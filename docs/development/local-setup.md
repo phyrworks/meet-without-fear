@@ -139,7 +139,63 @@ npm run dev:mobile     # Expo     :8081
    `development-simulator` EAS profile.
 4. There is no `mobile/.env.example`; an empty Clerk key fails at runtime with no useful message.
 
-## 6. E2E
+## 6. Running the app interactively with NO third-party credentials
+
+Verified working 2026-08-12. This is the fastest way to explore the product and its data.
+
+```bash
+# Terminal 1 — API. E2E_FIXTURE_ID is REQUIRED, see the gotcha below.
+E2E_AUTH_BYPASS=true MOCK_LLM=true E2E_FIXTURE_ID=user-a-full-journey \
+  npm run dev:api
+
+# Terminal 2 — web client. Clerk is swapped for a mock module at bundle time.
+cd mobile && EXPO_PUBLIC_E2E_MODE=true EXPO_PUBLIC_API_URL=http://localhost:3000 \
+  npx expo start --web --port 8082
+```
+
+Seed a fully populated two-user session at any stage:
+
+```bash
+curl -s -X POST http://localhost:3000/api/v1/e2e/seed-session \
+  -H 'Content-Type: application/json' \
+  -d '{"userA":{"email":"ada@e2e.test","name":"Ada Lovelace"},
+       "userB":{"email":"bob@e2e.test","name":"Bob Ross"},
+       "targetStage":"NEED_MAPPING_COMPLETE"}'
+```
+
+Emails **must** end in `@e2e.test`. The response includes per-user `pageUrls` carrying
+`?e2e-user-id=...&e2e-user-email=...`; `E2EAuthProvider` reads those and injects the
+`x-e2e-user-id` header, so no login is needed. Change the port in those URLs from 8081 to 8082.
+Open the two URLs in separate browser profiles to drive both sides of a session.
+
+`TargetStage` (`backend/src/testing/state-factory.ts:24`) offers 13 states: `CREATED`,
+`INVITATION_READY`, `EMPATHY_SHARED_A`, `FEEL_HEARD_B`, `RECONCILER_SHOWN_B`, `CONTEXT_SHARED_B`,
+`EMPATHY_REVEALED`, `NEED_MAPPING_COMPLETE`, `STRATEGIC_REPAIR_COMPLETE`, and four
+`STAGE4_REDESIGN_*` variants. Seeding `NEED_MAPPING_COMPLETE` populates 14 tables.
+
+Browse the data with `cd backend && npx prisma studio`.
+
+### Gotcha: `MOCK_LLM=true` alone breaks message sending
+
+Without `E2E_FIXTURE_ID`, `getModelCompletion` returns empty, `resolveStreamTurn` throws
+"AI response was empty after tag stripping" (`stream-turn-resolution.ts:222`), the stream aborts,
+**the user's message is deleted**, and the UI shows only "Message not sent. Failed to send message."
+Nothing in that message points at the missing fixture. Valid IDs are `user-a-full-journey` and
+`user-b-partner-journey` (`backend/src/lib/e2e-fixtures.ts`).
+
+### What does NOT work without credentials
+
+| Needs | What breaks without it |
+|---|---|
+| `ABLY_API_KEY` | **All realtime.** The mock token uses app id `mock-key-na`, so Ably returns 404 and the client sits `disconnected`. Partner presence shows "offline" and no live cross-user updates arrive. Free tier is enough. |
+| AWS Bedrock creds | Real AI. Fixture replies are a fixed script, not contextual — you cannot evaluate prompt behaviour locally. |
+| `CLERK_SECRET_KEY` | The real login flow. Note an unauthenticated call returns **500** ("Authentication not configured", `auth.ts:143-153`) rather than 401 when the key is absent. |
+| `RESEND_API_KEY` | Email invitations. |
+
+**Realtime is the credential worth getting first.** Without it you cannot observe two users
+affecting each other live, which is where most of this product's interesting behaviour lives.
+
+## 7. E2E
 
 ```bash
 cd e2e
