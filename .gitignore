@@ -145,3 +145,6 @@ mobile/test-results/
 scripts/__pycache__/
 scripts/ec2-bot/scripts/**/__pycache__/
 *.pyc
+
+# Golden harness: fixture manifests are committed, run databases are not.
+backend/src/testing/golden/.smoke*.ts
