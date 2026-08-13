@@ -103,6 +103,41 @@ implementation-independent and needs no code in either implementation. Tracked a
 part of `work-a39h.2`; it is not built yet, and until it is, this harness is an
 oracle for **behaviour** and not for **cost**.
 
+## Known gaps — read this before trusting a green run
+
+An adversarial review found eleven attack paths. Five were fixed (see the commit
+"close five false-pass paths"). These remain open, and a green run does **not**
+mean they are covered:
+
+- **Out-of-scope writes are invisible.** Scenarios declare their table scope, so
+  a spurious or missing write to any undeclared table passes. The declared list
+  is the same hand-maintained-list pattern this harness criticises elsewhere; it
+  should become "snapshot everything, present a scoped view".
+- **Negative authorization cannot currently fail.** `handleE2EAuthBypass`
+  *creates* an unknown `x-e2e-user-id` rather than rejecting it, so a scenario
+  asserting "an outsider gets 403" would mint that outsider and record whatever
+  they can see as the expected result. Any such scenario needs a strict bypass
+  mode first. (Related: `requireSessionAccess`'s invitation fallback grants
+  access to any authenticated non-inviter on a session with an ACCEPTED
+  invitation — tracked separately as `work-kpkq.2`.)
+- **Only read-only goldens exist so far.** Every recorded step has empty
+  `changes`, so `describeChange`, `timestampFacts` and the settle machinery have
+  never produced a non-trivial artifact. The write path — the 23 client-written
+  `@updatedAt` columns this harness was partly built to protect — has no
+  coverage yet. This is the single biggest gap.
+- **jsonb timestamps are not rebased.** The rebase covers the 144 timestamp
+  *columns*; timestamps serialized inside the 17 `Json` columns keep their
+  seed-time values, so their offset from everything else grows as the fixture
+  ages — the very failure the rebase exists to prevent, reintroduced through
+  jsonb.
+- **The fixture drift check compares table names only.** An added column, a
+  changed default, or a new enum value passes it.
+- **SSE `data:` is parsed one line per event.** Multi-line `data:` is legal and
+  would be silently dropped at both record and verify.
+- **Response headers and external side effects are never compared.** A migration
+  that drops an Ably publish or a push notification while writing the same rows
+  passes everything here.
+
 ## Conventions
 
 - **Never bulk-regenerate goldens.** Every accepted change needs a written
