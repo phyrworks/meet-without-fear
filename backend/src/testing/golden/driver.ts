@@ -1,0 +1,178 @@
+/**
+ * Golden harness — HTTP driver.
+ *
+ * Drives the real Express app (`src/app.ts`) with supertest against a disposable
+ * fixture clone. HTTP is the replay boundary because it is the only one that
+ * survives the migration: after Prisma is gone `prisma.session.findFirst(...)`
+ * has no equivalent to call, but `GET /api/v1/sessions/:id/messages` still does.
+ *
+ * The app is imported **dynamically, after DATABASE_URL is repointed**, because
+ * `lib/prisma.ts` binds its client at module load and caches it on `globalThis`.
+ * One run database per test file follows from that.
+ */
+
+import type { Express } from 'express';
+import request from 'supertest';
+import { restoreFixture, RestoredFixture } from './fixtures';
+import { Snapshot, takeSnapshot, diffSnapshots, RowChange } from './snapshot';
+
+export interface SseEvent {
+  event: string;
+  data: unknown;
+}
+
+/**
+ * Parse an SSE body into ordered events.
+ *
+ * Extracted from the pattern already proven at `scripts/mwf-moment-real.ts:448`,
+ * which drives this same endpoint through supertest.
+ */
+export function parseSse(raw: string): SseEvent[] {
+  return raw
+    .split(/\n\n+/)
+    .map(block => block.trim())
+    .filter(Boolean)
+    .map(block => {
+      const event = block.match(/^event:\s*(.+)$/m)?.[1] ?? 'message';
+      const dataText = block.match(/^data:\s*(.+)$/m)?.[1] ?? '{}';
+      let data: unknown;
+      try {
+        data = JSON.parse(dataText);
+      } catch {
+        data = dataText;
+      }
+      return { event, data };
+    });
+}
+
+export interface ActorRef {
+  id: string;
+  email: string;
+  name: string;
+}
+
+export interface StepResult {
+  label: string;
+  status: number;
+  body: unknown;
+  /** Present only for SSE steps. */
+  sse?: SseEvent[];
+  /** Row-level changes over the declared table scope, after quiescence. */
+  changes: RowChange[];
+  /** Changes visible the instant the response returned, before background work settled. */
+  changesAtResponse: RowChange[];
+}
+
+export interface Harness {
+  app: Express;
+  fixture: RestoredFixture;
+  actors: { userA: ActorRef; userB?: ActorRef };
+  sessionId: string;
+  /** Run one HTTP step with before/after snapshots over `tables`. */
+  step(opts: {
+    label: string;
+    actor: ActorRef;
+    tables: string[];
+    call: (agent: request.Agent, headers: Record<string, string>) => request.Test;
+    sse?: boolean;
+  }): Promise<StepResult>;
+  snapshot(tables: string[]): Promise<Snapshot>;
+  teardown(): Promise<void>;
+}
+
+export function authHeaders(actor: ActorRef): Record<string, string> {
+  return { 'x-e2e-user-id': actor.id, 'x-e2e-user-email': actor.email };
+}
+
+/**
+ * Wait until a snapshot stops changing.
+ *
+ * Fire-and-forget work outlives the response in several controllers
+ * (`messages.ts:411, 456, 494, 996`), so a single post-response sample races it.
+ * Polling to quiescence needs no application changes, which keeps this harness
+ * strictly an observer. A test-only job registry would be more precise and is
+ * the natural upgrade once app changes are in scope.
+ */
+async function settle(
+  take: () => Promise<Snapshot>,
+  opts: { stableFor?: number; timeoutMs?: number } = {},
+): Promise<Snapshot> {
+  const stableFor = opts.stableFor ?? 2;
+  const timeoutMs = opts.timeoutMs ?? 4000;
+  const deadline = Date.now() + timeoutMs;
+
+  let last = await take();
+  let stable = 0;
+  while (Date.now() < deadline) {
+    await new Promise(r => setTimeout(r, 120));
+    const next = await take();
+    stable = diffSnapshots(last, next).length === 0 ? stable + 1 : 0;
+    last = next;
+    if (stable >= stableFor) break;
+  }
+  return last;
+}
+
+export async function createHarness(opts: { baseUrl: string; stage: string; runId: string }): Promise<Harness> {
+  const fixture = await restoreFixture(opts);
+
+  // Repoint before the app (and therefore lib/prisma) is loaded.
+  process.env.DATABASE_URL = fixture.url;
+  process.env.E2E_AUTH_BYPASS = 'true';
+  process.env.MOCK_LLM = 'true';
+  process.env.E2E_FIXTURE_ID = process.env.E2E_FIXTURE_ID ?? 'user-a-full-journey';
+
+  const appModule = await import('../../app');
+  const app = (appModule.default ?? appModule) as Express;
+
+  const { seeded } = fixture.manifest;
+  const actors = { userA: seeded.userA, userB: seeded.userB };
+
+  const snapshot = (tables: string[]): Promise<Snapshot> =>
+    takeSnapshot({ target: fixture.target, database: fixture.database, tables });
+
+  return {
+    app,
+    fixture,
+    actors,
+    sessionId: seeded.sessionId,
+    snapshot,
+    async step({ label, actor, tables, call, sse }) {
+      const before = await snapshot(tables);
+
+      let test = call(request(app) as unknown as request.Agent, authHeaders(actor));
+      for (const [k, v] of Object.entries(authHeaders(actor))) test = test.set(k, v);
+      if (sse) {
+        test = test
+          .set('Accept', 'text/event-stream')
+          .buffer(true)
+          .parse((res, cb) => {
+            let raw = '';
+            res.setEncoding('utf8');
+            res.on('data', (chunk: string) => {
+              raw += chunk;
+            });
+            res.on('end', () => cb(null, raw));
+          });
+      }
+
+      const res = await test;
+      const atResponse = await snapshot(tables);
+      const settled = await settle(() => snapshot(tables));
+
+      return {
+        label,
+        status: res.status,
+        body: sse ? undefined : res.body,
+        sse: sse ? parseSse(String(res.body || res.text || '')) : undefined,
+        changesAtResponse: diffSnapshots(before, atResponse),
+        changes: diffSnapshots(before, settled),
+      };
+    },
+    async teardown() {
+      const { prisma } = await import('../../lib/prisma');
+      await prisma.$disconnect().catch(() => undefined);
+      await fixture.drop();
+    },
+  };
+}

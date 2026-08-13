@@ -1,0 +1,641 @@
+{
+  "scenario": "session-read",
+  "stage": "FEEL_HEARD_B",
+  "steps": [
+    {
+      "label": "messages as ada@e2e.test",
+      "status": 200,
+      "body": {
+        "data": {
+          "hasMore": false,
+          "messages": [
+            {
+              "content": "Hi, I'm having issues with my partner.",
+              "id": "<message:1>",
+              "refiningNeedId": null,
+              "role": "USER",
+              "senderId": "<user:ada>",
+              "sessionId": "<session:main>",
+              "stage": 0,
+              "timestamp": "<ts:1>"
+            },
+            {
+              "content": "I'm glad you reached out. Tell me more about what's happening.",
+              "id": "<message:2>",
+              "refiningNeedId": null,
+              "role": "AI",
+              "senderId": null,
+              "sessionId": "<session:main>",
+              "stage": 0,
+              "timestamp": "<ts:2>"
+            },
+            {
+              "content": "We argue about household chores constantly.",
+              "id": "<message:3>",
+              "refiningNeedId": null,
+              "role": "USER",
+              "senderId": "<user:ada>",
+              "sessionId": "<session:main>",
+              "stage": 1,
+              "timestamp": "<ts:3>"
+            },
+            {
+              "content": "That sounds frustrating. Would you like to invite your partner?",
+              "id": "<message:4>",
+              "refiningNeedId": null,
+              "role": "AI",
+              "senderId": null,
+              "sessionId": "<session:main>",
+              "stage": 1,
+              "timestamp": "<ts:4>"
+            },
+            {
+              "content": "Yes, I sent the invitation.",
+              "id": "<message:5>",
+              "refiningNeedId": null,
+              "role": "USER",
+              "senderId": "<user:ada>",
+              "sessionId": "<session:main>",
+              "stage": 1,
+              "timestamp": "<ts:5>"
+            },
+            {
+              "content": "Great. Let's continue exploring your perspective while we wait.",
+              "id": "<message:6>",
+              "refiningNeedId": null,
+              "role": "AI",
+              "senderId": null,
+              "sessionId": "<session:main>",
+              "stage": 1,
+              "timestamp": "<ts:6>"
+            },
+            {
+              "content": "I feel like I do most of the work and they don't notice.",
+              "id": "<message:7>",
+              "refiningNeedId": null,
+              "role": "USER",
+              "senderId": "<user:ada>",
+              "sessionId": "<session:main>",
+              "stage": 1,
+              "timestamp": "<ts:7>"
+            },
+            {
+              "content": "I hear you. Do you feel like I understand what you've been experiencing?",
+              "id": "<message:8>",
+              "refiningNeedId": null,
+              "role": "AI",
+              "senderId": null,
+              "sessionId": "<session:main>",
+              "stage": 1,
+              "timestamp": "<ts:8>"
+            },
+            {
+              "content": "Yes, I feel heard now.",
+              "id": "<message:9>",
+              "refiningNeedId": null,
+              "role": "USER",
+              "senderId": "<user:ada>",
+              "sessionId": "<session:main>",
+              "stage": 1,
+              "timestamp": "<ts:9>"
+            },
+            {
+              "content": "I'm glad. Now let's build some empathy for your partner's perspective.",
+              "id": "<message:10>",
+              "refiningNeedId": null,
+              "role": "AI",
+              "senderId": null,
+              "sessionId": "<session:main>",
+              "stage": 2,
+              "timestamp": "<ts:10>"
+            },
+            {
+              "content": "I think they're stressed from work too.",
+              "id": "<message:11>",
+              "refiningNeedId": null,
+              "role": "USER",
+              "senderId": "<user:ada>",
+              "sessionId": "<session:main>",
+              "stage": 2,
+              "timestamp": "<ts:11>"
+            },
+            {
+              "content": "That's a thoughtful observation. Here's an empathy statement you could share...",
+              "id": "<message:12>",
+              "refiningNeedId": null,
+              "role": "AI",
+              "senderId": null,
+              "sessionId": "<session:main>",
+              "stage": 2,
+              "timestamp": "<ts:12>"
+            },
+            {
+              "content": "I understand you might be feeling stressed from work. I want us to support each other better.",
+              "id": "<message:13>",
+              "refiningNeedId": null,
+              "role": "EMPATHY_STATEMENT",
+              "senderId": "<user:ada>",
+              "sessionId": "<session:main>",
+              "stage": 2,
+              "timestamp": "<ts:13>"
+            }
+          ]
+        },
+        "success": true
+      },
+      "changes": [],
+      "hadAsyncWrites": false
+    },
+    {
+      "label": "session state as ada@e2e.test",
+      "status": 200,
+      "body": {
+        "data": {
+          "compact": {
+            "canAdvance": true,
+            "isFirstSession": true,
+            "mySigned": true,
+            "mySignedAt": null,
+            "partnerSigned": true,
+            "partnerSignedAt": null
+          },
+          "invitation": {
+            "acceptedAt": "<ts:16>",
+            "createdAt": "<ts:17>",
+            "expiresAt": "<ts:20>",
+            "id": "<invitation:main>",
+            "invitedBy": {
+              "id": "<user:ada>",
+              "name": null
+            },
+            "isInviter": true,
+            "messageConfirmed": true,
+            "messageConfirmedAt": "<ts:16>",
+            "sessionId": "<session:main>",
+            "status": "ACCEPTED",
+            "topicFrame": null,
+            "topicFrameConfirmedAt": null
+          },
+          "messages": {
+            "hasMore": false,
+            "messages": [
+              {
+                "content": "Hi, I'm having issues with my partner.",
+                "id": "<message:1>",
+                "role": "USER",
+                "senderId": "<user:ada>",
+                "sessionId": "<session:main>",
+                "stage": 0,
+                "timestamp": "<ts:1>"
+              },
+              {
+                "content": "I'm glad you reached out. Tell me more about what's happening.",
+                "id": "<message:2>",
+                "role": "AI",
+                "senderId": null,
+                "sessionId": "<session:main>",
+                "stage": 0,
+                "timestamp": "<ts:2>"
+              },
+              {
+                "content": "We argue about household chores constantly.",
+                "id": "<message:3>",
+                "role": "USER",
+                "senderId": "<user:ada>",
+                "sessionId": "<session:main>",
+                "stage": 1,
+                "timestamp": "<ts:3>"
+              },
+              {
+                "content": "That sounds frustrating. Would you like to invite your partner?",
+                "id": "<message:4>",
+                "role": "AI",
+                "senderId": null,
+                "sessionId": "<session:main>",
+                "stage": 1,
+                "timestamp": "<ts:4>"
+              },
+              {
+                "content": "Yes, I sent the invitation.",
+                "id": "<message:5>",
+                "role": "USER",
+                "senderId": "<user:ada>",
+                "sessionId": "<session:main>",
+                "stage": 1,
+                "timestamp": "<ts:5>"
+              },
+              {
+                "content": "Great. Let's continue exploring your perspective while we wait.",
+                "id": "<message:6>",
+                "role": "AI",
+                "senderId": null,
+                "sessionId": "<session:main>",
+                "stage": 1,
+                "timestamp": "<ts:6>"
+              },
+              {
+                "content": "I feel like I do most of the work and they don't notice.",
+                "id": "<message:7>",
+                "role": "USER",
+                "senderId": "<user:ada>",
+                "sessionId": "<session:main>",
+                "stage": 1,
+                "timestamp": "<ts:7>"
+              },
+              {
+                "content": "I hear you. Do you feel like I understand what you've been experiencing?",
+                "id": "<message:8>",
+                "role": "AI",
+                "senderId": null,
+                "sessionId": "<session:main>",
+                "stage": 1,
+                "timestamp": "<ts:8>"
+              },
+              {
+                "content": "Yes, I feel heard now.",
+                "id": "<message:9>",
+                "role": "USER",
+                "senderId": "<user:ada>",
+                "sessionId": "<session:main>",
+                "stage": 1,
+                "timestamp": "<ts:9>"
+              },
+              {
+                "content": "I'm glad. Now let's build some empathy for your partner's perspective.",
+                "id": "<message:10>",
+                "role": "AI",
+                "senderId": null,
+                "sessionId": "<session:main>",
+                "stage": 2,
+                "timestamp": "<ts:10>"
+              },
+              {
+                "content": "I think they're stressed from work too.",
+                "id": "<message:11>",
+                "role": "USER",
+                "senderId": "<user:ada>",
+                "sessionId": "<session:main>",
+                "stage": 2,
+                "timestamp": "<ts:11>"
+              },
+              {
+                "content": "That's a thoughtful observation. Here's an empathy statement you could share...",
+                "id": "<message:12>",
+                "role": "AI",
+                "senderId": null,
+                "sessionId": "<session:main>",
+                "stage": 2,
+                "timestamp": "<ts:12>"
+              },
+              {
+                "content": "I understand you might be feeling stressed from work. I want us to support each other better.",
+                "id": "<message:13>",
+                "role": "EMPATHY_STATEMENT",
+                "senderId": "<user:ada>",
+                "sessionId": "<session:main>",
+                "stage": 2,
+                "timestamp": "<ts:14>"
+              }
+            ]
+          },
+          "progress": {
+            "canAdvance": false,
+            "milestones": {
+              "feelHeardConfirmedAt": "<ts:19>",
+              "witnessStartedAt": "<ts:7>"
+            },
+            "myProgress": {
+              "completedAt": null,
+              "gatesSatisfied": {},
+              "stage": 2,
+              "startedAt": "<ts:13>",
+              "status": "IN_PROGRESS"
+            },
+            "partnerProgress": {
+              "completedAt": null,
+              "stage": 2,
+              "startedAt": "<ts:18>",
+              "status": "IN_PROGRESS"
+            },
+            "sessionId": "<session:main>"
+          },
+          "session": {
+            "createdAt": "<ts:15>",
+            "currentStage": 2,
+            "id": "<session:main>",
+            "lastSeenChatItemId": null,
+            "lastViewedAt": null,
+            "myProgress": {
+              "stage": 2,
+              "status": "IN_PROGRESS"
+            },
+            "partner": {
+              "id": "<user:bob>",
+              "name": "Bob Ross",
+              "nickname": "Bob Ross"
+            },
+            "partnerLastActiveAt": "<ts:18>",
+            "partnerLastViewedAt": null,
+            "relationshipId": "<relationship:main>",
+            "resolvedAt": null,
+            "sourceInnerThoughts": null,
+            "stageStatus": "IN_PROGRESS",
+            "status": "ACTIVE"
+          }
+        },
+        "success": true
+      },
+      "changes": [],
+      "hadAsyncWrites": false
+    },
+    {
+      "label": "messages as bob@e2e.test",
+      "status": 200,
+      "body": {
+        "data": {
+          "hasMore": false,
+          "messages": [
+            {
+              "content": "Welcome! Ada Lovelace invited you to work through some challenges together.",
+              "id": "<message:14>",
+              "refiningNeedId": null,
+              "role": "AI",
+              "senderId": null,
+              "sessionId": "<session:main>",
+              "stage": 0,
+              "timestamp": "<ts:1>"
+            },
+            {
+              "content": "Things have been tense lately between us.",
+              "id": "<message:15>",
+              "refiningNeedId": null,
+              "role": "USER",
+              "senderId": "<user:bob>",
+              "sessionId": "<session:main>",
+              "stage": 0,
+              "timestamp": "<ts:2>"
+            },
+            {
+              "content": "I hear you. Tell me more about what's been happening.",
+              "id": "<message:16>",
+              "refiningNeedId": null,
+              "role": "AI",
+              "senderId": null,
+              "sessionId": "<session:main>",
+              "stage": 1,
+              "timestamp": "<ts:3>"
+            },
+            {
+              "content": "I feel like they don't see how much I'm dealing with at work.",
+              "id": "<message:17>",
+              "refiningNeedId": null,
+              "role": "USER",
+              "senderId": "<user:bob>",
+              "sessionId": "<session:main>",
+              "stage": 1,
+              "timestamp": "<ts:4>"
+            },
+            {
+              "content": "That sounds really hard. Can you tell me more?",
+              "id": "<message:18>",
+              "refiningNeedId": null,
+              "role": "AI",
+              "senderId": null,
+              "sessionId": "<session:main>",
+              "stage": 1,
+              "timestamp": "<ts:5>"
+            },
+            {
+              "content": "I work so hard and come home exhausted, but there's always more to do.",
+              "id": "<message:19>",
+              "refiningNeedId": null,
+              "role": "USER",
+              "senderId": "<user:bob>",
+              "sessionId": "<session:main>",
+              "stage": 1,
+              "timestamp": "<ts:6>"
+            },
+            {
+              "content": "I understand. How long has this been going on?",
+              "id": "<message:20>",
+              "refiningNeedId": null,
+              "role": "AI",
+              "senderId": null,
+              "sessionId": "<session:main>",
+              "stage": 1,
+              "timestamp": "<ts:7>"
+            },
+            {
+              "content": "Months now. I don't know how to get through to them.",
+              "id": "<message:21>",
+              "refiningNeedId": null,
+              "role": "USER",
+              "senderId": "<user:bob>",
+              "sessionId": "<session:main>",
+              "stage": 1,
+              "timestamp": "<ts:8>"
+            },
+            {
+              "content": "Do you feel like I understand what you've been going through?",
+              "id": "<message:22>",
+              "refiningNeedId": null,
+              "role": "AI",
+              "senderId": null,
+              "sessionId": "<session:main>",
+              "stage": 1,
+              "timestamp": "<ts:9>"
+            },
+            {
+              "content": "Yes, I feel heard.",
+              "id": "<message:23>",
+              "refiningNeedId": null,
+              "role": "USER",
+              "senderId": "<user:bob>",
+              "sessionId": "<session:main>",
+              "stage": 1,
+              "timestamp": "<ts:10>"
+            }
+          ]
+        },
+        "success": true
+      },
+      "changes": [],
+      "hadAsyncWrites": false
+    },
+    {
+      "label": "session state as bob@e2e.test",
+      "status": 200,
+      "body": {
+        "data": {
+          "compact": {
+            "canAdvance": true,
+            "isFirstSession": true,
+            "mySigned": true,
+            "mySignedAt": null,
+            "partnerSigned": true,
+            "partnerSignedAt": null
+          },
+          "invitation": {
+            "acceptedAt": "<ts:13>",
+            "createdAt": "<ts:14>",
+            "expiresAt": "<ts:17>",
+            "id": "<invitation:main>",
+            "invitedBy": {
+              "id": "<user:ada>",
+              "name": null
+            },
+            "isInviter": false,
+            "messageConfirmed": true,
+            "messageConfirmedAt": "<ts:13>",
+            "sessionId": "<session:main>",
+            "status": "ACCEPTED",
+            "topicFrame": null,
+            "topicFrameConfirmedAt": null
+          },
+          "messages": {
+            "hasMore": false,
+            "messages": [
+              {
+                "content": "Welcome! Ada Lovelace invited you to work through some challenges together.",
+                "id": "<message:14>",
+                "role": "AI",
+                "senderId": null,
+                "sessionId": "<session:main>",
+                "stage": 0,
+                "timestamp": "<ts:2>"
+              },
+              {
+                "content": "Things have been tense lately between us.",
+                "id": "<message:15>",
+                "role": "USER",
+                "senderId": "<user:bob>",
+                "sessionId": "<session:main>",
+                "stage": 0,
+                "timestamp": "<ts:3>"
+              },
+              {
+                "content": "I hear you. Tell me more about what's been happening.",
+                "id": "<message:16>",
+                "role": "AI",
+                "senderId": null,
+                "sessionId": "<session:main>",
+                "stage": 1,
+                "timestamp": "<ts:4>"
+              },
+              {
+                "content": "I feel like they don't see how much I'm dealing with at work.",
+                "id": "<message:17>",
+                "role": "USER",
+                "senderId": "<user:bob>",
+                "sessionId": "<session:main>",
+                "stage": 1,
+                "timestamp": "<ts:5>"
+              },
+              {
+                "content": "That sounds really hard. Can you tell me more?",
+                "id": "<message:18>",
+                "role": "AI",
+                "senderId": null,
+                "sessionId": "<session:main>",
+                "stage": 1,
+                "timestamp": "<ts:6>"
+              },
+              {
+                "content": "I work so hard and come home exhausted, but there's always more to do.",
+                "id": "<message:19>",
+                "role": "USER",
+                "senderId": "<user:bob>",
+                "sessionId": "<session:main>",
+                "stage": 1,
+                "timestamp": "<ts:7>"
+              },
+              {
+                "content": "I understand. How long has this been going on?",
+                "id": "<message:20>",
+                "role": "AI",
+                "senderId": null,
+                "sessionId": "<session:main>",
+                "stage": 1,
+                "timestamp": "<ts:8>"
+              },
+              {
+                "content": "Months now. I don't know how to get through to them.",
+                "id": "<message:21>",
+                "role": "USER",
+                "senderId": "<user:bob>",
+                "sessionId": "<session:main>",
+                "stage": 1,
+                "timestamp": "<ts:9>"
+              },
+              {
+                "content": "Do you feel like I understand what you've been going through?",
+                "id": "<message:22>",
+                "role": "AI",
+                "senderId": null,
+                "sessionId": "<session:main>",
+                "stage": 1,
+                "timestamp": "<ts:10>"
+              },
+              {
+                "content": "Yes, I feel heard.",
+                "id": "<message:23>",
+                "role": "USER",
+                "senderId": "<user:bob>",
+                "sessionId": "<session:main>",
+                "stage": 1,
+                "timestamp": "<ts:11>"
+              }
+            ]
+          },
+          "progress": {
+            "canAdvance": false,
+            "milestones": {
+              "feelHeardConfirmedAt": "<ts:16>",
+              "witnessStartedAt": "<ts:8>"
+            },
+            "myProgress": {
+              "completedAt": null,
+              "gatesSatisfied": {},
+              "stage": 2,
+              "startedAt": "<ts:15>",
+              "status": "IN_PROGRESS"
+            },
+            "partnerProgress": {
+              "completedAt": null,
+              "stage": 2,
+              "startedAt": "<ts:1>",
+              "status": "IN_PROGRESS"
+            },
+            "sessionId": "<session:main>"
+          },
+          "session": {
+            "createdAt": "<ts:12>",
+            "currentStage": 2,
+            "id": "<session:main>",
+            "lastSeenChatItemId": null,
+            "lastViewedAt": null,
+            "myProgress": {
+              "stage": 2,
+              "status": "IN_PROGRESS"
+            },
+            "partner": {
+              "id": "<user:ada>",
+              "name": "Ada Lovelace",
+              "nickname": "Ada Lovelace"
+            },
+            "partnerLastActiveAt": "<ts:1>",
+            "partnerLastViewedAt": null,
+            "relationshipId": "<relationship:main>",
+            "resolvedAt": null,
+            "sourceInnerThoughts": null,
+            "stageStatus": "IN_PROGRESS",
+            "status": "ACTIVE"
+          }
+        },
+        "success": true
+      },
+      "changes": [],
+      "hadAsyncWrites": false
+    }
+  ]
+}

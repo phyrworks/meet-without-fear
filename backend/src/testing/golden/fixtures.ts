@@ -67,7 +67,7 @@ export function readManifest(stage: string): FixtureManifest {
   const p = manifestPath(stage);
   if (!fs.existsSync(p)) {
     throw new Error(
-      `No fixture manifest for stage "${stage}" at ${p}. Build it first: npm run golden:build -- ${stage}`
+      `No fixture manifest for stage "${stage}" at ${p}. Build it first: npm run golden:build -- ${stage}`,
     );
   }
   return JSON.parse(fs.readFileSync(p, 'utf8')) as FixtureManifest;
@@ -129,7 +129,7 @@ export async function buildFixture(opts: {
  */
 async function seedInto(
   fixtureUrl: string,
-  opts: { stage: string; userA?: { email: string; name: string }; userB?: { email: string; name: string } | null }
+  opts: { stage: string; userA?: { email: string; name: string }; userB?: { email: string; name: string } | null },
 ): Promise<FixtureManifest['seeded']> {
   const userA = opts.userA ?? { email: 'ada@e2e.test', name: 'Ada Lovelace' };
   const userB = opts.userB === null ? null : (opts.userB ?? { email: 'bob@e2e.test', name: 'Bob Ross' });
@@ -196,15 +196,15 @@ export async function restoreFixture(opts: {
   // Detect schema drift: a fixture built against an older migration head is a
   // silent false pass waiting to happen.
   const tables = await listTables(target, runDb);
-  const missing = manifest.tables.filter((t) => !tables.includes(t));
-  const added = tables.filter((t) => !manifest.tables.includes(t));
+  const missing = manifest.tables.filter(t => !tables.includes(t));
+  const added = tables.filter(t => !manifest.tables.includes(t));
   if (missing.length || added.length) {
     await dropDatabase(target, runDb);
     throw new Error(
       `Fixture "${opts.stage}" is stale — schema drift since it was built.\n` +
         (missing.length ? `  tables now missing: ${missing.join(', ')}\n` : '') +
         (added.length ? `  tables added: ${added.join(', ')}\n` : '') +
-        `Rebuild it: npm run golden:build -- ${opts.stage}`
+        `Rebuild it: npm run golden:build -- ${opts.stage}`,
     );
   }
 
@@ -239,21 +239,21 @@ async function rebaseTimestampsToAge(
   target: DbTarget,
   database: string,
   manifest: FixtureManifest,
-  age: string
+  age: string,
 ): Promise<void> {
   const shift = await withClient(
     target,
-    async (c) => {
+    async c => {
       const r = await c.query<{ shift: string | null }>(
         `SELECT EXTRACT(EPOCH FROM (
            (now() AT TIME ZONE 'UTC') - max("createdAt") - $1::interval
          ))::bigint::text AS shift
          FROM "Session"`,
-        [age]
+        [age],
       );
       return r.rows[0]?.shift ?? null;
     },
-    database
+    database,
   );
   if (shift === null) return;
 

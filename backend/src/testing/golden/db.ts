@@ -44,11 +44,7 @@ function clientConfig(t: DbTarget, database = t.database): ClientConfig {
 }
 
 /** Run a function against a connected client, always closing it. */
-export async function withClient<T>(
-  t: DbTarget,
-  fn: (c: Client) => Promise<T>,
-  database?: string
-): Promise<T> {
+export async function withClient<T>(t: DbTarget, fn: (c: Client) => Promise<T>, database?: string): Promise<T> {
   const client = new Client(clientConfig(t, database));
   await client.connect();
   try {
@@ -68,17 +64,17 @@ async function withAdmin<T>(t: DbTarget, fn: (c: Client) => Promise<T>): Promise
 
 /** Terminate other sessions on a database so it can be dropped or cloned. */
 export async function disconnectAll(t: DbTarget, database: string): Promise<void> {
-  await withAdmin(t, async (c) => {
+  await withAdmin(t, async c => {
     await c.query(
       `SELECT pg_terminate_backend(pid) FROM pg_stat_activity
        WHERE datname = $1 AND pid <> pg_backend_pid()`,
-      [database]
+      [database],
     );
   });
 }
 
 export async function databaseExists(t: DbTarget, database: string): Promise<boolean> {
-  return withAdmin(t, async (c) => {
+  return withAdmin(t, async c => {
     const r = await c.query('SELECT 1 FROM pg_database WHERE datname = $1', [database]);
     return r.rowCount === 1;
   });
@@ -86,7 +82,7 @@ export async function databaseExists(t: DbTarget, database: string): Promise<boo
 
 export async function dropDatabase(t: DbTarget, database: string): Promise<void> {
   await disconnectAll(t, database);
-  await withAdmin(t, async (c) => {
+  await withAdmin(t, async c => {
     // Templates cannot be dropped until the flag is cleared.
     await c.query(`ALTER DATABASE "${database}" WITH is_template = false`).catch(() => undefined);
     await c.query(`DROP DATABASE IF EXISTS "${database}"`);
@@ -94,7 +90,7 @@ export async function dropDatabase(t: DbTarget, database: string): Promise<void>
 }
 
 export async function createDatabase(t: DbTarget, database: string): Promise<void> {
-  await withAdmin(t, async (c) => {
+  await withAdmin(t, async c => {
     await c.query(`CREATE DATABASE "${database}"`);
   });
 }
@@ -103,14 +99,10 @@ export async function createDatabase(t: DbTarget, database: string): Promise<voi
  * Clone a database from a template. Requires no open connections to the
  * template, which is why callers must not hold one.
  */
-export async function cloneDatabase(
-  t: DbTarget,
-  template: string,
-  target: string
-): Promise<void> {
+export async function cloneDatabase(t: DbTarget, template: string, target: string): Promise<void> {
   await dropDatabase(t, target);
   await disconnectAll(t, template);
-  await withAdmin(t, async (c) => {
+  await withAdmin(t, async c => {
     await c.query(`CREATE DATABASE "${target}" TEMPLATE "${template}"`);
   });
 }
@@ -123,31 +115,28 @@ export async function cloneDatabase(
 export async function listTables(t: DbTarget, database?: string): Promise<string[]> {
   return withClient(
     t,
-    async (c) => {
+    async c => {
       const r = await c.query<{ table_name: string }>(
         `SELECT table_name FROM information_schema.tables
          WHERE table_schema = 'public' AND table_type = 'BASE TABLE'
            AND table_name <> '_prisma_migrations'
-         ORDER BY table_name`
+         ORDER BY table_name`,
       );
-      return r.rows.map((x) => x.table_name);
+      return r.rows.map(x => x.table_name);
     },
-    database
+    database,
   );
 }
 
 /** Column names per table, ordered — used to build stable SELECT lists. */
-export async function listColumns(
-  t: DbTarget,
-  database?: string
-): Promise<Map<string, string[]>> {
+export async function listColumns(t: DbTarget, database?: string): Promise<Map<string, string[]>> {
   return withClient(
     t,
-    async (c) => {
+    async c => {
       const r = await c.query<{ table_name: string; column_name: string }>(
         `SELECT table_name, column_name FROM information_schema.columns
          WHERE table_schema = 'public'
-         ORDER BY table_name, ordinal_position`
+         ORDER BY table_name, ordinal_position`,
       );
       const m = new Map<string, string[]>();
       for (const row of r.rows) {
@@ -157,7 +146,7 @@ export async function listColumns(
       }
       return m;
     },
-    database
+    database,
   );
 }
 
@@ -172,11 +161,11 @@ export async function listColumns(
  */
 export async function listTimestampColumns(
   t: DbTarget,
-  database?: string
+  database?: string,
 ): Promise<Array<{ table: string; column: string; nullable: boolean }>> {
   return withClient(
     t,
-    async (c) => {
+    async c => {
       const r = await c.query<{ table_name: string; column_name: string; is_nullable: string }>(
         `SELECT c.table_name, c.column_name, c.is_nullable
          FROM information_schema.columns c
@@ -186,15 +175,15 @@ export async function listTimestampColumns(
            AND tb.table_type = 'BASE TABLE'
            AND c.table_name <> '_prisma_migrations'
            AND c.data_type LIKE 'timestamp%'
-         ORDER BY c.table_name, c.column_name`
+         ORDER BY c.table_name, c.column_name`,
       );
-      return r.rows.map((x) => ({
+      return r.rows.map(x => ({
         table: x.table_name,
         column: x.column_name,
         nullable: x.is_nullable === 'YES',
       }));
     },
-    database
+    database,
   );
 }
 
@@ -205,7 +194,7 @@ export async function listTimestampColumns(
 export async function rebaseTimestamps(
   t: DbTarget,
   database: string,
-  intervalSql: string
+  intervalSql: string,
 ): Promise<{ statements: number }> {
   const cols = await listTimestampColumns(t, database);
   const byTable = new Map<string, string[]>();
@@ -215,28 +204,25 @@ export async function rebaseTimestamps(
 
   return withClient(
     t,
-    async (c) => {
+    async c => {
       let statements = 0;
       for (const [table, columns] of byTable) {
-        const sets = columns.map((col) => `"${col}" = "${col}" + $1::interval`).join(', ');
+        const sets = columns.map(col => `"${col}" = "${col}" + $1::interval`).join(', ');
         await c.query(`UPDATE "${table}" SET ${sets}`, [intervalSql]);
         statements += 1;
       }
       return { statements };
     },
-    database
+    database,
   );
 }
 
 /** Row counts for every table — a cheap shape check on a restored fixture. */
-export async function tableCounts(
-  t: DbTarget,
-  database?: string
-): Promise<Record<string, number>> {
+export async function tableCounts(t: DbTarget, database?: string): Promise<Record<string, number>> {
   const tables = await listTables(t, database);
   return withClient(
     t,
-    async (c) => {
+    async c => {
       const out: Record<string, number> = {};
       for (const table of tables) {
         const r = await c.query<{ n: string }>(`SELECT count(*)::text AS n FROM "${table}"`);
@@ -245,6 +231,6 @@ export async function tableCounts(
       }
       return out;
     },
-    database
+    database,
   );
 }

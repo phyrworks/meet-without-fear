@@ -27,7 +27,9 @@ async function cmdBuild(stage: string): Promise<void> {
     process.stdout.write(`  userB    : ${m.seeded.userB.email} (${m.seeded.userB.id})\n`);
   }
   process.stdout.write(`  tables   : ${m.tables.length} in schema, ${Object.keys(m.counts).length} populated\n`);
-  const top = Object.entries(m.counts).sort((a, b) => b[1] - a[1]).slice(0, 8);
+  const top = Object.entries(m.counts)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 8);
   for (const [t, n] of top) process.stdout.write(`             ${t}: ${n}\n`);
 }
 
@@ -48,15 +50,30 @@ async function cmdRestore(stage: string, keep: boolean): Promise<void> {
 
 async function cmdList(): Promise<void> {
   const t = parseDbUrl(baseUrl());
-  const stages = ['CREATED', 'INVITATION_READY', 'EMPATHY_SHARED_A', 'FEEL_HEARD_B',
-    'RECONCILER_SHOWN_B', 'CONTEXT_SHARED_B', 'EMPATHY_REVEALED', 'NEED_MAPPING_COMPLETE',
-    'STRATEGIC_REPAIR_COMPLETE', 'STAGE4_REDESIGN_INVENTORY', 'STAGE4_REDESIGN_SHARED_SELECTIONS',
-    'STAGE4_REDESIGN_NO_OVERLAP_SELECTIONS', 'STAGE4_REDESIGN_PARTNER_INACTIVE'];
+  const stages = [
+    'CREATED',
+    'INVITATION_READY',
+    'EMPATHY_SHARED_A',
+    'FEEL_HEARD_B',
+    'RECONCILER_SHOWN_B',
+    'CONTEXT_SHARED_B',
+    'EMPATHY_REVEALED',
+    'NEED_MAPPING_COMPLETE',
+    'STRATEGIC_REPAIR_COMPLETE',
+    'STAGE4_REDESIGN_INVENTORY',
+    'STAGE4_REDESIGN_SHARED_SELECTIONS',
+    'STAGE4_REDESIGN_NO_OVERLAP_SELECTIONS',
+    'STAGE4_REDESIGN_PARTNER_INACTIVE',
+  ];
   for (const s of stages) {
     const db = fixtureDbName(s);
     const exists = await databaseExists(t, db);
     let built = '';
-    try { built = readManifest(s).builtAt.slice(0, 19).replace('T', ' '); } catch { built = '—'; }
+    try {
+      built = readManifest(s).builtAt.slice(0, 19).replace('T', ' ');
+    } catch {
+      built = '—';
+    }
     process.stdout.write(`  ${exists ? '✓' : ' '} ${s.padEnd(38)} ${built}\n`);
   }
 }
@@ -65,9 +82,12 @@ async function main(): Promise<void> {
   const [cmd, arg] = process.argv.slice(2);
   const keep = process.argv.includes('--keep');
   switch (cmd) {
-    case 'build': return cmdBuild(arg);
-    case 'restore': return cmdRestore(arg, keep);
-    case 'list': return cmdList();
+    case 'build':
+      return cmdBuild(arg);
+    case 'restore':
+      return cmdRestore(arg, keep);
+    case 'list':
+      return cmdList();
     default:
       process.stdout.write('Commands: build <stage> | restore <stage> [--keep] | list\n');
       process.exitCode = 1;

@@ -33,14 +33,10 @@ interface ColumnMeta {
 }
 
 /** Column metadata for the tables we intend to snapshot. */
-async function columnsFor(
-  target: DbTarget,
-  database: string,
-  tables: string[]
-): Promise<Map<string, ColumnMeta[]>> {
+async function columnsFor(target: DbTarget, database: string, tables: string[]): Promise<Map<string, ColumnMeta[]>> {
   return withClient(
     target,
-    async (c) => {
+    async c => {
       const r = await c.query<{
         table_name: string;
         column_name: string;
@@ -51,7 +47,7 @@ async function columnsFor(
          FROM information_schema.columns
          WHERE table_schema = 'public' AND table_name = ANY($1)
          ORDER BY table_name, ordinal_position`,
-        [tables]
+        [tables],
       );
       const m = new Map<string, ColumnMeta[]>();
       for (const row of r.rows) {
@@ -61,19 +57,15 @@ async function columnsFor(
       }
       return m;
     },
-    database
+    database,
   );
 }
 
 /** Primary key columns per table, for deterministic ordering. */
-async function primaryKeysFor(
-  target: DbTarget,
-  database: string,
-  tables: string[]
-): Promise<Map<string, string[]>> {
+async function primaryKeysFor(target: DbTarget, database: string, tables: string[]): Promise<Map<string, string[]>> {
   return withClient(
     target,
-    async (c) => {
+    async c => {
       const r = await c.query<{ table_name: string; column_name: string; ord: number }>(
         `SELECT t.relname AS table_name, a.attname AS column_name, k.ord
          FROM pg_constraint con
@@ -83,7 +75,7 @@ async function primaryKeysFor(
          JOIN pg_attribute a ON a.attrelid = t.oid AND a.attnum = k.attnum
          WHERE n.nspname = 'public' AND con.contype = 'p' AND t.relname = ANY($1)
          ORDER BY t.relname, k.ord`,
-        [tables]
+        [tables],
       );
       const m = new Map<string, string[]>();
       for (const row of r.rows) {
@@ -91,7 +83,7 @@ async function primaryKeysFor(
       }
       return m;
     },
-    database
+    database,
   );
 }
 
@@ -105,10 +97,11 @@ async function primaryKeysFor(
  */
 function selectList(cols: ColumnMeta[]): string {
   return cols
-    .map((c) => {
+    .map(c => {
       const q = `"${c.column}"`;
       if (c.dataType.startsWith('timestamp')) return `${q}::text AS ${q}`;
-      if (c.udtName === 'vector') return `(CASE WHEN ${q} IS NULL THEN NULL ELSE 'vector(' || array_length(${q}::real[], 1) || ')' END) AS ${q}`;
+      if (c.udtName === 'vector')
+        return `(CASE WHEN ${q} IS NULL THEN NULL ELSE 'vector(' || array_length(${q}::real[], 1) || ')' END) AS ${q}`;
       if (c.dataType === 'ARRAY') return q;
       return q;
     })
@@ -127,29 +120,27 @@ export async function takeSnapshot(opts: SnapshotOptions): Promise<Snapshot> {
   const colMap = await columnsFor(target, database, tables);
   const pkMap = await primaryKeysFor(target, database, tables);
 
-  const missing = tables.filter((t) => !colMap.has(t));
+  const missing = tables.filter(t => !colMap.has(t));
   if (missing.length) {
     throw new Error(`Snapshot requested unknown table(s): ${missing.join(', ')}`);
   }
 
   return withClient(
     target,
-    async (c) => {
+    async c => {
       const out: Record<string, TableSnapshot> = {};
       for (const table of tables) {
         const cols = colMap.get(table)!;
         const pk = pkMap.get(table) ?? [];
         // Fall back to every column when a table has no PK — still deterministic.
-        const orderCols = pk.length ? pk : cols.map((x) => x.column);
-        const orderBy = orderCols.map((x) => `"${x}"`).join(', ');
-        const r = await c.query(
-          `SELECT ${selectList(cols)} FROM "${table}" ORDER BY ${orderBy}`
-        );
+        const orderCols = pk.length ? pk : cols.map(x => x.column);
+        const orderBy = orderCols.map(x => `"${x}"`).join(', ');
+        const r = await c.query(`SELECT ${selectList(cols)} FROM "${table}" ORDER BY ${orderBy}`);
         out[table] = r.rows as SnapshotRow[];
       }
       return { tables: out, takenAt: new Date().toISOString() };
     },
-    database
+    database,
   );
 }
 
@@ -179,8 +170,8 @@ export function diffSnapshots(before: Snapshot, after: Snapshot): RowChange[] {
   const tables = new Set([...Object.keys(before.tables), ...Object.keys(after.tables)]);
 
   for (const table of [...tables].sort()) {
-    const b = new Map((before.tables[table] ?? []).map((r) => [rowKey(r), r]));
-    const a = new Map((after.tables[table] ?? []).map((r) => [rowKey(r), r]));
+    const b = new Map((before.tables[table] ?? []).map(r => [rowKey(r), r]));
+    const a = new Map((after.tables[table] ?? []).map(r => [rowKey(r), r]));
 
     for (const [key, row] of a) {
       if (!b.has(key)) {
@@ -188,9 +179,7 @@ export function diffSnapshots(before: Snapshot, after: Snapshot): RowChange[] {
         continue;
       }
       const prev = b.get(key)!;
-      const changedFields = Object.keys(row).filter(
-        (f) => JSON.stringify(row[f]) !== JSON.stringify(prev[f])
-      );
+      const changedFields = Object.keys(row).filter(f => JSON.stringify(row[f]) !== JSON.stringify(prev[f]));
       if (changedFields.length) {
         changes.push({ table, kind: 'changed', key, before: prev, after: row, changedFields });
       }
