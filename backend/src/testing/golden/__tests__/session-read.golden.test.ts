@@ -58,6 +58,18 @@ describe(`golden: ${SCENARIO}`, () => {
           call: (agent) => agent.get(`/api/v1/sessions/${harness.sessionId}/state`),
         })
       );
+      // A page smaller than the row count, so `take` actually binds. Mutation
+      // testing showed a dropped LIMIT escaping undetected without this: the
+      // fixture holds 13 messages and the default page is 25, so the limit
+      // never applied and the scenario could not observe it disappearing.
+      steps.push(
+        await harness.step({
+          label: `messages page of 5 as ${actor.email}`,
+          actor,
+          tables: scope,
+          call: (agent) => agent.get(`/api/v1/sessions/${harness.sessionId}/messages?limit=5`),
+        })
+      );
     }
   });
 

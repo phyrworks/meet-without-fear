@@ -349,6 +349,70 @@
       "hadAsyncWrites": false
     },
     {
+      "label": "messages page of 5 as ada@e2e.test",
+      "status": 200,
+      "body": {
+        "data": {
+          "hasMore": true,
+          "messages": [
+            {
+              "content": "Yes, I feel heard now.",
+              "id": "<message:9>",
+              "refiningNeedId": null,
+              "role": "USER",
+              "senderId": "<user:ada>",
+              "sessionId": "<session:main>",
+              "stage": 1,
+              "timestamp": "<ts:1>"
+            },
+            {
+              "content": "I'm glad. Now let's build some empathy for your partner's perspective.",
+              "id": "<message:10>",
+              "refiningNeedId": null,
+              "role": "AI",
+              "senderId": null,
+              "sessionId": "<session:main>",
+              "stage": 2,
+              "timestamp": "<ts:2>"
+            },
+            {
+              "content": "I think they're stressed from work too.",
+              "id": "<message:11>",
+              "refiningNeedId": null,
+              "role": "USER",
+              "senderId": "<user:ada>",
+              "sessionId": "<session:main>",
+              "stage": 2,
+              "timestamp": "<ts:3>"
+            },
+            {
+              "content": "That's a thoughtful observation. Here's an empathy statement you could share...",
+              "id": "<message:12>",
+              "refiningNeedId": null,
+              "role": "AI",
+              "senderId": null,
+              "sessionId": "<session:main>",
+              "stage": 2,
+              "timestamp": "<ts:4>"
+            },
+            {
+              "content": "I understand you might be feeling stressed from work. I want us to support each other better.",
+              "id": "<message:13>",
+              "refiningNeedId": null,
+              "role": "EMPATHY_STATEMENT",
+              "senderId": "<user:ada>",
+              "sessionId": "<session:main>",
+              "stage": 2,
+              "timestamp": "<ts:5>"
+            }
+          ]
+        },
+        "success": true
+      },
+      "changes": [],
+      "hadAsyncWrites": false
+    },
+    {
       "label": "messages as bob@e2e.test",
       "status": 200,
       "body": {
@@ -631,6 +695,70 @@
             "stageStatus": "IN_PROGRESS",
             "status": "ACTIVE"
           }
+        },
+        "success": true
+      },
+      "changes": [],
+      "hadAsyncWrites": false
+    },
+    {
+      "label": "messages page of 5 as bob@e2e.test",
+      "status": 200,
+      "body": {
+        "data": {
+          "hasMore": true,
+          "messages": [
+            {
+              "content": "I work so hard and come home exhausted, but there's always more to do.",
+              "id": "<message:19>",
+              "refiningNeedId": null,
+              "role": "USER",
+              "senderId": "<user:bob>",
+              "sessionId": "<session:main>",
+              "stage": 1,
+              "timestamp": "<ts:1>"
+            },
+            {
+              "content": "I understand. How long has this been going on?",
+              "id": "<message:20>",
+              "refiningNeedId": null,
+              "role": "AI",
+              "senderId": null,
+              "sessionId": "<session:main>",
+              "stage": 1,
+              "timestamp": "<ts:2>"
+            },
+            {
+              "content": "Months now. I don't know how to get through to them.",
+              "id": "<message:21>",
+              "refiningNeedId": null,
+              "role": "USER",
+              "senderId": "<user:bob>",
+              "sessionId": "<session:main>",
+              "stage": 1,
+              "timestamp": "<ts:3>"
+            },
+            {
+              "content": "Do you feel like I understand what you've been going through?",
+              "id": "<message:22>",
+              "refiningNeedId": null,
+              "role": "AI",
+              "senderId": null,
+              "sessionId": "<session:main>",
+              "stage": 1,
+              "timestamp": "<ts:4>"
+            },
+            {
+              "content": "Yes, I feel heard.",
+              "id": "<message:23>",
+              "refiningNeedId": null,
+              "role": "USER",
+              "senderId": "<user:bob>",
+              "sessionId": "<session:main>",
+              "stage": 1,
+              "timestamp": "<ts:5>"
+            }
+          ]
         },
         "success": true
       },
