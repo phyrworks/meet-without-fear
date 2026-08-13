@@ -163,7 +163,7 @@
           "invitation": {
             "acceptedAt": "<ts:16>",
             "createdAt": "<ts:17>",
-            "expiresAt": "<ts:20>",
+            "expiresAt": "<ts:19>",
             "id": "<invitation:main>",
             "invitedBy": {
               "id": "<user:ada>",
@@ -302,7 +302,7 @@
           "progress": {
             "canAdvance": false,
             "milestones": {
-              "feelHeardConfirmedAt": "<ts:19>",
+              "feelHeardConfirmedAt": "<ts:13>",
               "witnessStartedAt": "<ts:7>"
             },
             "myProgress": {
@@ -546,7 +546,7 @@
           "invitation": {
             "acceptedAt": "<ts:13>",
             "createdAt": "<ts:14>",
-            "expiresAt": "<ts:17>",
+            "expiresAt": "<ts:16>",
             "id": "<invitation:main>",
             "invitedBy": {
               "id": "<user:ada>",
@@ -658,7 +658,7 @@
           "progress": {
             "canAdvance": false,
             "milestones": {
-              "feelHeardConfirmedAt": "<ts:16>",
+              "feelHeardConfirmedAt": "<ts:15>",
               "witnessStartedAt": "<ts:8>"
             },
             "myProgress": {

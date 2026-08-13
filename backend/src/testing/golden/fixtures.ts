@@ -27,6 +27,7 @@ import {
   listTables,
   parseDbUrl,
   rebaseTimestamps,
+  rebaseJsonTimestamps,
   tableCounts,
   toDbUrl,
   withClient,
@@ -255,8 +256,14 @@ async function rebaseTimestampsToAge(
     },
     database,
   );
-  if (shift === null) return;
+  if (shift === null) {
+    throw new Error(
+      `Fixture "${manifest.stage}" has no Session row, so its age cannot be anchored. ` +
+        `Skipping the rebase silently would let the fixture age without bound.`,
+    );
+  }
 
   await rebaseTimestamps(target, database, `${shift} seconds`);
-  void manifest;
+  // Json columns hold ISO timestamps that the column rebase cannot reach.
+  await rebaseJsonTimestamps(target, database, Number(shift));
 }

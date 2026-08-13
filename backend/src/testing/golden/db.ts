@@ -217,6 +217,77 @@ export async function rebaseTimestamps(
   );
 }
 
+/**
+ * Shift ISO-8601 timestamps embedded inside `json`/`jsonb` columns.
+ *
+ * `rebaseTimestamps` only moves the 144 timestamp *columns*. Timestamps
+ * serialized into the 17 Json columns stayed at their seed-time values, so their
+ * offset from every rebased column grew by an hour every hour. This is not
+ * hypothetical: `StageProgress.gatesSatisfied->>'feelHeardConfirmedAt'` drifted
+ * to 16 hours old against 1-hour-old columns and broke the scenario — the exact
+ * silent-aging failure the rebase exists to prevent, reintroduced through jsonb.
+ *
+ * Parsing these in JavaScript is safe *here specifically*, unlike the naive
+ * `timestamp` columns: JSON values are written as ISO-8601 with an explicit `Z`,
+ * so there is no timezone ambiguity to get wrong.
+ */
+export async function rebaseJsonTimestamps(
+  t: DbTarget,
+  database: string,
+  shiftSeconds: number,
+): Promise<{ rowsUpdated: number }> {
+  const ISO_Z = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$/;
+
+  const shiftValue = (v: unknown): unknown => {
+    if (typeof v === 'string' && ISO_Z.test(v)) {
+      return new Date(new Date(v).getTime() + shiftSeconds * 1000).toISOString();
+    }
+    if (Array.isArray(v)) return v.map(shiftValue);
+    if (v && typeof v === 'object') {
+      const out: Record<string, unknown> = {};
+      for (const [k, val] of Object.entries(v as Record<string, unknown>)) out[k] = shiftValue(val);
+      return out;
+    }
+    return v;
+  };
+
+  return withClient(
+    t,
+    async c => {
+      const cols = await c.query<{ table_name: string; column_name: string }>(
+        `SELECT c.table_name, c.column_name
+         FROM information_schema.columns c
+         JOIN information_schema.tables tb
+           ON tb.table_schema = c.table_schema AND tb.table_name = c.table_name
+         WHERE c.table_schema = 'public'
+           AND tb.table_type = 'BASE TABLE'
+           AND c.table_name <> '_prisma_migrations'
+           AND c.data_type IN ('json', 'jsonb')`,
+      );
+
+      let rowsUpdated = 0;
+      for (const { table_name: table, column_name: col } of cols.rows) {
+        // ctid addresses a row without needing to know the primary key, which
+        // keeps this generic across composite-PK and PK-less tables alike.
+        const rows = await c.query<{ ctid: string; v: unknown }>(
+          `SELECT ctid::text AS ctid, "${col}" AS v FROM "${table}" WHERE "${col}" IS NOT NULL`,
+        );
+        for (const row of rows.rows) {
+          const shifted = shiftValue(row.v);
+          if (JSON.stringify(shifted) === JSON.stringify(row.v)) continue;
+          await c.query(`UPDATE "${table}" SET "${col}" = $1::jsonb WHERE ctid = $2::tid`, [
+            JSON.stringify(shifted),
+            row.ctid,
+          ]);
+          rowsUpdated += 1;
+        }
+      }
+      return { rowsUpdated };
+    },
+    database,
+  );
+}
+
 /** Row counts for every table — a cheap shape check on a restored fixture. */
 export async function tableCounts(t: DbTarget, database?: string): Promise<Record<string, number>> {
   const tables = await listTables(t, database);
