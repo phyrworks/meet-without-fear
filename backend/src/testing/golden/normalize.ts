@@ -23,8 +23,16 @@
 import { DbTarget, withClient } from './db';
 import type { FixtureManifest } from './fixtures';
 
-/** cuid v1: 'c' followed by 24 base36 chars. */
-const CUID_RE = /\bc[a-z0-9]{24}\b/g;
+/**
+ * cuid v1: 'c' followed by 24 base36 chars.
+ *
+ * The boundary is `(?<![a-z0-9])` rather than `\b`, because `_` is a word
+ * character: `auth.ts` builds `clerkId = \`e2e_${userId}\``, and `\bc[a-z0-9]{24}\b`
+ * does not match inside `e2e_c…`. That let a raw fixture id ride through any
+ * payload exposing clerkId without being labelled OR flagged unresolved —
+ * a hole straight through the tripwire.
+ */
+const CUID_RE = /(?<![a-z0-9])c[a-z0-9]{24}(?![a-z0-9])/g;
 /** `2026-08-12 23:52:14.936` or ISO-8601. */
 const TIMESTAMP_RE = /\b\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?(?:Z|[+-]\d{2}:?\d{2})?\b/g;
 
@@ -120,8 +128,11 @@ export function normalize<T>(value: T, map: LabelMap): NormalizeResult<T> {
     if (Array.isArray(v)) return v.map(walk);
     if (typeof v === 'object') {
       const out: Record<string, unknown> = {};
+      // Keys are normalized too. A response shaped `{ [userId]: ... }` would
+      // otherwise carry raw ids that are neither labelled nor flagged, so a
+      // leak keyed by an unknown id went undetected entirely.
       for (const k of Object.keys(v as object).sort()) {
-        out[k] = walk((v as Record<string, unknown>)[k]);
+        out[normalizeString(k)] = walk((v as Record<string, unknown>)[k]);
       }
       return out;
     }
@@ -148,18 +159,27 @@ export function normalize<T>(value: T, map: LabelMap): NormalizeResult<T> {
 function normalizeStampText(s: string): string {
   // `2026-08-12 23:52:14.936` and `2026-08-12T23:52:14.936Z` are the same instant
   // in this schema's UTC-naive convention; compare them on one basis.
-  return s
+  const base = s
     .replace('T', ' ')
     .replace('Z', '')
     .replace(/\+00:?00$/, '')
     .trim();
+  // Postgres ::text renders `12:00:00` while JSON bodies render `12:00:00.000`.
+  // Without padding, one instant becomes two stamps with two ranks, so "ties
+  // stay ties" silently stops being true wherever both forms co-occur.
+  const m = base.match(/^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})(?:\.(\d+))?$/);
+  if (!m) return base;
+  return `${m[1]}.${(m[2] ?? '').padEnd(6, '0').slice(0, 6)}`;
 }
 
 function collectStrings(v: unknown, fn: (s: string) => void): void {
   if (typeof v === 'string') return fn(v);
   if (Array.isArray(v)) return v.forEach(x => collectStrings(x, fn));
   if (v && typeof v === 'object') {
-    for (const k of Object.keys(v as object)) collectStrings((v as Record<string, unknown>)[k], fn);
+    for (const k of Object.keys(v as object)) {
+      fn(k);
+      collectStrings((v as Record<string, unknown>)[k], fn);
+    }
   }
 }
 

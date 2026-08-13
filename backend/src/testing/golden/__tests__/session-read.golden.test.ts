@@ -87,14 +87,19 @@ describe(`golden: ${SCENARIO}`, () => {
   it('matches the recorded baseline', async () => {
     const report = await recordOrVerify({ scenario: SCENARIO, harness, steps });
     if (report.recorded) {
-      // eslint-disable-next-line no-console
-      console.warn(`[golden] recorded baseline for "${SCENARIO}"`);
+      // Recording is an explicit, deliberate act (GOLDEN_UPDATE=1). Reaching
+      // here in a normal run would mean the oracle rewrote itself.
+      expect(process.env.GOLDEN_UPDATE).toBe('1');
       return;
     }
     if (report.diff) {
       throw new Error(`Golden mismatch for "${SCENARIO}":\n${report.diff}`);
     }
     expect(report.diff).toBeNull();
+  });
+
+  it('every step reached quiescence (a timed-out step is not a baseline)', () => {
+    expect(steps.filter(s => !s.settled).map(s => s.label)).toEqual([]);
   });
 
   it('the two participants see different message sets', () => {

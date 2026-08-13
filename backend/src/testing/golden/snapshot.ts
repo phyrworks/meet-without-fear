@@ -23,6 +23,8 @@ export type SnapshotRow = Record<string, unknown>;
 export type TableSnapshot = SnapshotRow[];
 export interface Snapshot {
   tables: Record<string, TableSnapshot>;
+  /** Primary key columns per table, so the diff can identify rows correctly. */
+  primaryKeys: Record<string, string[]>;
   takenAt: string;
 }
 
@@ -138,7 +140,9 @@ export async function takeSnapshot(opts: SnapshotOptions): Promise<Snapshot> {
         const r = await c.query(`SELECT ${selectList(cols)} FROM "${table}" ORDER BY ${orderBy}`);
         out[table] = r.rows as SnapshotRow[];
       }
-      return { tables: out, takenAt: new Date().toISOString() };
+      const primaryKeys: Record<string, string[]> = {};
+      for (const table of tables) primaryKeys[table] = pkMap.get(table) ?? [];
+      return { tables: out, primaryKeys, takenAt: new Date().toISOString() };
     },
     database,
   );
@@ -153,7 +157,17 @@ export interface RowChange {
   changedFields?: string[];
 }
 
-function rowKey(row: SnapshotRow): string {
+/**
+ * Identify a row by its real primary key.
+ *
+ * Hardcoding `id` meant composite-PK tables — `StrategyProposalNeed` is
+ * `@@id([proposalId, needId])` — fell back to hashing the whole row, so every
+ * UPDATE diffed as remove + add. `changedFields` was then never produced for
+ * them, which silently disabled `timestampFacts` on exactly those tables: the
+ * one check that catches a hand-written UPDATE forgetting `updatedAt`.
+ */
+function rowKey(row: SnapshotRow, pk: string[]): string {
+  if (pk.length) return pk.map(c => JSON.stringify(row[c])).join('\u0000');
   const id = row.id;
   if (id !== undefined && id !== null) return String(id);
   return JSON.stringify(row);
@@ -170,8 +184,9 @@ export function diffSnapshots(before: Snapshot, after: Snapshot): RowChange[] {
   const tables = new Set([...Object.keys(before.tables), ...Object.keys(after.tables)]);
 
   for (const table of [...tables].sort()) {
-    const b = new Map((before.tables[table] ?? []).map(r => [rowKey(r), r]));
-    const a = new Map((after.tables[table] ?? []).map(r => [rowKey(r), r]));
+    const pk = after.primaryKeys?.[table] ?? before.primaryKeys?.[table] ?? [];
+    const b = new Map((before.tables[table] ?? []).map(r => [rowKey(r, pk), r]));
+    const a = new Map((after.tables[table] ?? []).map(r => [rowKey(r, pk), r]));
 
     for (const [key, row] of a) {
       if (!b.has(key)) {

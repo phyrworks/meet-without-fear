@@ -21,8 +21,10 @@ export interface GoldenStep {
   sse?: Array<{ event: string; data: unknown }>;
   /** Changes visible once background work has settled. */
   changes: unknown[];
-  /** True when the response-time and settled snapshots differ — i.e. async writes. */
-  hadAsyncWrites: boolean;
+  /** Changes visible the instant the response returned — the transaction boundary. */
+  changesAtResponse: unknown[];
+  /** False when quiescence polling timed out; a timed-out step is not a baseline. */
+  settled: boolean;
 }
 
 export interface GoldenFile {
@@ -35,47 +37,63 @@ function goldenPath(scenario: string): string {
   return path.join(GOLDEN_DIR, `${scenario}.json`);
 }
 
-function normalizeChange(c: RowChange, map: LabelMap): unknown {
-  const before = c.before as Record<string, unknown> | undefined;
-  const after = (c.after ?? {}) as Record<string, unknown>;
-  const facts = timestampFacts(before, after);
-  const n = normalize(
-    {
-      table: c.table,
-      kind: c.kind,
-      key: c.key,
-      changedFields: c.changedFields?.slice().sort(),
-      after: c.after,
-      before: c.before,
-    },
-    map,
+function describeChange(c: RowChange): Record<string, unknown> {
+  const facts = timestampFacts(
+    c.before as Record<string, unknown> | undefined,
+    (c.after ?? {}) as Record<string, unknown>,
   );
-  return Object.keys(facts).length ? { ...(n.value as object), timestampFacts: facts } : n.value;
+  return {
+    table: c.table,
+    kind: c.kind,
+    key: c.key,
+    changedFields: c.changedFields?.slice().sort(),
+    after: c.after,
+    before: c.before,
+    ...(Object.keys(facts).length ? { timestampFacts: facts } : {}),
+  };
 }
 
+/**
+ * Normalize a whole step in ONE pass.
+ *
+ * Two reasons this is not done piecewise:
+ *
+ * 1. Timestamp ranks must share a universe across the response body and every
+ *    row change, or cross-row ordering is never asserted. Normalizing each
+ *    change separately meant a row whose timestamp was written from `now()`
+ *    instead of a carried value ranked identically inside its own object — a
+ *    false pass on exactly the kind of clock-basis error the migration invites.
+ * 2. Unresolved ids found in row changes were previously discarded, so the
+ *    advertised "any unresolved id fails the run" guard did not apply to the
+ *    channel where write regressions actually appear. Only 8 of 68 tables are
+ *    labelled, so that channel is where unknown ids are most likely.
+ */
 export function normalizeStep(step: StepResult, map: LabelMap): { golden: GoldenStep; unresolved: string[] } {
-  const unresolved: string[] = [];
-  const body = normalize(step.body, map);
-  unresolved.push(...body.unresolved);
+  const payload = {
+    body: step.sse ? undefined : step.body,
+    sse: step.sse,
+    changes: step.changes.map(describeChange),
+    changesAtResponse: step.changesAtResponse.map(describeChange),
+  };
 
-  let sse: GoldenStep['sse'];
-  if (step.sse) {
-    const n = normalize(step.sse, map);
-    unresolved.push(...n.unresolved);
-    sse = n.value as GoldenStep['sse'];
-  }
-
-  const changes = step.changes.map(c => normalizeChange(c, map));
+  const n = normalize(payload, map);
+  const v = n.value as typeof payload;
 
   return {
     golden: {
       label: step.label,
       status: step.status,
-      ...(step.sse ? { sse } : { body: body.value }),
-      changes,
-      hadAsyncWrites: step.changes.length !== step.changesAtResponse.length,
+      ...(step.sse ? { sse: v.sse as GoldenStep['sse'] } : { body: v.body }),
+      changes: (v.changes ?? []) as unknown[],
+      // Recorded as content, not as a count. A length-only flag cannot see
+      // background work that further mutates rows already changed at response
+      // time, nor a sync/async move where the counts happen to coincide — and
+      // the response-time state is precisely the transaction boundary the
+      // migration is most likely to shift.
+      changesAtResponse: (v.changesAtResponse ?? []) as unknown[],
+      settled: step.settled,
     },
-    unresolved: [...new Set(unresolved)],
+    unresolved: n.unresolved,
   };
 }
 
@@ -115,10 +133,30 @@ export async function recordOrVerify(opts: {
   };
 
   const p = goldenPath(scenario);
-  if (process.env.GOLDEN_UPDATE === '1' || !fs.existsSync(p)) {
+  const recording = process.env.GOLDEN_UPDATE === '1';
+
+  if (recording) {
     fs.mkdirSync(GOLDEN_DIR, { recursive: true });
     fs.writeFileSync(p, JSON.stringify(actual, null, 2) + '\n');
     return { scenario, recorded: true, unresolved: [...new Set(unresolved)], diff: null };
+  }
+
+  // A missing baseline must FAIL, never silently record. Auto-recording in
+  // verify mode meant a deleted, renamed or never-committed golden produced a
+  // suite that passed forever while asserting nothing — verified by deleting
+  // the file and watching all three tests pass. That is the oracle deleting
+  // itself and staying green, which is the worst failure this harness can have.
+  if (!fs.existsSync(p)) {
+    return {
+      scenario,
+      recorded: false,
+      unresolved: [...new Set(unresolved)],
+      diff:
+        `No recorded baseline at ${path.relative(process.cwd(), p)}.\n` +
+        `A missing golden is a failure, not a first run. If this scenario is new, record it\n` +
+        `deliberately and commit the file:\n` +
+        `    GOLDEN_UPDATE=1 npx jest ${scenario}`,
+    };
   }
 
   const expected = JSON.parse(fs.readFileSync(p, 'utf8')) as GoldenFile;

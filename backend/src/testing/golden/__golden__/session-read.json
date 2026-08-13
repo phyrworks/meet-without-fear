@@ -144,7 +144,8 @@
         "success": true
       },
       "changes": [],
-      "hadAsyncWrites": false
+      "changesAtResponse": [],
+      "settled": true
     },
     {
       "label": "session state as ada@e2e.test",
@@ -346,7 +347,8 @@
         "success": true
       },
       "changes": [],
-      "hadAsyncWrites": false
+      "changesAtResponse": [],
+      "settled": true
     },
     {
       "label": "messages page of 5 as ada@e2e.test",
@@ -410,7 +412,8 @@
         "success": true
       },
       "changes": [],
-      "hadAsyncWrites": false
+      "changesAtResponse": [],
+      "settled": true
     },
     {
       "label": "messages as bob@e2e.test",
@@ -524,7 +527,8 @@
         "success": true
       },
       "changes": [],
-      "hadAsyncWrites": false
+      "changesAtResponse": [],
+      "settled": true
     },
     {
       "label": "session state as bob@e2e.test",
@@ -699,7 +703,8 @@
         "success": true
       },
       "changes": [],
-      "hadAsyncWrites": false
+      "changesAtResponse": [],
+      "settled": true
     },
     {
       "label": "messages page of 5 as bob@e2e.test",
@@ -763,7 +768,8 @@
         "success": true
       },
       "changes": [],
-      "hadAsyncWrites": false
+      "changesAtResponse": [],
+      "settled": true
     }
   ]
 }

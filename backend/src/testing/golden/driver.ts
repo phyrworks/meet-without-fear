@@ -61,6 +61,8 @@ export interface StepResult {
   changes: RowChange[];
   /** Changes visible the instant the response returned, before background work settled. */
   changesAtResponse: RowChange[];
+  /** False when quiescence polling timed out rather than stabilising. */
+  settled: boolean;
 }
 
 export interface Harness {
@@ -96,9 +98,9 @@ export function authHeaders(actor: ActorRef): Record<string, string> {
 async function settle(
   take: () => Promise<Snapshot>,
   opts: { stableFor?: number; timeoutMs?: number } = {},
-): Promise<Snapshot> {
-  const stableFor = opts.stableFor ?? 2;
-  const timeoutMs = opts.timeoutMs ?? 4000;
+): Promise<{ snapshot: Snapshot; settled: boolean }> {
+  const stableFor = opts.stableFor ?? 4;
+  const timeoutMs = opts.timeoutMs ?? 6000;
   const deadline = Date.now() + timeoutMs;
 
   let last = await take();
@@ -108,9 +110,12 @@ async function settle(
     const next = await take();
     stable = diffSnapshots(last, next).length === 0 ? stable + 1 : 0;
     last = next;
-    if (stable >= stableFor) break;
+    // Returning `settled` matters: a timeout previously looked identical to
+    // quiescence, so a truncated state could be recorded as the baseline and a
+    // replay truncated at the same point would match it forever.
+    if (stable >= stableFor) return { snapshot: last, settled: true };
   }
-  return last;
+  return { snapshot: last, settled: false };
 }
 
 export async function createHarness(opts: { baseUrl: string; stage: string; runId: string }): Promise<Harness> {
@@ -158,7 +163,7 @@ export async function createHarness(opts: { baseUrl: string; stage: string; runI
 
       const res = await test;
       const atResponse = await snapshot(tables);
-      const settled = await settle(() => snapshot(tables));
+      const { snapshot: settledSnap, settled } = await settle(() => snapshot(tables));
 
       return {
         label,
@@ -166,7 +171,8 @@ export async function createHarness(opts: { baseUrl: string; stage: string; runI
         body: sse ? undefined : res.body,
         sse: sse ? parseSse(String(res.body || res.text || '')) : undefined,
         changesAtResponse: diffSnapshots(before, atResponse),
-        changes: diffSnapshots(before, settled),
+        changes: diffSnapshots(before, settledSnap),
+        settled,
       };
     },
     async teardown() {
