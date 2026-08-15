@@ -14,6 +14,9 @@ import type { RowChange } from './snapshot';
 
 const GOLDEN_DIR = path.join(__dirname, '__golden__');
 
+/** What `changesAtResponse` records for a step whose writes outlive the response. */
+export const ASYNC_BOUNDARY = '<async: response-time state is a race, not a boundary>';
+
 export interface GoldenStep {
   label: string;
   status: number;
@@ -22,7 +25,7 @@ export interface GoldenStep {
   /** Changes visible once background work has settled. */
   changes: unknown[];
   /** Changes visible the instant the response returned — the transaction boundary. */
-  changesAtResponse: unknown[];
+  changesAtResponse: unknown[] | typeof ASYNC_BOUNDARY;
   /** False when quiescence polling timed out; a timed-out step is not a baseline. */
   settled: boolean;
 }
@@ -76,7 +79,7 @@ export function normalizeStep(step: StepResult, map: LabelMap): { golden: Golden
     changesAtResponse: step.changesAtResponse.map(describeChange),
   };
 
-  const n = normalize(payload, map);
+  const n = normalize(payload, map, step.window);
   const v = n.value as typeof payload;
 
   return {
@@ -90,7 +93,13 @@ export function normalizeStep(step: StepResult, map: LabelMap): { golden: Golden
       // time, nor a sync/async move where the counts happen to coincide — and
       // the response-time state is precisely the transaction boundary the
       // migration is most likely to shift.
-      changesAtResponse: (v.changesAtResponse ?? []) as unknown[],
+      //
+      // Unless the step declares that its writes outlive the response, in which
+      // case there is no boundary to record: the same endpoint was measured
+      // returning with its empathy attempt on READY in one run and REVEALED in
+      // the next. Recording a race as a baseline is how a harness starts failing
+      // for reasons that have nothing to do with the code under test.
+      changesAtResponse: step.asyncBoundary ? ASYNC_BOUNDARY : ((v.changesAtResponse ?? []) as unknown[]),
       settled: step.settled,
     },
     unresolved: n.unresolved,

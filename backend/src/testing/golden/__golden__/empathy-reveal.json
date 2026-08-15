@@ -1,0 +1,1440 @@
+{
+  "scenario": "empathy-reveal",
+  "stage": "FEEL_HEARD_B",
+  "steps": [
+    {
+      "label": "draft as bob",
+      "status": 200,
+      "body": {
+        "data": {
+          "draftId": "<empathyDraft:bob>",
+          "readyToShare": true,
+          "savedAt": "<ts:fresh>"
+        },
+        "success": true
+      },
+      "changes": [
+        {
+          "after": {
+            "content": "I think you feel unseen when the chores pile up and nobody says anything.",
+            "createdAt": "<ts:fresh>",
+            "id": "<empathyDraft:bob>",
+            "readyToShare": true,
+            "sessionId": "<session:main>",
+            "updatedAt": "<ts:fresh>",
+            "userId": "<user:bob>",
+            "version": 1
+          },
+          "key": "\"<empathyDraft:bob>\"",
+          "kind": "added",
+          "table": "EmpathyDraft",
+          "timestampFacts": {
+            "updatedAt==createdAt": "true"
+          }
+        },
+        {
+          "after": {
+            "biometricEnabled": false,
+            "biometricEnrolledAt": null,
+            "clerkId": "e2e_<user:bob>",
+            "createdAt": "<ts:1>",
+            "email": "bob@e2e.test",
+            "firstName": null,
+            "globalFacts": null,
+            "id": "<user:bob>",
+            "lastMoodIntensity": 7,
+            "lastName": null,
+            "memoryPreferences": null,
+            "name": "Bob Ross",
+            "notificationPreferences": null,
+            "privacyPreferences": null,
+            "pushToken": null,
+            "updatedAt": "<ts:fresh>"
+          },
+          "before": {
+            "biometricEnabled": false,
+            "biometricEnrolledAt": null,
+            "clerkId": "e2e_1786582403926_rxdc7e",
+            "createdAt": "<ts:1>",
+            "email": "bob@e2e.test",
+            "firstName": null,
+            "globalFacts": null,
+            "id": "<user:bob>",
+            "lastMoodIntensity": 7,
+            "lastName": null,
+            "memoryPreferences": null,
+            "name": "Bob Ross",
+            "notificationPreferences": null,
+            "privacyPreferences": null,
+            "pushToken": null,
+            "updatedAt": "<ts:1>"
+          },
+          "changedFields": [
+            "clerkId",
+            "updatedAt"
+          ],
+          "key": "\"<user:bob>\"",
+          "kind": "changed",
+          "table": "User",
+          "timestampFacts": {
+            "updatedAt.bumped": "true",
+            "updatedAt==createdAt": "false"
+          }
+        }
+      ],
+      "changesAtResponse": [
+        {
+          "after": {
+            "content": "I think you feel unseen when the chores pile up and nobody says anything.",
+            "createdAt": "<ts:fresh>",
+            "id": "<empathyDraft:bob>",
+            "readyToShare": true,
+            "sessionId": "<session:main>",
+            "updatedAt": "<ts:fresh>",
+            "userId": "<user:bob>",
+            "version": 1
+          },
+          "key": "\"<empathyDraft:bob>\"",
+          "kind": "added",
+          "table": "EmpathyDraft",
+          "timestampFacts": {
+            "updatedAt==createdAt": "true"
+          }
+        },
+        {
+          "after": {
+            "biometricEnabled": false,
+            "biometricEnrolledAt": null,
+            "clerkId": "e2e_<user:bob>",
+            "createdAt": "<ts:1>",
+            "email": "bob@e2e.test",
+            "firstName": null,
+            "globalFacts": null,
+            "id": "<user:bob>",
+            "lastMoodIntensity": 7,
+            "lastName": null,
+            "memoryPreferences": null,
+            "name": "Bob Ross",
+            "notificationPreferences": null,
+            "privacyPreferences": null,
+            "pushToken": null,
+            "updatedAt": "<ts:fresh>"
+          },
+          "before": {
+            "biometricEnabled": false,
+            "biometricEnrolledAt": null,
+            "clerkId": "e2e_1786582403926_rxdc7e",
+            "createdAt": "<ts:1>",
+            "email": "bob@e2e.test",
+            "firstName": null,
+            "globalFacts": null,
+            "id": "<user:bob>",
+            "lastMoodIntensity": 7,
+            "lastName": null,
+            "memoryPreferences": null,
+            "name": "Bob Ross",
+            "notificationPreferences": null,
+            "privacyPreferences": null,
+            "pushToken": null,
+            "updatedAt": "<ts:1>"
+          },
+          "changedFields": [
+            "clerkId",
+            "updatedAt"
+          ],
+          "key": "\"<user:bob>\"",
+          "kind": "changed",
+          "table": "User",
+          "timestampFacts": {
+            "updatedAt.bumped": "true",
+            "updatedAt==createdAt": "false"
+          }
+        }
+      ],
+      "settled": true
+    },
+    {
+      "label": "consent as bob",
+      "status": 200,
+      "body": {
+        "data": {
+          "canReveal": true,
+          "consented": true,
+          "consentedAt": "<ts:fresh>",
+          "empathyMessage": {
+            "content": "I think you feel unseen when the chores pile up and nobody says anything.",
+            "id": "<message:24>",
+            "stage": 2,
+            "timestamp": "<ts:fresh>"
+          },
+          "partnerConsented": true,
+          "status": "ANALYZING",
+          "transitionMessage": {
+            "content": "Your empathy attempt has been submitted. Both empathy statements are now submitted. We'll show the next review or waiting step once the privacy-protected review is ready.",
+            "id": "<message:25>",
+            "stage": 2,
+            "timestamp": "<ts:fresh>"
+          }
+        },
+        "success": true
+      },
+      "changes": [
+        {
+          "after": {
+            "createdAt": "<ts:fresh>",
+            "decidedAt": "<ts:fresh>",
+            "decision": "GRANTED",
+            "id": "<consent:bob/EMPATHY_DRAFT/empathyDraft:bob>",
+            "metadata": null,
+            "requestedByUserId": "<user:bob>",
+            "revokedAt": null,
+            "sessionId": "<session:main>",
+            "targetId": "<empathyDraft:bob>",
+            "targetType": "EMPATHY_DRAFT",
+            "userId": "<user:bob>"
+          },
+          "key": "\"<consent:bob/EMPATHY_DRAFT/empathyDraft:bob>\"",
+          "kind": "added",
+          "table": "ConsentRecord"
+        },
+        {
+          "after": {
+            "consentRecordId": null,
+            "content": "I understand you might be feeling stressed from work. I want us to support each other better.",
+            "deliveredAt": "<ts:fresh>",
+            "deliveryStatus": "DELIVERED",
+            "draftId": "<empathyDraft:ada>",
+            "id": "<empathyAttempt:ada>",
+            "revealedAt": "<ts:fresh>",
+            "revisionCount": 0,
+            "seenAt": null,
+            "sessionId": "<session:main>",
+            "sharedAt": "<ts:1>",
+            "sourceUserId": "<user:ada>",
+            "status": "REVEALED",
+            "statusVersion": 3
+          },
+          "before": {
+            "consentRecordId": null,
+            "content": "I understand you might be feeling stressed from work. I want us to support each other better.",
+            "deliveredAt": null,
+            "deliveryStatus": "PENDING",
+            "draftId": "<empathyDraft:ada>",
+            "id": "<empathyAttempt:ada>",
+            "revealedAt": null,
+            "revisionCount": 0,
+            "seenAt": null,
+            "sessionId": "<session:main>",
+            "sharedAt": "<ts:1>",
+            "sourceUserId": "<user:ada>",
+            "status": "HELD",
+            "statusVersion": 0
+          },
+          "changedFields": [
+            "deliveredAt",
+            "deliveryStatus",
+            "revealedAt",
+            "status",
+            "statusVersion"
+          ],
+          "key": "\"<empathyAttempt:ada>\"",
+          "kind": "changed",
+          "table": "EmpathyAttempt"
+        },
+        {
+          "after": {
+            "consentRecordId": null,
+            "content": "I think you feel unseen when the chores pile up and nobody says anything.",
+            "deliveredAt": "<ts:fresh>",
+            "deliveryStatus": "DELIVERED",
+            "draftId": "<empathyDraft:bob>",
+            "id": "<empathyAttempt:bob>",
+            "revealedAt": "<ts:fresh>",
+            "revisionCount": 0,
+            "seenAt": null,
+            "sessionId": "<session:main>",
+            "sharedAt": "<ts:fresh>",
+            "sourceUserId": "<user:bob>",
+            "status": "REVEALED",
+            "statusVersion": 3
+          },
+          "key": "\"<empathyAttempt:bob>\"",
+          "kind": "added",
+          "table": "EmpathyAttempt"
+        },
+        {
+          "after": {
+            "content": "I think you feel unseen when the chores pile up and nobody says anything.",
+            "extractedEmotions": null,
+            "extractedNeeds": null,
+            "forUserId": "<user:bob>",
+            "id": "<message:24>",
+            "refiningNeedId": null,
+            "role": "EMPATHY_STATEMENT",
+            "senderId": "<user:bob>",
+            "sessionId": "<session:main>",
+            "stage": 2,
+            "timestamp": "<ts:fresh>"
+          },
+          "key": "\"<message:24>\"",
+          "kind": "added",
+          "table": "Message"
+        },
+        {
+          "after": {
+            "content": "Your empathy attempt has been submitted. Both empathy statements are now submitted. We'll show the next review or waiting step once the privacy-protected review is ready.",
+            "extractedEmotions": null,
+            "extractedNeeds": null,
+            "forUserId": "<user:bob>",
+            "id": "<message:25>",
+            "refiningNeedId": null,
+            "role": "AI",
+            "senderId": null,
+            "sessionId": "<session:main>",
+            "stage": 2,
+            "timestamp": "<ts:fresh>"
+          },
+          "key": "\"<message:25>\"",
+          "kind": "added",
+          "table": "Message"
+        },
+        {
+          "after": {
+            "content": "Ada Lovelace's attempt to understand your experience is ready for you to review. Take a moment to read it and let us know how it feels.",
+            "extractedEmotions": null,
+            "extractedNeeds": null,
+            "forUserId": "<user:bob>",
+            "id": "<message:26>",
+            "refiningNeedId": null,
+            "role": "AI",
+            "senderId": null,
+            "sessionId": "<session:main>",
+            "stage": 2,
+            "timestamp": "<ts:fresh>"
+          },
+          "key": "\"<message:26>\"",
+          "kind": "added",
+          "table": "Message"
+        },
+        {
+          "after": {
+            "content": "Bob Ross's attempt to understand your experience is ready for you to review. Take a moment to read it and let us know how it feels.",
+            "extractedEmotions": null,
+            "extractedNeeds": null,
+            "forUserId": "<user:ada>",
+            "id": "<message:27>",
+            "refiningNeedId": null,
+            "role": "AI",
+            "senderId": null,
+            "sessionId": "<session:main>",
+            "stage": 2,
+            "timestamp": "<ts:fresh>"
+          },
+          "key": "\"<message:27>\"",
+          "kind": "added",
+          "table": "Message"
+        },
+        {
+          "after": {
+            "biometricEnabled": false,
+            "biometricEnrolledAt": null,
+            "clerkId": "e2e_<user:bob>",
+            "createdAt": "<ts:2>",
+            "email": "bob@e2e.test",
+            "firstName": null,
+            "globalFacts": null,
+            "id": "<user:bob>",
+            "lastMoodIntensity": 7,
+            "lastName": null,
+            "memoryPreferences": null,
+            "name": "Bob Ross",
+            "notificationPreferences": null,
+            "privacyPreferences": null,
+            "pushToken": null,
+            "updatedAt": "<ts:fresh>"
+          },
+          "before": {
+            "biometricEnabled": false,
+            "biometricEnrolledAt": null,
+            "clerkId": "e2e_<user:bob>",
+            "createdAt": "<ts:2>",
+            "email": "bob@e2e.test",
+            "firstName": null,
+            "globalFacts": null,
+            "id": "<user:bob>",
+            "lastMoodIntensity": 7,
+            "lastName": null,
+            "memoryPreferences": null,
+            "name": "Bob Ross",
+            "notificationPreferences": null,
+            "privacyPreferences": null,
+            "pushToken": null,
+            "updatedAt": "<ts:fresh>"
+          },
+          "changedFields": [
+            "updatedAt"
+          ],
+          "key": "\"<user:bob>\"",
+          "kind": "changed",
+          "table": "User",
+          "timestampFacts": {
+            "updatedAt.bumped": "true",
+            "updatedAt==createdAt": "false"
+          }
+        }
+      ],
+      "changesAtResponse": "<async: response-time state is a race, not a boundary>",
+      "settled": true
+    },
+    {
+      "label": "empathy status as ada@e2e.test",
+      "status": 200,
+      "body": {
+        "data": {
+          "analyzing": false,
+          "awaitingSharing": false,
+          "hasNewSharedContext": false,
+          "hasUnviewedSharedContext": false,
+          "messageCountSinceSharedContext": 0,
+          "myAttempt": {
+            "consentRecordId": "",
+            "content": "I understand you might be feeling stressed from work. I want us to support each other better.",
+            "deliveryStatus": "delivered",
+            "id": "<empathyAttempt:ada>",
+            "revealedAt": "<ts:fresh>",
+            "revisionCount": 0,
+            "sharedAt": "<ts:1>",
+            "sourceUserId": "<user:ada>",
+            "status": "REVEALED",
+            "validatedAt": null
+          },
+          "myReconcilerResult": null,
+          "mySharedAt": null,
+          "mySharedContext": null,
+          "partnerAttempt": {
+            "consentRecordId": "",
+            "content": "I think you feel unseen when the chores pile up and nobody says anything.",
+            "id": "<empathyAttempt:bob>",
+            "revealedAt": "<ts:fresh>",
+            "revisionCount": 0,
+            "sharedAt": "<ts:fresh>",
+            "sourceUserId": "<user:bob>",
+            "status": "REVEALED",
+            "validatedAt": null
+          },
+          "partnerCompletedStage1": true,
+          "partnerEmpathyHeldStatus": "REVEALED",
+          "partnerEmpathySubmittedAt": "<ts:fresh>",
+          "partnerHasSubmittedEmpathy": true,
+          "readyForStage3": false,
+          "refinementHint": null,
+          "sharedContentDeliveryStatus": null,
+          "sharedContext": null
+        },
+        "success": true
+      },
+      "changes": [
+        {
+          "after": {
+            "biometricEnabled": false,
+            "biometricEnrolledAt": null,
+            "clerkId": "e2e_<user:ada>",
+            "createdAt": "<ts:2>",
+            "email": "ada@e2e.test",
+            "firstName": null,
+            "globalFacts": null,
+            "id": "<user:ada>",
+            "lastMoodIntensity": 7,
+            "lastName": null,
+            "memoryPreferences": null,
+            "name": "Ada Lovelace",
+            "notificationPreferences": null,
+            "privacyPreferences": null,
+            "pushToken": null,
+            "updatedAt": "<ts:fresh>"
+          },
+          "before": {
+            "biometricEnabled": false,
+            "biometricEnrolledAt": null,
+            "clerkId": "e2e_1786582403923_qqr7v0",
+            "createdAt": "<ts:2>",
+            "email": "ada@e2e.test",
+            "firstName": null,
+            "globalFacts": null,
+            "id": "<user:ada>",
+            "lastMoodIntensity": 7,
+            "lastName": null,
+            "memoryPreferences": null,
+            "name": "Ada Lovelace",
+            "notificationPreferences": null,
+            "privacyPreferences": null,
+            "pushToken": null,
+            "updatedAt": "<ts:2>"
+          },
+          "changedFields": [
+            "clerkId",
+            "updatedAt"
+          ],
+          "key": "\"<user:ada>\"",
+          "kind": "changed",
+          "table": "User",
+          "timestampFacts": {
+            "updatedAt.bumped": "true",
+            "updatedAt==createdAt": "false"
+          }
+        }
+      ],
+      "changesAtResponse": [
+        {
+          "after": {
+            "biometricEnabled": false,
+            "biometricEnrolledAt": null,
+            "clerkId": "e2e_<user:ada>",
+            "createdAt": "<ts:2>",
+            "email": "ada@e2e.test",
+            "firstName": null,
+            "globalFacts": null,
+            "id": "<user:ada>",
+            "lastMoodIntensity": 7,
+            "lastName": null,
+            "memoryPreferences": null,
+            "name": "Ada Lovelace",
+            "notificationPreferences": null,
+            "privacyPreferences": null,
+            "pushToken": null,
+            "updatedAt": "<ts:fresh>"
+          },
+          "before": {
+            "biometricEnabled": false,
+            "biometricEnrolledAt": null,
+            "clerkId": "e2e_1786582403923_qqr7v0",
+            "createdAt": "<ts:2>",
+            "email": "ada@e2e.test",
+            "firstName": null,
+            "globalFacts": null,
+            "id": "<user:ada>",
+            "lastMoodIntensity": 7,
+            "lastName": null,
+            "memoryPreferences": null,
+            "name": "Ada Lovelace",
+            "notificationPreferences": null,
+            "privacyPreferences": null,
+            "pushToken": null,
+            "updatedAt": "<ts:2>"
+          },
+          "changedFields": [
+            "clerkId",
+            "updatedAt"
+          ],
+          "key": "\"<user:ada>\"",
+          "kind": "changed",
+          "table": "User",
+          "timestampFacts": {
+            "updatedAt.bumped": "true",
+            "updatedAt==createdAt": "false"
+          }
+        }
+      ],
+      "settled": true
+    },
+    {
+      "label": "partner empathy as ada@e2e.test",
+      "status": 200,
+      "body": {
+        "data": {
+          "attempt": {
+            "consentRecordId": "",
+            "content": "I think you feel unseen when the chores pile up and nobody says anything.",
+            "id": "<empathyAttempt:bob>",
+            "revealedAt": "<ts:fresh>",
+            "revisionCount": 0,
+            "sharedAt": "<ts:fresh>",
+            "sourceUserId": "<user:bob>",
+            "status": "REVEALED",
+            "statusVersion": 3,
+            "validatedAt": null
+          },
+          "awaitingRevision": false,
+          "partnerStatus": "REVEALED",
+          "validated": false,
+          "validatedAt": null,
+          "waitingForPartner": false
+        },
+        "success": true
+      },
+      "changes": [
+        {
+          "after": {
+            "biometricEnabled": false,
+            "biometricEnrolledAt": null,
+            "clerkId": "e2e_<user:ada>",
+            "createdAt": "<ts:1>",
+            "email": "ada@e2e.test",
+            "firstName": null,
+            "globalFacts": null,
+            "id": "<user:ada>",
+            "lastMoodIntensity": 7,
+            "lastName": null,
+            "memoryPreferences": null,
+            "name": "Ada Lovelace",
+            "notificationPreferences": null,
+            "privacyPreferences": null,
+            "pushToken": null,
+            "updatedAt": "<ts:fresh>"
+          },
+          "before": {
+            "biometricEnabled": false,
+            "biometricEnrolledAt": null,
+            "clerkId": "e2e_<user:ada>",
+            "createdAt": "<ts:1>",
+            "email": "ada@e2e.test",
+            "firstName": null,
+            "globalFacts": null,
+            "id": "<user:ada>",
+            "lastMoodIntensity": 7,
+            "lastName": null,
+            "memoryPreferences": null,
+            "name": "Ada Lovelace",
+            "notificationPreferences": null,
+            "privacyPreferences": null,
+            "pushToken": null,
+            "updatedAt": "<ts:fresh>"
+          },
+          "changedFields": [
+            "updatedAt"
+          ],
+          "key": "\"<user:ada>\"",
+          "kind": "changed",
+          "table": "User",
+          "timestampFacts": {
+            "updatedAt.bumped": "true",
+            "updatedAt==createdAt": "false"
+          }
+        }
+      ],
+      "changesAtResponse": [
+        {
+          "after": {
+            "biometricEnabled": false,
+            "biometricEnrolledAt": null,
+            "clerkId": "e2e_<user:ada>",
+            "createdAt": "<ts:1>",
+            "email": "ada@e2e.test",
+            "firstName": null,
+            "globalFacts": null,
+            "id": "<user:ada>",
+            "lastMoodIntensity": 7,
+            "lastName": null,
+            "memoryPreferences": null,
+            "name": "Ada Lovelace",
+            "notificationPreferences": null,
+            "privacyPreferences": null,
+            "pushToken": null,
+            "updatedAt": "<ts:fresh>"
+          },
+          "before": {
+            "biometricEnabled": false,
+            "biometricEnrolledAt": null,
+            "clerkId": "e2e_<user:ada>",
+            "createdAt": "<ts:1>",
+            "email": "ada@e2e.test",
+            "firstName": null,
+            "globalFacts": null,
+            "id": "<user:ada>",
+            "lastMoodIntensity": 7,
+            "lastName": null,
+            "memoryPreferences": null,
+            "name": "Ada Lovelace",
+            "notificationPreferences": null,
+            "privacyPreferences": null,
+            "pushToken": null,
+            "updatedAt": "<ts:fresh>"
+          },
+          "changedFields": [
+            "updatedAt"
+          ],
+          "key": "\"<user:ada>\"",
+          "kind": "changed",
+          "table": "User",
+          "timestampFacts": {
+            "updatedAt.bumped": "true",
+            "updatedAt==createdAt": "false"
+          }
+        }
+      ],
+      "settled": true
+    },
+    {
+      "label": "messages as ada@e2e.test",
+      "status": 200,
+      "body": {
+        "data": {
+          "hasMore": false,
+          "messages": [
+            {
+              "content": "Hi, I'm having issues with my partner.",
+              "id": "<message:1>",
+              "refiningNeedId": null,
+              "role": "USER",
+              "senderId": "<user:ada>",
+              "sessionId": "<session:main>",
+              "stage": 0,
+              "timestamp": "<ts:1>"
+            },
+            {
+              "content": "I'm glad you reached out. Tell me more about what's happening.",
+              "id": "<message:2>",
+              "refiningNeedId": null,
+              "role": "AI",
+              "senderId": null,
+              "sessionId": "<session:main>",
+              "stage": 0,
+              "timestamp": "<ts:2>"
+            },
+            {
+              "content": "We argue about household chores constantly.",
+              "id": "<message:3>",
+              "refiningNeedId": null,
+              "role": "USER",
+              "senderId": "<user:ada>",
+              "sessionId": "<session:main>",
+              "stage": 1,
+              "timestamp": "<ts:3>"
+            },
+            {
+              "content": "That sounds frustrating. Would you like to invite your partner?",
+              "id": "<message:4>",
+              "refiningNeedId": null,
+              "role": "AI",
+              "senderId": null,
+              "sessionId": "<session:main>",
+              "stage": 1,
+              "timestamp": "<ts:4>"
+            },
+            {
+              "content": "Yes, I sent the invitation.",
+              "id": "<message:5>",
+              "refiningNeedId": null,
+              "role": "USER",
+              "senderId": "<user:ada>",
+              "sessionId": "<session:main>",
+              "stage": 1,
+              "timestamp": "<ts:5>"
+            },
+            {
+              "content": "Great. Let's continue exploring your perspective while we wait.",
+              "id": "<message:6>",
+              "refiningNeedId": null,
+              "role": "AI",
+              "senderId": null,
+              "sessionId": "<session:main>",
+              "stage": 1,
+              "timestamp": "<ts:6>"
+            },
+            {
+              "content": "I feel like I do most of the work and they don't notice.",
+              "id": "<message:7>",
+              "refiningNeedId": null,
+              "role": "USER",
+              "senderId": "<user:ada>",
+              "sessionId": "<session:main>",
+              "stage": 1,
+              "timestamp": "<ts:7>"
+            },
+            {
+              "content": "I hear you. Do you feel like I understand what you've been experiencing?",
+              "id": "<message:8>",
+              "refiningNeedId": null,
+              "role": "AI",
+              "senderId": null,
+              "sessionId": "<session:main>",
+              "stage": 1,
+              "timestamp": "<ts:8>"
+            },
+            {
+              "content": "Yes, I feel heard now.",
+              "id": "<message:9>",
+              "refiningNeedId": null,
+              "role": "USER",
+              "senderId": "<user:ada>",
+              "sessionId": "<session:main>",
+              "stage": 1,
+              "timestamp": "<ts:9>"
+            },
+            {
+              "content": "I'm glad. Now let's build some empathy for your partner's perspective.",
+              "id": "<message:10>",
+              "refiningNeedId": null,
+              "role": "AI",
+              "senderId": null,
+              "sessionId": "<session:main>",
+              "stage": 2,
+              "timestamp": "<ts:10>"
+            },
+            {
+              "content": "I think they're stressed from work too.",
+              "id": "<message:11>",
+              "refiningNeedId": null,
+              "role": "USER",
+              "senderId": "<user:ada>",
+              "sessionId": "<session:main>",
+              "stage": 2,
+              "timestamp": "<ts:11>"
+            },
+            {
+              "content": "That's a thoughtful observation. Here's an empathy statement you could share...",
+              "id": "<message:12>",
+              "refiningNeedId": null,
+              "role": "AI",
+              "senderId": null,
+              "sessionId": "<session:main>",
+              "stage": 2,
+              "timestamp": "<ts:12>"
+            },
+            {
+              "content": "I understand you might be feeling stressed from work. I want us to support each other better.",
+              "id": "<message:13>",
+              "refiningNeedId": null,
+              "role": "EMPATHY_STATEMENT",
+              "senderId": "<user:ada>",
+              "sessionId": "<session:main>",
+              "stage": 2,
+              "timestamp": "<ts:13>"
+            },
+            {
+              "content": "Bob Ross's attempt to understand your experience is ready for you to review. Take a moment to read it and let us know how it feels.",
+              "id": "<message:27>",
+              "refiningNeedId": null,
+              "role": "AI",
+              "senderId": null,
+              "sessionId": "<session:main>",
+              "stage": 2,
+              "timestamp": "<ts:fresh>"
+            }
+          ]
+        },
+        "success": true
+      },
+      "changes": [
+        {
+          "after": {
+            "biometricEnabled": false,
+            "biometricEnrolledAt": null,
+            "clerkId": "e2e_<user:ada>",
+            "createdAt": "<ts:14>",
+            "email": "ada@e2e.test",
+            "firstName": null,
+            "globalFacts": null,
+            "id": "<user:ada>",
+            "lastMoodIntensity": 7,
+            "lastName": null,
+            "memoryPreferences": null,
+            "name": "Ada Lovelace",
+            "notificationPreferences": null,
+            "privacyPreferences": null,
+            "pushToken": null,
+            "updatedAt": "<ts:fresh>"
+          },
+          "before": {
+            "biometricEnabled": false,
+            "biometricEnrolledAt": null,
+            "clerkId": "e2e_<user:ada>",
+            "createdAt": "<ts:14>",
+            "email": "ada@e2e.test",
+            "firstName": null,
+            "globalFacts": null,
+            "id": "<user:ada>",
+            "lastMoodIntensity": 7,
+            "lastName": null,
+            "memoryPreferences": null,
+            "name": "Ada Lovelace",
+            "notificationPreferences": null,
+            "privacyPreferences": null,
+            "pushToken": null,
+            "updatedAt": "<ts:fresh>"
+          },
+          "changedFields": [
+            "updatedAt"
+          ],
+          "key": "\"<user:ada>\"",
+          "kind": "changed",
+          "table": "User",
+          "timestampFacts": {
+            "updatedAt.bumped": "true",
+            "updatedAt==createdAt": "false"
+          }
+        }
+      ],
+      "changesAtResponse": [
+        {
+          "after": {
+            "biometricEnabled": false,
+            "biometricEnrolledAt": null,
+            "clerkId": "e2e_<user:ada>",
+            "createdAt": "<ts:14>",
+            "email": "ada@e2e.test",
+            "firstName": null,
+            "globalFacts": null,
+            "id": "<user:ada>",
+            "lastMoodIntensity": 7,
+            "lastName": null,
+            "memoryPreferences": null,
+            "name": "Ada Lovelace",
+            "notificationPreferences": null,
+            "privacyPreferences": null,
+            "pushToken": null,
+            "updatedAt": "<ts:fresh>"
+          },
+          "before": {
+            "biometricEnabled": false,
+            "biometricEnrolledAt": null,
+            "clerkId": "e2e_<user:ada>",
+            "createdAt": "<ts:14>",
+            "email": "ada@e2e.test",
+            "firstName": null,
+            "globalFacts": null,
+            "id": "<user:ada>",
+            "lastMoodIntensity": 7,
+            "lastName": null,
+            "memoryPreferences": null,
+            "name": "Ada Lovelace",
+            "notificationPreferences": null,
+            "privacyPreferences": null,
+            "pushToken": null,
+            "updatedAt": "<ts:fresh>"
+          },
+          "changedFields": [
+            "updatedAt"
+          ],
+          "key": "\"<user:ada>\"",
+          "kind": "changed",
+          "table": "User",
+          "timestampFacts": {
+            "updatedAt.bumped": "true",
+            "updatedAt==createdAt": "false"
+          }
+        }
+      ],
+      "settled": true
+    },
+    {
+      "label": "empathy status as bob@e2e.test",
+      "status": 200,
+      "body": {
+        "data": {
+          "analyzing": false,
+          "awaitingSharing": false,
+          "hasNewSharedContext": false,
+          "hasUnviewedSharedContext": false,
+          "messageCountSinceSharedContext": 0,
+          "myAttempt": {
+            "consentRecordId": "",
+            "content": "I think you feel unseen when the chores pile up and nobody says anything.",
+            "deliveryStatus": "delivered",
+            "id": "<empathyAttempt:bob>",
+            "revealedAt": "<ts:fresh>",
+            "revisionCount": 0,
+            "sharedAt": "<ts:fresh>",
+            "sourceUserId": "<user:bob>",
+            "status": "REVEALED",
+            "validatedAt": null
+          },
+          "myReconcilerResult": null,
+          "mySharedAt": null,
+          "mySharedContext": null,
+          "partnerAttempt": {
+            "consentRecordId": "",
+            "content": "I understand you might be feeling stressed from work. I want us to support each other better.",
+            "id": "<empathyAttempt:ada>",
+            "revealedAt": "<ts:fresh>",
+            "revisionCount": 0,
+            "sharedAt": "<ts:1>",
+            "sourceUserId": "<user:ada>",
+            "status": "REVEALED",
+            "validatedAt": null
+          },
+          "partnerCompletedStage1": true,
+          "partnerEmpathyHeldStatus": "REVEALED",
+          "partnerEmpathySubmittedAt": "<ts:1>",
+          "partnerHasSubmittedEmpathy": true,
+          "readyForStage3": false,
+          "refinementHint": null,
+          "sharedContentDeliveryStatus": null,
+          "sharedContext": null
+        },
+        "success": true
+      },
+      "changes": [
+        {
+          "after": {
+            "biometricEnabled": false,
+            "biometricEnrolledAt": null,
+            "clerkId": "e2e_<user:bob>",
+            "createdAt": "<ts:2>",
+            "email": "bob@e2e.test",
+            "firstName": null,
+            "globalFacts": null,
+            "id": "<user:bob>",
+            "lastMoodIntensity": 7,
+            "lastName": null,
+            "memoryPreferences": null,
+            "name": "Bob Ross",
+            "notificationPreferences": null,
+            "privacyPreferences": null,
+            "pushToken": null,
+            "updatedAt": "<ts:fresh>"
+          },
+          "before": {
+            "biometricEnabled": false,
+            "biometricEnrolledAt": null,
+            "clerkId": "e2e_<user:bob>",
+            "createdAt": "<ts:2>",
+            "email": "bob@e2e.test",
+            "firstName": null,
+            "globalFacts": null,
+            "id": "<user:bob>",
+            "lastMoodIntensity": 7,
+            "lastName": null,
+            "memoryPreferences": null,
+            "name": "Bob Ross",
+            "notificationPreferences": null,
+            "privacyPreferences": null,
+            "pushToken": null,
+            "updatedAt": "<ts:fresh>"
+          },
+          "changedFields": [
+            "updatedAt"
+          ],
+          "key": "\"<user:bob>\"",
+          "kind": "changed",
+          "table": "User",
+          "timestampFacts": {
+            "updatedAt.bumped": "true",
+            "updatedAt==createdAt": "false"
+          }
+        }
+      ],
+      "changesAtResponse": [
+        {
+          "after": {
+            "biometricEnabled": false,
+            "biometricEnrolledAt": null,
+            "clerkId": "e2e_<user:bob>",
+            "createdAt": "<ts:2>",
+            "email": "bob@e2e.test",
+            "firstName": null,
+            "globalFacts": null,
+            "id": "<user:bob>",
+            "lastMoodIntensity": 7,
+            "lastName": null,
+            "memoryPreferences": null,
+            "name": "Bob Ross",
+            "notificationPreferences": null,
+            "privacyPreferences": null,
+            "pushToken": null,
+            "updatedAt": "<ts:fresh>"
+          },
+          "before": {
+            "biometricEnabled": false,
+            "biometricEnrolledAt": null,
+            "clerkId": "e2e_<user:bob>",
+            "createdAt": "<ts:2>",
+            "email": "bob@e2e.test",
+            "firstName": null,
+            "globalFacts": null,
+            "id": "<user:bob>",
+            "lastMoodIntensity": 7,
+            "lastName": null,
+            "memoryPreferences": null,
+            "name": "Bob Ross",
+            "notificationPreferences": null,
+            "privacyPreferences": null,
+            "pushToken": null,
+            "updatedAt": "<ts:fresh>"
+          },
+          "changedFields": [
+            "updatedAt"
+          ],
+          "key": "\"<user:bob>\"",
+          "kind": "changed",
+          "table": "User",
+          "timestampFacts": {
+            "updatedAt.bumped": "true",
+            "updatedAt==createdAt": "false"
+          }
+        }
+      ],
+      "settled": true
+    },
+    {
+      "label": "partner empathy as bob@e2e.test",
+      "status": 200,
+      "body": {
+        "data": {
+          "attempt": {
+            "consentRecordId": "",
+            "content": "I understand you might be feeling stressed from work. I want us to support each other better.",
+            "id": "<empathyAttempt:ada>",
+            "revealedAt": "<ts:fresh>",
+            "revisionCount": 0,
+            "sharedAt": "<ts:1>",
+            "sourceUserId": "<user:ada>",
+            "status": "REVEALED",
+            "statusVersion": 3,
+            "validatedAt": null
+          },
+          "awaitingRevision": false,
+          "partnerStatus": "REVEALED",
+          "validated": false,
+          "validatedAt": null,
+          "waitingForPartner": false
+        },
+        "success": true
+      },
+      "changes": [
+        {
+          "after": {
+            "biometricEnabled": false,
+            "biometricEnrolledAt": null,
+            "clerkId": "e2e_<user:bob>",
+            "createdAt": "<ts:2>",
+            "email": "bob@e2e.test",
+            "firstName": null,
+            "globalFacts": null,
+            "id": "<user:bob>",
+            "lastMoodIntensity": 7,
+            "lastName": null,
+            "memoryPreferences": null,
+            "name": "Bob Ross",
+            "notificationPreferences": null,
+            "privacyPreferences": null,
+            "pushToken": null,
+            "updatedAt": "<ts:fresh>"
+          },
+          "before": {
+            "biometricEnabled": false,
+            "biometricEnrolledAt": null,
+            "clerkId": "e2e_<user:bob>",
+            "createdAt": "<ts:2>",
+            "email": "bob@e2e.test",
+            "firstName": null,
+            "globalFacts": null,
+            "id": "<user:bob>",
+            "lastMoodIntensity": 7,
+            "lastName": null,
+            "memoryPreferences": null,
+            "name": "Bob Ross",
+            "notificationPreferences": null,
+            "privacyPreferences": null,
+            "pushToken": null,
+            "updatedAt": "<ts:fresh>"
+          },
+          "changedFields": [
+            "updatedAt"
+          ],
+          "key": "\"<user:bob>\"",
+          "kind": "changed",
+          "table": "User",
+          "timestampFacts": {
+            "updatedAt.bumped": "true",
+            "updatedAt==createdAt": "false"
+          }
+        }
+      ],
+      "changesAtResponse": [
+        {
+          "after": {
+            "biometricEnabled": false,
+            "biometricEnrolledAt": null,
+            "clerkId": "e2e_<user:bob>",
+            "createdAt": "<ts:2>",
+            "email": "bob@e2e.test",
+            "firstName": null,
+            "globalFacts": null,
+            "id": "<user:bob>",
+            "lastMoodIntensity": 7,
+            "lastName": null,
+            "memoryPreferences": null,
+            "name": "Bob Ross",
+            "notificationPreferences": null,
+            "privacyPreferences": null,
+            "pushToken": null,
+            "updatedAt": "<ts:fresh>"
+          },
+          "before": {
+            "biometricEnabled": false,
+            "biometricEnrolledAt": null,
+            "clerkId": "e2e_<user:bob>",
+            "createdAt": "<ts:2>",
+            "email": "bob@e2e.test",
+            "firstName": null,
+            "globalFacts": null,
+            "id": "<user:bob>",
+            "lastMoodIntensity": 7,
+            "lastName": null,
+            "memoryPreferences": null,
+            "name": "Bob Ross",
+            "notificationPreferences": null,
+            "privacyPreferences": null,
+            "pushToken": null,
+            "updatedAt": "<ts:fresh>"
+          },
+          "changedFields": [
+            "updatedAt"
+          ],
+          "key": "\"<user:bob>\"",
+          "kind": "changed",
+          "table": "User",
+          "timestampFacts": {
+            "updatedAt.bumped": "true",
+            "updatedAt==createdAt": "false"
+          }
+        }
+      ],
+      "settled": true
+    },
+    {
+      "label": "messages as bob@e2e.test",
+      "status": 200,
+      "body": {
+        "data": {
+          "hasMore": false,
+          "messages": [
+            {
+              "content": "Welcome! Ada Lovelace invited you to work through some challenges together.",
+              "id": "<message:14>",
+              "refiningNeedId": null,
+              "role": "AI",
+              "senderId": null,
+              "sessionId": "<session:main>",
+              "stage": 0,
+              "timestamp": "<ts:1>"
+            },
+            {
+              "content": "Things have been tense lately between us.",
+              "id": "<message:15>",
+              "refiningNeedId": null,
+              "role": "USER",
+              "senderId": "<user:bob>",
+              "sessionId": "<session:main>",
+              "stage": 0,
+              "timestamp": "<ts:2>"
+            },
+            {
+              "content": "I hear you. Tell me more about what's been happening.",
+              "id": "<message:16>",
+              "refiningNeedId": null,
+              "role": "AI",
+              "senderId": null,
+              "sessionId": "<session:main>",
+              "stage": 1,
+              "timestamp": "<ts:3>"
+            },
+            {
+              "content": "I feel like they don't see how much I'm dealing with at work.",
+              "id": "<message:17>",
+              "refiningNeedId": null,
+              "role": "USER",
+              "senderId": "<user:bob>",
+              "sessionId": "<session:main>",
+              "stage": 1,
+              "timestamp": "<ts:4>"
+            },
+            {
+              "content": "That sounds really hard. Can you tell me more?",
+              "id": "<message:18>",
+              "refiningNeedId": null,
+              "role": "AI",
+              "senderId": null,
+              "sessionId": "<session:main>",
+              "stage": 1,
+              "timestamp": "<ts:5>"
+            },
+            {
+              "content": "I work so hard and come home exhausted, but there's always more to do.",
+              "id": "<message:19>",
+              "refiningNeedId": null,
+              "role": "USER",
+              "senderId": "<user:bob>",
+              "sessionId": "<session:main>",
+              "stage": 1,
+              "timestamp": "<ts:6>"
+            },
+            {
+              "content": "I understand. How long has this been going on?",
+              "id": "<message:20>",
+              "refiningNeedId": null,
+              "role": "AI",
+              "senderId": null,
+              "sessionId": "<session:main>",
+              "stage": 1,
+              "timestamp": "<ts:7>"
+            },
+            {
+              "content": "Months now. I don't know how to get through to them.",
+              "id": "<message:21>",
+              "refiningNeedId": null,
+              "role": "USER",
+              "senderId": "<user:bob>",
+              "sessionId": "<session:main>",
+              "stage": 1,
+              "timestamp": "<ts:8>"
+            },
+            {
+              "content": "Do you feel like I understand what you've been going through?",
+              "id": "<message:22>",
+              "refiningNeedId": null,
+              "role": "AI",
+              "senderId": null,
+              "sessionId": "<session:main>",
+              "stage": 1,
+              "timestamp": "<ts:9>"
+            },
+            {
+              "content": "Yes, I feel heard.",
+              "id": "<message:23>",
+              "refiningNeedId": null,
+              "role": "USER",
+              "senderId": "<user:bob>",
+              "sessionId": "<session:main>",
+              "stage": 1,
+              "timestamp": "<ts:10>"
+            },
+            {
+              "content": "I think you feel unseen when the chores pile up and nobody says anything.",
+              "id": "<message:24>",
+              "refiningNeedId": null,
+              "role": "EMPATHY_STATEMENT",
+              "senderId": "<user:bob>",
+              "sessionId": "<session:main>",
+              "stage": 2,
+              "timestamp": "<ts:fresh>"
+            },
+            {
+              "content": "Your empathy attempt has been submitted. Both empathy statements are now submitted. We'll show the next review or waiting step once the privacy-protected review is ready.",
+              "id": "<message:25>",
+              "refiningNeedId": null,
+              "role": "AI",
+              "senderId": null,
+              "sessionId": "<session:main>",
+              "stage": 2,
+              "timestamp": "<ts:fresh>"
+            },
+            {
+              "content": "Ada Lovelace's attempt to understand your experience is ready for you to review. Take a moment to read it and let us know how it feels.",
+              "id": "<message:26>",
+              "refiningNeedId": null,
+              "role": "AI",
+              "senderId": null,
+              "sessionId": "<session:main>",
+              "stage": 2,
+              "timestamp": "<ts:fresh>"
+            }
+          ]
+        },
+        "success": true
+      },
+      "changes": [
+        {
+          "after": {
+            "biometricEnabled": false,
+            "biometricEnrolledAt": null,
+            "clerkId": "e2e_<user:bob>",
+            "createdAt": "<ts:11>",
+            "email": "bob@e2e.test",
+            "firstName": null,
+            "globalFacts": null,
+            "id": "<user:bob>",
+            "lastMoodIntensity": 7,
+            "lastName": null,
+            "memoryPreferences": null,
+            "name": "Bob Ross",
+            "notificationPreferences": null,
+            "privacyPreferences": null,
+            "pushToken": null,
+            "updatedAt": "<ts:fresh>"
+          },
+          "before": {
+            "biometricEnabled": false,
+            "biometricEnrolledAt": null,
+            "clerkId": "e2e_<user:bob>",
+            "createdAt": "<ts:11>",
+            "email": "bob@e2e.test",
+            "firstName": null,
+            "globalFacts": null,
+            "id": "<user:bob>",
+            "lastMoodIntensity": 7,
+            "lastName": null,
+            "memoryPreferences": null,
+            "name": "Bob Ross",
+            "notificationPreferences": null,
+            "privacyPreferences": null,
+            "pushToken": null,
+            "updatedAt": "<ts:fresh>"
+          },
+          "changedFields": [
+            "updatedAt"
+          ],
+          "key": "\"<user:bob>\"",
+          "kind": "changed",
+          "table": "User",
+          "timestampFacts": {
+            "updatedAt.bumped": "true",
+            "updatedAt==createdAt": "false"
+          }
+        }
+      ],
+      "changesAtResponse": [
+        {
+          "after": {
+            "biometricEnabled": false,
+            "biometricEnrolledAt": null,
+            "clerkId": "e2e_<user:bob>",
+            "createdAt": "<ts:11>",
+            "email": "bob@e2e.test",
+            "firstName": null,
+            "globalFacts": null,
+            "id": "<user:bob>",
+            "lastMoodIntensity": 7,
+            "lastName": null,
+            "memoryPreferences": null,
+            "name": "Bob Ross",
+            "notificationPreferences": null,
+            "privacyPreferences": null,
+            "pushToken": null,
+            "updatedAt": "<ts:fresh>"
+          },
+          "before": {
+            "biometricEnabled": false,
+            "biometricEnrolledAt": null,
+            "clerkId": "e2e_<user:bob>",
+            "createdAt": "<ts:11>",
+            "email": "bob@e2e.test",
+            "firstName": null,
+            "globalFacts": null,
+            "id": "<user:bob>",
+            "lastMoodIntensity": 7,
+            "lastName": null,
+            "memoryPreferences": null,
+            "name": "Bob Ross",
+            "notificationPreferences": null,
+            "privacyPreferences": null,
+            "pushToken": null,
+            "updatedAt": "<ts:fresh>"
+          },
+          "changedFields": [
+            "updatedAt"
+          ],
+          "key": "\"<user:bob>\"",
+          "kind": "changed",
+          "table": "User",
+          "timestampFacts": {
+            "updatedAt.bumped": "true",
+            "updatedAt==createdAt": "false"
+          }
+        }
+      ],
+      "settled": true
+    }
+  ]
+}

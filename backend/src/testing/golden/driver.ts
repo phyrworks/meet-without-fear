@@ -14,6 +14,7 @@
 import type { Express } from 'express';
 import request from 'supertest';
 import { restoreFixture, RestoredFixture } from './fixtures';
+import type { FreshWindow } from './normalize';
 import { Snapshot, takeSnapshot, diffSnapshots, RowChange } from './snapshot';
 
 export interface SseEvent {
@@ -63,6 +64,13 @@ export interface StepResult {
   changesAtResponse: RowChange[];
   /** False when quiescence polling timed out rather than stabilising. */
   settled: boolean;
+  /**
+   * True when this step kicks off work that outlives the response, so
+   * `changesAtResponse` observes a race rather than a transaction boundary.
+   */
+  asyncBoundary: boolean;
+  /** Interval covering everything this run wrote, up to the end of this step. */
+  window: FreshWindow;
 }
 
 export interface Harness {
@@ -70,6 +78,8 @@ export interface Harness {
   fixture: RestoredFixture;
   actors: { userA: ActorRef; userB?: ActorRef };
   sessionId: string;
+  /** When the fixture finished restoring — the lower bound of this run's writes. */
+  startedAt: string;
   /** Run one HTTP step with before/after snapshots over `tables`. */
   step(opts: {
     label: string;
@@ -77,6 +87,14 @@ export interface Harness {
     tables: string[];
     call: (agent: request.Agent, headers: Record<string, string>) => request.Test;
     sse?: boolean;
+    /**
+     * Declare that this endpoint starts work that finishes after it responds.
+     * Set it when a controller kicks off a promise it does not await, e.g.
+     * `consentToShare` firing the reconciler. The response-time snapshot is then
+     * recorded as a race rather than as a baseline — a step like this was
+     * measured landing on `READY` in one run and `REVEALED` in the next.
+     */
+    asyncBoundary?: boolean;
   }): Promise<StepResult>;
   snapshot(tables: string[]): Promise<Snapshot>;
   teardown(): Promise<void>;
@@ -132,6 +150,9 @@ export async function createHarness(opts: { baseUrl: string; stage: string; runI
 
   const { seeded } = fixture.manifest;
   const actors = { userA: seeded.userA, userB: seeded.userB };
+  // Anchored after the restore and its rebase, so every write from here on is
+  // this run's own and every fixture value predates it.
+  const startedAt = new Date().toISOString();
 
   const snapshot = (tables: string[]): Promise<Snapshot> =>
     takeSnapshot({ target: fixture.target, database: fixture.database, tables });
@@ -141,8 +162,9 @@ export async function createHarness(opts: { baseUrl: string; stage: string; runI
     fixture,
     actors,
     sessionId: seeded.sessionId,
+    startedAt,
     snapshot,
-    async step({ label, actor, tables, call, sse }) {
+    async step({ label, actor, tables, call, sse, asyncBoundary }) {
       const before = await snapshot(tables);
 
       let test = call(request(app) as unknown as request.Agent, authHeaders(actor));
@@ -173,6 +195,8 @@ export async function createHarness(opts: { baseUrl: string; stage: string; runI
         changesAtResponse: diffSnapshots(before, atResponse),
         changes: diffSnapshots(before, settledSnap),
         settled,
+        asyncBoundary: !!asyncBoundary,
+        window: { from: startedAt, to: settledSnap.takenAt },
       };
     },
     async teardown() {
