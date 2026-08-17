@@ -151,7 +151,143 @@
           }
         }
       ],
-      "settled": true
+      "settled": true,
+      "trace": {
+        "complete": true,
+        "connections": 1,
+        "transactions": 7,
+        "statements": 7,
+        "byKind": {
+          "INSERT": 4,
+          "SELECT": 3
+        },
+        "rowsRead": {
+          "Relationship": 2,
+          "RelationshipMember": 2,
+          "Session": 3,
+          "StageProgress": 1,
+          "User": 1
+        },
+        "shapes": [
+          {
+            "occurrences": 1,
+            "explicit": false,
+            "isolation": null,
+            "statementCount": 1,
+            "kinds": {
+              "INSERT": 1
+            },
+            "statements": [
+              {
+                "kind": "INSERT",
+                "protocol": "extended",
+                "relations": [
+                  "EmpathyDraft",
+                  "Session",
+                  "User"
+                ],
+                "topRows": 1,
+                "rowsRead": {
+                  "Session": 1,
+                  "User": 1
+                },
+                "planNodes": [
+                  "LockRows",
+                  "Index Scan",
+                  "LockRows",
+                  "Index Scan",
+                  "Insert",
+                  "Result"
+                ]
+              }
+            ]
+          },
+          {
+            "occurrences": 3,
+            "explicit": false,
+            "isolation": null,
+            "statementCount": 1,
+            "kinds": {
+              "INSERT": 1
+            },
+            "statements": [
+              {
+                "kind": "INSERT",
+                "protocol": "extended",
+                "relations": [
+                  "User"
+                ],
+                "topRows": 1,
+                "rowsRead": {},
+                "planNodes": [
+                  "Insert",
+                  "Result"
+                ]
+              }
+            ]
+          },
+          {
+            "occurrences": 2,
+            "explicit": false,
+            "isolation": null,
+            "statementCount": 1,
+            "kinds": {
+              "SELECT": 1
+            },
+            "statements": [
+              {
+                "kind": "SELECT",
+                "protocol": "extended",
+                "relations": [
+                  "Relationship",
+                  "RelationshipMember",
+                  "Session"
+                ],
+                "topRows": 1,
+                "rowsRead": {
+                  "Relationship": 1,
+                  "RelationshipMember": 1,
+                  "Session": 1
+                },
+                "planNodes": [
+                  "Limit",
+                  "Nested Loop",
+                  "Nested Loop",
+                  "Index Scan",
+                  "Index Only Scan",
+                  "Index Only Scan"
+                ]
+              }
+            ]
+          },
+          {
+            "occurrences": 1,
+            "explicit": false,
+            "isolation": null,
+            "statementCount": 1,
+            "kinds": {
+              "SELECT": 1
+            },
+            "statements": [
+              {
+                "kind": "SELECT",
+                "protocol": "extended",
+                "relations": [
+                  "StageProgress"
+                ],
+                "topRows": 1,
+                "rowsRead": {
+                  "StageProgress": 1
+                },
+                "planNodes": [
+                  "Limit",
+                  "Index Scan Backward"
+                ]
+              }
+            ]
+          }
+        ]
+      }
     },
     {
       "label": "consent as bob",
@@ -384,7 +520,758 @@
         }
       ],
       "changesAtResponse": "<async: response-time state is a race, not a boundary>",
-      "settled": true
+      "settled": true,
+      "trace": {
+        "complete": true,
+        "connections": "<async: sampled while background work was still running — a race, not a measurement>",
+        "transactions": 129,
+        "statements": 139,
+        "byKind": {
+          "BEGIN": 4,
+          "COMMIT": 4,
+          "INSERT": 9,
+          "SELECT": 117,
+          "SET_TX": 1,
+          "UPDATE": 4
+        },
+        "rowsRead": "<async: sampled while background work was still running — a race, not a measurement>",
+        "shapes": [
+          {
+            "occurrences": 1,
+            "explicit": false,
+            "isolation": null,
+            "statementCount": 1,
+            "kinds": {
+              "INSERT": 1
+            },
+            "statements": [
+              {
+                "kind": "INSERT",
+                "protocol": "extended",
+                "relations": [
+                  "ConsentRecord",
+                  "Session",
+                  "User"
+                ],
+                "planNodes": [
+                  "LockRows",
+                  "Index Scan",
+                  "LockRows",
+                  "Index Scan",
+                  "LockRows",
+                  "Index Scan",
+                  "Insert",
+                  "Result"
+                ]
+              }
+            ]
+          },
+          {
+            "occurrences": 1,
+            "explicit": false,
+            "isolation": null,
+            "statementCount": 1,
+            "kinds": {
+              "INSERT": 1
+            },
+            "statements": [
+              {
+                "kind": "INSERT",
+                "protocol": "extended",
+                "relations": [
+                  "EmpathyAttempt",
+                  "EmpathyDraft",
+                  "Session",
+                  "User"
+                ],
+                "planNodes": [
+                  "LockRows",
+                  "Index Scan",
+                  "LockRows",
+                  "Index Scan",
+                  "LockRows",
+                  "Index Scan",
+                  "Insert",
+                  "Result"
+                ]
+              }
+            ]
+          },
+          {
+            "occurrences": 1,
+            "explicit": false,
+            "isolation": null,
+            "statementCount": 1,
+            "kinds": {
+              "INSERT": 1
+            },
+            "statements": [
+              {
+                "kind": "INSERT",
+                "protocol": "extended",
+                "relations": [
+                  "Message",
+                  "Session",
+                  "User"
+                ],
+                "planNodes": [
+                  "LockRows",
+                  "Index Scan",
+                  "LockRows",
+                  "Index Scan",
+                  "Insert",
+                  "Result"
+                ]
+              }
+            ]
+          },
+          {
+            "occurrences": 3,
+            "explicit": false,
+            "isolation": null,
+            "statementCount": 1,
+            "kinds": {
+              "INSERT": 1
+            },
+            "statements": [
+              {
+                "kind": "INSERT",
+                "protocol": "extended",
+                "relations": [
+                  "Message",
+                  "Session"
+                ],
+                "planNodes": [
+                  "LockRows",
+                  "Index Scan",
+                  "Insert",
+                  "Result"
+                ]
+              }
+            ]
+          },
+          {
+            "occurrences": 3,
+            "explicit": false,
+            "isolation": null,
+            "statementCount": 1,
+            "kinds": {
+              "INSERT": 1
+            },
+            "statements": [
+              {
+                "kind": "INSERT",
+                "protocol": "extended",
+                "relations": [
+                  "User"
+                ],
+                "planNodes": [
+                  "Insert",
+                  "Result"
+                ]
+              }
+            ]
+          },
+          {
+            "occurrences": 15,
+            "explicit": false,
+            "isolation": null,
+            "statementCount": 1,
+            "kinds": {
+              "SELECT": 1
+            },
+            "statements": [
+              {
+                "kind": "SELECT",
+                "protocol": "extended",
+                "relations": [
+                  "EmpathyAttempt"
+                ],
+                "planNodes": [
+                  "Limit",
+                  "Index Scan"
+                ]
+              }
+            ]
+          },
+          {
+            "occurrences": 1,
+            "explicit": false,
+            "isolation": null,
+            "statementCount": 1,
+            "kinds": {
+              "SELECT": 1
+            },
+            "statements": [
+              {
+                "kind": "SELECT",
+                "protocol": "extended",
+                "relations": [
+                  "EmpathyAttempt"
+                ],
+                "planNodes": [
+                  "Limit",
+                  "Sort",
+                  "Index Scan"
+                ]
+              }
+            ]
+          },
+          {
+            "occurrences": 1,
+            "explicit": false,
+            "isolation": null,
+            "statementCount": 1,
+            "kinds": {
+              "SELECT": 1
+            },
+            "statements": [
+              {
+                "kind": "SELECT",
+                "protocol": "extended",
+                "relations": [
+                  "EmpathyDraft"
+                ],
+                "planNodes": [
+                  "Limit",
+                  "Index Scan"
+                ]
+              }
+            ]
+          },
+          {
+            "occurrences": 5,
+            "explicit": false,
+            "isolation": null,
+            "statementCount": 1,
+            "kinds": {
+              "SELECT": 1
+            },
+            "statements": [
+              {
+                "kind": "SELECT",
+                "protocol": "extended",
+                "relations": [
+                  "EmpathyValidation"
+                ],
+                "planNodes": [
+                  "Bitmap Heap Scan",
+                  "BitmapOr",
+                  "Bitmap Index Scan",
+                  "Bitmap Index Scan"
+                ]
+              }
+            ]
+          },
+          {
+            "occurrences": 6,
+            "explicit": false,
+            "isolation": null,
+            "statementCount": 1,
+            "kinds": {
+              "SELECT": 1
+            },
+            "statements": [
+              {
+                "kind": "SELECT",
+                "protocol": "extended",
+                "relations": [
+                  "Message"
+                ],
+                "planNodes": [
+                  "Index Scan"
+                ]
+              }
+            ]
+          },
+          {
+            "occurrences": 5,
+            "explicit": false,
+            "isolation": null,
+            "statementCount": 1,
+            "kinds": {
+              "SELECT": 1
+            },
+            "statements": [
+              {
+                "kind": "SELECT",
+                "protocol": "extended",
+                "relations": [
+                  "Message"
+                ],
+                "planNodes": [
+                  "Limit",
+                  "Index Scan Backward"
+                ]
+              }
+            ]
+          },
+          {
+            "occurrences": 10,
+            "explicit": false,
+            "isolation": null,
+            "statementCount": 1,
+            "kinds": {
+              "SELECT": 1
+            },
+            "statements": [
+              {
+                "kind": "SELECT",
+                "protocol": "extended",
+                "relations": [
+                  "ReconcilerResult",
+                  "ReconcilerShareOffer"
+                ],
+                "planNodes": [
+                  "Limit",
+                  "Nested Loop",
+                  "Index Scan",
+                  "Index Scan"
+                ]
+              }
+            ]
+          },
+          {
+            "occurrences": 1,
+            "explicit": false,
+            "isolation": null,
+            "statementCount": 1,
+            "kinds": {
+              "SELECT": 1
+            },
+            "statements": [
+              {
+                "kind": "SELECT",
+                "protocol": "extended",
+                "relations": [
+                  "ReconcilerResult"
+                ],
+                "planNodes": [
+                  "Index Scan"
+                ]
+              }
+            ]
+          },
+          {
+            "occurrences": 2,
+            "explicit": false,
+            "isolation": null,
+            "statementCount": 1,
+            "kinds": {
+              "SELECT": 1
+            },
+            "statements": [
+              {
+                "kind": "SELECT",
+                "protocol": "extended",
+                "relations": [
+                  "ReconcilerResult"
+                ],
+                "planNodes": [
+                  "Limit",
+                  "Index Scan"
+                ]
+              }
+            ]
+          },
+          {
+            "occurrences": 5,
+            "explicit": false,
+            "isolation": null,
+            "statementCount": 1,
+            "kinds": {
+              "SELECT": 1
+            },
+            "statements": [
+              {
+                "kind": "SELECT",
+                "protocol": "extended",
+                "relations": [
+                  "ReconcilerResult"
+                ],
+                "planNodes": [
+                  "Limit",
+                  "Sort",
+                  "Index Scan"
+                ]
+              }
+            ]
+          },
+          {
+            "occurrences": 7,
+            "explicit": false,
+            "isolation": null,
+            "statementCount": 1,
+            "kinds": {
+              "SELECT": 1
+            },
+            "statements": [
+              {
+                "kind": "SELECT",
+                "protocol": "extended",
+                "relations": [
+                  "Relationship",
+                  "RelationshipMember",
+                  "Session"
+                ],
+                "planNodes": [
+                  "Limit",
+                  "Nested Loop",
+                  "Nested Loop",
+                  "Index Scan",
+                  "Index Only Scan",
+                  "Index Only Scan"
+                ]
+              }
+            ]
+          },
+          {
+            "occurrences": 14,
+            "explicit": false,
+            "isolation": null,
+            "statementCount": 1,
+            "kinds": {
+              "SELECT": 1
+            },
+            "statements": [
+              {
+                "kind": "SELECT",
+                "protocol": "extended",
+                "relations": [
+                  "Relationship"
+                ],
+                "planNodes": [
+                  "Index Scan"
+                ]
+              }
+            ]
+          },
+          {
+            "occurrences": 14,
+            "explicit": false,
+            "isolation": null,
+            "statementCount": 1,
+            "kinds": {
+              "SELECT": 1
+            },
+            "statements": [
+              {
+                "kind": "SELECT",
+                "protocol": "extended",
+                "relations": [
+                  "RelationshipMember"
+                ],
+                "planNodes": [
+                  "Bitmap Heap Scan",
+                  "Bitmap Index Scan"
+                ]
+              }
+            ]
+          },
+          {
+            "occurrences": 2,
+            "explicit": false,
+            "isolation": null,
+            "statementCount": 1,
+            "kinds": {
+              "SELECT": 1
+            },
+            "statements": [
+              {
+                "kind": "SELECT",
+                "protocol": "extended",
+                "relations": [
+                  "Session"
+                ],
+                "planNodes": [
+                  "Index Scan"
+                ]
+              }
+            ]
+          },
+          {
+            "occurrences": 6,
+            "explicit": false,
+            "isolation": null,
+            "statementCount": 1,
+            "kinds": {
+              "SELECT": 1
+            },
+            "statements": [
+              {
+                "kind": "SELECT",
+                "protocol": "extended",
+                "relations": [
+                  "Session"
+                ],
+                "planNodes": [
+                  "Limit",
+                  "Index Scan"
+                ]
+              }
+            ]
+          },
+          {
+            "occurrences": 3,
+            "explicit": false,
+            "isolation": null,
+            "statementCount": 1,
+            "kinds": {
+              "SELECT": 1
+            },
+            "statements": [
+              {
+                "kind": "SELECT",
+                "protocol": "extended",
+                "relations": [
+                  "StageProgress"
+                ],
+                "planNodes": [
+                  "Limit",
+                  "Index Scan Backward"
+                ]
+              }
+            ]
+          },
+          {
+            "occurrences": 5,
+            "explicit": false,
+            "isolation": null,
+            "statementCount": 1,
+            "kinds": {
+              "SELECT": 1
+            },
+            "statements": [
+              {
+                "kind": "SELECT",
+                "protocol": "extended",
+                "relations": [
+                  "StageProgress"
+                ],
+                "planNodes": [
+                  "Limit",
+                  "Index Scan"
+                ]
+              }
+            ]
+          },
+          {
+            "occurrences": 1,
+            "explicit": false,
+            "isolation": null,
+            "statementCount": 1,
+            "kinds": {
+              "SELECT": 1
+            },
+            "statements": [
+              {
+                "kind": "SELECT",
+                "protocol": "extended",
+                "relations": [
+                  "User"
+                ],
+                "planNodes": [
+                  "Limit",
+                  "Index Scan"
+                ]
+              }
+            ]
+          },
+          {
+            "occurrences": 7,
+            "explicit": false,
+            "isolation": null,
+            "statementCount": 1,
+            "kinds": {
+              "SELECT": 1
+            },
+            "statements": [
+              {
+                "kind": "SELECT",
+                "protocol": "extended",
+                "relations": [
+                  "User"
+                ],
+                "planNodes": [
+                  "Seq Scan"
+                ]
+              }
+            ]
+          },
+          {
+            "occurrences": 2,
+            "explicit": false,
+            "isolation": null,
+            "statementCount": 1,
+            "kinds": {
+              "SELECT": 1
+            },
+            "statements": [
+              {
+                "kind": "SELECT",
+                "protocol": "extended",
+                "relations": [
+                  "UserVessel"
+                ],
+                "planNodes": [
+                  "Index Scan"
+                ]
+              }
+            ]
+          },
+          {
+            "occurrences": 4,
+            "explicit": false,
+            "isolation": null,
+            "statementCount": 1,
+            "kinds": {
+              "SELECT": 1
+            },
+            "statements": [
+              {
+                "kind": "SELECT",
+                "protocol": "extended",
+                "relations": [
+                  "UserVessel"
+                ],
+                "planNodes": [
+                  "Limit",
+                  "Index Scan"
+                ]
+              }
+            ]
+          },
+          {
+            "occurrences": 1,
+            "explicit": true,
+            "isolation": "SERIALIZABLE",
+            "statementCount": 5,
+            "kinds": {
+              "BEGIN": 1,
+              "COMMIT": 1,
+              "SELECT": 1,
+              "SET_TX": 1,
+              "UPDATE": 1
+            },
+            "statements": [
+              {
+                "kind": "BEGIN",
+                "protocol": "simple",
+                "relations": [],
+                "planNodes": []
+              },
+              {
+                "kind": "SET_TX",
+                "protocol": "simple",
+                "relations": [],
+                "planNodes": []
+              },
+              {
+                "kind": "SELECT",
+                "protocol": "extended",
+                "relations": [
+                  "EmpathyAttempt"
+                ],
+                "planNodes": [
+                  "Bitmap Heap Scan",
+                  "Bitmap Index Scan"
+                ]
+              },
+              {
+                "kind": "UPDATE",
+                "protocol": "extended",
+                "relations": [
+                  "EmpathyAttempt"
+                ],
+                "planNodes": [
+                  "Update",
+                  "Bitmap Heap Scan",
+                  "Bitmap Index Scan"
+                ]
+              },
+              {
+                "kind": "COMMIT",
+                "protocol": "simple",
+                "relations": [],
+                "planNodes": []
+              }
+            ]
+          },
+          {
+            "occurrences": 1,
+            "explicit": true,
+            "isolation": null,
+            "statementCount": 3,
+            "kinds": {
+              "BEGIN": 1,
+              "COMMIT": 1,
+              "UPDATE": 1
+            },
+            "statements": [
+              {
+                "kind": "BEGIN",
+                "protocol": "simple",
+                "relations": [],
+                "planNodes": []
+              },
+              {
+                "kind": "UPDATE",
+                "protocol": "extended",
+                "relations": [
+                  "EmpathyAttempt"
+                ],
+                "planNodes": [
+                  "Update",
+                  "Bitmap Heap Scan",
+                  "Bitmap Index Scan"
+                ]
+              },
+              {
+                "kind": "COMMIT",
+                "protocol": "simple",
+                "relations": [],
+                "planNodes": []
+              }
+            ]
+          },
+          {
+            "occurrences": 2,
+            "explicit": true,
+            "isolation": null,
+            "statementCount": 3,
+            "kinds": {
+              "BEGIN": 1,
+              "COMMIT": 1,
+              "UPDATE": 1
+            },
+            "statements": [
+              {
+                "kind": "BEGIN",
+                "protocol": "simple",
+                "relations": [],
+                "planNodes": []
+              },
+              {
+                "kind": "UPDATE",
+                "protocol": "extended",
+                "relations": [
+                  "EmpathyAttempt"
+                ],
+                "planNodes": [
+                  "Update",
+                  "Index Scan"
+                ]
+              },
+              {
+                "kind": "COMMIT",
+                "protocol": "simple",
+                "relations": [],
+                "planNodes": []
+              }
+            ]
+          }
+        ]
+      }
     },
     {
       "label": "empathy status as ada@e2e.test",
@@ -535,7 +1422,302 @@
           }
         }
       ],
-      "settled": true
+      "settled": true,
+      "trace": {
+        "complete": true,
+        "connections": 2,
+        "transactions": 15,
+        "statements": 15,
+        "byKind": {
+          "INSERT": 3,
+          "SELECT": 12
+        },
+        "rowsRead": {
+          "EmpathyAttempt": 2,
+          "EmpathyValidation": 0,
+          "Message": 0,
+          "ReconcilerResult": 0,
+          "ReconcilerShareOffer": 0,
+          "Relationship": 3,
+          "RelationshipMember": 4,
+          "Session": 2,
+          "StageProgress": 1
+        },
+        "shapes": [
+          {
+            "occurrences": 3,
+            "explicit": false,
+            "isolation": null,
+            "statementCount": 1,
+            "kinds": {
+              "INSERT": 1
+            },
+            "statements": [
+              {
+                "kind": "INSERT",
+                "protocol": "extended",
+                "relations": [
+                  "User"
+                ],
+                "topRows": 1,
+                "rowsRead": {},
+                "planNodes": [
+                  "Insert",
+                  "Result"
+                ]
+              }
+            ]
+          },
+          {
+            "occurrences": 2,
+            "explicit": false,
+            "isolation": null,
+            "statementCount": 1,
+            "kinds": {
+              "SELECT": 1
+            },
+            "statements": [
+              {
+                "kind": "SELECT",
+                "protocol": "extended",
+                "relations": [
+                  "EmpathyAttempt"
+                ],
+                "topRows": 1,
+                "rowsRead": {
+                  "EmpathyAttempt": 1
+                },
+                "planNodes": [
+                  "Limit",
+                  "Index Scan"
+                ]
+              }
+            ]
+          },
+          {
+            "occurrences": 1,
+            "explicit": false,
+            "isolation": null,
+            "statementCount": 1,
+            "kinds": {
+              "SELECT": 1
+            },
+            "statements": [
+              {
+                "kind": "SELECT",
+                "protocol": "extended",
+                "relations": [
+                  "EmpathyValidation"
+                ],
+                "topRows": 0,
+                "rowsRead": {
+                  "EmpathyValidation": 0
+                },
+                "planNodes": [
+                  "Bitmap Heap Scan",
+                  "BitmapOr",
+                  "Bitmap Index Scan",
+                  "Bitmap Index Scan"
+                ]
+              }
+            ]
+          },
+          {
+            "occurrences": 1,
+            "explicit": false,
+            "isolation": null,
+            "statementCount": 1,
+            "kinds": {
+              "SELECT": 1
+            },
+            "statements": [
+              {
+                "kind": "SELECT",
+                "protocol": "extended",
+                "relations": [
+                  "Message"
+                ],
+                "topRows": 0,
+                "rowsRead": {
+                  "Message": 0
+                },
+                "planNodes": [
+                  "Limit",
+                  "Index Scan Backward"
+                ]
+              }
+            ]
+          },
+          {
+            "occurrences": 2,
+            "explicit": false,
+            "isolation": null,
+            "statementCount": 1,
+            "kinds": {
+              "SELECT": 1
+            },
+            "statements": [
+              {
+                "kind": "SELECT",
+                "protocol": "extended",
+                "relations": [
+                  "ReconcilerResult",
+                  "ReconcilerShareOffer"
+                ],
+                "topRows": 0,
+                "rowsRead": {
+                  "ReconcilerResult": 0,
+                  "ReconcilerShareOffer": 0
+                },
+                "planNodes": [
+                  "Limit",
+                  "Nested Loop",
+                  "Index Scan",
+                  "Index Scan"
+                ]
+              }
+            ]
+          },
+          {
+            "occurrences": 1,
+            "explicit": false,
+            "isolation": null,
+            "statementCount": 1,
+            "kinds": {
+              "SELECT": 1
+            },
+            "statements": [
+              {
+                "kind": "SELECT",
+                "protocol": "extended",
+                "relations": [
+                  "ReconcilerResult"
+                ],
+                "topRows": 0,
+                "rowsRead": {
+                  "ReconcilerResult": 0
+                },
+                "planNodes": [
+                  "Limit",
+                  "Sort",
+                  "Index Scan"
+                ]
+              }
+            ]
+          },
+          {
+            "occurrences": 2,
+            "explicit": false,
+            "isolation": null,
+            "statementCount": 1,
+            "kinds": {
+              "SELECT": 1
+            },
+            "statements": [
+              {
+                "kind": "SELECT",
+                "protocol": "extended",
+                "relations": [
+                  "Relationship",
+                  "RelationshipMember",
+                  "Session"
+                ],
+                "topRows": 1,
+                "rowsRead": {
+                  "Relationship": 1,
+                  "RelationshipMember": 1,
+                  "Session": 1
+                },
+                "planNodes": [
+                  "Limit",
+                  "Nested Loop",
+                  "Nested Loop",
+                  "Index Scan",
+                  "Index Only Scan",
+                  "Index Only Scan"
+                ]
+              }
+            ]
+          },
+          {
+            "occurrences": 1,
+            "explicit": false,
+            "isolation": null,
+            "statementCount": 1,
+            "kinds": {
+              "SELECT": 1
+            },
+            "statements": [
+              {
+                "kind": "SELECT",
+                "protocol": "extended",
+                "relations": [
+                  "Relationship"
+                ],
+                "topRows": 1,
+                "rowsRead": {
+                  "Relationship": 1
+                },
+                "planNodes": [
+                  "Index Scan"
+                ]
+              }
+            ]
+          },
+          {
+            "occurrences": 1,
+            "explicit": false,
+            "isolation": null,
+            "statementCount": 1,
+            "kinds": {
+              "SELECT": 1
+            },
+            "statements": [
+              {
+                "kind": "SELECT",
+                "protocol": "extended",
+                "relations": [
+                  "RelationshipMember"
+                ],
+                "topRows": 2,
+                "rowsRead": {
+                  "RelationshipMember": 2
+                },
+                "planNodes": [
+                  "Bitmap Heap Scan",
+                  "Bitmap Index Scan"
+                ]
+              }
+            ]
+          },
+          {
+            "occurrences": 1,
+            "explicit": false,
+            "isolation": null,
+            "statementCount": 1,
+            "kinds": {
+              "SELECT": 1
+            },
+            "statements": [
+              {
+                "kind": "SELECT",
+                "protocol": "extended",
+                "relations": [
+                  "StageProgress"
+                ],
+                "topRows": 1,
+                "rowsRead": {
+                  "StageProgress": 1
+                },
+                "planNodes": [
+                  "Limit",
+                  "Index Scan"
+                ]
+              }
+            ]
+          }
+        ]
+      }
     },
     {
       "label": "partner empathy as ada@e2e.test",
@@ -662,7 +1844,187 @@
           }
         }
       ],
-      "settled": true
+      "settled": true,
+      "trace": {
+        "complete": true,
+        "connections": 1,
+        "transactions": 9,
+        "statements": 9,
+        "byKind": {
+          "INSERT": 3,
+          "SELECT": 6
+        },
+        "rowsRead": {
+          "EmpathyAttempt": 1,
+          "EmpathyValidation": 0,
+          "Relationship": 3,
+          "RelationshipMember": 4,
+          "Session": 2
+        },
+        "shapes": [
+          {
+            "occurrences": 3,
+            "explicit": false,
+            "isolation": null,
+            "statementCount": 1,
+            "kinds": {
+              "INSERT": 1
+            },
+            "statements": [
+              {
+                "kind": "INSERT",
+                "protocol": "extended",
+                "relations": [
+                  "User"
+                ],
+                "topRows": 1,
+                "rowsRead": {},
+                "planNodes": [
+                  "Insert",
+                  "Result"
+                ]
+              }
+            ]
+          },
+          {
+            "occurrences": 1,
+            "explicit": false,
+            "isolation": null,
+            "statementCount": 1,
+            "kinds": {
+              "SELECT": 1
+            },
+            "statements": [
+              {
+                "kind": "SELECT",
+                "protocol": "extended",
+                "relations": [
+                  "EmpathyAttempt"
+                ],
+                "topRows": 1,
+                "rowsRead": {
+                  "EmpathyAttempt": 1
+                },
+                "planNodes": [
+                  "Limit",
+                  "Index Scan"
+                ]
+              }
+            ]
+          },
+          {
+            "occurrences": 1,
+            "explicit": false,
+            "isolation": null,
+            "statementCount": 1,
+            "kinds": {
+              "SELECT": 1
+            },
+            "statements": [
+              {
+                "kind": "SELECT",
+                "protocol": "extended",
+                "relations": [
+                  "EmpathyValidation"
+                ],
+                "topRows": 0,
+                "rowsRead": {
+                  "EmpathyValidation": 0
+                },
+                "planNodes": [
+                  "Limit",
+                  "Index Scan"
+                ]
+              }
+            ]
+          },
+          {
+            "occurrences": 2,
+            "explicit": false,
+            "isolation": null,
+            "statementCount": 1,
+            "kinds": {
+              "SELECT": 1
+            },
+            "statements": [
+              {
+                "kind": "SELECT",
+                "protocol": "extended",
+                "relations": [
+                  "Relationship",
+                  "RelationshipMember",
+                  "Session"
+                ],
+                "topRows": 1,
+                "rowsRead": {
+                  "Relationship": 1,
+                  "RelationshipMember": 1,
+                  "Session": 1
+                },
+                "planNodes": [
+                  "Limit",
+                  "Nested Loop",
+                  "Nested Loop",
+                  "Index Scan",
+                  "Index Only Scan",
+                  "Index Only Scan"
+                ]
+              }
+            ]
+          },
+          {
+            "occurrences": 1,
+            "explicit": false,
+            "isolation": null,
+            "statementCount": 1,
+            "kinds": {
+              "SELECT": 1
+            },
+            "statements": [
+              {
+                "kind": "SELECT",
+                "protocol": "extended",
+                "relations": [
+                  "Relationship"
+                ],
+                "topRows": 1,
+                "rowsRead": {
+                  "Relationship": 1
+                },
+                "planNodes": [
+                  "Index Scan"
+                ]
+              }
+            ]
+          },
+          {
+            "occurrences": 1,
+            "explicit": false,
+            "isolation": null,
+            "statementCount": 1,
+            "kinds": {
+              "SELECT": 1
+            },
+            "statements": [
+              {
+                "kind": "SELECT",
+                "protocol": "extended",
+                "relations": [
+                  "RelationshipMember"
+                ],
+                "topRows": 2,
+                "rowsRead": {
+                  "RelationshipMember": 2
+                },
+                "planNodes": [
+                  "Bitmap Heap Scan",
+                  "Bitmap Index Scan"
+                ]
+              }
+            ]
+          }
+        ]
+      }
     },
     {
       "label": "messages as ada@e2e.test",
@@ -915,7 +2277,109 @@
           }
         }
       ],
-      "settled": true
+      "settled": true,
+      "trace": {
+        "complete": true,
+        "connections": 1,
+        "transactions": 6,
+        "statements": 6,
+        "byKind": {
+          "INSERT": 3,
+          "SELECT": 3
+        },
+        "rowsRead": {
+          "Message": 14,
+          "Relationship": 2,
+          "RelationshipMember": 2,
+          "Session": 2
+        },
+        "shapes": [
+          {
+            "occurrences": 3,
+            "explicit": false,
+            "isolation": null,
+            "statementCount": 1,
+            "kinds": {
+              "INSERT": 1
+            },
+            "statements": [
+              {
+                "kind": "INSERT",
+                "protocol": "extended",
+                "relations": [
+                  "User"
+                ],
+                "topRows": 1,
+                "rowsRead": {},
+                "planNodes": [
+                  "Insert",
+                  "Result"
+                ]
+              }
+            ]
+          },
+          {
+            "occurrences": 1,
+            "explicit": false,
+            "isolation": null,
+            "statementCount": 1,
+            "kinds": {
+              "SELECT": 1
+            },
+            "statements": [
+              {
+                "kind": "SELECT",
+                "protocol": "extended",
+                "relations": [
+                  "Message"
+                ],
+                "topRows": 14,
+                "rowsRead": {
+                  "Message": 14
+                },
+                "planNodes": [
+                  "Limit",
+                  "Index Scan Backward"
+                ]
+              }
+            ]
+          },
+          {
+            "occurrences": 2,
+            "explicit": false,
+            "isolation": null,
+            "statementCount": 1,
+            "kinds": {
+              "SELECT": 1
+            },
+            "statements": [
+              {
+                "kind": "SELECT",
+                "protocol": "extended",
+                "relations": [
+                  "Relationship",
+                  "RelationshipMember",
+                  "Session"
+                ],
+                "topRows": 1,
+                "rowsRead": {
+                  "Relationship": 1,
+                  "RelationshipMember": 1,
+                  "Session": 1
+                },
+                "planNodes": [
+                  "Limit",
+                  "Nested Loop",
+                  "Nested Loop",
+                  "Index Scan",
+                  "Index Only Scan",
+                  "Index Only Scan"
+                ]
+              }
+            ]
+          }
+        ]
+      }
     },
     {
       "label": "empathy status as bob@e2e.test",
@@ -1064,7 +2528,302 @@
           }
         }
       ],
-      "settled": true
+      "settled": true,
+      "trace": {
+        "complete": true,
+        "connections": 2,
+        "transactions": 15,
+        "statements": 15,
+        "byKind": {
+          "INSERT": 3,
+          "SELECT": 12
+        },
+        "rowsRead": {
+          "EmpathyAttempt": 2,
+          "EmpathyValidation": 0,
+          "Message": 0,
+          "ReconcilerResult": 0,
+          "ReconcilerShareOffer": 0,
+          "Relationship": 3,
+          "RelationshipMember": 4,
+          "Session": 2,
+          "StageProgress": 1
+        },
+        "shapes": [
+          {
+            "occurrences": 3,
+            "explicit": false,
+            "isolation": null,
+            "statementCount": 1,
+            "kinds": {
+              "INSERT": 1
+            },
+            "statements": [
+              {
+                "kind": "INSERT",
+                "protocol": "extended",
+                "relations": [
+                  "User"
+                ],
+                "topRows": 1,
+                "rowsRead": {},
+                "planNodes": [
+                  "Insert",
+                  "Result"
+                ]
+              }
+            ]
+          },
+          {
+            "occurrences": 2,
+            "explicit": false,
+            "isolation": null,
+            "statementCount": 1,
+            "kinds": {
+              "SELECT": 1
+            },
+            "statements": [
+              {
+                "kind": "SELECT",
+                "protocol": "extended",
+                "relations": [
+                  "EmpathyAttempt"
+                ],
+                "topRows": 1,
+                "rowsRead": {
+                  "EmpathyAttempt": 1
+                },
+                "planNodes": [
+                  "Limit",
+                  "Index Scan"
+                ]
+              }
+            ]
+          },
+          {
+            "occurrences": 1,
+            "explicit": false,
+            "isolation": null,
+            "statementCount": 1,
+            "kinds": {
+              "SELECT": 1
+            },
+            "statements": [
+              {
+                "kind": "SELECT",
+                "protocol": "extended",
+                "relations": [
+                  "EmpathyValidation"
+                ],
+                "topRows": 0,
+                "rowsRead": {
+                  "EmpathyValidation": 0
+                },
+                "planNodes": [
+                  "Bitmap Heap Scan",
+                  "BitmapOr",
+                  "Bitmap Index Scan",
+                  "Bitmap Index Scan"
+                ]
+              }
+            ]
+          },
+          {
+            "occurrences": 1,
+            "explicit": false,
+            "isolation": null,
+            "statementCount": 1,
+            "kinds": {
+              "SELECT": 1
+            },
+            "statements": [
+              {
+                "kind": "SELECT",
+                "protocol": "extended",
+                "relations": [
+                  "Message"
+                ],
+                "topRows": 0,
+                "rowsRead": {
+                  "Message": 0
+                },
+                "planNodes": [
+                  "Limit",
+                  "Index Scan Backward"
+                ]
+              }
+            ]
+          },
+          {
+            "occurrences": 2,
+            "explicit": false,
+            "isolation": null,
+            "statementCount": 1,
+            "kinds": {
+              "SELECT": 1
+            },
+            "statements": [
+              {
+                "kind": "SELECT",
+                "protocol": "extended",
+                "relations": [
+                  "ReconcilerResult",
+                  "ReconcilerShareOffer"
+                ],
+                "topRows": 0,
+                "rowsRead": {
+                  "ReconcilerResult": 0,
+                  "ReconcilerShareOffer": 0
+                },
+                "planNodes": [
+                  "Limit",
+                  "Nested Loop",
+                  "Index Scan",
+                  "Index Scan"
+                ]
+              }
+            ]
+          },
+          {
+            "occurrences": 1,
+            "explicit": false,
+            "isolation": null,
+            "statementCount": 1,
+            "kinds": {
+              "SELECT": 1
+            },
+            "statements": [
+              {
+                "kind": "SELECT",
+                "protocol": "extended",
+                "relations": [
+                  "ReconcilerResult"
+                ],
+                "topRows": 0,
+                "rowsRead": {
+                  "ReconcilerResult": 0
+                },
+                "planNodes": [
+                  "Limit",
+                  "Sort",
+                  "Index Scan"
+                ]
+              }
+            ]
+          },
+          {
+            "occurrences": 2,
+            "explicit": false,
+            "isolation": null,
+            "statementCount": 1,
+            "kinds": {
+              "SELECT": 1
+            },
+            "statements": [
+              {
+                "kind": "SELECT",
+                "protocol": "extended",
+                "relations": [
+                  "Relationship",
+                  "RelationshipMember",
+                  "Session"
+                ],
+                "topRows": 1,
+                "rowsRead": {
+                  "Relationship": 1,
+                  "RelationshipMember": 1,
+                  "Session": 1
+                },
+                "planNodes": [
+                  "Limit",
+                  "Nested Loop",
+                  "Nested Loop",
+                  "Index Scan",
+                  "Index Only Scan",
+                  "Index Only Scan"
+                ]
+              }
+            ]
+          },
+          {
+            "occurrences": 1,
+            "explicit": false,
+            "isolation": null,
+            "statementCount": 1,
+            "kinds": {
+              "SELECT": 1
+            },
+            "statements": [
+              {
+                "kind": "SELECT",
+                "protocol": "extended",
+                "relations": [
+                  "Relationship"
+                ],
+                "topRows": 1,
+                "rowsRead": {
+                  "Relationship": 1
+                },
+                "planNodes": [
+                  "Index Scan"
+                ]
+              }
+            ]
+          },
+          {
+            "occurrences": 1,
+            "explicit": false,
+            "isolation": null,
+            "statementCount": 1,
+            "kinds": {
+              "SELECT": 1
+            },
+            "statements": [
+              {
+                "kind": "SELECT",
+                "protocol": "extended",
+                "relations": [
+                  "RelationshipMember"
+                ],
+                "topRows": 2,
+                "rowsRead": {
+                  "RelationshipMember": 2
+                },
+                "planNodes": [
+                  "Bitmap Heap Scan",
+                  "Bitmap Index Scan"
+                ]
+              }
+            ]
+          },
+          {
+            "occurrences": 1,
+            "explicit": false,
+            "isolation": null,
+            "statementCount": 1,
+            "kinds": {
+              "SELECT": 1
+            },
+            "statements": [
+              {
+                "kind": "SELECT",
+                "protocol": "extended",
+                "relations": [
+                  "StageProgress"
+                ],
+                "topRows": 1,
+                "rowsRead": {
+                  "StageProgress": 1
+                },
+                "planNodes": [
+                  "Limit",
+                  "Index Scan"
+                ]
+              }
+            ]
+          }
+        ]
+      }
     },
     {
       "label": "partner empathy as bob@e2e.test",
@@ -1191,7 +2950,187 @@
           }
         }
       ],
-      "settled": true
+      "settled": true,
+      "trace": {
+        "complete": true,
+        "connections": 1,
+        "transactions": 9,
+        "statements": 9,
+        "byKind": {
+          "INSERT": 3,
+          "SELECT": 6
+        },
+        "rowsRead": {
+          "EmpathyAttempt": 1,
+          "EmpathyValidation": 0,
+          "Relationship": 3,
+          "RelationshipMember": 4,
+          "Session": 2
+        },
+        "shapes": [
+          {
+            "occurrences": 3,
+            "explicit": false,
+            "isolation": null,
+            "statementCount": 1,
+            "kinds": {
+              "INSERT": 1
+            },
+            "statements": [
+              {
+                "kind": "INSERT",
+                "protocol": "extended",
+                "relations": [
+                  "User"
+                ],
+                "topRows": 1,
+                "rowsRead": {},
+                "planNodes": [
+                  "Insert",
+                  "Result"
+                ]
+              }
+            ]
+          },
+          {
+            "occurrences": 1,
+            "explicit": false,
+            "isolation": null,
+            "statementCount": 1,
+            "kinds": {
+              "SELECT": 1
+            },
+            "statements": [
+              {
+                "kind": "SELECT",
+                "protocol": "extended",
+                "relations": [
+                  "EmpathyAttempt"
+                ],
+                "topRows": 1,
+                "rowsRead": {
+                  "EmpathyAttempt": 1
+                },
+                "planNodes": [
+                  "Limit",
+                  "Index Scan"
+                ]
+              }
+            ]
+          },
+          {
+            "occurrences": 1,
+            "explicit": false,
+            "isolation": null,
+            "statementCount": 1,
+            "kinds": {
+              "SELECT": 1
+            },
+            "statements": [
+              {
+                "kind": "SELECT",
+                "protocol": "extended",
+                "relations": [
+                  "EmpathyValidation"
+                ],
+                "topRows": 0,
+                "rowsRead": {
+                  "EmpathyValidation": 0
+                },
+                "planNodes": [
+                  "Limit",
+                  "Index Scan"
+                ]
+              }
+            ]
+          },
+          {
+            "occurrences": 2,
+            "explicit": false,
+            "isolation": null,
+            "statementCount": 1,
+            "kinds": {
+              "SELECT": 1
+            },
+            "statements": [
+              {
+                "kind": "SELECT",
+                "protocol": "extended",
+                "relations": [
+                  "Relationship",
+                  "RelationshipMember",
+                  "Session"
+                ],
+                "topRows": 1,
+                "rowsRead": {
+                  "Relationship": 1,
+                  "RelationshipMember": 1,
+                  "Session": 1
+                },
+                "planNodes": [
+                  "Limit",
+                  "Nested Loop",
+                  "Nested Loop",
+                  "Index Scan",
+                  "Index Only Scan",
+                  "Index Only Scan"
+                ]
+              }
+            ]
+          },
+          {
+            "occurrences": 1,
+            "explicit": false,
+            "isolation": null,
+            "statementCount": 1,
+            "kinds": {
+              "SELECT": 1
+            },
+            "statements": [
+              {
+                "kind": "SELECT",
+                "protocol": "extended",
+                "relations": [
+                  "Relationship"
+                ],
+                "topRows": 1,
+                "rowsRead": {
+                  "Relationship": 1
+                },
+                "planNodes": [
+                  "Index Scan"
+                ]
+              }
+            ]
+          },
+          {
+            "occurrences": 1,
+            "explicit": false,
+            "isolation": null,
+            "statementCount": 1,
+            "kinds": {
+              "SELECT": 1
+            },
+            "statements": [
+              {
+                "kind": "SELECT",
+                "protocol": "extended",
+                "relations": [
+                  "RelationshipMember"
+                ],
+                "topRows": 2,
+                "rowsRead": {
+                  "RelationshipMember": 2
+                },
+                "planNodes": [
+                  "Bitmap Heap Scan",
+                  "Bitmap Index Scan"
+                ]
+              }
+            ]
+          }
+        ]
+      }
     },
     {
       "label": "messages as bob@e2e.test",
@@ -1434,7 +3373,109 @@
           }
         }
       ],
-      "settled": true
+      "settled": true,
+      "trace": {
+        "complete": true,
+        "connections": 1,
+        "transactions": 6,
+        "statements": 6,
+        "byKind": {
+          "INSERT": 3,
+          "SELECT": 3
+        },
+        "rowsRead": {
+          "Message": 13,
+          "Relationship": 2,
+          "RelationshipMember": 2,
+          "Session": 2
+        },
+        "shapes": [
+          {
+            "occurrences": 3,
+            "explicit": false,
+            "isolation": null,
+            "statementCount": 1,
+            "kinds": {
+              "INSERT": 1
+            },
+            "statements": [
+              {
+                "kind": "INSERT",
+                "protocol": "extended",
+                "relations": [
+                  "User"
+                ],
+                "topRows": 1,
+                "rowsRead": {},
+                "planNodes": [
+                  "Insert",
+                  "Result"
+                ]
+              }
+            ]
+          },
+          {
+            "occurrences": 1,
+            "explicit": false,
+            "isolation": null,
+            "statementCount": 1,
+            "kinds": {
+              "SELECT": 1
+            },
+            "statements": [
+              {
+                "kind": "SELECT",
+                "protocol": "extended",
+                "relations": [
+                  "Message"
+                ],
+                "topRows": 13,
+                "rowsRead": {
+                  "Message": 13
+                },
+                "planNodes": [
+                  "Limit",
+                  "Index Scan Backward"
+                ]
+              }
+            ]
+          },
+          {
+            "occurrences": 2,
+            "explicit": false,
+            "isolation": null,
+            "statementCount": 1,
+            "kinds": {
+              "SELECT": 1
+            },
+            "statements": [
+              {
+                "kind": "SELECT",
+                "protocol": "extended",
+                "relations": [
+                  "Relationship",
+                  "RelationshipMember",
+                  "Session"
+                ],
+                "topRows": 1,
+                "rowsRead": {
+                  "Relationship": 1,
+                  "RelationshipMember": 1,
+                  "Session": 1
+                },
+                "planNodes": [
+                  "Limit",
+                  "Nested Loop",
+                  "Nested Loop",
+                  "Index Scan",
+                  "Index Only Scan",
+                  "Index Only Scan"
+                ]
+              }
+            ]
+          }
+        ]
+      }
     }
   ]
 }

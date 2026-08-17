@@ -61,6 +61,35 @@ already committed in `backend/.env.example` and `e2e/.env.test` work unchanged.
 
 Day-to-day: `podman machine start && podman start mwf-postgres`.
 
+### The golden harness changes one server-wide setting
+
+The SQL-trace oracle in `backend/src/testing/golden` reads Postgres's own statement log, so it needs
+the log lines to carry the database, application, virtual xid and xid. `log_line_prefix` is
+`PGC_SIGHUP` — it cannot be set per-database — so the harness sets it once, server-wide:
+
+```
+log_line_prefix = '%m [%p] db=%d,app=%a,vxid=%v,xid=%x '
+```
+
+It does this with `ALTER SYSTEM` + `pg_reload_conf()`, which writes to
+`/var/lib/postgresql/data/postgresql.auto.conf` inside the container and therefore **persists across
+container restarts**. It is idempotent and is deliberately **not** restored afterwards: restoring it
+per run races other test workers, and one worker's restore landing mid-run turns another's trace into
+a silently empty window. It is a formatting-only change to a development container.
+
+To put it back:
+
+```bash
+podman exec mwf-postgres psql -U mwf_user -d postgres \
+  -c "ALTER SYSTEM RESET log_line_prefix;" -c "SELECT pg_reload_conf();"
+```
+
+Everything else the oracle needs — `log_statement`, `auto_explain` via `session_preload_libraries`,
+`plan_cache_mode`, and the two `log_parameter_max_length` settings that keep bind values out of the
+log — is set per-database on the disposable `mwf_run_*` clone and vanishes with `DROP DATABASE`. All
+of it requires a superuser; `mwf_user` is one in this container, and the harness fails with an
+explicit message rather than a confusing error if it is not.
+
 ### Alternative: devenv (what the README assumes)
 
 `devenv up -d` provisions the same three databases plus pgvector via Nix. Costs a multi-GB Nix

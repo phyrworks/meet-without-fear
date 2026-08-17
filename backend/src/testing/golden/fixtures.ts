@@ -24,6 +24,8 @@ import {
   cloneDatabase,
   createDatabase,
   dropDatabase,
+  enableStatementCapture,
+  ensureLogLinePrefix,
   listTables,
   parseDbUrl,
   rebaseTimestamps,
@@ -187,6 +189,13 @@ export async function restoreFixture(opts: {
   runId: string;
   /** Age the fixture should present as. Default 1 hour old. */
   ageInterval?: string;
+  /**
+   * Turn on Postgres statement + plan capture for this run database.
+   *
+   * Opt-in, because it is a superuser operation and one server-wide setting, and
+   * a scenario that does not record a trace should not require either.
+   */
+  captureStatements?: boolean;
 }): Promise<RestoredFixture> {
   const manifest = readManifest(opts.stage);
   const target = parseDbUrl(opts.baseUrl);
@@ -210,6 +219,25 @@ export async function restoreFixture(opts: {
   }
 
   await rebaseTimestampsToAge(target, runDb, manifest, opts.ageInterval ?? '1 hour');
+
+  // Capture is enabled *after* the clone and *after* the rebase, deliberately.
+  // The rebase issues one whole-table UPDATE per table with a timestamp column —
+  // 30-odd statements whose plans are large and whose row counts are the
+  // fixture's, not the run's. None of that is behaviour under test, and all of
+  // it would be spending the journald budget the trace needs.
+  if (opts.captureStatements) {
+    try {
+      await ensureLogLinePrefix(target);
+      await enableStatementCapture(target, runDb);
+    } catch (e) {
+      // The clone already exists by this point, and a throw here skips the
+      // harness's `teardown`. Two `mwf_run_*` databases were left behind that
+      // way while this was being built; the drift check above avoids it the
+      // same way.
+      await dropDatabase(target, runDb);
+      throw e;
+    }
+  }
 
   return {
     manifest,

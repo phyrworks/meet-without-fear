@@ -51,6 +51,9 @@ describe(`golden: ${SCENARIO}`, () => {
       baseUrl: BASE_URL,
       stage: 'FEEL_HEARD_B',
       runId: `${SCENARIO}_${process.pid}`,
+      // The other escaped mutation lives here: moving the reveal write out of
+      // its Serializable `$transaction` writes identical rows.
+      trace: true,
     });
 
     const { userA, userB } = harness.actors;
@@ -137,6 +140,35 @@ describe(`golden: ${SCENARIO}`, () => {
 
   it('every step reached quiescence (a timed-out step is not a baseline)', () => {
     expect(steps.filter((s) => !s.settled).map((s) => s.label)).toEqual([]);
+  });
+
+  // An empty or rate-limited window reads as a *smaller* trace, which looks
+  // exactly like the code having got cheaper. Same failure shape as `settled`.
+  it('every step captured a complete SQL trace', () => {
+    expect(
+      steps
+        .filter((s) => !s.trace?.complete)
+        .map((s) => `${s.label}: ${s.trace?.incompleteReason ?? 'no trace'}`)
+    ).toEqual([]);
+  });
+
+  // The mutation that escaped every row and response assertion here: moving the
+  // reveal `updateMany` out of `checkAndRevealBothIfReady`'s Serializable
+  // `$transaction` writes the same rows in the same order and returns the same
+  // bodies. Only the envelope differs — and the envelope is the TOCTOU
+  // protection, so its loss is the whole defect.
+  it('the reveal runs inside one Serializable transaction', () => {
+    const serializable = (consentStep.trace?.shapes ?? []).filter((t) => t.isolation === 'SERIALIZABLE');
+    expect(serializable).toHaveLength(1);
+    // One occurrence, not two: the reveal is a single read-check-write.
+    expect(serializable[0].occurrences).toBe(1);
+    // Read-check-write: the check reads and the reveal writes, in one group.
+    const kinds = serializable[0].kinds;
+    expect(kinds.SELECT ?? 0).toBeGreaterThan(0);
+    expect((kinds.UPDATE ?? 0) + (kinds.INSERT ?? 0)).toBeGreaterThan(0);
+    // Grouped by vxid, never by "has a BEGIN": Prisma wraps a bare `updateMany`
+    // in its own implicit BEGIN/COMMIT, so the mutated code still has one.
+    expect(serializable[0].statementCount).toBeGreaterThan(2);
   });
 
   // Without this, a regression that stops writing entirely would still record a

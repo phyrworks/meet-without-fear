@@ -11,6 +11,7 @@ import * as path from 'path';
 import type { Harness, StepResult } from './driver';
 import { buildLabelMap, normalize, timestampFacts, LabelMap } from './normalize';
 import type { RowChange } from './snapshot';
+import type { TraceSummary } from './trace';
 
 const GOLDEN_DIR = path.join(__dirname, '__golden__');
 
@@ -28,6 +29,11 @@ export interface GoldenStep {
   changesAtResponse: unknown[] | typeof ASYNC_BOUNDARY;
   /** False when quiescence polling timed out; a timed-out step is not a baseline. */
   settled: boolean;
+  /**
+   * What the step asked of Postgres. Present only for scenarios that record a
+   * trace; absent leaves every existing golden byte-identical.
+   */
+  trace?: TraceSummary;
 }
 
 export interface GoldenFile {
@@ -101,6 +107,12 @@ export function normalizeStep(step: StepResult, map: LabelMap): { golden: Golden
       // for reasons that have nothing to do with the code under test.
       changesAtResponse: step.asyncBoundary ? ASYNC_BOUNDARY : ((v.changesAtResponse ?? []) as unknown[]),
       settled: step.settled,
+      // Deliberately not passed through `normalize`. A trace carries no ids and
+      // no timestamps by construction — `trace.ts` builds it out of
+      // classifications, relation names and counts — so normalizing it could
+      // only ever damage it. `TIMESTAMP_RE` and `CUID_RE` have nothing to match,
+      // and the "unresolved id fails the run" guard has nothing to guard.
+      ...(step.trace ? { trace: step.trace } : {}),
     },
     unresolved: n.unresolved,
   };

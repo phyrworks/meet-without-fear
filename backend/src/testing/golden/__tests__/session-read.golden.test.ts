@@ -33,6 +33,9 @@ describe(`golden: ${SCENARIO}`, () => {
       baseUrl: BASE_URL,
       stage: 'FEEL_HEARD_B',
       runId: `${SCENARIO}_${process.pid}`,
+      // The read scenario is where the dropped-`take` blind spot lives, so this
+      // is the scenario the trace oracle was built for.
+      trace: true,
     });
 
     const { userA, userB } = harness.actors;
@@ -100,6 +103,35 @@ describe(`golden: ${SCENARIO}`, () => {
 
   it('every step reached quiescence (a timed-out step is not a baseline)', () => {
     expect(steps.filter(s => !s.settled).map(s => s.label)).toEqual([]);
+  });
+
+  // Same lesson as `settled`, one layer down. A window that was empty, truncated
+  // or rate-limited produces *smaller* counts, which is indistinguishable from
+  // the code having got cheaper. It has to fail loudly or it is worse than not
+  // capturing at all.
+  it('every step captured a complete SQL trace', () => {
+    expect(
+      steps.filter(s => !s.trace?.complete).map(s => `${s.label}: ${s.trace?.incompleteReason ?? 'no trace'}`)
+    ).toEqual([]);
+  });
+
+  // The regression this whole oracle exists for. `take: limit + 1` is re-sliced
+  // by the controller at `messages.ts:671`, so removing it leaves every HTTP
+  // response byte-identical and only the rows read from Postgres change.
+  it('the paginated read bounds the rows it reads from Message', () => {
+    for (const step of steps.filter(s => s.label.startsWith('messages page of 5'))) {
+      const rowsRead = step.trace?.rowsRead;
+      // A synchronous step always records exact counts; `ASYNC_RACE` here would
+      // mean the step was mis-declared and the assertion had quietly stopped
+      // asserting anything.
+      expect(typeof rowsRead).toBe('object');
+      const read = (rowsRead as Record<string, number>).Message;
+      expect(read).toBeDefined();
+      // `limit + 1` is the whole trick: 6 rows fetched to answer `hasMore` on a
+      // page of 5. The fixture holds 13 messages, so an unbounded read is 13
+      // (or 10 for the partner) and this assertion moves.
+      expect(read).toBeLessThanOrEqual(6);
+    }
   });
 
   it('the two participants see different message sets', () => {
