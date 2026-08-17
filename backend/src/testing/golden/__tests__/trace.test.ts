@@ -19,6 +19,8 @@
 
 import {
   MARK_PREFIX,
+  UNASSERTED_CONNECTIONS,
+  UNASSERTED_ROWS,
   buildTrace,
   extractWindow,
   groupTransactions,
@@ -302,24 +304,25 @@ describe('summarize', () => {
     expect(JSON.stringify(of(forward).shapes)).toEqual(JSON.stringify(of(reversed).shapes));
   });
 
-  it('bands only the relation a band was declared for, and leaves the rest exact', () => {
-    // The narrowing this replaced: an earlier version discarded the whole
-    // rowsRead map on any async step, which threw away relations that had never
-    // been seen to move, on the only step carrying a write path.
+  it('unasserts only the declared relation, and leaves every other one exact', () => {
+    // Two corrections are baked into this. The first version discarded the whole
+    // rowsRead map on any async step, throwing away relations that had never
+    // moved. The second replaced that with fitted ranges, which failed on a clean
+    // tree. What survives is the narrowing: one relation, everything else exact.
     const stmts = buildTrace(parsePostgresLog(SAMPLE_BASIC), { database: 'probe', application: APP });
     const exact = summarize(groupTransactions(stmts), { complete: true });
-    const banded = summarize(groupTransactions(stmts), {
+    const muted = summarize(groupTransactions(stmts), {
       complete: true,
-      bands: { connections: [1, 2], rowCounts: { Message: { perStatement: [0, 6], total: [6, 7] } } },
+      unasserted: { connections: true, rowCounts: ['Message'] },
     });
 
     expect(exact.rowsRead).toEqual({ Message: 6, User: 1 });
-    expect(banded.rowsRead).toEqual({ Message: '6-7', User: 1 });
-    expect(banded.connections).toBe('1-2');
+    expect(muted.rowsRead).toEqual({ Message: UNASSERTED_ROWS, User: 1 });
+    expect(muted.connections).toBe(UNASSERTED_CONNECTIONS);
     // Kinds, relations, plan shape and the envelope are never coarsened.
-    expect(banded.statements).toBe(2);
-    expect(banded.byKind).toEqual({ INSERT: 1, SELECT: 1 });
-    expect(banded.shapes.flatMap(s => s.statements.map(x => x.planNodes))).toContainEqual([
+    expect(muted.statements).toBe(2);
+    expect(muted.byKind).toEqual({ INSERT: 1, SELECT: 1 });
+    expect(muted.shapes.flatMap(s => s.statements.map(x => x.planNodes))).toContainEqual([
       'Limit',
       'Sort',
       'Nested Loop',
@@ -328,38 +331,35 @@ describe('summarize', () => {
     ]);
   });
 
-  it('records a count outside its band exactly, so real movement still fails', () => {
-    // A band that silently absorbed any value would be an oracle that cannot
-    // fail — the thing this harness's conventions exist to prevent.
-    const stmts = buildTrace(parsePostgresLog(SAMPLE_BASIC), { database: 'probe', application: APP });
-    const s = summarize(groupTransactions(stmts), {
-      complete: true,
-      bands: { rowCounts: { Message: { perStatement: [0, 1], total: [0, 1] } } },
-    });
-    expect(s.rowsRead).toEqual({ Message: 6, User: 1 });
-    const select = s.shapes.flatMap(x => x.statements).find(x => x.kind === 'SELECT')!;
-    expect(select.rowsRead).toEqual({ Message: 6, User: 1 });
+  it('says what it is, so an unasserted field cannot be mistaken for data', () => {
+    // A bare sentinel would read like a value. A reader who cannot tell an
+    // unasserted field from a measured one eventually re-records the golden to
+    // make a red go away, which is the failure this harness's conventions exist
+    // to prevent.
+    for (const text of [UNASSERTED_CONNECTIONS, UNASSERTED_ROWS]) {
+      expect(text).toMatch(/^<unasserted: /);
+      expect(text.length).toBeGreaterThan(60);
+    }
+    expect(UNASSERTED_CONNECTIONS).toMatch(/clean tree produced 5/);
+    expect(UNASSERTED_ROWS).toMatch(/races those inserts/);
   });
 
-  it('bands topRows only when the banded scan is the plan root', () => {
-    // Minimal rule, chosen because it is the one that stabilised the raced
-    // statement across 18 captures without touching any other topRows. Here the
-    // Message scan sits under a Limit, so the root count stays exact.
+  it('suppresses topRows only when the unasserted scan is the plan root', () => {
+    // Validated against 30 captures: the statement that actually flips is a bare
+    // Index Scan, while five `Limit -> Index Scan Backward` statements over the
+    // same relation are stable and keep their exact topRows. Here the Message
+    // scan sits under a Limit, so the root count survives — which is what keeps
+    // a Limit that stopped limiting visible even on an unasserted relation.
     const stmts = buildTrace(parsePostgresLog(SAMPLE_BASIC), { database: 'probe', application: APP });
-    const s = summarize(groupTransactions(stmts), {
-      complete: true,
-      bands: { rowCounts: { Message: { perStatement: [0, 6], total: [0, 6] } } },
-    });
+    const s = summarize(groupTransactions(stmts), { complete: true, unasserted: { rowCounts: ['Message'] } });
     const select = s.shapes.flatMap(x => x.statements).find(x => x.kind === 'SELECT')!;
-    expect(select.rowsRead).toEqual({ Message: '0-6', User: 1 });
-    // `Limit` reported 6 too, but it is a different node; banding it would hide
-    // a Limit that stopped limiting.
+    expect(select.rowsRead).toEqual({ Message: UNASSERTED_ROWS, User: 1 });
     expect(select.topRows).toBe(6);
   });
 
-  it('merges shapes that differ only inside a band', () => {
+  it('merges shapes that differ only in an unasserted count', () => {
     // This is what actually removes the flake: the raced read produced two
-    // buckets (Message=0 x5 and Message=1 x1) that collapse into one.
+    // buckets (Message=0 and Message=1) that collapse into one.
     const scan = (rows: number, vxid: string) =>
       [
         `2026-08-17 22:20:20.860 UTC [1] db=probe,app=${APP},vxid=${vxid},xid=0 LOG:  execute <unnamed>: SELECT 1`,
@@ -371,13 +371,20 @@ describe('summarize', () => {
     const stmts = buildTrace(parsePostgresLog(raw), { database: 'probe', application: APP });
 
     expect(summarize(groupTransactions(stmts), { complete: true }).shapes).toHaveLength(2);
-    const banded = summarize(groupTransactions(stmts), {
-      complete: true,
-      bands: { rowCounts: { Message: { perStatement: [0, 1], total: [1, 1] } } },
-    });
-    expect(banded.shapes).toHaveLength(1);
-    expect(banded.shapes[0].occurrences).toBe(2);
-    expect(banded.shapes[0].statements[0].topRows).toBe('0-1');
+    const muted = summarize(groupTransactions(stmts), { complete: true, unasserted: { rowCounts: ['Message'] } });
+    expect(muted.shapes).toHaveLength(1);
+    expect(muted.shapes[0].occurrences).toBe(2);
+    // Here the scan IS the root, so topRows goes with it.
+    expect(muted.shapes[0].statements[0].topRows).toBe(UNASSERTED_ROWS);
+  });
+
+  it('leaves a relation exact when the step declares nothing', () => {
+    // The default must be "assert everything". A step that forgets to declare a
+    // genuine race flakes loudly, which is the safe direction.
+    const stmts = buildTrace(parsePostgresLog(SAMPLE_BASIC), { database: 'probe', application: APP });
+    const s = summarize(groupTransactions(stmts), { complete: true });
+    expect(s.connections).toBe(1);
+    expect(s.rowsRead).toEqual({ Message: 6, User: 1 });
   });
 
   it('carries incompleteness through instead of reporting a smaller trace', () => {

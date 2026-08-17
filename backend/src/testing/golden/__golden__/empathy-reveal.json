@@ -523,7 +523,7 @@
       "settled": true,
       "trace": {
         "complete": true,
-        "connections": "3-4",
+        "connections": "<unasserted: pool high-water mark under concurrent background work — 48 runs measured 3-4, then a clean tree produced 5; no ceiling is derivable, so nothing is claimed>",
         "transactions": 129,
         "statements": 139,
         "byKind": {
@@ -538,7 +538,7 @@
           "EmpathyAttempt": 23,
           "EmpathyDraft": 2,
           "EmpathyValidation": 0,
-          "Message": "34-35",
+          "Message": "<unasserted: this step INSERTs into this relation from background work, so every read of it races those inserts and no row count is a property of the work>",
           "ReconcilerResult": 0,
           "ReconcilerShareOffer": 0,
           "Relationship": 21,
@@ -815,7 +815,7 @@
             ]
           },
           {
-            "occurrences": 1,
+            "occurrences": 6,
             "explicit": false,
             "isolation": null,
             "statementCount": 1,
@@ -829,9 +829,9 @@
                 "relations": [
                   "Message"
                 ],
-                "topRows": "0-1",
+                "topRows": "<unasserted: this step INSERTs into this relation from background work, so every read of it races those inserts and no row count is a property of the work>",
                 "rowsRead": {
-                  "Message": "0-1"
+                  "Message": "<unasserted: this step INSERTs into this relation from background work, so every read of it races those inserts and no row count is a property of the work>"
                 },
                 "planNodes": [
                   "Index Scan"
@@ -856,111 +856,11 @@
                 ],
                 "topRows": 0,
                 "rowsRead": {
-                  "Message": "0-1"
+                  "Message": "<unasserted: this step INSERTs into this relation from background work, so every read of it races those inserts and no row count is a property of the work>"
                 },
                 "planNodes": [
                   "Limit",
                   "Index Scan Backward"
-                ]
-              }
-            ]
-          },
-          {
-            "occurrences": 1,
-            "explicit": false,
-            "isolation": null,
-            "statementCount": 1,
-            "kinds": {
-              "SELECT": 1
-            },
-            "statements": [
-              {
-                "kind": "SELECT",
-                "protocol": "extended",
-                "relations": [
-                  "Message"
-                ],
-                "topRows": 11,
-                "rowsRead": {
-                  "Message": 11
-                },
-                "planNodes": [
-                  "Index Scan"
-                ]
-              }
-            ]
-          },
-          {
-            "occurrences": 1,
-            "explicit": false,
-            "isolation": null,
-            "statementCount": 1,
-            "kinds": {
-              "SELECT": 1
-            },
-            "statements": [
-              {
-                "kind": "SELECT",
-                "protocol": "extended",
-                "relations": [
-                  "Message"
-                ],
-                "topRows": 12,
-                "rowsRead": {
-                  "Message": 12
-                },
-                "planNodes": [
-                  "Index Scan"
-                ]
-              }
-            ]
-          },
-          {
-            "occurrences": 1,
-            "explicit": false,
-            "isolation": null,
-            "statementCount": 1,
-            "kinds": {
-              "SELECT": 1
-            },
-            "statements": [
-              {
-                "kind": "SELECT",
-                "protocol": "extended",
-                "relations": [
-                  "Message"
-                ],
-                "topRows": 3,
-                "rowsRead": {
-                  "Message": 3
-                },
-                "planNodes": [
-                  "Index Scan"
-                ]
-              }
-            ]
-          },
-          {
-            "occurrences": 2,
-            "explicit": false,
-            "isolation": null,
-            "statementCount": 1,
-            "kinds": {
-              "SELECT": 1
-            },
-            "statements": [
-              {
-                "kind": "SELECT",
-                "protocol": "extended",
-                "relations": [
-                  "Message"
-                ],
-                "topRows": 4,
-                "rowsRead": {
-                  "Message": 4
-                },
-                "planNodes": [
-                  "Index Scan"
                 ]
               }
             ]

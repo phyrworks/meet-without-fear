@@ -146,10 +146,11 @@ And against the write path (`empathy-reveal`, the Stage 2 mutual reveal):
 | Route the reveal commentary to the guesser instead of the subject | **caught** | `<user:ada>` where `<user:bob>` was expected — and the scenario's own routing assertion *passed*, because each partner still received exactly one message. Only the golden's content-to-recipient pairing saw it. |
 | Move the reveal write outside its Serializable transaction | passed | **real blind spot** — same class as the dropped `take` |
 
-Both blind spots are now covered by the SQL trace (below). Neither mutation has
-been re-run against it here — a separate mutation-gate pass does that
-independently — but the signal each would move is recorded in the goldens and
-named in the table further down.
+Both blind spots are now covered by the SQL trace (below), confirmed by a
+separate mutation-gate pass: all five mutations above go red against it, and two
+further ones written for that gate — removing a redundant `session.findFirst`,
+and turning a `findMany({ id: { in: … } })` into a per-id loop — produced diffs
+confined entirely to `trace.*`, with no HTTP body and no row movement at all.
 
 Both escaped mutations changed no row and no response byte. Removing
 `take: limit + 1` fetches every row and the controller slices to the same page,
@@ -163,7 +164,7 @@ it**.
 
 Repeatability: 5 consecutive runs across 3 timezones, all byte-identical, plus 7
 consecutive green runs of both scenarios after the fresh/carried change. The
-trace added 18 more recorded runs for the variance measurement below, then 5
+trace added 48 recorded runs for the variance measurement below, then 5
 consecutive verify runs plus `TZ=UTC` and `TZ=Pacific/Chatham`.
 
 ## The SQL trace (`trace.ts`)
@@ -247,39 +248,58 @@ opened more than one connection (4 distinct results in 6 runs on `session state`
 behaviour. The *count* of distinct connections is still recorded. The vxid
 grouping — the part that answers "did these run together" — is kept in full.
 
-**Bands are per relation and per measured range, never per step.** 18 consecutive
-runs of both scenarios say what actually moves, and it is three numbers, all on
+**A quantity is asserted exactly, or refused outright. Never fitted to a range.**
+48 recorded runs of both scenarios say what moves, and it is two things, both on
 `consent as bob`, where the request and the fire-and-forget reveal overlap:
 
-| | distribution over 18 runs |
+| | distribution over 48 runs |
 |---|---|
-| `connections` | 4 ×16, 3 ×2 |
-| `rowsRead.Message` (rollup) | 34 ×17, 35 ×1 |
-| one `Message`-only `Index Scan` | 0 rows ×17, 1 row ×1 |
+| `connections` | 4 ×45, 3 ×3 — **and 5 once, off-sample** |
+| `rowsRead.Message` (rollup) | 34 ×46, 35 ×2 |
+| one `Message`-only `Index Scan` | 0 rows ×46, 1 row ×2 |
 
-Nothing else moved anywhere. Every other relation on that step —
-`EmpathyAttempt`, `EmpathyDraft`, `EmpathyValidation`, `ReconcilerResult`,
-`ReconcilerShareOffer`, `Relationship`, `RelationshipMember`, `Session`,
-`StageProgress`, `User`, `UserVessel` — was identical 18/18, as were statement
-count, transaction count, kinds, isolation and every plan node type. All 6 steps
-of `session-read` and the other 7 of `empathy-reveal` were stable 18/18 with
-nothing banded at all. Replaying the 18 captures with each relation banded in
-turn confirms `Message` is the only one that needs it: banding it alone makes the
-step stable, banding any other single relation does not.
+Everything else was identical 48/48: statement count (139), transaction count
+(129), kinds, isolation, every plan node type, and every other relation on that
+step — `EmpathyAttempt` 23, `RelationshipMember` 35, `Relationship` 21, `Session`
+21, `User` 19, `StageProgress` 8, `UserVessel` 6, `EmpathyDraft` 2, and three
+zeroes. All 6 steps of `session-read` and the other 7 of `empathy-reveal` were
+stable 48/48 with nothing declared at all.
 
-So the scenario declares `traceBands` for `Message` on that one step, across the
-ranges observed, and nothing else is coarsened anywhere. In the recorded golden
-that is 2 statement shapes out of 41 and one relation out of twelve; the other
-eleven keep exact counts on the only step in either scenario that carries a write
-path. A count outside its declared range is recorded exactly and fails the diff,
-so a band cannot absorb a real regression. `topRows` is banded only when the
-banded scan is the plan *root* — a `Limit` above it reports the same number and
-keeps it exact, or a `Limit` that stopped limiting could hide inside the band.
+Both moving quantities are **refused**, not ranged, and the history is the
+argument. An interim version declared `connections: [3, 4]` from the first 18
+runs. The mutation gate then produced `5` on a clean, unmutated tree — a value 48
+runs never showed — and `connections` also moved under two unrelated mutations,
+so it cannot separate "the pool scheduled differently" from "a regression added a
+query". A range that fails on a clean tree trains a reader to dismiss exactly the
+failures this harness exists to raise, and a reader who dismisses them eventually
+re-records the golden to make the red go away.
 
-An earlier version discarded the whole `rowsRead` map on any `asyncBoundary`
-step. That was far coarser than the evidence and is recorded here because the
-distinction is the point: a band has to be justified by an observation, not by
-sharing a step with one.
+`rowsRead.Message` looked far tighter — 46 of 48 at one value, moving by a single
+row — but it is the same kind of claim. The raced statement is a `findMany` with
+no `LIMIT`, so nothing bounds it at one row, and the reveal inserts *two* Message
+rows in separate autocommit transactions. `34-35` was a property of the sample
+exactly as `3-4` was, so it went too.
+
+`EmpathyAttempt` is the control that shows the line is real and not superstition:
+the reveal writes it too, but only with `UPDATE`, so its read counts cannot move
+with timing and they stayed at 23 across all 48 runs. **INSERT/DELETE moves row
+counts; UPDATE cannot.** That is the rule for deciding what a step with
+background work can still assert.
+
+So the scenario declares `traceUnasserted` for `connections` and `Message` on that
+one step, and nothing else anywhere is coarsened. `connections` stays exact on
+every synchronous step, where it has never moved. `topRows` is suppressed only
+where the unasserted scan *is* the plan root — validated against 30 captures, the
+statement that flips is a bare `Index Scan`, while five `Limit -> Index Scan
+Backward` statements over the same relation are stable at 0 and keep their exact
+`topRows`, so a `Limit` that stopped limiting is visible even on the relation this
+step cannot count.
+
+Two earlier versions are recorded here because the corrections are the point. The
+first discarded the whole `rowsRead` map on any `asyncBoundary` step — far coarser
+than the evidence, on the only step carrying a write path. The second replaced
+that with fitted ranges, which failed on a clean tree. What survives both is the
+narrowing, not the fitting.
 
 **An empty or truncated window fails loudly.** Same lesson as `settled`, one
 layer down: a rate-limited window is a *smaller* trace, which is
@@ -334,11 +354,11 @@ mean they are covered:
   design, so `SELECT on Message reading 6 rows` is as specific as it gets. When
   two call sites issue structurally identical queries, the trace cannot tell you
   which one regressed — only that one more or one fewer happened.
-- **`asyncBoundary` steps do not assert row counts.** On those steps the count a
-  read observed is a race and is recorded as such, so a genuine cost regression
-  confined to background work would pass. `consent as bob` is the only such step
-  today, and it is also the one carrying the Serializable envelope this oracle
-  most wants to watch.
+- **The one step with background writes cannot assert `Message` row counts or its
+  connection count.** A cost regression confined to reads of `Message` during the
+  reveal would pass. `consent as bob` is the only such step today, and it is also
+  the one carrying the Serializable envelope this oracle most wants to watch. Its
+  other eleven relations are still asserted exactly.
 
 ## Conventions
 

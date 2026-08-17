@@ -87,29 +87,42 @@ describe(`golden: ${SCENARIO}`, () => {
       // awaiting it, so the reveal lands somewhere after the response — measured
       // returning on READY in one run and REVEALED in the next.
       asyncBoundary: true,
-      // The only bands in either scenario, and the only step that needs any.
-      // Measured over 18 consecutive runs of this suite, three numbers move and
-      // nothing else does:
+      // The only unasserted trace fields in either scenario, and the only step
+      // that needs any. 48 recorded runs (18 + 30) say what moves here; nothing
+      // moves on any other step of either scenario.
       //
-      //   connections                        4 x16, 3 x2
-      //   rowsRead.Message (rollup)          34 x17, 35 x1
-      //   one Message-only Index Scan         0 x17,  1 x1
+      //   connections                     4 x45, 3 x3
+      //   rowsRead.Message (rollup)       34 x46, 35 x2
+      //   one Message-only Index Scan      0 x46,  1 x2
       //
-      // The scan is a read of the reveal message racing the fire-and-forget
-      // write that creates it. Every other relation this step touches
-      // (EmpathyAttempt, EmpathyDraft, EmpathyValidation, ReconcilerResult,
-      // ReconcilerShareOffer, Relationship, RelationshipMember, Session,
-      // StageProgress, User, UserVessel) was identical 18/18, as were the
-      // statement count, the transaction count, kinds, isolation and every plan
-      // node type — so all of those stay exact, including on this step. Replaying
-      // the 18 captures with each relation banded in turn confirms Message is the
-      // only one that has to be: banding it alone makes the step stable, banding
-      // any other single relation does not.
+      // Both are refused rather than given a measured range, and the history is
+      // why. An earlier version declared `connections: [3, 4]` from the first 18
+      // runs. The mutation gate then produced `5` on a clean, unmutated tree —
+      // a value 48 runs never showed — and `connections` also moved under two
+      // unrelated mutations, so it cannot separate "the pool scheduled
+      // differently" from "a regression added a query". A range that fails on a
+      // clean tree teaches a reader to dismiss exactly the failures this harness
+      // exists to raise.
       //
-      // A count outside its range is still recorded exactly and fails the diff.
-      traceBands: {
-        connections: [3, 4],
-        rowCounts: { Message: { perStatement: [0, 1], total: [34, 35] } },
+      // `rowsRead.Message` looked far tighter (46/48 at one value, moving by a
+      // single row) but it is the same kind of claim. The raced statement is a
+      // `findMany` with no LIMIT, so nothing bounds it at one row, and the reveal
+      // inserts TWO Message rows in separate autocommit transactions. 34-35 was a
+      // property of the sample exactly as 3-4 was, so it goes too.
+      //
+      // What is NOT refused is the point: every other relation this step touches
+      // stays exact — EmpathyAttempt 23, RelationshipMember 35, Relationship 21,
+      // Session 21, User 19, StageProgress 8, UserVessel 6, EmpathyDraft 2, and
+      // three zeroes — as do statement count (139), transaction count (129),
+      // kinds, isolation and every plan node type, all identical 48/48.
+      //
+      // EmpathyAttempt is the control that shows the line is real rather than
+      // superstition: the reveal writes it too, but only with UPDATE, so its read
+      // counts cannot move with timing. INSERT/DELETE moves row counts; UPDATE
+      // does not.
+      traceUnasserted: {
+        connections: true,
+        rowCounts: ['Message'],
       },
       call: (agent) =>
         agent.post(`/api/v1/sessions/${harness.sessionId}/empathy/consent`).send({ consent: true }),

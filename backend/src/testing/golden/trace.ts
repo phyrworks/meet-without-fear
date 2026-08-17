@@ -167,8 +167,8 @@ export interface TracedStatement {
   topRows: number | null;
   /**
    * Relation scanned by the plan's *root* node, when the root is a scan at all.
-   * Internal: never emitted. It exists so a declared row-count band can apply to
-   * `topRows` only when the root node is the banded scan itself, and not when a
+   * Internal: never emitted. It exists so an unasserted relation can suppress
+   * `topRows` only when the root node is that scan itself, and not when a
    * `Limit` above it happens to report the same number.
    */
   rootRelation: string | null;
@@ -416,45 +416,52 @@ export function groupTransactions(statements: TracedStatement[]): TracedTransact
 // ============================================================================
 
 /**
- * Ranges a step declares because it *measured* a count moving, with the numbers.
+ * What a step's trace must NOT assert, because a concurrent writer makes the
+ * value a sample of a race rather than a property of the work.
  *
- * A band is not a licence to be vague. A value inside its declared range is
- * recorded as the range, so the race stops flapping the golden; a value outside
- * it is recorded exactly, so real movement still fails the diff. Nothing is
- * banded because it shares a step with something that moved — only because it
- * was seen to move, over a sample big enough to say so.
+ * This is deliberately a refusal and not a numeric range. An earlier version
+ * declared measured ranges — `connections: [3, 4]` from 18 runs — and it failed
+ * on a clean, unmutated tree: a run produced `5`, and the same field also moved
+ * under two unrelated mutations. A fitted range on a quantity with no derivable
+ * ceiling is worse than no assertion at all, because it fails for reasons a
+ * reader cannot distinguish from a regression, and a reader who cannot tell
+ * those apart eventually re-records the golden to make the red go away. That is
+ * the one failure mode this harness's conventions exist to prevent.
  *
- * Every range in a scenario must carry the observation that produced it. See
- * `empathy-reveal.golden.test.ts` for the only one that exists.
+ * So the rule is: if a bound can be *derived*, assert exactly; if it can only be
+ * *fitted to a sample*, assert nothing and say why. Nothing in between.
+ *
+ * Declare the narrowest thing that is genuinely unassertable — a single
+ * relation, not a whole step. Every other relation on the same step stays exact.
+ * See `empathy-reveal.golden.test.ts` for the only declaration that exists and
+ * the measurements behind it.
  */
-export interface RaceBands {
-  /**
-   * Relation -> the ranges its row counts were measured spanning.
-   *
-   * `perStatement` bands an individual scan's count; `total` bands the summed
-   * rollup. They are declared separately rather than deriving the second from
-   * the first, because deriving it means multiplying the per-statement range by
-   * the number of statements it touches and recording a band far wider than
-   * anything observed.
-   */
-  rowCounts?: Record<string, { perStatement: [number, number]; total: [number, number] }>;
-  /** Range the count of distinct backend connections was measured spanning. */
-  connections?: [number, number];
+export interface UnassertedTrace {
+  /** Do not assert the count of distinct backend connections. */
+  connections?: boolean;
+  /** Relations whose read counts must not be asserted on this step. */
+  rowCounts?: string[];
 }
 
-/** Inside the declared range -> the range; outside it -> the exact value. */
-function band(value: number, range: [number, number] | undefined): number | string {
-  if (!range) return value;
-  return value >= range[0] && value <= range[1] ? `${range[0]}-${range[1]}` : value;
-}
+/**
+ * Placeholders. Self-describing on purpose: an unasserted field sitting in a
+ * golden must not read as data, and a reader hitting one should learn why
+ * without leaving the file.
+ */
+export const UNASSERTED_CONNECTIONS =
+  '<unasserted: pool high-water mark under concurrent background work — 48 runs measured 3-4, ' +
+  'then a clean tree produced 5; no ceiling is derivable, so nothing is claimed>';
+export const UNASSERTED_ROWS =
+  '<unasserted: this step INSERTs into this relation from background work, so every read of it ' +
+  'races those inserts and no row count is a property of the work>';
 
 export interface TraceStatementSummary {
   kind: StatementKind;
   protocol: 'simple' | 'extended';
   relations: string[];
-  /** A range only where the step declared one — see `RaceBands`. */
+  /** A placeholder only where the step declared it unassertable. */
   topRows?: number | string | null;
-  /** Per-relation; a range only where the step declared one. */
+  /** Per-relation; a placeholder only where the step declared it unassertable. */
   rowsRead?: Record<string, number | string>;
   planNodes: string[];
 }
@@ -482,12 +489,12 @@ export interface TraceSummary {
   /** False means the window was empty, truncated or rate-limited. Never a pass. */
   complete: boolean;
   incompleteReason?: string;
-  /** Distinct backends the app used. A range only where the step declared one. */
+  /** Distinct backends the app used, or the placeholder where unassertable. */
   connections: number | string;
   transactions: number;
   statements: number;
   byKind: Record<string, number>;
-  /** Rows read per relation, summed. Per-relation ranges where declared. */
+  /** Rows read per relation, summed. Placeholder per relation where unassertable. */
   rowsRead: Record<string, number | string>;
   /** Transaction shapes, grouped and canonically ordered. */
   shapes: TraceTransactionShape[];
@@ -528,46 +535,65 @@ function sortKeys(o: Record<string, number>): Record<string, number> {
  * has no identity beyond the statements in it, which is precisely what is
  * recorded.
  *
- * **Bands are per relation and per measured range, never per step.** An earlier
- * version discarded the whole `rowsRead` map on any step declaring
- * `asyncBoundary`. That was far coarser than the evidence: on `consent as bob`
- * it threw away `EmpathyAttempt`, `Session`, `User` and `StageProgress` counts
- * that never moved, on the only step in either scenario that carries a write
- * path. 18 runs say what actually moves there, and it is three numbers:
+ * **What a step refuses to assert is narrowed to one relation, not one step.**
+ * The first version discarded the whole `rowsRead` map on any step declaring
+ * `asyncBoundary`, which threw away `EmpathyAttempt`, `Session`, `User` and
+ * eight other relations that never moved, on the only step in either scenario
+ * carrying a write path. The second version replaced that with fitted numeric
+ * ranges, and those failed on a clean tree. What survives both corrections is
+ * the narrowing, not the fitting.
  *
- *   connections          4 x16, 3 x2
- *   rowsRead.Message     34 x17, 35 x1
- *   one Message-only scan  0 rows x17, 1 row x1
+ * 48 recorded runs (18 + 30) of both scenarios say what moves. On
+ * `consent as bob`, and nowhere else:
  *
- * and nothing else — every other relation on that step (`EmpathyAttempt`,
- * `EmpathyDraft`, `EmpathyValidation`, `ReconcilerResult`,
- * `ReconcilerShareOffer`, `Relationship`, `RelationshipMember`, `Session`,
- * `StageProgress`, `User`, `UserVessel`) was identical 18/18, as were statement
- * count, transaction count, kinds, isolation and plan node types. Confirmed by
- * replaying the 18 captures with each relation banded in turn: banding `Message`
- * alone makes the step stable, and banding any other single relation does not.
- * All 6 steps of `session-read` and the other 7 of `empathy-reveal` were stable
- * 18/18 with nothing banded at all.
+ *   connections                     4 x45, 3 x3      (and 5 once, off-sample)
+ *   rowsRead.Message (rollup)       34 x46, 35 x2
+ *   one Message-only Index Scan      0 x46,  1 x2
  *
- * So `Message` is banded on that one step, and only across the ranges observed.
- * Everything else, everywhere, stays exact — which is what lets
- * `messages page of 5` see `Message: 6` become `Message: 13`.
+ * Everything else was identical 48/48: statement count (139), transaction count
+ * (129), kinds, isolation, every plan node type, and every other relation —
+ * `EmpathyAttempt` 23, `RelationshipMember` 35, `Relationship` 21, `Session` 21,
+ * `User` 19, `StageProgress` 8, `UserVessel` 6, `EmpathyDraft` 2, and three
+ * zeroes. All 6 steps of `session-read` and the other 7 of `empathy-reveal` were
+ * stable 48/48 with nothing declared at all.
  *
- * `topRows` is banded only when it is the same number as a banded relation's own
- * count, i.e. when the scan *is* the plan root. That is the minimal rule that
- * works: measured against all 18 captures, it stabilises the raced statement
- * without touching any other `topRows`.
+ * Both moving quantities are refused rather than ranged, because neither has a
+ * ceiling that can be derived:
+ *
+ *   - `connections` is a pool high-water mark. 48 runs said 3-4 and a clean tree
+ *     then produced 5. It also moves under unrelated mutations, so it cannot
+ *     separate "the pool scheduled differently" from "a regression added a
+ *     query". It is refused on this step and stays exact on every synchronous
+ *     step, where it has never moved (48/48).
+ *   - `rowsRead.Message` looked tighter — 46/48 at one value, moving by one row
+ *     — but the raced statement is a `findMany` with no `LIMIT`, so nothing
+ *     syntactically bounds it at one row, and the reveal inserts *two* Message
+ *     rows in separate autocommit transactions. 34-35 was a property of the
+ *     sample, exactly as 3-4 was. Refused.
+ *
+ * `EmpathyAttempt` is the control that shows this is not superstition: the
+ * reveal writes it too, but only with UPDATE, so its read counts are
+ * timing-invariant and stayed at 23 across all 48 runs. The line is INSERT/
+ * DELETE (row counts move) versus UPDATE (they cannot).
+ *
+ * `topRows` is refused only when the unasserted scan *is* the plan root.
+ * Validated against all 30 captures in the second sample: the statement that
+ * flips is the bare `Index Scan`, while five `Limit -> Index Scan Backward`
+ * statements over the same relation are stable at 0 and keep their exact
+ * `topRows`. So a `Limit` that stopped limiting is still visible even on the
+ * relation this step cannot count.
  */
 export function summarize(
   transactions: TracedTransaction[],
   opts: {
     complete: boolean;
     incompleteReason?: string;
-    /** Ranges the step measured a count moving across. */
-    bands?: RaceBands;
+    /** What this step cannot assert, and why. */
+    unasserted?: UnassertedTrace;
   },
 ): TraceSummary {
-  const bands = opts.bands ?? {};
+  const unasserted = opts.unasserted ?? {};
+  const mutedRelations = new Set(unasserted.rowCounts ?? []);
   const byKind: Record<string, number> = {};
   const rowsRead: Record<string, number> = {};
   const connections = new Set<string>();
@@ -589,22 +615,22 @@ export function summarize(
       statementCount: tx.statements.length,
       kinds: sortKeys(kinds),
       statements: tx.statements.map(s => {
-        const banded: Record<string, number | string> = {};
+        const counts: Record<string, number | string> = {};
         let topRows: number | string | null = s.topRows;
         for (const [rel, n] of Object.entries(s.rowsRead).sort(([a], [b]) => a.localeCompare(b))) {
-          const range = bands.rowCounts?.[rel]?.perStatement;
-          banded[rel] = band(n, range);
-          // Only when the banded scan *is* the plan root. A `Limit` above it
-          // reports the same number and must keep it exact, or a Limit that
-          // stopped limiting would hide inside the band.
-          if (banded[rel] !== n && s.rootRelation === rel && topRows === n) topRows = banded[rel];
+          const muted = mutedRelations.has(rel);
+          counts[rel] = muted ? UNASSERTED_ROWS : n;
+          // Only when the unasserted scan *is* the plan root. A `Limit` above it
+          // reports the same number and keeps it exact, so a `Limit` that
+          // stopped limiting stays visible even here.
+          if (muted && s.rootRelation === rel && topRows === n) topRows = UNASSERTED_ROWS;
         }
         return {
           kind: s.kind,
           protocol: s.protocol,
           relations: s.relations,
           topRows,
-          rowsRead: banded,
+          rowsRead: counts,
           planNodes: s.planNodes,
         };
       }),
@@ -626,12 +652,12 @@ export function summarize(
   return {
     complete: opts.complete,
     ...(opts.incompleteReason ? { incompleteReason: opts.incompleteReason } : {}),
-    connections: band(connections.size, bands.connections),
+    connections: unasserted.connections ? UNASSERTED_CONNECTIONS : connections.size,
     transactions: transactions.length,
     statements,
     byKind: sortKeys(byKind),
     rowsRead: Object.fromEntries(
-      Object.entries(sortKeys(rowsRead)).map(([rel, n]) => [rel, band(n, bands.rowCounts?.[rel]?.total)]),
+      Object.entries(sortKeys(rowsRead)).map(([rel, n]) => [rel, mutedRelations.has(rel) ? UNASSERTED_ROWS : n]),
     ),
     shapes,
   };
@@ -739,8 +765,8 @@ export interface CaptureOptions {
   endToken: string;
   /** Seconds of history to ask for on the first attempt. */
   sinceSeconds: number;
-  /** Ranges the step measured a count moving across; see `RaceBands`. */
-  bands?: RaceBands;
+  /** What this step cannot assert, and why; see `UnassertedTrace`. */
+  unasserted?: UnassertedTrace;
   /** Bounded — never poll without a ceiling. Defaults match the capture spike. */
   attempts?: number;
   intervalMs?: number;
@@ -788,5 +814,5 @@ export async function captureWindow(opts: CaptureOptions): Promise<TraceSummary>
         'window contained no statements from the application under test — capture is not reaching the app connections',
     });
   }
-  return summarize(groupTransactions(statements), { complete: true, bands: opts.bands });
+  return summarize(groupTransactions(statements), { complete: true, unasserted: opts.unasserted });
 }

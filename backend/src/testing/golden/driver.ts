@@ -17,7 +17,7 @@ import { mark, openMarkerClient } from './db';
 import { restoreFixture, RestoredFixture } from './fixtures';
 import type { FreshWindow } from './normalize';
 import { Snapshot, takeSnapshot, diffSnapshots, RowChange } from './snapshot';
-import { APP_UNDER_TEST, LogReader, RaceBands, TraceSummary, captureWindow, podmanLogReader } from './trace';
+import { APP_UNDER_TEST, LogReader, TraceSummary, UnassertedTrace, captureWindow, podmanLogReader } from './trace';
 
 export interface SseEvent {
   event: string;
@@ -103,15 +103,14 @@ export interface Harness {
      */
     asyncBoundary?: boolean;
     /**
-     * Ranges this step was *measured* moving its SQL trace across, so the golden
-     * records the range instead of one sample of a race. A value outside its
-     * declared range is still recorded exactly, so real movement fails.
+     * Parts of this step's SQL trace that cannot be asserted, because a
+     * concurrent writer makes them a sample of a race.
      *
-     * Independent of `asyncBoundary`: a band is justified by observation, not by
-     * a category. Declare one only with the run count and the distribution in a
-     * comment beside it.
+     * A refusal, never a fitted range — see `UnassertedTrace` for the clean-tree
+     * failure that ruled ranges out. Declare the narrowest thing that is
+     * genuinely unassertable, and put the measurement beside the declaration.
      */
-    traceBands?: RaceBands;
+    traceUnasserted?: UnassertedTrace;
   }): Promise<StepResult>;
   snapshot(tables: string[]): Promise<Snapshot>;
   teardown(): Promise<void>;
@@ -218,7 +217,7 @@ export async function createHarness(opts: {
     sessionId: seeded.sessionId,
     startedAt,
     snapshot,
-    async step({ label, actor, tables, call, sse, asyncBoundary, traceBands }) {
+    async step({ label, actor, tables, call, sse, asyncBoundary, traceUnasserted }) {
       const before = await snapshot(tables);
 
       // Sentinels bracket the window. The begin marker goes after the `before`
@@ -263,7 +262,7 @@ export async function createHarness(opts: {
           beginToken,
           endToken,
           sinceSeconds: (Date.now() - markedAt) / 1000,
-          bands: traceBands,
+          unasserted: traceUnasserted,
         });
       }
 
