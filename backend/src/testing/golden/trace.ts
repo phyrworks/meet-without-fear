@@ -165,6 +165,13 @@ export interface TracedStatement {
   relations: string[];
   /** `Actual Rows` on the plan's root node — the dropped-LIMIT discriminator. */
   topRows: number | null;
+  /**
+   * Relation scanned by the plan's *root* node, when the root is a scan at all.
+   * Internal: never emitted. It exists so a declared row-count band can apply to
+   * `topRows` only when the root node is the banded scan itself, and not when a
+   * `Limit` above it happens to report the same number.
+   */
+  rootRelation: string | null;
   /** Rows read per relation, weighted by `loops` so an N+1 shows its true cost. */
   rowsRead: Record<string, number>;
   /** Plan node types in printed order. A vanished `Limit` is visible here. */
@@ -310,6 +317,7 @@ export function buildTrace(records: LogRecord[], opts: BuildTraceOptions): Trace
         isolation,
         relations: [],
         topRows: null,
+        rootRelation: null,
         rowsRead: {},
         planNodes: [],
       };
@@ -330,7 +338,10 @@ export function buildTrace(records: LogRecord[], opts: BuildTraceOptions): Trace
     for (const line of r.detail) {
       const node = parsePlanNode(line);
       if (!node) continue;
-      if (firstPlan && stmt.topRows === null) stmt.topRows = node.rows;
+      if (firstPlan && stmt.topRows === null) {
+        stmt.topRows = node.rows;
+        stmt.rootRelation = node.relation;
+      }
       stmt.planNodes.push(node.type);
       if (!node.relation) continue;
       relations.add(node.relation);
@@ -405,22 +416,46 @@ export function groupTransactions(statements: TracedStatement[]): TracedTransact
 // ============================================================================
 
 /**
- * What a step whose writes outlive its response records instead of a row count.
+ * Ranges a step declares because it *measured* a count moving, with the numbers.
  *
- * Mirrors `ASYNC_BOUNDARY` in `runner.ts`, and for the same reason: recording
- * one sample of a race as a baseline is how a harness starts failing for reasons
- * that have nothing to do with the code under test. See `summarize`.
+ * A band is not a licence to be vague. A value inside its declared range is
+ * recorded as the range, so the race stops flapping the golden; a value outside
+ * it is recorded exactly, so real movement still fails the diff. Nothing is
+ * banded because it shares a step with something that moved — only because it
+ * was seen to move, over a sample big enough to say so.
+ *
+ * Every range in a scenario must carry the observation that produced it. See
+ * `empathy-reveal.golden.test.ts` for the only one that exists.
  */
-export const ASYNC_RACE = '<async: sampled while background work was still running — a race, not a measurement>';
+export interface RaceBands {
+  /**
+   * Relation -> the ranges its row counts were measured spanning.
+   *
+   * `perStatement` bands an individual scan's count; `total` bands the summed
+   * rollup. They are declared separately rather than deriving the second from
+   * the first, because deriving it means multiplying the per-statement range by
+   * the number of statements it touches and recording a band far wider than
+   * anything observed.
+   */
+  rowCounts?: Record<string, { perStatement: [number, number]; total: [number, number] }>;
+  /** Range the count of distinct backend connections was measured spanning. */
+  connections?: [number, number];
+}
+
+/** Inside the declared range -> the range; outside it -> the exact value. */
+function band(value: number, range: [number, number] | undefined): number | string {
+  if (!range) return value;
+  return value >= range[0] && value <= range[1] ? `${range[0]}-${range[1]}` : value;
+}
 
 export interface TraceStatementSummary {
   kind: StatementKind;
   protocol: 'simple' | 'extended';
   relations: string[];
-  /** Omitted on concurrent steps — see `ASYNC_RACE`. */
-  topRows?: number | null;
-  /** Omitted on concurrent steps — see `ASYNC_RACE`. */
-  rowsRead?: Record<string, number>;
+  /** A range only where the step declared one — see `RaceBands`. */
+  topRows?: number | string | null;
+  /** Per-relation; a range only where the step declared one. */
+  rowsRead?: Record<string, number | string>;
   planNodes: string[];
 }
 
@@ -447,13 +482,13 @@ export interface TraceSummary {
   /** False means the window was empty, truncated or rate-limited. Never a pass. */
   complete: boolean;
   incompleteReason?: string;
-  /** Distinct backends the app used. `ASYNC_RACE` on concurrent steps. */
+  /** Distinct backends the app used. A range only where the step declared one. */
   connections: number | string;
   transactions: number;
   statements: number;
   byKind: Record<string, number>;
-  /** Rows read per relation, summed. `ASYNC_RACE` on concurrent steps. */
-  rowsRead: Record<string, number> | string;
+  /** Rows read per relation, summed. Per-relation ranges where declared. */
+  rowsRead: Record<string, number | string>;
   /** Transaction shapes, grouped and canonically ordered. */
   shapes: TraceTransactionShape[];
 }
@@ -469,7 +504,7 @@ function sortKeys(o: Record<string, number>): Record<string, number> {
 /**
  * Produce the artefact that goes in the golden.
  *
- * Two shaping decisions, both forced by measuring six consecutive runs of both
+ * Two shaping decisions, both forced by measuring 18 consecutive runs of both
  * scenarios rather than by taste. The raw numbers are in the commit message and
  * the README; the reasoning is here.
  *
@@ -493,27 +528,46 @@ function sortKeys(o: Record<string, number>): Record<string, number> {
  * has no identity beyond the statements in it, which is precisely what is
  * recorded.
  *
- * **Row counts are banded on concurrent steps only.** On a step declaring
- * `asyncBoundary`, the request and the fire-and-forget work it started overlap,
- * so a read can observe the background write or not. Measured on
- * `consent as bob`: one `Index Scan` on `Message` read 0 rows in five runs and 1
- * row in the sixth, and the pool opened 4 connections in five runs and 3 in the
- * sixth. Everything else on that step was stable 6/6 across 139 statements and
- * 129 transactions — statement count, transaction count, kinds, relations,
- * isolation, plan node types. So exactly those two dimensions are replaced by
- * `ASYNC_RACE`, and nothing else is coarsened anywhere. Synchronous steps keep
- * every row count exact, which is what makes `messages page of 5` able to see
- * `Message: 6` become `Message: 13`.
+ * **Bands are per relation and per measured range, never per step.** An earlier
+ * version discarded the whole `rowsRead` map on any step declaring
+ * `asyncBoundary`. That was far coarser than the evidence: on `consent as bob`
+ * it threw away `EmpathyAttempt`, `Session`, `User` and `StageProgress` counts
+ * that never moved, on the only step in either scenario that carries a write
+ * path. 18 runs say what actually moves there, and it is three numbers:
+ *
+ *   connections          4 x16, 3 x2
+ *   rowsRead.Message     34 x17, 35 x1
+ *   one Message-only scan  0 rows x17, 1 row x1
+ *
+ * and nothing else — every other relation on that step (`EmpathyAttempt`,
+ * `EmpathyDraft`, `EmpathyValidation`, `ReconcilerResult`,
+ * `ReconcilerShareOffer`, `Relationship`, `RelationshipMember`, `Session`,
+ * `StageProgress`, `User`, `UserVessel`) was identical 18/18, as were statement
+ * count, transaction count, kinds, isolation and plan node types. Confirmed by
+ * replaying the 18 captures with each relation banded in turn: banding `Message`
+ * alone makes the step stable, and banding any other single relation does not.
+ * All 6 steps of `session-read` and the other 7 of `empathy-reveal` were stable
+ * 18/18 with nothing banded at all.
+ *
+ * So `Message` is banded on that one step, and only across the ranges observed.
+ * Everything else, everywhere, stays exact — which is what lets
+ * `messages page of 5` see `Message: 6` become `Message: 13`.
+ *
+ * `topRows` is banded only when it is the same number as a banded relation's own
+ * count, i.e. when the scan *is* the plan root. That is the minimal rule that
+ * works: measured against all 18 captures, it stabilises the raced statement
+ * without touching any other `topRows`.
  */
 export function summarize(
   transactions: TracedTransaction[],
   opts: {
     complete: boolean;
     incompleteReason?: string;
-    /** The step declared `asyncBoundary`; row counts sample a race. */
-    concurrent?: boolean;
+    /** Ranges the step measured a count moving across. */
+    bands?: RaceBands;
   },
 ): TraceSummary {
+  const bands = opts.bands ?? {};
   const byKind: Record<string, number> = {};
   const rowsRead: Record<string, number> = {};
   const connections = new Set<string>();
@@ -534,13 +588,26 @@ export function summarize(
       isolation: tx.isolation,
       statementCount: tx.statements.length,
       kinds: sortKeys(kinds),
-      statements: tx.statements.map(s => ({
-        kind: s.kind,
-        protocol: s.protocol,
-        relations: s.relations,
-        ...(opts.concurrent ? {} : { topRows: s.topRows, rowsRead: sortKeys(s.rowsRead) }),
-        planNodes: s.planNodes,
-      })),
+      statements: tx.statements.map(s => {
+        const banded: Record<string, number | string> = {};
+        let topRows: number | string | null = s.topRows;
+        for (const [rel, n] of Object.entries(s.rowsRead).sort(([a], [b]) => a.localeCompare(b))) {
+          const range = bands.rowCounts?.[rel]?.perStatement;
+          banded[rel] = band(n, range);
+          // Only when the banded scan *is* the plan root. A `Limit` above it
+          // reports the same number and must keep it exact, or a Limit that
+          // stopped limiting would hide inside the band.
+          if (banded[rel] !== n && s.rootRelation === rel && topRows === n) topRows = banded[rel];
+        }
+        return {
+          kind: s.kind,
+          protocol: s.protocol,
+          relations: s.relations,
+          topRows,
+          rowsRead: banded,
+          planNodes: s.planNodes,
+        };
+      }),
     };
   });
 
@@ -559,11 +626,13 @@ export function summarize(
   return {
     complete: opts.complete,
     ...(opts.incompleteReason ? { incompleteReason: opts.incompleteReason } : {}),
-    connections: opts.concurrent ? ASYNC_RACE : connections.size,
+    connections: band(connections.size, bands.connections),
     transactions: transactions.length,
     statements,
     byKind: sortKeys(byKind),
-    rowsRead: opts.concurrent ? ASYNC_RACE : sortKeys(rowsRead),
+    rowsRead: Object.fromEntries(
+      Object.entries(sortKeys(rowsRead)).map(([rel, n]) => [rel, band(n, bands.rowCounts?.[rel]?.total)]),
+    ),
     shapes,
   };
 }
@@ -670,8 +739,8 @@ export interface CaptureOptions {
   endToken: string;
   /** Seconds of history to ask for on the first attempt. */
   sinceSeconds: number;
-  /** The step declared `asyncBoundary`; see `summarize`. */
-  concurrent?: boolean;
+  /** Ranges the step measured a count moving across; see `RaceBands`. */
+  bands?: RaceBands;
   /** Bounded — never poll without a ceiling. Defaults match the capture spike. */
   attempts?: number;
   intervalMs?: number;
@@ -719,5 +788,5 @@ export async function captureWindow(opts: CaptureOptions): Promise<TraceSummary>
         'window contained no statements from the application under test — capture is not reaching the app connections',
     });
   }
-  return summarize(groupTransactions(statements), { complete: true, concurrent: opts.concurrent });
+  return summarize(groupTransactions(statements), { complete: true, bands: opts.bands });
 }

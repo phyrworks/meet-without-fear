@@ -18,7 +18,6 @@
  */
 
 import {
-  ASYNC_RACE,
   MARK_PREFIX,
   buildTrace,
   extractWindow,
@@ -303,30 +302,82 @@ describe('summarize', () => {
     expect(JSON.stringify(of(forward).shapes)).toEqual(JSON.stringify(of(reversed).shapes));
   });
 
-  it('bands row counts on a concurrent step, and only there', () => {
-    // Measured on `consent as bob`: one Index Scan on Message read 0 rows in
-    // five runs and 1 in the sixth, because the read races the fire-and-forget
-    // reveal. Everything else on that step was stable 6/6.
+  it('bands only the relation a band was declared for, and leaves the rest exact', () => {
+    // The narrowing this replaced: an earlier version discarded the whole
+    // rowsRead map on any async step, which threw away relations that had never
+    // been seen to move, on the only step carrying a write path.
     const stmts = buildTrace(parsePostgresLog(SAMPLE_BASIC), { database: 'probe', application: APP });
-    const sync = summarize(groupTransactions(stmts), { complete: true });
-    const async_ = summarize(groupTransactions(stmts), { complete: true, concurrent: true });
+    const exact = summarize(groupTransactions(stmts), { complete: true });
+    const banded = summarize(groupTransactions(stmts), {
+      complete: true,
+      bands: { connections: [1, 2], rowCounts: { Message: { perStatement: [0, 6], total: [6, 7] } } },
+    });
 
-    expect(sync.rowsRead).toEqual({ Message: 6, User: 1 });
-    expect(async_.rowsRead).toBe(ASYNC_RACE);
-    expect(async_.connections).toBe(ASYNC_RACE);
-    // Coarsened in exactly two dimensions. Kinds, relations, plan shape and the
-    // transaction envelope stay exact, because they were measured stable.
-    expect(async_.statements).toBe(2);
-    expect(async_.byKind).toEqual({ INSERT: 1, SELECT: 1 });
-    expect(async_.shapes[0].statements[0]).not.toHaveProperty('rowsRead');
-    expect(async_.shapes[0].statements[0]).not.toHaveProperty('topRows');
-    expect(async_.shapes.flatMap(s => s.statements.map(x => x.planNodes))).toContainEqual([
+    expect(exact.rowsRead).toEqual({ Message: 6, User: 1 });
+    expect(banded.rowsRead).toEqual({ Message: '6-7', User: 1 });
+    expect(banded.connections).toBe('1-2');
+    // Kinds, relations, plan shape and the envelope are never coarsened.
+    expect(banded.statements).toBe(2);
+    expect(banded.byKind).toEqual({ INSERT: 1, SELECT: 1 });
+    expect(banded.shapes.flatMap(s => s.statements.map(x => x.planNodes))).toContainEqual([
       'Limit',
       'Sort',
       'Nested Loop',
       'Index Scan',
       'Seq Scan',
     ]);
+  });
+
+  it('records a count outside its band exactly, so real movement still fails', () => {
+    // A band that silently absorbed any value would be an oracle that cannot
+    // fail — the thing this harness's conventions exist to prevent.
+    const stmts = buildTrace(parsePostgresLog(SAMPLE_BASIC), { database: 'probe', application: APP });
+    const s = summarize(groupTransactions(stmts), {
+      complete: true,
+      bands: { rowCounts: { Message: { perStatement: [0, 1], total: [0, 1] } } },
+    });
+    expect(s.rowsRead).toEqual({ Message: 6, User: 1 });
+    const select = s.shapes.flatMap(x => x.statements).find(x => x.kind === 'SELECT')!;
+    expect(select.rowsRead).toEqual({ Message: 6, User: 1 });
+  });
+
+  it('bands topRows only when the banded scan is the plan root', () => {
+    // Minimal rule, chosen because it is the one that stabilised the raced
+    // statement across 18 captures without touching any other topRows. Here the
+    // Message scan sits under a Limit, so the root count stays exact.
+    const stmts = buildTrace(parsePostgresLog(SAMPLE_BASIC), { database: 'probe', application: APP });
+    const s = summarize(groupTransactions(stmts), {
+      complete: true,
+      bands: { rowCounts: { Message: { perStatement: [0, 6], total: [0, 6] } } },
+    });
+    const select = s.shapes.flatMap(x => x.statements).find(x => x.kind === 'SELECT')!;
+    expect(select.rowsRead).toEqual({ Message: '0-6', User: 1 });
+    // `Limit` reported 6 too, but it is a different node; banding it would hide
+    // a Limit that stopped limiting.
+    expect(select.topRows).toBe(6);
+  });
+
+  it('merges shapes that differ only inside a band', () => {
+    // This is what actually removes the flake: the raced read produced two
+    // buckets (Message=0 x5 and Message=1 x1) that collapse into one.
+    const scan = (rows: number, vxid: string) =>
+      [
+        `2026-08-17 22:20:20.860 UTC [1] db=probe,app=${APP},vxid=${vxid},xid=0 LOG:  execute <unnamed>: SELECT 1`,
+        `2026-08-17 22:20:20.860 UTC [1] db=probe,app=${APP},vxid=${vxid},xid=0 LOG:  duration: 0.021 ms  plan:`,
+        `\tQuery Text: SELECT 1`,
+        `\tIndex Scan using "Message_pkey" on "Message"  (cost=0.15..8.17 rows=1 width=38) (actual rows=${rows} loops=1)`,
+      ].join('\n');
+    const raw = [scan(0, '3/1'), scan(1, '3/2')].join('\n');
+    const stmts = buildTrace(parsePostgresLog(raw), { database: 'probe', application: APP });
+
+    expect(summarize(groupTransactions(stmts), { complete: true }).shapes).toHaveLength(2);
+    const banded = summarize(groupTransactions(stmts), {
+      complete: true,
+      bands: { rowCounts: { Message: { perStatement: [0, 1], total: [1, 1] } } },
+    });
+    expect(banded.shapes).toHaveLength(1);
+    expect(banded.shapes[0].occurrences).toBe(2);
+    expect(banded.shapes[0].statements[0].topRows).toBe('0-1');
   });
 
   it('carries incompleteness through instead of reporting a smaller trace', () => {

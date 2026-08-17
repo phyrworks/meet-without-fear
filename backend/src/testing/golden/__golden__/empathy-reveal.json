@@ -523,7 +523,7 @@
       "settled": true,
       "trace": {
         "complete": true,
-        "connections": "<async: sampled while background work was still running — a race, not a measurement>",
+        "connections": "3-4",
         "transactions": 129,
         "statements": 139,
         "byKind": {
@@ -534,7 +534,20 @@
           "SET_TX": 1,
           "UPDATE": 4
         },
-        "rowsRead": "<async: sampled while background work was still running — a race, not a measurement>",
+        "rowsRead": {
+          "EmpathyAttempt": 23,
+          "EmpathyDraft": 2,
+          "EmpathyValidation": 0,
+          "Message": "34-35",
+          "ReconcilerResult": 0,
+          "ReconcilerShareOffer": 0,
+          "Relationship": 21,
+          "RelationshipMember": 35,
+          "Session": 21,
+          "StageProgress": 8,
+          "User": 19,
+          "UserVessel": 6
+        },
         "shapes": [
           {
             "occurrences": 1,
@@ -553,6 +566,11 @@
                   "Session",
                   "User"
                 ],
+                "topRows": 1,
+                "rowsRead": {
+                  "Session": 1,
+                  "User": 2
+                },
                 "planNodes": [
                   "LockRows",
                   "Index Scan",
@@ -584,6 +602,12 @@
                   "Session",
                   "User"
                 ],
+                "topRows": 1,
+                "rowsRead": {
+                  "EmpathyDraft": 1,
+                  "Session": 1,
+                  "User": 1
+                },
                 "planNodes": [
                   "LockRows",
                   "Index Scan",
@@ -614,6 +638,11 @@
                   "Session",
                   "User"
                 ],
+                "topRows": 1,
+                "rowsRead": {
+                  "Session": 1,
+                  "User": 1
+                },
                 "planNodes": [
                   "LockRows",
                   "Index Scan",
@@ -641,6 +670,10 @@
                   "Message",
                   "Session"
                 ],
+                "topRows": 1,
+                "rowsRead": {
+                  "Session": 1
+                },
                 "planNodes": [
                   "LockRows",
                   "Index Scan",
@@ -665,31 +698,11 @@
                 "relations": [
                   "User"
                 ],
+                "topRows": 1,
+                "rowsRead": {},
                 "planNodes": [
                   "Insert",
                   "Result"
-                ]
-              }
-            ]
-          },
-          {
-            "occurrences": 15,
-            "explicit": false,
-            "isolation": null,
-            "statementCount": 1,
-            "kinds": {
-              "SELECT": 1
-            },
-            "statements": [
-              {
-                "kind": "SELECT",
-                "protocol": "extended",
-                "relations": [
-                  "EmpathyAttempt"
-                ],
-                "planNodes": [
-                  "Limit",
-                  "Index Scan"
                 ]
               }
             ]
@@ -709,9 +722,39 @@
                 "relations": [
                   "EmpathyAttempt"
                 ],
+                "topRows": 0,
+                "rowsRead": {
+                  "EmpathyAttempt": 0
+                },
                 "planNodes": [
                   "Limit",
                   "Sort",
+                  "Index Scan"
+                ]
+              }
+            ]
+          },
+          {
+            "occurrences": 15,
+            "explicit": false,
+            "isolation": null,
+            "statementCount": 1,
+            "kinds": {
+              "SELECT": 1
+            },
+            "statements": [
+              {
+                "kind": "SELECT",
+                "protocol": "extended",
+                "relations": [
+                  "EmpathyAttempt"
+                ],
+                "topRows": 1,
+                "rowsRead": {
+                  "EmpathyAttempt": 1
+                },
+                "planNodes": [
+                  "Limit",
                   "Index Scan"
                 ]
               }
@@ -732,6 +775,10 @@
                 "relations": [
                   "EmpathyDraft"
                 ],
+                "topRows": 1,
+                "rowsRead": {
+                  "EmpathyDraft": 1
+                },
                 "planNodes": [
                   "Limit",
                   "Index Scan"
@@ -754,6 +801,10 @@
                 "relations": [
                   "EmpathyValidation"
                 ],
+                "topRows": 0,
+                "rowsRead": {
+                  "EmpathyValidation": 0
+                },
                 "planNodes": [
                   "Bitmap Heap Scan",
                   "BitmapOr",
@@ -764,7 +815,7 @@
             ]
           },
           {
-            "occurrences": 6,
+            "occurrences": 1,
             "explicit": false,
             "isolation": null,
             "statementCount": 1,
@@ -778,6 +829,10 @@
                 "relations": [
                   "Message"
                 ],
+                "topRows": "0-1",
+                "rowsRead": {
+                  "Message": "0-1"
+                },
                 "planNodes": [
                   "Index Scan"
                 ]
@@ -799,9 +854,113 @@
                 "relations": [
                   "Message"
                 ],
+                "topRows": 0,
+                "rowsRead": {
+                  "Message": "0-1"
+                },
                 "planNodes": [
                   "Limit",
                   "Index Scan Backward"
+                ]
+              }
+            ]
+          },
+          {
+            "occurrences": 1,
+            "explicit": false,
+            "isolation": null,
+            "statementCount": 1,
+            "kinds": {
+              "SELECT": 1
+            },
+            "statements": [
+              {
+                "kind": "SELECT",
+                "protocol": "extended",
+                "relations": [
+                  "Message"
+                ],
+                "topRows": 11,
+                "rowsRead": {
+                  "Message": 11
+                },
+                "planNodes": [
+                  "Index Scan"
+                ]
+              }
+            ]
+          },
+          {
+            "occurrences": 1,
+            "explicit": false,
+            "isolation": null,
+            "statementCount": 1,
+            "kinds": {
+              "SELECT": 1
+            },
+            "statements": [
+              {
+                "kind": "SELECT",
+                "protocol": "extended",
+                "relations": [
+                  "Message"
+                ],
+                "topRows": 12,
+                "rowsRead": {
+                  "Message": 12
+                },
+                "planNodes": [
+                  "Index Scan"
+                ]
+              }
+            ]
+          },
+          {
+            "occurrences": 1,
+            "explicit": false,
+            "isolation": null,
+            "statementCount": 1,
+            "kinds": {
+              "SELECT": 1
+            },
+            "statements": [
+              {
+                "kind": "SELECT",
+                "protocol": "extended",
+                "relations": [
+                  "Message"
+                ],
+                "topRows": 3,
+                "rowsRead": {
+                  "Message": 3
+                },
+                "planNodes": [
+                  "Index Scan"
+                ]
+              }
+            ]
+          },
+          {
+            "occurrences": 2,
+            "explicit": false,
+            "isolation": null,
+            "statementCount": 1,
+            "kinds": {
+              "SELECT": 1
+            },
+            "statements": [
+              {
+                "kind": "SELECT",
+                "protocol": "extended",
+                "relations": [
+                  "Message"
+                ],
+                "topRows": 4,
+                "rowsRead": {
+                  "Message": 4
+                },
+                "planNodes": [
+                  "Index Scan"
                 ]
               }
             ]
@@ -822,6 +981,11 @@
                   "ReconcilerResult",
                   "ReconcilerShareOffer"
                 ],
+                "topRows": 0,
+                "rowsRead": {
+                  "ReconcilerResult": 0,
+                  "ReconcilerShareOffer": 0
+                },
                 "planNodes": [
                   "Limit",
                   "Nested Loop",
@@ -846,6 +1010,10 @@
                 "relations": [
                   "ReconcilerResult"
                 ],
+                "topRows": 0,
+                "rowsRead": {
+                  "ReconcilerResult": 0
+                },
                 "planNodes": [
                   "Index Scan"
                 ]
@@ -867,6 +1035,10 @@
                 "relations": [
                   "ReconcilerResult"
                 ],
+                "topRows": 0,
+                "rowsRead": {
+                  "ReconcilerResult": 0
+                },
                 "planNodes": [
                   "Limit",
                   "Index Scan"
@@ -889,6 +1061,10 @@
                 "relations": [
                   "ReconcilerResult"
                 ],
+                "topRows": 0,
+                "rowsRead": {
+                  "ReconcilerResult": 0
+                },
                 "planNodes": [
                   "Limit",
                   "Sort",
@@ -914,6 +1090,12 @@
                   "RelationshipMember",
                   "Session"
                 ],
+                "topRows": 1,
+                "rowsRead": {
+                  "Relationship": 1,
+                  "RelationshipMember": 1,
+                  "Session": 1
+                },
                 "planNodes": [
                   "Limit",
                   "Nested Loop",
@@ -940,6 +1122,10 @@
                 "relations": [
                   "Relationship"
                 ],
+                "topRows": 1,
+                "rowsRead": {
+                  "Relationship": 1
+                },
                 "planNodes": [
                   "Index Scan"
                 ]
@@ -961,6 +1147,10 @@
                 "relations": [
                   "RelationshipMember"
                 ],
+                "topRows": 2,
+                "rowsRead": {
+                  "RelationshipMember": 2
+                },
                 "planNodes": [
                   "Bitmap Heap Scan",
                   "Bitmap Index Scan"
@@ -983,6 +1173,10 @@
                 "relations": [
                   "Session"
                 ],
+                "topRows": 1,
+                "rowsRead": {
+                  "Session": 1
+                },
                 "planNodes": [
                   "Index Scan"
                 ]
@@ -1004,6 +1198,10 @@
                 "relations": [
                   "Session"
                 ],
+                "topRows": 1,
+                "rowsRead": {
+                  "Session": 1
+                },
                 "planNodes": [
                   "Limit",
                   "Index Scan"
@@ -1026,6 +1224,10 @@
                 "relations": [
                   "StageProgress"
                 ],
+                "topRows": 1,
+                "rowsRead": {
+                  "StageProgress": 1
+                },
                 "planNodes": [
                   "Limit",
                   "Index Scan Backward"
@@ -1048,6 +1250,10 @@
                 "relations": [
                   "StageProgress"
                 ],
+                "topRows": 1,
+                "rowsRead": {
+                  "StageProgress": 1
+                },
                 "planNodes": [
                   "Limit",
                   "Index Scan"
@@ -1070,6 +1276,10 @@
                 "relations": [
                   "User"
                 ],
+                "topRows": 1,
+                "rowsRead": {
+                  "User": 1
+                },
                 "planNodes": [
                   "Limit",
                   "Index Scan"
@@ -1092,6 +1302,10 @@
                 "relations": [
                   "User"
                 ],
+                "topRows": 2,
+                "rowsRead": {
+                  "User": 2
+                },
                 "planNodes": [
                   "Seq Scan"
                 ]
@@ -1113,6 +1327,10 @@
                 "relations": [
                   "UserVessel"
                 ],
+                "topRows": 1,
+                "rowsRead": {
+                  "UserVessel": 1
+                },
                 "planNodes": [
                   "Index Scan"
                 ]
@@ -1134,6 +1352,10 @@
                 "relations": [
                   "UserVessel"
                 ],
+                "topRows": 1,
+                "rowsRead": {
+                  "UserVessel": 1
+                },
                 "planNodes": [
                   "Limit",
                   "Index Scan"
@@ -1158,12 +1380,16 @@
                 "kind": "BEGIN",
                 "protocol": "simple",
                 "relations": [],
+                "topRows": null,
+                "rowsRead": {},
                 "planNodes": []
               },
               {
                 "kind": "SET_TX",
                 "protocol": "simple",
                 "relations": [],
+                "topRows": null,
+                "rowsRead": {},
                 "planNodes": []
               },
               {
@@ -1172,6 +1398,10 @@
                 "relations": [
                   "EmpathyAttempt"
                 ],
+                "topRows": 2,
+                "rowsRead": {
+                  "EmpathyAttempt": 2
+                },
                 "planNodes": [
                   "Bitmap Heap Scan",
                   "Bitmap Index Scan"
@@ -1183,6 +1413,10 @@
                 "relations": [
                   "EmpathyAttempt"
                 ],
+                "topRows": 0,
+                "rowsRead": {
+                  "EmpathyAttempt": 2
+                },
                 "planNodes": [
                   "Update",
                   "Bitmap Heap Scan",
@@ -1193,43 +1427,8 @@
                 "kind": "COMMIT",
                 "protocol": "simple",
                 "relations": [],
-                "planNodes": []
-              }
-            ]
-          },
-          {
-            "occurrences": 1,
-            "explicit": true,
-            "isolation": null,
-            "statementCount": 3,
-            "kinds": {
-              "BEGIN": 1,
-              "COMMIT": 1,
-              "UPDATE": 1
-            },
-            "statements": [
-              {
-                "kind": "BEGIN",
-                "protocol": "simple",
-                "relations": [],
-                "planNodes": []
-              },
-              {
-                "kind": "UPDATE",
-                "protocol": "extended",
-                "relations": [
-                  "EmpathyAttempt"
-                ],
-                "planNodes": [
-                  "Update",
-                  "Bitmap Heap Scan",
-                  "Bitmap Index Scan"
-                ]
-              },
-              {
-                "kind": "COMMIT",
-                "protocol": "simple",
-                "relations": [],
+                "topRows": null,
+                "rowsRead": {},
                 "planNodes": []
               }
             ]
@@ -1249,6 +1448,8 @@
                 "kind": "BEGIN",
                 "protocol": "simple",
                 "relations": [],
+                "topRows": null,
+                "rowsRead": {},
                 "planNodes": []
               },
               {
@@ -1257,6 +1458,10 @@
                 "relations": [
                   "EmpathyAttempt"
                 ],
+                "topRows": 0,
+                "rowsRead": {
+                  "EmpathyAttempt": 1
+                },
                 "planNodes": [
                   "Update",
                   "Index Scan"
@@ -1266,6 +1471,53 @@
                 "kind": "COMMIT",
                 "protocol": "simple",
                 "relations": [],
+                "topRows": null,
+                "rowsRead": {},
+                "planNodes": []
+              }
+            ]
+          },
+          {
+            "occurrences": 1,
+            "explicit": true,
+            "isolation": null,
+            "statementCount": 3,
+            "kinds": {
+              "BEGIN": 1,
+              "COMMIT": 1,
+              "UPDATE": 1
+            },
+            "statements": [
+              {
+                "kind": "BEGIN",
+                "protocol": "simple",
+                "relations": [],
+                "topRows": null,
+                "rowsRead": {},
+                "planNodes": []
+              },
+              {
+                "kind": "UPDATE",
+                "protocol": "extended",
+                "relations": [
+                  "EmpathyAttempt"
+                ],
+                "topRows": 0,
+                "rowsRead": {
+                  "EmpathyAttempt": 2
+                },
+                "planNodes": [
+                  "Update",
+                  "Bitmap Heap Scan",
+                  "Bitmap Index Scan"
+                ]
+              },
+              {
+                "kind": "COMMIT",
+                "protocol": "simple",
+                "relations": [],
+                "topRows": null,
+                "rowsRead": {},
                 "planNodes": []
               }
             ]

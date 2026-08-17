@@ -162,8 +162,9 @@ silently downgraded isolation level — and **HTTP-level diffing cannot see any 
 it**.
 
 Repeatability: 5 consecutive runs across 3 timezones, all byte-identical, plus 7
-consecutive green runs of both scenarios after the fresh/carried change, and 7
-more (5 local + `TZ=UTC` + `TZ=Pacific/Chatham`) after the trace was added.
+consecutive green runs of both scenarios after the fresh/carried change. The
+trace added 18 more recorded runs for the variance measurement below, then 5
+consecutive verify runs plus `TZ=UTC` and `TZ=Pacific/Chatham`.
 
 ## The SQL trace (`trace.ts`)
 
@@ -246,15 +247,39 @@ opened more than one connection (4 distinct results in 6 runs on `session state`
 behaviour. The *count* of distinct connections is still recorded. The vxid
 grouping — the part that answers "did these run together" — is kept in full.
 
-**Row counts are banded on concurrent steps, and only there.** On a step
-declaring `asyncBoundary`, the request and the fire-and-forget work it started
-overlap. Measured on `consent as bob` across 6 runs: one `Index Scan` on
-`Message` read 0 rows five times and 1 row once, and the pool opened 4
-connections five times and 3 once. Everything else on that step was stable 6/6
-across 139 statements and 129 transactions — counts, kinds, relations, isolation,
-plan node types. So exactly those two dimensions become `ASYNC_RACE`, on exactly
-those steps. Synchronous steps keep every count exact, which is what lets
-`messages page of 5` see `Message: 6` become 13.
+**Bands are per relation and per measured range, never per step.** 18 consecutive
+runs of both scenarios say what actually moves, and it is three numbers, all on
+`consent as bob`, where the request and the fire-and-forget reveal overlap:
+
+| | distribution over 18 runs |
+|---|---|
+| `connections` | 4 ×16, 3 ×2 |
+| `rowsRead.Message` (rollup) | 34 ×17, 35 ×1 |
+| one `Message`-only `Index Scan` | 0 rows ×17, 1 row ×1 |
+
+Nothing else moved anywhere. Every other relation on that step —
+`EmpathyAttempt`, `EmpathyDraft`, `EmpathyValidation`, `ReconcilerResult`,
+`ReconcilerShareOffer`, `Relationship`, `RelationshipMember`, `Session`,
+`StageProgress`, `User`, `UserVessel` — was identical 18/18, as were statement
+count, transaction count, kinds, isolation and every plan node type. All 6 steps
+of `session-read` and the other 7 of `empathy-reveal` were stable 18/18 with
+nothing banded at all. Replaying the 18 captures with each relation banded in
+turn confirms `Message` is the only one that needs it: banding it alone makes the
+step stable, banding any other single relation does not.
+
+So the scenario declares `traceBands` for `Message` on that one step, across the
+ranges observed, and nothing else is coarsened anywhere. In the recorded golden
+that is 2 statement shapes out of 41 and one relation out of twelve; the other
+eleven keep exact counts on the only step in either scenario that carries a write
+path. A count outside its declared range is recorded exactly and fails the diff,
+so a band cannot absorb a real regression. `topRows` is banded only when the
+banded scan is the plan *root* — a `Limit` above it reports the same number and
+keeps it exact, or a `Limit` that stopped limiting could hide inside the band.
+
+An earlier version discarded the whole `rowsRead` map on any `asyncBoundary`
+step. That was far coarser than the evidence and is recorded here because the
+distinction is the point: a band has to be justified by an observation, not by
+sharing a step with one.
 
 **An empty or truncated window fails loudly.** Same lesson as `settled`, one
 layer down: a rate-limited window is a *smaller* trace, which is

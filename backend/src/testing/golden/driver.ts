@@ -17,7 +17,7 @@ import { mark, openMarkerClient } from './db';
 import { restoreFixture, RestoredFixture } from './fixtures';
 import type { FreshWindow } from './normalize';
 import { Snapshot, takeSnapshot, diffSnapshots, RowChange } from './snapshot';
-import { APP_UNDER_TEST, LogReader, TraceSummary, captureWindow, podmanLogReader } from './trace';
+import { APP_UNDER_TEST, LogReader, RaceBands, TraceSummary, captureWindow, podmanLogReader } from './trace';
 
 export interface SseEvent {
   event: string;
@@ -102,6 +102,16 @@ export interface Harness {
      * measured landing on `READY` in one run and `REVEALED` in the next.
      */
     asyncBoundary?: boolean;
+    /**
+     * Ranges this step was *measured* moving its SQL trace across, so the golden
+     * records the range instead of one sample of a race. A value outside its
+     * declared range is still recorded exactly, so real movement fails.
+     *
+     * Independent of `asyncBoundary`: a band is justified by observation, not by
+     * a category. Declare one only with the run count and the distribution in a
+     * comment beside it.
+     */
+    traceBands?: RaceBands;
   }): Promise<StepResult>;
   snapshot(tables: string[]): Promise<Snapshot>;
   teardown(): Promise<void>;
@@ -208,7 +218,7 @@ export async function createHarness(opts: {
     sessionId: seeded.sessionId,
     startedAt,
     snapshot,
-    async step({ label, actor, tables, call, sse, asyncBoundary }) {
+    async step({ label, actor, tables, call, sse, asyncBoundary, traceBands }) {
       const before = await snapshot(tables);
 
       // Sentinels bracket the window. The begin marker goes after the `before`
@@ -253,7 +263,7 @@ export async function createHarness(opts: {
           beginToken,
           endToken,
           sinceSeconds: (Date.now() - markedAt) / 1000,
-          concurrent: !!asyncBoundary,
+          bands: traceBands,
         });
       }
 

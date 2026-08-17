@@ -121,9 +121,8 @@ describe(`golden: ${SCENARIO}`, () => {
   it('the paginated read bounds the rows it reads from Message', () => {
     for (const step of steps.filter(s => s.label.startsWith('messages page of 5'))) {
       const rowsRead = step.trace?.rowsRead;
-      // A synchronous step always records exact counts; `ASYNC_RACE` here would
-      // mean the step was mis-declared and the assertion had quietly stopped
-      // asserting anything.
+      // This step declares no band, so the count must be an exact number. A
+      // banded string here would mean the assertion had quietly stopped asserting.
       expect(typeof rowsRead).toBe('object');
       const read = (rowsRead as Record<string, number>).Message;
       expect(read).toBeDefined();

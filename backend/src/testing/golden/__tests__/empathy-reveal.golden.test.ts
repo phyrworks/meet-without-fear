@@ -87,6 +87,30 @@ describe(`golden: ${SCENARIO}`, () => {
       // awaiting it, so the reveal lands somewhere after the response — measured
       // returning on READY in one run and REVEALED in the next.
       asyncBoundary: true,
+      // The only bands in either scenario, and the only step that needs any.
+      // Measured over 18 consecutive runs of this suite, three numbers move and
+      // nothing else does:
+      //
+      //   connections                        4 x16, 3 x2
+      //   rowsRead.Message (rollup)          34 x17, 35 x1
+      //   one Message-only Index Scan         0 x17,  1 x1
+      //
+      // The scan is a read of the reveal message racing the fire-and-forget
+      // write that creates it. Every other relation this step touches
+      // (EmpathyAttempt, EmpathyDraft, EmpathyValidation, ReconcilerResult,
+      // ReconcilerShareOffer, Relationship, RelationshipMember, Session,
+      // StageProgress, User, UserVessel) was identical 18/18, as were the
+      // statement count, the transaction count, kinds, isolation and every plan
+      // node type — so all of those stay exact, including on this step. Replaying
+      // the 18 captures with each relation banded in turn confirms Message is the
+      // only one that has to be: banding it alone makes the step stable, banding
+      // any other single relation does not.
+      //
+      // A count outside its range is still recorded exactly and fails the diff.
+      traceBands: {
+        connections: [3, 4],
+        rowCounts: { Message: { perStatement: [0, 1], total: [34, 35] } },
+      },
       call: (agent) =>
         agent.post(`/api/v1/sessions/${harness.sessionId}/empathy/consent`).send({ consent: true }),
     });
