@@ -242,12 +242,19 @@ async function isSuperuser(t: DbTarget, database?: string): Promise<boolean> {
  * with `ERROR: parameter "log_line_prefix" cannot be changed now`. Server-wide
  * or nothing.
  *
- * It is deliberately **not restored** afterwards. Set-and-restore-per-run races:
- * one worker's restore lands while another still needs the prefix, and the
- * second worker's trace silently loses its `db=`/`vxid=` fields — which reads as
- * an empty window, not as an error. It is a formatting-only change to a
- * development container, so the cost of leaving it is a differently-shaped log
- * line and a line in `postgresql.auto.conf`. Both are documented in
+ * It is deliberately **not restored** afterwards. Set-and-restore-per-run races
+ * anything else talking to the same server: one run's restore lands while
+ * another still needs the prefix, and the second run's trace silently loses its
+ * `db=`/`vxid=` fields — which reads as an empty window, not as an error.
+ *
+ * Note this is *not* a jest-worker race: `jest.config.js` pins `maxWorkers: 1`,
+ * so the two scenario files never overlap. The race is between concurrent jest
+ * *invocations* — two terminals, a watch mode alongside a manual run, an editor
+ * runner — all of which share one Postgres.
+ *
+ * It is a formatting-only change to a development container, so the cost of
+ * leaving it is a differently-shaped log line and a line in
+ * `postgresql.auto.conf`. Both are documented in
  * `docs/development/local-setup.md`.
  */
 export async function ensureLogLinePrefix(t: DbTarget): Promise<{ changed: boolean }> {

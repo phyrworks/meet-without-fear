@@ -523,7 +523,7 @@
       "settled": true,
       "trace": {
         "complete": true,
-        "connections": "<unasserted: pool high-water mark under concurrent background work — 48 runs measured 3-4, then a clean tree produced 5; no ceiling is derivable, so nothing is claimed>",
+        "connections": "<unasserted: pool high-water mark under concurrent background work — scheduling, not a property of the work; see the step declaration>",
         "transactions": 129,
         "statements": 139,
         "byKind": {
@@ -538,7 +538,7 @@
           "EmpathyAttempt": 23,
           "EmpathyDraft": 2,
           "EmpathyValidation": 0,
-          "Message": "<unasserted: this step INSERTs into this relation from background work, so every read of it races those inserts and no row count is a property of the work>",
+          "Message": "<unasserted: background work on this step writes \"Message\", so a read of it may or may not see those rows; see the step declaration>",
           "ReconcilerResult": 0,
           "ReconcilerShareOffer": 0,
           "Relationship": 21,
@@ -829,9 +829,9 @@
                 "relations": [
                   "Message"
                 ],
-                "topRows": "<unasserted: this step INSERTs into this relation from background work, so every read of it races those inserts and no row count is a property of the work>",
+                "topRows": "<unasserted: background work on this step writes \"Message\", so a read of it may or may not see those rows; see the step declaration>",
                 "rowsRead": {
-                  "Message": "<unasserted: this step INSERTs into this relation from background work, so every read of it races those inserts and no row count is a property of the work>"
+                  "Message": "<unasserted: background work on this step writes \"Message\", so a read of it may or may not see those rows; see the step declaration>"
                 },
                 "planNodes": [
                   "Index Scan"
@@ -856,7 +856,7 @@
                 ],
                 "topRows": 0,
                 "rowsRead": {
-                  "Message": "<unasserted: this step INSERTs into this relation from background work, so every read of it races those inserts and no row count is a property of the work>"
+                  "Message": "<unasserted: background work on this step writes \"Message\", so a read of it may or may not see those rows; see the step declaration>"
                 },
                 "planNodes": [
                   "Limit",

@@ -93,9 +93,6 @@ export interface LogRecord {
 const PREFIX_RE =
   /^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d+ \S+) \[(\d+)\](?: db=([^,]*),app=([^,]*),vxid=([^,]*),xid=(\S*))? (\w+):\s{2}([\s\S]*)$/;
 
-/** journald rate limiting announces itself; see `extractWindow`. */
-const SUPPRESSED_RE = /Suppressed \d+ messages/;
-
 /**
  * Split a raw `podman logs` capture into records.
  *
@@ -148,6 +145,8 @@ export type StatementKind =
   | 'COMMIT'
   | 'ROLLBACK'
   | 'SET_TX'
+  /** `SET SESSION CHARACTERISTICS AS TRANSACTION …` — a per-connection default. */
+  | 'SET_SESSION_TX'
   | 'SET'
   | 'DDL'
   | 'other';
@@ -159,7 +158,7 @@ export interface TracedStatement {
   xid: string;
   protocol: 'simple' | 'extended';
   kind: StatementKind;
-  /** Isolation level, present only on `SET_TX`. */
+  /** Isolation level named by this statement, in any of the spellings SQL allows. */
   isolation: string | null;
   /** Tables the plan touched, sorted. Indexes and functions are not tables. */
   relations: string[];
@@ -256,13 +255,45 @@ function parsePlanNode(line: string): PlanNode | null {
   };
 }
 
+/**
+ * Every spelling SQL allows for naming an isolation level.
+ *
+ * The levels are enumerated rather than captured as `[A-Z ]+`, because the mode
+ * list is comma-separated and order-free: `BEGIN TRANSACTION ISOLATION LEVEL
+ * REPEATABLE READ, READ WRITE` and `START TRANSACTION READ ONLY, ISOLATION LEVEL
+ * SERIALIZABLE` both have to yield the level and nothing else. An anchored
+ * greedy match swallowed the rest of the mode list or failed outright.
+ */
+const ISOLATION_RE = /\bISOLATION\s+LEVEL\s+(SERIALIZABLE|REPEATABLE\s+READ|READ\s+COMMITTED|READ\s+UNCOMMITTED)\b/i;
+
+function isolationOf(sql: string): string | null {
+  const m = ISOLATION_RE.exec(sql);
+  return m ? m[1].toUpperCase().replace(/\s+/g, ' ') : null;
+}
+
+/**
+ * Classify one statement.
+ *
+ * The transaction-opening forms matter more than they look. Prisma always emits
+ * a bare `BEGIN` followed by a standalone `SET TRANSACTION ISOLATION LEVEL …`,
+ * and an earlier version of this parser read the level *only* from that second
+ * statement — which meant a hand-written replacement opening its transaction the
+ * idiomatic way (`BEGIN ISOLATION LEVEL SERIALIZABLE`) recorded `isolation:
+ * null` and turned `empathy-reveal`'s Serializable assertion red for no reason.
+ * An oracle built to survive the Prisma migration cannot only understand the
+ * spelling Prisma happens to use.
+ */
 function kindFromText(sql: string): { kind: StatementKind; isolation: string | null } {
   const s = sql.trim().replace(/^\(+/, '');
-  if (/^BEGIN\b|^START TRANSACTION\b/i.test(s)) return { kind: 'BEGIN', isolation: null };
+  // Checked before the generic SET, and before BEGIN, because both prefixes
+  // would otherwise claim it.
+  if (/^SET\s+SESSION\s+CHARACTERISTICS\s+AS\s+TRANSACTION\b/i.test(s)) {
+    return { kind: 'SET_SESSION_TX', isolation: isolationOf(s) };
+  }
+  if (/^BEGIN\b|^START\s+TRANSACTION\b/i.test(s)) return { kind: 'BEGIN', isolation: isolationOf(s) };
   if (/^COMMIT\b|^END\b/i.test(s)) return { kind: 'COMMIT', isolation: null };
   if (/^ROLLBACK\b/i.test(s)) return { kind: 'ROLLBACK', isolation: null };
-  const iso = /^SET\s+TRANSACTION\s+ISOLATION\s+LEVEL\s+([A-Z ]+?)\s*;?\s*$/i.exec(s);
-  if (iso) return { kind: 'SET_TX', isolation: iso[1].toUpperCase().replace(/\s+/g, ' ') };
+  if (/^SET\s+TRANSACTION\b/i.test(s)) return { kind: 'SET_TX', isolation: isolationOf(s) };
   if (/^SET\b|^RESET\b/i.test(s)) return { kind: 'SET', isolation: null };
   if (/^SELECT\b|^WITH\b|^TABLE\b|^VALUES\b|^SHOW\b/i.test(s)) return { kind: 'SELECT', isolation: null };
   if (/^INSERT\b/i.test(s)) return { kind: 'INSERT', isolation: null };
@@ -378,6 +409,11 @@ export interface TracedTransaction {
    * vxid groups and the isolation level.
    */
   explicit: boolean;
+  /**
+   * The level this transaction actually ran at, from whichever spelling declared
+   * it: inline on `BEGIN`/`START TRANSACTION`, a standalone `SET TRANSACTION`, or
+   * the connection default left by `SET SESSION CHARACTERISTICS AS TRANSACTION`.
+   */
   isolation: string | null;
   statements: TracedStatement[];
 }
@@ -390,20 +426,39 @@ export interface TracedTransaction {
  * connection — which is precisely the grouping the escaped `$transaction`
  * mutation changes. Keyed with the pid as well, because a backend slot number is
  * reused after a connection closes.
+ *
+ * `SET SESSION CHARACTERISTICS AS TRANSACTION` is tracked per connection because
+ * it is how a hand-written implementation can legitimately make every
+ * transaction on a connection Serializable without saying so at any `BEGIN`.
+ * Without it the level would read as `null` on transactions that genuinely had
+ * one — a false *negative* on the isolation assertion, which is the direction
+ * that matters.
  */
 export function groupTransactions(statements: TracedStatement[]): TracedTransaction[] {
   const byKey = new Map<string, TracedTransaction>();
   const order: TracedTransaction[] = [];
+  const sessionDefault = new Map<string, string>();
 
   for (const s of statements) {
     const key = `${s.pid}|${s.vxid}`;
     let tx = byKey.get(key);
     if (!tx) {
-      tx = { pid: s.pid, vxid: s.vxid, explicit: false, isolation: null, statements: [] };
+      // Seeded from the connection default in force *before* this statement, so
+      // the `SET SESSION CHARACTERISTICS` statement's own group does not
+      // retroactively claim the level it is about to establish.
+      tx = {
+        pid: s.pid,
+        vxid: s.vxid,
+        explicit: false,
+        isolation: sessionDefault.get(s.pid) ?? null,
+        statements: [],
+      };
       byKey.set(key, tx);
       order.push(tx);
     }
+    if (s.kind === 'SET_SESSION_TX' && s.isolation) sessionDefault.set(s.pid, s.isolation);
     if (s.kind === 'BEGIN') tx.explicit = true;
+    if (s.kind === 'BEGIN' && s.isolation) tx.isolation = s.isolation;
     if (s.kind === 'SET_TX' && s.isolation) tx.isolation = s.isolation;
     tx.statements.push(s);
   }
@@ -447,13 +502,24 @@ export interface UnassertedTrace {
  * Placeholders. Self-describing on purpose: an unasserted field sitting in a
  * golden must not read as data, and a reader hitting one should learn why
  * without leaving the file.
+ *
+ * They carry the *reason* and not the sample. An earlier version froze
+ * "48 runs measured 3-4" into every golden, which meant the next re-measurement
+ * would redden every file for a change in a statistic no assertion depends on.
+ * The run counts belong in the step declaration and in the README, where they
+ * are evidence for a decision, not in an artefact that is diffed byte for byte.
  */
 export const UNASSERTED_CONNECTIONS =
-  '<unasserted: pool high-water mark under concurrent background work — 48 runs measured 3-4, ' +
-  'then a clean tree produced 5; no ceiling is derivable, so nothing is claimed>';
-export const UNASSERTED_ROWS =
-  '<unasserted: this step INSERTs into this relation from background work, so every read of it ' +
-  'races those inserts and no row count is a property of the work>';
+  '<unasserted: pool high-water mark under concurrent background work — scheduling, not a property ' +
+  'of the work; see the step declaration>';
+
+/** Per relation, because the justification differs per relation. */
+export function unassertedRows(relation: string): string {
+  return (
+    `<unasserted: background work on this step writes "${relation}", so a read of it may or may not ` +
+    `see those rows; see the step declaration>`
+  );
+}
 
 export interface TraceStatementSummary {
   kind: StatementKind;
@@ -488,7 +554,9 @@ export interface TraceTransactionShape {
 export interface TraceSummary {
   /** False means the window was empty, truncated or rate-limited. Never a pass. */
   complete: boolean;
-  incompleteReason?: string;
+  /** A closed enum — never text taken from a log record. See `IncompleteReason`. */
+  incompleteReason?: IncompleteReason;
+  incompleteCounts?: IncompleteCounts;
   /** Distinct backends the app used, or the placeholder where unassertable. */
   connections: number | string;
   transactions: number;
@@ -572,9 +640,23 @@ function sortKeys(o: Record<string, number>): Record<string, number> {
  *     sample, exactly as 3-4 was. Refused.
  *
  * `EmpathyAttempt` is the control that shows this is not superstition: the
- * reveal writes it too, but only with UPDATE, so its read counts are
- * timing-invariant and stayed at 23 across all 48 runs. The line is INSERT/
- * DELETE (row counts move) versus UPDATE (they cannot).
+ * reveal writes it too, and its read counts stayed at 23 across all 48 runs.
+ *
+ * The reason is narrower than "UPDATE cannot move a row count", which is the
+ * rule an earlier version of this comment stated and which is simply false: a
+ * read predicated on a mutated column moves with it, and
+ * `WHERE status = 'READY'` raced against the reveal's `READY -> REVEALED` flip
+ * returns 2 rows before and 0 after without a single row being inserted or
+ * deleted. This app is full of status-filtered reads, so that wrong rule would
+ * have been applied to one of them sooner or later.
+ *
+ * The real condition is: **a read count is assertable under background work only
+ * if the read's predicate closure is invariant under those writes** — the set of
+ * rows it matches cannot change, whether by rows appearing, disappearing, or
+ * starting or stopping matching. That has to be argued per query, not per
+ * statement kind. Here the `EmpathyAttempt` reads predicate on immutable
+ * identifiers, so the reveal's UPDATE cannot move them; the `Message` reads
+ * predicate on a session and stage into which the reveal INSERTs, so they can.
  *
  * `topRows` is refused only when the unasserted scan *is* the plan root.
  * Validated against all 30 captures in the second sample: the statement that
@@ -587,7 +669,8 @@ export function summarize(
   transactions: TracedTransaction[],
   opts: {
     complete: boolean;
-    incompleteReason?: string;
+    incompleteReason?: IncompleteReason;
+    incompleteCounts?: IncompleteCounts;
     /** What this step cannot assert, and why. */
     unasserted?: UnassertedTrace;
   },
@@ -619,11 +702,11 @@ export function summarize(
         let topRows: number | string | null = s.topRows;
         for (const [rel, n] of Object.entries(s.rowsRead).sort(([a], [b]) => a.localeCompare(b))) {
           const muted = mutedRelations.has(rel);
-          counts[rel] = muted ? UNASSERTED_ROWS : n;
+          counts[rel] = muted ? unassertedRows(rel) : n;
           // Only when the unasserted scan *is* the plan root. A `Limit` above it
           // reports the same number and keeps it exact, so a `Limit` that
           // stopped limiting stays visible even here.
-          if (muted && s.rootRelation === rel && topRows === n) topRows = UNASSERTED_ROWS;
+          if (muted && s.rootRelation === rel && topRows === n) topRows = unassertedRows(rel);
         }
         return {
           kind: s.kind,
@@ -652,12 +735,13 @@ export function summarize(
   return {
     complete: opts.complete,
     ...(opts.incompleteReason ? { incompleteReason: opts.incompleteReason } : {}),
+    ...(opts.incompleteCounts ? { incompleteCounts: opts.incompleteCounts } : {}),
     connections: unasserted.connections ? UNASSERTED_CONNECTIONS : connections.size,
     transactions: transactions.length,
     statements,
     byKind: sortKeys(byKind),
     rowsRead: Object.fromEntries(
-      Object.entries(sortKeys(rowsRead)).map(([rel, n]) => [rel, mutedRelations.has(rel) ? UNASSERTED_ROWS : n]),
+      Object.entries(sortKeys(rowsRead)).map(([rel, n]) => [rel, mutedRelations.has(rel) ? unassertedRows(rel) : n]),
     ),
     shapes,
   };
@@ -667,10 +751,36 @@ export function summarize(
 // Layer 5 — windowing and reading
 // ============================================================================
 
+/**
+ * Why a window is not usable. A closed set, deliberately.
+ *
+ * Nothing here is derived from a record's text, and nothing may become so. The
+ * previous version quoted the matched log line into this field, and that field
+ * is embedded by `summarize`, written to `__golden__/*.json` in record mode and
+ * printed in verify mode — a probe drove real user-shaped content into a golden
+ * through it. It also bypassed the runner's unresolved-id guard, which does not
+ * inspect the trace. Counts are safe to report; excerpts never are.
+ */
+export type IncompleteReason =
+  | 'never-read'
+  | 'begin-marker-missing'
+  | 'end-marker-missing'
+  | 'markers-duplicated'
+  | 'markers-out-of-order'
+  | 'no-app-statements';
+
+/** Counts that make a failure diagnosable without quoting anything. */
+export interface IncompleteCounts {
+  beginMarkers: number;
+  endMarkers: number;
+  reads: number;
+}
+
 export interface WindowResult {
   records: LogRecord[];
   complete: boolean;
-  incompleteReason?: string;
+  incompleteReason?: IncompleteReason;
+  incompleteCounts?: IncompleteCounts;
 }
 
 /**
@@ -680,10 +790,20 @@ export interface WindowResult {
  * VM's, not the host's, and the two drift. Sentinels are exact — a statement is
  * inside the window if and only if it was logged between the two marks.
  *
- * Every failure mode returns `complete: false` rather than a shorter trace. A
- * truncated window and a cheaper query produce the same smaller numbers, and
- * this harness has already been burned once by a timeout that looked identical
- * to success (see `settled` in `driver.ts`).
+ * **Truncation is detected by marker loss and by nothing else.** There used to
+ * be a second check here for journald's `Suppressed N messages` notice. It was
+ * dead code: journald emits that notice into the VM journal attributed to
+ * `user@501.service`, not into the container stream, so `podman logs` never
+ * contains it — verified against a real suppression event, which is present in
+ * the VM journal and absent from `podman logs` for the same window. Even if it
+ * appeared it could not have matched, because its `systemd-journald[…]:` line
+ * shape is rejected by the record prefix before any content test runs.
+ *
+ * That is a weaker guarantee than the old comment claimed, and it is worth
+ * stating plainly: rate limiting severe enough to drop statements will normally
+ * also drop the end marker, which *is* caught, but a drop that spares both
+ * markers would pass. The mitigation that actually works is not detection, it is
+ * `withClient` self-muting so the budget is never approached.
  */
 export function extractWindow(records: LogRecord[], opts: { beginToken: string; endToken: string }): WindowResult {
   const indexOfMark = (token: string): number[] => {
@@ -696,34 +816,20 @@ export function extractWindow(records: LogRecord[], opts: { beginToken: string; 
 
   const begins = indexOfMark(opts.beginToken);
   const ends = indexOfMark(opts.endToken);
+  const counts = { beginMarkers: begins.length, endMarkers: ends.length, reads: 1 };
+  const fail = (reason: IncompleteReason): WindowResult => ({
+    records: [],
+    complete: false,
+    incompleteReason: reason,
+    incompleteCounts: counts,
+  });
 
-  if (begins.length === 0) {
-    return { records: [], complete: false, incompleteReason: 'begin marker not found in the log read' };
-  }
-  if (ends.length === 0) {
-    return { records: [], complete: false, incompleteReason: 'end marker not found in the log read' };
-  }
-  if (begins.length > 1 || ends.length > 1) {
-    return {
-      records: [],
-      complete: false,
-      incompleteReason: `sentinel appeared twice (begin x${begins.length}, end x${ends.length}) — the window is ambiguous`,
-    };
-  }
-  if (ends[0] < begins[0]) {
-    return { records: [], complete: false, incompleteReason: 'end marker precedes the begin marker' };
-  }
+  if (begins.length === 0) return fail('begin-marker-missing');
+  if (ends.length === 0) return fail('end-marker-missing');
+  if (begins.length > 1 || ends.length > 1) return fail('markers-duplicated');
+  if (ends[0] < begins[0]) return fail('markers-out-of-order');
 
-  const window = records.slice(begins[0] + 1, ends[0]);
-  const suppressed = window.find(r => SUPPRESSED_RE.test(r.message));
-  if (suppressed) {
-    return {
-      records: window,
-      complete: false,
-      incompleteReason: `journald rate-limited inside the window: ${suppressed.message}`,
-    };
-  }
-  return { records: window, complete: true };
+  return { records: records.slice(begins[0] + 1, ends[0]), complete: true };
 }
 
 /**
@@ -784,12 +890,14 @@ export interface CaptureOptions {
 export async function captureWindow(opts: CaptureOptions): Promise<TraceSummary> {
   const attempts = opts.attempts ?? 10;
   const intervalMs = opts.intervalMs ?? 400;
-  let last: WindowResult = { records: [], complete: false, incompleteReason: 'never read' };
+  let last: WindowResult = { records: [], complete: false, incompleteReason: 'never-read' };
+  let reads = 0;
 
   for (let i = 0; i < attempts; i++) {
     // Widen on every retry: a too-tight `--since` and a lagging write are
     // indistinguishable from here, and widening fixes both.
     const raw = await opts.reader.read(opts.sinceSeconds + 10 + i * 10);
+    reads += 1;
     last = extractWindow(parsePostgresLog(raw), opts);
     if (last.complete) break;
     if (i < attempts - 1) await new Promise(r => setTimeout(r, intervalMs));
@@ -798,7 +906,8 @@ export async function captureWindow(opts: CaptureOptions): Promise<TraceSummary>
   if (!last.complete) {
     return summarize([], {
       complete: false,
-      incompleteReason: `${last.incompleteReason} (after ${attempts} reads of ${opts.reader.describe()})`,
+      incompleteReason: last.incompleteReason ?? 'never-read',
+      incompleteCounts: { ...(last.incompleteCounts ?? { beginMarkers: 0, endMarkers: 0, reads: 0 }), reads },
     });
   }
 
@@ -810,9 +919,36 @@ export async function captureWindow(opts: CaptureOptions): Promise<TraceSummary>
   if (statements.length === 0) {
     return summarize([], {
       complete: false,
-      incompleteReason:
-        'window contained no statements from the application under test — capture is not reaching the app connections',
+      incompleteReason: 'no-app-statements',
+      incompleteCounts: { beginMarkers: 1, endMarkers: 1, reads },
     });
   }
   return summarize(groupTransactions(statements), { complete: true, unasserted: opts.unasserted });
+}
+
+/**
+ * Every app-under-test statement in a read, with the window it belongs to.
+ *
+ * Used by the scenario-level assertion that nothing escapes every window. A
+ * statement outside all of them either contaminated the next step or vanished
+ * between two — see `driver.ts` `unwindowedStatements`.
+ */
+export function statementsOutsideWindows(
+  records: LogRecord[],
+  opts: { database: string; application?: string; windows: Array<{ beginToken: string; endToken: string }> },
+): number {
+  const application = opts.application ?? APP_UNDER_TEST;
+  const bounds: Array<[number, number]> = [];
+  for (const w of opts.windows) {
+    const b = records.findIndex(r => r.message.includes(`${MARK_PREFIX}${w.beginToken}`));
+    const e = records.findIndex(r => r.message.includes(`${MARK_PREFIX}${w.endToken}`));
+    if (b >= 0 && e > b) bounds.push([b, e]);
+  }
+  let outside = 0;
+  records.forEach((r, i) => {
+    if (r.database !== opts.database || r.application !== application || r.severity !== 'LOG') return;
+    if (!STATEMENT_RE.test(r.message) && !EXECUTE_RE.test(r.message)) return;
+    if (!bounds.some(([b, e]) => i > b && i < e)) outside += 1;
+  });
+  return outside;
 }

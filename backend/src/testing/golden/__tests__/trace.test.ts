@@ -1,11 +1,15 @@
 /**
  * Unit tests for the SQL-statement trace oracle's parser.
  *
- * Every sample here is **real output** from the project's own container
+ * Every log sample here is **real output** from the project's own container
  * (pgvector/pgvector:pg16, Postgres 16.14) captured through
  * `podman logs mwf-postgres`, not text written to match the parser. Continuation
  * lines are real tabs. Writing these by hand is how a parser ends up agreeing
- * with its author's memory of a log format rather than with Postgres.
+ * with its author's memory of a log format rather than with Postgres — and this
+ * file has already been caught once with a fabricated sample: a journald
+ * `Suppressed N messages` notice given a Postgres-style prefix that the real
+ * pipeline cannot produce, propping up a check that could never fire. Both the
+ * check and the sample are gone.
  *
  * The two facts these tests exist to protect are the two mutations that escaped
  * the HTTP-diffing harness (see `README.md`, "Discrimination results"):
@@ -20,12 +24,13 @@
 import {
   MARK_PREFIX,
   UNASSERTED_CONNECTIONS,
-  UNASSERTED_ROWS,
   buildTrace,
   extractWindow,
   groupTransactions,
   parsePostgresLog,
+  statementsOutsideWindows,
   summarize,
+  unassertedRows,
 } from '../trace';
 
 const APP = 'mwf-app-under-test';
@@ -238,6 +243,63 @@ describe('groupTransactions', () => {
     expect(txs.map(t => t.isolation)).toEqual([null, null]);
   });
 
+  // Real capture. Prisma opens with a bare `BEGIN` and a standalone
+  // `SET TRANSACTION ISOLATION LEVEL`, and reading the level only from that
+  // second statement is a parser that understands one ORM rather than SQL. A
+  // hand-written replacement opening its transaction the idiomatic way recorded
+  // `isolation: null` and turned `empathy-reveal`'s assertion red for no reason
+  // — the exact way an oracle built to survive the migration fails to.
+  describe.each([
+    ['BEGIN ISOLATION LEVEL SERIALIZABLE', 'SERIALIZABLE'],
+    ['BEGIN TRANSACTION ISOLATION LEVEL SERIALIZABLE', 'SERIALIZABLE'],
+    ['START TRANSACTION ISOLATION LEVEL SERIALIZABLE', 'SERIALIZABLE'],
+    ['BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ WRITE', 'REPEATABLE READ'],
+    ['START TRANSACTION READ ONLY, ISOLATION LEVEL SERIALIZABLE', 'SERIALIZABLE'],
+    ['BEGIN ISOLATION LEVEL READ COMMITTED', 'READ COMMITTED'],
+  ])('opening spelling: %s', (sql, expected) => {
+    it(`reads the level as ${expected}`, () => {
+      const raw = [
+        `2026-08-18 00:15:07.001 UTC [52941] db=probe,app=${APP},vxid=3/150020,xid=0 LOG:  statement: ${sql}`,
+        `2026-08-18 00:15:07.002 UTC [52941] db=probe,app=${APP},vxid=3/150020,xid=0 LOG:  statement: SELECT 1 FROM t`,
+        `2026-08-18 00:15:07.003 UTC [52941] db=probe,app=${APP},vxid=3/150020,xid=0 LOG:  statement: COMMIT`,
+      ].join('\n');
+      const txs = groupTransactions(buildTrace(parsePostgresLog(raw), { database: 'probe', application: APP }));
+      expect(txs).toHaveLength(1);
+      expect(txs[0].isolation).toBe(expected);
+      expect(txs[0].explicit).toBe(true);
+      // The mode list must not be swallowed into the level.
+      expect(txs[0].isolation).not.toMatch(/READ WRITE|READ ONLY/);
+    });
+  });
+
+  it('carries a SET SESSION CHARACTERISTICS default onto later transactions', () => {
+    // Real capture. This is how a hand-written implementation can legitimately
+    // make every transaction on a connection Serializable without saying so at
+    // any BEGIN. Missing it is a false negative on the isolation assertion.
+    const raw = [
+      `2026-08-18 00:15:07.010 UTC [52941] db=probe,app=${APP},vxid=3/150026,xid=0 LOG:  statement: SET SESSION CHARACTERISTICS AS TRANSACTION ISOLATION LEVEL SERIALIZABLE`,
+      `2026-08-18 00:15:07.011 UTC [52941] db=probe,app=${APP},vxid=3/150027,xid=0 LOG:  statement: BEGIN`,
+      `2026-08-18 00:15:07.012 UTC [52941] db=probe,app=${APP},vxid=3/150027,xid=0 LOG:  statement: SELECT 1 FROM t`,
+      `2026-08-18 00:15:07.013 UTC [52941] db=probe,app=${APP},vxid=3/150027,xid=0 LOG:  statement: COMMIT`,
+    ].join('\n');
+    const txs = groupTransactions(buildTrace(parsePostgresLog(raw), { database: 'probe', application: APP }));
+    expect(txs).toHaveLength(2);
+    // The SET's own group does not retroactively claim the level it establishes.
+    expect(txs[0].isolation).toBeNull();
+    expect(txs[0].statements[0].kind).toBe('SET_SESSION_TX');
+    expect(txs[1].isolation).toBe('SERIALIZABLE');
+  });
+
+  it('does not leak a session default onto another connection', () => {
+    const raw = [
+      `2026-08-18 00:15:07.010 UTC [1] db=probe,app=${APP},vxid=3/1,xid=0 LOG:  statement: SET SESSION CHARACTERISTICS AS TRANSACTION ISOLATION LEVEL SERIALIZABLE`,
+      `2026-08-18 00:15:07.011 UTC [2] db=probe,app=${APP},vxid=4/1,xid=0 LOG:  statement: BEGIN`,
+      `2026-08-18 00:15:07.012 UTC [2] db=probe,app=${APP},vxid=4/1,xid=0 LOG:  statement: COMMIT`,
+    ].join('\n');
+    const txs = groupTransactions(buildTrace(parsePostgresLog(raw), { database: 'probe', application: APP }));
+    expect(txs.find(t => t.pid === '2')!.isolation).toBeNull();
+  });
+
   it('separates concurrent transactions on different backends', () => {
     const raw = [
       `2026-08-17 22:20:20.860 UTC [1] db=probe,app=${APP},vxid=3/1,xid=0 LOG:  statement: BEGIN`,
@@ -317,7 +379,7 @@ describe('summarize', () => {
     });
 
     expect(exact.rowsRead).toEqual({ Message: 6, User: 1 });
-    expect(muted.rowsRead).toEqual({ Message: UNASSERTED_ROWS, User: 1 });
+    expect(muted.rowsRead).toEqual({ Message: unassertedRows('Message'), User: 1 });
     expect(muted.connections).toBe(UNASSERTED_CONNECTIONS);
     // Kinds, relations, plan shape and the envelope are never coarsened.
     expect(muted.statements).toBe(2);
@@ -336,12 +398,20 @@ describe('summarize', () => {
     // unasserted field from a measured one eventually re-records the golden to
     // make a red go away, which is the failure this harness's conventions exist
     // to prevent.
-    for (const text of [UNASSERTED_CONNECTIONS, UNASSERTED_ROWS]) {
+    for (const text of [UNASSERTED_CONNECTIONS, unassertedRows('Message')]) {
       expect(text).toMatch(/^<unasserted: /);
       expect(text.length).toBeGreaterThan(60);
+      expect(text).toMatch(/see the step declaration/);
     }
-    expect(UNASSERTED_CONNECTIONS).toMatch(/clean tree produced 5/);
-    expect(UNASSERTED_ROWS).toMatch(/races those inserts/);
+    // Parameterized: a placeholder must not explain itself with another
+    // relation's reasoning. Declaring a band on `EmpathyAttempt` used to emit a
+    // sentence that talked about Message.
+    expect(unassertedRows('EmpathyAttempt')).toContain('"EmpathyAttempt"');
+    expect(unassertedRows('EmpathyAttempt')).not.toContain('Message');
+    // No sample statistics: those live in the step declaration, so the first
+    // re-measurement does not redden every golden.
+    expect(UNASSERTED_CONNECTIONS).not.toMatch(/\b\d+ runs?\b/);
+    expect(unassertedRows('Message')).not.toMatch(/\b\d+ runs?\b/);
   });
 
   it('suppresses topRows only when the unasserted scan is the plan root', () => {
@@ -353,7 +423,7 @@ describe('summarize', () => {
     const stmts = buildTrace(parsePostgresLog(SAMPLE_BASIC), { database: 'probe', application: APP });
     const s = summarize(groupTransactions(stmts), { complete: true, unasserted: { rowCounts: ['Message'] } });
     const select = s.shapes.flatMap(x => x.statements).find(x => x.kind === 'SELECT')!;
-    expect(select.rowsRead).toEqual({ Message: UNASSERTED_ROWS, User: 1 });
+    expect(select.rowsRead).toEqual({ Message: unassertedRows('Message'), User: 1 });
     expect(select.topRows).toBe(6);
   });
 
@@ -375,7 +445,7 @@ describe('summarize', () => {
     expect(muted.shapes).toHaveLength(1);
     expect(muted.shapes[0].occurrences).toBe(2);
     // Here the scan IS the root, so topRows goes with it.
-    expect(muted.shapes[0].statements[0].topRows).toBe(UNASSERTED_ROWS);
+    expect(muted.shapes[0].statements[0].topRows).toBe(unassertedRows('Message'));
   });
 
   it('leaves a relation exact when the step declares nothing', () => {
@@ -388,13 +458,23 @@ describe('summarize', () => {
   });
 
   it('carries incompleteness through instead of reporting a smaller trace', () => {
-    const s = summarize([], { complete: false, incompleteReason: 'end marker never appeared' });
+    const s = summarize([], { complete: false, incompleteReason: 'end-marker-missing' });
     // A truncated window and a quiet step look identical from the counts alone.
     // `settled` already taught this harness that lesson once (see driver.ts).
     expect(s.complete).toBe(false);
-    expect(s.incompleteReason).toBe('end marker never appeared');
+    expect(s.incompleteReason).toBe('end-marker-missing');
   });
 });
+
+/** The closed set `incompleteReason` may take. Mirrors `IncompleteReason`. */
+const REASONS = [
+  'never-read',
+  'begin-marker-missing',
+  'end-marker-missing',
+  'markers-duplicated',
+  'markers-out-of-order',
+  'no-app-statements',
+];
 
 describe('extractWindow', () => {
   const markLine = (token: string, pid = '99') =>
@@ -418,35 +498,96 @@ describe('extractWindow', () => {
     const raw = [markLine('s0b'), `2026-08-17 22:20:20.100 UTC [48189] db=probe,app=${APP},vxid=3/2,xid=0 LOG:  statement: SELECT 1`].join('\n');
     const w = extractWindow(parsePostgresLog(raw), { beginToken: 's0b', endToken: 's0e' });
     expect(w.complete).toBe(false);
-    expect(w.incompleteReason).toMatch(/end marker/);
+    expect(w.incompleteReason).toBe('end-marker-missing');
   });
 
   it('is incomplete when the begin marker has already scrolled out of the read', () => {
     const raw = [`2026-08-17 22:20:20.100 UTC [48189] db=probe,app=${APP},vxid=3/2,xid=0 LOG:  statement: SELECT 1`, markLine('s0e')].join('\n');
     const w = extractWindow(parsePostgresLog(raw), { beginToken: 's0b', endToken: 's0e' });
     expect(w.complete).toBe(false);
-    expect(w.incompleteReason).toMatch(/begin marker/);
-  });
-
-  it('is incomplete when journald dropped messages inside the window', () => {
-    // Measured during the spike: `Suppressed 35097 messages`, 3000 statements
-    // truncated to 1562. A rate-limited window is a *smaller* trace, which is
-    // indistinguishable from a cheaper query unless it is flagged.
-    const raw = [
-      markLine('s0b'),
-      '2026-08-17 22:20:20.050 UTC [0] LOG:  Suppressed 35097 messages, backlog of 12 messages',
-      `2026-08-17 22:20:20.100 UTC [48189] db=probe,app=${APP},vxid=3/2,xid=0 LOG:  statement: SELECT 1`,
-      markLine('s0e'),
-    ].join('\n');
-    const w = extractWindow(parsePostgresLog(raw), { beginToken: 's0b', endToken: 's0e' });
-    expect(w.complete).toBe(false);
-    expect(w.incompleteReason).toMatch(/[Ss]uppressed/);
+    expect(w.incompleteReason).toBe('begin-marker-missing');
   });
 
   it('rejects a duplicated marker rather than guessing which one is the window', () => {
     const raw = [markLine('s0b'), markLine('s0b'), markLine('s0e')].join('\n');
     const w = extractWindow(parsePostgresLog(raw), { beginToken: 's0b', endToken: 's0e' });
     expect(w.complete).toBe(false);
-    expect(w.incompleteReason).toMatch(/twice|duplicate/i);
+    expect(w.incompleteReason).toBe('markers-duplicated');
+    expect(w.incompleteCounts).toEqual({ beginMarkers: 2, endMarkers: 1, reads: 1 });
+  });
+
+  it('never puts window content into the reason it reports', () => {
+    // This is a privacy guard, not tidiness. `incompleteReason` is embedded by
+    // `summarize`, written into `__golden__/*.json` in record mode and printed
+    // in verify mode, and it bypasses the runner's unresolved-id check, which
+    // does not inspect the trace. A previous version quoted a matched log line
+    // here and a probe drove real user-shaped content into a golden through it.
+    const secret = 'I feel unseen when the chores pile up';
+    const raw = [
+      markLine('s0b'),
+      `2026-08-17 22:20:20.100 UTC [48189] db=probe,app=${APP},vxid=3/2,xid=0 LOG:  statement: SELECT '${secret}'`,
+      markLine('s0b'),
+      markLine('s0e'),
+    ].join('\n');
+    const w = extractWindow(parsePostgresLog(raw), { beginToken: 's0b', endToken: 's0e' });
+    expect(w.complete).toBe(false);
+    // The reason is drawn from a closed set, so there is no path by which a
+    // record's text can reach it.
+    expect(REASONS).toContain(w.incompleteReason);
+    expect(JSON.stringify(w)).not.toContain('chores');
+
+    const s = summarize([], { complete: false, incompleteReason: w.incompleteReason, incompleteCounts: w.incompleteCounts });
+    expect(JSON.stringify(s)).not.toContain('chores');
+    expect(REASONS).toContain(s.incompleteReason);
+  });
+});
+
+describe('statementsOutsideWindows', () => {
+  const markLine = (token: string) =>
+    `2026-08-17 22:20:20.000 UTC [99] db=probe,app=mwf-golden-marker,vxid=9/1,xid=0 LOG:  statement: SELECT '${MARK_PREFIX}${token}'`;
+  const appLine = (vxid: string) =>
+    `2026-08-17 22:20:20.100 UTC [48189] db=probe,app=${APP},vxid=${vxid},xid=0 LOG:  statement: SELECT 1`;
+
+  it('counts nothing when every statement is inside a window', () => {
+    const raw = [markLine('a_b'), appLine('3/1'), markLine('a_e'), markLine('b_b'), appLine('3/2'), markLine('b_e')].join('\n');
+    const n = statementsOutsideWindows(parsePostgresLog(raw), {
+      database: 'probe',
+      windows: [
+        { beginToken: 'a_b', endToken: 'a_e' },
+        { beginToken: 'b_b', endToken: 'b_e' },
+      ],
+    });
+    expect(n).toBe(0);
+  });
+
+  it('catches a statement that escaped between two windows', () => {
+    // `settle()` watches rows, so a trailing read that touches none can outlive
+    // it. Undetected, that statement either contaminates the next window or is
+    // seen by nobody — and an undeclared fire-and-forget path added later looks
+    // exactly like this.
+    const raw = [markLine('a_b'), appLine('3/1'), markLine('a_e'), appLine('3/9'), markLine('b_b'), appLine('3/2'), markLine('b_e')].join('\n');
+    const n = statementsOutsideWindows(parsePostgresLog(raw), {
+      database: 'probe',
+      windows: [
+        { beginToken: 'a_b', endToken: 'a_e' },
+        { beginToken: 'b_b', endToken: 'b_e' },
+      ],
+    });
+    expect(n).toBe(1);
+  });
+
+  it('ignores the harness own connections and other databases', () => {
+    const raw = [
+      `2026-08-17 22:20:19.000 UTC [1] db=probe,app=mwf-golden-harness,vxid=1/1,xid=0 LOG:  statement: SELECT 1`,
+      `2026-08-17 22:20:19.000 UTC [2] db=other,app=${APP},vxid=2/1,xid=0 LOG:  statement: SELECT 1`,
+      markLine('a_b'),
+      appLine('3/1'),
+      markLine('a_e'),
+    ].join('\n');
+    const n = statementsOutsideWindows(parsePostgresLog(raw), {
+      database: 'probe',
+      windows: [{ beginToken: 'a_b', endToken: 'a_e' }],
+    });
+    expect(n).toBe(0);
   });
 });

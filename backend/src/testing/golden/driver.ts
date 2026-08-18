@@ -17,7 +17,16 @@ import { mark, openMarkerClient } from './db';
 import { restoreFixture, RestoredFixture } from './fixtures';
 import type { FreshWindow } from './normalize';
 import { Snapshot, takeSnapshot, diffSnapshots, RowChange } from './snapshot';
-import { APP_UNDER_TEST, LogReader, TraceSummary, UnassertedTrace, captureWindow, podmanLogReader } from './trace';
+import {
+  APP_UNDER_TEST,
+  LogReader,
+  TraceSummary,
+  UnassertedTrace,
+  captureWindow,
+  parsePostgresLog,
+  podmanLogReader,
+  statementsOutsideWindows,
+} from './trace';
 
 export interface SseEvent {
   event: string;
@@ -113,6 +122,18 @@ export interface Harness {
     traceUnasserted?: UnassertedTrace;
   }): Promise<StepResult>;
   snapshot(tables: string[]): Promise<Snapshot>;
+  /**
+   * How many app-under-test statements fell outside every step's window.
+   *
+   * Must be zero. `settle()` watches *rows*, so a trailing read that touches no
+   * rows can outlive it and either contaminate the next step's window or land
+   * between two and be seen by neither. Measured at zero on this machine today,
+   * so this is prevention: it converts a silent gap into a failure, and it is
+   * how an undeclared fire-and-forget path added later announces itself.
+   *
+   * Returns null when the harness was created without a trace.
+   */
+  unwindowedStatements(): Promise<number | null>;
   teardown(): Promise<void>;
 }
 
@@ -209,6 +230,8 @@ export async function createHarness(opts: {
   // alphabet `mark()` enforces.
   const traceToken = `${opts.runId}_${Date.now().toString(36)}`.replace(/[^a-z0-9_]/gi, '_');
   let stepIndex = 0;
+  const windows: Array<{ beginToken: string; endToken: string }> = [];
+  const traceStartedAt = Date.now();
 
   return {
     app,
@@ -218,6 +241,19 @@ export async function createHarness(opts: {
     startedAt,
     snapshot,
     async step({ label, actor, tables, call, sse, asyncBoundary, traceUnasserted }) {
+      // Refusing to assert is only ever justified by concurrent background work,
+      // and `asyncBoundary` is how a step declares it has any. Without this
+      // coupling, `traceUnasserted` on the paginated read would silence the
+      // dropped-`take` channel with code review as the only thing standing in the
+      // way — and the whole point of that channel is that review cannot see it.
+      if (traceUnasserted && !asyncBoundary) {
+        throw new Error(
+          `Step "${label}" declares traceUnasserted without asyncBoundary. A trace field may only go ` +
+            `unasserted because work outliving the response races it; a synchronous step has no such ` +
+            `excuse, and silencing one there would hide a real regression channel.`,
+        );
+      }
+
       const before = await snapshot(tables);
 
       // Sentinels bracket the window. The begin marker goes after the `before`
@@ -227,7 +263,10 @@ export async function createHarness(opts: {
       const beginToken = `${traceToken}_${stepNo}_b`;
       const endToken = `${traceToken}_${stepNo}_e`;
       const markedAt = Date.now();
-      if (marker) await mark(marker, beginToken);
+      if (marker) {
+        await mark(marker, beginToken);
+        windows.push({ beginToken, endToken });
+      }
 
       let test = call(request(app) as unknown as request.Agent, authHeaders(actor));
       for (const [k, v] of Object.entries(authHeaders(actor))) test = test.set(k, v);
@@ -278,6 +317,11 @@ export async function createHarness(opts: {
         window: { from: startedAt, to: settledSnap.takenAt },
         ...(trace ? { trace } : {}),
       };
+    },
+    async unwindowedStatements() {
+      if (!logReader) return null;
+      const raw = await logReader.read((Date.now() - traceStartedAt) / 1000 + 30);
+      return statementsOutsideWindows(parsePostgresLog(raw), { database: fixture.database, windows });
     },
     async teardown() {
       const { prisma } = await import('../../lib/prisma');

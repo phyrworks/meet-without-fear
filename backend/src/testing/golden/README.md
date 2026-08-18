@@ -19,7 +19,7 @@ npx tsx src/testing/golden/cli.ts list
 npm run test --workspace=backend -- golden
 
 # 4. re-record (never in bulk — see below)
-GOLDEN_UPDATE=1 npm run test --workspace=backend -- session-read.golden
+GOLDEN_UPDATE=session-read npm run test --workspace=backend -- session-read.golden
 ```
 
 ## How it is put together
@@ -218,6 +218,42 @@ also discards `DETAIL: parameters:` records outright, as a second layer.
 its own implicit BEGIN/COMMIT, so the mutated code still has one. Grouping is
 always by vxid.
 
+### Reading a trace diff during the migration
+
+The predictable way this oracle fails is not a missed regression. It is the first
+hand-written-SQL PR turning every `trace.*` field red at once, and someone
+re-recording the lot under deadline. Some of what a trace pins is a behaviour
+contract the migration must preserve; some of it is Prisma-shaped bookkeeping the
+migration will legitimately change. Know which before you touch a golden.
+
+| Field | | What a change means |
+|---|---|---|
+| transaction grouping (`transactions`, `statementCount`, which statements share a shape) | **contract** | Work moved into or out of a transaction. This is the atomicity guarantee; a change here is a defect until argued otherwise. |
+| `isolation` | **contract** | A Serializable block was lost or downgraded. Never expected churn — the parser understands every spelling, so a faithful reimplementation records the same level however it opens the transaction. |
+| `rowsRead`, `topRows` | **contract** | The query reads a different number of rows. This is the whole cost channel. |
+| `relations` | **contract** | Different tables touched — a join dropped, a lookup added. |
+| `planNodes` | **mostly contract** | A vanished `Limit` is the dropped-`take` signal. But an equivalent query can legitimately plan differently (`Bitmap Heap Scan` vs `Index Scan`) at identical row counts; check `rowsRead` alongside it before calling it a regression. |
+| `byKind`, `statements` | **incidental** | Inflated by Prisma's own bookkeeping: it wraps single writes in `BEGIN`/`COMMIT` and emits a standalone `SET TRANSACTION`. A hand-written equivalent that opens `BEGIN ISOLATION LEVEL SERIALIZABLE` legitimately records two fewer statements for the same behaviour. |
+| `connections` | **incidental** | Pool shape. Already unasserted where background work makes it a race. |
+| `protocol` | **security tripwire** | See below. |
+
+**On `protocol`: keep it.** The case for dropping it is real — which wire protocol
+a driver chose is invisible to a user and irrelevant to correctness, and it will
+churn, because `node-postgres` uses the simple protocol for a query with no bind
+parameters where Prisma always used a named prepared statement.
+
+It stays because that churn *is* the signal. `protocol: 'extended'` means the
+client sent bind parameters; `'simple'` means it did not. On a data query
+carrying user content, "no bind parameters" means the values were interpolated
+into the SQL string — and this is a product whose entire thesis is a privacy
+boundary, being migrated to hand-written SQL by people under deadline. Nothing
+else in this artefact can see that, and no HTTP assertion ever will.
+
+So `protocol` moving is not noise to absorb, it is one question to answer: was a
+constant inlined (fine, re-record and say so), or was a *value* inlined (stop).
+It is the cheapest SQL-injection tripwire available here, and it costs one enum
+per statement.
+
 ### Four things measurement forced
 
 **The harness must mute its own connections.** `empathy-reveal` snapshots the
@@ -281,10 +317,22 @@ rows in separate autocommit transactions. `34-35` was a property of the sample
 exactly as `3-4` was, so it went too.
 
 `EmpathyAttempt` is the control that shows the line is real and not superstition:
-the reveal writes it too, but only with `UPDATE`, so its read counts cannot move
-with timing and they stayed at 23 across all 48 runs. **INSERT/DELETE moves row
-counts; UPDATE cannot.** That is the rule for deciding what a step with
-background work can still assert.
+the reveal writes it too, and its read counts stayed at 23 across all 48 runs.
+
+The reason is narrower than it first looks, and an earlier version of this
+section got it wrong. It said "INSERT/DELETE moves row counts; UPDATE cannot",
+which is false: a read predicated on a mutated column moves with it, and
+`WHERE status = 'READY'` raced against this very reveal's `READY → REVEALED` flip
+returns 2 rows before and 0 after without a single row being inserted or deleted.
+This app is full of status-filtered reads, so that rule would have been misapplied.
+
+**The real condition: a read count is assertable under background work only if
+the read's predicate closure is invariant under those writes** — the set of rows
+it matches cannot change, whether by rows appearing, disappearing, or starting or
+stopping matching. That is a per-query argument, not a per-statement-kind one.
+Here the `EmpathyAttempt` reads predicate on immutable identifiers, so the
+reveal's `UPDATE` cannot move them; the `Message` reads predicate on a session and
+stage the reveal `INSERT`s into, so they can.
 
 So the scenario declares `traceUnasserted` for `connections` and `Message` on that
 one step, and nothing else anywhere is coarsened. `connections` stays exact on
@@ -302,13 +350,36 @@ that with fitted ranges, which failed on a clean tree. What survives both is the
 narrowing, not the fitting.
 
 **An empty or truncated window fails loudly.** Same lesson as `settled`, one
-layer down: a rate-limited window is a *smaller* trace, which is
-indistinguishable from the code having got cheaper. Each step is delimited by
-sentinel statements on a dedicated unmuted connection rather than by wall clock,
-because the container's clock is the podman VM's and drifts against the host's.
-A missing sentinel, a duplicated one, a `Suppressed N messages` notice inside the
-window, or zero statements from the app all set `complete: false`, and both
-scenarios assert on it. Every wait is bounded (10 reads, 400ms apart).
+layer down: a smaller trace is indistinguishable from the code having got
+cheaper. Each step is delimited by sentinel statements on a dedicated unmuted
+connection rather than by wall clock, because the container's clock is the podman
+VM's and drifts against the host's.
+
+**Truncation is detected by marker loss and by nothing else** — state that
+plainly, because an earlier version implied more. It also checked for journald's
+`Suppressed N messages` notice, and that check was dead code: journald emits the
+notice into the VM journal attributed to `user@501.service`, never into the
+container stream, so `podman logs` cannot contain it, and its
+`systemd-journald[…]:` line shape would be rejected by the record prefix anyway.
+Worse, the check copied matched text into `incompleteReason`, which is embedded
+in the artefact and written to a golden in record mode — a probe drove real
+user-shaped content into a golden through it. Both the check and its fabricated
+unit-test sample are gone, and `incompleteReason` is now a closed enum plus
+counts with a test pinning that it can never contain window content.
+
+What remains: a missing sentinel, a duplicated one, markers out of order, or zero
+statements from the app all set `complete: false`, and both scenarios assert on
+it. Rate limiting severe enough to drop statements will normally drop the end
+marker too, which *is* caught; a drop that spares both markers would pass. The
+mitigation that actually works is not detection, it is `withClient` self-muting so
+the budget is never approached. Every wait is bounded (10 reads, 400ms apart).
+
+**Nothing may fall outside every window.** `settle()` watches rows, so a trailing
+read that touches none can outlive it and either contaminate the next step's
+window or land between two and be seen by neither. Both scenarios assert that
+zero app-under-test statements fall outside all windows. Measured at zero today —
+this is prevention, and it is how an undeclared fire-and-forget path added later
+announces itself.
 
 ## Known gaps — read this before trusting a green run
 

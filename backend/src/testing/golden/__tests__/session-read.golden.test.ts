@@ -9,7 +9,7 @@
  * Requires a running local Postgres and a built fixture:
  *   npx tsx src/testing/golden/cli.ts build FEEL_HEARD_B
  *
- * Record:  GOLDEN_UPDATE=1 npm run test --workspace=backend -- session-read.golden
+ * Record:  GOLDEN_UPDATE=session-read npm run test --workspace=backend -- session-read.golden
  */
 
 import type { Harness, StepResult } from '../driver';
@@ -90,9 +90,10 @@ describe(`golden: ${SCENARIO}`, () => {
   it('matches the recorded baseline', async () => {
     const report = await recordOrVerify({ scenario: SCENARIO, harness, steps });
     if (report.recorded) {
-      // Recording is an explicit, deliberate act (GOLDEN_UPDATE=1). Reaching
-      // here in a normal run would mean the oracle rewrote itself.
-      expect(process.env.GOLDEN_UPDATE).toBe('1');
+      // Recording is an explicit, deliberate act, and it has to name this
+      // scenario. Reaching here in a normal run would mean the oracle rewrote
+      // itself.
+      expect(process.env.GOLDEN_UPDATE?.split(',')).toContain(SCENARIO);
       return;
     }
     if (report.diff) {
@@ -109,6 +110,14 @@ describe(`golden: ${SCENARIO}`, () => {
   // or rate-limited produces *smaller* counts, which is indistinguishable from
   // the code having got cheaper. It has to fail loudly or it is worse than not
   // capturing at all.
+  // `settle()` watches rows, so a read that touches none can outlive it and
+  // either contaminate the next step's window or fall between two and be seen by
+  // neither. Measured at zero today; this exists so an undeclared fire-and-forget
+  // path added later announces itself instead of quietly skewing a trace.
+  it('no app statement fell outside every step window', async () => {
+    expect(await harness.unwindowedStatements()).toBe(0);
+  });
+
   it('every step captured a complete SQL trace', () => {
     expect(
       steps.filter(s => !s.trace?.complete).map(s => `${s.label}: ${s.trace?.incompleteReason ?? 'no trace'}`)

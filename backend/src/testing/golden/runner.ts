@@ -1,9 +1,11 @@
 /**
  * Golden harness — record / verify.
  *
- * Set `GOLDEN_UPDATE=1` to (re)record. Never bulk-regenerate: every accepted
- * change to a golden file should have a written reason, because a harness whose
- * baselines are refreshed on failure is a harness that always passes.
+ * Set `GOLDEN_UPDATE=<scenario>` to (re)record that one scenario. The scenario
+ * must be named: a blanket value is rejected, because "never bulk-regenerate"
+ * was a convention with nothing enforcing it, and a harness whose baselines are
+ * refreshed on failure is a harness that always passes. Every accepted change to
+ * a golden file should have a written reason.
  */
 
 import * as fs from 'fs';
@@ -44,6 +46,36 @@ export interface GoldenFile {
 
 function goldenPath(scenario: string): string {
   return path.join(GOLDEN_DIR, `${scenario}.json`);
+}
+
+/**
+ * Recording requires naming the scenario: `GOLDEN_UPDATE=session-read`.
+ *
+ * It used to be `GOLDEN_UPDATE=1`, and that is one exported variable away from
+ * disaster: left in a shell, the whole suite becomes a self-rewriting recorder
+ * that is green by construction. "Never bulk-regenerate" was a convention with
+ * nothing enforcing it, and a convention is exactly what gets skipped at 6pm on
+ * the day a migration PR turns every trace field red.
+ *
+ * A comma-separated list is accepted, so re-recording two scenarios together is
+ * possible — but it has to be typed out, which is the point.
+ */
+export function isRecording(scenario: string): boolean {
+  const raw = process.env.GOLDEN_UPDATE;
+  if (!raw) return false;
+  const named = raw
+    .split(',')
+    .map(s => s.trim())
+    .filter(Boolean);
+  if (named.includes('1') || named.includes('true') || named.includes('all')) {
+    throw new Error(
+      `GOLDEN_UPDATE=${raw} is not accepted: recording must name the scenario, e.g.\n` +
+        `    GOLDEN_UPDATE=${scenario} npx jest ${scenario}\n` +
+        `A blanket value turns every scenario in the suite into a recorder, which is how a\n` +
+        `harness silently stops being an oracle. Re-record one scenario at a time, with a reason.`,
+    );
+  }
+  return named.includes(scenario);
 }
 
 function describeChange(c: RowChange): Record<string, unknown> {
@@ -154,7 +186,7 @@ export async function recordOrVerify(opts: {
   };
 
   const p = goldenPath(scenario);
-  const recording = process.env.GOLDEN_UPDATE === '1';
+  const recording = isRecording(scenario);
 
   if (recording) {
     fs.mkdirSync(GOLDEN_DIR, { recursive: true });
@@ -176,7 +208,7 @@ export async function recordOrVerify(opts: {
         `No recorded baseline at ${path.relative(process.cwd(), p)}.\n` +
         `A missing golden is a failure, not a first run. If this scenario is new, record it\n` +
         `deliberately and commit the file:\n` +
-        `    GOLDEN_UPDATE=1 npx jest ${scenario}`,
+        `    GOLDEN_UPDATE=${scenario} npx jest ${scenario}`,
     };
   }
 

@@ -85,10 +85,44 @@ podman exec mwf-postgres psql -U mwf_user -d postgres \
 ```
 
 Everything else the oracle needs — `log_statement`, `auto_explain` via `session_preload_libraries`,
-`plan_cache_mode`, and the two `log_parameter_max_length` settings that keep bind values out of the
-log — is set per-database on the disposable `mwf_run_*` clone and vanishes with `DROP DATABASE`. All
-of it requires a superuser; `mwf_user` is one in this container, and the harness fails with an
-explicit message rather than a confusing error if it is not.
+`plan_cache_mode`, and the two `log_parameter_max_length` settings — is set per-database on the
+disposable `mwf_run_*` clone and vanishes with `DROP DATABASE`. All of it requires a superuser;
+`mwf_user` is one in this container, and the harness fails with an explicit message rather than a
+confusing error if it is not.
+
+#### The captured statement log contains real identifiers, and it persists
+
+**`log_parameter_max_length=0` and `auto_explain.log_parameter_max_length=0` do not keep bind values
+out of the log.** They suppress the two *parameter list* channels — `DETAIL: parameters:` and
+`Query Parameters:` — and nothing else. PostgreSQL still inlines bind values into plan predicates:
+
+```
+Index Cond: (id = 'cmsqt19i200079kbfuv75bxh8'::text)
+```
+
+Measured on one hour of golden-suite runs: 3,645 such lines. These are ids rather than message
+bodies, but they are real identifiers from a real database, so treat the capture as sensitive.
+
+`plan_cache_mode='force_custom_plan'`, which the harness sets so plan shape is deterministic, is what
+makes this *universal*: a custom plan is built against the actual parameter values every time, so
+every predicate is inlined. Anyone revisiting that setting is also revisiting this, in both
+directions — turning it off reduces inlining but reintroduces the plan-shape nondeterminism it was
+added to remove.
+
+The log lives in the podman VM's journal, not in the container, and **it is not purged when the run
+database is dropped or when the container restarts**. Measured: 305 MB of journal holding 70,889
+statement lines across two days of development.
+
+To inspect or purge it:
+
+```bash
+podman machine ssh 'journalctl --disk-usage'
+podman machine ssh 'sudo journalctl --rotate && sudo journalctl --vacuum-time=1s'   # purge everything
+```
+
+The golden artefacts themselves are clean by construction — a recorded trace has no text-shaped
+field at all, only kinds, relation names, counts and plan node types — so nothing here reaches
+`__golden__/*.json`. This is about the raw journal on the development machine.
 
 ### Alternative: devenv (what the README assumes)
 

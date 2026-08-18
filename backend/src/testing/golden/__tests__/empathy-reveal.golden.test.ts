@@ -21,7 +21,7 @@
  * Requires a running local Postgres and a built fixture:
  *   npx tsx src/testing/golden/cli.ts build FEEL_HEARD_B
  *
- * Record:  GOLDEN_UPDATE=1 npx jest empathy-reveal.golden
+ * Record:  GOLDEN_UPDATE=empathy-reveal npx jest empathy-reveal.golden
  */
 
 import { listTables } from '../db';
@@ -117,9 +117,14 @@ describe(`golden: ${SCENARIO}`, () => {
       // kinds, isolation and every plan node type, all identical 48/48.
       //
       // EmpathyAttempt is the control that shows the line is real rather than
-      // superstition: the reveal writes it too, but only with UPDATE, so its read
-      // counts cannot move with timing. INSERT/DELETE moves row counts; UPDATE
-      // does not.
+      // superstition: the reveal writes it too, and its counts never moved. The
+      // reason is NOT "UPDATE cannot move a row count" — that is false, and a
+      // read like `WHERE status = 'READY'` raced against this very reveal's
+      // READY -> REVEALED flip would return 2 rows before it and 0 after without
+      // any row being inserted. The condition is that a read's *predicate
+      // closure* be invariant under the background writes, which is a per-query
+      // argument. These EmpathyAttempt reads predicate on immutable ids; the
+      // Message reads predicate on a session and stage the reveal inserts into.
       traceUnasserted: {
         connections: true,
         rowCounts: ['Message'],
@@ -166,7 +171,7 @@ describe(`golden: ${SCENARIO}`, () => {
   it('matches the recorded baseline', async () => {
     const report = await recordOrVerify({ scenario: SCENARIO, harness, steps });
     if (report.recorded) {
-      expect(process.env.GOLDEN_UPDATE).toBe('1');
+      expect(process.env.GOLDEN_UPDATE?.split(',')).toContain(SCENARIO);
       return;
     }
     if (report.diff) {
@@ -181,6 +186,14 @@ describe(`golden: ${SCENARIO}`, () => {
 
   // An empty or rate-limited window reads as a *smaller* trace, which looks
   // exactly like the code having got cheaper. Same failure shape as `settled`.
+  // `settle()` watches rows, so a read that touches none can outlive it and
+  // either contaminate the next step's window or fall between two and be seen by
+  // neither. Measured at zero today; this exists so an undeclared fire-and-forget
+  // path added later announces itself instead of quietly skewing a trace.
+  it('no app statement fell outside every step window', async () => {
+    expect(await harness.unwindowedStatements()).toBe(0);
+  });
+
   it('every step captured a complete SQL trace', () => {
     expect(
       steps
