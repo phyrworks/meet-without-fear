@@ -21,7 +21,7 @@
  * Requires a running local Postgres and a built fixture:
  *   npx tsx src/testing/golden/cli.ts build FEEL_HEARD_B
  *
- * Record:  GOLDEN_UPDATE=1 npx jest empathy-reveal.golden
+ * Record:  GOLDEN_UPDATE=empathy-reveal npx jest empathy-reveal.golden
  */
 
 import { listTables } from '../db';
@@ -51,6 +51,9 @@ describe(`golden: ${SCENARIO}`, () => {
       baseUrl: BASE_URL,
       stage: 'FEEL_HEARD_B',
       runId: `${SCENARIO}_${process.pid}`,
+      // The other escaped mutation lives here: moving the reveal write out of
+      // its Serializable `$transaction` writes identical rows.
+      trace: true,
     });
 
     const { userA, userB } = harness.actors;
@@ -84,6 +87,48 @@ describe(`golden: ${SCENARIO}`, () => {
       // awaiting it, so the reveal lands somewhere after the response — measured
       // returning on READY in one run and REVEALED in the next.
       asyncBoundary: true,
+      // The only unasserted trace fields in either scenario, and the only step
+      // that needs any. 48 recorded runs (18 + 30) say what moves here; nothing
+      // moves on any other step of either scenario.
+      //
+      //   connections                     4 x45, 3 x3
+      //   rowsRead.Message (rollup)       34 x46, 35 x2
+      //   one Message-only Index Scan      0 x46,  1 x2
+      //
+      // Both are refused rather than given a measured range, and the history is
+      // why. An earlier version declared `connections: [3, 4]` from the first 18
+      // runs. The mutation gate then produced `5` on a clean, unmutated tree —
+      // a value 48 runs never showed — and `connections` also moved under two
+      // unrelated mutations, so it cannot separate "the pool scheduled
+      // differently" from "a regression added a query". A range that fails on a
+      // clean tree teaches a reader to dismiss exactly the failures this harness
+      // exists to raise.
+      //
+      // `rowsRead.Message` looked far tighter (46/48 at one value, moving by a
+      // single row) but it is the same kind of claim. The raced statement is a
+      // `findMany` with no LIMIT, so nothing bounds it at one row, and the reveal
+      // inserts TWO Message rows in separate autocommit transactions. 34-35 was a
+      // property of the sample exactly as 3-4 was, so it goes too.
+      //
+      // What is NOT refused is the point: every other relation this step touches
+      // stays exact — EmpathyAttempt 23, RelationshipMember 35, Relationship 21,
+      // Session 21, User 19, StageProgress 8, UserVessel 6, EmpathyDraft 2, and
+      // three zeroes — as do statement count (139), transaction count (129),
+      // kinds, isolation and every plan node type, all identical 48/48.
+      //
+      // EmpathyAttempt is the control that shows the line is real rather than
+      // superstition: the reveal writes it too, and its counts never moved. The
+      // reason is NOT "UPDATE cannot move a row count" — that is false, and a
+      // read like `WHERE status = 'READY'` raced against this very reveal's
+      // READY -> REVEALED flip would return 2 rows before it and 0 after without
+      // any row being inserted. The condition is that a read's *predicate
+      // closure* be invariant under the background writes, which is a per-query
+      // argument. These EmpathyAttempt reads predicate on immutable ids; the
+      // Message reads predicate on a session and stage the reveal inserts into.
+      traceUnasserted: {
+        connections: true,
+        rowCounts: ['Message'],
+      },
       call: (agent) =>
         agent.post(`/api/v1/sessions/${harness.sessionId}/empathy/consent`).send({ consent: true }),
     });
@@ -126,7 +171,7 @@ describe(`golden: ${SCENARIO}`, () => {
   it('matches the recorded baseline', async () => {
     const report = await recordOrVerify({ scenario: SCENARIO, harness, steps });
     if (report.recorded) {
-      expect(process.env.GOLDEN_UPDATE).toBe('1');
+      expect(process.env.GOLDEN_UPDATE?.split(',')).toContain(SCENARIO);
       return;
     }
     if (report.diff) {
@@ -137,6 +182,43 @@ describe(`golden: ${SCENARIO}`, () => {
 
   it('every step reached quiescence (a timed-out step is not a baseline)', () => {
     expect(steps.filter((s) => !s.settled).map((s) => s.label)).toEqual([]);
+  });
+
+  // An empty or rate-limited window reads as a *smaller* trace, which looks
+  // exactly like the code having got cheaper. Same failure shape as `settled`.
+  // `settle()` watches rows, so a read that touches none can outlive it and
+  // either contaminate the next step's window or fall between two and be seen by
+  // neither. Measured at zero today; this exists so an undeclared fire-and-forget
+  // path added later announces itself instead of quietly skewing a trace.
+  it('no app statement fell outside every step window', async () => {
+    expect(await harness.unwindowedStatements()).toBe(0);
+  });
+
+  it('every step captured a complete SQL trace', () => {
+    expect(
+      steps
+        .filter((s) => !s.trace?.complete)
+        .map((s) => `${s.label}: ${s.trace?.incompleteReason ?? 'no trace'}`)
+    ).toEqual([]);
+  });
+
+  // The mutation that escaped every row and response assertion here: moving the
+  // reveal `updateMany` out of `checkAndRevealBothIfReady`'s Serializable
+  // `$transaction` writes the same rows in the same order and returns the same
+  // bodies. Only the envelope differs — and the envelope is the TOCTOU
+  // protection, so its loss is the whole defect.
+  it('the reveal runs inside one Serializable transaction', () => {
+    const serializable = (consentStep.trace?.shapes ?? []).filter((t) => t.isolation === 'SERIALIZABLE');
+    expect(serializable).toHaveLength(1);
+    // One occurrence, not two: the reveal is a single read-check-write.
+    expect(serializable[0].occurrences).toBe(1);
+    // Read-check-write: the check reads and the reveal writes, in one group.
+    const kinds = serializable[0].kinds;
+    expect(kinds.SELECT ?? 0).toBeGreaterThan(0);
+    expect((kinds.UPDATE ?? 0) + (kinds.INSERT ?? 0)).toBeGreaterThan(0);
+    // Grouped by vxid, never by "has a BEGIN": Prisma wraps a bare `updateMany`
+    // in its own implicit BEGIN/COMMIT, so the mutated code still has one.
+    expect(serializable[0].statementCount).toBeGreaterThan(2);
   });
 
   // Without this, a regression that stops writing entirely would still record a

@@ -13,6 +13,7 @@
  */
 
 import { Client, ClientConfig } from 'pg';
+import { HARNESS_APP, MARKER_APP, MARK_PREFIX } from './trace';
 
 export interface DbTarget {
   host: string;
@@ -39,8 +40,40 @@ export function toDbUrl(t: DbTarget): string {
   return `postgresql://${auth}@${t.host}:${t.port}/${t.database}`;
 }
 
-function clientConfig(t: DbTarget, database = t.database): ClientConfig {
-  return { host: t.host, port: t.port, user: t.user, password: t.password, database };
+function clientConfig(t: DbTarget, database = t.database, application = HARNESS_APP): ClientConfig {
+  // Tagging the harness's own connections is what lets the statement trace keep
+  // only the application under test. Without it the oracle would be reading
+  // mostly its own snapshots back.
+  return { host: t.host, port: t.port, user: t.user, password: t.password, database, application_name: application };
+}
+
+/**
+ * Silence this connection in the Postgres log, immediately after connecting.
+ *
+ * This is not an optimisation. `empathy-reveal` snapshots the whole database —
+ * ~68 SELECTs per snapshot — and `settle()` takes up to 50 of them per step, so
+ * an unmuted harness emits thousands of statements per step. Measured with
+ * capture on and no muting: journald rate-limited (`Suppressed 35097 messages`),
+ * 3000 statements arrived as 1562, and the end marker was lost. Filtering by
+ * `application_name` afterwards does not help, because the journald budget is
+ * spent before anything is filtered.
+ *
+ * Both settings are session-scope overrides of the per-database values.
+ * `auto_explain.log_min_duration` is settable even on a database where
+ * auto_explain was never loaded — Postgres accepts a dotted name as a
+ * placeholder GUC — so this needs no knowledge of whether capture is on.
+ *
+ * Sent as one simple-protocol query: `withClient` is called several times per
+ * snapshot and per settle poll, and a round trip each would be felt.
+ */
+async function muteConnection(client: Client): Promise<void> {
+  await client
+    .query(`SET log_statement = 'none'; SET auto_explain.log_min_duration = -1;`)
+    // A non-superuser cannot set `log_statement` (PGC_SUSET). That is only a
+    // problem when capture is on, and `enableStatementCapture` refuses to turn
+    // capture on without superuser, so failing quietly here cannot hide a
+    // rate-limited trace.
+    .catch(() => undefined);
 }
 
 /** Run a function against a connected client, always closing it. */
@@ -48,6 +81,7 @@ export async function withClient<T>(t: DbTarget, fn: (c: Client) => Promise<T>, 
   const client = new Client(clientConfig(t, database));
   await client.connect();
   try {
+    await muteConnection(client);
     return await fn(client);
   } finally {
     await client.end();
@@ -105,6 +139,234 @@ export async function cloneDatabase(t: DbTarget, template: string, target: strin
   await withAdmin(t, async c => {
     await c.query(`CREATE DATABASE "${target}" TEMPLATE "${template}"`);
   });
+}
+
+// ============================================================================
+// Statement capture — see `trace.ts` for what is done with the log
+// ============================================================================
+
+/**
+ * The prefix the trace parser needs: database, application, virtual xid, xid.
+ *
+ * `%v` is the load-bearing one. It is constant across every statement of one
+ * transaction and differs between transactions, which is the only way to answer
+ * "did these two statements run together" — and answering that is half of why
+ * this oracle exists.
+ */
+export const REQUIRED_LOG_LINE_PREFIX = '%m [%p] db=%d,app=%a,vxid=%v,xid=%x ';
+
+/**
+ * auto_explain, loaded per-database with no server restart.
+ *
+ * `session_preload_libraries` is the only per-database way in:
+ * `shared_preload_libraries` is postmaster-context and empty on this container,
+ * and changing it means restarting an always-on service.
+ *
+ * FOOTGUN, verified: this setting takes ONE library. `ALTER DATABASE … SET
+ * session_preload_libraries = 'auto_explain,pg_stat_statements'` is *accepted*,
+ * and then every new connection to that database dies with
+ * `FATAL: could not access file` — you cannot even connect to undo it. Hence the
+ * assertion below rather than a comment.
+ */
+const PRELOAD_LIBRARY = 'auto_explain';
+
+/**
+ * Per-database capture settings.
+ *
+ * All are `ALTER DATABASE`, so they apply only to connections opened afterwards,
+ * never leak to another database, and disappear with `DROP DATABASE` — which
+ * matters because every run database is disposable and nothing here needs
+ * cleaning up.
+ *
+ * The two parameter-length settings are the privacy boundary. `0` means "log the
+ * parameter list as empty", not "truncate to 0 characters of a value we
+ * assembled anyway". There are two of them because they are different subsystems:
+ * `log_parameter_max_length` governs `DETAIL: parameters:` on the statement log
+ * and `auto_explain.log_parameter_max_length` governs `Query Parameters:` inside
+ * the plan. Setting only the first leaves the second wide open — verified: with
+ * `log_parameter_max_length=0` alone, a capture of this container emitted
+ * `Query Parameters: $1 = 'nope', $2 = '5'`.
+ */
+const CAPTURE_SETTINGS: Array<[string, string]> = [
+  // Plan shape must not depend on how many times a pooled connection happens to
+  // have run a statement. Measured: Prisma issues NAMED prepared statements
+  // (`execute s16: …`), and Postgres switches a named statement from a custom
+  // plan to a generic plan on its sixth execution. Prisma's `findMany` emits
+  // `… WHERE "id" IN ($1) OFFSET $2` with `$2 = 0`; a custom plan knows the
+  // offset is zero and elides the `Limit` node, a generic plan cannot and keeps
+  // it. Which pooled connection serves a request decides which side of the
+  // sixth execution it lands on, so the same query recorded `["Limit","Index
+  // Scan"]` in one run and `["Index Scan"]` in the next — 6 runs produced 4
+  // distinct traces for one step, with identical rows read either way.
+  //
+  // Verified in isolation: executions 1-5 of `SELECT … OFFSET $2` have no Limit
+  // node, execution 6 onwards has one.
+  //
+  // Forcing custom plans removes the coin flip rather than banding the artefact
+  // away, which keeps `planNodes` exact and therefore keeps "the Limit node
+  // disappeared" as a real second signal for a dropped `take`. It is applied to
+  // recording and replay alike, so it cannot bias a differential comparison.
+  ['plan_cache_mode', `'force_custom_plan'`],
+  ['log_statement', `'all'`],
+  ['log_parameter_max_length', '0'],
+  ['log_parameter_max_length_on_error', '0'],
+  ['session_preload_libraries', `'${PRELOAD_LIBRARY}'`],
+  // Plans for everything. `Actual Rows` per node is the only
+  // implementation-independent way to see a dropped LIMIT.
+  ['auto_explain.log_min_duration', '0'],
+  ['auto_explain.log_analyze', 'on'],
+  // Timings are noise in a golden and cost real overhead to collect.
+  ['auto_explain.log_timing', 'off'],
+  // Text, not JSON: measured at 7 journal entries per statement against 24 for
+  // JSON, and journald's budget is the binding constraint on this whole design.
+  ['auto_explain.log_format', `'text'`],
+  ['auto_explain.log_nested_statements', 'on'],
+  ['auto_explain.log_parameter_max_length', '0'],
+];
+
+async function isSuperuser(t: DbTarget, database?: string): Promise<boolean> {
+  return withClient(
+    t,
+    async c => {
+      const r = await c.query<{ super: string }>(`SELECT current_setting('is_superuser') AS super`);
+      return r.rows[0]?.super === 'on';
+    },
+    database,
+  );
+}
+
+/**
+ * Set `log_line_prefix` once, server-wide, and leave it.
+ *
+ * It is `PGC_SIGHUP`, so `ALTER DATABASE … SET log_line_prefix` fails outright
+ * with `ERROR: parameter "log_line_prefix" cannot be changed now`. Server-wide
+ * or nothing.
+ *
+ * It is deliberately **not restored** afterwards. Set-and-restore-per-run races
+ * anything else talking to the same server: one run's restore lands while
+ * another still needs the prefix, and the second run's trace silently loses its
+ * `db=`/`vxid=` fields — which reads as an empty window, not as an error.
+ *
+ * Note this is *not* a jest-worker race: `jest.config.js` pins `maxWorkers: 1`,
+ * so the two scenario files never overlap. The race is between concurrent jest
+ * *invocations* — two terminals, a watch mode alongside a manual run, an editor
+ * runner — all of which share one Postgres.
+ *
+ * It is a formatting-only change to a development container, so the cost of
+ * leaving it is a differently-shaped log line and a line in
+ * `postgresql.auto.conf`. Both are documented in
+ * `docs/development/local-setup.md`.
+ */
+export async function ensureLogLinePrefix(t: DbTarget): Promise<{ changed: boolean }> {
+  const current = await withClient(
+    t,
+    async c => (await c.query<{ p: string }>(`SELECT current_setting('log_line_prefix') AS p`)).rows[0]?.p ?? '',
+    'postgres',
+  );
+  if (current === REQUIRED_LOG_LINE_PREFIX) return { changed: false };
+
+  if (!(await isSuperuser(t, 'postgres'))) {
+    throw new Error(
+      `SQL trace capture needs log_line_prefix = ${JSON.stringify(REQUIRED_LOG_LINE_PREFIX)} but it is ` +
+        `${JSON.stringify(current)}, and role "${t.user}" is not a superuser so it cannot be changed.\n` +
+        `Either grant superuser locally, or set it in postgresql.conf and reload:\n` +
+        `    log_line_prefix = '${REQUIRED_LOG_LINE_PREFIX}'`,
+    );
+  }
+
+  await withClient(
+    t,
+    async c => {
+      // ALTER SYSTEM takes no bind parameters. The value is a module constant,
+      // never caller input.
+      await c.query(`ALTER SYSTEM SET log_line_prefix = '${REQUIRED_LOG_LINE_PREFIX.replace(/'/g, "''")}'`);
+      await c.query(`SELECT pg_reload_conf()`);
+    },
+    'postgres',
+  );
+
+  // A reload is asynchronous. Bounded, because an unbounded wait on a config
+  // that will never arrive is the failure mode that looks like a hang.
+  for (let i = 0; i < 20; i++) {
+    const now = await withClient(
+      t,
+      async c => (await c.query<{ p: string }>(`SELECT current_setting('log_line_prefix') AS p`)).rows[0]?.p ?? '',
+      'postgres',
+    );
+    if (now === REQUIRED_LOG_LINE_PREFIX) return { changed: true };
+    await new Promise(r => setTimeout(r, 100));
+  }
+  throw new Error(
+    `log_line_prefix did not take effect within 2s after ALTER SYSTEM + pg_reload_conf(). ` +
+      `Something else may be managing postgresql.auto.conf.`,
+  );
+}
+
+/**
+ * Turn on statement + plan capture for one run database. Idempotent.
+ *
+ * Applies only to connections opened after it returns, which is the ordering
+ * constraint the driver has to respect: capture before `import('../../app')`,
+ * for the same reason `DATABASE_URL` has to be set before it.
+ */
+export async function enableStatementCapture(t: DbTarget, database: string): Promise<void> {
+  if (PRELOAD_LIBRARY.includes(',')) {
+    throw new Error(
+      `session_preload_libraries takes exactly one library. A comma-separated list is accepted by ` +
+        `ALTER DATABASE and then makes the database unreachable: every new connection dies with ` +
+        `FATAL: could not access file.`,
+    );
+  }
+
+  if (!(await isSuperuser(t, 'postgres'))) {
+    throw new Error(
+      `SQL trace capture needs a superuser: log_statement and session_preload_libraries are both ` +
+        `restricted settings, and role "${t.user}" is not one.\n` +
+        `Locally: ALTER ROLE "${t.user}" SUPERUSER;  — or run the scenario without a trace.`,
+    );
+  }
+
+  await withClient(
+    t,
+    async c => {
+      for (const [param, value] of CAPTURE_SETTINGS) {
+        // Values are literals from the constant above, never caller input;
+        // ALTER DATABASE … SET does not accept bind parameters.
+        await c.query(`ALTER DATABASE "${database}" SET ${param} = ${value}`);
+      }
+    },
+    'postgres',
+  );
+}
+
+/**
+ * A connection that is *not* muted, used only to write window sentinels.
+ *
+ * auto_explain is still turned off on it: a marker needs to appear in the log as
+ * one statement, and a plan for `SELECT 'literal'` is three more journal entries
+ * of nothing.
+ */
+export async function openMarkerClient(t: DbTarget, database: string): Promise<Client> {
+  const client = new Client(clientConfig(t, database, MARKER_APP));
+  await client.connect();
+  await client.query(`SET auto_explain.log_min_duration = -1`).catch(() => undefined);
+  return client;
+}
+
+/**
+ * Write one sentinel into the log.
+ *
+ * A trivial statement, because the point is the *position* of the line, not what
+ * it does. Wall-clock `--since` cannot delimit a window on its own: the
+ * container's clock is the podman VM's and drifts against the host's.
+ */
+export async function mark(client: Client, token: string): Promise<void> {
+  // Inlined rather than bound, because a bound parameter turns the marker into
+  // an extended-protocol `execute <unnamed>: SELECT $1` whose token is only in
+  // the (suppressed) parameter list — the marker would be unfindable in the log.
+  // Restricted to a token alphabet so that inlining cannot become injection.
+  if (!/^[a-z0-9_]+$/i.test(token)) throw new Error(`Trace marker token must be [A-Za-z0-9_]+, got: ${token}`);
+  await client.query(`SELECT '${MARK_PREFIX}${token}' AS mark`);
 }
 
 // ============================================================================

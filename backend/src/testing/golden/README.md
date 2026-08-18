@@ -19,7 +19,7 @@ npx tsx src/testing/golden/cli.ts list
 npm run test --workspace=backend -- golden
 
 # 4. re-record (never in bulk — see below)
-GOLDEN_UPDATE=1 npm run test --workspace=backend -- session-read.golden
+GOLDEN_UPDATE=session-read npm run test --workspace=backend -- session-read.golden
 ```
 
 ## How it is put together
@@ -31,9 +31,10 @@ GOLDEN_UPDATE=1 npm run test --workspace=backend -- session-read.golden
 | `snapshot.ts` | Scoped, PK-ordered table snapshots and a row-level diff. |
 | `driver.ts` | supertest against the real `app`, with before/after snapshots. |
 | `normalize.ts` | Structural id labels; fresh/carried timestamp normalization. |
+| `trace.ts` | Parses Postgres's own statement log into a per-step SQL trace. |
 | `runner.ts` | Record/verify against `__golden__/*.json`. |
 
-Five decisions carry the design:
+Six decisions carry the design:
 
 **The oracle never queries through Prisma.** If snapshots went through the
 implementation under test, a Prisma bug would be invisible — both the recording
@@ -62,6 +63,12 @@ rank where `<ts:fresh>` was expected.
 first appearance would make a swapped-user defect byte-identical, which is a
 false pass on exactly the privacy-routing bug this product cannot afford. Any
 cuid-shaped token that does not resolve fails the run.
+
+**Each step also records what it asked of Postgres.** HTTP diffing is
+structurally blind to cost and to atomicity — two mutations were measured
+escaping it entirely (below). A step's trace comes from Postgres's own statement
+log, so it needs no code in the application under test and will survive Prisma
+being deleted.
 
 ## Scenarios
 
@@ -105,7 +112,8 @@ are unorderable noise, the fixture's lattice is exact. What that gives up is
 equality between any two fields — `revealedAt == deliveredAt` is meaningful and
 `decidedAt == createdAt` is a coincidence, and at millisecond resolution they
 are indistinguishable. "These columns were written by one statement" belongs to
-the statement-log oracle instead.
+the SQL trace instead, which now exists and sees the transaction envelope
+directly.
 
 **`changesAtResponse` is a race whenever writes outlive the response.**
 `consentToShare` fires the reconciler without awaiting it, and the same endpoint
@@ -138,32 +146,240 @@ And against the write path (`empathy-reveal`, the Stage 2 mutual reveal):
 | Route the reveal commentary to the guesser instead of the subject | **caught** | `<user:ada>` where `<user:bob>` was expected — and the scenario's own routing assertion *passed*, because each partner still received exactly one message. Only the golden's content-to-recipient pairing saw it. |
 | Move the reveal write outside its Serializable transaction | passed | **real blind spot** — same class as the dropped `take` |
 
-The escaped mutation is worth stating plainly: moving the `updateMany` out of
-the transaction writes identical rows, so the settled snapshot, both HTTP bodies
-and every assertion here are unchanged. What differs is the transaction envelope
-and the TOCTOU race it exists to prevent — visible only to the statement-log
-oracle (`work-a39h.7`). Until that exists, this harness is an oracle for
-**behaviour**, not for **cost** and not for **atomicity**.
+Both blind spots are now covered by the SQL trace (below), confirmed by a
+separate mutation-gate pass: all five mutations above go red against it, and two
+further ones written for that gate — removing a redundant `session.findFirst`,
+and turning a `findMany({ id: { in: … } })` into a per-id loop — produced diffs
+confined entirely to `trace.*`, with no HTTP body and no row movement at all.
+
+Both escaped mutations changed no row and no response byte. Removing
+`take: limit + 1` fetches every row and the controller slices to the same page,
+so `hasMore` computes identically; moving the `updateMany` out of its
+transaction writes the same rows in the same order. What changes in the first is
+how many rows Postgres read, and in the second the transaction envelope and the
+TOCTOU race it exists to prevent. That is the whole class of query-efficiency
+and atomicity regression — an N+1, a lost `LIMIT`, a join replaced by a loop, a
+silently downgraded isolation level — and **HTTP-level diffing cannot see any of
+it**.
 
 Repeatability: 5 consecutive runs across 3 timezones, all byte-identical, plus 7
-consecutive green runs of both scenarios after the fresh/carried change.
+consecutive green runs of both scenarios after the fresh/carried change. The
+trace added 48 recorded runs for the variance measurement below, then 5
+consecutive verify runs plus `TZ=UTC` and `TZ=Pacific/Chatham`.
 
-### The blind spot the mutations exposed
+## The SQL trace (`trace.ts`)
 
-Removing `take: limit + 1` does not change any HTTP response. The controller
-already does `messages.slice(0, limit)`, so dropping the database limit fetches
-all rows and slices to the same page; `hasMore` computes identically. Only the
-number of rows read from Postgres changes.
+Every step records what it asked of Postgres, read back from Postgres's own log.
+No application code is involved, which is the point: it has to keep working
+after Prisma is gone.
 
-That is the whole class of query-efficiency regression — an N+1, a lost `LIMIT`,
-a join replaced by a loop — and **HTTP-level diffing cannot see any of it**. On a
-long session it is a production incident that every assertion here would pass.
+**How the capture works.** `ALTER DATABASE <runDb> SET log_statement='all'`, plus
+auto_explain loaded through `session_preload_libraries` for `Actual Rows` per
+plan node. Both are per-database, need no server restart, apply only to
+connections opened afterwards, and die with `DROP DATABASE`. The log is read
+back with `podman logs`. One setting cannot be per-database — `log_line_prefix`
+is `PGC_SIGHUP` — so it is set once server-wide and left; see
+`docs/development/local-setup.md`.
 
-The fix is the second oracle in the plan: compare PostgreSQL's own statement log
-per step (counts in bands, transaction envelope, backend PID identity), which is
-implementation-independent and needs no code in either implementation. Tracked as
-part of `work-a39h.2`; it is not built yet, and until it is, this harness is an
-oracle for **behaviour** and not for **cost**.
+`pg_stat_statements` was ruled out and should not be revisited.
+`shared_preload_libraries` is empty on this container and the setting is
+postmaster-context, so it needs a restart of an always-on service; `LOAD` and
+`CREATE EXTENSION` both *succeed* and then every function errors, which is a
+trap that looks like it works. It is also structurally weaker: an aggregate keyed
+by normalized query text has no ordering, no backend identity and no transaction
+grouping, so it cannot answer "did these two statements run in one transaction".
+
+**What a step records.** Statement and transaction counts, kinds, relations
+touched, rows read per relation, plan node types, and — grouped by virtual
+transaction id — the transaction envelope with its isolation level. Identical
+transactions are grouped with an occurrence count, so a redundant query removed
+reads as `occurrences: 13 -> 12` rather than shifting a hundred array positions.
+
+**What it never records: SQL text, bind values, durations, costs, pids, vxids.**
+The privacy half is not theoretical. `log_parameter_max_length=0` suppresses
+`DETAIL: parameters:` and `auto_explain.log_parameter_max_length=0` suppresses
+`Query Parameters:` — the second was found only by capturing and reading the
+output, because setting the first alone still emitted
+`Query Parameters: $1 = 'nope'`. And even with both at 0, Postgres inlines bind
+values into plan quals: a real capture produced
+`Filter: ("forUserId" = 'u1'::text)`. So the rule is not "filter the text", it is
+that a traced statement has no text-shaped field at all — kind, protocol,
+relations, counts and node types, with nowhere for a value to land. The parser
+also discards `DETAIL: parameters:` records outright, as a second layer.
+
+### What it makes visible
+
+| | recorded |
+|---|---|
+| dropped `take: limit + 1` | `messages page of 5` reads `Message: 6`; unpaginated reads 13. `topRows` moves with it, and the `Limit` node disappears — three independent signals for one mutation. |
+| reveal moved out of its `$transaction` | `consent as bob` records exactly one shape with `isolation: SERIALIZABLE`, `statementCount: 5`, `BEGIN / SET_TX / SELECT EmpathyAttempt / UPDATE EmpathyAttempt / COMMIT`. Moving the write out splits it into two vxid groups and drops the isolation level. |
+
+"Has a `BEGIN`" is **not** a discriminator — Prisma wraps a bare `updateMany` in
+its own implicit BEGIN/COMMIT, so the mutated code still has one. Grouping is
+always by vxid.
+
+### Reading a trace diff during the migration
+
+The predictable way this oracle fails is not a missed regression. It is the first
+hand-written-SQL PR turning every `trace.*` field red at once, and someone
+re-recording the lot under deadline. Some of what a trace pins is a behaviour
+contract the migration must preserve; some of it is Prisma-shaped bookkeeping the
+migration will legitimately change. Know which before you touch a golden.
+
+| Field | | What a change means |
+|---|---|---|
+| transaction grouping (`transactions`, `statementCount`, which statements share a shape) | **contract** | Work moved into or out of a transaction. This is the atomicity guarantee; a change here is a defect until argued otherwise. |
+| `isolation` | **contract** | A Serializable block was lost or downgraded. Never expected churn — the parser understands every spelling, so a faithful reimplementation records the same level however it opens the transaction. |
+| `rowsRead`, `topRows` | **contract** | The query reads a different number of rows. This is the whole cost channel. |
+| `relations` | **contract** | Different tables touched — a join dropped, a lookup added. |
+| `planNodes` | **mostly contract** | A vanished `Limit` is the dropped-`take` signal. But an equivalent query can legitimately plan differently (`Bitmap Heap Scan` vs `Index Scan`) at identical row counts; check `rowsRead` alongside it before calling it a regression. |
+| `byKind`, `statements` | **incidental** | Inflated by Prisma's own bookkeeping: it wraps single writes in `BEGIN`/`COMMIT` and emits a standalone `SET TRANSACTION`. A hand-written equivalent that opens `BEGIN ISOLATION LEVEL SERIALIZABLE` legitimately records two fewer statements for the same behaviour. |
+| `connections` | **incidental** | Pool shape. Already unasserted where background work makes it a race. |
+| `protocol` | **security tripwire** | See below. |
+
+**On `protocol`: keep it.** The case for dropping it is real — which wire protocol
+a driver chose is invisible to a user and irrelevant to correctness, and it will
+churn, because `node-postgres` uses the simple protocol for a query with no bind
+parameters where Prisma always used a named prepared statement.
+
+It stays because that churn *is* the signal. `protocol: 'extended'` means the
+client sent bind parameters; `'simple'` means it did not. On a data query
+carrying user content, "no bind parameters" means the values were interpolated
+into the SQL string — and this is a product whose entire thesis is a privacy
+boundary, being migrated to hand-written SQL by people under deadline. Nothing
+else in this artefact can see that, and no HTTP assertion ever will.
+
+So `protocol` moving is not noise to absorb, it is one question to answer: was a
+constant inlined (fine, re-record and say so), or was a *value* inlined (stop).
+It is the cheapest SQL-injection tripwire available here, and it costs one enum
+per statement.
+
+### Four things measurement forced
+
+**The harness must mute its own connections.** `empathy-reveal` snapshots the
+whole database (~68 SELECTs) and `settle()` polls up to 50 times per step, so an
+unmuted harness emits thousands of statements. Measured with capture on:
+journald rate-limited (`Suppressed 35097 messages`), 3000 statements arrived as
+1562, and the end marker was lost. Filtering by `application_name` afterwards
+does not help — the journald budget is spent before anything is filtered. So
+`withClient` self-mutes immediately after connect.
+
+**Plan shape had to be pinned with `plan_cache_mode='force_custom_plan'`.**
+Prisma issues *named* prepared statements, and Postgres switches a named
+statement from a custom to a generic plan on its sixth execution. Prisma's
+`findMany` emits `… WHERE "id" IN ($1) OFFSET $2` with `$2 = 0`; a custom plan
+knows the offset is zero and elides the `Limit` node, a generic plan cannot.
+Which pooled connection serves a request decides which side of the sixth
+execution it lands on, so the same query recorded `["Limit","Index Scan"]` in one
+run and `["Index Scan"]` in the next — six runs produced four distinct traces for
+one step, with identical rows read either way. Forcing custom plans removes the
+coin flip at its source instead of banding the artefact away, which is what keeps
+"the `Limit` node disappeared" usable as a real signal.
+
+**Connection attribution had to be dropped, and it was the plan.** `<conn:N>` by
+order of first appearance was measured unstable on every step where the pool
+opened more than one connection (4 distinct results in 6 runs on `session state`,
+6 in 6 on `consent as bob`); the identical data with the label removed was stable
+6/6 everywhere. Which pool slot served a transaction is scheduling, not
+behaviour. The *count* of distinct connections is still recorded. The vxid
+grouping — the part that answers "did these run together" — is kept in full.
+
+**A quantity is asserted exactly, or refused outright. Never fitted to a range.**
+48 recorded runs of both scenarios say what moves, and it is two things, both on
+`consent as bob`, where the request and the fire-and-forget reveal overlap:
+
+| | distribution over 48 runs |
+|---|---|
+| `connections` | 4 ×45, 3 ×3 — **and 5 once, off-sample** |
+| `rowsRead.Message` (rollup) | 34 ×46, 35 ×2 |
+| one `Message`-only `Index Scan` | 0 rows ×46, 1 row ×2 |
+
+Everything else was identical 48/48: statement count (139), transaction count
+(129), kinds, isolation, every plan node type, and every other relation on that
+step — `EmpathyAttempt` 23, `RelationshipMember` 35, `Relationship` 21, `Session`
+21, `User` 19, `StageProgress` 8, `UserVessel` 6, `EmpathyDraft` 2, and three
+zeroes. All 6 steps of `session-read` and the other 7 of `empathy-reveal` were
+stable 48/48 with nothing declared at all.
+
+Both moving quantities are **refused**, not ranged, and the history is the
+argument. An interim version declared `connections: [3, 4]` from the first 18
+runs. The mutation gate then produced `5` on a clean, unmutated tree — a value 48
+runs never showed — and `connections` also moved under two unrelated mutations,
+so it cannot separate "the pool scheduled differently" from "a regression added a
+query". A range that fails on a clean tree trains a reader to dismiss exactly the
+failures this harness exists to raise, and a reader who dismisses them eventually
+re-records the golden to make the red go away.
+
+`rowsRead.Message` looked far tighter — 46 of 48 at one value, moving by a single
+row — but it is the same kind of claim. The raced statement is a `findMany` with
+no `LIMIT`, so nothing bounds it at one row, and the reveal inserts *two* Message
+rows in separate autocommit transactions. `34-35` was a property of the sample
+exactly as `3-4` was, so it went too.
+
+`EmpathyAttempt` is the control that shows the line is real and not superstition:
+the reveal writes it too, and its read counts stayed at 23 across all 48 runs.
+
+The reason is narrower than it first looks, and an earlier version of this
+section got it wrong. It said "INSERT/DELETE moves row counts; UPDATE cannot",
+which is false: a read predicated on a mutated column moves with it, and
+`WHERE status = 'READY'` raced against this very reveal's `READY → REVEALED` flip
+returns 2 rows before and 0 after without a single row being inserted or deleted.
+This app is full of status-filtered reads, so that rule would have been misapplied.
+
+**The real condition: a read count is assertable under background work only if
+the read's predicate closure is invariant under those writes** — the set of rows
+it matches cannot change, whether by rows appearing, disappearing, or starting or
+stopping matching. That is a per-query argument, not a per-statement-kind one.
+Here the `EmpathyAttempt` reads predicate on immutable identifiers, so the
+reveal's `UPDATE` cannot move them; the `Message` reads predicate on a session and
+stage the reveal `INSERT`s into, so they can.
+
+So the scenario declares `traceUnasserted` for `connections` and `Message` on that
+one step, and nothing else anywhere is coarsened. `connections` stays exact on
+every synchronous step, where it has never moved. `topRows` is suppressed only
+where the unasserted scan *is* the plan root — validated against 30 captures, the
+statement that flips is a bare `Index Scan`, while five `Limit -> Index Scan
+Backward` statements over the same relation are stable at 0 and keep their exact
+`topRows`, so a `Limit` that stopped limiting is visible even on the relation this
+step cannot count.
+
+Two earlier versions are recorded here because the corrections are the point. The
+first discarded the whole `rowsRead` map on any `asyncBoundary` step — far coarser
+than the evidence, on the only step carrying a write path. The second replaced
+that with fitted ranges, which failed on a clean tree. What survives both is the
+narrowing, not the fitting.
+
+**An empty or truncated window fails loudly.** Same lesson as `settled`, one
+layer down: a smaller trace is indistinguishable from the code having got
+cheaper. Each step is delimited by sentinel statements on a dedicated unmuted
+connection rather than by wall clock, because the container's clock is the podman
+VM's and drifts against the host's.
+
+**Truncation is detected by marker loss and by nothing else** — state that
+plainly, because an earlier version implied more. It also checked for journald's
+`Suppressed N messages` notice, and that check was dead code: journald emits the
+notice into the VM journal attributed to `user@501.service`, never into the
+container stream, so `podman logs` cannot contain it, and its
+`systemd-journald[…]:` line shape would be rejected by the record prefix anyway.
+Worse, the check copied matched text into `incompleteReason`, which is embedded
+in the artefact and written to a golden in record mode — a probe drove real
+user-shaped content into a golden through it. Both the check and its fabricated
+unit-test sample are gone, and `incompleteReason` is now a closed enum plus
+counts with a test pinning that it can never contain window content.
+
+What remains: a missing sentinel, a duplicated one, markers out of order, or zero
+statements from the app all set `complete: false`, and both scenarios assert on
+it. Rate limiting severe enough to drop statements will normally drop the end
+marker too, which *is* caught; a drop that spares both markers would pass. The
+mitigation that actually works is not detection, it is `withClient` self-muting so
+the budget is never approached. Every wait is bounded (10 reads, 400ms apart).
+
+**Nothing may fall outside every window.** `settle()` watches rows, so a trailing
+read that touches none can outlive it and either contaminate the next step's
+window or land between two and be seen by neither. Both scenarios assert that
+zero app-under-test statements fall outside all windows. Measured at zero today —
+this is prevention, and it is how an undeclared fire-and-forget path added later
+announces itself.
 
 ## Known gaps — read this before trusting a green run
 
@@ -201,6 +417,19 @@ mean they are covered:
 - **Response headers and external side effects are never compared.** A migration
   that drops an Ably publish or a push notification while writing the same rows
   passes everything here.
+- **The SQL trace is podman-shaped and local-only.** `LogReader` is an interface
+  so CI can swap the source, but only `podmanLogReader` exists, and capture needs
+  a superuser. A scenario that does not opt in records no trace at all, and
+  nothing fails if a future scenario forgets to.
+- **A trace cannot attribute a statement to a call site.** It has no SQL text by
+  design, so `SELECT on Message reading 6 rows` is as specific as it gets. When
+  two call sites issue structurally identical queries, the trace cannot tell you
+  which one regressed — only that one more or one fewer happened.
+- **The one step with background writes cannot assert `Message` row counts or its
+  connection count.** A cost regression confined to reads of `Message` during the
+  reveal would pass. `consent as bob` is the only such step today, and it is also
+  the one carrying the Serializable envelope this oracle most wants to watch. Its
+  other eleven relations are still asserted exactly.
 
 ## Conventions
 

@@ -61,6 +61,69 @@ already committed in `backend/.env.example` and `e2e/.env.test` work unchanged.
 
 Day-to-day: `podman machine start && podman start mwf-postgres`.
 
+### The golden harness changes one server-wide setting
+
+The SQL-trace oracle in `backend/src/testing/golden` reads Postgres's own statement log, so it needs
+the log lines to carry the database, application, virtual xid and xid. `log_line_prefix` is
+`PGC_SIGHUP` — it cannot be set per-database — so the harness sets it once, server-wide:
+
+```
+log_line_prefix = '%m [%p] db=%d,app=%a,vxid=%v,xid=%x '
+```
+
+It does this with `ALTER SYSTEM` + `pg_reload_conf()`, which writes to
+`/var/lib/postgresql/data/postgresql.auto.conf` inside the container and therefore **persists across
+container restarts**. It is idempotent and is deliberately **not** restored afterwards: restoring it
+per run races other test workers, and one worker's restore landing mid-run turns another's trace into
+a silently empty window. It is a formatting-only change to a development container.
+
+To put it back:
+
+```bash
+podman exec mwf-postgres psql -U mwf_user -d postgres \
+  -c "ALTER SYSTEM RESET log_line_prefix;" -c "SELECT pg_reload_conf();"
+```
+
+Everything else the oracle needs — `log_statement`, `auto_explain` via `session_preload_libraries`,
+`plan_cache_mode`, and the two `log_parameter_max_length` settings — is set per-database on the
+disposable `mwf_run_*` clone and vanishes with `DROP DATABASE`. All of it requires a superuser;
+`mwf_user` is one in this container, and the harness fails with an explicit message rather than a
+confusing error if it is not.
+
+#### The captured statement log contains real identifiers, and it persists
+
+**`log_parameter_max_length=0` and `auto_explain.log_parameter_max_length=0` do not keep bind values
+out of the log.** They suppress the two *parameter list* channels — `DETAIL: parameters:` and
+`Query Parameters:` — and nothing else. PostgreSQL still inlines bind values into plan predicates:
+
+```
+Index Cond: (id = 'cmsqt19i200079kbfuv75bxh8'::text)
+```
+
+Measured on one hour of golden-suite runs: 3,645 such lines. These are ids rather than message
+bodies, but they are real identifiers from a real database, so treat the capture as sensitive.
+
+`plan_cache_mode='force_custom_plan'`, which the harness sets so plan shape is deterministic, is what
+makes this *universal*: a custom plan is built against the actual parameter values every time, so
+every predicate is inlined. Anyone revisiting that setting is also revisiting this, in both
+directions — turning it off reduces inlining but reintroduces the plan-shape nondeterminism it was
+added to remove.
+
+The log lives in the podman VM's journal, not in the container, and **it is not purged when the run
+database is dropped or when the container restarts**. Measured: 305 MB of journal holding 70,889
+statement lines across two days of development.
+
+To inspect or purge it:
+
+```bash
+podman machine ssh 'journalctl --disk-usage'
+podman machine ssh 'sudo journalctl --rotate && sudo journalctl --vacuum-time=1s'   # purge everything
+```
+
+The golden artefacts themselves are clean by construction — a recorded trace has no text-shaped
+field at all, only kinds, relation names, counts and plan node types — so nothing here reaches
+`__golden__/*.json`. This is about the raw journal on the development machine.
+
 ### Alternative: devenv (what the README assumes)
 
 `devenv up -d` provisions the same three databases plus pgvector via Nix. Costs a multi-GB Nix
