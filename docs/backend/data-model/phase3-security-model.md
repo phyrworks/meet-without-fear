@@ -85,6 +85,65 @@ document deliberately makes no recommendation on either: **whether to launch enc
 
 ## Revision history
 
+**Draft 5 (2026-08-18)** responds to a fourth adversarial pass, which **approved the architecture**
+and found eight specification items to close before the DDL that depends on them. The role split,
+derived inventory, vessel-derived predicates, column grants, immutability triggers, tiering and
+threat model all survived untouched. What was broken: two objects that were specified rather than
+built, and one CI query.
+
+### The three failure classes, and the audit each one implies
+
+Each review pass found a different *class*. Writing all three down together is more useful than any
+individual fix, because they are what a future contributor needs to check for.
+
+| Draft | Class | The audit that catches it |
+|---|---|---|
+| 2 | **Read-narrowing without write-pinning.** A read policy that trusts a column while the write side leaves it open is not a narrowing, it is a redirection. | For every column a SELECT policy reads, ask what pins it on INSERT and on UPDATE. Assertion 7. |
+| 3 | **Pins that stop the product.** A constraint that correctly blocks an attacker and also blocks a real call site is not shippable. | For every pin, enumerate the legitimate writers *by reading the whole calling function*, not the one line that prompted the pin. |
+| **5** | **Effective-principal confusion.** The `current_user` inside a privileged object is not who the surrounding control assumed. | **For every privileged object, ask "who is `current_user` on this line?" — including the principals Postgres supplies.** |
+
+Three independent instances of the draft-5 class appeared at once, and **none of them is visible to
+any assertion in the catalogue**:
+
+- A `SECURITY DEFINER` function's `current_user` is its **owner**, so an owner-owned transition
+  function under `FORCE` sees nothing, and a job-owned one under branch A sees nothing either.
+- A foreign key's internal `ON DELETE SET NULL` fires triggers as the **table owner** — not the
+  deleting role, not `mwf_job`. **[V]** `DELETE FROM "User"` produced
+  `ERROR: senderId immutable (current_user=p5_owner)`.
+- **[V]** Permissive policies are inherited through **role membership**, unlike `BYPASSRLS`. A
+  single `GRANT mwf_job TO mwf_app` took an outsider identity from 1 row to **2 of 2** — a total
+  boundary collapse from one grant that looks like a convenience.
+
+**The rule, stated for the record:** *every privileged object must state its owner, and every
+exemption must enumerate the principals that can reach it, including the ones Postgres supplies.*
+
+### A premise I over-generalised
+
+Draft 4 wrote *"RLS cannot let you write a row it will not let you read"* and promoted it to a law.
+**It is false as stated.** **[V]** A blind constant write is not filtered:
+`UPDATE t SET note='OVERWRITTEN BY ADA'` — no `WHERE`, no column read — returned `UPDATE 2` and
+overwrote the hidden row. For `INSERT` it is false by construction, since `WITH CHECK` never
+consults the SELECT policy.
+
+**Correct wording: *a write that reads a column reaches only rows the SELECT policy admits.***
+**[V]** The same table, `UPDATE … WHERE id = 2`, left the hidden row untouched.
+
+The §4.3 mechanism choice is unaffected — all six call sites are `WHERE`-qualified — but the law
+was wrong and is corrected wherever it appeared.
+
+### Draft-5 items
+
+| # | Item | Verified? | Response |
+|---|---|---|---|
+| 1 | `app.anonymize_user_in_session` has **no authorization check**; an outsider drove it | reported, and the shape is undeniable | §7.12a: own membership check, `p_display_name` dropped, `EXECUTE` narrowed |
+| 2 | Both new functions must **name an owner**; §1 T4 wrongly calls the transition function branch-independent | **[V]** owner-owned + `FORCE` ⇒ inert | §4.3 and §1 T4 corrected |
+| 3 | The trigger exemption must cover the **FK referential action** | **[V]** fires as the table owner | Catalogue §4 |
+| 4 | The **`READY` path** re-opens disclosure one level up | reported; mechanism confirmed in `state.ts` | §4.3: disclosing set widened to the *reveal-reachable* closure |
+| 5 | Transition function has a **TOCTOU** and is not idempotent | reported | §4.3: `FOR UPDATE` + status-guarded write + no-op on unchanged status |
+| 6 | Assertion 7 is **wrong three ways** and passes an M1 | **[V]** all three, and the fix verified against the evasion | Catalogue §7.1 rewritten and re-tested |
+| 7 | `services/account-deletion.ts` is a **second** anonymization path, session-less | **[C]** confirmed, incl. `GlobalLibraryItem` | §7.12a; two signatures, not one |
+| 8 | Two new structural assertions | **[V]** role-membership collapse reproduced | Catalogue §7, assertions 9 and 10 |
+
 **Draft 4 (2026-08-18)** responds to a third adversarial pass. Pass 3 confirmed the confidentiality
 analysis is sound — no reviewer has found a way for a member to read hidden partner content through
 the draft-3 policy set — and found that **the design was correct and unshippable**: three of its
@@ -932,8 +991,11 @@ measured, and it fails in three separate ways [V]:
 | `960` `READY → REFINING` on the partner's row | **silently blocked**, `UPDATE 0` |
 | Ada rewrites Bob's `content` | **succeeds** — a session-wide UPDATE policy hands over the partner's empathy text |
 
-So the read narrowing of §4.3 and any policy-based write widening are **mutually exclusive by
-construction**: RLS cannot let you write a row it will not let you read.
+So for these six call sites the read narrowing of §4.3 and any policy-based write widening are
+mutually exclusive. The precise rule — draft 4 over-generalised it and the corrected form is in the
+revision history — is: **a write that reads a column reaches only rows the SELECT policy admits.**
+All six sites are `WHERE`-qualified, so all six are caught. A *blind constant* write is not
+filtered [V], and `INSERT` never consults the SELECT policy at all.
 
 **The mechanism that works is a `SECURITY DEFINER` transition function**, with `status` not
 column-granted to `mwf_app` at all and the row `UPDATE` policy left author-only:
@@ -946,36 +1008,77 @@ CREATE POLICY "EmpathyAttempt_update" ON "EmpathyAttempt" FOR UPDATE TO mwf_app
 REVOKE UPDATE ON "EmpathyAttempt" FROM mwf_app;
 GRANT  UPDATE (content, "revisionCount") ON "EmpathyAttempt" TO mwf_app;
 
--- Every status transition, author or not, goes through here.
+-- OWNER MATTERS AND MUST BE STATED. A SECURITY DEFINER function runs as its
+-- owner, so:
+--   * owned by the table owner + FORCE ROW LEVEL SECURITY  -> the body sees zero
+--     rows and every call raises 'no such attempt' [V]
+--   * owned by mwf_job under branch A (no BYPASSRLS, no permissive policy) -> the
+--     same, silently
+-- So: owned by mwf_job, and under branch A mwf_job additionally needs
+-- USING (true) policies on EmpathyAttempt, Session and RelationshipMember.
+-- This function is therefore BRANCH-DEPENDENT (§1 T4).
 CREATE FUNCTION app.empathy_set_status(p_id text, p_new "EmpathyStatus") RETURNS void
   LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public, app AS $$
 DECLARE r record;
-        disclosing "EmpathyStatus"[] := ARRAY['REVEALED','VALIDATED']::"EmpathyStatus"[];
+        -- NOT the SELECT predicate's set. This is the set of states the PRODUCT
+        -- converts into disclosure. checkAndRevealBothIfReady reveals every READY
+        -- attempt once both sides are READY/VALIDATED, and it runs outside this
+        -- function -- so letting a non-author write READY is letting them reveal,
+        -- one step later. Same shape for AWAITING_SHARING, which the sharing flow
+        -- can carry into a reveal. Matching this set to the read predicate was
+        -- exactly the sin of section 4.3, one level up.
+        reveal_reachable "EmpathyStatus"[] :=
+          ARRAY['REVEALED','VALIDATED','READY','AWAITING_SHARING']::"EmpathyStatus"[];
 BEGIN
-  SELECT * INTO r FROM public."EmpathyAttempt" WHERE id = p_id;
+  -- FOR UPDATE, not a bare SELECT. Without it: a concurrent REVEALED -> HELD
+  -- committing underneath let a non-author read REVEALED, pass the guard, block
+  -- on the lock, and write VALIDATED onto a row whose committed prior state was
+  -- HELD. The guard has to hold over the write, not merely precede it.
+  SELECT * INTO r FROM public."EmpathyAttempt" WHERE id = p_id FOR UPDATE;
   IF NOT FOUND THEN RAISE EXCEPTION 'no such attempt' USING ERRCODE='42501'; END IF;
 
-  -- the caller must be in the attempt's session
+  -- Idempotent. The callers include retried fire-and-forget paths, and two
+  -- identical calls previously moved statusVersion 4 -> 6 with no state change.
+  IF r.status IS NOT DISTINCT FROM p_new THEN RETURN; END IF;
+
   IF NOT EXISTS (SELECT 1 FROM public."Session" s
                  JOIN public."RelationshipMember" rm ON rm."relationshipId" = s."relationshipId"
                  WHERE s.id = r."sessionId" AND rm."userId" = app.current_user_id()) THEN
     RAISE EXCEPTION 'not a session member' USING ERRCODE='42501';
   END IF;
 
-  -- THE RULE: a non-author may never move a row INTO a disclosing state.
-  -- Everything else is legal, because it either narrows visibility or moves
-  -- between two states that are both already non-disclosing.
+  -- THE RULE: a non-author may never move a row into a state the reveal path can
+  -- turn into disclosure. Everything else narrows visibility or moves between two
+  -- states that are both already reveal-unreachable.
   IF r."sourceUserId" IS DISTINCT FROM app.current_user_id()
-     AND p_new = ANY(disclosing) AND NOT (r.status = ANY(disclosing)) THEN
-    RAISE EXCEPTION 'non-author may not disclose an EmpathyAttempt (% -> %)', r.status, p_new
-      USING ERRCODE = '42501';
+     AND p_new = ANY(reveal_reachable) AND NOT (r.status = ANY(reveal_reachable)) THEN
+    RAISE EXCEPTION 'non-author may not advance an EmpathyAttempt toward disclosure (% -> %)',
+      r.status, p_new USING ERRCODE = '42501';
   END IF;
 
+  -- Status-guarded write: if anything moved between the lock and here, fail loudly
+  -- rather than clobbering. Belt and braces over FOR UPDATE.
   UPDATE public."EmpathyAttempt"
      SET status = p_new, "statusVersion" = "statusVersion" + 1
-   WHERE id = p_id;
+   WHERE id = p_id AND status = r.status;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'concurrent status change on % (expected %)', p_id, r.status
+      USING ERRCODE = '40001';
+  END IF;
 END $$;
+ALTER FUNCTION app.empathy_set_status(text, "EmpathyStatus") OWNER TO mwf_job;
+REVOKE EXECUTE ON FUNCTION app.empathy_set_status(text, "EmpathyStatus") FROM PUBLIC;
+GRANT  EXECUTE ON FUNCTION app.empathy_set_status(text, "EmpathyStatus") TO mwf_app;
 ```
+
+**The `READY` widening is the item to re-check first.** **[R]** Widening the set from
+`{REVEALED, VALIDATED}` to include `READY` and `AWAITING_SHARING` is the right *shape* — it closes
+the reported escalation, where Ada sets Bob's row `READY`, sets her own, and
+`checkAndRevealBothIfReady` does the disclosing for her — but it has **not** been re-run against
+the six call sites, and `768`'s `HELD → ANALYZING` and `960`'s `* → REFINING` are the ones to
+verify, since a guesser sitting in `READY` moving to `REFINING` is a *narrowing* and must stay
+legal. The alternative placement is to make `checkAndRevealBothIfReady` enforce the non-author rule
+itself; that is more precise and more code. **Decide with the D6 work, not before it.**
 
 **[V] Verified against ground truth** (row state read back as superuser after each attempt, not
 merely absence of error):
@@ -1050,25 +1153,50 @@ That settles the argument for (a): the application-side `select:` discipline is 
 fragile in principle, it has already failed twice in the file draft 2 held up as the model.
 `ReconcilerResult_select USING ("subjectId" = me)` makes both leaks return zero rows.
 
-##### The three ambiguous columns, classified
+##### The classification, completed — and two errors of mine corrected
 
-Draft 2 left `alignmentSummary`, `correctlyIdentified` and `rationale` unstated. Reading the
-consumer [C]:
+All 21 sites are now classified. **The leak surface is exactly three functions**, and 17 of the
+remaining 18 sites are correctly scoped. The codebase already shows the right discipline:
+`stream-turn-context.ts:527` carries a comment forbidding precisely these fields in the guesser's
+prompt.
 
-| Column | Where it goes | Classification |
+| # | Leak | Shape |
 |---|---|---|
-| `alignmentSummary` | Both directions are fed into `buildReconcilerSummaryPrompt` (`stage-prompts.ts:2253` via `state.ts:653`), which generates one **session-level** summary. Never returned verbatim. | **Analysis side — stays on `ReconcilerResult`.** It describes how well the guesser understood the subject, i.e. it is derived from the subject's private material. Its one cross-partner use is LLM synthesis inside a two-party path, which runs as `mwf_job` under D6 — so `subjectId = me` does not break it. |
-| `correctlyIdentified` | Produced at `analysis.ts:556`, re-read at `:410` inside a full-row map. **Never reaches a user.** | **Analysis side.** It enumerates the subject's actual feelings and needs. |
-| `rationale` | Produced at `analysis.ts:563`, re-read at `:421` inside a full-row map. **Never reaches a user.** | **Analysis side.** LLM reasoning that references the subject's material. |
+| 1 | `runReconcilerHandler` (`POST /reconciler/run`) | session-membership auth; returns **both** directions' results in full |
+| 2 | `getReconcilerStatusHandler` (`GET /sessions/:id/reconciler/status`) | same |
+| 3 | **`generateReconcilerSummary` (`GET /sessions/:id/reconciler/summary`)** | session-membership auth; feeds **both** directions' `alignmentSummary` verbatim into an LLM prompt and returns the synthesis to **either** partner |
 
-**None of the three moves to `ReconcilerGuidance`.** `ReconcilerGuidance` carries exactly the three
-columns the schema itself labels as containing no partner content, and nothing else. The test for
-membership of that table is the schema's own comment, not convenience.
+**Leak 3 was hiding behind an error of mine.** Draft 3 left `alignmentSummary` on `ReconcilerResult`
+on the grounds that its only cross-partner use was "LLM synthesis inside a two-party path, which
+runs as `mwf_job` under D6". **That privileged job identity does not exist.** There is no queue, no
+worker and no system identity touching the reconciler anywhere in `backend/src` — I conflated the
+*unbuilt* `mwf_job` with current behaviour and used a design artefact as evidence about production.
+`generateReconcilerSummary` is an ordinary authenticated HTTP handler.
 
-**[R]** The remaining 19 read sites still need classifying as guesser-facing, subject-facing, or
-reconciler-internal before (a) is written. That classification is a prerequisite, not a detail —
-and draft 2's undercount by nearly half is the argument for doing it exhaustively rather than by
-grep.
+Second correction: **`rationale` has no legitimate guesser audience at all** once leak 1 is fixed. I
+classified it as "never reaches a user", which was true only because leak 1 returns the whole row
+and I was reading the *intended* consumers rather than the actual ones.
+
+Also worth recording: `suggestedShareContent` and `suggestedShareReason` are **write-only in
+production** — generated and stored, never read back on any live path.
+
+Final column assignment:
+
+| Column | Table | Reason |
+|---|---|---|
+| `areaHint`, `guidanceType`, `promptSeed` | **`ReconcilerGuidance`** | the schema's own comment: *"Abstract guidance … no specific partner content"*, and `empathy-status.ts:89` selects exactly these three |
+| `alignmentSummary`, `correctlyIdentified`, `rationale`, `missedFeelings`, `misattributions`, `mostImportantGap`, `gapSummary`, `suggestedShareContent`, `suggestedShareReason`, `alignmentScore`, `gapSeverity`, `recommendedAction`, `sharingWouldHelp`, `suggestedShareFocus` | **`ReconcilerResult`** (subject-only) | all derived from the subject's private Stage 1 material |
+
+**Say this plainly: the table split does not fix leak 3.** Splitting the table makes
+`ReconcilerResult` unreadable by the guesser, which closes leaks 1 and 2 structurally. Leak 3 reads
+both rows *server-side* and returns a **synthesis**, so it survives any row policy — the handler
+would still read both subjects' rows under whatever identity it runs as, and the LLM output crosses
+the boundary in prose. **Leak 3 is behavioural and needs a behavioural fix:** either the summary is
+generated once under a privileged identity and delivered identically to both partners as shared
+content (which is arguably what it is meant to be), or it is generated per-recipient from only that
+recipient's own row. The database can bound it but cannot decide it.
+
+D8a is therefore specifiable now, with that caveat attached.
 
 ### 4.4 The recommendation
 
@@ -1541,6 +1669,22 @@ Six sites silently half-apply. Every one of them is a stage transition — the t
 whether a session can progress — so the failure mode is "the partner is stuck at Stage 3 and
 nobody knows why".
 
+**And two partner-*detection* failures, which are worse because they invert a boolean rather than
+losing a write.** `RelationshipMember`'s policy is `userId = app.current_user_id()`, so a read of a
+session's members returns **1 of 2** and any "find the other member" logic returns nothing:
+
+| Site | Code | Consequence |
+|---|---|---|
+| `session-deletion.ts` step 1 | reads members, then `if (!partner)` | **deletes the caller's own `RelationshipMember` row despite a partner existing** — a silent self-lockout from a live session |
+| `account-deletion.ts:77` | `members.find(m => m.userId !== userId)` then `if (partner)` | **partners are never notified** that an account was deleted; `partnersNotified` reports 0 and nothing errors |
+
+Both are `if (partner)` guards reading a list RLS has truncated to one element. Neither raises, and
+both produce a plausible-looking result. This is the same shape as the silent `UPDATE 0` and
+belongs in the same audit: **every `.find(m => m.userId !== …)` and every `if (!partner)` in the
+codebase must be re-checked against the `RelationshipMember` policy.** The fix for both is that
+partner resolution goes through a `SECURITY DEFINER` helper (`app.partner_user_id(sessionId)`),
+because "who is my partner" is a fact the caller is entitled to and the policy hides.
+
 ### 7.12a Anonymization is systematically incompatible with every pin — and it binds early
 
 Draft 2 noticed `session-deletion.ts:95` for `Message`, added a `mwf_job` trigger exemption, and
@@ -1572,22 +1716,80 @@ will look unrelated to it.
 
 **Resolution: anonymization becomes one privileged mechanism, not a set of per-pin exemptions.**
 
+**There is a second anonymization path, and draft 4 named neither its existence nor its shape.**
+**[C]** `services/account-deletion.ts`, reached in-request from `controllers/auth.ts:650`, also runs
+as `mwf_app` and writes:
+
+| Line | Write | Blocked by |
+|---|---|---|
+| `:92` | `GlobalLibraryItem.contributedBy → NULL` | **`GlobalLibraryItem` is `SELECT`-only for `mwf_app`** (catalogue §1.1) → `permission denied` at **W1** |
+| `:100`, `:104` | `ReconcilerResult.guesserName` / `subjectName` scrub | no `UPDATE` grant |
+| `:110` | `PreSessionMessage` delete | needs a DELETE policy |
+| `:160` | `User` delete | cascades; see D9 |
+
+**Its writes are session-less** — `GlobalLibraryItem` and the `ReconcilerResult` scrubs are keyed on
+`userId` across every session — so `app.anonymize_user_in_session(session, user, name)` cannot
+express them. **Two functions are needed, not one.**
+
 ```sql
--- Owned by mwf_job, so current_user inside the body is mwf_job and the existing
--- trigger exemptions already cover it. SECURITY DEFINER does NOT bypass triggers
--- (draft 2 got that wrong; catalogue §4) — it makes current_user predictable,
--- which is what the exemptions key on.
-CREATE FUNCTION app.anonymize_user_in_session(p_session_id text, p_user_id text,
-                                              p_display_name text)
+-- (1) Per-session anonymization  <- services/session-deletion.ts
+--
+-- OWNER: mwf_job. That is load-bearing twice over. SECURITY DEFINER does not
+-- bypass triggers (catalogue §4); it makes current_user predictable, and the
+-- trigger exemptions key on exactly that. Under branch A, mwf_job also needs
+-- USING (true) policies on every table touched here.
+--
+-- p_display_name is GONE. Both call sites passed the literal '[Deleted User]',
+-- and it was an attacker-controlled string landing in ReconcilerResult.subjectName,
+-- which the partner reads. The literal is now internal to the function.
+CREATE FUNCTION app.anonymize_user_in_session(p_session_id text, p_user_id text)
   RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public
-  AS $$ /* the six writes above, in one transaction, in one auditable place */ $$;
-ALTER FUNCTION app.anonymize_user_in_session(text,text,text) OWNER TO mwf_job;
+  AS $$
+BEGIN
+  -- ITS OWN AUTHORIZATION CHECK. "The handler keeps its check" is not an answer
+  -- when the handler runs as mwf_app and a backend authorization bug is the
+  -- dominant threat this design exists to stop (T1). Without this, an outsider
+  -- nulled another user's Message.senderId and EmpathyAttempt.sourceUserId --
+  -- and the victim then could not see their own attempt.
+  IF app.current_user_id() IS DISTINCT FROM p_user_id THEN
+    RAISE EXCEPTION 'may only anonymize yourself' USING ERRCODE = '42501';
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM public."Session" s
+                 JOIN public."RelationshipMember" rm ON rm."relationshipId" = s."relationshipId"
+                 WHERE s.id = p_session_id AND rm."userId" = p_user_id) THEN
+    RAISE EXCEPTION 'not a member of that session' USING ERRCODE = '42501';
+  END IF;
+  /* the six per-session writes, one transaction, one auditable place */
+END $$;
+ALTER FUNCTION app.anonymize_user_in_session(text, text) OWNER TO mwf_job;
+
+-- (2) Account-wide anonymization  <- services/account-deletion.ts
+--     Session-less by nature; same self-only check, no membership check to make.
+CREATE FUNCTION app.anonymize_user_account(p_user_id text)
+  RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public
+  AS $$
+BEGIN
+  IF app.current_user_id() IS DISTINCT FROM p_user_id THEN
+    RAISE EXCEPTION 'may only anonymize yourself' USING ERRCODE = '42501';
+  END IF;
+  /* GlobalLibraryItem.contributedBy, both ReconcilerResult scrubs, PreSessionMessage */
+END $$;
+ALTER FUNCTION app.anonymize_user_account(text) OWNER TO mwf_job;
+
+REVOKE EXECUTE ON FUNCTION app.anonymize_user_in_session(text,text) FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION app.anonymize_user_account(text)         FROM PUBLIC;
+GRANT  EXECUTE ON FUNCTION app.anonymize_user_in_session(text,text) TO mwf_app;
+GRANT  EXECUTE ON FUNCTION app.anonymize_user_account(text)         TO mwf_app;
 ```
 
-The handler at `invitations.ts:1193` keeps its authorization check and calls the function. Three
-properties this buys over per-pin exemptions: the privilege is one greppable object rather than a
-carve-out in six triggers; the deletion semantics live in one place; and adding a seventh
-anonymized column is a change to that function, not a silent discovery in production.
+If an admin-initiated deletion is ever needed, it gets a **separate** function granted to
+`mwf_ops` — not a widened check on these two. A parameter that lets the caller name someone else
+is the hole; keeping the self-only rule absolute is what makes these safe to grant to `mwf_app` at
+all.
+
+Three properties this buys over per-pin exemptions: the privilege is two greppable objects rather
+than carve-outs in six triggers; the deletion semantics live in one place each; and adding a
+seventh anonymized column is a change to a function, not a silent discovery in production.
 
 **The alternative — an `mwf_app` exemption in every pin — is rejected**, because an exemption that
 names `mwf_app` is not an exemption, it is the removal of the pin.
@@ -1853,26 +2055,41 @@ detail follows.
 
 ### 10.0 The decision list
 
-Eleven decisions. Three are genuinely the owner's to make on product grounds and carry no
-engineering recommendation; the other eight have one.
+*Self-contained: everything needed to decide is in this section.*
+
+**Status.** The architecture has been through four adversarial review passes and is approved. No
+reviewer has found a way for one partner to read the other's hidden content through the current
+policy set. What remains is specification work on two functions and one CI query, plus the
+decisions below.
+
+**Three of these are genuinely yours** — they are product judgements, not engineering ones, and I
+have deliberately made no recommendation: **D5** (launch encrypted), **D8** (embeddings),
+**D9** (what deletion means). Everything else is an engineering call I have made and am
+accountable for; overrule any of it, but none of it needs your time to proceed.
+
+**One is not a decision at all — D0 is a query, and nothing can start until it returns.**
 
 | # | Decision | Options | Recommendation | Blocks |
 |---|---|---|---|---|
-| **D0** | **Run the W0 query** — is the Render role `rolbypassrls`? | it is a query, not a choice | run it before anything else | **W1, the entire role architecture** |
-| **D1** | How per-request identity reaches a query under a pool | Prisma interactive tx / driver-adapter spike / **`pg` per-request client in Phase 4** / session `SET` | **`pg` in Phase 4.** Session `SET` is a verified cross-user leak. Spike the adapter — half a day, could pull enforcement months earlier | W10, W11, W12 |
-| **D2** | One application role or several | 1 / 2 / **4** | **4** (`mwf_migrator`, `mwf_app`, `mwf_job`, `mwf_ops`). `mwf_ops` read-only is cheap and caps a live fail-open | W1 |
-| **D3** | RLS on all 68 tables or a subset | all / Tier 1 only / **all enabled, policies tiered** | **tiered**, 66 enabled, 2 exempt | W8, W9 |
-| **D4** | Column encryption mechanism | pgcrypto / **application-side envelope** / none | **app-side envelope.** pgcrypto disqualified on measurement — its key lands in query plans and its index writes plaintext to disk | W13 |
-| **D5** | **Launch encrypted?** | now / at launch / never | **none — this is yours and your co-founder's.** Cost: prompt debugging, 19 raw-SQL sites, content-equality dedupe, key loss = permanent data loss. Benefit: stolen-backup only | W13 |
-| **D6** | Two-party detached work (reveal, share-accept, 6 `StageProgress` sites) | session-scoped GUC / **run as `mwf_job`** / restructure | **`mwf_job`.** A session GUC that can write `Message` is most of the boundary re-exposed as a settable variable | W10, W12 |
-| **D7** | 404 vs 403 on inaccessible sessions | keep the existence probe / **accept 404** | **accept the 404**, delete the probe | W8 |
-| **D8** | Vector embeddings under encryption | encrypt (lose ANN) / accept the leak / separate store | **none — needs costing.** An embedding is a semantic side channel that survives column encryption. Do not decide D5 without this on the table | D5 |
-| **D8a** | `ReconcilerResult` guesser access | **split out `ReconcilerGuidance`** / `SECURITY DEFINER` accessor / app-side `select:` | **split.** Two live P0 leaks already exist in exactly the app-side discipline the third option relies on | W9 |
-| **D9** | **`Message.forUserId` delete rule** | `CASCADE` / `SET NULL` + retain | **none — this is yours.** `CASCADE` means deleting a user also deletes messages *their partner sent them*, contradicting the anonymise-don't-delete behaviour already implemented. `SET NULL` makes `forUserId NOT NULL` impossible and removes W7 entirely | **W7** |
-| **D10** | T3 (LLM/analytics queries) has no in-database mitigation on Render | **accept; operational controls** / leave managed Postgres | **accept.** Self-hosting trades backups, PITR, HA and read replicas for one control on a currently hypothetical threat | — |
+| **D0** | Does the Render database role have the `rolbypassrls` attribute? | `SELECT rolsuper, rolbypassrls FROM pg_roles WHERE rolname = current_user;` — one query against production | **Run it first.** A role that lacks `BYPASSRLS` cannot grant it [V], so the answer decides whether the role architecture is writable as designed or needs per-table permissive policies instead. Both branches are written up (§1 T4). | **W1 — the first migration, and everything after it** |
+| **D1** | How per-request user identity reaches the database under a connection pool | (a) wrap every request in a Prisma interactive transaction (b) spike the `@prisma/adapter-pg` driver adapter (c) **`pg` client per request, in the Phase 4 rewrite** (d) session-level `SET` | **(c).** (d) is a verified cross-user data leak. (a) touches ~700 call sites. Worth half a day on (b) first: if it works it could bring enforcement forward by months. | W10, W11, W12 |
+| **D2** | One database role, or several | 1 / 2 / **4** | **4** — `mwf_migrator`, `mwf_app`, `mwf_job`, `mwf_ops`. The first two are the boundary; `mwf_ops` as read-only is cheap and caps a live fail-open in the ops dashboard. | W1 |
+| **D3** | RLS on all 68 tables, or a subset | all at once / highest-risk only / **all enabled, policies delivered in tiers** | **Tiered.** 66 tables enabled, 2 exempt as genuinely global reference data. A table with RLS on and no policy returns nothing, so unfinished tiers fail closed. | W8, W9 |
+| **D4** | Which column-encryption mechanism, if we encrypt | pgcrypto / **application-side envelope encryption** / none | **App-side envelope.** pgcrypto was disqualified on measurement, not preference: its master key appears verbatim in query plans, and the index needed to make it searchable writes **plaintext to disk**. | W13 |
+| **D5** | **Do we launch encrypted?** | now / at launch / not yet | **None — this is yours and your co-founder's.** What it costs: prompt debugging gets materially harder, 19 raw-SQL sites need rework, content-equality de-duplication breaks, and a key-management mistake is unrecoverable data loss. What it buys: protection against a stolen backup, and nothing else. Do not decide without **D8**. | W13 |
+| **D6** | How the two-party background paths run (mutual reveal, share-offer accept, 6 stage-progress writes) | session-scoped identity variable / **run them as `mwf_job`** / restructure into per-user passes | **`mwf_job`.** A session-scoped variable that can write `Message` is most of the privacy boundary re-exposed as a setting any code can change. A named role is auditable; the privilege is the same and the visibility is much better. | W10, W12 |
+| **D7** | When a user requests a session they cannot access, return 404 or 403 | keep the existence probe (403) / **accept 404** | **Accept the 404** and delete the probe. Leaking "this session exists" is a small real disclosure, and the probe is the only thing preserving it. | W8 |
+| **D8** | What happens to vector embeddings under encryption | encrypt them (lose similarity search) / accept the leak and document it / separate store with its own key | **None — this needs costing that nobody has done.** An embedding is derived from plaintext and is a semantically searchable side channel that **survives** column encryption. A stolen backup with embeddings retains much of what encryption was meant to protect. **This must be on the table when you decide D5.** | D5 |
+| **D8a** | How the "guesser" reads their refinement hint without reading the analysis about their partner | **split three columns into `ReconcilerGuidance`** / a privileged accessor function / keep relying on application-side field selection | **Split the table.** Not hypothetical: **three live leaks** already exist in exactly the application-side discipline the third option depends on, including one endpoint returning both partners' full gap analyses. **Note: the split fixes two of the three. The third feeds both partners' text into an LLM and returns the synthesis — that one is behavioural and needs a code fix regardless.** | W9 |
+| **D9** | **What should deleting a user do to messages their partner sent them?** | delete them (`CASCADE`) / keep them and drop the link (`SET NULL`) | **None — this is yours.** It is a product question about what deletion *means* here. `CASCADE` contradicts the anonymise-don't-delete behaviour the code already implements. `SET NULL` is compatible with it but makes the `forUserId NOT NULL` change **impossible**, which removes one of the design's headline items entirely. Related: `Message.senderId`'s existing `SET NULL` rule is a hidden writer that complicates the immutability trigger (catalogue §4) — the same conversation. | **W7 — do not sequence it before this is answered** |
+| **D10** | LLM-driven and analytics queries have no in-database mitigation on Render | **accept it; use operational controls** / move off managed Postgres | **Accept.** Render permits no custom extensions and grants no superuser, so the mechanism that would work cannot be deployed there. Self-hosting would trade managed backups, point-in-time recovery, HA and read replicas for one control on a threat that is currently hypothetical. Revisit only if an analytics capability is actually built. | — |
 
-**The three that are genuinely yours: D5, D8, D9.** The rest are engineering calls I have made and
-am accountable for; overrule any of them, but they do not need your time to proceed.
+#### If you only answer three things
+
+**D0** unblocks all engineering. **D9** unblocks W7 and is genuinely a question about your product's
+promise to users. **D5 + D8 together** are the encryption conversation with your co-founder — and
+D8 is the part most likely to be missed, because embeddings look like an implementation detail and
+are not.
 
 ### 10.1 Detail
 

@@ -262,6 +262,19 @@ Every `SECURITY DEFINER` is a privilege-escalation surface. Each is justified in
 pins `search_path`, each has `EXECUTE` revoked from `PUBLIC`, each returns a scalar. None takes a
 value that becomes SQL.
 
+**Every row states an owner.** That is not bookkeeping: a `SECURITY DEFINER` function runs as its
+owner, so ownership *is* the privilege, and getting it wrong fails silently in both directions
+(§7 assertion 11). All `SECURITY DEFINER` functions here are owned by **`mwf_job`**, and under
+branch A `mwf_job` additionally needs `USING (true)` policies on every table their bodies touch —
+otherwise the bodies see zero rows and raise "not found" on every call [V].
+
+| Signature | Owner | Security | Volatility | Justification | Called by | Verified by |
+|---|---|---|---|---|---|---|
+| `app.empathy_set_status(text, "EmpathyStatus")` | **`mwf_job`** | DEFINER | `VOLATILE` | The only writer of `EmpathyAttempt.status`. Encodes the non-author transition rule that neither a CHECK nor a policy can express. `FOR UPDATE` + status-guarded write for TOCTOU; no-op when unchanged, because callers include retried fire-and-forget paths. | 6 sites (design §4.3) | **[V]** 6 call sites pass, 5 attacks blocked |
+| `app.anonymize_user_in_session(text, text)` | **`mwf_job`** | DEFINER | `VOLATILE` | Per-session anonymization. **Carries its own self-only + membership check** — the handler runs as `mwf_app` and a backend authorization bug is the dominant threat. `p_display_name` removed: an attacker-controlled string was landing in the partner-visible `ReconcilerResult.subjectName`. | `session-deletion.ts` | **[R]** |
+| `app.anonymize_user_account(text)` | **`mwf_job`** | DEFINER | `VOLATILE` | Account-wide anonymization. Session-less writes (`GlobalLibraryItem.contributedBy`, both `ReconcilerResult` scrubs) that the per-session signature cannot express. Self-only check. | `account-deletion.ts` | **[R]** |
+| `app.partner_user_id(text)` | **`mwf_job`** | DEFINER | `STABLE` | "Who is my partner" is a fact the caller is entitled to and `RelationshipMember`'s policy hides, producing two silent `if (!partner)` inversions (design §7.11). | partner-detection sites | **[R]** |
+
 | Signature | Security | Volatility | Justification | Called by | Verified by |
 |---|---|---|---|---|---|
 | `app.current_user_id() → text` | **INVOKER** | `STABLE PARALLEL SAFE` | Reads a GUC. No privilege needed; `DEFINER` would be gratuitous. | every policy | **[V]** returns the `SET LOCAL` value; NULL when unset; NULL ⇒ zero rows |
@@ -391,16 +404,36 @@ does nothing here.
 CREATE FUNCTION app.message_routing_immutable() RETURNS trigger
   LANGUAGE plpgsql AS $$
 BEGIN
-  -- The anonymization path is the one legitimate writer of senderId. Keyed to
-  -- the role, so it is greppable and appears in the grant inventory. If the
-  -- anonymization is wrapped in a SECURITY DEFINER function owned by mwf_job,
-  -- current_user is mwf_job inside it and this same check covers both shapes.
-  IF current_user = 'mwf_job' THEN
+  -- THE EXEMPTION MUST ENUMERATE EVERY PRINCIPAL THAT CAN REACH THIS LINE,
+  -- INCLUDING THE ONES POSTGRES SUPPLIES. Draft 4 named only mwf_job and was
+  -- wrong twice over:
+  --
+  --  * mwf_job -- the anonymization functions, which are SECURITY DEFINER and
+  --    OWNED BY mwf_job, so current_user is mwf_job inside them.
+  --
+  --  * THE TABLE OWNER -- Message.senderId is ON DELETE SET NULL, and the FK's
+  --    internal UPDATE fires this trigger as the TABLE OWNER: not the deleting
+  --    role, not mwf_job. [V] DELETE FROM "User" produced
+  --    'ERROR: senderId immutable (current_user=p5_owner)'. Without this arm,
+  --    W4 breaks EVERY User deletion -- and it breaks it the day the trigger
+  --    DDL applies, not at W10.
+  IF current_user IN ('mwf_job', 'mwf_migrator') THEN
     RETURN NEW;
   END IF;
   ...
 END $$;
 ```
+
+**The alternative is to stop `Message.senderId` being `ON DELETE SET NULL`** and make deletion
+explicit in `app.anonymize_user_account`. That is cleaner — the referential action is a hidden
+writer that no grant, policy or assertion can see — but it changes a delete rule the product
+depends on, so it is filed under **D9**, which already asks the owner about `Message` delete
+semantics.
+
+**Audit every trigger this way.** The same question — *which principals reach this line, including
+the ones Postgres supplies* — applies to `app.consent_no_resurrect` and
+`app.empathy_attempt_immutable`. Any column on a table reachable by a referential action needs the
+owner arm. **[R]** Not yet enumerated for the other two triggers.
 
 A `SECURITY DEFINER` wrapper owned by `mwf_job` is still worth having — it puts the deletion
 semantics in one place and makes `current_user` predictable — but it is a complement to the
@@ -637,6 +670,9 @@ failure on the day it shipped.
 | 6 | every `app.*` `SECURITY DEFINER` pins `search_path` and is not `PUBLIC`-executable | `pg_proc` where `prosecdef` | search-path takeover on the most privileged objects here |
 | **7** | **every column a `SELECT` policy reads is write-controlled on *both* the INSERT and the UPDATE side** — see §7.1 for the SQL | `pg_depend` policy→column refs, joined against `polwithcheck` per command and against `information_schema.column_privileges` | **[V] M1** — fires on the vulnerable config, silent on the fixed one |
 | **8** | `mwf_job` carries non-removable audit logging | `SELECT rolconfig FROM pg_roles WHERE rolname='mwf_job'` must contain `log_statement=all` **and** `log_parameter_max_length=0` | **[V]** an RLS-bypassing role whose statements are not logged; and logging that captures bind values |
+| **9** | **`mwf_app` is a member of no role** | `SELECT roleid::regrole FROM pg_auth_members WHERE member = 'mwf_app'::regrole` | **[V] total boundary collapse from one grant.** Permissive policies are inherited through role membership where `BYPASSRLS` is not: `GRANT mwf_job TO mwf_app` took an **outsider identity** from 1 row to 2 of 2. §2.4's branch-A fallback all but invites this as a shortcut. |
+| **10** | *(branch A only)* every table `mwf_job` holds a command grant on has a policy for that command | `role_table_grants` ⟕ `pg_policy` for `mwf_job` | a table added by a later migration is silently uncovered — the retention sweep then deletes nothing and logs success |
+| **11** | every `app.*` `SECURITY DEFINER` function has the expected owner | `SELECT proname, proowner::regrole FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE n.nspname='app' AND p.prosecdef` compared against a declared manifest | **[V] the draft-5 class.** An owner-owned transition function under `FORCE` raises `no such attempt` on every call; a job-owned one under branch A is equally inert. Ownership is the security property and nothing else checks it. |
 
 Assertion 7 is the important addition. Assertions 1–6 check that objects *exist and are shaped
 right*; 7 checks a **relationship between two object classes**, which is where both of draft 2's
@@ -652,6 +688,28 @@ review confirmed this by running it. And it fires on the sanctioned `ConsentedCo
 exception, which is permanent CI red.
 
 Respecified **per-command and conjunctive**, with a registry for the two legitimate exception kinds.
+
+**Draft 4's version was wrong three ways, all confirmed by execution, and it passed an M1.** The
+fixes are inline below and each was re-tested:
+
+1. **The `pg_depend` join attributed columns to the policy's table rather than the referenced one**,
+   producing entries like `Session.userId` — a column `Session` does not have. Fixed with
+   `AND d.refobjid = p.polrelid`.
+2. **The pin test was `chk LIKE '%'||col||'%'`, so any *mention* counted.**
+   `WITH CHECK ("sourceUserId" IS NOT NULL AND <membership>)` passed the assertion while the M1
+   forge succeeded. Replaced with an equality-shape test requiring the column to be equated to the
+   caller identity.
+3. **The "zero rows on the fixed config" claim was false** — the view returned `EmpathyAttempt.status`
+   and four more, because the waivers the fixed config actually needs were never registered.
+
+**[V] Re-tested in four configurations after the fix:**
+
+| Configuration | Expected | Result |
+|---|---|---|
+| Vulnerable (`WITH CHECK (<membership only>)`) | fires | `ea.sourceUserId` ✓ |
+| **The evasion** (`WITH CHECK ("sourceUserId" IS NOT NULL AND …)`) | **fires** | `ea.sourceUserId` ✓ — draft 4 passed this |
+| Correctly pinned, waivers registered | zero rows | zero rows ✓ |
+| Attribution check: any reported column its table lacks? | none | none ✓ |
 
 ```sql
 -- Exceptions are data, not code, and each carries a written reason. A column may
@@ -677,14 +735,18 @@ WITH pol AS (
   FROM pg_policy p
   JOIN pg_depend d  ON d.classid = 'pg_policy'::regclass AND d.objid = p.oid
                    AND d.refclassid = 'pg_class'::regclass AND d.refobjsubid > 0
+                   AND d.refobjid = p.polrelid   -- FIX 1: this table's own columns only
   JOIN pg_attribute a ON a.attrelid = d.refobjid AND a.attnum = d.refobjsubid
   JOIN pg_class c   ON c.oid = p.polrelid
 ),
 sel  AS (SELECT DISTINCT tbl, col, polrelid FROM pol WHERE polcmd IN ('r','*')),
-ipin AS (SELECT DISTINCT polrelid, col FROM pol
-          WHERE polcmd IN ('a','*') AND has_check AND chk LIKE '%'||col||'%'),
-upin AS (SELECT DISTINCT polrelid, col FROM pol
-          WHERE polcmd IN ('w','*') AND has_check AND chk LIKE '%'||col||'%'),
+-- FIX 2: equality-shape, not substring. The column must be EQUATED to the caller
+-- identity. "col IS NOT NULL" and bare mentions no longer count as a pin -- that
+-- evasion passed draft 4's assertion while the M1 forge succeeded.
+ipin AS (SELECT DISTINCT polrelid, col FROM pol WHERE polcmd IN ('a','*')
+          AND chk ~ ('"'||col||'"[[:space:]]*=[[:space:]]*(app\.)?current_user_id\(\)')),
+upin AS (SELECT DISTINCT polrelid, col FROM pol WHERE polcmd IN ('w','*')
+          AND chk ~ ('"'||col||'"[[:space:]]*=[[:space:]]*(app\.)?current_user_id\(\)')),
 gr   AS (SELECT table_name tbl, column_name col FROM information_schema.column_privileges
           WHERE grantee = 'mwf_app' AND privilege_type = 'UPDATE'),
 ig   AS (SELECT table_name tbl FROM information_schema.role_table_grants
@@ -722,12 +784,20 @@ WHERE v.violation IS NOT NULL;
 | Sanctioned exception `ConsentedContent.consentActive`, both waivers registered | silent | silent ✓ — no permanent CI red |
 | Draft-3 fixed config, exceptions registered | zero rows | zero rows ✓ |
 
-Two honest limitations. The `chk LIKE '%'||col||'%'` test cannot tell a `USING` reference from a
-`WITH CHECK` one when a column appears in both — a false *negative* is impossible, since `pg_depend`
-already proved the reference exists, but a policy that names a column only in `USING` and not in
-`WITH CHECK` could pass. And the registry is hand-maintained; the `length(reason) >= 20` check
-forces a sentence, not a rubber stamp, but it cannot force a *true* sentence. Both are recorded
-rather than hidden, because an assertion nobody understands the limits of is the next M1.
+**Four blind spots, stated because an assertion nobody understands the limits of is the next M1:**
+
+1. **Function ownership is not asserted anywhere.** The draft-5 failure class is effective-principal
+   confusion, and nothing in this catalogue checks who owns a `SECURITY DEFINER` function. Assertion
+   11 below closes it.
+2. **A column protected only by a `SECURITY DEFINER` helper records no `pg_depend` entry**, so it is
+   invisible to a source this section otherwise describes as exhaustive. `EmpathyAttempt.status` is
+   the live example: its real protection is `app.empathy_set_status`, not a policy, and the
+   assertion sees only the waiver.
+3. The regex is a *shape* test on generated expression text. It is far stronger than the substring
+   test it replaces, but it recognises one idiom; a semantically equivalent pin written differently
+   (say `app.current_user_id() = "col"`) would be reported as a violation and need a waiver.
+4. The registry is hand-maintained. `length(reason) >= 20` forces a sentence, not a rubber stamp —
+   it cannot force a *true* sentence.
 
 Full SQL is in [§11.2 of the design document](./phase3-security-model.md#112-structural-assertions--the-cheap-high-value-layer).
 
@@ -796,7 +866,8 @@ is the design document.
 | — with RLS enabled + `FORCE` | 66 | mechanism [V] | per-table predicates |
 | — without RLS | 2 (`Need`, `GlobalLibraryItem`) | — | rationale only |
 | — RLS on, zero policies, grants revoked | 1 (`BrainActivity`, inside the 66) | — | rationale only |
-| Functions | **10** | **6 [V]** | 4 — **2 need their own review**; +`app.empathy_set_status` [V] and `app.anonymize_user_in_session` [R] in draft 4 |
+| Functions | **12** | **6 [V]** | 6 — all `SECURITY DEFINER` owners now declared (§3); +`app.anonymize_user_account` and `app.partner_user_id` in draft 5 |
+| Structural assertions | **11** | 5 [V] | 6 — assertions 9 and 11 added for the effective-principal class |
 | Triggers | **4** | 2 [V] | 2 — exemptions must key on the **job role's name**, not on `BYPASSRLS` [V] |
 | CHECK constraints | 7 | 1 [V] | 6 |
 | NOT NULL changes | 1 | mechanism [V18] | **blocked on D9** |
@@ -834,6 +905,14 @@ corrected:
 - `StrategyProposal.createdByUserId` — **not yet in the never-`UPDATE`-grantable set and should
   be** (§2.1). An author column, written to `NULL` by the anonymization path, not currently a
   read-policy arm — exactly the latent case that becomes a defect when a policy is widened.
+- **The `READY` widening in `app.empathy_set_status`** (design §4.3) — the right shape, but the six
+  call sites have **not** been re-run against the widened set. Verify before the DDL.
+- **`app.consent_no_resurrect` and `app.empathy_attempt_immutable` have not been audited for
+  referential-action principals** (§4). `Message.senderId`'s `ON DELETE SET NULL` fires as the
+  **table owner** [V]; any column on a table reachable by a referential action needs the same arm.
+- **The three anonymization functions and `app.partner_user_id` are specified, not built** — and
+  the draft-5 lesson is that a specified privileged object is where the next defect lives. Each
+  needs the "who is `current_user` on this line" audit before it ships.
 
 ---
 
