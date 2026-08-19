@@ -35,6 +35,35 @@ import type { FixtureManifest } from './fixtures';
  * a hole straight through the tripwire.
  */
 const CUID_RE = /(?<![a-z0-9])c[a-z0-9]{24}(?![a-z0-9])/g;
+
+/**
+ * The *other* clerkId format, and the second volatile-identifier tripwire.
+ *
+ * There are two, and the distinction matters because the comment above is about
+ * the first and is easy to mistake for covering both:
+ *
+ *   `auth.ts:91`          `e2e_${userId}`                    — contains a cuid,
+ *                                                              normalised by
+ *                                                              CUID_RE, which is
+ *                                                              exactly what the
+ *                                                              `(?<![a-z0-9])`
+ *                                                              boundary is for.
+ *   `state-factory.ts:150` `e2e_${Date.now()}_${random}`     — contains no cuid
+ *                                                              at all.
+ *
+ * Both appear in one `User` row change in `empathy-reveal`: the seeded value on
+ * the `before` side and the bypass-rewritten one on the `after` side. The second
+ * form used to ride into the goldens raw, so rebuilding a fixture produced a red
+ * suite with no relation to the code under test — measured at exactly four
+ * changed values on a rebuild, all of them this.
+ *
+ * The seeded values are labelled from the manifest (see `buildLabelMap`); this
+ * pattern is the backstop that fails the run if one ever appears unlabelled.
+ * There is no general solution — a volatile identifier of arbitrary shape cannot
+ * be detected — so each known shape is enumerated as it is found.
+ */
+const SEEDED_CLERKID_RE = /(?<![a-z0-9_])e2e_\d{10,}_[a-z0-9]{4,}(?![a-z0-9])/g;
+
 /** `2026-08-12 23:52:14.936` or ISO-8601. */
 const TIMESTAMP_RE = /\b\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?(?:Z|[+-]\d{2}:?\d{2})?\b/g;
 
@@ -49,13 +78,29 @@ export interface LabelMap {
  * Everything resolvable gets a name that means something to a human reading a
  * diff, and that is stable across runs because it derives from data, not order.
  */
-export async function buildLabelMap(target: DbTarget, database: string, manifest: FixtureManifest): Promise<LabelMap> {
+export async function buildLabelMap(
+  target: DbTarget,
+  database: string,
+  manifest: FixtureManifest,
+  /** Seeded `User.clerkId` values, captured at restore — see `RestoredFixture`. */
+  seededClerkIds: Array<{ userId: string; clerkId: string }> = [],
+): Promise<LabelMap> {
   const labels = new Map<string, string>();
 
   const nameOf = (email: string): string => email.split('@')[0];
   labels.set(manifest.seeded.userA.id, `<user:${nameOf(manifest.seeded.userA.email)}>`);
   if (manifest.seeded.userB) {
     labels.set(manifest.seeded.userB.id, `<user:${nameOf(manifest.seeded.userB.email)}>`);
+  }
+
+  // `User.clerkId` as seeded is `e2e_${Date.now()}_${random}` — a per-build
+  // identifier with no cuid in it, so nothing else here recognises it. Labelled
+  // from its owner, the same natural-key derivation everything else uses, so a
+  // clerkId that ends up on the wrong user still reads as a mismatch rather than
+  // collapsing to a shared placeholder.
+  for (const { userId, clerkId } of seededClerkIds) {
+    const who = labels.get(userId) ?? `user(${userId.slice(-4)})`;
+    labels.set(clerkId, `<clerkId:${who.replace(/[<>]|user:/g, '')}>`);
   }
   labels.set(manifest.seeded.sessionId, '<session:main>');
   labels.set(manifest.seeded.relationshipId, '<relationship:main>');
@@ -89,9 +134,7 @@ export async function buildLabelMap(target: DbTarget, database: string, manifest
 
       // Drafts before consents: a consent is labelled by what it consents *to*,
       // and the target is usually a draft.
-      const drafts = await c.query<{ id: string; userId: string }>(
-        `SELECT id, "userId" FROM "EmpathyDraft"`,
-      );
+      const drafts = await c.query<{ id: string; userId: string }>(`SELECT id, "userId" FROM "EmpathyDraft"`);
       for (const d of drafts.rows) {
         const who = labels.get(d.userId) ?? d.userId;
         labels.set(d.id, `<empathyDraft:${who.replace(/[<>]|user:/g, '')}>`);
@@ -233,12 +276,16 @@ export function normalize<T>(value: T, map: LabelMap, window?: FreshWindow): Nor
       const rank = rankOf.get(stamp);
       return rank ? `<ts:${rank}>` : '<ts:?>';
     });
-    out = out.replace(CUID_RE, m => {
+    const resolve = (m: string): string => {
       const label = map.labels.get(m);
       if (label) return label;
       unresolved.add(m);
       return `<UNRESOLVED_ID:${m}>`;
-    });
+    };
+    // Before CUID_RE: a seeded clerkId contains no cuid, so the two never
+    // overlap, but running it first keeps the whole token as the unit.
+    out = out.replace(SEEDED_CLERKID_RE, resolve);
+    out = out.replace(CUID_RE, resolve);
     return out;
   };
 

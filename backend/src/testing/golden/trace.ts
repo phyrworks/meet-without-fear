@@ -189,7 +189,24 @@ const PLAN_RE = /^duration: [\d.]+ ms {2}plan:$/;
  * values out of the artefact.
  */
 const NODE_RE = /^\s*(?:->\s+)?(.+?) {2}\(cost=/;
-const ACTUAL_RE = /\(actual (?:time=[\d.]+\.\.[\d.]+ )?rows=(\d+) loops=(\d+)\)/;
+
+/**
+ * `(actual rows=N loops=M)` — with N integral on PG16 and fixed to two decimal
+ * places on PG18.
+ *
+ * The `[\d.]+` is not defensive vagueness, it is the whole fix for a defect that
+ * killed the row-count channel on the exact upgrade this oracle exists to
+ * support. PG18 renders `actual rows=6.00 loops=1`; the old `(\d+)` required a
+ * digit immediately before ` loops`, so on PG18 **nothing matched** and every
+ * `topRows` and `rowsRead` silently became 0. In verify mode that is loud, but in
+ * record mode it bakes an empty cost channel into a baseline and leaves a green
+ * suite attesting to it — the false-pass shape this harness is built around.
+ * Caught by a PG18 upgrade rehearsal, not by this file.
+ *
+ * `(never executed)` has no counts on either version and is not a parse failure.
+ */
+const ACTUAL_RE = /\(actual (?:time=[\d.]+\.\.[\d.]+ )?rows=([\d.]+) loops=(\d+)\)/;
+const NEVER_EXECUTED_RE = /\(never executed\)/;
 
 /**
  * Node types whose `on <name>` names a table.
@@ -222,8 +239,16 @@ const MODIFY_TARGETS = new Set(['Insert', 'Update', 'Delete', 'Merge']);
 interface PlanNode {
   type: string;
   relation: string | null;
+  /** Rows per loop. Integral on PG16, two decimal places on PG18. */
   rows: number;
   loops: number;
+  /**
+   * False when a node carried `(cost=` but no readable row counts and was not
+   * `(never executed)`. `auto_explain.log_analyze` is on, so every executed node
+   * must report them; a node that does not means Postgres changed its rendering
+   * under us. See `buildTrace`.
+   */
+  actualParsed: boolean;
 }
 
 function parsePlanNode(line: string): PlanNode | null {
@@ -246,12 +271,14 @@ function parsePlanNode(line: string): PlanNode | null {
   }
 
   const actual = ACTUAL_RE.exec(line);
+  const neverExecuted = NEVER_EXECUTED_RE.test(line);
   return {
     type,
     relation,
     // `(never executed)` has no counts at all; it read nothing.
     rows: actual ? Number(actual[1]) : 0,
     loops: actual ? Number(actual[2]) : 0,
+    actualParsed: !!actual || neverExecuted,
   };
 }
 
@@ -304,11 +331,19 @@ function kindFromText(sql: string): { kind: StatementKind; isolation: string | n
   return { kind: 'other', isolation: null };
 }
 
+/** Counters a caller can pass in to learn how the parse went. */
+export interface BuildTraceStats {
+  /** Plan nodes whose row counts could not be read. Must be zero. */
+  unparsedPlanNodes: number;
+}
+
 export interface BuildTraceOptions {
   /** Only this database's records are kept — a run must not see its neighbours. */
   database: string;
   /** Only this `application_name` is kept. Defaults to the app under test. */
   application?: string;
+  /** Optional; incremented in place. `captureWindow` uses it as a tripwire. */
+  stats?: BuildTraceStats;
 }
 
 /**
@@ -369,7 +404,10 @@ export function buildTrace(records: LogRecord[], opts: BuildTraceOptions): Trace
     for (const line of r.detail) {
       const node = parsePlanNode(line);
       if (!node) continue;
+      if (!node.actualParsed && opts.stats) opts.stats.unparsedPlanNodes += 1;
       if (firstPlan && stmt.topRows === null) {
+        // The root always has loops=1, so its per-loop figure is the true count.
+        // `Number('6.00')` is `6`, so PG16 and PG18 record the same value here.
         stmt.topRows = node.rows;
         stmt.rootRelation = node.relation;
       }
@@ -377,7 +415,20 @@ export function buildTrace(records: LogRecord[], opts: BuildTraceOptions): Trace
       if (!node.relation) continue;
       relations.add(node.relation);
       if (RELATION_SCANS.has(node.type)) {
-        stmt.rowsRead[node.relation] = (stmt.rowsRead[node.relation] ?? 0) + node.rows * node.loops;
+        // `rows` is rows *per loop*, so the tuples this node actually read is
+        // `rows * loops` — an integer, which the multiplication recovers from
+        // PG18's two-decimal average. Rounded, not truncated: a true total of 10
+        // over 3 loops renders as `3.33`, and `3.33 * 3 = 9.99` truncates to 9.
+        //
+        // PG16 and PG18 genuinely disagree here and no parser can reconcile
+        // them. Measured on identical data: PG16 renders `rows=6 loops=2` and
+        // PG18 renders `rows=6.50 loops=2` for the same scan whose true total is
+        // 13. PG16 rounds the average to an integer and loses a row; PG18 does
+        // not. So after the upgrade, `rowsRead` on nested-loop inner scans may
+        // shift slightly, and that is a fidelity improvement rather than a
+        // regression. Nodes with `loops=1` — which is nearly all of them — are
+        // unaffected and compare exactly across versions.
+        stmt.rowsRead[node.relation] = (stmt.rowsRead[node.relation] ?? 0) + Math.round(node.rows * node.loops);
       }
     }
     stmt.relations = [...relations].sort();
@@ -767,13 +818,16 @@ export type IncompleteReason =
   | 'end-marker-missing'
   | 'markers-duplicated'
   | 'markers-out-of-order'
-  | 'no-app-statements';
+  | 'no-app-statements'
+  | 'plan-rows-unparsed';
 
 /** Counts that make a failure diagnosable without quoting anything. */
 export interface IncompleteCounts {
   beginMarkers: number;
   endMarkers: number;
   reads: number;
+  /** Plan nodes whose row counts could not be read. Zero unless Postgres changed. */
+  unparsedPlanNodes?: number;
 }
 
 export interface WindowResult {
@@ -911,7 +965,29 @@ export async function captureWindow(opts: CaptureOptions): Promise<TraceSummary>
     });
   }
 
-  const statements = buildTrace(last.records, { database: opts.database, application: opts.application });
+  const stats: BuildTraceStats = { unparsedPlanNodes: 0 };
+  const statements = buildTrace(last.records, {
+    database: opts.database,
+    application: opts.application,
+    stats,
+  });
+
+  // Fail at capture time, not at diff time. `log_analyze` is on, so every
+  // executed plan node must report `(actual rows=… loops=…)`; a node that
+  // carries `(cost=` but no readable counts means Postgres changed its plan
+  // rendering under us, which is exactly what PG18 did.
+  //
+  // Note this is deliberately narrower than "the plan parsed to zero recognised
+  // nodes", which was the obvious guard and would NOT have caught PG18: node
+  // lines still matched, because `(cost=` is unchanged. Only the row counts
+  // moved. The assertion has to sit on the thing that actually broke.
+  if (stats.unparsedPlanNodes > 0) {
+    return summarize([], {
+      complete: false,
+      incompleteReason: 'plan-rows-unparsed',
+      incompleteCounts: { beginMarkers: 1, endMarkers: 1, reads, unparsedPlanNodes: stats.unparsedPlanNodes },
+    });
+  }
   // An empty window is a hard failure, not a quiet step. Every step here drives
   // an HTTP endpoint that reaches Postgres; zero statements means the capture
   // settings did not apply to the app's connections, which is the exact shape of

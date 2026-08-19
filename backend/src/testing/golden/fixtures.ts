@@ -176,6 +176,22 @@ export interface RestoredFixture {
   database: string;
   url: string;
   target: DbTarget;
+  /**
+   * `User.clerkId` as seeded, captured before the app can overwrite it.
+   *
+   * `state-factory.ts` mints `e2e_${Date.now()}_${random}`, so the value differs
+   * on every fixture build and reaches the goldens through the `before` side of
+   * a `User` row change. Measured: rebuilding `FEEL_HEARD_B` changed exactly
+   * four values across both goldens and all four were this field — everything
+   * else, every cuid and timestamp and trace field, was byte-identical. Left
+   * unhandled it is a mysterious red whose obvious cure is re-recording.
+   *
+   * It has to be read here rather than in `buildLabelMap`, which runs at the end
+   * of a scenario: the E2E auth bypass rewrites `clerkId` to `e2e_${userId}` on
+   * the first request from each user, so by then the seeded value is gone from
+   * the database and survives only inside the snapshots.
+   */
+  seededClerkIds: Array<{ userId: string; clerkId: string }>;
   drop: () => Promise<void>;
 }
 
@@ -220,6 +236,17 @@ export async function restoreFixture(opts: {
 
   await rebaseTimestampsToAge(target, runDb, manifest, opts.ageInterval ?? '1 hour');
 
+  const seededClerkIds = await withClient(
+    target,
+    async c => {
+      const r = await c.query<{ id: string; clerkId: string }>(
+        `SELECT id, "clerkId" FROM "User" WHERE "clerkId" IS NOT NULL`,
+      );
+      return r.rows.map(x => ({ userId: x.id, clerkId: x.clerkId }));
+    },
+    runDb,
+  );
+
   // Capture is enabled *after* the clone and *after* the rebase, deliberately.
   // The rebase issues one whole-table UPDATE per table with a timestamp column —
   // 30-odd statements whose plans are large and whose row counts are the
@@ -244,6 +271,7 @@ export async function restoreFixture(opts: {
     database: runDb,
     url: toDbUrl({ ...target, database: runDb }),
     target,
+    seededClerkIds,
     drop: () => dropDatabase(target, runDb),
   };
 }

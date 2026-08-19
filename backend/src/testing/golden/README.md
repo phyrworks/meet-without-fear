@@ -64,6 +64,17 @@ first appearance would make a swapped-user defect byte-identical, which is a
 false pass on exactly the privacy-routing bug this product cannot afford. Any
 cuid-shaped token that does not resolve fails the run.
 
+**A fixture rebuild must not move a golden**, and it is worth stating as a
+property because it was almost lost. `User.clerkId` exists in two formats: the
+E2E bypass writes `e2e_${userId}`, which carries a cuid and normalizes, while
+`state-factory` seeds `e2e_${Date.now()}_${random}`, which carries none and rode
+into the goldens raw. Rebuilding `FEEL_HEARD_B` therefore produced a red suite
+unrelated to the code — measured at exactly four changed values, all of them this
+field, with every cuid, timestamp rank and trace field byte-identical. Seeded
+clerkIds are now captured at restore, before the bypass overwrites them, and
+labelled from their owner as `<clerkId:ada>`; an unlabelled one fails the run.
+Verified by rebuilding the fixture twice and watching the goldens stay green.
+
 **Each step also records what it asked of Postgres.** HTTP diffing is
 structurally blind to cost and to atomicity — two mutations were measured
 escaping it entirely (below). A step's trace comes from Postgres's own statement
@@ -253,6 +264,37 @@ So `protocol` moving is not noise to absorb, it is one question to answer: was a
 constant inlined (fine, re-record and say so), or was a *value* inlined (stop).
 It is the cheapest SQL-injection tripwire available here, and it costs one enum
 per statement.
+
+### Postgres 16 vs 18: the capture layer is version-sensitive
+
+PG18 renders `EXPLAIN ANALYZE` row counts to two decimal places —
+`actual rows=6.00 loops=1` where PG16 writes `actual rows=6 loops=1`. The parser
+originally required a bare integer, so on PG18 **no plan node matched at all**
+and every `topRows` and `rowsRead` silently became 0: the entire cost channel,
+the thing that catches a dropped `LIMIT`, stopped existing. Verify mode would
+have been loud about it; record mode would have baked an empty channel into a
+baseline and left a green suite attesting to it. Found by a PG18 upgrade
+rehearsal, not by this harness. Both renderings are now covered by table-driven
+tests built from real output captured side by side on both containers.
+
+Two consequences worth knowing before the upgrade:
+
+**PG16 and PG18 disagree on nested-loop row counts, and PG18 is right.** `rows`
+is a per-loop average. On identical data, PG16 renders `rows=6 loops=2` and PG18
+renders `rows=6.50 loops=2` for a scan whose true total is 13 — PG16 rounds the
+average to an integer and loses a row. The parser multiplies and rounds, so it
+reports 12 on PG16 and 13 on PG18. No parser can reconcile that; after the
+upgrade, `rowsRead` on nested-loop inner scans may shift slightly and **that is a
+fidelity improvement, not a regression**. Nodes with `loops=1` — nearly all of
+them — are unaffected and compare exactly across versions.
+
+**A rendering change now fails at capture, not at diff.** `auto_explain.log_analyze`
+is on, so every executed plan node must report `(actual rows=… loops=…)`. A node
+carrying `(cost=` but no readable counts, and not `(never executed)`, sets
+`complete: false` with reason `plan-rows-unparsed`. Note this is deliberately
+narrower than the obvious guard of "the plan parsed to zero recognised nodes",
+which would **not** have caught PG18: node lines still matched, because `(cost=`
+did not change. Only the counts moved, so the assertion sits on the counts.
 
 ### Four things measurement forced
 
