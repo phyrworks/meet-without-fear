@@ -273,7 +273,57 @@ otherwise the bodies see zero rows and raise "not found" on every call [V].
 | `app.empathy_set_status(text, "EmpathyStatus")` | **`mwf_job`** | DEFINER | `VOLATILE` | The only writer of `EmpathyAttempt.status`. Encodes the non-author transition rule that neither a CHECK nor a policy can express. `FOR UPDATE` + status-guarded write for TOCTOU; no-op when unchanged, because callers include retried fire-and-forget paths. | 6 sites (design §4.3) | **[V]** 6 call sites pass, 5 attacks blocked |
 | `app.anonymize_user_in_session(text, text)` | **`mwf_job`** | DEFINER | `VOLATILE` | Per-session anonymization. **Carries its own self-only + membership check** — the handler runs as `mwf_app` and a backend authorization bug is the dominant threat. `p_display_name` removed: an attacker-controlled string was landing in the partner-visible `ReconcilerResult.subjectName`. | `session-deletion.ts` | **[R]** |
 | `app.anonymize_user_account(text)` | **`mwf_job`** | DEFINER | `VOLATILE` | Account-wide anonymization. Session-less writes (`GlobalLibraryItem.contributedBy`, both `ReconcilerResult` scrubs) that the per-session signature cannot express. Self-only check. | `account-deletion.ts` | **[R]** |
-| `app.partner_user_id(text)` | **`mwf_job`** | DEFINER | `STABLE` | "Who is my partner" is a fact the caller is entitled to and `RelationshipMember`'s policy hides, producing two silent `if (!partner)` inversions (design §7.11). | partner-detection sites | **[R]** |
+| `app.partner_user_id(p_session_id text)` | **`mwf_job`** | DEFINER | `STABLE` | "Who is my partner" is a fact the caller is entitled to and `RelationshipMember`'s policy hides, producing two silent `if (!partner)` inversions (design §7.11). **Caller-bound — see body below.** | partner-detection sites | **[R]** |
+| `app.create_user_for_clerk(p_clerk_id text, p_email text, …)` | **`mwf_job`** | DEFINER | `VOLATILE` | The pre-identity bootstrap. **The most dangerous object in this design** — see below. | auth middleware only | **[R]** |
+
+**`app.partner_user_id` — bound to the caller, or it is the `session_relationship` oracle again.**
+As merely *named* in draft 5 it takes an arbitrary session id and returns the partner's user id,
+which is strictly stronger than the oracle already fixed in §3.1. The same rule applies: **return
+`NULL` unless the caller is a member.**
+
+```sql
+CREATE FUNCTION app.partner_user_id(p_session_id text) RETURNS text
+  LANGUAGE sql STABLE SECURITY DEFINER SET search_path = pg_catalog, public
+  AS $$
+  SELECT other."userId"
+    FROM public."Session" s
+    JOIN public."RelationshipMember" me    ON me."relationshipId"    = s."relationshipId"
+                                          AND me."userId"            = app.current_user_id()
+    JOIN public."RelationshipMember" other ON other."relationshipId" = s."relationshipId"
+                                          AND other."userId"        <> app.current_user_id()
+   WHERE s.id = p_session_id
+   LIMIT 1;   -- NULL when the caller is not a member: no membership join, no row
+$$;
+ALTER FUNCTION app.partner_user_id(text) OWNER TO mwf_job;
+REVOKE EXECUTE ON FUNCTION app.partner_user_id(text) FROM PUBLIC;
+GRANT  EXECUTE ON FUNCTION app.partner_user_id(text) TO mwf_app;
+```
+
+The caller's own membership is a join condition rather than a separate guard, so there is no branch
+to forget and a non-member gets `NULL` — the same answer as "this session has no partner", which is
+what a non-member is entitled to know.
+
+**`app.create_user_for_clerk` — an account-squatting primitive, and it cannot be argument-checked.**
+This is the one object with no re-checkable argument, because it runs **before** an identity exists:
+`app.current_user_id()` is `NULL` by definition on this path. `User.clerkId` and `User.email` are
+both `@unique` [C], so an attacker who can call it freely can pre-create rows on a victim's Clerk
+subject or email address and take over the account at first login.
+
+Mitigations, all of which must hold together — **[R], none built:**
+
+1. **`INSERT`-only, never `UPDATE`.** It must not be able to re-point an existing `clerkId` or
+   `email` at anything. On conflict it returns the existing id and writes nothing.
+2. **`EXECUTE` granted to a dedicated `mwf_auth` role, not to `mwf_app`.** The auth middleware is
+   the only legitimate caller, and it is the only code path that runs pre-identity. Granting this
+   to `mwf_app` means all 19 `$queryRaw` sites can reach it.
+3. **The `clerkId` argument must be a verified Clerk subject.** The database cannot check this — the
+   JWT verification is upstream in `middleware/auth.ts` — so the grant boundary in (2) is doing the
+   whole job, and that must be stated rather than implied.
+4. **Rate-limited upstream**, since (3) leaves an authenticated-but-hostile caller able to iterate.
+
+**This object deserves its own review before it is built.** It is the single place where the
+design's "identity comes from a verified JWT" assumption is load-bearing at the database layer, and
+the database cannot verify it.
 
 | Signature | Security | Volatility | Justification | Called by | Verified by |
 |---|---|---|---|---|---|
@@ -430,10 +480,24 @@ writer that no grant, policy or assertion can see — but it changes a delete ru
 depends on, so it is filed under **D9**, which already asks the owner about `Message` delete
 semantics.
 
-**Audit every trigger this way.** The same question — *which principals reach this line, including
-the ones Postgres supplies* — applies to `app.consent_no_resurrect` and
-`app.empathy_attempt_immutable`. Any column on a table reachable by a referential action needs the
-owner arm. **[R]** Not yet enumerated for the other two triggers.
+**The other two triggers have the same exposure, and it is now enumerated.** Draft 5 left this
+`[R]`; the answer is **both**, and both are `onDelete: SetNull` into a column the trigger pins:
+
+| Trigger | Pinned column | Referential action | Consequence as drafted |
+|---|---|---|---|
+| `app.empathy_attempt_immutable` | `EmpathyAttempt."sourceUserId"` | `onDelete: SetNull` — `schema.prisma:747` [C] | **every `User` delete errors** |
+| `app.consent_no_resurrect` | `ConsentedContent."sourceUserId"` | `onDelete: SetNull` — `schema.prisma:531` [C] | **every `User` delete errors** |
+| `app.message_routing_immutable` | `Message."senderId"` | `onDelete: SetNull` | **[V]** `ERROR: senderId immutable (current_user=p5_owner)` |
+
+All three need the `current_user IN ('mwf_job', 'mwf_migrator')` arm. **[C]** The schema has 21
+`onDelete: SetNull` foreign keys in total and **zero `onUpdate` overrides**, so every FK also
+defaults to `onUpdate: CASCADE` — an update to a referenced key would fire the same triggers as the
+owner. Primary keys are not updated in this application today, but that is a convention, not a
+constraint, so the owner arm covers it either way.
+
+**The general form of the audit:** for each trigger, list every column it pins, then check whether
+any foreign key targets that column with a referential action. `pg_constraint.confupdtype` /
+`confdeltype` make this mechanical, and it should be a CI query rather than a reading exercise.
 
 A `SECURITY DEFINER` wrapper owned by `mwf_job` is still worth having — it puts the deletion
 semantics in one place and makes `current_user` predictable — but it is a complement to the
@@ -866,7 +930,7 @@ is the design document.
 | — with RLS enabled + `FORCE` | 66 | mechanism [V] | per-table predicates |
 | — without RLS | 2 (`Need`, `GlobalLibraryItem`) | — | rationale only |
 | — RLS on, zero policies, grants revoked | 1 (`BrainActivity`, inside the 66) | — | rationale only |
-| Functions | **12** | **6 [V]** | 6 — all `SECURITY DEFINER` owners now declared (§3); +`app.anonymize_user_account` and `app.partner_user_id` in draft 5 |
+| Functions | **12** | **6 [V]** | 6 — **all `SECURITY DEFINER` owners declared, with the owner's own table grants** (§3). Anonymization functions: **two** (`_in_session`, `_account`); the design doc and this catalogue now agree. |
 | Structural assertions | **11** | 5 [V] | 6 — assertions 9 and 11 added for the effective-principal class |
 | Triggers | **4** | 2 [V] | 2 — exemptions must key on the **job role's name**, not on `BYPASSRLS` [V] |
 | CHECK constraints | 7 | 1 [V] | 6 |
@@ -910,7 +974,7 @@ corrected:
 - **`app.consent_no_resurrect` and `app.empathy_attempt_immutable` have not been audited for
   referential-action principals** (§4). `Message.senderId`'s `ON DELETE SET NULL` fires as the
   **table owner** [V]; any column on a table reachable by a referential action needs the same arm.
-- **The three anonymization functions and `app.partner_user_id` are specified, not built** — and
+- **The two anonymization functions and `app.partner_user_id` are specified, not built** — and
   the draft-5 lesson is that a specified privileged object is where the next defect lives. Each
   needs the "who is `current_user` on this line" audit before it ships.
 

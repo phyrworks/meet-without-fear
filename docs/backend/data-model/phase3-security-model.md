@@ -85,6 +85,27 @@ document deliberately makes no recommendation on either: **whether to launch enc
 
 ## Revision history
 
+**Draft 6 (2026-08-18)** fixes a regression draft 5 introduced and closes the last specification
+items. **Draft 5's `READY` widening was a net regression on draft 4** — I marked it `[R]`, said the
+call sites had not been re-run, and shipped it anyway. That was the wrong call: an unverified
+security change is not a smaller version of a verified one.
+
+| Draft-6 item | Verified? | Response |
+|---|---|---|
+| **One array doing two jobs.** `reveal_reachable` was tested against the target (correct) *and* used as the source exemption (wrong) — so every state added to tighten the guard widened the escape hatch. | **[V]** three attacks that draft 4 blocked, draft 5 allowed | Two sets: wide `reveal_reachable` for the target, narrow `disclosing = {REVEALED, VALIDATED}` for the exemption. |
+| **The `[V]` table was stale**, carried from draft 4 and false against the code above it | — | Re-run in full against the shipping code, including the exhaustive reachable-set closure. |
+| **The writer inventory was six; it is nine.** `state.ts:91`, `state.ts:325`, `stage2.ts:148`/`:211` are non-author and legitimately system-initiated. | **[C]**, and **[V]** they work as `mwf_job` | Added to the D6 allowlist explicitly — `EmpathyAttempt.status` writes were covered by neither of D6's two named categories. |
+| Idempotent early-return sat above the membership check (status oracle in ≤8 calls); two error strings disclosed row existence | — | Membership first, one indistinguishable message. **[V]** an outsider gets the same error probing a hidden row as a missing one. |
+| **The other two immutability triggers have the same referential-action exposure** | **[C]** both `onDelete: SetNull` | Both get the owner arm; the audit is now a CI query, not a reading exercise. Also: zero `onUpdate` overrides, so all 21 `SET NULL` FKs default to `onUpdate: CASCADE`. |
+| `Invitation.acceptedByUserId ON DELETE SET NULL` contradicts its own CHECK | — | Split the invariant: `acceptedAt` carries "was accepted", `acceptedByUserId` carries "by whom" and may be nulled. CHECKs have no role exemption, which is the general lesson. |
+| `app.partner_user_id` and `app.create_user_for_clerk` were named, not specified | — | Both specified. `partner_user_id` is caller-bound by join. `create_user_for_clerk` is flagged as the design's one un-argument-checkable object and gets its own role. |
+| Branch-A sequencing for the privileged functions | **[V]** zero rows as `mwf_job` without permissive policies | New **W1a**, ordered before W4a/W4b. |
+
+**One more instance of the draft-5 class, found while re-testing:** I declared the function's owner
+but never granted that owner table privileges, so every call failed with `permission denied`. The
+owner is not just a name — it is a principal that needs its own grants. Catalogue §3 now states
+them.
+
 **Draft 5 (2026-08-18)** responds to a fourth adversarial pass, which **approved the architecture**
 and found eight specification items to close before the DDL that depends on them. The role split,
 derived inventory, vessel-derived predicates, column grants, immutability triggers, tiering and
@@ -1020,38 +1041,47 @@ GRANT  UPDATE (content, "revisionCount") ON "EmpathyAttempt" TO mwf_app;
 CREATE FUNCTION app.empathy_set_status(p_id text, p_new "EmpathyStatus") RETURNS void
   LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public, app AS $$
 DECLARE r record;
-        -- NOT the SELECT predicate's set. This is the set of states the PRODUCT
-        -- converts into disclosure. checkAndRevealBothIfReady reveals every READY
-        -- attempt once both sides are READY/VALIDATED, and it runs outside this
-        -- function -- so letting a non-author write READY is letting them reveal,
-        -- one step later. Same shape for AWAITING_SHARING, which the sharing flow
-        -- can carry into a reveal. Matching this set to the read predicate was
-        -- exactly the sin of section 4.3, one level up.
+        -- TWO SETS, DOING TWO DIFFERENT JOBS. Draft 5 used one array for both the
+        -- target test and the source exemption, and that was a NET REGRESSION on
+        -- draft 4: every state added to tighten the target simultaneously widened
+        -- the escape hatch, because the exemption's justification -- "a source that
+        -- was already disclosing leaks nothing new" -- is true only of REVEALED and
+        -- VALIDATED. READY and AWAITING_SHARING are reveal-REACHABLE, not disclosing.
+        --
+        -- Target test: what the PRODUCT can turn into disclosure.
+        -- checkAndRevealBothIfReady reveals every READY attempt once both sides are
+        -- READY/VALIDATED, and it runs outside this function -- so letting a
+        -- non-author write READY is letting them reveal, one step later.
         reveal_reachable "EmpathyStatus"[] :=
           ARRAY['REVEALED','VALIDATED','READY','AWAITING_SHARING']::"EmpathyStatus"[];
+        -- Source exemption: only states where the content is ALREADY visible.
+        disclosing "EmpathyStatus"[] := ARRAY['REVEALED','VALIDATED']::"EmpathyStatus"[];
 BEGIN
   -- FOR UPDATE, not a bare SELECT. Without it: a concurrent REVEALED -> HELD
   -- committing underneath let a non-author read REVEALED, pass the guard, block
   -- on the lock, and write VALIDATED onto a row whose committed prior state was
   -- HELD. The guard has to hold over the write, not merely precede it.
   SELECT * INTO r FROM public."EmpathyAttempt" WHERE id = p_id FOR UPDATE;
-  IF NOT FOUND THEN RAISE EXCEPTION 'no such attempt' USING ERRCODE='42501'; END IF;
+
+  -- MEMBERSHIP FIRST, and ONE indistinguishable error for "no row" and "not
+  -- yours". Draft 5 put the idempotent early-return above this, which let a
+  -- non-member binary-search a hidden row's exact status in at most eight calls;
+  -- and two distinct error strings disclosed row existence on their own.
+  IF NOT FOUND
+     OR NOT EXISTS (SELECT 1 FROM public."Session" s
+                    JOIN public."RelationshipMember" rm ON rm."relationshipId" = s."relationshipId"
+                    WHERE s.id = r."sessionId" AND rm."userId" = app.current_user_id()) THEN
+    RAISE EXCEPTION 'attempt not found or not accessible' USING ERRCODE='42501';
+  END IF;
 
   -- Idempotent. The callers include retried fire-and-forget paths, and two
   -- identical calls previously moved statusVersion 4 -> 6 with no state change.
   IF r.status IS NOT DISTINCT FROM p_new THEN RETURN; END IF;
 
-  IF NOT EXISTS (SELECT 1 FROM public."Session" s
-                 JOIN public."RelationshipMember" rm ON rm."relationshipId" = s."relationshipId"
-                 WHERE s.id = r."sessionId" AND rm."userId" = app.current_user_id()) THEN
-    RAISE EXCEPTION 'not a session member' USING ERRCODE='42501';
-  END IF;
-
   -- THE RULE: a non-author may never move a row into a state the reveal path can
-  -- turn into disclosure. Everything else narrows visibility or moves between two
-  -- states that are both already reveal-unreachable.
+  -- turn into disclosure, unless the content is already disclosed.
   IF r."sourceUserId" IS DISTINCT FROM app.current_user_id()
-     AND p_new = ANY(reveal_reachable) AND NOT (r.status = ANY(reveal_reachable)) THEN
+     AND p_new = ANY(reveal_reachable) AND NOT (r.status = ANY(disclosing)) THEN
     RAISE EXCEPTION 'non-author may not advance an EmpathyAttempt toward disclosure (% -> %)',
       r.status, p_new USING ERRCODE = '42501';
   END IF;
@@ -1071,35 +1101,75 @@ REVOKE EXECUTE ON FUNCTION app.empathy_set_status(text, "EmpathyStatus") FROM PU
 GRANT  EXECUTE ON FUNCTION app.empathy_set_status(text, "EmpathyStatus") TO mwf_app;
 ```
 
-**The `READY` widening is the item to re-check first.** **[R]** Widening the set from
-`{REVEALED, VALIDATED}` to include `READY` and `AWAITING_SHARING` is the right *shape* — it closes
-the reported escalation, where Ada sets Bob's row `READY`, sets her own, and
-`checkAndRevealBothIfReady` does the disclosing for her — but it has **not** been re-run against
-the six call sites, and `768`'s `HELD → ANALYZING` and `960`'s `* → REFINING` are the ones to
-verify, since a guesser sitting in `READY` moving to `REFINING` is a *narrowing* and must stay
-legal. The alternative placement is to make `checkAndRevealBothIfReady` enforce the non-author rule
-itself; that is more precise and more code. **Decide with the D6 work, not before it.**
+##### The writer inventory is nine, not six
 
-**[V] Verified against ground truth** (row state read back as superuser after each attempt, not
-merely absence of error):
+Draft 4 listed six. **[C] Three more exist, all non-author, all writing into the reveal-reachable
+closure, and none is tunable by any rule** — the transitions are legitimately system-initiated:
 
-| | Result |
+| Site | Actor → row | Transition | Why no guard can allow it |
+|---|---|---|---|
+| `state.ts:91` `markEmpathyReady`, from `messages.ts:497` `confirmFeelHeard` | subject → **guesser's** row | `HELD → READY` | **Stage 2's primary progression.** The subject completes Stage 1 and the reconciler marks the partner's attempt `READY`. A detached promise inside an HTTP handler — same pool, same `mwf_app` identity. |
+| `state.ts:325` `runReconcilerForDirection` | subject → **guesser's** row | `* → AWAITING_SHARING` | the gaps-detected path |
+| `stage2.ts:148`, `:211` `triggerReconcilerAndUpdateStatuses` | second consenter → **both** rows | `* → READY` / `AWAITING_SHARING` | writes both partners at once |
+
+**All three are added to the D6 allowlist explicitly and run as `mwf_job`.** D6 previously named
+`checkAndRevealBothIfReady` and "the reconciler's own `ReconcilerResult` reads and writes" — an
+`EmpathyAttempt.status` write is neither, so the allowlist would not have covered them and the
+guard would have killed the main path. **[V]** As `mwf_job` all three succeed with a direct
+`UPDATE`; they do **not** call the transition function, whose membership check has no user identity
+to test against.
+
+So: **`mwf_app` writes `status` only through `app.empathy_set_status`; `mwf_job` writes it
+directly.** `sharing.ts:834`/`:984` are already covered by the accept transaction, and
+`reconciler.ts:960` is correctly inventoried as an `mwf_app` caller.
+
+##### The verification table, re-run against the code above
+
+Draft 5 carried this table forward from draft 4 without re-running it, and it was false — exactly
+as its own `[R]` warned. **[V] Re-run against the two-set function as written above.** Ground truth
+read back as superuser after every attempt, plus a check that Ada cannot read Bob's plaintext
+through the SELECT policy afterwards.
+
+| Real call site | Result | Ada reads Bob's text after? |
+|---|---|---|
+| `768` both rows `HELD → ANALYZING` | pass | no |
+| `1147` Ada sets Bob `REVEALED → VALIDATED` | pass | **yes — correct**, `VALIDATED` is disclosing |
+| `1161` Ada sets Bob `REVEALED → REFINING` | pass | no |
+| `2066` Ada, own `REFINING → ANALYZING` | pass | no |
+| `1396` Ada, own `→ VALIDATED` | pass | no |
+| `960` Ada sets Bob `→ REFINING` from `HELD`/`ANALYZING`/`READY`/`AWAITING_SHARING`/`REVEALED` | **all five pass** | no |
+| `state.ts:91`, `state.ts:325`, `stage2.ts:148` as `mwf_job` | pass (direct `UPDATE`) | no |
+
+| Attack | Result |
 |---|---|
-| all **six** real call sites, including both-row `768` and non-author `1147`/`1161`/`960` | **all succeed** |
-| Ada reveals Bob's `HELD` row | `ERROR: non-author may not disclose` |
-| Ada moves Bob `HELD → VALIDATED` | `ERROR: non-author may not disclose` |
-| Ada reveals Bob's `READY` row | `ERROR: non-author may not disclose` |
-| Eve (outsider) reveals Bob's row | `ERROR: not a session member` |
-| Ada rewrites **Bob's** content | **blocked** — row unchanged |
-| Ada rewrites **her own** content | succeeds |
+| Ada: Bob `READY → REVEALED` | **blocked** — draft 5 allowed this in one call |
+| Ada: Bob `AWAITING_SHARING → REVEALED` | **blocked** — draft 5 allowed this |
+| Ada: Bob `AWAITING_SHARING → READY` | **blocked** — the T1 shape draft 5 left intact |
+| Ada: Bob `HELD → REVEALED` | blocked |
+| Ada: Bob `HELD → VALIDATED` | blocked |
+| Ada: Bob `HELD → READY` | blocked |
+| Eve (outsider), any transition | `attempt not found or not accessible` |
+| Eve probes a hidden row's status | **same message** — indistinguishable |
 
-Why the rule is the right one, in one line: **the danger is a non-author moving a row into a
-disclosing state**; a transition whose target is non-disclosing cannot leak, and one whose source
-was already disclosing leaks nothing new.
+In every blocked row, Ada's subsequent read of Bob's content returned **zero rows**.
 
-**Cost, stated plainly:** six application call sites stop being `prisma.empathyAttempt.update({
-status })` and become a function call. That is Phase 4 work and it belongs on the W-list, not in a
-footnote — it is now **W4a**.
+**[V] The non-author reachable closure**, computed exhaustively over all source × target pairs:
+
+| Non-author source | Can reach |
+|---|---|
+| `HELD` / `ANALYZING` / `REFINING` / `NEEDS_WORK` | `{HELD, ANALYZING, REFINING, NEEDS_WORK}` |
+| `READY` / `AWAITING_SHARING` | `{HELD, ANALYZING, REFINING, NEEDS_WORK}` — downward only |
+
+**Disjoint from `{REVEALED, VALIDATED, READY, AWAITING_SHARING}`.** A non-author cannot reach a
+reveal-reachable state from any non-disclosing source, and `960`'s narrowing stays legal from all
+five sources.
+
+Why the rule is right, in one line: **the danger is a non-author moving a row into a state the
+reveal path can convert into disclosure**; a transition whose target is outside that set cannot
+leak, and one whose source is *already disclosing* leaks nothing new.
+
+**Cost, stated plainly:** six application call sites become a function call and three move to the
+`mwf_job` connection. Phase 4 work — **W4a**.
 
 #### `ReconcilerResult` — the guesser arm cannot be expressed as a row policy
 
@@ -1401,14 +1471,35 @@ out by the public unauthenticated `GET /invitations/:id` [C]. The root cause is 
 issue: `Invitation` has **no invitee identity field**, so the check can never verify the caller is
 the invitee.
 
+**Two of my own proposals contradicted each other**, and review caught it: `ON DELETE SET NULL`
+cannot coexist with `CHECK (status <> 'ACCEPTED' OR "acceptedByUserId" IS NOT NULL)`. **CHECK
+constraints have no role exemption** — unlike triggers, there is nowhere to put a `mwf_job` arm —
+so deleting a user who had accepted an invitation would abort the delete outright.
+
+The resolution separates the two facts the constraint was conflating: *that* an invitation was
+accepted, and *by whom*. Only the second may be anonymized.
+
 ```sql
 ALTER TABLE "Invitation"
-  ADD COLUMN "acceptedByUserId" text NULL
-    REFERENCES "User"(id) ON DELETE SET NULL;
-ALTER TABLE "Invitation" ADD CONSTRAINT "Invitation_accepted_bound_ck"
-  CHECK (status <> 'ACCEPTED' OR "acceptedByUserId" IS NOT NULL) NOT VALID;
+  ADD COLUMN "acceptedByUserId" text NULL REFERENCES "User"(id) ON DELETE SET NULL,
+  ADD COLUMN "acceptedAt"       timestamptz NULL;
+
+-- The invariant is "an accepted invitation records that acceptance happened".
+-- acceptedAt is never nulled by any referential action, so the constraint holds
+-- across user deletion while acceptedByUserId is free to become NULL.
+ALTER TABLE "Invitation" ADD CONSTRAINT "Invitation_accepted_dated_ck"
+  CHECK (status <> 'ACCEPTED' OR "acceptedAt" IS NOT NULL) NOT VALID;
+
 CREATE INDEX "Invitation_acceptedByUserId_idx" ON "Invitation"("acceptedByUserId");
 ```
+
+The `work-kpkq.2` fix is unaffected: the policy arm is still
+`"acceptedByUserId" = app.current_user_id()`, which simply stops matching once the acceptor is
+deleted — correct, since a deleted user should not retain session access. **[R]** Not executed.
+
+The simpler alternative is to drop the CHECK entirely and rely on the application; that is weaker
+and gives up the constraint's real value, which is making "accepted but unattributed" a state the
+database can reason about.
 
 The RLS policy then admits the invitee before they are a member:
 
@@ -1964,8 +2055,9 @@ rather than a stop-the-world rewrite. Prerequisites: `decrypt()` must **throw**,
 | W2 | `app.*` helper functions (`current_user_id`, `is_member`, `session_relationship`, `is_session_member`) | W1 | yes | no |
 | W3 | CHECK constraints (§5.1), all `NOT VALID` | **the error-path fix (§5.2) — not optional** | yes, *after* that | no |
 | W4 | Immutability triggers on `Message`, `EmpathyAttempt`, `ConsentedContent`. **Binds the day it applies, not at W10 — see §7.12a** | W3, **W4b** | yes | no |
-| **W4a** | `app.empathy_set_status()` + move the **6** status call sites onto it (§4.3) | W1 | schema yes; **the 6 call sites are Phase 4** | **partly** |
-| **W4b** | `app.anonymize_user_in_session()` + move `deleteSessionForUser` onto it (§7.12a) | W1 | schema yes; **the call site is Phase 4** | **partly** |
+| **W1a** | *(branch A only)* `USING (true)` policies for `mwf_job`/`mwf_ops` on every table their bodies touch | W1 | yes | no |
+| **W4a** | `app.empathy_set_status()` + move the **6** `mwf_app` status call sites onto it, and the **3** system ones onto `mwf_job` (§4.3) | W1, **W1a under branch A** | schema yes; **the 9 call sites are Phase 4** | **partly** |
+| **W4b** | `app.anonymize_user_in_session()`, `app.anonymize_user_account()`, `app.partner_user_id()` + move `session-deletion.ts`, `account-deletion.ts` and the partner-detection sites onto them (§7.12a, §7.11) | W1, **W1a under branch A** | schema yes; **the call sites are Phase 4** | **partly** |
 | W5 | The 5 FKs (§6) + their indexes | — | yes | no |
 | W6 | `Invitation.acceptedByUserId` + backfill | W5 | schema yes; **middleware fix is Phase 4** | partly |
 | W6a | **Write-path fix: set `forUserId` on all 5 `Message.create` sites** + CI guard (§7.12) | — | yes | no |
@@ -1976,6 +2068,12 @@ rather than a stop-the-world rewrite. Prerequisites: `decrypt()` must **throw**,
 | W11 | Detached-work identity plumbing (§7.3 tier 1, ~30 sites) | D1-c | no | **yes** |
 | W12 | Session-scoped identity for two-party paths (§7.3 tier 2) | W11 | no | **yes** |
 | W13 | Encryption: fix `decrypt()` to throw; extend the field map; envelope + `keyId` | product decision | mostly yes | partly |
+
+**Branch-A sequencing, which nothing previously captured:** the `SECURITY DEFINER` functions are
+owned by `mwf_job`, and under branch A `mwf_job` has no `BYPASSRLS`. So on a `FORCE`d table with no
+permissive policy their bodies see **zero rows** and raise "not found" on every call [V] — silently
+correct-looking DDL, uniformly broken behaviour. **W1a must land before W4a and W4b under branch A.**
+Under branch B, W1a does not exist.
 
 **What genuinely cannot be done database-first:** only **W10, W11, W12**. Everything else lands
 against the current Prisma backend without breaking it, because a policy on a table whose reader
