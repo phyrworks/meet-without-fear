@@ -180,6 +180,108 @@ describe('buildTrace', () => {
     expect(stmt.rowsRead).toEqual({ Message: 12, Session: 4 });
   });
 
+  /**
+   * Real output from both versions, captured side by side on identical data:
+   * `pgvector/pgvector:pg16` (Postgres 16.14, the `mwf-postgres` container) and
+   * `pgvector/pgvector:pg18` (Postgres 18.6, a throwaway container on :5433).
+   *
+   * PG18 renders `actual rows` to two decimal places. The parser used to require
+   * `rows=(\d+)` immediately before ` loops`, so on PG18 nothing matched, every
+   * row count silently became 0, and the whole cost channel stopped existing —
+   * on the very upgrade this oracle was built to support. Verify mode would have
+   * been loud; record mode would have baked an empty channel into a baseline and
+   * stayed green.
+   */
+  describe.each([
+    ['PG16', 'Seq Scan on "Message" m  (cost=0.00..20.62 rows=4 width=68) (actual rows=6 loops=1)', 6, 6],
+    ['PG18', 'Seq Scan on "Message" m  (cost=0.00..20.62 rows=4 width=68) (actual rows=6.00 loops=1)', 6, 6],
+  ])('%s single-loop rendering', (_v, nodeLine, expectTop, expectRead) => {
+    it('reads the same row count from either rendering', () => {
+      const raw = [
+        `2026-08-18 23:50:39.445 UTC [76] db=probe,app=${APP},vxid=2/78,xid=0 LOG:  execute <unnamed>: SELECT 1`,
+        `2026-08-18 23:50:39.445 UTC [76] db=probe,app=${APP},vxid=2/78,xid=0 LOG:  duration: 0.018 ms  plan:`,
+        `\tQuery Text: SELECT 1`,
+        `\t${nodeLine}`,
+      ].join('\n');
+      const stats = { unparsedPlanNodes: 0 };
+      const [stmt] = buildTrace(parsePostgresLog(raw), { database: 'probe', application: APP, stats });
+      expect(stmt.topRows).toBe(expectTop);
+      expect(stmt.rowsRead).toEqual({ Message: expectRead });
+      expect(stats.unparsedPlanNodes).toBe(0);
+    });
+  });
+
+  it('recovers the true total from a fractional per-loop average', () => {
+    // Real capture of the same query on both versions. The inner scan matched 7
+    // rows for one outer row and 6 for the other, so the true total is 13.
+    // PG18 says `rows=6.50 loops=2` and gets 13. PG16 says `rows=6 loops=2` and
+    // gets 12 — it rounds the average to an integer and loses a row. No parser
+    // can reconcile that; PG18 is simply more faithful, and the README says so.
+    const plan = (nodeLine: string) =>
+      [
+        `2026-08-18 23:50:39.447 UTC [76] db=probe,app=${APP},vxid=2/80,xid=0 LOG:  execute <unnamed>: SELECT 1`,
+        `2026-08-18 23:50:39.447 UTC [76] db=probe,app=${APP},vxid=2/80,xid=0 LOG:  duration: 0.013 ms  plan:`,
+        `\tQuery Text: SELECT 1`,
+        `\tSeq Scan on "User" u  (cost=0.00..3.40 rows=2 width=11) (actual rows=2.00 loops=1)`,
+        `\t    ->  Aggregate  (cost=1.18..1.19 rows=1 width=8) (actual rows=1.00 loops=2)`,
+        `\t          ->  ${nodeLine}`,
+      ].join('\n');
+
+    const pg18 = buildTrace(parsePostgresLog(plan('Seq Scan on "Message" m  (cost=0.00..1.16 rows=6 width=0) (actual rows=6.50 loops=2)')), {
+      database: 'probe',
+      application: APP,
+    })[0];
+    expect(pg18.rowsRead.Message).toBe(13);
+
+    const pg16 = buildTrace(parsePostgresLog(plan('Seq Scan on "Message" m  (cost=0.00..1.16 rows=6 width=0) (actual rows=6 loops=2)')), {
+      database: 'probe',
+      application: APP,
+    })[0];
+    expect(pg16.rowsRead.Message).toBe(12);
+  });
+
+  it('rounds rather than truncates a repeating average', () => {
+    // 10 rows over 3 loops renders as 3.33; truncating `3.33 * 3 = 9.99` loses a
+    // row, so the product is rounded.
+    const raw = [
+      `2026-08-18 23:50:39.447 UTC [76] db=probe,app=${APP},vxid=2/81,xid=0 LOG:  execute <unnamed>: SELECT 1`,
+      `2026-08-18 23:50:39.447 UTC [76] db=probe,app=${APP},vxid=2/81,xid=0 LOG:  duration: 0.013 ms  plan:`,
+      `\tQuery Text: SELECT 1`,
+      `\tSeq Scan on "Message" m  (cost=0.00..1.16 rows=6 width=0) (actual rows=3.33 loops=3)`,
+    ].join('\n');
+    const [stmt] = buildTrace(parsePostgresLog(raw), { database: 'probe', application: APP });
+    expect(stmt.rowsRead.Message).toBe(10);
+  });
+
+  it('treats a never-executed node as read-nothing, not as a parse failure', () => {
+    // Renders identically on PG16 and PG18 — verified on both containers.
+    const raw = [
+      `2026-08-18 23:50:39.447 UTC [76] db=probe,app=${APP},vxid=2/82,xid=0 LOG:  execute <unnamed>: SELECT 1`,
+      `2026-08-18 23:50:39.447 UTC [76] db=probe,app=${APP},vxid=2/82,xid=0 LOG:  duration: 0.013 ms  plan:`,
+      `\tQuery Text: SELECT 1`,
+      `\tSeq Scan on "Message" m  (cost=0.00..1.16 rows=1 width=3) (never executed)`,
+    ].join('\n');
+    const stats = { unparsedPlanNodes: 0 };
+    const [stmt] = buildTrace(parsePostgresLog(raw), { database: 'probe', application: APP, stats });
+    expect(stmt.rowsRead).toEqual({ Message: 0 });
+    expect(stats.unparsedPlanNodes).toBe(0);
+  });
+
+  it('counts a node whose row counts cannot be read, so a rendering change fails at capture', () => {
+    // The shape of the PG18 defect: node lines still match, because `(cost=` did
+    // not change. Only the counts moved. An assertion on "did any node parse"
+    // would have missed it entirely, so the tripwire sits on the counts.
+    const raw = [
+      `2026-08-18 23:50:39.447 UTC [76] db=probe,app=${APP},vxid=2/83,xid=0 LOG:  execute <unnamed>: SELECT 1`,
+      `2026-08-18 23:50:39.447 UTC [76] db=probe,app=${APP},vxid=2/83,xid=0 LOG:  duration: 0.013 ms  plan:`,
+      `\tQuery Text: SELECT 1`,
+      `\tSeq Scan on "Message" m  (cost=0.00..1.16 rows=6 width=0) (actual rows=6,00 loops=1)`,
+    ].join('\n');
+    const stats = { unparsedPlanNodes: 0 };
+    buildTrace(parsePostgresLog(raw), { database: 'probe', application: APP, stats });
+    expect(stats.unparsedPlanNodes).toBe(1);
+  });
+
   it('does not mistake an index for a relation', () => {
     const raw = [
       `2026-08-17 22:21:32.437 UTC [48199] db=probe,app=${APP},vxid=3/1,xid=0 LOG:  statement: SELECT 1`,

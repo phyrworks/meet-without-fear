@@ -169,7 +169,12 @@ export async function recordOrVerify(opts: {
   steps: StepResult[];
 }): Promise<RunReport> {
   const { scenario, harness, steps } = opts;
-  const map = await buildLabelMap(harness.fixture.target, harness.fixture.database, harness.fixture.manifest);
+  const map = await buildLabelMap(
+    harness.fixture.target,
+    harness.fixture.database,
+    harness.fixture.manifest,
+    harness.fixture.seededClerkIds,
+  );
 
   const normalized: GoldenStep[] = [];
   const unresolved: string[] = [];

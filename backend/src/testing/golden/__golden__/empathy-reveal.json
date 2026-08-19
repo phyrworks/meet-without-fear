@@ -54,7 +54,7 @@
           "before": {
             "biometricEnabled": false,
             "biometricEnrolledAt": null,
-            "clerkId": "e2e_1786582403926_rxdc7e",
+            "clerkId": "<clerkId:bob>",
             "createdAt": "<ts:1>",
             "email": "bob@e2e.test",
             "firstName": null,
@@ -123,7 +123,7 @@
           "before": {
             "biometricEnabled": false,
             "biometricEnrolledAt": null,
-            "clerkId": "e2e_1786582403926_rxdc7e",
+            "clerkId": "<clerkId:bob>",
             "createdAt": "<ts:1>",
             "email": "bob@e2e.test",
             "firstName": null,
@@ -1495,7 +1495,7 @@
           "before": {
             "biometricEnabled": false,
             "biometricEnrolledAt": null,
-            "clerkId": "e2e_1786582403923_qqr7v0",
+            "clerkId": "<clerkId:ada>",
             "createdAt": "<ts:2>",
             "email": "ada@e2e.test",
             "firstName": null,
@@ -1546,7 +1546,7 @@
           "before": {
             "biometricEnabled": false,
             "biometricEnrolledAt": null,
-            "clerkId": "e2e_1786582403923_qqr7v0",
+            "clerkId": "<clerkId:ada>",
             "createdAt": "<ts:2>",
             "email": "ada@e2e.test",
             "firstName": null,
