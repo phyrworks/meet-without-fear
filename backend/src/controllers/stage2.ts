@@ -45,6 +45,7 @@ import { updateContext } from '../lib/request-context';
 import { routeModel, scoreAmbiguity } from '../services/model-router';
 import { transition } from '../services/empathy-state-machine';
 import { cleanVisibleAIText } from '../utils/visible-text';
+import { findMessageByContent } from '../utils/message-dedupe';
 
 // ============================================================================
 // Types
@@ -1290,13 +1291,14 @@ export async function validateEmpathy(
       const waitMessage =
         "You confirmed this feels right. We'll hold here while your partner reviews what you shared. Once they respond, we'll move you into the next step.";
 
-      const existingWaitMessage = await prisma.message.findFirst({
-        where: {
-          sessionId,
-          forUserId: user.id,
-          role: MessageRole.AI,
-          content: waitMessage,
-        },
+      // Matched on contentHash, not content: the content column is encrypted with
+      // a random IV per write, so equality on it can never match. See
+      // utils/message-dedupe.ts.
+      const existingWaitMessage = await findMessageByContent(prisma.message, {
+        sessionId,
+        forUserId: user.id,
+        role: MessageRole.AI,
+        content: waitMessage,
       });
 
       if (!existingWaitMessage) {

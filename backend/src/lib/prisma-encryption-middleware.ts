@@ -10,19 +10,40 @@
  *
  * Limitations:
  * - Raw queries ($queryRaw, $executeRaw) bypass this middleware
- * - Encrypted fields cannot be used in WHERE clauses for content-based filtering
+ * - Encrypted fields cannot be used in WHERE clauses for content-based filtering.
+ *   Message uses a `contentHash` column (SHA-256 of the plaintext, written here)
+ *   for equality/dedupe probes instead.
+ *
+ * A row that cannot be decrypted raises FieldDecryptionError, which propagates
+ * to the caller. It is never converted into empty content.
  */
 
 import { Prisma, PrismaClient } from '@prisma/client';
 import { encrypt, decrypt, isEncrypted } from '../utils/field-encryption';
+import { contentHash } from '../utils/content-hash';
+
+export interface SensitiveFieldConfig {
+  /** Encrypted/decrypted as strings. */
+  stringFields: string[];
+  /** JSON.stringify before encrypt, JSON.parse after decrypt. */
+  jsonFields: string[];
+  /**
+   * Deterministic digests written alongside the ciphertext, so equality/dedupe
+   * probes have something to match on. `from` is a plaintext string field,
+   * `to` is the column that receives its SHA-256. See utils/content-hash.ts.
+   */
+  hashedFields?: Array<{ from: string; to: string }>;
+}
 
 /**
  * Maps Prisma model names to their sensitive fields.
- * - stringFields: encrypted/decrypted as strings
- * - jsonFields: JSON.stringify before encrypt, JSON.parse after decrypt
  */
-export const SENSITIVE_FIELD_MAP: Record<string, { stringFields: string[]; jsonFields: string[] }> = {
-  Message: { stringFields: ['content'], jsonFields: [] },
+export const SENSITIVE_FIELD_MAP: Record<string, SensitiveFieldConfig> = {
+  Message: {
+    stringFields: ['content'],
+    jsonFields: [],
+    hashedFields: [{ from: 'content', to: 'contentHash' }],
+  },
   InnerWorkMessage: { stringFields: ['content'], jsonFields: [] },
   UserVessel: { stringFields: ['conversationSummary'], jsonFields: ['notableFacts'] },
   Boundary: { stringFields: ['description'], jsonFields: [] },
@@ -58,8 +79,16 @@ const RESULT_BEARING_OPERATIONS = new Set([
 /** Encrypt a single data object's sensitive fields in place. */
 export function encryptDataFields(
   data: Record<string, unknown>,
-  config: { stringFields: string[]; jsonFields: string[] },
+  config: SensitiveFieldConfig,
 ): void {
+  // Hash BEFORE encrypting — the digest must cover the plaintext. Written on
+  // every write that supplies the source field, including when no encryption
+  // key is configured, so probes behave identically in both modes.
+  for (const { from, to } of config.hashedFields ?? []) {
+    if (from in data && typeof data[from] === 'string') {
+      data[to] = contentHash(data[from] as string);
+    }
+  }
   for (const field of config.stringFields) {
     if (field in data && typeof data[field] === 'string') {
       data[field] = encrypt(data[field] as string);
@@ -77,7 +106,7 @@ export function encryptDataFields(
 /** Decrypt a single record's sensitive fields in place. */
 export function decryptRecordFields(
   record: Record<string, unknown>,
-  config: { stringFields: string[]; jsonFields: string[] },
+  config: SensitiveFieldConfig,
 ): void {
   for (const field of config.stringFields) {
     if (field in record && typeof record[field] === 'string') {
@@ -88,15 +117,15 @@ export function decryptRecordFields(
     if (field in record && typeof record[field] === 'string') {
       const value = record[field] as string;
       if (isEncrypted(value)) {
+        // decrypt() throws FieldDecryptionError on an undecryptable value; that
+        // propagates deliberately — see utils/field-encryption.ts.
         const decrypted = decrypt(value);
-        if (decrypted === '') {
+        try {
+          record[field] = JSON.parse(decrypted);
+        } catch {
+          // Decryption succeeded but the plaintext is not valid JSON — a genuinely
+          // malformed legacy value, not a key failure.
           record[field] = null;
-        } else {
-          try {
-            record[field] = JSON.parse(decrypted);
-          } catch {
-            record[field] = null;
-          }
         }
       }
     }
@@ -108,7 +137,7 @@ export function decryptRecordFields(
 function encryptWriteArgs(
   operation: string,
   args: Record<string, unknown>,
-  config: { stringFields: string[]; jsonFields: string[] },
+  config: SensitiveFieldConfig,
 ): void {
   if (operation === 'upsert') {
     if (args.create && typeof args.create === 'object') {
@@ -133,7 +162,7 @@ function encryptWriteArgs(
 /** Decrypt result records. Handles single objects, arrays, and null. */
 function decryptResult(
   result: unknown,
-  config: { stringFields: string[]; jsonFields: string[] },
+  config: SensitiveFieldConfig,
 ): void {
   if (result == null) return;
   if (Array.isArray(result)) {
@@ -148,6 +177,44 @@ function decryptResult(
 }
 
 /**
+ * The body of the `$allOperations` interceptor, extracted so it can be exercised
+ * directly in unit tests without a live PrismaClient.
+ *
+ * Decryption failures (FieldDecryptionError) propagate to the caller: an
+ * undecryptable row is missing data, not empty data.
+ */
+export async function applyFieldEncryption({
+  model,
+  operation,
+  args,
+  query,
+}: {
+  model: string;
+  operation: string;
+  args: Record<string, unknown>;
+  query: (args: Record<string, unknown>) => Promise<unknown>;
+}): Promise<unknown> {
+  const config = SENSITIVE_FIELD_MAP[model ?? ''];
+  if (!config) {
+    return query(args);
+  }
+
+  // Encrypt on write
+  if (WRITE_OPERATIONS.has(operation)) {
+    encryptWriteArgs(operation, args, config);
+  }
+
+  const result = await query(args);
+
+  // Decrypt on read (including results returned from write operations)
+  if (RESULT_BEARING_OPERATIONS.has(operation) && result != null) {
+    decryptResult(result, config);
+  }
+
+  return result;
+}
+
+/**
  * Apply field-level encryption to a PrismaClient via $extends.
  * Returns a new extended client with transparent encrypt-on-write / decrypt-on-read.
  */
@@ -156,26 +223,7 @@ export function withEncryption(prisma: PrismaClient) {
     name: 'field-level-encryption',
     query: {
       $allModels: {
-        async $allOperations({ model, operation, args, query }: { model: string; operation: string; args: Record<string, unknown>; query: (args: Record<string, unknown>) => Promise<unknown> }) {
-          const config = SENSITIVE_FIELD_MAP[model ?? ''];
-          if (!config) {
-            return query(args);
-          }
-
-          // Encrypt on write
-          if (WRITE_OPERATIONS.has(operation)) {
-            encryptWriteArgs(operation, args as Record<string, unknown>, config);
-          }
-
-          const result = await query(args);
-
-          // Decrypt on read (including results returned from write operations)
-          if (RESULT_BEARING_OPERATIONS.has(operation) && result != null) {
-            decryptResult(result, config);
-          }
-
-          return result;
-        },
+        $allOperations: applyFieldEncryption,
       },
     },
   });

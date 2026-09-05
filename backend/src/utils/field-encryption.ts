@@ -14,7 +14,6 @@
  */
 
 import crypto from 'crypto';
-import { logger } from '../lib/logger';
 
 const ALGORITHM = 'aes-256-gcm';
 const IV_LENGTH = 12; // 96 bits — recommended for GCM
@@ -22,6 +21,27 @@ const AUTH_TAG_LENGTH = 16; // 128 bits
 const ENCRYPTED_PREFIX = 'enc:v1:';
 
 let encryptionKey: Buffer | null = null;
+
+/**
+ * Thrown when a value in the `enc:v1:` format cannot be decrypted — wrong key,
+ * corrupted ciphertext, or a tampered auth tag.
+ *
+ * This error MUST propagate. Swallowing it and substituting an empty string
+ * presents total, irreversible data loss as legitimately empty content, which
+ * is indistinguishable from the user having written nothing. Any call site that
+ * genuinely needs to survive a bad row must handle this explicitly (log at error
+ * level, count it, skip the row) rather than treating it as empty content.
+ */
+export class FieldDecryptionError extends Error {
+  readonly cause?: unknown;
+
+  constructor(message: string, cause?: unknown) {
+    super(message);
+    this.name = 'FieldDecryptionError';
+    this.cause = cause;
+    Object.setPrototypeOf(this, FieldDecryptionError.prototype);
+  }
+}
 
 /**
  * Lazily resolves the encryption key from the environment.
@@ -88,8 +108,12 @@ export function encrypt(plaintext: string): string {
  * Decrypt a value produced by `encrypt()`.
  *
  * If the value does not match the encrypted format (e.g. legacy plaintext),
- * it is returned unchanged. If decryption fails due to corrupted data or
- * wrong key, returns an empty string rather than throwing.
+ * it is returned unchanged — that passthrough is deliberate and load-bearing
+ * for rows written before encryption was enabled.
+ *
+ * @throws {FieldDecryptionError} if a value IS in the encrypted format but
+ * cannot be decrypted (wrong key, corrupted ciphertext, tampered auth tag).
+ * Never returns an empty string to signal failure.
  */
 export function decrypt(encrypted: string): string {
   const key = getKey();
@@ -111,10 +135,13 @@ export function decrypt(encrypted: string): string {
     const decrypted = Buffer.concat([decipher.update(ciphertext), decipher.final()]);
     return decrypted.toString('utf8');
   } catch (err) {
-    logger.error('[FieldEncryption] Decryption failed — returning empty string', {
-      error: err instanceof Error ? err.message : String(err),
-    });
-    return '';
+    // Do NOT return '' here. An undecryptable value is missing data, not empty
+    // data — the caller must decide, explicitly, how to handle it.
+    throw new FieldDecryptionError(
+      '[FieldEncryption] Failed to decrypt a value in enc:v1: format ' +
+        '(wrong key, corrupted ciphertext, or tampered auth tag)',
+      err,
+    );
   }
 }
 

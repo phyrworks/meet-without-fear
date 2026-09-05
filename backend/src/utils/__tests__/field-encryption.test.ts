@@ -1,5 +1,11 @@
 import crypto from 'crypto';
-import { encrypt, decrypt, isEncrypted, _resetForTesting } from '../field-encryption';
+import {
+  encrypt,
+  decrypt,
+  isEncrypted,
+  FieldDecryptionError,
+  _resetForTesting,
+} from '../field-encryption';
 
 // Generate a deterministic 32-byte key for tests
 const TEST_KEY = crypto.randomBytes(32).toString('base64');
@@ -99,26 +105,59 @@ describe('field-encryption', () => {
   });
 
   describe('corrupted data handling', () => {
-    it('returns empty string for corrupted ciphertext', () => {
+    it('throws FieldDecryptionError for corrupted ciphertext', () => {
       const encrypted = encrypt('valid content');
       // Mangle the ciphertext portion
       const corrupted = encrypted.slice(0, -4) + 'XXXX';
-      const result = decrypt(corrupted);
-      expect(result).toBe('');
+      expect(() => decrypt(corrupted)).toThrow(FieldDecryptionError);
     });
 
-    it('returns empty string for truncated encrypted value', () => {
-      const encrypted = encrypt('test data');
-      // Chop it in half
+    it('throws FieldDecryptionError for a tampered auth tag', () => {
+      const encrypted = encrypt('valid content');
+      const [, , ivB64, authTagB64, ciphertextB64] = encrypted.split(':');
+      const tagBuf = Buffer.from(authTagB64, 'base64');
+      tagBuf[0] = tagBuf[0] ^ 0xff; // flip every bit of the first tag byte
+      const tampered = `enc:v1:${ivB64}:${tagBuf.toString('base64')}:${ciphertextB64}`;
+      expect(tampered).not.toBe(encrypted);
+      expect(() => decrypt(tampered)).toThrow(FieldDecryptionError);
+    });
+
+    it('attaches the underlying error as the cause', () => {
+      const encrypted = encrypt('valid content');
+      const corrupted = encrypted.slice(0, -4) + 'XXXX';
+      let caught: unknown;
+      try {
+        decrypt(corrupted);
+      } catch (err) {
+        caught = err;
+      }
+      expect(caught).toBeInstanceOf(FieldDecryptionError);
+      // The underlying crypto error is preserved so the real reason is not lost.
+      // (It crosses jest's realm boundary, so `toBeInstanceOf(Error)` is unreliable.)
+      const cause = (caught as FieldDecryptionError).cause as Error | undefined;
+      expect(cause).toBeDefined();
+      expect(typeof cause?.message).toBe('string');
+      expect(cause?.message.length).toBeGreaterThan(0);
+    });
+
+    it('throws for a truncated encrypted value that still matches the format', () => {
+      const encrypted = encrypt('test data that is long enough to survive being chopped in half');
       const truncated = encrypted.slice(0, Math.floor(encrypted.length / 2));
-      // If it still looks like encrypted format, it should fail gracefully
-      // If it doesn't match format, it's returned as-is (treated as plaintext)
-      const result = decrypt(truncated);
-      expect(typeof result).toBe('string');
+      if (isEncrypted(truncated)) {
+        expect(() => decrypt(truncated)).toThrow(FieldDecryptionError);
+      } else {
+        // Not in encrypted format → treated as legacy plaintext, returned unchanged
+        expect(decrypt(truncated)).toBe(truncated);
+      }
     });
 
     it('returns plaintext unchanged if value is not encrypted format', () => {
       expect(decrypt('plain text that was never encrypted')).toBe('plain text that was never encrypted');
+    });
+
+    it('returns legacy values that only look prefix-ish unchanged', () => {
+      expect(decrypt('enc:v1:onlyone')).toBe('enc:v1:onlyone');
+      expect(decrypt('')).toBe('');
     });
   });
 
@@ -191,15 +230,29 @@ describe('field-encryption', () => {
   });
 
   describe('decryption with wrong key', () => {
-    it('returns empty string when decrypting with a different key', () => {
+    it('throws FieldDecryptionError when decrypting with a different key', () => {
       const encrypted = encrypt('secret content');
 
       // Switch to a different key
       _resetForTesting();
       process.env.FIELD_ENCRYPTION_KEY = crypto.randomBytes(32).toString('base64');
 
-      const result = decrypt(encrypted);
-      expect(result).toBe('');
+      expect(() => decrypt(encrypted)).toThrow(FieldDecryptionError);
+    });
+
+    it('never silently yields an empty string for undecryptable content', () => {
+      const encrypted = encrypt('secret content');
+
+      _resetForTesting();
+      process.env.FIELD_ENCRYPTION_KEY = crypto.randomBytes(32).toString('base64');
+
+      let result: string | undefined;
+      try {
+        result = decrypt(encrypted);
+      } catch {
+        result = undefined;
+      }
+      expect(result).toBeUndefined();
     });
   });
 });
