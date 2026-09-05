@@ -41,6 +41,7 @@ import {
 } from '../services/tending.service';
 import { getModelCompletion } from '../lib/bedrock';
 import { extractJsonFromResponse } from '../utils/json-extractor';
+import { findMessageByContent } from '../utils/message-dedupe';
 import { z } from 'zod';
 
 // ============================================================================
@@ -1026,10 +1027,15 @@ export async function shareStage4Selections(req: Request, res: Response): Promis
           partnerMember?.user.name ||
           undefined;
         const bridgeContent = stage4HandoffBridgeMessage(partnerName);
+        // Matched on contentHash, not content: the content column is encrypted with
+        // a random IV per write, so equality on it can never match. See
+        // utils/message-dedupe.ts.
         const alreadyBridged = Boolean(
-          await prisma.message.findFirst({
-            where: { sessionId, forUserId: user.id, role: 'AI', content: bridgeContent },
-            select: { id: true },
+          await findMessageByContent(prisma.message, {
+            sessionId,
+            forUserId: user.id,
+            role: 'AI',
+            content: bridgeContent,
           })
         );
         if (!alreadyBridged) {

@@ -651,6 +651,12 @@ model Message {
   forUserId      String? // Which user the AI was responding to (for data isolation)
   role           MessageRole
   content        String          @db.Text
+  // SHA-256 hex of the PLAINTEXT content, written by the Prisma encryption
+  // middleware alongside the encrypted `content`. Field encryption is
+  // non-deterministic (random IV per write), so `content` equality cannot be
+  // used to dedupe; probes match on this instead. Nullable for rows written
+  // before this column existed.
+  contentHash    String?         @db.VarChar(64)
   stage          Int
   timestamp      DateTime        @default(now())
   refiningNeed   IdentifiedNeed? @relation(fields: [refiningNeedId], references: [id], onDelete: SetNull)
@@ -665,6 +671,7 @@ model Message {
 
   @@index([sessionId, timestamp])
   @@index([sessionId, forUserId, role])
+  @@index([sessionId, forUserId, role, contentHash])
   @@index([senderId])
   @@index([forUserId])
   @@index([refiningNeedId])

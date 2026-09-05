@@ -20,14 +20,30 @@
 
 import { Prisma, PrismaClient } from '@prisma/client';
 import { encrypt, decrypt, isEncrypted } from '../utils/field-encryption';
+import { contentHash } from '../utils/content-hash';
+
+export interface SensitiveFieldConfig {
+  /** Encrypted/decrypted as strings. */
+  stringFields: string[];
+  /** JSON.stringify before encrypt, JSON.parse after decrypt. */
+  jsonFields: string[];
+  /**
+   * Deterministic digests written alongside the ciphertext, so equality/dedupe
+   * probes have something to match on. `from` is a plaintext string field,
+   * `to` is the column that receives its SHA-256. See utils/content-hash.ts.
+   */
+  hashedFields?: Array<{ from: string; to: string }>;
+}
 
 /**
  * Maps Prisma model names to their sensitive fields.
- * - stringFields: encrypted/decrypted as strings
- * - jsonFields: JSON.stringify before encrypt, JSON.parse after decrypt
  */
-export const SENSITIVE_FIELD_MAP: Record<string, { stringFields: string[]; jsonFields: string[] }> = {
-  Message: { stringFields: ['content'], jsonFields: [] },
+export const SENSITIVE_FIELD_MAP: Record<string, SensitiveFieldConfig> = {
+  Message: {
+    stringFields: ['content'],
+    jsonFields: [],
+    hashedFields: [{ from: 'content', to: 'contentHash' }],
+  },
   InnerWorkMessage: { stringFields: ['content'], jsonFields: [] },
   UserVessel: { stringFields: ['conversationSummary'], jsonFields: ['notableFacts'] },
   Boundary: { stringFields: ['description'], jsonFields: [] },
@@ -63,8 +79,16 @@ const RESULT_BEARING_OPERATIONS = new Set([
 /** Encrypt a single data object's sensitive fields in place. */
 export function encryptDataFields(
   data: Record<string, unknown>,
-  config: { stringFields: string[]; jsonFields: string[] },
+  config: SensitiveFieldConfig,
 ): void {
+  // Hash BEFORE encrypting — the digest must cover the plaintext. Written on
+  // every write that supplies the source field, including when no encryption
+  // key is configured, so probes behave identically in both modes.
+  for (const { from, to } of config.hashedFields ?? []) {
+    if (from in data && typeof data[from] === 'string') {
+      data[to] = contentHash(data[from] as string);
+    }
+  }
   for (const field of config.stringFields) {
     if (field in data && typeof data[field] === 'string') {
       data[field] = encrypt(data[field] as string);
@@ -82,7 +106,7 @@ export function encryptDataFields(
 /** Decrypt a single record's sensitive fields in place. */
 export function decryptRecordFields(
   record: Record<string, unknown>,
-  config: { stringFields: string[]; jsonFields: string[] },
+  config: SensitiveFieldConfig,
 ): void {
   for (const field of config.stringFields) {
     if (field in record && typeof record[field] === 'string') {
@@ -113,7 +137,7 @@ export function decryptRecordFields(
 function encryptWriteArgs(
   operation: string,
   args: Record<string, unknown>,
-  config: { stringFields: string[]; jsonFields: string[] },
+  config: SensitiveFieldConfig,
 ): void {
   if (operation === 'upsert') {
     if (args.create && typeof args.create === 'object') {
@@ -138,7 +162,7 @@ function encryptWriteArgs(
 /** Decrypt result records. Handles single objects, arrays, and null. */
 function decryptResult(
   result: unknown,
-  config: { stringFields: string[]; jsonFields: string[] },
+  config: SensitiveFieldConfig,
 ): void {
   if (result == null) return;
   if (Array.isArray(result)) {

@@ -12,6 +12,7 @@ import {
   FieldDecryptionError,
   _resetForTesting,
 } from '../../utils/field-encryption';
+import { contentHash } from '../../utils/content-hash';
 
 const TEST_KEY = crypto.randomBytes(32).toString('base64');
 
@@ -260,6 +261,94 @@ describe('prisma-encryption-middleware', () => {
 
       expect(records[0].content).toBe('encrypted message');
       expect(records[1].content).toBe('legacy plaintext');
+    });
+  });
+
+  describe('contentHash on write', () => {
+    const captured: Array<Record<string, unknown>> = [];
+    const query = async (args: Record<string, unknown>) => {
+      captured.push(args);
+      return null;
+    };
+
+    beforeEach(() => {
+      captured.length = 0;
+    });
+
+    it('writes contentHash alongside the encrypted content on create', async () => {
+      const args: Record<string, unknown> = {
+        data: { sessionId: 's1', role: 'AI', content: 'a system message', stage: 2 },
+      };
+      await applyFieldEncryption({ model: 'Message', operation: 'create', args, query });
+
+      const data = (captured[0].data as Record<string, unknown>);
+      expect(data.contentHash).toBe(contentHash('a system message'));
+      expect(isEncrypted(data.content as string)).toBe(true);
+    });
+
+    it('writes contentHash even when no encryption key is configured', async () => {
+      _resetForTesting();
+      delete process.env.FIELD_ENCRYPTION_KEY;
+
+      const args: Record<string, unknown> = { data: { content: 'a system message' } };
+      await applyFieldEncryption({ model: 'Message', operation: 'create', args, query });
+
+      const data = (captured[0].data as Record<string, unknown>);
+      expect(data.contentHash).toBe(contentHash('a system message'));
+      expect(data.content).toBe('a system message');
+    });
+
+    it('writes contentHash for every row of a createMany', async () => {
+      const args: Record<string, unknown> = {
+        data: [{ content: 'first' }, { content: 'second' }],
+      };
+      await applyFieldEncryption({ model: 'Message', operation: 'createMany', args, query });
+
+      const rows = captured[0].data as Array<Record<string, unknown>>;
+      expect(rows[0].contentHash).toBe(contentHash('first'));
+      expect(rows[1].contentHash).toBe(contentHash('second'));
+      expect(rows[0].contentHash).not.toBe(rows[1].contentHash);
+    });
+
+    it('refreshes contentHash when content is updated', async () => {
+      const args: Record<string, unknown> = {
+        where: { id: 'm1' },
+        data: { content: 'edited content' },
+      };
+      await applyFieldEncryption({ model: 'Message', operation: 'update', args, query });
+
+      const data = (captured[0].data as Record<string, unknown>);
+      expect(data.contentHash).toBe(contentHash('edited content'));
+    });
+
+    it('writes contentHash on both branches of an upsert', async () => {
+      const args: Record<string, unknown> = {
+        where: { id: 'm1' },
+        create: { content: 'created' },
+        update: { content: 'updated' },
+      };
+      await applyFieldEncryption({ model: 'Message', operation: 'upsert', args, query });
+
+      expect((captured[0].create as Record<string, unknown>).contentHash).toBe(
+        contentHash('created'),
+      );
+      expect((captured[0].update as Record<string, unknown>).contentHash).toBe(
+        contentHash('updated'),
+      );
+    });
+
+    it('leaves contentHash alone on an update that does not touch content', async () => {
+      const args: Record<string, unknown> = { where: { id: 'm1' }, data: { stage: 3 } };
+      await applyFieldEncryption({ model: 'Message', operation: 'update', args, query });
+
+      expect(captured[0].data).not.toHaveProperty('contentHash');
+    });
+
+    it('does not add contentHash to models without a hashed field', async () => {
+      const args: Record<string, unknown> = { data: { content: 'inner work content' } };
+      await applyFieldEncryption({ model: 'InnerWorkMessage', operation: 'create', args, query });
+
+      expect(captured[0].data).not.toHaveProperty('contentHash');
     });
   });
 
