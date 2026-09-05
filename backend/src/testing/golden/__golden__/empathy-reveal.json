@@ -401,6 +401,7 @@
         {
           "after": {
             "content": "I think you feel unseen when the chores pile up and nobody says anything.",
+            "contentHash": "0015d3b2e57854eba0b25510594447189ba49c832703082a30f8ff6b9646af3f",
             "extractedEmotions": null,
             "extractedNeeds": null,
             "forUserId": "<user:bob>",
@@ -419,6 +420,7 @@
         {
           "after": {
             "content": "Your empathy attempt has been submitted. Both empathy statements are now submitted. We'll show the next review or waiting step once the privacy-protected review is ready.",
+            "contentHash": "79832dcdc45750fdf9f82902b33ac9c9e627591a9b635b98d29e8b6f2f1ec1c5",
             "extractedEmotions": null,
             "extractedNeeds": null,
             "forUserId": "<user:bob>",
@@ -437,6 +439,7 @@
         {
           "after": {
             "content": "Ada Lovelace's attempt to understand your experience is ready for you to review. Take a moment to read it and let us know how it feels.",
+            "contentHash": "a2c33f53504e2ec413015e881b54c24d690d84c2191fac172df4120ae511ce93",
             "extractedEmotions": null,
             "extractedNeeds": null,
             "forUserId": "<user:bob>",
@@ -455,6 +458,7 @@
         {
           "after": {
             "content": "Bob Ross's attempt to understand your experience is ready for you to review. Take a moment to read it and let us know how it feels.",
+            "contentHash": "978497e5d3bb4506ecdaf135fcd07151abc309e0614b3bf343bf07a7d6f7f502",
             "extractedEmotions": null,
             "extractedNeeds": null,
             "forUserId": "<user:ada>",
