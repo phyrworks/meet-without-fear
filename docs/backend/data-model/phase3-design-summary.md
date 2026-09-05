@@ -19,12 +19,12 @@ request ──► mwf_app connects (non-owner)
             BEGIN; SET LOCAL app.current_user_id = <User.id from verified JWT>;
                      │
                      ▼
-            RLS policies (68 tables, FORCEd)      ← who may SEE / INSERT / UPDATE / DELETE which rows
+            RLS policies (69 tables, FORCEd)      ← who may SEE / INSERT / UPDATE / DELETE which rows
             column-level UPDATE grants            ← which columns may change at all
             BEFORE UPDATE triggers (3)            ← which transitions are legal
             SECURITY DEFINER functions (owned by mwf_job)
                                                   ← the few writes RLS cannot express
-            CHECK constraints (7), FKs (+10, 39 re-ruled), NOT NULL (+1)
+            CHECK constraints (7), FKs (+11, 39 re-ruled), NOT NULL (+1)
 ```
 
 Today the database has **zero** of every row above the last one: no non-owner role, no RLS, no
@@ -43,12 +43,13 @@ column grants, no triggers, no CHECKs (`erd-current.md` §3, §5). The backend i
 
 **Roles** (→ cat §2): `mwf_migrator` (owner, runs migrations) · `mwf_app` (HTTP, RLS subject) ·
 `mwf_job` (retention/tending + the two-party reveal paths; `USING (true)` on the tables it touches) ·
-`mwf_ops` (`/api/brain/*`, `SELECT` only; `USING (true)` on reporting tables, never vessel tables) ·
+`mwf_ops` (`/api/brain/*`, `SELECT` only, on exactly the tables `routes/brain.ts` reads — vessel
+tables included, because it reads them) ·
 `mwf_auth` (first-login user creation only). `mwf_analyst` **withdrawn** — a
 placeholder GUC cannot be locked to a role on PG16 or PG18, and the fix (a C extension) can't run on Render.
 
 **D0 check.** **Branch A unconditionally**, on least privilege: `BYPASSRLS` is all-or-nothing
-across 70 tables and invisible in the schema, while per-table `USING (true)` policies are strictly
+across 71 tables and invisible in the schema, while per-table `USING (true)` policies are strictly
 less privilege, scopable and greppable. Branch B — grant the attribute — is rejected, not deferred,
 and the same rule covers `mwf_app`'s interim (row 4 above). **Nothing forks on `rolbypassrls`.**
 The query stays as a **check**: `rolsuper` must be **false**, or `FORCE` does not bind the owner and
@@ -57,18 +58,18 @@ live only in the migration step. → model §1 T4, §9 W1a.
 
 ---
 
-## 2. Row-level security — 68 of 70 tables
+## 2. Row-level security — 69 of 71 tables
 
 | | Now | Proposed | Why | Where |
 |---|---|---|---|---|
-| Coverage | 0 policies | `ENABLE` + `FORCE` on 68 tables; **four policies per table** (SELECT/INSERT/UPDATE/DELETE), never `ALL`, always `TO mwf_app` | a table with a SELECT policy and no UPDATE policy returns `UPDATE 0` **silently** — partial coverage is silent write loss, not safety | → cat §5.2 |
-| Inventory | — | classified **from `pg_catalog`** into shapes; CI asserts it still sums to 70 | three hand-kept lists disagreed and lost `Relationship` | → cat §1.2–1.3 |
+| Coverage | 0 policies | `ENABLE` + `FORCE` on 69 tables; **four policies per table** (SELECT/INSERT/UPDATE/DELETE), never `ALL`, always `TO mwf_app` | a table with a SELECT policy and no UPDATE policy returns `UPDATE 0` **silently** — partial coverage is silent write loss, not safety | → cat §5.2 |
+| Inventory | — | classified **from `pg_catalog`** into shapes; CI asserts it still sums to 71 | three hand-kept lists disagreed and lost `Relationship` | → cat §1.2–1.3 |
 | Predicates | — | inline `EXISTS` for self-checks; helper functions only where the check is about the *partner* | helper is 8× slower (can't be inlined); inline subquery on a partner row is silently double-filtered by that table's own policy | → model §7.9, §3.3 |
 | Exempt | — | `Need`, `GlobalLibraryItem` (global reference, `SELECT` only). `BrainActivity`: RLS on, **no policies, all `mwf_app` grants revoked** | full LLM prompts, no owning user; written from paths with no identity | → cat §1.1 |
 
 **Shape templates** (→ cat §1.2): A `userId` (20, incl. `UserKey`) · B `userId`+`sessionId` (16,
 same predicate) · C `sessionId` only (17, incl. `SessionKey`; session membership) · D/D2 hop to
-parent owner (12) · E `Session` via `relationshipId` · F no owner column (4, bespoke).
+parent owner (12) · E `Session` via `relationshipId` · F no owner column (5, bespoke — incl. `ReconcilerGuidance`).
 
 **Nine bespoke tables** — where the template would be *wider than the product* (→ model §4.3, cat §5.1):
 
@@ -149,18 +150,19 @@ All `SECURITY DEFINER` functions: owned by `mwf_job`, `search_path` pinned, `EXE
 violation echoes the **whole row** to client and log for any role that isn't RLS-bound, which is
 `mwf_app` until enforcement. → model §5.2.
 
-**FKs: +10, and 39 rules changed** → cat §6.3, §6.3a. Added: `Message.forUserId` ·
+**FKs: +11, and 39 rules changed** → cat §6.3, §6.3a. Added: `Message.forUserId` ·
 `ReconcilerResult.guesserId/subjectId` · `ReconcilerShareOffer.userId` ·
 `Stage4NeedDeclination.userId` · `PreSessionMessage.userId` · `Invitation.acceptedByUserId` (new
-column) · `UserKey.userId` — all `RESTRICT`; plus `Stage4ProposalRevision.sessionId` (`CASCADE`) and
-`SessionKey.sessionId` (`CASCADE` — sessions are hard-deleted by retention and their content goes with them). Each ships with its index. Why: an RLS arm pointing at a
-deleted user is a row nobody can read and nothing removes.
+column) · `UserKey.userId` — all `RESTRICT`; plus `ReconcilerGuidance.resultId` and
+`Stage4ProposalRevision.sessionId` (`CASCADE`) and `SessionKey.sessionId` (`CASCADE` — sessions are
+hard-deleted by retention and their content goes with them). Each ships with its index.
 
 **The uniform rule** (→ model §10 D9): *every FK referencing `"User"(id)` is `ON DELETE RESTRICT` —
 no exceptions.* A `User` row is never hard-deleted, so every referential action on it is dead code
 and a hidden writer. **[C]** 39 existing FKs are rebuilt — 33 `CASCADE`, 6 `SET NULL`; cat §6.3a
-lists each, structural assertion 12 enforces it. Consequence: `account-deletion.ts` cascades
-nothing any more, so `app.anonymize_user_account` deletes the private-only rows explicitly.
+lists each, structural assertion 12 enforces it. **Timing matters: the rebuild ships at W4b, in the
+same migration as the tombstone path** — `account-deletion.ts:160` calls `user.delete` until then
+and `RESTRICT` would 500 account deletion product-wide [C].
 
 **New column:** `Invitation.acceptedByUserId` + `acceptedAt`. Makes `work-kpkq.2` (any
 authenticated non-inviter gets session access via the invitation fallback) structurally impossible;
@@ -171,7 +173,8 @@ the fallback in `middleware/auth.ts:317` is then deleted. → model §6.2.
 (`GET /reconciler/summary`, LLM synthesis of both partners' text) is a code fix (→ model §4.3). And
 the two envelope-key tables `UserKey` (`userId`) / `SessionKey` (`sessionId`), each with `keyId`,
 `wrappedDek`, `createdAt`, `destroyedAt` — **[R]**, → model §8.6, cat §1.2. Owner columns are named
-so the shape classifier reaches them as A and C. They take the table count from 68 to 70.
+so the shape classifier reaches them as A and C — unlike `ReconcilerGuidance`, which has neither
+column and must be named as Shape F. The three take the table count from 68 to **71**.
 
 ---
 
@@ -181,19 +184,21 @@ Database-first still leaves these on the backend. Nothing here is optional.
 
 | Change | Where | When |
 |---|---|---|
-| Set `forUserId` on every `Message.create` (5 sites) + CI guard | `stream-turn-admission.ts:159`, `scripts/mwf-moment-real.ts` ×4 | **W6a — before W7 or sending 500s** |
+| Set `forUserId` on the 7 `Message.create` sites that omit it (of 29 application sites) + CI guard | `stream-turn-admission.ts:159`, `scripts/mwf-moment-real.ts` ×6 | **W6a — before W7 or sending 500s** |
 | Strip `PostgresError.detail` from API errors | error middleware | before first CHECK (W3) |
 | Split `DATABASE_URL` → `APP_DATABASE_URL`, `JOB_DATABASE_URL`, `OPS_…`, `AUTH_…` | `lib/prisma.ts`, `render.yaml`, `routes/brain.ts` | W0/W1 |
 | Two-party paths run as `mwf_job`: reveal, share-accept, 6 both-partner `StageProgress` writes, 3 status writers | `state.ts:393`, `sharing.ts:1005`, `stage2.ts:1721–1753`, `stage3.ts:981–994`, `sessions.ts:474`, `stage4.ts:1476,2326`, `stage4-auto-closure.service.ts:182` | W4a / W10 |
 | 9 status writers → `app.empathy_set_status` / `mwf_job` | see §5 | W4a |
-| Account deletion → **`User` tombstone** (scrub name/email/clerkId/pushToken/globalFacts/biometric/preferences, set `deletedAt`) + destroy the wrapped DEK; **explicit** deletes of the private-only rows, since no `User` cascade fires any more; session anonymisation stops nulling `senderId`; partner lookup → `app.partner_user_id` | `session-deletion.ts:95`, `account-deletion.ts:116-160` | W4b |
+| Account deletion → **`User` tombstone** (scrub name/email/clerkId/pushToken/globalFacts/biometric/preferences, set `deletedAt`) + destroy the wrapped DEK; **explicit** deletes of the private-only rows, since no `User` cascade fires any more; keep the abandon step; session anonymisation stops nulling `senderId`; partner lookup → `app.partner_user_id`. **Interim: a Prisma scrub + `deleteUserPrivateRows()` over `JOB_DATABASE_URL`** — `app.current_user_id()` is NULL until Phase 4, so the function's self-check cannot pass yet; both functions take a `current_user = 'mwf_job'` arm | `session-deletion.ts:95`, `account-deletion.ts:116-160` | **W4b — same deploy as the FK rebuild** |
+| `deleteUserPrivateRows(userId)` — one shared list, used by the deletion path **and** by the two hard-delete cleanups, which then call `user.delete` only as the owner role under `E2E_AUTH_BYPASS`/script mode | `routes/e2e.ts:112` (via `e2e/helpers/cleanup.ts`), `scripts/mwf-moment-real.ts:593` | W4b |
+| Every membership count excludes tombstones (`user.deletedAt IS NULL`) — one site found, the rest audited under `work-a39h.3.14` | `tending.service.ts:577`, `:612` | W4b |
 | Delete the invitation fallback in `requireSessionAccess` | `middleware/auth.ts:317` | W6 |
 | `ReconcilerGuidance` split: 4 read sites repoint, 1 deleted, summary endpoint reworked | `stage2.ts:1903`, `empathy-status.ts:89,171`, `stream-turn-context.ts:517`, `state.ts:619` | W9 / `work-kpkq.16` |
 | Per-request identity (`BEGIN; SET LOCAL …`) | Phase 4 `pg` layer | **W10 — enforcement cannot precede this** |
 | `decrypt()` must **throw**, not return `''`; envelope `enc:v2:<keyId>`; `REQUIRE_FIELD_ENCRYPTION=true` mandatory — the keyless-in-production path is retired | `utils/field-encryption.ts:113`, `server.ts:64` | **W13, in Phase 3** |
 | Vectors: `enc:v2` blobs under the owner's key; drop the `vector(1024)` columns and the `<=>` SQL; cosine similarity in memory | `services/embedding.ts` | W13 |
 | The other four W13 prerequisites: extend `SENSITIVE_FIELD_MAP` past its 9 models (start with `BrainActivity.input/output`, and give `BrainActivity` a short retention regardless) · hash column for the two content-equality dedupe probes · prompt debugging via a developer script reading **through the application**, never a DB browser · resumable re-encryption/backfill job | `utils/field-encryption.ts`, `stage2.ts:1293`, `stage4.ts:1030`, new script + job | W13 |
-| Audit 19 `$queryRaw`/`$executeRaw` sites | `services/embedding.ts` (9) et al. | W10 |
+| Audit 19 `$queryRaw`/`$executeRaw` sites — **10 after D8**, which removes all nine in `services/embedding.ts` | `services/embedding.ts` (9) et al. | W10 |
 
 ---
 
@@ -205,10 +210,10 @@ Database-first still leaves these on the backend. Nothing here is optional.
 | W1 (+W1a) | roles, grants, column `UPDATE` grants; `USING (true)` for job/ops (branch A) | **D0 check returned `rolsuper=false`** |
 | W2 | `app.*` helpers | W1 |
 | W3 | CHECKs | **error-path fix first** |
-| W4 / W4a / W4b | triggers; transition function; anonymisation functions | W3, W1a |
-| W5, W6, W6a | FKs + indexes; `Invitation.acceptedByUserId`; `forUserId` write-path fix; **all 39 `User` FKs → `RESTRICT`** | — |
-| W7 | `forUserId` backfill → NOT NULL → FK (`RESTRICT`) | **PG18, W6a soaked** |
-| W8, W9 | enable+force RLS on all 70; Tier 1–4 policies as `USING (true)` placeholders | W2, W7 |
+| W4 / W4a / W4b | triggers; transition function; **W4b = the tombstone deploy: anonymisation functions, `User.deletedAt`, the 39 `User` FKs → `RESTRICT`, and the app-side interim deletion path, all in one migration** | W3, W1a |
+| W5, W6, W6a | the **new** FKs + indexes; `Invitation.acceptedByUserId`; `forUserId` write-path fix | — |
+| W7 | `forUserId` backfill → NOT NULL → FK (`RESTRICT`) | **PG18, W6a soaked, W4b** |
+| W8, W9 | enable+force RLS on all 71; Tier 1–4 policies as `USING (true)` placeholders | W2, W7 |
 | W10 | enforcement **per tier** (`USING (true)` placeholders → real predicates), with shadow-mode row-count comparison as an outage detector | **Phase 4 identity** |
 | W13 | encryption: envelope keys (`UserKey`/`SessionKey`), field-map extension, encrypted vectors | its six prerequisites in §7 |
 
@@ -254,7 +259,7 @@ columns. All `work-kpkq.15`. (HNSW is no longer listed — D8 removes the `vecto
 - `mwf_job` bypasses RLS and **cannot be audited on Render** (`log_statement` needs superuser); the CI allowlist of entrypoints carries the whole weight.
 - Nothing automated catches a policy that is *too wide*; shadow mode only catches *too narrow*. The safety net is the fixture-based visibility matrix in the golden harness (→ model §11.3), which first needs a strict E2E-bypass mode (`work-a39h.8`).
 - `app.create_user_for_clerk` runs pre-identity against two `@unique` columns; the grant boundary is the only control. Needs its own review before it is built.
-- Tombstoned users keep their `RelationshipMember` row, so membership predicates still see two members. **[R] — confirm nothing assumes a member row implies a live account.** `account-deletion.ts` cascades those rows away today; `RESTRICT` stops that.
+- Tombstoned users keep their `RelationshipMember` row, so membership predicates still see two members — and **one consumer already breaks on that** [C]: `tending.service.ts:577` counts `members.length` and `:612` completes only at that count, while tending lives in `RESOLVED` sessions, which account deletion does not abandon. **Rule: every membership count excludes `user.deletedAt IS NOT NULL`.** Remaining sites: `work-a39h.3.14`. Checked and sound: push skips a null `pushToken`; invitation accept needs status `INVITED` and deletion sets `ABANDONED` — which holds only while W4b keeps the abandon step.
 - AI replies addressed to a tombstone stay in the database readable by nobody — no identity can ever be a tombstone id. A `mwf_job` retention job may purge them later.
-- Erasure is satisfied by scrubbing identifiers and the person's own private material, plus crypto-shredding their DEK; **retained delivered content needs a sentence in the privacy policy.** The wrapped DEK is in backups taken before the destroy, so the shred is absolute only once those age out (→ model §8.6).
+- Erasure is satisfied by scrubbing identifiers and the person's own private material, plus crypto-shredding their DEK; **retained delivered content needs a sentence in the privacy policy.** Two bounds on the shred: the wrapped DEK is in backups taken before the destroy, so it is absolute only once those age out; and an **unrevealed `EmpathyAttempt` is session-keyed**, so shredding does not reach it — RLS alone hides it from the partner (→ model §8.6).
 - Three design "failure classes" recur across drafts and are the audit checklist for implementation: read-narrowing without write-pinning · pins that stop the product · **effective-principal confusion** (who is `current_user` on this line, including the principals Postgres supplies).

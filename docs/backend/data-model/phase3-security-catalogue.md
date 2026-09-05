@@ -34,15 +34,16 @@ test.
 
 ## 1. Tables — RLS status
 
-**70 tables** — 68 today plus `UserKey` and `SessionKey`, the envelope-key tables D5 adds at W13
-(design §8.6). `ENABLE` + `FORCE` on **68**, deliberately none on **2** (`Need`,
-`GlobalLibraryItem`); `_prisma_migrations` is outside the 70 and is `mwf_migrator`-only. A table
+**71 tables** — 68 today plus the three this design adds: `ReconcilerGuidance` (D8a, W9) and the
+envelope-key tables `UserKey` / `SessionKey` (D5, W13). `ENABLE` + `FORCE` on **69**, deliberately
+none on **2** (`Need`, `GlobalLibraryItem`); `_prisma_migrations` is outside the 71 and is
+`mwf_migrator`-only. A table
 with RLS enabled and **no** policy returns zero rows to the app role — deny by default, which is
 why enabling everywhere before writing every policy is safe [R].
 
 *(Draft 6 said "`FORCE` on 65, none on 3", counting `_prisma_migrations` inside the total and
 `BrainActivity` outside `FORCE`. Both were wrong against §1.3's own query and against §9. The
-arithmetic is now: 70 in the inventory, 68 `FORCE`d, 2 exempt, `BrainActivity` inside the 68 with
+arithmetic is now: 71 in the inventory, 69 `FORCE`d, 2 exempt, `BrainActivity` inside the 69 with
 zero policies and all grants revoked.)*
 
 `FORCE` is on every RLS table without exception. **[V]** Without it a non-superuser owner sees all
@@ -56,12 +57,12 @@ hole.
 | `Need` | Global need taxonomy (19 rows, seeded by migration). No user dimension. | `GRANT SELECT` to `mwf_app`; **no `INSERT`/`UPDATE`/`DELETE`** — it is a reference table and the app has no business writing it. |
 | `GlobalLibraryItem` | Global suggestion library. No inbound or outbound FKs by design [C]. | `GRANT SELECT` only. |
 | `BrainActivity` | **The interesting one.** Holds full LLM prompts — `input`/`output` — and is the most sensitive table in the schema [C, `work-kpkq.8`]. It has *no owning user column* and is written from `bedrock.ts:660`, `ai-orchestrator.ts:234` and `context-retriever.ts:632`, all with `.catch(() => {})` and no identity [C]. | **`REVOKE ALL FROM mwf_app`.** A policy would have to be permissive enough to be useless. `mwf_job` writes it; `mwf_ops` reads it. This is strictly stronger than any policy available. |
-| `_prisma_migrations` | Prisma's own bookkeeping. Outside the 70-table inventory (§1.3 excludes it). | `mwf_migrator` only; revoked from `mwf_app`. |
+| `_prisma_migrations` | Prisma's own bookkeeping. Outside the 71-table inventory (§1.3 excludes it). | `mwf_migrator` only; revoked from `mwf_app`. |
 
 **Verified by:** structural assertion 2 (§7) lists every `public` table lacking
 `relrowsecurity AND relforcerowsecurity` and must return exactly these four names.
 
-### 1.2 Policy shape per table — derived, and it closes at 70
+### 1.2 Policy shape per table — derived, and it closes at 71
 
 The first draft hand-maintained this table. It counted to 73, disagreed with §4 of the design
 document (which counted 71), contained an internal 13-vs-14 mismatch, and **omitted
@@ -69,7 +70,8 @@ document (which counted 71), contained an internal 13-vs-14 mismatch, and **omit
 four.
 
 The classification below is **generated** by the query in §1.3 and verified to sum to 68 [V]; the
-two W13 key tables take it to **70** and are marked **[R]** — they do not exist yet.
+three tables this design adds — `ReconcilerGuidance` at W9, `UserKey` and `SessionKey` at W13 — take
+it to **71** and are marked **[R]**, since none of them exists yet.
 
 | Shape | n | Tables | `USING` template |
 |---|---|---|---|
@@ -79,8 +81,17 @@ two W13 key tables take it to **70** and are marked **[R]** — they do not exis
 | **D** — hop via `vesselId` / `sharedVesselId` | 8 | `Agreement`, `Boundary`, `CommonGround`, `ConsentedContent`*, `EmotionalReading`, `IdentifiedNeed`, `UserDocument`, `UserEvent` | parent's owner |
 | **D2** — hop via another parent key | 4 | `Stage4SubChatMessage` (→`Stage4SubChat`), `StrategyProposalNeed` (→`StrategyProposal`), `TakeawayLink` (→`SessionTakeaway`), `TendingResponsePartialClosure` (→`TendingResponse`) | parent's owner |
 | **E** — `relationshipId` | 1 | `Session` | membership on `relationshipId` |
-| **F** — no owner column at all | 4 | `Relationship`*, `User`*, `Need`†, `GlobalLibraryItem`† | see §5.1 / §1.1 |
-| | **70** | | |
+| **F** — no owner column at all | 5 | `Relationship`*, `User`*, `Need`†, `GlobalLibraryItem`†, `ReconcilerGuidance`*§ | see §5.1 / §1.1 |
+| | **71** | | |
+
+**§ `ReconcilerGuidance` — new at W9, [R]** (design §4.3, D8a). Draft 7 counted it in the design
+summary's "new tables" line and nowhere else; it is a real table and it belongs in the inventory.
+Columns `guesserId`, `subjectId`, `resultId`, `areaHint`, `guidanceType`, `promptSeed` — **no
+`userId` and no `sessionId`**, so §1.3's classifier cannot place it and it must be **named
+explicitly as Shape F, bespoke**. Predicate:
+`USING ("guesserId" = app.current_user_id() OR "subjectId" = app.current_user_id())`. FK
+`resultId → ReconcilerResult(id) ON DELETE CASCADE` with its index. `mwf_app` gets no `UPDATE` or
+`INSERT` grant at all — `mwf_job` writes it (§5.1a).
 
 **§ The two envelope-key tables — new at W13, [R]** (design §8.6). Columns: `id`, the owner key,
 `keyId` (KMS key id), `wrappedDek bytea`, `createdAt`, `destroyedAt`. The owner key is
@@ -95,7 +106,8 @@ but Shape D by meaning:** `InnerWorkMessage.sessionId` and `SessionTakeaway.sess
 **`InnerWorkSession`**, not `Session` [C]. A single polymorphic `sessionId` policy would be wrong
 on exactly the two tables holding solo therapeutic content.
 
-Nine tables carry a bespoke predicate rather than their shape's template: `Message`,
+Ten tables carry a bespoke predicate rather than their shape's template: `ReconcilerGuidance`§,
+`Message`,
 `EmpathyAttempt`, `ConsentedContent`, `ReconcilerResult`, `Invitation`, `ConsentRecord`, `User`,
 `Relationship`, and `BrainActivity` (revoked). Three of those — `EmpathyAttempt`,
 `ConsentedContent`, `ReconcilerResult` — are bespoke *because the shape template was wider than
@@ -107,10 +119,12 @@ Three hand-maintained lists that disagreed is the antipattern the golden harness
 by name. The lists above are now generated, and the generator runs in CI as an assertion.
 
 ```sql
--- Shape classification. Sums to 68 [V], 70 once UserKey/SessionKey land -- which
--- this query classifies unmodified, because they key ownership on "userId" and
--- "sessionId". Any table this cannot classify, or any RLS-enabled table with no
--- policy for a command it holds a grant on, fails CI.
+-- Shape classification. Sums to 68 [V], 71 once ReconcilerGuidance (W9) and
+-- UserKey/SessionKey (W13) land. The key tables classify unmodified, because they
+-- key ownership on "userId" and "sessionId"; ReconcilerGuidance has neither column
+-- and must be named explicitly in the F/bespoke arm. Any table this cannot
+-- classify, or any RLS-enabled table with no policy for a command it holds a
+-- grant on, fails CI.
 WITH t AS (
   SELECT c.oid, c.relname AS tbl, c.relrowsecurity, c.relforcerowsecurity
   FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
@@ -190,7 +204,7 @@ here rather than assumed.
 be `false` and a `true` `rolbypassrls` confines the Render root credential to the migration step
 (design §1 T4). It is no longer a fork: §2.4 chooses branch A regardless. And: whether Render will
 set `log_statement` for a named role.
-| `mwf_ops` | `/api/brain/*` (12 all-user endpoints, no `req.user`) [C] | **`SELECT` only**, on the reporting tables it is given a policy for | any write, anywhere; **any vessel table** | **subject, with `USING (true)` on reporting tables only** — see §2.4 | assertion: zero non-`SELECT` grants |
+| `mwf_ops` | `/api/brain/*` (12 all-user endpoints, no `req.user`) [C] | **`SELECT` only**, on exactly the tables `routes/brain.ts` reads — which include `Message`, `UserVessel`, `InnerWorkSession`/`InnerWorkMessage` and `EmotionalReading` [C] | any write, anywhere; any table not on that list | **subject, with `SELECT`-only `USING (true)` on the enumerated set** — see §2.4 | assertion: zero non-`SELECT` grants |
 | `mwf_analyst` | future BI / LLM-driven queries (T3) | `SELECT` on RLS tables | — see below | **subject** | **[V] — CANNOT BE BUILT AS SPECIFIED** |
 
 **`mwf_analyst` is withdrawn as a specified property.** The first draft said its identity could be
@@ -210,7 +224,7 @@ in non-production when neither `DASHBOARD_API_SECRET` nor `CLERK_SECRET_KEY` is 
 
 **Decided 2026-09-04.** `mwf_job` and `mwf_ops` are RLS **subjects** with explicit permissive
 policies, not holders of the `BYPASSRLS` attribute. The reason is least privilege, and it holds
-whether or not the attribute is available on Render: `BYPASSRLS` is all-or-nothing across all 70
+whether or not the attribute is available on Render: `BYPASSRLS` is all-or-nothing across all 71
 tables and does not appear in the schema, while a permissive policy is per-table, scopable,
 enumerable and greppable. **Branch B — grant the attribute — is rejected, not deferred.**
 
@@ -230,10 +244,24 @@ CREATE POLICY "Message_job" ON "Message" FOR ALL TO mwf_job USING (true) WITH CH
 writes normally; **[V]** without it, on a `FORCE`d table, it sees **zero rows** and its `UPDATE`
 reports success while affecting none. Omission is silent, so the enumeration is load-bearing.
 
+**The `mwf_job` derivation is a union of two sets, and draft 7 named only one of them.**
+
 | Role | Which tables get a `USING (true)` policy | Count |
 |---|---|---|
-| `mwf_job` | exactly the tables the **D6 allowlist** entrypoints touch (design §10 D6): `checkAndRevealBothIfReady`, the share-offer accept transaction, `refreshStage4NeedCoverage`, `applyStage4AutoClosureFromSignal`, the six `StageProgress` sites, the six retention/tending CLI entrypoints, the reconciler's own `ReconcilerResult` reads and writes, and the two anonymisation functions of design §7.12a — **plus `destroyedAt` on `UserKey`/`SessionKey`** | **[R]** — derive from the allowlist when W1a is written; it is a subset of the 68, not all of them |
-| `mwf_ops` | reporting tables only — `BrainActivity` and the aggregate tables `/api/brain/*` reads. **Never a vessel table**: no `UserVessel`, `SharedVessel`, `Message`, `EmpathyAttempt`, `ConsentedContent`, `ReconcilerResult`, `InnerWork*` | **[R]** — enumerate against `routes/brain.ts` at W1a |
+| `mwf_job` | **(a) the D6 allowlist entrypoints** (design §10 D6): `checkAndRevealBothIfReady`, the share-offer accept transaction, `refreshStage4NeedCoverage`, `applyStage4AutoClosureFromSignal`, the six `StageProgress` sites, the six retention/tending CLI entrypoints, the reconciler's own `ReconcilerResult` reads and writes, and the two anonymisation functions of design §7.12a. **∪ (b) every `app.*` `SECURITY DEFINER` function body** — they are owned by `mwf_job`, so `current_user` inside them is `mwf_job` and their reads are subject to `mwf_job`'s policies. `is_member`, `is_co_member`, `session_relationship`, `is_session_member`, `partner_user_id` and `partner_display_name` read **`RelationshipMember`**, **`Session`** and **`User`**; `resolve_user_by_clerk_id` reads `User` and `create_user_for_clerk` **INSERTs** it [C]. **∪ `SELECT` on `UserKey` and `SessionKey`** (it needs the session key to encrypt the `Message` rows it writes at `sharing.ts:1018`, `state.ts:101`/`:514` — design §8.6) and `UPDATE (destroyedAt)` on both | **[R]** — derive when W1a is written; a subset of the 69, not all |
+| `mwf_ops` | **`SELECT`-only, on exactly the tables `routes/brain.ts` reads** [C]: `BrainActivity` (13 sites), `Session` (6), **`Message`** (`:257`, `:457`, `:873`, `:981`, `:1240`, `:1378`), **`UserVessel`** (`:895`, `:963`), **`InnerWorkSession`** (`:470`, `:1030`, `:1214`, `:1408`), **`InnerWorkMessage`** (`:477`, `:881`, `:1250`, `:1420`) and **`EmotionalReading`** (`:970`) | **[R]** — re-derive against `brain.ts` at W1a |
+
+**Draft 7 said `mwf_ops` gets "never a vessel table". That was wrong** and is withdrawn: the ops
+dashboard reads vessel tables today, and a role that cannot read them is a broken dashboard, not a
+tighter one. The honest framing is that `mwf_ops` is `SELECT`-only, enumerated, and **not** a
+general reader — and that **under D5 the content columns it reads are ciphertext to it**, since it
+holds no DEK. Content views on the dashboard therefore degrade to the developer decrypt script
+(W13 prerequisite 5); aggregate and count views are unaffected.
+
+**Omitting (b) is the failure that looks like a policy bug.** Without `USING (true)` for `mwf_job`
+on `RelationshipMember`, `Session` and `User`, every helper returns nothing, so every Tier 1
+predicate that calls one evaluates false and **W10 fails closed across the whole product** — with
+correct-looking DDL and no error anywhere.
 
 Two consequences already recorded elsewhere and repeated here because they bite at W1a: the
 `SECURITY DEFINER` functions owned by `mwf_job` see zero rows until their tables have these
@@ -328,10 +356,10 @@ otherwise the bodies see zero rows and raise "not found" on every call [V].
 | Signature | Owner | Security | Volatility | Justification | Called by | Verified by |
 |---|---|---|---|---|---|---|
 | `app.empathy_set_status(text, "EmpathyStatus")` | **`mwf_job`** | DEFINER | `VOLATILE` | The only writer of `EmpathyAttempt.status`. Encodes the non-author transition rule that neither a CHECK nor a policy can express. `FOR UPDATE` + status-guarded write for TOCTOU; no-op when unchanged, because callers include retried fire-and-forget paths. | 6 `mwf_app` sites; 3 system writers go direct as `mwf_job` (design §4.3) | **[V]** draft 6: all 9 writers pass, 8 attacks blocked, non-author reachable closure disjoint from the reveal-reachable set |
-| `app.anonymize_user_in_session(text, text)` | **`mwf_job`** | DEFINER | `VOLATILE` | Per-session anonymization. **Carries its own self-only + membership check** — the handler runs as `mwf_app` and a backend authorization bug is the dominant threat. `p_display_name` removed: an attacker-controlled string was landing in the partner-visible `ReconcilerResult.subjectName`. | `session-deletion.ts` | **[R]** |
-| `app.anonymize_user_account(text)` | **`mwf_job`** | DEFINER | `VOLATILE` | Account-wide anonymization. Session-less writes (`GlobalLibraryItem.contributedBy`, both `ReconcilerResult` scrubs) that the per-session signature cannot express. Self-only check. | `account-deletion.ts` | **[R]** |
+| `app.anonymize_user_in_session(text, text)` | **`mwf_job`** | DEFINER | `VOLATILE` | Per-session anonymization. **Two authorization arms: `current_user = 'mwf_job'` OR the self-only check**, plus the membership check. The `mwf_job` arm is what the W4b interim calls, because `app.current_user_id()` is NULL until Phase 4 (design §10 D9); the CI allowlist bounds it. `p_display_name` removed: an attacker-controlled string was landing in the partner-visible `ReconcilerResult.subjectName`. | `session-deletion.ts` | **[R]** |
+| `app.anonymize_user_account(text)` | **`mwf_job`** | DEFINER | `VOLATILE` | Account-wide. Under D9 it **writes the `User` tombstone and deletes the private-only rows explicitly**, since no `User` cascade fires after §6.3a. Same two authorization arms. Ships at **W4b, in the same migration as the FK rebuild** — never after it, or `account-deletion.ts:160` 500s. | `account-deletion.ts` | **[R]** |
 | `app.partner_user_id(p_session_id text)` | **`mwf_job`** | DEFINER | `STABLE` | "Who is my partner" is a fact the caller is entitled to and `RelationshipMember`'s policy hides, producing two silent `if (!partner)` inversions (design §7.11). **Caller-bound — see body below.** | partner-detection sites | **[R]** |
-| `app.create_user_for_clerk(p_clerk_id text, p_email text, …)` | **`mwf_job`** | DEFINER | `VOLATILE` | The pre-identity bootstrap. **The most dangerous object in this design** — see below. | auth middleware only | **[R]** |
+| `app.create_user_for_clerk(p_clerk_id text, p_email text, …)` | **`mwf_job`** | DEFINER | `VOLATILE` | The pre-identity bootstrap. **The most dangerous object in this design** — see below. **After W13 it also mints the user's `UserKey` row** in the same call: `UserKey_insert` is `WITH CHECK ("userId" = app.current_user_id())`, which is unsatisfiable at first auth, so nothing else can create it (design §8.6). | auth middleware only | **[R]** |
 
 **`app.partner_user_id` — bound to the caller, or it is the `session_relationship` oracle again.**
 As merely *named* in draft 5 it takes an arbitrary session id and returns the partner's user id,
@@ -692,6 +720,15 @@ CREATE POLICY "UserKey_insert" ON "UserKey" FOR INSERT TO mwf_app
 REVOKE UPDATE, DELETE ON "UserKey" FROM mwf_app;
 -- SessionKey: the Shape C session-membership expression, same two commands,
 -- same revokes.
+--
+-- mwf_job needs BOTH keys, and it reads them through its own permissive policies
+-- (2.4), not through the mwf_app ones above: it writes Message for both partners
+-- (sharing.ts:1018, state.ts:101/:514) and under the writer-principal rule of
+-- design 8.6 every mwf_job write is session-keyed, so it must resolve the
+-- SessionKey row. It also holds UPDATE (destroyedAt) -- the crypto-shred -- on
+-- both tables, which no other role has on any column.
+CREATE POLICY "UserKey_job"    ON "UserKey"    FOR ALL TO mwf_job USING (true) WITH CHECK (true);
+CREATE POLICY "SessionKey_job" ON "SessionKey" FOR ALL TO mwf_job USING (true) WITH CHECK (true);
 ```
 
 **The write policies are not a formality.** They are where the partner-scoped tables get their
@@ -739,8 +776,9 @@ client. Four configurations measured:
 Suppression is keyed to **RLS being active for the role**, not to per-row visibility. W3 precedes
 W8, so for the whole W3→W8 window there is no RLS on these tables and `mwf_app` is not an RLS-active
 role: CHECK constraints added at W3 would leak conflict narratives into logs and API errors for that
-period, on a live product. **[R]** From W8 the `USING (true)` placeholders make `mwf_app` RLS-active
-and suppression should engage — do not rely on that to fix W3.
+period, on a live product. **[V]** From W8 the `USING (true)` placeholders make `mwf_app` RLS-active and suppression **does**
+engage — verified on PG16: `FORCE` plus a `USING (true)` policy for a non-owner role suppresses the
+`DETAIL: Failing row` line. Good to know, but it does not fix W3, which is five steps earlier.
 
 **W3 therefore has a hard prerequisite:** strip `PostgresError.detail` in the API error handler and
 review `log_min_error_statement` **before** the first CHECK constraint ships. The first draft
@@ -770,9 +808,10 @@ synthetic `deleted+<User.id>@invalid` value. **[R]**
 
 ### 6.3 Foreign keys added
 
-**Ten added, 39 changed.** Of the added, five are the authorization-bearing subset of the nine
-unenforced `NOT NULL` relations, one is new with its column, and two come with the W13 key tables.
-The 39 *changed* rules are §6.3a — every existing FK to `User` becomes `ON DELETE RESTRICT`.
+**Eleven added, 39 changed.** Of the added, five are the authorization-bearing subset of the nine
+unenforced `NOT NULL` relations, one is new with its column, one comes with `ReconcilerGuidance`
+(W9) and two with the W13 key tables. The 39 *changed* rules are §6.3a — every existing FK to `User`
+becomes `ON DELETE RESTRICT`, rebuilt at W4b.
 
 | Table.column | References | On delete | Why it carries authorization meaning | Verified by |
 |---|---|---|---|---|
@@ -785,6 +824,7 @@ The 39 *changed* rules are §6.3a — every existing FK to `User` becomes `ON DE
 | `Stage4ProposalRevision.sessionId` | `Session(id)` | CASCADE | A Shape C policy join target. | **[R]** |
 | `Invitation.acceptedByUserId` | `User(id)` | **RESTRICT** | New column; `work-kpkq.2`. Deleting the invitee must not erase the invitation history — and under D9 there is no delete to erase it, so `RESTRICT` rather than `SET NULL`, for uniformity with the other `User` edges. The policy arm stops matching anyway, because a tombstone can never be `app.current_user_id()`. | **[R]** |
 | `UserKey.userId` | `User(id)` | **RESTRICT** | W13. Key destruction is an explicit `destroyedAt` write by `mwf_job`, never a referential action. | **[R]** |
+| `ReconcilerGuidance.resultId` | `ReconcilerResult(id)` | CASCADE | W9, D8a. The split table has no independent existence — it is three columns lifted off its parent, so it goes when the parent goes. Not a `User` edge, so §6.3a's rule does not apply. | **[R]** |
 | `SessionKey.sessionId` | `Session(id)` | **CASCADE** | W13. Sessions are hard-deleted by the retention job (`session-retention.ts:84` [C]) and their content cascades with them; the key goes with the content. | **[R]** |
 
 ### 6.3a Every existing FK to `User` changes delete rule — the uniform rule
@@ -793,6 +833,10 @@ The 39 *changed* rules are §6.3a — every existing FK to `User` becomes `ON DE
 (design §10 D9). A `User` row is never hard-deleted under soft delete, so every referential action
 on it is dead code, and a dead referential action is the hidden-writer class of §4. Uniformity
 means there is nothing to audit case by case; **structural assertion 12** (§7) checks it.
+
+**When: W4b, not W5.** The rebuild ships in the **same migration as the tombstone path**, because
+`account-deletion.ts:160` calls `prisma.user.delete` until then and `RESTRICT` would break it
+product-wide the day it lands (design §10 D9). W5 keeps the *new* FKs; W7 keeps `forUserId`.
 
 **[C]** 39 foreign keys reference `User` in `schema.prisma` today. All 39 are rebuilt as
 `RESTRICT`. Line numbers are `backend/prisma/schema.prisma`.
@@ -865,6 +909,7 @@ every parent delete, so each *new* FK ships with its index. That is completion, 
 | `"ReconcilerResult_guesserId_idx"`, `"ReconcilerResult_subjectId_idx"` | support the new FKs and both policy arms |
 | `"ReconcilerShareOffer_userId_idx"`, `"Stage4NeedDeclination_userId_idx"`, `"PreSessionMessage_userId_idx"` | new FKs + Shape A policies |
 | `"Stage4ProposalRevision_sessionId_idx"` | new FK + Shape C policy |
+| `"ReconcilerGuidance_resultId_idx"` | new FK on the D8a split table; also the join back to `ReconcilerResult`. **[R]** |
 | `"UserKey_userId_idx"`, `"SessionKey_sessionId_idx"` | new FKs + the Shape A / Shape C policies on the two W13 key tables. **[R]** |
 
 `Message` already has `@@index([forUserId])` and `@@index([senderId])` [C], which is exactly what
@@ -1083,18 +1128,18 @@ is the design document.
 | Object class | Count | Verified | Reasoned only |
 |---|---|---|---|
 | Roles | **4** | 1 mechanism [V] | 3 — **`mwf_analyst` withdrawn as undeployable on Render**, see §2 / §2.3 |
-| Tables, total | **70** | 68 generated and asserted [V]; +2 **[R]** | `UserKey`, `SessionKey` — new at W13 (§1.2, design §8.6) |
-| — with RLS enabled + `FORCE` | 68 | mechanism [V] | per-table predicates |
+| Tables, total | **71** | 68 generated and asserted [V]; +3 **[R]** | `ReconcilerGuidance` (W9) — counted for the first time in draft 7.1 — plus `UserKey`, `SessionKey` (W13). §1.2 |
+| — with RLS enabled + `FORCE` | 69 | mechanism [V] | per-table predicates |
 | — without RLS | 2 (`Need`, `GlobalLibraryItem`) | — | rationale only |
-| — RLS on, zero policies, grants revoked | 1 (`BrainActivity`, inside the 68) | — | rationale only |
+| — RLS on, zero policies, grants revoked | 1 (`BrainActivity`, inside the 69) | — | rationale only |
 | Functions | **12** | **6 [V]** | 6 — **all `SECURITY DEFINER` owners declared, with the owner's own table grants** (§3). Anonymization functions: **two** (`_in_session`, `_account`); the design doc and this catalogue now agree. |
 | Structural assertions | **12** | 5 [V] | 7 — 9 and 11 for the effective-principal class; **12 for the D9 uniform `RESTRICT` rule** (§6.3a) |
 | Triggers | **4** | 2 [V] | 2 — exemptions must key on the **job role's name**, not on `BYPASSRLS` [V] |
 | CHECK constraints | 7 | 1 [V] | 6 |
 | NOT NULL changes | 1 (`Message.forUserId`; the new `User.deletedAt` is nullable) | mechanism [V18] | **unblocked — D9 is soft delete, so `NOT NULL` stands** |
-| Foreign keys | **10 added, 39 changed** | 1 [V] | the rest — D9's uniform rule: **every** FK referencing `User` is `ON DELETE RESTRICT`, 33 from `CASCADE` and 6 from `SET NULL` [C] (§6.3a), enforced by assertion 12 |
-| Indexes | 9 | — | 9 |
-| Policies | **~268** = 4 commands × 66 tables + 2 commands × the 2 key tables (`SELECT`, `INSERT` only), minus `BrainActivity` (0), plus 3 extra arms — and separately the per-table `USING (true)` policies for `mwf_job`/`mwf_ops` (§2.4) | 5 [V] | the rest |
+| Foreign keys | **11 added, 39 changed** | 1 [V] | the rest — the added eleventh is `ReconcilerGuidance.resultId`. D9's uniform rule: **every** FK referencing `User` is `ON DELETE RESTRICT`, 33 from `CASCADE` and 6 from `SET NULL` [C] (§6.3a), rebuilt at **W4b**, enforced by assertion 12 |
+| Indexes | 10 | — | 10 |
+| Policies | **~271** = 4 commands × 66 ordinary tables + 2 commands × the 2 key tables (`SELECT`, `INSERT` only) + `BrainActivity` (0) = 69 RLS tables, plus 3 extra arms — and separately the per-table `USING (true)` policies for `mwf_job`/`mwf_ops` (§2.4) | 5 [V] | the rest |
 
 The policy count is now derived from the table count rather than asserted: the first draft's
 "~180 (4 cmds × 45 tables)" reconciled with neither 65 nor 68, because it silently assumed ~21
