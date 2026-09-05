@@ -2,9 +2,16 @@ import crypto from 'crypto';
 import {
   encryptDataFields,
   decryptRecordFields,
+  applyFieldEncryption,
   SENSITIVE_FIELD_MAP,
 } from '../prisma-encryption-middleware';
-import { encrypt, decrypt, isEncrypted, _resetForTesting } from '../../utils/field-encryption';
+import {
+  encrypt,
+  decrypt,
+  isEncrypted,
+  FieldDecryptionError,
+  _resetForTesting,
+} from '../../utils/field-encryption';
 
 const TEST_KEY = crypto.randomBytes(32).toString('base64');
 
@@ -253,6 +260,82 @@ describe('prisma-encryption-middleware', () => {
 
       expect(records[0].content).toBe('encrypted message');
       expect(records[1].content).toBe('legacy plaintext');
+    });
+  });
+
+  describe('undecryptable data propagates instead of becoming empty', () => {
+    it('decryptRecordFields throws on a string field encrypted under another key', () => {
+      const config = SENSITIVE_FIELD_MAP.Message;
+      const record: Record<string, unknown> = { content: encrypt('secret message'), role: 'AI' };
+
+      // Simulate a key rotation gone wrong: the row was written under a key we no longer hold.
+      _resetForTesting();
+      process.env.FIELD_ENCRYPTION_KEY = crypto.randomBytes(32).toString('base64');
+
+      expect(() => decryptRecordFields(record, config)).toThrow(FieldDecryptionError);
+      // The caller must never observe the row silently emptied.
+      expect(record.content).not.toBe('');
+    });
+
+    it('decryptRecordFields throws on a JSON field encrypted under another key', () => {
+      const config = SENSITIVE_FIELD_MAP.UserVessel;
+      const record: Record<string, unknown> = {
+        notableFacts: JSON.parse(JSON.stringify([{ fact: 'they value honesty' }])),
+      };
+      encryptDataFields(record, config);
+
+      _resetForTesting();
+      process.env.FIELD_ENCRYPTION_KEY = crypto.randomBytes(32).toString('base64');
+
+      expect(() => decryptRecordFields(record, config)).toThrow(FieldDecryptionError);
+      expect(record.notableFacts).not.toBeNull();
+    });
+
+    it('the middleware read path propagates the decryption failure', async () => {
+      const row = { id: 'm1', content: encrypt('secret message'), role: 'AI' };
+
+      _resetForTesting();
+      process.env.FIELD_ENCRYPTION_KEY = crypto.randomBytes(32).toString('base64');
+
+      await expect(
+        applyFieldEncryption({
+          model: 'Message',
+          operation: 'findFirst',
+          args: { where: { id: 'm1' } },
+          query: async () => row,
+        }),
+      ).rejects.toThrow(FieldDecryptionError);
+    });
+
+    it('the middleware read path propagates a failure inside a findMany batch', async () => {
+      const rows = [
+        { id: 'm1', content: encrypt('first') },
+        { id: 'm2', content: encrypt('second') },
+      ];
+
+      _resetForTesting();
+      process.env.FIELD_ENCRYPTION_KEY = crypto.randomBytes(32).toString('base64');
+
+      await expect(
+        applyFieldEncryption({
+          model: 'Message',
+          operation: 'findMany',
+          args: {},
+          query: async () => rows,
+        }),
+      ).rejects.toThrow(FieldDecryptionError);
+    });
+
+    it('the middleware leaves unmapped models untouched', async () => {
+      const row = { id: 's1', status: 'ACTIVE' };
+      await expect(
+        applyFieldEncryption({
+          model: 'Session',
+          operation: 'findFirst',
+          args: {},
+          query: async () => row,
+        }),
+      ).resolves.toBe(row);
     });
   });
 });

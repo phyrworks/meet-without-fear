@@ -10,7 +10,12 @@
  *
  * Limitations:
  * - Raw queries ($queryRaw, $executeRaw) bypass this middleware
- * - Encrypted fields cannot be used in WHERE clauses for content-based filtering
+ * - Encrypted fields cannot be used in WHERE clauses for content-based filtering.
+ *   Message uses a `contentHash` column (SHA-256 of the plaintext, written here)
+ *   for equality/dedupe probes instead.
+ *
+ * A row that cannot be decrypted raises FieldDecryptionError, which propagates
+ * to the caller. It is never converted into empty content.
  */
 
 import { Prisma, PrismaClient } from '@prisma/client';
@@ -88,15 +93,15 @@ export function decryptRecordFields(
     if (field in record && typeof record[field] === 'string') {
       const value = record[field] as string;
       if (isEncrypted(value)) {
+        // decrypt() throws FieldDecryptionError on an undecryptable value; that
+        // propagates deliberately — see utils/field-encryption.ts.
         const decrypted = decrypt(value);
-        if (decrypted === '') {
+        try {
+          record[field] = JSON.parse(decrypted);
+        } catch {
+          // Decryption succeeded but the plaintext is not valid JSON — a genuinely
+          // malformed legacy value, not a key failure.
           record[field] = null;
-        } else {
-          try {
-            record[field] = JSON.parse(decrypted);
-          } catch {
-            record[field] = null;
-          }
         }
       }
     }
@@ -148,6 +153,44 @@ function decryptResult(
 }
 
 /**
+ * The body of the `$allOperations` interceptor, extracted so it can be exercised
+ * directly in unit tests without a live PrismaClient.
+ *
+ * Decryption failures (FieldDecryptionError) propagate to the caller: an
+ * undecryptable row is missing data, not empty data.
+ */
+export async function applyFieldEncryption({
+  model,
+  operation,
+  args,
+  query,
+}: {
+  model: string;
+  operation: string;
+  args: Record<string, unknown>;
+  query: (args: Record<string, unknown>) => Promise<unknown>;
+}): Promise<unknown> {
+  const config = SENSITIVE_FIELD_MAP[model ?? ''];
+  if (!config) {
+    return query(args);
+  }
+
+  // Encrypt on write
+  if (WRITE_OPERATIONS.has(operation)) {
+    encryptWriteArgs(operation, args, config);
+  }
+
+  const result = await query(args);
+
+  // Decrypt on read (including results returned from write operations)
+  if (RESULT_BEARING_OPERATIONS.has(operation) && result != null) {
+    decryptResult(result, config);
+  }
+
+  return result;
+}
+
+/**
  * Apply field-level encryption to a PrismaClient via $extends.
  * Returns a new extended client with transparent encrypt-on-write / decrypt-on-read.
  */
@@ -156,26 +199,7 @@ export function withEncryption(prisma: PrismaClient) {
     name: 'field-level-encryption',
     query: {
       $allModels: {
-        async $allOperations({ model, operation, args, query }: { model: string; operation: string; args: Record<string, unknown>; query: (args: Record<string, unknown>) => Promise<unknown> }) {
-          const config = SENSITIVE_FIELD_MAP[model ?? ''];
-          if (!config) {
-            return query(args);
-          }
-
-          // Encrypt on write
-          if (WRITE_OPERATIONS.has(operation)) {
-            encryptWriteArgs(operation, args as Record<string, unknown>, config);
-          }
-
-          const result = await query(args);
-
-          // Decrypt on read (including results returned from write operations)
-          if (RESULT_BEARING_OPERATIONS.has(operation) && result != null) {
-            decryptResult(result, config);
-          }
-
-          return result;
-        },
+        $allOperations: applyFieldEncryption,
       },
     },
   });
