@@ -27,16 +27,23 @@ Same convention as the design document, and it matters just as much here.
 
 The scratch database modelled `User`, `Relationship`, `RelationshipMember`, `Session` and
 `Message` only. A **[V]** on a mechanism (grants bind, triggers fire, policies compose) transfers
-to the other 63 tables. A **[V]** on a *predicate* does not — each table's policy needs its own
+to the other 65 tables. A **[V]** on a *predicate* does not — each table's policy needs its own
 test.
 
 ---
 
 ## 1. Tables — RLS status
 
-68 tables. `ENABLE` + `FORCE` on 65, deliberately none on 3. A table with RLS enabled and **no**
-policy returns zero rows to the app role — deny by default, which is why enabling everywhere
-before writing every policy is safe [R].
+**70 tables** — 68 today plus `UserKey` and `SessionKey`, the envelope-key tables D5 adds at W13
+(design §8.6). `ENABLE` + `FORCE` on **68**, deliberately none on **2** (`Need`,
+`GlobalLibraryItem`); `_prisma_migrations` is outside the 70 and is `mwf_migrator`-only. A table
+with RLS enabled and **no** policy returns zero rows to the app role — deny by default, which is
+why enabling everywhere before writing every policy is safe [R].
+
+*(Draft 6 said "`FORCE` on 65, none on 3", counting `_prisma_migrations` inside the total and
+`BrainActivity` outside `FORCE`. Both were wrong against §1.3's own query and against §9. The
+arithmetic is now: 70 in the inventory, 68 `FORCE`d, 2 exempt, `BrainActivity` inside the 68 with
+zero policies and all grants revoked.)*
 
 `FORCE` is on every RLS table without exception. **[V]** Without it a non-superuser owner sees all
 rows (5 of 5); with it, zero. `FORCE` is what stops the migration role from silently being the
@@ -49,30 +56,39 @@ hole.
 | `Need` | Global need taxonomy (19 rows, seeded by migration). No user dimension. | `GRANT SELECT` to `mwf_app`; **no `INSERT`/`UPDATE`/`DELETE`** — it is a reference table and the app has no business writing it. |
 | `GlobalLibraryItem` | Global suggestion library. No inbound or outbound FKs by design [C]. | `GRANT SELECT` only. |
 | `BrainActivity` | **The interesting one.** Holds full LLM prompts — `input`/`output` — and is the most sensitive table in the schema [C, `work-kpkq.8`]. It has *no owning user column* and is written from `bedrock.ts:660`, `ai-orchestrator.ts:234` and `context-retriever.ts:632`, all with `.catch(() => {})` and no identity [C]. | **`REVOKE ALL FROM mwf_app`.** A policy would have to be permissive enough to be useless. `mwf_job` writes it; `mwf_ops` reads it. This is strictly stronger than any policy available. |
-| `_prisma_migrations` | Prisma's own bookkeeping. | `mwf_migrator` only; revoked from `mwf_app`. |
+| `_prisma_migrations` | Prisma's own bookkeeping. Outside the 70-table inventory (§1.3 excludes it). | `mwf_migrator` only; revoked from `mwf_app`. |
 
 **Verified by:** structural assertion 2 (§7) lists every `public` table lacking
 `relrowsecurity AND relforcerowsecurity` and must return exactly these four names.
 
-### 1.2 Policy shape per table — derived, and it closes at 68
+### 1.2 Policy shape per table — derived, and it closes at 70
 
 The first draft hand-maintained this table. It counted to 73, disagreed with §4 of the design
 document (which counted 71), contained an internal 13-vs-14 mismatch, and **omitted
 `Relationship` entirely** — the root of every membership check in the design. Review caught all
 four.
 
-The classification below is **generated** by the query in §1.3 and verified to sum to 68 [V].
+The classification below is **generated** by the query in §1.3 and verified to sum to 68 [V]; the
+two W13 key tables take it to **70** and are marked **[R]** — they do not exist yet.
 
 | Shape | n | Tables | `USING` template |
 |---|---|---|---|
-| **A** — `userId`, no `sessionId` | 19 | `GratitudeEntry`, `GratitudePreferences`, `InnerWorkSession`, `Insight`, `MeditationFavorite`, `MeditationPreferences`, `MeditationSession`, `MeditationStats`, `NeedScore`, `NeedsAssessmentState`, `Person`, `PersonMention`, `PreSessionMessage`, `ReconcilerShareOffer`, `RecurringTheme`, `RelationshipMember`, `SavedMeditation`, `TendingEntryOutcome`, `TendingResponse` | `"userId" = app.current_user_id()` |
+| **A** — `userId`, no `sessionId` | 20 | `GratitudeEntry`, `GratitudePreferences`, `InnerWorkSession`, `Insight`, `MeditationFavorite`, `MeditationPreferences`, `MeditationSession`, `MeditationStats`, `NeedScore`, `NeedsAssessmentState`, `Person`, `PersonMention`, `PreSessionMessage`, `ReconcilerShareOffer`, `RecurringTheme`, `RelationshipMember`, `SavedMeditation`, `TendingEntryOutcome`, `TendingResponse`, `UserKey`§ | `"userId" = app.current_user_id()` |
 | **B** — `userId` **and** `sessionId` | 16 | `ConsentRecord`*, `EmotionalExerciseCompletion`, `EmpathyDraft`, `EmpathyValidation`, `Stage4NeedDeclination`, `Stage4ProposalSelection`, `Stage4SubChat`, `StageProgress`, `StrategyRanking`, `TendingAdjustment`, `TendingBetweenPeriodNote`, `TendingCheckin`, `TendingReminder`, `UserMemory`, `UserVessel`, `ValidationFeedbackDraft` | `"userId" = app.current_user_id()` — the session join adds nothing and costs a subquery |
-| **C** — `sessionId`, no `userId` | 16 | `BrainActivity`†, `EmpathyAttempt`*, `InnerWorkMessage`‡, `Invitation`*, `Message`*, `ReconcilerResult`*, `RefinementAttemptCounter`, `SessionTakeaway`‡, `SharedVessel`, `Stage4Closure`, `Stage4NeedCoverage`, `Stage4ProposalRevision`, `StrategyProposal`, `TendingCoordinationCycle`, `TendingEntry`, `TendingNeedOutcome` | inline session membership (§7.9 of the design doc) |
+| **C** — `sessionId`, no `userId` | 17 | `BrainActivity`†, `EmpathyAttempt`*, `InnerWorkMessage`‡, `Invitation`*, `Message`*, `ReconcilerResult`*, `RefinementAttemptCounter`, `SessionKey`§, `SessionTakeaway`‡, `SharedVessel`, `Stage4Closure`, `Stage4NeedCoverage`, `Stage4ProposalRevision`, `StrategyProposal`, `TendingCoordinationCycle`, `TendingEntry`, `TendingNeedOutcome` | inline session membership (§7.9 of the design doc) |
 | **D** — hop via `vesselId` / `sharedVesselId` | 8 | `Agreement`, `Boundary`, `CommonGround`, `ConsentedContent`*, `EmotionalReading`, `IdentifiedNeed`, `UserDocument`, `UserEvent` | parent's owner |
 | **D2** — hop via another parent key | 4 | `Stage4SubChatMessage` (→`Stage4SubChat`), `StrategyProposalNeed` (→`StrategyProposal`), `TakeawayLink` (→`SessionTakeaway`), `TendingResponsePartialClosure` (→`TendingResponse`) | parent's owner |
 | **E** — `relationshipId` | 1 | `Session` | membership on `relationshipId` |
 | **F** — no owner column at all | 4 | `Relationship`*, `User`*, `Need`†, `GlobalLibraryItem`† | see §5.1 / §1.1 |
-| | **68** | | |
+| | **70** | | |
+
+**§ The two envelope-key tables — new at W13, [R]** (design §8.6). Columns: `id`, the owner key,
+`keyId` (KMS key id), `wrappedDek bytea`, `createdAt`, `destroyedAt`. The owner key is
+`UserKey."userId"` → `User(id)` and `SessionKey."sessionId"` → `Session(id)`, both
+`ON DELETE RESTRICT` — named that way deliberately, so **§1.3's classifier reaches them unmodified**
+as Shape A and Shape C rather than needing an explicit entry. Grants: `mwf_app` may `SELECT` its own
+row and `INSERT` once and **never `UPDATE`**; `destroyedAt` is written only by `mwf_job` (that write
+is the crypto-shred).
 
 `*` bespoke predicate — see §5.1. `†` no RLS or revoked — see §1.1. `‡` **Shape C by column name
 but Shape D by meaning:** `InnerWorkMessage.sessionId` and `SessionTakeaway.sessionId` point at
@@ -91,8 +107,10 @@ Three hand-maintained lists that disagreed is the antipattern the golden harness
 by name. The lists above are now generated, and the generator runs in CI as an assertion.
 
 ```sql
--- Shape classification. Sums to 68 [V]. Any table this cannot classify, or any
--- RLS-enabled table with no policy for a command it holds a grant on, fails CI.
+-- Shape classification. Sums to 68 [V], 70 once UserKey/SessionKey land -- which
+-- this query classifies unmodified, because they key ownership on "userId" and
+-- "sessionId". Any table this cannot classify, or any RLS-enabled table with no
+-- policy for a command it holds a grant on, fails CI.
 WITH t AS (
   SELECT c.oid, c.relname AS tbl, c.relrowsecurity, c.relforcerowsecurity
   FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
@@ -129,8 +147,8 @@ round-trip will fail [R].
 | Role | Connects from | May | May **not** | RLS | Verified by |
 |---|---|---|---|---|---|
 | `mwf_migrator` | `prisma migrate deploy` (`render.yaml:8`), `DATABASE_URL` | own all tables; all DDL; `CREATE ROLE`; `BYPASSRLS` | — (it is the trust root) | bypasses | assertion 1 must show the **app** is not this role |
-| `mwf_app` | every HTTP request, `APP_DATABASE_URL` | `SELECT`/`INSERT`/`DELETE` on RLS tables; `UPDATE` on **listed columns only**; `EXECUTE` on `app.*` | `TRUNCATE` [V]; any DDL [V]; `SET ROLE` [V]; `row_security=off` [V]; `CREATE` in `public` [V]; **read/write `BrainActivity`**; write `Need`/`GlobalLibraryItem` | **subject, FORCEd** | assertions 1, 4, 5 |
-| `mwf_job` | retention & tending CLI entrypoints (6) [C] **plus the D6 two-party paths** | `SELECT`/`UPDATE`/`DELETE` on the tables those jobs touch; write `BrainActivity`; write `Message` (the reveal and share-accept paths) | own tables; DDL | `BYPASSRLS` | assertion 8, plus the CI bounding check below |
+| `mwf_app` | every HTTP request, `APP_DATABASE_URL` | `SELECT`/`INSERT`/`DELETE` on RLS tables; `UPDATE` on **listed columns only**; `EXECUTE` on `app.*` | `TRUNCATE` [V]; any DDL [V]; `SET ROLE` [V]; `row_security=off` [V]; `CREATE` in `public` [V]; **read/write `BrainActivity`**; write `Need`/`GlobalLibraryItem`; **hold `BYPASSRLS`, ever — including the W8–W10 interim** (design §9.1(1)) | **subject, FORCEd** | assertions 1, 4, 5 |
+| `mwf_job` | retention & tending CLI entrypoints (6) [C] **plus the D6 two-party paths** | `SELECT`/`UPDATE`/`DELETE` on the tables those jobs touch; write `BrainActivity`; write `Message` (the reveal and share-accept paths); write `destroyedAt` on `UserKey`/`SessionKey` | own tables; DDL | **subject, with `USING (true)` policies per table** — see §2.4 | assertion 8, plus the CI bounding check below |
 
 **`mwf_job` is the residual** (design doc §10, D6). The DB-side audit control works — but **not on
 Render**:
@@ -167,9 +185,12 @@ here rather than assumed.
 | PostgreSQL 18 available and the default; in-place upgrades supported | `work-a39h.1` is unblocked; the PG18-only `NOT NULL … NOT VALID` form is usable | `postgresql-upgrading` |
 | Read replicas supported (up to 5) | The only realistic analytics path if T3 ever needs one | `postgresql-read-replicas` |
 
-**Unverified and worth one support ticket if it matters:** whether Render's role carries
-`rolbypassrls`, and whether Render will set `log_statement` for a named role.
-| `mwf_ops` | `/api/brain/*` (12 all-user endpoints, no `req.user`) [C] | **`SELECT` only**, everywhere | any write, anywhere | `BYPASSRLS` | assertion: zero non-`SELECT` grants |
+**Still to run, and worth one support ticket:** the D0 **check** —
+`SELECT rolsuper, rolbypassrls FROM pg_roles WHERE rolname = current_user;` — where `rolsuper` must
+be `false` and a `true` `rolbypassrls` confines the Render root credential to the migration step
+(design §1 T4). It is no longer a fork: §2.4 chooses branch A regardless. And: whether Render will
+set `log_statement` for a named role.
+| `mwf_ops` | `/api/brain/*` (12 all-user endpoints, no `req.user`) [C] | **`SELECT` only**, on the reporting tables it is given a policy for | any write, anywhere; **any vessel table** | **subject, with `USING (true)` on reporting tables only** — see §2.4 | assertion: zero non-`SELECT` grants |
 | `mwf_analyst` | future BI / LLM-driven queries (T3) | `SELECT` on RLS tables | — see below | **subject** | **[V] — CANNOT BE BUILT AS SPECIFIED** |
 
 **`mwf_analyst` is withdrawn as a specified property.** The first draft said its identity could be
@@ -184,6 +205,41 @@ this row states no property.**
 `mwf_ops` read-only is worth more than it looks: `backend/src/routes/brain.ts:32-39` **fails open
 in non-production when neither `DASHBOARD_API_SECRET` nor `CLERK_SECRET_KEY` is set** [C]. A
 `SELECT`-only role caps that blast radius today, before any of the rest of this lands.
+
+### 2.4 D0, decided — branch A: `USING (true)` policies, not `BYPASSRLS`
+
+**Decided 2026-09-04.** `mwf_job` and `mwf_ops` are RLS **subjects** with explicit permissive
+policies, not holders of the `BYPASSRLS` attribute. The reason is least privilege, and it holds
+whether or not the attribute is available on Render: `BYPASSRLS` is all-or-nothing across all 70
+tables and does not appear in the schema, while a permissive policy is per-table, scopable,
+enumerable and greppable. **Branch B — grant the attribute — is rejected, not deferred.**
+
+**The same rule covers `mwf_app`'s interim.** It is never granted `BYPASSRLS` either: the W8–W10
+window runs on `USING (true)` **placeholder** predicates that W10 replaces tier by tier
+(design §9.1(1)). So `rolbypassrls` forks nothing at all — only `mwf_migrator`, the table owner,
+would use the attribute, and even there `FORCE` can simply be toggled off instead [V]. The D0
+query's live purpose is the `rolsuper` half.
+
+```sql
+-- One pair per table the role legitimately reaches. Never FOR ALL on a table
+-- the role does not need.
+CREATE POLICY "Message_job" ON "Message" FOR ALL TO mwf_job USING (true) WITH CHECK (true);
+```
+
+**[V]** The mechanism works: with such a policy a non-`BYPASSRLS` job role sees every row and
+writes normally; **[V]** without it, on a `FORCE`d table, it sees **zero rows** and its `UPDATE`
+reports success while affecting none. Omission is silent, so the enumeration is load-bearing.
+
+| Role | Which tables get a `USING (true)` policy | Count |
+|---|---|---|
+| `mwf_job` | exactly the tables the **D6 allowlist** entrypoints touch (design §10 D6): `checkAndRevealBothIfReady`, the share-offer accept transaction, `refreshStage4NeedCoverage`, `applyStage4AutoClosureFromSignal`, the six `StageProgress` sites, the six retention/tending CLI entrypoints, the reconciler's own `ReconcilerResult` reads and writes, and the two anonymisation functions of design §7.12a — **plus `destroyedAt` on `UserKey`/`SessionKey`** | **[R]** — derive from the allowlist when W1a is written; it is a subset of the 68, not all of them |
+| `mwf_ops` | reporting tables only — `BrainActivity` and the aggregate tables `/api/brain/*` reads. **Never a vessel table**: no `UserVessel`, `SharedVessel`, `Message`, `EmpathyAttempt`, `ConsentedContent`, `ReconcilerResult`, `InnerWork*` | **[R]** — enumerate against `routes/brain.ts` at W1a |
+
+Two consequences already recorded elsewhere and repeated here because they bite at W1a: the
+`SECURITY DEFINER` functions owned by `mwf_job` see zero rows until their tables have these
+policies, so **W1a precedes W4a and W4b** (design §9); and **[V]** permissive policies are
+inherited through **role membership**, unlike `BYPASSRLS`, so a single `GRANT mwf_job TO mwf_app`
+would collapse the boundary — that is structural assertion 9.
 
 ### 2.1 The column-level `UPDATE` grants — T7
 
@@ -441,7 +497,9 @@ CREATE TRIGGER "Message_routing_immutable"
 
 **One breakage this causes, and it is real.** `session-deletion.ts:95` does
 `message.updateMany({ where: { senderId: userId }, data: { senderId: null } })` to anonymize a
-departing user [C]. The trigger rejects it.
+departing user [C]. The trigger rejects it. **Under D9 that write goes away entirely** — soft
+delete stops nulling `senderId` and takes attribution from the `User` tombstone instead — but the
+exemption below is still required, because the anonymisation functions run as `mwf_job`.
 
 **The first draft's recommended handling was wrong** and review caught it: it said the
 anonymization should become a `SECURITY DEFINER` function *instead of* a role carve-out. **A
@@ -475,25 +533,31 @@ BEGIN
 END $$;
 ```
 
-**The alternative is to stop `Message.senderId` being `ON DELETE SET NULL`** and make deletion
-explicit in `app.anonymize_user_account`. That is cleaner — the referential action is a hidden
-writer that no grant, policy or assertion can see — but it changes a delete rule the product
-depends on, so it is filed under **D9**, which already asks the owner about `Message` delete
-semantics.
+**D9 took the alternative.** Decided 2026-09-04: soft delete, so a `User` row is scrubbed into a
+tombstone and **never removed** — and **every** FK to `User` becomes `ON DELETE RESTRICT`, the
+three pinned author columns among them (§6.3a; design §10 D9, §3.2 step 3b). A referential action
+that can never fire cannot be a hidden writer.
 
-**The other two triggers have the same exposure, and it is now enumerated.** Draft 5 left this
-`[R]`; the answer is **both**, and both are `onDelete: SetNull` into a column the trigger pins:
+**The other two triggers had the same exposure, and it is now enumerated and resolved.** Draft 5
+left this `[R]`; the answer was **both**, and both were `onDelete: SetNull` into a column the
+trigger pins:
 
-| Trigger | Pinned column | Referential action | Consequence as drafted |
+| Trigger | Pinned column | Was | Now (D9) |
 |---|---|---|---|
-| `app.empathy_attempt_immutable` | `EmpathyAttempt."sourceUserId"` | `onDelete: SetNull` — `schema.prisma:747` [C] | **every `User` delete errors** |
-| `app.consent_no_resurrect` | `ConsentedContent."sourceUserId"` | `onDelete: SetNull` — `schema.prisma:531` [C] | **every `User` delete errors** |
-| `app.message_routing_immutable` | `Message."senderId"` | `onDelete: SetNull` | **[V]** `ERROR: senderId immutable (current_user=p5_owner)` |
+| `app.empathy_attempt_immutable` | `EmpathyAttempt."sourceUserId"` | `onDelete: SetNull` — `schema.prisma:747` [C]; every `User` delete errors | **`RESTRICT`** — the action never fires |
+| `app.consent_no_resurrect` | `ConsentedContent."sourceUserId"` | `onDelete: SetNull` — `schema.prisma:531` [C]; every `User` delete errors | **`RESTRICT`** |
+| `app.message_routing_immutable` | `Message."senderId"` | `onDelete: SetNull` — `schema.prisma:649` [C]; **[V]** `ERROR: senderId immutable (current_user=p5_owner)` | **`RESTRICT`** |
 
-All three need the `current_user IN ('mwf_job', 'mwf_migrator')` arm. **[C]** The schema has 21
-`onDelete: SetNull` foreign keys in total and **zero `onUpdate` overrides**, so every FK also
-defaults to `onUpdate: CASCADE` — an update to a referenced key would fire the same triggers as the
-owner. Primary keys are not updated in this application today, but that is a convention, not a
+**The `current_user IN ('mwf_job', 'mwf_migrator')` arm stays in all three anyway.** It is defence
+in depth, and it is still reached: the anonymisation functions are `SECURITY DEFINER` owned by
+`mwf_job`, so `mwf_job` is a live principal inside them (design §7.12a). What has gone is the
+*hidden* principal — the table owner arriving through an FK — for `User` deletes specifically.
+
+**[C]** The schema has 21 `onDelete: SetNull` foreign keys in total, six of which target `User`
+(`schema.prisma:531`, `:649`, `:747`, `:792`, `:959`, `:969`). All six become `RESTRICT`, along
+with the 33 `CASCADE` edges to `User` — the uniform rule of §6.3a, so nothing is left to audit
+case by case. **[C]** There are **zero `onUpdate` overrides**, so every FK defaults to
+`onUpdate: CASCADE` — an update to a referenced key would still fire these triggers as the owner. Primary keys are not updated in this application today, but that is a convention, not a
 constraint, so the owner arm covers it either way.
 
 **The general form of the audit:** for each trigger, list every column it pins, then check whether
@@ -514,8 +578,10 @@ path pays nothing.
 `ALL` is never used. Each command gets its own policy so that a permission can be widened for
 reads without silently widening writes.
 
-`TO mwf_app` on every policy: `mwf_job` and `mwf_ops` hold `BYPASSRLS` and are unaffected, and
-naming the role explicitly means adding a future role does not silently inherit access.
+`TO mwf_app` on every policy in this section. `mwf_job` and `mwf_ops` are RLS subjects too (§2.4)
+and get their own `TO mwf_job` / `TO mwf_ops` permissive policies, per table, listed there — never
+by widening an `mwf_app` policy. Naming the role explicitly means adding a future role does not
+silently inherit access.
 
 ### 5.1 The bespoke five
 
@@ -612,6 +678,20 @@ CREATE POLICY "<T>_select" ON "<T>" FOR SELECT TO mwf_app
                  WHERE uv.id = "<T>"."vesselId"
                    AND uv."userId" = app.current_user_id()));
 -- _insert / _update / _delete: same expression.
+
+-- ================================================= UserKey / SessionKey (W13)
+-- Two commands, not four, and the missing two are revoked so the failure is
+-- loud rather than a silent zero-row UPDATE. mwf_app may read its own wrapped
+-- DEK and create one; it may never rewrite or delete one. destroyedAt -- the
+-- crypto-shred of design 8.6 -- is written only by mwf_job, through its own
+-- USING (true) policy (2.4). [R]
+CREATE POLICY "UserKey_select" ON "UserKey" FOR SELECT TO mwf_app
+  USING ("userId" = app.current_user_id());
+CREATE POLICY "UserKey_insert" ON "UserKey" FOR INSERT TO mwf_app
+  WITH CHECK ("userId" = app.current_user_id());
+REVOKE UPDATE, DELETE ON "UserKey" FROM mwf_app;
+-- SessionKey: the Shape C session-membership expression, same two commands,
+-- same revokes.
 ```
 
 **The write policies are not a formality.** They are where the partner-scoped tables get their
@@ -637,7 +717,7 @@ The local dev database has 4 `Message` rows [C] — it proves nothing.
 
 | Table | Name | Predicate | Invariant | Verified by |
 |---|---|---|---|---|
-| `Message` | `Message_ai_authorship_ck` | `role NOT IN ('AI','SYSTEM') OR "senderId" IS NULL` | **`work-kpkq.4`, persistence half.** A human-authored row can never claim to be the facilitator. **One-directional on purpose:** `senderId IS NULL` does *not* imply AI, because `session-deletion.ts:95` nulls it to anonymize departing users and the FK is `SET NULL` [C]. The biconditional would reject legitimate anonymized rows. | **[V]** forged insert rejected; genuine AI and genuine USER inserts accepted |
+| `Message` | `Message_ai_authorship_ck` | `role NOT IN ('AI','SYSTEM') OR "senderId" IS NULL` | **`work-kpkq.4`, persistence half.** A human-authored row can never claim to be the facilitator. **One-directional on purpose:** `senderId IS NULL` does *not* imply AI. Under D9 no *new* row enters that state — `session-deletion.ts:95` stops nulling `senderId` and the FK becomes `RESTRICT` — but rows anonymized before the migration remain [C], so the biconditional would reject history. | **[V]** forged insert rejected; genuine AI and genuine USER inserts accepted |
 | `ConsentRecord` | `ConsentRecord_decision_dated_ck` | `(decision IS NULL) = ("decidedAt" IS NULL)` | A consent decision is dated or it is not a decision. Undated decisions make revocation ordering undefined. | **[R]** |
 | `ConsentedContent` | `ConsentedContent_revocation_ck` | `"revokedAt" IS NULL OR "revokedAt" >= "consentedAt"` | Consent cannot be revoked before it was given. | **[R]** |
 | `ConsentedContent` | `ConsentedContent_inactive_dated_ck` | `"consentActive" OR "revokedAt" IS NOT NULL` | Inactive content records *when* it was withdrawn. Otherwise "why is this hidden" has no answer. | **[R]** |
@@ -656,9 +736,11 @@ client. Four configurations measured:
 | superuser | no | **full row content** |
 | app role, row it cannot see | yes | suppressed — RLS error fires before the CHECK |
 
-Suppression is keyed to **RLS being active for the role**, not to per-row visibility. Since
-`mwf_app` holds `BYPASSRLS` for the whole W3→W10 window, CHECK constraints added at W3 would leak
-conflict narratives into logs and API errors for that entire period, on a live product.
+Suppression is keyed to **RLS being active for the role**, not to per-row visibility. W3 precedes
+W8, so for the whole W3→W8 window there is no RLS on these tables and `mwf_app` is not an RLS-active
+role: CHECK constraints added at W3 would leak conflict narratives into logs and API errors for that
+period, on a live product. **[R]** From W8 the `USING (true)` placeholders make `mwf_app` RLS-active
+and suppression should engage — do not rely on that to fix W3.
 
 **W3 therefore has a hard prerequisite:** strip `PostgresError.detail` in the API error handler and
 review `log_min_error_statement` **before** the first CHECK constraint ships. The first draft
@@ -675,24 +757,96 @@ on `work-a39h.1`.
 |---|---|---|---|---|
 | `Message.forUserId` | `text NULL` | `text NOT NULL` | Backfill `forUserId = senderId` where both were null-eligible; **delete or resolve rows where both are NULL** — those are unaddressable under the new policy | **[V18]** mechanism; **[R]** this data |
 
-No other column changes nullability in this pass. `Message.senderId` stays nullable — the
-anonymization path depends on it [C].
+**No longer blocked on D9.** Soft delete (design §10 D9) keeps `forUserId NOT NULL` — the delete
+rule becomes `RESTRICT`, not `SET NULL`, so nothing forces the column nullable. The only remaining
+gates are PG18 and a soaked W6a.
+
+No other column changes nullability in this pass. `Message.senderId` stays nullable — historic
+anonymized rows depend on it [C], even though D9 stops producing new ones.
+
+**New column:** `User.deletedAt timestamptz NULL` — the tombstone marker (design §10 D9). Nullable
+by construction. `User.email` stays `NOT NULL` and `@unique`; the tombstone satisfies both with a
+synthetic `deleted+<User.id>@invalid` value. **[R]**
 
 ### 6.3 Foreign keys added
 
-Six. Five are the authorization-bearing subset of the nine unenforced `NOT NULL` relations; one is
-new with its column.
+**Ten added, 39 changed.** Of the added, five are the authorization-bearing subset of the nine
+unenforced `NOT NULL` relations, one is new with its column, and two come with the W13 key tables.
+The 39 *changed* rules are §6.3a — every existing FK to `User` becomes `ON DELETE RESTRICT`.
 
 | Table.column | References | On delete | Why it carries authorization meaning | Verified by |
 |---|---|---|---|---|
-| `Message.forUserId` | `User(id)` | CASCADE | **The privacy boundary.** An RLS policy arm pointing at nothing is a row no one can read and nothing removes. | **[V]** FK created and enforced on the model schema; orphan insert rejected |
-| `ReconcilerResult.guesserId` | `User(id)` | CASCADE | An RLS policy arm. Also carries a denormalized name copy scrubbed in app code *because* the DB cannot [C]. | **[R]** orphan count unmeasured |
-| `ReconcilerResult.subjectId` | `User(id)` | CASCADE | Ditto. | **[R]** |
-| `ReconcilerShareOffer.userId` | `User(id)` | CASCADE | Sole owner column; the whole RLS policy. | **[R]** |
-| `Stage4NeedDeclination.userId` | `User(id)` | CASCADE | Sole owner column. | **[R]** |
-| `PreSessionMessage.userId` | `User(id)` | CASCADE | Sole owner column, on an FK island [C]. | **[R]** |
+| `Message.forUserId` | `User(id)` | **RESTRICT** | **The privacy boundary.** An RLS policy arm pointing at nothing is a row no one can read and nothing removes. `RESTRICT`, not `CASCADE`, under D9: the `User` row becomes a tombstone and is never removed, so `RESTRICT` states the truth and turns any future hard delete into a loud error rather than a silent cascade through the boundary. | **[V]** FK created and enforced on the model schema; orphan insert rejected. **[R]** the `RESTRICT` rule |
+| `ReconcilerResult.guesserId` | `User(id)` | **RESTRICT** | An RLS policy arm. Also carries a denormalized name copy scrubbed in app code *because* the DB cannot [C]. | **[R]** orphan count unmeasured |
+| `ReconcilerResult.subjectId` | `User(id)` | **RESTRICT** | Ditto. | **[R]** |
+| `ReconcilerShareOffer.userId` | `User(id)` | **RESTRICT** | Sole owner column; the whole RLS policy. | **[R]** |
+| `Stage4NeedDeclination.userId` | `User(id)` | **RESTRICT** | Sole owner column. | **[R]** |
+| `PreSessionMessage.userId` | `User(id)` | **RESTRICT** | Sole owner column, on an FK island [C]. Removal is `app.anonymize_user_account`'s explicit job (§6.3a), as it already is at `account-deletion.ts:110`. | **[R]** |
 | `Stage4ProposalRevision.sessionId` | `Session(id)` | CASCADE | A Shape C policy join target. | **[R]** |
-| `Invitation.acceptedByUserId` | `User(id)` | SET NULL | New column; `work-kpkq.2`. `SET NULL` not `CASCADE` — deleting the invitee should not erase the invitation history. | **[R]** |
+| `Invitation.acceptedByUserId` | `User(id)` | **RESTRICT** | New column; `work-kpkq.2`. Deleting the invitee must not erase the invitation history — and under D9 there is no delete to erase it, so `RESTRICT` rather than `SET NULL`, for uniformity with the other `User` edges. The policy arm stops matching anyway, because a tombstone can never be `app.current_user_id()`. | **[R]** |
+| `UserKey.userId` | `User(id)` | **RESTRICT** | W13. Key destruction is an explicit `destroyedAt` write by `mwf_job`, never a referential action. | **[R]** |
+| `SessionKey.sessionId` | `Session(id)` | **CASCADE** | W13. Sessions are hard-deleted by the retention job (`session-retention.ts:84` [C]) and their content cascades with them; the key goes with the content. | **[R]** |
+
+### 6.3a Every existing FK to `User` changes delete rule — the uniform rule
+
+**Every foreign key that references `"User"(id)` is `ON DELETE RESTRICT`. No exceptions**
+(design §10 D9). A `User` row is never hard-deleted under soft delete, so every referential action
+on it is dead code, and a dead referential action is the hidden-writer class of §4. Uniformity
+means there is nothing to audit case by case; **structural assertion 12** (§7) checks it.
+
+**[C]** 39 foreign keys reference `User` in `schema.prisma` today. All 39 are rebuilt as
+`RESTRICT`. Line numbers are `backend/prisma/schema.prisma`.
+
+**Six are `onDelete: SetNull`** — the three trigger-pinned ones first, since they are the §4 case:
+
+| Table.column | Line | From |
+|---|---|---|
+| `Message.senderId` **(trigger-pinned)** | `:649` | SET NULL |
+| `EmpathyAttempt.sourceUserId` **(trigger-pinned)** | `:747` | SET NULL |
+| `ConsentedContent.sourceUserId` **(trigger-pinned)** | `:531` | SET NULL |
+| `EmpathyValidation.userId` | `:792` | SET NULL |
+| `StrategyProposal.createdByUserId` | `:959` | SET NULL |
+| `StrategyProposal.removedByUserId` | `:969` | SET NULL |
+
+**Thirty-three are `onDelete: Cascade`:**
+
+| Table.column | Line | Table.column | Line |
+|---|---|---|---|
+| `RelationshipMember.userId` | `:108` | `Insight.userId` | `:1727` |
+| `InnerWorkSession.userId` | `:204` | `RecurringTheme.userId` | `:1753` |
+| `StageProgress.userId` | `:332` | `GratitudeEntry.userId` | `:1772` |
+| `UserVessel.userId` | `:364` | `GratitudePreferences.userId` | `:1802` |
+| `ConsentRecord.userId` | `:603` | `MeditationSession.userId` | `:1818` |
+| `ConsentRecord.requestedByUserId` | `:609` | `MeditationStats.userId` | `:1857` |
+| `EmpathyDraft.userId` | `:728` | `MeditationFavorite.userId` | `:1875` |
+| `Stage4ProposalSelection.userId` | `:1119` | `MeditationPreferences.userId` | `:1890` |
+| `Stage4SubChat.userId` | `:1206` | `SavedMeditation.userId` | `:1903` |
+| `TendingCheckin.userId` | `:1265` | `ValidationFeedbackDraft.userId` | `:1998` |
+| `TendingCoordinationCycle.createdByUserId` | `:1291` | `TendingReminder.userId` | `:1385` |
+| `TendingResponse.userId` | `:1315` | `TendingAdjustment.userId` | `:1409` |
+| `TendingEntryOutcome.userId` | `:1341` | `TendingBetweenPeriodNote.userId` | `:1430` |
+| `StrategyRanking.userId` | `:1479` | `EmotionalExerciseCompletion.userId` | `:1495` |
+| `Invitation.invitedById` | `:1549` | `UserMemory.userId` | `:1599` |
+| `NeedScore.userId` | `:1642` | `NeedsAssessmentState.userId` | `:1657` |
+| `Person.userId` | `:1674` | | |
+
+**`RelationshipMember.userId` is on that list deliberately.** D9 retains the membership row so the
+partner's predicates still see two members, and `RESTRICT` is what stops a future cascade removing
+it silently.
+
+**The consequence to plan for:** dropping 33 `CASCADE` edges means `account-deletion.ts:116-160`
+deletes nothing by cascade any more, so `app.anonymize_user_account` must delete the private-only
+rows **explicitly**. From what cascades today [C]: `UserVessel` (and through it `UserEvent`,
+`EmotionalReading`, `IdentifiedNeed`, `Boundary`, `UserDocument`), `InnerWorkSession` (and through
+it `InnerWorkMessage`, `SessionTakeaway`), `EmpathyDraft`, `ValidationFeedbackDraft`,
+`StageProgress`, `StrategyRanking`, `EmotionalExerciseCompletion`, `ConsentRecord`,
+`Stage4ProposalSelection`, `Stage4SubChat` (and `Stage4SubChatMessage`), `UserMemory`, `NeedScore`,
+`NeedsAssessmentState`, `Person`, `Insight`, `RecurringTheme`, `GratitudeEntry`,
+`GratitudePreferences`, `MeditationSession`, `MeditationStats`, `MeditationFavorite`,
+`MeditationPreferences`, `SavedMeditation`, and the per-user `Tending*` tables. **Retained rather
+than deleted:** `RelationshipMember`, `Invitation`, `StrategyProposal`, and every delivered row.
+**[R]** — the delete-versus-retain split is a product judgement per table and needs one pass before
+W4b.
 
 **Deliberately not added:** `PersonMention.userId` (moderate weight, deferred),
 `Stage4NeedDeclination.needId` (integrity only), `PersonMention.sourceId` and
@@ -711,6 +865,7 @@ every parent delete, so each *new* FK ships with its index. That is completion, 
 | `"ReconcilerResult_guesserId_idx"`, `"ReconcilerResult_subjectId_idx"` | support the new FKs and both policy arms |
 | `"ReconcilerShareOffer_userId_idx"`, `"Stage4NeedDeclination_userId_idx"`, `"PreSessionMessage_userId_idx"` | new FKs + Shape A policies |
 | `"Stage4ProposalRevision_sessionId_idx"` | new FK + Shape C policy |
+| `"UserKey_userId_idx"`, `"SessionKey_sessionId_idx"` | new FKs + the Shape A / Shape C policies on the two W13 key tables. **[R]** |
 
 `Message` already has `@@index([forUserId])` and `@@index([senderId])` [C], which is exactly what
 `Message_select`'s two arms need. **[V]** With 50,005 rows a policy-filtered paged read planned as
@@ -735,9 +890,10 @@ failure on the day it shipped.
 | 6 | every `app.*` `SECURITY DEFINER` pins `search_path` and is not `PUBLIC`-executable | `pg_proc` where `prosecdef` | search-path takeover on the most privileged objects here |
 | **7** | **every column a `SELECT` policy reads is write-controlled on *both* the INSERT and the UPDATE side** — see §7.1 for the SQL | `pg_depend` policy→column refs, joined against `polwithcheck` per command and against `information_schema.column_privileges` | **[V] M1** — fires on the vulnerable config, silent on the fixed one |
 | **8** | `mwf_job` carries non-removable audit logging | `SELECT rolconfig FROM pg_roles WHERE rolname='mwf_job'` must contain `log_statement=all` **and** `log_parameter_max_length=0` | **[V]** an RLS-bypassing role whose statements are not logged; and logging that captures bind values |
-| **9** | **`mwf_app` is a member of no role** | `SELECT roleid::regrole FROM pg_auth_members WHERE member = 'mwf_app'::regrole` | **[V] total boundary collapse from one grant.** Permissive policies are inherited through role membership where `BYPASSRLS` is not: `GRANT mwf_job TO mwf_app` took an **outsider identity** from 1 row to 2 of 2. §2.4's branch-A fallback all but invites this as a shortcut. |
-| **10** | *(branch A only)* every table `mwf_job` holds a command grant on has a policy for that command | `role_table_grants` ⟕ `pg_policy` for `mwf_job` | a table added by a later migration is silently uncovered — the retention sweep then deletes nothing and logs success |
+| **9** | **`mwf_app` is a member of no role** | `SELECT roleid::regrole FROM pg_auth_members WHERE member = 'mwf_app'::regrole` | **[V] total boundary collapse from one grant.** Permissive policies are inherited through role membership where `BYPASSRLS` is not: `GRANT mwf_job TO mwf_app` took an **outsider identity** from 1 row to 2 of 2. Branch A (§2.4) is built on permissive policies, so this grant is the shortcut somebody will reach for. |
+| **10** | every table `mwf_job` holds a command grant on has a policy for that command | `role_table_grants` ⟕ `pg_policy` for `mwf_job` | a table added by a later migration is silently uncovered — the retention sweep then deletes nothing and logs success |
 | **11** | every `app.*` `SECURITY DEFINER` function has the expected owner | `SELECT proname, proowner::regrole FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE n.nspname='app' AND p.prosecdef` compared against a declared manifest | **[V] the draft-5 class.** An owner-owned transition function under `FORCE` raises `no such attempt` on every call; a job-owned one under branch A is equally inert. Ownership is the security property and nothing else checks it. |
+| **12** | **no FK referencing `User` has a delete rule other than `RESTRICT`** | `SELECT conrelid::regclass, conname, confdeltype FROM pg_constraint WHERE contype = 'f' AND confrelid = '"User"'::regclass AND confdeltype <> 'r'` | the D9 uniform rule (§6.3a). 39 existing FKs are rebuilt; a later migration that adds a `User` FK with Prisma's default `CASCADE` reintroduces a hidden writer and a delete path through the privacy boundary. **[R]** |
 
 Assertion 7 is the important addition. Assertions 1–6 check that objects *exist and are shaped
 right*; 7 checks a **relationship between two object classes**, which is where both of draft 2's
@@ -927,25 +1083,24 @@ is the design document.
 | Object class | Count | Verified | Reasoned only |
 |---|---|---|---|
 | Roles | **4** | 1 mechanism [V] | 3 — **`mwf_analyst` withdrawn as undeployable on Render**, see §2 / §2.3 |
-| Tables, total | **68** | inventory generated and asserted [V] | — |
-| — with RLS enabled + `FORCE` | 66 | mechanism [V] | per-table predicates |
+| Tables, total | **70** | 68 generated and asserted [V]; +2 **[R]** | `UserKey`, `SessionKey` — new at W13 (§1.2, design §8.6) |
+| — with RLS enabled + `FORCE` | 68 | mechanism [V] | per-table predicates |
 | — without RLS | 2 (`Need`, `GlobalLibraryItem`) | — | rationale only |
-| — RLS on, zero policies, grants revoked | 1 (`BrainActivity`, inside the 66) | — | rationale only |
+| — RLS on, zero policies, grants revoked | 1 (`BrainActivity`, inside the 68) | — | rationale only |
 | Functions | **12** | **6 [V]** | 6 — **all `SECURITY DEFINER` owners declared, with the owner's own table grants** (§3). Anonymization functions: **two** (`_in_session`, `_account`); the design doc and this catalogue now agree. |
-| Structural assertions | **11** | 5 [V] | 6 — assertions 9 and 11 added for the effective-principal class |
+| Structural assertions | **12** | 5 [V] | 7 — 9 and 11 for the effective-principal class; **12 for the D9 uniform `RESTRICT` rule** (§6.3a) |
 | Triggers | **4** | 2 [V] | 2 — exemptions must key on the **job role's name**, not on `BYPASSRLS` [V] |
 | CHECK constraints | 7 | 1 [V] | 6 |
-| NOT NULL changes | 1 | mechanism [V18] | **blocked on D9** |
-| Foreign keys | 8 | 1 [V] | 7 — **`Message.forUserId` delete rule blocked on D9** |
-| Indexes | 7 | — | 7 |
-| Policies | **~264** = 4 commands × 66 tables, minus `BrainActivity` (0) and plus 3 extra arms | 5 [V] | the rest |
+| NOT NULL changes | 1 (`Message.forUserId`; the new `User.deletedAt` is nullable) | mechanism [V18] | **unblocked — D9 is soft delete, so `NOT NULL` stands** |
+| Foreign keys | **10 added, 39 changed** | 1 [V] | the rest — D9's uniform rule: **every** FK referencing `User` is `ON DELETE RESTRICT`, 33 from `CASCADE` and 6 from `SET NULL` [C] (§6.3a), enforced by assertion 12 |
+| Indexes | 9 | — | 9 |
+| Policies | **~268** = 4 commands × 66 tables + 2 commands × the 2 key tables (`SELECT`, `INSERT` only), minus `BrainActivity` (0), plus 3 extra arms — and separately the per-table `USING (true)` policies for `mwf_job`/`mwf_ops` (§2.4) | 5 [V] | the rest |
 
 The policy count is now derived from the table count rather than asserted: the first draft's
 "~180 (4 cmds × 45 tables)" reconciled with neither 65 nor 68, because it silently assumed ~21
 tables would get `_select` only — which §5.2 now shows is unsafe.
 
-**Seven objects are wrong, unsafe, or blocked as drafted.** Marked rather than quietly
-corrected:
+**Five objects are wrong, unsafe, or unbuilt as drafted.** Marked rather than quietly corrected:
 
 - `User_covisible` + column grants (§2.2) — **does not achieve column-scoped partner visibility.**
   Postgres has no per-policy column scoping. Superseded in the design summary by
@@ -960,16 +1115,24 @@ corrected:
 - `ALTER ROLE mwf_job SET log_statement` (§2) — **works locally, fails on Render** [V]. `SUSET`
   parameters need superuser and Render grants none. The `mwf_job` residual is unauditable in
   production without a Render support ticket.
-- `Message.forUserId` FK and `NOT NULL` (§6.2, §6.3) — **blocked on D9**, the product decision
-  about whether deleting a user deletes the messages their partner sent them. `SET NULL` would
-  make `NOT NULL` impossible.
-- The **role table (§2) is branch-dependent on D0.** **[V]** `BYPASSRLS` cannot be granted by a
-  role that lacks it, so if Render's role has no `rolbypassrls`, `mwf_job` and `mwf_ops` need
-  explicit `USING (true)` policies per table instead — a design change, not a parameter, and one
-  that silently yields zero rows if missed.
 - **The two anonymization functions and `app.partner_user_id` are specified, not built** — and
   the draft-5 lesson is that a specified privileged object is where the next defect lives. Each
   needs the "who is `current_user` on this line" audit before it ships.
+
+**Closed by the owner's decisions of 2026-09-04:**
+
+- `Message.forUserId` **`NOT NULL` and FK** (§6.2, §6.3) — **D9 is soft delete**, so the `User` row
+  is never removed, the FK is `ON DELETE RESTRICT`, and `NOT NULL` stands. All 39 existing `User`
+  FKs move to `RESTRICT` with it (§6.3a), which removes the §4 hidden-writer case entirely and
+  hands the private-only deletes to `app.anonymize_user_account`.
+- The **role table's branch-dependence on D0** (§2) — **branch A, unconditionally** (§2.4).
+  `mwf_job` and `mwf_ops` are RLS subjects with per-table `USING (true)` policies, and `mwf_app`
+  never holds `BYPASSRLS` even in the W8–W10 interim. Nothing in the design forks on
+  `rolbypassrls`; the query survives for its `rolsuper` half.
+
+**New and unbuilt, from the same decisions:** `UserKey` and `SessionKey` (§1.2, §6.3, design §8.6)
+— **[R]** in every respect. They key ownership on `userId` / `sessionId` precisely so §1.3's
+classifier reaches them as Shape A and Shape C without a special case.
 
 **Closed since draft 5**, for the record: `Message_routing_immutable` vs `session-deletion.ts:95`
 — all three triggers carry the `current_user IN ('mwf_job', 'mwf_migrator')` arm (§4) ·

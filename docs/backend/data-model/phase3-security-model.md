@@ -47,7 +47,8 @@ and are the reason this document is on its third draft.
    user; a self check is not double-filtered and stays inline. §7.9.
 0d. **The `forUserId NOT NULL` change breaks message sending on the first user turn after it
    applies.** The primary send path sets no `forUserId` at all [C]. The write-path fix must ship
-   and soak first — W6a before W7 — and the whole item is gated on D9 anyway. §7.12.
+   and soak first — W6a before W7. (D9 is decided — soft delete — so W7 is no longer gated on it.)
+   §7.12.
 0e. **`ReconcilerResult` has 21 read sites, not 11, and two of them are live leaks** — a session-
    membership-only endpoint returning both partners' full gap analyses, and `empathy-status.ts:171`
    putting `gapSummary` into the guesser's response. Filed P0. This is what settles D8a. §4.3.
@@ -72,18 +73,30 @@ and are the reason this document is on its third draft.
 7. **`Message.forUserId` can become `NOT NULL` with a real foreign key** — but the syntax that
    makes it non-blocking is PG18-only (verified: syntax error on PG16). §3.2.
 8. **The one thing that genuinely cannot be done database-first** is turning enforcement *on*.
-   Prisma cannot set per-request identity. Ship the policies with the app role holding
-   `BYPASSRLS`, and drop it in one line when Phase 4 lands. Everything else — roles, constraints,
-   FKs, triggers, ~80% of the work — lands against the current backend. §2.3, §9.
+   Prisma cannot set per-request identity. Ship each tier's policies as `USING (true)`
+   **placeholders** and replace them with the real predicates, tier by tier, when Phase 4 lands.
+   `mwf_app` never holds `BYPASSRLS` — same least-privilege reason as D0 branch A. Everything else
+   — roles, constraints, FKs, triggers, ~80% of the work — lands against the current backend.
+   §2.3, §9.
 9. **The golden harness cannot currently fail a negative-authorization test**, because the E2E
    bypass mints unknown users rather than rejecting them. Every claim in this document is a
    negative-authorization claim. Fixing that is a prerequisite, not a follow-up. §11.3.
 
-Nine decisions need the owner (§10). Two of them are product calls, not engineering ones, and this
-document deliberately makes no recommendation on either: **whether to launch encrypted** (D5), and
-**whether deleting a user should delete the messages their partner sent them** (D9).
+Nine decisions needed the owner (§10). **All are now taken — the four that were open were decided
+2026-09-04**: D0 branch A, D9 soft delete, D5 launch encrypted with envelope keys, D8 encrypt the
+vectors. §10.0 carries them; the drafting below is updated to match.
 
 ## Revision history
+
+**Draft 7 (2026-09-04)** records the owner's decisions on the four open items. No new review pass;
+the design does not change shape, but four branches collapse.
+
+| Decision | What it settles |
+|---|---|
+| **D0 — branch A, unconditionally** | `mwf_job` and `mwf_ops` get per-table `USING (true)` policies rather than the `BYPASSRLS` attribute, on least privilege: the attribute is all-or-nothing across 70 tables and invisible in the schema. Branch B is rejected, not deferred. The `rolsuper`/`rolbypassrls` query survives as a **check**, not a fork (§1 T4). |
+| **D9 — soft delete** | Account deletion scrubs the `User` row into a tombstone rather than removing it; the leaver's private-only data still hard-deletes; delivered content stays with the partner. `Message.forUserId` becomes `NOT NULL` + `ON DELETE RESTRICT`, and the three trigger-pinned author columns move `SET NULL` → `RESTRICT` (§10 D9). |
+| **D5 — launch encrypted, in Phase 3** | Envelope encryption with the KEK in AWS KMS and per-user / per-session DEKs in `UserKey` / `SessionKey`. D4 (app-side) stands. W13 moves into Phase 3 behind six named prerequisites (§8.6, §9). |
+| **D8 — encrypt the vectors** | The three `vector(1024)` columns become `enc:v2` blobs under the owner's key and cosine similarity moves into the application. Nothing is lost: every search is already scoped to one user's rows and no vector index exists (§8.4). |
 
 **Draft 6 (2026-08-18)** fixes a regression draft 5 introduced and closes the last specification
 items. **Draft 5's `READY` widening was a net regression on draft 4** — I marked it `[R]`, said the
@@ -217,8 +230,9 @@ and this one earned it.
 **Two review points I partly disagree with**, stated so they can be re-argued rather than
 silently dropped:
 
-- **`$queryRaw` is 19 non-test sites, not 22 or 23.** My first draft said 23 (it counted a test, two
-  mocks and a comment); review said 22. The derivation is in §7.5 so the number is checkable.
+- **`$queryRaw` is 19 non-test call sites, not 22 or 23.** My first draft said 23 (it counted a
+  test, two mocks and a comment); review said 22. The derivation is in §7.5 so the number is
+  checkable, and 19 is the figure used everywhere.
 - **The golden harness does not snapshot 41 of 68 tables.** That figure belongs to
   `backend/snapshots/create-snapshot.ts`, a legacy file the harness README itself criticises;
   `empathy-reveal` derives whole-database scope from `information_schema` [C]. The *action* review
@@ -239,7 +253,7 @@ them as interchangeable.
 
 Two facts about the verification environment matter. The scratch database used a **cut-down
 model** of the schema — `User`, `Relationship`, `RelationshipMember`, `Session`, `Message` with
-50,005 rows — not all 68 tables. Results about *mechanism* (does RLS bind, does `SET LOCAL`
+50,005 rows — not all 70 tables. Results about *mechanism* (does RLS bind, does `SET LOCAL`
 unwind, does a column grant stop a re-route) transfer. Results about *this schema at production
 scale* do not. And the toy `MessageRole` enum used `ASSISTANT`; **the real enum value is `AI`,
 with nine members** [C] — DDL below uses the real values.
@@ -404,26 +418,34 @@ ALTER ROLE p4_job2 BYPASSRLS;
   DETAIL: Only roles with the BYPASSRLS attribute may change the BYPASSRLS attribute.
 ```
 
-This design needs `BYPASSRLS` on `mwf_migrator`, `mwf_job` and `mwf_ops`. So the answer to one
-undocumented question decides whether W1 — **the first migration** — is writable as drafted.
+Draft 6 needed `BYPASSRLS` on `mwf_migrator`, `mwf_job` and `mwf_ops`, which made the answer to
+one undocumented question decide whether W1 — **the first migration** — was writable as drafted.
+**D0 removed the dependency**: only `mwf_migrator` — the table owner, which can toggle `FORCE`
+itself [V] — needs it at all, and even there it is a convenience.
 
-#### Branch A — the Render role LACKS `rolbypassrls`
+#### Branch A — per-table `USING (true)`, chosen unconditionally (D0)
+
+**Decided 2026-09-04: branch A, whether or not the attribute is available.** `BYPASSRLS` is
+all-or-nothing across 70 tables and invisible in the schema; per-table permissive policies —
+`mwf_job` only on the tables its bodies touch, `mwf_ops` only on reporting tables and never on a
+vessel table — are strictly less privilege and are visible in the schema. Least privilege and
+defence in depth are the owner's stated principles, and this is the configuration that expresses
+them.
 
 T4's good news holds in full: the production role is a non-superuser owner, `FORCE` binds it, and
-the dashboard credential is not a bypass. But:
+the dashboard credential is not a bypass. The mechanics:
 
-- **`mwf_job` and `mwf_ops` cannot be created as drafted**, and the failure is **silent**. **[V]** A
+- **Omitting the policy fails silently, so the enumeration is load-bearing.** **[V]** A
   non-`BYPASSRLS` job role on a `FORCE`d table with no policy for it **sees zero rows**, and its
   `UPDATE` reports success while affecting **zero rows**. D6 collapses without an error — the
-  reveal simply never happens.
-- **The fallback works and is a design change, not a parameter.** **[V]** With an explicit
+  reveal simply never happens. Every table `mwf_job` touches needs its policy written out.
+- **The mechanism works.** **[V]** With an explicit
   `CREATE POLICY … FOR ALL TO mwf_job USING (true) WITH CHECK (true)` the job role sees every row
-  and writes normally. Every table `mwf_job` touches needs such a policy, written out.
-- **That fallback is arguably better.** `BYPASSRLS` is all-or-nothing and invisible in the schema;
-  per-table permissive policies are enumerable, greppable, and **scopable** — `mwf_ops` can be
-  given `USING (true)` on the tables it reports on and simply omitted from the vessel tables. It
-  turns the D6 residual from an attribute into a reviewable list, which is what §10 D6 wanted
-  anyway.
+  and writes normally.
+- **It is the better configuration, which is why it is chosen rather than tolerated.** Per-table
+  permissive policies are enumerable, greppable, and **scopable** — `mwf_ops` is given
+  `USING (true)` on the tables it reports on and simply omitted from the vessel tables. It turns
+  the D6 residual from an attribute into a reviewable list, which is what §10 D6 wanted anyway.
 - **`mwf_migrator` is fine either way.** **[V]** A non-superuser owner can toggle
   `FORCE ROW LEVEL SECURITY` off and back on — verified: sees 0 rows with `FORCE` and no policy,
   2 rows after `NO FORCE`, 0 again after re-enabling. That is the escape hatch for backfills and
@@ -433,21 +455,27 @@ the dashboard credential is not a bypass. But:
   then rejected the write because the exemption named a different role. Key the exemptions to
   `current_user = 'mwf_job'` and nothing else.
 
-#### Branch B — the Render role HAS `rolbypassrls`
+#### Branch B — grant the attribute: rejected
 
-The roles provision exactly as drafted, and W1 is writable as written. The cost is that **the
-primary Render credential bypasses every policy**, so "FORCE genuinely binds in production"
-weakens to "FORCE binds the roles we create". Treat the primary credential as break-glass: create
-`mwf_app` as a separate `NOBYPASSRLS` role, never use the primary for application traffic, and
-record in the runbook that anyone with the Render dashboard is outside the boundary (T4 was always
-honest about this; branch B just makes the dashboard credential the concrete instance).
+Provisioning `mwf_job`/`mwf_ops` with `BYPASSRLS` would make W1 writable exactly as first drafted.
+**Rejected on least-privilege grounds** (D0, 2026-09-04): the attribute cannot be scoped to the
+tables a role actually needs, and it does not appear in the schema.
 
-#### What is branch-dependent
+#### The D0 check — what the query is still for
 
-Marked so a reader knows what to re-read once W0 returns: **W1** (role creation), **catalogue §2**
-(the role table), **D6's mechanism** (attribute vs per-table policies), and **this section's T4
-conclusion**. Everything else — policies, pins, triggers, constraints, the transition function — is
-identical under both branches.
+The query runs before W1, as a check rather than a fork:
+
+- **`rolsuper` must be `false`.** If it is true, `FORCE` does not bind the owner (row 2 of the
+  table above) and the T4 conclusion this design rests on is wrong.
+- **If `rolbypassrls` is `true`**, the Render root credential itself bypasses every policy. That is
+  survivable but must be contained: the credential lives only in the migration step, `mwf_app`
+  is created separately as `NOBYPASSRLS`, and the runbook records that anyone holding the Render
+  dashboard is outside the boundary.
+
+**Nothing forks on the answer.** `mwf_job` and `mwf_ops` take permissive policies either way
+(branch A), and `mwf_app` is never granted `BYPASSRLS` even in the interim — §9.1(1)'s
+`USING (true)` placeholders carry the W8–W10 window, for the same least-privilege reason. Both
+answers are recorded and acted on; neither changes a line of DDL.
 
 Encryption at rest (§8) is the only control that touches T4, and only if the key lives somewhere
 the insider does not — which, for a two-person company, it does not. Be honest about that in the
@@ -614,9 +642,11 @@ in Phase 4.
 
 **This is the sequencing consequence the owner needs to see.** The brief asked what genuinely
 cannot be done database-first. This is it: **the DDL can land without the backend, but RLS cannot
-be *enforced* until the backend can set identity.** The resolution (§10) is to ship the policies
-`ENABLE`d but grant the app role `BYPASSRLS` until Phase 4 lands, then drop it in a one-line
-migration. The database work is real and testable throughout; the switch is a single flag.
+be *enforced* until the backend can set identity.** The resolution (§9.1) is to ship the policies
+`ENABLE`d with `USING (true)` **placeholder** predicates and swap them for the real ones tier by
+tier once Phase 4 lands. `mwf_app` is never granted `BYPASSRLS`: the placeholder is the same
+privilege expressed per table, and it is revertible per tier rather than role-wide. The database
+work is real and testable throughout.
 
 D1-b deserves a spike. If `@prisma/adapter-pg` allows a connection-checkout hook, enforcement
 could precede the rewrite by months. Half a day to find out. **[R] — not tested.**
@@ -627,8 +657,8 @@ could precede the rewrite by months. Half a day to find out. **[R] — not teste
 |---|---|---|---|
 | `mwf_migrator` | owns tables, runs `prisma migrate deploy` | owner; `FORCE` applies but it needs to bypass, so it also holds `BYPASSRLS` | migration DDL cannot be constrained by policies |
 | `mwf_app` | every authenticated HTTP request | **subject** | the boundary |
-| `mwf_job` | retention sweeps, tending reminders, coordination cycles | `BYPASSRLS` | cross-tenant by definition — six such entrypoints [C] |
-| `mwf_ops` | `/api/brain/*` dashboard (12 all-user endpoints, no `req.user`) [C] | `BYPASSRLS`, **`SELECT` only** | today it reads everything through the app credential |
+| `mwf_job` | retention sweeps, tending reminders, coordination cycles | **`USING (true)` policies on the tables its bodies touch** (D0 branch A), not `BYPASSRLS` | cross-tenant by definition — six such entrypoints [C] |
+| `mwf_ops` | `/api/brain/*` dashboard (12 all-user endpoints, no `req.user`) [C] | **`USING (true)` on reporting tables only, never a vessel table**; **`SELECT` only** | today it reads everything through the app credential |
 | `mwf_analyst` | future BI / LLM-driven queries | **subject**, no `SET` privilege | T3 |
 
 **Recommendation: five roles, phased.** `mwf_migrator` + `mwf_app` are mandatory and are the whole
@@ -676,6 +706,11 @@ NULL` is a reachable state, and any constraint or policy that reads `senderId IS
 "facilitator-authored" is wrong. The implication for §5: the authorship CHECK must be
 **one-directional**.
 
+**D9 stops new rows entering that state, but does not empty it.** Under soft delete
+`session-deletion.ts:95` no longer nulls `senderId` and the FK becomes `RESTRICT` (§10 D9), so no
+*new* anonymized row appears. Rows anonymized before the migration remain, so the CHECK stays
+one-directional — a biconditional would reject history.
+
 ### 3.2 The proposal — make the column say what it means
 
 ```sql
@@ -703,13 +738,27 @@ ALTER TABLE "Message" VALIDATE CONSTRAINT "Message_forUserId_nn";
 
 -- ============================================================================
 -- Step 3: the foreign key the column has never had.
--- CASCADE matches the 96 existing CASCADE edges and the privacy model: when a
--- user is deleted, rows addressed to them go too.
+-- RESTRICT, not CASCADE (D9, decided 2026-09-04: soft delete). A User row is
+-- scrubbed into a tombstone and never removed, so no referential action on it
+-- can fire; RESTRICT says that in the schema and turns any future hard delete
+-- into a loud error rather than a silent cascade through the privacy boundary.
 -- ============================================================================
 ALTER TABLE "Message"
   ADD CONSTRAINT "Message_forUserId_fkey"
-  FOREIGN KEY ("forUserId") REFERENCES "User"(id) ON DELETE CASCADE NOT VALID;
+  FOREIGN KEY ("forUserId") REFERENCES "User"(id) ON DELETE RESTRICT NOT VALID;
 ALTER TABLE "Message" VALIDATE CONSTRAINT "Message_forUserId_fkey";
+
+-- Step 3b: the same rule everywhere. THE UNIFORM RULE, from D9: every foreign
+-- key that references "User"(id) is ON DELETE RESTRICT. No exceptions. A User
+-- row is never hard-deleted, so every referential action on it is dead code --
+-- and a dead referential action is the hidden-writer class this design keeps
+-- tripping over (catalogue 4). 39 existing FKs are rebuilt: 33 CASCADE and 6
+-- SET NULL [C]; catalogue 6.3 lists every one, and structural assertion 12
+-- enforces the rule.
+ALTER TABLE "Message"           DROP CONSTRAINT "Message_senderId_fkey",
+  ADD CONSTRAINT "Message_senderId_fkey"
+  FOREIGN KEY ("senderId") REFERENCES "User"(id) ON DELETE RESTRICT;
+-- ... and the same DROP/ADD for the other 38.
 ```
 
 **[V18]** The PG18 form was executed on PostgreSQL 18.4: `ADD CONSTRAINT … NOT NULL col NOT VALID`
@@ -809,7 +858,7 @@ the golden harness README spends a section on ("hand-maintained table lists rot"
 caught in review rather than by me.
 
 The inventory below is **generated from `pg_catalog`** against the live schema and it closes at
-68 [V]. The generating query is in catalogue §1.3 and it runs as a coverage assertion in CI, so a
+68 [V] — **70** once `UserKey` and `SessionKey` land (§8.6); the counts below are pre-W13. The generating query is in catalogue §1.3 and it runs as a coverage assertion in CI, so a
 table added by a future migration cannot silently miss a policy.
 
 | Shape | n | Predicate |
@@ -1270,12 +1319,12 @@ D8a is therefore specifiable now, with that caveat attached.
 
 ### 4.4 The recommendation
 
-**Enable RLS on all 68 tables; write real policies on a tiered rollout; deny-by-default everywhere
+**Enable RLS on all 70 tables; write real policies on a tiered rollout; deny-by-default everywhere
 else.**
 
-The argument for all-68 is that "which tables hold sensitive data" is not a stable judgement —
+The argument for all-70 is that "which tables hold sensitive data" is not a stable judgement —
 `BrainActivity.input/output` holds full LLM prompts and is the most sensitive table in the schema
-while looking like telemetry [C, `work-kpkq.8`]. The argument against is that 68 policy sets are a
+while looking like telemetry [C, `work-kpkq.8`]. The argument against is that 70 policy sets are a
 lot of surface to get right at once.
 
 The reconciliation: enabling RLS with **no policy** on a table means the app role sees **zero
@@ -1305,8 +1354,9 @@ tables half-done.
 | — | **RLS on, zero policies, all grants revoked:** `BrainActivity` | no owning user; written from paths with no identity [C]. `mwf_ops` reads, `mwf_job` writes. Belt and braces: revoked *and* deny-by-default. |
 | — | **no RLS at all:** `Need`, `GlobalLibraryItem` | genuinely global reference data; `SELECT` only for `mwf_app` |
 | — | **not application data:** `_prisma_migrations` | `mwf_migrator` only |
+| **W13** | `UserKey` (`userId`), `SessionKey` (`sessionId`) — §8.6 | Shapes A and C, so the §1.3 classifier reaches them unmodified; `mwf_app` may `SELECT` its own row and `INSERT` once, never `UPDATE`; `destroyedAt` is a `mwf_job` write. **[R]** |
 
-That is 66 tables with RLS enabled, 2 without, 68 total — and the coverage assertion in catalogue
+That is 68 tables with RLS enabled, 2 without, 70 total — and the coverage assertion in catalogue
 §1.3 is what keeps that arithmetic true rather than a sentence I typed.
 
 `User` needs a carve-out: a partner must read the other's `name`/`firstName` [C]. Options are a
@@ -1383,9 +1433,11 @@ configurations:
 stronger than the first draft guessed, and it has a sharp sequencing consequence the first draft
 got exactly backwards:
 
-> **During the entire W3→W10 window, `mwf_app` holds `BYPASSRLS`. So CHECK constraints added at W3
-> leak full row content — conflict narratives, trauma descriptions — into logs and API errors for
-> the whole period, on a live product with real users.**
+> **W3 precedes W8, so for the whole W3→W8 window there is no RLS on these tables at all and
+> `mwf_app` is not an RLS-active role. CHECK constraints added at W3 therefore leak full row
+> content — conflict narratives, trauma descriptions — into logs and API errors for that period,
+> on a live product with real users.** **[R]** From W8 the `USING (true)` placeholders make
+> `mwf_app` RLS-active and suppression should engage; do not rely on that to fix W3.
 
 The first draft listed W3 as "independent — no RLS needed" and treated the error-path fix as an
 aside. Both were wrong. **W3 now has a hard prerequisite:** the API error handler must strip
@@ -1441,17 +1493,18 @@ names** [C]. Account deletion scrubs those names in application code *precisely 
 database cannot* [C].
 
 If the policy is `USING ("guesserId" = app.current_user_id() OR "subjectId" = app.current_user_id())`,
-then a stale `guesserId` pointing at a deleted user is a row **no one can read and no cascade will
+then a stale `guesserId` pointing at a deleted user is a row **no one can read and nothing will
 ever remove** — an unreachable object holding the most sensitive derived content in the product.
-With the FK and `ON DELETE CASCADE`, deletion is a database fact and the name-scrubbing code
-becomes belt-and-braces rather than the only mechanism.
+The FK makes the reference an enforced fact rather than a string, which is what the policy arm
+needs. Under D9 the delete rule is `RESTRICT`, like every other edge to `User`, and removal becomes
+the anonymisation function's explicit job rather than a cascade's.
 
 ```sql
 ALTER TABLE "ReconcilerResult"
   ADD CONSTRAINT "ReconcilerResult_guesserId_fkey"
-    FOREIGN KEY ("guesserId") REFERENCES "User"(id) ON DELETE CASCADE NOT VALID,
+    FOREIGN KEY ("guesserId") REFERENCES "User"(id) ON DELETE RESTRICT NOT VALID,
   ADD CONSTRAINT "ReconcilerResult_subjectId_fkey"
-    FOREIGN KEY ("subjectId") REFERENCES "User"(id) ON DELETE CASCADE NOT VALID;
+    FOREIGN KEY ("subjectId") REFERENCES "User"(id) ON DELETE RESTRICT NOT VALID;
 -- ... likewise ReconcilerShareOffer.userId, Stage4NeedDeclination.userId,
 --     PreSessionMessage.userId, Stage4ProposalRevision.sessionId.
 ```
@@ -1481,7 +1534,7 @@ accepted, and *by whom*. Only the second may be anonymized.
 
 ```sql
 ALTER TABLE "Invitation"
-  ADD COLUMN "acceptedByUserId" text NULL REFERENCES "User"(id) ON DELETE SET NULL,
+  ADD COLUMN "acceptedByUserId" text NULL REFERENCES "User"(id) ON DELETE RESTRICT,
   ADD COLUMN "acceptedAt"       timestamptz NULL;
 
 -- The invariant is "an accepted invitation records that acceptance happened".
@@ -1493,9 +1546,15 @@ ALTER TABLE "Invitation" ADD CONSTRAINT "Invitation_accepted_dated_ck"
 CREATE INDEX "Invitation_acceptedByUserId_idx" ON "Invitation"("acceptedByUserId");
 ```
 
+**`RESTRICT`, not `SET NULL` — changed under D9.** With soft delete the `User` row is never
+removed, so `SET NULL` is a referential action that can never fire, and `RESTRICT` says so. The
+`acceptedAt` / `acceptedByUserId` split above is therefore no longer *forced* by the CHECK; it is
+kept as belt-and-braces, since `acceptedAt` is the fact the invariant actually needs.
+
 The `work-kpkq.2` fix is unaffected: the policy arm is still
-`"acceptedByUserId" = app.current_user_id()`, which simply stops matching once the acceptor is
-deleted — correct, since a deleted user should not retain session access. **[R]** Not executed.
+`"acceptedByUserId" = app.current_user_id()`, and a tombstoned acceptor can never be the value of
+`app.current_user_id()`, so it stops matching — correct, since a deleted user should not retain
+session access. **[R]** Not executed.
 
 The simpler alternative is to drop the CHECK entirely and rely on the application; that is weaker
 and gives up the constraint's real value, which is making "accepted but unattributed" a state the
@@ -1525,7 +1584,7 @@ The brief asks this directly.
 |---|---|
 | **`work-kpkq.2`** — invitation fallback grants non-members access | **Yes, with a schema change.** §6.2. The column is the fix; the middleware change follows from it. |
 | **`work-kpkq.4`** — members forge AI messages | **Persistence: yes** [V]. `CHECK (role NOT IN ('AI','SYSTEM') OR senderId IS NULL)` plus the immutability trigger. **The Ably transport: no** — server-only publish and presence-based typing stay a backend fix. |
-| **`work-kpkq.8`** — plaintext at rest | **Mechanism yes, decision no.** §8. Whether to launch encrypted is a product call. |
+| **`work-kpkq.8`** — plaintext at rest | **Yes, and decided.** §8. D5/D8 (2026-09-04): launch encrypted, envelope keys, encrypted vectors. |
 | Missing `where` on a `Message` read (T1) | **Yes**, once identity is wired. §3.3. |
 | Cross-partner re-route (T7) | **Yes** [V], but *not* by RLS — by column grants and a trigger. §1 T7. |
 
@@ -1566,8 +1625,9 @@ Six cross-tenant entrypoints, none with a possible single identity [C]:
 | `services/data-retention.ts:36` | `BrainActivity` across all users (**no caller**) |
 
 **Good news:** there is no in-process scheduler at all — no `node-cron`, no `setInterval`, no cron
-service in `render.yaml` [C]. These are standalone CLI entrypoints. They run as `mwf_job` with
-`BYPASSRLS`. Zero code change; a different connection string.
+service in `render.yaml` [C]. These are standalone CLI entrypoints. They run as `mwf_job`, which
+reaches these tables through its own `USING (true)` policies (D0 branch A). Zero code change; a
+different connection string.
 
 ### 7.3 Fire-and-forget work that outlives the request
 
@@ -1616,7 +1676,7 @@ The `User` upsert is a write with no prior identity, and so is Clerk's own first
 minimal-privilege role. Recommend the function: one object, auditable, justified in catalogue §3.
 
 The golden harness (`testing/golden/db.ts:15`) connects with raw `pg` as a superuser to
-`CREATE DATABASE … TEMPLATE`, snapshot 68 tables and read the statement log [C]. **It must keep
+`CREATE DATABASE … TEMPLATE`, snapshot every table and read the statement log [C]. **It must keep
 `BYPASSRLS`** — its oracle role requires seeing everything. But note the tension the harness's own
 README already names: its value is observing *real* row visibility, and a bypassing role cannot.
 The resolution is that the harness snapshots as superuser while the **application under test**
@@ -1629,13 +1689,14 @@ unaffected.
 
 ### 7.5 `$queryRaw` — 19 sites
 
-**Count corrected.** The first draft said 23 and `work-kpkq.8` says "~20"; review said 22. The
-figure is **19** non-test call sites [C], derived by excluding `__tests__` (1), `__mocks__` (2) and
-a comment line in the encryption middleware (1) from the raw grep total of 23. Breakdown, so it is
-checkable: `services/embedding.ts` (9), `scripts/reset-db-data.ts` (2),
+**Count settled, and every other figure in this document reconciled to it. The number is 19**
+non-test call sites [C]: a grep of `backend/src` for `$queryRaw`/`$executeRaw` returns 23 lines,
+and excluding `__tests__` (1), `__mocks__` (2) and a comment line in the encryption middleware (1)
+leaves 19. Breakdown, so it is checkable: `services/embedding.ts` (9), `scripts/reset-db-data.ts` (2),
 `controllers/needs-assessment.ts` (2), `controllers/meditation.ts` (2), `controllers/gratitude.ts`
 (2), `services/cross-feature-context.ts` (1), `services/context-retriever.ts` (1). Two of the 19
-are in a script, so **17 in application code**.
+are in a script, so **17 in application code**. D8 removes three of the nine `embedding.ts` sites
+outright (§8.4).
 
 These **already bypass the encryption middleware** [C, `work-kpkq.8`] — that is a pre-existing bug,
 not one RLS creates. Under RLS they behave *better*: raw SQL is still subject to policy, so a raw
@@ -1801,9 +1862,18 @@ app.current_user_id())` rejects `col → NULL` by construction. The two are inco
 not in these six instances, and any future anonymization column will collide the same way.
 
 **And the timing is worse than the RLS breakages, which review is right to flag.** Column grants
-and triggers bind **the day their DDL applies** — W1 and W4 — while `mwf_app` still holds
-`BYPASSRLS` and every RLS breakage is still dormant. So this lands weeks before the flag day and
-will look unrelated to it.
+and triggers bind **the day their DDL applies** — W1 and W4 — while every RLS breakage is still
+dormant behind the W8 placeholders. So this lands weeks before enforcement and will look unrelated
+to it.
+
+**What D9 changes about the bodies, not the mechanism.** Soft delete (§10 D9) means neither
+function nulls an author column on a delivered row any more: `session-deletion.ts:95` stops nulling
+`Message.senderId`, and `:147`/`:153`/`:165`/`:183` stop nulling their author columns. What the
+functions do instead is **scrub PII into the `User` tombstone and hard-delete the leaver's
+private-only rows**. That still needs privilege — a tombstone write is a write to a row whose
+ownership is being removed, and the `ReconcilerResult` name scrubs still have no `UPDATE` grant —
+so the two functions survive with the same shape, the same self-only check and the same owner. The
+column list they touch shrinks; the argument for them does not.
 
 **Resolution: anonymization becomes one privileged mechanism, not a set of per-pin exemptions.**
 
@@ -1933,9 +2003,10 @@ every create, verify zero new NULLs for a full retention window, then backfill, 
 That ordering also makes W7 revertible — the constraint can be dropped without reverting the
 application.
 
-**This interacts with D9.** In D9's `SET NULL` branch, `forUserId` cannot be `NOT NULL` at all and
-this whole item collapses to "set the column anyway, for correctness". In the `CASCADE` branch it
-is a hard prerequisite. Do not sequence W7 before D9 is answered.
+**D9 is answered, and W7 is no longer gated on it.** Soft delete keeps `forUserId NOT NULL` — the
+headline change stands, with `ON DELETE RESTRICT` rather than `CASCADE` (§3.2, §10 D9). The
+write-path fix is therefore a hard prerequisite, and W7's only remaining gates are PG18 and a
+soaked W6a.
 
 **Handling:** these are two-party writes with no single identity, and they are D6's real
 constituency alongside the reconciler. Either `StageProgress` gets a session-scoped write policy,
@@ -1945,18 +2016,19 @@ or these six run as `mwf_job`. Deciding that is D6, not a detail.
 
 ## 8. Encryption at rest — `work-kpkq.8`
 
-> **This is a product decision, not an engineering one.** Whether to launch encrypted — accepting
-> that prompt debugging becomes materially harder and that a key-management mistake is
-> unrecoverable data loss — is a conversation the owner must have with their co-founder. This
-> section designs the *mechanism* and makes no recommendation about *whether*. `server.ts:64-84`
-> deliberately runs production keyless today "for prompt debugging" [C], which was a defensible
-> pre-launch call and is a different call now that there are real users.
+> **Decided 2026-09-04 (D5): launch encrypted, in Phase 3, with envelope encryption.** Not an
+> afterthought and not a post-launch project — W13 moves into the Phase 3 body behind the six
+> prerequisites listed in §9. D4 stands: application-side, not pgcrypto. The key hierarchy is §8.6.
+> `server.ts:64-84` deliberately runs production keyless today "for prompt debugging" [C]; that
+> path is **retired at W13** and `REQUIRE_FIELD_ENCRYPTION=true` becomes mandatory. Prompt
+> debugging moves to a developer script that reads through the application with the key — never a
+> DB browser.
 
 ### 8.1 What exists
 
 `utils/field-encryption.ts` — AES-256-GCM, `enc:v1:<iv>:<authTag>:<ciphertext>`, key from
 `FIELD_ENCRYPTION_KEY`, pass-through when unset [C]. `SENSITIVE_FIELD_MAP` covers **9 of 68
-models** [C]. Uncovered: `BrainActivity.input/output` (full LLM prompts — the most sensitive table
+models** [C] — 9 of 70 once the key tables land, which hold no plaintext of their own. Uncovered: `BrainActivity.input/output` (full LLM prompts — the most sensitive table
 in the schema), `PreSessionMessage.content`, `Stage4SubChatMessage.content`,
 `SessionTakeaway.content`, `UserMemory.content`, `ReconcilerResult.*`,
 `ConsentedContent.transformedContent`, `InnerWorkSession.*`, `TendingResponse.reflection`, ~20 more.
@@ -1967,7 +2039,8 @@ Two defects independent of the coverage gap:
   this is **silent, total, irreversible data loss** presented as empty content. It must throw.
   Fix this *before* enabling encryption anywhere, not after — it is the difference between a
   rotation bug you notice and one you discover months later.
-- **23 `$queryRaw` sites bypass the middleware entirely** [C].
+- **19 `$queryRaw`/`$executeRaw` call sites bypass the middleware entirely** [C]; see §7.5 for the
+  derivation. All 19 are in the W13 audit scope.
 
 ### 8.2 D4 — pgcrypto or application-side?
 
@@ -2020,19 +2093,37 @@ ALTER TABLE "BrainActivity" ALTER COLUMN input  TYPE text;   -- already text
    `content` [C] — `stage2.ts:1293`, `stage4.ts:1030` compare content equality to detect
    duplicates. Those break and need a hash column or a different dedupe key.
 
-### 8.4 The embedding side channel — flagged, not solved
+### 8.4 The embedding side channel — D8, decided: encrypt the vectors
 
 `UserVessel.contentEmbedding`, `InnerWorkSession.contentEmbedding`, `SessionTakeaway.embedding` are
-`vector(1024)` derived from plaintext [C]. **An embedding is not encrypted and cannot be** — its
-whole purpose is that distance in the vector space tracks meaning.
+`vector(1024)` derived from plaintext [C]. **An embedding as a `vector` column is not encrypted and
+cannot be** — its whole purpose is that distance in the vector space tracks meaning. A stolen
+backup containing them retains a semantically searchable index of private content even if every
+text column is ciphertext, and embedding-inversion against 1024-dim models is a live research area.
 
-So a stolen backup containing embeddings retains a semantically searchable index of private
-content even if every text column is ciphertext. Embedding-inversion attacks against 1024-dim
-models are a live research area and can recover substantial content. **[R] — unquantified for this
-model.** Options: encrypt the vectors and give up ANN entirely; accept the leak and document it;
-or keep vectors in a separate store with its own key. **This is an open question and the honest
-answer is that no one has costed it.** Do not let the encryption decision be taken without it on
-the table.
+**Decided: encrypt them, and compute similarity in the application.** Two facts make this cheap,
+and they are why the trade-off review feared does not exist here:
+
+- **[C]** All three columns are searched only within one user's own rows —
+  `WHERE uv."userId" = ${userId}`, `WHERE s."userId" = ${userId}`,
+  `WHERE iws."userId" = ${userId}` in `services/embedding.ts`. There is no cross-user vector search
+  anywhere.
+- **[C]** There is **no vector index on any of them**. HNSW was deliberately left out of scope
+  (§13), so Postgres already sequentially scans the user's own rows. There is no ANN to give up.
+
+**Design.** Each vector is stored as an encrypted blob — `bytea`, or `text` in the `enc:v2` format
+— under the **owning user's key** (§8.6). The application decrypts that user's vectors and computes
+cosine similarity in memory. The `vector(1024)` columns and the `<=>` raw SQL are removed; three of
+the nine `services/embedding.ts` raw sites go with them.
+
+**Cost at current scale: none.** n vectors × 1024 float32 is 4 KB each; a cosine comparison over a
+thousand of them is sub-millisecond in JS, against a network round-trip that is not. Re-cost if a
+single user ever holds tens of thousands of vectors.
+
+**pgvector then ceases to be a schema requirement** — the three columns above are the only
+`Unsupported("vector(1024)")` declarations in the schema [C]. **[R]** Whether the extension can
+actually be *dropped* depends on nothing else in the database depending on it; check `pg_depend`
+first, and dropping it is optional either way.
 
 ### 8.5 Key rotation
 
@@ -2040,6 +2131,86 @@ Rotation is where field encryption usually dies. The `keyId` in the `v2` prefix 
 a flag day: readers resolve by id, so generations coexist and rotation is a background re-wrap
 rather than a stop-the-world rewrite. Prerequisites: `decrypt()` must **throw**, not return `''`
 [C]; and there must be a re-encryption job that can be interrupted and resumed. Neither exists.
+
+**With the §8.6 hierarchy, rotation has two independent levels.** Rotating the **KEK** in KMS
+re-wraps every `wrappedDek` and touches no ciphertext at all — a fast, bounded job over two tables.
+Rotating a **DEK** is the expensive one, and it is per-user or per-session rather than global, so
+it can be done incrementally and resumably. The same job serves the initial backfill of existing
+plaintext rows.
+
+
+### 8.6 Key hierarchy — one key per vessel
+
+**KEK in AWS KMS.** AWS credentials are already in the deployment for Bedrock [C], so this adds a
+key policy, not a vendor. **DEKs** are AES-256 data keys wrapped by the KEK and stored in the
+database, in two new tables (catalogue §1.2):
+
+| Table | Grain | Wraps | Shape |
+|---|---|---|---|
+| `UserKey` | one live key per `User`, keyed on `userId` | the **private vessel** — everything with exactly one legitimate reader | A |
+| `SessionKey` | one live key per `Session`, keyed on `sessionId` | the **shared vessel** — everything both partners may read | C |
+
+Columns: `id`, the owner key (`UserKey."userId"` → `User`, `SessionKey."sessionId"` → `Session`),
+`keyId` (the KMS key id, and the same `keyId` that appears in the
+`enc:v2:<keyId>:<iv>:<tag>:<ct>` prefix of §8.3), `wrappedDek bytea`, `createdAt`, `destroyedAt`.
+The owner columns are deliberately named `userId` and `sessionId` rather than a generic `ownerId`,
+so catalogue §1.3's shape classifier picks them up as Shape A and Shape C with no special-casing.
+`UserKey.userId` is `ON DELETE RESTRICT` — a `User` row is never removed. `SessionKey.sessionId` is
+`ON DELETE CASCADE`: sessions **are** hard-deleted, by the retention job (`session-retention.ts:84`
+[C]), and their content cascades with them, so the key goes with the content. For a live owner, key
+destruction is an explicit `destroyedAt` write, never a referential action.
+`mwf_app` may `SELECT` its own row and `INSERT` once; it may **never** `UPDATE`. `destroyedAt` is
+written only by `mwf_job`. **[R]** — designed, not built.
+
+**The key-selection rule [R].** *A row with exactly one legitimate reader is encrypted under that
+user's key; a row both partners may read is encrypted under the session key.* It is the vessel
+model restated in key material, which is why it is stated as a rule rather than a per-table list.
+
+For `Message`, where the rule has to be evaluated per row rather than per table:
+
+| Row | Key |
+|---|---|
+| `senderId IS NULL` (AI, SYSTEM) **or** `senderId = forUserId` (the user's own typed message, their own empathy statement) | the `forUserId` user's key |
+| otherwise — the two-party rows: `SHARED_CONTEXT`, `VALIDATION_FEEDBACK` (§3.1: `EMPATHY_STATEMENT` is self-addressed and falls under the first row) | the session key |
+
+**Which table goes under which key**, read off the ownership columns of catalogue §1.2 [C for the
+columns; **[R]** for the assignment]:
+
+- **User key** — every Shape A and Shape B table (`userId` *is* the owner); the Shape D tables that
+  hop through `UserVessel` (`Boundary`, `EmotionalReading`, `IdentifiedNeed`, `UserDocument`,
+  `UserEvent`) [C]; `InnerWorkMessage` and `SessionTakeaway`, whose `sessionId` points at
+  `InnerWorkSession` and which are therefore solo content [C]; `TakeawayLink` and
+  `TendingResponsePartialClosure` through their parents.
+- **Session key** — the Shape C tables owned by a real `Session` (`EmpathyAttempt`, `SharedVessel`,
+  `Stage4Closure`, `Stage4NeedCoverage`, `Stage4ProposalRevision`, `StrategyProposal`,
+  `RefinementAttemptCounter`, the `Tending*` session tables); the Shape D tables that hop through
+  `SharedVessel` (`Agreement`, `CommonGround`, `ConsentedContent`) [C]; `Stage4SubChatMessage` and
+  `StrategyProposalNeed` through their parents.
+- **The four two-party tables, assigned [R]:** `ReconcilerResult` → the **subject's** user key —
+  §4.3 gives the subject sole read access, so the subject is its only legitimate reader, and
+  crypto-shredding on the subject's deletion is the correct outcome. `ReconcilerGuidance` → the
+  **session key**: both partners read it, which is the whole point of the D8a split.
+  `ConsentRecord` → the **session key**; a nullable `sessionId` [C] means the account-scoped rows
+  need a fallback, which is the one detail to settle when it is built. `Invitation` → the
+  **session key**; a `Session` exists when the row is created — `invitations.ts:460` writes
+  `sessionId: sess.id` in the same transaction that creates the session [C].
+- **No key: `BrainActivity`** — it has no owning user at all, which is why it gets a short
+  retention window instead.
+
+**Crypto-shredding makes D9 true by construction.** Account deletion destroys the user's wrapped
+DEK. Every byte of that user's private-only content becomes unrecoverable from the live database
+instantly — the erasure guarantee soft delete cannot otherwise give, because soft delete by
+definition leaves rows in place. **Residual, stated plainly:** the wrapped DEK is a row in
+`UserKey`, so it is in every backup taken before the destroy; a restore of such a backup restores
+the key. The guarantee becomes absolute only when those backups age out (Render's retention window
+— **[R]** confirm the number). Per-user KMS keys would close this and cost about a dollar per user
+per month; not recommended at this scale, but it is the lever if the residual ever matters. The session key is untouched, so the partner keeps
+the exchange that was delivered to them. D9 and D5 are the same mechanism seen from two sides.
+
+**Key loss is not the risk D5 was framed around.** The KEK lives in KMS and is not something a
+two-person company can misplace; the wrapped DEKs live in the database and are in its backups. The
+failure mode that remains is destroying a DEK by mistake, which is exactly why `destroyedAt` is a
+`mwf_job`-only write on a table `mwf_app` can never `UPDATE`.
 
 ---
 
@@ -2050,56 +2221,74 @@ rather than a stop-the-world rewrite. Prerequisites: `decrypt()` must **throw**,
 
 | # | Work | Depends on | Independent? | Simultaneous with Phase 4? |
 |---|---|---|---|---|
-| **W0** | Verify the Render role's `rolbypassrls`. Split `DATABASE_URL` from `APP_DATABASE_URL`. | — | **yes — do this first; W1 is not writable until it returns** | no |
-| W1 | Create the four roles; grants; `REVOKE TRUNCATE`; column-level `UPDATE` grants. **Branch-dependent: see §1 T4** — branch A also needs `USING (true)` policies per table for `mwf_job`/`mwf_ops` | **W0** | no — gated on W0 | no |
+| **W0** | Run the D0 **check**: `SELECT rolsuper, rolbypassrls …`. `rolsuper` must be false. Split `DATABASE_URL` from `APP_DATABASE_URL`. | — | **yes — do this first** | no |
+| W1 | Create the four roles; grants; `REVOKE TRUNCATE`; column-level `UPDATE` grants. **Branch A** (§1 T4): `USING (true)` policies per table for `mwf_job`/`mwf_ops`, never the `BYPASSRLS` attribute | **W0 returned `rolsuper=false`** | no — gated on the W0 check | no |
 | W2 | `app.*` helper functions (`current_user_id`, `is_member`, `session_relationship`, `is_session_member`) | W1 | yes | no |
 | W3 | CHECK constraints (§5.1), all `NOT VALID` | **the error-path fix (§5.2) — not optional** | yes, *after* that | no |
 | W4 | Immutability triggers on `Message`, `EmpathyAttempt`, `ConsentedContent`. **Binds the day it applies, not at W10 — see §7.12a** | W3, **W4b** | yes | no |
-| **W1a** | *(branch A only)* `USING (true)` policies for `mwf_job`/`mwf_ops` on every table their bodies touch | W1 | yes | no |
-| **W4a** | `app.empathy_set_status()` + move the **6** `mwf_app` status call sites onto it, and the **3** system ones onto `mwf_job` (§4.3) | W1, **W1a under branch A** | schema yes; **the 9 call sites are Phase 4** | **partly** |
-| **W4b** | `app.anonymize_user_in_session()`, `app.anonymize_user_account()`, `app.partner_user_id()` + move `session-deletion.ts`, `account-deletion.ts` and the partner-detection sites onto them (§7.12a, §7.11) | W1, **W1a under branch A** | schema yes; **the call sites are Phase 4** | **partly** |
+| **W1a** | `USING (true)` policies for `mwf_job` on every table its bodies touch, and for `mwf_ops` on the reporting tables only — never a vessel table (branch A, D0) | W1 | yes | no |
+| **W4a** | `app.empathy_set_status()` + move the **6** `mwf_app` status call sites onto it, and the **3** system ones onto `mwf_job` (§4.3) | W1, **W1a** | schema yes; **the 9 call sites are Phase 4** | **partly** |
+| **W4b** | `app.anonymize_user_in_session()`, `app.anonymize_user_account()`, `app.partner_user_id()` + move `session-deletion.ts`, `account-deletion.ts` and the partner-detection sites onto them. **Under D9 these write the `User` tombstone and hard-delete private-only rows; they no longer null author columns** (§7.12a, §10 D9) | W1, **W1a** | schema yes; **the call sites are Phase 4** | **partly** |
 | W5 | The 5 FKs (§6) + their indexes | — | yes | no |
 | W6 | `Invitation.acceptedByUserId` + backfill | W5 | schema yes; **middleware fix is Phase 4** | partly |
 | W6a | **Write-path fix: set `forUserId` on all 5 `Message.create` sites** + CI guard (§7.12) | — | yes | no |
-| W7 | `Message.forUserId` backfill → `NOT NULL` → FK. **Blocked on D9. Requires W6a shipped and soaked, or message sending 500s product-wide** (§7.12) | PG18, W5, W6a, **D9** | no — gated on an owner decision | no |
-| W8 | `ENABLE`/`FORCE` RLS on all 68; Tier 1 policies | W2, W7 | yes, **with `mwf_app` holding `BYPASSRLS`** | no |
+| W7 | `Message.forUserId` backfill → `NOT NULL` → FK (`RESTRICT`), plus **all 39 existing `User` FKs → `RESTRICT`** (catalogue §6.3a). **Requires W6a shipped and soaked, or message sending 500s product-wide** (§7.12). No longer gated on D9 | PG18, W5, W6a | yes | no |
+| W8 | `ENABLE`/`FORCE` RLS on all 70; Tier 1 policies, shipped as `USING (true)` **placeholders** for `mwf_app` (§9.1(1)) — never `BYPASSRLS` on `mwf_app` | W2, W7 | yes | no |
 | W9 | Tiers 2–4 policies | W8 | yes | no |
 | **W10** | **Enforcement, per tier — not a flag day.** See §9.1 | W8/W9 **and** D1-c | **NO** | **YES** |
 | W11 | Detached-work identity plumbing (§7.3 tier 1, ~30 sites) | D1-c | no | **yes** |
 | W12 | Session-scoped identity for two-party paths (§7.3 tier 2) | W11 | no | **yes** |
-| W13 | Encryption: fix `decrypt()` to throw; extend the field map; envelope + `keyId` | product decision | mostly yes | partly |
+| **W13** | **Encryption (D5/D8), part of Phase 3, not after it.** `UserKey`/`SessionKey` + KMS KEK (§8.6); `enc:v2` envelope; encrypted vectors and in-app cosine similarity (§8.4); `REQUIRE_FIELD_ENCRYPTION=true` mandatory | its **six prerequisites** below | mostly yes | partly |
+
+**W13's six prerequisites**, all of which are application work and none of which is optional:
+
+1. **`decrypt()` must throw**, not return `''` (`utils/field-encryption.ts:113`) [C]. On a wrong key
+   the current behaviour is silent, total, irreversible data loss presented as empty content.
+2. **Extend `SENSITIVE_FIELD_MAP`** beyond its 9 models to the uncovered tables, starting with
+   `BrainActivity.input/output` — and put a **short retention** on `BrainActivity` regardless, since
+   it has no owning user and therefore no key (§8.6).
+3. **Audit the 19 `$queryRaw`/`$executeRaw` call sites** (§7.5) [C]. They bypass the encryption
+   middleware today.
+4. **Replace the two content-equality dedupe probes** (`stage2.ts:1293`, `stage4.ts:1030`) with a
+   hash column. Ciphertext is non-deterministic; equality comparison stops working.
+5. **Prompt debugging moves to a developer script** that reads through the application with the
+   key. Never a DB browser — that is what `server.ts:64` currently exists to allow, and it is
+   retired here.
+6. **A resumable re-encryption/backfill job** for existing plaintext rows (§8.5).
 
 **Branch-A sequencing, which nothing previously captured:** the `SECURITY DEFINER` functions are
 owned by `mwf_job`, and under branch A `mwf_job` has no `BYPASSRLS`. So on a `FORCE`d table with no
 permissive policy their bodies see **zero rows** and raise "not found" on every call [V] — silently
-correct-looking DDL, uniformly broken behaviour. **W1a must land before W4a and W4b under branch A.**
-Under branch B, W1a does not exist.
+correct-looking DDL, uniformly broken behaviour. **W1a must land before W4a and W4b.** Branch A is
+now unconditional (D0), so W1a is unconditional too.
 
 **What genuinely cannot be done database-first:** only **W10, W11, W12**. Everything else lands
-against the current Prisma backend without breaking it, because a policy on a table whose reader
-holds `BYPASSRLS` is inert but *testable* — the golden harness can connect as a non-bypassing role
-and prove the policies work while production still runs on the old path.
+against the current Prisma backend without breaking it, because a `USING (true)` placeholder is
+inert but *testable* — the golden harness can point a test tier's policies at the real predicate
+and prove they work while production still runs on the placeholder.
 
 That is the answer to "the owner is deliberately working database-first": the strategy is sound,
-and **W0–W9 plus W13 is roughly 80% of the work.**
+and **W0–W9 plus W13 is roughly 80% of the work.** W13 is inside that 80%, not after it: D5 put
+encryption in Phase 3.
 
 ### 9.1 Enforcement is a gradient, not a switch
 
 The first draft called W10 "a one-line switch". That framing was wrong in a way worth naming: a
-single `ALTER ROLE mwf_app NOBYPASSRLS` means **the entire policy set gets zero production
+single `ALTER ROLE mwf_app NOBYPASSRLS` would mean **the entire policy set gets zero production
 exercise until the instant it governs every endpoint** — at which point findings §4.3 (wrong
 predicates), §7.10 (missing write policies) and §7.11 (half-applying writes) all trip at once,
 across the whole product, with the silent half invisible.
 
 Three mechanisms turn it into a gradient. Use all three.
 
-**(1) Per-tier enforcement via per-table `FORCE`.** Enforcement does not have to be role-wide.
-Enable RLS and policies on every table at W8/W9, but apply `FORCE ROW LEVEL SECURITY` **tier by
-tier** while `mwf_app` still owns nothing and holds `BYPASSRLS`… which does not work, because
-`BYPASSRLS` is role-wide [V]. The workable form is the inverse: drop `BYPASSRLS` at W10 but ship
-each tier's policies as `USING (true)` placeholders, then replace tier N's placeholders with the
-real predicates in its own migration. Each tier is then independently revertible, and a bad
-predicate affects one tier. **[R] — not tested; the placeholder-swap migration needs a rehearsal.**
+**(1) Per-tier enforcement via placeholder predicates — and `mwf_app` never holds `BYPASSRLS`.**
+Enforcement does not have to be role-wide, and role-wide is the only thing `BYPASSRLS` can be [V].
+So the attribute is not used on `mwf_app` at all: at W8/W9 every table gets its full four-command
+policy set with `USING (true)` **placeholder** predicates, and W10 replaces tier N's placeholders
+with the real predicates in tier N's own migration. The privilege is identical to `BYPASSRLS`
+while the placeholders stand, but it is per table, visible in `pg_policies`, and independently
+revertible — the same least-privilege argument that decided D0. A bad predicate affects one tier.
+**[R] — not tested; the placeholder-swap migration needs a rehearsal.**
 
 **(2) Shadow mode — an outage detector. Draft 2 claimed the opposite and was wrong.**
 
@@ -2141,8 +2330,9 @@ what the comparison cancels out. The two things that do work are both human-anch
 
 **[R] — shadow mode designed here, not built.**
 
-**(3) Reversibility.** Every enforcement step is one `ALTER ROLE`, and the rollback is the
-inverse. Rehearse the rollback before the first tier, not after the first incident.
+**(3) Reversibility.** Every enforcement step is one tier's policy swap, and the rollback is
+restoring that tier's placeholders — no role change, no effect on the tiers already enforced.
+Rehearse the rollback before the first tier, not after the first incident.
 
 ---
 
@@ -2157,37 +2347,33 @@ detail follows.
 
 **Status.** The architecture has been through four adversarial review passes and is approved. No
 reviewer has found a way for one partner to read the other's hidden content through the current
-policy set. What remains is specification work on two functions and one CI query, plus the
-decisions below.
+policy set. What remains is specification work on two functions and one CI query.
 
-**Three of these are genuinely yours** — they are product judgements, not engineering ones, and I
-have deliberately made no recommendation: **D5** (launch encrypted), **D8** (embeddings),
-**D9** (what deletion means). Everything else is an engineering call I have made and am
-accountable for; overrule any of it, but none of it needs your time to proceed.
-
-**One is not a decision at all — D0 is a query, and nothing can start until it returns.**
+**Decided 2026-09-04.** The three product judgements — **D5** (launch encrypted), **D8**
+(embeddings), **D9** (what deletion means) — and the one query, **D0**, are answered. Their rows
+below carry the decision and the date; the rest of the document is written to match. The only thing
+still outstanding before W1 is *running* the D0 check query against production.
 
 | # | Decision | Options | Recommendation | Blocks |
 |---|---|---|---|---|
-| **D0** | Does the Render database role have the `rolbypassrls` attribute? | `SELECT rolsuper, rolbypassrls FROM pg_roles WHERE rolname = current_user;` — one query against production | **Run it first.** A role that lacks `BYPASSRLS` cannot grant it [V], so the answer decides whether the role architecture is writable as designed or needs per-table permissive policies instead. Both branches are written up (§1 T4). | **W1 — the first migration, and everything after it** |
+| **D0** | `BYPASSRLS` attribute for `mwf_job`/`mwf_ops`, or per-table `USING (true)` policies? | (a) the attribute, if available (b) **per-table permissive policies — branch A** | **Decided 2026-09-04: branch A, unconditionally.** Least privilege and defence in depth: the attribute is all-or-nothing across 70 tables and invisible in the schema, while per-table policies are scopable (`mwf_job` only where its bodies reach; `mwf_ops` only on reporting tables, never a vessel table), enumerable and greppable. `SELECT rolsuper, rolbypassrls FROM pg_roles WHERE rolname = current_user;` is still **required as a check**: `rolsuper` must be false, or `FORCE` does not bind the owner and T4 is wrong; a true `rolbypassrls` means the Render root credential bypasses RLS and must live only in the migration step. §1 T4. | **W1 — the check, not the decision** |
 | **D1** | How per-request user identity reaches the database under a connection pool | (a) wrap every request in a Prisma interactive transaction (b) spike the `@prisma/adapter-pg` driver adapter (c) **`pg` client per request, in the Phase 4 rewrite** (d) session-level `SET` | **(c).** (d) is a verified cross-user data leak. (a) touches ~700 call sites. Worth half a day on (b) first: if it works it could bring enforcement forward by months. | W10, W11, W12 |
 | **D2** | One database role, or several | 1 / 2 / **4** | **4** — `mwf_migrator`, `mwf_app`, `mwf_job`, `mwf_ops`. The first two are the boundary; `mwf_ops` as read-only is cheap and caps a live fail-open in the ops dashboard. | W1 |
-| **D3** | RLS on all 68 tables, or a subset | all at once / highest-risk only / **all enabled, policies delivered in tiers** | **Tiered.** 66 tables enabled, 2 exempt as genuinely global reference data. A table with RLS on and no policy returns nothing, so unfinished tiers fail closed. | W8, W9 |
+| **D3** | RLS on all 70 tables, or a subset | all at once / highest-risk only / **all enabled, policies delivered in tiers** | **Tiered.** 68 tables enabled, 2 exempt as genuinely global reference data. A table with RLS on and no policy returns nothing, so unfinished tiers fail closed. | W8, W9 |
 | **D4** | Which column-encryption mechanism, if we encrypt | pgcrypto / **application-side envelope encryption** / none | **App-side envelope.** pgcrypto was disqualified on measurement, not preference: its master key appears verbatim in query plans, and the index needed to make it searchable writes **plaintext to disk**. | W13 |
-| **D5** | **Do we launch encrypted?** | now / at launch / not yet | **None — this is yours and your co-founder's.** What it costs: prompt debugging gets materially harder, 19 raw-SQL sites need rework, content-equality de-duplication breaks, and a key-management mistake is unrecoverable data loss. What it buys: protection against a stolen backup, and nothing else. Do not decide without **D8**. | W13 |
+| **D5** | **Do we launch encrypted?** | now / at launch / not yet | **Decided 2026-09-04: yes, in Phase 3, with envelope encryption.** Not an afterthought — W13 moves into the Phase 3 body. KEK in AWS KMS (already in use for Bedrock [C]); per-user and per-session DEKs wrapped by it and stored in `UserKey` / `SessionKey` (§8.6). D4 stands: application-side, not pgcrypto. Six prerequisites gate it (§9), and the keyless-in-production path at `server.ts:64` is retired. Key loss is not the risk it was framed as: the KEK is in KMS and the wrapped DEKs are in the database's own backups. | W13 |
 | **D6** | How the two-party background paths run (mutual reveal, share-offer accept, 6 stage-progress writes) | session-scoped identity variable / **run them as `mwf_job`** / restructure into per-user passes | **`mwf_job`.** A session-scoped variable that can write `Message` is most of the privacy boundary re-exposed as a setting any code can change. A named role is auditable; the privilege is the same and the visibility is much better. | W10, W12 |
 | **D7** | When a user requests a session they cannot access, return 404 or 403 | keep the existence probe (403) / **accept 404** | **Accept the 404** and delete the probe. Leaking "this session exists" is a small real disclosure, and the probe is the only thing preserving it. | W8 |
-| **D8** | What happens to vector embeddings under encryption | encrypt them (lose similarity search) / accept the leak and document it / separate store with its own key | **None — this needs costing that nobody has done.** An embedding is derived from plaintext and is a semantically searchable side channel that **survives** column encryption. A stolen backup with embeddings retains much of what encryption was meant to protect. **This must be on the table when you decide D5.** | D5 |
+| **D8** | What happens to vector embeddings under encryption | **encrypt them** / accept the leak and document it / separate store with its own key | **Decided 2026-09-04: encrypt them; similarity moves into the application.** The costing turned out to be trivial. **[C]** All three `vector(1024)` columns are searched only within one user's own rows, and **no vector index exists on any of them** (HNSW was out of scope, §13), so Postgres already scans. Storing each vector as an `enc:v2` blob under the owner's key and comparing in memory loses nothing and closes the side channel. §8.4. | W13 |
 | **D8a** | How the "guesser" reads their refinement hint without reading the analysis about their partner | **split three columns into `ReconcilerGuidance`** / a privileged accessor function / keep relying on application-side field selection | **Split the table.** Not hypothetical: **three live leaks** already exist in exactly the application-side discipline the third option depends on, including one endpoint returning both partners' full gap analyses. **Note: the split fixes two of the three. The third feeds both partners' text into an LLM and returns the synthesis — that one is behavioural and needs a code fix regardless.** | W9 |
-| **D9** | **What should deleting a user do to messages their partner sent them?** | delete them (`CASCADE`) / keep them and drop the link (`SET NULL`) | **None — this is yours.** It is a product question about what deletion *means* here. `CASCADE` contradicts the anonymise-don't-delete behaviour the code already implements. `SET NULL` is compatible with it but makes the `forUserId NOT NULL` change **impossible**, which removes one of the design's headline items entirely. Related: `Message.senderId`'s existing `SET NULL` rule is a hidden writer that complicates the immutability trigger (catalogue §4) — the same conversation. | **W7 — do not sequence it before this is answered** |
+| **D9** | **What should deleting a user do to messages their partner sent them?** | delete them (`CASCADE`) / keep them and drop the link (`SET NULL`) / **soft delete** | **Decided 2026-09-04: soft delete.** The person asking to be deleted may want it applied to their partner's copy too, but the partner may want to keep the exchange; there may be safety, legal or other concerns; and what has already been delivered cannot be undelivered. So the partner continues to see the conversation. The `User` row becomes a **tombstone**; the leaver's private-only data still hard-deletes; delivered content stays, attributed through the tombstone. `forUserId` becomes `NOT NULL` + `ON DELETE RESTRICT` — the headline change survives. See **D9, decided** below. An archived-conversation path may come later. | **W7 — no longer gated** |
 | **D10** | LLM-driven and analytics queries have no in-database mitigation on Render | **accept it; use operational controls** / move off managed Postgres | **Accept.** Render permits no custom extensions and grants no superuser, so the mechanism that would work cannot be deployed there. Self-hosting would trade managed backups, point-in-time recovery, HA and read replicas for one control on a threat that is currently hypothetical. Revisit only if an analytics capability is actually built. | — |
 
-#### If you only answer three things
+#### Decided 2026-09-04
 
-**D0** unblocks all engineering. **D9** unblocks W7 and is genuinely a question about your product's
-promise to users. **D5 + D8 together** are the encryption conversation with your co-founder — and
-D8 is the part most likely to be missed, because embeddings look like an implementation detail and
-are not.
+All four are answered — D0 branch A, D9 soft delete, D5 launch encrypted with envelope keys, D8
+encrypt the vectors. The one action left is **running the D0 check query** against production
+before W1.
 
 ### 10.1 Detail
 
@@ -2195,15 +2381,15 @@ are not.
 |---|---|---|---|
 | **D1** | Per-request identity under a pool | (a) Prisma interactive tx everywhere (b) driver adapter (c) **`pg` per-request client in Phase 4** (d) session `SET` + `DISCARD ALL` | **(c)**. (d) is a verified cross-user leak [V]. Spike (b) — half a day, could bring enforcement forward by months. |
 | **D2** | One app role or several | 1 / 2 / **5** | **5**, phased. `mwf_migrator` + `mwf_app` are mandatory; `mwf_ops` read-only is cheap and caps the `brain.ts` fail-open [C]. |
-| **D3** | RLS on all 68 or a subset | all-68 / Tier 1 only / **all enabled, policies tiered** | **Tiered**, because no policy = zero rows = fail closed. Exempt `Need`, `GlobalLibraryItem`; revoke `BrainActivity` from `mwf_app`. |
+| **D3** | RLS on all 70 or a subset | all-70 / Tier 1 only / **all enabled, policies tiered** | **Tiered**, because no policy = zero rows = fail closed. Exempt `Need`, `GlobalLibraryItem`; revoke `BrainActivity` from `mwf_app`. |
 | **D4** | pgcrypto vs application-side | pgcrypto / **app-side envelope** / none | **App-side envelope.** pgcrypto is disqualified on measurement [V]: non-deterministic, key in plans, functional index writes plaintext to disk. |
-| **D5** | **Launch encrypted?** | now / at launch / never | **No recommendation — owner + co-founder.** Cost: prompt debugging, 23 raw-SQL sites, content-equality dedupe, key loss = data loss. Benefit: T5 only. |
+| **D5** | **Launch encrypted?** | now / **at launch, in Phase 3** / never | **Decided: at launch, envelope encryption, §8.6.** The costs are handled as W13's six prerequisites (§9): prompt debugging moves to a developer script, the 19 raw-SQL sites are audited, dedupe moves to a hash column. Key loss is a non-risk with a KMS KEK. |
 | **D6** | Two-party detached work: reconciler reveal, share-offer accept, the six `StageProgress` sites | (a) session-scoped GUC **including** an INSERT policy on `Message` (b) **run these paths as `mwf_job`** (c) restructure to per-user passes | **(b) — changed from the first draft.** See below. |
 | **D7** | 404-vs-403 on inaccessible sessions | keep the probe / **accept 404** | **Accept the 404** and delete the probe. |
-| **D8** | Vector embeddings under encryption | encrypt (lose ANN) / accept the leak / separate store | **No recommendation — needs costing.** Do not decide D5 without this on the table. |
+| **D8** | Vector embeddings under encryption | **encrypt** / accept the leak / separate store | **Decided: encrypt, similarity in the application.** There is no ANN to lose — no vector index exists, and every search is already single-user-scoped [C]. §8.4. |
 | **D8a** | `ReconcilerResult` guesser access (§4.3) | (a) **split out `ReconcilerGuidance`** (b) `SECURITY DEFINER` accessor (c) leave it to app-side `select:` | **(a) — and this is no longer a hypothetical.** Two live leaks were confirmed in exactly the code option (c) relies on. Specify and build it. |
 | **D10** | **T3: accept that it has no in-database mitigation, or move off managed Render Postgres?** | (a) **accept; operational controls only** (b) self-host Postgres on a Render private service to regain `shared_preload_libraries` and custom extensions | **(a).** (b) trades managed backups, PITR, HA and read replicas for one control on a threat that is currently hypothetical. Revisit only if an analytics/LLM-query capability is actually built. |
-| **D9** | **`Message.forUserId` delete rule** — see below | `CASCADE` / `SET NULL` + retain / restructure | **No recommendation — product decision.** |
+| **D9** | **`Message.forUserId` delete rule** — see below | `CASCADE` / `SET NULL` + retain / **soft delete + `RESTRICT`** | **Decided: soft delete.** The `User` row is never removed, so `RESTRICT` and `NOT NULL` both hold. See below. |
 
 ### D6, decided
 
@@ -2287,23 +2473,100 @@ and no database mechanism can restrict that — `pg_hba.conf` is not user-editab
 a reviewable event, not a config change. That is the whole mechanism — there is no clever
 alternative, and pretending otherwise would be the same mistake as shadow mode.
 
-### D9 — the `ON DELETE CASCADE` question, for the owner
+### D9, decided — soft delete
 
-§3.2 proposes `Message.forUserId REFERENCES "User"(id) ON DELETE CASCADE`. **Cascades ignore RLS**,
-and this one has a product consequence I should not decide:
+**The owner's reasoning, recorded because the mechanism follows from it.** The person asking for
+deletion may want it applied to their partner's copy as well, but the partner may want to keep the
+exchange; there may be safety, legal or other concerns on either side; and whatever has already
+been *delivered* to the partner cannot be undelivered. So: **soft delete. B continues to see the
+conversation.** An archived-conversation path may come later.
 
-- Deleting a user would also delete **messages their partner sent to them** — including
-  `SHARED_CONTEXT` rows that represent consented disclosures. That contradicts
-  `session-deletion.ts`, which deliberately implements *anonymise, don't delete* by nulling
-  `senderId` [C].
-- Independently confirmed in review: a member deleting a session cascades away messages they could
-  not read.
+#### The `User` tombstone
 
-Both are product decisions. **Design for either answer:** if the answer is "delete", `CASCADE` is
-right and `session-deletion.ts` should be simplified to match. If the answer is "retain", the FK
-must be `ON DELETE SET NULL` — which means `forUserId` **cannot** be `NOT NULL`, and §3.2's
-headline change is off the table, replaced by a CHECK that tolerates a tombstone value. Do not
-let W7 be written before this is answered.
+Account deletion **scrubs the `User` row rather than removing it**, and adds
+`deletedAt timestamptz`. Scrubbed: `name`, `firstName`, `lastName`, `email`, `clerkId`,
+`pushToken`, `globalFacts`, `biometricEnabled` / `biometricEnrolledAt`, `memoryPreferences`,
+`notificationPreferences`, `privacyPreferences`, `lastMoodIntensity`.
+
+**Two columns need care, because the schema constrains them** [C, `prisma/schema.prisma`
+`model User`]:
+
+| Column | Constraint | Tombstone value |
+|---|---|---|
+| `email` | `String @unique`, **NOT NULL** | a synthetic unique value — `deleted+<User.id>@invalid` — which satisfies both `NOT NULL` and `@unique` and can never collide with a real address (`.invalid` is reserved, RFC 2606) |
+| `clerkId` | `String? @unique`, nullable | `NULL`. The Clerk user is still deleted (`account-deletion.ts:171`), so **no login is possible** — the tombstone is unreachable as an identity |
+
+Everything else on `User` is nullable [C] and is simply nulled. **[R]** — the column list is read
+off the schema; the migration and the scrub function are not written.
+
+#### What still hard-deletes
+
+**The leaver's private-only data, unchanged.** Whatever `account-deletion.ts` and the schema's
+`onDelete: Cascade` edges already treat as private goes: `UserVessel`, `InnerWorkSession` and its
+`InnerWorkMessage`/`SessionTakeaway` children, `EmpathyDraft`, `ValidationFeedbackDraft`,
+`UserDocument`, `PreSessionMessage`, `StageProgress`, `StrategyRanking`,
+`EmotionalExerciseCompletion`, `ConsentRecord`, the inner-work tables [C]. Everything **delivered
+to the partner** stays, attributed via the tombstone.
+
+`RelationshipMember` is the exception to "cascade as before": it must now be **retained**, or the
+partner's membership predicates stop seeing two members. It is cascade-deleted today [C,
+`account-deletion.ts:136`], and its FK to `User` becomes `RESTRICT` like all the others. See §14.
+
+#### Delete rules — the uniform rule
+
+**Every foreign key that references `"User"(id)` is `ON DELETE RESTRICT`. No exceptions.**
+
+Because a `User` row is never removed, every referential action pointing at it is dead code — and a
+dead referential action is exactly the "hidden writer" class this design keeps tripping over
+(catalogue §4). Making the rule uniform means there is nothing to audit case by case, and
+structural assertion 12 checks it mechanically.
+
+**[C]** The schema has **39** foreign keys referencing `User` today — **33 `CASCADE`** and **6
+`SET NULL`** — and all 39 are rebuilt as `RESTRICT`. Catalogue §6.3 lists every one with its
+current action. The design's own new `User` edges (`Message.forUserId`,
+`Invitation.acceptedByUserId`, `ReconcilerResult.guesserId`/`subjectId`,
+`ReconcilerShareOffer.userId`, `Stage4NeedDeclination.userId`, `PreSessionMessage.userId`,
+`UserKey.userId`) are `RESTRICT` from the start.
+
+**The catalogue §4 hazard disappears entirely.** The FK's internal `SET NULL` firing an
+immutability trigger *as the table owner* — **[V]** `ERROR: senderId immutable
+(current_user=p5_owner)` — cannot happen if the referential action can never fire. **Keep the
+`current_user IN ('mwf_job','mwf_migrator')` arm in all three triggers anyway**: it is defence in
+depth, and the anonymisation functions are `SECURITY DEFINER` owned by `mwf_job`, so `mwf_job` is
+still a live principal inside them.
+
+**The consequence to plan for:** dropping 33 `CASCADE` edges means `account-deletion.ts:116-160`
+no longer deletes anything by cascade, so `app.anonymize_user_account` must delete the private-only
+rows **explicitly**. From what cascades today [C]: `UserVessel` (and through it `UserEvent`,
+`EmotionalReading`, `IdentifiedNeed`, `Boundary`, `UserDocument`), `InnerWorkSession` (and through
+it `InnerWorkMessage`, `SessionTakeaway`), `EmpathyDraft`, `ValidationFeedbackDraft`,
+`StageProgress`, `StrategyRanking`, `EmotionalExerciseCompletion`, `ConsentRecord`,
+`Stage4ProposalSelection`, `Stage4SubChat` (and `Stage4SubChatMessage`), `UserMemory`, `NeedScore`,
+`NeedsAssessmentState`, `Person`, `Insight`, `RecurringTheme`, `GratitudeEntry`,
+`GratitudePreferences`, `MeditationSession`, `MeditationStats`, `MeditationFavorite`,
+`MeditationPreferences`, `SavedMeditation`, the `Tending*` per-user tables, plus
+`PreSessionMessage` (already an explicit delete at `:110`). **Retained rather than deleted**:
+`RelationshipMember`, `Invitation`, and every delivered row. **[R]** — the split between "delete"
+and "retain" is a product judgement per table and needs one pass before W4b.
+
+#### What the anonymisation functions do instead
+
+`app.anonymize_user_in_session` and `app.anonymize_user_account` (§7.12a — specified, not built)
+change purpose: they **scrub PII into the tombstone and hard-delete the leaver's private-only
+rows**. They no longer null author columns on delivered rows. Concretely,
+`session-deletion.ts:95` stops setting `Message.senderId → NULL`; attribution now comes from the
+tombstone, which is what the partner's UI reads.
+
+#### The two consequences worth stating
+
+**AI replies addressed to the leaver stay in the database, readable by nobody.** Their `forUserId`
+is the tombstone, and no identity can ever be set to a tombstone id, so `Message_select` matches
+for no one. A retention job running as `mwf_job` may purge them later; nothing depends on it.
+
+**Legal.** Erasure is satisfied by scrubbing the identifiers and destroying the person's own
+private material — including, under D5, crypto-shredding their DEK, which makes their private-only
+ciphertext unrecoverable in every backup at once (§8.6). **Retained delivered content needs a
+sentence in the privacy policy.**
 
 ---
 
@@ -2477,7 +2740,8 @@ table. The mapping between the two groupings:
 | `WELLBEING` | Wellbeing satellites + Needs reference & assessment (minus `Need`) | uniform Shape A |
 | `OPERATIONS` | Operations / global + `BrainActivity` + `Need` | the three tables with **no** RLS |
 
-All 68 tables are accounted for once each, as in the as-is document.
+All 68 tables are accounted for once each, as in the as-is document. The two envelope-key tables
+of §8.6 are not drawn — see catalogue §1.2.
 
 ```mermaid
 erDiagram
@@ -2532,8 +2796,8 @@ erDiagram
     IDENTITY_CORE   ||--o{ EMPATHY_RECONCILER : "Session [FK CASCADE]; User via guesserId/subjectId [+FK]"
     IDENTITY_CORE   ||--o{ STAGE_3_4          : "Session [FK CASCADE]"
     IDENTITY_CORE   ||--o{ TENDING            : "Session [FK CASCADE]"
-    IDENTITY_CORE   ||--o{ WELLBEING          : "User [FK CASCADE]"
-    IDENTITY_CORE   ||--o{ INNER_WORK_MEMORY  : "User [FK CASCADE] -- NOT via Session"
+    IDENTITY_CORE   ||--o{ WELLBEING          : "User [FK CASCADE -> +RESTRICT]"
+    IDENTITY_CORE   ||--o{ INNER_WORK_MEMORY  : "User [FK CASCADE -> +RESTRICT] -- NOT via Session"
     VESSELS_CONSENT ||--o{ STAGE_3_4          : "IdentifiedNeed to StrategyProposalNeed [FK CASCADE]"
     VESSELS_CONSENT |o--o{ MESSAGING          : "IdentifiedNeed to Message [refiningNeedId FK SETNULL]"
     STAGE_3_4       ||--o{ TENDING            : "Agreement to TendingEntry [FK CASCADE]"
@@ -2551,21 +2815,22 @@ The root of every policy in the design. If `RelationshipMember` is wrong, everyt
 
 ```mermaid
 erDiagram
-    User ||--o{ RelationshipMember : "userId [FK CASCADE]"
+    User ||--o{ RelationshipMember : "userId [FK CASCADE -> +RESTRICT]"
     Relationship ||--o{ RelationshipMember : "relationshipId [FK CASCADE]"
     Relationship ||--o{ Session : "relationshipId [FK CASCADE]"
     Session |o--o{ Session : "previousSessionId [FK SETNULL]"
     Session ||--o{ Invitation : "sessionId [FK CASCADE]"
-    User ||--o{ Invitation : "invitedById [FK CASCADE]"
-    User |o--o{ Invitation : "acceptedByUserId [+COL] [+FK SETNULL] -- the work-kpkq.2 fix"
+    User ||--o{ Invitation : "invitedById [FK CASCADE -> +RESTRICT]"
+    User |o--o{ Invitation : "acceptedByUserId [+COL] [+FK RESTRICT] -- the work-kpkq.2 fix"
     Session ||--o{ StageProgress : "sessionId [FK CASCADE]"
-    User ||--o{ StageProgress : "userId [FK CASCADE]"
+    User ||--o{ StageProgress : "userId [FK CASCADE -> +RESTRICT]"
 
     User {
         text id PK "RLS - id = current_user_id; partner sees name/firstName via COLUMN GRANT only"
         text clerkId UK "nullable - resolved by SECURITY DEFINER fn at auth time"
-        text email UK "NOT in the partner-visible column grant"
+        text email UK "NOT NULL + UNIQUE - tombstone uses a synthetic deleted+id@invalid value"
         json globalFacts "encryption candidate - covered by the map today"
+        timestamptz deletedAt "[+COL] NULLABLE - the D9 tombstone marker; the row is never deleted"
     }
     Relationship {
         text id PK "RLS - via RelationshipMember"
@@ -2601,16 +2866,16 @@ The one diagram that matters most. Every marker here is load-bearing.
 ```mermaid
 erDiagram
     Session ||--o{ Message : "sessionId [FK CASCADE]"
-    User |o--o{ Message : "senderId [FK SETNULL] -- nullable, anonymization path"
-    User ||--o{ Message : "forUserId [+NN?] [+FK CASCADE-or-SETNULL?] -- WAS dotted. BLOCKED ON D9"
+    User |o--o{ Message : "senderId [FK SETNULL -> +RESTRICT] -- nullable for historic rows only (D9)"
+    User ||--o{ Message : "forUserId [+NN] [+FK RESTRICT] -- WAS dotted. D9: soft delete"
     IdentifiedNeed |o--o{ Message : "refiningNeedId [FK SETNULL]"
-    User ||--o{ PreSessionMessage : "userId [+FK CASCADE] -- WAS dotted: NOT NULL, no FK"
+    User ||--o{ PreSessionMessage : "userId [+FK RESTRICT] -- WAS dotted: NOT NULL, no FK"
     Session |o..o{ PreSessionMessage : "associatedSessionId (NO FK) -- still unenforced, deferred"
 
     Message {
         text id PK "RLS* forUserId = me OR senderId = me"
         text sessionId FK "NOT NULL - [+TRG] immutable, no UPDATE grant"
-        text senderId FK "NULLABLE - [+TRG] immutable, no UPDATE grant. NULL does NOT imply AI"
+        text senderId FK "NULLABLE for historic rows - [+TRG] immutable, no UPDATE grant. NULL does NOT imply AI"
         text forUserId FK "[+NN] [+FK] - [+TRG] immutable, no UPDATE grant. THE boundary"
         enum role "[+CK] AI/SYSTEM implies senderId IS NULL. [+TRG] immutable"
         text content "encryption candidate (covered today). [+TRG] immutable when role is AI/SYSTEM"
@@ -2634,7 +2899,7 @@ deliberately not.
 
 ```mermaid
 erDiagram
-    User ||--o{ UserVessel : "userId [FK CASCADE]"
+    User ||--o{ UserVessel : "userId [FK CASCADE -> +RESTRICT]"
     Session ||--o{ UserVessel : "sessionId [FK CASCADE]"
     UserVessel ||--o{ UserEvent : "vesselId [FK CASCADE]"
     UserVessel ||--o{ EmotionalReading : "vesselId [FK CASCADE]"
@@ -2646,10 +2911,10 @@ erDiagram
     SharedVessel ||--o{ CommonGround : "sharedVesselId [FK CASCADE]"
     SharedVessel ||--o{ Agreement : "sharedVesselId [FK CASCADE]"
     ConsentRecord ||--o{ ConsentedContent : "consentRecordId [FK RESTRICT]"
-    User ||--o{ ConsentRecord : "userId [FK CASCADE] -- the consenter"
-    User ||--o{ ConsentRecord : "requestedByUserId [FK CASCADE] -- the asker"
+    User ||--o{ ConsentRecord : "userId [FK CASCADE -> +RESTRICT] -- the consenter"
+    User ||--o{ ConsentRecord : "requestedByUserId [FK CASCADE -> +RESTRICT] -- the asker"
     Session |o--o{ ConsentRecord : "sessionId [FK CASCADE] -- nullable"
-    User |o--o{ ConsentedContent : "sourceUserId [FK SETNULL]"
+    User |o--o{ ConsentedContent : "sourceUserId [FK SETNULL -> +RESTRICT] (D9)"
     IdentifiedNeed |o--o| ConsentedContent : "originalNeedId [FK SETNULL] -- UNIQUE"
 
     UserVessel {
@@ -2687,15 +2952,15 @@ authorization meaning.
 ```mermaid
 erDiagram
     Session ||--o{ EmpathyDraft : "sessionId [FK CASCADE]"
-    User ||--o{ EmpathyDraft : "userId [FK CASCADE]"
+    User ||--o{ EmpathyDraft : "userId [FK CASCADE -> +RESTRICT]"
     EmpathyDraft |o--o{ EmpathyAttempt : "draftId [FK SETNULL]"
     EmpathyAttempt ||--o{ EmpathyValidation : "attemptId [FK CASCADE]"
     ReconcilerResult ||--o{ ReconcilerShareOffer : "resultId [FK CASCADE]"
     ReconcilerResult ||--o| ReconcilerGuidance : "resultId [+TABLE, +FK CASCADE] -- D8a(a)"
     Session ||--o{ ReconcilerResult : "sessionId [FK CASCADE]"
-    User ||--o{ ReconcilerResult : "guesserId [+FK CASCADE] -- WAS dotted: NOT NULL, no FK"
-    User ||--o{ ReconcilerResult : "subjectId [+FK CASCADE] -- WAS dotted: NOT NULL, no FK"
-    User ||--o{ ReconcilerShareOffer : "userId [+FK CASCADE] -- WAS dotted: NOT NULL, no FK"
+    User ||--o{ ReconcilerResult : "guesserId [+FK RESTRICT] -- WAS dotted: NOT NULL, no FK"
+    User ||--o{ ReconcilerResult : "subjectId [+FK RESTRICT] -- WAS dotted: NOT NULL, no FK"
+    User ||--o{ ReconcilerShareOffer : "userId [+FK RESTRICT] -- WAS dotted: NOT NULL, no FK"
 
     ReconcilerResult {
         text id PK "RLS* subjectId = me ONLY - the guesser arm CANNOT be a row policy, see 4.3"
@@ -2747,7 +3012,7 @@ erDiagram
     Stage4SubChat ||--o{ Stage4SubChatMessage : "subChatId [FK CASCADE]"
     Session ||--o{ Stage4Closure : "sessionId [FK CASCADE]"
     Session ||--o{ Stage4ProposalRevision : "sessionId [+FK CASCADE] -- WAS dotted"
-    User ||--o{ Stage4NeedDeclination : "userId [+FK CASCADE] -- WAS dotted"
+    User ||--o{ Stage4NeedDeclination : "userId [+FK RESTRICT] -- WAS dotted"
     IdentifiedNeed ||..o{ Stage4NeedDeclination : "needId (NO FK) -- deferred, integrity only"
 
     StrategyProposal {
@@ -2766,12 +3031,12 @@ erDiagram
 
 ```mermaid
 erDiagram
-    User ||--o{ InnerWorkSession : "userId [FK CASCADE]"
+    User ||--o{ InnerWorkSession : "userId [FK CASCADE -> +RESTRICT]"
     InnerWorkSession ||--o{ InnerWorkMessage : "sessionId [FK CASCADE] -- points at InnerWorkSession"
     InnerWorkSession ||--o{ SessionTakeaway : "sessionId [FK CASCADE] -- points at InnerWorkSession"
     SessionTakeaway ||--o{ TakeawayLink : "sourceId [FK CASCADE]"
     SessionTakeaway ||--o{ TakeawayLink : "targetId [FK CASCADE]"
-    User ||--o{ Person : "userId [FK CASCADE]"
+    User ||--o{ Person : "userId [FK CASCADE -> +RESTRICT]"
     Person ||--o{ PersonMention : "personId [FK CASCADE]"
     User ||..o{ PersonMention : "userId (NO FK) -- NOT NULL, deferred"
 
@@ -2812,7 +3077,6 @@ Named so a reviewer can see they were considered rather than missed. All belong 
 |---|---|
 | Junction tables for the 10 array-of-IDs columns | Integrity and queryability, not authorization. Would double the size of this change. |
 | 25 missing FK indexes | Performance. **Exception:** each of the 6 new FKs ships with its index — an FK without one is incomplete. |
-| HNSW indexes on the 3 vector columns | Performance. But see §8.4: the vectors are a security question even though the *index* is not. |
 | `timestamptz` for all 144 columns | Correctness. Touches every table and would swamp the diff. Note the harness already found a real timezone bug here [C]. |
 | `uuidv7` / cuid2 migration | **[V18]** `uuidv7()` exists on PG18. Still schema-wide and orthogonal. The security-relevant part — cuid v1 leaking creation time and host fingerprint in values used as capabilities — is real and is made *less* urgent by RLS, since an id stops being a capability once policies bind. |
 | `Need.id` having no sequence | A reference table. Latent. |
@@ -2824,27 +3088,43 @@ Named so a reviewer can see they were considered rather than missed. All belong 
 
 Where this design is least certain, so review can be pointed at it.
 
-1. **Does the Render production role carry `rolbypassrls`?** Superuser is answered: Render
-   documents that it grants none, so `FORCE` binds the owner. `rolbypassrls` is undocumented and
-   unverified. One query against production — **D0, W0**.
-2. **Does `@prisma/adapter-pg` allow a connection-checkout hook?** [R] Half a day to find out;
+1. **Does `@prisma/adapter-pg` allow a connection-checkout hook?** [R] Half a day to find out;
    could bring enforcement forward by months (D1-b).
-3. **Does the production `Message` table satisfy the authorship CHECK and the `forUserId` FK?** The
+2. **Does the production `Message` table satisfy the authorship CHECK and the `forUserId` FK?** The
    local sample is 4 rows [C]. Meaningless. Must be re-run against production before W3 / W7.
-4. **Session-scoped identity (D6).** The largest untested piece. It admits both partners' rows into
+3. **Session-scoped identity (D6).** The largest untested piece. It admits both partners' rows into
    one transaction and needs its own adversarial review once built.
-5. **Does Prisma use savepoints in interactive transactions?** [R] If so, §2.2's identity-loss
+4. **Does Prisma use savepoints in interactive transactions?** [R] If so, §2.2's identity-loss
    hazard applies to the interim period.
-6. **How much does a 1024-dim embedding leak?** [R] Unquantified, and D5 / D8 should not be decided
-   without it.
-7. **RLS performance on production-shaped data.** [V] on synthetic 100k rows in one session, which
+5. **RLS performance on production-shaped data.** [V] on synthetic 100k rows in one session, which
    is not production shape.
-8. **D9 — the `Message.forUserId` delete rule.** Owner decision, §10. **W7 is blocked on it.**
+6. **Does anything in the application assume a `RelationshipMember` row implies a live account?**
+   [R] Under D9 a tombstoned user keeps their membership row, so membership predicates still see
+   two members — which is the point, but it is a new state for every consumer of that table.
+   `account-deletion.ts` cascades those rows away today [C].
+7. **Can `pgvector` actually be dropped once the vectors are encrypted?** [R] The three
+   `vector(1024)` columns are the only declarations in the schema [C]; check `pg_depend` before
+   dropping, and it is optional either way. §8.4.
+8. **Which rows does `app.anonymize_user_account` delete, now that no `User` cascade fires?** [R]
+   §10 D9 lists what cascades today; the delete-versus-retain split is a product judgement per
+   table and needs one pass before W4b.
 9. **Will Render set `log_statement='all'` for a named role on request?** [V] The customer cannot;
-   Render can. Determines whether the `mwf_job` residual is auditable in production at all.
+    Render can. Determines whether the `mwf_job` residual is auditable in production at all.
 10. **Does `ConsentedContent_select_own` match the product?** §4.3. `consent.ts:167` reads
     `consentActive` rather than filtering on it, which suggests the owner-facing list shows
     inactive items with a flag — but that is an inference, not a confirmation.
+
+**Closed by the owner's decisions of 2026-09-04** (§10.0):
+
+- **Does the Render production role carry `rolbypassrls`?** No longer a fork. **D0 chose branch A
+  unconditionally** on least-privilege grounds; the query survives as a check that `rolsuper` is
+  false and that a bypassing root credential is confined to the migration step. §1 T4.
+- **How much does a 1024-dim embedding leak?** No longer needs quantifying. **D8 encrypts the
+  vectors**, so the side channel is closed rather than costed — and closing it costs nothing,
+  because no vector index exists and every search is already single-user-scoped [C]. §8.4.
+- **D9 — the `Message.forUserId` delete rule.** **Soft delete.** `forUserId` is `NOT NULL` with
+  `ON DELETE RESTRICT`; the `User` row becomes a tombstone and is never removed. W7 is unblocked.
+  §10 D9.
 
 **Closed since draft 4** — listed so nobody re-opens them:
 
