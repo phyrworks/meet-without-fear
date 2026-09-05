@@ -202,16 +202,17 @@ authorization column.** Never grantable to `mwf_app`:
 
 `forUserId`, `senderId`, `sessionId`, `role`, `userId`, `vesselId`, `relationshipId`,
 `guesserId`, `subjectId`, `sourceUserId`, `invitedById`, `acceptedByUserId`, `sharedVesselId`,
-`consentRecordId`, `proposalId`, `subChatId`, and every primary key.
+`consentRecordId`, `proposalId`, `subChatId`, `createdByUserId`, and every primary key.
 
-**Extended in draft 3.** Any column a *read policy* consults is an authorization column, whatever
-its name suggests. Three were missed:
+**Extended in draft 3, and once more after draft 6.** Any column a *read policy* consults is an
+authorization column, whatever its name suggests. Four were missed:
 
 | Column | Why it is now on the list |
 |---|---|
 | `EmpathyAttempt."sourceUserId"` | The `sourceUserId = me` arm of `EmpathyAttempt_select`. **[V]** With it writable, Ada forged an attempt attributed to Bob and Bob read it as his own. |
-| `EmpathyAttempt.status` | Half the read predicate after §4.3 — `REVEALED`/`VALIDATED` is what discloses the attempt to the partner. A member who can set it can reveal their partner's attempt to themselves. The reveal runs as `mwf_job` (D6), so `mwf_app` needs no grant. **[R] — untested; test this first.** |
+| `EmpathyAttempt.status` | Half the read predicate after §4.3 — `REVEALED`/`VALIDATED` is what discloses the attempt to the partner. A member who can set it can reveal their partner's attempt to themselves. The reveal runs as `mwf_job` (D6), so `mwf_app` needs no grant; its only path is `app.empathy_set_status` (§3). **[V]** design §4.3, draft 6: 9 writers pass, 8 attacks blocked. The grant itself is assertion 5. |
 | `ConsentedContent."sourceUserId"` | The `sourceUserId = me` arm of `ConsentedContent_select_own`. |
+| `StrategyProposal."createdByUserId"` | An author column. Not a read-policy arm today, but `session-deletion.ts:165` nulls it on anonymisation — an `mwf_job` path after W4b — and it is exactly the latent case that becomes a defect when a policy is widened. |
 
 **One deliberate exception.** `ConsentedContent."consentActive"` and `"revokedAt"` **are** granted
 to `mwf_app`, because `controllers/consent.ts:224` is an in-request write by the consenting user
@@ -270,7 +271,7 @@ otherwise the bodies see zero rows and raise "not found" on every call [V].
 
 | Signature | Owner | Security | Volatility | Justification | Called by | Verified by |
 |---|---|---|---|---|---|---|
-| `app.empathy_set_status(text, "EmpathyStatus")` | **`mwf_job`** | DEFINER | `VOLATILE` | The only writer of `EmpathyAttempt.status`. Encodes the non-author transition rule that neither a CHECK nor a policy can express. `FOR UPDATE` + status-guarded write for TOCTOU; no-op when unchanged, because callers include retried fire-and-forget paths. | 6 sites (design §4.3) | **[V]** 6 call sites pass, 5 attacks blocked |
+| `app.empathy_set_status(text, "EmpathyStatus")` | **`mwf_job`** | DEFINER | `VOLATILE` | The only writer of `EmpathyAttempt.status`. Encodes the non-author transition rule that neither a CHECK nor a policy can express. `FOR UPDATE` + status-guarded write for TOCTOU; no-op when unchanged, because callers include retried fire-and-forget paths. | 6 `mwf_app` sites; 3 system writers go direct as `mwf_job` (design §4.3) | **[V]** draft 6: all 9 writers pass, 8 attacks blocked, non-author reachable closure disjoint from the reveal-reachable set |
 | `app.anonymize_user_in_session(text, text)` | **`mwf_job`** | DEFINER | `VOLATILE` | Per-session anonymization. **Carries its own self-only + membership check** — the handler runs as `mwf_app` and a backend authorization bug is the dominant threat. `p_display_name` removed: an attacker-controlled string was landing in the partner-visible `ReconcilerResult.subjectName`. | `session-deletion.ts` | **[R]** |
 | `app.anonymize_user_account(text)` | **`mwf_job`** | DEFINER | `VOLATILE` | Account-wide anonymization. Session-less writes (`GlobalLibraryItem.contributedBy`, both `ReconcilerResult` scrubs) that the per-session signature cannot express. Self-only check. | `account-deletion.ts` | **[R]** |
 | `app.partner_user_id(p_session_id text)` | **`mwf_job`** | DEFINER | `STABLE` | "Who is my partner" is a fact the caller is entitled to and `RelationshipMember`'s policy hides, producing two silent `if (!partner)` inversions (design §7.11). **Caller-bound — see body below.** | partner-detection sites | **[R]** |
@@ -943,16 +944,16 @@ The policy count is now derived from the table count rather than asserted: the f
 "~180 (4 cmds × 45 tables)" reconciled with neither 65 nor 68, because it silently assumed ~21
 tables would get `_select` only — which §5.2 now shows is unsafe.
 
-**Five objects are known to be wrong, unsafe, or blocked as drafted.** Marked rather than quietly
+**Seven objects are wrong, unsafe, or blocked as drafted.** Marked rather than quietly
 corrected:
 
 - `User_covisible` + column grants (§2.2) — **does not achieve column-scoped partner visibility.**
-  Postgres has no per-policy column scoping. Redesign as a `SECURITY DEFINER` name lookup.
+  Postgres has no per-policy column scoping. Superseded in the design summary by
+  `app.partner_display_name()`, a `SECURITY DEFINER` name lookup; the §2.2, §3
+  (`shares_relationship_with`) and §5 entries still show the superseded draft and are rewritten
+  with the DDL.
 - `app.create_user_for_clerk` (§3) — the only `SECURITY DEFINER` function that writes. Needs its
   own adversarial review before it is built.
-- `Message_routing_immutable` (§4) — **breaks `session-deletion.ts:95`**, and the first draft's
-  recommended fix does not work: a `SECURITY DEFINER` function does not bypass triggers. Needs an
-  explicit `current_user = 'mwf_job'` exemption.
 - `mwf_analyst` (§2, §2.3) — **withdrawn.** `REVOKE SET ON PARAMETER` is a no-op on PG16 and PG18
   [V]; the working alternative (`PGC_SUSET` via a C extension) cannot be installed on Render *and*
   could not be granted even if it were. T3 has no in-database mitigation on Render.
@@ -966,17 +967,17 @@ corrected:
   role that lacks it, so if Render's role has no `rolbypassrls`, `mwf_job` and `mwf_ops` need
   explicit `USING (true)` policies per table instead — a design change, not a parameter, and one
   that silently yields zero rows if missed.
-- `StrategyProposal.createdByUserId` — **not yet in the never-`UPDATE`-grantable set and should
-  be** (§2.1). An author column, written to `NULL` by the anonymization path, not currently a
-  read-policy arm — exactly the latent case that becomes a defect when a policy is widened.
-- **The `READY` widening in `app.empathy_set_status`** (design §4.3) — the right shape, but the six
-  call sites have **not** been re-run against the widened set. Verify before the DDL.
-- **`app.consent_no_resurrect` and `app.empathy_attempt_immutable` have not been audited for
-  referential-action principals** (§4). `Message.senderId`'s `ON DELETE SET NULL` fires as the
-  **table owner** [V]; any column on a table reachable by a referential action needs the same arm.
 - **The two anonymization functions and `app.partner_user_id` are specified, not built** — and
   the draft-5 lesson is that a specified privileged object is where the next defect lives. Each
   needs the "who is `current_user` on this line" audit before it ships.
+
+**Closed since draft 5**, for the record: `Message_routing_immutable` vs `session-deletion.ts:95`
+— all three triggers carry the `current_user IN ('mwf_job', 'mwf_migrator')` arm (§4) ·
+`StrategyProposal.createdByUserId` — now on the never-`UPDATE`-grantable list (§2.1) · the
+`READY` widening — replaced by the two-set transition function, re-verified against all nine
+writers (design §4.3, draft 6) · the referential-action audit of `consent_no_resurrect` and
+`empathy_attempt_immutable` — enumerated, both `onDelete: SetNull` into a pinned column, both
+exempted (§4).
 
 ---
 

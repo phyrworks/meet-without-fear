@@ -1754,7 +1754,7 @@ Enumerated [C]:
 | `stage3.ts:981` | `userId: { in: [user.id, partnerId] }` | **half-applies silently** |
 | `stage2.ts:1738` | `userId: { in: userIds }` | **half-applies silently** |
 | `sessions.ts:893`, `stage0.ts:186` | `userId: user.id` | fine |
-| `invitations.ts:469`, `:731` | `stageProgress.create` for the joining user | fails **loudly** if it creates for the partner — check |
+| `invitations.ts:469`, `:731` | `stageProgress.create` for the joining user | fine — [C] both write `userId: user.id` |
 
 Six sites silently half-apply. Every one of them is a stage transition — the thing that decides
 whether a session can progress — so the failure mode is "the partner is stuck at Stage 3 and
@@ -2824,42 +2824,41 @@ Named so a reviewer can see they were considered rather than missed. All belong 
 
 Where this design is least certain, so review can be pointed at it.
 
-1. **Does the Render production role carry `rolbypassrls`?** **Superuser is now answered: Render
-   documents that it grants none**, so `FORCE` binds the owner. `rolbypassrls` is undocumented and
-   still unverified. One query against production; still W0.
+1. **Does the Render production role carry `rolbypassrls`?** Superuser is answered: Render
+   documents that it grants none, so `FORCE` binds the owner. `rolbypassrls` is undocumented and
+   unverified. One query against production — **D0, W0**.
 2. **Does `@prisma/adapter-pg` allow a connection-checkout hook?** [R] Half a day to find out;
-   could bring enforcement forward by months.
+   could bring enforcement forward by months (D1-b).
 3. **Does the production `Message` table satisfy the authorship CHECK and the `forUserId` FK?** The
-   local sample is 4 rows [C]. Meaningless. Must be re-run against production.
+   local sample is 4 rows [C]. Meaningless. Must be re-run against production before W3 / W7.
 4. **Session-scoped identity (D6).** The largest untested piece. It admits both partners' rows into
-   one transaction and needs its own adversarial review.
+   one transaction and needs its own adversarial review once built.
 5. **Does Prisma use savepoints in interactive transactions?** [R] If so, §2.2's identity-loss
    hazard applies to the interim period.
-6. **How much does a 1024-dim embedding leak?** [R] Unquantified, and D5 should not be decided
+6. **How much does a 1024-dim embedding leak?** [R] Unquantified, and D5 / D8 should not be decided
    without it.
-7. **Is `pg_policies` readability acceptable?** [V] It is readable. Assumed yes.
-8. **RLS performance on production-shaped data.** [V] on synthetic 100k rows in one session, which
+7. **RLS performance on production-shaped data.** [V] on synthetic 100k rows in one session, which
    is not production shape.
-9. **D9 — the `Message.forUserId` delete rule.** Owner decision, §10. **W7 is blocked on it.**
-10. ~~**`REVOKE SET ON PARAMETER` on PG18.**~~ **Closed.** It does nothing on PG16 or PG18, for
-    custom *or* core GUCs. The working alternative (a `PGC_SUSET` C extension) is undeployable on
-    Render. **T3 has no in-database mitigation on Render — this is now a settled negative, not an
-    open question.** See D10.
-11. **Which of the 21 `ReconcilerResult` readers are guesser-facing versus reconciler-internal?**
-    Draft 2 said eleven and was wrong by nearly half — 8 are reachable only through
-    `reconcilerShareOffer.include.result`. Two are live leaks (P0). The remaining 19 need
-    classifying before D8a(a) is written.
-14. **Will Render set `log_statement='all'` for a named role on request?** [V] The customer cannot;
-    Render can. Determines whether the `mwf_job` residual is auditable in production at all.
-15. **Is `EmpathyAttempt.status` reachable by `mwf_app` on any write path?** It is half the read
-    predicate after §4.3, so a member who can set it to `REVEALED` reveals their partner's attempt
-    to themselves. **[R] — the sharpest untested hole in the design; test before anything else.**
-12. **Does `ConsentedContent_select_own` match the product?** §4.3. `consent.ts:167` reads
+8. **D9 — the `Message.forUserId` delete rule.** Owner decision, §10. **W7 is blocked on it.**
+9. **Will Render set `log_statement='all'` for a named role on request?** [V] The customer cannot;
+   Render can. Determines whether the `mwf_job` residual is auditable in production at all.
+10. **Does `ConsentedContent_select_own` match the product?** §4.3. `consent.ts:167` reads
     `consentActive` rather than filtering on it, which suggests the owner-facing list shows
     inactive items with a flag — but that is an inference, not a confirmation.
-13. **Are the two `invitations.ts` `stageProgress.create` calls for the partner or the joining
-    user?** [C] shows creates at `:469` and `:731`; if either creates the partner's row it fails
-    loudly under a Shape B INSERT policy. Unresolved.
+
+**Closed since draft 4** — listed so nobody re-opens them:
+
+- `pg_policies` readability — [V] readable; accepted.
+- `REVOKE SET ON PARAMETER` on PG18 — a no-op on PG16 and PG18 for custom and core GUCs; the
+  `PGC_SUSET` C-extension alternative is undeployable on Render. T3 has no in-database mitigation
+  there. See D10.
+- The 21 `ReconcilerResult` readers — all classified in §4.3: three leaking handlers
+  (`work-kpkq.16`), 17 correctly scoped, one write-only pair.
+- `EmpathyAttempt.status` writability by `mwf_app` — `status` is on the never-`UPDATE`-grantable
+  list (catalogue §2.1, assertion 5); `mwf_app` writes it only through `app.empathy_set_status`,
+  whose draft-6 [V] table in §4.3 blocks every non-author transition into a reveal-reachable state.
+- The `invitations.ts:469` / `:731` `stageProgress.create` calls — [C] both write
+  `userId: user.id`, the caller's own row; the Shape B INSERT policy admits them.
 
 ---
 

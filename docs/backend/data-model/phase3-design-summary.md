@@ -168,7 +168,7 @@ Database-first still leaves these on the backend. Nothing here is optional.
 | Set `forUserId` on every `Message.create` (5 sites) + CI guard | `stream-turn-admission.ts:159`, `scripts/mwf-moment-real.ts` ×4 | **W6a — before W7 or sending 500s** |
 | Strip `PostgresError.detail` from API errors | error middleware | before first CHECK (W3) |
 | Split `DATABASE_URL` → `APP_DATABASE_URL`, `JOB_DATABASE_URL`, `OPS_…`, `AUTH_…` | `lib/prisma.ts`, `render.yaml`, `routes/brain.ts` | W0/W1 |
-| Two-party paths run as `mwf_job`: reveal, share-accept, 6 both-partner `StageProgress` writes, 3 status writers | `state.ts:393`, `sharing.ts:1005`, `stage2.ts:1721,1738,1753`, `stage3.ts:981,994`, `invitations.ts:469,731` | W4a / W10 |
+| Two-party paths run as `mwf_job`: reveal, share-accept, 6 both-partner `StageProgress` writes, 3 status writers | `state.ts:393`, `sharing.ts:1005`, `stage2.ts:1721–1753`, `stage3.ts:981–994`, `sessions.ts:474`, `stage4.ts:1476,2326`, `stage4-auto-closure.service.ts:182` | W4a / W10 |
 | 9 status writers → `app.empathy_set_status` / `mwf_job` | see §5 | W4a |
 | Deletion paths → anonymisation functions; partner lookup → `app.partner_user_id` | `session-deletion.ts`, `account-deletion.ts` | W4b |
 | Delete the invitation fallback in `requireSessionAccess` | `middleware/auth.ts:317` | W6 |
