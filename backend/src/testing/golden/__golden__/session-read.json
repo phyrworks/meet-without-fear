@@ -148,7 +148,7 @@
       "settled": true,
       "trace": {
         "complete": true,
-        "connections": 1,
+        "connections": "<unasserted: pool high-water mark — pg.Pool opens connections on demand under concurrent queries, so this is scheduling, not a property of the work; refused on every step by driver.ts; see the step declaration>",
         "transactions": 6,
         "statements": 6,
         "byKind": {
@@ -453,7 +453,7 @@
       "settled": true,
       "trace": {
         "complete": true,
-        "connections": 3,
+        "connections": "<unasserted: pool high-water mark — pg.Pool opens connections on demand under concurrent queries, so this is scheduling, not a property of the work; refused on every step by driver.ts; see the step declaration>",
         "transactions": 21,
         "statements": 21,
         "byKind": {
@@ -939,7 +939,7 @@
       "settled": true,
       "trace": {
         "complete": true,
-        "connections": 1,
+        "connections": "<unasserted: pool high-water mark — pg.Pool opens connections on demand under concurrent queries, so this is scheduling, not a property of the work; refused on every step by driver.ts; see the step declaration>",
         "transactions": 6,
         "statements": 6,
         "byKind": {
@@ -1156,7 +1156,7 @@
       "settled": true,
       "trace": {
         "complete": true,
-        "connections": 1,
+        "connections": "<unasserted: pool high-water mark — pg.Pool opens connections on demand under concurrent queries, so this is scheduling, not a property of the work; refused on every step by driver.ts; see the step declaration>",
         "transactions": 6,
         "statements": 6,
         "byKind": {
@@ -1434,7 +1434,7 @@
       "settled": true,
       "trace": {
         "complete": true,
-        "connections": 3,
+        "connections": "<unasserted: pool high-water mark — pg.Pool opens connections on demand under concurrent queries, so this is scheduling, not a property of the work; refused on every step by driver.ts; see the step declaration>",
         "transactions": 21,
         "statements": 21,
         "byKind": {
@@ -1920,7 +1920,7 @@
       "settled": true,
       "trace": {
         "complete": true,
-        "connections": 1,
+        "connections": "<unasserted: pool high-water mark — pg.Pool opens connections on demand under concurrent queries, so this is scheduling, not a property of the work; refused on every step by driver.ts; see the step declaration>",
         "transactions": 6,
         "statements": 6,
         "byKind": {
