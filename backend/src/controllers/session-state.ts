@@ -140,7 +140,7 @@ export async function getSessionState(req: Request, res: Response): Promise<void
     const sessionId = req.params.id;
 
     // Fetch core session data in parallel
-    const [sessionWithRelations, messages, userVessel] = await Promise.all([
+    const [sessionWithRelations, latestInvitation, linkedInnerThoughts, messages, userVessel] = await Promise.all([
       // 1. Session with all core relations
       prisma.session.findFirst({
         where: {
@@ -170,26 +170,33 @@ export async function getSessionState(req: Request, res: Response): Promise<void
             },
           },
           stageProgress: true,
-          invitations: {
-            orderBy: { createdAt: 'desc' },
-            take: 1,
-          },
-          linkedInnerThoughts: {
-            where: {
-              userId: user.id,
-              linkedTrigger: 'suggestion_start',
-              status: { not: 'ARCHIVED' },
-            },
-            orderBy: { updatedAt: 'desc' },
-            take: 1,
-            select: {
-              id: true,
-              title: true,
-              summary: true,
-              theme: true,
-              contextSummarySnapshot: true,
-            },
-          },
+        },
+      }),
+
+      // 1b/1c. Latest invitation and the linked inner-thoughts session, each as its
+      // own findFirst rather than a nested `take: 1` include. Prisma 7 no longer
+      // pushes a nested to-many `take` into SQL: it reads every matching child row
+      // and trims in JS, so the cost grew with the session's history. findFirst
+      // emits LIMIT. Both are used only after the session query above has passed
+      // the membership check; on a miss they are discarded with it.
+      prisma.invitation.findFirst({
+        where: { sessionId },
+        orderBy: { createdAt: 'desc' },
+      }),
+      prisma.innerWorkSession.findFirst({
+        where: {
+          linkedPartnerSessionId: sessionId,
+          userId: user.id,
+          linkedTrigger: 'suggestion_start',
+          status: { not: 'ARCHIVED' },
+        },
+        orderBy: { updatedAt: 'desc' },
+        select: {
+          id: true,
+          title: true,
+          summary: true,
+          theme: true,
+          contextSummarySnapshot: true,
         },
       }),
 
@@ -239,7 +246,7 @@ export async function getSessionState(req: Request, res: Response): Promise<void
     }
 
     const session = sessionWithRelations;
-    const sourceInnerThoughts = session.linkedInnerThoughts[0] ?? null;
+    const sourceInnerThoughts = linkedInnerThoughts;
     const partnerId = await getPartnerUserId(sessionId, user.id);
 
     // Get my membership (for nickname I use for partner)
@@ -366,7 +373,7 @@ export async function getSessionState(req: Request, res: Response): Promise<void
     };
 
     // Build invitation response
-    const invitation = session.invitations[0];
+    const invitation = latestInvitation;
     const isInviter = invitation?.invitedById === user.id;
     const invitationResponse = invitation
       ? {
