@@ -61,6 +61,8 @@ docs/product/gold-session-scratch/*.md
 # Prisma
 backend/prisma/*.db
 backend/prisma/*.db-journal
+# Prisma 7 generated client (prisma generate writes it; see schema.prisma)
+backend/src/generated/
 
 # Database snapshots
 backend/snapshots/snapshot-*.sql
