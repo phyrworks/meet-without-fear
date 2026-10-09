@@ -1,0 +1,214 @@
+[
+  {
+    "id": "rowLevelSecurity.public.UserMemory.disable",
+    "label": "Disable row-level security on \"UserMemory\"",
+    "operationClass": "widening",
+    "target": {
+      "id": "postgres",
+      "details": {
+        "schema": "public",
+        "objectType": "rowLevelSecurity",
+        "name": "UserMemory"
+      }
+    },
+    "precheck": [
+      {
+        "description": "check RLS is currently enabled on \"UserMemory\"",
+        "sql": "SELECT EXISTS (SELECT 1 AS \"one\" FROM \"pg_class\" AS \"c\" INNER JOIN \"pg_namespace\" AS \"n\" ON \"n\".\"oid\" = \"c\".\"relnamespace\" WHERE (\"n\".\"nspname\" = $1 AND \"c\".\"relname\" = $2 AND \"c\".\"relrowsecurity\")) AS \"result\"",
+        "params": [
+          "public",
+          "UserMemory"
+        ]
+      }
+    ],
+    "execute": [
+      {
+        "description": "disable row-level security on \"UserMemory\"",
+        "sql": "ALTER TABLE \"public\".\"UserMemory\" DISABLE ROW LEVEL SECURITY",
+        "params": []
+      }
+    ],
+    "postcheck": [
+      {
+        "description": "verify row-level security is disabled on \"UserMemory\"",
+        "sql": "SELECT EXISTS (SELECT 1 AS \"one\" FROM \"pg_class\" AS \"c\" INNER JOIN \"pg_namespace\" AS \"n\" ON \"n\".\"oid\" = \"c\".\"relnamespace\" WHERE (\"n\".\"nspname\" = $1 AND \"c\".\"relname\" = $2 AND NOT (\"c\".\"relrowsecurity\"))) AS \"result\"",
+        "params": [
+          "public",
+          "UserMemory"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "rlsPolicy.public.UserMemory.user_memory_owner_delete_a2adeef6.drop",
+    "label": "Drop RLS policy \"user_memory_owner_delete_a2adeef6\" on \"UserMemory\"",
+    "operationClass": "widening",
+    "target": {
+      "id": "postgres",
+      "details": {
+        "schema": "public",
+        "objectType": "rlsPolicy",
+        "name": "user_memory_owner_delete_a2adeef6",
+        "table": "UserMemory"
+      }
+    },
+    "precheck": [
+      {
+        "description": "ensure RLS policy \"user_memory_owner_delete_a2adeef6\" exists",
+        "sql": "SELECT EXISTS (SELECT 1 AS \"one\" FROM \"pg_policies\" WHERE (\"schemaname\" = $1 AND \"tablename\" = $2 AND \"policyname\" = $3)) AS \"result\"",
+        "params": [
+          "public",
+          "UserMemory",
+          "user_memory_owner_delete_a2adeef6"
+        ]
+      }
+    ],
+    "execute": [
+      {
+        "description": "drop RLS policy \"user_memory_owner_delete_a2adeef6\"",
+        "sql": "DROP POLICY \"user_memory_owner_delete_a2adeef6\" ON \"public\".\"UserMemory\"",
+        "params": []
+      }
+    ],
+    "postcheck": [
+      {
+        "description": "verify RLS policy \"user_memory_owner_delete_a2adeef6\" is absent",
+        "sql": "SELECT NOT EXISTS (SELECT 1 AS \"one\" FROM \"pg_policies\" WHERE (\"schemaname\" = $1 AND \"tablename\" = $2 AND \"policyname\" = $3)) AS \"result\"",
+        "params": [
+          "public",
+          "UserMemory",
+          "user_memory_owner_delete_a2adeef6"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "rlsPolicy.public.UserMemory.user_memory_owner_insert_127d690c.drop",
+    "label": "Drop RLS policy \"user_memory_owner_insert_127d690c\" on \"UserMemory\"",
+    "operationClass": "widening",
+    "target": {
+      "id": "postgres",
+      "details": {
+        "schema": "public",
+        "objectType": "rlsPolicy",
+        "name": "user_memory_owner_insert_127d690c",
+        "table": "UserMemory"
+      }
+    },
+    "precheck": [
+      {
+        "description": "ensure RLS policy \"user_memory_owner_insert_127d690c\" exists",
+        "sql": "SELECT EXISTS (SELECT 1 AS \"one\" FROM \"pg_policies\" WHERE (\"schemaname\" = $1 AND \"tablename\" = $2 AND \"policyname\" = $3)) AS \"result\"",
+        "params": [
+          "public",
+          "UserMemory",
+          "user_memory_owner_insert_127d690c"
+        ]
+      }
+    ],
+    "execute": [
+      {
+        "description": "drop RLS policy \"user_memory_owner_insert_127d690c\"",
+        "sql": "DROP POLICY \"user_memory_owner_insert_127d690c\" ON \"public\".\"UserMemory\"",
+        "params": []
+      }
+    ],
+    "postcheck": [
+      {
+        "description": "verify RLS policy \"user_memory_owner_insert_127d690c\" is absent",
+        "sql": "SELECT NOT EXISTS (SELECT 1 AS \"one\" FROM \"pg_policies\" WHERE (\"schemaname\" = $1 AND \"tablename\" = $2 AND \"policyname\" = $3)) AS \"result\"",
+        "params": [
+          "public",
+          "UserMemory",
+          "user_memory_owner_insert_127d690c"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "rlsPolicy.public.UserMemory.user_memory_owner_read_0fda1f08.drop",
+    "label": "Drop RLS policy \"user_memory_owner_read_0fda1f08\" on \"UserMemory\"",
+    "operationClass": "widening",
+    "target": {
+      "id": "postgres",
+      "details": {
+        "schema": "public",
+        "objectType": "rlsPolicy",
+        "name": "user_memory_owner_read_0fda1f08",
+        "table": "UserMemory"
+      }
+    },
+    "precheck": [
+      {
+        "description": "ensure RLS policy \"user_memory_owner_read_0fda1f08\" exists",
+        "sql": "SELECT EXISTS (SELECT 1 AS \"one\" FROM \"pg_policies\" WHERE (\"schemaname\" = $1 AND \"tablename\" = $2 AND \"policyname\" = $3)) AS \"result\"",
+        "params": [
+          "public",
+          "UserMemory",
+          "user_memory_owner_read_0fda1f08"
+        ]
+      }
+    ],
+    "execute": [
+      {
+        "description": "drop RLS policy \"user_memory_owner_read_0fda1f08\"",
+        "sql": "DROP POLICY \"user_memory_owner_read_0fda1f08\" ON \"public\".\"UserMemory\"",
+        "params": []
+      }
+    ],
+    "postcheck": [
+      {
+        "description": "verify RLS policy \"user_memory_owner_read_0fda1f08\" is absent",
+        "sql": "SELECT NOT EXISTS (SELECT 1 AS \"one\" FROM \"pg_policies\" WHERE (\"schemaname\" = $1 AND \"tablename\" = $2 AND \"policyname\" = $3)) AS \"result\"",
+        "params": [
+          "public",
+          "UserMemory",
+          "user_memory_owner_read_0fda1f08"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "rlsPolicy.public.UserMemory.user_memory_owner_update_4db5a36c.drop",
+    "label": "Drop RLS policy \"user_memory_owner_update_4db5a36c\" on \"UserMemory\"",
+    "operationClass": "widening",
+    "target": {
+      "id": "postgres",
+      "details": {
+        "schema": "public",
+        "objectType": "rlsPolicy",
+        "name": "user_memory_owner_update_4db5a36c",
+        "table": "UserMemory"
+      }
+    },
+    "precheck": [
+      {
+        "description": "ensure RLS policy \"user_memory_owner_update_4db5a36c\" exists",
+        "sql": "SELECT EXISTS (SELECT 1 AS \"one\" FROM \"pg_policies\" WHERE (\"schemaname\" = $1 AND \"tablename\" = $2 AND \"policyname\" = $3)) AS \"result\"",
+        "params": [
+          "public",
+          "UserMemory",
+          "user_memory_owner_update_4db5a36c"
+        ]
+      }
+    ],
+    "execute": [
+      {
+        "description": "drop RLS policy \"user_memory_owner_update_4db5a36c\"",
+        "sql": "DROP POLICY \"user_memory_owner_update_4db5a36c\" ON \"public\".\"UserMemory\"",
+        "params": []
+      }
+    ],
+    "postcheck": [
+      {
+        "description": "verify RLS policy \"user_memory_owner_update_4db5a36c\" is absent",
+        "sql": "SELECT NOT EXISTS (SELECT 1 AS \"one\" FROM \"pg_policies\" WHERE (\"schemaname\" = $1 AND \"tablename\" = $2 AND \"policyname\" = $3)) AS \"result\"",
+        "params": [
+          "public",
+          "UserMemory",
+          "user_memory_owner_update_4db5a36c"
+        ]
+      }
+    ]
+  }
+]

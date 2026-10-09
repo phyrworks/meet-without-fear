@@ -1299,7 +1299,6 @@ namespace public {
 
     @@index([userId], map: "UserMemory_userId_idx")
     @@index([userId, sessionId], map: "UserMemory_userId_sessionId_idx")
-    @@rls
   }
 
   model ValidationFeedbackDraft {
@@ -1686,35 +1685,4 @@ namespace public {
     PRIVATE = "PRIVATE"
     SHARED = "SHARED"
   }
-
-  // --- E4 experiment: owner-only RLS on UserMemory for role mwf_app ---
-  policy_select user_memory_owner_read {
-    target = UserMemory
-    roles  = [mwf_app]
-    using  = "\"userId\" = current_setting('app.current_user_id', true)"
-  }
-
-  policy_insert user_memory_owner_insert {
-    target    = UserMemory
-    roles     = [mwf_app]
-    withCheck = "\"userId\" = current_setting('app.current_user_id', true)"
-  }
-
-  policy_update user_memory_owner_update {
-    target    = UserMemory
-    roles     = [mwf_app]
-    using     = "\"userId\" = current_setting('app.current_user_id', true)"
-    withCheck = "\"userId\" = current_setting('app.current_user_id', true)"
-  }
-
-  policy_delete user_memory_owner_delete {
-    target = UserMemory
-    roles  = [mwf_app]
-    using  = "\"userId\" = current_setting('app.current_user_id', true)"
-  }
-
-}
-
-namespace unbound {
-  role mwf_app {}
 }

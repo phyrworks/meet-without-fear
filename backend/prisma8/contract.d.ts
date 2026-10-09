@@ -27,7 +27,7 @@ import type {
 } from '@prisma/orm-postgres/contract/types';
 
 export type StorageHash =
-  StorageHashBase<'dd3181deac81e028bbc91d79f32b15721f3f7c09dcc767228a78346da7964811'>;
+  StorageHashBase<'ed356377780f4dc470e61d46329775bdc9993d3ca6b4f8652b84f80cf6d85e55'>;
 export type ExecutionHash = ExecutionHashBase<string>;
 export type ProfileHash =
   ProfileHashBase<'3916f444a8a17ad749191acf9e08dad97d1a327b88c2f1d45d12f240296aa8b2'>;
@@ -2108,7 +2108,6 @@ export type FieldInputTypes = {
   };
 };
 export type StorageColumnTypes = {
-  readonly __unbound__: {};
   readonly public: {
     readonly Agreement: {
       readonly agreedAt: TimestampString<3> | null;
@@ -3042,7 +3041,6 @@ export type StorageColumnTypes = {
   };
 };
 export type StorageColumnInputTypes = {
-  readonly __unbound__: {};
   readonly public: {
     readonly Agreement: {
       readonly agreedAt: CodecTypes['pg/timestamp-string@1']['input'] | null;
@@ -5421,11 +5419,6 @@ export type TypeMaps = TypeMapsType<
 type ContractBase = Omit<
   ContractType<{
     readonly namespaces: {
-      readonly __unbound__: {
-        readonly id: '__unbound__';
-        readonly kind: 'postgres-unbound-schema';
-        readonly entries: { readonly table: {} };
-      };
       readonly public: {
         readonly id: 'public';
         readonly kind: 'postgres-schema';
