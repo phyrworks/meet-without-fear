@@ -1,4 +1,4 @@
-import { EmpathyStatus } from '@prisma/client';
+import { EmpathyStatus } from '../../generated/prisma/client';
 import {
   transition,
   canTransition,

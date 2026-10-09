@@ -16,7 +16,7 @@
 import { MemoryCategory } from 'shared';
 import { getHaikuJson } from '../lib/bedrock';
 import { withHaikuCircuitBreaker } from '../utils/circuit-breaker';
-import { BrainActivityCallType } from '@prisma/client';
+import { BrainActivityCallType } from '../generated/prisma/client';
 
 // ============================================================================
 // Types

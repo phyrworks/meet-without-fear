@@ -1,5 +1,5 @@
 import { prisma } from '../lib/prisma';
-import { UserMemory, MemoryStatus, MemorySource, MemoryCategory } from '@prisma/client';
+import { UserMemory, MemoryStatus, MemorySource, MemoryCategory } from '../generated/prisma/client';
 
 export const memoryService = {
   /**

@@ -18,7 +18,7 @@
  * to the caller. It is never converted into empty content.
  */
 
-import { Prisma, PrismaClient } from '@prisma/client';
+import { Prisma, PrismaClient } from '../generated/prisma/client';
 import { encrypt, decrypt, isEncrypted } from '../utils/field-encryption';
 import { contentHash } from '../utils/content-hash';
 

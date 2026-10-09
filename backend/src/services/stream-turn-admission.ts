@@ -13,7 +13,7 @@
  */
 
 import { Request } from 'express';
-import type { Message, Session, StageProgress } from '@prisma/client';
+import type { Message, Session, StageProgress } from '../generated/prisma/client';
 import { logger } from '../lib/logger';
 import { prisma } from '../lib/prisma';
 import { brainService } from './brain-service';

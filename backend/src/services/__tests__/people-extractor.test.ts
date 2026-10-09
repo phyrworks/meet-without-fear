@@ -4,7 +4,7 @@
  * Tests for AI-powered people extraction and tracking.
  */
 
-import { Person } from '@prisma/client';
+import { Person } from '../../generated/prisma/client';
 import { prisma } from '../../lib/prisma';
 import { getHaikuJson } from '../../lib/bedrock';
 import { extractAndTrackPeople, mergePeople } from '../people-extractor';

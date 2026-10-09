@@ -1,6 +1,7 @@
-import { PrismaClient } from '@prisma/client';
+import { PrismaClient } from '../src/generated/prisma/client';
+import { createPrismaPgAdapter } from '../src/lib/prisma-pg';
 
-const prisma = new PrismaClient();
+const prisma = new PrismaClient({ adapter: createPrismaPgAdapter() });
 
 async function main() {
   console.log("Fetching recent Inner Work Sessions...");

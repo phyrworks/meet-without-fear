@@ -2,7 +2,7 @@
 import { logger } from '../lib/logger';
 import { prisma } from '../lib/prisma';
 import { getAbly } from '../services/realtime';
-import { ActivityType, ActivityStatus, BrainActivity, BrainActivityCallType } from '@prisma/client';
+import { ActivityType, ActivityStatus, BrainActivity, BrainActivityCallType } from '../generated/prisma/client';
 
 export type ActivityInput = {
   sessionId?: string;

@@ -7,7 +7,7 @@ import {
   ParsedNeedAction,
   NeedEditOperation,
 } from '@meet-without-fear/shared';
-import { Prisma } from '@prisma/client';
+import { Prisma } from '../generated/prisma/client';
 import { prisma } from '../lib/prisma';
 import { cleanVisibleAIText } from '../utils/visible-text';
 import { validateNeedIsUniversal, withNeedReframingWarning } from './needs';

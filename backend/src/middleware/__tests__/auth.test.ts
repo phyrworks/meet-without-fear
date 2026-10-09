@@ -199,7 +199,7 @@ describe('Auth Middleware', () => {
     });
 
     it('handles concurrent create race (P2002 fallback)', async () => {
-      const { PrismaClientKnownRequestError } = jest.requireActual('@prisma/client/runtime/library');
+      const { PrismaClientKnownRequestError } = jest.requireActual('../../generated/prisma/client').Prisma;
       mockVerifyToken.mockResolvedValue({ sub: 'clerk-race-user' });
       mockGetUser.mockResolvedValue({
         firstName: 'Race',
@@ -228,7 +228,7 @@ describe('Auth Middleware', () => {
     });
 
     it('links an existing user by email when create hits the email unique constraint', async () => {
-      const { PrismaClientKnownRequestError } = jest.requireActual('@prisma/client/runtime/library');
+      const { PrismaClientKnownRequestError } = jest.requireActual('../../generated/prisma/client').Prisma;
       mockVerifyToken.mockResolvedValue({ sub: 'clerk-new-local-user' });
       mockGetUser.mockResolvedValue({
         firstName: 'Local',

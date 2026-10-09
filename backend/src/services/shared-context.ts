@@ -6,7 +6,7 @@
  */
 
 import prisma from '../lib/prisma';
-import { EmpathyStatus, SharedContentDeliveryStatus, InvitationStatus } from '@prisma/client';
+import { EmpathyStatus, SharedContentDeliveryStatus, InvitationStatus } from '../generated/prisma/client';
 
 /**
  * Gates stored in StageProgress.gatesSatisfied for Stage 0

@@ -10,7 +10,7 @@
 
 import { logger } from '../lib/logger';
 import { prisma } from '../lib/prisma';
-import type { Message } from '@prisma/client';
+import type { Message } from '../generated/prisma/client';
 import { getSessionSummary } from './conversation-summarizer';
 import { getPartnerUserId } from '../utils/session';
 import { assembleContextBundle, formatContextForPrompt } from './context-assembler';

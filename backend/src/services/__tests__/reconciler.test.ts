@@ -13,7 +13,7 @@
  */
 
 import { prisma } from '../../lib/prisma';
-import { EmpathyStatus } from '@prisma/client';
+import { EmpathyStatus } from '../../generated/prisma/client';
 import { MessageRole } from '@meet-without-fear/shared';
 
 // Mock prisma

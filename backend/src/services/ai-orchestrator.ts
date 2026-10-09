@@ -35,7 +35,7 @@ import {
   type RetrievedContext,
 } from './context-retriever';
 import { brainService } from '../services/brain-service';
-import { ActivityType } from '@prisma/client';
+import { ActivityType } from '../generated/prisma/client';
 import { parseMicroTagResponse } from '../utils/micro-tag-parser';
 import { handleDispatch, type DispatchContext } from './dispatch-handler';
 import { getToolsForStage, parseSessionStateToolInput, SESSION_STATE_TOOL_NAME } from './stage-tools';

@@ -10,7 +10,7 @@
  */
 
 import { Request, Response } from 'express';
-import { MentionSourceType as PrismaMentionSourceType } from '@prisma/client';
+import { MentionSourceType as PrismaMentionSourceType } from '../generated/prisma/client';
 import { prisma } from '../lib/prisma';
 import { getUser } from '../middleware/auth';
 import { asyncHandler, ValidationError, NotFoundError } from '../middleware/errors';

@@ -12,7 +12,7 @@
  */
 
 import { Request, Response } from 'express';
-import { Prisma, StageProgress } from '@prisma/client';
+import { Prisma, StageProgress } from '../generated/prisma/client';
 import { logger } from '../lib/logger';
 import { prisma } from '../lib/prisma';
 import { confirmNeedsRequestSchema, ConsentContentType, MessageRole, NeedCategory } from '@meet-without-fear/shared';

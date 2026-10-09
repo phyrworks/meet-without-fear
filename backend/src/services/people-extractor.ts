@@ -5,7 +5,7 @@
  * for cross-feature intelligence.
  */
 
-import { MentionSourceType, Person, BrainActivityCallType } from '@prisma/client';
+import { MentionSourceType, Person, BrainActivityCallType } from '../generated/prisma/client';
 import { logger } from '../lib/logger';
 import { prisma } from '../lib/prisma';
 import { getHaikuJson } from '../lib/bedrock';

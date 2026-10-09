@@ -11,7 +11,7 @@
  */
 
 import { logger } from '../lib/logger';
-import { Prisma } from '@prisma/client';
+import { Prisma } from '../generated/prisma/client';
 import { prisma } from '../lib/prisma';
 import { getEmbedding } from '../lib/bedrock';
 

@@ -20,7 +20,8 @@ import {
   TendingEntryStatus,
   TendingEntryType,
   ExerciseType,
-} from '@prisma/client';
+} from '../generated/prisma/client';
+import { createPrismaPgAdapter } from '../lib/prisma-pg';
 
 import {
   SessionStatus as SharedSessionStatus,
@@ -47,7 +48,7 @@ describe('Prisma Schema', () => {
   let prisma: PrismaClient;
 
   beforeAll(() => {
-    prisma = new PrismaClient();
+    prisma = new PrismaClient({ adapter: createPrismaPgAdapter() });
   });
 
   afterAll(async () => {

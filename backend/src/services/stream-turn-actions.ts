@@ -16,7 +16,7 @@
  * raw model prose.
  */
 
-import { Prisma } from '@prisma/client';
+import { Prisma } from '../generated/prisma/client';
 import { logger } from '../lib/logger';
 import { prisma } from '../lib/prisma';
 import { publishSessionEvent, publishTopicFrameUpdated } from './realtime';
