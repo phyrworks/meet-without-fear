@@ -135,23 +135,25 @@ async function getRecentThemes(userId: string, excludeSessionId?: string): Promi
  */
 async function updateSessionMetadata(sessionId: string, turnId: string): Promise<void> {
   try {
-    const session = await prisma.innerWorkSession.findUnique({
-      where: { id: sessionId },
-      include: {
-        messages: {
-          orderBy: { timestamp: 'asc' },
-          take: 20, // Last 20 messages for context
-        },
-      },
-    });
+    // Messages are a separate findMany rather than a nested `take: 20` include:
+    // Prisma 7 does not push a nested to-many `take` into SQL, so the include read
+    // every message of the session on every message sent. This emits LIMIT.
+    const [session, messages] = await Promise.all([
+      prisma.innerWorkSession.findUnique({ where: { id: sessionId } }),
+      prisma.innerWorkMessage.findMany({
+        where: { sessionId },
+        orderBy: { timestamp: 'asc' },
+        take: 20, // Last 20 messages for context
+      }),
+    ]);
 
-    if (!session || session.messages.length < 2) {
+    if (!session || messages.length < 2) {
       // Need at least a user message to summarize
       return;
     }
 
     const prompt = buildInnerWorkSummaryPrompt(
-      session.messages.map((m) => ({
+      messages.map((m) => ({
         role: m.role === 'USER' ? 'user' : 'assistant',
         content: m.content,
       }))
