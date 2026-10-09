@@ -1,0 +1,28 @@
+[
+  {
+    "id": "app.drop-schema-ping",
+    "invariantId": "app:drop-schema-ping-v1",
+    "label": "Drop function app.ping() and schema \"app\"",
+    "operationClass": "data",
+    "target": {
+      "id": "postgres"
+    },
+    "precheck": [],
+    "execute": [
+      {
+        "description": "drop function app.ping()",
+        "sql": "DROP FUNCTION IF EXISTS app.ping()"
+      },
+      {
+        "description": "drop schema app",
+        "sql": "DROP SCHEMA IF EXISTS app"
+      }
+    ],
+    "postcheck": [
+      {
+        "description": "schema app is gone",
+        "sql": "SELECT NOT EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = 'app') AS result"
+      }
+    ]
+  }
+]

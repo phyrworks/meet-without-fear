@@ -1,0 +1,61 @@
+[
+  {
+    "id": "extension.vector",
+    "label": "Create extension \"vector\"",
+    "operationClass": "additive",
+    "target": {
+      "id": "postgres"
+    },
+    "precheck": [],
+    "execute": [
+      {
+        "description": "Create extension \"vector\"",
+        "sql": "CREATE EXTENSION IF NOT EXISTS \"vector\""
+      }
+    ],
+    "postcheck": []
+  },
+  {
+    "id": "app.schema",
+    "label": "Create schema \"app\"",
+    "operationClass": "additive",
+    "target": {
+      "id": "postgres"
+    },
+    "precheck": [],
+    "execute": [
+      {
+        "description": "create schema app",
+        "sql": "CREATE SCHEMA IF NOT EXISTS app"
+      }
+    ],
+    "postcheck": [
+      {
+        "description": "schema app exists",
+        "sql": "SELECT EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = 'app') AS result"
+      }
+    ]
+  },
+  {
+    "id": "app.ping",
+    "invariantId": "app:schema-ping-v1",
+    "label": "Create function app.ping()",
+    "operationClass": "data",
+    "target": {
+      "id": "postgres"
+    },
+    "precheck": [],
+    "execute": [
+      {
+        "description": "create SECURITY DEFINER function app.ping()",
+        "sql": "CREATE OR REPLACE FUNCTION app.ping() RETURNS int LANGUAGE sql SECURITY DEFINER SET search_path = pg_catalog AS $$ SELECT 1 $$"
+      }
+    ],
+    "postcheck": [
+      {
+        "description": "function app.ping() exists",
+        "sql": "SELECT EXISTS (SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'app' AND p.proname = 'ping') AS result"
+      }
+    ]
+  }
+]
