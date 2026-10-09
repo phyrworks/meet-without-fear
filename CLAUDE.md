@@ -64,7 +64,7 @@ All routes below point at living docs under `docs/` (topical layout). When worki
 | **Integrations (Ably, Clerk, Bedrock)** | `docs/architecture/integrations.md` | |
 | **Code conventions** | `docs/architecture/conventions.md` | |
 | **Tech stack** | `docs/architecture/stack.md` | |
-| **Deployment** | `docs/deployment/index.md` | `docs/deployment/render-config.md`, `docs/deployment/environment-variables.md` |
+| **Deployment** | `docs/deployment/index.md` | `infra/aws/README.md`, `docs/deployment/environment-variables.md` |
 | **Infrastructure (slam-bot, EC2, Vercel)** | `docs/infrastructure/index.md` | |
 | **Known concerns / tech debt** | `docs/architecture/concerns.md` | |
 | **Historical plans/specs** | `docs/archive/index.md` | |

@@ -24,11 +24,9 @@ fi
 | Variable | Used by | Description |
 |---|---|---|
 | `SENTRY_AUTH_TOKEN` | check-sentry, health-check, investigate | Sentry API bearer token |
-| `READONLY_DATABASE_URL` | check-db, health-check, investigate | PostgreSQL read-only connection (preferred) |
-| `PRODUCTION_DATABASE_URL` | check-db | PostgreSQL full connection (fallback) |
+| `READONLY_DATABASE_URL` | check-db, health-check, investigate | AWS PostgreSQL read-only connection through the SSH tunnel |
 | `MIXPANEL_USERNAME` | check-mixpanel, daily-strategy | Mixpanel API username |
 | `MIXPANEL_SECRET` | check-mixpanel, daily-strategy | Mixpanel API secret |
-| `RENDER_API_KEY` | render-logs, health-check | Render API key |
 | `SLACK_BOT_TOKEN` | slack-upload, send-voice-message | Slack bot OAuth token |
 
 ## Security Rules
@@ -36,3 +34,5 @@ fi
 - NEVER print full connection strings or tokens in output
 - Only confirm presence/absence of credentials
 - `READONLY_DATABASE_URL` uses `slam_bot_readonly` role (SELECT-only)
+
+Production database diagnostics require `READONLY_DATABASE_URL`; never fall back to an administrative or development database. MWF diagnostics do not use Render credentials.

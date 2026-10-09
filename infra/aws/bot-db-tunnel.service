@@ -1,0 +1,11 @@
+[Unit]
+Description=Meet Without Fear readonly database SSH tunnel
+After=network-online.target
+Wants=network-online.target
+[Service]
+User=ubuntu
+ExecStart=/usr/bin/ssh -N -o BatchMode=yes -o ExitOnForwardFailure=yes -o ServerAliveInterval=30 -o ServerAliveCountMax=3 -o UserKnownHostsFile=/home/ubuntu/.ssh/mwf-aws-known-hosts -i /home/ubuntu/.ssh/mwf-aws-readonly -L 127.0.0.1:15432:127.0.0.1:5432 mwf-tunnel@54.189.24.241
+Restart=always
+RestartSec=10
+[Install]
+WantedBy=multi-user.target

@@ -18,7 +18,7 @@ All required environment variables for Meet Without Fear services.
 | Variable | Description | Example |
 |----------|-------------|---------|
 | `NODE_ENV` | Environment mode | `production` |
-| `PORT` | Server port (Render sets automatically) | `3000` |
+| `PORT` | Container port (Compose sets to 3000) | `3000` |
 | `DATABASE_URL` | PostgreSQL connection string | `postgresql://user:pass@host:5432/db` |
 | `JWT_SECRET` | Access token signing secret | (generated) |
 | `JWT_REFRESH_SECRET` | Refresh token signing secret | (generated) |
@@ -77,7 +77,7 @@ Get your API key from [Ably Dashboard](https://ably.com/dashboard).
 | Variable | Description |
 |----------|-------------|
 | `DATABASE_URL` | Pooled connection string (for app) |
-| `DIRECT_DATABASE_URL` | Direct connection string (for migrations) |
+| `TRUST_PROXY` | Exact proxy address (`172.29.0.2`); other clients cannot supply trusted forwarding headers |
 
 ### Connection String Format
 
@@ -111,17 +111,17 @@ AWS_REGION=us-west-2
 LOG_LEVEL=debug
 ```
 
-### Production (Render)
+### Production (AWS Lightsail)
 
-Set via Render dashboard or `render.yaml`:
+Store the preserved production integrations in root-only `/etc/mwf/application.env`.
+Compose fixes `NODE_ENV=production`, `PORT=3000`, and disables `E2E_AUTH_BYPASS`
+and `MOCK_LLM`. `DATABASE_URL` uses `mwf_app@db:5432/mwf` with a bounded
+connection pool. Keep administration credentials in `/etc/mwf/database.env`.
+No integration secret belongs in Terraform state, GitHub variables or an image.
 
-- `DATABASE_URL`: Auto-set from database service
-- `REDIS_URL`: Auto-set from Redis service
-- `JWT_SECRET`: Generate with `generateValue: true`
-- `JWT_REFRESH_SECRET`: Generate with `generateValue: true`
-- `ABLY_API_KEY`: Set manually (secret)
-- `AWS_*`: Set manually (secrets)
-- `FIELD_ENCRYPTION_KEY`: Generate with `openssl rand -base64 32` (optional during test phase; required before public launch — also set `REQUIRE_FIELD_ENCRYPTION=true`)
+See [the AWS runbook](../../infra/aws/README.md) for secret delivery, backups,
+rotation, deployment and operator SSH tunnels. The actual Prisma schema uses
+`DATABASE_URL` for both application access and migration execution.
 
 ## Secrets Management
 
@@ -137,7 +137,7 @@ Set via Render dashboard or `render.yaml`:
 ### Rotate secrets regularly
 
 1. Generate new secret
-2. Update in Render dashboard
+2. Update the protected host configuration and its private configuration backup
 3. Deploy new version
 4. Invalidate old tokens (if applicable)
 
@@ -189,7 +189,7 @@ export const env = envSchema.parse(process.env);
 
 ## Related Documentation
 
-- [Render Configuration](./render-config.md)
+- [AWS runbook](../../infra/aws/README.md)
 - [Security](../backend/security/index.md)
 
 ---

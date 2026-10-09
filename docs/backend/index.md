@@ -54,14 +54,14 @@ These rules are constitutional and must never be compromised:
 
 - **Runtime**: Node.js with Express
 - **ORM**: Prisma with application-layer access-control filters.
-- **Database**: PostgreSQL (Render). `pgvector` extension is currently disabled (commented out in `schema.prisma`); embeddings fields are placeholders for future vector search. PostgreSQL RLS is not active runtime protection.
+- **Database**: PostgreSQL 18 with pgvector on AWS Lightsail; the production vector extension is installed. PostgreSQL RLS is not active runtime protection.
 - **Realtime**: Ably (pub/sub + presence detection for immediate partner notifications)
 - **Push**: Expo Push Notifications (for offline users)
 - **AI Models**: AWS Bedrock (Haiku for mechanics, Sonnet for facilitation)
 - **Auth**: Clerk (JWT validation, account deletion handoff)
 - **Email**: Resend (transactional; not outbound invitation delivery)
 - **Voice**: AssemblyAI Universal Streaming (real-time transcription via `realtime-transcription.ts`; WebSocket upgrade is unauthenticated — auth uses a first-message pattern: the client sends `{ type: "auth", token: "<clerk-jwt>" }` as the first WebSocket message; connections that omit or fail auth are closed with code 1008 after a 5-second timeout)
-- **Infrastructure**: Render.com (Web Service + Managed Postgres)
+- **Infrastructure**: AWS Lightsail (Caddy, API and private PostgreSQL containers); see [the AWS runbook](../../infra/aws/README.md)
 
 ## Dual-Layer Data Strategy
 

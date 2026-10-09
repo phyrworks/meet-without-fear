@@ -17,17 +17,6 @@
     "project_token": "bde416691ec555209e6949a2aec8abec",
     "dashboard": "https://mixpanel.com"
   },
-  "render": {
-    "backend": {
-      "service_id": "srv-d58bj73uibrs73akacd0",
-      "name": "meet-without-fear-api",
-      "dashboard": "https://dashboard.render.com/web/srv-d58bj73uibrs73akacd0/logs"
-    },
-    "envGroup": {
-      "name": "be-heard-api-env",
-      "id": "evg-d58bivruibrs73aka8qg"
-    }
-  },
   "slack": {
     "channels": {
       "bot-ops": "C0ASSFTB7H9",
@@ -43,5 +32,16 @@
       "shantamg"
     ],
     "slack_to_github_users": {}
+  },
+  "aws": {
+    "region": "us-west-2",
+    "backend": {
+      "instance": "mwf-api",
+      "static_ip": "54.189.24.241",
+      "url": "https://api.meetwithoutfear.com",
+      "health_url": "https://api.meetwithoutfear.com/health",
+      "operator_ssh_alias": "mwf-api",
+      "runbook": "infra/aws/README.md"
+    }
   }
 }

@@ -1,0 +1,4 @@
+operator_cidrs = ["203.0.113.1/32"]
+ssh_public_key = "ssh-ed25519 REPLACE_WITH_OPERATOR_PUBLIC_KEY"
+# During migration only, add refs/heads/codex/aws-lightsail-migration.
+deployment_refs = ["refs/heads/main"]

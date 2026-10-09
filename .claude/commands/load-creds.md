@@ -22,7 +22,6 @@ VAR_NAME="${VAR_NAME:-$(grep '^VAR_NAME=' backend/.env 2>/dev/null | cut -d= -f2
 | Variable | Used by | Description |
 |----------|---------|-------------|
 | `SENTRY_AUTH_TOKEN` | check-sentry | Sentry API bearer token |
-| `RENDER_API_KEY` | render-logs | Render API key |
 | `MIXPANEL_USERNAME` | check-mixpanel | Mixpanel API username (not yet configured) |
 | `MIXPANEL_SECRET` | check-mixpanel | Mixpanel API secret (not yet configured) |
 

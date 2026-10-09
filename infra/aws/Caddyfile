@@ -1,0 +1,11 @@
+api.meetwithoutfear.com {
+  reverse_proxy api:3000 {
+    flush_interval -1
+  }
+}
+# This listener is published on host loopback only for pre-DNS SSH verification.
+:8080 {
+  reverse_proxy api:3000 {
+    flush_interval -1
+  }
+}

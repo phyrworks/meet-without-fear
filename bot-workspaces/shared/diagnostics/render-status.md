@@ -1,21 +1,20 @@
-# Render Status Utility
+# AWS API Deployment Status
 
-Check production Render deployment status, recent deploys, and service health.
+This filename is retained for existing workspace links. Production is AWS Lightsail at `https://api.meetwithoutfear.com`; there is no separate staging service provisioned by this migration.
 
-## Credentials
+## Checks
 
-Load `RENDER_API_KEY` per `shared/references/credentials.md`.
+```bash
+curl --fail --silent --show-error --max-time 15 https://api.meetwithoutfear.com/health
+gh run list --repo shantamg/meet-without-fear --workflow aws-deploy.yml --limit 5
+```
 
-## Service IDs
+Inspect the relevant run with `gh run view RUN_ID`. A successful AWS Deploy run confirms that the host reported the requested release healthy. Compare the run's commit with the change being verified; an unrelated successful release does not establish deployment of that change.
 
-- Service: `srv-d58bj73uibrs73akacd0` (meet-without-fear-api)
-- Env group: `evg-d58bivruibrs73aka8qg` (be-heard-api-env)
-- Dashboard: https://dashboard.render.com/web/srv-d58bj73uibrs73akacd0
+On the operator machine, inspect the current release and operational health:
 
-## Checks (run in parallel)
+```bash
+ssh mwf-api 'sudo cat /var/lib/mwf/current-release.json; sudo /opt/mwf/ops-health.sh'
+```
 
-1. **Health check**: GET `/health` on the service URL
-2. **Service info**: GET `/v1/services/{id}` — plan, region, suspended status
-3. **Recent deploys**: GET `/v1/services/{id}/deploys?limit=5` — status, commit message, timestamp
-4. **Recent events**: GET `/v1/services/{id}/events?limit=10` — deploy/build events
-5. **Env vars**: GET `/v1/services/{id}/env-vars` — names only, NEVER print values
+The bot's restricted database tunnel cannot run host commands. If host access is unavailable, report that limitation and use public health, GitHub deployment results, Sentry, and read-only database checks. Do not retrieve or print runtime environment files. See `infra/aws/README.md`.

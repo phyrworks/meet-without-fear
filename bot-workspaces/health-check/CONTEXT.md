@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Cross-reference Mixpanel activity, Render logs, and Sentry errors to surface production issues. Creates GitHub issues for actionable findings and posts a summary to #health-check.
+Cross-reference Mixpanel activity, AWS API diagnostics, and Sentry errors to surface production issues. Creates GitHub issues for actionable findings and posts a summary to #health-check.
 
 ## Stage Pointers
 

@@ -187,7 +187,7 @@ status: living
 ## CI/CD & Deployment
 
 **Hosting:**
-- Backend: Flexible (Node.js 20+), commonly Vercel, Railway, or AWS
+- Backend: AWS Lightsail (`us-west-2`), Dockerized Node.js 20 API behind Caddy HTTPS at `api.meetwithoutfear.com`. PostgreSQL 18 with pgvector runs on the same server with no public database port. GitHub Actions deploys through OIDC and S3; see [the AWS runbook](../../infra/aws/README.md).
 - Mobile: Expo EAS (Expo Application Services)
   - iOS distribution: TestFlight → App Store
   - Android distribution: Google Play Store

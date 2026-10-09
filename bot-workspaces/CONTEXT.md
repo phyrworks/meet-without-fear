@@ -13,8 +13,8 @@ Pointers to cross-workspace resources. Each workspace's `CONTEXT.md` references 
 - `shared/diagnostics/check-db.md` — PostgreSQL query utility (read-only production)
 - `shared/diagnostics/check-mixpanel.md` — Mixpanel event export and analysis
 - `shared/diagnostics/check-sentry.md` — Sentry issue query (backend + mobile)
-- `shared/diagnostics/render-logs.md` — Render backend log fetching
-- `shared/diagnostics/render-status.md` — Render deployment status and health
+- `shared/diagnostics/render-logs.md` — AWS API error diagnostics
+- `shared/diagnostics/render-status.md` — AWS deployment status and health
 
 ### GitHub Utilities
 - `shared/github/create-issue.md` — Issue creation with dedup, provenance, cross-referencing
@@ -30,7 +30,7 @@ Pointers to cross-workspace resources. Each workspace's `CONTEXT.md` references 
 
 ## Configuration Files
 
-- `.claude/config/services.json` — Channel IDs, Sentry project slugs, Render service IDs, bot user ID
+- `.claude/config/services.json` — Channel IDs, Sentry project slugs, AWS API connection details, bot user ID
 - `.env` — Local dev credentials (fallback)
 - `/opt/slam-bot/.env` — EC2 bot credentials (primary)
 

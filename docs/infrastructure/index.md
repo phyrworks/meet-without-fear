@@ -1,7 +1,7 @@
 ---
 title: Infrastructure
 sidebar_position: 1
-description: Slam bot (EC2), Render hosting, Vercel deploys, GitHub automation.
+description: Slam bot (EC2), AWS Lightsail hosting, Vercel deploys, GitHub automation.
 created: 2026-03-11
 updated: 2026-05-30
 status: living
@@ -86,7 +86,7 @@ Local operator scripts live at `scripts/ec2-bot/`:
 | `deploy.sh` | Symlink scripts, install systemd units + crontab + logrotate |
 | `configure-slack.sh` | Write Slack tokens + channel IDs (`SLAM_BOT_CHANNEL_ID` for `#slam-paws`, `AGENTIC_DEVS_CHANNEL_ID` for `#agentic-devs`, `BUGS_AND_REQUESTS_CHANNEL_ID` for `#bugs-and-requests`, `MOST_IMPORTANT_THING_CHANNEL_ID` for `#most-important-thing`, `DAILY_SUMMARY_CHANNEL_ID` for `#daily-summary`) to `/opt/slam-bot/.env` and start the socket service |
 | `configure-mixpanel.sh` | Write Mixpanel service-account credentials |
-| `configure-db.sh` | Create/rotate `slam_bot_readonly` role on the Render Postgres |
+| `configure-db.sh` | Legacy database setup; current AWS readonly role and tunnel are managed by `infra/aws/` |
 | `run-and-publish.sh` | Wrap a Playwright e2e run and publish results (screenshots, transcript, metadata) to the test dashboard. Called by the `@slam_paws test` Slack handler or manually via SSH. |
 | `save-snapshot.sh` | Save a named DB + app-state snapshot so test runs can branch from a known point. |
 | `restore-snapshot.sh` | Restore a previously saved snapshot by ID (used with `--starting-snapshot-id` in `run-and-publish.sh`). |
@@ -141,8 +141,8 @@ Set `CHANNEL=<channel>` in the env so the emoji reaction handlers work.
 
 ## Production hosting
 
-- **Backend API**: Render (`meet-without-fear-api` / `srv-d58bj73uibrs73akacd0`), env group `be-heard-api-env`
-- **Database**: Render Postgres (`be-heard-db` / `dpg-d58660shg0os73bkkpmg-a`), Oregon region
+- **Backend API**: AWS Lightsail `mwf-api` in `us-west-2`, Dockerized Express behind Caddy at `api.meetwithoutfear.com`
+- **Database**: PostgreSQL 18 with pgvector on the same host, database `mwf`, non-superuser app role `mwf_app`; operator and bot access through SSH tunnels only. See [the AWS runbook](../../infra/aws/README.md).
 - **Docs site (this one)**: Vercel
 - **Marketing site**: Vercel (`website/`)
 - **Web app** (`app.meetwithoutfear.com`): Vercel — Expo Web build of `mobile/`, Vercel project `mwf-app`. Deployed via `.github/workflows/vercel-deploy-app.yml` on pushes to `main` that touch `mobile/**` or `shared/**`.
@@ -155,7 +155,7 @@ See [deployment](../deployment/index.md) for release procedures and env var refe
 
 - `.github/workflows/docs-impact.yml` — PR-time check that code changes and their mapped docs are updated together. Mapping rules in `docs/code-to-docs-mapping.json`.
 - `.github/workflows/ci.yml` — PR-time CI with three conditional jobs gated by `dorny/paths-filter`. `ci`: spins up a Postgres 15 service container, installs deps (`npm ci`), generates the Prisma client, runs `npm run check`, migrates the test DB, and runs `npm run test`. `python-eval`: runs `py_compile` syntax checks across all gold-loop scripts and executes `test_mwf_moment_eval.py` when eval files change (`scripts/mwf_*.py`, `eval/gold-scenarios.json`, `eval/icm/**`, `eval/moments/**`, etc.). `bot-harness`: validates `bot-workspaces/label-registry.json` (JSON lint), Python-compiles the provider harness (`scripts/ec2-bot/scripts/lib/invoke_provider.py` and `bot_harness/*.py`), bash-syntax-checks the five public shell scripts, node-checks the Socket Mode listener, runs the bot harness unit tests, and enforces a stale-name guard when `scripts/ec2-bot/**` or `bot-workspaces/**` change. A `ci-success` gate job (requiring `changes`, `ci`, `python-eval`, and `bot-harness`) is the single required status check for branch protection.
-- `.github/workflows/render-deploy.yml` — Push-to-`main` backend deploy: filters to pushes that touch `backend/`, `shared/`, the lockfile, `render.yaml`, or the workflow itself, then POSTs the Render deploy hook (stored in repo secret `RENDER_DEPLOY_HOOK`). Render's built-in auto-deploy must be **off** — this workflow is the sole deploy trigger.
+- `.github/workflows/aws-deploy.yml` — Push-to-`main` backend deployment for API/shared/dependency/infrastructure changes. GitHub OIDC uploads checksummed image and runtime artifacts to S3; the host polls, backs up before migrations, deploys, and reports health to the workflow. Render automatic deployment is disabled.
 - `.github/workflows/vercel-deploy-app.yml` — Push-to-`main` Expo Web deploy: filters to pushes touching `mobile/**` or `shared/**`, builds the Expo Web bundle, and deploys to `app.meetwithoutfear.com` via Vercel (`mwf-app` project). Also supports `workflow_dispatch`.
 - `.github/workflows/vercel-deploy-website.yml` — Push-to-`main` marketing site deploy: filters to pushes touching `website/**`, deploys to Vercel.
 - `.github/workflows/vercel-deploy-test-dashboard.yml` — Push-to-`main` test dashboard deploy: filters to pushes touching `tools/test-dashboard/**`, deploys Vite SPA + Vercel serverless functions to `mwf-test-dashboard` project. Also supports `workflow_dispatch`.

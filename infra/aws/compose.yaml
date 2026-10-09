@@ -1,0 +1,77 @@
+name: mwf
+x-common: &common
+  restart: unless-stopped
+  logging:
+    driver: local
+    options: {max-size: 10m, max-file: '3'}
+services:
+  db:
+    <<: *common
+    image: ${DB_IMAGE:?Set a digest-pinned PostgreSQL 18 pgvector image}
+    env_file: [{path: /etc/mwf/database.env, format: raw}]
+    volumes:
+      - postgres:/var/lib/postgresql
+      - ./init-db.sh:/docker-entrypoint-initdb.d/10-mwf.sh:ro
+    # Administrative access is available only through an SSH tunnel.
+    ports: ['127.0.0.1:5432:5432']
+    networks: [database, admin]
+    mem_limit: 650m
+    shm_size: 128m
+    command: [postgres, -c, shared_buffers=128MB, -c, max_connections=35, -c, work_mem=4MB, -c, maintenance_work_mem=64MB]
+    healthcheck:
+      test: [CMD-SHELL, 'pg_isready -U "$${POSTGRES_USER}" -d "$${POSTGRES_DB}"']
+      interval: 10s
+      timeout: 5s
+      retries: 12
+  api:
+    <<: *common
+    image: ${APP_IMAGE:?Set the selected immutable application image}
+    env_file: [{path: /etc/mwf/application.env, format: raw}]
+    environment:
+      NODE_ENV: production
+      PORT: '3000'
+      TRUST_PROXY: '172.29.0.2'
+      E2E_AUTH_BYPASS: 'false'
+      MOCK_LLM: 'false'
+      NODE_OPTIONS: --max-old-space-size=640
+    networks:
+      edge: {ipv4_address: 172.29.0.3}
+      database: {}
+    mem_limit: 850m
+    init: true
+    stop_grace_period: 20s
+    depends_on:
+      db: {condition: service_healthy}
+    healthcheck:
+      test: [CMD, node, /app/infra/aws/healthcheck.cjs]
+      interval: 15s
+      timeout: 10s
+      start_period: 30s
+      retries: 4
+  caddy:
+    <<: *common
+    image: ${CADDY_IMAGE:?Set a digest-pinned Caddy image}
+    ports: ['80:80', '443:443', '127.0.0.1:8080:8080']
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    networks:
+      edge: {ipv4_address: 172.29.0.2}
+    mem_limit: 128m
+    depends_on:
+      api: {condition: service_healthy}
+networks:
+  edge:
+    ipam:
+      config: [{subnet: 172.29.0.0/24}]
+  database: {internal: true}
+  # A regular bridge enables the loopback-only port mapping on Docker 29.
+  admin: {}
+volumes:
+  postgres:
+    name: mwf_postgres
+  caddy_data:
+    name: mwf_caddy_data
+  caddy_config:
+    name: mwf_caddy_config

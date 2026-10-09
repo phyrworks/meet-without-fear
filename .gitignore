@@ -148,3 +148,14 @@ scripts/ec2-bot/scripts/**/__pycache__/
 
 # Golden harness: fixture manifests are committed, run databases are not.
 backend/src/testing/golden/.smoke*.ts
+
+# AWS deployment: secrets, state, plans, backups, and local build contexts
+infra/aws/.local/
+infra/aws/.terraform/
+infra/aws/*.tfstate*
+infra/aws/*.tfplan
+infra/aws/*.tfvars
+infra/aws/backend.hcl
+infra/aws/backend.tf
+infra/aws/crash.log
+*.dump

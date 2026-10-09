@@ -21,22 +21,17 @@ Default to **production read-only** for investigation. A readonly role should on
 
 **SECURITY**: NEVER print full connection strings. Write operations will be rejected by PostgreSQL even if attempted.
 
-### ⚠️ Guard against silently querying the wrong database
+### Verify the production tunnel
 
-`backend/.env`'s `DATABASE_URL` is usually a **local** dev DB (`localhost`), which holds a stale snapshot — NOT production. If you fall back to it without noticing, every result is misleading (this once produced a false "telemetry stopped" conclusion). Before running any query, resolve the URL and confirm the host. Abort and tell the user if it points at localhost when you intended production:
+Production is the Lightsail `mwf-api` instance in `us-west-2`, database `mwf`.
+Use `python3 infra/aws/prod-query.py 'SELECT ...'`. It loads protected
+`~/.config/mwf/production.json`, opens the `mwf-api` SSH tunnel if necessary,
+and checks both the database name and readonly role before querying.
 
-```bash
-DB_URL="${READONLY_DATABASE_URL:-$(grep '^READONLY_DATABASE_URL=' backend/.env 2>/dev/null | cut -d= -f2-)}"
-[ -z "$DB_URL" ] && DB_URL="$(grep '^DATABASE_URL=' backend/.env 2>/dev/null | cut -d= -f2-)"
-# Print host/db ONLY (never the credentials) so you know which DB you're hitting:
-echo "Target DB: $(echo "$DB_URL" | sed -E 's#.*@([^/]+)/([^?]+).*#\1 / \2#')"
-case "$DB_URL" in
-  *@localhost*|*@127.0.0.1*)
-    echo "⚠️  This is a LOCAL database (stale snapshot), not production. For prod investigation, set READONLY_DATABASE_URL or fetch the prod connection string from Render before continuing." ;;
-esac
-```
-
-**Production DB**: the live Render Postgres is `be-heard-db` (`be_heard_db`, instance `dpg-d58660shg0os73bkkpmg-a`, region oregon). When you need prod and only have a localhost `DATABASE_URL`, fetch the prod connection string from the Render API (`/v1/postgres/dpg-d58660shg0os73bkkpmg-a/connection-info`, using `RENDER_API_KEY`) rather than querying localhost.
+A loopback database address is expected for the SSH tunnel on port 15432;
+it must not be confused with the local development database on port 5432.
+Do not retrieve Render credentials or fall back to the development DATABASE_URL.
+See `infra/aws/README.md` for recovery and credential rotation.
 
 ## Running queries
 

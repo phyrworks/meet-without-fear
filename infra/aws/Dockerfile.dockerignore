@@ -1,0 +1,13 @@
+**/.env*
+**/.local
+**/.git
+**/node_modules
+**/dist
+**/.terraform
+**/*.tfstate*
+**/*.tfvars
+**/*.dump
+**/*.pem
+**/*.credentials
+**/backend.hcl
+**/backend.tf

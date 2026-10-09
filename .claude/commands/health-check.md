@@ -1,6 +1,6 @@
 # Health Check — Daily Production Health Audit
 
-Cross-reference Mixpanel activity, Render logs, and Sentry errors to surface production issues.
+Cross-reference Mixpanel activity, AWS API diagnostics, and Sentry errors to surface production issues.
 
 ## Arguments
 
@@ -17,12 +17,12 @@ Run `/check-mixpanel` (no arguments — gets last 24h summary). From the results
 - **Key event counts** — especially `Session Created`, `Session Resolved`, `Stage Started`, `Stage Completed`, `Message Sent`, app opens
 - **Any anomalies** — sudden drops, missing expected events, error-related events
 
-## Step 2: Check Render logs during peak activity (parallel)
+## Step 2: Check AWS API diagnostics during peak activity (parallel)
 
 Launch parallel sub-agents:
 
-1. **Render errors** — Run `/render-logs errors` to get error-level logs from the same time window
-2. **Render warnings** — Run `/render-logs` with text search for `warn` or `timeout` or `throttling`
+1. **AWS API errors** — Run `/render-logs errors` to get error-level logs from the same time window
+2. **AWS API warnings** — Run `/render-logs` with text search for `warn` or `timeout` or `throttling`
 3. **Sentry issues** — Run `/check-sentry` (no arguments — gets recent unresolved issues)
 
 ## Step 3: Cross-reference and analyze
@@ -56,7 +56,7 @@ Activity Summary (Mixpanel)
 Errors & Issues
 - Sentry: N unresolved issues (N new since last check)
   - [issue summaries with links]
-- Render logs: N errors, N warnings
+- AWS API diagnostics: N errors, N warnings
   - [grouped error summaries]
 
 Cross-Reference Findings

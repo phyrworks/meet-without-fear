@@ -120,6 +120,6 @@ Summary:
 
 When stuck sessions are found:
 1. Check Sentry for errors correlated with the session time window (`/check-sentry`)
-2. Check Render logs for pipeline errors around that time (`/render-logs errors`)
+2. Check AWS API diagnostics for pipeline errors around that time (`/render-logs errors`)
 3. Inspect `BrainActivity` rows for the session to see LLM call failures
 4. If user-impacting, follow `/github-ops` thresholds for creating issues

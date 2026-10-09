@@ -3,7 +3,7 @@ title: Deployment
 sidebar_position: 1
 description: Production deployment targets and distribution options for the Meet Without Fear platform.
 created: 2026-03-11
-updated: 2026-04-20
+updated: 2026-09-07
 status: living
 ---
 # Deployment
@@ -12,19 +12,13 @@ Production deployment targets and distribution options for the Meet Without Fear
 
 ## Production Infrastructure
 
-### Backend: Render.com
+### Backend: AWS Lightsail
 
-The Express API is deployed to Render.com as a web service. Configuration is defined in `render.yaml` at the repository root.
+The API and PostgreSQL run as separate Docker Compose services on `mwf-api`, an Ubuntu 24.04 Lightsail `small_3_0` instance in `us-west-2`. Caddy serves `api.meetwithoutfear.com`; the attached static IPv4 is `54.189.24.241`. The server has 2 GB RAM and 60 GB disk, costing $12/month plus S3 usage.
 
-- **Service name**: `meet-without-fear-api`
-- **Runtime**: Node.js (20.x per `package.json` engines; `render.yaml` specifies `runtime: node`)
-- **Plan**: Starter
-- **Branch**: `main`
-- **Build command**: `npm ci && npm run prisma:generate --workspace=backend && npm run build --workspace=backend`
-- **Start command**: `cd backend && npx prisma migrate deploy && node dist/backend/src/server.js`
-- **Environment variables**: Loaded from the `be-heard-api-env` environment group on Render
+Terraform entry point: `infra/aws/main.tf`. Runtime configuration, backup/restore commands, protected secrets, maintenance and rollback are documented in [the AWS runbook](../../infra/aws/README.md). [Migration status](aws-migration-status.md) records cutover and acceptance.
 
-Prisma migrations run automatically on each deploy via `prisma migrate deploy` in the start command.
+Production secrets live in root-only `/etc/mwf/application.env`, supplied outside Git and Terraform. PostgreSQL is accessible only inside Docker and through a loopback SSH tunnel. The application role is not a superuser. Nightly S3 backups retain seven days; pre-migration/final-source backups retain 30 days.
 
 ### Mobile: EAS Build (Expo)
 
@@ -95,10 +89,9 @@ A gate job (`ci-success`) rolls the individual jobs up — set that as the singl
 
 The pipeline uses a dedicated test database (`meetwithoutfear_test`) with `NODE_ENV=test`.
 
-### `.github/workflows/render-deploy.yml` — explicit deploys on main
-Runs on push to `main`. A `dorny/paths-filter` step restricts deploys to pushes that actually change `backend/`, `shared/`, the lockfile, `render.yaml`, or the workflow itself. On a match, the workflow `curl -X POST`s the Render **deploy hook** stored in repo secret `RENDER_DEPLOY_HOOK`.
+### `.github/workflows/aws-deploy.yml` — verified AWS deployments
 
-> Render's built-in "auto-deploy on push" must be **off** for the `meet-without-fear-api` service — GitHub Actions is the only deploy trigger. This prevents docs-only pushes from rebuilding the backend.
+Backend, shared, dependency and infrastructure changes on main trigger builds. GitHub OIDC provides scoped S3 release publishing permissions. CI builds the selected commit, publishes an immutable image and checksum, and waits for the host to confirm successful backup, Prisma migration, HTTP health and database readiness. A host timer downloads releases without opening CI SSH access. Failed releases require an explicit new attempt; database migrations are never automatically reversed.
 
 ### `.github/workflows/vercel-deploy-app.yml` — Expo Web deploy on main
 Runs on push to `main` when `mobile/**` or `shared/**` changes (also `workflow_dispatch`). Builds the Expo Web bundle via `vercel build --prod` and deploys it to `app.meetwithoutfear.com` (Vercel project `mwf-app`). Uses repo vars `VERCEL_ORG_ID` / `VERCEL_APP_PROJECT_ID` and secret `VERCEL_TOKEN`.
@@ -120,7 +113,7 @@ The backend requires the following environment variables (see `backend/.env.exam
 | Variable | Purpose |
 |----------|---------|
 | `DATABASE_URL` | PostgreSQL connection string |
-| `DIRECT_URL` | Direct database connection (bypasses connection pooler) |
+| `TRUST_PROXY` | Exact Caddy address (`172.29.0.2`) used by the deployment adapter |
 | `CLERK_SECRET_KEY` / `CLERK_PUBLISHABLE_KEY` | Authentication (Clerk) |
 | `ABLY_API_KEY` | Real-time messaging |
 | `RESEND_API_KEY` / `FROM_EMAIL` | Email delivery |
@@ -161,4 +154,4 @@ Optional variables include Twilio SMS credentials, Neural Monitor dashboard sett
 ## See Also
 
 - `.planning/architecture/production-deployment-strategy.md` -- Neural Monitor dashboard deployment strategy (planning)
-- [Environment variables](environment-variables.md), [Render config](render-config.md), [Push notifications](push-notifications.md)
+- [Environment variables](environment-variables.md), [AWS runbook](../../infra/aws/README.md), [Push notifications](push-notifications.md)

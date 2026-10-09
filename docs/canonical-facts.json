@@ -1,12 +1,12 @@
 {
   "_comment": "Cross-doc canonical values. If any of these change, search for occurrences across docs/ and update them together. Updated irregularly; not the source of truth — the code is. This is for cross-doc consistency checks.",
-  "_updated": "2026-04-14",
+  "_updated": "2026-09-07",
 
   "backend": {
     "framework": "Express",
     "runtime": "Node.js 20",
     "orm": "Prisma 6.x",
-    "database": "PostgreSQL (Render)",
+    "database": "PostgreSQL 18 with pgvector (AWS Lightsail)",
     "service_count": 49,
     "controller_count": 19
   },
@@ -59,15 +59,13 @@
   },
 
   "deployment": {
-    "backend_host": "Render",
-    "backend_service_name": "meet-without-fear-api",
-    "backend_service_id": "srv-d58bj73uibrs73akacd0",
-    "backend_env_group": "be-heard-api-env",
-    "backend_env_group_id": "evg-d58bivruibrs73aka8qg",
-    "database_name": "be_heard_db",
-    "database_user": "be_heard_db_user",
-    "database_id": "dpg-d58660shg0os73bkkpmg-a",
-    "database_region": "oregon",
+    "backend_host": "AWS Lightsail",
+    "backend_instance_name": "mwf-api",
+    "backend_hostname": "api.meetwithoutfear.com",
+    "backend_static_ip": "54.189.24.241",
+    "database_name": "mwf",
+    "database_user": "mwf_app",
+    "database_region": "us-west-2",
     "docs_site_host": "Vercel",
     "marketing_site_host": "Vercel"
   },

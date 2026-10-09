@@ -4,15 +4,16 @@ Query the PostgreSQL database for diagnostics, data inspection, or debugging.
 
 ## Credentials
 
-Load `READONLY_DATABASE_URL` (preferred) or `PRODUCTION_DATABASE_URL` (fallback) per `shared/references/credentials.md`.
+Load only `READONLY_DATABASE_URL` per `shared/references/credentials.md`. On the bot this points to `127.0.0.1:15432` through `mwf-db-tunnel.service`, using database `mwf` and role `slam_bot_readonly`. If it is absent or the tunnel is down, report the failure; do not fall back to an administrative or development database.
 
 ## Running Queries
 
 ```bash
-psql "$PRODUCTION_DATABASE_URL" -c "SELECT ..." --no-psqlrc -P pager=off
+PGOPTIONS="-c default_transaction_read_only=on -c statement_timeout=30000" \
+  psql "$READONLY_DATABASE_URL" -X -v ON_ERROR_STOP=1 -P pager=off -c "SELECT ..."
 ```
 
-Fallback: `cd && DATABASE_URL="$PRODUCTION_DATABASE_URL" npm run db:query 'SELECT ...'`
+First confirm `SELECT current_database(), current_user;` returns `mwf` and `slam_bot_readonly`. On the operator machine, `python3 infra/aws/prod-query.py 'SELECT ...'` opens and verifies the tunnel automatically.
 
 ## Default Health Check
 

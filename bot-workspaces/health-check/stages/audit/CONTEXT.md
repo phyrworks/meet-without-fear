@@ -27,8 +27,8 @@ Use `github_state_*` helpers for all open issue/PR metadata lookups. Do NOT call
    - Follow-ups sent in last 24h (warn if >20)
    - Last successful tick timestamp (warn if >90 min ago)
 4. **Check production** (parallel sub-agents):
-   - Render error logs (`shared/diagnostics/render-logs.md`)
-   - Render warning logs (text search: warn, timeout, throttling)
+   - AWS API health (`shared/diagnostics/render-status.md`)
+   - Read-only database/pipeline health (`shared/diagnostics/check-pipeline-health.md`)
    - Sentry unresolved issues (`shared/diagnostics/check-sentry.md`)
 4b. **Cross-reference and analyze**:
    - Errors during activity windows = user impact
@@ -62,7 +62,7 @@ Use `github_state_*` helpers for all open issue/PR metadata lookups. Do NOT call
 
 Structured health report with:
 - Activity summary (Mixpanel)
-- Errors and issues (Sentry + Render)
+- Errors and issues (Sentry + AWS API)
 - Thread tracker health (file count, oldest age, follow-up volume, cron status)
 - Cross-reference findings
 - Already addressed (findings skipped due to existing issues or recent fixes)

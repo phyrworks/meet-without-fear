@@ -1,6 +1,6 @@
 # Investigate — Meet Without Fear Bug/Issue Investigator
 
-Investigate a bug, error, or issue across all Meet Without Fear services. Correlates data from Render logs, Sentry errors, Mixpanel events, the database, and GitHub issues.
+Investigate a bug, error, or issue across all Meet Without Fear services. Correlates data from AWS API diagnostics, Sentry errors, Mixpanel events, the database, and GitHub issues.
 
 ## Arguments
 
@@ -28,7 +28,7 @@ The sub-agent should search docs with Grep/Glob and return a brief summary of an
 Launch parallel sub-agents, each using the appropriate skill:
 
 1. **Sentry** — run `/check-sentry` with the search term derived from `$ARGUMENTS`
-2. **Render logs** — run `/render-logs errors` to get recent error logs
+2. **AWS API diagnostics** — run `/render-logs errors` to get recent error logs
 3. **Database** — run `/check-db` with a relevant query (e.g., recent sessions, stuck pipelines)
 4. **GitHub issues** — follow `/github-ops` issue search pattern
 

@@ -84,7 +84,7 @@ Cross-workspace resources live in `shared/`:
 | Directory | Contents |
 |---|---|
 | `shared/references/` | Credential patterns, formatting rules, GitHub conventions |
-| `shared/diagnostics/` | Database, Sentry, Mixpanel, pipeline, Render log utilities |
+| `shared/diagnostics/` | Database, Sentry, Mixpanel, pipeline, AWS API diagnostics |
 | `shared/github/` | Issue creation, image attachment |
 | `shared/slack/` | Message posting, file upload |
 | `shared/skills/` | PR creation, voice messages |
