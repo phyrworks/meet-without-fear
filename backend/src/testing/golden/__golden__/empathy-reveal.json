@@ -154,7 +154,7 @@
       "settled": true,
       "trace": {
         "complete": true,
-        "connections": 1,
+        "connections": "<unasserted: pool high-water mark — pg.Pool opens connections on demand under concurrent queries, so this is scheduling, not a property of the work; refused on every step by driver.ts; see the step declaration>",
         "transactions": 7,
         "statements": 7,
         "byKind": {
@@ -527,14 +527,14 @@
       "settled": true,
       "trace": {
         "complete": true,
-        "connections": "<unasserted: pool high-water mark under concurrent background work — scheduling, not a property of the work; see the step declaration>",
-        "transactions": 129,
-        "statements": 139,
+        "connections": "<unasserted: pool high-water mark — pg.Pool opens connections on demand under concurrent queries, so this is scheduling, not a property of the work; refused on every step by driver.ts; see the step declaration>",
+        "transactions": 134,
+        "statements": 138,
         "byKind": {
-          "BEGIN": 4,
-          "COMMIT": 4,
+          "BEGIN": 1,
+          "COMMIT": 1,
           "INSERT": 9,
-          "SELECT": 117,
+          "SELECT": 122,
           "SET_TX": 1,
           "UPDATE": 4
         },
@@ -1268,6 +1268,80 @@
             ]
           },
           {
+            "occurrences": 5,
+            "explicit": false,
+            "isolation": null,
+            "statementCount": 1,
+            "kinds": {
+              "SELECT": 1
+            },
+            "statements": [
+              {
+                "kind": "SELECT",
+                "protocol": "extended",
+                "relations": [],
+                "topRows": 0,
+                "rowsRead": {},
+                "planNodes": [
+                  "Result"
+                ]
+              }
+            ]
+          },
+          {
+            "occurrences": 2,
+            "explicit": false,
+            "isolation": null,
+            "statementCount": 1,
+            "kinds": {
+              "UPDATE": 1
+            },
+            "statements": [
+              {
+                "kind": "UPDATE",
+                "protocol": "extended",
+                "relations": [
+                  "EmpathyAttempt"
+                ],
+                "topRows": 0,
+                "rowsRead": {
+                  "EmpathyAttempt": 1
+                },
+                "planNodes": [
+                  "Update",
+                  "Index Scan"
+                ]
+              }
+            ]
+          },
+          {
+            "occurrences": 1,
+            "explicit": false,
+            "isolation": null,
+            "statementCount": 1,
+            "kinds": {
+              "UPDATE": 1
+            },
+            "statements": [
+              {
+                "kind": "UPDATE",
+                "protocol": "extended",
+                "relations": [
+                  "EmpathyAttempt"
+                ],
+                "topRows": 0,
+                "rowsRead": {
+                  "EmpathyAttempt": 2
+                },
+                "planNodes": [
+                  "Update",
+                  "Bitmap Heap Scan",
+                  "Bitmap Index Scan"
+                ]
+              }
+            ]
+          },
+          {
             "occurrences": 1,
             "explicit": true,
             "isolation": "SERIALIZABLE",
@@ -1310,95 +1384,6 @@
                   "Bitmap Heap Scan",
                   "Bitmap Index Scan"
                 ]
-              },
-              {
-                "kind": "UPDATE",
-                "protocol": "extended",
-                "relations": [
-                  "EmpathyAttempt"
-                ],
-                "topRows": 0,
-                "rowsRead": {
-                  "EmpathyAttempt": 2
-                },
-                "planNodes": [
-                  "Update",
-                  "Bitmap Heap Scan",
-                  "Bitmap Index Scan"
-                ]
-              },
-              {
-                "kind": "COMMIT",
-                "protocol": "simple",
-                "relations": [],
-                "topRows": null,
-                "rowsRead": {},
-                "planNodes": []
-              }
-            ]
-          },
-          {
-            "occurrences": 2,
-            "explicit": true,
-            "isolation": null,
-            "statementCount": 3,
-            "kinds": {
-              "BEGIN": 1,
-              "COMMIT": 1,
-              "UPDATE": 1
-            },
-            "statements": [
-              {
-                "kind": "BEGIN",
-                "protocol": "simple",
-                "relations": [],
-                "topRows": null,
-                "rowsRead": {},
-                "planNodes": []
-              },
-              {
-                "kind": "UPDATE",
-                "protocol": "extended",
-                "relations": [
-                  "EmpathyAttempt"
-                ],
-                "topRows": 0,
-                "rowsRead": {
-                  "EmpathyAttempt": 1
-                },
-                "planNodes": [
-                  "Update",
-                  "Index Scan"
-                ]
-              },
-              {
-                "kind": "COMMIT",
-                "protocol": "simple",
-                "relations": [],
-                "topRows": null,
-                "rowsRead": {},
-                "planNodes": []
-              }
-            ]
-          },
-          {
-            "occurrences": 1,
-            "explicit": true,
-            "isolation": null,
-            "statementCount": 3,
-            "kinds": {
-              "BEGIN": 1,
-              "COMMIT": 1,
-              "UPDATE": 1
-            },
-            "statements": [
-              {
-                "kind": "BEGIN",
-                "protocol": "simple",
-                "relations": [],
-                "topRows": null,
-                "rowsRead": {},
-                "planNodes": []
               },
               {
                 "kind": "UPDATE",
@@ -1581,12 +1566,12 @@
       "settled": true,
       "trace": {
         "complete": true,
-        "connections": 2,
-        "transactions": 15,
-        "statements": 15,
+        "connections": "<unasserted: pool high-water mark — pg.Pool opens connections on demand under concurrent queries, so this is scheduling, not a property of the work; refused on every step by driver.ts; see the step declaration>",
+        "transactions": 16,
+        "statements": 16,
         "byKind": {
           "INSERT": 3,
-          "SELECT": 12
+          "SELECT": 13
         },
         "rowsRead": {
           "EmpathyAttempt": 2,
@@ -1871,6 +1856,27 @@
                 ]
               }
             ]
+          },
+          {
+            "occurrences": 1,
+            "explicit": false,
+            "isolation": null,
+            "statementCount": 1,
+            "kinds": {
+              "SELECT": 1
+            },
+            "statements": [
+              {
+                "kind": "SELECT",
+                "protocol": "extended",
+                "relations": [],
+                "topRows": 0,
+                "rowsRead": {},
+                "planNodes": [
+                  "Result"
+                ]
+              }
+            ]
           }
         ]
       }
@@ -2003,7 +2009,7 @@
       "settled": true,
       "trace": {
         "complete": true,
-        "connections": 1,
+        "connections": "<unasserted: pool high-water mark — pg.Pool opens connections on demand under concurrent queries, so this is scheduling, not a property of the work; refused on every step by driver.ts; see the step declaration>",
         "transactions": 9,
         "statements": 9,
         "byKind": {
@@ -2436,7 +2442,7 @@
       "settled": true,
       "trace": {
         "complete": true,
-        "connections": 1,
+        "connections": "<unasserted: pool high-water mark — pg.Pool opens connections on demand under concurrent queries, so this is scheduling, not a property of the work; refused on every step by driver.ts; see the step declaration>",
         "transactions": 6,
         "statements": 6,
         "byKind": {
@@ -2687,12 +2693,12 @@
       "settled": true,
       "trace": {
         "complete": true,
-        "connections": 2,
-        "transactions": 15,
-        "statements": 15,
+        "connections": "<unasserted: pool high-water mark — pg.Pool opens connections on demand under concurrent queries, so this is scheduling, not a property of the work; refused on every step by driver.ts; see the step declaration>",
+        "transactions": 16,
+        "statements": 16,
         "byKind": {
           "INSERT": 3,
-          "SELECT": 12
+          "SELECT": 13
         },
         "rowsRead": {
           "EmpathyAttempt": 2,
@@ -2977,6 +2983,27 @@
                 ]
               }
             ]
+          },
+          {
+            "occurrences": 1,
+            "explicit": false,
+            "isolation": null,
+            "statementCount": 1,
+            "kinds": {
+              "SELECT": 1
+            },
+            "statements": [
+              {
+                "kind": "SELECT",
+                "protocol": "extended",
+                "relations": [],
+                "topRows": 0,
+                "rowsRead": {},
+                "planNodes": [
+                  "Result"
+                ]
+              }
+            ]
           }
         ]
       }
@@ -3109,7 +3136,7 @@
       "settled": true,
       "trace": {
         "complete": true,
-        "connections": 1,
+        "connections": "<unasserted: pool high-water mark — pg.Pool opens connections on demand under concurrent queries, so this is scheduling, not a property of the work; refused on every step by driver.ts; see the step declaration>",
         "transactions": 9,
         "statements": 9,
         "byKind": {
@@ -3532,7 +3559,7 @@
       "settled": true,
       "trace": {
         "complete": true,
-        "connections": 1,
+        "connections": "<unasserted: pool high-water mark — pg.Pool opens connections on demand under concurrent queries, so this is scheduling, not a property of the work; refused on every step by driver.ts; see the step declaration>",
         "transactions": 6,
         "statements": 6,
         "byKind": {
