@@ -10,7 +10,7 @@
 
 import { logger } from '../lib/logger';
 import { prisma } from '../lib/prisma';
-import { EmpathyStatus, SharedContentDeliveryStatus } from '@prisma/client';
+import { EmpathyStatus, SharedContentDeliveryStatus } from '../generated/prisma/client';
 import {
   type MemoryIntentResult,
   type RetrievalDepth,

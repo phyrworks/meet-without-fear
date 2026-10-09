@@ -14,7 +14,7 @@ import type {
   FormattedMemorySuggestion,
   UpdateMemoryAIResponse,
 } from '@meet-without-fear/shared';
-import { BrainActivityCallType } from '@prisma/client';
+import { BrainActivityCallType } from '../generated/prisma/client';
 
 // ============================================================================
 // Types

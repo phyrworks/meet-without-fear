@@ -10,7 +10,7 @@
  * - Full deletion after 90 days
  */
 
-import { Prisma } from '@prisma/client';
+import { Prisma } from '../generated/prisma/client';
 import { prisma } from '../lib/prisma';
 import { logger } from '../lib/logger';
 

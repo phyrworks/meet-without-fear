@@ -1,4 +1,5 @@
-import { PrismaClient } from '@prisma/client';
+import { PrismaClient } from '../generated/prisma/client';
+import { createPrismaPgAdapter } from '../lib/prisma-pg';
 import { checkAttempts, incrementAttempts } from '../services/reconciler';
 
 /**
@@ -19,7 +20,7 @@ describe('Circuit Breaker', () => {
   const relationshipId = `${TEST_PREFIX}-rel`;
 
   beforeAll(() => {
-    prisma = new PrismaClient();
+    prisma = new PrismaClient({ adapter: createPrismaPgAdapter() });
   });
 
   afterAll(async () => {

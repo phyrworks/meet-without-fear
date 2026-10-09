@@ -245,7 +245,7 @@ migration will legitimately change. Know which before you touch a golden.
 | `relations` | **contract** | Different tables touched — a join dropped, a lookup added. |
 | `planNodes` | **mostly contract** | A vanished `Limit` is the dropped-`take` signal. But an equivalent query can legitimately plan differently (`Bitmap Heap Scan` vs `Index Scan`) at identical row counts; check `rowsRead` alongside it before calling it a regression. |
 | `byKind`, `statements` | **incidental** | Inflated by Prisma's own bookkeeping: it wraps single writes in `BEGIN`/`COMMIT` and emits a standalone `SET TRANSACTION`. A hand-written equivalent that opens `BEGIN ISOLATION LEVEL SERIALIZABLE` legitimately records two fewer statements for the same behaviour. |
-| `connections` | **incidental** | Pool shape. Already unasserted where background work makes it a race. |
+| `connections` | **incidental** | Pool shape. Unasserted on every step since Prisma 7 (see below). |
 | `protocol` | **security tripwire** | See below. |
 
 **On `protocol`: keep it.** The case for dropping it is real — which wire protocol
@@ -377,8 +377,14 @@ reveal's `UPDATE` cannot move them; the `Message` reads predicate on a session a
 stage the reveal `INSERT`s into, so they can.
 
 So the scenario declares `traceUnasserted` for `connections` and `Message` on that
-one step, and nothing else anywhere is coarsened. `connections` stays exact on
-every synchronous step, where it has never moved. `topRows` is suppressed only
+one step, and nothing else anywhere is coarsened. `connections` stayed exact on
+every synchronous step, where it never moved under Prisma 6's engine pool. Under
+Prisma 7 the client goes through the pg driver adapter, and `pg.Pool` opens a
+connection whenever every open one is busy; `session state` fires its queries
+through `Promise.all` and was measured at 3, 5 and 6 on a clean tree. So
+`driver.ts` now refuses `connections` on every step — the same refusal, not a
+range — and `Message` on `consent as bob` remains the only per-step declaration.
+`topRows` is suppressed only
 where the unasserted scan *is* the plan root — validated against 30 captures, the
 statement that flips is a bare `Index Scan`, while five `Limit -> Index Scan
 Backward` statements over the same relation are stable at 0 and keep their exact
@@ -467,8 +473,9 @@ mean they are covered:
   design, so `SELECT on Message reading 6 rows` is as specific as it gets. When
   two call sites issue structurally identical queries, the trace cannot tell you
   which one regressed — only that one more or one fewer happened.
-- **The one step with background writes cannot assert `Message` row counts or its
-  connection count.** A cost regression confined to reads of `Message` during the
+- **No step asserts its connection count**, so a change in pooling (or a query
+  added to a `Promise.all`) is visible only through `statements` and shapes.
+- **The one step with background writes cannot assert `Message` row counts.** A cost regression confined to reads of `Message` during the
   reveal would pass. `consent as bob` is the only such step today, and it is also
   the one carrying the Serializable envelope this oracle most wants to watch. Its
   other eleven relations are still asserted exactly.

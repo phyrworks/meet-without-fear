@@ -82,8 +82,17 @@ async function globalSetup(_config: FullConfig) {
   // Create a temporary script to truncate tables
   const truncateScriptPath = path.join(backendDir, '.temp-truncate.js');
   const truncateScript = `
-const { PrismaClient } = require('@prisma/client');
-const prisma = new PrismaClient();
+// Prisma 7's client is generated TypeScript (backend/src/generated), which
+// plain node cannot require; these scripts only run raw SQL, so give them a
+// pg-backed stand-in with the same three methods.
+const { Client } = require('pg');
+const db = new Client({ connectionString: process.env.DATABASE_URL });
+const connected = db.connect();
+const prisma = {
+  $queryRawUnsafe: async function(sql, ...params) { await connected; return (await db.query(sql, params)).rows; },
+  $executeRawUnsafe: async function(sql, ...params) { await connected; return (await db.query(sql, params)).rowCount; },
+  $disconnect: async function() { await connected; await db.end(); },
+};
 
 const TABLES_TO_TRUNCATE = ${JSON.stringify(TABLES_TO_TRUNCATE)};
 
@@ -145,8 +154,17 @@ truncateTables().catch(console.error);
   const fixVectorScriptPath = path.join(backendDir, '.temp-fix-vector.js');
   // Build the fix script without using template literals to avoid escaping issues
   const fixVectorLines = [
-    "const { PrismaClient } = require('@prisma/client');",
-    "const prisma = new PrismaClient();",
+    "// Prisma 7's client is generated TypeScript (backend/src/generated), which",
+    "// plain node cannot require; these scripts only run raw SQL, so give them a",
+    "// pg-backed stand-in with the same three methods.",
+    "const { Client } = require('pg');",
+    "const db = new Client({ connectionString: process.env.DATABASE_URL });",
+    "const connected = db.connect();",
+    "const prisma = {",
+    "  $queryRawUnsafe: async function(sql, ...params) { await connected; return (await db.query(sql, params)).rows; },",
+    "  $executeRawUnsafe: async function(sql, ...params) { await connected; return (await db.query(sql, params)).rowCount; },",
+    "  $disconnect: async function() { await connected; await db.end(); },",
+    "};",
     "",
     "async function fixVectorMigration() {",
     "  const migrationName = '" + vectorMigrationName + "';",

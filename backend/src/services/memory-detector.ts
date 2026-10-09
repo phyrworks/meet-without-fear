@@ -10,7 +10,7 @@ import { getHaikuJson } from '../lib/bedrock';
 import { logger } from '../lib/logger';
 import { withHaikuCircuitBreaker, HAIKU_TIMEOUT_MS } from '../utils/circuit-breaker';
 import type { MemoryDetectionResult, MemoryCategory } from 'shared';
-import { BrainActivityCallType } from '@prisma/client';
+import { BrainActivityCallType } from '../generated/prisma/client';
 
 // ============================================================================
 // Types

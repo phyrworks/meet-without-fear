@@ -301,7 +301,8 @@ export async function createHarness(opts: {
           beginToken,
           endToken,
           sinceSeconds: (Date.now() - markedAt) / 1000,
-          unasserted: traceUnasserted,
+          // `connections` is unasserted on every step: under the Prisma 7 pg driver adapter, pg.Pool opens connections on demand under Promise.all, so the count varies run to run (3, 5, 6 measured on one step).
+          unasserted: { ...traceUnasserted, connections: true },
         });
       }
 

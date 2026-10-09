@@ -25,7 +25,7 @@ import {
 import { CONTEXT_LIMITS } from '../utils/token-budget';
 import { withHaikuCircuitBreaker } from '../utils/circuit-breaker';
 import { brainService } from '../services/brain-service';
-import { ActivityType, BrainActivityCallType } from '@prisma/client';
+import { ActivityType, BrainActivityCallType } from '../generated/prisma/client';
 import { searchSessionContent, searchInnerWorkSessionContent } from './embedding';
 
 // ============================================================================

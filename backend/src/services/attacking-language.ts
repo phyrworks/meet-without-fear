@@ -1,5 +1,5 @@
 import { getHaikuJson } from '../lib/bedrock';
-import { BrainActivityCallType } from '@prisma/client';
+import { BrainActivityCallType } from '../generated/prisma/client';
 
 export interface SendableRewriteResult {
   needsRewrite: boolean;

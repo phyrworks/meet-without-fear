@@ -1,4 +1,5 @@
-import { PrismaClient } from '@prisma/client';
+import { PrismaClient } from '../generated/prisma/client';
+import { createPrismaPgAdapter } from '../lib/prisma-pg';
 import { runReconcilerForDirection, incrementAttempts } from '../services/reconciler';
 
 /**
@@ -38,7 +39,7 @@ describe('Circuit Breaker Integration', () => {
   const sessionId = `${TEST_PREFIX}-session`;
 
   beforeAll(() => {
-    prisma = new PrismaClient();
+    prisma = new PrismaClient({ adapter: createPrismaPgAdapter() });
   });
 
   afterAll(async () => {

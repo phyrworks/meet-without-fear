@@ -21,7 +21,7 @@ import {
   Stage4SubChatAnchor as PrismaStage4SubChatAnchor,
   Stage4SubChatStatus as PrismaStage4SubChatStatus,
   StrategySource as PrismaStrategySource,
-} from '@prisma/client';
+} from '../generated/prisma/client';
 import {
   MessageRole as SharedMessageRole,
   Stage4ProposalDraft,

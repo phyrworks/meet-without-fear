@@ -8,7 +8,7 @@
 import { prisma } from '../../lib/prisma';
 import { logger } from '../../lib/logger';
 import { EmpathyStatus, MessageRole } from '@meet-without-fear/shared';
-import type { Prisma } from '@prisma/client';
+import type { Prisma } from '../../generated/prisma/client';
 import { publishMessageAIResponse } from '../realtime';
 import { transition } from '../empathy-state-machine';
 import {
