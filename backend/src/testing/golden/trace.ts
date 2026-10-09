@@ -561,8 +561,8 @@ export interface UnassertedTrace {
  * are evidence for a decision, not in an artefact that is diffed byte for byte.
  */
 export const UNASSERTED_CONNECTIONS =
-  '<unasserted: pool high-water mark under concurrent background work — scheduling, not a property ' +
-  'of the work; see the step declaration>';
+  '<unasserted: pool high-water mark — pg.Pool opens connections on demand under concurrent queries, ' +
+  'so this is scheduling, not a property of the work; refused on every step by driver.ts; see the step declaration>';
 
 /** Per relation, because the justification differs per relation. */
 export function unassertedRows(relation: string): string {
@@ -682,8 +682,10 @@ function sortKeys(o: Record<string, number>): Record<string, number> {
  *   - `connections` is a pool high-water mark. 48 runs said 3-4 and a clean tree
  *     then produced 5. It also moves under unrelated mutations, so it cannot
  *     separate "the pool scheduled differently" from "a regression added a
- *     query". It is refused on this step and stays exact on every synchronous
- *     step, where it has never moved (48/48).
+ *     query". It was refused on this step and exact on every synchronous step,
+ *     where it never moved (48/48) under Prisma 6's engine pool. Under Prisma 7's
+ *     pg driver adapter it moved on a synchronous step too (`session state`:
+ *     3, 5, 6), so `driver.ts` now refuses it on every step.
  *   - `rowsRead.Message` looked tighter — 46/48 at one value, moving by one row
  *     — but the raced statement is a `findMany` with no `LIMIT`, so nothing
  *     syntactically bounds it at one row, and the reveal inserts *two* Message

@@ -89,7 +89,9 @@ describe(`golden: ${SCENARIO}`, () => {
       asyncBoundary: true,
       // The only unasserted trace fields in either scenario, and the only step
       // that needs any. 48 recorded runs (18 + 30) say what moves here; nothing
-      // moves on any other step of either scenario.
+      // moves on any other step of either scenario. (Those runs were Prisma 6.
+      // Under Prisma 7's pg adapter `connections` moves on synchronous steps
+      // too, so driver.ts now refuses it everywhere; `Message` stays per-step.)
       //
       //   connections                     4 x45, 3 x3
       //   rowsRead.Message (rollup)       34 x46, 35 x2
