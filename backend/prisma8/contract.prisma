@@ -1,0 +1,1688 @@
+// use prisma-8
+// Contract inferred from the live database schema. Edit as needed, then run `prisma contract emit`.
+
+namespace public {
+  model Relationship {
+    id                  String               @id(map: "Relationship_pkey")
+    createdAt           TimestampString(3)   @default(now())
+    updatedAt           TimestampString(3)
+    relationshipMembers RelationshipMember[]
+    sessions            Session[]
+  }
+
+  model Session {
+    id                           String                        @id(map: "Session_pkey")
+    relationshipId               String
+    status                       pg.enum(SessionStatus)        @default("CREATED")
+    createdAt                    TimestampString(3)            @default(now())
+    updatedAt                    TimestampString(3)
+    resolvedAt                   TimestampString(3)?
+    _type                        pg.enum(SessionType)          @default("CONFLICT_RESOLUTION") @map("type")
+    topicFrame                   String?
+    topicFrameConfirmedAt        TimestampString(3)?
+    previousSessionId            String?
+    brainActivities              BrainActivity[]
+    consentRecords               ConsentRecord[]
+    emotionalExerciseCompletions EmotionalExerciseCompletion[]
+    empathyAttempts              EmpathyAttempt[]
+    empathyDrafts                EmpathyDraft[]
+    empathyValidations           EmpathyValidation[]
+    innerWorkSessions            InnerWorkSession[]
+    invitations                  Invitation[]
+    messages                     Message[]
+    reconcilerResults            ReconcilerResult[]
+    refinementAttemptCounters    RefinementAttemptCounter[]
+    sharedVessel                 SharedVessel?
+    stage4Closure                Stage4Closure?
+    stage4NeedCoverages          Stage4NeedCoverage[]
+    stage4NeedDeclinations       Stage4NeedDeclination[]
+    stage4ProposalSelections     Stage4ProposalSelection[]
+    stage4SubChats               Stage4SubChat[]
+    stageProgresses              StageProgress[]
+    strategyProposals            StrategyProposal[]
+    strategyRankings             StrategyRanking[]
+    tendingAdjustments           TendingAdjustment[]
+    tendingBetweenPeriodNotes    TendingBetweenPeriodNote[]
+    tendingCheckins              TendingCheckin[]
+    tendingCoordinationCycles    TendingCoordinationCycle[]
+    tendingEntries               TendingEntry[]
+    tendingNeedOutcomes          TendingNeedOutcome[]
+    tendingReminders             TendingReminder[]
+    userMemories                 UserMemory[]
+    userVessels                  UserVessel[]
+    validationFeedbackDrafts     ValidationFeedbackDraft[]
+    previousSession              Session?                      @relation(name: "Session_previousSessionId_fkey", fields: [previousSessionId], references: [id], onDelete: SetNull, onUpdate: Cascade, map: "Session_previousSessionId_fkey")
+    sessions                     Session[]                     @relation(name: "Session_previousSessionId_fkey")
+    relationship                 Relationship                  @relation(fields: [relationshipId], references: [id], onDelete: Cascade, onUpdate: Cascade, map: "Session_relationshipId_fkey")
+
+    @@index([previousSessionId], map: "Session_previousSessionId_idx")
+    @@index([relationshipId], map: "Session_relationshipId_idx")
+    @@index([status], map: "Session_status_idx")
+    @@index([_type], map: "Session_type_idx")
+  }
+
+  model SharedVessel {
+    id                String             @id(map: "SharedVessel_pkey")
+    sessionId         String
+    createdAt         TimestampString(3) @default(now())
+    updatedAt         TimestampString(3)
+    agreements        Agreement[]
+    commonGrounds     CommonGround[]
+    consentedContents ConsentedContent[]
+    session           Session            @relation(fields: [sessionId], references: [id], onDelete: Cascade, onUpdate: Cascade, map: "SharedVessel_sessionId_fkey")
+
+    @@index([sessionId], map: "SharedVessel_sessionId_key", unique: true)
+  }
+
+  model User {
+    id                                String                        @id(map: "User_pkey")
+    clerkId                           String?
+    email                             String
+    name                              String?
+    firstName                         String?
+    lastName                          String?
+    pushToken                         String?
+    biometricEnabled                  Boolean                       @default(false)
+    biometricEnrolledAt               TimestampString(3)?
+    createdAt                         TimestampString(3)            @default(now())
+    updatedAt                         TimestampString(3)
+    memoryPreferences                 Jsonb?
+    lastMoodIntensity                 Int?
+    notificationPreferences           Jsonb?
+    globalFacts                       Jsonb?
+    privacyPreferences                Jsonb?
+    consentedContents                 ConsentedContent[]
+    emotionalExerciseCompletions      EmotionalExerciseCompletion[]
+    empathyAttempts                   EmpathyAttempt[]
+    empathyDrafts                     EmpathyDraft[]
+    empathyValidations                EmpathyValidation[]
+    gratitudeEntries                  GratitudeEntry[]
+    gratitudePreferences              GratitudePreferences?
+    innerWorkSessions                 InnerWorkSession[]
+    insights                          Insight[]
+    invitations                       Invitation[]
+    meditationFavorites               MeditationFavorite[]
+    meditationPreferences             MeditationPreferences?
+    meditationSessions                MeditationSession[]
+    meditationStats                   MeditationStats?
+    messages                          Message[]
+    needScores                        NeedScore[]
+    needsAssessmentState              NeedsAssessmentState?
+    people                            Person[]
+    recurringThemes                   RecurringTheme[]
+    relationshipMembers               RelationshipMember[]
+    savedMeditations                  SavedMeditation[]
+    stage4ProposalSelections          Stage4ProposalSelection[]
+    stage4SubChats                    Stage4SubChat[]
+    stageProgresses                   StageProgress[]
+    strategyRankings                  StrategyRanking[]
+    tendingAdjustments                TendingAdjustment[]
+    tendingBetweenPeriodNotes         TendingBetweenPeriodNote[]
+    tendingCheckins                   TendingCheckin[]
+    tendingCoordinationCycles         TendingCoordinationCycle[]
+    tendingEntryOutcomes              TendingEntryOutcome[]
+    tendingReminders                  TendingReminder[]
+    tendingResponses                  TendingResponse[]
+    userMemories                      UserMemory[]
+    userVessels                       UserVessel[]
+    validationFeedbackDrafts          ValidationFeedbackDraft[]
+    consentRecords                    ConsentRecord[]               @relation(name: "ConsentRecord_requestedByUserId_fkey")
+    consentRecordsConsentRecord       ConsentRecord[]               @relation(name: "ConsentRecord_userId_fkey")
+    strategyProposals                 StrategyProposal[]            @relation(name: "StrategyProposal_createdByUserId_fkey")
+    strategyProposalsStrategyProposal StrategyProposal[]            @relation(name: "StrategyProposal_removedByUserId_fkey")
+
+    @@index([clerkId], map: "User_clerkId_key", unique: true)
+    @@index([email], map: "User_email_key", unique: true)
+  }
+
+  model ConsentRecord {
+    id                String                      @id(map: "ConsentRecord_pkey")
+    userId            String
+    sessionId         String?
+    targetType        pg.enum(ConsentContentType)
+    targetId          String?
+    requestedByUserId String
+    decision          pg.enum(ConsentDecision)?
+    decidedAt         TimestampString(3)?
+    revokedAt         TimestampString(3)?
+    metadata          Jsonb?
+    createdAt         TimestampString(3)          @default(now())
+    consentedContents ConsentedContent[]
+    empathyAttempts   EmpathyAttempt[]
+    strategyProposals StrategyProposal[]
+    requestedByUser   User                        @relation(name: "ConsentRecord_requestedByUserId_fkey", fields: [requestedByUserId], references: [id], onDelete: Cascade, onUpdate: Cascade, map: "ConsentRecord_requestedByUserId_fkey", index: false)
+    session           Session?                    @relation(fields: [sessionId], references: [id], onDelete: Cascade, onUpdate: Cascade, map: "ConsentRecord_sessionId_fkey", index: false)
+    user              User                        @relation(name: "ConsentRecord_userId_fkey", fields: [userId], references: [id], onDelete: Cascade, onUpdate: Cascade, map: "ConsentRecord_userId_fkey", index: "ConsentRecord_userId_sessionId_targetType_decidedAt_idx")
+
+    @@index([userId, sessionId, targetType, decidedAt], map: "ConsentRecord_userId_sessionId_targetType_decidedAt_idx")
+  }
+
+  model StrategyProposal {
+    id                       String                        @id(map: "StrategyProposal_pkey")
+    sessionId                String
+    createdByUserId          String?
+    description              String
+    needsAddressed           String[]?                     @noCheck(elementNotNull)
+    duration                 String?
+    measureOfSuccess         String?
+    source                   pg.enum(StrategySource)       @default("USER_SUBMITTED")
+    createdAt                TimestampString(3)            @default(now())
+    updatedAt                TimestampString(3)
+    consentRecordId          String?
+    kind                     pg.enum(Stage4ProposalKind)   @default("SHARED_PROPOSAL")
+    status                   pg.enum(Stage4ProposalStatus) @default("ACTIVE")
+    removedAt                TimestampString(3)?
+    removedByUserId          String?
+    removalReason            String?
+    parentProposalId         String?
+    coverageSummary          Jsonb?
+    capturedFromMessageId    String?
+    agreements               Agreement[]
+    stage4ProposalRevisions  Stage4ProposalRevision[]
+    stage4ProposalSelections Stage4ProposalSelection[]
+    strategyProposalNeeds    StrategyProposalNeed[]
+    consentRecord            ConsentRecord?                @relation(fields: [consentRecordId], references: [id], onDelete: SetNull, onUpdate: Cascade, map: "StrategyProposal_consentRecordId_fkey", index: false)
+    createdByUser            User?                         @relation(name: "StrategyProposal_createdByUserId_fkey", fields: [createdByUserId], references: [id], onDelete: SetNull, onUpdate: Cascade, map: "StrategyProposal_createdByUserId_fkey", index: false)
+    removedByUser            User?                         @relation(name: "StrategyProposal_removedByUserId_fkey", fields: [removedByUserId], references: [id], onDelete: SetNull, onUpdate: Cascade, map: "StrategyProposal_removedByUserId_fkey", index: false)
+    session                  Session                       @relation(fields: [sessionId], references: [id], onDelete: Cascade, onUpdate: Cascade, map: "StrategyProposal_sessionId_fkey")
+
+    @@index([parentProposalId], map: "StrategyProposal_parentProposalId_idx")
+    @@index([sessionId], map: "StrategyProposal_sessionId_idx")
+    @@index([sessionId, status], map: "StrategyProposal_sessionId_status_idx")
+  }
+
+  model Agreement {
+    id               String                   @id(map: "Agreement_pkey")
+    sharedVesselId   String
+    description      String
+    _type            pg.enum(AgreementType)   @map("type")
+    status           pg.enum(AgreementStatus) @default("PROPOSED")
+    agreedByA        Boolean                  @default(false)
+    agreedByB        Boolean                  @default(false)
+    agreedAt         TimestampString(3)?
+    followUpDate     TimestampString(3)?
+    completedAt      TimestampString(3)?
+    proposalId       String?
+    duration         String?
+    measureOfSuccess String?
+    tendingEntries   TendingEntry[]
+    proposal         StrategyProposal?        @relation(fields: [proposalId], references: [id], onDelete: SetNull, onUpdate: Cascade, map: "Agreement_proposalId_fkey", index: false)
+    sharedVessel     SharedVessel             @relation(fields: [sharedVesselId], references: [id], onDelete: Cascade, onUpdate: Cascade, map: "Agreement_sharedVesselId_fkey")
+
+    @@index([sharedVesselId], map: "Agreement_sharedVesselId_idx")
+  }
+
+  model UserVessel {
+    id                   String                       @id(map: "UserVessel_pkey")
+    userId               String
+    sessionId            String
+    createdAt            TimestampString(3)           @default(now())
+    updatedAt            TimestampString(3)
+    conversationSummary  String?
+    lastSeenChatItemId   String?
+    lastViewedAt         TimestampString(3)?
+    notableFacts         Jsonb?
+    lastViewedShareTabAt TimestampString(3)?
+    contentEmbedding     pgvector.Vector(1024)?
+    archivedAt           TimestampString(3)?
+    lastActiveAt         TimestampString(3)?
+    boundaries           Boundary[]
+    emotionalReadings    EmotionalReading[]
+    identifiedNeeds      IdentifiedNeed[]
+    userDocuments        UserDocument[]
+    userEvents           UserEvent[]
+    session              Session                      @relation(fields: [sessionId], references: [id], onDelete: Cascade, onUpdate: Cascade, map: "UserVessel_sessionId_fkey")
+    user                 User                         @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: Cascade, map: "UserVessel_userId_fkey")
+
+    @@index([sessionId], map: "UserVessel_sessionId_idx")
+    @@index([userId], map: "UserVessel_userId_idx")
+    @@index([userId, sessionId], map: "UserVessel_userId_sessionId_key", unique: true)
+  }
+
+  model Boundary {
+    id            String             @id(map: "Boundary_pkey")
+    vesselId      String
+    description   String
+    nonNegotiable Boolean            @default(false)
+    createdAt     TimestampString(3) @default(now())
+    vessel        UserVessel         @relation(fields: [vesselId], references: [id], onDelete: Cascade, onUpdate: Cascade, map: "Boundary_vesselId_fkey")
+
+    @@index([vesselId], map: "Boundary_vesselId_idx")
+  }
+
+  model InnerWorkMessage {
+    id                String               @id(map: "InnerWorkMessage_pkey")
+    sessionId         String
+    role              pg.enum(MessageRole)
+    content           String
+    timestamp         TimestampString(3)   @default(now())
+    innerWorkSessions InnerWorkSession[]
+    session           InnerWorkSession     @relation(fields: [sessionId], references: [id], onDelete: Cascade, onUpdate: Cascade, map: "InnerWorkMessage_sessionId_fkey", index: "InnerWorkMessage_sessionId_timestamp_idx")
+
+    @@index([sessionId, timestamp], map: "InnerWorkMessage_sessionId_timestamp_idx")
+  }
+
+  model InnerWorkSession {
+    id                     String                       @id(map: "InnerWorkSession_pkey")
+    userId                 String
+    title                  String?
+    summary                String?
+    theme                  String?
+    status                 pg.enum(InnerWorkStatus)     @default("ACTIVE")
+    createdAt              TimestampString(3)           @default(now())
+    updatedAt              TimestampString(3)
+    linkedAtStage          Int?
+    linkedPartnerSessionId String?
+    linkedTrigger          String?
+    conversationSummary    String?
+    contentEmbedding       pgvector.Vector(1024)?
+    distilledAt            TimestampString(3)?
+    linkedAtMessageId      String?
+    contextSummarySnapshot String?
+    brainActivities        BrainActivity[]
+    innerWorkMessages      InnerWorkMessage[]
+    sessionTakeaways       SessionTakeaway[]
+    linkedAtMessage        InnerWorkMessage?            @relation(fields: [linkedAtMessageId], references: [id], onDelete: SetNull, onUpdate: Cascade, map: "InnerWorkSession_linkedAtMessageId_fkey")
+    linkedPartnerSession   Session?                     @relation(fields: [linkedPartnerSessionId], references: [id], onDelete: SetNull, onUpdate: Cascade, map: "InnerWorkSession_linkedPartnerSessionId_fkey")
+    user                   User                         @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: Cascade, map: "InnerWorkSession_userId_fkey", index: "InnerWorkSession_userId_updatedAt_idx")
+
+    @@index([linkedAtMessageId], map: "InnerWorkSession_linkedAtMessageId_idx")
+    @@index([linkedPartnerSessionId], map: "InnerWorkSession_linkedPartnerSessionId_idx")
+    @@index([status], map: "InnerWorkSession_status_idx")
+    @@index([userId, updatedAt], map: "InnerWorkSession_userId_updatedAt_idx")
+  }
+
+  model BrainActivity {
+    id                 String                          @id(map: "BrainActivity_pkey")
+    sessionId          String?
+    turnId             String?
+    activityType       pg.enum(ActivityType)
+    _model             String                          @map("model")
+    input              Jsonb?
+    output             Jsonb?
+    metadata           Jsonb?
+    tokenCountInput    Int                             @default(0)
+    tokenCountOutput   Int                             @default(0)
+    cost               Float                           @default(0)
+    durationMs         Int                             @default(0)
+    status             pg.enum(ActivityStatus)         @default("PENDING")
+    createdAt          TimestampString(3)              @default(now())
+    completedAt        TimestampString(3)?
+    callType           pg.enum(BrainActivityCallType)?
+    structuredOutput   Jsonb?
+    innerWorkSessionId String?
+    innerWorkSession   InnerWorkSession?               @relation(fields: [innerWorkSessionId], references: [id], onDelete: Cascade, onUpdate: Cascade, map: "BrainActivity_innerWorkSessionId_fkey")
+    session            Session?                        @relation(fields: [sessionId], references: [id], onDelete: Cascade, onUpdate: Cascade, map: "BrainActivity_sessionId_fkey")
+
+    @@index([activityType], map: "BrainActivity_activityType_idx")
+    @@index([createdAt], map: "BrainActivity_createdAt_idx")
+    @@index([innerWorkSessionId], map: "BrainActivity_innerWorkSessionId_idx")
+    @@index([sessionId], map: "BrainActivity_sessionId_idx")
+    @@index([turnId], map: "BrainActivity_turnId_idx")
+  }
+
+  model CommonGround {
+    id             String                @id(map: "CommonGround_pkey")
+    sharedVesselId String
+    need           String
+    category       pg.enum(NeedCategory)
+    confirmedByA   Boolean               @default(false)
+    confirmedByB   Boolean               @default(false)
+    confirmedAt    TimestampString(3)?
+    sharedVessel   SharedVessel          @relation(fields: [sharedVesselId], references: [id], onDelete: Cascade, onUpdate: Cascade, map: "CommonGround_sharedVesselId_fkey")
+
+    @@index([sharedVesselId], map: "CommonGround_sharedVesselId_idx")
+  }
+
+  model IdentifiedNeed {
+    id                    String                 @id(map: "IdentifiedNeed_pkey")
+    vesselId              String
+    need                  String
+    category              pg.enum(NeedCategory)
+    evidence              String[]?              @noCheck(elementNotNull)
+    confirmed             Boolean                @default(false)
+    aiConfidence          Float
+    createdAt             TimestampString(3)     @default(now())
+    deletedAt             TimestampString(3)?
+    lockedAt              TimestampString(3)?
+    supersededByNeedId    String?
+    consentedContent      ConsentedContent?
+    messages              Message[]
+    strategyProposalNeeds StrategyProposalNeed[]
+    supersededByNeed      IdentifiedNeed?        @relation(name: "IdentifiedNeed_supersededByNeedId_fkey", fields: [supersededByNeedId], references: [id], onDelete: SetNull, onUpdate: Cascade, map: "IdentifiedNeed_supersededByNeedId_fkey")
+    identifiedNeeds       IdentifiedNeed[]       @relation(name: "IdentifiedNeed_supersededByNeedId_fkey")
+    vessel                UserVessel             @relation(fields: [vesselId], references: [id], onDelete: Cascade, onUpdate: Cascade, map: "IdentifiedNeed_vesselId_fkey")
+
+    @@index([deletedAt], map: "IdentifiedNeed_deletedAt_idx")
+    @@index([lockedAt], map: "IdentifiedNeed_lockedAt_idx")
+    @@index([supersededByNeedId], map: "IdentifiedNeed_supersededByNeedId_idx")
+    @@index([vesselId], map: "IdentifiedNeed_vesselId_idx")
+  }
+
+  model ConsentedContent {
+    id                 String              @id(map: "ConsentedContent_pkey")
+    sharedVesselId     String
+    sourceUserId       String?
+    originalNeedId     String?
+    transformedContent String
+    consentedAt        TimestampString(3)  @default(now())
+    consentActive      Boolean             @default(true)
+    revokedAt          TimestampString(3)?
+    consentRecordId    String
+    consentRecord      ConsentRecord       @relation(fields: [consentRecordId], references: [id], onDelete: Restrict, onUpdate: Cascade, map: "ConsentedContent_consentRecordId_fkey", index: false)
+    originalNeed       IdentifiedNeed?     @relation(fields: [originalNeedId], references: [id], onDelete: SetNull, onUpdate: Cascade, map: "ConsentedContent_originalNeedId_fkey")
+    sharedVessel       SharedVessel        @relation(fields: [sharedVesselId], references: [id], onDelete: Cascade, onUpdate: Cascade, map: "ConsentedContent_sharedVesselId_fkey")
+    sourceUser         User?               @relation(fields: [sourceUserId], references: [id], onDelete: SetNull, onUpdate: Cascade, map: "ConsentedContent_sourceUserId_fkey")
+
+    @@index([originalNeedId], map: "ConsentedContent_originalNeedId_key", unique: true)
+    @@index([sharedVesselId], map: "ConsentedContent_sharedVesselId_idx")
+    @@index([sourceUserId], map: "ConsentedContent_sourceUserId_idx")
+  }
+
+  model EmotionalExerciseCompletion {
+    id              String                @id(map: "EmotionalExerciseCompletion_pkey")
+    sessionId       String
+    userId          String
+    _type           pg.enum(ExerciseType) @map("type")
+    completedAt     TimestampString(3)    @default(now())
+    intensityBefore Int?
+    intensityAfter  Int?
+    session         Session               @relation(fields: [sessionId], references: [id], onDelete: Cascade, onUpdate: Cascade, map: "EmotionalExerciseCompletion_sessionId_fkey", index: "EmotionalExerciseCompletion_sessionId_userId_completedAt_idx")
+    user            User                  @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: Cascade, map: "EmotionalExerciseCompletion_userId_fkey", index: false)
+
+    @@index([sessionId, userId, completedAt], map: "EmotionalExerciseCompletion_sessionId_userId_completedAt_idx")
+  }
+
+  model EmotionalReading {
+    id        String             @id(map: "EmotionalReading_pkey")
+    vesselId  String
+    intensity Int
+    context   String?
+    stage     Int
+    timestamp TimestampString(3) @default(now())
+    vessel    UserVessel         @relation(fields: [vesselId], references: [id], onDelete: Cascade, onUpdate: Cascade, map: "EmotionalReading_vesselId_fkey", index: "EmotionalReading_vesselId_timestamp_idx")
+
+    @@index([vesselId, timestamp], map: "EmotionalReading_vesselId_timestamp_idx")
+  }
+
+  model EmpathyDraft {
+    id              String             @id(map: "EmpathyDraft_pkey")
+    sessionId       String
+    userId          String
+    content         String
+    readyToShare    Boolean            @default(false)
+    version         Int                @default(1)
+    updatedAt       TimestampString(3)
+    createdAt       TimestampString(3) @default(now())
+    empathyAttempts EmpathyAttempt[]
+    session         Session            @relation(fields: [sessionId], references: [id], onDelete: Cascade, onUpdate: Cascade, map: "EmpathyDraft_sessionId_fkey", index: "EmpathyDraft_sessionId_userId_key")
+    user            User               @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: Cascade, map: "EmpathyDraft_userId_fkey", index: false)
+
+    @@index([sessionId, userId], map: "EmpathyDraft_sessionId_userId_key", unique: true)
+  }
+
+  model EmpathyAttempt {
+    id                 String                               @id(map: "EmpathyAttempt_pkey")
+    draftId            String?
+    sessionId          String
+    sourceUserId       String?
+    content            String
+    sharedAt           TimestampString(3)                   @default(now())
+    consentRecordId    String?
+    revealedAt         TimestampString(3)?
+    revisionCount      Int                                  @default(0)
+    status             pg.enum(EmpathyStatus)               @default("HELD")
+    deliveredAt        TimestampString(3)?
+    deliveryStatus     pg.enum(SharedContentDeliveryStatus) @default("PENDING")
+    seenAt             TimestampString(3)?
+    statusVersion      Int                                  @default(0)
+    empathyValidations EmpathyValidation[]
+    consentRecord      ConsentRecord?                       @relation(fields: [consentRecordId], references: [id], onDelete: SetNull, onUpdate: Cascade, map: "EmpathyAttempt_consentRecordId_fkey", index: false)
+    draft              EmpathyDraft?                        @relation(fields: [draftId], references: [id], onDelete: SetNull, onUpdate: Cascade, map: "EmpathyAttempt_draftId_fkey", index: false)
+    session            Session                              @relation(fields: [sessionId], references: [id], onDelete: Cascade, onUpdate: Cascade, map: "EmpathyAttempt_sessionId_fkey", index: "EmpathyAttempt_sessionId_sourceUserId_key")
+    sourceUser         User?                                @relation(fields: [sourceUserId], references: [id], onDelete: SetNull, onUpdate: Cascade, map: "EmpathyAttempt_sourceUserId_fkey", index: false)
+
+    @@index([sessionId, sourceUserId], map: "EmpathyAttempt_sessionId_sourceUserId_key", unique: true)
+  }
+
+  model EmpathyValidation {
+    id             String              @id(map: "EmpathyValidation_pkey")
+    attemptId      String
+    sessionId      String
+    userId         String?
+    validated      Boolean
+    feedback       String?
+    feedbackShared Boolean             @default(false)
+    validatedAt    TimestampString(3)? @default(now())
+    attempt        EmpathyAttempt      @relation(fields: [attemptId], references: [id], onDelete: Cascade, onUpdate: Cascade, map: "EmpathyValidation_attemptId_fkey", index: "EmpathyValidation_attemptId_userId_key")
+    session        Session             @relation(fields: [sessionId], references: [id], onDelete: Cascade, onUpdate: Cascade, map: "EmpathyValidation_sessionId_fkey", index: false)
+    user           User?               @relation(fields: [userId], references: [id], onDelete: SetNull, onUpdate: Cascade, map: "EmpathyValidation_userId_fkey", index: false)
+
+    @@index([attemptId, userId], map: "EmpathyValidation_attemptId_userId_key", unique: true)
+  }
+
+  model GlobalLibraryItem {
+    id                  String                       @id(map: "GlobalLibraryItem_pkey")
+    title               String
+    description         String
+    category            String
+    source              pg.enum(GlobalLibrarySource)
+    createdAt           TimestampString(3)           @default(now())
+    updatedAt           TimestampString(3)
+    contributedBy       String?
+    contributionConsent TimestampString(3)?
+
+    @@index([category], map: "GlobalLibraryItem_category_idx")
+    @@index([source], map: "GlobalLibraryItem_source_idx")
+  }
+
+  model GratitudeEntry {
+    id                  String             @id(map: "GratitudeEntry_pkey")
+    userId              String
+    content             String
+    voiceRecorded       Boolean            @default(false)
+    createdAt           TimestampString(3) @default(now())
+    extractedPeople     String[]?          @default([]) @noCheck(elementNotNull)
+    extractedPlaces     String[]?          @default([]) @noCheck(elementNotNull)
+    extractedActivities String[]?          @default([]) @noCheck(elementNotNull)
+    extractedEmotions   String[]?          @default([]) @noCheck(elementNotNull)
+    extractedThemes     String[]?          @default([]) @noCheck(elementNotNull)
+    linkedNeedIds       Int[]?             @default([]) @noCheck(elementNotNull)
+    linkedConflictId    String?
+    sentimentScore      Float?
+    aiResponse          String?
+    user                User               @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: Cascade, map: "GratitudeEntry_userId_fkey", index: "GratitudeEntry_userId_createdAt_idx")
+
+    @@index([userId, createdAt], map: "GratitudeEntry_userId_createdAt_idx")
+  }
+
+  model GratitudePreferences {
+    id              String    @id(map: "GratitudePreferences_pkey")
+    userId          String
+    enabled         Boolean   @default(true)
+    frequency       Int       @default(1)
+    preferredTimes  String[]? @default(["20:00"]) @noCheck(elementNotNull)
+    weekdayOnly     Boolean   @default(false)
+    quietHoursStart String?
+    quietHoursEnd   String?
+    user            User      @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: Cascade, map: "GratitudePreferences_userId_fkey")
+
+    @@index([userId], map: "GratitudePreferences_userId_key", unique: true)
+  }
+
+  model Insight {
+    id        String               @id(map: "Insight_pkey")
+    userId    String
+    _type     pg.enum(InsightType) @map("type")
+    summary   String
+    data      Jsonb
+    priority  Int                  @default(0)
+    dismissed Boolean              @default(false)
+    expiresAt TimestampString(3)?
+    createdAt TimestampString(3)   @default(now())
+    user      User                 @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: Cascade, map: "Insight_userId_fkey", index: "Insight_userId_dismissed_priority_idx")
+
+    @@index([userId, dismissed, priority], map: "Insight_userId_dismissed_priority_idx")
+    @@index([userId, expiresAt], map: "Insight_userId_expiresAt_idx")
+  }
+
+  model Invitation {
+    id                 String                    @id(map: "Invitation_pkey")
+    sessionId          String
+    invitedById        String
+    name               String?
+    status             pg.enum(InvitationStatus) @default("PENDING")
+    createdAt          TimestampString(3)        @default(now())
+    expiresAt          TimestampString(3)
+    acceptedAt         TimestampString(3)?
+    declinedAt         TimestampString(3)?
+    declineReason      String?
+    messageConfirmed   Boolean                   @default(false)
+    messageConfirmedAt TimestampString(3)?
+    invitedBy          User                      @relation(fields: [invitedById], references: [id], onDelete: Cascade, onUpdate: Cascade, map: "Invitation_invitedById_fkey", index: false)
+    session            Session                   @relation(fields: [sessionId], references: [id], onDelete: Cascade, onUpdate: Cascade, map: "Invitation_sessionId_fkey")
+
+    @@index([sessionId], map: "Invitation_sessionId_idx")
+    @@index([status], map: "Invitation_status_idx")
+  }
+
+  model MeditationFavorite {
+    id              String                @id(map: "MeditationFavorite_pkey")
+    userId          String
+    name            String
+    focusArea       String
+    durationMinutes Int
+    favoriteType    pg.enum(FavoriteType)
+    script          String?
+    savedAt         TimestampString(3)    @default(now())
+    user            User                  @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: Cascade, map: "MeditationFavorite_userId_fkey")
+
+    @@index([userId], map: "MeditationFavorite_userId_idx")
+  }
+
+  model MeditationPreferences {
+    id              String  @id(map: "MeditationPreferences_pkey")
+    userId          String
+    preferredVoice  String  @default("default")
+    voiceSpeed      Float   @default(1)
+    defaultDuration Int     @default(10)
+    backgroundSound String  @default("silence")
+    reminderEnabled Boolean @default(false)
+    reminderTime    String?
+    user            User    @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: Cascade, map: "MeditationPreferences_userId_fkey")
+
+    @@index([userId], map: "MeditationPreferences_userId_key", unique: true)
+  }
+
+  model MeditationSession {
+    id               String                  @id(map: "MeditationSession_pkey")
+    userId           String
+    _type            pg.enum(MeditationType) @map("type")
+    durationMinutes  Int
+    focusArea        String?
+    completed        Boolean                 @default(false)
+    startedAt        TimestampString(3)      @default(now())
+    completedAt      TimestampString(3)?
+    scriptGenerated  String?
+    voiceId          String?
+    backgroundSound  String?
+    savedAsFavorite  Boolean                 @default(false)
+    favoriteType     pg.enum(FavoriteType)?
+    postNotes        String?
+    linkedNeedIds    Int[]?                  @default([]) @noCheck(elementNotNull)
+    linkedConflictId String?
+    user             User                    @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: Cascade, map: "MeditationSession_userId_fkey", index: "MeditationSession_userId_startedAt_idx")
+
+    @@index([userId, startedAt], map: "MeditationSession_userId_startedAt_idx")
+  }
+
+  model MeditationStats {
+    id                 String              @id(map: "MeditationStats_pkey")
+    userId             String
+    totalSessions      Int                 @default(0)
+    guidedCount        Int                 @default(0)
+    unguidedCount      Int                 @default(0)
+    totalMinutes       Int                 @default(0)
+    currentStreak      Int                 @default(0)
+    longestStreak      Int                 @default(0)
+    streakStartDate    TimestampString(3)?
+    lastSessionDate    TimestampString(3)?
+    favoriteFocusAreas Jsonb               @default(json`{}`)
+    user               User                @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: Cascade, map: "MeditationStats_userId_fkey")
+
+    @@index([userId], map: "MeditationStats_userId_key", unique: true)
+  }
+
+  model Message {
+    id                String               @id(map: "Message_pkey")
+    sessionId         String
+    senderId          String?
+    role              pg.enum(MessageRole)
+    content           String
+    stage             Int
+    timestamp         TimestampString(3)   @default(now())
+    extractedNeeds    String[]?            @noCheck(elementNotNull)
+    extractedEmotions String[]?            @noCheck(elementNotNull)
+    forUserId         String?
+    refiningNeedId    String?
+    contentHash       VarChar(64)?
+    refiningNeed      IdentifiedNeed?      @relation(fields: [refiningNeedId], references: [id], onDelete: SetNull, onUpdate: Cascade, map: "Message_refiningNeedId_fkey")
+    sender            User?                @relation(fields: [senderId], references: [id], onDelete: SetNull, onUpdate: Cascade, map: "Message_senderId_fkey")
+    session           Session              @relation(fields: [sessionId], references: [id], onDelete: Cascade, onUpdate: Cascade, map: "Message_sessionId_fkey", index: "Message_sessionId_forUserId_role_contentHash_idx")
+
+    @@index([forUserId], map: "Message_forUserId_idx")
+    @@index([refiningNeedId], map: "Message_refiningNeedId_idx")
+    @@index([senderId], map: "Message_senderId_idx")
+    @@index([sessionId, forUserId, role, contentHash], map: "Message_sessionId_forUserId_role_contentHash_idx")
+    @@index([sessionId, forUserId, role], map: "Message_sessionId_forUserId_role_idx")
+    @@index([sessionId, timestamp], map: "Message_sessionId_timestamp_idx")
+  }
+
+  model Need {
+    id          Int                    @id(map: "Need_pkey")
+    name        String
+    slug        String
+    description String
+    category    pg.enum(NeedsCategory)
+    order       Int
+    needScores  NeedScore[]
+
+    @@index([slug], map: "Need_slug_key", unique: true)
+  }
+
+  model NeedScore {
+    id            String             @id(map: "NeedScore_pkey")
+    userId        String
+    needId        Int
+    score         Int
+    clarification String?
+    createdAt     TimestampString(3) @default(now())
+    need          Need               @relation(fields: [needId], references: [id], onDelete: Cascade, onUpdate: Cascade, map: "NeedScore_needId_fkey", index: false)
+    user          User               @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: Cascade, map: "NeedScore_userId_fkey", index: "NeedScore_userId_createdAt_idx")
+
+    @@index([userId, createdAt], map: "NeedScore_userId_createdAt_idx")
+    @@index([userId, needId], map: "NeedScore_userId_needId_idx")
+  }
+
+  model NeedsAssessmentState {
+    id                   String              @id(map: "NeedsAssessmentState_pkey")
+    userId               String
+    baselineCompleted    Boolean             @default(false)
+    baselineCompletedAt  TimestampString(3)?
+    checkInFrequencyDays Int                 @default(7)
+    lastCheckInNeedId    Int?
+    lastCheckInAt        TimestampString(3)?
+    nextCheckInAt        TimestampString(3)?
+    user                 User                @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: Cascade, map: "NeedsAssessmentState_userId_fkey")
+
+    @@index([userId], map: "NeedsAssessmentState_userId_key", unique: true)
+  }
+
+  model Person {
+    id                        String             @id(map: "Person_pkey")
+    userId                    String
+    name                      String
+    aliases                   String[]?          @default([]) @noCheck(elementNotNull)
+    relationship              String?
+    firstMentioned            TimestampString(3) @default(now())
+    lastMentioned             TimestampString(3) @default(now())
+    mentionCountInnerThoughts Int                @default(0)
+    mentionCountGratitude     Int                @default(0)
+    mentionCountNeeds         Int                @default(0)
+    mentionCountConflict      Int                @default(0)
+    needsConnections          Jsonb              @default(json`{}`)
+    personMentions            PersonMention[]
+    user                      User               @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: Cascade, map: "Person_userId_fkey", index: "Person_userId_lastMentioned_idx")
+
+    @@index([userId, lastMentioned], map: "Person_userId_lastMentioned_idx")
+    @@index([userId, name], map: "Person_userId_name_key", unique: true)
+  }
+
+  model PersonMention {
+    id         String                     @id(map: "PersonMention_pkey")
+    personId   String
+    userId     String
+    sourceType pg.enum(MentionSourceType)
+    sourceId   String
+    context    String?
+    sentiment  Float?
+    createdAt  TimestampString(3)         @default(now())
+    person     Person                     @relation(fields: [personId], references: [id], onDelete: Cascade, onUpdate: Cascade, map: "PersonMention_personId_fkey", index: "PersonMention_personId_createdAt_idx")
+
+    @@index([personId, createdAt], map: "PersonMention_personId_createdAt_idx")
+    @@index([userId, sourceType], map: "PersonMention_userId_sourceType_idx")
+  }
+
+  model PreSessionMessage {
+    id                  String               @id(map: "PreSessionMessage_pkey")
+    userId              String
+    role                pg.enum(MessageRole)
+    content             String
+    timestamp           TimestampString(3)   @default(now())
+    detectedIntent      String?
+    emotionalTone       String?
+    extractedPerson     String?
+    extractedTopic      String?
+    associatedSessionId String?
+    associatedAt        TimestampString(3)?
+    expiresAt           TimestampString(3)
+
+    @@index([expiresAt], map: "PreSessionMessage_expiresAt_idx")
+    @@index([userId, associatedSessionId], map: "PreSessionMessage_userId_associatedSessionId_idx")
+    @@index([userId, timestamp], map: "PreSessionMessage_userId_timestamp_idx")
+  }
+
+  model ReconcilerResult {
+    id                    String                @id(map: "ReconcilerResult_pkey")
+    sessionId             String
+    guesserId             String
+    guesserName           String
+    subjectId             String
+    subjectName           String
+    alignmentScore        Int
+    alignmentSummary      String
+    correctlyIdentified   String[]?             @noCheck(elementNotNull)
+    gapSeverity           String
+    gapSummary            String
+    missedFeelings        String[]?             @noCheck(elementNotNull)
+    misattributions       String[]?             @noCheck(elementNotNull)
+    mostImportantGap      String?
+    recommendedAction     String
+    rationale             String
+    sharingWouldHelp      Boolean
+    suggestedShareFocus   String?
+    createdAt             TimestampString(3)    @default(now())
+    areaHint              String?
+    guidanceType          String?
+    promptSeed            String?
+    suggestedShareContent String?
+    suggestedShareReason  String?
+    iteration             Int                   @default(1)
+    wasCircuitBreakerTrip Boolean               @default(false)
+    supersededAt          TimestampString(3)?
+    reconcilerShareOffer  ReconcilerShareOffer?
+    session               Session               @relation(fields: [sessionId], references: [id], onDelete: Cascade, onUpdate: Cascade, map: "ReconcilerResult_sessionId_fkey")
+
+    @@index([sessionId, guesserId, subjectId], map: "ReconcilerResult_sessionId_guesserId_subjectId_idx")
+    @@index([sessionId], map: "ReconcilerResult_sessionId_idx")
+    @@index([sessionId, subjectId], map: "ReconcilerResult_sessionId_subjectId_idx")
+  }
+
+  model ReconcilerShareOffer {
+    id                     String                               @id(map: "ReconcilerShareOffer_pkey")
+    resultId               String
+    userId                 String
+    status                 pg.enum(ReconcilerShareStatus)       @default("NOT_OFFERED")
+    offerMessage           String?
+    sharedContent          String?
+    sharedAt               TimestampString(3)?
+    declinedAt             TimestampString(3)?
+    skippedAt              TimestampString(3)?
+    createdAt              TimestampString(3)                   @default(now())
+    updatedAt              TimestampString(3)
+    refinedContent         String?
+    suggestedContent       String?
+    suggestedReason        String?
+    deliveredAt            TimestampString(3)?
+    deliveryStatus         pg.enum(SharedContentDeliveryStatus) @default("PENDING")
+    seenAt                 TimestampString(3)?
+    iteration              Int                                  @default(1)
+    refinementChatUsed     Boolean                              @default(false)
+    lastDeliveryNotifiedAt TimestampString(3)?
+    lastSeenNotifiedAt     TimestampString(3)?
+    result                 ReconcilerResult                     @relation(fields: [resultId], references: [id], onDelete: Cascade, onUpdate: Cascade, map: "ReconcilerShareOffer_resultId_fkey")
+
+    @@index([resultId], map: "ReconcilerShareOffer_resultId_key", unique: true)
+    @@index([userId, status], map: "ReconcilerShareOffer_userId_status_idx")
+  }
+
+  model RecurringTheme {
+    id           String             @id(map: "RecurringTheme_pkey")
+    userId       String
+    tag          String
+    sessionCount Int
+    summary      String
+    summaryAt    TimestampString(3)
+    createdAt    TimestampString(3) @default(now())
+    updatedAt    TimestampString(3)
+    user         User               @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: Cascade, map: "RecurringTheme_userId_fkey", index: "RecurringTheme_userId_sessionCount_idx")
+
+    @@index([userId, sessionCount], map: "RecurringTheme_userId_sessionCount_idx")
+    @@index([userId, tag], map: "RecurringTheme_userId_tag_key", unique: true)
+  }
+
+  model RefinementAttemptCounter {
+    id        String             @id(map: "RefinementAttemptCounter_pkey")
+    sessionId String
+    direction String
+    attempts  Int                @default(0)
+    createdAt TimestampString(3) @default(now())
+    updatedAt TimestampString(3)
+    session   Session            @relation(fields: [sessionId], references: [id], onDelete: Cascade, onUpdate: Cascade, map: "RefinementAttemptCounter_sessionId_fkey", index: "RefinementAttemptCounter_sessionId_direction_key")
+
+    @@index([sessionId, direction], map: "RefinementAttemptCounter_sessionId_direction_key", unique: true)
+  }
+
+  model RelationshipMember {
+    id             String             @id(map: "RelationshipMember_pkey")
+    relationshipId String
+    userId         String
+    joinedAt       TimestampString(3) @default(now())
+    role           String             @default("member")
+    nickname       String?
+    relationship   Relationship       @relation(fields: [relationshipId], references: [id], onDelete: Cascade, onUpdate: Cascade, map: "RelationshipMember_relationshipId_fkey", index: "RelationshipMember_relationshipId_userId_key")
+    user           User               @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: Cascade, map: "RelationshipMember_userId_fkey")
+
+    @@index([relationshipId, userId], map: "RelationshipMember_relationshipId_userId_key", unique: true)
+    @@index([userId], map: "RelationshipMember_userId_idx")
+  }
+
+  model SavedMeditation {
+    id              String             @id(map: "SavedMeditation_pkey")
+    userId          String
+    title           String
+    script          String
+    durationSeconds Int
+    conversationId  String?
+    createdAt       TimestampString(3) @default(now())
+    updatedAt       TimestampString(3)
+    user            User               @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: Cascade, map: "SavedMeditation_userId_fkey", index: "SavedMeditation_userId_createdAt_idx")
+
+    @@index([userId, createdAt], map: "SavedMeditation_userId_createdAt_idx")
+  }
+
+  model SessionTakeaway {
+    id                        String                       @id(map: "SessionTakeaway_pkey")
+    sessionId                 String
+    content                   String
+    theme                     String?
+    source                    pg.enum(TakeawaySource)      @default("AI")
+    position                  Int                          @default(0)
+    createdAt                 TimestampString(3)           @default(now())
+    updatedAt                 TimestampString(3)
+    embedding                 pgvector.Vector(1024)?
+    _type                     pg.enum(TakeawayType)        @default("INSIGHT") @map("type")
+    resolved                  Boolean                      @default(false)
+    resolvedAt                TimestampString(3)?
+    session                   InnerWorkSession             @relation(fields: [sessionId], references: [id], onDelete: Cascade, onUpdate: Cascade, map: "SessionTakeaway_sessionId_fkey", index: "SessionTakeaway_sessionId_position_idx")
+    takeawayLinks             TakeawayLink[]               @relation(name: "TakeawayLink_sourceId_fkey")
+    takeawayLinksTakeawayLink TakeawayLink[]               @relation(name: "TakeawayLink_targetId_fkey")
+
+    @@index([sessionId, position], map: "SessionTakeaway_sessionId_position_idx")
+  }
+
+  model Stage4Closure {
+    id                    String                       @id(map: "Stage4Closure_pkey")
+    sessionId             String
+    kind                  pg.enum(Stage4ClosureKind)
+    reason                pg.enum(Stage4ClosureReason)
+    summary               String
+    sharedAgreementIds    String[]?                    @noCheck(elementNotNull)
+    individualProposalIds String[]?                    @noCheck(elementNotNull)
+    openNeedIds           String[]?                    @noCheck(elementNotNull)
+    closedByUserId        String?
+    closedAt              TimestampString(3)           @default(now())
+    createdAt             TimestampString(3)           @default(now())
+    checkInAt             TimestampString(3)?
+    session               Session                      @relation(fields: [sessionId], references: [id], onDelete: Cascade, onUpdate: Cascade, map: "Stage4Closure_sessionId_fkey")
+
+    @@index([sessionId], map: "Stage4Closure_sessionId_key", unique: true)
+  }
+
+  model Stage4NeedCoverage {
+    id                  String             @id(map: "Stage4NeedCoverage_pkey")
+    sessionId           String
+    needId              String?
+    needLabel           String
+    sourceUserId        String?
+    coverageStatus      String
+    coveringProposalIds String[]?          @noCheck(elementNotNull)
+    note                String?
+    updatedAt           TimestampString(3)
+    createdAt           TimestampString(3) @default(now())
+    session             Session            @relation(fields: [sessionId], references: [id], onDelete: Cascade, onUpdate: Cascade, map: "Stage4NeedCoverage_sessionId_fkey")
+
+    @@index([sessionId], map: "Stage4NeedCoverage_sessionId_idx")
+  }
+
+  model Stage4NeedDeclination {
+    id         String             @id(map: "Stage4NeedDeclination_pkey")
+    sessionId  String
+    userId     String
+    needId     String
+    declinedAt TimestampString(3) @default(now())
+    session    Session            @relation(fields: [sessionId], references: [id], onDelete: Cascade, onUpdate: Cascade, map: "Stage4NeedDeclination_sessionId_fkey")
+
+    @@index([sessionId], map: "Stage4NeedDeclination_sessionId_idx")
+    @@index([sessionId, userId, needId], map: "Stage4NeedDeclination_sessionId_userId_needId_key", unique: true)
+  }
+
+  model Stage4ProposalRevision {
+    id          String             @id(map: "Stage4ProposalRevision_pkey")
+    proposalId  String
+    sessionId   String
+    actorUserId String?
+    action      String
+    before      Jsonb?
+    after       Jsonb?
+    reason      String?
+    messageId   String?
+    createdAt   TimestampString(3) @default(now())
+    proposal    StrategyProposal   @relation(fields: [proposalId], references: [id], onDelete: Cascade, onUpdate: Cascade, map: "Stage4ProposalRevision_proposalId_fkey", index: "Stage4ProposalRevision_proposalId_createdAt_idx")
+
+    @@index([proposalId, createdAt], map: "Stage4ProposalRevision_proposalId_createdAt_idx")
+    @@index([sessionId, createdAt], map: "Stage4ProposalRevision_sessionId_createdAt_idx")
+  }
+
+  model Stage4ProposalSelection {
+    id         String                           @id(map: "Stage4ProposalSelection_pkey")
+    proposalId String
+    sessionId  String
+    userId     String
+    decision   pg.enum(Stage4SelectionDecision)
+    note       String?
+    selectedAt TimestampString(3)               @default(now())
+    updatedAt  TimestampString(3)
+    proposal   StrategyProposal                 @relation(fields: [proposalId], references: [id], onDelete: Cascade, onUpdate: Cascade, map: "Stage4ProposalSelection_proposalId_fkey", index: "Stage4ProposalSelection_proposalId_userId_key")
+    session    Session                          @relation(fields: [sessionId], references: [id], onDelete: Cascade, onUpdate: Cascade, map: "Stage4ProposalSelection_sessionId_fkey", index: "Stage4ProposalSelection_sessionId_userId_idx")
+    user       User                             @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: Cascade, map: "Stage4ProposalSelection_userId_fkey", index: false)
+
+    @@index([proposalId, userId], map: "Stage4ProposalSelection_proposalId_userId_key", unique: true)
+    @@index([sessionId, userId], map: "Stage4ProposalSelection_sessionId_userId_idx")
+  }
+
+  model Stage4SubChat {
+    id                    String                       @id(map: "Stage4SubChat_pkey")
+    sessionId             String
+    userId                String
+    anchorKind            pg.enum(Stage4SubChatAnchor)
+    anchorId              String?
+    status                pg.enum(Stage4SubChatStatus) @default("ACTIVE")
+    createdAt             TimestampString(3)           @default(now())
+    resolvedAt            TimestampString(3)?
+    stage4SubChatMessages Stage4SubChatMessage[]
+    session               Session                      @relation(fields: [sessionId], references: [id], onDelete: Cascade, onUpdate: Cascade, map: "Stage4SubChat_sessionId_fkey", index: "Stage4SubChat_sessionId_anchorKind_anchorId_status_idx")
+    user                  User                         @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: Cascade, map: "Stage4SubChat_userId_fkey", index: false)
+
+    @@index([sessionId, anchorKind, anchorId, status], map: "Stage4SubChat_sessionId_anchorKind_anchorId_status_idx")
+    @@index([sessionId, userId, status], map: "Stage4SubChat_sessionId_userId_status_idx")
+  }
+
+  model Stage4SubChatMessage {
+    id        String               @id(map: "Stage4SubChatMessage_pkey")
+    subChatId String
+    role      pg.enum(MessageRole)
+    content   String
+    createdAt TimestampString(3)   @default(now())
+    subChat   Stage4SubChat        @relation(fields: [subChatId], references: [id], onDelete: Cascade, onUpdate: Cascade, map: "Stage4SubChatMessage_subChatId_fkey", index: "Stage4SubChatMessage_subChatId_createdAt_idx")
+
+    @@index([subChatId, createdAt], map: "Stage4SubChatMessage_subChatId_createdAt_idx")
+  }
+
+  model StageProgress {
+    id                   String               @id(map: "StageProgress_pkey")
+    sessionId            String
+    userId               String
+    stage                Int
+    status               pg.enum(StageStatus) @default("IN_PROGRESS")
+    startedAt            TimestampString(3)   @default(now())
+    completedAt          TimestampString(3)?
+    gatesSatisfied       Jsonb?
+    isSynthesisDirty     Boolean              @default(true)
+    synthesisLastUpdated TimestampString(3)?
+    session              Session              @relation(fields: [sessionId], references: [id], onDelete: Cascade, onUpdate: Cascade, map: "StageProgress_sessionId_fkey")
+    user                 User                 @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: Cascade, map: "StageProgress_userId_fkey")
+
+    @@index([sessionId], map: "StageProgress_sessionId_idx")
+    @@index([sessionId, userId, stage], map: "StageProgress_sessionId_userId_stage_key", unique: true)
+    @@index([userId], map: "StageProgress_userId_idx")
+  }
+
+  model StrategyProposalNeed {
+    proposalId String
+    needId     String
+    createdAt  TimestampString(3) @default(now())
+    need       IdentifiedNeed     @relation(fields: [needId], references: [id], onDelete: Cascade, onUpdate: Cascade, map: "StrategyProposalNeed_needId_fkey")
+    proposal   StrategyProposal   @relation(fields: [proposalId], references: [id], onDelete: Cascade, onUpdate: Cascade, map: "StrategyProposalNeed_proposalId_fkey", index: "StrategyProposalNeed_pkey")
+
+    @@id([proposalId, needId], map: "StrategyProposalNeed_pkey")
+    @@index([needId], map: "StrategyProposalNeed_needId_idx")
+  }
+
+  model StrategyRanking {
+    id          String             @id(map: "StrategyRanking_pkey")
+    sessionId   String
+    userId      String
+    rankedIds   String[]?          @noCheck(elementNotNull)
+    submittedAt TimestampString(3) @default(now())
+    session     Session            @relation(fields: [sessionId], references: [id], onDelete: Cascade, onUpdate: Cascade, map: "StrategyRanking_sessionId_fkey", index: "StrategyRanking_sessionId_userId_key")
+    user        User               @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: Cascade, map: "StrategyRanking_userId_fkey", index: false)
+
+    @@index([sessionId, userId], map: "StrategyRanking_sessionId_userId_key", unique: true)
+  }
+
+  model TakeawayLink {
+    id         String                    @id(map: "TakeawayLink_pkey")
+    sourceId   String
+    targetId   String
+    linkType   pg.enum(TakeawayLinkType)
+    similarity Float?
+    createdAt  TimestampString(3)        @default(now())
+    source     SessionTakeaway           @relation(name: "TakeawayLink_sourceId_fkey", fields: [sourceId], references: [id], onDelete: Cascade, onUpdate: Cascade, map: "TakeawayLink_sourceId_fkey")
+    target     SessionTakeaway           @relation(name: "TakeawayLink_targetId_fkey", fields: [targetId], references: [id], onDelete: Cascade, onUpdate: Cascade, map: "TakeawayLink_targetId_fkey")
+
+    @@index([sourceId], map: "TakeawayLink_sourceId_idx")
+    @@index([sourceId, targetId], map: "TakeawayLink_sourceId_targetId_key", unique: true)
+    @@index([targetId], map: "TakeawayLink_targetId_idx")
+  }
+
+  model TendingCoordinationCycle {
+    id                 String                             @id(map: "TendingCoordinationCycle_pkey")
+    sessionId          String
+    createdByUserId    String
+    status             pg.enum(TendingCoordinationStatus) @default("WAITING_FOR_PARTNER")
+    entryIds           String[]?                          @noCheck(elementNotNull)
+    participantUserIds String[]?                          @noCheck(elementNotNull)
+    submittedUserIds   String[]?                          @noCheck(elementNotNull)
+    responseDeadlineAt TimestampString(3)
+    resolvedAt         TimestampString(3)?
+    resultSummary      String?
+    createdAt          TimestampString(3)                 @default(now())
+    updatedAt          TimestampString(3)
+    coordinationKey    String?
+    tendingCheckins    TendingCheckin[]
+    createdByUser      User                               @relation(fields: [createdByUserId], references: [id], onDelete: Cascade, onUpdate: Cascade, map: "TendingCoordinationCycle_createdByUserId_fkey", index: false)
+    session            Session                            @relation(fields: [sessionId], references: [id], onDelete: Cascade, onUpdate: Cascade, map: "TendingCoordinationCycle_sessionId_fkey", index: "TendingCoordinationCycle_sessionId_status_idx")
+
+    @@index([coordinationKey], map: "TendingCoordinationCycle_active_coordinationKey_key", where: "((\"coordinationKey\" IS NOT NULL) AND (status = ANY (ARRAY['WAITING_FOR_PARTNER'::\"TendingCoordinationStatus\", 'READY_TO_RESOLVE'::\"TendingCoordinationStatus\"])))", unique: true)
+    @@index([coordinationKey], map: "TendingCoordinationCycle_coordinationKey_idx")
+    @@index([responseDeadlineAt], map: "TendingCoordinationCycle_responseDeadlineAt_idx")
+    @@index([sessionId, status], map: "TendingCoordinationCycle_sessionId_status_idx")
+  }
+
+  model TendingCheckin {
+    id                        String                      @id(map: "TendingCheckin_pkey")
+    sessionId                 String
+    userId                    String
+    nextAction                pg.enum(TendingNextAction)?
+    continueChoice            pg.enum(ContinueChoice)?
+    reflectionSummary         String?
+    submittedAt               TimestampString(3)          @default(now())
+    createdAt                 TimestampString(3)          @default(now())
+    coordinationCycleId       String?
+    tendingAdjustments        TendingAdjustment[]
+    tendingBetweenPeriodNotes TendingBetweenPeriodNote[]
+    tendingEntryOutcomes      TendingEntryOutcome[]
+    tendingNeedOutcomes       TendingNeedOutcome[]
+    tendingReminders          TendingReminder[]
+    tendingResponses          TendingResponse[]
+    coordinationCycle         TendingCoordinationCycle?   @relation(fields: [coordinationCycleId], references: [id], onDelete: SetNull, onUpdate: Cascade, map: "TendingCheckin_coordinationCycleId_fkey")
+    session                   Session                     @relation(fields: [sessionId], references: [id], onDelete: Cascade, onUpdate: Cascade, map: "TendingCheckin_sessionId_fkey", index: "TendingCheckin_sessionId_submittedAt_idx")
+    user                      User                        @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: Cascade, map: "TendingCheckin_userId_fkey", index: "TendingCheckin_userId_submittedAt_idx")
+
+    @@index([coordinationCycleId], map: "TendingCheckin_coordinationCycleId_idx")
+    @@index([sessionId, submittedAt], map: "TendingCheckin_sessionId_submittedAt_idx")
+    @@index([userId, submittedAt], map: "TendingCheckin_userId_submittedAt_idx")
+  }
+
+  model TendingEntry {
+    id                             String                          @id(map: "TendingEntry_pkey")
+    sessionId                      String
+    agreementId                    String?
+    _type                          pg.enum(TendingEntryType)       @map("type")
+    status                         pg.enum(TendingEntryStatus)     @default("SCHEDULED")
+    scheduledFor                   TimestampString(3)?
+    openedAt                       TimestampString(3)?
+    completedAt                    TimestampString(3)?
+    summary                        String?
+    createdAt                      TimestampString(3)              @default(now())
+    updatedAt                      TimestampString(3)
+    optedInShared                  Boolean                         @default(false)
+    ownerUserId                    String?
+    scope                          pg.enum(TendingEntryScope)      @default("SHARED")
+    tendingAdjustments             TendingAdjustment[]
+    tendingEntryOutcomes           TendingEntryOutcome[]
+    tendingReminders               TendingReminder[]
+    tendingResponses               TendingResponse[]
+    tendingResponsePartialClosures TendingResponsePartialClosure[]
+    agreement                      Agreement?                      @relation(fields: [agreementId], references: [id], onDelete: Cascade, onUpdate: Cascade, map: "TendingEntry_agreementId_fkey")
+    session                        Session                         @relation(fields: [sessionId], references: [id], onDelete: Cascade, onUpdate: Cascade, map: "TendingEntry_sessionId_fkey", index: "TendingEntry_sessionId_scope_ownerUserId_idx")
+
+    @@index([agreementId], map: "TendingEntry_agreementId_idx")
+    @@index([scheduledFor], map: "TendingEntry_scheduledFor_idx")
+    @@index([sessionId, scope, ownerUserId], map: "TendingEntry_sessionId_scope_ownerUserId_idx")
+    @@index([sessionId, status], map: "TendingEntry_sessionId_status_idx")
+  }
+
+  model TendingAdjustment {
+    id                     String                             @id(map: "TendingAdjustment_pkey")
+    sessionId              String
+    checkinId              String
+    tendingEntryId         String
+    userId                 String
+    privacyScope           pg.enum(TendingReminderScope)      @default("PRIVATE")
+    revisedCommitmentText  String?
+    revisedCadence         String?
+    revisedScope           String?
+    revisedSuccessCriteria String?
+    reason                 String?
+    blockerAddressed       pg.enum(TendingBlockerCategory)[]? @noCheck(elementNotNull)
+    createdAt              TimestampString(3)                 @default(now())
+    checkin                TendingCheckin                     @relation(fields: [checkinId], references: [id], onDelete: Cascade, onUpdate: Cascade, map: "TendingAdjustment_checkinId_fkey")
+    session                Session                            @relation(fields: [sessionId], references: [id], onDelete: Cascade, onUpdate: Cascade, map: "TendingAdjustment_sessionId_fkey", index: "TendingAdjustment_sessionId_createdAt_idx")
+    tendingEntry           TendingEntry                       @relation(fields: [tendingEntryId], references: [id], onDelete: Cascade, onUpdate: Cascade, map: "TendingAdjustment_tendingEntryId_fkey")
+    user                   User                               @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: Cascade, map: "TendingAdjustment_userId_fkey", index: "TendingAdjustment_userId_createdAt_idx")
+
+    @@index([checkinId], map: "TendingAdjustment_checkinId_idx")
+    @@index([sessionId, createdAt], map: "TendingAdjustment_sessionId_createdAt_idx")
+    @@index([tendingEntryId], map: "TendingAdjustment_tendingEntryId_idx")
+    @@index([userId, createdAt], map: "TendingAdjustment_userId_createdAt_idx")
+  }
+
+  model TendingBetweenPeriodNote {
+    id                        String              @id(map: "TendingBetweenPeriodNote_pkey")
+    sessionId                 String
+    userId                    String
+    content                   String
+    carryForwardSelected      Boolean             @default(false)
+    consentToShareWithPartner Boolean             @default(false)
+    shareConsentAt            TimestampString(3)?
+    selectedForCheckinId      String?
+    createdAt                 TimestampString(3)  @default(now())
+    updatedAt                 TimestampString(3)
+    selectedForCheckin        TendingCheckin?     @relation(fields: [selectedForCheckinId], references: [id], onDelete: SetNull, onUpdate: Cascade, map: "TendingBetweenPeriodNote_selectedForCheckinId_fkey")
+    session                   Session             @relation(fields: [sessionId], references: [id], onDelete: Cascade, onUpdate: Cascade, map: "TendingBetweenPeriodNote_sessionId_fkey", index: "TendingBetweenPeriodNote_sessionId_userId_createdAt_idx")
+    user                      User                @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: Cascade, map: "TendingBetweenPeriodNote_userId_fkey", index: false)
+
+    @@index([selectedForCheckinId], map: "TendingBetweenPeriodNote_selectedForCheckinId_idx")
+    @@index([sessionId, userId, createdAt], map: "TendingBetweenPeriodNote_sessionId_userId_createdAt_idx")
+  }
+
+  model TendingResponse {
+    id                             String                          @id(map: "TendingResponse_pkey")
+    tendingEntryId                 String
+    userId                         String
+    status                         String
+    reflection                     String?
+    continueChoice                 pg.enum(ContinueChoice)?
+    submittedAt                    TimestampString(3)              @default(now())
+    checkinId                      String?
+    tendingEntryOutcomes           TendingEntryOutcome[]
+    tendingResponsePartialClosures TendingResponsePartialClosure[]
+    checkin                        TendingCheckin?                 @relation(fields: [checkinId], references: [id], onDelete: SetNull, onUpdate: Cascade, map: "TendingResponse_checkinId_fkey")
+    tendingEntry                   TendingEntry                    @relation(fields: [tendingEntryId], references: [id], onDelete: Cascade, onUpdate: Cascade, map: "TendingResponse_tendingEntryId_fkey", index: "TendingResponse_tendingEntryId_userId_key")
+    user                           User                            @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: Cascade, map: "TendingResponse_userId_fkey", index: false)
+
+    @@index([checkinId], map: "TendingResponse_checkinId_idx")
+    @@index([tendingEntryId, userId], map: "TendingResponse_tendingEntryId_userId_key", unique: true)
+  }
+
+  model TendingEntryOutcome {
+    id                  String                              @id(map: "TendingEntryOutcome_pkey")
+    checkinId           String
+    tendingEntryId      String
+    responseId          String?
+    userId              String
+    followThroughStatus pg.enum(TendingFollowThroughStatus)
+    helpfulnessStatus   pg.enum(TendingHelpfulnessStatus)?
+    blockerCategories   pg.enum(TendingBlockerCategory)[]?  @noCheck(elementNotNull)
+    whatHappened        String?
+    helpedNeed          String?
+    blockerNote         String?
+    stillWorthTrying    Boolean?
+    createdAt           TimestampString(3)                  @default(now())
+    checkin             TendingCheckin                      @relation(fields: [checkinId], references: [id], onDelete: Cascade, onUpdate: Cascade, map: "TendingEntryOutcome_checkinId_fkey", index: "TendingEntryOutcome_checkinId_tendingEntryId_key")
+    response            TendingResponse?                    @relation(fields: [responseId], references: [id], onDelete: SetNull, onUpdate: Cascade, map: "TendingEntryOutcome_responseId_fkey", index: false)
+    tendingEntry        TendingEntry                        @relation(fields: [tendingEntryId], references: [id], onDelete: Cascade, onUpdate: Cascade, map: "TendingEntryOutcome_tendingEntryId_fkey")
+    user                User                                @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: Cascade, map: "TendingEntryOutcome_userId_fkey", index: "TendingEntryOutcome_userId_createdAt_idx")
+
+    @@index([checkinId, tendingEntryId], map: "TendingEntryOutcome_checkinId_tendingEntryId_key", unique: true)
+    @@index([tendingEntryId], map: "TendingEntryOutcome_tendingEntryId_idx")
+    @@index([userId, createdAt], map: "TendingEntryOutcome_userId_createdAt_idx")
+  }
+
+  model TendingNeedOutcome {
+    id               String                               @id(map: "TendingNeedOutcome_pkey")
+    checkinId        String
+    sessionId        String
+    needId           String?
+    needLabel        String
+    sourceUserId     String?
+    resolutionStatus pg.enum(TendingNeedResolutionStatus)
+    note             String?
+    changedNeedLabel String?
+    nextAction       pg.enum(TendingNextAction)?
+    createdAt        TimestampString(3)                   @default(now())
+    checkin          TendingCheckin                       @relation(fields: [checkinId], references: [id], onDelete: Cascade, onUpdate: Cascade, map: "TendingNeedOutcome_checkinId_fkey")
+    session          Session                              @relation(fields: [sessionId], references: [id], onDelete: Cascade, onUpdate: Cascade, map: "TendingNeedOutcome_sessionId_fkey", index: "TendingNeedOutcome_sessionId_createdAt_idx")
+
+    @@index([checkinId], map: "TendingNeedOutcome_checkinId_idx")
+    @@index([needId], map: "TendingNeedOutcome_needId_idx")
+    @@index([sessionId, createdAt], map: "TendingNeedOutcome_sessionId_createdAt_idx")
+  }
+
+  model TendingReminder {
+    id             String                        @id(map: "TendingReminder_pkey")
+    sessionId      String
+    checkinId      String?
+    tendingEntryId String?
+    userId         String
+    scope          pg.enum(TendingReminderScope)
+    remindAt       TimestampString(3)
+    cadence        String?
+    note           String?
+    status         String                        @default("SCHEDULED")
+    createdAt      TimestampString(3)            @default(now())
+    updatedAt      TimestampString(3)
+    checkin        TendingCheckin?               @relation(fields: [checkinId], references: [id], onDelete: SetNull, onUpdate: Cascade, map: "TendingReminder_checkinId_fkey")
+    session        Session                       @relation(fields: [sessionId], references: [id], onDelete: Cascade, onUpdate: Cascade, map: "TendingReminder_sessionId_fkey", index: "TendingReminder_sessionId_remindAt_idx")
+    tendingEntry   TendingEntry?                 @relation(fields: [tendingEntryId], references: [id], onDelete: Cascade, onUpdate: Cascade, map: "TendingReminder_tendingEntryId_fkey")
+    user           User                          @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: Cascade, map: "TendingReminder_userId_fkey", index: "TendingReminder_userId_remindAt_idx")
+
+    @@index([checkinId], map: "TendingReminder_checkinId_idx")
+    @@index([sessionId, remindAt], map: "TendingReminder_sessionId_remindAt_idx")
+    @@index([tendingEntryId], map: "TendingReminder_tendingEntryId_idx")
+    @@index([userId, remindAt], map: "TendingReminder_userId_remindAt_idx")
+  }
+
+  model TendingResponsePartialClosure {
+    id                String                            @id(map: "TendingResponsePartialClosure_pkey")
+    tendingResponseId String
+    tendingEntryId    String
+    resolution        pg.enum(PartialClosureResolution)
+    createdAt         TimestampString(3)                @default(now())
+    tendingEntry      TendingEntry                      @relation(fields: [tendingEntryId], references: [id], onDelete: Cascade, onUpdate: Cascade, map: "TendingResponsePartialClosure_tendingEntryId_fkey")
+    tendingResponse   TendingResponse                   @relation(fields: [tendingResponseId], references: [id], onDelete: Cascade, onUpdate: Cascade, map: "TendingResponsePartialClosure_tendingResponseId_fkey", index: "TendingResponsePartialClosure_tendingResponseId_tendingEntr_key")
+
+    @@index([tendingEntryId], map: "TendingResponsePartialClosure_tendingEntryId_idx")
+    @@index([tendingResponseId, tendingEntryId], map: "TendingResponsePartialClosure_tendingResponseId_tendingEntr_key", unique: true)
+  }
+
+  model UserDocument {
+    id        String             @id(map: "UserDocument_pkey")
+    vesselId  String
+    title     String
+    content   String
+    _type     String             @map("type")
+    createdAt TimestampString(3) @default(now())
+    updatedAt TimestampString(3)
+    vessel    UserVessel         @relation(fields: [vesselId], references: [id], onDelete: Cascade, onUpdate: Cascade, map: "UserDocument_vesselId_fkey")
+
+    @@index([vesselId], map: "UserDocument_vesselId_idx")
+  }
+
+  model UserEvent {
+    id           String               @id(map: "UserEvent_pkey")
+    vesselId     String
+    description  String
+    attributedTo pg.enum(Attribution)
+    emotions     String[]?            @noCheck(elementNotNull)
+    timestamp    TimestampString(3)   @default(now())
+    vessel       UserVessel           @relation(fields: [vesselId], references: [id], onDelete: Cascade, onUpdate: Cascade, map: "UserEvent_vesselId_fkey", index: "UserEvent_vesselId_timestamp_idx")
+
+    @@index([vesselId, timestamp], map: "UserEvent_vesselId_timestamp_idx")
+  }
+
+  model UserMemory {
+    id          String                  @id(map: "UserMemory_pkey")
+    userId      String
+    sessionId   String?
+    content     String
+    category    pg.enum(MemoryCategory)
+    status      pg.enum(MemoryStatus)   @default("ACTIVE")
+    source      pg.enum(MemorySource)   @default("USER_APPROVED")
+    suggestedBy String?
+    createdAt   TimestampString(3)      @default(now())
+    updatedAt   TimestampString(3)
+    session     Session?                @relation(fields: [sessionId], references: [id], onDelete: Cascade, onUpdate: Cascade, map: "UserMemory_sessionId_fkey", index: false)
+    user        User                    @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: Cascade, map: "UserMemory_userId_fkey")
+
+    @@index([userId], map: "UserMemory_userId_idx")
+    @@index([userId, sessionId], map: "UserMemory_userId_sessionId_idx")
+  }
+
+  model ValidationFeedbackDraft {
+    id           String             @id(map: "ValidationFeedbackDraft_pkey")
+    sessionId    String
+    userId       String
+    content      String
+    readyToShare Boolean            @default(false)
+    createdAt    TimestampString(3) @default(now())
+    updatedAt    TimestampString(3)
+    session      Session            @relation(fields: [sessionId], references: [id], onDelete: Cascade, onUpdate: Cascade, map: "ValidationFeedbackDraft_sessionId_fkey", index: "ValidationFeedbackDraft_sessionId_userId_key")
+    user         User               @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: Cascade, map: "ValidationFeedbackDraft_userId_fkey", index: false)
+
+    @@index([sessionId, userId], map: "ValidationFeedbackDraft_sessionId_userId_key", unique: true)
+  }
+
+  native_enum ActivityStatus {
+    PENDING = "PENDING"
+    COMPLETED = "COMPLETED"
+    FAILED = "FAILED"
+  }
+
+  native_enum ActivityType {
+    LLM_CALL = "LLM_CALL"
+    EMBEDDING = "EMBEDDING"
+    RETRIEVAL = "RETRIEVAL"
+    TOOL_USE = "TOOL_USE"
+  }
+
+  native_enum AgreementStatus {
+    PROPOSED = "PROPOSED"
+    AGREED = "AGREED"
+    IN_PROGRESS = "IN_PROGRESS"
+    COMPLETED = "COMPLETED"
+    ABANDONED = "ABANDONED"
+  }
+
+  native_enum AgreementType {
+    MICRO_EXPERIMENT = "MICRO_EXPERIMENT"
+    COMMITMENT = "COMMITMENT"
+    CHECK_IN = "CHECK_IN"
+    HYBRID = "HYBRID"
+  }
+
+  native_enum Attribution {
+    SELF = "SELF"
+    OTHER = "OTHER"
+    MUTUAL = "MUTUAL"
+    EXTERNAL = "EXTERNAL"
+  }
+
+  native_enum BrainActivityCallType {
+    ORCHESTRATED_RESPONSE = "ORCHESTRATED_RESPONSE"
+    RETRIEVAL_PLANNING = "RETRIEVAL_PLANNING"
+    INTENT_DETECTION = "INTENT_DETECTION"
+    BACKGROUND_CLASSIFICATION = "BACKGROUND_CLASSIFICATION"
+    PARTNER_SESSION_CLASSIFICATION = "PARTNER_SESSION_CLASSIFICATION"
+    CHAT_ROUTER_RESPONSE = "CHAT_ROUTER_RESPONSE"
+    REFERENCE_DETECTION = "REFERENCE_DETECTION"
+    PEOPLE_EXTRACTION = "PEOPLE_EXTRACTION"
+    MEMORY_DETECTION = "MEMORY_DETECTION"
+    MEMORY_VALIDATION = "MEMORY_VALIDATION"
+    RECONCILER_ANALYSIS = "RECONCILER_ANALYSIS"
+    SUMMARIZATION = "SUMMARIZATION"
+    NEEDS_EXTRACTION = "NEEDS_EXTRACTION"
+    WITNESSING_RESPONSE = "WITNESSING_RESPONSE"
+    MEMORY_FORMATTING = "MEMORY_FORMATTING"
+    THEME_EXTRACTION = "THEME_EXTRACTION"
+    GLOBAL_MEMORY_CONSOLIDATION = "GLOBAL_MEMORY_CONSOLIDATION"
+    DISTILLATION = "DISTILLATION"
+    CROSS_SESSION_THEME = "CROSS_SESSION_THEME"
+  }
+
+  native_enum ConsentContentType {
+    IDENTIFIED_NEED = "IDENTIFIED_NEED"
+    EVENT_SUMMARY = "EVENT_SUMMARY"
+    EMOTIONAL_PATTERN = "EMOTIONAL_PATTERN"
+    BOUNDARY = "BOUNDARY"
+    EMPATHY_DRAFT = "EMPATHY_DRAFT"
+    EMPATHY_ATTEMPT = "EMPATHY_ATTEMPT"
+    STRATEGY_PROPOSAL = "STRATEGY_PROPOSAL"
+  }
+
+  native_enum ConsentDecision {
+    GRANTED = "GRANTED"
+    DENIED = "DENIED"
+    REVOKED = "REVOKED"
+  }
+
+  native_enum ContinueChoice {
+    ANOTHER_ROUND = "ANOTHER_ROUND"
+    EXTEND = "EXTEND"
+    NEW_PROCESS = "NEW_PROCESS"
+    PARTIAL_CLOSURE = "PARTIAL_CLOSURE"
+    FULL_CLOSURE = "FULL_CLOSURE"
+  }
+
+  native_enum EmpathyStatus {
+    HELD = "HELD"
+    ANALYZING = "ANALYZING"
+    NEEDS_WORK = "NEEDS_WORK"
+    REVEALED = "REVEALED"
+    VALIDATED = "VALIDATED"
+    AWAITING_SHARING = "AWAITING_SHARING"
+    REFINING = "REFINING"
+    READY = "READY"
+  }
+
+  native_enum ExerciseType {
+    BREATHING_EXERCISE = "BREATHING_EXERCISE"
+    BODY_SCAN = "BODY_SCAN"
+    GROUNDING = "GROUNDING"
+    PAUSE_SESSION = "PAUSE_SESSION"
+  }
+
+  native_enum FavoriteType {
+    EXACT = "EXACT"
+    THEME = "THEME"
+  }
+
+  native_enum GlobalLibrarySource {
+    CURATED = "CURATED"
+    CONTRIBUTED = "CONTRIBUTED"
+  }
+
+  native_enum InnerWorkStatus {
+    ACTIVE = "ACTIVE"
+    COMPLETED = "COMPLETED"
+    ARCHIVED = "ARCHIVED"
+  }
+
+  native_enum InsightType {
+    PATTERN = "PATTERN"
+    CONTRADICTION = "CONTRADICTION"
+    SUGGESTION = "SUGGESTION"
+  }
+
+  native_enum InvitationStatus {
+    PENDING = "PENDING"
+    ACCEPTED = "ACCEPTED"
+    DECLINED = "DECLINED"
+    EXPIRED = "EXPIRED"
+  }
+
+  native_enum MeditationType {
+    GUIDED = "GUIDED"
+    UNGUIDED = "UNGUIDED"
+  }
+
+  native_enum MemoryCategory {
+    AI_NAME = "AI_NAME"
+    LANGUAGE = "LANGUAGE"
+    COMMUNICATION = "COMMUNICATION"
+    PERSONAL_INFO = "PERSONAL_INFO"
+    RELATIONSHIP = "RELATIONSHIP"
+    PREFERENCE = "PREFERENCE"
+  }
+
+  native_enum MemorySource {
+    USER_APPROVED = "USER_APPROVED"
+    USER_CREATED = "USER_CREATED"
+    USER_EDITED = "USER_EDITED"
+  }
+
+  native_enum MemoryStatus {
+    ACTIVE = "ACTIVE"
+    REJECTED = "REJECTED"
+    PENDING = "PENDING"
+  }
+
+  native_enum MentionSourceType {
+    INNER_THOUGHTS = "INNER_THOUGHTS"
+    GRATITUDE = "GRATITUDE"
+    NEEDS_CHECKIN = "NEEDS_CHECKIN"
+    PARTNER_SESSION = "PARTNER_SESSION"
+  }
+
+  native_enum MessageRole {
+    USER = "USER"
+    AI = "AI"
+    SYSTEM = "SYSTEM"
+    EMPATHY_STATEMENT = "EMPATHY_STATEMENT"
+    EMPATHY_REVEAL_INTRO = "EMPATHY_REVEAL_INTRO"
+    EMPATHY_VALIDATION_PROMPT = "EMPATHY_VALIDATION_PROMPT"
+    SHARED_CONTEXT = "SHARED_CONTEXT"
+    SHARE_SUGGESTION = "SHARE_SUGGESTION"
+    VALIDATION_FEEDBACK = "VALIDATION_FEEDBACK"
+  }
+
+  native_enum NeedCategory {
+    SAFETY = "SAFETY"
+    CONNECTION = "CONNECTION"
+    AUTONOMY = "AUTONOMY"
+    RECOGNITION = "RECOGNITION"
+    MEANING = "MEANING"
+    FAIRNESS = "FAIRNESS"
+  }
+
+  native_enum NeedsCategory {
+    FOUNDATION = "FOUNDATION"
+    EMOTIONAL = "EMOTIONAL"
+    RELATIONAL = "RELATIONAL"
+    INTEGRATION = "INTEGRATION"
+    TRANSCENDENCE = "TRANSCENDENCE"
+  }
+
+  native_enum PartialClosureResolution {
+    RESOLVED = "RESOLVED"
+    CONTINUING = "CONTINUING"
+  }
+
+  native_enum ReconcilerShareStatus {
+    NOT_OFFERED = "NOT_OFFERED"
+    OFFERED = "OFFERED"
+    ACCEPTED = "ACCEPTED"
+    DECLINED = "DECLINED"
+    SKIPPED = "SKIPPED"
+    PENDING = "PENDING"
+    EXPIRED = "EXPIRED"
+  }
+
+  native_enum SessionStatus {
+    CREATED = "CREATED"
+    INVITED = "INVITED"
+    ACTIVE = "ACTIVE"
+    PAUSED = "PAUSED"
+    WAITING = "WAITING"
+    RESOLVED = "RESOLVED"
+    ABANDONED = "ABANDONED"
+    ARCHIVED = "ARCHIVED"
+  }
+
+  native_enum SessionType {
+    CONFLICT_RESOLUTION = "CONFLICT_RESOLUTION"
+    INNER_WORK = "INNER_WORK"
+  }
+
+  native_enum SharedContentDeliveryStatus {
+    PENDING = "PENDING"
+    DELIVERED = "DELIVERED"
+    SEEN = "SEEN"
+  }
+
+  native_enum Stage4ClosureKind {
+    SHARED_AGREEMENT = "SHARED_AGREEMENT"
+    NO_SHARED_AGREEMENT = "NO_SHARED_AGREEMENT"
+  }
+
+  native_enum Stage4ClosureReason {
+    MUTUAL_SELECTION = "MUTUAL_SELECTION"
+    NO_OVERLAP = "NO_OVERLAP"
+    BOUNDARY_HONORED = "BOUNDARY_HONORED"
+    USER_STOPPED = "USER_STOPPED"
+  }
+
+  native_enum Stage4ProposalKind {
+    SHARED_PROPOSAL = "SHARED_PROPOSAL"
+    INDIVIDUAL_COMMITMENT = "INDIVIDUAL_COMMITMENT"
+  }
+
+  native_enum Stage4ProposalStatus {
+    ACTIVE = "ACTIVE"
+    REVISED = "REVISED"
+    REMOVED = "REMOVED"
+    CONVERTED_TO_AGREEMENT = "CONVERTED_TO_AGREEMENT"
+  }
+
+  native_enum Stage4SelectionDecision {
+    WILLING = "WILLING"
+    NOT_WILLING = "NOT_WILLING"
+  }
+
+  native_enum Stage4SubChatAnchor {
+    NEEDS_BRAINSTORM = "NEEDS_BRAINSTORM"
+    PROPOSAL_REFINEMENT = "PROPOSAL_REFINEMENT"
+    NO_OVERLAP = "NO_OVERLAP"
+  }
+
+  native_enum Stage4SubChatStatus {
+    ACTIVE = "ACTIVE"
+    RESOLVED = "RESOLVED"
+  }
+
+  native_enum StageStatus {
+    NOT_STARTED = "NOT_STARTED"
+    IN_PROGRESS = "IN_PROGRESS"
+    GATE_PENDING = "GATE_PENDING"
+    COMPLETED = "COMPLETED"
+  }
+
+  native_enum StrategySource {
+    USER_SUBMITTED = "USER_SUBMITTED"
+    AI_SUGGESTED = "AI_SUGGESTED"
+    CURATED = "CURATED"
+  }
+
+  native_enum TakeawayLinkType {
+    AI_SEMANTIC = "AI_SEMANTIC"
+    USER_MANUAL = "USER_MANUAL"
+  }
+
+  native_enum TakeawaySource {
+    AI = "AI"
+    USER = "USER"
+  }
+
+  native_enum TakeawayType {
+    INSIGHT = "INSIGHT"
+    ACTION_ITEM = "ACTION_ITEM"
+    INTENTION = "INTENTION"
+  }
+
+  native_enum TendingBlockerCategory {
+    FORGOT = "FORGOT"
+    TOO_HARD = "TOO_HARD"
+    TOO_FREQUENT = "TOO_FREQUENT"
+    UNCLEAR = "UNCLEAR"
+    PARTNER_DID_NOT_DO_PART = "PARTNER_DID_NOT_DO_PART"
+    I_DID_NOT_DO_PART = "I_DID_NOT_DO_PART"
+    CIRCUMSTANCES_CHANGED = "CIRCUMSTANCES_CHANGED"
+    NO_LONGER_WANTED = "NO_LONGER_WANTED"
+    OTHER = "OTHER"
+  }
+
+  native_enum TendingCoordinationStatus {
+    WAITING_FOR_PARTNER = "WAITING_FOR_PARTNER"
+    READY_TO_RESOLVE = "READY_TO_RESOLVE"
+    RESOLVED = "RESOLVED"
+    TIMED_OUT = "TIMED_OUT"
+  }
+
+  native_enum TendingEntryScope {
+    SHARED = "SHARED"
+    INDIVIDUAL = "INDIVIDUAL"
+  }
+
+  native_enum TendingEntryStatus {
+    SCHEDULED = "SCHEDULED"
+    OPEN = "OPEN"
+    PARTIAL = "PARTIAL"
+    COMPLETED = "COMPLETED"
+    EXPIRED = "EXPIRED"
+    CANCELLED = "CANCELLED"
+  }
+
+  native_enum TendingEntryType {
+    SCHEDULED_SHARED_AGREEMENT_CHECKIN = "SCHEDULED_SHARED_AGREEMENT_CHECKIN"
+    USER_INITIATED_REENTRY = "USER_INITIATED_REENTRY"
+    SCHEDULED_INDIVIDUAL_COMMITMENT_CHECKIN = "SCHEDULED_INDIVIDUAL_COMMITMENT_CHECKIN"
+  }
+
+  native_enum TendingFollowThroughStatus {
+    HAPPENED = "HAPPENED"
+    PARTLY_HAPPENED = "PARTLY_HAPPENED"
+    DID_NOT_HAPPEN = "DID_NOT_HAPPEN"
+    NOT_SURE = "NOT_SURE"
+  }
+
+  native_enum TendingHelpfulnessStatus {
+    HELPED = "HELPED"
+    PARTLY_HELPED = "PARTLY_HELPED"
+    DID_NOT_HELP = "DID_NOT_HELP"
+    NOT_SURE = "NOT_SURE"
+  }
+
+  native_enum TendingNeedResolutionStatus {
+    RESOLVED = "RESOLVED"
+    IMPROVING = "IMPROVING"
+    STILL_OPEN = "STILL_OPEN"
+    CHANGED = "CHANGED"
+    NOT_SURE = "NOT_SURE"
+  }
+
+  native_enum TendingNextAction {
+    FULL_CLOSURE = "FULL_CLOSURE"
+    EXTEND = "EXTEND"
+    ADJUST_COMMITMENT = "ADJUST_COMMITMENT"
+    REOPEN_STRATEGY_WORK = "REOPEN_STRATEGY_WORK"
+    NEW_PROCESS = "NEW_PROCESS"
+    PARTIAL_CLOSURE = "PARTIAL_CLOSURE"
+  }
+
+  native_enum TendingReminderScope {
+    PRIVATE = "PRIVATE"
+    SHARED = "SHARED"
+  }
+}

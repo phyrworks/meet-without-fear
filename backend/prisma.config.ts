@@ -12,6 +12,7 @@ export default definePrismaConfig({
   orm: ormConfig({
     extensions: [pgvector],
     contract: prisma7Schema('prisma/schema.prisma'),
+    migrations: { dir: './prisma8/migrations' },
     db: {
       connection: process.env['DATABASE_URL']!,
     },
