@@ -1688,7 +1688,7 @@ namespace public {
   }
 
   // --- E4 experiment: owner-only RLS on UserMemory for role mwf_app ---
-  policy_select user_memory_owner_select {
+  policy_select user_memory_owner_read {
     target = UserMemory
     roles  = [mwf_app]
     using  = "\"userId\" = current_setting('app.current_user_id', true)"

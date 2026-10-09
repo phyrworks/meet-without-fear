@@ -1,0 +1,45 @@
+[
+  {
+    "id": "rlsPolicy.public.UserMemory.user_memory_owner_select_0fda1f08.rename",
+    "label": "Rename RLS policy \"user_memory_owner_select_0fda1f08\" to \"user_memory_owner_read_0fda1f08\" on \"UserMemory\"",
+    "operationClass": "widening",
+    "target": {
+      "id": "postgres",
+      "details": {
+        "schema": "public",
+        "objectType": "rlsPolicy",
+        "name": "user_memory_owner_read_0fda1f08",
+        "table": "UserMemory"
+      }
+    },
+    "precheck": [
+      {
+        "description": "ensure RLS policy \"user_memory_owner_select_0fda1f08\" exists",
+        "sql": "SELECT EXISTS (SELECT 1 AS \"one\" FROM \"pg_policies\" WHERE (\"schemaname\" = $1 AND \"tablename\" = $2 AND \"policyname\" = $3)) AS \"result\"",
+        "params": [
+          "public",
+          "UserMemory",
+          "user_memory_owner_select_0fda1f08"
+        ]
+      }
+    ],
+    "execute": [
+      {
+        "description": "rename RLS policy \"user_memory_owner_select_0fda1f08\" to \"user_memory_owner_read_0fda1f08\"",
+        "sql": "ALTER POLICY \"user_memory_owner_select_0fda1f08\" ON \"public\".\"UserMemory\" RENAME TO \"user_memory_owner_read_0fda1f08\"",
+        "params": []
+      }
+    ],
+    "postcheck": [
+      {
+        "description": "verify RLS policy \"user_memory_owner_read_0fda1f08\" exists",
+        "sql": "SELECT EXISTS (SELECT 1 AS \"one\" FROM \"pg_policies\" WHERE (\"schemaname\" = $1 AND \"tablename\" = $2 AND \"policyname\" = $3)) AS \"result\"",
+        "params": [
+          "public",
+          "UserMemory",
+          "user_memory_owner_read_0fda1f08"
+        ]
+      }
+    ]
+  }
+]

@@ -12745,13 +12745,13 @@
               "tableName": "UserMemory",
               "withCheck": "\"userId\" = current_setting('app.current_user_id', true)"
             },
-            "user_memory_owner_select": {
+            "user_memory_owner_read": {
               "kind": "policy",
-              "name": "user_memory_owner_select_0fda1f08",
+              "name": "user_memory_owner_read_0fda1f08",
               "namespaceId": "public",
               "operation": "select",
               "permissive": true,
-              "prefix": "user_memory_owner_select",
+              "prefix": "user_memory_owner_read",
               "roles": [
                 "mwf_app"
               ],
@@ -22949,7 +22949,7 @@
         "kind": "postgres-schema"
       }
     },
-    "storageHash": "557229df553e8d9f5238930b7220a54709af28ff020d9dbfdb9060a528ab4325"
+    "storageHash": "dd3181deac81e028bbc91d79f32b15721f3f7c09dcc767228a78346da7964811"
   },
   "capabilities": {
     "postgres": {
