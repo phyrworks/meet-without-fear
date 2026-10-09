@@ -128,7 +128,9 @@ jobs:
         run: npm run check
 
       - name: Run database migrations
-        run: npx prisma migrate deploy --schema=backend/prisma/schema.prisma
+        # Prisma 7 reads the URL from prisma.config.ts, which the CLI only
+        # finds in its cwd; from the repo root, point at it explicitly.
+        run: npx prisma migrate deploy --config=backend/prisma.config.ts
 
       # Scope to backend + shared. Mobile's jest setup has a pre-existing
       # `__fbBatchedBridgeConfig is not set` failure (all 42 suites red on
