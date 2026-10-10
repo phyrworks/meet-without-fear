@@ -1025,7 +1025,6 @@ export class StateFactory {
     // Create ReconcilerResult with significant gaps
     const reconcilerResult = await tx.reconcilerResult.create({
       data: {
-        id: `reconciler-${sessionId}-${Date.now()}`,
         sessionId,
         guesserId: userAId,
         guesserName: userAName,
@@ -1316,7 +1315,6 @@ export class StateFactory {
     // Create ReconcilerResult (the analysis that found gaps)
     const reconcilerResult = await tx.reconcilerResult.create({
       data: {
-        id: `reconciler-${sessionId}-${Date.now()}`,
         sessionId,
         guesserId: userAId, // User A is the one who needs help understanding
         guesserName: userAName,
