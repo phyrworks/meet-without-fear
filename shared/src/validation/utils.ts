@@ -14,8 +14,6 @@ import { ErrorCode } from '../api';
 /** UUID validation */
 export const uuid = z.string().uuid('Invalid ID format');
 
-/** CUID validation */
-export const cuid = z.string().cuid('Invalid ID format');
 
 /** Non-empty string with configurable field name */
 export const nonEmptyString = (field: string) =>

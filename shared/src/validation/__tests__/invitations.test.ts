@@ -9,16 +9,16 @@ import {
 } from '../invitations';
 
 describe('acceptInvitationParamsSchema', () => {
-  it('accepts valid CUID', () => {
+  it('accepts valid UUID', () => {
     const result = acceptInvitationParamsSchema.safeParse({
-      invitationId: 'clxxxxxxxxxxxxxxxxxx123',
+      invitationId: '0190f3a2-6c1e-7b4d-9a8e-3f2b1c0d4e51',
     });
     expect(result.success).toBe(true);
   });
 
-  it('rejects invalid CUID', () => {
+  it('rejects invalid UUID', () => {
     const result = acceptInvitationParamsSchema.safeParse({
-      invitationId: 'not-a-cuid',
+      invitationId: 'not-a-uuid',
     });
     expect(result.success).toBe(false);
   });
@@ -30,16 +30,16 @@ describe('acceptInvitationParamsSchema', () => {
 });
 
 describe('resendInvitationRequestSchema', () => {
-  it('accepts valid CUID', () => {
+  it('accepts valid UUID', () => {
     const result = resendInvitationRequestSchema.safeParse({
-      invitationId: 'clxxxxxxxxxxxxxxxxxx123',
+      invitationId: '0190f3a2-6c1e-7b4d-9a8e-3f2b1c0d4e51',
     });
     expect(result.success).toBe(true);
   });
 
-  it('rejects invalid CUID', () => {
+  it('rejects invalid UUID', () => {
     const result = resendInvitationRequestSchema.safeParse({
-      invitationId: 'not-a-cuid',
+      invitationId: 'not-a-uuid',
     });
     expect(result.success).toBe(false);
   });

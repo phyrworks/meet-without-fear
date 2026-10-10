@@ -186,7 +186,7 @@ describe('recordEmotionRequestSchema', () => {
 describe('confirmNeedsRequestSchema', () => {
   it('accepts valid needIds', () => {
     const result = confirmNeedsRequestSchema.safeParse({
-      needIds: ['clxxxxxxxxxxxxxxxxxx123', 'clxxxxxxxxxxxxxxxxxx456'],
+      needIds: ['0190f3a2-6c1e-7b4d-9a8e-3f2b1c0d4e51', '0190f3a2-6c1e-7b4d-9a8e-3f2b1c0d4e52'],
     });
     expect(result.success).toBe(true);
   });
@@ -200,10 +200,10 @@ describe('confirmNeedsRequestSchema', () => {
 
   it('accepts with adjustments', () => {
     const result = confirmNeedsRequestSchema.safeParse({
-      needIds: ['clxxxxxxxxxxxxxxxxxx123'],
+      needIds: ['0190f3a2-6c1e-7b4d-9a8e-3f2b1c0d4e51'],
       adjustments: [
         {
-          needId: 'clxxxxxxxxxxxxxxxxxx123',
+          needId: '0190f3a2-6c1e-7b4d-9a8e-3f2b1c0d4e51',
           confirmed: true,
         },
       ],
@@ -213,10 +213,10 @@ describe('confirmNeedsRequestSchema', () => {
 
   it('accepts adjustment with correction', () => {
     const result = confirmNeedsRequestSchema.safeParse({
-      needIds: ['clxxxxxxxxxxxxxxxxxx123'],
+      needIds: ['0190f3a2-6c1e-7b4d-9a8e-3f2b1c0d4e51'],
       adjustments: [
         {
-          needId: 'clxxxxxxxxxxxxxxxxxx123',
+          needId: '0190f3a2-6c1e-7b4d-9a8e-3f2b1c0d4e51',
           confirmed: false,
           correction: "That's not quite right, I meant...",
         },
@@ -265,7 +265,7 @@ describe('proposeStrategyRequestSchema', () => {
 describe('rankStrategiesRequestSchema', () => {
   it('accepts valid rankings', () => {
     const result = rankStrategiesRequestSchema.safeParse({
-      rankedIds: ['clxxxxxxxxxxxxxxxxxx123', 'clxxxxxxxxxxxxxxxxxx456'],
+      rankedIds: ['0190f3a2-6c1e-7b4d-9a8e-3f2b1c0d4e51', '0190f3a2-6c1e-7b4d-9a8e-3f2b1c0d4e52'],
     });
     expect(result.success).toBe(true);
   });

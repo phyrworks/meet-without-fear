@@ -72,11 +72,11 @@ export type SessionDetailInput = z.infer<typeof sessionDetailSchema>;
 
 export const createSessionRequestSchema = z
   .object({
-    personId: z.string().cuid().optional(),
+    personId: z.string().uuid().optional(),
     inviteName: z.string().min(1, 'Name is required').max(100, 'Name too long').optional(),
     context: z.string().max(500, 'Context too long').optional(),
-    innerThoughtsId: z.string().cuid().optional(), // Link to originating Inner Thoughts session
-    linkedAtMessageId: z.string().cuid().optional(),
+    innerThoughtsId: z.string().uuid().optional(), // Link to originating Inner Thoughts session
+    linkedAtMessageId: z.string().uuid().optional(),
     forceCreate: z.boolean().optional(),
   })
   .refine(data => data.personId || data.inviteName, {
@@ -197,7 +197,7 @@ export const invitationSchema = z.object({
 export type InvitationInput = z.infer<typeof invitationSchema>;
 
 export const acceptInvitationRequestSchema = z.object({
-  invitationId: z.string().cuid('Invalid invitation ID'),
+  invitationId: z.string().uuid('Invalid invitation ID'),
 });
 
 export type AcceptInvitationRequestInput = z.infer<typeof acceptInvitationRequestSchema>;

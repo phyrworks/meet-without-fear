@@ -6,7 +6,7 @@
  */
 
 import { z } from 'zod';
-import { cuid } from './utils';
+import { uuid } from './utils';
 
 // Re-export from contracts
 export {
@@ -30,13 +30,13 @@ export {
 // ============================================================================
 
 export const acceptInvitationParamsSchema = z.object({
-  invitationId: cuid,
+  invitationId: uuid,
 });
 
 export type AcceptInvitationParamsInput = z.infer<typeof acceptInvitationParamsSchema>;
 
 export const resendInvitationRequestSchema = z.object({
-  invitationId: cuid,
+  invitationId: uuid,
 });
 
 export type ResendInvitationRequestInput = z.infer<typeof resendInvitationRequestSchema>;
