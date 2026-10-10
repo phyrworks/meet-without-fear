@@ -4,7 +4,7 @@
  * These exist because of a specific defect: rebuilding the `FEEL_HEARD_B`
  * fixture turned the `empathy-reveal` golden red for reasons that had nothing to
  * do with the code under test. Measured on a real rebuild, **exactly four values
- * changed across both goldens and all four were `User.clerkId`** — every cuid,
+ * changed across both goldens and all four were `User.clerkId`** — every id,
  * every timestamp rank and every trace field was byte-identical, which is the
  * structural-label design working everywhere except on the one identifier it did
  * not recognise.
@@ -19,28 +19,29 @@ import { normalize, LabelMap } from '../normalize';
 function labelMap(extra: Record<string, string> = {}): LabelMap {
   return {
     labels: new Map<string, string>([
-      ['claaaaaaaaaaaaaaaaaaaaaaa', '<user:ada>'],
-      ['cbbbbbbbbbbbbbbbbbbbbbbbb', '<user:bob>'],
+      ['0190f3a2-6c1e-7b4d-9a8e-00000000000a', '<user:ada>'],
+      ['0190f3a2-6c1e-7b4d-9a8e-00000000000b', '<user:bob>'],
       ...Object.entries(extra),
     ]),
   };
 }
 
 describe('clerkId normalization — the two formats', () => {
-  // `middleware/auth.ts:91` builds `e2e_${userId}` from a cuid. This is the case
-  // the `(?<![a-z0-9])` boundary on CUID_RE exists for: `\b` would not match
-  // inside `e2e_c…` because `_` is a word character. A review suggested this
-  // case does not occur and the boundary guards nothing — it does occur, on
+  // `middleware/auth.ts` builds `e2e_${userId}` from a user id (a uuid since
+  // cuid_to_uuidv7). This is the case the lookbehind on UUID_RE / CUID_RE exists
+  // for: `\b` would not match after `e2e_` because `_` is a word character. A
+  // review suggested this case does not occur and the boundary guards nothing —
+  // it does occur, on
   // every request through the E2E bypass, and it is visible in the recorded
   // golden as `"clerkId": "e2e_<user:bob>"`.
-  it('normalizes the auth-bypass format, which embeds a cuid', () => {
-    const r = normalize({ clerkId: 'e2e_cbbbbbbbbbbbbbbbbbbbbbbbb' }, labelMap());
+  it('normalizes the auth-bypass format, which embeds a user id', () => {
+    const r = normalize({ clerkId: 'e2e_0190f3a2-6c1e-7b4d-9a8e-00000000000b' }, labelMap());
     expect(r.value).toEqual({ clerkId: 'e2e_<user:bob>' });
     expect(r.unresolved).toEqual([]);
   });
 
   // `state-factory.ts:150` builds `e2e_${Date.now()}_${random}`, which contains
-  // no cuid at all, so CUID_RE cannot see it. This is the format that leaked.
+  // no id at all, so the id patterns cannot see it. This is the format that leaked.
   it('normalizes the seeded format from its owner, when the label map knows it', () => {
     const map = labelMap({ e2e_1787097373886_xa944v: '<clerkId:bob>' });
     const r = normalize({ clerkId: 'e2e_1787097373886_xa944v' }, map);
@@ -61,7 +62,7 @@ describe('clerkId normalization — the two formats', () => {
     // bypass rewrite on `after`.
     const map = labelMap({ e2e_1787097373886_xa944v: '<clerkId:bob>' });
     const r = normalize(
-      { before: { clerkId: 'e2e_1787097373886_xa944v' }, after: { clerkId: 'e2e_cbbbbbbbbbbbbbbbbbbbbbbbb' } },
+      { before: { clerkId: 'e2e_1787097373886_xa944v' }, after: { clerkId: 'e2e_0190f3a2-6c1e-7b4d-9a8e-00000000000b' } },
       map,
     );
     expect(r.value).toEqual({ before: { clerkId: '<clerkId:bob>' }, after: { clerkId: 'e2e_<user:bob>' } });

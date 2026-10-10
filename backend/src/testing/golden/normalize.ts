@@ -12,7 +12,8 @@
  *    each row's natural key instead, so a swap reads as
  *    `<user:ada>` where `<user:bob>` was expected.
  *
- * 2. **Any cuid-shaped token that does not resolve fails the run.** Silently
+ * 2. **Any id-shaped token (uuid, or legacy cuid) that does not resolve fails
+ *    the run.** Silently
  *    normalizing an unknown id would hide exactly the rows a regression
  *    introduced.
  *
@@ -35,6 +36,18 @@ import type { FixtureManifest } from './fixtures';
  * a hole straight through the tripwire.
  */
 const CUID_RE = /(?<![a-z0-9])c[a-z0-9]{24}(?![a-z0-9])/g;
+
+/**
+ * Every primary key is a database-minted UUIDv7 since `cuid_to_uuidv7`. Any
+ * version is matched, not just 7: an id the app minted itself (v4 from
+ * `crypto.randomUUID()`) is still an id and must resolve or fail. CUID_RE stays
+ * as a tripwire for a cuid surviving anywhere.
+ *
+ * Same boundary reasoning as CUID_RE: `e2e_${userId}` puts `_` directly before
+ * the id, so the lookbehind excludes only alphanumerics. `-` must stay allowed
+ * too: the mobile chat list builds ids like `context-shared-${messageId}`.
+ */
+const UUID_RE = /(?<![0-9a-zA-Z])[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(?![0-9a-zA-Z])/g;
 
 /**
  * The *other* clerkId format, and the second volatile-identifier tripwire.
@@ -94,7 +107,7 @@ export async function buildLabelMap(
   }
 
   // `User.clerkId` as seeded is `e2e_${Date.now()}_${random}` — a per-build
-  // identifier with no cuid in it, so nothing else here recognises it. Labelled
+  // identifier with no id in it, so nothing else here recognises it. Labelled
   // from its owner, the same natural-key derivation everything else uses, so a
   // clerkId that ends up on the wrong user still reads as a mismatch rather than
   // collapsing to a shared placeholder.
@@ -155,7 +168,7 @@ export async function buildLabelMap(
         const group = `${who}/${r.targetType}`;
         const n = (consentRank.get(group) ?? 0) + 1;
         consentRank.set(group, n);
-        // An unlabelled target must not put a raw cuid inside a label: labels are
+        // An unlabelled target must not put a raw id inside a label: labels are
         // substituted for ids in a single pass and are never rescanned, so it
         // would ride into the golden unnormalized and differ every run.
         const targetLabel = r.targetId ? labels.get(r.targetId) : null;
@@ -177,7 +190,7 @@ export async function buildLabelMap(
 
 export interface NormalizeResult<T> {
   value: T;
-  /** cuid-shaped tokens with no structural label. Non-empty means the run fails. */
+  /** id-shaped tokens with no structural label. Non-empty means the run fails. */
   unresolved: string[];
 }
 
@@ -282,9 +295,10 @@ export function normalize<T>(value: T, map: LabelMap, window?: FreshWindow): Nor
       unresolved.add(m);
       return `<UNRESOLVED_ID:${m}>`;
     };
-    // Before CUID_RE: a seeded clerkId contains no cuid, so the two never
+    // Before the id patterns: a seeded clerkId contains no id, so they never
     // overlap, but running it first keeps the whole token as the unit.
     out = out.replace(SEEDED_CLERKID_RE, resolve);
+    out = out.replace(UUID_RE, resolve);
     out = out.replace(CUID_RE, resolve);
     return out;
   };
