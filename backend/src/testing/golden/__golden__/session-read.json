@@ -839,7 +839,8 @@
                   "User": 2
                 },
                 "planNodes": [
-                  "Seq Scan"
+                  "Bitmap Heap Scan",
+                  "Bitmap Index Scan"
                 ]
               }
             ]
@@ -1820,7 +1821,8 @@
                   "User": 2
                 },
                 "planNodes": [
-                  "Seq Scan"
+                  "Bitmap Heap Scan",
+                  "Bitmap Index Scan"
                 ]
               }
             ]
