@@ -224,19 +224,25 @@ export class StateFactory {
       });
 
       // 6. Create invitation
-      const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+      // One instant for all of the invitation's own stamps. With acceptedAt from
+      // `new Date()` here and createdAt from `@default(now())` at insert, the two
+      // landed in the same millisecond on some fixture builds and not on others,
+      // which shifted every later timestamp rank in the session-read golden.
+      const invitedAt = new Date();
+      const expiresAt = new Date(invitedAt.getTime() + 7 * 24 * 60 * 60 * 1000);
       const invitationAccepted = TWO_USER_ACTIVE_TARGETS.has(targetStage);
       const invitationStatus = invitationAccepted ? 'ACCEPTED' : 'PENDING';
       const invitation = await tx.invitation.create({
         data: {
           sessionId: session.id,
           invitedById: userARecord.id,
-          acceptedAt: invitationAccepted ? new Date() : null,
+          createdAt: invitedAt,
+          acceptedAt: invitationAccepted ? invitedAt : null,
           name: userB?.name || 'Partner',
           status: invitationStatus,
           expiresAt,
           messageConfirmed: targetStage !== TargetStage.CREATED,
-          messageConfirmedAt: targetStage !== TargetStage.CREATED ? new Date() : null,
+          messageConfirmedAt: targetStage !== TargetStage.CREATED ? invitedAt : null,
         },
       });
 
