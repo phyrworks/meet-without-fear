@@ -1,4 +1,5 @@
 import { E2EFixture } from './types';
+import { FIXTURE_USER_IDS } from './ids';
 
 export const reconcilerOfferOptional: E2EFixture = {
   name: 'Reconciler OFFER_OPTIONAL',
@@ -8,7 +9,7 @@ export const reconcilerOfferOptional: E2EFixture = {
   seed: {
     users: [
       {
-        id: 'user-b',
+        id: FIXTURE_USER_IDS.userB,
         email: 'user-b@e2e.test',
         clerkId: 'e2e_clerk_user_b',
         name: 'Darryl Test',

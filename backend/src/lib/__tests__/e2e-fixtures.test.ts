@@ -10,6 +10,9 @@ import {
   getFixtureResponseByIndex,
   clearFixtureCache,
 } from '../e2e-fixtures';
+import { FIXTURE_USER_IDS } from '../../fixtures/ids';
+
+const USER_A = FIXTURE_USER_IDS.userA;
 
 describe('E2E Fixture Loader', () => {
   describe('loadFixture', () => {
@@ -26,7 +29,7 @@ describe('E2E Fixture Loader', () => {
 
       expect(fixture.seed?.users).toHaveLength(1);
       expect(fixture.seed!.users![0]).toEqual({
-        id: 'user-a',
+        id: USER_A,
         email: 'user-a@e2e.test',
         clerkId: 'e2e_clerk_user_a',
         name: 'Alice Test',
@@ -37,9 +40,9 @@ describe('E2E Fixture Loader', () => {
       const fixture = loadFixture('test-fixture');
 
       expect(fixture.storyline).toBeDefined();
-      expect(fixture.storyline!['user-a']).toHaveLength(2);
-      expect(fixture.storyline!['user-a'][0].user).toBe('Hello');
-      expect(fixture.storyline!['user-a'][0].ai).toContain('thinking');
+      expect(fixture.storyline![USER_A]).toHaveLength(2);
+      expect(fixture.storyline![USER_A][0].user).toBe('Hello');
+      expect(fixture.storyline![USER_A][0].ai).toContain('thinking');
     });
 
     it('throws error when fixture not found', () => {
@@ -55,7 +58,7 @@ describe('E2E Fixture Loader', () => {
     it('returns AI response for given user and index', () => {
       const fixture = loadFixture('test-fixture');
 
-      const response = getFixtureResponse(fixture, 'user-a', 0);
+      const response = getFixtureResponse(fixture, USER_A, 0);
 
       expect(response).toContain('thinking');
       expect(response).toContain('Hi there! How can I help you today?');
@@ -64,7 +67,7 @@ describe('E2E Fixture Loader', () => {
     it('returns next response when index increments', () => {
       const fixture = loadFixture('test-fixture');
 
-      const response = getFixtureResponse(fixture, 'user-a', 1);
+      const response = getFixtureResponse(fixture, USER_A, 1);
 
       expect(response).toContain("I'm doing well");
     });
@@ -80,8 +83,8 @@ describe('E2E Fixture Loader', () => {
     it('throws error when index out of bounds', () => {
       const fixture = loadFixture('test-fixture');
 
-      expect(() => getFixtureResponse(fixture, 'user-a', 99)).toThrow(
-        'Response index 99 out of bounds for user user-a (has 2 responses)'
+      expect(() => getFixtureResponse(fixture, USER_A, 99)).toThrow(
+        `Response index 99 out of bounds for user ${USER_A} (has 2 responses)`
       );
     });
   });
