@@ -14,10 +14,11 @@ import { checkAttempts, incrementAttempts } from '../services/reconciler';
 describe('Circuit Breaker', () => {
   let prisma: PrismaClient;
   const TEST_PREFIX = 'cb-unit';
-  const testSessionId = `${TEST_PREFIX}-session`;
-  const userAId = `${TEST_PREFIX}-user-a`;
-  const userBId = `${TEST_PREFIX}-user-b`;
-  const relationshipId = `${TEST_PREFIX}-rel`;
+  const testSessionId = '00000000-0000-4000-8000-0000000cb105';
+  const userAId = '00000000-0000-4000-8000-0000000cb10a';
+  const userBId = '00000000-0000-4000-8000-0000000cb10b';
+  // Fixed UUIDs: these rows are real and every id column is a Postgres uuid.
+  const relationshipId = '00000000-0000-4000-8000-0000000cb10e';
 
   beforeAll(() => {
     prisma = new PrismaClient({ adapter: createPrismaPgAdapter() });
