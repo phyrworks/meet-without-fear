@@ -8,6 +8,7 @@ import { Request, Response, NextFunction } from 'express';
 import { ErrorCode, ApiError, ApiResponse } from '@meet-without-fear/shared';
 import { ZodError } from 'zod';
 import { logger } from '../lib/logger';
+import { Prisma } from '../generated/prisma/client';
 
 // ============================================================================
 // API Error Classes
@@ -134,6 +135,18 @@ export function errorHandler(
     return;
   }
 
+  // A malformed id. Every primary key is a Postgres uuid, so a lookup by an id
+  // that is not one fails in the database (P2007) where it used to find nothing.
+  // Answer as the lookup used to: the resource does not exist.
+  if (isMalformedIdError(err)) {
+    const response: ApiResponse<never> = {
+      success: false,
+      error: { code: ErrorCode.NOT_FOUND, message: 'Resource not found' },
+    };
+    res.status(404).json(response);
+    return;
+  }
+
   // Handle our custom AppError
   if (err instanceof AppError) {
     const apiError: ApiError = {
@@ -161,6 +174,15 @@ export function errorHandler(
     },
   };
   res.status(500).json(response);
+}
+
+/** Prisma's error for a value Postgres rejects as a uuid ("invalid input syntax for type uuid"). */
+export function isMalformedIdError(err: unknown): boolean {
+  return (
+    err instanceof Prisma.PrismaClientKnownRequestError &&
+    err.code === 'P2007' &&
+    /type uuid/.test(err.message)
+  );
 }
 
 /**
