@@ -3,11 +3,18 @@ title: Prisma Schema
 sidebar_position: 1
 description: Core Vessel Architecture tables plus pointers to the rest of the Prisma schema (Inner Work, reconciler, memory, needs/people, telemetry).
 slug: /backend/data-model/prisma-schema
-updated: "2026-05-23"
+updated: "2026-10-10"
 ---
 # Prisma Schema
 
 This page documents the **core Vessel Architecture tables** (Users, Relationships, Sessions, UserVessel, SharedVessel, and their direct children) plus notable cross-cutting conventions. For subsystems that live alongside the core — Inner Work, memory, reconciler, needs/people catalogs, telemetry, and pre-session messages — the authoritative source is `backend/prisma/schema.prisma`. Key subsystems summarized near the bottom of this page.
+
+**Identifiers.** Every primary key is a UUIDv7 in a native `uuid` column, minted by the database
+(`@default(dbgenerated("uuidv7()")) @db.Uuid`, PostgreSQL 18's built-in `uuidv7()`), so writers
+other than Prisma get ids for free and ids sort in creation order. Every foreign-key column and id
+array (`rankedIds`, `entryIds`, ...) is `@db.Uuid` too. The models below abbreviate foreign keys as
+plain `String`. `Need.id` is the exception: an `Int` catalogue key. Ids were cuids until migration
+`cuid_to_uuidv7`, which rewrote every existing id and reference.
 
 ## Schema Overview
 
@@ -33,7 +40,7 @@ erDiagram
 
 ```prisma
 model User {
-  id                      String    @id @default(cuid())
+  id                      String    @id @default(dbgenerated("uuidv7()")) @db.Uuid
   clerkId                 String?   @unique // Clerk authentication user ID
   email                   String    @unique
   name                    String?   // Full name (computed from firstName + lastName)
@@ -68,7 +75,7 @@ model User {
 
 ```prisma
 model Relationship {
-  id        String   @id @default(cuid())
+  id        String   @id @default(dbgenerated("uuidv7()")) @db.Uuid
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -78,7 +85,7 @@ model Relationship {
 }
 
 model RelationshipMember {
-  id             String       @id @default(cuid())
+  id             String       @id @default(dbgenerated("uuidv7()")) @db.Uuid
   relationship   Relationship @relation(fields: [relationshipId], references: [id])
   relationshipId String
   user           User         @relation(fields: [userId], references: [id])
@@ -94,7 +101,7 @@ model RelationshipMember {
 
 ```prisma
 model Session {
-  id             String        @id @default(cuid())
+  id             String        @id @default(dbgenerated("uuidv7()")) @db.Uuid
   relationship   Relationship  @relation(fields: [relationshipId], references: [id])
   relationshipId String
   status         SessionStatus @default(CREATED)
@@ -159,7 +166,7 @@ const sharedStage = Math.min(
 
 ```prisma
 model UserVessel {
-  id        String   @id @default(cuid())
+  id        String   @id @default(dbgenerated("uuidv7()")) @db.Uuid
   user      User     @relation(fields: [userId], references: [id])
   userId    String
   session   Session  @relation(fields: [sessionId], references: [id])
@@ -201,7 +208,7 @@ model UserVessel {
 
 ```prisma
 model UserEvent {
-  id            String     @id @default(cuid())
+  id            String     @id @default(dbgenerated("uuidv7()")) @db.Uuid
   vessel        UserVessel @relation(fields: [vesselId], references: [id])
   vesselId      String
   description   String     @db.Text
@@ -229,7 +236,7 @@ enum Attribution {
 
 ```prisma
 model EmotionalReading {
-  id        String     @id @default(cuid())
+  id        String     @id @default(dbgenerated("uuidv7()")) @db.Uuid
   vessel    UserVessel @relation(fields: [vesselId], references: [id])
   vesselId  String
   intensity Int        // 1-10 scale
@@ -245,7 +252,7 @@ model EmotionalReading {
 
 ```prisma
 model IdentifiedNeed {
-  id                 String           @id @default(cuid())
+  id                 String           @id @default(dbgenerated("uuidv7()")) @db.Uuid
   vessel             UserVessel       @relation(fields: [vesselId], references: [id], onDelete: Cascade)
   vesselId           String
   need               String           // From universal needs taxonomy
@@ -286,7 +293,7 @@ enum NeedCategory {
 
 ```prisma
 model Boundary {
-  id            String     @id @default(cuid())
+  id            String     @id @default(dbgenerated("uuidv7()")) @db.Uuid
   vessel        UserVessel @relation(fields: [vesselId], references: [id])
   vesselId      String
   description   String     @db.Text
@@ -303,7 +310,7 @@ model Boundary {
 
 ```prisma
 model SharedVessel {
-  id        String   @id @default(cuid())
+  id        String   @id @default(dbgenerated("uuidv7()")) @db.Uuid
   session   Session  @relation(fields: [sessionId], references: [id])
   sessionId String   @unique
   createdAt DateTime @default(now())
@@ -320,7 +327,7 @@ model SharedVessel {
 
 ```prisma
 model ConsentedContent {
-  id                 String       @id @default(cuid())
+  id                 String       @id @default(dbgenerated("uuidv7()")) @db.Uuid
   sharedVessel       SharedVessel @relation(fields: [sharedVesselId], references: [id])
   sharedVesselId     String
   sourceUser         User         @relation(fields: [sourceUserId], references: [id])
@@ -344,7 +351,7 @@ model ConsentedContent {
 
 ```prisma
 model CommonGround {
-  id             String       @id @default(cuid())
+  id             String       @id @default(dbgenerated("uuidv7()")) @db.Uuid
   sharedVessel   SharedVessel @relation(fields: [sharedVesselId], references: [id])
   sharedVesselId String
   need           String
@@ -361,7 +368,7 @@ model CommonGround {
 
 ```prisma
 model Agreement {
-  id             String          @id @default(cuid())
+  id             String          @id @default(dbgenerated("uuidv7()")) @db.Uuid
   sharedVessel   SharedVessel    @relation(fields: [sharedVesselId], references: [id])
   sharedVesselId String
   description    String          @db.Text
@@ -399,7 +406,7 @@ enum AgreementStatus {
 
 ```prisma
 model ConsentRecord {
-  id           String        @id @default(cuid())
+  id           String        @id @default(dbgenerated("uuidv7()")) @db.Uuid
   user         User          @relation(fields: [userId], references: [id])
   userId       String
   session      Session?      @relation(fields: [sessionId], references: [id])
@@ -445,7 +452,7 @@ enum ConsentDecision {
 
 ```prisma
 model StageProgress {
-  id        String   @id @default(cuid())
+  id        String   @id @default(dbgenerated("uuidv7()")) @db.Uuid
   session   Session  @relation(fields: [sessionId], references: [id])
   sessionId String
   user      User     @relation(fields: [userId], references: [id])
@@ -477,7 +484,7 @@ enum StageStatus {
 
 // Emotional regulation exercises (Emotional Barometer)
 model EmotionalExerciseCompletion {
-  id        String     @id @default(cuid())
+  id        String     @id @default(dbgenerated("uuidv7()")) @db.Uuid
   session   Session    @relation(fields: [sessionId], references: [id])
   sessionId String
   user      User       @relation(fields: [userId], references: [id])
@@ -533,7 +540,7 @@ if (progress.isSynthesisDirty) {
 
 ```prisma
 model Message {
-  id             String         @id @default(cuid())
+  id             String         @id @default(dbgenerated("uuidv7()")) @db.Uuid
   session        Session        @relation(fields: [sessionId], references: [id])
   sessionId      String
   sender         User?          @relation(fields: [senderId], references: [id])
@@ -564,7 +571,7 @@ model Message {
 
 ```prisma
 model EmpathyDraft {
-  id        String   @id @default(cuid())
+  id        String   @id @default(dbgenerated("uuidv7()")) @db.Uuid
   session   Session  @relation(fields: [sessionId], references: [id])
   sessionId String
   user      User     @relation(fields: [userId], references: [id])
@@ -585,7 +592,7 @@ model EmpathyDraft {
 
 ```prisma
 model EmpathyAttempt {
-  id          String        @id @default(cuid())
+  id          String        @id @default(dbgenerated("uuidv7()")) @db.Uuid
   draft       EmpathyDraft  @relation(fields: [draftId], references: [id])
   draftId     String
   session     Session       @relation(fields: [sessionId], references: [id])
@@ -607,7 +614,7 @@ model EmpathyAttempt {
 
 ```prisma
 model EmpathyValidation {
-  id           String         @id @default(cuid())
+  id           String         @id @default(dbgenerated("uuidv7()")) @db.Uuid
   attempt      EmpathyAttempt @relation(fields: [attemptId], references: [id])
   attemptId    String
   session      Session        @relation(fields: [sessionId], references: [id])
@@ -629,7 +636,7 @@ Drafts used by the Stage 2 "Not quite yet" Feedback Coach before the final valid
 
 ```prisma
 model ValidationFeedbackDraft {
-  id        String   @id @default(cuid())
+  id        String   @id @default(dbgenerated("uuidv7()")) @db.Uuid
   session   Session  @relation(fields: [sessionId], references: [id])
   sessionId String
   user      User     @relation(fields: [userId], references: [id])
@@ -652,7 +659,7 @@ model ValidationFeedbackDraft {
 
 ```prisma
 model StrategyProposal {
-  id          String   @id @default(cuid())
+  id          String   @id @default(dbgenerated("uuidv7()")) @db.Uuid
   session     Session  @relation(fields: [sessionId], references: [id])
   sessionId   String
   createdBy   User?    @relation(fields: [createdByUserId], references: [id])
@@ -707,7 +714,7 @@ Tracks each user's willingness decision on a proposal.
 
 ```prisma
 model Stage4ProposalSelection {
-  id         String   @id @default(cuid())
+  id         String   @id @default(dbgenerated("uuidv7()")) @db.Uuid
   proposal   StrategyProposal @relation(fields: [proposalId], references: [id])
   proposalId String
   session    Session  @relation(fields: [sessionId], references: [id])
@@ -732,7 +739,7 @@ Audit trail for all proposal changes.
 
 ```prisma
 model Stage4ProposalRevision {
-  id           String   @id @default(cuid())
+  id           String   @id @default(dbgenerated("uuidv7()")) @db.Uuid
   proposal     StrategyProposal @relation(fields: [proposalId], references: [id])
   proposalId   String
   sessionId    String
@@ -752,7 +759,7 @@ Tracks which identified needs are addressed by proposals.
 
 ```prisma
 model Stage4NeedCoverage {
-  id                  String   @id @default(cuid())
+  id                  String   @id @default(dbgenerated("uuidv7()")) @db.Uuid
   session             Session  @relation(fields: [sessionId], references: [id])
   sessionId           String
   needId              String?
@@ -772,7 +779,7 @@ Records the final outcome of Stage 4.
 
 ```prisma
 model Stage4Closure {
-  id                   String   @id @default(cuid())
+  id                   String   @id @default(dbgenerated("uuidv7()")) @db.Uuid
   session              Session  @relation(fields: [sessionId], references: [id])
   sessionId            String   @unique
   kind                 Stage4ClosureKind
@@ -806,7 +813,7 @@ Used by the legacy ranking flow only. Not consulted by the redesigned willingnes
 
 ```prisma
 model StrategyRanking {
-  id          String   @id @default(cuid())
+  id          String   @id @default(dbgenerated("uuidv7()")) @db.Uuid
   session     Session  @relation(fields: [sessionId], references: [id])
   sessionId   String
   user        User     @relation(fields: [userId], references: [id])
@@ -855,7 +862,7 @@ Post-resolution check-in and re-entry models. Created when Stage 4 closes with a
 
 ```prisma
 model TendingEntry {
-  id             String             @id @default(cuid())
+  id             String             @id @default(dbgenerated("uuidv7()")) @db.Uuid
   session        Session            @relation(fields: [sessionId], references: [id])
   sessionId      String
   agreement      Agreement?         @relation(fields: [agreementId], references: [id])
@@ -908,7 +915,7 @@ One response per entry/user (enforced by upsert in the service).
 
 ```prisma
 model TendingResponse {
-  id             String          @id @default(cuid())
+  id             String          @id @default(dbgenerated("uuidv7()")) @db.Uuid
   tendingEntry   TendingEntry    @relation(fields: [tendingEntryId], references: [id], onDelete: Cascade)
   tendingEntryId String
   user           User            @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -942,7 +949,7 @@ Tracks per-entry resolution when `ContinueChoice = PARTIAL_CLOSURE`.
 
 ```prisma
 model TendingResponsePartialClosure {
-  id               String          @id @default(cuid())
+  id               String          @id @default(dbgenerated("uuidv7()")) @db.Uuid
   tendingResponse  TendingResponse @relation(fields: [tendingResponseId], references: [id])
   tendingResponseId String
   tendingEntry     TendingEntry    @relation(fields: [tendingEntryId], references: [id])
@@ -965,7 +972,7 @@ Structured three-orientation check-in submitted by a user at the end of a tendin
 
 ```prisma
 model TendingCheckin {
-  id                  String                    @id @default(cuid())
+  id                  String                    @id @default(dbgenerated("uuidv7()")) @db.Uuid
   session             Session                   @relation(fields: [sessionId], references: [id], onDelete: Cascade)
   sessionId           String
   user                User                      @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -997,7 +1004,7 @@ Coordinates a simultaneous check-in across both partners. Created when a user su
 
 ```prisma
 model TendingCoordinationCycle {
-  id                 String                    @id @default(cuid())
+  id                 String                    @id @default(dbgenerated("uuidv7()")) @db.Uuid
   session            Session                   @relation(fields: [sessionId], references: [id], onDelete: Cascade)
   sessionId          String
   createdBy          User                      @relation(fields: [createdByUserId], references: [id], onDelete: Cascade)
@@ -1034,7 +1041,7 @@ Per-entry follow-through assessment recorded during a structured check-in. One r
 
 ```prisma
 model TendingEntryOutcome {
-  id                  String                     @id @default(cuid())
+  id                  String                     @id @default(dbgenerated("uuidv7()")) @db.Uuid
   checkin             TendingCheckin             @relation(fields: [checkinId], references: [id], onDelete: Cascade)
   checkinId           String
   tendingEntry        TendingEntry               @relation(fields: [tendingEntryId], references: [id], onDelete: Cascade)
@@ -1090,7 +1097,7 @@ Per-need resolution assessment recorded during a structured check-in.
 
 ```prisma
 model TendingNeedOutcome {
-  id               String                      @id @default(cuid())
+  id               String                      @id @default(dbgenerated("uuidv7()")) @db.Uuid
   checkin          TendingCheckin              @relation(fields: [checkinId], references: [id], onDelete: Cascade)
   checkinId        String
   session          Session                     @relation(fields: [sessionId], references: [id], onDelete: Cascade)
@@ -1124,7 +1131,7 @@ A reminder scheduled for a user about a tending entry. Created during a check-in
 
 ```prisma
 model TendingReminder {
-  id             String               @id @default(cuid())
+  id             String               @id @default(dbgenerated("uuidv7()")) @db.Uuid
   session        Session              @relation(fields: [sessionId], references: [id], onDelete: Cascade)
   sessionId      String
   checkin        TendingCheckin?      @relation(fields: [checkinId], references: [id], onDelete: SetNull)
@@ -1159,7 +1166,7 @@ Records a modification to a commitment (text, cadence, scope, or success criteri
 
 ```prisma
 model TendingAdjustment {
-  id                     String               @id @default(cuid())
+  id                     String               @id @default(dbgenerated("uuidv7()")) @db.Uuid
   session                Session              @relation(fields: [sessionId], references: [id], onDelete: Cascade)
   sessionId              String
   checkin                TendingCheckin       @relation(fields: [checkinId], references: [id], onDelete: Cascade)
@@ -1190,7 +1197,7 @@ A reflection note written between tending check-ins. Can optionally be carried f
 
 ```prisma
 model TendingBetweenPeriodNote {
-  id                        String          @id @default(cuid())
+  id                        String          @id @default(dbgenerated("uuidv7()")) @db.Uuid
   session                   Session         @relation(fields: [sessionId], references: [id], onDelete: Cascade)
   sessionId                 String
   user                      User            @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -1232,7 +1239,7 @@ Guided AI sub-conversations anchored to proposal refinement, needs brainstorming
 
 ```prisma
 model Stage4SubChat {
-  id         String             @id @default(cuid())
+  id         String             @id @default(dbgenerated("uuidv7()")) @db.Uuid
   session    Session            @relation(fields: [sessionId], references: [id])
   sessionId  String
   user       User               @relation(fields: [userId], references: [id])
@@ -1247,7 +1254,7 @@ model Stage4SubChat {
 }
 
 model Stage4SubChatMessage {
-  id         String      @id @default(cuid())
+  id         String      @id @default(dbgenerated("uuidv7()")) @db.Uuid
   subChat    Stage4SubChat @relation(fields: [subChatId], references: [id])
   subChatId  String
   role       MessageRole
@@ -1296,7 +1303,7 @@ Anonymized micro-experiment suggestions for Stage 4. See [Stage 4 Global Library
 
 ```prisma
 model GlobalLibraryItem {
-  id          String   @id @default(cuid())
+  id          String   @id @default(dbgenerated("uuidv7()")) @db.Uuid
   title       String
   description String   @db.Text
   category    String   // e.g., "communication", "quality-time", "conflict-resolution"

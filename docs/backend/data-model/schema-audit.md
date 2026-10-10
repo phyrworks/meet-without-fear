@@ -55,6 +55,11 @@ derivation, and no business-rule enforcement. Every invariant in this product li
 
 ## 2. Identifiers
 
+> **Superseded by migration `cuid_to_uuidv7`.** Every cuid primary key is now a database-minted
+> UUIDv7 in a native `uuid` column (`DEFAULT uuidv7()`), and every foreign key, id array and
+> unconstrained id reference was rewritten with it. The E2E bypass now rejects a non-UUID id header.
+> `Need.id` is unchanged. This section records the cuid-era state the decision was made from.
+
 ### There are no UUIDs anywhere
 
 ```
