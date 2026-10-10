@@ -69,6 +69,8 @@ async function verifyClerkToken(req: Request): Promise<string | null> {
   }
 }
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 /**
  * E2E auth bypass handler
  * When E2E_AUTH_BYPASS=true AND NODE_ENV is not production, accepts x-e2e-user-id and x-e2e-user-email headers
@@ -86,6 +88,12 @@ async function handleE2EAuthBypass(req: Request): Promise<boolean> {
 
   if (!e2eUserId || !e2eEmail) {
     return false;
+  }
+
+  // User.id is a Postgres uuid: say so here rather than let the upsert fail in
+  // the database with an error that reads like a missing resource.
+  if (!UUID_RE.test(e2eUserId)) {
+    throw new UnauthorizedError('x-e2e-user-id must be a UUID');
   }
 
   const e2eClerkId = `e2e_${e2eUserId}`;
