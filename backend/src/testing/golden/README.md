@@ -277,14 +277,16 @@ baseline and left a green suite attesting to it. Found by a PG18 upgrade
 rehearsal, not by this harness. Both renderings are now covered by table-driven
 tests built from real output captured side by side on both containers.
 
-Two consequences worth knowing before the upgrade:
+The dev container (`mwf-postgres`) has been PostgreSQL 18 since 2026-10-12; 16 cannot run the
+schema at all since `uuidv7()` ids. The 16 renderings stay covered because they are what any
+pre-upgrade capture contains. Two consequences of the version change:
 
 **PG16 and PG18 disagree on nested-loop row counts, and PG18 is right.** `rows`
 is a per-loop average. On identical data, PG16 renders `rows=6 loops=2` and PG18
 renders `rows=6.50 loops=2` for a scan whose true total is 13 — PG16 rounds the
 average to an integer and loses a row. The parser multiplies and rounds, so it
-reports 12 on PG16 and 13 on PG18. No parser can reconcile that; after the
-upgrade, `rowsRead` on nested-loop inner scans may shift slightly and **that is a
+reports 12 on PG16 and 13 on PG18. No parser can reconcile that; against
+a PG16 capture, PG18 `rowsRead` on nested-loop inner scans may shift slightly and **that is a
 fidelity improvement, not a regression**. Nodes with `loops=1` — nearly all of
 them — are unaffected and compare exactly across versions.
 
