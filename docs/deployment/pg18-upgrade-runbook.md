@@ -56,7 +56,8 @@ podman run -d --name pg18-preflight \
 **Note the mount path**: `pgvector/pgvector:pg18` (Postgres 18+ images) store data under
 `/var/lib/postgresql/<version>/…` and refuse to start against a volume mounted at the old
 `/var/lib/postgresql/data` path used by the 16 image — mount the volume at `/var/lib/postgresql`
-(no `/data` suffix), not the path from the PG16 setup instructions in `local-setup.md`.
+(no `/data` suffix). The dev container in `local-setup.md` §2 is itself PG18 now and already does
+this; the pre-flight uses port 5433 and its own volume so it never touches the dev database.
 
 ```bash
 cd backend
@@ -329,7 +330,7 @@ Built the `FEEL_HEARD_B` fixture and ran both existing golden scenarios (`sessio
 `empathy-reveal`) against the local PG18 rehearsal container via
 `GOLDEN_DATABASE_URL`/`DATABASE_URL`, with `MWF_PG_CONTAINER` pointed at the PG18 container name so
 the SQL-trace capture's `podman logs` reader targeted the right container (the harness defaults to
-`mwf-postgres`, i.e. the PG16 dev container, via `driver.ts`'s
+`mwf-postgres`, at the time the PG16 dev container, via `driver.ts`'s
 `process.env.MWF_PG_CONTAINER ?? 'mwf-postgres'`). Confirmed `mwf_user` is a superuser on the PG18
 container too (required for `log_statement`/`session_preload_libraries`), and that
 `auto_explain.so` ships in the `pgvector/pgvector:pg18` image. Fixture build succeeded first try:

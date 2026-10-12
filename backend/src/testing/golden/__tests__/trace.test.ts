@@ -1,10 +1,10 @@
 /**
  * Unit tests for the SQL-statement trace oracle's parser.
  *
- * Every log sample here is **real output** from the project's own container
- * (pgvector/pgvector:pg16, Postgres 16.14) captured through
- * `podman logs mwf-postgres`, not text written to match the parser. Continuation
- * lines are real tabs. Writing these by hand is how a parser ends up agreeing
+ * Every log sample here is **real output** from the project's own container,
+ * captured through `podman logs mwf-postgres` while it was still
+ * pgvector/pgvector:pg16 (Postgres 16.14; it is pg18 since 2026-10-12), not
+ * text written to match the parser. Continuation lines are real tabs. Writing these by hand is how a parser ends up agreeing
  * with its author's memory of a log format rather than with Postgres — and this
  * file has already been caught once with a fabricated sample: a journald
  * `Suppressed N messages` notice given a Postgres-style prefix that the real
@@ -182,7 +182,7 @@ describe('buildTrace', () => {
 
   /**
    * Real output from both versions, captured side by side on identical data:
-   * `pgvector/pgvector:pg16` (Postgres 16.14, the `mwf-postgres` container) and
+   * `pgvector/pgvector:pg16` (Postgres 16.14, the then `mwf-postgres` container) and
    * `pgvector/pgvector:pg18` (Postgres 18.6, a throwaway container on :5433).
    *
    * PG18 renders `actual rows` to two decimal places. The parser used to require

@@ -33,7 +33,7 @@ under a different major bakes the wrong engine artifacts into `node_modules`.
 `20251228220702` runs `CREATE EXTENSION "vector"`. A vanilla Postgres will fail to migrate.
 
 **PostgreSQL 18 is the minimum.** Every primary key defaults to `uuidv7()`, which is built into
-PostgreSQL 18 and does not exist in 16 (migration `cuid_to_uuidv7`).
+PostgreSQL 18 and does not exist in 16 (migration `20261010180736_cuid_to_uuidv7`).
 
 Note the schema does *not* declare the extension — `datasource db` has `// extensions = [vector]`
 commented out in `backend/prisma/schema.prisma`. It is created by raw SQL in that migration only.
@@ -44,45 +44,49 @@ difference. That is expected and is not schema drift.
 
 ```bash
 podman machine start          # or use Docker
-podman run -d --name mwf-postgres18 \
+podman run -d --name mwf-postgres \
   -e POSTGRES_USER=mwf_user \
   -e POSTGRES_PASSWORD=mwf_password \
   -e POSTGRES_DB=meet_without_fear \
-  -p 5433:5432 \
+  -p 5432:5432 \
   -v mwf-pgdata18:/var/lib/postgresql \
   --restart unless-stopped \
   pgvector/pgvector:pg18
 
-podman exec mwf-postgres18 psql -U mwf_user -d meet_without_fear \
+podman exec mwf-postgres psql -U mwf_user -d meet_without_fear \
   -c "CREATE DATABASE meet_without_fear_shadow OWNER mwf_user;" \
   -c "CREATE DATABASE meet_without_fear_test OWNER mwf_user;"
 ```
 
-Mount the volume at **`/var/lib/postgresql`, not `/var/lib/postgresql/data`**. The 18 images keep
-their data in a versioned subdirectory (`/var/lib/postgresql/18/docker`) and refuse to start on a
-volume mounted at the old `/data` path, saying so in the container log.
+The first `psql` after `podman run` can be refused for a few seconds while initdb runs; retry
+until `podman exec mwf-postgres pg_isready -U mwf_user` reports `accepting connections`.
 
-The host port is **5433** while the old PostgreSQL 16 container (`mwf-postgres`, port 5432) still
-exists; point `DATABASE_URL`, `DIRECT_URL` and `SHADOW_DATABASE_URL` in `backend/.env` at port 5433.
-Same user, password and database names as before. Once nothing needs the 16 container any more:
+**Mount the volume at `/var/lib/postgresql`, not `/var/lib/postgresql/data`.** From 18 on, the
+official images keep the cluster in a major-versioned subdirectory (`PGDATA` is
+`/var/lib/postgresql/18/docker`) so that a future `pg_upgrade --link` can see both versions on one
+volume. Given a volume at the old `/data` path, the container refuses to start and its log points at
+[docker-library/postgres#1259](https://github.com/docker-library/postgres/pull/1259). The volume is
+named `mwf-pgdata18` for the same reason — it is not interchangeable with a 16-era volume.
+
+This is the default port and container name everything else assumes: `backend/.env.example`,
+`e2e/.env.test` and the golden harness (`GOLDEN_DATABASE_URL` defaults to `localhost:5432`,
+`MWF_PG_CONTAINER` to `mwf-postgres`) all work with no environment variables set.
+
+**Coming from the old PostgreSQL 16 container?** It cannot run this schema: migration
+`20261010180736_cuid_to_uuidv7` makes every primary key default to `uuidv7()`, which 16 does not
+have. A 16 data directory cannot be mounted by an 18 server either, so the old `mwf-pgdata` volume is
+not reusable — remove the old container and its volume, start the one above, and re-run
+`prisma migrate deploy` (§3) and `golden:build` (see `backend/src/testing/golden/README.md`):
 
 ```bash
-podman rm -f mwf-postgres && podman volume rm mwf-pgdata
-```
-
-The golden harness defaults to the 16 container (port 5432, container `mwf-postgres`). Point it at
-the 18 one:
-
-```bash
-export GOLDEN_DATABASE_URL=postgresql://mwf_user:mwf_password@localhost:5433/meet_without_fear
-export MWF_PG_CONTAINER=mwf-postgres18
+podman rm -f mwf-postgres && podman volume rm mwf-pgdata   # 16-era container + volume
 ```
 
 Three databases are required: the main one, `_shadow` (Prisma's shadow DB for `migrate dev`), and
 `_test` (the E2E harness). Using exactly these names and credentials means the `DATABASE_URL`s
 already committed in `backend/.env.example` and `e2e/.env.test` work unchanged.
 
-Day-to-day: `podman machine start && podman start mwf-postgres18`.
+Day-to-day: `podman machine start && podman start mwf-postgres`.
 
 ### The golden harness changes one server-wide setting
 
@@ -103,7 +107,7 @@ a silently empty window. It is a formatting-only change to a development contain
 To put it back:
 
 ```bash
-podman exec mwf-postgres18 psql -U mwf_user -d postgres \
+podman exec mwf-postgres psql -U mwf_user -d postgres \
   -c "ALTER SYSTEM RESET log_line_prefix;" -c "SELECT pg_reload_conf();"
 ```
 
@@ -168,7 +172,7 @@ cd backend && npx prisma migrate deploy    # 76 migrations
 Also migrate the test database, which the E2E harness uses:
 
 ```bash
-DATABASE_URL="postgresql://mwf_user:mwf_password@127.0.0.1:5433/meet_without_fear_test" \
+DATABASE_URL="postgresql://mwf_user:mwf_password@127.0.0.1:5432/meet_without_fear_test" \
   npx prisma migrate deploy
 ```
 
