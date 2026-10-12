@@ -12,7 +12,8 @@ Scope: `backend/prisma/schema.prisma` at migration 76 (uuidv7 ids). Inputs: the 
 (`database-redesign-user-flow.md`), the August audit and ERD, the approved Phase 3 security design,
 the vessel and reconciler docs, and a production call-site grep over `backend/src` (method in §11).
 Severity: **P0** data can be wrong or leak · **P1** design debt that will cost soon · **P2** polish.
-Line numbers are `schema.prisma` lines; `cs=n` is production call sites (`prisma.<model>.`).
+Line numbers are `schema.prisma` lines. **R/W** is production read/write call sites from the census
+(`schema-review-2026-10/models.csv`, direct delegate calls incl. `any`-casts; nested `include` reads excluded).
 
 ---
 
@@ -23,7 +24,7 @@ Line numbers are `schema.prisma` lines; `cs=n` is production call sites (`prisma
 | 1 | **P0** | **The privacy boundary is not a row.** A participant's private conversation — the thing the whole visibility table is about — has no table. It is `Session` + a nullable, FK-less `Message.forUserId` (l.656), plus `UserVessel` carrying read-state and AI memory. Partner-facing facts hang off positional slots (`agreedByA/B`, `confirmedByA/B`, "first member by `joinedAt` is A", `stage4.ts:54`) and unenforced `guesserId/subjectId` text. Make **`conversation`** (session × participant) a first-class row and key messages, drafts and memory on it; make empathy **direction** explicit (`author_id`, `subject_id`). | §2.1, §3.3, §7 |
 | 2 | **P1** | **The state machine lives in a blob.** `StageProgress.gatesSatisfied` (l.345) is written from 20 files / 175 sites and holds booleans, ISO timestamps, a walkthrough phase, and **need ids** (`coveredNeedIds`, `skippedNeedIds`, `currentNeedId`, `stage4.ts:506`). Replace with a `participant_milestone` event table and a `need_disposition` junction; derive "stage" as a view. | §3.2, §6 |
 | 3 | **P1** | **Three of everything.** Conversations ×3 (`UserVessel`, `InnerWorkSession`, `Stage4SubChat`), messages ×3, drafts ×2 (`EmpathyDraft`, `ValidationFeedbackDraft`), consent ×2 (`ConsentRecord`, `ConsentedContent`), need-link ×2 (`StrategyProposal.needsAddressed[]` 58 refs vs the `StrategyProposalNeed` junction 11 refs). Each duplicate is another RLS policy set, another encryption map entry, another deletion path. Unify to one `conversation`, one `message`, one `draft`, one `consent`. | §1, §2, §3.1 |
-| 4 | **P1** | **A third of the schema is speculative.** 23 of 68 models have ≤3 production call sites; `CommonGround` and `TakeawayLink` have 0; `RecurringTheme`, `UserEvent`, `Boundary`, `UserDocument` are written only by the deletion path. Eight wellbeing tables, three needs-assessment tables and the people tracker are feature prototypes carrying 11 `jsonb`/array columns between them. Collapse to per-user feature documents or drop; keep only what a job or a list query filters in SQL. | §4 |
+| 4 | **P1** | **The schema describes behaviour the application does not have.** Per the census (`schema-review-2026-10/census.md` §2–3): 20 of 68 models have ≤3 direct production call sites; `CommonGround` has none; production never creates a row in `UserEvent`, `Boundary`, `UserDocument`, `PreSessionMessage`, `GlobalLibraryItem` or `Insight` (the last three are *read* from always-empty tables); 69 columns are never written and 33 never read, and some unwritten columns are relied on — `ReconcilerShareOffer.lastDeliveryNotifiedAt/lastSeenNotifiedAt` gate a notification count that therefore never excludes anything (`notifications.ts:176–177`), `Message.extractedEmotions` feeds reconciler themes while always empty (`reconciler/analysis.ts:258`). Collapse the wellbeing/people/needs-assessment prototypes to per-user feature documents or drop them; delete the dead columns; keep only what a job or a list query filters in SQL. | §4 |
 | 5 | **P2** | **Postgres is a bystander.** 0 CHECKs, 0 views, 0 triggers (audit §1); 144 naive timestamps; 9 free-text statuses (`Stage4ProposalRevision.action` holds `'CONVERTED'`, `'covered'` and `'subchat_refined'` in the same column); `MeditationStats` and `Stage4NeedCoverage` are hand-maintained caches of things a view computes. | §3.5, §5, §6 |
 | — | **Order** | **Re-shape before Phase 3 W8–W10, not after.** Phase 3 writes four policies, column grants and triggers per table on the *current* 71-table shape; every rename afterwards redoes that work. Production is 9 users; the golden harness is the oracle. W0–W6 (roles, identity, CHECKs, FKs) are shape-independent and can proceed; policies should land on the target shape. | §7, §8 |
 
@@ -31,76 +32,76 @@ Line numbers are `schema.prisma` lines; `cs=n` is production call sites (`prisma
 
 `keep` may still mean rename to snake_case and add constraints (§5). Target names in §9.
 
-| Model | cs | Disposition | Reason |
+| Model | R/W | Disposition | Reason |
 |---|---|---|---|
-| User | 61 | **split** | identity stays; device/auth flags → `user_device`; 3 preference blobs + 2 wellbeing prefs → `user_preferences`; `globalFacts` → `ai_memory`; `lastMoodIntensity` → view over `mood_reading` |
-| Relationship | 6 | keep | root of membership; add CHECK "exactly 2 members" via trigger or deferred constraint |
-| RelationshipMember | 16 | keep | one row per user per relationship (unique exists); `role` text → enum |
-| Session | 121 | keep | trim: drop `type` (`INNER_WORK` never written, `brain.ts` only), `WAITING`/`PAUSED` are per-participant states → milestones |
-| StageProgress | 154 | **split** | → `participant_milestone` (event rows) + `need_disposition`; stage becomes a view |
-| UserVessel | 51 | **rename** → `conversation` | it already *is* session × user, unique; read-state and AI memory move to `conversation_read_state` / `ai_memory` |
-| UserEvent | 1 | drop-until-needed | written by nobody, read by nobody; deletion path only |
-| EmotionalReading | 6 | keep → `mood_reading` | time series, filtered by DB (`emotions.ts`) |
-| IdentifiedNeed | 42 | keep → `need` | core entity; absorb `ConsentedContent` columns (1:1 via `originalNeedId @unique`) |
-| Boundary | 1 | drop-until-needed | deletion path only |
-| UserDocument | 1 | drop-until-needed | deletion path only; `type` free text |
-| SharedVessel | 11 | **merge-into** Session | 1:1 container with no columns of its own; children key on `session_id` |
-| ConsentedContent | 4 | **merge-into** need | 1:1 with `IdentifiedNeed`; becomes `shared_text`, `consent_id`, `revoked_at` on `need` |
-| CommonGround | 0 | drop | no production reader or writer; `confirmedByA/B` positional |
-| Agreement | 10 | keep | replace `agreedByA/B` with `agreement_party` junction (or derive from `proposal_choice`) |
-| ConsentRecord | 18 | keep → `consent` | polymorphic `targetId` → exclusive-arc FK columns + CHECK |
-| Message | 95 | keep | `conversation_id` FK replaces `sessionId`+`forUserId`; `role` splits into `role` + `kind`; drop `extractedNeeds/Emotions` |
-| PreSessionMessage | 2 | drop-until-needed | structural island, 24h TTL rows, 2 call sites |
-| InnerWorkSession | 41 | **merge-into** conversation | `kind = INNER_WORK`; inner-work-only columns nullable with CHECK per kind |
-| InnerWorkMessage | 12 | **merge-into** message | same shape as `Message` minus routing |
-| SessionTakeaway | 12 | keep → `takeaway` | browsed and filtered (knowledge base); embedding per D8 moves to app |
-| TakeawayLink | 0 | drop | no production call sites; similarity links derivable |
-| EmpathyDraft | 17 | **merge-into** draft | `draft(conversation_id, kind, …)` unique per kind |
-| EmpathyAttempt | 52 | keep → `empathy_attempt` | add `subject_id`; rows immutable per submission with `round`; unique (session, author, round) |
-| EmpathyValidation | 7 | keep → `empathy_review` | one per attempt per reviewer (unique exists) |
-| ValidationFeedbackDraft | 1 | **merge-into** draft | identical shape to `EmpathyDraft` |
-| ReconcilerResult | 22 | keep | FK `attempt_id`; `subject_id` FK (RLS arm); drop `guesserName/subjectName`; `ReconcilerGuidance` split per Phase 3 D8a |
-| ReconcilerShareOffer | 29 | keep → `context_share_offer` | `userId` → FK; status enum already |
-| RefinementAttemptCounter | 2 | drop → view | `count(*)` of `reconciler_result` per attempt; `direction` string is a composite key in disguise |
-| StrategyProposal | 37 | keep → `proposal` | drop `needsAddressed[]` in favour of the junction; FK `parent_proposal_id`, `captured_from_message_id` |
-| StrategyProposalNeed | 3 | keep → `proposal_need` | the one real junction; make it the only need link |
-| Stage4ProposalSelection | 10 | keep → `proposal_choice` | willingness per user per proposal (unique exists) |
-| Stage4ProposalRevision | 9 | keep → `proposal_revision` | audit log; `action` → enum; `before/after` jsonb with `jsonb_typeof = 'object'` CHECK; FKs on `sessionId`, `actorUserId`, `messageId` |
-| Stage4NeedCoverage | 11 | **view** + merge-into need_disposition | coverage = `proposal_need` × `proposal_choice`; user-set covered/skipped → `need_disposition` |
-| Stage4NeedDeclination | 5 | **merge-into** need_disposition | a declination is `status = DECLINED` |
-| Stage4Closure | 13 | keep → `session_closure` | drop the three id arrays (derivable); `closedByUserId` → FK |
-| Stage4SubChat | 6 | **merge-into** conversation | `kind = SUBCHAT`, `anchor_kind`, `anchor_proposal_id` FK |
-| Stage4SubChatMessage | 2 | **merge-into** message | |
-| TendingEntry | 27 | keep → `follow_up` | job-queried (`scheduledFor` index); `ownerUserId` → FK |
-| TendingCheckin | 3 | keep → `follow_up_checkin` | gains `payload jsonb` absorbing the five response tables |
-| TendingCoordinationCycle | 9 | drop → view | three id arrays; status derivable from check-ins vs `response_deadline_at` on the entry |
-| TendingResponse | 3 | **merge-into** checkin payload | `status` free text; read back only with its check-in |
-| TendingEntryOutcome | 1 | **merge-into** checkin payload | |
-| TendingNeedOutcome | 1 | **merge-into** checkin payload | `needLabel` is a denormalised copy |
-| TendingReminder | 4 | keep → `reminder` | job-queried (`remindAt`); `status` → enum |
-| TendingAdjustment | 1 | **merge-into** checkin payload | |
-| TendingBetweenPeriodNote | 6 | keep → `follow_up_note` | created between check-ins; has a consent flag |
-| TendingResponsePartialClosure | 1 | **merge-into** checkin payload | |
-| StrategyRanking | 7 | drop-until-needed | product flow is willingness selection, not ranking; `rankedIds[]` |
-| EmotionalExerciseCompletion | 3 | keep → `regulation_event` | per session/user time series |
-| GlobalLibraryItem | 2 | drop-until-needed | island; `contributedBy` no FK; curated content belongs in code/seed until it is user-contributed |
-| Invitation | 23 | keep | add `accepted_by_user_id` (Phase 3 §6) |
-| UserMemory | 23 | keep | filtered by status/category/session |
-| Need | 6 | **lookup** → `need_taxonomy` | fix `Int @id` with no generator (audit §2); keep seeded |
-| NeedScore | 4 | keep | `DISTINCT ON` time-series queries in 4 raw-SQL sites |
-| NeedsAssessmentState | 8 | **jsonb-table** | per-user feature state, read whole; `nextCheckInAt` promoted to a column if a job ever queries it |
-| Person | 19 | keep (slim) | unique (user, name); drop 4 counters and `needsConnections` → derive |
-| PersonMention | 8 | **jsonb-table** | polymorphic `sourceId`; mentions become a `jsonb` array on `person` until something filters them |
-| Insight | 4 | keep | already the jsonb-document pattern done right (`data jsonb` + typed filter columns) |
-| RecurringTheme | 1 | drop → view | `group by theme` over conversations; cached summary → `ai_memory` |
-| GratitudeEntry | 9 | keep (slim) → `gratitude_entry` | five tag arrays + `linkedNeedIds` + sentiment → one `extracted jsonb` |
-| GratitudePreferences | 3 | **merge-into** user_preferences | |
-| MeditationSession | 7 | keep | time series listed by date; drop `linkedNeedIds`, `linkedConflictId` (0 refs) |
-| MeditationStats | 5 | **view** | streaks and totals are `count/sum` over `meditation_session` |
-| MeditationFavorite | 5 | **merge-into** `meditation_script` | same thing as `SavedMeditation` with a `favorite_type` |
-| MeditationPreferences | 3 | **merge-into** user_preferences | |
-| SavedMeditation | 8 | keep → `meditation_script` | `conversationId` → FK conversation |
-| BrainActivity | 20 | keep | telemetry; jsonb legitimate; retention per Phase 3 |
+| User | 38/20 | **split** | identity stays; device/auth flags → `user_device`; 3 preference blobs + 2 wellbeing prefs → `user_preferences`; `globalFacts` → `ai_memory`; `lastMoodIntensity` → view over `mood_reading` |
+| Relationship | 2/3 | keep | root of membership; add CHECK "exactly 2 members" via trigger or deferred constraint |
+| RelationshipMember | 11/5 | keep | one row per user per relationship (unique exists); `role` text → enum |
+| Session | 90/28 | keep | trim: drop `type` (`INNER_WORK` never written, `brain.ts` only), `WAITING`/`PAUSED` are per-participant states → milestones |
+| StageProgress | 65/38 | **split** | → `participant_milestone` (event rows) + `need_disposition`; stage becomes a view; `isSynthesisDirty`/`synthesisLastUpdated` never read |
+| UserVessel | 30/14 | **rename** → `conversation` | it already *is* session × user, unique; read-state and AI memory move to `conversation_read_state` / `ai_memory` |
+| UserEvent | 0/1 | drop-until-needed | never created in production (census §2.2); `deleteMany` only |
+| EmotionalReading | 4/2 | keep → `mood_reading` | time series, filtered by DB (`emotions.ts`) |
+| IdentifiedNeed | 23/16 | keep → `need` | core entity; absorb `ConsentedContent` columns (1:1 via `originalNeedId @unique`) |
+| Boundary | 0/1 | drop-until-needed | never created; `deleteMany` only, yet still in the encryption map |
+| UserDocument | 0/1 | drop-until-needed | never created; `deleteMany` only; still in the encryption map |
+| SharedVessel | 6/2 | **merge-into** Session | 1:1 container with no columns of its own; children key on `session_id` |
+| ConsentedContent | 1/3 | **merge-into** need | 1:1 with `IdentifiedNeed`; becomes `shared_text`, `consent_id`, `revoked_at` on `need` |
+| CommonGround | 0/0 | drop | the only model with zero production call sites (census §2.1); `confirmedByA/B` positional |
+| Agreement | 6/3 | keep | replace `agreedByA/B` with `agreement_party` junction (or derive from `proposal_choice`) |
+| ConsentRecord | 6/5 | keep → `consent` | polymorphic `targetId` → exclusive-arc FK columns + CHECK; `metadata` never written |
+| Message | 36/34 | keep | `conversation_id` FK replaces `sessionId`+`forUserId`; `role` splits into `role` + `kind`; drop `extractedNeeds/Emotions` (never written, F4.2) |
+| PreSessionMessage | 1/1 | drop-until-needed | never created; `context-retriever.ts:311/343` reads an always-empty table |
+| InnerWorkSession | 31/13 | **merge-into** conversation | `kind = INNER_WORK`; inner-work-only columns nullable with CHECK per kind |
+| InnerWorkMessage | 5/5 | **merge-into** message | same shape as `Message` minus routing |
+| SessionTakeaway | 12/5 | keep → `takeaway` | browsed and filtered (knowledge base); embedding per D8 moves to app |
+| TakeawayLink | 5/3 | keep → `takeaway_link` | live (knowledge-base browse + distillation auto-link) but reached only through `prismaAny` casts (F4.3); add `CHECK (source_id <> target_id)` |
+| EmpathyDraft | 5/3 | **merge-into** draft | `draft(conversation_id, kind, …)` unique per kind |
+| EmpathyAttempt | 28/15 | keep → `empathy_attempt` | add `subject_id`; rows immutable per submission with `round`; unique (session, author, round); `consentRecordId` never written |
+| EmpathyValidation | 4/3 | keep → `empathy_review` | one per attempt per reviewer (unique exists) |
+| ValidationFeedbackDraft | 0/1 | **merge-into** draft | identical shape to `EmpathyDraft` |
+| ReconcilerResult | 13/7 | keep | FK `attempt_id`; `subject_id` FK (RLS arm); drop `guesserName/subjectName`; `ReconcilerGuidance` split per Phase 3 D8a |
+| ReconcilerShareOffer | 15/12 | keep → `context_share_offer` | `userId` → FK; drop `seenAt`, `skippedAt`, `refinementChatUsed`; write or drop `last*NotifiedAt` (F4.2) |
+| RefinementAttemptCounter | 1/1 | drop → view | `count(*)` of `reconciler_result` per attempt; `direction` string is a composite key in disguise |
+| StrategyProposal | 19/11 | keep → `proposal` | drop `needsAddressed[]` in favour of the junction; drop never-written `parentProposalId`, `coverageSummary`, `consentRecordId` (F4.2); FK `captured_from_message_id` |
+| StrategyProposalNeed | 1/2 | keep → `proposal_need` | the one real junction; make it the only need link |
+| Stage4ProposalSelection | 7/2 | keep → `proposal_choice` | willingness per user per proposal (unique exists) |
+| Stage4ProposalRevision | 0/8 | keep → `proposal_revision` | audit log; `action` → enum; `before/after` jsonb with `jsonb_typeof = 'object'` CHECK; FKs on `sessionId`, `actorUserId`, `messageId` |
+| Stage4NeedCoverage | 8/2 | **view** + merge-into need_disposition | coverage = `proposal_need` × `proposal_choice`; user-set covered/skipped → `need_disposition` |
+| Stage4NeedDeclination | 3/2 | **merge-into** need_disposition | a declination is `status = DECLINED` |
+| Stage4Closure | 11/2 | keep → `session_closure` | drop the three id arrays (derivable); `closedByUserId` → FK |
+| Stage4SubChat | 4/2 | **merge-into** conversation | `kind = SUBCHAT`, `anchor_kind`, `anchor_proposal_id` FK |
+| Stage4SubChatMessage | 0/2 | **merge-into** message | |
+| TendingEntry | 7/20 | keep → `follow_up` | job-queried (`scheduledFor` index); `ownerUserId` → FK |
+| TendingCheckin | 2/1 | keep → `follow_up_checkin` | gains `payload jsonb` absorbing the five response tables |
+| TendingCoordinationCycle | 5/4 | drop → view | three id arrays; status derivable from check-ins vs `response_deadline_at` on the entry |
+| TendingResponse | 1/2 | **merge-into** checkin payload | `status` free text; read back only with its check-in |
+| TendingEntryOutcome | 0/1 | **merge-into** checkin payload | |
+| TendingNeedOutcome | 0/1 | **merge-into** checkin payload | `needLabel` is a denormalised copy |
+| TendingReminder | 1/3 | keep → `reminder` | job-queried (`remindAt`); `status` → enum |
+| TendingAdjustment | 0/1 | **merge-into** checkin payload | |
+| TendingBetweenPeriodNote | 3/3 | keep → `follow_up_note` | created between check-ins; has a consent flag |
+| TendingResponsePartialClosure | 0/1 | **merge-into** checkin payload | |
+| StrategyRanking | 4/2 | drop-until-needed | product flow is willingness selection, not ranking; `rankedIds[]` |
+| EmotionalExerciseCompletion | 1/2 | keep → `regulation_event` | per session/user time series |
+| GlobalLibraryItem | 1/1 | drop-until-needed | island; never seeded, so `stage4.ts:2472` reads an empty library; `contributedBy` no FK |
+| Invitation | 14/8 | keep | add `accepted_by_user_id` (Phase 3 §6) |
+| UserMemory | 11/12 | keep | filtered by status/category/session |
+| Need | 6/0 | **lookup** → `need_taxonomy` | fix `Int @id` with no generator (audit §2); keep seeded |
+| NeedScore | 2/2 | keep | `DISTINCT ON` time-series queries in 4 raw-SQL sites |
+| NeedsAssessmentState | 4/4 | **jsonb-table** | per-user feature state, read whole; `nextCheckInAt` promoted to a column if a job ever queries it |
+| Person | 12/7 | keep (slim) | unique (user, name); drop 4 counters and `needsConnections` → derive |
+| PersonMention | 4/4 | **jsonb-table** | polymorphic `sourceId`; mentions become a `jsonb` array on `person` until something filters them |
+| Insight | 3/1 | drop-until-needed | the jsonb-document pattern done right, but nothing generates insights — the dismiss endpoint updates rows that never exist (census §2.2) |
+| RecurringTheme | 1/1 | drop → view | one `upsert` (`theme-detector.ts:159`, via an `any` cast), one reader; `group by theme` over conversations instead |
+| GratitudeEntry | 7/2 | keep (slim) → `gratitude_entry` | five tag arrays + `linkedNeedIds` + sentiment → one `extracted jsonb` |
+| GratitudePreferences | 1/2 | **merge-into** user_preferences | |
+| MeditationSession | 5/2 | keep | time series listed by date; drop `linkedNeedIds`, `linkedConflictId` (0 refs) |
+| MeditationStats | 3/2 | **view** | streaks and totals are `count/sum` over `meditation_session` |
+| MeditationFavorite | 2/3 | **merge-into** `meditation_script` | same thing as `SavedMeditation` with a `favorite_type` |
+| MeditationPreferences | 1/2 | **merge-into** user_preferences | |
+| SavedMeditation | 5/3 | keep → `meditation_script` | `conversationId` → FK conversation |
+| BrainActivity | 10/6 | keep | telemetry; jsonb legitimate; retention per Phase 3 |
 
 Tally (68): keep 32 · split 2 · rename 1 · merge-into 17 · view 5 · jsonb-table 2 · lookup 1 · drop / drop-until-needed 8. Target: **~40 tables** (+ `ReconcilerGuidance`, `UserKey`, `SessionKey` from Phase 3).
 
@@ -120,7 +121,7 @@ That correction stands once, and the rest of the concern survives it intact:
 | God tables | **Real** — `User` mixes identity, auth device, four `jsonb` preference/memory blobs and a mood cache; `UserVessel` mixes private-vessel root, read-state and AI memory; `Message` mixes routing, content, event-kind and extraction | §2 |
 | Real arrays | **Real** — 27 array columns, 10 of them id lists with no FK (audit §3b), plus `needsAddressed[]` shadowing a junction | §3.1 |
 | JSON hiding structure | **Real** — `gatesSatisfied` holds need ids and timestamps; `Stage4ProposalRevision.before/after` is unshaped; `conversationSummary` is JSON serialised into `text` ×2 | §3.2 |
-| Over-specification | **Real** — 23 models ≤3 call sites; 2 with none | §4 |
+| Over-specification | **Real** — 20 models ≤3 direct call sites, 1 with none, 6 never populated, 69 columns never written (census §1–3) | §4 |
 | Coupling | **Real** — 127 back-relations say 60+ tables reach `User`/`Session` directly rather than through a domain parent | §2, §6 |
 
 ---
@@ -191,17 +192,21 @@ gains nothing a view can't. Keep.
 
 ### F3.2 JSON — 17 `jsonb` + 2 JSON-in-`text` (P1)
 
+Census §5: of the 17, **3 are typed by a shared DTO** (the `User` preferences), **10 are ad hoc**, **4 are never written** (`ConsentRecord.metadata`, `StrategyProposal.coverageSummary`, `Person.needsConnections`, `Insight.data`). `shared/src/dto/stage.ts:36` defines `GateSatisfactionDTO` for `gatesSatisfied` and **no writer uses it** — the ~15 write sites use inline literals and two files redeclare local gate types. `User.globalFacts` is documented as an array (l.40) and written as an object (`global-memory.ts:28`).
+
 | Column | Verdict | Why |
 |---|---|---|
 | `StageProgress.gatesSatisfied` (l.345) | **hides structure — P1** | 20 files write it; keys include `compactSigned/signedAt`, `feelHeardConfirmed/At`, `needsConfirmed`, `needsShared`, `selectionSubmitted`, and Stage 4 `phase/currentNeedId/coveredNeedIds/skippedNeedIds` (`stage4.ts:504–508`). Each boolean+timestamp pair is a **milestone event**; each id list is a **junction**. Target: `participant_milestone(conversation_id, milestone enum, at timestamptz, UNIQUE)` + `need_disposition(conversation_id, need_id, status enum)` |
 | `Stage4ProposalRevision.before/after` | acceptable as audit diff | add `CHECK (jsonb_typeof(before)='object')`; `action` → enum (F3.5) |
-| `StrategyProposal.coverageSummary` | drop | 5 refs; derivable from the junction |
-| `Person.needsConnections`, `MeditationStats.favoriteFocusAreas` | drop | counters of derivable things |
+| `StrategyProposal.coverageSummary` | drop | never written (census §3); derivable from the junction |
+| `Person.needsConnections`, `MeditationStats.favoriteFocusAreas` | drop | `needsConnections` is never written (always `{}`); both are counters of derivable things |
 | `ConsentRecord.metadata`, `Insight.data`, `BrainActivity.{input,output,metadata,structuredOutput}` | legitimate | telemetry / LLM payloads, read whole |
 | `User.{memory,notification,privacy}Preferences` | legitimate | → `user_preferences` (F2.1) |
 | `User.globalFacts`, `UserVessel.notableFacts`, `UserVessel.conversationSummary` (text), `InnerWorkSession.conversationSummary` (text) | legitimate, mis-homed | → `ai_memory` jsonb; the two `text` columns become real `jsonb` (audit §6) |
 
 ### F3.3 Id columns with no FK — 31 by catalog, 26 after false positives (P0 for the first row)
+
+The uuid migration rewrote the *values* of all 26 but left the columns `text` (census §9), so every one now mismatches the `uuid` column it points at: a join or raw-SQL comparison is `uuid = text` and needs a cast, and Prisma cannot express the relation at all. Each of these either becomes a typed FK or goes.
 
 | Group | Columns | Fix |
 |---|---|---|
@@ -243,7 +248,11 @@ CHECKs: Phase 3 §6 lists seven; add `mood_reading.intensity BETWEEN 1 AND 10`,
 `empathy_attempt.author_id <> subject_id`, `need_score.score IN (0,1,2)`, `jsonb_typeof` on every
 jsonb column, and the exclusive-arc checks (F3.3).
 
-Free-text statuses (ERD §3.5 lists 9). Observed values: `Stage4ProposalRevision.action` =
+Modification timestamps: **45 of 68 tables have no `updatedAt`, and production updates 27 of them in place** (census §10) — `StageProgress` (33 update sites), `EmpathyAttempt` (14), `IdentifiedNeed` (8), `Invitation` (6), `ReconcilerResult` (6) among them — so last-modified time is unrecorded on the tables whose rows change most. In the target shape every mutable table gets `updated_at timestamptz` maintained by one trigger; append-only tables (`message`, `participant_milestone`, `proposal_revision`) get `created_at` only and a revoked `UPDATE` grant instead.
+
+Enum order: five enums (`MessageRole`, `EmpathyStatus`, `ReconcilerShareStatus`, `TendingEntryType`, `MemoryStatus`) have the same members in a different `pg_enum.enumsortorder` than the schema declares (census §7), because `ADD VALUE` appends. Any `ORDER BY status` or `<` comparison follows the DB order. Rebuild them in the re-shape; never rely on enum order.
+
+Free-text statuses (ERD §3.5 lists 9; census §6 adds `InnerWorkSession.linkedTrigger`, whose schema comment lists three values none of which is written — the only value written is `suggestion_start`). Observed values: `Stage4ProposalRevision.action` =
 `CREATED | REVISED | REMOVED | RESTORED | CONVERTED | CAPTURE_SKIPPED | covered | subchat_refined`
 (mixed case, two styles); `TendingReminder.status` = `SCHEDULED | DELIVERED | RESOLVED`;
 `RelationshipMember.role` = `member` only. All nine → Postgres enums. Enum lifecycle: adding a
@@ -260,33 +269,69 @@ two "legacy" values. Acceptable; or use a lookup table only where values are use
 columns in SQL (list, job, index); (b) it is joined to another table; (c) it carries an RLS or
 consent predicate of its own. Otherwise it is a document: one `jsonb` row per owner, or nothing.
 
-**Evidence.** The parallel census (`scratchpad/schema-census/census.md`) was not written when this
-section was produced; counts here are from `grep -rn 'prisma.<model>.\|tx.<model>.' backend/src`
-excluding `*.test.*`, `__tests__`, `fixtures`, `scripts/`, `src/testing/`, `e2e/`, `generated/`
-(§11). Mobile surface checked with `grep -rl` over `mobile/src` and `mobile/app`.
+**Evidence.** The census in `schema-review-2026-10/` (`census.md`, `models.csv`, `columns.csv`;
+670 columns matching the catalog exactly, production = `backend/src` minus tests/mocks/fixtures/
+scripts/`src/testing`/generated, 149 files). From `models.csv`: **20 models have ≤3 direct
+production call sites (`prod_r + prod_w`)**; counting nested `include` reads as well, 14. The
+direct figure is the one used here because a nested read through a parent proves only that the
+parent is used. Mobile surface checked with `grep -rl` over `mobile/src` and `mobile/app`.
 
 | Cluster | Tables (cs) | (a) | (b) | (c) | Disposition |
 |---|---|---|---|---|---|
-| Private vessel children | `UserEvent` 1, `Boundary` 1, `UserDocument` 1 | no | no | inherit | **drop-until-needed**; the only call is `session-deletion.ts` |
-| Shared vessel | `SharedVessel` 11, `CommonGround` 0 | no | container only | inherit | merge / drop |
-| Pre-session | `PreSessionMessage` 2 | TTL index | no | own | drop-until-needed; if revived, a `conversation` of kind `PRE_SESSION` |
-| Stage 2 drafts | `ValidationFeedbackDraft` 1 | no | no | own | merge into `draft` |
-| Stage 4 bookkeeping | `Stage4NeedCoverage` 11, `Stage4NeedDeclination` 5, `StrategyRanking` 7 | coverage listed per session | yes | inherit | coverage → view + `need_disposition`; ranking → drop-until-needed (product spec: willingness, not rank) |
-| Tending responses | `TendingResponse` 3, `EntryOutcome` 1, `NeedOutcome` 1, `Adjustment` 1, `PartialClosure` 1, `CoordinationCycle` 9 | only the cycle (deadline) | only to their check-in | inherit | five → `checkin.payload jsonb`; cycle → view with `response_deadline_at` on `follow_up` |
-| Knowledge base | `SessionTakeaway` 12, `TakeawayLink` 0, `RecurringTheme` 1 | takeaways browsed/filtered (mobile 9 files) | links no | own | takeaway keep; link drop; theme → view |
-| People | `Person` 19, `PersonMention` 8 | person list by `lastMentioned`; mentions by `(userId, sourceType)` | mention → person | own | person keep (slim); mention → jsonb on person until a filter needs it |
-| Needs assessment | `Need` 6, `NeedScore` 4, `NeedsAssessmentState` 8 | scores: `DISTINCT ON` in 4 raw-SQL sites | yes | own | taxonomy + scores keep; state → feature doc |
-| Gratitude | `GratitudeEntry` 9, `GratitudePreferences` 3 | entries by date | no | own | entry keep (slim); prefs → `user_preferences` |
-| Meditation | `MeditationSession` 7, `Stats` 5, `Favorite` 5, `Preferences` 3, `SavedMeditation` 8 | sessions by date | no | own | session keep; stats → view; favorite+saved → `meditation_script`; prefs → `user_preferences` |
-| Insights | `Insight` 4 | by `(userId, dismissed, priority)` | no | own | keep — this is the jsonb-document pattern done correctly |
-| Library | `GlobalLibraryItem` 2 | by category | no | none (global) | drop-until-needed |
-| Regulation | `EmotionalExerciseCompletion` 3 | by `(sessionId,userId,completedAt)` | no | inherit | keep |
+| Private vessel children | `UserEvent` 0/1, `Boundary` 0/1, `UserDocument` 0/1 | no | no | inherit | **drop-until-needed**; never created; the only call is `session-deletion.ts:112–116`; two are still in the encryption map |
+| Shared vessel | `SharedVessel` 6/2, `CommonGround` 0/0 | no | container only | inherit | merge / drop |
+| Pre-session | `PreSessionMessage` 1/1 | TTL index | no | own | drop-until-needed; never created, read path runs against an empty table; if revived, a `conversation` of kind `PRE_SESSION` |
+| Stage 2 drafts | `ValidationFeedbackDraft` 0/1 | no | no | own | merge into `draft`; today it is saved and never loaded (census §2.3) |
+| Stage 4 bookkeeping | `Stage4NeedCoverage` 8/2, `Stage4NeedDeclination` 3/2, `StrategyRanking` 4/2, `Stage4ProposalRevision` 0/8 | coverage listed per session | yes | inherit | coverage → view + `need_disposition`; ranking → drop-until-needed (product spec: willingness, not rank; the only order-dependent array, census §4); revision is an audit log with no reader — keep, append-only |
+| Tending responses | `TendingResponse` 1/2, `EntryOutcome` 0/1, `NeedOutcome` 0/1, `Adjustment` 0/1, `PartialClosure` 0/1, `CoordinationCycle` 5/4 | only the cycle (deadline) | only to their check-in (nested reads only, census §2.3) | inherit | five → `checkin.payload jsonb`; cycle → view with `response_deadline_at` on `follow_up` |
+| Knowledge base | `SessionTakeaway` 12/5, `TakeawayLink` 5/3, `RecurringTheme` 1/1 | takeaways browsed/filtered (mobile 9 files); links listed per takeaway | link → takeaway ×2 | own | takeaway and link keep (both live, both reached via `any` casts, F4.3); theme → view |
+| People | `Person` 12/7, `PersonMention` 4/4 | person list by `lastMentioned`; mentions by `(userId, sourceType)` | mention → person | own | person keep (slim); mention → jsonb on person until a filter needs it |
+| Needs assessment | `Need` 6/0, `NeedScore` 2/2, `NeedsAssessmentState` 4/4 | scores: `DISTINCT ON` in 4 raw-SQL sites | yes | own | taxonomy + scores keep; state → feature doc |
+| Gratitude | `GratitudeEntry` 7/2, `GratitudePreferences` 1/2 | entries by date | no | own | entry keep (slim); prefs → `user_preferences` |
+| Meditation | `MeditationSession` 5/2, `Stats` 3/2, `Favorite` 2/3, `Preferences` 1/2, `SavedMeditation` 5/3 | sessions by date | no | own | session keep; stats → view; favorite+saved → `meditation_script`; prefs → `user_preferences` |
+| Insights | `Insight` 3/1 | by `(userId, dismissed, priority)` | no | own | drop-until-needed — the right pattern for a feature that does not exist yet: no writer, table always empty |
+| Library | `GlobalLibraryItem` 1/1 | by category | no | none (global) | drop-until-needed; never seeded, read by `stage4.ts:2472` as an empty list |
+| Regulation | `EmotionalExerciseCompletion` 1/2 | by `(sessionId,userId,completedAt)` | no | inherit | keep |
 
 The owner's "tables that contain json" suggestion is right for exactly the rows above marked
 *feature doc* / *payload*: data the server writes and reads back whole for one user, never filters,
 never joins, never shows a partner. It is wrong for anything a job scans (`follow_up.scheduled_for`,
 `reminder.remind_at`), anything listed with `ORDER BY`/`WHERE` (`takeaway`, `need_score`,
 `meditation_session`), and anything that crosses the consent boundary (every core table).
+
+### F4.2 Columns the application reads but never writes (P1 — behaviour the schema promises and the app lacks)
+
+Census §3, high confidence, each hand-checked. These are not clutter; the reader behaves as if the
+column were maintained.
+
+| Column | Reader | Effect today | Disposition |
+|---|---|---|---|
+| `ReconcilerShareOffer.lastDeliveryNotifiedAt`, `lastSeenNotifiedAt` | `notifications.ts:170–180` counts accepted offers `WHERE … IS NULL` to surface "not yet notified" delivery/seen updates | nothing ever sets them, so the filter is always true and the count never excludes an item already surfaced | write them in the delivery/seen transitions, or drop them and the count's `OR` arms — one or the other |
+| `Message.extractedEmotions` | `reconciler/analysis.ts:249–258` builds the theme set from it | always empty; the only `extractedEmotions:` writer is `GratitudeEntry` | drop column and reader |
+| `EmpathyAttempt.consentRecordId` | `stage2.ts:964`, `empathy-status.ts:222` as `?? ''` | always `''` | drop; the consent arc lives on `consent` (F3.3) |
+| `ConsentRecord.metadata` | `consent.ts:53` returns it to the client | always `null` | drop |
+| `StrategyProposal.parentProposalId`, `coverageSummary`, `consentRecordId` | set to `null` only on an in-memory `ProposalRow` (`stage4-capture.service.ts:742–747`) | never persisted | drop; revive `parent_proposal_id` as a real FK only when revision lineage is a feature |
+| `Agreement.completedAt` | read as a completion marker | written by tooling only | derive from `follow_up` closure or write it |
+| Never written *and* never read: `Message.extractedNeeds`, `StageProgress.synthesisLastUpdated`, `ConsentedContent.originalNeedId`, `GratitudeEntry.linkedConflictId`, `MeditationSession.linkedConflictId/linkedNeedIds`, `ReconcilerShareOffer.seenAt`; default-only flags nobody reads: `StageProgress.isSynthesisDirty`, `ReconcilerResult.wasCircuitBreakerTrip`, `ReconcilerShareOffer.refinementChatUsed` | — | dead from birth | drop |
+
+Where the census marks a column "written but never read" (`Session.previousSessionId`,
+`Stage4Closure.closedByUserId`, `Invitation.declineReason`, `StrategyProposal.capturedFromMessageId`,
+…), this review keeps the ones that are audit facts and FKs them; they are cheap and the product
+spec asks for lineage ("Result and source").
+
+### F4.3 `any`-cast access to the Prisma client (P1)
+
+Eighteen production call sites bypass the generated types: `prismaAny = prisma as any`
+(`knowledge-base.ts:306/409/459/524` → `takeawayLink` ×7), `(prisma as any).sessionTakeaway` ×5 and
+`.innerWorkSession` ×3 (`controllers/takeaways.ts`), `(prisma as any).innerWorkSession`
+(`controllers/distillation.ts`), `(prisma as any).takeawayLink` (`services/distillation.ts`), and
+`(prisma.recurringTheme as any)` (`theme-detector.ts:159`). Four models are reached this way —
+`TakeawayLink`, `SessionTakeaway`, `InnerWorkSession`, `RecurringTheme`, all in the knowledge-base
+cluster — which is why a plain `prisma.<model>.` grep under-counted `TakeawayLink` to zero in the
+first draft of this review. Consequence: a schema change to any of those four tables does not fail
+`npm run check`, and the encryption field map cannot be type-checked against them either. The fix
+is code (`Prisma.TransactionClient` typing or regenerating the client), but the re-shape should
+land with a lint rule forbidding `as any` on the client.
 
 ---
 
@@ -460,13 +505,18 @@ five tending response tables, `TakeawayLink`, `RecurringTheme`, `MeditationStats
   queried read-only for column types (183 uuid, 158 text, 144 naive timestamp, 27 array, 17 jsonb),
   array/jsonb/unenforced-id inventories, and the zero counts for CHECK/view/trigger/policy. The
   local database holds no application rows beyond `Need` (19), so no data-shape claims rest on it.
-- Production call sites: `grep -rn 'prisma.<model>.\|tx.<model>.' backend/src` excluding tests,
-  mocks, fixtures, scripts, `src/testing`, `e2e`, generated code. Counts are lines, not distinct
-  callers; nested `include`/`select` reads are not counted, so a model with cs=0 may still be read
-  through its parent (`CommonGround` is — `stage3.ts:1346` returns `commonGround: []` literally).
-  Column reference counts (`gatesSatisfied` 175 across 20 files, etc.) use the same exclusions.
-- The parallel census (`schema-census/census.md`) did not exist when §4 was written; its
-  never-read/never-written column lists should be reconciled against §0 when available.
+- Production call sites and column read/write evidence come from the census copied into
+  `schema-review-2026-10/` (`census.md` §13 gives its method and blind spots: regex over delegate
+  calls including the `any`-cast forms, object-literal parsing of `data`/`where`, ~40 hand-checked
+  overrides). `models.csv` columns used here: `prod_r`, `prod_w`, `nested_reads`, `created_in_prod`.
+  The first draft used a plain `prisma.<model>.` grep and missed the `any`-cast sites (F4.3); where
+  the two disagreed the census number is used. Column reference counts quoted in prose
+  (`gatesSatisfied` 175 across 20 files, `needsAddressed` 58) are this review's own grep with the
+  same exclusions and count lines, not distinct callers.
+- One disagreement with the census: it classes `src/scripts/open-due-tending-entries.ts` and
+  `sweep-session-retention.ts` as tooling; they are scheduled jobs, and their scans of
+  `TendingEntry.scheduledFor` and session retention are production access paths for §4's
+  criterion (a). That is why `TendingEntry` and `TendingReminder` stay tables.
 - Audit and ERD figures (118 FKs, 25 unindexed, 41 unenforced, 9 free-text statuses) are cited,
   not re-derived; the uuidv7 migration post-dates both and changed types, not shape.
 - Not reviewed: index selectivity, query plans, mobile cache shape, the `.planning/` documents.

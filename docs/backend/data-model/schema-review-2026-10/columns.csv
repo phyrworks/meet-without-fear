@@ -1,0 +1,671 @@
+model,column,type,nullable,written,read,confidence,notes,db_type
+User,id,String,N,yes,yes,w:high; r:high,write@backend/src/middleware/auth.ts:104; read@backend/src/controllers/auth.ts:115,uuid
+User,clerkId,String?,Y,yes,yes,w:high; r:high,write@backend/src/middleware/auth.ts:104; read@backend/src/middleware/auth.ts:115,text
+User,email,String,N,yes,yes,w:high; r:high,write@backend/src/middleware/auth.ts:104; read@backend/src/controllers/invitations.ts:70,text
+User,name,String?,Y,yes,yes,w:high; r:high,write@backend/src/middleware/auth.ts:220; read@backend/src/controllers/invitations.ts:70; name in 5 models,text
+User,firstName,String?,Y,yes,yes,w:high; r:high,write@backend/src/middleware/auth.ts:220; read@backend/src/controllers/invitations.ts:70,text
+User,lastName,String?,Y,yes,yes,w:high; r:high,write@backend/src/middleware/auth.ts:220; read@backend/src/controllers/invitations.ts:882,text
+User,pushToken,String?,Y,yes,yes,w:high; r:high,write@backend/src/controllers/auth.ts:157; read@backend/src/services/push.ts:473,text
+User,biometricEnabled,Boolean,N,yes,likely,w:high; r:medium,write@backend/src/controllers/auth.ts:366; prop@backend/src/controllers/auth.ts:54,bool
+User,biometricEnrolledAt,DateTime?,Y,yes,likely,w:high; r:medium,write@backend/src/controllers/auth.ts:366; prop@backend/src/controllers/auth.ts:378,timestamp
+User,memoryPreferences,Json?,Y,yes,yes,w:high; r:high,write@backend/src/controllers/auth.ts:446; read@backend/src/controllers/auth.ts:393,jsonb
+User,notificationPreferences,Json?,Y,yes,yes,w:high; r:high,write@backend/src/controllers/auth.ts:558; read@backend/src/controllers/auth.ts:504,jsonb
+User,privacyPreferences,Json?,Y,yes,yes,w:high; r:high,write@backend/src/controllers/auth.ts:623; read@backend/src/controllers/auth.ts:580,jsonb
+User,lastMoodIntensity,Int?,Y,yes,likely,w:high; r:medium,write@backend/src/controllers/auth.ts:481; prop@backend/src/controllers/auth.ts:55,int4
+User,createdAt,DateTime,N,default,n/a,w:common name — not assessed; r:common name — not assessed,,timestamp
+User,updatedAt,DateTime,N,default,n/a,w:common name — not assessed; r:common name — not assessed,,timestamp
+User,globalFacts,Json?,Y,yes,yes,w:high; r:high,write@backend/src/services/global-memory.ts:215; read@backend/src/services/global-memory.ts:124,jsonb
+Relationship,id,String,N,default,yes,w:common name — not assessed; r:high,read@backend/src/controllers/invitations.ts:749,uuid
+Relationship,createdAt,DateTime,N,default,n/a,w:common name — not assessed; r:common name — not assessed,,timestamp
+Relationship,updatedAt,DateTime,N,default,n/a,w:common name — not assessed; r:common name — not assessed,,timestamp
+RelationshipMember,id,String,N,default,yes,w:common name — not assessed; r:high,read@backend/src/controllers/invitations.ts:1070,uuid
+RelationshipMember,relationshipId,String,N,yes,yes,w:high; r:high,write@backend/src/controllers/invitations.ts:710; read@backend/src/controllers/invitations.ts:417; name in 2 models,uuid
+RelationshipMember,userId,String,N,yes,yes,w:high; r:high,write@backend/src/controllers/invitations.ts:710; read@backend/src/controllers/auth.ts:68,uuid
+RelationshipMember,joinedAt,DateTime,N,default-only,yes,w:high; r:high,read@backend/src/controllers/invitations.ts:882,timestamp
+RelationshipMember,role,String,N,default-only,likely,w:high; r:low,"manually verified: @default(""member""); invitations.ts:710 create omits it; prop@backend/src/controllers/inner-work.ts:106; name in 5 models",text
+RelationshipMember,nickname,String?,Y,yes,yes,w:high; r:high,write@backend/src/controllers/invitations.ts:417; read@backend/src/controllers/invitations.ts:337,text
+Session,id,String,N,default,yes,w:common name — not assessed; r:high,read@backend/src/controllers/auth.ts:220,uuid
+Session,relationshipId,String,N,yes,yes,w:high; r:high,write@backend/src/controllers/invitations.ts:452; read@backend/src/controllers/invitations.ts:430; name in 2 models,uuid
+Session,status,SessionStatus,N,yes,yes,w:high; r:high,write@backend/src/controllers/invitations.ts:452; read@backend/src/controllers/auth.ts:68,SessionStatus
+Session,type,SessionType,N,yes,yes,w:high; r:high,write@backend/src/services/tending.service.ts:1358; read@backend/src/services/session-retention.ts:54; name in 8 models,SessionType
+Session,createdAt,DateTime,N,default,yes,w:common name — not assessed; r:high,read@backend/src/controllers/gratitude.ts:642,timestamp
+Session,updatedAt,DateTime,N,yes,yes,w:high; r:high,write@backend/src/services/realtime.ts:332; read@backend/src/controllers/invitations.ts:70,timestamp
+Session,resolvedAt,DateTime?,Y,yes,likely,w:high; r:low,write@backend/src/controllers/sessions.ts:465; prop@backend/src/controllers/session-state.ts:446; name in 4 models,timestamp
+Session,topicFrame,String?,Y,yes,yes,w:high; r:high,write@backend/src/services/stream-turn-actions.ts:324; read@backend/src/controllers/session-state.ts:54,text
+Session,topicFrameConfirmedAt,DateTime?,Y,yes,yes,w:high; r:high,write@backend/src/controllers/topic-frame.ts:71; read@backend/src/controllers/session-state.ts:54,timestamp
+Session,previousSessionId,String?,Y,yes,no,w:high; r:high,write@backend/src/services/tending.service.ts:1358,uuid
+InnerWorkSession,id,String,N,yes,yes,w:high; r:high,write@backend/src/services/embedding.ts:355 (raw); read@backend/src/controllers/distillation.ts:34,uuid
+InnerWorkSession,userId,String,N,yes,yes,w:high; r:high,write@backend/src/controllers/inner-work.ts:350; read@backend/src/controllers/distillation.ts:34,uuid
+InnerWorkSession,title,String?,Y,yes,yes,w:high; r:high,write@backend/src/controllers/inner-work.ts:172; read@backend/src/controllers/people.ts:212; name in 4 models,text
+InnerWorkSession,summary,String?,Y,yes,yes,w:high; r:high,write@backend/src/controllers/inner-work.ts:172; read@backend/src/controllers/messages.ts:832; name in 5 models,text
+InnerWorkSession,theme,String?,Y,yes,yes,w:high; r:high,write@backend/src/controllers/inner-work.ts:172; read@backend/src/controllers/inner-work.ts:116; name in 2 models,text
+InnerWorkSession,status,InnerWorkStatus,N,yes,yes,w:high; r:high,write@backend/src/controllers/inner-work.ts:350; read@backend/src/controllers/inner-work.ts:1175,InnerWorkStatus
+InnerWorkSession,createdAt,DateTime,N,default,yes,w:common name — not assessed; r:high,read@backend/src/controllers/knowledge-base.ts:78,timestamp
+InnerWorkSession,updatedAt,DateTime,N,yes,yes,w:high; r:high,write@backend/src/controllers/inner-work.ts:864; read@backend/src/controllers/inner-work.ts:116,timestamp
+InnerWorkSession,distilledAt,DateTime?,Y,yes,yes,w:high; r:high,write@backend/src/routes/e2e.ts:362; read@backend/src/controllers/takeaways.ts:61,timestamp
+InnerWorkSession,conversationSummary,String?,Y,yes,yes,w:high; r:high,write@backend/src/services/conversation-summarizer.ts:766; read@backend/src/services/conversation-summarizer.ts:800; name in 2 models,text
+InnerWorkSession,contentEmbedding,"Unsupported(""vector(1024)"")?",Y,yes,likely,w:high; r:low,write@backend/src/services/embedding.ts:355 (raw); prop@backend/src/services/embedding.ts:204; name in 2 models,vector
+InnerWorkSession,linkedPartnerSessionId,String?,Y,yes,yes,w:high; r:high,write@backend/src/controllers/inner-work.ts:350; read@backend/src/controllers/inner-work.ts:1175,uuid
+InnerWorkSession,linkedAtMessageId,String?,Y,yes,likely,w:high; r:medium,manually verified: conditional spread invitations.ts:515; prop@backend/src/controllers/inner-work.ts:93,uuid
+InnerWorkSession,linkedAtStage,Int?,Y,yes,client-only?,w:high; r:low,write@backend/src/controllers/inner-work.ts:350; only in mobile:mobile/src/hooks/useInnerThoughts.ts:169,int4
+InnerWorkSession,linkedTrigger,String?,Y,yes,yes,w:high; r:high,write@backend/src/controllers/inner-work.ts:350; read@backend/src/controllers/messages.ts:832,text
+InnerWorkSession,contextSummarySnapshot,String?,Y,yes,yes,w:high; r:high,manually verified: conditional spread invitations.ts:516; read@backend/src/controllers/session-state.ts:186,text
+InnerWorkMessage,id,String,N,default,yes,w:common name — not assessed; r:high,read@backend/src/controllers/invitations.ts:498,uuid
+InnerWorkMessage,sessionId,String,N,yes,yes,w:high; r:high,write@backend/src/controllers/inner-work.ts:370; read@backend/src/controllers/inner-work.ts:143,uuid
+InnerWorkMessage,role,MessageRole,N,yes,yes,w:high; r:high,write@backend/src/controllers/inner-work.ts:370; read@backend/src/controllers/messages.ts:832; name in 5 models,MessageRole
+InnerWorkMessage,content,String,N,yes,yes,w:high; r:high,write@backend/src/controllers/inner-work.ts:370; read@backend/src/controllers/messages.ts:832,text
+InnerWorkMessage,timestamp,DateTime,N,default-only,yes,w:high; r:high,read@backend/src/controllers/inner-work.ts:143; name in 5 models,timestamp
+SessionTakeaway,id,String,N,yes,yes,w:high; r:high,write@backend/src/services/embedding.ts:475 (raw); read@backend/src/controllers/knowledge-base.ts:294,uuid
+SessionTakeaway,sessionId,String,N,n/a,yes,w:common name — not assessed; r:high,read@backend/src/controllers/takeaways.ts:67,uuid
+SessionTakeaway,content,String,N,yes,yes,w:high; r:high,write@backend/src/controllers/takeaways.ts:116; read@backend/src/services/embedding.ts:525 (raw),text
+SessionTakeaway,theme,String?,Y,yes,yes,w:high; r:high,write@backend/src/routes/e2e.ts:362; read@backend/src/services/embedding.ts:525 (raw); name in 2 models,text
+SessionTakeaway,source,TakeawaySource,N,yes,yes,w:high; r:high,write@backend/src/controllers/takeaways.ts:116; read@backend/src/services/distillation.ts:207; name in 4 models,TakeawaySource
+SessionTakeaway,type,TakeawayType,N,yes,yes,w:high; r:high,write@backend/src/routes/e2e.ts:362; read@backend/src/services/embedding.ts:525 (raw); name in 8 models,TakeawayType
+SessionTakeaway,position,Int,N,yes,yes,w:high; r:high,write@backend/src/routes/e2e.ts:362; read@backend/src/controllers/knowledge-base.ts:78,int4
+SessionTakeaway,resolved,Boolean,N,yes,likely,w:high; r:medium,write@backend/src/controllers/knowledge-base.ts:617; prop@backend/src/controllers/knowledge-base.ts:60,bool
+SessionTakeaway,resolvedAt,DateTime?,Y,yes,likely,w:high; r:low,write@backend/src/controllers/knowledge-base.ts:617; prop@backend/src/controllers/session-state.ts:446; name in 4 models,timestamp
+SessionTakeaway,createdAt,DateTime,N,default,yes,w:common name — not assessed; r:high,read@backend/src/controllers/knowledge-base.ts:249,timestamp
+SessionTakeaway,updatedAt,DateTime,N,default,n/a,w:common name — not assessed; r:common name — not assessed,,timestamp
+SessionTakeaway,embedding,"Unsupported(""vector(1024)"")?",Y,yes,yes,w:high; r:high,write@backend/src/services/embedding.ts:475 (raw); read@backend/src/services/embedding.ts:525 (raw),vector
+TakeawayLink,id,String,N,default,yes,w:common name — not assessed; r:high,read@backend/src/controllers/knowledge-base.ts:462,uuid
+TakeawayLink,sourceId,String,N,yes,yes,w:high; r:high,write@backend/src/controllers/knowledge-base.ts:412; read@backend/src/controllers/knowledge-base.ts:309; name in 2 models,uuid
+TakeawayLink,targetId,String,N,yes,yes,w:high; r:high,write@backend/src/controllers/knowledge-base.ts:412; read@backend/src/controllers/knowledge-base.ts:319; name in 2 models,uuid
+TakeawayLink,linkType,TakeawayLinkType,N,yes,likely,w:high; r:medium,write@backend/src/controllers/knowledge-base.ts:412; prop@backend/src/controllers/knowledge-base.ts:339,TakeawayLinkType
+TakeawayLink,similarity,Float?,Y,yes,likely,w:high; r:medium,write@backend/src/services/distillation.ts:319; prop@backend/src/controllers/knowledge-base.ts:229,float8
+TakeawayLink,createdAt,DateTime,N,default,n/a,w:common name — not assessed; r:common name — not assessed,,timestamp
+StageProgress,id,String,N,default,yes,w:common name — not assessed; r:high,read@backend/src/controllers/sessions.ts:687,uuid
+StageProgress,sessionId,String,N,yes,yes,w:high; r:high,write@backend/src/controllers/invitations.ts:469; read@backend/src/controllers/emotions.ts:95,uuid
+StageProgress,userId,String,N,yes,yes,w:high; r:high,write@backend/src/controllers/invitations.ts:469; read@backend/src/controllers/emotions.ts:95,uuid
+StageProgress,stage,Int,N,yes,yes,w:high; r:high,write@backend/src/controllers/invitations.ts:469; read@backend/src/controllers/emotions.ts:95; name in 3 models,int4
+StageProgress,status,StageStatus,N,yes,yes,w:high; r:high,write@backend/src/controllers/invitations.ts:469; read@backend/src/controllers/emotions.ts:95,StageStatus
+StageProgress,startedAt,DateTime,N,yes,yes,w:high; r:high,write@backend/src/controllers/messages.ts:328; read@backend/src/controllers/session-state.ts:331; name in 2 models,timestamp
+StageProgress,completedAt,DateTime?,Y,yes,yes,w:high; r:high,write@backend/src/controllers/messages.ts:297; read@backend/src/controllers/session-state.ts:331; name in 6 models,timestamp
+StageProgress,gatesSatisfied,Json?,Y,yes,yes,w:high; r:high,write@backend/src/controllers/messages.ts:297; read@backend/src/controllers/stage4.ts:349,jsonb
+StageProgress,isSynthesisDirty,Boolean,N,default-only,no,w:high; r:high,,bool
+StageProgress,synthesisLastUpdated,DateTime?,Y,no,no,w:high; r:high,,timestamp
+UserVessel,id,String,N,yes,yes,w:high; r:high,write@backend/src/services/embedding.ts:202 (raw); read@backend/src/routes/brain.ts:963,uuid
+UserVessel,userId,String,N,yes,yes,w:high; r:high,write@backend/src/controllers/invitations.ts:478; read@backend/src/controllers/emotions.ts:81,uuid
+UserVessel,sessionId,String,N,yes,yes,w:high; r:high,write@backend/src/controllers/invitations.ts:478; read@backend/src/controllers/emotions.ts:81,uuid
+UserVessel,createdAt,DateTime,N,default,n/a,w:common name — not assessed; r:common name — not assessed,,timestamp
+UserVessel,updatedAt,DateTime,N,default,n/a,w:common name — not assessed; r:common name — not assessed,,timestamp
+UserVessel,conversationSummary,String?,Y,yes,yes,w:high; r:high,write@backend/src/services/conversation-summarizer.ts:376; read@backend/src/services/conversation-summarizer.ts:448; name in 2 models,text
+UserVessel,contentEmbedding,"Unsupported(""vector(1024)"")?",Y,yes,yes,w:high; r:high,write@backend/src/services/embedding.ts:202 (raw); read@backend/src/services/embedding.ts:238 (raw); name in 2 models,vector
+UserVessel,lastViewedAt,DateTime?,Y,yes,yes,w:high; r:high,write@backend/src/controllers/sessions.ts:1096; read@backend/src/controllers/invitations.ts:70,timestamp
+UserVessel,lastSeenChatItemId,String?,Y,yes,yes,w:high; r:high,write@backend/src/controllers/sessions.ts:1096; read@backend/src/controllers/invitations.ts:70,text
+UserVessel,lastViewedShareTabAt,DateTime?,Y,yes,yes,w:high; r:high,write@backend/src/controllers/sessions.ts:1166; read@backend/src/controllers/notifications.ts:138,timestamp
+UserVessel,lastActiveAt,DateTime?,Y,yes,yes,w:high; r:high,write@backend/src/controllers/sessions.ts:1096; read@backend/src/controllers/session-state.ts:222,timestamp
+UserVessel,archivedAt,DateTime?,Y,yes,yes,w:high; r:high,write@backend/src/services/session-deletion.ts:117; read@backend/src/controllers/invitations.ts:70,timestamp
+UserVessel,notableFacts,Json?,Y,yes,yes,w:high; r:high,write@backend/src/services/partner-session-classifier.ts:583; read@backend/src/routes/brain.ts:895,jsonb
+UserEvent,id,String,N,no,n/a,w:high; r:common name — not assessed,model has no create/upsert path in prod,uuid
+UserEvent,vesselId,String,N,no,yes,w:high; r:high,model has no create/upsert path in prod; read@backend/src/services/session-deletion.ts:112; name in 5 models,uuid
+UserEvent,description,String,N,no,likely,w:high; r:low,model has no create/upsert path in prod; prop@backend/src/controllers/needs-assessment.ts:79; name in 6 models,text
+UserEvent,attributedTo,Attribution,N,no,no,w:high; r:high,model has no create/upsert path in prod,Attribution
+UserEvent,emotions,String[],Y,no,likely,w:high; r:medium,model has no create/upsert path in prod; prop@backend/src/controllers/gratitude.ts:238,_text
+UserEvent,timestamp,DateTime,N,no,likely,w:high; r:low,model has no create/upsert path in prod; prop@backend/src/controllers/emotions.ts:125; name in 5 models,timestamp
+EmotionalReading,id,String,N,default,n/a,w:common name — not assessed; r:common name — not assessed,,uuid
+EmotionalReading,vesselId,String,N,yes,yes,w:high; r:high,write@backend/src/controllers/emotions.ts:102; read@backend/src/controllers/emotions.ts:165; name in 5 models,uuid
+EmotionalReading,intensity,Int,N,yes,yes,w:high; r:high,write@backend/src/controllers/emotions.ts:102; read@backend/src/routes/brain.ts:970,int4
+EmotionalReading,context,String?,Y,yes,likely,w:high; r:low,write@backend/src/controllers/emotions.ts:102; prop@backend/src/controllers/emotions.ts:177; name in 2 models,text
+EmotionalReading,stage,Int,N,yes,likely,w:high; r:low,write@backend/src/controllers/emotions.ts:102; prop@backend/src/controllers/emotions.ts:107; name in 3 models,int4
+EmotionalReading,timestamp,DateTime,N,default-only,yes,w:high; r:high,read@backend/src/controllers/emotions.ts:165; name in 5 models,timestamp
+IdentifiedNeed,id,String,N,default,yes,w:common name — not assessed; r:high,read@backend/src/controllers/stage3.ts:532,uuid
+IdentifiedNeed,vesselId,String,N,yes,yes,w:high; r:high,write@backend/src/controllers/stage3.ts:1166; read@backend/src/controllers/stage3.ts:49; name in 5 models,uuid
+IdentifiedNeed,need,String,N,yes,yes,w:high; r:high,write@backend/src/controllers/stage3.ts:564; read@backend/src/controllers/stage3.ts:49; name in 2 models,text
+IdentifiedNeed,category,NeedCategory,N,yes,yes,w:high; r:high,write@backend/src/controllers/stage3.ts:1166; read@backend/src/services/stream-turn-admission.ts:141; name in 5 models,NeedCategory
+IdentifiedNeed,evidence,String[],Y,yes,likely,w:high; r:medium,write@backend/src/controllers/stage3.ts:1166; prop@backend/src/controllers/stage3.ts:419,_text
+IdentifiedNeed,confirmed,Boolean,N,yes,yes,w:high; r:high,write@backend/src/controllers/stage3.ts:564; read@backend/src/controllers/stage3.ts:49,bool
+IdentifiedNeed,aiConfidence,Float,N,yes,likely,w:high; r:medium,write@backend/src/controllers/stage3.ts:1166; prop@backend/src/controllers/stage3.ts:435,float8
+IdentifiedNeed,supersededByNeedId,String?,Y,yes,yes,w:high; r:high,write@backend/src/services/needs-edit-applier.service.ts:287; read@backend/src/controllers/stage3.ts:49,uuid
+IdentifiedNeed,lockedAt,DateTime?,Y,yes,likely,w:high; r:medium,write@backend/src/controllers/stage3.ts:577; prop@backend/src/services/needs-edit-applier.service.ts:91,timestamp
+IdentifiedNeed,deletedAt,DateTime?,Y,yes,yes,w:high; r:high,write@backend/src/services/needs-edit-applier.service.ts:218; read@backend/src/controllers/stage3.ts:49,timestamp
+IdentifiedNeed,createdAt,DateTime,N,default,yes,w:common name — not assessed; r:high,read@backend/src/controllers/stage3.ts:49,timestamp
+Boundary,id,String,N,no,n/a,w:high; r:common name — not assessed,model has no create/upsert path in prod,uuid
+Boundary,vesselId,String,N,no,yes,w:high; r:high,model has no create/upsert path in prod; read@backend/src/services/session-deletion.ts:115; name in 5 models,uuid
+Boundary,description,String,N,no,likely,w:high; r:low,model has no create/upsert path in prod; prop@backend/src/controllers/needs-assessment.ts:79; name in 6 models,text
+Boundary,nonNegotiable,Boolean,N,no,no,w:high; r:high,model has no create/upsert path in prod,bool
+Boundary,createdAt,DateTime,N,no,n/a,w:high; r:common name — not assessed,model has no create/upsert path in prod,timestamp
+UserDocument,id,String,N,no,n/a,w:high; r:common name — not assessed,model has no create/upsert path in prod,uuid
+UserDocument,vesselId,String,N,no,yes,w:high; r:high,model has no create/upsert path in prod; read@backend/src/services/session-deletion.ts:116; name in 5 models,uuid
+UserDocument,title,String,N,no,likely,w:high; r:low,model has no create/upsert path in prod; prop@backend/src/controllers/inner-work.ts:84; name in 4 models,text
+UserDocument,content,String,N,no,n/a,w:high; r:common name — not assessed,model has no create/upsert path in prod,text
+UserDocument,type,String,N,no,likely,w:high; r:low,model has no create/upsert path in prod; prop@backend/src/controllers/emotions.ts:251; name in 8 models,text
+UserDocument,createdAt,DateTime,N,no,n/a,w:high; r:common name — not assessed,model has no create/upsert path in prod,timestamp
+UserDocument,updatedAt,DateTime,N,no,n/a,w:high; r:common name — not assessed,model has no create/upsert path in prod,timestamp
+SharedVessel,id,String,N,default,yes,w:common name — not assessed; r:high,read@backend/src/services/shared-context.ts:244,uuid
+SharedVessel,sessionId,String,N,yes,yes,w:high; r:high,write@backend/src/controllers/consent.ts:118; read@backend/src/controllers/consent.ts:118,uuid
+SharedVessel,createdAt,DateTime,N,default,n/a,w:common name — not assessed; r:common name — not assessed,,timestamp
+SharedVessel,updatedAt,DateTime,N,default,n/a,w:common name — not assessed; r:common name — not assessed,,timestamp
+ConsentedContent,id,String,N,default,n/a,w:common name — not assessed; r:common name — not assessed,,uuid
+ConsentedContent,sharedVesselId,String,N,yes,yes,w:high; r:high,write@backend/src/controllers/consent.ts:125; read@backend/src/services/shared-context.ts:250; name in 3 models,uuid
+ConsentedContent,sourceUserId,String?,Y,yes,yes,w:high; r:high,write@backend/src/controllers/consent.ts:125; read@backend/src/services/session-deletion.ts:183; name in 4 models,uuid
+ConsentedContent,originalNeedId,String?,Y,no,no,w:high; r:high,,uuid
+ConsentedContent,transformedContent,String,N,yes,yes,w:high; r:high,write@backend/src/controllers/consent.ts:125; read@backend/src/services/shared-context.ts:250,text
+ConsentedContent,consentedAt,DateTime,N,yes,yes,w:high; r:high,write@backend/src/controllers/consent.ts:125; read@backend/src/services/shared-context.ts:250,timestamp
+ConsentedContent,consentActive,Boolean,N,yes,yes,w:high; r:high,write@backend/src/controllers/consent.ts:125; read@backend/src/services/shared-context.ts:250,bool
+ConsentedContent,revokedAt,DateTime?,Y,yes,likely,w:high; r:low,write@backend/src/controllers/consent.ts:221; prop@backend/src/controllers/consent.ts:159; name in 2 models,timestamp
+ConsentedContent,consentRecordId,String,N,yes,yes,w:high; r:high,write@backend/src/controllers/consent.ts:125; read@backend/src/controllers/consent.ts:221; name in 3 models,uuid
+CommonGround,id,String,N,no,n/a,w:high; r:common name — not assessed,model has no create/upsert path in prod,uuid
+CommonGround,sharedVesselId,String,N,no,no,w:high; r:high,model has no create/upsert path in prod; name in 3 models,uuid
+CommonGround,need,String,N,no,likely,w:high; r:low,model has no create/upsert path in prod; prop@backend/src/controllers/gratitude.ts:457; name in 2 models,text
+CommonGround,category,NeedCategory,N,no,likely,w:high; r:low,model has no create/upsert path in prod; prop@backend/src/controllers/inner-work.ts:894; name in 5 models,NeedCategory
+CommonGround,confirmedByA,Boolean,N,no,no,w:high; r:high,model has no create/upsert path in prod,bool
+CommonGround,confirmedByB,Boolean,N,no,no,w:high; r:high,model has no create/upsert path in prod,bool
+CommonGround,confirmedAt,DateTime?,Y,no,client-only?,w:high; r:low,model has no create/upsert path in prod; only in mobile:mobile/src/hooks/useSessions.ts:386,timestamp
+Agreement,id,String,N,default,yes,w:common name — not assessed; r:high,read@backend/src/controllers/stage4.ts:2271,uuid
+Agreement,sharedVesselId,String,N,yes,yes,w:high; r:high,write@backend/src/controllers/stage4.ts:1402; read@backend/src/controllers/stage4.ts:2696; name in 3 models,uuid
+Agreement,description,String,N,yes,likely,w:high; r:low,write@backend/src/controllers/stage4.ts:1402; prop@backend/src/controllers/needs-assessment.ts:79; name in 6 models,text
+Agreement,type,AgreementType,N,yes,likely,w:high; r:low,write@backend/src/controllers/stage4.ts:1402; prop@backend/src/controllers/emotions.ts:251; name in 8 models,AgreementType
+Agreement,status,AgreementStatus,N,yes,yes,w:high; r:high,write@backend/src/controllers/stage4.ts:1402; read@backend/src/controllers/sessions.ts:441,AgreementStatus
+Agreement,agreedByA,Boolean,N,yes,likely,w:high; r:medium,write@backend/src/controllers/stage4.ts:1402; prop@backend/src/controllers/stage4.ts:2305,bool
+Agreement,agreedByB,Boolean,N,yes,likely,w:high; r:medium,write@backend/src/controllers/stage4.ts:1402; prop@backend/src/controllers/stage4.ts:2304,bool
+Agreement,agreedAt,DateTime?,Y,yes,yes,w:high; r:high,write@backend/src/controllers/stage4.ts:1402; read@backend/src/services/stage4-state.ts:640,timestamp
+Agreement,followUpDate,DateTime?,Y,yes,likely,w:high; r:medium,write@backend/src/controllers/stage4.ts:1402; prop@backend/src/controllers/sessions.ts:490,timestamp
+Agreement,duration,String?,Y,yes,likely,w:high; r:low,write@backend/src/controllers/stage4.ts:1402; prop@backend/src/controllers/stage4.ts:109; name in 2 models,text
+Agreement,measureOfSuccess,String?,Y,yes,yes,w:high; r:high,write@backend/src/controllers/stage4.ts:1402; read@backend/src/services/stream-turn-context.ts:207; name in 2 models,text
+Agreement,completedAt,DateTime?,Y,no,likely,w:high; r:low,manually verified: only tooling writes it; prop@backend/src/controllers/emotions.ts:252; name in 6 models,timestamp
+Agreement,proposalId,String?,Y,yes,yes,w:high; r:high,write@backend/src/controllers/stage4.ts:1402; read@backend/src/controllers/stage4.ts:2114; name in 4 models,uuid
+ConsentRecord,id,String,N,default,yes,w:common name — not assessed; r:high,read@backend/src/controllers/consent.ts:84,uuid
+ConsentRecord,userId,String,N,yes,yes,w:high; r:high,write@backend/src/controllers/stage2.ts:677; read@backend/src/controllers/consent.ts:38,uuid
+ConsentRecord,sessionId,String?,Y,yes,yes,w:high; r:high,write@backend/src/controllers/stage2.ts:677; read@backend/src/controllers/consent.ts:38,uuid
+ConsentRecord,targetType,ConsentContentType,N,yes,yes,w:high; r:high,write@backend/src/controllers/stage2.ts:677; read@backend/src/controllers/stage2.ts:458,ConsentContentType
+ConsentRecord,targetId,String?,Y,yes,likely,w:high; r:low,write@backend/src/controllers/stage2.ts:677; prop@backend/src/controllers/consent.ts:51; name in 2 models,text
+ConsentRecord,requestedByUserId,String,N,yes,no,w:high; r:high,write@backend/src/controllers/stage2.ts:677,uuid
+ConsentRecord,decision,ConsentDecision?,Y,yes,yes,w:high; r:high,write@backend/src/controllers/consent.ts:105; read@backend/src/controllers/consent.ts:38; name in 2 models,ConsentDecision
+ConsentRecord,decidedAt,DateTime?,Y,yes,likely,w:high; r:medium,write@backend/src/controllers/consent.ts:105; prop@backend/src/controllers/consent.ts:158,timestamp
+ConsentRecord,revokedAt,DateTime?,Y,yes,yes,w:high; r:high,write@backend/src/controllers/consent.ts:215; read@backend/src/controllers/consent.ts:193; name in 2 models,timestamp
+ConsentRecord,metadata,Json?,Y,no,n/a,w:high; r:common name — not assessed,"manually verified: both creates (stage2.ts:677, stage3.ts:757) omit it; consent.ts:53 passes it to the client (always null)",jsonb
+ConsentRecord,createdAt,DateTime,N,default,yes,w:common name — not assessed; r:high,read@backend/src/controllers/consent.ts:38,timestamp
+Message,id,String,N,default,yes,w:common name — not assessed; r:high,read@backend/src/routes/brain.ts:873,uuid
+Message,sessionId,String,N,yes,yes,w:high; r:high,write@backend/src/controllers/messages.ts:398; read@backend/src/controllers/inner-work.ts:250,uuid
+Message,senderId,String?,Y,yes,yes,w:high; r:high,write@backend/src/controllers/messages.ts:398; read@backend/src/controllers/inner-work.ts:250,uuid
+Message,forUserId,String?,Y,yes,yes,w:high; r:high,write@backend/src/controllers/messages.ts:398; read@backend/src/controllers/inner-work.ts:260,text
+Message,role,MessageRole,N,yes,yes,w:high; r:high,write@backend/src/controllers/messages.ts:398; read@backend/src/controllers/inner-work.ts:260; name in 5 models,MessageRole
+Message,content,String,N,yes,yes,w:high; r:high,write@backend/src/controllers/messages.ts:398; read@backend/src/controllers/reconciler.ts:588,text
+Message,contentHash,String?,Y,yes,likely,w:high; r:medium,write@backend/src/lib/prisma-encryption-middleware.ts (hashedFields); prop@backend/src/utils/message-dedupe.ts:12,varchar
+Message,stage,Int,N,yes,yes,w:high; r:high,write@backend/src/controllers/messages.ts:398; read@backend/src/controllers/stage2.ts:631; name in 3 models,int4
+Message,timestamp,DateTime,N,yes,yes,w:high; r:high,write@backend/src/controllers/reconciler.ts:979; read@backend/src/controllers/inner-work.ts:250; name in 5 models,timestamp
+Message,refiningNeedId,String?,Y,yes,likely,w:high; r:medium,write@backend/src/services/stream-turn-admission.ts:159; prop@backend/src/controllers/messages.ts:691,uuid
+Message,extractedNeeds,String[],Y,no,no,w:high; r:high,"manually verified: name appears nowhere in backend/src, shared, mobile",_text
+Message,extractedEmotions,String[],Y,no,yes,w:high; r:high,manually verified: only `extractedEmotions:` writer is GratitudeEntry (gratitude.ts:280); read by reconciler/analysis.ts:249-258 -> always empty; read@backend/src/services/reconciler/analysis.ts:241; name in 2 models,_text
+PreSessionMessage,id,String,N,no,yes,w:high; r:high,model has no create/upsert path in prod; read@backend/src/services/context-retriever.ts:343 (raw),uuid
+PreSessionMessage,userId,String,N,no,yes,w:high; r:high,model has no create/upsert path in prod; read@backend/src/services/account-deletion.ts:110,text
+PreSessionMessage,role,MessageRole,N,no,yes,w:high; r:high,model has no create/upsert path in prod; read@backend/src/services/context-retriever.ts:311; name in 5 models,MessageRole
+PreSessionMessage,content,String,N,no,yes,w:high; r:high,model has no create/upsert path in prod; read@backend/src/services/context-retriever.ts:311,text
+PreSessionMessage,timestamp,DateTime,N,no,yes,w:high; r:high,model has no create/upsert path in prod; read@backend/src/services/context-retriever.ts:311; name in 5 models,timestamp
+PreSessionMessage,detectedIntent,String?,Y,no,no,w:high; r:high,model has no create/upsert path in prod,text
+PreSessionMessage,emotionalTone,String?,Y,no,no,w:high; r:high,model has no create/upsert path in prod,text
+PreSessionMessage,extractedPerson,String?,Y,no,no,w:high; r:high,model has no create/upsert path in prod,text
+PreSessionMessage,extractedTopic,String?,Y,no,no,w:high; r:high,model has no create/upsert path in prod,text
+PreSessionMessage,associatedSessionId,String?,Y,no,yes,w:high; r:high,model has no create/upsert path in prod; read@backend/src/services/context-retriever.ts:311,text
+PreSessionMessage,associatedAt,DateTime?,Y,no,no,w:high; r:high,model has no create/upsert path in prod,timestamp
+PreSessionMessage,expiresAt,DateTime,N,no,yes,w:high; r:high,model has no create/upsert path in prod; read@backend/src/services/context-retriever.ts:311; name in 3 models,timestamp
+EmpathyDraft,id,String,N,default,n/a,w:common name — not assessed; r:common name — not assessed,,uuid
+EmpathyDraft,sessionId,String,N,yes,yes,w:high; r:high,write@backend/src/controllers/stage2.ts:388; read@backend/src/controllers/stage2.ts:388,uuid
+EmpathyDraft,userId,String,N,yes,yes,w:high; r:high,write@backend/src/controllers/stage2.ts:388; read@backend/src/controllers/inner-work.ts:197,uuid
+EmpathyDraft,content,String,N,yes,yes,w:high; r:high,write@backend/src/controllers/stage2.ts:388; read@backend/src/services/stream-turn-context.ts:503,text
+EmpathyDraft,readyToShare,Boolean,N,yes,likely,w:high; r:low,write@backend/src/controllers/stage2.ts:388; prop@backend/src/controllers/inner-work.ts:281; name in 2 models,bool
+EmpathyDraft,version,Int,N,yes,likely,w:high; r:medium,write@backend/src/controllers/stage2.ts:388; prop@backend/src/controllers/stage2.ts:486,int4
+EmpathyDraft,updatedAt,DateTime,N,default,n/a,w:common name — not assessed; r:common name — not assessed,,timestamp
+EmpathyDraft,createdAt,DateTime,N,default,n/a,w:common name — not assessed; r:common name — not assessed,,timestamp
+EmpathyAttempt,id,String,N,default,yes,w:common name — not assessed; r:high,read@backend/src/controllers/stage2.ts:1148,uuid
+EmpathyAttempt,draftId,String?,Y,yes,client-only?,w:high; r:low,write@backend/src/controllers/stage2.ts:693; only in shared:shared/src/contracts/stages.ts:123,uuid
+EmpathyAttempt,sessionId,String,N,yes,yes,w:high; r:high,write@backend/src/controllers/stage2.ts:693; read@backend/src/controllers/messages.ts:482,uuid
+EmpathyAttempt,sourceUserId,String?,Y,yes,yes,w:high; r:high,write@backend/src/controllers/stage2.ts:693; read@backend/src/controllers/inner-work.ts:197; name in 4 models,uuid
+EmpathyAttempt,content,String,N,yes,yes,w:high; r:high,write@backend/src/controllers/stage2.ts:693; read@backend/src/services/context-assembler.ts:551,text
+EmpathyAttempt,sharedAt,DateTime,N,yes,yes,w:high; r:high,write@backend/src/controllers/stage2.ts:693; read@backend/src/controllers/stage2.ts:662; name in 2 models,timestamp
+EmpathyAttempt,consentRecordId,String?,Y,no,likely,w:high; r:low,"manually verified: read as `?? ''` (stage2.ts:964, empathy-status.ts:222) but never written in prod; prop@backend/src/controllers/stage2.ts:964; name in 3 models",uuid
+EmpathyAttempt,status,EmpathyStatus,N,yes,yes,w:high; r:high,write@backend/src/controllers/reconciler.ts:960; read@backend/src/controllers/inner-work.ts:197,EmpathyStatus
+EmpathyAttempt,statusVersion,Int,N,yes,likely,w:high; r:medium,write@backend/src/controllers/reconciler.ts:960; prop@backend/src/controllers/stage2.ts:969,int4
+EmpathyAttempt,revealedAt,DateTime?,Y,yes,yes,w:high; r:high,write@backend/src/services/reconciler/state.ts:431; read@backend/src/services/context-assembler.ts:551,timestamp
+EmpathyAttempt,revisionCount,Int,N,yes,likely,w:high; r:medium,write@backend/src/controllers/stage2.ts:2068; prop@backend/src/controllers/stage2.ts:968,int4
+EmpathyAttempt,deliveryStatus,SharedContentDeliveryStatus,N,yes,likely,w:high; r:low,write@backend/src/controllers/stage2.ts:1148; prop@backend/src/services/context-assembler.ts:612; name in 2 models,SharedContentDeliveryStatus
+EmpathyAttempt,deliveredAt,DateTime?,Y,yes,yes,w:high; r:high,write@backend/src/controllers/stage2.ts:1162; read@backend/src/services/context-assembler.ts:551; name in 2 models,timestamp
+EmpathyAttempt,seenAt,DateTime?,Y,yes,no,w:high; r:high,write@backend/src/controllers/stage2.ts:1148; name in 2 models,timestamp
+EmpathyValidation,id,String,N,default,n/a,w:common name — not assessed; r:common name — not assessed,,uuid
+EmpathyValidation,attemptId,String,N,yes,yes,w:high; r:high,write@backend/src/controllers/stage2.ts:1122; read@backend/src/controllers/stage2.ts:946,uuid
+EmpathyValidation,sessionId,String,N,yes,yes,w:high; r:high,write@backend/src/controllers/stage2.ts:1122; read@backend/src/services/session-deletion.ts:153,uuid
+EmpathyValidation,userId,String?,Y,yes,yes,w:high; r:high,write@backend/src/controllers/stage2.ts:1122; read@backend/src/controllers/notifications.ts:107,uuid
+EmpathyValidation,validated,Boolean,N,yes,yes,w:high; r:high,write@backend/src/controllers/stage2.ts:1122; read@backend/src/services/context-assembler.ts:551,bool
+EmpathyValidation,feedback,String?,Y,yes,client-only?,w:high; r:low,write@backend/src/controllers/stage2.ts:1122; only in mobile:mobile/app/(auth)/settings/help.tsx:75,text
+EmpathyValidation,feedbackShared,Boolean,N,yes,likely,w:high; r:medium,write@backend/src/controllers/stage2.ts:1122; prop@backend/src/controllers/stage2.ts:1322,bool
+EmpathyValidation,validatedAt,DateTime?,Y,yes,yes,w:high; r:high,write@backend/src/controllers/stage2.ts:1122; read@backend/src/services/context-assembler.ts:551,timestamp
+ReconcilerResult,id,String,N,default,yes,w:common name — not assessed; r:high,read@backend/src/services/reconciler/circuit-breaker.ts:124,uuid
+ReconcilerResult,sessionId,String,N,yes,yes,w:high; r:high,write@backend/src/services/reconciler/analysis.ts:547; read@backend/src/controllers/notifications.ts:83,uuid
+ReconcilerResult,guesserId,String,N,yes,yes,w:high; r:high,write@backend/src/services/reconciler/analysis.ts:547; read@backend/src/controllers/stage2.ts:1905,text
+ReconcilerResult,guesserName,String,N,yes,likely,w:high; r:medium,write@backend/src/services/account-deletion.ts:100; prop@backend/src/controllers/notifications.ts:98,text
+ReconcilerResult,subjectId,String,N,yes,yes,w:high; r:high,write@backend/src/services/reconciler/analysis.ts:547; read@backend/src/services/account-deletion.ts:104,text
+ReconcilerResult,subjectName,String,N,yes,yes,w:high; r:high,write@backend/src/services/account-deletion.ts:104; read@backend/src/controllers/stage2.ts:1905,text
+ReconcilerResult,alignmentScore,Int,N,yes,likely,w:high; r:medium,write@backend/src/services/reconciler/analysis.ts:547; prop@backend/src/services/reconciler/analysis.ts:408,int4
+ReconcilerResult,alignmentSummary,String,N,yes,likely,w:high; r:medium,write@backend/src/services/reconciler/analysis.ts:547; prop@backend/src/services/reconciler/analysis.ts:409,text
+ReconcilerResult,correctlyIdentified,String[],Y,yes,likely,w:high; r:medium,write@backend/src/services/reconciler/analysis.ts:547; prop@backend/src/services/reconciler/analysis.ts:410,_text
+ReconcilerResult,gapSeverity,String,N,yes,yes,w:high; r:high,write@backend/src/services/reconciler/analysis.ts:547; read@backend/src/services/empathy-status.ts:171,text
+ReconcilerResult,gapSummary,String,N,yes,yes,w:high; r:high,write@backend/src/services/reconciler/analysis.ts:547; read@backend/src/services/empathy-status.ts:171,text
+ReconcilerResult,missedFeelings,String[],Y,yes,likely,w:high; r:medium,write@backend/src/services/reconciler/analysis.ts:547; prop@backend/src/services/reconciler/analysis.ts:326,_text
+ReconcilerResult,misattributions,String[],Y,yes,likely,w:high; r:medium,write@backend/src/services/reconciler/analysis.ts:547; prop@backend/src/services/reconciler/analysis.ts:347,_text
+ReconcilerResult,mostImportantGap,String?,Y,yes,likely,w:high; r:medium,write@backend/src/services/reconciler/analysis.ts:547; prop@backend/src/controllers/reconciler.ts:302,text
+ReconcilerResult,recommendedAction,String,N,yes,yes,w:high; r:high,write@backend/src/services/reconciler/analysis.ts:547; read@backend/src/services/empathy-status.ts:171,text
+ReconcilerResult,rationale,String,N,yes,likely,w:high; r:medium,write@backend/src/services/reconciler/analysis.ts:547; prop@backend/src/services/reconciler/analysis.ts:421,text
+ReconcilerResult,sharingWouldHelp,Boolean,N,yes,likely,w:high; r:medium,write@backend/src/services/reconciler/analysis.ts:547; prop@backend/src/services/reconciler/analysis.ts:422,bool
+ReconcilerResult,suggestedShareFocus,String?,Y,yes,likely,w:high; r:medium,write@backend/src/services/reconciler/analysis.ts:547; prop@backend/src/controllers/notifications.ts:100,text
+ReconcilerResult,areaHint,String?,Y,yes,yes,w:high; r:high,write@backend/src/services/reconciler/analysis.ts:547; read@backend/src/controllers/stage2.ts:1905,text
+ReconcilerResult,guidanceType,String?,Y,yes,yes,w:high; r:high,write@backend/src/services/reconciler/analysis.ts:547; read@backend/src/controllers/stage2.ts:1905,text
+ReconcilerResult,promptSeed,String?,Y,yes,yes,w:high; r:high,write@backend/src/services/reconciler/analysis.ts:547; read@backend/src/controllers/stage2.ts:1905,text
+ReconcilerResult,suggestedShareContent,String?,Y,yes,no,w:high; r:high,write@backend/src/services/reconciler/sharing.ts:561,text
+ReconcilerResult,suggestedShareReason,String?,Y,yes,no,w:high; r:high,write@backend/src/services/reconciler/sharing.ts:561,text
+ReconcilerResult,iteration,Int,N,default-only,likely,w:high; r:low,"manually verified: @default(1), no writer; stream-turn-context.ts:533 reads it; prop@backend/src/services/stage-prompts.ts:843; name in 2 models",int4
+ReconcilerResult,wasCircuitBreakerTrip,Boolean,N,default-only,no,w:high; r:high,,bool
+ReconcilerResult,supersededAt,DateTime?,Y,yes,yes,w:high; r:high,write@backend/src/controllers/stage2.ts:2079; read@backend/src/controllers/stage2.ts:1905,timestamp
+ReconcilerResult,createdAt,DateTime,N,default,yes,w:common name — not assessed; r:high,read@backend/src/services/empathy-status.ts:171,timestamp
+ReconcilerShareOffer,id,String,N,default,yes,w:common name — not assessed; r:high,read@backend/src/controllers/reconciler.ts:286,uuid
+ReconcilerShareOffer,resultId,String,N,yes,yes,w:high; r:high,write@backend/src/services/reconciler/circuit-breaker.ts:130; read@backend/src/services/reconciler/circuit-breaker.ts:130,uuid
+ReconcilerShareOffer,userId,String,N,yes,yes,w:high; r:high,write@backend/src/services/reconciler/circuit-breaker.ts:130; read@backend/src/controllers/notifications.ts:83,text
+ReconcilerShareOffer,status,ReconcilerShareStatus,N,yes,yes,w:high; r:high,write@backend/src/controllers/reconciler.ts:286; read@backend/src/controllers/notifications.ts:83,ReconcilerShareStatus
+ReconcilerShareOffer,suggestedContent,String?,Y,yes,likely,w:high; r:medium,write@backend/src/controllers/reconciler.ts:661; prop@backend/src/controllers/inner-work.ts:895,text
+ReconcilerShareOffer,suggestedReason,String?,Y,yes,likely,w:high; r:medium,write@backend/src/services/reconciler/sharing.ts:570; prop@backend/src/controllers/messages.ts:515,text
+ReconcilerShareOffer,offerMessage,String?,Y,yes,likely,w:high; r:medium,write@backend/src/services/reconciler/sharing.ts:1345; prop@backend/src/controllers/reconciler.ts:301,text
+ReconcilerShareOffer,refinedContent,String?,Y,yes,likely,w:high; r:medium,write@backend/src/controllers/reconciler.ts:944; prop@backend/src/controllers/reconciler.ts:360,text
+ReconcilerShareOffer,sharedContent,String?,Y,yes,yes,w:high; r:high,write@backend/src/controllers/reconciler.ts:944; read@backend/src/services/context-assembler.ts:569,text
+ReconcilerShareOffer,sharedAt,DateTime?,Y,yes,yes,w:high; r:high,write@backend/src/controllers/reconciler.ts:944; read@backend/src/services/context-assembler.ts:569; name in 2 models,timestamp
+ReconcilerShareOffer,deliveryStatus,SharedContentDeliveryStatus,N,yes,yes,w:high; r:high,write@backend/src/controllers/reconciler.ts:944; read@backend/src/controllers/notifications.ts:170; name in 2 models,SharedContentDeliveryStatus
+ReconcilerShareOffer,deliveredAt,DateTime?,Y,yes,yes,w:high; r:high,write@backend/src/controllers/reconciler.ts:944; read@backend/src/services/context-assembler.ts:569; name in 2 models,timestamp
+ReconcilerShareOffer,seenAt,DateTime?,Y,no,no,w:high; r:high,name in 2 models,timestamp
+ReconcilerShareOffer,declinedAt,DateTime?,Y,yes,client-only?,w:high; r:low,write@backend/src/services/reconciler/sharing.ts:813; only in shared:shared/src/contracts/sessions.ts:219; name in 3 models,timestamp
+ReconcilerShareOffer,skippedAt,DateTime?,Y,yes,no,w:high; r:high,write@backend/src/controllers/reconciler.ts:515,timestamp
+ReconcilerShareOffer,iteration,Int,N,default-only,likely,w:high; r:low,"manually verified: @default(1), no writer; prop@backend/src/services/stage-prompts.ts:843; name in 2 models",int4
+ReconcilerShareOffer,refinementChatUsed,Boolean,N,default-only,no,w:high; r:high,,bool
+ReconcilerShareOffer,lastDeliveryNotifiedAt,DateTime?,Y,no,yes,w:high; r:high,manually verified: only appears as `= null` filter in notifications.ts:176 -> filter is always true; read@backend/src/controllers/notifications.ts:170,timestamp
+ReconcilerShareOffer,lastSeenNotifiedAt,DateTime?,Y,no,yes,w:high; r:high,manually verified: only appears as `= null` filter in notifications.ts:177 -> filter is always true; read@backend/src/controllers/notifications.ts:170,timestamp
+ReconcilerShareOffer,createdAt,DateTime,N,default,n/a,w:common name — not assessed; r:common name — not assessed,,timestamp
+ReconcilerShareOffer,updatedAt,DateTime,N,default,yes,w:common name — not assessed; r:high,read@backend/src/services/reconciler/sharing.ts:761,timestamp
+RefinementAttemptCounter,id,String,N,default,n/a,w:common name — not assessed; r:common name — not assessed,,uuid
+RefinementAttemptCounter,sessionId,String,N,yes,yes,w:high; r:high,write@backend/src/services/reconciler/circuit-breaker.ts:48; read@backend/src/services/reconciler/circuit-breaker.ts:25,uuid
+RefinementAttemptCounter,direction,String,N,yes,yes,w:high; r:high,write@backend/src/services/reconciler/circuit-breaker.ts:48; read@backend/src/services/reconciler/circuit-breaker.ts:25,text
+RefinementAttemptCounter,attempts,Int,N,yes,likely,w:high; r:medium,write@backend/src/services/reconciler/circuit-breaker.ts:48; prop@backend/src/services/reconciler/circuit-breaker.ts:29,int4
+RefinementAttemptCounter,createdAt,DateTime,N,default,n/a,w:common name — not assessed; r:common name — not assessed,,timestamp
+RefinementAttemptCounter,updatedAt,DateTime,N,default,n/a,w:common name — not assessed; r:common name — not assessed,,timestamp
+StrategyProposal,id,String,N,default,yes,w:common name — not assessed; r:high,read@backend/src/controllers/stage4.ts:790,uuid
+StrategyProposal,sessionId,String,N,yes,yes,w:high; r:high,write@backend/src/controllers/stage4.ts:1720; read@backend/src/controllers/stage4.ts:790,uuid
+StrategyProposal,createdByUserId,String?,Y,yes,yes,w:high; r:high,write@backend/src/controllers/stage4.ts:1720; read@backend/src/controllers/stage4.ts:1294; name in 2 models,uuid
+StrategyProposal,description,String,N,yes,yes,w:high; r:high,write@backend/src/controllers/stage4.ts:1720; read@backend/src/controllers/stage4.ts:1294; name in 6 models,text
+StrategyProposal,needsAddressed,String[],Y,yes,yes,w:high; r:high,write@backend/src/controllers/stage4.ts:1720; read@backend/src/controllers/stage4.ts:1569,_text
+StrategyProposal,duration,String?,Y,yes,yes,w:high; r:high,write@backend/src/controllers/stage4.ts:1720; read@backend/src/controllers/stage4.ts:1294; name in 2 models,text
+StrategyProposal,measureOfSuccess,String?,Y,yes,yes,w:high; r:high,write@backend/src/controllers/stage4.ts:1720; read@backend/src/controllers/stage4.ts:1294; name in 2 models,text
+StrategyProposal,source,StrategySource,N,yes,likely,w:high; r:low,write@backend/src/controllers/stage4.ts:1720; prop@backend/src/controllers/knowledge-base.ts:347; name in 4 models,StrategySource
+StrategyProposal,kind,Stage4ProposalKind,N,yes,yes,w:high; r:high,write@backend/src/controllers/stage4.ts:2494; read@backend/src/controllers/stage4.ts:890; name in 2 models,Stage4ProposalKind
+StrategyProposal,status,Stage4ProposalStatus,N,yes,yes,w:high; r:high,write@backend/src/controllers/stage4.ts:1424; read@backend/src/controllers/stage4.ts:790,Stage4ProposalStatus
+StrategyProposal,removedAt,DateTime?,Y,yes,likely,w:high; r:medium,write@backend/src/services/stage4-capture.service.ts:781; prop@backend/src/services/stage4-capture.service.ts:617,timestamp
+StrategyProposal,removedByUserId,String?,Y,yes,likely,w:high; r:medium,write@backend/src/services/stage4-capture.service.ts:781; prop@backend/src/services/stage4-capture.service.ts:618,uuid
+StrategyProposal,removalReason,String?,Y,yes,likely,w:high; r:medium,write@backend/src/services/stage4-capture.service.ts:781; prop@backend/src/services/stage4-capture.service.ts:619,text
+StrategyProposal,parentProposalId,String?,Y,no,no,w:high; r:high,"manually verified: only set to null on an in-memory ProposalRow (stage4-capture.service.ts:742), never in a Prisma payload",text
+StrategyProposal,coverageSummary,Json?,Y,no,no,w:high; r:high,manually verified: only set to null on an in-memory ProposalRow (stage4-capture.service.ts:743),jsonb
+StrategyProposal,capturedFromMessageId,String?,Y,yes,no,w:high; r:high,write@backend/src/services/stage4-capture.service.ts:715,text
+StrategyProposal,createdAt,DateTime,N,default,n/a,w:common name — not assessed; r:common name — not assessed,,timestamp
+StrategyProposal,updatedAt,DateTime,N,default,yes,w:common name — not assessed; r:high,read@backend/src/services/stage4-capture.service.ts:887,timestamp
+StrategyProposal,consentRecordId,String?,Y,no,likely,w:high; r:low,manually verified: only set to null on an in-memory ProposalRow (stage4-capture.service.ts:747); prop@backend/src/controllers/stage2.ts:964; name in 3 models,uuid
+StrategyProposalNeed,proposalId,String,N,yes,yes,w:high; r:high,write@backend/src/services/stage4-capture.service.ts:97; read@backend/src/services/stage4-capture.service.ts:97; name in 4 models,uuid
+StrategyProposalNeed,needId,String,N,yes,yes,w:high; r:high,write@backend/src/services/stage4-capture.service.ts:97; read@backend/src/services/stage4-capture.service.ts:97; name in 5 models,uuid
+StrategyProposalNeed,createdAt,DateTime,N,default,n/a,w:common name — not assessed; r:common name — not assessed,,timestamp
+Stage4ProposalSelection,id,String,N,default,n/a,w:common name — not assessed; r:common name — not assessed,,uuid
+Stage4ProposalSelection,proposalId,String,N,yes,yes,w:high; r:high,write@backend/src/controllers/stage4.ts:807; read@backend/src/controllers/stage4.ts:807; name in 4 models,uuid
+Stage4ProposalSelection,sessionId,String,N,yes,yes,w:high; r:high,write@backend/src/controllers/stage4.ts:807; read@backend/src/controllers/stage4.ts:898,uuid
+Stage4ProposalSelection,userId,String,N,yes,yes,w:high; r:high,write@backend/src/controllers/stage4.ts:807; read@backend/src/controllers/stage4.ts:807,uuid
+Stage4ProposalSelection,decision,Stage4SelectionDecision,N,yes,yes,w:high; r:high,write@backend/src/controllers/stage4.ts:807; read@backend/src/controllers/stage4.ts:936; name in 2 models,Stage4SelectionDecision
+Stage4ProposalSelection,note,String?,Y,yes,likely,w:high; r:low,write@backend/src/controllers/stage4.ts:807; prop@backend/src/controllers/reconciler.ts:709; name in 4 models,text
+Stage4ProposalSelection,selectedAt,DateTime,N,yes,likely,w:high; r:medium,write@backend/src/controllers/stage4.ts:807; prop@backend/src/services/stage4-state.ts:747,timestamp
+Stage4ProposalSelection,updatedAt,DateTime,N,default,yes,w:common name — not assessed; r:high,read@backend/src/services/stage4-state.ts:629,timestamp
+Stage4ProposalRevision,id,String,N,default,n/a,w:common name — not assessed; r:common name — not assessed,,uuid
+Stage4ProposalRevision,proposalId,String,N,yes,likely,w:high; r:low,write@backend/src/controllers/stage4.ts:1429; prop@backend/src/controllers/stage4.ts:536; name in 4 models,uuid
+Stage4ProposalRevision,sessionId,String,N,yes,n/a,w:high; r:common name — not assessed,write@backend/src/controllers/stage4.ts:1429,text
+Stage4ProposalRevision,actorUserId,String?,Y,yes,likely,w:high; r:medium,write@backend/src/controllers/stage4.ts:1429; prop@backend/src/services/push.ts:287,text
+Stage4ProposalRevision,action,String,N,yes,likely,w:high; r:medium,write@backend/src/controllers/stage4.ts:1429; prop@backend/src/controllers/reconciler.ts:359,text
+Stage4ProposalRevision,before,Json?,Y,yes,likely,w:high; r:medium,write@backend/src/controllers/stage4.ts:1429; prop@backend/src/controllers/stage2.ts:819,jsonb
+Stage4ProposalRevision,after,Json?,Y,yes,likely,w:high; r:medium,write@backend/src/controllers/stage4.ts:1429; prop@backend/src/services/dispatch-handler.ts:188,jsonb
+Stage4ProposalRevision,reason,String?,Y,yes,likely,w:high; r:low,write@backend/src/controllers/stage4.ts:1429; prop@backend/src/controllers/auth.ts:341; name in 3 models,text
+Stage4ProposalRevision,messageId,String?,Y,yes,likely,w:high; r:medium,write@backend/src/services/stage4-capture.service.ts:644; prop@backend/src/services/stage4-capture.service.ts:653,text
+Stage4ProposalRevision,createdAt,DateTime,N,default,n/a,w:common name — not assessed; r:common name — not assessed,,timestamp
+Stage4NeedCoverage,id,String,N,default,yes,w:common name — not assessed; r:high,read@backend/src/controllers/stage4.ts:363,uuid
+Stage4NeedCoverage,sessionId,String,N,n/a,yes,w:common name — not assessed; r:high,read@backend/src/controllers/stage4.ts:363,uuid
+Stage4NeedCoverage,needId,String?,Y,yes,yes,w:high; r:high,manually verified: stage4-coverage.service.ts:243 rows -> createMany :251; read@backend/src/controllers/stage4.ts:363; name in 5 models,text
+Stage4NeedCoverage,needLabel,String,N,yes,yes,w:high; r:high,manually verified: stage4-coverage.service.ts:243 rows -> createMany :251; read@backend/src/services/stream-turn-context.ts:136; name in 2 models,text
+Stage4NeedCoverage,sourceUserId,String?,Y,yes,yes,w:high; r:high,manually verified: stage4-coverage.service.ts:243 rows -> createMany :251; read@backend/src/services/stream-turn-context.ts:225; name in 4 models,text
+Stage4NeedCoverage,coverageStatus,String,N,yes,yes,w:high; r:high,manually verified: stage4-coverage.service.ts:243 rows -> createMany :251; read@backend/src/controllers/stage4.ts:924,text
+Stage4NeedCoverage,coveringProposalIds,String[],Y,yes,yes,w:high; r:high,manually verified: stage4-coverage.service.ts:243 rows -> createMany :251; read@backend/src/controllers/stage4.ts:924,_uuid
+Stage4NeedCoverage,note,String?,Y,yes,likely,w:high; r:low,manually verified: stage4-coverage.service.ts:243 rows -> createMany :251; prop@backend/src/controllers/reconciler.ts:709; name in 4 models,text
+Stage4NeedCoverage,updatedAt,DateTime,N,default,yes,w:common name — not assessed; r:high,read@backend/src/services/stage4-state.ts:633,timestamp
+Stage4NeedCoverage,createdAt,DateTime,N,default,n/a,w:common name — not assessed; r:common name — not assessed,,timestamp
+Stage4NeedDeclination,id,String,N,default,n/a,w:common name — not assessed; r:common name — not assessed,,uuid
+Stage4NeedDeclination,sessionId,String,N,yes,yes,w:high; r:high,write@backend/src/controllers/stage4.ts:1108; read@backend/src/controllers/stage4.ts:944,uuid
+Stage4NeedDeclination,userId,String,N,yes,yes,w:high; r:high,write@backend/src/controllers/stage4.ts:1108; read@backend/src/controllers/stage4.ts:944,text
+Stage4NeedDeclination,needId,String,N,yes,yes,w:high; r:high,write@backend/src/controllers/stage4.ts:1108; read@backend/src/controllers/stage4.ts:944; name in 5 models,text
+Stage4NeedDeclination,declinedAt,DateTime,N,default-only,client-only?,w:high; r:low,only in shared:shared/src/contracts/sessions.ts:219; name in 3 models,timestamp
+Stage4Closure,id,String,N,default,n/a,w:common name — not assessed; r:common name — not assessed,,uuid
+Stage4Closure,sessionId,String,N,yes,yes,w:high; r:high,write@backend/src/controllers/stage4.ts:1462; read@backend/src/controllers/stage4.ts:526,uuid
+Stage4Closure,kind,Stage4ClosureKind,N,yes,likely,w:high; r:low,write@backend/src/controllers/stage4.ts:1462; prop@backend/src/controllers/stage4.ts:557; name in 2 models,Stage4ClosureKind
+Stage4Closure,reason,Stage4ClosureReason,N,yes,likely,w:high; r:low,write@backend/src/controllers/stage4.ts:1462; prop@backend/src/controllers/auth.ts:341; name in 3 models,Stage4ClosureReason
+Stage4Closure,summary,String,N,yes,likely,w:high; r:low,write@backend/src/controllers/stage4.ts:1462; prop@backend/src/controllers/inner-work.ts:85; name in 5 models,text
+Stage4Closure,sharedAgreementIds,String[],Y,yes,likely,w:high; r:medium,write@backend/src/controllers/stage4.ts:1462; prop@backend/src/services/stage4-state.ts:767,_uuid
+Stage4Closure,individualProposalIds,String[],Y,yes,likely,w:high; r:medium,write@backend/src/controllers/stage4.ts:1462; prop@backend/src/services/stage4-state.ts:701,_uuid
+Stage4Closure,openNeedIds,String[],Y,yes,likely,w:high; r:medium,write@backend/src/controllers/stage4.ts:1462; prop@backend/src/services/stage4-state.ts:702,_uuid
+Stage4Closure,checkInAt,DateTime?,Y,yes,likely,w:high; r:medium,write@backend/src/controllers/stage4.ts:1462; prop@backend/src/services/stage4-state.ts:772,timestamp
+Stage4Closure,closedByUserId,String?,Y,yes,no,w:high; r:high,write@backend/src/controllers/stage4.ts:1462,text
+Stage4Closure,closedAt,DateTime,N,yes,likely,w:high; r:medium,write@backend/src/controllers/stage4.ts:1462; prop@backend/src/services/stage4-state.ts:771,timestamp
+Stage4Closure,createdAt,DateTime,N,default,n/a,w:common name — not assessed; r:common name — not assessed,,timestamp
+Stage4SubChat,id,String,N,default,yes,w:common name — not assessed; r:high,read@backend/src/services/stage4-subchat.service.ts:206,uuid
+Stage4SubChat,sessionId,String,N,yes,yes,w:high; r:high,write@backend/src/services/stage4-subchat.service.ts:190; read@backend/src/services/stage4-subchat.service.ts:173,uuid
+Stage4SubChat,userId,String,N,yes,yes,w:high; r:high,write@backend/src/services/stage4-subchat.service.ts:190; read@backend/src/services/stage4-subchat.service.ts:173,uuid
+Stage4SubChat,anchorKind,Stage4SubChatAnchor,N,yes,yes,w:high; r:high,write@backend/src/services/stage4-subchat.service.ts:190; read@backend/src/services/stage4-subchat.service.ts:173,Stage4SubChatAnchor
+Stage4SubChat,anchorId,String?,Y,yes,yes,w:high; r:high,write@backend/src/services/stage4-subchat.service.ts:190; read@backend/src/services/stage4-subchat.service.ts:173,text
+Stage4SubChat,status,Stage4SubChatStatus,N,yes,yes,w:high; r:high,write@backend/src/services/stage4-subchat.service.ts:190; read@backend/src/services/stage4-subchat.service.ts:173,Stage4SubChatStatus
+Stage4SubChat,createdAt,DateTime,N,default,n/a,w:common name — not assessed; r:common name — not assessed,,timestamp
+Stage4SubChat,resolvedAt,DateTime?,Y,yes,likely,w:high; r:low,write@backend/src/services/stage4-subchat.service.ts:546; prop@backend/src/controllers/session-state.ts:446; name in 4 models,timestamp
+Stage4SubChatMessage,id,String,N,default,n/a,w:common name — not assessed; r:common name — not assessed,,uuid
+Stage4SubChatMessage,subChatId,String,N,yes,likely,w:high; r:medium,write@backend/src/services/stage4-subchat.service.ts:376; prop@backend/src/services/stage4-subchat.service.ts:363,uuid
+Stage4SubChatMessage,role,MessageRole,N,yes,likely,w:high; r:low,write@backend/src/services/stage4-subchat.service.ts:376; prop@backend/src/controllers/inner-work.ts:106; name in 5 models,MessageRole
+Stage4SubChatMessage,content,String,N,yes,n/a,w:high; r:common name — not assessed,write@backend/src/services/stage4-subchat.service.ts:376,text
+Stage4SubChatMessage,createdAt,DateTime,N,default,yes,w:common name — not assessed; r:high,read@backend/src/services/stage4-subchat.service.ts:173,timestamp
+TendingEntry,id,String,N,default,yes,w:common name — not assessed; r:high,read@backend/src/services/stream-turn-context.ts:207,uuid
+TendingEntry,sessionId,String,N,yes,yes,w:high; r:high,write@backend/src/services/tending.service.ts:328; read@backend/src/services/stage4-state.ts:644,uuid
+TendingEntry,agreementId,String?,Y,yes,likely,w:high; r:medium,write@backend/src/services/tending.service.ts:328; prop@backend/src/services/stage4-state.ts:570,uuid
+TendingEntry,type,TendingEntryType,N,yes,yes,w:high; r:high,write@backend/src/services/tending.service.ts:328; read@backend/src/services/tending.service.ts:1483; name in 8 models,TendingEntryType
+TendingEntry,scope,TendingEntryScope,N,yes,yes,w:high; r:high,write@backend/src/services/tending.service.ts:328; read@backend/src/services/stream-turn-context.ts:207; name in 2 models,TendingEntryScope
+TendingEntry,ownerUserId,String?,Y,yes,yes,w:high; r:high,write@backend/src/services/tending.service.ts:369; read@backend/src/services/stream-turn-context.ts:207,text
+TendingEntry,optedInShared,Boolean,N,yes,yes,w:high; r:high,write@backend/src/services/tending.service.ts:369; read@backend/src/services/stream-turn-context.ts:207,bool
+TendingEntry,status,TendingEntryStatus,N,yes,yes,w:high; r:high,write@backend/src/services/tending.service.ts:328; read@backend/src/services/tending.service.ts:913,TendingEntryStatus
+TendingEntry,scheduledFor,DateTime?,Y,yes,yes,w:high; r:high,write@backend/src/services/tending.service.ts:328; read@backend/src/services/stage4-state.ts:644,timestamp
+TendingEntry,openedAt,DateTime?,Y,yes,likely,w:high; r:medium,write@backend/src/services/tending.service.ts:328; prop@backend/src/services/stage4-state.ts:572,timestamp
+TendingEntry,completedAt,DateTime?,Y,yes,likely,w:high; r:low,write@backend/src/services/tending.service.ts:608; prop@backend/src/controllers/emotions.ts:252; name in 6 models,timestamp
+TendingEntry,summary,String?,Y,yes,yes,w:high; r:high,write@backend/src/services/tending.service.ts:328; read@backend/src/services/stream-turn-context.ts:207; name in 5 models,text
+TendingEntry,createdAt,DateTime,N,default,yes,w:common name — not assessed; r:high,read@backend/src/services/stage4-state.ts:644,timestamp
+TendingEntry,updatedAt,DateTime,N,default,n/a,w:common name — not assessed; r:common name — not assessed,,timestamp
+TendingCheckin,id,String,N,default,n/a,w:common name — not assessed; r:common name — not assessed,,uuid
+TendingCheckin,sessionId,String,N,yes,yes,w:high; r:high,write@backend/src/services/tending.service.ts:1104; read@backend/src/services/stream-turn-context.ts:245,uuid
+TendingCheckin,userId,String,N,yes,yes,w:high; r:high,write@backend/src/services/tending.service.ts:1104; read@backend/src/services/stream-turn-context.ts:245,uuid
+TendingCheckin,coordinationCycleId,String?,Y,yes,likely,w:high; r:medium,write@backend/src/services/tending.service.ts:1104; prop@backend/src/services/tending.service.ts:1283,uuid
+TendingCheckin,nextAction,TendingNextAction?,Y,yes,likely,w:high; r:low,write@backend/src/services/tending.service.ts:1104; prop@backend/src/controllers/tending.ts:254; name in 2 models,TendingNextAction
+TendingCheckin,continueChoice,ContinueChoice?,Y,yes,likely,w:high; r:low,write@backend/src/services/tending.service.ts:1104; prop@backend/src/controllers/tending.ts:263; name in 2 models,ContinueChoice
+TendingCheckin,reflectionSummary,String?,Y,yes,likely,w:high; r:medium,write@backend/src/services/tending.service.ts:1104; prop@backend/src/services/tending.service.ts:490,text
+TendingCheckin,submittedAt,DateTime,N,yes,yes,w:high; r:high,write@backend/src/services/tending.service.ts:1104; read@backend/src/services/stream-turn-context.ts:245; name in 3 models,timestamp
+TendingCheckin,createdAt,DateTime,N,default,n/a,w:common name — not assessed; r:common name — not assessed,,timestamp
+TendingCoordinationCycle,id,String,N,default,yes,w:common name — not assessed; r:high,read@backend/src/services/tending.service.ts:1089,uuid
+TendingCoordinationCycle,sessionId,String,N,yes,yes,w:high; r:high,write@backend/src/services/tending.service.ts:1057; read@backend/src/services/tending.service.ts:412,uuid
+TendingCoordinationCycle,createdByUserId,String,N,yes,likely,w:high; r:low,write@backend/src/services/tending.service.ts:1057; prop@backend/src/controllers/stage4.ts:571; name in 2 models,uuid
+TendingCoordinationCycle,coordinationKey,String?,Y,yes,yes,w:high; r:high,write@backend/src/services/tending.service.ts:1057; read@backend/src/services/tending.service.ts:1047,text
+TendingCoordinationCycle,status,TendingCoordinationStatus,N,yes,yes,w:high; r:high,write@backend/src/services/tending.service.ts:1057; read@backend/src/services/tending.service.ts:1047,TendingCoordinationStatus
+TendingCoordinationCycle,entryIds,String[],Y,yes,likely,w:high; r:medium,write@backend/src/services/tending.service.ts:1057; prop@backend/src/services/tending.service.ts:41,_uuid
+TendingCoordinationCycle,participantUserIds,String[],Y,yes,yes,w:high; r:high,write@backend/src/services/tending.service.ts:1057; read@backend/src/services/tending.service.ts:412,_uuid
+TendingCoordinationCycle,submittedUserIds,String[],Y,yes,likely,w:high; r:medium,write@backend/src/services/tending.service.ts:1057; prop@backend/src/services/tending.service.ts:757,_uuid
+TendingCoordinationCycle,responseDeadlineAt,DateTime,N,yes,yes,w:high; r:high,write@backend/src/services/tending.service.ts:1057; read@backend/src/services/tending.service.ts:1610,timestamp
+TendingCoordinationCycle,resolvedAt,DateTime?,Y,yes,likely,w:high; r:low,write@backend/src/services/tending.service.ts:1622; prop@backend/src/controllers/session-state.ts:446; name in 4 models,timestamp
+TendingCoordinationCycle,resultSummary,String?,Y,yes,likely,w:high; r:medium,write@backend/src/services/tending.service.ts:1057; prop@backend/src/services/tending.service.ts:496,text
+TendingCoordinationCycle,createdAt,DateTime,N,default,yes,w:common name — not assessed; r:high,read@backend/src/services/tending.service.ts:412,timestamp
+TendingCoordinationCycle,updatedAt,DateTime,N,default,n/a,w:common name — not assessed; r:common name — not assessed,,timestamp
+TendingResponse,id,String,N,default,n/a,w:common name — not assessed; r:common name — not assessed,,uuid
+TendingResponse,tendingEntryId,String,N,yes,yes,w:high; r:high,write@backend/src/services/tending.service.ts:581; read@backend/src/services/tending.service.ts:581; name in 5 models,uuid
+TendingResponse,userId,String,N,yes,yes,w:high; r:high,write@backend/src/services/tending.service.ts:581; read@backend/src/services/tending.service.ts:581,uuid
+TendingResponse,checkinId,String?,Y,yes,likely,w:high; r:low,write@backend/src/services/tending.service.ts:1123; prop@backend/src/services/tending.service.ts:140; name in 5 models,uuid
+TendingResponse,status,String,N,yes,n/a,w:high; r:common name — not assessed,write@backend/src/services/tending.service.ts:581,text
+TendingResponse,reflection,String?,Y,yes,likely,w:high; r:medium,write@backend/src/services/tending.service.ts:581; prop@backend/src/services/tending.service.ts:142,text
+TendingResponse,continueChoice,ContinueChoice?,Y,yes,likely,w:high; r:low,write@backend/src/services/tending.service.ts:581; prop@backend/src/controllers/tending.ts:263; name in 2 models,ContinueChoice
+TendingResponse,submittedAt,DateTime,N,yes,likely,w:high; r:low,write@backend/src/services/tending.service.ts:581; prop@backend/src/services/tending.service.ts:144; name in 3 models,timestamp
+TendingEntryOutcome,id,String,N,default,n/a,w:common name — not assessed; r:common name — not assessed,,uuid
+TendingEntryOutcome,checkinId,String,N,yes,yes,w:high; r:high,write@backend/src/services/tending.service.ts:1162; read@backend/src/services/tending.service.ts:1162; name in 5 models,uuid
+TendingEntryOutcome,tendingEntryId,String,N,yes,yes,w:high; r:high,write@backend/src/services/tending.service.ts:1162; read@backend/src/services/tending.service.ts:1162; name in 5 models,uuid
+TendingEntryOutcome,responseId,String?,Y,yes,likely,w:high; r:medium,write@backend/src/services/tending.service.ts:1162; prop@backend/src/services/tending.service.ts:153,uuid
+TendingEntryOutcome,userId,String,N,yes,n/a,w:high; r:common name — not assessed,write@backend/src/services/tending.service.ts:1162,uuid
+TendingEntryOutcome,followThroughStatus,TendingFollowThroughStatus,N,yes,likely,w:high; r:medium,write@backend/src/services/tending.service.ts:1162; prop@backend/src/services/stream-turn-context.ts:264,TendingFollowThroughStatus
+TendingEntryOutcome,helpfulnessStatus,TendingHelpfulnessStatus?,Y,yes,likely,w:high; r:medium,write@backend/src/services/tending.service.ts:1162; prop@backend/src/services/stream-turn-context.ts:264,TendingHelpfulnessStatus
+TendingEntryOutcome,blockerCategories,TendingBlockerCategory[],Y,yes,likely,w:high; r:medium,write@backend/src/services/tending.service.ts:1162; prop@backend/src/services/stream-turn-context.ts:264,_TendingBlockerCategory
+TendingEntryOutcome,whatHappened,String?,Y,yes,likely,w:high; r:medium,write@backend/src/services/tending.service.ts:1162; prop@backend/src/services/tending.service.ts:158,text
+TendingEntryOutcome,helpedNeed,String?,Y,yes,likely,w:high; r:medium,write@backend/src/services/tending.service.ts:1162; prop@backend/src/services/tending.service.ts:159,text
+TendingEntryOutcome,blockerNote,String?,Y,yes,likely,w:high; r:medium,write@backend/src/services/tending.service.ts:1162; prop@backend/src/services/tending.service.ts:160,text
+TendingEntryOutcome,stillWorthTrying,Boolean?,Y,yes,likely,w:high; r:medium,write@backend/src/services/tending.service.ts:1162; prop@backend/src/services/stream-turn-context.ts:264,bool
+TendingEntryOutcome,createdAt,DateTime,N,default,yes,w:common name — not assessed; r:high,read@backend/src/services/tending.service.ts:465,timestamp
+TendingNeedOutcome,id,String,N,default,n/a,w:common name — not assessed; r:common name — not assessed,,uuid
+TendingNeedOutcome,checkinId,String,N,yes,likely,w:high; r:low,write@backend/src/services/tending.service.ts:1198; prop@backend/src/services/tending.service.ts:140; name in 5 models,uuid
+TendingNeedOutcome,sessionId,String,N,yes,n/a,w:high; r:common name — not assessed,write@backend/src/services/tending.service.ts:1198,uuid
+TendingNeedOutcome,needId,String?,Y,yes,likely,w:high; r:low,write@backend/src/services/tending.service.ts:1198; prop@backend/src/controllers/needs-assessment.ts:94; name in 5 models,text
+TendingNeedOutcome,needLabel,String,N,yes,likely,w:high; r:low,write@backend/src/services/tending.service.ts:1198; prop@backend/src/controllers/stage4.ts:191; name in 2 models,text
+TendingNeedOutcome,sourceUserId,String?,Y,yes,likely,w:high; r:low,write@backend/src/services/tending.service.ts:1198; prop@backend/src/controllers/consent.ts:164; name in 4 models,text
+TendingNeedOutcome,resolutionStatus,TendingNeedResolutionStatus,N,yes,likely,w:high; r:medium,write@backend/src/services/tending.service.ts:1198; prop@backend/src/services/stream-turn-context.ts:267,TendingNeedResolutionStatus
+TendingNeedOutcome,note,String?,Y,yes,likely,w:high; r:low,write@backend/src/services/tending.service.ts:1198; prop@backend/src/controllers/reconciler.ts:709; name in 4 models,text
+TendingNeedOutcome,changedNeedLabel,String?,Y,yes,likely,w:high; r:medium,write@backend/src/services/tending.service.ts:1198; prop@backend/src/services/tending.service.ts:858,text
+TendingNeedOutcome,nextAction,TendingNextAction?,Y,yes,likely,w:high; r:low,write@backend/src/services/tending.service.ts:1198; prop@backend/src/controllers/tending.ts:254; name in 2 models,TendingNextAction
+TendingNeedOutcome,createdAt,DateTime,N,default,yes,w:common name — not assessed; r:high,read@backend/src/services/tending.service.ts:465,timestamp
+TendingReminder,id,String,N,default,yes,w:common name — not assessed; r:high,read@backend/src/services/tending.service.ts:1566,uuid
+TendingReminder,sessionId,String,N,yes,n/a,w:high; r:common name — not assessed,write@backend/src/services/tending.service.ts:1219,uuid
+TendingReminder,checkinId,String?,Y,yes,likely,w:high; r:low,write@backend/src/services/tending.service.ts:1219; prop@backend/src/services/tending.service.ts:140; name in 5 models,uuid
+TendingReminder,tendingEntryId,String?,Y,yes,likely,w:high; r:low,write@backend/src/services/tending.service.ts:1219; prop@backend/src/services/stream-turn-context.ts:264; name in 5 models,uuid
+TendingReminder,userId,String,N,yes,n/a,w:high; r:common name — not assessed,write@backend/src/services/tending.service.ts:1219,uuid
+TendingReminder,scope,TendingReminderScope,N,yes,likely,w:high; r:low,write@backend/src/services/tending.service.ts:1219; prop@backend/src/services/stage4-prompts.ts:240; name in 2 models,TendingReminderScope
+TendingReminder,remindAt,DateTime,N,yes,yes,w:high; r:high,write@backend/src/services/tending.service.ts:1219; read@backend/src/services/tending.service.ts:465,timestamp
+TendingReminder,cadence,String?,Y,yes,likely,w:high; r:medium,write@backend/src/services/tending.service.ts:1219; prop@backend/src/services/tending.service.ts:175,text
+TendingReminder,note,String?,Y,yes,likely,w:high; r:low,write@backend/src/services/tending.service.ts:1219; prop@backend/src/controllers/reconciler.ts:709; name in 4 models,text
+TendingReminder,status,String,N,yes,yes,w:high; r:high,write@backend/src/services/tending.service.ts:1566; read@backend/src/services/tending.service.ts:1554,text
+TendingReminder,createdAt,DateTime,N,default,n/a,w:common name — not assessed; r:common name — not assessed,,timestamp
+TendingReminder,updatedAt,DateTime,N,default,n/a,w:common name — not assessed; r:common name — not assessed,,timestamp
+TendingAdjustment,id,String,N,default,n/a,w:common name — not assessed; r:common name — not assessed,,uuid
+TendingAdjustment,sessionId,String,N,yes,n/a,w:high; r:common name — not assessed,write@backend/src/services/tending.service.ts:1235,uuid
+TendingAdjustment,checkinId,String,N,yes,likely,w:high; r:low,write@backend/src/services/tending.service.ts:1235; prop@backend/src/services/tending.service.ts:140; name in 5 models,uuid
+TendingAdjustment,tendingEntryId,String,N,yes,likely,w:high; r:low,write@backend/src/services/tending.service.ts:1235; prop@backend/src/services/stream-turn-context.ts:264; name in 5 models,uuid
+TendingAdjustment,userId,String,N,yes,n/a,w:high; r:common name — not assessed,write@backend/src/services/tending.service.ts:1235,uuid
+TendingAdjustment,privacyScope,TendingReminderScope,N,yes,likely,w:high; r:medium,write@backend/src/services/tending.service.ts:1235; prop@backend/src/services/tending.service.ts:204,TendingReminderScope
+TendingAdjustment,revisedCommitmentText,String?,Y,yes,likely,w:high; r:medium,write@backend/src/services/tending.service.ts:1235; prop@backend/src/services/stream-turn-context.ts:270,text
+TendingAdjustment,revisedCadence,String?,Y,yes,likely,w:high; r:medium,write@backend/src/services/tending.service.ts:1235; prop@backend/src/services/stream-turn-context.ts:270,text
+TendingAdjustment,revisedScope,String?,Y,yes,likely,w:high; r:medium,write@backend/src/services/tending.service.ts:1235; prop@backend/src/services/tending.service.ts:207,text
+TendingAdjustment,revisedSuccessCriteria,String?,Y,yes,likely,w:high; r:medium,write@backend/src/services/tending.service.ts:1235; prop@backend/src/services/stream-turn-context.ts:270,text
+TendingAdjustment,reason,String?,Y,yes,likely,w:high; r:low,write@backend/src/services/tending.service.ts:1235; prop@backend/src/controllers/auth.ts:341; name in 3 models,text
+TendingAdjustment,blockerAddressed,TendingBlockerCategory[],Y,yes,likely,w:high; r:medium,write@backend/src/services/tending.service.ts:1235; prop@backend/src/services/tending.service.ts:210,_TendingBlockerCategory
+TendingAdjustment,createdAt,DateTime,N,default,yes,w:common name — not assessed; r:high,read@backend/src/services/tending.service.ts:465,timestamp
+TendingBetweenPeriodNote,id,String,N,default,yes,w:common name — not assessed; r:high,read@backend/src/services/stream-turn-context.ts:231,uuid
+TendingBetweenPeriodNote,sessionId,String,N,yes,yes,w:high; r:high,write@backend/src/services/tending.service.ts:448; read@backend/src/services/stream-turn-context.ts:231,uuid
+TendingBetweenPeriodNote,userId,String,N,yes,yes,w:high; r:high,write@backend/src/services/tending.service.ts:448; read@backend/src/services/stream-turn-context.ts:231,uuid
+TendingBetweenPeriodNote,content,String,N,yes,yes,w:high; r:high,write@backend/src/services/tending.service.ts:448; read@backend/src/services/stream-turn-context.ts:231,text
+TendingBetweenPeriodNote,carryForwardSelected,Boolean,N,yes,yes,w:high; r:high,write@backend/src/services/tending.service.ts:1253; read@backend/src/services/stream-turn-context.ts:231,bool
+TendingBetweenPeriodNote,consentToShareWithPartner,Boolean,N,yes,yes,w:high; r:high,write@backend/src/services/tending.service.ts:1266; read@backend/src/services/stream-turn-context.ts:231,bool
+TendingBetweenPeriodNote,shareConsentAt,DateTime?,Y,yes,likely,w:high; r:medium,write@backend/src/services/tending.service.ts:1266; prop@backend/src/services/tending.service.ts:257,timestamp
+TendingBetweenPeriodNote,selectedForCheckinId,String?,Y,yes,likely,w:high; r:medium,write@backend/src/services/tending.service.ts:1253; prop@backend/src/services/tending.service.ts:258,uuid
+TendingBetweenPeriodNote,createdAt,DateTime,N,default,yes,w:common name — not assessed; r:high,read@backend/src/services/stream-turn-context.ts:231,timestamp
+TendingBetweenPeriodNote,updatedAt,DateTime,N,default,n/a,w:common name — not assessed; r:common name — not assessed,,timestamp
+TendingResponsePartialClosure,id,String,N,default,n/a,w:common name — not assessed; r:common name — not assessed,,uuid
+TendingResponsePartialClosure,tendingResponseId,String,N,yes,yes,w:high; r:high,write@backend/src/services/tending.service.ts:1400; read@backend/src/services/tending.service.ts:1400,uuid
+TendingResponsePartialClosure,tendingEntryId,String,N,yes,yes,w:high; r:high,write@backend/src/services/tending.service.ts:1400; read@backend/src/services/tending.service.ts:1400; name in 5 models,uuid
+TendingResponsePartialClosure,resolution,PartialClosureResolution,N,yes,likely,w:high; r:medium,write@backend/src/services/tending.service.ts:1400; prop@backend/src/services/tending.service.ts:1682,PartialClosureResolution
+TendingResponsePartialClosure,createdAt,DateTime,N,default,n/a,w:common name — not assessed; r:common name — not assessed,,timestamp
+StrategyRanking,id,String,N,default,n/a,w:common name — not assessed; r:common name — not assessed,,uuid
+StrategyRanking,sessionId,String,N,yes,yes,w:high; r:high,write@backend/src/controllers/stage4.ts:1861; read@backend/src/controllers/stage4.ts:1586,uuid
+StrategyRanking,userId,String,N,yes,yes,w:high; r:high,write@backend/src/controllers/stage4.ts:1861; read@backend/src/controllers/stage4.ts:1861,uuid
+StrategyRanking,rankedIds,String[],Y,yes,likely,w:high; r:medium,write@backend/src/controllers/stage4.ts:1861; prop@backend/src/controllers/stage4.ts:1987,_uuid
+StrategyRanking,submittedAt,DateTime,N,yes,likely,w:high; r:low,write@backend/src/controllers/stage4.ts:1861; prop@backend/src/services/tending.service.ts:144; name in 3 models,timestamp
+EmotionalExerciseCompletion,id,String,N,default,n/a,w:common name — not assessed; r:common name — not assessed,,uuid
+EmotionalExerciseCompletion,sessionId,String,N,yes,yes,w:high; r:high,write@backend/src/controllers/emotions.ts:235; read@backend/src/services/session-deletion.ts:171,uuid
+EmotionalExerciseCompletion,userId,String,N,yes,yes,w:high; r:high,write@backend/src/controllers/emotions.ts:235; read@backend/src/services/account-deletion.ts:133,uuid
+EmotionalExerciseCompletion,type,ExerciseType,N,yes,likely,w:high; r:low,write@backend/src/controllers/emotions.ts:235; prop@backend/src/controllers/emotions.ts:251; name in 8 models,ExerciseType
+EmotionalExerciseCompletion,completedAt,DateTime,N,default-only,likely,w:high; r:low,prop@backend/src/controllers/emotions.ts:252; name in 6 models,timestamp
+EmotionalExerciseCompletion,intensityBefore,Int?,Y,yes,client-only?,w:high; r:low,write@backend/src/controllers/emotions.ts:235; only in mobile:mobile/src/components/BodyScanExercise.tsx:58,int4
+EmotionalExerciseCompletion,intensityAfter,Int?,Y,yes,client-only?,w:high; r:low,write@backend/src/controllers/emotions.ts:235; only in mobile:mobile/src/components/BodyScanExercise.tsx:60,int4
+GlobalLibraryItem,id,String,N,no,n/a,w:high; r:common name — not assessed,model has no create/upsert path in prod,uuid
+GlobalLibraryItem,title,String,N,no,yes,w:high; r:high,model has no create/upsert path in prod; read@backend/src/controllers/stage4.ts:2472; name in 4 models,text
+GlobalLibraryItem,description,String,N,no,yes,w:high; r:high,model has no create/upsert path in prod; read@backend/src/controllers/stage4.ts:2472; name in 6 models,text
+GlobalLibraryItem,category,String,N,no,yes,w:high; r:high,model has no create/upsert path in prod; read@backend/src/controllers/stage4.ts:2472; name in 5 models,text
+GlobalLibraryItem,source,GlobalLibrarySource,N,no,yes,w:high; r:high,model has no create/upsert path in prod; read@backend/src/controllers/stage4.ts:2472; name in 4 models,GlobalLibrarySource
+GlobalLibraryItem,createdAt,DateTime,N,no,n/a,w:high; r:common name — not assessed,model has no create/upsert path in prod,timestamp
+GlobalLibraryItem,updatedAt,DateTime,N,no,yes,w:high; r:high,model has no create/upsert path in prod; read@backend/src/controllers/stage4.ts:2472,timestamp
+GlobalLibraryItem,contributedBy,String?,Y,yes,yes,w:high; r:high,write@backend/src/services/account-deletion.ts:92; read@backend/src/services/account-deletion.ts:92,text
+GlobalLibraryItem,contributionConsent,DateTime?,Y,no,no,w:high; r:high,model has no create/upsert path in prod,timestamp
+Invitation,id,String,N,default,yes,w:common name — not assessed; r:high,read@backend/src/controllers/invitations.ts:572,uuid
+Invitation,sessionId,String,N,yes,yes,w:high; r:high,write@backend/src/controllers/invitations.ts:460; read@backend/src/controllers/messages.ts:385,uuid
+Invitation,invitedById,String,N,yes,yes,w:high; r:high,write@backend/src/controllers/invitations.ts:460; read@backend/src/controllers/messages.ts:385,uuid
+Invitation,name,String?,Y,yes,yes,w:high; r:high,write@backend/src/controllers/invitations.ts:460; read@backend/src/controllers/messages.ts:385; name in 5 models,text
+Invitation,messageConfirmed,Boolean,N,yes,yes,w:high; r:high,write@backend/src/controllers/sessions.ts:878; read@backend/src/controllers/session-state.ts:54,bool
+Invitation,messageConfirmedAt,DateTime?,Y,yes,yes,w:high; r:high,write@backend/src/controllers/sessions.ts:878; read@backend/src/services/shared-context.ts:42,timestamp
+Invitation,status,InvitationStatus,N,yes,yes,w:high; r:high,write@backend/src/controllers/invitations.ts:669; read@backend/src/controllers/session-state.ts:54,InvitationStatus
+Invitation,createdAt,DateTime,N,default,yes,w:common name — not assessed; r:high,read@backend/src/controllers/session-state.ts:182,timestamp
+Invitation,expiresAt,DateTime,N,yes,yes,w:high; r:high,write@backend/src/controllers/invitations.ts:460; read@backend/src/controllers/session-state.ts:54; name in 3 models,timestamp
+Invitation,acceptedAt,DateTime?,Y,yes,yes,w:high; r:high,write@backend/src/controllers/invitations.ts:718; read@backend/src/services/shared-context.ts:42,timestamp
+Invitation,declinedAt,DateTime?,Y,yes,client-only?,w:high; r:low,write@backend/src/controllers/invitations.ts:842; only in shared:shared/src/contracts/sessions.ts:219; name in 3 models,timestamp
+Invitation,declineReason,String?,Y,yes,no,w:high; r:high,write@backend/src/controllers/invitations.ts:842,text
+UserMemory,id,String,N,default,yes,w:common name — not assessed; r:high,read@backend/src/controllers/memories.ts:182,uuid
+UserMemory,userId,String,N,yes,yes,w:high; r:high,write@backend/src/controllers/memories.ts:151; read@backend/src/controllers/memories.ts:107,uuid
+UserMemory,sessionId,String?,Y,yes,yes,w:high; r:high,write@backend/src/controllers/memories.ts:151; read@backend/src/controllers/memories.ts:107,uuid
+UserMemory,content,String,N,yes,yes,w:high; r:high,write@backend/src/controllers/memories.ts:151; read@backend/src/controllers/memories.ts:287,text
+UserMemory,category,MemoryCategory,N,yes,yes,w:high; r:high,write@backend/src/controllers/memories.ts:151; read@backend/src/services/context-assembler.ts:902; name in 5 models,MemoryCategory
+UserMemory,status,MemoryStatus,N,yes,yes,w:high; r:high,write@backend/src/controllers/memories.ts:151; read@backend/src/controllers/memories.ts:107,MemoryStatus
+UserMemory,source,MemorySource,N,yes,likely,w:high; r:low,write@backend/src/controllers/memories.ts:151; prop@backend/src/controllers/knowledge-base.ts:347; name in 4 models,MemorySource
+UserMemory,suggestedBy,String?,Y,yes,likely,w:high; r:medium,write@backend/src/controllers/memories.ts:318; prop@backend/src/controllers/memories.ts:62,text
+UserMemory,createdAt,DateTime,N,default,yes,w:common name — not assessed; r:high,read@backend/src/controllers/memories.ts:107,timestamp
+UserMemory,updatedAt,DateTime,N,yes,n/a,w:high; r:common name — not assessed,write@backend/src/controllers/memories.ts:206,timestamp
+Need,id,Int,N,seed-only,yes,w:high; r:high,seeded by migration 20260106083657 INSERT; read@backend/src/controllers/gratitude.ts:457,int4
+Need,name,String,N,seed-only,yes,w:high; r:high,seeded by migration 20260106083657 INSERT; read@backend/src/controllers/gratitude.ts:151 (raw); name in 5 models,text
+Need,slug,String,N,seed-only,likely,w:high; r:medium,seeded by migration 20260106083657 INSERT; prop@backend/src/controllers/needs-assessment.ts:78,text
+Need,description,String,N,seed-only,likely,w:high; r:low,seeded by migration 20260106083657 INSERT; prop@backend/src/controllers/needs-assessment.ts:79; name in 6 models,text
+Need,category,NeedsCategory,N,seed-only,yes,w:high; r:high,seeded by migration 20260106083657 INSERT; read@backend/src/controllers/needs-assessment.ts:130; name in 5 models,NeedsCategory
+Need,order,Int,N,seed-only,yes,w:high; r:high,seeded by migration 20260106083657 INSERT; read@backend/src/controllers/needs-assessment.ts:130,int4
+NeedScore,id,String,N,default,yes,w:common name — not assessed; r:high,read@backend/src/controllers/gratitude.ts:151 (raw),uuid
+NeedScore,userId,String,N,yes,yes,w:high; r:high,write@backend/src/controllers/needs-assessment.ts:410; read@backend/src/controllers/needs-assessment.ts:404,uuid
+NeedScore,needId,Int,N,yes,yes,w:high; r:high,write@backend/src/controllers/needs-assessment.ts:410; read@backend/src/controllers/needs-assessment.ts:404; name in 5 models,int4
+NeedScore,score,Int,N,yes,yes,w:high; r:high,write@backend/src/controllers/needs-assessment.ts:410; read@backend/src/controllers/gratitude.ts:151 (raw),int4
+NeedScore,clarification,String?,Y,yes,likely,w:high; r:medium,write@backend/src/controllers/needs-assessment.ts:410; prop@backend/src/controllers/needs-assessment.ts:96,text
+NeedScore,createdAt,DateTime,N,default,yes,w:common name — not assessed; r:high,read@backend/src/controllers/needs-assessment.ts:404,timestamp
+NeedsAssessmentState,id,String,N,default,n/a,w:common name — not assessed; r:common name — not assessed,,uuid
+NeedsAssessmentState,userId,String,N,yes,yes,w:high; r:high,write@backend/src/controllers/needs-assessment.ts:158; read@backend/src/controllers/gratitude.ts:145,uuid
+NeedsAssessmentState,baselineCompleted,Boolean,N,yes,likely,w:high; r:medium,write@backend/src/controllers/needs-assessment.ts:305; prop@backend/src/controllers/gratitude.ts:150,bool
+NeedsAssessmentState,baselineCompletedAt,DateTime?,Y,yes,likely,w:high; r:medium,write@backend/src/controllers/needs-assessment.ts:305; prop@backend/src/controllers/needs-assessment.ts:247,timestamp
+NeedsAssessmentState,checkInFrequencyDays,Int,N,yes,likely,w:high; r:medium,write@backend/src/controllers/needs-assessment.ts:514; prop@backend/src/controllers/needs-assessment.ts:248,int4
+NeedsAssessmentState,lastCheckInNeedId,Int?,Y,yes,no,w:high; r:high,write@backend/src/controllers/needs-assessment.ts:420,int4
+NeedsAssessmentState,lastCheckInAt,DateTime?,Y,yes,likely,w:high; r:medium,write@backend/src/controllers/needs-assessment.ts:305; prop@backend/src/controllers/needs-assessment.ts:249,timestamp
+NeedsAssessmentState,nextCheckInAt,DateTime?,Y,yes,likely,w:high; r:medium,write@backend/src/controllers/needs-assessment.ts:305; prop@backend/src/controllers/needs-assessment.ts:250,timestamp
+Person,id,String,N,default,yes,w:common name — not assessed; r:high,read@backend/src/controllers/people.ts:158,uuid
+Person,userId,String,N,yes,yes,w:high; r:high,write@backend/src/services/people-extractor.ts:221; read@backend/src/controllers/people.ts:131,uuid
+Person,name,String,N,yes,yes,w:high; r:high,write@backend/src/services/people-extractor.ts:221; read@backend/src/controllers/people.ts:269; name in 5 models,text
+Person,aliases,String[],Y,yes,likely,w:high; r:medium,write@backend/src/services/people-extractor.ts:338; prop@backend/src/controllers/people.ts:70,_text
+Person,relationship,String?,Y,yes,likely,w:high; r:medium,write@backend/src/services/people-extractor.ts:221; prop@backend/src/controllers/gratitude.ts:663,text
+Person,firstMentioned,DateTime,N,yes,likely,w:high; r:medium,write@backend/src/services/people-extractor.ts:221; prop@backend/src/controllers/people.ts:72,timestamp
+Person,lastMentioned,DateTime,N,yes,likely,w:high; r:medium,write@backend/src/services/people-extractor.ts:221; prop@backend/src/controllers/people.ts:73,timestamp
+Person,mentionCountInnerThoughts,Int,N,yes,yes,w:high; r:high,write@backend/src/services/people-extractor.ts:338; read@backend/src/services/cross-feature-context.ts:302,int4
+Person,mentionCountGratitude,Int,N,yes,yes,w:high; r:high,write@backend/src/services/people-extractor.ts:338; read@backend/src/services/cross-feature-context.ts:302,int4
+Person,mentionCountNeeds,Int,N,yes,likely,w:high; r:medium,write@backend/src/services/people-extractor.ts:338; prop@backend/src/controllers/people.ts:77,int4
+Person,mentionCountConflict,Int,N,yes,yes,w:high; r:high,write@backend/src/services/people-extractor.ts:338; read@backend/src/services/cross-feature-context.ts:302,int4
+Person,needsConnections,Json,N,default-only,likely,w:high; r:medium,"manually verified: @default(""{}""); gratitude.ts:503 is a response DTO, not a DB write; prop@backend/src/controllers/people.ts:193",jsonb
+PersonMention,id,String,N,default,n/a,w:common name — not assessed; r:common name — not assessed,,uuid
+PersonMention,personId,String,N,yes,yes,w:high; r:high,write@backend/src/services/people-extractor.ts:241; read@backend/src/controllers/people.ts:167,uuid
+PersonMention,userId,String,N,yes,n/a,w:high; r:common name — not assessed,write@backend/src/services/people-extractor.ts:241,text
+PersonMention,sourceType,MentionSourceType,N,yes,yes,w:high; r:high,write@backend/src/services/people-extractor.ts:241; read@backend/src/controllers/people.ts:174,MentionSourceType
+PersonMention,sourceId,String,N,yes,yes,w:high; r:high,write@backend/src/services/people-extractor.ts:241; read@backend/src/controllers/people.ts:201; name in 2 models,text
+PersonMention,context,String?,Y,yes,likely,w:high; r:low,write@backend/src/services/people-extractor.ts:241; prop@backend/src/controllers/emotions.ts:177; name in 2 models,text
+PersonMention,sentiment,Float?,Y,yes,likely,w:high; r:medium,write@backend/src/services/people-extractor.ts:241; prop@backend/src/controllers/gratitude.ts:241,float8
+PersonMention,createdAt,DateTime,N,default,yes,w:common name — not assessed; r:high,read@backend/src/controllers/people.ts:167,timestamp
+Insight,id,String,N,no,yes,w:high; r:high,model has no create/upsert path in prod; read@backend/src/controllers/inner-work.ts:1341,uuid
+Insight,userId,String,N,no,yes,w:high; r:high,model has no create/upsert path in prod; read@backend/src/controllers/inner-work.ts:1204,uuid
+Insight,type,InsightType,N,no,likely,w:high; r:low,model has no create/upsert path in prod; prop@backend/src/controllers/emotions.ts:251; name in 8 models,InsightType
+Insight,summary,String,N,no,likely,w:high; r:low,model has no create/upsert path in prod; prop@backend/src/controllers/inner-work.ts:85; name in 5 models,text
+Insight,data,Json,N,no,likely,w:high; r:medium,model has no create/upsert path in prod; prop@backend/src/controllers/auth.ts:106,jsonb
+Insight,priority,Int,N,no,yes,w:high; r:high,model has no create/upsert path in prod; read@backend/src/controllers/inner-work.ts:1204,int4
+Insight,dismissed,Boolean,N,yes,yes,w:high; r:high,write@backend/src/controllers/inner-work.ts:1352; read@backend/src/controllers/inner-work.ts:1204,bool
+Insight,expiresAt,DateTime?,Y,no,yes,w:high; r:high,model has no create/upsert path in prod; read@backend/src/controllers/inner-work.ts:1204; name in 3 models,timestamp
+Insight,createdAt,DateTime,N,no,yes,w:high; r:high,model has no create/upsert path in prod; read@backend/src/controllers/inner-work.ts:1204,timestamp
+RecurringTheme,id,String,N,default,n/a,w:common name — not assessed; r:common name — not assessed,,uuid
+RecurringTheme,userId,String,N,yes,yes,w:high; r:high,write@backend/src/services/theme-detector.ts:159; read@backend/src/controllers/knowledge-base.ts:172,uuid
+RecurringTheme,tag,String,N,yes,yes,w:high; r:high,write@backend/src/services/theme-detector.ts:159; read@backend/src/services/theme-detector.ts:159,text
+RecurringTheme,sessionCount,Int,N,yes,yes,w:high; r:high,write@backend/src/services/theme-detector.ts:159; read@backend/src/controllers/knowledge-base.ts:172,int4
+RecurringTheme,summary,String,N,yes,likely,w:high; r:low,write@backend/src/services/theme-detector.ts:159; prop@backend/src/controllers/inner-work.ts:85; name in 5 models,text
+RecurringTheme,summaryAt,DateTime,N,yes,likely,w:high; r:medium,write@backend/src/services/theme-detector.ts:159; prop@backend/src/controllers/knowledge-base.ts:185,timestamp
+RecurringTheme,createdAt,DateTime,N,default,n/a,w:common name — not assessed; r:common name — not assessed,,timestamp
+RecurringTheme,updatedAt,DateTime,N,default,n/a,w:common name — not assessed; r:common name — not assessed,,timestamp
+GratitudeEntry,id,String,N,default,yes,w:common name — not assessed; r:high,read@backend/src/controllers/gratitude.ts:352,uuid
+GratitudeEntry,userId,String,N,yes,yes,w:high; r:high,write@backend/src/controllers/gratitude.ts:271; read@backend/src/controllers/gratitude.ts:352,uuid
+GratitudeEntry,content,String,N,yes,n/a,w:high; r:common name — not assessed,write@backend/src/controllers/gratitude.ts:271,text
+GratitudeEntry,voiceRecorded,Boolean,N,yes,likely,w:high; r:medium,write@backend/src/controllers/gratitude.ts:271; prop@backend/src/controllers/gratitude.ts:93,bool
+GratitudeEntry,createdAt,DateTime,N,default,yes,w:common name — not assessed; r:high,read@backend/src/controllers/gratitude.ts:322,timestamp
+GratitudeEntry,extractedPeople,String[],Y,yes,yes,w:high; r:high,write@backend/src/controllers/gratitude.ts:271; read@backend/src/controllers/gratitude.ts:418,_text
+GratitudeEntry,extractedPlaces,String[],Y,yes,yes,w:high; r:high,write@backend/src/controllers/gratitude.ts:271; read@backend/src/controllers/gratitude.ts:418,_text
+GratitudeEntry,extractedActivities,String[],Y,yes,yes,w:high; r:high,write@backend/src/controllers/gratitude.ts:271; read@backend/src/controllers/gratitude.ts:418,_text
+GratitudeEntry,extractedEmotions,String[],Y,yes,likely,w:high; r:low,write@backend/src/controllers/gratitude.ts:271; prop@backend/src/controllers/gratitude.ts:100; name in 2 models,_text
+GratitudeEntry,extractedThemes,String[],Y,yes,yes,w:high; r:high,write@backend/src/controllers/gratitude.ts:271; read@backend/src/controllers/gratitude.ts:418,_text
+GratitudeEntry,linkedNeedIds,Int[],Y,yes,yes,w:high; r:high,write@backend/src/controllers/gratitude.ts:271; read@backend/src/controllers/gratitude.ts:418; name in 2 models,_int4
+GratitudeEntry,linkedConflictId,String?,Y,no,no,w:high; r:high,manually verified: name appears nowhere outside generated client; name in 2 models,text
+GratitudeEntry,sentimentScore,Float?,Y,yes,yes,w:high; r:high,write@backend/src/controllers/gratitude.ts:271; read@backend/src/controllers/gratitude.ts:418,float8
+GratitudeEntry,aiResponse,String?,Y,yes,likely,w:high; r:medium,write@backend/src/controllers/gratitude.ts:271; prop@backend/src/controllers/gratitude.ts:95,text
+GratitudePreferences,id,String,N,default,n/a,w:common name — not assessed; r:common name — not assessed,,uuid
+GratitudePreferences,userId,String,N,yes,yes,w:high; r:high,write@backend/src/controllers/gratitude.ts:541; read@backend/src/controllers/gratitude.ts:536,uuid
+GratitudePreferences,enabled,Boolean,N,yes,likely,w:medium; r:medium,manually verified: `...parseResult.data` (zod schema gratitude.ts:60-65) into upsert gratitude.ts:569; prop@backend/src/controllers/gratitude.ts:117,bool
+GratitudePreferences,frequency,Int,N,yes,likely,w:medium; r:medium,manually verified: `...parseResult.data` (zod schema gratitude.ts:60-65) into upsert gratitude.ts:569; prop@backend/src/controllers/gratitude.ts:118,int4
+GratitudePreferences,preferredTimes,String[],Y,yes,likely,w:medium; r:medium,manually verified: `...parseResult.data` (zod schema gratitude.ts:60-65) into upsert gratitude.ts:569; prop@backend/src/controllers/gratitude.ts:119,_text
+GratitudePreferences,weekdayOnly,Boolean,N,yes,likely,w:medium; r:medium,manually verified: `...parseResult.data` (zod schema gratitude.ts:60-65) into upsert gratitude.ts:569; prop@backend/src/controllers/gratitude.ts:120,bool
+GratitudePreferences,quietHoursStart,String?,Y,yes,likely,w:medium; r:medium,manually verified: `...parseResult.data` (zod schema gratitude.ts:60-65) into upsert gratitude.ts:569; prop@backend/src/controllers/gratitude.ts:121,text
+GratitudePreferences,quietHoursEnd,String?,Y,yes,likely,w:medium; r:medium,manually verified: `...parseResult.data` (zod schema gratitude.ts:60-65) into upsert gratitude.ts:569; prop@backend/src/controllers/gratitude.ts:122,text
+MeditationSession,id,String,N,default,yes,w:common name — not assessed; r:high,read@backend/src/controllers/meditation.ts:487,uuid
+MeditationSession,userId,String,N,yes,yes,w:high; r:high,write@backend/src/controllers/meditation.ts:448; read@backend/src/controllers/meditation.ts:487,uuid
+MeditationSession,type,MeditationType,N,yes,likely,w:high; r:low,write@backend/src/controllers/meditation.ts:448; prop@backend/src/controllers/emotions.ts:251; name in 8 models,MeditationType
+MeditationSession,durationMinutes,Int,N,yes,likely,w:high; r:low,write@backend/src/controllers/meditation.ts:448; prop@backend/src/controllers/meditation.ts:127; name in 2 models,int4
+MeditationSession,focusArea,String?,Y,yes,yes,w:high; r:high,write@backend/src/controllers/meditation.ts:448; read@backend/src/services/cross-feature-context.ts:213; name in 2 models,text
+MeditationSession,completed,Boolean,N,yes,yes,w:high; r:high,write@backend/src/controllers/meditation.ts:497; read@backend/src/services/cross-feature-context.ts:213,bool
+MeditationSession,startedAt,DateTime,N,default-only,yes,w:high; r:high,read@backend/src/controllers/meditation.ts:558; name in 2 models,timestamp
+MeditationSession,completedAt,DateTime?,Y,yes,likely,w:high; r:low,write@backend/src/controllers/meditation.ts:497; prop@backend/src/controllers/emotions.ts:252; name in 6 models,timestamp
+MeditationSession,scriptGenerated,String?,Y,yes,likely,w:high; r:medium,write@backend/src/controllers/meditation.ts:448; prop@backend/src/controllers/meditation.ts:132,text
+MeditationSession,voiceId,String?,Y,yes,likely,w:high; r:medium,write@backend/src/controllers/meditation.ts:448; prop@backend/src/controllers/meditation.ts:133,text
+MeditationSession,backgroundSound,String?,Y,yes,likely,w:high; r:low,write@backend/src/controllers/meditation.ts:448; prop@backend/src/controllers/meditation.ts:134; name in 2 models,text
+MeditationSession,savedAsFavorite,Boolean,N,yes,likely,w:high; r:medium,write@backend/src/controllers/meditation.ts:497; prop@backend/src/controllers/meditation.ts:135,bool
+MeditationSession,favoriteType,FavoriteType?,Y,yes,likely,w:high; r:low,write@backend/src/controllers/meditation.ts:497; prop@backend/src/controllers/meditation.ts:136; name in 2 models,FavoriteType
+MeditationSession,postNotes,String?,Y,yes,likely,w:high; r:medium,write@backend/src/controllers/meditation.ts:497; prop@backend/src/controllers/meditation.ts:137,text
+MeditationSession,linkedNeedIds,Int[],Y,no,no,w:high; r:high,manually verified: meditation.ts create/update never set it; all linkedNeedIds reads are GratitudeEntry; name in 2 models,_int4
+MeditationSession,linkedConflictId,String?,Y,no,no,w:high; r:high,manually verified: name appears nowhere outside generated client; name in 2 models,text
+MeditationStats,id,String,N,default,n/a,w:common name — not assessed; r:common name — not assessed,,uuid
+MeditationStats,userId,String,N,yes,yes,w:high; r:high,write@backend/src/controllers/meditation.ts:242; read@backend/src/controllers/meditation.ts:199,uuid
+MeditationStats,totalSessions,Int,N,yes,likely,w:high; r:medium,write@backend/src/controllers/meditation.ts:242; prop@backend/src/controllers/meditation.ts:694,int4
+MeditationStats,guidedCount,Int,N,yes,likely,w:high; r:medium,write@backend/src/controllers/meditation.ts:242; prop@backend/src/controllers/meditation.ts:695,int4
+MeditationStats,unguidedCount,Int,N,yes,likely,w:high; r:medium,write@backend/src/controllers/meditation.ts:242; prop@backend/src/controllers/meditation.ts:696,int4
+MeditationStats,totalMinutes,Int,N,yes,likely,w:high; r:medium,write@backend/src/controllers/meditation.ts:242; prop@backend/src/controllers/meditation.ts:697,int4
+MeditationStats,currentStreak,Int,N,yes,likely,w:high; r:medium,write@backend/src/controllers/meditation.ts:242; prop@backend/src/controllers/meditation.ts:208,int4
+MeditationStats,longestStreak,Int,N,yes,likely,w:high; r:medium,write@backend/src/controllers/meditation.ts:242; prop@backend/src/controllers/meditation.ts:209,int4
+MeditationStats,streakStartDate,DateTime?,Y,yes,likely,w:high; r:medium,write@backend/src/controllers/meditation.ts:242; prop@backend/src/controllers/meditation.ts:210,timestamp
+MeditationStats,lastSessionDate,DateTime?,Y,yes,likely,w:high; r:medium,write@backend/src/controllers/meditation.ts:242; prop@backend/src/controllers/meditation.ts:205,timestamp
+MeditationStats,favoriteFocusAreas,Json,N,yes,likely,w:high; r:medium,write@backend/src/controllers/meditation.ts:242; prop@backend/src/controllers/meditation.ts:237,jsonb
+MeditationFavorite,id,String,N,default,yes,w:common name — not assessed; r:high,read@backend/src/controllers/meditation.ts:787,uuid
+MeditationFavorite,userId,String,N,yes,yes,w:high; r:high,write@backend/src/controllers/meditation.ts:515; read@backend/src/controllers/meditation.ts:721,uuid
+MeditationFavorite,name,String,N,yes,likely,w:high; r:low,write@backend/src/controllers/meditation.ts:515; prop@backend/src/controllers/auth.ts:51; name in 5 models,text
+MeditationFavorite,focusArea,String,N,yes,likely,w:high; r:low,write@backend/src/controllers/meditation.ts:515; prop@backend/src/controllers/meditation.ts:128; name in 2 models,text
+MeditationFavorite,durationMinutes,Int,N,yes,likely,w:high; r:low,write@backend/src/controllers/meditation.ts:515; prop@backend/src/controllers/meditation.ts:127; name in 2 models,int4
+MeditationFavorite,favoriteType,FavoriteType,N,yes,likely,w:high; r:low,write@backend/src/controllers/meditation.ts:515; prop@backend/src/controllers/meditation.ts:136; name in 2 models,FavoriteType
+MeditationFavorite,script,String?,Y,yes,likely,w:high; r:low,write@backend/src/controllers/meditation.ts:515; prop@backend/src/controllers/meditation.ts:176; name in 2 models,text
+MeditationFavorite,savedAt,DateTime,N,default-only,yes,w:high; r:high,read@backend/src/controllers/meditation.ts:721,timestamp
+MeditationPreferences,id,String,N,default,n/a,w:common name — not assessed; r:common name — not assessed,,uuid
+MeditationPreferences,userId,String,N,yes,yes,w:high; r:high,write@backend/src/controllers/meditation.ts:818; read@backend/src/controllers/meditation.ts:813,uuid
+MeditationPreferences,preferredVoice,String,N,yes,client-only?,w:medium; r:low,manually verified: `...parseResult.data` (zod schema meditation.ts:~95-102) into upsert meditation.ts:846; only in shared:shared/src/dto/meditation.ts:74,text
+MeditationPreferences,voiceSpeed,Float,N,yes,client-only?,w:medium; r:low,manually verified: `...parseResult.data` (zod schema meditation.ts:~95-102) into upsert meditation.ts:846; only in shared:shared/src/dto/meditation.ts:75,float8
+MeditationPreferences,defaultDuration,Int,N,yes,client-only?,w:medium; r:low,manually verified: `...parseResult.data` (zod schema meditation.ts:~95-102) into upsert meditation.ts:846; only in shared:shared/src/dto/meditation.ts:76,int4
+MeditationPreferences,backgroundSound,String,N,yes,likely,w:medium; r:low,manually verified: `...parseResult.data` (zod schema meditation.ts:~95-102) into upsert meditation.ts:846; prop@backend/src/controllers/meditation.ts:134; name in 2 models,text
+MeditationPreferences,reminderEnabled,Boolean,N,yes,client-only?,w:medium; r:low,manually verified: `...parseResult.data` (zod schema meditation.ts:~95-102) into upsert meditation.ts:846; only in shared:shared/src/dto/meditation.ts:78,bool
+MeditationPreferences,reminderTime,String?,Y,yes,client-only?,w:medium; r:low,manually verified: `...parseResult.data` (zod schema meditation.ts:~95-102) into upsert meditation.ts:846; only in shared:shared/src/dto/meditation.ts:79,text
+SavedMeditation,id,String,N,default,yes,w:common name — not assessed; r:high,read@backend/src/controllers/meditation.ts:925,uuid
+SavedMeditation,userId,String,N,yes,yes,w:high; r:high,write@backend/src/controllers/meditation.ts:992; read@backend/src/controllers/meditation.ts:925,uuid
+SavedMeditation,title,String,N,yes,yes,w:high; r:high,write@backend/src/controllers/meditation.ts:992; read@backend/src/controllers/meditation.ts:925; name in 4 models,text
+SavedMeditation,script,String,N,yes,likely,w:high; r:low,write@backend/src/controllers/meditation.ts:992; prop@backend/src/controllers/meditation.ts:176; name in 2 models,text
+SavedMeditation,durationSeconds,Int,N,yes,yes,w:high; r:high,write@backend/src/controllers/meditation.ts:992; read@backend/src/controllers/meditation.ts:925,int4
+SavedMeditation,conversationId,String?,Y,yes,likely,w:high; r:medium,write@backend/src/controllers/meditation.ts:992; prop@backend/src/controllers/meditation.ts:896,text
+SavedMeditation,createdAt,DateTime,N,default,yes,w:common name — not assessed; r:high,read@backend/src/controllers/meditation.ts:925,timestamp
+SavedMeditation,updatedAt,DateTime,N,default,n/a,w:common name — not assessed; r:common name — not assessed,,timestamp
+BrainActivity,id,String,N,default,yes,w:common name — not assessed; r:high,read@backend/src/routes/brain.ts:724,uuid
+BrainActivity,sessionId,String?,Y,n/a,yes,w:common name — not assessed; r:high,read@backend/src/routes/brain.ts:173,uuid
+BrainActivity,innerWorkSessionId,String?,Y,yes,likely,w:high; r:medium,manually verified: relation connect inside conditional spread brain-service.ts:43; prop@backend/src/lib/bedrock.ts:420,uuid
+BrainActivity,turnId,String?,Y,yes,yes,w:high; r:high,write@backend/src/services/brain-service.ts:40; read@backend/src/routes/brain.ts:1099,text
+BrainActivity,activityType,ActivityType,N,yes,likely,w:high; r:medium,write@backend/src/services/brain-service.ts:40; prop@backend/src/services/brain-service.ts:45,ActivityType
+BrainActivity,model,String,N,yes,yes,w:high; r:high,write@backend/src/services/brain-service.ts:40; read@backend/src/routes/brain.ts:173,text
+BrainActivity,input,Json?,Y,yes,yes,w:high; r:high,write@backend/src/services/brain-service.ts:40; read@backend/src/services/data-retention.ts:44,jsonb
+BrainActivity,output,Json?,Y,yes,yes,w:high; r:high,write@backend/src/services/brain-service.ts:89; read@backend/src/services/data-retention.ts:44,jsonb
+BrainActivity,metadata,Json?,Y,yes,yes,w:high; r:high,write@backend/src/services/ai-orchestrator.ts:828; read@backend/src/routes/brain.ts:173,jsonb
+BrainActivity,callType,BrainActivityCallType?,Y,yes,yes,w:high; r:high,write@backend/src/services/brain-service.ts:40; read@backend/src/routes/brain.ts:314,BrainActivityCallType
+BrainActivity,structuredOutput,Json?,Y,yes,yes,w:high; r:high,write@backend/src/services/brain-service.ts:89; read@backend/src/services/data-retention.ts:44,jsonb
+BrainActivity,tokenCountInput,Int,N,yes,yes,w:high; r:high,write@backend/src/services/brain-service.ts:40; read@backend/src/routes/brain.ts:173,int4
+BrainActivity,tokenCountOutput,Int,N,yes,yes,w:high; r:high,write@backend/src/services/brain-service.ts:40; read@backend/src/routes/brain.ts:173,int4
+BrainActivity,cost,Float,N,yes,yes,w:high; r:high,write@backend/src/services/brain-service.ts:40; read@backend/src/routes/brain.ts:173,float8
+BrainActivity,durationMs,Int,N,yes,yes,w:high; r:high,write@backend/src/services/brain-service.ts:40; read@backend/src/routes/brain.ts:173,int4
+BrainActivity,status,ActivityStatus,N,yes,n/a,w:high; r:common name — not assessed,write@backend/src/services/brain-service.ts:40,ActivityStatus
+BrainActivity,createdAt,DateTime,N,default,yes,w:common name — not assessed; r:high,read@backend/src/routes/brain.ts:173,timestamp
+BrainActivity,completedAt,DateTime?,Y,yes,likely,w:high; r:low,write@backend/src/services/brain-service.ts:89; prop@backend/src/controllers/emotions.ts:252; name in 6 models,timestamp
+ValidationFeedbackDraft,id,String,N,default,n/a,w:common name — not assessed; r:common name — not assessed,,uuid
+ValidationFeedbackDraft,sessionId,String,N,yes,yes,w:high; r:high,write@backend/src/controllers/stage2.ts:1494; read@backend/src/controllers/stage2.ts:1494,uuid
+ValidationFeedbackDraft,userId,String,N,yes,yes,w:high; r:high,write@backend/src/controllers/stage2.ts:1494; read@backend/src/controllers/stage2.ts:1494,uuid
+ValidationFeedbackDraft,content,String,N,yes,n/a,w:high; r:common name — not assessed,write@backend/src/controllers/stage2.ts:1494,text
+ValidationFeedbackDraft,readyToShare,Boolean,N,yes,likely,w:high; r:low,write@backend/src/controllers/stage2.ts:1494; prop@backend/src/controllers/inner-work.ts:281; name in 2 models,bool
+ValidationFeedbackDraft,createdAt,DateTime,N,default,n/a,w:common name — not assessed; r:common name — not assessed,,timestamp
+ValidationFeedbackDraft,updatedAt,DateTime,N,default,n/a,w:common name — not assessed; r:common name — not assessed,,timestamp
