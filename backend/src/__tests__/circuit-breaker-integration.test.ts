@@ -33,10 +33,11 @@ describe('Circuit Breaker Integration', () => {
 
   // Test IDs - use unique prefix to avoid collisions
   const TEST_PREFIX = 'cb-integ';
-  const userAId = `${TEST_PREFIX}-user-a`;
-  const userBId = `${TEST_PREFIX}-user-b`;
-  const relationshipId = `${TEST_PREFIX}-rel`;
-  const sessionId = `${TEST_PREFIX}-session`;
+  const userAId = '00000000-0000-4000-8000-0000000cb20a';
+  const userBId = '00000000-0000-4000-8000-0000000cb20b';
+  // Fixed UUIDs: these rows are real and every id column is a Postgres uuid.
+  const relationshipId = '00000000-0000-4000-8000-0000000cb20e';
+  const sessionId = '00000000-0000-4000-8000-0000000cb205';
 
   beforeAll(() => {
     prisma = new PrismaClient({ adapter: createPrismaPgAdapter() });

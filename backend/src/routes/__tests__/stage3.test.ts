@@ -60,8 +60,8 @@ describe('Stage 3 API', () => {
   const mockPartnerId = 'cluser0002aaaaaaaaa';
   const mockSessionId = 'clsess0001aaaaaaaaa';
   const mockVesselId = 'clvess0001aaaaaaaaa';
-  const mockNeedId1 = 'clneed0001aaaaaaaaa';
-  const mockNeedId2 = 'clneed0002aaaaaaaaa';
+  const mockNeedId1 = '00000000-0000-4000-8000-0000000ee001'; // uuids: the request contract validates them
+  const mockNeedId2 = '00000000-0000-4000-8000-0000000ee002';
 
   beforeEach(() => {
     jest.clearAllMocks();

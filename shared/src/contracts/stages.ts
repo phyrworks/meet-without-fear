@@ -241,11 +241,11 @@ export type RecordEmotionResponseInput = z.infer<typeof recordEmotionResponseSch
 // ============================================================================
 
 export const confirmNeedsRequestSchema = z.object({
-  needIds: z.array(z.string().cuid()),
+  needIds: z.array(z.string().uuid()),
   adjustments: z
     .array(
       z.object({
-        needId: z.string().cuid(),
+        needId: z.string().uuid(),
         confirmed: z.boolean(),
         correction: z.string().max(500, 'Correction too long').optional(),
       }),
@@ -312,7 +312,7 @@ export const proposeStrategyResponseSchema = z.object({
 export type ProposeStrategyResponseInput = z.infer<typeof proposeStrategyResponseSchema>;
 
 export const rankStrategiesRequestSchema = z.object({
-  rankedIds: z.array(z.string().cuid()).min(1, 'Must rank at least one strategy'),
+  rankedIds: z.array(z.string().uuid()).min(1, 'Must rank at least one strategy'),
 });
 
 export type RankStrategiesRequestInput = z.infer<typeof rankStrategiesRequestSchema>;

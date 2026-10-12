@@ -11,7 +11,7 @@ test.describe('Font Rendering Debug', () => {
   test.beforeEach(async ({ page }) => {
     // Set E2E auth headers
     await page.setExtraHTTPHeaders({
-      'x-e2e-user-id': 'test-user-123',
+      'x-e2e-user-id': '00000000-0000-4000-8000-000000000123',
       'x-e2e-user-email': 'test@example.com',
       'X-E2E-Fixture-ID': 'user-a-full-journey',
     });
@@ -19,7 +19,7 @@ test.describe('Font Rendering Debug', () => {
     // Seed user
     await page.request.get('/api/e2e/seed', {
       headers: {
-        'x-e2e-user-id': 'test-user-123',
+        'x-e2e-user-id': '00000000-0000-4000-8000-000000000123',
         'x-e2e-user-email': 'test@example.com',
       },
     });

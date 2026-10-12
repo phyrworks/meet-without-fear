@@ -77,7 +77,7 @@ Runs on every PR targeting `main`. Short-circuited via `dorny/paths-filter` when
 
 **Steps:**
 
-1. Starts a PostgreSQL 15 service container (health-checked with `pg_isready`).
+1. Starts a PostgreSQL 18 + pgvector service container (health-checked with `pg_isready`). 18 is the minimum: ids default to the built-in `uuidv7()`.
 2. Checks out the repository and sets up Node.js 20 with npm caching.
 3. Installs dependencies (`npm ci`).
 4. Generates the Prisma client (`npm run prisma:generate --workspace=backend`, with `PRISMA_ENGINES_CHECKSUM_IGNORE_MISSING=1`).

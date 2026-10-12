@@ -1,4 +1,5 @@
 import { E2EFixture } from './types';
+import { FIXTURE_USER_IDS } from './ids';
 
 export const userAFullJourney: E2EFixture = {
   name: 'User A Full Journey',
@@ -7,7 +8,7 @@ export const userAFullJourney: E2EFixture = {
   seed: {
     users: [
       {
-        id: 'user-a',
+        id: FIXTURE_USER_IDS.userA,
         email: 'user-a@e2e.test',
         clerkId: 'e2e_clerk_user_a',
         name: 'Alice Test',

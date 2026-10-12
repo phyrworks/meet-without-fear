@@ -1,4 +1,5 @@
 import { E2EFixture } from './types';
+import { FIXTURE_USER_IDS } from './ids';
 
 /**
  * Test fixture for unit tests (legacy storyline format)
@@ -10,7 +11,7 @@ export const testFixture: E2EFixture = {
   seed: {
     users: [
       {
-        id: 'user-a',
+        id: FIXTURE_USER_IDS.userA,
         email: 'user-a@e2e.test',
         clerkId: 'e2e_clerk_user_a',
         name: 'Alice Test',
@@ -19,7 +20,7 @@ export const testFixture: E2EFixture = {
   },
 
   storyline: {
-    'user-a': [
+    [FIXTURE_USER_IDS.userA]: [
       {
         user: 'Hello',
         ai: `<thinking>

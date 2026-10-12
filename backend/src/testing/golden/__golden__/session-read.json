@@ -264,8 +264,8 @@
           },
           "invitation": {
             "acceptedAt": "<ts:16>",
-            "createdAt": "<ts:17>",
-            "expiresAt": "<ts:19>",
+            "createdAt": "<ts:16>",
+            "expiresAt": "<ts:18>",
             "id": "<invitation:main>",
             "invitedBy": {
               "id": "<user:ada>",
@@ -417,7 +417,7 @@
             "partnerProgress": {
               "completedAt": null,
               "stage": 2,
-              "startedAt": "<ts:18>",
+              "startedAt": "<ts:17>",
               "status": "IN_PROGRESS"
             },
             "sessionId": "<session:main>"
@@ -437,7 +437,7 @@
               "name": "Bob Ross",
               "nickname": "Bob Ross"
             },
-            "partnerLastActiveAt": "<ts:18>",
+            "partnerLastActiveAt": "<ts:17>",
             "partnerLastViewedAt": null,
             "relationshipId": "<relationship:main>",
             "resolvedAt": null,
@@ -839,7 +839,8 @@
                   "User": 2
                 },
                 "planNodes": [
-                  "Seq Scan"
+                  "Bitmap Heap Scan",
+                  "Bitmap Index Scan"
                 ]
               }
             ]
@@ -1272,8 +1273,8 @@
           },
           "invitation": {
             "acceptedAt": "<ts:13>",
-            "createdAt": "<ts:14>",
-            "expiresAt": "<ts:16>",
+            "createdAt": "<ts:13>",
+            "expiresAt": "<ts:15>",
             "id": "<invitation:main>",
             "invitedBy": {
               "id": "<user:ada>",
@@ -1385,14 +1386,14 @@
           "progress": {
             "canAdvance": false,
             "milestones": {
-              "feelHeardConfirmedAt": "<ts:15>",
+              "feelHeardConfirmedAt": "<ts:14>",
               "witnessStartedAt": "<ts:8>"
             },
             "myProgress": {
               "completedAt": null,
               "gatesSatisfied": {},
               "stage": 2,
-              "startedAt": "<ts:15>",
+              "startedAt": "<ts:14>",
               "status": "IN_PROGRESS"
             },
             "partnerProgress": {
@@ -1820,7 +1821,8 @@
                   "User": 2
                 },
                 "planNodes": [
-                  "Seq Scan"
+                  "Bitmap Heap Scan",
+                  "Bitmap Index Scan"
                 ]
               }
             ]

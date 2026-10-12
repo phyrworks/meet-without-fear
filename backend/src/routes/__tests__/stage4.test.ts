@@ -111,7 +111,12 @@ describe('Stage 4 API', () => {
   const mockUser = { id: 'clusertest00001', email: 'test@example.com', name: 'Test User' };
   const mockSessionId = 'clsession00001';
   const mockPartnerId = 'clpartner00001';
-  const mockStrategyIds = ['clstrat000001', 'clstrat000002', 'clstrat000003', 'clstrat000004'];
+  const mockStrategyIds = [ // uuids: the request contract validates rankedIds
+    '00000000-0000-4000-8000-00000005a001',
+    '00000000-0000-4000-8000-00000005a002',
+    '00000000-0000-4000-8000-00000005a003',
+    '00000000-0000-4000-8000-00000005a004',
+  ];
 
   beforeEach(() => {
     jest.clearAllMocks();

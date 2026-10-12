@@ -4,7 +4,6 @@
 
 import {
   uuid,
-  cuid,
   nonEmptyString,
   email,
   timestamp,
@@ -23,18 +22,6 @@ describe('uuid', () => {
 
   it('rejects invalid UUID', () => {
     const result = uuid.safeParse('not-a-uuid');
-    expect(result.success).toBe(false);
-  });
-});
-
-describe('cuid', () => {
-  it('accepts valid CUID', () => {
-    const result = cuid.safeParse('clxxxxxxxxxxxxxxxxxx123');
-    expect(result.success).toBe(true);
-  });
-
-  it('rejects invalid CUID', () => {
-    const result = cuid.safeParse('not-a-cuid');
     expect(result.success).toBe(false);
   });
 });

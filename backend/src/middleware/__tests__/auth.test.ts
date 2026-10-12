@@ -403,8 +403,8 @@ describe('Auth Middleware', () => {
 
     it('authenticates user with e2e headers when bypass enabled', async () => {
       const e2eUser = {
-        id: 'e2e-user-123',
-        clerkId: 'e2e_e2e-user-123',
+        id: '00000000-0000-4000-8000-0000000e2e01',
+        clerkId: 'e2e_00000000-0000-4000-8000-0000000e2e01',
         email: 'test@e2e.test',
         name: null,
         firstName: null,
@@ -420,7 +420,7 @@ describe('Auth Middleware', () => {
 
       const req = createMockRequest({
         headers: {
-          'x-e2e-user-id': 'e2e-user-123',
+          'x-e2e-user-id': '00000000-0000-4000-8000-0000000e2e01',
           'x-e2e-user-email': 'test@e2e.test',
         },
       });
@@ -430,13 +430,26 @@ describe('Auth Middleware', () => {
       await requireAuth(req as Request, res as Response, next);
 
       expect(prisma.user.upsert).toHaveBeenCalledWith({
-        where: { id: 'e2e-user-123' },
-        create: { id: 'e2e-user-123', email: 'test@e2e.test', clerkId: 'e2e_e2e-user-123' },
-        update: { email: 'test@e2e.test', clerkId: 'e2e_e2e-user-123' },
+        where: { id: '00000000-0000-4000-8000-0000000e2e01' },
+        create: { id: '00000000-0000-4000-8000-0000000e2e01', email: 'test@e2e.test', clerkId: 'e2e_00000000-0000-4000-8000-0000000e2e01' },
+        update: { email: 'test@e2e.test', clerkId: 'e2e_00000000-0000-4000-8000-0000000e2e01' },
       });
       expect(next).toHaveBeenCalled();
       expect(statusMock).not.toHaveBeenCalled();
       expect(req.user).toEqual(e2eUser);
+    });
+
+    it('rejects an x-e2e-user-id that is not a UUID before touching the database', async () => {
+      const req = createMockRequest({
+        headers: { 'x-e2e-user-id': 'test-user-123', 'x-e2e-user-email': 'test@e2e.test' },
+      });
+      const { res } = createMockResponse();
+      const next = jest.fn();
+
+      await expect(requireAuth(req as Request, res as Response, next)).rejects.toThrow(
+        'x-e2e-user-id must be a UUID'
+      );
+      expect(prisma.user.upsert).not.toHaveBeenCalled();
     });
 
     it('returns 401 when e2e headers missing and bypass enabled', async () => {
@@ -463,7 +476,7 @@ describe('Auth Middleware', () => {
 
       const req = createMockRequest({
         headers: {
-          'x-e2e-user-id': 'e2e-user-123',
+          'x-e2e-user-id': '00000000-0000-4000-8000-0000000e2e01',
           'x-e2e-user-email': 'test@e2e.test',
         },
       });
@@ -478,8 +491,8 @@ describe('Auth Middleware', () => {
 
     it('uses e2e auth even when Clerk header is present', async () => {
       const e2eUser = {
-        id: 'e2e-user-123',
-        clerkId: 'e2e_e2e-user-123',
+        id: '00000000-0000-4000-8000-0000000e2e01',
+        clerkId: 'e2e_00000000-0000-4000-8000-0000000e2e01',
         email: 'test@e2e.test',
         name: null,
         firstName: null,
@@ -495,7 +508,7 @@ describe('Auth Middleware', () => {
 
       const req = createMockRequest({
         headers: {
-          'x-e2e-user-id': 'e2e-user-123',
+          'x-e2e-user-id': '00000000-0000-4000-8000-0000000e2e01',
           'x-e2e-user-email': 'test@e2e.test',
           authorization: 'Bearer some-clerk-token',
         },

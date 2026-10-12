@@ -212,17 +212,17 @@ describe('Stage 2: consentToShareRequestSchema', () => {
 describe('Stage 3: confirmNeedsRequestSchema', () => {
   it('accepts valid needs confirmation', () => {
     const result = confirmNeedsRequestSchema.safeParse({
-      needIds: ['clxxxxxxxxxxxxxxxxxx123'],
+      needIds: ['0190f3a2-6c1e-7b4d-9a8e-3f2b1c0d4e51'],
     });
     expect(result.success).toBe(true);
   });
 
   it('accepts with adjustments', () => {
     const result = confirmNeedsRequestSchema.safeParse({
-      needIds: ['clxxxxxxxxxxxxxxxxxx123'],
+      needIds: ['0190f3a2-6c1e-7b4d-9a8e-3f2b1c0d4e51'],
       adjustments: [
         {
-          needId: 'clxxxxxxxxxxxxxxxxxx123',
+          needId: '0190f3a2-6c1e-7b4d-9a8e-3f2b1c0d4e51',
           confirmed: true,
           correction: 'Minor adjustment',
         },
@@ -271,7 +271,7 @@ describe('Stage 4: proposeStrategyRequestSchema', () => {
 describe('Stage 4: rankStrategiesRequestSchema', () => {
   it('accepts valid rankings', () => {
     const result = rankStrategiesRequestSchema.safeParse({
-      rankedIds: ['clxxxxxxxxxxxxxxxxxx123'],
+      rankedIds: ['0190f3a2-6c1e-7b4d-9a8e-3f2b1c0d4e51'],
     });
     expect(result.success).toBe(true);
   });

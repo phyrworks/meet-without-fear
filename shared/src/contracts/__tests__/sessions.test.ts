@@ -15,7 +15,7 @@ import { SessionStatus } from '../../enums';
 describe('createSessionRequestSchema', () => {
   it('accepts personId only', () => {
     const result = createSessionRequestSchema.safeParse({
-      personId: 'clxxxxxxxxxxxxxxxxxx123',
+      personId: '0190f3a2-6c1e-7b4d-9a8e-3f2b1c0d4e51',
     });
     expect(result.success).toBe(true);
   });
@@ -29,7 +29,7 @@ describe('createSessionRequestSchema', () => {
 
   it('accepts both personId and inviteName', () => {
     const result = createSessionRequestSchema.safeParse({
-      personId: 'clxxxxxxxxxxxxxxxxxx123',
+      personId: '0190f3a2-6c1e-7b4d-9a8e-3f2b1c0d4e51',
       inviteName: 'My Partner',
     });
     expect(result.success).toBe(true);
@@ -50,7 +50,7 @@ describe('createSessionRequestSchema', () => {
 
   it('accepts an explicit force-create confirmation', () => {
     const result = createSessionRequestSchema.safeParse({
-      personId: 'clxxxxxxxxxxxxxxxxxx123',
+      personId: '0190f3a2-6c1e-7b4d-9a8e-3f2b1c0d4e51',
       forceCreate: true,
     });
     expect(result.success).toBe(true);
@@ -58,7 +58,7 @@ describe('createSessionRequestSchema', () => {
 
   it('rejects a non-boolean force-create value', () => {
     const result = createSessionRequestSchema.safeParse({
-      personId: 'clxxxxxxxxxxxxxxxxxx123',
+      personId: '0190f3a2-6c1e-7b4d-9a8e-3f2b1c0d4e51',
       forceCreate: 'true',
     });
     expect(result.success).toBe(false);
@@ -166,16 +166,23 @@ describe('sendMessageRequestSchema', () => {
 });
 
 describe('acceptInvitationRequestSchema', () => {
-  it('accepts valid CUID', () => {
+  it('accepts valid UUID', () => {
     const result = acceptInvitationRequestSchema.safeParse({
-      invitationId: 'clxxxxxxxxxxxxxxxxxx123',
+      invitationId: '0190f3a2-6c1e-7b4d-9a8e-3f2b1c0d4e51',
     });
     expect(result.success).toBe(true);
   });
 
-  it('rejects invalid CUID', () => {
+  it('rejects invalid UUID', () => {
     const result = acceptInvitationRequestSchema.safeParse({
-      invitationId: 'not-a-cuid',
+      invitationId: 'not-a-uuid',
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it('rejects a cuid (ids are UUIDv7 since cuid_to_uuidv7)', () => {
+    const result = acceptInvitationRequestSchema.safeParse({
+      invitationId: 'cmv2p1tis0005tj9kwfbbpqfm',
     });
     expect(result.success).toBe(false);
   });

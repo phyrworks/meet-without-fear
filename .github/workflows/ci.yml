@@ -75,10 +75,11 @@ jobs:
 
     services:
       postgres:
-        # Use pgvector/pgvector:pg15 (not plain postgres:15) because one of
-        # the Prisma migrations does CREATE EXTENSION "vector". Render's
-        # managed Postgres has pgvector available; mirror that in CI.
-        image: pgvector/pgvector:pg15
+        # pgvector because one of the Prisma migrations does CREATE EXTENSION
+        # "vector"; PostgreSQL 18 because every primary key defaults to the
+        # built-in uuidv7() (migration cuid_to_uuidv7). Production runs
+        # pgvector/pgvector:pg18 (infra/aws/images.env.example).
+        image: pgvector/pgvector:pg18
         env:
           POSTGRES_USER: meetwithoutfear_user
           POSTGRES_PASSWORD: meetwithoutfear_password

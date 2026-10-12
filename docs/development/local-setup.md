@@ -27,10 +27,13 @@ A `.node-version` file at the repo root pins the version, so `--use-on-cd` switc
 when you `cd` in. Confirm `node -v` reports `v20.x` **before** running `npm install` — installing
 under a different major bakes the wrong engine artifacts into `node_modules`.
 
-## 2. PostgreSQL 16 + pgvector
+## 2. PostgreSQL 18 + pgvector
 
 **pgvector is mandatory.** Three models use `vector(1024)` columns, and migration
 `20251228220702` runs `CREATE EXTENSION "vector"`. A vanilla Postgres will fail to migrate.
+
+**PostgreSQL 18 is the minimum.** Every primary key defaults to `uuidv7()`, which is built into
+PostgreSQL 18 and does not exist in 16 (migration `cuid_to_uuidv7`).
 
 Note the schema does *not* declare the extension — `datasource db` has `// extensions = [vector]`
 commented out in `backend/prisma/schema.prisma`. It is created by raw SQL in that migration only.
@@ -41,25 +44,45 @@ difference. That is expected and is not schema drift.
 
 ```bash
 podman machine start          # or use Docker
-podman run -d --name mwf-postgres \
+podman run -d --name mwf-postgres18 \
   -e POSTGRES_USER=mwf_user \
   -e POSTGRES_PASSWORD=mwf_password \
   -e POSTGRES_DB=meet_without_fear \
-  -p 5432:5432 \
-  -v mwf-pgdata:/var/lib/postgresql/data \
+  -p 5433:5432 \
+  -v mwf-pgdata18:/var/lib/postgresql \
   --restart unless-stopped \
-  pgvector/pgvector:pg16
+  pgvector/pgvector:pg18
 
-podman exec mwf-postgres psql -U mwf_user -d meet_without_fear \
+podman exec mwf-postgres18 psql -U mwf_user -d meet_without_fear \
   -c "CREATE DATABASE meet_without_fear_shadow OWNER mwf_user;" \
   -c "CREATE DATABASE meet_without_fear_test OWNER mwf_user;"
+```
+
+Mount the volume at **`/var/lib/postgresql`, not `/var/lib/postgresql/data`**. The 18 images keep
+their data in a versioned subdirectory (`/var/lib/postgresql/18/docker`) and refuse to start on a
+volume mounted at the old `/data` path, saying so in the container log.
+
+The host port is **5433** while the old PostgreSQL 16 container (`mwf-postgres`, port 5432) still
+exists; point `DATABASE_URL`, `DIRECT_URL` and `SHADOW_DATABASE_URL` in `backend/.env` at port 5433.
+Same user, password and database names as before. Once nothing needs the 16 container any more:
+
+```bash
+podman rm -f mwf-postgres && podman volume rm mwf-pgdata
+```
+
+The golden harness defaults to the 16 container (port 5432, container `mwf-postgres`). Point it at
+the 18 one:
+
+```bash
+export GOLDEN_DATABASE_URL=postgresql://mwf_user:mwf_password@localhost:5433/meet_without_fear
+export MWF_PG_CONTAINER=mwf-postgres18
 ```
 
 Three databases are required: the main one, `_shadow` (Prisma's shadow DB for `migrate dev`), and
 `_test` (the E2E harness). Using exactly these names and credentials means the `DATABASE_URL`s
 already committed in `backend/.env.example` and `e2e/.env.test` work unchanged.
 
-Day-to-day: `podman machine start && podman start mwf-postgres`.
+Day-to-day: `podman machine start && podman start mwf-postgres18`.
 
 ### The golden harness changes one server-wide setting
 
@@ -72,7 +95,7 @@ log_line_prefix = '%m [%p] db=%d,app=%a,vxid=%v,xid=%x '
 ```
 
 It does this with `ALTER SYSTEM` + `pg_reload_conf()`, which writes to
-`/var/lib/postgresql/data/postgresql.auto.conf` inside the container and therefore **persists across
+`/var/lib/postgresql/18/docker/postgresql.auto.conf` inside the container and therefore **persists across
 container restarts**. It is idempotent and is deliberately **not** restored afterwards: restoring it
 per run races other test workers, and one worker's restore landing mid-run turns another's trace into
 a silently empty window. It is a formatting-only change to a development container.
@@ -80,7 +103,7 @@ a silently empty window. It is a formatting-only change to a development contain
 To put it back:
 
 ```bash
-podman exec mwf-postgres psql -U mwf_user -d postgres \
+podman exec mwf-postgres18 psql -U mwf_user -d postgres \
   -c "ALTER SYSTEM RESET log_line_prefix;" -c "SELECT pg_reload_conf();"
 ```
 
@@ -97,7 +120,7 @@ out of the log.** They suppress the two *parameter list* channels — `DETAIL: p
 `Query Parameters:` — and nothing else. PostgreSQL still inlines bind values into plan predicates:
 
 ```
-Index Cond: (id = 'cmsqt19i200079kbfuv75bxh8'::text)
+Index Cond: (id = '01a1271a-d70a-715d-abca-c24750640076'::uuid)
 ```
 
 Measured on one hour of golden-suite runs: 3,645 such lines. These are ids rather than message
@@ -139,13 +162,13 @@ against the *default* postgresql formula (18), so the extension lands in the wro
 npm install                       # workspaces; ~3400 packages
 cp backend/.env.example backend/.env   # then fill in, see below
 npm run prisma -- generate
-cd backend && npx prisma migrate deploy    # 74 migrations
+cd backend && npx prisma migrate deploy    # 76 migrations
 ```
 
 Also migrate the test database, which the E2E harness uses:
 
 ```bash
-DATABASE_URL="postgresql://mwf_user:mwf_password@127.0.0.1:5432/meet_without_fear_test" \
+DATABASE_URL="postgresql://mwf_user:mwf_password@127.0.0.1:5433/meet_without_fear_test" \
   npx prisma migrate deploy
 ```
 
