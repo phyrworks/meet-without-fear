@@ -21,9 +21,9 @@ Line numbers are `schema.prisma` lines. **R/W** is production read/write call si
 
 | # | Sev | Finding | Pointer |
 |---|---|---|---|
-| 1 | **P0** | **The privacy boundary is not a row.** A participant's private conversation — the thing the whole visibility table is about — has no table. It is `Session` + a nullable, FK-less `Message.forUserId` (l.656), plus `UserVessel` carrying read-state and AI memory. Partner-facing facts hang off positional slots (`agreedByA/B`, `confirmedByA/B`, "first member by `joinedAt` is A", `stage4.ts:54`) and unenforced `guesserId/subjectId` text. Make **`conversation`** (session × participant) a first-class row and key messages, drafts and memory on it; make empathy **direction** explicit (`author_id`, `subject_id`). | §2.1, §3.3, §7 |
-| 2 | **P1** | **The state machine lives in a blob.** `StageProgress.gatesSatisfied` (l.345) is written from 20 files / 175 sites and holds booleans, ISO timestamps, a walkthrough phase, and **need ids** (`coveredNeedIds`, `skippedNeedIds`, `currentNeedId`, `stage4.ts:506`). Replace with a `participant_milestone` event table and a `need_disposition` junction; derive "stage" as a view. | §3.2, §6 |
-| 3 | **P1** | **Three of everything.** Conversations ×3 (`UserVessel`, `InnerWorkSession`, `Stage4SubChat`), messages ×3, drafts ×2 (`EmpathyDraft`, `ValidationFeedbackDraft`), consent ×2 (`ConsentRecord`, `ConsentedContent`), need-link ×2 (`StrategyProposal.needsAddressed[]` 58 refs vs the `StrategyProposalNeed` junction 11 refs). Each duplicate is another RLS policy set, another encryption map entry, another deletion path. Unify to one `conversation`, one `message`, one `draft`, one `consent`. | §1, §2, §3.1 |
+| 1 | **P0** | **The privacy boundary is not a row.** A participant's private conversation — the thing the whole visibility table is about — has no table. It is `Session` + a nullable, FK-less `Message.forUserId` (l.656), plus `UserVessel` carrying read-state and AI memory. Partner-facing facts hang off positional slots (`agreedByA/B`, `confirmedByA/B`, "first member by `joinedAt` is A", `stage4.ts:54`) and unenforced `guesserId/subjectId` text. Make **`participant`** (one row per session membership, human or modeled) the first-class entity, key each private `conversation` and everything it owns on it, and make empathy **direction** explicit (`author_participant_id`, `subject_participant_id`). | §2.1, §3.3, §7, §9 |
+| 2 | **P1** | **The state machine lives in a blob.** `StageProgress.gatesSatisfied` (l.345) is written from 20 files / 175 sites and holds booleans, ISO timestamps, a walkthrough phase, and **need ids** (`coveredNeedIds`, `skippedNeedIds`, `currentNeedId`, `stage4.ts:506`). Replace with a `participant_milestone` event table over a `milestone` lookup (no stage numbers anywhere in the schema) and a `need_disposition` junction; "current stage" is a view. | §3.2, §6, §9 |
+| 3 | **P1** | **Three of everything.** Conversations ×3 (`UserVessel`, `InnerWorkSession`, `Stage4SubChat`), messages ×3, drafts ×2 (`EmpathyDraft`, `ValidationFeedbackDraft`), consent ×2 (`ConsentRecord`, `ConsentedContent`), need-link ×2 (`StrategyProposal.needsAddressed[]` 58 refs vs the `StrategyProposalNeed` junction 11 refs). Each duplicate is another RLS policy set, another encryption map entry, another deletion path. Unify to one session `conversation`, one `message`, one `draft`, one `consent`; Inner Work is the one deliberate exception (owner decision, §9) and gets its own `reflection` pair. | §1, §2, §3.1, §9 |
 | 4 | **P1** | **The schema describes behaviour the application does not have.** Per the census (`schema-review-2026-10/census.md` §2–3): 20 of 68 models have ≤3 direct production call sites; `CommonGround` has none; production never creates a row in `UserEvent`, `Boundary`, `UserDocument`, `PreSessionMessage`, `GlobalLibraryItem` or `Insight` (the last three are *read* from always-empty tables); 69 columns are never written and 33 never read, and some unwritten columns are relied on — `ReconcilerShareOffer.lastDeliveryNotifiedAt/lastSeenNotifiedAt` gate a notification count that therefore never excludes anything (`notifications.ts:176–177`), `Message.extractedEmotions` feeds reconciler themes while always empty (`reconciler/analysis.ts:258`). Collapse the wellbeing/people/needs-assessment prototypes to per-user feature documents or drop them; delete the dead columns; keep only what a job or a list query filters in SQL. | §4 |
 | 5 | **P2** | **Postgres is a bystander.** 0 CHECKs, 0 views, 0 triggers (audit §1); 144 naive timestamps; 9 free-text statuses (`Stage4ProposalRevision.action` holds `'CONVERTED'`, `'covered'` and `'subchat_refined'` in the same column); `MeditationStats` and `Stage4NeedCoverage` are hand-maintained caches of things a view computes. | §3.5, §5, §6 |
 | — | **Order** | **Re-shape before Phase 3 W8–W10, not after.** Phase 3 writes four policies, column grants and triggers per table on the *current* 71-table shape; every rename afterwards redoes that work. Production is 9 users; the golden harness is the oracle. W0–W6 (roles, identity, CHECKs, FKs) are shape-independent and can proceed; policies should land on the target shape. | §7, §8 |
@@ -35,55 +35,55 @@ Line numbers are `schema.prisma` lines. **R/W** is production read/write call si
 | Model | R/W | Disposition | Reason |
 |---|---|---|---|
 | User | 38/20 | **split** | identity stays; device/auth flags → `user_device`; 3 preference blobs + 2 wellbeing prefs → `user_preferences`; `globalFacts` → `ai_memory`; `lastMoodIntensity` → view over `mood_reading` |
-| Relationship | 2/3 | keep | root of membership; add CHECK "exactly 2 members" via trigger or deferred constraint |
-| RelationshipMember | 11/5 | keep | one row per user per relationship (unique exists); `role` text → enum |
-| Session | 90/28 | keep | trim: drop `type` (`INNER_WORK` never written, `brain.ts` only), `WAITING`/`PAUSED` are per-participant states → milestones |
-| StageProgress | 65/38 | **split** | → `participant_milestone` (event rows) + `need_disposition`; stage becomes a view; `isSynthesisDirty`/`synthesisLastUpdated` never read |
-| UserVessel | 30/14 | **rename** → `conversation` | it already *is* session × user, unique; read-state and AI memory move to `conversation_read_state` / `ai_memory` |
+| Relationship | 2/3 | keep | durable pairing of users across sessions; **no** "exactly 2" invariant — cardinality is a per-session rule on `participant` (§9) |
+| RelationshipMember | 11/5 | keep | one row per user per relationship (unique exists); `role` text → enum; per-session membership is `participant`, not this |
+| Session | 90/28 | keep | gains `participant` children (human or modeled); drop `type` (`INNER_WORK` never written, `brain.ts` only); `WAITING`/`PAUSED` are per-participant states → milestones |
+| StageProgress | 65/38 | **split** | → `participant` (its `(sessionId,userId)` key) + `participant_milestone` (event rows over the `milestone` lookup) + `need_disposition`; stage becomes a view; `isSynthesisDirty`/`synthesisLastUpdated` never read |
+| UserVessel | 30/14 | **rename** → `conversation` | it already *is* session × user, unique; owned by `participant_id`; read-state and AI memory move to `conversation_read_state` / `ai_memory` (per participant) |
 | UserEvent | 0/1 | drop-until-needed | never created in production (census §2.2); `deleteMany` only |
-| EmotionalReading | 4/2 | keep → `mood_reading` | time series, filtered by DB (`emotions.ts`) |
-| IdentifiedNeed | 23/16 | keep → `need` | core entity; absorb `ConsentedContent` columns (1:1 via `originalNeedId @unique`) |
+| EmotionalReading | 4/2 | keep → `mood_reading` | time series, filtered by DB (`emotions.ts`); participant-scoped; drop `stage` |
+| IdentifiedNeed | 23/16 | keep → `need` | core entity, participant-scoped; absorb `ConsentedContent` columns (1:1 via `originalNeedId @unique`) |
 | Boundary | 0/1 | drop-until-needed | never created; `deleteMany` only, yet still in the encryption map |
 | UserDocument | 0/1 | drop-until-needed | never created; `deleteMany` only; still in the encryption map |
 | SharedVessel | 6/2 | **merge-into** Session | 1:1 container with no columns of its own; children key on `session_id` |
 | ConsentedContent | 1/3 | **merge-into** need | 1:1 with `IdentifiedNeed`; becomes `shared_text`, `consent_id`, `revoked_at` on `need` |
 | CommonGround | 0/0 | drop | the only model with zero production call sites (census §2.1); `confirmedByA/B` positional |
-| Agreement | 6/3 | keep | replace `agreedByA/B` with `agreement_party` junction (or derive from `proposal_choice`) |
-| ConsentRecord | 6/5 | keep → `consent` | polymorphic `targetId` → exclusive-arc FK columns + CHECK; `metadata` never written |
-| Message | 36/34 | keep | `conversation_id` FK replaces `sessionId`+`forUserId`; `role` splits into `role` + `kind`; drop `extractedNeeds/Emotions` (never written, F4.2) |
+| Agreement | 6/3 | keep | replace `agreedByA/B` with `agreement_party(agreement_id, participant_id, agreed_at)` — decided (§10 Q1) |
+| ConsentRecord | 6/5 | keep → `consent` | participant-scoped (`participant_id`, `requested_by_participant_id`); polymorphic `targetId` → exclusive-arc FK columns + CHECK; `metadata` never written |
+| Message | 36/34 | keep | `conversation_id` FK replaces `sessionId`+`forUserId`; `sender_participant_id`; `role` splits into `role` + `kind`; drop `stage` (derivable from milestones) and `extractedNeeds/Emotions` (F4.2) |
 | PreSessionMessage | 1/1 | drop-until-needed | never created; `context-retriever.ts:311/343` reads an always-empty table |
-| InnerWorkSession | 31/13 | **merge-into** conversation | `kind = INNER_WORK`; inner-work-only columns nullable with CHECK per kind |
-| InnerWorkMessage | 5/5 | **merge-into** message | same shape as `Message` minus routing |
-| SessionTakeaway | 12/5 | keep → `takeaway` | browsed and filtered (knowledge base); embedding per D8 moves to app |
-| TakeawayLink | 5/3 | keep → `takeaway_link` | live (knowledge-base browse + distillation auto-link) but reached only through `prismaAny` casts (F4.3); add `CHECK (source_id <> target_id)` |
-| EmpathyDraft | 5/3 | **merge-into** draft | `draft(conversation_id, kind, …)` unique per kind |
-| EmpathyAttempt | 28/15 | keep → `empathy_attempt` | add `subject_id`; rows immutable per submission with `round`; unique (session, author, round); `consentRecordId` never written |
-| EmpathyValidation | 4/3 | keep → `empathy_review` | one per attempt per reviewer (unique exists) |
+| InnerWorkSession | 31/13 | **rename** → `reflection` | owner decision (§9): structurally separate from session conversations; `user_id` owner, `linked_session_id` for context only; drop `linkedAtStage`/`linkedTrigger` |
+| InnerWorkMessage | 5/5 | **rename** → `reflection_message` | second message table, paid for deliberately (§9) |
+| SessionTakeaway | 12/5 | keep → `takeaway` | reflection cluster (FK `reflection_id`); browsed and filtered; embedding per D8 moves to app |
+| TakeawayLink | 5/3 | keep → `takeaway_link` | reflection cluster; live but reached only through `prismaAny` casts (F4.3); add `CHECK (source_id <> target_id)` |
+| EmpathyDraft | 5/3 | **merge-into** draft | `draft(participant_id, kind, …)` unique per kind |
+| EmpathyAttempt | 28/15 | keep → `empathy_attempt` | `author_participant_id`, `subject_participant_id` (CHECK author <> subject); rows immutable per submission with `round`; unique (author, subject, round); `consentRecordId` never written |
+| EmpathyValidation | 4/3 | keep → `empathy_review` | one per attempt by its subject participant (unique exists) |
 | ValidationFeedbackDraft | 0/1 | **merge-into** draft | identical shape to `EmpathyDraft` |
-| ReconcilerResult | 13/7 | keep | FK `attempt_id`; `subject_id` FK (RLS arm); drop `guesserName/subjectName`; `ReconcilerGuidance` split per Phase 3 D8a |
-| ReconcilerShareOffer | 15/12 | keep → `context_share_offer` | `userId` → FK; drop `seenAt`, `skippedAt`, `refinementChatUsed`; write or drop `last*NotifiedAt` (F4.2) |
+| ReconcilerResult | 13/7 | keep | FK `attempt_id`; `subject_participant_id` FK (RLS arm); drop `guesserName/subjectName`; `ReconcilerGuidance` split per Phase 3 D8a |
+| ReconcilerShareOffer | 15/12 | keep → `context_share_offer` | `userId` → `participant_id` FK; drop `seenAt`, `skippedAt`, `refinementChatUsed`; write or drop `last*NotifiedAt` (F4.2) |
 | RefinementAttemptCounter | 1/1 | drop → view | `count(*)` of `reconciler_result` per attempt; `direction` string is a composite key in disguise |
 | StrategyProposal | 19/11 | keep → `proposal` | drop `needsAddressed[]` in favour of the junction; drop never-written `parentProposalId`, `coverageSummary`, `consentRecordId` (F4.2); FK `captured_from_message_id` |
 | StrategyProposalNeed | 1/2 | keep → `proposal_need` | the one real junction; make it the only need link |
-| Stage4ProposalSelection | 7/2 | keep → `proposal_choice` | willingness per user per proposal (unique exists) |
-| Stage4ProposalRevision | 0/8 | keep → `proposal_revision` | audit log; `action` → enum; `before/after` jsonb with `jsonb_typeof = 'object'` CHECK; FKs on `sessionId`, `actorUserId`, `messageId` |
+| Stage4ProposalSelection | 7/2 | keep → `proposal_choice` | willingness per participant per proposal (unique exists) |
+| Stage4ProposalRevision | 0/8 | keep → `proposal_revision` | audit log; `action` → enum; `before/after` jsonb with `jsonb_typeof = 'object'` CHECK; FKs `actor_participant_id`, `message_id`; `sessionId` dropped (via proposal) |
 | Stage4NeedCoverage | 8/2 | **view** + merge-into need_disposition | coverage = `proposal_need` × `proposal_choice`; user-set covered/skipped → `need_disposition` |
 | Stage4NeedDeclination | 3/2 | **merge-into** need_disposition | a declination is `status = DECLINED` |
-| Stage4Closure | 11/2 | keep → `session_closure` | drop the three id arrays (derivable); `closedByUserId` → FK |
-| Stage4SubChat | 4/2 | **merge-into** conversation | `kind = SUBCHAT`, `anchor_kind`, `anchor_proposal_id` FK |
+| Stage4Closure | 11/2 | keep → `session_closure` | drop the three id arrays (derivable); `closedByUserId` → `closed_by_participant_id` FK |
+| Stage4SubChat | 4/2 | **merge-into** conversation | stays in `conversation` (`kind = SUBCHAT`, `anchor_proposal_id` FK): it is a participant's private thread inside the session, same privacy class and same key as the main thread — unlike Inner Work |
 | Stage4SubChatMessage | 0/2 | **merge-into** message | |
-| TendingEntry | 7/20 | keep → `follow_up` | job-queried (`scheduledFor` index); `ownerUserId` → FK |
-| TendingCheckin | 2/1 | keep → `follow_up_checkin` | gains `payload jsonb` absorbing the five response tables |
+| TendingEntry | 7/20 | keep → `follow_up` | job-queried (`scheduledFor` index); `ownerUserId` → `owner_participant_id` FK |
+| TendingCheckin | 2/1 | keep → `follow_up_checkin` | per participant; gains `payload jsonb` absorbing the five response tables |
 | TendingCoordinationCycle | 5/4 | drop → view | three id arrays; status derivable from check-ins vs `response_deadline_at` on the entry |
 | TendingResponse | 1/2 | **merge-into** checkin payload | `status` free text; read back only with its check-in |
 | TendingEntryOutcome | 0/1 | **merge-into** checkin payload | |
 | TendingNeedOutcome | 0/1 | **merge-into** checkin payload | `needLabel` is a denormalised copy |
 | TendingReminder | 1/3 | keep → `reminder` | job-queried (`remindAt`); `status` → enum |
 | TendingAdjustment | 0/1 | **merge-into** checkin payload | |
-| TendingBetweenPeriodNote | 3/3 | keep → `follow_up_note` | created between check-ins; has a consent flag |
+| TendingBetweenPeriodNote | 3/3 | keep → `follow_up_note` | per participant; created between check-ins; has a consent flag |
 | TendingResponsePartialClosure | 0/1 | **merge-into** checkin payload | |
 | StrategyRanking | 4/2 | drop-until-needed | product flow is willingness selection, not ranking; `rankedIds[]` |
-| EmotionalExerciseCompletion | 1/2 | keep → `regulation_event` | per session/user time series |
+| EmotionalExerciseCompletion | 1/2 | keep → `regulation_event` | per-participant time series |
 | GlobalLibraryItem | 1/1 | drop-until-needed | island; never seeded, so `stage4.ts:2472` reads an empty library; `contributedBy` no FK |
 | Invitation | 14/8 | keep | add `accepted_by_user_id` (Phase 3 §6) |
 | UserMemory | 11/12 | keep | filtered by status/category/session |
@@ -92,8 +92,8 @@ Line numbers are `schema.prisma` lines. **R/W** is production read/write call si
 | NeedsAssessmentState | 4/4 | **jsonb-table** | per-user feature state, read whole; `nextCheckInAt` promoted to a column if a job ever queries it |
 | Person | 12/7 | keep (slim) | unique (user, name); drop 4 counters and `needsConnections` → derive |
 | PersonMention | 4/4 | **jsonb-table** | polymorphic `sourceId`; mentions become a `jsonb` array on `person` until something filters them |
-| Insight | 3/1 | drop-until-needed | the jsonb-document pattern done right, but nothing generates insights — the dismiss endpoint updates rows that never exist (census §2.2) |
-| RecurringTheme | 1/1 | drop → view | one `upsert` (`theme-detector.ts:159`, via an `any` cast), one reader; `group by theme` over conversations instead |
+| Insight | 3/1 | drop-until-needed | reflection cluster; the jsonb-document pattern done right, but nothing generates insights — the dismiss endpoint updates rows that never exist (census §2.2) |
+| RecurringTheme | 1/1 | drop → view | one `upsert` (`theme-detector.ts:159`, via an `any` cast), one reader; `group by theme` over `reflection` instead |
 | GratitudeEntry | 7/2 | keep (slim) → `gratitude_entry` | five tag arrays + `linkedNeedIds` + sentiment → one `extracted jsonb` |
 | GratitudePreferences | 1/2 | **merge-into** user_preferences | |
 | MeditationSession | 5/2 | keep | time series listed by date; drop `linkedNeedIds`, `linkedConflictId` (0 refs) |
@@ -103,7 +103,7 @@ Line numbers are `schema.prisma` lines. **R/W** is production read/write call si
 | SavedMeditation | 5/3 | keep → `meditation_script` | `conversationId` → FK conversation |
 | BrainActivity | 10/6 | keep | telemetry; jsonb legitimate; retention per Phase 3 |
 
-Tally (68): keep 32 · split 2 · rename 1 · merge-into 17 · view 5 · jsonb-table 2 · lookup 1 · drop / drop-until-needed 8. Target: **~40 tables** (+ `ReconcilerGuidance`, `UserKey`, `SessionKey` from Phase 3).
+Tally (68): keep 32 · split 2 · rename 3 · merge-into 15 · view 5 · jsonb-table 2 · lookup 1 · drop / drop-until-needed 8. Target: **~43 tables** (+ `participant`, `milestone`, `reflection_message` as new; + `ReconcilerGuidance`, `UserKey`, `SessionKey` from Phase 3). No table or column in the target carries a stage number; every `Stage4*` model above lands under a domain name.
 
 ---
 
@@ -152,7 +152,7 @@ private thread exists, and the thread is attached somewhere else.
 
 | Today | Target |
 |---|---|
-| `UserVessel(userId, sessionId)` + children `UserEvent/Boundary/UserDocument/EmotionalReading/IdentifiedNeed` | `conversation(id, session_id, user_id, kind)`; `need`, `mood_reading` key on it |
+| `UserVessel(userId, sessionId)` + children `UserEvent/Boundary/UserDocument/EmotionalReading/IdentifiedNeed` | `participant(id, session_id, user_id, kind)` + `conversation(id, participant_id, kind)`; `need`, `mood_reading` key on the participant |
 | `lastViewedAt, lastSeenChatItemId, lastViewedShareTabAt, lastActiveAt, archivedAt` | `conversation_read_state` (hot, UPDATE-heavy, no partner visibility) |
 | `conversationSummary text(JSON)`, `notableFacts jsonb`, `contentEmbedding` | `ai_memory(conversation_id)` jsonb doc; embedding per D8 |
 
@@ -163,7 +163,7 @@ private thread exists, and the thread is attached somewhere else.
   `kind` (what it is). Phase 3's CHECK "humans can't author as AI" then reads `role='AI' ⇒ sender_id IS NULL` cleanly.
 - `extractedNeeds[]`, `extractedEmotions[]` (l.674–675): 4 and 10 references, none a reader that filters. Drop.
 - `forUserId`: see F3.3.
-- `contentHash`, `refiningNeedId`, `stage`: keep (`stage` becomes derivable but is cheap denormalisation for the chat list).
+- `contentHash`, `refiningNeedId`: keep. `stage` (l.665): drop — the owner wants no stage numbers in the schema (§9); the chat list groups messages by `participant_milestone.at` instead.
 
 ### F2.4 `Session` — fine, slightly over-stated (P2)
 
@@ -240,7 +240,7 @@ Uniques that exist and are right: `RelationshipMember(relationshipId,userId)`, `
 | `EmpathyAttempt` | `(session_id, author_id, round)` | `(sessionId, sourceUserId)` with nullable `sourceUserId` — the schema comment (l.781–783) admits NULLs defeat it; and uniqueness-per-session forbids the immutable-per-submission history the product spec requires ("a later private edit must not silently change what the partner was shown") |
 | `ReconcilerResult` | one *current* per attempt: `UNIQUE (attempt_id) WHERE superseded_at IS NULL` | none |
 | `ReconcilerShareOffer` | `(attempt_id, iteration)` | `resultId @unique` only |
-| `Relationship` | exactly two members | nothing; `getUserSlot` returns `null` under 2 |
+| `session` | ≥2 `participant` rows, ≥1 human, before it may become `ACTIVE` (owner decision, §9) | nothing; `getUserSlot` returns `null` under 2 |
 | `participant_milestone` | `(conversation_id, milestone)` | n/a (jsonb) |
 | `Session` | at most one `ACTIVE` per relationship? | **open question**, §10 |
 
@@ -367,8 +367,8 @@ queries, 2 encryption/retrieval helpers.
 
 | View / function | Replaces | Columns |
 |---|---|---|
-| `v_participant(session_id, user_id, conversation_id, partner_user_id, partner_display_name)` | 40 partner-lookup sites, `getUserSlot`, `app.partner_user_id()` callers | from `relationship_member` ×2, tombstone-aware |
-| `v_participant_stage(conversation_id, stage, status, …)` | `StageProgress` readers; `gatesSatisfied` decoding | computed from `participant_milestone` |
+| `v_participant(participant_id, session_id, user_id, kind, conversation_id, display_name)` and `v_co_participant(participant_id, other_participant_id)` | 40 partner-lookup sites, `getUserSlot`, `app.partner_user_id()` callers | from `participant`; N-safe (one row per other participant); tombstone-aware |
+| `v_participant_stage(participant_id, current_milestone_key, stage_label, …)` and `v_session_readiness(session_id, milestone_key, all_reached)` | `StageProgress` readers; `gatesSatisfied` decoding; every "both ready" check | `participant_milestone ⋈ milestone`; readiness = no participant lacks the milestone |
 | `v_empathy_direction(session_id, author_id, subject_id, current_attempt_id, status, latest_result_id, open_offer_id, review_id, round)` | reconciler `findFirst` chains; `RefinementAttemptCounter` | one row per direction |
 | `v_need_coverage(session_id, need_id, owner_id, status, covering_proposal_ids)` | `Stage4NeedCoverage` | `proposal_need ⋈ proposal_choice` |
 | `v_session_closure_items` | the three `Stage4Closure` arrays | |
@@ -378,11 +378,11 @@ queries, 2 encryption/retrieval helpers.
 | `app.current_user_id()`, `app.partner_user_id()`, `app.empathy_set_status()`, `app.anonymize_*` | Phase 3 §5 — unchanged | |
 
 **Per-row `userId` for RLS.** Phase 3 classifies 36 tables as Shape A/B (own `userId`). After the
-re-shape most content keys on `conversation_id` and becomes Shape D (hop to `conversation.user_id`).
-That is the right trade: one owner column on one parent, one inlined `EXISTS`, instead of 36
-copies of the owner that must each be write-pinned (design §2 "write side rule"). Keep a direct
-`user_id` only where the row has no conversation: `user_*`, `relationship_member`, `invitation`,
-`consent` (two parties), `agreement_party`, `follow_up_checkin`, `reminder`, the wellbeing tables.
+re-shape most content keys on `participant_id` (directly, or via `conversation_id`) and becomes
+Shape D (hop to `participant.user_id`). That is the right trade: one owner column on one parent,
+one inlined `EXISTS`, instead of 36 copies of the owner that must each be write-pinned (design §2
+"write side rule"). Keep a direct `user_id` only where the row has no participant: `user_*`,
+`relationship_member`, `invitation`, `reminder`, `reflection` and its children, the wellbeing tables.
 
 ---
 
@@ -390,16 +390,18 @@ copies of the owner that must each be write-pinned (design §2 "write side rule"
 
 | Phase 3 element | Effect of this proposal |
 |---|---|
-| `forUserId NOT NULL + FK` (design §3) | **Changed, same guarantee**: `message.conversation_id NOT NULL FK → conversation(session_id, user_id)`. Predicate `EXISTS (conversation c WHERE c.id = conversation_id AND c.user_id = me) OR sender_id = me`. The `Message` BEFORE UPDATE trigger pins `conversation_id, sender_id, role, kind` instead of `forUserId, senderId, role`. Backfill is the one Phase 3 already planned |
-| Bespoke predicates (9 tables) | **Fewer**: `Message` stays bespoke (two arms); `EmpathyAttempt` stays (status-gated reveal) but gains `subject_id` so the member arm becomes `subject_id = me AND status IN (…)` — narrower than "any member"; `ConsentedContent` disappears into `need` (predicate: owner, or `shared_at IS NOT NULL AND revoked_at IS NULL AND partner`); `ReconcilerResult`'s `subjectId = me` arm now has an FK behind it; `RefinementAttemptCounter`, `Stage4NeedCoverage`, `CommonGround`, `SharedVessel`, three message/conversation duplicates → **no policy at all** |
-| Shape inventory (71 → ~41) | 69 × 4 policies becomes ~39 × 4; CI assertion §1.3 still sums |
+| `forUserId NOT NULL + FK` (design §3) | **Changed, same guarantee, one more hop**: `message.conversation_id NOT NULL FK → conversation(participant_id) → participant(user_id)`. Predicate `EXISTS (SELECT 1 FROM conversation c JOIN participant p ON p.id = c.participant_id WHERE c.id = message.conversation_id AND p.user_id = app.current_user_id()) OR EXISTS (… sender_participant_id → participant.user_id = me)`. The `Message` BEFORE UPDATE trigger pins `conversation_id, sender_participant_id, role, kind`. Backfill: one `participant` row per `(sessionId, userId)` in `StageProgress`/`UserVessel`, then `conversation_id` from `(sessionId, coalesce(forUserId, senderId))` — the backfill Phase 3 already planned, routed through the new row |
+| Identity | unchanged: `app.current_user_id()` from the JWT. Every participant-scoped predicate is the **same one join**: `participant.user_id = app.current_user_id()`. A modeled participant has `user_id NULL` and never matches; its rows are reachable only through the session's human participants (`participant` policy: `user_id = me OR EXISTS (participant p2 WHERE p2.session_id = participant.session_id AND p2.user_id = me)`) |
+| Bespoke predicates (9 tables → 6) | `message` (owner arm + sender arm); `empathy_attempt` (`author = me OR (subject = me AND status IN (REVEALED, VALIDATED))` — narrower than today's "any member"); `need` (owner, or `shared_at IS NOT NULL AND revoked_at IS NULL AND co-participant`); `reconciler_result` (`subject_participant = me` only, now FK-backed); `invitation`; `consent` (two participants); `user` (own row + display-name function); `relationship` (member). Gone with their tables: `ReconcilerShareOffer`'s `userId` arm (now template), `ConsentedContent`, `RefinementAttemptCounter`, `Stage4NeedCoverage`, `CommonGround`, `SharedVessel`, the duplicate message/conversation/draft tables |
+| Shape inventory (71 → ~46) | 69 × 4 policies becomes ~44 × 4; CI assertion §1.3 still sums. New shapes: `participant` (bespoke, above); `reflection` + `reflection_message` + `takeaway` + `takeaway_link` are Shape A/D on `reflection.user_id` — a second policy set, paid deliberately (§9) |
 | `ReconcilerGuidance` split (D8a) | keep; FK `attempt_id` instead of `resultId` is optional |
-| Soft delete / tombstone (D9) | simpler: scrub = update 4 `user` columns + delete `user_device`, `user_preferences`, `ai_memory`, the user's `conversation` rows of kind `INNER_WORK`; delivered content stays attributed. Every FK → `user` RESTRICT, unchanged. `agreement_party` and `participant_milestone` rows survive as history |
-| Envelope keys (D5, W13) | `UserKey` ↔ `user`; `SessionKey` ↔ `session`. Cleaner: a **`conversation_key`** per private conversation makes crypto-shred of one participant's private thread exact (today an unrevealed `EmpathyAttempt` is session-keyed and cannot be shredded, design §11). Shared artefacts (revealed attempts, shared needs, agreements, closure) stay session-keyed. This is a refinement, not a reversal |
+| Soft delete / tombstone (D9) | scrub = update 4 `user` columns + delete `user_device`, `user_preferences`, `ai_memory` (user-level), all `reflection` rows (private by definition), and the leaver's private-only session rows via their `participant` rows (`conversation`, `draft`, unshared `need`, `mood_reading`); the `participant` row itself survives with `user_id` still pointing at the tombstone, so delivered content, `agreement_party` and `participant_milestone` stay attributed. Every FK → `user` RESTRICT, unchanged |
+| Envelope keys (D5, W13) | `UserKey` ↔ `user` (covers `reflection*`, `ai_memory`, wellbeing); `SessionKey` ↔ `session` (shared artefacts: revealed attempts, shared needs, agreements, closure). Add **`participant_key`** per participant for the private thread (`conversation`, `message`, `draft`, unshared `need`, private `ai_memory`) so crypto-shredding one person's private session material is exact — today an unrevealed `EmpathyAttempt` is session-keyed and cannot be shredded (design §11). Refinement, not reversal |
 | `BrainActivity` revoked from `mwf_app` | unchanged |
-| Two-party paths as `mwf_job` (D6) | unchanged; fewer tables to touch at reveal (attempt + milestone + message) |
-| CHECKs (7) | all seven map 1:1; `Message` check becomes `role <> 'AI' OR sender_id IS NULL` |
-| Harder | `conversation.kind` CHECKs are new surface; the policy on `conversation` itself must be exactly `user_id = me` with `session_id` pinned on insert (membership check in `WITH CHECK`) |
+| Two-party paths as `mwf_job` (D6) | unchanged in kind, N-safe in form: reveal fires when `v_session_readiness.all_reached` for the milestone, computed as `NOT EXISTS (participant p WHERE NOT EXISTS (participant_milestone m WHERE m.participant_id = p.id AND m.key = …))`. Fewer tables touched at reveal (attempt + milestone + message) |
+| CHECKs (7) | all seven map 1:1; `Message` check becomes `role <> 'AI' OR sender_participant_id IS NULL`; `ReconcilerResult` guesser<>subject becomes `empathy_attempt` author<>subject |
+| Session cardinality | cannot be a CHECK (spans rows). Two triggers: **(i)** `BEFORE UPDATE OF status ON session` refuses the move to `ACTIVE` unless `≥2 participant` rows exist of which `≥1` is `human`; **(ii)** a `DEFERRABLE INITIALLY DEFERRED` constraint trigger on `participant` (DELETE / UPDATE OF kind, user_id) refuses leaving a non-terminal session with no human participant. A session in `CREATED`/`INVITED` legitimately has one participant, so the rule is status-gated, not row-level |
+| Harder | `conversation.kind` CHECKs are new surface; the `conversation` policy is exactly "my participant" with `participant_id` pinned on insert; `reflection` must never be reachable from a session-side policy — enforced structurally (no FK from any consent/share/reveal/empathy table to `reflection*`, CI assertion over `pg_constraint`) and by the service rule in §9 the DB cannot express |
 
 ---
 
@@ -426,62 +428,82 @@ W7–W10 on the new shape → W13.**
 
 ## 9. Proposed target shape
 
-Core domain only. `conversation` is the private vessel; `session` is the shared one.
+**Owner decisions, 2026-10-13** (product understanding in §0–§4 confirmed):
+
+| # | Decision | Reasoning recorded |
+|---|---|---|
+| D1 | **`participant` is the first-class entity** — one row per session membership, `kind human \| modeled`, `user_id NULL` for modeled. Everything the journey scopes to "a person in this session" keys on it | "the data modeling should allow for a future where more than two can participate" and "a single person can have a modeled conversation as if they are talking to another individual… this is meant as a communication facilitator only." Consequences: (a) a modeled conversation is a session with one human and one modeled participant — no new table; (b) every "both" in the journey becomes "all participants" over `participant_milestone`; (c) every RLS predicate becomes `participant.user_id = app.current_user_id()` through one join (§7). `relationship`/`relationship_member` stay as the durable pairing of users across sessions and lose the "exactly 2" invariant; cardinality is a per-session rule enforced by the two triggers in §7 |
+| D2 | **Inner Work leaves the shared `conversation` table** → `reflection` + `reflection_message`, owned by `user_id`, `linked_session_id` for context only | "a personal reflective space… may give the LLM private context, but isn't something that should ever be directly shared with the other participant." Structural guarantee: no consent, share, reveal, empathy or proposal table may FK `reflection*`; their FKs point only at session `conversation`/`message`. Cost: a second message table, a second encryption-map entry, a second policy set. Paid because the alternative — one table with a `kind` column and a policy that must never let `INNER_WORK` rows cross — makes the product's strongest privacy promise depend on a predicate instead of on the absence of a foreign key. `SUBCHAT` stays in `conversation` (same participant, same key, same privacy class). **Service rule the DB cannot express:** a prompt built for participant X may include only X's private material (X's session conversation, drafts, needs, `ai_memory`, and X's reflections) plus the session's shared vessel — never another participant's private material or reflections |
+| D3 | **No stage numbers in the schema.** `milestone(key, ordinal, stage_label)` is a **lookup table**, not an enum; `participant_milestone` references it; "current stage" is a view; `message.stage`, `mood_reading.stage`, `reflection.linked_at_stage` are dropped; every `Stage4*` model lands under a domain name | "The number of stages may change in the future… 'Stage4*'… a better name would be warranted." Renumbering or inserting a stage is a data change to `milestone.ordinal`/`stage_label`, not a migration |
+| D4 | **Q1 closed: `agreement` is a row with `agreement_party`.** "All parties willing" is a set over the session's participants, not a pair of booleans | matches the spec's "a shared agreement requires both people's willingness" generalised to N |
+
+Core domain only. `conversation` is a participant's private vessel; `session` is the shared one;
+`reflection` is outside both.
 
 ```mermaid
 erDiagram
     user ||--o{ relationship_member : ""
-    relationship ||--|{ relationship_member : "exactly 2"
+    relationship ||--o{ relationship_member : "durable pairing; no cardinality rule"
     relationship ||--o{ session : ""
     session ||--o{ invitation : ""
-    session ||--|{ conversation : "one per participant (kind SESSION); also INNER_WORK, SUBCHAT"
-    user ||--o{ conversation : "owner"
+    session ||--|{ participant : "kind: human | modeled; >=2 and >=1 human before ACTIVE (trigger)"
+    user |o--o{ participant : "user_id NULL for modeled"
+    participant ||--|| conversation : "private thread; also kind SUBCHAT (0..n)"
     conversation ||--o{ message : "conversation_id NOT NULL"
-    user |o--o{ message : "sender_id (NULL = AI/SYSTEM)"
-    conversation ||--o{ participant_milestone : "compact_signed, feel_heard, empathy_submitted, needs_shared, selections_shared, …"
-    conversation ||--o{ draft : "kind: EMPATHY, FEEDBACK, SHARE_CONTEXT"
-    conversation ||--o{ need : "private until shared"
-    conversation ||--o{ mood_reading : ""
-    conversation ||--o{ ai_memory : "jsonb: summary, notable_facts, global_facts"
-    session ||--o{ empathy_attempt : ""
-    user ||--o{ empathy_attempt : "author_id"
-    user ||--o{ empathy_attempt : "subject_id"
+    participant |o--o{ message : "sender_participant_id (NULL = AI/SYSTEM)"
+    milestone ||--o{ participant_milestone : "lookup: key, ordinal, stage_label"
+    participant ||--o{ participant_milestone : "compact_signed, feel_heard, empathy_submitted, needs_shared, choices_shared, ..."
+    participant ||--o{ draft : "kind: EMPATHY, FEEDBACK, SHARE_CONTEXT"
+    participant ||--o{ need : "private until shared"
+    participant ||--o{ mood_reading : ""
+    participant ||--o| ai_memory : "jsonb: summary, notable_facts"
+    participant ||--o| conversation_read_state : ""
+    participant ||--o{ empathy_attempt : "author_participant_id"
+    participant ||--o{ empathy_attempt : "subject_participant_id (CHECK author <> subject)"
     empathy_attempt ||--o{ reconciler_result : "immutable per round; one current"
     reconciler_result ||--o| reconciler_guidance : "D8a"
-    empathy_attempt ||--o{ context_share_offer : ""
+    empathy_attempt ||--o{ context_share_offer : "to subject"
     empathy_attempt ||--o| empathy_review : "by subject"
     consent ||--o{ empathy_attempt : "arc"
     consent ||--o{ need : "arc: shared_text, revoked_at"
     consent ||--o{ proposal : "arc"
-    user ||--o{ consent : "user_id / requested_by"
+    participant ||--o{ consent : "participant_id / requested_by_participant_id"
     session ||--o{ proposal : ""
     proposal ||--o{ proposal_need : ""
     need ||--o{ proposal_need : ""
-    proposal ||--o{ proposal_choice : "per user: WILLING / NOT_WILLING"
+    proposal ||--o{ proposal_choice : "per participant: WILLING / NOT_WILLING"
     proposal ||--o{ proposal_revision : "action enum, before/after jsonb"
-    conversation ||--o{ need_disposition : "per need: OPEN, COVERED, SKIPPED, DECLINED"
+    participant ||--o{ need_disposition : "per need: OPEN, COVERED, SKIPPED, DECLINED"
     proposal ||--o{ agreement : "RESTRICT"
-    agreement ||--|{ agreement_party : "agreed_at per user"
-    session ||--o| session_closure : "kind, reason, summary"
+    agreement ||--|{ agreement_party : "participant_id, agreed_at; all parties = set over participants"
+    session ||--o| session_closure : "kind, reason, summary, closed_by_participant_id"
     agreement ||--o{ follow_up : ""
     session ||--o{ follow_up : "scheduled_for, response_deadline_at"
-    follow_up ||--o{ follow_up_checkin : "payload jsonb"
-    follow_up ||--o{ reminder : "remind_at"
-    conversation ||--o{ follow_up_note : ""
+    follow_up ||--o{ follow_up_checkin : "per participant; payload jsonb"
+    follow_up ||--o{ reminder : "remind_at (user-scoped delivery)"
+    participant ||--o{ follow_up_note : ""
+    user ||--o{ reflection : "Inner Work: private, user-owned, outside the session boundary"
+    session |o--o{ reflection : "linked_session_id: context only, never shared"
+    reflection ||--o{ reflection_message : ""
+    reflection ||--o{ takeaway : ""
 ```
 
-**Introduced:** `conversation`, `conversation_read_state`, `ai_memory`, `participant_milestone`,
-`need_disposition`, `draft`, `agreement_party`, `user_device`, `user_preferences`,
-`meditation_script`, `follow_up_checkin.payload`; views in §6. **Retired:** `SharedVessel`,
-`CommonGround`, `ConsentedContent` (into `need`), `UserEvent`, `Boundary`, `UserDocument`,
-`PreSessionMessage`, `InnerWorkSession`/`InnerWorkMessage`/`Stage4SubChat`/`Stage4SubChatMessage`
-(into `conversation`/`message`), `ValidationFeedbackDraft`, `RefinementAttemptCounter`,
+**Introduced:** `participant`, `milestone` (lookup), `conversation`, `conversation_read_state`,
+`ai_memory`, `participant_milestone`, `need_disposition`, `draft`, `agreement_party`, `reflection`,
+`reflection_message`, `user_device`, `user_preferences`, `meditation_script`,
+`follow_up_checkin.payload`; views in §6 plus `v_session_readiness` and `v_reflection_theme`.
+**Retired:** `SharedVessel`, `CommonGround`, `ConsentedContent` (into `need`), `UserEvent`,
+`Boundary`, `UserDocument`, `PreSessionMessage`, `Stage4SubChat`/`Stage4SubChatMessage` (into
+`conversation`/`message`), `ValidationFeedbackDraft`, `RefinementAttemptCounter`,
 `Stage4NeedCoverage`, `Stage4NeedDeclination`, `StrategyRanking`, `TendingCoordinationCycle`,
-five tending response tables, `TakeawayLink`, `RecurringTheme`, `MeditationStats`,
+five tending response tables, `RecurringTheme`, `Insight`, `MeditationStats`,
 `MeditationFavorite`, `MeditationPreferences`, `GratitudePreferences`, `PersonMention`,
-`GlobalLibraryItem`. **Feature documents (jsonb, one row per owner):** `user_preferences`,
-`ai_memory`, `needs_assessment_state`, `person.mentions`, `gratitude_entry.extracted`,
-`follow_up_checkin.payload`, `insight.data`.
+`GlobalLibraryItem`; every `Stage4*` and `Tending*` name, and every `stage` column.
+**Renamed, not merged:** `InnerWorkSession` → `reflection`, `InnerWorkMessage` →
+`reflection_message`, `SessionTakeaway` → `takeaway` (all in the reflection cluster, FKs only
+among themselves and to `user`/`session`). **Feature documents (jsonb, one row per owner):**
+`user_preferences`, `ai_memory`, `needs_assessment_state`, `person.mentions`,
+`gratitude_entry.extracted`, `follow_up_checkin.payload`.
 
 ---
 
@@ -489,13 +511,15 @@ five tending response tables, `TakeawayLink`, `RecurringTheme`, `MeditationStats
 
 | # | Question | Options | Cost |
 |---|---|---|---|
-| Q1 | **Is an agreement a thing, or two WILLING choices?** The spec says "a shared agreement requires both people's willingness to that proposal" | (a) derive `agreement` as a view over `proposal_choice`; (b) keep `agreement` as a row created at mutual willingness with `agreement_party` | (a) no table, but `follow_up` then FKs a proposal; (b) one more table and an invariant to enforce (both parties WILLING at creation) |
-| Q2 | **One conversation table for session, inner-work and sub-chats, or three?** | (a) one `conversation` with `kind` + CHECK per kind; (b) `conversation` for session threads only, `inner_work_session` separate | (a) one message table, one policy, one encryption map; nullable kind-specific columns. (b) keeps inner-work's richer lifecycle isolated at the price of a second message table |
+| Q1 | **Decided 2026-10-13:** `agreement` is a row; `agreement_party` holds one row per willing participant (§9 D4) | — | — |
+| Q2 | **Decided 2026-10-13:** Inner Work is structurally separate (`reflection`, `reflection_message`); session threads and sub-chats share `conversation` (§9 D2) | — | — |
 | Q3 | **At most one live session per relationship?** | enforce with a partial unique; or allow parallel topics | the partial unique kills a class of "which session" bugs; parallel topics are a product capability |
 | Q4 | **Wellbeing features (meditation, gratitude, needs assessment, people): ship, shelve, or demote to documents?** Mobile has screens for all four | (a) keep as the slimmed tables in §0; (b) move each to one `feature_state(user_id, feature, doc jsonb)` row; (c) drop with the screens | (a) ~9 tables; (b) 1 table, no SQL filtering ever; (c) nothing to secure or encrypt |
-| Q5 | **History of empathy attempts: immutable rows per submission, or overwrite with `revisionCount`?** The spec's "a later private edit must not silently change what the partner was shown" implies immutability | rows per round (recommended) vs. in-place | rows: `round` column, unique `(session, author, round)`, reveal references a specific row; in-place: smaller, but the spec's guarantee is unenforceable |
-| Q6 | **Pre-session chat (before a session exists): keep the feature?** | drop; or a `conversation` of kind `PRE_SESSION` with `session_id NULL` | keeping it means the `conversation` policy has a no-session arm |
+| Q5 | **History of empathy attempts: immutable rows per submission, or overwrite with `revisionCount`?** The spec's "a later private edit must not silently change what the partner was shown" implies immutability | rows per round (recommended) vs. in-place | rows: `round` column, unique `(author, subject, round)`, reveal references a specific row; in-place: smaller, but the spec's guarantee is unenforceable |
+| Q6 | **Pre-session chat (before a session exists): keep the feature?** | drop; or a `conversation` whose `participant` belongs to a session in `CREATED` status | keeping it means the first participant exists before anyone is invited, which D1's status-gated cardinality already allows |
 | Q7 | **snake_case now?** | yes with the re-shape; or never | mechanical `@map`s + ~18 raw-SQL rewrites now; every hand-written policy/trigger quotes `"PascalCase"` forever otherwise |
+| P1 | *Parked (owner: do not design yet).* With N participants, when does a reveal fire — all N ready, or pairwise per direction? The shape supports either (`v_session_readiness` vs per-attempt status); the choice is product | — | — |
+| P2 | *Parked.* What is the modeled participant's "private conversation" — a thread the human can read, an AI-only working space, or nothing? Today's shape gives it a `conversation` row like any participant; whether the human may read it is a policy decision | — | — |
 
 ---
 
