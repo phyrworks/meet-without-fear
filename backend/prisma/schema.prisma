@@ -247,6 +247,7 @@ model Milestone {
   scope          MilestoneScope @default(participant)
   selfAssertable Boolean        @default(false) @map("self_assertable")
   createdAt      DateTime       @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt      DateTime       @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
 
   reached ParticipantMilestone[]
 
@@ -348,6 +349,7 @@ model SessionKey {
   wrappedDek  Bytes     @map("wrapped_dek")
   createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
   destroyedAt DateTime? @map("destroyed_at") @db.Timestamptz(3)
+  updatedAt   DateTime  @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
 
   session Session @relation(fields: [sessionId], references: [id], onDelete: Cascade, onUpdate: NoAction)
 
@@ -363,6 +365,7 @@ model ParticipantKey {
   wrappedDek    Bytes     @map("wrapped_dek")
   createdAt     DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
   destroyedAt   DateTime? @map("destroyed_at") @db.Timestamptz(3)
+  updatedAt   DateTime  @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
 
   participant Participant @relation(fields: [participantId], references: [id], onDelete: Cascade, onUpdate: NoAction)
 
@@ -454,6 +457,7 @@ model ReconcilerResult {
   circuitBreakerTripped Boolean           @default(false) @map("circuit_breaker_tripped")
   supersededAt          DateTime?         @map("superseded_at") @db.Timestamptz(3)
   createdAt             DateTime          @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt             DateTime          @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
 
   attempt            EmpathyAttempt @relation(fields: [attemptId], references: [id], onDelete: Cascade, onUpdate: NoAction)
   subjectParticipant Participant    @relation(fields: [subjectParticipantId], references: [id], onDelete: Cascade, onUpdate: NoAction)
@@ -538,6 +542,7 @@ model Consent {
   decidedAt                DateTime?        @map("decided_at") @db.Timestamptz(3)
   revokedAt                DateTime?        @map("revoked_at") @db.Timestamptz(3)
   createdAt                DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt                DateTime         @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
   targetKind               ConsentTarget    @default(dbgenerated("\nCASE\n    WHEN (need_id IS NOT NULL) THEN 'NEED'::consent_target\n    WHEN (empathy_attempt_id IS NOT NULL) THEN 'EMPATHY_ATTEMPT'::consent_target\n    WHEN (proposal_id IS NOT NULL) THEN 'PROPOSAL'::consent_target\n    WHEN (share_offer_id IS NOT NULL) THEN 'SHARE_OFFER'::consent_target\n    WHEN (review_id IS NOT NULL) THEN 'REVIEW'::consent_target\n    ELSE NULL::consent_target\nEND")) @map("target_kind")
 
   participant            Participant        @relation("ConsentDecider", fields: [participantId], references: [id], onDelete: Cascade, onUpdate: NoAction)
@@ -599,6 +604,7 @@ model NeedShare {
   sharedAt      DateTime     @default(now()) @map("shared_at") @db.Timestamptz(3)
   revokedAt     DateTime?    @map("revoked_at") @db.Timestamptz(3)
   createdAt     DateTime     @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt     DateTime     @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
 
   need        Need        @relation(fields: [needId], references: [id], onDelete: Restrict, onUpdate: NoAction)
   participant Participant @relation(fields: [participantId], references: [id], onDelete: Cascade, onUpdate: NoAction)
@@ -1049,6 +1055,7 @@ model UserKey {
   wrappedDek  Bytes     @map("wrapped_dek")
   createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
   destroyedAt DateTime? @map("destroyed_at") @db.Timestamptz(3)
+  updatedAt   DateTime  @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
 
   user User @relation(fields: [userId], references: [id], onDelete: Restrict, onUpdate: NoAction)
 
@@ -1080,6 +1087,7 @@ model BrainActivity {
   status           ActivityStatus @default(PENDING)
   createdAt        DateTime       @default(now()) @map("created_at") @db.Timestamptz(3)
   completedAt      DateTime?      @map("completed_at") @db.Timestamptz(3)
+  updatedAt        DateTime       @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
 
   session     Session?     @relation(fields: [sessionId], references: [id], onDelete: Cascade, onUpdate: NoAction)
   reflection  Reflection?  @relation(fields: [reflectionId], references: [id], onDelete: Cascade, onUpdate: NoAction)
