@@ -27,20 +27,33 @@ export const EMPATHY_REVEAL_ALLOW: AllowList = {
         'spec §1.2 empathy_attempt: revisionCount becomes rows with a round, so a reveal payload names the round ' +
         'and the attempt row it came from.',
     },
-    {
-      kind: 'addedEntries',
+    // The two delivered copies, one per revealed attempt, each pinned by its
+    // structural key AND its audience, lineage and sender. A predicate on
+    // `kind` alone (the first version) admitted a statement copied into its
+    // author's own conversation, duplicated, with the wrong lineage — the
+    // R2/R3 leak class. Each rule admits exactly one row. No `initial` rule:
+    // FEEL_HEARD_B holds no revealed attempt, so the target adds nothing there.
+    ...(
+      [
+        ['ada', 'bob'],
+        ['bob', 'ada'],
+      ] as const
+    ).map(([author, subject]) => ({
+      kind: 'addedEntries' as const,
       at: 'steps.*.changes',
-      where: { view: 'message', kind: 'added', 'after.kind': 'EMPATHY_STATEMENT' },
+      where: {
+        view: 'message',
+        kind: 'added',
+        key: `<message:${subject}@main/EMPATHY_STATEMENT:${author}#1>`,
+        'after.kind': 'EMPATHY_STATEMENT',
+        'after.role': 'USER',
+        'after.conversation_id': `<conversation:${subject}@main/MAIN>`,
+        'after.sender_participant_id': `<participant:${author}@main>`,
+        'after.source_attempt_id': `<empathyAttempt:${author}→${subject}@main#1>`,
+      },
       why:
-        "plan §3 step 9: the reveal job writes an EMPATHY_STATEMENT row into the SUBJECT's conversation; today it " +
-        "is written only into the author's own chat (spec §1.1 message.source_attempt_id).",
-    },
-    {
-      kind: 'addedEntries',
-      // In `initial` the rows are keyed by label, so the entry is the row itself.
-      at: 'initial.message',
-      where: { kind: 'EMPATHY_STATEMENT' },
-      why: 'as above, for a fixture that already holds a revealed attempt (none in FEEL_HEARD_B today).',
-    },
+        `plan §3 step 9: the reveal job writes ${author}'s EMPATHY_STATEMENT into the SUBJECT's (${subject}'s) ` +
+        "conversation; today it is written only into the author's own chat (spec §1.1 message.source_attempt_id).",
+    })),
   ],
 };

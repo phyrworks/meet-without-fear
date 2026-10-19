@@ -61,10 +61,15 @@ export interface ValuesSubsetRule extends RuleBase {
 }
 
 /**
- * Entries that MAY be added to a matching array (or keyed map of rows): an
+ * ONE entry that MAY be added to a matching array (or keyed map of rows): an
  * entry present only in the new run is permitted when every `where` field
- * (dot paths into the entry) equals the given value. Used for rows the target
- * migration inserts (plan §4: delivered EMPATHY_STATEMENT copies).
+ * (dot paths into the entry; `$key` = its map key) equals the given value.
+ * Each rule admits at most one entry per container, so `where` must pin the
+ * expected row completely — its structural key and every reference that makes
+ * it the right row (audience, lineage, sender). A predicate on `kind` alone
+ * admitted a leak into the wrong conversation (TS-4 review probe). Used for
+ * rows the target migration inserts (plan §4: delivered EMPATHY_STATEMENT
+ * copies).
  */
 export interface AddedEntriesRule extends RuleBase {
   kind: 'addedEntries';

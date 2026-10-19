@@ -10,7 +10,7 @@
  * change.
  */
 
-import { compareWithAllowList } from '../runner';
+import { compareWithAllowList } from '../allow-lists/compare';
 import type { AllowList } from '../allow-lists/types';
 import { EMPATHY_REVEAL_ALLOW } from '../allow-lists/empathy-reveal';
 import { SESSION_READ_ALLOW } from '../allow-lists/session-read';
@@ -60,14 +60,29 @@ function revealTargetLike(): Json {
   const d1 = t.steps[1].body.data as Record<string, Record<string, unknown>>;
   d1.attempt.round = 1;
   d1.attempt.attemptId = d1.attempt.id;
-  // ... and the delivered EMPATHY_STATEMENT copy the migration writes.
-  t.steps[0].changes.push({
+  // ... and the two delivered EMPATHY_STATEMENT copies the migration writes,
+  // one into each subject's conversation.
+  t.steps[0].changes.push(deliveredCopy('ada', 'bob'), deliveredCopy('bob', 'ada'));
+  return t;
+}
+
+/** A delivered copy of `author`'s statement, as the target writes it into `subject`'s conversation. */
+function deliveredCopy(author: string, subject: string): Json {
+  const key = `<message:${subject}@main/EMPATHY_STATEMENT:${author}#1>`;
+  return {
     view: 'message',
     kind: 'added',
-    key: '<message:bob@main/EMPATHY_STATEMENT:ada#1>',
-    after: { kind: 'EMPATHY_STATEMENT', role: 'USER' },
-  });
-  return t;
+    key,
+    after: {
+      id: key,
+      kind: 'EMPATHY_STATEMENT',
+      role: 'USER',
+      conversation_id: `<conversation:${subject}@main/MAIN>`,
+      sender_participant_id: `<participant:${author}@main>`,
+      source_attempt_id: `<empathyAttempt:${author}→${subject}@main#1>`,
+      content: `${author}'s statement`,
+    },
+  };
 }
 
 describe('compareWithAllowList — empathy-reveal (old ⊆ new, named additions)', () => {
@@ -116,6 +131,70 @@ describe('compareWithAllowList — empathy-reveal (old ⊆ new, named additions)
     t.steps[0].changes.push({ view: 'message', kind: 'added', key: '<message:bob@main#11>', after: { kind: 'CHAT', role: 'AI' } });
     const r = compareWithAllowList(revealBaseline(), t, EMPATHY_REVEAL_ALLOW);
     expect(r.violations.join('\n')).toContain('steps.0.changes');
+  });
+
+  // The review probe's case (a): Ada's statement copied into Ada's OWN
+  // conversation, twice, carrying the wrong lineage. A kind-only predicate
+  // accepted it.
+  it("rejects a copy into the author's own conversation, duplicated, with the wrong lineage", () => {
+    const t = revealTargetLike();
+    for (const n of [2, 3]) {
+      const key = `<message:ada@main/EMPATHY_STATEMENT:ada#${n}>`;
+      t.steps[0].changes.push({
+        view: 'message',
+        kind: 'added',
+        key,
+        after: {
+          id: key,
+          kind: 'EMPATHY_STATEMENT',
+          role: 'USER',
+          conversation_id: '<conversation:ada@main/MAIN>',
+          source_attempt_id: '<empathyAttempt:bob→ada@main#1>',
+          content: 'leaked',
+        },
+      });
+    }
+    const r = compareWithAllowList(revealBaseline(), t, EMPATHY_REVEAL_ALLOW);
+    const text = r.violations.join('\n');
+    expect(text).toContain('<message:ada@main/EMPATHY_STATEMENT:ada#2>');
+    expect(text).toContain('<message:ada@main/EMPATHY_STATEMENT:ada#3>');
+  });
+
+  it('rejects the right copy delivered with the wrong lineage, or into the wrong conversation', () => {
+    for (const mutate of [
+      (c: Json) => (c.after.source_attempt_id = '<empathyAttempt:bob→ada@main#1>'),
+      (c: Json) => (c.after.conversation_id = '<conversation:ada@main/MAIN>'),
+      (c: Json) => (c.after.sender_participant_id = null),
+    ]) {
+      const t = revealTargetLike();
+      mutate(t.steps[0].changes.find((c: Json) => c.key === '<message:bob@main/EMPATHY_STATEMENT:ada#1>'));
+      expect(compareWithAllowList(revealBaseline(), t, EMPATHY_REVEAL_ALLOW).violations).not.toEqual([]);
+    }
+  });
+
+  it('admits each expected copy once: a duplicate of a correct copy is rejected', () => {
+    const t = revealTargetLike();
+    t.steps[0].changes.push(deliveredCopy('ada', 'bob'));
+    const r = compareWithAllowList(revealBaseline(), t, EMPATHY_REVEAL_ALLOW);
+    expect(r.violations).toEqual([
+      expect.stringContaining('steps.0.changes.length'),
+      expect.stringContaining('entry added and not on the allow-list'),
+    ]);
+  });
+
+  // The review probe's case (b): unrevealed Bob text sitting in Ada's
+  // conversation in the restored state. Nothing may be added to `initial`.
+  it("rejects an initial message row holding the partner's unrevealed statement", () => {
+    const base = revealBaseline();
+    base.initial = { message: { '<message:ada@main#1>': { kind: 'CHAT' } } };
+    const t = clone(base);
+    t.initial.message['<message:ada@main/EMPATHY_STATEMENT:bob#1>'] = {
+      kind: 'EMPATHY_STATEMENT',
+      conversation_id: '<conversation:ada@main/MAIN>',
+      content: 'unrevealed bob text',
+    };
+    const r = compareWithAllowList(base, t, EMPATHY_REVEAL_ALLOW);
+    expect(r.violations).toEqual([expect.stringContaining('initial.message.<message:ada@main/EMPATHY_STATEMENT:bob#1>')]);
   });
 });
 

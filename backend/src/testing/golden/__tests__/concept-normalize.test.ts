@@ -165,6 +165,15 @@ describe('concept labels — content rows', () => {
     expect(map.labels.get(consent)).toBe('<consent:ada@main/EMPATHY_ATTEMPT/empathyAttempt:ada→bob@main#1>');
   });
 
+  it('leaves an attempt with no resolvable subject unresolved, so the run fails', () => {
+    const attempt = '33333333-3333-3333-3333-33333333bbbb';
+    const map = buildConceptLabelMap(
+      input({ empathy_attempt: [{ id: attempt, author_participant_id: P_ADA, subject_participant_id: null, round: 1 }] }),
+    );
+    expect(map.labels.has(attempt)).toBe(false);
+    expect(normalize({ id: attempt }, map).unresolved).toEqual([attempt]);
+  });
+
   it('labels the manifest ids and seeded clerkIds as the byte-level map does', () => {
     const i = input();
     i.seededClerkIds = [{ userId: BOB, clerkId: 'e2e_1787097373886_xa944v' }];

@@ -241,6 +241,13 @@ JOIN old_concept_participant p ON p.session_id = sc."sessionId" AND p.user_id = 
 -- milestone reached by more than one route keeps the earliest instant
 -- (the PK is (participant_id, milestone_key)).
 --
+-- DEPARTURE (empathy_validated instant): step 7 says `empathy_validated @
+-- StageProgress.completedAt`. Here an `empathyExchangedAt` / `empathyValidatedAt`
+-- companion, when present, is preferred over completedAt — the same rule every
+-- other gate gets — and the COMPLETED-stage-2 route still contributes
+-- completedAt, so with `min()` the earlier of the two wins. In today's fixtures
+-- the companion and completedAt are the same instant.
+--
 -- Dropped keys (step 7: AI hints, ranking, derived): feelHeardCheckOffered,
 -- finalEmotionalReading, readyToRank, rankingSubmitted, partnerConsented,
 -- partnerValidated, partner, own; fixture-derived strategiesRanked,
@@ -341,8 +348,9 @@ WHERE k.key NOT IN (
 --
 -- conversation_id: the MAIN conversation of participant (sessionId,
 -- coalesce(forUserId, senderId)). A row with neither is the leaver's orphan
--- that step 4a deletes; here it projects with conversation_id NULL, which the
--- harness's resolution check reports.
+-- that step 4a deletes; here it projects with conversation_id NULL, and the
+-- normaliser refuses to label a message without a conversation, so its id
+-- stays unresolved and the run fails.
 -- role/kind (spec §3): USER/AI/SYSTEM keep their role with kind CHAT; the six
 -- event roles become kind = the old role, with role USER when a sender is set
 -- (a delivered item authored by a participant — spec, T-message-immutable:
@@ -350,12 +358,12 @@ WHERE k.key NOT IN (
 -- role USER ⇔ sender set).
 -- source_attempt_id (step 9, "resolved by (sessionId, author)"):
 --   EMPATHY_STATEMENT   → the attempt whose sourceUserId is the sender;
---   VALIDATION_FEEDBACK → the attempt being reviewed: the session's attempt
---                         NOT authored by the sender (the reviewer is the
---                         subject; resolving by the sender would name the
---                         reviewer's own attempt). Departure from the step's
---                         literal wording, chosen for the spec's "which attempt
---                         row … came from".
+--   VALIDATION_FEEDBACK → the attempt being reviewed: the one authored by the
+--                         message's RECIPIENT (forUserId) — the feedback is
+--                         delivered to the attempt's author, so this is the
+--                         step's "(sessionId, author)" literally. (Resolving
+--                         by the sender would name the reviewer's own attempt;
+--                         "not the sender" breaks on a NULL sender or N>2.)
 --   SHARED_CONTEXT and every other kind → NULL (no old link exists).
 -- Delivered EMPATHY_STATEMENT copies the migration inserts into the subject's
 -- conversation do not exist in the old shape (step 9: "today's data has
@@ -379,7 +387,7 @@ SELECT
     WHEN 'EMPATHY_STATEMENT' THEN
       (SELECT a.id FROM "EmpathyAttempt" a WHERE a."sessionId" = m."sessionId" AND a."sourceUserId" = m."senderId")
     WHEN 'VALIDATION_FEEDBACK' THEN
-      (SELECT a.id FROM "EmpathyAttempt" a WHERE a."sessionId" = m."sessionId" AND a."sourceUserId" IS DISTINCT FROM m."senderId")
+      (SELECT a.id FROM "EmpathyAttempt" a WHERE a."sessionId" = m."sessionId" AND a."sourceUserId"::text = lower(m."forUserId"))
   END AS source_attempt_id,
   m."timestamp" AS created_at
 FROM "Message" m
@@ -415,7 +423,9 @@ JOIN old_concept_participant p ON p.session_id = sc."sessionId" AND p.user_id = 
 --
 -- subject: the session's other participant. More than one other participant
 -- makes the scalar subquery raise — the step's "RAISE if N≠2" — and none
--- leaves it NULL, which the harness's resolution check reports.
+-- leaves it NULL. A NULL author or subject is listed by
+-- `concept_check_attempt_without_direction` (below), which fails the snapshot;
+-- the normaliser also refuses to label such an attempt.
 -- round ← revisionCount + 1. status (spec §3 empathy_status): ANALYZING →
 -- HELD, NEEDS_WORK → AWAITING_SHARING. submitted_at ← sharedAt.
 -- supersedes_attempt_id: NULL — the old shape keeps one row per direction.
@@ -438,6 +448,14 @@ SELECT
   a."seenAt"         AS seen_at
 FROM "EmpathyAttempt" a
 LEFT JOIN old_concept_participant au ON au.session_id = a."sessionId" AND au.user_id = a."sourceUserId";
+
+
+-- Plan step 11: every attempt has an author and a subject (target NOT NULL;
+-- "RAISE if N≠2"). An attempt the view cannot direct fails the snapshot.
+CREATE VIEW concept_check_attempt_without_direction AS
+SELECT id, author_participant_id IS NULL AS no_author, subject_participant_id IS NULL AS no_subject
+FROM old_concept_empathy_attempt
+WHERE author_participant_id IS NULL OR subject_participant_id IS NULL;
 
 
 -- ----------------------------------------------------------------------------
@@ -579,8 +597,9 @@ SELECT
   p.id,
   'VALIDATION_FEEDBACK'::text,
   NULL::uuid,
-  (SELECT a.id FROM "EmpathyAttempt" a
-    WHERE a."sessionId" = f."sessionId" AND a."sourceUserId" IS DISTINCT FROM f."userId"),
+  -- The attempt this drafter reviews is the one whose SUBJECT they are (the
+  -- old row names no attempt; "not authored by the drafter" picks wrong at N>2).
+  (SELECT a.id FROM old_concept_empathy_attempt a WHERE a.subject_participant_id = p.id),
   NULL::uuid,
   f.content,
   f."readyToShare",
@@ -827,7 +846,8 @@ JOIN old_concept_participant p ON p.session_id = ag.session_id AND p.user_id = s
 -- EMPATHY_ATTEMPT/EMPATHY_DRAFT → EMPATHY_ATTEMPT, STRATEGY_PROPOSAL →
 -- PROPOSAL. EVENT_SUMMARY/EMOTIONAL_PATTERN/BOUNDARY have no target (the
 -- plan's precheck expects none) and project with target_kind NULL and an
--- empty arc, so they are visible rather than dropped.
+-- empty arc rather than being dropped, and `concept_check_consent_unresolved_arc`
+-- fails the snapshot on them (and on any targetId that does not resolve).
 -- Arc resolution ("targetId text → uuid resolved against the target table"):
 --   NEED            → the IdentifiedNeed with that id;
 --   EMPATHY_ATTEMPT → the EmpathyAttempt with that id; for EMPATHY_DRAFT (the
@@ -891,6 +911,19 @@ SELECT
 FROM sess s
 LEFT JOIN old_concept_participant p  ON p.session_id  = s.session_id AND p.user_id  = s."userId"
 LEFT JOIN old_concept_participant rp ON rp.session_id = s.session_id AND rp.user_id = s."requestedByUserId";
+
+
+-- Plan §3 precheck: "every ConsentRecord.targetType ∈ {IDENTIFIED_NEED,
+-- EMPATHY_ATTEMPT, EMPATHY_DRAFT, STRATEGY_PROPOSAL} and targetId resolves",
+-- i.e. the target's `num_nonnulls(arc) = 1`. A consent with no target kind or
+-- an all-NULL arc (the normaliser would otherwise rank it `#n`) fails the
+-- snapshot; so does a consent with no deciding participant.
+CREATE VIEW concept_check_consent_unresolved_arc AS
+SELECT id, target_kind, participant_id IS NULL AS no_participant
+FROM old_concept_consent
+WHERE target_kind IS NULL
+   OR participant_id IS NULL
+   OR num_nonnulls(need_id, empathy_attempt_id, proposal_id, share_offer_id, review_id) <> 1;
 
 
 -- ----------------------------------------------------------------------------

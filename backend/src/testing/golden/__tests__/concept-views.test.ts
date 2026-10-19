@@ -140,6 +140,113 @@ describe('concept views — FEEL_HEARD_B', () => {
     expect(rows).toEqual([{ target_kind: 'EMPATHY_ATTEMPT', arcs: 1, to_attempt: true }]);
   });
 
+  /** Run setup statements and a query in one transaction, then roll back. */
+  const inTx = async <T extends Record<string, unknown>>(setup: string[], sql: string): Promise<T[]> =>
+    withClient(
+      fx.target,
+      async c => {
+        await c.query('BEGIN');
+        try {
+          for (const s of setup) await c.query(s);
+          return (await c.query<T>(sql)).rows;
+        } finally {
+          await c.query('ROLLBACK');
+        }
+      },
+      fx.database,
+    );
+  const ADA = `(SELECT id FROM "User" WHERE email = 'ada@e2e.test')`;
+  const BOB = `(SELECT id FROM "User" WHERE email = 'bob@e2e.test')`;
+  const SESSION = `(SELECT id FROM "Session" LIMIT 1)`;
+  const milestonesOf = `SELECT u.email || ':' || pm.milestone_key || '@' || pm.reached_at::text AS m
+    FROM old_concept_participant_milestone pm
+    JOIN old_concept_participant p ON p.id = pm.participant_id
+    JOIN old_concept_user u ON u.id = p.user_id
+    WHERE pm.milestone_key NOT IN ('compact_signed', 'feel_heard') ORDER BY 1`;
+
+  // Every step-7 branch FEEL_HEARD_B does not reach, pinned on a rolled-back
+  // copy: the fixture-only spellings, COMPLETED stages 2-4, `phase`, `paused`.
+  it('decodes the gate branches FEEL_HEARD_B does not reach (fixture-only keys, COMPLETED 2-4, phase, paused)', async () => {
+    const rows = await inTx<{ m: string }>(
+      [
+        `UPDATE "StageProgress" SET status = 'COMPLETED', "completedAt" = '2030-01-01 00:00:02',
+           "gatesSatisfied" = '{"empathyExchanged": true, "empathyExchangedAt": "2030-01-01T00:00:01.000Z"}'
+         WHERE stage = 2 AND "userId" = ${ADA}`,
+        `INSERT INTO "StageProgress" (id, "sessionId", "userId", stage, status, "startedAt", "completedAt", "gatesSatisfied", "isSynthesisDirty")
+         VALUES (gen_random_uuid(), ${SESSION}, ${ADA}, 3, 'COMPLETED', '2030-01-01 00:00:02', '2030-01-01 00:00:04',
+                 '{"needsIdentified": true, "needsIdentifiedAt": "2030-01-01T00:00:03.000Z"}', false),
+                (gen_random_uuid(), ${SESSION}, ${ADA}, 4, 'COMPLETED', '2030-01-01 00:00:04', '2030-01-01 00:00:06',
+                 '{"phase": "NEEDS_WALKTHROUGH"}', false)`,
+        `UPDATE "Session" SET status = 'PAUSED', "updatedAt" = '2030-01-01 00:00:07'`,
+      ],
+      milestonesOf,
+    );
+    expect(rows.map(r => r.m)).toEqual([
+      'ada@e2e.test:choices_shared@2030-01-01 00:00:06', // COMPLETED stage 4 (step 7)
+      'ada@e2e.test:empathy_validated@2030-01-01 00:00:01', // empathyExchanged + its instant (earlier than completedAt)
+      'ada@e2e.test:needs_confirmed@2030-01-01 00:00:03', // needsIdentified + its instant
+      'ada@e2e.test:needs_shared@2030-01-01 00:00:04', // COMPLETED stage 3
+      'ada@e2e.test:paused@2030-01-01 00:00:07', // Session PAUSED, every participant
+      'ada@e2e.test:repair_walkthrough_started@2030-01-01 00:00:04', // phase <> INVENTORY @ startedAt
+      'bob@e2e.test:paused@2030-01-01 00:00:07',
+    ]);
+  });
+
+  it("does not start the walkthrough on phase 'INVENTORY'", async () => {
+    const rows = await inTx<{ m: string }>(
+      [`UPDATE "StageProgress" SET "gatesSatisfied" = '{"phase": "INVENTORY"}' WHERE stage = 2 AND "userId" = ${ADA}`],
+      milestonesOf,
+    );
+    expect(rows).toEqual([]);
+  });
+
+  it('resolves VALIDATION_FEEDBACK to the attempt its recipient authored, and a feedback draft to the attempt its drafter is subject of', async () => {
+    const rows = await inTx<{ kind: string; author: string }>(
+      [
+        `INSERT INTO "Message" (id, "sessionId", "senderId", "forUserId", role, content, stage, timestamp)
+         VALUES (gen_random_uuid(), ${SESSION}, ${BOB}, ${ADA}::text, 'VALIDATION_FEEDBACK', 'feedback', 2, '2030-01-01 00:00:01')`,
+        `INSERT INTO "ValidationFeedbackDraft" (id, "sessionId", "userId", content, "readyToShare", "createdAt", "updatedAt")
+         VALUES (gen_random_uuid(), ${SESSION}, ${BOB}, 'draft feedback', false, '2030-01-01 00:00:01', '2030-01-01 00:00:01')`,
+      ],
+      `SELECT x.kind, u.email AS author FROM (
+         SELECT 'message' AS kind, source_attempt_id AS attempt FROM old_concept_message WHERE kind = 'VALIDATION_FEEDBACK'
+         UNION ALL SELECT 'draft', attempt_id FROM old_concept_draft WHERE kind = 'VALIDATION_FEEDBACK') x
+       JOIN old_concept_empathy_attempt a ON a.id = x.attempt
+       JOIN old_concept_participant p ON p.id = a.author_participant_id
+       JOIN old_concept_user u ON u.id = p.user_id ORDER BY 1`,
+    );
+    expect(rows).toEqual([
+      { kind: 'draft', author: 'ada@e2e.test' },
+      { kind: 'message', author: 'ada@e2e.test' },
+    ]);
+  });
+
+  it('fails a snapshot on a consent whose target does not resolve (plan §3 precheck)', async () => {
+    await q(`INSERT INTO "ConsentRecord" (id, "userId", "sessionId", "targetType", "targetId", "requestedByUserId", "createdAt")
+             VALUES ('00000000-0000-4000-8000-0000000000c1', ${ADA}, ${SESSION}, 'IDENTIFIED_NEED', gen_random_uuid()::text, ${ADA}, now())`);
+    try {
+      await expect(takeConceptSnapshot(fx.target, fx.database)).rejects.toThrow(/concept_check_consent_unresolved_arc/);
+    } finally {
+      await q(`DELETE FROM "ConsentRecord" WHERE id = '00000000-0000-4000-8000-0000000000c1'`);
+    }
+  });
+
+  it('fails a snapshot on an attempt the view cannot direct', async () => {
+    // No author: the subject lookup then sees both participants and the scalar
+    // subquery raises (step 11's "RAISE if N≠2"); with N=1 the check view
+    // catches the NULL subject instead. Either way the snapshot fails closed.
+    await q(`INSERT INTO "EmpathyAttempt" (id, "sessionId", "sourceUserId", content, "sharedAt", "revisionCount", status, "deliveryStatus", "statusVersion")
+             VALUES ('00000000-0000-4000-8000-0000000000a1', ${SESSION}, NULL, 'orphan', now(), 0, 'HELD', 'PENDING', 0)`);
+    try {
+      await expect(takeConceptSnapshot(fx.target, fx.database)).rejects.toThrow(
+        /more than one row returned by a subquery|concept_check_attempt_without_direction/,
+      );
+    } finally {
+      await q(`DELETE FROM "EmpathyAttempt" WHERE id = '00000000-0000-4000-8000-0000000000a1'`);
+    }
+    expect(await q(`SELECT * FROM concept_check_attempt_without_direction`)).toEqual([]);
+  });
+
   it('fails a snapshot when a gate key has no mapping (the step-7 precheck)', async () => {
     const before = await takeConceptSnapshot(fx.target, fx.database);
     expect(before.tables.old_concept_participant).toHaveLength(2);

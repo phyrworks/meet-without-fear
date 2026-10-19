@@ -496,13 +496,15 @@ export function buildConceptLabelMap(input: ConceptLabelInput): LabelMap {
     sortedBy(msgs, ['created_at']).forEach((m, i) => labels.set(String(m.id), `<message:${group}#${i + 1}>`));
   }
 
-  // empathy_attempt: direction and round.
+  // empathy_attempt: direction and round. Both ends must resolve: an attempt
+  // with no subject is the unrevealed-to-whom state the target forbids, and a
+  // placeholder label would fail open.
   for (const a of rows('empathy_attempt')) {
     const author = label(a.author_participant_id);
-    if (!author) continue;
     const subject = label(a.subject_participant_id);
+    if (!author || !subject) continue;
     const [who, session] = bare(author).split('@');
-    const about = subject ? bare(subject).split('@')[0] : '?';
+    const about = bare(subject).split('@')[0];
     labels.set(String(a.id), `<empathyAttempt:${who}→${about}@${session}#${str(a.round)}>`);
   }
 

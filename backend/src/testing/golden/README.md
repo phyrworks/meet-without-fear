@@ -32,9 +32,9 @@ GOLDEN_UPDATE=session-read npm run test --workspace=backend -- session-read.gold
 | `driver.ts` | supertest against the real `app`, with before/after snapshots. |
 | `normalize.ts` | Structural id labels; fresh/carried timestamp normalization. |
 | `trace.ts` | Parses Postgres's own statement log into a per-step SQL trace. |
-| `runner.ts` | Record/verify against `__golden__/*.json`; the allow-list comparator for `*.concept.json`. |
+| `runner.ts` | Record/verify against `__golden__/*.json` and `*.concept.json`. |
 | `concept-views/` | `old_concept_*` views (harness-owned SQL) projecting the schema into the target's vocabulary. |
-| `allow-lists/` | Per-scenario rules for what the re-shaped run may change in a normalised baseline. |
+| `allow-lists/` | Per-scenario rules for what the re-shaped run may change in a normalised baseline; `compare.ts` is the comparator. |
 
 Six decisions carry the design:
 
@@ -153,7 +153,10 @@ the first rename. Each scenario therefore records a second, **normalised** basel
 - **Comparison.** Never byte-for-byte: `compareWithAllowList` asserts *baseline ⊆ run, plus
   only the changes the scenario's allow-list names* (`allow-lists/<scenario>.ts`) — keys
   that must become absent, keys that may be added, enum values that may narrow, rows the
-  target may insert. On the current shape nothing changes, so every rule holds trivially;
+  target may insert. An inserted row is admitted once, and only by a rule that pins it
+  completely — structural key, audience, lineage, sender: a first version that matched on
+  `kind` alone accepted a statement copied into its author's own conversation (review
+  probe, TS-4 fix round 1). On the current shape nothing changes, so every rule holds trivially;
   any change outside the list fails. A rule marked `mustMatch` also fails if its path stops
   existing, so it cannot go vacuous.
 - **Recording** names the normalised file explicitly and can never rewrite a byte-level one:
