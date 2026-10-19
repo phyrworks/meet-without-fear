@@ -115,12 +115,22 @@ export interface SnapshotOptions {
   database: string;
   /** Tables in scope. Declaring scope keeps unrelated background writes out of the diff. */
   tables: string[];
+  /**
+   * Explicit row identity and ordering, per relation — required for views,
+   * which have no primary key to introspect (the `old_concept_*` views,
+   * `concept-views/index.ts`). `identity` becomes the diff key and must be
+   * unique: a duplicate fails the snapshot rather than letting two rows share a
+   * key and one of them vanish from every diff. Rows are ordered by
+   * `orderBy` then `identity`, so the order is total.
+   */
+  keys?: Record<string, { identity: string[]; orderBy: string[] }>;
 }
 
 export async function takeSnapshot(opts: SnapshotOptions): Promise<Snapshot> {
-  const { target, database, tables } = opts;
+  const { target, database, tables, keys = {} } = opts;
   const colMap = await columnsFor(target, database, tables);
   const pkMap = await primaryKeysFor(target, database, tables);
+  for (const [table, k] of Object.entries(keys)) pkMap.set(table, [...k.identity]);
 
   const missing = tables.filter(t => !colMap.has(t));
   if (missing.length) {
@@ -135,10 +145,28 @@ export async function takeSnapshot(opts: SnapshotOptions): Promise<Snapshot> {
         const cols = colMap.get(table)!;
         const pk = pkMap.get(table) ?? [];
         // Fall back to every column when a table has no PK — still deterministic.
-        const orderCols = pk.length ? pk : cols.map(x => x.column);
+        const declared = keys[table];
+        const orderCols = declared
+          ? [...declared.orderBy, ...declared.identity.filter(x => !declared.orderBy.includes(x))]
+          : pk.length
+            ? pk
+            : cols.map(x => x.column);
         const orderBy = orderCols.map(x => `"${x}"`).join(', ');
         const r = await c.query(`SELECT ${selectList(cols)} FROM "${table}" ORDER BY ${orderBy}`);
         out[table] = r.rows as SnapshotRow[];
+        if (declared) {
+          const seen = new Set<string>();
+          for (const row of out[table]) {
+            const k = rowKey(row, declared.identity);
+            if (seen.has(k)) {
+              throw new Error(
+                `Snapshot of ${table}: identity (${declared.identity.join(', ')}) is not unique — ` +
+                  `two rows share ${k.replace(/\u0000/g, ', ')}. A duplicate key would hide one row from every diff.`,
+              );
+            }
+            seen.add(k);
+          }
+        }
       }
       const primaryKeys: Record<string, string[]> = {};
       for (const table of tables) primaryKeys[table] = pkMap.get(table) ?? [];
