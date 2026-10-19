@@ -88,6 +88,31 @@ already committed in `backend/.env.example` and `e2e/.env.test` work unchanged.
 
 Day-to-day: `podman machine start && podman start mwf-postgres`.
 
+### Database roles (required before `prisma migrate`)
+
+The Phase 3 roles `mwf_migrator`, `mwf_app`, `mwf_job`, `mwf_ops` and `mwf_auth` are cluster-level,
+so they are created outside Prisma by `infra/aws/roles.sql`. The migration
+`phase3_app_schema_helpers` refuses to run without them (it makes `mwf_job` own the
+`SECURITY DEFINER` helpers in schema `app`). Apply the file once per container; it is idempotent,
+and the development passwords are these fixed literals:
+
+```bash
+podman exec -i mwf-postgres psql -U mwf_user -d meet_without_fear \
+  -v migrator_password=mwf_migrator_dev -v app_password=mwf_app_dev \
+  -v job_password=mwf_job_dev -v ops_password=mwf_ops_dev -v auth_password=mwf_auth_dev \
+  < infra/aws/roles.sql
+```
+
+Check the result with the D0 script — every `mwf_*` role except the local superuser `mwf_user`
+must show `rolsuper = f` and `rolbypassrls = f`, and the second result set must be empty:
+
+```bash
+podman exec -i mwf-postgres psql -U mwf_user -d meet_without_fear < backend/scripts/d0-check.sql
+```
+
+Fresh production clusters get the roles from `infra/aws/init-db.sh`; existing ones (production)
+are an owner-only operator step with `roles.sql`.
+
 ### The golden harness changes one server-wide setting
 
 The SQL-trace oracle in `backend/src/testing/golden` reads Postgres's own statement log, so it needs

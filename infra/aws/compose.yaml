@@ -26,6 +26,10 @@ services:
   api:
     <<: *common
     image: ${APP_IMAGE:?Set the selected immutable application image}
+    # application.env carries DATABASE_URL (migrations, and the fallback) and,
+    # when set, the per-role APP_/JOB_/OPS_/AUTH_DATABASE_URL; each role URL
+    # falls back to DATABASE_URL. Do not list them under `environment:` — an
+    # entry there overrides env_file even when it resolves to empty.
     env_file: [{path: /etc/mwf/application.env, format: raw}]
     environment:
       NODE_ENV: production

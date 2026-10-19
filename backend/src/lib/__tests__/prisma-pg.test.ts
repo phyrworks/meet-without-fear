@@ -1,4 +1,4 @@
-import { pgSettingsFromUrl, createPrismaPgAdapter } from '../prisma-pg';
+import { pgSettingsFromUrl, createPrismaPgAdapter, databaseUrlFromEnv } from '../prisma-pg';
 
 describe('pgSettingsFromUrl', () => {
   it('maps connection_limit to pool max and strips it (production URL shape)', () => {
@@ -48,5 +48,21 @@ describe('createPrismaPgAdapter', () => {
     } finally {
       if (saved !== undefined) process.env.DATABASE_URL = saved;
     }
+  });
+});
+
+describe('databaseUrlFromEnv', () => {
+  const saved = { ...process.env };
+  afterEach(() => {
+    process.env = { ...saved };
+  });
+
+  it('prefers the role URL and falls back to DATABASE_URL; the default role is app', () => {
+    process.env.DATABASE_URL = 'postgresql://root@h/db';
+    process.env.APP_DATABASE_URL = 'postgresql://mwf_app@h/db';
+    delete process.env.JOB_DATABASE_URL;
+    expect(databaseUrlFromEnv('app')).toBe('postgresql://mwf_app@h/db');
+    expect(databaseUrlFromEnv('job')).toBe('postgresql://root@h/db');
+    expect(databaseUrlFromEnv()).toBe('postgresql://mwf_app@h/db');
   });
 });

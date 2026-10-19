@@ -209,6 +209,9 @@ export async function createHarness(opts: {
   // statements against this database. Set unconditionally: it costs nothing and
   // it also makes `pg_stat_activity` legible while debugging a stuck run.
   process.env.DATABASE_URL = `${fixture.url}?application_name=${APP_UNDER_TEST}`;
+  // lib/prisma prefers APP_DATABASE_URL over DATABASE_URL (database-urls.ts);
+  // one left in a developer's environment would point the app elsewhere.
+  delete process.env.APP_DATABASE_URL;
   process.env.E2E_AUTH_BYPASS = 'true';
   process.env.MOCK_LLM = 'true';
   process.env.E2E_FIXTURE_ID = process.env.E2E_FIXTURE_ID ?? 'user-a-full-journey';
