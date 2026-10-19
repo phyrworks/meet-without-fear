@@ -22,7 +22,7 @@ import {
   ScenarioMessage,
   ScenarioMessageRole,
   Stamp,
-  Stage4Content,
+  RepairContent,
 } from './scenario-model';
 import { TargetStage } from './target-stage';
 
@@ -321,7 +321,15 @@ const BUILDERS: Record<TargetStage, Build> = {
 
   [TargetStage.NEED_MAPPING_COMPLETE]: () => needMappingComplete(),
 
-  // All five stages complete under the legacy ranking flow; the agreement is confirmed now.
+  // The whole journey complete under the legacy ranking flow; the agreement is confirmed now.
+  //
+  // NOT target-reachable: `closed` is reached without `choices_shared` and with
+  // no session closure. `closed` stands in for the legacy ranking-flow
+  // completion (rankings + agreement) that today's rows record as a COMPLETED
+  // final stage; the migration plan's step 7 would decode that row as
+  // `choices_shared`, and the target journey reaches `closed` only after
+  // `choices_shared` and a `session_closure`. What this scenario becomes in the
+  // target shape is a TS-5 decision (see current-shape.ts module comment).
   [TargetStage.STRATEGIC_REPAIR_COMPLETE]: () => {
     const journey: Partial<Record<MilestoneKey, Stamp>> = {
       compact_signed: sec(-350),
@@ -394,10 +402,10 @@ const BUILDERS: Record<TargetStage, Build> = {
     };
   },
 
-  [TargetStage.STAGE4_REDESIGN_INVENTORY]: () => stage4Redesign({}),
+  [TargetStage.STAGE4_REDESIGN_INVENTORY]: () => repairRedesign({}),
 
   [TargetStage.STAGE4_REDESIGN_SHARED_SELECTIONS]: () =>
-    stage4Redesign({
+    repairRedesign({
       [A]: [
         { proposal: 'checkin', decision: 'WILLING' },
         { proposal: 'pause', decision: 'NOT_WILLING' },
@@ -410,7 +418,7 @@ const BUILDERS: Record<TargetStage, Build> = {
     }),
 
   [TargetStage.STAGE4_REDESIGN_NO_OVERLAP_SELECTIONS]: () =>
-    stage4Redesign({
+    repairRedesign({
       [A]: [
         { proposal: 'checkin', decision: 'WILLING' },
         { proposal: 'pause', decision: 'NOT_WILLING' },
@@ -423,7 +431,7 @@ const BUILDERS: Record<TargetStage, Build> = {
     }),
 
   [TargetStage.STAGE4_REDESIGN_PARTNER_INACTIVE]: () =>
-    stage4Redesign({ [A]: [{ proposal: 'checkin', decision: 'WILLING' }] }),
+    repairRedesign({ [A]: [{ proposal: 'checkin', decision: 'WILLING' }] }),
 };
 
 const need = (n: string, category: 'RECOGNITION' | 'FAIRNESS' | 'CONNECTION') => ({
@@ -475,9 +483,9 @@ function needMappingComplete(): ReturnType<Build> {
   };
 }
 
-const STAGE4_REASON = 'E2E redesigned Stage 4 fixture';
+const REPAIR_REVISION_REASON = 'E2E redesigned Stage 4 fixture';
 
-const STAGE4_CONTENT: Stage4Content = {
+const REPAIR_CONTENT: RepairContent = {
   proposals: [
     {
       key: 'checkin',
@@ -527,21 +535,21 @@ const STAGE4_CONTENT: Stage4Content = {
       actor: A,
       action: 'CREATED',
       after: { description: 'Try a Sunday evening planning check-in for the next two weeks' },
-      reason: STAGE4_REASON,
+      reason: REPAIR_REVISION_REASON,
     },
     {
       proposal: 'pause',
       actor: B,
       action: 'CREATED',
       after: { description: 'Use a pause phrase when either person starts to shut down' },
-      reason: STAGE4_REASON,
+      reason: REPAIR_REVISION_REASON,
     },
     {
       proposal: 'individual',
       actor: A,
       action: 'CREATED',
       after: { description: 'I will name when I am overloaded before I disappear' },
-      reason: STAGE4_REASON,
+      reason: REPAIR_REVISION_REASON,
     },
     {
       proposal: 'spreadsheet',
@@ -549,7 +557,7 @@ const STAGE4_CONTENT: Stage4Content = {
       action: 'REMOVED',
       before: { status: 'ACTIVE' },
       after: { status: 'REMOVED' },
-      reason: STAGE4_REASON,
+      reason: REPAIR_REVISION_REASON,
     },
   ],
   coverage: [
@@ -581,7 +589,7 @@ const STAGE4_CONTENT: Stage4Content = {
  * Redesigned Stage 4 on top of NEED_MAPPING_COMPLETE. Its content is stamped on
  * the `late` clock (read after the Stage 3 data), as are the participants' choices.
  */
-function stage4Redesign(choices: Record<string, ParticipantScenario['choices']>): ReturnType<Build> {
+function repairRedesign(choices: Record<string, ParticipantScenario['choices']>): ReturnType<Build> {
   const s = needMappingComplete();
   for (const p of s.participants) {
     const mine = choices[p.key];
@@ -590,7 +598,7 @@ function stage4Redesign(choices: Record<string, ParticipantScenario['choices']>)
       p.milestones.choices_shared = at(0, 'late');
     }
   }
-  return { ...s, stage4: STAGE4_CONTENT };
+  return { ...s, repair: REPAIR_CONTENT };
 }
 
 /**

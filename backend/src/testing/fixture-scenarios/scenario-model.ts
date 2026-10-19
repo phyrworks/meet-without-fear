@@ -58,7 +58,7 @@ export type MilestoneKey = (typeof MILESTONE_KEYS)[number];
  * anchors are distinct on purpose: today's factory read the clock separately
  * when it confirmed the topic (`session`), minted the invitation
  * (`invitation`), started the scenario's own data (`scenario`) and, for the
- * redesigned Stage 4, after the Stage 3 data (`late`). Collapsing them onto one
+ * redesigned repair flow, after the needs data (`late`). Collapsing them onto one
  * instant would merge timestamps that are distinct today and move the
  * goldens' timestamp ranks (golden README, "Two timestamps a millisecond apart
  * have no reliable order"). A writer reads each referenced clock once, in this
@@ -94,6 +94,11 @@ export type ParticipantKey = string;
  */
 export type JourneyPhase = 'onboarding' | 'witness' | 'perspective' | 'needs' | 'repair';
 
+/**
+ * Today's `Message.role` kinds, kept as one union because the current shape stores
+ * them in one column. The target splits this into `role` (USER/AI/SYSTEM) plus a
+ * `kind` for the event messages; a target-shape writer maps it.
+ */
 export type ScenarioMessageRole = 'USER' | 'AI' | 'EMPATHY_STATEMENT' | 'EMPATHY_VALIDATION_PROMPT' | 'SHARED_CONTEXT';
 
 /** A message in one participant's private conversation. */
@@ -144,13 +149,13 @@ export interface NeedContent {
   confirmed: boolean;
 }
 
-/** A participant's private choice on a redesigned-Stage-4 proposal (at `choices_shared`). */
+/** A participant's private choice on a repair proposal (redesigned flow) (at `choices_shared`). */
 export interface ProposalChoice {
   proposal: string;
   decision: 'WILLING' | 'NOT_WILLING';
 }
 
-/** Legacy Stage 4 ranking (`StrategyRanking`, dropped in the target). */
+/** Legacy repair-flow ranking (`StrategyRanking`, dropped in the target). */
 export interface LegacyRanking {
   proposals: string[];
   submittedAt: Stamp;
@@ -210,7 +215,7 @@ export interface ReconciliationContent {
   messages?: DeliveredMessage[];
 }
 
-/** Legacy Stage 4 strategy (`StrategyProposal` without kind/status). */
+/** Legacy repair-flow strategy (`StrategyProposal` without kind/status). */
 export interface LegacyStrategy {
   key: string;
   by: ParticipantKey;
@@ -230,7 +235,7 @@ export interface LegacyAgreement {
   followUpAt: Stamp;
 }
 
-export interface Stage4Proposal {
+export interface RepairProposal {
   key: string;
   by: ParticipantKey;
   description: string;
@@ -242,7 +247,7 @@ export interface Stage4Proposal {
   removed?: { by: ParticipantKey; at: Stamp; reason: string };
 }
 
-export interface Stage4Revision {
+export interface ProposalRevision {
   proposal: string;
   actor: ParticipantKey;
   action: 'CREATED' | 'REMOVED';
@@ -251,7 +256,7 @@ export interface Stage4Revision {
   reason: string;
 }
 
-export interface Stage4Coverage {
+export interface NeedCoverage {
   needLabel: string;
   source: ParticipantKey;
   coverageStatus: 'COVERED' | 'PARTIAL' | 'OPEN';
@@ -259,10 +264,10 @@ export interface Stage4Coverage {
   note: string;
 }
 
-export interface Stage4Content {
-  proposals: Stage4Proposal[];
-  revisions: Stage4Revision[];
-  coverage: Stage4Coverage[];
+export interface RepairContent {
+  proposals: RepairProposal[];
+  revisions: ProposalRevision[];
+  coverage: NeedCoverage[];
 }
 
 export interface Scenario {
@@ -277,7 +282,7 @@ export interface Scenario {
   };
   reconciliation?: ReconciliationContent;
   legacyStrategies?: { strategies: LegacyStrategy[]; agreement?: LegacyAgreement };
-  stage4?: Stage4Content;
+  repair?: RepairContent;
   /** Encoding quirks of the pre-rebuild factory; see the module comment. */
   currentShape?: CurrentShapeQuirks;
 }

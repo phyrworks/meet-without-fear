@@ -20,6 +20,18 @@
  * `compactSignedAt` rather than `signedAt`, and never wrote `invitationSent` or
  * `needsShared`. Acceptance binds the writer to the fixtures' rows.
  *
+ * Stage 4 diverges from step 7 in substance, not just in key names. Step 7
+ * decodes a COMPLETED stage-4 `StageProgress` row as `choices_shared`, and in
+ * the target journey `closed` follows `choices_shared` plus a `session_closure`
+ * row. Here `closed` is the stage-4 terminal and `choices_shared` an
+ * in-progress gate: in today's fixtures stage 4 is completed only by
+ * STRATEGIC_REPAIR_COMPLETE, under the legacy ranking flow
+ * (`strategiesRanked`/`agreementCreated`, the `rankingSubmitted` +
+ * `agreementCreated` completion gate of `sessions.ts`), whose rows carry no
+ * `selectionSubmitted`. `closed` stands in for that legacy completion. The
+ * resulting milestone set (`closed` without `choices_shared`, no closure) is
+ * not one the target journey produces; resolving it is a TS-5 decision.
+ *
  * The pure functions (everything above `writeCurrentShape`) have unit tests in
  * `__tests__/current-shape.test.ts`.
  */
@@ -74,6 +86,9 @@ export const GATE_ENCODING: Record<MilestoneKey, GateEncoding> = {
   // Recorded after the choices it attests to (an update of the stage-4 row).
   choices_shared: { kind: 'gate', stage: 4, key: 'selectionSubmitted', late: true },
   repair_walkthrough_started: { kind: 'unsupported' },
+  // NOT step 7: step 7 decodes stage-4 COMPLETED as `choices_shared`. Here
+  // `closed` stands in for the legacy ranking-flow completion
+  // (rankingSubmitted/agreementCreated) — see the module comment.
   closed: { kind: 'completes', stage: 4 },
   paused: { kind: 'unsupported' },
 };
@@ -152,7 +167,20 @@ export function stageProgressPlan(p: ParticipantScenario, s: Scenario): StagePro
     });
   }
 
-  const lateGates: StageProgressPlan['lateGates'] = [];
+  // Keys the step-7 table marks derived/dropped: carried as facts, re-derived
+  // here. Done before the gate loop so a late gate update (which replaces
+  // gatesSatisfied wholesale) carries them too.
+  const stage4 = rows.find(r => r.stage === LAST_STAGE);
+  if (stage4) {
+    if (p.ranking) stage4.gates.push(['strategiesRanked', true]);
+    const agreement = s.legacyStrategies?.agreement;
+    if (agreement) {
+      stage4.gates.push(['agreementCreated', true]);
+      if (agreement.status === 'AGREED') stage4.gates.push(['agreementConfirmed', true]);
+    }
+  }
+
+  const late: Array<{ row: StageRow; entries: GateEntry[] }> = [];
   for (const key of Object.keys(GATE_ENCODING) as MilestoneKey[]) {
     const enc = GATE_ENCODING[key];
     const stamp = reached[key];
@@ -166,22 +194,14 @@ export function stageProgressPlan(p: ParticipantScenario, s: Scenario): StagePro
     const entries: GateEntry[] = [[enc.key, true]];
     if (!untimed.has(key)) entries.push([`${enc.key}At`, stamp]);
     if (enc.late) {
-      lateGates.push({ stage: enc.stage, gates: [...row.gates, ...entries] });
+      late.push({ row, entries });
     } else {
       row.gates.push(...entries);
     }
   }
 
-  // Keys the step-7 table marks derived/dropped: carried as facts, re-derived here.
-  const stage4 = rows.find(r => r.stage === LAST_STAGE);
-  if (stage4) {
-    if (p.ranking) stage4.gates.push(['strategiesRanked', true]);
-    const agreement = s.legacyStrategies?.agreement;
-    if (agreement) {
-      stage4.gates.push(['agreementCreated', true]);
-      if (agreement.status === 'AGREED') stage4.gates.push(['agreementConfirmed', true]);
-    }
-  }
+  // A late update replaces the row's whole gate set: the row's own gates first.
+  const lateGates = late.map(({ row, entries }) => ({ stage: row.stage, gates: [...row.gates, ...entries] }));
 
   return { rows, lateGates };
 }
@@ -601,8 +621,8 @@ export async function writeCurrentShape(tx: Tx, scenario: Scenario, users: UserR
 
   // --- Redesigned Stage 4: proposals, revisions, coverage, choices --------------
   readClock('late');
-  if (scenario.stage4) {
-    const { proposals, revisions, coverage } = scenario.stage4;
+  if (scenario.repair) {
+    const { proposals, revisions, coverage } = scenario.repair;
     const proposalIds = new Map<string, string>();
     for (const pr of proposals) {
       const row = await tx.strategyProposal.create({

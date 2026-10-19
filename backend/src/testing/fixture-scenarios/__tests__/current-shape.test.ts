@@ -68,10 +68,9 @@ describe('stageProgressPlan — milestone set → StageProgress rows', () => {
   });
 
   it('omits the …At companion for milestones listed as untimed gates', () => {
-    const s = base(
-      [{ key: 'a', journey: { startedAt: at(-10) }, milestones: { compact_signed: at(-5) } }],
-      { currentShape: { untimedGates: ['compact_signed'] } }
-    );
+    const s = base([{ key: 'a', journey: { startedAt: at(-10) }, milestones: { compact_signed: at(-5) } }], {
+      currentShape: { untimedGates: ['compact_signed'] },
+    });
     expect(stageProgressPlan(s.participants[0], s).rows[0].gates).toEqual([['compactSigned', true]]);
   });
 
@@ -91,7 +90,7 @@ describe('stageProgressPlan — milestone set → StageProgress rows', () => {
       },
     ]);
     const rows = stageProgressPlan(s.participants[0], s).rows;
-    expect(rows.map((r) => [r.stage, r.status])).toEqual([
+    expect(rows.map(r => [r.stage, r.status])).toEqual([
       [0, 'COMPLETED'],
       [1, 'COMPLETED'],
       [2, 'COMPLETED'],
@@ -179,11 +178,65 @@ describe('stageProgressPlan — milestone set → StageProgress rows', () => {
       choices: [{ proposal: 'p1', decision: 'WILLING' }],
     };
     const plan = stageProgressPlan(p, base([p]));
-    expect(plan.rows[4]).toEqual({ stage: 4, status: 'IN_PROGRESS', startedAt: at(-1), completedAt: undefined, gates: [] });
+    expect(plan.rows[4]).toEqual({
+      stage: 4,
+      status: 'IN_PROGRESS',
+      startedAt: at(-1),
+      completedAt: undefined,
+      gates: [],
+    });
     expect(plan.lateGates).toEqual([
       {
         stage: 4,
         gates: [
+          ['selectionSubmitted', true],
+          ['selectionSubmittedAt', at(0, 'late')],
+        ],
+      },
+    ]);
+  });
+
+  it('a late choices_shared update keeps the derived stage-4 keys (it replaces gatesSatisfied wholesale)', () => {
+    const p: ParticipantScenario = {
+      key: 'a',
+      journey: { startedAt: at(-5) },
+      milestones: {
+        compact_signed: at(-4),
+        feel_heard: at(-3),
+        empathy_validated: at(-2),
+        needs_shared: at(-1),
+        choices_shared: at(0, 'late'),
+      },
+      choices: [{ proposal: 'p1', decision: 'WILLING' }],
+      ranking: { proposals: ['s1'], submittedAt: at(-1) },
+    };
+    const s = base([p], {
+      legacyStrategies: {
+        strategies: [{ key: 's1', by: 'a', description: 'd', needsAddressed: [], duration: 'ongoing', at: at(-2) }],
+        agreement: {
+          proposal: 's1',
+          description: 'd',
+          type: 'COMMITMENT',
+          status: 'AGREED',
+          agreedBy: ['a'],
+          agreedAt: at(0),
+          followUpAt: at(14 * DAY),
+        },
+      },
+    });
+    const plan = stageProgressPlan(p, s);
+    expect(plan.rows[4].gates).toEqual([
+      ['strategiesRanked', true],
+      ['agreementCreated', true],
+      ['agreementConfirmed', true],
+    ]);
+    expect(plan.lateGates).toEqual([
+      {
+        stage: 4,
+        gates: [
+          ['strategiesRanked', true],
+          ['agreementCreated', true],
+          ['agreementConfirmed', true],
           ['selectionSubmitted', true],
           ['selectionSubmittedAt', at(0, 'late')],
         ],
@@ -218,8 +271,8 @@ describe('gatesToJson', () => {
           ['compactSigned', true],
           ['compactSignedAt', at(0)],
         ],
-        resolve
-      )
+        resolve,
+      ),
     ).toEqual({ compactSigned: true, compactSignedAt: '2026-01-01T00:00:00.000Z' });
     expect(gatesToJson([], resolve)).toEqual({});
   });
@@ -235,8 +288,8 @@ describe('session and invitation encoding', () => {
       sessionStatus(
         base([inviter({ invitation_sent: at(0, 'invitation') })], {
           invitation: { acceptedAt: at(0, 'invitation'), expiresAt: at(7 * DAY, 'invitation') },
-        })
-      )
+        }),
+      ),
     ).toBe('ACTIVE');
   });
 
@@ -250,7 +303,10 @@ describe('session and invitation encoding', () => {
       messageConfirmed: true,
       messageConfirmedAt: at(0, 'invitation'),
     });
-    expect(invitationFields(base([inviter()]))).toMatchObject({ messageConfirmed: false, messageConfirmedAt: undefined });
+    expect(invitationFields(base([inviter()]))).toMatchObject({
+      messageConfirmed: false,
+      messageConfirmedAt: undefined,
+    });
   });
 });
 
@@ -286,7 +342,7 @@ describe('clocks', () => {
   });
 
   it('maps journey phases to today’s Message.stage integers', () => {
-    expect(['onboarding', 'witness', 'perspective', 'needs', 'repair'].map((p) => phaseToStage(p as never))).toEqual([
+    expect(['onboarding', 'witness', 'perspective', 'needs', 'repair'].map(p => phaseToStage(p as never))).toEqual([
       0, 1, 2, 3, 4,
     ]);
   });
@@ -309,7 +365,7 @@ describe('gate encoding table', () => {
         'needs_validated',
         'paused',
         'repair_walkthrough_started',
-      ].sort()
+      ].sort(),
     );
   });
 });
@@ -317,7 +373,7 @@ describe('gate encoding table', () => {
 describe('scenarios', () => {
   const names = { a: 'Ada Lovelace', b: 'Bob Ross' };
 
-  it.each(Object.values(TargetStage))('%s translates to current-shape rows for every participant', (stage) => {
+  it.each(Object.values(TargetStage))('%s translates to current-shape rows for every participant', stage => {
     for (const withB of [true, false]) {
       const s = scenarioFor(stage, { a: names.a, b: withB ? names.b : undefined });
       expect(s.name).toBe(stage);
@@ -342,10 +398,10 @@ describe('scenarios', () => {
     const s = scenarioFor(TargetStage.FEEL_HEARD_B, names);
     const [a, b] = s.participants;
     expect(Object.keys(a.milestones).sort()).toEqual(
-      ['compact_signed', 'empathy_submitted', 'feel_heard', 'invitation_sent'].sort()
+      ['compact_signed', 'empathy_submitted', 'feel_heard', 'invitation_sent'].sort(),
     );
     expect(Object.keys(b.milestones).sort()).toEqual(['compact_signed', 'feel_heard'].sort());
     expect(sessionStatus(s)).toBe('ACTIVE');
-    expect(stageProgressPlan(b, s).rows.map((r) => r.status)).toEqual(['COMPLETED', 'COMPLETED', 'IN_PROGRESS']);
+    expect(stageProgressPlan(b, s).rows.map(r => r.status)).toEqual(['COMPLETED', 'COMPLETED', 'IN_PROGRESS']);
   });
 });
