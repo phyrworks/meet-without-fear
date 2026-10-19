@@ -1,0 +1,1356 @@
+{
+  "scenario": "empathy-reveal",
+  "stage": "FEEL_HEARD_B",
+  "initial": {
+    "agreement": {},
+    "agreement_party": {},
+    "consent": {
+      "<consent:ada@main/EMPATHY_ATTEMPT/empathyAttempt:ada→bob@main#1>": {
+        "created_at": "<ts:30>",
+        "decided_at": "<ts:14>",
+        "decision": "GRANTED",
+        "empathy_attempt_id": "<empathyAttempt:ada→bob@main#1>",
+        "id": "<consent:ada@main/EMPATHY_ATTEMPT/empathyAttempt:ada→bob@main#1>",
+        "need_id": null,
+        "participant_id": "<participant:ada@main>",
+        "proposal_id": null,
+        "requested_by_participant_id": "<participant:ada@main>",
+        "review_id": null,
+        "revoked_at": null,
+        "share_offer_id": null,
+        "target_kind": "EMPATHY_ATTEMPT"
+      }
+    },
+    "context_share_offer": {},
+    "conversation": {
+      "<conversation:ada@main/MAIN>": {
+        "anchor_kind": null,
+        "anchor_proposal_id": null,
+        "id": "<conversation:ada@main/MAIN>",
+        "kind": "MAIN",
+        "participant_id": "<participant:ada@main>",
+        "resolved_at": null,
+        "status": "ACTIVE"
+      },
+      "<conversation:bob@main/MAIN>": {
+        "anchor_kind": null,
+        "anchor_proposal_id": null,
+        "id": "<conversation:bob@main/MAIN>",
+        "kind": "MAIN",
+        "participant_id": "<participant:bob@main>",
+        "resolved_at": null,
+        "status": "ACTIVE"
+      }
+    },
+    "draft": {
+      "<draft:ada@main/EMPATHY>": {
+        "about_participant_id": "<participant:bob@main>",
+        "attempt_id": null,
+        "content": "I understand you might be feeling stressed from work. I want us to support each other better.",
+        "created_at": "<ts:29>",
+        "id": "<draft:ada@main/EMPATHY>",
+        "kind": "EMPATHY",
+        "participant_id": "<participant:ada@main>",
+        "ready_to_share": true,
+        "share_offer_id": null,
+        "updated_at": "<ts:29>",
+        "version": 1
+      }
+    },
+    "empathy_attempt": {
+      "<empathyAttempt:ada→bob@main#1>": {
+        "author_participant_id": "<participant:ada@main>",
+        "content": "I understand you might be feeling stressed from work. I want us to support each other better.",
+        "delivered_at": null,
+        "delivery_status": "PENDING",
+        "id": "<empathyAttempt:ada→bob@main#1>",
+        "revealed_at": null,
+        "round": 1,
+        "seen_at": null,
+        "status": "HELD",
+        "status_version": 0,
+        "subject_participant_id": "<participant:bob@main>",
+        "submitted_at": "<ts:14>",
+        "supersedes_attempt_id": null
+      }
+    },
+    "empathy_review": {},
+    "message": {
+      "<message:ada@main#10>": {
+        "content": "I'm glad. Now let's build some empathy for your partner's perspective.",
+        "content_hash": "2d2ba9f01a25cc167953cca7c5cb7533b5ef4b9819cdc0a4ee4298d34aecc720",
+        "conversation_id": "<conversation:ada@main/MAIN>",
+        "created_at": "<ts:10>",
+        "id": "<message:ada@main#10>",
+        "kind": "CHAT",
+        "refining_need_id": null,
+        "role": "AI",
+        "sender_participant_id": null,
+        "source_attempt_id": null
+      },
+      "<message:ada@main#11>": {
+        "content": "I think they're stressed from work too.",
+        "content_hash": "b19cadf9c4e0e827c4fdded57d1de577cfe80a6d55849f48853b43b6ad9e7c01",
+        "conversation_id": "<conversation:ada@main/MAIN>",
+        "created_at": "<ts:11>",
+        "id": "<message:ada@main#11>",
+        "kind": "CHAT",
+        "refining_need_id": null,
+        "role": "USER",
+        "sender_participant_id": "<participant:ada@main>",
+        "source_attempt_id": null
+      },
+      "<message:ada@main#12>": {
+        "content": "That's a thoughtful observation. Here's an empathy statement you could share...",
+        "content_hash": "8bf9b8f08465095b845ae0c5db714f26d29ad6656298cdb60b39b7f765ea94a3",
+        "conversation_id": "<conversation:ada@main/MAIN>",
+        "created_at": "<ts:12>",
+        "id": "<message:ada@main#12>",
+        "kind": "CHAT",
+        "refining_need_id": null,
+        "role": "AI",
+        "sender_participant_id": null,
+        "source_attempt_id": null
+      },
+      "<message:ada@main#1>": {
+        "content": "Hi, I'm having issues with my partner.",
+        "content_hash": "c2583ea77715a9728ceb23a629360518ceb88e42b7896478df7c6467b3492d93",
+        "conversation_id": "<conversation:ada@main/MAIN>",
+        "created_at": "<ts:1>",
+        "id": "<message:ada@main#1>",
+        "kind": "CHAT",
+        "refining_need_id": null,
+        "role": "USER",
+        "sender_participant_id": "<participant:ada@main>",
+        "source_attempt_id": null
+      },
+      "<message:ada@main#2>": {
+        "content": "I'm glad you reached out. Tell me more about what's happening.",
+        "content_hash": "ab1e7653e34ae3e1c98dbe54ef23095167b7ecb913cd602ceea723a176e45d62",
+        "conversation_id": "<conversation:ada@main/MAIN>",
+        "created_at": "<ts:2>",
+        "id": "<message:ada@main#2>",
+        "kind": "CHAT",
+        "refining_need_id": null,
+        "role": "AI",
+        "sender_participant_id": null,
+        "source_attempt_id": null
+      },
+      "<message:ada@main#3>": {
+        "content": "We argue about household chores constantly.",
+        "content_hash": "f88806d71a0080462eaa9f35ff80a8794c16e9093f2ec0667ee9bea5c647274f",
+        "conversation_id": "<conversation:ada@main/MAIN>",
+        "created_at": "<ts:3>",
+        "id": "<message:ada@main#3>",
+        "kind": "CHAT",
+        "refining_need_id": null,
+        "role": "USER",
+        "sender_participant_id": "<participant:ada@main>",
+        "source_attempt_id": null
+      },
+      "<message:ada@main#4>": {
+        "content": "That sounds frustrating. Would you like to invite your partner?",
+        "content_hash": "6aac9315f8fc7f4649bb48456ac17778b1b968b179990b70b8bb5113b60eda17",
+        "conversation_id": "<conversation:ada@main/MAIN>",
+        "created_at": "<ts:4>",
+        "id": "<message:ada@main#4>",
+        "kind": "CHAT",
+        "refining_need_id": null,
+        "role": "AI",
+        "sender_participant_id": null,
+        "source_attempt_id": null
+      },
+      "<message:ada@main#5>": {
+        "content": "Yes, I sent the invitation.",
+        "content_hash": "8b5f1f1770f6051fbdea485234c21e8b79a94d09c354aefb3f3373678f6b36d5",
+        "conversation_id": "<conversation:ada@main/MAIN>",
+        "created_at": "<ts:5>",
+        "id": "<message:ada@main#5>",
+        "kind": "CHAT",
+        "refining_need_id": null,
+        "role": "USER",
+        "sender_participant_id": "<participant:ada@main>",
+        "source_attempt_id": null
+      },
+      "<message:ada@main#6>": {
+        "content": "Great. Let's continue exploring your perspective while we wait.",
+        "content_hash": "d80b6b56e31303bc11c83773f3ed4800a772b91a9e3fd38f0a8db901cb88a8fa",
+        "conversation_id": "<conversation:ada@main/MAIN>",
+        "created_at": "<ts:6>",
+        "id": "<message:ada@main#6>",
+        "kind": "CHAT",
+        "refining_need_id": null,
+        "role": "AI",
+        "sender_participant_id": null,
+        "source_attempt_id": null
+      },
+      "<message:ada@main#7>": {
+        "content": "I feel like I do most of the work and they don't notice.",
+        "content_hash": "b07b70a89b858e52ec6b17ff6ae02332d8786c48e133cd6601ba546cb8ecd297",
+        "conversation_id": "<conversation:ada@main/MAIN>",
+        "created_at": "<ts:7>",
+        "id": "<message:ada@main#7>",
+        "kind": "CHAT",
+        "refining_need_id": null,
+        "role": "USER",
+        "sender_participant_id": "<participant:ada@main>",
+        "source_attempt_id": null
+      },
+      "<message:ada@main#8>": {
+        "content": "I hear you. Do you feel like I understand what you've been experiencing?",
+        "content_hash": "f6b8797d1050971693ec9c343edb3f34fd0c2f6267ee974aed829c2b5f1fe3fc",
+        "conversation_id": "<conversation:ada@main/MAIN>",
+        "created_at": "<ts:8>",
+        "id": "<message:ada@main#8>",
+        "kind": "CHAT",
+        "refining_need_id": null,
+        "role": "AI",
+        "sender_participant_id": null,
+        "source_attempt_id": null
+      },
+      "<message:ada@main#9>": {
+        "content": "Yes, I feel heard now.",
+        "content_hash": "a5efa798023219f1b16eebcf4ce2983c42103333c3f2d96990047aad82dd7dda",
+        "conversation_id": "<conversation:ada@main/MAIN>",
+        "created_at": "<ts:9>",
+        "id": "<message:ada@main#9>",
+        "kind": "CHAT",
+        "refining_need_id": null,
+        "role": "USER",
+        "sender_participant_id": "<participant:ada@main>",
+        "source_attempt_id": null
+      },
+      "<message:ada@main/EMPATHY_STATEMENT:ada#1>": {
+        "content": "I understand you might be feeling stressed from work. I want us to support each other better.",
+        "content_hash": "01995d17ed918387b0011c7fff38d58f9653cda5bdaca9a252beab1ff4a30cf4",
+        "conversation_id": "<conversation:ada@main/MAIN>",
+        "created_at": "<ts:14>",
+        "id": "<message:ada@main/EMPATHY_STATEMENT:ada#1>",
+        "kind": "EMPATHY_STATEMENT",
+        "refining_need_id": null,
+        "role": "USER",
+        "sender_participant_id": "<participant:ada@main>",
+        "source_attempt_id": "<empathyAttempt:ada→bob@main#1>"
+      },
+      "<message:bob@main#10>": {
+        "content": "Yes, I feel heard.",
+        "content_hash": "be08556ef2be793cd9c990718f154d8383556538137089c5661c075c8073c437",
+        "conversation_id": "<conversation:bob@main/MAIN>",
+        "created_at": "<ts:23>",
+        "id": "<message:bob@main#10>",
+        "kind": "CHAT",
+        "refining_need_id": null,
+        "role": "USER",
+        "sender_participant_id": "<participant:bob@main>",
+        "source_attempt_id": null
+      },
+      "<message:bob@main#1>": {
+        "content": "Welcome! Ada Lovelace invited you to work through some challenges together.",
+        "content_hash": "52a603a9ac23363be9dafc55a91969dd0eeb48259f67ccb0c1dd55e0d99ce856",
+        "conversation_id": "<conversation:bob@main/MAIN>",
+        "created_at": "<ts:14>",
+        "id": "<message:bob@main#1>",
+        "kind": "CHAT",
+        "refining_need_id": null,
+        "role": "AI",
+        "sender_participant_id": null,
+        "source_attempt_id": null
+      },
+      "<message:bob@main#2>": {
+        "content": "Things have been tense lately between us.",
+        "content_hash": "d0e936ac8babf6f7e92dcbb52d300cef1fc02079e7468bd28f76be3ab8ec3fb6",
+        "conversation_id": "<conversation:bob@main/MAIN>",
+        "created_at": "<ts:15>",
+        "id": "<message:bob@main#2>",
+        "kind": "CHAT",
+        "refining_need_id": null,
+        "role": "USER",
+        "sender_participant_id": "<participant:bob@main>",
+        "source_attempt_id": null
+      },
+      "<message:bob@main#3>": {
+        "content": "I hear you. Tell me more about what's been happening.",
+        "content_hash": "5b25dc3ca179ffcd5d8a3cd9e9e1420f55a48c29b59fb341b9a635a8548e711d",
+        "conversation_id": "<conversation:bob@main/MAIN>",
+        "created_at": "<ts:16>",
+        "id": "<message:bob@main#3>",
+        "kind": "CHAT",
+        "refining_need_id": null,
+        "role": "AI",
+        "sender_participant_id": null,
+        "source_attempt_id": null
+      },
+      "<message:bob@main#4>": {
+        "content": "I feel like they don't see how much I'm dealing with at work.",
+        "content_hash": "7614eba9a318757de566b0e3fa59ddfbbf5ab1e0341f74fbc5d596c00c6a18c7",
+        "conversation_id": "<conversation:bob@main/MAIN>",
+        "created_at": "<ts:17>",
+        "id": "<message:bob@main#4>",
+        "kind": "CHAT",
+        "refining_need_id": null,
+        "role": "USER",
+        "sender_participant_id": "<participant:bob@main>",
+        "source_attempt_id": null
+      },
+      "<message:bob@main#5>": {
+        "content": "That sounds really hard. Can you tell me more?",
+        "content_hash": "7dcfa44de7b3290ba953cf2f9ee409039675d9550bea2cf9cf658acb8ca23869",
+        "conversation_id": "<conversation:bob@main/MAIN>",
+        "created_at": "<ts:18>",
+        "id": "<message:bob@main#5>",
+        "kind": "CHAT",
+        "refining_need_id": null,
+        "role": "AI",
+        "sender_participant_id": null,
+        "source_attempt_id": null
+      },
+      "<message:bob@main#6>": {
+        "content": "I work so hard and come home exhausted, but there's always more to do.",
+        "content_hash": "639fa2ff2151692748b916f4110d6d77b3bb45c37adeed1250c9c0c9b3c1bc02",
+        "conversation_id": "<conversation:bob@main/MAIN>",
+        "created_at": "<ts:19>",
+        "id": "<message:bob@main#6>",
+        "kind": "CHAT",
+        "refining_need_id": null,
+        "role": "USER",
+        "sender_participant_id": "<participant:bob@main>",
+        "source_attempt_id": null
+      },
+      "<message:bob@main#7>": {
+        "content": "I understand. How long has this been going on?",
+        "content_hash": "3b6b66475f0fb4bc4ac14529a80b4edde0ac2ddf9d5a4bb2bfac9a62aced149e",
+        "conversation_id": "<conversation:bob@main/MAIN>",
+        "created_at": "<ts:20>",
+        "id": "<message:bob@main#7>",
+        "kind": "CHAT",
+        "refining_need_id": null,
+        "role": "AI",
+        "sender_participant_id": null,
+        "source_attempt_id": null
+      },
+      "<message:bob@main#8>": {
+        "content": "Months now. I don't know how to get through to them.",
+        "content_hash": "799a349d8d43a9abdced4507b4fe9e61543d5f7fc44054028e3cf222148620e1",
+        "conversation_id": "<conversation:bob@main/MAIN>",
+        "created_at": "<ts:21>",
+        "id": "<message:bob@main#8>",
+        "kind": "CHAT",
+        "refining_need_id": null,
+        "role": "USER",
+        "sender_participant_id": "<participant:bob@main>",
+        "source_attempt_id": null
+      },
+      "<message:bob@main#9>": {
+        "content": "Do you feel like I understand what you've been going through?",
+        "content_hash": "0fff55e8b8ee6d0e5ec8c028d98d389d6288f578101ce5717052c69a12d8cc7a",
+        "conversation_id": "<conversation:bob@main/MAIN>",
+        "created_at": "<ts:22>",
+        "id": "<message:bob@main#9>",
+        "kind": "CHAT",
+        "refining_need_id": null,
+        "role": "AI",
+        "sender_participant_id": null,
+        "source_attempt_id": null
+      }
+    },
+    "need": {},
+    "need_disposition": {},
+    "need_share": {},
+    "participant": {
+      "<participant:ada@main>": {
+        "display_name": "Ada Lovelace",
+        "id": "<participant:ada@main>",
+        "joined_at": "<ts:26>",
+        "kind": "human",
+        "left_at": null,
+        "session_id": "<session:main>",
+        "user_id": "<user:ada>"
+      },
+      "<participant:bob@main>": {
+        "display_name": "Bob Ross",
+        "id": "<participant:bob@main>",
+        "joined_at": "<ts:26>",
+        "kind": "human",
+        "left_at": null,
+        "session_id": "<session:main>",
+        "user_id": "<user:bob>"
+      }
+    },
+    "participant_milestone": {
+      "<milestone:ada@main/compact_signed>": {
+        "milestone_key": "compact_signed",
+        "participant_id": "<participant:ada@main>",
+        "reached_at": "<ts:7>"
+      },
+      "<milestone:ada@main/feel_heard>": {
+        "milestone_key": "feel_heard",
+        "participant_id": "<participant:ada@main>",
+        "reached_at": "<ts:13>"
+      },
+      "<milestone:bob@main/compact_signed>": {
+        "milestone_key": "compact_signed",
+        "participant_id": "<participant:bob@main>",
+        "reached_at": "<ts:20>"
+      },
+      "<milestone:bob@main/feel_heard>": {
+        "milestone_key": "feel_heard",
+        "participant_id": "<participant:bob@main>",
+        "reached_at": "<ts:28>"
+      }
+    },
+    "proposal": {},
+    "proposal_choice": {},
+    "proposal_need": {},
+    "reconciler_guidance": {},
+    "reconciler_result": {},
+    "reflection": {},
+    "reflection_message": {},
+    "session": {
+      "<session:main>": {
+        "created_at": "<ts:27>",
+        "id": "<session:main>",
+        "previous_session_id": null,
+        "relationship_id": "<relationship:main>",
+        "resolved_at": null,
+        "status": "ACTIVE",
+        "topic_frame": null,
+        "topic_frame_confirmed_at": null,
+        "updated_at": "<ts:27>"
+      }
+    },
+    "takeaway": {},
+    "takeaway_link": {},
+    "user": {
+      "<user:ada>": {
+        "clerk_id": "<clerkId:ada>",
+        "created_at": "<ts:24>",
+        "deleted_at": null,
+        "email": "ada@e2e.test",
+        "first_name": null,
+        "id": "<user:ada>",
+        "last_name": null,
+        "name": "Ada Lovelace",
+        "updated_at": "<ts:24>"
+      },
+      "<user:bob>": {
+        "clerk_id": "<clerkId:bob>",
+        "created_at": "<ts:25>",
+        "deleted_at": null,
+        "email": "bob@e2e.test",
+        "first_name": null,
+        "id": "<user:bob>",
+        "last_name": null,
+        "name": "Bob Ross",
+        "updated_at": "<ts:25>"
+      }
+    }
+  },
+  "steps": [
+    {
+      "label": "draft as bob",
+      "status": 200,
+      "body": {
+        "data": {
+          "draftId": "<draft:bob@main/EMPATHY>",
+          "readyToShare": true,
+          "savedAt": "<ts:fresh>"
+        },
+        "success": true
+      },
+      "changes": [
+        {
+          "view": "draft",
+          "kind": "added",
+          "key": "<draft:bob@main/EMPATHY>",
+          "after": {
+            "about_participant_id": "<participant:ada@main>",
+            "attempt_id": null,
+            "content": "I think you feel unseen when the chores pile up and nobody says anything.",
+            "created_at": "<ts:fresh>",
+            "id": "<draft:bob@main/EMPATHY>",
+            "kind": "EMPATHY",
+            "participant_id": "<participant:bob@main>",
+            "ready_to_share": true,
+            "share_offer_id": null,
+            "updated_at": "<ts:fresh>",
+            "version": 1
+          }
+        },
+        {
+          "view": "user",
+          "kind": "changed",
+          "key": "<user:bob>",
+          "changedFields": [
+            "clerk_id",
+            "updated_at"
+          ],
+          "before": {
+            "clerk_id": "<clerkId:bob>",
+            "created_at": "<ts:1>",
+            "deleted_at": null,
+            "email": "bob@e2e.test",
+            "first_name": null,
+            "id": "<user:bob>",
+            "last_name": null,
+            "name": "Bob Ross",
+            "updated_at": "<ts:1>"
+          },
+          "after": {
+            "clerk_id": "e2e_<user:bob>",
+            "created_at": "<ts:1>",
+            "deleted_at": null,
+            "email": "bob@e2e.test",
+            "first_name": null,
+            "id": "<user:bob>",
+            "last_name": null,
+            "name": "Bob Ross",
+            "updated_at": "<ts:fresh>"
+          }
+        }
+      ]
+    },
+    {
+      "label": "consent as bob",
+      "status": 200,
+      "body": {
+        "data": {
+          "canReveal": true,
+          "consented": true,
+          "consentedAt": "<ts:fresh>",
+          "empathyMessage": {
+            "content": "I think you feel unseen when the chores pile up and nobody says anything.",
+            "id": "<message:bob@main/EMPATHY_STATEMENT:bob#1>",
+            "stage": 2,
+            "timestamp": "<ts:fresh>"
+          },
+          "partnerConsented": true,
+          "status": "ANALYZING",
+          "transitionMessage": {
+            "content": "Your empathy attempt has been submitted. Both empathy statements are now submitted. We'll show the next review or waiting step once the privacy-protected review is ready.",
+            "id": "<message:bob@main#11>",
+            "stage": 2,
+            "timestamp": "<ts:fresh>"
+          }
+        },
+        "success": true
+      },
+      "changes": [
+        {
+          "view": "consent",
+          "kind": "added",
+          "key": "<consent:bob@main/EMPATHY_ATTEMPT/empathyAttempt:bob→ada@main#1>",
+          "after": {
+            "created_at": "<ts:fresh>",
+            "decided_at": "<ts:fresh>",
+            "decision": "GRANTED",
+            "empathy_attempt_id": "<empathyAttempt:bob→ada@main#1>",
+            "id": "<consent:bob@main/EMPATHY_ATTEMPT/empathyAttempt:bob→ada@main#1>",
+            "need_id": null,
+            "participant_id": "<participant:bob@main>",
+            "proposal_id": null,
+            "requested_by_participant_id": "<participant:bob@main>",
+            "review_id": null,
+            "revoked_at": null,
+            "share_offer_id": null,
+            "target_kind": "EMPATHY_ATTEMPT"
+          }
+        },
+        {
+          "view": "empathy_attempt",
+          "kind": "changed",
+          "key": "<empathyAttempt:ada→bob@main#1>",
+          "changedFields": [
+            "delivered_at",
+            "delivery_status",
+            "revealed_at",
+            "status",
+            "status_version"
+          ],
+          "before": {
+            "author_participant_id": "<participant:ada@main>",
+            "content": "I understand you might be feeling stressed from work. I want us to support each other better.",
+            "delivered_at": null,
+            "delivery_status": "PENDING",
+            "id": "<empathyAttempt:ada→bob@main#1>",
+            "revealed_at": null,
+            "round": 1,
+            "seen_at": null,
+            "status": "HELD",
+            "status_version": 0,
+            "subject_participant_id": "<participant:bob@main>",
+            "submitted_at": "<ts:1>",
+            "supersedes_attempt_id": null
+          },
+          "after": {
+            "author_participant_id": "<participant:ada@main>",
+            "content": "I understand you might be feeling stressed from work. I want us to support each other better.",
+            "delivered_at": "<ts:fresh>",
+            "delivery_status": "DELIVERED",
+            "id": "<empathyAttempt:ada→bob@main#1>",
+            "revealed_at": "<ts:fresh>",
+            "round": 1,
+            "seen_at": null,
+            "status": "REVEALED",
+            "status_version": 3,
+            "subject_participant_id": "<participant:bob@main>",
+            "submitted_at": "<ts:1>",
+            "supersedes_attempt_id": null
+          }
+        },
+        {
+          "view": "empathy_attempt",
+          "kind": "added",
+          "key": "<empathyAttempt:bob→ada@main#1>",
+          "after": {
+            "author_participant_id": "<participant:bob@main>",
+            "content": "I think you feel unseen when the chores pile up and nobody says anything.",
+            "delivered_at": "<ts:fresh>",
+            "delivery_status": "DELIVERED",
+            "id": "<empathyAttempt:bob→ada@main#1>",
+            "revealed_at": "<ts:fresh>",
+            "round": 1,
+            "seen_at": null,
+            "status": "REVEALED",
+            "status_version": 3,
+            "subject_participant_id": "<participant:ada@main>",
+            "submitted_at": "<ts:fresh>",
+            "supersedes_attempt_id": null
+          }
+        },
+        {
+          "view": "message",
+          "kind": "added",
+          "key": "<message:ada@main#13>",
+          "after": {
+            "content": "Bob Ross's attempt to understand your experience is ready for you to review. Take a moment to read it and let us know how it feels.",
+            "content_hash": "978497e5d3bb4506ecdaf135fcd07151abc309e0614b3bf343bf07a7d6f7f502",
+            "conversation_id": "<conversation:ada@main/MAIN>",
+            "created_at": "<ts:fresh>",
+            "id": "<message:ada@main#13>",
+            "kind": "CHAT",
+            "refining_need_id": null,
+            "role": "AI",
+            "sender_participant_id": null,
+            "source_attempt_id": null
+          }
+        },
+        {
+          "view": "message",
+          "kind": "added",
+          "key": "<message:bob@main#11>",
+          "after": {
+            "content": "Your empathy attempt has been submitted. Both empathy statements are now submitted. We'll show the next review or waiting step once the privacy-protected review is ready.",
+            "content_hash": "79832dcdc45750fdf9f82902b33ac9c9e627591a9b635b98d29e8b6f2f1ec1c5",
+            "conversation_id": "<conversation:bob@main/MAIN>",
+            "created_at": "<ts:fresh>",
+            "id": "<message:bob@main#11>",
+            "kind": "CHAT",
+            "refining_need_id": null,
+            "role": "AI",
+            "sender_participant_id": null,
+            "source_attempt_id": null
+          }
+        },
+        {
+          "view": "message",
+          "kind": "added",
+          "key": "<message:bob@main#12>",
+          "after": {
+            "content": "Ada Lovelace's attempt to understand your experience is ready for you to review. Take a moment to read it and let us know how it feels.",
+            "content_hash": "a2c33f53504e2ec413015e881b54c24d690d84c2191fac172df4120ae511ce93",
+            "conversation_id": "<conversation:bob@main/MAIN>",
+            "created_at": "<ts:fresh>",
+            "id": "<message:bob@main#12>",
+            "kind": "CHAT",
+            "refining_need_id": null,
+            "role": "AI",
+            "sender_participant_id": null,
+            "source_attempt_id": null
+          }
+        },
+        {
+          "view": "message",
+          "kind": "added",
+          "key": "<message:bob@main/EMPATHY_STATEMENT:bob#1>",
+          "after": {
+            "content": "I think you feel unseen when the chores pile up and nobody says anything.",
+            "content_hash": "0015d3b2e57854eba0b25510594447189ba49c832703082a30f8ff6b9646af3f",
+            "conversation_id": "<conversation:bob@main/MAIN>",
+            "created_at": "<ts:fresh>",
+            "id": "<message:bob@main/EMPATHY_STATEMENT:bob#1>",
+            "kind": "EMPATHY_STATEMENT",
+            "refining_need_id": null,
+            "role": "USER",
+            "sender_participant_id": "<participant:bob@main>",
+            "source_attempt_id": "<empathyAttempt:bob→ada@main#1>"
+          }
+        },
+        {
+          "view": "user",
+          "kind": "changed",
+          "key": "<user:bob>",
+          "changedFields": [
+            "updated_at"
+          ],
+          "before": {
+            "clerk_id": "e2e_<user:bob>",
+            "created_at": "<ts:2>",
+            "deleted_at": null,
+            "email": "bob@e2e.test",
+            "first_name": null,
+            "id": "<user:bob>",
+            "last_name": null,
+            "name": "Bob Ross",
+            "updated_at": "<ts:fresh>"
+          },
+          "after": {
+            "clerk_id": "e2e_<user:bob>",
+            "created_at": "<ts:2>",
+            "deleted_at": null,
+            "email": "bob@e2e.test",
+            "first_name": null,
+            "id": "<user:bob>",
+            "last_name": null,
+            "name": "Bob Ross",
+            "updated_at": "<ts:fresh>"
+          }
+        }
+      ]
+    },
+    {
+      "label": "empathy status as ada@e2e.test",
+      "status": 200,
+      "body": {
+        "data": {
+          "analyzing": false,
+          "awaitingSharing": false,
+          "hasNewSharedContext": false,
+          "hasUnviewedSharedContext": false,
+          "messageCountSinceSharedContext": 0,
+          "myAttempt": {
+            "consentRecordId": "",
+            "content": "I understand you might be feeling stressed from work. I want us to support each other better.",
+            "deliveryStatus": "delivered",
+            "id": "<empathyAttempt:ada→bob@main#1>",
+            "revealedAt": "<ts:fresh>",
+            "revisionCount": 0,
+            "sharedAt": "<ts:1>",
+            "sourceUserId": "<user:ada>",
+            "status": "REVEALED",
+            "validatedAt": null
+          },
+          "myReconcilerResult": null,
+          "mySharedAt": null,
+          "mySharedContext": null,
+          "partnerAttempt": {
+            "consentRecordId": "",
+            "content": "I think you feel unseen when the chores pile up and nobody says anything.",
+            "id": "<empathyAttempt:bob→ada@main#1>",
+            "revealedAt": "<ts:fresh>",
+            "revisionCount": 0,
+            "sharedAt": "<ts:fresh>",
+            "sourceUserId": "<user:bob>",
+            "status": "REVEALED",
+            "validatedAt": null
+          },
+          "partnerCompletedStage1": true,
+          "partnerEmpathyHeldStatus": "REVEALED",
+          "partnerEmpathySubmittedAt": "<ts:fresh>",
+          "partnerHasSubmittedEmpathy": true,
+          "readyForStage3": false,
+          "refinementHint": null,
+          "sharedContentDeliveryStatus": null,
+          "sharedContext": null
+        },
+        "success": true
+      },
+      "changes": [
+        {
+          "view": "user",
+          "kind": "changed",
+          "key": "<user:ada>",
+          "changedFields": [
+            "clerk_id",
+            "updated_at"
+          ],
+          "before": {
+            "clerk_id": "<clerkId:ada>",
+            "created_at": "<ts:2>",
+            "deleted_at": null,
+            "email": "ada@e2e.test",
+            "first_name": null,
+            "id": "<user:ada>",
+            "last_name": null,
+            "name": "Ada Lovelace",
+            "updated_at": "<ts:2>"
+          },
+          "after": {
+            "clerk_id": "e2e_<user:ada>",
+            "created_at": "<ts:2>",
+            "deleted_at": null,
+            "email": "ada@e2e.test",
+            "first_name": null,
+            "id": "<user:ada>",
+            "last_name": null,
+            "name": "Ada Lovelace",
+            "updated_at": "<ts:fresh>"
+          }
+        }
+      ]
+    },
+    {
+      "label": "partner empathy as ada@e2e.test",
+      "status": 200,
+      "body": {
+        "data": {
+          "attempt": {
+            "consentRecordId": "",
+            "content": "I think you feel unseen when the chores pile up and nobody says anything.",
+            "id": "<empathyAttempt:bob→ada@main#1>",
+            "revealedAt": "<ts:fresh>",
+            "revisionCount": 0,
+            "sharedAt": "<ts:fresh>",
+            "sourceUserId": "<user:bob>",
+            "status": "REVEALED",
+            "statusVersion": 3,
+            "validatedAt": null
+          },
+          "awaitingRevision": false,
+          "partnerStatus": "REVEALED",
+          "validated": false,
+          "validatedAt": null,
+          "waitingForPartner": false
+        },
+        "success": true
+      },
+      "changes": [
+        {
+          "view": "user",
+          "kind": "changed",
+          "key": "<user:ada>",
+          "changedFields": [
+            "updated_at"
+          ],
+          "before": {
+            "clerk_id": "e2e_<user:ada>",
+            "created_at": "<ts:1>",
+            "deleted_at": null,
+            "email": "ada@e2e.test",
+            "first_name": null,
+            "id": "<user:ada>",
+            "last_name": null,
+            "name": "Ada Lovelace",
+            "updated_at": "<ts:fresh>"
+          },
+          "after": {
+            "clerk_id": "e2e_<user:ada>",
+            "created_at": "<ts:1>",
+            "deleted_at": null,
+            "email": "ada@e2e.test",
+            "first_name": null,
+            "id": "<user:ada>",
+            "last_name": null,
+            "name": "Ada Lovelace",
+            "updated_at": "<ts:fresh>"
+          }
+        }
+      ]
+    },
+    {
+      "label": "messages as ada@e2e.test",
+      "status": 200,
+      "body": {
+        "data": {
+          "hasMore": false,
+          "messages": [
+            {
+              "content": "Hi, I'm having issues with my partner.",
+              "id": "<message:ada@main#1>",
+              "refiningNeedId": null,
+              "role": "USER",
+              "senderId": "<user:ada>",
+              "sessionId": "<session:main>",
+              "stage": 0,
+              "timestamp": "<ts:1>"
+            },
+            {
+              "content": "I'm glad you reached out. Tell me more about what's happening.",
+              "id": "<message:ada@main#2>",
+              "refiningNeedId": null,
+              "role": "AI",
+              "senderId": null,
+              "sessionId": "<session:main>",
+              "stage": 0,
+              "timestamp": "<ts:2>"
+            },
+            {
+              "content": "We argue about household chores constantly.",
+              "id": "<message:ada@main#3>",
+              "refiningNeedId": null,
+              "role": "USER",
+              "senderId": "<user:ada>",
+              "sessionId": "<session:main>",
+              "stage": 1,
+              "timestamp": "<ts:3>"
+            },
+            {
+              "content": "That sounds frustrating. Would you like to invite your partner?",
+              "id": "<message:ada@main#4>",
+              "refiningNeedId": null,
+              "role": "AI",
+              "senderId": null,
+              "sessionId": "<session:main>",
+              "stage": 1,
+              "timestamp": "<ts:4>"
+            },
+            {
+              "content": "Yes, I sent the invitation.",
+              "id": "<message:ada@main#5>",
+              "refiningNeedId": null,
+              "role": "USER",
+              "senderId": "<user:ada>",
+              "sessionId": "<session:main>",
+              "stage": 1,
+              "timestamp": "<ts:5>"
+            },
+            {
+              "content": "Great. Let's continue exploring your perspective while we wait.",
+              "id": "<message:ada@main#6>",
+              "refiningNeedId": null,
+              "role": "AI",
+              "senderId": null,
+              "sessionId": "<session:main>",
+              "stage": 1,
+              "timestamp": "<ts:6>"
+            },
+            {
+              "content": "I feel like I do most of the work and they don't notice.",
+              "id": "<message:ada@main#7>",
+              "refiningNeedId": null,
+              "role": "USER",
+              "senderId": "<user:ada>",
+              "sessionId": "<session:main>",
+              "stage": 1,
+              "timestamp": "<ts:7>"
+            },
+            {
+              "content": "I hear you. Do you feel like I understand what you've been experiencing?",
+              "id": "<message:ada@main#8>",
+              "refiningNeedId": null,
+              "role": "AI",
+              "senderId": null,
+              "sessionId": "<session:main>",
+              "stage": 1,
+              "timestamp": "<ts:8>"
+            },
+            {
+              "content": "Yes, I feel heard now.",
+              "id": "<message:ada@main#9>",
+              "refiningNeedId": null,
+              "role": "USER",
+              "senderId": "<user:ada>",
+              "sessionId": "<session:main>",
+              "stage": 1,
+              "timestamp": "<ts:9>"
+            },
+            {
+              "content": "I'm glad. Now let's build some empathy for your partner's perspective.",
+              "id": "<message:ada@main#10>",
+              "refiningNeedId": null,
+              "role": "AI",
+              "senderId": null,
+              "sessionId": "<session:main>",
+              "stage": 2,
+              "timestamp": "<ts:10>"
+            },
+            {
+              "content": "I think they're stressed from work too.",
+              "id": "<message:ada@main#11>",
+              "refiningNeedId": null,
+              "role": "USER",
+              "senderId": "<user:ada>",
+              "sessionId": "<session:main>",
+              "stage": 2,
+              "timestamp": "<ts:11>"
+            },
+            {
+              "content": "That's a thoughtful observation. Here's an empathy statement you could share...",
+              "id": "<message:ada@main#12>",
+              "refiningNeedId": null,
+              "role": "AI",
+              "senderId": null,
+              "sessionId": "<session:main>",
+              "stage": 2,
+              "timestamp": "<ts:12>"
+            },
+            {
+              "content": "I understand you might be feeling stressed from work. I want us to support each other better.",
+              "id": "<message:ada@main/EMPATHY_STATEMENT:ada#1>",
+              "refiningNeedId": null,
+              "role": "EMPATHY_STATEMENT",
+              "senderId": "<user:ada>",
+              "sessionId": "<session:main>",
+              "stage": 2,
+              "timestamp": "<ts:13>"
+            },
+            {
+              "content": "Bob Ross's attempt to understand your experience is ready for you to review. Take a moment to read it and let us know how it feels.",
+              "id": "<message:ada@main#13>",
+              "refiningNeedId": null,
+              "role": "AI",
+              "senderId": null,
+              "sessionId": "<session:main>",
+              "stage": 2,
+              "timestamp": "<ts:fresh>"
+            }
+          ]
+        },
+        "success": true
+      },
+      "changes": [
+        {
+          "view": "user",
+          "kind": "changed",
+          "key": "<user:ada>",
+          "changedFields": [
+            "updated_at"
+          ],
+          "before": {
+            "clerk_id": "e2e_<user:ada>",
+            "created_at": "<ts:14>",
+            "deleted_at": null,
+            "email": "ada@e2e.test",
+            "first_name": null,
+            "id": "<user:ada>",
+            "last_name": null,
+            "name": "Ada Lovelace",
+            "updated_at": "<ts:fresh>"
+          },
+          "after": {
+            "clerk_id": "e2e_<user:ada>",
+            "created_at": "<ts:14>",
+            "deleted_at": null,
+            "email": "ada@e2e.test",
+            "first_name": null,
+            "id": "<user:ada>",
+            "last_name": null,
+            "name": "Ada Lovelace",
+            "updated_at": "<ts:fresh>"
+          }
+        }
+      ]
+    },
+    {
+      "label": "empathy status as bob@e2e.test",
+      "status": 200,
+      "body": {
+        "data": {
+          "analyzing": false,
+          "awaitingSharing": false,
+          "hasNewSharedContext": false,
+          "hasUnviewedSharedContext": false,
+          "messageCountSinceSharedContext": 0,
+          "myAttempt": {
+            "consentRecordId": "",
+            "content": "I think you feel unseen when the chores pile up and nobody says anything.",
+            "deliveryStatus": "delivered",
+            "id": "<empathyAttempt:bob→ada@main#1>",
+            "revealedAt": "<ts:fresh>",
+            "revisionCount": 0,
+            "sharedAt": "<ts:fresh>",
+            "sourceUserId": "<user:bob>",
+            "status": "REVEALED",
+            "validatedAt": null
+          },
+          "myReconcilerResult": null,
+          "mySharedAt": null,
+          "mySharedContext": null,
+          "partnerAttempt": {
+            "consentRecordId": "",
+            "content": "I understand you might be feeling stressed from work. I want us to support each other better.",
+            "id": "<empathyAttempt:ada→bob@main#1>",
+            "revealedAt": "<ts:fresh>",
+            "revisionCount": 0,
+            "sharedAt": "<ts:1>",
+            "sourceUserId": "<user:ada>",
+            "status": "REVEALED",
+            "validatedAt": null
+          },
+          "partnerCompletedStage1": true,
+          "partnerEmpathyHeldStatus": "REVEALED",
+          "partnerEmpathySubmittedAt": "<ts:1>",
+          "partnerHasSubmittedEmpathy": true,
+          "readyForStage3": false,
+          "refinementHint": null,
+          "sharedContentDeliveryStatus": null,
+          "sharedContext": null
+        },
+        "success": true
+      },
+      "changes": [
+        {
+          "view": "user",
+          "kind": "changed",
+          "key": "<user:bob>",
+          "changedFields": [
+            "updated_at"
+          ],
+          "before": {
+            "clerk_id": "e2e_<user:bob>",
+            "created_at": "<ts:2>",
+            "deleted_at": null,
+            "email": "bob@e2e.test",
+            "first_name": null,
+            "id": "<user:bob>",
+            "last_name": null,
+            "name": "Bob Ross",
+            "updated_at": "<ts:fresh>"
+          },
+          "after": {
+            "clerk_id": "e2e_<user:bob>",
+            "created_at": "<ts:2>",
+            "deleted_at": null,
+            "email": "bob@e2e.test",
+            "first_name": null,
+            "id": "<user:bob>",
+            "last_name": null,
+            "name": "Bob Ross",
+            "updated_at": "<ts:fresh>"
+          }
+        }
+      ]
+    },
+    {
+      "label": "partner empathy as bob@e2e.test",
+      "status": 200,
+      "body": {
+        "data": {
+          "attempt": {
+            "consentRecordId": "",
+            "content": "I understand you might be feeling stressed from work. I want us to support each other better.",
+            "id": "<empathyAttempt:ada→bob@main#1>",
+            "revealedAt": "<ts:fresh>",
+            "revisionCount": 0,
+            "sharedAt": "<ts:1>",
+            "sourceUserId": "<user:ada>",
+            "status": "REVEALED",
+            "statusVersion": 3,
+            "validatedAt": null
+          },
+          "awaitingRevision": false,
+          "partnerStatus": "REVEALED",
+          "validated": false,
+          "validatedAt": null,
+          "waitingForPartner": false
+        },
+        "success": true
+      },
+      "changes": [
+        {
+          "view": "user",
+          "kind": "changed",
+          "key": "<user:bob>",
+          "changedFields": [
+            "updated_at"
+          ],
+          "before": {
+            "clerk_id": "e2e_<user:bob>",
+            "created_at": "<ts:2>",
+            "deleted_at": null,
+            "email": "bob@e2e.test",
+            "first_name": null,
+            "id": "<user:bob>",
+            "last_name": null,
+            "name": "Bob Ross",
+            "updated_at": "<ts:fresh>"
+          },
+          "after": {
+            "clerk_id": "e2e_<user:bob>",
+            "created_at": "<ts:2>",
+            "deleted_at": null,
+            "email": "bob@e2e.test",
+            "first_name": null,
+            "id": "<user:bob>",
+            "last_name": null,
+            "name": "Bob Ross",
+            "updated_at": "<ts:fresh>"
+          }
+        }
+      ]
+    },
+    {
+      "label": "messages as bob@e2e.test",
+      "status": 200,
+      "body": {
+        "data": {
+          "hasMore": false,
+          "messages": [
+            {
+              "content": "Welcome! Ada Lovelace invited you to work through some challenges together.",
+              "id": "<message:bob@main#1>",
+              "refiningNeedId": null,
+              "role": "AI",
+              "senderId": null,
+              "sessionId": "<session:main>",
+              "stage": 0,
+              "timestamp": "<ts:1>"
+            },
+            {
+              "content": "Things have been tense lately between us.",
+              "id": "<message:bob@main#2>",
+              "refiningNeedId": null,
+              "role": "USER",
+              "senderId": "<user:bob>",
+              "sessionId": "<session:main>",
+              "stage": 0,
+              "timestamp": "<ts:2>"
+            },
+            {
+              "content": "I hear you. Tell me more about what's been happening.",
+              "id": "<message:bob@main#3>",
+              "refiningNeedId": null,
+              "role": "AI",
+              "senderId": null,
+              "sessionId": "<session:main>",
+              "stage": 1,
+              "timestamp": "<ts:3>"
+            },
+            {
+              "content": "I feel like they don't see how much I'm dealing with at work.",
+              "id": "<message:bob@main#4>",
+              "refiningNeedId": null,
+              "role": "USER",
+              "senderId": "<user:bob>",
+              "sessionId": "<session:main>",
+              "stage": 1,
+              "timestamp": "<ts:4>"
+            },
+            {
+              "content": "That sounds really hard. Can you tell me more?",
+              "id": "<message:bob@main#5>",
+              "refiningNeedId": null,
+              "role": "AI",
+              "senderId": null,
+              "sessionId": "<session:main>",
+              "stage": 1,
+              "timestamp": "<ts:5>"
+            },
+            {
+              "content": "I work so hard and come home exhausted, but there's always more to do.",
+              "id": "<message:bob@main#6>",
+              "refiningNeedId": null,
+              "role": "USER",
+              "senderId": "<user:bob>",
+              "sessionId": "<session:main>",
+              "stage": 1,
+              "timestamp": "<ts:6>"
+            },
+            {
+              "content": "I understand. How long has this been going on?",
+              "id": "<message:bob@main#7>",
+              "refiningNeedId": null,
+              "role": "AI",
+              "senderId": null,
+              "sessionId": "<session:main>",
+              "stage": 1,
+              "timestamp": "<ts:7>"
+            },
+            {
+              "content": "Months now. I don't know how to get through to them.",
+              "id": "<message:bob@main#8>",
+              "refiningNeedId": null,
+              "role": "USER",
+              "senderId": "<user:bob>",
+              "sessionId": "<session:main>",
+              "stage": 1,
+              "timestamp": "<ts:8>"
+            },
+            {
+              "content": "Do you feel like I understand what you've been going through?",
+              "id": "<message:bob@main#9>",
+              "refiningNeedId": null,
+              "role": "AI",
+              "senderId": null,
+              "sessionId": "<session:main>",
+              "stage": 1,
+              "timestamp": "<ts:9>"
+            },
+            {
+              "content": "Yes, I feel heard.",
+              "id": "<message:bob@main#10>",
+              "refiningNeedId": null,
+              "role": "USER",
+              "senderId": "<user:bob>",
+              "sessionId": "<session:main>",
+              "stage": 1,
+              "timestamp": "<ts:10>"
+            },
+            {
+              "content": "I think you feel unseen when the chores pile up and nobody says anything.",
+              "id": "<message:bob@main/EMPATHY_STATEMENT:bob#1>",
+              "refiningNeedId": null,
+              "role": "EMPATHY_STATEMENT",
+              "senderId": "<user:bob>",
+              "sessionId": "<session:main>",
+              "stage": 2,
+              "timestamp": "<ts:fresh>"
+            },
+            {
+              "content": "Your empathy attempt has been submitted. Both empathy statements are now submitted. We'll show the next review or waiting step once the privacy-protected review is ready.",
+              "id": "<message:bob@main#11>",
+              "refiningNeedId": null,
+              "role": "AI",
+              "senderId": null,
+              "sessionId": "<session:main>",
+              "stage": 2,
+              "timestamp": "<ts:fresh>"
+            },
+            {
+              "content": "Ada Lovelace's attempt to understand your experience is ready for you to review. Take a moment to read it and let us know how it feels.",
+              "id": "<message:bob@main#12>",
+              "refiningNeedId": null,
+              "role": "AI",
+              "senderId": null,
+              "sessionId": "<session:main>",
+              "stage": 2,
+              "timestamp": "<ts:fresh>"
+            }
+          ]
+        },
+        "success": true
+      },
+      "changes": [
+        {
+          "view": "user",
+          "kind": "changed",
+          "key": "<user:bob>",
+          "changedFields": [
+            "updated_at"
+          ],
+          "before": {
+            "clerk_id": "e2e_<user:bob>",
+            "created_at": "<ts:11>",
+            "deleted_at": null,
+            "email": "bob@e2e.test",
+            "first_name": null,
+            "id": "<user:bob>",
+            "last_name": null,
+            "name": "Bob Ross",
+            "updated_at": "<ts:fresh>"
+          },
+          "after": {
+            "clerk_id": "e2e_<user:bob>",
+            "created_at": "<ts:11>",
+            "deleted_at": null,
+            "email": "bob@e2e.test",
+            "first_name": null,
+            "id": "<user:bob>",
+            "last_name": null,
+            "name": "Bob Ross",
+            "updated_at": "<ts:fresh>"
+          }
+        }
+      ]
+    }
+  ]
+}
