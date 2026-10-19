@@ -25,6 +25,7 @@
 
 import { DbTarget, withClient } from './db';
 import type { FixtureManifest } from './fixtures';
+import { CONCEPT_VIEWS } from './concept-views';
 
 /**
  * cuid v1: 'c' followed by 24 base36 chars.
@@ -358,4 +359,224 @@ export function timestampFacts(
     }
   }
   return facts;
+}
+
+// ============================================================================
+// Concept-view rename map
+// ============================================================================
+//
+// The normalised baselines (`__golden__/<scenario>.concept.json`) are read
+// through the `old_concept_*` views (`concept-views/`), which present today's
+// tables in the target schema's vocabulary. Their ids must survive the rebuild,
+// and three kinds of key have no id at all in today's shape — a participant, a
+// conversation and a milestone are natural keys the views derive an id from.
+// So the concept label map is built from the *view rows* alone, never from an
+// old table: the same function labels a run against the target-shape views.
+//
+// The two rules above are kept, not relaxed: every label derives from the row's
+// natural key (who, in which session, about whom, which round), and an id with
+// no label is left alone so `normalize` reports it unresolved and the run fails.
+// A row whose natural key does not resolve — a participant of a user the
+// fixture does not know, a message with no conversation — gets no label.
+
+/** Row values as they come out of a concept snapshot (raw, pre-normalisation). */
+type ConceptRow = Record<string, unknown>;
+
+export interface ConceptLabelInput {
+  /** Shape-independent ids: the target keeps session/relationship/invitation/user ids. */
+  manifest: {
+    sessionId: string;
+    relationshipId: string;
+    invitationId: string;
+    users: Array<{ id: string; email: string }>;
+  };
+  seededClerkIds: Array<{ userId: string; clerkId: string }>;
+  /**
+   * Concept view rows by concept name, merged across every snapshot of the run
+   * (so a row deleted mid-run still has the label it had when it existed).
+   */
+  rows: Partial<Record<string, ConceptRow[]>>;
+}
+
+/**
+ * Label constructors for the target's new concept keys — the rename map.
+ * `who` is a user's bare label (`ada`), `session` a session's (`main`).
+ */
+export const CONCEPT_LABEL = {
+  participant: (who: string, session: string): string => `<participant:${who}@${session}>`,
+  conversation: (participant: string, kind: string): string => `<conversation:${participant}/${kind}>`,
+  milestone: (participant: string, key: string): string => `<milestone:${participant}/${key}>`,
+};
+
+/** `<participant:ada@main>` → `ada@main`; `<user:ada>` → `ada`. */
+function bare(label: string): string {
+  return label.replace(/^<[a-zA-Z]+:/, '').replace(/>$/, '');
+}
+
+/** `<empathyAttempt:ada→bob@main#1>` → `empathyAttempt:ada→bob@main#1` (for nesting). */
+function inner(label: string): string {
+  return label.replace(/^</, '').replace(/>$/, '');
+}
+
+const str = (v: unknown): string => (v === null || v === undefined ? '' : String(v));
+
+/** Sort by the given fields (as strings), then by id — data, never arrival order. */
+function sortedBy(rows: ConceptRow[], fields: string[]): ConceptRow[] {
+  return [...rows].sort((a, b) => {
+    for (const f of [...fields, 'id']) {
+      const x = str(a[f]);
+      const y = str(b[f]);
+      if (x !== y) return x < y ? -1 : 1;
+    }
+    return 0;
+  });
+}
+
+/** Group rows by a key function, dropping rows whose key is null. */
+function groupBy(rows: ConceptRow[], key: (r: ConceptRow) => string | null): Map<string, ConceptRow[]> {
+  const m = new Map<string, ConceptRow[]>();
+  for (const r of rows) {
+    const k = key(r);
+    if (k === null) continue;
+    m.set(k, [...(m.get(k) ?? []), r]);
+  }
+  return m;
+}
+
+export function buildConceptLabelMap(input: ConceptLabelInput): LabelMap {
+  const labels = new Map<string, string>();
+  const rows = (name: string): ConceptRow[] => input.rows[name] ?? [];
+  const label = (id: unknown): string | null =>
+    id === null || id === undefined ? null : (labels.get(String(id)) ?? null);
+
+  // Shape-independent ids, labelled as the byte-level map labels them.
+  const nameOf = (email: string): string => email.split('@')[0];
+  for (const u of input.manifest.users) labels.set(u.id, `<user:${nameOf(u.email)}>`);
+  for (const { userId, clerkId } of input.seededClerkIds) {
+    const who = labels.get(userId);
+    if (who) labels.set(clerkId, `<clerkId:${bare(who)}>`);
+  }
+  labels.set(input.manifest.sessionId, '<session:main>');
+  labels.set(input.manifest.relationshipId, '<relationship:main>');
+  labels.set(input.manifest.invitationId, '<invitation:main>');
+
+  // participant: (user, session).
+  for (const p of rows('participant')) {
+    const who = label(p.user_id);
+    const session = label(p.session_id);
+    if (who && session) labels.set(String(p.id), CONCEPT_LABEL.participant(bare(who), bare(session)));
+  }
+
+  // conversation: MAIN is unique per participant; sub-chats rank by id (kept
+  // from Stage4SubChat, time-ordered) within their participant.
+  for (const [pid, convs] of groupBy(rows('conversation'), r => label(r.participant_id))) {
+    let sub = 0;
+    for (const c of sortedBy(convs, ['kind'])) {
+      const kind = str(c.kind);
+      labels.set(String(c.id), CONCEPT_LABEL.conversation(bare(pid), kind === 'MAIN' ? 'MAIN' : `${kind}#${++sub}`));
+    }
+  }
+
+  // message: ranked within (conversation, kind, sender) by time then id. CHAT
+  // ranks within the conversation; a delivered kind also carries its sender,
+  // so the copy the target inserts into a subject's conversation (plan §3 step
+  // 9) renumbers nothing that already existed. The audience is in the label, so
+  // a message routed to the wrong conversation reads as a different message.
+  const convPart = (convLabel: string): string => bare(convLabel).replace(/\/MAIN$/, '');
+  const messageGroup = (m: ConceptRow): string | null => {
+    const conv = label(m.conversation_id);
+    if (!conv) return null;
+    const kind = str(m.kind);
+    if (kind === 'CHAT') return convPart(conv);
+    const sender = label(m.sender_participant_id);
+    const from = sender ? bare(sender).split('@')[0] : 'ai';
+    return `${convPart(conv)}/${kind}:${from}`;
+  };
+  for (const [group, msgs] of groupBy(rows('message'), messageGroup)) {
+    sortedBy(msgs, ['created_at']).forEach((m, i) => labels.set(String(m.id), `<message:${group}#${i + 1}>`));
+  }
+
+  // empathy_attempt: direction and round.
+  for (const a of rows('empathy_attempt')) {
+    const author = label(a.author_participant_id);
+    if (!author) continue;
+    const subject = label(a.subject_participant_id);
+    const [who, session] = bare(author).split('@');
+    const about = subject ? bare(subject).split('@')[0] : '?';
+    labels.set(String(a.id), `<empathyAttempt:${who}→${about}@${session}#${str(a.round)}>`);
+  }
+
+  // Rows named after their parent, plus a natural suffix; a collision (two
+  // rows with one natural key) is numbered within that key only.
+  const fromParent = (concept: string, kind: string, parentCol: string, suffix: (r: ConceptRow) => string): void => {
+    for (const [parent, group] of groupBy(rows(concept), r => label(r[parentCol]))) {
+      const seen = new Map<string, number>();
+      for (const r of sortedBy(group, [])) {
+        const base = `${bare(parent)}${suffix(r)}`;
+        const n = (seen.get(base) ?? 0) + 1;
+        seen.set(base, n);
+        labels.set(String(r.id), `<${kind}:${base}${n > 1 ? `#${n}` : ''}>`);
+      }
+    }
+  };
+  // Rows ranked within their parent by a natural order.
+  const ranked = (concept: string, kind: string, parentCol: string, order: string[]): void => {
+    for (const [parent, group] of groupBy(rows(concept), r => label(r[parentCol]))) {
+      sortedBy(group, order).forEach((r, i) => labels.set(String(r.id), `<${kind}:${bare(parent)}#${i + 1}>`));
+    }
+  };
+
+  fromParent('draft', 'draft', 'participant_id', r => `/${str(r.kind)}`);
+  ranked('need', 'need', 'participant_id', ['created_at']);
+  ranked('proposal', 'proposal', 'session_id', ['created_at']);
+  fromParent('agreement', 'agreement', 'proposal_id', () => '');
+  fromParent('reconciler_result', 'reconcilerResult', 'attempt_id', r => `/i${str(r.iteration)}`);
+  fromParent('context_share_offer', 'shareOffer', 'attempt_id', r => `/i${str(r.iteration)}`);
+  fromParent('empathy_review', 'review', 'attempt_id', () => '');
+  ranked('reflection', 'reflection', 'user_id', ['created_at']);
+  ranked('reflection_message', 'reflectionMessage', 'reflection_id', ['created_at']);
+  ranked('takeaway', 'takeaway', 'reflection_id', ['position']);
+
+  // consent: who decided, over what kind, about which target. A consent whose
+  // arc names nothing labelled is ranked within (who, kind) — never globally,
+  // which would make a consent against the wrong target byte-identical.
+  const ARC = ['need_id', 'empathy_attempt_id', 'proposal_id', 'share_offer_id', 'review_id'];
+  for (const [group, consents] of groupBy(rows('consent'), r => {
+    const who = label(r.participant_id);
+    return who ? `${bare(who)}/${str(r.target_kind) || 'NONE'}` : null;
+  })) {
+    sortedBy(consents, ['decided_at', 'created_at']).forEach((r, i) => {
+      const target = ARC.map(col => label(r[col])).find(Boolean);
+      labels.set(String(r.id), `<consent:${group}/${target ? inner(target) : `#${i + 1}`}>`);
+    });
+  }
+
+  return { labels };
+}
+
+/** Composite-key concepts whose row key has its own name in the rename map. */
+const ROW_KEY_NAME: Record<string, string> = { participant_milestone: 'milestone' };
+
+const camel = (s: string): string => s.replace(/_([a-z])/g, (_, c: string) => c.toUpperCase());
+
+/**
+ * The structural key of a concept row, from its NORMALISED identity columns.
+ *
+ * Single-column identities are already labels (`<participant:ada@main>`).
+ * Composite ones are rendered from their labelled parts: a milestone is
+ * `<milestone:ada@main/feel_heard>`; other junctions are
+ * `<proposalChoice:proposal:main#1/participant:bob@main>`.
+ */
+export function conceptRowKey(concept: string, row: Record<string, unknown>, identity?: string[]): string {
+  const declared = (CONCEPT_VIEWS as Record<string, { identity: readonly string[] }>)[concept];
+  const cols = identity ?? (declared ? [...declared.identity] : ['id']);
+  if (concept === 'participant_milestone') {
+    return CONCEPT_LABEL.milestone(bare(str(row.participant_id)), str(row.milestone_key));
+  }
+  if (cols.length === 1) return str(row[cols[0]]);
+  const parts = cols.map(c => {
+    const v = str(row[c]);
+    return v.startsWith('<') ? inner(v) : v;
+  });
+  return `<${ROW_KEY_NAME[concept] ?? camel(concept)}:${parts.join('/')}>`;
 }
