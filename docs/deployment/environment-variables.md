@@ -81,6 +81,7 @@ Get your API key from [Ably Dashboard](https://ably.com/dashboard).
 | `JOB_DATABASE_URL` | Optional. Background jobs and two-party paths (`mwf_job`). Falls back to `DATABASE_URL`. Accepted but not yet used by any code path (W4a/W10) |
 | `OPS_DATABASE_URL` | Optional. `/api/brain/*` (`mwf_ops`). Falls back to `DATABASE_URL`. Accepted but not yet used (W10) |
 | `AUTH_DATABASE_URL` | Optional. First-login user creation (`mwf_auth`). Falls back to `DATABASE_URL`. Accepted but not yet used (W10) |
+| `DB_IDENTITY_BINDING` | `on` binds the request's user id to every database statement (`set_config('app.current_user_id', …, true)` inside a transaction; `backend/src/lib/prisma-identity.ts`). Default `off`; any other value fails start-up. Experimental (Phase 3 D1 spike): adds a BEGIN/set_config/COMMIT round-trip set to every authenticated statement and relies on Prisma 7.10 client internals |
 | `TRUST_PROXY` | Exact proxy address (`172.29.0.2`); other clients cannot supply trusted forwarding headers |
 
 ### Connection String Format

@@ -11,6 +11,8 @@ import { prisma } from '../lib/prisma';
 import { ApiResponse, ErrorCode } from '@meet-without-fear/shared';
 import { Prisma } from '../generated/prisma/client';
 import { logger } from '../lib/logger';
+import { identityBindingEnabled } from '../lib/prisma-identity';
+import { updateContext } from '../lib/request-context';
 
 // ============================================================================
 // Types
@@ -260,7 +262,21 @@ export async function requireAuth(
   res: Response,
   next: NextFunction
 ): Promise<void> {
-  await handleClerkAuth(req, res, next, true);
+  await handleClerkAuth(req, res, bindRequestIdentity(req, next), true);
+}
+
+/**
+ * With DB_IDENTITY_BINDING=on, put the authenticated user's id on the request
+ * context before the route runs, so lib/prisma-identity.ts binds it to every
+ * statement the request issues (including continuations it schedules).
+ * Off: `next` unchanged, nothing else differs.
+ */
+function bindRequestIdentity(req: Request, next: NextFunction): NextFunction {
+  if (!identityBindingEnabled()) return next;
+  return ((err?: unknown) => {
+    if (err === undefined && req.user) updateContext({ userId: req.user.id });
+    next(err);
+  }) as NextFunction;
 }
 
 /**
@@ -271,7 +287,7 @@ export async function optionalAuth(
   res: Response,
   next: NextFunction
 ): Promise<void> {
-  await handleClerkAuth(req, res, next, false);
+  await handleClerkAuth(req, res, bindRequestIdentity(req, next), false);
 }
 
 /**

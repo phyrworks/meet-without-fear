@@ -79,6 +79,15 @@ export function runWithContext<T>(context: RequestContext, fn: () => T): T {
 }
 
 /**
+ * Run a function in exactly this context — or in none, when `context` is
+ * undefined. For re-entering a captured context from a callback that runs
+ * elsewhere (lib/prisma-identity.ts).
+ */
+export function runInCapturedContext<T>(context: RequestContext | undefined, fn: () => T): T {
+  return asyncLocalStorage.run(context as RequestContext, fn);
+}
+
+/**
  * Update the current request context with additional data
  * Only call this within an existing request context
  */
