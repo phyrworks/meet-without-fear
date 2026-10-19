@@ -351,6 +351,7 @@ model SessionKey {
 
   session Session @relation(fields: [sessionId], references: [id], onDelete: Cascade, onUpdate: NoAction)
 
+  @@index([sessionId])
   @@map("session_key")
 }
 
@@ -365,6 +366,7 @@ model ParticipantKey {
 
   participant Participant @relation(fields: [participantId], references: [id], onDelete: Cascade, onUpdate: NoAction)
 
+  @@index([participantId])
   @@map("participant_key")
 }
 
@@ -583,6 +585,7 @@ model Need {
   refiningMessages Message[]
   consents         Consent[]
 
+  @@index([participantId])
   @@index([supersededByNeedId])
   @@map("need")
 }
@@ -1049,6 +1052,7 @@ model UserKey {
 
   user User @relation(fields: [userId], references: [id], onDelete: Restrict, onUpdate: NoAction)
 
+  @@index([userId])
   @@map("user_key")
 }
 
