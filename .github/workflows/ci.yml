@@ -128,6 +128,15 @@ jobs:
       - name: Run checks (lint & type-check)
         run: npm run check
 
+      - name: Create database roles
+        # Roles are cluster-level and live outside Prisma (infra/aws/roles.sql);
+        # migration phase3_app_schema_helpers refuses to run without them.
+        run: >-
+          psql -v ON_ERROR_STOP=1 "$DATABASE_URL"
+          -v migrator_password=ci -v app_password=ci -v job_password=ci
+          -v ops_password=ci -v auth_password=ci
+          -f infra/aws/roles.sql
+
       - name: Run database migrations
         # Prisma 7 reads the URL from prisma.config.ts, which the CLI only
         # finds in its cwd; from the repo root, point at it explicitly.
