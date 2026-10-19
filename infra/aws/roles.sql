@@ -5,7 +5,8 @@
 -- second database in the cluster, and passwords never belong in migrations.
 -- A fresh production cluster gets the same roles from init-db.sh.
 --
--- Run as a superuser (or a CREATEROLE role) against the application database:
+-- Run as a superuser (ALTER ROLE ... NOSUPERUSER NOBYPASSRLS requires one)
+-- against the application database:
 --
 --   psql -v ON_ERROR_STOP=1 -d <db> \
 --     -v migrator_password=... -v app_password=... -v job_password=... \
@@ -50,8 +51,14 @@ FROM (VALUES ('mwf_migrator'), ('mwf_app'), ('mwf_job'), ('mwf_ops'), ('mwf_auth
 -- mwf_job. Grant that, without inheritance, to mwf_migrator and to this
 -- database's owner when the owner is not a superuser (production: mwf_app,
 -- which runs migrations today). While mwf_app owns every table this widens
--- nothing -- mwf_job holds strictly less than the owner. Revoke it from
--- mwf_app when migrations move to mwf_migrator (W10).
+-- nothing -- mwf_job holds strictly less than the owner.
+-- INTERIM EXCEPTION to security-catalogue assertion 9 ("mwf_app is a member
+-- of no role"). Revoke it from mwf_app before W1a/W4a (the first grant or
+-- policy that gives mwf_job more than SELECT on Session/RelationshipMember)
+-- and before any RLS is forced on mwf_app (W8); coupled to moving migrations
+-- to mwf_migrator. Tracked as work-a39h.11.19.
+-- Issued unconditionally: on PG16+ re-granting an existing membership updates
+-- its options, so a membership that exists WITH INHERIT TRUE is corrected.
 SELECT format('GRANT mwf_job TO %I WITH INHERIT FALSE, SET TRUE', g.grantee)
 FROM (
   SELECT 'mwf_migrator'::name AS grantee
@@ -61,8 +68,4 @@ FROM (
   JOIN pg_catalog.pg_roles r ON r.oid = d.datdba
   WHERE d.datname = pg_catalog.current_database() AND NOT r.rolsuper AND r.rolname <> 'mwf_job'
 ) AS g
-WHERE NOT EXISTS (
-  SELECT 1 FROM pg_catalog.pg_auth_members m
-  WHERE m.roleid = 'mwf_job'::regrole AND m.member = g.grantee::regrole
-)
 \gexec

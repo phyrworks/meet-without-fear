@@ -13,9 +13,14 @@ CREATE ROLE mwf_migrator LOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE P
 CREATE ROLE mwf_job LOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE PASSWORD :'job_password';
 CREATE ROLE mwf_ops LOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE PASSWORD :'ops_password';
 CREATE ROLE mwf_auth LOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE PASSWORD :'auth_password';
--- Migrations (run as the database owner, mwf_app, until W10 moves them to
+-- Migrations (run as the database owner, mwf_app, until they move to
 -- mwf_migrator) make mwf_job own the SECURITY DEFINER helpers, which needs
 -- SET ROLE mwf_job. No inheritance: mwf_app gains none of mwf_job's grants.
+-- INTERIM EXCEPTION to security-catalogue assertion 9 ("mwf_app is a member
+-- of no role"): revoke mwf_app's membership before W1a/W4a (the first grant
+-- or policy that gives mwf_job more than SELECT on Session/RelationshipMember)
+-- and before any RLS is forced on mwf_app (W8); coupled to moving migrations
+-- to mwf_migrator. Tracked as work-a39h.11.19.
 GRANT mwf_job TO mwf_app WITH INHERIT FALSE, SET TRUE;
 GRANT mwf_job TO mwf_migrator WITH INHERIT FALSE, SET TRUE;
 CREATE ROLE slam_bot_readonly LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE PASSWORD :'readonly_password';
