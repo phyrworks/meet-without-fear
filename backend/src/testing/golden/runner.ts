@@ -10,9 +10,13 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
+import { compareWithAllowList } from './allow-lists/compare';
+import type { AllowList } from './allow-lists/types';
 import type { Harness, StepResult } from './driver';
-import { buildLabelMap, normalize, timestampFacts, LabelMap } from './normalize';
-import type { RowChange } from './snapshot';
+import { CONCEPT_VIEWS, conceptOf } from './concept-views';
+import { buildConceptLabelMap, buildLabelMap, conceptRowKey, normalize, timestampFacts, LabelMap } from './normalize';
+import { diffSnapshots } from './snapshot';
+import type { RowChange, Snapshot, SnapshotRow } from './snapshot';
 import type { TraceSummary } from './trace';
 
 const GOLDEN_DIR = path.join(__dirname, '__golden__');
@@ -257,4 +261,193 @@ function brief(v: unknown): string {
   const s = JSON.stringify(v);
   if (s === undefined) return 'undefined';
   return s.length > 160 ? `${s.slice(0, 160)}…` : s;
+}
+
+// ============================================================================
+// Normalised (concept) baselines — record / verify
+// ============================================================================
+
+/**
+ * A normalised baseline: what a scenario looks like through the
+ * `old_concept_*` views, in the target schema's vocabulary.
+ *
+ * It holds no trace and no response-time state — both are shape-bound and stay
+ * in the byte-level golden — and its rows are keyed by structural label
+ * (`initial.participant["<participant:ada@main>"]`), never by array position,
+ * because the order of rows by id is not preserved where the target mints new
+ * ids.
+ */
+export interface ConceptGoldenFile {
+  scenario: string;
+  stage: string;
+  /** Every concept view as restored, by concept, then by row key. */
+  initial: Record<string, Record<string, unknown>>;
+  steps: ConceptGoldenStep[];
+}
+
+export interface ConceptGoldenStep {
+  label: string;
+  status: number;
+  body?: unknown;
+  sse?: Array<{ event: string; data: unknown }>;
+  /** Concept-view row changes once the step settled, sorted by view then key. */
+  changes: Array<{
+    view: string;
+    kind: RowChange['kind'];
+    key: string;
+    changedFields?: string[];
+    before?: unknown;
+    after?: unknown;
+  }>;
+}
+
+export interface ConceptRunReport {
+  scenario: string;
+  recorded: boolean;
+  unresolved: string[];
+  /** Differences the allow-list does not name (or a missing baseline). Empty = accepted. */
+  violations: string[];
+  /** Allow-list rules marked `mustMatch` that matched nothing in the baseline. */
+  unmatchedRules: string[];
+}
+
+/** The `GOLDEN_UPDATE` name, and file stem, of a scenario's normalised baseline. */
+export function conceptGoldenName(scenario: string): string {
+  return `${scenario}.concept`;
+}
+
+/** Concept-view tables of a snapshot, by concept name. */
+function conceptTables(snap: Snapshot): Record<string, SnapshotRow[]> {
+  const out: Record<string, SnapshotRow[]> = {};
+  for (const [view, rows] of Object.entries(snap.tables)) out[conceptOf(view)] = rows;
+  return out;
+}
+
+/**
+ * Build the normalised baseline for a run and record it, or compare it with
+ * the recorded one under the scenario's allow-list.
+ *
+ * Recording is `GOLDEN_UPDATE=<scenario>.concept` — named, like the byte-level
+ * goldens, and distinct from them, so recording a normalised baseline can
+ * never rewrite a byte-level one.
+ */
+export async function recordOrVerifyConcept(opts: {
+  scenario: string;
+  harness: Harness;
+  steps: StepResult[];
+  allowList: AllowList;
+}): Promise<ConceptRunReport> {
+  const { scenario, harness, steps, allowList } = opts;
+  if (allowList.scenario !== scenario) {
+    throw new Error(`Allow-list for "${allowList.scenario}" used for scenario "${scenario}"`);
+  }
+  const initial = harness.conceptInitial;
+  if (!initial || steps.some(s => !s.concept)) {
+    throw new Error(`Scenario "${scenario}": the harness was created without \`concept: true\``);
+  }
+
+  // Labels come from every row the run ever showed, so a row deleted mid-run
+  // keeps its label. Later snapshots win, but identity (and so the label's
+  // natural key) cannot change for a given id.
+  const merged = new Map<string, Map<string, SnapshotRow>>();
+  for (const snap of [initial, ...steps.flatMap(s => [s.concept!.before, s.concept!.after])]) {
+    for (const [concept, rows] of Object.entries(conceptTables(snap))) {
+      const identity = [...(CONCEPT_VIEWS as Record<string, { identity: readonly string[] }>)[concept].identity];
+      const m = merged.get(concept) ?? new Map<string, SnapshotRow>();
+      for (const r of rows) m.set(identity.map(c => String(r[c])).join('\u0000'), r);
+      merged.set(concept, m);
+    }
+  }
+  const { seeded } = harness.fixture.manifest;
+  const map = buildConceptLabelMap({
+    manifest: {
+      sessionId: seeded.sessionId,
+      relationshipId: seeded.relationshipId,
+      invitationId: seeded.invitationId,
+      users: [seeded.userA, ...(seeded.userB ? [seeded.userB] : [])],
+    },
+    seededClerkIds: harness.fixture.seededClerkIds,
+    rows: Object.fromEntries([...merged].map(([c, m]) => [c, [...m.values()]])),
+  });
+
+  const unresolved = new Set<string>();
+  const keyed = (concept: string, rows: SnapshotRow[]): Record<string, unknown> => {
+    const out: Record<string, unknown> = {};
+    for (const r of rows) {
+      const k = conceptRowKey(concept, r);
+      // Two rows under one structural key would silently become one.
+      if (k in out) throw new Error(`Concept "${concept}": two rows share the structural key ${k}`);
+      out[k] = r;
+    }
+    // Sorted by key: snapshot order follows raw ids, which the target mints
+    // afresh for participants and conversations.
+    return Object.fromEntries(Object.entries(out).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)));
+  };
+
+  const n0 = normalize(conceptTables(initial), map);
+  n0.unresolved.forEach(u => unresolved.add(u));
+  const initialOut: ConceptGoldenFile['initial'] = {};
+  for (const [concept, rows] of Object.entries(n0.value).sort(([a], [b]) => (a < b ? -1 : 1))) {
+    initialOut[concept] = keyed(concept, rows);
+  }
+
+  const goldenSteps: ConceptGoldenStep[] = steps.map(s => {
+    const raw = diffSnapshots(s.concept!.before, s.concept!.after).map(c => ({
+      view: conceptOf(c.table),
+      kind: c.kind,
+      changedFields: c.changedFields?.slice().sort(),
+      before: c.before,
+      after: c.after,
+    }));
+    const n = normalize({ body: s.sse ? undefined : s.body, sse: s.sse, changes: raw }, map, s.window);
+    n.unresolved.forEach(u => unresolved.add(u));
+    const v = n.value as { body?: unknown; sse?: ConceptGoldenStep['sse']; changes: typeof raw };
+    const changes = v.changes
+      .map(c => ({
+        view: c.view,
+        kind: c.kind,
+        key: conceptRowKey(c.view, (c.after ?? c.before) as Record<string, unknown>),
+        ...(c.changedFields ? { changedFields: c.changedFields } : {}),
+        ...(c.before !== undefined ? { before: c.before } : {}),
+        ...(c.after !== undefined ? { after: c.after } : {}),
+      }))
+      .sort((a, b) => (a.view === b.view ? (a.key < b.key ? -1 : a.key > b.key ? 1 : 0) : a.view < b.view ? -1 : 1));
+    return {
+      label: s.label,
+      status: s.status,
+      ...(s.sse ? { sse: v.sse } : { body: v.body }),
+      changes,
+    };
+  });
+
+  const actual: ConceptGoldenFile = {
+    scenario,
+    stage: harness.fixture.manifest.stage,
+    initial: initialOut,
+    steps: goldenSteps,
+  };
+
+  const name = conceptGoldenName(scenario);
+  const p = goldenPath(name);
+  const base = { scenario, unresolved: [...unresolved] };
+
+  if (isRecording(name)) {
+    fs.mkdirSync(GOLDEN_DIR, { recursive: true });
+    fs.writeFileSync(p, JSON.stringify(actual, null, 2) + '\n');
+    return { ...base, recorded: true, violations: [], unmatchedRules: [] };
+  }
+  if (!fs.existsSync(p)) {
+    return {
+      ...base,
+      recorded: false,
+      unmatchedRules: [],
+      violations: [
+        `No recorded normalised baseline at ${path.relative(process.cwd(), p)}. A missing baseline is a failure.\n` +
+          `Record it deliberately and commit the file:\n    GOLDEN_UPDATE=${name} npx jest ${scenario}.golden`,
+      ],
+    };
+  }
+  const expected = JSON.parse(fs.readFileSync(p, 'utf8')) as ConceptGoldenFile;
+  const cmp = compareWithAllowList(expected, actual, allowList);
+  return { ...base, recorded: false, violations: cmp.violations, unmatchedRules: cmp.unmatchedRules };
 }

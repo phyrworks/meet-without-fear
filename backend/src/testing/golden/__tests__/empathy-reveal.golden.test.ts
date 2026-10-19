@@ -22,12 +22,19 @@
  *   npx tsx src/testing/golden/cli.ts build FEEL_HEARD_B
  *
  * Record:  GOLDEN_UPDATE=empathy-reveal npx jest empathy-reveal.golden
+ *
+ * The same run also records a NORMALISED baseline through the `old_concept_*`
+ * views (`__golden__/empathy-reveal.concept.json`), compared under
+ * `allow-lists/empathy-reveal.ts` rather than byte-for-byte — the oracle that survives
+ * the data-layer rebuild. Record it (never the byte-level one) with:
+ *          GOLDEN_UPDATE=empathy-reveal.concept npx jest empathy-reveal.golden
  */
 
 import { listTables } from '../db';
 import type { Harness, StepResult } from '../driver';
 import { createHarness } from '../driver';
-import { recordOrVerify } from '../runner';
+import { EMPATHY_REVEAL_ALLOW } from '../allow-lists/empathy-reveal';
+import { conceptGoldenName, recordOrVerify, recordOrVerifyConcept } from '../runner';
 import type { SnapshotRow } from '../snapshot';
 
 const BASE_URL =
@@ -54,6 +61,10 @@ describe(`golden: ${SCENARIO}`, () => {
       // The other escaped mutation lives here: moving the reveal write out of
       // its Serializable `$transaction` writes identical rows.
       trace: true,
+      // Snapshot the `old_concept_*` views around every step for the normalised
+      // baseline. Muted harness reads outside the trace window: the byte-level
+      // golden is unaffected.
+      concept: true,
     });
 
     const { userA, userB } = harness.actors;
@@ -180,6 +191,23 @@ describe(`golden: ${SCENARIO}`, () => {
       throw new Error(`Golden mismatch for "${SCENARIO}":\n${report.diff}`);
     }
     expect(report.diff).toBeNull();
+  });
+
+  // The shape-independent oracle (TS-4): the same steps through the concept
+  // views, compared as "baseline ⊆ run, plus only the changes the allow-list
+  // names". On the current shape the allow-list is satisfied trivially.
+  it('matches the normalised concept baseline under its allow-list', async () => {
+    const report = await recordOrVerifyConcept({ scenario: SCENARIO, harness, steps, allowList: EMPATHY_REVEAL_ALLOW });
+    expect(report.unresolved).toEqual([]);
+    if (report.recorded) {
+      expect(process.env.GOLDEN_UPDATE?.split(',')).toContain(conceptGoldenName(SCENARIO));
+      return;
+    }
+    if (report.violations.length) {
+      throw new Error(`Normalised baseline mismatch for "${SCENARIO}":\n${report.violations.join('\n')}`);
+    }
+    // A rule whose path vanished would otherwise pass while asserting nothing.
+    expect(report.unmatchedRules).toEqual([]);
   });
 
   it('every step reached quiescence (a timed-out step is not a baseline)', () => {
