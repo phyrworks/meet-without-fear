@@ -40,7 +40,7 @@ describe('clerkId normalization — the two formats', () => {
     expect(r.unresolved).toEqual([]);
   });
 
-  // `state-factory.ts:150` builds `e2e_${Date.now()}_${random}`, which contains
+  // `fixture-scenarios/current-shape.ts` builds `e2e_${Date.now()}_${random}`, which contains
   // no id at all, so the id patterns cannot see it. This is the format that leaked.
   it('normalizes the seeded format from its owner, when the label map knows it', () => {
     const map = labelMap({ e2e_1787097373886_xa944v: '<clerkId:bob>' });
