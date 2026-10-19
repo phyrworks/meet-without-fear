@@ -4,7 +4,7 @@ sidebar_position: 3
 description: All required environment variables for Meet Without Fear services.
 slug: /deployment/environment-variables
 created: 2026-03-11
-updated: 2026-05-25
+updated: 2026-10-19
 status: living
 ---
 # Environment Variables
@@ -76,7 +76,11 @@ Get your API key from [Ably Dashboard](https://ably.com/dashboard).
 
 | Variable | Description |
 |----------|-------------|
-| `DATABASE_URL` | Pooled connection string (for app) |
+| `DATABASE_URL` | Root/migration connection string. Migrations (`prisma.config.ts`, `infra/aws/deploy.sh`) always use it, and every role URL below falls back to it |
+| `APP_DATABASE_URL` | Optional. HTTP request path (`mwf_app`); used by `lib/prisma.ts`. Falls back to `DATABASE_URL` when unset or empty |
+| `JOB_DATABASE_URL` | Optional. Background jobs and two-party paths (`mwf_job`). Falls back to `DATABASE_URL`. Accepted but not yet used by any code path (W4a/W10) |
+| `OPS_DATABASE_URL` | Optional. `/api/brain/*` (`mwf_ops`). Falls back to `DATABASE_URL`. Accepted but not yet used (W10) |
+| `AUTH_DATABASE_URL` | Optional. First-login user creation (`mwf_auth`). Falls back to `DATABASE_URL`. Accepted but not yet used (W10) |
 | `TRUST_PROXY` | Exact proxy address (`172.29.0.2`); other clients cannot supply trusted forwarding headers |
 
 ### Connection String Format
@@ -116,7 +120,10 @@ LOG_LEVEL=debug
 Store the preserved production integrations in root-only `/etc/mwf/application.env`.
 Compose fixes `NODE_ENV=production`, `PORT=3000`, and disables `E2E_AUTH_BYPASS`
 and `MOCK_LLM`. `DATABASE_URL` uses `mwf_app@db:5432/mwf` with a bounded
-connection pool. Keep administration credentials in `/etc/mwf/database.env`.
+connection pool. The per-role URLs (`APP_`/`JOB_`/`OPS_`/`AUTH_DATABASE_URL`) go
+in the same file when they are introduced; Compose passes the whole file through
+`env_file`, so no `compose.yaml` change is needed. Keep administration credentials
+in `/etc/mwf/database.env`.
 No integration secret belongs in Terraform state, GitHub variables or an image.
 
 See [the AWS runbook](../../infra/aws/README.md) for secret delivery, backups,
@@ -176,6 +183,11 @@ const envSchema = z.object({
   NODE_ENV: z.enum(['development', 'production', 'test']),
   PORT: z.string().transform(Number).default('3000'),
   DATABASE_URL: z.string().url(),
+  // Per-role URLs, each falling back to DATABASE_URL (backend/src/lib/database-urls.ts)
+  APP_DATABASE_URL: z.string().url().optional(),
+  JOB_DATABASE_URL: z.string().url().optional(),
+  OPS_DATABASE_URL: z.string().url().optional(),
+  AUTH_DATABASE_URL: z.string().url().optional(),
   JWT_SECRET: z.string().min(32),
   JWT_REFRESH_SECRET: z.string().min(32),
   ABLY_API_KEY: z.string(),

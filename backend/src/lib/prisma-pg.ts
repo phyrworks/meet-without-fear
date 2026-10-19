@@ -28,6 +28,7 @@ import path from 'path';
 import dotenv from 'dotenv';
 import { Pool, type PoolConfig } from 'pg';
 import { PrismaPg } from '@prisma/adapter-pg';
+import { databaseUrlFor, DATABASE_URL_VARS, type DatabaseRole } from './database-urls';
 
 /** Query parameters that only Prisma's Rust engine understood. */
 const PRISMA_ONLY_PARAMS = [
@@ -91,19 +92,22 @@ export function pgSettingsFromUrl(databaseUrl: string): PgSettings {
 }
 
 /**
+ * The URL a role connects with: its own variable (APP_DATABASE_URL, ...),
+ * else DATABASE_URL — see database-urls.ts.
+ *
  * Prisma 6's generated client loaded backend/.env by itself (without
  * overriding variables already set). Prisma 7's does not, and several
  * scripts and DB-backed tests relied on that, so keep doing it here.
  * Resolves to backend/.env from src/lib; from dist/ it points at a file
  * that does not exist and is a no-op, as in production.
  */
-function databaseUrlFromEnv(): string {
-  if (!process.env.DATABASE_URL) {
+export function databaseUrlFromEnv(role: DatabaseRole = 'app'): string {
+  if (!databaseUrlFor(role)) {
     dotenv.config({ path: path.resolve(__dirname, '../../.env') });
   }
-  const databaseUrl = process.env.DATABASE_URL;
+  const databaseUrl = databaseUrlFor(role);
   if (!databaseUrl) {
-    throw new Error('DATABASE_URL is not set');
+    throw new Error(`Neither ${DATABASE_URL_VARS[role]} nor DATABASE_URL is set`);
   }
   return databaseUrl;
 }
@@ -126,15 +130,16 @@ function buildAdapter(databaseUrl: string): PrismaPg {
 /**
  * A PrismaPg adapter over a pg.Pool we construct.
  *
- * Without an explicit URL, DATABASE_URL is read on first connect rather
+ * Without an explicit URL, the role's URL (APP_DATABASE_URL for the default
+ * `app` role, falling back to DATABASE_URL) is read on first connect rather
  * than at construction: Prisma 6 did the same, and importing lib/prisma
  * with no database configured (the image smoke test in aws-deploy.yml,
  * mocked unit tests) must keep working.
  */
-export function createPrismaPgAdapter(databaseUrl?: string): PgAdapterFactory {
+export function createPrismaPgAdapter(databaseUrl?: string, role: DatabaseRole = 'app'): PgAdapterFactory {
   if (databaseUrl !== undefined) return buildAdapter(databaseUrl);
   let adapter: PrismaPg | undefined;
-  const resolve = (): PrismaPg => (adapter ??= buildAdapter(databaseUrlFromEnv()));
+  const resolve = (): PrismaPg => (adapter ??= buildAdapter(databaseUrlFromEnv(role)));
   return {
     provider: 'postgres',
     adapterName: ADAPTER_NAME,
