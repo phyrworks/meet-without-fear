@@ -81,6 +81,33 @@ escaping it entirely (below). A step's trace comes from Postgres's own statement
 log, so it needs no code in the application under test and will survive Prisma
 being deleted.
 
+## Changing the fixture factory without moving a golden
+
+`state-factory.ts` is two layers: shape-independent scenarios
+(`../fixture-scenarios/scenarios.ts`) and a current-shape writer
+(`../fixture-scenarios/current-shape.ts`) that must write exactly the rows the
+goldens were recorded against. Any change to either is checked with:
+
+```bash
+npx tsx src/testing/golden/tools/fidelity.ts run --old-ref phoenix/base
+```
+
+It seeds all 13 `TargetStage`s, with and without a partner account, once with
+the factory at `--old-ref` and once with the working tree's, into throwaway
+`mwf_fid_*` databases (the `mwf_fx_*` templates are never touched), and prints
+one line per stage: `IDENTICAL`, or the `table.column xN` values that differ.
+Exit code 1 on any difference.
+
+It can demand exact equality because the seeding child runs with a **pinned
+clock** (`Date.now()`/`new Date()` advance 1ms per call, `Math.random`
+seeded): every stamp, Prisma's `@default(now())` included, becomes a function
+of the order of clock reads, so identical writes in identical order dump
+byte-identically. A real-clock rebuild cannot be compared that way —
+default-stamp columns jitter between any two builds, old vs old included.
+`tools/normdump.ts` describes the normalization; `seed` and `compare`
+subcommands run the halves separately. It compares factories against one
+schema, not across a migration.
+
 ## Scenarios
 
 | Scenario | Fixture | Covers |

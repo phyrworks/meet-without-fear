@@ -283,7 +283,8 @@ Emails **must** end in `@e2e.test`. The response includes per-user `pageUrls` ca
 `x-e2e-user-id` header, so no login is needed. Change the port in those URLs from 8081 to 8082.
 Open the two URLs in separate browser profiles to drive both sides of a session.
 
-`TargetStage` (`backend/src/testing/state-factory.ts:24`) offers 13 states: `CREATED`,
+`TargetStage` (`backend/src/testing/fixture-scenarios/target-stage.ts`, re-exported by
+`state-factory.ts`; each state is defined in `fixture-scenarios/scenarios.ts`) offers 13 states: `CREATED`,
 `INVITATION_READY`, `EMPATHY_SHARED_A`, `FEEL_HEARD_B`, `RECONCILER_SHOWN_B`, `CONTEXT_SHARED_B`,
 `EMPATHY_REVEALED`, `NEED_MAPPING_COMPLETE`, `STRATEGIC_REPAIR_COMPLETE`, and four
 `STAGE4_REDESIGN_*` variants. Seeding `NEED_MAPPING_COMPLETE` populates 14 tables.

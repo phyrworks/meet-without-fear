@@ -61,7 +61,7 @@ const UUID_RE = /(?<![0-9a-zA-Z])[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}
  *                                                              exactly what the
  *                                                              `(?<![a-z0-9])`
  *                                                              boundary is for.
- *   `state-factory.ts:150` `e2e_${Date.now()}_${random}`     — contains no cuid
+ *   `current-shape.ts` (writeCurrentShape) `e2e_${Date.now()}_${random}`     — contains no cuid
  *                                                              at all.
  *
  * Both appear in one `User` row change in `empathy-reveal`: the seeded value on

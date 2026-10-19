@@ -255,7 +255,12 @@ await new SessionBuilder(request)
 
 ### Implementation
 
-The State Factory (`backend/src/testing/state-factory.ts`) uses Prisma transactions to atomically create all required data for a given stage.
+The State Factory (`backend/src/testing/state-factory.ts`) creates all required data for a given stage atomically, in one Prisma transaction. It has two layers behind it:
+
+- **Scenario model** (`backend/src/testing/fixture-scenarios/scenarios.ts`, types in `scenario-model.ts`): each `TargetStage` is a declarative, schema-independent description — the participants, the milestones each has reached (`compact_signed`, `feel_heard`, `empathy_validated`, `needs_shared`, `choices_shared`, `closed`, …, the keys of the target schema's `milestone` table) with timestamps, and the content they produced (messages, empathy attempt, needs, proposals and choices, reconciler result). No stage numbers or `gatesSatisfied` keys appear in it.
+- **Current-shape writer** (`backend/src/testing/fixture-scenarios/current-shape.ts`): translates a scenario into today's tables — `StageProgress` rows, stage integers, `gatesSatisfied` JSON, `Session.status`, `Invitation` flags. Its milestone ↔ gate-key table is `GATE_ENCODING`. It reproduces the pre-rebuild factory's rows exactly (same values, timestamp lattice and write order), which is what keeps the recorded golden suite valid across a fixture rebuild.
+
+To add a stage, add a `TargetStage` member (`fixture-scenarios/target-stage.ts`) and a builder in `scenarios.ts`; the writer needs no change unless the scenario uses content it has never written.
 
 ## Ably (Real-Time Messaging)
 
@@ -404,7 +409,8 @@ Enabled only when `E2E_AUTH_BYPASS=true`:
 | `backend/src/lib/e2e-fixtures.ts` | Fixture loading logic |
 | `backend/src/lib/bedrock.ts` | LLM mock toggle |
 | `backend/src/routes/e2e.ts` | E2E helper endpoints |
-| `backend/src/testing/state-factory.ts` | Session stage creation |
+| `backend/src/testing/state-factory.ts` | Session stage creation (public surface) |
+| `backend/src/testing/fixture-scenarios/` | Stage scenarios (milestones + content) and the current-shape writer |
 | `mobile/src/providers/E2EAuthProvider.tsx` | Mobile auth bypass |
 
 ## Test Run Publishing & Dashboard
