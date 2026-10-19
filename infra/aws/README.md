@@ -26,7 +26,7 @@ Lightsail prepends a `/bin/sh` wrapper to user data; Terraform explicitly invoke
 `bootstrap.sh` installs Docker, AWS CLI, unattended security updates, bounded logs and 2 GB swap. Automatic reboots are disabled. Copy this directory's runtime files into root-owned `/opt/mwf` (exclude `.local`, Terraform state/config and `.terraform`). Create root-only `/etc/mwf` files:
 
 - `application.env`: exact production integration settings; `DATABASE_URL` uses non-superuser `mwf_app` at `db:5432/mwf`, with `connection_limit=12`. Preserve encryption keys and production Bedrock settings. No local development settings.
-- `database.env`: `POSTGRES_USER=postgres`, random `POSTGRES_PASSWORD`, `POSTGRES_DB=mwf`, random `APP_DB_PASSWORD`, random `READONLY_DB_PASSWORD`.
+- `database.env`: `POSTGRES_USER=postgres`, random `POSTGRES_PASSWORD`, `POSTGRES_DB=mwf`, random `APP_DB_PASSWORD`, random `READONLY_DB_PASSWORD`, and random `MIGRATOR_DB_PASSWORD`, `JOB_DB_PASSWORD`, `OPS_DB_PASSWORD`, `AUTH_DB_PASSWORD` for the Phase 3 roles (`init-db.sh` creates them on a fresh cluster; an existing cluster gets them from `roles.sql`, run by the operator over the SSH tunnel as `postgres` before the first release containing migration `phase3_app_schema_helpers`).
 - `release.env`: pinned `DB_IMAGE`, `CADDY_IMAGE` from `images.env.example`, and immutable `APP_IMAGE`.
 - `operations.env`: `BACKUP_BUCKET` and `AWS_DEFAULT_REGION=us-west-2`.
 - `backup.credentials`: AWS credentials-file format for Terraform's backup user (PutObject on nightly/preserved only).
