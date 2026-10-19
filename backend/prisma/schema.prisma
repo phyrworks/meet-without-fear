@@ -15,468 +15,1255 @@ datasource db {
 }
 
 // ============================================================================
-// Core Models
+// Target shape, October 2026 — docs/backend/data-model/schema-target-2026-10.md
+//
+// 47 tables (spec §1.1–1.8). This file declares everything `prisma migrate
+// diff` can see. Everything it cannot see — RLS, policies, triggers, CHECKs,
+// the `intensity` domain, views, `app.*` functions, grants, the milestone
+// seed — lives in the migration SQL. The SQL-only objects that `prisma db
+// pull` CAN see (the two generated columns and the `sql_`-prefixed partial /
+// expression indexes) are in backend/scripts/target-shape/sql-only.sql.
+//
+// Rules (spec §5): never declare a partial unique; never give a Prisma index
+// a `sql_` name; every relation has an explicit onDelete and
+// onUpdate: NoAction; generated columns are declared exactly as `db pull`
+// renders them. Gate: backend/scripts/target-shape/check-schema.sh.
 // ============================================================================
 
-model User {
-  id                      String    @id @default(dbgenerated("uuidv7()")) @db.Uuid
-  clerkId                 String?   @unique // Clerk authentication user ID
-  email                   String    @unique
-  name                    String? // Full name (computed from firstName + lastName)
-  firstName               String?
-  lastName                String?
-  pushToken               String? // Expo push token for realtime fallbacks
-  biometricEnabled        Boolean   @default(false)
-  biometricEnrolledAt     DateTime?
-  memoryPreferences       Json? // MemoryPreferencesDTO - AI memory settings
-  notificationPreferences Json? // NotificationPreferencesDTO - notification settings
-  privacyPreferences      Json? // PrivacyPreferencesDTO - visibility and invitation settings
-  lastMoodIntensity       Int? // Last mood intensity (1-10) for session entry default
-  createdAt               DateTime  @default(now())
-  updatedAt               DateTime  @updatedAt
-
-  // === Global Facts ===
-  // Consolidated facts about the user across all sessions
-  // Format: [{ category: string, fact: string }]
-  // Categories: People, Logistics, Conflict, Emotional, History, etc.
-  // Max 50 facts, deduplicated and pruned during consolidation
-  globalFacts Json?
-
-  // Relationships
-  relationships             RelationshipMember[]
-  vessels                   UserVessel[]
-  stageProgress             StageProgress[]
-  messages                  Message[]
-  consentsGiven             ConsentRecord[]               @relation("ConsentsGiven")
-  consentsRequested         ConsentRecord[]               @relation("ConsentsRequested")
-  consentedContent          ConsentedContent[]
-  empathyDrafts             EmpathyDraft[]
-  empathyAttempts           EmpathyAttempt[]
-  empathyValidations        EmpathyValidation[]
-  strategyProposals         StrategyProposal[]
-  removedStage4Proposals    StrategyProposal[]            @relation("Stage4ProposalRemovedBy")
-  strategyRankings          StrategyRanking[]
-  stage4ProposalSelections  Stage4ProposalSelection[]
-  stage4SubChats            Stage4SubChat[]
-  tendingResponses          TendingResponse[]
-  tendingCheckins           TendingCheckin[]
-  tendingCoordinationCycles TendingCoordinationCycle[]
-  tendingEntryOutcomes      TendingEntryOutcome[]
-  tendingReminders          TendingReminder[]
-  tendingAdjustments        TendingAdjustment[]
-  tendingBetweenPeriodNotes TendingBetweenPeriodNote[]
-  exerciseCompletions       EmotionalExerciseCompletion[]
-  invitationsSent           Invitation[]                  @relation("InvitedBy")
-  innerWorkSessions         InnerWorkSession[]
-  userMemories              UserMemory[]
-  validationFeedbackDrafts  ValidationFeedbackDraft[]
-
-  // Inner Work: Needs Assessment
-  needScores           NeedScore[]
-  needsAssessmentState NeedsAssessmentState?
-
-  // Inner Work: People Tracking
-  people Person[]
-
-  // Inner Work: Gratitude Practice
-  gratitudeEntries     GratitudeEntry[]
-  gratitudePreferences GratitudePreferences?
-
-  // Inner Work: Meditation
-  meditationSessions    MeditationSession[]
-  meditationStats       MeditationStats?
-  meditationFavorites   MeditationFavorite[]
-  meditationPreferences MeditationPreferences?
-  savedMeditations      SavedMeditation[]
-
-  // Inner Work: Cross-Feature Intelligence
-  insights Insight[]
-
-  // Inner Work: Recurring Themes (Knowledge Base)
-  recurringThemes RecurringTheme[]
-}
+// ----------------------------------------------------------------------------
+// 1.1 Core / session (16)
+// ----------------------------------------------------------------------------
 
 model Relationship {
   id        String   @id @default(dbgenerated("uuidv7()")) @db.Uuid
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
 
-  // Members (exactly 2 for Meet Without Fear)
   members  RelationshipMember[]
   sessions Session[]
+
+  @@map("relationship")
 }
 
 model RelationshipMember {
-  id             String       @id @default(dbgenerated("uuidv7()")) @db.Uuid
-  relationship   Relationship @relation(fields: [relationshipId], references: [id], onDelete: Cascade)
-  relationshipId String       @db.Uuid
-  user           User         @relation(fields: [userId], references: [id], onDelete: Cascade)
-  userId         String       @db.Uuid
-  joinedAt       DateTime     @default(now())
-  role           String       @default("member")
-  nickname       String? // What this member calls their partner
+  relationshipId String           @map("relationship_id") @db.Uuid
+  userId         String           @map("user_id") @db.Uuid
+  role           RelationshipRole @default(member)
+  nickname       String?
+  joinedAt       DateTime         @default(now()) @map("joined_at") @db.Timestamptz(3)
+  createdAt      DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt      DateTime         @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
 
-  @@unique([relationshipId, userId])
+  relationship Relationship @relation(fields: [relationshipId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  user         User         @relation(fields: [userId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+
+  @@id([relationshipId, userId])
   @@index([userId])
+  @@map("relationship_member")
 }
-
-// ============================================================================
-// Session
-// ============================================================================
 
 model Session {
-  id             String        @id @default(dbgenerated("uuidv7()")) @db.Uuid
-  relationship   Relationship  @relation(fields: [relationshipId], references: [id], onDelete: Cascade)
-  relationshipId String        @db.Uuid
-  status         SessionStatus @default(CREATED)
-  type           SessionType   @default(CONFLICT_RESOLUTION)
-  createdAt      DateTime      @default(now())
-  updatedAt      DateTime      @updatedAt
-  resolvedAt     DateTime?
+  id                    String        @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  relationshipId        String        @map("relationship_id") @db.Uuid
+  status                SessionStatus @default(CREATED)
+  topicFrame            String?       @map("topic_frame")
+  topicFrameConfirmedAt DateTime?     @map("topic_frame_confirmed_at") @db.Timestamptz(3)
+  previousSessionId     String?       @map("previous_session_id") @db.Uuid
+  resolvedAt            DateTime?     @map("resolved_at") @db.Timestamptz(3)
+  createdAt             DateTime      @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt             DateTime      @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
 
-  // Explicit topic frame (3-5 word neutral description of the conflict, e.g., "Tuesday pickup disagreement")
-  // Proposed by AI from user 1's Stage 0 invitation draft, finalized before invite is shared
-  topicFrame            String?
-  topicFrameConfirmedAt DateTime?
+  relationship    Relationship @relation(fields: [relationshipId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  previousSession Session?     @relation("SessionLineage", fields: [previousSessionId], references: [id], onDelete: SetNull, onUpdate: NoAction)
+  nextSessions    Session[]    @relation("SessionLineage")
 
-  // Related entities
-  messages                  Message[]
-  sharedVessel              SharedVessel?
-  stageProgress             StageProgress[]
-  userVessels               UserVessel[]
-  empathyDrafts             EmpathyDraft[]
-  empathyAttempts           EmpathyAttempt[]
-  empathyValidations        EmpathyValidation[]
-  strategyProposals         StrategyProposal[]
-  strategyRankings          StrategyRanking[]
-  stage4ProposalSelections  Stage4ProposalSelection[]
-  stage4NeedCoverages       Stage4NeedCoverage[]
-  stage4NeedDeclinations    Stage4NeedDeclination[]
-  stage4Closure             Stage4Closure?
-  stage4SubChats            Stage4SubChat[]
-  tendingEntries            TendingEntry[]
-  tendingCheckins           TendingCheckin[]
-  tendingCoordinationCycles TendingCoordinationCycle[]
-  tendingNeedOutcomes       TendingNeedOutcome[]
-  tendingReminders          TendingReminder[]
-  tendingAdjustments        TendingAdjustment[]
-  tendingBetweenPeriodNotes TendingBetweenPeriodNote[]
-  consentRecords            ConsentRecord[]
-  exerciseCompletions       EmotionalExerciseCompletion[]
-  invitations               Invitation[]
-  userMemories              UserMemory[]
-  validationFeedbackDrafts  ValidationFeedbackDraft[]
-  refinementAttemptCounters RefinementAttemptCounter[]
-  reconcilerResults         ReconcilerResult[]
-  brainActivities           BrainActivity[]
-
-  // Linked Inner Thoughts sessions for private reflection during partner session
-  linkedInnerThoughts InnerWorkSession[] @relation("LinkedInnerThoughts")
-
-  // Stage 4 Phase 5: Tending check-in NEW_PROCESS path links forward to a fresh session
-  previousSession   Session?  @relation("SessionLineage", fields: [previousSessionId], references: [id], onDelete: SetNull)
-  previousSessionId String?   @db.Uuid
-  nextSessions      Session[] @relation("SessionLineage")
-
-  @@index([relationshipId])
-  @@index([status])
-  @@index([type])
-  @@index([previousSessionId])
-}
-
-enum SessionType {
-  CONFLICT_RESOLUTION // Partner-based conflict resolution (4-stage process)
-  INNER_WORK // Solo self-reflection and pattern recognition
-}
-
-enum SessionStatus {
-  CREATED // Invitation sent
-  INVITED // Partner invited, awaiting join
-  ACTIVE // Both users engaged
-  PAUSED // Cooling period
-  WAITING // One user ahead, waiting for other
-  RESOLVED // Process completed
-  ABANDONED // Timeout or withdrawal
-  ARCHIVED // User has archived this session
-}
-
-// ============================================================================
-// Inner Work Session (Solo Self-Reflection)
-// ============================================================================
-
-model InnerWorkSession {
-  id          String          @id @default(dbgenerated("uuidv7()")) @db.Uuid
-  user        User            @relation(fields: [userId], references: [id], onDelete: Cascade)
-  userId      String          @db.Uuid
-  title       String? // Optional user-provided or AI-generated title
-  summary     String?         @db.Text // AI-generated summary of the session
-  theme       String? // Detected theme (e.g., "anxiety", "relationship patterns")
-  status      InnerWorkStatus @default(ACTIVE)
-  createdAt   DateTime        @default(now())
-  updatedAt   DateTime        @updatedAt
-  distilledAt DateTime? // Set when distillation has been run on this session
-
-  // Rolling conversation summary for long sessions (like partner session vessels)
-  // Stores JSON: { text, keyThemes, emotionalJourney, unresolvedTopics, messageCount, generatedAt }
-  conversationSummary String? @db.Text
-
-  // Session-level content embedding for semantic search
-  // Embeds theme + summary for session-level retrieval
-  // Replaces message-level embedding per fact-ledger architecture
-  contentEmbedding Unsupported("vector(1024)")?
-
-  // Messages in this inner work session
-  messages  InnerWorkMessage[]
-  // Distilled takeaways from this session
-  takeaways SessionTakeaway[]
-
-  // Brain activities (LLM calls) made during this session
+  participants    Participant[]
+  invitations     Invitation[]
+  sessionKeys     SessionKey[]
+  needShares      NeedShare[]
+  proposals       Proposal[]
+  agreements      Agreement[]
+  closure         SessionClosure?
+  followUps       FollowUp[]
+  userMemories    UserMemory[]
+  reflections     Reflection[]
   brainActivities BrainActivity[]
 
-  // Link to partner session for context-aware Inner Thoughts
-  // When set, AI has access to partner session context and can reference it
-  linkedPartnerSession   Session?          @relation("LinkedInnerThoughts", fields: [linkedPartnerSessionId], references: [id], onDelete: SetNull)
-  linkedPartnerSessionId String?           @db.Uuid
-  linkedAtMessage        InnerWorkMessage? @relation("InnerWorkBranchPoint", fields: [linkedAtMessageId], references: [id], onDelete: SetNull)
-  linkedAtMessageId      String?           @db.Uuid
-  linkedAtStage          Int? // Stage when Inner Thoughts was opened (1, 2, 3, 4)
-  linkedTrigger          String? // Why it was opened: "empathy_wait", "voluntary", "witness_wait"
-  contextSummarySnapshot String?           @db.Text // Point-in-time context passed when a partner session was started
+  @@index([relationshipId])
+  @@index([previousSessionId])
+  @@map("session")
+}
+
+model Participant {
+  id          String          @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  sessionId   String          @map("session_id") @db.Uuid
+  userId      String?         @map("user_id") @db.Uuid
+  kind        ParticipantKind @default(human)
+  displayName String?         @map("display_name")
+  joinedAt    DateTime        @default(now()) @map("joined_at") @db.Timestamptz(3)
+  leftAt      DateTime?       @map("left_at") @db.Timestamptz(3)
+  createdAt   DateTime        @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt   DateTime        @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  session Session @relation(fields: [sessionId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  user    User?   @relation(fields: [userId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+
+  conversations           Conversation[]
+  readState               ConversationReadState?
+  sentMessages            Message[]              @relation("MessageSender")
+  drafts                  Draft[]                @relation("DraftOwner")
+  draftsAbout             Draft[]                @relation("DraftAbout")
+  milestones              ParticipantMilestone[]
+  aiMemories              AiMemory[]
+  moodReadings            MoodReading[]
+  regulationEvents        RegulationEvent[]
+  invitationsSent         Invitation[]
+  participantKeys         ParticipantKey[]
+  empathyAttemptsAuthored EmpathyAttempt[]       @relation("EmpathyAttemptAuthor")
+  empathyAttemptsAbout    EmpathyAttempt[]       @relation("EmpathyAttemptSubject")
+  empathyReviews          EmpathyReview[]
+  reconcilerResults       ReconcilerResult[]
+  guidanceAuthored        ReconcilerGuidance[]   @relation("GuidanceAuthor")
+  guidanceAbout           ReconcilerGuidance[]   @relation("GuidanceSubject")
+  shareOffers             ContextShareOffer[]
+  consents                Consent[]              @relation("ConsentDecider")
+  consentsRequested       Consent[]              @relation("ConsentRequester")
+  needs                   Need[]
+  needShares              NeedShare[]
+  needDispositions        NeedDisposition[]
+  proposalsCreated        Proposal[]             @relation("ProposalCreator")
+  proposalsRemoved        Proposal[]             @relation("ProposalRemover")
+  proposalChoices         ProposalChoice[]
+  proposalRevisions       ProposalRevision[]
+  agreementParties        AgreementParty[]
+  closuresClosed          SessionClosure[]
+  followUpsOwned          FollowUp[]
+  followUpCheckins        FollowUpCheckin[]
+  followUpNotes           FollowUpNote[]
+  brainActivities         BrainActivity[]
+
+  @@unique([sessionId, userId])
+  @@index([userId])
+  @@map("participant")
+}
+
+/// sql_conversation_one_main: UNIQUE (participant_id) WHERE kind = 'MAIN' — sql-only.sql.
+model Conversation {
+  id               String             @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  participantId    String             @map("participant_id") @db.Uuid
+  kind             ConversationKind   @default(MAIN)
+  anchorKind       SubchatAnchor?     @map("anchor_kind")
+  anchorProposalId String?            @map("anchor_proposal_id") @db.Uuid
+  status           ConversationStatus @default(ACTIVE)
+  resolvedAt       DateTime?          @map("resolved_at") @db.Timestamptz(3)
+  createdAt        DateTime           @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt        DateTime           @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  participant    Participant @relation(fields: [participantId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  anchorProposal Proposal?   @relation(fields: [anchorProposalId], references: [id], onDelete: SetNull, onUpdate: NoAction)
+
+  messages Message[]
+
+  @@index([participantId, kind, status])
+  @@index([anchorProposalId])
+  @@map("conversation")
+}
+
+model ConversationReadState {
+  participantId        String    @id @map("participant_id") @db.Uuid
+  lastViewedAt         DateTime? @map("last_viewed_at") @db.Timestamptz(3)
+  lastSeenMessageId    String?   @map("last_seen_message_id") @db.Uuid
+  lastViewedShareTabAt DateTime? @map("last_viewed_share_tab_at") @db.Timestamptz(3)
+  lastActiveAt         DateTime? @map("last_active_at") @db.Timestamptz(3)
+  archivedAt           DateTime? @map("archived_at") @db.Timestamptz(3)
+  createdAt            DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt            DateTime  @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  participant     Participant @relation(fields: [participantId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  lastSeenMessage Message?    @relation(fields: [lastSeenMessageId], references: [id], onDelete: SetNull, onUpdate: NoAction)
+
+  @@index([lastSeenMessageId])
+  @@map("conversation_read_state")
+}
+
+model Message {
+  id                  String      @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  conversationId      String      @map("conversation_id") @db.Uuid
+  senderParticipantId String?     @map("sender_participant_id") @db.Uuid
+  role                MessageRole
+  kind                MessageKind @default(CHAT)
+  content             String
+  contentHash         String?     @map("content_hash") @db.VarChar(64)
+  refiningNeedId      String?     @map("refining_need_id") @db.Uuid
+  sourceAttemptId     String?     @map("source_attempt_id") @db.Uuid
+  createdAt           DateTime    @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  conversation      Conversation    @relation(fields: [conversationId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  senderParticipant Participant?    @relation("MessageSender", fields: [senderParticipantId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  refiningNeed      Need?           @relation(fields: [refiningNeedId], references: [id], onDelete: SetNull, onUpdate: NoAction)
+  sourceAttempt     EmpathyAttempt? @relation(fields: [sourceAttemptId], references: [id], onDelete: SetNull, onUpdate: NoAction)
+
+  readStates ConversationReadState[]
+
+  @@index([conversationId, createdAt])
+  @@index([conversationId, kind, contentHash])
+  @@index([senderParticipantId])
+  @@index([refiningNeedId])
+  @@index([sourceAttemptId])
+  @@map("message")
+}
+
+/// sql_draft_one_per_point: UNIQUE (participant_id, kind,
+/// coalesce(about_participant_id, attempt_id, share_offer_id)) is an
+/// expression index — sql-only.sql.
+model Draft {
+  id                 String    @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  participantId      String    @map("participant_id") @db.Uuid
+  kind               DraftKind
+  aboutParticipantId String?   @map("about_participant_id") @db.Uuid
+  attemptId          String?   @map("attempt_id") @db.Uuid
+  shareOfferId       String?   @map("share_offer_id") @db.Uuid
+  content            String
+  readyToShare       Boolean   @default(false) @map("ready_to_share")
+  version            Int       @default(1)
+  createdAt          DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt          DateTime  @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  participant      Participant        @relation("DraftOwner", fields: [participantId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  aboutParticipant Participant?       @relation("DraftAbout", fields: [aboutParticipantId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  attempt          EmpathyAttempt?    @relation(fields: [attemptId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  shareOffer       ContextShareOffer? @relation(fields: [shareOfferId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([aboutParticipantId])
+  @@index([attemptId])
+  @@index([shareOfferId])
+  @@map("draft")
+}
+
+model Milestone {
+  key            String         @id
+  ordinal        Int            @unique
+  stageLabel     String         @map("stage_label")
+  scope          MilestoneScope @default(participant)
+  selfAssertable Boolean        @default(false) @map("self_assertable")
+  createdAt      DateTime       @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  reached ParticipantMilestone[]
+
+  @@map("milestone")
+}
+
+model ParticipantMilestone {
+  participantId String   @map("participant_id") @db.Uuid
+  milestoneKey  String   @map("milestone_key")
+  reachedAt     DateTime @default(now()) @map("reached_at") @db.Timestamptz(3)
+  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  participant Participant @relation(fields: [participantId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  milestone   Milestone   @relation(fields: [milestoneKey], references: [key], onDelete: Restrict, onUpdate: NoAction)
+
+  @@id([participantId, milestoneKey])
+  @@index([milestoneKey, reachedAt])
+  @@map("participant_milestone")
+}
+
+model AiMemory {
+  id            String       @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  participantId String?      @map("participant_id") @db.Uuid
+  userId        String?      @map("user_id") @db.Uuid
+  kind          AiMemoryKind
+  doc           Json
+  createdAt     DateTime     @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt     DateTime     @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  participant Participant? @relation(fields: [participantId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  user        User?        @relation(fields: [userId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+
+  @@unique([participantId, kind])
+  @@unique([userId, kind])
+  @@map("ai_memory")
+}
+
+/// intensity is the `intensity` domain (int CHECK 1..10) in the migration SQL.
+model MoodReading {
+  id            String   @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  participantId String   @map("participant_id") @db.Uuid
+  intensity     Int
+  context       String?
+  recordedAt    DateTime @default(now()) @map("recorded_at") @db.Timestamptz(3)
+  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  participant Participant @relation(fields: [participantId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([participantId, recordedAt])
+  @@map("mood_reading")
+}
+
+model RegulationEvent {
+  id              String         @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  participantId   String         @map("participant_id") @db.Uuid
+  type            RegulationType
+  intensityBefore Int?           @map("intensity_before")
+  intensityAfter  Int?           @map("intensity_after")
+  completedAt     DateTime       @default(now()) @map("completed_at") @db.Timestamptz(3)
+  createdAt       DateTime       @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  participant Participant @relation(fields: [participantId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([participantId, completedAt])
+  @@map("regulation_event")
+}
+
+model Invitation {
+  id                     String           @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  sessionId              String           @map("session_id") @db.Uuid
+  invitedByParticipantId String           @map("invited_by_participant_id") @db.Uuid
+  acceptedByUserId       String?          @map("accepted_by_user_id") @db.Uuid
+  name                   String?
+  status                 InvitationStatus @default(PENDING)
+  messageConfirmedAt     DateTime?        @map("message_confirmed_at") @db.Timestamptz(3)
+  expiresAt              DateTime         @map("expires_at") @db.Timestamptz(3)
+  acceptedAt             DateTime?        @map("accepted_at") @db.Timestamptz(3)
+  declinedAt             DateTime?        @map("declined_at") @db.Timestamptz(3)
+  declineReason          String?          @map("decline_reason")
+  createdAt              DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt              DateTime         @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  session              Session     @relation(fields: [sessionId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  invitedByParticipant Participant @relation(fields: [invitedByParticipantId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  acceptedByUser       User?       @relation(fields: [acceptedByUserId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+
+  @@index([sessionId])
+  @@index([invitedByParticipantId])
+  @@index([status, expiresAt])
+  @@index([acceptedByUserId])
+  @@map("invitation")
+}
+
+/// sql_session_key_live: UNIQUE (session_id) WHERE destroyed_at IS NULL — sql-only.sql.
+model SessionKey {
+  id          String    @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  sessionId   String    @map("session_id") @db.Uuid
+  keyId       String    @map("key_id")
+  wrappedDek  Bytes     @map("wrapped_dek")
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  destroyedAt DateTime? @map("destroyed_at") @db.Timestamptz(3)
+
+  session Session @relation(fields: [sessionId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@map("session_key")
+}
+
+/// sql_participant_key_live: UNIQUE (participant_id) WHERE destroyed_at IS NULL — sql-only.sql.
+model ParticipantKey {
+  id            String    @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  participantId String    @map("participant_id") @db.Uuid
+  keyId         String    @map("key_id")
+  wrappedDek    Bytes     @map("wrapped_dek")
+  createdAt     DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  destroyedAt   DateTime? @map("destroyed_at") @db.Timestamptz(3)
+
+  participant Participant @relation(fields: [participantId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@map("participant_key")
+}
+
+// ----------------------------------------------------------------------------
+// 1.2 Empathy and reconciler (5)
+// ----------------------------------------------------------------------------
+
+/// sql_attempt_one_live_per_direction: UNIQUE (author_participant_id,
+/// subject_participant_id) WHERE status NOT IN ('SUPERSEDED','VALIDATED') — sql-only.sql.
+model EmpathyAttempt {
+  id                   String         @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  authorParticipantId  String         @map("author_participant_id") @db.Uuid
+  subjectParticipantId String         @map("subject_participant_id") @db.Uuid
+  round                Int            @default(1)
+  supersedesAttemptId  String?        @map("supersedes_attempt_id") @db.Uuid
+  content              String
+  status               EmpathyStatus  @default(HELD)
+  statusVersion        Int            @default(0) @map("status_version")
+  submittedAt          DateTime       @default(now()) @map("submitted_at") @db.Timestamptz(3)
+  revealedAt           DateTime?      @map("revealed_at") @db.Timestamptz(3)
+  deliveryStatus       DeliveryStatus @default(PENDING) @map("delivery_status")
+  deliveredAt          DateTime?      @map("delivered_at") @db.Timestamptz(3)
+  seenAt               DateTime?      @map("seen_at") @db.Timestamptz(3)
+  createdAt            DateTime       @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt            DateTime       @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  authorParticipant  Participant      @relation("EmpathyAttemptAuthor", fields: [authorParticipantId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  subjectParticipant Participant      @relation("EmpathyAttemptSubject", fields: [subjectParticipantId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  supersedesAttempt  EmpathyAttempt?  @relation("EmpathyAttemptSupersession", fields: [supersedesAttemptId], references: [id], onDelete: SetNull, onUpdate: NoAction)
+  supersededBy       EmpathyAttempt[] @relation("EmpathyAttemptSupersession")
+
+  deliveredMessages Message[]
+  drafts            Draft[]
+  reviews           EmpathyReview[]
+  reconcilerResults ReconcilerResult[]
+  shareOffers       ContextShareOffer[]
+  consents          Consent[]
+
+  @@unique([authorParticipantId, subjectParticipantId, round])
+  @@index([subjectParticipantId, revealedAt])
+  @@index([supersedesAttemptId])
+  @@map("empathy_attempt")
+}
+
+model EmpathyReview {
+  id                    String    @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  attemptId             String    @map("attempt_id") @db.Uuid
+  reviewerParticipantId String    @map("reviewer_participant_id") @db.Uuid
+  validated             Boolean
+  feedback              String?
+  feedbackSentAt        DateTime? @map("feedback_sent_at") @db.Timestamptz(3)
+  createdAt             DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt             DateTime  @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  attempt             EmpathyAttempt @relation(fields: [attemptId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  reviewerParticipant Participant    @relation(fields: [reviewerParticipantId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  consents Consent[]
+
+  @@unique([attemptId, reviewerParticipantId])
+  @@index([reviewerParticipantId])
+  @@map("empathy_review")
+}
+
+/// sql_result_one_current: UNIQUE (attempt_id) WHERE superseded_at IS NULL — sql-only.sql.
+model ReconcilerResult {
+  id                    String            @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  attemptId             String            @map("attempt_id") @db.Uuid
+  subjectParticipantId  String            @map("subject_participant_id") @db.Uuid
+  iteration             Int               @default(1)
+  alignmentScore        Int               @map("alignment_score")
+  alignmentSummary      String            @map("alignment_summary")
+  gapSummary            String            @map("gap_summary")
+  gapSeverity           GapSeverity       @map("gap_severity")
+  correctlyIdentified   String[]          @default([]) @map("correctly_identified")
+  missedFeelings        String[]          @default([]) @map("missed_feelings")
+  misattributions       String[]          @default([])
+  mostImportantGap      String?           @map("most_important_gap")
+  recommendedAction     RecommenderAction @map("recommended_action")
+  rationale             String
+  sharingWouldHelp      Boolean           @map("sharing_would_help")
+  suggestedShareFocus   String?           @map("suggested_share_focus")
+  suggestedShareContent String?           @map("suggested_share_content")
+  suggestedShareReason  String?           @map("suggested_share_reason")
+  circuitBreakerTripped Boolean           @default(false) @map("circuit_breaker_tripped")
+  supersededAt          DateTime?         @map("superseded_at") @db.Timestamptz(3)
+  createdAt             DateTime          @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  attempt            EmpathyAttempt @relation(fields: [attemptId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  subjectParticipant Participant    @relation(fields: [subjectParticipantId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  guidance    ReconcilerGuidance?
+  shareOffers ContextShareOffer[]
+
+  @@unique([attemptId, iteration])
+  @@index([subjectParticipantId])
+  @@map("reconciler_result")
+}
+
+model ReconcilerGuidance {
+  resultId             String   @id @map("result_id") @db.Uuid
+  authorParticipantId  String   @map("author_participant_id") @db.Uuid
+  subjectParticipantId String   @map("subject_participant_id") @db.Uuid
+  areaHint             String?  @map("area_hint")
+  guidanceType         String?  @map("guidance_type")
+  promptSeed           String?  @map("prompt_seed")
+  createdAt            DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  result             ReconcilerResult @relation(fields: [resultId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  authorParticipant  Participant      @relation("GuidanceAuthor", fields: [authorParticipantId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  subjectParticipant Participant      @relation("GuidanceSubject", fields: [subjectParticipantId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([authorParticipantId])
+  @@index([subjectParticipantId])
+  @@map("reconciler_guidance")
+}
+
+model ContextShareOffer {
+  id                   String           @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  attemptId            String           @map("attempt_id") @db.Uuid
+  resultId             String           @map("result_id") @db.Uuid
+  subjectParticipantId String           @map("subject_participant_id") @db.Uuid
+  iteration            Int              @default(1)
+  status               ShareOfferStatus @default(PENDING)
+  offerMessage         String?          @map("offer_message")
+  suggestedContent     String?          @map("suggested_content")
+  suggestedReason      String?          @map("suggested_reason")
+  sharedContent        String?          @map("shared_content")
+  sharedAt             DateTime?        @map("shared_at") @db.Timestamptz(3)
+  declinedAt           DateTime?        @map("declined_at") @db.Timestamptz(3)
+  offeredAt            DateTime?        @map("offered_at") @db.Timestamptz(3)
+  deliveryStatus       DeliveryStatus   @default(PENDING) @map("delivery_status")
+  deliveredAt          DateTime?        @map("delivered_at") @db.Timestamptz(3)
+  seenAt               DateTime?        @map("seen_at") @db.Timestamptz(3)
+  deliveryNotifiedAt   DateTime?        @map("delivery_notified_at") @db.Timestamptz(3)
+  seenNotifiedAt       DateTime?        @map("seen_notified_at") @db.Timestamptz(3)
+  createdAt            DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt            DateTime         @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  attempt            EmpathyAttempt   @relation(fields: [attemptId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  result             ReconcilerResult @relation(fields: [resultId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  subjectParticipant Participant      @relation(fields: [subjectParticipantId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  drafts   Draft[]
+  consents Consent[]
+
+  @@unique([attemptId, iteration])
+  @@index([subjectParticipantId, status])
+  @@index([resultId])
+  @@map("context_share_offer")
+}
+
+// ----------------------------------------------------------------------------
+// 1.3 Consent (1)
+// ----------------------------------------------------------------------------
+
+/// target_kind is GENERATED ALWAYS AS (CASE … END) STORED — created by
+/// sql-only.sql; declared here exactly as `prisma db pull` renders it.
+model Consent {
+  id                       String           @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  participantId            String           @map("participant_id") @db.Uuid
+  requestedByParticipantId String?          @map("requested_by_participant_id") @db.Uuid
+  needId                   String?          @map("need_id") @db.Uuid
+  empathyAttemptId         String?          @map("empathy_attempt_id") @db.Uuid
+  proposalId               String?          @map("proposal_id") @db.Uuid
+  shareOfferId             String?          @map("share_offer_id") @db.Uuid
+  reviewId                 String?          @map("review_id") @db.Uuid
+  decision                 ConsentDecision?
+  decidedAt                DateTime?        @map("decided_at") @db.Timestamptz(3)
+  revokedAt                DateTime?        @map("revoked_at") @db.Timestamptz(3)
+  createdAt                DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
+  targetKind               ConsentTarget    @default(dbgenerated("\nCASE\n    WHEN (need_id IS NOT NULL) THEN 'NEED'::consent_target\n    WHEN (empathy_attempt_id IS NOT NULL) THEN 'EMPATHY_ATTEMPT'::consent_target\n    WHEN (proposal_id IS NOT NULL) THEN 'PROPOSAL'::consent_target\n    WHEN (share_offer_id IS NOT NULL) THEN 'SHARE_OFFER'::consent_target\n    WHEN (review_id IS NOT NULL) THEN 'REVIEW'::consent_target\n    ELSE NULL::consent_target\nEND")) @map("target_kind")
+
+  participant            Participant        @relation("ConsentDecider", fields: [participantId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  requestedByParticipant Participant?       @relation("ConsentRequester", fields: [requestedByParticipantId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  need                   Need?              @relation(fields: [needId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  empathyAttempt         EmpathyAttempt?    @relation(fields: [empathyAttemptId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  proposal               Proposal?          @relation(fields: [proposalId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  shareOffer             ContextShareOffer? @relation(fields: [shareOfferId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  review                 EmpathyReview?     @relation(fields: [reviewId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([requestedByParticipantId])
+  @@index([needId])
+  @@index([empathyAttemptId])
+  @@index([proposalId])
+  @@index([shareOfferId])
+  @@index([reviewId])
+  @@index([participantId, decidedAt])
+  @@map("consent")
+}
+
+// ----------------------------------------------------------------------------
+// 1.4 Needs, proposals, agreements, closure (10)
+// ----------------------------------------------------------------------------
+
+/// sql_need_live: (participant_id) WHERE deleted_at IS NULL — sql-only.sql.
+model Need {
+  id                 String       @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  participantId      String       @map("participant_id") @db.Uuid
+  label              String
+  category           NeedCategory
+  evidence           String[]     @default([])
+  aiConfidence       Float        @map("ai_confidence") @db.Real
+  confirmedAt        DateTime?    @map("confirmed_at") @db.Timestamptz(3)
+  lockedAt           DateTime?    @map("locked_at") @db.Timestamptz(3)
+  supersededByNeedId String?      @map("superseded_by_need_id") @db.Uuid
+  deletedAt          DateTime?    @map("deleted_at") @db.Timestamptz(3)
+  createdAt          DateTime     @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt          DateTime     @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  participant      Participant @relation(fields: [participantId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  supersededByNeed Need?       @relation("NeedSupersession", fields: [supersededByNeedId], references: [id], onDelete: SetNull, onUpdate: NoAction)
+  supersedes       Need[]      @relation("NeedSupersession")
+
+  share            NeedShare?
+  refiningMessages Message[]
+  consents         Consent[]
+
+  @@index([supersededByNeedId])
+  @@map("need")
+}
+
+model NeedShare {
+  needId        String       @id @map("need_id") @db.Uuid
+  participantId String       @map("participant_id") @db.Uuid
+  sessionId     String       @map("session_id") @db.Uuid
+  category      NeedCategory
+  sharedText    String       @map("shared_text")
+  sharedAt      DateTime     @default(now()) @map("shared_at") @db.Timestamptz(3)
+  revokedAt     DateTime?    @map("revoked_at") @db.Timestamptz(3)
+  createdAt     DateTime     @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  need        Need        @relation(fields: [needId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  participant Participant @relation(fields: [participantId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  session     Session     @relation(fields: [sessionId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  dispositions  NeedDisposition[]
+  proposalNeeds ProposalNeed[]
+
+  @@index([sessionId, revokedAt])
+  @@index([participantId])
+  @@map("need_share")
+}
+
+/// sql_disposition_one_current: UNIQUE (participant_id) WHERE is_current — sql-only.sql.
+model NeedDisposition {
+  participantId String                @map("participant_id") @db.Uuid
+  needId        String                @map("need_id") @db.Uuid
+  status        NeedDispositionStatus @default(OPEN)
+  isCurrent     Boolean               @default(false) @map("is_current")
+  note          String?
+  createdAt     DateTime              @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt     DateTime              @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  participant Participant @relation(fields: [participantId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  need        NeedShare   @relation(fields: [needId], references: [needId], onDelete: Cascade, onUpdate: NoAction)
+
+  @@id([participantId, needId])
+  @@index([needId])
+  @@map("need_disposition")
+}
+
+model Proposal {
+  id                     String         @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  sessionId              String         @map("session_id") @db.Uuid
+  createdByParticipantId String?        @map("created_by_participant_id") @db.Uuid
+  source                 ProposalSource @default(USER_SUBMITTED)
+  kind                   ProposalKind   @default(SHARED_PROPOSAL)
+  status                 ProposalStatus @default(ACTIVE)
+  description            String
+  duration               String?
+  measureOfSuccess       String?        @map("measure_of_success")
+  unresolvedNeedLabels   String[]       @default([]) @map("unresolved_need_labels")
+  removedAt              DateTime?      @map("removed_at") @db.Timestamptz(3)
+  removedByParticipantId String?        @map("removed_by_participant_id") @db.Uuid
+  removalReason          String?        @map("removal_reason")
+  sharedAt               DateTime?      @map("shared_at") @db.Timestamptz(3)
+  createdAt              DateTime       @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt              DateTime       @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  session              Session      @relation(fields: [sessionId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  createdByParticipant Participant? @relation("ProposalCreator", fields: [createdByParticipantId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  removedByParticipant Participant? @relation("ProposalRemover", fields: [removedByParticipantId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  subchats  Conversation[]
+  consents  Consent[]
+  needs     ProposalNeed[]
+  choices   ProposalChoice[]
+  revisions ProposalRevision[]
+  agreement Agreement?
+  followUps FollowUp[]
+
+  @@index([sessionId, status])
+  @@index([createdByParticipantId])
+  @@index([removedByParticipantId])
+  @@map("proposal")
+}
+
+model ProposalNeed {
+  proposalId String   @map("proposal_id") @db.Uuid
+  needId     String   @map("need_id") @db.Uuid
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  proposal Proposal  @relation(fields: [proposalId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  need     NeedShare @relation(fields: [needId], references: [needId], onDelete: Cascade, onUpdate: NoAction)
+
+  @@id([proposalId, needId])
+  @@index([needId])
+  @@map("proposal_need")
+}
+
+model ProposalChoice {
+  proposalId    String         @map("proposal_id") @db.Uuid
+  participantId String         @map("participant_id") @db.Uuid
+  decision      ChoiceDecision
+  note          String?
+  createdAt     DateTime       @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt     DateTime       @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  proposal    Proposal    @relation(fields: [proposalId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  participant Participant @relation(fields: [participantId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@id([proposalId, participantId])
+  @@index([participantId])
+  @@map("proposal_choice")
+}
+
+model ProposalRevision {
+  id                 String         @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  proposalId         String         @map("proposal_id") @db.Uuid
+  actorParticipantId String?        @map("actor_participant_id") @db.Uuid
+  action             RevisionAction
+  before             Json?
+  after              Json?
+  reason             String?
+  createdAt          DateTime       @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  proposal         Proposal     @relation(fields: [proposalId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  actorParticipant Participant? @relation(fields: [actorParticipantId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([proposalId, createdAt])
+  @@index([actorParticipantId])
+  @@map("proposal_revision")
+}
+
+model Agreement {
+  id               String          @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  sessionId        String          @map("session_id") @db.Uuid
+  proposalId       String          @unique @map("proposal_id") @db.Uuid
+  type             AgreementType
+  status           AgreementStatus @default(AGREED)
+  description      String
+  duration         String?
+  measureOfSuccess String?         @map("measure_of_success")
+  followUpAt       DateTime?       @map("follow_up_at") @db.Timestamptz(3)
+  completedAt      DateTime?       @map("completed_at") @db.Timestamptz(3)
+  createdAt        DateTime        @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt        DateTime        @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  session  Session  @relation(fields: [sessionId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  proposal Proposal @relation(fields: [proposalId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+
+  parties   AgreementParty[]
+  followUps FollowUp[]
+
+  @@index([sessionId, status])
+  @@map("agreement")
+}
+
+model AgreementParty {
+  agreementId   String   @map("agreement_id") @db.Uuid
+  participantId String   @map("participant_id") @db.Uuid
+  agreedAt      DateTime @default(now()) @map("agreed_at") @db.Timestamptz(3)
+  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  agreement   Agreement   @relation(fields: [agreementId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  participant Participant @relation(fields: [participantId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@id([agreementId, participantId])
+  @@index([participantId])
+  @@map("agreement_party")
+}
+
+model SessionClosure {
+  sessionId             String        @id @map("session_id") @db.Uuid
+  kind                  ClosureKind
+  reason                ClosureReason
+  summary               String
+  closedByParticipantId String?       @map("closed_by_participant_id") @db.Uuid
+  checkInAt             DateTime?     @map("check_in_at") @db.Timestamptz(3)
+  closedAt              DateTime      @default(now()) @map("closed_at") @db.Timestamptz(3)
+  createdAt             DateTime      @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  session             Session      @relation(fields: [sessionId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  closedByParticipant Participant? @relation(fields: [closedByParticipantId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([closedByParticipantId])
+  @@map("session_closure")
+}
+
+// ----------------------------------------------------------------------------
+// 1.5 Follow-up (4)
+// ----------------------------------------------------------------------------
+
+/// sql_follow_up_due: (scheduled_for) WHERE status = 'SCHEDULED' — sql-only.sql.
+model FollowUp {
+  id                 String         @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  sessionId          String         @map("session_id") @db.Uuid
+  agreementId        String?        @map("agreement_id") @db.Uuid
+  proposalId         String?        @map("proposal_id") @db.Uuid
+  type               FollowUpType
+  scope              FollowUpScope  @default(SHARED)
+  ownerParticipantId String?        @map("owner_participant_id") @db.Uuid
+  optedInShared      Boolean        @default(false) @map("opted_in_shared")
+  status             FollowUpStatus @default(SCHEDULED)
+  scheduledFor       DateTime?      @map("scheduled_for") @db.Timestamptz(3)
+  responseDeadlineAt DateTime?      @map("response_deadline_at") @db.Timestamptz(3)
+  openedAt           DateTime?      @map("opened_at") @db.Timestamptz(3)
+  completedAt        DateTime?      @map("completed_at") @db.Timestamptz(3)
+  summary            String?
+  createdAt          DateTime       @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt          DateTime       @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  session          Session      @relation(fields: [sessionId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  agreement        Agreement?   @relation(fields: [agreementId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  proposal         Proposal?    @relation(fields: [proposalId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  ownerParticipant Participant? @relation(fields: [ownerParticipantId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  checkins  FollowUpCheckin[]
+  reminders Reminder[]
+
+  @@index([sessionId, status])
+  @@index([agreementId])
+  @@index([proposalId])
+  @@index([ownerParticipantId])
+  @@map("follow_up")
+}
+
+model FollowUpCheckin {
+  id                String          @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  followUpId        String          @map("follow_up_id") @db.Uuid
+  participantId     String          @map("participant_id") @db.Uuid
+  nextAction        NextAction?     @map("next_action")
+  continueChoice    ContinueChoice? @map("continue_choice")
+  reflectionSummary String?         @map("reflection_summary")
+  payload           Json            @default("{}")
+  submittedAt       DateTime        @default(now()) @map("submitted_at") @db.Timestamptz(3)
+  createdAt         DateTime        @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  followUp    FollowUp    @relation(fields: [followUpId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  participant Participant @relation(fields: [participantId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  carriedNotes FollowUpNote[]
+
+  @@unique([followUpId, participantId])
+  @@index([participantId, submittedAt])
+  @@map("follow_up_checkin")
+}
+
+model FollowUpNote {
+  id                   String   @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  participantId        String   @map("participant_id") @db.Uuid
+  content              String
+  carryForward         Boolean  @default(false) @map("carry_forward")
+  carriedIntoCheckinId String?  @map("carried_into_checkin_id") @db.Uuid
+  createdAt            DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt            DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  participant        Participant      @relation(fields: [participantId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  carriedIntoCheckin FollowUpCheckin? @relation(fields: [carriedIntoCheckinId], references: [id], onDelete: SetNull, onUpdate: NoAction)
+
+  @@index([participantId, createdAt])
+  @@index([carriedIntoCheckinId])
+  @@map("follow_up_note")
+}
+
+/// sql_reminder_due: (remind_at) WHERE status = 'SCHEDULED' — sql-only.sql.
+model Reminder {
+  id         String         @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  userId     String         @map("user_id") @db.Uuid
+  followUpId String?        @map("follow_up_id") @db.Uuid
+  scope      ReminderScope  @default(PRIVATE)
+  remindAt   DateTime       @map("remind_at") @db.Timestamptz(3)
+  cadence    String?
+  note       String?
+  status     ReminderStatus @default(SCHEDULED)
+  createdAt  DateTime       @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt  DateTime       @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  user     User      @relation(fields: [userId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  followUp FollowUp? @relation(fields: [followUpId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([userId, remindAt])
+  @@index([followUpId])
+  @@map("reminder")
+}
+
+// ----------------------------------------------------------------------------
+// 1.6 Reflection — Inner Work (4). Nothing in 1.1–1.5 may FK these tables.
+// ----------------------------------------------------------------------------
+
+model Reflection {
+  id              String           @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  userId          String           @map("user_id") @db.Uuid
+  title           String?
+  theme           String?
+  status          ReflectionStatus @default(ACTIVE)
+  summary         String?
+  summaryDoc      Json?            @map("summary_doc")
+  linkedSessionId String?          @map("linked_session_id") @db.Uuid
+  linkedAt        DateTime?        @map("linked_at") @db.Timestamptz(3)
+  contextSnapshot String?          @map("context_snapshot")
+  distilledAt     DateTime?        @map("distilled_at") @db.Timestamptz(3)
+  createdAt       DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt       DateTime         @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  user          User     @relation(fields: [userId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  linkedSession Session? @relation(fields: [linkedSessionId], references: [id], onDelete: SetNull, onUpdate: NoAction)
+
+  messages        ReflectionMessage[]
+  takeaways       Takeaway[]
+  brainActivities BrainActivity[]
 
   @@index([userId, updatedAt])
-  @@index([status])
-  @@index([linkedPartnerSessionId])
-  @@index([linkedAtMessageId])
+  @@index([linkedSessionId])
+  @@index([userId, theme])
+  @@map("reflection")
 }
 
-enum InnerWorkStatus {
-  ACTIVE // Ongoing inner work session
-  COMPLETED // User marked as complete or AI determined closure
-  ARCHIVED // User archived this session
+model ReflectionMessage {
+  id           String      @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  reflectionId String      @map("reflection_id") @db.Uuid
+  role         MessageRole
+  content      String
+  createdAt    DateTime    @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  reflection Reflection @relation(fields: [reflectionId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([reflectionId, createdAt])
+  @@map("reflection_message")
 }
 
-enum TakeawaySource {
-  AI // Distilled by AI
-  USER // Added or edited by user
-}
+model Takeaway {
+  id           String         @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  reflectionId String         @map("reflection_id") @db.Uuid
+  content      String
+  theme        String?
+  source       TakeawaySource @default(AI)
+  type         TakeawayType   @default(INSIGHT)
+  position     Int            @default(0)
+  resolvedAt   DateTime?      @map("resolved_at") @db.Timestamptz(3)
+  createdAt    DateTime       @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt    DateTime       @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
 
-enum TakeawayType {
-  INSIGHT // A reflection or observation
-  ACTION_ITEM // Something concrete to do
-  INTENTION // A desire or aspiration (not a concrete action)
-}
+  reflection Reflection @relation(fields: [reflectionId], references: [id], onDelete: Cascade, onUpdate: NoAction)
 
-enum TakeawayLinkType {
-  AI_SEMANTIC // Auto-detected via embedding similarity
-  USER_MANUAL // Manually linked by the user
-}
+  linksOut TakeawayLink[] @relation("TakeawayLinkSource")
+  linksIn  TakeawayLink[] @relation("TakeawayLinkTarget")
 
-model InnerWorkMessage {
-  id                String             @id @default(dbgenerated("uuidv7()")) @db.Uuid
-  session           InnerWorkSession   @relation(fields: [sessionId], references: [id], onDelete: Cascade)
-  sessionId         String             @db.Uuid
-  role              MessageRole
-  content           String             @db.Text
-  timestamp         DateTime           @default(now())
-  branchForSessions InnerWorkSession[] @relation("InnerWorkBranchPoint")
-
-  // NOTE: Message-level embedding removed per fact-ledger architecture
-  // Session-level contentEmbedding on InnerWorkSession is used instead
-
-  @@index([sessionId, timestamp])
-}
-
-model SessionTakeaway {
-  id         String           @id @default(dbgenerated("uuidv7()")) @db.Uuid
-  session    InnerWorkSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
-  sessionId  String           @db.Uuid
-  content    String           @db.Text
-  theme      String?
-  source     TakeawaySource   @default(AI)
-  type       TakeawayType     @default(INSIGHT)
-  position   Int              @default(0)
-  resolved   Boolean          @default(false)
-  resolvedAt DateTime?
-  createdAt  DateTime         @default(now())
-  updatedAt  DateTime         @updatedAt
-
-  // Takeaway-level embedding for semantic search and auto-linking
-  embedding Unsupported("vector(1024)")?
-
-  // Links where this takeaway is the source
-  outgoingLinks TakeawayLink[] @relation("TakeawayLinkSource")
-  // Links where this takeaway is the target
-  incomingLinks TakeawayLink[] @relation("TakeawayLinkTarget")
-
-  @@index([sessionId, position])
+  @@index([reflectionId, position])
+  @@map("takeaway")
 }
 
 model TakeawayLink {
-  id         String           @id @default(dbgenerated("uuidv7()")) @db.Uuid
-  source     SessionTakeaway  @relation("TakeawayLinkSource", fields: [sourceId], references: [id], onDelete: Cascade)
-  sourceId   String           @db.Uuid
-  target     SessionTakeaway  @relation("TakeawayLinkTarget", fields: [targetId], references: [id], onDelete: Cascade)
-  targetId   String           @db.Uuid
-  linkType   TakeawayLinkType
-  similarity Float?
-  createdAt  DateTime         @default(now())
+  sourceId   String           @map("source_id") @db.Uuid
+  targetId   String           @map("target_id") @db.Uuid
+  linkType   TakeawayLinkType @map("link_type")
+  similarity Float?           @db.Real
+  createdAt  DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
 
-  @@unique([sourceId, targetId])
-  @@index([sourceId])
+  source Takeaway @relation("TakeawayLinkSource", fields: [sourceId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  target Takeaway @relation("TakeawayLinkTarget", fields: [targetId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@id([sourceId, targetId])
   @@index([targetId])
+  @@map("takeaway_link")
 }
 
-// ============================================================================
-// Stage Progress
-// ============================================================================
+// ----------------------------------------------------------------------------
+// 1.7 User, preferences, feature state (6)
+// ----------------------------------------------------------------------------
 
-model StageProgress {
-  id          String      @id @default(dbgenerated("uuidv7()")) @db.Uuid
-  session     Session     @relation(fields: [sessionId], references: [id], onDelete: Cascade)
-  sessionId   String      @db.Uuid
-  user        User        @relation(fields: [userId], references: [id], onDelete: Cascade)
-  userId      String      @db.Uuid
-  stage       Int
-  status      StageStatus @default(IN_PROGRESS)
-  startedAt   DateTime    @default(now())
-  completedAt DateTime?
+/// name is GENERATED ALWAYS AS (nullif(trim(…), '')) STORED — created by
+/// sql-only.sql; declared exactly as `prisma db pull` renders it (plain, no
+/// default). The app never writes it.
+model User {
+  id        String    @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  clerkId   String?   @unique @map("clerk_id")
+  email     String    @unique
+  firstName String?   @map("first_name")
+  lastName  String?   @map("last_name")
+  deletedAt DateTime? @map("deleted_at") @db.Timestamptz(3)
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime  @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+  name      String?
 
-  // Gate satisfaction tracking
-  gatesSatisfied Json? // Stage-specific gate conditions
+  relationshipMembers RelationshipMember[]
+  participants        Participant[]
+  aiMemories          AiMemory[]
+  invitationsAccepted Invitation[]
+  reminders           Reminder[]
+  reflections         Reflection[]
+  devices             UserDevice[]
+  preferences         UserPreferences?
+  memories            UserMemory[]
+  featureStates       FeatureState[]
+  keys                UserKey[]
 
-  // Synthesis cache invalidation
-  isSynthesisDirty     Boolean   @default(true)
-  synthesisLastUpdated DateTime?
+  @@map("user")
+}
 
-  @@unique([sessionId, userId, stage])
-  @@index([sessionId])
+/// sql_user_device_token: UNIQUE (user_id, push_token) WHERE push_token IS NOT NULL — sql-only.sql.
+model UserDevice {
+  id                  String          @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  userId              String          @map("user_id") @db.Uuid
+  pushToken           String?         @map("push_token")
+  platform            DevicePlatform?
+  biometricEnabled    Boolean         @default(false) @map("biometric_enabled")
+  biometricEnrolledAt DateTime?       @map("biometric_enrolled_at") @db.Timestamptz(3)
+  lastSeenAt          DateTime?       @map("last_seen_at") @db.Timestamptz(3)
+  createdAt           DateTime        @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt           DateTime        @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+
   @@index([userId])
+  @@map("user_device")
 }
 
-enum StageStatus {
-  NOT_STARTED
-  IN_PROGRESS
-  GATE_PENDING // Requirements met, awaiting partner
-  COMPLETED
+model UserPreferences {
+  userId    String   @id @map("user_id") @db.Uuid
+  doc       Json     @default("{}")
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+
+  @@map("user_preferences")
 }
 
-// ============================================================================
-// User Vessel (Private Data)
-// ============================================================================
+model UserMemory {
+  id            String         @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  userId        String         @map("user_id") @db.Uuid
+  sessionId     String?        @map("session_id") @db.Uuid
+  content       String
+  category      MemoryCategory
+  status        MemoryStatus   @default(ACTIVE)
+  source        MemorySource   @default(USER_APPROVED)
+  suggestedText String?        @map("suggested_text")
+  createdAt     DateTime       @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt     DateTime       @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
 
-model UserVessel {
-  id        String   @id @default(dbgenerated("uuidv7()")) @db.Uuid
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  userId    String   @db.Uuid
-  session   Session  @relation(fields: [sessionId], references: [id], onDelete: Cascade)
-  sessionId String   @db.Uuid
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  user    User     @relation(fields: [userId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  session Session? @relation(fields: [sessionId], references: [id], onDelete: Cascade, onUpdate: NoAction)
 
-  // Private content
-  events            UserEvent[]
-  emotionalReadings EmotionalReading[]
-  identifiedNeeds   IdentifiedNeed[]
-  boundaries        Boundary[]
-  documents         UserDocument[]
-
-  // Rolling conversation summary for long sessions
-  // Stores JSON with: text, keyThemes, emotionalJourney, unresolvedTopics
-  conversationSummary String? @db.Text
-
-  // Session-level content embedding for semantic search
-  // Embeds combined facts + summary for session-level retrieval
-  // Replaces message-level embedding per fact-ledger architecture
-  contentEmbedding Unsupported("vector(1024)")?
-
-  // === Session Read State ===
-  // When the user last viewed/opened this session's chat
-  // Used to determine: (1) if session has unread content, (2) where "new messages" line appears
-  lastViewedAt         DateTime?
-  // The ID of the last chat item the user saw (for "new messages" line placement)
-  lastSeenChatItemId   String?
-  // When the user last viewed the Share/Partner tab
-  // Used to determine "seen" status for shared content (empathy, context)
-  lastViewedShareTabAt DateTime?
-  // When the user last actively did something in this session.
-  // Used for partner-facing presence details; distinct from read/view state.
-  lastActiveAt         DateTime?
-  // When this user removed the session from their own conversation list.
-  // The partner may still retain their own vessel and access.
-  archivedAt           DateTime?
-
-  // === Notable Facts ===
-  // AI-extracted structured facts about the user's situation, emotions, and circumstances
-  // Format: [{ category: string, fact: string }]
-  // Categories: People, Logistics, Conflict, Emotional, History, etc.
-  // Updated by Haiku after each message, used to reduce chat history in prompts
-  notableFacts Json?
-
-  @@unique([userId, sessionId])
-  @@index([userId])
+  @@index([userId, status])
   @@index([sessionId])
+  @@map("user_memory")
 }
 
-model UserEvent {
-  id           String      @id @default(dbgenerated("uuidv7()")) @db.Uuid
-  vessel       UserVessel  @relation(fields: [vesselId], references: [id], onDelete: Cascade)
-  vesselId     String      @db.Uuid
-  description  String      @db.Text
-  attributedTo Attribution
-  emotions     String[]
-  timestamp    DateTime    @default(now())
+model FeatureState {
+  userId    String   @map("user_id") @db.Uuid
+  feature   String
+  doc       Json     @default("{}")
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
 
-  // Embedding for semantic search
-  // embedding Unsupported("vector(1024)")?  -- pgvector not available
+  user User @relation(fields: [userId], references: [id], onDelete: Restrict, onUpdate: NoAction)
 
-  @@index([vesselId, timestamp])
+  @@id([userId, feature])
+  @@map("feature_state")
 }
 
-enum Attribution {
-  SELF
-  OTHER
-  MUTUAL
-  EXTERNAL
+/// sql_user_key_live: UNIQUE (user_id) WHERE destroyed_at IS NULL — sql-only.sql.
+model UserKey {
+  id          String    @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  userId      String    @map("user_id") @db.Uuid
+  keyId       String    @map("key_id")
+  wrappedDek  Bytes     @map("wrapped_dek")
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  destroyedAt DateTime? @map("destroyed_at") @db.Timestamptz(3)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+
+  @@map("user_key")
 }
 
-model EmotionalReading {
-  id        String     @id @default(dbgenerated("uuidv7()")) @db.Uuid
-  vessel    UserVessel @relation(fields: [vesselId], references: [id], onDelete: Cascade)
-  vesselId  String     @db.Uuid
-  intensity Int // 1-10 scale
-  context   String?    @db.Text
-  stage     Int // Stage when reading was taken
-  timestamp DateTime   @default(now())
+// ----------------------------------------------------------------------------
+// 1.8 Telemetry (1)
+// ----------------------------------------------------------------------------
 
-  @@index([vesselId, timestamp])
+model BrainActivity {
+  id               String         @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  sessionId        String?        @map("session_id") @db.Uuid
+  reflectionId     String?        @map("reflection_id") @db.Uuid
+  participantId    String?        @map("participant_id") @db.Uuid
+  turnId           String?        @map("turn_id")
+  activityType     ActivityType   @map("activity_type")
+  callType         BrainCallType? @map("call_type")
+  model            String
+  input            Json?
+  output           Json?
+  metadata         Json?
+  structuredOutput Json?          @map("structured_output")
+  tokenCountInput  Int            @default(0) @map("token_count_input")
+  tokenCountOutput Int            @default(0) @map("token_count_output")
+  durationMs       Int            @default(0) @map("duration_ms")
+  cost             Decimal        @default(0) @db.Decimal(10, 6)
+  status           ActivityStatus @default(PENDING)
+  createdAt        DateTime       @default(now()) @map("created_at") @db.Timestamptz(3)
+  completedAt      DateTime?      @map("completed_at") @db.Timestamptz(3)
+
+  session     Session?     @relation(fields: [sessionId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  reflection  Reflection?  @relation(fields: [reflectionId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  participant Participant? @relation(fields: [participantId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([sessionId])
+  @@index([reflectionId])
+  @@index([participantId])
+  @@index([turnId])
+  @@index([createdAt])
+  @@map("brain_activity")
 }
 
-model IdentifiedNeed {
-  id                 String           @id @default(dbgenerated("uuidv7()")) @db.Uuid
-  vessel             UserVessel       @relation(fields: [vesselId], references: [id], onDelete: Cascade)
-  vesselId           String           @db.Uuid
-  need               String // From universal needs taxonomy
-  category           NeedCategory
-  evidence           String[] // Quotes/references supporting this need
-  confirmed          Boolean          @default(false) // User confirmed this need
-  aiConfidence       Float // AI confidence in identification
-  supersededByNeed   IdentifiedNeed?  @relation("NeedSupersession", fields: [supersededByNeedId], references: [id], onDelete: SetNull)
-  supersededByNeedId String?          @db.Uuid
-  supersedes         IdentifiedNeed[] @relation("NeedSupersession")
-  lockedAt           DateTime?
-  deletedAt          DateTime?
-  createdAt          DateTime         @default(now())
+// ============================================================================
+// 3. Enums — Postgres type names via @@map; members in the order of spec §3
+// ============================================================================
 
-  // Link to shared version if consented
-  consentedContent ConsentedContent?
+enum SessionStatus {
+  CREATED
+  INVITED
+  ACTIVE
+  RESOLVED
+  ABANDONED
+  ARCHIVED
 
-  proposalLinks    StrategyProposalNeed[]
-  refiningMessages Message[]
+  @@map("session_status")
+}
 
-  @@index([vesselId])
-  @@index([supersededByNeedId])
-  @@index([lockedAt])
-  @@index([deletedAt])
+enum ParticipantKind {
+  human
+  modeled
+
+  @@map("participant_kind")
+}
+
+enum ConversationKind {
+  MAIN
+  SUBCHAT
+
+  @@map("conversation_kind")
+}
+
+enum ConversationStatus {
+  ACTIVE
+  RESOLVED
+
+  @@map("conversation_status")
+}
+
+enum SubchatAnchor {
+  NEEDS_BRAINSTORM
+  PROPOSAL_REFINEMENT
+  NO_OVERLAP
+
+  @@map("subchat_anchor")
+}
+
+enum MessageRole {
+  USER
+  AI
+  SYSTEM
+
+  @@map("message_role")
+}
+
+enum MessageKind {
+  CHAT
+  EMPATHY_STATEMENT
+  EMPATHY_REVEAL_INTRO
+  SHARED_CONTEXT
+  VALIDATION_FEEDBACK
+  SHARE_SUGGESTION
+  EMPATHY_VALIDATION_PROMPT
+
+  @@map("message_kind")
+}
+
+enum DraftKind {
+  EMPATHY
+  VALIDATION_FEEDBACK
+  SHARE_CONTEXT
+
+  @@map("draft_kind")
+}
+
+enum MilestoneScope {
+  participant
+  session
+
+  @@map("milestone_scope")
+}
+
+enum AiMemoryKind {
+  SUMMARY
+  NOTABLE_FACTS
+  GLOBAL_FACTS
+
+  @@map("ai_memory_kind")
+}
+
+enum RegulationType {
+  BREATHING_EXERCISE
+  BODY_SCAN
+  GROUNDING
+  PAUSE_SESSION
+
+  @@map("regulation_type")
+}
+
+enum InvitationStatus {
+  PENDING
+  ACCEPTED
+  DECLINED
+  EXPIRED
+
+  @@map("invitation_status")
+}
+
+enum RelationshipRole {
+  member
+  owner
+
+  @@map("relationship_role")
+}
+
+enum EmpathyStatus {
+  HELD
+  AWAITING_SHARING
+  REFINING
+  READY
+  REVEALED
+  VALIDATED
+  SUPERSEDED
+
+  @@map("empathy_status")
+}
+
+enum DeliveryStatus {
+  PENDING
+  DELIVERED
+  SEEN
+
+  @@map("delivery_status")
+}
+
+enum ShareOfferStatus {
+  PENDING
+  OFFERED
+  ACCEPTED
+  DECLINED
+  EXPIRED
+
+  @@map("share_offer_status")
+}
+
+enum GapSeverity {
+  NONE
+  MINOR
+  MODERATE
+  SIGNIFICANT
+
+  @@map("gap_severity")
+}
+
+enum RecommenderAction {
+  PROCEED
+  OFFER_OPTIONAL
+  OFFER_SHARING
+
+  @@map("recommender_action")
+}
+
+enum ConsentTarget {
+  NEED
+  EMPATHY_ATTEMPT
+  PROPOSAL
+  SHARE_OFFER
+  REVIEW
+
+  @@map("consent_target")
+}
+
+enum ConsentDecision {
+  GRANTED
+  DENIED
+  REVOKED
+
+  @@map("consent_decision")
 }
 
 enum NeedCategory {
@@ -486,1489 +1273,243 @@ enum NeedCategory {
   RECOGNITION
   MEANING
   FAIRNESS
+
+  @@map("need_category")
 }
 
-model Boundary {
-  id            String     @id @default(dbgenerated("uuidv7()")) @db.Uuid
-  vessel        UserVessel @relation(fields: [vesselId], references: [id], onDelete: Cascade)
-  vesselId      String     @db.Uuid
-  description   String     @db.Text
-  nonNegotiable Boolean    @default(false)
-  createdAt     DateTime   @default(now())
+enum NeedDispositionStatus {
+  OPEN
+  COVERED
+  PARTIAL
+  SKIPPED
+  DECLINED
 
-  @@index([vesselId])
+  @@map("need_disposition_status")
 }
 
-model UserDocument {
-  id        String     @id @default(dbgenerated("uuidv7()")) @db.Uuid
-  vessel    UserVessel @relation(fields: [vesselId], references: [id], onDelete: Cascade)
-  vesselId  String     @db.Uuid
-  title     String
-  content   String     @db.Text
-  type      String // e.g., "reflection", "journal", "note"
-  createdAt DateTime   @default(now())
-  updatedAt DateTime   @updatedAt
-
-  @@index([vesselId])
-}
-
-// ============================================================================
-// Shared Vessel (Consensual Data)
-// ============================================================================
-
-model SharedVessel {
-  id        String   @id @default(dbgenerated("uuidv7()")) @db.Uuid
-  session   Session  @relation(fields: [sessionId], references: [id], onDelete: Cascade)
-  sessionId String   @unique @db.Uuid
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  // Shared content
-  consentedContent ConsentedContent[]
-  commonGround     CommonGround[]
-  agreements       Agreement[]
-}
-
-model ConsentedContent {
-  id                 String          @id @default(dbgenerated("uuidv7()")) @db.Uuid
-  sharedVessel       SharedVessel    @relation(fields: [sharedVesselId], references: [id], onDelete: Cascade)
-  sharedVesselId     String          @db.Uuid
-  sourceUser         User?           @relation(fields: [sourceUserId], references: [id], onDelete: SetNull)
-  sourceUserId       String?         @db.Uuid
-  originalNeed       IdentifiedNeed? @relation(fields: [originalNeedId], references: [id], onDelete: SetNull)
-  originalNeedId     String?         @unique @db.Uuid
-  transformedContent String          @db.Text // Heat removed, need preserved
-  consentedAt        DateTime        @default(now())
-  consentActive      Boolean         @default(true)
-  revokedAt          DateTime?
-
-  // Link to consent record for audit
-  consentRecord   ConsentRecord @relation(fields: [consentRecordId], references: [id])
-  consentRecordId String        @db.Uuid
-
-  @@index([sharedVesselId])
-  @@index([sourceUserId])
-}
-
-model CommonGround {
-  id             String       @id @default(dbgenerated("uuidv7()")) @db.Uuid
-  sharedVessel   SharedVessel @relation(fields: [sharedVesselId], references: [id], onDelete: Cascade)
-  sharedVesselId String       @db.Uuid
-  need           String
-  category       NeedCategory
-  confirmedByA   Boolean      @default(false)
-  confirmedByB   Boolean      @default(false)
-  confirmedAt    DateTime?
-
-  @@index([sharedVesselId])
-}
-
-model Agreement {
-  id               String            @id @default(dbgenerated("uuidv7()")) @db.Uuid
-  sharedVessel     SharedVessel      @relation(fields: [sharedVesselId], references: [id], onDelete: Cascade)
-  sharedVesselId   String            @db.Uuid
-  description      String            @db.Text
-  type             AgreementType
-  status           AgreementStatus   @default(PROPOSED)
-  agreedByA        Boolean           @default(false)
-  agreedByB        Boolean           @default(false)
-  agreedAt         DateTime?
-  followUpDate     DateTime?
-  duration         String?
-  measureOfSuccess String?
-  completedAt      DateTime?
-  proposal         StrategyProposal? @relation(fields: [proposalId], references: [id], onDelete: SetNull)
-  proposalId       String?           @db.Uuid
-  tendingEntries   TendingEntry[]
-
-  @@index([sharedVesselId])
-}
-
-enum AgreementType {
-  MICRO_EXPERIMENT // Small, reversible action
-  COMMITMENT // Longer-term agreement
-  CHECK_IN // Scheduled follow-up
-  HYBRID // Combined elements from multiple strategies
-}
-
-enum AgreementStatus {
-  PROPOSED
-  AGREED
-  IN_PROGRESS
-  COMPLETED
-  ABANDONED
-}
-
-// ============================================================================
-// Consent Management
-// ============================================================================
-
-model ConsentRecord {
-  id                String             @id @default(dbgenerated("uuidv7()")) @db.Uuid
-  user              User               @relation("ConsentsGiven", fields: [userId], references: [id], onDelete: Cascade)
-  userId            String             @db.Uuid
-  session           Session?           @relation(fields: [sessionId], references: [id], onDelete: Cascade)
-  sessionId         String?            @db.Uuid
-  targetType        ConsentContentType
-  targetId          String? // e.g., empathy draft id, need id, boundary id
-  requestedBy       User               @relation("ConsentsRequested", fields: [requestedByUserId], references: [id], onDelete: Cascade)
-  requestedByUserId String             @db.Uuid
-  decision          ConsentDecision?
-  decidedAt         DateTime?
-  revokedAt         DateTime?
-  metadata          Json? // Additional context
-  createdAt         DateTime           @default(now())
-
-  // Link to resulting shared content
-  consentedContent ConsentedContent[]
-  empathyAttempt   EmpathyAttempt[]
-  strategyProposal StrategyProposal[]
-
-  @@index([userId, sessionId, targetType, decidedAt])
-}
-
-enum ConsentContentType {
-  IDENTIFIED_NEED
-  EVENT_SUMMARY
-  EMOTIONAL_PATTERN
-  BOUNDARY
-  EMPATHY_DRAFT
-  EMPATHY_ATTEMPT
-  STRATEGY_PROPOSAL
-}
-
-enum ConsentDecision {
-  GRANTED
-  DENIED
-  REVOKED
-}
-
-// ============================================================================
-// Messages
-// ============================================================================
-
-model Message {
-  id             String          @id @default(dbgenerated("uuidv7()")) @db.Uuid
-  session        Session         @relation(fields: [sessionId], references: [id], onDelete: Cascade)
-  sessionId      String          @db.Uuid
-  sender         User?           @relation(fields: [senderId], references: [id], onDelete: SetNull)
-  senderId       String?         @db.Uuid // null for AI messages
-  forUserId      String? // Which user the AI was responding to (for data isolation)
-  role           MessageRole
-  content        String          @db.Text
-  // SHA-256 hex of the PLAINTEXT content, written by the Prisma encryption
-  // middleware alongside the encrypted `content`. Field encryption is
-  // non-deterministic (random IV per write), so `content` equality cannot be
-  // used to dedupe; probes match on this instead. Nullable for rows written
-  // before this column existed.
-  contentHash    String?         @db.VarChar(64)
-  stage          Int
-  timestamp      DateTime        @default(now())
-  refiningNeed   IdentifiedNeed? @relation(fields: [refiningNeedId], references: [id], onDelete: SetNull)
-  refiningNeedId String?         @db.Uuid
-
-  // NOTE: Message-level embedding removed per fact-ledger architecture
-  // Session-level contentEmbedding on UserVessel is used instead
-
-  // Extracted memory references
-  extractedNeeds    String[]
-  extractedEmotions String[]
-
-  @@index([sessionId, timestamp])
-  @@index([sessionId, forUserId, role])
-  @@index([sessionId, forUserId, role, contentHash])
-  @@index([senderId])
-  @@index([forUserId])
-  @@index([refiningNeedId])
-}
-
-enum MessageRole {
-  USER
-  AI
-  SYSTEM
-  EMPATHY_STATEMENT // User's shared empathy statement (shown in chat history)
-  EMPATHY_REVEAL_INTRO // AI intro message when revealing partner's empathy to user
-  SHARED_CONTEXT // Context shared by subject to help guesser refine empathy
-  VALIDATION_FEEDBACK // Constructive feedback after subject marks empathy as not quite
-  SHARE_SUGGESTION // Suggested content for subject to share (reconciler)
-  EMPATHY_VALIDATION_PROMPT // AI prompt asking user to validate partner's understanding
-}
-
-// ============================================================================
-// Pre-Session Messages
-// ============================================================================
-
-// Messages captured before a session is created or identified.
-// These are associated with a session retroactively once the user
-// starts or switches to a session.
-model PreSessionMessage {
-  id        String      @id @default(dbgenerated("uuidv7()")) @db.Uuid
-  userId    String
-  role      MessageRole
-  content   String      @db.Text
-  timestamp DateTime    @default(now())
-
-  // Embedding for semantic search
-  // embedding Unsupported("vector(1024)")?  -- pgvector not available
-
-  // Metadata from intent detection
-  detectedIntent  String? // The intent detected for this message
-  emotionalTone   String? // neutral, upset, hopeful, anxious
-  extractedPerson String? // If a person was mentioned
-  extractedTopic  String? // If a topic was identified
-
-  // Association tracking
-  associatedSessionId String? // Set when message is linked to a session
-  associatedAt        DateTime? // When it was associated
-
-  // Cleanup
-  expiresAt DateTime // Auto-cleanup after 24 hours if not associated
-
-  @@index([userId, timestamp])
-  @@index([userId, associatedSessionId])
-  @@index([expiresAt])
-}
-
-// ============================================================================
-// Stage 2: Empathy Attempts
-// ============================================================================
-
-model EmpathyDraft {
-  id           String   @id @default(dbgenerated("uuidv7()")) @db.Uuid
-  session      Session  @relation(fields: [sessionId], references: [id], onDelete: Cascade)
-  sessionId    String   @db.Uuid
-  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  userId       String   @db.Uuid
-  content      String   @db.Text
-  readyToShare Boolean  @default(false)
-  version      Int      @default(1)
-  updatedAt    DateTime @updatedAt
-  createdAt    DateTime @default(now())
-
-  attempts EmpathyAttempt[]
-
-  @@unique([sessionId, userId])
-}
-
-model EmpathyAttempt {
-  id              String         @id @default(dbgenerated("uuidv7()")) @db.Uuid
-  draft           EmpathyDraft?  @relation(fields: [draftId], references: [id], onDelete: SetNull)
-  draftId         String?        @db.Uuid
-  session         Session        @relation(fields: [sessionId], references: [id], onDelete: Cascade)
-  sessionId       String         @db.Uuid
-  sourceUser      User?          @relation(fields: [sourceUserId], references: [id], onDelete: SetNull)
-  sourceUserId    String?        @db.Uuid
-  content         String         @db.Text
-  sharedAt        DateTime       @default(now())
-  consentRecord   ConsentRecord? @relation(fields: [consentRecordId], references: [id], onDelete: SetNull)
-  consentRecordId String?        @db.Uuid
-
-  // Reconciler flow fields
-  status        EmpathyStatus @default(HELD)
-  statusVersion Int           @default(0) // Incremented on every status change for event ordering
-  revealedAt    DateTime?
-  revisionCount Int           @default(0)
-
-  // Delivery status for showing pending/delivered/seen to the author
-  deliveryStatus SharedContentDeliveryStatus @default(PENDING)
-  /// When the empathy statement was delivered to partner's chat (when revealed)
-  deliveredAt    DateTime?
-  /// When the partner acknowledged/saw the statement
-  seenAt         DateTime?
-
-  validations EmpathyValidation[]
-
-  // Unique constraint: one empathy attempt per user per session.
-  // Note: sourceUserId is String? (nullable). PostgreSQL treats NULL != NULL in unique constraints,
-  // so multiple NULL rows for same sessionId would be allowed. In practice sourceUserId is always set.
-  @@unique([sessionId, sourceUserId])
-}
-
-enum EmpathyStatus {
-  HELD // Waiting for partner to complete Stage 1
-  ANALYZING // Reconciler is comparing guess vs actual Stage 1 content
-  AWAITING_SHARING // Gaps detected, waiting for subject to respond to share suggestion
-  REFINING // Guesser is refining after receiving shared context
-  NEEDS_WORK // Significant gaps detected, guesser should refine (legacy - use AWAITING_SHARING)
-  READY // Reconciler complete, waiting for partner to also complete Stage 2 before revealing
-  REVEALED // Recipient can now see statement
-  VALIDATED // Recipient has validated accuracy
-}
-
-model EmpathyValidation {
-  id             String         @id @default(dbgenerated("uuidv7()")) @db.Uuid
-  attempt        EmpathyAttempt @relation(fields: [attemptId], references: [id], onDelete: Cascade)
-  attemptId      String         @db.Uuid
-  session        Session        @relation(fields: [sessionId], references: [id], onDelete: Cascade)
-  sessionId      String         @db.Uuid
-  user           User?          @relation(fields: [userId], references: [id], onDelete: SetNull)
-  userId         String?        @db.Uuid // Recipient validating partner attempt (null if user deleted)
-  validated      Boolean
-  feedback       String?        @db.Text
-  feedbackShared Boolean        @default(false)
-  validatedAt    DateTime?      @default(now())
-
-  @@unique([attemptId, userId])
-}
-
-// ============================================================================
-// Post-Stage 2: Empathy Reconciler
-// ============================================================================
-
-/// Stores the result of reconciler analysis comparing what one person
-/// guessed about the other vs what they actually expressed.
-model ReconcilerResult {
-  id        String  @id @default(dbgenerated("uuidv7()")) @db.Uuid
-  session   Session @relation(fields: [sessionId], references: [id], onDelete: Cascade)
-  sessionId String  @db.Uuid
-
-  /// The user who made the empathy guess
-  guesserId   String
-  guesserName String
-  /// The user being guessed about (whose feelings were analyzed)
-  subjectId   String
-  subjectName String
-
-  // Alignment Analysis
-  alignmentScore      Int // 0-100
-  alignmentSummary    String   @db.Text
-  correctlyIdentified String[] // Feelings/needs that were correctly identified
-
-  // Gap Analysis
-  gapSeverity      String // none, minor, moderate, significant
-  gapSummary       String   @db.Text
-  missedFeelings   String[] // Feelings/needs that were missed
-  misattributions  String[] // Incorrect assumptions made
-  mostImportantGap String?  @db.Text // The single most important gap
-
-  // Recommendation
-  recommendedAction   String // PROCEED, OFFER_OPTIONAL, OFFER_SHARING
-  rationale           String  @db.Text
-  sharingWouldHelp    Boolean
-  suggestedShareFocus String? @db.Text
-
-  // Abstract guidance for refinement (no specific partner content)
-  areaHint     String? // e.g., "work and effort"
-  guidanceType String? // e.g., "explore_deeper_feelings"
-  promptSeed   String? // e.g., "what might be underneath"
-
-  // Suggestion for subject to share (generated when gaps are significant)
-  suggestedShareContent String? @db.Text // AI-generated suggestion for what subject could share
-  suggestedShareReason  String? @db.Text // Why this would help the guesser understand
-
-  /// Which iteration of the reconciler loop produced this result (1 = first run)
-  iteration             Int       @default(1)
-  /// Whether this result was produced by the circuit breaker forcing READY
-  wasCircuitBreakerTrip Boolean   @default(false)
-  /// When set, this result has been superseded by a newer analysis (audit trail)
-  supersededAt          DateTime?
-
-  createdAt DateTime @default(now())
-
-  // Relationship to share offer
-  shareOffer ReconcilerShareOffer?
-
-  @@index([sessionId, guesserId, subjectId])
-  @@index([sessionId])
-  @@index([sessionId, subjectId])
-}
-
-/// Tracks the share suggestion made to a user (the subject) and their response.
-/// This allows the subject to optionally share context to help the guesser understand better.
-model ReconcilerShareOffer {
-  id       String           @id @default(dbgenerated("uuidv7()")) @db.Uuid
-  result   ReconcilerResult @relation(fields: [resultId], references: [id], onDelete: Cascade)
-  resultId String           @unique @db.Uuid
-
-  /// The user being asked to share (the subject of the analysis)
-  userId String
-
-  /// Status of the share offer
-  status ReconcilerShareStatus @default(NOT_OFFERED)
-
-  /// AI-generated suggestion for what to share
-  suggestedContent String? @db.Text // What the AI suggests the subject could share
-  suggestedReason  String? @db.Text // Why this would help the guesser
-
-  /// The AI-generated message offering to share (shown to user)
-  offerMessage String? @db.Text
-
-  /// User's refined version (if they edited the suggestion)
-  refinedContent String? @db.Text
-
-  /// Final content that was shared (could be suggested, refined, or custom)
-  sharedContent String?   @db.Text
-  sharedAt      DateTime?
-
-  /// Delivery status of shared content (pending -> delivered -> seen)
-  deliveryStatus SharedContentDeliveryStatus @default(PENDING)
-  /// When the content was delivered to the guesser
-  deliveredAt    DateTime?
-  /// When the guesser saw/acknowledged the content (sent first message after)
-  seenAt         DateTime?
-
-  /// If they declined
-  declinedAt DateTime?
-
-  /// Legacy: skipped without responding
-  skippedAt DateTime?
-
-  /// Which iteration of the reconciler loop this offer belongs to
-  iteration          Int     @default(1)
-  /// Whether the refinement chat was used before accepting/declining
-  refinementChatUsed Boolean @default(false)
-
-  /// When the subject was last notified about delivery status change
-  lastDeliveryNotifiedAt DateTime?
-  /// When the subject was last notified about seen status change
-  lastSeenNotifiedAt     DateTime?
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  @@index([userId, status])
-}
-
-/// Delivery status for shared content (empathy statements, shared context)
-enum SharedContentDeliveryStatus {
-  PENDING // Content saved but not yet delivered
-  DELIVERED // Content delivered to recipient's chat
-  SEEN // Recipient has viewed/acknowledged the content
-}
-
-enum ReconcilerShareStatus {
-  PENDING // Suggestion generated, not yet shown to user
-  OFFERED // Shown to user, awaiting response
-  ACCEPTED // User accepted (with or without refinement)
-  DECLINED // User declined to share
-  EXPIRED // Offer expired (timeout)
-  NOT_OFFERED // Legacy: no offer was made
-  SKIPPED // Legacy: user skipped without responding
-}
-
-/// Tracks refinement attempts per direction to implement circuit breaker.
-/// Prevents infinite refinement loops by limiting attempts to 3 per direction.
-model RefinementAttemptCounter {
-  id        String   @id @default(dbgenerated("uuidv7()")) @db.Uuid
-  session   Session  @relation(fields: [sessionId], references: [id], onDelete: Cascade)
-  sessionId String   @db.Uuid
-  direction String // "guesserId->subjectId" composite string
-  attempts  Int      @default(0)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  @@unique([sessionId, direction])
-}
-
-// ============================================================================
-// Stage 4: Strategies and Rankings
-// ============================================================================
-
-model StrategyProposal {
-  id                    String               @id @default(dbgenerated("uuidv7()")) @db.Uuid
-  session               Session              @relation(fields: [sessionId], references: [id], onDelete: Cascade)
-  sessionId             String               @db.Uuid
-  createdBy             User?                @relation(fields: [createdByUserId], references: [id], onDelete: SetNull)
-  createdByUserId       String?              @db.Uuid
-  description           String               @db.Text
-  needsAddressed        String[]
-  duration              String?
-  measureOfSuccess      String?
-  source                StrategySource       @default(USER_SUBMITTED)
-  kind                  Stage4ProposalKind   @default(SHARED_PROPOSAL)
-  status                Stage4ProposalStatus @default(ACTIVE)
-  removedAt             DateTime?
-  removedBy             User?                @relation("Stage4ProposalRemovedBy", fields: [removedByUserId], references: [id], onDelete: SetNull)
-  removedByUserId       String?              @db.Uuid
-  removalReason         String?              @db.Text
-  parentProposalId      String?
-  coverageSummary       Json?
-  capturedFromMessageId String?
-  createdAt             DateTime             @default(now())
-  updatedAt             DateTime             @updatedAt
-  consentRecord         ConsentRecord?       @relation(fields: [consentRecordId], references: [id], onDelete: SetNull)
-  consentRecordId       String?              @db.Uuid
-
-  // Note: Rankings reference proposals via rankedIds (String[]), not a direct relation
-  agreements Agreement[]
-  selections Stage4ProposalSelection[]
-  revisions  Stage4ProposalRevision[]
-  needLinks  StrategyProposalNeed[]
-
-  @@index([sessionId])
-  @@index([sessionId, status])
-  @@index([parentProposalId])
-}
-
-enum StrategySource {
+enum ProposalSource {
   USER_SUBMITTED
   AI_SUGGESTED
   CURATED
+
+  @@map("proposal_source")
 }
 
-enum Stage4ProposalKind {
+enum ProposalKind {
   SHARED_PROPOSAL
   INDIVIDUAL_COMMITMENT
+
+  @@map("proposal_kind")
 }
 
-enum Stage4ProposalStatus {
+enum ProposalStatus {
   ACTIVE
   REVISED
   REMOVED
   CONVERTED_TO_AGREEMENT
+
+  @@map("proposal_status")
 }
 
-enum Stage4SelectionDecision {
+enum ChoiceDecision {
   WILLING
   NOT_WILLING
+
+  @@map("choice_decision")
 }
 
-enum Stage4ClosureKind {
+enum RevisionAction {
+  CREATED
+  REVISED
+  REMOVED
+  RESTORED
+  CONVERTED
+  CAPTURE_SKIPPED
+  COVERED
+  SUBCHAT_REFINED
+
+  @@map("revision_action")
+}
+
+enum AgreementType {
+  MICRO_EXPERIMENT
+  COMMITMENT
+  CHECK_IN
+  HYBRID
+
+  @@map("agreement_type")
+}
+
+enum AgreementStatus {
+  AGREED
+  IN_PROGRESS
+  COMPLETED
+  ABANDONED
+
+  @@map("agreement_status")
+}
+
+enum ClosureKind {
   SHARED_AGREEMENT
   NO_SHARED_AGREEMENT
+
+  @@map("closure_kind")
 }
 
-enum Stage4ClosureReason {
+enum ClosureReason {
   MUTUAL_SELECTION
   NO_OVERLAP
   BOUNDARY_HONORED
   USER_STOPPED
+
+  @@map("closure_reason")
 }
 
-enum TendingEntryType {
-  SCHEDULED_SHARED_AGREEMENT_CHECKIN
-  SCHEDULED_INDIVIDUAL_COMMITMENT_CHECKIN
+enum FollowUpType {
+  SCHEDULED_SHARED_AGREEMENT
+  SCHEDULED_INDIVIDUAL_COMMITMENT
   USER_INITIATED_REENTRY
+
+  @@map("follow_up_type")
 }
 
-enum TendingEntryStatus {
+enum FollowUpScope {
+  SHARED
+  INDIVIDUAL
+
+  @@map("follow_up_scope")
+}
+
+enum FollowUpStatus {
   SCHEDULED
   OPEN
   PARTIAL
   COMPLETED
   EXPIRED
   CANCELLED
+
+  @@map("follow_up_status")
 }
 
-enum TendingEntryScope {
-  SHARED
-  INDIVIDUAL
-}
-
-enum TendingFollowThroughStatus {
-  HAPPENED
-  PARTLY_HAPPENED
-  DID_NOT_HAPPEN
-  NOT_SURE
-}
-
-enum TendingHelpfulnessStatus {
-  HELPED
-  PARTLY_HELPED
-  DID_NOT_HELP
-  NOT_SURE
-}
-
-enum TendingBlockerCategory {
-  FORGOT
-  TOO_HARD
-  TOO_FREQUENT
-  UNCLEAR
-  PARTNER_DID_NOT_DO_PART
-  I_DID_NOT_DO_PART
-  CIRCUMSTANCES_CHANGED
-  NO_LONGER_WANTED
-  OTHER
-}
-
-enum TendingNeedResolutionStatus {
-  RESOLVED
-  IMPROVING
-  STILL_OPEN
-  CHANGED
-  NOT_SURE
-}
-
-enum TendingNextAction {
+enum NextAction {
   FULL_CLOSURE
   EXTEND
   ADJUST_COMMITMENT
   REOPEN_STRATEGY_WORK
   NEW_PROCESS
   PARTIAL_CLOSURE
+
+  @@map("next_action")
 }
 
-enum TendingReminderScope {
+enum ContinueChoice {
+  ANOTHER_ROUND
+  EXTEND
+  NEW_PROCESS
+  PARTIAL_CLOSURE
+  FULL_CLOSURE
+
+  @@map("continue_choice")
+}
+
+enum ReminderScope {
   PRIVATE
   SHARED
+
+  @@map("reminder_scope")
 }
 
-enum TendingCoordinationStatus {
-  WAITING_FOR_PARTNER
-  READY_TO_RESOLVE
-  RESOLVED
-  TIMED_OUT
+enum ReminderStatus {
+  SCHEDULED
+  DELIVERED
+  CANCELLED
+
+  @@map("reminder_status")
 }
 
-model StrategyProposalNeed {
-  proposalId String   @db.Uuid
-  needId     String   @db.Uuid
-  createdAt  DateTime @default(now())
-
-  proposal StrategyProposal @relation(fields: [proposalId], references: [id], onDelete: Cascade)
-  need     IdentifiedNeed   @relation(fields: [needId], references: [id], onDelete: Cascade)
-
-  @@id([proposalId, needId])
-  @@index([needId])
-}
-
-model Stage4ProposalSelection {
-  id         String                  @id @default(dbgenerated("uuidv7()")) @db.Uuid
-  proposal   StrategyProposal        @relation(fields: [proposalId], references: [id], onDelete: Cascade)
-  proposalId String                  @db.Uuid
-  session    Session                 @relation(fields: [sessionId], references: [id], onDelete: Cascade)
-  sessionId  String                  @db.Uuid
-  user       User                    @relation(fields: [userId], references: [id], onDelete: Cascade)
-  userId     String                  @db.Uuid
-  decision   Stage4SelectionDecision
-  note       String?                 @db.Text
-  selectedAt DateTime                @default(now())
-  updatedAt  DateTime                @updatedAt
-
-  @@unique([proposalId, userId])
-  @@index([sessionId, userId])
-}
-
-model Stage4ProposalRevision {
-  id          String           @id @default(dbgenerated("uuidv7()")) @db.Uuid
-  proposal    StrategyProposal @relation(fields: [proposalId], references: [id], onDelete: Cascade)
-  proposalId  String           @db.Uuid
-  sessionId   String
-  actorUserId String?
-  action      String
-  before      Json?
-  after       Json?
-  reason      String?          @db.Text
-  messageId   String?
-  createdAt   DateTime         @default(now())
-
-  @@index([proposalId, createdAt])
-  @@index([sessionId, createdAt])
-}
-
-model Stage4NeedCoverage {
-  id                  String   @id @default(dbgenerated("uuidv7()")) @db.Uuid
-  session             Session  @relation(fields: [sessionId], references: [id], onDelete: Cascade)
-  sessionId           String   @db.Uuid
-  needId              String?
-  needLabel           String
-  sourceUserId        String?
-  coverageStatus      String
-  coveringProposalIds String[] @db.Uuid
-  note                String?  @db.Text
-  updatedAt           DateTime @updatedAt
-  createdAt           DateTime @default(now())
-
-  @@index([sessionId])
-}
-
-model Stage4NeedDeclination {
-  id         String   @id @default(dbgenerated("uuidv7()")) @db.Uuid
-  session    Session  @relation(fields: [sessionId], references: [id], onDelete: Cascade)
-  sessionId  String   @db.Uuid
-  userId     String
-  needId     String
-  declinedAt DateTime @default(now())
-
-  @@unique([sessionId, userId, needId])
-  @@index([sessionId])
-}
-
-model Stage4Closure {
-  id                    String              @id @default(dbgenerated("uuidv7()")) @db.Uuid
-  session               Session             @relation(fields: [sessionId], references: [id], onDelete: Cascade)
-  sessionId             String              @unique @db.Uuid
-  kind                  Stage4ClosureKind
-  reason                Stage4ClosureReason
-  summary               String              @db.Text
-  sharedAgreementIds    String[]            @db.Uuid
-  individualProposalIds String[]            @db.Uuid
-  openNeedIds           String[]            @db.Uuid
-  checkInAt             DateTime?
-  closedByUserId        String?
-  closedAt              DateTime            @default(now())
-  createdAt             DateTime            @default(now())
-}
-
-enum Stage4SubChatAnchor {
-  NEEDS_BRAINSTORM
-  PROPOSAL_REFINEMENT
-  NO_OVERLAP
-}
-
-enum Stage4SubChatStatus {
+enum ReflectionStatus {
   ACTIVE
-  RESOLVED
+  COMPLETED
+  ARCHIVED
+
+  @@map("reflection_status")
 }
 
-model Stage4SubChat {
-  id         String              @id @default(dbgenerated("uuidv7()")) @db.Uuid
-  session    Session             @relation(fields: [sessionId], references: [id], onDelete: Cascade)
-  sessionId  String              @db.Uuid
-  user       User                @relation(fields: [userId], references: [id], onDelete: Cascade)
-  userId     String              @db.Uuid
-  anchorKind Stage4SubChatAnchor
-  anchorId   String?
-  status     Stage4SubChatStatus @default(ACTIVE)
-  createdAt  DateTime            @default(now())
-  resolvedAt DateTime?
+enum TakeawaySource {
+  AI
+  USER
 
-  messages Stage4SubChatMessage[]
-
-  @@index([sessionId, userId, status])
-  @@index([sessionId, anchorKind, anchorId, status])
+  @@map("takeaway_source")
 }
 
-model Stage4SubChatMessage {
-  id        String        @id @default(dbgenerated("uuidv7()")) @db.Uuid
-  subChat   Stage4SubChat @relation(fields: [subChatId], references: [id], onDelete: Cascade)
-  subChatId String        @db.Uuid
-  role      MessageRole
-  content   String        @db.Text
-  createdAt DateTime      @default(now())
+enum TakeawayType {
+  INSIGHT
+  ACTION_ITEM
+  INTENTION
 
-  @@index([subChatId, createdAt])
+  @@map("takeaway_type")
 }
 
-model TendingEntry {
-  id            String             @id @default(dbgenerated("uuidv7()")) @db.Uuid
-  session       Session            @relation(fields: [sessionId], references: [id], onDelete: Cascade)
-  sessionId     String             @db.Uuid
-  agreement     Agreement?         @relation(fields: [agreementId], references: [id], onDelete: Cascade)
-  agreementId   String?            @db.Uuid
-  type          TendingEntryType
-  scope         TendingEntryScope  @default(SHARED)
-  ownerUserId   String?
-  optedInShared Boolean            @default(false)
-  status        TendingEntryStatus @default(SCHEDULED)
-  scheduledFor  DateTime?
-  openedAt      DateTime?
-  completedAt   DateTime?
-  summary       String?            @db.Text
-  createdAt     DateTime           @default(now())
-  updatedAt     DateTime           @updatedAt
+enum TakeawayLinkType {
+  AI_SEMANTIC
+  USER_MANUAL
 
-  responses       TendingResponse[]
-  partialClosures TendingResponsePartialClosure[]
-  entryOutcomes   TendingEntryOutcome[]
-  reminders       TendingReminder[]
-  adjustments     TendingAdjustment[]
-
-  @@index([sessionId, status])
-  @@index([agreementId])
-  @@index([scheduledFor])
-  @@index([sessionId, scope, ownerUserId])
+  @@map("takeaway_link_type")
 }
-
-model TendingCheckin {
-  id                  String                    @id @default(dbgenerated("uuidv7()")) @db.Uuid
-  session             Session                   @relation(fields: [sessionId], references: [id], onDelete: Cascade)
-  sessionId           String                    @db.Uuid
-  user                User                      @relation(fields: [userId], references: [id], onDelete: Cascade)
-  userId              String                    @db.Uuid
-  coordinationCycle   TendingCoordinationCycle? @relation(fields: [coordinationCycleId], references: [id], onDelete: SetNull)
-  coordinationCycleId String?                   @db.Uuid
-  nextAction          TendingNextAction?
-  continueChoice      ContinueChoice?
-  reflectionSummary   String?                   @db.Text
-  submittedAt         DateTime                  @default(now())
-  createdAt           DateTime                  @default(now())
-
-  responses          TendingResponse[]
-  entryOutcomes      TendingEntryOutcome[]
-  needOutcomes       TendingNeedOutcome[]
-  reminders          TendingReminder[]
-  adjustments        TendingAdjustment[]
-  betweenPeriodNotes TendingBetweenPeriodNote[]
-
-  @@index([sessionId, submittedAt])
-  @@index([userId, submittedAt])
-  @@index([coordinationCycleId])
-}
-
-model TendingCoordinationCycle {
-  id                 String                    @id @default(dbgenerated("uuidv7()")) @db.Uuid
-  session            Session                   @relation(fields: [sessionId], references: [id], onDelete: Cascade)
-  sessionId          String                    @db.Uuid
-  createdBy          User                      @relation(fields: [createdByUserId], references: [id], onDelete: Cascade)
-  createdByUserId    String                    @db.Uuid
-  coordinationKey    String?
-  status             TendingCoordinationStatus @default(WAITING_FOR_PARTNER)
-  entryIds           String[]                  @db.Uuid
-  participantUserIds String[]                  @db.Uuid
-  submittedUserIds   String[]                  @db.Uuid
-  responseDeadlineAt DateTime
-  resolvedAt         DateTime?
-  resultSummary      String?                   @db.Text
-  createdAt          DateTime                  @default(now())
-  updatedAt          DateTime                  @updatedAt
-
-  checkins TendingCheckin[]
-
-  @@index([sessionId, status])
-  @@index([coordinationKey])
-  @@index([responseDeadlineAt])
-}
-
-model TendingResponse {
-  id             String          @id @default(dbgenerated("uuidv7()")) @db.Uuid
-  tendingEntry   TendingEntry    @relation(fields: [tendingEntryId], references: [id], onDelete: Cascade)
-  tendingEntryId String          @db.Uuid
-  user           User            @relation(fields: [userId], references: [id], onDelete: Cascade)
-  userId         String          @db.Uuid
-  checkin        TendingCheckin? @relation(fields: [checkinId], references: [id], onDelete: SetNull)
-  checkinId      String?         @db.Uuid
-  status         String
-  reflection     String?         @db.Text
-  continueChoice ContinueChoice?
-  submittedAt    DateTime        @default(now())
-
-  // Stage 4 Phase 5: when continueChoice = PARTIAL_CLOSURE, per-entry resolutions
-  // are recorded against the originating response (one row per TendingEntry resolved).
-  partialClosures TendingResponsePartialClosure[]
-  entryOutcomes   TendingEntryOutcome[]
-
-  @@unique([tendingEntryId, userId])
-  @@index([checkinId])
-}
-
-model TendingEntryOutcome {
-  id                  String                     @id @default(dbgenerated("uuidv7()")) @db.Uuid
-  checkin             TendingCheckin             @relation(fields: [checkinId], references: [id], onDelete: Cascade)
-  checkinId           String                     @db.Uuid
-  tendingEntry        TendingEntry               @relation(fields: [tendingEntryId], references: [id], onDelete: Cascade)
-  tendingEntryId      String                     @db.Uuid
-  response            TendingResponse?           @relation(fields: [responseId], references: [id], onDelete: SetNull)
-  responseId          String?                    @db.Uuid
-  user                User                       @relation(fields: [userId], references: [id], onDelete: Cascade)
-  userId              String                     @db.Uuid
-  followThroughStatus TendingFollowThroughStatus
-  helpfulnessStatus   TendingHelpfulnessStatus?
-  blockerCategories   TendingBlockerCategory[]
-  whatHappened        String?                    @db.Text
-  helpedNeed          String?                    @db.Text
-  blockerNote         String?                    @db.Text
-  stillWorthTrying    Boolean?
-  createdAt           DateTime                   @default(now())
-
-  @@unique([checkinId, tendingEntryId])
-  @@index([tendingEntryId])
-  @@index([userId, createdAt])
-}
-
-model TendingNeedOutcome {
-  id               String                      @id @default(dbgenerated("uuidv7()")) @db.Uuid
-  checkin          TendingCheckin              @relation(fields: [checkinId], references: [id], onDelete: Cascade)
-  checkinId        String                      @db.Uuid
-  session          Session                     @relation(fields: [sessionId], references: [id], onDelete: Cascade)
-  sessionId        String                      @db.Uuid
-  needId           String?
-  needLabel        String
-  sourceUserId     String?
-  resolutionStatus TendingNeedResolutionStatus
-  note             String?                     @db.Text
-  changedNeedLabel String?
-  nextAction       TendingNextAction?
-  createdAt        DateTime                    @default(now())
-
-  @@index([sessionId, createdAt])
-  @@index([checkinId])
-  @@index([needId])
-}
-
-model TendingReminder {
-  id             String               @id @default(dbgenerated("uuidv7()")) @db.Uuid
-  session        Session              @relation(fields: [sessionId], references: [id], onDelete: Cascade)
-  sessionId      String               @db.Uuid
-  checkin        TendingCheckin?      @relation(fields: [checkinId], references: [id], onDelete: SetNull)
-  checkinId      String?              @db.Uuid
-  tendingEntry   TendingEntry?        @relation(fields: [tendingEntryId], references: [id], onDelete: Cascade)
-  tendingEntryId String?              @db.Uuid
-  user           User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
-  userId         String               @db.Uuid
-  scope          TendingReminderScope
-  remindAt       DateTime
-  cadence        String?
-  note           String?              @db.Text
-  status         String               @default("SCHEDULED")
-  createdAt      DateTime             @default(now())
-  updatedAt      DateTime             @updatedAt
-
-  @@index([sessionId, remindAt])
-  @@index([userId, remindAt])
-  @@index([checkinId])
-  @@index([tendingEntryId])
-}
-
-model TendingAdjustment {
-  id                     String                   @id @default(dbgenerated("uuidv7()")) @db.Uuid
-  session                Session                  @relation(fields: [sessionId], references: [id], onDelete: Cascade)
-  sessionId              String                   @db.Uuid
-  checkin                TendingCheckin           @relation(fields: [checkinId], references: [id], onDelete: Cascade)
-  checkinId              String                   @db.Uuid
-  tendingEntry           TendingEntry             @relation(fields: [tendingEntryId], references: [id], onDelete: Cascade)
-  tendingEntryId         String                   @db.Uuid
-  user                   User                     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  userId                 String                   @db.Uuid
-  privacyScope           TendingReminderScope     @default(PRIVATE)
-  revisedCommitmentText  String?                  @db.Text
-  revisedCadence         String?
-  revisedScope           String?                  @db.Text
-  revisedSuccessCriteria String?                  @db.Text
-  reason                 String?                  @db.Text
-  blockerAddressed       TendingBlockerCategory[]
-  createdAt              DateTime                 @default(now())
-
-  @@index([sessionId, createdAt])
-  @@index([checkinId])
-  @@index([tendingEntryId])
-  @@index([userId, createdAt])
-}
-
-model TendingBetweenPeriodNote {
-  id                        String          @id @default(dbgenerated("uuidv7()")) @db.Uuid
-  session                   Session         @relation(fields: [sessionId], references: [id], onDelete: Cascade)
-  sessionId                 String          @db.Uuid
-  user                      User            @relation(fields: [userId], references: [id], onDelete: Cascade)
-  userId                    String          @db.Uuid
-  content                   String          @db.Text
-  carryForwardSelected      Boolean         @default(false)
-  consentToShareWithPartner Boolean         @default(false)
-  shareConsentAt            DateTime?
-  selectedForCheckin        TendingCheckin? @relation(fields: [selectedForCheckinId], references: [id], onDelete: SetNull)
-  selectedForCheckinId      String?         @db.Uuid
-  createdAt                 DateTime        @default(now())
-  updatedAt                 DateTime        @updatedAt
-
-  @@index([sessionId, userId, createdAt])
-  @@index([selectedForCheckinId])
-}
-
-// Stage 4 Phase 5: ContinueChoice — five forward paths at the end of a Tending check-in.
-enum ContinueChoice {
-  ANOTHER_ROUND // Reset Stage 4 to inventory building; new experiments
-  EXTEND // Keep current entries open with a new scheduledFor
-  NEW_PROCESS // Create a fresh Session linked via previousSessionId; both users start at Stage 0
-  PARTIAL_CLOSURE // Close some entries, continue others (per-TendingEntry granularity)
-  FULL_CLOSURE // Mark all entries COMPLETED and move session to terminal state
-}
-
-enum PartialClosureResolution {
-  RESOLVED
-  CONTINUING
-}
-
-// Stage 4 Phase 5: Per-TendingEntry resolution recorded when a user picks PARTIAL_CLOSURE.
-// Scope decision: targets TendingEntry (not Agreement) so individual commitments can be
-// partially closed alongside shared agreements. See PR description for rationale.
-model TendingResponsePartialClosure {
-  id                String                   @id @default(dbgenerated("uuidv7()")) @db.Uuid
-  tendingResponse   TendingResponse          @relation(fields: [tendingResponseId], references: [id], onDelete: Cascade)
-  tendingResponseId String                   @db.Uuid
-  tendingEntry      TendingEntry             @relation(fields: [tendingEntryId], references: [id], onDelete: Cascade)
-  tendingEntryId    String                   @db.Uuid
-  resolution        PartialClosureResolution
-  createdAt         DateTime                 @default(now())
-
-  @@unique([tendingResponseId, tendingEntryId])
-  @@index([tendingEntryId])
-}
-
-model StrategyRanking {
-  id          String   @id @default(dbgenerated("uuidv7()")) @db.Uuid
-  session     Session  @relation(fields: [sessionId], references: [id], onDelete: Cascade)
-  sessionId   String   @db.Uuid
-  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  userId      String   @db.Uuid
-  rankedIds   String[] @db.Uuid // Ordered StrategyProposal ids
-  submittedAt DateTime @default(now())
-
-  @@unique([sessionId, userId])
-}
-
-// ============================================================================
-// Emotional Regulation
-// ============================================================================
-
-model EmotionalExerciseCompletion {
-  id              String       @id @default(dbgenerated("uuidv7()")) @db.Uuid
-  session         Session      @relation(fields: [sessionId], references: [id], onDelete: Cascade)
-  sessionId       String       @db.Uuid
-  user            User         @relation(fields: [userId], references: [id], onDelete: Cascade)
-  userId          String       @db.Uuid
-  type            ExerciseType
-  completedAt     DateTime     @default(now())
-  intensityBefore Int?
-  intensityAfter  Int?
-
-  @@index([sessionId, userId, completedAt])
-}
-
-enum ExerciseType {
-  BREATHING_EXERCISE
-  BODY_SCAN
-  GROUNDING
-  PAUSE_SESSION
-}
-
-// ============================================================================
-// Global Library (Stage 4 Suggestions)
-// ============================================================================
-
-model GlobalLibraryItem {
-  id          String              @id @default(dbgenerated("uuidv7()")) @db.Uuid
-  title       String
-  description String              @db.Text
-  category    String // e.g., "communication", "quality-time", "conflict-resolution"
-  source      GlobalLibrarySource
-  createdAt   DateTime            @default(now())
-  updatedAt   DateTime            @updatedAt
-
-  // Embedding for semantic search
-  // embedding Unsupported("vector(1024)")?  -- pgvector not available
-
-  // For user-contributed items only
-  contributedBy       String? // User ID if contributed (anonymized in results)
-  contributionConsent DateTime? // When user consented to anonymized contribution
-
-  @@index([category])
-  @@index([source])
-}
-
-enum GlobalLibrarySource {
-  CURATED // Admin/expert authored
-  CONTRIBUTED // User-contributed with explicit consent
-}
-
-// ============================================================================
-// Invitations
-// ============================================================================
-
-model Invitation {
-  id                 String           @id @default(dbgenerated("uuidv7()")) @db.Uuid
-  session            Session          @relation(fields: [sessionId], references: [id], onDelete: Cascade)
-  sessionId          String           @db.Uuid
-  invitedBy          User             @relation("InvitedBy", fields: [invitedById], references: [id], onDelete: Cascade)
-  invitedById        String           @db.Uuid
-  name               String? // Display name for the invited person
-  messageConfirmed   Boolean          @default(false) // User confirmed the message
-  messageConfirmedAt DateTime? // When the user confirmed the message (for chat indicator positioning)
-  status             InvitationStatus @default(PENDING)
-  createdAt          DateTime         @default(now())
-  expiresAt          DateTime
-  acceptedAt         DateTime?
-  declinedAt         DateTime?
-  declineReason      String?
-
-  @@index([sessionId])
-  @@index([status])
-}
-
-enum InvitationStatus {
-  PENDING
-  ACCEPTED
-  DECLINED
-  EXPIRED
-}
-
-// ============================================================================
-// User Memory (Things to Always Remember)
-// ============================================================================
 
 enum MemoryCategory {
-  AI_NAME // "Call me Alex"
-  LANGUAGE // "Respond in Spanish"
-  COMMUNICATION // "Keep responses brief"
-  PERSONAL_INFO // "Call me Sam", pronouns
-  RELATIONSHIP // "Partner's name is Jordan"
-  PREFERENCE // "Use examples when explaining"
+  AI_NAME
+  LANGUAGE
+  COMMUNICATION
+  PERSONAL_INFO
+  RELATIONSHIP
+  PREFERENCE
+
+  @@map("memory_category")
 }
 
 enum MemoryStatus {
   ACTIVE
   PENDING
   REJECTED
+
+  @@map("memory_status")
 }
 
 enum MemorySource {
-  USER_APPROVED // AI suggested, user approved
-  USER_CREATED // User created directly
-  USER_EDITED // AI suggested, user edited before saving
+  USER_APPROVED
+  USER_CREATED
+  USER_EDITED
+
+  @@map("memory_source")
 }
 
-model UserMemory {
-  id          String         @id @default(dbgenerated("uuidv7()")) @db.Uuid
-  user        User           @relation(fields: [userId], references: [id], onDelete: Cascade)
-  userId      String         @db.Uuid
-  session     Session?       @relation(fields: [sessionId], references: [id], onDelete: Cascade)
-  sessionId   String?        @db.Uuid // null = global memory
-  content     String         @db.Text
-  category    MemoryCategory
-  status      MemoryStatus   @default(ACTIVE)
-  source      MemorySource   @default(USER_APPROVED)
-  suggestedBy String?        @db.Text // AI's original suggestion if edited
-  createdAt   DateTime       @default(now())
-  updatedAt   DateTime       @updatedAt
+enum DevicePlatform {
+  ios
+  android
+  web
 
-  @@index([userId])
-  @@index([userId, sessionId])
+  @@map("device_platform")
 }
 
-// ============================================================================
-// Inner Work: Needs Assessment ("Am I OK?")
-// ============================================================================
+enum ActivityType {
+  LLM_CALL
+  EMBEDDING
+  RETRIEVAL
+  TOOL_USE
 
-// Reference table for the 19 core human needs (seeded data)
-model Need {
-  id          Int           @id
-  name        String // "Physical Safety"
-  slug        String        @unique // "physical-safety"
-  description String        @db.Text // Full question text
-  category    NeedsCategory
-  order       Int // Display order within category
-
-  scores NeedScore[]
+  @@map("activity_type")
 }
 
-enum NeedsCategory {
-  FOUNDATION // Physical safety, health, rest, material security
-  EMOTIONAL // Emotional safety, self-compassion, regulation, agency
-  RELATIONAL // Being seen, belonging, trust, contribution
-  INTEGRATION // Purpose, learning, integrity, hope
-  TRANSCENDENCE // Presence, gratitude, connection to larger whole
+enum ActivityStatus {
+  PENDING
+  COMPLETED
+  FAILED
+
+  @@map("activity_status")
 }
 
-// User's scores over time for each need
-model NeedScore {
-  id            String   @id @default(dbgenerated("uuidv7()")) @db.Uuid
-  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  userId        String   @db.Uuid
-  need          Need     @relation(fields: [needId], references: [id], onDelete: Cascade)
-  needId        Int
-  score         Int // 0 = Not met, 1 = Somewhat met, 2 = Fully met
-  clarification String?  @db.Text // Optional user notes
-  createdAt     DateTime @default(now())
-
-  @@index([userId, needId])
-  @@index([userId, createdAt])
-}
-
-// Track baseline completion and check-in preferences
-model NeedsAssessmentState {
-  id                   String    @id @default(dbgenerated("uuidv7()")) @db.Uuid
-  user                 User      @relation(fields: [userId], references: [id], onDelete: Cascade)
-  userId               String    @unique @db.Uuid
-  baselineCompleted    Boolean   @default(false)
-  baselineCompletedAt  DateTime?
-  checkInFrequencyDays Int       @default(7) // 1-10 days
-  lastCheckInNeedId    Int? // Which need was last checked
-  lastCheckInAt        DateTime?
-  nextCheckInAt        DateTime?
-}
-
-// ============================================================================
-// Inner Work: People Tracking
-// ============================================================================
-
-// A person mentioned by the user across features
-model Person {
-  id             String   @id @default(dbgenerated("uuidv7()")) @db.Uuid
-  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  userId         String   @db.Uuid
-  name           String // Primary name: "Sarah"
-  aliases        String[] @default([]) // ["my friend Sarah", "Sarah W."]
-  relationship   String? // "friend", "partner", "family", "coworker", etc.
-  firstMentioned DateTime @default(now())
-  lastMentioned  DateTime @default(now())
-
-  // Mention counts by feature
-  mentionCountInnerThoughts Int @default(0)
-  mentionCountGratitude     Int @default(0)
-  mentionCountNeeds         Int @default(0)
-  mentionCountConflict      Int @default(0) // Partner sessions
-
-  // Which needs this person relates to (JSON: { "trust": 3, "belonging": 1 })
-  needsConnections Json @default("{}")
-
-  mentions PersonMention[]
-
-  @@unique([userId, name])
-  @@index([userId, lastMentioned])
-}
-
-// Individual mention instance
-model PersonMention {
-  id         String            @id @default(dbgenerated("uuidv7()")) @db.Uuid
-  person     Person            @relation(fields: [personId], references: [id], onDelete: Cascade)
-  personId   String            @db.Uuid
-  userId     String
-  sourceType MentionSourceType
-  sourceId   String // ID of the source entity
-  context    String?           @db.Text // Surrounding text snippet
-  sentiment  Float? // -1 to 1
-  createdAt  DateTime          @default(now())
-
-  @@index([personId, createdAt])
-  @@index([userId, sourceType])
-}
-
-enum MentionSourceType {
-  INNER_THOUGHTS // InnerWorkMessage
-  GRATITUDE // GratitudeEntry
-  NEEDS_CHECKIN // NeedScore clarification
-  PARTNER_SESSION // Session message
-}
-
-// ============================================================================
-// Inner Work: Cross-Feature Intelligence (Insights)
-// ============================================================================
-
-// AI-generated insights from cross-feature pattern recognition
-model Insight {
-  id        String      @id @default(dbgenerated("uuidv7()")) @db.Uuid
-  user      User        @relation(fields: [userId], references: [id], onDelete: Cascade)
-  userId    String      @db.Uuid
-  type      InsightType
-  summary   String      @db.Text // Human-readable insight summary
-  data      Json // Structured data supporting the insight
-  priority  Int         @default(0) // Higher = more important (0-10)
-  dismissed Boolean     @default(false)
-  expiresAt DateTime? // Auto-expire old insights
-  createdAt DateTime    @default(now())
-
-  @@index([userId, dismissed, priority])
-  @@index([userId, expiresAt])
-}
-
-enum InsightType {
-  PATTERN // Recurring behavior or theme detected
-  CONTRADICTION // Conflicting self-reports or behaviors
-  SUGGESTION // Recommended action based on patterns
-}
-
-// ============================================================================
-// Inner Work: Recurring Themes (Knowledge Base)
-// ============================================================================
-
-model RecurringTheme {
-  id           String   @id @default(dbgenerated("uuidv7()")) @db.Uuid
-  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  userId       String   @db.Uuid
-  tag          String // The theme tag (matches InnerWorkSession.theme)
-  sessionCount Int // How many sessions share this theme (updated each time)
-  summary      String   @db.Text // Haiku-generated cross-session summary
-  summaryAt    DateTime // When summary was last generated
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
-
-  @@unique([userId, tag])
-  @@index([userId, sessionCount])
-}
-
-// ============================================================================
-// Inner Work: Gratitude Practice ("See the Positive")
-// ============================================================================
-
-model GratitudeEntry {
-  id            String   @id @default(dbgenerated("uuidv7()")) @db.Uuid
-  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  userId        String   @db.Uuid
-  content       String   @db.Text // The gratitude text
-  voiceRecorded Boolean  @default(false)
-  createdAt     DateTime @default(now())
-
-  // AI-extracted metadata (populated async)
-  extractedPeople     String[] @default([])
-  extractedPlaces     String[] @default([])
-  extractedActivities String[] @default([])
-  extractedEmotions   String[] @default([])
-  extractedThemes     String[] @default([])
-
-  // Connections
-  linkedNeedIds    Int[]   @default([]) // Which needs this touches
-  linkedConflictId String? // If mentioned an active conflict
-  sentimentScore   Float? // -1 to 1, for trend tracking
-
-  // AI response to the gratitude
-  aiResponse String? @db.Text
-
-  // Embedding for semantic search
-  // embedding Unsupported("vector(1024)")?  -- pgvector not available
-
-  @@index([userId, createdAt])
-}
-
-// User preferences for gratitude practice
-model GratitudePreferences {
-  id              String   @id @default(dbgenerated("uuidv7()")) @db.Uuid
-  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  userId          String   @unique @db.Uuid
-  enabled         Boolean  @default(true)
-  frequency       Int      @default(1) // 0-3 times per day
-  preferredTimes  String[] @default(["20:00"]) // Array of HH:MM
-  weekdayOnly     Boolean  @default(false)
-  quietHoursStart String? // HH:MM
-  quietHoursEnd   String? // HH:MM
-}
-
-// ============================================================================
-// Inner Work: Meditation ("Develop Loving Awareness")
-// ============================================================================
-
-model MeditationSession {
-  id              String         @id @default(dbgenerated("uuidv7()")) @db.Uuid
-  user            User           @relation(fields: [userId], references: [id], onDelete: Cascade)
-  userId          String         @db.Uuid
-  type            MeditationType
-  durationMinutes Int
-  focusArea       String? // e.g., "grounding", "self-compassion"
-  completed       Boolean        @default(false)
-  startedAt       DateTime       @default(now())
-  completedAt     DateTime?
-
-  // Guided-specific
-  scriptGenerated String? @db.Text // Full script text
-  voiceId         String? // TTS voice identifier
-  backgroundSound String? // "rain", "bowls", "silence"
-
-  // Favorites
-  savedAsFavorite Boolean       @default(false)
-  favoriteType    FavoriteType?
-
-  // Post-session
-  postNotes        String? @db.Text
-  linkedNeedIds    Int[]   @default([])
-  linkedConflictId String? // If done in preparation for conflict
-
-  @@index([userId, startedAt])
-}
-
-enum MeditationType {
-  GUIDED
-  UNGUIDED
-}
-
-enum FavoriteType {
-  EXACT // Replay exact script
-  THEME // Generate fresh variation
-}
-
-// Aggregated stats (computed on save)
-model MeditationStats {
-  id              String    @id @default(dbgenerated("uuidv7()")) @db.Uuid
-  user            User      @relation(fields: [userId], references: [id], onDelete: Cascade)
-  userId          String    @unique @db.Uuid
-  totalSessions   Int       @default(0)
-  guidedCount     Int       @default(0)
-  unguidedCount   Int       @default(0)
-  totalMinutes    Int       @default(0)
-  currentStreak   Int       @default(0)
-  longestStreak   Int       @default(0)
-  streakStartDate DateTime?
-  lastSessionDate DateTime?
-
-  // Favorite focus areas (JSON: { "grounding": 5, "compassion": 3 })
-  favoriteFocusAreas Json @default("{}")
-}
-
-// Saved meditation favorites
-model MeditationFavorite {
-  id              String       @id @default(dbgenerated("uuidv7()")) @db.Uuid
-  user            User         @relation(fields: [userId], references: [id], onDelete: Cascade)
-  userId          String       @db.Uuid
-  name            String // User-given or auto-generated name
-  focusArea       String
-  durationMinutes Int
-  favoriteType    FavoriteType
-  script          String?      @db.Text // Only for EXACT type
-  savedAt         DateTime     @default(now())
-
-  @@index([userId])
-}
-
-// User preferences for meditation
-model MeditationPreferences {
-  id              String  @id @default(dbgenerated("uuidv7()")) @db.Uuid
-  user            User    @relation(fields: [userId], references: [id], onDelete: Cascade)
-  userId          String  @unique @db.Uuid
-  preferredVoice  String  @default("default")
-  voiceSpeed      Float   @default(1.0) // 0.8 - 1.2
-  defaultDuration Int     @default(10)
-  backgroundSound String  @default("silence")
-  reminderEnabled Boolean @default(false)
-  reminderTime    String? // HH:MM
-}
-
-// User's custom-created meditations (via chat or text import)
-model SavedMeditation {
-  id              String   @id @default(dbgenerated("uuidv7()")) @db.Uuid
-  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  userId          String   @db.Uuid
-  title           String // User-provided or AI-generated title
-  script          String   @db.Text // Full script with [PAUSE:Xs] tokens
-  durationSeconds Int // Calculated from script
-  conversationId  String? // Link to InnerWorkSession that created it (for editing)
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
-
-  @@index([userId, createdAt])
-}
-
-// ============================================================================
-// Core System
-// ============================================================================
-
-// ============================================================================
-// Core System
-// ============================================================================
-
-model BrainActivity {
-  id                 String            @id @default(dbgenerated("uuidv7()")) @db.Uuid
-  session            Session?          @relation(fields: [sessionId], references: [id], onDelete: Cascade)
-  sessionId          String?           @db.Uuid
-  innerWorkSession   InnerWorkSession? @relation(fields: [innerWorkSessionId], references: [id], onDelete: Cascade)
-  innerWorkSessionId String?           @db.Uuid
-  turnId             String?
-  activityType       ActivityType
-  model              String // e.g. "claude-3-5-sonnet", "titan-embed"
-
-  // Full telemetry
-  input    Json? // Prompt, query, etc.
-  output   Json? // Response, retrieved items, etc.
-  metadata Json? // Reasoning, confidence, errors
-
-  // Typed call information for dashboard display
-  callType         BrainActivityCallType? // Specific LLM call type for component rendering
-  structuredOutput Json? // Typed output data for dashboard components
-
-  // Stats
-  tokenCountInput  Int   @default(0)
-  tokenCountOutput Int   @default(0)
-  cost             Float @default(0.0)
-  durationMs       Int   @default(0)
-
-  status      ActivityStatus @default(PENDING)
-  createdAt   DateTime       @default(now())
-  completedAt DateTime?
-
-  @@index([sessionId])
-  @@index([innerWorkSessionId])
-  @@index([turnId])
-  @@index([activityType])
-  @@index([createdAt])
-}
-
-enum BrainActivityCallType {
+enum BrainCallType {
   ORCHESTRATED_RESPONSE
   RETRIEVAL_PLANNING
   INTENT_DETECTION
@@ -1988,31 +1529,6 @@ enum BrainActivityCallType {
   GLOBAL_MEMORY_CONSOLIDATION
   DISTILLATION
   CROSS_SESSION_THEME
-}
 
-enum ActivityType {
-  LLM_CALL
-  EMBEDDING
-  RETRIEVAL
-  TOOL_USE
-}
-
-enum ActivityStatus {
-  PENDING
-  COMPLETED
-  FAILED
-}
-
-model ValidationFeedbackDraft {
-  id           String   @id @default(dbgenerated("uuidv7()")) @db.Uuid
-  session      Session  @relation(fields: [sessionId], references: [id], onDelete: Cascade)
-  sessionId    String   @db.Uuid
-  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  userId       String   @db.Uuid
-  content      String   @db.Text
-  readyToShare Boolean  @default(false)
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
-
-  @@unique([sessionId, userId])
+  @@map("brain_call_type")
 }
