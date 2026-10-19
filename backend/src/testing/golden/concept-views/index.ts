@@ -156,13 +156,22 @@ export async function takeConceptSnapshot(target: DbTarget, database: string): P
     const spec: ConceptViewSpec = CONCEPT_VIEWS[name];
     keys[viewName(name)] = { identity: [...spec.identity], orderBy: [...spec.orderBy] };
   }
-  return takeSnapshot({ target, database, tables: CONCEPT_NAMES.map(viewName), keys });
+  return takeSnapshot({ target, database, tables: CONCEPT_NAMES.map(viewName), keys, prelude: NO_JIT });
 }
+
+/**
+ * The views nest the participant union many times over, so their plans cost
+ * enough to trigger JIT compilation — measured at ~950 ms per view per
+ * snapshot, against 2 ms without it, for identical rows. Harness reads only;
+ * the app under test is untouched.
+ */
+const NO_JIT = 'SET jit = off';
 
 async function assertConceptChecksEmpty(target: DbTarget, database: string): Promise<void> {
   const problems = await withClient(
     target,
     async c => {
+      await c.query(NO_JIT);
       const views = await c.query<{ table_name: string }>(
         `SELECT table_name FROM information_schema.views
          WHERE table_schema = 'public' AND table_name LIKE '${CONCEPT_CHECK_PREFIX}%' ORDER BY 1`,

@@ -32,7 +32,9 @@ GOLDEN_UPDATE=session-read npm run test --workspace=backend -- session-read.gold
 | `driver.ts` | supertest against the real `app`, with before/after snapshots. |
 | `normalize.ts` | Structural id labels; fresh/carried timestamp normalization. |
 | `trace.ts` | Parses Postgres's own statement log into a per-step SQL trace. |
-| `runner.ts` | Record/verify against `__golden__/*.json`. |
+| `runner.ts` | Record/verify against `__golden__/*.json`; the allow-list comparator for `*.concept.json`. |
+| `concept-views/` | `old_concept_*` views (harness-owned SQL) projecting the schema into the target's vocabulary. |
+| `allow-lists/` | Per-scenario rules for what the re-shaped run may change in a normalised baseline. |
 
 Six decisions carry the design:
 
@@ -121,6 +123,46 @@ in the product to reproduce in SQL by hand — a read-check-write under
 Serializable isolation, an `updateMany` with an `increment`, a mutual-reveal
 invariant spanning both partners, and fire-and-forget execution.
 
+## Normalised baselines: the oracle that survives the rebuild
+
+The byte-level goldens are shaped like today's tables, so the data-layer rebuild
+(docs/backend/data-model/schema-migration-plan-2026-10.md §4) reddens them wholesale on
+the first rename. Each scenario therefore records a second, **normalised** baseline,
+`__golden__/<scenario>.concept.json`, in the same run:
+
+- **What it holds.** Every step's HTTP body, plus the step's row changes read through the
+  `old_concept_*` views, plus the full state of those views as restored (`initial`). No
+  trace and no response-time state — both are shape-bound and stay in the byte-level file.
+- **The views** (`concept-views/current-shape.sql`) project the old tables into the target
+  schema's participant-centred vocabulary — `participant`, `conversation`,
+  `participant_milestone` (the step-7 gate-key table), `message` with its role/kind split,
+  `consent` as an arc, and so on; the file's per-view comments give each mapping. They are
+  **owned by the harness**: applied to each run database after `restoreFixture` and before
+  the first snapshot, never a Prisma migration. After the rebuild a target-shape file with
+  the same view names and column sets replaces it. `CONCEPT_VIEWS` (`concept-views/index.ts`)
+  declares each view's row identity and natural `ORDER BY`, since a view has no primary key;
+  `concept_check_*` views list old-shape states the mapping cannot represent (an unmapped
+  gate key) and fail the snapshot.
+- **Labels.** The rename map in `normalize.ts` labels concept ids from the view rows alone
+  (`<participant:ada@main>`, `<conversation:ada@main/MAIN>`, `<message:ada@main#3>`,
+  `<milestone:ada@main/feel_heard>` as a row key), so the same code labels a run against
+  the target views. Participants and conversations have no id in today's shape; the views
+  derive one from the natural key (`md5(pair)::uuid`), and an unlabelled one fails the run
+  like any other id. A message's label carries its audience, so a message routed to the
+  wrong conversation reads as a different message.
+- **Comparison.** Never byte-for-byte: `compareWithAllowList` asserts *baseline ⊆ run, plus
+  only the changes the scenario's allow-list names* (`allow-lists/<scenario>.ts`) — keys
+  that must become absent, keys that may be added, enum values that may narrow, rows the
+  target may insert. On the current shape nothing changes, so every rule holds trivially;
+  any change outside the list fails. A rule marked `mustMatch` also fails if its path stops
+  existing, so it cannot go vacuous.
+- **Recording** names the normalised file explicitly and can never rewrite a byte-level one:
+  `GOLDEN_UPDATE=session-read.concept npx jest session-read.golden`.
+
+The concept snapshots run on muted harness connections outside every trace window, so the
+byte-level goldens did not move. They set `jit = off`: the nested view plans cost enough to
+trigger JIT compilation, measured at ~950 ms per view per snapshot against 2 ms without it.
+
 ## Four hazards found by running it, not by reading
 
 **`node-postgres` and naive timestamps.** All 144 timestamp columns are
@@ -183,6 +225,11 @@ And against the write path (`empathy-reveal`, the Stage 2 mutual reveal):
 | Remove `revealedAt` from the reveal update | **caught** | `<ts:fresh>` → `null`, and `changedFields` shrank 5 → 4 |
 | Route the reveal commentary to the guesser instead of the subject | **caught** | `<user:ada>` where `<user:bob>` was expected — and the scenario's own routing assertion *passed*, because each partner still received exactly one message. Only the golden's content-to-recipient pairing saw it. |
 | Move the reveal write outside its Serializable transaction | passed | **real blind spot** — same class as the dropped `take` |
+
+The normalised baseline (below) was put through the routing mutation as well (TS-4,
+2026-10-19): routing the reveal commentary to the guesser turned
+`empathy-reveal.concept.json` red on the swapped message content in both conversations and in
+both partners' message reads, alongside the byte-level golden.
 
 Both blind spots are now covered by the SQL trace (below), confirmed by a
 separate mutation-gate pass: all five mutations above go red against it, and two

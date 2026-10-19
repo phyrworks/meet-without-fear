@@ -10,11 +10,18 @@
  *   npx tsx src/testing/golden/cli.ts build FEEL_HEARD_B
  *
  * Record:  GOLDEN_UPDATE=session-read npm run test --workspace=backend -- session-read.golden
+ *
+ * The same run also records a NORMALISED baseline through the `old_concept_*`
+ * views (`__golden__/session-read.concept.json`), compared under
+ * `allow-lists/session-read.ts` rather than byte-for-byte — the oracle that survives
+ * the data-layer rebuild. Record it (never the byte-level one) with:
+ *          GOLDEN_UPDATE=session-read.concept npx jest session-read.golden
  */
 
 import type { Harness, StepResult } from '../driver';
 import { createHarness } from '../driver';
-import { recordOrVerify } from '../runner';
+import { SESSION_READ_ALLOW } from '../allow-lists/session-read';
+import { conceptGoldenName, recordOrVerify, recordOrVerifyConcept } from '../runner';
 
 const BASE_URL =
   process.env.GOLDEN_DATABASE_URL ||
@@ -36,6 +43,10 @@ describe(`golden: ${SCENARIO}`, () => {
       // The read scenario is where the dropped-`take` blind spot lives, so this
       // is the scenario the trace oracle was built for.
       trace: true,
+      // Snapshot the `old_concept_*` views around every step for the normalised
+      // baseline. Muted harness reads outside the trace window: the byte-level
+      // golden is unaffected.
+      concept: true,
     });
 
     const { userA, userB } = harness.actors;
@@ -100,6 +111,23 @@ describe(`golden: ${SCENARIO}`, () => {
       throw new Error(`Golden mismatch for "${SCENARIO}":\n${report.diff}`);
     }
     expect(report.diff).toBeNull();
+  });
+
+  // The shape-independent oracle (TS-4): the same steps through the concept
+  // views, compared as "baseline ⊆ run, plus only the changes the allow-list
+  // names". On the current shape the allow-list is satisfied trivially.
+  it('matches the normalised concept baseline under its allow-list', async () => {
+    const report = await recordOrVerifyConcept({ scenario: SCENARIO, harness, steps, allowList: SESSION_READ_ALLOW });
+    expect(report.unresolved).toEqual([]);
+    if (report.recorded) {
+      expect(process.env.GOLDEN_UPDATE?.split(',')).toContain(conceptGoldenName(SCENARIO));
+      return;
+    }
+    if (report.violations.length) {
+      throw new Error(`Normalised baseline mismatch for "${SCENARIO}":\n${report.violations.join('\n')}`);
+    }
+    // A rule whose path vanished would otherwise pass while asserting nothing.
+    expect(report.unmatchedRules).toEqual([]);
   });
 
   it('every step reached quiescence (a timed-out step is not a baseline)', () => {

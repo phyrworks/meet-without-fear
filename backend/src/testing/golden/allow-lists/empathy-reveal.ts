@@ -32,8 +32,8 @@ export const EMPATHY_REVEAL_ALLOW: AllowList = {
       at: 'steps.*.changes',
       where: { view: 'message', kind: 'added', 'after.kind': 'EMPATHY_STATEMENT' },
       why:
-        'plan §3 step 9: the reveal job writes an EMPATHY_STATEMENT row into the SUBJECT\'s conversation; today it ' +
-        'is written only into the author\'s own chat (spec §1.1 message.source_attempt_id).',
+        "plan §3 step 9: the reveal job writes an EMPATHY_STATEMENT row into the SUBJECT's conversation; today it " +
+        "is written only into the author's own chat (spec §1.1 message.source_attempt_id).",
     },
     {
       kind: 'addedEntries',

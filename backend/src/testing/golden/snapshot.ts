@@ -124,10 +124,17 @@ export interface SnapshotOptions {
    * `orderBy` then `identity`, so the order is total.
    */
   keys?: Record<string, { identity: string[]; orderBy: string[] }>;
+  /**
+   * SQL run on the reading connection before the snapshot's queries — e.g.
+   * `SET jit = off` for the concept views, whose nested plans cost enough to
+   * trigger JIT compilation: measured at ~950 ms per view per snapshot with JIT
+   * on, 2 ms with it off, for the same rows.
+   */
+  prelude?: string;
 }
 
 export async function takeSnapshot(opts: SnapshotOptions): Promise<Snapshot> {
-  const { target, database, tables, keys = {} } = opts;
+  const { target, database, tables, keys = {}, prelude } = opts;
   const colMap = await columnsFor(target, database, tables);
   const pkMap = await primaryKeysFor(target, database, tables);
   for (const [table, k] of Object.entries(keys)) pkMap.set(table, [...k.identity]);
@@ -140,6 +147,7 @@ export async function takeSnapshot(opts: SnapshotOptions): Promise<Snapshot> {
   return withClient(
     target,
     async c => {
+      if (prelude) await c.query(prelude);
       const out: Record<string, TableSnapshot> = {};
       for (const table of tables) {
         const cols = colMap.get(table)!;
@@ -161,7 +169,7 @@ export async function takeSnapshot(opts: SnapshotOptions): Promise<Snapshot> {
             if (seen.has(k)) {
               throw new Error(
                 `Snapshot of ${table}: identity (${declared.identity.join(', ')}) is not unique — ` +
-                  `two rows share ${k.replace(/\u0000/g, ', ')}. A duplicate key would hide one row from every diff.`,
+                  `two rows share ${k.split('\u0000').join(', ')}. A duplicate key would hide one row from every diff.`,
               );
             }
             seen.add(k);

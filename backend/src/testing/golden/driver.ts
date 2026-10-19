@@ -13,7 +13,8 @@
 
 import type { Express } from 'express';
 import request from 'supertest';
-import { mark, openMarkerClient } from './db';
+import { applyConceptViews, CURRENT_SHAPE_SQL, takeConceptSnapshot } from './concept-views';
+import { dropDatabase, mark, openMarkerClient } from './db';
 import { restoreFixture, RestoredFixture } from './fixtures';
 import type { FreshWindow } from './normalize';
 import { Snapshot, takeSnapshot, diffSnapshots, RowChange } from './snapshot';
@@ -87,6 +88,13 @@ export interface StepResult {
    * envelope. Present only when the harness was created with a trace.
    */
   trace?: TraceSummary;
+  /**
+   * The `old_concept_*` views before the step and after it settled. Present
+   * only when the harness was created with `concept`. Taken on muted harness
+   * connections outside the trace window, so they change nothing the
+   * byte-level golden records.
+   */
+  concept?: { before: Snapshot; after: Snapshot };
 }
 
 export interface Harness {
@@ -96,6 +104,8 @@ export interface Harness {
   sessionId: string;
   /** When the fixture finished restoring — the lower bound of this run's writes. */
   startedAt: string;
+  /** The concept views as restored, before any step. Present only with `concept`. */
+  conceptInitial?: Snapshot;
   /** Run one HTTP step with before/after snapshots over `tables`. */
   step(opts: {
     label: string;
@@ -192,9 +202,36 @@ export async function createHarness(opts: {
   stage: string;
   runId: string;
   trace?: TraceOptions | boolean;
+  /**
+   * Apply the `old_concept_*` views (`concept-views/`) to the run database and
+   * snapshot them around every step, for the normalised baseline
+   * (`recordOrVerifyConcept`). `true` uses the current-shape SQL; a path picks
+   * another concept SQL file (the target-shape one, after the rebuild).
+   */
+  concept?: boolean | { sql: string };
 }): Promise<Harness> {
   const traceOpts: TraceOptions | null = opts.trace === true ? {} : opts.trace ? opts.trace : null;
-  const fixture = await restoreFixture({ ...opts, captureStatements: !!traceOpts });
+  const fixture = await restoreFixture({
+    baseUrl: opts.baseUrl,
+    stage: opts.stage,
+    runId: opts.runId,
+    captureStatements: !!traceOpts,
+  });
+
+  // After the restore (and its rebase), before anything is snapshotted. On
+  // failure the run database must go, as `restoreFixture` does for its own.
+  const conceptSql = opts.concept === true ? CURRENT_SHAPE_SQL : opts.concept ? opts.concept.sql : null;
+  let conceptInitial: Snapshot | undefined;
+  if (conceptSql) {
+    try {
+      await applyConceptViews(fixture.target, fixture.database, conceptSql);
+      conceptInitial = await takeConceptSnapshot(fixture.target, fixture.database);
+    } catch (e) {
+      await dropDatabase(fixture.target, fixture.database);
+      throw e;
+    }
+  }
+  const conceptSnapshot = (): Promise<Snapshot> => takeConceptSnapshot(fixture.target, fixture.database);
 
   const logReader =
     traceOpts &&
@@ -242,6 +279,7 @@ export async function createHarness(opts: {
     actors,
     sessionId: seeded.sessionId,
     startedAt,
+    conceptInitial,
     snapshot,
     async step({ label, actor, tables, call, sse, asyncBoundary, traceUnasserted }) {
       // Refusing to assert is only ever justified by concurrent background work,
@@ -258,6 +296,7 @@ export async function createHarness(opts: {
       }
 
       const before = await snapshot(tables);
+      const conceptBefore = conceptSql ? await conceptSnapshot() : undefined;
 
       // Sentinels bracket the window. The begin marker goes after the `before`
       // snapshot so the snapshot's own statements are outside it, even though
@@ -308,6 +347,9 @@ export async function createHarness(opts: {
           unasserted: { ...traceUnasserted, connections: true },
         });
       }
+      // After the end marker, so the trace window is exactly what it was
+      // before the concept views existed.
+      const conceptAfter = conceptBefore ? await conceptSnapshot() : undefined;
 
       return {
         label,
@@ -320,6 +362,7 @@ export async function createHarness(opts: {
         asyncBoundary: !!asyncBoundary,
         window: { from: startedAt, to: settledSnap.takenAt },
         ...(trace ? { trace } : {}),
+        ...(conceptBefore && conceptAfter ? { concept: { before: conceptBefore, after: conceptAfter } } : {}),
       };
     },
     async unwindowedStatements() {
