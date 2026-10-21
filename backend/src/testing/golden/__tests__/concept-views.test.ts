@@ -210,6 +210,16 @@ describe('concept views — FEEL_HEARD_B', () => {
     ]);
   });
 
+  it('fails an ACCEPTED invitation with no acceptor or no accepted instant (target CHECK, fix round 1)', async () => {
+    expect(await q(`SELECT * FROM concept_check_invitation_accepted_without_acceptor`)).toEqual([]);
+    expect(await q(`SELECT * FROM concept_check_read_state_without_participant`)).toEqual([]);
+    const rows = await inTx<{ no_acceptor: boolean; no_accepted_at: boolean }>(
+      [`UPDATE "Invitation" SET "acceptedAt" = NULL`],
+      `SELECT no_acceptor, no_accepted_at FROM concept_check_invitation_accepted_without_acceptor`,
+    );
+    expect(rows).toEqual([{ no_acceptor: false, no_accepted_at: true }]);
+  });
+
   it("does not start the walkthrough on phase 'INVENTORY'", async () => {
     const rows = await inTx<{ m: string }>(
       [`UPDATE "StageProgress" SET "gatesSatisfied" = '{"phase": "INVENTORY"}' WHERE stage = 2 AND "userId" = ${ADA}`],

@@ -6,12 +6,12 @@
     "agreement_party": {},
     "brain_activity": {},
     "consent": {
-      "<consent:ada@main/EMPATHY_ATTEMPT/empathyAttempt:ada→bob@main#2>": {
+      "<consent:ada@main/EMPATHY_ATTEMPT/empathyAttempt:ada→bob@main#1>": {
         "created_at": "<ts:34>",
         "decided_at": "<ts:14>",
         "decision": "GRANTED",
-        "empathy_attempt_id": "<empathyAttempt:ada→bob@main#2>",
-        "id": "<consent:ada@main/EMPATHY_ATTEMPT/empathyAttempt:ada→bob@main#2>",
+        "empathy_attempt_id": "<empathyAttempt:ada→bob@main#1>",
+        "id": "<consent:ada@main/EMPATHY_ATTEMPT/empathyAttempt:ada→bob@main#1>",
         "need_id": null,
         "participant_id": "<participant:ada@main>",
         "proposal_id": null,
@@ -38,17 +38,17 @@
       }
     },
     "context_share_offer": {
-      "<shareOffer:ada→bob@main#2/i1>": {
-        "attempt_id": "<empathyAttempt:ada→bob@main#2>",
+      "<shareOffer:ada→bob@main#1/i1>": {
+        "attempt_id": "<empathyAttempt:ada→bob@main#1>",
         "created_at": "<ts:37>",
         "declined_at": null,
         "delivered_at": null,
         "delivery_notified_at": null,
         "delivery_status": "PENDING",
-        "id": "<shareOffer:ada→bob@main#2/i1>",
+        "id": "<shareOffer:ada→bob@main#1/i1>",
         "iteration": 1,
         "offer_message": null,
-        "result_id": "<reconcilerResult:ada→bob@main#2/i1>",
+        "result_id": "<reconcilerResult:ada→bob@main#1/i1>",
         "seen_at": null,
         "seen_notified_at": null,
         "shared_at": null,
@@ -129,12 +129,12 @@
       }
     },
     "empathy_attempt": {
-      "<empathyAttempt:ada→bob@main#2>": {
+      "<empathyAttempt:ada→bob@main#1>": {
         "author_participant_id": "<participant:ada@main>",
         "content": "I understand you might be feeling stressed from work. I want us to support each other better.",
         "delivered_at": null,
         "delivery_status": "PENDING",
-        "id": "<empathyAttempt:ada→bob@main#2>",
+        "id": "<empathyAttempt:ada→bob@main#1>",
         "revealed_at": null,
         "round": 1,
         "seen_at": null,
@@ -332,7 +332,7 @@
         "refining_need_id": null,
         "role": "USER",
         "sender_participant_id": "<participant:ada@main>",
-        "source_attempt_id": "<empathyAttempt:ada→bob@main#2>"
+        "source_attempt_id": "<empathyAttempt:ada→bob@main#1>"
       },
       "<message:bob@main#10>": {
         "content": "Yes, I feel heard.",
@@ -510,10 +510,10 @@
     "proposal_need": {},
     "reconciler_guidance": {},
     "reconciler_result": {
-      "<reconcilerResult:ada→bob@main#2/i1>": {
+      "<reconcilerResult:ada→bob@main#1/i1>": {
         "alignment_score": 45,
         "alignment_summary": "Ada Lovelace's empathy attempt captures some elements but misses key aspects of Bob Ross's experience.",
-        "attempt_id": "<empathyAttempt:ada→bob@main#2>",
+        "attempt_id": "<empathyAttempt:ada→bob@main#1>",
         "circuit_breaker_tripped": false,
         "correctly_identified": [
           "stress",
@@ -522,7 +522,7 @@
         "created_at": "<ts:25>",
         "gap_severity": "SIGNIFICANT",
         "gap_summary": "Ada Lovelace hasn't fully grasped the depth of Bob Ross's exhaustion and feeling unseen.",
-        "id": "<reconcilerResult:ada→bob@main#2/i1>",
+        "id": "<reconcilerResult:ada→bob@main#1/i1>",
         "iteration": 1,
         "misattributions": [],
         "missed_feelings": [
@@ -1007,7 +1007,7 @@
                 "suggestedContent": "I feel like I'm running on empty - exhausted from work every day, and then coming home to more tasks. What I really need is for someone to see how hard I'm trying, even when I don't have anything left to give.",
                 "suggestedShareFocus": "The exhaustion from work and feeling unseen."
               },
-              "id": "<shareOffer:ada→bob@main#2/i1>",
+              "id": "<shareOffer:ada→bob@main#1/i1>",
               "type": "share_offer"
             }
           ],
@@ -1354,7 +1354,7 @@
             "action": "OFFER_SHARING",
             "canRefine": true,
             "guesserName": "Ada Lovelace",
-            "offerId": "<shareOffer:ada→bob@main#2/i1>",
+            "offerId": "<shareOffer:ada→bob@main#1/i1>",
             "reason": "This helps Ada Lovelace understand that Bob Ross's frustration comes from exhaustion and feeling unseen, not anger or blame.",
             "suggestedContent": "I feel like I'm running on empty - exhausted from work every day, and then coming home to more tasks. What I really need is for someone to see how hard I'm trying, even when I don't have anything left to give.",
             "suggestedShareFocus": "The exhaustion from work and feeling unseen."
@@ -2181,7 +2181,7 @@
             "consentRecordId": "",
             "content": "I understand you might be feeling stressed from work. I want us to support each other better.",
             "deliveryStatus": "pending",
-            "id": "<empathyAttempt:ada→bob@main#2>",
+            "id": "<empathyAttempt:ada→bob@main#1>",
             "revealedAt": null,
             "revisionCount": 0,
             "sharedAt": "<ts:1>",
@@ -2607,7 +2607,7 @@
               "createdAt": "<ts:3>",
               "decidedAt": "<ts:1>",
               "decision": "GRANTED",
-              "id": "<consent:ada@main/EMPATHY_ATTEMPT/empathyAttempt:ada→bob@main#2>",
+              "id": "<consent:ada@main/EMPATHY_ATTEMPT/empathyAttempt:ada→bob@main#1>",
               "revokedAt": null,
               "targetId": "<draft:ada@main/EMPATHY>"
             }
@@ -2785,7 +2785,7 @@
         {
           "view": "context_share_offer",
           "kind": "changed",
-          "key": "<shareOffer:ada→bob@main#2/i1>",
+          "key": "<shareOffer:ada→bob@main#1/i1>",
           "changedFields": [
             "delivered_at",
             "delivery_status",
@@ -2795,16 +2795,16 @@
             "updated_at"
           ],
           "before": {
-            "attempt_id": "<empathyAttempt:ada→bob@main#2>",
+            "attempt_id": "<empathyAttempt:ada→bob@main#1>",
             "created_at": "<ts:3>",
             "declined_at": null,
             "delivered_at": null,
             "delivery_notified_at": null,
             "delivery_status": "PENDING",
-            "id": "<shareOffer:ada→bob@main#2/i1>",
+            "id": "<shareOffer:ada→bob@main#1/i1>",
             "iteration": 1,
             "offer_message": null,
-            "result_id": "<reconcilerResult:ada→bob@main#2/i1>",
+            "result_id": "<reconcilerResult:ada→bob@main#1/i1>",
             "seen_at": null,
             "seen_notified_at": null,
             "shared_at": null,
@@ -2816,16 +2816,16 @@
             "updated_at": "<ts:3>"
           },
           "after": {
-            "attempt_id": "<empathyAttempt:ada→bob@main#2>",
+            "attempt_id": "<empathyAttempt:ada→bob@main#1>",
             "created_at": "<ts:3>",
             "declined_at": null,
             "delivered_at": "<ts:fresh>",
             "delivery_notified_at": null,
             "delivery_status": "DELIVERED",
-            "id": "<shareOffer:ada→bob@main#2/i1>",
+            "id": "<shareOffer:ada→bob@main#1/i1>",
             "iteration": 1,
             "offer_message": null,
-            "result_id": "<reconcilerResult:ada→bob@main#2/i1>",
+            "result_id": "<reconcilerResult:ada→bob@main#1/i1>",
             "seen_at": null,
             "seen_notified_at": null,
             "shared_at": "<ts:fresh>",
@@ -2840,7 +2840,7 @@
         {
           "view": "empathy_attempt",
           "kind": "changed",
-          "key": "<empathyAttempt:ada→bob@main#2>",
+          "key": "<empathyAttempt:ada→bob@main#1>",
           "changedFields": [
             "status",
             "status_version"
@@ -2850,7 +2850,7 @@
             "content": "I understand you might be feeling stressed from work. I want us to support each other better.",
             "delivered_at": null,
             "delivery_status": "PENDING",
-            "id": "<empathyAttempt:ada→bob@main#2>",
+            "id": "<empathyAttempt:ada→bob@main#1>",
             "revealed_at": null,
             "round": 1,
             "seen_at": null,
@@ -2865,7 +2865,7 @@
             "content": "I understand you might be feeling stressed from work. I want us to support each other better.",
             "delivered_at": null,
             "delivery_status": "PENDING",
-            "id": "<empathyAttempt:ada→bob@main#2>",
+            "id": "<empathyAttempt:ada→bob@main#1>",
             "revealed_at": null,
             "round": 1,
             "seen_at": null,
@@ -4058,7 +4058,7 @@
         {
           "view": "empathy_attempt",
           "kind": "changed",
-          "key": "<empathyAttempt:ada→bob@main#2>",
+          "key": "<empathyAttempt:ada→bob@main#1>",
           "changedFields": [
             "content",
             "round",
@@ -4070,7 +4070,7 @@
             "content": "I understand you might be feeling stressed from work. I want us to support each other better.",
             "delivered_at": null,
             "delivery_status": "PENDING",
-            "id": "<empathyAttempt:ada→bob@main#2>",
+            "id": "<empathyAttempt:ada→bob@main#1>",
             "revealed_at": null,
             "round": 1,
             "seen_at": null,
@@ -4085,7 +4085,7 @@
             "content": "I see now that you are running on empty and need someone to notice how hard you try.",
             "delivered_at": null,
             "delivery_status": "PENDING",
-            "id": "<empathyAttempt:ada→bob@main#2>",
+            "id": "<empathyAttempt:ada→bob@main#1>",
             "revealed_at": null,
             "round": 2,
             "seen_at": null,
@@ -4144,20 +4144,20 @@
             "refining_need_id": null,
             "role": "USER",
             "sender_participant_id": "<participant:ada@main>",
-            "source_attempt_id": "<empathyAttempt:ada→bob@main#2>"
+            "source_attempt_id": "<empathyAttempt:ada→bob@main#1>"
           }
         },
         {
           "view": "reconciler_result",
           "kind": "changed",
-          "key": "<reconcilerResult:ada→bob@main#2/i1>",
+          "key": "<reconcilerResult:ada→bob@main#1/i1>",
           "changedFields": [
             "superseded_at"
           ],
           "before": {
             "alignment_score": 45,
             "alignment_summary": "Ada Lovelace's empathy attempt captures some elements but misses key aspects of Bob Ross's experience.",
-            "attempt_id": "<empathyAttempt:ada→bob@main#2>",
+            "attempt_id": "<empathyAttempt:ada→bob@main#1>",
             "circuit_breaker_tripped": false,
             "correctly_identified": [
               "stress",
@@ -4166,7 +4166,7 @@
             "created_at": "<ts:2>",
             "gap_severity": "SIGNIFICANT",
             "gap_summary": "Ada Lovelace hasn't fully grasped the depth of Bob Ross's exhaustion and feeling unseen.",
-            "id": "<reconcilerResult:ada→bob@main#2/i1>",
+            "id": "<reconcilerResult:ada→bob@main#1/i1>",
             "iteration": 1,
             "misattributions": [],
             "missed_feelings": [
@@ -4187,7 +4187,7 @@
           "after": {
             "alignment_score": 45,
             "alignment_summary": "Ada Lovelace's empathy attempt captures some elements but misses key aspects of Bob Ross's experience.",
-            "attempt_id": "<empathyAttempt:ada→bob@main#2>",
+            "attempt_id": "<empathyAttempt:ada→bob@main#1>",
             "circuit_breaker_tripped": false,
             "correctly_identified": [
               "stress",
@@ -4196,7 +4196,7 @@
             "created_at": "<ts:2>",
             "gap_severity": "SIGNIFICANT",
             "gap_summary": "Ada Lovelace hasn't fully grasped the depth of Bob Ross's exhaustion and feeling unseen.",
-            "id": "<reconcilerResult:ada→bob@main#2/i1>",
+            "id": "<reconcilerResult:ada→bob@main#1/i1>",
             "iteration": 1,
             "misattributions": [],
             "missed_feelings": [
@@ -5314,7 +5314,7 @@
         {
           "view": "empathy_attempt",
           "kind": "changed",
-          "key": "<empathyAttempt:ada→bob@main#2>",
+          "key": "<empathyAttempt:ada→bob@main#1>",
           "changedFields": [
             "delivered_at",
             "delivery_status",
@@ -5327,7 +5327,7 @@
             "content": "I see now that you are running on empty and need someone to notice how hard you try.",
             "delivered_at": null,
             "delivery_status": "PENDING",
-            "id": "<empathyAttempt:ada→bob@main#2>",
+            "id": "<empathyAttempt:ada→bob@main#1>",
             "revealed_at": null,
             "round": 2,
             "seen_at": null,
@@ -5342,7 +5342,7 @@
             "content": "I see now that you are running on empty and need someone to notice how hard you try.",
             "delivered_at": "<ts:fresh>",
             "delivery_status": "DELIVERED",
-            "id": "<empathyAttempt:ada→bob@main#2>",
+            "id": "<empathyAttempt:ada→bob@main#1>",
             "revealed_at": "<ts:fresh>",
             "round": 2,
             "seen_at": null,
@@ -5924,7 +5924,7 @@
                 "content": "I see now that you are running on empty and need someone to notice how hard you try.",
                 "sourceUserId": "<user:ada>"
               },
-              "id": "<empathyAttempt:ada→bob@main#2>",
+              "id": "<empathyAttempt:ada→bob@main#1>",
               "type": "validate_empathy"
             }
           ],
@@ -5997,7 +5997,7 @@
           "partnerAttempt": {
             "consentRecordId": "",
             "content": "I see now that you are running on empty and need someone to notice how hard you try.",
-            "id": "<empathyAttempt:ada→bob@main#2>",
+            "id": "<empathyAttempt:ada→bob@main#1>",
             "revealedAt": "<ts:fresh>",
             "revisionCount": 1,
             "sharedAt": "<ts:1>",
@@ -6057,7 +6057,7 @@
           "attempt": {
             "consentRecordId": "",
             "content": "I see now that you are running on empty and need someone to notice how hard you try.",
-            "id": "<empathyAttempt:ada→bob@main#2>",
+            "id": "<empathyAttempt:ada→bob@main#1>",
             "revealedAt": "<ts:fresh>",
             "revisionCount": 1,
             "sharedAt": "<ts:1>",
@@ -7207,7 +7207,7 @@
             "consentRecordId": "",
             "content": "I see now that you are running on empty and need someone to notice how hard you try.",
             "deliveryStatus": "delivered",
-            "id": "<empathyAttempt:ada→bob@main#2>",
+            "id": "<empathyAttempt:ada→bob@main#1>",
             "revealedAt": "<ts:fresh>",
             "revisionCount": 1,
             "sharedAt": "<ts:1>",
@@ -7613,7 +7613,7 @@
               "createdAt": "<ts:3>",
               "decidedAt": "<ts:1>",
               "decision": "GRANTED",
-              "id": "<consent:ada@main/EMPATHY_ATTEMPT/empathyAttempt:ada→bob@main#2>",
+              "id": "<consent:ada@main/EMPATHY_ATTEMPT/empathyAttempt:ada→bob@main#1>",
               "revokedAt": null,
               "targetId": "<draft:ada@main/EMPATHY>"
             }

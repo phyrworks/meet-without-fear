@@ -14,6 +14,13 @@ import { compareWithAllowList } from '../allow-lists/compare';
 import type { AllowList } from '../allow-lists/types';
 import { EMPATHY_REVEAL_ALLOW } from '../allow-lists/empathy-reveal';
 import { SESSION_READ_ALLOW } from '../allow-lists/session-read';
+import {
+  ADA_ORIGINAL,
+  ADA_REVISED,
+  R2_RESUBMIT_STEP,
+  R2_REVEAL_STEP,
+  UNREVEALED_ATTEMPT_HIDDEN_ALLOW,
+} from '../allow-lists/unrevealed-attempt-hidden';
 
 // Fabricated golden JSON, mutated freely by each test.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -266,6 +273,76 @@ describe('compareWithAllowList — session-read (identical except named)', () =>
   });
 });
 
+describe('compareWithAllowList — unrevealed-attempt-hidden (R2 rounds, TS-5 fix 1)', () => {
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const baseline: Json = require('../__golden__/unrevealed-attempt-hidden.concept.json');
+  const R1 = '<empathyAttempt:ada→bob@main#1>';
+  const R2 = '<empathyAttempt:ada→bob@main#2>';
+
+  /** The baseline as the target would record it: resubmit = a new round, reveal = round 2. */
+  function targetLike(copySource = R2): Json {
+    const t = clone(baseline);
+    const rs = t.steps[R2_RESUBMIT_STEP].changes;
+    const i = rs.findIndex((c: Json) => c.view === 'empathy_attempt' && c.key === R1);
+    rs[i] = { view: 'empathy_attempt', kind: 'changed', key: R1, after: { round: 1, status: 'SUPERSEDED', content: ADA_ORIGINAL } };
+    rs.push({
+      view: 'empathy_attempt',
+      kind: 'added',
+      key: R2,
+      after: {
+        round: 2,
+        author_participant_id: '<participant:ada@main>',
+        subject_participant_id: '<participant:bob@main>',
+        supersedes_attempt_id: R1,
+        content: ADA_REVISED,
+        status: 'READY',
+      },
+    });
+    const m = rs.find((c: Json) => c.key === '<message:ada@main/EMPATHY_STATEMENT:ada#2>');
+    m.after.source_attempt_id = R2;
+    const rv = t.steps[R2_REVEAL_STEP].changes;
+    const j = rv.findIndex((c: Json) => c.view === 'empathy_attempt' && c.key === R1);
+    rv[j] = { view: 'empathy_attempt', kind: 'changed', key: R2, after: { round: 2, status: 'REVEALED', content: ADA_REVISED } };
+    for (const [author, subject, src] of [
+      ['ada', 'bob', copySource],
+      ['bob', 'ada', '<empathyAttempt:bob→ada@main#1>'],
+    ]) {
+      rv.push({
+        view: 'message',
+        kind: 'added',
+        key: `<message:${subject}@main/EMPATHY_STATEMENT:${author}#1>`,
+        after: {
+          kind: 'EMPATHY_STATEMENT',
+          role: 'USER',
+          conversation_id: `<conversation:${subject}@main/MAIN>`,
+          sender_participant_id: `<participant:${author}@main>`,
+          source_attempt_id: src,
+        },
+      });
+    }
+    return t;
+  }
+
+  it('accepts the target’s round-2 representation of the resubmit and the reveal', () => {
+    expect(compareWithAllowList(baseline, targetLike(), UNREVEALED_ATTEMPT_HIDDEN_ALLOW).violations).toEqual([]);
+  });
+
+  it('passes trivially on the current shape', () => {
+    expect(compareWithAllowList(baseline, baseline, UNREVEALED_ATTEMPT_HIDDEN_ALLOW)).toEqual({ violations: [], unmatchedRules: [] });
+  });
+
+  it('rejects a delivered copy of the superseded round 1', () => {
+    expect(compareWithAllowList(baseline, targetLike(R1), UNREVEALED_ATTEMPT_HIDDEN_ALLOW).violations).not.toEqual([]);
+  });
+
+  it('rejects the delivered copy written by any step other than the reveal', () => {
+    const t = targetLike();
+    const copy = t.steps[R2_REVEAL_STEP].changes.pop();
+    t.steps[R2_REVEAL_STEP + 1].changes.push(copy);
+    expect(compareWithAllowList(baseline, t, UNREVEALED_ATTEMPT_HIDDEN_ALLOW).violations).not.toEqual([]);
+  });
+});
+
 describe('compareWithAllowList — mechanics', () => {
   const none: AllowList = { scenario: 'x', rules: [] };
 
@@ -319,6 +396,51 @@ describe('compareWithAllowList — mechanics', () => {
     expect(compareWithAllowList(base, { steps: [{ unrepresentable: 'reason' }] }, list).violations).toEqual([
       expect.stringContaining('steps.0.label'),
     ]);
+  });
+
+  it('addedKeys with `each` admits the key only if every entry of its array satisfies the predicate (TS-5)', () => {
+    const list: AllowList = {
+      scenario: 'x',
+      rules: [{ kind: 'addedKeys', at: 'steps.1', keys: ['changes'], each: { view: 'user', key: '<user:bob>' }, why: 'test' }],
+    };
+    const base = { steps: [{ changes: [] }, { label: 'after' }] };
+    const ok = { steps: [{ changes: [] }, { label: 'after', changes: [{ view: 'user', key: '<user:bob>' }] }] };
+    const empty = { steps: [{ changes: [] }, { label: 'after', changes: [] }] };
+    const bad = {
+      steps: [{ changes: [] }, { label: 'after', changes: [{ view: 'user', key: '<user:bob>' }, { view: 'message', key: 'm' }] }],
+    };
+    expect(compareWithAllowList(base, ok, list).violations).toEqual([]);
+    expect(compareWithAllowList(base, empty, list).violations).toEqual([]);
+    expect(compareWithAllowList(base, bad, list).violations).toEqual([expect.stringContaining('steps.1.changes')]);
+    // Not on step 0: there `changes` is in the baseline and compared as usual.
+    const elsewhere = { steps: [{ changes: [{ view: 'user', key: '<user:bob>' }] }, { label: 'after' }] };
+    expect(compareWithAllowList(base, elsewhere, list).violations).not.toEqual([]);
+  });
+
+  it('replacedEntry swaps exactly one baseline entry for one pinned run entry (TS-5)', () => {
+    const list: AllowList = {
+      scenario: 'x',
+      rules: [
+        {
+          kind: 'replacedEntry',
+          at: 'steps.0.changes',
+          where: { key: '<attempt:#1>', 'after.status': 'REVEALED' },
+          with: { key: '<attempt:#2>', 'after.status': 'REVEALED' },
+          mustMatch: true,
+          why: 'test',
+        },
+      ],
+    };
+    const base = { steps: [{ changes: [{ key: '<attempt:#1>', after: { status: 'REVEALED' } }, { key: 'm' }] }] };
+    const ok = { steps: [{ changes: [{ key: '<attempt:#2>', after: { status: 'REVEALED' } }, { key: 'm' }] }] };
+    const wrong = { steps: [{ changes: [{ key: '<attempt:#2>', after: { status: 'READY' } }, { key: 'm' }] }] };
+    const both = {
+      steps: [{ changes: [{ key: '<attempt:#1>', after: { status: 'REVEALED' } }, { key: '<attempt:#2>', after: { status: 'REVEALED' } }, { key: 'm' }] }],
+    };
+    expect(compareWithAllowList(base, base, list).violations).toEqual([]);
+    expect(compareWithAllowList(base, ok, list).violations).toEqual([]);
+    expect(compareWithAllowList(base, wrong, list).violations).not.toEqual([]);
+    expect(compareWithAllowList(base, both, list).violations).not.toEqual([]);
   });
 
   it('allows added entries in a keyed map of rows by predicate', () => {

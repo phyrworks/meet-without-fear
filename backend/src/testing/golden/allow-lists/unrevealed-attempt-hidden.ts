@@ -7,15 +7,49 @@
  * round supersedes it. Spec §7: "a co-participant sees an attempt only once
  * REVEALED/VALIDATED"; "what the partner saw stays readable to them".
  *
- * The target re-record may change, beyond the DTO rules every read carries:
- *  - the reveal payloads gain `round` and `attemptId` (as `empathy-reveal`);
- *  - the reveal step gains the two delivered EMPATHY_STATEMENT copies, one in
- *    each subject's conversation, pinned completely.
+ * Ada's resubmit (step RESUBMIT) IS a round on the target (spec §1.2,
+ * `app.empathy_set_status` "on resubmit flips round n to SUPERSEDED and
+ * inserts n+1"). Today it rewrites the one attempt row in place
+ * (revisionCount → the view's round 2). Concept labels are taken from a row's
+ * first appearance, so today's row is `<empathyAttempt:ada→bob@main#1>`
+ * throughout, as the target's round-1 row will be. The target re-record may
+ * therefore change, beyond the DTO rules every read carries:
+ *
+ *  RESUBMIT  round 1's change becomes "→ SUPERSEDED, content unchanged" and a
+ *            round-2 row (the revised text, superseding #1) is added; the
+ *            EMPATHY_STATEMENT the resubmit writes into Ada's chat names #2.
+ *  REVEAL    the reveal flips round 2, not round 1; the delivered copies are
+ *            round 2's (Ada→Bob) and round 1's (Bob→Ada), pinned to this step.
+ *  reads     reveal payloads gain `round`/`attemptId`; the four post-reveal
+ *            bodies that name Ada's attempt name round 2 (and its counter).
+ *
+ * Every row is pinned by key, lineage and content: a copy of the wrong round, a
+ * second copy, or round 2 revealed before its time is still a violation.
  */
 
 import type { KnownLeak } from '../privacy';
 import { deliveredStatementCopy, READ_DTO_RULES } from './common';
 import type { AllowList } from './types';
+
+/** Step layout (the scenario asserts the labels): 30 reads, accept 30, 15 reads, resubmit 46, 15 reads, reveal 62. */
+export const R2_RESUBMIT_STEP = 46;
+export const R2_REVEAL_STEP = 62;
+/** Post-reveal reads whose bodies name Ada's attempt (pending actions, empathy status ×2, partner empathy). */
+const ATTEMPT_ID_PATHS = [
+  'steps.66.body.data.actions.0.id',
+  'steps.67.body.data.partnerAttempt.id',
+  'steps.67.body.data.partnerAttempt.revisionCount',
+  'steps.68.body.data.attempt.id',
+  'steps.68.body.data.attempt.revisionCount',
+  'steps.82.body.data.myAttempt.id',
+  'steps.82.body.data.myAttempt.revisionCount',
+];
+
+export const ADA_ORIGINAL = 'I understand you might be feeling stressed from work. I want us to support each other better.';
+export const ADA_REVISED = 'I see now that you are running on empty and need someone to notice how hard you try.';
+
+const R1 = '<empathyAttempt:ada→bob@main#1>';
+const R2 = '<empathyAttempt:ada→bob@main#2>';
 
 export const UNREVEALED_ATTEMPT_HIDDEN_ALLOW: AllowList = {
   scenario: 'unrevealed-attempt-hidden',
@@ -28,18 +62,93 @@ export const UNREVEALED_ATTEMPT_HIDDEN_ALLOW: AllowList = {
       mustMatch: true,
       why: 'spec §1.2 empathy_attempt: revisionCount becomes rows with a round; a reveal payload names its round and row.',
     },
-    deliveredStatementCopy('ada', 'bob', 'steps'),
-    deliveredStatementCopy('bob', 'ada', 'steps'),
+    // --- RESUBMIT: round 1 superseded, round 2 inserted --------------------
+    {
+      kind: 'replacedEntry',
+      at: `steps.${R2_RESUBMIT_STEP}.changes`,
+      where: { view: 'empathy_attempt', key: R1, 'after.round': 2 },
+      with: {
+        view: 'empathy_attempt',
+        kind: 'changed',
+        key: R1,
+        'after.round': 1,
+        'after.status': 'SUPERSEDED',
+        'after.content': ADA_ORIGINAL,
+      },
+      mustMatch: true,
+      why: 'spec §1.2/§4: on resubmit round 1 goes to SUPERSEDED and stays immutable (today the row is rewritten).',
+    },
+    {
+      kind: 'addedEntries',
+      at: `steps.${R2_RESUBMIT_STEP}.changes`,
+      where: {
+        view: 'empathy_attempt',
+        kind: 'added',
+        key: R2,
+        'after.round': 2,
+        'after.author_participant_id': '<participant:ada@main>',
+        'after.subject_participant_id': '<participant:bob@main>',
+        'after.supersedes_attempt_id': R1,
+        'after.content': ADA_REVISED,
+        // The step settles after the reconciler has run: inserted HELD, it is
+        // READY when the step's state is taken — as today's row is.
+        'after.status': 'READY',
+      },
+      mustMatch: true,
+      why: 'spec §1.2: the resubmit inserts round n+1 superseding round n.',
+    },
+    {
+      kind: 'replacedEntry',
+      at: `steps.${R2_RESUBMIT_STEP}.changes`,
+      where: { view: 'message', key: '<message:ada@main/EMPATHY_STATEMENT:ada#2>', 'after.source_attempt_id': R1 },
+      with: {
+        view: 'message',
+        kind: 'added',
+        key: '<message:ada@main/EMPATHY_STATEMENT:ada#2>',
+        'after.conversation_id': '<conversation:ada@main/MAIN>',
+        'after.source_attempt_id': R2,
+        'after.content': ADA_REVISED,
+      },
+      mustMatch: true,
+      why: 'plan §3 step 9 lineage: the resubmitted statement in the author’s chat names the round it states.',
+    },
+    // --- REVEAL: round 2 revealed; copies pinned to this step ---------------
+    {
+      kind: 'replacedEntry',
+      at: `steps.${R2_REVEAL_STEP}.changes`,
+      where: { view: 'empathy_attempt', key: R1, 'after.status': 'REVEALED' },
+      with: {
+        view: 'empathy_attempt',
+        kind: 'changed',
+        key: R2,
+        'after.round': 2,
+        'after.status': 'REVEALED',
+        'after.content': ADA_REVISED,
+      },
+      mustMatch: true,
+      why: 'spec §4: the reveal flips the live round (2); round 1 stays SUPERSEDED and unrevealed.',
+    },
+    deliveredStatementCopy('ada', 'bob', R2_REVEAL_STEP, 2),
+    deliveredStatementCopy('bob', 'ada', R2_REVEAL_STEP, 1),
+    {
+      kind: 'mayDiffer',
+      at: ATTEMPT_ID_PATHS,
+      mustMatch: true,
+      why:
+        'the post-reveal reads return round 2’s row (its id and counter); the scenario’s “each subject reads the ' +
+        'statement about them” probe pins its content to the revised text.',
+    },
   ],
   targetOnly: [
     {
       assertion:
-        "After the reveal, Ada resubmits (round 2 supersedes round 1). Bob's reads still contain round 1's statement " +
-        '(his delivered EMPATHY_STATEMENT copy and the revealed row), and never round 2 until it is revealed.',
+        "After the reveal, Ada resubmits again (round 3 supersedes the revealed round 2). Bob's reads still contain " +
+        'round 2’s statement (his delivered EMPATHY_STATEMENT copy and the revealed row), and never round 3 until it is ' +
+        'revealed.',
       why:
         'Plan §4 R2 "still present after the author\'s next round supersedes it"; spec §7 subject arm on revealed_at. ' +
-        'The current shape has no rounds: an attempt is one mutable row (revisionCount) and resubmission after a ' +
-        'reveal does not exist, so this arm cannot be driven before the rebuild.',
+        'Today no endpoint resubmits a revealed attempt (resubmit is for REFINING), so this arm cannot be driven on the ' +
+        'current shape. The pre-reveal resubmit IS a round on the target and is declared above.',
     },
   ],
 };

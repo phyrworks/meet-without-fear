@@ -18,7 +18,7 @@
  *           GOLDEN_UPDATE=reveal-all-ready-bob-first.concept npx jest reveal-all-ready-bob-first.golden
  */
 
-import { REVEAL_BOB_FIRST_ALLOW } from '../allow-lists/reveal-all-ready';
+import { REVEAL_BOB_FIRST_ALLOW, REVEAL_BOB_FIRST_STEP } from '../allow-lists/reveal-all-ready';
 import { listTables } from '../db';
 import type { Harness, StepResult } from '../driver';
 import { createHarness } from '../driver';
@@ -83,6 +83,10 @@ describe(`golden: ${SCENARIO}`, () => {
     allowList: REVEAL_BOB_FIRST_ALLOW,
     harness: () => harness,
     steps: () => steps,
+  });
+
+  it('the reveal happens at the step the allow-list pins the delivered copies to', () => {
+    expect(steps[REVEAL_BOB_FIRST_STEP].label).toBe('decline share as bob');
   });
 
   revealChecks({

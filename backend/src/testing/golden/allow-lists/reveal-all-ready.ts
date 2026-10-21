@@ -18,7 +18,7 @@
 import { deliveredStatementCopy, READ_DTO_RULES } from './common';
 import type { AllowList, AllowRule } from './types';
 
-const rules: AllowRule[] = [
+const rules = (revealStep: number): AllowRule[] => [
   ...READ_DTO_RULES,
   {
     kind: 'addedKeys',
@@ -27,9 +27,22 @@ const rules: AllowRule[] = [
     mustMatch: true,
     why: 'spec §1.2 empathy_attempt: revisionCount becomes rows with a round; a reveal payload names its round and row.',
   },
-  deliveredStatementCopy('ada', 'bob', 'steps'),
-  deliveredStatementCopy('bob', 'ada', 'steps'),
+  // Pinned to the reveal step: a copy written by any other step is a second
+  // reveal, which R3's "exactly once" forbids.
+  deliveredStatementCopy('ada', 'bob', revealStep),
+  deliveredStatementCopy('bob', 'ada', revealStep),
 ];
 
-export const REVEAL_ADA_FIRST_ALLOW: AllowList = { scenario: 'reveal-all-ready-ada-first', rules };
-export const REVEAL_BOB_FIRST_ALLOW: AllowList = { scenario: 'reveal-all-ready-bob-first', rules };
+/** ada-first: [hook, 30 reads, draft, consent ← reveal, …]. The scenario asserts the label at this index. */
+export const REVEAL_ADA_FIRST_STEP = 32;
+/** bob-first: [hook, 30 reads, decline ← reveal, …]. */
+export const REVEAL_BOB_FIRST_STEP = 31;
+
+export const REVEAL_ADA_FIRST_ALLOW: AllowList = {
+  scenario: 'reveal-all-ready-ada-first',
+  rules: rules(REVEAL_ADA_FIRST_STEP),
+};
+export const REVEAL_BOB_FIRST_ALLOW: AllowList = {
+  scenario: 'reveal-all-ready-bob-first',
+  rules: rules(REVEAL_BOB_FIRST_STEP),
+};

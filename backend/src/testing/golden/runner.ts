@@ -14,7 +14,15 @@ import { compareWithAllowList } from './allow-lists/compare';
 import type { AllowList } from './allow-lists/types';
 import type { Harness, StepResult } from './driver';
 import { CONCEPT_VIEWS, conceptOf } from './concept-views';
-import { buildConceptLabelMap, buildLabelMap, conceptRowKey, normalize, timestampFacts, LabelMap } from './normalize';
+import {
+  buildConceptLabelMap,
+  buildLabelMap,
+  conceptRowKey,
+  mergeFallbackLabels,
+  normalize,
+  timestampFacts,
+  LabelMap,
+} from './normalize';
 import { diffSnapshots } from './snapshot';
 import type { RowChange, Snapshot, SnapshotRow } from './snapshot';
 import type { TraceSummary } from './trace';
@@ -190,7 +198,12 @@ export async function recordOrVerify(opts: {
     harness.fixture.manifest,
     harness.fixture.seededClerkIds,
   );
-  for (const [id, label] of fixtureMap.labels) if (!map.labels.has(id)) map.labels.set(id, label);
+  const collisions = mergeFallbackLabels(map, fixtureMap);
+  if (collisions.length) {
+    // A deleted row keeps the rank it had in the fixture while the owner's
+    // surviving rows re-rank in the run: two ids would read as one row.
+    throw new Error(`Scenario "${scenario}": fixture-template labels collide with run labels:\n  ${collisions.join('\n  ')}`);
+  }
 
   const normalized: GoldenStep[] = [];
   const unresolved: string[] = [];
@@ -373,8 +386,12 @@ export async function recordOrVerifyConcept(opts: {
   }
 
   // Labels come from every row the run ever showed, so a row deleted mid-run
-  // keeps its label. Later snapshots win, but identity (and so the label's
-  // natural key) cannot change for a given id.
+  // keeps its label. The FIRST snapshot that shows a row wins (TS-5 fix 1):
+  // today's shape mutates one attempt row in place on resubmit
+  // (revisionCount → round), while the target keeps that row as round 1 and
+  // inserts round 2. Labelling a row by how it first appeared names it as the
+  // target does; a label taken from the last state renamed the row the run
+  // started with.
   const merged = new Map<string, Map<string, SnapshotRow>>();
   const snaps = [initial, ...steps.flatMap(s => [s.concept!.before, s.concept!.after])].filter(
     (x): x is Snapshot => !!x,
@@ -383,7 +400,10 @@ export async function recordOrVerifyConcept(opts: {
     for (const [concept, rows] of Object.entries(conceptTables(snap))) {
       const identity = [...(CONCEPT_VIEWS as Record<string, { identity: readonly string[] }>)[concept].identity];
       const m = merged.get(concept) ?? new Map<string, SnapshotRow>();
-      for (const r of rows) m.set(identity.map(c => String(r[c])).join('\u0000'), r);
+      for (const r of rows) {
+        const k = identity.map(c => String(r[c])).join('\u0000');
+        if (!m.has(k)) m.set(k, r);
+      }
       merged.set(concept, m);
     }
   }

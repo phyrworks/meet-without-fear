@@ -999,11 +999,14 @@ FROM "TakeawayLink" l;
 -- The plan names no source for it; the target CHECK requires it on every
 -- ACCEPTED row, so the migration must derive it. ASSUMPTION (TS-5): the
 -- session's one participant other than the inviter, for an ACCEPTED row;
--- NULL otherwise, and NULL when there is not exactly one such participant
--- (the scalar subquery would RAISE — the precheck).
+-- NULL for any other status. With NO such participant the subquery yields
+-- NULL, which `concept_check_invitation_accepted_without_acceptor` (below)
+-- fails, as the target CHECK would; with TWO OR MORE it RAISEs ("more than
+-- one row returned by a subquery") — the precheck either way.
 -- message_confirmed_at ← messageConfirmedAt only where messageConfirmed (the
--- boolean is folded into the timestamp). updated_at: the old row has none;
--- not projected.
+-- boolean is folded into the timestamp). updated_at: the target column exists
+-- but the old row has no source for it (no `updatedAt` on Invitation), so it is
+-- not projected — a comparison against the target view must omit it too.
 -- ----------------------------------------------------------------------------
 CREATE VIEW old_concept_invitation AS
 SELECT
@@ -1046,6 +1049,25 @@ SELECT
   uv."updatedAt"    AS updated_at
 FROM "UserVessel" uv
 LEFT JOIN old_concept_participant p ON p.session_id = uv."sessionId" AND p.user_id = uv."userId";
+
+
+-- Target CHECK `status <> 'ACCEPTED' OR (accepted_at IS NOT NULL AND
+-- accepted_by_user_id IS NOT NULL)`: an ACCEPTED invitation the view cannot
+-- give an acceptor (or an accepted instant) fails the snapshot.
+CREATE VIEW concept_check_invitation_accepted_without_acceptor AS
+SELECT id, accepted_by_user_id IS NULL AS no_acceptor, accepted_at IS NULL AS no_accepted_at
+FROM old_concept_invitation
+WHERE status = 'ACCEPTED' AND (accepted_by_user_id IS NULL OR accepted_at IS NULL);
+
+
+-- conversation_read_state's PK is participant_id: a vessel the view cannot
+-- tie to a participant would project a NULL key. The LEFT JOIN is kept so the
+-- row stays visible here instead of silently dropping out of the concept.
+CREATE VIEW concept_check_read_state_without_participant AS
+SELECT uv.id AS vessel_id
+FROM "UserVessel" uv
+LEFT JOIN old_concept_participant p ON p.session_id = uv."sessionId" AND p.user_id = uv."userId"
+WHERE p.id IS NULL;
 
 
 -- ----------------------------------------------------------------------------

@@ -31,6 +31,9 @@
 import {
   UNREVEALED_ATTEMPT_HIDDEN_ALLOW,
   UNREVEALED_ATTEMPT_HIDDEN_KNOWN_LEAKS,
+  ADA_REVISED,
+  R2_RESUBMIT_STEP,
+  R2_REVEAL_STEP,
 } from '../allow-lists/unrevealed-attempt-hidden';
 import { listTables } from '../db';
 import type { ActorRef, Harness, StepResult } from '../driver';
@@ -43,7 +46,6 @@ const BASE_URL =
   process.env.GOLDEN_DATABASE_URL || 'postgresql://mwf_user:mwf_password@localhost:5432/meet_without_fear';
 
 const SCENARIO = 'unrevealed-attempt-hidden';
-const ADA_REVISED = 'I see now that you are running on empty and need someone to notice how hard you try.';
 
 const READ_TABLES = ['User', 'Message', 'UserVessel', 'EmpathyAttempt', 'ReconcilerShareOffer', 'ReconcilerResult'];
 
@@ -129,6 +131,15 @@ describe(`golden: ${SCENARIO}`, () => {
     expect(partnerView('awaiting')).toMatchObject({ attempt: null, partnerStatus: 'AWAITING_SHARING' });
     expect(partnerView('refining')).toMatchObject({ attempt: null, partnerStatus: 'REFINING' });
     expect(partnerView('ready')).toMatchObject({ attempt: null, partnerStatus: 'READY' });
+  });
+
+  it('the resubmit and the reveal sit at the step indices the allow-list pins', () => {
+    expect(steps[R2_RESUBMIT_STEP].label).toBe('resubmit as ada');
+    expect(steps[R2_REVEAL_STEP].label).toBe('run bob→ada reconciler (e2e hook)');
+    expect(steps[66].label).toBe('revealed: pending actions as bob@e2e.test');
+    expect(steps[67].label).toBe('revealed: empathy status as bob@e2e.test');
+    expect(steps[68].label).toBe('revealed: partner empathy as bob@e2e.test');
+    expect(steps[82].label).toBe('revealed: empathy status as ada@e2e.test');
   });
 
   it('after the reveal each subject reads the statement about them', () => {

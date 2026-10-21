@@ -5,7 +5,15 @@
  * whether a run is accepted under a scenario's allow-list (`./types.ts`).
  */
 
-import type { AbsentKeysRule, AddedEntriesRule, AddedKeysRule, AllowList, AllowRule, MayBeAbsentRule } from './types';
+import type {
+  AbsentKeysRule,
+  AddedEntriesRule,
+  AddedKeysRule,
+  AllowList,
+  AllowRule,
+  MayBeAbsentRule,
+  ReplacedEntryRule,
+} from './types';
 
 function brief(v: unknown): string {
   const s = JSON.stringify(v);
@@ -98,8 +106,26 @@ export function compareWithAllowList(expected: unknown, actual: unknown, allow: 
     return true;
   };
 
-  const walk = (e: unknown, a: unknown, p: string[]): void => {
-    if (Array.isArray(e) && Array.isArray(a)) {
+  const satisfies = (value: unknown, where: Record<string, unknown>, mapKey?: string): boolean =>
+    Object.entries(where).every(
+      ([k, v]) => JSON.stringify(k === '$key' ? mapKey : getDotted(value, k)) === JSON.stringify(v),
+    );
+
+  const walk = (e0: unknown, a0: unknown, p: string[]): void => {
+    if (Array.isArray(e0) && Array.isArray(a0)) {
+      let e: unknown[] = e0;
+      let a: unknown[] = a0;
+      // `replacedEntry`: one baseline entry matching `where` and one run entry
+      // matching `with` leave the positional comparison together (TS-5).
+      for (const r of rulesAt('replacedEntry', p)) {
+        const rule = r.rule as ReplacedEntryRule;
+        const ei = e.findIndex(x => satisfies(x, rule.where));
+        const ai = a.findIndex(x => satisfies(x, rule.with));
+        if (ei >= 0) r.matched++;
+        if (ei < 0 || ai < 0) continue;
+        e = e.filter((_, i) => i !== ei);
+        a = a.filter((_, i) => i !== ai);
+      }
       const adders = rulesAt('addedEntries', p);
       adders.forEach(r => r.matched++);
       let rest = a;
@@ -116,6 +142,8 @@ export function compareWithAllowList(expected: unknown, actual: unknown, allow: 
       }
       return;
     }
+    const e = e0;
+    const a = a0;
     if (isObj(e) && isObj(a)) {
       const absent = new Set(rulesAt('absentKeys', p).flatMap(r => (r.matched++, (r.rule as AbsentKeysRule).keys)));
       const added = new Set(rulesAt('addedKeys', p).flatMap(r => (r.matched++, (r.rule as AddedKeysRule).keys)));
@@ -138,8 +166,20 @@ export function compareWithAllowList(expected: unknown, actual: unknown, allow: 
           continue;
         }
         if (!inE && inA) {
-          if (!added.has(k) && !admitEntry(adders, used, a[k], k))
+          if (added.has(k)) {
+            // `each`: the added value must be an array whose every entry
+            // satisfies the predicate (TS-5: a step's concept changes where
+            // the baseline could record none).
+            for (const r of rulesAt('addedKeys', p)) {
+              const rule = r.rule as AddedKeysRule;
+              if (!rule.each || !rule.keys.includes(k)) continue;
+              const v = a[k];
+              const bad = Array.isArray(v) ? v.filter(x => !satisfies(x, rule.each!)) : [v];
+              if (bad.length) fail(kp, 'added value outside the rule’s `each` predicate', rule.each, bad);
+            }
+          } else if (!admitEntry(adders, used, a[k], k)) {
             fail(kp, 'added and not on the allow-list', undefined, a[k]);
+          }
           continue;
         }
         const differ = rulesAt('mayDiffer', kp);

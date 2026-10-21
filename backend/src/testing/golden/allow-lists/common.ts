@@ -36,17 +36,24 @@ export const READ_DTO_RULES: AllowRule[] = [
  * duplicate, or the wrong lineage is still a violation (TS-4 review probe).
  *
  * `where` = 'initial' for an attempt revealed in the fixture (the migration
- * inserts the copy into the restored state), or 'steps' for one revealed
- * during the run (the reveal job inserts it in the step's changes).
+ * inserts the copy into the restored state), or the index of the step whose
+ * reveal inserts it — pinned to that one step, so a duplicate copy written by
+ * any other step is a violation and "exactly once" holds on the target too.
+ * `round` is the revealed attempt's round (its lineage).
  */
-export function deliveredStatementCopy(author: string, subject: string, where: 'initial' | 'steps'): AddedEntriesRule {
+export function deliveredStatementCopy(
+  author: string,
+  subject: string,
+  where: 'initial' | number,
+  round = 1,
+): AddedEntriesRule {
   const key = `<message:${subject}@main/EMPATHY_STATEMENT:${author}#1>`;
   const row = {
     'kind': 'EMPATHY_STATEMENT',
     'role': 'USER',
     'conversation_id': `<conversation:${subject}@main/MAIN>`,
     'sender_participant_id': `<participant:${author}@main>`,
-    'source_attempt_id': `<empathyAttempt:${author}→${subject}@main#1>`,
+    'source_attempt_id': `<empathyAttempt:${author}→${subject}@main#${round}>`,
   };
   return where === 'initial'
     ? {
@@ -59,7 +66,7 @@ export function deliveredStatementCopy(author: string, subject: string, where: '
       }
     : {
         kind: 'addedEntries',
-        at: 'steps.*.changes',
+        at: `steps.${where}.changes`,
         where: {
           view: 'message',
           kind: 'added',

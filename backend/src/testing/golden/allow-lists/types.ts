@@ -49,6 +49,25 @@ export interface AbsentKeysRule extends RuleBase {
 export interface AddedKeysRule extends RuleBase {
   kind: 'addedKeys';
   keys: string[];
+  /**
+   * Optional: the added value must be an array whose EVERY entry satisfies
+   * this predicate (dot paths → values, as `addedEntries.where`). Without it
+   * an added key's value is unasserted.
+   */
+  each?: Record<string, unknown>;
+}
+
+/**
+ * ONE baseline entry of a matching array (matching `where`) may be replaced by
+ * ONE run entry (matching `with`); both then leave the positional comparison.
+ * For a row the target represents as a different row — TS-5 R2: today's
+ * resubmit mutates the attempt in place, the target supersedes round 1 and
+ * reveals round 2. Pin `with` completely, as for `addedEntries`.
+ */
+export interface ReplacedEntryRule extends RuleBase {
+  kind: 'replacedEntry';
+  where: Record<string, unknown>;
+  with: Record<string, unknown>;
 }
 
 /**
@@ -106,7 +125,8 @@ export type AllowRule =
   | ValuesSubsetRule
   | AddedEntriesRule
   | MayDifferRule
-  | MayBeAbsentRule;
+  | MayBeAbsentRule
+  | ReplacedEntryRule;
 
 export interface AllowList {
   scenario: string;

@@ -290,6 +290,31 @@ export async function buildLabelMap(
   return { labels };
 }
 
+/**
+ * Fill `map` with `fallback`'s labels for ids `map` does not know (rows the
+ * run deleted, labelled from the fixture template). Returns every collision —
+ * a fallback label some OTHER id already carries in `map` — and adds none of
+ * them: ranks are computed per database, so when a run deletes some of an
+ * owner's rows the survivors re-rank and a deleted row's template rank can
+ * equal a survivor's new one. Two ids under one label would read as one row.
+ */
+export function mergeFallbackLabels(map: LabelMap, fallback: LabelMap): string[] {
+  const used = new Map<string, string>();
+  for (const [id, label] of map.labels) used.set(label, id);
+  const collisions: string[] = [];
+  for (const [id, label] of fallback.labels) {
+    if (map.labels.has(id)) continue;
+    const owner = used.get(label);
+    if (owner !== undefined && owner !== id) {
+      collisions.push(`${label}: ${id} (fixture) and ${owner} (run)`);
+      continue;
+    }
+    map.labels.set(id, label);
+    used.set(label, id);
+  }
+  return collisions;
+}
+
 export interface NormalizeResult<T> {
   value: T;
   /** id-shaped tokens with no structural label. Non-empty means the run fails. */
