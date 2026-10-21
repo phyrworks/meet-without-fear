@@ -489,6 +489,33 @@ export async function writeCurrentShape(tx: Tx, scenario: Scenario, users: UserR
     }));
   };
 
+  // A shared need is recorded as production's needs share writes it: one
+  // GRANTED IDENTIFIED_NEED consent per need (`stage3.ts` consentToShareNeeds),
+  // and no ConsentedContent. Needs are matched to their rows by insertion order
+  // (uuidv7). No pre-TS-5 scenario shares a need, so this writes nothing for them.
+  const writeNeedShares = async (i: number): Promise<void> => {
+    const p = scenario.participants[i];
+    if (!p.needs?.some(n => n.shared)) return;
+    const sharedAt = p.milestones.needs_shared;
+    if (!sharedAt) throw new Error(`Participant "${p.key}" shares needs but has no needs_shared milestone`);
+    const rows = await tx.identifiedNeed.findMany({ where: { vesselId: vessels[i]!.id }, orderBy: { id: 'asc' } });
+    if (rows.length !== p.needs.length) throw new Error(`Participant "${p.key}": need rows do not match the scenario`);
+    for (const [k, n] of p.needs.entries()) {
+      if (!n.shared) continue;
+      await tx.consentRecord.create({
+        data: {
+          userId: userRows[i].id,
+          sessionId,
+          targetType: 'IDENTIFIED_NEED',
+          targetId: rows[k].id,
+          requestedByUserId: userRows[i].id,
+          decision: 'GRANTED',
+          decidedAt: t(sharedAt),
+        },
+      });
+    }
+  };
+
   // --- Per participant: progress, conversation, empathy, needs ----------------
   const plans = scenario.participants.map(p => stageProgressPlan(p, scenario));
   for (const [i, p] of scenario.participants.entries()) {
@@ -565,12 +592,14 @@ export async function writeCurrentShape(tx: Tx, scenario: Scenario, users: UserR
 
     if (p.needs?.length && !scenario.currentShape?.batchNeeds) {
       await tx.identifiedNeed.createMany({ data: needRows(i) });
+      await writeNeedShares(i);
     }
   }
 
   if (scenario.currentShape?.batchNeeds) {
     const data = scenario.participants.flatMap((p, i) => (p.needs?.length ? needRows(i) : []));
     if (data.length) await tx.identifiedNeed.createMany({ data });
+    for (const i of scenario.participants.keys()) await writeNeedShares(i);
   }
 
   // --- Reconciliation ----------------------------------------------------------
@@ -781,6 +810,54 @@ export async function writeCurrentShape(tx: Tx, scenario: Scenario, users: UserR
       },
     });
     await tx.session.update({ where: { id: sessionId }, data: { status: 'RESOLVED', resolvedAt: t(c.at) } });
+  }
+
+  // --- Inner Work and prompt captures (TS-5; no earlier scenario has either) ----
+  // Reflections are `InnerWorkSession` + `InnerWorkMessage`, optionally linked to
+  // this session (`linkedPartnerSessionId`). A capture is a COMPLETED
+  // `BrainActivity` LLM_CALL with the prompt as `input`, keyed to this session or
+  // to one of the participant's reflections, with a turnId shaped like
+  // production's (`${sessionId}-${userId}-…`).
+  for (const [i, p] of scenario.participants.entries()) {
+    const reflectionIds: string[] = [];
+    for (const r of p.reflections ?? []) {
+      const row = await tx.innerWorkSession.create({
+        data: {
+          userId: userRows[i].id,
+          title: r.title,
+          theme: r.theme,
+          summary: r.summary,
+          ...(r.linkedToSession ? { linkedPartnerSessionId: sessionId } : {}),
+          createdAt: t(r.at),
+        },
+      });
+      reflectionIds.push(row.id);
+      for (const m of r.messages) {
+        await tx.innerWorkMessage.create({
+          data: { sessionId: row.id, role: m.role, content: m.content, timestamp: t(m.at) },
+        });
+      }
+    }
+    for (const [k, c] of (p.promptCaptures ?? []).entries()) {
+      const reflectionId = c.scope === 'session' ? undefined : reflectionIds[c.scope.reflection];
+      if (c.scope !== 'session' && !reflectionId) {
+        throw new Error(`Participant "${p.key}": prompt capture ${k} names a missing reflection`);
+      }
+      await tx.brainActivity.create({
+        data: {
+          ...(reflectionId ? { innerWorkSessionId: reflectionId } : { sessionId }),
+          turnId: `${reflectionId ?? sessionId}-${userRows[i].id}-turn-${k + 1}`,
+          activityType: 'LLM_CALL',
+          callType: c.callType,
+          model: 'claude-sonnet',
+          input: c.input,
+          output: { text: c.output },
+          status: 'COMPLETED',
+          createdAt: t(c.at),
+          completedAt: t(c.at),
+        },
+      });
+    }
   }
 
   return {

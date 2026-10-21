@@ -147,6 +147,46 @@ export interface NeedContent {
   category: NeedCategoryName;
   aiConfidence: number;
   confirmed: boolean;
+  /**
+   * The participant shared this need (target `need_share`) at their
+   * `needs_shared` milestone. `text` is the target's `shared_text`; today's
+   * shape has nowhere to hold it (production's needs share writes only a
+   * GRANTED IDENTIFIED_NEED consent — `stage3.ts` consentToShareNeeds — and no
+   * ConsentedContent), so the current-shape writer records only the consent.
+   */
+  shared?: { text: string };
+}
+
+/**
+ * A participant's Inner Work reflection (target `reflection`,
+ * `reflection_message`): private to its author, never referenced by anything
+ * that crosses between participants (spec §7, D2).
+ */
+export interface ReflectionContent {
+  title: string;
+  theme?: string;
+  summary?: string;
+  /** Linked to the scenario's session (today's `linkedPartnerSessionId`). */
+  linkedToSession?: boolean;
+  at: Stamp;
+  messages: Array<{ role: 'USER' | 'AI'; content: string; at: Stamp }>;
+}
+
+/**
+ * A captured LLM call (target `brain_activity`): the prompt built for one of
+ * the participant's turns, in the session (`scope: 'session'`) or in one of
+ * their reflections (`scope: { reflection: index }`). Production writes these
+ * from `lib/bedrock.ts`; under MOCK_LLM nothing is captured, so a scenario
+ * that needs a capture states it as content.
+ */
+export interface PromptCapture {
+  scope: 'session' | { reflection: number };
+  callType: 'ORCHESTRATED_RESPONSE' | 'WITNESSING_RESPONSE' | 'RECONCILER_ANALYSIS';
+  at: Stamp;
+  /** The prompt as captured (`BrainActivity.input`). */
+  input: { systemPrompt: string; messages: Array<{ role: 'user' | 'assistant'; content: string }> };
+  /** The response text (`BrainActivity.output`). */
+  output: string;
 }
 
 /** A participant's private choice on a repair proposal (redesigned flow) (at `choices_shared`). */
@@ -176,6 +216,10 @@ export interface ParticipantScenario {
   needs?: NeedContent[];
   choices?: ProposalChoice[];
   ranking?: LegacyRanking;
+  /** Inner Work reflections, oldest first. */
+  reflections?: ReflectionContent[];
+  /** LLM calls captured for this participant's turns, oldest first. */
+  promptCaptures?: PromptCapture[];
 }
 
 export interface ReconcilerResultContent {
