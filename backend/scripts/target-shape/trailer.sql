@@ -739,9 +739,17 @@ CREATE FUNCTION app.t_agreement_parties() RETURNS trigger
   LANGUAGE plpgsql
   AS $$
   DECLARE
-    v_agreement uuid := CASE WHEN TG_TABLE_NAME = 'agreement' THEN NEW.id
-                             WHEN TG_OP = 'DELETE' THEN OLD.agreement_id ELSE NEW.agreement_id END;
+    v_agreement uuid;
   BEGIN
+    -- IF, not CASE: plpgsql plans a CASE as one expression, and NEW of an
+    -- agreement_party row has no id (nor any NEW on DELETE).
+    IF TG_TABLE_NAME = 'agreement' THEN
+      v_agreement := NEW.id;
+    ELSIF TG_OP = 'DELETE' THEN
+      v_agreement := OLD.agreement_id;
+    ELSE
+      v_agreement := NEW.agreement_id;
+    END IF;
     IF NOT app.agreement_parties_ok(v_agreement) THEN
       RAISE EXCEPTION 'an agreement names every present participant, each WILLING' USING ERRCODE = 'check_violation';
     END IF;
@@ -991,10 +999,14 @@ GRANT SELECT ON v_participant, v_co_participant, v_session_readiness, v_current_
 
 -- mwf_job: what the definer helpers read (plan §2 step 2: SELECT on
 -- participant), and what each definer writer it owns reads and writes —
--- without these the functions above cannot run.
+-- without these the functions above cannot run. SELECT covers every table a
+-- writer touches: an UPDATE or DELETE with a WHERE needs SELECT on the
+-- columns it reads.
 GRANT USAGE ON SCHEMA public TO mwf_job;
-GRANT SELECT ON participant, empathy_attempt, session, conversation, need, need_share, consent, "user",
-                participant_milestone, follow_up, reflection
+GRANT SELECT ON participant, empathy_attempt, session, conversation, message, need, need_share, consent, "user",
+                participant_milestone, follow_up, reflection, conversation_read_state, draft, ai_memory, mood_reading,
+                regulation_event, need_disposition, follow_up_note, proposal_choice, follow_up_checkin, brain_activity,
+                feature_state, user_memory, user_device, user_preferences, reminder, participant_key, user_key
   TO mwf_job;
 GRANT INSERT, UPDATE ON empathy_attempt TO mwf_job;                    -- empathy_set_status
 GRANT INSERT ON message TO mwf_job;                                     -- empathy_set_status (delivered copy)
