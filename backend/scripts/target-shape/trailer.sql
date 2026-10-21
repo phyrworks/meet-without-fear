@@ -237,7 +237,9 @@ CREATE FUNCTION app.empathy_direction_status()
 
 -- The only writer of session.status (spec §1.1 transition set). Members or
 -- the job; T-cardinality-1 (trigger) still refuses → ACTIVE without two
--- participants. Locks the session row (lock order: session, then attempt).
+-- participants. Locks the session row FOR NO KEY UPDATE (lock order: session,
+-- then attempt; NO KEY so child-row INSERTs, which take KEY SHARE on session
+-- through their FK, are not blocked — status/resolved_at are not key columns).
 CREATE FUNCTION app.session_set_status(session uuid, status public.session_status) RETURNS void
   LANGUAGE plpgsql SECURITY DEFINER
   SET search_path = pg_catalog, public, pg_temp
@@ -246,7 +248,7 @@ CREATE FUNCTION app.session_set_status(session uuid, status public.session_statu
     v_from public.session_status;
     v_job  boolean := session_user IN ('mwf_job', 'mwf_migrator');
   BEGIN
-    SELECT s.status INTO v_from FROM public.session s WHERE s.id = session_set_status.session FOR UPDATE;
+    SELECT s.status INTO v_from FROM public.session s WHERE s.id = session_set_status.session FOR NO KEY UPDATE;
     IF NOT FOUND OR NOT (v_job OR coalesce(app.is_member(session_set_status.session), false)) THEN
       RAISE EXCEPTION 'session not found' USING ERRCODE = 'P0002';
     END IF;
@@ -305,8 +307,8 @@ CREATE FUNCTION app.empathy_set_status(attempt uuid, status public.empathy_statu
     IF NOT FOUND THEN
       RAISE EXCEPTION 'attempt not found' USING ERRCODE = 'P0002';
     END IF;
-    PERFORM 1 FROM public.session s WHERE s.id = v_session FOR UPDATE;
-    SELECT * INTO a FROM public.empathy_attempt e WHERE e.id = empathy_set_status.attempt FOR UPDATE;
+    PERFORM 1 FROM public.session s WHERE s.id = v_session FOR NO KEY UPDATE;
+    SELECT * INTO a FROM public.empathy_attempt e WHERE e.id = empathy_set_status.attempt FOR NO KEY UPDATE;
     SELECT p.user_id, p.left_at INTO v_author_user, v_author_left FROM public.participant p WHERE p.id = a.author_participant_id;
     SELECT p.user_id, p.left_at INTO v_subject_user, v_subject_left FROM public.participant p WHERE p.id = a.subject_participant_id;
     v_is_author  := v_me IS NOT NULL AND v_author_user IS NOT NULL AND v_me = v_author_user;
@@ -652,7 +654,7 @@ CREATE FUNCTION app.t_message_immutable() RETURNS trigger
       RAISE EXCEPTION 'message routing is immutable' USING ERRCODE = 'check_violation';
     END IF;
     IF NEW.content IS DISTINCT FROM OLD.content AND (OLD.role IN ('AI', 'SYSTEM') OR OLD.kind <> 'CHAT')
-       AND current_user NOT IN ('mwf_job', 'mwf_migrator') THEN
+       AND session_user NOT IN ('mwf_job', 'mwf_migrator') THEN
       RAISE EXCEPTION 'this message''s content is immutable' USING ERRCODE = 'check_violation';
     END IF;
     RETURN NEW;
