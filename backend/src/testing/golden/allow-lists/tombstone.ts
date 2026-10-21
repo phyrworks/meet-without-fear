@@ -7,19 +7,32 @@
  * session ABANDONED. Spec §4 `app.anonymize_user_account` (the complete walk).
  */
 
-import type { KnownLeak } from '../privacy';
+import { KnownLeak, SESSION_READS, USER_READS } from '../privacy';
 import { deliveredStatementCopy, READ_DTO_RULES } from './common';
 import type { AllowList } from './types';
 
 /**
- * Step layout (the scenario asserts it): 30 reads before (the full read minus
- * `strategies`, which shuffles), the deletion at index 30, 30 reads after.
- * Rules that only the post-deletion state may trigger are pinned to those
- * indices, never to `steps.*`.
+ * Bob's full read leaves out `strategies`: GET /strategies shuffles its list
+ * on every call (controllers/stage4.ts shuffleArray) and this fixture has two
+ * proposals, so its order is not a baseline (measured flipping).
  */
-export const TOMBSTONE_DELETION_STEP = 30;
-const AFTER_STEPS = Array.from({ length: TOMBSTONE_DELETION_STEP }, (_, i) => TOMBSTONE_DELETION_STEP + 1 + i);
-const after = (suffix: string): string[] => AFTER_STEPS.map(i => `steps.${i}.${suffix}`);
+export const TOMBSTONE_READ_EXCEPT = ['strategies'];
+const READ_NAMES = [...SESSION_READS, ...USER_READS].map(([n]) => n).filter(n => !TOMBSTONE_READ_EXCEPT.includes(n));
+
+/**
+ * Step layout (the scenario asserts it): the 30 reads before, the deletion at
+ * index 30, the same 30 reads after. Rules only the post-deletion state may
+ * trigger are pinned to the exact step of the read they concern, never to
+ * `steps.*`.
+ */
+export const TOMBSTONE_DELETION_STEP = READ_NAMES.length;
+const AFTER_STEPS = READ_NAMES.map((_, i) => TOMBSTONE_DELETION_STEP + 1 + i);
+const afterRead = (read: string): number => {
+  const i = READ_NAMES.indexOf(read);
+  if (i < 0) throw new Error(`tombstone allow-list: no read named ${read}`);
+  return TOMBSTONE_DELETION_STEP + 1 + i;
+};
+const at = (read: string, suffix: string): string => `steps.${afterRead(read)}.${suffix}`;
 
 export const TOMBSTONE_ALLOW: AllowList = {
   scenario: 'tombstone',
@@ -37,19 +50,34 @@ export const TOMBSTONE_ALLOW: AllowList = {
     // the state after the deletion" is what requires the key to go.
     {
       kind: 'mayBeAbsent',
-      at: [`steps.${TOMBSTONE_DELETION_STEP}`, ...after('').map(p => p.replace(/\.$/, ''))],
+      at: [`steps.${TOMBSTONE_DELETION_STEP}`, ...AFTER_STEPS.map(i => `steps.${i}`)],
       keys: ['unrepresentable'],
       mustMatch: true,
       why: 'spec §4 anonymize walk: the target leaves a state the views represent (tombstoned user and participant).',
     },
+    // The deletion step's concept changes are the walk itself. They have no
+    // baseline to compare with; the scenario's rule check ("every rule of the
+    // tombstone walk holds") asserts them against the database instead.
     {
       kind: 'addedKeys',
-      at: [`steps.${TOMBSTONE_DELETION_STEP}`, ...after('').map(p => p.replace(/\.$/, ''))],
+      at: `steps.${TOMBSTONE_DELETION_STEP}`,
       keys: ['changes'],
       mustMatch: true,
-      why: 'the concept changes exist on the target where today the state is unrepresentable (see above).',
+      why: 'the walk’s concept changes exist on the target where today the state is unrepresentable.',
     },
-    // What fixing each known deviation changes in Bob's post-deletion reads.
+    // A read after the deletion may change exactly what a read before it
+    // changed: the reader's own user row stamped by the auth bypass. Anything
+    // else a read writes is a violation (fix round 1, I1).
+    {
+      kind: 'addedKeys',
+      at: AFTER_STEPS.map(i => `steps.${i}`),
+      keys: ['changes'],
+      each: { view: 'user', kind: 'changed', key: '<user:bob>', changedFields: ['updated_at'] },
+      mustMatch: true,
+      why: 'a GET writes nothing but the auth bypass’s User.updatedAt (measured on all 30 pre-deletion reads).',
+    },
+    // What fixing each known deviation changes in Bob's post-deletion reads,
+    // each pinned to the one read that shows it and paired with a probe.
     {
       kind: 'mayDiffer',
       at: [`steps.${TOMBSTONE_DELETION_STEP}.body.data.summary`],
@@ -57,25 +85,38 @@ export const TOMBSTONE_ALLOW: AllowList = {
       why: 'spec §4: the deletion is app.anonymize_user_account; its counts are not today’s cascade counts.',
     },
     {
+      // Null today, the revealed round on the target: a null cannot be
+      // narrowed field by field. Paired with the "Ada's revealed statement"
+      // survives-probe and the private-material probes over the same read.
       kind: 'mayDiffer',
-      at: [...after('body.data.attempt'), ...after('body.data.partnerStatus')],
+      at: [at('partner empathy', 'body.data.attempt'), at('partner empathy', 'body.data.partnerStatus')],
       mustMatch: true,
       why: 'spec §7: the revealed attempt stays readable to its subject after its author leaves (deviation: empathy/partner).',
     },
     {
+      // Only the partner's side: myNeeds is Bob's own data and must not move
+      // (if the target's comparison fills it, that is a re-declaration, not this rule).
       kind: 'mayDiffer',
-      at: [...after('body.data.partnerNeeds'), ...after('body.data.myNeeds'), ...after('body.data.analysisComplete')],
+      at: [at('needs comparison', 'body.data.partnerNeeds'), at('needs comparison', 'body.data.analysisComplete')],
       mustMatch: true,
-      why: 'spec §4 walk: need_share survives the leaver (deviation: needs comparison is empty today).',
+      why: 'spec §4 walk: need_share survives the leaver (deviation: the comparison is empty today). Paired with the ' +
+        '"Ada\'s shared need" survives-probes and the need label/evidence private probes.',
     },
     {
       kind: 'mayDiffer',
-      at: [...after('body.data.**.partner.name'), ...after('body.data.**.partner.nickname')],
+      at: ['session', 'state', 'session list'].flatMap(r => [
+        at(r, 'body.data.**.partner.name'),
+        at(r, 'body.data.**.partner.nickname'),
+      ]),
       mustMatch: true,
-      why: 'spec §7 v_participant: the leaver’s display_name is NULL; the partner sees the fallback, not the name.',
+      why: 'spec §7 v_participant: the leaver’s display_name is NULL; the partner sees the fallback, not the name. ' +
+        'Paired with the rule check "the partner no longer reads the leaver\'s name" (name and nickname).',
     },
   ],
 };
+
+/** Ada's private material found in Bob's post-deletion reads, today. */
+export const TOMBSTONE_PRIVATE_KNOWN_LEAKS: KnownLeak[] = [];
 
 const dev = (at: string, finding: string, evidence: string): KnownLeak => ({ at, finding, evidence });
 const AFTER = "Bob's reads after the deletion ✗";

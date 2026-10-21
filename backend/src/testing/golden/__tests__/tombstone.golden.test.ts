@@ -29,13 +29,19 @@
  *           GOLDEN_UPDATE=tombstone.concept npx jest tombstone.golden
  */
 
-import { TOMBSTONE_ALLOW, TOMBSTONE_DELETION_STEP, TOMBSTONE_KNOWN_DEVIATIONS } from '../allow-lists/tombstone';
+import {
+  TOMBSTONE_ALLOW,
+  TOMBSTONE_DELETION_STEP,
+  TOMBSTONE_KNOWN_DEVIATIONS,
+  TOMBSTONE_PRIVATE_KNOWN_LEAKS,
+  TOMBSTONE_READ_EXCEPT,
+} from '../allow-lists/tombstone';
 import { withClient, listTables } from '../db';
 import type { Harness, StepResult } from '../driver';
 import { createHarness } from '../driver';
-import { scenarioFor, TOMBSTONE_TEXT } from '../../fixture-scenarios/scenarios';
+import { ADA_REFLECTION, scenarioFor, TOMBSTONE_TEXT } from '../../fixture-scenarios/scenarios';
 import { TargetStage } from '../../fixture-scenarios/target-stage';
-import { findMissing, fullRead, Leak, unexpectedLeakReport } from '../privacy';
+import { findLeaks, findMissing, fullRead, Leak, unexpectedLeakReport } from '../privacy';
 import { goldenScenarioChecks } from '../scenario-checks';
 import type { Snapshot } from '../snapshot';
 
@@ -56,11 +62,27 @@ const SURVIVES: Record<string, string> = {
 };
 
 /**
- * Bob's full read, minus `strategies`: GET /strategies shuffles its list on
- * every call (controllers/stage4.ts shuffleArray) and this fixture has two
- * proposals, so its order is not a baseline (measured flipping).
+ * Ada's private material (fix round 1, C2): none of it may be in Bob's reads
+ * after she leaves — her own conversation, her needs' labels and evidence,
+ * her reflection. (Her draft text is her revealed statement, which survives
+ * by design, so it is not a probe.)
  */
-const READS = { tables: ['User', 'Message', 'UserVessel'], set: 'all' as const, except: ['strategies'] };
+const ADA_PRIVATE_PROBES: Record<string, string> = {
+  ...Object.fromEntries(ADA_PRIVATE_LINES.map((l, i) => [`Ada's private line ${i + 1}`, l])),
+  ...Object.fromEntries(
+    TOMBSTONE_TEXT.adaNeeds.flatMap((n, i) => [
+      [`Ada's need ${i + 1} label`, n.need],
+      ...(n.evidence ?? []).map((e, j) => [`Ada's need ${i + 1} evidence ${j + 1}`, e] as const),
+    ]),
+  ),
+  "Ada's reflection title": ADA_REFLECTION.title,
+  "Ada's reflection theme": ADA_REFLECTION.theme,
+  "Ada's reflection summary": ADA_REFLECTION.summary,
+  "Ada's reflection line": ADA_REFLECTION.userLine,
+  "Ada's reflection reply": ADA_REFLECTION.aiLine,
+};
+
+const READS = { tables: ['User', 'Message', 'UserVessel'], set: 'all' as const, except: TOMBSTONE_READ_EXCEPT };
 
 const AFTER_TABLES = [
   'Session', 'User', 'Message', 'EmpathyAttempt', 'EmpathyDraft', 'IdentifiedNeed', 'Agreement', 'InnerWorkSession',
@@ -173,7 +195,10 @@ describe(`golden: ${SCENARIO}`, () => {
     rule('participant.display_name is NULL', adaDisplayNames.length === 1 && adaDisplayNames[0] === null);
     rule(
       "the partner no longer reads the leaver's name",
-      !bobAfter.some(s => JSON.stringify(s.body).includes('"name":"Ada Lovelace"')),
+      !bobAfter.some(s => {
+        const body = JSON.stringify(s.body);
+        return body.includes('"name":"Ada Lovelace"') || body.includes('"nickname":"Ada Lovelace"');
+      }),
     );
     rule('user row is tombstoned, not deleted', t.User.some(u => u.id === adaId));
     rule(
@@ -183,5 +208,17 @@ describe(`golden: ${SCENARIO}`, () => {
     deviations.push(...findMissing(bobAfter, SURVIVES, "Bob's reads after the deletion"));
 
     expect(unexpectedLeakReport(deviations, TOMBSTONE_KNOWN_DEVIATIONS)).toEqual({ unexpected: [], stale: [] });
+  });
+
+  it("none of the leaver's private material is in Bob's reads after the deletion (known leaks aside)", () => {
+    const observed = findLeaks(bobAfter, ADA_PRIVATE_PROBES);
+    expect(unexpectedLeakReport(observed, TOMBSTONE_PRIVATE_KNOWN_LEAKS)).toEqual({ unexpected: [], stale: [] });
+  });
+
+  it('the probes are live: the deletion removed rows carrying them (they existed in the run database)', () => {
+    const removed = JSON.stringify(deletion.changes.filter(c => c.kind === 'removed').map(c => c.before));
+    for (const probe of [ADA_REFLECTION.title, ADA_REFLECTION.userLine, ...TOMBSTONE_TEXT.adaNeeds.map(n => n.need)]) {
+      expect(removed).toContain(probe);
+    }
   });
 });

@@ -521,7 +521,7 @@ function bobSessionCapture(p: ParticipantScenario, when: Stamp): PromptCapture {
 }
 
 /** Text each partner's shared needs carry in the target (`need_share.shared_text`). */
-const shareNeeds = (needs: typeof ADA_NEEDS, texts: string[]) =>
+const shareNeeds = (needs: NeedContent[], texts: string[]) =>
   needs.map((n, i) => ({ ...n, shared: { text: texts[i] } }));
 
 /**
@@ -563,7 +563,7 @@ function tombstoneReady(a: string, b: string): ReturnType<Build> {
       i => at(-390000 + i * 5000),
     ),
     empathy: revealed(TOMBSTONE_TEXT.adaEmpathy, B, sec(-302)),
-    needs: shareNeeds(ADA_NEEDS, TOMBSTONE_TEXT.adaNeedShares),
+    needs: shareNeeds(TOMBSTONE_TEXT.adaNeeds, TOMBSTONE_TEXT.adaNeedShares),
     ranking: { proposals: ['checkin', 'appreciation'], submittedAt: sec(-90) },
     reflections: [adaReflection(sec(-380))],
   };
@@ -690,6 +690,23 @@ export const TOMBSTONE_TEXT = {
   bobEmpathy: 'I think you feel invisible when you are the only one tracking the house.',
   adaSharedContext: 'What I need you to know is that I am exhausted too, and I stopped saying it because it never seemed to count.',
   adaNeedShares: ['Ada wants her effort to be noticed out loud.', 'Ada wants the house to feel like a joint project.'],
+  /** Ada's private needs (label + evidence): probes R5 checks are gone from Bob's reads after she leaves. */
+  adaNeeds: [
+    {
+      need: 'To be seen carrying the household',
+      category: 'RECOGNITION',
+      aiConfidence: 0.95,
+      confirmed: true,
+      evidence: ['Ada said she is the only one who knows when the milk runs out'],
+    },
+    {
+      need: 'A fair split of the invisible chores',
+      category: 'FAIRNESS',
+      aiConfidence: 0.95,
+      confirmed: true,
+      evidence: ['Ada said the mental load of planning meals is hers alone'],
+    },
+  ] as NeedContent[],
   bobNeedShares: ['Bob wants to be understood before being asked for more.', 'Bob wants practical help on hard work days.'],
 };
 

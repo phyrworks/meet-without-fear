@@ -7,7 +7,7 @@
         "completed_at": null,
         "description": "Weekly check-in on Sundays to discuss upcoming week and divide tasks",
         "duration": null,
-        "follow_up_at": "<ts:47>",
+        "follow_up_at": "<ts:46>",
         "id": "<agreement:main#1>",
         "measure_of_success": null,
         "proposal_id": "<proposal:main#1>",
@@ -212,7 +212,7 @@
         "target_kind": "NEED"
       },
       "<consent:bob@main/NEED/need:bob@main#2>": {
-        "created_at": "<ts:41>",
+        "created_at": "<ts:40>",
         "decided_at": "<ts:24>",
         "decision": "GRANTED",
         "empathy_attempt_id": null,
@@ -230,7 +230,7 @@
     "context_share_offer": {
       "<shareOffer:bob→ada@main#1/i1>": {
         "attempt_id": "<empathyAttempt:bob→ada@main#1>",
-        "created_at": "<ts:42>",
+        "created_at": "<ts:41>",
         "declined_at": null,
         "delivered_at": "<ts:17>",
         "delivery_notified_at": null,
@@ -247,7 +247,7 @@
         "subject_participant_id": "<participant:ada@main>",
         "suggested_content": "What I need you to know is that I am exhausted too, and I stopped saying it because it never seemed to count.",
         "suggested_reason": "This helps Bob Ross understand that Ada Lovelace's frustration comes from exhaustion and feeling unseen, not anger or blame.",
-        "updated_at": "<ts:42>"
+        "updated_at": "<ts:41>"
       }
     },
     "conversation": {
@@ -358,7 +358,7 @@
         "created_at": "<ts:30>",
         "decline_reason": null,
         "declined_at": null,
-        "expires_at": "<ts:46>",
+        "expires_at": "<ts:45>",
         "id": "<invitation:main>",
         "invited_by_participant_id": "<participant:ada@main>",
         "message_confirmed_at": "<ts:30>",
@@ -508,9 +508,11 @@
         "confirmed": true,
         "created_at": "<ts:22>",
         "deleted_at": null,
-        "evidence": [],
+        "evidence": [
+          "Ada said she is the only one who knows when the milk runs out"
+        ],
         "id": "<need:ada@main#1>",
-        "label": "Appreciation",
+        "label": "To be seen carrying the household",
         "locked_at": null,
         "participant_id": "<participant:ada@main>",
         "superseded_by_need_id": null
@@ -521,9 +523,11 @@
         "confirmed": true,
         "created_at": "<ts:22>",
         "deleted_at": null,
-        "evidence": [],
+        "evidence": [
+          "Ada said the mental load of planning meals is hers alone"
+        ],
         "id": "<need:ada@main#2>",
-        "label": "Partnership",
+        "label": "A fair split of the invisible chores",
         "locked_at": null,
         "participant_id": "<participant:ada@main>",
         "superseded_by_need_id": null
@@ -674,7 +678,7 @@
           "Appreciation",
           "Partnership"
         ],
-        "updated_at": "<ts:43>"
+        "updated_at": "<ts:42>"
       },
       "<proposal:main#2>": {
         "created_at": "<ts:25>",
@@ -694,7 +698,7 @@
         "unresolved_need_labels": [
           "Recognition"
         ],
-        "updated_at": "<ts:44>"
+        "updated_at": "<ts:43>"
       }
     },
     "proposal_choice": {},
@@ -738,14 +742,14 @@
         "created_at": "<ts:6>",
         "distilled_at": null,
         "id": "<reflection:ada#1>",
-        "linked_at": "<ts:45>",
+        "linked_at": "<ts:44>",
         "linked_session_id": "<session:main>",
         "status": "ACTIVE",
         "summary": "Ada traced her scorekeeping about chores to watching her mother never rest, and is afraid of repeating it.",
         "summary_doc": null,
         "theme": "inherited resentment about rest",
         "title": "Keeping score like my mother did",
-        "updated_at": "<ts:45>",
+        "updated_at": "<ts:44>",
         "user_id": "<user:ada>"
       }
     },
@@ -1798,21 +1802,21 @@
           "records": [
             {
               "contentType": "IDENTIFIED_NEED",
-              "createdAt": "<ts:6>",
-              "decidedAt": "<ts:2>",
-              "decision": "GRANTED",
-              "id": "<consent:bob@main/NEED/need:bob@main#2>",
-              "revokedAt": null,
-              "targetId": "<need:bob@main#2>"
-            },
-            {
-              "contentType": "IDENTIFIED_NEED",
               "createdAt": "<ts:5>",
               "decidedAt": "<ts:2>",
               "decision": "GRANTED",
               "id": "<consent:bob@main/NEED/need:bob@main#1>",
               "revokedAt": null,
               "targetId": "<need:bob@main#1>"
+            },
+            {
+              "contentType": "IDENTIFIED_NEED",
+              "createdAt": "<ts:5>",
+              "decidedAt": "<ts:2>",
+              "decision": "GRANTED",
+              "id": "<consent:bob@main/NEED/need:bob@main#2>",
+              "revokedAt": null,
+              "targetId": "<need:bob@main#2>"
             },
             {
               "contentType": "EMPATHY_DRAFT",
@@ -3143,21 +3147,21 @@
           "records": [
             {
               "contentType": "IDENTIFIED_NEED",
-              "createdAt": "<ts:5>",
-              "decidedAt": "<ts:2>",
-              "decision": "GRANTED",
-              "id": "<consent:bob@main/NEED/need:bob@main#2>",
-              "revokedAt": null,
-              "targetId": "<need:bob@main#2>"
-            },
-            {
-              "contentType": "IDENTIFIED_NEED",
               "createdAt": "<ts:4>",
               "decidedAt": "<ts:2>",
               "decision": "GRANTED",
               "id": "<consent:bob@main/NEED/need:bob@main#1>",
               "revokedAt": null,
               "targetId": "<need:bob@main#1>"
+            },
+            {
+              "contentType": "IDENTIFIED_NEED",
+              "createdAt": "<ts:4>",
+              "decidedAt": "<ts:2>",
+              "decision": "GRANTED",
+              "id": "<consent:bob@main/NEED/need:bob@main#2>",
+              "revokedAt": null,
+              "targetId": "<need:bob@main#2>"
             },
             {
               "contentType": "EMPATHY_DRAFT",
