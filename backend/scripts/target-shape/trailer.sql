@@ -1326,12 +1326,24 @@ END
 $$;
 
 -- Plan step 13: v_session_closure_items reproduces each old Stage4Closure
--- array as a set, restricted to shared needs. An old open-need id with no
--- need_share row is expected (listed); any other difference RAISEs.
+-- array as a set, restricted to LIVE shared needs. Two named exception
+-- classes are expected and listed, never RAISEd:
+--   (1) an old open-need id with no need_share row (an unshared need — the
+--       old rule, stage4-coverage.service.ts, covers every confirmed need);
+--   (2) an old open-need id whose need_share is revoked (TS-7b): the view, by
+--       definition, never names a revoked share (spec §1.4), and the old
+--       arrays were computed without regard to consent state.
+-- Any other difference RAISEs, with the differing ids. Known TS-14 risk
+-- (TS-7b, see the migration header): the old rule counts a need COVERED by
+-- any non-REMOVED proposal (CONVERTED_TO_AGREEMENT included — stage4.ts
+-- converts the agreed proposals in the closure transaction) and by fuzzy
+-- text matches; the view counts only proposal_need links to ACTIVE proposals.
+-- Those states RAISE here on purpose (negative case n13).
 DO $$
 DECLARE
   r record;
   bad text := '';
+  old_live uuid[];
 BEGIN
   FOR r IN
     SELECT o.session_id, o.shared_agreement_ids, o.individual_proposal_ids, o.open_need_ids,
@@ -1348,15 +1360,22 @@ BEGIN
     IF NOT (r.individual_proposal_ids @> r.individual_commitment_ids AND r.individual_commitment_ids @> r.individual_proposal_ids) THEN
       bad := bad || format(' %s:individual_commitments', r.session_id);
     END IF;
-    IF NOT (r.v_open @> ARRAY(SELECT x FROM unnest(r.open_need_ids) x WHERE EXISTS (SELECT 1 FROM need_share s WHERE s.need_id = x))
-            AND ARRAY(SELECT x FROM unnest(r.open_need_ids) x WHERE EXISTS (SELECT 1 FROM need_share s WHERE s.need_id = x)) @> r.v_open) THEN
-      bad := bad || format(' %s:open_needs', r.session_id);
+    old_live := ARRAY(SELECT x FROM unnest(r.open_need_ids) x
+                      WHERE EXISTS (SELECT 1 FROM need_share s WHERE s.need_id = x AND s.revoked_at IS NULL));
+    IF NOT (r.v_open @> old_live AND old_live @> r.v_open) THEN
+      bad := bad || format(' %s:open_needs(old-only %s, view-only %s)', r.session_id,
+                           ARRAY(SELECT unnest(old_live) EXCEPT SELECT unnest(r.v_open)),
+                           ARRAY(SELECT unnest(r.v_open) EXCEPT SELECT unnest(old_live)));
     END IF;
   END LOOP;
   PERFORM app_migration.note('13', 'Stage4Closure.openNeedIds entry that is not a shared need (expected difference)', count(*),
                              string_agg(x::text, ', '))
   FROM app_migration.old_closure o CROSS JOIN unnest(o.open_need_ids) x
   WHERE NOT EXISTS (SELECT 1 FROM need_share s WHERE s.need_id = x);
+  PERFORM app_migration.note('13', 'Stage4Closure.openNeedIds entry whose need_share is revoked (expected difference, TS-7b)', count(*),
+                             string_agg(x::text, ', '))
+  FROM app_migration.old_closure o CROSS JOIN unnest(o.open_need_ids) x
+  WHERE EXISTS (SELECT 1 FROM need_share s WHERE s.need_id = x AND s.revoked_at IS NOT NULL);
   PERFORM app_migration.assert(bad = '', format('step 13: v_session_closure_items differs from Stage4Closure:%s', bad));
 END
 $$;

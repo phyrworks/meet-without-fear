@@ -125,6 +125,22 @@ const HEADER = `-- =============================================================
 --    in app_migration.dropped_content for the owner to decide at TS-14.
 --  * The app.* functions treat a caller as the job only when it logged in as
 --    mwf_job or mwf_migrator (session_user); a superuser is not the job.
+--  * need_share has two sources (TS-7b): ConsentedContent, and the Stage 3
+--    handler's granted IDENTIFIED_NEED ConsentRecords (no ConsentedContent;
+--    shared_text = the need label, ruling R19; duplicates merged, R18).
+--  * TS-14 RISK, step-13 closure comparison (TS-7b). It is now live for every
+--    production Stage4Closure, because Stage 3 shares become need_share rows.
+--    The old openNeedIds rule (stage4.ts ~1338 over
+--    stage4-coverage.service.ts) counts a need COVERED when any non-REMOVED
+--    proposal links or fuzzily matches it, and that includes
+--    CONVERTED_TO_AGREEMENT: the SHARED_AGREEMENT closure converts the agreed
+--    proposals in the same transaction. v_session_closure_items counts only
+--    proposal_need links to ACTIVE proposals. A shared need covered by the
+--    agreed proposal, or by a fuzzy/description-only match, is therefore open
+--    in the view and covered in the old array. The comparison RAISEs on it
+--    (negative case n13), and this is NOT relaxed: deciding between fixing
+--    the view rule and accepting the difference is the owner's call at TS-14.
+--    Expected on most real SHARED_AGREEMENT closures.
 --  * Does NOT enable RLS or create policies (TS-16).
 --  * TS-16 (v_participant): under owner-only RLS a co-participant reads NULL
 --    last_active_at / last_mood / read state and is_tombstone = false through
