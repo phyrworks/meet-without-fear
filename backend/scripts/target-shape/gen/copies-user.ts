@@ -82,7 +82,12 @@ SELECT "sourceId", "targetId", "linkType"::text::takeaway_link_type, similarity:
 SELECT app_migration.note('15', 'InnerWorkSession.' || c || ' dropped', n)
 FROM (SELECT 'linkedAtStage' AS c, count(*) FILTER (WHERE "linkedAtStage" IS NOT NULL) AS n FROM "InnerWorkSession"
       UNION ALL SELECT 'linkedTrigger', count(*) FILTER (WHERE "linkedTrigger" IS NOT NULL) FROM "InnerWorkSession"
-      UNION ALL SELECT 'linkedAtMessageId', count(*) FILTER (WHERE "linkedAtMessageId" IS NOT NULL) FROM "InnerWorkSession") x
+      UNION ALL SELECT 'linkedAtMessageId', count(*) FILTER (WHERE "linkedAtMessageId" IS NOT NULL) FROM "InnerWorkSession"
+      UNION ALL SELECT 'contentEmbedding (D8)', count(*) FILTER (WHERE "contentEmbedding" IS NOT NULL) FROM "InnerWorkSession") x
+WHERE n > 0;
+SELECT app_migration.note('15', t || ' dropped (D8)', n)
+FROM (SELECT 'SessionTakeaway.embedding' AS t, count(*) FILTER (WHERE embedding IS NOT NULL) AS n FROM "SessionTakeaway"
+      UNION ALL SELECT 'UserVessel.contentEmbedding', count(*) FILTER (WHERE "contentEmbedding" IS NOT NULL) FROM "UserVessel") x
 WHERE n > 0;
 SELECT app_migration.assert(a = b AND c = d AND e = f AND g = h,
          format('step 15: reflection %s/%s, reflection_message %s/%s, takeaway %s/%s, takeaway_link %s/%s', a, b, c, d, e, f, g, h))
