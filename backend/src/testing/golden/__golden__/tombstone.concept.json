@@ -1,0 +1,3480 @@
+{
+  "scenario": "tombstone",
+  "stage": "TOMBSTONE_READY",
+  "initial": {
+    "agreement": {
+      "<agreement:main#1>": {
+        "completed_at": null,
+        "description": "Weekly check-in on Sundays to discuss upcoming week and divide tasks",
+        "duration": null,
+        "follow_up_at": "<ts:47>",
+        "id": "<agreement:main#1>",
+        "measure_of_success": null,
+        "proposal_id": "<proposal:main#1>",
+        "session_id": "<session:main>",
+        "status": "AGREED",
+        "type": "COMMITMENT"
+      }
+    },
+    "agreement_party": {
+      "<agreementParty:agreement:main#1/participant:ada@main>": {
+        "agreed_at": "<ts:33>",
+        "agreement_id": "<agreement:main#1>",
+        "participant_id": "<participant:ada@main>"
+      },
+      "<agreementParty:agreement:main#1/participant:bob@main>": {
+        "agreed_at": "<ts:33>",
+        "agreement_id": "<agreement:main#1>",
+        "participant_id": "<participant:bob@main>"
+      }
+    },
+    "brain_activity": {
+      "<brainActivity:reflection:ada#1#1>": {
+        "activity_type": "LLM_CALL",
+        "call_type": "WITNESSING_RESPONSE",
+        "completed_at": "<ts:10>",
+        "cost": 0,
+        "created_at": "<ts:10>",
+        "duration_ms": 0,
+        "id": "<brainActivity:reflection:ada#1#1>",
+        "input": {
+          "messages": [
+            {
+              "content": "I keep a silent tally of every dish because my mother never sat down once in thirty years.",
+              "role": "user"
+            }
+          ],
+          "systemPrompt": "You are Ada's private reflection guide. Reflection theme: inherited resentment about rest."
+        },
+        "metadata": null,
+        "model": "claude-sonnet",
+        "output": {
+          "text": "It sounds like the tally protects you from becoming her, and it also keeps you braced for unfairness."
+        },
+        "participant_id": null,
+        "reflection_id": "<reflection:ada#1>",
+        "session_id": null,
+        "status": "COMPLETED",
+        "structured_output": null,
+        "token_count_input": 0,
+        "token_count_output": 0,
+        "turn_id": "<reflection:ada#1>-<user:ada>-turn-2"
+      },
+      "<brainActivity:session:main#1>": {
+        "activity_type": "LLM_CALL",
+        "call_type": "ORCHESTRATED_RESPONSE",
+        "completed_at": "<ts:9>",
+        "cost": 0,
+        "created_at": "<ts:9>",
+        "duration_ms": 0,
+        "id": "<brainActivity:session:main#1>",
+        "input": {
+          "messages": [
+            {
+              "content": "I am tired of being the only one who notices the laundry.",
+              "role": "user"
+            },
+            {
+              "content": "That sounds lonely. What do you wish your partner noticed?",
+              "role": "assistant"
+            },
+            {
+              "content": "That I am exhausted too, and I never get to say so.",
+              "role": "user"
+            }
+          ],
+          "systemPrompt": "You are a calm facilitator witnessing Ada in her private conversation. Stage: witness."
+        },
+        "metadata": null,
+        "model": "claude-sonnet",
+        "output": {
+          "text": "I hear how tired you are."
+        },
+        "participant_id": null,
+        "reflection_id": null,
+        "session_id": "<session:main>",
+        "status": "COMPLETED",
+        "structured_output": null,
+        "token_count_input": 0,
+        "token_count_output": 0,
+        "turn_id": "<session:main>-<user:ada>-turn-1"
+      },
+      "<brainActivity:session:main#2>": {
+        "activity_type": "LLM_CALL",
+        "call_type": "ORCHESTRATED_RESPONSE",
+        "completed_at": "<ts:11>",
+        "cost": 0,
+        "created_at": "<ts:11>",
+        "duration_ms": 0,
+        "id": "<brainActivity:session:main#2>",
+        "input": {
+          "messages": [
+            {
+              "content": "Work has been brutal and I come home with nothing left.",
+              "role": "user"
+            },
+            {
+              "content": "Coming home empty sounds hard. What happens next?",
+              "role": "assistant"
+            }
+          ],
+          "systemPrompt": "You are a calm facilitator witnessing Bob in his private conversation. Stage: witness."
+        },
+        "metadata": null,
+        "model": "claude-sonnet",
+        "output": {
+          "text": "Coming home empty sounds hard. What happens next?"
+        },
+        "participant_id": null,
+        "reflection_id": null,
+        "session_id": "<session:main>",
+        "status": "COMPLETED",
+        "structured_output": null,
+        "token_count_input": 0,
+        "token_count_output": 0,
+        "turn_id": "<session:main>-<user:bob>-turn-1"
+      }
+    },
+    "consent": {
+      "<consent:ada@main/EMPATHY_ATTEMPT/empathyAttempt:ada→bob@main#1>": {
+        "created_at": "<ts:35>",
+        "decided_at": "<ts:14>",
+        "decision": "GRANTED",
+        "empathy_attempt_id": "<empathyAttempt:ada→bob@main#1>",
+        "id": "<consent:ada@main/EMPATHY_ATTEMPT/empathyAttempt:ada→bob@main#1>",
+        "need_id": null,
+        "participant_id": "<participant:ada@main>",
+        "proposal_id": null,
+        "requested_by_participant_id": "<participant:ada@main>",
+        "review_id": null,
+        "revoked_at": null,
+        "share_offer_id": null,
+        "target_kind": "EMPATHY_ATTEMPT"
+      },
+      "<consent:ada@main/NEED/need:ada@main#1>": {
+        "created_at": "<ts:36>",
+        "decided_at": "<ts:24>",
+        "decision": "GRANTED",
+        "empathy_attempt_id": null,
+        "id": "<consent:ada@main/NEED/need:ada@main#1>",
+        "need_id": "<need:ada@main#1>",
+        "participant_id": "<participant:ada@main>",
+        "proposal_id": null,
+        "requested_by_participant_id": "<participant:ada@main>",
+        "review_id": null,
+        "revoked_at": null,
+        "share_offer_id": null,
+        "target_kind": "NEED"
+      },
+      "<consent:ada@main/NEED/need:ada@main#2>": {
+        "created_at": "<ts:37>",
+        "decided_at": "<ts:24>",
+        "decision": "GRANTED",
+        "empathy_attempt_id": null,
+        "id": "<consent:ada@main/NEED/need:ada@main#2>",
+        "need_id": "<need:ada@main#2>",
+        "participant_id": "<participant:ada@main>",
+        "proposal_id": null,
+        "requested_by_participant_id": "<participant:ada@main>",
+        "review_id": null,
+        "revoked_at": null,
+        "share_offer_id": null,
+        "target_kind": "NEED"
+      },
+      "<consent:bob@main/EMPATHY_ATTEMPT/empathyAttempt:bob→ada@main#1>": {
+        "created_at": "<ts:39>",
+        "decided_at": "<ts:15>",
+        "decision": "GRANTED",
+        "empathy_attempt_id": "<empathyAttempt:bob→ada@main#1>",
+        "id": "<consent:bob@main/EMPATHY_ATTEMPT/empathyAttempt:bob→ada@main#1>",
+        "need_id": null,
+        "participant_id": "<participant:bob@main>",
+        "proposal_id": null,
+        "requested_by_participant_id": "<participant:bob@main>",
+        "review_id": null,
+        "revoked_at": null,
+        "share_offer_id": null,
+        "target_kind": "EMPATHY_ATTEMPT"
+      },
+      "<consent:bob@main/NEED/need:bob@main#1>": {
+        "created_at": "<ts:40>",
+        "decided_at": "<ts:24>",
+        "decision": "GRANTED",
+        "empathy_attempt_id": null,
+        "id": "<consent:bob@main/NEED/need:bob@main#1>",
+        "need_id": "<need:bob@main#1>",
+        "participant_id": "<participant:bob@main>",
+        "proposal_id": null,
+        "requested_by_participant_id": "<participant:bob@main>",
+        "review_id": null,
+        "revoked_at": null,
+        "share_offer_id": null,
+        "target_kind": "NEED"
+      },
+      "<consent:bob@main/NEED/need:bob@main#2>": {
+        "created_at": "<ts:41>",
+        "decided_at": "<ts:24>",
+        "decision": "GRANTED",
+        "empathy_attempt_id": null,
+        "id": "<consent:bob@main/NEED/need:bob@main#2>",
+        "need_id": "<need:bob@main#2>",
+        "participant_id": "<participant:bob@main>",
+        "proposal_id": null,
+        "requested_by_participant_id": "<participant:bob@main>",
+        "review_id": null,
+        "revoked_at": null,
+        "share_offer_id": null,
+        "target_kind": "NEED"
+      }
+    },
+    "context_share_offer": {
+      "<shareOffer:bob→ada@main#1/i1>": {
+        "attempt_id": "<empathyAttempt:bob→ada@main#1>",
+        "created_at": "<ts:42>",
+        "declined_at": null,
+        "delivered_at": "<ts:17>",
+        "delivery_notified_at": null,
+        "delivery_status": "DELIVERED",
+        "id": "<shareOffer:bob→ada@main#1/i1>",
+        "iteration": 1,
+        "offer_message": null,
+        "result_id": "<reconcilerResult:bob→ada@main#1/i1>",
+        "seen_at": null,
+        "seen_notified_at": null,
+        "shared_at": "<ts:17>",
+        "shared_content": "What I need you to know is that I am exhausted too, and I stopped saying it because it never seemed to count.",
+        "status": "ACCEPTED",
+        "subject_participant_id": "<participant:ada@main>",
+        "suggested_content": "What I need you to know is that I am exhausted too, and I stopped saying it because it never seemed to count.",
+        "suggested_reason": "This helps Bob Ross understand that Ada Lovelace's frustration comes from exhaustion and feeling unseen, not anger or blame.",
+        "updated_at": "<ts:42>"
+      }
+    },
+    "conversation": {
+      "<conversation:ada@main/MAIN>": {
+        "anchor_kind": null,
+        "anchor_proposal_id": null,
+        "id": "<conversation:ada@main/MAIN>",
+        "kind": "MAIN",
+        "participant_id": "<participant:ada@main>",
+        "resolved_at": null,
+        "status": "ACTIVE"
+      },
+      "<conversation:bob@main/MAIN>": {
+        "anchor_kind": null,
+        "anchor_proposal_id": null,
+        "id": "<conversation:bob@main/MAIN>",
+        "kind": "MAIN",
+        "participant_id": "<participant:bob@main>",
+        "resolved_at": null,
+        "status": "ACTIVE"
+      }
+    },
+    "conversation_read_state": {
+      "<participant:ada@main>": {
+        "archived_at": null,
+        "last_active_at": null,
+        "last_seen_message_id": null,
+        "last_viewed_at": null,
+        "last_viewed_share_tab_at": null,
+        "participant_id": "<participant:ada@main>",
+        "updated_at": "<ts:31>"
+      },
+      "<participant:bob@main>": {
+        "archived_at": null,
+        "last_active_at": null,
+        "last_seen_message_id": null,
+        "last_viewed_at": null,
+        "last_viewed_share_tab_at": null,
+        "participant_id": "<participant:bob@main>",
+        "updated_at": "<ts:32>"
+      }
+    },
+    "draft": {
+      "<draft:ada@main/EMPATHY>": {
+        "about_participant_id": "<participant:bob@main>",
+        "attempt_id": null,
+        "content": "I think you come home hollowed out and the chores feel like a verdict on you.",
+        "created_at": "<ts:34>",
+        "id": "<draft:ada@main/EMPATHY>",
+        "kind": "EMPATHY",
+        "participant_id": "<participant:ada@main>",
+        "ready_to_share": true,
+        "share_offer_id": null,
+        "updated_at": "<ts:34>",
+        "version": 1
+      },
+      "<draft:bob@main/EMPATHY>": {
+        "about_participant_id": "<participant:ada@main>",
+        "attempt_id": null,
+        "content": "I think you feel invisible when you are the only one tracking the house.",
+        "created_at": "<ts:38>",
+        "id": "<draft:bob@main/EMPATHY>",
+        "kind": "EMPATHY",
+        "participant_id": "<participant:bob@main>",
+        "ready_to_share": true,
+        "share_offer_id": null,
+        "updated_at": "<ts:38>",
+        "version": 1
+      }
+    },
+    "empathy_attempt": {
+      "<empathyAttempt:ada→bob@main#1>": {
+        "author_participant_id": "<participant:ada@main>",
+        "content": "I think you come home hollowed out and the chores feel like a verdict on you.",
+        "delivered_at": "<ts:18>",
+        "delivery_status": "DELIVERED",
+        "id": "<empathyAttempt:ada→bob@main#1>",
+        "revealed_at": "<ts:18>",
+        "round": 1,
+        "seen_at": null,
+        "status": "VALIDATED",
+        "status_version": 0,
+        "subject_participant_id": "<participant:bob@main>",
+        "submitted_at": "<ts:14>",
+        "supersedes_attempt_id": null
+      },
+      "<empathyAttempt:bob→ada@main#1>": {
+        "author_participant_id": "<participant:bob@main>",
+        "content": "I think you feel invisible when you are the only one tracking the house.",
+        "delivered_at": "<ts:18>",
+        "delivery_status": "DELIVERED",
+        "id": "<empathyAttempt:bob→ada@main#1>",
+        "revealed_at": "<ts:18>",
+        "round": 1,
+        "seen_at": null,
+        "status": "VALIDATED",
+        "status_version": 0,
+        "subject_participant_id": "<participant:ada@main>",
+        "submitted_at": "<ts:15>",
+        "supersedes_attempt_id": null
+      }
+    },
+    "empathy_review": {},
+    "invitation": {
+      "<invitation:main>": {
+        "accepted_at": "<ts:30>",
+        "accepted_by_user_id": "<user:bob>",
+        "created_at": "<ts:30>",
+        "decline_reason": null,
+        "declined_at": null,
+        "expires_at": "<ts:46>",
+        "id": "<invitation:main>",
+        "invited_by_participant_id": "<participant:ada@main>",
+        "message_confirmed_at": "<ts:30>",
+        "name": "Bob Ross",
+        "session_id": "<session:main>",
+        "status": "ACCEPTED"
+      }
+    },
+    "message": {
+      "<message:ada@main#1>": {
+        "content": "I am tired of being the only one who notices the laundry.",
+        "content_hash": "b3983b000e9519c29709607db273577290391bf3bf92a3282e45cd1ace72e7a2",
+        "conversation_id": "<conversation:ada@main/MAIN>",
+        "created_at": "<ts:2>",
+        "id": "<message:ada@main#1>",
+        "kind": "CHAT",
+        "refining_need_id": null,
+        "role": "USER",
+        "sender_participant_id": "<participant:ada@main>",
+        "source_attempt_id": null
+      },
+      "<message:ada@main#2>": {
+        "content": "That sounds lonely. What do you wish your partner noticed?",
+        "content_hash": "159074762f9bf32ff22de3d3395473b63298e270823a35b1e3c481d32d0375a0",
+        "conversation_id": "<conversation:ada@main/MAIN>",
+        "created_at": "<ts:4>",
+        "id": "<message:ada@main#2>",
+        "kind": "CHAT",
+        "refining_need_id": null,
+        "role": "AI",
+        "sender_participant_id": null,
+        "source_attempt_id": null
+      },
+      "<message:ada@main#3>": {
+        "content": "That I am exhausted too, and I never get to say so.",
+        "content_hash": "c8f2d15fc584905878dea05e399dc2a92ed255cad8c95e3ea9473fca1ee6dd2b",
+        "conversation_id": "<conversation:ada@main/MAIN>",
+        "created_at": "<ts:6>",
+        "id": "<message:ada@main#3>",
+        "kind": "CHAT",
+        "refining_need_id": null,
+        "role": "USER",
+        "sender_participant_id": "<participant:ada@main>",
+        "source_attempt_id": null
+      },
+      "<message:ada@main/EMPATHY_STATEMENT:ada#1>": {
+        "content": "I think you come home hollowed out and the chores feel like a verdict on you.",
+        "content_hash": "dc6d7be679a196396f68ba066f63d0919a043151e5c1408f18d57f4c168acb19",
+        "conversation_id": "<conversation:ada@main/MAIN>",
+        "created_at": "<ts:14>",
+        "id": "<message:ada@main/EMPATHY_STATEMENT:ada#1>",
+        "kind": "EMPATHY_STATEMENT",
+        "refining_need_id": null,
+        "role": "USER",
+        "sender_participant_id": "<participant:ada@main>",
+        "source_attempt_id": "<empathyAttempt:ada→bob@main#1>"
+      },
+      "<message:ada@main/EMPATHY_VALIDATION_PROMPT:bob#1>": {
+        "content": "VALIDATED",
+        "content_hash": "3dac322c8372666cf11fabc5ab2f7a003b1c5f2b30c7bd20bb4069a1d40b850f",
+        "conversation_id": "<conversation:ada@main/MAIN>",
+        "created_at": "<ts:20>",
+        "id": "<message:ada@main/EMPATHY_VALIDATION_PROMPT:bob#1>",
+        "kind": "EMPATHY_VALIDATION_PROMPT",
+        "refining_need_id": null,
+        "role": "USER",
+        "sender_participant_id": "<participant:bob@main>",
+        "source_attempt_id": null
+      },
+      "<message:ada@main/SHARED_CONTEXT:ada#1>": {
+        "content": "What I need you to know is that I am exhausted too, and I stopped saying it because it never seemed to count.",
+        "content_hash": "adaaca35e1b0d2245cf3974d8a36eb2df4262fed2e11f76c73b3ea9bf55a3f2a",
+        "conversation_id": "<conversation:ada@main/MAIN>",
+        "created_at": "<ts:17>",
+        "id": "<message:ada@main/SHARED_CONTEXT:ada#1>",
+        "kind": "SHARED_CONTEXT",
+        "refining_need_id": null,
+        "role": "USER",
+        "sender_participant_id": "<participant:ada@main>",
+        "source_attempt_id": null
+      },
+      "<message:bob@main#1>": {
+        "content": "Work has been brutal and I come home with nothing left.",
+        "content_hash": "a929a52d6f4086df81181fcb613b35d2ac11d8dfe46556ad6b3f120828752e9e",
+        "conversation_id": "<conversation:bob@main/MAIN>",
+        "created_at": "<ts:3>",
+        "id": "<message:bob@main#1>",
+        "kind": "CHAT",
+        "refining_need_id": null,
+        "role": "USER",
+        "sender_participant_id": "<participant:bob@main>",
+        "source_attempt_id": null
+      },
+      "<message:bob@main#2>": {
+        "content": "Coming home empty sounds hard. What happens next?",
+        "content_hash": "eb4b8844adfb7c2ea532f7edf3fe01f16afa2d467f86698b39cd18a7759fbe90",
+        "conversation_id": "<conversation:bob@main/MAIN>",
+        "created_at": "<ts:5>",
+        "id": "<message:bob@main#2>",
+        "kind": "CHAT",
+        "refining_need_id": null,
+        "role": "AI",
+        "sender_participant_id": null,
+        "source_attempt_id": null
+      },
+      "<message:bob@main/EMPATHY_STATEMENT:bob#1>": {
+        "content": "I think you feel invisible when you are the only one tracking the house.",
+        "content_hash": "68242c41a5a603ae9c68d847d97d45bd84d2b3851d6f4f6efbc86fff657f16e5",
+        "conversation_id": "<conversation:bob@main/MAIN>",
+        "created_at": "<ts:15>",
+        "id": "<message:bob@main/EMPATHY_STATEMENT:bob#1>",
+        "kind": "EMPATHY_STATEMENT",
+        "refining_need_id": null,
+        "role": "USER",
+        "sender_participant_id": "<participant:bob@main>",
+        "source_attempt_id": "<empathyAttempt:bob→ada@main#1>"
+      },
+      "<message:bob@main/EMPATHY_VALIDATION_PROMPT:ada#1>": {
+        "content": "VALIDATED",
+        "content_hash": "3dac322c8372666cf11fabc5ab2f7a003b1c5f2b30c7bd20bb4069a1d40b850f",
+        "conversation_id": "<conversation:bob@main/MAIN>",
+        "created_at": "<ts:19>",
+        "id": "<message:bob@main/EMPATHY_VALIDATION_PROMPT:ada#1>",
+        "kind": "EMPATHY_VALIDATION_PROMPT",
+        "refining_need_id": null,
+        "role": "USER",
+        "sender_participant_id": "<participant:ada@main>",
+        "source_attempt_id": null
+      },
+      "<message:bob@main/SHARED_CONTEXT:ada#1>": {
+        "content": "What I need you to know is that I am exhausted too, and I stopped saying it because it never seemed to count.",
+        "content_hash": "adaaca35e1b0d2245cf3974d8a36eb2df4262fed2e11f76c73b3ea9bf55a3f2a",
+        "conversation_id": "<conversation:bob@main/MAIN>",
+        "created_at": "<ts:17>",
+        "id": "<message:bob@main/SHARED_CONTEXT:ada#1>",
+        "kind": "SHARED_CONTEXT",
+        "refining_need_id": null,
+        "role": "USER",
+        "sender_participant_id": "<participant:ada@main>",
+        "source_attempt_id": null
+      }
+    },
+    "need": {
+      "<need:ada@main#1>": {
+        "ai_confidence": 0.95,
+        "category": "RECOGNITION",
+        "confirmed": true,
+        "created_at": "<ts:22>",
+        "deleted_at": null,
+        "evidence": [],
+        "id": "<need:ada@main#1>",
+        "label": "Appreciation",
+        "locked_at": null,
+        "participant_id": "<participant:ada@main>",
+        "superseded_by_need_id": null
+      },
+      "<need:ada@main#2>": {
+        "ai_confidence": 0.95,
+        "category": "FAIRNESS",
+        "confirmed": true,
+        "created_at": "<ts:22>",
+        "deleted_at": null,
+        "evidence": [],
+        "id": "<need:ada@main#2>",
+        "label": "Partnership",
+        "locked_at": null,
+        "participant_id": "<participant:ada@main>",
+        "superseded_by_need_id": null
+      },
+      "<need:bob@main#1>": {
+        "ai_confidence": 0.95,
+        "category": "CONNECTION",
+        "confirmed": true,
+        "created_at": "<ts:22>",
+        "deleted_at": null,
+        "evidence": [],
+        "id": "<need:bob@main#1>",
+        "label": "Understanding",
+        "locked_at": null,
+        "participant_id": "<participant:bob@main>",
+        "superseded_by_need_id": null
+      },
+      "<need:bob@main#2>": {
+        "ai_confidence": 0.95,
+        "category": "CONNECTION",
+        "confirmed": true,
+        "created_at": "<ts:22>",
+        "deleted_at": null,
+        "evidence": [],
+        "id": "<need:bob@main#2>",
+        "label": "Support",
+        "locked_at": null,
+        "participant_id": "<participant:bob@main>",
+        "superseded_by_need_id": null
+      }
+    },
+    "need_disposition": {},
+    "need_share": {},
+    "participant": {
+      "<participant:ada@main>": {
+        "display_name": "Ada Lovelace",
+        "id": "<participant:ada@main>",
+        "joined_at": "<ts:28>",
+        "kind": "human",
+        "left_at": null,
+        "session_id": "<session:main>",
+        "user_id": "<user:ada>"
+      },
+      "<participant:bob@main>": {
+        "display_name": "Bob Ross",
+        "id": "<participant:bob@main>",
+        "joined_at": "<ts:28>",
+        "kind": "human",
+        "left_at": null,
+        "session_id": "<session:main>",
+        "user_id": "<user:bob>"
+      }
+    },
+    "participant_milestone": {
+      "<milestone:ada@main/choices_shared>": {
+        "milestone_key": "choices_shared",
+        "participant_id": "<participant:ada@main>",
+        "reached_at": "<ts:33>"
+      },
+      "<milestone:ada@main/compact_signed>": {
+        "milestone_key": "compact_signed",
+        "participant_id": "<participant:ada@main>",
+        "reached_at": "<ts:12>"
+      },
+      "<milestone:ada@main/empathy_validated>": {
+        "milestone_key": "empathy_validated",
+        "participant_id": "<participant:ada@main>",
+        "reached_at": "<ts:21>"
+      },
+      "<milestone:ada@main/feel_heard>": {
+        "milestone_key": "feel_heard",
+        "participant_id": "<participant:ada@main>",
+        "reached_at": "<ts:13>"
+      },
+      "<milestone:ada@main/invitation_sent>": {
+        "milestone_key": "invitation_sent",
+        "participant_id": "<participant:ada@main>",
+        "reached_at": "<ts:1>"
+      },
+      "<milestone:ada@main/needs_confirmed>": {
+        "milestone_key": "needs_confirmed",
+        "participant_id": "<participant:ada@main>",
+        "reached_at": "<ts:22>"
+      },
+      "<milestone:ada@main/needs_shared>": {
+        "milestone_key": "needs_shared",
+        "participant_id": "<participant:ada@main>",
+        "reached_at": "<ts:24>"
+      },
+      "<milestone:ada@main/needs_validated>": {
+        "milestone_key": "needs_validated",
+        "participant_id": "<participant:ada@main>",
+        "reached_at": "<ts:23>"
+      },
+      "<milestone:bob@main/choices_shared>": {
+        "milestone_key": "choices_shared",
+        "participant_id": "<participant:bob@main>",
+        "reached_at": "<ts:33>"
+      },
+      "<milestone:bob@main/compact_signed>": {
+        "milestone_key": "compact_signed",
+        "participant_id": "<participant:bob@main>",
+        "reached_at": "<ts:12>"
+      },
+      "<milestone:bob@main/empathy_validated>": {
+        "milestone_key": "empathy_validated",
+        "participant_id": "<participant:bob@main>",
+        "reached_at": "<ts:21>"
+      },
+      "<milestone:bob@main/feel_heard>": {
+        "milestone_key": "feel_heard",
+        "participant_id": "<participant:bob@main>",
+        "reached_at": "<ts:13>"
+      },
+      "<milestone:bob@main/needs_confirmed>": {
+        "milestone_key": "needs_confirmed",
+        "participant_id": "<participant:bob@main>",
+        "reached_at": "<ts:22>"
+      },
+      "<milestone:bob@main/needs_shared>": {
+        "milestone_key": "needs_shared",
+        "participant_id": "<participant:bob@main>",
+        "reached_at": "<ts:24>"
+      },
+      "<milestone:bob@main/needs_validated>": {
+        "milestone_key": "needs_validated",
+        "participant_id": "<participant:bob@main>",
+        "reached_at": "<ts:23>"
+      }
+    },
+    "proposal": {
+      "<proposal:main#1>": {
+        "created_at": "<ts:25>",
+        "created_by_participant_id": "<participant:ada@main>",
+        "description": "Weekly check-in on Sundays to discuss upcoming week and divide tasks",
+        "duration": "ongoing",
+        "id": "<proposal:main#1>",
+        "kind": "SHARED_PROPOSAL",
+        "measure_of_success": null,
+        "removal_reason": null,
+        "removed_at": null,
+        "removed_by_participant_id": null,
+        "session_id": "<session:main>",
+        "shared_at": null,
+        "source": "USER_SUBMITTED",
+        "status": "ACTIVE",
+        "unresolved_need_labels": [
+          "Appreciation",
+          "Partnership"
+        ],
+        "updated_at": "<ts:43>"
+      },
+      "<proposal:main#2>": {
+        "created_at": "<ts:25>",
+        "created_by_participant_id": "<participant:bob@main>",
+        "description": "Express appreciation for at least one thing your partner did each day",
+        "duration": "ongoing",
+        "id": "<proposal:main#2>",
+        "kind": "SHARED_PROPOSAL",
+        "measure_of_success": null,
+        "removal_reason": null,
+        "removed_at": null,
+        "removed_by_participant_id": null,
+        "session_id": "<session:main>",
+        "shared_at": null,
+        "source": "USER_SUBMITTED",
+        "status": "ACTIVE",
+        "unresolved_need_labels": [
+          "Recognition"
+        ],
+        "updated_at": "<ts:44>"
+      }
+    },
+    "proposal_choice": {},
+    "proposal_need": {},
+    "reconciler_guidance": {},
+    "reconciler_result": {
+      "<reconcilerResult:bob→ada@main#1/i1>": {
+        "alignment_score": 45,
+        "alignment_summary": "Bob Ross's empathy attempt captures some elements but misses key aspects of Ada Lovelace's experience.",
+        "attempt_id": "<empathyAttempt:bob→ada@main#1>",
+        "circuit_breaker_tripped": false,
+        "correctly_identified": [
+          "stress",
+          "work pressure"
+        ],
+        "created_at": "<ts:16>",
+        "gap_severity": "SIGNIFICANT",
+        "gap_summary": "Bob Ross hasn't fully grasped the depth of Ada Lovelace's exhaustion and feeling unseen.",
+        "id": "<reconcilerResult:bob→ada@main#1/i1>",
+        "iteration": 1,
+        "misattributions": [],
+        "missed_feelings": [
+          "exhaustion",
+          "feeling unseen",
+          "overwhelm"
+        ],
+        "most_important_gap": "Ada Lovelace feels exhausted and unseen, not just stressed.",
+        "rationale": "Sharing specific context would help Bob Ross understand Ada Lovelace's perspective better.",
+        "recommended_action": "OFFER_SHARING",
+        "sharing_would_help": true,
+        "subject_participant_id": "<participant:ada@main>",
+        "suggested_share_content": "I feel like I'm running on empty - exhausted from work every day, and then coming home to more tasks. What I really need is for someone to see how hard I'm trying, even when I don't have anything left to give.",
+        "suggested_share_focus": "The exhaustion from work and feeling unseen.",
+        "suggested_share_reason": "This helps Bob Ross understand that Ada Lovelace's frustration comes from exhaustion and feeling unseen, not anger or blame.",
+        "superseded_at": null
+      }
+    },
+    "reflection": {
+      "<reflection:ada#1>": {
+        "context_snapshot": null,
+        "created_at": "<ts:6>",
+        "distilled_at": null,
+        "id": "<reflection:ada#1>",
+        "linked_at": "<ts:45>",
+        "linked_session_id": "<session:main>",
+        "status": "ACTIVE",
+        "summary": "Ada traced her scorekeeping about chores to watching her mother never rest, and is afraid of repeating it.",
+        "summary_doc": null,
+        "theme": "inherited resentment about rest",
+        "title": "Keeping score like my mother did",
+        "updated_at": "<ts:45>",
+        "user_id": "<user:ada>"
+      }
+    },
+    "reflection_message": {
+      "<reflectionMessage:ada#1#1>": {
+        "content": "I keep a silent tally of every dish because my mother never sat down once in thirty years.",
+        "created_at": "<ts:7>",
+        "id": "<reflectionMessage:ada#1#1>",
+        "reflection_id": "<reflection:ada#1>",
+        "role": "USER"
+      },
+      "<reflectionMessage:ada#1#2>": {
+        "content": "It sounds like the tally protects you from becoming her, and it also keeps you braced for unfairness.",
+        "created_at": "<ts:8>",
+        "id": "<reflectionMessage:ada#1#2>",
+        "reflection_id": "<reflection:ada#1>",
+        "role": "AI"
+      }
+    },
+    "session": {
+      "<session:main>": {
+        "created_at": "<ts:29>",
+        "id": "<session:main>",
+        "previous_session_id": null,
+        "relationship_id": "<relationship:main>",
+        "resolved_at": null,
+        "status": "ACTIVE",
+        "topic_frame": null,
+        "topic_frame_confirmed_at": null,
+        "updated_at": "<ts:29>"
+      }
+    },
+    "session_closure": {},
+    "takeaway": {},
+    "takeaway_link": {},
+    "user": {
+      "<user:ada>": {
+        "clerk_id": "<clerkId:ada>",
+        "created_at": "<ts:26>",
+        "deleted_at": null,
+        "email": "ada@e2e.test",
+        "first_name": null,
+        "id": "<user:ada>",
+        "last_name": null,
+        "name": "Ada Lovelace",
+        "updated_at": "<ts:26>"
+      },
+      "<user:bob>": {
+        "clerk_id": "<clerkId:bob>",
+        "created_at": "<ts:27>",
+        "deleted_at": null,
+        "email": "bob@e2e.test",
+        "first_name": null,
+        "id": "<user:bob>",
+        "last_name": null,
+        "name": "Bob Ross",
+        "updated_at": "<ts:27>"
+      }
+    }
+  },
+  "steps": [
+    {
+      "label": "before deletion: session as bob@e2e.test",
+      "status": 200,
+      "body": {
+        "data": {
+          "session": {
+            "createdAt": "<ts:2>",
+            "currentStage": 4,
+            "id": "<session:main>",
+            "myProgress": {
+              "stage": 4,
+              "status": "COMPLETED"
+            },
+            "partner": {
+              "id": "<user:ada>",
+              "name": "Ada Lovelace",
+              "nickname": "Ada Lovelace"
+            },
+            "relationshipId": "<relationship:main>",
+            "resolvedAt": null,
+            "stageStatus": "COMPLETED",
+            "status": "ACTIVE"
+          }
+        },
+        "success": true
+      },
+      "changes": [
+        {
+          "view": "user",
+          "kind": "changed",
+          "key": "<user:bob>",
+          "changedFields": [
+            "clerk_id",
+            "updated_at"
+          ],
+          "before": {
+            "clerk_id": "<clerkId:bob>",
+            "created_at": "<ts:1>",
+            "deleted_at": null,
+            "email": "bob@e2e.test",
+            "first_name": null,
+            "id": "<user:bob>",
+            "last_name": null,
+            "name": "Bob Ross",
+            "updated_at": "<ts:1>"
+          },
+          "after": {
+            "clerk_id": "e2e_<user:bob>",
+            "created_at": "<ts:1>",
+            "deleted_at": null,
+            "email": "bob@e2e.test",
+            "first_name": null,
+            "id": "<user:bob>",
+            "last_name": null,
+            "name": "Bob Ross",
+            "updated_at": "<ts:fresh>"
+          }
+        }
+      ]
+    },
+    {
+      "label": "before deletion: state as bob@e2e.test",
+      "status": 200,
+      "body": {
+        "data": {
+          "compact": {
+            "canAdvance": true,
+            "isFirstSession": true,
+            "mySigned": true,
+            "mySignedAt": null,
+            "partnerSigned": true,
+            "partnerSignedAt": null
+          },
+          "invitation": {
+            "acceptedAt": "<ts:11>",
+            "createdAt": "<ts:11>",
+            "expiresAt": "<ts:13>",
+            "id": "<invitation:main>",
+            "invitedBy": {
+              "id": "<user:ada>",
+              "name": null
+            },
+            "isInviter": false,
+            "messageConfirmed": true,
+            "messageConfirmedAt": "<ts:11>",
+            "sessionId": "<session:main>",
+            "status": "ACCEPTED",
+            "topicFrame": null,
+            "topicFrameConfirmedAt": null
+          },
+          "messages": {
+            "hasMore": false,
+            "messages": [
+              {
+                "content": "Work has been brutal and I come home with nothing left.",
+                "id": "<message:bob@main#1>",
+                "role": "USER",
+                "senderId": "<user:bob>",
+                "sessionId": "<session:main>",
+                "stage": 1,
+                "timestamp": "<ts:1>"
+              },
+              {
+                "content": "Coming home empty sounds hard. What happens next?",
+                "id": "<message:bob@main#2>",
+                "role": "AI",
+                "senderId": null,
+                "sessionId": "<session:main>",
+                "stage": 1,
+                "timestamp": "<ts:2>"
+              },
+              {
+                "content": "I think you feel invisible when you are the only one tracking the house.",
+                "id": "<message:bob@main/EMPATHY_STATEMENT:bob#1>",
+                "role": "EMPATHY_STATEMENT",
+                "senderId": "<user:bob>",
+                "sessionId": "<session:main>",
+                "stage": 2,
+                "timestamp": "<ts:5>"
+              },
+              {
+                "content": "What I need you to know is that I am exhausted too, and I stopped saying it because it never seemed to count.",
+                "id": "<message:bob@main/SHARED_CONTEXT:ada#1>",
+                "role": "SHARED_CONTEXT",
+                "senderId": "<user:ada>",
+                "sessionId": "<session:main>",
+                "stage": 2,
+                "timestamp": "<ts:6>"
+              },
+              {
+                "content": "VALIDATED",
+                "id": "<message:bob@main/EMPATHY_VALIDATION_PROMPT:ada#1>",
+                "role": "EMPATHY_VALIDATION_PROMPT",
+                "senderId": "<user:ada>",
+                "sessionId": "<session:main>",
+                "stage": 2,
+                "timestamp": "<ts:7>"
+              }
+            ]
+          },
+          "progress": {
+            "canAdvance": true,
+            "milestones": {
+              "feelHeardConfirmedAt": "<ts:4>",
+              "witnessStartedAt": "<ts:3>"
+            },
+            "myProgress": {
+              "completedAt": "<ts:12>",
+              "gatesSatisfied": {
+                "agreementConfirmed": true,
+                "agreementCreated": true,
+                "strategiesRanked": true
+              },
+              "stage": 4,
+              "startedAt": "<ts:8>",
+              "status": "COMPLETED"
+            },
+            "partnerProgress": {
+              "completedAt": "<ts:12>",
+              "stage": 4,
+              "startedAt": "<ts:8>",
+              "status": "COMPLETED"
+            },
+            "sessionId": "<session:main>"
+          },
+          "session": {
+            "createdAt": "<ts:10>",
+            "currentStage": 4,
+            "id": "<session:main>",
+            "lastSeenChatItemId": null,
+            "lastViewedAt": null,
+            "myProgress": {
+              "stage": 4,
+              "status": "COMPLETED"
+            },
+            "partner": {
+              "id": "<user:ada>",
+              "name": "Ada Lovelace",
+              "nickname": "Ada Lovelace"
+            },
+            "partnerLastActiveAt": "<ts:12>",
+            "partnerLastViewedAt": null,
+            "relationshipId": "<relationship:main>",
+            "resolvedAt": null,
+            "sourceInnerThoughts": null,
+            "stageStatus": "COMPLETED",
+            "status": "ACTIVE"
+          }
+        },
+        "success": true
+      },
+      "changes": [
+        {
+          "view": "user",
+          "kind": "changed",
+          "key": "<user:bob>",
+          "changedFields": [
+            "updated_at"
+          ],
+          "before": {
+            "clerk_id": "e2e_<user:bob>",
+            "created_at": "<ts:9>",
+            "deleted_at": null,
+            "email": "bob@e2e.test",
+            "first_name": null,
+            "id": "<user:bob>",
+            "last_name": null,
+            "name": "Bob Ross",
+            "updated_at": "<ts:fresh>"
+          },
+          "after": {
+            "clerk_id": "e2e_<user:bob>",
+            "created_at": "<ts:9>",
+            "deleted_at": null,
+            "email": "bob@e2e.test",
+            "first_name": null,
+            "id": "<user:bob>",
+            "last_name": null,
+            "name": "Bob Ross",
+            "updated_at": "<ts:fresh>"
+          }
+        }
+      ]
+    },
+    {
+      "label": "before deletion: progress as bob@e2e.test",
+      "status": 200,
+      "body": {
+        "data": {
+          "milestones": {
+            "commonGroundFoundAt": null,
+            "feelHeardConfirmedAt": "<ts:2>",
+            "needsIdentifiedAt": "<ts:3>",
+            "witnessStartedAt": "<ts:1>"
+          },
+          "myProgress": {
+            "completedAt": "<ts:6>",
+            "gatesSatisfied": {
+              "agreementConfirmed": true,
+              "agreementCreated": true,
+              "strategiesRanked": true
+            },
+            "stage": 4,
+            "startedAt": "<ts:4>",
+            "status": "COMPLETED"
+          },
+          "partnerProgress": {
+            "completedAt": "<ts:6>",
+            "gatesSatisfied": {
+              "agreementConfirmed": true,
+              "agreementCreated": true,
+              "strategiesRanked": true
+            },
+            "stage": 4,
+            "startedAt": "<ts:4>",
+            "status": "COMPLETED"
+          },
+          "sessionStatus": "ACTIVE"
+        },
+        "success": true
+      },
+      "changes": [
+        {
+          "view": "user",
+          "kind": "changed",
+          "key": "<user:bob>",
+          "changedFields": [
+            "updated_at"
+          ],
+          "before": {
+            "clerk_id": "e2e_<user:bob>",
+            "created_at": "<ts:5>",
+            "deleted_at": null,
+            "email": "bob@e2e.test",
+            "first_name": null,
+            "id": "<user:bob>",
+            "last_name": null,
+            "name": "Bob Ross",
+            "updated_at": "<ts:fresh>"
+          },
+          "after": {
+            "clerk_id": "e2e_<user:bob>",
+            "created_at": "<ts:5>",
+            "deleted_at": null,
+            "email": "bob@e2e.test",
+            "first_name": null,
+            "id": "<user:bob>",
+            "last_name": null,
+            "name": "Bob Ross",
+            "updated_at": "<ts:fresh>"
+          }
+        }
+      ]
+    },
+    {
+      "label": "before deletion: messages as bob@e2e.test",
+      "status": 200,
+      "body": {
+        "data": {
+          "hasMore": false,
+          "messages": [
+            {
+              "content": "Work has been brutal and I come home with nothing left.",
+              "id": "<message:bob@main#1>",
+              "refiningNeedId": null,
+              "role": "USER",
+              "senderId": "<user:bob>",
+              "sessionId": "<session:main>",
+              "stage": 1,
+              "timestamp": "<ts:1>"
+            },
+            {
+              "content": "Coming home empty sounds hard. What happens next?",
+              "id": "<message:bob@main#2>",
+              "refiningNeedId": null,
+              "role": "AI",
+              "senderId": null,
+              "sessionId": "<session:main>",
+              "stage": 1,
+              "timestamp": "<ts:2>"
+            },
+            {
+              "content": "I think you feel invisible when you are the only one tracking the house.",
+              "id": "<message:bob@main/EMPATHY_STATEMENT:bob#1>",
+              "refiningNeedId": null,
+              "role": "EMPATHY_STATEMENT",
+              "senderId": "<user:bob>",
+              "sessionId": "<session:main>",
+              "stage": 2,
+              "timestamp": "<ts:3>"
+            },
+            {
+              "content": "What I need you to know is that I am exhausted too, and I stopped saying it because it never seemed to count.",
+              "id": "<message:bob@main/SHARED_CONTEXT:ada#1>",
+              "refiningNeedId": null,
+              "role": "SHARED_CONTEXT",
+              "senderId": "<user:ada>",
+              "sessionId": "<session:main>",
+              "stage": 2,
+              "timestamp": "<ts:4>"
+            },
+            {
+              "content": "VALIDATED",
+              "id": "<message:bob@main/EMPATHY_VALIDATION_PROMPT:ada#1>",
+              "refiningNeedId": null,
+              "role": "EMPATHY_VALIDATION_PROMPT",
+              "senderId": "<user:ada>",
+              "sessionId": "<session:main>",
+              "stage": 2,
+              "timestamp": "<ts:5>"
+            }
+          ]
+        },
+        "success": true
+      },
+      "changes": [
+        {
+          "view": "user",
+          "kind": "changed",
+          "key": "<user:bob>",
+          "changedFields": [
+            "updated_at"
+          ],
+          "before": {
+            "clerk_id": "e2e_<user:bob>",
+            "created_at": "<ts:6>",
+            "deleted_at": null,
+            "email": "bob@e2e.test",
+            "first_name": null,
+            "id": "<user:bob>",
+            "last_name": null,
+            "name": "Bob Ross",
+            "updated_at": "<ts:fresh>"
+          },
+          "after": {
+            "clerk_id": "e2e_<user:bob>",
+            "created_at": "<ts:6>",
+            "deleted_at": null,
+            "email": "bob@e2e.test",
+            "first_name": null,
+            "id": "<user:bob>",
+            "last_name": null,
+            "name": "Bob Ross",
+            "updated_at": "<ts:fresh>"
+          }
+        }
+      ]
+    },
+    {
+      "label": "before deletion: emotions as bob@e2e.test",
+      "status": 200,
+      "body": {
+        "data": {
+          "readings": []
+        },
+        "success": true
+      },
+      "changes": [
+        {
+          "view": "user",
+          "kind": "changed",
+          "key": "<user:bob>",
+          "changedFields": [
+            "updated_at"
+          ],
+          "before": {
+            "clerk_id": "e2e_<user:bob>",
+            "created_at": "<ts:1>",
+            "deleted_at": null,
+            "email": "bob@e2e.test",
+            "first_name": null,
+            "id": "<user:bob>",
+            "last_name": null,
+            "name": "Bob Ross",
+            "updated_at": "<ts:fresh>"
+          },
+          "after": {
+            "clerk_id": "e2e_<user:bob>",
+            "created_at": "<ts:1>",
+            "deleted_at": null,
+            "email": "bob@e2e.test",
+            "first_name": null,
+            "id": "<user:bob>",
+            "last_name": null,
+            "name": "Bob Ross",
+            "updated_at": "<ts:fresh>"
+          }
+        }
+      ]
+    },
+    {
+      "label": "before deletion: pending actions as bob@e2e.test",
+      "status": 200,
+      "body": {
+        "data": {
+          "actions": [
+            {
+              "data": {
+                "content": "What I need you to know is that I am exhausted too, and I stopped saying it because it never seemed to count.",
+                "senderId": "<user:ada>",
+                "timestamp": "<ts:1>"
+              },
+              "id": "<message:bob@main/SHARED_CONTEXT:ada#1>",
+              "type": "context_received"
+            }
+          ],
+          "sentTabUpdates": 0
+        },
+        "success": true
+      },
+      "changes": [
+        {
+          "view": "user",
+          "kind": "changed",
+          "key": "<user:bob>",
+          "changedFields": [
+            "updated_at"
+          ],
+          "before": {
+            "clerk_id": "e2e_<user:bob>",
+            "created_at": "<ts:2>",
+            "deleted_at": null,
+            "email": "bob@e2e.test",
+            "first_name": null,
+            "id": "<user:bob>",
+            "last_name": null,
+            "name": "Bob Ross",
+            "updated_at": "<ts:fresh>"
+          },
+          "after": {
+            "clerk_id": "e2e_<user:bob>",
+            "created_at": "<ts:2>",
+            "deleted_at": null,
+            "email": "bob@e2e.test",
+            "first_name": null,
+            "id": "<user:bob>",
+            "last_name": null,
+            "name": "Bob Ross",
+            "updated_at": "<ts:fresh>"
+          }
+        }
+      ]
+    },
+    {
+      "label": "before deletion: compact status as bob@e2e.test",
+      "status": 200,
+      "body": {
+        "data": {
+          "canAdvance": true,
+          "isFirstSession": true,
+          "mySigned": true,
+          "mySignedAt": null,
+          "partnerSigned": true,
+          "partnerSignedAt": null
+        },
+        "success": true
+      },
+      "changes": [
+        {
+          "view": "user",
+          "kind": "changed",
+          "key": "<user:bob>",
+          "changedFields": [
+            "updated_at"
+          ],
+          "before": {
+            "clerk_id": "e2e_<user:bob>",
+            "created_at": "<ts:1>",
+            "deleted_at": null,
+            "email": "bob@e2e.test",
+            "first_name": null,
+            "id": "<user:bob>",
+            "last_name": null,
+            "name": "Bob Ross",
+            "updated_at": "<ts:fresh>"
+          },
+          "after": {
+            "clerk_id": "e2e_<user:bob>",
+            "created_at": "<ts:1>",
+            "deleted_at": null,
+            "email": "bob@e2e.test",
+            "first_name": null,
+            "id": "<user:bob>",
+            "last_name": null,
+            "name": "Bob Ross",
+            "updated_at": "<ts:fresh>"
+          }
+        }
+      ]
+    },
+    {
+      "label": "before deletion: empathy status as bob@e2e.test",
+      "status": 200,
+      "body": {
+        "data": {
+          "analyzing": false,
+          "awaitingSharing": false,
+          "hasNewSharedContext": false,
+          "hasUnviewedSharedContext": false,
+          "messageCountSinceSharedContext": 0,
+          "myAttempt": {
+            "consentRecordId": "",
+            "content": "I think you feel invisible when you are the only one tracking the house.",
+            "deliveryStatus": "seen",
+            "id": "<empathyAttempt:bob→ada@main#1>",
+            "revealedAt": "<ts:5>",
+            "revisionCount": 0,
+            "sharedAt": "<ts:2>",
+            "sourceUserId": "<user:bob>",
+            "status": "VALIDATED",
+            "validatedAt": null
+          },
+          "myReconcilerResult": {
+            "action": "OFFER_SHARING",
+            "analyzedAt": "<ts:3>",
+            "gapSeverity": "significant",
+            "gapSummary": "Bob Ross hasn't fully grasped the depth of Ada Lovelace's exhaustion and feeling unseen."
+          },
+          "mySharedAt": null,
+          "mySharedContext": null,
+          "partnerAttempt": {
+            "consentRecordId": "",
+            "content": "I think you come home hollowed out and the chores feel like a verdict on you.",
+            "id": "<empathyAttempt:ada→bob@main#1>",
+            "revealedAt": "<ts:5>",
+            "revisionCount": 0,
+            "sharedAt": "<ts:1>",
+            "sourceUserId": "<user:ada>",
+            "status": "VALIDATED",
+            "validatedAt": null
+          },
+          "partnerCompletedStage1": true,
+          "partnerEmpathyHeldStatus": "VALIDATED",
+          "partnerEmpathySubmittedAt": "<ts:1>",
+          "partnerHasSubmittedEmpathy": true,
+          "readyForStage3": true,
+          "refinementHint": null,
+          "sharedContentDeliveryStatus": null,
+          "sharedContext": {
+            "content": "What I need you to know is that I am exhausted too, and I stopped saying it because it never seemed to count.",
+            "sharedAt": "<ts:4>"
+          }
+        },
+        "success": true
+      },
+      "changes": [
+        {
+          "view": "user",
+          "kind": "changed",
+          "key": "<user:bob>",
+          "changedFields": [
+            "updated_at"
+          ],
+          "before": {
+            "clerk_id": "e2e_<user:bob>",
+            "created_at": "<ts:6>",
+            "deleted_at": null,
+            "email": "bob@e2e.test",
+            "first_name": null,
+            "id": "<user:bob>",
+            "last_name": null,
+            "name": "Bob Ross",
+            "updated_at": "<ts:fresh>"
+          },
+          "after": {
+            "clerk_id": "e2e_<user:bob>",
+            "created_at": "<ts:6>",
+            "deleted_at": null,
+            "email": "bob@e2e.test",
+            "first_name": null,
+            "id": "<user:bob>",
+            "last_name": null,
+            "name": "Bob Ross",
+            "updated_at": "<ts:fresh>"
+          }
+        }
+      ]
+    },
+    {
+      "label": "before deletion: partner empathy as bob@e2e.test",
+      "status": 200,
+      "body": {
+        "data": {
+          "attempt": {
+            "consentRecordId": "",
+            "content": "I think you come home hollowed out and the chores feel like a verdict on you.",
+            "id": "<empathyAttempt:ada→bob@main#1>",
+            "revealedAt": "<ts:2>",
+            "revisionCount": 0,
+            "sharedAt": "<ts:1>",
+            "sourceUserId": "<user:ada>",
+            "status": "VALIDATED",
+            "statusVersion": 0,
+            "validatedAt": null
+          },
+          "awaitingRevision": false,
+          "partnerStatus": "VALIDATED",
+          "validated": false,
+          "validatedAt": null,
+          "waitingForPartner": false
+        },
+        "success": true
+      },
+      "changes": [
+        {
+          "view": "user",
+          "kind": "changed",
+          "key": "<user:bob>",
+          "changedFields": [
+            "updated_at"
+          ],
+          "before": {
+            "clerk_id": "e2e_<user:bob>",
+            "created_at": "<ts:3>",
+            "deleted_at": null,
+            "email": "bob@e2e.test",
+            "first_name": null,
+            "id": "<user:bob>",
+            "last_name": null,
+            "name": "Bob Ross",
+            "updated_at": "<ts:fresh>"
+          },
+          "after": {
+            "clerk_id": "e2e_<user:bob>",
+            "created_at": "<ts:3>",
+            "deleted_at": null,
+            "email": "bob@e2e.test",
+            "first_name": null,
+            "id": "<user:bob>",
+            "last_name": null,
+            "name": "Bob Ross",
+            "updated_at": "<ts:fresh>"
+          }
+        }
+      ]
+    },
+    {
+      "label": "before deletion: empathy draft as bob@e2e.test",
+      "status": 200,
+      "body": {
+        "data": {
+          "alreadyConsented": true,
+          "canConsent": false,
+          "draft": {
+            "content": "I think you feel invisible when you are the only one tracking the house.",
+            "id": "<draft:bob@main/EMPATHY>",
+            "readyToShare": true,
+            "updatedAt": "<ts:2>",
+            "version": 1
+          }
+        },
+        "success": true
+      },
+      "changes": [
+        {
+          "view": "user",
+          "kind": "changed",
+          "key": "<user:bob>",
+          "changedFields": [
+            "updated_at"
+          ],
+          "before": {
+            "clerk_id": "e2e_<user:bob>",
+            "created_at": "<ts:1>",
+            "deleted_at": null,
+            "email": "bob@e2e.test",
+            "first_name": null,
+            "id": "<user:bob>",
+            "last_name": null,
+            "name": "Bob Ross",
+            "updated_at": "<ts:fresh>"
+          },
+          "after": {
+            "clerk_id": "e2e_<user:bob>",
+            "created_at": "<ts:1>",
+            "deleted_at": null,
+            "email": "bob@e2e.test",
+            "first_name": null,
+            "id": "<user:bob>",
+            "last_name": null,
+            "name": "Bob Ross",
+            "updated_at": "<ts:fresh>"
+          }
+        }
+      ]
+    },
+    {
+      "label": "before deletion: share suggestion as bob@e2e.test",
+      "status": 200,
+      "body": {
+        "data": {
+          "hasSuggestion": false,
+          "suggestion": null
+        },
+        "success": true
+      },
+      "changes": [
+        {
+          "view": "user",
+          "kind": "changed",
+          "key": "<user:bob>",
+          "changedFields": [
+            "updated_at"
+          ],
+          "before": {
+            "clerk_id": "e2e_<user:bob>",
+            "created_at": "<ts:1>",
+            "deleted_at": null,
+            "email": "bob@e2e.test",
+            "first_name": null,
+            "id": "<user:bob>",
+            "last_name": null,
+            "name": "Bob Ross",
+            "updated_at": "<ts:fresh>"
+          },
+          "after": {
+            "clerk_id": "e2e_<user:bob>",
+            "created_at": "<ts:1>",
+            "deleted_at": null,
+            "email": "bob@e2e.test",
+            "first_name": null,
+            "id": "<user:bob>",
+            "last_name": null,
+            "name": "Bob Ross",
+            "updated_at": "<ts:fresh>"
+          }
+        }
+      ]
+    },
+    {
+      "label": "before deletion: reconciler status as bob@e2e.test",
+      "status": 200,
+      "body": {
+        "data": {
+          "aUnderstandingB": {
+            "analyzedAt": "<ts:fresh>",
+            "guesserId": "",
+            "guesserName": "",
+            "result": {
+              "abstractGuidance": {
+                "areaHint": null,
+                "guidanceType": null,
+                "promptSeed": null
+              },
+              "alignment": {
+                "correctlyIdentified": [
+                  "stress",
+                  "work pressure"
+                ],
+                "score": 45,
+                "summary": "Bob Ross's empathy attempt captures some elements but misses key aspects of Ada Lovelace's experience."
+              },
+              "gaps": {
+                "misattributions": [],
+                "missedFeelings": [
+                  "exhaustion",
+                  "feeling unseen",
+                  "overwhelm"
+                ],
+                "mostImportantGap": "Ada Lovelace feels exhausted and unseen, not just stressed.",
+                "severity": "significant",
+                "summary": "Bob Ross hasn't fully grasped the depth of Ada Lovelace's exhaustion and feeling unseen."
+              },
+              "recommendation": {
+                "action": "OFFER_SHARING",
+                "rationale": "Sharing specific context would help Bob Ross understand Ada Lovelace's perspective better.",
+                "sharingWouldHelp": true,
+                "suggestedShareFocus": "The exhaustion from work and feeling unseen."
+              }
+            },
+            "shareOfferStatus": "NOT_OFFERED",
+            "subjectId": "",
+            "subjectName": ""
+          },
+          "bUnderstandingA": null,
+          "hasRun": true,
+          "pendingShareOffers": 0,
+          "readyForStage3": false,
+          "sessionId": "<session:main>"
+        },
+        "success": true
+      },
+      "changes": [
+        {
+          "view": "user",
+          "kind": "changed",
+          "key": "<user:bob>",
+          "changedFields": [
+            "updated_at"
+          ],
+          "before": {
+            "clerk_id": "e2e_<user:bob>",
+            "created_at": "<ts:1>",
+            "deleted_at": null,
+            "email": "bob@e2e.test",
+            "first_name": null,
+            "id": "<user:bob>",
+            "last_name": null,
+            "name": "Bob Ross",
+            "updated_at": "<ts:fresh>"
+          },
+          "after": {
+            "clerk_id": "e2e_<user:bob>",
+            "created_at": "<ts:1>",
+            "deleted_at": null,
+            "email": "bob@e2e.test",
+            "first_name": null,
+            "id": "<user:bob>",
+            "last_name": null,
+            "name": "Bob Ross",
+            "updated_at": "<ts:fresh>"
+          }
+        }
+      ]
+    },
+    {
+      "label": "before deletion: share offer as bob@e2e.test",
+      "status": 200,
+      "body": {
+        "data": {
+          "hasSuggestion": false,
+          "suggestion": null
+        },
+        "success": true
+      },
+      "changes": [
+        {
+          "view": "user",
+          "kind": "changed",
+          "key": "<user:bob>",
+          "changedFields": [
+            "updated_at"
+          ],
+          "before": {
+            "clerk_id": "e2e_<user:bob>",
+            "created_at": "<ts:1>",
+            "deleted_at": null,
+            "email": "bob@e2e.test",
+            "first_name": null,
+            "id": "<user:bob>",
+            "last_name": null,
+            "name": "Bob Ross",
+            "updated_at": "<ts:fresh>"
+          },
+          "after": {
+            "clerk_id": "e2e_<user:bob>",
+            "created_at": "<ts:1>",
+            "deleted_at": null,
+            "email": "bob@e2e.test",
+            "first_name": null,
+            "id": "<user:bob>",
+            "last_name": null,
+            "name": "Bob Ross",
+            "updated_at": "<ts:fresh>"
+          }
+        }
+      ]
+    },
+    {
+      "label": "before deletion: reconciler summary as bob@e2e.test",
+      "status": 400,
+      "body": {
+        "error": {
+          "code": "VALIDATION_ERROR",
+          "message": "Reconciliation not yet complete - pending share offers"
+        },
+        "success": false
+      },
+      "changes": [
+        {
+          "view": "user",
+          "kind": "changed",
+          "key": "<user:bob>",
+          "changedFields": [
+            "updated_at"
+          ],
+          "before": {
+            "clerk_id": "e2e_<user:bob>",
+            "created_at": "<ts:1>",
+            "deleted_at": null,
+            "email": "bob@e2e.test",
+            "first_name": null,
+            "id": "<user:bob>",
+            "last_name": null,
+            "name": "Bob Ross",
+            "updated_at": "<ts:fresh>"
+          },
+          "after": {
+            "clerk_id": "e2e_<user:bob>",
+            "created_at": "<ts:1>",
+            "deleted_at": null,
+            "email": "bob@e2e.test",
+            "first_name": null,
+            "id": "<user:bob>",
+            "last_name": null,
+            "name": "Bob Ross",
+            "updated_at": "<ts:fresh>"
+          }
+        }
+      ]
+    },
+    {
+      "label": "before deletion: pending consent as bob@e2e.test",
+      "status": 200,
+      "body": {
+        "data": {
+          "pendingRequests": []
+        },
+        "success": true
+      },
+      "changes": [
+        {
+          "view": "user",
+          "kind": "changed",
+          "key": "<user:bob>",
+          "changedFields": [
+            "updated_at"
+          ],
+          "before": {
+            "clerk_id": "e2e_<user:bob>",
+            "created_at": "<ts:1>",
+            "deleted_at": null,
+            "email": "bob@e2e.test",
+            "first_name": null,
+            "id": "<user:bob>",
+            "last_name": null,
+            "name": "Bob Ross",
+            "updated_at": "<ts:fresh>"
+          },
+          "after": {
+            "clerk_id": "e2e_<user:bob>",
+            "created_at": "<ts:1>",
+            "deleted_at": null,
+            "email": "bob@e2e.test",
+            "first_name": null,
+            "id": "<user:bob>",
+            "last_name": null,
+            "name": "Bob Ross",
+            "updated_at": "<ts:fresh>"
+          }
+        }
+      ]
+    },
+    {
+      "label": "before deletion: consent history as bob@e2e.test",
+      "status": 200,
+      "body": {
+        "data": {
+          "records": [
+            {
+              "contentType": "IDENTIFIED_NEED",
+              "createdAt": "<ts:6>",
+              "decidedAt": "<ts:2>",
+              "decision": "GRANTED",
+              "id": "<consent:bob@main/NEED/need:bob@main#2>",
+              "revokedAt": null,
+              "targetId": "<need:bob@main#2>"
+            },
+            {
+              "contentType": "IDENTIFIED_NEED",
+              "createdAt": "<ts:5>",
+              "decidedAt": "<ts:2>",
+              "decision": "GRANTED",
+              "id": "<consent:bob@main/NEED/need:bob@main#1>",
+              "revokedAt": null,
+              "targetId": "<need:bob@main#1>"
+            },
+            {
+              "contentType": "EMPATHY_DRAFT",
+              "createdAt": "<ts:4>",
+              "decidedAt": "<ts:1>",
+              "decision": "GRANTED",
+              "id": "<consent:bob@main/EMPATHY_ATTEMPT/empathyAttempt:bob→ada@main#1>",
+              "revokedAt": null,
+              "targetId": "<draft:bob@main/EMPATHY>"
+            }
+          ]
+        },
+        "success": true
+      },
+      "changes": [
+        {
+          "view": "user",
+          "kind": "changed",
+          "key": "<user:bob>",
+          "changedFields": [
+            "updated_at"
+          ],
+          "before": {
+            "clerk_id": "e2e_<user:bob>",
+            "created_at": "<ts:3>",
+            "deleted_at": null,
+            "email": "bob@e2e.test",
+            "first_name": null,
+            "id": "<user:bob>",
+            "last_name": null,
+            "name": "Bob Ross",
+            "updated_at": "<ts:fresh>"
+          },
+          "after": {
+            "clerk_id": "e2e_<user:bob>",
+            "created_at": "<ts:3>",
+            "deleted_at": null,
+            "email": "bob@e2e.test",
+            "first_name": null,
+            "id": "<user:bob>",
+            "last_name": null,
+            "name": "Bob Ross",
+            "updated_at": "<ts:fresh>"
+          }
+        }
+      ]
+    },
+    {
+      "label": "before deletion: needs as bob@e2e.test",
+      "status": 200,
+      "body": {
+        "data": {
+          "extracting": false,
+          "needs": [
+            {
+              "aiConfidence": 0.95,
+              "category": "CONNECTION",
+              "confirmed": true,
+              "createdAt": "<ts:1>",
+              "deletedAt": null,
+              "description": "Understanding",
+              "evidence": [],
+              "id": "<need:bob@main#1>",
+              "lockedAt": null,
+              "need": "Understanding",
+              "needsReframing": false,
+              "status": "draft",
+              "supersededByNeedId": null
+            },
+            {
+              "aiConfidence": 0.95,
+              "category": "CONNECTION",
+              "confirmed": true,
+              "createdAt": "<ts:1>",
+              "deletedAt": null,
+              "description": "Support",
+              "evidence": [],
+              "id": "<need:bob@main#2>",
+              "lockedAt": null,
+              "need": "Support",
+              "needsReframing": false,
+              "status": "draft",
+              "supersededByNeedId": null
+            }
+          ],
+          "synthesizedAt": "<ts:1>"
+        },
+        "success": true
+      },
+      "changes": [
+        {
+          "view": "user",
+          "kind": "changed",
+          "key": "<user:bob>",
+          "changedFields": [
+            "updated_at"
+          ],
+          "before": {
+            "clerk_id": "e2e_<user:bob>",
+            "created_at": "<ts:2>",
+            "deleted_at": null,
+            "email": "bob@e2e.test",
+            "first_name": null,
+            "id": "<user:bob>",
+            "last_name": null,
+            "name": "Bob Ross",
+            "updated_at": "<ts:fresh>"
+          },
+          "after": {
+            "clerk_id": "e2e_<user:bob>",
+            "created_at": "<ts:2>",
+            "deleted_at": null,
+            "email": "bob@e2e.test",
+            "first_name": null,
+            "id": "<user:bob>",
+            "last_name": null,
+            "name": "Bob Ross",
+            "updated_at": "<ts:fresh>"
+          }
+        }
+      ]
+    },
+    {
+      "label": "before deletion: needs comparison as bob@e2e.test",
+      "status": 200,
+      "body": {
+        "data": {
+          "analysisComplete": false,
+          "commonGround": [],
+          "myNeeds": [],
+          "noOverlap": false,
+          "partnerNeeds": []
+        },
+        "success": true
+      },
+      "changes": [
+        {
+          "view": "user",
+          "kind": "changed",
+          "key": "<user:bob>",
+          "changedFields": [
+            "updated_at"
+          ],
+          "before": {
+            "clerk_id": "e2e_<user:bob>",
+            "created_at": "<ts:1>",
+            "deleted_at": null,
+            "email": "bob@e2e.test",
+            "first_name": null,
+            "id": "<user:bob>",
+            "last_name": null,
+            "name": "Bob Ross",
+            "updated_at": "<ts:fresh>"
+          },
+          "after": {
+            "clerk_id": "e2e_<user:bob>",
+            "created_at": "<ts:1>",
+            "deleted_at": null,
+            "email": "bob@e2e.test",
+            "first_name": null,
+            "id": "<user:bob>",
+            "last_name": null,
+            "name": "Bob Ross",
+            "updated_at": "<ts:fresh>"
+          }
+        }
+      ]
+    },
+    {
+      "label": "before deletion: stage4 as bob@e2e.test",
+      "status": 200,
+      "body": {
+        "data": {
+          "coverageAudit": {
+            "covered": [],
+            "open": [],
+            "partial": [],
+            "updatedAt": null
+          },
+          "inventory": {
+            "individualCommitments": [],
+            "removedProposalCount": 0,
+            "sharedProposals": [
+              {
+                "description": "Express appreciation for at least one thing your partner did each day",
+                "duration": "ongoing",
+                "id": "<proposal:main#2>",
+                "kind": "SHARED_PROPOSAL",
+                "measureOfSuccess": null,
+                "needsAddressed": [
+                  {
+                    "coverage": "COVERED",
+                    "label": "Recognition"
+                  }
+                ],
+                "sourceLabel": "YOU",
+                "status": "ACTIVE"
+              },
+              {
+                "description": "Weekly check-in on Sundays to discuss upcoming week and divide tasks",
+                "duration": "ongoing",
+                "id": "<proposal:main#1>",
+                "kind": "SHARED_PROPOSAL",
+                "measureOfSuccess": null,
+                "needsAddressed": [
+                  {
+                    "coverage": "COVERED",
+                    "label": "Appreciation"
+                  },
+                  {
+                    "coverage": "COVERED",
+                    "label": "Partnership"
+                  }
+                ],
+                "sourceLabel": "PARTNER",
+                "status": "ACTIVE"
+              }
+            ],
+            "unaddressedNeeds": [],
+            "updatedAt": "<ts:2>"
+          },
+          "mySelectionStatus": "NOT_STARTED",
+          "mySelections": [],
+          "outcome": null,
+          "partnerSelectionStatus": "NOT_STARTED",
+          "partnerSelections": [],
+          "phase": "INVENTORY_BUILDING",
+          "tendingPreview": null,
+          "walkthrough": {
+            "currentIndex": 0,
+            "currentNeed": null,
+            "defaultCheckInDate": "2026-10-31",
+            "ownNeeds": [],
+            "partnerNeeds": [],
+            "phase": "QUALITY_REVIEW",
+            "proposalGroups": [
+              {
+                "key": "you_suggested",
+                "proposals": [],
+                "readOnly": false,
+                "title": "Options you suggested"
+              },
+              {
+                "key": "partner_suggested",
+                "proposals": [],
+                "readOnly": false,
+                "title": "Options your partner suggested"
+              },
+              {
+                "key": "ai_suggested",
+                "proposals": [],
+                "readOnly": false,
+                "title": "MWF ideas"
+              }
+            ],
+            "qualityWarnings": [],
+            "totalInPhase": 0
+          }
+        },
+        "success": true
+      },
+      "changes": [
+        {
+          "view": "user",
+          "kind": "changed",
+          "key": "<user:bob>",
+          "changedFields": [
+            "updated_at"
+          ],
+          "before": {
+            "clerk_id": "e2e_<user:bob>",
+            "created_at": "<ts:1>",
+            "deleted_at": null,
+            "email": "bob@e2e.test",
+            "first_name": null,
+            "id": "<user:bob>",
+            "last_name": null,
+            "name": "Bob Ross",
+            "updated_at": "<ts:fresh>"
+          },
+          "after": {
+            "clerk_id": "e2e_<user:bob>",
+            "created_at": "<ts:1>",
+            "deleted_at": null,
+            "email": "bob@e2e.test",
+            "first_name": null,
+            "id": "<user:bob>",
+            "last_name": null,
+            "name": "Bob Ross",
+            "updated_at": "<ts:fresh>"
+          }
+        }
+      ]
+    },
+    {
+      "label": "before deletion: agreements as bob@e2e.test",
+      "status": 200,
+      "body": {
+        "data": {
+          "agreements": [
+            {
+              "agreedAt": "<ts:2>",
+              "agreedByMe": true,
+              "agreedByPartner": true,
+              "description": "Weekly check-in on Sundays to discuss upcoming week and divide tasks",
+              "duration": null,
+              "followUpDate": "<ts:3>",
+              "id": "<agreement:main#1>",
+              "measureOfSuccess": null,
+              "status": "AGREED",
+              "strategyId": "<proposal:main#1>",
+              "type": "COMMITMENT"
+            }
+          ]
+        },
+        "success": true
+      },
+      "changes": [
+        {
+          "view": "user",
+          "kind": "changed",
+          "key": "<user:bob>",
+          "changedFields": [
+            "updated_at"
+          ],
+          "before": {
+            "clerk_id": "e2e_<user:bob>",
+            "created_at": "<ts:1>",
+            "deleted_at": null,
+            "email": "bob@e2e.test",
+            "first_name": null,
+            "id": "<user:bob>",
+            "last_name": null,
+            "name": "Bob Ross",
+            "updated_at": "<ts:fresh>"
+          },
+          "after": {
+            "clerk_id": "e2e_<user:bob>",
+            "created_at": "<ts:1>",
+            "deleted_at": null,
+            "email": "bob@e2e.test",
+            "first_name": null,
+            "id": "<user:bob>",
+            "last_name": null,
+            "name": "Bob Ross",
+            "updated_at": "<ts:fresh>"
+          }
+        }
+      ]
+    },
+    {
+      "label": "before deletion: tending as bob@e2e.test",
+      "status": 200,
+      "body": {
+        "data": {
+          "betweenPeriodNotes": [],
+          "coordinationCycles": [],
+          "entries": []
+        },
+        "success": true
+      },
+      "changes": [
+        {
+          "view": "user",
+          "kind": "changed",
+          "key": "<user:bob>",
+          "changedFields": [
+            "updated_at"
+          ],
+          "before": {
+            "clerk_id": "e2e_<user:bob>",
+            "created_at": "<ts:1>",
+            "deleted_at": null,
+            "email": "bob@e2e.test",
+            "first_name": null,
+            "id": "<user:bob>",
+            "last_name": null,
+            "name": "Bob Ross",
+            "updated_at": "<ts:fresh>"
+          },
+          "after": {
+            "clerk_id": "e2e_<user:bob>",
+            "created_at": "<ts:1>",
+            "deleted_at": null,
+            "email": "bob@e2e.test",
+            "first_name": null,
+            "id": "<user:bob>",
+            "last_name": null,
+            "name": "Bob Ross",
+            "updated_at": "<ts:fresh>"
+          }
+        }
+      ]
+    },
+    {
+      "label": "before deletion: tending history as bob@e2e.test",
+      "status": 200,
+      "body": {
+        "data": {
+          "cycles": []
+        },
+        "success": true
+      },
+      "changes": [
+        {
+          "view": "user",
+          "kind": "changed",
+          "key": "<user:bob>",
+          "changedFields": [
+            "updated_at"
+          ],
+          "before": {
+            "clerk_id": "e2e_<user:bob>",
+            "created_at": "<ts:1>",
+            "deleted_at": null,
+            "email": "bob@e2e.test",
+            "first_name": null,
+            "id": "<user:bob>",
+            "last_name": null,
+            "name": "Bob Ross",
+            "updated_at": "<ts:fresh>"
+          },
+          "after": {
+            "clerk_id": "e2e_<user:bob>",
+            "created_at": "<ts:1>",
+            "deleted_at": null,
+            "email": "bob@e2e.test",
+            "first_name": null,
+            "id": "<user:bob>",
+            "last_name": null,
+            "name": "Bob Ross",
+            "updated_at": "<ts:fresh>"
+          }
+        }
+      ]
+    },
+    {
+      "label": "before deletion: inner thoughts as bob@e2e.test",
+      "status": 200,
+      "body": {
+        "data": {
+          "innerThoughtsSessionId": null
+        },
+        "success": true
+      },
+      "changes": [
+        {
+          "view": "user",
+          "kind": "changed",
+          "key": "<user:bob>",
+          "changedFields": [
+            "updated_at"
+          ],
+          "before": {
+            "clerk_id": "e2e_<user:bob>",
+            "created_at": "<ts:1>",
+            "deleted_at": null,
+            "email": "bob@e2e.test",
+            "first_name": null,
+            "id": "<user:bob>",
+            "last_name": null,
+            "name": "Bob Ross",
+            "updated_at": "<ts:fresh>"
+          },
+          "after": {
+            "clerk_id": "e2e_<user:bob>",
+            "created_at": "<ts:1>",
+            "deleted_at": null,
+            "email": "bob@e2e.test",
+            "first_name": null,
+            "id": "<user:bob>",
+            "last_name": null,
+            "name": "Bob Ross",
+            "updated_at": "<ts:fresh>"
+          }
+        }
+      ]
+    },
+    {
+      "label": "before deletion: session list as bob@e2e.test",
+      "status": 200,
+      "body": {
+        "data": {
+          "hasMore": false,
+          "items": [
+            {
+              "createdAt": "<ts:3>",
+              "hasUnread": true,
+              "id": "<session:main>",
+              "lastSeenChatItemId": null,
+              "lastViewedAt": null,
+              "myProgress": {
+                "completedAt": "<ts:4>",
+                "stage": 4,
+                "startedAt": "<ts:1>",
+                "status": "COMPLETED"
+              },
+              "partner": {
+                "id": "<user:ada>",
+                "name": "Ada Lovelace",
+                "nickname": "Ada Lovelace"
+              },
+              "partnerActionNeeded": [],
+              "partnerProgress": {
+                "completedAt": "<ts:4>",
+                "stage": 4,
+                "startedAt": "<ts:1>",
+                "status": "COMPLETED"
+              },
+              "relationshipId": "<relationship:main>",
+              "selfActionNeeded": [],
+              "status": "ACTIVE",
+              "statusSummary": {
+                "partnerStatus": "Ada Lovelace is also ready",
+                "userStatus": "You've shared your ideas for next steps"
+              },
+              "updatedAt": "<ts:3>"
+            }
+          ]
+        },
+        "success": true
+      },
+      "changes": [
+        {
+          "view": "user",
+          "kind": "changed",
+          "key": "<user:bob>",
+          "changedFields": [
+            "updated_at"
+          ],
+          "before": {
+            "clerk_id": "e2e_<user:bob>",
+            "created_at": "<ts:2>",
+            "deleted_at": null,
+            "email": "bob@e2e.test",
+            "first_name": null,
+            "id": "<user:bob>",
+            "last_name": null,
+            "name": "Bob Ross",
+            "updated_at": "<ts:fresh>"
+          },
+          "after": {
+            "clerk_id": "e2e_<user:bob>",
+            "created_at": "<ts:2>",
+            "deleted_at": null,
+            "email": "bob@e2e.test",
+            "first_name": null,
+            "id": "<user:bob>",
+            "last_name": null,
+            "name": "Bob Ross",
+            "updated_at": "<ts:fresh>"
+          }
+        }
+      ]
+    },
+    {
+      "label": "before deletion: badge count as bob@e2e.test",
+      "status": 200,
+      "body": {
+        "data": {
+          "bySession": {
+            "<session:main>": 1
+          },
+          "count": 1
+        },
+        "success": true
+      },
+      "changes": [
+        {
+          "view": "user",
+          "kind": "changed",
+          "key": "<user:bob>",
+          "changedFields": [
+            "updated_at"
+          ],
+          "before": {
+            "clerk_id": "e2e_<user:bob>",
+            "created_at": "<ts:1>",
+            "deleted_at": null,
+            "email": "bob@e2e.test",
+            "first_name": null,
+            "id": "<user:bob>",
+            "last_name": null,
+            "name": "Bob Ross",
+            "updated_at": "<ts:fresh>"
+          },
+          "after": {
+            "clerk_id": "e2e_<user:bob>",
+            "created_at": "<ts:1>",
+            "deleted_at": null,
+            "email": "bob@e2e.test",
+            "first_name": null,
+            "id": "<user:bob>",
+            "last_name": null,
+            "name": "Bob Ross",
+            "updated_at": "<ts:fresh>"
+          }
+        }
+      ]
+    },
+    {
+      "label": "before deletion: inner thoughts list as bob@e2e.test",
+      "status": 200,
+      "body": {
+        "data": {
+          "hasMore": false,
+          "sessions": [],
+          "total": 0
+        },
+        "success": true
+      },
+      "changes": [
+        {
+          "view": "user",
+          "kind": "changed",
+          "key": "<user:bob>",
+          "changedFields": [
+            "updated_at"
+          ],
+          "before": {
+            "clerk_id": "e2e_<user:bob>",
+            "created_at": "<ts:1>",
+            "deleted_at": null,
+            "email": "bob@e2e.test",
+            "first_name": null,
+            "id": "<user:bob>",
+            "last_name": null,
+            "name": "Bob Ross",
+            "updated_at": "<ts:fresh>"
+          },
+          "after": {
+            "clerk_id": "e2e_<user:bob>",
+            "created_at": "<ts:1>",
+            "deleted_at": null,
+            "email": "bob@e2e.test",
+            "first_name": null,
+            "id": "<user:bob>",
+            "last_name": null,
+            "name": "Bob Ross",
+            "updated_at": "<ts:fresh>"
+          }
+        }
+      ]
+    },
+    {
+      "label": "before deletion: inner work list as bob@e2e.test",
+      "status": 200,
+      "body": {
+        "data": {
+          "hasMore": false,
+          "sessions": [],
+          "total": 0
+        },
+        "success": true
+      },
+      "changes": [
+        {
+          "view": "user",
+          "kind": "changed",
+          "key": "<user:bob>",
+          "changedFields": [
+            "updated_at"
+          ],
+          "before": {
+            "clerk_id": "e2e_<user:bob>",
+            "created_at": "<ts:1>",
+            "deleted_at": null,
+            "email": "bob@e2e.test",
+            "first_name": null,
+            "id": "<user:bob>",
+            "last_name": null,
+            "name": "Bob Ross",
+            "updated_at": "<ts:fresh>"
+          },
+          "after": {
+            "clerk_id": "e2e_<user:bob>",
+            "created_at": "<ts:1>",
+            "deleted_at": null,
+            "email": "bob@e2e.test",
+            "first_name": null,
+            "id": "<user:bob>",
+            "last_name": null,
+            "name": "Bob Ross",
+            "updated_at": "<ts:fresh>"
+          }
+        }
+      ]
+    },
+    {
+      "label": "before deletion: knowledge base recent as bob@e2e.test",
+      "status": 200,
+      "body": {
+        "data": {
+          "takeaways": []
+        },
+        "success": true
+      },
+      "changes": [
+        {
+          "view": "user",
+          "kind": "changed",
+          "key": "<user:bob>",
+          "changedFields": [
+            "updated_at"
+          ],
+          "before": {
+            "clerk_id": "e2e_<user:bob>",
+            "created_at": "<ts:1>",
+            "deleted_at": null,
+            "email": "bob@e2e.test",
+            "first_name": null,
+            "id": "<user:bob>",
+            "last_name": null,
+            "name": "Bob Ross",
+            "updated_at": "<ts:fresh>"
+          },
+          "after": {
+            "clerk_id": "e2e_<user:bob>",
+            "created_at": "<ts:1>",
+            "deleted_at": null,
+            "email": "bob@e2e.test",
+            "first_name": null,
+            "id": "<user:bob>",
+            "last_name": null,
+            "name": "Bob Ross",
+            "updated_at": "<ts:fresh>"
+          }
+        }
+      ]
+    },
+    {
+      "label": "before deletion: knowledge base themes as bob@e2e.test",
+      "status": 200,
+      "body": {
+        "data": {
+          "themes": []
+        },
+        "success": true
+      },
+      "changes": [
+        {
+          "view": "user",
+          "kind": "changed",
+          "key": "<user:bob>",
+          "changedFields": [
+            "updated_at"
+          ],
+          "before": {
+            "clerk_id": "e2e_<user:bob>",
+            "created_at": "<ts:1>",
+            "deleted_at": null,
+            "email": "bob@e2e.test",
+            "first_name": null,
+            "id": "<user:bob>",
+            "last_name": null,
+            "name": "Bob Ross",
+            "updated_at": "<ts:fresh>"
+          },
+          "after": {
+            "clerk_id": "e2e_<user:bob>",
+            "created_at": "<ts:1>",
+            "deleted_at": null,
+            "email": "bob@e2e.test",
+            "first_name": null,
+            "id": "<user:bob>",
+            "last_name": null,
+            "name": "Bob Ross",
+            "updated_at": "<ts:fresh>"
+          }
+        }
+      ]
+    },
+    {
+      "label": "before deletion: people as bob@e2e.test",
+      "status": 200,
+      "body": {
+        "data": {
+          "people": [
+            {
+              "activeSessionCount": 1,
+              "connectedSince": "<ts:2>",
+              "id": "<user:ada>",
+              "initials": "AL",
+              "lastSession": {
+                "id": "<session:main>",
+                "status": "ACTIVE",
+                "updatedAt": "<ts:3>"
+              },
+              "name": "Ada Lovelace",
+              "nickname": "Ada Lovelace",
+              "relationshipId": "<relationship:main>"
+            }
+          ]
+        },
+        "success": true
+      },
+      "changes": [
+        {
+          "view": "user",
+          "kind": "changed",
+          "key": "<user:bob>",
+          "changedFields": [
+            "updated_at"
+          ],
+          "before": {
+            "clerk_id": "e2e_<user:bob>",
+            "created_at": "<ts:1>",
+            "deleted_at": null,
+            "email": "bob@e2e.test",
+            "first_name": null,
+            "id": "<user:bob>",
+            "last_name": null,
+            "name": "Bob Ross",
+            "updated_at": "<ts:fresh>"
+          },
+          "after": {
+            "clerk_id": "e2e_<user:bob>",
+            "created_at": "<ts:1>",
+            "deleted_at": null,
+            "email": "bob@e2e.test",
+            "first_name": null,
+            "id": "<user:bob>",
+            "last_name": null,
+            "name": "Bob Ross",
+            "updated_at": "<ts:fresh>"
+          }
+        }
+      ]
+    },
+    {
+      "label": "delete account as ada@e2e.test",
+      "status": 200,
+      "body": {
+        "data": {
+          "success": true,
+          "summary": {
+            "dataRecordsDeleted": 15,
+            "partnersNotified": 1,
+            "sessionsAbandoned": 1
+          }
+        },
+        "success": true
+      },
+      "unrepresentable": "more than one row returned by a subquery used as an expression"
+    },
+    {
+      "label": "after deletion: session as bob@e2e.test",
+      "status": 200,
+      "body": {
+        "data": {
+          "session": {
+            "createdAt": "<ts:1>",
+            "currentStage": 4,
+            "id": "<session:main>",
+            "myProgress": {
+              "stage": 4,
+              "status": "COMPLETED"
+            },
+            "partner": {
+              "id": "",
+              "name": "Ada Lovelace",
+              "nickname": "Ada Lovelace"
+            },
+            "relationshipId": "<relationship:main>",
+            "resolvedAt": null,
+            "stageStatus": "COMPLETED",
+            "status": "ABANDONED"
+          }
+        },
+        "success": true
+      },
+      "unrepresentable": "more than one row returned by a subquery used as an expression"
+    },
+    {
+      "label": "after deletion: state as bob@e2e.test",
+      "status": 200,
+      "body": {
+        "data": {
+          "compact": {
+            "canAdvance": true,
+            "isFirstSession": true,
+            "mySigned": true,
+            "mySignedAt": null,
+            "partnerSigned": false,
+            "partnerSignedAt": null
+          },
+          "invitation": null,
+          "messages": {
+            "hasMore": false,
+            "messages": [
+              {
+                "content": "Work has been brutal and I come home with nothing left.",
+                "id": "<message:bob@main#1>",
+                "role": "USER",
+                "senderId": "<user:bob>",
+                "sessionId": "<session:main>",
+                "stage": 1,
+                "timestamp": "<ts:1>"
+              },
+              {
+                "content": "Coming home empty sounds hard. What happens next?",
+                "id": "<message:bob@main#2>",
+                "role": "AI",
+                "senderId": null,
+                "sessionId": "<session:main>",
+                "stage": 1,
+                "timestamp": "<ts:2>"
+              },
+              {
+                "content": "I think you feel invisible when you are the only one tracking the house.",
+                "id": "<message:bob@main/EMPATHY_STATEMENT:bob#1>",
+                "role": "EMPATHY_STATEMENT",
+                "senderId": "<user:bob>",
+                "sessionId": "<session:main>",
+                "stage": 2,
+                "timestamp": "<ts:5>"
+              },
+              {
+                "content": "What I need you to know is that I am exhausted too, and I stopped saying it because it never seemed to count.",
+                "id": "<message:bob@main/SHARED_CONTEXT:ada#1>",
+                "role": "SHARED_CONTEXT",
+                "senderId": null,
+                "sessionId": "<session:main>",
+                "stage": 2,
+                "timestamp": "<ts:6>"
+              },
+              {
+                "content": "VALIDATED",
+                "id": "<message:bob@main/EMPATHY_VALIDATION_PROMPT:ada#1>",
+                "role": "EMPATHY_VALIDATION_PROMPT",
+                "senderId": null,
+                "sessionId": "<session:main>",
+                "stage": 2,
+                "timestamp": "<ts:7>"
+              }
+            ]
+          },
+          "progress": {
+            "canAdvance": true,
+            "milestones": {
+              "feelHeardConfirmedAt": "<ts:4>",
+              "witnessStartedAt": "<ts:3>"
+            },
+            "myProgress": {
+              "completedAt": "<ts:10>",
+              "gatesSatisfied": {
+                "agreementConfirmed": true,
+                "agreementCreated": true,
+                "strategiesRanked": true
+              },
+              "stage": 4,
+              "startedAt": "<ts:8>",
+              "status": "COMPLETED"
+            },
+            "partnerProgress": {
+              "completedAt": null,
+              "gatesSatisfied": null,
+              "stage": 0,
+              "startedAt": null,
+              "status": "NOT_STARTED"
+            },
+            "sessionId": "<session:main>"
+          },
+          "session": {
+            "createdAt": "<ts:9>",
+            "currentStage": 4,
+            "id": "<session:main>",
+            "lastSeenChatItemId": null,
+            "lastViewedAt": null,
+            "myProgress": {
+              "stage": 4,
+              "status": "COMPLETED"
+            },
+            "partner": {
+              "id": "",
+              "name": "Ada Lovelace",
+              "nickname": "Ada Lovelace"
+            },
+            "partnerLastActiveAt": null,
+            "partnerLastViewedAt": null,
+            "relationshipId": "<relationship:main>",
+            "resolvedAt": null,
+            "sourceInnerThoughts": null,
+            "stageStatus": "COMPLETED",
+            "status": "ABANDONED"
+          }
+        },
+        "success": true
+      },
+      "unrepresentable": "more than one row returned by a subquery used as an expression"
+    },
+    {
+      "label": "after deletion: progress as bob@e2e.test",
+      "status": 200,
+      "body": {
+        "data": {
+          "milestones": {
+            "commonGroundFoundAt": null,
+            "feelHeardConfirmedAt": "<ts:2>",
+            "needsIdentifiedAt": "<ts:3>",
+            "witnessStartedAt": "<ts:1>"
+          },
+          "myProgress": {
+            "completedAt": "<ts:5>",
+            "gatesSatisfied": {
+              "agreementConfirmed": true,
+              "agreementCreated": true,
+              "strategiesRanked": true
+            },
+            "stage": 4,
+            "startedAt": "<ts:4>",
+            "status": "COMPLETED"
+          },
+          "partnerProgress": {
+            "completedAt": null,
+            "gatesSatisfied": null,
+            "stage": 0,
+            "startedAt": null,
+            "status": "NOT_STARTED"
+          },
+          "sessionStatus": "ABANDONED"
+        },
+        "success": true
+      },
+      "unrepresentable": "more than one row returned by a subquery used as an expression"
+    },
+    {
+      "label": "after deletion: messages as bob@e2e.test",
+      "status": 200,
+      "body": {
+        "data": {
+          "hasMore": false,
+          "messages": [
+            {
+              "content": "Work has been brutal and I come home with nothing left.",
+              "id": "<message:bob@main#1>",
+              "refiningNeedId": null,
+              "role": "USER",
+              "senderId": "<user:bob>",
+              "sessionId": "<session:main>",
+              "stage": 1,
+              "timestamp": "<ts:1>"
+            },
+            {
+              "content": "Coming home empty sounds hard. What happens next?",
+              "id": "<message:bob@main#2>",
+              "refiningNeedId": null,
+              "role": "AI",
+              "senderId": null,
+              "sessionId": "<session:main>",
+              "stage": 1,
+              "timestamp": "<ts:2>"
+            },
+            {
+              "content": "I think you feel invisible when you are the only one tracking the house.",
+              "id": "<message:bob@main/EMPATHY_STATEMENT:bob#1>",
+              "refiningNeedId": null,
+              "role": "EMPATHY_STATEMENT",
+              "senderId": "<user:bob>",
+              "sessionId": "<session:main>",
+              "stage": 2,
+              "timestamp": "<ts:3>"
+            },
+            {
+              "content": "What I need you to know is that I am exhausted too, and I stopped saying it because it never seemed to count.",
+              "id": "<message:bob@main/SHARED_CONTEXT:ada#1>",
+              "refiningNeedId": null,
+              "role": "SHARED_CONTEXT",
+              "senderId": null,
+              "sessionId": "<session:main>",
+              "stage": 2,
+              "timestamp": "<ts:4>"
+            },
+            {
+              "content": "VALIDATED",
+              "id": "<message:bob@main/EMPATHY_VALIDATION_PROMPT:ada#1>",
+              "refiningNeedId": null,
+              "role": "EMPATHY_VALIDATION_PROMPT",
+              "senderId": null,
+              "sessionId": "<session:main>",
+              "stage": 2,
+              "timestamp": "<ts:5>"
+            }
+          ]
+        },
+        "success": true
+      },
+      "unrepresentable": "more than one row returned by a subquery used as an expression"
+    },
+    {
+      "label": "after deletion: emotions as bob@e2e.test",
+      "status": 200,
+      "body": {
+        "data": {
+          "readings": []
+        },
+        "success": true
+      },
+      "unrepresentable": "more than one row returned by a subquery used as an expression"
+    },
+    {
+      "label": "after deletion: pending actions as bob@e2e.test",
+      "status": 200,
+      "body": {
+        "data": {
+          "actions": [],
+          "sentTabUpdates": 0
+        },
+        "success": true
+      },
+      "unrepresentable": "more than one row returned by a subquery used as an expression"
+    },
+    {
+      "label": "after deletion: compact status as bob@e2e.test",
+      "status": 200,
+      "body": {
+        "data": {
+          "canAdvance": false,
+          "isFirstSession": true,
+          "mySigned": true,
+          "mySignedAt": null,
+          "partnerSigned": false,
+          "partnerSignedAt": null
+        },
+        "success": true
+      },
+      "unrepresentable": "more than one row returned by a subquery used as an expression"
+    },
+    {
+      "label": "after deletion: empathy status as bob@e2e.test",
+      "status": 200,
+      "body": {
+        "data": {
+          "analyzing": false,
+          "awaitingSharing": false,
+          "hasNewSharedContext": false,
+          "hasUnviewedSharedContext": false,
+          "messageCountSinceSharedContext": 0,
+          "myAttempt": {
+            "consentRecordId": "",
+            "content": "I think you feel invisible when you are the only one tracking the house.",
+            "deliveryStatus": "seen",
+            "id": "<empathyAttempt:bob→ada@main#1>",
+            "revealedAt": "<ts:4>",
+            "revisionCount": 0,
+            "sharedAt": "<ts:1>",
+            "sourceUserId": "<user:bob>",
+            "status": "VALIDATED",
+            "validatedAt": null
+          },
+          "myReconcilerResult": {
+            "action": "OFFER_SHARING",
+            "analyzedAt": "<ts:2>",
+            "gapSeverity": "significant",
+            "gapSummary": "Bob Ross hasn't fully grasped the depth of Ada Lovelace's exhaustion and feeling unseen."
+          },
+          "mySharedAt": null,
+          "mySharedContext": null,
+          "partnerAttempt": {
+            "consentRecordId": "",
+            "content": "I think you feel invisible when you are the only one tracking the house.",
+            "id": "<empathyAttempt:bob→ada@main#1>",
+            "revealedAt": "<ts:4>",
+            "revisionCount": 0,
+            "sharedAt": "<ts:1>",
+            "sourceUserId": "<user:bob>",
+            "status": "VALIDATED",
+            "validatedAt": null
+          },
+          "partnerCompletedStage1": false,
+          "partnerEmpathyHeldStatus": "VALIDATED",
+          "partnerEmpathySubmittedAt": "<ts:1>",
+          "partnerHasSubmittedEmpathy": true,
+          "readyForStage3": true,
+          "refinementHint": null,
+          "sharedContentDeliveryStatus": null,
+          "sharedContext": {
+            "content": "What I need you to know is that I am exhausted too, and I stopped saying it because it never seemed to count.",
+            "sharedAt": "<ts:3>"
+          }
+        },
+        "success": true
+      },
+      "unrepresentable": "more than one row returned by a subquery used as an expression"
+    },
+    {
+      "label": "after deletion: partner empathy as bob@e2e.test",
+      "status": 200,
+      "body": {
+        "data": {
+          "attempt": null,
+          "awaitingRevision": false,
+          "partnerStatus": null,
+          "validated": false,
+          "validatedAt": null,
+          "waitingForPartner": true
+        },
+        "success": true
+      },
+      "unrepresentable": "more than one row returned by a subquery used as an expression"
+    },
+    {
+      "label": "after deletion: empathy draft as bob@e2e.test",
+      "status": 200,
+      "body": {
+        "data": {
+          "alreadyConsented": true,
+          "canConsent": false,
+          "draft": {
+            "content": "I think you feel invisible when you are the only one tracking the house.",
+            "id": "<draft:bob@main/EMPATHY>",
+            "readyToShare": true,
+            "updatedAt": "<ts:1>",
+            "version": 1
+          }
+        },
+        "success": true
+      },
+      "unrepresentable": "more than one row returned by a subquery used as an expression"
+    },
+    {
+      "label": "after deletion: share suggestion as bob@e2e.test",
+      "status": 200,
+      "body": {
+        "data": {
+          "hasSuggestion": false,
+          "suggestion": null
+        },
+        "success": true
+      },
+      "unrepresentable": "more than one row returned by a subquery used as an expression"
+    },
+    {
+      "label": "after deletion: reconciler status as bob@e2e.test",
+      "status": 200,
+      "body": {
+        "data": {
+          "aUnderstandingB": {
+            "analyzedAt": "<ts:fresh>",
+            "guesserId": "",
+            "guesserName": "",
+            "result": {
+              "abstractGuidance": {
+                "areaHint": null,
+                "guidanceType": null,
+                "promptSeed": null
+              },
+              "alignment": {
+                "correctlyIdentified": [
+                  "stress",
+                  "work pressure"
+                ],
+                "score": 45,
+                "summary": "Bob Ross's empathy attempt captures some elements but misses key aspects of Ada Lovelace's experience."
+              },
+              "gaps": {
+                "misattributions": [],
+                "missedFeelings": [
+                  "exhaustion",
+                  "feeling unseen",
+                  "overwhelm"
+                ],
+                "mostImportantGap": "Ada Lovelace feels exhausted and unseen, not just stressed.",
+                "severity": "significant",
+                "summary": "Bob Ross hasn't fully grasped the depth of Ada Lovelace's exhaustion and feeling unseen."
+              },
+              "recommendation": {
+                "action": "OFFER_SHARING",
+                "rationale": "Sharing specific context would help Bob Ross understand Ada Lovelace's perspective better.",
+                "sharingWouldHelp": true,
+                "suggestedShareFocus": "The exhaustion from work and feeling unseen."
+              }
+            },
+            "shareOfferStatus": "NOT_OFFERED",
+            "subjectId": "",
+            "subjectName": ""
+          },
+          "bUnderstandingA": null,
+          "hasRun": true,
+          "pendingShareOffers": 0,
+          "readyForStage3": false,
+          "sessionId": "<session:main>"
+        },
+        "success": true
+      },
+      "unrepresentable": "more than one row returned by a subquery used as an expression"
+    },
+    {
+      "label": "after deletion: share offer as bob@e2e.test",
+      "status": 200,
+      "body": {
+        "data": {
+          "hasSuggestion": false,
+          "suggestion": null
+        },
+        "success": true
+      },
+      "unrepresentable": "more than one row returned by a subquery used as an expression"
+    },
+    {
+      "label": "after deletion: reconciler summary as bob@e2e.test",
+      "status": 400,
+      "body": {
+        "error": {
+          "code": "VALIDATION_ERROR",
+          "message": "Reconciliation not yet complete - pending share offers"
+        },
+        "success": false
+      },
+      "unrepresentable": "more than one row returned by a subquery used as an expression"
+    },
+    {
+      "label": "after deletion: pending consent as bob@e2e.test",
+      "status": 200,
+      "body": {
+        "data": {
+          "pendingRequests": []
+        },
+        "success": true
+      },
+      "unrepresentable": "more than one row returned by a subquery used as an expression"
+    },
+    {
+      "label": "after deletion: consent history as bob@e2e.test",
+      "status": 200,
+      "body": {
+        "data": {
+          "records": [
+            {
+              "contentType": "IDENTIFIED_NEED",
+              "createdAt": "<ts:5>",
+              "decidedAt": "<ts:2>",
+              "decision": "GRANTED",
+              "id": "<consent:bob@main/NEED/need:bob@main#2>",
+              "revokedAt": null,
+              "targetId": "<need:bob@main#2>"
+            },
+            {
+              "contentType": "IDENTIFIED_NEED",
+              "createdAt": "<ts:4>",
+              "decidedAt": "<ts:2>",
+              "decision": "GRANTED",
+              "id": "<consent:bob@main/NEED/need:bob@main#1>",
+              "revokedAt": null,
+              "targetId": "<need:bob@main#1>"
+            },
+            {
+              "contentType": "EMPATHY_DRAFT",
+              "createdAt": "<ts:3>",
+              "decidedAt": "<ts:1>",
+              "decision": "GRANTED",
+              "id": "<consent:bob@main/EMPATHY_ATTEMPT/empathyAttempt:bob→ada@main#1>",
+              "revokedAt": null,
+              "targetId": "<draft:bob@main/EMPATHY>"
+            }
+          ]
+        },
+        "success": true
+      },
+      "unrepresentable": "more than one row returned by a subquery used as an expression"
+    },
+    {
+      "label": "after deletion: needs as bob@e2e.test",
+      "status": 200,
+      "body": {
+        "data": {
+          "isDirty": false,
+          "needs": [],
+          "synthesizedAt": null
+        },
+        "success": true
+      },
+      "unrepresentable": "more than one row returned by a subquery used as an expression"
+    },
+    {
+      "label": "after deletion: needs comparison as bob@e2e.test",
+      "status": 200,
+      "body": {
+        "data": {
+          "analysisComplete": false,
+          "commonGround": [],
+          "myNeeds": [],
+          "noOverlap": false,
+          "partnerNeeds": []
+        },
+        "success": true
+      },
+      "unrepresentable": "more than one row returned by a subquery used as an expression"
+    },
+    {
+      "label": "after deletion: stage4 as bob@e2e.test",
+      "status": 200,
+      "body": {
+        "data": {
+          "coverageAudit": {
+            "covered": [],
+            "open": [],
+            "partial": [],
+            "updatedAt": null
+          },
+          "inventory": {
+            "individualCommitments": [],
+            "removedProposalCount": 0,
+            "sharedProposals": [
+              {
+                "description": "Express appreciation for at least one thing your partner did each day",
+                "duration": "ongoing",
+                "id": "<proposal:main#2>",
+                "kind": "SHARED_PROPOSAL",
+                "measureOfSuccess": null,
+                "needsAddressed": [
+                  {
+                    "coverage": "COVERED",
+                    "label": "Recognition"
+                  }
+                ],
+                "sourceLabel": "YOU",
+                "status": "ACTIVE"
+              },
+              {
+                "description": "Weekly check-in on Sundays to discuss upcoming week and divide tasks",
+                "duration": "ongoing",
+                "id": "<proposal:main#1>",
+                "kind": "SHARED_PROPOSAL",
+                "measureOfSuccess": null,
+                "needsAddressed": [
+                  {
+                    "coverage": "COVERED",
+                    "label": "Appreciation"
+                  },
+                  {
+                    "coverage": "COVERED",
+                    "label": "Partnership"
+                  }
+                ],
+                "sourceLabel": "PARTNER",
+                "status": "ACTIVE"
+              }
+            ],
+            "unaddressedNeeds": [],
+            "updatedAt": "<ts:1>"
+          },
+          "mySelectionStatus": "NOT_STARTED",
+          "mySelections": [],
+          "outcome": null,
+          "partnerSelectionStatus": "NOT_STARTED",
+          "partnerSelections": [],
+          "phase": "INVENTORY_BUILDING",
+          "tendingPreview": null,
+          "walkthrough": {
+            "currentIndex": 0,
+            "currentNeed": null,
+            "defaultCheckInDate": "2026-10-31",
+            "ownNeeds": [],
+            "partnerNeeds": [],
+            "phase": "QUALITY_REVIEW",
+            "proposalGroups": [
+              {
+                "key": "you_suggested",
+                "proposals": [],
+                "readOnly": false,
+                "title": "Options you suggested"
+              },
+              {
+                "key": "partner_suggested",
+                "proposals": [],
+                "readOnly": false,
+                "title": "Options your partner suggested"
+              },
+              {
+                "key": "ai_suggested",
+                "proposals": [],
+                "readOnly": false,
+                "title": "MWF ideas"
+              }
+            ],
+            "qualityWarnings": [],
+            "totalInPhase": 0
+          }
+        },
+        "success": true
+      },
+      "unrepresentable": "more than one row returned by a subquery used as an expression"
+    },
+    {
+      "label": "after deletion: agreements as bob@e2e.test",
+      "status": 200,
+      "body": {
+        "data": {
+          "agreements": [
+            {
+              "agreedAt": "<ts:1>",
+              "agreedByMe": true,
+              "agreedByPartner": true,
+              "description": "Weekly check-in on Sundays to discuss upcoming week and divide tasks",
+              "duration": null,
+              "followUpDate": "<ts:2>",
+              "id": "<agreement:main#1>",
+              "measureOfSuccess": null,
+              "status": "AGREED",
+              "strategyId": "<proposal:main#1>",
+              "type": "COMMITMENT"
+            }
+          ]
+        },
+        "success": true
+      },
+      "unrepresentable": "more than one row returned by a subquery used as an expression"
+    },
+    {
+      "label": "after deletion: tending as bob@e2e.test",
+      "status": 200,
+      "body": {
+        "data": {
+          "betweenPeriodNotes": [],
+          "coordinationCycles": [],
+          "entries": []
+        },
+        "success": true
+      },
+      "unrepresentable": "more than one row returned by a subquery used as an expression"
+    },
+    {
+      "label": "after deletion: tending history as bob@e2e.test",
+      "status": 200,
+      "body": {
+        "data": {
+          "cycles": []
+        },
+        "success": true
+      },
+      "unrepresentable": "more than one row returned by a subquery used as an expression"
+    },
+    {
+      "label": "after deletion: inner thoughts as bob@e2e.test",
+      "status": 200,
+      "body": {
+        "data": {
+          "innerThoughtsSessionId": null
+        },
+        "success": true
+      },
+      "unrepresentable": "more than one row returned by a subquery used as an expression"
+    },
+    {
+      "label": "after deletion: session list as bob@e2e.test",
+      "status": 200,
+      "body": {
+        "data": {
+          "hasMore": false,
+          "items": [
+            {
+              "createdAt": "<ts:2>",
+              "hasUnread": true,
+              "id": "<session:main>",
+              "lastSeenChatItemId": null,
+              "lastViewedAt": null,
+              "myProgress": {
+                "completedAt": "<ts:3>",
+                "stage": 4,
+                "startedAt": "<ts:1>",
+                "status": "COMPLETED"
+              },
+              "partner": {
+                "id": "",
+                "name": "Ada Lovelace",
+                "nickname": "Ada Lovelace"
+              },
+              "partnerActionNeeded": [
+                "complete_stage"
+              ],
+              "partnerProgress": {
+                "completedAt": null,
+                "stage": 0,
+                "startedAt": null,
+                "status": "NOT_STARTED"
+              },
+              "relationshipId": "<relationship:main>",
+              "selfActionNeeded": [],
+              "status": "ABANDONED",
+              "statusSummary": {
+                "partnerStatus": "This conversation was not completed",
+                "userStatus": "Session ended"
+              },
+              "updatedAt": "<ts:fresh>"
+            }
+          ]
+        },
+        "success": true
+      },
+      "unrepresentable": "more than one row returned by a subquery used as an expression"
+    },
+    {
+      "label": "after deletion: badge count as bob@e2e.test",
+      "status": 200,
+      "body": {
+        "data": {
+          "bySession": {},
+          "count": 0
+        },
+        "success": true
+      },
+      "unrepresentable": "more than one row returned by a subquery used as an expression"
+    },
+    {
+      "label": "after deletion: inner thoughts list as bob@e2e.test",
+      "status": 200,
+      "body": {
+        "data": {
+          "hasMore": false,
+          "sessions": [],
+          "total": 0
+        },
+        "success": true
+      },
+      "unrepresentable": "more than one row returned by a subquery used as an expression"
+    },
+    {
+      "label": "after deletion: inner work list as bob@e2e.test",
+      "status": 200,
+      "body": {
+        "data": {
+          "hasMore": false,
+          "sessions": [],
+          "total": 0
+        },
+        "success": true
+      },
+      "unrepresentable": "more than one row returned by a subquery used as an expression"
+    },
+    {
+      "label": "after deletion: knowledge base recent as bob@e2e.test",
+      "status": 200,
+      "body": {
+        "data": {
+          "takeaways": []
+        },
+        "success": true
+      },
+      "unrepresentable": "more than one row returned by a subquery used as an expression"
+    },
+    {
+      "label": "after deletion: knowledge base themes as bob@e2e.test",
+      "status": 200,
+      "body": {
+        "data": {
+          "themes": []
+        },
+        "success": true
+      },
+      "unrepresentable": "more than one row returned by a subquery used as an expression"
+    },
+    {
+      "label": "after deletion: people as bob@e2e.test",
+      "status": 200,
+      "body": {
+        "data": {
+          "people": []
+        },
+        "success": true
+      },
+      "unrepresentable": "more than one row returned by a subquery used as an expression"
+    }
+  ]
+}

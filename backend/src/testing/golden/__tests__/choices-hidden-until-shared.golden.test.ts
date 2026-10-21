@@ -36,9 +36,10 @@ const BASE_URL =
 
 const SCENARIO = 'choices-hidden-until-shared';
 const READ_TABLES = ['User', 'Message', 'UserVessel', 'StageProgress', 'Stage4ProposalSelection', 'Stage4NeedDeclination'];
-// Not 'strategies': the legacy endpoint orders proposals by createdAt alone,
-// and the fixture's proposals share a millisecond, so its order is a coin flip
-// (measured: two orders in three runs). It carries no choices.
+// Not 'strategies': GET /strategies shuffles its list on every call
+// (controllers/stage4.ts shuffleArray — the anonymous legacy pool), so with
+// more than one proposal it cannot be a recorded baseline (measured: two
+// orders in three runs). It carries no choices.
 const CHOICE_READS = ['session', 'state', 'progress', 'messages', 'stage4', 'agreements', 'pending actions',
   'session list', 'badge count'];
 
@@ -149,7 +150,7 @@ describe(`golden: ${SCENARIO}`, () => {
   });
 
   it('proposal_need and need_disposition name only need_share ids', () => {
-    const last = steps[steps.length - 1].concept!.after.tables;
+    const last = steps[steps.length - 1].concept!.after!.tables;
     const shared = new Set(last[viewName('need_share')].map(r => String(r.need_id)));
     const named = [...last[viewName('proposal_need')], ...last[viewName('need_disposition')]].map(r => String(r.need_id));
     expect(named.filter(id => !shared.has(id))).toEqual([]);

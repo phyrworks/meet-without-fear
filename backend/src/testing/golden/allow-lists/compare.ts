@@ -5,7 +5,7 @@
  * whether a run is accepted under a scenario's allow-list (`./types.ts`).
  */
 
-import type { AbsentKeysRule, AddedEntriesRule, AddedKeysRule, AllowList, AllowRule } from './types';
+import type { AbsentKeysRule, AddedEntriesRule, AddedKeysRule, AllowList, AllowRule, MayBeAbsentRule } from './types';
 
 function brief(v: unknown): string {
   const s = JSON.stringify(v);
@@ -119,6 +119,9 @@ export function compareWithAllowList(expected: unknown, actual: unknown, allow: 
     if (isObj(e) && isObj(a)) {
       const absent = new Set(rulesAt('absentKeys', p).flatMap(r => (r.matched++, (r.rule as AbsentKeysRule).keys)));
       const added = new Set(rulesAt('addedKeys', p).flatMap(r => (r.matched++, (r.rule as AddedKeysRule).keys)));
+      const removable = new Set(
+        rulesAt('mayBeAbsent', p).flatMap(r => (r.matched++, (r.rule as MayBeAbsentRule).keys)),
+      );
       const adders = rulesAt('addedEntries', p);
       adders.forEach(r => r.matched++);
       const used = new Set<Entry>();
@@ -131,7 +134,7 @@ export function compareWithAllowList(expected: unknown, actual: unknown, allow: 
           continue;
         }
         if (inE && !inA) {
-          fail(kp, 'present in the baseline, missing from the run', e[k], undefined);
+          if (!removable.has(k)) fail(kp, 'present in the baseline, missing from the run', e[k], undefined);
           continue;
         }
         if (!inE && inA) {

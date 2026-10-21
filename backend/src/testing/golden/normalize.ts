@@ -276,6 +276,8 @@ export async function buildLabelMap(
         'needCoverage',
         r => bare(r.sourceUserId),
       );
+      await rankWithin(`SELECT id, "userId" FROM "RelationshipMember" ORDER BY id`, 'member', r => bare(r.userId));
+      await rankWithin(`SELECT id, "userId" FROM "StrategyRanking" ORDER BY id`, 'ranking', r => bare(r.userId));
       await rankWithin(
         `SELECT id, "userId" FROM "Stage4NeedDeclination" ORDER BY "declinedAt", id`,
         'declination',

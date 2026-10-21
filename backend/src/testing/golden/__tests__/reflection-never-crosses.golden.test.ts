@@ -139,7 +139,7 @@ describe(`golden: ${SCENARIO}`, () => {
   });
 
   it('no session-scoped brain_activity input carries reflection text', () => {
-    const last = steps[steps.length - 1].concept!.after.tables[viewName('brain_activity')];
+    const last = steps[steps.length - 1].concept!.after!.tables[viewName('brain_activity')];
     const sessionRows = last.filter(r => r.session_id !== null);
     expect(sessionRows.length).toBeGreaterThan(0);
     const text = JSON.stringify(sessionRows.map(r => r.input));

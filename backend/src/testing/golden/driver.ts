@@ -12,6 +12,7 @@
  */
 
 import type { Express } from 'express';
+import * as http from 'http';
 import request from 'supertest';
 import { applyConceptViews, CONCEPT_NAMES, ConceptName, CURRENT_SHAPE_SQL, takeConceptSnapshot } from './concept-views';
 import { dropDatabase, mark, openMarkerClient } from './db';
@@ -94,7 +95,14 @@ export interface StepResult {
    * connections outside the trace window, so they change nothing the
    * byte-level golden records.
    */
-  concept?: { before: Snapshot; after: Snapshot };
+  concept?: { before: Snapshot; after: Snapshot; unrepresentable?: undefined } | ConceptUnrepresentable;
+}
+
+/** A step after which the concept views could not represent the database (`conceptUnrepresentable: 'record'`). */
+export interface ConceptUnrepresentable {
+  before?: Snapshot;
+  after?: undefined;
+  unrepresentable: string;
 }
 
 export interface Harness {
@@ -211,6 +219,16 @@ export async function createHarness(opts: {
    * `TS4_CONCEPT_NAMES` for the two scenarios recorded before TS-5's views).
    */
   concept?: boolean | { sql?: string; views?: readonly ConceptName[] };
+  /**
+   * What a step does when the concept views cannot represent the database
+   * after it (default `'throw'`, which fails the run). `'record'` keeps the
+   * reason on the step (`concept.unrepresentable`) and the normalised baseline
+   * records it in place of the step's concept changes — for a scenario whose
+   * subject IS such a state (TS-5 R5: today's account deletion leaves rows the
+   * migration's mapping cannot direct). The restored state must still be
+   * representable.
+   */
+  conceptUnrepresentable?: 'throw' | 'record';
 }): Promise<Harness> {
   const traceOpts: TraceOptions | null = opts.trace === true ? {} : opts.trace ? opts.trace : null;
   const conceptViews: readonly ConceptName[] =
@@ -236,6 +254,20 @@ export async function createHarness(opts: {
     }
   }
   const conceptSnapshot = (): Promise<Snapshot> => takeConceptSnapshot(fixture.target, fixture.database, conceptViews);
+  /**
+   * A concept snapshot, or — with `conceptUnrepresentable: 'record'` — the
+   * reason the views cannot represent the database (a `concept_check_*` row,
+   * or a view that RAISEs). Either is the migration precheck failing on this
+   * state, which is information, not a harness fault.
+   */
+  const conceptSnapshotOrReason = async (): Promise<{ snap?: Snapshot; reason?: string }> => {
+    try {
+      return { snap: await conceptSnapshot() };
+    } catch (e) {
+      if (opts.conceptUnrepresentable !== 'record') throw e;
+      return { reason: (e as Error).message };
+    }
+  };
 
   const logReader =
     traceOpts &&
@@ -259,6 +291,16 @@ export async function createHarness(opts: {
 
   const appModule = await import('../../app');
   const app = (appModule.default ?? appModule) as Express;
+  // One server for the run, bound to the loopback address explicitly.
+  // `request(app)` listens on an ephemeral port on every interface per request
+  // and the client then dials 127.0.0.1. TS-5 saw two runs fail on their first
+  // steps with `Parse Error: Expected HTTP/, RTSP/ or ICE/` — a non-HTTP peer
+  // answering — while other test processes were active on this machine; the
+  // suspected cause is a dual-stack listener sharing a port number with another
+  // process's 127.0.0.1 socket (macOS). Unproven; binding the address the
+  // client dials removes that ambiguity and changes no recorded byte.
+  const server = http.createServer(app);
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
 
   const { seeded } = fixture.manifest;
   const actors = { userA: seeded.userA, userB: seeded.userB };
@@ -300,7 +342,7 @@ export async function createHarness(opts: {
       }
 
       const before = await snapshot(tables);
-      const conceptBefore = conceptSql ? await conceptSnapshot() : undefined;
+      const conceptBefore = conceptSql ? await conceptSnapshotOrReason() : undefined;
 
       // Sentinels bracket the window. The begin marker goes after the `before`
       // snapshot so the snapshot's own statements are outside it, even though
@@ -314,7 +356,7 @@ export async function createHarness(opts: {
         windows.push({ beginToken, endToken });
       }
 
-      let test = call(request(app) as unknown as request.Agent, authHeaders(actor));
+      let test = call(request(server) as unknown as request.Agent, authHeaders(actor));
       for (const [k, v] of Object.entries(authHeaders(actor))) test = test.set(k, v);
       if (sse) {
         test = test
@@ -353,7 +395,13 @@ export async function createHarness(opts: {
       }
       // After the end marker, so the trace window is exactly what it was
       // before the concept views existed.
-      const conceptAfter = conceptBefore ? await conceptSnapshot() : undefined;
+      const conceptAfter = conceptBefore ? await conceptSnapshotOrReason() : undefined;
+      const concept: StepResult['concept'] =
+        conceptBefore && conceptAfter
+          ? conceptBefore.snap && conceptAfter.snap
+            ? { before: conceptBefore.snap, after: conceptAfter.snap }
+            : { before: conceptBefore.snap, unrepresentable: (conceptAfter.reason ?? conceptBefore.reason)! }
+          : undefined;
 
       return {
         label,
@@ -366,7 +414,7 @@ export async function createHarness(opts: {
         asyncBoundary: !!asyncBoundary,
         window: { from: startedAt, to: settledSnap.takenAt },
         ...(trace ? { trace } : {}),
-        ...(conceptBefore && conceptAfter ? { concept: { before: conceptBefore, after: conceptAfter } } : {}),
+        ...(concept ? { concept } : {}),
       };
     },
     async unwindowedStatements() {
@@ -375,6 +423,7 @@ export async function createHarness(opts: {
       return statementsOutsideWindows(parsePostgresLog(raw), { database: fixture.database, windows });
     },
     async teardown() {
+      await new Promise<void>(resolve => server.close(() => resolve()));
       const { prisma } = await import('../../lib/prisma');
       await prisma.$disconnect().catch(() => undefined);
       await marker?.end().catch(() => undefined);

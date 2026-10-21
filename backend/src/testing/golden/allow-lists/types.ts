@@ -88,7 +88,25 @@ export interface MayDifferRule extends RuleBase {
   kind: 'mayDiffer';
 }
 
-export type AllowRule = AbsentKeysRule | AddedKeysRule | ValuesSubsetRule | AddedEntriesRule | MayDifferRule;
+/**
+ * Keys that MAY be missing from the new artefact at matching objects (when
+ * present they are compared as usual). Unlike `absentKeys`, it holds on the
+ * current shape too — for a key whose disappearance on the target is expected
+ * but asserted elsewhere (TS-5 R5: `unrepresentable`, whose absence the
+ * scenario's own rule check requires).
+ */
+export interface MayBeAbsentRule extends RuleBase {
+  kind: 'mayBeAbsent';
+  keys: string[];
+}
+
+export type AllowRule =
+  | AbsentKeysRule
+  | AddedKeysRule
+  | ValuesSubsetRule
+  | AddedEntriesRule
+  | MayDifferRule
+  | MayBeAbsentRule;
 
 export interface AllowList {
   scenario: string;

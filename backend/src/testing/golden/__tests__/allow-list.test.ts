@@ -305,6 +305,22 @@ describe('compareWithAllowList — mechanics', () => {
     expect(compareWithAllowList(base, elsewhere, list).violations).toEqual([expect.stringContaining('category')]);
   });
 
+  it('mayBeAbsent lets a key disappear, holds when it stays equal, and still compares it when present (TS-5)', () => {
+    const list: AllowList = {
+      scenario: 'x',
+      rules: [{ kind: 'mayBeAbsent', at: 'steps.*', keys: ['unrepresentable'], mustMatch: true, why: 'test' }],
+    };
+    const base = { steps: [{ label: 's', unrepresentable: 'reason' }] };
+    expect(compareWithAllowList(base, base, list)).toEqual({ violations: [], unmatchedRules: [] });
+    expect(compareWithAllowList(base, { steps: [{ label: 's' }] }, list).violations).toEqual([]);
+    expect(compareWithAllowList(base, { steps: [{ label: 's', unrepresentable: 'other' }] }, list).violations).toEqual([
+      expect.stringContaining('steps.0.unrepresentable'),
+    ]);
+    expect(compareWithAllowList(base, { steps: [{ unrepresentable: 'reason' }] }, list).violations).toEqual([
+      expect.stringContaining('steps.0.label'),
+    ]);
+  });
+
   it('allows added entries in a keyed map of rows by predicate', () => {
     const list: AllowList = {
       scenario: 'x',

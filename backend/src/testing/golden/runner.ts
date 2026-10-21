@@ -179,6 +179,18 @@ export async function recordOrVerify(opts: {
     harness.fixture.manifest,
     harness.fixture.seededClerkIds,
   );
+  // Rows the run deleted (TS-5 R5: account deletion) are gone from the run
+  // database but still named in the `before` side of its changes. The fixture
+  // template holds them under the same ids (the run is its clone), labelled by
+  // the same rules; the run's own label wins wherever both have one, so a
+  // scenario that deletes nothing labels exactly as before.
+  const fixtureMap = await buildLabelMap(
+    harness.fixture.target,
+    harness.fixture.manifest.database,
+    harness.fixture.manifest,
+    harness.fixture.seededClerkIds,
+  );
+  for (const [id, label] of fixtureMap.labels) if (!map.labels.has(id)) map.labels.set(id, label);
 
   const normalized: GoldenStep[] = [];
   const unresolved: string[] = [];
@@ -290,8 +302,13 @@ export interface ConceptGoldenStep {
   status: number;
   body?: unknown;
   sse?: Array<{ event: string; data: unknown }>;
+  /**
+   * Why the concept views could not represent the database after this step
+   * (harness `conceptUnrepresentable: 'record'`); `changes` is absent then.
+   */
+  unrepresentable?: string;
   /** Concept-view row changes once the step settled, sorted by view then key. */
-  changes: Array<{
+  changes?: Array<{
     view: string;
     kind: RowChange['kind'];
     key: string;
@@ -359,7 +376,10 @@ export async function recordOrVerifyConcept(opts: {
   // keeps its label. Later snapshots win, but identity (and so the label's
   // natural key) cannot change for a given id.
   const merged = new Map<string, Map<string, SnapshotRow>>();
-  for (const snap of [initial, ...steps.flatMap(s => [s.concept!.before, s.concept!.after])]) {
+  const snaps = [initial, ...steps.flatMap(s => [s.concept!.before, s.concept!.after])].filter(
+    (x): x is Snapshot => !!x,
+  );
+  for (const snap of snaps) {
     for (const [concept, rows] of Object.entries(conceptTables(snap))) {
       const identity = [...(CONCEPT_VIEWS as Record<string, { identity: readonly string[] }>)[concept].identity];
       const m = merged.get(concept) ?? new Map<string, SnapshotRow>();
@@ -405,7 +425,23 @@ export async function recordOrVerifyConcept(opts: {
   }
 
   const goldenSteps: ConceptGoldenStep[] = steps.map(s => {
-    const raw = diffSnapshots(s.concept!.before, s.concept!.after).map(c => ({
+    const concept = s.concept!;
+    if (concept.unrepresentable !== undefined) {
+      // The views cannot represent the state after this step: record why, in
+      // place of its changes. On the target there is a state to compare, so
+      // the allow-list must name both `changes` (added) and `unrepresentable`
+      // (absent) for these steps — see driver `conceptUnrepresentable`.
+      const n = normalize({ body: s.sse ? undefined : s.body, sse: s.sse, reason: concept.unrepresentable }, map, s.window);
+      n.unresolved.forEach(u => unresolved.add(u));
+      const v = n.value as { body?: unknown; sse?: ConceptGoldenStep['sse']; reason: string };
+      return {
+        label: s.label,
+        status: s.status,
+        ...(s.sse ? { sse: v.sse } : { body: v.body }),
+        unrepresentable: v.reason,
+      };
+    }
+    const raw = diffSnapshots(concept.before, concept.after).map(c => ({
       view: conceptOf(c.table),
       kind: c.kind,
       changedFields: c.changedFields?.slice().sort(),

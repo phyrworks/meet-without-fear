@@ -132,14 +132,14 @@ describe(`golden: ${SCENARIO}`, () => {
   // A documented failure of the current shape, not of the scenario: it must
   // flip (and this test be inverted) when the target writes need_share.
   it(`KNOWN FINDING — ${NEEDS_SHARE_WRITES_NO_NEED_SHARE}`, () => {
-    const last = steps[steps.length - 1].concept!.after.tables;
+    const last = steps[steps.length - 1].concept!.after!.tables;
     const needConsents = last[viewName('consent')].filter(r => r.target_kind === 'NEED' && r.decision === 'GRANTED');
     expect(needConsents).toHaveLength(4);
     expect(last[viewName('need_share')]).toEqual([]);
   });
 
   it('proposal_need and need_disposition name only need_share ids', () => {
-    const last = steps[steps.length - 1].concept!.after.tables;
+    const last = steps[steps.length - 1].concept!.after!.tables;
     const shared = new Set(last[viewName('need_share')].map(r => String(r.need_id)));
     const named = [...last[viewName('proposal_need')], ...last[viewName('need_disposition')]].map(r => String(r.need_id));
     expect(named.filter(id => !shared.has(id))).toEqual([]);

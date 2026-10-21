@@ -105,13 +105,13 @@ export async function fullRead(
   harness: Harness,
   actor: { id: string; email: string; name: string },
   phase: string,
-  opts: { tables: string[]; set?: ReadSet; only?: string[] },
+  opts: { tables: string[]; set?: ReadSet; only?: string[]; except?: string[] },
 ): Promise<StepResult[]> {
   const set = opts.set ?? 'session';
   const reads: Array<readonly [string, string]> = [
     ...(set !== 'user' ? SESSION_READS.map(([n, p]) => [n, `/sessions/${harness.sessionId}${p}`] as const) : []),
     ...(set !== 'session' ? USER_READS : []),
-  ].filter(([n]) => !opts.only || opts.only.includes(n));
+  ].filter(([n]) => (!opts.only || opts.only.includes(n)) && !opts.except?.includes(n));
   const out: StepResult[] = [];
   for (const [name, path] of reads) {
     out.push(
@@ -155,6 +155,20 @@ export interface KnownLeak {
 }
 
 export const leakKey = (l: Leak): string => `${l.step} ⊃ ${l.probe}`;
+
+/**
+ * The mirror of `findLeaks` for content that MUST stay readable (R5: what
+ * survives a partner's account deletion): every probe found in none of the
+ * steps, reported as a `Leak` with step `<scope> ✗` so the same known-list
+ * contract (`unexpectedLeakReport`) applies — a missing probe not on the list
+ * fails, a listed one that reappears fails until its entry goes.
+ */
+export function findMissing(steps: StepResult[], probes: Record<string, string>, scope: string): Leak[] {
+  const text = steps.map(s => JSON.stringify(s.sse ?? s.body ?? null)).join('\n');
+  return Object.entries(probes)
+    .filter(([, needle]) => !text.includes(needle))
+    .map(([probe]) => ({ step: `${scope} ✗`, probe }));
+}
 
 /**
  * Leaks not on the known list, and known leaks no longer observed. Both must
