@@ -151,6 +151,23 @@ How they work (`privacy.ts`, `scenario-checks.ts`, `reveal-checks.ts`):
   direct; with `conceptUnrepresentable: 'record'` the concept baseline records the reason in place
   of a step's changes, and the allow-list (`mayBeAbsent`, `addedKeys`) lets the target supply them.
 
+- **Allow-list rules are pinned, never wildcard where it matters** (TS-5 fix round 1): delivered
+  copies are admitted only at the reveal step's index; `mayDiffer` names the exact keys a target fix
+  changes and is always paired with a probe; `addedKeys … each` pins what a step the baseline could
+  not record may contain; `replacedEntry` declares a row the target represents differently (R2: the
+  pre-reveal resubmit is a new round on the target — round 1 superseded, round 2 inserted and
+  revealed).
+- **Concept labels come from a row's first appearance**, so today's in-place resubmit keeps the
+  label the target's round-1 row will carry. Byte-level labels for rows a run deleted come from the
+  fixture template; a label that would collide with a survivor's fails the run.
+- **Two R4 checks are vacuous on the current shape**: "proposal_need / need_disposition name only
+  need_share ids" can only hold here (the views join need_share, which is empty). The scenarios pin
+  the emptiness; the bite is a `targetOnly` assertion (non-empty on the target).
+- **Fixture rebuilds can move the new goldens' timestamp ranks**: several TS-5 fixtures write rows
+  with `@default(now())` stamps in one millisecond, and a rebuild can split or merge those ties
+  (measured on TOMBSTONE_READY: carried-rank renumbering and the order of two consent records). The
+  pre-TS-5 property "a rebuild must not move a golden" holds for FEEL_HEARD_B only.
+
 GET `/sessions/:id/strategies` shuffles its list on every call (`controllers/stage4.ts`
 `shuffleArray`); with more than one proposal it cannot be part of a baseline, so the scenarios on
 such fixtures leave it out.
