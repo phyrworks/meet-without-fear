@@ -113,6 +113,20 @@ podman exec -i mwf-postgres psql -U mwf_user -d meet_without_fear < backend/scri
 Fresh production clusters get the roles from `infra/aws/init-db.sh`; existing ones (production)
 are an owner-only operator step with `roles.sql`.
 
+**Connecting as the job or the app.** Once the target shape is in (migration `*_target_shape`),
+the `app.*` SECURITY DEFINER functions treat a caller as *the job* only when it logged in as
+`mwf_job` or `mwf_migrator` (`session_user`) — the superuser `mwf_user` is **not** the job, so
+code or scripts that need the job arm (reveal, `need_share`, anonymising another user) must
+connect as `mwf_job`; request-path arms connect as `mwf_app` and set
+`app.current_user_id` with `SET LOCAL`/`set_config(…, true)`:
+
+```bash
+JOB_DATABASE_URL="postgresql://mwf_job:mwf_job_dev@127.0.0.1:5432/meet_without_fear"
+APP_DATABASE_URL="postgresql://mwf_app:mwf_app_dev@127.0.0.1:5432/meet_without_fear"
+# inside the container the local socket trusts every role:
+podman exec -it mwf-postgres psql -U mwf_job -d meet_without_fear
+```
+
 ### The golden harness changes one server-wide setting
 
 The SQL-trace oracle in `backend/src/testing/golden` reads Postgres's own statement log, so it needs
