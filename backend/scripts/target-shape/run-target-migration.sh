@@ -6,7 +6,8 @@
 #   backend/scripts/target-shape/run-target-migration.sh <ts7_name> [options]
 #
 # 1. CI-style check: the generator is deterministic (two runs, cmp) and the
-#    committed migration.sql equals its output.               (--check-only stops here)
+#    committed migration.sql and fix-data.template.sql equal its output.
+#                                                             (--check-only stops here)
 # 2. Builds <ts7_name> at the CURRENT shape: CREATE DATABASE, then
 #    `prisma migrate deploy` of the phoenix/base migration history from a
 #    checkout of phoenix/base (BASE_DIR, default <repo>/.ts7-base, created with
@@ -27,7 +28,7 @@
 # ones by name even if the pattern were loosened. Never `prisma migrate dev`,
 # never `db push`. Evidence goes to --out <dir> (default: a fresh mktemp dir).
 #
-# Options: --check-only | --no-fix | --fix-data <file> | --extras | --keep-going
+# Options: --check-only | --no-migrate (stop before step 6) | --no-fix | --fix-data <file> | --extras | --keep-going
 #          --skip-seed (reuse an existing current-shape database: only steps 4–8)
 #          --out <dir>
 # Env: MWF_PG_CONTAINER (mwf-postgres), PGUSER_SU (mwf_user), PGPASSWORD_SU
@@ -37,10 +38,11 @@
 set -euo pipefail
 
 DB="${1:-}"; shift || true
-CHECK_ONLY=0; NO_FIX=0; FIX_FILE=""; EXTRAS=0; KEEP_GOING=0; SKIP_SEED=0; OUT=""
+CHECK_ONLY=0; NO_MIGRATE=0; NO_FIX=0; FIX_FILE=""; EXTRAS=0; KEEP_GOING=0; SKIP_SEED=0; OUT=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --check-only) CHECK_ONLY=1 ;;
+    --no-migrate) NO_MIGRATE=1 ;;
     --no-fix) NO_FIX=1 ;;
     --fix-data) FIX_FILE="$2"; shift ;;
     --extras) EXTRAS=1 ;;
@@ -132,6 +134,7 @@ if [ "$NO_FIX" = 0 ]; then
 fi
 psql_db -f - <"$HERE/smoke-before.sql" >"$OUT/smoke-before.txt"
 echo "   old-shape facts recorded in schema ts7_smoke: $(grep 'smoke-before' "$OUT/smoke-before.txt" | tr -s ' ')"
+[ "$NO_MIGRATE" = 1 ] && { echo "no-migrate: $DB left at the current shape (seeded, fixed)"; exit 0; }
 
 # --- 6. the migration -----------------------------------------------------------
 step "6. prisma migrate deploy → $DB"
