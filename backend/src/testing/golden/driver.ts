@@ -13,7 +13,7 @@
 
 import type { Express } from 'express';
 import request from 'supertest';
-import { applyConceptViews, CURRENT_SHAPE_SQL, takeConceptSnapshot } from './concept-views';
+import { applyConceptViews, CONCEPT_NAMES, ConceptName, CURRENT_SHAPE_SQL, takeConceptSnapshot } from './concept-views';
 import { dropDatabase, mark, openMarkerClient } from './db';
 import { restoreFixture, RestoredFixture } from './fixtures';
 import type { FreshWindow } from './normalize';
@@ -207,10 +207,14 @@ export async function createHarness(opts: {
    * snapshot them around every step, for the normalised baseline
    * (`recordOrVerifyConcept`). `true` uses the current-shape SQL; a path picks
    * another concept SQL file (the target-shape one, after the rebuild).
+   * `views` narrows the snapshot to those concepts (default: all of them;
+   * `TS4_CONCEPT_NAMES` for the two scenarios recorded before TS-5's views).
    */
-  concept?: boolean | { sql: string };
+  concept?: boolean | { sql?: string; views?: readonly ConceptName[] };
 }): Promise<Harness> {
   const traceOpts: TraceOptions | null = opts.trace === true ? {} : opts.trace ? opts.trace : null;
+  const conceptViews: readonly ConceptName[] =
+    (typeof opts.concept === 'object' && opts.concept.views) || CONCEPT_NAMES;
   const fixture = await restoreFixture({
     baseUrl: opts.baseUrl,
     stage: opts.stage,
@@ -220,18 +224,18 @@ export async function createHarness(opts: {
 
   // After the restore (and its rebase), before anything is snapshotted. On
   // failure the run database must go, as `restoreFixture` does for its own.
-  const conceptSql = opts.concept === true ? CURRENT_SHAPE_SQL : opts.concept ? opts.concept.sql : null;
+  const conceptSql = opts.concept === true ? CURRENT_SHAPE_SQL : opts.concept ? (opts.concept.sql ?? CURRENT_SHAPE_SQL) : null;
   let conceptInitial: Snapshot | undefined;
   if (conceptSql) {
     try {
       await applyConceptViews(fixture.target, fixture.database, conceptSql);
-      conceptInitial = await takeConceptSnapshot(fixture.target, fixture.database);
+      conceptInitial = await takeConceptSnapshot(fixture.target, fixture.database, conceptViews);
     } catch (e) {
       await dropDatabase(fixture.target, fixture.database);
       throw e;
     }
   }
-  const conceptSnapshot = (): Promise<Snapshot> => takeConceptSnapshot(fixture.target, fixture.database);
+  const conceptSnapshot = (): Promise<Snapshot> => takeConceptSnapshot(fixture.target, fixture.database, conceptViews);
 
   const logReader =
     traceOpts &&

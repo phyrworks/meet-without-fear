@@ -49,6 +49,22 @@ describe('concept views — FEEL_HEARD_B', () => {
     if (fx) await fx.drop();
   });
 
+  it('TS-5 views: the invitation names Ada as inviter and Bob as acceptor; one read state per participant; no closure, no captures', async () => {
+    const inv = await q<{ inviter: string; acceptor: string; status: string; confirmed: boolean }>(
+      `SELECT ui.email AS inviter, ua.email AS acceptor, i.status, i.message_confirmed_at IS NOT NULL AS confirmed
+       FROM old_concept_invitation i
+       JOIN old_concept_participant p ON p.id = i.invited_by_participant_id
+       JOIN old_concept_user ui ON ui.id = p.user_id
+       JOIN old_concept_user ua ON ua.id = i.accepted_by_user_id`,
+    );
+    expect(inv).toEqual([{ inviter: 'ada@e2e.test', acceptor: 'bob@e2e.test', status: 'ACCEPTED', confirmed: true }]);
+    expect(
+      Number(await one(`SELECT count(*) FROM old_concept_conversation_read_state WHERE participant_id IS NOT NULL`)),
+    ).toBe(2);
+    expect(Number(await one(`SELECT count(*) FROM old_concept_session_closure`))).toBe(0);
+    expect(Number(await one(`SELECT count(*) FROM old_concept_brain_activity`))).toBe(0);
+  });
+
   it('has one participant per (session, user): two in FEEL_HEARD_B', async () => {
     expect(Number(await one(`SELECT count(*) FROM old_concept_participant`))).toBe(2);
     expect(

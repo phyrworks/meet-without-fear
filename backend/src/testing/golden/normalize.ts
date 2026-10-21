@@ -539,6 +539,15 @@ export function buildConceptLabelMap(input: ConceptLabelInput): LabelMap {
   ranked('reflection_message', 'reflectionMessage', 'reflection_id', ['created_at']);
   ranked('takeaway', 'takeaway', 'reflection_id', ['position']);
 
+  // brain_activity (TS-5): ranked by time within the reflection it belongs to,
+  // else its session — `<brainActivity:session:main#2>`,
+  // `<brainActivity:reflection:ada#1#1>`. Labels above must exist first.
+  for (const [parent, group] of groupBy(rows('brain_activity'), r => label(r.reflection_id) ?? label(r.session_id))) {
+    sortedBy(group, ['created_at']).forEach((r, i) =>
+      labels.set(String(r.id), `<brainActivity:${inner(parent)}#${i + 1}>`),
+    );
+  }
+
   // consent: who decided, over what kind, about which target. A consent whose
   // arc names nothing labelled is ranked within (who, kind) — never globally,
   // which would make a consent against the wrong target byte-identical.

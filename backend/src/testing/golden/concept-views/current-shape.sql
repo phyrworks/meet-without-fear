@@ -978,3 +978,118 @@ FROM "SessionTakeaway" t;
 CREATE VIEW old_concept_takeaway_link AS
 SELECT l."sourceId" AS source_id, l."targetId" AS target_id, l."linkType"::text AS link_type, l.similarity, l."createdAt" AS created_at
 FROM "TakeawayLink" l;
+
+
+-- ============================================================================
+-- TS-5 additions (golden scenarios R1–R7). Same conventions as above.
+-- ============================================================================
+
+-- ----------------------------------------------------------------------------
+-- invitation — spec §1.1 `invitation`, Absorbs: `Invitation`
+-- (`messageConfirmed` folded into the timestamp; `invitedById` →
+-- participant). Ids kept (plan §2 "ids kept" list).
+--
+-- accepted_by_user_id is a NEW column (P3 §6) the old shape does not have.
+-- The plan names no source for it; the target CHECK requires it on every
+-- ACCEPTED row, so the migration must derive it. ASSUMPTION (TS-5): the
+-- session's one participant other than the inviter, for an ACCEPTED row;
+-- NULL otherwise, and NULL when there is not exactly one such participant
+-- (the scalar subquery would RAISE — the precheck).
+-- message_confirmed_at ← messageConfirmedAt only where messageConfirmed (the
+-- boolean is folded into the timestamp). updated_at: the old row has none;
+-- not projected.
+-- ----------------------------------------------------------------------------
+CREATE VIEW old_concept_invitation AS
+SELECT
+  i.id,
+  i."sessionId" AS session_id,
+  ip.id AS invited_by_participant_id,
+  CASE WHEN i.status::text = 'ACCEPTED' THEN
+    (SELECT o.user_id FROM old_concept_participant o
+      WHERE o.session_id = i."sessionId" AND o.user_id <> i."invitedById")
+  END AS accepted_by_user_id,
+  i.name,
+  i.status::text AS status,
+  CASE WHEN i."messageConfirmed" THEN i."messageConfirmedAt" END AS message_confirmed_at,
+  i."expiresAt"  AS expires_at,
+  i."acceptedAt" AS accepted_at,
+  i."declinedAt" AS declined_at,
+  i."declineReason" AS decline_reason,
+  i."createdAt" AS created_at
+FROM "Invitation" i
+LEFT JOIN old_concept_participant ip ON ip.session_id = i."sessionId" AND ip.user_id = i."invitedById";
+
+
+-- ----------------------------------------------------------------------------
+-- conversation_read_state — spec §1.1 `conversation_read_state`, Absorbs:
+-- `UserVessel.{lastViewedAt, lastSeenChatItemId, lastViewedShareTabAt,
+-- lastActiveAt, archivedAt}`. Plan §3 step 6. One row per UserVessel (the
+-- target: one per participant, PK participant_id).
+-- last_seen_message_id ← lastSeenChatItemId only where it names a Message
+-- (target FK message SET NULL); other chat-item ids drop to NULL.
+-- updated_at ← UserVessel.updatedAt.
+-- ----------------------------------------------------------------------------
+CREATE VIEW old_concept_conversation_read_state AS
+SELECT
+  p.id AS participant_id,
+  uv."lastViewedAt" AS last_viewed_at,
+  (SELECT m.id FROM "Message" m WHERE m.id::text = lower(uv."lastSeenChatItemId")) AS last_seen_message_id,
+  uv."lastViewedShareTabAt" AS last_viewed_share_tab_at,
+  uv."lastActiveAt" AS last_active_at,
+  uv."archivedAt"   AS archived_at,
+  uv."updatedAt"    AS updated_at
+FROM "UserVessel" uv
+LEFT JOIN old_concept_participant p ON p.session_id = uv."sessionId" AND p.user_id = uv."userId";
+
+
+-- ----------------------------------------------------------------------------
+-- session_closure — spec §1.4 `session_closure`, Absorbs: `Stage4Closure`
+-- minus `sharedAgreementIds`, `individualProposalIds`, `openNeedIds` (→
+-- `v_session_closure_items`). Plan §3 step 13. closed_by_participant_id ←
+-- closedByUserId (text, no FK) resolved within the session; NULL =
+-- auto-closure.
+-- ----------------------------------------------------------------------------
+CREATE VIEW old_concept_session_closure AS
+SELECT
+  c."sessionId" AS session_id,
+  c.kind::text   AS kind,
+  c.reason::text AS reason,
+  c.summary,
+  cp.id AS closed_by_participant_id,
+  c."checkInAt" AS check_in_at,
+  c."closedAt"  AS closed_at,
+  c."createdAt" AS created_at
+FROM "Stage4Closure" c
+LEFT JOIN old_concept_participant cp
+  ON cp.session_id = c."sessionId" AND cp.user_id::text = lower(c."closedByUserId");
+
+
+-- ----------------------------------------------------------------------------
+-- brain_activity — spec §1.8 `brain_activity`, Absorbs: `BrainActivity`
+-- (`innerWorkSessionId` → `reflection_id`). Plan §3 step 18:
+-- participant_id NULL for history — the old row records no participant (some
+-- turnIds embed a user id, and RETRIEVAL inputs carry `userId`, but the plan
+-- does not derive one). Ids kept.
+-- ----------------------------------------------------------------------------
+CREATE VIEW old_concept_brain_activity AS
+SELECT
+  b.id,
+  b."sessionId" AS session_id,
+  b."innerWorkSessionId" AS reflection_id,
+  NULL::uuid AS participant_id,
+  b."turnId" AS turn_id,
+  b."activityType"::text AS activity_type,
+  b."callType"::text AS call_type,
+  b.model,
+  b.input,
+  b.output,
+  b.metadata,
+  b."structuredOutput" AS structured_output,
+  b."tokenCountInput"  AS token_count_input,
+  b."tokenCountOutput" AS token_count_output,
+  b."durationMs" AS duration_ms,
+  b.cost,
+  b.status::text AS status,
+  b."createdAt"   AS created_at,
+  b."completedAt" AS completed_at
+FROM "BrainActivity" b;
