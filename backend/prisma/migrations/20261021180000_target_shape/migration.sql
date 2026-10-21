@@ -2075,6 +2075,33 @@ JOIN "IdentifiedNeed" n ON n.id = app_migration.as_uuid(cr."targetId")
 JOIN "UserVessel" uv ON uv.id = n."vesselId"
 WHERE uv."sessionId" <> sv."sessionId";
 
+-- P20e need_consent_unresolved (a granted IDENTIFIED_NEED ConsentRecord is a need_share: targetId must be a need)
+INSERT INTO app_migration.precheck (check_name, offender, detail)
+SELECT 'need_consent_unresolved', c.id::text, coalesce(c."targetId", 'NULL') || ' (' || c.decision::text || ')'
+FROM "ConsentRecord" c
+WHERE c."targetType" = 'IDENTIFIED_NEED' AND c.decision IN ('GRANTED', 'REVOKED')
+  AND NOT EXISTS (SELECT 1 FROM "IdentifiedNeed" n WHERE n.id = app_migration.as_uuid(c."targetId"));
+
+-- P20f need_consent_duplicate (need_share PK need_id: one granted record per need without ConsentedContent)
+INSERT INTO app_migration.precheck (check_name, offender, detail)
+SELECT 'need_consent_duplicate', c."targetId", string_agg(c.id::text, ', ' ORDER BY c.id)
+FROM "ConsentRecord" c
+WHERE c."targetType" = 'IDENTIFIED_NEED' AND c.decision IN ('GRANTED', 'REVOKED')
+  AND EXISTS (SELECT 1 FROM "IdentifiedNeed" n WHERE n.id = app_migration.as_uuid(c."targetId"))
+  AND NOT EXISTS (SELECT 1 FROM "ConsentedContent" xcc JOIN "ConsentRecord" xcr ON xcr.id = xcc."consentRecordId"
+                  WHERE app_migration.as_uuid(xcr."targetId") = app_migration.as_uuid(c."targetId"))
+GROUP BY c."targetId"
+HAVING count(*) > 1;
+
+-- P20g need_consent_revocation (CHECK need_share.revoked_at >= shared_at for a record-sourced share)
+INSERT INTO app_migration.precheck (check_name, offender, detail)
+SELECT 'need_consent_revocation', c.id::text, format('decidedAt=%s createdAt=%s revokedAt=%s', c."decidedAt", c."createdAt", c."revokedAt")
+FROM "ConsentRecord" c
+WHERE c."targetType" = 'IDENTIFIED_NEED' AND c.decision IN ('GRANTED', 'REVOKED')
+  AND NOT EXISTS (SELECT 1 FROM "ConsentedContent" xcc JOIN "ConsentRecord" xcr ON xcr.id = xcc."consentRecordId"
+                  WHERE app_migration.as_uuid(xcr."targetId") = app_migration.as_uuid(c."targetId"))
+  AND c."revokedAt" < coalesce(c."decidedAt", c."createdAt");
+
 -- P21 proposal_removed_dates (CHECK (status = REMOVED) = (removed_at IS NOT NULL))
 INSERT INTO app_migration.precheck (check_name, offender, detail)
 SELECT 'proposal_removed_dates', id::text, format('status=%s removedAt=%s', status, "removedAt")
@@ -2698,9 +2725,12 @@ FROM "IdentifiedNeed" o WHERE o.id = need.id AND o."supersededByNeedId" IS NOT N
 SELECT app_migration.assert(a = b, format('needs: %s need rows for %s "IdentifiedNeed" rows', a, b))
 FROM (SELECT (SELECT count(*) FROM need) AS a, (SELECT count(*) FROM "IdentifiedNeed") AS b) x;
 
--- ---- Step 12 (part): need_share ← ConsentedContent. need via consentRecordId
--- → ConsentRecord.targetId (originalNeedId was never written, census §3);
--- participant_id/session_id from the resolved need's owner (pass 2 N-1).
+-- ---- Step 12 (part): need_share ← ConsentedContent ∪ granted IDENTIFIED_NEED
+-- ConsentRecord rows (TS-7b). participant_id/session_id from the resolved
+-- need's owner (pass 2 N-1; T-need-share-owner).
+-- (a) ConsentedContent: need via consentRecordId → ConsentRecord.targetId
+-- (originalNeedId was never written, census §3); shared_text = the
+-- transformed text.
 WITH ins AS (
   INSERT INTO need_share (need_id, participant_id, session_id, category, shared_text, shared_at, revoked_at, created_at, updated_at)
   SELECT n.id, n.participant_id, p.session_id, n.category, cc."transformedContent", cc."consentedAt", cc."revokedAt",
@@ -2715,12 +2745,66 @@ SELECT app_migration.note('12', 'need_share from ConsentedContent', count(*)) FR
 INSERT INTO app_migration.shape_map
 SELECT 'need_share:ConsentedContent', cc.id::text, app_migration.as_uuid(cr."targetId")
 FROM "ConsentedContent" cc JOIN "ConsentRecord" cr ON cr.id = cc."consentRecordId";
-SELECT app_migration.assert(a = b, format('step 12: %s need_share rows for %s "ConsentedContent" rows', a, b))
-FROM (SELECT (SELECT count(*) FROM need_share) AS a, (SELECT count(*) FROM "ConsentedContent") AS b) x;
+-- (b) the Stage 3 share-needs handler (stage3.ts ~750-780 on phoenix/base)
+-- writes one GRANTED ConsentRecord(IDENTIFIED_NEED) per shared need and never
+-- a ConsentedContent row: a granted (or since revoked) record whose need has
+-- no ConsentedContent is the share. No transformed text exists on this path:
+-- shared_text = the need's label. shared_at = the grant time (decidedAt),
+-- else the owner's stage-3 gatesSatisfied.sharedAt, else the record's
+-- createdAt; revoked_at from the record. P20e-P20g guarantee one resolvable
+-- record per such need, with revoked_at >= shared_at. Step 12's consent copy
+-- below still writes the consent row for the same record: one record, one
+-- consent, one need_share.
+CREATE TABLE app_migration.need_share_record_src AS
+SELECT cr.id AS record_id, n.id AS need_id, n.participant_id, p.session_id, n.category, n.label,
+       coalesce(cr."decidedAt",
+                (SELECT app_migration.ts(sp."gatesSatisfied" -> 'sharedAt') FROM "StageProgress" sp
+                 WHERE sp."sessionId" = p.session_id AND sp."userId" = p.user_id AND sp.stage = 3
+                   AND jsonb_typeof(sp."gatesSatisfied") = 'object'),
+                cr."createdAt") AS shared_at,
+       CASE WHEN cr."decidedAt" IS NOT NULL THEN 'decidedAt'
+            WHEN EXISTS (SELECT 1 FROM "StageProgress" sp
+                         WHERE sp."sessionId" = p.session_id AND sp."userId" = p.user_id AND sp.stage = 3
+                           AND jsonb_typeof(sp."gatesSatisfied") = 'object' AND app_migration.ts(sp."gatesSatisfied" -> 'sharedAt') IS NOT NULL)
+              THEN 'gatesSatisfied.sharedAt'
+            ELSE 'createdAt' END AS shared_at_source,
+       cr."revokedAt" AS revoked_at
+FROM "ConsentRecord" cr
+JOIN need n ON n.id = app_migration.as_uuid(cr."targetId")
+JOIN participant p ON p.id = n.participant_id
+WHERE cr."targetType" = 'IDENTIFIED_NEED' AND cr.decision IN ('GRANTED', 'REVOKED')
+  AND NOT EXISTS (SELECT 1 FROM "ConsentedContent" xcc JOIN "ConsentRecord" xcr ON xcr.id = xcc."consentRecordId"
+                  WHERE app_migration.as_uuid(xcr."targetId") = n.id);
+WITH ins AS (
+  INSERT INTO need_share (need_id, participant_id, session_id, category, shared_text, shared_at, revoked_at, created_at, updated_at)
+  SELECT need_id, participant_id, session_id, category, label, shared_at, revoked_at, shared_at, coalesce(revoked_at, shared_at)
+  FROM app_migration.need_share_record_src
+  ORDER BY need_id
+  RETURNING need_id
+)
+SELECT app_migration.note('12', 'need_share from a granted IDENTIFIED_NEED ConsentRecord without ConsentedContent (Stage 3 share; shared_text = need label)', count(*))
+FROM ins;
+SELECT app_migration.note('12', 'need_share from a ConsentRecord: shared_at from ' || shared_at_source, count(*))
+FROM app_migration.need_share_record_src GROUP BY shared_at_source;
+INSERT INTO app_migration.shape_map
+SELECT 'need_share:ConsentRecord', record_id::text, need_id FROM app_migration.need_share_record_src;
+
+-- Reported both ways: need_share = ConsentedContent + qualifying records, and
+-- every granted IDENTIFIED_NEED record lands in exactly one need_share
+-- (need_id is the PK: "exactly one" is "one").
+SELECT app_migration.assert(a = b + c, format('step 12: %s need_share rows for %s "ConsentedContent" rows + %s granted IDENTIFIED_NEED "ConsentRecord" rows without ConsentedContent', a, b, c))
+FROM (SELECT (SELECT count(*) FROM need_share) AS a, (SELECT count(*) FROM "ConsentedContent") AS b,
+             (SELECT count(*) FROM app_migration.need_share_record_src) AS c) x;
+SELECT app_migration.assert(n = 0, format('step 12: %s granted IDENTIFIED_NEED "ConsentRecord" row(s) without exactly one need_share: %s', n, ids))
+FROM (SELECT count(*) AS n, string_agg(cr.id::text, ', ' ORDER BY cr.id) AS ids
+      FROM "ConsentRecord" cr
+      WHERE cr."targetType" = 'IDENTIFIED_NEED' AND cr.decision IN ('GRANTED', 'REVOKED')
+        AND (SELECT count(*) FROM need_share ns WHERE ns.need_id = app_migration.as_uuid(cr."targetId")) <> 1) x;
 SELECT app_migration.assert(n = 0, format('step 12: %s need_share row(s) whose participant_id/session_id is not the need owner''s (T-need-share-owner)', n))
 FROM (SELECT count(*) AS n FROM need_share ns
       JOIN need n ON n.id = ns.need_id JOIN participant p ON p.id = n.participant_id
       WHERE ns.participant_id <> n.participant_id OR ns.session_id <> p.session_id) x;
+DROP TABLE app_migration.need_share_record_src;
 
 -- ---- Step 8: need_disposition ← stage4Walkthrough {currentNeedId,
 -- coveredNeedIds, skippedNeedIds} (stage4.ts:500, stream-turn-actions.ts:243;
@@ -4411,8 +4495,13 @@ CREATE FUNCTION app.anonymize_user_in_session(session uuid, participant uuid) RE
     DELETE FROM public.follow_up_checkin c USING public.follow_up f
       WHERE c.follow_up_id = f.id AND f.scope = 'INDIVIDUAL' AND c.participant_id = pid;
     DELETE FROM public.empathy_attempt WHERE author_participant_id = pid AND revealed_at IS NULL;  -- cascades results, offers, reviews
-    -- 4. full prompts in plaintext
-    DELETE FROM public.brain_activity WHERE participant_id = pid;
+    -- 4. full prompts in plaintext: the participant's own rows, and (ruling
+    -- R17) every row of the session with no participant — migrated history
+    -- (BrainActivity had no user column) cannot be attributed; deleting the
+    -- partner's telemetry too is acceptable, leaking the leaver's prompts is not
+    DELETE FROM public.brain_activity
+    WHERE participant_id = pid
+       OR (session_id = anonymize_user_in_session.session AND participant_id IS NULL);
     -- 7. the participant-key shred
     UPDATE public.participant_key SET destroyed_at = now() WHERE participant_id = pid AND destroyed_at IS NULL;
   END
@@ -5108,7 +5197,7 @@ GRANT SELECT (id, scope) ON follow_up TO mwf_job;
 GRANT SELECT (participant_id) ON conversation_read_state, draft, mood_reading, regulation_event, need_disposition, follow_up_note, proposal_choice TO mwf_job;
 GRANT SELECT (participant_id, user_id) ON ai_memory TO mwf_job;
 GRANT SELECT (follow_up_id, participant_id) ON follow_up_checkin TO mwf_job;
-GRANT SELECT (participant_id, reflection_id) ON brain_activity TO mwf_job;
+GRANT SELECT (session_id, participant_id, reflection_id) ON brain_activity TO mwf_job;  -- session_id: R17 (step 4, NULL-participant history)
 GRANT SELECT (id, user_id) ON reflection TO mwf_job;
 GRANT SELECT (user_id) ON feature_state, user_memory, user_device, user_preferences, reminder TO mwf_job;
 GRANT DELETE ON conversation, conversation_read_state, draft, ai_memory, mood_reading, regulation_event, need_disposition,
