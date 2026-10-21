@@ -14,7 +14,18 @@ import {
   DEFAULT_NOTIFICATION_PREFERENCES,
   DEFAULT_PRIVACY_PREFERENCES,
 } from '../../../../shared/src/dto/auth';
-import { DROPPED_KEYS, MILESTONES, MILESTONE_RULES, TERMINAL_MILESTONE, atExpr, jsonLit, lit, litArr } from './maps';
+import {
+  DROPPED_KEYS,
+  MILESTONES,
+  MILESTONE_RULES,
+  TERMINAL_MILESTONE,
+  atExpr,
+  jsonLit,
+  lit,
+  litArr,
+  needConsentGranted,
+  needHasNoConsentedContent,
+} from './maps';
 
 const terminalArr = `ARRAY[${TERMINAL_MILESTONE.map(lit).join(', ')}]`;
 
@@ -365,9 +376,12 @@ FROM "IdentifiedNeed" o WHERE o.id = need.id AND o."supersededByNeedId" IS NOT N
 SELECT app_migration.assert(a = b, format('needs: %s need rows for %s "IdentifiedNeed" rows', a, b))
 FROM (SELECT (SELECT count(*) FROM need) AS a, (SELECT count(*) FROM "IdentifiedNeed") AS b) x;
 
--- ---- Step 12 (part): need_share ← ConsentedContent. need via consentRecordId
--- → ConsentRecord.targetId (originalNeedId was never written, census §3);
--- participant_id/session_id from the resolved need's owner (pass 2 N-1).
+-- ---- Step 12 (part): need_share ← ConsentedContent ∪ granted IDENTIFIED_NEED
+-- ConsentRecord rows (TS-7b). participant_id/session_id from the resolved
+-- need's owner (pass 2 N-1; T-need-share-owner).
+-- (a) ConsentedContent: need via consentRecordId → ConsentRecord.targetId
+-- (originalNeedId was never written, census §3); shared_text = the
+-- transformed text.
 WITH ins AS (
   INSERT INTO need_share (need_id, participant_id, session_id, category, shared_text, shared_at, revoked_at, created_at, updated_at)
   SELECT n.id, n.participant_id, p.session_id, n.category, cc."transformedContent", cc."consentedAt", cc."revokedAt",
@@ -382,12 +396,65 @@ SELECT app_migration.note('12', 'need_share from ConsentedContent', count(*)) FR
 INSERT INTO app_migration.shape_map
 SELECT 'need_share:ConsentedContent', cc.id::text, app_migration.as_uuid(cr."targetId")
 FROM "ConsentedContent" cc JOIN "ConsentRecord" cr ON cr.id = cc."consentRecordId";
-SELECT app_migration.assert(a = b, format('step 12: %s need_share rows for %s "ConsentedContent" rows', a, b))
-FROM (SELECT (SELECT count(*) FROM need_share) AS a, (SELECT count(*) FROM "ConsentedContent") AS b) x;
+-- (b) the Stage 3 share-needs handler (stage3.ts ~750-780 on phoenix/base)
+-- writes one GRANTED ConsentRecord(IDENTIFIED_NEED) per shared need and never
+-- a ConsentedContent row: a granted (or since revoked) record whose need has
+-- no ConsentedContent is the share. No transformed text exists on this path:
+-- shared_text = the need's label. shared_at = the grant time (decidedAt),
+-- else the owner's stage-3 gatesSatisfied.sharedAt, else the record's
+-- createdAt; revoked_at from the record. P20e-P20g guarantee one resolvable
+-- record per such need, with revoked_at >= shared_at. Step 12's consent copy
+-- below still writes the consent row for the same record: one record, one
+-- consent, one need_share.
+CREATE TABLE app_migration.need_share_record_src AS
+SELECT cr.id AS record_id, n.id AS need_id, n.participant_id, p.session_id, n.category, n.label,
+       coalesce(cr."decidedAt",
+                (SELECT app_migration.ts(sp."gatesSatisfied" -> 'sharedAt') FROM "StageProgress" sp
+                 WHERE sp."sessionId" = p.session_id AND sp."userId" = p.user_id AND sp.stage = 3
+                   AND jsonb_typeof(sp."gatesSatisfied") = 'object'),
+                cr."createdAt") AS shared_at,
+       CASE WHEN cr."decidedAt" IS NOT NULL THEN 'decidedAt'
+            WHEN EXISTS (SELECT 1 FROM "StageProgress" sp
+                         WHERE sp."sessionId" = p.session_id AND sp."userId" = p.user_id AND sp.stage = 3
+                           AND jsonb_typeof(sp."gatesSatisfied") = 'object' AND app_migration.ts(sp."gatesSatisfied" -> 'sharedAt') IS NOT NULL)
+              THEN 'gatesSatisfied.sharedAt'
+            ELSE 'createdAt' END AS shared_at_source,
+       cr."revokedAt" AS revoked_at
+FROM "ConsentRecord" cr
+JOIN need n ON n.id = app_migration.as_uuid(cr."targetId")
+JOIN participant p ON p.id = n.participant_id
+WHERE ${needConsentGranted('cr')}
+  AND ${needHasNoConsentedContent('n.id')};
+WITH ins AS (
+  INSERT INTO need_share (need_id, participant_id, session_id, category, shared_text, shared_at, revoked_at, created_at, updated_at)
+  SELECT need_id, participant_id, session_id, category, label, shared_at, revoked_at, shared_at, coalesce(revoked_at, shared_at)
+  FROM app_migration.need_share_record_src
+  ORDER BY need_id
+  RETURNING need_id
+)
+SELECT app_migration.note('12', 'need_share from a granted IDENTIFIED_NEED ConsentRecord without ConsentedContent (Stage 3 share; shared_text = need label)', count(*))
+FROM ins;
+SELECT app_migration.note('12', 'need_share from a ConsentRecord: shared_at from ' || shared_at_source, count(*))
+FROM app_migration.need_share_record_src GROUP BY shared_at_source;
+INSERT INTO app_migration.shape_map
+SELECT 'need_share:ConsentRecord', record_id::text, need_id FROM app_migration.need_share_record_src;
+
+-- Reported both ways: need_share = ConsentedContent + qualifying records, and
+-- every granted IDENTIFIED_NEED record lands in exactly one need_share
+-- (need_id is the PK: "exactly one" is "one").
+SELECT app_migration.assert(a = b + c, format('step 12: %s need_share rows for %s "ConsentedContent" rows + %s granted IDENTIFIED_NEED "ConsentRecord" rows without ConsentedContent', a, b, c))
+FROM (SELECT (SELECT count(*) FROM need_share) AS a, (SELECT count(*) FROM "ConsentedContent") AS b,
+             (SELECT count(*) FROM app_migration.need_share_record_src) AS c) x;
+SELECT app_migration.assert(n = 0, format('step 12: %s granted IDENTIFIED_NEED "ConsentRecord" row(s) without exactly one need_share: %s', n, ids))
+FROM (SELECT count(*) AS n, string_agg(cr.id::text, ', ' ORDER BY cr.id) AS ids
+      FROM "ConsentRecord" cr
+      WHERE ${needConsentGranted('cr')}
+        AND (SELECT count(*) FROM need_share ns WHERE ns.need_id = app_migration.as_uuid(cr."targetId")) <> 1) x;
 SELECT app_migration.assert(n = 0, format('step 12: %s need_share row(s) whose participant_id/session_id is not the need owner''s (T-need-share-owner)', n))
 FROM (SELECT count(*) AS n FROM need_share ns
       JOIN need n ON n.id = ns.need_id JOIN participant p ON p.id = n.participant_id
       WHERE ns.participant_id <> n.participant_id OR ns.session_id <> p.session_id) x;
+DROP TABLE app_migration.need_share_record_src;
 
 -- ---- Step 8: need_disposition ← stage4Walkthrough {currentNeedId,
 -- coveredNeedIds, skippedNeedIds} (stage4.ts:500, stream-turn-actions.ts:243;

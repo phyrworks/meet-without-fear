@@ -190,6 +190,21 @@ const FIXES: Record<string, string> = {
 -- The shared need must belong to the session it was shared into.
 -- (Investigate: a need shared across sessions is a bug; delete the row.)
 -- DELETE FROM "ConsentedContent" WHERE id IN (<ids>);`,
+  need_consent_unresolved: `
+-- A granted IDENTIFIED_NEED ConsentRecord is a shared need (the Stage 3
+-- share-needs handler writes no ConsentedContent), so its targetId must name
+-- an IdentifiedNeed. Point it at the need that was shared, or — if that need
+-- is gone — record the decision with the owner and delete the record.
+-- UPDATE "ConsentRecord" SET "targetId" = '<need id>' WHERE id = '<record id>';
+-- or: DELETE FROM "ConsentRecord" WHERE id IN (<ids>);`,
+  need_consent_duplicate: `
+-- need_share is keyed by need: one granted record per need without
+-- ConsentedContent. Keep the earliest grant (it dates the share); a later
+-- revocation belongs on the kept row.
+-- DELETE FROM "ConsentRecord" WHERE id IN (<later duplicate ids>);`,
+  need_consent_revocation: `
+-- A share cannot be revoked before it was granted (need_share CHECK).
+-- UPDATE "ConsentRecord" SET "revokedAt" = coalesce("decidedAt", "createdAt") WHERE id IN (<ids>);`,
   proposal_removed_dates: `
 -- CHECK (status = REMOVED) = (removed_at IS NOT NULL).
 -- UPDATE "StrategyProposal" SET "removedAt" = "updatedAt" WHERE status = 'REMOVED' AND "removedAt" IS NULL AND id IN (<ids>);`,

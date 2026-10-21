@@ -18,6 +18,8 @@ import {
   TIMESTAMP_KEYS,
   WALKTHROUGH_KEYS,
   litArr,
+  needConsentGranted,
+  needHasNoConsentedContent,
   q,
 } from './maps';
 
@@ -314,6 +316,31 @@ JOIN "SharedVessel" sv ON sv.id = cc."sharedVesselId"
 JOIN "IdentifiedNeed" n ON n.id = app_migration.as_uuid(cr."targetId")
 JOIN "UserVessel" uv ON uv.id = n."vesselId"
 WHERE uv."sessionId" <> sv."sessionId"`));
+
+  // need_share's second source (TS-7b): a granted IDENTIFIED_NEED
+  // ConsentRecord with no ConsentedContent on its need — what production's
+  // Stage 3 share-needs handler writes (stage3.ts ~750-780 on phoenix/base).
+  parts.push(P('P20e need_consent_unresolved (a granted IDENTIFIED_NEED ConsentRecord is a need_share: targetId must be a need)', `
+SELECT 'need_consent_unresolved', c.id::text, coalesce(c."targetId", 'NULL') || ' (' || c.decision::text || ')'
+FROM "ConsentRecord" c
+WHERE ${needConsentGranted('c')}
+  AND NOT EXISTS (SELECT 1 FROM "IdentifiedNeed" n WHERE n.id = app_migration.as_uuid(c."targetId"))`));
+
+  parts.push(P('P20f need_consent_duplicate (need_share PK need_id: one granted record per need without ConsentedContent)', `
+SELECT 'need_consent_duplicate', c."targetId", string_agg(c.id::text, ', ' ORDER BY c.id)
+FROM "ConsentRecord" c
+WHERE ${needConsentGranted('c')}
+  AND EXISTS (SELECT 1 FROM "IdentifiedNeed" n WHERE n.id = app_migration.as_uuid(c."targetId"))
+  AND ${needHasNoConsentedContent('app_migration.as_uuid(c."targetId")')}
+GROUP BY c."targetId"
+HAVING count(*) > 1`));
+
+  parts.push(P('P20g need_consent_revocation (CHECK need_share.revoked_at >= shared_at for a record-sourced share)', `
+SELECT 'need_consent_revocation', c.id::text, format('decidedAt=%s createdAt=%s revokedAt=%s', c."decidedAt", c."createdAt", c."revokedAt")
+FROM "ConsentRecord" c
+WHERE ${needConsentGranted('c')}
+  AND ${needHasNoConsentedContent('app_migration.as_uuid(c."targetId")')}
+  AND c."revokedAt" < coalesce(c."decidedAt", c."createdAt")`));
 
   parts.push(P('P21 proposal_removed_dates (CHECK (status = REMOVED) = (removed_at IS NOT NULL))', `
 SELECT 'proposal_removed_dates', id::text, format('status=%s removedAt=%s', status, "removedAt")
