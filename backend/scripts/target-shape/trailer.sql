@@ -488,8 +488,13 @@ CREATE FUNCTION app.anonymize_user_in_session(session uuid, participant uuid) RE
     DELETE FROM public.follow_up_checkin c USING public.follow_up f
       WHERE c.follow_up_id = f.id AND f.scope = 'INDIVIDUAL' AND c.participant_id = pid;
     DELETE FROM public.empathy_attempt WHERE author_participant_id = pid AND revealed_at IS NULL;  -- cascades results, offers, reviews
-    -- 4. full prompts in plaintext
-    DELETE FROM public.brain_activity WHERE participant_id = pid;
+    -- 4. full prompts in plaintext: the participant's own rows, and (ruling
+    -- R17) every row of the session with no participant — migrated history
+    -- (BrainActivity had no user column) cannot be attributed; deleting the
+    -- partner's telemetry too is acceptable, leaking the leaver's prompts is not
+    DELETE FROM public.brain_activity
+    WHERE participant_id = pid
+       OR (session_id = anonymize_user_in_session.session AND participant_id IS NULL);
     -- 7. the participant-key shred
     UPDATE public.participant_key SET destroyed_at = now() WHERE participant_id = pid AND destroyed_at IS NULL;
   END
@@ -1185,7 +1190,7 @@ GRANT SELECT (id, scope) ON follow_up TO mwf_job;
 GRANT SELECT (participant_id) ON conversation_read_state, draft, mood_reading, regulation_event, need_disposition, follow_up_note, proposal_choice TO mwf_job;
 GRANT SELECT (participant_id, user_id) ON ai_memory TO mwf_job;
 GRANT SELECT (follow_up_id, participant_id) ON follow_up_checkin TO mwf_job;
-GRANT SELECT (participant_id, reflection_id) ON brain_activity TO mwf_job;
+GRANT SELECT (session_id, participant_id, reflection_id) ON brain_activity TO mwf_job;  -- session_id: R17 (step 4, NULL-participant history)
 GRANT SELECT (id, user_id) ON reflection TO mwf_job;
 GRANT SELECT (user_id) ON feature_state, user_memory, user_device, user_preferences, reminder TO mwf_job;
 GRANT DELETE ON conversation, conversation_read_state, draft, ai_memory, mood_reading, regulation_event, need_disposition,

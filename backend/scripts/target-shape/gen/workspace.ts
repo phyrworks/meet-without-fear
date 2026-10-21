@@ -311,6 +311,22 @@ FROM "EmpathyValidation" v;
  * (USER or an event role) whose sender was nulled belongs to a deleted user:
  * its candidates are the session's vanished users, and it is never
  * attributed. exact_user is the one candidate of an attributable AI/SYSTEM row.
+ *
+ * Exactness rests on precheck P13 session_without_two_participants. The
+ * candidates come from the pair set, i.e. from the users the old rows still
+ * name. A member who left no trace there is invisible, and their session
+ * would show a single candidate: an AI reply that was theirs would be
+ * attributed, wrongly, to the one visible user. P13 RAISEs for every live or
+ * resolved session (ACTIVE, WAITING, PAUSED, RESOLVED) with fewer than two
+ * distinct users in the pair set. A non-terminal session with a vanished
+ * member is exempt, because the vanished member is in the pair set by
+ * definition. So in those sessions a single candidate means a one-user
+ * session or a pre-acceptance row, never a hidden partner. If P13 is relaxed
+ * or bypassed (for example a fix-data file that deletes its offenders'
+ * evidence instead of repairing it), this attribution stops being exact.
+ * CREATED/INVITED/ABANDONED/ARCHIVED sessions are outside P13. Their single
+ * candidate is the only user the data knows, and for CREATED/INVITED that is
+ * the inviter.
  */
 export function ownerlessSrc(ns: string): string {
   return `CREATE TABLE ${ns}.ownerless AS
