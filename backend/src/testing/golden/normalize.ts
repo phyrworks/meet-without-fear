@@ -182,6 +182,70 @@ export async function buildLabelMap(
         const who = labels.get(v.userId) ?? v.userId;
         labels.set(v.id, `<vessel:${who.replace(/[<>]|user:/g, '')}>`);
       }
+
+      // TS-5: the tables the privacy scenarios' bodies and changes name. Each
+      // is ranked by time then id within its natural owner — never globally
+      // by first appearance (module comment, rule 1).
+      const bare = (id: string | null): string =>
+        id ? (labels.get(id) ?? `?${id}`).replace(/[<>]|user:|session:/g, '') : 'none';
+      const rankWithin = async (
+        sql: string,
+        name: string,
+        owner: (r: Record<string, string | null>) => string,
+      ): Promise<void> => {
+        const r = await c.query<Record<string, string | null>>(sql);
+        const n = new Map<string, number>();
+        for (const row of r.rows) {
+          const o = owner(row);
+          n.set(o, (n.get(o) ?? 0) + 1);
+          labels.set(String(row.id), `<${name}:${o}#${n.get(o)}>`);
+        }
+      };
+      await rankWithin(
+        `SELECT id, "userId" FROM "InnerWorkSession" ORDER BY "createdAt", id`,
+        'innerWork',
+        r => bare(r.userId),
+      );
+      await rankWithin(
+        `SELECT id, "sessionId" FROM "InnerWorkMessage" ORDER BY "sessionId", timestamp, id`,
+        'innerWorkMessage',
+        r => bare(r.sessionId),
+      );
+      await rankWithin(
+        `SELECT id, coalesce("innerWorkSessionId", "sessionId") AS owner FROM "BrainActivity" ORDER BY "createdAt", id`,
+        'brainActivity',
+        r => bare(r.owner),
+      );
+      await rankWithin(
+        `SELECT id, "guesserId", "subjectId" FROM "ReconcilerResult" ORDER BY "createdAt", id`,
+        'reconcilerResult',
+        r => `${bare(r.guesserId)}→${bare(r.subjectId)}`,
+      );
+      await rankWithin(
+        `SELECT id, "userId" FROM "ReconcilerShareOffer" ORDER BY "createdAt", id`,
+        'shareOffer',
+        r => bare(r.userId),
+      );
+      await rankWithin(
+        `SELECT n.id, uv."userId" FROM "IdentifiedNeed" n JOIN "UserVessel" uv ON uv.id = n."vesselId"
+         ORDER BY n."createdAt", n.id`,
+        'need',
+        r => bare(r.userId),
+      );
+      await rankWithin(
+        `SELECT id, "sessionId" FROM "StrategyProposal" ORDER BY "createdAt", id`,
+        'proposal',
+        r => bare(r.sessionId),
+      );
+      // Agreement has no createdAt; its uuidv7 id is insertion-ordered.
+      await rankWithin(`SELECT id FROM "Agreement" ORDER BY id`, 'agreement', () => 'main');
+      await rankWithin(`SELECT id, "sessionId" FROM "SharedVessel"`, 'sharedVessel', r => bare(r.sessionId));
+      await rankWithin(`SELECT id, "sessionId" FROM "Stage4Closure"`, 'closure', r => bare(r.sessionId));
+      await rankWithin(
+        `SELECT id, "sessionId" FROM "TendingEntry" ORDER BY "createdAt", id`,
+        'tendingEntry',
+        r => bare(r.sessionId),
+      );
     },
     database,
   );
