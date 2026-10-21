@@ -115,7 +115,7 @@ describe('concept views — FEEL_HEARD_B', () => {
     expect(rows).toEqual([{ author: 'ada@e2e.test', subject: 'bob@e2e.test', linked: true }]);
   });
 
-  it('decodes the gates to milestones: both participants signed the compact and feel heard', async () => {
+  it('decodes the gates to milestones: both participants signed the compact and feel heard; Ada sent the invitation', async () => {
     const rows = await q<{ who: string; milestone_key: string }>(
       `SELECT u.email AS who, pm.milestone_key FROM old_concept_participant_milestone pm
        JOIN old_concept_participant p ON p.id = pm.participant_id
@@ -124,6 +124,8 @@ describe('concept views — FEEL_HEARD_B', () => {
     expect(rows.map(r => `${r.who}:${r.milestone_key}`)).toEqual([
       'ada@e2e.test:compact_signed',
       'ada@e2e.test:feel_heard',
+      // R13: the stage-0 `invitationSent` gate, decoded @ StageProgress.startedAt.
+      'ada@e2e.test:invitation_sent',
       'bob@e2e.test:compact_signed',
       'bob@e2e.test:feel_heard',
     ]);
@@ -162,7 +164,7 @@ describe('concept views — FEEL_HEARD_B', () => {
     FROM old_concept_participant_milestone pm
     JOIN old_concept_participant p ON p.id = pm.participant_id
     JOIN old_concept_user u ON u.id = p.user_id
-    WHERE pm.milestone_key NOT IN ('compact_signed', 'feel_heard') ORDER BY 1`;
+    WHERE pm.milestone_key NOT IN ('compact_signed', 'feel_heard', 'invitation_sent') ORDER BY 1`;
 
   // Every step-7 branch FEEL_HEARD_B does not reach, pinned on a rolled-back
   // copy: the fixture-only spellings, COMPLETED stages 2-4, `phase`, `paused`.

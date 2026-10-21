@@ -335,7 +335,22 @@ describe('session and invitation encoding', () => {
     ).toBe('ACTIVE');
   });
 
-  it('invitation_sent is encoded on the Invitation row, not as a gate', () => {
+  it('invitation_sent also writes the untimed invitationSent key on the stage-0 row, as production does (R13)', () => {
+    const p: ParticipantScenario = {
+      ...inviter({ invitation_sent: at(0, 'invitation'), compact_signed: at(-1) }),
+      journey: {},
+    };
+    const rows = stageProgressPlan(p, base([p])).rows;
+    expect(rows[0].gates).toEqual([
+      ['invitationSent', true],
+      ['compactSigned', true],
+      ['compactSignedAt', at(-1)],
+    ]);
+    const noJourney: ParticipantScenario = { key: 'a', milestones: { invitation_sent: at(0, 'invitation') } };
+    expect(stageProgressPlan(noJourney, base([noJourney])).rows).toEqual([]);
+  });
+
+  it('invitation_sent is encoded on the Invitation row', () => {
     const s = base([inviter({ invitation_sent: at(0, 'invitation') })]);
     expect(invitationFields(s)).toEqual({
       status: 'PENDING',

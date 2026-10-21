@@ -17,8 +17,8 @@
  * *today's fixtures* used, which is not quite the production key table of the
  * migration plan (step 7): the fixtures wrote `empathyExchanged` where the app
  * writes `empathyValidated`, `needsIdentified` for `needs_confirmed`,
- * `compactSignedAt` rather than `signedAt`, and never wrote `invitationSent` or
- * `needsShared`. Acceptance binds the writer to the fixtures' rows.
+ * `compactSignedAt` rather than `signedAt`, and never wrote `needsShared` (nor,
+ * before R13, `invitationSent`). Acceptance binds the writer to the fixtures' rows.
  *
  * Stage 4 follows the migration plan (owner decision OD5, 2026-10-21): the
  * stage-4 terminal milestone is `choices_shared` — step 7 decodes a COMPLETED
@@ -85,6 +85,8 @@ export type GateEncoding =
 
 export const GATE_ENCODING: Record<MilestoneKey, GateEncoding> = {
   compact_signed: { kind: 'gate', stage: 0, key: 'compactSigned', completes: true },
+  // Also the untimed `invitationSent` key on the stage-0 row when the
+  // participant has one (R13; see stageProgressPlan).
   invitation_sent: { kind: 'elsewhere', where: 'Invitation.messageConfirmed/messageConfirmedAt' },
   feel_heard: { kind: 'gate', stage: 1, key: 'feelHeardConfirmed', completes: true },
   empathy_submitted: { kind: 'elsewhere', where: 'EmpathyAttempt.sharedAt (+ ConsentRecord, statement message)' },
@@ -204,6 +206,12 @@ export function stageProgressPlan(p: ParticipantScenario, s: Scenario): StagePro
       gates: [],
     });
   }
+
+  // R13: production (`sessions.ts` confirmInvitation) writes `invitationSent:
+  // true` into the inviter's stage-0 gates, with no `…At` companion — step 7
+  // decodes `invitation_sent` @ StageProgress.startedAt. `Invitation.
+  // messageConfirmedAt` is not that instant (`topic-frame.ts` sets it too).
+  if (reached.invitation_sent) rows[0].gates.push(['invitationSent', true]);
 
   // Keys the step-7 table marks derived/dropped: carried as facts, re-derived
   // here. Done before the gate loop so a late gate update (which replaces
