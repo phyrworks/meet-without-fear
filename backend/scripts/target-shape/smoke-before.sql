@@ -56,18 +56,25 @@ GROUP BY s.id;
 -- Stage 3 handler's shares — a GRANTED, unrevoked IDENTIFIED_NEED
 -- ConsentRecord whose need has no ConsentedContent (session = the need's
 -- vessel's session).
+-- Needs are counted once (a double-tapped share has two records, R18), and
+-- text ids are compared as uuids (as the migration does).
+CREATE FUNCTION ts7_smoke.as_uuid(v text) RETURNS uuid LANGUAGE sql IMMUTABLE AS $f$
+  SELECT CASE WHEN v ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' THEN v::uuid END
+$f$;
 CREATE TABLE ts7_smoke.old_shared_need AS
-SELECT session_id, count(*) AS n FROM (
-  SELECT sv."sessionId" AS session_id
+SELECT session_id, count(DISTINCT need_id) AS n FROM (
+  SELECT sv."sessionId" AS session_id, ts7_smoke.as_uuid(cr."targetId") AS need_id
   FROM "ConsentedContent" cc JOIN "SharedVessel" sv ON sv.id = cc."sharedVesselId"
+  JOIN "ConsentRecord" cr ON cr.id = cc."consentRecordId"
   WHERE cc."consentActive"
   UNION ALL
-  SELECT uv."sessionId"
+  SELECT uv."sessionId", n.id
   FROM "ConsentRecord" cr
-  JOIN "IdentifiedNeed" n ON n.id::text = cr."targetId"
+  JOIN "IdentifiedNeed" n ON n.id = ts7_smoke.as_uuid(cr."targetId")
   JOIN "UserVessel" uv ON uv.id = n."vesselId"
   WHERE cr."targetType" = 'IDENTIFIED_NEED' AND cr.decision = 'GRANTED' AND cr."revokedAt" IS NULL
-    AND NOT EXISTS (SELECT 1 FROM "ConsentedContent" cc JOIN "ConsentRecord" c2 ON c2.id = cc."consentRecordId" WHERE c2."targetId" = cr."targetId")
+    AND NOT EXISTS (SELECT 1 FROM "ConsentedContent" cc JOIN "ConsentRecord" c2 ON c2.id = cc."consentRecordId"
+                    WHERE ts7_smoke.as_uuid(c2."targetId") = n.id)
 ) x
 GROUP BY session_id;
 

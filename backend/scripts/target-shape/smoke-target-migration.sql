@@ -296,6 +296,39 @@ BEGIN
       RAISE EXCEPTION 'smoke 8: v_need_coverage does not count P6 as covering need %', r.need_id;
     END IF;
   END LOOP;
+  -- R18: C's double-tap (6cc1 + 6cc5 on 6e1) merged into one share dated by
+  -- the first grant; both records kept as consent rows.
+  IF (SELECT count(*) FROM need_share WHERE need_id = '00000000-0000-7e00-8000-0000000006e1') <> 1
+     OR (SELECT count(*) FROM consent WHERE need_id = '00000000-0000-7e00-8000-0000000006e1'
+           AND id IN ('00000000-0000-7e00-8000-000000006cc1', '00000000-0000-7e00-8000-000000006cc5')) <> 2 THEN
+    RAISE EXCEPTION 'smoke 8: duplicate grants on 6e1 did not merge into one need_share with two consent rows';
+  END IF;
+  -- The revoked Stage 3 share (6cc3 REVOKED, revokedAt 2026-10-05 09:00) lands
+  -- revoked and is ABSENT from v_need_shared for the partner C.
+  IF NOT EXISTS (SELECT 1 FROM need_share ns JOIN participant p ON p.id = ns.participant_id
+                 WHERE ns.need_id = '00000000-0000-7e00-8000-0000000006e3' AND p.user_id = d AND ns.session_id = s
+                   AND ns.shared_at = '2026-10-04 09:30+00' AND ns.revoked_at = '2026-10-05 09:00+00') THEN
+    RAISE EXCEPTION 'smoke 8: revoked Stage 3 share 6e3 is not in need_share with revoked_at 2026-10-05 09:00';
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM consent WHERE id = '00000000-0000-7e00-8000-000000006cc3' AND decision = 'REVOKED'
+                   AND need_id = '00000000-0000-7e00-8000-0000000006e3') THEN
+    RAISE EXCEPTION 'smoke 8: consent 6cc3 is not REVOKED on 6e3';
+  END IF;
+  PERFORM set_config('app.current_user_id', c::text, true);
+  IF NOT app.is_member(s) OR EXISTS (SELECT 1 FROM v_need_shared WHERE need_id = '00000000-0000-7e00-8000-0000000006e3') THEN
+    RAISE EXCEPTION 'smoke 8: as partner C, the revoked share 6e3 is visible in v_need_shared';
+  END IF;
+  PERFORM set_config('app.current_user_id', '', true);
+  -- The closure through S: old openNeedIds {6e3 revoked, 6e4 PARTIAL} → view
+  -- open_need_ids = {6e4} (the revoked one is the listed expected difference).
+  IF (SELECT open_need_ids FROM v_session_closure_items WHERE session_id = s) <> ARRAY['00000000-0000-7e00-8000-0000000006e4'::uuid] THEN
+    RAISE EXCEPTION 'smoke 8: v_session_closure_items(S).open_need_ids = %, expected {6e4}',
+      (SELECT open_need_ids FROM v_session_closure_items WHERE session_id = s);
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM app_migration.report rp WHERE rp.item LIKE 'Stage4Closure.openNeedIds entry whose need_share is revoked%'
+                   AND rp.n = 1 AND rp.detail = '00000000-0000-7e00-8000-0000000006e3') THEN
+    RAISE EXCEPTION 'smoke 8: the revoked open-need id 6e3 is not listed as the expected difference';
+  END IF;
   IF (SELECT cardinality(unresolved_need_labels) FROM proposal WHERE id = '00000000-0000-7e00-8000-0000000006f1') <> 0 THEN
     RAISE EXCEPTION 'smoke 8: P6 kept unresolved need labels: %', (SELECT unresolved_need_labels FROM proposal WHERE id = '00000000-0000-7e00-8000-0000000006f1');
   END IF;
@@ -303,7 +336,7 @@ BEGIN
         AND old_key IN ('00000000-0000-7e00-8000-000000006cc1', '00000000-0000-7e00-8000-000000006cc2')) <> 2 THEN
     RAISE EXCEPTION 'smoke 8: shape_map lacks need_share:ConsentRecord for 6cc1/6cc2';
   END IF;
-  RAISE NOTICE 'smoke 8: both Stage 3 shares in need_share (owner, session S, label text, grant time), consent kept, visible to the partner in v_need_shared, P6 links both (v_need_coverage)';
+  RAISE NOTICE 'smoke 8: Stage 3 shares in need_share (owner, session S, label text, grant time), consent kept, visible to the partner in v_need_shared, P6 links both (v_need_coverage); duplicate grant merged (R18); revoked share lands revoked and is absent for the partner; closure S open_need_ids = {6e4}, revoked 6e3 listed';
 END
 $$;
 COMMIT;
