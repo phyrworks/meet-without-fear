@@ -117,6 +117,44 @@ schema, not across a migration.
 | `session-read` | `FEEL_HEARD_B` | The privacy boundary on reads. `Message.forUserId` is the entire mechanism separating what each partner sees, and the two users see different, overlapping row sets. Scoped to three tables. |
 | `empathy-reveal` | `FEEL_HEARD_B` | The write path: Bob drafts and consents, which makes both directions submittable, and the reconciler reveals both attempts from a Serializable transaction *after* the response returns. Whole-database scope. |
 
+### Privacy scenarios (TS-5, plan §4 "New golden scenarios" R1–R7)
+
+Recorded on the current shape through the concept views, to be re-recorded on the target.
+Each is one test file, a byte-level golden, a `.concept` golden and an allow-list.
+
+| Scenario | Fixture | Pins |
+|---|---|---|
+| `reflection-never-crosses` (R1) | `INNER_WORK_LINKED_A` | none of Ada's reflection reaches Bob's reads, his turn's prompt, or a session-scoped `brain_activity.input` |
+| `unrevealed-attempt-hidden` (R2) | `RECONCILER_SHOWN_B` | an attempt in AWAITING_SHARING / REFINING / READY is absent from its subject's reads, its status present; readable after the reveal |
+| `reveal-all-ready-ada-first`, `-bob-first` (R3) | `FEEL_HEARD_B`, `RECONCILER_SHOWN_B` | either order of READY reveals exactly once; the delivered copies are the target's named additions |
+| `needs-hidden-until-shared` (R4) | `NEEDS_CONFIRMED` | a partner's need label/evidence never reach the other (known leak today) |
+| `choices-hidden-until-shared` (R4) | `STAGE4_REDESIGN_PARTNER_INACTIVE` | a partner's Stage 4 choices stay hidden until shared |
+| `tombstone` (R5) | `TOMBSTONE_READY` | what account deletion keeps, removes and tombstones (ten known deviations today) |
+| `author-sees-status-only` (R6) | `RECONCILER_SHOWN_B` | the author reads status, never the gap analysis, the offer or unsent feedback (known leaks today) |
+| `declined-offer-no-trace` (R7) | `RECONCILER_SHOWN_B` | the author's reads are unchanged by the subject's decline except the direction's status (one known trace) |
+
+How they work (`privacy.ts`, `scenario-checks.ts`, `reveal-checks.ts`):
+
+- **Full read.** `fullRead` issues every session and user GET a client can make (`SESSION_READS`,
+  `USER_READS`) as harness steps; scenarios that read at many phases use a named subset.
+- **Probes.** Distinctive strings from the content that must not reach a reader; `findLeaks`
+  scans bodies and SSE events, `findMissing` the content that must stay readable.
+- **Prompt capture.** Under MOCK_LLM no prompt is persisted, so `capturePrompts` wraps
+  `lib/bedrock`'s prompt-taking exports and records their arguments while calling through.
+- **Known leaks are findings, not fixes.** A violation by today's code is listed in the
+  scenario's allow-list module (`KnownLeak`: the exact step ⊃ probe, a bead-style finding, the
+  evidence). The test passes only if the observed set equals the list: a new leak fails, and so
+  does a listed one that stops happening — delete its entry when the target (or a fix) closes it.
+- **Behaviour that does not exist yet** (rounds; closure items over shared needs) is never faked:
+  the allow-list's `targetOnly` names the assertion the target re-record must add.
+- **Unrepresentable states.** Today's account deletion leaves rows the migration mapping cannot
+  direct; with `conceptUnrepresentable: 'record'` the concept baseline records the reason in place
+  of a step's changes, and the allow-list (`mayBeAbsent`, `addedKeys`) lets the target supply them.
+
+GET `/sessions/:id/strategies` shuffles its list on every call (`controllers/stage4.ts`
+`shuffleArray`); with more than one proposal it cannot be part of a baseline, so the scenarios on
+such fixtures leave it out.
+
 A scenario is worth adding when it exercises machinery no existing one does.
 `empathy-reveal` was chosen over an easier write because it is the hardest write
 in the product to reproduce in SQL by hand — a read-check-write under
