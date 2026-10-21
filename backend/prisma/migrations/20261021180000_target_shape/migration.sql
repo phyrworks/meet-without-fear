@@ -1576,7 +1576,8 @@ CREATE TABLE app_migration.dropped_content (
   session_id uuid,
   user_id    uuid,
   text       text NOT NULL,
-  written_at timestamptz
+  written_at timestamptz,
+  candidates jsonb            -- R16: the users a row could belong to, when it is not attributable exactly
 );
 
 -- Work tables (dropped at the end of the migration).
@@ -1746,6 +1747,29 @@ SELECT v.id, v."attemptId", v."sessionId",
        (v."userId" IS NULL) AS reviewer_recovered,
        v.validated, v.feedback, v."feedbackShared", v."validatedAt"
 FROM "EmpathyValidation" v;
+
+CREATE TABLE app_migration.ownerless AS
+WITH m AS (
+  SELECT id, "sessionId" AS session_id, role::text AS role, "timestamp" AS ts
+  FROM "Message" WHERE "forUserId" IS NULL AND "senderId" IS NULL
+), inv AS (
+  SELECT DISTINCT ON (i."sessionId") i."sessionId" AS session_id, i."invitedById" AS inviter,
+         (SELECT min(j."acceptedAt") FROM "Invitation" j WHERE j."sessionId" = i."sessionId" AND j.status = 'ACCEPTED') AS accepted_at
+  FROM "Invitation" i ORDER BY i."sessionId", i."createdAt", i.id
+)
+SELECT m.id AS message_id, m.session_id, m.role, m.ts, c.candidates,
+       CASE WHEN m.role IN ('AI', 'SYSTEM') AND cardinality(c.candidates) = 1 THEN c.candidates[1] END AS exact_user,
+       EXISTS (SELECT 1 FROM app_migration.pair p JOIN app_migration.vanished v USING (user_id) WHERE p.session_id = m.session_id) AS vanished_session
+FROM m
+LEFT JOIN inv ON inv.session_id = m.session_id
+CROSS JOIN LATERAL (
+  SELECT coalesce(array_agg(u.user_id ORDER BY u.user_id), '{}') AS candidates
+  FROM (SELECT DISTINCT p.user_id FROM app_migration.pair p WHERE p.session_id = m.session_id) u
+  WHERE CASE WHEN m.role IN ('AI', 'SYSTEM')
+             THEN NOT (inv.inviter IS NOT NULL AND u.user_id <> inv.inviter AND (inv.accepted_at IS NULL OR m.ts < inv.accepted_at))
+             ELSE u.user_id IN (SELECT v.user_id FROM app_migration.vanished v)
+        END
+) c;
 
 -- ============================================================================
 -- 2b. Prechecks (plan step 0b)
@@ -2260,12 +2284,11 @@ SELECT 'brain_cost_overflow', id::text, cost::text
 FROM "BrainActivity"
 WHERE abs(cost) >= 10000;
 
--- P33 message_without_owner (no forUserId and no senderId, in a session without a vanished member)
+-- P33 message_without_owner (no forUserId/senderId, not attributable exactly, session without a vanished member)
 INSERT INTO app_migration.precheck (check_name, offender, detail)
-SELECT 'message_without_owner', m.id::text, m.role::text || ' @ ' || m.timestamp::text
-FROM "Message" m
-WHERE m."forUserId" IS NULL AND m."senderId" IS NULL
-  AND NOT EXISTS (SELECT 1 FROM app_migration.pair p JOIN app_migration.vanished v USING (user_id) WHERE p.session_id = m."sessionId");
+SELECT 'message_without_owner', o.message_id::text, format('%s @ %s; candidates %s', o.role, o.ts, to_jsonb(o.candidates))
+FROM app_migration.ownerless o
+WHERE o.exact_user IS NULL AND NOT o.vanished_session;
 
 
 -- The single verdict: every failing precheck at once, with ids.
@@ -2886,15 +2909,21 @@ FROM (SELECT count(*) AS n FROM empathy_review r JOIN empathy_attempt a ON a.id 
 -- source_attempt_id: EMPATHY_STATEMENT → the attempt authored by its sender
 -- (plan: by (session, author)); VALIDATION_FEEDBACK and SHARED_CONTEXT (spec
 -- §1.1 names it too) → the attempt the sender is the subject of.
--- Rows with neither forUserId nor senderId are dropped only in a session with
--- a vanished member — the leaver's private rows (plan 4a, D9); P33 refused
--- them anywhere else. Their text goes to app_migration.dropped_content (R-c).
-INSERT INTO app_migration.dropped_content (concept, session_id, user_id, text, written_at)
-SELECT 'Message.content (no owner; session with a vanished member, D9)', m."sessionId", NULL, m.content, m.timestamp
-FROM "Message" m WHERE m."forUserId" IS NULL AND m."senderId" IS NULL ORDER BY m.timestamp, m.id;
-SELECT app_migration.note('9', 'Message without forUserId and senderId (role ' || role::text || '), vanished-member session: not copied (D9, plan 4a) → dropped_content', count(*),
-                          string_agg(id::text, ', ' ORDER BY id))
-FROM "Message" WHERE "forUserId" IS NULL AND "senderId" IS NULL GROUP BY role;
+-- Rows with neither forUserId nor senderId (ruling R16, exact or nothing):
+-- an AI/SYSTEM row with exactly one candidate user goes to that user's MAIN
+-- conversation (app_migration.ownerless.exact_user); every other ownerless row
+-- — only in a vanished-member session, P33 refused them elsewhere — is not
+-- copied and goes to app_migration.dropped_content with its candidates.
+INSERT INTO app_migration.dropped_content (concept, session_id, user_id, text, written_at, candidates)
+SELECT 'message_without_owner', m."sessionId", NULL, m.content, m."timestamp", to_jsonb(o.candidates)
+FROM "Message" m JOIN app_migration.ownerless o ON o.message_id = m.id
+WHERE o.exact_user IS NULL
+ORDER BY m."timestamp", m.id;
+SELECT app_migration.note('9', 'ownerless ' || role || ' message attributed exactly (one candidate)', count(*), string_agg(message_id::text, ', ' ORDER BY message_id))
+FROM app_migration.ownerless WHERE exact_user IS NOT NULL GROUP BY role;
+SELECT app_migration.note('9', 'ownerless ' || role || ' message, vanished-member session, not attributable exactly → dropped_content with candidates', count(*),
+                          string_agg(message_id::text, ', ' ORDER BY message_id))
+FROM app_migration.ownerless WHERE exact_user IS NULL GROUP BY role;
 
 INSERT INTO message (id, conversation_id, sender_participant_id, role, kind, content, content_hash, refining_need_id, source_attempt_id, created_at)
 SELECT m.id, c.id,
@@ -2917,7 +2946,8 @@ SELECT m.id, c.id,
        END,
        m.timestamp
 FROM "Message" m
-CROSS JOIN LATERAL (SELECT coalesce(app_migration.as_uuid(m."forUserId"), m."senderId") AS owner) o
+LEFT JOIN app_migration.ownerless ow ON ow.message_id = m.id
+CROSS JOIN LATERAL (SELECT coalesce(app_migration.as_uuid(m."forUserId"), m."senderId", ow.exact_user) AS owner) o
 JOIN participant po ON po.session_id = m."sessionId" AND po.user_id = o.owner
 JOIN conversation c ON c.participant_id = po.id AND c.kind = 'MAIN'
 LEFT JOIN participant ps ON ps.session_id = m."sessionId" AND ps.user_id = m."senderId"
@@ -2960,10 +2990,10 @@ SELECT app_migration.note('9', 'delivered EMPATHY_STATEMENT copies inserted (add
 FROM app_migration.shape_map WHERE concept = 'message:delivered_empathy_statement';
 
 SELECT app_migration.assert(a = b + c + d - e,
-         format('step 9: message %s <> Message %s + Stage4SubChatMessage %s + delivered copies %s - ownerless %s', a, b, c, d, e))
+         format('step 9: message %s <> Message %s + Stage4SubChatMessage %s + delivered copies %s - unattributable ownerless %s', a, b, c, d, e))
 FROM (SELECT (SELECT count(*) FROM message) AS a, (SELECT count(*) FROM "Message") AS b, (SELECT count(*) FROM "Stage4SubChatMessage") AS c,
              (SELECT count(*) FROM app_migration.shape_map WHERE concept = 'message:delivered_empathy_statement') AS d,
-             (SELECT count(*) FROM "Message" WHERE "forUserId" IS NULL AND "senderId" IS NULL) AS e) x;
+             (SELECT count(*) FROM app_migration.ownerless WHERE exact_user IS NULL) AS e) x;
 
 -- Step 11 assertion: every reveal is still resolvable — for every
 -- REVEALED/VALIDATED attempt, under the subject's identity
@@ -3740,7 +3770,8 @@ DROP VIEW app_migration.pair, app_migration.vanished;
 DROP TABLE "User", "Relationship", "RelationshipMember", "Session", "InnerWorkSession", "InnerWorkMessage", "SessionTakeaway", "TakeawayLink", "StageProgress", "UserVessel", "UserEvent", "EmotionalReading", "IdentifiedNeed", "Boundary", "UserDocument", "SharedVessel", "ConsentedContent", "CommonGround", "Agreement", "ConsentRecord", "Message", "PreSessionMessage", "EmpathyDraft", "EmpathyAttempt", "EmpathyValidation", "ReconcilerResult", "ReconcilerShareOffer", "RefinementAttemptCounter", "StrategyProposal", "StrategyProposalNeed", "Stage4ProposalSelection", "Stage4ProposalRevision", "Stage4NeedCoverage", "Stage4NeedDeclination", "Stage4Closure", "Stage4SubChat", "Stage4SubChatMessage", "TendingEntry", "TendingCheckin", "TendingCoordinationCycle", "TendingResponse", "TendingEntryOutcome", "TendingNeedOutcome", "TendingReminder", "TendingAdjustment", "TendingBetweenPeriodNote", "TendingResponsePartialClosure", "StrategyRanking", "EmotionalExerciseCompletion", "GlobalLibraryItem", "Invitation", "UserMemory", "Need", "NeedScore", "NeedsAssessmentState", "Person", "PersonMention", "Insight", "RecurringTheme", "GratitudeEntry", "GratitudePreferences", "MeditationSession", "MeditationStats", "MeditationFavorite", "MeditationPreferences", "SavedMeditation", "BrainActivity", "ValidationFeedbackDraft";
 DROP TABLE app_migration.precheck, app_migration.su, app_migration.ab_slot, app_migration.checkin_map,
            app_migration.milestone_src, app_migration.disposition_ref, app_migration.proposal_need_src,
-           app_migration.slot_fix, app_migration.empathy_attempt_src, app_migration.empathy_validation_src;
+           app_migration.slot_fix, app_migration.empathy_attempt_src, app_migration.empathy_validation_src,
+           app_migration.ownerless;
 DROP TYPE "SessionType", "SessionStatus", "InnerWorkStatus", "TakeawaySource", "TakeawayType", "TakeawayLinkType", "StageStatus", "Attribution", "NeedCategory", "AgreementType", "AgreementStatus", "ConsentContentType", "ConsentDecision", "MessageRole", "EmpathyStatus", "SharedContentDeliveryStatus", "ReconcilerShareStatus", "StrategySource", "Stage4ProposalKind", "Stage4ProposalStatus", "Stage4SelectionDecision", "Stage4ClosureKind", "Stage4ClosureReason", "TendingEntryType", "TendingEntryStatus", "TendingEntryScope", "TendingFollowThroughStatus", "TendingHelpfulnessStatus", "TendingBlockerCategory", "TendingNeedResolutionStatus", "TendingNextAction", "TendingReminderScope", "TendingCoordinationStatus", "Stage4SubChatAnchor", "Stage4SubChatStatus", "ContinueChoice", "PartialClosureResolution", "ExerciseType", "GlobalLibrarySource", "InvitationStatus", "MemoryCategory", "MemoryStatus", "MemorySource", "NeedsCategory", "MentionSourceType", "InsightType", "MeditationType", "FavoriteType", "BrainActivityCallType", "ActivityType", "ActivityStatus";
 
 DO $$
@@ -4129,7 +4160,9 @@ CREATE FUNCTION app.empathy_direction_status()
 
 -- The only writer of session.status (spec §1.1 transition set). Members or
 -- the job; T-cardinality-1 (trigger) still refuses → ACTIVE without two
--- participants. Locks the session row (lock order: session, then attempt).
+-- participants. Locks the session row FOR NO KEY UPDATE (lock order: session,
+-- then attempt; NO KEY so child-row INSERTs, which take KEY SHARE on session
+-- through their FK, are not blocked — status/resolved_at are not key columns).
 CREATE FUNCTION app.session_set_status(session uuid, status public.session_status) RETURNS void
   LANGUAGE plpgsql SECURITY DEFINER
   SET search_path = pg_catalog, public, pg_temp
@@ -4138,7 +4171,7 @@ CREATE FUNCTION app.session_set_status(session uuid, status public.session_statu
     v_from public.session_status;
     v_job  boolean := session_user IN ('mwf_job', 'mwf_migrator');
   BEGIN
-    SELECT s.status INTO v_from FROM public.session s WHERE s.id = session_set_status.session FOR UPDATE;
+    SELECT s.status INTO v_from FROM public.session s WHERE s.id = session_set_status.session FOR NO KEY UPDATE;
     IF NOT FOUND OR NOT (v_job OR coalesce(app.is_member(session_set_status.session), false)) THEN
       RAISE EXCEPTION 'session not found' USING ERRCODE = 'P0002';
     END IF;
@@ -4197,8 +4230,8 @@ CREATE FUNCTION app.empathy_set_status(attempt uuid, status public.empathy_statu
     IF NOT FOUND THEN
       RAISE EXCEPTION 'attempt not found' USING ERRCODE = 'P0002';
     END IF;
-    PERFORM 1 FROM public.session s WHERE s.id = v_session FOR UPDATE;
-    SELECT * INTO a FROM public.empathy_attempt e WHERE e.id = empathy_set_status.attempt FOR UPDATE;
+    PERFORM 1 FROM public.session s WHERE s.id = v_session FOR NO KEY UPDATE;
+    SELECT * INTO a FROM public.empathy_attempt e WHERE e.id = empathy_set_status.attempt FOR NO KEY UPDATE;
     SELECT p.user_id, p.left_at INTO v_author_user, v_author_left FROM public.participant p WHERE p.id = a.author_participant_id;
     SELECT p.user_id, p.left_at INTO v_subject_user, v_subject_left FROM public.participant p WHERE p.id = a.subject_participant_id;
     v_is_author  := v_me IS NOT NULL AND v_author_user IS NOT NULL AND v_me = v_author_user;
@@ -4544,7 +4577,7 @@ CREATE FUNCTION app.t_message_immutable() RETURNS trigger
       RAISE EXCEPTION 'message routing is immutable' USING ERRCODE = 'check_violation';
     END IF;
     IF NEW.content IS DISTINCT FROM OLD.content AND (OLD.role IN ('AI', 'SYSTEM') OR OLD.kind <> 'CHAT')
-       AND current_user NOT IN ('mwf_job', 'mwf_migrator') THEN
+       AND session_user NOT IN ('mwf_job', 'mwf_migrator') THEN
       RAISE EXCEPTION 'this message''s content is immutable' USING ERRCODE = 'check_violation';
     END IF;
     RETURN NEW;
