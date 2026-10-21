@@ -256,9 +256,9 @@ JOIN old_concept_participant p ON p.session_id = sc."sessionId" AND p.user_id = 
 -- `concept_check_unmapped_gate_key` and fails the run (step 7: "unknown keys
 -- RAISE").
 --
--- Departure, documented by TS-3: today's fixtures complete stage 4 under the
--- legacy ranking flow, so a COMPLETED stage-4 row decodes here as
--- `choices_shared` (step 7) where the scenario model says `closed`.
+-- Stage 4 (OD5, 2026-10-21): a COMPLETED stage-4 row decodes as
+-- `choices_shared` (step 7), which is also what the scenario model says for
+-- the legacy ranking flow; TS-3's `closed` departure is gone.
 -- ----------------------------------------------------------------------------
 CREATE VIEW old_concept_participant_milestone AS
 WITH prog AS (

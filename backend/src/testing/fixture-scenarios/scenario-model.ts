@@ -270,6 +270,21 @@ export interface RepairContent {
   coverage: NeedCoverage[];
 }
 
+/**
+ * How the repair stage ended (target `session_closure`). A participant reaches
+ * `closed` only in a scenario that carries one (OD5), and only after
+ * `choices_shared`.
+ */
+export interface SessionClosureContent {
+  kind: 'SHARED_AGREEMENT' | 'NO_SHARED_AGREEMENT';
+  reason: 'MUTUAL_SELECTION' | 'NO_OVERLAP' | 'BOUNDARY_HONORED' | 'USER_STOPPED';
+  summary: string;
+  /** Who closed it; null = auto-closure. */
+  closedBy: ParticipantKey | null;
+  at: Stamp;
+  checkInAt?: Stamp;
+}
+
 export interface Scenario {
   name: string;
   /** In invitation order: the first participant invited the rest. */
@@ -283,6 +298,8 @@ export interface Scenario {
   reconciliation?: ReconciliationContent;
   legacyStrategies?: { strategies: LegacyStrategy[]; agreement?: LegacyAgreement };
   repair?: RepairContent;
+  /** The repair stage ended (session_closure); participants may then reach `closed`. */
+  closure?: SessionClosureContent;
   /** Encoding quirks of the pre-rebuild factory; see the module comment. */
   currentShape?: CurrentShapeQuirks;
 }

@@ -20,17 +20,25 @@
  * `compactSignedAt` rather than `signedAt`, and never wrote `invitationSent` or
  * `needsShared`. Acceptance binds the writer to the fixtures' rows.
  *
- * Stage 4 diverges from step 7 in substance, not just in key names. Step 7
- * decodes a COMPLETED stage-4 `StageProgress` row as `choices_shared`, and in
- * the target journey `closed` follows `choices_shared` plus a `session_closure`
- * row. Here `closed` is the stage-4 terminal and `choices_shared` an
- * in-progress gate: in today's fixtures stage 4 is completed only by
- * STRATEGIC_REPAIR_COMPLETE, under the legacy ranking flow
- * (`strategiesRanked`/`agreementCreated`, the `rankingSubmitted` +
- * `agreementCreated` completion gate of `sessions.ts`), whose rows carry no
- * `selectionSubmitted`. `closed` stands in for that legacy completion. The
- * resulting milestone set (`closed` without `choices_shared`, no closure) is
- * not one the target journey produces; resolving it is a TS-5 decision.
+ * Stage 4 follows the migration plan (owner decision OD5, 2026-10-21): the
+ * stage-4 terminal milestone is `choices_shared` — step 7 decodes a COMPLETED
+ * stage-4 row as `choices_shared` — and `closed` is reached only by a scenario
+ * that carries closure content (`Scenario.closure`, the target's
+ * `session_closure`). Today's shape encodes `choices_shared` two ways, by flow:
+ *   - redesigned repair flow (the participant has `choices`): the
+ *     `selectionSubmitted` gate on an IN_PROGRESS stage-4 row, written after
+ *     the choices (`stage4.ts` markStage4SelectionSubmitted);
+ *   - legacy ranking flow (a `ranking` plus the scenario's agreement, and no
+ *     choices): the stage-4 row COMPLETED at the instant — the
+ *     `rankingSubmitted` + `agreementCreated` completion gate of `sessions.ts`,
+ *     whose rows carry no `selectionSubmitted`.
+ * `closed` writes the `Stage4Closure` row, moves the session to RESOLVED and
+ * completes the stage-4 row at the closure instant, as `stage4.ts`'s close
+ * handler does.
+ *
+ * Production writes `invitationSent: true` into the inviter's stage-0 gates
+ * when the invitation message is confirmed (`sessions.ts` confirmInvitation,
+ * ruling R13); the writer does the same wherever `invitation_sent` is reached.
  *
  * The pure functions (everything above `writeCurrentShape`) have unit tests in
  * `__tests__/current-shape.test.ts`.
@@ -63,7 +71,9 @@ type Tx = Parameters<Parameters<typeof prisma.$transaction>[0]>[0];
  *   milestones in `currentShape.untimedGates`).
  * - `completes`: the milestone is stage `stage`'s terminal milestone — the row
  *   is `COMPLETED` at its instant and the next stage starts then. It may also
- *   carry a gate key (stages 0–2) or none (`needs_shared`, `closed`).
+ *   carry a gate key (stages 0–2) or none (`needs_shared`). Stage 4's
+ *   terminal, `choices_shared`, completes the row only under the legacy flow
+ *   or a closure (`stageCompletion`).
  * - `elsewhere`: carried by another row, never by a gate.
  * - `unsupported`: today's fixtures never encoded it; refusing beats dropping.
  */
@@ -83,13 +93,13 @@ export const GATE_ENCODING: Record<MilestoneKey, GateEncoding> = {
   needs_confirmed: { kind: 'gate', stage: 3, key: 'needsIdentified' },
   needs_validated: { kind: 'gate', stage: 3, key: 'needsValidated' },
   needs_shared: { kind: 'completes', stage: 3 },
-  // Recorded after the choices it attests to (an update of the stage-4 row).
-  choices_shared: { kind: 'gate', stage: 4, key: 'selectionSubmitted', late: true },
+  // Stage 4's terminal (step 7, OD5). The gate is recorded after the choices it
+  // attests to (an update of the stage-4 row) and only in the redesigned flow;
+  // the legacy flow completes the row instead (`stageCompletion`).
+  choices_shared: { kind: 'gate', stage: 4, key: 'selectionSubmitted', late: true, completes: true },
   repair_walkthrough_started: { kind: 'unsupported' },
-  // NOT step 7: step 7 decodes stage-4 COMPLETED as `choices_shared`. Here
-  // `closed` stands in for the legacy ranking-flow completion
-  // (rankingSubmitted/agreementCreated) — see the module comment.
-  closed: { kind: 'completes', stage: 4 },
+  // Requires `Scenario.closure` (OD5).
+  closed: { kind: 'elsewhere', where: 'Stage4Closure (+ Session RESOLVED, stage-4 row COMPLETED at closedAt)' },
   paused: { kind: 'unsupported' },
 };
 
@@ -122,10 +132,28 @@ export interface StageProgressPlan {
   lateGates: Array<{ stage: number; gates: GateEntry[] }>;
 }
 
+/** Legacy ranking flow: a ranking, the scenario's agreement, and no redesigned-flow choices. */
+function legacyRepairCompleted(p: ParticipantScenario, s: Scenario): boolean {
+  return Boolean(p.ranking && s.legacyStrategies?.agreement && !p.choices?.length);
+}
+
+/**
+ * The instant stage `stage` completed for `p`, or undefined. Stages 0–3: their
+ * terminal milestone. Stage 4 (OD5): the closure instant if the participant
+ * reached `closed`; otherwise `choices_shared` under the legacy flow. The
+ * redesigned flow's `choices_shared` leaves the row IN_PROGRESS.
+ */
+export function stageCompletion(stage: number, p: ParticipantScenario, s: Scenario): Stamp | undefined {
+  const reached = p.milestones;
+  if (stage !== LAST_STAGE) return reached[TERMINAL[stage]];
+  if (reached.closed) return reached.closed;
+  return legacyRepairCompleted(p, s) ? reached.choices_shared : undefined;
+}
+
 /**
  * A participant's milestone set → today's `StageProgress` rows.
  *
- * Stage n is COMPLETED iff its terminal milestone is reached, at that instant;
+ * Stage n is COMPLETED iff it completed (`stageCompletion`), at that instant;
  * stage n+1 starts then. The first incomplete stage is the IN_PROGRESS row; a
  * participant who has completed every stage has none. Stage 0 starts at the
  * journey's `startedAt`.
@@ -137,16 +165,26 @@ export function stageProgressPlan(p: ParticipantScenario, s: Scenario): StagePro
       throw new Error(`Participant "${p.key}": milestone ${key} has no encoding in today's fixture shape`);
     }
   }
+  if (reached.closed) {
+    if (!s.closure) throw new Error(`Participant "${p.key}" reached closed, but the scenario carries no closure`);
+    if (!reached.choices_shared) throw new Error(`Participant "${p.key}" reached closed without choices_shared`);
+  }
+  if (reached.choices_shared && !p.choices?.length && !legacyRepairCompleted(p, s)) {
+    throw new Error(
+      `Participant "${p.key}": choices_shared needs choices (redesigned flow) or a ranking plus an agreement (legacy flow)`,
+    );
+  }
   if (!p.journey) {
     const stray = (Object.keys(reached) as MilestoneKey[]).filter(k => GATE_ENCODING[k].kind !== 'elsewhere');
     if (stray.length) throw new Error(`Participant "${p.key}" has not begun but reached ${stray.join(', ')}`);
     return { rows: [], lateGates: [] };
   }
 
+  const completion = (stage: number): Stamp | undefined => stageCompletion(stage, p, s);
   let completed = 0;
-  while (completed <= LAST_STAGE && reached[TERMINAL[completed]]) completed++;
+  while (completed <= LAST_STAGE && completion(completed)) completed++;
   for (let stage = completed + 1; stage <= LAST_STAGE; stage++) {
-    if (reached[TERMINAL[stage]]) {
+    if (completion(stage)) {
       throw new Error(
         `Participant "${p.key}": ${TERMINAL[stage]} completes stage ${stage}, but ${TERMINAL[completed]} (stage ${completed}) is not reached`,
       );
@@ -161,8 +199,8 @@ export function stageProgressPlan(p: ParticipantScenario, s: Scenario): StagePro
     rows.push({
       stage,
       status: isCompleted ? 'COMPLETED' : 'IN_PROGRESS',
-      startedAt: stage === 0 ? p.journey.startedAt : reached[TERMINAL[stage - 1]],
-      completedAt: isCompleted ? reached[TERMINAL[stage]] : undefined,
+      startedAt: stage === 0 ? p.journey.startedAt : completion(stage - 1),
+      completedAt: isCompleted ? completion(stage) : undefined,
       gates: [],
     });
   }
@@ -185,6 +223,8 @@ export function stageProgressPlan(p: ParticipantScenario, s: Scenario): StagePro
     const enc = GATE_ENCODING[key];
     const stamp = reached[key];
     if (!stamp || enc.kind !== 'gate') continue;
+    // The selection gate belongs to the redesigned flow only (module comment).
+    if (key === 'choices_shared' && !p.choices?.length) continue;
     const row = rows.find(r => r.stage === enc.stage);
     if (!row) {
       throw new Error(
@@ -710,6 +750,29 @@ export async function writeCurrentShape(tx: Tx, scenario: Scenario, users: UserR
       where: { sessionId, userId: { in: group.userIds }, stage: group.stage },
       data: { gatesSatisfied: group.gates },
     });
+  }
+
+  // --- Closure (OD5): Stage4Closure, then the session RESOLVED ------------------
+  // `stage4.ts`'s close handler, in its order. The stage-4 rows were already
+  // planned COMPLETED at the closure instant (`stageCompletion`). The id arrays
+  // are the target's `v_session_closure_items` and stay empty here.
+  if (scenario.closure) {
+    const c = scenario.closure;
+    await tx.stage4Closure.create({
+      data: {
+        sessionId,
+        kind: c.kind,
+        reason: c.reason,
+        summary: c.summary,
+        sharedAgreementIds: [],
+        individualProposalIds: [],
+        openNeedIds: [],
+        checkInAt: tOpt(c.checkInAt) ?? null,
+        closedByUserId: c.closedBy === null ? null : userId(c.closedBy),
+        closedAt: t(c.at),
+      },
+    });
+    await tx.session.update({ where: { id: sessionId }, data: { status: 'RESOLVED', resolvedAt: t(c.at) } });
   }
 
   return {

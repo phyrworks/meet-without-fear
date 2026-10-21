@@ -323,13 +323,10 @@ const BUILDERS: Record<TargetStage, Build> = {
 
   // The whole journey complete under the legacy ranking flow; the agreement is confirmed now.
   //
-  // NOT target-reachable: `closed` is reached without `choices_shared` and with
-  // no session closure. `closed` stands in for the legacy ranking-flow
-  // completion (rankings + agreement) that today's rows record as a COMPLETED
-  // final stage; the migration plan's step 7 would decode that row as
-  // `choices_shared`, and the target journey reaches `closed` only after
-  // `choices_shared` and a `session_closure`. What this scenario becomes in the
-  // target shape is a TS-5 decision (see current-shape.ts module comment).
+  // Stage 4 ends at `choices_shared` (OD5, plan step 7: a COMPLETED stage-4 row
+  // decodes as `choices_shared`). There is no session closure, so nobody has
+  // reached `closed`; the current-shape writer encodes the legacy completion
+  // (ranking + agreement) as the COMPLETED stage-4 row.
   [TargetStage.STRATEGIC_REPAIR_COMPLETE]: () => {
     const journey: Partial<Record<MilestoneKey, Stamp>> = {
       compact_signed: sec(-350),
@@ -338,7 +335,7 @@ const BUILDERS: Record<TargetStage, Build> = {
       needs_confirmed: sec(-240),
       needs_validated: sec(-180),
       needs_shared: sec(-150),
-      closed: at(0),
+      choices_shared: at(0),
     };
     return {
       invitation: ACCEPTED,
