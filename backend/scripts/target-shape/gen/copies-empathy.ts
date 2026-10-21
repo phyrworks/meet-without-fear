@@ -108,15 +108,21 @@ export function stepMessages(): string {
 -- source_attempt_id: EMPATHY_STATEMENT → the attempt authored by its sender
 -- (plan: by (session, author)); VALIDATION_FEEDBACK and SHARED_CONTEXT (spec
 -- §1.1 names it too) → the attempt the sender is the subject of.
--- Rows with neither forUserId nor senderId are dropped only in a session with
--- a vanished member — the leaver's private rows (plan 4a, D9); P33 refused
--- them anywhere else. Their text goes to app_migration.dropped_content (R-c).
-INSERT INTO app_migration.dropped_content (concept, session_id, user_id, text, written_at)
-SELECT 'Message.content (no owner; session with a vanished member, D9)', m."sessionId", NULL, m.content, m.timestamp
-FROM "Message" m WHERE m."forUserId" IS NULL AND m."senderId" IS NULL ORDER BY m.timestamp, m.id;
-SELECT app_migration.note('9', 'Message without forUserId and senderId (role ' || role::text || '), vanished-member session: not copied (D9, plan 4a) → dropped_content', count(*),
-                          string_agg(id::text, ', ' ORDER BY id))
-FROM "Message" WHERE "forUserId" IS NULL AND "senderId" IS NULL GROUP BY role;
+-- Rows with neither forUserId nor senderId (ruling R16, exact or nothing):
+-- an AI/SYSTEM row with exactly one candidate user goes to that user's MAIN
+-- conversation (app_migration.ownerless.exact_user); every other ownerless row
+-- — only in a vanished-member session, P33 refused them elsewhere — is not
+-- copied and goes to app_migration.dropped_content with its candidates.
+INSERT INTO app_migration.dropped_content (concept, session_id, user_id, text, written_at, candidates)
+SELECT 'message_without_owner', m."sessionId", NULL, m.content, m."timestamp", to_jsonb(o.candidates)
+FROM "Message" m JOIN app_migration.ownerless o ON o.message_id = m.id
+WHERE o.exact_user IS NULL
+ORDER BY m."timestamp", m.id;
+SELECT app_migration.note('9', 'ownerless ' || role || ' message attributed exactly (one candidate)', count(*), string_agg(message_id::text, ', ' ORDER BY message_id))
+FROM app_migration.ownerless WHERE exact_user IS NOT NULL GROUP BY role;
+SELECT app_migration.note('9', 'ownerless ' || role || ' message, vanished-member session, not attributable exactly → dropped_content with candidates', count(*),
+                          string_agg(message_id::text, ', ' ORDER BY message_id))
+FROM app_migration.ownerless WHERE exact_user IS NULL GROUP BY role;
 
 INSERT INTO message (id, conversation_id, sender_participant_id, role, kind, content, content_hash, refining_need_id, source_attempt_id, created_at)
 SELECT m.id, c.id,
@@ -139,7 +145,8 @@ SELECT m.id, c.id,
        END,
        m.timestamp
 FROM "Message" m
-CROSS JOIN LATERAL (SELECT coalesce(app_migration.as_uuid(m."forUserId"), m."senderId") AS owner) o
+LEFT JOIN app_migration.ownerless ow ON ow.message_id = m.id
+CROSS JOIN LATERAL (SELECT coalesce(app_migration.as_uuid(m."forUserId"), m."senderId", ow.exact_user) AS owner) o
 JOIN participant po ON po.session_id = m."sessionId" AND po.user_id = o.owner
 JOIN conversation c ON c.participant_id = po.id AND c.kind = 'MAIN'
 LEFT JOIN participant ps ON ps.session_id = m."sessionId" AND ps.user_id = m."senderId"
@@ -182,10 +189,10 @@ SELECT app_migration.note('9', 'delivered EMPATHY_STATEMENT copies inserted (add
 FROM app_migration.shape_map WHERE concept = 'message:delivered_empathy_statement';
 
 SELECT app_migration.assert(a = b + c + d - e,
-         format('step 9: message %s <> Message %s + Stage4SubChatMessage %s + delivered copies %s - ownerless %s', a, b, c, d, e))
+         format('step 9: message %s <> Message %s + Stage4SubChatMessage %s + delivered copies %s - unattributable ownerless %s', a, b, c, d, e))
 FROM (SELECT (SELECT count(*) FROM message) AS a, (SELECT count(*) FROM "Message") AS b, (SELECT count(*) FROM "Stage4SubChatMessage") AS c,
              (SELECT count(*) FROM app_migration.shape_map WHERE concept = 'message:delivered_empathy_statement') AS d,
-             (SELECT count(*) FROM "Message" WHERE "forUserId" IS NULL AND "senderId" IS NULL) AS e) x;
+             (SELECT count(*) FROM app_migration.ownerless WHERE exact_user IS NULL) AS e) x;
 
 -- Step 11 assertion: every reveal is still resolvable — for every
 -- REVEALED/VALIDATED attempt, under the subject's identity

@@ -71,17 +71,6 @@ WHERE c."targetType" = 'EMPATHY_DRAFT' AND c."targetId" = d.id::text AND d."sess
 DELETE FROM "EmpathyAttempt" a WHERE a."sessionId" IN (SELECT id FROM nob_session);
 DELETE FROM "EmpathyDraft" d WHERE d."sessionId" IN (SELECT id FROM nob_session);
 
--- message_without_owner (P33) — seed-extras.sql's pre-2026-style AI row in a
--- live session (forUserId arrived 2026-01-02 without a backfill). The
--- template's rule: the sender of the nearest earlier USER message with a
--- sender in the session, else the nearest later one.
-UPDATE "Message" m SET "forUserId" = coalesce(
-    (SELECT u."senderId" FROM "Message" u WHERE u."sessionId" = m."sessionId" AND u.role = 'USER' AND u."senderId" IS NOT NULL
-       AND (u.timestamp, u.id) < (m.timestamp, m.id) ORDER BY u.timestamp DESC, u.id DESC LIMIT 1),
-    (SELECT u."senderId" FROM "Message" u WHERE u."sessionId" = m."sessionId" AND u.role = 'USER' AND u."senderId" IS NOT NULL
-       AND (u.timestamp, u.id) > (m.timestamp, m.id) ORDER BY u.timestamp, u.id LIMIT 1))::text
-WHERE m."forUserId" IS NULL AND m."senderId" IS NULL
-  -- not in a session with a vanished member (there the row is the leaver's, dropped by plan 4a)
-  AND NOT EXISTS (SELECT 1 FROM "Message" x
-                  WHERE x."sessionId" = m."sessionId" AND x."forUserId" IS NOT NULL
-                    AND NOT EXISTS (SELECT 1 FROM "User" u WHERE u.id::text = x."forUserId"));
+-- message_without_owner (P33): nothing to fill — the template ships no UPDATE
+-- (ruling R16, exact or nothing); seed-extras' ownerless rows are either
+-- attributable exactly by the migration itself or in a vanished-member session.

@@ -94,7 +94,8 @@ CREATE TABLE app_migration.dropped_content (
   session_id uuid,
   user_id    uuid,
   text       text NOT NULL,
-  written_at timestamptz
+  written_at timestamptz,
+  candidates jsonb            -- R16: the users a row could belong to, when it is not attributable exactly
 );
 
 -- Work tables (dropped at the end of the migration).
@@ -156,6 +157,7 @@ CREATE FUNCTION app_migration.note(p_step text, p_item text, p_n bigint, p_detai
 ${beforeCounts('app_migration')}
 ${pairSet('app_migration')}
 ${evidenceSrc('app_migration')}
+${ownerlessSrc('app_migration')}
 `;
 }
 
@@ -293,5 +295,45 @@ SELECT v.id, v."attemptId", v."sessionId",
        (v."userId" IS NULL) AS reviewer_recovered,
        v.validated, v.feedback, v."feedbackShared", v."validatedAt"
 FROM "EmpathyValidation" v;
+`;
+}
+
+/**
+ * Messages with neither forUserId nor senderId (ruling R16: an AI/SYSTEM row
+ * is private material of the user whose turn produced it; attribution is
+ * exact or nothing). The old Message model has no turn or thread key
+ * (verified on phoenix/base: id, sessionId, senderId, forUserId, role,
+ * content, contentHash, stage, timestamp, refiningNeedId, extracted*;
+ * turnId exists only on BrainActivity, from 2026-01-12). So an AI/SYSTEM row
+ * is attributed only when exactly one user could have had the turn: the
+ * session's users, minus every non-inviter before the session's invitation
+ * was accepted (the invitee cannot chat before joining). A human-authored row
+ * (USER or an event role) whose sender was nulled belongs to a deleted user:
+ * its candidates are the session's vanished users, and it is never
+ * attributed. exact_user is the one candidate of an attributable AI/SYSTEM row.
+ */
+export function ownerlessSrc(ns: string): string {
+  return `CREATE TABLE ${ns}.ownerless AS
+WITH m AS (
+  SELECT id, "sessionId" AS session_id, role::text AS role, "timestamp" AS ts
+  FROM "Message" WHERE "forUserId" IS NULL AND "senderId" IS NULL
+), inv AS (
+  SELECT DISTINCT ON (i."sessionId") i."sessionId" AS session_id, i."invitedById" AS inviter,
+         (SELECT min(j."acceptedAt") FROM "Invitation" j WHERE j."sessionId" = i."sessionId" AND j.status = 'ACCEPTED') AS accepted_at
+  FROM "Invitation" i ORDER BY i."sessionId", i."createdAt", i.id
+)
+SELECT m.id AS message_id, m.session_id, m.role, m.ts, c.candidates,
+       CASE WHEN m.role IN ('AI', 'SYSTEM') AND cardinality(c.candidates) = 1 THEN c.candidates[1] END AS exact_user,
+       EXISTS (SELECT 1 FROM ${ns}.pair p JOIN ${ns}.vanished v USING (user_id) WHERE p.session_id = m.session_id) AS vanished_session
+FROM m
+LEFT JOIN inv ON inv.session_id = m.session_id
+CROSS JOIN LATERAL (
+  SELECT coalesce(array_agg(u.user_id ORDER BY u.user_id), '{}') AS candidates
+  FROM (SELECT DISTINCT p.user_id FROM ${ns}.pair p WHERE p.session_id = m.session_id) u
+  WHERE CASE WHEN m.role IN ('AI', 'SYSTEM')
+             THEN NOT (inv.inviter IS NOT NULL AND u.user_id <> inv.inviter AND (inv.accepted_at IS NULL OR m.ts < inv.accepted_at))
+             ELSE u.user_id IN (SELECT v.user_id FROM ${ns}.vanished v)
+        END
+) c;
 `;
 }

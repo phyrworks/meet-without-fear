@@ -13,7 +13,7 @@
  * template filled in for the seeded scratch database.
  */
 
-import { beforeCounts, evidenceSrc, helperFns, pairSet } from './workspace';
+import { beforeCounts, evidenceSrc, helperFns, ownerlessSrc, pairSet } from './workspace';
 import { CHECKS, prechecks } from './prechecks';
 
 /** Corrective guidance per check name: comment lines, then a commented statement. */
@@ -101,17 +101,16 @@ const FIXES: Record<string, string> = {
 -- Zero: nobody accepted (→ PENDING); several: decide who.
 -- UPDATE "Invitation" SET status = 'PENDING', "acceptedAt" = NULL WHERE id IN (<ids>);`,
   message_without_owner: `
--- Pre-2026-01-02 rows have no forUserId (migration 20260102225910 added it
--- without a backfill). Backfill rule: the sender of the nearest EARLIER USER
--- message with a sender in the same session (the turn the AI answered); if
--- none, the nearest LATER one. Rows with no USER sender in their session at
--- all stay listed: decide them by hand. Review the result before committing.
--- UPDATE "Message" m SET "forUserId" = coalesce(
---     (SELECT u."senderId" FROM "Message" u WHERE u."sessionId" = m."sessionId" AND u.role = 'USER' AND u."senderId" IS NOT NULL
---        AND (u.timestamp, u.id) < (m.timestamp, m.id) ORDER BY u.timestamp DESC, u.id DESC LIMIT 1),
---     (SELECT u."senderId" FROM "Message" u WHERE u."sessionId" = m."sessionId" AND u.role = 'USER' AND u."senderId" IS NOT NULL
---        AND (u.timestamp, u.id) > (m.timestamp, m.id) ORDER BY u.timestamp, u.id LIMIT 1))::text
--- WHERE m.id IN (<ids>);`,
+-- Attribution is EXACT OR NOTHING (ruling R16): an AI/SYSTEM reply is the
+-- private material of the user whose turn produced it, and two users' private
+-- chats interleave in one session, so no neighbour rule may guess. The
+-- migration itself attributes every row with exactly one candidate (an
+-- AI/SYSTEM row in a one-user session, or one written before the session's
+-- invitation was accepted: only the inviter could have had a turn). This block
+-- lists only the rest, each with its candidates, and ships NO UPDATE. For each
+-- row the owner decides: set "forUserId" by hand only from first-hand
+-- knowledge of whose turn it was, or export the row and delete it.
+-- (No corrective statement is provided on purpose.)`,
   attempt_without_author: `
 -- sourceUserId was nulled (author deleted) and the migration could not
 -- recover it (it recovers the session's one vanished member without another
@@ -279,7 +278,8 @@ CREATE TABLE pg_temp.row_counts (phase text NOT NULL, table_name text NOT NULL, 
 ${helperFns('pg_temp')}
 ${beforeCounts('pg_temp')}
 ${pairSet("pg_temp")}
-${evidenceSrc("pg_temp")}`;
+${evidenceSrc("pg_temp")}
+${ownerlessSrc("pg_temp")}`;
   const blocks = CHECKS.map((c) => {
     const select = c.select.replace(/app_migration\./g, 'pg_temp.');
     return `-- ${'-'.repeat(76)}\n-- ${c.title}\n-- ${'-'.repeat(76)}\n${select};\n${FIXES[c.name].trim()}\n`;

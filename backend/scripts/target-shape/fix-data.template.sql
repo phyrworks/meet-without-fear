@@ -135,6 +135,29 @@ SELECT v.id, v."attemptId", v."sessionId",
        v.validated, v.feedback, v."feedbackShared", v."validatedAt"
 FROM "EmpathyValidation" v;
 
+CREATE TABLE pg_temp.ownerless AS
+WITH m AS (
+  SELECT id, "sessionId" AS session_id, role::text AS role, "timestamp" AS ts
+  FROM "Message" WHERE "forUserId" IS NULL AND "senderId" IS NULL
+), inv AS (
+  SELECT DISTINCT ON (i."sessionId") i."sessionId" AS session_id, i."invitedById" AS inviter,
+         (SELECT min(j."acceptedAt") FROM "Invitation" j WHERE j."sessionId" = i."sessionId" AND j.status = 'ACCEPTED') AS accepted_at
+  FROM "Invitation" i ORDER BY i."sessionId", i."createdAt", i.id
+)
+SELECT m.id AS message_id, m.session_id, m.role, m.ts, c.candidates,
+       CASE WHEN m.role IN ('AI', 'SYSTEM') AND cardinality(c.candidates) = 1 THEN c.candidates[1] END AS exact_user,
+       EXISTS (SELECT 1 FROM pg_temp.pair p JOIN pg_temp.vanished v USING (user_id) WHERE p.session_id = m.session_id) AS vanished_session
+FROM m
+LEFT JOIN inv ON inv.session_id = m.session_id
+CROSS JOIN LATERAL (
+  SELECT coalesce(array_agg(u.user_id ORDER BY u.user_id), '{}') AS candidates
+  FROM (SELECT DISTINCT p.user_id FROM pg_temp.pair p WHERE p.session_id = m.session_id) u
+  WHERE CASE WHEN m.role IN ('AI', 'SYSTEM')
+             THEN NOT (inv.inviter IS NOT NULL AND u.user_id <> inv.inviter AND (inv.accepted_at IS NULL OR m.ts < inv.accepted_at))
+             ELSE u.user_id IN (SELECT v.user_id FROM pg_temp.vanished v)
+        END
+) c;
+
 -- ----------------------------------------------------------------------------
 -- P01 live_sessions_per_relationship (A-Q3 partial unique)
 -- ----------------------------------------------------------------------------
@@ -877,20 +900,18 @@ WHERE abs(cost) >= 10000;
 -- UPDATE "BrainActivity" SET cost = 0 WHERE id IN (<ids>);
 
 -- ----------------------------------------------------------------------------
--- P33 message_without_owner (no forUserId and no senderId, in a session without a vanished member)
+-- P33 message_without_owner (no forUserId/senderId, not attributable exactly, session without a vanished member)
 -- ----------------------------------------------------------------------------
-SELECT 'message_without_owner', m.id::text, m.role::text || ' @ ' || m.timestamp::text
-FROM "Message" m
-WHERE m."forUserId" IS NULL AND m."senderId" IS NULL
-  AND NOT EXISTS (SELECT 1 FROM pg_temp.pair p JOIN pg_temp.vanished v USING (user_id) WHERE p.session_id = m."sessionId");
--- Pre-2026-01-02 rows have no forUserId (migration 20260102225910 added it
--- without a backfill). Backfill rule: the sender of the nearest EARLIER USER
--- message with a sender in the same session (the turn the AI answered); if
--- none, the nearest LATER one. Rows with no USER sender in their session at
--- all stay listed: decide them by hand. Review the result before committing.
--- UPDATE "Message" m SET "forUserId" = coalesce(
---     (SELECT u."senderId" FROM "Message" u WHERE u."sessionId" = m."sessionId" AND u.role = 'USER' AND u."senderId" IS NOT NULL
---        AND (u.timestamp, u.id) < (m.timestamp, m.id) ORDER BY u.timestamp DESC, u.id DESC LIMIT 1),
---     (SELECT u."senderId" FROM "Message" u WHERE u."sessionId" = m."sessionId" AND u.role = 'USER' AND u."senderId" IS NOT NULL
---        AND (u.timestamp, u.id) > (m.timestamp, m.id) ORDER BY u.timestamp, u.id LIMIT 1))::text
--- WHERE m.id IN (<ids>);
+SELECT 'message_without_owner', o.message_id::text, format('%s @ %s; candidates %s', o.role, o.ts, to_jsonb(o.candidates))
+FROM pg_temp.ownerless o
+WHERE o.exact_user IS NULL AND NOT o.vanished_session;
+-- Attribution is EXACT OR NOTHING (ruling R16): an AI/SYSTEM reply is the
+-- private material of the user whose turn produced it, and two users' private
+-- chats interleave in one session, so no neighbour rule may guess. The
+-- migration itself attributes every row with exactly one candidate (an
+-- AI/SYSTEM row in a one-user session, or one written before the session's
+-- invitation was accepted: only the inviter could have had a turn). This block
+-- lists only the rest, each with its candidates, and ships NO UPDATE. For each
+-- row the owner decides: set "forUserId" by hand only from first-hand
+-- knowledge of whose turn it was, or export the row and delete it.
+-- (No corrective statement is provided on purpose.)

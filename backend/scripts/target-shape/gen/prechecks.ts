@@ -482,15 +482,16 @@ SELECT 'brain_cost_overflow', id::text, cost::text
 FROM "BrainActivity"
 WHERE abs(cost) >= 10000`));
 
-  // Review D1: Message.forUserId arrived 2026-01-02 (migration
+  // Review D1 / ruling R16: Message.forUserId arrived 2026-01-02 (migration
   // 20260102225910) with no backfill, so older AI/SYSTEM rows name nobody.
-  // Plan 4a drops ownerless rows only as a vanished leaver's private rows;
-  // anywhere else they must be backfilled first (fix-data template).
-  parts.push(P('P33 message_without_owner (no forUserId and no senderId, in a session without a vanished member)', `
-SELECT 'message_without_owner', m.id::text, m.role::text || ' @ ' || m.timestamp::text
-FROM "Message" m
-WHERE m."forUserId" IS NULL AND m."senderId" IS NULL
-  AND NOT EXISTS (SELECT 1 FROM app_migration.pair p JOIN app_migration.vanished v USING (user_id) WHERE p.session_id = m."sessionId")`));
+  // The migration attributes a row only when exactly one user could have had
+  // the turn (app_migration.ownerless); a vanished-member session's remainder
+  // goes to dropped_content with its candidates; anywhere else the remainder
+  // is listed here, with its candidates, for the owner.
+  parts.push(P('P33 message_without_owner (no forUserId/senderId, not attributable exactly, session without a vanished member)', `
+SELECT 'message_without_owner', o.message_id::text, format('%s @ %s; candidates %s', o.role, o.ts, to_jsonb(o.candidates))
+FROM app_migration.ownerless o
+WHERE o.exact_user IS NULL AND NOT o.vanished_session`));
 
   parts.push(`
 -- The single verdict: every failing precheck at once, with ids.

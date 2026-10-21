@@ -243,7 +243,8 @@ DROP VIEW app_migration.pair, app_migration.vanished;
 DROP TABLE ${OLD_TABLES.map(q).join(', ')};
 DROP TABLE app_migration.precheck, app_migration.su, app_migration.ab_slot, app_migration.checkin_map,
            app_migration.milestone_src, app_migration.disposition_ref, app_migration.proposal_need_src,
-           app_migration.slot_fix, app_migration.empathy_attempt_src, app_migration.empathy_validation_src;
+           app_migration.slot_fix, app_migration.empathy_attempt_src, app_migration.empathy_validation_src,
+           app_migration.ownerless;
 DROP TYPE ${OLD_ENUMS.map(q).join(', ')};
 
 DO $$
