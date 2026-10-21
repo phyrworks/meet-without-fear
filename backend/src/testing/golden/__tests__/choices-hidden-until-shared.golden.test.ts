@@ -23,6 +23,7 @@
 import {
   CHOICES_HIDDEN_UNTIL_SHARED_ALLOW,
   CHOICES_HIDDEN_UNTIL_SHARED_KNOWN_LEAKS,
+  CHOICES_NEED_LABEL_KNOWN_LEAKS,
 } from '../allow-lists/choices-hidden-until-shared';
 import { viewName } from '../concept-views';
 import { listTables } from '../db';
@@ -149,10 +150,24 @@ describe(`golden: ${SCENARIO}`, () => {
     expect(stage4Of('shared').data?.partnerSelections).toHaveLength(2);
   });
 
-  it('proposal_need and need_disposition name only need_share ids', () => {
+  it("Bob's need labels never reach Ada's reads (known leaks aside)", () => {
+    // BOB_NEEDS in this fixture carry no evidence, so labels are the probes.
+    // Quoted: a label is a JSON string value; the bare words also occur in
+    // coverage notes and proposal text.
+    const probes = { 'bob need label Understanding': '"Understanding"', 'bob need label Support': '"Support"' };
+    const observed = findLeaks([...phase.before, ...phase.unshared, ...phase.shared], probes);
+    expect(unexpectedLeakReport(observed, CHOICES_NEED_LABEL_KNOWN_LEAKS)).toEqual({ unexpected: [], stale: [] });
+  });
+
+  // TAUTOLOGICAL ON THE CURRENT SHAPE (fix round 1, I4): the current-shape
+  // proposal_need / need_disposition views join old_concept_need_share, so they
+  // can only name need_share ids, and this fixture has no need_share row at all.
+  // The real assertion is target-only (allow-list targetOnly): non-empty rows,
+  // every id a need_share id. Here it only pins that the vacuity is what it is.
+  it('proposal_need and need_disposition are empty on the current shape (the junction check is targetOnly)', () => {
     const last = steps[steps.length - 1].concept!.after!.tables;
-    const shared = new Set(last[viewName('need_share')].map(r => String(r.need_id)));
-    const named = [...last[viewName('proposal_need')], ...last[viewName('need_disposition')]].map(r => String(r.need_id));
-    expect(named.filter(id => !shared.has(id))).toEqual([]);
+    expect(last[viewName('need_share')]).toEqual([]);
+    expect(last[viewName('proposal_need')]).toEqual([]);
+    expect(last[viewName('need_disposition')]).toEqual([]);
   });
 });

@@ -18,6 +18,19 @@ import type { AllowList } from './types';
 export const DECLINED_OFFER_NO_TRACE_ALLOW: AllowList = {
   scenario: 'declined-offer-no-trace',
   rules: [...READ_DTO_RULES],
+  targetOnly: [
+    {
+      assertion:
+        'Compare the author’s reads after the decline with her reads BEFORE THE OFFER WAS MADE (a fixture without a ' +
+        'reconciler result), not only before the decline.',
+      why:
+        'Gap recorded in fix round 1 (I5): this baseline already contains the offer (the fixture restores with it, and ' +
+        'MOCK_LLM never makes one), so a trace that is constant from offer to decline — one that proves an offer ' +
+        'EXISTS — passes this scenario. Offer existence is probed in author-sees-status-only instead (its KNOWN ' +
+        'entries "offer exists: …": empathy/status action OFFER_SHARING; reconciler/status pendingShareOffers and ' +
+        'recommendation; reconciler/run).',
+    },
+  ],
 };
 
 /**

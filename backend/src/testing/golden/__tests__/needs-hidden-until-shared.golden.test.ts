@@ -138,10 +138,13 @@ describe(`golden: ${SCENARIO}`, () => {
     expect(last[viewName('need_share')]).toEqual([]);
   });
 
-  it('proposal_need and need_disposition name only need_share ids', () => {
+  // TAUTOLOGICAL ON THE CURRENT SHAPE (fix round 1, I4): the current-shape
+  // views join old_concept_need_share, so they can only name need_share ids, and
+  // need_share is empty here (F2). The real assertion is target-only (allow-list
+  // targetOnly): non-empty rows, every id a need_share id.
+  it('proposal_need and need_disposition are empty on the current shape (the junction check is targetOnly)', () => {
     const last = steps[steps.length - 1].concept!.after!.tables;
-    const shared = new Set(last[viewName('need_share')].map(r => String(r.need_id)));
-    const named = [...last[viewName('proposal_need')], ...last[viewName('need_disposition')]].map(r => String(r.need_id));
-    expect(named.filter(id => !shared.has(id))).toEqual([]);
+    expect(last[viewName('proposal_need')]).toEqual([]);
+    expect(last[viewName('need_disposition')]).toEqual([]);
   });
 });

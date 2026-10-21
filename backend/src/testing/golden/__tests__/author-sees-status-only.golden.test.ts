@@ -62,6 +62,12 @@ export const PROBES: Record<string, string> = {
   'result.suggestedShareReason': result.suggestedShareReason,
   'offer.suggestedContent': offer.suggestedContent,
   'unsent feedback': UNSENT_FEEDBACK,
+  // Fix round 1 (I5): the offer's EXISTENCE, not only its text. The direction's
+  // status (AWAITING_SHARING) is what v_empathy_direction_status shows by
+  // design; anything beyond it that says "an offer was made" is a trace.
+  'offer exists: pending offer count': '"pendingShareOffers":1',
+  'offer exists: recommended action': '"action":"OFFER_SHARING"',
+  'offer exists: sharing would help': '"sharingWouldHelp":true',
 };
 
 jest.setTimeout(600_000);

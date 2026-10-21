@@ -51,6 +51,15 @@ export const NEEDS_HIDDEN_UNTIL_SHARED_ALLOW: AllowList = {
   targetOnly: [
     {
       assertion:
+        'After both shares, need_share holds the four shared needs and every need_id that proposal_need / ' +
+        'need_disposition name is one of them; assert need_share NON-EMPTY (the current-shape check is tautological ' +
+        'and the scenario only pins today’s empty rows).',
+      why:
+        'The current-shape views join old_concept_need_share and production’s share writes none (F2 — a finding ' +
+        'against the plan text; TS-7b is changing the migration so ConsentRecord-only shares become need_share).',
+    },
+    {
+      assertion:
         'After both partners share, each partner reads the other’s needs as need_share.shared_text with its category; ' +
         'the comparison never carries need.label or need.evidence, and v_need_coverage / v_session_closure_items / ' +
         'proposal_need name only need_share ids.',

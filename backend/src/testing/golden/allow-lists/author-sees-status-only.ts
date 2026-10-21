@@ -57,4 +57,26 @@ export const AUTHOR_SEES_STATUS_ONLY_KNOWN_LEAKS: KnownLeak[] = [
         '(controllers/reconciler.ts runReconcilerHandler)',
     ),
   ]),
+  // Fix round 1 (I5): the offer's existence, beyond the direction's status.
+  leak(
+    'author: empathy status as ada@e2e.test ⊃ offer exists: recommended action',
+    'R6/P1-4: GET empathy/status tells the author a share was offered to the subject (myReconcilerResult.action = OFFER_SHARING)',
+    'body.data.myReconcilerResult.action = "OFFER_SHARING" — beyond the AWAITING_SHARING status the author may see.',
+  ),
+  ...['offer exists: pending offer count', 'offer exists: recommended action', 'offer exists: sharing would help'].map(
+    probe =>
+      leak(
+        `author: reconciler status as ada@e2e.test ⊃ ${probe}`,
+        'R6/P1-4: GET reconciler/status tells the author a share offer exists (pendingShareOffers, recommendation)',
+        'body.data.pendingShareOffers = 1; body.data.aUnderstandingB.result.recommendation = {action: OFFER_SHARING, ' +
+          'sharingWouldHelp: true} (services/reconciler/state.ts getReconcilerStatus).',
+      ),
+  ),
+  ...['offer exists: recommended action', 'offer exists: sharing would help'].map(probe =>
+    leak(
+      `reconciler run as ada@e2e.test ⊃ ${probe}`,
+      F_RECONCILER_RUN,
+      'body.data.aUnderstandingB.result.recommendation = {action: OFFER_SHARING, sharingWouldHelp: true}.',
+    ),
+  ),
 ];

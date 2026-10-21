@@ -23,8 +23,19 @@ export const CHOICES_HIDDEN_UNTIL_SHARED_ALLOW: AllowList = {
   rules: [
     ...READ_DTO_RULES,
     {
+      // Only the keys that name a need in the Stage 4 state — never a
+      // proposal's text or source label. Paired with the scenario's probe of
+      // the partner's need labels (KNOWN leaks below): on the target the text
+      // may change, the label may not reappear.
       kind: 'mayDiffer',
-      at: 'steps.*.body.data.**.label',
+      at: [
+        'steps.*.body.data.walkthrough.currentNeed.label',
+        'steps.*.body.data.walkthrough.ownNeeds.*.label',
+        'steps.*.body.data.walkthrough.partnerNeeds.*.label',
+        'steps.*.body.data.**.needsAddressed.*.label',
+        'steps.*.body.data.inventory.unaddressedNeeds.*.label',
+        'steps.*.body.data.coverageAudit.*.*.label',
+      ],
       mustMatch: true,
       why:
         'spec §1.4 v_need_coverage over need_share: a need named in Stage 4 is its shared text, not the label ' +
@@ -32,6 +43,15 @@ export const CHOICES_HIDDEN_UNTIL_SHARED_ALLOW: AllowList = {
     },
   ],
   targetOnly: [
+    {
+      assertion:
+        'proposal_need and need_disposition are NON-EMPTY after the share, and every need_id they name is a need_share ' +
+        'id (spec §7 "can never name an unshared need").',
+      why:
+        'On the current shape the check is tautological: the views join old_concept_need_share, so they can only name ' +
+        'need_share ids, and this fixture has none (the scenario pins that they are empty). Only the target can make ' +
+        'the assertion bite.',
+    },
     {
       assertion:
         'v_session_closure_items names only need_share ids: close Stage 4 with an open shared need and an unshared ' +
@@ -44,5 +64,22 @@ export const CHOICES_HIDDEN_UNTIL_SHARED_ALLOW: AllowList = {
   ],
 };
 
-/** Observed against the current code; see `privacy.ts` for the contract. */
+/** Choices: observed against the current code (none); see `privacy.ts` for the contract. */
 export const CHOICES_HIDDEN_UNTIL_SHARED_KNOWN_LEAKS: KnownLeak[] = [];
+
+/** The partner's need labels in Ada's reads: observed against the current code. */
+export const CHOICES_NEED_LABEL_KNOWN_LEAKS: KnownLeak[] = [
+  'before bob chooses',
+  'bob chose, not shared',
+  'bob shared',
+].map(phase => ({
+  at: `${phase}: stage4 as ada@e2e.test ⊃ bob need label Support`,
+  finding:
+    'R4: GET /sessions/:id/stage4 shows a partner’s private need label (Stage4NeedCoverage.needLabel) in the ' +
+    'walkthrough, coverage audit and proposal cards — the F-R4-1 class (label, not shared text)',
+  evidence:
+    'body.data.walkthrough.partnerNeeds[0].label, coverageAudit.partial[0].label and needsAddressed[].label = "Support" ' +
+    '(Bob’s IdentifiedNeed.need, copied into Stage4NeedCoverage.needLabel by the fixture as Stage 4 coverage does); ' +
+    'services/stage4-state.ts builds them from coverage rows. Bob’s other need ("Understanding") has no coverage row ' +
+    'and is not shown.',
+}));
