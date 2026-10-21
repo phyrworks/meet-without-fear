@@ -26,7 +26,21 @@
 --  * Leaves schema app_migration (shape_map, row_counts, report) for the
 --    after-phase verify script (TS-8), which drops it (ruling R14). Read the
 --    report: SELECT step, item, n, detail FROM app_migration.report ORDER BY seq;
+--  * User-written text the target has no column for (gatesSatisfied.skipReason
+--    and the feel-heard feedback, Stage4NeedCoverage.note, superseded unsent
+--    review feedback, a differing cycle resultSummary, dropped PROPOSED
+--    agreement descriptions, a vanished leaver's ownerless messages) is kept
+--    in app_migration.dropped_content for the owner to decide at TS-14.
+--  * The app.* functions treat a caller as the job only when it logged in as
+--    mwf_job or mwf_migrator (session_user); a superuser is not the job.
 --  * Does NOT enable RLS or create policies (TS-16).
+--  * TS-16 (v_participant): under owner-only RLS a co-participant reads NULL
+--    last_active_at / last_mood / read state and is_tombstone = false through
+--    this security_invoker view, and coalesce(showActivityStatus, true) would
+--    default to true over a user_preferences row it cannot see. The
+--    partner-facing columns need a SECURITY DEFINER table function (owned by
+--    mwf_job, identity-bound) returning participant_id + the masked
+--    last_active_at, with no default-true over an invisible row.
 --
 -- SECTIONS
 --   0  guard
@@ -1555,6 +1569,16 @@ CREATE TABLE app_migration.report (
   detail text
 );
 
+-- User-written text the target has no column for (ruling R-c): kept here,
+-- never silently dropped, for the owner to decide at TS-14. No grants.
+CREATE TABLE app_migration.dropped_content (
+  concept    text NOT NULL,
+  session_id uuid,
+  user_id    uuid,
+  text       text NOT NULL,
+  written_at timestamptz
+);
+
 -- Work tables (dropped at the end of the migration).
 CREATE TABLE app_migration.precheck (
   check_name text NOT NULL,
@@ -1701,6 +1725,28 @@ CREATE VIEW app_migration.vanished AS
   SELECT DISTINCT su.user_id FROM app_migration.su
   WHERE NOT EXISTS (SELECT 1 FROM "User" u WHERE u.id = su.user_id);
 
+CREATE TABLE app_migration.empathy_attempt_src AS
+SELECT a.id, a."draftId", a."sessionId",
+       coalesce(a."sourceUserId",
+         CASE WHEN (SELECT count(*) FROM "EmpathyAttempt" o WHERE o."sessionId" = a."sessionId" AND o."sourceUserId" IS NULL) = 1
+              THEN (SELECT CASE WHEN count(*) = 1 THEN min(v.user_id::text)::uuid END
+                    FROM app_migration.vanished v JOIN app_migration.pair p ON p.user_id = v.user_id AND p.session_id = a."sessionId"
+                    WHERE NOT EXISTS (SELECT 1 FROM "EmpathyAttempt" o WHERE o."sessionId" = a."sessionId" AND o."sourceUserId" = v.user_id))
+         END) AS "sourceUserId",
+       (a."sourceUserId" IS NULL) AS author_recovered,
+       a.content, a."sharedAt", a."consentRecordId", a.status, a."statusVersion", a."revealedAt", a."revisionCount",
+       a."deliveryStatus", a."deliveredAt", a."seenAt"
+FROM "EmpathyAttempt" a;
+CREATE TABLE app_migration.empathy_validation_src AS
+SELECT v.id, v."attemptId", v."sessionId",
+       coalesce(v."userId",
+         (SELECT CASE WHEN count(DISTINCT p.user_id) = 1 THEN min(p.user_id::text)::uuid END
+          FROM app_migration.pair p JOIN app_migration.empathy_attempt_src a ON a.id = v."attemptId"
+          WHERE p.session_id = v."sessionId" AND p.user_id IS DISTINCT FROM a."sourceUserId")) AS "userId",
+       (v."userId" IS NULL) AS reviewer_recovered,
+       v.validated, v.feedback, v."feedbackShared", v."validatedAt"
+FROM "EmpathyValidation" v;
+
 -- ============================================================================
 -- 2b. Prechecks (plan step 0b)
 -- ============================================================================
@@ -1787,10 +1833,10 @@ FROM "ConsentRecord" c
 WHERE c."targetType" IN ('IDENTIFIED_NEED', 'EMPATHY_ATTEMPT', 'EMPATHY_DRAFT', 'STRATEGY_PROPOSAL')
   AND NOT CASE c."targetType"
     WHEN 'IDENTIFIED_NEED' THEN EXISTS (SELECT 1 FROM "IdentifiedNeed" n WHERE n.id = app_migration.as_uuid(c."targetId"))
-    WHEN 'EMPATHY_ATTEMPT' THEN EXISTS (SELECT 1 FROM "EmpathyAttempt" a WHERE a.id = app_migration.as_uuid(c."targetId"))
+    WHEN 'EMPATHY_ATTEMPT' THEN EXISTS (SELECT 1 FROM app_migration.empathy_attempt_src a WHERE a.id = app_migration.as_uuid(c."targetId"))
     WHEN 'EMPATHY_DRAFT' THEN
-         EXISTS (SELECT 1 FROM "EmpathyAttempt" a WHERE a.id = app_migration.as_uuid(c."targetId") OR a."draftId" = app_migration.as_uuid(c."targetId"))
-      OR EXISTS (SELECT 1 FROM "EmpathyDraft" d JOIN "EmpathyAttempt" a ON a."sessionId" = d."sessionId" AND a."sourceUserId" = d."userId"
+         EXISTS (SELECT 1 FROM app_migration.empathy_attempt_src a WHERE a.id = app_migration.as_uuid(c."targetId") OR a."draftId" = app_migration.as_uuid(c."targetId"))
+      OR EXISTS (SELECT 1 FROM "EmpathyDraft" d JOIN app_migration.empathy_attempt_src a ON a."sessionId" = d."sessionId" AND a."sourceUserId" = d."userId"
                  WHERE d.id = app_migration.as_uuid(c."targetId"))
     WHEN 'STRATEGY_PROPOSAL' THEN EXISTS (SELECT 1 FROM "StrategyProposal" p WHERE p.id = app_migration.as_uuid(c."targetId"))
   END;
@@ -1825,7 +1871,7 @@ SELECT 'session_resolved_without_resolved_at', id::text, NULL
 FROM "Session"
 WHERE status = 'RESOLVED' AND "resolvedAt" IS NULL;
 
--- P13 session_without_two_participants (step 4a; T-cardinality-1)
+-- P13 session_without_two_participants (the step-4a assertion, checked before any copy; T-cardinality-1)
 INSERT INTO app_migration.precheck (check_name, offender, detail)
 SELECT 'session_without_two_participants', s.id::text,
        s.status::text || ', participants: ' || coalesce((SELECT string_agg(DISTINCT p.user_id::text, ', ') FROM app_migration.pair p WHERE p.session_id = s.id), 'none')
@@ -1841,19 +1887,19 @@ SELECT 'invitation_accepted_without_accepted_at', id::text, NULL
 FROM "Invitation"
 WHERE status = 'ACCEPTED' AND "acceptedAt" IS NULL;
 
--- P14b invitation_accepted_without_unique_acceptor (accepted_by_user_id = the one non-inviter member)
+-- P14b invitation_accepted_without_unique_acceptor (accepted_by_user_id = the one non-inviter participant, vanished ones included)
 INSERT INTO app_migration.precheck (check_name, offender, detail)
 SELECT 'invitation_accepted_without_unique_acceptor', i.id::text,
-       (SELECT count(*) FROM "RelationshipMember" m WHERE m."relationshipId" = s."relationshipId" AND m."userId" <> i."invitedById")::text
-       || ' non-inviter member(s)'
-FROM "Invitation" i JOIN "Session" s ON s.id = i."sessionId"
+       (SELECT count(DISTINCT p.user_id) FROM app_migration.pair p WHERE p.session_id = i."sessionId" AND p.user_id <> i."invitedById")::text
+       || ' non-inviter participant(s)'
+FROM "Invitation" i
 WHERE i.status = 'ACCEPTED'
-  AND (SELECT count(*) FROM "RelationshipMember" m WHERE m."relationshipId" = s."relationshipId" AND m."userId" <> i."invitedById") <> 1;
+  AND (SELECT count(DISTINCT p.user_id) FROM app_migration.pair p WHERE p.session_id = i."sessionId" AND p.user_id <> i."invitedById") <> 1;
 
--- P15a attempt_without_author (empathy_attempt.author NOT NULL)
+-- P15a attempt_without_author (empathy_attempt.author NOT NULL; not recoverable from vanished-member evidence)
 INSERT INTO app_migration.precheck (check_name, offender, detail)
 SELECT 'attempt_without_author', id::text, NULL
-FROM "EmpathyAttempt"
+FROM app_migration.empathy_attempt_src
 WHERE "sourceUserId" IS NULL;
 
 -- P15b attempt_without_unique_subject (step 11: subject = the other participant; RAISE if N≠2)
@@ -1861,7 +1907,7 @@ INSERT INTO app_migration.precheck (check_name, offender, detail)
 SELECT 'attempt_without_unique_subject', a.id::text,
        (SELECT count(DISTINCT p.user_id) FROM app_migration.pair p WHERE p.session_id = a."sessionId" AND p.user_id <> a."sourceUserId")::text
        || ' other participant(s)'
-FROM "EmpathyAttempt" a
+FROM app_migration.empathy_attempt_src a
 WHERE a."sourceUserId" IS NOT NULL
   AND (SELECT count(DISTINCT p.user_id) FROM app_migration.pair p WHERE p.session_id = a."sessionId" AND p.user_id <> a."sourceUserId") <> 1;
 
@@ -1876,33 +1922,33 @@ WHERE (SELECT count(DISTINCT p.user_id) FROM app_migration.pair p WHERE p.sessio
 -- P15d attempt_revealed_without_revealed_at (CHECK REVEALED/VALIDATED → revealed_at)
 INSERT INTO app_migration.precheck (check_name, offender, detail)
 SELECT 'attempt_revealed_without_revealed_at', id::text, status::text
-FROM "EmpathyAttempt"
+FROM app_migration.empathy_attempt_src
 WHERE status IN ('REVEALED', 'VALIDATED') AND "revealedAt" IS NULL;
 
--- P16a validation_without_reviewer (empathy_review.reviewer NOT NULL)
+-- P16a validation_without_reviewer (empathy_review.reviewer NOT NULL; not recoverable as the attempt subject)
 INSERT INTO app_migration.precheck (check_name, offender, detail)
 SELECT 'validation_without_reviewer', id::text, NULL
-FROM "EmpathyValidation"
+FROM app_migration.empathy_validation_src
 WHERE "userId" IS NULL;
 
 -- P16b validation_reviewer_is_author (reviewer = the subject of the attempt)
 INSERT INTO app_migration.precheck (check_name, offender, detail)
 SELECT 'validation_reviewer_is_author', v.id::text, NULL
-FROM "EmpathyValidation" v JOIN "EmpathyAttempt" a ON a.id = v."attemptId"
+FROM app_migration.empathy_validation_src v JOIN app_migration.empathy_attempt_src a ON a.id = v."attemptId"
 WHERE v."userId" = a."sourceUserId";
 
 -- P16c validation_draft_without_partner_attempt (draft(VALIDATION_FEEDBACK).attempt = the attempt of the partner)
 INSERT INTO app_migration.precheck (check_name, offender, detail)
 SELECT 'validation_draft_without_partner_attempt', d.id::text,
-       (SELECT count(*) FROM "EmpathyAttempt" a WHERE a."sessionId" = d."sessionId" AND a."sourceUserId" <> d."userId")::text || ' partner attempt(s)'
+       (SELECT count(*) FROM app_migration.empathy_attempt_src a WHERE a."sessionId" = d."sessionId" AND a."sourceUserId" <> d."userId")::text || ' partner attempt(s)'
 FROM "ValidationFeedbackDraft" d
-WHERE (SELECT count(*) FROM "EmpathyAttempt" a WHERE a."sessionId" = d."sessionId" AND a."sourceUserId" <> d."userId") <> 1;
+WHERE (SELECT count(*) FROM app_migration.empathy_attempt_src a WHERE a."sessionId" = d."sessionId" AND a."sourceUserId" <> d."userId") <> 1;
 
 -- P17a reconciler_result_without_attempt (result → attempt by (session, guesser))
 INSERT INTO app_migration.precheck (check_name, offender, detail)
 SELECT 'reconciler_result_without_attempt', r.id::text, r."guesserId"
 FROM "ReconcilerResult" r
-WHERE NOT EXISTS (SELECT 1 FROM "EmpathyAttempt" a
+WHERE NOT EXISTS (SELECT 1 FROM app_migration.empathy_attempt_src a
                   WHERE a."sessionId" = r."sessionId" AND a."sourceUserId" = app_migration.as_uuid(r."guesserId"));
 
 -- P17b reconciler_result_two_current (sql_result_one_current)
@@ -2214,6 +2260,13 @@ SELECT 'brain_cost_overflow', id::text, cost::text
 FROM "BrainActivity"
 WHERE abs(cost) >= 10000;
 
+-- P33 message_without_owner (no forUserId and no senderId, in a session without a vanished member)
+INSERT INTO app_migration.precheck (check_name, offender, detail)
+SELECT 'message_without_owner', m.id::text, m.role::text || ' @ ' || m.timestamp::text
+FROM "Message" m
+WHERE m."forUserId" IS NULL AND m."senderId" IS NULL
+  AND NOT EXISTS (SELECT 1 FROM app_migration.pair p JOIN app_migration.vanished v USING (user_id) WHERE p.session_id = m."sessionId");
+
 
 -- The single verdict: every failing precheck at once, with ids.
 DO $$
@@ -2404,6 +2457,32 @@ FROM (
   JOIN participant p ON p.session_id = s.id AND p.user_id = m."userId"
 ) x
 WHERE rn <= 2;
+-- A vanished member's RelationshipMember row cascaded with their deletion, so
+-- the survivor alone was ranked above (review D2). Where the session has one
+-- surviving member and one vanished participant, recover both slots: the
+-- survivor is A when a surviving Invitation of the session was sent by them
+-- (the inviter joins first), else B (the inviter's own invitation cascaded
+-- with the inviter); the vanished participant takes the other slot. (Every
+-- agreement that survives step 13 was agreed by both, so the slot decides who
+-- is listed, never who agreed — P22b.)
+CREATE TABLE app_migration.slot_fix AS
+SELECT s.id AS session_id,
+       (SELECT a.participant_id FROM app_migration.ab_slot a WHERE a.session_id = s.id) AS survivor,
+       (SELECT p.id FROM participant p JOIN app_migration.vanished v USING (user_id) WHERE p.session_id = s.id) AS gone,
+       CASE WHEN EXISTS (SELECT 1 FROM "Invitation" i JOIN app_migration.ab_slot a ON a.session_id = s.id
+                         JOIN participant p ON p.id = a.participant_id
+                         WHERE i."sessionId" = s.id AND i."invitedById" = p.user_id)
+            THEN 'A' ELSE 'B' END AS survivor_slot
+FROM "Session" s
+WHERE (SELECT count(*) FROM app_migration.ab_slot a WHERE a.session_id = s.id) = 1
+  AND (SELECT count(*) FROM participant p JOIN app_migration.vanished v USING (user_id) WHERE p.session_id = s.id) = 1;
+DELETE FROM app_migration.ab_slot WHERE session_id IN (SELECT session_id FROM app_migration.slot_fix);
+INSERT INTO app_migration.ab_slot (session_id, slot, participant_id, tied)
+SELECT session_id, survivor_slot, survivor, false FROM app_migration.slot_fix
+UNION ALL
+SELECT session_id, CASE survivor_slot WHEN 'A' THEN 'B' ELSE 'A' END, gone, false FROM app_migration.slot_fix;
+SELECT app_migration.note('5', 'A/B slots recovered for a session with a vanished member (survivor slot from the surviving invitation)', count(*))
+FROM app_migration.slot_fix;
 SELECT app_migration.note('5', 'A/B slot decided by the ctid tie-break (no split agreement)', count(DISTINCT session_id))
 FROM app_migration.ab_slot WHERE tied;
 SELECT app_migration.assert(n = 0, format('step 5: %s two-member session(s) without exactly one A and one B', n))
@@ -2547,7 +2626,7 @@ SELECT * FROM (
   WHERE s.status = 'PAUSED' AND p.left_at IS NULL
   UNION ALL
   SELECT p.id, 'empathy_submitted', a."sharedAt", 'EmpathyAttempt.sharedAt'
-  FROM "EmpathyAttempt" a JOIN participant p ON p.session_id = a."sessionId" AND p.user_id = a."sourceUserId"
+  FROM app_migration.empathy_attempt_src a JOIN participant p ON p.session_id = a."sessionId" AND p.user_id = a."sourceUserId"
   UNION ALL
   SELECT p.id, 'invitation_sent', i."messageConfirmedAt", 'Invitation.messageConfirmedAt'
   FROM "Invitation" i JOIN participant p ON p.session_id = i."sessionId" AND p.user_id = i."invitedById"
@@ -2562,7 +2641,12 @@ ORDER BY 3, 1, 2;
 
 SELECT app_migration.note('7', 'milestone source ' || source || ' → ' || milestone_key, count(*))
 FROM app_migration.milestone_src GROUP BY source, milestone_key ORDER BY source, milestone_key;
-SELECT app_migration.note('7', 'gatesSatisfied.' || k || ' dropped (free text, no target column)', count(*))
+INSERT INTO app_migration.dropped_content (concept, session_id, user_id, text, written_at)
+SELECT 'StageProgress.gatesSatisfied.' || k, sp."sessionId", sp."userId", sp."gatesSatisfied" ->> k, coalesce(sp."completedAt", sp."startedAt")
+FROM "StageProgress" sp CROSS JOIN unnest(ARRAY['skipReason', 'feedback']::text[]) AS k
+WHERE jsonb_typeof(sp."gatesSatisfied") = 'object' AND app_migration.jnull(sp."gatesSatisfied" -> k) IS NOT NULL
+ORDER BY sp.id, k;
+SELECT app_migration.note('7', 'gatesSatisfied.' || k || ' (free text, no target column) → app_migration.dropped_content', count(*))
 FROM "StageProgress" sp CROSS JOIN unnest(ARRAY['skipReason', 'feedback']::text[]) AS k
 WHERE jsonb_typeof(sp."gatesSatisfied") = 'object' AND app_migration.jnull(sp."gatesSatisfied" -> k) IS NOT NULL
 GROUP BY k;
@@ -2662,6 +2746,9 @@ FROM (SELECT count(*) AS n FROM app_migration.disposition_ref r
       JOIN need_share ns ON ns.need_id = app_migration.as_uuid(r.need_text)
       WHERE NOT EXISTS (SELECT 1 FROM need_disposition d WHERE d.participant_id = r.participant_id AND d.need_id = ns.need_id)) x;
 SELECT app_migration.note('8', 'Stage4NeedCoverage not copied (computed: v_need_coverage)', count(*)) FROM "Stage4NeedCoverage";
+INSERT INTO app_migration.dropped_content (concept, session_id, user_id, text, written_at)
+SELECT 'Stage4NeedCoverage.note', c."sessionId", app_migration.as_uuid(c."sourceUserId"), c.note, c."updatedAt"
+FROM "Stage4NeedCoverage" c WHERE c.note IS NOT NULL ORDER BY c.id;
 
 -- ---- Step 13 (part): proposal ← StrategyProposal (ids kept). needsAddressed
 -- → proposal_need / unresolved_need_labels below; parentProposalId,
@@ -2707,14 +2794,14 @@ SELECT a.id, pa.id, ps.id, a."revisionCount" + 1, NULL, a.content,
        (CASE a.status::text WHEN 'ANALYZING' THEN 'HELD' WHEN 'NEEDS_WORK' THEN 'AWAITING_SHARING' ELSE a.status::text END)::empathy_status,
        a."statusVersion", a."sharedAt", a."revealedAt", a."deliveryStatus"::text::delivery_status, a."deliveredAt", a."seenAt",
        a."sharedAt", greatest(a."sharedAt", a."revealedAt", a."deliveredAt", a."seenAt")
-FROM "EmpathyAttempt" a
+FROM app_migration.empathy_attempt_src a
 JOIN participant pa ON pa.session_id = a."sessionId" AND pa.user_id = a."sourceUserId"
 JOIN participant ps ON ps.session_id = a."sessionId" AND ps.user_id <> a."sourceUserId";
 SELECT app_migration.note('11', 'EmpathyAttempt.status ' || status::text || ' → ' ||
                           CASE status::text WHEN 'ANALYZING' THEN 'HELD' ELSE 'AWAITING_SHARING' END, count(*))
-FROM "EmpathyAttempt" WHERE status IN ('ANALYZING', 'NEEDS_WORK') GROUP BY status;
+FROM app_migration.empathy_attempt_src WHERE status IN ('ANALYZING', 'NEEDS_WORK') GROUP BY status;
 SELECT app_migration.assert(a = b, format('step 11: %s empathy_attempt rows for %s "EmpathyAttempt" rows (subject must be unique)', a, b))
-FROM (SELECT (SELECT count(*) FROM empathy_attempt) AS a, (SELECT count(*) FROM "EmpathyAttempt") AS b) x;
+FROM (SELECT (SELECT count(*) FROM empathy_attempt) AS a, (SELECT count(*) FROM app_migration.empathy_attempt_src) AS b) x;
 
 -- reconciler_result ← ReconcilerResult (ids kept) → the attempt of (session, guesser).
 INSERT INTO reconciler_result (id, attempt_id, subject_participant_id, iteration, alignment_score, alignment_summary, gap_summary, gap_severity,
@@ -2727,7 +2814,7 @@ SELECT r.id, a.id, ps.id, r.iteration, r."alignmentScore", r."alignmentSummary",
        r."suggestedShareContent", r."suggestedShareReason", r."wasCircuitBreakerTrip", r."supersededAt",
        r."createdAt", coalesce(r."supersededAt", r."createdAt")
 FROM "ReconcilerResult" r
-JOIN "EmpathyAttempt" a ON a."sessionId" = r."sessionId" AND a."sourceUserId" = app_migration.as_uuid(r."guesserId")
+JOIN app_migration.empathy_attempt_src a ON a."sessionId" = r."sessionId" AND a."sourceUserId" = app_migration.as_uuid(r."guesserId")
 JOIN participant ps ON ps.session_id = r."sessionId" AND ps.user_id = app_migration.as_uuid(r."subjectId");
 SELECT app_migration.assert(a = b, format('step 11: %s reconciler_result rows for %s "ReconcilerResult" rows', a, b))
 FROM (SELECT (SELECT count(*) FROM reconciler_result) AS a, (SELECT count(*) FROM "ReconcilerResult") AS b) x;
@@ -2742,7 +2829,7 @@ FROM (SELECT count(*) AS n FROM (SELECT attempt_id FROM reconciler_result WHERE 
 SELECT app_migration.note('11', 'RefinementAttemptCounter direction: attempts vs results (not asserted; see header)', count(*),
                           string_agg(format('%s %s: counter=%s results=%s round=%s', c."sessionId", c.direction, c.attempts,
                             (SELECT count(*) FROM "ReconcilerResult" r WHERE r."sessionId" = c."sessionId" AND r."guesserId" || '->' || r."subjectId" = c.direction),
-                            (SELECT a."revisionCount" + 1 FROM "EmpathyAttempt" a WHERE a."sessionId" = c."sessionId" AND a."sourceUserId"::text = split_part(c.direction, '->', 1))),
+                            (SELECT a."revisionCount" + 1 FROM app_migration.empathy_attempt_src a WHERE a."sessionId" = c."sessionId" AND a."sourceUserId"::text = split_part(c.direction, '->', 1))),
                             '; '))
 FROM "RefinementAttemptCounter" c;
 
@@ -2777,11 +2864,11 @@ SELECT v.id, v."attemptId", p.id, v.validated,
        CASE WHEN v."feedbackShared" THEN v.feedback END,
        CASE WHEN v."feedbackShared" AND v.feedback IS NOT NULL THEN coalesce(v."validatedAt", a.submitted_at) END,
        coalesce(v."validatedAt", a.submitted_at), coalesce(v."validatedAt", a.submitted_at)
-FROM "EmpathyValidation" v
+FROM app_migration.empathy_validation_src v
 JOIN participant p ON p.session_id = v."sessionId" AND p.user_id = v."userId"
 JOIN empathy_attempt a ON a.id = v."attemptId";
 SELECT app_migration.assert(a = b, format('step 11: %s empathy_review rows for %s "EmpathyValidation" rows', a, b))
-FROM (SELECT (SELECT count(*) FROM empathy_review) AS a, (SELECT count(*) FROM "EmpathyValidation") AS b) x;
+FROM (SELECT (SELECT count(*) FROM empathy_review) AS a, (SELECT count(*) FROM app_migration.empathy_validation_src) AS b) x;
 SELECT app_migration.assert(n = 0, format('step 11: %s empathy_review row(s) whose reviewer is not the attempt''s subject', n))
 FROM (SELECT count(*) AS n FROM empathy_review r JOIN empathy_attempt a ON a.id = r.attempt_id
       WHERE r.reviewer_participant_id <> a.subject_participant_id) x;
@@ -2799,8 +2886,13 @@ FROM (SELECT count(*) AS n FROM empathy_review r JOIN empathy_attempt a ON a.id 
 -- source_attempt_id: EMPATHY_STATEMENT → the attempt authored by its sender
 -- (plan: by (session, author)); VALIDATION_FEEDBACK and SHARED_CONTEXT (spec
 -- §1.1 names it too) → the attempt the sender is the subject of.
--- Rows with neither forUserId nor senderId belong to nobody (plan 4a): not copied.
-SELECT app_migration.note('9', 'Message without forUserId and senderId (role ' || role::text || '): not copied (D9, plan 4a)', count(*),
+-- Rows with neither forUserId nor senderId are dropped only in a session with
+-- a vanished member — the leaver's private rows (plan 4a, D9); P33 refused
+-- them anywhere else. Their text goes to app_migration.dropped_content (R-c).
+INSERT INTO app_migration.dropped_content (concept, session_id, user_id, text, written_at)
+SELECT 'Message.content (no owner; session with a vanished member, D9)', m."sessionId", NULL, m.content, m.timestamp
+FROM "Message" m WHERE m."forUserId" IS NULL AND m."senderId" IS NULL ORDER BY m.timestamp, m.id;
+SELECT app_migration.note('9', 'Message without forUserId and senderId (role ' || role::text || '), vanished-member session: not copied (D9, plan 4a) → dropped_content', count(*),
                           string_agg(id::text, ', ' ORDER BY id))
 FROM "Message" WHERE "forUserId" IS NULL AND "senderId" IS NULL GROUP BY role;
 
@@ -2815,12 +2907,12 @@ SELECT m.id, c.id,
        m.content, m."contentHash", m."refiningNeedId",
        CASE m.role::text
          WHEN 'EMPATHY_STATEMENT' THEN
-           (SELECT a.id FROM "EmpathyAttempt" a WHERE a."sessionId" = m."sessionId" AND a."sourceUserId" = coalesce(m."senderId", o.owner))
+           (SELECT a.id FROM app_migration.empathy_attempt_src a WHERE a."sessionId" = m."sessionId" AND a."sourceUserId" = coalesce(m."senderId", o.owner))
          WHEN 'VALIDATION_FEEDBACK' THEN
-           (SELECT a.id FROM "EmpathyAttempt" a WHERE a."sessionId" = m."sessionId"
+           (SELECT a.id FROM app_migration.empathy_attempt_src a WHERE a."sessionId" = m."sessionId"
               AND CASE WHEN m."senderId" IS NOT NULL THEN a."sourceUserId" <> m."senderId" ELSE a."sourceUserId" = o.owner END)
          WHEN 'SHARED_CONTEXT' THEN
-           (SELECT a.id FROM "EmpathyAttempt" a WHERE a."sessionId" = m."sessionId"
+           (SELECT a.id FROM app_migration.empathy_attempt_src a WHERE a."sessionId" = m."sessionId"
               AND CASE WHEN m."senderId" IS NOT NULL THEN a."sourceUserId" <> m."senderId" ELSE a."sourceUserId" = o.owner END)
        END,
        m.timestamp
@@ -2954,7 +3046,7 @@ WITH ins AS (
   SELECT app_migration.mint(d."createdAt"), p.id, 'VALIDATION_FEEDBACK', NULL, a.id, NULL, d.content, d."readyToShare", 1, d."createdAt", d."updatedAt"
   FROM "ValidationFeedbackDraft" d
   JOIN participant p ON p.session_id = d."sessionId" AND p.user_id = d."userId"
-  JOIN "EmpathyAttempt" a ON a."sessionId" = d."sessionId" AND a."sourceUserId" <> d."userId"
+  JOIN app_migration.empathy_attempt_src a ON a."sessionId" = d."sessionId" AND a."sourceUserId" <> d."userId"
   ORDER BY d."createdAt", d.id
   RETURNING id, participant_id
 )
@@ -2965,7 +3057,7 @@ JOIN "ValidationFeedbackDraft" d ON d."sessionId" = p.session_id AND d."userId" 
 
 WITH src AS (
   SELECT v.id AS validation_id, p.id AS participant_id, v."attemptId", v.feedback, coalesce(v."validatedAt", a.submitted_at) AS at
-  FROM "EmpathyValidation" v
+  FROM app_migration.empathy_validation_src v
   JOIN participant p ON p.session_id = v."sessionId" AND p.user_id = v."userId"
   JOIN empathy_attempt a ON a.id = v."attemptId"
   WHERE NOT v."feedbackShared" AND v.feedback IS NOT NULL
@@ -2980,9 +3072,15 @@ WITH src AS (
 INSERT INTO app_migration.shape_map
 SELECT 'draft:EmpathyValidation.feedback', v.id::text, ins.id
 FROM ins JOIN participant p ON p.id = ins.participant_id
-JOIN "EmpathyValidation" v ON v."attemptId" = ins.attempt_id AND v."userId" = p.user_id;
-SELECT app_migration.note('10', 'unsent EmpathyValidation.feedback superseded by a ValidationFeedbackDraft (not copied)', count(*))
-FROM "EmpathyValidation" v
+JOIN app_migration.empathy_validation_src v ON v."attemptId" = ins.attempt_id AND v."userId" = p.user_id;
+INSERT INTO app_migration.dropped_content (concept, session_id, user_id, text, written_at)
+SELECT 'EmpathyValidation.feedback (unsent; superseded by a ValidationFeedbackDraft)', v."sessionId", v."userId", v.feedback, v."validatedAt"
+FROM app_migration.empathy_validation_src v
+JOIN participant p ON p.session_id = v."sessionId" AND p.user_id = v."userId"
+WHERE NOT v."feedbackShared" AND v.feedback IS NOT NULL
+  AND NOT EXISTS (SELECT 1 FROM app_migration.shape_map s WHERE s.concept = 'draft:EmpathyValidation.feedback' AND s.old_key = v.id::text);
+SELECT app_migration.note('10', 'unsent EmpathyValidation.feedback superseded by a ValidationFeedbackDraft → dropped_content', count(*))
+FROM app_migration.empathy_validation_src v
 JOIN participant p ON p.session_id = v."sessionId" AND p.user_id = v."userId"
 WHERE NOT v."feedbackShared" AND v.feedback IS NOT NULL
   AND NOT EXISTS (SELECT 1 FROM app_migration.shape_map s WHERE s.concept = 'draft:EmpathyValidation.feedback' AND s.old_key = v.id::text);
@@ -3019,9 +3117,9 @@ WITH t AS (
          CASE c."targetType"
            WHEN 'EMPATHY_ATTEMPT' THEN app_migration.as_uuid(c."targetId")
            WHEN 'EMPATHY_DRAFT' THEN coalesce(
-             (SELECT a.id FROM "EmpathyAttempt" a WHERE a.id = app_migration.as_uuid(c."targetId")),
-             (SELECT a.id FROM "EmpathyAttempt" a WHERE a."draftId" = app_migration.as_uuid(c."targetId") ORDER BY a.id LIMIT 1),
-             (SELECT a.id FROM "EmpathyDraft" d JOIN "EmpathyAttempt" a ON a."sessionId" = d."sessionId" AND a."sourceUserId" = d."userId"
+             (SELECT a.id FROM app_migration.empathy_attempt_src a WHERE a.id = app_migration.as_uuid(c."targetId")),
+             (SELECT a.id FROM app_migration.empathy_attempt_src a WHERE a."draftId" = app_migration.as_uuid(c."targetId") ORDER BY a.id LIMIT 1),
+             (SELECT a.id FROM "EmpathyDraft" d JOIN app_migration.empathy_attempt_src a ON a."sessionId" = d."sessionId" AND a."sourceUserId" = d."userId"
               WHERE d.id = app_migration.as_uuid(c."targetId")))
          END AS t_attempt,
          CASE c."targetType" WHEN 'STRATEGY_PROPOSAL' THEN app_migration.as_uuid(c."targetId") END AS t_proposal
@@ -3139,6 +3237,10 @@ FROM (SELECT (SELECT count(*) FROM proposal_revision) AS a, (SELECT count(*) FRO
 -- listed). created_at = agreedAt, else the proposal's createdAt (Agreement has no createdAt).
 SELECT app_migration.note('13', 'PROPOSED agreement not accepted by both: dropped', count(*), string_agg(id::text, ', ' ORDER BY id))
 FROM "Agreement" WHERE status = 'PROPOSED' AND NOT ("agreedByA" AND "agreedByB");
+INSERT INTO app_migration.dropped_content (concept, session_id, user_id, text, written_at)
+SELECT 'Agreement.description (PROPOSED, not accepted by both; dropped)', sv."sessionId", NULL, a.description, a."agreedAt"
+FROM "Agreement" a JOIN "SharedVessel" sv ON sv.id = a."sharedVesselId"
+WHERE a.status = 'PROPOSED' AND NOT (a."agreedByA" AND a."agreedByB");
 SELECT app_migration.note('13', 'PROPOSED agreement accepted by both → AGREED', count(*))
 FROM "Agreement" WHERE status = 'PROPOSED' AND "agreedByA" AND "agreedByB";
 INSERT INTO agreement (id, session_id, proposal_id, type, status, description, duration, measure_of_success, follow_up_at, completed_at, created_at, updated_at)
@@ -3150,6 +3252,10 @@ FROM "Agreement" a
 JOIN "SharedVessel" sv ON sv.id = a."sharedVesselId"
 JOIN "StrategyProposal" sp ON sp.id = a."proposalId"
 WHERE a.status <> 'PROPOSED' OR (a."agreedByA" AND a."agreedByB");
+
+SELECT app_migration.assert(a = b - c, format('step 13: %s agreement rows for %s "Agreement" rows - %s dropped PROPOSED', a, b, c))
+FROM (SELECT (SELECT count(*) FROM agreement) AS a, (SELECT count(*) FROM "Agreement") AS b,
+             (SELECT count(*) FROM "Agreement" WHERE status = 'PROPOSED' AND NOT ("agreedByA" AND "agreedByB")) AS c) x;
 
 -- agreement_party ← agreedByA/agreedByB through the A/B slots.
 INSERT INTO agreement_party (agreement_id, participant_id, agreed_at, created_at)
@@ -3178,13 +3284,17 @@ SELECT app_migration.note('13', 'proposal_choice WILLING synthesised from Agreem
 FROM app_migration.shape_map WHERE concept = 'proposal_choice:from_agreement';
 
 -- T-agreement-parties, evaluated on every migrated agreement (its deferred
--- trigger only sees rows written after the trailer creates it).
-SELECT app_migration.assert(n = 0, format('step 13: %s agreement(s) whose parties are not exactly the live human participants, all WILLING: %s', n, ids))
+-- trigger only sees rows written after the trailer creates it): the parties
+-- are the human participants present when it was created — a tombstoned
+-- leaver (left_at = the migration) included (spec §4 "what survives").
+SELECT app_migration.assert(n = 0, format('step 13: %s agreement(s) whose parties are not exactly the human participants present at creation, all WILLING: %s', n, ids))
 FROM (SELECT count(*) AS n, string_agg(ag.id::text, ', ' ORDER BY ag.id) AS ids
       FROM agreement ag
       WHERE EXISTS (SELECT participant_id FROM agreement_party WHERE agreement_id = ag.id
-                    EXCEPT SELECT id FROM participant WHERE session_id = ag.session_id AND kind = 'human' AND left_at IS NULL)
-         OR EXISTS (SELECT id FROM participant WHERE session_id = ag.session_id AND kind = 'human' AND left_at IS NULL
+                    EXCEPT SELECT id FROM participant WHERE session_id = ag.session_id AND kind = 'human'
+                                                        AND (left_at IS NULL OR left_at > ag.created_at))
+         OR EXISTS (SELECT id FROM participant WHERE session_id = ag.session_id AND kind = 'human'
+                                                AND (left_at IS NULL OR left_at > ag.created_at)
                     EXCEPT SELECT participant_id FROM agreement_party WHERE agreement_id = ag.id)
          OR EXISTS (SELECT 1 FROM agreement_party ap
                     WHERE ap.agreement_id = ag.id
@@ -3210,8 +3320,9 @@ SELECT app_migration.note('13', 'StrategyRanking dropped (ranking not in the pro
 
 -- ---- Step 14: follow_up ← TendingEntry (ids kept). type: the *_CHECKIN suffix
 -- goes (owner decision 2026-10-21), any other value RAISEs. response_deadline_at
--- and summary from the entry's latest TendingCoordinationCycle (the entry's
--- own summary wins when both are set; conflicts reported).
+-- and summary from the entry's OPEN TendingCoordinationCycle (plan step 14),
+-- else its latest; the entry's own summary wins when both are set, and the
+-- cycle's differing resultSummary goes to app_migration.dropped_content.
 INSERT INTO follow_up (id, session_id, agreement_id, proposal_id, type, scope, owner_participant_id, opted_in_shared, status,
                        scheduled_for, response_deadline_at, opened_at, completed_at, summary, created_at, updated_at)
 SELECT e.id, e."sessionId", ag.id, NULL,
@@ -3228,18 +3339,23 @@ FROM "TendingEntry" e
 LEFT JOIN agreement ag ON ag.id = e."agreementId"
 LEFT JOIN participant po ON po.session_id = e."sessionId" AND po.user_id = app_migration.as_uuid(e."ownerUserId")
 LEFT JOIN LATERAL (
-  SELECT * FROM "TendingCoordinationCycle" c WHERE e.id = ANY (c."entryIds") ORDER BY c."createdAt" DESC, c.id DESC LIMIT 1
+  SELECT * FROM "TendingCoordinationCycle" c WHERE e.id = ANY (c."entryIds") ORDER BY (c.status IN ('WAITING_FOR_PARTNER', 'READY_TO_RESOLVE')) DESC, c."createdAt" DESC, c.id DESC LIMIT 1
 ) y ON true;
-SELECT app_migration.note('14', 'TendingEntry.summary and its cycle resultSummary both set and different (entry kept)', count(*))
+INSERT INTO app_migration.dropped_content (concept, session_id, user_id, text, written_at)
+SELECT 'TendingCoordinationCycle.resultSummary (differs from the entry summary kept)', e."sessionId", y."createdByUserId", y."resultSummary", y."updatedAt"
 FROM "TendingEntry" e
-JOIN LATERAL (SELECT * FROM "TendingCoordinationCycle" c WHERE e.id = ANY (c."entryIds") ORDER BY c."createdAt" DESC, c.id DESC LIMIT 1) y ON true
+JOIN LATERAL (SELECT * FROM "TendingCoordinationCycle" c WHERE e.id = ANY (c."entryIds") ORDER BY (c.status IN ('WAITING_FOR_PARTNER', 'READY_TO_RESOLVE')) DESC, c."createdAt" DESC, c.id DESC LIMIT 1) y ON true
 WHERE e.summary IS NOT NULL AND y."resultSummary" IS NOT NULL AND e.summary <> y."resultSummary";
--- The entry's latest cycle (the one response_deadline_at came from), for the
--- trailer's v_follow_up_cycle comparison.
+SELECT app_migration.note('14', 'TendingEntry.summary and its cycle resultSummary both set and different (entry kept; cycle text → dropped_content)', count(*))
+FROM "TendingEntry" e
+JOIN LATERAL (SELECT * FROM "TendingCoordinationCycle" c WHERE e.id = ANY (c."entryIds") ORDER BY (c.status IN ('WAITING_FOR_PARTNER', 'READY_TO_RESOLVE')) DESC, c."createdAt" DESC, c.id DESC LIMIT 1) y ON true
+WHERE e.summary IS NOT NULL AND y."resultSummary" IS NOT NULL AND e.summary <> y."resultSummary";
+-- The entry's open (else latest) cycle — the one response_deadline_at came
+-- from — for the trailer's v_follow_up_cycle comparison.
 INSERT INTO app_migration.old_cycle (follow_up_id, cycle_id, status)
 SELECT e.id, y.id, y.status::text
 FROM "TendingEntry" e
-JOIN LATERAL (SELECT * FROM "TendingCoordinationCycle" c WHERE e.id = ANY (c."entryIds") ORDER BY c."createdAt" DESC, c.id DESC LIMIT 1) y ON true;
+JOIN LATERAL (SELECT * FROM "TendingCoordinationCycle" c WHERE e.id = ANY (c."entryIds") ORDER BY (c.status IN ('WAITING_FOR_PARTNER', 'READY_TO_RESOLVE')) DESC, c."createdAt" DESC, c.id DESC LIMIT 1) y ON true;
 SELECT app_migration.assert(a = b, format('step 14: %s follow_up rows for %s "TendingEntry" rows', a, b))
 FROM (SELECT (SELECT count(*) FROM follow_up) AS a, (SELECT count(*) FROM "TendingEntry") AS b) x;
 SELECT app_migration.assert(n = 0, format('step 14: %s follow_up row(s) lost their agreement or owner', n))
@@ -3371,6 +3487,9 @@ INSERT INTO reminder (id, user_id, follow_up_id, scope, remind_at, cadence, note
 SELECT r.id, r."userId", r."tendingEntryId", r.scope::text::reminder_scope, r."remindAt", r.cadence, r.note, r.status::reminder_status,
        r."createdAt", r."updatedAt"
 FROM "TendingReminder" r;
+SELECT app_migration.note('14', 'TendingReminder.' || c || ' dropped (reminder keys on user + follow_up)', n)
+FROM (SELECT 'checkinId' AS c, count(*) FILTER (WHERE "checkinId" IS NOT NULL) AS n FROM "TendingReminder"
+      UNION ALL SELECT 'sessionId', count(*) FROM "TendingReminder") x;
 SELECT app_migration.assert(a = b, format('step 14: %s reminder rows for %s "TendingReminder" rows', a, b))
 FROM (SELECT (SELECT count(*) FROM reminder) AS a, (SELECT count(*) FROM "TendingReminder") AS b) x;
 SELECT app_migration.note('14', 'TendingCoordinationCycle dropped (→ response_deadline_at/summary + v_follow_up_cycle)', count(*))
@@ -3383,13 +3502,14 @@ FROM "TendingCoordinationCycle";
 -- ---- Renames that hang off participant: invitation, mood_reading, regulation_event, user_memory.
 -- invitation (ids kept): invitedById → participant; messageConfirmed folded into
 -- message_confirmed_at (createdAt when the flag is set without a time);
--- accepted_by_user_id (new, P3 §6) = the relationship's one non-inviter member
--- for an ACCEPTED invitation (P14b checked there is exactly one).
+-- accepted_by_user_id (new, P3 §6) = the session's one participant other than
+-- the inviter, a vanished acceptor included (their tombstone keeps the id;
+-- P14b checked there is exactly one).
 INSERT INTO invitation (id, session_id, invited_by_participant_id, accepted_by_user_id, name, status, message_confirmed_at, expires_at,
                         accepted_at, declined_at, decline_reason, created_at, updated_at)
 SELECT i.id, i."sessionId", pi.id,
        CASE WHEN i.status = 'ACCEPTED' THEN
-         (SELECT m."userId" FROM "RelationshipMember" m WHERE m."relationshipId" = s."relationshipId" AND m."userId" <> i."invitedById")
+         (SELECT DISTINCT p.user_id FROM app_migration.pair p WHERE p.session_id = i."sessionId" AND p.user_id <> i."invitedById")
        END,
        i.name, i.status::text::invitation_status,
        coalesce(i."messageConfirmedAt", CASE WHEN i."messageConfirmed" THEN i."createdAt" END),
@@ -3398,6 +3518,8 @@ SELECT i.id, i."sessionId", pi.id,
 FROM "Invitation" i
 JOIN "Session" s ON s.id = i."sessionId"
 JOIN participant pi ON pi.session_id = i."sessionId" AND pi.user_id = i."invitedById";
+SELECT app_migration.note('3', 'invitation accepted by a vanished member (accepted_by_user_id = the tombstone)', count(*))
+FROM invitation i JOIN app_migration.vanished v ON v.user_id = i.accepted_by_user_id;
 SELECT app_migration.assert(a = b, format('invitation: %s rows for %s "Invitation" rows', a, b))
 FROM (SELECT (SELECT count(*) FROM invitation) AS a, (SELECT count(*) FROM "Invitation") AS b) x;
 
@@ -3616,9 +3738,10 @@ $$;
 -- so the old FKs between them need no ordering.
 DROP VIEW app_migration.pair, app_migration.vanished;
 DROP TABLE "User", "Relationship", "RelationshipMember", "Session", "InnerWorkSession", "InnerWorkMessage", "SessionTakeaway", "TakeawayLink", "StageProgress", "UserVessel", "UserEvent", "EmotionalReading", "IdentifiedNeed", "Boundary", "UserDocument", "SharedVessel", "ConsentedContent", "CommonGround", "Agreement", "ConsentRecord", "Message", "PreSessionMessage", "EmpathyDraft", "EmpathyAttempt", "EmpathyValidation", "ReconcilerResult", "ReconcilerShareOffer", "RefinementAttemptCounter", "StrategyProposal", "StrategyProposalNeed", "Stage4ProposalSelection", "Stage4ProposalRevision", "Stage4NeedCoverage", "Stage4NeedDeclination", "Stage4Closure", "Stage4SubChat", "Stage4SubChatMessage", "TendingEntry", "TendingCheckin", "TendingCoordinationCycle", "TendingResponse", "TendingEntryOutcome", "TendingNeedOutcome", "TendingReminder", "TendingAdjustment", "TendingBetweenPeriodNote", "TendingResponsePartialClosure", "StrategyRanking", "EmotionalExerciseCompletion", "GlobalLibraryItem", "Invitation", "UserMemory", "Need", "NeedScore", "NeedsAssessmentState", "Person", "PersonMention", "Insight", "RecurringTheme", "GratitudeEntry", "GratitudePreferences", "MeditationSession", "MeditationStats", "MeditationFavorite", "MeditationPreferences", "SavedMeditation", "BrainActivity", "ValidationFeedbackDraft";
-DROP TYPE "SessionType", "SessionStatus", "InnerWorkStatus", "TakeawaySource", "TakeawayType", "TakeawayLinkType", "StageStatus", "Attribution", "NeedCategory", "AgreementType", "AgreementStatus", "ConsentContentType", "ConsentDecision", "MessageRole", "EmpathyStatus", "SharedContentDeliveryStatus", "ReconcilerShareStatus", "StrategySource", "Stage4ProposalKind", "Stage4ProposalStatus", "Stage4SelectionDecision", "Stage4ClosureKind", "Stage4ClosureReason", "TendingEntryType", "TendingEntryStatus", "TendingEntryScope", "TendingFollowThroughStatus", "TendingHelpfulnessStatus", "TendingBlockerCategory", "TendingNeedResolutionStatus", "TendingNextAction", "TendingReminderScope", "TendingCoordinationStatus", "Stage4SubChatAnchor", "Stage4SubChatStatus", "ContinueChoice", "PartialClosureResolution", "ExerciseType", "GlobalLibrarySource", "InvitationStatus", "MemoryCategory", "MemoryStatus", "MemorySource", "NeedsCategory", "MentionSourceType", "InsightType", "MeditationType", "FavoriteType", "BrainActivityCallType", "ActivityType", "ActivityStatus";
 DROP TABLE app_migration.precheck, app_migration.su, app_migration.ab_slot, app_migration.checkin_map,
-           app_migration.milestone_src, app_migration.disposition_ref, app_migration.proposal_need_src;
+           app_migration.milestone_src, app_migration.disposition_ref, app_migration.proposal_need_src,
+           app_migration.slot_fix, app_migration.empathy_attempt_src, app_migration.empathy_validation_src;
+DROP TYPE "SessionType", "SessionStatus", "InnerWorkStatus", "TakeawaySource", "TakeawayType", "TakeawayLinkType", "StageStatus", "Attribution", "NeedCategory", "AgreementType", "AgreementStatus", "ConsentContentType", "ConsentDecision", "MessageRole", "EmpathyStatus", "SharedContentDeliveryStatus", "ReconcilerShareStatus", "StrategySource", "Stage4ProposalKind", "Stage4ProposalStatus", "Stage4SelectionDecision", "Stage4ClosureKind", "Stage4ClosureReason", "TendingEntryType", "TendingEntryStatus", "TendingEntryScope", "TendingFollowThroughStatus", "TendingHelpfulnessStatus", "TendingBlockerCategory", "TendingNeedResolutionStatus", "TendingNextAction", "TendingReminderScope", "TendingCoordinationStatus", "Stage4SubChatAnchor", "Stage4SubChatStatus", "ContinueChoice", "PartialClosureResolution", "ExerciseType", "GlobalLibrarySource", "InvitationStatus", "MemoryCategory", "MemoryStatus", "MemorySource", "NeedsCategory", "MentionSourceType", "InsightType", "MeditationType", "FavoriteType", "BrainActivityCallType", "ActivityType", "ActivityStatus";
 
 DO $$
 DECLARE
@@ -3907,15 +4030,25 @@ ALTER TABLE brain_activity
 -- ---------------------------------------------------------------------------
 -- T4. app.* functions (spec §4; P3 §5).
 --
--- "Is the caller a job?" inside a SECURITY DEFINER function: current_user is
+-- Every SECURITY DEFINER function and every trigger function pins
+-- search_path = pg_catalog, public, pg_temp (pg_temp last, so a caller's temp
+-- objects can never shadow a catalog or a table) and qualifies every relation.
+--
+-- "Is the caller the job?" inside a SECURITY DEFINER function: current_user is
 -- the owner (mwf_job), so the test reads session_user — the role that logged
--- in: mwf_job or mwf_migrator, or a superuser (local development, where every
--- connection is the superuser mwf_user and RLS is not yet enforced).
+-- in — and is exactly session_user IN ('mwf_job', 'mwf_migrator') (spec
+-- Conventions `job`). No catalog is read and no superuser arm exists (Phase 3
+-- §1: rolsuper must be false); local tooling that needs the job connects as
+-- mwf_job (JOB_DATABASE_URL, docs/development/local-setup.md).
+--
+-- Every self-arm is NULL-safe: an unset identity (app.current_user_id() IS
+-- NULL) or a modeled participant (user_id IS NULL) is never "self".
 -- ---------------------------------------------------------------------------
 
 -- Invoker helper: updated_at on every UPDATE (owner decision 2026-10-21; not moddatetime).
 CREATE OR REPLACE FUNCTION app.touch_updated_at() RETURNS trigger
   LANGUAGE plpgsql
+  SET search_path = pg_catalog, public, pg_temp
   AS $$ BEGIN NEW.updated_at := now(); RETURN NEW; END $$;
 
 -- The two TS-1 helpers keep their signatures and owner (mwf_job) and are
@@ -3928,7 +4061,7 @@ SET ROLE mwf_job;
 -- matter: a leaver keeps reading the shared vessel; spec §1.1 participant.)
 CREATE OR REPLACE FUNCTION app.is_member(session uuid) RETURNS boolean
   LANGUAGE sql STABLE SECURITY DEFINER
-  SET search_path = pg_catalog, public
+  SET search_path = pg_catalog, public, pg_temp
   AS $$
     SELECT EXISTS (
       SELECT 1 FROM public.participant p
@@ -3941,7 +4074,7 @@ CREATE OR REPLACE FUNCTION app.is_member(session uuid) RETURNS boolean
 -- the two-party job paths; v_co_participant is the N-safe read).
 CREATE OR REPLACE FUNCTION app.partner_user_id(session uuid) RETURNS uuid
   LANGUAGE sql STABLE SECURITY DEFINER
-  SET search_path = pg_catalog, public
+  SET search_path = pg_catalog, public, pg_temp
   AS $$
     SELECT other.user_id
     FROM public.participant me
@@ -3958,7 +4091,7 @@ REVOKE CREATE ON SCHEMA app FROM mwf_job;
 -- Does the caller share this participant's session?
 CREATE FUNCTION app.is_co_participant(participant uuid) RETURNS boolean
   LANGUAGE sql STABLE SECURITY DEFINER
-  SET search_path = pg_catalog, public
+  SET search_path = pg_catalog, public, pg_temp
   AS $$
     SELECT EXISTS (
       SELECT 1 FROM public.participant them
@@ -3970,7 +4103,7 @@ CREATE FUNCTION app.is_co_participant(participant uuid) RETURNS boolean
 -- The caller's participant id in this session (NULL if none).
 CREATE FUNCTION app.my_participant(session uuid) RETURNS uuid
   LANGUAGE sql STABLE SECURITY DEFINER
-  SET search_path = pg_catalog, public
+  SET search_path = pg_catalog, public, pg_temp
   AS $$
     SELECT p.id FROM public.participant p
     WHERE p.session_id = my_participant.session AND p.user_id = app.current_user_id()
@@ -3980,10 +4113,10 @@ CREATE FUNCTION app.my_participant(session uuid) RETURNS uuid
 -- (the latest round per direction): what both parties may see while neither
 -- may read an unrevealed row (P0-2). Behind v_empathy_direction_status.
 CREATE FUNCTION app.empathy_direction_status()
-  RETURNS TABLE (author_participant_id uuid, subject_participant_id uuid, round integer, status empathy_status,
+  RETURNS TABLE (author_participant_id uuid, subject_participant_id uuid, round integer, status public.empathy_status,
                  submitted_at timestamptz, revealed_at timestamptz)
   LANGUAGE sql STABLE SECURITY DEFINER
-  SET search_path = pg_catalog, public
+  SET search_path = pg_catalog, public, pg_temp
   AS $$
     SELECT DISTINCT ON (a.author_participant_id, a.subject_participant_id)
            a.author_participant_id, a.subject_participant_id, a.round, a.status, a.submitted_at, a.revealed_at
@@ -3994,26 +4127,26 @@ CREATE FUNCTION app.empathy_direction_status()
     ORDER BY a.author_participant_id, a.subject_participant_id, a.round DESC
   $$;
 
--- The only writer of session.status (spec §1.1 transition set). T-cardinality-1
--- (trigger) still refuses → ACTIVE without two participants.
-CREATE FUNCTION app.session_set_status(session uuid, status session_status) RETURNS void
+-- The only writer of session.status (spec §1.1 transition set). Members or
+-- the job; T-cardinality-1 (trigger) still refuses → ACTIVE without two
+-- participants. Locks the session row (lock order: session, then attempt).
+CREATE FUNCTION app.session_set_status(session uuid, status public.session_status) RETURNS void
   LANGUAGE plpgsql SECURITY DEFINER
-  SET search_path = pg_catalog, public
+  SET search_path = pg_catalog, public, pg_temp
   AS $$
   DECLARE
-    v_from session_status;
-    v_job  boolean := session_user IN ('mwf_job', 'mwf_migrator')
-                      OR coalesce((SELECT r.rolsuper FROM pg_roles r WHERE r.rolname = session_user), false);
+    v_from public.session_status;
+    v_job  boolean := session_user IN ('mwf_job', 'mwf_migrator');
   BEGIN
     SELECT s.status INTO v_from FROM public.session s WHERE s.id = session_set_status.session FOR UPDATE;
-    IF NOT FOUND OR NOT (v_job OR app.is_member(session_set_status.session)) THEN
+    IF NOT FOUND OR NOT (v_job OR coalesce(app.is_member(session_set_status.session), false)) THEN
       RAISE EXCEPTION 'session not found' USING ERRCODE = 'P0002';
     END IF;
     IF v_from = session_set_status.status THEN
       RETURN;
     END IF;
     IF NOT ((v_from, session_set_status.status) IN (
-              ('CREATED'::session_status, 'INVITED'::session_status), ('INVITED', 'ACTIVE'),
+              ('CREATED'::public.session_status, 'INVITED'::public.session_status), ('INVITED', 'ACTIVE'),
               ('CREATED', 'ABANDONED'), ('INVITED', 'ABANDONED'), ('ACTIVE', 'ABANDONED'),
               ('ACTIVE', 'RESOLVED'), ('RESOLVED', 'ARCHIVED'), ('ABANDONED', 'ARCHIVED'))) THEN
       RAISE EXCEPTION 'session status % → % is not a permitted transition', v_from, session_set_status.status
@@ -4027,49 +4160,64 @@ CREATE FUNCTION app.session_set_status(session uuid, status session_status) RETU
   $$;
 
 -- The only writer of empathy_attempt.status (spec §1.2 transition table; P3 §5).
--- → REVEALED only by the job and only when the reveal gate holds (every
--- direction between the session's live human participants is READY or later
--- — all-N; pairwise is a change to v_gate below). On → REVEALED: stamps
--- revealed_at once and writes the EMPATHY_STATEMENT into the SUBJECT's MAIN
--- conversation (the author keeps their own copy). The re-encryption of
--- content under the session key is the job's, in the application (the key
--- never reaches SQL). → SUPERSEDED is the author's resubmission: p_content is
--- the new round's text; round n+1 is inserted HELD in the same transaction and
--- its id returned. Returns the attempt id written.
-CREATE FUNCTION app.empathy_set_status(attempt uuid, status empathy_status, content text DEFAULT NULL) RETURNS uuid
+-- Actors (P3 §5: a non-author never moves a row into a disclosing state):
+--   the AUTHOR (identity-bound) or the job: HELD → AWAITING_SHARING | READY,
+--     AWAITING_SHARING → REFINING | READY, REFINING → READY | AWAITING_SHARING
+--     (the stage2.ts in-request writers), and SUPERSEDED (resubmission);
+--   the job only: READY → REVEALED, and only when the reveal gate holds;
+--   the SUBJECT (identity-bound) or the job: REVEALED → VALIDATED | REFINING.
+-- Anyone else: 'attempt not found'. Locks the session row, then the attempt,
+-- so a concurrent resubmit of the reverse direction cannot slip between the
+-- gate read and the reveal. On → REVEALED: stamps revealed_at once and writes
+-- the EMPATHY_STATEMENT into the SUBJECT's MAIN conversation (the author keeps
+-- their own copy); re-encrypting content under the session key is the job's,
+-- in the application (keys never reach SQL). → SUPERSEDED inserts round n+1
+-- (HELD) with p_content and returns its id; a retried call returns that id.
+CREATE FUNCTION app.empathy_set_status(attempt uuid, status public.empathy_status, content text DEFAULT NULL) RETURNS uuid
   LANGUAGE plpgsql SECURITY DEFINER
-  SET search_path = pg_catalog, public
+  SET search_path = pg_catalog, public, pg_temp
   AS $$
   DECLARE
-    a       public.empathy_attempt%ROWTYPE;
-    v_me    uuid := app.current_user_id();
-    v_job   boolean := session_user IN ('mwf_job', 'mwf_migrator')
-                       OR coalesce((SELECT r.rolsuper FROM pg_roles r WHERE r.rolname = session_user), false);
-    v_author_user  uuid;
-    v_subject_user uuid;
+    a              public.empathy_attempt%ROWTYPE;
+    v_me           uuid := app.current_user_id();
+    v_job          boolean := session_user IN ('mwf_job', 'mwf_migrator');
     v_session      uuid;
-    v_gate  boolean;
-    v_new   uuid;
+    v_author_user  uuid;
+    v_author_left  timestamptz;
+    v_subject_user uuid;
+    v_subject_left timestamptz;
+    v_is_author    boolean;
+    v_is_subject   boolean;
+    v_gate         boolean;
+    v_new          uuid;
   BEGIN
-    SELECT * INTO a FROM public.empathy_attempt e WHERE e.id = empathy_set_status.attempt FOR UPDATE;
+    SELECT p.session_id INTO v_session
+    FROM public.empathy_attempt e JOIN public.participant p ON p.id = e.author_participant_id
+    WHERE e.id = empathy_set_status.attempt;
     IF NOT FOUND THEN
       RAISE EXCEPTION 'attempt not found' USING ERRCODE = 'P0002';
     END IF;
-    SELECT p.user_id, p.session_id INTO v_author_user, v_session FROM public.participant p WHERE p.id = a.author_participant_id;
-    SELECT p.user_id INTO v_subject_user FROM public.participant p WHERE p.id = a.subject_participant_id;
-    IF NOT v_job AND v_me IS DISTINCT FROM v_author_user AND v_me IS DISTINCT FROM v_subject_user THEN
+    PERFORM 1 FROM public.session s WHERE s.id = v_session FOR UPDATE;
+    SELECT * INTO a FROM public.empathy_attempt e WHERE e.id = empathy_set_status.attempt FOR UPDATE;
+    SELECT p.user_id, p.left_at INTO v_author_user, v_author_left FROM public.participant p WHERE p.id = a.author_participant_id;
+    SELECT p.user_id, p.left_at INTO v_subject_user, v_subject_left FROM public.participant p WHERE p.id = a.subject_participant_id;
+    v_is_author  := v_me IS NOT NULL AND v_author_user IS NOT NULL AND v_me = v_author_user;
+    v_is_subject := v_me IS NOT NULL AND v_subject_user IS NOT NULL AND v_me = v_subject_user;
+    IF NOT (v_job OR v_is_author OR v_is_subject) THEN
       RAISE EXCEPTION 'attempt not found' USING ERRCODE = 'P0002';
-    END IF;
-    IF a.status = empathy_set_status.status THEN
-      RETURN a.id;
     END IF;
 
     IF empathy_set_status.status = 'SUPERSEDED' THEN
+      IF NOT (v_job OR v_is_author) THEN
+        RAISE EXCEPTION 'only the author resubmits' USING ERRCODE = 'insufficient_privilege';
+      END IF;
+      IF a.status = 'SUPERSEDED' THEN
+        -- A retried resubmission: return the round that superseded this one.
+        SELECT e.id INTO v_new FROM public.empathy_attempt e WHERE e.supersedes_attempt_id = a.id ORDER BY e.round DESC LIMIT 1;
+        RETURN coalesce(v_new, a.id);
+      END IF;
       IF a.status = 'VALIDATED' THEN
         RAISE EXCEPTION 'a VALIDATED attempt cannot be superseded' USING ERRCODE = 'check_violation';
-      END IF;
-      IF NOT (v_job OR v_me = v_author_user) THEN
-        RAISE EXCEPTION 'only the author resubmits' USING ERRCODE = 'insufficient_privilege';
       END IF;
       IF empathy_set_status.content IS NULL THEN
         RAISE EXCEPTION 'resubmission needs the new round''s content' USING ERRCODE = 'null_value_not_allowed';
@@ -4081,29 +4229,37 @@ CREATE FUNCTION app.empathy_set_status(attempt uuid, status empathy_status, cont
       RETURN v_new;
     END IF;
 
-    IF NOT ((a.status, empathy_set_status.status) IN (
-              ('HELD'::empathy_status, 'AWAITING_SHARING'::empathy_status), ('HELD', 'READY'),
-              ('AWAITING_SHARING', 'REFINING'), ('AWAITING_SHARING', 'READY'),
-              ('REFINING', 'READY'), ('REFINING', 'AWAITING_SHARING'),
-              ('READY', 'REVEALED'),
-              ('REVEALED', 'VALIDATED'), ('REVEALED', 'REFINING'))) THEN
+    IF a.status = empathy_set_status.status THEN
+      RETURN a.id;
+    END IF;
+
+    IF (a.status, empathy_set_status.status) IN (
+         ('HELD'::public.empathy_status, 'AWAITING_SHARING'::public.empathy_status), ('HELD', 'READY'),
+         ('AWAITING_SHARING', 'REFINING'), ('AWAITING_SHARING', 'READY'),
+         ('REFINING', 'READY'), ('REFINING', 'AWAITING_SHARING')) THEN
+      IF NOT (v_job OR v_is_author) THEN
+        RAISE EXCEPTION 'only the author or the job moves this attempt' USING ERRCODE = 'insufficient_privilege';
+      END IF;
+    ELSIF (a.status, empathy_set_status.status) = ('READY'::public.empathy_status, 'REVEALED'::public.empathy_status) THEN
+      IF NOT v_job THEN
+        RAISE EXCEPTION 'only the job reveals' USING ERRCODE = 'insufficient_privilege';
+      END IF;
+    ELSIF (a.status, empathy_set_status.status) IN (
+         ('REVEALED'::public.empathy_status, 'VALIDATED'::public.empathy_status), ('REVEALED', 'REFINING')) THEN
+      IF NOT (v_job OR v_is_subject) THEN
+        RAISE EXCEPTION 'only the subject reviews a revealed attempt' USING ERRCODE = 'insufficient_privilege';
+      END IF;
+    ELSE
       RAISE EXCEPTION 'empathy status % → % is not a permitted transition', a.status, empathy_set_status.status
         USING ERRCODE = 'check_violation';
     END IF;
-    -- Actors: the subject moves REVEALED → VALIDATED | REFINING; everything else is the job's.
-    IF a.status = 'REVEALED' THEN
-      IF NOT (v_job OR v_me = v_subject_user) THEN
-        RAISE EXCEPTION 'only the subject reviews a revealed attempt' USING ERRCODE = 'insufficient_privilege';
-      END IF;
-    ELSIF NOT v_job THEN
-      RAISE EXCEPTION 'empathy status % → % is a job transition', a.status, empathy_set_status.status
-        USING ERRCODE = 'insufficient_privilege';
-    END IF;
 
     IF empathy_set_status.status = 'REVEALED' THEN
-      -- The reveal gate: every ordered pair of live human participants has a
-      -- live attempt at READY or later.
-      SELECT NOT EXISTS (
+      -- The reveal gate (never vacuous): author and subject are both present,
+      -- and every ordered pair of present human participants has a live
+      -- attempt at READY or later.
+      SELECT v_author_left IS NULL AND v_subject_left IS NULL
+         AND NOT EXISTS (
                SELECT 1
                FROM public.participant x
                JOIN public.participant y ON y.session_id = x.session_id AND y.id <> x.id
@@ -4133,13 +4289,22 @@ CREATE FUNCTION app.empathy_set_status(attempt uuid, status empathy_status, cont
   $$;
 
 -- need_share is written only here, by the job (it holds the session key that
--- encrypts shared_text), after the owner's GRANTED consent; participant_id and
--- session_id come from the need, never from the caller (spec §1.4, N-1, N-7).
+-- encrypts shared_text; EXECUTE is the job's alone), after the owner's
+-- GRANTED consent, for a need that is neither deleted nor superseded;
+-- participant_id and session_id come from the need, never from the caller
+-- (spec §1.4, N-1, N-7). Idempotent: a need already shared is left as it is.
 CREATE FUNCTION app.need_share(need uuid, shared_text text) RETURNS void
   LANGUAGE plpgsql SECURITY DEFINER
-  SET search_path = pg_catalog, public
+  SET search_path = pg_catalog, public, pg_temp
   AS $$
   BEGIN
+    IF NOT (session_user IN ('mwf_job', 'mwf_migrator')) THEN
+      RAISE EXCEPTION 'need_share is the job''s' USING ERRCODE = 'insufficient_privilege';
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM public.need n
+                   WHERE n.id = need_share.need AND n.deleted_at IS NULL AND n.superseded_by_need_id IS NULL) THEN
+      RAISE EXCEPTION 'need not found, deleted or superseded' USING ERRCODE = 'P0002';
+    END IF;
     IF NOT EXISTS (SELECT 1 FROM public.consent c JOIN public.need n ON n.id = c.need_id
                    WHERE c.need_id = need_share.need AND c.participant_id = n.participant_id AND c.decision = 'GRANTED') THEN
       RAISE EXCEPTION 'need has no GRANTED consent by its owner' USING ERRCODE = 'check_violation';
@@ -4147,22 +4312,24 @@ CREATE FUNCTION app.need_share(need uuid, shared_text text) RETURNS void
     INSERT INTO public.need_share (need_id, participant_id, session_id, category, shared_text)
     SELECT n.id, n.participant_id, p.session_id, n.category, need_share.shared_text
     FROM public.need n JOIN public.participant p ON p.id = n.participant_id
-    WHERE n.id = need_share.need;
+    WHERE n.id = need_share.need
+    ON CONFLICT (need_id) DO NOTHING;
   END
   $$;
 
 -- Revoke a shared need: need_share.revoked_at and the consent's REVOKED in
--- one transaction (spec §1.4). Owner or job.
+-- one transaction (spec §1.4). The need's owner (identity-bound) or the job.
 CREATE FUNCTION app.need_revoke_share(need uuid) RETURNS void
   LANGUAGE plpgsql SECURITY DEFINER
-  SET search_path = pg_catalog, public
+  SET search_path = pg_catalog, public, pg_temp
   AS $$
   DECLARE
-    v_job boolean := session_user IN ('mwf_job', 'mwf_migrator')
-                     OR coalesce((SELECT r.rolsuper FROM pg_roles r WHERE r.rolname = session_user), false);
+    v_job boolean := session_user IN ('mwf_job', 'mwf_migrator');
+    v_me  uuid := app.current_user_id();
   BEGIN
-    IF NOT (v_job OR EXISTS (SELECT 1 FROM public.need n JOIN public.participant p ON p.id = n.participant_id
-                             WHERE n.id = need_revoke_share.need AND p.user_id = app.current_user_id())) THEN
+    IF NOT (v_job OR (v_me IS NOT NULL AND EXISTS (
+              SELECT 1 FROM public.need n JOIN public.participant p ON p.id = n.participant_id
+              WHERE n.id = need_revoke_share.need AND p.user_id = v_me))) THEN
       RAISE EXCEPTION 'need not found' USING ERRCODE = 'P0002';
     END IF;
     UPDATE public.need_share SET revoked_at = now() WHERE need_id = need_revoke_share.need AND revoked_at IS NULL;
@@ -4172,20 +4339,21 @@ CREATE FUNCTION app.need_revoke_share(need uuid) RETURNS void
   $$;
 
 -- app.anonymize_user_in_session(session, participant): steps 1–4 and 7
--- (participant key) of the account walk for one session (spec §4).
+-- (participant key) of the account walk for one session (spec §4). The
+-- participant's own user (identity-bound, never NULL) or the job.
 CREATE FUNCTION app.anonymize_user_in_session(session uuid, participant uuid) RETURNS void
   LANGUAGE plpgsql SECURITY DEFINER
-  SET search_path = pg_catalog, public
+  SET search_path = pg_catalog, public, pg_temp
   AS $$
   DECLARE
-    v_job  boolean := session_user IN ('mwf_job', 'mwf_migrator')
-                      OR coalesce((SELECT r.rolsuper FROM pg_roles r WHERE r.rolname = session_user), false);
+    v_job  boolean := session_user IN ('mwf_job', 'mwf_migrator');
+    v_me   uuid := app.current_user_id();
     v_user uuid;
     pid    uuid := anonymize_user_in_session.participant;
   BEGIN
     SELECT p.user_id INTO v_user FROM public.participant p
     WHERE p.id = pid AND p.session_id = anonymize_user_in_session.session;
-    IF NOT FOUND OR NOT (v_job OR v_user = app.current_user_id()) THEN
+    IF NOT FOUND OR NOT (v_job OR coalesce(v_me IS NOT NULL AND v_user = v_me, false)) THEN
       RAISE EXCEPTION 'participant not found' USING ERRCODE = 'P0002';
     END IF;
     -- 1. a live session → ABANDONED (closes the invite-accept path; lets T-cardinality-2 accept the leave)
@@ -4218,17 +4386,19 @@ CREATE FUNCTION app.anonymize_user_in_session(session uuid, participant uuid) RE
   $$;
 
 -- app.anonymize_user_account(user): the complete walk (spec §4, P1-13).
+-- The user themself (identity-bound, never NULL) or the job.
 CREATE FUNCTION app.anonymize_user_account("user" uuid) RETURNS void
   LANGUAGE plpgsql SECURITY DEFINER
-  SET search_path = pg_catalog, public
+  SET search_path = pg_catalog, public, pg_temp
   AS $$
   DECLARE
-    v_job boolean := session_user IN ('mwf_job', 'mwf_migrator')
-                     OR coalesce((SELECT r.rolsuper FROM pg_roles r WHERE r.rolname = session_user), false);
+    v_job boolean := session_user IN ('mwf_job', 'mwf_migrator');
+    v_me  uuid := app.current_user_id();
     v_uid uuid := anonymize_user_account."user";
     r     record;
   BEGIN
-    IF NOT (v_job OR v_uid = app.current_user_id()) OR NOT EXISTS (SELECT 1 FROM public."user" u WHERE u.id = v_uid) THEN
+    IF NOT (v_job OR coalesce(v_me IS NOT NULL AND v_uid = v_me, false))
+       OR NOT EXISTS (SELECT 1 FROM public."user" u WHERE u.id = v_uid) THEN
       RAISE EXCEPTION 'user not found' USING ERRCODE = 'P0002';
     END IF;
     -- 1–4, 7 (participant keys) per session
@@ -4258,7 +4428,7 @@ CREATE FUNCTION app.anonymize_user_account("user" uuid) RETURNS void
 -- first login (mwf_auth only, INSERT only).
 CREATE FUNCTION app.resolve_user_by_clerk_id(clerk_id text) RETURNS uuid
   LANGUAGE sql STABLE SECURITY DEFINER
-  SET search_path = pg_catalog, public
+  SET search_path = pg_catalog, public, pg_temp
   AS $$
     SELECT u.id FROM public."user" u WHERE u.clerk_id = resolve_user_by_clerk_id.clerk_id AND u.deleted_at IS NULL
   $$;
@@ -4266,7 +4436,7 @@ CREATE FUNCTION app.resolve_user_by_clerk_id(clerk_id text) RETURNS uuid
 CREATE FUNCTION app.create_user_for_clerk(clerk_id text, email text, first_name text DEFAULT NULL, last_name text DEFAULT NULL)
   RETURNS uuid
   LANGUAGE sql SECURITY DEFINER
-  SET search_path = pg_catalog, public
+  SET search_path = pg_catalog, public, pg_temp
   AS $$
     INSERT INTO public."user" (clerk_id, email, first_name, last_name)
     VALUES (create_user_for_clerk.clerk_id, create_user_for_clerk.email, create_user_for_clerk.first_name, create_user_for_clerk.last_name)
@@ -4280,8 +4450,8 @@ GRANT CREATE ON SCHEMA app TO mwf_job;
 ALTER FUNCTION app.is_co_participant(uuid) OWNER TO mwf_job;
 ALTER FUNCTION app.my_participant(uuid) OWNER TO mwf_job;
 ALTER FUNCTION app.empathy_direction_status() OWNER TO mwf_job;
-ALTER FUNCTION app.session_set_status(uuid, session_status) OWNER TO mwf_job;
-ALTER FUNCTION app.empathy_set_status(uuid, empathy_status, text) OWNER TO mwf_job;
+ALTER FUNCTION app.session_set_status(uuid, public.session_status) OWNER TO mwf_job;
+ALTER FUNCTION app.empathy_set_status(uuid, public.empathy_status, text) OWNER TO mwf_job;
 ALTER FUNCTION app.need_share(uuid, text) OWNER TO mwf_job;
 ALTER FUNCTION app.need_revoke_share(uuid) OWNER TO mwf_job;
 ALTER FUNCTION app.anonymize_user_in_session(uuid, uuid) OWNER TO mwf_job;
@@ -4293,7 +4463,7 @@ REVOKE CREATE ON SCHEMA app FROM mwf_job;
 SET ROLE mwf_job;
 REVOKE EXECUTE ON FUNCTION
   app.is_co_participant(uuid), app.my_participant(uuid), app.empathy_direction_status(),
-  app.session_set_status(uuid, session_status), app.empathy_set_status(uuid, empathy_status, text),
+  app.session_set_status(uuid, public.session_status), app.empathy_set_status(uuid, public.empathy_status, text),
   app.need_share(uuid, text), app.need_revoke_share(uuid),
   app.anonymize_user_in_session(uuid, uuid), app.anonymize_user_account(uuid),
   app.resolve_user_by_clerk_id(text), app.create_user_for_clerk(text, text, text, text)
@@ -4301,16 +4471,15 @@ REVOKE EXECUTE ON FUNCTION
 -- mwf_app: the identity-bound reads and the request-path writers.
 GRANT EXECUTE ON FUNCTION
   app.is_co_participant(uuid), app.my_participant(uuid), app.empathy_direction_status(),
-  app.session_set_status(uuid, session_status), app.empathy_set_status(uuid, empathy_status, text),
+  app.session_set_status(uuid, public.session_status), app.empathy_set_status(uuid, public.empathy_status, text),
   app.need_revoke_share(uuid), app.anonymize_user_in_session(uuid, uuid), app.anonymize_user_account(uuid),
   app.resolve_user_by_clerk_id(text)
   TO mwf_app;
--- mwf_job: its own writers when called from a job connection (owner already
--- executes; listed for the job paths that call them by name).
+-- mwf_job: its own writers when called from a job connection.
 GRANT EXECUTE ON FUNCTION
   app.is_member(uuid), app.partner_user_id(uuid), app.is_co_participant(uuid), app.my_participant(uuid),
-  app.empathy_direction_status(), app.session_set_status(uuid, session_status),
-  app.empathy_set_status(uuid, empathy_status, text), app.need_share(uuid, text), app.need_revoke_share(uuid),
+  app.empathy_direction_status(), app.session_set_status(uuid, public.session_status),
+  app.empathy_set_status(uuid, public.empathy_status, text), app.need_share(uuid, text), app.need_revoke_share(uuid),
   app.anonymize_user_in_session(uuid, uuid), app.anonymize_user_account(uuid)
   TO mwf_job;
 -- mwf_auth: first-login creation only (and the lookup that precedes it).
@@ -4320,39 +4489,44 @@ RESET ROLE;
 -- ---------------------------------------------------------------------------
 -- T5. Triggers (spec §5 "Lives only in migration SQL"; §7). Invoker rights
 -- throughout — T-consent-owner must be (N-4), and the others need no more
--- than their caller can see.
+-- than their caller can see — with search_path pinned and every relation
+-- qualified, so a caller's temp table cannot stand in for a real one. No
+-- caller needs EXECUTE on a trigger function (PostgreSQL checks it only at
+-- CREATE TRIGGER); EXECUTE is revoked from PUBLIC below.
 -- ---------------------------------------------------------------------------
 
 -- T-cardinality-1: → ACTIVE needs ≥2 participants with ≥1 live human (D1).
 CREATE FUNCTION app.t_session_cardinality() RETURNS trigger
   LANGUAGE plpgsql
+  SET search_path = pg_catalog, public, pg_temp
   AS $$
   BEGIN
     IF NEW.status = 'ACTIVE' AND OLD.status IS DISTINCT FROM 'ACTIVE'
-       AND ((SELECT count(*) FROM participant p WHERE p.session_id = NEW.id) < 2
-            OR NOT EXISTS (SELECT 1 FROM participant p WHERE p.session_id = NEW.id AND p.kind = 'human' AND p.left_at IS NULL)) THEN
+       AND ((SELECT count(*) FROM public.participant p WHERE p.session_id = NEW.id) < 2
+            OR NOT EXISTS (SELECT 1 FROM public.participant p WHERE p.session_id = NEW.id AND p.kind = 'human' AND p.left_at IS NULL)) THEN
       RAISE EXCEPTION 'a session becomes ACTIVE only with two participants, one of them a present human'
         USING ERRCODE = 'check_violation';
     END IF;
     RETURN NEW;
   END
   $$;
-CREATE TRIGGER t_cardinality_1 BEFORE UPDATE OF status ON session
+CREATE TRIGGER t_cardinality_1 BEFORE UPDATE OF status ON public.session
   FOR EACH ROW EXECUTE FUNCTION app.t_session_cardinality();
 
 -- T-cardinality-2 (deferred): a non-terminal session never loses its last present human.
 CREATE FUNCTION app.t_participant_cardinality() RETURNS trigger
   LANGUAGE plpgsql
+  SET search_path = pg_catalog, public, pg_temp
   AS $$
   BEGIN
-    IF EXISTS (SELECT 1 FROM session s WHERE s.id = OLD.session_id AND s.status NOT IN ('RESOLVED', 'ABANDONED', 'ARCHIVED'))
-       AND NOT EXISTS (SELECT 1 FROM participant p WHERE p.session_id = OLD.session_id AND p.kind = 'human' AND p.left_at IS NULL) THEN
+    IF EXISTS (SELECT 1 FROM public.session s WHERE s.id = OLD.session_id AND s.status NOT IN ('RESOLVED', 'ABANDONED', 'ARCHIVED'))
+       AND NOT EXISTS (SELECT 1 FROM public.participant p WHERE p.session_id = OLD.session_id AND p.kind = 'human' AND p.left_at IS NULL) THEN
       RAISE EXCEPTION 'a live session must keep a present human participant' USING ERRCODE = 'check_violation';
     END IF;
     RETURN NULL;
   END
   $$;
-CREATE CONSTRAINT TRIGGER t_cardinality_2 AFTER DELETE OR UPDATE OF kind, user_id, left_at ON participant
+CREATE CONSTRAINT TRIGGER t_cardinality_2 AFTER DELETE OR UPDATE OF kind, user_id, left_at ON public.participant
   DEFERRABLE INITIALLY DEFERRED
   FOR EACH ROW EXECUTE FUNCTION app.t_participant_cardinality();
 
@@ -4360,6 +4534,7 @@ CREATE CONSTRAINT TRIGGER t_cardinality_2 AFTER DELETE OR UPDATE OF kind, user_i
 -- and of every delivered kind never changes, except by the job (W13 re-encryption).
 CREATE FUNCTION app.t_message_immutable() RETURNS trigger
   LANGUAGE plpgsql
+  SET search_path = pg_catalog, public, pg_temp
   AS $$
   BEGIN
     IF NEW.conversation_id IS DISTINCT FROM OLD.conversation_id
@@ -4375,88 +4550,127 @@ CREATE FUNCTION app.t_message_immutable() RETURNS trigger
     RETURN NEW;
   END
   $$;
-CREATE TRIGGER t_message_immutable BEFORE UPDATE ON message
+CREATE TRIGGER t_message_immutable BEFORE UPDATE ON public.message
   FOR EACH ROW EXECUTE FUNCTION app.t_message_immutable();
 
 -- T-same-session: author and subject belong to the same session.
 CREATE FUNCTION app.t_attempt_same_session() RETURNS trigger
   LANGUAGE plpgsql
+  SET search_path = pg_catalog, public, pg_temp
   AS $$
   BEGIN
-    IF (SELECT session_id FROM participant WHERE id = NEW.author_participant_id)
-       IS DISTINCT FROM (SELECT session_id FROM participant WHERE id = NEW.subject_participant_id) THEN
+    IF (SELECT p.session_id FROM public.participant p WHERE p.id = NEW.author_participant_id)
+       IS DISTINCT FROM (SELECT p.session_id FROM public.participant p WHERE p.id = NEW.subject_participant_id) THEN
       RAISE EXCEPTION 'author and subject must share a session' USING ERRCODE = 'check_violation';
     END IF;
     RETURN NEW;
   END
   $$;
-CREATE TRIGGER t_same_session BEFORE INSERT OR UPDATE OF author_participant_id, subject_participant_id ON empathy_attempt
+CREATE TRIGGER t_same_session BEFORE INSERT OR UPDATE OF author_participant_id, subject_participant_id ON public.empathy_attempt
   FOR EACH ROW EXECUTE FUNCTION app.t_attempt_same_session();
+
+-- T-review-subject: the reviewer of an attempt is its subject (spec §1.2 "trigger-checked").
+CREATE FUNCTION app.t_review_subject() RETURNS trigger
+  LANGUAGE plpgsql
+  SET search_path = pg_catalog, public, pg_temp
+  AS $$
+  BEGIN
+    IF NOT EXISTS (SELECT 1 FROM public.empathy_attempt a
+                   WHERE a.id = NEW.attempt_id AND a.subject_participant_id = NEW.reviewer_participant_id) THEN
+      RAISE EXCEPTION 'only the subject of an attempt reviews it' USING ERRCODE = 'check_violation';
+    END IF;
+    RETURN NEW;
+  END
+  $$;
+CREATE TRIGGER t_review_subject BEFORE INSERT OR UPDATE OF attempt_id, reviewer_participant_id ON public.empathy_review
+  FOR EACH ROW EXECUTE FUNCTION app.t_review_subject();
 
 -- T-consent-owner: the decider owns the arc target. Invoker rights, so under
 -- the caller's RLS a partner's row and a missing row look the same; one fixed
 -- message with no ids (N-4).
 CREATE FUNCTION app.t_consent_owner() RETURNS trigger
   LANGUAGE plpgsql SECURITY INVOKER
+  SET search_path = pg_catalog, public, pg_temp
   AS $$
   DECLARE
     v_owner uuid;
   BEGIN
-    v_owner := CASE
-      WHEN NEW.need_id IS NOT NULL THEN (SELECT participant_id FROM need WHERE id = NEW.need_id)
-      WHEN NEW.empathy_attempt_id IS NOT NULL THEN (SELECT author_participant_id FROM empathy_attempt WHERE id = NEW.empathy_attempt_id)
-      WHEN NEW.proposal_id IS NOT NULL THEN (SELECT created_by_participant_id FROM proposal WHERE id = NEW.proposal_id)
-      WHEN NEW.share_offer_id IS NOT NULL THEN (SELECT subject_participant_id FROM context_share_offer WHERE id = NEW.share_offer_id)
-      WHEN NEW.review_id IS NOT NULL THEN (SELECT reviewer_participant_id FROM empathy_review WHERE id = NEW.review_id)
-    END;
+    IF NEW.need_id IS NOT NULL THEN
+      SELECT n.participant_id INTO v_owner FROM public.need n WHERE n.id = NEW.need_id;
+    ELSIF NEW.empathy_attempt_id IS NOT NULL THEN
+      SELECT a.author_participant_id INTO v_owner FROM public.empathy_attempt a WHERE a.id = NEW.empathy_attempt_id;
+    ELSIF NEW.proposal_id IS NOT NULL THEN
+      SELECT p.created_by_participant_id INTO v_owner FROM public.proposal p WHERE p.id = NEW.proposal_id;
+    ELSIF NEW.share_offer_id IS NOT NULL THEN
+      SELECT o.subject_participant_id INTO v_owner FROM public.context_share_offer o WHERE o.id = NEW.share_offer_id;
+    ELSIF NEW.review_id IS NOT NULL THEN
+      SELECT r.reviewer_participant_id INTO v_owner FROM public.empathy_review r WHERE r.id = NEW.review_id;
+    END IF;
     IF v_owner IS NULL OR v_owner <> NEW.participant_id THEN
       RAISE EXCEPTION 'consent target is not yours' USING ERRCODE = 'check_violation';
     END IF;
     RETURN NEW;
   END
   $$;
-CREATE TRIGGER t_consent_owner BEFORE INSERT OR UPDATE ON consent
+CREATE TRIGGER t_consent_owner BEFORE INSERT OR UPDATE ON public.consent
   FOR EACH ROW EXECUTE FUNCTION app.t_consent_owner();
 
--- T-consent-transitions: decision moves only NULL → GRANTED | DENIED, GRANTED → REVOKED.
+-- T-consent-transitions: decision moves only NULL → GRANTED | DENIED,
+-- GRANTED → REVOKED; decided_at moves only with the first decision and
+-- revoked_at only with the revocation (both are otherwise pinned).
 CREATE FUNCTION app.t_consent_transitions() RETURNS trigger
   LANGUAGE plpgsql
+  SET search_path = pg_catalog, public, pg_temp
   AS $$
   BEGIN
     IF TG_OP = 'INSERT' THEN
-      IF NEW.decision = 'REVOKED' THEN
+      IF NEW.decision = 'REVOKED' OR NEW.revoked_at IS NOT NULL THEN
         RAISE EXCEPTION 'a consent is not created revoked' USING ERRCODE = 'check_violation';
       END IF;
-    ELSIF NEW.decision IS DISTINCT FROM OLD.decision
-          AND NOT ((OLD.decision IS NULL AND NEW.decision IN ('GRANTED', 'DENIED'))
-                   OR (OLD.decision = 'GRANTED' AND NEW.decision = 'REVOKED')) THEN
+      RETURN NEW;
+    END IF;
+    IF NEW.decision IS NOT DISTINCT FROM OLD.decision THEN
+      IF NEW.decided_at IS DISTINCT FROM OLD.decided_at OR NEW.revoked_at IS DISTINCT FROM OLD.revoked_at THEN
+        RAISE EXCEPTION 'decided_at and revoked_at change only with the decision' USING ERRCODE = 'check_violation';
+      END IF;
+    ELSIF OLD.decision IS NULL AND NEW.decision IN ('GRANTED', 'DENIED') THEN
+      IF NEW.revoked_at IS NOT NULL THEN
+        RAISE EXCEPTION 'a first decision is not a revocation' USING ERRCODE = 'check_violation';
+      END IF;
+    ELSIF OLD.decision = 'GRANTED' AND NEW.decision = 'REVOKED' THEN
+      IF NEW.decided_at IS DISTINCT FROM OLD.decided_at OR NEW.revoked_at IS NULL THEN
+        RAISE EXCEPTION 'a revocation keeps decided_at and records revoked_at' USING ERRCODE = 'check_violation';
+      END IF;
+    ELSE
       RAISE EXCEPTION 'consent decision % → % is not permitted', OLD.decision, NEW.decision USING ERRCODE = 'check_violation';
     END IF;
     RETURN NEW;
   END
   $$;
-CREATE TRIGGER t_consent_transitions BEFORE INSERT OR UPDATE OF decision ON consent
+CREATE TRIGGER t_consent_transitions BEFORE INSERT OR UPDATE ON public.consent
   FOR EACH ROW EXECUTE FUNCTION app.t_consent_transitions();
 
 -- T-need-share-owner: participant_id/session_id are the need owner's (N-1).
 CREATE FUNCTION app.t_need_share_owner() RETURNS trigger
   LANGUAGE plpgsql
+  SET search_path = pg_catalog, public, pg_temp
   AS $$
   BEGIN
-    IF NOT EXISTS (SELECT 1 FROM need n JOIN participant p ON p.id = n.participant_id
+    IF NOT EXISTS (SELECT 1 FROM public.need n JOIN public.participant p ON p.id = n.participant_id
                    WHERE n.id = NEW.need_id AND n.participant_id = NEW.participant_id AND p.session_id = NEW.session_id) THEN
       RAISE EXCEPTION 'need_share must carry its need owner''s participant and session' USING ERRCODE = 'check_violation';
     END IF;
     RETURN NEW;
   END
   $$;
-CREATE TRIGGER t_need_share_owner BEFORE INSERT OR UPDATE ON need_share
+CREATE TRIGGER t_need_share_owner BEFORE INSERT OR UPDATE ON public.need_share
   FOR EACH ROW EXECUTE FUNCTION app.t_need_share_owner();
 
 -- T-need-share-terminal: the delivered text and its pins never change;
 -- revoked_at moves only NULL → value (P3 §4, re-homed).
 CREATE FUNCTION app.t_need_share_terminal() RETURNS trigger
   LANGUAGE plpgsql
+  SET search_path = pg_catalog, public, pg_temp
   AS $$
   BEGIN
     IF NEW.need_id IS DISTINCT FROM OLD.need_id OR NEW.shared_text IS DISTINCT FROM OLD.shared_text
@@ -4468,35 +4682,46 @@ CREATE FUNCTION app.t_need_share_terminal() RETURNS trigger
     RETURN NEW;
   END
   $$;
-CREATE TRIGGER t_need_share_terminal BEFORE UPDATE ON need_share
+CREATE TRIGGER t_need_share_terminal BEFORE UPDATE ON public.need_share
   FOR EACH ROW EXECUTE FUNCTION app.t_need_share_terminal();
 
 -- T-result-live-attempt: no result on a SUPERSEDED round; subject = the attempt's subject.
 CREATE FUNCTION app.t_result_live_attempt() RETURNS trigger
   LANGUAGE plpgsql
+  SET search_path = pg_catalog, public, pg_temp
   AS $$
   BEGIN
-    IF NOT EXISTS (SELECT 1 FROM empathy_attempt a
+    IF NOT EXISTS (SELECT 1 FROM public.empathy_attempt a
                    WHERE a.id = NEW.attempt_id AND a.status <> 'SUPERSEDED' AND a.subject_participant_id = NEW.subject_participant_id) THEN
       RAISE EXCEPTION 'a reconciler result needs a live attempt with the same subject' USING ERRCODE = 'check_violation';
     END IF;
     RETURN NEW;
   END
   $$;
-CREATE TRIGGER t_result_live_attempt BEFORE INSERT ON reconciler_result
+CREATE TRIGGER t_result_live_attempt BEFORE INSERT ON public.reconciler_result
   FOR EACH ROW EXECUTE FUNCTION app.t_result_live_attempt();
 
 -- T-agreement-parties (deferred): at commit, the parties of an agreement are
--- exactly the session's present human participants, each WILLING on the
--- proposal (D4; "what the 2-participant system does, applied across N").
+-- exactly the session's human participants present when it was created
+-- (left_at IS NULL or later than created_at — a leaver/tombstone who was
+-- present stays a party, spec §4 "what survives … agreement_party"), each
+-- WILLING on the proposal (D4; "what the 2-participant system does, applied
+-- across N"). The predicate is app.agreement_parties_ok, used by the trigger
+-- (inlined, so no caller needs EXECUTE on it) and by T8's check of the
+-- migrated rows.
 CREATE FUNCTION app.agreement_parties_ok(agreement uuid) RETURNS boolean
   LANGUAGE sql STABLE
+  SET search_path = pg_catalog, public, pg_temp
   AS $$
     SELECT NOT EXISTS (SELECT 1 FROM public.agreement ag WHERE ag.id = agreement_parties_ok.agreement)
-        OR (SELECT NOT EXISTS (SELECT participant_id FROM public.agreement_party WHERE agreement_id = ag.id
-                               EXCEPT SELECT id FROM public.participant WHERE session_id = ag.session_id AND kind = 'human' AND left_at IS NULL)
-               AND NOT EXISTS (SELECT id FROM public.participant WHERE session_id = ag.session_id AND kind = 'human' AND left_at IS NULL
-                               EXCEPT SELECT participant_id FROM public.agreement_party WHERE agreement_id = ag.id)
+        OR (SELECT NOT EXISTS (SELECT ap.participant_id FROM public.agreement_party ap WHERE ap.agreement_id = ag.id
+                               EXCEPT SELECT p.id FROM public.participant p
+                                      WHERE p.session_id = ag.session_id AND p.kind = 'human'
+                                        AND (p.left_at IS NULL OR p.left_at > ag.created_at))
+               AND NOT EXISTS (SELECT p.id FROM public.participant p
+                               WHERE p.session_id = ag.session_id AND p.kind = 'human'
+                                 AND (p.left_at IS NULL OR p.left_at > ag.created_at)
+                               EXCEPT SELECT ap.participant_id FROM public.agreement_party ap WHERE ap.agreement_id = ag.id)
                AND NOT EXISTS (SELECT 1 FROM public.agreement_party ap
                                WHERE ap.agreement_id = ag.id
                                  AND NOT EXISTS (SELECT 1 FROM public.proposal_choice c
@@ -4506,9 +4731,11 @@ CREATE FUNCTION app.agreement_parties_ok(agreement uuid) RETURNS boolean
   $$;
 CREATE FUNCTION app.t_agreement_parties() RETURNS trigger
   LANGUAGE plpgsql
+  SET search_path = pg_catalog, public, pg_temp
   AS $$
   DECLARE
     v_agreement uuid;
+    v_ok        boolean;
   BEGIN
     -- IF, not CASE: plpgsql plans a CASE as one expression, and NEW of an
     -- agreement_party row has no id (nor any NEW on DELETE).
@@ -4519,18 +4746,42 @@ CREATE FUNCTION app.t_agreement_parties() RETURNS trigger
     ELSE
       v_agreement := NEW.agreement_id;
     END IF;
-    IF NOT app.agreement_parties_ok(v_agreement) THEN
+    SELECT NOT EXISTS (SELECT 1 FROM public.agreement ag WHERE ag.id = v_agreement)
+        OR (SELECT NOT EXISTS (SELECT ap.participant_id FROM public.agreement_party ap WHERE ap.agreement_id = ag.id
+                               EXCEPT SELECT p.id FROM public.participant p
+                                      WHERE p.session_id = ag.session_id AND p.kind = 'human'
+                                        AND (p.left_at IS NULL OR p.left_at > ag.created_at))
+               AND NOT EXISTS (SELECT p.id FROM public.participant p
+                               WHERE p.session_id = ag.session_id AND p.kind = 'human'
+                                 AND (p.left_at IS NULL OR p.left_at > ag.created_at)
+                               EXCEPT SELECT ap.participant_id FROM public.agreement_party ap WHERE ap.agreement_id = ag.id)
+               AND NOT EXISTS (SELECT 1 FROM public.agreement_party ap
+                               WHERE ap.agreement_id = ag.id
+                                 AND NOT EXISTS (SELECT 1 FROM public.proposal_choice c
+                                                 WHERE c.proposal_id = ag.proposal_id AND c.participant_id = ap.participant_id
+                                                   AND c.decision = 'WILLING'))
+            FROM public.agreement ag WHERE ag.id = v_agreement)
+      INTO v_ok;
+    IF NOT v_ok THEN
       RAISE EXCEPTION 'an agreement names every present participant, each WILLING' USING ERRCODE = 'check_violation';
     END IF;
     RETURN NULL;
   END
   $$;
-CREATE CONSTRAINT TRIGGER t_agreement_parties AFTER INSERT OR UPDATE OR DELETE ON agreement_party
+CREATE CONSTRAINT TRIGGER t_agreement_parties AFTER INSERT OR UPDATE OR DELETE ON public.agreement_party
   DEFERRABLE INITIALLY DEFERRED
   FOR EACH ROW EXECUTE FUNCTION app.t_agreement_parties();
-CREATE CONSTRAINT TRIGGER t_agreement_parties_on_agreement AFTER INSERT ON agreement
+CREATE CONSTRAINT TRIGGER t_agreement_parties_on_agreement AFTER INSERT ON public.agreement
   DEFERRABLE INITIALLY DEFERRED
   FOR EACH ROW EXECUTE FUNCTION app.t_agreement_parties();
+
+-- No caller needs EXECUTE on a trigger function or on the T8 predicate.
+REVOKE EXECUTE ON FUNCTION
+  app.touch_updated_at(), app.t_session_cardinality(), app.t_participant_cardinality(), app.t_message_immutable(),
+  app.t_attempt_same_session(), app.t_review_subject(), app.t_consent_owner(), app.t_consent_transitions(),
+  app.t_need_share_owner(), app.t_need_share_terminal(), app.t_result_live_attempt(), app.t_agreement_parties(),
+  app.agreement_parties_ok(uuid)
+  FROM PUBLIC;
 
 -- touch_updated_at on the 35 tables that have updated_at (T8 asserts the set
 -- equals the catalog's). message and takeaway_link have none.
@@ -4579,6 +4830,14 @@ CREATE TRIGGER touch_updated_at BEFORE UPDATE ON user_preferences FOR EACH ROW E
 -- participant's latest mood_reading; last_active_at masked unless it is the
 -- caller's own row or the owner allows it (privacy.showActivityStatus,
 -- default true — DEFAULT_PRIVACY_PREFERENCES).
+-- TS-16 NOTE: under owner-only RLS on conversation_read_state, user_preferences,
+-- "user" and mood_reading, a co-participant reading this view gets NULL for
+-- last_active_at, last_mood and the read state, and is_tombstone = false — and
+-- coalesce(showActivityStatus, true) would default to true over a row it cannot
+-- see. The partner-facing columns need a SECURITY DEFINER table function
+-- (owned by mwf_job, identity-bound) that returns participant_id + the masked
+-- last_active_at (+ last_mood if the product wants it), with no default-true
+-- over an invisible row; this view then serves only the caller's own rows.
 CREATE VIEW v_participant WITH (security_invoker = true) AS
 SELECT p.id AS participant_id, p.session_id, p.user_id, p.kind,
        coalesce(p.display_name, CASE WHEN u.deleted_at IS NULL THEN u.name END) AS display_name,
@@ -4766,28 +5025,68 @@ GRANT SELECT ON v_participant, v_co_participant, v_session_readiness, v_current_
 -- production; RLS and per-tier grants are TS-16).
 -- ---------------------------------------------------------------------------
 
--- mwf_job: what the definer helpers read (plan §2 step 2: SELECT on
--- participant), and what each definer writer it owns reads and writes —
--- without these the functions above cannot run. SELECT covers every table a
--- writer touches: an UPDATE or DELETE with a WHERE needs SELECT on the
--- columns it reads.
+-- mwf_job: exactly what the definer helpers and writers it owns read and
+-- write — mwf_job is also the job's login role, so these are its direct
+-- privileges too. Column lists everywhere a column list exists: SELECT only
+-- the id / FK / filter columns a function reads (an UPDATE or DELETE with a
+-- WHERE needs SELECT on what it reads), UPDATE only the columns a function
+-- writes — never a routing column (participant.user_id/session_id,
+-- empathy_attempt.author/subject; Phase 3 §4). DELETE cannot be narrowed.
 GRANT USAGE ON SCHEMA public TO mwf_job;
-GRANT SELECT ON participant, empathy_attempt, session, conversation, message, need, need_share, consent, "user",
-                participant_milestone, follow_up, reflection, conversation_read_state, draft, ai_memory, mood_reading,
-                regulation_event, need_disposition, follow_up_note, proposal_choice, follow_up_checkin, brain_activity,
-                feature_state, user_memory, user_device, user_preferences, reminder, participant_key, user_key
-  TO mwf_job;
-GRANT INSERT, UPDATE ON empathy_attempt TO mwf_job;                    -- empathy_set_status
-GRANT INSERT ON message TO mwf_job;                                     -- empathy_set_status (delivered copy)
-GRANT UPDATE ON session TO mwf_job;                                     -- session_set_status
-GRANT INSERT, UPDATE ON need_share TO mwf_job;                          -- need_share, need_revoke_share
-GRANT UPDATE ON consent TO mwf_job;                                     -- need_revoke_share
-GRANT INSERT, UPDATE ON "user" TO mwf_job;                              -- create_user_for_clerk, the tombstone
-GRANT UPDATE ON participant, participant_key, user_key TO mwf_job;      -- anonymize_*
+-- is_member, partner_user_id, is_co_participant, my_participant, every self/membership test, T-cardinality-*, T-same-session, reveal gate
+GRANT SELECT (id, session_id, user_id, kind, left_at) ON participant TO mwf_job;
+-- anonymize_user_in_session step 2
+GRANT UPDATE (display_name, left_at) ON participant TO mwf_job;
+-- empathy_set_status reads the row (%ROWTYPE) and RETURNING id; empathy_direction_status; T-consent-owner; anonymize (revealed_at filter)
+GRANT SELECT ON empathy_attempt TO mwf_job;
+-- empathy_set_status: status moves, the reveal stamp (delivery columns for the job's delivery path)
+GRANT UPDATE (status, status_version, revealed_at, delivery_status, delivered_at, seen_at) ON empathy_attempt TO mwf_job;
+-- empathy_set_status: round n+1 on resubmission
+GRANT INSERT (author_participant_id, subject_participant_id, round, supersedes_attempt_id, content, status) ON empathy_attempt TO mwf_job;
+-- session_set_status, empathy_set_status (row lock), anonymize step 1
+GRANT SELECT (id, status, resolved_at) ON session TO mwf_job;
+GRANT UPDATE (status, resolved_at) ON session TO mwf_job;
+-- empathy_set_status: the subject's MAIN conversation; anonymize step 3
+GRANT SELECT (id, participant_id, kind) ON conversation TO mwf_job;
+-- empathy_set_status: the delivered copy, and its duplicate probe
+GRANT SELECT (conversation_id, source_attempt_id, kind) ON message TO mwf_job;
+GRANT INSERT (conversation_id, sender_participant_id, role, kind, content, source_attempt_id) ON message TO mwf_job;
+-- need_share (owner, category, live), need_revoke_share (owner), T-consent-owner, T-need-share-owner, anonymize step 3
+GRANT SELECT (id, participant_id, category, deleted_at, superseded_by_need_id) ON need TO mwf_job;
+-- need_share (the only writer), need_revoke_share, anonymize step 3 (shared needs survive)
+GRANT SELECT (need_id, revoked_at) ON need_share TO mwf_job;
+GRANT INSERT (need_id, participant_id, session_id, category, shared_text) ON need_share TO mwf_job;
+GRANT UPDATE (revoked_at) ON need_share TO mwf_job;
+-- need_share (the owner's GRANTED consent), need_revoke_share (→ REVOKED)
+GRANT SELECT (need_id, participant_id, decision) ON consent TO mwf_job;
+GRANT UPDATE (decision, revoked_at) ON consent TO mwf_job;
+-- T-consent-owner (owner of a proposal / share offer / review target), fired by need_revoke_share
+GRANT SELECT (id, created_by_participant_id) ON proposal TO mwf_job;
+GRANT SELECT (id, subject_participant_id) ON context_share_offer TO mwf_job;
+GRANT SELECT (id, reviewer_participant_id) ON empathy_review TO mwf_job;
+-- resolve_user_by_clerk_id, create_user_for_clerk (RETURNING id), anonymize_user_account (existence, tombstone)
+GRANT SELECT (id, clerk_id, deleted_at) ON "user" TO mwf_job;
+GRANT INSERT (clerk_id, email, first_name, last_name) ON "user" TO mwf_job;
+GRANT UPDATE (clerk_id, email, first_name, last_name, deleted_at) ON "user" TO mwf_job;
+-- anonymize_user_in_session step 3: unshared choices (choices_shared milestone), INDIVIDUAL check-ins
+GRANT SELECT (participant_id, milestone_key) ON participant_milestone TO mwf_job;
+GRANT SELECT (id, scope) ON follow_up TO mwf_job;
+-- anonymize_*: the filter columns of every private-row delete (steps 3–5)
+GRANT SELECT (participant_id) ON conversation_read_state, draft, mood_reading, regulation_event, need_disposition, follow_up_note, proposal_choice TO mwf_job;
+GRANT SELECT (participant_id, user_id) ON ai_memory TO mwf_job;
+GRANT SELECT (follow_up_id, participant_id) ON follow_up_checkin TO mwf_job;
+GRANT SELECT (participant_id, reflection_id) ON brain_activity TO mwf_job;
+GRANT SELECT (id, user_id) ON reflection TO mwf_job;
+GRANT SELECT (user_id) ON feature_state, user_memory, user_device, user_preferences, reminder TO mwf_job;
 GRANT DELETE ON conversation, conversation_read_state, draft, ai_memory, mood_reading, regulation_event, need_disposition,
                 follow_up_note, need, proposal_choice, follow_up_checkin, empathy_attempt, brain_activity, reflection,
                 feature_state, user_memory, user_device, user_preferences, reminder
-  TO mwf_job;                                                            -- anonymize_*
+  TO mwf_job;
+-- anonymize step 7: the crypto-shred
+GRANT SELECT (participant_id, destroyed_at) ON participant_key TO mwf_job;
+GRANT UPDATE (destroyed_at) ON participant_key TO mwf_job;
+GRANT SELECT (user_id, destroyed_at) ON user_key TO mwf_job;
+GRANT UPDATE (destroyed_at) ON user_key TO mwf_job;
 
 -- mwf_ops: SELECT on exactly the tables routes/brain.ts reads, re-based
 -- (BrainActivity, Session/Relationship/RelationshipMember/User, StageProgress,
@@ -4838,7 +5137,7 @@ BEGIN
   WHERE c.table_schema = 'public' AND c.data_type = 'jsonb'
     AND NOT EXISTS (SELECT 1 FROM pg_constraint k
                     WHERE k.contype = 'c' AND k.conrelid = format('public.%I', c.table_name)::regclass
-                      AND pg_get_constraintdef(k.oid) ~ ('jsonb_typeof\(' || c.column_name || '\)'));
+                      AND pg_get_constraintdef(k.oid) ~ ('jsonb_typeof\(' || c.column_name || '\) (= |= ANY )'));
   PERFORM app_migration.assert(bad IS NULL, format('step 20: jsonb column(s) without a jsonb_typeof CHECK: %s', bad));
 
   -- touch_updated_at on exactly the tables that have updated_at (35).
@@ -4857,6 +5156,21 @@ BEGIN
   WHERE s.nspname = 'public' AND c.relkind = 'v' AND NOT coalesce('security_invoker=true' = ANY (c.reloptions), false);
   PERFORM app_migration.assert(bad IS NULL, format('step 20: view(s) without security_invoker: %s', bad));
 
+  -- Every SECURITY DEFINER function and every trigger function in schema app
+  -- pins search_path with pg_temp last (C1/I4: no temp-object shadowing).
+  SELECT string_agg(p.proname, ', ' ORDER BY p.proname) INTO bad
+  FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+  WHERE n.nspname = 'app' AND (p.prosecdef OR p.prorettype = 'pg_catalog.trigger'::regtype)
+    AND NOT coalesce('search_path=pg_catalog, public, pg_temp' = ANY (p.proconfig), false);
+  PERFORM app_migration.assert(bad IS NULL, format('step 20: app function(s) without a pinned search_path: %s', bad));
+
+  -- No SECURITY DEFINER function and no trigger function is executable by PUBLIC.
+  SELECT string_agg(p.proname, ', ' ORDER BY p.proname) INTO bad
+  FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+  WHERE n.nspname = 'app' AND (p.prosecdef OR p.prorettype = 'pg_catalog.trigger'::regtype)
+    AND has_function_privilege('public', p.oid, 'EXECUTE');
+  PERFORM app_migration.assert(bad IS NULL, format('step 20: app function(s) executable by PUBLIC: %s', bad));
+
   -- Invariants over the migrated rows (their triggers only see later writes).
   SELECT count(*) INTO n FROM empathy_attempt a
   JOIN participant x ON x.id = a.author_participant_id JOIN participant y ON y.id = a.subject_participant_id
@@ -4868,6 +5182,10 @@ BEGIN
     AND EXISTS (SELECT 1 FROM participant p WHERE p.session_id = s.id)
     AND NOT EXISTS (SELECT 1 FROM participant p WHERE p.session_id = s.id AND p.kind = 'human' AND p.left_at IS NULL);
   PERFORM app_migration.assert(n = 0, format('T-cardinality-2: %s live session(s) without a present human', n));
+
+  SELECT count(*) INTO n FROM empathy_review r JOIN empathy_attempt a ON a.id = r.attempt_id
+  WHERE r.reviewer_participant_id <> a.subject_participant_id;
+  PERFORM app_migration.assert(n = 0, format('T-review-subject: %s review(s) by a non-subject', n));
 
   SELECT count(*) INTO n FROM agreement ag WHERE NOT app.agreement_parties_ok(ag.id);
   PERFORM app_migration.assert(n = 0, format('T-agreement-parties: %s agreement(s) fail', n));
@@ -4903,8 +5221,12 @@ BEGIN
   FOR r IN
     SELECT o.session_id, o.shared_agreement_ids, o.individual_proposal_ids, o.open_need_ids,
            v.agreement_ids, v.individual_commitment_ids, v.open_need_ids AS v_open
-    FROM app_migration.old_closure o JOIN v_session_closure_items v ON v.session_id = o.session_id
+    FROM app_migration.old_closure o LEFT JOIN v_session_closure_items v ON v.session_id = o.session_id
   LOOP
+    IF r.agreement_ids IS NULL THEN
+      bad := bad || format(' %s:no_view_row', r.session_id);
+      CONTINUE;
+    END IF;
     IF NOT (r.shared_agreement_ids @> r.agreement_ids AND r.agreement_ids @> r.shared_agreement_ids) THEN
       bad := bad || format(' %s:agreements', r.session_id);
     END IF;
