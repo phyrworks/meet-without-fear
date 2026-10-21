@@ -10,7 +10,10 @@
 -- the table privileges it holds in production as the tables' owner — so every
 -- refusal below comes from the function or trigger, not from a missing grant.
 -- An expected refusal is caught by its SQLSTATE and logged PASS; anything else
--- (or a refusal that does not happen: 'TEST FAILED') stops the run.
+-- (or a refusal that does not happen: 'TEST FAILED') stops the run. Most
+-- refusals come from the function or trigger under test; 6a–6d (mwf_job's
+-- narrowed column grants) and 13b (no EXECUTE on need_share) are grant
+-- refusals, by design — 13d reaches need_share's own job check.
 -- ============================================================================
 \set ON_ERROR_STOP on
 \pset pager off
@@ -136,6 +139,7 @@ END $$;
 
 -- ============================ as mwf_app ======================================
 \connect - mwf_app
+SELECT 'connected as ' || session_user || ' (current_user ' || current_user || ')';
 SELECT set_config('t.a_user', :'a_user', false), set_config('t.b_user', :'b_user', false), set_config('t.outsider', :'outsider', false), set_config('t.att_a', :'att_a', false), set_config('t.att_b', :'att_b', false), set_config('t.r_session', :'r_session', false), set_config('t.b_participant', :'b_participant', false), set_config('t.a_participant', :'a_participant', false) \g /dev/null
 -- 7. the AUTHOR moves own AWAITING_SHARING → READY
 DO $$ BEGIN
@@ -146,6 +150,7 @@ END $$;
 
 -- ============================ as mwf_job ======================================
 \connect - mwf_job
+SELECT 'connected as ' || session_user || ' (current_user ' || current_user || ')';
 SELECT set_config('t.a_user', :'a_user', false), set_config('t.b_user', :'b_user', false), set_config('t.outsider', :'outsider', false), set_config('t.att_a', :'att_a', false), set_config('t.att_b', :'att_b', false), set_config('t.r_session', :'r_session', false), set_config('t.b_participant', :'b_participant', false), set_config('t.a_participant', :'a_participant', false) \g /dev/null
 -- 8. the job reveals both; the subject's conversation gains exactly one copy, even when the reveal is repeated
 DO $$ DECLARE n int; BEGIN
@@ -161,6 +166,7 @@ END $$;
 
 -- ============================ as mwf_app ======================================
 \connect - mwf_app
+SELECT 'connected as ' || session_user || ' (current_user ' || current_user || ')';
 SELECT set_config('t.a_user', :'a_user', false), set_config('t.b_user', :'b_user', false), set_config('t.outsider', :'outsider', false), set_config('t.att_a', :'att_a', false), set_config('t.att_b', :'att_b', false), set_config('t.r_session', :'r_session', false), set_config('t.b_participant', :'b_participant', false), set_config('t.a_participant', :'a_participant', false) \g /dev/null
 -- 9. the AUTHOR cannot validate their own revealed attempt; the SUBJECT can
 DO $$ BEGIN
@@ -257,7 +263,7 @@ DO $$ BEGIN
   BEGIN
     PERFORM app.need_share('00000000-0000-7e00-8000-0000000000e1', 'x');
     RAISE EXCEPTION 'TEST FAILED: mwf_app ran need_share';
-  EXCEPTION WHEN insufficient_privilege THEN RAISE NOTICE 'PASS 13b need_share stays the job''s: %', SQLERRM;
+  EXCEPTION WHEN insufficient_privilege THEN RAISE NOTICE 'PASS 13b need_share stays the job''s (refused by the missing EXECUTE grant): %', SQLERRM;
   END;
   PERFORM set_config('app.current_user_id', current_setting('t.outsider'), true);
   IF app.is_member('00000000-0000-7e00-8000-0000000005e1') THEN
@@ -267,6 +273,29 @@ DO $$ BEGIN
 END $$;
 DROP VIEW pg_temp.pg_roles;
 DROP TABLE pg_temp.participant;
+
+-- 13d. need_share's own job check, reached by a non-job caller: grant EXECUTE
+--      to mwf_app on this throwaway clone (superuser), call it as mwf_app, revoke.
+\connect - mwf_user
+SELECT 'connected as ' || session_user || ' (setup: temporary GRANT EXECUTE ON app.need_share TO mwf_app)';
+GRANT EXECUTE ON FUNCTION app.need_share(uuid, text) TO mwf_app;
+\connect - mwf_app
+SELECT 'connected as ' || session_user || ' (current_user ' || current_user || ')';
+SELECT set_config('t.a_user', :'a_user', false), set_config('t.b_user', :'b_user', false), set_config('t.outsider', :'outsider', false), set_config('t.att_a', :'att_a', false), set_config('t.att_b', :'att_b', false), set_config('t.r_session', :'r_session', false), set_config('t.b_participant', :'b_participant', false), set_config('t.a_participant', :'a_participant', false) \g /dev/null
+DO $$ BEGIN
+  PERFORM set_config('app.current_user_id', '00000000-0000-7e00-8000-0000000000c1', true);
+  BEGIN
+    PERFORM app.need_share('00000000-0000-7e00-8000-0000000000e1', 'x');
+    RAISE EXCEPTION 'TEST FAILED: need_share ran for mwf_app with EXECUTE granted';
+  EXCEPTION WHEN insufficient_privilege THEN RAISE NOTICE 'PASS 13d need_share refuses a non-job caller by its own check (EXECUTE granted): %', SQLERRM;
+  END;
+END $$;
+\connect - mwf_user
+SELECT 'connected as ' || session_user || ' (setup: REVOKE EXECUTE ON app.need_share FROM mwf_app)';
+REVOKE EXECUTE ON FUNCTION app.need_share(uuid, text) FROM mwf_app;
+\connect - mwf_app
+SELECT 'connected as ' || session_user || ' (current_user ' || current_user || ')';
+SELECT set_config('t.a_user', :'a_user', false), set_config('t.b_user', :'b_user', false), set_config('t.outsider', :'outsider', false), set_config('t.att_a', :'att_a', false), set_config('t.att_b', :'att_b', false), set_config('t.r_session', :'r_session', false), set_config('t.b_participant', :'b_participant', false), set_config('t.a_participant', :'a_participant', false) \g /dev/null
 
 -- 14. T-review-subject: a review by a non-subject is refused (I5)
 DO $$ BEGIN
@@ -292,6 +321,7 @@ ROLLBACK;
 
 -- ============================ as mwf_job ======================================
 \connect - mwf_job
+SELECT 'connected as ' || session_user || ' (current_user ' || current_user || ')';
 -- 16. need_share is idempotent and refuses a deleted need
 DO $$ DECLARE n int; BEGIN
   PERFORM app.need_share('00000000-0000-7e00-8000-0000000000e1', 'again');

@@ -162,7 +162,7 @@ INSERT INTO "Message" (id, "sessionId", "senderId", "forUserId", role, content, 
   ('00000000-0000-7e00-8000-00000000e5c2', '00000000-0000-7e00-8000-0000000005e1', NULL, '00000000-0000-7e00-8000-0000000000c1', 'AI', 'That sounds tiring', 1, '2026-09-01 10:01+00', '{}', '{}'),
   ('00000000-0000-7e00-8000-00000000e5c3', '00000000-0000-7e00-8000-0000000005e1', '00000000-0000-7e00-8000-0000000000d1', '00000000-0000-7e00-8000-0000000000c1', 'VALIDATION_FEEDBACK', 'You got most of it', 2, '2026-09-03 08:31+00', NULL, NULL),
   ('00000000-0000-7e00-8000-00000000e5c4', '00000000-0000-7e00-8000-0000000005e1', '00000000-0000-7e00-8000-0000000000d1', '00000000-0000-7e00-8000-0000000000c1', 'SHARED_CONTEXT', 'Money is tight', 2, '2026-09-02 11:20+00', NULL, NULL),
-  ('00000000-0000-7e00-8000-00000000e5c5', '00000000-0000-7e00-8000-0000000005e1', NULL, NULL, 'AI', 'orphan', 1, '2026-09-01 10:02+00', NULL, NULL),
+  ('00000000-0000-7e00-8000-00000000e5c5', '00000000-0000-7e00-8000-0000000005e1', NULL, NULL, 'AI', 'pre-2026 reply to Cara before Dev joined', 0, '2026-09-01 09:02+00', NULL, NULL),
   ('00000000-0000-7e00-8000-00000000e5c6', '00000000-0000-7e00-8000-0000000005e1', NULL, '00000000-0000-7e00-8000-0000000000d1', 'USER', 'my own turn', 1, '2026-09-01 10:03+00', NULL, NULL),
   ('00000000-0000-7e00-8000-00000000e5c7', '00000000-0000-7e00-8000-0000000005e1', NULL, '00000000-0000-7e00-8000-0000000000c1', 'SYSTEM', 'Stage 4 begins', 4, '2026-09-05 09:00+00', NULL, NULL);
 -- Session Y: the vanished member E (forUserId with no User row).
@@ -344,3 +344,11 @@ INSERT INTO "Stage4ProposalSelection" (id, "proposalId", "sessionId", "userId", 
 INSERT INTO "Agreement" (id, "sharedVesselId", description, type, status, "agreedByA", "agreedByB", "agreedAt", "proposalId") VALUES
   ('00000000-0000-7e00-8000-0000000a9e05', '00000000-0000-7e00-8000-00000000005b', 'Slow mornings', 'COMMITMENT', 'COMPLETED',
    true, true, '2026-08-11 09:00+00', '00000000-0000-7e00-8000-0000000000f5');
+
+-- Session V, ruling R16: two pre-2026-style AI replies with no forUserId. The
+-- first predates E2's acceptance (2026-08-01 10:00): only the inviter C could
+-- have had the turn → attributed exactly to C (the survivor). The second
+-- follows it: C or E2 → not attributable → dropped_content with both candidates.
+INSERT INTO "Message" (id, "sessionId", "senderId", "forUserId", role, content, stage, "timestamp") VALUES
+  ('00000000-0000-7e00-8000-00000000e5f3', '00000000-0000-7e00-8000-0000000005e5', NULL, NULL, 'AI', 'reply to Cara before Eve joined', 0, '2026-08-01 09:40+00'),
+  ('00000000-0000-7e00-8000-00000000e5f4', '00000000-0000-7e00-8000-0000000005e5', NULL, NULL, 'AI', 'reply after both joined: whose?', 1, '2026-08-01 10:30+00');

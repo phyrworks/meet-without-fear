@@ -194,4 +194,42 @@ FROM v_session_closure_items v JOIN session_closure c ON c.session_id = v.sessio
 ORDER BY v.session_id;
 SELECT follow_up_id, status, cardinality(participant_ids) AS expected, cardinality(waiting_on) AS waiting FROM v_follow_up_cycle ORDER BY 1;
 
+-- 7. Ruling R16 (extras only): an ownerless pre-2026 AI reply is attributed
+--    only when exactly one user could have had the turn. In vanished-member
+--    session V the reply before E2 joined lands in the survivor C's MAIN
+--    conversation; the reply after both joined is not copied and sits in
+--    app_migration.dropped_content with both candidates.
+\echo '-- 7. R16: ownerless AI replies in vanished-member session V (extras)'
+SELECT m.id AS message_id, p.user_id AS conversation_owner, c.kind, left(m.content, 40) AS content
+FROM message m JOIN conversation c ON c.id = m.conversation_id JOIN participant p ON p.id = c.participant_id
+WHERE m.id IN ('00000000-0000-7e00-8000-00000000e5f3', '00000000-0000-7e00-8000-00000000e5f4', '00000000-0000-7e00-8000-00000000e5c5');
+SELECT concept, session_id, user_id, left(text, 40) AS text, candidates FROM app_migration.dropped_content WHERE concept = 'message_without_owner';
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM session WHERE id = '00000000-0000-7e00-8000-0000000005e5') THEN
+    RAISE NOTICE 'smoke 7 skipped (no extras)';
+    RETURN;
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM message m JOIN conversation c ON c.id = m.conversation_id JOIN participant p ON p.id = c.participant_id
+                 WHERE m.id = '00000000-0000-7e00-8000-00000000e5f3' AND c.kind = 'MAIN'
+                   AND p.user_id = '00000000-0000-7e00-8000-0000000000c1' AND p.session_id = '00000000-0000-7e00-8000-0000000005e5') THEN
+    RAISE EXCEPTION 'smoke 7: the exactly attributable reply e5f3 is not in the survivor''s MAIN conversation';
+  END IF;
+  IF EXISTS (SELECT 1 FROM message WHERE id = '00000000-0000-7e00-8000-00000000e5f4') THEN
+    RAISE EXCEPTION 'smoke 7: the inexact reply e5f4 was copied into a conversation';
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM app_migration.dropped_content
+                 WHERE concept = 'message_without_owner' AND text = 'reply after both joined: whose?' AND user_id IS NULL
+                   AND candidates @> '["00000000-0000-7e00-8000-0000000000c1", "00000000-0000-7e00-8000-0000000000ef"]'::jsonb
+                   AND jsonb_array_length(candidates) = 2) THEN
+    RAISE EXCEPTION 'smoke 7: the inexact reply e5f4 is not in dropped_content with both candidates';
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM message m JOIN conversation c ON c.id = m.conversation_id JOIN participant p ON p.id = c.participant_id
+                 WHERE m.id = '00000000-0000-7e00-8000-00000000e5c5' AND p.user_id = '00000000-0000-7e00-8000-0000000000c1') THEN
+    RAISE EXCEPTION 'smoke 7: the pre-acceptance reply e5c5 in session X is not in the inviter''s conversation';
+  END IF;
+  RAISE NOTICE 'smoke 7: e5f3 → survivor C (exact), e5c5 → inviter C (exact), e5f4 → dropped_content with candidates [C, E2]';
+END
+$$;
+
 \echo '-- smoke: all comparisons passed'
