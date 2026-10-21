@@ -22,7 +22,12 @@
 # 6. Applies the migration with `prisma migrate deploy` (DATABASE_URL pointed
 #    at the scratch database; backend/prisma.config.ts), logging to deploy.log.
 # 7. Prints the per-step count report (app_migration.row_counts, .report).
-# 8. Runs check-schema.sh --db <ts7_name>, then smoke-target-migration.sql.
+# 8. Runs check-schema.sh --db <ts7_name>, then smoke-target-migration.sql,
+#    then (with --extras) functions-caller-tests.sql on a throwaway clone: the
+#    caller arms log in as mwf_app and as mwf_job (inside the dev container
+#    the local socket trusts them; elsewhere use APP_DATABASE_URL /
+#    JOB_DATABASE_URL, docs/development/local-setup.md) — never the superuser,
+#    which the app.* functions do not treat as the job.
 #
 # Never touches anything but ^ts7_[a-z0-9_]+$ databases; refuses the shared
 # ones by name even if the pattern were loosened. Never `prisma migrate dev`,
@@ -169,6 +174,18 @@ bash "$HERE/check-schema.sh" --db "$DB" "$OUT/check-schema" >"$OUT/check-schema.
 step "8b. smoke-target-migration.sql"
 psql_db -f - <"$HERE/smoke-target-migration.sql" >"$OUT/smoke.txt" 2>&1 || { cat "$OUT/smoke.txt"; exit 1; }
 sed 's/^/   /' "$OUT/smoke.txt"
+
+if [ "$EXTRAS" = 1 ]; then
+  step "8c. functions-caller-tests.sql — as mwf_app and mwf_job (logins, not the superuser), on a throwaway clone"
+  CT="${DB:0:56}_calls"
+  psql_admin -c "DROP DATABASE IF EXISTS $CT WITH (FORCE)" -c "CREATE DATABASE $CT TEMPLATE $DB" >/dev/null
+  podman exec -i "$CONTAINER" psql -X -q -v ON_ERROR_STOP=1 -U "$SU" -d "$CT" <"$HERE/functions-caller-tests.sql" >"$OUT/caller-tests.txt" 2>&1 \
+    || { cat "$OUT/caller-tests.txt"; psql_admin -c "DROP DATABASE IF EXISTS $CT WITH (FORCE)" >/dev/null; exit 1; }
+  psql_admin -c "DROP DATABASE IF EXISTS $CT WITH (FORCE)" >/dev/null
+  grep -E 'PASS|connected as|ALL PASSED' "$OUT/caller-tests.txt" | sed 's/^NOTICE:  /   /; s/^ /   /'
+else
+  echo; echo "== 8c. functions-caller-tests.sql skipped (needs --extras)"
+fi
 
 echo
 echo "== evidence in $OUT"

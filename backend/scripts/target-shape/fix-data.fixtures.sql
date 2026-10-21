@@ -41,22 +41,24 @@ SET "revealedAt" = coalesce(
       a."sharedAt")
 WHERE a.status IN ('REVEALED', 'VALIDATED') AND a."revealedAt" IS NULL;
 
+-- The no-partner seeds (user A a.<stage>.nob@e2e.test): the only sessions the
+-- next two blocks may touch — every other session is real-shaped (and the
+-- extras' vanished-member sessions must reach the migration as they are).
+CREATE TEMP TABLE nob_session AS
+SELECT s.id FROM "Session" s
+JOIN "RelationshipMember" m ON m."relationshipId" = s."relationshipId"
+JOIN "User" u ON u.id = m."userId"
+WHERE u.email ~ '^a\.[a-z0-9-]+\.nob@e2e\.test$';
+
 -- session_without_two_participants (P13) and
 -- invitation_accepted_without_unique_acceptor (P14b) — without a partner
 -- account the factory still marks partner-required stages ACTIVE with an
 -- ACCEPTED invitation that nobody accepted (scenarios.ts PARTNER_REQUIRED).
 -- The true state is "invited, not yet accepted".
-UPDATE "Invitation" i
-SET status = 'PENDING', "acceptedAt" = NULL
-FROM "Session" s
-WHERE s.id = i."sessionId" AND i.status = 'ACCEPTED'
-  AND (SELECT count(*) FROM "RelationshipMember" m WHERE m."relationshipId" = s."relationshipId" AND m."userId" <> i."invitedById") = 0;
-UPDATE "Session" s
-SET status = 'INVITED'
-WHERE s.status IN ('ACTIVE', 'WAITING', 'PAUSED')
-  AND (SELECT count(*) FROM "RelationshipMember" m WHERE m."relationshipId" = s."relationshipId") < 2
-  AND NOT EXISTS (SELECT 1 FROM "StageProgress" sp WHERE sp."sessionId" = s.id AND sp."userId" NOT IN
-                  (SELECT m."userId" FROM "RelationshipMember" m WHERE m."relationshipId" = s."relationshipId"));
+UPDATE "Invitation" i SET status = 'PENDING', "acceptedAt" = NULL
+WHERE i.status = 'ACCEPTED' AND i."sessionId" IN (SELECT id FROM nob_session);
+UPDATE "Session" s SET status = 'INVITED'
+WHERE s.status IN ('ACTIVE', 'WAITING', 'PAUSED') AND s.id IN (SELECT id FROM nob_session);
 
 -- attempt_without_unique_subject (P15b) and empathy_draft_without_unique_subject
 -- (P15c) — EMPATHY_SHARED_A without a partner: an empathy attempt (and its
@@ -65,12 +67,21 @@ WHERE s.status IN ('ACTIVE', 'WAITING', 'PAUSED')
 -- (the EMPATHY_STATEMENT message, whose source_attempt_id becomes NULL).
 DELETE FROM "ConsentRecord" c
 USING "EmpathyDraft" d
-WHERE c."targetType" = 'EMPATHY_DRAFT' AND c."targetId" = d.id::text
-  AND NOT EXISTS (SELECT 1 FROM "RelationshipMember" m JOIN "Session" s ON s."relationshipId" = m."relationshipId"
-                  WHERE s.id = d."sessionId" AND m."userId" <> d."userId");
-DELETE FROM "EmpathyAttempt" a
-WHERE NOT EXISTS (SELECT 1 FROM "RelationshipMember" m JOIN "Session" s ON s."relationshipId" = m."relationshipId"
-                  WHERE s.id = a."sessionId" AND m."userId" <> a."sourceUserId");
-DELETE FROM "EmpathyDraft" d
-WHERE NOT EXISTS (SELECT 1 FROM "RelationshipMember" m JOIN "Session" s ON s."relationshipId" = m."relationshipId"
-                  WHERE s.id = d."sessionId" AND m."userId" <> d."userId");
+WHERE c."targetType" = 'EMPATHY_DRAFT' AND c."targetId" = d.id::text AND d."sessionId" IN (SELECT id FROM nob_session);
+DELETE FROM "EmpathyAttempt" a WHERE a."sessionId" IN (SELECT id FROM nob_session);
+DELETE FROM "EmpathyDraft" d WHERE d."sessionId" IN (SELECT id FROM nob_session);
+
+-- message_without_owner (P33) — seed-extras.sql's pre-2026-style AI row in a
+-- live session (forUserId arrived 2026-01-02 without a backfill). The
+-- template's rule: the sender of the nearest earlier USER message with a
+-- sender in the session, else the nearest later one.
+UPDATE "Message" m SET "forUserId" = coalesce(
+    (SELECT u."senderId" FROM "Message" u WHERE u."sessionId" = m."sessionId" AND u.role = 'USER' AND u."senderId" IS NOT NULL
+       AND (u.timestamp, u.id) < (m.timestamp, m.id) ORDER BY u.timestamp DESC, u.id DESC LIMIT 1),
+    (SELECT u."senderId" FROM "Message" u WHERE u."sessionId" = m."sessionId" AND u.role = 'USER' AND u."senderId" IS NOT NULL
+       AND (u.timestamp, u.id) > (m.timestamp, m.id) ORDER BY u.timestamp, u.id LIMIT 1))::text
+WHERE m."forUserId" IS NULL AND m."senderId" IS NULL
+  -- not in a session with a vanished member (there the row is the leaver's, dropped by plan 4a)
+  AND NOT EXISTS (SELECT 1 FROM "Message" x
+                  WHERE x."sessionId" = m."sessionId" AND x."forUserId" IS NOT NULL
+                    AND NOT EXISTS (SELECT 1 FROM "User" u WHERE u.id::text = x."forUserId"));

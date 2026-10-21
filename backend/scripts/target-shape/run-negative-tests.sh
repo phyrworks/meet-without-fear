@@ -39,9 +39,12 @@ CASES=(
 "n3_agreement_without_proposal|agreement_without_proposal|UPDATE \"Agreement\" SET \"proposalId\" = NULL WHERE id = '00000000-0000-7e00-8000-0000000a9e01';"
 "n4_unknown_gate_key|unknown_gate_key|UPDATE \"StageProgress\" SET \"gatesSatisfied\" = \"gatesSatisfied\" || '{\"mysteryFlag\": true}' WHERE \"sessionId\" = '00000000-0000-7e00-8000-0000000005e1' AND stage = 4;"
 "n5_consent_target_unresolved|consent_target_unresolved|UPDATE \"ConsentRecord\" SET \"targetId\" = '00000000-0000-7e00-8000-00000000dead' WHERE id = '00000000-0000-7e00-8000-000000000cc1';"
-"n6_vanished_member|attempt_without_author|DELETE FROM \"User\" WHERE email = 'b.empathy-revealed@e2e.test';"
+"n6_vanished_member_no_evidence|session_without_two_participants|UPDATE \"Message\" SET \"forUserId\" = NULL WHERE \"forUserId\" = (SELECT id::text FROM \"User\" WHERE email = 'b.empathy-revealed@e2e.test'); DELETE FROM \"User\" WHERE email = 'b.empathy-revealed@e2e.test';"
 "n7_consent_owner|T-consent-owner|UPDATE \"ConsentRecord\" SET \"targetId\" = '00000000-0000-7e00-8000-00000000a7d1' WHERE id = '00000000-0000-7e00-8000-000000000cc5';"
 "n8_closure_items|v_session_closure_items differs|UPDATE \"Stage4Closure\" SET \"individualProposalIds\" = '{}' WHERE \"sessionId\" = '00000000-0000-7e00-8000-0000000005e1';"
+"n9_message_without_owner|message_without_owner|UPDATE \"Message\" SET \"forUserId\" = NULL WHERE id = '00000000-0000-7e00-8000-00000000e5c2';"
+"n10_attempt_author_unrecoverable|attempt_without_author|UPDATE \"EmpathyAttempt\" SET \"sourceUserId\" = NULL WHERE id = '00000000-0000-7e00-8000-00000000a7c5';"
+"n11_acceptor_unrecoverable|invitation_accepted_without_unique_acceptor|UPDATE \"Message\" SET \"forUserId\" = NULL WHERE \"forUserId\" = '00000000-0000-7e00-8000-0000000000ef'; DELETE FROM \"ReconcilerResult\" WHERE id = '00000000-0000-7e00-8000-00000000e5e5';"
 )
 
 OLD_TABLES_SQL="SELECT count(*) FROM pg_tables WHERE schemaname = 'public' AND tablename ~ '^[A-Z]'"

@@ -9,9 +9,14 @@
 -- validation feedback, a ValidationFeedbackDraft, tending (cycle, check-in
 -- covering two entries, outcomes, need outcome, adjustment, partial closure,
 -- orphan response, notes, reminder), mood, exercise, memory, reflection with
--- takeaways and a link, the four wellbeing features, brain activity, a
--- vanished member, an ownerless message, a USER message with a nulled sender,
--- and PAUSED / WAITING sessions. Fixed ids (…7e…) make the rows easy to find.
+-- takeaways and a link, the four wellbeing features, brain activity, two
+-- vanished members (E in session Y: messages only; E2 in session V: an
+-- attempt with its author nulled, a review with its reviewer nulled, an
+-- accepted invitation, a reconciler result and an agreement), a pre-2026-style
+-- ownerless AI message in a live session (backfilled by the fix-data
+-- template), an ownerless USER message in a vanished-member session (dropped,
+-- kept in app_migration.dropped_content), a USER message with a nulled
+-- sender, and PAUSED / WAITING sessions. Fixed ids (…7e…) make the rows easy to find.
 -- Scratch-only: refuses anything but a ts7_* database.
 -- ============================================================================
 DO $$
@@ -290,3 +295,52 @@ INSERT INTO "BrainActivity" (id, "sessionId", "innerWorkSessionId", "turnId", "a
    'ORCHESTRATED_RESPONSE', 0.0012345678, 'COMPLETED', '2026-09-01 10:01+00'),
   ('00000000-0000-7e00-8000-0000000eba02', NULL, '00000000-0000-7e00-8000-0000000e1e01', 't2', 'LLM_CALL', 'haiku', 'null', NULL,
    'DISTILLATION', 0, 'COMPLETED', '2026-09-02 14:00+00');
+
+-- Session Y: the vanished member E's own typed message — senderId nulled by
+-- the deletion, forUserId never set before 2026-01-02 (plan 4a: dropped).
+INSERT INTO "Message" (id, "sessionId", "senderId", "forUserId", role, content, stage, "timestamp") VALUES
+  ('00000000-0000-7e00-8000-00000000e5e9', '00000000-0000-7e00-8000-0000000005e2', NULL, NULL, 'USER', 'E typed this', 1, '2026-09-01 09:59+00');
+
+-- Session V (relationship R5, RESOLVED): C and the vanished member E2
+-- (…00ef, no "User" row: deleted, its RelationshipMember / EmpathyDraft /
+-- Stage4ProposalSelection rows cascaded, its attempt's sourceUserId and its
+-- review's userId nulled). C invited E2, E2 accepted; both agreed.
+INSERT INTO "Relationship" (id, "createdAt", "updatedAt") VALUES
+  ('00000000-0000-7e00-8000-0000000000a5', '2026-08-01 09:00+00', '2026-08-01 09:00+00');
+INSERT INTO "RelationshipMember" ("relationshipId", "userId", "joinedAt", role) VALUES
+  ('00000000-0000-7e00-8000-0000000000a5', '00000000-0000-7e00-8000-0000000000c1', '2026-08-01 09:00+00', 'member');
+INSERT INTO "Session" (id, "relationshipId", status, "resolvedAt", "createdAt", "updatedAt") VALUES
+  ('00000000-0000-7e00-8000-0000000005e5', '00000000-0000-7e00-8000-0000000000a5', 'RESOLVED', '2026-08-20 09:00+00', '2026-08-01 09:00+00', '2026-08-20 09:00+00');
+INSERT INTO "SharedVessel" (id, "sessionId", "updatedAt") VALUES
+  ('00000000-0000-7e00-8000-00000000005b', '00000000-0000-7e00-8000-0000000005e5', '2026-08-01 09:00+00');
+INSERT INTO "Invitation" (id, "sessionId", "invitedById", name, status, "expiresAt", "acceptedAt", "messageConfirmed", "messageConfirmedAt", "createdAt") VALUES
+  ('00000000-0000-7e00-8000-0000000001a5', '00000000-0000-7e00-8000-0000000005e5', '00000000-0000-7e00-8000-0000000000c1', 'Eve', 'ACCEPTED',
+   '2026-08-08 09:00+00', '2026-08-01 10:00+00', true, '2026-08-01 09:30+00', '2026-08-01 09:10+00');
+INSERT INTO "UserVessel" (id, "userId", "sessionId", "createdAt", "updatedAt") VALUES
+  ('00000000-0000-7e00-8000-0000000007c5', '00000000-0000-7e00-8000-0000000000c1', '00000000-0000-7e00-8000-0000000005e5', '2026-08-01 09:00+00', '2026-08-01 09:00+00');
+INSERT INTO "StageProgress" ("sessionId", "userId", stage, status, "startedAt", "gatesSatisfied") VALUES
+  ('00000000-0000-7e00-8000-0000000005e5', '00000000-0000-7e00-8000-0000000000c1', 0, 'COMPLETED', '2026-08-01 09:00+00', '{"compactSigned": true, "signedAt": "2026-08-01T09:20:00Z"}');
+UPDATE "StageProgress" SET "completedAt" = '2026-08-01 09:20+00' WHERE "sessionId" = '00000000-0000-7e00-8000-0000000005e5';
+INSERT INTO "Message" (id, "sessionId", "senderId", "forUserId", role, content, stage, "timestamp") VALUES
+  ('00000000-0000-7e00-8000-00000000e5f1', '00000000-0000-7e00-8000-0000000005e5', NULL, '00000000-0000-7e00-8000-0000000000ef', 'AI', 'hello E2', 1, '2026-08-01 10:05+00'),
+  ('00000000-0000-7e00-8000-00000000e5f2', '00000000-0000-7e00-8000-0000000005e5', NULL, NULL, 'USER', 'E2 typed this', 1, '2026-08-01 10:06+00');
+INSERT INTO "EmpathyAttempt" (id, "sessionId", "sourceUserId", content, "sharedAt", status, "revealedAt", "deliveryStatus") VALUES
+  ('00000000-0000-7e00-8000-00000000a7c5', '00000000-0000-7e00-8000-0000000005e5', '00000000-0000-7e00-8000-0000000000c1',
+   'Eve feels rushed', '2026-08-05 09:00+00', 'VALIDATED', '2026-08-06 09:00+00', 'DELIVERED'),
+  ('00000000-0000-7e00-8000-00000000a7e5', '00000000-0000-7e00-8000-0000000005e5', NULL,
+   'Cara feels alone', '2026-08-05 10:00+00', 'VALIDATED', '2026-08-06 09:00+00', 'DELIVERED');
+INSERT INTO "EmpathyValidation" (id, "attemptId", "sessionId", "userId", validated, "feedbackShared", "validatedAt") VALUES
+  ('00000000-0000-7e00-8000-0000000e7c05', '00000000-0000-7e00-8000-00000000a7e5', '00000000-0000-7e00-8000-0000000005e5', '00000000-0000-7e00-8000-0000000000c1', true, false, '2026-08-07 09:00+00'),
+  ('00000000-0000-7e00-8000-0000000e7e05', '00000000-0000-7e00-8000-00000000a7c5', '00000000-0000-7e00-8000-0000000005e5', NULL, true, false, '2026-08-07 10:00+00');
+INSERT INTO "ReconcilerResult" (id, "sessionId", "guesserId", "guesserName", "subjectId", "subjectName", "alignmentScore", "alignmentSummary",
+                                "gapSeverity", "gapSummary", "recommendedAction", rationale, "sharingWouldHelp", "createdAt") VALUES
+  ('00000000-0000-7e00-8000-00000000e5e5', '00000000-0000-7e00-8000-0000000005e5', '00000000-0000-7e00-8000-0000000000ef', 'Eve',
+   '00000000-0000-7e00-8000-0000000000c1', 'Cara', 90, 'close', 'none', 'none', 'PROCEED', 'aligned', false, '2026-08-05 11:00+00');
+INSERT INTO "StrategyProposal" (id, "sessionId", "createdByUserId", description, "needsAddressed", kind, status, "createdAt", "updatedAt") VALUES
+  ('00000000-0000-7e00-8000-0000000000f5', '00000000-0000-7e00-8000-0000000005e5', '00000000-0000-7e00-8000-0000000000c1',
+   'Slow mornings', '{}', 'SHARED_PROPOSAL', 'CONVERTED_TO_AGREEMENT', '2026-08-10 09:00+00', '2026-08-11 09:00+00');
+INSERT INTO "Stage4ProposalSelection" (id, "proposalId", "sessionId", "userId", decision, "selectedAt", "updatedAt") VALUES
+  ('00000000-0000-7e00-8000-0000000005c5', '00000000-0000-7e00-8000-0000000000f5', '00000000-0000-7e00-8000-0000000005e5', '00000000-0000-7e00-8000-0000000000c1', 'WILLING', '2026-08-10 10:00+00', '2026-08-10 10:00+00');
+INSERT INTO "Agreement" (id, "sharedVesselId", description, type, status, "agreedByA", "agreedByB", "agreedAt", "proposalId") VALUES
+  ('00000000-0000-7e00-8000-0000000a9e05', '00000000-0000-7e00-8000-00000000005b', 'Slow mornings', 'COMMITMENT', 'COMPLETED',
+   true, true, '2026-08-11 09:00+00', '00000000-0000-7e00-8000-0000000000f5');
