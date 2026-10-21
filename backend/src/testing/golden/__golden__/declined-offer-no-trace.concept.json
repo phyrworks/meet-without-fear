@@ -1,0 +1,4508 @@
+{
+  "scenario": "declined-offer-no-trace",
+  "stage": "RECONCILER_SHOWN_B",
+  "initial": {
+    "agreement": {},
+    "agreement_party": {},
+    "brain_activity": {},
+    "consent": {
+      "<consent:ada@main/EMPATHY_ATTEMPT/empathyAttempt:ada→bob@main#1>": {
+        "created_at": "<ts:34>",
+        "decided_at": "<ts:14>",
+        "decision": "GRANTED",
+        "empathy_attempt_id": "<empathyAttempt:ada→bob@main#1>",
+        "id": "<consent:ada@main/EMPATHY_ATTEMPT/empathyAttempt:ada→bob@main#1>",
+        "need_id": null,
+        "participant_id": "<participant:ada@main>",
+        "proposal_id": null,
+        "requested_by_participant_id": "<participant:ada@main>",
+        "review_id": null,
+        "revoked_at": null,
+        "share_offer_id": null,
+        "target_kind": "EMPATHY_ATTEMPT"
+      },
+      "<consent:bob@main/EMPATHY_ATTEMPT/empathyAttempt:bob→ada@main#1>": {
+        "created_at": "<ts:36>",
+        "decided_at": "<ts:24>",
+        "decision": "GRANTED",
+        "empathy_attempt_id": "<empathyAttempt:bob→ada@main#1>",
+        "id": "<consent:bob@main/EMPATHY_ATTEMPT/empathyAttempt:bob→ada@main#1>",
+        "need_id": null,
+        "participant_id": "<participant:bob@main>",
+        "proposal_id": null,
+        "requested_by_participant_id": "<participant:bob@main>",
+        "review_id": null,
+        "revoked_at": null,
+        "share_offer_id": null,
+        "target_kind": "EMPATHY_ATTEMPT"
+      }
+    },
+    "context_share_offer": {
+      "<shareOffer:ada→bob@main#1/i1>": {
+        "attempt_id": "<empathyAttempt:ada→bob@main#1>",
+        "created_at": "<ts:37>",
+        "declined_at": null,
+        "delivered_at": null,
+        "delivery_notified_at": null,
+        "delivery_status": "PENDING",
+        "id": "<shareOffer:ada→bob@main#1/i1>",
+        "iteration": 1,
+        "offer_message": null,
+        "result_id": "<reconcilerResult:ada→bob@main#1/i1>",
+        "seen_at": null,
+        "seen_notified_at": null,
+        "shared_at": null,
+        "shared_content": null,
+        "status": "OFFERED",
+        "subject_participant_id": "<participant:bob@main>",
+        "suggested_content": "I feel like I'm running on empty - exhausted from work every day, and then coming home to more tasks. What I really need is for someone to see how hard I'm trying, even when I don't have anything left to give.",
+        "suggested_reason": "This helps Ada Lovelace understand that Bob Ross's frustration comes from exhaustion and feeling unseen, not anger or blame.",
+        "updated_at": "<ts:37>"
+      }
+    },
+    "conversation": {
+      "<conversation:ada@main/MAIN>": {
+        "anchor_kind": null,
+        "anchor_proposal_id": null,
+        "id": "<conversation:ada@main/MAIN>",
+        "kind": "MAIN",
+        "participant_id": "<participant:ada@main>",
+        "resolved_at": null,
+        "status": "ACTIVE"
+      },
+      "<conversation:bob@main/MAIN>": {
+        "anchor_kind": null,
+        "anchor_proposal_id": null,
+        "id": "<conversation:bob@main/MAIN>",
+        "kind": "MAIN",
+        "participant_id": "<participant:bob@main>",
+        "resolved_at": null,
+        "status": "ACTIVE"
+      }
+    },
+    "conversation_read_state": {
+      "<participant:ada@main>": {
+        "archived_at": null,
+        "last_active_at": null,
+        "last_seen_message_id": null,
+        "last_viewed_at": null,
+        "last_viewed_share_tab_at": null,
+        "participant_id": "<participant:ada@main>",
+        "updated_at": "<ts:31>"
+      },
+      "<participant:bob@main>": {
+        "archived_at": null,
+        "last_active_at": null,
+        "last_seen_message_id": null,
+        "last_viewed_at": null,
+        "last_viewed_share_tab_at": null,
+        "participant_id": "<participant:bob@main>",
+        "updated_at": "<ts:32>"
+      }
+    },
+    "draft": {
+      "<draft:ada@main/EMPATHY>": {
+        "about_participant_id": "<participant:bob@main>",
+        "attempt_id": null,
+        "content": "I understand you might be feeling stressed from work. I want us to support each other better.",
+        "created_at": "<ts:33>",
+        "id": "<draft:ada@main/EMPATHY>",
+        "kind": "EMPATHY",
+        "participant_id": "<participant:ada@main>",
+        "ready_to_share": true,
+        "share_offer_id": null,
+        "updated_at": "<ts:33>",
+        "version": 1
+      },
+      "<draft:bob@main/EMPATHY>": {
+        "about_participant_id": "<participant:ada@main>",
+        "attempt_id": null,
+        "content": "I understand that Riley may feel alone with the household work and want their effort to be noticed.",
+        "created_at": "<ts:35>",
+        "id": "<draft:bob@main/EMPATHY>",
+        "kind": "EMPATHY",
+        "participant_id": "<participant:bob@main>",
+        "ready_to_share": true,
+        "share_offer_id": null,
+        "updated_at": "<ts:35>",
+        "version": 1
+      }
+    },
+    "empathy_attempt": {
+      "<empathyAttempt:ada→bob@main#1>": {
+        "author_participant_id": "<participant:ada@main>",
+        "content": "I understand you might be feeling stressed from work. I want us to support each other better.",
+        "delivered_at": null,
+        "delivery_status": "PENDING",
+        "id": "<empathyAttempt:ada→bob@main#1>",
+        "revealed_at": null,
+        "round": 1,
+        "seen_at": null,
+        "status": "AWAITING_SHARING",
+        "status_version": 0,
+        "subject_participant_id": "<participant:bob@main>",
+        "submitted_at": "<ts:14>",
+        "supersedes_attempt_id": null
+      },
+      "<empathyAttempt:bob→ada@main#1>": {
+        "author_participant_id": "<participant:bob@main>",
+        "content": "I understand that Riley may feel alone with the household work and want their effort to be noticed.",
+        "delivered_at": null,
+        "delivery_status": "PENDING",
+        "id": "<empathyAttempt:bob→ada@main#1>",
+        "revealed_at": null,
+        "round": 1,
+        "seen_at": null,
+        "status": "HELD",
+        "status_version": 0,
+        "subject_participant_id": "<participant:ada@main>",
+        "submitted_at": "<ts:24>",
+        "supersedes_attempt_id": null
+      }
+    },
+    "empathy_review": {},
+    "invitation": {
+      "<invitation:main>": {
+        "accepted_at": "<ts:30>",
+        "accepted_by_user_id": "<user:bob>",
+        "created_at": "<ts:30>",
+        "decline_reason": null,
+        "declined_at": null,
+        "expires_at": "<ts:38>",
+        "id": "<invitation:main>",
+        "invited_by_participant_id": "<participant:ada@main>",
+        "message_confirmed_at": "<ts:30>",
+        "name": "Bob Ross",
+        "session_id": "<session:main>",
+        "status": "ACCEPTED"
+      }
+    },
+    "message": {
+      "<message:ada@main#10>": {
+        "content": "I'm glad. Now let's build some empathy for your partner's perspective.",
+        "content_hash": "2d2ba9f01a25cc167953cca7c5cb7533b5ef4b9819cdc0a4ee4298d34aecc720",
+        "conversation_id": "<conversation:ada@main/MAIN>",
+        "created_at": "<ts:10>",
+        "id": "<message:ada@main#10>",
+        "kind": "CHAT",
+        "refining_need_id": null,
+        "role": "AI",
+        "sender_participant_id": null,
+        "source_attempt_id": null
+      },
+      "<message:ada@main#11>": {
+        "content": "I think they're stressed from work too.",
+        "content_hash": "b19cadf9c4e0e827c4fdded57d1de577cfe80a6d55849f48853b43b6ad9e7c01",
+        "conversation_id": "<conversation:ada@main/MAIN>",
+        "created_at": "<ts:11>",
+        "id": "<message:ada@main#11>",
+        "kind": "CHAT",
+        "refining_need_id": null,
+        "role": "USER",
+        "sender_participant_id": "<participant:ada@main>",
+        "source_attempt_id": null
+      },
+      "<message:ada@main#12>": {
+        "content": "That's a thoughtful observation. Here's an empathy statement you could share...",
+        "content_hash": "8bf9b8f08465095b845ae0c5db714f26d29ad6656298cdb60b39b7f765ea94a3",
+        "conversation_id": "<conversation:ada@main/MAIN>",
+        "created_at": "<ts:12>",
+        "id": "<message:ada@main#12>",
+        "kind": "CHAT",
+        "refining_need_id": null,
+        "role": "AI",
+        "sender_participant_id": null,
+        "source_attempt_id": null
+      },
+      "<message:ada@main#1>": {
+        "content": "Hi, I'm having issues with my partner.",
+        "content_hash": "c2583ea77715a9728ceb23a629360518ceb88e42b7896478df7c6467b3492d93",
+        "conversation_id": "<conversation:ada@main/MAIN>",
+        "created_at": "<ts:1>",
+        "id": "<message:ada@main#1>",
+        "kind": "CHAT",
+        "refining_need_id": null,
+        "role": "USER",
+        "sender_participant_id": "<participant:ada@main>",
+        "source_attempt_id": null
+      },
+      "<message:ada@main#2>": {
+        "content": "I'm glad you reached out. Tell me more about what's happening.",
+        "content_hash": "ab1e7653e34ae3e1c98dbe54ef23095167b7ecb913cd602ceea723a176e45d62",
+        "conversation_id": "<conversation:ada@main/MAIN>",
+        "created_at": "<ts:2>",
+        "id": "<message:ada@main#2>",
+        "kind": "CHAT",
+        "refining_need_id": null,
+        "role": "AI",
+        "sender_participant_id": null,
+        "source_attempt_id": null
+      },
+      "<message:ada@main#3>": {
+        "content": "We argue about household chores constantly.",
+        "content_hash": "f88806d71a0080462eaa9f35ff80a8794c16e9093f2ec0667ee9bea5c647274f",
+        "conversation_id": "<conversation:ada@main/MAIN>",
+        "created_at": "<ts:3>",
+        "id": "<message:ada@main#3>",
+        "kind": "CHAT",
+        "refining_need_id": null,
+        "role": "USER",
+        "sender_participant_id": "<participant:ada@main>",
+        "source_attempt_id": null
+      },
+      "<message:ada@main#4>": {
+        "content": "That sounds frustrating. Would you like to invite your partner?",
+        "content_hash": "6aac9315f8fc7f4649bb48456ac17778b1b968b179990b70b8bb5113b60eda17",
+        "conversation_id": "<conversation:ada@main/MAIN>",
+        "created_at": "<ts:4>",
+        "id": "<message:ada@main#4>",
+        "kind": "CHAT",
+        "refining_need_id": null,
+        "role": "AI",
+        "sender_participant_id": null,
+        "source_attempt_id": null
+      },
+      "<message:ada@main#5>": {
+        "content": "Yes, I sent the invitation.",
+        "content_hash": "8b5f1f1770f6051fbdea485234c21e8b79a94d09c354aefb3f3373678f6b36d5",
+        "conversation_id": "<conversation:ada@main/MAIN>",
+        "created_at": "<ts:5>",
+        "id": "<message:ada@main#5>",
+        "kind": "CHAT",
+        "refining_need_id": null,
+        "role": "USER",
+        "sender_participant_id": "<participant:ada@main>",
+        "source_attempt_id": null
+      },
+      "<message:ada@main#6>": {
+        "content": "Great. Let's continue exploring your perspective while we wait.",
+        "content_hash": "d80b6b56e31303bc11c83773f3ed4800a772b91a9e3fd38f0a8db901cb88a8fa",
+        "conversation_id": "<conversation:ada@main/MAIN>",
+        "created_at": "<ts:6>",
+        "id": "<message:ada@main#6>",
+        "kind": "CHAT",
+        "refining_need_id": null,
+        "role": "AI",
+        "sender_participant_id": null,
+        "source_attempt_id": null
+      },
+      "<message:ada@main#7>": {
+        "content": "I feel like I do most of the work and they don't notice.",
+        "content_hash": "b07b70a89b858e52ec6b17ff6ae02332d8786c48e133cd6601ba546cb8ecd297",
+        "conversation_id": "<conversation:ada@main/MAIN>",
+        "created_at": "<ts:7>",
+        "id": "<message:ada@main#7>",
+        "kind": "CHAT",
+        "refining_need_id": null,
+        "role": "USER",
+        "sender_participant_id": "<participant:ada@main>",
+        "source_attempt_id": null
+      },
+      "<message:ada@main#8>": {
+        "content": "I hear you. Do you feel like I understand what you've been experiencing?",
+        "content_hash": "f6b8797d1050971693ec9c343edb3f34fd0c2f6267ee974aed829c2b5f1fe3fc",
+        "conversation_id": "<conversation:ada@main/MAIN>",
+        "created_at": "<ts:8>",
+        "id": "<message:ada@main#8>",
+        "kind": "CHAT",
+        "refining_need_id": null,
+        "role": "AI",
+        "sender_participant_id": null,
+        "source_attempt_id": null
+      },
+      "<message:ada@main#9>": {
+        "content": "Yes, I feel heard now.",
+        "content_hash": "a5efa798023219f1b16eebcf4ce2983c42103333c3f2d96990047aad82dd7dda",
+        "conversation_id": "<conversation:ada@main/MAIN>",
+        "created_at": "<ts:9>",
+        "id": "<message:ada@main#9>",
+        "kind": "CHAT",
+        "refining_need_id": null,
+        "role": "USER",
+        "sender_participant_id": "<participant:ada@main>",
+        "source_attempt_id": null
+      },
+      "<message:ada@main/EMPATHY_STATEMENT:ada#1>": {
+        "content": "I understand you might be feeling stressed from work. I want us to support each other better.",
+        "content_hash": "01995d17ed918387b0011c7fff38d58f9653cda5bdaca9a252beab1ff4a30cf4",
+        "conversation_id": "<conversation:ada@main/MAIN>",
+        "created_at": "<ts:14>",
+        "id": "<message:ada@main/EMPATHY_STATEMENT:ada#1>",
+        "kind": "EMPATHY_STATEMENT",
+        "refining_need_id": null,
+        "role": "USER",
+        "sender_participant_id": "<participant:ada@main>",
+        "source_attempt_id": "<empathyAttempt:ada→bob@main#1>"
+      },
+      "<message:bob@main#10>": {
+        "content": "Yes, I feel heard.",
+        "content_hash": "be08556ef2be793cd9c990718f154d8383556538137089c5661c075c8073c437",
+        "conversation_id": "<conversation:bob@main/MAIN>",
+        "created_at": "<ts:23>",
+        "id": "<message:bob@main#10>",
+        "kind": "CHAT",
+        "refining_need_id": null,
+        "role": "USER",
+        "sender_participant_id": "<participant:bob@main>",
+        "source_attempt_id": null
+      },
+      "<message:bob@main#1>": {
+        "content": "Welcome! Ada Lovelace invited you to work through some challenges together.",
+        "content_hash": "52a603a9ac23363be9dafc55a91969dd0eeb48259f67ccb0c1dd55e0d99ce856",
+        "conversation_id": "<conversation:bob@main/MAIN>",
+        "created_at": "<ts:14>",
+        "id": "<message:bob@main#1>",
+        "kind": "CHAT",
+        "refining_need_id": null,
+        "role": "AI",
+        "sender_participant_id": null,
+        "source_attempt_id": null
+      },
+      "<message:bob@main#2>": {
+        "content": "Things have been tense lately between us.",
+        "content_hash": "d0e936ac8babf6f7e92dcbb52d300cef1fc02079e7468bd28f76be3ab8ec3fb6",
+        "conversation_id": "<conversation:bob@main/MAIN>",
+        "created_at": "<ts:15>",
+        "id": "<message:bob@main#2>",
+        "kind": "CHAT",
+        "refining_need_id": null,
+        "role": "USER",
+        "sender_participant_id": "<participant:bob@main>",
+        "source_attempt_id": null
+      },
+      "<message:bob@main#3>": {
+        "content": "I hear you. Tell me more about what's been happening.",
+        "content_hash": "5b25dc3ca179ffcd5d8a3cd9e9e1420f55a48c29b59fb341b9a635a8548e711d",
+        "conversation_id": "<conversation:bob@main/MAIN>",
+        "created_at": "<ts:16>",
+        "id": "<message:bob@main#3>",
+        "kind": "CHAT",
+        "refining_need_id": null,
+        "role": "AI",
+        "sender_participant_id": null,
+        "source_attempt_id": null
+      },
+      "<message:bob@main#4>": {
+        "content": "I feel like they don't see how much I'm dealing with at work.",
+        "content_hash": "7614eba9a318757de566b0e3fa59ddfbbf5ab1e0341f74fbc5d596c00c6a18c7",
+        "conversation_id": "<conversation:bob@main/MAIN>",
+        "created_at": "<ts:17>",
+        "id": "<message:bob@main#4>",
+        "kind": "CHAT",
+        "refining_need_id": null,
+        "role": "USER",
+        "sender_participant_id": "<participant:bob@main>",
+        "source_attempt_id": null
+      },
+      "<message:bob@main#5>": {
+        "content": "That sounds really hard. Can you tell me more?",
+        "content_hash": "7dcfa44de7b3290ba953cf2f9ee409039675d9550bea2cf9cf658acb8ca23869",
+        "conversation_id": "<conversation:bob@main/MAIN>",
+        "created_at": "<ts:18>",
+        "id": "<message:bob@main#5>",
+        "kind": "CHAT",
+        "refining_need_id": null,
+        "role": "AI",
+        "sender_participant_id": null,
+        "source_attempt_id": null
+      },
+      "<message:bob@main#6>": {
+        "content": "I work so hard and come home exhausted, but there's always more to do.",
+        "content_hash": "639fa2ff2151692748b916f4110d6d77b3bb45c37adeed1250c9c0c9b3c1bc02",
+        "conversation_id": "<conversation:bob@main/MAIN>",
+        "created_at": "<ts:19>",
+        "id": "<message:bob@main#6>",
+        "kind": "CHAT",
+        "refining_need_id": null,
+        "role": "USER",
+        "sender_participant_id": "<participant:bob@main>",
+        "source_attempt_id": null
+      },
+      "<message:bob@main#7>": {
+        "content": "I understand. How long has this been going on?",
+        "content_hash": "3b6b66475f0fb4bc4ac14529a80b4edde0ac2ddf9d5a4bb2bfac9a62aced149e",
+        "conversation_id": "<conversation:bob@main/MAIN>",
+        "created_at": "<ts:20>",
+        "id": "<message:bob@main#7>",
+        "kind": "CHAT",
+        "refining_need_id": null,
+        "role": "AI",
+        "sender_participant_id": null,
+        "source_attempt_id": null
+      },
+      "<message:bob@main#8>": {
+        "content": "Months now. I don't know how to get through to them.",
+        "content_hash": "799a349d8d43a9abdced4507b4fe9e61543d5f7fc44054028e3cf222148620e1",
+        "conversation_id": "<conversation:bob@main/MAIN>",
+        "created_at": "<ts:21>",
+        "id": "<message:bob@main#8>",
+        "kind": "CHAT",
+        "refining_need_id": null,
+        "role": "USER",
+        "sender_participant_id": "<participant:bob@main>",
+        "source_attempt_id": null
+      },
+      "<message:bob@main#9>": {
+        "content": "Do you feel like I understand what you've been going through?",
+        "content_hash": "0fff55e8b8ee6d0e5ec8c028d98d389d6288f578101ce5717052c69a12d8cc7a",
+        "conversation_id": "<conversation:bob@main/MAIN>",
+        "created_at": "<ts:22>",
+        "id": "<message:bob@main#9>",
+        "kind": "CHAT",
+        "refining_need_id": null,
+        "role": "AI",
+        "sender_participant_id": null,
+        "source_attempt_id": null
+      }
+    },
+    "need": {},
+    "need_disposition": {},
+    "need_share": {},
+    "participant": {
+      "<participant:ada@main>": {
+        "display_name": "Ada Lovelace",
+        "id": "<participant:ada@main>",
+        "joined_at": "<ts:28>",
+        "kind": "human",
+        "left_at": null,
+        "session_id": "<session:main>",
+        "user_id": "<user:ada>"
+      },
+      "<participant:bob@main>": {
+        "display_name": "Bob Ross",
+        "id": "<participant:bob@main>",
+        "joined_at": "<ts:28>",
+        "kind": "human",
+        "left_at": null,
+        "session_id": "<session:main>",
+        "user_id": "<user:bob>"
+      }
+    },
+    "participant_milestone": {
+      "<milestone:ada@main/compact_signed>": {
+        "milestone_key": "compact_signed",
+        "participant_id": "<participant:ada@main>",
+        "reached_at": "<ts:7>"
+      },
+      "<milestone:ada@main/feel_heard>": {
+        "milestone_key": "feel_heard",
+        "participant_id": "<participant:ada@main>",
+        "reached_at": "<ts:13>"
+      },
+      "<milestone:ada@main/invitation_sent>": {
+        "milestone_key": "invitation_sent",
+        "participant_id": "<participant:ada@main>",
+        "reached_at": "<ts:1>"
+      },
+      "<milestone:bob@main/compact_signed>": {
+        "milestone_key": "compact_signed",
+        "participant_id": "<participant:bob@main>",
+        "reached_at": "<ts:20>"
+      },
+      "<milestone:bob@main/feel_heard>": {
+        "milestone_key": "feel_heard",
+        "participant_id": "<participant:bob@main>",
+        "reached_at": "<ts:24>"
+      }
+    },
+    "proposal": {},
+    "proposal_choice": {},
+    "proposal_need": {},
+    "reconciler_guidance": {},
+    "reconciler_result": {
+      "<reconcilerResult:ada→bob@main#1/i1>": {
+        "alignment_score": 45,
+        "alignment_summary": "Ada Lovelace's empathy attempt captures some elements but misses key aspects of Bob Ross's experience.",
+        "attempt_id": "<empathyAttempt:ada→bob@main#1>",
+        "circuit_breaker_tripped": false,
+        "correctly_identified": [
+          "stress",
+          "work pressure"
+        ],
+        "created_at": "<ts:25>",
+        "gap_severity": "SIGNIFICANT",
+        "gap_summary": "Ada Lovelace hasn't fully grasped the depth of Bob Ross's exhaustion and feeling unseen.",
+        "id": "<reconcilerResult:ada→bob@main#1/i1>",
+        "iteration": 1,
+        "misattributions": [],
+        "missed_feelings": [
+          "exhaustion",
+          "feeling unseen",
+          "overwhelm"
+        ],
+        "most_important_gap": "Bob Ross feels exhausted and unseen, not just stressed.",
+        "rationale": "Sharing specific context would help Ada Lovelace understand Bob Ross's perspective better.",
+        "recommended_action": "OFFER_SHARING",
+        "sharing_would_help": true,
+        "subject_participant_id": "<participant:bob@main>",
+        "suggested_share_content": "I feel like I'm running on empty - exhausted from work every day, and then coming home to more tasks. What I really need is for someone to see how hard I'm trying, even when I don't have anything left to give.",
+        "suggested_share_focus": "The exhaustion from work and feeling unseen.",
+        "suggested_share_reason": "This helps Ada Lovelace understand that Bob Ross's frustration comes from exhaustion and feeling unseen, not anger or blame.",
+        "superseded_at": null
+      }
+    },
+    "reflection": {},
+    "reflection_message": {},
+    "session": {
+      "<session:main>": {
+        "created_at": "<ts:29>",
+        "id": "<session:main>",
+        "previous_session_id": null,
+        "relationship_id": "<relationship:main>",
+        "resolved_at": null,
+        "status": "ACTIVE",
+        "topic_frame": null,
+        "topic_frame_confirmed_at": null,
+        "updated_at": "<ts:29>"
+      }
+    },
+    "session_closure": {},
+    "takeaway": {},
+    "takeaway_link": {},
+    "user": {
+      "<user:ada>": {
+        "clerk_id": "<clerkId:ada>",
+        "created_at": "<ts:26>",
+        "deleted_at": null,
+        "email": "ada@e2e.test",
+        "first_name": null,
+        "id": "<user:ada>",
+        "last_name": null,
+        "name": "Ada Lovelace",
+        "updated_at": "<ts:26>"
+      },
+      "<user:bob>": {
+        "clerk_id": "<clerkId:bob>",
+        "created_at": "<ts:27>",
+        "deleted_at": null,
+        "email": "bob@e2e.test",
+        "first_name": null,
+        "id": "<user:bob>",
+        "last_name": null,
+        "name": "Bob Ross",
+        "updated_at": "<ts:27>"
+      }
+    }
+  },
+  "steps": [
+    {
+      "label": "before decline: session as ada@e2e.test",
+      "status": 200,
+      "body": {
+        "data": {
+          "session": {
+            "createdAt": "<ts:2>",
+            "currentStage": 2,
+            "id": "<session:main>",
+            "myProgress": {
+              "stage": 2,
+              "status": "IN_PROGRESS"
+            },
+            "partner": {
+              "id": "<user:bob>",
+              "name": "Bob Ross",
+              "nickname": "Bob Ross"
+            },
+            "relationshipId": "<relationship:main>",
+            "resolvedAt": null,
+            "stageStatus": "IN_PROGRESS",
+            "status": "ACTIVE"
+          }
+        },
+        "success": true
+      },
+      "changes": [
+        {
+          "view": "user",
+          "kind": "changed",
+          "key": "<user:ada>",
+          "changedFields": [
+            "clerk_id",
+            "updated_at"
+          ],
+          "before": {
+            "clerk_id": "<clerkId:ada>",
+            "created_at": "<ts:1>",
+            "deleted_at": null,
+            "email": "ada@e2e.test",
+            "first_name": null,
+            "id": "<user:ada>",
+            "last_name": null,
+            "name": "Ada Lovelace",
+            "updated_at": "<ts:1>"
+          },
+          "after": {
+            "clerk_id": "e2e_<user:ada>",
+            "created_at": "<ts:1>",
+            "deleted_at": null,
+            "email": "ada@e2e.test",
+            "first_name": null,
+            "id": "<user:ada>",
+            "last_name": null,
+            "name": "Ada Lovelace",
+            "updated_at": "<ts:fresh>"
+          }
+        }
+      ]
+    },
+    {
+      "label": "before decline: state as ada@e2e.test",
+      "status": 200,
+      "body": {
+        "data": {
+          "compact": {
+            "canAdvance": true,
+            "isFirstSession": true,
+            "mySigned": true,
+            "mySignedAt": null,
+            "partnerSigned": true,
+            "partnerSignedAt": null
+          },
+          "invitation": {
+            "acceptedAt": "<ts:18>",
+            "createdAt": "<ts:18>",
+            "expiresAt": "<ts:19>",
+            "id": "<invitation:main>",
+            "invitedBy": {
+              "id": "<user:ada>",
+              "name": null
+            },
+            "isInviter": true,
+            "messageConfirmed": true,
+            "messageConfirmedAt": "<ts:18>",
+            "sessionId": "<session:main>",
+            "status": "ACCEPTED",
+            "topicFrame": null,
+            "topicFrameConfirmedAt": null
+          },
+          "messages": {
+            "hasMore": false,
+            "messages": [
+              {
+                "content": "Hi, I'm having issues with my partner.",
+                "id": "<message:ada@main#1>",
+                "role": "USER",
+                "senderId": "<user:ada>",
+                "sessionId": "<session:main>",
+                "stage": 0,
+                "timestamp": "<ts:1>"
+              },
+              {
+                "content": "I'm glad you reached out. Tell me more about what's happening.",
+                "id": "<message:ada@main#2>",
+                "role": "AI",
+                "senderId": null,
+                "sessionId": "<session:main>",
+                "stage": 0,
+                "timestamp": "<ts:2>"
+              },
+              {
+                "content": "We argue about household chores constantly.",
+                "id": "<message:ada@main#3>",
+                "role": "USER",
+                "senderId": "<user:ada>",
+                "sessionId": "<session:main>",
+                "stage": 1,
+                "timestamp": "<ts:3>"
+              },
+              {
+                "content": "That sounds frustrating. Would you like to invite your partner?",
+                "id": "<message:ada@main#4>",
+                "role": "AI",
+                "senderId": null,
+                "sessionId": "<session:main>",
+                "stage": 1,
+                "timestamp": "<ts:4>"
+              },
+              {
+                "content": "Yes, I sent the invitation.",
+                "id": "<message:ada@main#5>",
+                "role": "USER",
+                "senderId": "<user:ada>",
+                "sessionId": "<session:main>",
+                "stage": 1,
+                "timestamp": "<ts:5>"
+              },
+              {
+                "content": "Great. Let's continue exploring your perspective while we wait.",
+                "id": "<message:ada@main#6>",
+                "role": "AI",
+                "senderId": null,
+                "sessionId": "<session:main>",
+                "stage": 1,
+                "timestamp": "<ts:6>"
+              },
+              {
+                "content": "I feel like I do most of the work and they don't notice.",
+                "id": "<message:ada@main#7>",
+                "role": "USER",
+                "senderId": "<user:ada>",
+                "sessionId": "<session:main>",
+                "stage": 1,
+                "timestamp": "<ts:7>"
+              },
+              {
+                "content": "I hear you. Do you feel like I understand what you've been experiencing?",
+                "id": "<message:ada@main#8>",
+                "role": "AI",
+                "senderId": null,
+                "sessionId": "<session:main>",
+                "stage": 1,
+                "timestamp": "<ts:8>"
+              },
+              {
+                "content": "Yes, I feel heard now.",
+                "id": "<message:ada@main#9>",
+                "role": "USER",
+                "senderId": "<user:ada>",
+                "sessionId": "<session:main>",
+                "stage": 1,
+                "timestamp": "<ts:9>"
+              },
+              {
+                "content": "I'm glad. Now let's build some empathy for your partner's perspective.",
+                "id": "<message:ada@main#10>",
+                "role": "AI",
+                "senderId": null,
+                "sessionId": "<session:main>",
+                "stage": 2,
+                "timestamp": "<ts:10>"
+              },
+              {
+                "content": "I think they're stressed from work too.",
+                "id": "<message:ada@main#11>",
+                "role": "USER",
+                "senderId": "<user:ada>",
+                "sessionId": "<session:main>",
+                "stage": 2,
+                "timestamp": "<ts:11>"
+              },
+              {
+                "content": "That's a thoughtful observation. Here's an empathy statement you could share...",
+                "id": "<message:ada@main#12>",
+                "role": "AI",
+                "senderId": null,
+                "sessionId": "<session:main>",
+                "stage": 2,
+                "timestamp": "<ts:12>"
+              },
+              {
+                "content": "I understand you might be feeling stressed from work. I want us to support each other better.",
+                "id": "<message:ada@main/EMPATHY_STATEMENT:ada#1>",
+                "role": "EMPATHY_STATEMENT",
+                "senderId": "<user:ada>",
+                "sessionId": "<session:main>",
+                "stage": 2,
+                "timestamp": "<ts:14>"
+              }
+            ]
+          },
+          "progress": {
+            "canAdvance": false,
+            "milestones": {
+              "feelHeardConfirmedAt": "<ts:13>",
+              "witnessStartedAt": "<ts:7>"
+            },
+            "myProgress": {
+              "completedAt": null,
+              "gatesSatisfied": {},
+              "stage": 2,
+              "startedAt": "<ts:13>",
+              "status": "IN_PROGRESS"
+            },
+            "partnerProgress": {
+              "completedAt": null,
+              "stage": 2,
+              "startedAt": "<ts:15>",
+              "status": "IN_PROGRESS"
+            },
+            "sessionId": "<session:main>"
+          },
+          "session": {
+            "createdAt": "<ts:17>",
+            "currentStage": 2,
+            "id": "<session:main>",
+            "lastSeenChatItemId": null,
+            "lastViewedAt": null,
+            "myProgress": {
+              "stage": 2,
+              "status": "IN_PROGRESS"
+            },
+            "partner": {
+              "id": "<user:bob>",
+              "name": "Bob Ross",
+              "nickname": "Bob Ross"
+            },
+            "partnerLastActiveAt": "<ts:15>",
+            "partnerLastViewedAt": null,
+            "relationshipId": "<relationship:main>",
+            "resolvedAt": null,
+            "sourceInnerThoughts": null,
+            "stageStatus": "IN_PROGRESS",
+            "status": "ACTIVE"
+          }
+        },
+        "success": true
+      },
+      "changes": [
+        {
+          "view": "user",
+          "kind": "changed",
+          "key": "<user:ada>",
+          "changedFields": [
+            "updated_at"
+          ],
+          "before": {
+            "clerk_id": "e2e_<user:ada>",
+            "created_at": "<ts:16>",
+            "deleted_at": null,
+            "email": "ada@e2e.test",
+            "first_name": null,
+            "id": "<user:ada>",
+            "last_name": null,
+            "name": "Ada Lovelace",
+            "updated_at": "<ts:fresh>"
+          },
+          "after": {
+            "clerk_id": "e2e_<user:ada>",
+            "created_at": "<ts:16>",
+            "deleted_at": null,
+            "email": "ada@e2e.test",
+            "first_name": null,
+            "id": "<user:ada>",
+            "last_name": null,
+            "name": "Ada Lovelace",
+            "updated_at": "<ts:fresh>"
+          }
+        }
+      ]
+    },
+    {
+      "label": "before decline: progress as ada@e2e.test",
+      "status": 200,
+      "body": {
+        "data": {
+          "milestones": {
+            "commonGroundFoundAt": null,
+            "feelHeardConfirmedAt": "<ts:2>",
+            "needsIdentifiedAt": null,
+            "witnessStartedAt": "<ts:1>"
+          },
+          "myProgress": {
+            "completedAt": null,
+            "gatesSatisfied": {},
+            "stage": 2,
+            "startedAt": "<ts:2>",
+            "status": "IN_PROGRESS"
+          },
+          "partnerProgress": {
+            "completedAt": null,
+            "gatesSatisfied": {},
+            "stage": 2,
+            "startedAt": "<ts:3>",
+            "status": "IN_PROGRESS"
+          },
+          "sessionStatus": "ACTIVE"
+        },
+        "success": true
+      },
+      "changes": [
+        {
+          "view": "user",
+          "kind": "changed",
+          "key": "<user:ada>",
+          "changedFields": [
+            "updated_at"
+          ],
+          "before": {
+            "clerk_id": "e2e_<user:ada>",
+            "created_at": "<ts:4>",
+            "deleted_at": null,
+            "email": "ada@e2e.test",
+            "first_name": null,
+            "id": "<user:ada>",
+            "last_name": null,
+            "name": "Ada Lovelace",
+            "updated_at": "<ts:fresh>"
+          },
+          "after": {
+            "clerk_id": "e2e_<user:ada>",
+            "created_at": "<ts:4>",
+            "deleted_at": null,
+            "email": "ada@e2e.test",
+            "first_name": null,
+            "id": "<user:ada>",
+            "last_name": null,
+            "name": "Ada Lovelace",
+            "updated_at": "<ts:fresh>"
+          }
+        }
+      ]
+    },
+    {
+      "label": "before decline: messages as ada@e2e.test",
+      "status": 200,
+      "body": {
+        "data": {
+          "hasMore": false,
+          "messages": [
+            {
+              "content": "Hi, I'm having issues with my partner.",
+              "id": "<message:ada@main#1>",
+              "refiningNeedId": null,
+              "role": "USER",
+              "senderId": "<user:ada>",
+              "sessionId": "<session:main>",
+              "stage": 0,
+              "timestamp": "<ts:1>"
+            },
+            {
+              "content": "I'm glad you reached out. Tell me more about what's happening.",
+              "id": "<message:ada@main#2>",
+              "refiningNeedId": null,
+              "role": "AI",
+              "senderId": null,
+              "sessionId": "<session:main>",
+              "stage": 0,
+              "timestamp": "<ts:2>"
+            },
+            {
+              "content": "We argue about household chores constantly.",
+              "id": "<message:ada@main#3>",
+              "refiningNeedId": null,
+              "role": "USER",
+              "senderId": "<user:ada>",
+              "sessionId": "<session:main>",
+              "stage": 1,
+              "timestamp": "<ts:3>"
+            },
+            {
+              "content": "That sounds frustrating. Would you like to invite your partner?",
+              "id": "<message:ada@main#4>",
+              "refiningNeedId": null,
+              "role": "AI",
+              "senderId": null,
+              "sessionId": "<session:main>",
+              "stage": 1,
+              "timestamp": "<ts:4>"
+            },
+            {
+              "content": "Yes, I sent the invitation.",
+              "id": "<message:ada@main#5>",
+              "refiningNeedId": null,
+              "role": "USER",
+              "senderId": "<user:ada>",
+              "sessionId": "<session:main>",
+              "stage": 1,
+              "timestamp": "<ts:5>"
+            },
+            {
+              "content": "Great. Let's continue exploring your perspective while we wait.",
+              "id": "<message:ada@main#6>",
+              "refiningNeedId": null,
+              "role": "AI",
+              "senderId": null,
+              "sessionId": "<session:main>",
+              "stage": 1,
+              "timestamp": "<ts:6>"
+            },
+            {
+              "content": "I feel like I do most of the work and they don't notice.",
+              "id": "<message:ada@main#7>",
+              "refiningNeedId": null,
+              "role": "USER",
+              "senderId": "<user:ada>",
+              "sessionId": "<session:main>",
+              "stage": 1,
+              "timestamp": "<ts:7>"
+            },
+            {
+              "content": "I hear you. Do you feel like I understand what you've been experiencing?",
+              "id": "<message:ada@main#8>",
+              "refiningNeedId": null,
+              "role": "AI",
+              "senderId": null,
+              "sessionId": "<session:main>",
+              "stage": 1,
+              "timestamp": "<ts:8>"
+            },
+            {
+              "content": "Yes, I feel heard now.",
+              "id": "<message:ada@main#9>",
+              "refiningNeedId": null,
+              "role": "USER",
+              "senderId": "<user:ada>",
+              "sessionId": "<session:main>",
+              "stage": 1,
+              "timestamp": "<ts:9>"
+            },
+            {
+              "content": "I'm glad. Now let's build some empathy for your partner's perspective.",
+              "id": "<message:ada@main#10>",
+              "refiningNeedId": null,
+              "role": "AI",
+              "senderId": null,
+              "sessionId": "<session:main>",
+              "stage": 2,
+              "timestamp": "<ts:10>"
+            },
+            {
+              "content": "I think they're stressed from work too.",
+              "id": "<message:ada@main#11>",
+              "refiningNeedId": null,
+              "role": "USER",
+              "senderId": "<user:ada>",
+              "sessionId": "<session:main>",
+              "stage": 2,
+              "timestamp": "<ts:11>"
+            },
+            {
+              "content": "That's a thoughtful observation. Here's an empathy statement you could share...",
+              "id": "<message:ada@main#12>",
+              "refiningNeedId": null,
+              "role": "AI",
+              "senderId": null,
+              "sessionId": "<session:main>",
+              "stage": 2,
+              "timestamp": "<ts:12>"
+            },
+            {
+              "content": "I understand you might be feeling stressed from work. I want us to support each other better.",
+              "id": "<message:ada@main/EMPATHY_STATEMENT:ada#1>",
+              "refiningNeedId": null,
+              "role": "EMPATHY_STATEMENT",
+              "senderId": "<user:ada>",
+              "sessionId": "<session:main>",
+              "stage": 2,
+              "timestamp": "<ts:13>"
+            }
+          ]
+        },
+        "success": true
+      },
+      "changes": [
+        {
+          "view": "user",
+          "kind": "changed",
+          "key": "<user:ada>",
+          "changedFields": [
+            "updated_at"
+          ],
+          "before": {
+            "clerk_id": "e2e_<user:ada>",
+            "created_at": "<ts:14>",
+            "deleted_at": null,
+            "email": "ada@e2e.test",
+            "first_name": null,
+            "id": "<user:ada>",
+            "last_name": null,
+            "name": "Ada Lovelace",
+            "updated_at": "<ts:fresh>"
+          },
+          "after": {
+            "clerk_id": "e2e_<user:ada>",
+            "created_at": "<ts:14>",
+            "deleted_at": null,
+            "email": "ada@e2e.test",
+            "first_name": null,
+            "id": "<user:ada>",
+            "last_name": null,
+            "name": "Ada Lovelace",
+            "updated_at": "<ts:fresh>"
+          }
+        }
+      ]
+    },
+    {
+      "label": "before decline: emotions as ada@e2e.test",
+      "status": 200,
+      "body": {
+        "data": {
+          "readings": []
+        },
+        "success": true
+      },
+      "changes": [
+        {
+          "view": "user",
+          "kind": "changed",
+          "key": "<user:ada>",
+          "changedFields": [
+            "updated_at"
+          ],
+          "before": {
+            "clerk_id": "e2e_<user:ada>",
+            "created_at": "<ts:1>",
+            "deleted_at": null,
+            "email": "ada@e2e.test",
+            "first_name": null,
+            "id": "<user:ada>",
+            "last_name": null,
+            "name": "Ada Lovelace",
+            "updated_at": "<ts:fresh>"
+          },
+          "after": {
+            "clerk_id": "e2e_<user:ada>",
+            "created_at": "<ts:1>",
+            "deleted_at": null,
+            "email": "ada@e2e.test",
+            "first_name": null,
+            "id": "<user:ada>",
+            "last_name": null,
+            "name": "Ada Lovelace",
+            "updated_at": "<ts:fresh>"
+          }
+        }
+      ]
+    },
+    {
+      "label": "before decline: pending actions as ada@e2e.test",
+      "status": 200,
+      "body": {
+        "data": {
+          "actions": [],
+          "sentTabUpdates": 0
+        },
+        "success": true
+      },
+      "changes": [
+        {
+          "view": "user",
+          "kind": "changed",
+          "key": "<user:ada>",
+          "changedFields": [
+            "updated_at"
+          ],
+          "before": {
+            "clerk_id": "e2e_<user:ada>",
+            "created_at": "<ts:1>",
+            "deleted_at": null,
+            "email": "ada@e2e.test",
+            "first_name": null,
+            "id": "<user:ada>",
+            "last_name": null,
+            "name": "Ada Lovelace",
+            "updated_at": "<ts:fresh>"
+          },
+          "after": {
+            "clerk_id": "e2e_<user:ada>",
+            "created_at": "<ts:1>",
+            "deleted_at": null,
+            "email": "ada@e2e.test",
+            "first_name": null,
+            "id": "<user:ada>",
+            "last_name": null,
+            "name": "Ada Lovelace",
+            "updated_at": "<ts:fresh>"
+          }
+        }
+      ]
+    },
+    {
+      "label": "before decline: compact status as ada@e2e.test",
+      "status": 200,
+      "body": {
+        "data": {
+          "canAdvance": true,
+          "isFirstSession": true,
+          "mySigned": true,
+          "mySignedAt": null,
+          "partnerSigned": true,
+          "partnerSignedAt": null
+        },
+        "success": true
+      },
+      "changes": [
+        {
+          "view": "user",
+          "kind": "changed",
+          "key": "<user:ada>",
+          "changedFields": [
+            "updated_at"
+          ],
+          "before": {
+            "clerk_id": "e2e_<user:ada>",
+            "created_at": "<ts:1>",
+            "deleted_at": null,
+            "email": "ada@e2e.test",
+            "first_name": null,
+            "id": "<user:ada>",
+            "last_name": null,
+            "name": "Ada Lovelace",
+            "updated_at": "<ts:fresh>"
+          },
+          "after": {
+            "clerk_id": "e2e_<user:ada>",
+            "created_at": "<ts:1>",
+            "deleted_at": null,
+            "email": "ada@e2e.test",
+            "first_name": null,
+            "id": "<user:ada>",
+            "last_name": null,
+            "name": "Ada Lovelace",
+            "updated_at": "<ts:fresh>"
+          }
+        }
+      ]
+    },
+    {
+      "label": "before decline: empathy status as ada@e2e.test",
+      "status": 200,
+      "body": {
+        "data": {
+          "analyzing": false,
+          "awaitingSharing": true,
+          "hasNewSharedContext": false,
+          "hasUnviewedSharedContext": false,
+          "messageCountSinceSharedContext": 0,
+          "myAttempt": {
+            "consentRecordId": "",
+            "content": "I understand you might be feeling stressed from work. I want us to support each other better.",
+            "deliveryStatus": "pending",
+            "id": "<empathyAttempt:ada→bob@main#1>",
+            "revealedAt": null,
+            "revisionCount": 0,
+            "sharedAt": "<ts:1>",
+            "sourceUserId": "<user:ada>",
+            "status": "AWAITING_SHARING",
+            "validatedAt": null
+          },
+          "myReconcilerResult": {
+            "action": "OFFER_SHARING",
+            "analyzedAt": "<ts:3>",
+            "gapSeverity": "significant",
+            "gapSummary": "Ada Lovelace hasn't fully grasped the depth of Bob Ross's exhaustion and feeling unseen."
+          },
+          "mySharedAt": null,
+          "mySharedContext": null,
+          "partnerAttempt": null,
+          "partnerCompletedStage1": true,
+          "partnerEmpathyHeldStatus": "HELD",
+          "partnerEmpathySubmittedAt": "<ts:2>",
+          "partnerHasSubmittedEmpathy": true,
+          "readyForStage3": false,
+          "refinementHint": null,
+          "sharedContentDeliveryStatus": null,
+          "sharedContext": null
+        },
+        "success": true
+      },
+      "changes": [
+        {
+          "view": "user",
+          "kind": "changed",
+          "key": "<user:ada>",
+          "changedFields": [
+            "updated_at"
+          ],
+          "before": {
+            "clerk_id": "e2e_<user:ada>",
+            "created_at": "<ts:4>",
+            "deleted_at": null,
+            "email": "ada@e2e.test",
+            "first_name": null,
+            "id": "<user:ada>",
+            "last_name": null,
+            "name": "Ada Lovelace",
+            "updated_at": "<ts:fresh>"
+          },
+          "after": {
+            "clerk_id": "e2e_<user:ada>",
+            "created_at": "<ts:4>",
+            "deleted_at": null,
+            "email": "ada@e2e.test",
+            "first_name": null,
+            "id": "<user:ada>",
+            "last_name": null,
+            "name": "Ada Lovelace",
+            "updated_at": "<ts:fresh>"
+          }
+        }
+      ]
+    },
+    {
+      "label": "before decline: partner empathy as ada@e2e.test",
+      "status": 200,
+      "body": {
+        "data": {
+          "attempt": null,
+          "awaitingRevision": false,
+          "partnerStatus": "HELD",
+          "validated": false,
+          "validatedAt": null,
+          "waitingForPartner": true
+        },
+        "success": true
+      },
+      "changes": [
+        {
+          "view": "user",
+          "kind": "changed",
+          "key": "<user:ada>",
+          "changedFields": [
+            "updated_at"
+          ],
+          "before": {
+            "clerk_id": "e2e_<user:ada>",
+            "created_at": "<ts:1>",
+            "deleted_at": null,
+            "email": "ada@e2e.test",
+            "first_name": null,
+            "id": "<user:ada>",
+            "last_name": null,
+            "name": "Ada Lovelace",
+            "updated_at": "<ts:fresh>"
+          },
+          "after": {
+            "clerk_id": "e2e_<user:ada>",
+            "created_at": "<ts:1>",
+            "deleted_at": null,
+            "email": "ada@e2e.test",
+            "first_name": null,
+            "id": "<user:ada>",
+            "last_name": null,
+            "name": "Ada Lovelace",
+            "updated_at": "<ts:fresh>"
+          }
+        }
+      ]
+    },
+    {
+      "label": "before decline: empathy draft as ada@e2e.test",
+      "status": 200,
+      "body": {
+        "data": {
+          "alreadyConsented": true,
+          "canConsent": false,
+          "draft": {
+            "content": "I understand you might be feeling stressed from work. I want us to support each other better.",
+            "id": "<draft:ada@main/EMPATHY>",
+            "readyToShare": true,
+            "updatedAt": "<ts:2>",
+            "version": 1
+          }
+        },
+        "success": true
+      },
+      "changes": [
+        {
+          "view": "user",
+          "kind": "changed",
+          "key": "<user:ada>",
+          "changedFields": [
+            "updated_at"
+          ],
+          "before": {
+            "clerk_id": "e2e_<user:ada>",
+            "created_at": "<ts:1>",
+            "deleted_at": null,
+            "email": "ada@e2e.test",
+            "first_name": null,
+            "id": "<user:ada>",
+            "last_name": null,
+            "name": "Ada Lovelace",
+            "updated_at": "<ts:fresh>"
+          },
+          "after": {
+            "clerk_id": "e2e_<user:ada>",
+            "created_at": "<ts:1>",
+            "deleted_at": null,
+            "email": "ada@e2e.test",
+            "first_name": null,
+            "id": "<user:ada>",
+            "last_name": null,
+            "name": "Ada Lovelace",
+            "updated_at": "<ts:fresh>"
+          }
+        }
+      ]
+    },
+    {
+      "label": "before decline: share suggestion as ada@e2e.test",
+      "status": 200,
+      "body": {
+        "data": {
+          "hasSuggestion": false,
+          "suggestion": null
+        },
+        "success": true
+      },
+      "changes": [
+        {
+          "view": "user",
+          "kind": "changed",
+          "key": "<user:ada>",
+          "changedFields": [
+            "updated_at"
+          ],
+          "before": {
+            "clerk_id": "e2e_<user:ada>",
+            "created_at": "<ts:1>",
+            "deleted_at": null,
+            "email": "ada@e2e.test",
+            "first_name": null,
+            "id": "<user:ada>",
+            "last_name": null,
+            "name": "Ada Lovelace",
+            "updated_at": "<ts:fresh>"
+          },
+          "after": {
+            "clerk_id": "e2e_<user:ada>",
+            "created_at": "<ts:1>",
+            "deleted_at": null,
+            "email": "ada@e2e.test",
+            "first_name": null,
+            "id": "<user:ada>",
+            "last_name": null,
+            "name": "Ada Lovelace",
+            "updated_at": "<ts:fresh>"
+          }
+        }
+      ]
+    },
+    {
+      "label": "before decline: reconciler status as ada@e2e.test",
+      "status": 200,
+      "body": {
+        "data": {
+          "aUnderstandingB": {
+            "analyzedAt": "<ts:fresh>",
+            "guesserId": "",
+            "guesserName": "",
+            "result": {
+              "abstractGuidance": {
+                "areaHint": null,
+                "guidanceType": null,
+                "promptSeed": null
+              },
+              "alignment": {
+                "correctlyIdentified": [
+                  "stress",
+                  "work pressure"
+                ],
+                "score": 45,
+                "summary": "Ada Lovelace's empathy attempt captures some elements but misses key aspects of Bob Ross's experience."
+              },
+              "gaps": {
+                "misattributions": [],
+                "missedFeelings": [
+                  "exhaustion",
+                  "feeling unseen",
+                  "overwhelm"
+                ],
+                "mostImportantGap": "Bob Ross feels exhausted and unseen, not just stressed.",
+                "severity": "significant",
+                "summary": "Ada Lovelace hasn't fully grasped the depth of Bob Ross's exhaustion and feeling unseen."
+              },
+              "recommendation": {
+                "action": "OFFER_SHARING",
+                "rationale": "Sharing specific context would help Ada Lovelace understand Bob Ross's perspective better.",
+                "sharingWouldHelp": true,
+                "suggestedShareFocus": "The exhaustion from work and feeling unseen."
+              }
+            },
+            "shareOfferStatus": "NOT_OFFERED",
+            "subjectId": "",
+            "subjectName": ""
+          },
+          "bUnderstandingA": null,
+          "hasRun": true,
+          "pendingShareOffers": 1,
+          "readyForStage3": false,
+          "sessionId": "<session:main>"
+        },
+        "success": true
+      },
+      "changes": [
+        {
+          "view": "user",
+          "kind": "changed",
+          "key": "<user:ada>",
+          "changedFields": [
+            "updated_at"
+          ],
+          "before": {
+            "clerk_id": "e2e_<user:ada>",
+            "created_at": "<ts:1>",
+            "deleted_at": null,
+            "email": "ada@e2e.test",
+            "first_name": null,
+            "id": "<user:ada>",
+            "last_name": null,
+            "name": "Ada Lovelace",
+            "updated_at": "<ts:fresh>"
+          },
+          "after": {
+            "clerk_id": "e2e_<user:ada>",
+            "created_at": "<ts:1>",
+            "deleted_at": null,
+            "email": "ada@e2e.test",
+            "first_name": null,
+            "id": "<user:ada>",
+            "last_name": null,
+            "name": "Ada Lovelace",
+            "updated_at": "<ts:fresh>"
+          }
+        }
+      ]
+    },
+    {
+      "label": "before decline: share offer as ada@e2e.test",
+      "status": 200,
+      "body": {
+        "data": {
+          "hasSuggestion": false,
+          "suggestion": null
+        },
+        "success": true
+      },
+      "changes": [
+        {
+          "view": "user",
+          "kind": "changed",
+          "key": "<user:ada>",
+          "changedFields": [
+            "updated_at"
+          ],
+          "before": {
+            "clerk_id": "e2e_<user:ada>",
+            "created_at": "<ts:1>",
+            "deleted_at": null,
+            "email": "ada@e2e.test",
+            "first_name": null,
+            "id": "<user:ada>",
+            "last_name": null,
+            "name": "Ada Lovelace",
+            "updated_at": "<ts:fresh>"
+          },
+          "after": {
+            "clerk_id": "e2e_<user:ada>",
+            "created_at": "<ts:1>",
+            "deleted_at": null,
+            "email": "ada@e2e.test",
+            "first_name": null,
+            "id": "<user:ada>",
+            "last_name": null,
+            "name": "Ada Lovelace",
+            "updated_at": "<ts:fresh>"
+          }
+        }
+      ]
+    },
+    {
+      "label": "before decline: reconciler summary as ada@e2e.test",
+      "status": 400,
+      "body": {
+        "error": {
+          "code": "VALIDATION_ERROR",
+          "message": "Reconciliation not yet complete - pending share offers"
+        },
+        "success": false
+      },
+      "changes": [
+        {
+          "view": "user",
+          "kind": "changed",
+          "key": "<user:ada>",
+          "changedFields": [
+            "updated_at"
+          ],
+          "before": {
+            "clerk_id": "e2e_<user:ada>",
+            "created_at": "<ts:1>",
+            "deleted_at": null,
+            "email": "ada@e2e.test",
+            "first_name": null,
+            "id": "<user:ada>",
+            "last_name": null,
+            "name": "Ada Lovelace",
+            "updated_at": "<ts:fresh>"
+          },
+          "after": {
+            "clerk_id": "e2e_<user:ada>",
+            "created_at": "<ts:1>",
+            "deleted_at": null,
+            "email": "ada@e2e.test",
+            "first_name": null,
+            "id": "<user:ada>",
+            "last_name": null,
+            "name": "Ada Lovelace",
+            "updated_at": "<ts:fresh>"
+          }
+        }
+      ]
+    },
+    {
+      "label": "before decline: pending consent as ada@e2e.test",
+      "status": 200,
+      "body": {
+        "data": {
+          "pendingRequests": []
+        },
+        "success": true
+      },
+      "changes": [
+        {
+          "view": "user",
+          "kind": "changed",
+          "key": "<user:ada>",
+          "changedFields": [
+            "updated_at"
+          ],
+          "before": {
+            "clerk_id": "e2e_<user:ada>",
+            "created_at": "<ts:1>",
+            "deleted_at": null,
+            "email": "ada@e2e.test",
+            "first_name": null,
+            "id": "<user:ada>",
+            "last_name": null,
+            "name": "Ada Lovelace",
+            "updated_at": "<ts:fresh>"
+          },
+          "after": {
+            "clerk_id": "e2e_<user:ada>",
+            "created_at": "<ts:1>",
+            "deleted_at": null,
+            "email": "ada@e2e.test",
+            "first_name": null,
+            "id": "<user:ada>",
+            "last_name": null,
+            "name": "Ada Lovelace",
+            "updated_at": "<ts:fresh>"
+          }
+        }
+      ]
+    },
+    {
+      "label": "before decline: consent history as ada@e2e.test",
+      "status": 200,
+      "body": {
+        "data": {
+          "records": [
+            {
+              "contentType": "EMPATHY_DRAFT",
+              "createdAt": "<ts:3>",
+              "decidedAt": "<ts:1>",
+              "decision": "GRANTED",
+              "id": "<consent:ada@main/EMPATHY_ATTEMPT/empathyAttempt:ada→bob@main#1>",
+              "revokedAt": null,
+              "targetId": "<draft:ada@main/EMPATHY>"
+            }
+          ]
+        },
+        "success": true
+      },
+      "changes": [
+        {
+          "view": "user",
+          "kind": "changed",
+          "key": "<user:ada>",
+          "changedFields": [
+            "updated_at"
+          ],
+          "before": {
+            "clerk_id": "e2e_<user:ada>",
+            "created_at": "<ts:2>",
+            "deleted_at": null,
+            "email": "ada@e2e.test",
+            "first_name": null,
+            "id": "<user:ada>",
+            "last_name": null,
+            "name": "Ada Lovelace",
+            "updated_at": "<ts:fresh>"
+          },
+          "after": {
+            "clerk_id": "e2e_<user:ada>",
+            "created_at": "<ts:2>",
+            "deleted_at": null,
+            "email": "ada@e2e.test",
+            "first_name": null,
+            "id": "<user:ada>",
+            "last_name": null,
+            "name": "Ada Lovelace",
+            "updated_at": "<ts:fresh>"
+          }
+        }
+      ]
+    },
+    {
+      "label": "before decline: needs as ada@e2e.test",
+      "status": 200,
+      "body": {
+        "data": {
+          "isDirty": false,
+          "needs": [],
+          "synthesizedAt": null
+        },
+        "success": true
+      },
+      "changes": [
+        {
+          "view": "user",
+          "kind": "changed",
+          "key": "<user:ada>",
+          "changedFields": [
+            "updated_at"
+          ],
+          "before": {
+            "clerk_id": "e2e_<user:ada>",
+            "created_at": "<ts:1>",
+            "deleted_at": null,
+            "email": "ada@e2e.test",
+            "first_name": null,
+            "id": "<user:ada>",
+            "last_name": null,
+            "name": "Ada Lovelace",
+            "updated_at": "<ts:fresh>"
+          },
+          "after": {
+            "clerk_id": "e2e_<user:ada>",
+            "created_at": "<ts:1>",
+            "deleted_at": null,
+            "email": "ada@e2e.test",
+            "first_name": null,
+            "id": "<user:ada>",
+            "last_name": null,
+            "name": "Ada Lovelace",
+            "updated_at": "<ts:fresh>"
+          }
+        }
+      ]
+    },
+    {
+      "label": "before decline: needs comparison as ada@e2e.test",
+      "status": 200,
+      "body": {
+        "data": {
+          "analysisComplete": false,
+          "commonGround": [],
+          "myNeeds": [],
+          "noOverlap": false,
+          "partnerNeeds": []
+        },
+        "success": true
+      },
+      "changes": [
+        {
+          "view": "user",
+          "kind": "changed",
+          "key": "<user:ada>",
+          "changedFields": [
+            "updated_at"
+          ],
+          "before": {
+            "clerk_id": "e2e_<user:ada>",
+            "created_at": "<ts:1>",
+            "deleted_at": null,
+            "email": "ada@e2e.test",
+            "first_name": null,
+            "id": "<user:ada>",
+            "last_name": null,
+            "name": "Ada Lovelace",
+            "updated_at": "<ts:fresh>"
+          },
+          "after": {
+            "clerk_id": "e2e_<user:ada>",
+            "created_at": "<ts:1>",
+            "deleted_at": null,
+            "email": "ada@e2e.test",
+            "first_name": null,
+            "id": "<user:ada>",
+            "last_name": null,
+            "name": "Ada Lovelace",
+            "updated_at": "<ts:fresh>"
+          }
+        }
+      ]
+    },
+    {
+      "label": "before decline: stage4 as ada@e2e.test",
+      "status": 200,
+      "body": {
+        "data": {
+          "coverageAudit": {
+            "covered": [],
+            "open": [],
+            "partial": [],
+            "updatedAt": null
+          },
+          "inventory": {
+            "individualCommitments": [],
+            "removedProposalCount": 0,
+            "sharedProposals": [],
+            "unaddressedNeeds": [],
+            "updatedAt": "<ts:1>"
+          },
+          "mySelectionStatus": "NOT_STARTED",
+          "mySelections": [],
+          "outcome": null,
+          "partnerSelectionStatus": "NOT_STARTED",
+          "partnerSelections": [],
+          "phase": "INVENTORY_BUILDING",
+          "tendingPreview": null,
+          "walkthrough": {
+            "currentIndex": 0,
+            "currentNeed": null,
+            "defaultCheckInDate": "2026-10-31",
+            "ownNeeds": [],
+            "partnerNeeds": [],
+            "phase": "QUALITY_REVIEW",
+            "proposalGroups": [
+              {
+                "key": "you_suggested",
+                "proposals": [],
+                "readOnly": false,
+                "title": "Options you suggested"
+              },
+              {
+                "key": "partner_suggested",
+                "proposals": [],
+                "readOnly": false,
+                "title": "Options your partner suggested"
+              },
+              {
+                "key": "ai_suggested",
+                "proposals": [],
+                "readOnly": false,
+                "title": "MWF ideas"
+              }
+            ],
+            "qualityWarnings": [],
+            "totalInPhase": 0
+          }
+        },
+        "success": true
+      },
+      "changes": [
+        {
+          "view": "user",
+          "kind": "changed",
+          "key": "<user:ada>",
+          "changedFields": [
+            "updated_at"
+          ],
+          "before": {
+            "clerk_id": "e2e_<user:ada>",
+            "created_at": "<ts:2>",
+            "deleted_at": null,
+            "email": "ada@e2e.test",
+            "first_name": null,
+            "id": "<user:ada>",
+            "last_name": null,
+            "name": "Ada Lovelace",
+            "updated_at": "<ts:fresh>"
+          },
+          "after": {
+            "clerk_id": "e2e_<user:ada>",
+            "created_at": "<ts:2>",
+            "deleted_at": null,
+            "email": "ada@e2e.test",
+            "first_name": null,
+            "id": "<user:ada>",
+            "last_name": null,
+            "name": "Ada Lovelace",
+            "updated_at": "<ts:fresh>"
+          }
+        }
+      ]
+    },
+    {
+      "label": "before decline: strategies as ada@e2e.test",
+      "status": 200,
+      "body": {
+        "data": {
+          "aiSuggestionsAvailable": false,
+          "canMarkReadyToRank": false,
+          "canRank": false,
+          "myReadyToRank": false,
+          "partnerReadyToRank": false,
+          "phase": "COLLECTING",
+          "rankableStrategyCount": 0,
+          "strategies": []
+        },
+        "success": true
+      },
+      "changes": [
+        {
+          "view": "user",
+          "kind": "changed",
+          "key": "<user:ada>",
+          "changedFields": [
+            "updated_at"
+          ],
+          "before": {
+            "clerk_id": "e2e_<user:ada>",
+            "created_at": "<ts:1>",
+            "deleted_at": null,
+            "email": "ada@e2e.test",
+            "first_name": null,
+            "id": "<user:ada>",
+            "last_name": null,
+            "name": "Ada Lovelace",
+            "updated_at": "<ts:fresh>"
+          },
+          "after": {
+            "clerk_id": "e2e_<user:ada>",
+            "created_at": "<ts:1>",
+            "deleted_at": null,
+            "email": "ada@e2e.test",
+            "first_name": null,
+            "id": "<user:ada>",
+            "last_name": null,
+            "name": "Ada Lovelace",
+            "updated_at": "<ts:fresh>"
+          }
+        }
+      ]
+    },
+    {
+      "label": "before decline: agreements as ada@e2e.test",
+      "status": 200,
+      "body": {
+        "data": {
+          "agreements": []
+        },
+        "success": true
+      },
+      "changes": [
+        {
+          "view": "user",
+          "kind": "changed",
+          "key": "<user:ada>",
+          "changedFields": [
+            "updated_at"
+          ],
+          "before": {
+            "clerk_id": "e2e_<user:ada>",
+            "created_at": "<ts:1>",
+            "deleted_at": null,
+            "email": "ada@e2e.test",
+            "first_name": null,
+            "id": "<user:ada>",
+            "last_name": null,
+            "name": "Ada Lovelace",
+            "updated_at": "<ts:fresh>"
+          },
+          "after": {
+            "clerk_id": "e2e_<user:ada>",
+            "created_at": "<ts:1>",
+            "deleted_at": null,
+            "email": "ada@e2e.test",
+            "first_name": null,
+            "id": "<user:ada>",
+            "last_name": null,
+            "name": "Ada Lovelace",
+            "updated_at": "<ts:fresh>"
+          }
+        }
+      ]
+    },
+    {
+      "label": "before decline: tending as ada@e2e.test",
+      "status": 200,
+      "body": {
+        "data": {
+          "betweenPeriodNotes": [],
+          "coordinationCycles": [],
+          "entries": []
+        },
+        "success": true
+      },
+      "changes": [
+        {
+          "view": "user",
+          "kind": "changed",
+          "key": "<user:ada>",
+          "changedFields": [
+            "updated_at"
+          ],
+          "before": {
+            "clerk_id": "e2e_<user:ada>",
+            "created_at": "<ts:1>",
+            "deleted_at": null,
+            "email": "ada@e2e.test",
+            "first_name": null,
+            "id": "<user:ada>",
+            "last_name": null,
+            "name": "Ada Lovelace",
+            "updated_at": "<ts:fresh>"
+          },
+          "after": {
+            "clerk_id": "e2e_<user:ada>",
+            "created_at": "<ts:1>",
+            "deleted_at": null,
+            "email": "ada@e2e.test",
+            "first_name": null,
+            "id": "<user:ada>",
+            "last_name": null,
+            "name": "Ada Lovelace",
+            "updated_at": "<ts:fresh>"
+          }
+        }
+      ]
+    },
+    {
+      "label": "before decline: tending history as ada@e2e.test",
+      "status": 200,
+      "body": {
+        "data": {
+          "cycles": []
+        },
+        "success": true
+      },
+      "changes": [
+        {
+          "view": "user",
+          "kind": "changed",
+          "key": "<user:ada>",
+          "changedFields": [
+            "updated_at"
+          ],
+          "before": {
+            "clerk_id": "e2e_<user:ada>",
+            "created_at": "<ts:1>",
+            "deleted_at": null,
+            "email": "ada@e2e.test",
+            "first_name": null,
+            "id": "<user:ada>",
+            "last_name": null,
+            "name": "Ada Lovelace",
+            "updated_at": "<ts:fresh>"
+          },
+          "after": {
+            "clerk_id": "e2e_<user:ada>",
+            "created_at": "<ts:1>",
+            "deleted_at": null,
+            "email": "ada@e2e.test",
+            "first_name": null,
+            "id": "<user:ada>",
+            "last_name": null,
+            "name": "Ada Lovelace",
+            "updated_at": "<ts:fresh>"
+          }
+        }
+      ]
+    },
+    {
+      "label": "before decline: inner thoughts as ada@e2e.test",
+      "status": 200,
+      "body": {
+        "data": {
+          "innerThoughtsSessionId": null
+        },
+        "success": true
+      },
+      "changes": [
+        {
+          "view": "user",
+          "kind": "changed",
+          "key": "<user:ada>",
+          "changedFields": [
+            "updated_at"
+          ],
+          "before": {
+            "clerk_id": "e2e_<user:ada>",
+            "created_at": "<ts:1>",
+            "deleted_at": null,
+            "email": "ada@e2e.test",
+            "first_name": null,
+            "id": "<user:ada>",
+            "last_name": null,
+            "name": "Ada Lovelace",
+            "updated_at": "<ts:fresh>"
+          },
+          "after": {
+            "clerk_id": "e2e_<user:ada>",
+            "created_at": "<ts:1>",
+            "deleted_at": null,
+            "email": "ada@e2e.test",
+            "first_name": null,
+            "id": "<user:ada>",
+            "last_name": null,
+            "name": "Ada Lovelace",
+            "updated_at": "<ts:fresh>"
+          }
+        }
+      ]
+    },
+    {
+      "label": "before decline: session list as ada@e2e.test",
+      "status": 200,
+      "body": {
+        "data": {
+          "hasMore": false,
+          "items": [
+            {
+              "createdAt": "<ts:4>",
+              "hasUnread": true,
+              "id": "<session:main>",
+              "lastSeenChatItemId": null,
+              "lastViewedAt": null,
+              "myProgress": {
+                "completedAt": null,
+                "stage": 2,
+                "startedAt": "<ts:1>",
+                "status": "IN_PROGRESS"
+              },
+              "partner": {
+                "id": "<user:bob>",
+                "name": "Bob Ross",
+                "nickname": "Bob Ross"
+              },
+              "partnerActionNeeded": [
+                "complete_stage"
+              ],
+              "partnerProgress": {
+                "completedAt": null,
+                "stage": 2,
+                "startedAt": "<ts:2>",
+                "status": "IN_PROGRESS"
+              },
+              "relationshipId": "<relationship:main>",
+              "selfActionNeeded": [],
+              "status": "ACTIVE",
+              "statusSummary": {
+                "partnerStatus": "Bob Ross is working on their perspective",
+                "userStatus": "You've shared your understanding"
+              },
+              "updatedAt": "<ts:4>"
+            }
+          ]
+        },
+        "success": true
+      },
+      "changes": [
+        {
+          "view": "user",
+          "kind": "changed",
+          "key": "<user:ada>",
+          "changedFields": [
+            "updated_at"
+          ],
+          "before": {
+            "clerk_id": "e2e_<user:ada>",
+            "created_at": "<ts:3>",
+            "deleted_at": null,
+            "email": "ada@e2e.test",
+            "first_name": null,
+            "id": "<user:ada>",
+            "last_name": null,
+            "name": "Ada Lovelace",
+            "updated_at": "<ts:fresh>"
+          },
+          "after": {
+            "clerk_id": "e2e_<user:ada>",
+            "created_at": "<ts:3>",
+            "deleted_at": null,
+            "email": "ada@e2e.test",
+            "first_name": null,
+            "id": "<user:ada>",
+            "last_name": null,
+            "name": "Ada Lovelace",
+            "updated_at": "<ts:fresh>"
+          }
+        }
+      ]
+    },
+    {
+      "label": "before decline: badge count as ada@e2e.test",
+      "status": 200,
+      "body": {
+        "data": {
+          "bySession": {},
+          "count": 0
+        },
+        "success": true
+      },
+      "changes": [
+        {
+          "view": "user",
+          "kind": "changed",
+          "key": "<user:ada>",
+          "changedFields": [
+            "updated_at"
+          ],
+          "before": {
+            "clerk_id": "e2e_<user:ada>",
+            "created_at": "<ts:1>",
+            "deleted_at": null,
+            "email": "ada@e2e.test",
+            "first_name": null,
+            "id": "<user:ada>",
+            "last_name": null,
+            "name": "Ada Lovelace",
+            "updated_at": "<ts:fresh>"
+          },
+          "after": {
+            "clerk_id": "e2e_<user:ada>",
+            "created_at": "<ts:1>",
+            "deleted_at": null,
+            "email": "ada@e2e.test",
+            "first_name": null,
+            "id": "<user:ada>",
+            "last_name": null,
+            "name": "Ada Lovelace",
+            "updated_at": "<ts:fresh>"
+          }
+        }
+      ]
+    },
+    {
+      "label": "before decline: inner thoughts list as ada@e2e.test",
+      "status": 200,
+      "body": {
+        "data": {
+          "hasMore": false,
+          "sessions": [],
+          "total": 0
+        },
+        "success": true
+      },
+      "changes": [
+        {
+          "view": "user",
+          "kind": "changed",
+          "key": "<user:ada>",
+          "changedFields": [
+            "updated_at"
+          ],
+          "before": {
+            "clerk_id": "e2e_<user:ada>",
+            "created_at": "<ts:1>",
+            "deleted_at": null,
+            "email": "ada@e2e.test",
+            "first_name": null,
+            "id": "<user:ada>",
+            "last_name": null,
+            "name": "Ada Lovelace",
+            "updated_at": "<ts:fresh>"
+          },
+          "after": {
+            "clerk_id": "e2e_<user:ada>",
+            "created_at": "<ts:1>",
+            "deleted_at": null,
+            "email": "ada@e2e.test",
+            "first_name": null,
+            "id": "<user:ada>",
+            "last_name": null,
+            "name": "Ada Lovelace",
+            "updated_at": "<ts:fresh>"
+          }
+        }
+      ]
+    },
+    {
+      "label": "before decline: inner work list as ada@e2e.test",
+      "status": 200,
+      "body": {
+        "data": {
+          "hasMore": false,
+          "sessions": [],
+          "total": 0
+        },
+        "success": true
+      },
+      "changes": [
+        {
+          "view": "user",
+          "kind": "changed",
+          "key": "<user:ada>",
+          "changedFields": [
+            "updated_at"
+          ],
+          "before": {
+            "clerk_id": "e2e_<user:ada>",
+            "created_at": "<ts:1>",
+            "deleted_at": null,
+            "email": "ada@e2e.test",
+            "first_name": null,
+            "id": "<user:ada>",
+            "last_name": null,
+            "name": "Ada Lovelace",
+            "updated_at": "<ts:fresh>"
+          },
+          "after": {
+            "clerk_id": "e2e_<user:ada>",
+            "created_at": "<ts:1>",
+            "deleted_at": null,
+            "email": "ada@e2e.test",
+            "first_name": null,
+            "id": "<user:ada>",
+            "last_name": null,
+            "name": "Ada Lovelace",
+            "updated_at": "<ts:fresh>"
+          }
+        }
+      ]
+    },
+    {
+      "label": "before decline: knowledge base recent as ada@e2e.test",
+      "status": 200,
+      "body": {
+        "data": {
+          "takeaways": []
+        },
+        "success": true
+      },
+      "changes": [
+        {
+          "view": "user",
+          "kind": "changed",
+          "key": "<user:ada>",
+          "changedFields": [
+            "updated_at"
+          ],
+          "before": {
+            "clerk_id": "e2e_<user:ada>",
+            "created_at": "<ts:1>",
+            "deleted_at": null,
+            "email": "ada@e2e.test",
+            "first_name": null,
+            "id": "<user:ada>",
+            "last_name": null,
+            "name": "Ada Lovelace",
+            "updated_at": "<ts:fresh>"
+          },
+          "after": {
+            "clerk_id": "e2e_<user:ada>",
+            "created_at": "<ts:1>",
+            "deleted_at": null,
+            "email": "ada@e2e.test",
+            "first_name": null,
+            "id": "<user:ada>",
+            "last_name": null,
+            "name": "Ada Lovelace",
+            "updated_at": "<ts:fresh>"
+          }
+        }
+      ]
+    },
+    {
+      "label": "before decline: knowledge base themes as ada@e2e.test",
+      "status": 200,
+      "body": {
+        "data": {
+          "themes": []
+        },
+        "success": true
+      },
+      "changes": [
+        {
+          "view": "user",
+          "kind": "changed",
+          "key": "<user:ada>",
+          "changedFields": [
+            "updated_at"
+          ],
+          "before": {
+            "clerk_id": "e2e_<user:ada>",
+            "created_at": "<ts:1>",
+            "deleted_at": null,
+            "email": "ada@e2e.test",
+            "first_name": null,
+            "id": "<user:ada>",
+            "last_name": null,
+            "name": "Ada Lovelace",
+            "updated_at": "<ts:fresh>"
+          },
+          "after": {
+            "clerk_id": "e2e_<user:ada>",
+            "created_at": "<ts:1>",
+            "deleted_at": null,
+            "email": "ada@e2e.test",
+            "first_name": null,
+            "id": "<user:ada>",
+            "last_name": null,
+            "name": "Ada Lovelace",
+            "updated_at": "<ts:fresh>"
+          }
+        }
+      ]
+    },
+    {
+      "label": "before decline: people as ada@e2e.test",
+      "status": 200,
+      "body": {
+        "data": {
+          "people": [
+            {
+              "activeSessionCount": 1,
+              "connectedSince": "<ts:2>",
+              "id": "<user:bob>",
+              "initials": "BR",
+              "lastSession": {
+                "id": "<session:main>",
+                "status": "ACTIVE",
+                "updatedAt": "<ts:3>"
+              },
+              "name": "Bob Ross",
+              "nickname": "Bob Ross",
+              "relationshipId": "<relationship:main>"
+            }
+          ]
+        },
+        "success": true
+      },
+      "changes": [
+        {
+          "view": "user",
+          "kind": "changed",
+          "key": "<user:ada>",
+          "changedFields": [
+            "updated_at"
+          ],
+          "before": {
+            "clerk_id": "e2e_<user:ada>",
+            "created_at": "<ts:1>",
+            "deleted_at": null,
+            "email": "ada@e2e.test",
+            "first_name": null,
+            "id": "<user:ada>",
+            "last_name": null,
+            "name": "Ada Lovelace",
+            "updated_at": "<ts:fresh>"
+          },
+          "after": {
+            "clerk_id": "e2e_<user:ada>",
+            "created_at": "<ts:1>",
+            "deleted_at": null,
+            "email": "ada@e2e.test",
+            "first_name": null,
+            "id": "<user:ada>",
+            "last_name": null,
+            "name": "Ada Lovelace",
+            "updated_at": "<ts:fresh>"
+          }
+        }
+      ]
+    },
+    {
+      "label": "decline share as bob",
+      "status": 200,
+      "body": {
+        "data": {
+          "guesserUpdated": true,
+          "sharedContent": null,
+          "status": "declined"
+        },
+        "success": true
+      },
+      "changes": [
+        {
+          "view": "context_share_offer",
+          "kind": "changed",
+          "key": "<shareOffer:ada→bob@main#1/i1>",
+          "changedFields": [
+            "declined_at",
+            "status",
+            "updated_at"
+          ],
+          "before": {
+            "attempt_id": "<empathyAttempt:ada→bob@main#1>",
+            "created_at": "<ts:3>",
+            "declined_at": null,
+            "delivered_at": null,
+            "delivery_notified_at": null,
+            "delivery_status": "PENDING",
+            "id": "<shareOffer:ada→bob@main#1/i1>",
+            "iteration": 1,
+            "offer_message": null,
+            "result_id": "<reconcilerResult:ada→bob@main#1/i1>",
+            "seen_at": null,
+            "seen_notified_at": null,
+            "shared_at": null,
+            "shared_content": null,
+            "status": "OFFERED",
+            "subject_participant_id": "<participant:bob@main>",
+            "suggested_content": "I feel like I'm running on empty - exhausted from work every day, and then coming home to more tasks. What I really need is for someone to see how hard I'm trying, even when I don't have anything left to give.",
+            "suggested_reason": "This helps Ada Lovelace understand that Bob Ross's frustration comes from exhaustion and feeling unseen, not anger or blame.",
+            "updated_at": "<ts:3>"
+          },
+          "after": {
+            "attempt_id": "<empathyAttempt:ada→bob@main#1>",
+            "created_at": "<ts:3>",
+            "declined_at": "<ts:fresh>",
+            "delivered_at": null,
+            "delivery_notified_at": null,
+            "delivery_status": "PENDING",
+            "id": "<shareOffer:ada→bob@main#1/i1>",
+            "iteration": 1,
+            "offer_message": null,
+            "result_id": "<reconcilerResult:ada→bob@main#1/i1>",
+            "seen_at": null,
+            "seen_notified_at": null,
+            "shared_at": null,
+            "shared_content": null,
+            "status": "DECLINED",
+            "subject_participant_id": "<participant:bob@main>",
+            "suggested_content": "I feel like I'm running on empty - exhausted from work every day, and then coming home to more tasks. What I really need is for someone to see how hard I'm trying, even when I don't have anything left to give.",
+            "suggested_reason": "This helps Ada Lovelace understand that Bob Ross's frustration comes from exhaustion and feeling unseen, not anger or blame.",
+            "updated_at": "<ts:fresh>"
+          }
+        },
+        {
+          "view": "empathy_attempt",
+          "kind": "changed",
+          "key": "<empathyAttempt:ada→bob@main#1>",
+          "changedFields": [
+            "status",
+            "status_version"
+          ],
+          "before": {
+            "author_participant_id": "<participant:ada@main>",
+            "content": "I understand you might be feeling stressed from work. I want us to support each other better.",
+            "delivered_at": null,
+            "delivery_status": "PENDING",
+            "id": "<empathyAttempt:ada→bob@main#1>",
+            "revealed_at": null,
+            "round": 1,
+            "seen_at": null,
+            "status": "AWAITING_SHARING",
+            "status_version": 0,
+            "subject_participant_id": "<participant:bob@main>",
+            "submitted_at": "<ts:1>",
+            "supersedes_attempt_id": null
+          },
+          "after": {
+            "author_participant_id": "<participant:ada@main>",
+            "content": "I understand you might be feeling stressed from work. I want us to support each other better.",
+            "delivered_at": null,
+            "delivery_status": "PENDING",
+            "id": "<empathyAttempt:ada→bob@main#1>",
+            "revealed_at": null,
+            "round": 1,
+            "seen_at": null,
+            "status": "READY",
+            "status_version": 1,
+            "subject_participant_id": "<participant:bob@main>",
+            "submitted_at": "<ts:1>",
+            "supersedes_attempt_id": null
+          }
+        },
+        {
+          "view": "user",
+          "kind": "changed",
+          "key": "<user:bob>",
+          "changedFields": [
+            "clerk_id",
+            "updated_at"
+          ],
+          "before": {
+            "clerk_id": "<clerkId:bob>",
+            "created_at": "<ts:2>",
+            "deleted_at": null,
+            "email": "bob@e2e.test",
+            "first_name": null,
+            "id": "<user:bob>",
+            "last_name": null,
+            "name": "Bob Ross",
+            "updated_at": "<ts:2>"
+          },
+          "after": {
+            "clerk_id": "e2e_<user:bob>",
+            "created_at": "<ts:2>",
+            "deleted_at": null,
+            "email": "bob@e2e.test",
+            "first_name": null,
+            "id": "<user:bob>",
+            "last_name": null,
+            "name": "Bob Ross",
+            "updated_at": "<ts:fresh>"
+          }
+        }
+      ]
+    },
+    {
+      "label": "after decline: session as ada@e2e.test",
+      "status": 200,
+      "body": {
+        "data": {
+          "session": {
+            "createdAt": "<ts:2>",
+            "currentStage": 2,
+            "id": "<session:main>",
+            "myProgress": {
+              "stage": 2,
+              "status": "IN_PROGRESS"
+            },
+            "partner": {
+              "id": "<user:bob>",
+              "name": "Bob Ross",
+              "nickname": "Bob Ross"
+            },
+            "relationshipId": "<relationship:main>",
+            "resolvedAt": null,
+            "stageStatus": "IN_PROGRESS",
+            "status": "ACTIVE"
+          }
+        },
+        "success": true
+      },
+      "changes": [
+        {
+          "view": "user",
+          "kind": "changed",
+          "key": "<user:ada>",
+          "changedFields": [
+            "updated_at"
+          ],
+          "before": {
+            "clerk_id": "e2e_<user:ada>",
+            "created_at": "<ts:1>",
+            "deleted_at": null,
+            "email": "ada@e2e.test",
+            "first_name": null,
+            "id": "<user:ada>",
+            "last_name": null,
+            "name": "Ada Lovelace",
+            "updated_at": "<ts:fresh>"
+          },
+          "after": {
+            "clerk_id": "e2e_<user:ada>",
+            "created_at": "<ts:1>",
+            "deleted_at": null,
+            "email": "ada@e2e.test",
+            "first_name": null,
+            "id": "<user:ada>",
+            "last_name": null,
+            "name": "Ada Lovelace",
+            "updated_at": "<ts:fresh>"
+          }
+        }
+      ]
+    },
+    {
+      "label": "after decline: state as ada@e2e.test",
+      "status": 200,
+      "body": {
+        "data": {
+          "compact": {
+            "canAdvance": true,
+            "isFirstSession": true,
+            "mySigned": true,
+            "mySignedAt": null,
+            "partnerSigned": true,
+            "partnerSignedAt": null
+          },
+          "invitation": {
+            "acceptedAt": "<ts:18>",
+            "createdAt": "<ts:18>",
+            "expiresAt": "<ts:19>",
+            "id": "<invitation:main>",
+            "invitedBy": {
+              "id": "<user:ada>",
+              "name": null
+            },
+            "isInviter": true,
+            "messageConfirmed": true,
+            "messageConfirmedAt": "<ts:18>",
+            "sessionId": "<session:main>",
+            "status": "ACCEPTED",
+            "topicFrame": null,
+            "topicFrameConfirmedAt": null
+          },
+          "messages": {
+            "hasMore": false,
+            "messages": [
+              {
+                "content": "Hi, I'm having issues with my partner.",
+                "id": "<message:ada@main#1>",
+                "role": "USER",
+                "senderId": "<user:ada>",
+                "sessionId": "<session:main>",
+                "stage": 0,
+                "timestamp": "<ts:1>"
+              },
+              {
+                "content": "I'm glad you reached out. Tell me more about what's happening.",
+                "id": "<message:ada@main#2>",
+                "role": "AI",
+                "senderId": null,
+                "sessionId": "<session:main>",
+                "stage": 0,
+                "timestamp": "<ts:2>"
+              },
+              {
+                "content": "We argue about household chores constantly.",
+                "id": "<message:ada@main#3>",
+                "role": "USER",
+                "senderId": "<user:ada>",
+                "sessionId": "<session:main>",
+                "stage": 1,
+                "timestamp": "<ts:3>"
+              },
+              {
+                "content": "That sounds frustrating. Would you like to invite your partner?",
+                "id": "<message:ada@main#4>",
+                "role": "AI",
+                "senderId": null,
+                "sessionId": "<session:main>",
+                "stage": 1,
+                "timestamp": "<ts:4>"
+              },
+              {
+                "content": "Yes, I sent the invitation.",
+                "id": "<message:ada@main#5>",
+                "role": "USER",
+                "senderId": "<user:ada>",
+                "sessionId": "<session:main>",
+                "stage": 1,
+                "timestamp": "<ts:5>"
+              },
+              {
+                "content": "Great. Let's continue exploring your perspective while we wait.",
+                "id": "<message:ada@main#6>",
+                "role": "AI",
+                "senderId": null,
+                "sessionId": "<session:main>",
+                "stage": 1,
+                "timestamp": "<ts:6>"
+              },
+              {
+                "content": "I feel like I do most of the work and they don't notice.",
+                "id": "<message:ada@main#7>",
+                "role": "USER",
+                "senderId": "<user:ada>",
+                "sessionId": "<session:main>",
+                "stage": 1,
+                "timestamp": "<ts:7>"
+              },
+              {
+                "content": "I hear you. Do you feel like I understand what you've been experiencing?",
+                "id": "<message:ada@main#8>",
+                "role": "AI",
+                "senderId": null,
+                "sessionId": "<session:main>",
+                "stage": 1,
+                "timestamp": "<ts:8>"
+              },
+              {
+                "content": "Yes, I feel heard now.",
+                "id": "<message:ada@main#9>",
+                "role": "USER",
+                "senderId": "<user:ada>",
+                "sessionId": "<session:main>",
+                "stage": 1,
+                "timestamp": "<ts:9>"
+              },
+              {
+                "content": "I'm glad. Now let's build some empathy for your partner's perspective.",
+                "id": "<message:ada@main#10>",
+                "role": "AI",
+                "senderId": null,
+                "sessionId": "<session:main>",
+                "stage": 2,
+                "timestamp": "<ts:10>"
+              },
+              {
+                "content": "I think they're stressed from work too.",
+                "id": "<message:ada@main#11>",
+                "role": "USER",
+                "senderId": "<user:ada>",
+                "sessionId": "<session:main>",
+                "stage": 2,
+                "timestamp": "<ts:11>"
+              },
+              {
+                "content": "That's a thoughtful observation. Here's an empathy statement you could share...",
+                "id": "<message:ada@main#12>",
+                "role": "AI",
+                "senderId": null,
+                "sessionId": "<session:main>",
+                "stage": 2,
+                "timestamp": "<ts:12>"
+              },
+              {
+                "content": "I understand you might be feeling stressed from work. I want us to support each other better.",
+                "id": "<message:ada@main/EMPATHY_STATEMENT:ada#1>",
+                "role": "EMPATHY_STATEMENT",
+                "senderId": "<user:ada>",
+                "sessionId": "<session:main>",
+                "stage": 2,
+                "timestamp": "<ts:14>"
+              }
+            ]
+          },
+          "progress": {
+            "canAdvance": false,
+            "milestones": {
+              "feelHeardConfirmedAt": "<ts:13>",
+              "witnessStartedAt": "<ts:7>"
+            },
+            "myProgress": {
+              "completedAt": null,
+              "gatesSatisfied": {},
+              "stage": 2,
+              "startedAt": "<ts:13>",
+              "status": "IN_PROGRESS"
+            },
+            "partnerProgress": {
+              "completedAt": null,
+              "stage": 2,
+              "startedAt": "<ts:15>",
+              "status": "IN_PROGRESS"
+            },
+            "sessionId": "<session:main>"
+          },
+          "session": {
+            "createdAt": "<ts:17>",
+            "currentStage": 2,
+            "id": "<session:main>",
+            "lastSeenChatItemId": null,
+            "lastViewedAt": null,
+            "myProgress": {
+              "stage": 2,
+              "status": "IN_PROGRESS"
+            },
+            "partner": {
+              "id": "<user:bob>",
+              "name": "Bob Ross",
+              "nickname": "Bob Ross"
+            },
+            "partnerLastActiveAt": "<ts:15>",
+            "partnerLastViewedAt": null,
+            "relationshipId": "<relationship:main>",
+            "resolvedAt": null,
+            "sourceInnerThoughts": null,
+            "stageStatus": "IN_PROGRESS",
+            "status": "ACTIVE"
+          }
+        },
+        "success": true
+      },
+      "changes": [
+        {
+          "view": "user",
+          "kind": "changed",
+          "key": "<user:ada>",
+          "changedFields": [
+            "updated_at"
+          ],
+          "before": {
+            "clerk_id": "e2e_<user:ada>",
+            "created_at": "<ts:16>",
+            "deleted_at": null,
+            "email": "ada@e2e.test",
+            "first_name": null,
+            "id": "<user:ada>",
+            "last_name": null,
+            "name": "Ada Lovelace",
+            "updated_at": "<ts:fresh>"
+          },
+          "after": {
+            "clerk_id": "e2e_<user:ada>",
+            "created_at": "<ts:16>",
+            "deleted_at": null,
+            "email": "ada@e2e.test",
+            "first_name": null,
+            "id": "<user:ada>",
+            "last_name": null,
+            "name": "Ada Lovelace",
+            "updated_at": "<ts:fresh>"
+          }
+        }
+      ]
+    },
+    {
+      "label": "after decline: progress as ada@e2e.test",
+      "status": 200,
+      "body": {
+        "data": {
+          "milestones": {
+            "commonGroundFoundAt": null,
+            "feelHeardConfirmedAt": "<ts:2>",
+            "needsIdentifiedAt": null,
+            "witnessStartedAt": "<ts:1>"
+          },
+          "myProgress": {
+            "completedAt": null,
+            "gatesSatisfied": {},
+            "stage": 2,
+            "startedAt": "<ts:2>",
+            "status": "IN_PROGRESS"
+          },
+          "partnerProgress": {
+            "completedAt": null,
+            "gatesSatisfied": {},
+            "stage": 2,
+            "startedAt": "<ts:3>",
+            "status": "IN_PROGRESS"
+          },
+          "sessionStatus": "ACTIVE"
+        },
+        "success": true
+      },
+      "changes": [
+        {
+          "view": "user",
+          "kind": "changed",
+          "key": "<user:ada>",
+          "changedFields": [
+            "updated_at"
+          ],
+          "before": {
+            "clerk_id": "e2e_<user:ada>",
+            "created_at": "<ts:4>",
+            "deleted_at": null,
+            "email": "ada@e2e.test",
+            "first_name": null,
+            "id": "<user:ada>",
+            "last_name": null,
+            "name": "Ada Lovelace",
+            "updated_at": "<ts:fresh>"
+          },
+          "after": {
+            "clerk_id": "e2e_<user:ada>",
+            "created_at": "<ts:4>",
+            "deleted_at": null,
+            "email": "ada@e2e.test",
+            "first_name": null,
+            "id": "<user:ada>",
+            "last_name": null,
+            "name": "Ada Lovelace",
+            "updated_at": "<ts:fresh>"
+          }
+        }
+      ]
+    },
+    {
+      "label": "after decline: messages as ada@e2e.test",
+      "status": 200,
+      "body": {
+        "data": {
+          "hasMore": false,
+          "messages": [
+            {
+              "content": "Hi, I'm having issues with my partner.",
+              "id": "<message:ada@main#1>",
+              "refiningNeedId": null,
+              "role": "USER",
+              "senderId": "<user:ada>",
+              "sessionId": "<session:main>",
+              "stage": 0,
+              "timestamp": "<ts:1>"
+            },
+            {
+              "content": "I'm glad you reached out. Tell me more about what's happening.",
+              "id": "<message:ada@main#2>",
+              "refiningNeedId": null,
+              "role": "AI",
+              "senderId": null,
+              "sessionId": "<session:main>",
+              "stage": 0,
+              "timestamp": "<ts:2>"
+            },
+            {
+              "content": "We argue about household chores constantly.",
+              "id": "<message:ada@main#3>",
+              "refiningNeedId": null,
+              "role": "USER",
+              "senderId": "<user:ada>",
+              "sessionId": "<session:main>",
+              "stage": 1,
+              "timestamp": "<ts:3>"
+            },
+            {
+              "content": "That sounds frustrating. Would you like to invite your partner?",
+              "id": "<message:ada@main#4>",
+              "refiningNeedId": null,
+              "role": "AI",
+              "senderId": null,
+              "sessionId": "<session:main>",
+              "stage": 1,
+              "timestamp": "<ts:4>"
+            },
+            {
+              "content": "Yes, I sent the invitation.",
+              "id": "<message:ada@main#5>",
+              "refiningNeedId": null,
+              "role": "USER",
+              "senderId": "<user:ada>",
+              "sessionId": "<session:main>",
+              "stage": 1,
+              "timestamp": "<ts:5>"
+            },
+            {
+              "content": "Great. Let's continue exploring your perspective while we wait.",
+              "id": "<message:ada@main#6>",
+              "refiningNeedId": null,
+              "role": "AI",
+              "senderId": null,
+              "sessionId": "<session:main>",
+              "stage": 1,
+              "timestamp": "<ts:6>"
+            },
+            {
+              "content": "I feel like I do most of the work and they don't notice.",
+              "id": "<message:ada@main#7>",
+              "refiningNeedId": null,
+              "role": "USER",
+              "senderId": "<user:ada>",
+              "sessionId": "<session:main>",
+              "stage": 1,
+              "timestamp": "<ts:7>"
+            },
+            {
+              "content": "I hear you. Do you feel like I understand what you've been experiencing?",
+              "id": "<message:ada@main#8>",
+              "refiningNeedId": null,
+              "role": "AI",
+              "senderId": null,
+              "sessionId": "<session:main>",
+              "stage": 1,
+              "timestamp": "<ts:8>"
+            },
+            {
+              "content": "Yes, I feel heard now.",
+              "id": "<message:ada@main#9>",
+              "refiningNeedId": null,
+              "role": "USER",
+              "senderId": "<user:ada>",
+              "sessionId": "<session:main>",
+              "stage": 1,
+              "timestamp": "<ts:9>"
+            },
+            {
+              "content": "I'm glad. Now let's build some empathy for your partner's perspective.",
+              "id": "<message:ada@main#10>",
+              "refiningNeedId": null,
+              "role": "AI",
+              "senderId": null,
+              "sessionId": "<session:main>",
+              "stage": 2,
+              "timestamp": "<ts:10>"
+            },
+            {
+              "content": "I think they're stressed from work too.",
+              "id": "<message:ada@main#11>",
+              "refiningNeedId": null,
+              "role": "USER",
+              "senderId": "<user:ada>",
+              "sessionId": "<session:main>",
+              "stage": 2,
+              "timestamp": "<ts:11>"
+            },
+            {
+              "content": "That's a thoughtful observation. Here's an empathy statement you could share...",
+              "id": "<message:ada@main#12>",
+              "refiningNeedId": null,
+              "role": "AI",
+              "senderId": null,
+              "sessionId": "<session:main>",
+              "stage": 2,
+              "timestamp": "<ts:12>"
+            },
+            {
+              "content": "I understand you might be feeling stressed from work. I want us to support each other better.",
+              "id": "<message:ada@main/EMPATHY_STATEMENT:ada#1>",
+              "refiningNeedId": null,
+              "role": "EMPATHY_STATEMENT",
+              "senderId": "<user:ada>",
+              "sessionId": "<session:main>",
+              "stage": 2,
+              "timestamp": "<ts:13>"
+            }
+          ]
+        },
+        "success": true
+      },
+      "changes": [
+        {
+          "view": "user",
+          "kind": "changed",
+          "key": "<user:ada>",
+          "changedFields": [
+            "updated_at"
+          ],
+          "before": {
+            "clerk_id": "e2e_<user:ada>",
+            "created_at": "<ts:14>",
+            "deleted_at": null,
+            "email": "ada@e2e.test",
+            "first_name": null,
+            "id": "<user:ada>",
+            "last_name": null,
+            "name": "Ada Lovelace",
+            "updated_at": "<ts:fresh>"
+          },
+          "after": {
+            "clerk_id": "e2e_<user:ada>",
+            "created_at": "<ts:14>",
+            "deleted_at": null,
+            "email": "ada@e2e.test",
+            "first_name": null,
+            "id": "<user:ada>",
+            "last_name": null,
+            "name": "Ada Lovelace",
+            "updated_at": "<ts:fresh>"
+          }
+        }
+      ]
+    },
+    {
+      "label": "after decline: emotions as ada@e2e.test",
+      "status": 200,
+      "body": {
+        "data": {
+          "readings": []
+        },
+        "success": true
+      },
+      "changes": [
+        {
+          "view": "user",
+          "kind": "changed",
+          "key": "<user:ada>",
+          "changedFields": [
+            "updated_at"
+          ],
+          "before": {
+            "clerk_id": "e2e_<user:ada>",
+            "created_at": "<ts:1>",
+            "deleted_at": null,
+            "email": "ada@e2e.test",
+            "first_name": null,
+            "id": "<user:ada>",
+            "last_name": null,
+            "name": "Ada Lovelace",
+            "updated_at": "<ts:fresh>"
+          },
+          "after": {
+            "clerk_id": "e2e_<user:ada>",
+            "created_at": "<ts:1>",
+            "deleted_at": null,
+            "email": "ada@e2e.test",
+            "first_name": null,
+            "id": "<user:ada>",
+            "last_name": null,
+            "name": "Ada Lovelace",
+            "updated_at": "<ts:fresh>"
+          }
+        }
+      ]
+    },
+    {
+      "label": "after decline: pending actions as ada@e2e.test",
+      "status": 200,
+      "body": {
+        "data": {
+          "actions": [],
+          "sentTabUpdates": 0
+        },
+        "success": true
+      },
+      "changes": [
+        {
+          "view": "user",
+          "kind": "changed",
+          "key": "<user:ada>",
+          "changedFields": [
+            "updated_at"
+          ],
+          "before": {
+            "clerk_id": "e2e_<user:ada>",
+            "created_at": "<ts:1>",
+            "deleted_at": null,
+            "email": "ada@e2e.test",
+            "first_name": null,
+            "id": "<user:ada>",
+            "last_name": null,
+            "name": "Ada Lovelace",
+            "updated_at": "<ts:fresh>"
+          },
+          "after": {
+            "clerk_id": "e2e_<user:ada>",
+            "created_at": "<ts:1>",
+            "deleted_at": null,
+            "email": "ada@e2e.test",
+            "first_name": null,
+            "id": "<user:ada>",
+            "last_name": null,
+            "name": "Ada Lovelace",
+            "updated_at": "<ts:fresh>"
+          }
+        }
+      ]
+    },
+    {
+      "label": "after decline: compact status as ada@e2e.test",
+      "status": 200,
+      "body": {
+        "data": {
+          "canAdvance": true,
+          "isFirstSession": true,
+          "mySigned": true,
+          "mySignedAt": null,
+          "partnerSigned": true,
+          "partnerSignedAt": null
+        },
+        "success": true
+      },
+      "changes": [
+        {
+          "view": "user",
+          "kind": "changed",
+          "key": "<user:ada>",
+          "changedFields": [
+            "updated_at"
+          ],
+          "before": {
+            "clerk_id": "e2e_<user:ada>",
+            "created_at": "<ts:1>",
+            "deleted_at": null,
+            "email": "ada@e2e.test",
+            "first_name": null,
+            "id": "<user:ada>",
+            "last_name": null,
+            "name": "Ada Lovelace",
+            "updated_at": "<ts:fresh>"
+          },
+          "after": {
+            "clerk_id": "e2e_<user:ada>",
+            "created_at": "<ts:1>",
+            "deleted_at": null,
+            "email": "ada@e2e.test",
+            "first_name": null,
+            "id": "<user:ada>",
+            "last_name": null,
+            "name": "Ada Lovelace",
+            "updated_at": "<ts:fresh>"
+          }
+        }
+      ]
+    },
+    {
+      "label": "after decline: empathy status as ada@e2e.test",
+      "status": 200,
+      "body": {
+        "data": {
+          "analyzing": false,
+          "awaitingSharing": false,
+          "hasNewSharedContext": false,
+          "hasUnviewedSharedContext": false,
+          "messageCountSinceSharedContext": 0,
+          "myAttempt": {
+            "consentRecordId": "",
+            "content": "I understand you might be feeling stressed from work. I want us to support each other better.",
+            "deliveryStatus": "pending",
+            "id": "<empathyAttempt:ada→bob@main#1>",
+            "revealedAt": null,
+            "revisionCount": 0,
+            "sharedAt": "<ts:1>",
+            "sourceUserId": "<user:ada>",
+            "status": "READY",
+            "validatedAt": null
+          },
+          "myReconcilerResult": {
+            "action": "OFFER_SHARING",
+            "analyzedAt": "<ts:3>",
+            "gapSeverity": "significant",
+            "gapSummary": "Ada Lovelace hasn't fully grasped the depth of Bob Ross's exhaustion and feeling unseen."
+          },
+          "mySharedAt": null,
+          "mySharedContext": null,
+          "partnerAttempt": null,
+          "partnerCompletedStage1": true,
+          "partnerEmpathyHeldStatus": "HELD",
+          "partnerEmpathySubmittedAt": "<ts:2>",
+          "partnerHasSubmittedEmpathy": true,
+          "readyForStage3": false,
+          "refinementHint": null,
+          "sharedContentDeliveryStatus": null,
+          "sharedContext": null
+        },
+        "success": true
+      },
+      "changes": [
+        {
+          "view": "user",
+          "kind": "changed",
+          "key": "<user:ada>",
+          "changedFields": [
+            "updated_at"
+          ],
+          "before": {
+            "clerk_id": "e2e_<user:ada>",
+            "created_at": "<ts:4>",
+            "deleted_at": null,
+            "email": "ada@e2e.test",
+            "first_name": null,
+            "id": "<user:ada>",
+            "last_name": null,
+            "name": "Ada Lovelace",
+            "updated_at": "<ts:fresh>"
+          },
+          "after": {
+            "clerk_id": "e2e_<user:ada>",
+            "created_at": "<ts:4>",
+            "deleted_at": null,
+            "email": "ada@e2e.test",
+            "first_name": null,
+            "id": "<user:ada>",
+            "last_name": null,
+            "name": "Ada Lovelace",
+            "updated_at": "<ts:fresh>"
+          }
+        }
+      ]
+    },
+    {
+      "label": "after decline: partner empathy as ada@e2e.test",
+      "status": 200,
+      "body": {
+        "data": {
+          "attempt": null,
+          "awaitingRevision": false,
+          "partnerStatus": "HELD",
+          "validated": false,
+          "validatedAt": null,
+          "waitingForPartner": true
+        },
+        "success": true
+      },
+      "changes": [
+        {
+          "view": "user",
+          "kind": "changed",
+          "key": "<user:ada>",
+          "changedFields": [
+            "updated_at"
+          ],
+          "before": {
+            "clerk_id": "e2e_<user:ada>",
+            "created_at": "<ts:1>",
+            "deleted_at": null,
+            "email": "ada@e2e.test",
+            "first_name": null,
+            "id": "<user:ada>",
+            "last_name": null,
+            "name": "Ada Lovelace",
+            "updated_at": "<ts:fresh>"
+          },
+          "after": {
+            "clerk_id": "e2e_<user:ada>",
+            "created_at": "<ts:1>",
+            "deleted_at": null,
+            "email": "ada@e2e.test",
+            "first_name": null,
+            "id": "<user:ada>",
+            "last_name": null,
+            "name": "Ada Lovelace",
+            "updated_at": "<ts:fresh>"
+          }
+        }
+      ]
+    },
+    {
+      "label": "after decline: empathy draft as ada@e2e.test",
+      "status": 200,
+      "body": {
+        "data": {
+          "alreadyConsented": true,
+          "canConsent": false,
+          "draft": {
+            "content": "I understand you might be feeling stressed from work. I want us to support each other better.",
+            "id": "<draft:ada@main/EMPATHY>",
+            "readyToShare": true,
+            "updatedAt": "<ts:2>",
+            "version": 1
+          }
+        },
+        "success": true
+      },
+      "changes": [
+        {
+          "view": "user",
+          "kind": "changed",
+          "key": "<user:ada>",
+          "changedFields": [
+            "updated_at"
+          ],
+          "before": {
+            "clerk_id": "e2e_<user:ada>",
+            "created_at": "<ts:1>",
+            "deleted_at": null,
+            "email": "ada@e2e.test",
+            "first_name": null,
+            "id": "<user:ada>",
+            "last_name": null,
+            "name": "Ada Lovelace",
+            "updated_at": "<ts:fresh>"
+          },
+          "after": {
+            "clerk_id": "e2e_<user:ada>",
+            "created_at": "<ts:1>",
+            "deleted_at": null,
+            "email": "ada@e2e.test",
+            "first_name": null,
+            "id": "<user:ada>",
+            "last_name": null,
+            "name": "Ada Lovelace",
+            "updated_at": "<ts:fresh>"
+          }
+        }
+      ]
+    },
+    {
+      "label": "after decline: share suggestion as ada@e2e.test",
+      "status": 200,
+      "body": {
+        "data": {
+          "hasSuggestion": false,
+          "suggestion": null
+        },
+        "success": true
+      },
+      "changes": [
+        {
+          "view": "user",
+          "kind": "changed",
+          "key": "<user:ada>",
+          "changedFields": [
+            "updated_at"
+          ],
+          "before": {
+            "clerk_id": "e2e_<user:ada>",
+            "created_at": "<ts:1>",
+            "deleted_at": null,
+            "email": "ada@e2e.test",
+            "first_name": null,
+            "id": "<user:ada>",
+            "last_name": null,
+            "name": "Ada Lovelace",
+            "updated_at": "<ts:fresh>"
+          },
+          "after": {
+            "clerk_id": "e2e_<user:ada>",
+            "created_at": "<ts:1>",
+            "deleted_at": null,
+            "email": "ada@e2e.test",
+            "first_name": null,
+            "id": "<user:ada>",
+            "last_name": null,
+            "name": "Ada Lovelace",
+            "updated_at": "<ts:fresh>"
+          }
+        }
+      ]
+    },
+    {
+      "label": "after decline: reconciler status as ada@e2e.test",
+      "status": 200,
+      "body": {
+        "data": {
+          "aUnderstandingB": {
+            "analyzedAt": "<ts:fresh>",
+            "guesserId": "",
+            "guesserName": "",
+            "result": {
+              "abstractGuidance": {
+                "areaHint": null,
+                "guidanceType": null,
+                "promptSeed": null
+              },
+              "alignment": {
+                "correctlyIdentified": [
+                  "stress",
+                  "work pressure"
+                ],
+                "score": 45,
+                "summary": "Ada Lovelace's empathy attempt captures some elements but misses key aspects of Bob Ross's experience."
+              },
+              "gaps": {
+                "misattributions": [],
+                "missedFeelings": [
+                  "exhaustion",
+                  "feeling unseen",
+                  "overwhelm"
+                ],
+                "mostImportantGap": "Bob Ross feels exhausted and unseen, not just stressed.",
+                "severity": "significant",
+                "summary": "Ada Lovelace hasn't fully grasped the depth of Bob Ross's exhaustion and feeling unseen."
+              },
+              "recommendation": {
+                "action": "OFFER_SHARING",
+                "rationale": "Sharing specific context would help Ada Lovelace understand Bob Ross's perspective better.",
+                "sharingWouldHelp": true,
+                "suggestedShareFocus": "The exhaustion from work and feeling unseen."
+              }
+            },
+            "shareOfferStatus": "NOT_OFFERED",
+            "subjectId": "",
+            "subjectName": ""
+          },
+          "bUnderstandingA": null,
+          "hasRun": true,
+          "pendingShareOffers": 0,
+          "readyForStage3": false,
+          "sessionId": "<session:main>"
+        },
+        "success": true
+      },
+      "changes": [
+        {
+          "view": "user",
+          "kind": "changed",
+          "key": "<user:ada>",
+          "changedFields": [
+            "updated_at"
+          ],
+          "before": {
+            "clerk_id": "e2e_<user:ada>",
+            "created_at": "<ts:1>",
+            "deleted_at": null,
+            "email": "ada@e2e.test",
+            "first_name": null,
+            "id": "<user:ada>",
+            "last_name": null,
+            "name": "Ada Lovelace",
+            "updated_at": "<ts:fresh>"
+          },
+          "after": {
+            "clerk_id": "e2e_<user:ada>",
+            "created_at": "<ts:1>",
+            "deleted_at": null,
+            "email": "ada@e2e.test",
+            "first_name": null,
+            "id": "<user:ada>",
+            "last_name": null,
+            "name": "Ada Lovelace",
+            "updated_at": "<ts:fresh>"
+          }
+        }
+      ]
+    },
+    {
+      "label": "after decline: share offer as ada@e2e.test",
+      "status": 200,
+      "body": {
+        "data": {
+          "hasSuggestion": false,
+          "suggestion": null
+        },
+        "success": true
+      },
+      "changes": [
+        {
+          "view": "user",
+          "kind": "changed",
+          "key": "<user:ada>",
+          "changedFields": [
+            "updated_at"
+          ],
+          "before": {
+            "clerk_id": "e2e_<user:ada>",
+            "created_at": "<ts:1>",
+            "deleted_at": null,
+            "email": "ada@e2e.test",
+            "first_name": null,
+            "id": "<user:ada>",
+            "last_name": null,
+            "name": "Ada Lovelace",
+            "updated_at": "<ts:fresh>"
+          },
+          "after": {
+            "clerk_id": "e2e_<user:ada>",
+            "created_at": "<ts:1>",
+            "deleted_at": null,
+            "email": "ada@e2e.test",
+            "first_name": null,
+            "id": "<user:ada>",
+            "last_name": null,
+            "name": "Ada Lovelace",
+            "updated_at": "<ts:fresh>"
+          }
+        }
+      ]
+    },
+    {
+      "label": "after decline: reconciler summary as ada@e2e.test",
+      "status": 400,
+      "body": {
+        "error": {
+          "code": "VALIDATION_ERROR",
+          "message": "Reconciliation not yet complete - pending share offers"
+        },
+        "success": false
+      },
+      "changes": [
+        {
+          "view": "user",
+          "kind": "changed",
+          "key": "<user:ada>",
+          "changedFields": [
+            "updated_at"
+          ],
+          "before": {
+            "clerk_id": "e2e_<user:ada>",
+            "created_at": "<ts:1>",
+            "deleted_at": null,
+            "email": "ada@e2e.test",
+            "first_name": null,
+            "id": "<user:ada>",
+            "last_name": null,
+            "name": "Ada Lovelace",
+            "updated_at": "<ts:fresh>"
+          },
+          "after": {
+            "clerk_id": "e2e_<user:ada>",
+            "created_at": "<ts:1>",
+            "deleted_at": null,
+            "email": "ada@e2e.test",
+            "first_name": null,
+            "id": "<user:ada>",
+            "last_name": null,
+            "name": "Ada Lovelace",
+            "updated_at": "<ts:fresh>"
+          }
+        }
+      ]
+    },
+    {
+      "label": "after decline: pending consent as ada@e2e.test",
+      "status": 200,
+      "body": {
+        "data": {
+          "pendingRequests": []
+        },
+        "success": true
+      },
+      "changes": [
+        {
+          "view": "user",
+          "kind": "changed",
+          "key": "<user:ada>",
+          "changedFields": [
+            "updated_at"
+          ],
+          "before": {
+            "clerk_id": "e2e_<user:ada>",
+            "created_at": "<ts:1>",
+            "deleted_at": null,
+            "email": "ada@e2e.test",
+            "first_name": null,
+            "id": "<user:ada>",
+            "last_name": null,
+            "name": "Ada Lovelace",
+            "updated_at": "<ts:fresh>"
+          },
+          "after": {
+            "clerk_id": "e2e_<user:ada>",
+            "created_at": "<ts:1>",
+            "deleted_at": null,
+            "email": "ada@e2e.test",
+            "first_name": null,
+            "id": "<user:ada>",
+            "last_name": null,
+            "name": "Ada Lovelace",
+            "updated_at": "<ts:fresh>"
+          }
+        }
+      ]
+    },
+    {
+      "label": "after decline: consent history as ada@e2e.test",
+      "status": 200,
+      "body": {
+        "data": {
+          "records": [
+            {
+              "contentType": "EMPATHY_DRAFT",
+              "createdAt": "<ts:3>",
+              "decidedAt": "<ts:1>",
+              "decision": "GRANTED",
+              "id": "<consent:ada@main/EMPATHY_ATTEMPT/empathyAttempt:ada→bob@main#1>",
+              "revokedAt": null,
+              "targetId": "<draft:ada@main/EMPATHY>"
+            }
+          ]
+        },
+        "success": true
+      },
+      "changes": [
+        {
+          "view": "user",
+          "kind": "changed",
+          "key": "<user:ada>",
+          "changedFields": [
+            "updated_at"
+          ],
+          "before": {
+            "clerk_id": "e2e_<user:ada>",
+            "created_at": "<ts:2>",
+            "deleted_at": null,
+            "email": "ada@e2e.test",
+            "first_name": null,
+            "id": "<user:ada>",
+            "last_name": null,
+            "name": "Ada Lovelace",
+            "updated_at": "<ts:fresh>"
+          },
+          "after": {
+            "clerk_id": "e2e_<user:ada>",
+            "created_at": "<ts:2>",
+            "deleted_at": null,
+            "email": "ada@e2e.test",
+            "first_name": null,
+            "id": "<user:ada>",
+            "last_name": null,
+            "name": "Ada Lovelace",
+            "updated_at": "<ts:fresh>"
+          }
+        }
+      ]
+    },
+    {
+      "label": "after decline: needs as ada@e2e.test",
+      "status": 200,
+      "body": {
+        "data": {
+          "isDirty": false,
+          "needs": [],
+          "synthesizedAt": null
+        },
+        "success": true
+      },
+      "changes": [
+        {
+          "view": "user",
+          "kind": "changed",
+          "key": "<user:ada>",
+          "changedFields": [
+            "updated_at"
+          ],
+          "before": {
+            "clerk_id": "e2e_<user:ada>",
+            "created_at": "<ts:1>",
+            "deleted_at": null,
+            "email": "ada@e2e.test",
+            "first_name": null,
+            "id": "<user:ada>",
+            "last_name": null,
+            "name": "Ada Lovelace",
+            "updated_at": "<ts:fresh>"
+          },
+          "after": {
+            "clerk_id": "e2e_<user:ada>",
+            "created_at": "<ts:1>",
+            "deleted_at": null,
+            "email": "ada@e2e.test",
+            "first_name": null,
+            "id": "<user:ada>",
+            "last_name": null,
+            "name": "Ada Lovelace",
+            "updated_at": "<ts:fresh>"
+          }
+        }
+      ]
+    },
+    {
+      "label": "after decline: needs comparison as ada@e2e.test",
+      "status": 200,
+      "body": {
+        "data": {
+          "analysisComplete": false,
+          "commonGround": [],
+          "myNeeds": [],
+          "noOverlap": false,
+          "partnerNeeds": []
+        },
+        "success": true
+      },
+      "changes": [
+        {
+          "view": "user",
+          "kind": "changed",
+          "key": "<user:ada>",
+          "changedFields": [
+            "updated_at"
+          ],
+          "before": {
+            "clerk_id": "e2e_<user:ada>",
+            "created_at": "<ts:1>",
+            "deleted_at": null,
+            "email": "ada@e2e.test",
+            "first_name": null,
+            "id": "<user:ada>",
+            "last_name": null,
+            "name": "Ada Lovelace",
+            "updated_at": "<ts:fresh>"
+          },
+          "after": {
+            "clerk_id": "e2e_<user:ada>",
+            "created_at": "<ts:1>",
+            "deleted_at": null,
+            "email": "ada@e2e.test",
+            "first_name": null,
+            "id": "<user:ada>",
+            "last_name": null,
+            "name": "Ada Lovelace",
+            "updated_at": "<ts:fresh>"
+          }
+        }
+      ]
+    },
+    {
+      "label": "after decline: stage4 as ada@e2e.test",
+      "status": 200,
+      "body": {
+        "data": {
+          "coverageAudit": {
+            "covered": [],
+            "open": [],
+            "partial": [],
+            "updatedAt": null
+          },
+          "inventory": {
+            "individualCommitments": [],
+            "removedProposalCount": 0,
+            "sharedProposals": [],
+            "unaddressedNeeds": [],
+            "updatedAt": "<ts:1>"
+          },
+          "mySelectionStatus": "NOT_STARTED",
+          "mySelections": [],
+          "outcome": null,
+          "partnerSelectionStatus": "NOT_STARTED",
+          "partnerSelections": [],
+          "phase": "INVENTORY_BUILDING",
+          "tendingPreview": null,
+          "walkthrough": {
+            "currentIndex": 0,
+            "currentNeed": null,
+            "defaultCheckInDate": "2026-10-31",
+            "ownNeeds": [],
+            "partnerNeeds": [],
+            "phase": "QUALITY_REVIEW",
+            "proposalGroups": [
+              {
+                "key": "you_suggested",
+                "proposals": [],
+                "readOnly": false,
+                "title": "Options you suggested"
+              },
+              {
+                "key": "partner_suggested",
+                "proposals": [],
+                "readOnly": false,
+                "title": "Options your partner suggested"
+              },
+              {
+                "key": "ai_suggested",
+                "proposals": [],
+                "readOnly": false,
+                "title": "MWF ideas"
+              }
+            ],
+            "qualityWarnings": [],
+            "totalInPhase": 0
+          }
+        },
+        "success": true
+      },
+      "changes": [
+        {
+          "view": "user",
+          "kind": "changed",
+          "key": "<user:ada>",
+          "changedFields": [
+            "updated_at"
+          ],
+          "before": {
+            "clerk_id": "e2e_<user:ada>",
+            "created_at": "<ts:2>",
+            "deleted_at": null,
+            "email": "ada@e2e.test",
+            "first_name": null,
+            "id": "<user:ada>",
+            "last_name": null,
+            "name": "Ada Lovelace",
+            "updated_at": "<ts:fresh>"
+          },
+          "after": {
+            "clerk_id": "e2e_<user:ada>",
+            "created_at": "<ts:2>",
+            "deleted_at": null,
+            "email": "ada@e2e.test",
+            "first_name": null,
+            "id": "<user:ada>",
+            "last_name": null,
+            "name": "Ada Lovelace",
+            "updated_at": "<ts:fresh>"
+          }
+        }
+      ]
+    },
+    {
+      "label": "after decline: strategies as ada@e2e.test",
+      "status": 200,
+      "body": {
+        "data": {
+          "aiSuggestionsAvailable": false,
+          "canMarkReadyToRank": false,
+          "canRank": false,
+          "myReadyToRank": false,
+          "partnerReadyToRank": false,
+          "phase": "COLLECTING",
+          "rankableStrategyCount": 0,
+          "strategies": []
+        },
+        "success": true
+      },
+      "changes": [
+        {
+          "view": "user",
+          "kind": "changed",
+          "key": "<user:ada>",
+          "changedFields": [
+            "updated_at"
+          ],
+          "before": {
+            "clerk_id": "e2e_<user:ada>",
+            "created_at": "<ts:1>",
+            "deleted_at": null,
+            "email": "ada@e2e.test",
+            "first_name": null,
+            "id": "<user:ada>",
+            "last_name": null,
+            "name": "Ada Lovelace",
+            "updated_at": "<ts:fresh>"
+          },
+          "after": {
+            "clerk_id": "e2e_<user:ada>",
+            "created_at": "<ts:1>",
+            "deleted_at": null,
+            "email": "ada@e2e.test",
+            "first_name": null,
+            "id": "<user:ada>",
+            "last_name": null,
+            "name": "Ada Lovelace",
+            "updated_at": "<ts:fresh>"
+          }
+        }
+      ]
+    },
+    {
+      "label": "after decline: agreements as ada@e2e.test",
+      "status": 200,
+      "body": {
+        "data": {
+          "agreements": []
+        },
+        "success": true
+      },
+      "changes": [
+        {
+          "view": "user",
+          "kind": "changed",
+          "key": "<user:ada>",
+          "changedFields": [
+            "updated_at"
+          ],
+          "before": {
+            "clerk_id": "e2e_<user:ada>",
+            "created_at": "<ts:1>",
+            "deleted_at": null,
+            "email": "ada@e2e.test",
+            "first_name": null,
+            "id": "<user:ada>",
+            "last_name": null,
+            "name": "Ada Lovelace",
+            "updated_at": "<ts:fresh>"
+          },
+          "after": {
+            "clerk_id": "e2e_<user:ada>",
+            "created_at": "<ts:1>",
+            "deleted_at": null,
+            "email": "ada@e2e.test",
+            "first_name": null,
+            "id": "<user:ada>",
+            "last_name": null,
+            "name": "Ada Lovelace",
+            "updated_at": "<ts:fresh>"
+          }
+        }
+      ]
+    },
+    {
+      "label": "after decline: tending as ada@e2e.test",
+      "status": 200,
+      "body": {
+        "data": {
+          "betweenPeriodNotes": [],
+          "coordinationCycles": [],
+          "entries": []
+        },
+        "success": true
+      },
+      "changes": [
+        {
+          "view": "user",
+          "kind": "changed",
+          "key": "<user:ada>",
+          "changedFields": [
+            "updated_at"
+          ],
+          "before": {
+            "clerk_id": "e2e_<user:ada>",
+            "created_at": "<ts:1>",
+            "deleted_at": null,
+            "email": "ada@e2e.test",
+            "first_name": null,
+            "id": "<user:ada>",
+            "last_name": null,
+            "name": "Ada Lovelace",
+            "updated_at": "<ts:fresh>"
+          },
+          "after": {
+            "clerk_id": "e2e_<user:ada>",
+            "created_at": "<ts:1>",
+            "deleted_at": null,
+            "email": "ada@e2e.test",
+            "first_name": null,
+            "id": "<user:ada>",
+            "last_name": null,
+            "name": "Ada Lovelace",
+            "updated_at": "<ts:fresh>"
+          }
+        }
+      ]
+    },
+    {
+      "label": "after decline: tending history as ada@e2e.test",
+      "status": 200,
+      "body": {
+        "data": {
+          "cycles": []
+        },
+        "success": true
+      },
+      "changes": [
+        {
+          "view": "user",
+          "kind": "changed",
+          "key": "<user:ada>",
+          "changedFields": [
+            "updated_at"
+          ],
+          "before": {
+            "clerk_id": "e2e_<user:ada>",
+            "created_at": "<ts:1>",
+            "deleted_at": null,
+            "email": "ada@e2e.test",
+            "first_name": null,
+            "id": "<user:ada>",
+            "last_name": null,
+            "name": "Ada Lovelace",
+            "updated_at": "<ts:fresh>"
+          },
+          "after": {
+            "clerk_id": "e2e_<user:ada>",
+            "created_at": "<ts:1>",
+            "deleted_at": null,
+            "email": "ada@e2e.test",
+            "first_name": null,
+            "id": "<user:ada>",
+            "last_name": null,
+            "name": "Ada Lovelace",
+            "updated_at": "<ts:fresh>"
+          }
+        }
+      ]
+    },
+    {
+      "label": "after decline: inner thoughts as ada@e2e.test",
+      "status": 200,
+      "body": {
+        "data": {
+          "innerThoughtsSessionId": null
+        },
+        "success": true
+      },
+      "changes": [
+        {
+          "view": "user",
+          "kind": "changed",
+          "key": "<user:ada>",
+          "changedFields": [
+            "updated_at"
+          ],
+          "before": {
+            "clerk_id": "e2e_<user:ada>",
+            "created_at": "<ts:1>",
+            "deleted_at": null,
+            "email": "ada@e2e.test",
+            "first_name": null,
+            "id": "<user:ada>",
+            "last_name": null,
+            "name": "Ada Lovelace",
+            "updated_at": "<ts:fresh>"
+          },
+          "after": {
+            "clerk_id": "e2e_<user:ada>",
+            "created_at": "<ts:1>",
+            "deleted_at": null,
+            "email": "ada@e2e.test",
+            "first_name": null,
+            "id": "<user:ada>",
+            "last_name": null,
+            "name": "Ada Lovelace",
+            "updated_at": "<ts:fresh>"
+          }
+        }
+      ]
+    },
+    {
+      "label": "after decline: session list as ada@e2e.test",
+      "status": 200,
+      "body": {
+        "data": {
+          "hasMore": false,
+          "items": [
+            {
+              "createdAt": "<ts:4>",
+              "hasUnread": true,
+              "id": "<session:main>",
+              "lastSeenChatItemId": null,
+              "lastViewedAt": null,
+              "myProgress": {
+                "completedAt": null,
+                "stage": 2,
+                "startedAt": "<ts:1>",
+                "status": "IN_PROGRESS"
+              },
+              "partner": {
+                "id": "<user:bob>",
+                "name": "Bob Ross",
+                "nickname": "Bob Ross"
+              },
+              "partnerActionNeeded": [
+                "complete_stage"
+              ],
+              "partnerProgress": {
+                "completedAt": null,
+                "stage": 2,
+                "startedAt": "<ts:2>",
+                "status": "IN_PROGRESS"
+              },
+              "relationshipId": "<relationship:main>",
+              "selfActionNeeded": [],
+              "status": "ACTIVE",
+              "statusSummary": {
+                "partnerStatus": "Bob Ross is working on their perspective",
+                "userStatus": "You've shared your understanding"
+              },
+              "updatedAt": "<ts:4>"
+            }
+          ]
+        },
+        "success": true
+      },
+      "changes": [
+        {
+          "view": "user",
+          "kind": "changed",
+          "key": "<user:ada>",
+          "changedFields": [
+            "updated_at"
+          ],
+          "before": {
+            "clerk_id": "e2e_<user:ada>",
+            "created_at": "<ts:3>",
+            "deleted_at": null,
+            "email": "ada@e2e.test",
+            "first_name": null,
+            "id": "<user:ada>",
+            "last_name": null,
+            "name": "Ada Lovelace",
+            "updated_at": "<ts:fresh>"
+          },
+          "after": {
+            "clerk_id": "e2e_<user:ada>",
+            "created_at": "<ts:3>",
+            "deleted_at": null,
+            "email": "ada@e2e.test",
+            "first_name": null,
+            "id": "<user:ada>",
+            "last_name": null,
+            "name": "Ada Lovelace",
+            "updated_at": "<ts:fresh>"
+          }
+        }
+      ]
+    },
+    {
+      "label": "after decline: badge count as ada@e2e.test",
+      "status": 200,
+      "body": {
+        "data": {
+          "bySession": {},
+          "count": 0
+        },
+        "success": true
+      },
+      "changes": [
+        {
+          "view": "user",
+          "kind": "changed",
+          "key": "<user:ada>",
+          "changedFields": [
+            "updated_at"
+          ],
+          "before": {
+            "clerk_id": "e2e_<user:ada>",
+            "created_at": "<ts:1>",
+            "deleted_at": null,
+            "email": "ada@e2e.test",
+            "first_name": null,
+            "id": "<user:ada>",
+            "last_name": null,
+            "name": "Ada Lovelace",
+            "updated_at": "<ts:fresh>"
+          },
+          "after": {
+            "clerk_id": "e2e_<user:ada>",
+            "created_at": "<ts:1>",
+            "deleted_at": null,
+            "email": "ada@e2e.test",
+            "first_name": null,
+            "id": "<user:ada>",
+            "last_name": null,
+            "name": "Ada Lovelace",
+            "updated_at": "<ts:fresh>"
+          }
+        }
+      ]
+    },
+    {
+      "label": "after decline: inner thoughts list as ada@e2e.test",
+      "status": 200,
+      "body": {
+        "data": {
+          "hasMore": false,
+          "sessions": [],
+          "total": 0
+        },
+        "success": true
+      },
+      "changes": [
+        {
+          "view": "user",
+          "kind": "changed",
+          "key": "<user:ada>",
+          "changedFields": [
+            "updated_at"
+          ],
+          "before": {
+            "clerk_id": "e2e_<user:ada>",
+            "created_at": "<ts:1>",
+            "deleted_at": null,
+            "email": "ada@e2e.test",
+            "first_name": null,
+            "id": "<user:ada>",
+            "last_name": null,
+            "name": "Ada Lovelace",
+            "updated_at": "<ts:fresh>"
+          },
+          "after": {
+            "clerk_id": "e2e_<user:ada>",
+            "created_at": "<ts:1>",
+            "deleted_at": null,
+            "email": "ada@e2e.test",
+            "first_name": null,
+            "id": "<user:ada>",
+            "last_name": null,
+            "name": "Ada Lovelace",
+            "updated_at": "<ts:fresh>"
+          }
+        }
+      ]
+    },
+    {
+      "label": "after decline: inner work list as ada@e2e.test",
+      "status": 200,
+      "body": {
+        "data": {
+          "hasMore": false,
+          "sessions": [],
+          "total": 0
+        },
+        "success": true
+      },
+      "changes": [
+        {
+          "view": "user",
+          "kind": "changed",
+          "key": "<user:ada>",
+          "changedFields": [
+            "updated_at"
+          ],
+          "before": {
+            "clerk_id": "e2e_<user:ada>",
+            "created_at": "<ts:1>",
+            "deleted_at": null,
+            "email": "ada@e2e.test",
+            "first_name": null,
+            "id": "<user:ada>",
+            "last_name": null,
+            "name": "Ada Lovelace",
+            "updated_at": "<ts:fresh>"
+          },
+          "after": {
+            "clerk_id": "e2e_<user:ada>",
+            "created_at": "<ts:1>",
+            "deleted_at": null,
+            "email": "ada@e2e.test",
+            "first_name": null,
+            "id": "<user:ada>",
+            "last_name": null,
+            "name": "Ada Lovelace",
+            "updated_at": "<ts:fresh>"
+          }
+        }
+      ]
+    },
+    {
+      "label": "after decline: knowledge base recent as ada@e2e.test",
+      "status": 200,
+      "body": {
+        "data": {
+          "takeaways": []
+        },
+        "success": true
+      },
+      "changes": [
+        {
+          "view": "user",
+          "kind": "changed",
+          "key": "<user:ada>",
+          "changedFields": [
+            "updated_at"
+          ],
+          "before": {
+            "clerk_id": "e2e_<user:ada>",
+            "created_at": "<ts:1>",
+            "deleted_at": null,
+            "email": "ada@e2e.test",
+            "first_name": null,
+            "id": "<user:ada>",
+            "last_name": null,
+            "name": "Ada Lovelace",
+            "updated_at": "<ts:fresh>"
+          },
+          "after": {
+            "clerk_id": "e2e_<user:ada>",
+            "created_at": "<ts:1>",
+            "deleted_at": null,
+            "email": "ada@e2e.test",
+            "first_name": null,
+            "id": "<user:ada>",
+            "last_name": null,
+            "name": "Ada Lovelace",
+            "updated_at": "<ts:fresh>"
+          }
+        }
+      ]
+    },
+    {
+      "label": "after decline: knowledge base themes as ada@e2e.test",
+      "status": 200,
+      "body": {
+        "data": {
+          "themes": []
+        },
+        "success": true
+      },
+      "changes": [
+        {
+          "view": "user",
+          "kind": "changed",
+          "key": "<user:ada>",
+          "changedFields": [
+            "updated_at"
+          ],
+          "before": {
+            "clerk_id": "e2e_<user:ada>",
+            "created_at": "<ts:1>",
+            "deleted_at": null,
+            "email": "ada@e2e.test",
+            "first_name": null,
+            "id": "<user:ada>",
+            "last_name": null,
+            "name": "Ada Lovelace",
+            "updated_at": "<ts:fresh>"
+          },
+          "after": {
+            "clerk_id": "e2e_<user:ada>",
+            "created_at": "<ts:1>",
+            "deleted_at": null,
+            "email": "ada@e2e.test",
+            "first_name": null,
+            "id": "<user:ada>",
+            "last_name": null,
+            "name": "Ada Lovelace",
+            "updated_at": "<ts:fresh>"
+          }
+        }
+      ]
+    },
+    {
+      "label": "after decline: people as ada@e2e.test",
+      "status": 200,
+      "body": {
+        "data": {
+          "people": [
+            {
+              "activeSessionCount": 1,
+              "connectedSince": "<ts:2>",
+              "id": "<user:bob>",
+              "initials": "BR",
+              "lastSession": {
+                "id": "<session:main>",
+                "status": "ACTIVE",
+                "updatedAt": "<ts:3>"
+              },
+              "name": "Bob Ross",
+              "nickname": "Bob Ross",
+              "relationshipId": "<relationship:main>"
+            }
+          ]
+        },
+        "success": true
+      },
+      "changes": [
+        {
+          "view": "user",
+          "kind": "changed",
+          "key": "<user:ada>",
+          "changedFields": [
+            "updated_at"
+          ],
+          "before": {
+            "clerk_id": "e2e_<user:ada>",
+            "created_at": "<ts:1>",
+            "deleted_at": null,
+            "email": "ada@e2e.test",
+            "first_name": null,
+            "id": "<user:ada>",
+            "last_name": null,
+            "name": "Ada Lovelace",
+            "updated_at": "<ts:fresh>"
+          },
+          "after": {
+            "clerk_id": "e2e_<user:ada>",
+            "created_at": "<ts:1>",
+            "deleted_at": null,
+            "email": "ada@e2e.test",
+            "first_name": null,
+            "id": "<user:ada>",
+            "last_name": null,
+            "name": "Ada Lovelace",
+            "updated_at": "<ts:fresh>"
+          }
+        }
+      ]
+    }
+  ]
+}
