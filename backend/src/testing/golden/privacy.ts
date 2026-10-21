@@ -75,6 +75,29 @@ export const USER_READS: ReadonlyArray<readonly [string, string]> = [
 export type ReadSet = 'session' | 'user' | 'all';
 
 /**
+ * The reads that can carry Stage 2 content (attempts, results, offers,
+ * delivered messages), for scenarios that read at many phases: R2, R3, R7.
+ * R1 and R6 — whose plan rows say "full read" — read everything.
+ */
+export const EMPATHY_READS = [
+  'session',
+  'state',
+  'messages',
+  'pending actions',
+  'empathy status',
+  'partner empathy',
+  'empathy draft',
+  'share suggestion',
+  'reconciler status',
+  'share offer',
+  'reconciler summary',
+  'pending consent',
+  'consent history',
+  'session list',
+  'badge count',
+];
+
+/**
  * One full read by `actor`: every session read, then (with `set: 'all'`) every
  * user read, each a step labelled `<phase>: <name> as <email>`.
  */

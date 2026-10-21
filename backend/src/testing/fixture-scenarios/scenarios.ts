@@ -52,8 +52,12 @@ const sec = (n: number) => at(n * 1000);
 // Shared content
 // ============================================================================
 
-const ADA_EMPATHY_STATEMENT =
+export const ADA_EMPATHY_STATEMENT =
   'I understand you might be feeling stressed from work. I want us to support each other better.';
+
+/** Bob's HELD attempt in RECONCILER_SHOWN_B. */
+export const BOB_HELD_EMPATHY_STATEMENT =
+  'I understand that Riley may feel alone with the household work and want their effort to be noticed.';
 
 const ADA_STORY: string[] = [
   "Hi, I'm having issues with my partner.",
@@ -106,7 +110,7 @@ const bobStory = (adaName: string): Line[] => [
   ['USER', 'Yes, I feel heard.', 'witness'],
 ];
 
-const SHARE_CONTENT =
+export const SHARE_CONTENT =
   "I feel like I'm running on empty - exhausted from work every day, and then coming home to more tasks. What I really need is for someone to see how hard I'm trying, even when I don't have anything left to give.";
 
 /** `a` guessed about `b` (names); `guesser`/`subject` are their participant keys. */
@@ -223,11 +227,7 @@ const BUILDERS: Record<TargetStage, Build> = {
     bob.milestones.empathy_submitted = sec(-30);
     // Bob's own attempt keeps the mobile share-offer fetch gate open, which only
     // requests pending offers once the user has submitted empathy.
-    bob.empathy = heldEmpathy(
-      'I understand that Riley may feel alone with the household work and want their effort to be noticed.',
-      'HELD',
-      false,
-    );
+    bob.empathy = heldEmpathy(BOB_HELD_EMPATHY_STATEMENT, 'HELD', false);
     return {
       invitation: ACCEPTED,
       participants: [adaWaitingInStage2('AWAITING_SHARING'), bob],

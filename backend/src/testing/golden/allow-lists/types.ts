@@ -81,4 +81,12 @@ export type AllowRule = AbsentKeysRule | AddedKeysRule | ValuesSubsetRule | Adde
 export interface AllowList {
   scenario: string;
   rules: AllowRule[];
+  /**
+   * Assertions the plan requires that the CURRENT shape cannot exercise (the
+   * behaviour does not exist yet — e.g. rounds). Documentation for the target
+   * re-record, which must add the steps and assertions named here; the
+   * comparator does not read it (TS-5 brief: "do not fake it … encode the
+   * target expectation in the allow-list").
+   */
+  targetOnly?: Array<{ assertion: string; why: string }>;
 }

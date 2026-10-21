@@ -246,6 +246,31 @@ export async function buildLabelMap(
         'tendingEntry',
         r => bare(r.sessionId),
       );
+      await rankWithin(
+        `SELECT id, direction FROM "RefinementAttemptCounter" ORDER BY "createdAt", id`,
+        'refinementCounter',
+        r => String(r.direction).replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/g, m => bare(m)),
+      );
+      await rankWithin(
+        `SELECT id, "userId" FROM "ValidationFeedbackDraft" ORDER BY "createdAt", id`,
+        'feedbackDraft',
+        r => bare(r.userId),
+      );
+      await rankWithin(
+        `SELECT id, "userId" FROM "EmpathyValidation" ORDER BY "validatedAt" NULLS LAST, id`,
+        'validation',
+        r => bare(r.userId),
+      );
+      await rankWithin(
+        `SELECT id, "userId" FROM "Stage4ProposalSelection" ORDER BY "selectedAt", id`,
+        'selection',
+        r => bare(r.userId),
+      );
+      await rankWithin(
+        `SELECT id, "sourceUserId" FROM "ConsentedContent" ORDER BY "consentedAt", id`,
+        'consentedContent',
+        r => bare(r.sourceUserId),
+      );
     },
     database,
   );
