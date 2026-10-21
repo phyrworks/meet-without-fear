@@ -336,6 +336,15 @@ export async function recordOrVerifyConcept(opts: {
   harness: Harness;
   steps: StepResult[];
   allowList: AllowList;
+  /**
+   * Old-shape ids that denote a concept row under another id, labelled as
+   * that row (TS-5). Today's Stage 4 DTOs name a need by its
+   * `Stage4NeedCoverage` row id when the coverage row has no `needId`
+   * (`needIdentifier = row.needId ?? row.id`); the target names the need
+   * itself. Aliasing the coverage id to the need it covers labels both runs
+   * the same. An alias whose `sameAs` has no concept label is left unresolved.
+   */
+  aliases?: Array<{ id: string; sameAs: string }>;
 }): Promise<ConceptRunReport> {
   const { scenario, harness, steps, allowList } = opts;
   if (allowList.scenario !== scenario) {
@@ -369,6 +378,10 @@ export async function recordOrVerifyConcept(opts: {
     seededClerkIds: harness.fixture.seededClerkIds,
     rows: Object.fromEntries([...merged].map(([c, m]) => [c, [...m.values()]])),
   });
+  for (const { id, sameAs } of opts.aliases ?? []) {
+    const label = map.labels.get(sameAs);
+    if (label) map.labels.set(id, label);
+  }
 
   const unresolved = new Set<string>();
   const keyed = (concept: string, rows: SnapshotRow[]): Record<string, unknown> => {

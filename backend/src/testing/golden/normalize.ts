@@ -271,6 +271,16 @@ export async function buildLabelMap(
         'consentedContent',
         r => bare(r.sourceUserId),
       );
+      await rankWithin(
+        `SELECT id, "sourceUserId" FROM "Stage4NeedCoverage" ORDER BY "createdAt", id`,
+        'needCoverage',
+        r => bare(r.sourceUserId),
+      );
+      await rankWithin(
+        `SELECT id, "userId" FROM "Stage4NeedDeclination" ORDER BY "declinedAt", id`,
+        'declination',
+        r => bare(r.userId),
+      );
     },
     database,
   );

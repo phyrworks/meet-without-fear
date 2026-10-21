@@ -16,6 +16,8 @@ export function goldenScenarioChecks(opts: {
   allowList: AllowList;
   harness: () => Harness;
   steps: () => StepResult[];
+  /** See `recordOrVerifyConcept`'s `aliases`. */
+  conceptAliases?: () => Array<{ id: string; sameAs: string }>;
 }): void {
   const { scenario, allowList } = opts;
 
@@ -35,7 +37,13 @@ export function goldenScenarioChecks(opts: {
   });
 
   it('matches the normalised concept baseline under its allow-list', async () => {
-    const report = await recordOrVerifyConcept({ scenario, harness: opts.harness(), steps: opts.steps(), allowList });
+    const report = await recordOrVerifyConcept({
+      scenario,
+      harness: opts.harness(),
+      steps: opts.steps(),
+      allowList,
+      aliases: opts.conceptAliases?.(),
+    });
     expect(report.unresolved).toEqual([]);
     if (report.recorded) {
       expect(process.env.GOLDEN_UPDATE?.split(',')).toContain(conceptGoldenName(scenario));

@@ -1,0 +1,5628 @@
+{
+  "scenario": "choices-hidden-until-shared",
+  "stage": "STAGE4_REDESIGN_PARTNER_INACTIVE",
+  "steps": [
+    {
+      "label": "before bob chooses: session as ada@e2e.test",
+      "status": 200,
+      "body": {
+        "data": {
+          "session": {
+            "createdAt": "<ts:2>",
+            "currentStage": 4,
+            "id": "<session:main>",
+            "myProgress": {
+              "stage": 4,
+              "status": "IN_PROGRESS"
+            },
+            "partner": {
+              "id": "<user:bob>",
+              "name": "Bob Ross",
+              "nickname": "Bob Ross"
+            },
+            "relationshipId": "<relationship:main>",
+            "resolvedAt": null,
+            "stageStatus": "IN_PROGRESS",
+            "status": "ACTIVE"
+          }
+        },
+        "success": true
+      },
+      "changes": [
+        {
+          "after": {
+            "biometricEnabled": false,
+            "biometricEnrolledAt": null,
+            "clerkId": "e2e_<user:ada>",
+            "createdAt": "<ts:1>",
+            "email": "ada@e2e.test",
+            "firstName": null,
+            "globalFacts": null,
+            "id": "<user:ada>",
+            "lastMoodIntensity": 7,
+            "lastName": null,
+            "memoryPreferences": null,
+            "name": "Ada Lovelace",
+            "notificationPreferences": null,
+            "privacyPreferences": null,
+            "pushToken": null,
+            "updatedAt": "<ts:fresh>"
+          },
+          "before": {
+            "biometricEnabled": false,
+            "biometricEnrolledAt": null,
+            "clerkId": "<clerkId:ada>",
+            "createdAt": "<ts:1>",
+            "email": "ada@e2e.test",
+            "firstName": null,
+            "globalFacts": null,
+            "id": "<user:ada>",
+            "lastMoodIntensity": 7,
+            "lastName": null,
+            "memoryPreferences": null,
+            "name": "Ada Lovelace",
+            "notificationPreferences": null,
+            "privacyPreferences": null,
+            "pushToken": null,
+            "updatedAt": "<ts:1>"
+          },
+          "changedFields": [
+            "clerkId",
+            "updatedAt"
+          ],
+          "key": "\"<user:ada>\"",
+          "kind": "changed",
+          "table": "User",
+          "timestampFacts": {
+            "updatedAt.bumped": "true",
+            "updatedAt==createdAt": "false"
+          }
+        }
+      ],
+      "changesAtResponse": [
+        {
+          "after": {
+            "biometricEnabled": false,
+            "biometricEnrolledAt": null,
+            "clerkId": "e2e_<user:ada>",
+            "createdAt": "<ts:1>",
+            "email": "ada@e2e.test",
+            "firstName": null,
+            "globalFacts": null,
+            "id": "<user:ada>",
+            "lastMoodIntensity": 7,
+            "lastName": null,
+            "memoryPreferences": null,
+            "name": "Ada Lovelace",
+            "notificationPreferences": null,
+            "privacyPreferences": null,
+            "pushToken": null,
+            "updatedAt": "<ts:fresh>"
+          },
+          "before": {
+            "biometricEnabled": false,
+            "biometricEnrolledAt": null,
+            "clerkId": "<clerkId:ada>",
+            "createdAt": "<ts:1>",
+            "email": "ada@e2e.test",
+            "firstName": null,
+            "globalFacts": null,
+            "id": "<user:ada>",
+            "lastMoodIntensity": 7,
+            "lastName": null,
+            "memoryPreferences": null,
+            "name": "Ada Lovelace",
+            "notificationPreferences": null,
+            "privacyPreferences": null,
+            "pushToken": null,
+            "updatedAt": "<ts:1>"
+          },
+          "changedFields": [
+            "clerkId",
+            "updatedAt"
+          ],
+          "key": "\"<user:ada>\"",
+          "kind": "changed",
+          "table": "User",
+          "timestampFacts": {
+            "updatedAt.bumped": "true",
+            "updatedAt==createdAt": "false"
+          }
+        }
+      ],
+      "settled": true
+    },
+    {
+      "label": "before bob chooses: state as ada@e2e.test",
+      "status": 200,
+      "body": {
+        "data": {
+          "compact": {
+            "canAdvance": true,
+            "isFirstSession": true,
+            "mySigned": true,
+            "mySignedAt": null,
+            "partnerSigned": true,
+            "partnerSignedAt": null
+          },
+          "invitation": {
+            "acceptedAt": "<ts:4>",
+            "createdAt": "<ts:4>",
+            "expiresAt": "<ts:7>",
+            "id": "<invitation:main>",
+            "invitedBy": {
+              "id": "<user:ada>",
+              "name": null
+            },
+            "isInviter": true,
+            "messageConfirmed": true,
+            "messageConfirmedAt": "<ts:4>",
+            "sessionId": "<session:main>",
+            "status": "ACCEPTED",
+            "topicFrame": null,
+            "topicFrameConfirmedAt": null
+          },
+          "messages": {
+            "hasMore": false,
+            "messages": []
+          },
+          "progress": {
+            "canAdvance": false,
+            "milestones": {
+              "feelHeardConfirmedAt": null,
+              "witnessStartedAt": "<ts:1>"
+            },
+            "myProgress": {
+              "completedAt": null,
+              "gatesSatisfied": {
+                "selectionSubmitted": true,
+                "selectionSubmittedAt": "<ts:6>"
+              },
+              "stage": 4,
+              "startedAt": "<ts:5>",
+              "status": "IN_PROGRESS"
+            },
+            "partnerProgress": {
+              "completedAt": null,
+              "stage": 4,
+              "startedAt": "<ts:5>",
+              "status": "IN_PROGRESS"
+            },
+            "sessionId": "<session:main>"
+          },
+          "session": {
+            "createdAt": "<ts:3>",
+            "currentStage": 4,
+            "id": "<session:main>",
+            "lastSeenChatItemId": null,
+            "lastViewedAt": null,
+            "myProgress": {
+              "stage": 4,
+              "status": "IN_PROGRESS"
+            },
+            "partner": {
+              "id": "<user:bob>",
+              "name": "Bob Ross",
+              "nickname": "Bob Ross"
+            },
+            "partnerLastActiveAt": "<ts:5>",
+            "partnerLastViewedAt": null,
+            "relationshipId": "<relationship:main>",
+            "resolvedAt": null,
+            "sourceInnerThoughts": null,
+            "stageStatus": "IN_PROGRESS",
+            "status": "ACTIVE"
+          }
+        },
+        "success": true
+      },
+      "changes": [
+        {
+          "after": {
+            "biometricEnabled": false,
+            "biometricEnrolledAt": null,
+            "clerkId": "e2e_<user:ada>",
+            "createdAt": "<ts:2>",
+            "email": "ada@e2e.test",
+            "firstName": null,
+            "globalFacts": null,
+            "id": "<user:ada>",
+            "lastMoodIntensity": 7,
+            "lastName": null,
+            "memoryPreferences": null,
+            "name": "Ada Lovelace",
+            "notificationPreferences": null,
+            "privacyPreferences": null,
+            "pushToken": null,
+            "updatedAt": "<ts:fresh>"
+          },
+          "before": {
+            "biometricEnabled": false,
+            "biometricEnrolledAt": null,
+            "clerkId": "e2e_<user:ada>",
+            "createdAt": "<ts:2>",
+            "email": "ada@e2e.test",
+            "firstName": null,
+            "globalFacts": null,
+            "id": "<user:ada>",
+            "lastMoodIntensity": 7,
+            "lastName": null,
+            "memoryPreferences": null,
+            "name": "Ada Lovelace",
+            "notificationPreferences": null,
+            "privacyPreferences": null,
+            "pushToken": null,
+            "updatedAt": "<ts:fresh>"
+          },
+          "changedFields": [
+            "updatedAt"
+          ],
+          "key": "\"<user:ada>\"",
+          "kind": "changed",
+          "table": "User",
+          "timestampFacts": {
+            "updatedAt.bumped": "true",
+            "updatedAt==createdAt": "false"
+          }
+        }
+      ],
+      "changesAtResponse": [
+        {
+          "after": {
+            "biometricEnabled": false,
+            "biometricEnrolledAt": null,
+            "clerkId": "e2e_<user:ada>",
+            "createdAt": "<ts:2>",
+            "email": "ada@e2e.test",
+            "firstName": null,
+            "globalFacts": null,
+            "id": "<user:ada>",
+            "lastMoodIntensity": 7,
+            "lastName": null,
+            "memoryPreferences": null,
+            "name": "Ada Lovelace",
+            "notificationPreferences": null,
+            "privacyPreferences": null,
+            "pushToken": null,
+            "updatedAt": "<ts:fresh>"
+          },
+          "before": {
+            "biometricEnabled": false,
+            "biometricEnrolledAt": null,
+            "clerkId": "e2e_<user:ada>",
+            "createdAt": "<ts:2>",
+            "email": "ada@e2e.test",
+            "firstName": null,
+            "globalFacts": null,
+            "id": "<user:ada>",
+            "lastMoodIntensity": 7,
+            "lastName": null,
+            "memoryPreferences": null,
+            "name": "Ada Lovelace",
+            "notificationPreferences": null,
+            "privacyPreferences": null,
+            "pushToken": null,
+            "updatedAt": "<ts:fresh>"
+          },
+          "changedFields": [
+            "updatedAt"
+          ],
+          "key": "\"<user:ada>\"",
+          "kind": "changed",
+          "table": "User",
+          "timestampFacts": {
+            "updatedAt.bumped": "true",
+            "updatedAt==createdAt": "false"
+          }
+        }
+      ],
+      "settled": true
+    },
+    {
+      "label": "before bob chooses: progress as ada@e2e.test",
+      "status": 200,
+      "body": {
+        "data": {
+          "milestones": {
+            "commonGroundFoundAt": null,
+            "feelHeardConfirmedAt": null,
+            "needsIdentifiedAt": "<ts:2>",
+            "witnessStartedAt": "<ts:1>"
+          },
+          "myProgress": {
+            "completedAt": null,
+            "gatesSatisfied": {
+              "selectionSubmitted": true,
+              "selectionSubmittedAt": "<ts:5>"
+            },
+            "stage": 4,
+            "startedAt": "<ts:4>",
+            "status": "IN_PROGRESS"
+          },
+          "partnerProgress": {
+            "completedAt": null,
+            "gatesSatisfied": {},
+            "stage": 4,
+            "startedAt": "<ts:4>",
+            "status": "IN_PROGRESS"
+          },
+          "sessionStatus": "ACTIVE"
+        },
+        "success": true
+      },
+      "changes": [
+        {
+          "after": {
+            "biometricEnabled": false,
+            "biometricEnrolledAt": null,
+            "clerkId": "e2e_<user:ada>",
+            "createdAt": "<ts:3>",
+            "email": "ada@e2e.test",
+            "firstName": null,
+            "globalFacts": null,
+            "id": "<user:ada>",
+            "lastMoodIntensity": 7,
+            "lastName": null,
+            "memoryPreferences": null,
+            "name": "Ada Lovelace",
+            "notificationPreferences": null,
+            "privacyPreferences": null,
+            "pushToken": null,
+            "updatedAt": "<ts:fresh>"
+          },
+          "before": {
+            "biometricEnabled": false,
+            "biometricEnrolledAt": null,
+            "clerkId": "e2e_<user:ada>",
+            "createdAt": "<ts:3>",
+            "email": "ada@e2e.test",
+            "firstName": null,
+            "globalFacts": null,
+            "id": "<user:ada>",
+            "lastMoodIntensity": 7,
+            "lastName": null,
+            "memoryPreferences": null,
+            "name": "Ada Lovelace",
+            "notificationPreferences": null,
+            "privacyPreferences": null,
+            "pushToken": null,
+            "updatedAt": "<ts:fresh>"
+          },
+          "changedFields": [
+            "updatedAt"
+          ],
+          "key": "\"<user:ada>\"",
+          "kind": "changed",
+          "table": "User",
+          "timestampFacts": {
+            "updatedAt.bumped": "true",
+            "updatedAt==createdAt": "false"
+          }
+        }
+      ],
+      "changesAtResponse": [
+        {
+          "after": {
+            "biometricEnabled": false,
+            "biometricEnrolledAt": null,
+            "clerkId": "e2e_<user:ada>",
+            "createdAt": "<ts:3>",
+            "email": "ada@e2e.test",
+            "firstName": null,
+            "globalFacts": null,
+            "id": "<user:ada>",
+            "lastMoodIntensity": 7,
+            "lastName": null,
+            "memoryPreferences": null,
+            "name": "Ada Lovelace",
+            "notificationPreferences": null,
+            "privacyPreferences": null,
+            "pushToken": null,
+            "updatedAt": "<ts:fresh>"
+          },
+          "before": {
+            "biometricEnabled": false,
+            "biometricEnrolledAt": null,
+            "clerkId": "e2e_<user:ada>",
+            "createdAt": "<ts:3>",
+            "email": "ada@e2e.test",
+            "firstName": null,
+            "globalFacts": null,
+            "id": "<user:ada>",
+            "lastMoodIntensity": 7,
+            "lastName": null,
+            "memoryPreferences": null,
+            "name": "Ada Lovelace",
+            "notificationPreferences": null,
+            "privacyPreferences": null,
+            "pushToken": null,
+            "updatedAt": "<ts:fresh>"
+          },
+          "changedFields": [
+            "updatedAt"
+          ],
+          "key": "\"<user:ada>\"",
+          "kind": "changed",
+          "table": "User",
+          "timestampFacts": {
+            "updatedAt.bumped": "true",
+            "updatedAt==createdAt": "false"
+          }
+        }
+      ],
+      "settled": true
+    },
+    {
+      "label": "before bob chooses: messages as ada@e2e.test",
+      "status": 200,
+      "body": {
+        "data": {
+          "hasMore": false,
+          "messages": []
+        },
+        "success": true
+      },
+      "changes": [
+        {
+          "after": {
+            "biometricEnabled": false,
+            "biometricEnrolledAt": null,
+            "clerkId": "e2e_<user:ada>",
+            "createdAt": "<ts:1>",
+            "email": "ada@e2e.test",
+            "firstName": null,
+            "globalFacts": null,
+            "id": "<user:ada>",
+            "lastMoodIntensity": 7,
+            "lastName": null,
+            "memoryPreferences": null,
+            "name": "Ada Lovelace",
+            "notificationPreferences": null,
+            "privacyPreferences": null,
+            "pushToken": null,
+            "updatedAt": "<ts:fresh>"
+          },
+          "before": {
+            "biometricEnabled": false,
+            "biometricEnrolledAt": null,
+            "clerkId": "e2e_<user:ada>",
+            "createdAt": "<ts:1>",
+            "email": "ada@e2e.test",
+            "firstName": null,
+            "globalFacts": null,
+            "id": "<user:ada>",
+            "lastMoodIntensity": 7,
+            "lastName": null,
+            "memoryPreferences": null,
+            "name": "Ada Lovelace",
+            "notificationPreferences": null,
+            "privacyPreferences": null,
+            "pushToken": null,
+            "updatedAt": "<ts:fresh>"
+          },
+          "changedFields": [
+            "updatedAt"
+          ],
+          "key": "\"<user:ada>\"",
+          "kind": "changed",
+          "table": "User",
+          "timestampFacts": {
+            "updatedAt.bumped": "true",
+            "updatedAt==createdAt": "false"
+          }
+        }
+      ],
+      "changesAtResponse": [
+        {
+          "after": {
+            "biometricEnabled": false,
+            "biometricEnrolledAt": null,
+            "clerkId": "e2e_<user:ada>",
+            "createdAt": "<ts:1>",
+            "email": "ada@e2e.test",
+            "firstName": null,
+            "globalFacts": null,
+            "id": "<user:ada>",
+            "lastMoodIntensity": 7,
+            "lastName": null,
+            "memoryPreferences": null,
+            "name": "Ada Lovelace",
+            "notificationPreferences": null,
+            "privacyPreferences": null,
+            "pushToken": null,
+            "updatedAt": "<ts:fresh>"
+          },
+          "before": {
+            "biometricEnabled": false,
+            "biometricEnrolledAt": null,
+            "clerkId": "e2e_<user:ada>",
+            "createdAt": "<ts:1>",
+            "email": "ada@e2e.test",
+            "firstName": null,
+            "globalFacts": null,
+            "id": "<user:ada>",
+            "lastMoodIntensity": 7,
+            "lastName": null,
+            "memoryPreferences": null,
+            "name": "Ada Lovelace",
+            "notificationPreferences": null,
+            "privacyPreferences": null,
+            "pushToken": null,
+            "updatedAt": "<ts:fresh>"
+          },
+          "changedFields": [
+            "updatedAt"
+          ],
+          "key": "\"<user:ada>\"",
+          "kind": "changed",
+          "table": "User",
+          "timestampFacts": {
+            "updatedAt.bumped": "true",
+            "updatedAt==createdAt": "false"
+          }
+        }
+      ],
+      "settled": true
+    },
+    {
+      "label": "before bob chooses: pending actions as ada@e2e.test",
+      "status": 200,
+      "body": {
+        "data": {
+          "actions": [],
+          "sentTabUpdates": 0
+        },
+        "success": true
+      },
+      "changes": [
+        {
+          "after": {
+            "biometricEnabled": false,
+            "biometricEnrolledAt": null,
+            "clerkId": "e2e_<user:ada>",
+            "createdAt": "<ts:1>",
+            "email": "ada@e2e.test",
+            "firstName": null,
+            "globalFacts": null,
+            "id": "<user:ada>",
+            "lastMoodIntensity": 7,
+            "lastName": null,
+            "memoryPreferences": null,
+            "name": "Ada Lovelace",
+            "notificationPreferences": null,
+            "privacyPreferences": null,
+            "pushToken": null,
+            "updatedAt": "<ts:fresh>"
+          },
+          "before": {
+            "biometricEnabled": false,
+            "biometricEnrolledAt": null,
+            "clerkId": "e2e_<user:ada>",
+            "createdAt": "<ts:1>",
+            "email": "ada@e2e.test",
+            "firstName": null,
+            "globalFacts": null,
+            "id": "<user:ada>",
+            "lastMoodIntensity": 7,
+            "lastName": null,
+            "memoryPreferences": null,
+            "name": "Ada Lovelace",
+            "notificationPreferences": null,
+            "privacyPreferences": null,
+            "pushToken": null,
+            "updatedAt": "<ts:fresh>"
+          },
+          "changedFields": [
+            "updatedAt"
+          ],
+          "key": "\"<user:ada>\"",
+          "kind": "changed",
+          "table": "User",
+          "timestampFacts": {
+            "updatedAt.bumped": "true",
+            "updatedAt==createdAt": "false"
+          }
+        }
+      ],
+      "changesAtResponse": [
+        {
+          "after": {
+            "biometricEnabled": false,
+            "biometricEnrolledAt": null,
+            "clerkId": "e2e_<user:ada>",
+            "createdAt": "<ts:1>",
+            "email": "ada@e2e.test",
+            "firstName": null,
+            "globalFacts": null,
+            "id": "<user:ada>",
+            "lastMoodIntensity": 7,
+            "lastName": null,
+            "memoryPreferences": null,
+            "name": "Ada Lovelace",
+            "notificationPreferences": null,
+            "privacyPreferences": null,
+            "pushToken": null,
+            "updatedAt": "<ts:fresh>"
+          },
+          "before": {
+            "biometricEnabled": false,
+            "biometricEnrolledAt": null,
+            "clerkId": "e2e_<user:ada>",
+            "createdAt": "<ts:1>",
+            "email": "ada@e2e.test",
+            "firstName": null,
+            "globalFacts": null,
+            "id": "<user:ada>",
+            "lastMoodIntensity": 7,
+            "lastName": null,
+            "memoryPreferences": null,
+            "name": "Ada Lovelace",
+            "notificationPreferences": null,
+            "privacyPreferences": null,
+            "pushToken": null,
+            "updatedAt": "<ts:fresh>"
+          },
+          "changedFields": [
+            "updatedAt"
+          ],
+          "key": "\"<user:ada>\"",
+          "kind": "changed",
+          "table": "User",
+          "timestampFacts": {
+            "updatedAt.bumped": "true",
+            "updatedAt==createdAt": "false"
+          }
+        }
+      ],
+      "settled": true
+    },
+    {
+      "label": "before bob chooses: stage4 as ada@e2e.test",
+      "status": 200,
+      "body": {
+        "data": {
+          "coverageAudit": {
+            "covered": [
+              {
+                "coveringProposalIds": [
+                  "<proposal:main#1>"
+                ],
+                "id": "<needCoverage:ada#1>",
+                "label": "Partnership",
+                "note": "Sunday planning check-in directly covers partnership.",
+                "source": "YOU",
+                "userDeclinedToAddress": false
+              }
+            ],
+            "open": [
+              {
+                "coveringProposalIds": [],
+                "id": "<needCoverage:ada#2>",
+                "label": "Appreciation",
+                "note": "No active shared proposal directly covers appreciation yet.",
+                "source": "YOU",
+                "userDeclinedToAddress": false
+              }
+            ],
+            "partial": [
+              {
+                "coveringProposalIds": [
+                  "<proposal:main#1>",
+                  "<proposal:main#2>"
+                ],
+                "id": "<needCoverage:bob#1>",
+                "label": "Support",
+                "note": "Support is partly covered but may need more specificity.",
+                "source": "PARTNER",
+                "userDeclinedToAddress": false
+              }
+            ],
+            "updatedAt": "<ts:4>"
+          },
+          "inventory": {
+            "individualCommitments": [
+              {
+                "description": "I will name when I am overloaded before I disappear",
+                "duration": "This week",
+                "id": "<proposal:main#3>",
+                "kind": "INDIVIDUAL_COMMITMENT",
+                "measureOfSuccess": "Stress is named before withdrawal",
+                "needsAddressed": [
+                  {
+                    "coverage": "COVERED",
+                    "label": "Appreciation"
+                  }
+                ],
+                "ownerLabel": "You",
+                "sourceLabel": "YOU",
+                "status": "ACTIVE"
+              }
+            ],
+            "removedProposalCount": 1,
+            "sharedProposals": [
+              {
+                "description": "Use a pause phrase when either person starts to shut down",
+                "duration": "One month",
+                "id": "<proposal:main#2>",
+                "kind": "SHARED_PROPOSAL",
+                "measureOfSuccess": "Hard conversations can pause without either person feeling abandoned",
+                "needsAddressed": [
+                  {
+                    "coverage": "PARTIAL",
+                    "id": "<needCoverage:bob#1>",
+                    "label": "Support"
+                  }
+                ],
+                "sourceLabel": "PARTNER",
+                "status": "ACTIVE"
+              },
+              {
+                "description": "Try a Sunday evening planning check-in for the next two weeks",
+                "duration": "Two weeks",
+                "id": "<proposal:main#1>",
+                "kind": "SHARED_PROPOSAL",
+                "measureOfSuccess": "Both people know the week plan before Monday",
+                "myDecision": "WILLING",
+                "needsAddressed": [
+                  {
+                    "coverage": "COVERED",
+                    "id": "<needCoverage:ada#1>",
+                    "label": "Partnership"
+                  },
+                  {
+                    "coverage": "PARTIAL",
+                    "id": "<needCoverage:bob#1>",
+                    "label": "Support"
+                  }
+                ],
+                "sourceLabel": "YOU",
+                "status": "ACTIVE"
+              }
+            ],
+            "unaddressedNeeds": [
+              {
+                "id": "<needCoverage:ada#2>",
+                "label": "Appreciation",
+                "note": "No active shared proposal directly covers appreciation yet.",
+                "source": "YOU"
+              }
+            ],
+            "updatedAt": "<ts:3>"
+          },
+          "mySelectionStatus": "SUBMITTED",
+          "mySelections": [
+            {
+              "decision": "WILLING",
+              "note": null,
+              "proposalId": "<proposal:main#1>",
+              "selectedAt": "<ts:2>",
+              "updatedAt": "<ts:5>"
+            }
+          ],
+          "outcome": null,
+          "partnerSelectionStatus": "NOT_STARTED",
+          "partnerSelections": [],
+          "phase": "SELECTION",
+          "tendingPreview": null,
+          "walkthrough": {
+            "currentIndex": 0,
+            "currentNeed": {
+              "id": "<needCoverage:ada#1>",
+              "label": "Partnership",
+              "source": "YOU",
+              "status": "in_progress"
+            },
+            "defaultCheckInDate": "2026-10-31",
+            "ownNeeds": [
+              {
+                "id": "<needCoverage:ada#1>",
+                "label": "Partnership",
+                "source": "YOU",
+                "status": "in_progress"
+              },
+              {
+                "id": "<needCoverage:ada#2>",
+                "label": "Appreciation",
+                "source": "YOU",
+                "status": "needs_options"
+              }
+            ],
+            "partnerNeeds": [
+              {
+                "id": "<needCoverage:bob#1>",
+                "label": "Support",
+                "source": "PARTNER",
+                "status": "not_started"
+              }
+            ],
+            "phase": "MY_NEEDS",
+            "proposalGroups": [
+              {
+                "key": "you_suggested",
+                "proposals": [
+                  {
+                    "description": "Try a Sunday evening planning check-in for the next two weeks",
+                    "duration": "Two weeks",
+                    "id": "<proposal:main#1>",
+                    "kind": "SHARED_PROPOSAL",
+                    "measureOfSuccess": "Both people know the week plan before Monday",
+                    "myDecision": "WILLING",
+                    "needsAddressed": [
+                      {
+                        "coverage": "COVERED",
+                        "id": "<needCoverage:ada#1>",
+                        "label": "Partnership"
+                      },
+                      {
+                        "coverage": "PARTIAL",
+                        "id": "<needCoverage:bob#1>",
+                        "label": "Support"
+                      }
+                    ],
+                    "sourceLabel": "YOU",
+                    "status": "ACTIVE"
+                  }
+                ],
+                "readOnly": false,
+                "title": "Options you suggested"
+              },
+              {
+                "key": "partner_suggested",
+                "proposals": [],
+                "readOnly": false,
+                "title": "Options your partner suggested"
+              },
+              {
+                "key": "ai_suggested",
+                "proposals": [],
+                "readOnly": false,
+                "title": "MWF ideas"
+              }
+            ],
+            "qualityWarnings": [],
+            "totalInPhase": 2
+          }
+        },
+        "success": true
+      },
+      "changes": [
+        {
+          "after": {
+            "biometricEnabled": false,
+            "biometricEnrolledAt": null,
+            "clerkId": "e2e_<user:ada>",
+            "createdAt": "<ts:1>",
+            "email": "ada@e2e.test",
+            "firstName": null,
+            "globalFacts": null,
+            "id": "<user:ada>",
+            "lastMoodIntensity": 7,
+            "lastName": null,
+            "memoryPreferences": null,
+            "name": "Ada Lovelace",
+            "notificationPreferences": null,
+            "privacyPreferences": null,
+            "pushToken": null,
+            "updatedAt": "<ts:fresh>"
+          },
+          "before": {
+            "biometricEnabled": false,
+            "biometricEnrolledAt": null,
+            "clerkId": "e2e_<user:ada>",
+            "createdAt": "<ts:1>",
+            "email": "ada@e2e.test",
+            "firstName": null,
+            "globalFacts": null,
+            "id": "<user:ada>",
+            "lastMoodIntensity": 7,
+            "lastName": null,
+            "memoryPreferences": null,
+            "name": "Ada Lovelace",
+            "notificationPreferences": null,
+            "privacyPreferences": null,
+            "pushToken": null,
+            "updatedAt": "<ts:fresh>"
+          },
+          "changedFields": [
+            "updatedAt"
+          ],
+          "key": "\"<user:ada>\"",
+          "kind": "changed",
+          "table": "User",
+          "timestampFacts": {
+            "updatedAt.bumped": "true",
+            "updatedAt==createdAt": "false"
+          }
+        }
+      ],
+      "changesAtResponse": [
+        {
+          "after": {
+            "biometricEnabled": false,
+            "biometricEnrolledAt": null,
+            "clerkId": "e2e_<user:ada>",
+            "createdAt": "<ts:1>",
+            "email": "ada@e2e.test",
+            "firstName": null,
+            "globalFacts": null,
+            "id": "<user:ada>",
+            "lastMoodIntensity": 7,
+            "lastName": null,
+            "memoryPreferences": null,
+            "name": "Ada Lovelace",
+            "notificationPreferences": null,
+            "privacyPreferences": null,
+            "pushToken": null,
+            "updatedAt": "<ts:fresh>"
+          },
+          "before": {
+            "biometricEnabled": false,
+            "biometricEnrolledAt": null,
+            "clerkId": "e2e_<user:ada>",
+            "createdAt": "<ts:1>",
+            "email": "ada@e2e.test",
+            "firstName": null,
+            "globalFacts": null,
+            "id": "<user:ada>",
+            "lastMoodIntensity": 7,
+            "lastName": null,
+            "memoryPreferences": null,
+            "name": "Ada Lovelace",
+            "notificationPreferences": null,
+            "privacyPreferences": null,
+            "pushToken": null,
+            "updatedAt": "<ts:fresh>"
+          },
+          "changedFields": [
+            "updatedAt"
+          ],
+          "key": "\"<user:ada>\"",
+          "kind": "changed",
+          "table": "User",
+          "timestampFacts": {
+            "updatedAt.bumped": "true",
+            "updatedAt==createdAt": "false"
+          }
+        }
+      ],
+      "settled": true
+    },
+    {
+      "label": "before bob chooses: agreements as ada@e2e.test",
+      "status": 200,
+      "body": {
+        "data": {
+          "agreements": []
+        },
+        "success": true
+      },
+      "changes": [
+        {
+          "after": {
+            "biometricEnabled": false,
+            "biometricEnrolledAt": null,
+            "clerkId": "e2e_<user:ada>",
+            "createdAt": "<ts:1>",
+            "email": "ada@e2e.test",
+            "firstName": null,
+            "globalFacts": null,
+            "id": "<user:ada>",
+            "lastMoodIntensity": 7,
+            "lastName": null,
+            "memoryPreferences": null,
+            "name": "Ada Lovelace",
+            "notificationPreferences": null,
+            "privacyPreferences": null,
+            "pushToken": null,
+            "updatedAt": "<ts:fresh>"
+          },
+          "before": {
+            "biometricEnabled": false,
+            "biometricEnrolledAt": null,
+            "clerkId": "e2e_<user:ada>",
+            "createdAt": "<ts:1>",
+            "email": "ada@e2e.test",
+            "firstName": null,
+            "globalFacts": null,
+            "id": "<user:ada>",
+            "lastMoodIntensity": 7,
+            "lastName": null,
+            "memoryPreferences": null,
+            "name": "Ada Lovelace",
+            "notificationPreferences": null,
+            "privacyPreferences": null,
+            "pushToken": null,
+            "updatedAt": "<ts:fresh>"
+          },
+          "changedFields": [
+            "updatedAt"
+          ],
+          "key": "\"<user:ada>\"",
+          "kind": "changed",
+          "table": "User",
+          "timestampFacts": {
+            "updatedAt.bumped": "true",
+            "updatedAt==createdAt": "false"
+          }
+        }
+      ],
+      "changesAtResponse": [
+        {
+          "after": {
+            "biometricEnabled": false,
+            "biometricEnrolledAt": null,
+            "clerkId": "e2e_<user:ada>",
+            "createdAt": "<ts:1>",
+            "email": "ada@e2e.test",
+            "firstName": null,
+            "globalFacts": null,
+            "id": "<user:ada>",
+            "lastMoodIntensity": 7,
+            "lastName": null,
+            "memoryPreferences": null,
+            "name": "Ada Lovelace",
+            "notificationPreferences": null,
+            "privacyPreferences": null,
+            "pushToken": null,
+            "updatedAt": "<ts:fresh>"
+          },
+          "before": {
+            "biometricEnabled": false,
+            "biometricEnrolledAt": null,
+            "clerkId": "e2e_<user:ada>",
+            "createdAt": "<ts:1>",
+            "email": "ada@e2e.test",
+            "firstName": null,
+            "globalFacts": null,
+            "id": "<user:ada>",
+            "lastMoodIntensity": 7,
+            "lastName": null,
+            "memoryPreferences": null,
+            "name": "Ada Lovelace",
+            "notificationPreferences": null,
+            "privacyPreferences": null,
+            "pushToken": null,
+            "updatedAt": "<ts:fresh>"
+          },
+          "changedFields": [
+            "updatedAt"
+          ],
+          "key": "\"<user:ada>\"",
+          "kind": "changed",
+          "table": "User",
+          "timestampFacts": {
+            "updatedAt.bumped": "true",
+            "updatedAt==createdAt": "false"
+          }
+        }
+      ],
+      "settled": true
+    },
+    {
+      "label": "before bob chooses: session list as ada@e2e.test",
+      "status": 200,
+      "body": {
+        "data": {
+          "hasMore": false,
+          "items": [
+            {
+              "createdAt": "<ts:2>",
+              "hasUnread": true,
+              "id": "<session:main>",
+              "lastSeenChatItemId": null,
+              "lastViewedAt": null,
+              "myProgress": {
+                "completedAt": null,
+                "stage": 4,
+                "startedAt": "<ts:3>",
+                "status": "IN_PROGRESS"
+              },
+              "partner": {
+                "id": "<user:bob>",
+                "name": "Bob Ross",
+                "nickname": "Bob Ross"
+              },
+              "partnerActionNeeded": [
+                "complete_stage"
+              ],
+              "partnerProgress": {
+                "completedAt": null,
+                "stage": 4,
+                "startedAt": "<ts:3>",
+                "status": "IN_PROGRESS"
+              },
+              "relationshipId": "<relationship:main>",
+              "selfActionNeeded": [
+                "complete_stage"
+              ],
+              "status": "ACTIVE",
+              "statusSummary": {
+                "partnerStatus": "Bob Ross is thinking about next steps",
+                "userStatus": "Considering next steps"
+              },
+              "updatedAt": "<ts:2>"
+            }
+          ]
+        },
+        "success": true
+      },
+      "changes": [
+        {
+          "after": {
+            "biometricEnabled": false,
+            "biometricEnrolledAt": null,
+            "clerkId": "e2e_<user:ada>",
+            "createdAt": "<ts:1>",
+            "email": "ada@e2e.test",
+            "firstName": null,
+            "globalFacts": null,
+            "id": "<user:ada>",
+            "lastMoodIntensity": 7,
+            "lastName": null,
+            "memoryPreferences": null,
+            "name": "Ada Lovelace",
+            "notificationPreferences": null,
+            "privacyPreferences": null,
+            "pushToken": null,
+            "updatedAt": "<ts:fresh>"
+          },
+          "before": {
+            "biometricEnabled": false,
+            "biometricEnrolledAt": null,
+            "clerkId": "e2e_<user:ada>",
+            "createdAt": "<ts:1>",
+            "email": "ada@e2e.test",
+            "firstName": null,
+            "globalFacts": null,
+            "id": "<user:ada>",
+            "lastMoodIntensity": 7,
+            "lastName": null,
+            "memoryPreferences": null,
+            "name": "Ada Lovelace",
+            "notificationPreferences": null,
+            "privacyPreferences": null,
+            "pushToken": null,
+            "updatedAt": "<ts:fresh>"
+          },
+          "changedFields": [
+            "updatedAt"
+          ],
+          "key": "\"<user:ada>\"",
+          "kind": "changed",
+          "table": "User",
+          "timestampFacts": {
+            "updatedAt.bumped": "true",
+            "updatedAt==createdAt": "false"
+          }
+        }
+      ],
+      "changesAtResponse": [
+        {
+          "after": {
+            "biometricEnabled": false,
+            "biometricEnrolledAt": null,
+            "clerkId": "e2e_<user:ada>",
+            "createdAt": "<ts:1>",
+            "email": "ada@e2e.test",
+            "firstName": null,
+            "globalFacts": null,
+            "id": "<user:ada>",
+            "lastMoodIntensity": 7,
+            "lastName": null,
+            "memoryPreferences": null,
+            "name": "Ada Lovelace",
+            "notificationPreferences": null,
+            "privacyPreferences": null,
+            "pushToken": null,
+            "updatedAt": "<ts:fresh>"
+          },
+          "before": {
+            "biometricEnabled": false,
+            "biometricEnrolledAt": null,
+            "clerkId": "e2e_<user:ada>",
+            "createdAt": "<ts:1>",
+            "email": "ada@e2e.test",
+            "firstName": null,
+            "globalFacts": null,
+            "id": "<user:ada>",
+            "lastMoodIntensity": 7,
+            "lastName": null,
+            "memoryPreferences": null,
+            "name": "Ada Lovelace",
+            "notificationPreferences": null,
+            "privacyPreferences": null,
+            "pushToken": null,
+            "updatedAt": "<ts:fresh>"
+          },
+          "changedFields": [
+            "updatedAt"
+          ],
+          "key": "\"<user:ada>\"",
+          "kind": "changed",
+          "table": "User",
+          "timestampFacts": {
+            "updatedAt.bumped": "true",
+            "updatedAt==createdAt": "false"
+          }
+        }
+      ],
+      "settled": true
+    },
+    {
+      "label": "before bob chooses: badge count as ada@e2e.test",
+      "status": 200,
+      "body": {
+        "data": {
+          "bySession": {},
+          "count": 0
+        },
+        "success": true
+      },
+      "changes": [
+        {
+          "after": {
+            "biometricEnabled": false,
+            "biometricEnrolledAt": null,
+            "clerkId": "e2e_<user:ada>",
+            "createdAt": "<ts:1>",
+            "email": "ada@e2e.test",
+            "firstName": null,
+            "globalFacts": null,
+            "id": "<user:ada>",
+            "lastMoodIntensity": 7,
+            "lastName": null,
+            "memoryPreferences": null,
+            "name": "Ada Lovelace",
+            "notificationPreferences": null,
+            "privacyPreferences": null,
+            "pushToken": null,
+            "updatedAt": "<ts:fresh>"
+          },
+          "before": {
+            "biometricEnabled": false,
+            "biometricEnrolledAt": null,
+            "clerkId": "e2e_<user:ada>",
+            "createdAt": "<ts:1>",
+            "email": "ada@e2e.test",
+            "firstName": null,
+            "globalFacts": null,
+            "id": "<user:ada>",
+            "lastMoodIntensity": 7,
+            "lastName": null,
+            "memoryPreferences": null,
+            "name": "Ada Lovelace",
+            "notificationPreferences": null,
+            "privacyPreferences": null,
+            "pushToken": null,
+            "updatedAt": "<ts:fresh>"
+          },
+          "changedFields": [
+            "updatedAt"
+          ],
+          "key": "\"<user:ada>\"",
+          "kind": "changed",
+          "table": "User",
+          "timestampFacts": {
+            "updatedAt.bumped": "true",
+            "updatedAt==createdAt": "false"
+          }
+        }
+      ],
+      "changesAtResponse": [
+        {
+          "after": {
+            "biometricEnabled": false,
+            "biometricEnrolledAt": null,
+            "clerkId": "e2e_<user:ada>",
+            "createdAt": "<ts:1>",
+            "email": "ada@e2e.test",
+            "firstName": null,
+            "globalFacts": null,
+            "id": "<user:ada>",
+            "lastMoodIntensity": 7,
+            "lastName": null,
+            "memoryPreferences": null,
+            "name": "Ada Lovelace",
+            "notificationPreferences": null,
+            "privacyPreferences": null,
+            "pushToken": null,
+            "updatedAt": "<ts:fresh>"
+          },
+          "before": {
+            "biometricEnabled": false,
+            "biometricEnrolledAt": null,
+            "clerkId": "e2e_<user:ada>",
+            "createdAt": "<ts:1>",
+            "email": "ada@e2e.test",
+            "firstName": null,
+            "globalFacts": null,
+            "id": "<user:ada>",
+            "lastMoodIntensity": 7,
+            "lastName": null,
+            "memoryPreferences": null,
+            "name": "Ada Lovelace",
+            "notificationPreferences": null,
+            "privacyPreferences": null,
+            "pushToken": null,
+            "updatedAt": "<ts:fresh>"
+          },
+          "changedFields": [
+            "updatedAt"
+          ],
+          "key": "\"<user:ada>\"",
+          "kind": "changed",
+          "table": "User",
+          "timestampFacts": {
+            "updatedAt.bumped": "true",
+            "updatedAt==createdAt": "false"
+          }
+        }
+      ],
+      "settled": true
+    },
+    {
+      "label": "choose pause as bob",
+      "status": 200,
+      "body": {
+        "data": {
+          "partnerSubmitted": true,
+          "state": {
+            "coverageAudit": {
+              "covered": [
+                {
+                  "coveringProposalIds": [
+                    "<proposal:main#1>"
+                  ],
+                  "id": "<needCoverage:ada#1>",
+                  "label": "Partnership",
+                  "note": "Sunday planning check-in directly covers partnership.",
+                  "source": "PARTNER",
+                  "userDeclinedToAddress": false
+                }
+              ],
+              "open": [
+                {
+                  "coveringProposalIds": [],
+                  "id": "<needCoverage:ada#2>",
+                  "label": "Appreciation",
+                  "note": "No active shared proposal directly covers appreciation yet.",
+                  "source": "PARTNER",
+                  "userDeclinedToAddress": false
+                }
+              ],
+              "partial": [
+                {
+                  "coveringProposalIds": [
+                    "<proposal:main#1>",
+                    "<proposal:main#2>"
+                  ],
+                  "id": "<needCoverage:bob#1>",
+                  "label": "Support",
+                  "note": "Support is partly covered but may need more specificity.",
+                  "source": "YOU",
+                  "userDeclinedToAddress": false
+                }
+              ],
+              "updatedAt": "<ts:3>"
+            },
+            "inventory": {
+              "individualCommitments": [
+                {
+                  "description": "I will name when I am overloaded before I disappear",
+                  "duration": "This week",
+                  "id": "<proposal:main#3>",
+                  "kind": "INDIVIDUAL_COMMITMENT",
+                  "measureOfSuccess": "Stress is named before withdrawal",
+                  "needsAddressed": [
+                    {
+                      "coverage": "COVERED",
+                      "label": "Appreciation"
+                    }
+                  ],
+                  "ownerLabel": "Partner",
+                  "sourceLabel": "PARTNER",
+                  "status": "ACTIVE"
+                }
+              ],
+              "removedProposalCount": 1,
+              "sharedProposals": [
+                {
+                  "description": "Use a pause phrase when either person starts to shut down",
+                  "duration": "One month",
+                  "id": "<proposal:main#2>",
+                  "kind": "SHARED_PROPOSAL",
+                  "measureOfSuccess": "Hard conversations can pause without either person feeling abandoned",
+                  "myDecision": "WILLING",
+                  "needsAddressed": [
+                    {
+                      "coverage": "PARTIAL",
+                      "id": "<needCoverage:bob#1>",
+                      "label": "Support"
+                    }
+                  ],
+                  "sourceLabel": "YOU",
+                  "status": "ACTIVE"
+                },
+                {
+                  "description": "Try a Sunday evening planning check-in for the next two weeks",
+                  "duration": "Two weeks",
+                  "id": "<proposal:main#1>",
+                  "kind": "SHARED_PROPOSAL",
+                  "measureOfSuccess": "Both people know the week plan before Monday",
+                  "needsAddressed": [
+                    {
+                      "coverage": "COVERED",
+                      "id": "<needCoverage:ada#1>",
+                      "label": "Partnership"
+                    },
+                    {
+                      "coverage": "PARTIAL",
+                      "id": "<needCoverage:bob#1>",
+                      "label": "Support"
+                    }
+                  ],
+                  "sourceLabel": "PARTNER",
+                  "status": "ACTIVE"
+                }
+              ],
+              "unaddressedNeeds": [
+                {
+                  "id": "<needCoverage:ada#2>",
+                  "label": "Appreciation",
+                  "note": "No active shared proposal directly covers appreciation yet.",
+                  "source": "PARTNER"
+                }
+              ],
+              "updatedAt": "<ts:2>"
+            },
+            "mySelectionStatus": "NOT_STARTED",
+            "mySelections": [
+              {
+                "decision": "WILLING",
+                "note": null,
+                "proposalId": "<proposal:main#2>",
+                "selectedAt": "<ts:fresh>",
+                "updatedAt": "<ts:fresh>"
+              }
+            ],
+            "outcome": null,
+            "partnerSelectionStatus": "SUBMITTED",
+            "partnerSelections": [],
+            "phase": "SELECTION",
+            "tendingPreview": null,
+            "walkthrough": {
+              "currentIndex": 0,
+              "currentNeed": {
+                "id": "<needCoverage:bob#1>",
+                "label": "Support",
+                "source": "YOU",
+                "status": "in_progress"
+              },
+              "defaultCheckInDate": "2026-10-31",
+              "ownNeeds": [
+                {
+                  "id": "<needCoverage:bob#1>",
+                  "label": "Support",
+                  "source": "YOU",
+                  "status": "in_progress"
+                }
+              ],
+              "partnerNeeds": [
+                {
+                  "id": "<needCoverage:ada#1>",
+                  "label": "Partnership",
+                  "source": "PARTNER",
+                  "status": "not_started"
+                },
+                {
+                  "id": "<needCoverage:ada#2>",
+                  "label": "Appreciation",
+                  "source": "PARTNER",
+                  "status": "needs_options"
+                }
+              ],
+              "phase": "MY_NEEDS",
+              "proposalGroups": [
+                {
+                  "key": "you_suggested",
+                  "proposals": [
+                    {
+                      "description": "Use a pause phrase when either person starts to shut down",
+                      "duration": "One month",
+                      "id": "<proposal:main#2>",
+                      "kind": "SHARED_PROPOSAL",
+                      "measureOfSuccess": "Hard conversations can pause without either person feeling abandoned",
+                      "myDecision": "WILLING",
+                      "needsAddressed": [
+                        {
+                          "coverage": "PARTIAL",
+                          "id": "<needCoverage:bob#1>",
+                          "label": "Support"
+                        }
+                      ],
+                      "sourceLabel": "YOU",
+                      "status": "ACTIVE"
+                    }
+                  ],
+                  "readOnly": false,
+                  "title": "Options you suggested"
+                },
+                {
+                  "key": "partner_suggested",
+                  "proposals": [
+                    {
+                      "description": "Try a Sunday evening planning check-in for the next two weeks",
+                      "duration": "Two weeks",
+                      "id": "<proposal:main#1>",
+                      "kind": "SHARED_PROPOSAL",
+                      "measureOfSuccess": "Both people know the week plan before Monday",
+                      "needsAddressed": [
+                        {
+                          "coverage": "COVERED",
+                          "id": "<needCoverage:ada#1>",
+                          "label": "Partnership"
+                        },
+                        {
+                          "coverage": "PARTIAL",
+                          "id": "<needCoverage:bob#1>",
+                          "label": "Support"
+                        }
+                      ],
+                      "sourceLabel": "PARTNER",
+                      "status": "ACTIVE"
+                    }
+                  ],
+                  "readOnly": false,
+                  "title": "Options your partner suggested"
+                },
+                {
+                  "key": "ai_suggested",
+                  "proposals": [],
+                  "readOnly": false,
+                  "title": "MWF ideas"
+                }
+              ],
+              "qualityWarnings": [],
+              "totalInPhase": 1
+            }
+          },
+          "submitted": false,
+          "submittedAt": "<ts:fresh>"
+        },
+        "success": true
+      },
+      "changes": [
+        {
+          "after": {
+            "decision": "WILLING",
+            "id": "<selection:bob#1>",
+            "note": null,
+            "proposalId": "<proposal:main#2>",
+            "selectedAt": "<ts:fresh>",
+            "sessionId": "<session:main>",
+            "updatedAt": "<ts:fresh>",
+            "userId": "<user:bob>"
+          },
+          "key": "\"<selection:bob#1>\"",
+          "kind": "added",
+          "table": "Stage4ProposalSelection",
+          "timestampFacts": {
+            "updatedAt==createdAt": "false"
+          }
+        },
+        {
+          "after": {
+            "biometricEnabled": false,
+            "biometricEnrolledAt": null,
+            "clerkId": "e2e_<user:bob>",
+            "createdAt": "<ts:1>",
+            "email": "bob@e2e.test",
+            "firstName": null,
+            "globalFacts": null,
+            "id": "<user:bob>",
+            "lastMoodIntensity": 7,
+            "lastName": null,
+            "memoryPreferences": null,
+            "name": "Bob Ross",
+            "notificationPreferences": null,
+            "privacyPreferences": null,
+            "pushToken": null,
+            "updatedAt": "<ts:fresh>"
+          },
+          "before": {
+            "biometricEnabled": false,
+            "biometricEnrolledAt": null,
+            "clerkId": "<clerkId:bob>",
+            "createdAt": "<ts:1>",
+            "email": "bob@e2e.test",
+            "firstName": null,
+            "globalFacts": null,
+            "id": "<user:bob>",
+            "lastMoodIntensity": 7,
+            "lastName": null,
+            "memoryPreferences": null,
+            "name": "Bob Ross",
+            "notificationPreferences": null,
+            "privacyPreferences": null,
+            "pushToken": null,
+            "updatedAt": "<ts:1>"
+          },
+          "changedFields": [
+            "clerkId",
+            "updatedAt"
+          ],
+          "key": "\"<user:bob>\"",
+          "kind": "changed",
+          "table": "User",
+          "timestampFacts": {
+            "updatedAt.bumped": "true",
+            "updatedAt==createdAt": "false"
+          }
+        }
+      ],
+      "changesAtResponse": [
+        {
+          "after": {
+            "decision": "WILLING",
+            "id": "<selection:bob#1>",
+            "note": null,
+            "proposalId": "<proposal:main#2>",
+            "selectedAt": "<ts:fresh>",
+            "sessionId": "<session:main>",
+            "updatedAt": "<ts:fresh>",
+            "userId": "<user:bob>"
+          },
+          "key": "\"<selection:bob#1>\"",
+          "kind": "added",
+          "table": "Stage4ProposalSelection",
+          "timestampFacts": {
+            "updatedAt==createdAt": "false"
+          }
+        },
+        {
+          "after": {
+            "biometricEnabled": false,
+            "biometricEnrolledAt": null,
+            "clerkId": "e2e_<user:bob>",
+            "createdAt": "<ts:1>",
+            "email": "bob@e2e.test",
+            "firstName": null,
+            "globalFacts": null,
+            "id": "<user:bob>",
+            "lastMoodIntensity": 7,
+            "lastName": null,
+            "memoryPreferences": null,
+            "name": "Bob Ross",
+            "notificationPreferences": null,
+            "privacyPreferences": null,
+            "pushToken": null,
+            "updatedAt": "<ts:fresh>"
+          },
+          "before": {
+            "biometricEnabled": false,
+            "biometricEnrolledAt": null,
+            "clerkId": "<clerkId:bob>",
+            "createdAt": "<ts:1>",
+            "email": "bob@e2e.test",
+            "firstName": null,
+            "globalFacts": null,
+            "id": "<user:bob>",
+            "lastMoodIntensity": 7,
+            "lastName": null,
+            "memoryPreferences": null,
+            "name": "Bob Ross",
+            "notificationPreferences": null,
+            "privacyPreferences": null,
+            "pushToken": null,
+            "updatedAt": "<ts:1>"
+          },
+          "changedFields": [
+            "clerkId",
+            "updatedAt"
+          ],
+          "key": "\"<user:bob>\"",
+          "kind": "changed",
+          "table": "User",
+          "timestampFacts": {
+            "updatedAt.bumped": "true",
+            "updatedAt==createdAt": "false"
+          }
+        }
+      ],
+      "settled": true
+    },
+    {
+      "label": "choose checkin as bob",
+      "status": 200,
+      "body": {
+        "data": {
+          "partnerSubmitted": true,
+          "state": {
+            "coverageAudit": {
+              "covered": [
+                {
+                  "coveringProposalIds": [
+                    "<proposal:main#1>"
+                  ],
+                  "id": "<needCoverage:ada#1>",
+                  "label": "Partnership",
+                  "note": "Sunday planning check-in directly covers partnership.",
+                  "source": "PARTNER",
+                  "userDeclinedToAddress": false
+                }
+              ],
+              "open": [
+                {
+                  "coveringProposalIds": [],
+                  "id": "<needCoverage:ada#2>",
+                  "label": "Appreciation",
+                  "note": "No active shared proposal directly covers appreciation yet.",
+                  "source": "PARTNER",
+                  "userDeclinedToAddress": false
+                }
+              ],
+              "partial": [
+                {
+                  "coveringProposalIds": [
+                    "<proposal:main#1>",
+                    "<proposal:main#2>"
+                  ],
+                  "id": "<needCoverage:bob#1>",
+                  "label": "Support",
+                  "note": "Support is partly covered but may need more specificity.",
+                  "source": "YOU",
+                  "userDeclinedToAddress": false
+                }
+              ],
+              "updatedAt": "<ts:3>"
+            },
+            "inventory": {
+              "individualCommitments": [
+                {
+                  "description": "I will name when I am overloaded before I disappear",
+                  "duration": "This week",
+                  "id": "<proposal:main#3>",
+                  "kind": "INDIVIDUAL_COMMITMENT",
+                  "measureOfSuccess": "Stress is named before withdrawal",
+                  "needsAddressed": [
+                    {
+                      "coverage": "COVERED",
+                      "label": "Appreciation"
+                    }
+                  ],
+                  "ownerLabel": "Partner",
+                  "sourceLabel": "PARTNER",
+                  "status": "ACTIVE"
+                }
+              ],
+              "removedProposalCount": 1,
+              "sharedProposals": [
+                {
+                  "description": "Use a pause phrase when either person starts to shut down",
+                  "duration": "One month",
+                  "id": "<proposal:main#2>",
+                  "kind": "SHARED_PROPOSAL",
+                  "measureOfSuccess": "Hard conversations can pause without either person feeling abandoned",
+                  "myDecision": "WILLING",
+                  "needsAddressed": [
+                    {
+                      "coverage": "PARTIAL",
+                      "id": "<needCoverage:bob#1>",
+                      "label": "Support"
+                    }
+                  ],
+                  "sourceLabel": "YOU",
+                  "status": "ACTIVE"
+                },
+                {
+                  "description": "Try a Sunday evening planning check-in for the next two weeks",
+                  "duration": "Two weeks",
+                  "id": "<proposal:main#1>",
+                  "kind": "SHARED_PROPOSAL",
+                  "measureOfSuccess": "Both people know the week plan before Monday",
+                  "myDecision": "WILLING",
+                  "needsAddressed": [
+                    {
+                      "coverage": "COVERED",
+                      "id": "<needCoverage:ada#1>",
+                      "label": "Partnership"
+                    },
+                    {
+                      "coverage": "PARTIAL",
+                      "id": "<needCoverage:bob#1>",
+                      "label": "Support"
+                    }
+                  ],
+                  "sourceLabel": "PARTNER",
+                  "status": "ACTIVE"
+                }
+              ],
+              "unaddressedNeeds": [
+                {
+                  "id": "<needCoverage:ada#2>",
+                  "label": "Appreciation",
+                  "note": "No active shared proposal directly covers appreciation yet.",
+                  "source": "PARTNER"
+                }
+              ],
+              "updatedAt": "<ts:2>"
+            },
+            "mySelectionStatus": "NOT_STARTED",
+            "mySelections": [
+              {
+                "decision": "WILLING",
+                "note": null,
+                "proposalId": "<proposal:main#1>",
+                "selectedAt": "<ts:fresh>",
+                "updatedAt": "<ts:fresh>"
+              },
+              {
+                "decision": "WILLING",
+                "note": null,
+                "proposalId": "<proposal:main#2>",
+                "selectedAt": "<ts:fresh>",
+                "updatedAt": "<ts:fresh>"
+              }
+            ],
+            "outcome": null,
+            "partnerSelectionStatus": "SUBMITTED",
+            "partnerSelections": [],
+            "phase": "SELECTION",
+            "tendingPreview": null,
+            "walkthrough": {
+              "currentIndex": 0,
+              "currentNeed": {
+                "id": "<needCoverage:bob#1>",
+                "label": "Support",
+                "source": "YOU",
+                "status": "in_progress"
+              },
+              "defaultCheckInDate": "2026-10-31",
+              "ownNeeds": [
+                {
+                  "id": "<needCoverage:bob#1>",
+                  "label": "Support",
+                  "source": "YOU",
+                  "status": "in_progress"
+                }
+              ],
+              "partnerNeeds": [
+                {
+                  "id": "<needCoverage:ada#1>",
+                  "label": "Partnership",
+                  "source": "PARTNER",
+                  "status": "not_started"
+                },
+                {
+                  "id": "<needCoverage:ada#2>",
+                  "label": "Appreciation",
+                  "source": "PARTNER",
+                  "status": "needs_options"
+                }
+              ],
+              "phase": "MY_NEEDS",
+              "proposalGroups": [
+                {
+                  "key": "you_suggested",
+                  "proposals": [
+                    {
+                      "description": "Use a pause phrase when either person starts to shut down",
+                      "duration": "One month",
+                      "id": "<proposal:main#2>",
+                      "kind": "SHARED_PROPOSAL",
+                      "measureOfSuccess": "Hard conversations can pause without either person feeling abandoned",
+                      "myDecision": "WILLING",
+                      "needsAddressed": [
+                        {
+                          "coverage": "PARTIAL",
+                          "id": "<needCoverage:bob#1>",
+                          "label": "Support"
+                        }
+                      ],
+                      "sourceLabel": "YOU",
+                      "status": "ACTIVE"
+                    }
+                  ],
+                  "readOnly": false,
+                  "title": "Options you suggested"
+                },
+                {
+                  "key": "partner_suggested",
+                  "proposals": [
+                    {
+                      "description": "Try a Sunday evening planning check-in for the next two weeks",
+                      "duration": "Two weeks",
+                      "id": "<proposal:main#1>",
+                      "kind": "SHARED_PROPOSAL",
+                      "measureOfSuccess": "Both people know the week plan before Monday",
+                      "myDecision": "WILLING",
+                      "needsAddressed": [
+                        {
+                          "coverage": "COVERED",
+                          "id": "<needCoverage:ada#1>",
+                          "label": "Partnership"
+                        },
+                        {
+                          "coverage": "PARTIAL",
+                          "id": "<needCoverage:bob#1>",
+                          "label": "Support"
+                        }
+                      ],
+                      "sourceLabel": "PARTNER",
+                      "status": "ACTIVE"
+                    }
+                  ],
+                  "readOnly": false,
+                  "title": "Options your partner suggested"
+                },
+                {
+                  "key": "ai_suggested",
+                  "proposals": [],
+                  "readOnly": false,
+                  "title": "MWF ideas"
+                }
+              ],
+              "qualityWarnings": [],
+              "totalInPhase": 1
+            }
+          },
+          "submitted": false,
+          "submittedAt": "<ts:fresh>"
+        },
+        "success": true
+      },
+      "changes": [
+        {
+          "after": {
+            "decision": "WILLING",
+            "id": "<selection:bob#2>",
+            "note": null,
+            "proposalId": "<proposal:main#1>",
+            "selectedAt": "<ts:fresh>",
+            "sessionId": "<session:main>",
+            "updatedAt": "<ts:fresh>",
+            "userId": "<user:bob>"
+          },
+          "key": "\"<selection:bob#2>\"",
+          "kind": "added",
+          "table": "Stage4ProposalSelection",
+          "timestampFacts": {
+            "updatedAt==createdAt": "false"
+          }
+        },
+        {
+          "after": {
+            "biometricEnabled": false,
+            "biometricEnrolledAt": null,
+            "clerkId": "e2e_<user:bob>",
+            "createdAt": "<ts:1>",
+            "email": "bob@e2e.test",
+            "firstName": null,
+            "globalFacts": null,
+            "id": "<user:bob>",
+            "lastMoodIntensity": 7,
+            "lastName": null,
+            "memoryPreferences": null,
+            "name": "Bob Ross",
+            "notificationPreferences": null,
+            "privacyPreferences": null,
+            "pushToken": null,
+            "updatedAt": "<ts:fresh>"
+          },
+          "before": {
+            "biometricEnabled": false,
+            "biometricEnrolledAt": null,
+            "clerkId": "e2e_<user:bob>",
+            "createdAt": "<ts:1>",
+            "email": "bob@e2e.test",
+            "firstName": null,
+            "globalFacts": null,
+            "id": "<user:bob>",
+            "lastMoodIntensity": 7,
+            "lastName": null,
+            "memoryPreferences": null,
+            "name": "Bob Ross",
+            "notificationPreferences": null,
+            "privacyPreferences": null,
+            "pushToken": null,
+            "updatedAt": "<ts:fresh>"
+          },
+          "changedFields": [
+            "updatedAt"
+          ],
+          "key": "\"<user:bob>\"",
+          "kind": "changed",
+          "table": "User",
+          "timestampFacts": {
+            "updatedAt.bumped": "true",
+            "updatedAt==createdAt": "false"
+          }
+        }
+      ],
+      "changesAtResponse": [
+        {
+          "after": {
+            "decision": "WILLING",
+            "id": "<selection:bob#2>",
+            "note": null,
+            "proposalId": "<proposal:main#1>",
+            "selectedAt": "<ts:fresh>",
+            "sessionId": "<session:main>",
+            "updatedAt": "<ts:fresh>",
+            "userId": "<user:bob>"
+          },
+          "key": "\"<selection:bob#2>\"",
+          "kind": "added",
+          "table": "Stage4ProposalSelection",
+          "timestampFacts": {
+            "updatedAt==createdAt": "false"
+          }
+        },
+        {
+          "after": {
+            "biometricEnabled": false,
+            "biometricEnrolledAt": null,
+            "clerkId": "e2e_<user:bob>",
+            "createdAt": "<ts:1>",
+            "email": "bob@e2e.test",
+            "firstName": null,
+            "globalFacts": null,
+            "id": "<user:bob>",
+            "lastMoodIntensity": 7,
+            "lastName": null,
+            "memoryPreferences": null,
+            "name": "Bob Ross",
+            "notificationPreferences": null,
+            "privacyPreferences": null,
+            "pushToken": null,
+            "updatedAt": "<ts:fresh>"
+          },
+          "before": {
+            "biometricEnabled": false,
+            "biometricEnrolledAt": null,
+            "clerkId": "e2e_<user:bob>",
+            "createdAt": "<ts:1>",
+            "email": "bob@e2e.test",
+            "firstName": null,
+            "globalFacts": null,
+            "id": "<user:bob>",
+            "lastMoodIntensity": 7,
+            "lastName": null,
+            "memoryPreferences": null,
+            "name": "Bob Ross",
+            "notificationPreferences": null,
+            "privacyPreferences": null,
+            "pushToken": null,
+            "updatedAt": "<ts:fresh>"
+          },
+          "changedFields": [
+            "updatedAt"
+          ],
+          "key": "\"<user:bob>\"",
+          "kind": "changed",
+          "table": "User",
+          "timestampFacts": {
+            "updatedAt.bumped": "true",
+            "updatedAt==createdAt": "false"
+          }
+        }
+      ],
+      "settled": true
+    },
+    {
+      "label": "bob chose, not shared: session as ada@e2e.test",
+      "status": 200,
+      "body": {
+        "data": {
+          "session": {
+            "createdAt": "<ts:2>",
+            "currentStage": 4,
+            "id": "<session:main>",
+            "myProgress": {
+              "stage": 4,
+              "status": "IN_PROGRESS"
+            },
+            "partner": {
+              "id": "<user:bob>",
+              "name": "Bob Ross",
+              "nickname": "Bob Ross"
+            },
+            "relationshipId": "<relationship:main>",
+            "resolvedAt": null,
+            "stageStatus": "IN_PROGRESS",
+            "status": "ACTIVE"
+          }
+        },
+        "success": true
+      },
+      "changes": [
+        {
+          "after": {
+            "biometricEnabled": false,
+            "biometricEnrolledAt": null,
+            "clerkId": "e2e_<user:ada>",
+            "createdAt": "<ts:1>",
+            "email": "ada@e2e.test",
+            "firstName": null,
+            "globalFacts": null,
+            "id": "<user:ada>",
+            "lastMoodIntensity": 7,
+            "lastName": null,
+            "memoryPreferences": null,
+            "name": "Ada Lovelace",
+            "notificationPreferences": null,
+            "privacyPreferences": null,
+            "pushToken": null,
+            "updatedAt": "<ts:fresh>"
+          },
+          "before": {
+            "biometricEnabled": false,
+            "biometricEnrolledAt": null,
+            "clerkId": "e2e_<user:ada>",
+            "createdAt": "<ts:1>",
+            "email": "ada@e2e.test",
+            "firstName": null,
+            "globalFacts": null,
+            "id": "<user:ada>",
+            "lastMoodIntensity": 7,
+            "lastName": null,
+            "memoryPreferences": null,
+            "name": "Ada Lovelace",
+            "notificationPreferences": null,
+            "privacyPreferences": null,
+            "pushToken": null,
+            "updatedAt": "<ts:fresh>"
+          },
+          "changedFields": [
+            "updatedAt"
+          ],
+          "key": "\"<user:ada>\"",
+          "kind": "changed",
+          "table": "User",
+          "timestampFacts": {
+            "updatedAt.bumped": "true",
+            "updatedAt==createdAt": "false"
+          }
+        }
+      ],
+      "changesAtResponse": [
+        {
+          "after": {
+            "biometricEnabled": false,
+            "biometricEnrolledAt": null,
+            "clerkId": "e2e_<user:ada>",
+            "createdAt": "<ts:1>",
+            "email": "ada@e2e.test",
+            "firstName": null,
+            "globalFacts": null,
+            "id": "<user:ada>",
+            "lastMoodIntensity": 7,
+            "lastName": null,
+            "memoryPreferences": null,
+            "name": "Ada Lovelace",
+            "notificationPreferences": null,
+            "privacyPreferences": null,
+            "pushToken": null,
+            "updatedAt": "<ts:fresh>"
+          },
+          "before": {
+            "biometricEnabled": false,
+            "biometricEnrolledAt": null,
+            "clerkId": "e2e_<user:ada>",
+            "createdAt": "<ts:1>",
+            "email": "ada@e2e.test",
+            "firstName": null,
+            "globalFacts": null,
+            "id": "<user:ada>",
+            "lastMoodIntensity": 7,
+            "lastName": null,
+            "memoryPreferences": null,
+            "name": "Ada Lovelace",
+            "notificationPreferences": null,
+            "privacyPreferences": null,
+            "pushToken": null,
+            "updatedAt": "<ts:fresh>"
+          },
+          "changedFields": [
+            "updatedAt"
+          ],
+          "key": "\"<user:ada>\"",
+          "kind": "changed",
+          "table": "User",
+          "timestampFacts": {
+            "updatedAt.bumped": "true",
+            "updatedAt==createdAt": "false"
+          }
+        }
+      ],
+      "settled": true
+    },
+    {
+      "label": "bob chose, not shared: state as ada@e2e.test",
+      "status": 200,
+      "body": {
+        "data": {
+          "compact": {
+            "canAdvance": true,
+            "isFirstSession": true,
+            "mySigned": true,
+            "mySignedAt": null,
+            "partnerSigned": true,
+            "partnerSignedAt": null
+          },
+          "invitation": {
+            "acceptedAt": "<ts:4>",
+            "createdAt": "<ts:4>",
+            "expiresAt": "<ts:7>",
+            "id": "<invitation:main>",
+            "invitedBy": {
+              "id": "<user:ada>",
+              "name": null
+            },
+            "isInviter": true,
+            "messageConfirmed": true,
+            "messageConfirmedAt": "<ts:4>",
+            "sessionId": "<session:main>",
+            "status": "ACCEPTED",
+            "topicFrame": null,
+            "topicFrameConfirmedAt": null
+          },
+          "messages": {
+            "hasMore": false,
+            "messages": []
+          },
+          "progress": {
+            "canAdvance": false,
+            "milestones": {
+              "feelHeardConfirmedAt": null,
+              "witnessStartedAt": "<ts:1>"
+            },
+            "myProgress": {
+              "completedAt": null,
+              "gatesSatisfied": {
+                "selectionSubmitted": true,
+                "selectionSubmittedAt": "<ts:6>"
+              },
+              "stage": 4,
+              "startedAt": "<ts:5>",
+              "status": "IN_PROGRESS"
+            },
+            "partnerProgress": {
+              "completedAt": null,
+              "stage": 4,
+              "startedAt": "<ts:5>",
+              "status": "IN_PROGRESS"
+            },
+            "sessionId": "<session:main>"
+          },
+          "session": {
+            "createdAt": "<ts:3>",
+            "currentStage": 4,
+            "id": "<session:main>",
+            "lastSeenChatItemId": null,
+            "lastViewedAt": null,
+            "myProgress": {
+              "stage": 4,
+              "status": "IN_PROGRESS"
+            },
+            "partner": {
+              "id": "<user:bob>",
+              "name": "Bob Ross",
+              "nickname": "Bob Ross"
+            },
+            "partnerLastActiveAt": "<ts:5>",
+            "partnerLastViewedAt": null,
+            "relationshipId": "<relationship:main>",
+            "resolvedAt": null,
+            "sourceInnerThoughts": null,
+            "stageStatus": "IN_PROGRESS",
+            "status": "ACTIVE"
+          }
+        },
+        "success": true
+      },
+      "changes": [
+        {
+          "after": {
+            "biometricEnabled": false,
+            "biometricEnrolledAt": null,
+            "clerkId": "e2e_<user:ada>",
+            "createdAt": "<ts:2>",
+            "email": "ada@e2e.test",
+            "firstName": null,
+            "globalFacts": null,
+            "id": "<user:ada>",
+            "lastMoodIntensity": 7,
+            "lastName": null,
+            "memoryPreferences": null,
+            "name": "Ada Lovelace",
+            "notificationPreferences": null,
+            "privacyPreferences": null,
+            "pushToken": null,
+            "updatedAt": "<ts:fresh>"
+          },
+          "before": {
+            "biometricEnabled": false,
+            "biometricEnrolledAt": null,
+            "clerkId": "e2e_<user:ada>",
+            "createdAt": "<ts:2>",
+            "email": "ada@e2e.test",
+            "firstName": null,
+            "globalFacts": null,
+            "id": "<user:ada>",
+            "lastMoodIntensity": 7,
+            "lastName": null,
+            "memoryPreferences": null,
+            "name": "Ada Lovelace",
+            "notificationPreferences": null,
+            "privacyPreferences": null,
+            "pushToken": null,
+            "updatedAt": "<ts:fresh>"
+          },
+          "changedFields": [
+            "updatedAt"
+          ],
+          "key": "\"<user:ada>\"",
+          "kind": "changed",
+          "table": "User",
+          "timestampFacts": {
+            "updatedAt.bumped": "true",
+            "updatedAt==createdAt": "false"
+          }
+        }
+      ],
+      "changesAtResponse": [
+        {
+          "after": {
+            "biometricEnabled": false,
+            "biometricEnrolledAt": null,
+            "clerkId": "e2e_<user:ada>",
+            "createdAt": "<ts:2>",
+            "email": "ada@e2e.test",
+            "firstName": null,
+            "globalFacts": null,
+            "id": "<user:ada>",
+            "lastMoodIntensity": 7,
+            "lastName": null,
+            "memoryPreferences": null,
+            "name": "Ada Lovelace",
+            "notificationPreferences": null,
+            "privacyPreferences": null,
+            "pushToken": null,
+            "updatedAt": "<ts:fresh>"
+          },
+          "before": {
+            "biometricEnabled": false,
+            "biometricEnrolledAt": null,
+            "clerkId": "e2e_<user:ada>",
+            "createdAt": "<ts:2>",
+            "email": "ada@e2e.test",
+            "firstName": null,
+            "globalFacts": null,
+            "id": "<user:ada>",
+            "lastMoodIntensity": 7,
+            "lastName": null,
+            "memoryPreferences": null,
+            "name": "Ada Lovelace",
+            "notificationPreferences": null,
+            "privacyPreferences": null,
+            "pushToken": null,
+            "updatedAt": "<ts:fresh>"
+          },
+          "changedFields": [
+            "updatedAt"
+          ],
+          "key": "\"<user:ada>\"",
+          "kind": "changed",
+          "table": "User",
+          "timestampFacts": {
+            "updatedAt.bumped": "true",
+            "updatedAt==createdAt": "false"
+          }
+        }
+      ],
+      "settled": true
+    },
+    {
+      "label": "bob chose, not shared: progress as ada@e2e.test",
+      "status": 200,
+      "body": {
+        "data": {
+          "milestones": {
+            "commonGroundFoundAt": null,
+            "feelHeardConfirmedAt": null,
+            "needsIdentifiedAt": "<ts:2>",
+            "witnessStartedAt": "<ts:1>"
+          },
+          "myProgress": {
+            "completedAt": null,
+            "gatesSatisfied": {
+              "selectionSubmitted": true,
+              "selectionSubmittedAt": "<ts:5>"
+            },
+            "stage": 4,
+            "startedAt": "<ts:4>",
+            "status": "IN_PROGRESS"
+          },
+          "partnerProgress": {
+            "completedAt": null,
+            "gatesSatisfied": {},
+            "stage": 4,
+            "startedAt": "<ts:4>",
+            "status": "IN_PROGRESS"
+          },
+          "sessionStatus": "ACTIVE"
+        },
+        "success": true
+      },
+      "changes": [
+        {
+          "after": {
+            "biometricEnabled": false,
+            "biometricEnrolledAt": null,
+            "clerkId": "e2e_<user:ada>",
+            "createdAt": "<ts:3>",
+            "email": "ada@e2e.test",
+            "firstName": null,
+            "globalFacts": null,
+            "id": "<user:ada>",
+            "lastMoodIntensity": 7,
+            "lastName": null,
+            "memoryPreferences": null,
+            "name": "Ada Lovelace",
+            "notificationPreferences": null,
+            "privacyPreferences": null,
+            "pushToken": null,
+            "updatedAt": "<ts:fresh>"
+          },
+          "before": {
+            "biometricEnabled": false,
+            "biometricEnrolledAt": null,
+            "clerkId": "e2e_<user:ada>",
+            "createdAt": "<ts:3>",
+            "email": "ada@e2e.test",
+            "firstName": null,
+            "globalFacts": null,
+            "id": "<user:ada>",
+            "lastMoodIntensity": 7,
+            "lastName": null,
+            "memoryPreferences": null,
+            "name": "Ada Lovelace",
+            "notificationPreferences": null,
+            "privacyPreferences": null,
+            "pushToken": null,
+            "updatedAt": "<ts:fresh>"
+          },
+          "changedFields": [
+            "updatedAt"
+          ],
+          "key": "\"<user:ada>\"",
+          "kind": "changed",
+          "table": "User",
+          "timestampFacts": {
+            "updatedAt.bumped": "true",
+            "updatedAt==createdAt": "false"
+          }
+        }
+      ],
+      "changesAtResponse": [
+        {
+          "after": {
+            "biometricEnabled": false,
+            "biometricEnrolledAt": null,
+            "clerkId": "e2e_<user:ada>",
+            "createdAt": "<ts:3>",
+            "email": "ada@e2e.test",
+            "firstName": null,
+            "globalFacts": null,
+            "id": "<user:ada>",
+            "lastMoodIntensity": 7,
+            "lastName": null,
+            "memoryPreferences": null,
+            "name": "Ada Lovelace",
+            "notificationPreferences": null,
+            "privacyPreferences": null,
+            "pushToken": null,
+            "updatedAt": "<ts:fresh>"
+          },
+          "before": {
+            "biometricEnabled": false,
+            "biometricEnrolledAt": null,
+            "clerkId": "e2e_<user:ada>",
+            "createdAt": "<ts:3>",
+            "email": "ada@e2e.test",
+            "firstName": null,
+            "globalFacts": null,
+            "id": "<user:ada>",
+            "lastMoodIntensity": 7,
+            "lastName": null,
+            "memoryPreferences": null,
+            "name": "Ada Lovelace",
+            "notificationPreferences": null,
+            "privacyPreferences": null,
+            "pushToken": null,
+            "updatedAt": "<ts:fresh>"
+          },
+          "changedFields": [
+            "updatedAt"
+          ],
+          "key": "\"<user:ada>\"",
+          "kind": "changed",
+          "table": "User",
+          "timestampFacts": {
+            "updatedAt.bumped": "true",
+            "updatedAt==createdAt": "false"
+          }
+        }
+      ],
+      "settled": true
+    },
+    {
+      "label": "bob chose, not shared: messages as ada@e2e.test",
+      "status": 200,
+      "body": {
+        "data": {
+          "hasMore": false,
+          "messages": []
+        },
+        "success": true
+      },
+      "changes": [
+        {
+          "after": {
+            "biometricEnabled": false,
+            "biometricEnrolledAt": null,
+            "clerkId": "e2e_<user:ada>",
+            "createdAt": "<ts:1>",
+            "email": "ada@e2e.test",
+            "firstName": null,
+            "globalFacts": null,
+            "id": "<user:ada>",
+            "lastMoodIntensity": 7,
+            "lastName": null,
+            "memoryPreferences": null,
+            "name": "Ada Lovelace",
+            "notificationPreferences": null,
+            "privacyPreferences": null,
+            "pushToken": null,
+            "updatedAt": "<ts:fresh>"
+          },
+          "before": {
+            "biometricEnabled": false,
+            "biometricEnrolledAt": null,
+            "clerkId": "e2e_<user:ada>",
+            "createdAt": "<ts:1>",
+            "email": "ada@e2e.test",
+            "firstName": null,
+            "globalFacts": null,
+            "id": "<user:ada>",
+            "lastMoodIntensity": 7,
+            "lastName": null,
+            "memoryPreferences": null,
+            "name": "Ada Lovelace",
+            "notificationPreferences": null,
+            "privacyPreferences": null,
+            "pushToken": null,
+            "updatedAt": "<ts:fresh>"
+          },
+          "changedFields": [
+            "updatedAt"
+          ],
+          "key": "\"<user:ada>\"",
+          "kind": "changed",
+          "table": "User",
+          "timestampFacts": {
+            "updatedAt.bumped": "true",
+            "updatedAt==createdAt": "false"
+          }
+        }
+      ],
+      "changesAtResponse": [
+        {
+          "after": {
+            "biometricEnabled": false,
+            "biometricEnrolledAt": null,
+            "clerkId": "e2e_<user:ada>",
+            "createdAt": "<ts:1>",
+            "email": "ada@e2e.test",
+            "firstName": null,
+            "globalFacts": null,
+            "id": "<user:ada>",
+            "lastMoodIntensity": 7,
+            "lastName": null,
+            "memoryPreferences": null,
+            "name": "Ada Lovelace",
+            "notificationPreferences": null,
+            "privacyPreferences": null,
+            "pushToken": null,
+            "updatedAt": "<ts:fresh>"
+          },
+          "before": {
+            "biometricEnabled": false,
+            "biometricEnrolledAt": null,
+            "clerkId": "e2e_<user:ada>",
+            "createdAt": "<ts:1>",
+            "email": "ada@e2e.test",
+            "firstName": null,
+            "globalFacts": null,
+            "id": "<user:ada>",
+            "lastMoodIntensity": 7,
+            "lastName": null,
+            "memoryPreferences": null,
+            "name": "Ada Lovelace",
+            "notificationPreferences": null,
+            "privacyPreferences": null,
+            "pushToken": null,
+            "updatedAt": "<ts:fresh>"
+          },
+          "changedFields": [
+            "updatedAt"
+          ],
+          "key": "\"<user:ada>\"",
+          "kind": "changed",
+          "table": "User",
+          "timestampFacts": {
+            "updatedAt.bumped": "true",
+            "updatedAt==createdAt": "false"
+          }
+        }
+      ],
+      "settled": true
+    },
+    {
+      "label": "bob chose, not shared: pending actions as ada@e2e.test",
+      "status": 200,
+      "body": {
+        "data": {
+          "actions": [],
+          "sentTabUpdates": 0
+        },
+        "success": true
+      },
+      "changes": [
+        {
+          "after": {
+            "biometricEnabled": false,
+            "biometricEnrolledAt": null,
+            "clerkId": "e2e_<user:ada>",
+            "createdAt": "<ts:1>",
+            "email": "ada@e2e.test",
+            "firstName": null,
+            "globalFacts": null,
+            "id": "<user:ada>",
+            "lastMoodIntensity": 7,
+            "lastName": null,
+            "memoryPreferences": null,
+            "name": "Ada Lovelace",
+            "notificationPreferences": null,
+            "privacyPreferences": null,
+            "pushToken": null,
+            "updatedAt": "<ts:fresh>"
+          },
+          "before": {
+            "biometricEnabled": false,
+            "biometricEnrolledAt": null,
+            "clerkId": "e2e_<user:ada>",
+            "createdAt": "<ts:1>",
+            "email": "ada@e2e.test",
+            "firstName": null,
+            "globalFacts": null,
+            "id": "<user:ada>",
+            "lastMoodIntensity": 7,
+            "lastName": null,
+            "memoryPreferences": null,
+            "name": "Ada Lovelace",
+            "notificationPreferences": null,
+            "privacyPreferences": null,
+            "pushToken": null,
+            "updatedAt": "<ts:fresh>"
+          },
+          "changedFields": [
+            "updatedAt"
+          ],
+          "key": "\"<user:ada>\"",
+          "kind": "changed",
+          "table": "User",
+          "timestampFacts": {
+            "updatedAt.bumped": "true",
+            "updatedAt==createdAt": "false"
+          }
+        }
+      ],
+      "changesAtResponse": [
+        {
+          "after": {
+            "biometricEnabled": false,
+            "biometricEnrolledAt": null,
+            "clerkId": "e2e_<user:ada>",
+            "createdAt": "<ts:1>",
+            "email": "ada@e2e.test",
+            "firstName": null,
+            "globalFacts": null,
+            "id": "<user:ada>",
+            "lastMoodIntensity": 7,
+            "lastName": null,
+            "memoryPreferences": null,
+            "name": "Ada Lovelace",
+            "notificationPreferences": null,
+            "privacyPreferences": null,
+            "pushToken": null,
+            "updatedAt": "<ts:fresh>"
+          },
+          "before": {
+            "biometricEnabled": false,
+            "biometricEnrolledAt": null,
+            "clerkId": "e2e_<user:ada>",
+            "createdAt": "<ts:1>",
+            "email": "ada@e2e.test",
+            "firstName": null,
+            "globalFacts": null,
+            "id": "<user:ada>",
+            "lastMoodIntensity": 7,
+            "lastName": null,
+            "memoryPreferences": null,
+            "name": "Ada Lovelace",
+            "notificationPreferences": null,
+            "privacyPreferences": null,
+            "pushToken": null,
+            "updatedAt": "<ts:fresh>"
+          },
+          "changedFields": [
+            "updatedAt"
+          ],
+          "key": "\"<user:ada>\"",
+          "kind": "changed",
+          "table": "User",
+          "timestampFacts": {
+            "updatedAt.bumped": "true",
+            "updatedAt==createdAt": "false"
+          }
+        }
+      ],
+      "settled": true
+    },
+    {
+      "label": "bob chose, not shared: stage4 as ada@e2e.test",
+      "status": 200,
+      "body": {
+        "data": {
+          "coverageAudit": {
+            "covered": [
+              {
+                "coveringProposalIds": [
+                  "<proposal:main#1>"
+                ],
+                "id": "<needCoverage:ada#1>",
+                "label": "Partnership",
+                "note": "Sunday planning check-in directly covers partnership.",
+                "source": "YOU",
+                "userDeclinedToAddress": false
+              }
+            ],
+            "open": [
+              {
+                "coveringProposalIds": [],
+                "id": "<needCoverage:ada#2>",
+                "label": "Appreciation",
+                "note": "No active shared proposal directly covers appreciation yet.",
+                "source": "YOU",
+                "userDeclinedToAddress": false
+              }
+            ],
+            "partial": [
+              {
+                "coveringProposalIds": [
+                  "<proposal:main#1>",
+                  "<proposal:main#2>"
+                ],
+                "id": "<needCoverage:bob#1>",
+                "label": "Support",
+                "note": "Support is partly covered but may need more specificity.",
+                "source": "PARTNER",
+                "userDeclinedToAddress": false
+              }
+            ],
+            "updatedAt": "<ts:4>"
+          },
+          "inventory": {
+            "individualCommitments": [
+              {
+                "description": "I will name when I am overloaded before I disappear",
+                "duration": "This week",
+                "id": "<proposal:main#3>",
+                "kind": "INDIVIDUAL_COMMITMENT",
+                "measureOfSuccess": "Stress is named before withdrawal",
+                "needsAddressed": [
+                  {
+                    "coverage": "COVERED",
+                    "label": "Appreciation"
+                  }
+                ],
+                "ownerLabel": "You",
+                "sourceLabel": "YOU",
+                "status": "ACTIVE"
+              }
+            ],
+            "removedProposalCount": 1,
+            "sharedProposals": [
+              {
+                "description": "Use a pause phrase when either person starts to shut down",
+                "duration": "One month",
+                "id": "<proposal:main#2>",
+                "kind": "SHARED_PROPOSAL",
+                "measureOfSuccess": "Hard conversations can pause without either person feeling abandoned",
+                "needsAddressed": [
+                  {
+                    "coverage": "PARTIAL",
+                    "id": "<needCoverage:bob#1>",
+                    "label": "Support"
+                  }
+                ],
+                "sourceLabel": "PARTNER",
+                "status": "ACTIVE"
+              },
+              {
+                "description": "Try a Sunday evening planning check-in for the next two weeks",
+                "duration": "Two weeks",
+                "id": "<proposal:main#1>",
+                "kind": "SHARED_PROPOSAL",
+                "measureOfSuccess": "Both people know the week plan before Monday",
+                "myDecision": "WILLING",
+                "needsAddressed": [
+                  {
+                    "coverage": "COVERED",
+                    "id": "<needCoverage:ada#1>",
+                    "label": "Partnership"
+                  },
+                  {
+                    "coverage": "PARTIAL",
+                    "id": "<needCoverage:bob#1>",
+                    "label": "Support"
+                  }
+                ],
+                "sourceLabel": "YOU",
+                "status": "ACTIVE"
+              }
+            ],
+            "unaddressedNeeds": [
+              {
+                "id": "<needCoverage:ada#2>",
+                "label": "Appreciation",
+                "note": "No active shared proposal directly covers appreciation yet.",
+                "source": "YOU"
+              }
+            ],
+            "updatedAt": "<ts:3>"
+          },
+          "mySelectionStatus": "SUBMITTED",
+          "mySelections": [
+            {
+              "decision": "WILLING",
+              "note": null,
+              "proposalId": "<proposal:main#1>",
+              "selectedAt": "<ts:2>",
+              "updatedAt": "<ts:5>"
+            }
+          ],
+          "outcome": null,
+          "partnerSelectionStatus": "NOT_STARTED",
+          "partnerSelections": [],
+          "phase": "SELECTION",
+          "tendingPreview": null,
+          "walkthrough": {
+            "currentIndex": 0,
+            "currentNeed": {
+              "id": "<needCoverage:ada#1>",
+              "label": "Partnership",
+              "source": "YOU",
+              "status": "in_progress"
+            },
+            "defaultCheckInDate": "2026-10-31",
+            "ownNeeds": [
+              {
+                "id": "<needCoverage:ada#1>",
+                "label": "Partnership",
+                "source": "YOU",
+                "status": "in_progress"
+              },
+              {
+                "id": "<needCoverage:ada#2>",
+                "label": "Appreciation",
+                "source": "YOU",
+                "status": "needs_options"
+              }
+            ],
+            "partnerNeeds": [
+              {
+                "id": "<needCoverage:bob#1>",
+                "label": "Support",
+                "source": "PARTNER",
+                "status": "not_started"
+              }
+            ],
+            "phase": "MY_NEEDS",
+            "proposalGroups": [
+              {
+                "key": "you_suggested",
+                "proposals": [
+                  {
+                    "description": "Try a Sunday evening planning check-in for the next two weeks",
+                    "duration": "Two weeks",
+                    "id": "<proposal:main#1>",
+                    "kind": "SHARED_PROPOSAL",
+                    "measureOfSuccess": "Both people know the week plan before Monday",
+                    "myDecision": "WILLING",
+                    "needsAddressed": [
+                      {
+                        "coverage": "COVERED",
+                        "id": "<needCoverage:ada#1>",
+                        "label": "Partnership"
+                      },
+                      {
+                        "coverage": "PARTIAL",
+                        "id": "<needCoverage:bob#1>",
+                        "label": "Support"
+                      }
+                    ],
+                    "sourceLabel": "YOU",
+                    "status": "ACTIVE"
+                  }
+                ],
+                "readOnly": false,
+                "title": "Options you suggested"
+              },
+              {
+                "key": "partner_suggested",
+                "proposals": [],
+                "readOnly": false,
+                "title": "Options your partner suggested"
+              },
+              {
+                "key": "ai_suggested",
+                "proposals": [],
+                "readOnly": false,
+                "title": "MWF ideas"
+              }
+            ],
+            "qualityWarnings": [],
+            "totalInPhase": 2
+          }
+        },
+        "success": true
+      },
+      "changes": [
+        {
+          "after": {
+            "biometricEnabled": false,
+            "biometricEnrolledAt": null,
+            "clerkId": "e2e_<user:ada>",
+            "createdAt": "<ts:1>",
+            "email": "ada@e2e.test",
+            "firstName": null,
+            "globalFacts": null,
+            "id": "<user:ada>",
+            "lastMoodIntensity": 7,
+            "lastName": null,
+            "memoryPreferences": null,
+            "name": "Ada Lovelace",
+            "notificationPreferences": null,
+            "privacyPreferences": null,
+            "pushToken": null,
+            "updatedAt": "<ts:fresh>"
+          },
+          "before": {
+            "biometricEnabled": false,
+            "biometricEnrolledAt": null,
+            "clerkId": "e2e_<user:ada>",
+            "createdAt": "<ts:1>",
+            "email": "ada@e2e.test",
+            "firstName": null,
+            "globalFacts": null,
+            "id": "<user:ada>",
+            "lastMoodIntensity": 7,
+            "lastName": null,
+            "memoryPreferences": null,
+            "name": "Ada Lovelace",
+            "notificationPreferences": null,
+            "privacyPreferences": null,
+            "pushToken": null,
+            "updatedAt": "<ts:fresh>"
+          },
+          "changedFields": [
+            "updatedAt"
+          ],
+          "key": "\"<user:ada>\"",
+          "kind": "changed",
+          "table": "User",
+          "timestampFacts": {
+            "updatedAt.bumped": "true",
+            "updatedAt==createdAt": "false"
+          }
+        }
+      ],
+      "changesAtResponse": [
+        {
+          "after": {
+            "biometricEnabled": false,
+            "biometricEnrolledAt": null,
+            "clerkId": "e2e_<user:ada>",
+            "createdAt": "<ts:1>",
+            "email": "ada@e2e.test",
+            "firstName": null,
+            "globalFacts": null,
+            "id": "<user:ada>",
+            "lastMoodIntensity": 7,
+            "lastName": null,
+            "memoryPreferences": null,
+            "name": "Ada Lovelace",
+            "notificationPreferences": null,
+            "privacyPreferences": null,
+            "pushToken": null,
+            "updatedAt": "<ts:fresh>"
+          },
+          "before": {
+            "biometricEnabled": false,
+            "biometricEnrolledAt": null,
+            "clerkId": "e2e_<user:ada>",
+            "createdAt": "<ts:1>",
+            "email": "ada@e2e.test",
+            "firstName": null,
+            "globalFacts": null,
+            "id": "<user:ada>",
+            "lastMoodIntensity": 7,
+            "lastName": null,
+            "memoryPreferences": null,
+            "name": "Ada Lovelace",
+            "notificationPreferences": null,
+            "privacyPreferences": null,
+            "pushToken": null,
+            "updatedAt": "<ts:fresh>"
+          },
+          "changedFields": [
+            "updatedAt"
+          ],
+          "key": "\"<user:ada>\"",
+          "kind": "changed",
+          "table": "User",
+          "timestampFacts": {
+            "updatedAt.bumped": "true",
+            "updatedAt==createdAt": "false"
+          }
+        }
+      ],
+      "settled": true
+    },
+    {
+      "label": "bob chose, not shared: agreements as ada@e2e.test",
+      "status": 200,
+      "body": {
+        "data": {
+          "agreements": []
+        },
+        "success": true
+      },
+      "changes": [
+        {
+          "after": {
+            "biometricEnabled": false,
+            "biometricEnrolledAt": null,
+            "clerkId": "e2e_<user:ada>",
+            "createdAt": "<ts:1>",
+            "email": "ada@e2e.test",
+            "firstName": null,
+            "globalFacts": null,
+            "id": "<user:ada>",
+            "lastMoodIntensity": 7,
+            "lastName": null,
+            "memoryPreferences": null,
+            "name": "Ada Lovelace",
+            "notificationPreferences": null,
+            "privacyPreferences": null,
+            "pushToken": null,
+            "updatedAt": "<ts:fresh>"
+          },
+          "before": {
+            "biometricEnabled": false,
+            "biometricEnrolledAt": null,
+            "clerkId": "e2e_<user:ada>",
+            "createdAt": "<ts:1>",
+            "email": "ada@e2e.test",
+            "firstName": null,
+            "globalFacts": null,
+            "id": "<user:ada>",
+            "lastMoodIntensity": 7,
+            "lastName": null,
+            "memoryPreferences": null,
+            "name": "Ada Lovelace",
+            "notificationPreferences": null,
+            "privacyPreferences": null,
+            "pushToken": null,
+            "updatedAt": "<ts:fresh>"
+          },
+          "changedFields": [
+            "updatedAt"
+          ],
+          "key": "\"<user:ada>\"",
+          "kind": "changed",
+          "table": "User",
+          "timestampFacts": {
+            "updatedAt.bumped": "true",
+            "updatedAt==createdAt": "false"
+          }
+        }
+      ],
+      "changesAtResponse": [
+        {
+          "after": {
+            "biometricEnabled": false,
+            "biometricEnrolledAt": null,
+            "clerkId": "e2e_<user:ada>",
+            "createdAt": "<ts:1>",
+            "email": "ada@e2e.test",
+            "firstName": null,
+            "globalFacts": null,
+            "id": "<user:ada>",
+            "lastMoodIntensity": 7,
+            "lastName": null,
+            "memoryPreferences": null,
+            "name": "Ada Lovelace",
+            "notificationPreferences": null,
+            "privacyPreferences": null,
+            "pushToken": null,
+            "updatedAt": "<ts:fresh>"
+          },
+          "before": {
+            "biometricEnabled": false,
+            "biometricEnrolledAt": null,
+            "clerkId": "e2e_<user:ada>",
+            "createdAt": "<ts:1>",
+            "email": "ada@e2e.test",
+            "firstName": null,
+            "globalFacts": null,
+            "id": "<user:ada>",
+            "lastMoodIntensity": 7,
+            "lastName": null,
+            "memoryPreferences": null,
+            "name": "Ada Lovelace",
+            "notificationPreferences": null,
+            "privacyPreferences": null,
+            "pushToken": null,
+            "updatedAt": "<ts:fresh>"
+          },
+          "changedFields": [
+            "updatedAt"
+          ],
+          "key": "\"<user:ada>\"",
+          "kind": "changed",
+          "table": "User",
+          "timestampFacts": {
+            "updatedAt.bumped": "true",
+            "updatedAt==createdAt": "false"
+          }
+        }
+      ],
+      "settled": true
+    },
+    {
+      "label": "bob chose, not shared: session list as ada@e2e.test",
+      "status": 200,
+      "body": {
+        "data": {
+          "hasMore": false,
+          "items": [
+            {
+              "createdAt": "<ts:2>",
+              "hasUnread": true,
+              "id": "<session:main>",
+              "lastSeenChatItemId": null,
+              "lastViewedAt": null,
+              "myProgress": {
+                "completedAt": null,
+                "stage": 4,
+                "startedAt": "<ts:3>",
+                "status": "IN_PROGRESS"
+              },
+              "partner": {
+                "id": "<user:bob>",
+                "name": "Bob Ross",
+                "nickname": "Bob Ross"
+              },
+              "partnerActionNeeded": [
+                "complete_stage"
+              ],
+              "partnerProgress": {
+                "completedAt": null,
+                "stage": 4,
+                "startedAt": "<ts:3>",
+                "status": "IN_PROGRESS"
+              },
+              "relationshipId": "<relationship:main>",
+              "selfActionNeeded": [
+                "complete_stage"
+              ],
+              "status": "ACTIVE",
+              "statusSummary": {
+                "partnerStatus": "Bob Ross is thinking about next steps",
+                "userStatus": "Considering next steps"
+              },
+              "updatedAt": "<ts:2>"
+            }
+          ]
+        },
+        "success": true
+      },
+      "changes": [
+        {
+          "after": {
+            "biometricEnabled": false,
+            "biometricEnrolledAt": null,
+            "clerkId": "e2e_<user:ada>",
+            "createdAt": "<ts:1>",
+            "email": "ada@e2e.test",
+            "firstName": null,
+            "globalFacts": null,
+            "id": "<user:ada>",
+            "lastMoodIntensity": 7,
+            "lastName": null,
+            "memoryPreferences": null,
+            "name": "Ada Lovelace",
+            "notificationPreferences": null,
+            "privacyPreferences": null,
+            "pushToken": null,
+            "updatedAt": "<ts:fresh>"
+          },
+          "before": {
+            "biometricEnabled": false,
+            "biometricEnrolledAt": null,
+            "clerkId": "e2e_<user:ada>",
+            "createdAt": "<ts:1>",
+            "email": "ada@e2e.test",
+            "firstName": null,
+            "globalFacts": null,
+            "id": "<user:ada>",
+            "lastMoodIntensity": 7,
+            "lastName": null,
+            "memoryPreferences": null,
+            "name": "Ada Lovelace",
+            "notificationPreferences": null,
+            "privacyPreferences": null,
+            "pushToken": null,
+            "updatedAt": "<ts:fresh>"
+          },
+          "changedFields": [
+            "updatedAt"
+          ],
+          "key": "\"<user:ada>\"",
+          "kind": "changed",
+          "table": "User",
+          "timestampFacts": {
+            "updatedAt.bumped": "true",
+            "updatedAt==createdAt": "false"
+          }
+        }
+      ],
+      "changesAtResponse": [
+        {
+          "after": {
+            "biometricEnabled": false,
+            "biometricEnrolledAt": null,
+            "clerkId": "e2e_<user:ada>",
+            "createdAt": "<ts:1>",
+            "email": "ada@e2e.test",
+            "firstName": null,
+            "globalFacts": null,
+            "id": "<user:ada>",
+            "lastMoodIntensity": 7,
+            "lastName": null,
+            "memoryPreferences": null,
+            "name": "Ada Lovelace",
+            "notificationPreferences": null,
+            "privacyPreferences": null,
+            "pushToken": null,
+            "updatedAt": "<ts:fresh>"
+          },
+          "before": {
+            "biometricEnabled": false,
+            "biometricEnrolledAt": null,
+            "clerkId": "e2e_<user:ada>",
+            "createdAt": "<ts:1>",
+            "email": "ada@e2e.test",
+            "firstName": null,
+            "globalFacts": null,
+            "id": "<user:ada>",
+            "lastMoodIntensity": 7,
+            "lastName": null,
+            "memoryPreferences": null,
+            "name": "Ada Lovelace",
+            "notificationPreferences": null,
+            "privacyPreferences": null,
+            "pushToken": null,
+            "updatedAt": "<ts:fresh>"
+          },
+          "changedFields": [
+            "updatedAt"
+          ],
+          "key": "\"<user:ada>\"",
+          "kind": "changed",
+          "table": "User",
+          "timestampFacts": {
+            "updatedAt.bumped": "true",
+            "updatedAt==createdAt": "false"
+          }
+        }
+      ],
+      "settled": true
+    },
+    {
+      "label": "bob chose, not shared: badge count as ada@e2e.test",
+      "status": 200,
+      "body": {
+        "data": {
+          "bySession": {},
+          "count": 0
+        },
+        "success": true
+      },
+      "changes": [
+        {
+          "after": {
+            "biometricEnabled": false,
+            "biometricEnrolledAt": null,
+            "clerkId": "e2e_<user:ada>",
+            "createdAt": "<ts:1>",
+            "email": "ada@e2e.test",
+            "firstName": null,
+            "globalFacts": null,
+            "id": "<user:ada>",
+            "lastMoodIntensity": 7,
+            "lastName": null,
+            "memoryPreferences": null,
+            "name": "Ada Lovelace",
+            "notificationPreferences": null,
+            "privacyPreferences": null,
+            "pushToken": null,
+            "updatedAt": "<ts:fresh>"
+          },
+          "before": {
+            "biometricEnabled": false,
+            "biometricEnrolledAt": null,
+            "clerkId": "e2e_<user:ada>",
+            "createdAt": "<ts:1>",
+            "email": "ada@e2e.test",
+            "firstName": null,
+            "globalFacts": null,
+            "id": "<user:ada>",
+            "lastMoodIntensity": 7,
+            "lastName": null,
+            "memoryPreferences": null,
+            "name": "Ada Lovelace",
+            "notificationPreferences": null,
+            "privacyPreferences": null,
+            "pushToken": null,
+            "updatedAt": "<ts:fresh>"
+          },
+          "changedFields": [
+            "updatedAt"
+          ],
+          "key": "\"<user:ada>\"",
+          "kind": "changed",
+          "table": "User",
+          "timestampFacts": {
+            "updatedAt.bumped": "true",
+            "updatedAt==createdAt": "false"
+          }
+        }
+      ],
+      "changesAtResponse": [
+        {
+          "after": {
+            "biometricEnabled": false,
+            "biometricEnrolledAt": null,
+            "clerkId": "e2e_<user:ada>",
+            "createdAt": "<ts:1>",
+            "email": "ada@e2e.test",
+            "firstName": null,
+            "globalFacts": null,
+            "id": "<user:ada>",
+            "lastMoodIntensity": 7,
+            "lastName": null,
+            "memoryPreferences": null,
+            "name": "Ada Lovelace",
+            "notificationPreferences": null,
+            "privacyPreferences": null,
+            "pushToken": null,
+            "updatedAt": "<ts:fresh>"
+          },
+          "before": {
+            "biometricEnabled": false,
+            "biometricEnrolledAt": null,
+            "clerkId": "e2e_<user:ada>",
+            "createdAt": "<ts:1>",
+            "email": "ada@e2e.test",
+            "firstName": null,
+            "globalFacts": null,
+            "id": "<user:ada>",
+            "lastMoodIntensity": 7,
+            "lastName": null,
+            "memoryPreferences": null,
+            "name": "Ada Lovelace",
+            "notificationPreferences": null,
+            "privacyPreferences": null,
+            "pushToken": null,
+            "updatedAt": "<ts:fresh>"
+          },
+          "changedFields": [
+            "updatedAt"
+          ],
+          "key": "\"<user:ada>\"",
+          "kind": "changed",
+          "table": "User",
+          "timestampFacts": {
+            "updatedAt.bumped": "true",
+            "updatedAt==createdAt": "false"
+          }
+        }
+      ],
+      "settled": true
+    },
+    {
+      "label": "set aside open need as bob",
+      "status": 200,
+      "body": {
+        "data": {
+          "state": {
+            "coverageAudit": {
+              "covered": [
+                {
+                  "coveringProposalIds": [
+                    "<proposal:main#1>"
+                  ],
+                  "id": "<needCoverage:ada#1>",
+                  "label": "Partnership",
+                  "note": "Sunday planning check-in directly covers partnership.",
+                  "source": "PARTNER",
+                  "userDeclinedToAddress": false
+                }
+              ],
+              "open": [
+                {
+                  "coveringProposalIds": [],
+                  "id": "<needCoverage:ada#2>",
+                  "label": "Appreciation",
+                  "note": "No active shared proposal directly covers appreciation yet.",
+                  "source": "PARTNER",
+                  "userDeclinedToAddress": true
+                }
+              ],
+              "partial": [
+                {
+                  "coveringProposalIds": [
+                    "<proposal:main#1>",
+                    "<proposal:main#2>"
+                  ],
+                  "id": "<needCoverage:bob#1>",
+                  "label": "Support",
+                  "note": "Support is partly covered but may need more specificity.",
+                  "source": "YOU",
+                  "userDeclinedToAddress": false
+                }
+              ],
+              "updatedAt": "<ts:3>"
+            },
+            "inventory": {
+              "individualCommitments": [
+                {
+                  "description": "I will name when I am overloaded before I disappear",
+                  "duration": "This week",
+                  "id": "<proposal:main#3>",
+                  "kind": "INDIVIDUAL_COMMITMENT",
+                  "measureOfSuccess": "Stress is named before withdrawal",
+                  "needsAddressed": [
+                    {
+                      "coverage": "COVERED",
+                      "label": "Appreciation"
+                    }
+                  ],
+                  "ownerLabel": "Partner",
+                  "sourceLabel": "PARTNER",
+                  "status": "ACTIVE"
+                }
+              ],
+              "removedProposalCount": 1,
+              "sharedProposals": [
+                {
+                  "description": "Use a pause phrase when either person starts to shut down",
+                  "duration": "One month",
+                  "id": "<proposal:main#2>",
+                  "kind": "SHARED_PROPOSAL",
+                  "measureOfSuccess": "Hard conversations can pause without either person feeling abandoned",
+                  "myDecision": "WILLING",
+                  "needsAddressed": [
+                    {
+                      "coverage": "PARTIAL",
+                      "id": "<needCoverage:bob#1>",
+                      "label": "Support"
+                    }
+                  ],
+                  "sourceLabel": "YOU",
+                  "status": "ACTIVE"
+                },
+                {
+                  "description": "Try a Sunday evening planning check-in for the next two weeks",
+                  "duration": "Two weeks",
+                  "id": "<proposal:main#1>",
+                  "kind": "SHARED_PROPOSAL",
+                  "measureOfSuccess": "Both people know the week plan before Monday",
+                  "myDecision": "WILLING",
+                  "needsAddressed": [
+                    {
+                      "coverage": "COVERED",
+                      "id": "<needCoverage:ada#1>",
+                      "label": "Partnership"
+                    },
+                    {
+                      "coverage": "PARTIAL",
+                      "id": "<needCoverage:bob#1>",
+                      "label": "Support"
+                    }
+                  ],
+                  "sourceLabel": "PARTNER",
+                  "status": "ACTIVE"
+                }
+              ],
+              "unaddressedNeeds": [
+                {
+                  "id": "<needCoverage:ada#2>",
+                  "label": "Appreciation",
+                  "note": "No active shared proposal directly covers appreciation yet.",
+                  "source": "PARTNER"
+                }
+              ],
+              "updatedAt": "<ts:2>"
+            },
+            "mySelectionStatus": "NOT_STARTED",
+            "mySelections": [
+              {
+                "decision": "WILLING",
+                "note": null,
+                "proposalId": "<proposal:main#1>",
+                "selectedAt": "<ts:fresh>",
+                "updatedAt": "<ts:fresh>"
+              },
+              {
+                "decision": "WILLING",
+                "note": null,
+                "proposalId": "<proposal:main#2>",
+                "selectedAt": "<ts:fresh>",
+                "updatedAt": "<ts:fresh>"
+              }
+            ],
+            "outcome": null,
+            "partnerSelectionStatus": "SUBMITTED",
+            "partnerSelections": [],
+            "phase": "SELECTION",
+            "tendingPreview": null,
+            "walkthrough": {
+              "currentIndex": 0,
+              "currentNeed": {
+                "id": "<needCoverage:bob#1>",
+                "label": "Support",
+                "source": "YOU",
+                "status": "in_progress"
+              },
+              "defaultCheckInDate": "2026-10-31",
+              "ownNeeds": [
+                {
+                  "id": "<needCoverage:bob#1>",
+                  "label": "Support",
+                  "source": "YOU",
+                  "status": "in_progress"
+                }
+              ],
+              "partnerNeeds": [
+                {
+                  "id": "<needCoverage:ada#1>",
+                  "label": "Partnership",
+                  "source": "PARTNER",
+                  "status": "not_started"
+                },
+                {
+                  "id": "<needCoverage:ada#2>",
+                  "label": "Appreciation",
+                  "source": "PARTNER",
+                  "status": "needs_options"
+                }
+              ],
+              "phase": "MY_NEEDS",
+              "proposalGroups": [
+                {
+                  "key": "you_suggested",
+                  "proposals": [
+                    {
+                      "description": "Use a pause phrase when either person starts to shut down",
+                      "duration": "One month",
+                      "id": "<proposal:main#2>",
+                      "kind": "SHARED_PROPOSAL",
+                      "measureOfSuccess": "Hard conversations can pause without either person feeling abandoned",
+                      "myDecision": "WILLING",
+                      "needsAddressed": [
+                        {
+                          "coverage": "PARTIAL",
+                          "id": "<needCoverage:bob#1>",
+                          "label": "Support"
+                        }
+                      ],
+                      "sourceLabel": "YOU",
+                      "status": "ACTIVE"
+                    }
+                  ],
+                  "readOnly": false,
+                  "title": "Options you suggested"
+                },
+                {
+                  "key": "partner_suggested",
+                  "proposals": [
+                    {
+                      "description": "Try a Sunday evening planning check-in for the next two weeks",
+                      "duration": "Two weeks",
+                      "id": "<proposal:main#1>",
+                      "kind": "SHARED_PROPOSAL",
+                      "measureOfSuccess": "Both people know the week plan before Monday",
+                      "myDecision": "WILLING",
+                      "needsAddressed": [
+                        {
+                          "coverage": "COVERED",
+                          "id": "<needCoverage:ada#1>",
+                          "label": "Partnership"
+                        },
+                        {
+                          "coverage": "PARTIAL",
+                          "id": "<needCoverage:bob#1>",
+                          "label": "Support"
+                        }
+                      ],
+                      "sourceLabel": "PARTNER",
+                      "status": "ACTIVE"
+                    }
+                  ],
+                  "readOnly": false,
+                  "title": "Options your partner suggested"
+                },
+                {
+                  "key": "ai_suggested",
+                  "proposals": [],
+                  "readOnly": false,
+                  "title": "MWF ideas"
+                }
+              ],
+              "qualityWarnings": [],
+              "totalInPhase": 1
+            }
+          }
+        },
+        "success": true
+      },
+      "changes": [
+        {
+          "after": {
+            "declinedAt": "<ts:fresh>",
+            "id": "<declination:bob#1>",
+            "needId": "<needCoverage:ada#2>",
+            "sessionId": "<session:main>",
+            "userId": "<user:bob>"
+          },
+          "key": "\"<declination:bob#1>\"",
+          "kind": "added",
+          "table": "Stage4NeedDeclination"
+        },
+        {
+          "after": {
+            "biometricEnabled": false,
+            "biometricEnrolledAt": null,
+            "clerkId": "e2e_<user:bob>",
+            "createdAt": "<ts:1>",
+            "email": "bob@e2e.test",
+            "firstName": null,
+            "globalFacts": null,
+            "id": "<user:bob>",
+            "lastMoodIntensity": 7,
+            "lastName": null,
+            "memoryPreferences": null,
+            "name": "Bob Ross",
+            "notificationPreferences": null,
+            "privacyPreferences": null,
+            "pushToken": null,
+            "updatedAt": "<ts:fresh>"
+          },
+          "before": {
+            "biometricEnabled": false,
+            "biometricEnrolledAt": null,
+            "clerkId": "e2e_<user:bob>",
+            "createdAt": "<ts:1>",
+            "email": "bob@e2e.test",
+            "firstName": null,
+            "globalFacts": null,
+            "id": "<user:bob>",
+            "lastMoodIntensity": 7,
+            "lastName": null,
+            "memoryPreferences": null,
+            "name": "Bob Ross",
+            "notificationPreferences": null,
+            "privacyPreferences": null,
+            "pushToken": null,
+            "updatedAt": "<ts:fresh>"
+          },
+          "changedFields": [
+            "updatedAt"
+          ],
+          "key": "\"<user:bob>\"",
+          "kind": "changed",
+          "table": "User",
+          "timestampFacts": {
+            "updatedAt.bumped": "true",
+            "updatedAt==createdAt": "false"
+          }
+        }
+      ],
+      "changesAtResponse": [
+        {
+          "after": {
+            "declinedAt": "<ts:fresh>",
+            "id": "<declination:bob#1>",
+            "needId": "<needCoverage:ada#2>",
+            "sessionId": "<session:main>",
+            "userId": "<user:bob>"
+          },
+          "key": "\"<declination:bob#1>\"",
+          "kind": "added",
+          "table": "Stage4NeedDeclination"
+        },
+        {
+          "after": {
+            "biometricEnabled": false,
+            "biometricEnrolledAt": null,
+            "clerkId": "e2e_<user:bob>",
+            "createdAt": "<ts:1>",
+            "email": "bob@e2e.test",
+            "firstName": null,
+            "globalFacts": null,
+            "id": "<user:bob>",
+            "lastMoodIntensity": 7,
+            "lastName": null,
+            "memoryPreferences": null,
+            "name": "Bob Ross",
+            "notificationPreferences": null,
+            "privacyPreferences": null,
+            "pushToken": null,
+            "updatedAt": "<ts:fresh>"
+          },
+          "before": {
+            "biometricEnabled": false,
+            "biometricEnrolledAt": null,
+            "clerkId": "e2e_<user:bob>",
+            "createdAt": "<ts:1>",
+            "email": "bob@e2e.test",
+            "firstName": null,
+            "globalFacts": null,
+            "id": "<user:bob>",
+            "lastMoodIntensity": 7,
+            "lastName": null,
+            "memoryPreferences": null,
+            "name": "Bob Ross",
+            "notificationPreferences": null,
+            "privacyPreferences": null,
+            "pushToken": null,
+            "updatedAt": "<ts:fresh>"
+          },
+          "changedFields": [
+            "updatedAt"
+          ],
+          "key": "\"<user:bob>\"",
+          "kind": "changed",
+          "table": "User",
+          "timestampFacts": {
+            "updatedAt.bumped": "true",
+            "updatedAt==createdAt": "false"
+          }
+        }
+      ],
+      "settled": true
+    },
+    {
+      "label": "share selections as bob",
+      "status": 200,
+      "body": {
+        "data": {
+          "state": {
+            "coverageAudit": {
+              "covered": [
+                {
+                  "coveringProposalIds": [
+                    "<proposal:main#1>"
+                  ],
+                  "id": "<needCoverage:ada#1>",
+                  "label": "Partnership",
+                  "note": "Sunday planning check-in directly covers partnership.",
+                  "source": "PARTNER",
+                  "userDeclinedToAddress": false
+                }
+              ],
+              "open": [
+                {
+                  "coveringProposalIds": [],
+                  "id": "<needCoverage:ada#2>",
+                  "label": "Appreciation",
+                  "note": "No active shared proposal directly covers appreciation yet.",
+                  "source": "PARTNER",
+                  "userDeclinedToAddress": true
+                }
+              ],
+              "partial": [
+                {
+                  "coveringProposalIds": [
+                    "<proposal:main#1>",
+                    "<proposal:main#2>"
+                  ],
+                  "id": "<needCoverage:bob#1>",
+                  "label": "Support",
+                  "note": "Support is partly covered but may need more specificity.",
+                  "source": "YOU",
+                  "userDeclinedToAddress": false
+                }
+              ],
+              "updatedAt": "<ts:5>"
+            },
+            "inventory": {
+              "individualCommitments": [
+                {
+                  "description": "I will name when I am overloaded before I disappear",
+                  "duration": "This week",
+                  "id": "<proposal:main#3>",
+                  "kind": "INDIVIDUAL_COMMITMENT",
+                  "measureOfSuccess": "Stress is named before withdrawal",
+                  "needsAddressed": [
+                    {
+                      "coverage": "COVERED",
+                      "label": "Appreciation"
+                    }
+                  ],
+                  "ownerLabel": "Partner",
+                  "sourceLabel": "PARTNER",
+                  "status": "ACTIVE"
+                }
+              ],
+              "removedProposalCount": 1,
+              "sharedProposals": [
+                {
+                  "description": "Use a pause phrase when either person starts to shut down",
+                  "duration": "One month",
+                  "id": "<proposal:main#2>",
+                  "kind": "SHARED_PROPOSAL",
+                  "measureOfSuccess": "Hard conversations can pause without either person feeling abandoned",
+                  "myDecision": "WILLING",
+                  "needsAddressed": [
+                    {
+                      "coverage": "PARTIAL",
+                      "id": "<needCoverage:bob#1>",
+                      "label": "Support"
+                    }
+                  ],
+                  "sourceLabel": "YOU",
+                  "status": "ACTIVE"
+                },
+                {
+                  "description": "Try a Sunday evening planning check-in for the next two weeks",
+                  "duration": "Two weeks",
+                  "id": "<proposal:main#1>",
+                  "kind": "SHARED_PROPOSAL",
+                  "measureOfSuccess": "Both people know the week plan before Monday",
+                  "myDecision": "WILLING",
+                  "needsAddressed": [
+                    {
+                      "coverage": "COVERED",
+                      "id": "<needCoverage:ada#1>",
+                      "label": "Partnership"
+                    },
+                    {
+                      "coverage": "PARTIAL",
+                      "id": "<needCoverage:bob#1>",
+                      "label": "Support"
+                    }
+                  ],
+                  "partnerDecisionVisible": "WILLING",
+                  "sourceLabel": "PARTNER",
+                  "status": "ACTIVE"
+                }
+              ],
+              "unaddressedNeeds": [
+                {
+                  "id": "<needCoverage:ada#2>",
+                  "label": "Appreciation",
+                  "note": "No active shared proposal directly covers appreciation yet.",
+                  "source": "PARTNER"
+                }
+              ],
+              "updatedAt": "<ts:4>"
+            },
+            "mySelectionStatus": "SUBMITTED",
+            "mySelections": [
+              {
+                "decision": "WILLING",
+                "note": null,
+                "proposalId": "<proposal:main#1>",
+                "selectedAt": "<ts:fresh>",
+                "updatedAt": "<ts:fresh>"
+              },
+              {
+                "decision": "WILLING",
+                "note": null,
+                "proposalId": "<proposal:main#2>",
+                "selectedAt": "<ts:fresh>",
+                "updatedAt": "<ts:fresh>"
+              }
+            ],
+            "outcome": null,
+            "partnerSelectionStatus": "SUBMITTED",
+            "partnerSelections": [
+              {
+                "decision": "WILLING",
+                "note": null,
+                "proposalId": "<proposal:main#1>",
+                "selectedAt": "<ts:3>",
+                "updatedAt": "<ts:6>"
+              }
+            ],
+            "phase": "OUTCOME_REVIEW",
+            "tendingPreview": null,
+            "walkthrough": {
+              "currentIndex": 0,
+              "currentNeed": {
+                "id": "<needCoverage:bob#1>",
+                "label": "Support",
+                "source": "YOU",
+                "status": "in_progress"
+              },
+              "defaultCheckInDate": "2026-10-31",
+              "ownNeeds": [
+                {
+                  "id": "<needCoverage:bob#1>",
+                  "label": "Support",
+                  "source": "YOU",
+                  "status": "in_progress"
+                }
+              ],
+              "partnerNeeds": [
+                {
+                  "id": "<needCoverage:ada#1>",
+                  "label": "Partnership",
+                  "source": "PARTNER",
+                  "status": "not_started"
+                },
+                {
+                  "id": "<needCoverage:ada#2>",
+                  "label": "Appreciation",
+                  "source": "PARTNER",
+                  "status": "needs_options"
+                }
+              ],
+              "phase": "MY_NEEDS",
+              "proposalGroups": [
+                {
+                  "key": "you_suggested",
+                  "proposals": [
+                    {
+                      "description": "Use a pause phrase when either person starts to shut down",
+                      "duration": "One month",
+                      "id": "<proposal:main#2>",
+                      "kind": "SHARED_PROPOSAL",
+                      "measureOfSuccess": "Hard conversations can pause without either person feeling abandoned",
+                      "myDecision": "WILLING",
+                      "needsAddressed": [
+                        {
+                          "coverage": "PARTIAL",
+                          "id": "<needCoverage:bob#1>",
+                          "label": "Support"
+                        }
+                      ],
+                      "sourceLabel": "YOU",
+                      "status": "ACTIVE"
+                    }
+                  ],
+                  "readOnly": false,
+                  "title": "Options you suggested"
+                },
+                {
+                  "key": "partner_suggested",
+                  "proposals": [
+                    {
+                      "description": "Try a Sunday evening planning check-in for the next two weeks",
+                      "duration": "Two weeks",
+                      "id": "<proposal:main#1>",
+                      "kind": "SHARED_PROPOSAL",
+                      "measureOfSuccess": "Both people know the week plan before Monday",
+                      "myDecision": "WILLING",
+                      "needsAddressed": [
+                        {
+                          "coverage": "COVERED",
+                          "id": "<needCoverage:ada#1>",
+                          "label": "Partnership"
+                        },
+                        {
+                          "coverage": "PARTIAL",
+                          "id": "<needCoverage:bob#1>",
+                          "label": "Support"
+                        }
+                      ],
+                      "partnerDecisionVisible": "WILLING",
+                      "sourceLabel": "PARTNER",
+                      "status": "ACTIVE"
+                    }
+                  ],
+                  "readOnly": false,
+                  "title": "Options your partner suggested"
+                },
+                {
+                  "key": "ai_suggested",
+                  "proposals": [],
+                  "readOnly": false,
+                  "title": "MWF ideas"
+                }
+              ],
+              "qualityWarnings": [],
+              "totalInPhase": 1
+            }
+          }
+        },
+        "success": true
+      },
+      "changes": [
+        {
+          "after": {
+            "completedAt": null,
+            "gatesSatisfied": {
+              "selectionSubmitted": true,
+              "selectionSubmittedAt": "<ts:fresh>"
+            },
+            "id": "<progress:bob/stage4>",
+            "isSynthesisDirty": true,
+            "sessionId": "<session:main>",
+            "stage": 4,
+            "startedAt": "<ts:2>",
+            "status": "IN_PROGRESS",
+            "synthesisLastUpdated": null,
+            "userId": "<user:bob>"
+          },
+          "before": {
+            "completedAt": null,
+            "gatesSatisfied": {},
+            "id": "<progress:bob/stage4>",
+            "isSynthesisDirty": true,
+            "sessionId": "<session:main>",
+            "stage": 4,
+            "startedAt": "<ts:2>",
+            "status": "IN_PROGRESS",
+            "synthesisLastUpdated": null,
+            "userId": "<user:bob>"
+          },
+          "changedFields": [
+            "gatesSatisfied"
+          ],
+          "key": "\"<progress:bob/stage4>\"",
+          "kind": "changed",
+          "table": "StageProgress"
+        },
+        {
+          "after": {
+            "biometricEnabled": false,
+            "biometricEnrolledAt": null,
+            "clerkId": "e2e_<user:bob>",
+            "createdAt": "<ts:1>",
+            "email": "bob@e2e.test",
+            "firstName": null,
+            "globalFacts": null,
+            "id": "<user:bob>",
+            "lastMoodIntensity": 7,
+            "lastName": null,
+            "memoryPreferences": null,
+            "name": "Bob Ross",
+            "notificationPreferences": null,
+            "privacyPreferences": null,
+            "pushToken": null,
+            "updatedAt": "<ts:fresh>"
+          },
+          "before": {
+            "biometricEnabled": false,
+            "biometricEnrolledAt": null,
+            "clerkId": "e2e_<user:bob>",
+            "createdAt": "<ts:1>",
+            "email": "bob@e2e.test",
+            "firstName": null,
+            "globalFacts": null,
+            "id": "<user:bob>",
+            "lastMoodIntensity": 7,
+            "lastName": null,
+            "memoryPreferences": null,
+            "name": "Bob Ross",
+            "notificationPreferences": null,
+            "privacyPreferences": null,
+            "pushToken": null,
+            "updatedAt": "<ts:fresh>"
+          },
+          "changedFields": [
+            "updatedAt"
+          ],
+          "key": "\"<user:bob>\"",
+          "kind": "changed",
+          "table": "User",
+          "timestampFacts": {
+            "updatedAt.bumped": "true",
+            "updatedAt==createdAt": "false"
+          }
+        }
+      ],
+      "changesAtResponse": [
+        {
+          "after": {
+            "completedAt": null,
+            "gatesSatisfied": {
+              "selectionSubmitted": true,
+              "selectionSubmittedAt": "<ts:fresh>"
+            },
+            "id": "<progress:bob/stage4>",
+            "isSynthesisDirty": true,
+            "sessionId": "<session:main>",
+            "stage": 4,
+            "startedAt": "<ts:2>",
+            "status": "IN_PROGRESS",
+            "synthesisLastUpdated": null,
+            "userId": "<user:bob>"
+          },
+          "before": {
+            "completedAt": null,
+            "gatesSatisfied": {},
+            "id": "<progress:bob/stage4>",
+            "isSynthesisDirty": true,
+            "sessionId": "<session:main>",
+            "stage": 4,
+            "startedAt": "<ts:2>",
+            "status": "IN_PROGRESS",
+            "synthesisLastUpdated": null,
+            "userId": "<user:bob>"
+          },
+          "changedFields": [
+            "gatesSatisfied"
+          ],
+          "key": "\"<progress:bob/stage4>\"",
+          "kind": "changed",
+          "table": "StageProgress"
+        },
+        {
+          "after": {
+            "biometricEnabled": false,
+            "biometricEnrolledAt": null,
+            "clerkId": "e2e_<user:bob>",
+            "createdAt": "<ts:1>",
+            "email": "bob@e2e.test",
+            "firstName": null,
+            "globalFacts": null,
+            "id": "<user:bob>",
+            "lastMoodIntensity": 7,
+            "lastName": null,
+            "memoryPreferences": null,
+            "name": "Bob Ross",
+            "notificationPreferences": null,
+            "privacyPreferences": null,
+            "pushToken": null,
+            "updatedAt": "<ts:fresh>"
+          },
+          "before": {
+            "biometricEnabled": false,
+            "biometricEnrolledAt": null,
+            "clerkId": "e2e_<user:bob>",
+            "createdAt": "<ts:1>",
+            "email": "bob@e2e.test",
+            "firstName": null,
+            "globalFacts": null,
+            "id": "<user:bob>",
+            "lastMoodIntensity": 7,
+            "lastName": null,
+            "memoryPreferences": null,
+            "name": "Bob Ross",
+            "notificationPreferences": null,
+            "privacyPreferences": null,
+            "pushToken": null,
+            "updatedAt": "<ts:fresh>"
+          },
+          "changedFields": [
+            "updatedAt"
+          ],
+          "key": "\"<user:bob>\"",
+          "kind": "changed",
+          "table": "User",
+          "timestampFacts": {
+            "updatedAt.bumped": "true",
+            "updatedAt==createdAt": "false"
+          }
+        }
+      ],
+      "settled": true
+    },
+    {
+      "label": "bob shared: session as ada@e2e.test",
+      "status": 200,
+      "body": {
+        "data": {
+          "session": {
+            "createdAt": "<ts:2>",
+            "currentStage": 4,
+            "id": "<session:main>",
+            "myProgress": {
+              "stage": 4,
+              "status": "IN_PROGRESS"
+            },
+            "partner": {
+              "id": "<user:bob>",
+              "name": "Bob Ross",
+              "nickname": "Bob Ross"
+            },
+            "relationshipId": "<relationship:main>",
+            "resolvedAt": null,
+            "stageStatus": "IN_PROGRESS",
+            "status": "ACTIVE"
+          }
+        },
+        "success": true
+      },
+      "changes": [
+        {
+          "after": {
+            "biometricEnabled": false,
+            "biometricEnrolledAt": null,
+            "clerkId": "e2e_<user:ada>",
+            "createdAt": "<ts:1>",
+            "email": "ada@e2e.test",
+            "firstName": null,
+            "globalFacts": null,
+            "id": "<user:ada>",
+            "lastMoodIntensity": 7,
+            "lastName": null,
+            "memoryPreferences": null,
+            "name": "Ada Lovelace",
+            "notificationPreferences": null,
+            "privacyPreferences": null,
+            "pushToken": null,
+            "updatedAt": "<ts:fresh>"
+          },
+          "before": {
+            "biometricEnabled": false,
+            "biometricEnrolledAt": null,
+            "clerkId": "e2e_<user:ada>",
+            "createdAt": "<ts:1>",
+            "email": "ada@e2e.test",
+            "firstName": null,
+            "globalFacts": null,
+            "id": "<user:ada>",
+            "lastMoodIntensity": 7,
+            "lastName": null,
+            "memoryPreferences": null,
+            "name": "Ada Lovelace",
+            "notificationPreferences": null,
+            "privacyPreferences": null,
+            "pushToken": null,
+            "updatedAt": "<ts:fresh>"
+          },
+          "changedFields": [
+            "updatedAt"
+          ],
+          "key": "\"<user:ada>\"",
+          "kind": "changed",
+          "table": "User",
+          "timestampFacts": {
+            "updatedAt.bumped": "true",
+            "updatedAt==createdAt": "false"
+          }
+        }
+      ],
+      "changesAtResponse": [
+        {
+          "after": {
+            "biometricEnabled": false,
+            "biometricEnrolledAt": null,
+            "clerkId": "e2e_<user:ada>",
+            "createdAt": "<ts:1>",
+            "email": "ada@e2e.test",
+            "firstName": null,
+            "globalFacts": null,
+            "id": "<user:ada>",
+            "lastMoodIntensity": 7,
+            "lastName": null,
+            "memoryPreferences": null,
+            "name": "Ada Lovelace",
+            "notificationPreferences": null,
+            "privacyPreferences": null,
+            "pushToken": null,
+            "updatedAt": "<ts:fresh>"
+          },
+          "before": {
+            "biometricEnabled": false,
+            "biometricEnrolledAt": null,
+            "clerkId": "e2e_<user:ada>",
+            "createdAt": "<ts:1>",
+            "email": "ada@e2e.test",
+            "firstName": null,
+            "globalFacts": null,
+            "id": "<user:ada>",
+            "lastMoodIntensity": 7,
+            "lastName": null,
+            "memoryPreferences": null,
+            "name": "Ada Lovelace",
+            "notificationPreferences": null,
+            "privacyPreferences": null,
+            "pushToken": null,
+            "updatedAt": "<ts:fresh>"
+          },
+          "changedFields": [
+            "updatedAt"
+          ],
+          "key": "\"<user:ada>\"",
+          "kind": "changed",
+          "table": "User",
+          "timestampFacts": {
+            "updatedAt.bumped": "true",
+            "updatedAt==createdAt": "false"
+          }
+        }
+      ],
+      "settled": true
+    },
+    {
+      "label": "bob shared: state as ada@e2e.test",
+      "status": 200,
+      "body": {
+        "data": {
+          "compact": {
+            "canAdvance": true,
+            "isFirstSession": true,
+            "mySigned": true,
+            "mySignedAt": null,
+            "partnerSigned": true,
+            "partnerSignedAt": null
+          },
+          "invitation": {
+            "acceptedAt": "<ts:4>",
+            "createdAt": "<ts:4>",
+            "expiresAt": "<ts:7>",
+            "id": "<invitation:main>",
+            "invitedBy": {
+              "id": "<user:ada>",
+              "name": null
+            },
+            "isInviter": true,
+            "messageConfirmed": true,
+            "messageConfirmedAt": "<ts:4>",
+            "sessionId": "<session:main>",
+            "status": "ACCEPTED",
+            "topicFrame": null,
+            "topicFrameConfirmedAt": null
+          },
+          "messages": {
+            "hasMore": false,
+            "messages": []
+          },
+          "progress": {
+            "canAdvance": false,
+            "milestones": {
+              "feelHeardConfirmedAt": null,
+              "witnessStartedAt": "<ts:1>"
+            },
+            "myProgress": {
+              "completedAt": null,
+              "gatesSatisfied": {
+                "selectionSubmitted": true,
+                "selectionSubmittedAt": "<ts:6>"
+              },
+              "stage": 4,
+              "startedAt": "<ts:5>",
+              "status": "IN_PROGRESS"
+            },
+            "partnerProgress": {
+              "completedAt": null,
+              "stage": 4,
+              "startedAt": "<ts:5>",
+              "status": "IN_PROGRESS"
+            },
+            "sessionId": "<session:main>"
+          },
+          "session": {
+            "createdAt": "<ts:3>",
+            "currentStage": 4,
+            "id": "<session:main>",
+            "lastSeenChatItemId": null,
+            "lastViewedAt": null,
+            "myProgress": {
+              "stage": 4,
+              "status": "IN_PROGRESS"
+            },
+            "partner": {
+              "id": "<user:bob>",
+              "name": "Bob Ross",
+              "nickname": "Bob Ross"
+            },
+            "partnerLastActiveAt": "<ts:5>",
+            "partnerLastViewedAt": null,
+            "relationshipId": "<relationship:main>",
+            "resolvedAt": null,
+            "sourceInnerThoughts": null,
+            "stageStatus": "IN_PROGRESS",
+            "status": "ACTIVE"
+          }
+        },
+        "success": true
+      },
+      "changes": [
+        {
+          "after": {
+            "biometricEnabled": false,
+            "biometricEnrolledAt": null,
+            "clerkId": "e2e_<user:ada>",
+            "createdAt": "<ts:2>",
+            "email": "ada@e2e.test",
+            "firstName": null,
+            "globalFacts": null,
+            "id": "<user:ada>",
+            "lastMoodIntensity": 7,
+            "lastName": null,
+            "memoryPreferences": null,
+            "name": "Ada Lovelace",
+            "notificationPreferences": null,
+            "privacyPreferences": null,
+            "pushToken": null,
+            "updatedAt": "<ts:fresh>"
+          },
+          "before": {
+            "biometricEnabled": false,
+            "biometricEnrolledAt": null,
+            "clerkId": "e2e_<user:ada>",
+            "createdAt": "<ts:2>",
+            "email": "ada@e2e.test",
+            "firstName": null,
+            "globalFacts": null,
+            "id": "<user:ada>",
+            "lastMoodIntensity": 7,
+            "lastName": null,
+            "memoryPreferences": null,
+            "name": "Ada Lovelace",
+            "notificationPreferences": null,
+            "privacyPreferences": null,
+            "pushToken": null,
+            "updatedAt": "<ts:fresh>"
+          },
+          "changedFields": [
+            "updatedAt"
+          ],
+          "key": "\"<user:ada>\"",
+          "kind": "changed",
+          "table": "User",
+          "timestampFacts": {
+            "updatedAt.bumped": "true",
+            "updatedAt==createdAt": "false"
+          }
+        }
+      ],
+      "changesAtResponse": [
+        {
+          "after": {
+            "biometricEnabled": false,
+            "biometricEnrolledAt": null,
+            "clerkId": "e2e_<user:ada>",
+            "createdAt": "<ts:2>",
+            "email": "ada@e2e.test",
+            "firstName": null,
+            "globalFacts": null,
+            "id": "<user:ada>",
+            "lastMoodIntensity": 7,
+            "lastName": null,
+            "memoryPreferences": null,
+            "name": "Ada Lovelace",
+            "notificationPreferences": null,
+            "privacyPreferences": null,
+            "pushToken": null,
+            "updatedAt": "<ts:fresh>"
+          },
+          "before": {
+            "biometricEnabled": false,
+            "biometricEnrolledAt": null,
+            "clerkId": "e2e_<user:ada>",
+            "createdAt": "<ts:2>",
+            "email": "ada@e2e.test",
+            "firstName": null,
+            "globalFacts": null,
+            "id": "<user:ada>",
+            "lastMoodIntensity": 7,
+            "lastName": null,
+            "memoryPreferences": null,
+            "name": "Ada Lovelace",
+            "notificationPreferences": null,
+            "privacyPreferences": null,
+            "pushToken": null,
+            "updatedAt": "<ts:fresh>"
+          },
+          "changedFields": [
+            "updatedAt"
+          ],
+          "key": "\"<user:ada>\"",
+          "kind": "changed",
+          "table": "User",
+          "timestampFacts": {
+            "updatedAt.bumped": "true",
+            "updatedAt==createdAt": "false"
+          }
+        }
+      ],
+      "settled": true
+    },
+    {
+      "label": "bob shared: progress as ada@e2e.test",
+      "status": 200,
+      "body": {
+        "data": {
+          "milestones": {
+            "commonGroundFoundAt": null,
+            "feelHeardConfirmedAt": null,
+            "needsIdentifiedAt": "<ts:2>",
+            "witnessStartedAt": "<ts:1>"
+          },
+          "myProgress": {
+            "completedAt": null,
+            "gatesSatisfied": {
+              "selectionSubmitted": true,
+              "selectionSubmittedAt": "<ts:5>"
+            },
+            "stage": 4,
+            "startedAt": "<ts:4>",
+            "status": "IN_PROGRESS"
+          },
+          "partnerProgress": {
+            "completedAt": null,
+            "gatesSatisfied": {
+              "selectionSubmitted": true,
+              "selectionSubmittedAt": "<ts:fresh>"
+            },
+            "stage": 4,
+            "startedAt": "<ts:4>",
+            "status": "IN_PROGRESS"
+          },
+          "sessionStatus": "ACTIVE"
+        },
+        "success": true
+      },
+      "changes": [
+        {
+          "after": {
+            "biometricEnabled": false,
+            "biometricEnrolledAt": null,
+            "clerkId": "e2e_<user:ada>",
+            "createdAt": "<ts:3>",
+            "email": "ada@e2e.test",
+            "firstName": null,
+            "globalFacts": null,
+            "id": "<user:ada>",
+            "lastMoodIntensity": 7,
+            "lastName": null,
+            "memoryPreferences": null,
+            "name": "Ada Lovelace",
+            "notificationPreferences": null,
+            "privacyPreferences": null,
+            "pushToken": null,
+            "updatedAt": "<ts:fresh>"
+          },
+          "before": {
+            "biometricEnabled": false,
+            "biometricEnrolledAt": null,
+            "clerkId": "e2e_<user:ada>",
+            "createdAt": "<ts:3>",
+            "email": "ada@e2e.test",
+            "firstName": null,
+            "globalFacts": null,
+            "id": "<user:ada>",
+            "lastMoodIntensity": 7,
+            "lastName": null,
+            "memoryPreferences": null,
+            "name": "Ada Lovelace",
+            "notificationPreferences": null,
+            "privacyPreferences": null,
+            "pushToken": null,
+            "updatedAt": "<ts:fresh>"
+          },
+          "changedFields": [
+            "updatedAt"
+          ],
+          "key": "\"<user:ada>\"",
+          "kind": "changed",
+          "table": "User",
+          "timestampFacts": {
+            "updatedAt.bumped": "true",
+            "updatedAt==createdAt": "false"
+          }
+        }
+      ],
+      "changesAtResponse": [
+        {
+          "after": {
+            "biometricEnabled": false,
+            "biometricEnrolledAt": null,
+            "clerkId": "e2e_<user:ada>",
+            "createdAt": "<ts:3>",
+            "email": "ada@e2e.test",
+            "firstName": null,
+            "globalFacts": null,
+            "id": "<user:ada>",
+            "lastMoodIntensity": 7,
+            "lastName": null,
+            "memoryPreferences": null,
+            "name": "Ada Lovelace",
+            "notificationPreferences": null,
+            "privacyPreferences": null,
+            "pushToken": null,
+            "updatedAt": "<ts:fresh>"
+          },
+          "before": {
+            "biometricEnabled": false,
+            "biometricEnrolledAt": null,
+            "clerkId": "e2e_<user:ada>",
+            "createdAt": "<ts:3>",
+            "email": "ada@e2e.test",
+            "firstName": null,
+            "globalFacts": null,
+            "id": "<user:ada>",
+            "lastMoodIntensity": 7,
+            "lastName": null,
+            "memoryPreferences": null,
+            "name": "Ada Lovelace",
+            "notificationPreferences": null,
+            "privacyPreferences": null,
+            "pushToken": null,
+            "updatedAt": "<ts:fresh>"
+          },
+          "changedFields": [
+            "updatedAt"
+          ],
+          "key": "\"<user:ada>\"",
+          "kind": "changed",
+          "table": "User",
+          "timestampFacts": {
+            "updatedAt.bumped": "true",
+            "updatedAt==createdAt": "false"
+          }
+        }
+      ],
+      "settled": true
+    },
+    {
+      "label": "bob shared: messages as ada@e2e.test",
+      "status": 200,
+      "body": {
+        "data": {
+          "hasMore": false,
+          "messages": []
+        },
+        "success": true
+      },
+      "changes": [
+        {
+          "after": {
+            "biometricEnabled": false,
+            "biometricEnrolledAt": null,
+            "clerkId": "e2e_<user:ada>",
+            "createdAt": "<ts:1>",
+            "email": "ada@e2e.test",
+            "firstName": null,
+            "globalFacts": null,
+            "id": "<user:ada>",
+            "lastMoodIntensity": 7,
+            "lastName": null,
+            "memoryPreferences": null,
+            "name": "Ada Lovelace",
+            "notificationPreferences": null,
+            "privacyPreferences": null,
+            "pushToken": null,
+            "updatedAt": "<ts:fresh>"
+          },
+          "before": {
+            "biometricEnabled": false,
+            "biometricEnrolledAt": null,
+            "clerkId": "e2e_<user:ada>",
+            "createdAt": "<ts:1>",
+            "email": "ada@e2e.test",
+            "firstName": null,
+            "globalFacts": null,
+            "id": "<user:ada>",
+            "lastMoodIntensity": 7,
+            "lastName": null,
+            "memoryPreferences": null,
+            "name": "Ada Lovelace",
+            "notificationPreferences": null,
+            "privacyPreferences": null,
+            "pushToken": null,
+            "updatedAt": "<ts:fresh>"
+          },
+          "changedFields": [
+            "updatedAt"
+          ],
+          "key": "\"<user:ada>\"",
+          "kind": "changed",
+          "table": "User",
+          "timestampFacts": {
+            "updatedAt.bumped": "true",
+            "updatedAt==createdAt": "false"
+          }
+        }
+      ],
+      "changesAtResponse": [
+        {
+          "after": {
+            "biometricEnabled": false,
+            "biometricEnrolledAt": null,
+            "clerkId": "e2e_<user:ada>",
+            "createdAt": "<ts:1>",
+            "email": "ada@e2e.test",
+            "firstName": null,
+            "globalFacts": null,
+            "id": "<user:ada>",
+            "lastMoodIntensity": 7,
+            "lastName": null,
+            "memoryPreferences": null,
+            "name": "Ada Lovelace",
+            "notificationPreferences": null,
+            "privacyPreferences": null,
+            "pushToken": null,
+            "updatedAt": "<ts:fresh>"
+          },
+          "before": {
+            "biometricEnabled": false,
+            "biometricEnrolledAt": null,
+            "clerkId": "e2e_<user:ada>",
+            "createdAt": "<ts:1>",
+            "email": "ada@e2e.test",
+            "firstName": null,
+            "globalFacts": null,
+            "id": "<user:ada>",
+            "lastMoodIntensity": 7,
+            "lastName": null,
+            "memoryPreferences": null,
+            "name": "Ada Lovelace",
+            "notificationPreferences": null,
+            "privacyPreferences": null,
+            "pushToken": null,
+            "updatedAt": "<ts:fresh>"
+          },
+          "changedFields": [
+            "updatedAt"
+          ],
+          "key": "\"<user:ada>\"",
+          "kind": "changed",
+          "table": "User",
+          "timestampFacts": {
+            "updatedAt.bumped": "true",
+            "updatedAt==createdAt": "false"
+          }
+        }
+      ],
+      "settled": true
+    },
+    {
+      "label": "bob shared: pending actions as ada@e2e.test",
+      "status": 200,
+      "body": {
+        "data": {
+          "actions": [],
+          "sentTabUpdates": 0
+        },
+        "success": true
+      },
+      "changes": [
+        {
+          "after": {
+            "biometricEnabled": false,
+            "biometricEnrolledAt": null,
+            "clerkId": "e2e_<user:ada>",
+            "createdAt": "<ts:1>",
+            "email": "ada@e2e.test",
+            "firstName": null,
+            "globalFacts": null,
+            "id": "<user:ada>",
+            "lastMoodIntensity": 7,
+            "lastName": null,
+            "memoryPreferences": null,
+            "name": "Ada Lovelace",
+            "notificationPreferences": null,
+            "privacyPreferences": null,
+            "pushToken": null,
+            "updatedAt": "<ts:fresh>"
+          },
+          "before": {
+            "biometricEnabled": false,
+            "biometricEnrolledAt": null,
+            "clerkId": "e2e_<user:ada>",
+            "createdAt": "<ts:1>",
+            "email": "ada@e2e.test",
+            "firstName": null,
+            "globalFacts": null,
+            "id": "<user:ada>",
+            "lastMoodIntensity": 7,
+            "lastName": null,
+            "memoryPreferences": null,
+            "name": "Ada Lovelace",
+            "notificationPreferences": null,
+            "privacyPreferences": null,
+            "pushToken": null,
+            "updatedAt": "<ts:fresh>"
+          },
+          "changedFields": [
+            "updatedAt"
+          ],
+          "key": "\"<user:ada>\"",
+          "kind": "changed",
+          "table": "User",
+          "timestampFacts": {
+            "updatedAt.bumped": "true",
+            "updatedAt==createdAt": "false"
+          }
+        }
+      ],
+      "changesAtResponse": [
+        {
+          "after": {
+            "biometricEnabled": false,
+            "biometricEnrolledAt": null,
+            "clerkId": "e2e_<user:ada>",
+            "createdAt": "<ts:1>",
+            "email": "ada@e2e.test",
+            "firstName": null,
+            "globalFacts": null,
+            "id": "<user:ada>",
+            "lastMoodIntensity": 7,
+            "lastName": null,
+            "memoryPreferences": null,
+            "name": "Ada Lovelace",
+            "notificationPreferences": null,
+            "privacyPreferences": null,
+            "pushToken": null,
+            "updatedAt": "<ts:fresh>"
+          },
+          "before": {
+            "biometricEnabled": false,
+            "biometricEnrolledAt": null,
+            "clerkId": "e2e_<user:ada>",
+            "createdAt": "<ts:1>",
+            "email": "ada@e2e.test",
+            "firstName": null,
+            "globalFacts": null,
+            "id": "<user:ada>",
+            "lastMoodIntensity": 7,
+            "lastName": null,
+            "memoryPreferences": null,
+            "name": "Ada Lovelace",
+            "notificationPreferences": null,
+            "privacyPreferences": null,
+            "pushToken": null,
+            "updatedAt": "<ts:fresh>"
+          },
+          "changedFields": [
+            "updatedAt"
+          ],
+          "key": "\"<user:ada>\"",
+          "kind": "changed",
+          "table": "User",
+          "timestampFacts": {
+            "updatedAt.bumped": "true",
+            "updatedAt==createdAt": "false"
+          }
+        }
+      ],
+      "settled": true
+    },
+    {
+      "label": "bob shared: stage4 as ada@e2e.test",
+      "status": 200,
+      "body": {
+        "data": {
+          "coverageAudit": {
+            "covered": [
+              {
+                "coveringProposalIds": [
+                  "<proposal:main#1>"
+                ],
+                "id": "<needCoverage:ada#1>",
+                "label": "Partnership",
+                "note": "Sunday planning check-in directly covers partnership.",
+                "source": "YOU",
+                "userDeclinedToAddress": false
+              }
+            ],
+            "open": [
+              {
+                "coveringProposalIds": [],
+                "id": "<needCoverage:ada#2>",
+                "label": "Appreciation",
+                "note": "No active shared proposal directly covers appreciation yet.",
+                "source": "YOU",
+                "userDeclinedToAddress": false
+              }
+            ],
+            "partial": [
+              {
+                "coveringProposalIds": [
+                  "<proposal:main#1>",
+                  "<proposal:main#2>"
+                ],
+                "id": "<needCoverage:bob#1>",
+                "label": "Support",
+                "note": "Support is partly covered but may need more specificity.",
+                "source": "PARTNER",
+                "userDeclinedToAddress": false
+              }
+            ],
+            "updatedAt": "<ts:4>"
+          },
+          "inventory": {
+            "individualCommitments": [
+              {
+                "description": "I will name when I am overloaded before I disappear",
+                "duration": "This week",
+                "id": "<proposal:main#3>",
+                "kind": "INDIVIDUAL_COMMITMENT",
+                "measureOfSuccess": "Stress is named before withdrawal",
+                "needsAddressed": [
+                  {
+                    "coverage": "COVERED",
+                    "label": "Appreciation"
+                  }
+                ],
+                "ownerLabel": "You",
+                "sourceLabel": "YOU",
+                "status": "ACTIVE"
+              }
+            ],
+            "removedProposalCount": 1,
+            "sharedProposals": [
+              {
+                "description": "Use a pause phrase when either person starts to shut down",
+                "duration": "One month",
+                "id": "<proposal:main#2>",
+                "kind": "SHARED_PROPOSAL",
+                "measureOfSuccess": "Hard conversations can pause without either person feeling abandoned",
+                "needsAddressed": [
+                  {
+                    "coverage": "PARTIAL",
+                    "id": "<needCoverage:bob#1>",
+                    "label": "Support"
+                  }
+                ],
+                "partnerDecisionVisible": "WILLING",
+                "sourceLabel": "PARTNER",
+                "status": "ACTIVE"
+              },
+              {
+                "description": "Try a Sunday evening planning check-in for the next two weeks",
+                "duration": "Two weeks",
+                "id": "<proposal:main#1>",
+                "kind": "SHARED_PROPOSAL",
+                "measureOfSuccess": "Both people know the week plan before Monday",
+                "myDecision": "WILLING",
+                "needsAddressed": [
+                  {
+                    "coverage": "COVERED",
+                    "id": "<needCoverage:ada#1>",
+                    "label": "Partnership"
+                  },
+                  {
+                    "coverage": "PARTIAL",
+                    "id": "<needCoverage:bob#1>",
+                    "label": "Support"
+                  }
+                ],
+                "partnerDecisionVisible": "WILLING",
+                "sourceLabel": "YOU",
+                "status": "ACTIVE"
+              }
+            ],
+            "unaddressedNeeds": [
+              {
+                "id": "<needCoverage:ada#2>",
+                "label": "Appreciation",
+                "note": "No active shared proposal directly covers appreciation yet.",
+                "source": "YOU"
+              }
+            ],
+            "updatedAt": "<ts:3>"
+          },
+          "mySelectionStatus": "SUBMITTED",
+          "mySelections": [
+            {
+              "decision": "WILLING",
+              "note": null,
+              "proposalId": "<proposal:main#1>",
+              "selectedAt": "<ts:2>",
+              "updatedAt": "<ts:5>"
+            }
+          ],
+          "outcome": null,
+          "partnerSelectionStatus": "SUBMITTED",
+          "partnerSelections": [
+            {
+              "decision": "WILLING",
+              "note": null,
+              "proposalId": "<proposal:main#1>",
+              "selectedAt": "<ts:fresh>",
+              "updatedAt": "<ts:fresh>"
+            },
+            {
+              "decision": "WILLING",
+              "note": null,
+              "proposalId": "<proposal:main#2>",
+              "selectedAt": "<ts:fresh>",
+              "updatedAt": "<ts:fresh>"
+            }
+          ],
+          "phase": "OUTCOME_REVIEW",
+          "tendingPreview": null,
+          "walkthrough": {
+            "currentIndex": 0,
+            "currentNeed": {
+              "id": "<needCoverage:ada#1>",
+              "label": "Partnership",
+              "source": "YOU",
+              "status": "in_progress"
+            },
+            "defaultCheckInDate": "2026-10-31",
+            "ownNeeds": [
+              {
+                "id": "<needCoverage:ada#1>",
+                "label": "Partnership",
+                "source": "YOU",
+                "status": "in_progress"
+              },
+              {
+                "id": "<needCoverage:ada#2>",
+                "label": "Appreciation",
+                "source": "YOU",
+                "status": "needs_options"
+              }
+            ],
+            "partnerNeeds": [
+              {
+                "id": "<needCoverage:bob#1>",
+                "label": "Support",
+                "source": "PARTNER",
+                "status": "not_started"
+              }
+            ],
+            "phase": "MY_NEEDS",
+            "proposalGroups": [
+              {
+                "key": "you_suggested",
+                "proposals": [
+                  {
+                    "description": "Try a Sunday evening planning check-in for the next two weeks",
+                    "duration": "Two weeks",
+                    "id": "<proposal:main#1>",
+                    "kind": "SHARED_PROPOSAL",
+                    "measureOfSuccess": "Both people know the week plan before Monday",
+                    "myDecision": "WILLING",
+                    "needsAddressed": [
+                      {
+                        "coverage": "COVERED",
+                        "id": "<needCoverage:ada#1>",
+                        "label": "Partnership"
+                      },
+                      {
+                        "coverage": "PARTIAL",
+                        "id": "<needCoverage:bob#1>",
+                        "label": "Support"
+                      }
+                    ],
+                    "partnerDecisionVisible": "WILLING",
+                    "sourceLabel": "YOU",
+                    "status": "ACTIVE"
+                  }
+                ],
+                "readOnly": false,
+                "title": "Options you suggested"
+              },
+              {
+                "key": "partner_suggested",
+                "proposals": [],
+                "readOnly": false,
+                "title": "Options your partner suggested"
+              },
+              {
+                "key": "ai_suggested",
+                "proposals": [],
+                "readOnly": false,
+                "title": "MWF ideas"
+              }
+            ],
+            "qualityWarnings": [],
+            "totalInPhase": 2
+          }
+        },
+        "success": true
+      },
+      "changes": [
+        {
+          "after": {
+            "biometricEnabled": false,
+            "biometricEnrolledAt": null,
+            "clerkId": "e2e_<user:ada>",
+            "createdAt": "<ts:1>",
+            "email": "ada@e2e.test",
+            "firstName": null,
+            "globalFacts": null,
+            "id": "<user:ada>",
+            "lastMoodIntensity": 7,
+            "lastName": null,
+            "memoryPreferences": null,
+            "name": "Ada Lovelace",
+            "notificationPreferences": null,
+            "privacyPreferences": null,
+            "pushToken": null,
+            "updatedAt": "<ts:fresh>"
+          },
+          "before": {
+            "biometricEnabled": false,
+            "biometricEnrolledAt": null,
+            "clerkId": "e2e_<user:ada>",
+            "createdAt": "<ts:1>",
+            "email": "ada@e2e.test",
+            "firstName": null,
+            "globalFacts": null,
+            "id": "<user:ada>",
+            "lastMoodIntensity": 7,
+            "lastName": null,
+            "memoryPreferences": null,
+            "name": "Ada Lovelace",
+            "notificationPreferences": null,
+            "privacyPreferences": null,
+            "pushToken": null,
+            "updatedAt": "<ts:fresh>"
+          },
+          "changedFields": [
+            "updatedAt"
+          ],
+          "key": "\"<user:ada>\"",
+          "kind": "changed",
+          "table": "User",
+          "timestampFacts": {
+            "updatedAt.bumped": "true",
+            "updatedAt==createdAt": "false"
+          }
+        }
+      ],
+      "changesAtResponse": [
+        {
+          "after": {
+            "biometricEnabled": false,
+            "biometricEnrolledAt": null,
+            "clerkId": "e2e_<user:ada>",
+            "createdAt": "<ts:1>",
+            "email": "ada@e2e.test",
+            "firstName": null,
+            "globalFacts": null,
+            "id": "<user:ada>",
+            "lastMoodIntensity": 7,
+            "lastName": null,
+            "memoryPreferences": null,
+            "name": "Ada Lovelace",
+            "notificationPreferences": null,
+            "privacyPreferences": null,
+            "pushToken": null,
+            "updatedAt": "<ts:fresh>"
+          },
+          "before": {
+            "biometricEnabled": false,
+            "biometricEnrolledAt": null,
+            "clerkId": "e2e_<user:ada>",
+            "createdAt": "<ts:1>",
+            "email": "ada@e2e.test",
+            "firstName": null,
+            "globalFacts": null,
+            "id": "<user:ada>",
+            "lastMoodIntensity": 7,
+            "lastName": null,
+            "memoryPreferences": null,
+            "name": "Ada Lovelace",
+            "notificationPreferences": null,
+            "privacyPreferences": null,
+            "pushToken": null,
+            "updatedAt": "<ts:fresh>"
+          },
+          "changedFields": [
+            "updatedAt"
+          ],
+          "key": "\"<user:ada>\"",
+          "kind": "changed",
+          "table": "User",
+          "timestampFacts": {
+            "updatedAt.bumped": "true",
+            "updatedAt==createdAt": "false"
+          }
+        }
+      ],
+      "settled": true
+    },
+    {
+      "label": "bob shared: agreements as ada@e2e.test",
+      "status": 200,
+      "body": {
+        "data": {
+          "agreements": []
+        },
+        "success": true
+      },
+      "changes": [
+        {
+          "after": {
+            "biometricEnabled": false,
+            "biometricEnrolledAt": null,
+            "clerkId": "e2e_<user:ada>",
+            "createdAt": "<ts:1>",
+            "email": "ada@e2e.test",
+            "firstName": null,
+            "globalFacts": null,
+            "id": "<user:ada>",
+            "lastMoodIntensity": 7,
+            "lastName": null,
+            "memoryPreferences": null,
+            "name": "Ada Lovelace",
+            "notificationPreferences": null,
+            "privacyPreferences": null,
+            "pushToken": null,
+            "updatedAt": "<ts:fresh>"
+          },
+          "before": {
+            "biometricEnabled": false,
+            "biometricEnrolledAt": null,
+            "clerkId": "e2e_<user:ada>",
+            "createdAt": "<ts:1>",
+            "email": "ada@e2e.test",
+            "firstName": null,
+            "globalFacts": null,
+            "id": "<user:ada>",
+            "lastMoodIntensity": 7,
+            "lastName": null,
+            "memoryPreferences": null,
+            "name": "Ada Lovelace",
+            "notificationPreferences": null,
+            "privacyPreferences": null,
+            "pushToken": null,
+            "updatedAt": "<ts:fresh>"
+          },
+          "changedFields": [
+            "updatedAt"
+          ],
+          "key": "\"<user:ada>\"",
+          "kind": "changed",
+          "table": "User",
+          "timestampFacts": {
+            "updatedAt.bumped": "true",
+            "updatedAt==createdAt": "false"
+          }
+        }
+      ],
+      "changesAtResponse": [
+        {
+          "after": {
+            "biometricEnabled": false,
+            "biometricEnrolledAt": null,
+            "clerkId": "e2e_<user:ada>",
+            "createdAt": "<ts:1>",
+            "email": "ada@e2e.test",
+            "firstName": null,
+            "globalFacts": null,
+            "id": "<user:ada>",
+            "lastMoodIntensity": 7,
+            "lastName": null,
+            "memoryPreferences": null,
+            "name": "Ada Lovelace",
+            "notificationPreferences": null,
+            "privacyPreferences": null,
+            "pushToken": null,
+            "updatedAt": "<ts:fresh>"
+          },
+          "before": {
+            "biometricEnabled": false,
+            "biometricEnrolledAt": null,
+            "clerkId": "e2e_<user:ada>",
+            "createdAt": "<ts:1>",
+            "email": "ada@e2e.test",
+            "firstName": null,
+            "globalFacts": null,
+            "id": "<user:ada>",
+            "lastMoodIntensity": 7,
+            "lastName": null,
+            "memoryPreferences": null,
+            "name": "Ada Lovelace",
+            "notificationPreferences": null,
+            "privacyPreferences": null,
+            "pushToken": null,
+            "updatedAt": "<ts:fresh>"
+          },
+          "changedFields": [
+            "updatedAt"
+          ],
+          "key": "\"<user:ada>\"",
+          "kind": "changed",
+          "table": "User",
+          "timestampFacts": {
+            "updatedAt.bumped": "true",
+            "updatedAt==createdAt": "false"
+          }
+        }
+      ],
+      "settled": true
+    },
+    {
+      "label": "bob shared: session list as ada@e2e.test",
+      "status": 200,
+      "body": {
+        "data": {
+          "hasMore": false,
+          "items": [
+            {
+              "createdAt": "<ts:2>",
+              "hasUnread": true,
+              "id": "<session:main>",
+              "lastSeenChatItemId": null,
+              "lastViewedAt": null,
+              "myProgress": {
+                "completedAt": null,
+                "stage": 4,
+                "startedAt": "<ts:3>",
+                "status": "IN_PROGRESS"
+              },
+              "partner": {
+                "id": "<user:bob>",
+                "name": "Bob Ross",
+                "nickname": "Bob Ross"
+              },
+              "partnerActionNeeded": [
+                "complete_stage"
+              ],
+              "partnerProgress": {
+                "completedAt": null,
+                "stage": 4,
+                "startedAt": "<ts:3>",
+                "status": "IN_PROGRESS"
+              },
+              "relationshipId": "<relationship:main>",
+              "selfActionNeeded": [
+                "complete_stage"
+              ],
+              "status": "ACTIVE",
+              "statusSummary": {
+                "partnerStatus": "Bob Ross is thinking about next steps",
+                "userStatus": "Considering next steps"
+              },
+              "updatedAt": "<ts:2>"
+            }
+          ]
+        },
+        "success": true
+      },
+      "changes": [
+        {
+          "after": {
+            "biometricEnabled": false,
+            "biometricEnrolledAt": null,
+            "clerkId": "e2e_<user:ada>",
+            "createdAt": "<ts:1>",
+            "email": "ada@e2e.test",
+            "firstName": null,
+            "globalFacts": null,
+            "id": "<user:ada>",
+            "lastMoodIntensity": 7,
+            "lastName": null,
+            "memoryPreferences": null,
+            "name": "Ada Lovelace",
+            "notificationPreferences": null,
+            "privacyPreferences": null,
+            "pushToken": null,
+            "updatedAt": "<ts:fresh>"
+          },
+          "before": {
+            "biometricEnabled": false,
+            "biometricEnrolledAt": null,
+            "clerkId": "e2e_<user:ada>",
+            "createdAt": "<ts:1>",
+            "email": "ada@e2e.test",
+            "firstName": null,
+            "globalFacts": null,
+            "id": "<user:ada>",
+            "lastMoodIntensity": 7,
+            "lastName": null,
+            "memoryPreferences": null,
+            "name": "Ada Lovelace",
+            "notificationPreferences": null,
+            "privacyPreferences": null,
+            "pushToken": null,
+            "updatedAt": "<ts:fresh>"
+          },
+          "changedFields": [
+            "updatedAt"
+          ],
+          "key": "\"<user:ada>\"",
+          "kind": "changed",
+          "table": "User",
+          "timestampFacts": {
+            "updatedAt.bumped": "true",
+            "updatedAt==createdAt": "false"
+          }
+        }
+      ],
+      "changesAtResponse": [
+        {
+          "after": {
+            "biometricEnabled": false,
+            "biometricEnrolledAt": null,
+            "clerkId": "e2e_<user:ada>",
+            "createdAt": "<ts:1>",
+            "email": "ada@e2e.test",
+            "firstName": null,
+            "globalFacts": null,
+            "id": "<user:ada>",
+            "lastMoodIntensity": 7,
+            "lastName": null,
+            "memoryPreferences": null,
+            "name": "Ada Lovelace",
+            "notificationPreferences": null,
+            "privacyPreferences": null,
+            "pushToken": null,
+            "updatedAt": "<ts:fresh>"
+          },
+          "before": {
+            "biometricEnabled": false,
+            "biometricEnrolledAt": null,
+            "clerkId": "e2e_<user:ada>",
+            "createdAt": "<ts:1>",
+            "email": "ada@e2e.test",
+            "firstName": null,
+            "globalFacts": null,
+            "id": "<user:ada>",
+            "lastMoodIntensity": 7,
+            "lastName": null,
+            "memoryPreferences": null,
+            "name": "Ada Lovelace",
+            "notificationPreferences": null,
+            "privacyPreferences": null,
+            "pushToken": null,
+            "updatedAt": "<ts:fresh>"
+          },
+          "changedFields": [
+            "updatedAt"
+          ],
+          "key": "\"<user:ada>\"",
+          "kind": "changed",
+          "table": "User",
+          "timestampFacts": {
+            "updatedAt.bumped": "true",
+            "updatedAt==createdAt": "false"
+          }
+        }
+      ],
+      "settled": true
+    },
+    {
+      "label": "bob shared: badge count as ada@e2e.test",
+      "status": 200,
+      "body": {
+        "data": {
+          "bySession": {},
+          "count": 0
+        },
+        "success": true
+      },
+      "changes": [
+        {
+          "after": {
+            "biometricEnabled": false,
+            "biometricEnrolledAt": null,
+            "clerkId": "e2e_<user:ada>",
+            "createdAt": "<ts:1>",
+            "email": "ada@e2e.test",
+            "firstName": null,
+            "globalFacts": null,
+            "id": "<user:ada>",
+            "lastMoodIntensity": 7,
+            "lastName": null,
+            "memoryPreferences": null,
+            "name": "Ada Lovelace",
+            "notificationPreferences": null,
+            "privacyPreferences": null,
+            "pushToken": null,
+            "updatedAt": "<ts:fresh>"
+          },
+          "before": {
+            "biometricEnabled": false,
+            "biometricEnrolledAt": null,
+            "clerkId": "e2e_<user:ada>",
+            "createdAt": "<ts:1>",
+            "email": "ada@e2e.test",
+            "firstName": null,
+            "globalFacts": null,
+            "id": "<user:ada>",
+            "lastMoodIntensity": 7,
+            "lastName": null,
+            "memoryPreferences": null,
+            "name": "Ada Lovelace",
+            "notificationPreferences": null,
+            "privacyPreferences": null,
+            "pushToken": null,
+            "updatedAt": "<ts:fresh>"
+          },
+          "changedFields": [
+            "updatedAt"
+          ],
+          "key": "\"<user:ada>\"",
+          "kind": "changed",
+          "table": "User",
+          "timestampFacts": {
+            "updatedAt.bumped": "true",
+            "updatedAt==createdAt": "false"
+          }
+        }
+      ],
+      "changesAtResponse": [
+        {
+          "after": {
+            "biometricEnabled": false,
+            "biometricEnrolledAt": null,
+            "clerkId": "e2e_<user:ada>",
+            "createdAt": "<ts:1>",
+            "email": "ada@e2e.test",
+            "firstName": null,
+            "globalFacts": null,
+            "id": "<user:ada>",
+            "lastMoodIntensity": 7,
+            "lastName": null,
+            "memoryPreferences": null,
+            "name": "Ada Lovelace",
+            "notificationPreferences": null,
+            "privacyPreferences": null,
+            "pushToken": null,
+            "updatedAt": "<ts:fresh>"
+          },
+          "before": {
+            "biometricEnabled": false,
+            "biometricEnrolledAt": null,
+            "clerkId": "e2e_<user:ada>",
+            "createdAt": "<ts:1>",
+            "email": "ada@e2e.test",
+            "firstName": null,
+            "globalFacts": null,
+            "id": "<user:ada>",
+            "lastMoodIntensity": 7,
+            "lastName": null,
+            "memoryPreferences": null,
+            "name": "Ada Lovelace",
+            "notificationPreferences": null,
+            "privacyPreferences": null,
+            "pushToken": null,
+            "updatedAt": "<ts:fresh>"
+          },
+          "changedFields": [
+            "updatedAt"
+          ],
+          "key": "\"<user:ada>\"",
+          "kind": "changed",
+          "table": "User",
+          "timestampFacts": {
+            "updatedAt.bumped": "true",
+            "updatedAt==createdAt": "false"
+          }
+        }
+      ],
+      "settled": true
+    }
+  ]
+}
