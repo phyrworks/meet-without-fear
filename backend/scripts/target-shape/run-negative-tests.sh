@@ -45,6 +45,7 @@ CASES=(
 "n9_message_without_owner|message_without_owner|UPDATE \"Message\" SET \"forUserId\" = NULL WHERE id = '00000000-0000-7e00-8000-00000000e5c2';"
 "n10_attempt_author_unrecoverable|attempt_without_author|UPDATE \"EmpathyAttempt\" SET \"sourceUserId\" = NULL WHERE id = '00000000-0000-7e00-8000-00000000a7c5';"
 "n11_acceptor_unrecoverable|invitation_accepted_without_unique_acceptor|UPDATE \"Message\" SET \"forUserId\" = NULL WHERE \"forUserId\" = '00000000-0000-7e00-8000-0000000000ef'; DELETE FROM \"ReconcilerResult\" WHERE id = '00000000-0000-7e00-8000-00000000e5e5';"
+"n12_need_consent_unresolved|need_consent_unresolved|UPDATE \"ConsentRecord\" SET \"targetId\" = '00000000-0000-7e00-8000-00000000beef' WHERE id = '00000000-0000-7e00-8000-000000006cc1';"
 )
 
 OLD_TABLES_SQL="SELECT count(*) FROM pg_tables WHERE schemaname = 'public' AND tablename ~ '^[A-Z]'"

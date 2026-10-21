@@ -335,4 +335,30 @@ DO $$ DECLARE n int; BEGIN
   END;
 END $$;
 
+-- 17. ruling R17 (rolled back): anonymize_user_in_session also deletes the
+--     session's NULL-participant brain_activity rows — migrated history that
+--     cannot be attributed (eba01 in X). History of other sessions (eba03 in
+--     S) and reflection telemetry (eba02, no session) stay.
+BEGIN;
+DO $$ DECLARE x_before int; s_before int; refl_before int; BEGIN
+  SELECT count(*) INTO x_before FROM brain_activity WHERE session_id = '00000000-0000-7e00-8000-0000000005e1' AND participant_id IS NULL;
+  SELECT count(*) INTO s_before FROM brain_activity WHERE session_id = '00000000-0000-7e00-8000-0000000005e6' AND participant_id IS NULL;
+  SELECT count(*) INTO refl_before FROM brain_activity WHERE session_id IS NULL AND reflection_id IS NOT NULL;
+  IF x_before = 0 OR s_before = 0 OR refl_before = 0 THEN
+    RAISE EXCEPTION 'TEST FAILED: setup — expected NULL-participant history in X (%), in S (%) and reflection telemetry (%)', x_before, s_before, refl_before;
+  END IF;
+  PERFORM app.anonymize_user_in_session('00000000-0000-7e00-8000-0000000005e1',
+            (SELECT p.id FROM participant p WHERE p.session_id = '00000000-0000-7e00-8000-0000000005e1' AND p.user_id = '00000000-0000-7e00-8000-0000000000d1'));
+  IF EXISTS (SELECT 1 FROM brain_activity WHERE session_id = '00000000-0000-7e00-8000-0000000005e1' AND participant_id IS NULL) THEN
+    RAISE EXCEPTION 'TEST FAILED: NULL-participant brain_activity of the session survived anonymize_user_in_session';
+  END IF;
+  IF (SELECT count(*) FROM brain_activity WHERE session_id = '00000000-0000-7e00-8000-0000000005e6' AND participant_id IS NULL) <> s_before
+     OR (SELECT count(*) FROM brain_activity WHERE session_id IS NULL AND reflection_id IS NOT NULL) <> refl_before THEN
+    RAISE EXCEPTION 'TEST FAILED: anonymize_user_in_session deleted brain_activity outside the session';
+  END IF;
+  RAISE NOTICE 'PASS 17 anonymize_user_in_session deletes the session''s NULL-participant brain_activity (% row(s) in X), keeps S (%) and reflection telemetry (%)',
+    x_before, s_before, refl_before;
+END $$;
+ROLLBACK;
+
 \echo 'functions-caller-tests: ALL PASSED'

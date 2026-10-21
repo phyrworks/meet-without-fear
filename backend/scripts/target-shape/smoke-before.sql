@@ -52,11 +52,24 @@ SELECT s.id AS session_id,
 FROM "Session" s JOIN "RelationshipMember" m ON m."relationshipId" = s."relationshipId"
 GROUP BY s.id;
 
--- Old shared needs (active ConsentedContent) per session.
+-- Old shared needs per session: active ConsentedContent, plus (TS-7b) the
+-- Stage 3 handler's shares — a GRANTED, unrevoked IDENTIFIED_NEED
+-- ConsentRecord whose need has no ConsentedContent (session = the need's
+-- vessel's session).
 CREATE TABLE ts7_smoke.old_shared_need AS
-SELECT sv."sessionId" AS session_id, count(*) FILTER (WHERE cc."consentActive") AS n
-FROM "ConsentedContent" cc JOIN "SharedVessel" sv ON sv.id = cc."sharedVesselId"
-GROUP BY sv."sessionId";
+SELECT session_id, count(*) AS n FROM (
+  SELECT sv."sessionId" AS session_id
+  FROM "ConsentedContent" cc JOIN "SharedVessel" sv ON sv.id = cc."sharedVesselId"
+  WHERE cc."consentActive"
+  UNION ALL
+  SELECT uv."sessionId"
+  FROM "ConsentRecord" cr
+  JOIN "IdentifiedNeed" n ON n.id::text = cr."targetId"
+  JOIN "UserVessel" uv ON uv.id = n."vesselId"
+  WHERE cr."targetType" = 'IDENTIFIED_NEED' AND cr.decision = 'GRANTED' AND cr."revokedAt" IS NULL
+    AND NOT EXISTS (SELECT 1 FROM "ConsentedContent" cc JOIN "ConsentRecord" c2 ON c2.id = cc."consentRecordId" WHERE c2."targetId" = cr."targetId")
+) x
+GROUP BY session_id;
 
 SELECT 'smoke-before: recorded', (SELECT count(*) FROM ts7_smoke.seed) AS seeded_sessions,
        (SELECT count(*) FROM ts7_smoke.old_stage) AS members, (SELECT count(*) FROM ts7_smoke.old_attempt) AS attempts;
