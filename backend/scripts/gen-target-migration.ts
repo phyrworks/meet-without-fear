@@ -128,19 +128,19 @@ const HEADER = `-- =============================================================
 --  * need_share has two sources (TS-7b): ConsentedContent, and the Stage 3
 --    handler's granted IDENTIFIED_NEED ConsentRecords (no ConsentedContent;
 --    shared_text = the need label, ruling R19; duplicates merged, R18).
---  * TS-14 RISK, step-13 closure comparison (TS-7b). It is now live for every
---    production Stage4Closure, because Stage 3 shares become need_share rows.
---    The old openNeedIds rule (stage4.ts ~1338 over
---    stage4-coverage.service.ts) counts a need COVERED when any non-REMOVED
---    proposal links or fuzzily matches it, and that includes
---    CONVERTED_TO_AGREEMENT: the SHARED_AGREEMENT closure converts the agreed
---    proposals in the same transaction. v_session_closure_items counts only
---    proposal_need links to ACTIVE proposals. A shared need covered by the
---    agreed proposal, or by a fuzzy/description-only match, is therefore open
---    in the view and covered in the old array. The comparison RAISEs on it
---    (negative case n13), and this is NOT relaxed: deciding between fixing
---    the view rule and accepting the difference is the owner's call at TS-14.
---    Expected on most real SHARED_AGREEMENT closures.
+--  * Step-13 closure comparison (TS-7b). It is live for every production
+--    Stage4Closure, because Stage 3 shares become need_share rows.
+--    - Ruling R20 (2026-10-21; owner may veto): a proposal covers a need
+--      while ACTIVE, REVISED or CONVERTED_TO_AGREEMENT. The SHARED_AGREEMENT
+--      closure converts the agreed proposals (stage4.ts ~1426), and the old
+--      app revises a proposal in place.
+--    - The old rule also matched needs by fuzzy text and description. A need
+--      that only such a proposal covered is a named, listed exception, when
+--      that proposal has a needsAddressed label that matched no need or has
+--      unresolved_need_labels. Any other difference RAISEs (negative n13).
+--    - TS-14: read the 'R20 named exception' report rows. A RAISE here means
+--      the old closure disagrees with the view for a reason this rule does
+--      not explain; decide per case.
 --  * Does NOT enable RLS or create policies (TS-16).
 --  * TS-16 (v_participant): under owner-only RLS a co-participant reads NULL
 --    last_active_at / last_mood / read state and is_tombstone = false through

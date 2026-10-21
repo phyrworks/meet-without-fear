@@ -154,6 +154,19 @@ LEFT JOIN participant p ON p.session_id = c."sessionId" AND p.user_id = app_migr
 INSERT INTO app_migration.old_closure (session_id, shared_agreement_ids, individual_proposal_ids, open_need_ids)
 SELECT "sessionId", coalesce("sharedAgreementIds", '{}'), coalesce("individualProposalIds", '{}'), coalesce("openNeedIds", '{}')
 FROM "Stage4Closure";
+-- Explanation inputs for the trailer's closure comparison (R20): the old
+-- coverage rows of closed sessions, and needsAddressed labels that matched
+-- no need case-insensitively.
+INSERT INTO app_migration.old_coverage (session_id, need_id, status, covering_proposal_ids)
+SELECT c."sessionId", app_migration.as_uuid(c."needId"), c."coverageStatus", coalesce(c."coveringProposalIds", '{}')
+FROM "Stage4NeedCoverage" c
+WHERE app_migration.as_uuid(c."needId") IS NOT NULL
+  AND EXISTS (SELECT 1 FROM "Stage4Closure" x WHERE x."sessionId" = c."sessionId")
+ORDER BY c."sessionId", c."needId";
+INSERT INTO app_migration.proposal_nomatch_label (proposal_id, label)
+SELECT DISTINCT s.proposal_id, s.label FROM app_migration.proposal_need_src s
+WHERE s.source = 'needsAddressed' AND s.need_id IS NULL AND s.label IS NOT NULL
+ORDER BY 1, 2;
 SELECT app_migration.assert(a = b, format('step 13: %s session_closure rows for %s "Stage4Closure" rows', a, b))
 FROM (SELECT (SELECT count(*) FROM session_closure) AS a, (SELECT count(*) FROM "Stage4Closure") AS b) x;
 SELECT app_migration.note('13', 'StrategyRanking dropped (ranking not in the product flow)', count(*)) FROM "StrategyRanking";

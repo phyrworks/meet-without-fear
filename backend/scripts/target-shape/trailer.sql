@@ -1044,8 +1044,15 @@ WHERE revoked_at IS NULL;
 CREATE VIEW v_empathy_direction_status WITH (security_invoker = true) AS
 SELECT * FROM app.empathy_direction_status();
 
--- Per shared need: covering ACTIVE proposals and who is WILLING on one;
--- COVERED when every present human is, PARTIAL when some are, OPEN otherwise.
+-- Per shared need: covering proposals and who is WILLING on one; COVERED
+-- when every present human is, PARTIAL when some are, OPEN otherwise.
+-- Ruling R20 (2026-10-21; owner may veto): a proposal covers while ACTIVE,
+-- REVISED or CONVERTED_TO_AGREEMENT. An agreed proposal covers at least as
+-- much as an active one: stage4.ts ~1426 converts the agreed proposals in
+-- the closure transaction. REVISED is a live state: the old app revises the
+-- same row in place (stage4-capture.service.ts:675-684, :841-855), its links
+-- move with it (:707, :877), and its readers treat REVISED as ACTIVE (:291,
+-- :494).
 CREATE VIEW v_need_coverage WITH (security_invoker = true) AS
 SELECT ns.session_id, ns.need_id, ns.participant_id AS need_owner_participant_id,
        coalesce(cov.proposal_ids, '{}') AS covering_proposal_ids,
@@ -1057,12 +1064,12 @@ FROM need_share ns
 LEFT JOIN LATERAL (
   SELECT array_agg(pr.id ORDER BY pr.created_at, pr.id) AS proposal_ids
   FROM proposal_need pn JOIN proposal pr ON pr.id = pn.proposal_id
-  WHERE pn.need_id = ns.need_id AND pr.status = 'ACTIVE'
+  WHERE pn.need_id = ns.need_id AND pr.status IN ('ACTIVE', 'REVISED', 'CONVERTED_TO_AGREEMENT')
 ) cov ON true
 LEFT JOIN LATERAL (
   SELECT array_agg(DISTINCT c.participant_id) AS willing
   FROM proposal_need pn
-  JOIN proposal pr ON pr.id = pn.proposal_id AND pr.status = 'ACTIVE'
+  JOIN proposal pr ON pr.id = pn.proposal_id AND pr.status IN ('ACTIVE', 'REVISED', 'CONVERTED_TO_AGREEMENT')
   JOIN proposal_choice c ON c.proposal_id = pr.id AND c.decision = 'WILLING'
   JOIN participant p ON p.id = c.participant_id AND p.kind = 'human' AND p.left_at IS NULL
   WHERE pn.need_id = ns.need_id
@@ -1072,7 +1079,9 @@ CROSS JOIN LATERAL (
 ) h
 WHERE ns.revoked_at IS NULL;
 
--- The three Stage4Closure arrays, computed (never an unshared need id).
+-- The three Stage4Closure arrays, computed (never an unshared need id). An
+-- open need is a live share with an OPEN disposition or no covering proposal
+-- (ACTIVE, REVISED or CONVERTED_TO_AGREEMENT; ruling R20, above).
 CREATE VIEW v_session_closure_items WITH (security_invoker = true) AS
 SELECT s.id AS session_id,
        coalesce((SELECT array_agg(ag.id ORDER BY ag.created_at, ag.id) FROM agreement ag WHERE ag.session_id = s.id), '{}') AS agreement_ids,
@@ -1086,7 +1095,7 @@ SELECT s.id AS session_id,
                  FROM need_share ns
                  WHERE ns.session_id = s.id AND ns.revoked_at IS NULL
                    AND (EXISTS (SELECT 1 FROM need_disposition d WHERE d.need_id = ns.need_id AND d.status = 'OPEN')
-                        OR NOT EXISTS (SELECT 1 FROM proposal_need pn JOIN proposal pr ON pr.id = pn.proposal_id AND pr.status = 'ACTIVE'
+                        OR NOT EXISTS (SELECT 1 FROM proposal_need pn JOIN proposal pr ON pr.id = pn.proposal_id AND pr.status IN ('ACTIVE', 'REVISED', 'CONVERTED_TO_AGREEMENT')
                                        WHERE pn.need_id = ns.need_id))),
                 '{}') AS open_need_ids
 FROM session s;
@@ -1326,28 +1335,59 @@ END
 $$;
 
 -- Plan step 13: v_session_closure_items reproduces each old Stage4Closure
--- array as a set, restricted to LIVE shared needs. Two named exception
--- classes are expected and listed, never RAISEd:
+-- array as a set, restricted to LIVE shared needs. Named exception classes
+-- are listed and counted in app_migration.report, never RAISEd:
 --   (1) an old open-need id with no need_share row (an unshared need — the
 --       old rule, stage4-coverage.service.ts, covers every confirmed need);
 --   (2) an old open-need id whose need_share is revoked (TS-7b): the view, by
 --       definition, never names a revoked share (spec §1.4), and the old
---       arrays were computed without regard to consent state.
--- Any other difference RAISEs, with the differing ids. Known TS-14 risk
--- (TS-7b, see the migration header): the old rule counts a need COVERED by
--- any non-REMOVED proposal (CONVERTED_TO_AGREEMENT included — stage4.ts
--- converts the agreed proposals in the closure transaction) and by fuzzy
--- text matches; the view counts only proposal_need links to ACTIVE proposals.
--- Those states RAISE here on purpose (negative case n13).
+--       arrays were computed without regard to consent state;
+--   (3) ruling R20: a need the view lists as open while the old closure
+--       counted it covered, EXPLAINED by the old coverage row. Every proposal
+--       that covered it there is one the migration could not link: either it
+--       has a needsAddressed label that matched no need case-insensitively,
+--       or it has a non-empty unresolved_need_labels. The old rule's fuzzy,
+--       description and label-substring matches cannot be reproduced from
+--       proposal_need. Each case is listed per session with the need, the
+--       proposal(s) and the explanation.
+-- Any other difference RAISEs, with the differing ids (negative case n13).
+-- Coverage itself follows R20 (ACTIVE, REVISED, CONVERTED_TO_AGREEMENT).
+CREATE TABLE app_migration.closure_diff AS
+WITH c AS (
+  SELECT o.session_id, o.shared_agreement_ids, o.individual_proposal_ids,
+         ARRAY(SELECT x FROM unnest(o.open_need_ids) x
+               WHERE EXISTS (SELECT 1 FROM need_share s WHERE s.need_id = x AND s.revoked_at IS NULL)) AS old_live,
+         v.agreement_ids, v.individual_commitment_ids, v.open_need_ids AS v_open
+  FROM app_migration.old_closure o LEFT JOIN v_session_closure_items v ON v.session_id = o.session_id
+)
+SELECT c.session_id, d.need_id, d.side, cov.covering_proposal_ids,
+       CASE
+         WHEN d.side = 'view-only' AND cov.status = 'COVERED' AND cardinality(cov.covering_proposal_ids) > 0
+              AND NOT EXISTS (SELECT 1 FROM unnest(cov.covering_proposal_ids) p
+                              WHERE NOT EXISTS (SELECT 1 FROM app_migration.proposal_nomatch_label l WHERE l.proposal_id = p)
+                                AND NOT EXISTS (SELECT 1 FROM proposal pr WHERE pr.id = p AND cardinality(pr.unresolved_need_labels) > 0))
+           THEN CASE WHEN EXISTS (SELECT 1 FROM unnest(cov.covering_proposal_ids) p
+                                  JOIN app_migration.proposal_nomatch_label l ON l.proposal_id = p)
+                     THEN 'old coverage by a proposal whose needsAddressed label matched no need'
+                     ELSE 'old coverage by a proposal with unresolved_need_labels' END
+       END AS explanation
+FROM c
+CROSS JOIN LATERAL (
+  SELECT x AS need_id, 'view-only' AS side FROM unnest(c.v_open) x WHERE x <> ALL (c.old_live)
+  UNION ALL
+  SELECT x, 'old-only' FROM unnest(c.old_live) x WHERE x <> ALL (c.v_open)
+) d
+LEFT JOIN app_migration.old_coverage cov ON cov.session_id = c.session_id AND cov.need_id = d.need_id
+WHERE c.agreement_ids IS NOT NULL;
+
 DO $$
 DECLARE
   r record;
   bad text := '';
-  old_live uuid[];
 BEGIN
   FOR r IN
-    SELECT o.session_id, o.shared_agreement_ids, o.individual_proposal_ids, o.open_need_ids,
-           v.agreement_ids, v.individual_commitment_ids, v.open_need_ids AS v_open
+    SELECT o.session_id, o.shared_agreement_ids, o.individual_proposal_ids,
+           v.agreement_ids, v.individual_commitment_ids
     FROM app_migration.old_closure o LEFT JOIN v_session_closure_items v ON v.session_id = o.session_id
   LOOP
     IF r.agreement_ids IS NULL THEN
@@ -1360,25 +1400,29 @@ BEGIN
     IF NOT (r.individual_proposal_ids @> r.individual_commitment_ids AND r.individual_commitment_ids @> r.individual_proposal_ids) THEN
       bad := bad || format(' %s:individual_commitments', r.session_id);
     END IF;
-    old_live := ARRAY(SELECT x FROM unnest(r.open_need_ids) x
-                      WHERE EXISTS (SELECT 1 FROM need_share s WHERE s.need_id = x AND s.revoked_at IS NULL));
-    IF NOT (r.v_open @> old_live AND old_live @> r.v_open) THEN
-      bad := bad || format(' %s:open_needs(old-only %s, view-only %s)', r.session_id,
-                           ARRAY(SELECT unnest(old_live) EXCEPT SELECT unnest(r.v_open)),
-                           ARRAY(SELECT unnest(r.v_open) EXCEPT SELECT unnest(old_live)));
-    END IF;
   END LOOP;
+  SELECT bad || coalesce(string_agg(format(' %s:open_needs(%s %s)', session_id, side, need_id), '' ORDER BY session_id, side, need_id), '')
+  INTO bad
+  FROM app_migration.closure_diff WHERE explanation IS NULL;
   PERFORM app_migration.note('13', 'Stage4Closure.openNeedIds entry that is not a shared need (expected difference)', count(*),
                              string_agg(x::text, ', '))
   FROM app_migration.old_closure o CROSS JOIN unnest(o.open_need_ids) x
   WHERE NOT EXISTS (SELECT 1 FROM need_share s WHERE s.need_id = x);
   PERFORM app_migration.note('13', 'Stage4Closure.openNeedIds entry whose need_share is revoked (expected difference, TS-7b)', count(*),
-                             string_agg(x::text, ', '))
+                             string_agg(x::text, ', ' ORDER BY x))
   FROM app_migration.old_closure o CROSS JOIN unnest(o.open_need_ids) x
   WHERE EXISTS (SELECT 1 FROM need_share s WHERE s.need_id = x AND s.revoked_at IS NOT NULL);
+  -- R20 named exception: one report row per explained difference (explanation
+  -- in item; session, need and old covering proposals in detail), plus the count.
+  PERFORM app_migration.note('13', 'closure open-need difference, R20 named exception: ' || explanation, 1,
+                             format('session %s need %s (%s) proposals %s', session_id, need_id, side, covering_proposal_ids))
+  FROM app_migration.closure_diff WHERE explanation IS NOT NULL ORDER BY session_id, need_id;
+  PERFORM app_migration.note('13', 'closure open-need differences explained (R20 named exception, total)', count(*))
+  FROM app_migration.closure_diff WHERE explanation IS NOT NULL;
   PERFORM app_migration.assert(bad = '', format('step 13: v_session_closure_items differs from Stage4Closure:%s', bad));
 END
 $$;
+DROP TABLE app_migration.closure_diff, app_migration.old_coverage, app_migration.proposal_nomatch_label;
 
 -- Plan step 14: for every open cycle, v_follow_up_cycle.status equals the old status.
 SELECT app_migration.assert(n = 0, format('step 14: %s open cycle(s) where v_follow_up_cycle.status differs: %s', n, ids))

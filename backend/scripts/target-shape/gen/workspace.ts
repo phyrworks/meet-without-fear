@@ -118,6 +118,19 @@ CREATE TABLE app_migration.old_closure (
   individual_proposal_ids uuid[] NOT NULL,
   open_need_ids           uuid[] NOT NULL
 );
+-- The old coverage rows of closed sessions and the needsAddressed labels that
+-- matched no need: the trailer's closure comparison explains a difference
+-- with them (ruling R20's named exception).
+CREATE TABLE app_migration.old_coverage (
+  session_id             uuid   NOT NULL,
+  need_id                uuid   NOT NULL,
+  status                 text   NOT NULL,
+  covering_proposal_ids  uuid[] NOT NULL
+);
+CREATE TABLE app_migration.proposal_nomatch_label (
+  proposal_id uuid NOT NULL,
+  label       text NOT NULL
+);
 CREATE TABLE app_migration.old_cycle (
   follow_up_id uuid PRIMARY KEY,
   cycle_id     uuid NOT NULL,
