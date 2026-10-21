@@ -319,15 +319,38 @@ BEGIN
     RAISE EXCEPTION 'smoke 8: as partner C, the revoked share 6e3 is visible in v_need_shared';
   END IF;
   PERFORM set_config('app.current_user_id', '', true);
-  -- The closure through S: old openNeedIds {6e3 revoked, 6e4 PARTIAL} → view
-  -- open_need_ids = {6e4} (the revoked one is the listed expected difference).
-  IF (SELECT open_need_ids FROM v_session_closure_items WHERE session_id = s) <> ARRAY['00000000-0000-7e00-8000-0000000006e4'::uuid] THEN
-    RAISE EXCEPTION 'smoke 8: v_session_closure_items(S).open_need_ids = %, expected {6e4}',
+  -- The SHARED_AGREEMENT closure through S (P6 CONVERTED_TO_AGREEMENT, R20).
+  -- Old openNeedIds = {6e3 revoked, 6e4 PARTIAL, 6e6 revoked}. View
+  -- open_need_ids = {6e4, 6e5}: 6e1/6e2 stay covered by the converted P6.
+  -- 6e3/6e6 are the listed revoked-share class. 6e5 (covered in the old rule
+  -- only by P7's description; P7's label matched no need) is the listed R20
+  -- named exception.
+  IF (SELECT open_need_ids FROM v_session_closure_items WHERE session_id = s)
+     <> ARRAY['00000000-0000-7e00-8000-0000000006e4'::uuid, '00000000-0000-7e00-8000-0000000006e5'::uuid] THEN
+    RAISE EXCEPTION 'smoke 8: v_session_closure_items(S).open_need_ids = %, expected {6e4, 6e5}',
       (SELECT open_need_ids FROM v_session_closure_items WHERE session_id = s);
   END IF;
+  IF (SELECT agreement_ids FROM v_session_closure_items WHERE session_id = s) <> ARRAY['00000000-0000-7e00-8000-0000000a9e06'::uuid]
+     OR NOT EXISTS (SELECT 1 FROM v_need_coverage WHERE need_id = '00000000-0000-7e00-8000-0000000006e2'
+                      AND covering_proposal_ids = ARRAY['00000000-0000-7e00-8000-0000000006f1'::uuid])
+     OR (SELECT status FROM proposal WHERE id = '00000000-0000-7e00-8000-0000000006f1') <> 'CONVERTED_TO_AGREEMENT' THEN
+    RAISE EXCEPTION 'smoke 8: the converted proposal P6 does not cover 6e2 / agreement a9e06 not in the closure items';
+  END IF;
   IF NOT EXISTS (SELECT 1 FROM app_migration.report rp WHERE rp.item LIKE 'Stage4Closure.openNeedIds entry whose need_share is revoked%'
-                   AND rp.n = 1 AND rp.detail = '00000000-0000-7e00-8000-0000000006e3') THEN
-    RAISE EXCEPTION 'smoke 8: the revoked open-need id 6e3 is not listed as the expected difference';
+                   AND rp.n = 2 AND rp.detail = '00000000-0000-7e00-8000-0000000006e3, 00000000-0000-7e00-8000-0000000006e6') THEN
+    RAISE EXCEPTION 'smoke 8: the revoked open-need ids 6e3, 6e6 are not listed as the expected difference';
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM app_migration.report rp
+                 WHERE rp.item = 'closure open-need difference, R20 named exception: old coverage by a proposal whose needsAddressed label matched no need'
+                   AND rp.detail LIKE '%need 00000000-0000-7e00-8000-0000000006e5 (view-only) proposals {00000000-0000-7e00-8000-0000000006f2}%')
+     OR (SELECT rp.n FROM app_migration.report rp WHERE rp.item = 'closure open-need differences explained (R20 named exception, total)') <> 1 THEN
+    RAISE EXCEPTION 'smoke 8: the R20 named exception for 6e5 (P7) is not listed exactly once';
+  END IF;
+  -- P20h: the REVOKED record without revokedAt (6cc7 on 6e6) runs the note
+  -- arm once and dates the revocation by its decision.
+  IF (SELECT rp.n FROM app_migration.report rp WHERE rp.item LIKE 'P20h %') <> 1
+     OR NOT EXISTS (SELECT 1 FROM need_share WHERE need_id = '00000000-0000-7e00-8000-0000000006e6' AND revoked_at = '2026-10-04 09:30+00') THEN
+    RAISE EXCEPTION 'smoke 8: P20h note count is not 1, or 6e6 is not revoked as of its decision';
   END IF;
   IF (SELECT cardinality(unresolved_need_labels) FROM proposal WHERE id = '00000000-0000-7e00-8000-0000000006f1') <> 0 THEN
     RAISE EXCEPTION 'smoke 8: P6 kept unresolved need labels: %', (SELECT unresolved_need_labels FROM proposal WHERE id = '00000000-0000-7e00-8000-0000000006f1');
@@ -336,7 +359,7 @@ BEGIN
         AND old_key IN ('00000000-0000-7e00-8000-000000006cc1', '00000000-0000-7e00-8000-000000006cc2')) <> 2 THEN
     RAISE EXCEPTION 'smoke 8: shape_map lacks need_share:ConsentRecord for 6cc1/6cc2';
   END IF;
-  RAISE NOTICE 'smoke 8: Stage 3 shares in need_share (owner, session S, label text, grant time), consent kept, visible to the partner in v_need_shared, P6 links both (v_need_coverage); duplicate grant merged (R18); revoked share lands revoked and is absent for the partner; closure S open_need_ids = {6e4}, revoked 6e3 listed';
+  RAISE NOTICE 'smoke 8: Stage 3 shares in need_share (owner, session S, label text, grant time), consent kept, visible to the partner in v_need_shared, P6 links both (v_need_coverage); duplicate grant merged (R18); revoked share lands revoked and is absent for the partner; SHARED_AGREEMENT closure S with converted P6 (R20): open_need_ids = {6e4, 6e5}, revoked 6e3/6e6 listed, 6e5 R20 named exception listed; P20h note = 1';
 END
 $$;
 COMMIT;

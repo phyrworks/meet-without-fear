@@ -360,8 +360,12 @@ INSERT INTO "Message" (id, "sessionId", "senderId", "forUserId", role, content, 
 -- phoenix/base) writes one GRANTED ConsentRecord(IDENTIFIED_NEED) per
 -- confirmed live need and sets gatesSatisfied needsShared + sharedAt. It
 -- writes NO ConsentedContent. Here both participants share that way:
---   C: 6e1 Appreciation (shared twice, a double-tap: R18 merge), 6e4 Weekend play time
---   D: 6e2 Downtime, 6e3 Quiet evenings (shared, then REVOKED)
+--   C: 6e1 Appreciation (shared twice, a double-tap: R18 merge), 6e4 Weekend
+--      play time, 6e5 Shared hobbies
+--   D: 6e2 Downtime, 6e3 Quiet evenings (shared, then REVOKED), 6e6 Fresh air
+--      (REVOKED without revokedAt: P20h)
+-- The closure is a production SHARED_AGREEMENT one: P6 is
+-- CONVERTED_TO_AGREEMENT (R20).
 -- Each share must land in need_share with the right owner (shared_text = the
 -- need label, R19). Proposal P6 links D's need through StrategyProposalNeed
 -- and C's label through needsAddressed, and must keep both proposal_need
@@ -385,7 +389,9 @@ INSERT INTO "IdentifiedNeed" (id, "vesselId", need, category, evidence, confirme
   ('00000000-0000-7e00-8000-0000000006e1', '00000000-0000-7e00-8000-0000000007c6', 'Appreciation', 'RECOGNITION', '{"nobody notices"}', true, 0.9, '2026-10-03 09:00+00'),
   ('00000000-0000-7e00-8000-0000000006e2', '00000000-0000-7e00-8000-0000000007d6', 'Downtime', 'AUTONOMY', '{}', true, 0.8, '2026-10-03 09:10+00'),
   ('00000000-0000-7e00-8000-0000000006e3', '00000000-0000-7e00-8000-0000000007d6', 'Quiet evenings', 'SAFETY', '{}', true, 0.7, '2026-10-03 09:20+00'),
-  ('00000000-0000-7e00-8000-0000000006e4', '00000000-0000-7e00-8000-0000000007c6', 'Weekend play time', 'CONNECTION', '{}', true, 0.7, '2026-10-03 09:05+00');
+  ('00000000-0000-7e00-8000-0000000006e4', '00000000-0000-7e00-8000-0000000007c6', 'Weekend play time', 'CONNECTION', '{}', true, 0.7, '2026-10-03 09:05+00'),
+  ('00000000-0000-7e00-8000-0000000006e5', '00000000-0000-7e00-8000-0000000007c6', 'Shared hobbies', 'CONNECTION', '{}', true, 0.7, '2026-10-03 09:06+00'),
+  ('00000000-0000-7e00-8000-0000000006e6', '00000000-0000-7e00-8000-0000000007d6', 'Fresh air', 'AUTONOMY', '{}', true, 0.6, '2026-10-03 09:25+00');
 INSERT INTO "ConsentRecord" (id, "userId", "sessionId", "targetType", "targetId", "requestedByUserId", decision, "decidedAt", "createdAt") VALUES
   ('00000000-0000-7e00-8000-000000006cc1', '00000000-0000-7e00-8000-0000000000c1', '00000000-0000-7e00-8000-0000000005e6', 'IDENTIFIED_NEED',
    '00000000-0000-7e00-8000-0000000006e1', '00000000-0000-7e00-8000-0000000000c1', 'GRANTED', '2026-10-04 09:00+00', '2026-10-04 09:00+00'),
@@ -396,11 +402,17 @@ INSERT INTO "ConsentRecord" (id, "userId", "sessionId", "targetType", "targetId"
    '00000000-0000-7e00-8000-0000000006e1', '00000000-0000-7e00-8000-0000000000c1', 'GRANTED', '2026-10-04 09:00:02+00', '2026-10-04 09:00:02+00'),
   -- C's second need, shared, only fuzzily matched by P6 (old coverage PARTIAL: "weekend")
   ('00000000-0000-7e00-8000-000000006cc4', '00000000-0000-7e00-8000-0000000000c1', '00000000-0000-7e00-8000-0000000005e6', 'IDENTIFIED_NEED',
-   '00000000-0000-7e00-8000-0000000006e4', '00000000-0000-7e00-8000-0000000000c1', 'GRANTED', '2026-10-04 09:00+00', '2026-10-04 09:00+00');
--- D's third need: shared, then revoked — the REVOKED + revokedAt shape P19b produces.
+   '00000000-0000-7e00-8000-0000000006e4', '00000000-0000-7e00-8000-0000000000c1', 'GRANTED', '2026-10-04 09:00+00', '2026-10-04 09:00+00'),
+  -- C's third need, shared; the old rule covered it only by P7's description (R20 named exception)
+  ('00000000-0000-7e00-8000-000000006cc6', '00000000-0000-7e00-8000-0000000000c1', '00000000-0000-7e00-8000-0000000005e6', 'IDENTIFIED_NEED',
+   '00000000-0000-7e00-8000-0000000006e5', '00000000-0000-7e00-8000-0000000000c1', 'GRANTED', '2026-10-04 09:00+00', '2026-10-04 09:00+00');
+-- D's third need: shared, then revoked — the REVOKED + revokedAt shape P19b
+-- produces. D's fourth: REVOKED with no revokedAt (P20h: revoked as of decidedAt).
 INSERT INTO "ConsentRecord" (id, "userId", "sessionId", "targetType", "targetId", "requestedByUserId", decision, "decidedAt", "revokedAt", "createdAt") VALUES
   ('00000000-0000-7e00-8000-000000006cc3', '00000000-0000-7e00-8000-0000000000d1', '00000000-0000-7e00-8000-0000000005e6', 'IDENTIFIED_NEED',
-   '00000000-0000-7e00-8000-0000000006e3', '00000000-0000-7e00-8000-0000000000d1', 'REVOKED', '2026-10-04 09:30+00', '2026-10-05 09:00+00', '2026-10-04 09:30+00');
+   '00000000-0000-7e00-8000-0000000006e3', '00000000-0000-7e00-8000-0000000000d1', 'REVOKED', '2026-10-04 09:30+00', '2026-10-05 09:00+00', '2026-10-04 09:30+00'),
+  ('00000000-0000-7e00-8000-000000006cc7', '00000000-0000-7e00-8000-0000000000d1', '00000000-0000-7e00-8000-0000000005e6', 'IDENTIFIED_NEED',
+   '00000000-0000-7e00-8000-0000000006e6', '00000000-0000-7e00-8000-0000000000d1', 'REVOKED', '2026-10-04 09:30+00', NULL, '2026-10-04 09:30+00');
 INSERT INTO "StageProgress" ("sessionId", "userId", stage, status, "startedAt", "completedAt", "gatesSatisfied") VALUES
   ('00000000-0000-7e00-8000-0000000005e6', '00000000-0000-7e00-8000-0000000000c1', 0, 'COMPLETED', '2026-10-01 09:00+00', '2026-10-01 09:10+00',
    '{"compactSigned": true, "signedAt": "2026-10-01T09:10:00Z"}'),
@@ -420,20 +432,38 @@ INSERT INTO "StageProgress" ("sessionId", "userId", stage, status, "startedAt", 
    '{"needsConfirmed": true, "confirmedAt": "2026-10-03T09:30:00Z", "needsShared": true, "sharedAt": "2026-10-04T09:30:00Z"}');
 INSERT INTO "StrategyProposal" (id, "sessionId", "createdByUserId", description, "needsAddressed", kind, status, "createdAt", "updatedAt") VALUES
   ('00000000-0000-7e00-8000-0000000006f1', '00000000-0000-7e00-8000-0000000005e6', '00000000-0000-7e00-8000-0000000000c1',
-   'Saturday mornings off for Dev, thanks out loud for Cara, weekend plans', '{appreciation}', 'SHARED_PROPOSAL', 'ACTIVE', '2026-10-04 10:00+00', '2026-10-04 10:00+00');
+   'Saturday mornings off for Dev, thanks out loud for Cara, weekend plans', '{appreciation}', 'SHARED_PROPOSAL', 'CONVERTED_TO_AGREEMENT', '2026-10-04 10:00+00', '2026-10-06 09:00+00'),
+  ('00000000-0000-7e00-8000-0000000006f2', '00000000-0000-7e00-8000-0000000005e6', '00000000-0000-7e00-8000-0000000000d1',
+   'Try shared hobbies on Sundays', '{hobby time}', 'SHARED_PROPOSAL', 'ACTIVE', '2026-10-04 10:10+00', '2026-10-04 10:10+00');
 INSERT INTO "StrategyProposalNeed" ("proposalId", "needId", "createdAt") VALUES
   ('00000000-0000-7e00-8000-0000000006f1', '00000000-0000-7e00-8000-0000000006e2', '2026-10-04 10:00+00');
+-- The closure is the production SHARED_AGREEMENT path (stage4.ts ~1386-1440).
+-- Both members were WILLING on P6. The closure transaction created agreement
+-- a9e06 and converted P6 to CONVERTED_TO_AGREEMENT. Ruling R20: P6 still
+-- covers 6e1/6e2. P7 stays ACTIVE (only D was willing).
+INSERT INTO "SharedVessel" (id, "sessionId", "updatedAt") VALUES
+  ('00000000-0000-7e00-8000-00000000005c', '00000000-0000-7e00-8000-0000000005e6', '2026-10-06 09:00+00');
+INSERT INTO "Stage4ProposalSelection" (id, "proposalId", "sessionId", "userId", decision, "selectedAt", "updatedAt") VALUES
+  ('00000000-0000-7e00-8000-0000000006c1', '00000000-0000-7e00-8000-0000000006f1', '00000000-0000-7e00-8000-0000000005e6', '00000000-0000-7e00-8000-0000000000c1', 'WILLING', '2026-10-05 11:00+00', '2026-10-05 11:00+00'),
+  ('00000000-0000-7e00-8000-0000000006d1', '00000000-0000-7e00-8000-0000000006f1', '00000000-0000-7e00-8000-0000000005e6', '00000000-0000-7e00-8000-0000000000d1', 'WILLING', '2026-10-05 11:30+00', '2026-10-05 11:30+00'),
+  ('00000000-0000-7e00-8000-0000000006d2', '00000000-0000-7e00-8000-0000000006f2', '00000000-0000-7e00-8000-0000000005e6', '00000000-0000-7e00-8000-0000000000d1', 'WILLING', '2026-10-05 11:30+00', '2026-10-05 11:30+00');
+INSERT INTO "Agreement" (id, "sharedVesselId", description, type, status, "agreedByA", "agreedByB", "agreedAt", "followUpDate", "proposalId") VALUES
+  ('00000000-0000-7e00-8000-0000000a9e06', '00000000-0000-7e00-8000-00000000005c', 'Saturday mornings off for Dev, thanks out loud for Cara, weekend plans',
+   'MICRO_EXPERIMENT', 'AGREED', true, true, '2026-10-06 09:00+00', '2026-10-16 09:00+00', '00000000-0000-7e00-8000-0000000006f1');
 -- Coverage and closure written by the OLD rule (stage4-coverage.service.ts
--- classifyCoverage over every confirmed need; stage4.ts ~1338 openNeedIds =
--- coverage rows OPEN or PARTIAL). P6 stays ACTIVE: the closure is
--- NO_SHARED_AGREEMENT / USER_STOPPED, so nothing is converted to an agreement.
---   6e1 Appreciation: needsAddressed label → COVERED
---   6e2 Downtime: StrategyProposalNeed → COVERED
+-- classifyCoverage over every confirmed need, refreshed while P6 was ACTIVE;
+-- stage4.ts ~1338 openNeedIds = coverage rows OPEN or PARTIAL):
+--   6e1 Appreciation: needsAddressed label on P6 → COVERED
+--   6e2 Downtime: StrategyProposalNeed on P6 → COVERED (R20: converted P6 still covers)
 --   6e3 Quiet evenings (revoked share): no match → OPEN, so it is in the old
 --       openNeedIds; the view never names a revoked share (expected
 --       difference, listed)
 --   6e4 Weekend play time: "weekend" is 1 of 3 words → score 0.33 → PARTIAL,
 --       so it is in the old openNeedIds; no proposal_need → open in the view too
+--   6e5 Shared hobbies: P7's description names it (directMention) → COVERED,
+--       but P7's only label "hobby time" matches no need → no proposal_need →
+--       open in the view: the R20 named exception (listed, not a RAISE)
+--   6e6 Fresh air (REVOKED, no revokedAt): no match → OPEN; revoked share → expected difference
 INSERT INTO "Stage4NeedCoverage" (id, "sessionId", "needId", "needLabel", "sourceUserId", "coverageStatus", "coveringProposalIds", note, "updatedAt", "createdAt") VALUES
   ('00000000-0000-7e00-8000-0000000006a1', '00000000-0000-7e00-8000-0000000005e6', '00000000-0000-7e00-8000-0000000006e1', 'Appreciation',
    '00000000-0000-7e00-8000-0000000000c1', 'COVERED', '{00000000-0000-7e00-8000-0000000006f1}', 'Covered by at least one active proposal.', '2026-10-05 10:00+00', '2026-10-05 10:00+00'),
@@ -442,10 +472,15 @@ INSERT INTO "Stage4NeedCoverage" (id, "sessionId", "needId", "needLabel", "sourc
   ('00000000-0000-7e00-8000-0000000006a3', '00000000-0000-7e00-8000-0000000005e6', '00000000-0000-7e00-8000-0000000006e3', 'Quiet evenings',
    '00000000-0000-7e00-8000-0000000000d1', 'OPEN', '{}', 'Not yet addressed by a proposal.', '2026-10-05 10:00+00', '2026-10-05 10:00+00'),
   ('00000000-0000-7e00-8000-0000000006a4', '00000000-0000-7e00-8000-0000000005e6', '00000000-0000-7e00-8000-0000000006e4', 'Weekend play time',
-   '00000000-0000-7e00-8000-0000000000c1', 'PARTIAL', '{00000000-0000-7e00-8000-0000000006f1}', 'Partly addressed; may need more detail or adjustment.', '2026-10-05 10:00+00', '2026-10-05 10:00+00');
+   '00000000-0000-7e00-8000-0000000000c1', 'PARTIAL', '{00000000-0000-7e00-8000-0000000006f1}', 'Partly addressed; may need more detail or adjustment.', '2026-10-05 10:00+00', '2026-10-05 10:00+00'),
+  ('00000000-0000-7e00-8000-0000000006a5', '00000000-0000-7e00-8000-0000000005e6', '00000000-0000-7e00-8000-0000000006e5', 'Shared hobbies',
+   '00000000-0000-7e00-8000-0000000000c1', 'COVERED', '{00000000-0000-7e00-8000-0000000006f2}', 'Covered by at least one active proposal.', '2026-10-05 10:00+00', '2026-10-05 10:00+00'),
+  ('00000000-0000-7e00-8000-0000000006a6', '00000000-0000-7e00-8000-0000000005e6', '00000000-0000-7e00-8000-0000000006e6', 'Fresh air',
+   '00000000-0000-7e00-8000-0000000000d1', 'OPEN', '{}', 'Not yet addressed by a proposal.', '2026-10-05 10:00+00', '2026-10-05 10:00+00');
 INSERT INTO "Stage4Closure" (id, "sessionId", kind, reason, summary, "sharedAgreementIds", "individualProposalIds", "openNeedIds", "closedByUserId", "closedAt", "createdAt") VALUES
-  ('00000000-0000-7e00-8000-0000000c105f', '00000000-0000-7e00-8000-0000000005e6', 'NO_SHARED_AGREEMENT', 'USER_STOPPED', 'We stopped here for now',
-   '{}', '{}', '{00000000-0000-7e00-8000-0000000006e3,00000000-0000-7e00-8000-0000000006e4}', '00000000-0000-7e00-8000-0000000000c1',
+  ('00000000-0000-7e00-8000-0000000c105f', '00000000-0000-7e00-8000-0000000005e6', 'SHARED_AGREEMENT', 'MUTUAL_SELECTION', 'We agreed on Saturday mornings',
+   '{00000000-0000-7e00-8000-0000000a9e06}', '{}',
+   '{00000000-0000-7e00-8000-0000000006e3,00000000-0000-7e00-8000-0000000006e4,00000000-0000-7e00-8000-0000000006e6}', '00000000-0000-7e00-8000-0000000000c1',
    '2026-10-06 09:00+00', '2026-10-06 09:00+00');
 INSERT INTO "BrainActivity" (id, "sessionId", "innerWorkSessionId", "turnId", "activityType", model, input, output, "callType", cost, status, "createdAt") VALUES
   ('00000000-0000-7e00-8000-0000000eba03', '00000000-0000-7e00-8000-0000000005e6', NULL, 't3', 'LLM_CALL', 'sonnet', '{"prompt": "s"}', NULL,
