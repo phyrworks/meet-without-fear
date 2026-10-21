@@ -326,14 +326,10 @@ FROM "ConsentRecord" c
 WHERE ${needConsentGranted('c')}
   AND NOT EXISTS (SELECT 1 FROM "IdentifiedNeed" n WHERE n.id = app_migration.as_uuid(c."targetId"))`));
 
-  parts.push(P('P20f need_consent_duplicate (need_share PK need_id: one granted record per need without ConsentedContent)', `
-SELECT 'need_consent_duplicate', c."targetId", string_agg(c.id::text, ', ' ORDER BY c.id)
-FROM "ConsentRecord" c
-WHERE ${needConsentGranted('c')}
-  AND EXISTS (SELECT 1 FROM "IdentifiedNeed" n WHERE n.id = app_migration.as_uuid(c."targetId"))
-  AND ${needHasNoConsentedContent('app_migration.as_uuid(c."targetId")')}
-GROUP BY c."targetId"
-HAVING count(*) > 1`));
+  // P20f (two granted records for one need) is not a precheck: ruling R18
+  // merges duplicates into one need_share (step 12 reports the count, grouped
+  // by the resolved need id). P20h (REVOKED without revokedAt) is a step-12
+  // note: revoked_at = decidedAt is unambiguous.
 
   parts.push(P('P20g need_consent_revocation (CHECK need_share.revoked_at >= shared_at for a record-sourced share)', `
 SELECT 'need_consent_revocation', c.id::text, format('decidedAt=%s createdAt=%s revokedAt=%s', c."decidedAt", c."createdAt", c."revokedAt")

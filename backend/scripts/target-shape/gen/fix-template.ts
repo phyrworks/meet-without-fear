@@ -193,15 +193,10 @@ const FIXES: Record<string, string> = {
   need_consent_unresolved: `
 -- A granted IDENTIFIED_NEED ConsentRecord is a shared need (the Stage 3
 -- share-needs handler writes no ConsentedContent), so its targetId must name
--- an IdentifiedNeed. Point it at the need that was shared, or — if that need
--- is gone — record the decision with the owner and delete the record.
--- UPDATE "ConsentRecord" SET "targetId" = '<need id>' WHERE id = '<record id>';
--- or: DELETE FROM "ConsentRecord" WHERE id IN (<ids>);`,
-  need_consent_duplicate: `
--- need_share is keyed by need: one granted record per need without
--- ConsentedContent. Keep the earliest grant (it dates the share); a later
--- revocation belongs on the kept row.
--- DELETE FROM "ConsentRecord" WHERE id IN (<later duplicate ids>);`,
+-- an IdentifiedNeed. Point it at the need that was shared. If that need is
+-- gone, the owner decides; ConsentRecord rows are not deleted by fix-data
+-- (ruling R18).
+-- UPDATE "ConsentRecord" SET "targetId" = '<need id>' WHERE id = '<record id>';`,
   need_consent_revocation: `
 -- A share cannot be revoked before it was granted (need_share CHECK).
 -- UPDATE "ConsentRecord" SET "revokedAt" = coalesce("decidedAt", "createdAt") WHERE id IN (<ids>);`,
