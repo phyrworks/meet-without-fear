@@ -87,6 +87,16 @@ CREATE TABLE app_migration.report (
   detail text
 );
 
+-- User-written text the target has no column for (ruling R-c): kept here,
+-- never silently dropped, for the owner to decide at TS-14. No grants.
+CREATE TABLE app_migration.dropped_content (
+  concept    text NOT NULL,
+  session_id uuid,
+  user_id    uuid,
+  text       text NOT NULL,
+  written_at timestamptz
+);
+
 -- Work tables (dropped at the end of the migration).
 CREATE TABLE app_migration.precheck (
   check_name text NOT NULL,
@@ -145,6 +155,7 @@ CREATE FUNCTION app_migration.note(p_step text, p_item text, p_n bigint, p_detai
 
 ${beforeCounts('app_migration')}
 ${pairSet('app_migration')}
+${evidenceSrc('app_migration')}
 `;
 }
 
@@ -248,5 +259,39 @@ CREATE VIEW ${ns}.pair AS
 CREATE VIEW ${ns}.vanished AS
   SELECT DISTINCT su.user_id FROM ${ns}.su
   WHERE NOT EXISTS (SELECT 1 FROM "User" u WHERE u.id = su.user_id);
+`;
+}
+
+/**
+ * EmpathyAttempt / EmpathyValidation with the author / reviewer a vanished
+ * member's deletion nulled (SetNull) recovered from surviving evidence
+ * (review D2): a NULL-author attempt belongs to the session's one vanished
+ * member who has no other attempt there (when the session has exactly one
+ * such attempt and one such member); a NULL reviewer is the attempt's one
+ * other participant. Every later step reads these instead of the raw tables;
+ * what stays NULL is refused by P15a / P16a.
+ */
+export function evidenceSrc(ns: string): string {
+  return `CREATE TABLE ${ns}.empathy_attempt_src AS
+SELECT a.id, a."draftId", a."sessionId",
+       coalesce(a."sourceUserId",
+         CASE WHEN (SELECT count(*) FROM "EmpathyAttempt" o WHERE o."sessionId" = a."sessionId" AND o."sourceUserId" IS NULL) = 1
+              THEN (SELECT CASE WHEN count(*) = 1 THEN min(v.user_id::text)::uuid END
+                    FROM ${ns}.vanished v JOIN ${ns}.pair p ON p.user_id = v.user_id AND p.session_id = a."sessionId"
+                    WHERE NOT EXISTS (SELECT 1 FROM "EmpathyAttempt" o WHERE o."sessionId" = a."sessionId" AND o."sourceUserId" = v.user_id))
+         END) AS "sourceUserId",
+       (a."sourceUserId" IS NULL) AS author_recovered,
+       a.content, a."sharedAt", a."consentRecordId", a.status, a."statusVersion", a."revealedAt", a."revisionCount",
+       a."deliveryStatus", a."deliveredAt", a."seenAt"
+FROM "EmpathyAttempt" a;
+CREATE TABLE ${ns}.empathy_validation_src AS
+SELECT v.id, v."attemptId", v."sessionId",
+       coalesce(v."userId",
+         (SELECT CASE WHEN count(DISTINCT p.user_id) = 1 THEN min(p.user_id::text)::uuid END
+          FROM ${ns}.pair p JOIN ${ns}.empathy_attempt_src a ON a.id = v."attemptId"
+          WHERE p.session_id = v."sessionId" AND p.user_id IS DISTINCT FROM a."sourceUserId")) AS "userId",
+       (v."userId" IS NULL) AS reviewer_recovered,
+       v.validated, v.feedback, v."feedbackShared", v."validatedAt"
+FROM "EmpathyValidation" v;
 `;
 }

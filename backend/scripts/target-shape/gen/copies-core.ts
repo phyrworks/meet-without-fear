@@ -180,6 +180,32 @@ FROM (
   JOIN participant p ON p.session_id = s.id AND p.user_id = m."userId"
 ) x
 WHERE rn <= 2;
+-- A vanished member's RelationshipMember row cascaded with their deletion, so
+-- the survivor alone was ranked above (review D2). Where the session has one
+-- surviving member and one vanished participant, recover both slots: the
+-- survivor is A when a surviving Invitation of the session was sent by them
+-- (the inviter joins first), else B (the inviter's own invitation cascaded
+-- with the inviter); the vanished participant takes the other slot. (Every
+-- agreement that survives step 13 was agreed by both, so the slot decides who
+-- is listed, never who agreed — P22b.)
+CREATE TABLE app_migration.slot_fix AS
+SELECT s.id AS session_id,
+       (SELECT a.participant_id FROM app_migration.ab_slot a WHERE a.session_id = s.id) AS survivor,
+       (SELECT p.id FROM participant p JOIN app_migration.vanished v USING (user_id) WHERE p.session_id = s.id) AS gone,
+       CASE WHEN EXISTS (SELECT 1 FROM "Invitation" i JOIN app_migration.ab_slot a ON a.session_id = s.id
+                         JOIN participant p ON p.id = a.participant_id
+                         WHERE i."sessionId" = s.id AND i."invitedById" = p.user_id)
+            THEN 'A' ELSE 'B' END AS survivor_slot
+FROM "Session" s
+WHERE (SELECT count(*) FROM app_migration.ab_slot a WHERE a.session_id = s.id) = 1
+  AND (SELECT count(*) FROM participant p JOIN app_migration.vanished v USING (user_id) WHERE p.session_id = s.id) = 1;
+DELETE FROM app_migration.ab_slot WHERE session_id IN (SELECT session_id FROM app_migration.slot_fix);
+INSERT INTO app_migration.ab_slot (session_id, slot, participant_id, tied)
+SELECT session_id, survivor_slot, survivor, false FROM app_migration.slot_fix
+UNION ALL
+SELECT session_id, CASE survivor_slot WHEN 'A' THEN 'B' ELSE 'A' END, gone, false FROM app_migration.slot_fix;
+SELECT app_migration.note('5', 'A/B slots recovered for a session with a vanished member (survivor slot from the surviving invitation)', count(*))
+FROM app_migration.slot_fix;
 SELECT app_migration.note('5', 'A/B slot decided by the ctid tie-break (no split agreement)', count(DISTINCT session_id))
 FROM app_migration.ab_slot WHERE tied;
 SELECT app_migration.assert(n = 0, format('step 5: %s two-member session(s) without exactly one A and one B', n))
@@ -290,7 +316,7 @@ ${rules}
   WHERE s.status = 'PAUSED' AND p.left_at IS NULL
   UNION ALL
   SELECT p.id, 'empathy_submitted', a."sharedAt", 'EmpathyAttempt.sharedAt'
-  FROM "EmpathyAttempt" a JOIN participant p ON p.session_id = a."sessionId" AND p.user_id = a."sourceUserId"
+  FROM app_migration.empathy_attempt_src a JOIN participant p ON p.session_id = a."sessionId" AND p.user_id = a."sourceUserId"
   UNION ALL
   SELECT p.id, 'invitation_sent', i."messageConfirmedAt", 'Invitation.messageConfirmedAt'
   FROM "Invitation" i JOIN participant p ON p.session_id = i."sessionId" AND p.user_id = i."invitedById"
@@ -305,7 +331,12 @@ ORDER BY 3, 1, 2;
 
 SELECT app_migration.note('7', 'milestone source ' || source || ' → ' || milestone_key, count(*))
 FROM app_migration.milestone_src GROUP BY source, milestone_key ORDER BY source, milestone_key;
-SELECT app_migration.note('7', 'gatesSatisfied.' || k || ' dropped (free text, no target column)', count(*))
+INSERT INTO app_migration.dropped_content (concept, session_id, user_id, text, written_at)
+SELECT 'StageProgress.gatesSatisfied.' || k, sp."sessionId", sp."userId", sp."gatesSatisfied" ->> k, coalesce(sp."completedAt", sp."startedAt")
+FROM "StageProgress" sp CROSS JOIN unnest(${litArr(contentKeys)}) AS k
+WHERE jsonb_typeof(sp."gatesSatisfied") = 'object' AND app_migration.jnull(sp."gatesSatisfied" -> k) IS NOT NULL
+ORDER BY sp.id, k;
+SELECT app_migration.note('7', 'gatesSatisfied.' || k || ' (free text, no target column) → app_migration.dropped_content', count(*))
 FROM "StageProgress" sp CROSS JOIN unnest(${litArr(contentKeys)}) AS k
 WHERE jsonb_typeof(sp."gatesSatisfied") = 'object' AND app_migration.jnull(sp."gatesSatisfied" -> k) IS NOT NULL
 GROUP BY k;
@@ -405,6 +436,9 @@ FROM (SELECT count(*) AS n FROM app_migration.disposition_ref r
       JOIN need_share ns ON ns.need_id = app_migration.as_uuid(r.need_text)
       WHERE NOT EXISTS (SELECT 1 FROM need_disposition d WHERE d.participant_id = r.participant_id AND d.need_id = ns.need_id)) x;
 SELECT app_migration.note('8', 'Stage4NeedCoverage not copied (computed: v_need_coverage)', count(*)) FROM "Stage4NeedCoverage";
+INSERT INTO app_migration.dropped_content (concept, session_id, user_id, text, written_at)
+SELECT 'Stage4NeedCoverage.note', c."sessionId", app_migration.as_uuid(c."sourceUserId"), c.note, c."updatedAt"
+FROM "Stage4NeedCoverage" c WHERE c.note IS NOT NULL ORDER BY c.id;
 
 -- ---- Step 13 (part): proposal ← StrategyProposal (ids kept). needsAddressed
 -- → proposal_need / unresolved_need_labels below; parentProposalId,

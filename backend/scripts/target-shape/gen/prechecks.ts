@@ -117,10 +117,10 @@ FROM "ConsentRecord" c
 WHERE c."targetType" IN ('IDENTIFIED_NEED', 'EMPATHY_ATTEMPT', 'EMPATHY_DRAFT', 'STRATEGY_PROPOSAL')
   AND NOT CASE c."targetType"
     WHEN 'IDENTIFIED_NEED' THEN EXISTS (SELECT 1 FROM "IdentifiedNeed" n WHERE n.id = app_migration.as_uuid(c."targetId"))
-    WHEN 'EMPATHY_ATTEMPT' THEN EXISTS (SELECT 1 FROM "EmpathyAttempt" a WHERE a.id = app_migration.as_uuid(c."targetId"))
+    WHEN 'EMPATHY_ATTEMPT' THEN EXISTS (SELECT 1 FROM app_migration.empathy_attempt_src a WHERE a.id = app_migration.as_uuid(c."targetId"))
     WHEN 'EMPATHY_DRAFT' THEN
-         EXISTS (SELECT 1 FROM "EmpathyAttempt" a WHERE a.id = app_migration.as_uuid(c."targetId") OR a."draftId" = app_migration.as_uuid(c."targetId"))
-      OR EXISTS (SELECT 1 FROM "EmpathyDraft" d JOIN "EmpathyAttempt" a ON a."sessionId" = d."sessionId" AND a."sourceUserId" = d."userId"
+         EXISTS (SELECT 1 FROM app_migration.empathy_attempt_src a WHERE a.id = app_migration.as_uuid(c."targetId") OR a."draftId" = app_migration.as_uuid(c."targetId"))
+      OR EXISTS (SELECT 1 FROM "EmpathyDraft" d JOIN app_migration.empathy_attempt_src a ON a."sessionId" = d."sessionId" AND a."sourceUserId" = d."userId"
                  WHERE d.id = app_migration.as_uuid(c."targetId"))
     WHEN 'STRATEGY_PROPOSAL' THEN EXISTS (SELECT 1 FROM "StrategyProposal" p WHERE p.id = app_migration.as_uuid(c."targetId"))
   END`));
@@ -157,7 +157,7 @@ WHERE status = 'RESOLVED' AND "resolvedAt" IS NULL`));
   // A live or resolved session needs two participants (step 4a assertion,
   // T-cardinality-1). Sessions that step 4a abandons (a vanished member,
   // non-terminal) are exempt.
-  parts.push(P('P13 session_without_two_participants (step 4a; T-cardinality-1)', `
+  parts.push(P('P13 session_without_two_participants (the step-4a assertion, checked before any copy; T-cardinality-1)', `
 SELECT 'session_without_two_participants', s.id::text,
        s.status::text || ', participants: ' || coalesce((SELECT string_agg(DISTINCT p.user_id::text, ', ') FROM app_migration.pair p WHERE p.session_id = s.id), 'none')
 FROM "Session" s
@@ -171,24 +171,27 @@ SELECT 'invitation_accepted_without_accepted_at', id::text, NULL
 FROM "Invitation"
 WHERE status = 'ACCEPTED' AND "acceptedAt" IS NULL`));
 
-  parts.push(P('P14b invitation_accepted_without_unique_acceptor (accepted_by_user_id = the one non-inviter member)', `
+  // The acceptor is the session's one participant other than the inviter —
+  // a surviving member or a vanished one (review D2: the acceptor's
+  // RelationshipMember row cascaded with their deletion).
+  parts.push(P('P14b invitation_accepted_without_unique_acceptor (accepted_by_user_id = the one non-inviter participant, vanished ones included)', `
 SELECT 'invitation_accepted_without_unique_acceptor', i.id::text,
-       (SELECT count(*) FROM "RelationshipMember" m WHERE m."relationshipId" = s."relationshipId" AND m."userId" <> i."invitedById")::text
-       || ' non-inviter member(s)'
-FROM "Invitation" i JOIN "Session" s ON s.id = i."sessionId"
+       (SELECT count(DISTINCT p.user_id) FROM app_migration.pair p WHERE p.session_id = i."sessionId" AND p.user_id <> i."invitedById")::text
+       || ' non-inviter participant(s)'
+FROM "Invitation" i
 WHERE i.status = 'ACCEPTED'
-  AND (SELECT count(*) FROM "RelationshipMember" m WHERE m."relationshipId" = s."relationshipId" AND m."userId" <> i."invitedById") <> 1`));
+  AND (SELECT count(DISTINCT p.user_id) FROM app_migration.pair p WHERE p.session_id = i."sessionId" AND p.user_id <> i."invitedById") <> 1`));
 
-  parts.push(P('P15a attempt_without_author (empathy_attempt.author NOT NULL)', `
+  parts.push(P('P15a attempt_without_author (empathy_attempt.author NOT NULL; not recoverable from vanished-member evidence)', `
 SELECT 'attempt_without_author', id::text, NULL
-FROM "EmpathyAttempt"
+FROM app_migration.empathy_attempt_src
 WHERE "sourceUserId" IS NULL`));
 
   parts.push(P('P15b attempt_without_unique_subject (step 11: subject = the other participant; RAISE if N≠2)', `
 SELECT 'attempt_without_unique_subject', a.id::text,
        (SELECT count(DISTINCT p.user_id) FROM app_migration.pair p WHERE p.session_id = a."sessionId" AND p.user_id <> a."sourceUserId")::text
        || ' other participant(s)'
-FROM "EmpathyAttempt" a
+FROM app_migration.empathy_attempt_src a
 WHERE a."sourceUserId" IS NOT NULL
   AND (SELECT count(DISTINCT p.user_id) FROM app_migration.pair p WHERE p.session_id = a."sessionId" AND p.user_id <> a."sourceUserId") <> 1`));
 
@@ -201,29 +204,29 @@ WHERE (SELECT count(DISTINCT p.user_id) FROM app_migration.pair p WHERE p.sessio
 
   parts.push(P('P15d attempt_revealed_without_revealed_at (CHECK REVEALED/VALIDATED → revealed_at)', `
 SELECT 'attempt_revealed_without_revealed_at', id::text, status::text
-FROM "EmpathyAttempt"
+FROM app_migration.empathy_attempt_src
 WHERE status IN ('REVEALED', 'VALIDATED') AND "revealedAt" IS NULL`));
 
-  parts.push(P('P16a validation_without_reviewer (empathy_review.reviewer NOT NULL)', `
+  parts.push(P('P16a validation_without_reviewer (empathy_review.reviewer NOT NULL; not recoverable as the attempt subject)', `
 SELECT 'validation_without_reviewer', id::text, NULL
-FROM "EmpathyValidation"
+FROM app_migration.empathy_validation_src
 WHERE "userId" IS NULL`));
 
   parts.push(P('P16b validation_reviewer_is_author (reviewer = the subject of the attempt)', `
 SELECT 'validation_reviewer_is_author', v.id::text, NULL
-FROM "EmpathyValidation" v JOIN "EmpathyAttempt" a ON a.id = v."attemptId"
+FROM app_migration.empathy_validation_src v JOIN app_migration.empathy_attempt_src a ON a.id = v."attemptId"
 WHERE v."userId" = a."sourceUserId"`));
 
   parts.push(P('P16c validation_draft_without_partner_attempt (draft(VALIDATION_FEEDBACK).attempt = the attempt of the partner)', `
 SELECT 'validation_draft_without_partner_attempt', d.id::text,
-       (SELECT count(*) FROM "EmpathyAttempt" a WHERE a."sessionId" = d."sessionId" AND a."sourceUserId" <> d."userId")::text || ' partner attempt(s)'
+       (SELECT count(*) FROM app_migration.empathy_attempt_src a WHERE a."sessionId" = d."sessionId" AND a."sourceUserId" <> d."userId")::text || ' partner attempt(s)'
 FROM "ValidationFeedbackDraft" d
-WHERE (SELECT count(*) FROM "EmpathyAttempt" a WHERE a."sessionId" = d."sessionId" AND a."sourceUserId" <> d."userId") <> 1`));
+WHERE (SELECT count(*) FROM app_migration.empathy_attempt_src a WHERE a."sessionId" = d."sessionId" AND a."sourceUserId" <> d."userId") <> 1`));
 
   parts.push(P('P17a reconciler_result_without_attempt (result → attempt by (session, guesser))', `
 SELECT 'reconciler_result_without_attempt', r.id::text, r."guesserId"
 FROM "ReconcilerResult" r
-WHERE NOT EXISTS (SELECT 1 FROM "EmpathyAttempt" a
+WHERE NOT EXISTS (SELECT 1 FROM app_migration.empathy_attempt_src a
                   WHERE a."sessionId" = r."sessionId" AND a."sourceUserId" = app_migration.as_uuid(r."guesserId"))`));
 
   parts.push(P('P17b reconciler_result_two_current (sql_result_one_current)', `
@@ -478,6 +481,16 @@ WHERE "sourceId" = "targetId"`));
 SELECT 'brain_cost_overflow', id::text, cost::text
 FROM "BrainActivity"
 WHERE abs(cost) >= 10000`));
+
+  // Review D1: Message.forUserId arrived 2026-01-02 (migration
+  // 20260102225910) with no backfill, so older AI/SYSTEM rows name nobody.
+  // Plan 4a drops ownerless rows only as a vanished leaver's private rows;
+  // anywhere else they must be backfilled first (fix-data template).
+  parts.push(P('P33 message_without_owner (no forUserId and no senderId, in a session without a vanished member)', `
+SELECT 'message_without_owner', m.id::text, m.role::text || ' @ ' || m.timestamp::text
+FROM "Message" m
+WHERE m."forUserId" IS NULL AND m."senderId" IS NULL
+  AND NOT EXISTS (SELECT 1 FROM app_migration.pair p JOIN app_migration.vanished v USING (user_id) WHERE p.session_id = m."sessionId")`));
 
   parts.push(`
 -- The single verdict: every failing precheck at once, with ids.

@@ -113,6 +113,28 @@ CREATE VIEW pg_temp.vanished AS
   SELECT DISTINCT su.user_id FROM pg_temp.su
   WHERE NOT EXISTS (SELECT 1 FROM "User" u WHERE u.id = su.user_id);
 
+CREATE TABLE pg_temp.empathy_attempt_src AS
+SELECT a.id, a."draftId", a."sessionId",
+       coalesce(a."sourceUserId",
+         CASE WHEN (SELECT count(*) FROM "EmpathyAttempt" o WHERE o."sessionId" = a."sessionId" AND o."sourceUserId" IS NULL) = 1
+              THEN (SELECT CASE WHEN count(*) = 1 THEN min(v.user_id::text)::uuid END
+                    FROM pg_temp.vanished v JOIN pg_temp.pair p ON p.user_id = v.user_id AND p.session_id = a."sessionId"
+                    WHERE NOT EXISTS (SELECT 1 FROM "EmpathyAttempt" o WHERE o."sessionId" = a."sessionId" AND o."sourceUserId" = v.user_id))
+         END) AS "sourceUserId",
+       (a."sourceUserId" IS NULL) AS author_recovered,
+       a.content, a."sharedAt", a."consentRecordId", a.status, a."statusVersion", a."revealedAt", a."revisionCount",
+       a."deliveryStatus", a."deliveredAt", a."seenAt"
+FROM "EmpathyAttempt" a;
+CREATE TABLE pg_temp.empathy_validation_src AS
+SELECT v.id, v."attemptId", v."sessionId",
+       coalesce(v."userId",
+         (SELECT CASE WHEN count(DISTINCT p.user_id) = 1 THEN min(p.user_id::text)::uuid END
+          FROM pg_temp.pair p JOIN pg_temp.empathy_attempt_src a ON a.id = v."attemptId"
+          WHERE p.session_id = v."sessionId" AND p.user_id IS DISTINCT FROM a."sourceUserId")) AS "userId",
+       (v."userId" IS NULL) AS reviewer_recovered,
+       v.validated, v.feedback, v."feedbackShared", v."validatedAt"
+FROM "EmpathyValidation" v;
+
 -- ----------------------------------------------------------------------------
 -- P01 live_sessions_per_relationship (A-Q3 partial unique)
 -- ----------------------------------------------------------------------------
@@ -241,10 +263,10 @@ FROM "ConsentRecord" c
 WHERE c."targetType" IN ('IDENTIFIED_NEED', 'EMPATHY_ATTEMPT', 'EMPATHY_DRAFT', 'STRATEGY_PROPOSAL')
   AND NOT CASE c."targetType"
     WHEN 'IDENTIFIED_NEED' THEN EXISTS (SELECT 1 FROM "IdentifiedNeed" n WHERE n.id = pg_temp.as_uuid(c."targetId"))
-    WHEN 'EMPATHY_ATTEMPT' THEN EXISTS (SELECT 1 FROM "EmpathyAttempt" a WHERE a.id = pg_temp.as_uuid(c."targetId"))
+    WHEN 'EMPATHY_ATTEMPT' THEN EXISTS (SELECT 1 FROM pg_temp.empathy_attempt_src a WHERE a.id = pg_temp.as_uuid(c."targetId"))
     WHEN 'EMPATHY_DRAFT' THEN
-         EXISTS (SELECT 1 FROM "EmpathyAttempt" a WHERE a.id = pg_temp.as_uuid(c."targetId") OR a."draftId" = pg_temp.as_uuid(c."targetId"))
-      OR EXISTS (SELECT 1 FROM "EmpathyDraft" d JOIN "EmpathyAttempt" a ON a."sessionId" = d."sessionId" AND a."sourceUserId" = d."userId"
+         EXISTS (SELECT 1 FROM pg_temp.empathy_attempt_src a WHERE a.id = pg_temp.as_uuid(c."targetId") OR a."draftId" = pg_temp.as_uuid(c."targetId"))
+      OR EXISTS (SELECT 1 FROM "EmpathyDraft" d JOIN pg_temp.empathy_attempt_src a ON a."sessionId" = d."sessionId" AND a."sourceUserId" = d."userId"
                  WHERE d.id = pg_temp.as_uuid(c."targetId"))
     WHEN 'STRATEGY_PROPOSAL' THEN EXISTS (SELECT 1 FROM "StrategyProposal" p WHERE p.id = pg_temp.as_uuid(c."targetId"))
   END;
@@ -300,7 +322,7 @@ WHERE status = 'RESOLVED' AND "resolvedAt" IS NULL;
 -- UPDATE "Session" SET "resolvedAt" = "updatedAt" WHERE id IN (<ids>);
 
 -- ----------------------------------------------------------------------------
--- P13 session_without_two_participants (step 4a; T-cardinality-1)
+-- P13 session_without_two_participants (the step-4a assertion, checked before any copy; T-cardinality-1)
 -- ----------------------------------------------------------------------------
 SELECT 'session_without_two_participants', s.id::text,
        s.status::text || ', participants: ' || coalesce((SELECT string_agg(DISTINCT p.user_id::text, ', ') FROM pg_temp.pair p WHERE p.session_id = s.id), 'none')
@@ -327,26 +349,30 @@ WHERE status = 'ACCEPTED' AND "acceptedAt" IS NULL;
 --   WHERE s.id = i."sessionId" AND m."userId" <> i."invitedById") WHERE id IN (<ids>);
 
 -- ----------------------------------------------------------------------------
--- P14b invitation_accepted_without_unique_acceptor (accepted_by_user_id = the one non-inviter member)
+-- P14b invitation_accepted_without_unique_acceptor (accepted_by_user_id = the one non-inviter participant, vanished ones included)
 -- ----------------------------------------------------------------------------
 SELECT 'invitation_accepted_without_unique_acceptor', i.id::text,
-       (SELECT count(*) FROM "RelationshipMember" m WHERE m."relationshipId" = s."relationshipId" AND m."userId" <> i."invitedById")::text
-       || ' non-inviter member(s)'
-FROM "Invitation" i JOIN "Session" s ON s.id = i."sessionId"
+       (SELECT count(DISTINCT p.user_id) FROM pg_temp.pair p WHERE p.session_id = i."sessionId" AND p.user_id <> i."invitedById")::text
+       || ' non-inviter participant(s)'
+FROM "Invitation" i
 WHERE i.status = 'ACCEPTED'
-  AND (SELECT count(*) FROM "RelationshipMember" m WHERE m."relationshipId" = s."relationshipId" AND m."userId" <> i."invitedById") <> 1;
--- accepted_by_user_id (new, P3 §6) is the relationship's one non-inviter
--- member. Zero: nobody accepted (→ PENDING); several: decide who.
+  AND (SELECT count(DISTINCT p.user_id) FROM pg_temp.pair p WHERE p.session_id = i."sessionId" AND p.user_id <> i."invitedById") <> 1;
+-- accepted_by_user_id (new, P3 §6) is the session's one participant other
+-- than the inviter (a vanished acceptor counts: their evidence names them).
+-- Zero: nobody accepted (→ PENDING); several: decide who.
 -- UPDATE "Invitation" SET status = 'PENDING', "acceptedAt" = NULL WHERE id IN (<ids>);
 
 -- ----------------------------------------------------------------------------
--- P15a attempt_without_author (empathy_attempt.author NOT NULL)
+-- P15a attempt_without_author (empathy_attempt.author NOT NULL; not recoverable from vanished-member evidence)
 -- ----------------------------------------------------------------------------
 SELECT 'attempt_without_author', id::text, NULL
-FROM "EmpathyAttempt"
+FROM pg_temp.empathy_attempt_src
 WHERE "sourceUserId" IS NULL;
--- sourceUserId was nulled (author deleted): the author is unknowable here;
--- recover it from the session's EmpathyDraft / statement message, or delete.
+-- sourceUserId was nulled (author deleted) and the migration could not
+-- recover it (it recovers the session's one vanished member without another
+-- attempt there). Name the author from the app logs if known (a vanished id
+-- needs other evidence in the session, e.g. a Message.forUserId); otherwise
+-- the attempt cannot be attributed.
 -- UPDATE "EmpathyAttempt" SET "sourceUserId" = '<user id>' WHERE id = '<attempt id>';
 
 -- ----------------------------------------------------------------------------
@@ -355,7 +381,7 @@ WHERE "sourceUserId" IS NULL;
 SELECT 'attempt_without_unique_subject', a.id::text,
        (SELECT count(DISTINCT p.user_id) FROM pg_temp.pair p WHERE p.session_id = a."sessionId" AND p.user_id <> a."sourceUserId")::text
        || ' other participant(s)'
-FROM "EmpathyAttempt" a
+FROM pg_temp.empathy_attempt_src a
 WHERE a."sourceUserId" IS NOT NULL
   AND (SELECT count(DISTINCT p.user_id) FROM pg_temp.pair p WHERE p.session_id = a."sessionId" AND p.user_id <> a."sourceUserId") <> 1;
 -- An attempt needs exactly one other participant as its subject. None: the
@@ -379,7 +405,7 @@ WHERE (SELECT count(DISTINCT p.user_id) FROM pg_temp.pair p WHERE p.session_id =
 -- P15d attempt_revealed_without_revealed_at (CHECK REVEALED/VALIDATED → revealed_at)
 -- ----------------------------------------------------------------------------
 SELECT 'attempt_revealed_without_revealed_at', id::text, status::text
-FROM "EmpathyAttempt"
+FROM pg_temp.empathy_attempt_src
 WHERE status IN ('REVEALED', 'VALIDATED') AND "revealedAt" IS NULL;
 -- CHECK REVEALED/VALIDATED → revealed_at. It was revealed no later than its
 -- validation: use that, else delivery, else submission.
@@ -387,20 +413,20 @@ WHERE status IN ('REVEALED', 'VALIDATED') AND "revealedAt" IS NULL;
 --   a."deliveredAt", a."sharedAt") WHERE id IN (<ids>);
 
 -- ----------------------------------------------------------------------------
--- P16a validation_without_reviewer (empathy_review.reviewer NOT NULL)
+-- P16a validation_without_reviewer (empathy_review.reviewer NOT NULL; not recoverable as the attempt subject)
 -- ----------------------------------------------------------------------------
 SELECT 'validation_without_reviewer', id::text, NULL
-FROM "EmpathyValidation"
+FROM pg_temp.empathy_validation_src
 WHERE "userId" IS NULL;
--- The reviewer was deleted (userId nulled): the subject of the attempt is the
--- reviewer by construction.
+-- The reviewer was deleted (userId nulled) and the attempt has no single
+-- other participant to recover them as (the migration does that itself).
 -- UPDATE "EmpathyValidation" v SET "userId" = <the attempt's other member> WHERE id IN (<ids>);
 
 -- ----------------------------------------------------------------------------
 -- P16b validation_reviewer_is_author (reviewer = the subject of the attempt)
 -- ----------------------------------------------------------------------------
 SELECT 'validation_reviewer_is_author', v.id::text, NULL
-FROM "EmpathyValidation" v JOIN "EmpathyAttempt" a ON a.id = v."attemptId"
+FROM pg_temp.empathy_validation_src v JOIN pg_temp.empathy_attempt_src a ON a.id = v."attemptId"
 WHERE v."userId" = a."sourceUserId";
 -- An author reviewing their own attempt: not a review. Delete.
 -- DELETE FROM "EmpathyValidation" WHERE id IN (<ids>);
@@ -409,9 +435,9 @@ WHERE v."userId" = a."sourceUserId";
 -- P16c validation_draft_without_partner_attempt (draft(VALIDATION_FEEDBACK).attempt = the attempt of the partner)
 -- ----------------------------------------------------------------------------
 SELECT 'validation_draft_without_partner_attempt', d.id::text,
-       (SELECT count(*) FROM "EmpathyAttempt" a WHERE a."sessionId" = d."sessionId" AND a."sourceUserId" <> d."userId")::text || ' partner attempt(s)'
+       (SELECT count(*) FROM pg_temp.empathy_attempt_src a WHERE a."sessionId" = d."sessionId" AND a."sourceUserId" <> d."userId")::text || ' partner attempt(s)'
 FROM "ValidationFeedbackDraft" d
-WHERE (SELECT count(*) FROM "EmpathyAttempt" a WHERE a."sessionId" = d."sessionId" AND a."sourceUserId" <> d."userId") <> 1;
+WHERE (SELECT count(*) FROM pg_temp.empathy_attempt_src a WHERE a."sessionId" = d."sessionId" AND a."sourceUserId" <> d."userId") <> 1;
 -- A feedback draft needs the partner's attempt; without one it reviews nothing.
 -- DELETE FROM "ValidationFeedbackDraft" WHERE id IN (<ids>);
 
@@ -420,7 +446,7 @@ WHERE (SELECT count(*) FROM "EmpathyAttempt" a WHERE a."sessionId" = d."sessionI
 -- ----------------------------------------------------------------------------
 SELECT 'reconciler_result_without_attempt', r.id::text, r."guesserId"
 FROM "ReconcilerResult" r
-WHERE NOT EXISTS (SELECT 1 FROM "EmpathyAttempt" a
+WHERE NOT EXISTS (SELECT 1 FROM pg_temp.empathy_attempt_src a
                   WHERE a."sessionId" = r."sessionId" AND a."sourceUserId" = pg_temp.as_uuid(r."guesserId"));
 -- A result whose guesser has no attempt in the session: stale. Delete (its
 -- share offer cascades).
@@ -849,3 +875,22 @@ FROM "BrainActivity"
 WHERE abs(cost) >= 10000;
 -- cost becomes numeric(10,6).
 -- UPDATE "BrainActivity" SET cost = 0 WHERE id IN (<ids>);
+
+-- ----------------------------------------------------------------------------
+-- P33 message_without_owner (no forUserId and no senderId, in a session without a vanished member)
+-- ----------------------------------------------------------------------------
+SELECT 'message_without_owner', m.id::text, m.role::text || ' @ ' || m.timestamp::text
+FROM "Message" m
+WHERE m."forUserId" IS NULL AND m."senderId" IS NULL
+  AND NOT EXISTS (SELECT 1 FROM pg_temp.pair p JOIN pg_temp.vanished v USING (user_id) WHERE p.session_id = m."sessionId");
+-- Pre-2026-01-02 rows have no forUserId (migration 20260102225910 added it
+-- without a backfill). Backfill rule: the sender of the nearest EARLIER USER
+-- message with a sender in the same session (the turn the AI answered); if
+-- none, the nearest LATER one. Rows with no USER sender in their session at
+-- all stay listed: decide them by hand. Review the result before committing.
+-- UPDATE "Message" m SET "forUserId" = coalesce(
+--     (SELECT u."senderId" FROM "Message" u WHERE u."sessionId" = m."sessionId" AND u.role = 'USER' AND u."senderId" IS NOT NULL
+--        AND (u.timestamp, u.id) < (m.timestamp, m.id) ORDER BY u.timestamp DESC, u.id DESC LIMIT 1),
+--     (SELECT u."senderId" FROM "Message" u WHERE u."sessionId" = m."sessionId" AND u.role = 'USER' AND u."senderId" IS NOT NULL
+--        AND (u.timestamp, u.id) > (m.timestamp, m.id) ORDER BY u.timestamp, u.id LIMIT 1))::text
+-- WHERE m.id IN (<ids>);

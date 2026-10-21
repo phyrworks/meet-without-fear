@@ -81,6 +81,10 @@ FROM (SELECT (SELECT count(*) FROM proposal_revision) AS a, (SELECT count(*) FRO
 -- listed). created_at = agreedAt, else the proposal's createdAt (Agreement has no createdAt).
 SELECT app_migration.note('13', 'PROPOSED agreement not accepted by both: dropped', count(*), string_agg(id::text, ', ' ORDER BY id))
 FROM "Agreement" WHERE status = 'PROPOSED' AND NOT ("agreedByA" AND "agreedByB");
+INSERT INTO app_migration.dropped_content (concept, session_id, user_id, text, written_at)
+SELECT 'Agreement.description (PROPOSED, not accepted by both; dropped)', sv."sessionId", NULL, a.description, a."agreedAt"
+FROM "Agreement" a JOIN "SharedVessel" sv ON sv.id = a."sharedVesselId"
+WHERE a.status = 'PROPOSED' AND NOT (a."agreedByA" AND a."agreedByB");
 SELECT app_migration.note('13', 'PROPOSED agreement accepted by both → AGREED', count(*))
 FROM "Agreement" WHERE status = 'PROPOSED' AND "agreedByA" AND "agreedByB";
 INSERT INTO agreement (id, session_id, proposal_id, type, status, description, duration, measure_of_success, follow_up_at, completed_at, created_at, updated_at)
@@ -92,6 +96,10 @@ FROM "Agreement" a
 JOIN "SharedVessel" sv ON sv.id = a."sharedVesselId"
 JOIN "StrategyProposal" sp ON sp.id = a."proposalId"
 WHERE a.status <> 'PROPOSED' OR (a."agreedByA" AND a."agreedByB");
+
+SELECT app_migration.assert(a = b - c, format('step 13: %s agreement rows for %s "Agreement" rows - %s dropped PROPOSED', a, b, c))
+FROM (SELECT (SELECT count(*) FROM agreement) AS a, (SELECT count(*) FROM "Agreement") AS b,
+             (SELECT count(*) FROM "Agreement" WHERE status = 'PROPOSED' AND NOT ("agreedByA" AND "agreedByB")) AS c) x;
 
 -- agreement_party ← agreedByA/agreedByB through the A/B slots.
 INSERT INTO agreement_party (agreement_id, participant_id, agreed_at, created_at)
@@ -120,13 +128,17 @@ SELECT app_migration.note('13', 'proposal_choice WILLING synthesised from Agreem
 FROM app_migration.shape_map WHERE concept = 'proposal_choice:from_agreement';
 
 -- T-agreement-parties, evaluated on every migrated agreement (its deferred
--- trigger only sees rows written after the trailer creates it).
-SELECT app_migration.assert(n = 0, format('step 13: %s agreement(s) whose parties are not exactly the live human participants, all WILLING: %s', n, ids))
+-- trigger only sees rows written after the trailer creates it): the parties
+-- are the human participants present when it was created — a tombstoned
+-- leaver (left_at = the migration) included (spec §4 "what survives").
+SELECT app_migration.assert(n = 0, format('step 13: %s agreement(s) whose parties are not exactly the human participants present at creation, all WILLING: %s', n, ids))
 FROM (SELECT count(*) AS n, string_agg(ag.id::text, ', ' ORDER BY ag.id) AS ids
       FROM agreement ag
       WHERE EXISTS (SELECT participant_id FROM agreement_party WHERE agreement_id = ag.id
-                    EXCEPT SELECT id FROM participant WHERE session_id = ag.session_id AND kind = 'human' AND left_at IS NULL)
-         OR EXISTS (SELECT id FROM participant WHERE session_id = ag.session_id AND kind = 'human' AND left_at IS NULL
+                    EXCEPT SELECT id FROM participant WHERE session_id = ag.session_id AND kind = 'human'
+                                                        AND (left_at IS NULL OR left_at > ag.created_at))
+         OR EXISTS (SELECT id FROM participant WHERE session_id = ag.session_id AND kind = 'human'
+                                                AND (left_at IS NULL OR left_at > ag.created_at)
                     EXCEPT SELECT participant_id FROM agreement_party WHERE agreement_id = ag.id)
          OR EXISTS (SELECT 1 FROM agreement_party ap
                     WHERE ap.agreement_id = ag.id
@@ -152,8 +164,9 @@ export function stepFollowUp(): string {
   return `
 -- ---- Step 14: follow_up ← TendingEntry (ids kept). type: the *_CHECKIN suffix
 -- goes (owner decision 2026-10-21), any other value RAISEs. response_deadline_at
--- and summary from the entry's latest TendingCoordinationCycle (the entry's
--- own summary wins when both are set; conflicts reported).
+-- and summary from the entry's OPEN TendingCoordinationCycle (plan step 14),
+-- else its latest; the entry's own summary wins when both are set, and the
+-- cycle's differing resultSummary goes to app_migration.dropped_content.
 INSERT INTO follow_up (id, session_id, agreement_id, proposal_id, type, scope, owner_participant_id, opted_in_shared, status,
                        scheduled_for, response_deadline_at, opened_at, completed_at, summary, created_at, updated_at)
 SELECT e.id, e."sessionId", ag.id, NULL,
@@ -170,18 +183,23 @@ FROM "TendingEntry" e
 LEFT JOIN agreement ag ON ag.id = e."agreementId"
 LEFT JOIN participant po ON po.session_id = e."sessionId" AND po.user_id = app_migration.as_uuid(e."ownerUserId")
 LEFT JOIN LATERAL (
-  SELECT * FROM "TendingCoordinationCycle" c WHERE e.id = ANY (c."entryIds") ORDER BY c."createdAt" DESC, c.id DESC LIMIT 1
+  SELECT * FROM "TendingCoordinationCycle" c WHERE e.id = ANY (c."entryIds") ORDER BY (c.status IN ('WAITING_FOR_PARTNER', 'READY_TO_RESOLVE')) DESC, c."createdAt" DESC, c.id DESC LIMIT 1
 ) y ON true;
-SELECT app_migration.note('14', 'TendingEntry.summary and its cycle resultSummary both set and different (entry kept)', count(*))
+INSERT INTO app_migration.dropped_content (concept, session_id, user_id, text, written_at)
+SELECT 'TendingCoordinationCycle.resultSummary (differs from the entry summary kept)', e."sessionId", y."createdByUserId", y."resultSummary", y."updatedAt"
 FROM "TendingEntry" e
-JOIN LATERAL (SELECT * FROM "TendingCoordinationCycle" c WHERE e.id = ANY (c."entryIds") ORDER BY c."createdAt" DESC, c.id DESC LIMIT 1) y ON true
+JOIN LATERAL (SELECT * FROM "TendingCoordinationCycle" c WHERE e.id = ANY (c."entryIds") ORDER BY (c.status IN ('WAITING_FOR_PARTNER', 'READY_TO_RESOLVE')) DESC, c."createdAt" DESC, c.id DESC LIMIT 1) y ON true
 WHERE e.summary IS NOT NULL AND y."resultSummary" IS NOT NULL AND e.summary <> y."resultSummary";
--- The entry's latest cycle (the one response_deadline_at came from), for the
--- trailer's v_follow_up_cycle comparison.
+SELECT app_migration.note('14', 'TendingEntry.summary and its cycle resultSummary both set and different (entry kept; cycle text → dropped_content)', count(*))
+FROM "TendingEntry" e
+JOIN LATERAL (SELECT * FROM "TendingCoordinationCycle" c WHERE e.id = ANY (c."entryIds") ORDER BY (c.status IN ('WAITING_FOR_PARTNER', 'READY_TO_RESOLVE')) DESC, c."createdAt" DESC, c.id DESC LIMIT 1) y ON true
+WHERE e.summary IS NOT NULL AND y."resultSummary" IS NOT NULL AND e.summary <> y."resultSummary";
+-- The entry's open (else latest) cycle — the one response_deadline_at came
+-- from — for the trailer's v_follow_up_cycle comparison.
 INSERT INTO app_migration.old_cycle (follow_up_id, cycle_id, status)
 SELECT e.id, y.id, y.status::text
 FROM "TendingEntry" e
-JOIN LATERAL (SELECT * FROM "TendingCoordinationCycle" c WHERE e.id = ANY (c."entryIds") ORDER BY c."createdAt" DESC, c.id DESC LIMIT 1) y ON true;
+JOIN LATERAL (SELECT * FROM "TendingCoordinationCycle" c WHERE e.id = ANY (c."entryIds") ORDER BY (c.status IN ('WAITING_FOR_PARTNER', 'READY_TO_RESOLVE')) DESC, c."createdAt" DESC, c.id DESC LIMIT 1) y ON true;
 SELECT app_migration.assert(a = b, format('step 14: %s follow_up rows for %s "TendingEntry" rows', a, b))
 FROM (SELECT (SELECT count(*) FROM follow_up) AS a, (SELECT count(*) FROM "TendingEntry") AS b) x;
 SELECT app_migration.assert(n = 0, format('step 14: %s follow_up row(s) lost their agreement or owner', n))
@@ -313,6 +331,9 @@ INSERT INTO reminder (id, user_id, follow_up_id, scope, remind_at, cadence, note
 SELECT r.id, r."userId", r."tendingEntryId", r.scope::text::reminder_scope, r."remindAt", r.cadence, r.note, r.status::reminder_status,
        r."createdAt", r."updatedAt"
 FROM "TendingReminder" r;
+SELECT app_migration.note('14', 'TendingReminder.' || c || ' dropped (reminder keys on user + follow_up)', n)
+FROM (SELECT 'checkinId' AS c, count(*) FILTER (WHERE "checkinId" IS NOT NULL) AS n FROM "TendingReminder"
+      UNION ALL SELECT 'sessionId', count(*) FROM "TendingReminder") x;
 SELECT app_migration.assert(a = b, format('step 14: %s reminder rows for %s "TendingReminder" rows', a, b))
 FROM (SELECT (SELECT count(*) FROM reminder) AS a, (SELECT count(*) FROM "TendingReminder") AS b) x;
 SELECT app_migration.note('14', 'TendingCoordinationCycle dropped (→ response_deadline_at/summary + v_follow_up_cycle)', count(*))

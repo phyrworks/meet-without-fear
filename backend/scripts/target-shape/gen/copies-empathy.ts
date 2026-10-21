@@ -16,14 +16,14 @@ SELECT a.id, pa.id, ps.id, a."revisionCount" + 1, NULL, a.content,
        (CASE a.status::text WHEN 'ANALYZING' THEN 'HELD' WHEN 'NEEDS_WORK' THEN 'AWAITING_SHARING' ELSE a.status::text END)::empathy_status,
        a."statusVersion", a."sharedAt", a."revealedAt", a."deliveryStatus"::text::delivery_status, a."deliveredAt", a."seenAt",
        a."sharedAt", greatest(a."sharedAt", a."revealedAt", a."deliveredAt", a."seenAt")
-FROM "EmpathyAttempt" a
+FROM app_migration.empathy_attempt_src a
 JOIN participant pa ON pa.session_id = a."sessionId" AND pa.user_id = a."sourceUserId"
 JOIN participant ps ON ps.session_id = a."sessionId" AND ps.user_id <> a."sourceUserId";
 SELECT app_migration.note('11', 'EmpathyAttempt.status ' || status::text || ' → ' ||
                           CASE status::text WHEN 'ANALYZING' THEN 'HELD' ELSE 'AWAITING_SHARING' END, count(*))
-FROM "EmpathyAttempt" WHERE status IN ('ANALYZING', 'NEEDS_WORK') GROUP BY status;
+FROM app_migration.empathy_attempt_src WHERE status IN ('ANALYZING', 'NEEDS_WORK') GROUP BY status;
 SELECT app_migration.assert(a = b, format('step 11: %s empathy_attempt rows for %s "EmpathyAttempt" rows (subject must be unique)', a, b))
-FROM (SELECT (SELECT count(*) FROM empathy_attempt) AS a, (SELECT count(*) FROM "EmpathyAttempt") AS b) x;
+FROM (SELECT (SELECT count(*) FROM empathy_attempt) AS a, (SELECT count(*) FROM app_migration.empathy_attempt_src) AS b) x;
 
 -- reconciler_result ← ReconcilerResult (ids kept) → the attempt of (session, guesser).
 INSERT INTO reconciler_result (id, attempt_id, subject_participant_id, iteration, alignment_score, alignment_summary, gap_summary, gap_severity,
@@ -36,7 +36,7 @@ SELECT r.id, a.id, ps.id, r.iteration, r."alignmentScore", r."alignmentSummary",
        r."suggestedShareContent", r."suggestedShareReason", r."wasCircuitBreakerTrip", r."supersededAt",
        r."createdAt", coalesce(r."supersededAt", r."createdAt")
 FROM "ReconcilerResult" r
-JOIN "EmpathyAttempt" a ON a."sessionId" = r."sessionId" AND a."sourceUserId" = app_migration.as_uuid(r."guesserId")
+JOIN app_migration.empathy_attempt_src a ON a."sessionId" = r."sessionId" AND a."sourceUserId" = app_migration.as_uuid(r."guesserId")
 JOIN participant ps ON ps.session_id = r."sessionId" AND ps.user_id = app_migration.as_uuid(r."subjectId");
 SELECT app_migration.assert(a = b, format('step 11: %s reconciler_result rows for %s "ReconcilerResult" rows', a, b))
 FROM (SELECT (SELECT count(*) FROM reconciler_result) AS a, (SELECT count(*) FROM "ReconcilerResult") AS b) x;
@@ -51,7 +51,7 @@ FROM (SELECT count(*) AS n FROM (SELECT attempt_id FROM reconciler_result WHERE 
 SELECT app_migration.note('11', 'RefinementAttemptCounter direction: attempts vs results (not asserted; see header)', count(*),
                           string_agg(format('%s %s: counter=%s results=%s round=%s', c."sessionId", c.direction, c.attempts,
                             (SELECT count(*) FROM "ReconcilerResult" r WHERE r."sessionId" = c."sessionId" AND r."guesserId" || '->' || r."subjectId" = c.direction),
-                            (SELECT a."revisionCount" + 1 FROM "EmpathyAttempt" a WHERE a."sessionId" = c."sessionId" AND a."sourceUserId"::text = split_part(c.direction, '->', 1))),
+                            (SELECT a."revisionCount" + 1 FROM app_migration.empathy_attempt_src a WHERE a."sessionId" = c."sessionId" AND a."sourceUserId"::text = split_part(c.direction, '->', 1))),
                             '; '))
 FROM "RefinementAttemptCounter" c;
 
@@ -86,11 +86,11 @@ SELECT v.id, v."attemptId", p.id, v.validated,
        CASE WHEN v."feedbackShared" THEN v.feedback END,
        CASE WHEN v."feedbackShared" AND v.feedback IS NOT NULL THEN coalesce(v."validatedAt", a.submitted_at) END,
        coalesce(v."validatedAt", a.submitted_at), coalesce(v."validatedAt", a.submitted_at)
-FROM "EmpathyValidation" v
+FROM app_migration.empathy_validation_src v
 JOIN participant p ON p.session_id = v."sessionId" AND p.user_id = v."userId"
 JOIN empathy_attempt a ON a.id = v."attemptId";
 SELECT app_migration.assert(a = b, format('step 11: %s empathy_review rows for %s "EmpathyValidation" rows', a, b))
-FROM (SELECT (SELECT count(*) FROM empathy_review) AS a, (SELECT count(*) FROM "EmpathyValidation") AS b) x;
+FROM (SELECT (SELECT count(*) FROM empathy_review) AS a, (SELECT count(*) FROM app_migration.empathy_validation_src) AS b) x;
 SELECT app_migration.assert(n = 0, format('step 11: %s empathy_review row(s) whose reviewer is not the attempt''s subject', n))
 FROM (SELECT count(*) AS n FROM empathy_review r JOIN empathy_attempt a ON a.id = r.attempt_id
       WHERE r.reviewer_participant_id <> a.subject_participant_id) x;
@@ -108,8 +108,13 @@ export function stepMessages(): string {
 -- source_attempt_id: EMPATHY_STATEMENT → the attempt authored by its sender
 -- (plan: by (session, author)); VALIDATION_FEEDBACK and SHARED_CONTEXT (spec
 -- §1.1 names it too) → the attempt the sender is the subject of.
--- Rows with neither forUserId nor senderId belong to nobody (plan 4a): not copied.
-SELECT app_migration.note('9', 'Message without forUserId and senderId (role ' || role::text || '): not copied (D9, plan 4a)', count(*),
+-- Rows with neither forUserId nor senderId are dropped only in a session with
+-- a vanished member — the leaver's private rows (plan 4a, D9); P33 refused
+-- them anywhere else. Their text goes to app_migration.dropped_content (R-c).
+INSERT INTO app_migration.dropped_content (concept, session_id, user_id, text, written_at)
+SELECT 'Message.content (no owner; session with a vanished member, D9)', m."sessionId", NULL, m.content, m.timestamp
+FROM "Message" m WHERE m."forUserId" IS NULL AND m."senderId" IS NULL ORDER BY m.timestamp, m.id;
+SELECT app_migration.note('9', 'Message without forUserId and senderId (role ' || role::text || '), vanished-member session: not copied (D9, plan 4a) → dropped_content', count(*),
                           string_agg(id::text, ', ' ORDER BY id))
 FROM "Message" WHERE "forUserId" IS NULL AND "senderId" IS NULL GROUP BY role;
 
@@ -124,12 +129,12 @@ SELECT m.id, c.id,
        m.content, m."contentHash", m."refiningNeedId",
        CASE m.role::text
          WHEN 'EMPATHY_STATEMENT' THEN
-           (SELECT a.id FROM "EmpathyAttempt" a WHERE a."sessionId" = m."sessionId" AND a."sourceUserId" = coalesce(m."senderId", o.owner))
+           (SELECT a.id FROM app_migration.empathy_attempt_src a WHERE a."sessionId" = m."sessionId" AND a."sourceUserId" = coalesce(m."senderId", o.owner))
          WHEN 'VALIDATION_FEEDBACK' THEN
-           (SELECT a.id FROM "EmpathyAttempt" a WHERE a."sessionId" = m."sessionId"
+           (SELECT a.id FROM app_migration.empathy_attempt_src a WHERE a."sessionId" = m."sessionId"
               AND CASE WHEN m."senderId" IS NOT NULL THEN a."sourceUserId" <> m."senderId" ELSE a."sourceUserId" = o.owner END)
          WHEN 'SHARED_CONTEXT' THEN
-           (SELECT a.id FROM "EmpathyAttempt" a WHERE a."sessionId" = m."sessionId"
+           (SELECT a.id FROM app_migration.empathy_attempt_src a WHERE a."sessionId" = m."sessionId"
               AND CASE WHEN m."senderId" IS NOT NULL THEN a."sourceUserId" <> m."senderId" ELSE a."sourceUserId" = o.owner END)
        END,
        m.timestamp
@@ -263,7 +268,7 @@ WITH ins AS (
   SELECT app_migration.mint(d."createdAt"), p.id, 'VALIDATION_FEEDBACK', NULL, a.id, NULL, d.content, d."readyToShare", 1, d."createdAt", d."updatedAt"
   FROM "ValidationFeedbackDraft" d
   JOIN participant p ON p.session_id = d."sessionId" AND p.user_id = d."userId"
-  JOIN "EmpathyAttempt" a ON a."sessionId" = d."sessionId" AND a."sourceUserId" <> d."userId"
+  JOIN app_migration.empathy_attempt_src a ON a."sessionId" = d."sessionId" AND a."sourceUserId" <> d."userId"
   ORDER BY d."createdAt", d.id
   RETURNING id, participant_id
 )
@@ -274,7 +279,7 @@ JOIN "ValidationFeedbackDraft" d ON d."sessionId" = p.session_id AND d."userId" 
 
 WITH src AS (
   SELECT v.id AS validation_id, p.id AS participant_id, v."attemptId", v.feedback, coalesce(v."validatedAt", a.submitted_at) AS at
-  FROM "EmpathyValidation" v
+  FROM app_migration.empathy_validation_src v
   JOIN participant p ON p.session_id = v."sessionId" AND p.user_id = v."userId"
   JOIN empathy_attempt a ON a.id = v."attemptId"
   WHERE NOT v."feedbackShared" AND v.feedback IS NOT NULL
@@ -289,9 +294,15 @@ WITH src AS (
 INSERT INTO app_migration.shape_map
 SELECT 'draft:EmpathyValidation.feedback', v.id::text, ins.id
 FROM ins JOIN participant p ON p.id = ins.participant_id
-JOIN "EmpathyValidation" v ON v."attemptId" = ins.attempt_id AND v."userId" = p.user_id;
-SELECT app_migration.note('10', 'unsent EmpathyValidation.feedback superseded by a ValidationFeedbackDraft (not copied)', count(*))
-FROM "EmpathyValidation" v
+JOIN app_migration.empathy_validation_src v ON v."attemptId" = ins.attempt_id AND v."userId" = p.user_id;
+INSERT INTO app_migration.dropped_content (concept, session_id, user_id, text, written_at)
+SELECT 'EmpathyValidation.feedback (unsent; superseded by a ValidationFeedbackDraft)', v."sessionId", v."userId", v.feedback, v."validatedAt"
+FROM app_migration.empathy_validation_src v
+JOIN participant p ON p.session_id = v."sessionId" AND p.user_id = v."userId"
+WHERE NOT v."feedbackShared" AND v.feedback IS NOT NULL
+  AND NOT EXISTS (SELECT 1 FROM app_migration.shape_map s WHERE s.concept = 'draft:EmpathyValidation.feedback' AND s.old_key = v.id::text);
+SELECT app_migration.note('10', 'unsent EmpathyValidation.feedback superseded by a ValidationFeedbackDraft → dropped_content', count(*))
+FROM app_migration.empathy_validation_src v
 JOIN participant p ON p.session_id = v."sessionId" AND p.user_id = v."userId"
 WHERE NOT v."feedbackShared" AND v.feedback IS NOT NULL
   AND NOT EXISTS (SELECT 1 FROM app_migration.shape_map s WHERE s.concept = 'draft:EmpathyValidation.feedback' AND s.old_key = v.id::text);
@@ -328,9 +339,9 @@ WITH t AS (
          CASE c."targetType"
            WHEN 'EMPATHY_ATTEMPT' THEN app_migration.as_uuid(c."targetId")
            WHEN 'EMPATHY_DRAFT' THEN coalesce(
-             (SELECT a.id FROM "EmpathyAttempt" a WHERE a.id = app_migration.as_uuid(c."targetId")),
-             (SELECT a.id FROM "EmpathyAttempt" a WHERE a."draftId" = app_migration.as_uuid(c."targetId") ORDER BY a.id LIMIT 1),
-             (SELECT a.id FROM "EmpathyDraft" d JOIN "EmpathyAttempt" a ON a."sessionId" = d."sessionId" AND a."sourceUserId" = d."userId"
+             (SELECT a.id FROM app_migration.empathy_attempt_src a WHERE a.id = app_migration.as_uuid(c."targetId")),
+             (SELECT a.id FROM app_migration.empathy_attempt_src a WHERE a."draftId" = app_migration.as_uuid(c."targetId") ORDER BY a.id LIMIT 1),
+             (SELECT a.id FROM "EmpathyDraft" d JOIN app_migration.empathy_attempt_src a ON a."sessionId" = d."sessionId" AND a."sourceUserId" = d."userId"
               WHERE d.id = app_migration.as_uuid(c."targetId")))
          END AS t_attempt,
          CASE c."targetType" WHEN 'STRATEGY_PROPOSAL' THEN app_migration.as_uuid(c."targetId") END AS t_proposal

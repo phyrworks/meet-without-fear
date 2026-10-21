@@ -118,7 +118,21 @@ const HEADER = `-- =============================================================
 --  * Leaves schema app_migration (shape_map, row_counts, report) for the
 --    after-phase verify script (TS-8), which drops it (ruling R14). Read the
 --    report: SELECT step, item, n, detail FROM app_migration.report ORDER BY seq;
+--  * User-written text the target has no column for (gatesSatisfied.skipReason
+--    and the feel-heard feedback, Stage4NeedCoverage.note, superseded unsent
+--    review feedback, a differing cycle resultSummary, dropped PROPOSED
+--    agreement descriptions, a vanished leaver's ownerless messages) is kept
+--    in app_migration.dropped_content for the owner to decide at TS-14.
+--  * The app.* functions treat a caller as the job only when it logged in as
+--    mwf_job or mwf_migrator (session_user); a superuser is not the job.
 --  * Does NOT enable RLS or create policies (TS-16).
+--  * TS-16 (v_participant): under owner-only RLS a co-participant reads NULL
+--    last_active_at / last_mood / read state and is_tombstone = false through
+--    this security_invoker view, and coalesce(showActivityStatus, true) would
+--    default to true over a user_preferences row it cannot see. The
+--    partner-facing columns need a SECURITY DEFINER table function (owned by
+--    mwf_job, identity-bound) returning participant_id + the masked
+--    last_active_at, with no default-true over an invisible row.
 --
 -- SECTIONS
 --   0  guard

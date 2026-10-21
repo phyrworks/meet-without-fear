@@ -12,13 +12,14 @@ export function stepRenames(): string {
 -- ---- Renames that hang off participant: invitation, mood_reading, regulation_event, user_memory.
 -- invitation (ids kept): invitedById → participant; messageConfirmed folded into
 -- message_confirmed_at (createdAt when the flag is set without a time);
--- accepted_by_user_id (new, P3 §6) = the relationship's one non-inviter member
--- for an ACCEPTED invitation (P14b checked there is exactly one).
+-- accepted_by_user_id (new, P3 §6) = the session's one participant other than
+-- the inviter, a vanished acceptor included (their tombstone keeps the id;
+-- P14b checked there is exactly one).
 INSERT INTO invitation (id, session_id, invited_by_participant_id, accepted_by_user_id, name, status, message_confirmed_at, expires_at,
                         accepted_at, declined_at, decline_reason, created_at, updated_at)
 SELECT i.id, i."sessionId", pi.id,
        CASE WHEN i.status = 'ACCEPTED' THEN
-         (SELECT m."userId" FROM "RelationshipMember" m WHERE m."relationshipId" = s."relationshipId" AND m."userId" <> i."invitedById")
+         (SELECT DISTINCT p.user_id FROM app_migration.pair p WHERE p.session_id = i."sessionId" AND p.user_id <> i."invitedById")
        END,
        i.name, i.status::text::invitation_status,
        coalesce(i."messageConfirmedAt", CASE WHEN i."messageConfirmed" THEN i."createdAt" END),
@@ -27,6 +28,8 @@ SELECT i.id, i."sessionId", pi.id,
 FROM "Invitation" i
 JOIN "Session" s ON s.id = i."sessionId"
 JOIN participant pi ON pi.session_id = i."sessionId" AND pi.user_id = i."invitedById";
+SELECT app_migration.note('3', 'invitation accepted by a vanished member (accepted_by_user_id = the tombstone)', count(*))
+FROM invitation i JOIN app_migration.vanished v ON v.user_id = i.accepted_by_user_id;
 SELECT app_migration.assert(a = b, format('invitation: %s rows for %s "Invitation" rows', a, b))
 FROM (SELECT (SELECT count(*) FROM invitation) AS a, (SELECT count(*) FROM "Invitation") AS b) x;
 
@@ -238,9 +241,10 @@ export function stepDrop(): string {
 -- so the old FKs between them need no ordering.
 DROP VIEW app_migration.pair, app_migration.vanished;
 DROP TABLE ${OLD_TABLES.map(q).join(', ')};
-DROP TYPE ${OLD_ENUMS.map(q).join(', ')};
 DROP TABLE app_migration.precheck, app_migration.su, app_migration.ab_slot, app_migration.checkin_map,
-           app_migration.milestone_src, app_migration.disposition_ref, app_migration.proposal_need_src;
+           app_migration.milestone_src, app_migration.disposition_ref, app_migration.proposal_need_src,
+           app_migration.slot_fix, app_migration.empathy_attempt_src, app_migration.empathy_validation_src;
+DROP TYPE ${OLD_ENUMS.map(q).join(', ')};
 
 DO $$
 DECLARE

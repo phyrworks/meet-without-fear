@@ -13,7 +13,7 @@
  * template filled in for the seeded scratch database.
  */
 
-import { beforeCounts, helperFns, pairSet } from './workspace';
+import { beforeCounts, evidenceSrc, helperFns, pairSet } from './workspace';
 import { CHECKS, prechecks } from './prechecks';
 
 /** Corrective guidance per check name: comment lines, then a commented statement. */
@@ -96,12 +96,28 @@ const FIXES: Record<string, string> = {
 -- UPDATE "Invitation" i SET "acceptedAt" = (SELECT min(m."joinedAt") FROM "RelationshipMember" m JOIN "Session" s ON s."relationshipId" = m."relationshipId"
 --   WHERE s.id = i."sessionId" AND m."userId" <> i."invitedById") WHERE id IN (<ids>);`,
   invitation_accepted_without_unique_acceptor: `
--- accepted_by_user_id (new, P3 §6) is the relationship's one non-inviter
--- member. Zero: nobody accepted (→ PENDING); several: decide who.
+-- accepted_by_user_id (new, P3 §6) is the session's one participant other
+-- than the inviter (a vanished acceptor counts: their evidence names them).
+-- Zero: nobody accepted (→ PENDING); several: decide who.
 -- UPDATE "Invitation" SET status = 'PENDING', "acceptedAt" = NULL WHERE id IN (<ids>);`,
+  message_without_owner: `
+-- Pre-2026-01-02 rows have no forUserId (migration 20260102225910 added it
+-- without a backfill). Backfill rule: the sender of the nearest EARLIER USER
+-- message with a sender in the same session (the turn the AI answered); if
+-- none, the nearest LATER one. Rows with no USER sender in their session at
+-- all stay listed: decide them by hand. Review the result before committing.
+-- UPDATE "Message" m SET "forUserId" = coalesce(
+--     (SELECT u."senderId" FROM "Message" u WHERE u."sessionId" = m."sessionId" AND u.role = 'USER' AND u."senderId" IS NOT NULL
+--        AND (u.timestamp, u.id) < (m.timestamp, m.id) ORDER BY u.timestamp DESC, u.id DESC LIMIT 1),
+--     (SELECT u."senderId" FROM "Message" u WHERE u."sessionId" = m."sessionId" AND u.role = 'USER' AND u."senderId" IS NOT NULL
+--        AND (u.timestamp, u.id) > (m.timestamp, m.id) ORDER BY u.timestamp, u.id LIMIT 1))::text
+-- WHERE m.id IN (<ids>);`,
   attempt_without_author: `
--- sourceUserId was nulled (author deleted): the author is unknowable here;
--- recover it from the session's EmpathyDraft / statement message, or delete.
+-- sourceUserId was nulled (author deleted) and the migration could not
+-- recover it (it recovers the session's one vanished member without another
+-- attempt there). Name the author from the app logs if known (a vanished id
+-- needs other evidence in the session, e.g. a Message.forUserId); otherwise
+-- the attempt cannot be attributed.
 -- UPDATE "EmpathyAttempt" SET "sourceUserId" = '<user id>' WHERE id = '<attempt id>';`,
   attempt_without_unique_subject: `
 -- An attempt needs exactly one other participant as its subject. None: the
@@ -118,8 +134,8 @@ const FIXES: Record<string, string> = {
 -- UPDATE "EmpathyAttempt" a SET "revealedAt" = coalesce((SELECT min(v."validatedAt") FROM "EmpathyValidation" v WHERE v."attemptId" = a.id),
 --   a."deliveredAt", a."sharedAt") WHERE id IN (<ids>);`,
   validation_without_reviewer: `
--- The reviewer was deleted (userId nulled): the subject of the attempt is the
--- reviewer by construction.
+-- The reviewer was deleted (userId nulled) and the attempt has no single
+-- other participant to recover them as (the migration does that itself).
 -- UPDATE "EmpathyValidation" v SET "userId" = <the attempt's other member> WHERE id IN (<ids>);`,
   validation_reviewer_is_author: `
 -- An author reviewing their own attempt: not a review. Delete.
@@ -262,7 +278,8 @@ export function fixDataTemplate(): string {
 CREATE TABLE pg_temp.row_counts (phase text NOT NULL, table_name text NOT NULL, n bigint NOT NULL);
 ${helperFns('pg_temp')}
 ${beforeCounts('pg_temp')}
-${pairSet('pg_temp')}`;
+${pairSet("pg_temp")}
+${evidenceSrc("pg_temp")}`;
   const blocks = CHECKS.map((c) => {
     const select = c.select.replace(/app_migration\./g, 'pg_temp.');
     return `-- ${'-'.repeat(76)}\n-- ${c.title}\n-- ${'-'.repeat(76)}\n${select};\n${FIXES[c.name].trim()}\n`;
