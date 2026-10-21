@@ -87,6 +87,8 @@ step "1. generator: deterministic, and equal to $(basename "$MIGRATION_DIR")/mig
 ( cd "$BACKEND" && "$TSX" scripts/gen-target-migration.ts >"$OUT/gen-1.sql" && "$TSX" scripts/gen-target-migration.ts >"$OUT/gen-2.sql" )
 cmp "$OUT/gen-1.sql" "$OUT/gen-2.sql" && echo "   ok: two runs byte-identical ($(wc -c <"$OUT/gen-1.sql") bytes, sha256 $(shasum -a 256 "$OUT/gen-1.sql" | cut -c1-16))"
 cmp "$OUT/gen-1.sql" "$MIGRATION" && echo "   ok: committed migration.sql equals the generator output"
+( cd "$BACKEND" && "$TSX" scripts/gen-target-migration.ts --fix-data-template >"$OUT/fix-data.template.sql" )
+cmp "$OUT/fix-data.template.sql" "$HERE/fix-data.template.sql" && echo "   ok: committed fix-data.template.sql equals the generator output"
 [ "$CHECK_ONLY" = 1 ] && { echo "check-only: done"; exit 0; }
 
 # --- 2–3. current-shape scratch database, seeded -------------------------------

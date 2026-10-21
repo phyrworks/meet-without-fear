@@ -31,10 +31,16 @@ export const KNOWN_GATE_KEYS = [
   ]),
 ].sort();
 
-const P = (name: string, select: string) =>
-  `-- ${name}\nINSERT INTO app_migration.precheck (check_name, offender, detail)\n${select.trim()};\n`;
+/** Every precheck, as registered by prechecks(): the fix-data template is rendered from the same list. */
+export const CHECKS: Array<{ title: string; name: string; select: string }> = [];
+
+const P = (title: string, select: string) => {
+  CHECKS.push({ title, name: title.split(' ')[1], select: select.trim() });
+  return `-- ${title}\nINSERT INTO app_migration.precheck (check_name, offender, detail)\n${select.trim()};\n`;
+};
 
 export function prechecks(): string {
+  CHECKS.length = 0;
   const parts: string[] = [];
 
   // ---------------- the plan's prechecks ----------------

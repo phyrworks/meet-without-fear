@@ -93,11 +93,6 @@ CREATE TABLE app_migration.precheck (
   offender   text NOT NULL,
   detail     text
 );
-CREATE TABLE app_migration.su (
-  session_id uuid NOT NULL,
-  user_id    uuid NOT NULL,
-  source     text NOT NULL
-);
 CREATE TABLE app_migration.ab_slot (
   session_id     uuid    NOT NULL,
   slot           text    NOT NULL CHECK (slot IN ('A', 'B')),
@@ -129,25 +124,11 @@ CREATE TABLE app_migration.checkin_map (
   UNIQUE (entry_id, user_id)
 );
 
-CREATE FUNCTION app_migration.as_uuid(v text) RETURNS uuid
-  LANGUAGE sql IMMUTABLE
-  AS $$ SELECT CASE WHEN v ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' THEN v::uuid END $$;
-
+${helperFns('app_migration')}
 -- uuidv7 whose embedded time is ts (as the uuid migration minted ids).
 CREATE FUNCTION app_migration.mint(ts timestamptz) RETURNS uuid
   LANGUAGE sql VOLATILE
   AS $$ SELECT uuidv7(coalesce(ts, clock_timestamp()) - clock_timestamp()) $$;
-
--- JSON null (Prisma JsonNull) is SQL NULL in the target.
-CREATE FUNCTION app_migration.jnull(j jsonb) RETURNS jsonb
-  LANGUAGE sql IMMUTABLE
-  AS $$ SELECT CASE WHEN jsonb_typeof(j) = 'null' THEN NULL ELSE j END $$;
-
--- An ISO timestamp inside a gate document; NULL when absent or not a timestamp.
-CREATE FUNCTION app_migration.ts(j jsonb) RETURNS timestamptz
-  LANGUAGE sql STABLE
-  AS $$ SELECT CASE WHEN jsonb_typeof(j) = 'string' AND pg_input_is_valid(j #>> '{}', 'timestamptz')
-                    THEN (j #>> '{}')::timestamptz END $$;
 
 CREATE FUNCTION app_migration.assert(ok boolean, msg text) RETURNS void
   LANGUAGE plpgsql
@@ -162,7 +143,33 @@ CREATE FUNCTION app_migration.note(p_step text, p_item text, p_n bigint, p_detai
   LANGUAGE sql
   AS $$ INSERT INTO app_migration.report (step, item, n, detail) VALUES (p_step, p_item, p_n, p_detail) $$;
 
--- Step 0: row counts of all 68 old tables.
+${beforeCounts('app_migration')}
+${pairSet('app_migration')}
+`;
+}
+
+/** as_uuid, jnull, ts — shared by the migration (ns app_migration) and the fix-data template (ns pg_temp). */
+export function helperFns(ns: string): string {
+  return `CREATE FUNCTION ${ns}.as_uuid(v text) RETURNS uuid
+  LANGUAGE sql IMMUTABLE
+  AS $$ SELECT CASE WHEN v ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' THEN v::uuid END $$;
+
+-- JSON null (Prisma JsonNull) is SQL NULL in the target.
+CREATE FUNCTION ${ns}.jnull(j jsonb) RETURNS jsonb
+  LANGUAGE sql IMMUTABLE
+  AS $$ SELECT CASE WHEN jsonb_typeof(j) = 'null' THEN NULL ELSE j END $$;
+
+-- An ISO timestamp inside a gate document; NULL when absent or not a timestamp.
+CREATE FUNCTION ${ns}.ts(j jsonb) RETURNS timestamptz
+  LANGUAGE sql STABLE
+  AS $$ SELECT CASE WHEN jsonb_typeof(j) = 'string' AND pg_input_is_valid(j #>> '{}', 'timestamptz')
+                    THEN (j #>> '{}')::timestamptz END $$;
+`;
+}
+
+/** Step 0: row counts of all 68 old tables into <ns>.row_counts (phase 'before'). */
+export function beforeCounts(ns: string): string {
+  return `-- Step 0: row counts of all 68 old tables.
 DO $$
 DECLARE
   t text;
@@ -170,49 +177,58 @@ DECLARE
 BEGIN
   FOREACH t IN ARRAY ${litArr(OLD_TABLES)} LOOP
     EXECUTE format('SELECT count(*) FROM public.%I', t) INTO n;
-    INSERT INTO app_migration.row_counts VALUES ('before', t, n);
+    INSERT INTO ${ns}.row_counts VALUES ('before', t, n);
   END LOOP;
 END
 $$;
+`;
+}
 
+/** The (session, user) pair set (<ns>.su) and the views pair / vanished over it. */
+export function pairSet(ns: string): string {
+  return `CREATE TABLE ${ns}.su (
+  session_id uuid NOT NULL,
+  user_id    uuid NOT NULL,
+  source     text NOT NULL
+);
 -- Every (session, user) pair any old row names (plan step 4: the participant
 -- set; the plan's union, extended to every old userId + sessionId pair so its
 -- assertion "every pair resolves to exactly one participant" can hold). Text
 -- ids that are not uuid-shaped drop out here and are reported by the step-17
 -- precheck. Users with no "User" row are the vanished members (step 4a).
-INSERT INTO app_migration.su (session_id, user_id, source)
+INSERT INTO ${ns}.su (session_id, user_id, source)
 SELECT DISTINCT session_id, user_id, source FROM (
   SELECT "sessionId" AS session_id, "userId" AS user_id, 'StageProgress' AS source FROM "StageProgress"
   UNION ALL SELECT "sessionId", "userId", 'UserVessel' FROM "UserVessel"
   UNION ALL SELECT "sessionId", "userId", 'EmpathyDraft' FROM "EmpathyDraft"
   UNION ALL SELECT "sessionId", "userId", 'Stage4ProposalSelection' FROM "Stage4ProposalSelection"
   UNION ALL SELECT "sessionId", "userId", 'TendingCheckin' FROM "TendingCheckin"
-  UNION ALL SELECT "sessionId", app_migration.as_uuid("forUserId"), 'Message.forUserId' FROM "Message"
+  UNION ALL SELECT "sessionId", ${ns}.as_uuid("forUserId"), 'Message.forUserId' FROM "Message"
   UNION ALL SELECT "sessionId", "senderId", 'Message.senderId' FROM "Message"
   UNION ALL SELECT s.id, m."userId", 'RelationshipMember'
     FROM "Session" s JOIN "RelationshipMember" m ON m."relationshipId" = s."relationshipId"
   UNION ALL SELECT "sessionId", "sourceUserId", 'EmpathyAttempt' FROM "EmpathyAttempt"
   UNION ALL SELECT "sessionId", "userId", 'EmpathyValidation' FROM "EmpathyValidation"
-  UNION ALL SELECT "sessionId", app_migration.as_uuid("guesserId"), 'ReconcilerResult.guesserId' FROM "ReconcilerResult"
-  UNION ALL SELECT "sessionId", app_migration.as_uuid("subjectId"), 'ReconcilerResult.subjectId' FROM "ReconcilerResult"
-  UNION ALL SELECT r."sessionId", app_migration.as_uuid(o."userId"), 'ReconcilerShareOffer.userId'
+  UNION ALL SELECT "sessionId", ${ns}.as_uuid("guesserId"), 'ReconcilerResult.guesserId' FROM "ReconcilerResult"
+  UNION ALL SELECT "sessionId", ${ns}.as_uuid("subjectId"), 'ReconcilerResult.subjectId' FROM "ReconcilerResult"
+  UNION ALL SELECT r."sessionId", ${ns}.as_uuid(o."userId"), 'ReconcilerShareOffer.userId'
     FROM "ReconcilerShareOffer" o JOIN "ReconcilerResult" r ON r.id = o."resultId"
   UNION ALL SELECT "sessionId", "userId", 'ConsentRecord.userId' FROM "ConsentRecord"
   UNION ALL SELECT "sessionId", "requestedByUserId", 'ConsentRecord.requestedByUserId' FROM "ConsentRecord"
   UNION ALL SELECT "sessionId", "createdByUserId", 'StrategyProposal.createdByUserId' FROM "StrategyProposal"
   UNION ALL SELECT "sessionId", "removedByUserId", 'StrategyProposal.removedByUserId' FROM "StrategyProposal"
   UNION ALL SELECT "sessionId", "userId", 'StrategyRanking' FROM "StrategyRanking"
-  UNION ALL SELECT p."sessionId", app_migration.as_uuid(r."actorUserId"), 'Stage4ProposalRevision.actorUserId'
+  UNION ALL SELECT p."sessionId", ${ns}.as_uuid(r."actorUserId"), 'Stage4ProposalRevision.actorUserId'
     FROM "Stage4ProposalRevision" r JOIN "StrategyProposal" p ON p.id = r."proposalId"
-  UNION ALL SELECT "sessionId", app_migration.as_uuid("userId"), 'Stage4NeedDeclination.userId' FROM "Stage4NeedDeclination"
-  UNION ALL SELECT "sessionId", app_migration.as_uuid("closedByUserId"), 'Stage4Closure.closedByUserId' FROM "Stage4Closure"
+  UNION ALL SELECT "sessionId", ${ns}.as_uuid("userId"), 'Stage4NeedDeclination.userId' FROM "Stage4NeedDeclination"
+  UNION ALL SELECT "sessionId", ${ns}.as_uuid("closedByUserId"), 'Stage4Closure.closedByUserId' FROM "Stage4Closure"
   UNION ALL SELECT "sessionId", "userId", 'Stage4SubChat' FROM "Stage4SubChat"
-  UNION ALL SELECT "sessionId", app_migration.as_uuid("ownerUserId"), 'TendingEntry.ownerUserId' FROM "TendingEntry"
+  UNION ALL SELECT "sessionId", ${ns}.as_uuid("ownerUserId"), 'TendingEntry.ownerUserId' FROM "TendingEntry"
   UNION ALL SELECT e."sessionId", r."userId", 'TendingResponse'
     FROM "TendingResponse" r JOIN "TendingEntry" e ON e.id = r."tendingEntryId"
   UNION ALL SELECT e."sessionId", o."userId", 'TendingEntryOutcome'
     FROM "TendingEntryOutcome" o JOIN "TendingEntry" e ON e.id = o."tendingEntryId"
-  UNION ALL SELECT "sessionId", app_migration.as_uuid("sourceUserId"), 'TendingNeedOutcome.sourceUserId' FROM "TendingNeedOutcome"
+  UNION ALL SELECT "sessionId", ${ns}.as_uuid("sourceUserId"), 'TendingNeedOutcome.sourceUserId' FROM "TendingNeedOutcome"
   UNION ALL SELECT "sessionId", "userId", 'TendingReminder' FROM "TendingReminder"
   UNION ALL SELECT "sessionId", "userId", 'TendingAdjustment' FROM "TendingAdjustment"
   UNION ALL SELECT "sessionId", "userId", 'TendingBetweenPeriodNote' FROM "TendingBetweenPeriodNote"
@@ -224,13 +240,13 @@ SELECT DISTINCT session_id, user_id, source FROM (
     FROM "EmotionalReading" e JOIN "UserVessel" v ON v.id = e."vesselId"
 ) x
 WHERE session_id IS NOT NULL AND user_id IS NOT NULL;
-CREATE INDEX ON app_migration.su (session_id, user_id);
+CREATE INDEX ON ${ns}.su (session_id, user_id);
 
 -- The distinct pairs, and the vanished users among them (no "User" row).
-CREATE VIEW app_migration.pair AS
-  SELECT DISTINCT session_id, user_id FROM app_migration.su;
-CREATE VIEW app_migration.vanished AS
-  SELECT DISTINCT su.user_id FROM app_migration.su
+CREATE VIEW ${ns}.pair AS
+  SELECT DISTINCT session_id, user_id FROM ${ns}.su;
+CREATE VIEW ${ns}.vanished AS
+  SELECT DISTINCT su.user_id FROM ${ns}.su
   WHERE NOT EXISTS (SELECT 1 FROM "User" u WHERE u.id = su.user_id);
 `;
 }

@@ -3,6 +3,7 @@
  *
  *   cd backend
  *   npx tsx scripts/gen-target-migration.ts > prisma/migrations/<ts>_target_shape/migration.sql
+ *   npx tsx scripts/gen-target-migration.ts --fix-data-template > scripts/target-shape/fix-data.template.sql
  *
  * Moves the database from the 68-table Prisma shape to the 47-table target
  * shape of docs/backend/data-model/schema-target-2026-10.md, following the
@@ -38,6 +39,7 @@ import { stepConversations, stepMilestones, stepNeeds, stepParticipants, stepUse
 import { stepDraftsConsent, stepEmpathy, stepMessages } from './target-shape/gen/copies-empathy';
 import { stepFollowUp, stepProposals } from './target-shape/gen/copies-repair';
 import { stepDrop, stepReflection, stepRenames, stepTelemetryAndAudit } from './target-shape/gen/copies-user';
+import { fixDataTemplate } from './target-shape/gen/fix-template';
 
 const BACKEND = path.resolve(__dirname, '..');
 const SCHEMA = path.join(BACKEND, 'prisma', 'schema.prisma');
@@ -137,6 +139,11 @@ const HEADER = `-- =============================================================
 `;
 
 function main(): void {
+  if (process.argv[2] === '--fix-data-template') {
+    process.stdout.write(fixDataTemplate().replace(/[ \t]+$/gm, ''));
+    return;
+  }
+  if (process.argv[2] !== undefined) throw new Error(`unknown argument ${process.argv[2]} (only --fix-data-template)`);
   const ddl = prismaDdl();
   const nNames = checkNoCollision(ddl);
   const out = [
