@@ -15,6 +15,7 @@ import {
   at,
   DAY,
   EmpathyContent,
+  NeedContent,
   JourneyPhase,
   MilestoneKey,
   ParticipantScenario,
@@ -444,12 +445,14 @@ const BUILDERS: Record<TargetStage, Build> = {
     return { invitation: ACCEPTED, participants: [ada, bob] };
   },
 
-  // Stage 3 for both: needs confirmed, nothing shared or validated yet.
+  // Stage 3 for both: needs confirmed, nothing shared or validated yet. The
+  // needs are R4's probes, so their labels and evidence are distinctive.
   [TargetStage.NEEDS_CONFIRMED]: () => {
     const s = needMappingComplete();
     for (const p of s.participants) {
       delete p.milestones.needs_validated;
       delete p.milestones.needs_shared;
+      p.needs = p.key === A ? NEEDS_CONFIRMED_TEXT.ada : NEEDS_CONFIRMED_TEXT.bob;
     }
     return s;
   },
@@ -644,6 +647,42 @@ function tombstoneReady(a: string, b: string): ReturnType<Build> {
     },
   };
 }
+
+/** NEEDS_CONFIRMED's needs (golden R4): a need's label and evidence never reach the partner. */
+export const NEEDS_CONFIRMED_TEXT: Record<'ada' | 'bob', NeedContent[]> = {
+  ada: [
+    {
+      need: 'Rest without having to earn it first',
+      category: 'AUTONOMY',
+      aiConfidence: 0.9,
+      confirmed: true,
+      evidence: ['Ada said she never sits down before ten at night'],
+    },
+    {
+      need: 'Being thanked out loud for the invisible work',
+      category: 'RECOGNITION',
+      aiConfidence: 0.9,
+      confirmed: true,
+      evidence: ['Ada said nobody has noticed the fridge is always full'],
+    },
+  ],
+  bob: [
+    {
+      need: 'A quiet first hour after work',
+      category: 'SAFETY',
+      aiConfidence: 0.9,
+      confirmed: true,
+      evidence: ['Bob said the first hour home decides his whole evening'],
+    },
+    {
+      need: 'Credit for the effort even when the result is late',
+      category: 'RECOGNITION',
+      aiConfidence: 0.9,
+      confirmed: true,
+      evidence: ['Bob said he gets no credit for tasks that are half done'],
+    },
+  ],
+};
 
 /** TOMBSTONE_READY's distinctive content (golden R5 asserts where each survives). */
 export const TOMBSTONE_TEXT = {

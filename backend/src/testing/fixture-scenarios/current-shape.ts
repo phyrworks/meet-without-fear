@@ -482,7 +482,7 @@ export async function writeCurrentShape(tx: Tx, scenario: Scenario, users: UserR
       vesselId: vessel.id,
       need: n.need,
       category: n.category,
-      evidence: [],
+      evidence: n.evidence ?? [],
       aiConfidence: n.aiConfidence,
       confirmed: n.confirmed,
       createdAt: t(confirmedAt),

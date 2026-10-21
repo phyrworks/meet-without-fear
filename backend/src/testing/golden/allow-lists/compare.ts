@@ -139,6 +139,11 @@ export function compareWithAllowList(expected: unknown, actual: unknown, allow: 
             fail(kp, 'added and not on the allow-list', undefined, a[k]);
           continue;
         }
+        const differ = rulesAt('mayDiffer', kp);
+        if (differ.length) {
+          differ.forEach(r => r.matched++);
+          continue;
+        }
         const subsets = rulesAt('valuesSubset', kp);
         if (subsets.length) {
           for (const r of subsets) {

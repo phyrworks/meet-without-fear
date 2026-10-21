@@ -147,6 +147,8 @@ export interface NeedContent {
   category: NeedCategoryName;
   aiConfidence: number;
   confirmed: boolean;
+  /** What the participant said that the need was drawn from (`IdentifiedNeed.evidence`; default none). */
+  evidence?: string[];
   /**
    * The participant shared this need (target `need_share`) at their
    * `needs_shared` milestone. `text` is the target's `shared_text`; today's

@@ -290,6 +290,21 @@ describe('compareWithAllowList — mechanics', () => {
     expect(r.violations).toEqual([]);
   });
 
+  it('mayDiffer lets a value change but not disappear, and only at its path (TS-5)', () => {
+    const list: AllowList = {
+      scenario: 'x',
+      rules: [{ kind: 'mayDiffer', at: 'steps.*.body.partnerNeeds.*.need', mustMatch: true, why: 'test' }],
+    };
+    const base = { steps: [{ body: { partnerNeeds: [{ need: 'label', category: 'SAFETY' }] } }] };
+    const changed = { steps: [{ body: { partnerNeeds: [{ need: 'shared text', category: 'SAFETY' }] } }] };
+    const gone = { steps: [{ body: { partnerNeeds: [{ category: 'SAFETY' }] } }] };
+    const elsewhere = { steps: [{ body: { partnerNeeds: [{ need: 'label', category: 'FAIRNESS' }] } }] };
+    expect(compareWithAllowList(base, base, list)).toEqual({ violations: [], unmatchedRules: [] });
+    expect(compareWithAllowList(base, changed, list).violations).toEqual([]);
+    expect(compareWithAllowList(base, gone, list).violations).toEqual([expect.stringContaining('partnerNeeds.0.need')]);
+    expect(compareWithAllowList(base, elsewhere, list).violations).toEqual([expect.stringContaining('category')]);
+  });
+
   it('allows added entries in a keyed map of rows by predicate', () => {
     const list: AllowList = {
       scenario: 'x',

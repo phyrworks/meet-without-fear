@@ -288,7 +288,7 @@ ts(participant_id, milestone_key, reached_at) AS (
   FROM prog WHERE (g->>'needsConfirmed')::boolean OR (g->>'needsIdentified')::boolean
   UNION ALL
   SELECT participant_id, 'needs_shared',
-         coalesce((g->>'needsSharedAt')::timestamptz AT TIME ZONE 'UTC', "completedAt", "startedAt")
+         coalesce((g->>'needsSharedAt')::timestamptz AT TIME ZONE 'UTC', (g->>'sharedAt')::timestamptz AT TIME ZONE 'UTC', "completedAt", "startedAt")
   FROM prog WHERE (g->>'needsShared')::boolean
   UNION ALL
   SELECT participant_id, 'needs_validated',
@@ -337,7 +337,13 @@ WHERE k.key NOT IN (
   -- dropped (step 7) and fixture-derived
   'feelHeardCheckOffered', 'finalEmotionalReading', 'readyToRank', 'rankingSubmitted',
   'partnerConsented', 'partnerValidated', 'partner', 'own',
-  'strategiesRanked', 'agreementCreated', 'agreementConfirmed'
+  'strategiesRanked', 'agreementCreated', 'agreementConfirmed',
+  -- TS-5: keys production's needs share writes that step 7's key table does
+  -- not list, so the migration precheck would RAISE on them (finding F3 of the
+  -- TS-5 report): `sharedAt` (stage3.ts consentToShareNeeds — read above as
+  -- `needsShared`'s instant) and `needsRevealReviewedAt`
+  -- (completeStage3AfterMutualNeedsShare — no milestone; dropped here).
+  'sharedAt', 'needsRevealReviewedAt'
 );
 
 

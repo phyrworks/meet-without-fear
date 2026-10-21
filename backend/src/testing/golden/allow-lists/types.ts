@@ -76,7 +76,19 @@ export interface AddedEntriesRule extends RuleBase {
   where: Record<string, unknown>;
 }
 
-export type AllowRule = AbsentKeysRule | AddedKeysRule | ValuesSubsetRule | AddedEntriesRule;
+/**
+ * The value at matching paths MAY differ from the baseline's (the key must
+ * still be present). For a value the target computes from a different source
+ * by design — e.g. a partner's need text, which becomes `need_share.shared_text`
+ * instead of the private label (TS-5, R4). Pair it with a scenario assertion
+ * that pins what the new value must (not) be; this rule only stops the
+ * comparator demanding equality.
+ */
+export interface MayDifferRule extends RuleBase {
+  kind: 'mayDiffer';
+}
+
+export type AllowRule = AbsentKeysRule | AddedKeysRule | ValuesSubsetRule | AddedEntriesRule | MayDifferRule;
 
 export interface AllowList {
   scenario: string;
