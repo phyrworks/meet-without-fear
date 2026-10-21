@@ -33,6 +33,22 @@
 --    in app_migration.dropped_content for the owner to decide at TS-14.
 --  * The app.* functions treat a caller as the job only when it logged in as
 --    mwf_job or mwf_migrator (session_user); a superuser is not the job.
+--  * need_share has two sources (TS-7b): ConsentedContent, and the Stage 3
+--    handler's granted IDENTIFIED_NEED ConsentRecords (no ConsentedContent;
+--    shared_text = the need label, ruling R19; duplicates merged, R18).
+--  * TS-14 RISK, step-13 closure comparison (TS-7b). It is now live for every
+--    production Stage4Closure, because Stage 3 shares become need_share rows.
+--    The old openNeedIds rule (stage4.ts ~1338 over
+--    stage4-coverage.service.ts) counts a need COVERED when any non-REMOVED
+--    proposal links or fuzzily matches it, and that includes
+--    CONVERTED_TO_AGREEMENT: the SHARED_AGREEMENT closure converts the agreed
+--    proposals in the same transaction. v_session_closure_items counts only
+--    proposal_need links to ACTIVE proposals. A shared need covered by the
+--    agreed proposal, or by a fuzzy/description-only match, is therefore open
+--    in the view and covered in the old array. The comparison RAISEs on it
+--    (negative case n13), and this is NOT relaxed: deciding between fixing
+--    the view rule and accepting the difference is the owner's call at TS-14.
+--    Expected on most real SHARED_AGREEMENT closures.
 --  * Does NOT enable RLS or create policies (TS-16).
 --  * TS-16 (v_participant): under owner-only RLS a co-participant reads NULL
 --    last_active_at / last_mood / read state and is_tombstone = false through
@@ -2082,17 +2098,6 @@ FROM "ConsentRecord" c
 WHERE c."targetType" = 'IDENTIFIED_NEED' AND c.decision IN ('GRANTED', 'REVOKED')
   AND NOT EXISTS (SELECT 1 FROM "IdentifiedNeed" n WHERE n.id = app_migration.as_uuid(c."targetId"));
 
--- P20f need_consent_duplicate (need_share PK need_id: one granted record per need without ConsentedContent)
-INSERT INTO app_migration.precheck (check_name, offender, detail)
-SELECT 'need_consent_duplicate', c."targetId", string_agg(c.id::text, ', ' ORDER BY c.id)
-FROM "ConsentRecord" c
-WHERE c."targetType" = 'IDENTIFIED_NEED' AND c.decision IN ('GRANTED', 'REVOKED')
-  AND EXISTS (SELECT 1 FROM "IdentifiedNeed" n WHERE n.id = app_migration.as_uuid(c."targetId"))
-  AND NOT EXISTS (SELECT 1 FROM "ConsentedContent" xcc JOIN "ConsentRecord" xcr ON xcr.id = xcc."consentRecordId"
-                  WHERE app_migration.as_uuid(xcr."targetId") = app_migration.as_uuid(c."targetId"))
-GROUP BY c."targetId"
-HAVING count(*) > 1;
-
 -- P20g need_consent_revocation (CHECK need_share.revoked_at >= shared_at for a record-sourced share)
 INSERT INTO app_migration.precheck (check_name, offender, detail)
 SELECT 'need_consent_revocation', c.id::text, format('decidedAt=%s createdAt=%s revokedAt=%s', c."decidedAt", c."createdAt", c."revokedAt")
@@ -2748,15 +2753,31 @@ FROM "ConsentedContent" cc JOIN "ConsentRecord" cr ON cr.id = cc."consentRecordI
 -- (b) the Stage 3 share-needs handler (stage3.ts ~750-780 on phoenix/base)
 -- writes one GRANTED ConsentRecord(IDENTIFIED_NEED) per shared need and never
 -- a ConsentedContent row: a granted (or since revoked) record whose need has
--- no ConsentedContent is the share. No transformed text exists on this path:
--- shared_text = the need's label. shared_at = the grant time (decidedAt),
--- else the owner's stage-3 gatesSatisfied.sharedAt, else the record's
--- createdAt; revoked_at from the record. P20e-P20g guarantee one resolvable
--- record per such need, with revoked_at >= shared_at. Step 12's consent copy
--- below still writes the consent row for the same record: one record, one
--- consent, one need_share.
+-- no ConsentedContent is the share.
+--
+-- shared_text = the need's label — a MIGRATION-TIME EXCEPTION (ruling R19),
+-- not a change of the need_share invariant: no transformed text exists on
+-- this path, and production already disclosed label + category to the
+-- partner after a mutual share (stage3.ts getNeedsComparison). New shares on
+-- the target still go through app.need_share with the job's transformed text.
+--
+-- shared_at = the grant time (decidedAt). The fallbacks (the owner's stage-3
+-- gatesSatisfied.sharedAt, then createdAt) are DEFENSIVE: only GRANTED/REVOKED
+-- records qualify and P19a refuses a decision without decidedAt, so they are
+-- unreachable after the prechecks. revoked_at = the record's revokedAt; a
+-- REVOKED record with no revokedAt (unambiguous data, so a note below, not a
+-- precheck — P20h) is revoked as of its decision: coalesce(revokedAt,
+-- decidedAt).
+--
+-- Duplicates (ruling R18): a double-tapped share records the same grant
+-- twice. They MERGE into one need_share per need: shared_at = the earliest
+-- grant; revoked_at = the latest revocation once every record of the need is
+-- revoked (a still-live grant keeps the share live). Every record still
+-- becomes its own consent row in step 12's consent copy below; no record is
+-- deleted. P20e (unresolvable target) and P20g (revoked before granted) RAISE.
 CREATE TABLE app_migration.need_share_record_src AS
-SELECT cr.id AS record_id, n.id AS need_id, n.participant_id, p.session_id, n.category, n.label,
+SELECT cr.id AS record_id, cr.decision::text AS decision, n.id AS need_id, n.participant_id, p.session_id, n.category, n.label,
+       (n.deleted_at IS NOT NULL OR n.superseded_by_need_id IS NOT NULL) AS dead_need,
        coalesce(cr."decidedAt",
                 (SELECT app_migration.ts(sp."gatesSatisfied" -> 'sharedAt') FROM "StageProgress" sp
                  WHERE sp."sessionId" = p.session_id AND sp."userId" = p.user_id AND sp.stage = 3
@@ -2768,7 +2789,8 @@ SELECT cr.id AS record_id, n.id AS need_id, n.participant_id, p.session_id, n.ca
                            AND jsonb_typeof(sp."gatesSatisfied") = 'object' AND app_migration.ts(sp."gatesSatisfied" -> 'sharedAt') IS NOT NULL)
               THEN 'gatesSatisfied.sharedAt'
             ELSE 'createdAt' END AS shared_at_source,
-       cr."revokedAt" AS revoked_at
+       CASE WHEN cr.decision = 'REVOKED' THEN coalesce(cr."revokedAt", cr."decidedAt") ELSE cr."revokedAt" END AS revoked_at,
+       (cr.decision = 'REVOKED' AND cr."revokedAt" IS NULL) AS revoked_undated
 FROM "ConsentRecord" cr
 JOIN need n ON n.id = app_migration.as_uuid(cr."targetId")
 JOIN participant p ON p.id = n.participant_id
@@ -2778,24 +2800,43 @@ WHERE cr."targetType" = 'IDENTIFIED_NEED' AND cr.decision IN ('GRANTED', 'REVOKE
 WITH ins AS (
   INSERT INTO need_share (need_id, participant_id, session_id, category, shared_text, shared_at, revoked_at, created_at, updated_at)
   SELECT need_id, participant_id, session_id, category, label, shared_at, revoked_at, shared_at, coalesce(revoked_at, shared_at)
-  FROM app_migration.need_share_record_src
+  FROM (SELECT need_id, min(participant_id::text)::uuid AS participant_id, min(session_id::text)::uuid AS session_id,
+               min(category) AS category, min(label) AS label, min(shared_at) AS shared_at,
+               CASE WHEN bool_and(revoked_at IS NOT NULL) THEN max(revoked_at) END AS revoked_at
+        FROM app_migration.need_share_record_src GROUP BY need_id) g
   ORDER BY need_id
   RETURNING need_id
 )
-SELECT app_migration.note('12', 'need_share from a granted IDENTIFIED_NEED ConsentRecord without ConsentedContent (Stage 3 share; shared_text = need label)', count(*))
+SELECT app_migration.note('12', 'need_share from a granted IDENTIFIED_NEED ConsentRecord without ConsentedContent (Stage 3 share; shared_text = need label, ruling R19)', count(*))
 FROM ins;
 SELECT app_migration.note('12', 'need_share from a ConsentRecord: shared_at from ' || shared_at_source, count(*))
 FROM app_migration.need_share_record_src GROUP BY shared_at_source;
+-- R18: duplicate grants merged (needs with more than one qualifying record).
+SELECT app_migration.note('12', 'R18 duplicate Stage 3 grants merged into one need_share (needs; records in detail)', count(*),
+                          string_agg(need_id::text || ' ← ' || records, '; ' ORDER BY need_id))
+FROM (SELECT need_id, string_agg(record_id::text, ', ' ORDER BY record_id) AS records
+      FROM app_migration.need_share_record_src GROUP BY need_id HAVING count(*) > 1) d;
+-- P20h: REVOKED without revokedAt → revoked as of decidedAt (note, not a RAISE).
+SELECT app_migration.note('12', 'P20h REVOKED IDENTIFIED_NEED ConsentRecord without revokedAt: need_share.revoked_at = decidedAt', count(*),
+                          string_agg(record_id::text, ', ' ORDER BY record_id))
+FROM app_migration.need_share_record_src WHERE revoked_undated;
+SELECT app_migration.note('12', 'need_share from a ConsentRecord on a deleted or superseded need (kept: it was shared)', count(DISTINCT need_id),
+                          string_agg(DISTINCT need_id::text, ', '))
+FROM app_migration.need_share_record_src WHERE dead_need;
 INSERT INTO app_migration.shape_map
 SELECT 'need_share:ConsentRecord', record_id::text, need_id FROM app_migration.need_share_record_src;
 
--- Reported both ways: need_share = ConsentedContent + qualifying records, and
--- every granted IDENTIFIED_NEED record lands in exactly one need_share
+-- Reported both ways: need_share = ConsentedContent + needs shared by
+-- qualifying records (records counted too), and every granted IDENTIFIED_NEED
+-- record's need maps to exactly one need_share, shared across duplicates
 -- (need_id is the PK: "exactly one" is "one").
-SELECT app_migration.assert(a = b + c, format('step 12: %s need_share rows for %s "ConsentedContent" rows + %s granted IDENTIFIED_NEED "ConsentRecord" rows without ConsentedContent', a, b, c))
+SELECT app_migration.note('12', 'granted IDENTIFIED_NEED ConsentRecord rows without ConsentedContent (records)', count(*))
+FROM app_migration.need_share_record_src;
+SELECT app_migration.assert(a = b + c, format('step 12: %s need_share rows for %s "ConsentedContent" rows + %s needs shared by %s granted IDENTIFIED_NEED "ConsentRecord" rows without ConsentedContent', a, b, c, d))
 FROM (SELECT (SELECT count(*) FROM need_share) AS a, (SELECT count(*) FROM "ConsentedContent") AS b,
-             (SELECT count(*) FROM app_migration.need_share_record_src) AS c) x;
-SELECT app_migration.assert(n = 0, format('step 12: %s granted IDENTIFIED_NEED "ConsentRecord" row(s) without exactly one need_share: %s', n, ids))
+             (SELECT count(DISTINCT need_id) FROM app_migration.need_share_record_src) AS c,
+             (SELECT count(*) FROM app_migration.need_share_record_src) AS d) x;
+SELECT app_migration.assert(n = 0, format('step 12: %s granted IDENTIFIED_NEED "ConsentRecord" row(s) whose need does not map to exactly one need_share: %s', n, ids))
 FROM (SELECT count(*) AS n, string_agg(cr.id::text, ', ' ORDER BY cr.id) AS ids
       FROM "ConsentRecord" cr
       WHERE cr."targetType" = 'IDENTIFIED_NEED' AND cr.decision IN ('GRANTED', 'REVOKED')
@@ -5333,12 +5374,24 @@ END
 $$;
 
 -- Plan step 13: v_session_closure_items reproduces each old Stage4Closure
--- array as a set, restricted to shared needs. An old open-need id with no
--- need_share row is expected (listed); any other difference RAISEs.
+-- array as a set, restricted to LIVE shared needs. Two named exception
+-- classes are expected and listed, never RAISEd:
+--   (1) an old open-need id with no need_share row (an unshared need — the
+--       old rule, stage4-coverage.service.ts, covers every confirmed need);
+--   (2) an old open-need id whose need_share is revoked (TS-7b): the view, by
+--       definition, never names a revoked share (spec §1.4), and the old
+--       arrays were computed without regard to consent state.
+-- Any other difference RAISEs, with the differing ids. Known TS-14 risk
+-- (TS-7b, see the migration header): the old rule counts a need COVERED by
+-- any non-REMOVED proposal (CONVERTED_TO_AGREEMENT included — stage4.ts
+-- converts the agreed proposals in the closure transaction) and by fuzzy
+-- text matches; the view counts only proposal_need links to ACTIVE proposals.
+-- Those states RAISE here on purpose (negative case n13).
 DO $$
 DECLARE
   r record;
   bad text := '';
+  old_live uuid[];
 BEGIN
   FOR r IN
     SELECT o.session_id, o.shared_agreement_ids, o.individual_proposal_ids, o.open_need_ids,
@@ -5355,15 +5408,22 @@ BEGIN
     IF NOT (r.individual_proposal_ids @> r.individual_commitment_ids AND r.individual_commitment_ids @> r.individual_proposal_ids) THEN
       bad := bad || format(' %s:individual_commitments', r.session_id);
     END IF;
-    IF NOT (r.v_open @> ARRAY(SELECT x FROM unnest(r.open_need_ids) x WHERE EXISTS (SELECT 1 FROM need_share s WHERE s.need_id = x))
-            AND ARRAY(SELECT x FROM unnest(r.open_need_ids) x WHERE EXISTS (SELECT 1 FROM need_share s WHERE s.need_id = x)) @> r.v_open) THEN
-      bad := bad || format(' %s:open_needs', r.session_id);
+    old_live := ARRAY(SELECT x FROM unnest(r.open_need_ids) x
+                      WHERE EXISTS (SELECT 1 FROM need_share s WHERE s.need_id = x AND s.revoked_at IS NULL));
+    IF NOT (r.v_open @> old_live AND old_live @> r.v_open) THEN
+      bad := bad || format(' %s:open_needs(old-only %s, view-only %s)', r.session_id,
+                           ARRAY(SELECT unnest(old_live) EXCEPT SELECT unnest(r.v_open)),
+                           ARRAY(SELECT unnest(r.v_open) EXCEPT SELECT unnest(old_live)));
     END IF;
   END LOOP;
   PERFORM app_migration.note('13', 'Stage4Closure.openNeedIds entry that is not a shared need (expected difference)', count(*),
                              string_agg(x::text, ', '))
   FROM app_migration.old_closure o CROSS JOIN unnest(o.open_need_ids) x
   WHERE NOT EXISTS (SELECT 1 FROM need_share s WHERE s.need_id = x);
+  PERFORM app_migration.note('13', 'Stage4Closure.openNeedIds entry whose need_share is revoked (expected difference, TS-7b)', count(*),
+                             string_agg(x::text, ', '))
+  FROM app_migration.old_closure o CROSS JOIN unnest(o.open_need_ids) x
+  WHERE EXISTS (SELECT 1 FROM need_share s WHERE s.need_id = x AND s.revoked_at IS NOT NULL);
   PERFORM app_migration.assert(bad = '', format('step 13: v_session_closure_items differs from Stage4Closure:%s', bad));
 END
 $$;

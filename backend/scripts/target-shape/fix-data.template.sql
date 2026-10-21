@@ -628,26 +628,10 @@ WHERE c."targetType" = 'IDENTIFIED_NEED' AND c.decision IN ('GRANTED', 'REVOKED'
   AND NOT EXISTS (SELECT 1 FROM "IdentifiedNeed" n WHERE n.id = pg_temp.as_uuid(c."targetId"));
 -- A granted IDENTIFIED_NEED ConsentRecord is a shared need (the Stage 3
 -- share-needs handler writes no ConsentedContent), so its targetId must name
--- an IdentifiedNeed. Point it at the need that was shared, or — if that need
--- is gone — record the decision with the owner and delete the record.
+-- an IdentifiedNeed. Point it at the need that was shared. If that need is
+-- gone, the owner decides; ConsentRecord rows are not deleted by fix-data
+-- (ruling R18).
 -- UPDATE "ConsentRecord" SET "targetId" = '<need id>' WHERE id = '<record id>';
--- or: DELETE FROM "ConsentRecord" WHERE id IN (<ids>);
-
--- ----------------------------------------------------------------------------
--- P20f need_consent_duplicate (need_share PK need_id: one granted record per need without ConsentedContent)
--- ----------------------------------------------------------------------------
-SELECT 'need_consent_duplicate', c."targetId", string_agg(c.id::text, ', ' ORDER BY c.id)
-FROM "ConsentRecord" c
-WHERE c."targetType" = 'IDENTIFIED_NEED' AND c.decision IN ('GRANTED', 'REVOKED')
-  AND EXISTS (SELECT 1 FROM "IdentifiedNeed" n WHERE n.id = pg_temp.as_uuid(c."targetId"))
-  AND NOT EXISTS (SELECT 1 FROM "ConsentedContent" xcc JOIN "ConsentRecord" xcr ON xcr.id = xcc."consentRecordId"
-                  WHERE pg_temp.as_uuid(xcr."targetId") = pg_temp.as_uuid(c."targetId"))
-GROUP BY c."targetId"
-HAVING count(*) > 1;
--- need_share is keyed by need: one granted record per need without
--- ConsentedContent. Keep the earliest grant (it dates the share); a later
--- revocation belongs on the kept row.
--- DELETE FROM "ConsentRecord" WHERE id IN (<later duplicate ids>);
 
 -- ----------------------------------------------------------------------------
 -- P20g need_consent_revocation (CHECK need_share.revoked_at >= shared_at for a record-sourced share)
