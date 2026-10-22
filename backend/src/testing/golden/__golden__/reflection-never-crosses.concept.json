@@ -39,9 +39,9 @@
       "<brainActivity:session:main#1>": {
         "activity_type": "LLM_CALL",
         "call_type": "ORCHESTRATED_RESPONSE",
-        "completed_at": "<ts:34>",
+        "completed_at": "<ts:43>",
         "cost": 0,
-        "created_at": "<ts:34>",
+        "created_at": "<ts:43>",
         "duration_ms": 0,
         "id": "<brainActivity:session:main#1>",
         "input": {
@@ -106,7 +106,7 @@
     },
     "consent": {
       "<consent:ada@main/EMPATHY_ATTEMPT/empathyAttempt:ada→bob@main#1>": {
-        "created_at": "<ts:37>",
+        "created_at": "<ts:36>",
         "decided_at": "<ts:18>",
         "decision": "GRANTED",
         "empathy_attempt_id": "<empathyAttempt:ada→bob@main#1>",
@@ -150,7 +150,7 @@
         "last_viewed_at": null,
         "last_viewed_share_tab_at": null,
         "participant_id": "<participant:ada@main>",
-        "updated_at": "<ts:33>"
+        "updated_at": "<ts:32>"
       },
       "<participant:bob@main>": {
         "archived_at": null,
@@ -159,7 +159,7 @@
         "last_viewed_at": null,
         "last_viewed_share_tab_at": null,
         "participant_id": "<participant:bob@main>",
-        "updated_at": "<ts:34>"
+        "updated_at": "<ts:33>"
       }
     },
     "draft": {
@@ -167,13 +167,13 @@
         "about_participant_id": "<participant:bob@main>",
         "attempt_id": null,
         "content": "I understand you might be feeling stressed from work. I want us to support each other better.",
-        "created_at": "<ts:36>",
+        "created_at": "<ts:34>",
         "id": "<draft:ada@main/EMPATHY>",
         "kind": "EMPATHY",
         "participant_id": "<participant:ada@main>",
         "ready_to_share": true,
         "share_offer_id": null,
-        "updated_at": "<ts:36>",
+        "updated_at": "<ts:35>",
         "version": 1
       }
     },
@@ -197,15 +197,15 @@
     "empathy_review": {},
     "invitation": {
       "<invitation:main>": {
-        "accepted_at": "<ts:32>",
+        "accepted_at": "<ts:42>",
         "accepted_by_user_id": "<user:bob>",
-        "created_at": "<ts:32>",
+        "created_at": "<ts:42>",
         "decline_reason": null,
         "declined_at": null,
-        "expires_at": "<ts:39>",
+        "expires_at": "<ts:45>",
         "id": "<invitation:main>",
         "invited_by_participant_id": "<participant:ada@main>",
-        "message_confirmed_at": "<ts:32>",
+        "message_confirmed_at": "<ts:42>",
         "name": "Bob Ross",
         "session_id": "<session:main>",
         "status": "ACCEPTED"
@@ -372,7 +372,7 @@
         "content": "Yes, I feel heard.",
         "content_hash": "be08556ef2be793cd9c990718f154d8383556538137089c5661c075c8073c437",
         "conversation_id": "<conversation:bob@main/MAIN>",
-        "created_at": "<ts:27>",
+        "created_at": "<ts:41>",
         "id": "<message:bob@main#10>",
         "kind": "CHAT",
         "refining_need_id": null,
@@ -456,7 +456,7 @@
         "content": "I understand. How long has this been going on?",
         "content_hash": "3b6b66475f0fb4bc4ac14529a80b4edde0ac2ddf9d5a4bb2bfac9a62aced149e",
         "conversation_id": "<conversation:bob@main/MAIN>",
-        "created_at": "<ts:24>",
+        "created_at": "<ts:38>",
         "id": "<message:bob@main#7>",
         "kind": "CHAT",
         "refining_need_id": null,
@@ -468,7 +468,7 @@
         "content": "Months now. I don't know how to get through to them.",
         "content_hash": "799a349d8d43a9abdced4507b4fe9e61543d5f7fc44054028e3cf222148620e1",
         "conversation_id": "<conversation:bob@main/MAIN>",
-        "created_at": "<ts:25>",
+        "created_at": "<ts:39>",
         "id": "<message:bob@main#8>",
         "kind": "CHAT",
         "refining_need_id": null,
@@ -480,7 +480,7 @@
         "content": "Do you feel like I understand what you've been going through?",
         "content_hash": "0fff55e8b8ee6d0e5ec8c028d98d389d6288f578101ce5717052c69a12d8cc7a",
         "conversation_id": "<conversation:bob@main/MAIN>",
-        "created_at": "<ts:26>",
+        "created_at": "<ts:40>",
         "id": "<message:bob@main#9>",
         "kind": "CHAT",
         "refining_need_id": null,
@@ -496,7 +496,7 @@
       "<participant:ada@main>": {
         "display_name": "Ada Lovelace",
         "id": "<participant:ada@main>",
-        "joined_at": "<ts:30>",
+        "joined_at": "<ts:28>",
         "kind": "human",
         "left_at": null,
         "session_id": "<session:main>",
@@ -505,7 +505,7 @@
       "<participant:bob@main>": {
         "display_name": "Bob Ross",
         "id": "<participant:bob@main>",
-        "joined_at": "<ts:30>",
+        "joined_at": "<ts:29>",
         "kind": "human",
         "left_at": null,
         "session_id": "<session:main>",
@@ -531,12 +531,12 @@
       "<milestone:bob@main/compact_signed>": {
         "milestone_key": "compact_signed",
         "participant_id": "<participant:bob@main>",
-        "reached_at": "<ts:24>"
+        "reached_at": "<ts:38>"
       },
       "<milestone:bob@main/feel_heard>": {
         "milestone_key": "feel_heard",
         "participant_id": "<participant:bob@main>",
-        "reached_at": "<ts:35>"
+        "reached_at": "<ts:44>"
       }
     },
     "proposal": {},
@@ -550,14 +550,14 @@
         "created_at": "<ts:14>",
         "distilled_at": null,
         "id": "<reflection:ada#1>",
-        "linked_at": "<ts:38>",
+        "linked_at": "<ts:37>",
         "linked_session_id": "<session:main>",
         "status": "ACTIVE",
         "summary": "Ada traced her scorekeeping about chores to watching her mother never rest, and is afraid of repeating it.",
         "summary_doc": null,
         "theme": "inherited resentment about rest",
         "title": "Keeping score like my mother did",
-        "updated_at": "<ts:38>",
+        "updated_at": "<ts:37>",
         "user_id": "<user:ada>"
       }
     },
@@ -579,7 +579,7 @@
     },
     "session": {
       "<session:main>": {
-        "created_at": "<ts:31>",
+        "created_at": "<ts:30>",
         "id": "<session:main>",
         "previous_session_id": null,
         "relationship_id": "<relationship:main>",
@@ -596,25 +596,25 @@
     "user": {
       "<user:ada>": {
         "clerk_id": "<clerkId:ada>",
-        "created_at": "<ts:28>",
+        "created_at": "<ts:24>",
         "deleted_at": null,
         "email": "ada@e2e.test",
         "first_name": null,
         "id": "<user:ada>",
         "last_name": null,
         "name": "Ada Lovelace",
-        "updated_at": "<ts:28>"
+        "updated_at": "<ts:25>"
       },
       "<user:bob>": {
         "clerk_id": "<clerkId:bob>",
-        "created_at": "<ts:29>",
+        "created_at": "<ts:26>",
         "deleted_at": null,
         "email": "bob@e2e.test",
         "first_name": null,
         "id": "<user:bob>",
         "last_name": null,
         "name": "Bob Ross",
-        "updated_at": "<ts:29>"
+        "updated_at": "<ts:27>"
       }
     }
   },
@@ -625,7 +625,7 @@
       "body": {
         "data": {
           "session": {
-            "createdAt": "<ts:2>",
+            "createdAt": "<ts:3>",
             "currentStage": 2,
             "id": "<session:main>",
             "myProgress": {
@@ -663,7 +663,7 @@
             "id": "<user:bob>",
             "last_name": null,
             "name": "Bob Ross",
-            "updated_at": "<ts:1>"
+            "updated_at": "<ts:2>"
           },
           "after": {
             "clerk_id": "e2e_<user:bob>",
@@ -773,7 +773,7 @@
                 "senderId": null,
                 "sessionId": "<session:main>",
                 "stage": 1,
-                "timestamp": "<ts:8>"
+                "timestamp": "<ts:10>"
               },
               {
                 "content": "Months now. I don't know how to get through to them.",
@@ -782,7 +782,7 @@
                 "senderId": "<user:bob>",
                 "sessionId": "<session:main>",
                 "stage": 1,
-                "timestamp": "<ts:9>"
+                "timestamp": "<ts:11>"
               },
               {
                 "content": "Do you feel like I understand what you've been going through?",
@@ -791,7 +791,7 @@
                 "senderId": null,
                 "sessionId": "<session:main>",
                 "stage": 1,
-                "timestamp": "<ts:10>"
+                "timestamp": "<ts:12>"
               },
               {
                 "content": "Yes, I feel heard.",
@@ -800,7 +800,7 @@
                 "senderId": "<user:bob>",
                 "sessionId": "<session:main>",
                 "stage": 1,
-                "timestamp": "<ts:11>"
+                "timestamp": "<ts:13>"
               }
             ]
           },
@@ -808,7 +808,7 @@
             "canAdvance": false,
             "milestones": {
               "feelHeardConfirmedAt": "<ts:15>",
-              "witnessStartedAt": "<ts:8>"
+              "witnessStartedAt": "<ts:10>"
             },
             "myProgress": {
               "completedAt": null,
@@ -826,7 +826,7 @@
             "sessionId": "<session:main>"
           },
           "session": {
-            "createdAt": "<ts:13>",
+            "createdAt": "<ts:9>",
             "currentStage": 2,
             "id": "<session:main>",
             "lastSeenChatItemId": null,
@@ -861,7 +861,7 @@
           ],
           "before": {
             "clerk_id": "e2e_<user:bob>",
-            "created_at": "<ts:12>",
+            "created_at": "<ts:8>",
             "deleted_at": null,
             "email": "bob@e2e.test",
             "first_name": null,
@@ -872,7 +872,7 @@
           },
           "after": {
             "clerk_id": "e2e_<user:bob>",
-            "created_at": "<ts:12>",
+            "created_at": "<ts:8>",
             "deleted_at": null,
             "email": "bob@e2e.test",
             "first_name": null,
@@ -893,7 +893,7 @@
             "commonGroundFoundAt": null,
             "feelHeardConfirmedAt": "<ts:4>",
             "needsIdentifiedAt": null,
-            "witnessStartedAt": "<ts:2>"
+            "witnessStartedAt": "<ts:3>"
           },
           "myProgress": {
             "completedAt": null,
@@ -923,7 +923,7 @@
           ],
           "before": {
             "clerk_id": "e2e_<user:bob>",
-            "created_at": "<ts:3>",
+            "created_at": "<ts:2>",
             "deleted_at": null,
             "email": "bob@e2e.test",
             "first_name": null,
@@ -934,7 +934,7 @@
           },
           "after": {
             "clerk_id": "e2e_<user:bob>",
-            "created_at": "<ts:3>",
+            "created_at": "<ts:2>",
             "deleted_at": null,
             "email": "bob@e2e.test",
             "first_name": null,
@@ -1021,7 +1021,7 @@
               "senderId": null,
               "sessionId": "<session:main>",
               "stage": 1,
-              "timestamp": "<ts:7>"
+              "timestamp": "<ts:8>"
             },
             {
               "content": "Months now. I don't know how to get through to them.",
@@ -1031,7 +1031,7 @@
               "senderId": "<user:bob>",
               "sessionId": "<session:main>",
               "stage": 1,
-              "timestamp": "<ts:8>"
+              "timestamp": "<ts:9>"
             },
             {
               "content": "Do you feel like I understand what you've been going through?",
@@ -1041,7 +1041,7 @@
               "senderId": null,
               "sessionId": "<session:main>",
               "stage": 1,
-              "timestamp": "<ts:9>"
+              "timestamp": "<ts:10>"
             },
             {
               "content": "Yes, I feel heard.",
@@ -1051,7 +1051,7 @@
               "senderId": "<user:bob>",
               "sessionId": "<session:main>",
               "stage": 1,
-              "timestamp": "<ts:10>"
+              "timestamp": "<ts:11>"
             }
           ]
         },
@@ -1067,7 +1067,7 @@
           ],
           "before": {
             "clerk_id": "e2e_<user:bob>",
-            "created_at": "<ts:11>",
+            "created_at": "<ts:7>",
             "deleted_at": null,
             "email": "bob@e2e.test",
             "first_name": null,
@@ -1078,7 +1078,7 @@
           },
           "after": {
             "clerk_id": "e2e_<user:bob>",
-            "created_at": "<ts:11>",
+            "created_at": "<ts:7>",
             "deleted_at": null,
             "email": "bob@e2e.test",
             "first_name": null,
@@ -1750,7 +1750,7 @@
           "walkthrough": {
             "currentIndex": 0,
             "currentNeed": null,
-            "defaultCheckInDate": "2026-10-31",
+            "defaultCheckInDate": "<date:today+10d>",
             "ownNeeds": [],
             "partnerNeeds": [],
             "phase": "QUALITY_REVIEW",
@@ -2048,7 +2048,7 @@
               "myProgress": {
                 "completedAt": null,
                 "stage": 2,
-                "startedAt": "<ts:4>",
+                "startedAt": "<ts:5>",
                 "status": "IN_PROGRESS"
               },
               "partner": {
@@ -2074,7 +2074,7 @@
                 "partnerStatus": "Ada Lovelace is working on their perspective",
                 "userStatus": "Working on understanding their perspective"
               },
-              "updatedAt": "<ts:3>"
+              "updatedAt": "<ts:4>"
             }
           ]
         },
@@ -2680,7 +2680,7 @@
                 "senderId": null,
                 "sessionId": "<session:main>",
                 "stage": 1,
-                "timestamp": "<ts:8>"
+                "timestamp": "<ts:10>"
               },
               {
                 "content": "Months now. I don't know how to get through to them.",
@@ -2689,7 +2689,7 @@
                 "senderId": "<user:bob>",
                 "sessionId": "<session:main>",
                 "stage": 1,
-                "timestamp": "<ts:9>"
+                "timestamp": "<ts:11>"
               },
               {
                 "content": "Do you feel like I understand what you've been going through?",
@@ -2698,7 +2698,7 @@
                 "senderId": null,
                 "sessionId": "<session:main>",
                 "stage": 1,
-                "timestamp": "<ts:10>"
+                "timestamp": "<ts:12>"
               },
               {
                 "content": "Yes, I feel heard.",
@@ -2707,7 +2707,7 @@
                 "senderId": "<user:bob>",
                 "sessionId": "<session:main>",
                 "stage": 1,
-                "timestamp": "<ts:11>"
+                "timestamp": "<ts:13>"
               },
               {
                 "content": "Some days I think we are just two tired people keeping score.",
@@ -2733,7 +2733,7 @@
             "canAdvance": false,
             "milestones": {
               "feelHeardConfirmedAt": "<ts:15>",
-              "witnessStartedAt": "<ts:8>"
+              "witnessStartedAt": "<ts:10>"
             },
             "myProgress": {
               "completedAt": null,
@@ -2751,7 +2751,7 @@
             "sessionId": "<session:main>"
           },
           "session": {
-            "createdAt": "<ts:13>",
+            "createdAt": "<ts:9>",
             "currentStage": 2,
             "id": "<session:main>",
             "lastSeenChatItemId": null,
@@ -2786,7 +2786,7 @@
           ],
           "before": {
             "clerk_id": "e2e_<user:bob>",
-            "created_at": "<ts:12>",
+            "created_at": "<ts:8>",
             "deleted_at": null,
             "email": "bob@e2e.test",
             "first_name": null,
@@ -2797,7 +2797,7 @@
           },
           "after": {
             "clerk_id": "e2e_<user:bob>",
-            "created_at": "<ts:12>",
+            "created_at": "<ts:8>",
             "deleted_at": null,
             "email": "bob@e2e.test",
             "first_name": null,
@@ -2818,7 +2818,7 @@
             "commonGroundFoundAt": null,
             "feelHeardConfirmedAt": "<ts:4>",
             "needsIdentifiedAt": null,
-            "witnessStartedAt": "<ts:2>"
+            "witnessStartedAt": "<ts:3>"
           },
           "myProgress": {
             "completedAt": null,
@@ -2848,7 +2848,7 @@
           ],
           "before": {
             "clerk_id": "e2e_<user:bob>",
-            "created_at": "<ts:3>",
+            "created_at": "<ts:2>",
             "deleted_at": null,
             "email": "bob@e2e.test",
             "first_name": null,
@@ -2859,7 +2859,7 @@
           },
           "after": {
             "clerk_id": "e2e_<user:bob>",
-            "created_at": "<ts:3>",
+            "created_at": "<ts:2>",
             "deleted_at": null,
             "email": "bob@e2e.test",
             "first_name": null,
@@ -2946,7 +2946,7 @@
               "senderId": null,
               "sessionId": "<session:main>",
               "stage": 1,
-              "timestamp": "<ts:7>"
+              "timestamp": "<ts:8>"
             },
             {
               "content": "Months now. I don't know how to get through to them.",
@@ -2956,7 +2956,7 @@
               "senderId": "<user:bob>",
               "sessionId": "<session:main>",
               "stage": 1,
-              "timestamp": "<ts:8>"
+              "timestamp": "<ts:9>"
             },
             {
               "content": "Do you feel like I understand what you've been going through?",
@@ -2966,7 +2966,7 @@
               "senderId": null,
               "sessionId": "<session:main>",
               "stage": 1,
-              "timestamp": "<ts:9>"
+              "timestamp": "<ts:10>"
             },
             {
               "content": "Yes, I feel heard.",
@@ -2976,7 +2976,7 @@
               "senderId": "<user:bob>",
               "sessionId": "<session:main>",
               "stage": 1,
-              "timestamp": "<ts:10>"
+              "timestamp": "<ts:11>"
             },
             {
               "content": "Some days I think we are just two tired people keeping score.",
@@ -3012,7 +3012,7 @@
           ],
           "before": {
             "clerk_id": "e2e_<user:bob>",
-            "created_at": "<ts:11>",
+            "created_at": "<ts:7>",
             "deleted_at": null,
             "email": "bob@e2e.test",
             "first_name": null,
@@ -3023,7 +3023,7 @@
           },
           "after": {
             "clerk_id": "e2e_<user:bob>",
-            "created_at": "<ts:11>",
+            "created_at": "<ts:7>",
             "deleted_at": null,
             "email": "bob@e2e.test",
             "first_name": null,
@@ -3695,7 +3695,7 @@
           "walkthrough": {
             "currentIndex": 0,
             "currentNeed": null,
-            "defaultCheckInDate": "2026-10-31",
+            "defaultCheckInDate": "<date:today+10d>",
             "ownNeeds": [],
             "partnerNeeds": [],
             "phase": "QUALITY_REVIEW",
@@ -3993,7 +3993,7 @@
               "myProgress": {
                 "completedAt": null,
                 "stage": 2,
-                "startedAt": "<ts:4>",
+                "startedAt": "<ts:5>",
                 "status": "IN_PROGRESS"
               },
               "partner": {
@@ -4019,7 +4019,7 @@
                 "partnerStatus": "Ada Lovelace is working on their perspective",
                 "userStatus": "Working on understanding their perspective"
               },
-              "updatedAt": "<ts:3>"
+              "updatedAt": "<ts:4>"
             }
           ]
         },
@@ -4357,7 +4357,7 @@
             "id": "<user:ada>",
             "last_name": null,
             "name": "Ada Lovelace",
-            "updated_at": "<ts:1>"
+            "updated_at": "<ts:2>"
           },
           "after": {
             "clerk_id": "e2e_<user:ada>",

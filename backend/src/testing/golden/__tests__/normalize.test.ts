@@ -15,6 +15,24 @@
 
 import { mergeFallbackLabels, normalize, LabelMap } from '../normalize';
 
+describe('bare calendar dates (TS-5 fix round 2)', () => {
+  const map: LabelMap = { labels: new Map() };
+  const window = { from: '2026-10-22T00:23:10.000Z', to: '2026-10-22T00:30:00.000Z' };
+
+  it('become their day offset from the run window’s start date', () => {
+    expect(normalize({ d: '2026-11-01', e: '2026-10-22', f: '2026-10-20' }, map, window).value).toEqual({
+      d: '<date:today+10d>',
+      e: '<date:today+0d>',
+      f: '<date:today-2d>',
+    });
+  });
+
+  it('are left alone without a window, and inside longer text', () => {
+    expect(normalize({ d: '2026-11-01' }, map).value).toEqual({ d: '2026-11-01' });
+    expect(normalize({ d: 'due 2026-11-01' }, map, window).value).toEqual({ d: 'due 2026-11-01' });
+  });
+});
+
 describe('mergeFallbackLabels (fixture-template labels for rows a run deleted, TS-5)', () => {
   const lm = (entries: Array<[string, string]>): LabelMap => ({ labels: new Map(entries) });
 

@@ -379,9 +379,25 @@ export async function writeCurrentShape(tx: Tx, scenario: Scenario, users: UserR
   }
   const clocks = new Set(referencedClocks(scenario));
   const instants: Partial<Record<Clock, Date>> = {};
+  // `explicitStamps` (TS-5 fix round 2, the TS-5 stages only): every stamp is
+  // a fixed offset from ONE clock read, so no two rows can land in — or leave —
+  // a shared millisecond by luck, and a rebuild cannot move a golden's
+  // timestamp ranks or a createdAt-ordered read. The clocks become fixed
+  // offsets of that read, and every column the old factory left to
+  // `@default(now())` / `@updatedAt` gets an explicit, distinct value from
+  // `auto()`. Off (the 13 pre-TS-5 stages), nothing below changes a write.
+  const explicit = scenario.currentShape?.explicitStamps === true;
+  const base = explicit ? new Date() : undefined;
+  const CLOCK_OFFSET_MS: Record<Clock, number> = { session: 0, invitation: 10, scenario: 20, late: 30 };
   const readClock = (c: Clock) => {
-    if (clocks.has(c)) instants[c] = new Date();
+    if (clocks.has(c)) instants[c] = base ? new Date(base.getTime() + CLOCK_OFFSET_MS[c]) : new Date();
   };
+  // Auto stamps sit a minute before the clocks, one millisecond apart, in write order.
+  let autoN = 0;
+  const auto = (): Date => new Date(base!.getTime() - 60_000 + autoN++);
+  /** `{col: auto()}` for each column in explicit mode; `{}` (database default) otherwise. */
+  const autoCols = (...cols: string[]): Record<string, Date> =>
+    explicit ? Object.fromEntries(cols.map(c => [c, auto()])) : {};
   const t = (s: Stamp) => resolveStamp(s, instants);
   const tOpt = (s: Stamp | undefined) => (s ? t(s) : undefined);
 
@@ -397,6 +413,7 @@ export async function writeCurrentShape(tx: Tx, scenario: Scenario, users: UserR
           name: u.name,
           clerkId: `e2e_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
           lastMoodIntensity: 7,
+          ...autoCols('createdAt', 'updatedAt'),
         },
       }),
     );
@@ -415,8 +432,11 @@ export async function writeCurrentShape(tx: Tx, scenario: Scenario, users: UserR
   const members = users.map((u, i) => ({
     userId: userRows[i].id,
     nickname: i === 0 ? users[1]?.name || null : users[0].name,
+    ...autoCols('joinedAt'),
   }));
-  const relationship = await tx.relationship.create({ data: { members: { create: members } } });
+  const relationship = await tx.relationship.create({
+    data: { ...autoCols('createdAt', 'updatedAt'), members: { create: members } },
+  });
 
   // --- Session -----------------------------------------------------------------
   readClock('session');
@@ -424,6 +444,7 @@ export async function writeCurrentShape(tx: Tx, scenario: Scenario, users: UserR
     data: {
       relationshipId: relationship.id,
       status: sessionStatus(scenario),
+      ...autoCols('createdAt', 'updatedAt'),
       ...(scenario.topic
         ? { topicFrame: scenario.topic.frame, topicFrameConfirmedAt: t(scenario.topic.confirmedAt) }
         : {}),
@@ -449,10 +470,12 @@ export async function writeCurrentShape(tx: Tx, scenario: Scenario, users: UserR
   });
 
   // --- Vessels -----------------------------------------------------------------
-  const sharedVessel = await tx.sharedVessel.create({ data: { sessionId } });
+  const sharedVessel = await tx.sharedVessel.create({ data: { sessionId, ...autoCols('createdAt', 'updatedAt') } });
   const vessels: Array<{ id: string } | undefined> = [];
   for (const row of userRows) {
-    vessels.push(await tx.userVessel.create({ data: { sessionId, userId: row.id } }));
+    vessels.push(
+      await tx.userVessel.create({ data: { sessionId, userId: row.id, ...autoCols('createdAt', 'updatedAt') } }),
+    );
   }
 
   readClock('scenario');
@@ -478,14 +501,16 @@ export async function writeCurrentShape(tx: Tx, scenario: Scenario, users: UserR
     if (!vessel) throw new Error(`No vessel for participant "${p.key}"`);
     const confirmedAt = p.milestones.needs_confirmed;
     if (!confirmedAt) throw new Error(`Participant "${p.key}" has needs but no needs_confirmed milestone`);
-    return (p.needs ?? []).map(n => ({
+    return (p.needs ?? []).map((n, k) => ({
       vesselId: vessel.id,
       need: n.need,
       category: n.category,
       evidence: n.evidence ?? [],
       aiConfidence: n.aiConfidence,
       confirmed: n.confirmed,
-      createdAt: t(confirmedAt),
+      // Explicit mode: one millisecond apart, so creation order is also the
+      // createdAt order (a need's rank no longer needs the id tiebreak).
+      createdAt: explicit ? new Date(t(confirmedAt).getTime() + k) : t(confirmedAt),
     }));
   };
 
@@ -511,6 +536,7 @@ export async function writeCurrentShape(tx: Tx, scenario: Scenario, users: UserR
           requestedByUserId: userRows[i].id,
           decision: 'GRANTED',
           decidedAt: t(sharedAt),
+          ...autoCols('createdAt'),
         },
       });
     }
@@ -528,7 +554,7 @@ export async function writeCurrentShape(tx: Tx, scenario: Scenario, users: UserR
           userId: uid,
           stage: row.stage,
           status: row.status,
-          startedAt: tOpt(row.startedAt),
+          startedAt: tOpt(row.startedAt) ?? (explicit ? auto() : undefined),
           completedAt: tOpt(row.completedAt),
           gatesSatisfied: gatesToJson(row.gates, t),
         },
@@ -543,7 +569,7 @@ export async function writeCurrentShape(tx: Tx, scenario: Scenario, users: UserR
       if (!submittedAt)
         throw new Error(`Participant "${p.key}" has an empathy attempt but no empathy_submitted milestone`);
       const draft = await tx.empathyDraft.create({
-        data: { sessionId, userId: uid, content: e.statement, readyToShare: true },
+        data: { sessionId, userId: uid, content: e.statement, readyToShare: true, ...autoCols('createdAt', 'updatedAt') },
       });
       await tx.empathyAttempt.create({
         data: {
@@ -567,6 +593,7 @@ export async function writeCurrentShape(tx: Tx, scenario: Scenario, users: UserR
             requestedByUserId: uid,
             decision: 'GRANTED',
             decidedAt: t(submittedAt),
+            ...autoCols('createdAt'),
           },
         });
       }
@@ -638,6 +665,7 @@ export async function writeCurrentShape(tx: Tx, scenario: Scenario, users: UserR
         suggestedReason: result.suggestedShareReason,
         ...(offer.shared ? { sharedContent: offer.shared.content, sharedAt: t(offer.shared.at) } : {}),
         ...(offer.deliveredAt ? { deliveryStatus: 'DELIVERED' as const, deliveredAt: t(offer.deliveredAt) } : {}),
+        ...autoCols('createdAt', 'updatedAt'),
       },
     });
     for (const m of messages ?? []) await writeMessage(m.to, m);
@@ -656,6 +684,7 @@ export async function writeCurrentShape(tx: Tx, scenario: Scenario, users: UserR
           needsAddressed: st.needsAddressed,
           duration: st.duration,
           createdAt: t(st.at),
+          ...autoCols('updatedAt'),
         },
       });
       strategyIds.set(st.key, row.id);
@@ -716,6 +745,7 @@ export async function writeCurrentShape(tx: Tx, scenario: Scenario, users: UserR
             ? { removedAt: t(pr.removed.at), removedByUserId: userId(pr.removed.by), removalReason: pr.removed.reason }
             : {}),
           coverageSummary: pr.coverageSummary,
+          ...autoCols('createdAt', 'updatedAt'),
         },
       });
       proposalIds.set(pr.key, row.id);
@@ -807,9 +837,13 @@ export async function writeCurrentShape(tx: Tx, scenario: Scenario, users: UserR
         checkInAt: tOpt(c.checkInAt) ?? null,
         closedByUserId: c.closedBy === null ? null : userId(c.closedBy),
         closedAt: t(c.at),
+        ...autoCols('createdAt'),
       },
     });
-    await tx.session.update({ where: { id: sessionId }, data: { status: 'RESOLVED', resolvedAt: t(c.at) } });
+    await tx.session.update({
+      where: { id: sessionId },
+      data: { status: 'RESOLVED', resolvedAt: t(c.at), ...autoCols('updatedAt') },
+    });
   }
 
   // --- Inner Work and prompt captures (TS-5; no earlier scenario has either) ----
@@ -829,6 +863,7 @@ export async function writeCurrentShape(tx: Tx, scenario: Scenario, users: UserR
           summary: r.summary,
           ...(r.linkedToSession ? { linkedPartnerSessionId: sessionId } : {}),
           createdAt: t(r.at),
+          ...autoCols('updatedAt'),
         },
       });
       reflectionIds.push(row.id);

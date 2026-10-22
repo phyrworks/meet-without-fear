@@ -81,6 +81,9 @@ const SEEDED_CLERKID_RE = /(?<![a-z0-9_])e2e_\d{10,}_[a-z0-9]{4,}(?![a-z0-9])/g;
 /** `2026-08-12 23:52:14.936` or ISO-8601. */
 const TIMESTAMP_RE = /\b\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?(?:Z|[+-]\d{2}:?\d{2})?\b/g;
 
+/** A string that is exactly an ISO calendar date. */
+const DATE_ONLY_RE = /^\d{4}-\d{2}-\d{2}$/;
+
 export interface LabelMap {
   /** id -> structural label */
   labels: Map<string, string>;
@@ -410,6 +413,15 @@ export function normalize<T>(value: T, map: LabelMap, window?: FreshWindow): Nor
   };
 
   const normalizeString = (s: string): string => {
+    // A bare calendar date (`2026-10-31`) is wall-clock-relative too — Stage
+    // 4's `defaultCheckInDate` is today (UTC) + 10 days — but TIMESTAMP_RE
+    // needs a time. Found when a golden recorded on 2026-10-21 went red after
+    // UTC midnight (TS-5 fix round 2). Within a run window it becomes its day
+    // offset from the window's start date: `<date:today+10d>`.
+    if (window && DATE_ONLY_RE.test(s)) {
+      const days = Math.round((Date.parse(`${s}T00:00:00Z`) - Date.parse(`${window.from.slice(0, 10)}T00:00:00Z`)) / 86_400_000);
+      return `<date:today${days >= 0 ? '+' : ''}${days}d>`;
+    }
     let out = s.replace(TIMESTAMP_RE, m => {
       const stamp = normalizeStampText(m);
       if (isFresh(stamp)) return '<ts:fresh>';

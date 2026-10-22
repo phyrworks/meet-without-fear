@@ -8,7 +8,7 @@
       "body": {
         "data": {
           "session": {
-            "createdAt": "<ts:2>",
+            "createdAt": "<ts:3>",
             "currentStage": 4,
             "id": "<session:main>",
             "myProgress": {
@@ -64,7 +64,7 @@
             "notificationPreferences": null,
             "privacyPreferences": null,
             "pushToken": null,
-            "updatedAt": "<ts:1>"
+            "updatedAt": "<ts:2>"
           },
           "changedFields": [
             "clerkId",
@@ -115,7 +115,7 @@
             "notificationPreferences": null,
             "privacyPreferences": null,
             "pushToken": null,
-            "updatedAt": "<ts:1>"
+            "updatedAt": "<ts:2>"
           },
           "changedFields": [
             "clerkId",
@@ -2029,21 +2029,21 @@
           "records": [
             {
               "contentType": "IDENTIFIED_NEED",
-              "createdAt": "<ts:5>",
+              "createdAt": "<ts:6>",
               "decidedAt": "<ts:2>",
               "decision": "GRANTED",
-              "id": "<consent:bob/IDENTIFIED_NEED/#1>",
+              "id": "<consent:bob/IDENTIFIED_NEED/#2>",
               "revokedAt": null,
-              "targetId": "<need:bob#1>"
+              "targetId": "<need:bob#2>"
             },
             {
               "contentType": "IDENTIFIED_NEED",
               "createdAt": "<ts:5>",
               "decidedAt": "<ts:2>",
               "decision": "GRANTED",
-              "id": "<consent:bob/IDENTIFIED_NEED/#2>",
+              "id": "<consent:bob/IDENTIFIED_NEED/#1>",
               "revokedAt": null,
-              "targetId": "<need:bob#2>"
+              "targetId": "<need:bob#1>"
             },
             {
               "contentType": "EMPATHY_DRAFT",
@@ -2186,7 +2186,7 @@
               "aiConfidence": 0.95,
               "category": "CONNECTION",
               "confirmed": true,
-              "createdAt": "<ts:1>",
+              "createdAt": "<ts:2>",
               "deletedAt": null,
               "description": "Support",
               "evidence": [],
@@ -2208,7 +2208,7 @@
             "biometricEnabled": false,
             "biometricEnrolledAt": null,
             "clerkId": "e2e_<user:bob>",
-            "createdAt": "<ts:2>",
+            "createdAt": "<ts:3>",
             "email": "bob@e2e.test",
             "firstName": null,
             "globalFacts": null,
@@ -2226,7 +2226,7 @@
             "biometricEnabled": false,
             "biometricEnrolledAt": null,
             "clerkId": "e2e_<user:bob>",
-            "createdAt": "<ts:2>",
+            "createdAt": "<ts:3>",
             "email": "bob@e2e.test",
             "firstName": null,
             "globalFacts": null,
@@ -2258,7 +2258,7 @@
             "biometricEnabled": false,
             "biometricEnrolledAt": null,
             "clerkId": "e2e_<user:bob>",
-            "createdAt": "<ts:2>",
+            "createdAt": "<ts:3>",
             "email": "bob@e2e.test",
             "firstName": null,
             "globalFacts": null,
@@ -2276,7 +2276,7 @@
             "biometricEnabled": false,
             "biometricEnrolledAt": null,
             "clerkId": "e2e_<user:bob>",
-            "createdAt": "<ts:2>",
+            "createdAt": "<ts:3>",
             "email": "bob@e2e.test",
             "firstName": null,
             "globalFacts": null,
@@ -2482,7 +2482,7 @@
           "walkthrough": {
             "currentIndex": 0,
             "currentNeed": null,
-            "defaultCheckInDate": "2026-10-31",
+            "defaultCheckInDate": "<date:today+10d>",
             "ownNeeds": [],
             "partnerNeeds": [],
             "phase": "QUALITY_REVIEW",
@@ -3088,7 +3088,7 @@
               "lastSeenChatItemId": null,
               "lastViewedAt": null,
               "myProgress": {
-                "completedAt": "<ts:4>",
+                "completedAt": "<ts:5>",
                 "stage": 4,
                 "startedAt": "<ts:1>",
                 "status": "COMPLETED"
@@ -3100,7 +3100,7 @@
               },
               "partnerActionNeeded": [],
               "partnerProgress": {
-                "completedAt": "<ts:4>",
+                "completedAt": "<ts:5>",
                 "stage": 4,
                 "startedAt": "<ts:1>",
                 "status": "COMPLETED"
@@ -3112,7 +3112,7 @@
                 "partnerStatus": "Ada Lovelace is also ready",
                 "userStatus": "You've shared your ideas for next steps"
               },
-              "updatedAt": "<ts:3>"
+              "updatedAt": "<ts:4>"
             }
           ]
         },
@@ -3960,7 +3960,7 @@
         },
         {
           "before": {
-            "createdAt": "<ts:27>",
+            "createdAt": "<ts:30>",
             "decidedAt": "<ts:9>",
             "decision": "GRANTED",
             "id": "<consent:ada/EMPATHY_DRAFT/empathyDraft:ada>",
@@ -3978,8 +3978,8 @@
         },
         {
           "before": {
-            "createdAt": "<ts:28>",
-            "decidedAt": "<ts:17>",
+            "createdAt": "<ts:31>",
+            "decidedAt": "<ts:18>",
             "decision": "GRANTED",
             "id": "<consent:ada/IDENTIFIED_NEED/#1>",
             "metadata": null,
@@ -3996,8 +3996,8 @@
         },
         {
           "before": {
-            "createdAt": "<ts:29>",
-            "decidedAt": "<ts:17>",
+            "createdAt": "<ts:32>",
+            "decidedAt": "<ts:18>",
             "decision": "GRANTED",
             "id": "<consent:ada/IDENTIFIED_NEED/#2>",
             "metadata": null,
@@ -4056,11 +4056,11 @@
         {
           "before": {
             "content": "I think you come home hollowed out and the chores feel like a verdict on you.",
-            "createdAt": "<ts:26>",
+            "createdAt": "<ts:28>",
             "id": "<empathyDraft:ada>",
             "readyToShare": true,
             "sessionId": "<session:main>",
-            "updatedAt": "<ts:26>",
+            "updatedAt": "<ts:29>",
             "userId": "<user:ada>",
             "version": 1
           },
@@ -4093,7 +4093,7 @@
             "aiConfidence": 0.95,
             "category": "FAIRNESS",
             "confirmed": true,
-            "createdAt": "<ts:15>",
+            "createdAt": "<ts:16>",
             "deletedAt": null,
             "evidence": [
               "Ada said the mental load of planning meals is hers alone"
@@ -4148,7 +4148,7 @@
             "summary": "Ada traced her scorekeeping about chores to watching her mother never rest, and is afraid of repeating it.",
             "theme": "inherited resentment about rest",
             "title": "Keeping score like my mother did",
-            "updatedAt": "<ts:31>",
+            "updatedAt": "<ts:34>",
             "userId": "<user:ada>"
           },
           "key": "\"<innerWork:ada#1>\"",
@@ -4157,15 +4157,15 @@
         },
         {
           "before": {
-            "acceptedAt": "<ts:23>",
-            "createdAt": "<ts:23>",
+            "acceptedAt": "<ts:35>",
+            "createdAt": "<ts:35>",
             "declineReason": null,
             "declinedAt": null,
-            "expiresAt": "<ts:32>",
+            "expiresAt": "<ts:37>",
             "id": "<invitation:main>",
             "invitedById": "<user:ada>",
             "messageConfirmed": true,
-            "messageConfirmedAt": "<ts:23>",
+            "messageConfirmedAt": "<ts:35>",
             "name": "Bob Ross",
             "sessionId": "<session:main>",
             "status": "ACCEPTED"
@@ -4473,7 +4473,7 @@
         {
           "before": {
             "id": "<member:ada#1>",
-            "joinedAt": "<ts:21>",
+            "joinedAt": "<ts:23>",
             "nickname": "Bob Ross",
             "relationshipId": "<relationship:main>",
             "role": "member",
@@ -4485,7 +4485,7 @@
         },
         {
           "after": {
-            "createdAt": "<ts:22>",
+            "createdAt": "<ts:24>",
             "id": "<session:main>",
             "previousSessionId": null,
             "relationshipId": "<relationship:main>",
@@ -4497,7 +4497,7 @@
             "updatedAt": "<ts:fresh>"
           },
           "before": {
-            "createdAt": "<ts:22>",
+            "createdAt": "<ts:24>",
             "id": "<session:main>",
             "previousSessionId": null,
             "relationshipId": "<relationship:main>",
@@ -4506,7 +4506,7 @@
             "topicFrame": null,
             "topicFrameConfirmedAt": null,
             "type": "CONFLICT_RESOLUTION",
-            "updatedAt": "<ts:22>"
+            "updatedAt": "<ts:25>"
           },
           "changedFields": [
             "status",
@@ -4583,12 +4583,12 @@
         },
         {
           "before": {
-            "completedAt": "<ts:17>",
+            "completedAt": "<ts:18>",
             "gatesSatisfied": {
               "needsIdentified": true,
               "needsIdentifiedAt": "<ts:15>",
               "needsValidated": true,
-              "needsValidatedAt": "<ts:16>"
+              "needsValidatedAt": "<ts:17>"
             },
             "id": "<progress:ada/stage3>",
             "isSynthesisDirty": true,
@@ -4605,7 +4605,7 @@
         },
         {
           "before": {
-            "completedAt": "<ts:25>",
+            "completedAt": "<ts:36>",
             "gatesSatisfied": {
               "agreementConfirmed": true,
               "agreementCreated": true,
@@ -4615,7 +4615,7 @@
             "isSynthesisDirty": true,
             "sessionId": "<session:main>",
             "stage": 4,
-            "startedAt": "<ts:17>",
+            "startedAt": "<ts:18>",
             "status": "COMPLETED",
             "synthesisLastUpdated": null,
             "userId": "<user:ada>"
@@ -4629,7 +4629,7 @@
             "capturedFromMessageId": null,
             "consentRecordId": null,
             "coverageSummary": null,
-            "createdAt": "<ts:18>",
+            "createdAt": "<ts:19>",
             "createdByUserId": null,
             "description": "Weekly check-in on Sundays to discuss upcoming week and divide tasks",
             "duration": "ongoing",
@@ -4647,13 +4647,13 @@
             "sessionId": "<session:main>",
             "source": "USER_SUBMITTED",
             "status": "ACTIVE",
-            "updatedAt": "<ts:30>"
+            "updatedAt": "<ts:33>"
           },
           "before": {
             "capturedFromMessageId": null,
             "consentRecordId": null,
             "coverageSummary": null,
-            "createdAt": "<ts:18>",
+            "createdAt": "<ts:19>",
             "createdByUserId": "<user:ada>",
             "description": "Weekly check-in on Sundays to discuss upcoming week and divide tasks",
             "duration": "ongoing",
@@ -4671,7 +4671,7 @@
             "sessionId": "<session:main>",
             "source": "USER_SUBMITTED",
             "status": "ACTIVE",
-            "updatedAt": "<ts:30>"
+            "updatedAt": "<ts:33>"
           },
           "changedFields": [
             "createdByUserId"
@@ -4692,7 +4692,7 @@
               "<proposal:main#2>"
             ],
             "sessionId": "<session:main>",
-            "submittedAt": "<ts:19>",
+            "submittedAt": "<ts:20>",
             "userId": "<user:ada>"
           },
           "key": "\"<ranking:ada#1>\"",
@@ -4704,7 +4704,7 @@
             "biometricEnabled": false,
             "biometricEnrolledAt": null,
             "clerkId": "<clerkId:ada>",
-            "createdAt": "<ts:20>",
+            "createdAt": "<ts:21>",
             "email": "ada@e2e.test",
             "firstName": null,
             "globalFacts": null,
@@ -4716,7 +4716,7 @@
             "notificationPreferences": null,
             "privacyPreferences": null,
             "pushToken": null,
-            "updatedAt": "<ts:20>"
+            "updatedAt": "<ts:22>"
           },
           "key": "\"<user:ada>\"",
           "kind": "removed",
@@ -4727,7 +4727,7 @@
             "archivedAt": null,
             "contentEmbedding": null,
             "conversationSummary": null,
-            "createdAt": "<ts:24>",
+            "createdAt": "<ts:26>",
             "id": "<vessel:ada>",
             "lastActiveAt": null,
             "lastSeenChatItemId": null,
@@ -4735,7 +4735,7 @@
             "lastViewedShareTabAt": null,
             "notableFacts": null,
             "sessionId": "<session:main>",
-            "updatedAt": "<ts:24>",
+            "updatedAt": "<ts:27>",
             "userId": "<user:ada>"
           },
           "key": "\"<vessel:ada>\"",
@@ -4781,7 +4781,7 @@
         },
         {
           "before": {
-            "createdAt": "<ts:27>",
+            "createdAt": "<ts:30>",
             "decidedAt": "<ts:9>",
             "decision": "GRANTED",
             "id": "<consent:ada/EMPATHY_DRAFT/empathyDraft:ada>",
@@ -4799,8 +4799,8 @@
         },
         {
           "before": {
-            "createdAt": "<ts:28>",
-            "decidedAt": "<ts:17>",
+            "createdAt": "<ts:31>",
+            "decidedAt": "<ts:18>",
             "decision": "GRANTED",
             "id": "<consent:ada/IDENTIFIED_NEED/#1>",
             "metadata": null,
@@ -4817,8 +4817,8 @@
         },
         {
           "before": {
-            "createdAt": "<ts:29>",
-            "decidedAt": "<ts:17>",
+            "createdAt": "<ts:32>",
+            "decidedAt": "<ts:18>",
             "decision": "GRANTED",
             "id": "<consent:ada/IDENTIFIED_NEED/#2>",
             "metadata": null,
@@ -4877,11 +4877,11 @@
         {
           "before": {
             "content": "I think you come home hollowed out and the chores feel like a verdict on you.",
-            "createdAt": "<ts:26>",
+            "createdAt": "<ts:28>",
             "id": "<empathyDraft:ada>",
             "readyToShare": true,
             "sessionId": "<session:main>",
-            "updatedAt": "<ts:26>",
+            "updatedAt": "<ts:29>",
             "userId": "<user:ada>",
             "version": 1
           },
@@ -4914,7 +4914,7 @@
             "aiConfidence": 0.95,
             "category": "FAIRNESS",
             "confirmed": true,
-            "createdAt": "<ts:15>",
+            "createdAt": "<ts:16>",
             "deletedAt": null,
             "evidence": [
               "Ada said the mental load of planning meals is hers alone"
@@ -4969,7 +4969,7 @@
             "summary": "Ada traced her scorekeeping about chores to watching her mother never rest, and is afraid of repeating it.",
             "theme": "inherited resentment about rest",
             "title": "Keeping score like my mother did",
-            "updatedAt": "<ts:31>",
+            "updatedAt": "<ts:34>",
             "userId": "<user:ada>"
           },
           "key": "\"<innerWork:ada#1>\"",
@@ -4978,15 +4978,15 @@
         },
         {
           "before": {
-            "acceptedAt": "<ts:23>",
-            "createdAt": "<ts:23>",
+            "acceptedAt": "<ts:35>",
+            "createdAt": "<ts:35>",
             "declineReason": null,
             "declinedAt": null,
-            "expiresAt": "<ts:32>",
+            "expiresAt": "<ts:37>",
             "id": "<invitation:main>",
             "invitedById": "<user:ada>",
             "messageConfirmed": true,
-            "messageConfirmedAt": "<ts:23>",
+            "messageConfirmedAt": "<ts:35>",
             "name": "Bob Ross",
             "sessionId": "<session:main>",
             "status": "ACCEPTED"
@@ -5294,7 +5294,7 @@
         {
           "before": {
             "id": "<member:ada#1>",
-            "joinedAt": "<ts:21>",
+            "joinedAt": "<ts:23>",
             "nickname": "Bob Ross",
             "relationshipId": "<relationship:main>",
             "role": "member",
@@ -5306,7 +5306,7 @@
         },
         {
           "after": {
-            "createdAt": "<ts:22>",
+            "createdAt": "<ts:24>",
             "id": "<session:main>",
             "previousSessionId": null,
             "relationshipId": "<relationship:main>",
@@ -5318,7 +5318,7 @@
             "updatedAt": "<ts:fresh>"
           },
           "before": {
-            "createdAt": "<ts:22>",
+            "createdAt": "<ts:24>",
             "id": "<session:main>",
             "previousSessionId": null,
             "relationshipId": "<relationship:main>",
@@ -5327,7 +5327,7 @@
             "topicFrame": null,
             "topicFrameConfirmedAt": null,
             "type": "CONFLICT_RESOLUTION",
-            "updatedAt": "<ts:22>"
+            "updatedAt": "<ts:25>"
           },
           "changedFields": [
             "status",
@@ -5404,12 +5404,12 @@
         },
         {
           "before": {
-            "completedAt": "<ts:17>",
+            "completedAt": "<ts:18>",
             "gatesSatisfied": {
               "needsIdentified": true,
               "needsIdentifiedAt": "<ts:15>",
               "needsValidated": true,
-              "needsValidatedAt": "<ts:16>"
+              "needsValidatedAt": "<ts:17>"
             },
             "id": "<progress:ada/stage3>",
             "isSynthesisDirty": true,
@@ -5426,7 +5426,7 @@
         },
         {
           "before": {
-            "completedAt": "<ts:25>",
+            "completedAt": "<ts:36>",
             "gatesSatisfied": {
               "agreementConfirmed": true,
               "agreementCreated": true,
@@ -5436,7 +5436,7 @@
             "isSynthesisDirty": true,
             "sessionId": "<session:main>",
             "stage": 4,
-            "startedAt": "<ts:17>",
+            "startedAt": "<ts:18>",
             "status": "COMPLETED",
             "synthesisLastUpdated": null,
             "userId": "<user:ada>"
@@ -5450,7 +5450,7 @@
             "capturedFromMessageId": null,
             "consentRecordId": null,
             "coverageSummary": null,
-            "createdAt": "<ts:18>",
+            "createdAt": "<ts:19>",
             "createdByUserId": null,
             "description": "Weekly check-in on Sundays to discuss upcoming week and divide tasks",
             "duration": "ongoing",
@@ -5468,13 +5468,13 @@
             "sessionId": "<session:main>",
             "source": "USER_SUBMITTED",
             "status": "ACTIVE",
-            "updatedAt": "<ts:30>"
+            "updatedAt": "<ts:33>"
           },
           "before": {
             "capturedFromMessageId": null,
             "consentRecordId": null,
             "coverageSummary": null,
-            "createdAt": "<ts:18>",
+            "createdAt": "<ts:19>",
             "createdByUserId": "<user:ada>",
             "description": "Weekly check-in on Sundays to discuss upcoming week and divide tasks",
             "duration": "ongoing",
@@ -5492,7 +5492,7 @@
             "sessionId": "<session:main>",
             "source": "USER_SUBMITTED",
             "status": "ACTIVE",
-            "updatedAt": "<ts:30>"
+            "updatedAt": "<ts:33>"
           },
           "changedFields": [
             "createdByUserId"
@@ -5513,7 +5513,7 @@
               "<proposal:main#2>"
             ],
             "sessionId": "<session:main>",
-            "submittedAt": "<ts:19>",
+            "submittedAt": "<ts:20>",
             "userId": "<user:ada>"
           },
           "key": "\"<ranking:ada#1>\"",
@@ -5525,7 +5525,7 @@
             "biometricEnabled": false,
             "biometricEnrolledAt": null,
             "clerkId": "<clerkId:ada>",
-            "createdAt": "<ts:20>",
+            "createdAt": "<ts:21>",
             "email": "ada@e2e.test",
             "firstName": null,
             "globalFacts": null,
@@ -5537,7 +5537,7 @@
             "notificationPreferences": null,
             "privacyPreferences": null,
             "pushToken": null,
-            "updatedAt": "<ts:20>"
+            "updatedAt": "<ts:22>"
           },
           "key": "\"<user:ada>\"",
           "kind": "removed",
@@ -5548,7 +5548,7 @@
             "archivedAt": null,
             "contentEmbedding": null,
             "conversationSummary": null,
-            "createdAt": "<ts:24>",
+            "createdAt": "<ts:26>",
             "id": "<vessel:ada>",
             "lastActiveAt": null,
             "lastSeenChatItemId": null,
@@ -5556,7 +5556,7 @@
             "lastViewedShareTabAt": null,
             "notableFacts": null,
             "sessionId": "<session:main>",
-            "updatedAt": "<ts:24>",
+            "updatedAt": "<ts:27>",
             "userId": "<user:ada>"
           },
           "key": "\"<vessel:ada>\"",
@@ -7551,21 +7551,21 @@
           "records": [
             {
               "contentType": "IDENTIFIED_NEED",
-              "createdAt": "<ts:5>",
+              "createdAt": "<ts:6>",
               "decidedAt": "<ts:2>",
               "decision": "GRANTED",
-              "id": "<consent:bob/IDENTIFIED_NEED/#1>",
+              "id": "<consent:bob/IDENTIFIED_NEED/#2>",
               "revokedAt": null,
-              "targetId": "<need:bob#1>"
+              "targetId": "<need:bob#2>"
             },
             {
               "contentType": "IDENTIFIED_NEED",
               "createdAt": "<ts:5>",
               "decidedAt": "<ts:2>",
               "decision": "GRANTED",
-              "id": "<consent:bob/IDENTIFIED_NEED/#2>",
+              "id": "<consent:bob/IDENTIFIED_NEED/#1>",
               "revokedAt": null,
-              "targetId": "<need:bob#2>"
+              "targetId": "<need:bob#1>"
             },
             {
               "contentType": "EMPATHY_DRAFT",
@@ -7973,7 +7973,7 @@
           "walkthrough": {
             "currentIndex": 0,
             "currentNeed": null,
-            "defaultCheckInDate": "2026-10-31",
+            "defaultCheckInDate": "<date:today+10d>",
             "ownNeeds": [],
             "partnerNeeds": [],
             "phase": "QUALITY_REVIEW",

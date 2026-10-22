@@ -8,7 +8,7 @@
       "body": {
         "data": {
           "session": {
-            "createdAt": "<ts:2>",
+            "createdAt": "<ts:3>",
             "currentStage": 3,
             "id": "<session:main>",
             "myProgress": {
@@ -64,7 +64,7 @@
             "notificationPreferences": null,
             "privacyPreferences": null,
             "pushToken": null,
-            "updatedAt": "<ts:1>"
+            "updatedAt": "<ts:2>"
           },
           "changedFields": [
             "clerkId",
@@ -115,7 +115,7 @@
             "notificationPreferences": null,
             "privacyPreferences": null,
             "pushToken": null,
-            "updatedAt": "<ts:1>"
+            "updatedAt": "<ts:2>"
           },
           "changedFields": [
             "clerkId",
@@ -176,7 +176,7 @@
               "completedAt": null,
               "gatesSatisfied": {
                 "needsIdentified": true,
-                "needsIdentifiedAt": "<ts:3>"
+                "needsIdentifiedAt": "<ts:5>"
               },
               "stage": 3,
               "startedAt": "<ts:2>",
@@ -191,7 +191,7 @@
             "sessionId": "<session:main>"
           },
           "session": {
-            "createdAt": "<ts:5>",
+            "createdAt": "<ts:4>",
             "currentStage": 3,
             "id": "<session:main>",
             "lastSeenChatItemId": null,
@@ -222,7 +222,7 @@
             "biometricEnabled": false,
             "biometricEnrolledAt": null,
             "clerkId": "e2e_<user:ada>",
-            "createdAt": "<ts:4>",
+            "createdAt": "<ts:3>",
             "email": "ada@e2e.test",
             "firstName": null,
             "globalFacts": null,
@@ -240,7 +240,7 @@
             "biometricEnabled": false,
             "biometricEnrolledAt": null,
             "clerkId": "e2e_<user:ada>",
-            "createdAt": "<ts:4>",
+            "createdAt": "<ts:3>",
             "email": "ada@e2e.test",
             "firstName": null,
             "globalFacts": null,
@@ -272,7 +272,7 @@
             "biometricEnabled": false,
             "biometricEnrolledAt": null,
             "clerkId": "e2e_<user:ada>",
-            "createdAt": "<ts:4>",
+            "createdAt": "<ts:3>",
             "email": "ada@e2e.test",
             "firstName": null,
             "globalFacts": null,
@@ -290,7 +290,7 @@
             "biometricEnabled": false,
             "biometricEnrolledAt": null,
             "clerkId": "e2e_<user:ada>",
-            "createdAt": "<ts:4>",
+            "createdAt": "<ts:3>",
             "email": "ada@e2e.test",
             "firstName": null,
             "globalFacts": null,
@@ -326,14 +326,14 @@
           "milestones": {
             "commonGroundFoundAt": null,
             "feelHeardConfirmedAt": null,
-            "needsIdentifiedAt": "<ts:3>",
+            "needsIdentifiedAt": "<ts:4>",
             "witnessStartedAt": "<ts:1>"
           },
           "myProgress": {
             "completedAt": null,
             "gatesSatisfied": {
               "needsIdentified": true,
-              "needsIdentifiedAt": "<ts:3>"
+              "needsIdentifiedAt": "<ts:4>"
             },
             "stage": 3,
             "startedAt": "<ts:2>",
@@ -343,7 +343,7 @@
             "completedAt": null,
             "gatesSatisfied": {
               "needsIdentified": true,
-              "needsIdentifiedAt": "<ts:3>"
+              "needsIdentifiedAt": "<ts:4>"
             },
             "stage": 3,
             "startedAt": "<ts:2>",
@@ -359,7 +359,7 @@
             "biometricEnabled": false,
             "biometricEnrolledAt": null,
             "clerkId": "e2e_<user:ada>",
-            "createdAt": "<ts:4>",
+            "createdAt": "<ts:3>",
             "email": "ada@e2e.test",
             "firstName": null,
             "globalFacts": null,
@@ -377,7 +377,7 @@
             "biometricEnabled": false,
             "biometricEnrolledAt": null,
             "clerkId": "e2e_<user:ada>",
-            "createdAt": "<ts:4>",
+            "createdAt": "<ts:3>",
             "email": "ada@e2e.test",
             "firstName": null,
             "globalFacts": null,
@@ -409,7 +409,7 @@
             "biometricEnabled": false,
             "biometricEnrolledAt": null,
             "clerkId": "e2e_<user:ada>",
-            "createdAt": "<ts:4>",
+            "createdAt": "<ts:3>",
             "email": "ada@e2e.test",
             "firstName": null,
             "globalFacts": null,
@@ -427,7 +427,7 @@
             "biometricEnabled": false,
             "biometricEnrolledAt": null,
             "clerkId": "e2e_<user:ada>",
-            "createdAt": "<ts:4>",
+            "createdAt": "<ts:3>",
             "email": "ada@e2e.test",
             "firstName": null,
             "globalFacts": null,
@@ -800,7 +800,7 @@
               "aiConfidence": 0.9,
               "category": "AUTONOMY",
               "confirmed": true,
-              "createdAt": "<ts:1>",
+              "createdAt": "<ts:2>",
               "deletedAt": null,
               "description": "Rest without having to earn it first",
               "evidence": [
@@ -817,7 +817,7 @@
               "aiConfidence": 0.9,
               "category": "RECOGNITION",
               "confirmed": true,
-              "createdAt": "<ts:1>",
+              "createdAt": "<ts:3>",
               "deletedAt": null,
               "description": "Being thanked out loud for the invisible work",
               "evidence": [
@@ -831,7 +831,7 @@
               "supersededByNeedId": null
             }
           ],
-          "synthesizedAt": "<ts:1>"
+          "synthesizedAt": "<ts:2>"
         },
         "success": true
       },
@@ -841,7 +841,7 @@
             "biometricEnabled": false,
             "biometricEnrolledAt": null,
             "clerkId": "e2e_<user:ada>",
-            "createdAt": "<ts:2>",
+            "createdAt": "<ts:1>",
             "email": "ada@e2e.test",
             "firstName": null,
             "globalFacts": null,
@@ -859,7 +859,7 @@
             "biometricEnabled": false,
             "biometricEnrolledAt": null,
             "clerkId": "e2e_<user:ada>",
-            "createdAt": "<ts:2>",
+            "createdAt": "<ts:1>",
             "email": "ada@e2e.test",
             "firstName": null,
             "globalFacts": null,
@@ -891,7 +891,7 @@
             "biometricEnabled": false,
             "biometricEnrolledAt": null,
             "clerkId": "e2e_<user:ada>",
-            "createdAt": "<ts:2>",
+            "createdAt": "<ts:1>",
             "email": "ada@e2e.test",
             "firstName": null,
             "globalFacts": null,
@@ -909,7 +909,7 @@
             "biometricEnabled": false,
             "biometricEnrolledAt": null,
             "clerkId": "e2e_<user:ada>",
-            "createdAt": "<ts:2>",
+            "createdAt": "<ts:1>",
             "email": "ada@e2e.test",
             "firstName": null,
             "globalFacts": null,
@@ -1080,7 +1080,7 @@
           "walkthrough": {
             "currentIndex": 0,
             "currentNeed": null,
-            "defaultCheckInDate": "2026-10-31",
+            "defaultCheckInDate": "<date:today+10d>",
             "ownNeeds": [],
             "partnerNeeds": [],
             "phase": "QUALITY_REVIEW",
@@ -1372,7 +1372,7 @@
                 "partnerStatus": "Bob Ross is exploring what matters to them",
                 "userStatus": "Exploring what matters to you"
               },
-              "updatedAt": "<ts:3>"
+              "updatedAt": "<ts:4>"
             }
           ]
         },
@@ -1554,7 +1554,7 @@
             "completedAt": null,
             "gatesSatisfied": {
               "needsIdentified": true,
-              "needsIdentifiedAt": "<ts:2>",
+              "needsIdentifiedAt": "<ts:4>",
               "needsShared": true,
               "sharedAt": "<ts:fresh>"
             },
@@ -1571,7 +1571,7 @@
             "completedAt": null,
             "gatesSatisfied": {
               "needsIdentified": true,
-              "needsIdentifiedAt": "<ts:2>"
+              "needsIdentifiedAt": "<ts:4>"
             },
             "id": "<progress:bob/stage3>",
             "isSynthesisDirty": true,
@@ -1595,7 +1595,7 @@
             "biometricEnabled": false,
             "biometricEnrolledAt": null,
             "clerkId": "e2e_<user:bob>",
-            "createdAt": "<ts:3>",
+            "createdAt": "<ts:2>",
             "email": "bob@e2e.test",
             "firstName": null,
             "globalFacts": null,
@@ -1613,7 +1613,7 @@
             "biometricEnabled": false,
             "biometricEnrolledAt": null,
             "clerkId": "<clerkId:bob>",
-            "createdAt": "<ts:3>",
+            "createdAt": "<ts:2>",
             "email": "bob@e2e.test",
             "firstName": null,
             "globalFacts": null,
@@ -1701,7 +1701,7 @@
             "completedAt": null,
             "gatesSatisfied": {
               "needsIdentified": true,
-              "needsIdentifiedAt": "<ts:2>",
+              "needsIdentifiedAt": "<ts:4>",
               "needsShared": true,
               "sharedAt": "<ts:fresh>"
             },
@@ -1718,7 +1718,7 @@
             "completedAt": null,
             "gatesSatisfied": {
               "needsIdentified": true,
-              "needsIdentifiedAt": "<ts:2>"
+              "needsIdentifiedAt": "<ts:4>"
             },
             "id": "<progress:bob/stage3>",
             "isSynthesisDirty": true,
@@ -1742,7 +1742,7 @@
             "biometricEnabled": false,
             "biometricEnrolledAt": null,
             "clerkId": "e2e_<user:bob>",
-            "createdAt": "<ts:3>",
+            "createdAt": "<ts:2>",
             "email": "bob@e2e.test",
             "firstName": null,
             "globalFacts": null,
@@ -1760,7 +1760,7 @@
             "biometricEnabled": false,
             "biometricEnrolledAt": null,
             "clerkId": "<clerkId:bob>",
-            "createdAt": "<ts:3>",
+            "createdAt": "<ts:2>",
             "email": "bob@e2e.test",
             "firstName": null,
             "globalFacts": null,
@@ -1961,7 +1961,7 @@
               "completedAt": null,
               "gatesSatisfied": {
                 "needsIdentified": true,
-                "needsIdentifiedAt": "<ts:3>"
+                "needsIdentifiedAt": "<ts:5>"
               },
               "stage": 3,
               "startedAt": "<ts:2>",
@@ -1976,7 +1976,7 @@
             "sessionId": "<session:main>"
           },
           "session": {
-            "createdAt": "<ts:5>",
+            "createdAt": "<ts:4>",
             "currentStage": 3,
             "id": "<session:main>",
             "lastSeenChatItemId": null,
@@ -2007,7 +2007,7 @@
             "biometricEnabled": false,
             "biometricEnrolledAt": null,
             "clerkId": "e2e_<user:ada>",
-            "createdAt": "<ts:4>",
+            "createdAt": "<ts:3>",
             "email": "ada@e2e.test",
             "firstName": null,
             "globalFacts": null,
@@ -2025,7 +2025,7 @@
             "biometricEnabled": false,
             "biometricEnrolledAt": null,
             "clerkId": "e2e_<user:ada>",
-            "createdAt": "<ts:4>",
+            "createdAt": "<ts:3>",
             "email": "ada@e2e.test",
             "firstName": null,
             "globalFacts": null,
@@ -2057,7 +2057,7 @@
             "biometricEnabled": false,
             "biometricEnrolledAt": null,
             "clerkId": "e2e_<user:ada>",
-            "createdAt": "<ts:4>",
+            "createdAt": "<ts:3>",
             "email": "ada@e2e.test",
             "firstName": null,
             "globalFacts": null,
@@ -2075,7 +2075,7 @@
             "biometricEnabled": false,
             "biometricEnrolledAt": null,
             "clerkId": "e2e_<user:ada>",
-            "createdAt": "<ts:4>",
+            "createdAt": "<ts:3>",
             "email": "ada@e2e.test",
             "firstName": null,
             "globalFacts": null,
@@ -2111,14 +2111,14 @@
           "milestones": {
             "commonGroundFoundAt": null,
             "feelHeardConfirmedAt": null,
-            "needsIdentifiedAt": "<ts:3>",
+            "needsIdentifiedAt": "<ts:4>",
             "witnessStartedAt": "<ts:1>"
           },
           "myProgress": {
             "completedAt": null,
             "gatesSatisfied": {
               "needsIdentified": true,
-              "needsIdentifiedAt": "<ts:3>"
+              "needsIdentifiedAt": "<ts:4>"
             },
             "stage": 3,
             "startedAt": "<ts:2>",
@@ -2128,7 +2128,7 @@
             "completedAt": null,
             "gatesSatisfied": {
               "needsIdentified": true,
-              "needsIdentifiedAt": "<ts:3>",
+              "needsIdentifiedAt": "<ts:4>",
               "needsShared": true,
               "sharedAt": "<ts:fresh>"
             },
@@ -2146,7 +2146,7 @@
             "biometricEnabled": false,
             "biometricEnrolledAt": null,
             "clerkId": "e2e_<user:ada>",
-            "createdAt": "<ts:4>",
+            "createdAt": "<ts:3>",
             "email": "ada@e2e.test",
             "firstName": null,
             "globalFacts": null,
@@ -2164,7 +2164,7 @@
             "biometricEnabled": false,
             "biometricEnrolledAt": null,
             "clerkId": "e2e_<user:ada>",
-            "createdAt": "<ts:4>",
+            "createdAt": "<ts:3>",
             "email": "ada@e2e.test",
             "firstName": null,
             "globalFacts": null,
@@ -2196,7 +2196,7 @@
             "biometricEnabled": false,
             "biometricEnrolledAt": null,
             "clerkId": "e2e_<user:ada>",
-            "createdAt": "<ts:4>",
+            "createdAt": "<ts:3>",
             "email": "ada@e2e.test",
             "firstName": null,
             "globalFacts": null,
@@ -2214,7 +2214,7 @@
             "biometricEnabled": false,
             "biometricEnrolledAt": null,
             "clerkId": "e2e_<user:ada>",
-            "createdAt": "<ts:4>",
+            "createdAt": "<ts:3>",
             "email": "ada@e2e.test",
             "firstName": null,
             "globalFacts": null,
@@ -2587,7 +2587,7 @@
               "aiConfidence": 0.9,
               "category": "AUTONOMY",
               "confirmed": true,
-              "createdAt": "<ts:1>",
+              "createdAt": "<ts:2>",
               "deletedAt": null,
               "description": "Rest without having to earn it first",
               "evidence": [
@@ -2604,7 +2604,7 @@
               "aiConfidence": 0.9,
               "category": "RECOGNITION",
               "confirmed": true,
-              "createdAt": "<ts:1>",
+              "createdAt": "<ts:3>",
               "deletedAt": null,
               "description": "Being thanked out loud for the invisible work",
               "evidence": [
@@ -2618,7 +2618,7 @@
               "supersededByNeedId": null
             }
           ],
-          "synthesizedAt": "<ts:1>"
+          "synthesizedAt": "<ts:2>"
         },
         "success": true
       },
@@ -2628,7 +2628,7 @@
             "biometricEnabled": false,
             "biometricEnrolledAt": null,
             "clerkId": "e2e_<user:ada>",
-            "createdAt": "<ts:2>",
+            "createdAt": "<ts:1>",
             "email": "ada@e2e.test",
             "firstName": null,
             "globalFacts": null,
@@ -2646,7 +2646,7 @@
             "biometricEnabled": false,
             "biometricEnrolledAt": null,
             "clerkId": "e2e_<user:ada>",
-            "createdAt": "<ts:2>",
+            "createdAt": "<ts:1>",
             "email": "ada@e2e.test",
             "firstName": null,
             "globalFacts": null,
@@ -2678,7 +2678,7 @@
             "biometricEnabled": false,
             "biometricEnrolledAt": null,
             "clerkId": "e2e_<user:ada>",
-            "createdAt": "<ts:2>",
+            "createdAt": "<ts:1>",
             "email": "ada@e2e.test",
             "firstName": null,
             "globalFacts": null,
@@ -2696,7 +2696,7 @@
             "biometricEnabled": false,
             "biometricEnrolledAt": null,
             "clerkId": "e2e_<user:ada>",
-            "createdAt": "<ts:2>",
+            "createdAt": "<ts:1>",
             "email": "ada@e2e.test",
             "firstName": null,
             "globalFacts": null,
@@ -2867,7 +2867,7 @@
           "walkthrough": {
             "currentIndex": 0,
             "currentNeed": null,
-            "defaultCheckInDate": "2026-10-31",
+            "defaultCheckInDate": "<date:today+10d>",
             "ownNeeds": [],
             "partnerNeeds": [],
             "phase": "QUALITY_REVIEW",
@@ -3157,7 +3157,7 @@
                 "partnerStatus": "Bob Ross is also ready",
                 "userStatus": "Exploring what matters to you"
               },
-              "updatedAt": "<ts:3>"
+              "updatedAt": "<ts:4>"
             }
           ]
         },
@@ -3358,7 +3358,7 @@
             "completedAt": "<ts:fresh>",
             "gatesSatisfied": {
               "needsIdentified": true,
-              "needsIdentifiedAt": "<ts:2>",
+              "needsIdentifiedAt": "<ts:3>",
               "needsRevealReviewedAt": "<ts:fresh>",
               "needsShared": true,
               "needsValidated": true,
@@ -3378,7 +3378,7 @@
             "completedAt": null,
             "gatesSatisfied": {
               "needsIdentified": true,
-              "needsIdentifiedAt": "<ts:2>"
+              "needsIdentifiedAt": "<ts:3>"
             },
             "id": "<progress:ada/stage3>",
             "isSynthesisDirty": true,
@@ -3403,7 +3403,7 @@
             "completedAt": "<ts:fresh>",
             "gatesSatisfied": {
               "needsIdentified": true,
-              "needsIdentifiedAt": "<ts:2>",
+              "needsIdentifiedAt": "<ts:3>",
               "needsRevealReviewedAt": "<ts:fresh>",
               "needsShared": true,
               "needsValidated": true,
@@ -3423,7 +3423,7 @@
             "completedAt": null,
             "gatesSatisfied": {
               "needsIdentified": true,
-              "needsIdentifiedAt": "<ts:2>",
+              "needsIdentifiedAt": "<ts:3>",
               "needsShared": true,
               "sharedAt": "<ts:fresh>"
             },
@@ -3484,7 +3484,7 @@
             "biometricEnabled": false,
             "biometricEnrolledAt": null,
             "clerkId": "e2e_<user:ada>",
-            "createdAt": "<ts:3>",
+            "createdAt": "<ts:2>",
             "email": "ada@e2e.test",
             "firstName": null,
             "globalFacts": null,
@@ -3502,7 +3502,7 @@
             "biometricEnabled": false,
             "biometricEnrolledAt": null,
             "clerkId": "e2e_<user:ada>",
-            "createdAt": "<ts:3>",
+            "createdAt": "<ts:2>",
             "email": "ada@e2e.test",
             "firstName": null,
             "globalFacts": null,
@@ -3608,7 +3608,7 @@
             "completedAt": "<ts:fresh>",
             "gatesSatisfied": {
               "needsIdentified": true,
-              "needsIdentifiedAt": "<ts:2>",
+              "needsIdentifiedAt": "<ts:3>",
               "needsRevealReviewedAt": "<ts:fresh>",
               "needsShared": true,
               "needsValidated": true,
@@ -3628,7 +3628,7 @@
             "completedAt": null,
             "gatesSatisfied": {
               "needsIdentified": true,
-              "needsIdentifiedAt": "<ts:2>"
+              "needsIdentifiedAt": "<ts:3>"
             },
             "id": "<progress:ada/stage3>",
             "isSynthesisDirty": true,
@@ -3653,7 +3653,7 @@
             "completedAt": "<ts:fresh>",
             "gatesSatisfied": {
               "needsIdentified": true,
-              "needsIdentifiedAt": "<ts:2>",
+              "needsIdentifiedAt": "<ts:3>",
               "needsRevealReviewedAt": "<ts:fresh>",
               "needsShared": true,
               "needsValidated": true,
@@ -3673,7 +3673,7 @@
             "completedAt": null,
             "gatesSatisfied": {
               "needsIdentified": true,
-              "needsIdentifiedAt": "<ts:2>",
+              "needsIdentifiedAt": "<ts:3>",
               "needsShared": true,
               "sharedAt": "<ts:fresh>"
             },
@@ -3734,7 +3734,7 @@
             "biometricEnabled": false,
             "biometricEnrolledAt": null,
             "clerkId": "e2e_<user:ada>",
-            "createdAt": "<ts:3>",
+            "createdAt": "<ts:2>",
             "email": "ada@e2e.test",
             "firstName": null,
             "globalFacts": null,
@@ -3752,7 +3752,7 @@
             "biometricEnabled": false,
             "biometricEnrolledAt": null,
             "clerkId": "e2e_<user:ada>",
-            "createdAt": "<ts:3>",
+            "createdAt": "<ts:2>",
             "email": "ada@e2e.test",
             "firstName": null,
             "globalFacts": null,
@@ -4109,7 +4109,7 @@
           "milestones": {
             "commonGroundFoundAt": null,
             "feelHeardConfirmedAt": null,
-            "needsIdentifiedAt": "<ts:2>",
+            "needsIdentifiedAt": "<ts:3>",
             "witnessStartedAt": "<ts:1>"
           },
           "myProgress": {
@@ -4136,7 +4136,7 @@
             "biometricEnabled": false,
             "biometricEnrolledAt": null,
             "clerkId": "e2e_<user:ada>",
-            "createdAt": "<ts:3>",
+            "createdAt": "<ts:2>",
             "email": "ada@e2e.test",
             "firstName": null,
             "globalFacts": null,
@@ -4154,7 +4154,7 @@
             "biometricEnabled": false,
             "biometricEnrolledAt": null,
             "clerkId": "e2e_<user:ada>",
-            "createdAt": "<ts:3>",
+            "createdAt": "<ts:2>",
             "email": "ada@e2e.test",
             "firstName": null,
             "globalFacts": null,
@@ -4186,7 +4186,7 @@
             "biometricEnabled": false,
             "biometricEnrolledAt": null,
             "clerkId": "e2e_<user:ada>",
-            "createdAt": "<ts:3>",
+            "createdAt": "<ts:2>",
             "email": "ada@e2e.test",
             "firstName": null,
             "globalFacts": null,
@@ -4204,7 +4204,7 @@
             "biometricEnabled": false,
             "biometricEnrolledAt": null,
             "clerkId": "e2e_<user:ada>",
-            "createdAt": "<ts:3>",
+            "createdAt": "<ts:2>",
             "email": "ada@e2e.test",
             "firstName": null,
             "globalFacts": null,
@@ -4607,7 +4607,7 @@
               "aiConfidence": 0.9,
               "category": "AUTONOMY",
               "confirmed": true,
-              "createdAt": "<ts:1>",
+              "createdAt": "<ts:2>",
               "deletedAt": null,
               "description": "Rest without having to earn it first",
               "evidence": [
@@ -4624,7 +4624,7 @@
               "aiConfidence": 0.9,
               "category": "RECOGNITION",
               "confirmed": true,
-              "createdAt": "<ts:1>",
+              "createdAt": "<ts:3>",
               "deletedAt": null,
               "description": "Being thanked out loud for the invisible work",
               "evidence": [
@@ -4638,7 +4638,7 @@
               "supersededByNeedId": null
             }
           ],
-          "synthesizedAt": "<ts:1>"
+          "synthesizedAt": "<ts:2>"
         },
         "success": true
       },
@@ -4648,7 +4648,7 @@
             "biometricEnabled": false,
             "biometricEnrolledAt": null,
             "clerkId": "e2e_<user:ada>",
-            "createdAt": "<ts:2>",
+            "createdAt": "<ts:1>",
             "email": "ada@e2e.test",
             "firstName": null,
             "globalFacts": null,
@@ -4666,7 +4666,7 @@
             "biometricEnabled": false,
             "biometricEnrolledAt": null,
             "clerkId": "e2e_<user:ada>",
-            "createdAt": "<ts:2>",
+            "createdAt": "<ts:1>",
             "email": "ada@e2e.test",
             "firstName": null,
             "globalFacts": null,
@@ -4698,7 +4698,7 @@
             "biometricEnabled": false,
             "biometricEnrolledAt": null,
             "clerkId": "e2e_<user:ada>",
-            "createdAt": "<ts:2>",
+            "createdAt": "<ts:1>",
             "email": "ada@e2e.test",
             "firstName": null,
             "globalFacts": null,
@@ -4716,7 +4716,7 @@
             "biometricEnabled": false,
             "biometricEnrolledAt": null,
             "clerkId": "e2e_<user:ada>",
-            "createdAt": "<ts:2>",
+            "createdAt": "<ts:1>",
             "email": "ada@e2e.test",
             "firstName": null,
             "globalFacts": null,
@@ -4916,7 +4916,7 @@
           "walkthrough": {
             "currentIndex": 0,
             "currentNeed": null,
-            "defaultCheckInDate": "2026-10-31",
+            "defaultCheckInDate": "<date:today+10d>",
             "ownNeeds": [],
             "partnerNeeds": [],
             "phase": "QUALITY_REVIEW",
@@ -5208,7 +5208,7 @@
                 "partnerStatus": "Bob Ross is thinking about next steps",
                 "userStatus": "Considering next steps"
               },
-              "updatedAt": "<ts:2>"
+              "updatedAt": "<ts:3>"
             }
           ]
         },
@@ -5654,7 +5654,7 @@
           "milestones": {
             "commonGroundFoundAt": null,
             "feelHeardConfirmedAt": null,
-            "needsIdentifiedAt": "<ts:2>",
+            "needsIdentifiedAt": "<ts:3>",
             "witnessStartedAt": "<ts:1>"
           },
           "myProgress": {
@@ -5681,7 +5681,7 @@
             "biometricEnabled": false,
             "biometricEnrolledAt": null,
             "clerkId": "e2e_<user:bob>",
-            "createdAt": "<ts:3>",
+            "createdAt": "<ts:2>",
             "email": "bob@e2e.test",
             "firstName": null,
             "globalFacts": null,
@@ -5699,7 +5699,7 @@
             "biometricEnabled": false,
             "biometricEnrolledAt": null,
             "clerkId": "e2e_<user:bob>",
-            "createdAt": "<ts:3>",
+            "createdAt": "<ts:2>",
             "email": "bob@e2e.test",
             "firstName": null,
             "globalFacts": null,
@@ -5731,7 +5731,7 @@
             "biometricEnabled": false,
             "biometricEnrolledAt": null,
             "clerkId": "e2e_<user:bob>",
-            "createdAt": "<ts:3>",
+            "createdAt": "<ts:2>",
             "email": "bob@e2e.test",
             "firstName": null,
             "globalFacts": null,
@@ -5749,7 +5749,7 @@
             "biometricEnabled": false,
             "biometricEnrolledAt": null,
             "clerkId": "e2e_<user:bob>",
-            "createdAt": "<ts:3>",
+            "createdAt": "<ts:2>",
             "email": "bob@e2e.test",
             "firstName": null,
             "globalFacts": null,
@@ -6162,7 +6162,7 @@
               "aiConfidence": 0.9,
               "category": "SAFETY",
               "confirmed": true,
-              "createdAt": "<ts:1>",
+              "createdAt": "<ts:2>",
               "deletedAt": null,
               "description": "A quiet first hour after work",
               "evidence": [
@@ -6179,7 +6179,7 @@
               "aiConfidence": 0.9,
               "category": "RECOGNITION",
               "confirmed": true,
-              "createdAt": "<ts:1>",
+              "createdAt": "<ts:3>",
               "deletedAt": null,
               "description": "Credit for the effort even when the result is late",
               "evidence": [
@@ -6193,7 +6193,7 @@
               "supersededByNeedId": null
             }
           ],
-          "synthesizedAt": "<ts:1>"
+          "synthesizedAt": "<ts:2>"
         },
         "success": true
       },
@@ -6203,7 +6203,7 @@
             "biometricEnabled": false,
             "biometricEnrolledAt": null,
             "clerkId": "e2e_<user:bob>",
-            "createdAt": "<ts:2>",
+            "createdAt": "<ts:1>",
             "email": "bob@e2e.test",
             "firstName": null,
             "globalFacts": null,
@@ -6221,7 +6221,7 @@
             "biometricEnabled": false,
             "biometricEnrolledAt": null,
             "clerkId": "e2e_<user:bob>",
-            "createdAt": "<ts:2>",
+            "createdAt": "<ts:1>",
             "email": "bob@e2e.test",
             "firstName": null,
             "globalFacts": null,
@@ -6253,7 +6253,7 @@
             "biometricEnabled": false,
             "biometricEnrolledAt": null,
             "clerkId": "e2e_<user:bob>",
-            "createdAt": "<ts:2>",
+            "createdAt": "<ts:1>",
             "email": "bob@e2e.test",
             "firstName": null,
             "globalFacts": null,
@@ -6271,7 +6271,7 @@
             "biometricEnabled": false,
             "biometricEnrolledAt": null,
             "clerkId": "e2e_<user:bob>",
-            "createdAt": "<ts:2>",
+            "createdAt": "<ts:1>",
             "email": "bob@e2e.test",
             "firstName": null,
             "globalFacts": null,
@@ -6471,7 +6471,7 @@
           "walkthrough": {
             "currentIndex": 0,
             "currentNeed": null,
-            "defaultCheckInDate": "2026-10-31",
+            "defaultCheckInDate": "<date:today+10d>",
             "ownNeeds": [],
             "partnerNeeds": [],
             "phase": "QUALITY_REVIEW",
@@ -6763,7 +6763,7 @@
                 "partnerStatus": "Ada Lovelace is thinking about next steps",
                 "userStatus": "Considering next steps"
               },
-              "updatedAt": "<ts:2>"
+              "updatedAt": "<ts:3>"
             }
           ]
         },

@@ -2504,7 +2504,7 @@
           "walkthrough": {
             "currentIndex": 0,
             "currentNeed": null,
-            "defaultCheckInDate": "2026-10-31",
+            "defaultCheckInDate": "<date:today+10d>",
             "ownNeeds": [],
             "partnerNeeds": [],
             "phase": "QUALITY_REVIEW",
@@ -6700,7 +6700,7 @@
           "walkthrough": {
             "currentIndex": 0,
             "currentNeed": null,
-            "defaultCheckInDate": "2026-10-31",
+            "defaultCheckInDate": "<date:today+10d>",
             "ownNeeds": [],
             "partnerNeeds": [],
             "phase": "QUALITY_REVIEW",

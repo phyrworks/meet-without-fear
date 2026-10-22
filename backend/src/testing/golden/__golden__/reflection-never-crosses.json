@@ -8,7 +8,7 @@
       "body": {
         "data": {
           "session": {
-            "createdAt": "<ts:2>",
+            "createdAt": "<ts:3>",
             "currentStage": 2,
             "id": "<session:main>",
             "myProgress": {
@@ -64,7 +64,7 @@
             "notificationPreferences": null,
             "privacyPreferences": null,
             "pushToken": null,
-            "updatedAt": "<ts:1>"
+            "updatedAt": "<ts:2>"
           },
           "changedFields": [
             "clerkId",
@@ -115,7 +115,7 @@
             "notificationPreferences": null,
             "privacyPreferences": null,
             "pushToken": null,
-            "updatedAt": "<ts:1>"
+            "updatedAt": "<ts:2>"
           },
           "changedFields": [
             "clerkId",
@@ -226,7 +226,7 @@
                 "senderId": null,
                 "sessionId": "<session:main>",
                 "stage": 1,
-                "timestamp": "<ts:8>"
+                "timestamp": "<ts:10>"
               },
               {
                 "content": "Months now. I don't know how to get through to them.",
@@ -235,7 +235,7 @@
                 "senderId": "<user:bob>",
                 "sessionId": "<session:main>",
                 "stage": 1,
-                "timestamp": "<ts:9>"
+                "timestamp": "<ts:11>"
               },
               {
                 "content": "Do you feel like I understand what you've been going through?",
@@ -244,7 +244,7 @@
                 "senderId": null,
                 "sessionId": "<session:main>",
                 "stage": 1,
-                "timestamp": "<ts:10>"
+                "timestamp": "<ts:12>"
               },
               {
                 "content": "Yes, I feel heard.",
@@ -253,7 +253,7 @@
                 "senderId": "<user:bob>",
                 "sessionId": "<session:main>",
                 "stage": 1,
-                "timestamp": "<ts:11>"
+                "timestamp": "<ts:13>"
               }
             ]
           },
@@ -261,7 +261,7 @@
             "canAdvance": false,
             "milestones": {
               "feelHeardConfirmedAt": "<ts:15>",
-              "witnessStartedAt": "<ts:8>"
+              "witnessStartedAt": "<ts:10>"
             },
             "myProgress": {
               "completedAt": null,
@@ -279,7 +279,7 @@
             "sessionId": "<session:main>"
           },
           "session": {
-            "createdAt": "<ts:13>",
+            "createdAt": "<ts:9>",
             "currentStage": 2,
             "id": "<session:main>",
             "lastSeenChatItemId": null,
@@ -310,7 +310,7 @@
             "biometricEnabled": false,
             "biometricEnrolledAt": null,
             "clerkId": "e2e_<user:bob>",
-            "createdAt": "<ts:12>",
+            "createdAt": "<ts:8>",
             "email": "bob@e2e.test",
             "firstName": null,
             "globalFacts": null,
@@ -328,7 +328,7 @@
             "biometricEnabled": false,
             "biometricEnrolledAt": null,
             "clerkId": "e2e_<user:bob>",
-            "createdAt": "<ts:12>",
+            "createdAt": "<ts:8>",
             "email": "bob@e2e.test",
             "firstName": null,
             "globalFacts": null,
@@ -360,7 +360,7 @@
             "biometricEnabled": false,
             "biometricEnrolledAt": null,
             "clerkId": "e2e_<user:bob>",
-            "createdAt": "<ts:12>",
+            "createdAt": "<ts:8>",
             "email": "bob@e2e.test",
             "firstName": null,
             "globalFacts": null,
@@ -378,7 +378,7 @@
             "biometricEnabled": false,
             "biometricEnrolledAt": null,
             "clerkId": "e2e_<user:bob>",
-            "createdAt": "<ts:12>",
+            "createdAt": "<ts:8>",
             "email": "bob@e2e.test",
             "firstName": null,
             "globalFacts": null,
@@ -415,7 +415,7 @@
             "commonGroundFoundAt": null,
             "feelHeardConfirmedAt": "<ts:4>",
             "needsIdentifiedAt": null,
-            "witnessStartedAt": "<ts:2>"
+            "witnessStartedAt": "<ts:3>"
           },
           "myProgress": {
             "completedAt": null,
@@ -441,7 +441,7 @@
             "biometricEnabled": false,
             "biometricEnrolledAt": null,
             "clerkId": "e2e_<user:bob>",
-            "createdAt": "<ts:3>",
+            "createdAt": "<ts:2>",
             "email": "bob@e2e.test",
             "firstName": null,
             "globalFacts": null,
@@ -459,7 +459,7 @@
             "biometricEnabled": false,
             "biometricEnrolledAt": null,
             "clerkId": "e2e_<user:bob>",
-            "createdAt": "<ts:3>",
+            "createdAt": "<ts:2>",
             "email": "bob@e2e.test",
             "firstName": null,
             "globalFacts": null,
@@ -491,7 +491,7 @@
             "biometricEnabled": false,
             "biometricEnrolledAt": null,
             "clerkId": "e2e_<user:bob>",
-            "createdAt": "<ts:3>",
+            "createdAt": "<ts:2>",
             "email": "bob@e2e.test",
             "firstName": null,
             "globalFacts": null,
@@ -509,7 +509,7 @@
             "biometricEnabled": false,
             "biometricEnrolledAt": null,
             "clerkId": "e2e_<user:bob>",
-            "createdAt": "<ts:3>",
+            "createdAt": "<ts:2>",
             "email": "bob@e2e.test",
             "firstName": null,
             "globalFacts": null,
@@ -612,7 +612,7 @@
               "senderId": null,
               "sessionId": "<session:main>",
               "stage": 1,
-              "timestamp": "<ts:7>"
+              "timestamp": "<ts:8>"
             },
             {
               "content": "Months now. I don't know how to get through to them.",
@@ -622,7 +622,7 @@
               "senderId": "<user:bob>",
               "sessionId": "<session:main>",
               "stage": 1,
-              "timestamp": "<ts:8>"
+              "timestamp": "<ts:9>"
             },
             {
               "content": "Do you feel like I understand what you've been going through?",
@@ -632,7 +632,7 @@
               "senderId": null,
               "sessionId": "<session:main>",
               "stage": 1,
-              "timestamp": "<ts:9>"
+              "timestamp": "<ts:10>"
             },
             {
               "content": "Yes, I feel heard.",
@@ -642,7 +642,7 @@
               "senderId": "<user:bob>",
               "sessionId": "<session:main>",
               "stage": 1,
-              "timestamp": "<ts:10>"
+              "timestamp": "<ts:11>"
             }
           ]
         },
@@ -654,7 +654,7 @@
             "biometricEnabled": false,
             "biometricEnrolledAt": null,
             "clerkId": "e2e_<user:bob>",
-            "createdAt": "<ts:11>",
+            "createdAt": "<ts:7>",
             "email": "bob@e2e.test",
             "firstName": null,
             "globalFacts": null,
@@ -672,7 +672,7 @@
             "biometricEnabled": false,
             "biometricEnrolledAt": null,
             "clerkId": "e2e_<user:bob>",
-            "createdAt": "<ts:11>",
+            "createdAt": "<ts:7>",
             "email": "bob@e2e.test",
             "firstName": null,
             "globalFacts": null,
@@ -704,7 +704,7 @@
             "biometricEnabled": false,
             "biometricEnrolledAt": null,
             "clerkId": "e2e_<user:bob>",
-            "createdAt": "<ts:11>",
+            "createdAt": "<ts:7>",
             "email": "bob@e2e.test",
             "firstName": null,
             "globalFacts": null,
@@ -722,7 +722,7 @@
             "biometricEnabled": false,
             "biometricEnrolledAt": null,
             "clerkId": "e2e_<user:bob>",
-            "createdAt": "<ts:11>",
+            "createdAt": "<ts:7>",
             "email": "bob@e2e.test",
             "firstName": null,
             "globalFacts": null,
@@ -2376,7 +2376,7 @@
           "walkthrough": {
             "currentIndex": 0,
             "currentNeed": null,
-            "defaultCheckInDate": "2026-10-31",
+            "defaultCheckInDate": "<date:today+10d>",
             "ownNeeds": [],
             "partnerNeeds": [],
             "phase": "QUALITY_REVIEW",
@@ -3088,7 +3088,7 @@
               "myProgress": {
                 "completedAt": null,
                 "stage": 2,
-                "startedAt": "<ts:4>",
+                "startedAt": "<ts:5>",
                 "status": "IN_PROGRESS"
               },
               "partner": {
@@ -3114,7 +3114,7 @@
                 "partnerStatus": "Ada Lovelace is working on their perspective",
                 "userStatus": "Working on understanding their perspective"
               },
-              "updatedAt": "<ts:3>"
+              "updatedAt": "<ts:4>"
             }
           ]
         },
@@ -4071,7 +4071,7 @@
             "lastViewedShareTabAt": null,
             "notableFacts": null,
             "sessionId": "<session:main>",
-            "updatedAt": "<ts:2>",
+            "updatedAt": "<ts:3>",
             "userId": "<user:bob>"
           },
           "changedFields": [
@@ -4312,7 +4312,7 @@
                 "senderId": null,
                 "sessionId": "<session:main>",
                 "stage": 1,
-                "timestamp": "<ts:8>"
+                "timestamp": "<ts:10>"
               },
               {
                 "content": "Months now. I don't know how to get through to them.",
@@ -4321,7 +4321,7 @@
                 "senderId": "<user:bob>",
                 "sessionId": "<session:main>",
                 "stage": 1,
-                "timestamp": "<ts:9>"
+                "timestamp": "<ts:11>"
               },
               {
                 "content": "Do you feel like I understand what you've been going through?",
@@ -4330,7 +4330,7 @@
                 "senderId": null,
                 "sessionId": "<session:main>",
                 "stage": 1,
-                "timestamp": "<ts:10>"
+                "timestamp": "<ts:12>"
               },
               {
                 "content": "Yes, I feel heard.",
@@ -4339,7 +4339,7 @@
                 "senderId": "<user:bob>",
                 "sessionId": "<session:main>",
                 "stage": 1,
-                "timestamp": "<ts:11>"
+                "timestamp": "<ts:13>"
               },
               {
                 "content": "Some days I think we are just two tired people keeping score.",
@@ -4365,7 +4365,7 @@
             "canAdvance": false,
             "milestones": {
               "feelHeardConfirmedAt": "<ts:15>",
-              "witnessStartedAt": "<ts:8>"
+              "witnessStartedAt": "<ts:10>"
             },
             "myProgress": {
               "completedAt": null,
@@ -4383,7 +4383,7 @@
             "sessionId": "<session:main>"
           },
           "session": {
-            "createdAt": "<ts:13>",
+            "createdAt": "<ts:9>",
             "currentStage": 2,
             "id": "<session:main>",
             "lastSeenChatItemId": null,
@@ -4414,7 +4414,7 @@
             "biometricEnabled": false,
             "biometricEnrolledAt": null,
             "clerkId": "e2e_<user:bob>",
-            "createdAt": "<ts:12>",
+            "createdAt": "<ts:8>",
             "email": "bob@e2e.test",
             "firstName": null,
             "globalFacts": null,
@@ -4432,7 +4432,7 @@
             "biometricEnabled": false,
             "biometricEnrolledAt": null,
             "clerkId": "e2e_<user:bob>",
-            "createdAt": "<ts:12>",
+            "createdAt": "<ts:8>",
             "email": "bob@e2e.test",
             "firstName": null,
             "globalFacts": null,
@@ -4464,7 +4464,7 @@
             "biometricEnabled": false,
             "biometricEnrolledAt": null,
             "clerkId": "e2e_<user:bob>",
-            "createdAt": "<ts:12>",
+            "createdAt": "<ts:8>",
             "email": "bob@e2e.test",
             "firstName": null,
             "globalFacts": null,
@@ -4482,7 +4482,7 @@
             "biometricEnabled": false,
             "biometricEnrolledAt": null,
             "clerkId": "e2e_<user:bob>",
-            "createdAt": "<ts:12>",
+            "createdAt": "<ts:8>",
             "email": "bob@e2e.test",
             "firstName": null,
             "globalFacts": null,
@@ -4519,7 +4519,7 @@
             "commonGroundFoundAt": null,
             "feelHeardConfirmedAt": "<ts:4>",
             "needsIdentifiedAt": null,
-            "witnessStartedAt": "<ts:2>"
+            "witnessStartedAt": "<ts:3>"
           },
           "myProgress": {
             "completedAt": null,
@@ -4545,7 +4545,7 @@
             "biometricEnabled": false,
             "biometricEnrolledAt": null,
             "clerkId": "e2e_<user:bob>",
-            "createdAt": "<ts:3>",
+            "createdAt": "<ts:2>",
             "email": "bob@e2e.test",
             "firstName": null,
             "globalFacts": null,
@@ -4563,7 +4563,7 @@
             "biometricEnabled": false,
             "biometricEnrolledAt": null,
             "clerkId": "e2e_<user:bob>",
-            "createdAt": "<ts:3>",
+            "createdAt": "<ts:2>",
             "email": "bob@e2e.test",
             "firstName": null,
             "globalFacts": null,
@@ -4595,7 +4595,7 @@
             "biometricEnabled": false,
             "biometricEnrolledAt": null,
             "clerkId": "e2e_<user:bob>",
-            "createdAt": "<ts:3>",
+            "createdAt": "<ts:2>",
             "email": "bob@e2e.test",
             "firstName": null,
             "globalFacts": null,
@@ -4613,7 +4613,7 @@
             "biometricEnabled": false,
             "biometricEnrolledAt": null,
             "clerkId": "e2e_<user:bob>",
-            "createdAt": "<ts:3>",
+            "createdAt": "<ts:2>",
             "email": "bob@e2e.test",
             "firstName": null,
             "globalFacts": null,
@@ -4716,7 +4716,7 @@
               "senderId": null,
               "sessionId": "<session:main>",
               "stage": 1,
-              "timestamp": "<ts:7>"
+              "timestamp": "<ts:8>"
             },
             {
               "content": "Months now. I don't know how to get through to them.",
@@ -4726,7 +4726,7 @@
               "senderId": "<user:bob>",
               "sessionId": "<session:main>",
               "stage": 1,
-              "timestamp": "<ts:8>"
+              "timestamp": "<ts:9>"
             },
             {
               "content": "Do you feel like I understand what you've been going through?",
@@ -4736,7 +4736,7 @@
               "senderId": null,
               "sessionId": "<session:main>",
               "stage": 1,
-              "timestamp": "<ts:9>"
+              "timestamp": "<ts:10>"
             },
             {
               "content": "Yes, I feel heard.",
@@ -4746,7 +4746,7 @@
               "senderId": "<user:bob>",
               "sessionId": "<session:main>",
               "stage": 1,
-              "timestamp": "<ts:10>"
+              "timestamp": "<ts:11>"
             },
             {
               "content": "Some days I think we are just two tired people keeping score.",
@@ -4778,7 +4778,7 @@
             "biometricEnabled": false,
             "biometricEnrolledAt": null,
             "clerkId": "e2e_<user:bob>",
-            "createdAt": "<ts:11>",
+            "createdAt": "<ts:7>",
             "email": "bob@e2e.test",
             "firstName": null,
             "globalFacts": null,
@@ -4796,7 +4796,7 @@
             "biometricEnabled": false,
             "biometricEnrolledAt": null,
             "clerkId": "e2e_<user:bob>",
-            "createdAt": "<ts:11>",
+            "createdAt": "<ts:7>",
             "email": "bob@e2e.test",
             "firstName": null,
             "globalFacts": null,
@@ -4828,7 +4828,7 @@
             "biometricEnabled": false,
             "biometricEnrolledAt": null,
             "clerkId": "e2e_<user:bob>",
-            "createdAt": "<ts:11>",
+            "createdAt": "<ts:7>",
             "email": "bob@e2e.test",
             "firstName": null,
             "globalFacts": null,
@@ -4846,7 +4846,7 @@
             "biometricEnabled": false,
             "biometricEnrolledAt": null,
             "clerkId": "e2e_<user:bob>",
-            "createdAt": "<ts:11>",
+            "createdAt": "<ts:7>",
             "email": "bob@e2e.test",
             "firstName": null,
             "globalFacts": null,
@@ -6500,7 +6500,7 @@
           "walkthrough": {
             "currentIndex": 0,
             "currentNeed": null,
-            "defaultCheckInDate": "2026-10-31",
+            "defaultCheckInDate": "<date:today+10d>",
             "ownNeeds": [],
             "partnerNeeds": [],
             "phase": "QUALITY_REVIEW",
@@ -7212,7 +7212,7 @@
               "myProgress": {
                 "completedAt": null,
                 "stage": 2,
-                "startedAt": "<ts:4>",
+                "startedAt": "<ts:5>",
                 "status": "IN_PROGRESS"
               },
               "partner": {
@@ -7238,7 +7238,7 @@
                 "partnerStatus": "Ada Lovelace is working on their perspective",
                 "userStatus": "Working on understanding their perspective"
               },
-              "updatedAt": "<ts:3>"
+              "updatedAt": "<ts:4>"
             }
           ]
         },
@@ -8077,7 +8077,7 @@
             "notificationPreferences": null,
             "privacyPreferences": null,
             "pushToken": null,
-            "updatedAt": "<ts:1>"
+            "updatedAt": "<ts:2>"
           },
           "changedFields": [
             "clerkId",
@@ -8128,7 +8128,7 @@
             "notificationPreferences": null,
             "privacyPreferences": null,
             "pushToken": null,
-            "updatedAt": "<ts:1>"
+            "updatedAt": "<ts:2>"
           },
           "changedFields": [
             "clerkId",

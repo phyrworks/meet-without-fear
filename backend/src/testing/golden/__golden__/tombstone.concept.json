@@ -7,7 +7,7 @@
         "completed_at": null,
         "description": "Weekly check-in on Sundays to discuss upcoming week and divide tasks",
         "duration": null,
-        "follow_up_at": "<ts:46>",
+        "follow_up_at": "<ts:55>",
         "id": "<agreement:main#1>",
         "measure_of_success": null,
         "proposal_id": "<proposal:main#1>",
@@ -18,12 +18,12 @@
     },
     "agreement_party": {
       "<agreementParty:agreement:main#1/participant:ada@main>": {
-        "agreed_at": "<ts:33>",
+        "agreed_at": "<ts:53>",
         "agreement_id": "<agreement:main#1>",
         "participant_id": "<participant:ada@main>"
       },
       "<agreementParty:agreement:main#1/participant:bob@main>": {
-        "agreed_at": "<ts:33>",
+        "agreed_at": "<ts:53>",
         "agreement_id": "<agreement:main#1>",
         "participant_id": "<participant:bob@main>"
       }
@@ -137,7 +137,7 @@
     },
     "consent": {
       "<consent:ada@main/EMPATHY_ATTEMPT/empathyAttempt:ada→bob@main#1>": {
-        "created_at": "<ts:35>",
+        "created_at": "<ts:39>",
         "decided_at": "<ts:14>",
         "decision": "GRANTED",
         "empathy_attempt_id": "<empathyAttempt:ada→bob@main#1>",
@@ -152,8 +152,8 @@
         "target_kind": "EMPATHY_ATTEMPT"
       },
       "<consent:ada@main/NEED/need:ada@main#1>": {
-        "created_at": "<ts:36>",
-        "decided_at": "<ts:24>",
+        "created_at": "<ts:40>",
+        "decided_at": "<ts:25>",
         "decision": "GRANTED",
         "empathy_attempt_id": null,
         "id": "<consent:ada@main/NEED/need:ada@main#1>",
@@ -167,8 +167,8 @@
         "target_kind": "NEED"
       },
       "<consent:ada@main/NEED/need:ada@main#2>": {
-        "created_at": "<ts:37>",
-        "decided_at": "<ts:24>",
+        "created_at": "<ts:41>",
+        "decided_at": "<ts:25>",
         "decision": "GRANTED",
         "empathy_attempt_id": null,
         "id": "<consent:ada@main/NEED/need:ada@main#2>",
@@ -182,7 +182,7 @@
         "target_kind": "NEED"
       },
       "<consent:bob@main/EMPATHY_ATTEMPT/empathyAttempt:bob→ada@main#1>": {
-        "created_at": "<ts:39>",
+        "created_at": "<ts:44>",
         "decided_at": "<ts:15>",
         "decision": "GRANTED",
         "empathy_attempt_id": "<empathyAttempt:bob→ada@main#1>",
@@ -197,8 +197,8 @@
         "target_kind": "EMPATHY_ATTEMPT"
       },
       "<consent:bob@main/NEED/need:bob@main#1>": {
-        "created_at": "<ts:40>",
-        "decided_at": "<ts:24>",
+        "created_at": "<ts:45>",
+        "decided_at": "<ts:25>",
         "decision": "GRANTED",
         "empathy_attempt_id": null,
         "id": "<consent:bob@main/NEED/need:bob@main#1>",
@@ -212,8 +212,8 @@
         "target_kind": "NEED"
       },
       "<consent:bob@main/NEED/need:bob@main#2>": {
-        "created_at": "<ts:40>",
-        "decided_at": "<ts:24>",
+        "created_at": "<ts:46>",
+        "decided_at": "<ts:25>",
         "decision": "GRANTED",
         "empathy_attempt_id": null,
         "id": "<consent:bob@main/NEED/need:bob@main#2>",
@@ -230,7 +230,7 @@
     "context_share_offer": {
       "<shareOffer:bob→ada@main#1/i1>": {
         "attempt_id": "<empathyAttempt:bob→ada@main#1>",
-        "created_at": "<ts:41>",
+        "created_at": "<ts:47>",
         "declined_at": null,
         "delivered_at": "<ts:17>",
         "delivery_notified_at": null,
@@ -247,7 +247,7 @@
         "subject_participant_id": "<participant:ada@main>",
         "suggested_content": "What I need you to know is that I am exhausted too, and I stopped saying it because it never seemed to count.",
         "suggested_reason": "This helps Bob Ross understand that Ada Lovelace's frustration comes from exhaustion and feeling unseen, not anger or blame.",
-        "updated_at": "<ts:41>"
+        "updated_at": "<ts:48>"
       }
     },
     "conversation": {
@@ -278,7 +278,7 @@
         "last_viewed_at": null,
         "last_viewed_share_tab_at": null,
         "participant_id": "<participant:ada@main>",
-        "updated_at": "<ts:31>"
+        "updated_at": "<ts:35>"
       },
       "<participant:bob@main>": {
         "archived_at": null,
@@ -287,7 +287,7 @@
         "last_viewed_at": null,
         "last_viewed_share_tab_at": null,
         "participant_id": "<participant:bob@main>",
-        "updated_at": "<ts:32>"
+        "updated_at": "<ts:36>"
       }
     },
     "draft": {
@@ -295,26 +295,26 @@
         "about_participant_id": "<participant:bob@main>",
         "attempt_id": null,
         "content": "I think you come home hollowed out and the chores feel like a verdict on you.",
-        "created_at": "<ts:34>",
+        "created_at": "<ts:37>",
         "id": "<draft:ada@main/EMPATHY>",
         "kind": "EMPATHY",
         "participant_id": "<participant:ada@main>",
         "ready_to_share": true,
         "share_offer_id": null,
-        "updated_at": "<ts:34>",
+        "updated_at": "<ts:38>",
         "version": 1
       },
       "<draft:bob@main/EMPATHY>": {
         "about_participant_id": "<participant:ada@main>",
         "attempt_id": null,
         "content": "I think you feel invisible when you are the only one tracking the house.",
-        "created_at": "<ts:38>",
+        "created_at": "<ts:42>",
         "id": "<draft:bob@main/EMPATHY>",
         "kind": "EMPATHY",
         "participant_id": "<participant:bob@main>",
         "ready_to_share": true,
         "share_offer_id": null,
-        "updated_at": "<ts:38>",
+        "updated_at": "<ts:43>",
         "version": 1
       }
     },
@@ -353,15 +353,15 @@
     "empathy_review": {},
     "invitation": {
       "<invitation:main>": {
-        "accepted_at": "<ts:30>",
+        "accepted_at": "<ts:52>",
         "accepted_by_user_id": "<user:bob>",
-        "created_at": "<ts:30>",
+        "created_at": "<ts:52>",
         "decline_reason": null,
         "declined_at": null,
-        "expires_at": "<ts:45>",
+        "expires_at": "<ts:54>",
         "id": "<invitation:main>",
         "invited_by_participant_id": "<participant:ada@main>",
-        "message_confirmed_at": "<ts:30>",
+        "message_confirmed_at": "<ts:52>",
         "name": "Bob Ross",
         "session_id": "<session:main>",
         "status": "ACCEPTED"
@@ -521,7 +521,7 @@
         "ai_confidence": 0.95,
         "category": "FAIRNESS",
         "confirmed": true,
-        "created_at": "<ts:22>",
+        "created_at": "<ts:23>",
         "deleted_at": null,
         "evidence": [
           "Ada said the mental load of planning meals is hers alone"
@@ -549,7 +549,7 @@
         "ai_confidence": 0.95,
         "category": "CONNECTION",
         "confirmed": true,
-        "created_at": "<ts:22>",
+        "created_at": "<ts:23>",
         "deleted_at": null,
         "evidence": [],
         "id": "<need:bob@main#2>",
@@ -565,7 +565,7 @@
       "<participant:ada@main>": {
         "display_name": "Ada Lovelace",
         "id": "<participant:ada@main>",
-        "joined_at": "<ts:28>",
+        "joined_at": "<ts:31>",
         "kind": "human",
         "left_at": null,
         "session_id": "<session:main>",
@@ -574,7 +574,7 @@
       "<participant:bob@main>": {
         "display_name": "Bob Ross",
         "id": "<participant:bob@main>",
-        "joined_at": "<ts:28>",
+        "joined_at": "<ts:32>",
         "kind": "human",
         "left_at": null,
         "session_id": "<session:main>",
@@ -585,7 +585,7 @@
       "<milestone:ada@main/choices_shared>": {
         "milestone_key": "choices_shared",
         "participant_id": "<participant:ada@main>",
-        "reached_at": "<ts:33>"
+        "reached_at": "<ts:53>"
       },
       "<milestone:ada@main/compact_signed>": {
         "milestone_key": "compact_signed",
@@ -615,17 +615,17 @@
       "<milestone:ada@main/needs_shared>": {
         "milestone_key": "needs_shared",
         "participant_id": "<participant:ada@main>",
-        "reached_at": "<ts:24>"
+        "reached_at": "<ts:25>"
       },
       "<milestone:ada@main/needs_validated>": {
         "milestone_key": "needs_validated",
         "participant_id": "<participant:ada@main>",
-        "reached_at": "<ts:23>"
+        "reached_at": "<ts:24>"
       },
       "<milestone:bob@main/choices_shared>": {
         "milestone_key": "choices_shared",
         "participant_id": "<participant:bob@main>",
-        "reached_at": "<ts:33>"
+        "reached_at": "<ts:53>"
       },
       "<milestone:bob@main/compact_signed>": {
         "milestone_key": "compact_signed",
@@ -650,17 +650,17 @@
       "<milestone:bob@main/needs_shared>": {
         "milestone_key": "needs_shared",
         "participant_id": "<participant:bob@main>",
-        "reached_at": "<ts:24>"
+        "reached_at": "<ts:25>"
       },
       "<milestone:bob@main/needs_validated>": {
         "milestone_key": "needs_validated",
         "participant_id": "<participant:bob@main>",
-        "reached_at": "<ts:23>"
+        "reached_at": "<ts:24>"
       }
     },
     "proposal": {
       "<proposal:main#1>": {
-        "created_at": "<ts:25>",
+        "created_at": "<ts:26>",
         "created_by_participant_id": "<participant:ada@main>",
         "description": "Weekly check-in on Sundays to discuss upcoming week and divide tasks",
         "duration": "ongoing",
@@ -678,10 +678,10 @@
           "Appreciation",
           "Partnership"
         ],
-        "updated_at": "<ts:42>"
+        "updated_at": "<ts:49>"
       },
       "<proposal:main#2>": {
-        "created_at": "<ts:25>",
+        "created_at": "<ts:26>",
         "created_by_participant_id": "<participant:bob@main>",
         "description": "Express appreciation for at least one thing your partner did each day",
         "duration": "ongoing",
@@ -698,7 +698,7 @@
         "unresolved_need_labels": [
           "Recognition"
         ],
-        "updated_at": "<ts:43>"
+        "updated_at": "<ts:50>"
       }
     },
     "proposal_choice": {},
@@ -742,14 +742,14 @@
         "created_at": "<ts:6>",
         "distilled_at": null,
         "id": "<reflection:ada#1>",
-        "linked_at": "<ts:44>",
+        "linked_at": "<ts:51>",
         "linked_session_id": "<session:main>",
         "status": "ACTIVE",
         "summary": "Ada traced her scorekeeping about chores to watching her mother never rest, and is afraid of repeating it.",
         "summary_doc": null,
         "theme": "inherited resentment about rest",
         "title": "Keeping score like my mother did",
-        "updated_at": "<ts:44>",
+        "updated_at": "<ts:51>",
         "user_id": "<user:ada>"
       }
     },
@@ -771,7 +771,7 @@
     },
     "session": {
       "<session:main>": {
-        "created_at": "<ts:29>",
+        "created_at": "<ts:33>",
         "id": "<session:main>",
         "previous_session_id": null,
         "relationship_id": "<relationship:main>",
@@ -779,7 +779,7 @@
         "status": "ACTIVE",
         "topic_frame": null,
         "topic_frame_confirmed_at": null,
-        "updated_at": "<ts:29>"
+        "updated_at": "<ts:34>"
       }
     },
     "session_closure": {},
@@ -788,25 +788,25 @@
     "user": {
       "<user:ada>": {
         "clerk_id": "<clerkId:ada>",
-        "created_at": "<ts:26>",
+        "created_at": "<ts:27>",
         "deleted_at": null,
         "email": "ada@e2e.test",
         "first_name": null,
         "id": "<user:ada>",
         "last_name": null,
         "name": "Ada Lovelace",
-        "updated_at": "<ts:26>"
+        "updated_at": "<ts:28>"
       },
       "<user:bob>": {
         "clerk_id": "<clerkId:bob>",
-        "created_at": "<ts:27>",
+        "created_at": "<ts:29>",
         "deleted_at": null,
         "email": "bob@e2e.test",
         "first_name": null,
         "id": "<user:bob>",
         "last_name": null,
         "name": "Bob Ross",
-        "updated_at": "<ts:27>"
+        "updated_at": "<ts:30>"
       }
     }
   },
@@ -817,7 +817,7 @@
       "body": {
         "data": {
           "session": {
-            "createdAt": "<ts:2>",
+            "createdAt": "<ts:3>",
             "currentStage": 4,
             "id": "<session:main>",
             "myProgress": {
@@ -855,7 +855,7 @@
             "id": "<user:bob>",
             "last_name": null,
             "name": "Bob Ross",
-            "updated_at": "<ts:1>"
+            "updated_at": "<ts:2>"
           },
           "after": {
             "clerk_id": "e2e_<user:bob>",
@@ -1802,21 +1802,21 @@
           "records": [
             {
               "contentType": "IDENTIFIED_NEED",
-              "createdAt": "<ts:5>",
+              "createdAt": "<ts:6>",
               "decidedAt": "<ts:2>",
               "decision": "GRANTED",
-              "id": "<consent:bob@main/NEED/need:bob@main#1>",
+              "id": "<consent:bob@main/NEED/need:bob@main#2>",
               "revokedAt": null,
-              "targetId": "<need:bob@main#1>"
+              "targetId": "<need:bob@main#2>"
             },
             {
               "contentType": "IDENTIFIED_NEED",
               "createdAt": "<ts:5>",
               "decidedAt": "<ts:2>",
               "decision": "GRANTED",
-              "id": "<consent:bob@main/NEED/need:bob@main#2>",
+              "id": "<consent:bob@main/NEED/need:bob@main#1>",
               "revokedAt": null,
-              "targetId": "<need:bob@main#2>"
+              "targetId": "<need:bob@main#1>"
             },
             {
               "contentType": "EMPATHY_DRAFT",
@@ -1890,7 +1890,7 @@
               "aiConfidence": 0.95,
               "category": "CONNECTION",
               "confirmed": true,
-              "createdAt": "<ts:1>",
+              "createdAt": "<ts:2>",
               "deletedAt": null,
               "description": "Support",
               "evidence": [],
@@ -1916,7 +1916,7 @@
           ],
           "before": {
             "clerk_id": "e2e_<user:bob>",
-            "created_at": "<ts:2>",
+            "created_at": "<ts:3>",
             "deleted_at": null,
             "email": "bob@e2e.test",
             "first_name": null,
@@ -1927,7 +1927,7 @@
           },
           "after": {
             "clerk_id": "e2e_<user:bob>",
-            "created_at": "<ts:2>",
+            "created_at": "<ts:3>",
             "deleted_at": null,
             "email": "bob@e2e.test",
             "first_name": null,
@@ -2048,7 +2048,7 @@
           "walkthrough": {
             "currentIndex": 0,
             "currentNeed": null,
-            "defaultCheckInDate": "2026-10-31",
+            "defaultCheckInDate": "<date:today+10d>",
             "ownNeeds": [],
             "partnerNeeds": [],
             "phase": "QUALITY_REVIEW",
@@ -2309,7 +2309,7 @@
               "lastSeenChatItemId": null,
               "lastViewedAt": null,
               "myProgress": {
-                "completedAt": "<ts:4>",
+                "completedAt": "<ts:5>",
                 "stage": 4,
                 "startedAt": "<ts:1>",
                 "status": "COMPLETED"
@@ -2321,7 +2321,7 @@
               },
               "partnerActionNeeded": [],
               "partnerProgress": {
-                "completedAt": "<ts:4>",
+                "completedAt": "<ts:5>",
                 "stage": 4,
                 "startedAt": "<ts:1>",
                 "status": "COMPLETED"
@@ -2333,7 +2333,7 @@
                 "partnerStatus": "Ada Lovelace is also ready",
                 "userStatus": "You've shared your ideas for next steps"
               },
-              "updatedAt": "<ts:3>"
+              "updatedAt": "<ts:4>"
             }
           ]
         },
@@ -3147,21 +3147,21 @@
           "records": [
             {
               "contentType": "IDENTIFIED_NEED",
-              "createdAt": "<ts:4>",
+              "createdAt": "<ts:5>",
               "decidedAt": "<ts:2>",
               "decision": "GRANTED",
-              "id": "<consent:bob@main/NEED/need:bob@main#1>",
+              "id": "<consent:bob@main/NEED/need:bob@main#2>",
               "revokedAt": null,
-              "targetId": "<need:bob@main#1>"
+              "targetId": "<need:bob@main#2>"
             },
             {
               "contentType": "IDENTIFIED_NEED",
               "createdAt": "<ts:4>",
               "decidedAt": "<ts:2>",
               "decision": "GRANTED",
-              "id": "<consent:bob@main/NEED/need:bob@main#2>",
+              "id": "<consent:bob@main/NEED/need:bob@main#1>",
               "revokedAt": null,
-              "targetId": "<need:bob@main#2>"
+              "targetId": "<need:bob@main#1>"
             },
             {
               "contentType": "EMPATHY_DRAFT",
@@ -3269,7 +3269,7 @@
           "walkthrough": {
             "currentIndex": 0,
             "currentNeed": null,
-            "defaultCheckInDate": "2026-10-31",
+            "defaultCheckInDate": "<date:today+10d>",
             "ownNeeds": [],
             "partnerNeeds": [],
             "phase": "QUALITY_REVIEW",

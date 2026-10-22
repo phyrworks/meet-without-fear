@@ -163,10 +163,18 @@ How they work (`privacy.ts`, `scenario-checks.ts`, `reveal-checks.ts`):
 - **Two R4 checks are vacuous on the current shape**: "proposal_need / need_disposition name only
   need_share ids" can only hold here (the views join need_share, which is empty). The scenarios pin
   the emptiness; the bite is a `targetOnly` assertion (non-empty on the target).
-- **Fixture rebuilds can move the new goldens' timestamp ranks**: several TS-5 fixtures write rows
-  with `@default(now())` stamps in one millisecond, and a rebuild can split or merge those ties
-  (measured on TOMBSTONE_READY: carried-rank renumbering and the order of two consent records). The
-  pre-TS-5 property "a rebuild must not move a golden" holds for FEEL_HEARD_B only.
+- **The TS-5 fixtures are rebuild-stable by construction** (fix round 2). Their scenarios set
+  `currentShape.explicitStamps`: the writer takes ONE clock read and makes every stamp a fixed
+  offset of it — the scenario clocks, and every column the old factory left to `@default(now())` /
+  `@updatedAt` (users, relationship and members, session, vessels, drafts, consents, share offers,
+  proposals, reflections). Co-written rows never share a millisecond, so neither timestamp ranks
+  nor a createdAt-ordered read (consent history) can move between builds — verified by building
+  each TS-5 fixture twice. A need's concept rank breaks createdAt ties on its UUIDv7 id (creation
+  order); with distinct stamps the tie no longer occurs. The 13 pre-TS-5 stages leave the flag off
+  and stay byte-identical (fidelity tool).
+- **Bare calendar dates are normalised** to their day offset from the run's start
+  (`<date:today+10d>`): Stage 4's `defaultCheckInDate` is today (UTC) + 10, and goldens recorded
+  one day went red after UTC midnight.
 
 GET `/sessions/:id/strategies` shuffles its list on every call (`controllers/stage4.ts`
 `shuffleArray`); with more than one proposal it cannot be part of a baseline, so the scenarios on

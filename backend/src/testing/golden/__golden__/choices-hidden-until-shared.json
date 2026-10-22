@@ -812,7 +812,7 @@
               "source": "YOU",
               "status": "in_progress"
             },
-            "defaultCheckInDate": "2026-10-31",
+            "defaultCheckInDate": "<date:today+10d>",
             "ownNeeds": [
               {
                 "id": "<needCoverage:ada#1>",
@@ -1498,7 +1498,7 @@
                 "source": "YOU",
                 "status": "in_progress"
               },
-              "defaultCheckInDate": "2026-10-31",
+              "defaultCheckInDate": "<date:today+10d>",
               "ownNeeds": [
                 {
                   "id": "<needCoverage:bob#1>",
@@ -1877,7 +1877,7 @@
                 "source": "YOU",
                 "status": "in_progress"
               },
-              "defaultCheckInDate": "2026-10-31",
+              "defaultCheckInDate": "<date:today+10d>",
               "ownNeeds": [
                 {
                   "id": "<needCoverage:bob#1>",
@@ -2917,7 +2917,7 @@
               "source": "YOU",
               "status": "in_progress"
             },
-            "defaultCheckInDate": "2026-10-31",
+            "defaultCheckInDate": "<date:today+10d>",
             "ownNeeds": [
               {
                 "id": "<needCoverage:ada#1>",
@@ -3610,7 +3610,7 @@
                 "source": "YOU",
                 "status": "in_progress"
               },
-              "defaultCheckInDate": "2026-10-31",
+              "defaultCheckInDate": "<date:today+10d>",
               "ownNeeds": [
                 {
                   "id": "<needCoverage:bob#1>",
@@ -3982,7 +3982,7 @@
                 "source": "YOU",
                 "status": "in_progress"
               },
-              "defaultCheckInDate": "2026-10-31",
+              "defaultCheckInDate": "<date:today+10d>",
               "ownNeeds": [
                 {
                   "id": "<needCoverage:bob#1>",
@@ -5075,7 +5075,7 @@
               "source": "YOU",
               "status": "in_progress"
             },
-            "defaultCheckInDate": "2026-10-31",
+            "defaultCheckInDate": "<date:today+10d>",
             "ownNeeds": [
               {
                 "id": "<needCoverage:ada#1>",

@@ -2,16 +2,16 @@
   "stage": "NEEDS_CONFIRMED",
   "database": "mwf_fx_needs_confirmed",
   "seeded": {
-    "sessionId": "01a16074-f300-71e7-894a-6c2b84126296",
-    "relationshipId": "01a16074-f2f6-7c16-941f-03e71519484b",
-    "invitationId": "01a16074-f304-7775-8b53-7315ff14492b",
+    "sessionId": "01a1610a-3809-7d37-abc8-ed62b1716fa6",
+    "relationshipId": "01a1610a-3804-7df5-b463-e4a82f47def2",
+    "invitationId": "01a1610a-380b-7f01-a41f-2c613e4992a4",
     "userA": {
-      "id": "01a16074-f2c4-7253-8838-d444c190f40d",
+      "id": "01a1610a-37f8-784e-88e2-2b18f9e9b0ff",
       "email": "ada@e2e.test",
       "name": "Ada Lovelace"
     },
     "userB": {
-      "id": "01a16074-f2c8-7071-90e7-431bca0ba001",
+      "id": "01a1610a-37fb-7ab9-88dd-8e4d795130a9",
       "email": "bob@e2e.test",
       "name": "Bob Ross"
     }
@@ -100,5 +100,5 @@
     "UserVessel",
     "ValidationFeedbackDraft"
   ],
-  "builtAt": "2026-10-21T21:53:59.865Z"
+  "builtAt": "2026-10-22T00:37:02.186Z"
 }

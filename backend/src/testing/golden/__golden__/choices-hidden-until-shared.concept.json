@@ -877,7 +877,7 @@
               "source": "YOU",
               "status": "in_progress"
             },
-            "defaultCheckInDate": "2026-10-31",
+            "defaultCheckInDate": "<date:today+10d>",
             "ownNeeds": [
               {
                 "id": "<need:ada@main#2>",
@@ -1287,7 +1287,7 @@
                 "source": "YOU",
                 "status": "in_progress"
               },
-              "defaultCheckInDate": "2026-10-31",
+              "defaultCheckInDate": "<date:today+10d>",
               "ownNeeds": [
                 {
                   "id": "<need:bob@main#2>",
@@ -1573,7 +1573,7 @@
                 "source": "YOU",
                 "status": "in_progress"
               },
-              "defaultCheckInDate": "2026-10-31",
+              "defaultCheckInDate": "<date:today+10d>",
               "ownNeeds": [
                 {
                   "id": "<need:bob@main#2>",
@@ -2176,7 +2176,7 @@
               "source": "YOU",
               "status": "in_progress"
             },
-            "defaultCheckInDate": "2026-10-31",
+            "defaultCheckInDate": "<date:today+10d>",
             "ownNeeds": [
               {
                 "id": "<need:ada@main#2>",
@@ -2593,7 +2593,7 @@
                 "source": "YOU",
                 "status": "in_progress"
               },
-              "defaultCheckInDate": "2026-10-31",
+              "defaultCheckInDate": "<date:today+10d>",
               "ownNeeds": [
                 {
                   "id": "<need:bob@main#2>",
@@ -2872,7 +2872,7 @@
                 "source": "YOU",
                 "status": "in_progress"
               },
-              "defaultCheckInDate": "2026-10-31",
+              "defaultCheckInDate": "<date:today+10d>",
               "ownNeeds": [
                 {
                   "id": "<need:bob@main#2>",
@@ -3491,7 +3491,7 @@
               "source": "YOU",
               "status": "in_progress"
             },
-            "defaultCheckInDate": "2026-10-31",
+            "defaultCheckInDate": "<date:today+10d>",
             "ownNeeds": [
               {
                 "id": "<need:ada@main#2>",

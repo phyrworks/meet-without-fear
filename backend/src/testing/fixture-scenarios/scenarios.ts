@@ -442,7 +442,7 @@ const BUILDERS: Record<TargetStage, Build> = {
     ada.promptCaptures = [adaReflectionCapture(sec(-95))];
     const bob = bobFeltHeard(at(0), a);
     bob.promptCaptures = [bobSessionCapture(bob, at(-1))];
-    return { invitation: ACCEPTED, participants: [ada, bob] };
+    return { invitation: ACCEPTED, participants: [ada, bob], currentShape: { explicitStamps: true } };
   },
 
   // Stage 3 for both: needs confirmed, nothing shared or validated yet. The
@@ -454,7 +454,7 @@ const BUILDERS: Record<TargetStage, Build> = {
       delete p.milestones.needs_shared;
       p.needs = p.key === A ? NEEDS_CONFIRMED_TEXT.ada : NEEDS_CONFIRMED_TEXT.bob;
     }
-    return s;
+    return { ...s, currentShape: { ...s.currentShape, explicitStamps: true } };
   },
 
   [TargetStage.TOMBSTONE_READY]: ({ a, b }) => tombstoneReady(a, b),
@@ -602,6 +602,7 @@ function tombstoneReady(a: string, b: string): ReturnType<Build> {
   return {
     invitation: ACCEPTED,
     participants: [ada, bob],
+    currentShape: { explicitStamps: true },
     // Bob's guess about Ada had gaps; Ada shared context, delivered to Bob.
     reconciliation: {
       result: reconcilerResult(b, a, sec(-311), B, A),

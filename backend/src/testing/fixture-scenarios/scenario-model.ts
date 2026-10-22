@@ -362,4 +362,12 @@ export interface CurrentShapeQuirks {
    * STRATEGIC_REPAIR_COMPLETE write order).
    */
   batchNeeds?: boolean;
+  /**
+   * TS-5 stages only: write every timestamp explicitly, as a fixed offset from
+   * one clock read — no `@default(now())` / `@updatedAt`, no co-written rows in
+   * one millisecond — so a fixture rebuild cannot move its goldens (see the
+   * current-shape writer). The 13 pre-TS-5 stages leave it off: their rows must
+   * stay byte-identical to what their goldens were recorded against.
+   */
+  explicitStamps?: boolean;
 }
