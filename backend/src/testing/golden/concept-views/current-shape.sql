@@ -1054,6 +1054,11 @@ LEFT JOIN old_concept_participant p ON p.session_id = uv."sessionId" AND p.user_
 -- Target CHECK `status <> 'ACCEPTED' OR (accepted_at IS NOT NULL AND
 -- accepted_by_user_id IS NOT NULL)`: an ACCEPTED invitation the view cannot
 -- give an acceptor (or an accepted instant) fails the snapshot.
+-- TRAP (documented, not scoped away): the factory's no-partner variants of the
+-- partner-required stages write an ACCEPTED invitation with ONE participant,
+-- so a concept snapshot of those fixtures fails here. That is the migration
+-- precheck telling the truth about that state (the target CHECK rejects it);
+-- no golden is recorded on a no-partner fixture.
 CREATE VIEW concept_check_invitation_accepted_without_acceptor AS
 SELECT id, accepted_by_user_id IS NULL AS no_acceptor, accepted_at IS NULL AS no_accepted_at
 FROM old_concept_invitation

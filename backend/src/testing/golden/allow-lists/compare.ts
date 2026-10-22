@@ -57,6 +57,28 @@ function getDotted(v: unknown, dotted: string): unknown {
   return cur;
 }
 
+/** Key-order-independent JSON. */
+function canon(v: unknown): string {
+  return JSON.stringify(v, (_k, x) =>
+    isObj(x) ? Object.fromEntries(Object.keys(x).sort().map(k => [k, x[k]])) : x,
+  );
+}
+
+/** A deep copy of `base` with each dot path in `overrides` set to its value. */
+function withOverrides(base: unknown, overrides: Record<string, unknown>): unknown {
+  const out = JSON.parse(JSON.stringify(base ?? {})) as Record<string, unknown>;
+  for (const [path, value] of Object.entries(overrides)) {
+    const parts = path.split('.');
+    let cur: Record<string, unknown> = out;
+    for (const k of parts.slice(0, -1)) {
+      if (!isObj(cur[k])) cur[k] = {};
+      cur = cur[k] as Record<string, unknown>;
+    }
+    cur[parts[parts.length - 1]] = value;
+  }
+  return out;
+}
+
 /**
  * Compare a run against its normalised baseline under an allow-list:
  * "subset plus named changes". Every baseline value must be present and equal
@@ -94,13 +116,16 @@ export function compareWithAllowList(expected: unknown, actual: unknown, allow: 
    * matches the entry's map key (for label-keyed row maps).
    */
   const admitEntry = (entries: Entry[], used: Set<Entry>, value: unknown, mapKey?: string): boolean => {
-    const r = entries.find(
-      x =>
-        !used.has(x) &&
-        Object.entries((x.rule as AddedEntriesRule).where).every(
-          ([k, v]) => JSON.stringify(k === '$key' ? mapKey : getDotted(value, k)) === JSON.stringify(v),
-        ),
-    );
+    const r = entries.find(x => {
+      if (used.has(x)) return false;
+      const rule = x.rule as AddedEntriesRule;
+      // `exact`: the entry is exactly the object `where` spells out — no field
+      // it does not name, so an unnamed field cannot ride in.
+      if (rule.exact) return canon(value) === canon(withOverrides({}, rule.where));
+      return Object.entries(rule.where).every(
+        ([k, v]) => JSON.stringify(k === '$key' ? mapKey : getDotted(value, k)) === JSON.stringify(v),
+      );
+    });
     if (!r) return false;
     used.add(r);
     return true;
@@ -115,14 +140,19 @@ export function compareWithAllowList(expected: unknown, actual: unknown, allow: 
     if (Array.isArray(e0) && Array.isArray(a0)) {
       let e: unknown[] = e0;
       let a: unknown[] = a0;
-      // `replacedEntry`: one baseline entry matching `where` and one run entry
-      // matching `with` leave the positional comparison together (TS-5).
+      // `replacedEntry`: the baseline entry matching `where`, with the `with`
+      // overrides applied, must EQUAL one run entry (every other field as
+      // recorded); then both leave the positional comparison (TS-5). If no run
+      // entry equals it, nothing is removed and the positional comparison
+      // reports the difference.
       for (const r of rulesAt('replacedEntry', p)) {
         const rule = r.rule as ReplacedEntryRule;
         const ei = e.findIndex(x => satisfies(x, rule.where));
-        const ai = a.findIndex(x => satisfies(x, rule.with));
         if (ei >= 0) r.matched++;
-        if (ei < 0 || ai < 0) continue;
+        if (ei < 0) continue;
+        const want = canon(withOverrides(e[ei], rule.with));
+        const ai = a.findIndex(x => canon(x) === want);
+        if (ai < 0) continue;
         e = e.filter((_, i) => i !== ei);
         a = a.filter((_, i) => i !== ai);
       }

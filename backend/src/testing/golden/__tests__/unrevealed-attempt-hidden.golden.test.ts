@@ -31,6 +31,7 @@
 import {
   UNREVEALED_ATTEMPT_HIDDEN_ALLOW,
   UNREVEALED_ATTEMPT_HIDDEN_KNOWN_LEAKS,
+  ADA_ORIGINAL,
   ADA_REVISED,
   R2_RESUBMIT_STEP,
   R2_REVEAL_STEP,
@@ -140,6 +141,12 @@ describe(`golden: ${SCENARIO}`, () => {
     expect(steps[67].label).toBe('revealed: empathy status as bob@e2e.test');
     expect(steps[68].label).toBe('revealed: partner empathy as bob@e2e.test');
     expect(steps[82].label).toBe('revealed: empathy status as ada@e2e.test');
+  });
+
+  // Fix round 2: the reveal discloses the live round only. Ada's superseded
+  // first statement was never revealed and must stay out of Bob's reads.
+  it("after the reveal Bob reads Ada's revised statement and never her superseded original", () => {
+    expect(findLeaks(phases.revealed.bob, { "Ada's original statement": ADA_ORIGINAL })).toEqual([]);
   });
 
   it('after the reveal each subject reads the statement about them', () => {

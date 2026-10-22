@@ -279,30 +279,52 @@ describe('compareWithAllowList — unrevealed-attempt-hidden (R2 rounds, TS-5 fi
   const R1 = '<empathyAttempt:ada→bob@main#1>';
   const R2 = '<empathyAttempt:ada→bob@main#2>';
 
-  /** The baseline as the target would record it: resubmit = a new round, reveal = round 2. */
-  function targetLike(copySource = R2): Json {
+  /** Round 2 as the target inserts it: every column of the view. */
+  const round2 = (overrides: Json = {}): Json => ({
+    view: 'empathy_attempt',
+    kind: 'added',
+    key: R2,
+    after: {
+      id: R2,
+      author_participant_id: '<participant:ada@main>',
+      subject_participant_id: '<participant:bob@main>',
+      round: 2,
+      supersedes_attempt_id: R1,
+      content: ADA_REVISED,
+      status: 'READY',
+      status_version: 1,
+      submitted_at: '<ts:fresh>',
+      revealed_at: null,
+      delivery_status: 'PENDING',
+      delivered_at: null,
+      seen_at: null,
+      ...overrides,
+    },
+  });
+
+  /**
+   * The baseline as the target would record it, built from the RECORDED rows
+   * (complete objects, not predicates): resubmit = round 1 superseded + round
+   * 2 inserted; reveal = round 2 revealed. `mutate` corrupts it for negatives.
+   */
+  function targetLike(copySource = R2, mutate: (t: Json) => void = () => undefined): Json {
     const t = clone(baseline);
     const rs = t.steps[R2_RESUBMIT_STEP].changes;
-    const i = rs.findIndex((c: Json) => c.view === 'empathy_attempt' && c.key === R1);
-    rs[i] = { view: 'empathy_attempt', kind: 'changed', key: R1, after: { round: 1, status: 'SUPERSEDED', content: ADA_ORIGINAL } };
-    rs.push({
-      view: 'empathy_attempt',
-      kind: 'added',
-      key: R2,
-      after: {
-        round: 2,
-        author_participant_id: '<participant:ada@main>',
-        subject_participant_id: '<participant:bob@main>',
-        supersedes_attempt_id: R1,
-        content: ADA_REVISED,
-        status: 'READY',
-      },
-    });
+    const r1 = rs.find((c: Json) => c.view === 'empathy_attempt' && c.key === R1);
+    r1.changedFields = ['status', 'status_version'];
+    Object.assign(r1.after, { round: 1, content: ADA_ORIGINAL, status: 'SUPERSEDED', status_version: 2 });
+    rs.push(round2());
     const m = rs.find((c: Json) => c.key === '<message:ada@main/EMPATHY_STATEMENT:ada#2>');
     m.after.source_attempt_id = R2;
     const rv = t.steps[R2_REVEAL_STEP].changes;
-    const j = rv.findIndex((c: Json) => c.view === 'empathy_attempt' && c.key === R1);
-    rv[j] = { view: 'empathy_attempt', kind: 'changed', key: R2, after: { round: 2, status: 'REVEALED', content: ADA_REVISED } };
+    const rev = rv.find((c: Json) => c.view === 'empathy_attempt' && c.key === R1);
+    rev.key = R2;
+    for (const side of ['before', 'after']) {
+      Object.assign(rev[side], { id: R2, supersedes_attempt_id: R1, submitted_at: '<ts:fresh>' });
+    }
+    rev.before.status_version = 1;
+    rev.after.status_version = 2;
+    mutate(t);
     for (const [author, subject, src] of [
       ['ada', 'bob', copySource],
       ['bob', 'ada', '<empathyAttempt:bob→ada@main#1>'],
@@ -333,6 +355,33 @@ describe('compareWithAllowList — unrevealed-attempt-hidden (R2 rounds, TS-5 fi
 
   it('rejects a delivered copy of the superseded round 1', () => {
     expect(compareWithAllowList(baseline, targetLike(R1), UNREVEALED_ATTEMPT_HIDDEN_ALLOW).violations).not.toEqual([]);
+  });
+
+  it('rejects a target that stamps revealed_at on the superseded round 1 at the resubmit', () => {
+    const t = targetLike(R2, x => {
+      const r1 = x.steps[R2_RESUBMIT_STEP].changes.find((c: Json) => c.key === R1 && c.view === 'empathy_attempt');
+      r1.after.revealed_at = '<ts:fresh>';
+    });
+    expect(compareWithAllowList(baseline, t, UNREVEALED_ATTEMPT_HIDDEN_ALLOW).violations).not.toEqual([]);
+  });
+
+  it('rejects a round 2 inserted already delivered, or carrying an extra field', () => {
+    for (const bad of [round2({ delivery_status: 'DELIVERED', delivered_at: '<ts:fresh>' }), round2({ extra: 1 })]) {
+      const t = targetLike(R2, x => {
+        const rs = x.steps[R2_RESUBMIT_STEP].changes;
+        rs[rs.findIndex((c: Json) => c.key === R2)] = bad;
+      });
+      expect(compareWithAllowList(baseline, t, UNREVEALED_ATTEMPT_HIDDEN_ALLOW).violations).not.toEqual([]);
+    }
+  });
+
+  it('rejects a reveal step that also stamps the superseded round', () => {
+    const t = targetLike(R2, x => {
+      const rv = x.steps[R2_REVEAL_STEP].changes;
+      const rev = rv.find((c: Json) => c.key === R2);
+      rev.after.supersedes_attempt_id = null;
+    });
+    expect(compareWithAllowList(baseline, t, UNREVEALED_ATTEMPT_HIDDEN_ALLOW).violations).not.toEqual([]);
   });
 
   it('rejects the delivered copy written by any step other than the reveal', () => {

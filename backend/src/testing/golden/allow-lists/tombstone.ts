@@ -185,3 +185,15 @@ export const TOMBSTONE_KNOWN_DEVIATIONS: KnownLeak[] = [
       'would RAISE (author NOT NULL). Recorded as `unrepresentable` in the concept baseline.',
   ),
 ];
+
+/** The leaver's email / names on the partner's three name-bearing reads after the deletion, today (fix round 2). */
+export const TOMBSTONE_NAME_KNOWN_LEAKS: KnownLeak[] = ['session', 'state', 'session list'].flatMap(read =>
+  ["Ada's first name", "Ada's last name"].map(probe => ({
+    at: `after deletion: ${read} as bob@e2e.test ⊃ ${probe}`,
+    finding:
+      'R5: after account deletion the partner still reads the leaver’s name (RelationshipMember.nickname) — F-R5-6',
+    evidence:
+      'body …partner = {id: "", name: "Ada Lovelace", nickname: "Ada Lovelace"} (Bob’s member row keeps the nickname; ' +
+      'the user row is gone). The email is not shown.',
+  })),
+);

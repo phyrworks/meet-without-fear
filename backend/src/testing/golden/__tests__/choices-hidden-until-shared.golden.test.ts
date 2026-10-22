@@ -24,6 +24,9 @@ import {
   CHOICES_HIDDEN_UNTIL_SHARED_ALLOW,
   CHOICES_HIDDEN_UNTIL_SHARED_KNOWN_LEAKS,
   CHOICES_NEED_LABEL_KNOWN_LEAKS,
+  CHOICES_BOB_WRITES_KNOWN_LEAKS,
+  ADA_READ_STEPS,
+  BOB_WRITE_STEPS,
 } from '../allow-lists/choices-hidden-until-shared';
 import { viewName } from '../concept-views';
 import { listTables } from '../db';
@@ -157,6 +160,28 @@ describe(`golden: ${SCENARIO}`, () => {
     const probes = { 'bob need label Understanding': '"Understanding"', 'bob need label Support': '"Support"' };
     const observed = findLeaks([...phase.before, ...phase.unshared, ...phase.shared], probes);
     expect(unexpectedLeakReport(observed, CHOICES_NEED_LABEL_KNOWN_LEAKS)).toEqual({ unexpected: [], stale: [] });
+  });
+
+  it('the step layout matches the indices the allow-list pins', () => {
+    expect(ADA_READ_STEPS.every(i => steps[i].label.endsWith(' as ada@e2e.test'))).toBe(true);
+    expect(BOB_WRITE_STEPS.map(i => steps[i].label)).toEqual([
+      'choose pause as bob',
+      'choose checkin as bob',
+      'set aside open need as bob',
+      'share selections as bob',
+    ]);
+    expect(steps).toHaveLength(31);
+  });
+
+  // Fix round 2: Bob's own write responses return the Stage 4 state too —
+  // with Ada's needs in it. Her labels are probes there (KNOWN if they hit).
+  it("Ada's need labels never reach Bob's write responses (known leaks aside)", () => {
+    const probes = { 'ada need label Partnership': '"Partnership"', 'ada need label Appreciation': '"Appreciation"' };
+    const observed = findLeaks(
+      BOB_WRITE_STEPS.map(i => steps[i]),
+      probes,
+    );
+    expect(unexpectedLeakReport(observed, CHOICES_BOB_WRITES_KNOWN_LEAKS)).toEqual({ unexpected: [], stale: [] });
   });
 
   // TAUTOLOGICAL ON THE CURRENT SHAPE (fix round 1, I4): the current-shape

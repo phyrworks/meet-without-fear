@@ -63,67 +63,79 @@ export const UNREVEALED_ATTEMPT_HIDDEN_ALLOW: AllowList = {
       why: 'spec §1.2 empathy_attempt: revisionCount becomes rows with a round; a reveal payload names its round and row.',
     },
     // --- RESUBMIT: round 1 superseded, round 2 inserted --------------------
+    // `replacedEntry`: the run entry must equal the recorded one with ONLY
+    // these overrides — so round 1 keeps `revealed_at: null`,
+    // `delivered_at: null`, `delivery_status: 'PENDING'`, its id, author,
+    // subject and `submitted_at`, and its `before` side, as recorded.
     {
       kind: 'replacedEntry',
       at: `steps.${R2_RESUBMIT_STEP}.changes`,
       where: { view: 'empathy_attempt', key: R1, 'after.round': 2 },
       with: {
-        view: 'empathy_attempt',
-        kind: 'changed',
-        key: R1,
+        changedFields: ['status', 'status_version'],
         'after.round': 1,
-        'after.status': 'SUPERSEDED',
         'after.content': ADA_ORIGINAL,
+        'after.status': 'SUPERSEDED',
+        // One transition (REFINING → SUPERSEDED) from the recorded version 1.
+        'after.status_version': 2,
       },
       mustMatch: true,
       why: 'spec §1.2/§4: on resubmit round 1 goes to SUPERSEDED and stays immutable (today the row is rewritten).',
     },
     {
+      // `exact`: every column of the view, none unnamed.
       kind: 'addedEntries',
+      exact: true,
       at: `steps.${R2_RESUBMIT_STEP}.changes`,
       where: {
         view: 'empathy_attempt',
         kind: 'added',
         key: R2,
-        'after.round': 2,
+        'after.id': R2,
         'after.author_participant_id': '<participant:ada@main>',
         'after.subject_participant_id': '<participant:bob@main>',
+        'after.round': 2,
         'after.supersedes_attempt_id': R1,
         'after.content': ADA_REVISED,
         // The step settles after the reconciler has run: inserted HELD, it is
         // READY when the step's state is taken — as today's row is.
         'after.status': 'READY',
+        // HELD at insert (0) → READY (1).
+        'after.status_version': 1,
+        'after.submitted_at': '<ts:fresh>',
+        'after.revealed_at': null,
+        'after.delivery_status': 'PENDING',
+        'after.delivered_at': null,
+        'after.seen_at': null,
       },
       mustMatch: true,
-      why: 'spec §1.2: the resubmit inserts round n+1 superseding round n.',
+      why: 'spec §1.2: the resubmit inserts round n+1 superseding round n — unrevealed, undelivered.',
     },
     {
       kind: 'replacedEntry',
       at: `steps.${R2_RESUBMIT_STEP}.changes`,
       where: { view: 'message', key: '<message:ada@main/EMPATHY_STATEMENT:ada#2>', 'after.source_attempt_id': R1 },
-      with: {
-        view: 'message',
-        kind: 'added',
-        key: '<message:ada@main/EMPATHY_STATEMENT:ada#2>',
-        'after.conversation_id': '<conversation:ada@main/MAIN>',
-        'after.source_attempt_id': R2,
-        'after.content': ADA_REVISED,
-      },
+      with: { 'after.source_attempt_id': R2 },
       mustMatch: true,
       why: 'plan §3 step 9 lineage: the resubmitted statement in the author’s chat names the round it states.',
     },
     // --- REVEAL: round 2 revealed; copies pinned to this step ---------------
+    // Recorded: round "2" (today's rewritten row, label #1) READY → REVEALED.
+    // Target: the round-2 row #2 — same transition, its own identity.
     {
       kind: 'replacedEntry',
       at: `steps.${R2_REVEAL_STEP}.changes`,
       where: { view: 'empathy_attempt', key: R1, 'after.status': 'REVEALED' },
       with: {
-        view: 'empathy_attempt',
-        kind: 'changed',
         key: R2,
-        'after.round': 2,
-        'after.status': 'REVEALED',
-        'after.content': ADA_REVISED,
+        'before.id': R2,
+        'after.id': R2,
+        'before.supersedes_attempt_id': R1,
+        'after.supersedes_attempt_id': R1,
+        'before.submitted_at': '<ts:fresh>',
+        'after.submitted_at': '<ts:fresh>',
+        'before.status_version': 1,
+        'after.status_version': 2,
       },
       mustMatch: true,
       why: 'spec §4: the reveal flips the live round (2); round 1 stays SUPERSEDED and unrevealed.',

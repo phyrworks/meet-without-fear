@@ -58,11 +58,14 @@ export interface AddedKeysRule extends RuleBase {
 }
 
 /**
- * ONE baseline entry of a matching array (matching `where`) may be replaced by
- * ONE run entry (matching `with`); both then leave the positional comparison.
- * For a row the target represents as a different row — TS-5 R2: today's
- * resubmit mutates the attempt in place, the target supersedes round 1 and
- * reveals round 2. Pin `with` completely, as for `addedEntries`.
+ * ONE baseline entry of a matching array (the one matching `where`) may be
+ * replaced by ONE run entry. The comparator enforces completeness: the run
+ * entry must EQUAL the baseline entry with the `with` overrides applied (dot
+ * paths → values) — every field `with` does not name must be as recorded, so
+ * a target that stamps, say, `revealed_at` on a superseded round is rejected.
+ * For a row the target represents differently — TS-5 R2: today's resubmit
+ * mutates the attempt in place, the target supersedes round 1 and reveals
+ * round 2.
  */
 export interface ReplacedEntryRule extends RuleBase {
   kind: 'replacedEntry';
@@ -93,6 +96,13 @@ export interface ValuesSubsetRule extends RuleBase {
 export interface AddedEntriesRule extends RuleBase {
   kind: 'addedEntries';
   where: Record<string, unknown>;
+  /**
+   * The comparator enforces completeness: the admitted entry must be EXACTLY
+   * the object `where` spells out (dot paths expanded) — a field `where` does
+   * not name cannot ride in. Use it when every field of the row is known
+   * (TS-5 R2's round-2 attempt). `$key` is not allowed with `exact`.
+   */
+  exact?: boolean;
 }
 
 /**

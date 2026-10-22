@@ -34,6 +34,7 @@ import {
   TOMBSTONE_DELETION_STEP,
   TOMBSTONE_KNOWN_DEVIATIONS,
   TOMBSTONE_PRIVATE_KNOWN_LEAKS,
+  TOMBSTONE_NAME_KNOWN_LEAKS,
   TOMBSTONE_READ_EXCEPT,
 } from '../allow-lists/tombstone';
 import { withClient, listTables } from '../db';
@@ -200,7 +201,17 @@ describe(`golden: ${SCENARIO}`, () => {
         return body.includes('"name":"Ada Lovelace"') || body.includes('"nickname":"Ada Lovelace"');
       }),
     );
-    rule('user row is tombstoned, not deleted', t.User.some(u => u.id === adaId));
+    // Fix round 2: the scrub, not mere existence (spec §4 walk step 6).
+    const adaUser = t.User.find(u => u.id === adaId);
+    rule(
+      'user row is tombstoned, not deleted',
+      !!adaUser &&
+        String(adaUser.email).startsWith('deleted+') &&
+        adaUser.name === null &&
+        adaUser.firstName === null &&
+        adaUser.lastName === null &&
+        adaUser.clerkId === null,
+    );
     rule(
       'the concept views represent the state after the deletion',
       !steps.some(s => s.concept?.unrepresentable !== undefined),
@@ -215,10 +226,33 @@ describe(`golden: ${SCENARIO}`, () => {
     expect(unexpectedLeakReport(observed, TOMBSTONE_PRIVATE_KNOWN_LEAKS)).toEqual({ unexpected: [], stale: [] });
   });
 
-  it('the probes are live: the deletion removed rows carrying them (they existed in the run database)', () => {
-    const removed = JSON.stringify(deletion.changes.filter(c => c.kind === 'removed').map(c => c.before));
-    for (const probe of [ADA_REFLECTION.title, ADA_REFLECTION.userLine, ...TOMBSTONE_TEXT.adaNeeds.map(n => n.need)]) {
-      expect(removed).toContain(probe);
+  // Fix round 2: checked against the restored state (the target keeps some of
+  // these rows, so "the deletion removed them" would not hold there).
+  it('the probes are live: the restored state carries them', () => {
+    const initial = JSON.stringify(harness.conceptInitial!.tables);
+    for (const probe of [
+      ADA_REFLECTION.title,
+      ADA_REFLECTION.userLine,
+      ...ADA_PRIVATE_LINES,
+      ...TOMBSTONE_TEXT.adaNeeds.flatMap(n => [n.need, ...(n.evidence ?? [])]),
+      'ada@e2e.test',
+      'Lovelace',
+    ]) {
+      expect(initial).toContain(probe);
     }
+  });
+
+  // Fix round 2: the leaver's identity on the three reads that carry the
+  // partner's name. Scoped to those reads: reconciler text and messages name
+  // "Ada Lovelace" by design (stored content, not a user fact).
+  it("the leaver's email and names are not on the partner's name-bearing reads (known leaks aside)", () => {
+    const nameReads = bobAfter.filter(s =>
+      ['after deletion: session as', 'after deletion: state as', 'after deletion: session list as'].some(p =>
+        s.label.startsWith(p),
+      ),
+    );
+    expect(nameReads).toHaveLength(3);
+    const observed = findLeaks(nameReads, { "Ada's email": 'ada@e2e.test', "Ada's first name": 'Ada', "Ada's last name": 'Lovelace' });
+    expect(unexpectedLeakReport(observed, TOMBSTONE_NAME_KNOWN_LEAKS)).toEqual({ unexpected: [], stale: [] });
   });
 });

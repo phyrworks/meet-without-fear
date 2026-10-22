@@ -18,6 +18,14 @@ import type { KnownLeak } from '../privacy';
 import { READ_DTO_RULES } from './common';
 import type { AllowList } from './types';
 
+/**
+ * Step layout (the scenario asserts it): Ada's 9 reads (0–8), Bob chooses
+ * twice (9, 10), Ada's 9 reads (11–19), Bob sets aside a need (20) and shares
+ * (21), Ada's 9 reads (22–30).
+ */
+export const ADA_READ_STEPS = [0, 11, 22].flatMap(start => Array.from({ length: 9 }, (_, i) => start + i));
+export const BOB_WRITE_STEPS = [9, 10, 20, 21];
+
 export const CHOICES_HIDDEN_UNTIL_SHARED_ALLOW: AllowList = {
   scenario: 'choices-hidden-until-shared',
   rules: [
@@ -27,15 +35,19 @@ export const CHOICES_HIDDEN_UNTIL_SHARED_ALLOW: AllowList = {
       // proposal's text or source label. Paired with the scenario's probe of
       // the partner's need labels (KNOWN leaks below): on the target the text
       // may change, the label may not reappear.
+      // Fix round 2: pinned to Ada's READ steps (the probed ones); Bob's write
+      // responses (which carry Ada's labels) are compared byte for byte.
       kind: 'mayDiffer',
-      at: [
-        'steps.*.body.data.walkthrough.currentNeed.label',
-        'steps.*.body.data.walkthrough.ownNeeds.*.label',
-        'steps.*.body.data.walkthrough.partnerNeeds.*.label',
-        'steps.*.body.data.**.needsAddressed.*.label',
-        'steps.*.body.data.inventory.unaddressedNeeds.*.label',
-        'steps.*.body.data.coverageAudit.*.*.label',
-      ],
+      at: ADA_READ_STEPS.flatMap(i =>
+        [
+          'walkthrough.currentNeed.label',
+          'walkthrough.ownNeeds.*.label',
+          'walkthrough.partnerNeeds.*.label',
+          '**.needsAddressed.*.label',
+          'inventory.unaddressedNeeds.*.label',
+          'coverageAudit.*.*.label',
+        ].map(s => `steps.${i}.body.data.${s}`),
+      ),
       mustMatch: true,
       why:
         'spec §1.4 v_need_coverage over need_share: a need named in Stage 4 is its shared text, not the label ' +
@@ -83,3 +95,21 @@ export const CHOICES_NEED_LABEL_KNOWN_LEAKS: KnownLeak[] = [
     'services/stage4-state.ts builds them from coverage rows. Bob’s other need ("Understanding") has no coverage row ' +
     'and is not shown.',
 }));
+
+/** Ada's need labels in Bob's write responses: observed against the current code (fix round 2). */
+export const CHOICES_BOB_WRITES_KNOWN_LEAKS: KnownLeak[] = [
+  'choose pause as bob',
+  'choose checkin as bob',
+  'set aside open need as bob',
+  'share selections as bob',
+].flatMap(step =>
+  ['Partnership', 'Appreciation'].map(label => ({
+    at: `${step} ⊃ ada need label ${label}`,
+    finding:
+      'R4: Stage 4 write responses (selection, need decline, share-selections) return the Stage 4 state with the ' +
+      'partner’s private need labels — the mirror of F-R4-2 (F-R4-3)',
+    evidence:
+      `body.data.state (walkthrough.partnerNeeds / proposalGroups[].proposals[].needsAddressed / coverageAudit) names ` +
+      `Ada's need "${label}" (Stage4NeedCoverage.needLabel) in the response to Bob's own write.`,
+  })),
+);
