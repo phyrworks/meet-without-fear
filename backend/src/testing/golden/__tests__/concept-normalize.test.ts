@@ -79,6 +79,25 @@ describe('concept labels — participants and conversations', () => {
   });
 });
 
+describe('concept labels — brain_activity (TS-5)', () => {
+  it('ranks captures by time within their reflection, else their session', () => {
+    const R = '33333333-3333-3333-3333-33333333aaaa';
+    const map = buildConceptLabelMap(
+      input({
+        reflection: [{ id: R, user_id: ADA, created_at: '2026-01-01 00:00:00' }],
+        brain_activity: [
+          { id: 'b2', session_id: SESSION, reflection_id: null, created_at: '2026-01-01 00:00:02' },
+          { id: 'b1', session_id: SESSION, reflection_id: null, created_at: '2026-01-01 00:00:01' },
+          { id: 'b3', session_id: null, reflection_id: R, created_at: '2026-01-01 00:00:03' },
+        ],
+      }),
+    );
+    expect(map.labels.get('b1')).toBe('<brainActivity:session:main#1>');
+    expect(map.labels.get('b2')).toBe('<brainActivity:session:main#2>');
+    expect(map.labels.get('b3')).toBe('<brainActivity:reflection:ada#1#1>');
+  });
+});
+
 describe('concept labels — messages', () => {
   it('ranks CHAT messages within their conversation by time, then id', () => {
     const map = buildConceptLabelMap(

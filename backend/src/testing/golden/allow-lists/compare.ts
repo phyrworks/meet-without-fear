@@ -5,7 +5,16 @@
  * whether a run is accepted under a scenario's allow-list (`./types.ts`).
  */
 
-import type { AbsentKeysRule, AddedEntriesRule, AddedKeysRule, AllowList, AllowRule } from './types';
+import type {
+  AbsentKeysRule,
+  AddedEntriesRule,
+  AddedKeysRule,
+  AllowList,
+  AllowRule,
+  MayBeAbsentRule,
+  ReplacedEntryRule,
+  TiedOrderRule,
+} from './types';
 
 function brief(v: unknown): string {
   const s = JSON.stringify(v);
@@ -49,6 +58,122 @@ function getDotted(v: unknown, dotted: string): unknown {
   return cur;
 }
 
+/** Key-order-independent JSON. */
+function canon(v: unknown): string {
+  return JSON.stringify(v, (_k, x) =>
+    isObj(x)
+      ? Object.fromEntries(
+          Object.keys(x)
+            .sort()
+            .map(k => [k, x[k]]),
+        )
+      : x,
+  );
+}
+
+/** A deep copy of `base` with each dot path in `overrides` set to its value. */
+function withOverrides(base: unknown, overrides: Record<string, unknown>): unknown {
+  const out = JSON.parse(JSON.stringify(base ?? {})) as Record<string, unknown>;
+  for (const [path, value] of Object.entries(overrides)) {
+    const parts = path.split('.');
+    let cur: Record<string, unknown> = out;
+    for (const k of parts.slice(0, -1)) {
+      if (!isObj(cur[k])) cur[k] = {};
+      cur = cur[k] as Record<string, unknown>;
+    }
+    cur[parts[parts.length - 1]] = value;
+  }
+  return out;
+}
+
+/**
+ * `tiedOrder` (TS-5 fix rounds 3–4). Rows an endpoint returns in heap order
+ * because they tie on its only sort key must not decide a golden — but only a
+ * GENUINE tie: rows with the same RAW key value (the same millisecond). Keying
+ * the tie on the normalised value (round 3) merged every run-written row,
+ * since all fresh stamps normalise to `<ts:fresh>`, and stopped asserting the
+ * order between them.
+ *
+ * So the tie groups are found on the RAW step payload, before normalisation
+ * (`rawTieRanges`), and recorded on the golden step as `tiedRanges` — index
+ * ranges of genuinely tied entries, per array path. Comparison
+ * (`alignTies`) takes the union of the baseline's and the run's ranges and
+ * puts exactly those slices into canonical order on both sides; everything
+ * else stays positional. Both sides matter: a tie can happen in the recording
+ * run (heap order recorded) or in the verifying run (heap order observed), and
+ * the endpoint's order outside a tie is not the canonical order. Rows whose
+ * raw keys differ, even by a millisecond, keep the order the endpoint returned.
+ */
+export type TiedRanges = Record<string, Array<[number, number]>>;
+
+/**
+ * Genuine-tie ranges in one step's RAW payload: for each array at a
+ * `tiedOrder` path, the [start, end) index ranges (length ≥ 2) of consecutive
+ * entries whose raw `key` values are equal. Paths are dot-joined relative to
+ * the step (`body.data.records`); `stepPath` (`['steps', '29']`) is prefixed
+ * only to match the rules' `at` patterns.
+ */
+export function rawTieRanges(rawPayload: unknown, rules: readonly AllowRule[], stepPath: string[]): TiedRanges {
+  const tied = rules.filter((r): r is TiedOrderRule => r.kind === 'tiedOrder');
+  const out: TiedRanges = {};
+  if (!tied.length) return out;
+  const patterns = tied.map(r => ({ key: r.key, pats: (Array.isArray(r.at) ? r.at : [r.at]).map(p => p.split('.')) }));
+  const go = (raw: unknown, p: string[]): void => {
+    if (Array.isArray(raw)) {
+      raw.forEach((x, i) => go(x, [...p, String(i)]));
+      for (const { key, pats } of patterns) {
+        if (!pats.some(pat => matchPath(pat, [...stepPath, ...p]))) continue;
+        let start = 0;
+        for (let i = 1; i <= raw.length; i++) {
+          const ends =
+            i === raw.length || JSON.stringify(getDotted(raw[i], key)) !== JSON.stringify(getDotted(raw[start], key));
+          if (!ends) continue;
+          if (i - start >= 2 && getDotted(raw[start], key) != null) (out[p.join('.')] ??= []).push([start, i]);
+          start = i;
+        }
+      }
+      return;
+    }
+    if (isObj(raw)) for (const [k, x] of Object.entries(raw)) go(x, [...p, k]);
+  };
+  go(rawPayload, []);
+  return out;
+}
+
+/**
+ * Copies of a baseline and a run golden (`{steps: [{…, tiedRanges?}]}`) with,
+ * per step, every range in EITHER side's `tiedRanges` put into canonical order
+ * on BOTH sides, and `tiedRanges` removed (it is metadata, not behaviour).
+ */
+export function alignTies<T>(expected: T, actual: T): [T, T] {
+  const e = JSON.parse(JSON.stringify(expected)) as { steps?: Array<Record<string, unknown>> };
+  const a = JSON.parse(JSON.stringify(actual)) as { steps?: Array<Record<string, unknown>> };
+  const sortSlice = (step: Record<string, unknown> | undefined, path: string, [s, t]: [number, number]): void => {
+    const arr = step && getDotted(step, path);
+    if (!Array.isArray(arr) || arr.length < t) return;
+    const slice = arr.slice(s, t).sort((x, y) => (canon(x) < canon(y) ? -1 : canon(x) > canon(y) ? 1 : 0));
+    arr.splice(s, t - s, ...slice);
+  };
+  const n = Math.max(e.steps?.length ?? 0, a.steps?.length ?? 0);
+  for (let i = 0; i < n; i++) {
+    const es = e.steps?.[i];
+    const as = a.steps?.[i];
+    const ranges: TiedRanges = {};
+    for (const r of [es?.tiedRanges, as?.tiedRanges] as Array<TiedRanges | undefined>) {
+      for (const [path, rs] of Object.entries(r ?? {})) (ranges[path] ??= []).push(...rs);
+    }
+    for (const [path, rs] of Object.entries(ranges)) {
+      for (const range of rs) {
+        sortSlice(es, path, range);
+        sortSlice(as, path, range);
+      }
+    }
+    if (es) delete es.tiedRanges;
+    if (as) delete as.tiedRanges;
+  }
+  return [e as T, a as T];
+}
+
 /**
  * Compare a run against its normalised baseline under an allow-list:
  * "subset plus named changes". Every baseline value must be present and equal
@@ -86,20 +211,46 @@ export function compareWithAllowList(expected: unknown, actual: unknown, allow: 
    * matches the entry's map key (for label-keyed row maps).
    */
   const admitEntry = (entries: Entry[], used: Set<Entry>, value: unknown, mapKey?: string): boolean => {
-    const r = entries.find(
-      x =>
-        !used.has(x) &&
-        Object.entries((x.rule as AddedEntriesRule).where).every(
-          ([k, v]) => JSON.stringify(k === '$key' ? mapKey : getDotted(value, k)) === JSON.stringify(v),
-        ),
-    );
+    const r = entries.find(x => {
+      if (used.has(x)) return false;
+      const rule = x.rule as AddedEntriesRule;
+      // `exact`: the entry is exactly the object `where` spells out — no field
+      // it does not name, so an unnamed field cannot ride in.
+      if (rule.exact) return canon(value) === canon(withOverrides({}, rule.where));
+      return Object.entries(rule.where).every(
+        ([k, v]) => JSON.stringify(k === '$key' ? mapKey : getDotted(value, k)) === JSON.stringify(v),
+      );
+    });
     if (!r) return false;
     used.add(r);
     return true;
   };
 
-  const walk = (e: unknown, a: unknown, p: string[]): void => {
-    if (Array.isArray(e) && Array.isArray(a)) {
+  const satisfies = (value: unknown, where: Record<string, unknown>, mapKey?: string): boolean =>
+    Object.entries(where).every(
+      ([k, v]) => JSON.stringify(k === '$key' ? mapKey : getDotted(value, k)) === JSON.stringify(v),
+    );
+
+  const walk = (e0: unknown, a0: unknown, p: string[]): void => {
+    if (Array.isArray(e0) && Array.isArray(a0)) {
+      let e: unknown[] = e0;
+      let a: unknown[] = a0;
+      // `replacedEntry`: the baseline entry matching `where`, with the `with`
+      // overrides applied, must EQUAL one run entry (every other field as
+      // recorded); then both leave the positional comparison (TS-5). If no run
+      // entry equals it, nothing is removed and the positional comparison
+      // reports the difference.
+      for (const r of rulesAt('replacedEntry', p)) {
+        const rule = r.rule as ReplacedEntryRule;
+        const ei = e.findIndex(x => satisfies(x, rule.where));
+        if (ei >= 0) r.matched++;
+        if (ei < 0) continue;
+        const want = canon(withOverrides(e[ei], rule.with));
+        const ai = a.findIndex(x => canon(x) === want);
+        if (ai < 0) continue;
+        e = e.filter((_, i) => i !== ei);
+        a = a.filter((_, i) => i !== ai);
+      }
       const adders = rulesAt('addedEntries', p);
       adders.forEach(r => r.matched++);
       let rest = a;
@@ -116,9 +267,14 @@ export function compareWithAllowList(expected: unknown, actual: unknown, allow: 
       }
       return;
     }
+    const e = e0;
+    const a = a0;
     if (isObj(e) && isObj(a)) {
       const absent = new Set(rulesAt('absentKeys', p).flatMap(r => (r.matched++, (r.rule as AbsentKeysRule).keys)));
       const added = new Set(rulesAt('addedKeys', p).flatMap(r => (r.matched++, (r.rule as AddedKeysRule).keys)));
+      const removable = new Set(
+        rulesAt('mayBeAbsent', p).flatMap(r => (r.matched++, (r.rule as MayBeAbsentRule).keys)),
+      );
       const adders = rulesAt('addedEntries', p);
       adders.forEach(r => r.matched++);
       const used = new Set<Entry>();
@@ -131,12 +287,29 @@ export function compareWithAllowList(expected: unknown, actual: unknown, allow: 
           continue;
         }
         if (inE && !inA) {
-          fail(kp, 'present in the baseline, missing from the run', e[k], undefined);
+          if (!removable.has(k)) fail(kp, 'present in the baseline, missing from the run', e[k], undefined);
           continue;
         }
         if (!inE && inA) {
-          if (!added.has(k) && !admitEntry(adders, used, a[k], k))
+          if (added.has(k)) {
+            // `each`: the added value must be an array whose every entry
+            // satisfies the predicate (TS-5: a step's concept changes where
+            // the baseline could record none).
+            for (const r of rulesAt('addedKeys', p)) {
+              const rule = r.rule as AddedKeysRule;
+              if (!rule.each || !rule.keys.includes(k)) continue;
+              const v = a[k];
+              const bad = Array.isArray(v) ? v.filter(x => !satisfies(x, rule.each!)) : [v];
+              if (bad.length) fail(kp, 'added value outside the rule’s `each` predicate', rule.each, bad);
+            }
+          } else if (!admitEntry(adders, used, a[k], k)) {
             fail(kp, 'added and not on the allow-list', undefined, a[k]);
+          }
+          continue;
+        }
+        const differ = rulesAt('mayDiffer', kp);
+        if (differ.length) {
+          differ.forEach(r => r.matched++);
           continue;
         }
         const subsets = rulesAt('valuesSubset', kp);

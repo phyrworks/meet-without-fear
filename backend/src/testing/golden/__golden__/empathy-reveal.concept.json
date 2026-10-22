@@ -387,6 +387,11 @@
         "participant_id": "<participant:ada@main>",
         "reached_at": "<ts:13>"
       },
+      "<milestone:ada@main/invitation_sent>": {
+        "milestone_key": "invitation_sent",
+        "participant_id": "<participant:ada@main>",
+        "reached_at": "<ts:1>"
+      },
       "<milestone:bob@main/compact_signed>": {
         "milestone_key": "compact_signed",
         "participant_id": "<participant:bob@main>",

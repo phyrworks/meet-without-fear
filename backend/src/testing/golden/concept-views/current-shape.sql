@@ -256,9 +256,9 @@ JOIN old_concept_participant p ON p.session_id = sc."sessionId" AND p.user_id = 
 -- `concept_check_unmapped_gate_key` and fails the run (step 7: "unknown keys
 -- RAISE").
 --
--- Departure, documented by TS-3: today's fixtures complete stage 4 under the
--- legacy ranking flow, so a COMPLETED stage-4 row decodes here as
--- `choices_shared` (step 7) where the scenario model says `closed`.
+-- Stage 4 (OD5, 2026-10-21): a COMPLETED stage-4 row decodes as
+-- `choices_shared` (step 7), which is also what the scenario model says for
+-- the legacy ranking flow; TS-3's `closed` departure is gone.
 -- ----------------------------------------------------------------------------
 CREATE VIEW old_concept_participant_milestone AS
 WITH prog AS (
@@ -288,7 +288,7 @@ ts(participant_id, milestone_key, reached_at) AS (
   FROM prog WHERE (g->>'needsConfirmed')::boolean OR (g->>'needsIdentified')::boolean
   UNION ALL
   SELECT participant_id, 'needs_shared',
-         coalesce((g->>'needsSharedAt')::timestamptz AT TIME ZONE 'UTC', "completedAt", "startedAt")
+         coalesce((g->>'needsSharedAt')::timestamptz AT TIME ZONE 'UTC', (g->>'sharedAt')::timestamptz AT TIME ZONE 'UTC', "completedAt", "startedAt")
   FROM prog WHERE (g->>'needsShared')::boolean
   UNION ALL
   SELECT participant_id, 'needs_validated',
@@ -337,7 +337,13 @@ WHERE k.key NOT IN (
   -- dropped (step 7) and fixture-derived
   'feelHeardCheckOffered', 'finalEmotionalReading', 'readyToRank', 'rankingSubmitted',
   'partnerConsented', 'partnerValidated', 'partner', 'own',
-  'strategiesRanked', 'agreementCreated', 'agreementConfirmed'
+  'strategiesRanked', 'agreementCreated', 'agreementConfirmed',
+  -- TS-5: keys production's needs share writes that step 7's key table does
+  -- not list, so the migration precheck would RAISE on them (finding F3 of the
+  -- TS-5 report): `sharedAt` (stage3.ts consentToShareNeeds — read above as
+  -- `needsShared`'s instant) and `needsRevealReviewedAt`
+  -- (completeStage3AfterMutualNeedsShare — no milestone; dropped here).
+  'sharedAt', 'needsRevealReviewedAt'
 );
 
 
@@ -978,3 +984,145 @@ FROM "SessionTakeaway" t;
 CREATE VIEW old_concept_takeaway_link AS
 SELECT l."sourceId" AS source_id, l."targetId" AS target_id, l."linkType"::text AS link_type, l.similarity, l."createdAt" AS created_at
 FROM "TakeawayLink" l;
+
+
+-- ============================================================================
+-- TS-5 additions (golden scenarios R1–R7). Same conventions as above.
+-- ============================================================================
+
+-- ----------------------------------------------------------------------------
+-- invitation — spec §1.1 `invitation`, Absorbs: `Invitation`
+-- (`messageConfirmed` folded into the timestamp; `invitedById` →
+-- participant). Ids kept (plan §2 "ids kept" list).
+--
+-- accepted_by_user_id is a NEW column (P3 §6) the old shape does not have.
+-- The plan names no source for it; the target CHECK requires it on every
+-- ACCEPTED row, so the migration must derive it. ASSUMPTION (TS-5): the
+-- session's one participant other than the inviter, for an ACCEPTED row;
+-- NULL for any other status. With NO such participant the subquery yields
+-- NULL, which `concept_check_invitation_accepted_without_acceptor` (below)
+-- fails, as the target CHECK would; with TWO OR MORE it RAISEs ("more than
+-- one row returned by a subquery") — the precheck either way.
+-- message_confirmed_at ← messageConfirmedAt only where messageConfirmed (the
+-- boolean is folded into the timestamp). updated_at: the target column exists
+-- but the old row has no source for it (no `updatedAt` on Invitation), so it is
+-- not projected — a comparison against the target view must omit it too.
+-- ----------------------------------------------------------------------------
+CREATE VIEW old_concept_invitation AS
+SELECT
+  i.id,
+  i."sessionId" AS session_id,
+  ip.id AS invited_by_participant_id,
+  CASE WHEN i.status::text = 'ACCEPTED' THEN
+    (SELECT o.user_id FROM old_concept_participant o
+      WHERE o.session_id = i."sessionId" AND o.user_id <> i."invitedById")
+  END AS accepted_by_user_id,
+  i.name,
+  i.status::text AS status,
+  CASE WHEN i."messageConfirmed" THEN i."messageConfirmedAt" END AS message_confirmed_at,
+  i."expiresAt"  AS expires_at,
+  i."acceptedAt" AS accepted_at,
+  i."declinedAt" AS declined_at,
+  i."declineReason" AS decline_reason,
+  i."createdAt" AS created_at
+FROM "Invitation" i
+LEFT JOIN old_concept_participant ip ON ip.session_id = i."sessionId" AND ip.user_id = i."invitedById";
+
+
+-- ----------------------------------------------------------------------------
+-- conversation_read_state — spec §1.1 `conversation_read_state`, Absorbs:
+-- `UserVessel.{lastViewedAt, lastSeenChatItemId, lastViewedShareTabAt,
+-- lastActiveAt, archivedAt}`. Plan §3 step 6. One row per UserVessel (the
+-- target: one per participant, PK participant_id).
+-- last_seen_message_id ← lastSeenChatItemId only where it names a Message
+-- (target FK message SET NULL); other chat-item ids drop to NULL.
+-- updated_at ← UserVessel.updatedAt.
+-- ----------------------------------------------------------------------------
+CREATE VIEW old_concept_conversation_read_state AS
+SELECT
+  p.id AS participant_id,
+  uv."lastViewedAt" AS last_viewed_at,
+  (SELECT m.id FROM "Message" m WHERE m.id::text = lower(uv."lastSeenChatItemId")) AS last_seen_message_id,
+  uv."lastViewedShareTabAt" AS last_viewed_share_tab_at,
+  uv."lastActiveAt" AS last_active_at,
+  uv."archivedAt"   AS archived_at,
+  uv."updatedAt"    AS updated_at
+FROM "UserVessel" uv
+LEFT JOIN old_concept_participant p ON p.session_id = uv."sessionId" AND p.user_id = uv."userId";
+
+
+-- Target CHECK `status <> 'ACCEPTED' OR (accepted_at IS NOT NULL AND
+-- accepted_by_user_id IS NOT NULL)`: an ACCEPTED invitation the view cannot
+-- give an acceptor (or an accepted instant) fails the snapshot.
+-- TRAP (documented, not scoped away): the factory's no-partner variants of the
+-- partner-required stages write an ACCEPTED invitation with ONE participant,
+-- so a concept snapshot of those fixtures fails here. That is the migration
+-- precheck telling the truth about that state (the target CHECK rejects it);
+-- no golden is recorded on a no-partner fixture.
+CREATE VIEW concept_check_invitation_accepted_without_acceptor AS
+SELECT id, accepted_by_user_id IS NULL AS no_acceptor, accepted_at IS NULL AS no_accepted_at
+FROM old_concept_invitation
+WHERE status = 'ACCEPTED' AND (accepted_by_user_id IS NULL OR accepted_at IS NULL);
+
+
+-- conversation_read_state's PK is participant_id: a vessel the view cannot
+-- tie to a participant would project a NULL key. The LEFT JOIN is kept so the
+-- row stays visible here instead of silently dropping out of the concept.
+CREATE VIEW concept_check_read_state_without_participant AS
+SELECT uv.id AS vessel_id
+FROM "UserVessel" uv
+LEFT JOIN old_concept_participant p ON p.session_id = uv."sessionId" AND p.user_id = uv."userId"
+WHERE p.id IS NULL;
+
+
+-- ----------------------------------------------------------------------------
+-- session_closure — spec §1.4 `session_closure`, Absorbs: `Stage4Closure`
+-- minus `sharedAgreementIds`, `individualProposalIds`, `openNeedIds` (→
+-- `v_session_closure_items`). Plan §3 step 13. closed_by_participant_id ←
+-- closedByUserId (text, no FK) resolved within the session; NULL =
+-- auto-closure.
+-- ----------------------------------------------------------------------------
+CREATE VIEW old_concept_session_closure AS
+SELECT
+  c."sessionId" AS session_id,
+  c.kind::text   AS kind,
+  c.reason::text AS reason,
+  c.summary,
+  cp.id AS closed_by_participant_id,
+  c."checkInAt" AS check_in_at,
+  c."closedAt"  AS closed_at,
+  c."createdAt" AS created_at
+FROM "Stage4Closure" c
+LEFT JOIN old_concept_participant cp
+  ON cp.session_id = c."sessionId" AND cp.user_id::text = lower(c."closedByUserId");
+
+
+-- ----------------------------------------------------------------------------
+-- brain_activity — spec §1.8 `brain_activity`, Absorbs: `BrainActivity`
+-- (`innerWorkSessionId` → `reflection_id`). Plan §3 step 18:
+-- participant_id NULL for history — the old row records no participant (some
+-- turnIds embed a user id, and RETRIEVAL inputs carry `userId`, but the plan
+-- does not derive one). Ids kept.
+-- ----------------------------------------------------------------------------
+CREATE VIEW old_concept_brain_activity AS
+SELECT
+  b.id,
+  b."sessionId" AS session_id,
+  b."innerWorkSessionId" AS reflection_id,
+  NULL::uuid AS participant_id,
+  b."turnId" AS turn_id,
+  b."activityType"::text AS activity_type,
+  b."callType"::text AS call_type,
+  b.model,
+  b.input,
+  b.output,
+  b.metadata,
+  b."structuredOutput" AS structured_output,
+  b."tokenCountInput"  AS token_count_input,
+  b."tokenCountOutput" AS token_count_output,
+  b."durationMs" AS duration_ms,
+  b.cost,
+  b.status::text AS status,
+  b."createdAt"   AS created_at,
+  b."completedAt" AS completed_at
+FROM "BrainActivity" b;

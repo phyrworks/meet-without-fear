@@ -41,4 +41,17 @@ export enum TargetStage {
 
   /** Redesigned Stage 4: One partner selected while the other is inactive */
   STAGE4_REDESIGN_PARTNER_INACTIVE = 'STAGE4_REDESIGN_PARTNER_INACTIVE',
+
+  /** FEEL_HEARD_B plus Ada's Inner Work reflection linked to the session, and prompt captures of both partners' turns (golden R1). */
+  INNER_WORK_LINKED_A = 'INNER_WORK_LINKED_A',
+
+  /** Stage 3: both partners have confirmed needs and neither has shared them yet (golden R4). */
+  NEEDS_CONFIRMED = 'NEEDS_CONFIRMED',
+
+  /**
+   * The whole journey under the legacy repair flow, with everything account deletion must sort into
+   * "survives" and "gone": revealed attempts, delivered shared context, shared needs, an agreement,
+   * private chat, Ada's reflection and prompt captures (golden R5).
+   */
+  TOMBSTONE_READY = 'TOMBSTONE_READY',
 }

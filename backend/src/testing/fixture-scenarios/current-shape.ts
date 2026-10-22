@@ -17,20 +17,28 @@
  * *today's fixtures* used, which is not quite the production key table of the
  * migration plan (step 7): the fixtures wrote `empathyExchanged` where the app
  * writes `empathyValidated`, `needsIdentified` for `needs_confirmed`,
- * `compactSignedAt` rather than `signedAt`, and never wrote `invitationSent` or
- * `needsShared`. Acceptance binds the writer to the fixtures' rows.
+ * `compactSignedAt` rather than `signedAt`, and never wrote `needsShared` (nor,
+ * before R13, `invitationSent`). Acceptance binds the writer to the fixtures' rows.
  *
- * Stage 4 diverges from step 7 in substance, not just in key names. Step 7
- * decodes a COMPLETED stage-4 `StageProgress` row as `choices_shared`, and in
- * the target journey `closed` follows `choices_shared` plus a `session_closure`
- * row. Here `closed` is the stage-4 terminal and `choices_shared` an
- * in-progress gate: in today's fixtures stage 4 is completed only by
- * STRATEGIC_REPAIR_COMPLETE, under the legacy ranking flow
- * (`strategiesRanked`/`agreementCreated`, the `rankingSubmitted` +
- * `agreementCreated` completion gate of `sessions.ts`), whose rows carry no
- * `selectionSubmitted`. `closed` stands in for that legacy completion. The
- * resulting milestone set (`closed` without `choices_shared`, no closure) is
- * not one the target journey produces; resolving it is a TS-5 decision.
+ * Stage 4 follows the migration plan (owner decision OD5, 2026-10-21): the
+ * stage-4 terminal milestone is `choices_shared` — step 7 decodes a COMPLETED
+ * stage-4 row as `choices_shared` — and `closed` is reached only by a scenario
+ * that carries closure content (`Scenario.closure`, the target's
+ * `session_closure`). Today's shape encodes `choices_shared` two ways, by flow:
+ *   - redesigned repair flow (the participant has `choices`): the
+ *     `selectionSubmitted` gate on an IN_PROGRESS stage-4 row, written after
+ *     the choices (`stage4.ts` markStage4SelectionSubmitted);
+ *   - legacy ranking flow (a `ranking` plus the scenario's agreement, and no
+ *     choices): the stage-4 row COMPLETED at the instant — the
+ *     `rankingSubmitted` + `agreementCreated` completion gate of `sessions.ts`,
+ *     whose rows carry no `selectionSubmitted`.
+ * `closed` writes the `Stage4Closure` row, moves the session to RESOLVED and
+ * completes the stage-4 row at the closure instant, as `stage4.ts`'s close
+ * handler does.
+ *
+ * Production writes `invitationSent: true` into the inviter's stage-0 gates
+ * when the invitation message is confirmed (`sessions.ts` confirmInvitation,
+ * ruling R13); the writer does the same wherever `invitation_sent` is reached.
  *
  * The pure functions (everything above `writeCurrentShape`) have unit tests in
  * `__tests__/current-shape.test.ts`.
@@ -63,7 +71,9 @@ type Tx = Parameters<Parameters<typeof prisma.$transaction>[0]>[0];
  *   milestones in `currentShape.untimedGates`).
  * - `completes`: the milestone is stage `stage`'s terminal milestone — the row
  *   is `COMPLETED` at its instant and the next stage starts then. It may also
- *   carry a gate key (stages 0–2) or none (`needs_shared`, `closed`).
+ *   carry a gate key (stages 0–2) or none (`needs_shared`). Stage 4's
+ *   terminal, `choices_shared`, completes the row only under the legacy flow
+ *   or a closure (`stageCompletion`).
  * - `elsewhere`: carried by another row, never by a gate.
  * - `unsupported`: today's fixtures never encoded it; refusing beats dropping.
  */
@@ -75,6 +85,8 @@ export type GateEncoding =
 
 export const GATE_ENCODING: Record<MilestoneKey, GateEncoding> = {
   compact_signed: { kind: 'gate', stage: 0, key: 'compactSigned', completes: true },
+  // Also the untimed `invitationSent` key on the stage-0 row when the
+  // participant has one (R13; see stageProgressPlan).
   invitation_sent: { kind: 'elsewhere', where: 'Invitation.messageConfirmed/messageConfirmedAt' },
   feel_heard: { kind: 'gate', stage: 1, key: 'feelHeardConfirmed', completes: true },
   empathy_submitted: { kind: 'elsewhere', where: 'EmpathyAttempt.sharedAt (+ ConsentRecord, statement message)' },
@@ -83,13 +95,13 @@ export const GATE_ENCODING: Record<MilestoneKey, GateEncoding> = {
   needs_confirmed: { kind: 'gate', stage: 3, key: 'needsIdentified' },
   needs_validated: { kind: 'gate', stage: 3, key: 'needsValidated' },
   needs_shared: { kind: 'completes', stage: 3 },
-  // Recorded after the choices it attests to (an update of the stage-4 row).
-  choices_shared: { kind: 'gate', stage: 4, key: 'selectionSubmitted', late: true },
+  // Stage 4's terminal (step 7, OD5). The gate is recorded after the choices it
+  // attests to (an update of the stage-4 row) and only in the redesigned flow;
+  // the legacy flow completes the row instead (`stageCompletion`).
+  choices_shared: { kind: 'gate', stage: 4, key: 'selectionSubmitted', late: true, completes: true },
   repair_walkthrough_started: { kind: 'unsupported' },
-  // NOT step 7: step 7 decodes stage-4 COMPLETED as `choices_shared`. Here
-  // `closed` stands in for the legacy ranking-flow completion
-  // (rankingSubmitted/agreementCreated) — see the module comment.
-  closed: { kind: 'completes', stage: 4 },
+  // Requires `Scenario.closure` (OD5).
+  closed: { kind: 'elsewhere', where: 'Stage4Closure (+ Session RESOLVED, stage-4 row COMPLETED at closedAt)' },
   paused: { kind: 'unsupported' },
 };
 
@@ -122,10 +134,28 @@ export interface StageProgressPlan {
   lateGates: Array<{ stage: number; gates: GateEntry[] }>;
 }
 
+/** Legacy ranking flow: a ranking, the scenario's agreement, and no redesigned-flow choices. */
+function legacyRepairCompleted(p: ParticipantScenario, s: Scenario): boolean {
+  return Boolean(p.ranking && s.legacyStrategies?.agreement && !p.choices?.length);
+}
+
+/**
+ * The instant stage `stage` completed for `p`, or undefined. Stages 0–3: their
+ * terminal milestone. Stage 4 (OD5): the closure instant if the participant
+ * reached `closed`; otherwise `choices_shared` under the legacy flow. The
+ * redesigned flow's `choices_shared` leaves the row IN_PROGRESS.
+ */
+export function stageCompletion(stage: number, p: ParticipantScenario, s: Scenario): Stamp | undefined {
+  const reached = p.milestones;
+  if (stage !== LAST_STAGE) return reached[TERMINAL[stage]];
+  if (reached.closed) return reached.closed;
+  return legacyRepairCompleted(p, s) ? reached.choices_shared : undefined;
+}
+
 /**
  * A participant's milestone set → today's `StageProgress` rows.
  *
- * Stage n is COMPLETED iff its terminal milestone is reached, at that instant;
+ * Stage n is COMPLETED iff it completed (`stageCompletion`), at that instant;
  * stage n+1 starts then. The first incomplete stage is the IN_PROGRESS row; a
  * participant who has completed every stage has none. Stage 0 starts at the
  * journey's `startedAt`.
@@ -137,16 +167,26 @@ export function stageProgressPlan(p: ParticipantScenario, s: Scenario): StagePro
       throw new Error(`Participant "${p.key}": milestone ${key} has no encoding in today's fixture shape`);
     }
   }
+  if (reached.closed) {
+    if (!s.closure) throw new Error(`Participant "${p.key}" reached closed, but the scenario carries no closure`);
+    if (!reached.choices_shared) throw new Error(`Participant "${p.key}" reached closed without choices_shared`);
+  }
+  if (reached.choices_shared && !p.choices?.length && !legacyRepairCompleted(p, s)) {
+    throw new Error(
+      `Participant "${p.key}": choices_shared needs choices (redesigned flow) or a ranking plus an agreement (legacy flow)`,
+    );
+  }
   if (!p.journey) {
     const stray = (Object.keys(reached) as MilestoneKey[]).filter(k => GATE_ENCODING[k].kind !== 'elsewhere');
     if (stray.length) throw new Error(`Participant "${p.key}" has not begun but reached ${stray.join(', ')}`);
     return { rows: [], lateGates: [] };
   }
 
+  const completion = (stage: number): Stamp | undefined => stageCompletion(stage, p, s);
   let completed = 0;
-  while (completed <= LAST_STAGE && reached[TERMINAL[completed]]) completed++;
+  while (completed <= LAST_STAGE && completion(completed)) completed++;
   for (let stage = completed + 1; stage <= LAST_STAGE; stage++) {
-    if (reached[TERMINAL[stage]]) {
+    if (completion(stage)) {
       throw new Error(
         `Participant "${p.key}": ${TERMINAL[stage]} completes stage ${stage}, but ${TERMINAL[completed]} (stage ${completed}) is not reached`,
       );
@@ -161,11 +201,17 @@ export function stageProgressPlan(p: ParticipantScenario, s: Scenario): StagePro
     rows.push({
       stage,
       status: isCompleted ? 'COMPLETED' : 'IN_PROGRESS',
-      startedAt: stage === 0 ? p.journey.startedAt : reached[TERMINAL[stage - 1]],
-      completedAt: isCompleted ? reached[TERMINAL[stage]] : undefined,
+      startedAt: stage === 0 ? p.journey.startedAt : completion(stage - 1),
+      completedAt: isCompleted ? completion(stage) : undefined,
       gates: [],
     });
   }
+
+  // R13: production (`sessions.ts` confirmInvitation) writes `invitationSent:
+  // true` into the inviter's stage-0 gates, with no `…At` companion — step 7
+  // decodes `invitation_sent` @ StageProgress.startedAt. `Invitation.
+  // messageConfirmedAt` is not that instant (`topic-frame.ts` sets it too).
+  if (reached.invitation_sent) rows[0].gates.push(['invitationSent', true]);
 
   // Keys the step-7 table marks derived/dropped: carried as facts, re-derived
   // here. Done before the gate loop so a late gate update (which replaces
@@ -185,6 +231,8 @@ export function stageProgressPlan(p: ParticipantScenario, s: Scenario): StagePro
     const enc = GATE_ENCODING[key];
     const stamp = reached[key];
     if (!stamp || enc.kind !== 'gate') continue;
+    // The selection gate belongs to the redesigned flow only (module comment).
+    if (key === 'choices_shared' && !p.choices?.length) continue;
     const row = rows.find(r => r.stage === enc.stage);
     if (!row) {
       throw new Error(
@@ -331,9 +379,25 @@ export async function writeCurrentShape(tx: Tx, scenario: Scenario, users: UserR
   }
   const clocks = new Set(referencedClocks(scenario));
   const instants: Partial<Record<Clock, Date>> = {};
+  // `explicitStamps` (TS-5 fix round 2, the TS-5 stages only): every stamp is
+  // a fixed offset from ONE clock read, so no two rows can land in — or leave —
+  // a shared millisecond by luck, and a rebuild cannot move a golden's
+  // timestamp ranks or a createdAt-ordered read. The clocks become fixed
+  // offsets of that read, and every column the old factory left to
+  // `@default(now())` / `@updatedAt` gets an explicit, distinct value from
+  // `auto()`. Off (the 13 pre-TS-5 stages), nothing below changes a write.
+  const explicit = scenario.currentShape?.explicitStamps === true;
+  const base = explicit ? new Date() : undefined;
+  const CLOCK_OFFSET_MS: Record<Clock, number> = { session: 0, invitation: 10, scenario: 20, late: 30 };
   const readClock = (c: Clock) => {
-    if (clocks.has(c)) instants[c] = new Date();
+    if (clocks.has(c)) instants[c] = base ? new Date(base.getTime() + CLOCK_OFFSET_MS[c]) : new Date();
   };
+  // Auto stamps sit a minute before the clocks, one millisecond apart, in write order.
+  let autoN = 0;
+  const auto = (): Date => new Date(base!.getTime() - 60_000 + autoN++);
+  /** `{col: auto()}` for each column in explicit mode; `{}` (database default) otherwise. */
+  const autoCols = (...cols: string[]): Record<string, Date> =>
+    explicit ? Object.fromEntries(cols.map(c => [c, auto()])) : {};
   const t = (s: Stamp) => resolveStamp(s, instants);
   const tOpt = (s: Stamp | undefined) => (s ? t(s) : undefined);
 
@@ -349,6 +413,7 @@ export async function writeCurrentShape(tx: Tx, scenario: Scenario, users: UserR
           name: u.name,
           clerkId: `e2e_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
           lastMoodIntensity: 7,
+          ...autoCols('createdAt', 'updatedAt'),
         },
       }),
     );
@@ -367,8 +432,11 @@ export async function writeCurrentShape(tx: Tx, scenario: Scenario, users: UserR
   const members = users.map((u, i) => ({
     userId: userRows[i].id,
     nickname: i === 0 ? users[1]?.name || null : users[0].name,
+    ...autoCols('joinedAt'),
   }));
-  const relationship = await tx.relationship.create({ data: { members: { create: members } } });
+  const relationship = await tx.relationship.create({
+    data: { ...autoCols('createdAt', 'updatedAt'), members: { create: members } },
+  });
 
   // --- Session -----------------------------------------------------------------
   readClock('session');
@@ -376,6 +444,7 @@ export async function writeCurrentShape(tx: Tx, scenario: Scenario, users: UserR
     data: {
       relationshipId: relationship.id,
       status: sessionStatus(scenario),
+      ...autoCols('createdAt', 'updatedAt'),
       ...(scenario.topic
         ? { topicFrame: scenario.topic.frame, topicFrameConfirmedAt: t(scenario.topic.confirmedAt) }
         : {}),
@@ -401,10 +470,12 @@ export async function writeCurrentShape(tx: Tx, scenario: Scenario, users: UserR
   });
 
   // --- Vessels -----------------------------------------------------------------
-  const sharedVessel = await tx.sharedVessel.create({ data: { sessionId } });
+  const sharedVessel = await tx.sharedVessel.create({ data: { sessionId, ...autoCols('createdAt', 'updatedAt') } });
   const vessels: Array<{ id: string } | undefined> = [];
   for (const row of userRows) {
-    vessels.push(await tx.userVessel.create({ data: { sessionId, userId: row.id } }));
+    vessels.push(
+      await tx.userVessel.create({ data: { sessionId, userId: row.id, ...autoCols('createdAt', 'updatedAt') } }),
+    );
   }
 
   readClock('scenario');
@@ -430,15 +501,45 @@ export async function writeCurrentShape(tx: Tx, scenario: Scenario, users: UserR
     if (!vessel) throw new Error(`No vessel for participant "${p.key}"`);
     const confirmedAt = p.milestones.needs_confirmed;
     if (!confirmedAt) throw new Error(`Participant "${p.key}" has needs but no needs_confirmed milestone`);
-    return (p.needs ?? []).map(n => ({
+    return (p.needs ?? []).map((n, k) => ({
       vesselId: vessel.id,
       need: n.need,
       category: n.category,
-      evidence: [],
+      evidence: n.evidence ?? [],
       aiConfidence: n.aiConfidence,
       confirmed: n.confirmed,
-      createdAt: t(confirmedAt),
+      // Explicit mode: one millisecond apart, so creation order is also the
+      // createdAt order (a need's rank no longer needs the id tiebreak).
+      createdAt: explicit ? new Date(t(confirmedAt).getTime() + k) : t(confirmedAt),
     }));
+  };
+
+  // A shared need is recorded as production's needs share writes it: one
+  // GRANTED IDENTIFIED_NEED consent per need (`stage3.ts` consentToShareNeeds),
+  // and no ConsentedContent. Needs are matched to their rows by insertion order
+  // (uuidv7). No pre-TS-5 scenario shares a need, so this writes nothing for them.
+  const writeNeedShares = async (i: number): Promise<void> => {
+    const p = scenario.participants[i];
+    if (!p.needs?.some(n => n.shared)) return;
+    const sharedAt = p.milestones.needs_shared;
+    if (!sharedAt) throw new Error(`Participant "${p.key}" shares needs but has no needs_shared milestone`);
+    const rows = await tx.identifiedNeed.findMany({ where: { vesselId: vessels[i]!.id }, orderBy: { id: 'asc' } });
+    if (rows.length !== p.needs.length) throw new Error(`Participant "${p.key}": need rows do not match the scenario`);
+    for (const [k, n] of p.needs.entries()) {
+      if (!n.shared) continue;
+      await tx.consentRecord.create({
+        data: {
+          userId: userRows[i].id,
+          sessionId,
+          targetType: 'IDENTIFIED_NEED',
+          targetId: rows[k].id,
+          requestedByUserId: userRows[i].id,
+          decision: 'GRANTED',
+          decidedAt: t(sharedAt),
+          ...autoCols('createdAt'),
+        },
+      });
+    }
   };
 
   // --- Per participant: progress, conversation, empathy, needs ----------------
@@ -453,7 +554,7 @@ export async function writeCurrentShape(tx: Tx, scenario: Scenario, users: UserR
           userId: uid,
           stage: row.stage,
           status: row.status,
-          startedAt: tOpt(row.startedAt),
+          startedAt: tOpt(row.startedAt) ?? (explicit ? auto() : undefined),
           completedAt: tOpt(row.completedAt),
           gatesSatisfied: gatesToJson(row.gates, t),
         },
@@ -468,7 +569,7 @@ export async function writeCurrentShape(tx: Tx, scenario: Scenario, users: UserR
       if (!submittedAt)
         throw new Error(`Participant "${p.key}" has an empathy attempt but no empathy_submitted milestone`);
       const draft = await tx.empathyDraft.create({
-        data: { sessionId, userId: uid, content: e.statement, readyToShare: true },
+        data: { sessionId, userId: uid, content: e.statement, readyToShare: true, ...autoCols('createdAt', 'updatedAt') },
       });
       await tx.empathyAttempt.create({
         data: {
@@ -492,6 +593,7 @@ export async function writeCurrentShape(tx: Tx, scenario: Scenario, users: UserR
             requestedByUserId: uid,
             decision: 'GRANTED',
             decidedAt: t(submittedAt),
+            ...autoCols('createdAt'),
           },
         });
       }
@@ -517,12 +619,14 @@ export async function writeCurrentShape(tx: Tx, scenario: Scenario, users: UserR
 
     if (p.needs?.length && !scenario.currentShape?.batchNeeds) {
       await tx.identifiedNeed.createMany({ data: needRows(i) });
+      await writeNeedShares(i);
     }
   }
 
   if (scenario.currentShape?.batchNeeds) {
     const data = scenario.participants.flatMap((p, i) => (p.needs?.length ? needRows(i) : []));
     if (data.length) await tx.identifiedNeed.createMany({ data });
+    for (const i of scenario.participants.keys()) await writeNeedShares(i);
   }
 
   // --- Reconciliation ----------------------------------------------------------
@@ -561,6 +665,7 @@ export async function writeCurrentShape(tx: Tx, scenario: Scenario, users: UserR
         suggestedReason: result.suggestedShareReason,
         ...(offer.shared ? { sharedContent: offer.shared.content, sharedAt: t(offer.shared.at) } : {}),
         ...(offer.deliveredAt ? { deliveryStatus: 'DELIVERED' as const, deliveredAt: t(offer.deliveredAt) } : {}),
+        ...autoCols('createdAt', 'updatedAt'),
       },
     });
     for (const m of messages ?? []) await writeMessage(m.to, m);
@@ -579,6 +684,7 @@ export async function writeCurrentShape(tx: Tx, scenario: Scenario, users: UserR
           needsAddressed: st.needsAddressed,
           duration: st.duration,
           createdAt: t(st.at),
+          ...autoCols('updatedAt'),
         },
       });
       strategyIds.set(st.key, row.id);
@@ -639,6 +745,7 @@ export async function writeCurrentShape(tx: Tx, scenario: Scenario, users: UserR
             ? { removedAt: t(pr.removed.at), removedByUserId: userId(pr.removed.by), removalReason: pr.removed.reason }
             : {}),
           coverageSummary: pr.coverageSummary,
+          ...autoCols('createdAt', 'updatedAt'),
         },
       });
       proposalIds.set(pr.key, row.id);
@@ -710,6 +817,82 @@ export async function writeCurrentShape(tx: Tx, scenario: Scenario, users: UserR
       where: { sessionId, userId: { in: group.userIds }, stage: group.stage },
       data: { gatesSatisfied: group.gates },
     });
+  }
+
+  // --- Closure (OD5): Stage4Closure, then the session RESOLVED ------------------
+  // `stage4.ts`'s close handler, in its order. The stage-4 rows were already
+  // planned COMPLETED at the closure instant (`stageCompletion`). The id arrays
+  // are the target's `v_session_closure_items` and stay empty here.
+  if (scenario.closure) {
+    const c = scenario.closure;
+    await tx.stage4Closure.create({
+      data: {
+        sessionId,
+        kind: c.kind,
+        reason: c.reason,
+        summary: c.summary,
+        sharedAgreementIds: [],
+        individualProposalIds: [],
+        openNeedIds: [],
+        checkInAt: tOpt(c.checkInAt) ?? null,
+        closedByUserId: c.closedBy === null ? null : userId(c.closedBy),
+        closedAt: t(c.at),
+        ...autoCols('createdAt'),
+      },
+    });
+    await tx.session.update({
+      where: { id: sessionId },
+      data: { status: 'RESOLVED', resolvedAt: t(c.at), ...autoCols('updatedAt') },
+    });
+  }
+
+  // --- Inner Work and prompt captures (TS-5; no earlier scenario has either) ----
+  // Reflections are `InnerWorkSession` + `InnerWorkMessage`, optionally linked to
+  // this session (`linkedPartnerSessionId`). A capture is a COMPLETED
+  // `BrainActivity` LLM_CALL with the prompt as `input`, keyed to this session or
+  // to one of the participant's reflections, with a turnId shaped like
+  // production's (`${sessionId}-${userId}-…`).
+  for (const [i, p] of scenario.participants.entries()) {
+    const reflectionIds: string[] = [];
+    for (const r of p.reflections ?? []) {
+      const row = await tx.innerWorkSession.create({
+        data: {
+          userId: userRows[i].id,
+          title: r.title,
+          theme: r.theme,
+          summary: r.summary,
+          ...(r.linkedToSession ? { linkedPartnerSessionId: sessionId } : {}),
+          createdAt: t(r.at),
+          ...autoCols('updatedAt'),
+        },
+      });
+      reflectionIds.push(row.id);
+      for (const m of r.messages) {
+        await tx.innerWorkMessage.create({
+          data: { sessionId: row.id, role: m.role, content: m.content, timestamp: t(m.at) },
+        });
+      }
+    }
+    for (const [k, c] of (p.promptCaptures ?? []).entries()) {
+      const reflectionId = c.scope === 'session' ? undefined : reflectionIds[c.scope.reflection];
+      if (c.scope !== 'session' && !reflectionId) {
+        throw new Error(`Participant "${p.key}": prompt capture ${k} names a missing reflection`);
+      }
+      await tx.brainActivity.create({
+        data: {
+          ...(reflectionId ? { innerWorkSessionId: reflectionId } : { sessionId }),
+          turnId: `${reflectionId ?? sessionId}-${userRows[i].id}-turn-${k + 1}`,
+          activityType: 'LLM_CALL',
+          callType: c.callType,
+          model: 'claude-sonnet',
+          input: c.input,
+          output: { text: c.output },
+          status: 'COMPLETED',
+          createdAt: t(c.at),
+          completedAt: t(c.at),
+        },
+      });
+    }
   }
 
   return {
