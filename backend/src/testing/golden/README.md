@@ -172,6 +172,13 @@ How they work (`privacy.ts`, `scenario-checks.ts`, `reveal-checks.ts`):
   each TS-5 fixture twice. A need's concept rank breaks createdAt ties on its UUIDv7 id (creation
   order); with distinct stamps the tie no longer occurs. The 13 pre-TS-5 stages leave the flag off
   and stay byte-identical (fidelity tool).
+- **Rows tied on an endpoint's only sort key compare as a multiset** (fix round 3, rule kind
+  `tiedOrder`, applied to both the byte-level and the normalised comparison). Consent history sorts
+  by `createdAt` alone and one needs share writes every consent with one `now`; conversations sort by
+  `timestamp` alone and one request can write several messages. Such rows came back in heap order —
+  measured flipping in an independent run. Within a run of equal keys the order is canonicalised;
+  across keys, values and counts everything is still compared. Never re-record a golden to the order
+  a run happened to produce.
 - **Bare calendar dates are normalised** to their day offset from the run's start
   (`<date:today+10d>`): Stage 4's `defaultCheckInDate` is today (UTC) + 10, and goldens recorded
   one day went red after UTC midnight.
