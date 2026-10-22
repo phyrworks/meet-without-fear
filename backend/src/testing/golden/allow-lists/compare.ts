@@ -13,6 +13,7 @@ import type {
   AllowRule,
   MayBeAbsentRule,
   ReplacedEntryRule,
+  TiedOrderRule,
 } from './types';
 
 function brief(v: unknown): string {
@@ -80,6 +81,46 @@ function withOverrides(base: unknown, overrides: Record<string, unknown>): unkno
 }
 
 /**
+ * `tiedOrder` (TS-5 fix round 3): in an array at a matching path, each run of
+ * CONSECUTIVE entries whose `key` value is equal is put into canonical order;
+ * entries with different keys keep their relative order. Applied to both
+ * sides before any comparison (byte-level and normalised), so rows an
+ * endpoint returns in database heap order because they tie on its only sort
+ * key (rows one request wrote in one millisecond, or run-written stamps that
+ * all normalise to `<ts:fresh>`) compare as a multiset within the tie, and as
+ * a sequence across it. A changed value or a missing row still differs.
+ */
+export function applyTiedOrder(value: unknown, rules: readonly AllowRule[]): unknown {
+  const tied = rules.filter((r): r is TiedOrderRule => r.kind === 'tiedOrder');
+  if (!tied.length) return value;
+  const patterns = tied.map(r => ({ key: r.key, pats: (Array.isArray(r.at) ? r.at : [r.at]).map(p => p.split('.')) }));
+  const go = (v: unknown, p: string[]): unknown => {
+    if (Array.isArray(v)) {
+      let arr = v.map((x, i) => go(x, [...p, String(i)]));
+      for (const { key, pats } of patterns) {
+        if (!pats.some(pat => matchPath(pat, p))) continue;
+        const out: unknown[] = [];
+        let run: unknown[] = [];
+        const flush = () => {
+          out.push(...run.sort((x, y) => (canon(x) < canon(y) ? -1 : canon(x) > canon(y) ? 1 : 0)));
+          run = [];
+        };
+        for (const x of arr) {
+          if (run.length && JSON.stringify(getDotted(run[0], key)) !== JSON.stringify(getDotted(x, key))) flush();
+          run.push(x);
+        }
+        flush();
+        arr = out;
+      }
+      return arr;
+    }
+    if (isObj(v)) return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, go(x, [...p, k])]));
+    return v;
+  };
+  return go(value, []);
+}
+
+/**
  * Compare a run against its normalised baseline under an allow-list:
  * "subset plus named changes". Every baseline value must be present and equal
  * in the run unless a rule names the change; every key or entry the run adds
@@ -89,7 +130,9 @@ function withOverrides(base: unknown, overrides: Record<string, unknown>): unkno
  * match count reflects the whole baseline — that is what lets a `mustMatch`
  * rule report that its path no longer exists.
  */
-export function compareWithAllowList(expected: unknown, actual: unknown, allow: AllowList): AllowListComparison {
+export function compareWithAllowList(expected0: unknown, actual0: unknown, allow: AllowList): AllowListComparison {
+  const expected = applyTiedOrder(expected0, allow.rules);
+  const actual = applyTiedOrder(actual0, allow.rules);
   const rules = allow.rules.map(rule => ({
     rule,
     patterns: (Array.isArray(rule.at) ? rule.at : [rule.at]).map(p => p.split('.')),

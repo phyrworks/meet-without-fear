@@ -10,8 +10,9 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
-import { compareWithAllowList } from './allow-lists/compare';
-import type { AllowList } from './allow-lists/types';
+import { applyTiedOrder, compareWithAllowList } from './allow-lists/compare';
+
+import type { AllowList, AllowRule } from './allow-lists/types';
 import type { Harness, StepResult } from './driver';
 import { CONCEPT_VIEWS, conceptOf } from './concept-views';
 import {
@@ -179,6 +180,8 @@ export async function recordOrVerify(opts: {
   scenario: string;
   harness: Harness;
   steps: StepResult[];
+  /** The scenario's allow-list rules; only `tiedOrder` is read here. */
+  tiedOrder?: readonly AllowRule[];
 }): Promise<RunReport> {
   const { scenario, harness, steps } = opts;
   const map = await buildLabelMap(
@@ -247,7 +250,11 @@ export async function recordOrVerify(opts: {
   }
 
   const expected = JSON.parse(fs.readFileSync(p, 'utf8')) as GoldenFile;
-  const diff = diffJson(expected, actual);
+  // `tiedOrder` rules (the scenario's allow-list) apply here too: rows an
+  // endpoint returns in heap order because they tie on its sort key compare
+  // as a multiset within the tie (TS-5 fix round 3).
+  const rules = opts.tiedOrder ?? [];
+  const diff = diffJson(applyTiedOrder(expected, rules), applyTiedOrder(actual, rules));
   return { scenario, recorded: false, unresolved: [...new Set(unresolved)], diff };
 }
 

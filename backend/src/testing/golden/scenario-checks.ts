@@ -22,12 +22,12 @@ export function goldenScenarioChecks(opts: {
   const { scenario, allowList } = opts;
 
   it('every identifier resolves to a structural label', async () => {
-    const report = await recordOrVerify({ scenario, harness: opts.harness(), steps: opts.steps() });
+    const report = await recordOrVerify({ scenario, harness: opts.harness(), steps: opts.steps(), tiedOrder: allowList.rules });
     expect(report.unresolved).toEqual([]);
   });
 
   it('matches the recorded baseline', async () => {
-    const report = await recordOrVerify({ scenario, harness: opts.harness(), steps: opts.steps() });
+    const report = await recordOrVerify({ scenario, harness: opts.harness(), steps: opts.steps(), tiedOrder: allowList.rules });
     if (report.recorded) {
       expect(process.env.GOLDEN_UPDATE?.split(',')).toContain(scenario);
       return;

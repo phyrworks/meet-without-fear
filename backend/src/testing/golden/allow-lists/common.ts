@@ -19,6 +19,27 @@ export const READ_DTO_RULES: AllowRule[] = [
       'plan §3 step 7: feelHeardCheckOffered (AI hint) and finalEmotionalReading (always null) are dropped; ' +
       'readyToRank/rankingSubmitted are dropped with ranking. gatesSatisfied becomes derived from participant_milestone.',
   },
+  // --- tiedOrder (fix round 3): endpoints that sort on ONE timestamp ---------
+  // Audit of every TS-5 response array whose rows one request can write:
+  {
+    kind: 'tiedOrder',
+    at: 'steps.*.body.data.records',
+    key: 'createdAt',
+    why:
+      'GET consent/history orders by createdAt alone (controllers/consent.ts); POST needs/consent writes every ' +
+      'need’s consent in one transaction with one `now` (stage3.ts consentToShareNeeds), so they tie and come back ' +
+      'in heap order — measured flipping at needs-hidden-until-shared step 29.',
+  },
+  {
+    kind: 'tiedOrder',
+    at: ['steps.*.body.data.messages', 'steps.*.body.data.messages.messages'],
+    key: 'timestamp',
+    why:
+      'GET messages and the state DTO order a conversation by timestamp alone (controllers/messages.ts); a stream ' +
+      'turn, a share acceptance, a resubmit or a reveal writes 2–3 messages for one reader in one request, and every ' +
+      'run-written stamp normalises to <ts:fresh>. Order between tied rows is still carried by their labels ' +
+      '(`<message:N>` ranks by timestamp then id), so only the response position is relaxed.',
+  },
   {
     kind: 'valuesSubset',
     at: ['steps.*.body.**.targetType', 'steps.*.body.**.contentType'],

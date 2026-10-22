@@ -10,7 +10,8 @@
  * change.
  */
 
-import { compareWithAllowList } from '../allow-lists/compare';
+import { applyTiedOrder, compareWithAllowList } from '../allow-lists/compare';
+import { diffJson } from '../runner';
 import type { AllowList } from '../allow-lists/types';
 import { EMPATHY_REVEAL_ALLOW } from '../allow-lists/empathy-reveal';
 import { SESSION_READ_ALLOW } from '../allow-lists/session-read';
@@ -490,6 +491,39 @@ describe('compareWithAllowList — mechanics', () => {
     expect(compareWithAllowList(base, ok, list).violations).toEqual([]);
     expect(compareWithAllowList(base, wrong, list).violations).not.toEqual([]);
     expect(compareWithAllowList(base, both, list).violations).not.toEqual([]);
+  });
+
+  describe('tiedOrder (fix round 3)', () => {
+    const list: AllowList = {
+      scenario: 'x',
+      rules: [{ kind: 'tiedOrder', at: 'steps.*.body.data.records', key: 'createdAt', why: 'test' }],
+    };
+    const rec = (id: string, createdAt: string, extra: Json = {}) => ({ id, createdAt, ...extra });
+    const art = (records: Json[]) => ({ steps: [{ body: { data: { records } } }] });
+    const base = art([rec('<c:3>', '<ts:5>'), rec('<c:1>', '<ts:fresh>'), rec('<c:2>', '<ts:fresh>')]);
+    const byteDiff = (e: Json, a: Json) => diffJson(applyTiedOrder(e, list.rules), applyTiedOrder(a, list.rules));
+
+    it('accepts either order of rows that tie on the key — normalised and byte-level', () => {
+      const swapped = art([rec('<c:3>', '<ts:5>'), rec('<c:2>', '<ts:fresh>'), rec('<c:1>', '<ts:fresh>')]);
+      expect(compareWithAllowList(base, swapped, list).violations).toEqual([]);
+      expect(byteDiff(base, swapped)).toBeNull();
+    });
+
+    it('still rejects a changed value, a missing row, and a reorder ACROSS different keys', () => {
+      const changed = art([rec('<c:3>', '<ts:5>'), rec('<c:2>', '<ts:fresh>'), rec('<c:1>', '<ts:fresh>', { decision: 'DENIED' })]);
+      const missing = art([rec('<c:3>', '<ts:5>'), rec('<c:1>', '<ts:fresh>')]);
+      const across = art([rec('<c:1>', '<ts:fresh>'), rec('<c:3>', '<ts:5>'), rec('<c:2>', '<ts:fresh>')]);
+      for (const bad of [changed, missing, across]) {
+        expect(compareWithAllowList(base, bad, list).violations).not.toEqual([]);
+        expect(byteDiff(base, bad)).not.toBeNull();
+      }
+    });
+
+    it('does nothing at other paths', () => {
+      const other = { steps: [{ body: { data: { items: [rec('a', '<ts:fresh>'), rec('b', '<ts:fresh>')] } } }] };
+      const swapped = { steps: [{ body: { data: { items: [rec('b', '<ts:fresh>'), rec('a', '<ts:fresh>')] } } }] };
+      expect(compareWithAllowList(other, swapped, list).violations).not.toEqual([]);
+    });
   });
 
   it('allows added entries in a keyed map of rows by predicate', () => {

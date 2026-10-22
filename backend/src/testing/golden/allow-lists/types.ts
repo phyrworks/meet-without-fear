@@ -129,6 +129,18 @@ export interface MayBeAbsentRule extends RuleBase {
   keys: string[];
 }
 
+/**
+ * Arrays at matching paths whose consecutive entries tie on `key` (a dot path
+ * into the entry — the endpoint's only sort key) may return the tied entries
+ * in any order. Applied to BOTH the byte-level and the normalised comparison
+ * (`applyTiedOrder`); it is not a target-only change and holds on the current
+ * shape too. Give each use a reason: which rows tie, and why.
+ */
+export interface TiedOrderRule extends RuleBase {
+  kind: 'tiedOrder';
+  key: string;
+}
+
 export type AllowRule =
   | AbsentKeysRule
   | AddedKeysRule
@@ -136,7 +148,8 @@ export type AllowRule =
   | AddedEntriesRule
   | MayDifferRule
   | MayBeAbsentRule
-  | ReplacedEntryRule;
+  | ReplacedEntryRule
+  | TiedOrderRule;
 
 export interface AllowList {
   scenario: string;
