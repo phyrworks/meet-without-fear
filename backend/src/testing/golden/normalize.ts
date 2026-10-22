@@ -81,6 +81,9 @@ const SEEDED_CLERKID_RE = /(?<![a-z0-9_])e2e_\d{10,}_[a-z0-9]{4,}(?![a-z0-9])/g;
 /** `2026-08-12 23:52:14.936` or ISO-8601. */
 const TIMESTAMP_RE = /\b\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?(?:Z|[+-]\d{2}:?\d{2})?\b/g;
 
+/** A string that is exactly an ISO calendar date. */
+const DATE_ONLY_RE = /^\d{4}-\d{2}-\d{2}$/;
+
 export interface LabelMap {
   /** id -> structural label */
   labels: Map<string, string>;
@@ -182,11 +185,137 @@ export async function buildLabelMap(
         const who = labels.get(v.userId) ?? v.userId;
         labels.set(v.id, `<vessel:${who.replace(/[<>]|user:/g, '')}>`);
       }
+
+      // TS-5: the tables the privacy scenarios' bodies and changes name. Each
+      // is ranked by time then id within its natural owner — never globally
+      // by first appearance (module comment, rule 1).
+      const bare = (id: string | null): string =>
+        id ? (labels.get(id) ?? `?${id}`).replace(/[<>]|user:|session:/g, '') : 'none';
+      const rankWithin = async (
+        sql: string,
+        name: string,
+        owner: (r: Record<string, string | null>) => string,
+      ): Promise<void> => {
+        const r = await c.query<Record<string, string | null>>(sql);
+        const n = new Map<string, number>();
+        for (const row of r.rows) {
+          const o = owner(row);
+          n.set(o, (n.get(o) ?? 0) + 1);
+          labels.set(String(row.id), `<${name}:${o}#${n.get(o)}>`);
+        }
+      };
+      await rankWithin(
+        `SELECT id, "userId" FROM "InnerWorkSession" ORDER BY "createdAt", id`,
+        'innerWork',
+        r => bare(r.userId),
+      );
+      await rankWithin(
+        `SELECT id, "sessionId" FROM "InnerWorkMessage" ORDER BY "sessionId", timestamp, id`,
+        'innerWorkMessage',
+        r => bare(r.sessionId),
+      );
+      await rankWithin(
+        `SELECT id, coalesce("innerWorkSessionId", "sessionId") AS owner FROM "BrainActivity" ORDER BY "createdAt", id`,
+        'brainActivity',
+        r => bare(r.owner),
+      );
+      await rankWithin(
+        `SELECT id, "guesserId", "subjectId" FROM "ReconcilerResult" ORDER BY "createdAt", id`,
+        'reconcilerResult',
+        r => `${bare(r.guesserId)}→${bare(r.subjectId)}`,
+      );
+      await rankWithin(
+        `SELECT id, "userId" FROM "ReconcilerShareOffer" ORDER BY "createdAt", id`,
+        'shareOffer',
+        r => bare(r.userId),
+      );
+      await rankWithin(
+        `SELECT n.id, uv."userId" FROM "IdentifiedNeed" n JOIN "UserVessel" uv ON uv.id = n."vesselId"
+         ORDER BY n."createdAt", n.id`,
+        'need',
+        r => bare(r.userId),
+      );
+      await rankWithin(
+        `SELECT id, "sessionId" FROM "StrategyProposal" ORDER BY "createdAt", id`,
+        'proposal',
+        r => bare(r.sessionId),
+      );
+      // Agreement has no createdAt; its uuidv7 id is insertion-ordered.
+      await rankWithin(`SELECT id FROM "Agreement" ORDER BY id`, 'agreement', () => 'main');
+      await rankWithin(`SELECT id, "sessionId" FROM "SharedVessel"`, 'sharedVessel', r => bare(r.sessionId));
+      await rankWithin(`SELECT id, "sessionId" FROM "Stage4Closure"`, 'closure', r => bare(r.sessionId));
+      await rankWithin(
+        `SELECT id, "sessionId" FROM "TendingEntry" ORDER BY "createdAt", id`,
+        'tendingEntry',
+        r => bare(r.sessionId),
+      );
+      await rankWithin(
+        `SELECT id, direction FROM "RefinementAttemptCounter" ORDER BY "createdAt", id`,
+        'refinementCounter',
+        r => String(r.direction).replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/g, m => bare(m)),
+      );
+      await rankWithin(
+        `SELECT id, "userId" FROM "ValidationFeedbackDraft" ORDER BY "createdAt", id`,
+        'feedbackDraft',
+        r => bare(r.userId),
+      );
+      await rankWithin(
+        `SELECT id, "userId" FROM "EmpathyValidation" ORDER BY "validatedAt" NULLS LAST, id`,
+        'validation',
+        r => bare(r.userId),
+      );
+      await rankWithin(
+        `SELECT id, "userId" FROM "Stage4ProposalSelection" ORDER BY "selectedAt", id`,
+        'selection',
+        r => bare(r.userId),
+      );
+      await rankWithin(
+        `SELECT id, "sourceUserId" FROM "ConsentedContent" ORDER BY "consentedAt", id`,
+        'consentedContent',
+        r => bare(r.sourceUserId),
+      );
+      await rankWithin(
+        `SELECT id, "sourceUserId" FROM "Stage4NeedCoverage" ORDER BY "createdAt", id`,
+        'needCoverage',
+        r => bare(r.sourceUserId),
+      );
+      await rankWithin(`SELECT id, "userId" FROM "RelationshipMember" ORDER BY id`, 'member', r => bare(r.userId));
+      await rankWithin(`SELECT id, "userId" FROM "StrategyRanking" ORDER BY id`, 'ranking', r => bare(r.userId));
+      await rankWithin(
+        `SELECT id, "userId" FROM "Stage4NeedDeclination" ORDER BY "declinedAt", id`,
+        'declination',
+        r => bare(r.userId),
+      );
     },
     database,
   );
 
   return { labels };
+}
+
+/**
+ * Fill `map` with `fallback`'s labels for ids `map` does not know (rows the
+ * run deleted, labelled from the fixture template). Returns every collision —
+ * a fallback label some OTHER id already carries in `map` — and adds none of
+ * them: ranks are computed per database, so when a run deletes some of an
+ * owner's rows the survivors re-rank and a deleted row's template rank can
+ * equal a survivor's new one. Two ids under one label would read as one row.
+ */
+export function mergeFallbackLabels(map: LabelMap, fallback: LabelMap): string[] {
+  const used = new Map<string, string>();
+  for (const [id, label] of map.labels) used.set(label, id);
+  const collisions: string[] = [];
+  for (const [id, label] of fallback.labels) {
+    if (map.labels.has(id)) continue;
+    const owner = used.get(label);
+    if (owner !== undefined && owner !== id) {
+      collisions.push(`${label}: ${id} (fixture) and ${owner} (run)`);
+      continue;
+    }
+    map.labels.set(id, label);
+    used.set(label, id);
+  }
+  return collisions;
 }
 
 export interface NormalizeResult<T> {
@@ -284,6 +413,15 @@ export function normalize<T>(value: T, map: LabelMap, window?: FreshWindow): Nor
   };
 
   const normalizeString = (s: string): string => {
+    // A bare calendar date (`2026-10-31`) is wall-clock-relative too — Stage
+    // 4's `defaultCheckInDate` is today (UTC) + 10 days — but TIMESTAMP_RE
+    // needs a time. Found when a golden recorded on 2026-10-21 went red after
+    // UTC midnight (TS-5 fix round 2). Within a run window it becomes its day
+    // offset from the window's start date: `<date:today+10d>`.
+    if (window && DATE_ONLY_RE.test(s)) {
+      const days = Math.round((Date.parse(`${s}T00:00:00Z`) - Date.parse(`${window.from.slice(0, 10)}T00:00:00Z`)) / 86_400_000);
+      return `<date:today${days >= 0 ? '+' : ''}${days}d>`;
+    }
     let out = s.replace(TIMESTAMP_RE, m => {
       const stamp = normalizeStampText(m);
       if (isFresh(stamp)) return '<ts:fresh>';
@@ -538,6 +676,15 @@ export function buildConceptLabelMap(input: ConceptLabelInput): LabelMap {
   ranked('reflection', 'reflection', 'user_id', ['created_at']);
   ranked('reflection_message', 'reflectionMessage', 'reflection_id', ['created_at']);
   ranked('takeaway', 'takeaway', 'reflection_id', ['position']);
+
+  // brain_activity (TS-5): ranked by time within the reflection it belongs to,
+  // else its session — `<brainActivity:session:main#2>`,
+  // `<brainActivity:reflection:ada#1#1>`. Labels above must exist first.
+  for (const [parent, group] of groupBy(rows('brain_activity'), r => label(r.reflection_id) ?? label(r.session_id))) {
+    sortedBy(group, ['created_at']).forEach((r, i) =>
+      labels.set(String(r.id), `<brainActivity:${inner(parent)}#${i + 1}>`),
+    );
+  }
 
   // consent: who decided, over what kind, about which target. A consent whose
   // arc names nothing labelled is ranked within (who, kind) — never globally,

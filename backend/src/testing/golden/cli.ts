@@ -64,6 +64,9 @@ async function cmdList(): Promise<void> {
     'STAGE4_REDESIGN_SHARED_SELECTIONS',
     'STAGE4_REDESIGN_NO_OVERLAP_SELECTIONS',
     'STAGE4_REDESIGN_PARTNER_INACTIVE',
+    'INNER_WORK_LINKED_A',
+    'NEEDS_CONFIRMED',
+    'TOMBSTONE_READY',
   ];
   for (const s of stages) {
     const db = fixtureDbName(s);

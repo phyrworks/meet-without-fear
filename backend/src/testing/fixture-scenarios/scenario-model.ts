@@ -147,6 +147,48 @@ export interface NeedContent {
   category: NeedCategoryName;
   aiConfidence: number;
   confirmed: boolean;
+  /** What the participant said that the need was drawn from (`IdentifiedNeed.evidence`; default none). */
+  evidence?: string[];
+  /**
+   * The participant shared this need (target `need_share`) at their
+   * `needs_shared` milestone. `text` is the target's `shared_text`; today's
+   * shape has nowhere to hold it (production's needs share writes only a
+   * GRANTED IDENTIFIED_NEED consent — `stage3.ts` consentToShareNeeds — and no
+   * ConsentedContent), so the current-shape writer records only the consent.
+   */
+  shared?: { text: string };
+}
+
+/**
+ * A participant's Inner Work reflection (target `reflection`,
+ * `reflection_message`): private to its author, never referenced by anything
+ * that crosses between participants (spec §7, D2).
+ */
+export interface ReflectionContent {
+  title: string;
+  theme?: string;
+  summary?: string;
+  /** Linked to the scenario's session (today's `linkedPartnerSessionId`). */
+  linkedToSession?: boolean;
+  at: Stamp;
+  messages: Array<{ role: 'USER' | 'AI'; content: string; at: Stamp }>;
+}
+
+/**
+ * A captured LLM call (target `brain_activity`): the prompt built for one of
+ * the participant's turns, in the session (`scope: 'session'`) or in one of
+ * their reflections (`scope: { reflection: index }`). Production writes these
+ * from `lib/bedrock.ts`; under MOCK_LLM nothing is captured, so a scenario
+ * that needs a capture states it as content.
+ */
+export interface PromptCapture {
+  scope: 'session' | { reflection: number };
+  callType: 'ORCHESTRATED_RESPONSE' | 'WITNESSING_RESPONSE' | 'RECONCILER_ANALYSIS';
+  at: Stamp;
+  /** The prompt as captured (`BrainActivity.input`). */
+  input: { systemPrompt: string; messages: Array<{ role: 'user' | 'assistant'; content: string }> };
+  /** The response text (`BrainActivity.output`). */
+  output: string;
 }
 
 /** A participant's private choice on a repair proposal (redesigned flow) (at `choices_shared`). */
@@ -176,6 +218,10 @@ export interface ParticipantScenario {
   needs?: NeedContent[];
   choices?: ProposalChoice[];
   ranking?: LegacyRanking;
+  /** Inner Work reflections, oldest first. */
+  reflections?: ReflectionContent[];
+  /** LLM calls captured for this participant's turns, oldest first. */
+  promptCaptures?: PromptCapture[];
 }
 
 export interface ReconcilerResultContent {
@@ -270,6 +316,21 @@ export interface RepairContent {
   coverage: NeedCoverage[];
 }
 
+/**
+ * How the repair stage ended (target `session_closure`). A participant reaches
+ * `closed` only in a scenario that carries one (OD5), and only after
+ * `choices_shared`.
+ */
+export interface SessionClosureContent {
+  kind: 'SHARED_AGREEMENT' | 'NO_SHARED_AGREEMENT';
+  reason: 'MUTUAL_SELECTION' | 'NO_OVERLAP' | 'BOUNDARY_HONORED' | 'USER_STOPPED';
+  summary: string;
+  /** Who closed it; null = auto-closure. */
+  closedBy: ParticipantKey | null;
+  at: Stamp;
+  checkInAt?: Stamp;
+}
+
 export interface Scenario {
   name: string;
   /** In invitation order: the first participant invited the rest. */
@@ -283,6 +344,8 @@ export interface Scenario {
   reconciliation?: ReconciliationContent;
   legacyStrategies?: { strategies: LegacyStrategy[]; agreement?: LegacyAgreement };
   repair?: RepairContent;
+  /** The repair stage ended (session_closure); participants may then reach `closed`. */
+  closure?: SessionClosureContent;
   /** Encoding quirks of the pre-rebuild factory; see the module comment. */
   currentShape?: CurrentShapeQuirks;
 }
@@ -299,4 +362,12 @@ export interface CurrentShapeQuirks {
    * STRATEGIC_REPAIR_COMPLETE write order).
    */
   batchNeeds?: boolean;
+  /**
+   * TS-5 stages only: write every timestamp explicitly, as a fixed offset from
+   * one clock read — no `@default(now())` / `@updatedAt`, no co-written rows in
+   * one millisecond — so a fixture rebuild cannot move its goldens (see the
+   * current-shape writer). The 13 pre-TS-5 stages leave it off: their rows must
+   * stay byte-identical to what their goldens were recorded against.
+   */
+  explicitStamps?: boolean;
 }

@@ -13,7 +13,51 @@
  * failure this harness can have, so both clerkId formats are pinned here.
  */
 
-import { normalize, LabelMap } from '../normalize';
+import { mergeFallbackLabels, normalize, LabelMap } from '../normalize';
+
+describe('bare calendar dates (TS-5 fix round 2)', () => {
+  const map: LabelMap = { labels: new Map() };
+  const window = { from: '2026-10-22T00:23:10.000Z', to: '2026-10-22T00:30:00.000Z' };
+
+  it('become their day offset from the run window’s start date', () => {
+    expect(normalize({ d: '2026-11-01', e: '2026-10-22', f: '2026-10-20' }, map, window).value).toEqual({
+      d: '<date:today+10d>',
+      e: '<date:today+0d>',
+      f: '<date:today-2d>',
+    });
+  });
+
+  it('are left alone without a window, and inside longer text', () => {
+    expect(normalize({ d: '2026-11-01' }, map).value).toEqual({ d: '2026-11-01' });
+    expect(normalize({ d: 'due 2026-11-01' }, map, window).value).toEqual({ d: 'due 2026-11-01' });
+  });
+});
+
+describe('mergeFallbackLabels (fixture-template labels for rows a run deleted, TS-5)', () => {
+  const lm = (entries: Array<[string, string]>): LabelMap => ({ labels: new Map(entries) });
+
+  it('adds labels for ids the run no longer has, and keeps the run’s own labels', () => {
+    const run = lm([['m2', '<message:2>']]);
+    const fixture = lm([
+      ['m1', '<message:1>'],
+      ['m2', '<message:9>'],
+    ]);
+    expect(mergeFallbackLabels(run, fixture)).toEqual([]);
+    expect(run.labels.get('m1')).toBe('<message:1>');
+    expect(run.labels.get('m2')).toBe('<message:2>');
+  });
+
+  it('reports — and does not add — a deleted row whose template rank a survivor now holds', () => {
+    // Fixture: need#1 = n1, need#2 = n2. The run deleted n1, so n2 re-ranks to #1.
+    const run = lm([['n2', '<need:bob#1>']]);
+    const fixture = lm([
+      ['n1', '<need:bob#1>'],
+      ['n2', '<need:bob#2>'],
+    ]);
+    expect(mergeFallbackLabels(run, fixture)).toEqual(['<need:bob#1>: n1 (fixture) and n2 (run)']);
+    expect(run.labels.has('n1')).toBe(false);
+  });
+});
 
 /** Two users, plus the seeded clerkId of one of them. */
 function labelMap(extra: Record<string, string> = {}): LabelMap {

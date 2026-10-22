@@ -10,11 +10,19 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
-import { compareWithAllowList } from './allow-lists/compare';
-import type { AllowList } from './allow-lists/types';
+import { alignTies, compareWithAllowList, rawTieRanges, TiedRanges } from './allow-lists/compare';
+import type { AllowList, AllowRule } from './allow-lists/types';
 import type { Harness, StepResult } from './driver';
 import { CONCEPT_VIEWS, conceptOf } from './concept-views';
-import { buildConceptLabelMap, buildLabelMap, conceptRowKey, normalize, timestampFacts, LabelMap } from './normalize';
+import {
+  buildConceptLabelMap,
+  buildLabelMap,
+  conceptRowKey,
+  mergeFallbackLabels,
+  normalize,
+  timestampFacts,
+  LabelMap,
+} from './normalize';
 import { diffSnapshots } from './snapshot';
 import type { RowChange, Snapshot, SnapshotRow } from './snapshot';
 import type { TraceSummary } from './trace';
@@ -40,6 +48,8 @@ export interface GoldenStep {
    * trace; absent leaves every existing golden byte-identical.
    */
   trace?: TraceSummary;
+  /** Genuine same-millisecond ties at `tiedOrder` paths (`rawTieRanges`); metadata, stripped before comparing. */
+  tiedRanges?: TiedRanges;
 }
 
 export interface GoldenFile {
@@ -113,7 +123,12 @@ function describeChange(c: RowChange): Record<string, unknown> {
  *    channel where write regressions actually appear. Only 8 of 68 tables are
  *    labelled, so that channel is where unknown ids are most likely.
  */
-export function normalizeStep(step: StepResult, map: LabelMap): { golden: GoldenStep; unresolved: string[] } {
+export function normalizeStep(
+  step: StepResult,
+  map: LabelMap,
+  /** The scenario's allow-list rules (only `tiedOrder` is read) and the step's index, for `rawTieRanges`. */
+  ties: { rules: readonly AllowRule[]; index: number } = { rules: [], index: 0 },
+): { golden: GoldenStep; unresolved: string[] } {
   const payload = {
     body: step.sse ? undefined : step.body,
     sse: step.sse,
@@ -123,6 +138,7 @@ export function normalizeStep(step: StepResult, map: LabelMap): { golden: Golden
 
   const n = normalize(payload, map, step.window);
   const v = n.value as typeof payload;
+  const tiedRanges = rawTieRanges(payload, ties.rules, ['steps', String(ties.index)]);
 
   return {
     golden: {
@@ -149,6 +165,8 @@ export function normalizeStep(step: StepResult, map: LabelMap): { golden: Golden
       // only ever damage it. `TIMESTAMP_RE` and `CUID_RE` have nothing to match,
       // and the "unresolved id fails the run" guard has nothing to guard.
       ...(step.trace ? { trace: step.trace } : {}),
+      // Genuine same-millisecond ties at `tiedOrder` paths (TS-5 fix round 4).
+      ...(Object.keys(tiedRanges).length ? { tiedRanges } : {}),
     },
     unresolved: n.unresolved,
   };
@@ -171,6 +189,8 @@ export async function recordOrVerify(opts: {
   scenario: string;
   harness: Harness;
   steps: StepResult[];
+  /** The scenario's allow-list rules; only `tiedOrder` is read here. */
+  tiedOrder?: readonly AllowRule[];
 }): Promise<RunReport> {
   const { scenario, harness, steps } = opts;
   const map = await buildLabelMap(
@@ -179,11 +199,30 @@ export async function recordOrVerify(opts: {
     harness.fixture.manifest,
     harness.fixture.seededClerkIds,
   );
+  // Rows the run deleted (TS-5 R5: account deletion) are gone from the run
+  // database but still named in the `before` side of its changes. The fixture
+  // template holds them under the same ids (the run is its clone), labelled by
+  // the same rules; the run's own label wins wherever both have one, so a
+  // scenario that deletes nothing labels exactly as before.
+  const fixtureMap = await buildLabelMap(
+    harness.fixture.target,
+    harness.fixture.manifest.database,
+    harness.fixture.manifest,
+    harness.fixture.seededClerkIds,
+  );
+  const collisions = mergeFallbackLabels(map, fixtureMap);
+  if (collisions.length) {
+    // A deleted row keeps the rank it had in the fixture while the owner's
+    // surviving rows re-rank in the run: two ids would read as one row.
+    throw new Error(
+      `Scenario "${scenario}": fixture-template labels collide with run labels:\n  ${collisions.join('\n  ')}`,
+    );
+  }
 
   const normalized: GoldenStep[] = [];
   const unresolved: string[] = [];
-  for (const s of steps) {
-    const n = normalizeStep(s, map);
+  for (const [index, s] of steps.entries()) {
+    const n = normalizeStep(s, map, { rules: opts.tiedOrder ?? [], index });
     normalized.push(n.golden);
     unresolved.push(...n.unresolved);
   }
@@ -222,7 +261,10 @@ export async function recordOrVerify(opts: {
   }
 
   const expected = JSON.parse(fs.readFileSync(p, 'utf8')) as GoldenFile;
-  const diff = diffJson(expected, actual);
+  // Genuine same-millisecond ties recorded on either side are put into
+  // canonical order on both before the positional comparison (TS-5 fix round 4).
+  const [e, a] = alignTies(expected, actual);
+  const diff = diffJson(e, a);
   return { scenario, recorded: false, unresolved: [...new Set(unresolved)], diff };
 }
 
@@ -290,8 +332,15 @@ export interface ConceptGoldenStep {
   status: number;
   body?: unknown;
   sse?: Array<{ event: string; data: unknown }>;
+  /**
+   * Why the concept views could not represent the database after this step
+   * (harness `conceptUnrepresentable: 'record'`); `changes` is absent then.
+   */
+  unrepresentable?: string;
+  /** Genuine same-millisecond ties at `tiedOrder` paths (`rawTieRanges`); metadata, stripped before comparing. */
+  tiedRanges?: TiedRanges;
   /** Concept-view row changes once the step settled, sorted by view then key. */
-  changes: Array<{
+  changes?: Array<{
     view: string;
     kind: RowChange['kind'];
     key: string;
@@ -336,6 +385,15 @@ export async function recordOrVerifyConcept(opts: {
   harness: Harness;
   steps: StepResult[];
   allowList: AllowList;
+  /**
+   * Old-shape ids that denote a concept row under another id, labelled as
+   * that row (TS-5). Today's Stage 4 DTOs name a need by its
+   * `Stage4NeedCoverage` row id when the coverage row has no `needId`
+   * (`needIdentifier = row.needId ?? row.id`); the target names the need
+   * itself. Aliasing the coverage id to the need it covers labels both runs
+   * the same. An alias whose `sameAs` has no concept label is left unresolved.
+   */
+  aliases?: Array<{ id: string; sameAs: string }>;
 }): Promise<ConceptRunReport> {
   const { scenario, harness, steps, allowList } = opts;
   if (allowList.scenario !== scenario) {
@@ -347,14 +405,24 @@ export async function recordOrVerifyConcept(opts: {
   }
 
   // Labels come from every row the run ever showed, so a row deleted mid-run
-  // keeps its label. Later snapshots win, but identity (and so the label's
-  // natural key) cannot change for a given id.
+  // keeps its label. The FIRST snapshot that shows a row wins (TS-5 fix 1):
+  // today's shape mutates one attempt row in place on resubmit
+  // (revisionCount → round), while the target keeps that row as round 1 and
+  // inserts round 2. Labelling a row by how it first appeared names it as the
+  // target does; a label taken from the last state renamed the row the run
+  // started with.
   const merged = new Map<string, Map<string, SnapshotRow>>();
-  for (const snap of [initial, ...steps.flatMap(s => [s.concept!.before, s.concept!.after])]) {
+  const snaps = [initial, ...steps.flatMap(s => [s.concept!.before, s.concept!.after])].filter(
+    (x): x is Snapshot => !!x,
+  );
+  for (const snap of snaps) {
     for (const [concept, rows] of Object.entries(conceptTables(snap))) {
       const identity = [...(CONCEPT_VIEWS as Record<string, { identity: readonly string[] }>)[concept].identity];
       const m = merged.get(concept) ?? new Map<string, SnapshotRow>();
-      for (const r of rows) m.set(identity.map(c => String(r[c])).join('\u0000'), r);
+      for (const r of rows) {
+        const k = identity.map(c => String(r[c])).join('\u0000');
+        if (!m.has(k)) m.set(k, r);
+      }
       merged.set(concept, m);
     }
   }
@@ -369,6 +437,10 @@ export async function recordOrVerifyConcept(opts: {
     seededClerkIds: harness.fixture.seededClerkIds,
     rows: Object.fromEntries([...merged].map(([c, m]) => [c, [...m.values()]])),
   });
+  for (const { id, sameAs } of opts.aliases ?? []) {
+    const label = map.labels.get(sameAs);
+    if (label) map.labels.set(id, label);
+  }
 
   const unresolved = new Set<string>();
   const keyed = (concept: string, rows: SnapshotRow[]): Record<string, unknown> => {
@@ -391,8 +463,33 @@ export async function recordOrVerifyConcept(opts: {
     initialOut[concept] = keyed(concept, rows);
   }
 
-  const goldenSteps: ConceptGoldenStep[] = steps.map(s => {
-    const raw = diffSnapshots(s.concept!.before, s.concept!.after).map(c => ({
+  const goldenSteps: ConceptGoldenStep[] = steps.map((s, index) => {
+    const concept = s.concept!;
+    if (concept.unrepresentable !== undefined) {
+      // The views cannot represent the state after this step: record why, in
+      // place of its changes. On the target there is a state to compare, so
+      // the allow-list must name both `changes` (added) and `unrepresentable`
+      // (absent) for these steps — see driver `conceptUnrepresentable`.
+      const n = normalize(
+        { body: s.sse ? undefined : s.body, sse: s.sse, reason: concept.unrepresentable },
+        map,
+        s.window,
+      );
+      n.unresolved.forEach(u => unresolved.add(u));
+      const v = n.value as { body?: unknown; sse?: ConceptGoldenStep['sse']; reason: string };
+      const tiedRanges = rawTieRanges({ body: s.sse ? undefined : s.body, sse: s.sse }, allowList.rules, [
+        'steps',
+        String(index),
+      ]);
+      return {
+        label: s.label,
+        status: s.status,
+        ...(s.sse ? { sse: v.sse } : { body: v.body }),
+        unrepresentable: v.reason,
+        ...(Object.keys(tiedRanges).length ? { tiedRanges } : {}),
+      };
+    }
+    const raw = diffSnapshots(concept.before, concept.after).map(c => ({
       view: conceptOf(c.table),
       kind: c.kind,
       changedFields: c.changedFields?.slice().sort(),
@@ -402,6 +499,10 @@ export async function recordOrVerifyConcept(opts: {
     const n = normalize({ body: s.sse ? undefined : s.body, sse: s.sse, changes: raw }, map, s.window);
     n.unresolved.forEach(u => unresolved.add(u));
     const v = n.value as { body?: unknown; sse?: ConceptGoldenStep['sse']; changes: typeof raw };
+    const tiedRanges = rawTieRanges({ body: s.sse ? undefined : s.body, sse: s.sse }, allowList.rules, [
+      'steps',
+      String(index),
+    ]);
     const changes = v.changes
       .map(c => ({
         view: c.view,
@@ -417,6 +518,7 @@ export async function recordOrVerifyConcept(opts: {
       status: s.status,
       ...(s.sse ? { sse: v.sse } : { body: v.body }),
       changes,
+      ...(Object.keys(tiedRanges).length ? { tiedRanges } : {}),
     };
   });
 
@@ -448,6 +550,8 @@ export async function recordOrVerifyConcept(opts: {
     };
   }
   const expected = JSON.parse(fs.readFileSync(p, 'utf8')) as ConceptGoldenFile;
-  const cmp = compareWithAllowList(expected, actual, allowList);
+  // Genuine same-millisecond ties on either side: canonical order on both (TS-5 fix round 4).
+  const [e, a] = alignTies(expected, actual);
+  const cmp = compareWithAllowList(e, a, allowList);
   return { ...base, recorded: false, violations: cmp.violations, unmatchedRules: cmp.unmatchedRules };
 }

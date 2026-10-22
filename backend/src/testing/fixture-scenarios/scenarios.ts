@@ -15,6 +15,7 @@ import {
   at,
   DAY,
   EmpathyContent,
+  NeedContent,
   JourneyPhase,
   MilestoneKey,
   ParticipantScenario,
@@ -23,6 +24,8 @@ import {
   ScenarioMessageRole,
   Stamp,
   RepairContent,
+  PromptCapture,
+  ReflectionContent,
 } from './scenario-model';
 import { TargetStage } from './target-stage';
 
@@ -50,8 +53,12 @@ const sec = (n: number) => at(n * 1000);
 // Shared content
 // ============================================================================
 
-const ADA_EMPATHY_STATEMENT =
+export const ADA_EMPATHY_STATEMENT =
   'I understand you might be feeling stressed from work. I want us to support each other better.';
+
+/** Bob's HELD attempt in RECONCILER_SHOWN_B. */
+export const BOB_HELD_EMPATHY_STATEMENT =
+  'I understand that Riley may feel alone with the household work and want their effort to be noticed.';
 
 const ADA_STORY: string[] = [
   "Hi, I'm having issues with my partner.",
@@ -104,12 +111,13 @@ const bobStory = (adaName: string): Line[] => [
   ['USER', 'Yes, I feel heard.', 'witness'],
 ];
 
-const SHARE_CONTENT =
+export const SHARE_CONTENT =
   "I feel like I'm running on empty - exhausted from work every day, and then coming home to more tasks. What I really need is for someone to see how hard I'm trying, even when I don't have anything left to give.";
 
-const reconcilerResult = (a: string, b: string, when: Stamp) => ({
-  guesser: A,
-  subject: B,
+/** `a` guessed about `b` (names); `guesser`/`subject` are their participant keys. */
+const reconcilerResult = (a: string, b: string, when: Stamp, guesser = A, subject = B) => ({
+  guesser,
+  subject,
   at: when,
   alignmentScore: 45,
   alignmentSummary: `${a}'s empathy attempt captures some elements but misses key aspects of ${b}'s experience.`,
@@ -220,11 +228,7 @@ const BUILDERS: Record<TargetStage, Build> = {
     bob.milestones.empathy_submitted = sec(-30);
     // Bob's own attempt keeps the mobile share-offer fetch gate open, which only
     // requests pending offers once the user has submitted empathy.
-    bob.empathy = heldEmpathy(
-      'I understand that Riley may feel alone with the household work and want their effort to be noticed.',
-      'HELD',
-      false,
-    );
+    bob.empathy = heldEmpathy(BOB_HELD_EMPATHY_STATEMENT, 'HELD', false);
     return {
       invitation: ACCEPTED,
       participants: [adaWaitingInStage2('AWAITING_SHARING'), bob],
@@ -323,13 +327,10 @@ const BUILDERS: Record<TargetStage, Build> = {
 
   // The whole journey complete under the legacy ranking flow; the agreement is confirmed now.
   //
-  // NOT target-reachable: `closed` is reached without `choices_shared` and with
-  // no session closure. `closed` stands in for the legacy ranking-flow
-  // completion (rankings + agreement) that today's rows record as a COMPLETED
-  // final stage; the migration plan's step 7 would decode that row as
-  // `choices_shared`, and the target journey reaches `closed` only after
-  // `choices_shared` and a `session_closure`. What this scenario becomes in the
-  // target shape is a TS-5 decision (see current-shape.ts module comment).
+  // Stage 4 ends at `choices_shared` (OD5, plan step 7: a COMPLETED stage-4 row
+  // decodes as `choices_shared`). There is no session closure, so nobody has
+  // reached `closed`; the current-shape writer encodes the legacy completion
+  // (ranking + agreement) as the COMPLETED stage-4 row.
   [TargetStage.STRATEGIC_REPAIR_COMPLETE]: () => {
     const journey: Partial<Record<MilestoneKey, Stamp>> = {
       compact_signed: sec(-350),
@@ -338,7 +339,7 @@ const BUILDERS: Record<TargetStage, Build> = {
       needs_confirmed: sec(-240),
       needs_validated: sec(-180),
       needs_shared: sec(-150),
-      closed: at(0),
+      choices_shared: at(0),
     };
     return {
       invitation: ACCEPTED,
@@ -432,6 +433,282 @@ const BUILDERS: Record<TargetStage, Build> = {
 
   [TargetStage.STAGE4_REDESIGN_PARTNER_INACTIVE]: () =>
     repairRedesign({ [A]: [{ proposal: 'checkin', decision: 'WILLING' }] }),
+
+  // FEEL_HEARD_B, plus Ada's reflection linked to the session and the prompts
+  // captured for her reflection turn and for Bob's last session turn.
+  [TargetStage.INNER_WORK_LINKED_A]: ({ a }) => {
+    const ada = adaWaitingInStage2('HELD');
+    ada.reflections = [adaReflection(sec(-100))];
+    ada.promptCaptures = [adaReflectionCapture(sec(-95))];
+    const bob = bobFeltHeard(at(0), a);
+    bob.promptCaptures = [bobSessionCapture(bob, at(-1))];
+    return { invitation: ACCEPTED, participants: [ada, bob], currentShape: { explicitStamps: true } };
+  },
+
+  // Stage 3 for both: needs confirmed, nothing shared or validated yet. The
+  // needs are R4's probes, so their labels and evidence are distinctive.
+  [TargetStage.NEEDS_CONFIRMED]: () => {
+    const s = needMappingComplete();
+    for (const p of s.participants) {
+      delete p.milestones.needs_validated;
+      delete p.milestones.needs_shared;
+      p.needs = p.key === A ? NEEDS_CONFIRMED_TEXT.ada : NEEDS_CONFIRMED_TEXT.bob;
+    }
+    return { ...s, currentShape: { ...s.currentShape, explicitStamps: true } };
+  },
+
+  [TargetStage.TOMBSTONE_READY]: ({ a, b }) => tombstoneReady(a, b),
+};
+
+// ============================================================================
+// TS-5 content: Inner Work, prompt captures, shared needs
+// ============================================================================
+
+/**
+ * Ada's private reflection. Every string here is a privacy probe: none of it
+ * may ever reach Bob (golden R1, spec §7 "a prompt built for participant X
+ * contains only X's private material").
+ */
+export const ADA_REFLECTION = {
+  title: 'Keeping score like my mother did',
+  theme: 'inherited resentment about rest',
+  summary: 'Ada traced her scorekeeping about chores to watching her mother never rest, and is afraid of repeating it.',
+  userLine: 'I keep a silent tally of every dish because my mother never sat down once in thirty years.',
+  aiLine: 'It sounds like the tally protects you from becoming her, and it also keeps you braced for unfairness.',
+};
+
+function adaReflection(when: Stamp): ReflectionContent {
+  return {
+    title: ADA_REFLECTION.title,
+    theme: ADA_REFLECTION.theme,
+    summary: ADA_REFLECTION.summary,
+    linkedToSession: true,
+    at: when,
+    messages: [
+      { role: 'USER', content: ADA_REFLECTION.userLine, at: { ...when, offsetMs: when.offsetMs + 1000 } },
+      { role: 'AI', content: ADA_REFLECTION.aiLine, at: { ...when, offsetMs: when.offsetMs + 2000 } },
+    ],
+  };
+}
+
+/** The prompt captured for Ada's reflection turn: her own private material, legitimately. */
+function adaReflectionCapture(when: Stamp): PromptCapture {
+  return {
+    scope: { reflection: 0 },
+    callType: 'WITNESSING_RESPONSE',
+    at: when,
+    input: {
+      systemPrompt: `You are Ada's private reflection guide. Reflection theme: ${ADA_REFLECTION.theme}.`,
+      messages: [{ role: 'user', content: ADA_REFLECTION.userLine }],
+    },
+    output: ADA_REFLECTION.aiLine,
+  };
+}
+
+/** The prompt captured for a participant's last session turn: their own conversation only. */
+function bobSessionCapture(p: ParticipantScenario, when: Stamp): PromptCapture {
+  const msgs = p.messages ?? [];
+  return {
+    scope: 'session',
+    callType: 'ORCHESTRATED_RESPONSE',
+    at: when,
+    input: {
+      systemPrompt: 'You are a calm facilitator witnessing Bob in his private conversation. Stage: witness.',
+      messages: msgs.map(m => ({ role: m.role === 'USER' ? ('user' as const) : ('assistant' as const), content: m.content })),
+    },
+    output: msgs[msgs.length - 1]?.content ?? '',
+  };
+}
+
+/** Text each partner's shared needs carry in the target (`need_share.shared_text`). */
+const shareNeeds = (needs: NeedContent[], texts: string[]) =>
+  needs.map((n, i) => ({ ...n, shared: { text: texts[i] } }));
+
+/**
+ * Golden R5's starting state: the legacy journey finished (STRATEGIC_REPAIR_COMPLETE's
+ * shape, timed gates), with both attempts revealed and validated, Ada's shared
+ * context delivered into Bob's conversation, both partners' needs shared, private
+ * chat for both, Ada's reflection, and prompt captures for Ada's session and
+ * reflection turns and Bob's session turn. The session is still ACTIVE.
+ */
+function tombstoneReady(a: string, b: string): ReturnType<Build> {
+  const journey: Partial<Record<MilestoneKey, Stamp>> = {
+    compact_signed: sec(-350),
+    feel_heard: sec(-320),
+    empathy_validated: sec(-300),
+    needs_confirmed: sec(-240),
+    needs_validated: sec(-180),
+    needs_shared: sec(-150),
+    choices_shared: at(0),
+  };
+  const revealed = (statement: string, validatedBy: string, validatedAt: Stamp): EmpathyContent => ({
+    statement,
+    status: 'VALIDATED',
+    revealedAt: sec(-305),
+    deliveredAt: sec(-305),
+    consentRecorded: true,
+    statementInChat: true,
+    validatedBy: { participant: validatedBy, at: validatedAt },
+  });
+  const ada: ParticipantScenario = {
+    key: A,
+    journey: { startedAt: sec(-400) },
+    milestones: { invitation_sent: INVITED, ...journey, empathy_submitted: sec(-315) },
+    messages: lines(
+      [
+        ['USER', 'I am tired of being the only one who notices the laundry.', 'witness'],
+        ['AI', 'That sounds lonely. What do you wish your partner noticed?', 'witness'],
+        ['USER', 'That I am exhausted too, and I never get to say so.', 'witness'],
+      ],
+      i => at(-390000 + i * 5000),
+    ),
+    empathy: revealed(TOMBSTONE_TEXT.adaEmpathy, B, sec(-302)),
+    needs: shareNeeds(TOMBSTONE_TEXT.adaNeeds, TOMBSTONE_TEXT.adaNeedShares),
+    ranking: { proposals: ['checkin', 'appreciation'], submittedAt: sec(-90) },
+    reflections: [adaReflection(sec(-380))],
+  };
+  ada.promptCaptures = [
+    {
+      scope: 'session',
+      callType: 'ORCHESTRATED_RESPONSE',
+      at: sec(-375),
+      input: {
+        systemPrompt: 'You are a calm facilitator witnessing Ada in her private conversation. Stage: witness.',
+        messages: (ada.messages ?? []).map(m => ({
+          role: m.role === 'USER' ? ('user' as const) : ('assistant' as const),
+          content: m.content,
+        })),
+      },
+      output: 'I hear how tired you are.',
+    },
+    adaReflectionCapture(sec(-370)),
+  ];
+  const bob: ParticipantScenario = {
+    key: B,
+    journey: { startedAt: sec(-400) },
+    milestones: { ...journey, empathy_submitted: sec(-312) },
+    messages: lines(
+      [
+        ['USER', 'Work has been brutal and I come home with nothing left.', 'witness'],
+        ['AI', 'Coming home empty sounds hard. What happens next?', 'witness'],
+      ],
+      i => at(-388000 + i * 5000),
+    ),
+    empathy: revealed(TOMBSTONE_TEXT.bobEmpathy, A, sec(-303)),
+    needs: shareNeeds(BOB_NEEDS, TOMBSTONE_TEXT.bobNeedShares),
+    ranking: { proposals: ['appreciation', 'checkin'], submittedAt: sec(-90) },
+  };
+  bob.promptCaptures = [bobSessionCapture(bob, sec(-360))];
+  return {
+    invitation: ACCEPTED,
+    participants: [ada, bob],
+    currentShape: { explicitStamps: true },
+    // Bob's guess about Ada had gaps; Ada shared context, delivered to Bob.
+    reconciliation: {
+      result: reconcilerResult(b, a, sec(-311), B, A),
+      shareOffer: {
+        status: 'ACCEPTED',
+        suggestedContent: TOMBSTONE_TEXT.adaSharedContext,
+        shared: { content: TOMBSTONE_TEXT.adaSharedContext, at: sec(-310) },
+        deliveredAt: sec(-310),
+      },
+      messages: [
+        { to: B, from: A, role: 'SHARED_CONTEXT', content: TOMBSTONE_TEXT.adaSharedContext, phase: 'perspective', at: sec(-310) },
+        { to: A, from: A, role: 'SHARED_CONTEXT', content: TOMBSTONE_TEXT.adaSharedContext, phase: 'perspective', at: sec(-310) },
+      ],
+    },
+    legacyStrategies: {
+      strategies: [
+        {
+          key: 'checkin',
+          by: A,
+          description: 'Weekly check-in on Sundays to discuss upcoming week and divide tasks',
+          needsAddressed: ['Appreciation', 'Partnership'],
+          duration: 'ongoing',
+          at: sec(-120),
+        },
+        {
+          key: 'appreciation',
+          by: B,
+          description: 'Express appreciation for at least one thing your partner did each day',
+          needsAddressed: ['Recognition'],
+          duration: 'ongoing',
+          at: sec(-120),
+        },
+      ],
+      agreement: {
+        proposal: 'checkin',
+        description: 'Weekly check-in on Sundays to discuss upcoming week and divide tasks',
+        type: 'COMMITMENT',
+        status: 'AGREED',
+        agreedBy: [A, B],
+        agreedAt: at(0),
+        followUpAt: at(14 * DAY),
+      },
+    },
+  };
+}
+
+/** NEEDS_CONFIRMED's needs (golden R4): a need's label and evidence never reach the partner. */
+export const NEEDS_CONFIRMED_TEXT: Record<'ada' | 'bob', NeedContent[]> = {
+  ada: [
+    {
+      need: 'Rest without having to earn it first',
+      category: 'AUTONOMY',
+      aiConfidence: 0.9,
+      confirmed: true,
+      evidence: ['Ada said she never sits down before ten at night'],
+    },
+    {
+      need: 'Being thanked out loud for the invisible work',
+      category: 'RECOGNITION',
+      aiConfidence: 0.9,
+      confirmed: true,
+      evidence: ['Ada said nobody has noticed the fridge is always full'],
+    },
+  ],
+  bob: [
+    {
+      need: 'A quiet first hour after work',
+      category: 'SAFETY',
+      aiConfidence: 0.9,
+      confirmed: true,
+      evidence: ['Bob said the first hour home decides his whole evening'],
+    },
+    {
+      need: 'Credit for the effort even when the result is late',
+      category: 'RECOGNITION',
+      aiConfidence: 0.9,
+      confirmed: true,
+      evidence: ['Bob said he gets no credit for tasks that are half done'],
+    },
+  ],
+};
+
+/** TOMBSTONE_READY's distinctive content (golden R5 asserts where each survives). */
+export const TOMBSTONE_TEXT = {
+  adaEmpathy: 'I think you come home hollowed out and the chores feel like a verdict on you.',
+  bobEmpathy: 'I think you feel invisible when you are the only one tracking the house.',
+  adaSharedContext: 'What I need you to know is that I am exhausted too, and I stopped saying it because it never seemed to count.',
+  adaNeedShares: ['Ada wants her effort to be noticed out loud.', 'Ada wants the house to feel like a joint project.'],
+  /** Ada's private needs (label + evidence): probes R5 checks are gone from Bob's reads after she leaves. */
+  adaNeeds: [
+    {
+      need: 'To be seen carrying the household',
+      category: 'RECOGNITION',
+      aiConfidence: 0.95,
+      confirmed: true,
+      evidence: ['Ada said she is the only one who knows when the milk runs out'],
+    },
+    {
+      need: 'A fair split of the invisible chores',
+      category: 'FAIRNESS',
+      aiConfidence: 0.95,
+      confirmed: true,
+      evidence: ['Ada said the mental load of planning meals is hers alone'],
+    },
+  ] as NeedContent[],
+  bobNeedShares: ['Bob wants to be understood before being asked for more.', 'Bob wants practical help on hard work days.'],
 };
 
 const need = (n: string, category: 'RECOGNITION' | 'FAIRNESS' | 'CONNECTION') => ({
@@ -617,6 +894,9 @@ const PARTNER_REQUIRED = new Set<TargetStage>([
   TargetStage.STAGE4_REDESIGN_SHARED_SELECTIONS,
   TargetStage.STAGE4_REDESIGN_NO_OVERLAP_SELECTIONS,
   TargetStage.STAGE4_REDESIGN_PARTNER_INACTIVE,
+  TargetStage.INNER_WORK_LINKED_A,
+  TargetStage.NEEDS_CONFIRMED,
+  TargetStage.TOMBSTONE_READY,
 ]);
 
 export function scenarioFor(stage: TargetStage, names: ScenarioNames): Scenario {

@@ -18,6 +18,7 @@
  *          GOLDEN_UPDATE=session-read.concept npx jest session-read.golden
  */
 
+import { TS4_CONCEPT_NAMES } from '../concept-views';
 import type { Harness, StepResult } from '../driver';
 import { createHarness } from '../driver';
 import { SESSION_READ_ALLOW } from '../allow-lists/session-read';
@@ -46,7 +47,8 @@ describe(`golden: ${SCENARIO}`, () => {
       // Snapshot the `old_concept_*` views around every step for the normalised
       // baseline. Muted harness reads outside the trace window: the byte-level
       // golden is unaffected.
-      concept: true,
+      // Pinned to the views this baseline was recorded through (TS4_CONCEPT_NAMES).
+      concept: { views: TS4_CONCEPT_NAMES },
     });
 
     const { userA, userB } = harness.actors;

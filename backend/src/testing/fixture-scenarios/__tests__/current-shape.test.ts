@@ -116,7 +116,7 @@ describe('stageProgressPlan — milestone set → StageProgress rows', () => {
     expect(rows[4]).toEqual({ stage: 4, status: 'IN_PROGRESS', startedAt: at(0), completedAt: undefined, gates: [] });
   });
 
-  it('closed completes stage 4 and derives the legacy ranking/agreement keys from content', () => {
+  it('legacy flow: choices_shared completes stage 4 and derives the ranking/agreement keys from content (OD5)', () => {
     const p: ParticipantScenario = {
       key: 'a',
       journey: { startedAt: at(-5) },
@@ -125,7 +125,7 @@ describe('stageProgressPlan — milestone set → StageProgress rows', () => {
         feel_heard: at(-3),
         empathy_validated: at(-2),
         needs_shared: at(-1),
-        closed: at(0),
+        choices_shared: at(0),
       },
       ranking: { proposals: ['s1'], submittedAt: at(-1) },
     };
@@ -157,6 +157,48 @@ describe('stageProgressPlan — milestone set → StageProgress rows', () => {
         ['agreementConfirmed', true],
       ],
     });
+  });
+
+  it('closed requires closure content and choices_shared, and completes stage 4 at the closure instant (OD5)', () => {
+    const p: ParticipantScenario = {
+      key: 'a',
+      journey: { startedAt: at(-5) },
+      milestones: {
+        compact_signed: at(-4),
+        feel_heard: at(-3),
+        empathy_validated: at(-2),
+        needs_shared: at(-1),
+        choices_shared: at(0, 'late'),
+        closed: at(1, 'late'),
+      },
+      choices: [{ proposal: 'p1', decision: 'WILLING' }],
+    };
+    expect(() => stageProgressPlan(p, base([p]))).toThrow(/closed.*no closure/);
+    const closure = {
+      kind: 'SHARED_AGREEMENT' as const,
+      reason: 'MUTUAL_SELECTION' as const,
+      summary: 's',
+      closedBy: 'a',
+      at: at(1, 'late'),
+    };
+    const plan = stageProgressPlan(p, base([p], { closure }));
+    expect(plan.rows[4]).toMatchObject({ stage: 4, status: 'COMPLETED', completedAt: at(1, 'late') });
+    expect(plan.lateGates[0].gates).toEqual([
+      ['selectionSubmitted', true],
+      ['selectionSubmittedAt', at(0, 'late')],
+    ]);
+    const noChoices: ParticipantScenario = { ...p, milestones: { ...p.milestones, choices_shared: undefined } };
+    delete noChoices.milestones.choices_shared;
+    expect(() => stageProgressPlan(noChoices, base([noChoices], { closure }))).toThrow(/closed without choices_shared/);
+  });
+
+  it('refuses choices_shared with neither choices nor a legacy ranking and agreement', () => {
+    const p: ParticipantScenario = {
+      key: 'a',
+      journey: {},
+      milestones: { compact_signed: at(-4), feel_heard: at(-3), empathy_validated: at(-2), needs_shared: at(-1), choices_shared: at(0) },
+    };
+    expect(() => stageProgressPlan(p, base([p]))).toThrow(/choices_shared needs choices/);
   });
 
   it('derives no stage-4 keys when there is no ranking or agreement', () => {
@@ -293,7 +335,22 @@ describe('session and invitation encoding', () => {
     ).toBe('ACTIVE');
   });
 
-  it('invitation_sent is encoded on the Invitation row, not as a gate', () => {
+  it('invitation_sent also writes the untimed invitationSent key on the stage-0 row, as production does (R13)', () => {
+    const p: ParticipantScenario = {
+      ...inviter({ invitation_sent: at(0, 'invitation'), compact_signed: at(-1) }),
+      journey: {},
+    };
+    const rows = stageProgressPlan(p, base([p])).rows;
+    expect(rows[0].gates).toEqual([
+      ['invitationSent', true],
+      ['compactSigned', true],
+      ['compactSignedAt', at(-1)],
+    ]);
+    const noJourney: ParticipantScenario = { key: 'a', milestones: { invitation_sent: at(0, 'invitation') } };
+    expect(stageProgressPlan(noJourney, base([noJourney])).rows).toEqual([]);
+  });
+
+  it('invitation_sent is encoded on the Invitation row', () => {
     const s = base([inviter({ invitation_sent: at(0, 'invitation') })]);
     expect(invitationFields(s)).toEqual({
       status: 'PENDING',
@@ -388,7 +445,10 @@ describe('scenarios', () => {
       const s = scenarioFor(stage, names);
       for (const p of s.participants) {
         if (p.empathy) expect(p.milestones.empathy_submitted).toBeDefined();
-        expect(Boolean(p.choices?.length)).toBe(Boolean(p.milestones.choices_shared));
+        // Choices imply choices_shared; choices_shared without choices is the
+        // legacy ranking flow (OD5), which carries a ranking instead.
+        if (p.choices?.length) expect(p.milestones.choices_shared).toBeDefined();
+        if (p.milestones.choices_shared && !p.choices?.length) expect(p.ranking).toBeDefined();
         if (p.needs?.length) expect(p.milestones.needs_confirmed).toBeDefined();
       }
     }

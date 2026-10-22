@@ -49,6 +49,22 @@ describe('concept views — FEEL_HEARD_B', () => {
     if (fx) await fx.drop();
   });
 
+  it('TS-5 views: the invitation names Ada as inviter and Bob as acceptor; one read state per participant; no closure, no captures', async () => {
+    const inv = await q<{ inviter: string; acceptor: string; status: string; confirmed: boolean }>(
+      `SELECT ui.email AS inviter, ua.email AS acceptor, i.status, i.message_confirmed_at IS NOT NULL AS confirmed
+       FROM old_concept_invitation i
+       JOIN old_concept_participant p ON p.id = i.invited_by_participant_id
+       JOIN old_concept_user ui ON ui.id = p.user_id
+       JOIN old_concept_user ua ON ua.id = i.accepted_by_user_id`,
+    );
+    expect(inv).toEqual([{ inviter: 'ada@e2e.test', acceptor: 'bob@e2e.test', status: 'ACCEPTED', confirmed: true }]);
+    expect(
+      Number(await one(`SELECT count(*) FROM old_concept_conversation_read_state WHERE participant_id IS NOT NULL`)),
+    ).toBe(2);
+    expect(Number(await one(`SELECT count(*) FROM old_concept_session_closure`))).toBe(0);
+    expect(Number(await one(`SELECT count(*) FROM old_concept_brain_activity`))).toBe(0);
+  });
+
   it('has one participant per (session, user): two in FEEL_HEARD_B', async () => {
     expect(Number(await one(`SELECT count(*) FROM old_concept_participant`))).toBe(2);
     expect(
@@ -115,7 +131,7 @@ describe('concept views — FEEL_HEARD_B', () => {
     expect(rows).toEqual([{ author: 'ada@e2e.test', subject: 'bob@e2e.test', linked: true }]);
   });
 
-  it('decodes the gates to milestones: both participants signed the compact and feel heard', async () => {
+  it('decodes the gates to milestones: both participants signed the compact and feel heard; Ada sent the invitation', async () => {
     const rows = await q<{ who: string; milestone_key: string }>(
       `SELECT u.email AS who, pm.milestone_key FROM old_concept_participant_milestone pm
        JOIN old_concept_participant p ON p.id = pm.participant_id
@@ -124,6 +140,8 @@ describe('concept views — FEEL_HEARD_B', () => {
     expect(rows.map(r => `${r.who}:${r.milestone_key}`)).toEqual([
       'ada@e2e.test:compact_signed',
       'ada@e2e.test:feel_heard',
+      // R13: the stage-0 `invitationSent` gate, decoded @ StageProgress.startedAt.
+      'ada@e2e.test:invitation_sent',
       'bob@e2e.test:compact_signed',
       'bob@e2e.test:feel_heard',
     ]);
@@ -162,7 +180,7 @@ describe('concept views — FEEL_HEARD_B', () => {
     FROM old_concept_participant_milestone pm
     JOIN old_concept_participant p ON p.id = pm.participant_id
     JOIN old_concept_user u ON u.id = p.user_id
-    WHERE pm.milestone_key NOT IN ('compact_signed', 'feel_heard') ORDER BY 1`;
+    WHERE pm.milestone_key NOT IN ('compact_signed', 'feel_heard', 'invitation_sent') ORDER BY 1`;
 
   // Every step-7 branch FEEL_HEARD_B does not reach, pinned on a rolled-back
   // copy: the fixture-only spellings, COMPLETED stages 2-4, `phase`, `paused`.
@@ -190,6 +208,16 @@ describe('concept views — FEEL_HEARD_B', () => {
       'ada@e2e.test:repair_walkthrough_started@2030-01-01 00:00:04', // phase <> INVENTORY @ startedAt
       'bob@e2e.test:paused@2030-01-01 00:00:07',
     ]);
+  });
+
+  it('fails an ACCEPTED invitation with no acceptor or no accepted instant (target CHECK, fix round 1)', async () => {
+    expect(await q(`SELECT * FROM concept_check_invitation_accepted_without_acceptor`)).toEqual([]);
+    expect(await q(`SELECT * FROM concept_check_read_state_without_participant`)).toEqual([]);
+    const rows = await inTx<{ no_acceptor: boolean; no_accepted_at: boolean }>(
+      [`UPDATE "Invitation" SET "acceptedAt" = NULL`],
+      `SELECT no_acceptor, no_accepted_at FROM concept_check_invitation_accepted_without_acceptor`,
+    );
+    expect(rows).toEqual([{ no_acceptor: false, no_accepted_at: true }]);
   });
 
   it("does not start the walkthrough on phase 'INVENTORY'", async () => {

@@ -72,10 +72,29 @@ export const CONCEPT_VIEWS = {
   reflection_message: { identity: ['id'], orderBy: ['reflection_id', 'created_at'] },
   takeaway: { identity: ['id'], orderBy: ['reflection_id', 'position'] },
   takeaway_link: { identity: ['source_id', 'target_id'], orderBy: [] },
+  // TS-5 additions (golden R1–R7).
+  invitation: { identity: ['id'], orderBy: ['session_id', 'created_at'] },
+  conversation_read_state: { identity: ['participant_id'], orderBy: [] },
+  session_closure: { identity: ['session_id'], orderBy: [] },
+  brain_activity: { identity: ['id'], orderBy: ['session_id', 'reflection_id', 'created_at'] },
 } as const satisfies Record<string, ConceptViewSpec>;
 
 export type ConceptName = keyof typeof CONCEPT_VIEWS;
 export const CONCEPT_NAMES = Object.keys(CONCEPT_VIEWS) as ConceptName[];
+
+/**
+ * The concepts TS-4 projected, which `session-read` and `empathy-reveal`
+ * recorded their normalised baselines through. Those two scenarios snapshot
+ * exactly this set: adding a view to their snapshot adds an `initial` entry to
+ * a recorded baseline, which is a re-record — an owner decision, not a side
+ * effect of a new view. Every other scenario snapshots every concept.
+ */
+export const TS4_CONCEPT_NAMES: readonly ConceptName[] = [
+  'user', 'session', 'participant', 'conversation', 'participant_milestone', 'message', 'empathy_attempt',
+  'empathy_review', 'reconciler_result', 'reconciler_guidance', 'context_share_offer', 'draft', 'consent', 'need',
+  'need_share', 'need_disposition', 'proposal', 'proposal_need', 'proposal_choice', 'agreement', 'agreement_party',
+  'reflection', 'reflection_message', 'takeaway', 'takeaway_link',
+];
 
 export function viewName(concept: ConceptName): string {
   return `${CONCEPT_VIEW_PREFIX}${concept}`;
@@ -149,14 +168,19 @@ export async function applyConceptViews(
  * Snapshot every concept view, ordered by its natural key, and fail if any
  * `concept_check_*` view reports a state the mapping cannot represent.
  */
-export async function takeConceptSnapshot(target: DbTarget, database: string): Promise<Snapshot> {
+export async function takeConceptSnapshot(
+  target: DbTarget,
+  database: string,
+  /** Which concepts to snapshot (default: every one). See `TS4_CONCEPT_NAMES`. */
+  names: readonly ConceptName[] = CONCEPT_NAMES,
+): Promise<Snapshot> {
   await assertConceptChecksEmpty(target, database);
   const keys: Record<string, { identity: string[]; orderBy: string[] }> = {};
-  for (const name of CONCEPT_NAMES) {
+  for (const name of names) {
     const spec: ConceptViewSpec = CONCEPT_VIEWS[name];
     keys[viewName(name)] = { identity: [...spec.identity], orderBy: [...spec.orderBy] };
   }
-  return takeSnapshot({ target, database, tables: CONCEPT_NAMES.map(viewName), keys, prelude: NO_JIT });
+  return takeSnapshot({ target, database, tables: names.map(viewName), keys, prelude: NO_JIT });
 }
 
 /**
