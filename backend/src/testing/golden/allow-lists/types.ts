@@ -130,11 +130,14 @@ export interface MayBeAbsentRule extends RuleBase {
 }
 
 /**
- * Arrays at matching paths whose consecutive entries tie on `key` (a dot path
- * into the entry — the endpoint's only sort key) may return the tied entries
- * in any order. Applied to BOTH the byte-level and the normalised comparison
- * (`applyTiedOrder`); it is not a target-only change and holds on the current
- * shape too. Give each use a reason: which rows tie, and why.
+ * Arrays at matching paths whose consecutive entries tie on the RAW value of
+ * `key` (a dot path into the entry — the endpoint's only sort key; the same
+ * millisecond, not the same normalised `<ts:…>`) may return the tied entries in
+ * any order. The runner records each step's genuine tie ranges
+ * (`rawTieRanges` → `tiedRanges`) and, before comparing the byte-level or the
+ * normalised golden, puts every range either side recorded into canonical
+ * order on both (`alignTies`); the rest stays positional. Not a target-only
+ * change. Give each use a reason.
  */
 export interface TiedOrderRule extends RuleBase {
   kind: 'tiedOrder';

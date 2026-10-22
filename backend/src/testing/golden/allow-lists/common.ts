@@ -36,9 +36,9 @@ export const READ_DTO_RULES: AllowRule[] = [
     key: 'timestamp',
     why:
       'GET messages and the state DTO order a conversation by timestamp alone (controllers/messages.ts); a stream ' +
-      'turn, a share acceptance, a resubmit or a reveal writes 2–3 messages for one reader in one request, and every ' +
-      'run-written stamp normalises to <ts:fresh>. Order between tied rows is still carried by their labels ' +
-      '(`<message:N>` ranks by timestamp then id), so only the response position is relaxed.',
+      'turn, a share acceptance, a resubmit or a reveal writes 2–3 messages for one reader in one request, which can ' +
+      'land in one millisecond. Only rows with the same RAW timestamp tie (fix round 4); rows a millisecond apart keep ' +
+      'their order even though both normalise to <ts:fresh>.',
   },
   {
     kind: 'valuesSubset',

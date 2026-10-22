@@ -10,8 +10,7 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
-import { applyTiedOrder, compareWithAllowList } from './allow-lists/compare';
-
+import { alignTies, compareWithAllowList, rawTieRanges, TiedRanges } from './allow-lists/compare';
 import type { AllowList, AllowRule } from './allow-lists/types';
 import type { Harness, StepResult } from './driver';
 import { CONCEPT_VIEWS, conceptOf } from './concept-views';
@@ -49,6 +48,8 @@ export interface GoldenStep {
    * trace; absent leaves every existing golden byte-identical.
    */
   trace?: TraceSummary;
+  /** Genuine same-millisecond ties at `tiedOrder` paths (`rawTieRanges`); metadata, stripped before comparing. */
+  tiedRanges?: TiedRanges;
 }
 
 export interface GoldenFile {
@@ -122,7 +123,12 @@ function describeChange(c: RowChange): Record<string, unknown> {
  *    channel where write regressions actually appear. Only 8 of 68 tables are
  *    labelled, so that channel is where unknown ids are most likely.
  */
-export function normalizeStep(step: StepResult, map: LabelMap): { golden: GoldenStep; unresolved: string[] } {
+export function normalizeStep(
+  step: StepResult,
+  map: LabelMap,
+  /** The scenario's allow-list rules (only `tiedOrder` is read) and the step's index, for `rawTieRanges`. */
+  ties: { rules: readonly AllowRule[]; index: number } = { rules: [], index: 0 },
+): { golden: GoldenStep; unresolved: string[] } {
   const payload = {
     body: step.sse ? undefined : step.body,
     sse: step.sse,
@@ -132,6 +138,7 @@ export function normalizeStep(step: StepResult, map: LabelMap): { golden: Golden
 
   const n = normalize(payload, map, step.window);
   const v = n.value as typeof payload;
+  const tiedRanges = rawTieRanges(payload, ties.rules, ['steps', String(ties.index)]);
 
   return {
     golden: {
@@ -158,6 +165,8 @@ export function normalizeStep(step: StepResult, map: LabelMap): { golden: Golden
       // only ever damage it. `TIMESTAMP_RE` and `CUID_RE` have nothing to match,
       // and the "unresolved id fails the run" guard has nothing to guard.
       ...(step.trace ? { trace: step.trace } : {}),
+      // Genuine same-millisecond ties at `tiedOrder` paths (TS-5 fix round 4).
+      ...(Object.keys(tiedRanges).length ? { tiedRanges } : {}),
     },
     unresolved: n.unresolved,
   };
@@ -205,13 +214,15 @@ export async function recordOrVerify(opts: {
   if (collisions.length) {
     // A deleted row keeps the rank it had in the fixture while the owner's
     // surviving rows re-rank in the run: two ids would read as one row.
-    throw new Error(`Scenario "${scenario}": fixture-template labels collide with run labels:\n  ${collisions.join('\n  ')}`);
+    throw new Error(
+      `Scenario "${scenario}": fixture-template labels collide with run labels:\n  ${collisions.join('\n  ')}`,
+    );
   }
 
   const normalized: GoldenStep[] = [];
   const unresolved: string[] = [];
-  for (const s of steps) {
-    const n = normalizeStep(s, map);
+  for (const [index, s] of steps.entries()) {
+    const n = normalizeStep(s, map, { rules: opts.tiedOrder ?? [], index });
     normalized.push(n.golden);
     unresolved.push(...n.unresolved);
   }
@@ -250,11 +261,10 @@ export async function recordOrVerify(opts: {
   }
 
   const expected = JSON.parse(fs.readFileSync(p, 'utf8')) as GoldenFile;
-  // `tiedOrder` rules (the scenario's allow-list) apply here too: rows an
-  // endpoint returns in heap order because they tie on its sort key compare
-  // as a multiset within the tie (TS-5 fix round 3).
-  const rules = opts.tiedOrder ?? [];
-  const diff = diffJson(applyTiedOrder(expected, rules), applyTiedOrder(actual, rules));
+  // Genuine same-millisecond ties recorded on either side are put into
+  // canonical order on both before the positional comparison (TS-5 fix round 4).
+  const [e, a] = alignTies(expected, actual);
+  const diff = diffJson(e, a);
   return { scenario, recorded: false, unresolved: [...new Set(unresolved)], diff };
 }
 
@@ -327,6 +337,8 @@ export interface ConceptGoldenStep {
    * (harness `conceptUnrepresentable: 'record'`); `changes` is absent then.
    */
   unrepresentable?: string;
+  /** Genuine same-millisecond ties at `tiedOrder` paths (`rawTieRanges`); metadata, stripped before comparing. */
+  tiedRanges?: TiedRanges;
   /** Concept-view row changes once the step settled, sorted by view then key. */
   changes?: Array<{
     view: string;
@@ -451,21 +463,30 @@ export async function recordOrVerifyConcept(opts: {
     initialOut[concept] = keyed(concept, rows);
   }
 
-  const goldenSteps: ConceptGoldenStep[] = steps.map(s => {
+  const goldenSteps: ConceptGoldenStep[] = steps.map((s, index) => {
     const concept = s.concept!;
     if (concept.unrepresentable !== undefined) {
       // The views cannot represent the state after this step: record why, in
       // place of its changes. On the target there is a state to compare, so
       // the allow-list must name both `changes` (added) and `unrepresentable`
       // (absent) for these steps — see driver `conceptUnrepresentable`.
-      const n = normalize({ body: s.sse ? undefined : s.body, sse: s.sse, reason: concept.unrepresentable }, map, s.window);
+      const n = normalize(
+        { body: s.sse ? undefined : s.body, sse: s.sse, reason: concept.unrepresentable },
+        map,
+        s.window,
+      );
       n.unresolved.forEach(u => unresolved.add(u));
       const v = n.value as { body?: unknown; sse?: ConceptGoldenStep['sse']; reason: string };
+      const tiedRanges = rawTieRanges({ body: s.sse ? undefined : s.body, sse: s.sse }, allowList.rules, [
+        'steps',
+        String(index),
+      ]);
       return {
         label: s.label,
         status: s.status,
         ...(s.sse ? { sse: v.sse } : { body: v.body }),
         unrepresentable: v.reason,
+        ...(Object.keys(tiedRanges).length ? { tiedRanges } : {}),
       };
     }
     const raw = diffSnapshots(concept.before, concept.after).map(c => ({
@@ -478,6 +499,10 @@ export async function recordOrVerifyConcept(opts: {
     const n = normalize({ body: s.sse ? undefined : s.body, sse: s.sse, changes: raw }, map, s.window);
     n.unresolved.forEach(u => unresolved.add(u));
     const v = n.value as { body?: unknown; sse?: ConceptGoldenStep['sse']; changes: typeof raw };
+    const tiedRanges = rawTieRanges({ body: s.sse ? undefined : s.body, sse: s.sse }, allowList.rules, [
+      'steps',
+      String(index),
+    ]);
     const changes = v.changes
       .map(c => ({
         view: c.view,
@@ -493,6 +518,7 @@ export async function recordOrVerifyConcept(opts: {
       status: s.status,
       ...(s.sse ? { sse: v.sse } : { body: v.body }),
       changes,
+      ...(Object.keys(tiedRanges).length ? { tiedRanges } : {}),
     };
   });
 
@@ -524,6 +550,8 @@ export async function recordOrVerifyConcept(opts: {
     };
   }
   const expected = JSON.parse(fs.readFileSync(p, 'utf8')) as ConceptGoldenFile;
-  const cmp = compareWithAllowList(expected, actual, allowList);
+  // Genuine same-millisecond ties on either side: canonical order on both (TS-5 fix round 4).
+  const [e, a] = alignTies(expected, actual);
+  const cmp = compareWithAllowList(e, a, allowList);
   return { ...base, recorded: false, violations: cmp.violations, unmatchedRules: cmp.unmatchedRules };
 }

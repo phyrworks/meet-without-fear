@@ -61,7 +61,13 @@ function getDotted(v: unknown, dotted: string): unknown {
 /** Key-order-independent JSON. */
 function canon(v: unknown): string {
   return JSON.stringify(v, (_k, x) =>
-    isObj(x) ? Object.fromEntries(Object.keys(x).sort().map(k => [k, x[k]])) : x,
+    isObj(x)
+      ? Object.fromEntries(
+          Object.keys(x)
+            .sort()
+            .map(k => [k, x[k]]),
+        )
+      : x,
   );
 }
 
@@ -81,43 +87,91 @@ function withOverrides(base: unknown, overrides: Record<string, unknown>): unkno
 }
 
 /**
- * `tiedOrder` (TS-5 fix round 3): in an array at a matching path, each run of
- * CONSECUTIVE entries whose `key` value is equal is put into canonical order;
- * entries with different keys keep their relative order. Applied to both
- * sides before any comparison (byte-level and normalised), so rows an
- * endpoint returns in database heap order because they tie on its only sort
- * key (rows one request wrote in one millisecond, or run-written stamps that
- * all normalise to `<ts:fresh>`) compare as a multiset within the tie, and as
- * a sequence across it. A changed value or a missing row still differs.
+ * `tiedOrder` (TS-5 fix rounds 3–4). Rows an endpoint returns in heap order
+ * because they tie on its only sort key must not decide a golden — but only a
+ * GENUINE tie: rows with the same RAW key value (the same millisecond). Keying
+ * the tie on the normalised value (round 3) merged every run-written row,
+ * since all fresh stamps normalise to `<ts:fresh>`, and stopped asserting the
+ * order between them.
+ *
+ * So the tie groups are found on the RAW step payload, before normalisation
+ * (`rawTieRanges`), and recorded on the golden step as `tiedRanges` — index
+ * ranges of genuinely tied entries, per array path. Comparison
+ * (`alignTies`) takes the union of the baseline's and the run's ranges and
+ * puts exactly those slices into canonical order on both sides; everything
+ * else stays positional. Both sides matter: a tie can happen in the recording
+ * run (heap order recorded) or in the verifying run (heap order observed), and
+ * the endpoint's order outside a tie is not the canonical order. Rows whose
+ * raw keys differ, even by a millisecond, keep the order the endpoint returned.
  */
-export function applyTiedOrder(value: unknown, rules: readonly AllowRule[]): unknown {
+export type TiedRanges = Record<string, Array<[number, number]>>;
+
+/**
+ * Genuine-tie ranges in one step's RAW payload: for each array at a
+ * `tiedOrder` path, the [start, end) index ranges (length ≥ 2) of consecutive
+ * entries whose raw `key` values are equal. Paths are dot-joined relative to
+ * the step (`body.data.records`); `stepPath` (`['steps', '29']`) is prefixed
+ * only to match the rules' `at` patterns.
+ */
+export function rawTieRanges(rawPayload: unknown, rules: readonly AllowRule[], stepPath: string[]): TiedRanges {
   const tied = rules.filter((r): r is TiedOrderRule => r.kind === 'tiedOrder');
-  if (!tied.length) return value;
+  const out: TiedRanges = {};
+  if (!tied.length) return out;
   const patterns = tied.map(r => ({ key: r.key, pats: (Array.isArray(r.at) ? r.at : [r.at]).map(p => p.split('.')) }));
-  const go = (v: unknown, p: string[]): unknown => {
-    if (Array.isArray(v)) {
-      let arr = v.map((x, i) => go(x, [...p, String(i)]));
+  const go = (raw: unknown, p: string[]): void => {
+    if (Array.isArray(raw)) {
+      raw.forEach((x, i) => go(x, [...p, String(i)]));
       for (const { key, pats } of patterns) {
-        if (!pats.some(pat => matchPath(pat, p))) continue;
-        const out: unknown[] = [];
-        let run: unknown[] = [];
-        const flush = () => {
-          out.push(...run.sort((x, y) => (canon(x) < canon(y) ? -1 : canon(x) > canon(y) ? 1 : 0)));
-          run = [];
-        };
-        for (const x of arr) {
-          if (run.length && JSON.stringify(getDotted(run[0], key)) !== JSON.stringify(getDotted(x, key))) flush();
-          run.push(x);
+        if (!pats.some(pat => matchPath(pat, [...stepPath, ...p]))) continue;
+        let start = 0;
+        for (let i = 1; i <= raw.length; i++) {
+          const ends =
+            i === raw.length || JSON.stringify(getDotted(raw[i], key)) !== JSON.stringify(getDotted(raw[start], key));
+          if (!ends) continue;
+          if (i - start >= 2 && getDotted(raw[start], key) != null) (out[p.join('.')] ??= []).push([start, i]);
+          start = i;
         }
-        flush();
-        arr = out;
       }
-      return arr;
+      return;
     }
-    if (isObj(v)) return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, go(x, [...p, k])]));
-    return v;
+    if (isObj(raw)) for (const [k, x] of Object.entries(raw)) go(x, [...p, k]);
   };
-  return go(value, []);
+  go(rawPayload, []);
+  return out;
+}
+
+/**
+ * Copies of a baseline and a run golden (`{steps: [{…, tiedRanges?}]}`) with,
+ * per step, every range in EITHER side's `tiedRanges` put into canonical order
+ * on BOTH sides, and `tiedRanges` removed (it is metadata, not behaviour).
+ */
+export function alignTies<T>(expected: T, actual: T): [T, T] {
+  const e = JSON.parse(JSON.stringify(expected)) as { steps?: Array<Record<string, unknown>> };
+  const a = JSON.parse(JSON.stringify(actual)) as { steps?: Array<Record<string, unknown>> };
+  const sortSlice = (step: Record<string, unknown> | undefined, path: string, [s, t]: [number, number]): void => {
+    const arr = step && getDotted(step, path);
+    if (!Array.isArray(arr) || arr.length < t) return;
+    const slice = arr.slice(s, t).sort((x, y) => (canon(x) < canon(y) ? -1 : canon(x) > canon(y) ? 1 : 0));
+    arr.splice(s, t - s, ...slice);
+  };
+  const n = Math.max(e.steps?.length ?? 0, a.steps?.length ?? 0);
+  for (let i = 0; i < n; i++) {
+    const es = e.steps?.[i];
+    const as = a.steps?.[i];
+    const ranges: TiedRanges = {};
+    for (const r of [es?.tiedRanges, as?.tiedRanges] as Array<TiedRanges | undefined>) {
+      for (const [path, rs] of Object.entries(r ?? {})) (ranges[path] ??= []).push(...rs);
+    }
+    for (const [path, rs] of Object.entries(ranges)) {
+      for (const range of rs) {
+        sortSlice(es, path, range);
+        sortSlice(as, path, range);
+      }
+    }
+    if (es) delete es.tiedRanges;
+    if (as) delete as.tiedRanges;
+  }
+  return [e as T, a as T];
 }
 
 /**
@@ -130,9 +184,7 @@ export function applyTiedOrder(value: unknown, rules: readonly AllowRule[]): unk
  * match count reflects the whole baseline — that is what lets a `mustMatch`
  * rule report that its path no longer exists.
  */
-export function compareWithAllowList(expected0: unknown, actual0: unknown, allow: AllowList): AllowListComparison {
-  const expected = applyTiedOrder(expected0, allow.rules);
-  const actual = applyTiedOrder(actual0, allow.rules);
+export function compareWithAllowList(expected: unknown, actual: unknown, allow: AllowList): AllowListComparison {
   const rules = allow.rules.map(rule => ({
     rule,
     patterns: (Array.isArray(rule.at) ? rule.at : [rule.at]).map(p => p.split('.')),

@@ -10,7 +10,8 @@
  * change.
  */
 
-import { applyTiedOrder, compareWithAllowList } from '../allow-lists/compare';
+import { alignTies, compareWithAllowList, rawTieRanges } from '../allow-lists/compare';
+import { LabelMap, normalize } from '../normalize';
 import { diffJson } from '../runner';
 import type { AllowList } from '../allow-lists/types';
 import { EMPATHY_REVEAL_ALLOW } from '../allow-lists/empathy-reveal';
@@ -493,36 +494,76 @@ describe('compareWithAllowList — mechanics', () => {
     expect(compareWithAllowList(base, both, list).violations).not.toEqual([]);
   });
 
-  describe('tiedOrder (fix round 3)', () => {
-    const list: AllowList = {
-      scenario: 'x',
-      rules: [{ kind: 'tiedOrder', at: 'steps.*.body.data.records', key: 'createdAt', why: 'test' }],
+  describe('tiedOrder — ties keyed on the RAW sort key (fix round 4)', () => {
+    const rules = [{ kind: 'tiedOrder' as const, at: 'steps.*.body.data.records', key: 'createdAt', why: 'test' }];
+    const list: AllowList = { scenario: 'x', rules };
+    const T0 = '2026-10-22T10:00:00.000Z';
+    const T1 = '2026-10-22T10:00:00.001Z'; // 1 ms later: normalises to the same <ts:fresh>
+    const OLD = '2026-10-21T09:00:00.000Z';
+    const window = { from: '2026-10-22T09:59:00.000Z', to: '2026-10-22T10:01:00.000Z' };
+    const map: LabelMap = {
+      labels: new Map([
+        ['0190f3a2-6c1e-7b4d-9a8e-000000000001', '<c:1>'],
+        ['0190f3a2-6c1e-7b4d-9a8e-000000000002', '<c:2>'],
+        ['0190f3a2-6c1e-7b4d-9a8e-000000000003', '<c:3>'],
+      ]),
     };
-    const rec = (id: string, createdAt: string, extra: Json = {}) => ({ id, createdAt, ...extra });
-    const art = (records: Json[]) => ({ steps: [{ body: { data: { records } } }] });
-    const base = art([rec('<c:3>', '<ts:5>'), rec('<c:1>', '<ts:fresh>'), rec('<c:2>', '<ts:fresh>')]);
-    const byteDiff = (e: Json, a: Json) => diffJson(applyTiedOrder(e, list.rules), applyTiedOrder(a, list.rules));
+    const id = (n: number) => `0190f3a2-6c1e-7b4d-9a8e-00000000000${n}`;
+    /** One step's golden as the runner builds it: the normalised payload plus its raw tie ranges. */
+    const step = (raw: Json): Json => {
+      const tiedRanges = rawTieRanges(raw, rules, ['steps', '0']);
+      return { ...(normalize(raw, map, window).value as Json), ...(Object.keys(tiedRanges).length ? { tiedRanges } : {}) };
+    };
+    const golden = (rows: Array<[number, string, Json?]>): Json => ({
+      steps: [step({ body: { data: { records: rows.map(([n, at, extra]) => ({ id: id(n), createdAt: at, ...extra })) } } })],
+    });
+    /** Both comparisons, as the runner makes them. */
+    const concept = (e: Json, a: Json) => compareWithAllowList(...alignTies(e, a), list).violations;
+    const byte = (e: Json, a: Json) => diffJson(...alignTies(e, a));
 
-    it('accepts either order of rows that tie on the key — normalised and byte-level', () => {
-      const swapped = art([rec('<c:3>', '<ts:5>'), rec('<c:2>', '<ts:fresh>'), rec('<c:1>', '<ts:fresh>')]);
-      expect(compareWithAllowList(base, swapped, list).violations).toEqual([]);
-      expect(byteDiff(base, swapped)).toBeNull();
+    it('rows in the same millisecond compare equal in either order — normalised and byte-level', () => {
+      const a = golden([[3, OLD], [1, T0], [2, T0]]);
+      const b = golden([[3, OLD], [2, T0], [1, T0]]);
+      expect(a.steps[0].body.data.records[1].createdAt).toBe('<ts:fresh>');
+      expect(a.steps[0].tiedRanges).toEqual({ 'body.data.records': [[1, 3]] });
+      expect(concept(a, b)).toEqual([]);
+      expect(byte(a, b)).toBeNull();
     });
 
-    it('still rejects a changed value, a missing row, and a reorder ACROSS different keys', () => {
-      const changed = art([rec('<c:3>', '<ts:5>'), rec('<c:2>', '<ts:fresh>'), rec('<c:1>', '<ts:fresh>', { decision: 'DENIED' })]);
-      const missing = art([rec('<c:3>', '<ts:5>'), rec('<c:1>', '<ts:fresh>')]);
-      const across = art([rec('<c:1>', '<ts:fresh>'), rec('<c:3>', '<ts:5>'), rec('<c:2>', '<ts:fresh>')]);
-      for (const bad of [changed, missing, across]) {
-        expect(compareWithAllowList(base, bad, list).violations).not.toEqual([]);
-        expect(byteDiff(base, bad)).not.toBeNull();
+    it('a tie on only one side (recorded tied, verified 1 ms apart, or the reverse) still compares equal', () => {
+      const tiedHeap = golden([[3, OLD], [1, T0], [2, T0]]); // heap order in the recording run
+      const apart = golden([[3, OLD], [2, T1], [1, T0]]); // the endpoint's order when not tied
+      expect(apart.steps[0].tiedRanges).toBeUndefined();
+      expect(concept(tiedHeap, apart)).toEqual([]);
+      expect(byte(apart, tiedHeap)).toBeNull();
+    });
+
+    it('rows 1 ms apart that normalise to the same <ts:fresh> keep their order: a swap FAILS', () => {
+      const a = golden([[3, OLD], [1, T0], [2, T1]]);
+      const b = golden([[3, OLD], [2, T1], [1, T0]]);
+      expect(JSON.stringify(a.steps[0].body.data.records.map((r: Json) => r.createdAt))).toBe(
+        JSON.stringify(b.steps[0].body.data.records.map((r: Json) => r.createdAt)),
+      );
+      expect(concept(a, b)).not.toEqual([]);
+      expect(byte(a, b)).not.toBeNull();
+    });
+
+    it('a changed value or a missing row in a genuine tie still fails', () => {
+      const a = golden([[3, OLD], [1, T0], [2, T0]]);
+      const changed = golden([[3, OLD], [2, T0], [1, T0, { decision: 'DENIED' }]]);
+      const missing = golden([[3, OLD], [1, T0]]);
+      for (const bad of [changed, missing]) {
+        expect(concept(a, bad)).not.toEqual([]);
+        expect(byte(a, bad)).not.toBeNull();
       }
     });
 
     it('does nothing at other paths', () => {
-      const other = { steps: [{ body: { data: { items: [rec('a', '<ts:fresh>'), rec('b', '<ts:fresh>')] } } }] };
-      const swapped = { steps: [{ body: { data: { items: [rec('b', '<ts:fresh>'), rec('a', '<ts:fresh>')] } } }] };
-      expect(compareWithAllowList(other, swapped, list).violations).not.toEqual([]);
+      const g = (ns: number[]) => ({
+        steps: [step({ body: { data: { items: ns.map(n => ({ id: id(n), createdAt: T0 })) } } })],
+      });
+      expect(g([1, 2]).steps[0].tiedRanges).toBeUndefined();
+      expect(byte(g([1, 2]), g([2, 1]))).not.toBeNull();
     });
   });
 

@@ -176,9 +176,12 @@ How they work (`privacy.ts`, `scenario-checks.ts`, `reveal-checks.ts`):
   `tiedOrder`, applied to both the byte-level and the normalised comparison). Consent history sorts
   by `createdAt` alone and one needs share writes every consent with one `now`; conversations sort by
   `timestamp` alone and one request can write several messages. Such rows came back in heap order —
-  measured flipping in an independent run. Within a run of equal keys the order is canonicalised;
-  across keys, values and counts everything is still compared. Never re-record a golden to the order
-  a run happened to produce.
+  measured flipping in an independent run. A tie is the same RAW key — the same millisecond — not
+  the same normalised `<ts:…>` (fix round 4: keying on the normalised value merged every run-written
+  row, all `<ts:fresh>`, and stopped asserting their order). Each step records its tie ranges from
+  the raw payload (`tiedRanges`); before comparing, ranges recorded by either side are put into
+  canonical order on both, and everything else — order across keys, values, counts — is positional.
+  Never re-record a golden to the order a run happened to produce.
 - **Bare calendar dates are normalised** to their day offset from the run's start
   (`<date:today+10d>`): Stage 4's `defaultCheckInDate` is today (UTC) + 10, and goldens recorded
   one day went red after UTC midnight.
