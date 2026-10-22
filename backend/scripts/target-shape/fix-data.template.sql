@@ -620,6 +620,32 @@ WHERE uv."sessionId" <> sv."sessionId";
 -- DELETE FROM "ConsentedContent" WHERE id IN (<ids>);
 
 -- ----------------------------------------------------------------------------
+-- P20e need_consent_unresolved (a granted IDENTIFIED_NEED ConsentRecord is a need_share: targetId must be a need)
+-- ----------------------------------------------------------------------------
+SELECT 'need_consent_unresolved', c.id::text, coalesce(c."targetId", 'NULL') || ' (' || c.decision::text || ')'
+FROM "ConsentRecord" c
+WHERE c."targetType" = 'IDENTIFIED_NEED' AND c.decision IN ('GRANTED', 'REVOKED')
+  AND NOT EXISTS (SELECT 1 FROM "IdentifiedNeed" n WHERE n.id = pg_temp.as_uuid(c."targetId"));
+-- A granted IDENTIFIED_NEED ConsentRecord is a shared need (the Stage 3
+-- share-needs handler writes no ConsentedContent), so its targetId must name
+-- an IdentifiedNeed. Point it at the need that was shared. If that need is
+-- gone, the owner decides; ConsentRecord rows are not deleted by fix-data
+-- (ruling R18).
+-- UPDATE "ConsentRecord" SET "targetId" = '<need id>' WHERE id = '<record id>';
+
+-- ----------------------------------------------------------------------------
+-- P20g need_consent_revocation (CHECK need_share.revoked_at >= shared_at for a record-sourced share)
+-- ----------------------------------------------------------------------------
+SELECT 'need_consent_revocation', c.id::text, format('decidedAt=%s createdAt=%s revokedAt=%s', c."decidedAt", c."createdAt", c."revokedAt")
+FROM "ConsentRecord" c
+WHERE c."targetType" = 'IDENTIFIED_NEED' AND c.decision IN ('GRANTED', 'REVOKED')
+  AND NOT EXISTS (SELECT 1 FROM "ConsentedContent" xcc JOIN "ConsentRecord" xcr ON xcr.id = xcc."consentRecordId"
+                  WHERE pg_temp.as_uuid(xcr."targetId") = pg_temp.as_uuid(c."targetId"))
+  AND c."revokedAt" < coalesce(c."decidedAt", c."createdAt");
+-- A share cannot be revoked before it was granted (need_share CHECK).
+-- UPDATE "ConsentRecord" SET "revokedAt" = coalesce("decidedAt", "createdAt") WHERE id IN (<ids>);
+
+-- ----------------------------------------------------------------------------
 -- P21 proposal_removed_dates (CHECK (status = REMOVED) = (removed_at IS NOT NULL))
 -- ----------------------------------------------------------------------------
 SELECT 'proposal_removed_dates', id::text, format('status=%s removedAt=%s', status, "removedAt")

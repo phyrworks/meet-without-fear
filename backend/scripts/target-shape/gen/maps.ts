@@ -175,3 +175,25 @@ export function atExpr(a: At): string {
   return 'gate' in a ? `app_migration.ts(sp.gates -> ${lit(a.gate)})` : `sp.${q(a.col)}`;
 }
 
+
+// ---------------------------------------------------------------------------
+// Step 12, need_share's second source (TS-7b). Production's Stage 3
+// share-needs handler (controllers/stage3.ts ~750-780 on phoenix/base) writes
+// one ConsentRecord(IDENTIFIED_NEED, targetId = need id, decision GRANTED) per
+// shared need and sets gatesSatisfied.needsShared/sharedAt — it never writes
+// ConsentedContent (only controllers/consent.ts:125 does). A shared need is
+// therefore ConsentedContent ∪ these records. "Granted" includes REVOKED: a
+// record is only revoked after it was granted (consent.ts:217 sets revokedAt,
+// and P19b makes such rows decision REVOKED), and the share keeps its
+// revoked_at. The prechecks, the copy and the assertions all use these two
+// fragments, so they cannot drift.
+// ---------------------------------------------------------------------------
+
+/** A ConsentRecord `alias` that shares an IdentifiedNeed (granted, possibly revoked since). */
+export const needConsentGranted = (alias: string) =>
+  `${alias}."targetType" = 'IDENTIFIED_NEED' AND ${alias}.decision IN ('GRANTED', 'REVOKED')`;
+
+/** No ConsentedContent shares the need `needExpr` (uuid) — the record is then need_share's source. */
+export const needHasNoConsentedContent = (needExpr: string) =>
+  `NOT EXISTS (SELECT 1 FROM "ConsentedContent" xcc JOIN "ConsentRecord" xcr ON xcr.id = xcc."consentRecordId"
+                  WHERE app_migration.as_uuid(xcr."targetId") = ${needExpr})`;

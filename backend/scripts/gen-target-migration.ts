@@ -125,6 +125,22 @@ const HEADER = `-- =============================================================
 --    in app_migration.dropped_content for the owner to decide at TS-14.
 --  * The app.* functions treat a caller as the job only when it logged in as
 --    mwf_job or mwf_migrator (session_user); a superuser is not the job.
+--  * need_share has two sources (TS-7b): ConsentedContent, and the Stage 3
+--    handler's granted IDENTIFIED_NEED ConsentRecords (no ConsentedContent;
+--    shared_text = the need label, ruling R19; duplicates merged, R18).
+--  * Step-13 closure comparison (TS-7b). It is live for every production
+--    Stage4Closure, because Stage 3 shares become need_share rows.
+--    - Ruling R20 (2026-10-21; owner may veto): a proposal covers a need
+--      while ACTIVE, REVISED or CONVERTED_TO_AGREEMENT. The SHARED_AGREEMENT
+--      closure converts the agreed proposals (stage4.ts ~1426), and the old
+--      app revises a proposal in place.
+--    - The old rule also matched needs by fuzzy text and description. A need
+--      that only such a proposal covered is a named, listed exception, when
+--      that proposal has a needsAddressed label that matched no need or has
+--      unresolved_need_labels. Any other difference RAISEs (negative n13).
+--    - TS-14: read the 'R20 named exception' report rows. A RAISE here means
+--      the old closure disagrees with the view for a reason this rule does
+--      not explain; decide per case.
 --  * Does NOT enable RLS or create policies (TS-16).
 --  * TS-16 (v_participant): under owner-only RLS a co-participant reads NULL
 --    last_active_at / last_mood / read state and is_tombstone = false through

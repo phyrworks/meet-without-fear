@@ -33,6 +33,22 @@
 --    in app_migration.dropped_content for the owner to decide at TS-14.
 --  * The app.* functions treat a caller as the job only when it logged in as
 --    mwf_job or mwf_migrator (session_user); a superuser is not the job.
+--  * need_share has two sources (TS-7b): ConsentedContent, and the Stage 3
+--    handler's granted IDENTIFIED_NEED ConsentRecords (no ConsentedContent;
+--    shared_text = the need label, ruling R19; duplicates merged, R18).
+--  * Step-13 closure comparison (TS-7b). It is live for every production
+--    Stage4Closure, because Stage 3 shares become need_share rows.
+--    - Ruling R20 (2026-10-21; owner may veto): a proposal covers a need
+--      while ACTIVE, REVISED or CONVERTED_TO_AGREEMENT. The SHARED_AGREEMENT
+--      closure converts the agreed proposals (stage4.ts ~1426), and the old
+--      app revises a proposal in place.
+--    - The old rule also matched needs by fuzzy text and description. A need
+--      that only such a proposal covered is a named, listed exception, when
+--      that proposal has a needsAddressed label that matched no need or has
+--      unresolved_need_labels. Any other difference RAISEs (negative n13).
+--    - TS-14: read the 'R20 named exception' report rows. A RAISE here means
+--      the old closure disagrees with the view for a reason this rule does
+--      not explain; decide per case.
 --  * Does NOT enable RLS or create policies (TS-16).
 --  * TS-16 (v_participant): under owner-only RLS a co-participant reads NULL
 --    last_active_at / last_mood / read state and is_tombstone = false through
@@ -1600,6 +1616,19 @@ CREATE TABLE app_migration.old_closure (
   individual_proposal_ids uuid[] NOT NULL,
   open_need_ids           uuid[] NOT NULL
 );
+-- The old coverage rows of closed sessions and the needsAddressed labels that
+-- matched no need: the trailer's closure comparison explains a difference
+-- with them (ruling R20's named exception).
+CREATE TABLE app_migration.old_coverage (
+  session_id             uuid   NOT NULL,
+  need_id                uuid   NOT NULL,
+  status                 text   NOT NULL,
+  covering_proposal_ids  uuid[] NOT NULL
+);
+CREATE TABLE app_migration.proposal_nomatch_label (
+  proposal_id uuid NOT NULL,
+  label       text NOT NULL
+);
 CREATE TABLE app_migration.old_cycle (
   follow_up_id uuid PRIMARY KEY,
   cycle_id     uuid NOT NULL,
@@ -2074,6 +2103,22 @@ JOIN "SharedVessel" sv ON sv.id = cc."sharedVesselId"
 JOIN "IdentifiedNeed" n ON n.id = app_migration.as_uuid(cr."targetId")
 JOIN "UserVessel" uv ON uv.id = n."vesselId"
 WHERE uv."sessionId" <> sv."sessionId";
+
+-- P20e need_consent_unresolved (a granted IDENTIFIED_NEED ConsentRecord is a need_share: targetId must be a need)
+INSERT INTO app_migration.precheck (check_name, offender, detail)
+SELECT 'need_consent_unresolved', c.id::text, coalesce(c."targetId", 'NULL') || ' (' || c.decision::text || ')'
+FROM "ConsentRecord" c
+WHERE c."targetType" = 'IDENTIFIED_NEED' AND c.decision IN ('GRANTED', 'REVOKED')
+  AND NOT EXISTS (SELECT 1 FROM "IdentifiedNeed" n WHERE n.id = app_migration.as_uuid(c."targetId"));
+
+-- P20g need_consent_revocation (CHECK need_share.revoked_at >= shared_at for a record-sourced share)
+INSERT INTO app_migration.precheck (check_name, offender, detail)
+SELECT 'need_consent_revocation', c.id::text, format('decidedAt=%s createdAt=%s revokedAt=%s', c."decidedAt", c."createdAt", c."revokedAt")
+FROM "ConsentRecord" c
+WHERE c."targetType" = 'IDENTIFIED_NEED' AND c.decision IN ('GRANTED', 'REVOKED')
+  AND NOT EXISTS (SELECT 1 FROM "ConsentedContent" xcc JOIN "ConsentRecord" xcr ON xcr.id = xcc."consentRecordId"
+                  WHERE app_migration.as_uuid(xcr."targetId") = app_migration.as_uuid(c."targetId"))
+  AND c."revokedAt" < coalesce(c."decidedAt", c."createdAt");
 
 -- P21 proposal_removed_dates (CHECK (status = REMOVED) = (removed_at IS NOT NULL))
 INSERT INTO app_migration.precheck (check_name, offender, detail)
@@ -2698,9 +2743,12 @@ FROM "IdentifiedNeed" o WHERE o.id = need.id AND o."supersededByNeedId" IS NOT N
 SELECT app_migration.assert(a = b, format('needs: %s need rows for %s "IdentifiedNeed" rows', a, b))
 FROM (SELECT (SELECT count(*) FROM need) AS a, (SELECT count(*) FROM "IdentifiedNeed") AS b) x;
 
--- ---- Step 12 (part): need_share ← ConsentedContent. need via consentRecordId
--- → ConsentRecord.targetId (originalNeedId was never written, census §3);
--- participant_id/session_id from the resolved need's owner (pass 2 N-1).
+-- ---- Step 12 (part): need_share ← ConsentedContent ∪ granted IDENTIFIED_NEED
+-- ConsentRecord rows (TS-7b). participant_id/session_id from the resolved
+-- need's owner (pass 2 N-1; T-need-share-owner).
+-- (a) ConsentedContent: need via consentRecordId → ConsentRecord.targetId
+-- (originalNeedId was never written, census §3); shared_text = the
+-- transformed text.
 WITH ins AS (
   INSERT INTO need_share (need_id, participant_id, session_id, category, shared_text, shared_at, revoked_at, created_at, updated_at)
   SELECT n.id, n.participant_id, p.session_id, n.category, cc."transformedContent", cc."consentedAt", cc."revokedAt",
@@ -2715,12 +2763,102 @@ SELECT app_migration.note('12', 'need_share from ConsentedContent', count(*)) FR
 INSERT INTO app_migration.shape_map
 SELECT 'need_share:ConsentedContent', cc.id::text, app_migration.as_uuid(cr."targetId")
 FROM "ConsentedContent" cc JOIN "ConsentRecord" cr ON cr.id = cc."consentRecordId";
-SELECT app_migration.assert(a = b, format('step 12: %s need_share rows for %s "ConsentedContent" rows', a, b))
-FROM (SELECT (SELECT count(*) FROM need_share) AS a, (SELECT count(*) FROM "ConsentedContent") AS b) x;
+-- (b) the Stage 3 share-needs handler (stage3.ts ~750-780 on phoenix/base)
+-- writes one GRANTED ConsentRecord(IDENTIFIED_NEED) per shared need and never
+-- a ConsentedContent row: a granted (or since revoked) record whose need has
+-- no ConsentedContent is the share.
+--
+-- shared_text = the need's label — a MIGRATION-TIME EXCEPTION (ruling R19),
+-- not a change of the need_share invariant: no transformed text exists on
+-- this path, and production already disclosed label + category to the
+-- partner after a mutual share (stage3.ts getNeedsComparison). New shares on
+-- the target still go through app.need_share with the job's transformed text.
+--
+-- shared_at = the grant time (decidedAt). The fallbacks (the owner's stage-3
+-- gatesSatisfied.sharedAt, then createdAt) are DEFENSIVE: only GRANTED/REVOKED
+-- records qualify and P19a refuses a decision without decidedAt, so they are
+-- unreachable after the prechecks. revoked_at = the record's revokedAt; a
+-- REVOKED record with no revokedAt (unambiguous data, so a note below, not a
+-- precheck — P20h) is revoked as of its decision: coalesce(revokedAt,
+-- decidedAt).
+--
+-- Duplicates (ruling R18): a double-tapped share records the same grant
+-- twice. They MERGE into one need_share per need: shared_at = the earliest
+-- grant; revoked_at = the latest revocation once every record of the need is
+-- revoked (a still-live grant keeps the share live). Every record still
+-- becomes its own consent row in step 12's consent copy below; no record is
+-- deleted. P20e (unresolvable target) and P20g (revoked before granted) RAISE.
+CREATE TABLE app_migration.need_share_record_src AS
+SELECT cr.id AS record_id, cr.decision::text AS decision, n.id AS need_id, n.participant_id, p.session_id, n.category, n.label,
+       (n.deleted_at IS NOT NULL OR n.superseded_by_need_id IS NOT NULL) AS dead_need,
+       coalesce(cr."decidedAt",
+                (SELECT app_migration.ts(sp."gatesSatisfied" -> 'sharedAt') FROM "StageProgress" sp
+                 WHERE sp."sessionId" = p.session_id AND sp."userId" = p.user_id AND sp.stage = 3
+                   AND jsonb_typeof(sp."gatesSatisfied") = 'object'),
+                cr."createdAt") AS shared_at,
+       CASE WHEN cr."decidedAt" IS NOT NULL THEN 'decidedAt'
+            WHEN EXISTS (SELECT 1 FROM "StageProgress" sp
+                         WHERE sp."sessionId" = p.session_id AND sp."userId" = p.user_id AND sp.stage = 3
+                           AND jsonb_typeof(sp."gatesSatisfied") = 'object' AND app_migration.ts(sp."gatesSatisfied" -> 'sharedAt') IS NOT NULL)
+              THEN 'gatesSatisfied.sharedAt'
+            ELSE 'createdAt' END AS shared_at_source,
+       CASE WHEN cr.decision = 'REVOKED' THEN coalesce(cr."revokedAt", cr."decidedAt") ELSE cr."revokedAt" END AS revoked_at,
+       (cr.decision = 'REVOKED' AND cr."revokedAt" IS NULL) AS revoked_undated
+FROM "ConsentRecord" cr
+JOIN need n ON n.id = app_migration.as_uuid(cr."targetId")
+JOIN participant p ON p.id = n.participant_id
+WHERE cr."targetType" = 'IDENTIFIED_NEED' AND cr.decision IN ('GRANTED', 'REVOKED')
+  AND NOT EXISTS (SELECT 1 FROM "ConsentedContent" xcc JOIN "ConsentRecord" xcr ON xcr.id = xcc."consentRecordId"
+                  WHERE app_migration.as_uuid(xcr."targetId") = n.id);
+WITH ins AS (
+  INSERT INTO need_share (need_id, participant_id, session_id, category, shared_text, shared_at, revoked_at, created_at, updated_at)
+  SELECT need_id, participant_id, session_id, category, label, shared_at, revoked_at, shared_at, coalesce(revoked_at, shared_at)
+  FROM (SELECT need_id, min(participant_id::text)::uuid AS participant_id, min(session_id::text)::uuid AS session_id,
+               min(category) AS category, min(label) AS label, min(shared_at) AS shared_at,
+               CASE WHEN bool_and(revoked_at IS NOT NULL) THEN max(revoked_at) END AS revoked_at
+        FROM app_migration.need_share_record_src GROUP BY need_id) g
+  ORDER BY need_id
+  RETURNING need_id
+)
+SELECT app_migration.note('12', 'need_share from a granted IDENTIFIED_NEED ConsentRecord without ConsentedContent (Stage 3 share; shared_text = need label, ruling R19)', count(*))
+FROM ins;
+SELECT app_migration.note('12', 'need_share from a ConsentRecord: shared_at from ' || shared_at_source, count(*))
+FROM app_migration.need_share_record_src GROUP BY shared_at_source;
+-- R18: duplicate grants merged (needs with more than one qualifying record).
+SELECT app_migration.note('12', 'R18 duplicate Stage 3 grants merged into one need_share (needs; records in detail)', count(*),
+                          string_agg(need_id::text || ' ← ' || records, '; ' ORDER BY need_id))
+FROM (SELECT need_id, string_agg(record_id::text, ', ' ORDER BY record_id) AS records
+      FROM app_migration.need_share_record_src GROUP BY need_id HAVING count(*) > 1) d;
+-- P20h: REVOKED without revokedAt → revoked as of decidedAt (note, not a RAISE).
+SELECT app_migration.note('12', 'P20h REVOKED IDENTIFIED_NEED ConsentRecord without revokedAt: need_share.revoked_at = decidedAt', count(*),
+                          string_agg(record_id::text, ', ' ORDER BY record_id))
+FROM app_migration.need_share_record_src WHERE revoked_undated;
+SELECT app_migration.note('12', 'need_share from a ConsentRecord on a deleted or superseded need (kept: it was shared)', count(DISTINCT need_id),
+                          string_agg(DISTINCT need_id::text, ', '))
+FROM app_migration.need_share_record_src WHERE dead_need;
+INSERT INTO app_migration.shape_map
+SELECT 'need_share:ConsentRecord', record_id::text, need_id FROM app_migration.need_share_record_src;
+
+-- Reported both ways: need_share = ConsentedContent + needs shared by
+-- qualifying records (records counted too), and every granted IDENTIFIED_NEED
+-- record's need maps to exactly one need_share, shared across duplicates
+-- (need_id is the PK: "exactly one" is "one").
+SELECT app_migration.note('12', 'granted IDENTIFIED_NEED ConsentRecord rows without ConsentedContent (records)', count(*))
+FROM app_migration.need_share_record_src;
+SELECT app_migration.assert(a = b + c, format('step 12: %s need_share rows for %s "ConsentedContent" rows + %s needs shared by %s granted IDENTIFIED_NEED "ConsentRecord" rows without ConsentedContent', a, b, c, d))
+FROM (SELECT (SELECT count(*) FROM need_share) AS a, (SELECT count(*) FROM "ConsentedContent") AS b,
+             (SELECT count(DISTINCT need_id) FROM app_migration.need_share_record_src) AS c,
+             (SELECT count(*) FROM app_migration.need_share_record_src) AS d) x;
+SELECT app_migration.assert(n = 0, format('step 12: %s granted IDENTIFIED_NEED "ConsentRecord" row(s) whose need does not map to exactly one need_share: %s', n, ids))
+FROM (SELECT count(*) AS n, string_agg(cr.id::text, ', ' ORDER BY cr.id) AS ids
+      FROM "ConsentRecord" cr
+      WHERE cr."targetType" = 'IDENTIFIED_NEED' AND cr.decision IN ('GRANTED', 'REVOKED')
+        AND (SELECT count(*) FROM need_share ns WHERE ns.need_id = app_migration.as_uuid(cr."targetId")) <> 1) x;
 SELECT app_migration.assert(n = 0, format('step 12: %s need_share row(s) whose participant_id/session_id is not the need owner''s (T-need-share-owner)', n))
 FROM (SELECT count(*) AS n FROM need_share ns
       JOIN need n ON n.id = ns.need_id JOIN participant p ON p.id = n.participant_id
       WHERE ns.participant_id <> n.participant_id OR ns.session_id <> p.session_id) x;
+DROP TABLE app_migration.need_share_record_src;
 
 -- ---- Step 8: need_disposition ← stage4Walkthrough {currentNeedId,
 -- coveredNeedIds, skippedNeedIds} (stage4.ts:500, stream-turn-actions.ts:243;
@@ -3340,6 +3478,19 @@ LEFT JOIN participant p ON p.session_id = c."sessionId" AND p.user_id = app_migr
 INSERT INTO app_migration.old_closure (session_id, shared_agreement_ids, individual_proposal_ids, open_need_ids)
 SELECT "sessionId", coalesce("sharedAgreementIds", '{}'), coalesce("individualProposalIds", '{}'), coalesce("openNeedIds", '{}')
 FROM "Stage4Closure";
+-- Explanation inputs for the trailer's closure comparison (R20): the old
+-- coverage rows of closed sessions, and needsAddressed labels that matched
+-- no need case-insensitively.
+INSERT INTO app_migration.old_coverage (session_id, need_id, status, covering_proposal_ids)
+SELECT c."sessionId", app_migration.as_uuid(c."needId"), c."coverageStatus", coalesce(c."coveringProposalIds", '{}')
+FROM "Stage4NeedCoverage" c
+WHERE app_migration.as_uuid(c."needId") IS NOT NULL
+  AND EXISTS (SELECT 1 FROM "Stage4Closure" x WHERE x."sessionId" = c."sessionId")
+ORDER BY c."sessionId", c."needId";
+INSERT INTO app_migration.proposal_nomatch_label (proposal_id, label)
+SELECT DISTINCT s.proposal_id, s.label FROM app_migration.proposal_need_src s
+WHERE s.source = 'needsAddressed' AND s.need_id IS NULL AND s.label IS NOT NULL
+ORDER BY 1, 2;
 SELECT app_migration.assert(a = b, format('step 13: %s session_closure rows for %s "Stage4Closure" rows', a, b))
 FROM (SELECT (SELECT count(*) FROM session_closure) AS a, (SELECT count(*) FROM "Stage4Closure") AS b) x;
 SELECT app_migration.note('13', 'StrategyRanking dropped (ranking not in the product flow)', count(*)) FROM "StrategyRanking";
@@ -4411,8 +4562,13 @@ CREATE FUNCTION app.anonymize_user_in_session(session uuid, participant uuid) RE
     DELETE FROM public.follow_up_checkin c USING public.follow_up f
       WHERE c.follow_up_id = f.id AND f.scope = 'INDIVIDUAL' AND c.participant_id = pid;
     DELETE FROM public.empathy_attempt WHERE author_participant_id = pid AND revealed_at IS NULL;  -- cascades results, offers, reviews
-    -- 4. full prompts in plaintext
-    DELETE FROM public.brain_activity WHERE participant_id = pid;
+    -- 4. full prompts in plaintext: the participant's own rows, and (ruling
+    -- R17) every row of the session with no participant — migrated history
+    -- (BrainActivity had no user column) cannot be attributed; deleting the
+    -- partner's telemetry too is acceptable, leaking the leaver's prompts is not
+    DELETE FROM public.brain_activity
+    WHERE participant_id = pid
+       OR (session_id = anonymize_user_in_session.session AND participant_id IS NULL);
     -- 7. the participant-key shred
     UPDATE public.participant_key SET destroyed_at = now() WHERE participant_id = pid AND destroyed_at IS NULL;
   END
@@ -4962,8 +5118,15 @@ WHERE revoked_at IS NULL;
 CREATE VIEW v_empathy_direction_status WITH (security_invoker = true) AS
 SELECT * FROM app.empathy_direction_status();
 
--- Per shared need: covering ACTIVE proposals and who is WILLING on one;
--- COVERED when every present human is, PARTIAL when some are, OPEN otherwise.
+-- Per shared need: covering proposals and who is WILLING on one; COVERED
+-- when every present human is, PARTIAL when some are, OPEN otherwise.
+-- Ruling R20 (2026-10-21; owner may veto): a proposal covers while ACTIVE,
+-- REVISED or CONVERTED_TO_AGREEMENT. An agreed proposal covers at least as
+-- much as an active one: stage4.ts ~1426 converts the agreed proposals in
+-- the closure transaction. REVISED is a live state: the old app revises the
+-- same row in place (stage4-capture.service.ts:675-684, :841-855), its links
+-- move with it (:707, :877), and its readers treat REVISED as ACTIVE (:291,
+-- :494).
 CREATE VIEW v_need_coverage WITH (security_invoker = true) AS
 SELECT ns.session_id, ns.need_id, ns.participant_id AS need_owner_participant_id,
        coalesce(cov.proposal_ids, '{}') AS covering_proposal_ids,
@@ -4975,12 +5138,12 @@ FROM need_share ns
 LEFT JOIN LATERAL (
   SELECT array_agg(pr.id ORDER BY pr.created_at, pr.id) AS proposal_ids
   FROM proposal_need pn JOIN proposal pr ON pr.id = pn.proposal_id
-  WHERE pn.need_id = ns.need_id AND pr.status = 'ACTIVE'
+  WHERE pn.need_id = ns.need_id AND pr.status IN ('ACTIVE', 'REVISED', 'CONVERTED_TO_AGREEMENT')
 ) cov ON true
 LEFT JOIN LATERAL (
   SELECT array_agg(DISTINCT c.participant_id) AS willing
   FROM proposal_need pn
-  JOIN proposal pr ON pr.id = pn.proposal_id AND pr.status = 'ACTIVE'
+  JOIN proposal pr ON pr.id = pn.proposal_id AND pr.status IN ('ACTIVE', 'REVISED', 'CONVERTED_TO_AGREEMENT')
   JOIN proposal_choice c ON c.proposal_id = pr.id AND c.decision = 'WILLING'
   JOIN participant p ON p.id = c.participant_id AND p.kind = 'human' AND p.left_at IS NULL
   WHERE pn.need_id = ns.need_id
@@ -4990,7 +5153,9 @@ CROSS JOIN LATERAL (
 ) h
 WHERE ns.revoked_at IS NULL;
 
--- The three Stage4Closure arrays, computed (never an unshared need id).
+-- The three Stage4Closure arrays, computed (never an unshared need id). An
+-- open need is a live share with an OPEN disposition or no covering proposal
+-- (ACTIVE, REVISED or CONVERTED_TO_AGREEMENT; ruling R20, above).
 CREATE VIEW v_session_closure_items WITH (security_invoker = true) AS
 SELECT s.id AS session_id,
        coalesce((SELECT array_agg(ag.id ORDER BY ag.created_at, ag.id) FROM agreement ag WHERE ag.session_id = s.id), '{}') AS agreement_ids,
@@ -5004,7 +5169,7 @@ SELECT s.id AS session_id,
                  FROM need_share ns
                  WHERE ns.session_id = s.id AND ns.revoked_at IS NULL
                    AND (EXISTS (SELECT 1 FROM need_disposition d WHERE d.need_id = ns.need_id AND d.status = 'OPEN')
-                        OR NOT EXISTS (SELECT 1 FROM proposal_need pn JOIN proposal pr ON pr.id = pn.proposal_id AND pr.status = 'ACTIVE'
+                        OR NOT EXISTS (SELECT 1 FROM proposal_need pn JOIN proposal pr ON pr.id = pn.proposal_id AND pr.status IN ('ACTIVE', 'REVISED', 'CONVERTED_TO_AGREEMENT')
                                        WHERE pn.need_id = ns.need_id))),
                 '{}') AS open_need_ids
 FROM session s;
@@ -5108,7 +5273,7 @@ GRANT SELECT (id, scope) ON follow_up TO mwf_job;
 GRANT SELECT (participant_id) ON conversation_read_state, draft, mood_reading, regulation_event, need_disposition, follow_up_note, proposal_choice TO mwf_job;
 GRANT SELECT (participant_id, user_id) ON ai_memory TO mwf_job;
 GRANT SELECT (follow_up_id, participant_id) ON follow_up_checkin TO mwf_job;
-GRANT SELECT (participant_id, reflection_id) ON brain_activity TO mwf_job;
+GRANT SELECT (session_id, participant_id, reflection_id) ON brain_activity TO mwf_job;  -- session_id: R17 (step 4, NULL-participant history)
 GRANT SELECT (id, user_id) ON reflection TO mwf_job;
 GRANT SELECT (user_id) ON feature_state, user_memory, user_device, user_preferences, reminder TO mwf_job;
 GRANT DELETE ON conversation, conversation_read_state, draft, ai_memory, mood_reading, regulation_event, need_disposition,
@@ -5244,16 +5409,59 @@ END
 $$;
 
 -- Plan step 13: v_session_closure_items reproduces each old Stage4Closure
--- array as a set, restricted to shared needs. An old open-need id with no
--- need_share row is expected (listed); any other difference RAISEs.
+-- array as a set, restricted to LIVE shared needs. Named exception classes
+-- are listed and counted in app_migration.report, never RAISEd:
+--   (1) an old open-need id with no need_share row (an unshared need — the
+--       old rule, stage4-coverage.service.ts, covers every confirmed need);
+--   (2) an old open-need id whose need_share is revoked (TS-7b): the view, by
+--       definition, never names a revoked share (spec §1.4), and the old
+--       arrays were computed without regard to consent state;
+--   (3) ruling R20: a need the view lists as open while the old closure
+--       counted it covered, EXPLAINED by the old coverage row. Every proposal
+--       that covered it there is one the migration could not link: either it
+--       has a needsAddressed label that matched no need case-insensitively,
+--       or it has a non-empty unresolved_need_labels. The old rule's fuzzy,
+--       description and label-substring matches cannot be reproduced from
+--       proposal_need. Each case is listed per session with the need, the
+--       proposal(s) and the explanation.
+-- Any other difference RAISEs, with the differing ids (negative case n13).
+-- Coverage itself follows R20 (ACTIVE, REVISED, CONVERTED_TO_AGREEMENT).
+CREATE TABLE app_migration.closure_diff AS
+WITH c AS (
+  SELECT o.session_id, o.shared_agreement_ids, o.individual_proposal_ids,
+         ARRAY(SELECT x FROM unnest(o.open_need_ids) x
+               WHERE EXISTS (SELECT 1 FROM need_share s WHERE s.need_id = x AND s.revoked_at IS NULL)) AS old_live,
+         v.agreement_ids, v.individual_commitment_ids, v.open_need_ids AS v_open
+  FROM app_migration.old_closure o LEFT JOIN v_session_closure_items v ON v.session_id = o.session_id
+)
+SELECT c.session_id, d.need_id, d.side, cov.covering_proposal_ids,
+       CASE
+         WHEN d.side = 'view-only' AND cov.status = 'COVERED' AND cardinality(cov.covering_proposal_ids) > 0
+              AND NOT EXISTS (SELECT 1 FROM unnest(cov.covering_proposal_ids) p
+                              WHERE NOT EXISTS (SELECT 1 FROM app_migration.proposal_nomatch_label l WHERE l.proposal_id = p)
+                                AND NOT EXISTS (SELECT 1 FROM proposal pr WHERE pr.id = p AND cardinality(pr.unresolved_need_labels) > 0))
+           THEN CASE WHEN EXISTS (SELECT 1 FROM unnest(cov.covering_proposal_ids) p
+                                  JOIN app_migration.proposal_nomatch_label l ON l.proposal_id = p)
+                     THEN 'old coverage by a proposal whose needsAddressed label matched no need'
+                     ELSE 'old coverage by a proposal with unresolved_need_labels' END
+       END AS explanation
+FROM c
+CROSS JOIN LATERAL (
+  SELECT x AS need_id, 'view-only' AS side FROM unnest(c.v_open) x WHERE x <> ALL (c.old_live)
+  UNION ALL
+  SELECT x, 'old-only' FROM unnest(c.old_live) x WHERE x <> ALL (c.v_open)
+) d
+LEFT JOIN app_migration.old_coverage cov ON cov.session_id = c.session_id AND cov.need_id = d.need_id
+WHERE c.agreement_ids IS NOT NULL;
+
 DO $$
 DECLARE
   r record;
   bad text := '';
 BEGIN
   FOR r IN
-    SELECT o.session_id, o.shared_agreement_ids, o.individual_proposal_ids, o.open_need_ids,
-           v.agreement_ids, v.individual_commitment_ids, v.open_need_ids AS v_open
+    SELECT o.session_id, o.shared_agreement_ids, o.individual_proposal_ids,
+           v.agreement_ids, v.individual_commitment_ids
     FROM app_migration.old_closure o LEFT JOIN v_session_closure_items v ON v.session_id = o.session_id
   LOOP
     IF r.agreement_ids IS NULL THEN
@@ -5266,18 +5474,29 @@ BEGIN
     IF NOT (r.individual_proposal_ids @> r.individual_commitment_ids AND r.individual_commitment_ids @> r.individual_proposal_ids) THEN
       bad := bad || format(' %s:individual_commitments', r.session_id);
     END IF;
-    IF NOT (r.v_open @> ARRAY(SELECT x FROM unnest(r.open_need_ids) x WHERE EXISTS (SELECT 1 FROM need_share s WHERE s.need_id = x))
-            AND ARRAY(SELECT x FROM unnest(r.open_need_ids) x WHERE EXISTS (SELECT 1 FROM need_share s WHERE s.need_id = x)) @> r.v_open) THEN
-      bad := bad || format(' %s:open_needs', r.session_id);
-    END IF;
   END LOOP;
+  SELECT bad || coalesce(string_agg(format(' %s:open_needs(%s %s)', session_id, side, need_id), '' ORDER BY session_id, side, need_id), '')
+  INTO bad
+  FROM app_migration.closure_diff WHERE explanation IS NULL;
   PERFORM app_migration.note('13', 'Stage4Closure.openNeedIds entry that is not a shared need (expected difference)', count(*),
                              string_agg(x::text, ', '))
   FROM app_migration.old_closure o CROSS JOIN unnest(o.open_need_ids) x
   WHERE NOT EXISTS (SELECT 1 FROM need_share s WHERE s.need_id = x);
+  PERFORM app_migration.note('13', 'Stage4Closure.openNeedIds entry whose need_share is revoked (expected difference, TS-7b)', count(*),
+                             string_agg(x::text, ', ' ORDER BY x))
+  FROM app_migration.old_closure o CROSS JOIN unnest(o.open_need_ids) x
+  WHERE EXISTS (SELECT 1 FROM need_share s WHERE s.need_id = x AND s.revoked_at IS NOT NULL);
+  -- R20 named exception: one report row per explained difference (explanation
+  -- in item; session, need and old covering proposals in detail), plus the count.
+  PERFORM app_migration.note('13', 'closure open-need difference, R20 named exception: ' || explanation, 1,
+                             format('session %s need %s (%s) proposals %s', session_id, need_id, side, covering_proposal_ids))
+  FROM app_migration.closure_diff WHERE explanation IS NOT NULL ORDER BY session_id, need_id;
+  PERFORM app_migration.note('13', 'closure open-need differences explained (R20 named exception, total)', count(*))
+  FROM app_migration.closure_diff WHERE explanation IS NOT NULL;
   PERFORM app_migration.assert(bad = '', format('step 13: v_session_closure_items differs from Stage4Closure:%s', bad));
 END
 $$;
+DROP TABLE app_migration.closure_diff, app_migration.old_coverage, app_migration.proposal_nomatch_label;
 
 -- Plan step 14: for every open cycle, v_follow_up_cycle.status equals the old status.
 SELECT app_migration.assert(n = 0, format('step 14: %s open cycle(s) where v_follow_up_cycle.status differs: %s', n, ids))
