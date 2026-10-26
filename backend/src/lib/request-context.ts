@@ -14,6 +14,11 @@ export interface RequestContext {
   sessionId?: string;
   /** User ID if authenticated */
   userId?: string;
+  /**
+   * The caller's `participant` row in `sessionId`, resolved once per request
+   * by `requireSessionAccess` (TS-9). Absent outside a session route.
+   */
+  participantId?: string;
   /** Request ID for tracing */
   requestId: string;
   /** Timestamp when the request started */
@@ -53,6 +58,13 @@ export function getCurrentTurnId(fallbackSessionId?: string): string {
  */
 export function getCurrentUserId(): string | undefined {
   return getRequestContext()?.userId;
+}
+
+/**
+ * Get the caller's participant id (set by `requireSessionAccess`).
+ */
+export function getCurrentParticipantId(): string | undefined {
+  return getRequestContext()?.participantId;
 }
 
 /**

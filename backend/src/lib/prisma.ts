@@ -44,4 +44,25 @@ if (process.env.NODE_ENV !== 'production') {
   globalForPrisma.prisma = prisma;
 }
 
+/**
+ * The job connection (`JOB_DATABASE_URL`, `mwf_job`; falls back to
+ * DATABASE_URL when unset). Created on first use, never at import: a request
+ * path that never writes as the job opens no second pool. AI/SYSTEM messages
+ * and every delivered message kind are written through it (spec §1.1 message,
+ * "Key per row"; TS-9).
+ */
+const globalForJob = globalThis as unknown as { jobPrisma: PrismaClient | undefined };
+
+export function getJobPrisma(): PrismaClient {
+  if (!globalForJob.jobPrisma) globalForJob.jobPrisma = createPrismaClient({ role: 'job' });
+  return globalForJob.jobPrisma;
+}
+
+/** Disconnect the job client if one was opened (tests, shutdown). */
+export async function disconnectJobPrisma(): Promise<void> {
+  const client = globalForJob.jobPrisma;
+  globalForJob.jobPrisma = undefined;
+  await client?.$disconnect();
+}
+
 export default prisma;

@@ -41,6 +41,8 @@ import { updateContext } from '../lib/request-context';
 import { consolidateGlobalFacts } from '../services/global-memory';
 import { finalizeTurnMetrics } from '../services/llm-telemetry';
 import { scrubVisibleAIText } from '../utils/visible-text';
+import { listConversationMessages, toMessageDTO } from '../services/message-store';
+import { loadMilestones } from '../services/stage-shim';
 
 // Re-exported for existing callers that import these from this controller.
 export { scrubVisibleAIText, isReadyForStage3RevealText };
@@ -586,86 +588,29 @@ export async function getConversationHistory(
 
     const { limit, before, after, order } = parseResult.data;
 
-    // Check session exists and user has access
-    const session = await prisma.session.findFirst({
-      where: {
-        id: sessionId,
-        relationship: {
-          members: {
-            some: { userId: user.id },
-          },
-        },
-      },
-    });
-
-    if (!session) {
+    // The caller's participant, resolved once by requireSessionAccess (TS-9).
+    // No participant (the invitee fallback) has no conversation to read.
+    const participant = req.participant;
+    if (!participant?.mainConversationId) {
       errorResponse(res, 'NOT_FOUND', 'Session not found', 404);
       return;
     }
 
-    // Build cursor conditions
-    const cursorCondition: Record<string, unknown> = {};
-    if (before) {
-      cursorCondition.timestamp = { lt: new Date(before) };
-    }
-    if (after) {
-      cursorCondition.timestamp = { gt: new Date(after) };
-    }
-
-    // Get messages - user's own messages (without specific recipient) + messages specifically for them
-    // This ensures data isolation: messages with forUserId only show to that user
+    // The caller's MAIN conversation IS the audience: no sender/recipient
+    // filter exists any more (target shape; `forUserId` is gone).
     logger.info(`[getConversationHistory:${requestId}] Fetching messages with limit=${limit}, before=${before || 'none'}, after=${after || 'none'}, order=${order}`);
-    const messages = await prisma.message.findMany({
-      where: {
-        sessionId,
-        OR: [
-          // Messages user sent without a specific recipient (broadcast to all, e.g., USER messages)
-          { senderId: user.id, forUserId: null },
-          // Messages specifically for this user (AI responses, SHARED_CONTEXT, etc.)
-          { forUserId: user.id },
-        ],
-        ...cursorCondition,
-      },
-      orderBy: { timestamp: order },
-      take: limit + 1, // Fetch one extra to check for more
-    });
+    const [messages, milestones] = await Promise.all([
+      listConversationMessages({
+        conversationId: participant.mainConversationId,
+        limit,
+        order,
+        before: before ? new Date(before) : undefined,
+        after: after ? new Date(after) : undefined,
+      }),
+      loadMilestones([participant.id]),
+    ]);
 
-    logger.info(`[getConversationHistory:${requestId}] ✅ Fetched ${messages.length} messages from database`);
-
-    // Check for duplicate message IDs
-    const messageIds = messages.map(m => m.id);
-    const duplicateIds = messageIds.filter((id, idx) => messageIds.indexOf(id) !== idx);
-    if (duplicateIds.length > 0) {
-      logger.warn(`[getConversationHistory:${requestId}] ⚠️  WARNING: Found ${duplicateIds.length} duplicate message ID(s) in query result!`);
-      duplicateIds.forEach(id => {
-        const duplicates = messages.filter(m => m.id === id);
-        logger.warn(`[getConversationHistory:${requestId}]   Duplicate ID ${id}: appears ${duplicates.length} times`);
-      });
-    }
-
-    // Check for duplicate content (same content, same role, within 1 second)
-    const contentMap = new Map<string, typeof messages>();
-    messages.forEach(m => {
-      const key = `${m.role}:${m.content.substring(0, 100)}`;
-      if (!contentMap.has(key)) {
-        contentMap.set(key, []);
-      }
-      contentMap.get(key)!.push(m);
-    });
-    const duplicateContent = Array.from(contentMap.entries()).filter(([_, msgs]) => msgs.length > 1);
-    if (duplicateContent.length > 0) {
-      logger.warn(`[getConversationHistory:${requestId}] ⚠️  WARNING: Found ${duplicateContent.length} message(s) with duplicate content!`);
-      duplicateContent.forEach(([key, msgs]) => {
-        logger.warn(`[getConversationHistory:${requestId}]   Duplicate group (role=${key.split(':')[0]}): appears ${msgs.length} times`);
-        msgs.forEach((msg, idx) => {
-          logger.warn(`[getConversationHistory:${requestId}]     ${idx + 1}. ID=${msg.id}, timestamp=${msg.timestamp.toISOString()}`);
-        });
-      });
-    }
-
-    // Log recent message IDs
-    const recentMessages = messages.slice(0, 5);
-    logger.info(`[getConversationHistory:${requestId}] Recent 5 message IDs:`, recentMessages.map(m => `${m.role}:${m.id.substring(0, 8)}...`).join(', '));
+    logger.info(`[getConversationHistory:${requestId}] Fetched ${messages.length} messages from database`);
 
     // Check if there are more messages
     const hasMore = messages.length > limit;
@@ -679,15 +624,10 @@ export async function getConversationHistory(
       resultMessages = resultMessages.reverse();
     }
 
+    const ownerMilestones = milestones.get(participant.id) ?? [];
     successResponse(res, {
       messages: resultMessages.map((m) => ({
-        id: m.id,
-        sessionId: m.sessionId,
-        senderId: m.senderId,
-        role: m.role,
-        content: m.content,
-        stage: m.stage,
-        timestamp: m.timestamp.toISOString(),
+        ...toMessageDTO(m, { sessionId, ownerMilestones }),
         refiningNeedId: m.refiningNeedId ?? null,
       })),
       hasMore,

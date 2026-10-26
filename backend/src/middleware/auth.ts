@@ -13,11 +13,17 @@ import { Prisma } from '../generated/prisma/client';
 import { logger } from '../lib/logger';
 import { identityBindingEnabled } from '../lib/prisma-identity';
 import { updateContext } from '../lib/request-context';
+import { resolveParticipant, type ResolvedParticipant } from '../services/participant-resolver';
 
 // ============================================================================
 // Types
 // ============================================================================
 
+/**
+ * The authenticated account — the target `user` row (spec §1.7). Device and
+ * biometric state moved to `user_device`, mood to `mood_reading`; `name` is
+ * generated from the first/last names and never written.
+ */
 export interface AuthUser {
   id: string;
   clerkId: string | null;
@@ -25,10 +31,7 @@ export interface AuthUser {
   name: string | null;
   firstName: string | null;
   lastName: string | null;
-  pushToken: string | null;
-  biometricEnabled: boolean;
-  biometricEnrolledAt: Date | null;
-  lastMoodIntensity: number | null;
+  deletedAt: Date | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -39,6 +42,12 @@ declare global {
     interface Request {
       user?: AuthUser;
       clerkUserId?: string;
+      /**
+       * The caller's participant in the route's session, resolved once by
+       * `requireSessionAccess` (TS-9). Absent on the invitee fallback path
+       * (no participant yet) and on routes without a session.
+       */
+      participant?: ResolvedParticipant;
     }
   }
 }
@@ -216,11 +225,11 @@ async function handleClerkAuth(
     const email = clerkUser.emailAddresses[0]?.emailAddress || `${clerkUserId}@pending.clerk`;
     const firstName = clerkUser.firstName || null;
     const lastName = clerkUser.lastName || null;
-    const name = [firstName, lastName].filter(Boolean).join(' ') || null;
 
     try {
+      // `name` is GENERATED from first/last (spec §1.7): never written.
       user = await prisma.user.create({
-        data: { clerkId: clerkUserId, email, name, firstName, lastName },
+        data: { clerkId: clerkUserId, email, firstName, lastName },
       });
     } catch (error) {
       // Concurrent create race, or a local account already exists for this
@@ -234,7 +243,7 @@ async function handleClerkAuth(
         if (user.clerkId !== clerkUserId) {
           user = await prisma.user.update({
             where: { id: user.id },
-            data: { clerkId: clerkUserId, email, name, firstName, lastName },
+            data: { clerkId: clerkUserId, email, firstName, lastName },
           });
         }
       } else {
@@ -338,8 +347,14 @@ export async function requireRelationshipAccess(
 }
 
 /**
- * Checks if the current user has access to a session
- * Supports both :id and :sessionId route params
+ * Checks if the current user has access to a session, and resolves their
+ * participant ONCE for the rest of the request (TS-9).
+ * Supports both :id and :sessionId route params.
+ *
+ * Membership is the `participant` row (spec §1.1): a caller with a present
+ * participant in the session is in, and `req.participant` / the request
+ * context's `participantId` carry it to everything below the route. A session
+ * that does not exist is a 404, one the caller does not belong to a 403.
  */
 export async function requireSessionAccess(
   req: Request,
@@ -359,21 +374,10 @@ export async function requireSessionAccess(
   }
 
   try {
-    // Primary check: user is a member of the session's relationship
-    const session = await prisma.session.findFirst({
-      where: {
-        id: sessionId,
-        relationship: {
-          members: {
-            some: {
-              userId: user.id,
-            },
-          },
-        },
-      },
-    });
-
-    if (session) {
+    const participant = await resolveParticipant(sessionId, user.id);
+    if (participant && !participant.leftAt) {
+      req.participant = participant;
+      updateContext({ sessionId, participantId: participant.id });
       next();
       return;
     }
@@ -388,25 +392,20 @@ export async function requireSessionAccess(
       throw new NotFoundError('Session');
     }
 
-    // Fallback: allow access for invitees during the acceptance timing gap.
-    // When an invitee accepts an invitation, the RelationshipMember is created
-    // inside a transaction. Between receiving the sessionId (from invitation
-    // details) and the transaction committing, session endpoint requests fail
-    // with 403. This fallback grants access if a valid invitation exists for
-    // this session and the requesting user is not the inviter.
-    const invitedSession = await prisma.session.findFirst({
+    // Fallback: allow access for invitees during the acceptance timing gap
+    // (the participant row is created when the invitation is accepted). Phase 3
+    // §7 schedules this fallback's deletion (W6); kept behind the same rule
+    // until then: a live invitation for this session that the caller did not send.
+    const invitedSession = await prisma.invitation.findFirst({
       where: {
-        id: sessionId,
-        invitations: {
-          some: {
-            invitedById: { not: user.id },
-            OR: [
-              { status: 'PENDING', expiresAt: { gt: new Date() } },
-              { status: 'ACCEPTED' },
-            ],
-          },
-        },
+        sessionId,
+        invitedByParticipant: { userId: { not: user.id } },
+        OR: [
+          { status: 'PENDING', expiresAt: { gt: new Date() } },
+          { status: 'ACCEPTED' },
+        ],
       },
+      select: { id: true },
     });
 
     if (!invitedSession) {
