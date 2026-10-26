@@ -1,10 +1,11 @@
 -- ============================================================================
--- trailer.sql — section 5 of the target_shape migration (TS-7). Hand-maintained;
--- backend/scripts/gen-target-migration.ts appends it to the generated sections
--- and splices backend/scripts/target-shape/sql-only.sql in, verbatim, at the
+-- trailer.sql — section 3 of the target_shape_baseline migration (TS-7c;
+-- built by TS-7, re-based on an empty database by OD7, 2026-10-26).
+-- Hand-maintained; backend/scripts/gen-target-migration.ts appends it after
+-- the preamble, the Prisma DDL and the milestone seed, and splices
+-- backend/scripts/target-shape/sql-only.sql in, verbatim, at the
 -- `-- @@include sql-only.sql` line. It never runs alone: it runs in the same
--- transaction, after the copies and after the old tables are dropped (plan §3
--- step 20), so a failure here also rolls everything back.
+-- transaction, so a failure here rolls the whole baseline back.
 --
 -- Spec: docs/backend/data-model/schema-target-2026-10.md §1 (Keys lines), §4
 -- (views, functions, the anonymisation walk), §7 (invariants);
@@ -20,17 +21,18 @@
 --   T5  triggers (the T-* set and touch_updated_at ×35)
 --   T6  views (security_invoker = true), SELECT to mwf_app
 --   T7  grants (mwf_job, mwf_ops, mwf_auth; mwf_app: views and EXECUTE only)
---   T8  catalog assertions (plan step 20) and invariant checks over the
---       migrated rows (a deferred/BEFORE trigger only sees rows written after
---       it exists), then the cleanup of the migration's work objects
+--   T8  catalog assertions (plan step 20). The database is empty, so there are
+--       no existing rows to re-check: every invariant is enforced by its
+--       trigger or CHECK from the first write on.
 --
--- Not here: RLS ENABLE/FORCE and policies (TS-16); the milestone seed (it
--- precedes step 7, because participant_milestone → milestone is RESTRICT).
+-- Not here: RLS ENABLE/FORCE and policies (TS-16); the milestone seed (its
+-- own section, before this one); schema app and app.current_user_id()
+-- (preamble.sql).
 -- ============================================================================
 
 -- ---------------------------------------------------------------------------
--- T1. intensity domain (spec §3): int 1..10. The prechecks (P27) proved every
--- copied value is in range, so the retype cannot fail on data.
+-- T1. intensity domain (spec §3): int 1..10. The tables are empty, so the
+-- retype cannot fail on data.
 -- ---------------------------------------------------------------------------
 CREATE DOMAIN intensity AS integer CHECK (VALUE BETWEEN 1 AND 10);
 ALTER TABLE mood_reading ALTER COLUMN intensity TYPE intensity;
@@ -44,9 +46,8 @@ ALTER TABLE regulation_event
 -- @@include sql-only.sql
 
 -- ---------------------------------------------------------------------------
--- T3. CHECK constraints. Names: chk_<table>_<rule>. Validated against the
--- migrated rows as they are added (the prechecks named in brackets guard the
--- ones old data could violate).
+-- T3. CHECK constraints. Names: chk_<table>_<rule>. (The [Pnn] tags name the
+-- TS-7 data-move prechecks that guarded each rule; kept as cross-references.)
 -- ---------------------------------------------------------------------------
 
 -- §1.1 session [P12]
@@ -159,15 +160,13 @@ CREATE OR REPLACE FUNCTION app.touch_updated_at() RETURNS trigger
   SET search_path = pg_catalog, public, pg_temp
   AS $$ BEGIN NEW.updated_at := now(); RETURN NEW; END $$;
 
--- The two TS-1 helpers keep their signatures and owner (mwf_job) and are
--- re-based on participant. CREATE OR REPLACE needs the owner, so it runs as
--- mwf_job inside a short CREATE window on schema app; grants are kept.
-GRANT CREATE ON SCHEMA app TO mwf_job;
-SET ROLE mwf_job;
+-- The two TS-1 helpers, with TS-1's signatures, over participant. Created
+-- here like every other definer helper and handed to mwf_job below (there is
+-- no earlier definition to replace: OD7 baseline).
 
 -- Does the caller have a participant row in this session? (left_at does not
 -- matter: a leaver keeps reading the shared vessel; spec §1.1 participant.)
-CREATE OR REPLACE FUNCTION app.is_member(session uuid) RETURNS boolean
+CREATE FUNCTION app.is_member(session uuid) RETURNS boolean
   LANGUAGE sql STABLE SECURITY DEFINER
   SET search_path = pg_catalog, public, pg_temp
   AS $$
@@ -180,7 +179,7 @@ CREATE OR REPLACE FUNCTION app.is_member(session uuid) RETURNS boolean
 -- The caller's co-participant's user id: NULL unless the caller is a
 -- participant and the session has exactly two human participants (kept for
 -- the two-party job paths; v_co_participant is the N-safe read).
-CREATE OR REPLACE FUNCTION app.partner_user_id(session uuid) RETURNS uuid
+CREATE FUNCTION app.partner_user_id(session uuid) RETURNS uuid
   LANGUAGE sql STABLE SECURITY DEFINER
   SET search_path = pg_catalog, public, pg_temp
   AS $$
@@ -192,9 +191,6 @@ CREATE OR REPLACE FUNCTION app.partner_user_id(session uuid) RETURNS uuid
       AND me.user_id = app.current_user_id()
       AND (SELECT count(*) FROM public.participant c WHERE c.session_id = me.session_id AND c.kind = 'human') = 2
   $$;
-
-RESET ROLE;
-REVOKE CREATE ON SCHEMA app FROM mwf_job;
 
 -- Does the caller share this participant's session?
 CREATE FUNCTION app.is_co_participant(participant uuid) RETURNS boolean
@@ -562,6 +558,8 @@ CREATE FUNCTION app.create_user_for_clerk(clerk_id text, email text, first_name 
 -- non-superuser migrator): CREATE on the schema for the hand-over only; then
 -- the EXECUTE grants issued AS mwf_job, the owner.
 GRANT CREATE ON SCHEMA app TO mwf_job;
+ALTER FUNCTION app.is_member(uuid) OWNER TO mwf_job;
+ALTER FUNCTION app.partner_user_id(uuid) OWNER TO mwf_job;
 ALTER FUNCTION app.is_co_participant(uuid) OWNER TO mwf_job;
 ALTER FUNCTION app.my_participant(uuid) OWNER TO mwf_job;
 ALTER FUNCTION app.empathy_direction_status() OWNER TO mwf_job;
@@ -577,15 +575,17 @@ REVOKE CREATE ON SCHEMA app FROM mwf_job;
 
 SET ROLE mwf_job;
 REVOKE EXECUTE ON FUNCTION
+  app.is_member(uuid), app.partner_user_id(uuid),
   app.is_co_participant(uuid), app.my_participant(uuid), app.empathy_direction_status(),
   app.session_set_status(uuid, public.session_status), app.empathy_set_status(uuid, public.empathy_status, text),
   app.need_share(uuid, text), app.need_revoke_share(uuid),
   app.anonymize_user_in_session(uuid, uuid), app.anonymize_user_account(uuid),
   app.resolve_user_by_clerk_id(text), app.create_user_for_clerk(text, text, text, text)
   FROM PUBLIC;
--- mwf_app: the identity-bound reads and the request-path writers.
+-- mwf_app: the identity-bound reads and the request-path writers (is_member
+-- and partner_user_id: as TS-1 granted them).
 GRANT EXECUTE ON FUNCTION
-  app.is_co_participant(uuid), app.my_participant(uuid), app.empathy_direction_status(),
+  app.is_member(uuid), app.partner_user_id(uuid), app.is_co_participant(uuid), app.my_participant(uuid), app.empathy_direction_status(),
   app.session_set_status(uuid, public.session_status), app.empathy_set_status(uuid, public.empathy_status, text),
   app.need_revoke_share(uuid), app.anonymize_user_in_session(uuid, uuid), app.anonymize_user_account(uuid),
   app.resolve_user_by_clerk_id(text)
@@ -822,8 +822,8 @@ CREATE TRIGGER t_result_live_attempt BEFORE INSERT ON public.reconciler_result
 -- present stays a party, spec §4 "what survives … agreement_party"), each
 -- WILLING on the proposal (D4; "what the 2-participant system does, applied
 -- across N"). The predicate is app.agreement_parties_ok, used by the trigger
--- (inlined, so no caller needs EXECUTE on it) and by T8's check of the
--- migrated rows.
+-- (inlined, so no caller needs EXECUTE on it); kept as a callable predicate
+-- for operators and tests.
 CREATE FUNCTION app.agreement_parties_ok(agreement uuid) RETURNS boolean
   LANGUAGE sql STABLE
   SET search_path = pg_catalog, public, pg_temp
@@ -890,7 +890,7 @@ CREATE CONSTRAINT TRIGGER t_agreement_parties_on_agreement AFTER INSERT ON publi
   DEFERRABLE INITIALLY DEFERRED
   FOR EACH ROW EXECUTE FUNCTION app.t_agreement_parties();
 
--- No caller needs EXECUTE on a trigger function or on the T8 predicate.
+-- No caller needs EXECUTE on a trigger function or on the agreement_parties_ok predicate.
 REVOKE EXECUTE ON FUNCTION
   app.touch_updated_at(), app.t_session_cardinality(), app.t_participant_cardinality(), app.t_message_immutable(),
   app.t_attempt_same_session(), app.t_review_subject(), app.t_consent_owner(), app.t_consent_transitions(),
@@ -1226,7 +1226,9 @@ GRANT SELECT ON brain_activity, session, relationship, relationship_member, "use
 GRANT SELECT ON milestone TO mwf_app;
 
 -- ---------------------------------------------------------------------------
--- T8. Assertions — catalog (plan step 20) and invariants over the migrated rows.
+-- T8. Catalog assertions (plan step 20). The tables are empty (OD7 baseline),
+-- so the TS-7 invariant re-checks over migrated rows are gone: every
+-- invariant is a trigger or a CHECK that sees every row from the first write.
 -- ---------------------------------------------------------------------------
 DO $$
 DECLARE
@@ -1236,13 +1238,13 @@ BEGIN
   -- Every FK to "user" is ON DELETE RESTRICT (P3 D9).
   SELECT string_agg(conrelid::regclass || '.' || conname, ', ' ORDER BY conname) INTO bad
   FROM pg_constraint WHERE contype = 'f' AND confrelid = 'public."user"'::regclass AND confdeltype <> 'r';
-  PERFORM app_migration.assert(bad IS NULL, format('step 20: FK(s) to user not RESTRICT: %s', bad));
+  IF bad IS NOT NULL THEN RAISE EXCEPTION 'step 20: FK(s) to user not RESTRICT: %', bad; END IF;
 
   -- need_share → need is RESTRICT (N-3).
-  PERFORM app_migration.assert(
-    EXISTS (SELECT 1 FROM pg_constraint WHERE contype = 'f' AND conrelid = 'public.need_share'::regclass
-            AND confrelid = 'public.need'::regclass AND confdeltype = 'r'),
-    'step 20: need_share → need is not RESTRICT');
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE contype = 'f' AND conrelid = 'public.need_share'::regclass
+                 AND confrelid = 'public.need'::regclass AND confdeltype = 'r') THEN
+    RAISE EXCEPTION 'step 20: need_share → need is not RESTRICT';
+  END IF;
 
   -- No FK into reflection* except brain_activity.reflection_id (D2).
   SELECT string_agg(conrelid::regclass || '.' || conname, ', ' ORDER BY conname) INTO bad
@@ -1253,7 +1255,7 @@ BEGIN
     AND conrelid NOT IN ('public.reflection'::regclass, 'public.reflection_message'::regclass,
                          'public.takeaway'::regclass, 'public.takeaway_link'::regclass)
     AND NOT (conrelid = 'public.brain_activity'::regclass AND confrelid = 'public.reflection'::regclass);
-  PERFORM app_migration.assert(bad IS NULL, format('step 20: FK(s) into reflection*: %s', bad));
+  IF bad IS NOT NULL THEN RAISE EXCEPTION 'step 20: FK(s) into reflection*: %', bad; END IF;
 
   -- Every jsonb column has a jsonb_typeof CHECK.
   SELECT string_agg(c.table_name || '.' || c.column_name, ', ' ORDER BY c.table_name, c.column_name) INTO bad
@@ -1262,7 +1264,7 @@ BEGIN
     AND NOT EXISTS (SELECT 1 FROM pg_constraint k
                     WHERE k.contype = 'c' AND k.conrelid = format('public.%I', c.table_name)::regclass
                       AND pg_get_constraintdef(k.oid) ~ ('jsonb_typeof\(' || c.column_name || '\) (= |= ANY )'));
-  PERFORM app_migration.assert(bad IS NULL, format('step 20: jsonb column(s) without a jsonb_typeof CHECK: %s', bad));
+  IF bad IS NOT NULL THEN RAISE EXCEPTION 'step 20: jsonb column(s) without a jsonb_typeof CHECK: %', bad; END IF;
 
   -- touch_updated_at on exactly the tables that have updated_at (35).
   SELECT string_agg(table_name, ', ' ORDER BY table_name) INTO bad
@@ -1270,15 +1272,15 @@ BEGIN
         WHERE c.table_schema = 'public' AND c.column_name = 'updated_at'
         EXCEPT
         SELECT c.relname::text FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid WHERE t.tgname = 'touch_updated_at') d;
-  PERFORM app_migration.assert(bad IS NULL, format('step 20: tables with updated_at but no touch_updated_at: %s', bad));
+  IF bad IS NOT NULL THEN RAISE EXCEPTION 'step 20: tables with updated_at but no touch_updated_at: %', bad; END IF;
   SELECT count(*) INTO n FROM pg_trigger WHERE tgname = 'touch_updated_at';
-  PERFORM app_migration.assert(n = 35, format('step 20: %s touch_updated_at triggers, expected 35', n));
+  IF n <> 35 THEN RAISE EXCEPTION 'step 20: % touch_updated_at triggers, expected 35', n; END IF;
 
   -- Views are security_invoker.
   SELECT string_agg(c.relname, ', ') INTO bad
   FROM pg_class c JOIN pg_namespace s ON s.oid = c.relnamespace
   WHERE s.nspname = 'public' AND c.relkind = 'v' AND NOT coalesce('security_invoker=true' = ANY (c.reloptions), false);
-  PERFORM app_migration.assert(bad IS NULL, format('step 20: view(s) without security_invoker: %s', bad));
+  IF bad IS NOT NULL THEN RAISE EXCEPTION 'step 20: view(s) without security_invoker: %', bad; END IF;
 
   -- Every SECURITY DEFINER function and every trigger function in schema app
   -- pins search_path with pg_temp last (C1/I4: no temp-object shadowing).
@@ -1286,152 +1288,23 @@ BEGIN
   FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
   WHERE n.nspname = 'app' AND (p.prosecdef OR p.prorettype = 'pg_catalog.trigger'::regtype)
     AND NOT coalesce('search_path=pg_catalog, public, pg_temp' = ANY (p.proconfig), false);
-  PERFORM app_migration.assert(bad IS NULL, format('step 20: app function(s) without a pinned search_path: %s', bad));
+  IF bad IS NOT NULL THEN RAISE EXCEPTION 'step 20: app function(s) without a pinned search_path: %', bad; END IF;
 
   -- No SECURITY DEFINER function and no trigger function is executable by PUBLIC.
   SELECT string_agg(p.proname, ', ' ORDER BY p.proname) INTO bad
   FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
   WHERE n.nspname = 'app' AND (p.prosecdef OR p.prorettype = 'pg_catalog.trigger'::regtype)
     AND has_function_privilege('public', p.oid, 'EXECUTE');
-  PERFORM app_migration.assert(bad IS NULL, format('step 20: app function(s) executable by PUBLIC: %s', bad));
+  IF bad IS NOT NULL THEN RAISE EXCEPTION 'step 20: app function(s) executable by PUBLIC: %', bad; END IF;
 
-  -- Invariants over the migrated rows (their triggers only see later writes).
-  SELECT count(*) INTO n FROM empathy_attempt a
-  JOIN participant x ON x.id = a.author_participant_id JOIN participant y ON y.id = a.subject_participant_id
-  WHERE x.session_id <> y.session_id;
-  PERFORM app_migration.assert(n = 0, format('T-same-session: %s attempt(s) across sessions', n));
+  -- Every SECURITY DEFINER function in schema app is owned by mwf_job (TS-1 hand-over).
+  SELECT string_agg(p.proname, ', ' ORDER BY p.proname) INTO bad
+  FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+  WHERE n.nspname = 'app' AND p.prosecdef AND pg_get_userbyid(p.proowner) <> 'mwf_job';
+  IF bad IS NOT NULL THEN RAISE EXCEPTION 'step 20: SECURITY DEFINER function(s) not owned by mwf_job: %', bad; END IF;
 
-  SELECT count(*) INTO n FROM session s
-  WHERE s.status NOT IN ('RESOLVED', 'ABANDONED', 'ARCHIVED')
-    AND EXISTS (SELECT 1 FROM participant p WHERE p.session_id = s.id)
-    AND NOT EXISTS (SELECT 1 FROM participant p WHERE p.session_id = s.id AND p.kind = 'human' AND p.left_at IS NULL);
-  PERFORM app_migration.assert(n = 0, format('T-cardinality-2: %s live session(s) without a present human', n));
-
-  SELECT count(*) INTO n FROM empathy_review r JOIN empathy_attempt a ON a.id = r.attempt_id
-  WHERE r.reviewer_participant_id <> a.subject_participant_id;
-  PERFORM app_migration.assert(n = 0, format('T-review-subject: %s review(s) by a non-subject', n));
-
-  SELECT count(*) INTO n FROM agreement ag WHERE NOT app.agreement_parties_ok(ag.id);
-  PERFORM app_migration.assert(n = 0, format('T-agreement-parties: %s agreement(s) fail', n));
-
-  SELECT count(*) INTO n FROM reconciler_result r JOIN empathy_attempt a ON a.id = r.attempt_id
-  WHERE a.status = 'SUPERSEDED' OR r.subject_participant_id <> a.subject_participant_id;
-  PERFORM app_migration.assert(n = 0, format('T-result-live-attempt: %s result(s) fail', n));
-
-  SELECT count(*) INTO n FROM consent c
-  LEFT JOIN need nd ON nd.id = c.need_id
-  LEFT JOIN empathy_attempt a ON a.id = c.empathy_attempt_id
-  LEFT JOIN proposal p ON p.id = c.proposal_id
-  LEFT JOIN context_share_offer o ON o.id = c.share_offer_id
-  LEFT JOIN empathy_review r ON r.id = c.review_id
-  WHERE c.participant_id IS DISTINCT FROM coalesce(nd.participant_id, a.author_participant_id, p.created_by_participant_id,
-                                                   o.subject_participant_id, r.reviewer_participant_id);
-  PERFORM app_migration.assert(n = 0, format('T-consent-owner: %s consent row(s) fail', n));
-
-  SELECT count(*) INTO n FROM need_share s JOIN need nd ON nd.id = s.need_id JOIN participant p ON p.id = nd.participant_id
-  WHERE s.participant_id <> nd.participant_id OR s.session_id <> p.session_id;
-  PERFORM app_migration.assert(n = 0, format('T-need-share-owner: %s need_share row(s) fail', n));
+  -- The milestone seed is in.
+  SELECT count(*) INTO n FROM milestone;
+  IF n <> 13 THEN RAISE EXCEPTION 'step 20: % milestone rows, expected 13', n; END IF;
 END
 $$;
-
--- Plan step 13: v_session_closure_items reproduces each old Stage4Closure
--- array as a set, restricted to LIVE shared needs. Named exception classes
--- are listed and counted in app_migration.report, never RAISEd:
---   (1) an old open-need id with no need_share row (an unshared need — the
---       old rule, stage4-coverage.service.ts, covers every confirmed need);
---   (2) an old open-need id whose need_share is revoked (TS-7b): the view, by
---       definition, never names a revoked share (spec §1.4), and the old
---       arrays were computed without regard to consent state;
---   (3) ruling R20: a need the view lists as open while the old closure
---       counted it covered, EXPLAINED by the old coverage row. Every proposal
---       that covered it there is one the migration could not link: either it
---       has a needsAddressed label that matched no need case-insensitively,
---       or it has a non-empty unresolved_need_labels. The old rule's fuzzy,
---       description and label-substring matches cannot be reproduced from
---       proposal_need. Each case is listed per session with the need, the
---       proposal(s) and the explanation.
--- Any other difference RAISEs, with the differing ids (negative case n13).
--- Coverage itself follows R20 (ACTIVE, REVISED, CONVERTED_TO_AGREEMENT).
-CREATE TABLE app_migration.closure_diff AS
-WITH c AS (
-  SELECT o.session_id, o.shared_agreement_ids, o.individual_proposal_ids,
-         ARRAY(SELECT x FROM unnest(o.open_need_ids) x
-               WHERE EXISTS (SELECT 1 FROM need_share s WHERE s.need_id = x AND s.revoked_at IS NULL)) AS old_live,
-         v.agreement_ids, v.individual_commitment_ids, v.open_need_ids AS v_open
-  FROM app_migration.old_closure o LEFT JOIN v_session_closure_items v ON v.session_id = o.session_id
-)
-SELECT c.session_id, d.need_id, d.side, cov.covering_proposal_ids,
-       CASE
-         WHEN d.side = 'view-only' AND cov.status = 'COVERED' AND cardinality(cov.covering_proposal_ids) > 0
-              AND NOT EXISTS (SELECT 1 FROM unnest(cov.covering_proposal_ids) p
-                              WHERE NOT EXISTS (SELECT 1 FROM app_migration.proposal_nomatch_label l WHERE l.proposal_id = p)
-                                AND NOT EXISTS (SELECT 1 FROM proposal pr WHERE pr.id = p AND cardinality(pr.unresolved_need_labels) > 0))
-           THEN CASE WHEN EXISTS (SELECT 1 FROM unnest(cov.covering_proposal_ids) p
-                                  JOIN app_migration.proposal_nomatch_label l ON l.proposal_id = p)
-                     THEN 'old coverage by a proposal whose needsAddressed label matched no need'
-                     ELSE 'old coverage by a proposal with unresolved_need_labels' END
-       END AS explanation
-FROM c
-CROSS JOIN LATERAL (
-  SELECT x AS need_id, 'view-only' AS side FROM unnest(c.v_open) x WHERE x <> ALL (c.old_live)
-  UNION ALL
-  SELECT x, 'old-only' FROM unnest(c.old_live) x WHERE x <> ALL (c.v_open)
-) d
-LEFT JOIN app_migration.old_coverage cov ON cov.session_id = c.session_id AND cov.need_id = d.need_id
-WHERE c.agreement_ids IS NOT NULL;
-
-DO $$
-DECLARE
-  r record;
-  bad text := '';
-BEGIN
-  FOR r IN
-    SELECT o.session_id, o.shared_agreement_ids, o.individual_proposal_ids,
-           v.agreement_ids, v.individual_commitment_ids
-    FROM app_migration.old_closure o LEFT JOIN v_session_closure_items v ON v.session_id = o.session_id
-  LOOP
-    IF r.agreement_ids IS NULL THEN
-      bad := bad || format(' %s:no_view_row', r.session_id);
-      CONTINUE;
-    END IF;
-    IF NOT (r.shared_agreement_ids @> r.agreement_ids AND r.agreement_ids @> r.shared_agreement_ids) THEN
-      bad := bad || format(' %s:agreements', r.session_id);
-    END IF;
-    IF NOT (r.individual_proposal_ids @> r.individual_commitment_ids AND r.individual_commitment_ids @> r.individual_proposal_ids) THEN
-      bad := bad || format(' %s:individual_commitments', r.session_id);
-    END IF;
-  END LOOP;
-  SELECT bad || coalesce(string_agg(format(' %s:open_needs(%s %s)', session_id, side, need_id), '' ORDER BY session_id, side, need_id), '')
-  INTO bad
-  FROM app_migration.closure_diff WHERE explanation IS NULL;
-  PERFORM app_migration.note('13', 'Stage4Closure.openNeedIds entry that is not a shared need (expected difference)', count(*),
-                             string_agg(x::text, ', '))
-  FROM app_migration.old_closure o CROSS JOIN unnest(o.open_need_ids) x
-  WHERE NOT EXISTS (SELECT 1 FROM need_share s WHERE s.need_id = x);
-  PERFORM app_migration.note('13', 'Stage4Closure.openNeedIds entry whose need_share is revoked (expected difference, TS-7b)', count(*),
-                             string_agg(x::text, ', ' ORDER BY x))
-  FROM app_migration.old_closure o CROSS JOIN unnest(o.open_need_ids) x
-  WHERE EXISTS (SELECT 1 FROM need_share s WHERE s.need_id = x AND s.revoked_at IS NOT NULL);
-  -- R20 named exception: one report row per explained difference (explanation
-  -- in item; session, need and old covering proposals in detail), plus the count.
-  PERFORM app_migration.note('13', 'closure open-need difference, R20 named exception: ' || explanation, 1,
-                             format('session %s need %s (%s) proposals %s', session_id, need_id, side, covering_proposal_ids))
-  FROM app_migration.closure_diff WHERE explanation IS NOT NULL ORDER BY session_id, need_id;
-  PERFORM app_migration.note('13', 'closure open-need differences explained (R20 named exception, total)', count(*))
-  FROM app_migration.closure_diff WHERE explanation IS NOT NULL;
-  PERFORM app_migration.assert(bad = '', format('step 13: v_session_closure_items differs from Stage4Closure:%s', bad));
-END
-$$;
-DROP TABLE app_migration.closure_diff, app_migration.old_coverage, app_migration.proposal_nomatch_label;
-
--- Plan step 14: for every open cycle, v_follow_up_cycle.status equals the old status.
-SELECT app_migration.assert(n = 0, format('step 14: %s open cycle(s) where v_follow_up_cycle.status differs: %s', n, ids))
-FROM (SELECT count(*) AS n, string_agg(format('%s old=%s new=%s', o.follow_up_id, o.status, v.status), '; ') AS ids
-      FROM app_migration.old_cycle o JOIN v_follow_up_cycle v ON v.follow_up_id = o.follow_up_id
-      WHERE o.status IN ('WAITING_FOR_PARTNER', 'READY_TO_RESOLVE') AND v.status <> o.status) x;
-
--- Cleanup: the work objects the trailer needed. Kept for TS-8: schema
--- app_migration with shape_map, row_counts, report (ruling R14).
-DROP TABLE app_migration.old_closure, app_migration.old_cycle;
-DROP FUNCTION app_migration.as_uuid(text), app_migration.mint(timestamptz), app_migration.jnull(jsonb), app_migration.ts(jsonb),
-              app_migration.assert(boolean, text), app_migration.unmapped(text, text), app_migration.note(text, text, bigint, text);
