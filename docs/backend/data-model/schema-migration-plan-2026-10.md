@@ -1,7 +1,7 @@
 ---
 title: "Schema Migration Plan — October 2026"
 sidebar_position: 8
-description: One-shot re-shape from the 68-table Prisma schema to the target shape — strategy, sequencing against Phase 3, build order with assertions, verification, application rewrite, Lightsail rollout, work breakdown, risks.
+description: Fresh-baseline cutover from the 68-table Prisma schema to the target shape (OD7, 2026-10-26: no data move) — strategy, sequencing against Phase 3, baseline build order, verification, application rewrite, Lightsail cutover, work breakdown, risks.
 created: 2026-10-17
 status: living
 ---
@@ -11,32 +11,40 @@ status: living
 Target: [`schema-target-2026-10.md`](./schema-target-2026-10.md) (47 tables; "Absorbs" lines there are
 the mapping used here). Rationale: [`schema-review-2026-10.md`](./schema-review-2026-10.md) §8–§9.
 Security: [`phase3-design-summary.md`](./phase3-design-summary.md) §8 rollout, re-sequenced in §2 below.
-Revised 2026-10-17 after the adversarial pass (dispositions at the end).
+Revised 2026-10-17 after the adversarial pass (dispositions at the end). **Revised 2026-10-26 for
+owner decision OD7** (§1, §3, §4, §6, §7, §8): existing production data is demo/test and is not
+preserved, so the cutover is a fresh baseline migration on an emptied database — there is no data
+move. The data-move design (prechecks, copy steps 1–19, id policy, fix-data, content-hash verify)
+is superseded; it stays readable in git history (`phoenix/target-shape` at `3cf611cb`), and the
+adversarial dispositions below that cite "§3 step N" refer to that version.
 
 ## 1. Strategy and why
 
-**One shot, one transaction, one cutover.** Production holds 9 users and ~1,000 messages; every
-copy step below completes in seconds, so there is nothing to amortise and nothing to dual-write.
-The golden harness (`backend/src/testing/golden/`) is the oracle: it snapshots tables through `pg`,
-never Prisma, and diffs rows before/after real HTTP calls — exactly the instrument a re-shape
-needs, and the one the uuid migration (`20261010180736_cuid_to_uuidv7`) already proved: generated
-SQL from the catalog, an `_id_map`, pre- and post-assertions that `RAISE` inside Prisma's single
-migration transaction, and a before/after **content-hash** verification
-(`backend/scripts/verify-uuid-migration.sql`) that checks identity of references, not just counts.
-This plan reuses that pattern: a generator script, a mapping table, assertions, the verify script
-extended to the new names — and, unlike the first draft, **one migration file**, because Prisma
-7.10 applies each file atomically on its own (adversarial P1-11 [V]): a second file that fails
-would leave the first committed.
+**A fresh baseline, one transaction, one cutover (OD7, 2026-10-26).** The owner decided that the
+data in production is demo/test data and is **not preserved**. The target shape is therefore not
+reached by moving rows: one migration, `*_target_shape_baseline`, builds the 47 target tables and
+everything that lives only in SQL on an **empty** database, and it is the only migration in
+`backend/prisma/migrations` (the 75 current-shape migrations, TS-1's `phase3_app_schema_helpers` and
+TS-7's data-move `target_shape` are deleted from the active branch; git history keeps them). A
+database still at the old shape is emptied first by the operator script
+`backend/scripts/target-shape/drop-old-objects.sql` (§6). No prechecks, no fix-data script, no
+content-hash verification, no mapping table: there is nothing to verify identity against.
+
+What carries over from the data-move design unchanged: the generator
+(`backend/scripts/gen-target-migration.ts`, deterministic, its output committed), the hand-maintained
+trailer (CHECKs, the `intensity` domain, `app.*` functions with the TS-1 ownership/grant order,
+T-* triggers, `touch_updated_at` on 35 tables, views, milestone seed, grants, the step-20 catalog
+assertions), `sql-only.sql`, the schema gate `check-schema.sh`, and the per-caller privacy tests —
+re-validated on an empty target database (TS-7c).
 
 **Why not incremental.** A strangler (new tables beside old, dual writes, per-feature cutover)
 buys safety only when the old shape must keep serving traffic for weeks. Here the application is
 rewritten against the target in the same release (§5), Phase 3's policies have not been written
-yet and would otherwise be written twice, and every intermediate state (two message tables, a
-`participant` half the code knows about) is a state the harness would have to certify on its
-own. What a one-shot does **not** buy: no dual-running, no partial rollback. The rollback is the
-preserved backup `deploy.sh` takes immediately before `migrate deploy` (`infra/aws/deploy.sh:13–15`),
-restored with `restore.sh … replace-production`. Between backup and a green smoke check the API is
-stopped (`compose stop api`), so no writes are lost by rolling back.
+yet and would otherwise be written twice, and every intermediate state is a state the harness would
+have to certify on its own. What a one-shot does **not** buy: no dual-running, no partial rollback.
+The rollback is the preserved backup taken immediately before the cutover, restored with
+`restore.sh … replace-production`, plus the previous image. Between backup and a green smoke check
+the API is stopped, so no writes are lost by rolling back.
 
 ## 2. Sequencing against Phase 3
 
@@ -52,7 +60,7 @@ FKs and the invitation column are cheaper to write once against the target than 
 | 3 | **W2** `app.current_user_id()`, the definer helpers (`app.is_member`, `app.is_co_participant` — target §4), request-scoped `SET LOCAL` in the Phase 4 `pg` layer spike | current | W1 |
 | 4 | Error middleware strips `PostgresError.detail` (P3 §7 prerequisite for any CHECK) | current | — |
 | 5 | **Fixture pipeline rewrite** (`state-factory.ts` → participant-centred; `work-a39h.6.1`) and new golden scenarios recorded **against the current shape** so the re-record in §4 has a baseline | current | — |
-| 6 | **Re-shape migration** = §3, carrying **W3 CHECKs, W4 triggers (the T-* set), W5/W6 FKs + `invitation.accepted_by_user_id`, W4b tombstone column + every-FK-to-user-RESTRICT**, in one migration file | → target | 1–5; rehearsal green (§6) |
+| 6 | **Baseline migration** = §3 (OD7: fresh baseline, no data move), carrying **W3 CHECKs, W4 triggers (the T-* set), W5/W6 FKs + `invitation.accepted_by_user_id`, W4b tombstone column + every-FK-to-user-RESTRICT**, in one migration file | → target | 1–5; `run-baseline.sh` green (§3) |
 | 7 | Application rewrite merged in the same release (§5); `prisma migrate diff --from-config-datasource --to-schema prisma/schema.prisma --script` empty | target | harness green |
 | 8 | **W8/W9** `ENABLE`+`FORCE` RLS on all target tables, policies as written in target §1 (placeholders first per tier, P3 §9.1) | target | 6, 7 |
 | 9 | **W10** enforcement per tier with shadow-mode row-count comparison | target | Phase 4 identity (step 3 complete) |
@@ -60,91 +68,39 @@ FKs and the invitation column are cheaper to write once against the target than 
 
 Nothing in steps 1–5 is wasted if the re-shape slips; nothing in 8–10 is written twice.
 
-## 3. Build order for the migration
+## 3. Build order for the baseline migration
 
-**One migration file** `*_target_shape/migration.sql`, generated by `backend/scripts/gen-target-migration.ts`
-(modelled on `gen-uuid-migration.ts`) with a hand-maintained trailer: (1) enums and new tables,
-(2) prechecks, (3) copies with assertions, (4) drop the 68 old tables and 51 old enum types,
-(5) **constraints, triggers, functions, views, `milestone` seed, grants** — all in the same
-transaction, so a failure anywhere leaves the database exactly as it was. The trailer is
-idempotent SQL (`CREATE OR REPLACE`, `IF NOT EXISTS`) only for readability; it never runs alone.
+OD7, 2026-10-26. **One migration file** `backend/prisma/migrations/20261026120000_target_shape_baseline/migration.sql`,
+written by `npx tsx backend/scripts/gen-target-migration.ts` (`--check`: two runs byte-identical,
+equal to the committed file, and the only migration). It runs in one transaction under
+`prisma migrate deploy`; a `RAISE` anywhere rolls it all back. Sections, in order:
 
-**Id policy.** Tables that are renames keep their ids (`session`, `message`, `need`, `proposal`,
-`empathy_attempt`, `agreement`, `follow_up`, `reflection*`, `takeaway*`, `user_memory`,
-`invitation`, `consent`) so URLs, push payloads and mobile caches survive. New entities
-(`participant`, `conversation`, `draft`, `participant_milestone`, `need_share`, …) mint
-`uuidv7(created_at)` as the uuid migration did. `_shape_map(concept, old_key, new_id)` records every
-minted id for the verify script and is dropped at the end.
-
-**Prechecks (step 0b) — every one lists offending ids and RAISEs; all are expected to return zero rows on
-production after the rehearsal has been used to fix data with a small pre-migration script:**
-
-| Precheck | Why |
-|---|---|
-| no relationship with >1 non-terminal `Session` | A-Q3 partial unique |
-| no `Message` with `role IN ('AI','SYSTEM') AND senderId IS NOT NULL` | target CHECK (P3 §6) |
-| every `Agreement` has `proposalId IS NOT NULL` (one writer passes `strategyId \|\| null`, `stage4.ts:2153`) | target `agreement.proposal_id NOT NULL` (P1-10) |
-| `Agreement.status = 'PROPOSED'` rows: both `agreedByA AND agreedByB` → will map to `AGREED`; otherwise → **dropped** (an agreement nobody accepted is just its proposal, which still exists) — listed, not fatal | enum loses `PROPOSED` (P1-10) |
-| `User.name IS NOT DISTINCT FROM nullif(trim(coalesce(firstName,'')\|\|' '\|\|coalesce(lastName,'')),'')` | `user.name` becomes generated (P2); mismatches are fixed by writing the split names first |
-| every `gatesSatisfied` key is in the key table of step 7 | unknown key = unmodelled state |
-| every `ConsentRecord.targetType` ∈ {IDENTIFIED_NEED, EMPATHY_ATTEMPT, EMPATHY_DRAFT, STRATEGY_PROPOSAL} and `targetId` resolves | arc (P0-3 shape) |
-| `_ab_slot` tie report (step 5) | P1-8 |
-| vanished-member report (step 4a) | P1-9 |
-
-| Step | Copy (old → new) | Assertion (RAISE on failure) |
+| # | Section | Source |
 |---|---|---|
-| 0 | Record row counts of all 68 tables into `_row_counts` | — |
-| 1 | `user` ← `User` identity cols; `user_device` ← push/biometric; `user_preferences` ← 3 jsonb (defaults filled from `DEFAULT_*_PREFERENCES`); `ai_memory(GLOBAL_FACTS)` ← `globalFacts` | one `user` per `User`; one `user_preferences` per user; `name` precheck passed |
-| 2 | `relationship`, `relationship_member` ← same (role text → enum; unknown values RAISE) | counts equal |
-| 3 | `session` ← `Session` (status `WAITING` → `ACTIVE`; `PAUSED` → `ACTIVE` + `paused` milestone in step 7); `topic_frame*` carried | counts equal; A-Q3 precheck passed |
-| 4 | **`participant`** ← one row per distinct `(sessionId, userId)` in `StageProgress ∪ UserVessel ∪ EmpathyDraft ∪ Stage4ProposalSelection ∪ TendingCheckin ∪ Message.forUserId ∪ Message.senderId`, union `RelationshipMember × Session`; `display_name` ← `User.name`; `joined_at` ← `RelationshipMember.joinedAt`; `kind='human'` | every `(session, user)` referenced by any old `userId+sessionId` pair resolves to exactly one participant |
-| 4a | **Vanished members** (users hard-deleted under today's `user.delete`, `account-deletion.ts:160`; their `RelationshipMember`/`StageProgress`/`UserVessel` cascaded): detect sessions whose evidence names a user id with no `User` row — `Message.forUserId` (text, no FK, survives), `ReconcilerResult.guesserId/subjectId`, `ReconcilerShareOffer.userId`, `Stage4NeedDeclination.userId`, `TendingEntry.ownerUserId`. For each such id: **mint a tombstone `user`** (`email 'deleted+<id>'`, `deleted_at = now()`, names NULL) and a `participant(kind='human', user_id = tombstone, left_at = now(), display_name NULL)`; route the session to `ABANDONED` if non-terminal; `Message` rows with `senderId IS NULL AND forUserId IS NULL` (the leaver's own typed messages, `stream-turn-admission.ts:159` never set `forUserId`) are the leaver's private rows under D9 → **deleted** (counted and reported). Data impact: unknown until the precheck runs; expected small (9 users) | after 4a, every session in ACTIVE/RESOLVED has ≥2 participants (else RAISE — this is the list the owner must look at); zero `Message` rows without a resolvable participant |
-| 5 | **A/B slots** → participant ids: `getUserSlot` order (first `RelationshipMember` by `joinedAt`) materialised once into `_ab_slot(session_id, slot, participant_id)`. **Tie-break** (ties are the common case: `relationship.create({members:{create:[inviter, invitee]}})` writes both in one statement, `invitations.ts:396–407`): order by `joinedAt, ctid` — physical order, which is what Prisma returned to `getUserSlot` on a tie; and because that is a belief about physical order, **RAISE when a tie coincides with any `Agreement` of that session having `agreedByA <> agreedByB`** (the only case where the slot matters) — those are resolved by hand on the rehearsal copy (expected 0) | every 2-participant session has exactly one A and one B; the tie-report is empty or hand-resolved |
-| 6 | **`conversation`** ← one MAIN per participant (id minted); `conversation_read_state` ← `UserVessel.{lastViewedAt, lastSeenChatItemId, lastViewedShareTabAt, lastActiveAt, archivedAt}`; `ai_memory(SUMMARY, NOTABLE_FACTS)` ← `UserVessel.{conversationSummary (parsed from text, RAISE on invalid JSON), notableFacts}`; SUBCHAT conversations ← `Stage4SubChat` (ids kept) | one MAIN per participant; every `UserVessel` mapped |
-| 7 | **`participant_milestone`** ← `StageProgress.gatesSatisfied` decoded with the **key table below**; plus `StageProgress(status=COMPLETED, stage=n)` → the terminal milestone of stage n (0 `compact_signed`, 1 `feel_heard`, 2 `empathy_validated`, 3 `needs_shared`, 4 `choices_shared`); `Session.status PAUSED` → `paused` | every `StageProgress COMPLETED` row has its terminal milestone; unknown keys RAISE |
-| 8 | **`need_disposition`** ← `gatesSatisfied.{coveredNeedIds, skippedNeedIds, currentNeedId}` ∪ `Stage4NeedDeclination` (→ DECLINED), for needs that have a `need_share` row (step 12); dispositions on unshared needs are reported and dropped. `Stage4NeedCoverage` is **not** copied (computed; `v_need_coverage`) | every referenced need id exists in `need_share` or is in the dropped report |
-| 9 | **`message`** ← `Message` (ids kept): `conversation_id` = MAIN conversation of participant `(sessionId, coalesce(forUserId, senderId))`; `sender_participant_id` from `senderId`; `role` ∈ USER/AI/SYSTEM, `kind` from the six event roles; `source_attempt_id` for `EMPATHY_STATEMENT`/`VALIDATION_FEEDBACK` rows resolved by **`(sessionId, author)`** — the old `@@unique([sessionId, sourceUserId])` makes that the key (there is no hash on `EmpathyAttempt`); `Stage4SubChatMessage` → SUBCHAT conversations; `InnerWorkMessage` → `reflection_message` (**never** into `message`). **Delivered copies:** for every REVEALED/VALIDATED attempt, insert an `EMPATHY_STATEMENT` message into the **subject's** conversation (`source_attempt_id` set, `created_at = revealedAt`) — today's data has none (P0-2) | counts: `message` = `Message` + `Stage4SubChatMessage` + inserted delivered copies (reported); `reflection_message` = `InnerWorkMessage`; zero NULL `conversation_id`; role/sender CHECK precheck passed |
-| 10 | `draft` ← `EmpathyDraft` (EMPATHY, `about` = the other participant), `ValidationFeedbackDraft` (VALIDATION_FEEDBACK, `attempt` = the partner's attempt), `ReconcilerShareOffer.refinedContent` (SHARE_CONTEXT, `share_offer`) | unique per (participant, kind, arc) |
-| 11 | **`empathy_attempt`** ← `EmpathyAttempt` (ids kept): author ← `sourceUserId`, subject ← the other participant (RAISE if N≠2 — none today), `round` ← `revisionCount+1`, status `ANALYZING→HELD`, `NEEDS_WORK→AWAITING_SHARING`, `revealed_at` carried; `reconciler_result` ← `ReconcilerResult` by `(sessionId, guesserId, subjectId)` → attempt (ids kept; `subject_participant_id`); `reconciler_guidance` split; `context_share_offer` ← `ReconcilerShareOffer` (+`attempt_id` via result; `NOT_OFFERED/SKIPPED → EXPIRED`); `empathy_review` ← `EmpathyValidation` (`feedback` kept only where `feedbackShared`; unsent text → `draft(VALIDATION_FEEDBACK)`); `RefinementAttemptCounter` dropped | **every reveal still resolvable**: for every old REVEALED/VALIDATED attempt the new row is readable by its subject under the target policy (simulated with `SET LOCAL app.current_user_id`), and the subject's conversation holds its delivered copy; one current result per attempt; counter value = `count(reconciler_result)` per direction |
-| 12 | **`consent`** ← `ConsentRecord`: arc column by `targetType` (`IDENTIFIED_NEED→need_id`, `EMPATHY_ATTEMPT/EMPATHY_DRAFT→empathy_attempt_id`, `STRATEGY_PROPOSAL→proposal_id`); `targetId` text → uuid resolved against the target table; `requested_by` kept only for NEED/PROPOSAL/EMPATHY_ATTEMPT. **`need_share`** ← `ConsentedContent` (`need_id` via `consentRecordId → ConsentRecord.targetId` — `originalNeedId` was never written, census §3; `session_id` via `SharedVessel`; `category` from the need; **`participant_id` and `session_id` from the resolved need's owner** (pass 2 N-1); `revoked_at` from `consentActive/revokedAt`) **∪ (TS-7b, 2026-10-21) granted or revoked `ConsentRecord(IDENTIFIED_NEED)` rows whose need has no `ConsentedContent`**. The Stage 3 share-needs handler writes only those and never `ConsentedContent`. For these rows:<br>• `shared_text` = need label (ruling R19, a migration-time exception);<br>• `shared_at` = `decidedAt`;<br>• `revoked_at` = `revokedAt`, or `decidedAt` for a REVOKED record without one (reported, P20h);<br>• duplicate grants merge (R18): one `need_share` per need, every record still its own `consent`;<br>• prechecks P20e (target unresolved) and P20g (revoked before granted) RAISE. | `num_nonnulls(arc)=1` for every row; every `ConsentedContent` landed on exactly one `need_share` whose `participant_id` equals its need's owner (T-need-share-owner would refuse otherwise); every granted `IDENTIFIED_NEED` record's need maps to exactly one `need_share`; `need_share` count = `ConsentedContent` + needs shared by records; T-consent-owner holds for every migrated row (else RAISE: a consent naming a partner's row) |
-| 13 | **Proposals**: `proposal` ← `StrategyProposal` (ids kept; `captured_from_message_id` dropped); `proposal_need` ← `StrategyProposalNeed` ∪ resolvable `needsAddressed[]` labels (match on `IdentifiedNeed.need` within the session, case-insensitive), **both filtered to needs with a `need_share` row**; unmatched or unshared → `proposal.unresolved_need_labels`; `proposal_choice` ← `Stage4ProposalSelection`; `proposal_revision` ← `Stage4ProposalRevision` (`action` upper-snaked; `sessionId` asserted = proposal's then dropped; `messageId` dropped); `agreement` ← `Agreement` (via `SharedVessel.sessionId`; `PROPOSED` per precheck); **`agreement_party` ← `agreedByA/B` through `_ab_slot`**; `session_closure` ← `Stage4Closure` minus arrays; `StrategyRanking` dropped | every `agreedByX=true` produced a party row and T-agreement-parties (deferred) accepts the result at commit; `v_session_closure_items` reproduces each old array as a set restricted to shared needs (differences reported per session; a difference that is only an unshared need id, or (TS-7b, 2026-10-21) a revoked share's need id, is expected and listed; anything else RAISEs. Ruling R20 (TS-7b, 2026-10-21; owner may veto): coverage counts ACTIVE, REVISED and CONVERTED_TO_AGREEMENT proposals. A need the old rule covered only by fuzzy or description matching is also a named exception, listed per session with the need, the proposal and the explanation, never RAISEd. It qualifies only when every proposal that covered it in the old coverage row has a `needsAddressed` label that matched no need, or a non-empty `unresolved_need_labels`); `needsAddressed` label coverage reported |
-| 14 | **Follow-up**: `follow_up` ← `TendingEntry` (ids kept; `owner_participant_id` via `(sessionId, ownerUserId)`; `response_deadline_at` and **`summary` ← the entry's open `TendingCoordinationCycle.{responseDeadlineAt, resultSummary}`**); `follow_up_checkin` ← `TendingCheckin` with `payload` assembled (`jsonb_agg`) from `TendingResponse`, `TendingEntryOutcome`, `TendingNeedOutcome` (`needId` resolved to a `need_share` id or kept as label), `TendingAdjustment`, `TendingResponsePartialClosure`; **orphan `TendingResponse` rows (`checkinId IS NULL`) get a synthetic check-in** per `(entry, user)` with `submitted_at = response.submittedAt`; `follow_up_note` ← `TendingBetweenPeriodNote` (`selectedForCheckinId` → `carried_into_checkin_id`; notes with `consentToShareWithPartner` are copied into that check-in's `payload.carriedNotes[]`); `reminder` ← `TendingReminder`; `TendingCoordinationCycle` dropped | counts conserved per concept: Σ array lengths in payloads = Σ old child rows (incl. orphans); `v_follow_up_cycle.status` equals the old cycle status for every open cycle |
-| 15 | **Reflection**: `reflection` ← `InnerWorkSession` (ids kept; `summary_doc` parsed from text; `linked_at` ← `updatedAt` of the linking row), `takeaway` ← `SessionTakeaway`, `takeaway_link` ← `TakeawayLink`; `RecurringTheme`, `Insight` dropped | counts equal; **zero FKs from target §1.1–1.5 tables to `reflection*`** (catalog assertion in the trailer) |
-| 16 | **Wellbeing → `feature_state`**: one row per (user, feature) built with `jsonb_build_object`/`jsonb_agg` from `Meditation*`/`SavedMeditation`, `Gratitude*`, `NeedScore`/`NeedsAssessmentState`, `Person`/`PersonMention`; `GlobalLibraryItem`, `PreSessionMessage`, `UserEvent`, `Boundary`, `UserDocument`, `CommonGround` dropped (all unpopulated per census §2) | Σ array lengths per feature = old row counts per user; each `doc` validates against its zod contract (verify script, post-migration) |
-| 17 | **26 FK-less text ids**: each either became a real FK above (`forUserId`, `guesserId/subjectId`, `ReconcilerShareOffer.userId`, `Stage4NeedDeclination.*`, `Stage4ProposalRevision.actorUserId`, `Stage4Closure.closedByUserId`, `TendingEntry.ownerUserId`, `TendingNeedOutcome.needId/sourceUserId` (inside payload, resolved), `SavedMeditation.conversationId` (document), `PersonMention.*` (document), `Stage4SubChat.anchorId` → `anchor_proposal_id` where it was a proposal id) or was dropped (`parentProposalId`, `capturedFromMessageId`, `Stage4ProposalRevision.messageId`, `Stage4NeedCoverage.*`, `linkedConflictId` ×2, `associatedSessionId`, `contributedBy`; `turnId` stays text) | every resolved value cast to uuid and found; unresolvable non-null values RAISE with table/column/count |
-| 18 | `brain_activity` ← `BrainActivity` (`innerWorkSessionId` → `reflection_id`; `participant_id` NULL for history) | counts equal |
-| 19 | Drop the 68 old tables and 51 old enum types; drop `_shape_map`, `_ab_slot`, `_row_counts` | after every assertion above |
-| 20 | **Trailer (same transaction)**: CHECKs, `intensity` domain, `sql_*` partial indexes, generated columns, triggers, `app.*` functions, views (`security_invoker`), `milestone` seed (ordinals from today's stage order; `self_assertable` flags), grants | catalog assertions inside the transaction: every FK to `user` is RESTRICT; `need_share → need` is RESTRICT; no FK into `reflection*` except `brain_activity`; every jsonb column has a `jsonb_typeof` CHECK. (`prisma migrate diff … --script` empty and `prisma db pull` matching `schema.prisma` are **CI gates** — §2 step 7, §7 issue 6 — not something the migration can run; pass 2 N-8. The gate is `backend/scripts/target-shape/check-schema.sh`; its `--db <name>` mode points it at the migrated scratch database. The `db pull` comparison is two-stage, because `db pull` renders the `sql_` partial indexes and flips single-column ones to 1:1 relations: exact on a database without the `sql_` objects, sql_-only difference with them — target §5, verified TS-6, 2026-10-19, PG 18.6 / Prisma 7.10. The generated columns and `sql_` indexes are `backend/scripts/target-shape/sql-only.sql`, appended verbatim; the CREATE DDL comes from a copy of `schema.prisma` without the `consent.target_kind` `@default`) |
+| 0 | **Preamble**: refuse unless the database is empty (no table `"Session"` — the old shape, with the cutover instruction in the hint —, no schema `app`, no relation in `public` but `_prisma_migrations`); the roles assertion (`mwf_app/job/ops/auth` exist) and `pg_has_role(current_user, 'mwf_job', 'SET')`, both from TS-1's migration; `CREATE SCHEMA app` + `USAGE` grants; `app.current_user_id()` | `backend/scripts/target-shape/preamble.sql` |
+| 1 | Enums and the 47 tables: `prisma migrate diff --from-empty --to-schema <copy of schema.prisma without the consent.target_kind @default> --script` (the default references other columns; §T2 re-adds the column GENERATED) | `schema.prisma` |
+| 2 | `milestone` seed (13 rows; reference data) | `backend/scripts/target-shape/gen/maps.ts` |
+| 3 | **Trailer**: T1 `intensity` domain · T2 `sql-only.sql` verbatim (generated columns, `sql_` indexes) · T3 CHECKs · T4 `app.*` functions — `is_member`/`partner_user_id` (TS-1's signatures, re-based on `participant`) created like every other definer helper and handed to `mwf_job` in the TS-1 order (GRANT CREATE → ALTER OWNER → REVOKE CREATE → SET ROLE `mwf_job` for REVOKE/GRANT EXECUTE) · T5 triggers (T-* and `touch_updated_at` ×35) · T6 views · T7 grants (column-level for `mwf_job`) · T8 catalog assertions (plan step 20: FK-to-user RESTRICT, `need_share → need` RESTRICT, no FK into `reflection*`, `jsonb_typeof` CHECK on every jsonb column, 35 `touch_updated_at`, views `security_invoker`, pinned `search_path`, no PUBLIC EXECUTE, definer functions owned by `mwf_job`, 13 milestones) | `backend/scripts/target-shape/trailer.sql` |
 
-**Step 7 key table** — built from a grep of every key written to `gatesSatisfied` in `backend/src` (adversarial P1-7; the census called the column ad hoc, and it is):
+There are no invariant re-checks over existing rows: the database is empty, and every invariant is
+a trigger or CHECK that sees every row from the first write.
 
-| Old key (sites) | Becomes |
-|---|---|
-| `compactSigned` + `signedAt` (13/9) | milestone `compact_signed` @ `signedAt` |
-| `invitationSent` (2) | milestone `invitation_sent` @ `StageProgress.startedAt` |
-| `feelHeardConfirmed` + `feelHeardConfirmedAt`/`confirmedAt` (4/5/5) | milestone `feel_heard` @ the timestamp |
-| `feelHeardCheckOffered` (1) | **dropped** — an AI hint flag, not a milestone; the prompt layer recomputes it |
-| `finalEmotionalReading` (1) | **dropped** — always written `null` (`messages.ts:289`); live readings are `mood_reading` |
-| `partnerConsented`, `partnerValidated` (2/2) | **derived** — the partner's `empathy_attempt` state; not copied |
-| `empathyValidated` (3) | milestone `empathy_validated` @ `StageProgress.completedAt` |
-| `needsConfirmed` (2), `needsShared` (12), `needsValidated` (6) | milestones `needs_confirmed`, `needs_shared`, `needs_validated` |
-| `readyToRank` (7), `rankingSubmitted` (1) | **dropped with ranking** (A-Q4-adjacent; not in the product flow). The Stage-4 completion gate `sessions.ts:524` (`rankingSubmitted`, `agreementCreated`) is replaced by `choices_shared` + a `session_closure` row → `closed` |
-| `selectionSubmitted` (3) | milestone `choices_shared` |
-| `phase` (7) | milestone `repair_walkthrough_started` when `phase <> 'INVENTORY'`; nothing else |
-| `currentNeedId`, `coveredNeedIds`, `skippedNeedIds` (3/3/3) | `need_disposition` (step 8) |
-| `partner`/`own` nested objects (`shared-context.ts:60–61`) | read-side projections of the above; not stored |
-
-**Old tables are dropped in the same transaction** as the data move and before the trailer. The
-preserved backup is the rollback, not the old tables; leaving 68 tables behind invites a reader to
-keep using them; and `migrate diff` cannot be empty with them present. The rehearsal (§6) keeps a
-restored copy with the old tables for a week for forensic comparison.
+**Proof** (`backend/scripts/target-shape/run-baseline.sh <ts7_name>`): generator `--check` →
+`CREATE DATABASE` → `migrate deploy` → `check-schema.sh --db` (validate, drift empty, pull delta
+`sql_`-only, `sql_` names complete) → a second `migrate deploy` is a no-op → `seed-target-fixture.sql`
+(a two-session target fixture through the real triggers) → `smoke-baseline.sql` (all 12 views as
+`mwf_app`) → `functions-caller-tests.sql` (17 per-caller tests as `mwf_app`/`mwf_job` logins).
+`--as-migrator` builds a database owned by `mwf_migrator` and deploys as it; `--cutover` proves the
+§6 path end to end from an old-shape database built from the `phoenix/base` history; `--dev` keeps
+the branch's development databases (`docs/development/local-setup.md`).
 
 ## 4. Verification
 
 | Layer | What | How |
 |---|---|---|
-| In-migration | every precheck and assertion in §3 | `RAISE EXCEPTION` inside the one transaction; zero tolerance |
-| Content-hash before/after | identity of every reference across the rename: each new row rendered with each id replaced by the content hash of the row it names, compared as a multiset to the old rendering **modulo the mapping** (`_shape_map` + §3's concept table). Rows that merge (5 tending tables → one payload) are compared after `jsonb` normalisation. Rows the migration *adds* (delivered `EMPATHY_STATEMENT` copies, synthetic check-ins, tombstone users/participants) are allow-listed by concept and counted | `backend/scripts/verify-target-migration.sql`, `-v phase=before|after`, extended from `verify-uuid-migration.sql`; run in rehearsal and on the production host before `compose up` |
+| In-migration | the preamble guard and the T8 catalog assertions of §3 | `RAISE EXCEPTION` inside the one transaction; zero tolerance |
+| ~~Content-hash before/after~~ | **cancelled by OD7 (2026-10-26)**: no data is moved, so there is no identity to verify | — |
+| Baseline proof | generator determinism; gate; second deploy no-op; target fixture; view smoke as `mwf_app`; 17 per-caller tests; the cutover path from an old-shape database | `backend/scripts/target-shape/run-baseline.sh` (§3) |
 | Golden harness (`work-a39h.2.4`) — what is and is not identical | The two recorded scenarios (`session-read`, `empathy-reveal`) redden wholesale on rename. Plan: (1) before the re-shape, record a **normalised** baseline: HTTP bodies for both scenarios, and row snapshots projected through `old_concept_*` views over the old tables that already present participant-centred rows; (2) after, the same views are redefined over the new tables; (3) compare with a **per-scenario allow-list**, not "byte-identical" (adversarial P1-14). **`session-read`**: identical except `StageProgressDetailDTO.gatesSatisfied` (now derived; keys `feelHeardCheckOffered`, `readyToRank`, `rankingSubmitted`, `finalEmotionalReading` absent — asserted absent, everything else asserted equal) and `ConsentRecordDTO.targetType` (5 values, asserted ⊆ old). **`empathy-reveal`**: old body ⊆ new body — `round`, `attemptId` added on reveal payloads; asserted as a subset match plus an exact list of added keys. Concept-view row diffs: identical modulo the added-row concepts above | `GOLDEN_UPDATE=<scenario>` one scenario at a time, per the harness README; the normaliser gains a rename map |
 | New golden scenarios (required before cutover) | **R1 reflection-never-crosses**: co-participant's full session read and prompt context (`brain_activity.input` of the turn) contain no reflection text. **R2 co-participant-cannot-read-unrevealed**: an attempt in HELD/AWAITING_SHARING/REFINING/READY is absent from the subject's reads; `v_empathy_direction_status` shows the status with no content; present after REVEALED **and still present after the author's next round supersedes it**. **R3 N=2 reveal fires on all-ready**: two attempts reach READY in either order; reveal occurs exactly once; both subjects' conversations gain an `EMPATHY_STATEMENT` row. **R4 choices and needs hidden until shared**: partner `proposal_choice` invisible before `choices_shared`; `need.label/evidence` never readable by the partner; `proposal_need`, `v_need_coverage`, `v_session_closure_items` name only `need_share` ids. **R5 tombstone**: account deletion leaves delivered messages, revealed attempts, `need_share` and agreements readable to the partner; private rows gone; `participant.display_name` NULL; `brain_activity` for the leaver gone; live session ABANDONED. **R6 author sees status only** (P1-15): the author's full read and prompt context contain no `reconciler_result` detail, no `context_share_offer` text, no unsent `empathy_review.feedback`; only `v_empathy_direction_status` rows and `reconciler_guidance`. **R7 declined offer leaves no trace**: after the subject declines, the author's reads (incl. `consent`) are unchanged from before the offer | recorded first against the **current** shape using the `old_concept_*` views (so they fail today where current code leaks — that is information), then re-recorded on the target |
 | Fixture pipeline (`work-a39h.6.1`) — **critical path** | `state-factory.ts` (53 tooling writes of `StageProgress` alone, census §11) rewritten to build participant-centred state through the application's own services where possible and through `pg` otherwise; `TargetStage`s expressed as milestone sets | blocks R1–R7 and the re-record; start first |
@@ -178,23 +134,28 @@ memory → deletion → realtime → dashboard. Each cluster lands behind the sa
 is one PR train on a `target-shape` integration branch, merged to `main` once (that merge is the
 deploy — §6). Only `rankStrategies*` removal touches mobile.
 
-## 6. Rollout on Lightsail
+## 6. Cutover on Lightsail
 
-`main` auto-deploys (`.github/workflows/aws-deploy.yml`, `on: push: branches: [main]`), and
-`deploy.sh` stops the API, takes `backup.sh preserved`, runs `migrate deploy`, starts the API and
-gates on health. **The merge to `main` is the deploy.**
+OD7, 2026-10-26: production's data is not preserved. `main` auto-deploys
+(`.github/workflows/aws-deploy.yml`) and `deploy.sh` runs `migrate deploy` itself, but `deploy.sh`
+cannot apply the baseline to a database that still has the old shape — the baseline's preamble
+refuses it. The cutover is therefore an **operator sequence** run before (or as) the merge that
+deploys the target image; afterwards `deploy.sh`'s own `migrate deploy` finds nothing pending.
 
 | # | Step | Command / artefact | Gate |
 |---|---|---|---|
-| 1 | Freeze: no other backend merges to `main` from rehearsal start to smoke green | branch protection note | — |
-| 2 | **Preserved backup** of production | `/opt/mwf/backup.sh preserved` (operator-run, in addition to the one `deploy.sh` takes) | artefact in S3 with `SHA256SUMS` |
-| 3 | **Rehearsal** on a restored copy | `restore.sh <dump> restore_target` → `psql -v phase=before -f verify-target-migration.sql` → `migrate deploy` against `restore_target` → `-v phase=after` → `infra/aws/verify.sql` → golden suite against it; **fix-data script** derived from the precheck reports, re-run until zero RAISE | all green; wall-clock measured (expect seconds) |
-| 4 | Keep the rehearsal database for 7 days | forensic "before" copy with the old tables | — |
-| 5 | Merge the `target-shape` train to `main` | PR; CI green incl. harness and `migrate diff` empty | 3 green |
-| 6 | Deploy runs | `deploy.sh`: API stopped → preserved backup → `migrate deploy` (**one file; all-or-nothing**) → API up → health | script exit 0 |
-| 7 | Smoke | `smoke.cjs`; `verify.sql`; `verify-target-migration.sql -v phase=after` against the `before` snapshot a pre-deploy hook took on production immediately before step 6; scripted two-user walk to reveal | all green |
+| 1 | Freeze: no other backend merges to `main` from cutover start to smoke green | branch protection note | — |
+| 2 | **Backup** (kept, although the data is not carried over) | `/opt/mwf/backup.sh preserved` | artefact in S3 with `SHA256SUMS` |
+| 3 | **Stop the API** | `compose stop api` | nothing writes |
+| 4 | **Drop the old shape** | `psql -v ON_ERROR_STOP=1 -d <db> -v target_db=<db> -f backend/scripts/target-shape/drop-old-objects.sql` — one transaction; refuses unless `<db>` is in the `target_db` allow-list, table `"Session"` exists and table `participant` does not; drops the 68 old tables, 51 enum types, TS-1's `app` objects and `_prisma_migrations`; asserts `public` is empty | script exit 0 |
+| 5 | **`prisma migrate deploy`** | applies the single baseline (one transaction) | exit 0; `_prisma_migrations` = 1 row |
+| 6 | **Deploy the image** | merge the `target-shape` train to `main` (`deploy.sh`: its `migrate deploy` is a no-op) | health green |
+| 7 | **Smoke** | `smoke.cjs`; `verify.sql`; `check-schema.sh --db`-equivalent drift check (`migrate diff` empty); scripted two-user walk to reveal | all green |
 | 8 | Mobile OTA for the `rankStrategies*` removal (`ota-update.yml`) | after 7 | — |
-| 9 | **Rollback** (only before step 8, only if 6 or 7 fails): `compose stop api`; `restore.sh <preserved dump> mwf replace-production`; redeploy previous image (`/var/lib/mwf/previous-image`); `verify.sql`. Because the migration is one transaction, a failure in step 6 leaves the database already at the old shape and only the image needs reverting | explicit operator decision; `deploy.sh` never reverses migrations itself |
+| 9 | **Rollback** (only before step 8): `compose stop api`; `restore.sh <backup> mwf replace-production`; redeploy the previous image (`/var/lib/mwf/previous-image`); `verify.sql`. A failure in step 5 leaves the database empty (the baseline is one transaction), so restoring the backup is the rollback | explicit operator decision |
+
+Rehearsal: `run-baseline.sh --cutover <ts7_name>` runs steps 4–5 and the full proof on a database
+built from the old migration history and seeded through the current-shape factory (TS-7c log).
 
 ## 7. Work breakdown (for beads; epic `target-shape`, label `project:meet-without-fear`)
 
@@ -206,23 +167,23 @@ gates on health. **The merge to `main` is the deploy.**
 | 4 | `old_concept_*` views + normaliser rename map + per-scenario allow-lists; record normalised baselines for `session-read`, `empathy-reveal` | baselines and allow-lists committed; harness green on current shape | 3 |
 | 5 | New golden scenarios R1–R7 recorded on the current shape | seven scenarios committed; failures on current code documented as findings, not fixed here | 3, 4 |
 | 6 | `schema.prisma` for the target (snake_case `@map`s, enums, composite ids, relations with `onUpdate: NoAction`, generated columns declared as `db pull` renders them, no `sql_`-named indexes) | `backend/scripts/target-shape/check-schema.sh` passes: `prisma validate`; `migrate diff --from-config-datasource --to-schema` against a DB built by the migration is empty; `prisma db pull` matches `schema.prisma` (after normalisation) on a database without the `sql_` objects, and differs only by the `sql_` objects on one with them — the single-stage "`db pull` output matches `schema.prisma`" is superseded: `db pull` renders partial indexes and flips single-column ones to 1:1 (target §5, verified TS-6, 2026-10-19, PG 18.6 / Prisma 7.10) | — |
-| 7 | Migration generator `gen-target-migration.ts` + the single migration file (§3 steps 0–20) and the fix-data script template | applies on a restored production copy with zero RAISE; all §3 assertions pass | 6 |
-| 8 | `verify-target-migration.sql` (content-hash before/after modulo mapping; added-row allow-list; payload/document zod validation) | before/after on the rehearsal copy reports zero identity differences | 7 |
+| 7 | Baseline generator `gen-target-migration.ts` + the single baseline migration (§3), `drop-old-objects.sql` and `run-baseline.sh` (OD7, 2026-10-26: no data move; the TS-7/7b data-move generator and fix-data template are superseded) | `run-baseline.sh <ts7_*>`: deploy ok, gate passed, 17 per-caller tests + second deploy no-op, view smoke; `--cutover` green from an old-shape database | 6 |
+| 8 | ~~`verify-target-migration.sql`~~ — **cancelled (OD7, 2026-10-26)**: no data is moved, so there is no before/after identity to verify | — | — |
 | 9 | App rewrite I: identity/participant resolution, context builder entry point, chat pipeline, session list | harness `session-read` green on target (allow-list); no `forUserId` in `backend/src` | 6 |
 | 10 | App rewrite II: empathy/reconciler (immutable rounds, `empathy_set_status` with gate + delivered copy, `v_empathy_direction_status`), consent arc | `empathy-reveal`, R2, R3, R6, R7 green on target | 9 |
 | 11 | App rewrite III: needs (`need_share`), proposals/agreements/closure/follow-up (choices, `agreement_party`, payload check-ins); ranking endpoints removed | R4 green; `rankStrategies*` gone from contracts; tending job runs against `follow_up` | 9 |
 | 12 | App rewrite IV: reflection (no `prismaAny`), wellbeing → `feature_state`, memory/preferences, deletion/retention via `app.anonymize_*`, brain dashboard | R1, R5 green; `no-prisma-any` lint passes; 39 mocking suites rewritten or deleted | 9 |
 | 13 | Encryption field map for target columns per the writer-principal rule (W13 prerequisite) | middleware tests green against target column names; `contentHash` still written | 9 |
-| 14 | Rehearsal on Lightsail restored copy (§6 steps 2–4) and runbook | rehearsal log with timings; verify scripts green; rollback rehearsed once on the copy | 7, 8, 10, 11, 12 |
-| 15 | Cutover: merge train to `main`, smoke, mobile OTA (§6 steps 5–8) | production on target; smoke green; `migrate diff` empty against production | 14 |
+| 14 | Cutover rehearsal (§6 steps 2–5) on a restored copy of production, and the runbook | `drop-old-objects.sql` + `migrate deploy` green on the copy with timings; smoke green; rollback (restore + previous image) rehearsed once on the copy | 7, 10, 11, 12 |
+| 15 | Cutover (§6 steps 1–8): backup → stop API → `drop-old-objects.sql` → `migrate deploy` → deploy image → smoke → mobile OTA | production on target with one `_prisma_migrations` row; smoke green; `migrate diff` empty against production | 14 |
 | 16 | Phase 3 W8–W10 on the target: enable/force RLS, policies from target §1, shadow mode, per-tier enforcement | CI structural assertions (coverage, FK-to-user RESTRICT, no FK into `reflection*`) green; R1–R7 green under enforcement | 15, 1 |
 
 ## 8. Risks
 
 | # | Risk | Mitigation already in the plan |
 |---|---|---|
-| 1 | A data row violates a new invariant (AI message with a sender, one-participant ACTIVE session, unresolvable `targetId`, nullable `Agreement.proposalId`, a vanished member) and the migration RAISEs on production | every such case is a **named precheck** that RAISEs in rehearsal first on a restored copy (§6.3) with ids listed; data is fixed by the pre-migration script; vanished members have a defined mapping (step 4a); the migration itself stays zero-tolerance |
-| 2 | The `gatesSatisfied` → milestone decoding loses a state the UI depends on | the key table is built from a grep of every writer, each key has a decision, unknown keys RAISE; the scenario allow-lists name exactly which derived keys are expected to disappear, so an unexpected loss fails the harness |
+| 1 | ~~A data row violates a new invariant and the migration RAISEs on production~~ — **moot under OD7** (no data is moved); the remaining risk is `drop-old-objects.sql` meeting an unexpected object (a harness view, a hand-made table) | the drop is RESTRICT and in one transaction, so an unknown dependent fails it and changes nothing; the rehearsal (row 14) runs it on a restored copy first |
+| 2 | ~~The `gatesSatisfied` → milestone decoding loses a state the UI depends on~~ — **moot under OD7** (nothing is decoded; new sessions write milestones directly) | the key table is built from a grep of every writer, each key has a decision, unknown keys RAISE; the scenario allow-lists name exactly which derived keys are expected to disappear, so an unexpected loss fails the harness |
 | 3 | The harness re-record masks a behavioural regression | baselines are recorded on the **current** shape through concept views first (§4), one scenario at a time; comparisons use explicit per-scenario allow-lists (subset + named additions), so the re-record can only change what the list says |
 | 4 | Application rewrite is larger than the schedule (≈1,000 call sites; 39 mocking suites) | clusters land behind existing contracts in dependency order (§5); only `rankStrategies*` removal touches mobile; the integration branch is not merged until the whole train is green |
 | 5 | Rollback after users have written to the new shape loses those writes | the API is stopped from backup to health check; the migration is one transaction, so a failed deploy leaves the old shape intact; rollback is permitted only before the mobile OTA (§6.9) and is an explicit operator step |
