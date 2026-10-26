@@ -14,7 +14,7 @@
 import type { Express } from 'express';
 import * as http from 'http';
 import request from 'supertest';
-import { applyConceptViews, CONCEPT_NAMES, ConceptName, CURRENT_SHAPE_SQL, takeConceptSnapshot } from './concept-views';
+import { applyConceptViews, CONCEPT_NAMES, ConceptName, conceptSqlForShape, takeConceptSnapshot } from './concept-views';
 import { dropDatabase, mark, openMarkerClient } from './db';
 import { restoreFixture, RestoredFixture } from './fixtures';
 import type { FreshWindow } from './normalize';
@@ -213,8 +213,8 @@ export async function createHarness(opts: {
   /**
    * Apply the `old_concept_*` views (`concept-views/`) to the run database and
    * snapshot them around every step, for the normalised baseline
-   * (`recordOrVerifyConcept`). `true` uses the current-shape SQL; a path picks
-   * another concept SQL file (the target-shape one, after the rebuild).
+   * (`recordOrVerifyConcept`). `true` uses the SQL for the schema in use
+   * (`conceptSqlForShape`); a path picks another concept SQL file.
    * `views` narrows the snapshot to those concepts (default: all of them;
    * `TS4_CONCEPT_NAMES` for the two scenarios recorded before TS-5's views).
    */
@@ -242,7 +242,10 @@ export async function createHarness(opts: {
 
   // After the restore (and its rebase), before anything is snapshotted. On
   // failure the run database must go, as `restoreFixture` does for its own.
-  const conceptSql = opts.concept === true ? CURRENT_SHAPE_SQL : opts.concept ? (opts.concept.sql ?? CURRENT_SHAPE_SQL) : null;
+  // The concept SQL follows the schema in use (current-shape.sql or, on the
+  // target branch, target-shape.sql — TS-9) unless the scenario names one.
+  const conceptSql =
+    opts.concept === true ? conceptSqlForShape() : opts.concept ? (opts.concept.sql ?? conceptSqlForShape()) : null;
   let conceptInitial: Snapshot | undefined;
   if (conceptSql) {
     try {

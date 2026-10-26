@@ -13,14 +13,21 @@
  * - `fixture-scenarios/current-shape.ts` — writes a scenario into today's
  *   tables (StageProgress rows, `gatesSatisfied` JSON, stage integers,
  *   `Session.status`, …), reproducing the pre-rebuild factory's rows exactly so
- *   recorded goldens stay valid. The target-shape writer replaces it.
+ *   recorded goldens stay valid.
+ * - `fixture-scenarios/target-shape.ts` — writes the same scenario into the
+ *   target tables (participant, conversation, participant_milestone, …)
+ *   through `pg` (TS-9). Which writer runs is decided by the schema in use
+ *   (`golden/shape.ts`).
  *
  * This file is the stable public surface (`StateFactory`, `stateFactory`,
  * `TargetStage`, `UserConfig`, `StateFactoryOptions`, `StateFactoryResult`).
  */
 
+import { Client } from 'pg';
 import { prisma } from '../lib/prisma';
-import { writeCurrentShape } from './fixture-scenarios/current-shape';
+import { writeCurrentShape, type CurrentShapeResult } from './fixture-scenarios/current-shape';
+import { writeTargetShape } from './fixture-scenarios/target-shape';
+import { isTargetShape } from './golden/shape';
 import { scenarioFor } from './fixture-scenarios/scenarios';
 import { TargetStage } from './fixture-scenarios/target-stage';
 
@@ -94,8 +101,7 @@ export class StateFactory {
     const scenario = scenarioFor(targetStage, { a: userA.name, b: userB?.name });
     const users = userB ? [userA, userB] : [userA];
 
-    return prisma.$transaction(async tx => {
-      const written = await writeCurrentShape(tx, scenario, users);
+    const write = async (written: CurrentShapeResult): Promise<StateFactoryResult> => {
       const [userARecord, userBRecord] = written.users;
 
       const result: StateFactoryResult = {
@@ -121,7 +127,27 @@ export class StateFactory {
       }
 
       return result;
-    });
+    };
+
+    if (isTargetShape()) {
+      // Target shape: through pg in one transaction, never through the app's
+      // Prisma client (the fixture must not depend on the code under test).
+      const db = new Client({ connectionString: process.env.DATABASE_URL });
+      await db.connect();
+      try {
+        await db.query('BEGIN');
+        const written = await writeTargetShape(db, scenario, users);
+        await db.query('COMMIT');
+        return write(written);
+      } catch (e) {
+        await db.query('ROLLBACK').catch(() => undefined);
+        throw e;
+      } finally {
+        await db.end();
+      }
+    }
+
+    return prisma.$transaction(async tx => write(await writeCurrentShape(tx, scenario, users)));
   }
 
   private pageUrl(sessionId: string, user: { id: string; email: string }): string {

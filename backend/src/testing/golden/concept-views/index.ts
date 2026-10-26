@@ -24,6 +24,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { DbTarget, withClient } from '../db';
+import { isTargetShape } from '../shape';
 import { Snapshot, takeSnapshot } from '../snapshot';
 
 export const CONCEPT_VIEW_PREFIX = 'old_concept_';
@@ -31,6 +32,13 @@ export const CONCEPT_VIEW_PREFIX = 'old_concept_';
 export const CONCEPT_CHECK_PREFIX = 'concept_check_';
 
 export const CURRENT_SHAPE_SQL = path.join(__dirname, 'current-shape.sql');
+/** The same views over the target tables (TS-9): same names, same column sets. */
+export const TARGET_SHAPE_SQL = path.join(__dirname, 'target-shape.sql');
+
+/** The concept SQL for the schema in use (`../shape.ts`). */
+export function conceptSqlForShape(): string {
+  return isTargetShape() ? TARGET_SHAPE_SQL : CURRENT_SHAPE_SQL;
+}
 
 export interface ConceptViewSpec {
   /** Columns that identify one row — the diff key. Must be unique per row. */
@@ -128,7 +136,7 @@ export function viewsDefinedIn(sql: string): string[] {
 export async function applyConceptViews(
   target: DbTarget,
   database: string,
-  sqlPath: string = CURRENT_SHAPE_SQL,
+  sqlPath: string = conceptSqlForShape(),
 ): Promise<void> {
   const sql = fs.readFileSync(sqlPath, 'utf8');
   await withClient(

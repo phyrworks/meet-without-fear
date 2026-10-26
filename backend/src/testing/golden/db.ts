@@ -457,6 +457,13 @@ export async function rebaseTimestamps(
   t: DbTarget,
   database: string,
   intervalSql: string,
+  /**
+   * Run with triggers off (`session_replication_role = replica`, superuser).
+   * The target shape has BEFORE UPDATE triggers — `touch_updated_at` on 35
+   * tables would stamp every rebased row with now() — that a rebase must not
+   * fire (TS-9). The current shape has none, so it leaves this off.
+   */
+  opts: { disableTriggers?: boolean } = {},
 ): Promise<{ statements: number }> {
   const cols = await listTimestampColumns(t, database);
   const byTable = new Map<string, string[]>();
@@ -467,6 +474,7 @@ export async function rebaseTimestamps(
   return withClient(
     t,
     async c => {
+      if (opts.disableTriggers) await c.query(`SET session_replication_role = replica`);
       let statements = 0;
       for (const [table, columns] of byTable) {
         const sets = columns.map(col => `"${col}" = "${col}" + $1::interval`).join(', ');
@@ -497,6 +505,8 @@ export async function rebaseJsonTimestamps(
   t: DbTarget,
   database: string,
   shiftSeconds: number,
+  /** See `rebaseTimestamps`. */
+  opts: { disableTriggers?: boolean } = {},
 ): Promise<{ rowsUpdated: number }> {
   const ISO_Z = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$/;
 
@@ -516,6 +526,7 @@ export async function rebaseJsonTimestamps(
   return withClient(
     t,
     async c => {
+      if (opts.disableTriggers) await c.query(`SET session_replication_role = replica`);
       const cols = await c.query<{ table_name: string; column_name: string }>(
         `SELECT c.table_name, c.column_name
          FROM information_schema.columns c

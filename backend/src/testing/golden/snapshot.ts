@@ -101,6 +101,11 @@ function selectList(cols: ColumnMeta[]): string {
   return cols
     .map(c => {
       const q = `"${c.column}"`;
+      // The target shape is timestamptz throughout (TS-9). Its `::text`
+      // carries the session's offset (`…+00`), which no stamp pattern here
+      // expects; rendered at UTC it is the same naive text the current shape's
+      // `timestamp` columns produce, so both shapes rank on one basis.
+      if (c.dataType === 'timestamp with time zone') return `(${q} AT TIME ZONE 'UTC')::text AS ${q}`;
       if (c.dataType.startsWith('timestamp')) return `${q}::text AS ${q}`;
       if (c.udtName === 'vector')
         return `(CASE WHEN ${q} IS NULL THEN NULL ELSE 'vector(' || array_length(${q}::real[], 1) || ')' END) AS ${q}`;
