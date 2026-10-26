@@ -163,7 +163,33 @@ export interface FixtureMaskRule extends RuleBase {
   baseline: unknown;
 }
 
+/**
+ * TARGET SHAPE ONLY (TS-9 fix round 1). A byte-level step's SQL `trace`
+ * recorded on the current shape, compared on the target through a relation
+ * rename map instead of byte-for-byte (relation names and plans are
+ * shape-bound; the README's contract fields are not):
+ *   - the run's trace is complete;
+ *   - protocol: every DATA statement is `extended` (bind parameters — the
+ *     SQL-injection tripwire); transaction-control statements (BEGIN, COMMIT,
+ *     ROLLBACK, SET_TX) may be `simple` — the identity-binding wrapper sends
+ *     them without parameters, and they carry no values;
+ *   - isolation: the set of explicit isolation levels is unchanged;
+ *   - relations: every relation the run touches is the image of one the
+ *     baseline touched (`relationMap`) or is named in `addedRelations` with
+ *     its reason;
+ *   - rowsRead: for steps whose label starts with `steps`, the run reads
+ *     exactly as many rows of the mapped relation as the baseline did of
+ *     `relation` (the same concept read the same way).
+ */
+export interface TraceMappedRule extends RuleBase {
+  kind: 'traceMapped';
+  relationMap: Record<string, string[]>;
+  addedRelations: Record<string, string>;
+  sameRowsRead: Array<{ steps: string; relation: string; as: string }>;
+}
+
 export type AllowRule =
+  | TraceMappedRule
   | FixtureMaskRule
   | AbsentKeysRule
   | AddedKeysRule

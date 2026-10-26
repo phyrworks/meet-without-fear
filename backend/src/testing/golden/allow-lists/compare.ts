@@ -15,6 +15,7 @@ import type {
   MayBeAbsentRule,
   ReplacedEntryRule,
   TiedOrderRule,
+  TraceMappedRule,
 } from './types';
 
 function brief(v: unknown): string {
@@ -213,6 +214,55 @@ export function alignTies<T>(expected: T, actual: T): [T, T] {
   return [e as T, a as T];
 }
 
+/** `steps.N.<…>` → the baseline's `steps[N].label`. */
+function labelOf(root: unknown, p: string[]): string {
+  if (p[0] !== 'steps' || !isObj(root)) return '';
+  const steps = (root as { steps?: Array<{ label?: string }> }).steps;
+  return steps?.[Number(p[1])]?.label ?? '';
+}
+
+type TraceLike = {
+  complete?: boolean;
+  rowsRead?: Record<string, number> | string;
+  shapes?: Array<{ isolation?: string | null; statements?: Array<{ kind: string; protocol: string; relations: string[] }> }>;
+};
+
+const TX_CONTROL = new Set(['BEGIN', 'COMMIT', 'ROLLBACK', 'SET_TX']);
+
+/** `traceMapped` (TS-9 fix round 1) — see TraceMappedRule. Returns the violations. */
+export function compareMappedTrace(e0: unknown, a0: unknown, rule: TraceMappedRule, label: string): string[] {
+  const e = (e0 ?? {}) as TraceLike;
+  const a = (a0 ?? {}) as TraceLike;
+  const out: string[] = [];
+  if (a.complete !== true) out.push('trace: the run\'s trace is not complete');
+  const statements = (t: TraceLike) => (t.shapes ?? []).flatMap(sh => sh.statements ?? []);
+  for (const st of statements(a)) {
+    if (st.protocol !== 'extended' && !TX_CONTROL.has(st.kind)) {
+      out.push(`trace: a ${st.kind} on [${st.relations.join(', ')}] used protocol ${st.protocol} (data statements must bind parameters)`);
+    }
+  }
+  const isolations = (t: TraceLike) =>
+    [...new Set((t.shapes ?? []).map(sh => sh.isolation).filter((x): x is string => !!x))].sort().join(',');
+  if (isolations(a) !== isolations(e)) out.push(`trace: isolation levels [${isolations(e)}] → [${isolations(a)}]`);
+  const allowed = new Set<string>(Object.keys(rule.addedRelations));
+  const baseRelations = new Set(statements(e).flatMap(st => st.relations));
+  for (const r of baseRelations) {
+    const mapped = rule.relationMap[r];
+    if (!mapped) out.push(`trace: baseline relation ${r} has no entry in the relation map`);
+    for (const m of mapped ?? []) allowed.add(m);
+  }
+  for (const r of new Set(statements(a).flatMap(st => st.relations))) {
+    if (!allowed.has(r)) out.push(`trace: the run touches ${r}, which no baseline relation maps to and the rule does not add`);
+  }
+  for (const s of rule.sameRowsRead) {
+    if (!label.startsWith(s.steps)) continue;
+    const er = typeof e.rowsRead === 'object' ? e.rowsRead[s.relation] : undefined;
+    const ar = typeof a.rowsRead === 'object' ? a.rowsRead[s.as] : undefined;
+    if (er === undefined || ar !== er) out.push(`trace: rowsRead ${s.relation}=${er} → ${s.as}=${ar}`);
+  }
+  return out;
+}
+
 /**
  * Compare a run against its normalised baseline under an allow-list:
  * "subset plus named changes". Every baseline value must be present and equal
@@ -343,6 +393,15 @@ export function compareWithAllowList(expected: unknown, actual: unknown, allow: 
             }
           } else if (!admitEntry(adders, used, a[k], k)) {
             fail(kp, 'added and not on the allow-list', undefined, a[k]);
+          }
+          continue;
+        }
+        const traceRules = rulesAt('traceMapped', kp);
+        if (traceRules.length) {
+          for (const r of traceRules) {
+            r.matched++;
+            const label = labelOf(expected, kp);
+            for (const v of compareMappedTrace(e[k], a[k], r.rule as TraceMappedRule, label)) fail(kp, v);
           }
           continue;
         }

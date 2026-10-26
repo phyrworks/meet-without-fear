@@ -122,13 +122,40 @@ export const SESSION_READ_BYTE_TARGET_ALLOW: AllowList = {
   rules: [
     ...SESSION_READ_ALLOW.rules,
     {
-      kind: 'mayDiffer',
+      kind: 'traceMapped',
       at: 'steps.*.trace',
       mustMatch: true,
+      // The current shape's relations → the target tables holding the same
+      // facts (spec §1 "Absorbs" lines). A relation's image is what the
+      // target reads for the old read: membership, stage, read state …
+      relationMap: {
+        Message: ['message'],
+        Session: ['session'],
+        Relationship: ['relationship'],
+        RelationshipMember: ['relationship_member'],
+        User: ['user', 'user_preferences'], // privacyPreferences → user_preferences.doc (spec §1.7)
+        StageProgress: ['participant_milestone', 'milestone'], // milestones + v_current_stage's lookup
+        UserVessel: ['conversation_read_state'],
+        Invitation: ['invitation'],
+        InnerWorkSession: ['reflection'],
+      },
+      addedRelations: {
+        participant: 'membership and the caller are the participant row (requireSessionAccess; v_co_participant)',
+        conversation: "the audience of a read is the caller's MAIN conversation",
+        participant_milestone:
+          "a message's DTO stage is derived from its owner's milestones (message.stage is dropped), so the message reads read them",
+      },
+      // The message reads are the same concept read the same way (the
+      // caller's messages, paged): same rows read. /state also reads message
+      // for the partner's last turn (presence), so it is not pinned here.
+      sameRowsRead: [
+        { steps: 'messages as', relation: 'Message', as: 'message' },
+        { steps: 'messages page of 5', relation: 'Message', as: 'message' },
+      ],
       why:
-        'the SQL trace names relations and plans, which are shape-bound (README "Reading a trace diff during the ' +
-        'migration"); its contract part for this scenario — the paginated read is bounded — is asserted on the ' +
-        'target run by the test itself',
+        'relation names and plans are shape-bound (README "Reading a trace diff during the migration"); the ' +
+        'contract fields are kept under the relation map: completeness, bind-parameter protocol for data ' +
+        'statements, isolation, relations ⊆ the mapped set, and the paged message read row count.',
     },
   ],
 };
