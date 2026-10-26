@@ -4,6 +4,7 @@
  */
 
 import { compareMappedTrace } from '../allow-lists/compare';
+import { buildTrace, kindFromText, parsePostgresLog } from '../trace';
 import type { TraceMappedRule } from '../allow-lists/types';
 
 const rule: TraceMappedRule = {
@@ -70,4 +71,54 @@ describe('traceMapped', () => {
     const unmapped = { ...base, shapes: [{ isolation: null, statements: [stmt('SELECT', 'extended', ['StageProgress'])] }] };
     expect(compareMappedTrace(unmapped, run(), rule, 'x').join('\n')).toMatch(/StageProgress has no entry/);
   });
+
+  it('exempts transaction control only when it touches no relation', () => {
+    const v = compareMappedTrace(
+      base,
+      run({ shapes: [{ isolation: null, statements: [stmt('COMMIT', 'simple', ['message'])] }] }),
+      rule,
+      'x',
+    );
+    expect(v.join('\n')).toMatch(/a COMMIT on \[message\] used protocol simple/);
+  });
 });
+
+describe('trace parser: transaction control (TS-9 fix round 2)', () => {
+  const APP = 'mwf-app-under-test';
+  const line = (msg: string) => `2026-10-26 12:00:00.000 UTC [7] db=probe,app=${APP},vxid=3/1,xid=0 LOG:  ${msg}`;
+
+  it('classifies a multi-statement `BEGIN; INSERT …` as other, never as BEGIN', () => {
+    expect(kindFromText('BEGIN; INSERT INTO message (content) VALUES (1)').kind).toBe('other');
+    expect(kindFromText('COMMIT; DELETE FROM message').kind).toBe('other');
+    expect(kindFromText('BEGIN').kind).toBe('BEGIN');
+    expect(kindFromText('COMMIT;').kind).toBe('COMMIT');
+  });
+
+  it('a `BEGIN; INSERT …` sent on the simple protocol fails the mapped trace', () => {
+    const stmts = buildTrace(parsePostgresLog(line("statement: BEGIN; INSERT INTO message (content) VALUES ('x')")), {
+      database: 'probe',
+      application: APP,
+    });
+    const trace = { complete: true, rowsRead: {}, shapes: [{ isolation: null, statements: stmts }] };
+    expect(compareMappedTrace(base, trace, rule, 'x').join('\n')).toMatch(/a other on \[\] used protocol simple/);
+  });
+
+  it("attributes a portal's late plan to its statement, not to the COMMIT logged before it", () => {
+    const raw = [
+      line('statement: BEGIN'),
+      line('execute <unnamed>: SELECT id FROM message WHERE conversation_id = $1'),
+      line('statement: COMMIT'),
+      line('duration: 0.02 ms  plan:'),
+      '\tQuery Text: SELECT id FROM message WHERE conversation_id = $1',
+      '\tSeq Scan on message  (cost=0.00..1.00 rows=3 width=16) (actual rows=3 loops=1)',
+    ].join('\n');
+    const stmts = buildTrace(parsePostgresLog(raw), { database: 'probe', application: APP });
+    expect(stmts.map(s => [s.kind, s.protocol, s.relations])).toEqual([
+      ['BEGIN', 'simple', []],
+      ['SELECT', 'extended', ['message']],
+      ['COMMIT', 'simple', []],
+    ]);
+    expect(stmts[1].rowsRead).toEqual({ message: 3 });
+  });
+});
+

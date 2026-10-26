@@ -237,7 +237,11 @@ export function compareMappedTrace(e0: unknown, a0: unknown, rule: TraceMappedRu
   if (a.complete !== true) out.push('trace: the run\'s trace is not complete');
   const statements = (t: TraceLike) => (t.shapes ?? []).flatMap(sh => sh.statements ?? []);
   for (const st of statements(a)) {
-    if (st.protocol !== 'extended' && !TX_CONTROL.has(st.kind)) {
+    // Exempt only genuine transaction control: the keyword AND no relation
+    // touched (a multi-statement `BEGIN; INSERT …` is classified `other` by
+    // the trace parser, and anything that touched a relation is data).
+    const txControl = TX_CONTROL.has(st.kind) && st.relations.length === 0;
+    if (st.protocol !== 'extended' && !txControl) {
       out.push(`trace: a ${st.kind} on [${st.relations.join(', ')}] used protocol ${st.protocol} (data statements must bind parameters)`);
     }
   }
