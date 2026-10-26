@@ -161,3 +161,6 @@ infra/aws/backend.hcl
 infra/aws/backend.tf
 infra/aws/crash.log
 *.dump
+
+# run-baseline.sh --cutover: detached checkout of phoenix/base (the old migration history)
+/.ts7-base/
