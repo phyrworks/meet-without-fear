@@ -14,6 +14,7 @@
 
 import { logger } from '../lib/logger';
 import { prisma } from '../lib/prisma';
+import { resolveParticipant } from './participant-resolver';
 import { getHaikuJson } from '../lib/bedrock';
 import { MemoryIntentResult } from './memory-intent';
 import { MemoryPreferencesDTO } from '@meet-without-fear/shared';
@@ -25,7 +26,8 @@ import {
 import { CONTEXT_LIMITS } from '../utils/token-budget';
 import { withHaikuCircuitBreaker } from '../utils/circuit-breaker';
 import { brainService } from '../services/brain-service';
-import { ActivityType, BrainActivityCallType } from '../generated/prisma/client';
+import { ActivityType } from '../generated/prisma/client';
+import { BrainActivityCallType } from './brain-service';
 import { searchSessionContent, searchInnerWorkSessionContent } from './embedding';
 
 // ============================================================================
@@ -281,52 +283,37 @@ async function getSessionHistory(
   sessionId: string,
   userId: string
 ): Promise<ConversationMessage[]> {
+  // Target shape (TS-9): the user's participant's MAIN conversation — their
+  // own turns and the AI's replies (delivered items excluded, as before).
+  const participant = await resolveParticipant(sessionId, userId);
+  if (!participant?.mainConversationId) return [];
   const messages = await prisma.message.findMany({
     where: {
-      sessionId,
-      OR: [
-        { senderId: userId },
-        { role: 'AI', forUserId: userId },
-      ],
+      conversationId: participant.mainConversationId,
+      OR: [{ senderParticipantId: participant.id }, { role: 'AI' }],
     },
-    orderBy: { timestamp: 'asc' },
+    orderBy: { createdAt: 'asc' },
     select: {
       content: true,
       role: true,
-      timestamp: true,
+      createdAt: true,
     },
   });
 
   return messages.map((m) => ({
     role: m.role === 'USER' ? 'user' as const : 'assistant' as const,
     content: m.content,
-    timestamp: m.timestamp.toISOString(),
+    timestamp: m.createdAt.toISOString(),
   }));
 }
 
 /**
  * Get unassociated pre-session messages for the user.
  */
-async function getPreSessionMessages(userId: string): Promise<ConversationMessage[]> {
-  const messages = await prisma.preSessionMessage.findMany({
-    where: {
-      userId,
-      associatedSessionId: null,
-      expiresAt: { gt: new Date() },
-    },
-    orderBy: { timestamp: 'asc' },
-    select: {
-      content: true,
-      role: true,
-      timestamp: true,
-    },
-  });
-
-  return messages.map((m) => ({
-    role: m.role === 'USER' ? 'user' as const : 'assistant' as const,
-    content: m.content,
-    timestamp: m.timestamp.toISOString(),
-  }));
+async function getPreSessionMessages(_userId: string): Promise<ConversationMessage[]> {
+  // Target shape (TS-9): pre-session chat is dropped (spec A-Q6 — PreSessionMessage
+  // was never populated); there is nothing to read.
+  return [];
 }
 
 /**
@@ -471,11 +458,13 @@ export async function retrieveContext(options: RetrievalOptions): Promise<Retrie
   let effectiveUserPrefs = userPreferences;
   if (!effectiveUserPrefs) {
     try {
-      const user = await prisma.user.findUnique({
-        where: { id: userId },
-        select: { memoryPreferences: true },
+      // user_preferences.doc absorbs User.memoryPreferences (spec §1.7), under `memory`.
+      const prefs = await prisma.userPreferences.findUnique({
+        where: { userId },
+        select: { doc: true },
       });
-      effectiveUserPrefs = (user?.memoryPreferences as unknown as MemoryPreferencesDTO | null) ?? undefined;
+      effectiveUserPrefs =
+        ((prefs?.doc as { memory?: unknown } | null)?.memory as MemoryPreferencesDTO | undefined) ?? undefined;
     } catch (error) {
       logger.warn('[ContextRetriever] Failed to fetch user preferences:', error);
     }

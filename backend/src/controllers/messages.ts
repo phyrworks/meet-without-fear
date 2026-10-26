@@ -483,7 +483,7 @@ export async function getConversationHistory(
     }
 
     // The caller's MAIN conversation IS the audience: no sender/recipient
-    // filter exists any more (target shape; `forUserId` is gone).
+    // filter exists any more (target shape: no recipient column).
     logger.info(`[getConversationHistory:${requestId}] Fetching messages with limit=${limit}, before=${before || 'none'}, after=${after || 'none'}, order=${order}`);
     const [messages, milestones] = await Promise.all([
       listConversationMessages({

@@ -2,7 +2,7 @@
  * Messages on the target shape (TS-9, spec §1.1 `message`).
  *
  * A message belongs to a conversation, and a conversation to ONE participant:
- * the conversation is the audience. There is no `forUserId` and no
+ * the conversation is the audience. There is no recipient column and no
  * "sender OR recipient" filter any more — a participant reads exactly their
  * own MAIN conversation, which is what made the old privacy filter
  * unnecessary.
