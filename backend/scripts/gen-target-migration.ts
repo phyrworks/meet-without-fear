@@ -1,50 +1,47 @@
 /**
- * Generator for the one-shot `target_shape` migration (TS-7, work-a39h.11.8).
+ * Generator for the `target_shape_baseline` migration (TS-7c, work-a39h.11.24).
  *
- *   cd backend
- *   npx tsx scripts/gen-target-migration.ts > prisma/migrations/<ts>_target_shape/migration.sql
- *   npx tsx scripts/gen-target-migration.ts --fix-data-template > scripts/target-shape/fix-data.template.sql
+ *   npx tsx backend/scripts/gen-target-migration.ts            # writes the migration
+ *   npx tsx backend/scripts/gen-target-migration.ts --stdout   # prints it
+ *   npx tsx backend/scripts/gen-target-migration.ts --check    # two runs equal, and equal to the committed file
  *
- * Moves the database from the 68-table Prisma shape to the 47-table target
- * shape of docs/backend/data-model/schema-target-2026-10.md, following the
- * build order of docs/backend/data-model/schema-migration-plan-2026-10.md §3.
- * Deterministic: it reads only repository files (schema.prisma, the trailer,
- * sql-only.sql, the mapping tables in scripts/target-shape/gen/) and runs
- * `prisma migrate diff --from-empty` (no database), so two runs are
- * byte-identical; run-target-migration.sh --check compares a fresh run with
- * the committed migration.sql.
+ * Owner decision OD7 (2026-10-26): existing data is demo/test and is not
+ * preserved. The cutover to the 47-table target shape of
+ * docs/backend/data-model/schema-target-2026-10.md is ONE fresh baseline
+ * migration that builds the target on an empty database; there is no data
+ * move. (TS-7/TS-7b's data-move generator — prechecks, copies, fix-data — is
+ * in git history, up to phoenix/target-shape 3cf611cb.)
  *
- * Output sections (plan §3):
- *   (0) guard — refuse unless the database is at the expected current shape;
- *   (1) enums and the 47 new tables — Prisma's DDL from a copy of
- *       schema.prisma without the consent.target_kind @default (sql-only.sql's
- *       trap). New snake_case names cannot collide with old "PascalCase" ones:
- *       every new name starts lower-case (checked here);
- *   (2) the migration workspace (schema app_migration) and the prechecks
- *       (step 0b) — all failures RAISE together, with ids;
- *   (3) the copies, steps 1–18 in FK order, each with its assertions;
- *   (4) step 19 — drop the 68 old tables and 51 old enum types;
- *   (5) scripts/target-shape/trailer.sql, with scripts/target-shape/sql-only.sql
- *       spliced in verbatim at its `-- @@include sql-only.sql` line.
+ * Output, in order (plan §3, baseline build order):
+ *   0  scripts/target-shape/preamble.sql — refuse a non-empty database; the
+ *      roles assertion and the SET ROLE mwf_job check; schema app;
+ *      app.current_user_id();
+ *   1  Prisma's DDL: `prisma migrate diff --from-empty --to-schema <copy of
+ *      schema.prisma without the consent.target_kind @default> --script`
+ *      (sql-only.sql re-adds that column GENERATED);
+ *   2  the milestone seed (gen/maps.ts MILESTONES);
+ *   3  scripts/target-shape/trailer.sql, with scripts/target-shape/sql-only.sql
+ *      spliced in verbatim at its `-- @@include sql-only.sql` line.
+ *
+ * Deterministic: it reads only repository files and runs `prisma migrate
+ * diff --from-empty` (no database), so two runs are byte-identical.
  */
 
 import { execFileSync } from 'child_process';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { OLD_ENUMS, OLD_TABLES, section } from './target-shape/gen/maps';
-import { guard, workspace } from './target-shape/gen/workspace';
-import { prechecks } from './target-shape/gen/prechecks';
-import { stepConversations, stepMilestones, stepNeeds, stepParticipants, stepUsers } from './target-shape/gen/copies-core';
-import { stepDraftsConsent, stepEmpathy, stepMessages } from './target-shape/gen/copies-empathy';
-import { stepFollowUp, stepProposals } from './target-shape/gen/copies-repair';
-import { stepDrop, stepReflection, stepRenames, stepTelemetryAndAudit } from './target-shape/gen/copies-user';
-import { fixDataTemplate } from './target-shape/gen/fix-template';
+import { milestoneSeed, section } from './target-shape/gen/maps';
+
+export const MIGRATION_NAME = '20261026120000_target_shape_baseline';
 
 const BACKEND = path.resolve(__dirname, '..');
 const SCHEMA = path.join(BACKEND, 'prisma', 'schema.prisma');
-const TRAILER = path.join(BACKEND, 'scripts', 'target-shape', 'trailer.sql');
-const SQL_ONLY = path.join(BACKEND, 'scripts', 'target-shape', 'sql-only.sql');
+const DIR = path.join(BACKEND, 'scripts', 'target-shape');
+const PREAMBLE = path.join(DIR, 'preamble.sql');
+const TRAILER = path.join(DIR, 'trailer.sql');
+const SQL_ONLY = path.join(DIR, 'sql-only.sql');
+const OUT = path.join(BACKEND, 'prisma', 'migrations', MIGRATION_NAME, 'migration.sql');
 const INCLUDE = '-- @@include sql-only.sql';
 
 /** Prisma's DDL for the target, from a copy of schema.prisma without the target_kind @default. */
@@ -52,7 +49,7 @@ function prismaDdl(): string {
   const schema = fs.readFileSync(SCHEMA, 'utf8');
   const stripped = schema.replace(/(\n\s*targetKind\s+ConsentTarget\s+)@default\(dbgenerated\("\\nCASE[\s\S]*?END"\)\)\s*/, '$1');
   if (stripped === schema) throw new Error('could not strip the consent.target_kind @default (sql-only.sql trap)');
-  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ts7-gen-'));
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ts7c-gen-'));
   try {
     const copy = path.join(tmp, 'schema.prisma');
     fs.writeFileSync(copy, stripped);
@@ -66,16 +63,13 @@ function prismaDdl(): string {
   }
 }
 
-/** Every name the DDL creates starts lower-case, so none can equal an old quoted PascalCase name. */
-function checkNoCollision(ddl: string): number {
+/** The DDL creates exactly the 47 target tables, all with lower-case names. */
+function checkDdl(ddl: string): number {
   const names = new Set<string>();
   for (const m of ddl.matchAll(/CREATE (?:TYPE|TABLE|UNIQUE INDEX|INDEX) "([^"]+)"/g)) names.add(m[1]);
   for (const m of ddl.matchAll(/CONSTRAINT "([^"]+)"/g)) names.add(m[1]);
   const bad = [...names].filter((n) => !/^[a-z_]/.test(n));
-  if (bad.length) throw new Error(`target DDL creates names that could collide with old objects: ${bad.join(', ')}`);
-  const old = new Set([...OLD_TABLES, ...OLD_ENUMS]);
-  const clash = [...names].filter((n) => old.has(n));
-  if (clash.length) throw new Error(`target DDL reuses old names: ${clash.join(', ')}`);
+  if (bad.length) throw new Error(`target DDL creates names that are not lower-case: ${bad.join(', ')}`);
   const tables = (ddl.match(/^CREATE TABLE /gm) ?? []).length;
   if (tables !== 47) throw new Error(`target DDL creates ${tables} tables, expected 47`);
   return names.size;
@@ -91,56 +85,37 @@ function trailer(): string {
 }
 
 const HEADER = `-- ============================================================================
--- target_shape — the one-shot re-shape to the 47-table target (TS-7)
+-- target_shape_baseline — the 47-table target shape, built on an EMPTY database
+-- (TS-7c; owner decision OD7, 2026-10-26: existing data is demo/test and is
+-- not preserved, so there is no data move)
 --
 -- GENERATED by backend/scripts/gen-target-migration.ts; do not edit by hand.
--- Regenerate: cd backend && npx tsx scripts/gen-target-migration.ts > <this file>
+-- Regenerate: npx tsx backend/scripts/gen-target-migration.ts
+-- Check:      npx tsx backend/scripts/gen-target-migration.ts --check
 -- Spec: docs/backend/data-model/schema-target-2026-10.md
--- Plan: docs/backend/data-model/schema-migration-plan-2026-10.md §3 (build
---       order), §6 (rollout)
+-- Plan: docs/backend/data-model/schema-migration-plan-2026-10.md §3 (baseline
+--       build order), §6 (cutover)
 --
 -- OPERATOR NOTES
---  * One file, one transaction: prisma migrate deploy wraps this file in a
---    single transaction on PostgreSQL. A RAISE anywhere — a precheck, an
---    assertion, a constraint — rolls back every statement, and the database is
---    left at the old shape. Nothing here forces a commit: no CREATE INDEX
---    CONCURRENTLY, no ALTER TYPE … ADD VALUE, no VACUUM, no COMMIT. Prisma
---    still records the attempt as a failed row in _prisma_migrations; clear it
---    with \`prisma migrate resolve --rolled-back <this migration>\` before a
---    retry.
---  * Prechecks (section 2) report EVERY offending row at once, by check name.
---    Each name has a block in backend/scripts/target-shape/fix-data.template.sql
---    (the query that lists offenders and the corrective statement an operator
---    fills in). Rehearse on a restored copy (plan §6.3): run, read the RAISE,
---    fix with the template, re-run until it applies.
---  * Run as the database owner with infra/aws/roles.sql applied; the owner must
---    be able to SET ROLE mwf_job (it hands the app.* helpers to mwf_job).
---  * Leaves schema app_migration (shape_map, row_counts, report) for the
---    after-phase verify script (TS-8), which drops it (ruling R14). Read the
---    report: SELECT step, item, n, detail FROM app_migration.report ORDER BY seq;
---  * User-written text the target has no column for (gatesSatisfied.skipReason
---    and the feel-heard feedback, Stage4NeedCoverage.note, superseded unsent
---    review feedback, a differing cycle resultSummary, dropped PROPOSED
---    agreement descriptions, a vanished leaver's ownerless messages) is kept
---    in app_migration.dropped_content for the owner to decide at TS-14.
+--  * This is the ONLY migration in prisma/migrations. A database that still
+--    has the old shape — and the old _prisma_migrations rows — must FIRST be
+--    emptied with backend/scripts/target-shape/drop-old-objects.sql (plan §6:
+--    backup → stop the API → drop-old-objects.sql → prisma migrate deploy →
+--    deploy the image → smoke). Section 0 refuses a database that still has
+--    table "Session", schema app, or any relation in public.
+--  * One file, one transaction: prisma migrate deploy sends the file as one
+--    multi-statement simple query, and PostgreSQL runs such a query string in
+--    a single implicit transaction (the file has no BEGIN/COMMIT of its own);
+--    a RAISE anywhere rolls everything back. Prisma still records the attempt
+--    as a failed _prisma_migrations row; clear it with
+--    \`prisma migrate resolve --rolled-back ${MIGRATION_NAME}\`.
+--    Nothing here forces a commit (no CONCURRENTLY, no ALTER TYPE … ADD VALUE,
+--    no VACUUM, no COMMIT), so nothing breaks the implicit transaction.
+--  * Run as the database owner (or mwf_migrator) with infra/aws/roles.sql
+--    applied; the migrating role must be able to SET ROLE mwf_job (it hands
+--    the app.* helpers to mwf_job).
 --  * The app.* functions treat a caller as the job only when it logged in as
 --    mwf_job or mwf_migrator (session_user); a superuser is not the job.
---  * need_share has two sources (TS-7b): ConsentedContent, and the Stage 3
---    handler's granted IDENTIFIED_NEED ConsentRecords (no ConsentedContent;
---    shared_text = the need label, ruling R19; duplicates merged, R18).
---  * Step-13 closure comparison (TS-7b). It is live for every production
---    Stage4Closure, because Stage 3 shares become need_share rows.
---    - Ruling R20 (2026-10-21; owner may veto): a proposal covers a need
---      while ACTIVE, REVISED or CONVERTED_TO_AGREEMENT. The SHARED_AGREEMENT
---      closure converts the agreed proposals (stage4.ts ~1426), and the old
---      app revises a proposal in place.
---    - The old rule also matched needs by fuzzy text and description. A need
---      that only such a proposal covered is a named, listed exception, when
---      that proposal has a needsAddressed label that matched no need or has
---      unresolved_need_labels. Any other difference RAISEs (negative n13).
---    - TS-14: read the 'R20 named exception' report rows. A RAISE here means
---      the old closure disagrees with the view for a reason this rule does
---      not explain; decide per case.
 --  * Does NOT enable RLS or create policies (TS-16).
 --  * TS-16 (v_participant): under owner-only RLS a co-participant reads NULL
 --    last_active_at / last_mood / read state and is_tombstone = false through
@@ -151,54 +126,53 @@ const HEADER = `-- =============================================================
 --    last_active_at, with no default-true over an invisible row.
 --
 -- SECTIONS
---   0  guard
---   1  enums and tables (Prisma DDL)
---   2  workspace (app_migration) and prechecks (plan step 0b)
---   3  copies with assertions, plan steps 1–18, in FK order:
---      1 user · 2 relationship · 3 session · 4/4a participant · 5 A/B slots ·
---      6 conversation + ai_memory · milestone seed · 7 participant_milestone ·
---      need · 12a need_share · 8 need_disposition · 13a proposal · 6b sub-chats ·
---      11 empathy · 9 message (+ delivered copies) · read state · 10 draft ·
---      12 consent · 13 proposal children, agreement, closure · 14 follow-up ·
---      renames (invitation, mood, regulation, memory) · 15 reflection ·
---      16 feature_state · 17 text-id audit · 18 brain_activity
---   4  step 19: drop the old tables and enum types
---   5  trailer: domain, sql-only.sql, CHECKs, functions, triggers, views,
---      grants, catalog and invariant assertions (backend/scripts/target-shape/trailer.sql)
+--   0  preamble: empty-database guard, roles, schema app, app.current_user_id()
+--      (backend/scripts/target-shape/preamble.sql)
+--   1  enums and the 47 tables (Prisma DDL, prisma migrate diff --from-empty)
+--   2  milestone seed (reference data)
+--   3  trailer: intensity domain, sql-only.sql, CHECKs, app.* functions,
+--      triggers, views, grants, catalog assertions
+--      (backend/scripts/target-shape/trailer.sql)
 -- ============================================================================
 `;
 
-function main(): void {
-  if (process.argv[2] === '--fix-data-template') {
-    process.stdout.write(fixDataTemplate().replace(/[ \t]+$/gm, ''));
-    return;
-  }
-  if (process.argv[2] !== undefined) throw new Error(`unknown argument ${process.argv[2]} (only --fix-data-template)`);
+export function generate(): string {
   const ddl = prismaDdl();
-  const nNames = checkNoCollision(ddl);
+  const nNames = checkDdl(ddl);
   const out = [
     HEADER,
-    section('0. Guard', guard()),
+    section('0. Preamble (backend/scripts/target-shape/preamble.sql)', fs.readFileSync(PREAMBLE, 'utf8')),
     section(`1. Enums and the 47 target tables — prisma migrate diff --from-empty (${nNames} named objects, all lower-case)`, ddl),
-    section('2a. Migration workspace (schema app_migration) and step 0 row counts', workspace()),
-    section('2b. Prechecks (plan step 0b)', prechecks()),
-    section('3a. Steps 1–3: user, relationship, session', stepUsers()),
-    section('3b. Steps 4, 4a, 5: participant, vanished members, A/B slots', stepParticipants()),
-    section('3c. Step 6: conversation, ai_memory', stepConversations()),
-    section('3d. Milestone seed and step 7: participant_milestone', stepMilestones()),
-    section('3e. need, need_share (12), need_disposition (8), proposal (13), sub-chats (6)', stepNeeds()),
-    section('3f. Step 11: empathy attempts, reconciler, reviews', stepEmpathy()),
-    section('3g. Step 9: messages, delivered copies, read state', stepMessages()),
-    section('3h. Steps 10, 12: drafts, consent', stepDraftsConsent()),
-    section('3i. Step 13: proposal children, agreements, closure', stepProposals()),
-    section('3j. Step 14: follow-up', stepFollowUp()),
-    section('3k. Renames: invitation, mood_reading, regulation_event, user_memory', stepRenames()),
-    section('3l. Steps 15–16: reflection, feature_state', stepReflection()),
-    section('3m. Steps 17–18: text-id audit, brain_activity, after-counts', stepTelemetryAndAudit()),
-    section('4. Step 19: drop the old shape', stepDrop()),
-    section('5. Trailer (backend/scripts/target-shape/trailer.sql, sql-only.sql spliced in)', trailer()),
+    section('2. Milestone seed (backend/scripts/target-shape/gen/maps.ts)', milestoneSeed()),
+    section('3. Trailer (backend/scripts/target-shape/trailer.sql, sql-only.sql spliced in)', trailer()),
   ].join('\n');
-  process.stdout.write(out.replace(/[ \t]+$/gm, ''));
+  return out.replace(/[ \t]+$/gm, '');
 }
 
-main();
+function main(): void {
+  const arg = process.argv[2];
+  if (arg === undefined) {
+    const sql = generate();
+    fs.mkdirSync(path.dirname(OUT), { recursive: true });
+    fs.writeFileSync(OUT, sql);
+    process.stderr.write(`wrote ${path.relative(process.cwd(), OUT)} (${Buffer.byteLength(sql)} bytes)\n`);
+  } else if (arg === '--stdout') {
+    process.stdout.write(generate());
+  } else if (arg === '--check') {
+    const a = generate();
+    const b = generate();
+    if (a !== b) throw new Error('generator is not deterministic: two runs differ');
+    const committed = fs.existsSync(OUT) ? fs.readFileSync(OUT, 'utf8') : '';
+    if (committed !== a) throw new Error(`${OUT} differs from the generator output: regenerate it`);
+    const others = fs
+      .readdirSync(path.dirname(path.dirname(OUT)), { withFileTypes: true })
+      .filter((d) => d.isDirectory() && d.name !== MIGRATION_NAME)
+      .map((d) => d.name);
+    if (others.length) throw new Error(`prisma/migrations holds more than the baseline: ${others.join(', ')}`);
+    process.stdout.write(`ok: two runs byte-identical and equal to ${MIGRATION_NAME}/migration.sql (${Buffer.byteLength(a)} bytes)\n`);
+  } else {
+    throw new Error(`unknown argument ${arg} (use --stdout or --check)`);
+  }
+}
+
+if (require.main === module) main();

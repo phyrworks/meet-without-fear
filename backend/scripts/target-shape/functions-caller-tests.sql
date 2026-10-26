@@ -1,8 +1,10 @@
 -- ============================================================================
 -- functions-caller-tests.sql — the app.* writers and triggers, exercised per
--- caller after the target_shape migration (TS-7 fix round 1). Run by
--- run-target-migration.sh on a throwaway clone of a migrated --extras scratch
--- database (it changes data). Every caller arm runs in a session that LOGGED
+-- caller (TS-7 fix round 1; re-based on the target_shape_baseline by TS-7c,
+-- OD7). Run by run-baseline.sh on a throwaway clone of a ts7_* database that
+-- the baseline built and seed-target-fixture.sql seeded (it changes data);
+-- run-baseline.sh adds test 18 (a second migrate deploy is a no-op), which
+-- needs the Prisma CLI. Every caller arm runs in a session that LOGGED
 -- IN as mwf_app or mwf_job (\connect), never as the superuser; identity is
 -- set_config('app.current_user_id', <user>, true), as the request layer does.
 --
@@ -28,9 +30,11 @@ $$;
 
 -- ---- setup (superuser) --------------------------------------------------------
 GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO mwf_app;
-SELECT u.id AS a_user FROM "user" u WHERE u.email = 'a.reconciler-shown-b.b@e2e.test' \gset
-SELECT u.id AS b_user FROM "user" u WHERE u.email = 'b.reconciler-shown-b@e2e.test' \gset
-SELECT u.id AS outsider FROM "user" u WHERE u.email = 'a.created.b@e2e.test' \gset
+-- Rows from seed-target-fixture.sql: session S (A, B; A→B AWAITING_SHARING,
+-- B→A HELD), session X (C, D; shared needs e1 of C and e4 of D), an outsider.
+SELECT u.id AS a_user FROM "user" u WHERE u.email = 'a@ts7c.test' \gset
+SELECT u.id AS b_user FROM "user" u WHERE u.email = 'b@ts7c.test' \gset
+SELECT u.id AS outsider FROM "user" u WHERE u.email = 'outsider@ts7c.test' \gset
 SELECT p.session_id AS r_session FROM participant p WHERE p.user_id = :'a_user' LIMIT 1 \gset
 SELECT a.id AS att_a FROM empathy_attempt a JOIN participant p ON p.id = a.author_participant_id WHERE p.user_id = :'a_user' AND p.session_id = :'r_session' \gset
 SELECT a.id AS att_b FROM empathy_attempt a JOIN participant p ON p.id = a.author_participant_id WHERE p.user_id = :'b_user' AND p.session_id = :'r_session' \gset
@@ -336,9 +340,9 @@ DO $$ DECLARE n int; BEGIN
 END $$;
 
 -- 17. ruling R17 (rolled back): anonymize_user_in_session also deletes the
---     session's NULL-participant brain_activity rows — migrated history that
---     cannot be attributed (eba01 in X). History of other sessions (eba03 in
---     S) and reflection telemetry (eba02, no session) stay.
+--     session's NULL-participant brain_activity rows — history that cannot
+--     be attributed (…ba1 in X). History of other sessions (…ba2 in S) and
+--     reflection telemetry (…ba3, no session) stay.
 BEGIN;
 DO $$ DECLARE x_before int; s_before int; refl_before int; BEGIN
   SELECT count(*) INTO x_before FROM brain_activity WHERE session_id = '00000000-0000-7e00-8000-0000000005e1' AND participant_id IS NULL;
