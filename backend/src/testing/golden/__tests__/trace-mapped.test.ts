@@ -21,7 +21,7 @@ const base = {
   rowsRead: { Message: 6 },
   shapes: [{ isolation: null, statements: [stmt('SELECT', 'extended', ['Message']), stmt('INSERT', 'extended', ['User'])] }],
 };
-const run = (over: Partial<typeof base> & { shapes?: unknown } = {}) => ({
+const run = (over: Record<string, unknown> = {}) => ({
   complete: true,
   rowsRead: { message: 6, conversation: 1 },
   shapes: [
@@ -53,7 +53,7 @@ describe('traceMapped', () => {
   });
 
   it('flags a changed row count of the same read, and a changed isolation level', () => {
-    expect(compareMappedTrace(base, run({ rowsRead: { message: 13 } as never }), rule, 'messages page').join('\n')).toMatch(
+    expect(compareMappedTrace(base, run({ rowsRead: { message: 13 } }), rule, 'messages page').join('\n')).toMatch(
       /rowsRead Message=6 → message=13/,
     );
     const v = compareMappedTrace(
