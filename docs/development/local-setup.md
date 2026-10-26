@@ -92,7 +92,8 @@ Day-to-day: `podman machine start && podman start mwf-postgres`.
 
 The Phase 3 roles `mwf_migrator`, `mwf_app`, `mwf_job`, `mwf_ops` and `mwf_auth` are cluster-level,
 so they are created outside Prisma by `infra/aws/roles.sql`. The migration
-`phase3_app_schema_helpers` refuses to run without them (it makes `mwf_job` own the
+`phase3_app_schema_helpers` (on `phoenix/target-shape`: `target_shape_baseline`) refuses to run
+without them (it makes `mwf_job` own the
 `SECURITY DEFINER` helpers in schema `app`). Apply the file once per container; it is idempotent,
 and the development passwords are these fixed literals:
 
@@ -113,7 +114,7 @@ podman exec -i mwf-postgres psql -U mwf_user -d meet_without_fear < backend/scri
 Fresh production clusters get the roles from `infra/aws/init-db.sh`; existing ones (production)
 are an owner-only operator step with `roles.sql`.
 
-**Connecting as the job or the app.** Once the target shape is in (migration `*_target_shape`),
+**Connecting as the job or the app.** Once the target shape is in (migration `*_target_shape_baseline`),
 the `app.*` SECURITY DEFINER functions treat a caller as *the job* only when it logged in as
 `mwf_job` or `mwf_migrator` (`session_user`) — the superuser `mwf_user` is **not** the job, so
 code or scripts that need the job arm (reveal, `need_share`, anonymising another user) must
@@ -214,6 +215,49 @@ Also migrate the test database, which the E2E harness uses:
 DATABASE_URL="postgresql://mwf_user:mwf_password@127.0.0.1:5432/meet_without_fear_test" \
   npx prisma migrate deploy
 ```
+
+### Working on phoenix/target-shape
+
+The target-shape branch has **one** migration, `20261026120000_target_shape_baseline` (owner
+decision OD7, 2026-10-26: existing data is not preserved; plan
+[`schema-migration-plan-2026-10.md`](../backend/data-model/schema-migration-plan-2026-10.md) §3). It
+builds the target on an **empty** database and refuses one that still has the old shape, so the
+branch uses its own databases instead of `meet_without_fear*`:
+
+| Database | Use |
+|---|---|
+| `mwf_target_dev` | the branch's `DATABASE_URL` |
+| `mwf_target_test` | the branch's test database (tests, E2E) |
+| `mwf_target_shadow` | Prisma's shadow database (`SHADOW_DATABASE_URL`), left empty |
+
+Create them (if missing), deploy the baseline into dev and test, and run the schema gate on both:
+
+```bash
+backend/scripts/target-shape/run-baseline.sh --dev
+```
+
+It is idempotent: an existing database gets `migrate deploy` (a no-op once applied) and is never
+dropped. In the branch's `backend/.env`:
+
+```bash
+DATABASE_URL=postgresql://mwf_user:mwf_password@127.0.0.1:5432/mwf_target_dev
+DIRECT_URL=postgresql://mwf_user:mwf_password@127.0.0.1:5432/mwf_target_dev
+SHADOW_DATABASE_URL=postgresql://mwf_user:mwf_password@127.0.0.1:5432/mwf_target_shadow
+APP_DATABASE_URL=postgresql://mwf_app:mwf_app_dev@127.0.0.1:5432/mwf_target_dev
+JOB_DATABASE_URL=postgresql://mwf_job:mwf_job_dev@127.0.0.1:5432/mwf_target_dev
+# the test database (e.g. for backend tests / e2e/.env.test):
+#   postgresql://mwf_user:mwf_password@127.0.0.1:5432/mwf_target_test
+```
+
+To prove the baseline itself on a throwaway `ts7_*` database (generator check, deploy, gate, a
+second deploy is a no-op, the target fixture, the view smoke as `mwf_app`, the 17 per-caller tests):
+`backend/scripts/target-shape/run-baseline.sh ts7_<name>` (`--as-migrator` deploys as
+`mwf_migrator` into a database it owns; `--cutover` rehearses the production cutover — old shape
+from the `phoenix/base` history → `drop-old-objects.sql` → baseline). A database created on this
+branch before the baseline existed (tables but no `_prisma_migrations`) fails `migrate deploy` with
+Prisma P3005; drop and re-run `--dev`, or, if its catalog equals a fresh baseline's
+(`pg_dump --schema-only` diff), record it with
+`npx prisma migrate resolve --applied 20261026120000_target_shape_baseline`.
 
 ### Gaps in the README's env list
 
