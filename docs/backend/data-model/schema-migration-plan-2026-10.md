@@ -186,7 +186,7 @@ built from the old migration history and seeded through the current-shape factor
 | 2 | ~~The `gatesSatisfied` → milestone decoding loses a state the UI depends on~~ — **moot under OD7** (nothing is decoded; new sessions write milestones directly) | the key table is built from a grep of every writer, each key has a decision, unknown keys RAISE; the scenario allow-lists name exactly which derived keys are expected to disappear, so an unexpected loss fails the harness |
 | 3 | The harness re-record masks a behavioural regression | baselines are recorded on the **current** shape through concept views first (§4), one scenario at a time; comparisons use explicit per-scenario allow-lists (subset + named additions), so the re-record can only change what the list says |
 | 4 | Application rewrite is larger than the schedule (≈1,000 call sites; 39 mocking suites) | clusters land behind existing contracts in dependency order (§5); only `rankStrategies*` removal touches mobile; the integration branch is not merged until the whole train is green |
-| 5 | Rollback after users have written to the new shape loses those writes | the API is stopped from backup to health check; the migration is one transaction, so a failed deploy leaves the old shape intact; rollback is permitted only before the mobile OTA (§6.9) and is an explicit operator step |
+| 5 | Rollback after users have written to the new shape loses those writes | the API is stopped from backup to health check; the baseline is one transaction, but the old shape is already dropped by then (§6 step 4), so a failed deploy leaves the database **empty** — restore the backup (§6 step 9); rollback is permitted only before the mobile OTA (§6.9) and is an explicit operator step |
 
 ---
 

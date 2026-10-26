@@ -44,6 +44,13 @@ The review's Q3–Q7 are still open. The target is designed under these; each ca
 
 ## 1. Tables by cluster
 
+> **OD7, 2026-10-26 — "Absorbs" lines are history.** The owner decided existing data is demo/test
+> and is not preserved: the target is built EMPTY by one baseline migration (plan §3), and nothing
+> is copied. Each "Absorbs" line still names the old concepts a table replaces (useful for the
+> application rewrite), but the data-move clauses inside them — what "the migration" resolves,
+> merges, reports or fills per row — describe TS-7/TS-7b's superseded data move (readable at
+> `phoenix/target-shape` 3cf611cb) and are moot.
+
 ### 1.1 Core / session (16)
 
 #### `relationship`
@@ -189,7 +196,7 @@ Lookup of journey milestones; the only place "stage" exists, as data. · core ·
 | self_assertable | boolean | no | false | may the participant insert it themselves (a CTA), or only `mwf_job` (a system fact) |
 | created_at | timestamptz | no | now() | |
 
-Keys: PK (key). UNIQUE (ordinal). Seeded by migration from today's gate keys; renumbering is an `UPDATE`.
+Keys: PK (key). UNIQUE (ordinal). Seeded by the baseline migration (13 rows, keys from the fixture vocabulary; OD7, 2026-10-26 — no gate keys are decoded); renumbering is an `UPDATE`.
 RLS: no RLS (reference table); `GRANT SELECT` to `mwf_app` (P3 §1.1 pattern, like `Need`).
 Absorbs: the key set of `StageProgress.gatesSatisfied` and the `stage` integers (D3).
 
@@ -203,7 +210,7 @@ Event: a participant reached a milestone at a time. · core · S (progress is vi
 
 Keys: PK (participant_id, milestone_key). Index (milestone_key, reached_at) — readiness scans. Append-only (no `updated_at`; un-reaching a milestone is a `DELETE` by `mwf_job` only — "withdraw selections" path). **No payload column**: an S-class `jsonb` would carry private material (the old `finalEmotionalReading` gate) to co-participants; a gate's payload lives on the P-class table it belongs to (`mood_reading`) (adversarial P1-2).
 RLS: S `mine(participant_id) OR co(participant_id)` · I `mine(participant_id)` **only for keys with `milestone.self_assertable = true`** (`compact_signed`, `feel_heard`, `needs_confirmed`, `choices_shared`); every key that records a fact the system establishes (`invitation_sent`, `empathy_submitted`, `empathy_ready`, `empathy_validated`, `needs_shared`, `closed`, `paused`) is inserted by `mwf_job` (adversarial P2 — otherwise a participant can self-insert `empathy_validated`) · U none · D `job`.
-Absorbs: `StageProgress` rows + the boolean/timestamp pairs in `gatesSatisfied` per the key table in the migration plan §3 step 7; `Session.status WAITING/PAUSED`.
+Absorbs: `StageProgress` rows + the boolean/timestamp pairs in `gatesSatisfied`; `Session.status WAITING/PAUSED`. (History: the key table that decoded them was plan §3 step 7 of the superseded data move — moot under OD7, 2026-10-26.)
 
 #### `ai_memory`
 AI working memory: rolling summary, notable facts, consolidated global facts. · core · P (participant scope) / U (user scope) · participant / user
@@ -444,15 +451,15 @@ The transformed, consented version of a need that co-participants may see (the s
 | need_id | uuid | no | | PK, FK need **RESTRICT** — a delivered copy outlives nothing it was delivered from (N-3) |
 | participant_id | uuid | no | | FK participant CASCADE — the need's owner, **denormalised so the shared projection needs no join to `need`** (pass 2 N-1); set by the insert function from `need.participant_id`, never by a caller, and re-checked by T-need-share-owner |
 | session_id | uuid | no | | FK session CASCADE (denormalised for the membership arm; set by the function from the owner's participant) |
-| category | need_category | no | | copy at share time (the partner needs the category; `label` is never copied — sole exception: migrated Stage 3 shares, see `shared_text`) |
-| shared_text | text | no | | "heat removed" version (encrypted, session key). **Migration-time exception (ruling R19, TS-7b, 2026-10-21):** shares migrated from a Stage 3 `ConsentRecord` with no `ConsentedContent` carry the need's `label`, because no transformed text exists on that path and production had already disclosed label + category to the partner after a mutual share (`stage3.ts` `getNeedsComparison`). This is not a change of the invariant: new shares go through `app.need_share` with the job's transformed text |
+| category | need_category | no | | copy at share time (the partner needs the category; `label` is never copied) |
+| shared_text | text | no | | "heat removed" version (encrypted, session key). Every share goes through `app.need_share` with the job's transformed text. (History: ruling R19, TS-7b, 2026-10-21, let shares *migrated* from a Stage 3 `ConsentRecord` carry the need's `label`; under OD7, 2026-10-26, nothing is migrated, so that exception is dead text and no row ever takes it.) |
 | shared_at | timestamptz | no | now() | |
 | revoked_at | timestamptz | yes | | |
 | created_at | timestamptz | no | now() | |
 
 Keys: PK (need_id) — a need is shared at most once; re-sharing after revocation is a new need row (supersession). CHECK `revoked_at IS NULL OR revoked_at >= shared_at`. Indexes: (session_id, revoked_at) — the partner-needs read; (participant_id). Trigger **T-need-share-owner** (BEFORE INSERT/UPDATE): `participant_id = (SELECT participant_id FROM need WHERE id = need_id)` and `session_id` = that participant's session, else refuse — the write-side pin for the two denormalised columns. Trigger **T-need-share-terminal**: `shared_text`, `participant_id`, `session_id` immutable; `revoked_at` only NULL→value (P3 §4 `ConsentedContent` trigger, re-homed). The share consent is the `consent` row with `need_id` and `decision = GRANTED` (arc; no back-pointer); revocation writes `revoked_at` here and `REVOKED` there in one transaction via `app.need_revoke_share()`.
 RLS: S `mine(participant_id) OR (revoked_at IS NULL AND app.is_member(session_id))` — no subquery into `need`, so the co-participant's empty `need` policy cannot empty this read (N-1 [V]); the row contains nothing but the transformed text and category (P3 §2 `ConsentedContent`: "revocation must mean something") · I **`mwf_job` only**, through `app.need_share(need_id)` after the owner's GRANTED consent — the job holds the session key needed to encrypt `shared_text`; `mwf_app` has no INSERT grant (N-7) · U none for `mwf_app` (revocation via function) · D none.
-Absorbs: `ConsentedContent` (`transformedContent`, `consentedAt`, `consentActive/revokedAt`; its `originalNeedId` was never written — the migration resolves the need through `consentRecordId → ConsentRecord.targetId`; `participant_id`/`session_id` filled from the resolved need) **and** (TS-7b, 2026-10-21) `ConsentRecord` rows with `targetType = IDENTIFIED_NEED` and decision GRANTED or REVOKED whose need has no `ConsentedContent`. The Stage 3 share-needs handler writes only these and never `ConsentedContent`. `shared_text` = the need label (R19, above). `shared_at` = the grant, and `revoked_at` comes from the record. Duplicate grants of one need merge into one row (R18): earliest grant, and the latest revocation once every record is revoked.
+Absorbs: `ConsentedContent` (`transformedContent`, `consentedAt`, `consentActive/revokedAt`; its `originalNeedId` was never written — the migration resolves the need through `consentRecordId → ConsentRecord.targetId`; `participant_id`/`session_id` filled from the resolved need) **and** (TS-7b, 2026-10-21) `ConsentRecord` rows with `targetType = IDENTIFIED_NEED` and decision GRANTED or REVOKED whose need has no `ConsentedContent`. The Stage 3 share-needs handler writes only these and never `ConsentedContent`. `shared_text` = the need label (R19, above). `shared_at` = the grant, and `revoked_at` comes from the record. Duplicate grants of one need merge into one row (R18): earliest grant, and the latest revocation once every record is revoked. (History: this whole paragraph is the TS-7/7b data move — moot under OD7, 2026-10-26.)
 **Delete rule, decided once (N-3):** `need_share → need` is **RESTRICT** everywhere (this table, ERD 2.4, Conventions, the anonymisation walk). A shared need is delivered content and cannot be undelivered (D9), so on account deletion the function hard-deletes only `need` rows that have no `need_share`; a shared need keeps both rows, and its private `label`/`evidence` become unreadable when the owner's participant key is destroyed — the partner keeps `shared_text` under the session key.
 **Structural consequence:** `proposal_need` references `need_share`, not `need` — a proposal can only address a need that has crossed the boundary, and the coverage and closure views can never name an unshared need id (adversarial P0-1, P1-15).
 
@@ -483,7 +490,7 @@ A repair idea for one or more shared needs. · proposals · S (shared proposals)
 | status | proposal_status | no | 'ACTIVE' | `ACTIVE \| REVISED \| REMOVED \| CONVERTED_TO_AGREEMENT` |
 | description | text | no | | encrypted |
 | duration, measure_of_success | text | yes | | |
-| unresolved_need_labels | text[] | no | '{}' | labels from `needsAddressed[]` the migration could not match to a `need_share` (kept as text; see plan §3) |
+| unresolved_need_labels | text[] | no | '{}' | labels from `needsAddressed[]` the migration could not match to a `need_share` (kept as text). **Moot under OD7 (2026-10-26):** nothing is migrated, so the column starts empty everywhere; whether the application ever writes it is for the rewrite to decide |
 | removed_at | timestamptz | yes | | |
 | removed_by_participant_id | uuid | yes | | FK participant CASCADE |
 | removal_reason | text | yes | | |
@@ -504,7 +511,7 @@ Which needs a proposal addresses. · proposals · S · none
 
 Keys: PK (proposal_id, need_id). Index (need_id).
 RLS: S via parent proposal (hop) · I creator of the proposal · U none · D creator.
-Absorbs: `StrategyProposalNeed` + resolvable entries of `StrategyProposal.needsAddressed[]`, both filtered to needs with a `need_share` row (TS-7b, 2026-10-21: either source — `ConsentedContent` or a Stage 3 `ConsentRecord`) (unshared matches are reported by the migration and kept as `unresolved_need_labels`).
+Absorbs: `StrategyProposalNeed` + resolvable entries of `StrategyProposal.needsAddressed[]`, both filtered to needs with a `need_share` row (TS-7b, 2026-10-21: either source — `ConsentedContent` or a Stage 3 `ConsentRecord`) (unshared matches are reported by the migration and kept as `unresolved_need_labels`). (History: the data-move mapping; moot under OD7, 2026-10-26.)
 
 #### `proposal_choice`
 A participant's willingness on a proposal. · proposals · P until `choices_shared` milestone, then S · **session** (the row exists to be revealed; an unshared choice is hard-deleted by the tombstone path, not shredded — adversarial P1-3)
@@ -761,7 +768,7 @@ A registered device: push token, biometric enrolment. · user · U · none
 
 Keys: PK. UNIQUE (user_id, push_token) WHERE push_token IS NOT NULL — Expo tokens are per install, so two accounts on one device legitimately share a token (adversarial P2). Index (user_id).
 RLS: `user_id = me` for all four (shape A). Tombstone scrub deletes rows.
-Absorbs: `User.{pushToken, biometricEnabled, biometricEnrolledAt}` (one row per user at migration; multi-device later).
+Absorbs: `User.{pushToken, biometricEnabled, biometricEnrolledAt}` (one row per user at migration — moot under OD7, 2026-10-26: nothing is copied; multi-device later).
 
 #### `user_preferences`
 The three preference documents, one row per user. · user · U · none (settings, not content)
@@ -1122,6 +1129,8 @@ Service rules the schema cannot express (each needs a test in the golden harness
 ## Adversarial findings, 2026-10-17 — dispositions
 
 Source: `scratchpad/target-schema-adversarial.md` (independent pass on `ab614381`). Table count after this pass: **47** (`need_share` added).
+
+> **OD7, 2026-10-26:** every disposition below that says "fixed in the migration plan §3 step N" (or §3 precheck / §4 content-hash) points at the superseded data-move plan (readable at `phoenix/target-shape` 3cf611cb). Those fixes are **moot** — no data is moved; the baseline (plan §3 now) builds the target empty. Dispositions fixed in this spec (§1–§7) or in the CI gate still stand.
 
 | ID | Disposition |
 |---|---|
