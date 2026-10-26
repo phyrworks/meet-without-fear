@@ -14,23 +14,25 @@
 
 import { Request, Response } from 'express';
 import { logger } from '../lib/logger';
-import { prisma } from '../lib/prisma';
+import { getJobPrisma, prisma } from '../lib/prisma';
 import { ApiResponse, DEFAULT_PRIVACY_PREFERENCES, ErrorCode, MessageRole, PrivacyPreferencesDTO, Stage } from '@meet-without-fear/shared';
 import { notifyPartner, publishSessionEvent, publishMessageAIResponse, publishMessageError } from '../services/realtime';
 import { successResponse, errorResponse } from '../utils/response';
 import { getPartnerUserId, isSessionCreator } from '../utils/session';
+import { getPartnerParticipant } from '../services/participant-resolver';
+import { loadMilestones, loadStageStates, progressDTO, rowForStage } from '../services/stage-shim';
+import { reachMilestone } from '../services/milestone-writer';
+import { createFacilitatorMessage, listConversationMessages } from '../services/message-store';
 import { getOrchestratedResponse, type FullAIContext } from '../services/ai';
 import { embedSessionContent } from '../services/embedding';
 import { updateSessionSummary, getSessionSummary } from '../services/conversation-summarizer';
 import { updateContext } from '../lib/request-context';
 
 async function getShowActivityStatus(userId: string): Promise<boolean> {
-  const user = await prisma.user.findUnique({
-    where: { id: userId },
-    select: { privacyPreferences: true } as any,
-  });
-  const preferences = ((user as { privacyPreferences?: unknown } | null)?.privacyPreferences as PrivacyPreferencesDTO | null) ?? DEFAULT_PRIVACY_PREFERENCES;
-  return preferences.showActivityStatus;
+  // The caller's own preferences document (user_preferences.doc, spec §1.7).
+  const prefs = await prisma.userPreferences.findUnique({ where: { userId }, select: { doc: true } });
+  const value = (prefs?.doc as { privacy?: { showActivityStatus?: unknown } } | null)?.privacy?.showActivityStatus;
+  return typeof value === 'boolean' ? value : DEFAULT_PRIVACY_PREFERENCES.showActivityStatus;
 }
 
 // ============================================================================
@@ -51,59 +53,41 @@ export async function getSession(req: Request, res: Response): Promise<void> {
 
     const sessionId = req.params.id;
 
-    // Get session with related data
-    const session = await prisma.session.findFirst({
-      where: {
-        id: sessionId,
-        relationship: {
-          members: {
-            some: { userId: user.id },
-          },
-        },
-      },
-      include: {
-        relationship: {
+    // The caller's participant (requireSessionAccess); no participant, no session.
+    const participant = req.participant;
+    const session = participant
+      ? await prisma.session.findUnique({
+          where: { id: sessionId },
           include: {
-            members: {
-              select: {
-                userId: true,
-                nickname: true,
-                user: {
+            relationship: {
+              include: {
+                members: {
                   select: {
-                    id: true,
-                    name: true,
-                    firstName: true,
+                    userId: true,
+                    nickname: true,
+                    user: { select: { id: true, name: true, firstName: true } },
                   },
                 },
               },
             },
           },
-        },
-        stageProgress: {
-          where: { userId: user.id },
-          orderBy: { stage: 'desc' },
-          take: 1,
-        },
-      },
-    });
+        })
+      : null;
 
-    if (!session) {
+    if (!participant || !session) {
       errorResponse(res, ErrorCode.NOT_FOUND, 'Session not found', 404);
       return;
     }
 
     // Get my membership (for nickname I use for partner)
-    const myMember = session.relationship.members.find(
-      (m) => m.userId === user.id
-    );
+    const myMember = session.relationship.members.find((m) => m.userId === user.id);
 
     // Get partner info
-    const partnerMember = session.relationship.members.find(
-      (m) => m.userId !== user.id
-    );
+    const partnerMember = session.relationship.members.find((m) => m.userId !== user.id);
 
-    // Get current stage progress
-    const currentProgress = session.stageProgress[0];
+    // Current progress (stage shim)
+    const state = (await loadStageStates([{ id: participant.id, joinedAt: participant.joinedAt }])).get(participant.id);
+    const currentProgress = progressDTO(state, { gates: false });
 
     // Use nickname (what I call my partner) with fallback to their actual name
     const partnerDisplayName = myMember?.nickname ||
@@ -115,8 +99,8 @@ export async function getSession(req: Request, res: Response): Promise<void> {
       session: {
         id: session.id,
         status: session.status,
-        currentStage: currentProgress?.stage ?? 0,
-        stageStatus: currentProgress?.status ?? 'NOT_STARTED',
+        currentStage: currentProgress.stage,
+        stageStatus: currentProgress.status,
         relationshipId: session.relationshipId,
         partner: partnerMember
           ? {
@@ -126,8 +110,8 @@ export async function getSession(req: Request, res: Response): Promise<void> {
             }
           : { id: '', name: myMember?.nickname || null, nickname: myMember?.nickname || null },
         myProgress: {
-          stage: currentProgress?.stage ?? 0,
-          status: currentProgress?.status ?? 'NOT_STARTED',
+          stage: currentProgress.stage,
+          status: currentProgress.status,
         },
         createdAt: session.createdAt.toISOString(),
         resolvedAt: session.resolvedAt?.toISOString() ?? null,
@@ -142,6 +126,12 @@ export async function getSession(req: Request, res: Response): Promise<void> {
 /**
  * Pause an active session
  * POST /sessions/:id/pause
+ *
+ * Target shape (TS-9): PAUSED is not a session status any more; a paused
+ * session is one whose present participants have reached the `paused`
+ * milestone (spec §1.1 participant_milestone, "Absorbs … Session.status
+ * PAUSED"). `paused` is a system key: written through the job connection.
+ * The response keeps its shape (`status: 'PAUSED'`).
  */
 export async function pauseSession(req: Request, res: Response): Promise<void> {
   try {
@@ -152,54 +142,44 @@ export async function pauseSession(req: Request, res: Response): Promise<void> {
     }
 
     const sessionId = req.params.id;
-
-    // Check session exists and user has access
-    const session = await prisma.session.findFirst({
-      where: {
-        id: sessionId,
-        relationship: {
-          members: {
-            some: { userId: user.id },
-          },
-        },
-      },
-    });
-
-    if (!session) {
+    const participant = req.participant;
+    const session = participant ? await prisma.session.findUnique({ where: { id: sessionId } }) : null;
+    if (!participant || !session) {
       errorResponse(res, ErrorCode.NOT_FOUND, 'Session not found', 404);
       return;
     }
 
-    // Check session is active
-    if (session.status !== 'ACTIVE') {
+    const paused = await isSessionPaused(sessionId);
+    if (session.status !== 'ACTIVE' || paused) {
       errorResponse(
         res,
         ErrorCode.SESSION_NOT_ACTIVE,
-        `Cannot pause session: current status is ${session.status}`,
+        `Cannot pause session: current status is ${paused ? 'PAUSED' : session.status}`,
         400
       );
       return;
     }
 
-    // Update session status to PAUSED
-    const updatedSession = await prisma.session.update({
-      where: { id: sessionId },
-      data: { status: 'PAUSED' },
+    const now = new Date();
+    const present = await prisma.participant.findMany({
+      where: { sessionId, leftAt: null },
+      select: { id: true },
     });
+    for (const p of present) await reachMilestone(p.id, 'paused', now);
 
     // Notify partner
-    const partnerId = await getPartnerUserId(sessionId, user.id);
-    if (partnerId) {
-      await notifyPartner(sessionId, partnerId, 'session.paused', {
+    const partner = await getPartnerParticipant(participant.id);
+    if (partner?.userId) {
+      await notifyPartner(sessionId, partner.userId, 'session.paused', {
         pausedBy: user.id,
-        pausedAt: updatedSession.updatedAt.toISOString(),
+        pausedAt: now.toISOString(),
       });
     }
 
     successResponse(res, {
       paused: true,
-      pausedAt: updatedSession.updatedAt.toISOString(),
-      status: updatedSession.status,
+      pausedAt: now.toISOString(),
+      status: 'PAUSED',
     });
   } catch (error) {
     logger.error('[pauseSession] Error:', error);
@@ -207,9 +187,19 @@ export async function pauseSession(req: Request, res: Response): Promise<void> {
   }
 }
 
+/** A session is paused while any of its participants holds the `paused` milestone. */
+async function isSessionPaused(sessionId: string): Promise<boolean> {
+  const n = await prisma.participantMilestone.count({
+    where: { milestoneKey: 'paused', participant: { sessionId } },
+  });
+  return n > 0;
+}
+
 /**
  * Resume a paused session
  * POST /sessions/:id/resume
+ *
+ * Un-reaching a milestone is a DELETE by the job (spec §1.1).
  */
 export async function resumeSession(req: Request, res: Response): Promise<void> {
   try {
@@ -220,26 +210,14 @@ export async function resumeSession(req: Request, res: Response): Promise<void> 
     }
 
     const sessionId = req.params.id;
-
-    // Check session exists and user has access
-    const session = await prisma.session.findFirst({
-      where: {
-        id: sessionId,
-        relationship: {
-          members: {
-            some: { userId: user.id },
-          },
-        },
-      },
-    });
-
-    if (!session) {
+    const participant = req.participant;
+    const session = participant ? await prisma.session.findUnique({ where: { id: sessionId } }) : null;
+    if (!participant || !session) {
       errorResponse(res, ErrorCode.NOT_FOUND, 'Session not found', 404);
       return;
     }
 
-    // Check session is paused
-    if (session.status !== 'PAUSED') {
+    if (!(await isSessionPaused(sessionId))) {
       errorResponse(
         res,
         ErrorCode.VALIDATION_ERROR,
@@ -249,25 +227,24 @@ export async function resumeSession(req: Request, res: Response): Promise<void> 
       return;
     }
 
-    // Update session status to ACTIVE
-    const updatedSession = await prisma.session.update({
-      where: { id: sessionId },
-      data: { status: 'ACTIVE' },
+    await getJobPrisma().participantMilestone.deleteMany({
+      where: { milestoneKey: 'paused', participant: { sessionId } },
     });
+    const now = new Date();
 
     // Notify partner
-    const partnerId = await getPartnerUserId(sessionId, user.id);
-    if (partnerId) {
-      await notifyPartner(sessionId, partnerId, 'session.resumed', {
+    const partner = await getPartnerParticipant(participant.id);
+    if (partner?.userId) {
+      await notifyPartner(sessionId, partner.userId, 'session.resumed', {
         resumedBy: user.id,
-        resumedAt: updatedSession.updatedAt.toISOString(),
+        resumedAt: now.toISOString(),
       });
     }
 
     successResponse(res, {
       resumed: true,
-      resumedAt: updatedSession.updatedAt.toISOString(),
-      status: updatedSession.status,
+      resumedAt: now.toISOString(),
+      status: session.status,
     });
   } catch (error) {
     logger.error('[resumeSession] Error:', error);
@@ -289,98 +266,39 @@ export async function getProgress(req: Request, res: Response): Promise<void> {
 
     const sessionId = req.params.id;
 
-    // Check session exists and user has access
-    const session = await prisma.session.findFirst({
-      where: {
-        id: sessionId,
-        relationship: {
-          members: {
-            some: { userId: user.id },
-          },
-        },
-      },
-      include: {
-        stageProgress: true,
-        relationship: {
-          include: {
-            members: true,
-          },
-        },
-      },
-    });
-
-    if (!session) {
+    const participant = req.participant;
+    const session = participant ? await prisma.session.findUnique({ where: { id: sessionId } }) : null;
+    if (!participant || !session) {
       errorResponse(res, ErrorCode.NOT_FOUND, 'Session not found', 404);
       return;
     }
 
-    const partnerId = await getPartnerUserId(sessionId, user.id);
+    // Both participants' progress (stage shim). `gatesSatisfied` is DERIVED
+    // from milestones (StageProgressDetailDTO unchanged; the keys the target
+    // dropped — feelHeardCheckOffered, readyToRank, rankingSubmitted,
+    // finalEmotionalReading — are never produced).
+    const partner = await getPartnerParticipant(participant.id);
+    const states = await loadStageStates([
+      { id: participant.id, joinedAt: participant.joinedAt },
+      ...(partner ? [{ id: partner.participantId, joinedAt: partner.joinedAt }] : []),
+    ]);
+    const myState = states.get(participant.id);
+    const partnerState = partner ? states.get(partner.participantId) : undefined;
 
-    // Get user's latest stage progress
-    const myProgressRecord = session.stageProgress
-      .filter((sp) => sp.userId === user.id)
-      .sort((a, b) => b.stage - a.stage)[0];
+    const myProgress = progressDTO(myState, { gates: true });
+    const partnerProgress = progressDTO(partnerState, { gates: true });
 
-    // Get user's Stage 1 progress for milestone tracking (feelHeardConfirmedAt)
-    const myStage1Record = session.stageProgress.find(
-      (sp) => sp.userId === user.id && sp.stage === 1
-    );
-
-    // Get partner's latest stage progress
-    const partnerProgressRecord = partnerId
-      ? session.stageProgress
-          .filter((sp) => sp.userId === partnerId)
-          .sort((a, b) => b.stage - a.stage)[0]
-      : null;
-
-    // Default progress for users who haven't started
-    const defaultProgress = {
-      stage: 0,
-      status: 'NOT_STARTED' as const,
-      startedAt: null,
-      completedAt: null,
-      gatesSatisfied: null,
-    };
-
-    const myProgress = myProgressRecord
-      ? {
-          stage: myProgressRecord.stage,
-          status: myProgressRecord.status,
-          startedAt: myProgressRecord.startedAt?.toISOString() ?? null,
-          completedAt: myProgressRecord.completedAt?.toISOString() ?? null,
-          gatesSatisfied: myProgressRecord.gatesSatisfied,
-        }
-      : defaultProgress;
-
-    const partnerProgress = partnerProgressRecord
-      ? {
-          stage: partnerProgressRecord.stage,
-          status: partnerProgressRecord.status,
-          startedAt: partnerProgressRecord.startedAt?.toISOString() ?? null,
-          completedAt: partnerProgressRecord.completedAt?.toISOString() ?? null,
-          gatesSatisfied: partnerProgressRecord.gatesSatisfied,
-        }
-      : defaultProgress;
-
-    // Extract milestones from stage progress records
-    const stage1Gates = myStage1Record?.gatesSatisfied as {
-      feelHeardConfirmedAt?: string;
-    } | null;
-
-    // Get user's Stage 3 progress for need mapping milestones
-    const myStage3Record = session.stageProgress.find(
-      (sp) => sp.userId === user.id && sp.stage === 3
-    );
-    const stage3Gates = myStage3Record?.gatesSatisfied as {
-      needsIdentifiedAt?: string;
-      commonGroundFoundAt?: string;
-    } | null;
-
+    // Milestones (old: the stage-1 and stage-3 rows and their gates). The two
+    // stage-3 instants the old gates carried (needsIdentifiedAt,
+    // commonGroundFoundAt) have no milestone: needs_confirmed is the
+    // identification instant; common ground is not a milestone (null).
+    const myStage1 = rowForStage(myState, 1);
+    const needsConfirmed = myState?.milestones.find((m) => m.key === 'needs_confirmed');
     const milestones = {
-      witnessStartedAt: myStage1Record?.startedAt?.toISOString() ?? null,
-      feelHeardConfirmedAt: stage1Gates?.feelHeardConfirmedAt ?? null,
-      needsIdentifiedAt: stage3Gates?.needsIdentifiedAt ?? null,
-      commonGroundFoundAt: stage3Gates?.commonGroundFoundAt ?? null,
+      witnessStartedAt: myStage1?.startedAt?.toISOString() ?? null,
+      feelHeardConfirmedAt: (myStage1?.gatesSatisfied.feelHeardConfirmedAt as string | undefined) ?? null,
+      needsIdentifiedAt: needsConfirmed?.reachedAt.toISOString() ?? null,
+      commonGroundFoundAt: null,
     };
 
     successResponse(res, {
@@ -549,6 +467,13 @@ function checkGates(
 /**
  * Advance to the next stage
  * POST /sessions/:id/stages/advance
+ *
+ * Target shape (TS-9): there is no stage row to complete or create. A stage
+ * is complete when its terminal milestone is reached (stage shim), and the
+ * next stage is current from that instant — so this endpoint writes nothing.
+ * It answers as the old one did: `advanced: true` with the stage the
+ * participant is now in once the previous stage's terminal milestone is
+ * reached, otherwise the unsatisfied (derived) gates of the current stage.
  */
 export async function advanceStage(req: Request, res: Response): Promise<void> {
   try {
@@ -559,57 +484,22 @@ export async function advanceStage(req: Request, res: Response): Promise<void> {
     }
 
     const sessionId = req.params.id;
-
-    // Check session exists and user has access
-    const session = await prisma.session.findFirst({
-      where: {
-        id: sessionId,
-        relationship: {
-          members: {
-            some: { userId: user.id },
-          },
-        },
-      },
-      include: {
-        stageProgress: true,
-        relationship: {
-          include: {
-            members: true,
-          },
-        },
-      },
-    });
-
-    if (!session) {
+    const participant = req.participant;
+    const session = participant ? await prisma.session.findUnique({ where: { id: sessionId } }) : null;
+    if (!participant || !session) {
       errorResponse(res, ErrorCode.NOT_FOUND, 'Session not found', 404);
       return;
     }
 
-    // Get user's current progress (needed for status check logic)
-    const currentProgress = session.stageProgress
-      .filter((sp) => sp.userId === user.id)
-      .sort((a, b) => b.stage - a.stage)[0];
+    const state = (await loadStageStates([{ id: participant.id, joinedAt: participant.joinedAt }])).get(participant.id);
+    const current = progressDTO(state, { gates: true });
+    const currentStage = current.stage;
 
-    const currentStage = currentProgress?.stage ?? 0;
-    const nextStage = currentStage + 1;
-
-    // Check session status allows advancement
-    // Allow ACTIVE for all users, allow INVITED for creator advancing to Stage 1
+    // Check session status allows advancement (ACTIVE; the creator from
+    // stage 0 while INVITED).
     if (session.status !== 'ACTIVE') {
-      if (session.status === 'INVITED' && nextStage === 1) {
-        // Creator can advance from Stage 0 to Stage 1 while waiting for partner
-        const isCreator = await isSessionCreator(sessionId, user.id);
-        if (!isCreator) {
-          errorResponse(
-            res,
-            ErrorCode.SESSION_NOT_ACTIVE,
-            `Cannot advance stage: session status is ${session.status}`,
-            400
-          );
-          return;
-        }
-        // Creator can proceed
-      } else {
+      const creatorAtStart = session.status === 'INVITED' && currentStage <= 1 && (await isSessionCreator(sessionId, user.id));
+      if (!creatorAtStart) {
         errorResponse(
           res,
           ErrorCode.SESSION_NOT_ACTIVE,
@@ -620,106 +510,34 @@ export async function advanceStage(req: Request, res: Response): Promise<void> {
       }
     }
 
-    // Validate stage range
-    if (nextStage > 4) {
-      errorResponse(
-        res,
-        ErrorCode.VALIDATION_ERROR,
-        'Already at final stage',
-        400
-      );
-      return;
-    }
-
-    // Check gates for current stage
-    const gatesSatisfied = currentProgress?.gatesSatisfied as Record<string, unknown> | null;
-    const gateCheck = checkGates(currentStage, gatesSatisfied);
-
-    if (!gateCheck.satisfied) {
-      successResponse(res, {
-        advanced: false,
-        newStage: currentStage,
-        newStatus: currentProgress?.status ?? 'NOT_STARTED',
-        advancedAt: null,
-        blockedReason: 'GATES_NOT_SATISFIED',
-        unsatisfiedGates: gateCheck.unsatisfiedGates,
-      });
-      return;
-    }
-
-    // Special check for Stage 4: requires both users to satisfy Stage 3 gates.
-    // Stage 3 validation no longer auto-creates Stage 4 rows; each user advances explicitly.
-    if (nextStage === 4) {
-      const partnerId = await getPartnerUserId(sessionId, user.id);
-      if (partnerId) {
-        const partnerCurrentProgress = session.stageProgress
-          .filter((sp) => sp.userId === partnerId)
-          .sort((a, b) => b.stage - a.stage)[0];
-
-        const partnerStage3 = session.stageProgress.find(
-          (sp) => sp.userId === partnerId && sp.stage === 3
-        );
-        const partnerStage3Gates = checkGates(
-          3,
-          partnerStage3?.gatesSatisfied as Record<string, unknown> | null
-        );
-
-        if (
-          partnerCurrentProgress?.stage !== 4 &&
-          (!partnerStage3 || !partnerStage3Gates.satisfied)
-        ) {
-          successResponse(res, {
-            advanced: false,
-            newStage: currentStage,
-            newStatus: 'GATE_PENDING',
-            advancedAt: null,
-            blockedReason: 'PARTNER_NOT_READY',
-          });
-          return;
-        }
+    const reachedCurrent = currentStage > 0 && rowForStage(state, currentStage)?.startedAt;
+    if (reachedCurrent) {
+      // The previous stage's terminal milestone moved the participant here.
+      const partner = await getPartnerParticipant(participant.id);
+      if (partner?.userId) {
+        await notifyPartner(sessionId, partner.userId, 'partner.advanced', {
+          toStage: currentStage,
+          advancedAt: current.startedAt ?? undefined,
+          triggeredByUserId: user.id,
+        });
       }
-    }
-
-    const now = new Date();
-
-    // Mark current stage as completed
-    if (currentProgress) {
-      await prisma.stageProgress.update({
-        where: { id: currentProgress.id },
-        data: {
-          status: 'COMPLETED',
-          completedAt: now,
-        },
+      successResponse(res, {
+        advanced: true,
+        newStage: currentStage,
+        newStatus: current.status,
+        advancedAt: current.startedAt,
       });
+      return;
     }
 
-    // Create progress for next stage
-    const newProgress = await prisma.stageProgress.create({
-      data: {
-        sessionId,
-        userId: user.id,
-        stage: nextStage,
-        status: 'IN_PROGRESS',
-        startedAt: now,
-        gatesSatisfied: {},
-      },
-    });
-
-    // Notify partner about stage advancement
-    const partnerId = await getPartnerUserId(sessionId, user.id);
-    if (partnerId) {
-      await notifyPartner(sessionId, partnerId, 'partner.advanced', {
-        toStage: nextStage,
-        advancedAt: now.toISOString(),
-        triggeredByUserId: user.id,
-      });
-    }
-
+    const gateCheck = checkGates(currentStage, (current.gatesSatisfied as Record<string, unknown> | null) ?? null);
     successResponse(res, {
-      advanced: true,
-      newStage: nextStage,
-      newStatus: newProgress.status,
-      advancedAt: now.toISOString(),
+      advanced: false,
+      newStage: currentStage,
+      newStatus: current.status,
+      advancedAt: null,
+      blockedReason: 'GATES_NOT_SATISFIED',
+      unsatisfiedGates: gateCheck.unsatisfiedGates,
     });
   } catch (error) {
     logger.error('[advanceStage] Error:', error);
@@ -744,50 +562,33 @@ export async function getInvitation(req: Request, res: Response): Promise<void> 
     }
 
     const sessionId = req.params.id;
-
-    // Get session with any invitation (not just user's)
-    // This allows both inviter and invitee to see the invitation
-    const session = await prisma.session.findFirst({
-      where: {
-        id: sessionId,
-        relationship: {
-          members: {
-            some: { userId: user.id },
-          },
-        },
-      },
-      include: {
-        invitations: {
-          orderBy: { createdAt: 'desc' },
-          take: 1,
-        },
-      },
-    });
-
-    if (!session) {
+    const participant = req.participant;
+    const session = participant ? await prisma.session.findUnique({ where: { id: sessionId } }) : null;
+    if (!participant || !session) {
       errorResponse(res, ErrorCode.NOT_FOUND, 'Session not found', 404);
       return;
     }
 
-    const invitation = session.invitations[0];
+    // The session's latest invitation (both inviter and invitee may see it)
+    const invitation = await prisma.invitation.findFirst({
+      where: { sessionId },
+      orderBy: { createdAt: 'desc' },
+    });
     if (!invitation) {
       errorResponse(res, ErrorCode.NOT_FOUND, 'Invitation not found', 404);
       return;
     }
 
-    // Determine if the current user is the inviter or invitee
-    const isInviter = invitation.invitedById === user.id;
-
     successResponse(res, {
       invitation: {
         id: invitation.id,
         name: invitation.name,
-        messageConfirmed: invitation.messageConfirmed,
+        messageConfirmed: invitation.messageConfirmedAt !== null,
         messageConfirmedAt: invitation.messageConfirmedAt?.toISOString() ?? null,
         acceptedAt: invitation.acceptedAt?.toISOString() ?? null,
         status: invitation.status,
         expiresAt: invitation.expiresAt.toISOString(),
-        isInviter,
+        isInviter: invitation.invitedByParticipantId === participant.id,
         topicFrame: session.topicFrame ?? null,
         topicFrameConfirmedAt: session.topicFrameConfirmedAt?.toISOString() ?? null,
       },
@@ -801,6 +602,13 @@ export async function getInvitation(req: Request, res: Response): Promise<void> 
 /**
  * Confirm invitation message (ready to share)
  * POST /sessions/:id/invitation/confirm
+ *
+ * Target shape (TS-9): the inviter reaches `compact_signed` (self-assertable,
+ * app connection) and `invitation_sent` (a system fact, job connection) — the
+ * old `{ compactSigned, invitationSent }` gates of the completed stage-0 row —
+ * which moves them to stage 1 in the stage shim. Session status moves to
+ * INVITED through app.session_set_status. The transition message is written
+ * into the inviter's conversation through the job connection.
  */
 export async function confirmInvitationMessage(req: Request, res: Response): Promise<void> {
   try {
@@ -811,58 +619,39 @@ export async function confirmInvitationMessage(req: Request, res: Response): Pro
     }
 
     const sessionId = req.params.id;
-
-    // Get session with invitation
-    const session = await prisma.session.findFirst({
-      where: {
-        id: sessionId,
-        relationship: {
-          members: {
-            some: { userId: user.id },
-          },
-        },
-      },
-      include: {
-        invitations: {
-          where: { invitedById: user.id },
-          orderBy: { createdAt: 'desc' },
-          take: 1,
-        },
-      },
-    });
-
-    if (!session) {
+    const participant = req.participant;
+    const session = participant ? await prisma.session.findUnique({ where: { id: sessionId } }) : null;
+    if (!participant || !session) {
       errorResponse(res, ErrorCode.NOT_FOUND, 'Session not found', 404);
       return;
     }
 
-    const invitation = session.invitations[0];
+    // The invitation this participant sent
+    const invitation = await prisma.invitation.findFirst({
+      where: { sessionId, invitedByParticipantId: participant.id },
+      orderBy: { createdAt: 'desc' },
+    });
     if (!invitation) {
       errorResponse(res, ErrorCode.NOT_FOUND, 'Invitation not found', 404);
       return;
     }
 
-    // Idempotent short-circuit: only return early if Stage 0 is already
-    // marked completed for this user. messageConfirmed alone is no longer
-    // sufficient because confirmTopicFrame now flips it eagerly so the
-    // partner can accept the link before the inviter closes the share modal.
-    if (invitation.messageConfirmed) {
-      const stage0 = await prisma.stageProgress.findFirst({
-        where: { sessionId, userId: user.id, stage: 0 },
-        select: { status: true },
+    // Idempotent short-circuit: only when the message is confirmed AND the
+    // inviter already sent it (invitation_sent). message_confirmed_at alone is
+    // not enough: confirmTopicFrame sets it eagerly so the partner can accept
+    // the link before the inviter closes the share modal.
+    const milestones = (await loadMilestones([participant.id])).get(participant.id) ?? [];
+    if (invitation.messageConfirmedAt && milestones.some((m) => m.key === 'invitation_sent')) {
+      successResponse(res, {
+        confirmed: true,
+        invitation: {
+          id: invitation.id,
+          messageConfirmed: true,
+          messageConfirmedAt: invitation.messageConfirmedAt.toISOString(),
+          topicFrame: session.topicFrame ?? null,
+        },
       });
-      if (stage0?.status === 'COMPLETED') {
-        successResponse(res, {
-          confirmed: true,
-          invitation: {
-            id: invitation.id,
-            messageConfirmed: true,
-            messageConfirmedAt: invitation.messageConfirmedAt?.toISOString() ?? null,
-            topicFrame: session.topicFrame ?? null,
-          },
-        });
-        return;
-      }
+      return;
     }
 
     if (!session.topicFrame || !session.topicFrameConfirmedAt) {
@@ -870,93 +659,32 @@ export async function confirmInvitationMessage(req: Request, res: Response): Pro
       return;
     }
 
-    // Advance user from Stage 0 to Stage 1 (Witness)
     const now = new Date();
 
-    // Confirm — only flip the messageConfirmed flag/timestamp.
-    // The invitation message column is no longer used by application code.
+    // Confirm — only the message_confirmed_at timestamp.
     const updatedInvitation = await prisma.invitation.update({
       where: { id: invitation.id },
-      data: {
-        messageConfirmed: true,
-        messageConfirmedAt: now,
-      },
+      data: { messageConfirmedAt: invitation.messageConfirmedAt ?? now },
     });
 
-    // Update session status to INVITED (ready for partner to accept)
-    await prisma.session.update({
-      where: { id: sessionId },
-      data: { status: 'INVITED' },
-    });
+    // Session → INVITED (ready for partner to accept), through its only writer.
+    if (session.status === 'CREATED') {
+      await getJobPrisma().$executeRaw`SELECT app.session_set_status(${sessionId}::uuid, 'INVITED'::public.session_status)`;
+    }
 
-    // Complete Stage 0 if exists
-    await prisma.stageProgress.updateMany({
-      where: {
-        sessionId,
-        userId: user.id,
-        stage: 0,
-        status: 'IN_PROGRESS',
-      },
-      data: {
-        status: 'COMPLETED',
-        completedAt: now,
-        gatesSatisfied: { compactSigned: true, invitationSent: true },
-      },
-    });
+    // Stage 0 complete: compact signed (if not yet) and invitation sent.
+    await reachMilestone(participant.id, 'compact_signed', now);
+    await reachMilestone(participant.id, 'invitation_sent', now);
 
-    // Create Stage 1 progress
-    await prisma.stageProgress.upsert({
-      where: {
-        sessionId_userId_stage: {
-          sessionId,
-          userId: user.id,
-          stage: 1,
-        },
-      },
-      update: {
-        status: 'IN_PROGRESS',
-        startedAt: now,
-      },
-      create: {
-        sessionId,
-        userId: user.id,
-        stage: 1,
-        status: 'IN_PROGRESS',
-        startedAt: now,
-        gatesSatisfied: {},
-      },
-    });
-
-    // Generate proactive transition message from AI
-    // Get conversation history from Stage 0 (invitation phase) - only this user's messages (data isolation)
-    //
-    // Check for existing summary to avoid "lazy eviction" - fetching messages already summarized
+    // Proactive transition message from the AI, from this participant's own
+    // conversation (summary-aware: only messages after the summary boundary).
     const existingSummary = await getSessionSummary(sessionId, user.id);
     const summaryBoundary = existingSummary?.summary.newestMessageAt;
-
-    // Determine how many messages to fetch based on whether summary exists
-    // If summary exists, fetch all messages after boundary (~15 based on recentMessagesToKeep)
-    // If no summary, limit to 20 to avoid excessive context
     const historyLimit = summaryBoundary ? 30 : 20;
-
-    // Use the most recent messages, then reverse for chronological order.
-    // ASC + take N returns the oldest N, which can make the transition prompt stale in long sessions.
-    const historyDesc = await prisma.message.findMany({
-      where: {
-        sessionId,
-        OR: [
-          // Messages user sent without a specific recipient
-          { senderId: user.id, forUserId: null },
-          // Messages specifically for this user
-          { forUserId: user.id },
-        ],
-        // If summary exists, only fetch messages AFTER the summary boundary
-        // This prevents duplicate context (summary + raw messages covering same content)
-        ...(summaryBoundary ? { timestamp: { gt: summaryBoundary } } : {}),
-      },
-      orderBy: { timestamp: 'desc' },
-      take: historyLimit,
-    });
+    const conversationId = participant.mainConversationId;
+    const historyDesc = conversationId
+      ? await listConversationMessages({ conversationId, limit: historyLimit - 1, order: 'desc', newerThan: summaryBoundary })
+      : [];
     const history = historyDesc.slice().reverse();
 
     // Get partner name for context
@@ -966,7 +694,7 @@ export async function confirmInvitationMessage(req: Request, res: Response): Pro
     // Includes userId to differentiate between users in the same session
     const turnId = `${sessionId}-${user.id}-invitation-confirm`;
     // Update request context so all downstream code can access this turnId
-    updateContext({ turnId, sessionId, userId: user.id });
+    updateContext({ turnId, sessionId, userId: user.id, participantId: participant.id });
 
     // Build AI context for transition
     const aiContext: FullAIContext = {
@@ -999,7 +727,7 @@ export async function confirmInvitationMessage(req: Request, res: Response): Pro
       confirmed: true,
       invitation: {
         id: updatedInvitation.id,
-        messageConfirmed: updatedInvitation.messageConfirmed,
+        messageConfirmed: updatedInvitation.messageConfirmedAt !== null,
         messageConfirmedAt: updatedInvitation.messageConfirmedAt?.toISOString() ?? null,
         topicFrame: session.topicFrame,
       },
@@ -1007,34 +735,22 @@ export async function confirmInvitationMessage(req: Request, res: Response): Pro
     });
 
     // Generate transition message in background (fire-and-forget)
-    // The AI message will be delivered to the client via Ably's message.ai_response event,
-    // which the mobile app already handles via useAIMessageHandler.addAIMessage.
     (async () => {
       try {
         const historyWithTrigger = [
           ...history.map((m) => ({
-            role: m.role === 'USER' ? 'user' as const : 'assistant' as const,
+            role: m.role === 'USER' && m.kind === 'CHAT' ? 'user' as const : 'assistant' as const,
             content: m.content,
           })),
           { role: 'user' as const, content: '[I just sent the invitation and am ready to continue.]' },
         ];
 
-        const orchestratorResult = await getOrchestratedResponse(
-          historyWithTrigger,
-          aiContext
-        );
+        const orchestratorResult = await getOrchestratedResponse(historyWithTrigger, aiContext);
+        if (!conversationId) throw new Error(`Participant ${participant.id} has no MAIN conversation`);
 
-        const aiResponseContent = orchestratorResult.response;
-
-        const aiMessage = await prisma.message.create({
-          data: {
-            sessionId,
-            senderId: null,
-            forUserId: user.id,
-            role: 'AI',
-            content: aiResponseContent,
-            stage: 1,
-          },
+        const aiMessage = await createFacilitatorMessage({
+          conversationId,
+          content: orchestratorResult.response,
         });
 
         logger.info('[confirmInvitationMessage] Generated transition message:', aiMessage.id);
@@ -1047,7 +763,7 @@ export async function confirmInvitationMessage(req: Request, res: Response): Pro
           role: MessageRole.AI,
           content: aiMessage.content,
           stage: Stage.WITNESS,
-          timestamp: aiMessage.timestamp.toISOString(),
+          timestamp: aiMessage.createdAt.toISOString(),
         });
 
         // Summarize and embed (non-blocking)
@@ -1076,8 +792,9 @@ export async function confirmInvitationMessage(req: Request, res: Response): Pro
  * Mark session as viewed
  * POST /sessions/:id/viewed
  *
- * Updates lastViewedAt and optionally lastSeenChatItemId on the user's UserVessel.
- * This is called when the user opens/views a session to mark it as "read".
+ * Updates lastViewedAt and optionally lastSeenChatItemId on the participant's
+ * conversation_read_state (target shape, TS-9). This is called when the user
+ * opens/views a session to mark it as "read".
  */
 export async function markSessionViewed(req: Request, res: Response): Promise<void> {
   try {
@@ -1088,30 +805,31 @@ export async function markSessionViewed(req: Request, res: Response): Promise<vo
     }
 
     const sessionId = req.params.id;
+    const participant = req.participant;
+    if (!participant) {
+      errorResponse(res, ErrorCode.NOT_FOUND, 'Session not found', 404);
+      return;
+    }
     const { lastSeenChatItemId } = req.body;
 
     const now = new Date();
 
-    // Update or create UserVessel with read state
-    const userVessel = await prisma.userVessel.upsert({
-      where: {
-        userId_sessionId: {
-          userId: user.id,
-          sessionId,
-        },
-      },
-      update: {
-        lastViewedAt: now,
-        lastActiveAt: now,
-        lastSeenChatItemId: lastSeenChatItemId ?? null,
-      },
-      create: {
-        userId: user.id,
-        sessionId,
-        lastViewedAt: now,
-        lastActiveAt: now,
-        lastSeenChatItemId: lastSeenChatItemId ?? null,
-      },
+    // last_seen_message_id is an FK to message: only a message of the
+    // participant's own conversation is kept (a mobile chat-item id that is
+    // not a message — e.g. `context-shared-…` — reads as null, as the target
+    // migration mapped it).
+    const seenMessage =
+      typeof lastSeenChatItemId === 'string' && participant.mainConversationId
+        ? await prisma.message.findFirst({
+            where: { id: lastSeenChatItemId, conversationId: participant.mainConversationId },
+            select: { id: true },
+          }).catch(() => null)
+        : null;
+
+    const readState = await prisma.conversationReadState.upsert({
+      where: { participantId: participant.id },
+      update: { lastViewedAt: now, lastActiveAt: now, lastSeenMessageId: seenMessage?.id ?? null },
+      create: { participantId: participant.id, lastViewedAt: now, lastActiveAt: now, lastSeenMessageId: seenMessage?.id ?? null },
     });
 
     // Notify partner that this user viewed the session (for delivery status updates)
@@ -1134,8 +852,8 @@ export async function markSessionViewed(req: Request, res: Response): Promise<vo
 
     successResponse(res, {
       success: true,
-      lastViewedAt: userVessel.lastViewedAt?.toISOString() ?? now.toISOString(),
-      lastSeenChatItemId: userVessel.lastSeenChatItemId,
+      lastViewedAt: readState.lastViewedAt?.toISOString() ?? now.toISOString(),
+      lastSeenChatItemId: readState.lastSeenMessageId,
     });
   } catch (error) {
     logger.error('[markSessionViewed] Error:', error);
@@ -1147,7 +865,7 @@ export async function markSessionViewed(req: Request, res: Response): Promise<vo
  * Mark the Share/Partner tab as viewed
  * POST /sessions/:id/viewed-share-tab
  *
- * Updates the lastViewedShareTabAt timestamp for the user's session vessel.
+ * Updates last_viewed_share_tab_at on the participant's conversation_read_state.
  * This is used to determine "seen" status for shared content (empathy, context).
  * Content is only marked as "seen" when the user actually views the Share tab.
  */
@@ -1160,26 +878,17 @@ export async function markShareTabViewed(req: Request, res: Response): Promise<v
     }
 
     const sessionId = req.params.id;
+    const participant = req.participant;
+    if (!participant) {
+      errorResponse(res, ErrorCode.NOT_FOUND, 'Session not found', 404);
+      return;
+    }
     const now = new Date();
 
-    // Update or create UserVessel with share tab view time
-    const userVessel = await prisma.userVessel.upsert({
-      where: {
-        userId_sessionId: {
-          userId: user.id,
-          sessionId,
-        },
-      },
-      update: {
-        lastViewedShareTabAt: now,
-        lastActiveAt: now,
-      },
-      create: {
-        userId: user.id,
-        sessionId,
-        lastViewedShareTabAt: now,
-        lastActiveAt: now,
-      },
+    const readState = await prisma.conversationReadState.upsert({
+      where: { participantId: participant.id },
+      update: { lastViewedShareTabAt: now, lastActiveAt: now },
+      create: { participantId: participant.id, lastViewedShareTabAt: now, lastActiveAt: now },
     });
 
     // Notify partner that this user viewed the Share tab (for delivery status updates)
@@ -1202,7 +911,7 @@ export async function markShareTabViewed(req: Request, res: Response): Promise<v
 
     successResponse(res, {
       success: true,
-      lastViewedShareTabAt: userVessel.lastViewedShareTabAt?.toISOString() ?? now.toISOString(),
+      lastViewedShareTabAt: readState.lastViewedShareTabAt?.toISOString() ?? now.toISOString(),
     });
   } catch (error) {
     logger.error('[markShareTabViewed] Error:', error);
@@ -1214,8 +923,9 @@ export async function markShareTabViewed(req: Request, res: Response): Promise<v
  * Get count of sessions with unread content
  * GET /sessions/unread-count
  *
- * Returns the number of sessions that have been updated since the user last viewed them.
- * Used for the tab badge on the Sessions tab.
+ * The number of the caller's live, unarchived sessions whose MAIN conversation
+ * has messages after their last view that they did not send
+ * (`v_conversation_unread`, target shape). Used for the Sessions tab badge.
  */
 export async function getUnreadSessionCount(req: Request, res: Response): Promise<void> {
   try {
@@ -1225,49 +935,18 @@ export async function getUnreadSessionCount(req: Request, res: Response): Promis
       return;
     }
 
-    // Get all sessions the user is a member of, with their vessels
-    const sessions = await prisma.session.findMany({
-      where: {
-        relationship: {
-          members: {
-            some: { userId: user.id },
-          },
-        },
-        // Only count active/waiting sessions, not archived/resolved
-        status: {
-          in: ['ACTIVE', 'INVITED', 'CREATED', 'WAITING', 'PAUSED'],
-        },
-      },
-      select: {
-        id: true,
-        updatedAt: true,
-        status: true,
-        userVessels: {
-          where: { userId: user.id },
-          select: {
-            lastViewedAt: true,
-          },
-        },
-      },
-    });
+    const rows = await prisma.$queryRaw<Array<{ n: bigint }>>`
+      SELECT count(*) AS n
+      FROM v_conversation_unread u
+      JOIN participant p ON p.id = u.participant_id
+      JOIN session s ON s.id = p.session_id
+      LEFT JOIN conversation_read_state r ON r.participant_id = p.id
+      WHERE p.user_id = ${user.id}::uuid AND p.left_at IS NULL
+        AND s.status IN ('ACTIVE', 'INVITED', 'CREATED')
+        AND r.archived_at IS NULL
+        AND u.unread_count > 0`;
 
-    // Count sessions with unread content
-    let unreadCount = 0;
-    for (const session of sessions) {
-      const userVessel = session.userVessels[0];
-      const lastViewedAt = userVessel?.lastViewedAt ?? null;
-
-      // Determine if there's unread content
-      const hasUnread = lastViewedAt === null
-        ? session.status !== 'CREATED' // Unread if not a fresh draft
-        : session.updatedAt > lastViewedAt;
-
-      if (hasUnread) {
-        unreadCount++;
-      }
-    }
-
-    successResponse(res, { count: unreadCount });
+    successResponse(res, { count: Number(rows[0]?.n ?? 0) });
   } catch (error) {
     logger.error('[getUnreadSessionCount] Error:', error);
     errorResponse(res, ErrorCode.INTERNAL_ERROR, 'Failed to get unread count', 500);

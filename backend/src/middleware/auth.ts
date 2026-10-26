@@ -394,15 +394,17 @@ export async function requireSessionAccess(
 
     // Fallback: allow access for invitees during the acceptance timing gap
     // (the participant row is created when the invitation is accepted). Phase 3
-    // §7 schedules this fallback's deletion (W6); kept behind the same rule
-    // until then: a live invitation for this session that the caller did not send.
+    // §7 schedules this fallback's deletion (W6). Until then: a live PENDING
+    // invitation for this session that the caller did not send, or an ACCEPTED
+    // one the caller accepted (`accepted_by_user_id`, new in the target — the
+    // old rule admitted ANY non-inviter once the invitation was accepted).
     const invitedSession = await prisma.invitation.findFirst({
       where: {
         sessionId,
         invitedByParticipant: { userId: { not: user.id } },
         OR: [
           { status: 'PENDING', expiresAt: { gt: new Date() } },
-          { status: 'ACCEPTED' },
+          { status: 'ACCEPTED', acceptedByUserId: user.id },
         ],
       },
       select: { id: true },

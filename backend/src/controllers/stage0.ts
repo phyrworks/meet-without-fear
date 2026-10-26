@@ -3,84 +3,41 @@
  *
  * Handles the compact signing process where both parties agree to
  * engage in the Meet Without Fear conflict resolution process.
+ *
+ * Target shape (TS-9): signing is the participant reaching the
+ * `compact_signed` milestone (self-assertable: the request path writes it).
+ * Reaching it completes stage 0 in the stage shim, so the old "advance to
+ * Stage 1" rows are implied. The partner's signature is their milestone
+ * (participant_milestone is visible to co-participants).
  */
 
 import { Request, Response } from 'express';
 import { logger } from '../lib/logger';
-import { prisma } from '../lib/prisma';
+import { getJobPrisma, prisma } from '../lib/prisma';
 import { notifyPartner } from '../services/realtime';
-import { ApiResponse, ErrorCode, signCompactRequestSchema } from '@meet-without-fear/shared';
+import { ErrorCode, signCompactRequestSchema } from '@meet-without-fear/shared';
 import { successResponse, errorResponse } from '../utils/response';
-import { getPartnerUserId } from '../utils/session';
-
-// ============================================================================
-// Types
-// ============================================================================
-
-interface CompactGates {
-  compactSigned: boolean;
-  signedAt: string | null;
-}
+import { getPartnerParticipant, type ResolvedParticipant } from '../services/participant-resolver';
+import { loadMilestones } from '../services/stage-shim';
+import { reachMilestone } from '../services/milestone-writer';
 
 // ============================================================================
 // Helper Functions
 // ============================================================================
 
-/**
- * Gets a partner's stage 0 progress
- */
-async function getPartnerProgress(
-  sessionId: string,
-  currentUserId: string
-): Promise<{ userId: string; gatesSatisfied: CompactGates | null } | null> {
-  const partnerId = await getPartnerUserId(sessionId, currentUserId);
-
-  if (!partnerId) {
-    return null;
-  }
-
-  const progress = await prisma.stageProgress.findFirst({
-    where: {
-      sessionId,
-      userId: partnerId,
-      stage: 0,
-    },
-  });
-
-  return {
-    userId: partnerId,
-    gatesSatisfied: progress?.gatesSatisfied as CompactGates | null,
-  };
+/** When `participantId` signed the compact, or null. */
+async function signedAt(participantId: string): Promise<Date | null> {
+  const milestones = (await loadMilestones([participantId])).get(participantId) ?? [];
+  return milestones.find((m) => m.key === 'compact_signed')?.reachedAt ?? null;
 }
 
-/**
- * Checks if a session exists and user has access
- */
-async function validateSessionAccess(
-  sessionId: string,
-  userId: string
-): Promise<{ valid: boolean; session?: unknown }> {
-  const session = await prisma.session.findUnique({
-    where: { id: sessionId },
-    include: {
-      relationship: {
-        include: {
-          members: true,
-        },
-      },
-    },
-  });
-
-  if (!session) {
-    return { valid: false };
+/** The caller's participant, or a 404 written to `res`. */
+function participantOr404(req: Request, res: Response): ResolvedParticipant | null {
+  if (!req.participant) {
+    errorResponse(res, ErrorCode.NOT_FOUND, 'Session not found', 404);
+    return null;
   }
-
-  const isMember = session.relationship.members.some((m) => m.userId === userId);
-  if (!isMember) {
-    return { valid: false };
-  }
-
-  return { valid: true, session };
+  return req.participant;
 }
 
 // ============================================================================
@@ -114,131 +71,45 @@ export async function signCompact(req: Request, res: Response): Promise<void> {
       return;
     }
 
-    // Check session exists and user has access
-    const sessionCheck = await validateSessionAccess(sessionId, user.id);
-    if (!sessionCheck.valid) {
-      errorResponse(res, ErrorCode.NOT_FOUND, 'Session not found', 404);
-      return;
-    }
+    const participant = participantOr404(req, res);
+    if (!participant) return;
 
-    // Check if already signed
-    const existing = await prisma.stageProgress.findUnique({
-      where: {
-        sessionId_userId_stage: {
-          sessionId,
-          userId: user.id,
-          stage: 0,
-        },
-      },
-    });
-
-    const existingGates = existing?.gatesSatisfied as CompactGates | null;
-    if (existingGates?.compactSigned) {
+    const now = new Date();
+    const recorded = await reachMilestone(participant.id, 'compact_signed', now);
+    if (!recorded) {
       errorResponse(res, ErrorCode.CONFLICT, 'Compact already signed', 409);
       return;
     }
-
-    const signedAt = new Date().toISOString();
-
-    // Update stage progress
-    await prisma.stageProgress.upsert({
-      where: {
-        sessionId_userId_stage: {
-          sessionId,
-          userId: user.id,
-          stage: 0,
-        },
-      },
-      create: {
-        sessionId,
-        userId: user.id,
-        stage: 0,
-        status: 'IN_PROGRESS',
-        gatesSatisfied: { compactSigned: true, signedAt },
-      },
-      update: {
-        gatesSatisfied: { compactSigned: true, signedAt },
-      },
-    });
+    const signedAtIso = now.toISOString();
 
     // Check if partner has signed
-    const partner = await getPartnerProgress(sessionId, user.id);
-    const partnerSigned = partner?.gatesSatisfied?.compactSigned ?? false;
+    const partner = await getPartnerParticipant(participant.id);
+    const partnerSigned = partner ? (await signedAt(partner.participantId)) !== null : false;
     const canAdvance = partnerSigned;
 
-    // If both have signed, ensure session is ACTIVE and advance to Stage 1
-    // This handles edge cases where invitation acceptance didn't update status
+    // If both have signed, ensure the session is ACTIVE — through
+    // app.session_set_status, the only writer of session.status, as the job.
     if (partnerSigned) {
-      const session = await prisma.session.findUnique({
-        where: { id: sessionId },
-        select: { status: true },
-      });
+      const session = await prisma.session.findUnique({ where: { id: sessionId }, select: { status: true } });
       if (session && session.status !== 'ACTIVE' && session.status !== 'RESOLVED') {
-        await prisma.session.update({
-          where: { id: sessionId },
-          data: { status: 'ACTIVE' },
-        });
-        logger.info(`[signCompact] Updated session ${sessionId} status to ACTIVE (both signed)`);
+        await getJobPrisma()
+          .$executeRaw`SELECT app.session_set_status(${sessionId}::uuid, 'ACTIVE'::public.session_status)`
+          .then(() => logger.info(`[signCompact] Updated session ${sessionId} status to ACTIVE (both signed)`))
+          .catch((err: unknown) => logger.warn(`[signCompact] Session ${sessionId} not moved to ACTIVE:`, err));
       }
-
-      // Auto-advance this user from Stage 0 to Stage 1
-      // Mark Stage 0 as completed
-      await prisma.stageProgress.updateMany({
-        where: {
-          sessionId,
-          userId: user.id,
-          stage: 0,
-          status: 'IN_PROGRESS',
-        },
-        data: {
-          status: 'COMPLETED',
-          completedAt: new Date(),
-        },
-      });
-
-      // Create Stage 1 progress
-      await prisma.stageProgress.upsert({
-        where: {
-          sessionId_userId_stage: {
-            sessionId,
-            userId: user.id,
-            stage: 1,
-          },
-        },
-        update: {
-          status: 'IN_PROGRESS',
-          startedAt: new Date(),
-        },
-        create: {
-          sessionId,
-          userId: user.id,
-          stage: 1,
-          status: 'IN_PROGRESS',
-          startedAt: new Date(),
-          gatesSatisfied: {},
-        },
-      });
       logger.info(`[signCompact] Advanced user ${user.id} to Stage 1`);
     }
 
-    // Check if there's an invitation to determine if we should notify the inviter
+    // Determine who to notify: if the signing user is the invitee, notify the
+    // inviter; otherwise the partner.
     const invitation = await prisma.invitation.findFirst({
-      where: {
-        sessionId,
-      },
-      select: {
-        invitedById: true,
-      },
+      where: { sessionId },
+      select: { invitedByParticipant: { select: { id: true, userId: true } } },
     });
-
-    // Determine who to notify: if the signing user is the invitee, notify the inviter
-    // Otherwise, notify the partner (for cases where there's no invitation or the inviter is signing)
     let notificationTargetId: string | null = null;
-    if (invitation && invitation.invitedById !== user.id) {
-      // The signing user is the invitee, notify the inviter
-      notificationTargetId = invitation.invitedById;
+    if (invitation && invitation.invitedByParticipant.id !== participant.id) {
+      notificationTargetId = invitation.invitedByParticipant.userId;
     } else if (partner?.userId) {
-      // No invitation or inviter is signing, notify the partner
       notificationTargetId = partner.userId;
     }
 
@@ -246,14 +117,14 @@ export async function signCompact(req: Request, res: Response): Promise<void> {
     if (notificationTargetId) {
       await notifyPartner(sessionId, notificationTargetId, 'partner.signed_compact', {
         signedBy: user.id,
-        signedAt,
+        signedAt: signedAtIso,
         triggeredByUserId: user.id,
       });
     }
 
     successResponse(res, {
       signed: true,
-      signedAt,
+      signedAt: signedAtIso,
       partnerSigned,
       canAdvance,
     });
@@ -276,41 +147,30 @@ export async function getCompactStatus(req: Request, res: Response): Promise<voi
     }
 
     const sessionId = req.params.id;
-
-    // Check session exists and user has access
-    const sessionCheck = await validateSessionAccess(sessionId, user.id);
-    if (!sessionCheck.valid) {
+    const participant = participantOr404(req, res);
+    if (!participant) return;
+    const session = await prisma.session.findUnique({ where: { id: sessionId }, select: { relationshipId: true } });
+    if (!session) {
       errorResponse(res, ErrorCode.NOT_FOUND, 'Session not found', 404);
       return;
     }
 
-    // Get user's own progress
-    const myProgress = await prisma.stageProgress.findUnique({
-      where: {
-        sessionId_userId_stage: {
-          sessionId,
-          userId: user.id,
-          stage: 0,
-        },
-      },
-    });
-
-    const myGates = myProgress?.gatesSatisfied as CompactGates | null;
-    const mySigned = myGates?.compactSigned ?? false;
-    const mySignedAt = myGates?.signedAt ?? null;
+    const mine = await signedAt(participant.id);
+    const mySigned = mine !== null;
+    const mySignedAt = mine?.toISOString() ?? null;
 
     // Only show partner status if user has signed (privacy constraint)
     let partnerSigned = false;
     let partnerSignedAt: string | null = null;
 
     if (mySigned) {
-      const partner = await getPartnerProgress(sessionId, user.id);
-      partnerSigned = partner?.gatesSatisfied?.compactSigned ?? false;
-      partnerSignedAt = partner?.gatesSatisfied?.signedAt ?? null;
+      const partner = await getPartnerParticipant(participant.id);
+      const theirs = partner ? await signedAt(partner.participantId) : null;
+      partnerSigned = theirs !== null;
+      partnerSignedAt = theirs?.toISOString() ?? null;
     }
 
     // Check if this is the first session for this relationship
-    const session = sessionCheck.session as { relationshipId: string };
     const priorResolvedCount = await prisma.session.count({
       where: {
         relationshipId: session.relationshipId,

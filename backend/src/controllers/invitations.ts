@@ -14,6 +14,8 @@ import {
 } from '@meet-without-fear/shared';
 import { successResponse, errorResponse } from '../utils/response';
 import { generateSessionStatusSummary } from '../utils/session';
+import { getPartnerParticipant } from '../services/participant-resolver';
+import { loadStageStates, progressDTO } from '../services/stage-shim';
 import { createInvitationUrl } from '../utils/urls';
 
 // ============================================================================
@@ -66,201 +68,128 @@ export async function listSessions(req: Request, res: Response): Promise<void> {
     const { status, limit = '20', cursor } = req.query;
     const takeLimit = parseInt(limit as string, 10);
 
-    // Find sessions where user is a member of the relationship
-    const sessions = await prisma.session.findMany({
+    // Target shape (TS-9): the list is the caller's participants — one per
+    // session — that they have not archived (conversation_read_state).
+    const mine = await prisma.participant.findMany({
       where: {
-        relationship: {
-          members: {
-            some: { userId: user.id },
-          },
-        },
-        userVessels: {
-          some: {
-            userId: user.id,
-            archivedAt: null,
-          },
-        },
-        ...(status && { status: status as 'INVITED' | 'ACTIVE' | 'PAUSED' | 'RESOLVED' | 'ABANDONED' }),
+        userId: user.id,
+        leftAt: null,
+        OR: [{ readState: null }, { readState: { archivedAt: null } }],
+        ...(status && { session: { status: status as 'INVITED' | 'ACTIVE' | 'RESOLVED' | 'ABANDONED' } }),
       },
       include: {
-        relationship: {
+        session: {
           include: {
-            members: {
+            relationship: {
               include: {
-                user: {
-                  select: {
-                    id: true,
-                    name: true,
-                    firstName: true,
-                    email: true,
-                  },
+                members: {
+                  include: { user: { select: { id: true, name: true, firstName: true, email: true } } },
                 },
               },
             },
           },
         },
-        stageProgress: true, // Get all stage progress records
-        // Include empathy attempts to show correct Stage 2 status
-        empathyAttempts: {
-          select: { sourceUserId: true, status: true },
-        },
-        // Include user vessels for read state tracking
-        userVessels: {
-          where: { userId: user.id },
-          select: {
-            lastViewedAt: true,
-            lastSeenChatItemId: true,
-          },
-        },
+        readState: { select: { lastViewedAt: true, lastSeenMessageId: true } },
       },
-      orderBy: { updatedAt: 'desc' },
+      orderBy: { session: { updatedAt: 'desc' } },
       take: takeLimit + 1,
-      ...(cursor && { cursor: { id: cursor as string }, skip: 1 }),
+      ...(cursor && { cursor: { sessionId_userId: { sessionId: cursor as string, userId: user.id } }, skip: 1 }),
     });
 
-    const hasMore = sessions.length > takeLimit;
-    const items = hasMore ? sessions.slice(0, -1) : sessions;
+    const hasMore = mine.length > takeLimit;
+    const items = hasMore ? mine.slice(0, -1) : mine;
 
-    const formattedSessions = items.map((session) => {
+    // Partners (v_co_participant), progress (stage shim), unread
+    // (v_conversation_unread) and Stage 2 directions, for the whole page.
+    const partners = new Map(
+      await Promise.all(items.map(async p => [p.id, await getPartnerParticipant(p.id)] as const)),
+    );
+    const stageStates = await loadStageStates([
+      ...items.map(p => ({ id: p.id, joinedAt: p.joinedAt })),
+      ...[...partners.values()].flatMap(c => (c ? [{ id: c.participantId, joinedAt: c.joinedAt }] : [])),
+    ]);
+    const ids = items.map(p => p.id);
+    const unread = ids.length
+      ? await prisma.$queryRaw<Array<{ participant_id: string; unread_count: bigint }>>`
+          SELECT participant_id, unread_count FROM v_conversation_unread WHERE participant_id = ANY(${ids}::uuid[])`
+      : [];
+    const unreadOf = new Map(unread.map(u => [u.participant_id, Number(u.unread_count)]));
+    // Own attempts directly; the partner's direction only as a content-free
+    // status (v_empathy_direction_status, identity-bound).
+    const ownAttempts = ids.length
+      ? await prisma.empathyAttempt.findMany({
+          where: { authorParticipantId: { in: ids }, status: { not: 'SUPERSEDED' } },
+          select: { authorParticipantId: true, status: true },
+        })
+      : [];
+    const directions = ids.length
+      ? await prisma.$queryRaw<Array<{ author_participant_id: string; subject_participant_id: string; status: string }>>`
+          SELECT author_participant_id, subject_participant_id, status::text AS status
+          FROM v_empathy_direction_status WHERE subject_participant_id = ANY(${ids}::uuid[])`
+      : [];
+
+    const formattedSessions = items.map((me) => {
+      const session = me.session;
+      const partner = partners.get(me.id) ?? null;
       // Find my membership record (for nickname I use for partner)
-      const myMember = session.relationship.members.find(
-        (m: { userId: string }) => m.userId === user.id
-      );
-      const partnerMember = session.relationship.members.find(
-        (m: { userId: string }) => m.userId !== user.id
-      );
+      const myMember = session.relationship.members.find(m => m.userId === user.id);
+      const partnerMember = session.relationship.members.find(m => m.userId !== user.id);
 
-      // Get user's latest stage progress
-      const myProgressRecord = session.stageProgress
-        .filter((sp: { userId: string }) => sp.userId === user.id)
-        .sort((a: { stage: number }, b: { stage: number }) => b.stage - a.stage)[0];
-
-      // Get partner's latest stage progress
-      const partnerProgressRecord = partnerMember
-        ? session.stageProgress
-            .filter((sp: { userId: string }) => sp.userId === partnerMember.userId)
-            .sort((a: { stage: number }, b: { stage: number }) => b.stage - a.stage)[0]
-        : null;
-
-      // Default progress for users who haven't started
-      const defaultProgress = {
-        stage: 0,
-        status: 'NOT_STARTED' as const,
-        startedAt: null,
-        completedAt: null,
-      };
-
-      const myProgress = myProgressRecord
-        ? {
-            stage: myProgressRecord.stage,
-            status: myProgressRecord.status,
-            startedAt: myProgressRecord.startedAt?.toISOString() ?? null,
-            completedAt: myProgressRecord.completedAt?.toISOString() ?? null,
-          }
-        : defaultProgress;
-
-      const partnerProgress = partnerProgressRecord
-        ? {
-            stage: partnerProgressRecord.stage,
-            status: partnerProgressRecord.status,
-            startedAt: partnerProgressRecord.startedAt?.toISOString() ?? null,
-            completedAt: partnerProgressRecord.completedAt?.toISOString() ?? null,
-          }
-        : defaultProgress;
+      const myProgress = progressDTO(stageStates.get(me.id), { gates: false });
+      const partnerProgress = progressDTO(partner ? stageStates.get(partner.participantId) : undefined, { gates: false });
+      const dto = (p: typeof myProgress) => ({
+        stage: p.stage,
+        status: p.status,
+        startedAt: p.startedAt,
+        completedAt: p.completedAt,
+      });
 
       // Compute action needed arrays
-      // selfActionNeeded: gates the user needs to satisfy
-      // partnerActionNeeded: gates the partner needs to satisfy
       const selfActionNeeded: string[] = [];
       const partnerActionNeeded: string[] = [];
 
-      // If user hasn't started, they need action
       if (myProgress.status === 'NOT_STARTED') {
         selfActionNeeded.push('complete_stage');
       }
 
       // If user is in progress, check Stage 2 sub-state to avoid showing
       // "Ready for you" when user is actually waiting on partner/system
+      const userEmpathy = ownAttempts.find(a => a.authorParticipantId === me.id);
+      const partnerEmpathy = directions.find(d => d.subject_participant_id === me.id);
       if (myProgress.status === 'IN_PROGRESS') {
-        const empathyData = (session as { empathyAttempts?: Array<{ sourceUserId: string | null; status: string }> }).empathyAttempts || [];
-        if (myProgress.stage === Stage.PERSPECTIVE_STRETCH && empathyData.length > 0) {
-          const userEmpathy = empathyData.find(
-            (a) => a.sourceUserId === user.id
-          );
-          const partnerEmpathy = empathyData.find(
-            (a) => a.sourceUserId !== user.id
-          );
-
-          const userNeedsToRefine =
-            userEmpathy?.status === 'REFINING' || userEmpathy?.status === 'NEEDS_WORK';
+        if (myProgress.stage === Stage.PERSPECTIVE_STRETCH && (userEmpathy || partnerEmpathy)) {
+          const userNeedsToRefine = userEmpathy?.status === 'REFINING';
           const userNeedsToValidate = partnerEmpathy?.status === 'REVEALED';
           const userNeedsToRespondToShare = partnerEmpathy?.status === 'AWAITING_SHARING';
-
           if (userNeedsToRefine || userNeedsToValidate || userNeedsToRespondToShare) {
             selfActionNeeded.push('complete_stage');
           } else if (!userEmpathy) {
-            // User hasn't sent empathy yet — they still have work to do
             selfActionNeeded.push('complete_stage');
           }
-          // Otherwise: user is waiting on partner/system — no selfActionNeeded
         } else {
           selfActionNeeded.push('complete_stage');
         }
       }
 
-      // If partner is behind or has incomplete status
       if (partnerProgress.status === 'IN_PROGRESS' || partnerProgress.status === 'NOT_STARTED') {
         partnerActionNeeded.push('complete_stage');
       }
 
-      // For invited sessions (partner hasn't joined), use nickname from my membership
-      // For active sessions, still use nickname (what I call them) with fallback to their actual name
+      // Nickname (what I call them), then their names.
       const partnerDisplayName = partnerMember
-        ? (myMember as { nickname?: string | null } | undefined)?.nickname || partnerMember.user.firstName || partnerMember.user.name
-        : (myMember as { nickname?: string | null } | undefined)?.nickname || null;
+        ? myMember?.nickname || partnerMember.user.firstName || partnerMember.user.name
+        : myMember?.nickname || null;
 
-      // Check for empathy attempts (Stage 2)
-      const empathyAttempts = (session as { empathyAttempts?: Array<{ sourceUserId: string | null }> }).empathyAttempts || [];
-      const userHasSentEmpathy = empathyAttempts.some(
-        (a: { sourceUserId: string | null }) => a.sourceUserId === user.id
-      );
-      const partnerHasSentEmpathy = partnerMember
-        ? empathyAttempts.some(
-            (a: { sourceUserId: string | null }) => a.sourceUserId === partnerMember.userId
-          )
-        : false;
-
-      // Generate human-readable status summary
       const statusSummary = generateSessionStatusSummary(
         session.status as SessionStatus,
-        {
-          stage: myProgress.stage as Stage,
-          status: myProgress.status as StageStatus,
-          startedAt: myProgress.startedAt,
-          completedAt: myProgress.completedAt,
-        },
-        {
-          stage: partnerProgress.stage as Stage,
-          status: partnerProgress.status as StageStatus,
-          startedAt: partnerProgress.startedAt,
-          completedAt: partnerProgress.completedAt,
-        },
+        { ...dto(myProgress), stage: myProgress.stage as Stage, status: myProgress.status as StageStatus },
+        { ...dto(partnerProgress), stage: partnerProgress.stage as Stage, status: partnerProgress.status as StageStatus },
         partnerDisplayName || 'Partner',
-        { userHasSentEmpathy, partnerHasSentEmpathy }
+        { userHasSentEmpathy: !!userEmpathy, partnerHasSentEmpathy: !!partnerEmpathy },
       );
 
-      // Get user's read state from UserVessel
-      const userVessels = (session as { userVessels?: Array<{ lastViewedAt: Date | null; lastSeenChatItemId: string | null }> }).userVessels || [];
-      const userVessel = userVessels[0];
-      const lastViewedAt = userVessel?.lastViewedAt ?? null;
-      const lastSeenChatItemId = userVessel?.lastSeenChatItemId ?? null;
-
-      // Determine if there's unread content:
-      // - If never viewed (lastViewedAt is null), consider unread if session has any activity
-      // - If viewed, compare session's updatedAt with lastViewedAt
-      const hasUnread = lastViewedAt === null
-        ? session.status !== 'CREATED' // Unread if not a fresh draft
-        : session.updatedAt > lastViewedAt;
+      const lastViewedAt = me.readState?.lastViewedAt ?? null;
+      const lastSeenChatItemId = me.readState?.lastSeenMessageId ?? null;
 
       return {
         id: session.id,
@@ -269,18 +198,15 @@ export async function listSessions(req: Request, res: Response): Promise<void> {
         createdAt: session.createdAt.toISOString(),
         updatedAt: session.updatedAt.toISOString(),
         partner: partnerMember
-          ? {
-              id: partnerMember.user.id,
-              name: partnerDisplayName,
-              nickname: (myMember as { nickname?: string | null } | undefined)?.nickname || null,
-            }
-          : { id: '', name: partnerDisplayName, nickname: (myMember as { nickname?: string | null } | undefined)?.nickname || null },
-        myProgress,
-        partnerProgress,
+          ? { id: partnerMember.user.id, name: partnerDisplayName, nickname: myMember?.nickname || null }
+          : { id: '', name: partnerDisplayName, nickname: myMember?.nickname || null },
+        myProgress: dto(myProgress),
+        partnerProgress: dto(partnerProgress),
         statusSummary,
         selfActionNeeded,
         partnerActionNeeded,
-        hasUnread,
+        // Unread: messages in my conversation after my last view, not mine.
+        hasUnread: (unreadOf.get(me.id) ?? 0) > 0,
         lastViewedAt: lastViewedAt?.toISOString() ?? null,
         lastSeenChatItemId,
       };
@@ -289,7 +215,7 @@ export async function listSessions(req: Request, res: Response): Promise<void> {
     successResponse(res, {
       items: formattedSessions,
       hasMore,
-      cursor: hasMore ? items[items.length - 1]?.id : undefined,
+      cursor: hasMore ? items[items.length - 1]?.sessionId : undefined,
     });
   } catch (error) {
     logger.error('[listSessions] Error:', error);
