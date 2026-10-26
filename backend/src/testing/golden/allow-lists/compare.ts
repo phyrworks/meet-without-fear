@@ -11,6 +11,7 @@ import type {
   AddedKeysRule,
   AllowList,
   AllowRule,
+  FixtureMaskRule,
   MayBeAbsentRule,
   ReplacedEntryRule,
   TiedOrderRule,
@@ -138,6 +139,44 @@ export function rawTieRanges(rawPayload: unknown, rules: readonly AllowRule[], s
   };
   go(rawPayload, []);
   return out;
+}
+
+const ISO_INSTANT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$/;
+
+/**
+ * `fixtureMask` (TS-9, target shape only): a deep copy of one step's RAW
+ * payload with every value at a mask path checked against the rule's
+ * `expect` and replaced by its `baseline`. `stepPath` (`['steps', '1']`) is
+ * prefixed to match the rules' `at` patterns. Returns the masked payload, how
+ * many values each rule masked, and every value that failed its `expect`.
+ */
+export function applyFixtureMasks<T>(
+  rawPayload: T,
+  rules: readonly AllowRule[],
+  stepPath: string[],
+): { payload: T; masked: Map<FixtureMaskRule, number>; errors: string[] } {
+  const masks = rules.filter((r): r is FixtureMaskRule => r.kind === 'fixtureMask');
+  const masked = new Map<FixtureMaskRule, number>(masks.map(m => [m, 0]));
+  const errors: string[] = [];
+  if (!masks.length) return { payload: rawPayload, masked, errors };
+  const copy = JSON.parse(JSON.stringify(rawPayload ?? null)) as unknown;
+  const go = (v: unknown, p: string[]): unknown => {
+    for (const m of masks) {
+      const pats = (Array.isArray(m.at) ? m.at : [m.at]).map(x => x.split('.'));
+      if (!pats.some(pat => matchPath(pat, [...stepPath, ...p]))) continue;
+      const ok = m.expect === 'isoTimestamp' && typeof v === 'string' && ISO_INSTANT.test(v);
+      if (!ok) {
+        errors.push(`fixtureMask @ ${[...stepPath, ...p].join('.')}: expected ${m.expect}, got ${brief(v)}`);
+        return v;
+      }
+      masked.set(m, (masked.get(m) ?? 0) + 1);
+      return m.baseline;
+    }
+    if (Array.isArray(v)) return v.map((x, i) => go(x, [...p, String(i)]));
+    if (isObj(v)) return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, go(x, [...p, k])]));
+    return v;
+  };
+  return { payload: go(copy, []) as T, masked, errors };
 }
 
 /**

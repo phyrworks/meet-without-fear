@@ -288,6 +288,10 @@ export async function createHarness(opts: {
   // lib/prisma prefers APP_DATABASE_URL over DATABASE_URL (database-urls.ts);
   // one left in a developer's environment would point the app elsewhere.
   delete process.env.APP_DATABASE_URL;
+  // Likewise the job connection (TS-9: AI/SYSTEM and delivered messages are
+  // written through it): unset, lib/prisma's job client falls back to the
+  // run database's DATABASE_URL instead of a developer's mwf_target_dev.
+  delete process.env.JOB_DATABASE_URL;
   process.env.E2E_AUTH_BYPASS = 'true';
   process.env.MOCK_LLM = 'true';
   process.env.E2E_FIXTURE_ID = process.env.E2E_FIXTURE_ID ?? 'user-a-full-journey';

@@ -144,7 +144,27 @@ export interface TiedOrderRule extends RuleBase {
   key: string;
 }
 
+/**
+ * TARGET SHAPE ONLY (TS-9). A value the target fixture cannot be made to hold
+ * the way the current-shape fixture held it, at a place where the difference
+ * would also move every later timestamp RANK of the step (a new instant
+ * renumbers all `<ts:N>` after it, so `mayDiffer` on the one key cannot
+ * contain it). The runner checks the run's RAW value against `expect` and,
+ * if it holds, substitutes `baseline` before normalisation; if it does not
+ * hold, the step fails. Never applied on the current shape. Give the
+ * fixture fact and pair it with a scenario assertion of the real value.
+ *
+ *   expect 'isoTimestamp' — the raw value is an ISO-8601 instant.
+ */
+export interface FixtureMaskRule extends RuleBase {
+  kind: 'fixtureMask';
+  expect: 'isoTimestamp';
+  /** What the baseline holds at this path (substituted into the run). */
+  baseline: unknown;
+}
+
 export type AllowRule =
+  | FixtureMaskRule
   | AbsentKeysRule
   | AddedKeysRule
   | ValuesSubsetRule
