@@ -144,7 +144,53 @@ export interface TiedOrderRule extends RuleBase {
   key: string;
 }
 
+/**
+ * TARGET SHAPE ONLY (TS-9). A value the target fixture cannot be made to hold
+ * the way the current-shape fixture held it, at a place where the difference
+ * would also move every later timestamp RANK of the step (a new instant
+ * renumbers all `<ts:N>` after it, so `mayDiffer` on the one key cannot
+ * contain it). The runner checks the run's RAW value against `expect` and,
+ * if it holds, substitutes `baseline` before normalisation; if it does not
+ * hold, the step fails. Never applied on the current shape. Give the
+ * fixture fact and pair it with a scenario assertion of the real value.
+ *
+ *   expect 'isoTimestamp' — the raw value is an ISO-8601 instant.
+ */
+export interface FixtureMaskRule extends RuleBase {
+  kind: 'fixtureMask';
+  expect: 'isoTimestamp';
+  /** What the baseline holds at this path (substituted into the run). */
+  baseline: unknown;
+}
+
+/**
+ * TARGET SHAPE ONLY (TS-9 fix round 1). A byte-level step's SQL `trace`
+ * recorded on the current shape, compared on the target through a relation
+ * rename map instead of byte-for-byte (relation names and plans are
+ * shape-bound; the README's contract fields are not):
+ *   - the run's trace is complete;
+ *   - protocol: every DATA statement is `extended` (bind parameters — the
+ *     SQL-injection tripwire); transaction-control statements (BEGIN, COMMIT,
+ *     ROLLBACK, SET_TX) may be `simple` — the identity-binding wrapper sends
+ *     them without parameters, and they carry no values;
+ *   - isolation: the set of explicit isolation levels is unchanged;
+ *   - relations: every relation the run touches is the image of one the
+ *     baseline touched (`relationMap`) or is named in `addedRelations` with
+ *     its reason;
+ *   - rowsRead: for steps whose label starts with `steps`, the run reads
+ *     exactly as many rows of the mapped relation as the baseline did of
+ *     `relation` (the same concept read the same way).
+ */
+export interface TraceMappedRule extends RuleBase {
+  kind: 'traceMapped';
+  relationMap: Record<string, string[]>;
+  addedRelations: Record<string, string>;
+  sameRowsRead: Array<{ steps: string; relation: string; as: string }>;
+}
+
 export type AllowRule =
+  | TraceMappedRule
+  | FixtureMaskRule
   | AbsentKeysRule
   | AddedKeysRule
   | ValuesSubsetRule

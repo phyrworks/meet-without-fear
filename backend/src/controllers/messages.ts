@@ -8,9 +8,9 @@
  */
 
 import { Request, Response } from 'express';
-import { Prisma } from '../generated/prisma/client';
+import { Prisma, type PrismaClient } from '../generated/prisma/client';
 import { logger } from '../lib/logger';
-import { prisma } from '../lib/prisma';
+import { getJobPrisma, prisma } from '../lib/prisma';
 import { getSonnetResponse, BrainActivityCallType } from '../lib/bedrock';
 import { buildInitialMessagePrompt, buildStagePromptString } from '../services/stage-prompts';
 import { parseMicroTagResponse } from '../utils/micro-tag-parser';
@@ -34,13 +34,23 @@ import {
 } from '@meet-without-fear/shared';
 import { notifyPartner, publishSessionEvent } from '../services/realtime';
 import { successResponse, errorResponse } from '../utils/response';
-import { getPartnerUserId, isSessionCreator } from '../utils/session';
+import { isSessionCreator } from '../utils/session';
 import { embedSessionContent } from '../services/embedding';
 import { runReconcilerForDirection } from '../services/reconciler';
 import { updateContext } from '../lib/request-context';
 import { consolidateGlobalFacts } from '../services/global-memory';
 import { finalizeTurnMetrics } from '../services/llm-telemetry';
 import { scrubVisibleAIText } from '../utils/visible-text';
+import {
+  createFacilitatorMessage,
+  listConversationMessages,
+  MESSAGE_SELECT,
+  toMessageDTO,
+  type StoredMessage,
+} from '../services/message-store';
+import { loadMilestones, loadStageStates } from '../services/stage-shim';
+import { getPartnerParticipant } from '../services/participant-resolver';
+import { reachMilestone } from '../services/milestone-writer';
 
 // Re-exported for existing callers that import these from this controller.
 export { scrubVisibleAIText, isReadyForStage3RevealText };
@@ -49,31 +59,6 @@ export { scrubVisibleAIText, isReadyForStage3RevealText };
 // Helpers
 // ============================================================================
 
-/**
- * Check if partner has completed stage 1 "feel heard"
- */
-async function hasPartnerCompletedStage1(
-  sessionId: string,
-  currentUserId: string
-): Promise<boolean> {
-  const partnerId = await getPartnerUserId(sessionId, currentUserId);
-  if (!partnerId) return false;
-
-  const partnerProgress = await prisma.stageProgress.findUnique({
-    where: {
-      sessionId_userId_stage: {
-        sessionId,
-        userId: partnerId,
-        stage: 1,
-      },
-    },
-  });
-
-  if (!partnerProgress) return false;
-
-  const gates = partnerProgress.gatesSatisfied as Record<string, unknown> | null;
-  return gates?.feelHeard === true || gates?.feelHeardConfirmed === true;
-}
 /**
  * Get a fallback initial message when AI is unavailable
  */
@@ -188,74 +173,60 @@ export async function confirmFeelHeard(
       return;
     }
 
-    const { confirmed, feedback } = parseResult.data;
+    // `feedback` has no target column (plan §3 step 7, gen/maps.ts "EXTENSION:
+    // messages.ts feel-heard feedback; free text with no target column"): it is
+    // validated and not stored.
+    const { confirmed } = parseResult.data;
 
-    // Check session exists and user has access
-    const session = await prisma.session.findFirst({
-      where: {
-        id: sessionId,
-        relationship: {
-          members: {
-            some: { userId: user.id },
-          },
-        },
-      },
-      include: {
-        relationship: {
+    // The caller's participant (requireSessionAccess). No participant: no access.
+    const participant = req.participant;
+    const session = participant
+      ? await prisma.session.findUnique({
+          where: { id: sessionId },
           include: {
-            members: {
-              select: {
-                userId: true,
-                nickname: true,
-                user: {
+            relationship: {
+              include: {
+                members: {
                   select: {
-                    id: true,
-                    name: true,
-                    firstName: true,
+                    userId: true,
+                    nickname: true,
+                    user: { select: { id: true, name: true, firstName: true } },
                   },
                 },
               },
             },
           },
-        },
-      },
-    });
+        })
+      : null;
 
-    if (!session) {
+    if (!participant || !session) {
       errorResponse(res, 'NOT_FOUND', 'Session not found', 404);
       return;
     }
 
-    // Get user's current stage progress (needed for both status check and stage validation)
-    const progress = await prisma.stageProgress.findFirst({
-      where: {
-        sessionId,
-        userId: user.id,
-      },
-      orderBy: { stage: 'desc' },
-    });
+    // The participant's progress (stage shim)
+    const stageState = (await loadStageStates([{ id: participant.id, joinedAt: participant.joinedAt }])).get(participant.id);
+    // A participant row IS having joined (the old check was "has a StageProgress row").
+    const hasJoined = true;
 
     // Check session allows feel-heard confirmation
     // Allow ACTIVE status for all users, and INVITED status for:
     // 1. The session creator, OR
-    // 2. Users who have already joined (have stage progress) - defensive check for edge cases
+    // 2. Users who have already joined (have progress) - defensive check for edge cases
     if (session.status !== 'ACTIVE') {
       if (session.status === 'INVITED') {
         const isCreator = await isSessionCreator(sessionId, user.id);
-        const hasJoined = !!progress; // User has stage progress, meaning they've joined
 
         if (!isCreator && !hasJoined) {
           errorResponse(res, 'SESSION_NOT_ACTIVE', 'Session is not active', 400);
           return;
         }
 
-        // If user has joined but session status is still INVITED, update it to ACTIVE
-        // This handles edge cases where status wasn't updated on invitation acceptance
+        // If user has joined but session status is still INVITED, move it to
+        // ACTIVE — through app.session_set_status, the only writer of
+        // session.status (spec §4), as the job (a two-party fact).
         if (hasJoined && !isCreator) {
-          await prisma.session.update({
-            where: { id: sessionId },
-            data: { status: 'ACTIVE' },
-          });
+          await getJobPrisma().$executeRaw`SELECT app.session_set_status(${sessionId}::uuid, 'ACTIVE'::public.session_status)`;
           logger.info(`[confirmFeelHeard] Updated session ${sessionId} status to ACTIVE (user has joined)`);
         }
         // Creator can proceed while session is INVITED
@@ -266,7 +237,7 @@ export async function confirmFeelHeard(
     }
 
     // Check user is in stage 1
-    const currentStage = progress?.stage ?? 0;
+    const currentStage = stageState?.current.stage ?? 0;
     if (currentStage !== 1) {
       errorResponse(
         res,
@@ -280,65 +251,25 @@ export async function confirmFeelHeard(
     // Generate turnId for this user action
     const turnId = `${sessionId}-${user.id}-feel-heard`;
     // Update request context so all downstream code can access this turnId
-    updateContext({ turnId, sessionId, userId: user.id });
-
-    // Build gates satisfied data (use names that match Stage1Gates interface)
-    const gatesSatisfied = {
-      feelHeardConfirmed: confirmed,
-      feelHeardConfirmedAt: new Date().toISOString(),
-      finalEmotionalReading: null, // Can be updated later with final barometer reading
-      ...(feedback ? { feedback } : {}),
-    } satisfies Prisma.InputJsonValue;
+    updateContext({ turnId, sessionId, userId: user.id, participantId: participant.id });
 
     const now = new Date();
     const confirmedAt = now.toISOString();
 
-    // Update stage progress - mark Stage 1 as COMPLETED when confirmed
-    await prisma.stageProgress.update({
-      where: {
-        sessionId_userId_stage: {
-          sessionId,
-          userId: user.id,
-          stage: 1,
-        },
-      },
-      data: {
-        gatesSatisfied,
-        status: confirmed ? 'COMPLETED' : 'IN_PROGRESS',
-        completedAt: confirmed ? now : null,
-      },
-    });
-
-    // When confirmed, advance user to Stage 2 immediately
-    // This ensures they get Stage 2 prompts with empathy statement capability
+    // Confirmed: the participant reaches `feel_heard` (self-assertable — the
+    // app connection). That milestone completes stage 1, so the stage shim
+    // now reports stage 2 — the old "advance to Stage 2" row is implied.
+    // Not confirmed: nothing to record (milestones are append-only facts).
     let advancedToStage2 = false;
     if (confirmed) {
-      // Check if Stage 2 record already exists (shouldn't, but be safe)
-      const existingStage2 = await prisma.stageProgress.findUnique({
-        where: {
-          sessionId_userId_stage: {
-            sessionId,
-            userId: user.id,
-            stage: 2,
-          },
-        },
-      });
-
-      if (!existingStage2) {
-        await prisma.stageProgress.create({
-          data: {
-            sessionId,
-            userId: user.id,
-            stage: 2,
-            status: 'IN_PROGRESS',
-            startedAt: now,
-            gatesSatisfied: {},
-          },
-        });
-        advancedToStage2 = true;
-        logger.info(`[confirmFeelHeard] Advanced user ${user.id} to Stage 2`);
-      }
+      advancedToStage2 = await reachMilestone(participant.id, 'feel_heard', now);
+      if (advancedToStage2) logger.info(`[confirmFeelHeard] Advanced user ${user.id} to Stage 2`);
     }
+
+    const partner = await getPartnerParticipant(participant.id);
+    const partnerState = partner
+      ? (await loadStageStates([{ id: partner.participantId, joinedAt: partner.joinedAt }])).get(partner.participantId)
+      : undefined;
 
     // Generate AI transition message when user confirms they feel heard
     let transitionMessage: {
@@ -348,15 +279,11 @@ export async function confirmFeelHeard(
       stage: number;
     } | null = null;
 
-    if (confirmed) {
+    if (confirmed && participant.mainConversationId) {
       try {
         // Get partner name (using nickname) and status for the transition message
-        const myMember = session.relationship.members.find(
-          (m) => m.userId === user.id
-        );
-        const partnerMember = session.relationship.members.find(
-          (m) => m.userId !== user.id
-        );
+        const myMember = session.relationship.members.find((m) => m.userId === user.id);
+        const partnerMember = session.relationship.members.find((m) => m.userId !== user.id);
 
         let partnerName: string | undefined;
         let partnerStatus: 'not_joined' | 'in_progress' | 'completed' = 'not_joined';
@@ -368,22 +295,14 @@ export async function confirmFeelHeard(
             partnerMember.user.name ||
             undefined;
 
-          // Check partner's stage progress to determine their status
-          const partnerProgress = await prisma.stageProgress.findFirst({
-            where: {
-              sessionId,
-              userId: partnerMember.userId,
-            },
-            orderBy: { stage: 'desc' },
-          });
-
-          if (partnerProgress) {
+          // The partner has begun once they are a participant (old: had a StageProgress row).
+          if (partnerState) {
             partnerStatus = 'in_progress';
           }
         } else {
           // Partner hasn't joined yet - get name from invitation
           const invitation = await prisma.invitation.findFirst({
-            where: { sessionId, invitedById: user.id },
+            where: { sessionId, invitedByParticipantId: participant.id },
             select: { name: true },
           });
           partnerName = myMember?.nickname || invitation?.name || undefined;
@@ -393,17 +312,11 @@ export async function confirmFeelHeard(
           buildStage2TransitionFallback(partnerName, partnerStatus)
         );
 
-        // Save the transition message to the database as Stage 2
-        // This is the first message in the perspective-taking phase
-        const aiMessage = await prisma.message.create({
-          data: {
-            sessionId,
-            senderId: null,
-            forUserId: user.id, // Track which user this AI response is for (data isolation)
-            role: 'AI',
-            content: transitionContent.trim(),
-            stage: 2, // Stage 2 - perspective stretch begins
-          },
+        // The facilitator's first Stage 2 message, into the participant's
+        // conversation (job connection).
+        const aiMessage = await createFacilitatorMessage({
+          conversationId: participant.mainConversationId,
+          content: transitionContent.trim(),
         });
 
         // Embed session content for cross-session retrieval (non-blocking)
@@ -415,37 +328,25 @@ export async function confirmFeelHeard(
         transitionMessage = {
           id: aiMessage.id,
           content: aiMessage.content,
-          timestamp: aiMessage.timestamp.toISOString(),
+          timestamp: aiMessage.createdAt.toISOString(),
           stage: 2, // Stage 2 transition message
         };
 
         logger.info(`[confirmFeelHeard] Generated transition message for session ${sessionId}`);
-
-        // Audit log the transition message
-        /* auditLog('RESPONSE', 'Stage transition message generated', {
-          turnId,
-          sessionId,
-          userId: user.id,
-          stage: 2,
-          operation: 'stage1-transition',
-          responseText: transitionContent,
-          messageId: aiMessage.id,
-        }); */
       } catch (error) {
         logger.error('[confirmFeelHeard] Failed to generate transition message:', error);
         // Continue without transition message - not a critical failure
       }
     }
 
-    // Check if partner has also completed
-    const partnerCompleted = await hasPartnerCompletedStage1(sessionId, user.id);
+    // Check if partner has also completed (their feel_heard milestone — S-class)
+    const partnerCompleted = partnerState?.milestones.some((m) => m.key === 'feel_heard') ?? false;
     const canAdvance = confirmed && partnerCompleted;
 
     // Notify partner of stage completion
     if (confirmed) {
-      const partnerId = await getPartnerUserId(sessionId, user.id);
-      if (partnerId) {
-        await notifyPartner(sessionId, partnerId, 'partner.stage_completed', {
+      if (partner?.userId) {
+        await notifyPartner(sessionId, partner.userId, 'partner.stage_completed', {
           stage: 1,
           completedBy: user.id,
         });
@@ -466,72 +367,60 @@ export async function confirmFeelHeard(
       });
     }
 
-    // NEW: Check if partner has an empathy attempt in HELD status
-    // If so, trigger the asymmetric reconciler for that direction
-    // (Partner = guesser, current user = subject whose Stage 1 is now complete)
+    // If the partner's attempt about this participant is HELD, trigger the
+    // asymmetric reconciler for that direction (partner = guesser, current
+    // user = subject whose Stage 1 is now complete). The status is read from
+    // v_empathy_direction_status — a content-free projection both parties of
+    // the direction may see (the attempt itself is the partner's, unrevealed).
     let reconcilerTriggered = false;
-    let reconcilerResult: {
-      empathyStatus: 'REVEALED' | 'AWAITING_SHARING';
-      shareOffer: { suggestedContent: string; reason: string } | null;
-    } | null = null;
 
-    if (confirmed) {
-      const partnerId = await getPartnerUserId(sessionId, user.id);
-      if (partnerId) {
-        // Check if partner has an empathy attempt in HELD status (waiting for us)
-        const partnerEmpathyAttempt = await prisma.empathyAttempt.findFirst({
-          where: {
-            sessionId,
-            sourceUserId: partnerId,
-            status: 'HELD',
-          },
-        });
+    if (confirmed && partner?.userId) {
+      const partnerId = partner.userId;
+      const held = await prisma.$queryRaw<Array<{ status: string }>>`
+        SELECT status::text AS status FROM v_empathy_direction_status
+        WHERE author_participant_id = ${partner.participantId}::uuid
+          AND subject_participant_id = ${participant.id}::uuid
+          AND status = 'HELD'`;
 
-        if (partnerEmpathyAttempt) {
-          logger.info(`[confirmFeelHeard] Partner ${partnerId} has HELD empathy - triggering reconciler (non-blocking)`);
+      if (held.length > 0) {
+        logger.info(`[confirmFeelHeard] Partner ${partnerId} has HELD empathy - triggering reconciler (non-blocking)`);
 
-          // Trigger reconciler in the background
-          (async () => {
-            try {
-              logger.info(`[confirmFeelHeard] Calling runReconcilerForDirection for sessionId=${sessionId}, guesserId=${partnerId}, subjectId=${user.id}`);
-              const result = await runReconcilerForDirection(sessionId, partnerId, user.id);
+        // Trigger reconciler in the background
+        (async () => {
+          try {
+            logger.info(`[confirmFeelHeard] Calling runReconcilerForDirection for sessionId=${sessionId}, guesserId=${partnerId}, subjectId=${user.id}`);
+            const result = await runReconcilerForDirection(sessionId, partnerId, user.id);
 
-              logger.info(`[confirmFeelHeard] Reconciler completed: status=${result.empathyStatus}, hasSuggestion=${!!result.shareOffer}`);
+            logger.info(`[confirmFeelHeard] Reconciler completed: status=${result.empathyStatus}, hasSuggestion=${!!result.shareOffer}`);
 
-              // If there's a share suggestion, notify the current user (subject)
-              // Note: We DON'T exclude the user here because they ARE the intended recipient
-              // Include full empathy status to avoid extra HTTP round-trip
-              if (result.empathyStatus === 'AWAITING_SHARING' && result.shareOffer) {
-                logger.info(`[confirmFeelHeard] Significant gaps found - notifying subject ${user.id} of share suggestion`);
-                const { buildEmpathyExchangeStatus } = await import('../services/empathy-status');
-                const empathyStatus = await buildEmpathyExchangeStatus(sessionId, user.id);
-                await notifyPartner(sessionId, user.id, 'empathy.share_suggestion', {
-                  // Include forUserId so mobile can filter - only the subject should see the modal
-                  forUserId: user.id,
-                  guesserName: session.relationship.members.find(m => m.userId === partnerId)
-                    ? 'your partner'
-                    : 'your partner',
-                  suggestedContent: result.shareOffer.suggestedContent,
-                  suggestedReason: (result.shareOffer as any).reason || (result.shareOffer as any).suggestedReason,
-                  empathyStatus,
-                  // Include triggeredByUserId for event tracing
-                  triggeredByUserId: user.id,
-                });
-              }
-
-              // If empathy is READY (no gaps), the guesser already got the alignment message.
-              // The reveal notification will be sent when both directions are READY.
-              if (result.empathyStatus === 'READY') {
-                logger.info(`[confirmFeelHeard] No significant gaps - empathy marked READY, waiting for partner to complete Stage 2`);
-              }
-            } catch (error) {
-              logger.error('[confirmFeelHeard] Reconciler background task failed:', error);
+            // If there's a share suggestion, notify the current user (subject).
+            // The event's audience field is the realtime envelope's user id
+            // (shared contract, plan §5 "Realtime"); mobile filters on it.
+            if (result.empathyStatus === 'AWAITING_SHARING' && result.shareOffer) {
+              logger.info(`[confirmFeelHeard] Significant gaps found - notifying subject ${user.id} of share suggestion`);
+              const { buildEmpathyExchangeStatus } = await import('../services/empathy-status');
+              const empathyStatus = await buildEmpathyExchangeStatus(sessionId, user.id);
+              await notifyPartner(sessionId, user.id, 'empathy.share_suggestion', {
+                forUserId: user.id,
+                guesserName: 'your partner',
+                suggestedContent: result.shareOffer.suggestedContent,
+                suggestedReason: (result.shareOffer as any).reason || (result.shareOffer as any).suggestedReason,
+                empathyStatus,
+                // Include triggeredByUserId for event tracing
+                triggeredByUserId: user.id,
+              });
             }
-          })();
-          reconcilerTriggered = true;
-        } else {
-          logger.info(`[confirmFeelHeard] Partner ${partnerId} does not have HELD empathy - reconciler NOT triggered`);
-        }
+
+            if (result.empathyStatus === 'READY') {
+              logger.info(`[confirmFeelHeard] No significant gaps - empathy marked READY, waiting for partner to complete Stage 2`);
+            }
+          } catch (error) {
+            logger.error('[confirmFeelHeard] Reconciler background task failed:', error);
+          }
+        })();
+        reconcilerTriggered = true;
+      } else {
+        logger.info(`[confirmFeelHeard] Partner ${partnerId} does not have HELD empathy - reconciler NOT triggered`);
       }
     }
 
@@ -586,86 +475,29 @@ export async function getConversationHistory(
 
     const { limit, before, after, order } = parseResult.data;
 
-    // Check session exists and user has access
-    const session = await prisma.session.findFirst({
-      where: {
-        id: sessionId,
-        relationship: {
-          members: {
-            some: { userId: user.id },
-          },
-        },
-      },
-    });
-
-    if (!session) {
+    // The caller's participant, resolved once by requireSessionAccess (TS-9).
+    // No participant (the invitee fallback) has no conversation to read.
+    const participant = req.participant;
+    if (!participant?.mainConversationId) {
       errorResponse(res, 'NOT_FOUND', 'Session not found', 404);
       return;
     }
 
-    // Build cursor conditions
-    const cursorCondition: Record<string, unknown> = {};
-    if (before) {
-      cursorCondition.timestamp = { lt: new Date(before) };
-    }
-    if (after) {
-      cursorCondition.timestamp = { gt: new Date(after) };
-    }
-
-    // Get messages - user's own messages (without specific recipient) + messages specifically for them
-    // This ensures data isolation: messages with forUserId only show to that user
+    // The caller's MAIN conversation IS the audience: no sender/recipient
+    // filter exists any more (target shape: no recipient column).
     logger.info(`[getConversationHistory:${requestId}] Fetching messages with limit=${limit}, before=${before || 'none'}, after=${after || 'none'}, order=${order}`);
-    const messages = await prisma.message.findMany({
-      where: {
-        sessionId,
-        OR: [
-          // Messages user sent without a specific recipient (broadcast to all, e.g., USER messages)
-          { senderId: user.id, forUserId: null },
-          // Messages specifically for this user (AI responses, SHARED_CONTEXT, etc.)
-          { forUserId: user.id },
-        ],
-        ...cursorCondition,
-      },
-      orderBy: { timestamp: order },
-      take: limit + 1, // Fetch one extra to check for more
-    });
+    const [messages, milestones] = await Promise.all([
+      listConversationMessages({
+        conversationId: participant.mainConversationId,
+        limit,
+        order,
+        before: before ? new Date(before) : undefined,
+        after: after ? new Date(after) : undefined,
+      }),
+      loadMilestones([participant.id]),
+    ]);
 
-    logger.info(`[getConversationHistory:${requestId}] ✅ Fetched ${messages.length} messages from database`);
-
-    // Check for duplicate message IDs
-    const messageIds = messages.map(m => m.id);
-    const duplicateIds = messageIds.filter((id, idx) => messageIds.indexOf(id) !== idx);
-    if (duplicateIds.length > 0) {
-      logger.warn(`[getConversationHistory:${requestId}] ⚠️  WARNING: Found ${duplicateIds.length} duplicate message ID(s) in query result!`);
-      duplicateIds.forEach(id => {
-        const duplicates = messages.filter(m => m.id === id);
-        logger.warn(`[getConversationHistory:${requestId}]   Duplicate ID ${id}: appears ${duplicates.length} times`);
-      });
-    }
-
-    // Check for duplicate content (same content, same role, within 1 second)
-    const contentMap = new Map<string, typeof messages>();
-    messages.forEach(m => {
-      const key = `${m.role}:${m.content.substring(0, 100)}`;
-      if (!contentMap.has(key)) {
-        contentMap.set(key, []);
-      }
-      contentMap.get(key)!.push(m);
-    });
-    const duplicateContent = Array.from(contentMap.entries()).filter(([_, msgs]) => msgs.length > 1);
-    if (duplicateContent.length > 0) {
-      logger.warn(`[getConversationHistory:${requestId}] ⚠️  WARNING: Found ${duplicateContent.length} message(s) with duplicate content!`);
-      duplicateContent.forEach(([key, msgs]) => {
-        logger.warn(`[getConversationHistory:${requestId}]   Duplicate group (role=${key.split(':')[0]}): appears ${msgs.length} times`);
-        msgs.forEach((msg, idx) => {
-          logger.warn(`[getConversationHistory:${requestId}]     ${idx + 1}. ID=${msg.id}, timestamp=${msg.timestamp.toISOString()}`);
-        });
-      });
-    }
-
-    // Log recent message IDs
-    const recentMessages = messages.slice(0, 5);
-    logger.info(`[getConversationHistory:${requestId}] Recent 5 message IDs:`, recentMessages.map(m => `${m.role}:${m.id.substring(0, 8)}...`).join(', '));
+    logger.info(`[getConversationHistory:${requestId}] Fetched ${messages.length} messages from database`);
 
     // Check if there are more messages
     const hasMore = messages.length > limit;
@@ -679,15 +511,10 @@ export async function getConversationHistory(
       resultMessages = resultMessages.reverse();
     }
 
+    const ownerMilestones = milestones.get(participant.id) ?? [];
     successResponse(res, {
       messages: resultMessages.map((m) => ({
-        id: m.id,
-        sessionId: m.sessionId,
-        senderId: m.senderId,
-        role: m.role,
-        content: m.content,
-        stage: m.stage,
-        timestamp: m.timestamp.toISOString(),
+        ...toMessageDTO(m, { sessionId, ownerMilestones }),
         refiningNeedId: m.refiningNeedId ?? null,
       })),
       hasMore,
@@ -715,34 +542,19 @@ export async function getInitialMessage(
 
     const { id: sessionId } = req.params;
 
-    // Check session exists and user has access
-    const session = await prisma.session.findFirst({
-      where: {
-        id: sessionId,
-        relationship: {
-          members: {
-            some: { userId: user.id },
-          },
-        },
-      },
-    });
-
-    if (!session) {
+    // The caller's participant (requireSessionAccess) and its conversation.
+    const participant = req.participant;
+    const session = participant ? await prisma.session.findUnique({ where: { id: sessionId } }) : null;
+    const conversationId = participant?.mainConversationId;
+    if (!participant || !session || !conversationId) {
       errorResponse(res, 'NOT_FOUND', 'Session not found', 404);
       return;
     }
 
-    // Check if there are already messages in this session for this user (data isolation)
+    // Already a message in the participant's own conversation?
     const existingMessages = await prisma.message.findFirst({
-      where: {
-        sessionId,
-        OR: [
-          // Messages user sent without a specific recipient
-          { senderId: user.id, forUserId: null },
-          // Messages specifically for this user
-          { forUserId: user.id },
-        ],
-      },
+      where: { conversationId },
+      select: { id: true },
     });
 
     if (existingMessages) {
@@ -751,16 +563,9 @@ export async function getInitialMessage(
       return;
     }
 
-    // Get user's current stage progress
-    const progress = await prisma.stageProgress.findFirst({
-      where: {
-        sessionId,
-        userId: user.id,
-      },
-      orderBy: { stage: 'desc' },
-    });
-
-    const currentStage = progress?.stage ?? 0;
+    // The participant's current stage (stage shim)
+    const stageState = (await loadStageStates([{ id: participant.id, joinedAt: participant.joinedAt }])).get(participant.id);
+    const currentStage = stageState?.current.stage ?? 0;
 
     // Determine if this is the invitation phase
     const isInvitationPhase = session.status === 'CREATED';
@@ -771,20 +576,20 @@ export async function getInitialMessage(
     // Find the session's invitation to determine inviter/invitee status
     const invitation = await prisma.invitation.findFirst({
       where: { sessionId },
-      select: { name: true, invitedById: true },
+      select: { name: true, invitedByParticipant: { select: { id: true, userId: true } } },
     });
 
     // Determine if the current user is the invitee (NOT the person who sent the invitation)
-    const isInvitee = invitation ? invitation.invitedById !== user.id : false;
+    const isInvitee = invitation ? invitation.invitedByParticipant.id !== participant.id : false;
 
     // Get partner name - for inviter it's from the invitation, for invitee it's from the inviter
     let partnerName: string | undefined;
     if (isInvitee) {
       // Invitee: partner is the inviter
-      const inviter = await prisma.user.findUnique({
-        where: { id: invitation?.invitedById },
-        select: { firstName: true, name: true },
-      });
+      const inviterUserId = invitation?.invitedByParticipant.userId;
+      const inviter = inviterUserId
+        ? await prisma.user.findUnique({ where: { id: inviterUserId }, select: { firstName: true, name: true } })
+        : null;
       partnerName = inviter?.firstName || inviter?.name || undefined;
     } else {
       // Inviter: partner name is from the invitation
@@ -829,17 +634,17 @@ export async function getInitialMessage(
     // Check if this session originated from an Inner Thoughts session
     let innerThoughtsContext: { summary: string; themes: string[]; fullContext?: string } | undefined;
     if (!isInvitee && isInvitationPhase) {
-      const originInnerThoughts = await prisma.innerWorkSession.findFirst({
-        where: {
-          linkedPartnerSessionId: sessionId,
-          userId: user.id,
-          linkedTrigger: 'suggestion_start',
-        },
+      // The caller's OWN reflection linked to this session (Inner Work never
+      // crosses participants). `linkedTrigger` is not in the target
+      // (reflection drops it); any linked reflection of theirs qualifies.
+      const originInnerThoughts = await prisma.reflection.findFirst({
+        where: { linkedSessionId: sessionId, userId: user.id },
+        orderBy: { createdAt: 'asc' },
         select: {
           summary: true,
           theme: true,
           messages: {
-            orderBy: { timestamp: 'asc' },
+            orderBy: { createdAt: 'asc' },
             select: { role: true, content: true }
           }
         },
@@ -914,7 +719,7 @@ export async function getInitialMessage(
     // Generate turnId for this user action - the invitee accessing their session
     const turnId = `${sessionId}-${user.id}-welcome`;
     // Update request context so all downstream code can access this turnId
-    updateContext({ turnId, sessionId, userId: user.id });
+    updateContext({ turnId, sessionId, userId: user.id, participantId: participant.id });
 
     // Get AI response
     let responseContent: string;
@@ -945,44 +750,40 @@ export async function getInitialMessage(
 
     // Save the AI message (trim whitespace that Claude sometimes adds).
     // This endpoint can be called twice during the Ready/compact transition;
-    // make the final write idempotent so concurrent calls do not create twins.
-    let aiMessage;
+    // make the final write idempotent so concurrent calls do not create twins:
+    // one Serializable transaction on the JOB connection (the facilitator's
+    // rows are the job's) checks the participant's conversation, then writes.
+    let aiMessage: StoredMessage;
     try {
-      aiMessage = await prisma.$transaction(async (tx) => {
+      // The probe reads only (id, created_at) — all the job may SELECT from
+      // message (trailer T7) — and an existing message is re-read on the app
+      // connection after the transaction.
+      const written = await getJobPrisma().$transaction(async (tx) => {
         const existing = await tx.message.findFirst({
-          where: {
-            sessionId,
-            forUserId: user.id,
-          },
-          orderBy: { timestamp: 'asc' },
+          where: { conversationId },
+          orderBy: { createdAt: 'asc' },
+          select: { id: true },
         });
-
-        if (existing) {
-          return existing;
-        }
-
-        return tx.message.create({
-          data: {
-            sessionId,
-            senderId: null,
-            forUserId: user.id, // Track which user this AI response is for (data isolation)
-            role: 'AI',
+        if (existing) return { existingId: existing.id };
+        return {
+          created: await createFacilitatorMessage({
+            conversationId,
             content: responseContent.trim(),
-            stage: currentStage,
-          },
-        });
+            client: tx as unknown as PrismaClient,
+          }),
+        };
       }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+      aiMessage = written.created
+        ?? ((await prisma.message.findUniqueOrThrow({ where: { id: written.existingId! }, select: MESSAGE_SELECT })) as StoredMessage);
     } catch (error) {
       if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2034') {
         const existing = await prisma.message.findFirst({
-          where: {
-            sessionId,
-            forUserId: user.id,
-          },
-          orderBy: { timestamp: 'asc' },
+          where: { conversationId },
+          orderBy: { createdAt: 'asc' },
+          select: MESSAGE_SELECT,
         });
         if (existing) {
-          aiMessage = existing;
+          aiMessage = existing as StoredMessage;
         } else {
           throw error;
         }
@@ -1000,15 +801,7 @@ export async function getInitialMessage(
     logger.info(`[getInitialMessage] Generated initial message for session ${sessionId}, stage ${currentStage}`);
 
     successResponse(res, {
-      message: {
-        id: aiMessage.id,
-        sessionId: aiMessage.sessionId,
-        senderId: aiMessage.senderId,
-        role: aiMessage.role,
-        content: aiMessage.content,
-        stage: aiMessage.stage,
-        timestamp: aiMessage.timestamp.toISOString(),
-      },
+      message: toMessageDTO(aiMessage, { sessionId, ownerMilestones: stageState?.milestones ?? [] }),
     });
   } catch (error) {
     logger.error('[getInitialMessage] Error:', error);
@@ -1067,9 +860,9 @@ export async function sendMessageStream(req: Request, res: Response): Promise<vo
     const {
       user,
       sessionId,
+      participant,
       content,
       session,
-      progress,
       currentStage,
       refiningNeedContext,
       userMessage,
@@ -1088,12 +881,12 @@ export async function sendMessageStream(req: Request, res: Response): Promise<vo
       data: {
         id: userMessage.id,
         content: userMessage.content,
-        timestamp: userMessage.timestamp.toISOString(),
+        timestamp: userMessage.createdAt.toISOString(),
         refiningNeedId: userMessage.refiningNeedId ?? null,
       },
     });
 
-    const stage3Gate = await resolveStage3GateTurn({ sessionId, userId: user.id, currentStage, content });
+    const stage3Gate = await resolveStage3GateTurn({ participant, currentStage, content });
     if (stage3Gate) {
       if (!clientDisconnected) {
         sendSSE(res, { event: 'chunk', data: { text: stage3Gate.text } });
@@ -1120,6 +913,7 @@ export async function sendMessageStream(req: Request, res: Response): Promise<vo
       requestId,
       sessionId,
       user,
+      participant,
       session,
       currentStage,
       refiningNeedContext,
@@ -1219,7 +1013,7 @@ export async function sendMessageStream(req: Request, res: Response): Promise<vo
     const aiMessage = await saveAiTurnMessage({
       requestId,
       sessionId,
-      userId: user.id,
+      participant,
       accumulatedText,
       effectiveStage,
       refiningNeedContext,
@@ -1233,7 +1027,7 @@ export async function sendMessageStream(req: Request, res: Response): Promise<vo
       effectiveStage,
       isInvitationPhase,
       session,
-      progress,
+      participant,
       userMessageId: userMessage.id,
       userContent: content,
       aiMessageContent: aiMessage.content,

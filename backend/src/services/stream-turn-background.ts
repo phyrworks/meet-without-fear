@@ -20,6 +20,7 @@ import { isMockLLMEnabled } from '../lib/bedrock';
 import { embedSessionContent } from './embedding';
 import { updateSessionSummary } from './conversation-summarizer';
 import { runPartnerSessionClassifier, ensureFactIds, CategorizedFactWithId } from './partner-session-classifier';
+import { resolveParticipant } from './participant-resolver';
 
 export interface StreamTurnBackgroundParams {
   requestId: string;
@@ -61,16 +62,20 @@ export function scheduleStreamTurnBackgroundJobs(params: StreamTurnBackgroundPar
   logger.info(`[sendMessageStream:${requestId}] 🚀 Triggering background classification...`);
   (async () => {
     try {
-      // Fetch existing facts for the classifier
-      const userVessel = await prisma.userVessel.findUnique({
-        where: { userId_sessionId: { userId, sessionId } },
-        select: { notableFacts: true },
-      });
+      // Fetch existing facts for the classifier: the participant's own
+      // ai_memory NOTABLE_FACTS document (`{ facts: [...] }`; TS-9).
+      const participant = await resolveParticipant(sessionId, userId);
+      const memory = participant
+        ? await prisma.aiMemory.findUnique({
+            where: { participantId_kind: { participantId: participant.id, kind: 'NOTABLE_FACTS' } },
+            select: { doc: true },
+          })
+        : null;
       // Extract existing facts with IDs for diff-based updates
       // Legacy facts (without IDs) get UUIDs assigned via ensureFactIds
       const existingFactsWithIds: CategorizedFactWithId[] = (() => {
-        if (!userVessel?.notableFacts) return [];
-        const facts = userVessel.notableFacts as unknown;
+        const facts = (memory?.doc as { facts?: unknown } | null)?.facts;
+        if (!facts) return [];
         if (Array.isArray(facts)) {
           // Check if it's CategorizedFact[] or CategorizedFactWithId[] format
           if (facts.length > 0 && typeof facts[0] === 'object' && 'fact' in facts[0]) {

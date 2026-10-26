@@ -28,6 +28,7 @@ import { applyStage4AutoClosureFromSignal } from './stage4-auto-closure.service'
 import { getStage4State as buildStage4State } from './stage4-state';
 import type { SessionStateToolInput } from './stage-tools';
 import type { ParsedStage4WalkthroughAction } from '../utils/micro-tag-parser';
+import { getPartnerParticipant, type ResolvedParticipant } from './participant-resolver';
 
 export interface RefiningNeedContext {
   id: string;
@@ -279,7 +280,8 @@ export interface PersistTurnStateParams {
   effectiveStage: number;
   isInvitationPhase: boolean;
   session: { topicFrame: string | null; topicFrameConfirmedAt: Date | null };
-  progress: { id: string; gatesSatisfied: unknown } | null;
+  /** The caller's participant (TS-9): drafts and milestones hang off it. */
+  participant: ResolvedParticipant;
   userMessageId: string;
   userContent: string;
   aiMessageContent: string;
@@ -296,25 +298,16 @@ export async function persistTurnState(params: PersistTurnStateParams): Promise<
     effectiveStage,
     isInvitationPhase,
     session,
-    progress,
+    participant,
     userMessageId,
     userContent,
     aiMessageContent,
     metadata,
   } = params;
 
-  if (currentStage === 1 && progress?.id && metadata.offerFeelHeardCheck) {
-    const currentGates = (progress.gatesSatisfied as Record<string, unknown>) ?? {};
-    await prisma.stageProgress.update({
-      where: { id: progress.id },
-      data: {
-        gatesSatisfied: {
-          ...currentGates,
-          feelHeardCheckOffered: true,
-        },
-      },
-    });
-  }
+  // `feelHeardCheckOffered` (an AI hint recorded as a gate) is dropped in the
+  // target (plan §3 step 7); `metadata.offerFeelHeardCheck` still rides the
+  // stream to the client, nothing is persisted for it (TS-9).
 
   // Save topic frame (Stage 0 / invitation phase) - only if not already confirmed
   if ((currentStage === 0 || isInvitationPhase) && metadata.topicFrame) {
@@ -335,24 +328,27 @@ export async function persistTurnState(params: PersistTurnStateParams): Promise<
     }
   }
 
-  // Save empathy draft (Stage 2 or Stage 2B)
+  // Save empathy draft (Stage 2 or Stage 2B): the participant's own
+  // `draft(EMPATHY)` about their partner. One atomic statement on the
+  // sql_draft_one_per_point expression index (as the old Prisma upsert was
+  // one statement): create at version 1, or replace the text and bump the
+  // version — concurrent turns cannot both create.
   if ((effectiveStage === 2 || effectiveStage === 21) && metadata.offerReadyToShare && metadata.proposedEmpathyStatement) {
-    await prisma.empathyDraft.upsert({
-      where: {
-        sessionId_userId: { sessionId, userId },
-      },
-      create: {
-        sessionId,
-        userId,
-        content: metadata.proposedEmpathyStatement,
-        readyToShare: false,
-        version: 1,
-      },
-      update: {
-        content: metadata.proposedEmpathyStatement,
-        version: { increment: 1 },
-      },
-    });
+    const partner = await getPartnerParticipant(participant.id);
+    if (!partner) {
+      // An EMPATHY draft names its subject (CHECK chk_draft_one_arc /
+      // chk_draft_arc_matches_kind: about_participant_id required): with no
+      // partner participant there is no row the target can hold. Stage 2 is
+      // reached only with a partner, so this is the invariant failing.
+      logger.error(`[sendMessageStream:${requestId}] Empathy draft not saved: Stage 2 turn with no partner participant`);
+    } else {
+      await prisma.$executeRaw`
+        INSERT INTO draft (participant_id, kind, about_participant_id, content, ready_to_share, version)
+        VALUES (${participant.id}::uuid, 'EMPATHY'::draft_kind, ${partner.participantId}::uuid,
+                ${metadata.proposedEmpathyStatement}, false, 1)
+        ON CONFLICT (participant_id, kind, (coalesce(about_participant_id, attempt_id, share_offer_id)))
+        DO UPDATE SET content = EXCLUDED.content, version = draft.version + 1`;
+    }
   }
 
   // Stage 4 structured capture. ProposedStrategy micro-tags remain only as a

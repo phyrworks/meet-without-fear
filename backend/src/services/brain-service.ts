@@ -2,7 +2,12 @@
 import { logger } from '../lib/logger';
 import { prisma } from '../lib/prisma';
 import { getAbly } from '../services/realtime';
-import { ActivityType, ActivityStatus, BrainActivity, BrainActivityCallType } from '../generated/prisma/client';
+import { ActivityType, ActivityStatus, BrainActivity, BrainCallType } from '../generated/prisma/client';
+
+// TS-9 (mechanical): the target schema names the enum `BrainCallType`
+// (spec §3, same members); the app keeps importing it under its old name.
+const BrainActivityCallType = BrainCallType;
+type BrainActivityCallType = BrainCallType;
 
 export type ActivityInput = {
   sessionId?: string;
@@ -40,7 +45,8 @@ export class BrainService {
       const activity = await prisma.brainActivity.create({
         data: {
           ...(params.sessionId ? { session: { connect: { id: params.sessionId } } } : {}),
-          ...(params.innerWorkSessionId ? { innerWorkSession: { connect: { id: params.innerWorkSessionId } } } : {}),
+          // TS-9 (mechanical): InnerWorkSession is `reflection` in the target.
+          ...(params.innerWorkSessionId ? { reflection: { connect: { id: params.innerWorkSessionId } } } : {}),
           turnId: params.turnId,
           activityType: params.activityType,
           model: params.model,

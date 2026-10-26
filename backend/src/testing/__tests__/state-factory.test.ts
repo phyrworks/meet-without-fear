@@ -1,9 +1,15 @@
 import { prisma } from '../../lib/prisma';
 import { StateFactory, TargetStage } from '../state-factory';
+import { isTargetShape } from '../golden/shape';
 
 jest.mock('../../lib/prisma');
 
-describe('StateFactory', () => {
+// The CURRENT-shape writer through a mocked Prisma. On the target shape the
+// factory writes through pg (fixture-scenarios/target-shape.ts, tested in
+// fixture-scenarios/__tests__/target-shape.test.ts), so this does not apply.
+const describeCurrent = isTargetShape() ? describe.skip : describe;
+
+describeCurrent('StateFactory', () => {
   beforeEach(() => {
     jest.clearAllMocks();
   });

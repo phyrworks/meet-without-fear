@@ -13,15 +13,19 @@
  *
  * Each function performs its own writes and returns; SSE framing stays in the
  * controller.
+ *
+ * Target shape (TS-9): AI rows go into the participant's MAIN conversation
+ * through the job connection (`createFacilitatorMessage`).
  */
 
-import type { Message } from '../generated/prisma/client';
 import { logger } from '../lib/logger';
 import { prisma } from '../lib/prisma';
 import { brainService } from './brain-service';
 import { publishMessageError } from './realtime';
-import { getPartnerUserId } from '../utils/session';
 import type { RefiningNeedContext } from './stream-turn-actions';
+import { getPartnerParticipant, type ResolvedParticipant } from './participant-resolver';
+import { createFacilitatorMessage, deleteMessage, type StoredMessage } from './message-store';
+import { loadStageStates, rowForStage } from './stage-shim';
 
 export function isReadyForStage3RevealText(content: string): boolean {
   const normalized = content.trim().toLowerCase();
@@ -32,27 +36,24 @@ export function isReadyForStage3RevealText(content: string): boolean {
     /(list|lists|needs|side by side|reveal|see them|see it|show)/.test(normalized);
 }
 
-async function getStage3GateResponse(sessionId: string, userId: string): Promise<string | null> {
-  const partnerId = await getPartnerUserId(sessionId, userId);
-  const progress = await prisma.stageProgress.findUnique({
-    where: {
-      sessionId_userId_stage: {
-        sessionId,
-        userId,
-        stage: 3,
-      },
-    },
-  });
-  if (!progress) return null;
+async function getStage3GateResponse(participant: ResolvedParticipant): Promise<string | null> {
+  const partner = await getPartnerParticipant(participant.id);
+  const states = await loadStageStates([
+    { id: participant.id, joinedAt: participant.joinedAt },
+    ...(partner ? [{ id: partner.participantId, joinedAt: partner.joinedAt }] : []),
+  ]);
+  // The old gate read the stage-3 StageProgress row: none before stage 3.
+  const stage3 = rowForStage(states.get(participant.id), 3);
+  if (!stage3) return null;
 
-  const vessel = await prisma.userVessel.findUnique({
-    where: { userId_sessionId: { userId, sessionId } },
-    include: { identifiedNeeds: { orderBy: { createdAt: 'asc' } } },
+  const needs = await prisma.need.findMany({
+    where: { participantId: participant.id, deletedAt: null },
+    orderBy: { createdAt: 'asc' },
+    select: { confirmedAt: true },
   });
-  const needs = vessel?.identifiedNeeds ?? [];
-  const gates = progress.gatesSatisfied as Record<string, unknown> | null;
-  const ownShared = gates?.needsShared === true;
-  const ownConfirmed = gates?.needsConfirmed === true || (needs.length > 0 && needs.every((need) => need.confirmed));
+  const gates = stage3.gatesSatisfied;
+  const ownShared = gates.needsShared === true;
+  const ownConfirmed = gates.needsConfirmed === true || (needs.length > 0 && needs.every((need) => need.confirmedAt !== null));
 
   if (needs.length === 0) {
     return "Let's first put words to what matters most for you here. What do you need in order to feel clear, grounded, or able to move forward from this?";
@@ -66,21 +67,13 @@ async function getStage3GateResponse(sessionId: string, userId: string): Promise
     return "Your needs are ready for your review. If they still feel right, you can choose to share them for the side-by-side step.";
   }
 
-  if (!partnerId) {
+  if (!partner) {
     return "Your needs are shared. We'll wait until your partner has shared theirs before showing anything side by side.";
   }
 
-  const partnerProgress = await prisma.stageProgress.findUnique({
-    where: {
-      sessionId_userId_stage: {
-        sessionId,
-        userId: partnerId,
-        stage: 3,
-      },
-    },
-  });
-  const partnerGates = partnerProgress?.gatesSatisfied as Record<string, unknown> | null;
-  if (partnerGates?.needsShared !== true) {
+  // The partner's milestones are S-class (participant_milestone is visible to co-participants).
+  const partnerShared = states.get(partner.participantId)?.milestones.some(m => m.key === 'needs_shared') ?? false;
+  if (!partnerShared) {
     return "Your needs are shared. We'll wait until your partner has shared theirs before showing anything side by side.";
   }
 
@@ -92,27 +85,22 @@ async function getStage3GateResponse(sessionId: string, userId: string): Promise
  * gate-derived response, or returns null to let the model handle the turn.
  */
 export async function resolveStage3GateTurn(params: {
-  sessionId: string;
-  userId: string;
+  participant: ResolvedParticipant;
   currentStage: number;
   content: string;
-}): Promise<{ text: string; aiMessage: Message } | null> {
-  const { sessionId, userId, currentStage, content } = params;
+}): Promise<{ text: string; aiMessage: StoredMessage } | null> {
+  const { participant, currentStage, content } = params;
 
   if (currentStage !== 3 || !isReadyForStage3RevealText(content)) return null;
+  if (!participant.mainConversationId) return null;
 
-  const gateResponse = await getStage3GateResponse(sessionId, userId);
+  const gateResponse = await getStage3GateResponse(participant);
   if (!gateResponse) return null;
 
-  const aiMessage = await prisma.message.create({
-    data: {
-      sessionId,
-      senderId: null,
-      forUserId: userId,
-      role: 'AI',
-      content: gateResponse,
-      stage: 3,
-    },
+  // The facilitator's reply, into the participant's conversation (job connection).
+  const aiMessage = await createFacilitatorMessage({
+    conversationId: participant.mainConversationId,
+    content: gateResponse,
   });
 
   return { text: gateResponse, aiMessage };
@@ -122,31 +110,35 @@ export async function resolveStage3GateTurn(params: {
 export async function saveAiTurnMessage(params: {
   requestId: string;
   sessionId: string;
-  userId: string;
+  participant: ResolvedParticipant;
   /** Visible response text; trimmed on the way in. */
   accumulatedText: string;
-  /** Stage used for analytics (21 for Stage 2B). */
+  /** Stage used for analytics (21 for Stage 2B); the target stores no stage. */
   effectiveStage: number;
   refiningNeedContext: RefiningNeedContext | null;
-}): Promise<Message> {
-  const { requestId, sessionId, userId, accumulatedText, effectiveStage, refiningNeedContext } = params;
+}): Promise<StoredMessage> {
+  const { requestId, sessionId, participant, accumulatedText, effectiveStage, refiningNeedContext } = params;
+  if (!participant.mainConversationId) throw new Error(`Participant ${participant.id} has no MAIN conversation`);
 
-  // Trim whitespace that Claude sometimes adds
-  const aiMessage = await prisma.message.create({
-    data: {
-      sessionId,
-      senderId: null,
-      forUserId: userId,
-      role: 'AI',
-      content: accumulatedText.trim(),
-      stage: effectiveStage, // Use effective stage (21 for Stage 2B) for analytics
-      refiningNeedId: refiningNeedContext?.id ?? null,
-    },
+  // Trim whitespace that Claude sometimes adds. The AI row is written through
+  // the JOB connection (spec §1.1 message, writer-principal rule).
+  const aiMessage = await createFacilitatorMessage({
+    conversationId: participant.mainConversationId,
+    content: accumulatedText.trim(),
+    refiningNeedId: refiningNeedContext?.id ?? null,
   });
   logger.info(`[sendMessageStream:${requestId}] AI message created: ${aiMessage.id}`);
 
   // Broadcast to Status Site
-  brainService.broadcastMessage(aiMessage);
+  brainService.broadcastMessage({
+    id: aiMessage.id,
+    sessionId,
+    senderId: null,
+    role: 'AI',
+    content: aiMessage.content,
+    stage: effectiveStage,
+    timestamp: aiMessage.createdAt,
+  });
 
   return aiMessage;
 }
@@ -167,7 +159,7 @@ export async function cleanupFailedStreamTurn(params: {
   logger.error(`[sendMessageStream:${requestId}] Stream failed, cleaning up user message`);
 
   // Delete user message so retry creates fresh conversation turn
-  await prisma.message.delete({ where: { id: userMessageId } }).catch((deleteErr) => {
+  await deleteMessage(userMessageId).catch((deleteErr) => {
     logger.warn(`[sendMessageStream:${requestId}] Failed to delete user message on error:`, deleteErr);
   });
 

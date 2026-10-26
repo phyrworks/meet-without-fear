@@ -14,9 +14,10 @@
 import type { Express } from 'express';
 import * as http from 'http';
 import request from 'supertest';
-import { applyConceptViews, CONCEPT_NAMES, ConceptName, CURRENT_SHAPE_SQL, takeConceptSnapshot } from './concept-views';
+import { applyConceptViews, CONCEPT_NAMES, ConceptName, conceptSqlForShape, takeConceptSnapshot } from './concept-views';
 import { dropDatabase, mark, openMarkerClient } from './db';
 import { restoreFixture, RestoredFixture } from './fixtures';
+import { isTargetShape } from './shape';
 import type { FreshWindow } from './normalize';
 import { Snapshot, takeSnapshot, diffSnapshots, RowChange } from './snapshot';
 import {
@@ -155,6 +156,17 @@ export interface Harness {
   teardown(): Promise<void>;
 }
 
+/**
+ * The job login (`mwf_job`) on a run database. Its password is the dev
+ * literal from docs/development/local-setup.md (`GOLDEN_JOB_PASSWORD`
+ * overrides). Tagged with the app-under-test application_name, so the job's
+ * statements are part of the trace like the app's.
+ */
+export function jobUrlFor(t: { host: string; port: number }, database: string): string {
+  const pw = encodeURIComponent(process.env.GOLDEN_JOB_PASSWORD ?? 'mwf_job_dev');
+  return `postgresql://mwf_job:${pw}@${t.host}:${t.port}/${database}?application_name=${APP_UNDER_TEST}`;
+}
+
 export function authHeaders(actor: ActorRef): Record<string, string> {
   return { 'x-e2e-user-id': actor.id, 'x-e2e-user-email': actor.email };
 }
@@ -213,8 +225,8 @@ export async function createHarness(opts: {
   /**
    * Apply the `old_concept_*` views (`concept-views/`) to the run database and
    * snapshot them around every step, for the normalised baseline
-   * (`recordOrVerifyConcept`). `true` uses the current-shape SQL; a path picks
-   * another concept SQL file (the target-shape one, after the rebuild).
+   * (`recordOrVerifyConcept`). `true` uses the SQL for the schema in use
+   * (`conceptSqlForShape`); a path picks another concept SQL file.
    * `views` narrows the snapshot to those concepts (default: all of them;
    * `TS4_CONCEPT_NAMES` for the two scenarios recorded before TS-5's views).
    */
@@ -242,7 +254,10 @@ export async function createHarness(opts: {
 
   // After the restore (and its rebase), before anything is snapshotted. On
   // failure the run database must go, as `restoreFixture` does for its own.
-  const conceptSql = opts.concept === true ? CURRENT_SHAPE_SQL : opts.concept ? (opts.concept.sql ?? CURRENT_SHAPE_SQL) : null;
+  // The concept SQL follows the schema in use (current-shape.sql or, on the
+  // target branch, target-shape.sql — TS-9) unless the scenario names one.
+  const conceptSql =
+    opts.concept === true ? conceptSqlForShape() : opts.concept ? (opts.concept.sql ?? conceptSqlForShape()) : null;
   let conceptInitial: Snapshot | undefined;
   if (conceptSql) {
     try {
@@ -285,6 +300,18 @@ export async function createHarness(opts: {
   // lib/prisma prefers APP_DATABASE_URL over DATABASE_URL (database-urls.ts);
   // one left in a developer's environment would point the app elsewhere.
   delete process.env.APP_DATABASE_URL;
+  // The job connection (TS-9: AI/SYSTEM and delivered messages, system
+  // milestones and AI memory are written through it). On the target it logs
+  // in as mwf_job ON THE RUN DATABASE (roles are cluster-wide), so the run
+  // exercises the job's real grants; identity binding is on, so the
+  // identity-bound reads (app.current_user_id(), v_empathy_direction_status)
+  // behave as in production. On the current shape neither applies.
+  if (isTargetShape()) {
+    process.env.JOB_DATABASE_URL = jobUrlFor(fixture.target, fixture.database);
+    process.env.DB_IDENTITY_BINDING = 'on';
+  } else {
+    delete process.env.JOB_DATABASE_URL;
+  }
   process.env.E2E_AUTH_BYPASS = 'true';
   process.env.MOCK_LLM = 'true';
   process.env.E2E_FIXTURE_ID = process.env.E2E_FIXTURE_ID ?? 'user-a-full-journey';
@@ -424,8 +451,9 @@ export async function createHarness(opts: {
     },
     async teardown() {
       await new Promise<void>(resolve => server.close(() => resolve()));
-      const { prisma } = await import('../../lib/prisma');
+      const { prisma, disconnectJobPrisma } = await import('../../lib/prisma');
       await prisma.$disconnect().catch(() => undefined);
+      await disconnectJobPrisma().catch(() => undefined);
       await marker?.end().catch(() => undefined);
       // The per-database capture settings need no cleanup: they live on the run
       // database and go with it. `log_line_prefix` is server-wide and stays —

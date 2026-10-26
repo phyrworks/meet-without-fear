@@ -5,6 +5,7 @@
  */
 
 import { prisma } from '../lib/prisma';
+import { getPartnerUserIdFor, resolveParticipant } from '../services/participant-resolver';
 import {
   SessionSummaryDTO,
   SessionStatusSummary,
@@ -56,61 +57,43 @@ type SessionWithIncludes = {
 };
 
 /**
- * Records that a user actively did something in a session.
+ * Records that a participant actively did something in their session — the
+ * `last_active_at` of their `conversation_read_state` (target shape, TS-9).
  *
  * This is intentionally separate from lastViewedAt, which is read-state used
  * for unread indicators and chat animation boundaries.
+ */
+export async function touchParticipantActivity(participantId: string, at: Date = new Date()): Promise<void> {
+  await prisma.conversationReadState.upsert({
+    where: { participantId },
+    update: { lastActiveAt: at },
+    create: { participantId, lastActiveAt: at },
+  });
+}
+
+/**
+ * (session, user) form of `touchParticipantActivity`, for callers that do not
+ * hold the participant. A user with no participant in the session is ignored.
  */
 export async function touchUserSessionActivity(
   sessionId: string,
   userId: string,
   at: Date = new Date()
 ): Promise<void> {
-  await prisma.userVessel.upsert({
-    where: {
-      userId_sessionId: {
-        userId,
-        sessionId,
-      },
-    },
-    update: {
-      lastActiveAt: at,
-    },
-    create: {
-      userId,
-      sessionId,
-      lastActiveAt: at,
-    },
-  });
+  const participant = await resolveParticipant(sessionId, userId);
+  if (participant) await touchParticipantActivity(participant.id, at);
 }
 
 /**
- * Gets the partner's user ID from a session
+ * Gets the partner's user ID from a session: the one other present human
+ * participant, through `v_co_participant` (participant-resolver). Null when
+ * the caller is not a participant or there is no single partner.
  */
 export async function getPartnerUserId(
   sessionId: string,
   currentUserId: string
 ): Promise<string | null> {
-  const session = await prisma.session.findUnique({
-    where: { id: sessionId },
-    include: {
-      relationship: {
-        include: {
-          members: true,
-        },
-      },
-    },
-  });
-
-  if (!session) {
-    return null;
-  }
-
-  const partnerMember = session.relationship.members.find(
-    (m: { userId: string }) => m.userId !== currentUserId
-  );
-
-  return partnerMember?.userId ?? null;
+  return getPartnerUserIdFor(sessionId, currentUserId);
 }
 
 /**
@@ -122,10 +105,8 @@ export async function isSessionCreator(
   userId: string
 ): Promise<boolean> {
   const invitation = await prisma.invitation.findFirst({
-    where: {
-      sessionId,
-      invitedById: userId,
-    },
+    where: { sessionId, invitedByParticipant: { userId } },
+    select: { id: true },
   });
 
   return invitation !== null;

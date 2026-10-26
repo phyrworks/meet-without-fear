@@ -310,8 +310,15 @@ function isolationOf(sql: string): string | null {
  * An oracle built to survive the Prisma migration cannot only understand the
  * spelling Prisma happens to use.
  */
-function kindFromText(sql: string): { kind: StatementKind; isolation: string | null } {
+export function kindFromText(sql: string): { kind: StatementKind; isolation: string | null } {
   const s = sql.trim().replace(/^\(+/, '');
+  // TS-9 fix round 2: a transaction-control keyword followed by MORE SQL in
+  // one simple-protocol message (`BEGIN; INSERT …`) is not transaction
+  // control — classifying it by its leading keyword would let a data
+  // statement ride the BEGIN/COMMIT exemption of the protocol tripwire.
+  if (/^(BEGIN|START|COMMIT|END|ROLLBACK|SET)\b/i.test(s) && /;\s*\S/.test(s)) {
+    return { kind: 'other', isolation: null };
+  }
   // Checked before the generic SET, and before BEGIN, because both prefixes
   // would otherwise claim it.
   if (/^SET\s+SESSION\s+CHARACTERISTICS\s+AS\s+TRANSACTION\b/i.test(s)) {
@@ -360,10 +367,27 @@ export interface BuildTraceOptions {
  * root — while nodes and rows-read merge across all of them, because the nested
  * work is real cost the statement caused.
  */
+/** Statements that never carry a plan of their own. */
+export const TX_CONTROL_KINDS: ReadonlySet<StatementKind> = new Set<StatementKind>([
+  'BEGIN',
+  'COMMIT',
+  'ROLLBACK',
+  'SET_TX',
+  'SET_SESSION_TX',
+  'SET',
+]);
+
 export function buildTrace(records: LogRecord[], opts: BuildTraceOptions): TracedStatement[] {
   const application = opts.application ?? APP_UNDER_TEST;
   const statements: TracedStatement[] = [];
   const lastByPid = new Map<string, TracedStatement>();
+  // The latest statement on each pid that can have a plan (not transaction
+  // control). An extended-protocol portal's auto_explain plan is logged when
+  // the portal closes — which, under the identity-binding wrapper, is AFTER
+  // the following simple-protocol COMMIT has been logged. Attributing that
+  // plan to the COMMIT put relations and rows on it (found TS-9 fix round 2;
+  // never present in a recorded golden). Transaction control has no plan.
+  const lastPlannableByPid = new Map<string, TracedStatement>();
 
   for (const r of records) {
     if (r.database !== opts.database || r.application !== application) continue;
@@ -389,11 +413,13 @@ export function buildTrace(records: LogRecord[], opts: BuildTraceOptions): Trace
       };
       statements.push(stmt);
       lastByPid.set(r.pid, stmt);
+      if (!TX_CONTROL_KINDS.has(kind)) lastPlannableByPid.set(r.pid, stmt);
       continue;
     }
 
     if (!PLAN_RE.test(r.message)) continue;
-    const stmt = lastByPid.get(r.pid);
+    const last = lastByPid.get(r.pid);
+    const stmt = last && TX_CONTROL_KINDS.has(last.kind) ? lastPlannableByPid.get(r.pid) : last;
     // A plan with no statement above it means the window opened mid-statement.
     // Dropping it is right: the alternative is attributing cost to whatever
     // statement happens to precede it in an unrelated transaction.

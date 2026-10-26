@@ -239,6 +239,26 @@ The concept snapshots run on muted harness connections outside every trace windo
 byte-level goldens did not move. They set `jit = off`: the nested view plans cost enough to
 trigger JIT compilation, measured at ~950 ms per view per snapshot against 2 ms without it.
 
+## On the target shape (TS-9)
+
+The harness runs against whichever schema the branch carries (`shape.ts` reads
+`prisma/schema.prisma`; `GOLDEN_SHAPE` overrides). On the target shape:
+
+| Piece | Target behaviour |
+|---|---|
+| Templates and runs | `mwf_tfx_<stage>` / `mwf_trun_<id>`, manifests in `__fixtures__/target/` — never the current shape's `mwf_fx_`/`mwf_run_`. |
+| Schema | `target-baseline.ts`: the TS-7c baseline migration in the tree, applied verbatim; no fallback (it fails loudly). Never `db push`. |
+| Job and identity | The app's job client logs in as `mwf_job` on the run database (`jobUrlFor`), and `DB_IDENTITY_BINDING=on`: job writes run under the job's real grants, identity-bound reads under the caller's identity. |
+| Fixtures | `fixture-scenarios/target-shape.ts` writes the same scenario model through `pg`. Its contract is the **concept image of the current-shape fixture** (what `current-shape.sql` shows), so a concept baseline recorded on the current shape stays comparable; every place it writes a decoded rather than a "truer" value is marked FIDELITY. Repair-stage scenarios are refused. |
+| Restore | Timestamps are `timestamptz`; the rebase runs with triggers off (`touch_updated_at` would stamp every row). Snapshots render `timestamptz` `AT TIME ZONE 'UTC'`, the same text as the old naive columns. |
+| Concept views | `concept-views/target-shape.sql`: same names, same column sets, near-identity projections. |
+| Byte-level goldens | Never re-recorded on the target (the runner refuses). Compared under the scenario's target allow-list instead of byte-for-byte. The trace goes through `traceMapped`: complete; every data statement `extended` (transaction control from the identity wrapper may be `simple`); isolation unchanged; relations within the rename map's image plus named additions; the paged message read's row count unchanged. Labels: `labelTargetRows` in `normalize.ts`. |
+| `fixtureMask` rule | A fixture fact the target cannot hold as the current-shape fixture did, where a different value would also renumber every later `<ts:N>`: the runner checks the run's raw value (`expect`) and substitutes the baseline's before normalising. Always paired with a scenario assertion of the real value. |
+
+`session-read` verifies on the target under `SESSION_READ_ALLOW` plus four pinned
+fixture-representation deltas (`allow-lists/session-read.ts`: the compact `signedAt` instant,
+a message's DTO stage, the user's split names, Ada's `empathy_submitted` milestone).
+
 ## Four hazards found by running it, not by reading
 
 **`node-postgres` and naive timestamps.** All 144 timestamp columns are

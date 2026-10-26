@@ -26,6 +26,7 @@
 import { DbTarget, withClient } from './db';
 import type { FixtureManifest } from './fixtures';
 import { CONCEPT_VIEWS } from './concept-views';
+import { isTargetShape } from './shape';
 
 /**
  * cuid v1: 'c' followed by 24 base36 chars.
@@ -122,6 +123,11 @@ export async function buildLabelMap(
   labels.set(manifest.seeded.sessionId, '<session:main>');
   labels.set(manifest.seeded.relationshipId, '<relationship:main>');
   labels.set(manifest.seeded.invitationId, '<invitation:main>');
+
+  if (isTargetShape()) {
+    await labelTargetRows(target, database, labels);
+    return { labels };
+  }
 
   await withClient(
     target,
@@ -291,6 +297,105 @@ export async function buildLabelMap(
   );
 
   return { labels };
+}
+
+/**
+ * The byte-level labels over the TARGET tables (TS-9): the same vocabulary as
+ * the current-shape rules above, from the rows that carry the same facts, so a
+ * byte-level golden recorded on the current shape reads the same labels from a
+ * target run. `<message:N>` is the global (time, id) rank, as before — the
+ * target writer inserts messages in the old order, so ties break the same way.
+ * Participants and conversations, which have no old row, take their concept
+ * labels (`<participant:ada@main>`).
+ */
+async function labelTargetRows(target: DbTarget, database: string, labels: Map<string, string>): Promise<void> {
+  const bare = (id: string | null): string =>
+    id ? (labels.get(id) ?? `?${id}`).replace(/[<>]|user:|session:/g, '') : 'none';
+  await withClient(
+    target,
+    async c => {
+      const rows = async (sql: string): Promise<Array<Record<string, string | null>>> =>
+        (await c.query<Record<string, string | null>>(sql)).rows;
+
+      for (const p of await rows(`SELECT id, user_id, session_id FROM participant ORDER BY id`)) {
+        labels.set(String(p.id), CONCEPT_LABEL.participant(bare(p.user_id), bare(p.session_id)));
+      }
+      for (const cv of await rows(
+        `SELECT c.id, c.participant_id, c.kind::text AS kind,
+                row_number() OVER (PARTITION BY c.participant_id, c.kind ORDER BY c.created_at, c.id)::text AS n
+         FROM conversation c`,
+      )) {
+        const who = (labels.get(String(cv.participant_id)) ?? '').replace(/^<participant:|>$/g, '');
+        labels.set(String(cv.id), CONCEPT_LABEL.conversation(who, cv.kind === 'MAIN' ? 'MAIN' : `${cv.kind}#${cv.n}`));
+      }
+      const userOf = new Map<string, string>();
+      for (const p of await rows(`SELECT id, user_id FROM participant`)) userOf.set(String(p.id), String(p.user_id));
+      const who = (participantId: string | null): string => bare(participantId ? (userOf.get(participantId) ?? null) : null);
+
+      for (const m of await rows(`SELECT id, row_number() OVER (ORDER BY created_at, id)::text AS rank FROM message`)) {
+        labels.set(String(m.id), `<message:${m.rank}>`);
+      }
+      for (const a of await rows(`SELECT id, author_participant_id FROM empathy_attempt ORDER BY id`)) {
+        labels.set(String(a.id), `<empathyAttempt:${who(a.author_participant_id)}>`);
+      }
+      for (const d of await rows(`SELECT id, participant_id, kind::text AS kind FROM draft ORDER BY id`)) {
+        const name = d.kind === 'EMPATHY' ? 'empathyDraft' : d.kind === 'VALIDATION_FEEDBACK' ? 'feedbackDraft' : 'shareDraft';
+        labels.set(String(d.id), `<${name}:${who(d.participant_id)}>`);
+      }
+      const rankWithin = async (sql: string, name: string, owner: (r: Record<string, string | null>) => string) => {
+        const n = new Map<string, number>();
+        for (const r of await rows(sql)) {
+          const o = owner(r);
+          n.set(o, (n.get(o) ?? 0) + 1);
+          labels.set(String(r.id), `<${name}:${o}#${n.get(o)}>`);
+        }
+      };
+      await rankWithin(`SELECT id, user_id FROM reflection ORDER BY created_at, id`, 'innerWork', r => bare(r.user_id));
+      await rankWithin(
+        `SELECT id, reflection_id FROM reflection_message ORDER BY reflection_id, created_at, id`,
+        'innerWorkMessage',
+        r => bare(r.reflection_id),
+      );
+      await rankWithin(
+        `SELECT id, coalesce(reflection_id, session_id) AS owner FROM brain_activity ORDER BY created_at, id`,
+        'brainActivity',
+        r => bare(r.owner),
+      );
+      await rankWithin(
+        `SELECT r.id, a.author_participant_id AS author, r.subject_participant_id AS subject
+         FROM reconciler_result r JOIN empathy_attempt a ON a.id = r.attempt_id ORDER BY r.created_at, r.id`,
+        'reconcilerResult',
+        r => `${who(r.author)}→${who(r.subject)}`,
+      );
+      await rankWithin(
+        `SELECT id, subject_participant_id FROM context_share_offer ORDER BY created_at, id`,
+        'shareOffer',
+        r => who(r.subject_participant_id),
+      );
+      await rankWithin(`SELECT id, participant_id FROM need ORDER BY created_at, id`, 'need', r => who(r.participant_id));
+      await rankWithin(`SELECT id, session_id FROM proposal ORDER BY created_at, id`, 'proposal', r => bare(r.session_id));
+      await rankWithin(`SELECT id FROM agreement ORDER BY id`, 'agreement', () => 'main');
+      await rankWithin(
+        `SELECT id, reviewer_participant_id FROM empathy_review ORDER BY created_at, id`,
+        'validation',
+        r => who(r.reviewer_participant_id),
+      );
+      // A consent: who decided, over what kind, about which target (as above).
+      const consentRank = new Map<string, number>();
+      for (const r of await rows(
+        `SELECT id, participant_id, target_kind::text AS kind,
+                coalesce(need_id, empathy_attempt_id, proposal_id, share_offer_id, review_id) AS target
+         FROM consent ORDER BY participant_id, target_kind, decided_at NULLS LAST, created_at, id`,
+      )) {
+        const group = `${who(r.participant_id)}/${r.kind}`;
+        const n = (consentRank.get(group) ?? 0) + 1;
+        consentRank.set(group, n);
+        const targetLabel = r.target ? labels.get(String(r.target)) : null;
+        labels.set(String(r.id), `<consent:${group}/${targetLabel ? targetLabel.replace(/[<>]/g, '') : `#${n}`}>`);
+      }
+    },
+    database,
+  );
 }
 
 /**

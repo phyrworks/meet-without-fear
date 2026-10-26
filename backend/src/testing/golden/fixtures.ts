@@ -35,10 +35,21 @@ import {
   withClient,
 } from './db';
 
+import { buildTargetDatabase } from './target-baseline';
+import { isTargetShape } from './shape';
+
 export const FIXTURE_PREFIX = 'mwf_fx_';
 export const RUN_PREFIX = 'mwf_run_';
+/** Target-shape templates and runs (TS-9): never the current shape's names. */
+export const TARGET_FIXTURE_PREFIX = 'mwf_tfx_';
+export const TARGET_RUN_PREFIX = 'mwf_trun_';
+
+const fixturePrefix = (): string => (isTargetShape() ? TARGET_FIXTURE_PREFIX : FIXTURE_PREFIX);
+const runPrefix = (): string => (isTargetShape() ? TARGET_RUN_PREFIX : RUN_PREFIX);
 
 const MANIFEST_DIR = path.join(__dirname, '__fixtures__');
+/** Target-shape manifests live beside, never over, the current-shape ones. */
+const manifestDir = (): string => (isTargetShape() ? path.join(MANIFEST_DIR, 'target') : MANIFEST_DIR);
 
 export interface FixtureManifest {
   stage: string;
@@ -59,11 +70,11 @@ export interface FixtureManifest {
 }
 
 function manifestPath(stage: string): string {
-  return path.join(MANIFEST_DIR, `${stage}.json`);
+  return path.join(manifestDir(), `${stage}.json`);
 }
 
 export function fixtureDbName(stage: string): string {
-  return `${FIXTURE_PREFIX}${stage.toLowerCase()}`;
+  return `${fixturePrefix()}${stage.toLowerCase()}`;
 }
 
 export function readManifest(stage: string): FixtureManifest {
@@ -93,15 +104,21 @@ export async function buildFixture(opts: {
   const dbName = fixtureDbName(opts.stage);
   const fixtureUrl = toDbUrl({ ...target, database: dbName });
 
-  await dropDatabase(target, dbName);
-  await createDatabase(target, dbName);
+  if (isTargetShape()) {
+    // The target baseline (TS-7c's migration once it lands; composed until
+    // then — target-baseline.ts). Never `db push`.
+    await buildTargetDatabase(target, dbName);
+  } else {
+    await dropDatabase(target, dbName);
+    await createDatabase(target, dbName);
 
-  // Apply the real migration history — never `db push`, per project convention.
-  execFileSync('npx', ['prisma', 'migrate', 'deploy'], {
-    cwd: path.resolve(__dirname, '../../..'),
-    env: { ...process.env, DATABASE_URL: fixtureUrl },
-    stdio: 'pipe',
-  });
+    // Apply the real migration history — never `db push`, per project convention.
+    execFileSync('npx', ['prisma', 'migrate', 'deploy'], {
+      cwd: path.resolve(__dirname, '../../..'),
+      env: { ...process.env, DATABASE_URL: fixtureUrl },
+      stdio: 'pipe',
+    });
+  }
 
   const seeded = await seedInto(fixtureUrl, opts);
 
@@ -117,7 +134,7 @@ export async function buildFixture(opts: {
     builtAt: new Date().toISOString(),
   };
 
-  fs.mkdirSync(MANIFEST_DIR, { recursive: true });
+  fs.mkdirSync(manifestDir(), { recursive: true });
   fs.writeFileSync(manifestPath(opts.stage), JSON.stringify(manifest, null, 2) + '\n');
 
   return manifest;
@@ -215,7 +232,7 @@ export async function restoreFixture(opts: {
 }): Promise<RestoredFixture> {
   const manifest = readManifest(opts.stage);
   const target = parseDbUrl(opts.baseUrl);
-  const runDb = `${RUN_PREFIX}${opts.runId}`.toLowerCase();
+  const runDb = `${runPrefix()}${opts.runId}`.toLowerCase();
 
   await cloneDatabase(target, manifest.database, runDb);
 
@@ -240,7 +257,9 @@ export async function restoreFixture(opts: {
     target,
     async c => {
       const r = await c.query<{ id: string; clerkId: string }>(
-        `SELECT id, "clerkId" FROM "User" WHERE "clerkId" IS NOT NULL`,
+        isTargetShape()
+          ? `SELECT id, clerk_id AS "clerkId" FROM "user" WHERE clerk_id IS NOT NULL`
+          : `SELECT id, "clerkId" FROM "User" WHERE "clerkId" IS NOT NULL`,
       );
       return r.rows.map(x => ({ userId: x.id, clerkId: x.clerkId }));
     },
@@ -301,8 +320,11 @@ async function rebaseTimestampsToAge(
   const shift = await withClient(
     target,
     async c => {
+      // Target shape: timestamptz, so now() compares directly.
       const r = await c.query<{ shift: string | null }>(
-        `SELECT EXTRACT(EPOCH FROM (
+        isTargetShape()
+          ? `SELECT EXTRACT(EPOCH FROM (now() - max(created_at) - $1::interval))::bigint::text AS shift FROM session`
+          : `SELECT EXTRACT(EPOCH FROM (
            (now() AT TIME ZONE 'UTC') - max("createdAt") - $1::interval
          ))::bigint::text AS shift
          FROM "Session"`,
@@ -319,7 +341,8 @@ async function rebaseTimestampsToAge(
     );
   }
 
-  await rebaseTimestamps(target, database, `${shift} seconds`);
+  const disableTriggers = isTargetShape();
+  await rebaseTimestamps(target, database, `${shift} seconds`, { disableTriggers });
   // Json columns hold ISO timestamps that the column rebase cannot reach.
-  await rebaseJsonTimestamps(target, database, Number(shift));
+  await rebaseJsonTimestamps(target, database, Number(shift), { disableTriggers });
 }

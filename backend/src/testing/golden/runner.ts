@@ -10,10 +10,11 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
-import { alignTies, compareWithAllowList, rawTieRanges, TiedRanges } from './allow-lists/compare';
+import { alignTies, applyFixtureMasks, compareWithAllowList, rawTieRanges, TiedRanges } from './allow-lists/compare';
 import type { AllowList, AllowRule } from './allow-lists/types';
 import type { Harness, StepResult } from './driver';
 import { CONCEPT_VIEWS, conceptOf } from './concept-views';
+import { isTargetShape } from './shape';
 import {
   buildConceptLabelMap,
   buildLabelMap,
@@ -172,6 +173,33 @@ export function normalizeStep(
   };
 }
 
+/**
+ * TS-9: on the target shape, apply the allow-list's `fixtureMask` rules to
+ * each step's raw body before it is normalised (see `FixtureMaskRule`).
+ * Returns the masked steps and every problem: a value that failed its
+ * `expect`, or a mask that matched nothing in the whole run (a mask that
+ * stops matching would otherwise hide nothing and assert nothing).
+ * The current shape is returned untouched.
+ */
+export function maskTargetSteps(
+  steps: StepResult[],
+  rules: readonly AllowRule[],
+): { steps: StepResult[]; problems: string[] } {
+  if (!isTargetShape() || !rules.some(r => r.kind === 'fixtureMask')) return { steps, problems: [] };
+  const problems: string[] = [];
+  const total = new Map<AllowRule, number>();
+  const out = steps.map((s, i) => {
+    const { payload, masked, errors } = applyFixtureMasks({ body: s.body, sse: s.sse }, rules, ['steps', String(i)]);
+    problems.push(...errors);
+    for (const [rule, n] of masked) total.set(rule, (total.get(rule) ?? 0) + n);
+    return { ...s, body: payload.body, sse: payload.sse };
+  });
+  for (const [rule, n] of total) {
+    if (n === 0) problems.push(`fixtureMask @ ${[rule.at].flat().join(', ')} matched nothing in the run`);
+  }
+  return { steps: out, problems };
+}
+
 export interface RunReport {
   scenario: string;
   recorded: boolean;
@@ -191,8 +219,20 @@ export async function recordOrVerify(opts: {
   steps: StepResult[];
   /** The scenario's allow-list rules; only `tiedOrder` is read here. */
   tiedOrder?: readonly AllowRule[];
+  /**
+   * On the TARGET shape the byte-level golden is compared under this
+   * allow-list instead of byte-for-byte (TS-9; plan §4): the golden was
+   * recorded on the current shape and is never re-recorded on the target.
+   * Required there; ignored on the current shape.
+   */
+  targetAllowList?: AllowList;
 }): Promise<RunReport> {
-  const { scenario, harness, steps } = opts;
+  const { scenario, harness } = opts;
+  const masking = maskTargetSteps(opts.steps, opts.targetAllowList?.rules ?? []);
+  if (masking.problems.length) {
+    return { scenario, recorded: false, unresolved: [], diff: masking.problems.map(p => `  ${p}`).join('\n') };
+  }
+  const steps = masking.steps;
   const map = await buildLabelMap(
     harness.fixture.target,
     harness.fixture.database,
@@ -236,6 +276,13 @@ export async function recordOrVerify(opts: {
   const p = goldenPath(scenario);
   const recording = isRecording(scenario);
 
+  if (recording && isTargetShape()) {
+    throw new Error(
+      `GOLDEN_UPDATE=${scenario} on the target shape: a byte-level golden is the current shape's record and is ` +
+        `never re-recorded on the target (TS-9). Verify it under its allow-list; re-record only the .concept file.`,
+    );
+  }
+
   if (recording) {
     fs.mkdirSync(GOLDEN_DIR, { recursive: true });
     fs.writeFileSync(p, JSON.stringify(actual, null, 2) + '\n');
@@ -264,6 +311,17 @@ export async function recordOrVerify(opts: {
   // Genuine same-millisecond ties recorded on either side are put into
   // canonical order on both before the positional comparison (TS-5 fix round 4).
   const [e, a] = alignTies(expected, actual);
+  if (isTargetShape()) {
+    if (!opts.targetAllowList) {
+      throw new Error(`Scenario "${scenario}": on the target shape the byte-level golden needs its allow-list`);
+    }
+    const cmp = compareWithAllowList(e, a, opts.targetAllowList);
+    const problems = [
+      ...cmp.violations,
+      ...cmp.unmatchedRules.map(r => `  rule matched nothing in the baseline: ${r}`),
+    ];
+    return { scenario, recorded: false, unresolved: [...new Set(unresolved)], diff: problems.length ? problems.join('\n') : null };
+  }
   const diff = diffJson(e, a);
   return { scenario, recorded: false, unresolved: [...new Set(unresolved)], diff };
 }
@@ -395,7 +453,12 @@ export async function recordOrVerifyConcept(opts: {
    */
   aliases?: Array<{ id: string; sameAs: string }>;
 }): Promise<ConceptRunReport> {
-  const { scenario, harness, steps, allowList } = opts;
+  const { scenario, harness, allowList } = opts;
+  const masking = maskTargetSteps(opts.steps, allowList.rules);
+  if (masking.problems.length) {
+    return { scenario, recorded: false, unresolved: [], violations: masking.problems.map(p => `  ${p}`), unmatchedRules: [] };
+  }
+  const steps = masking.steps;
   if (allowList.scenario !== scenario) {
     throw new Error(`Allow-list for "${allowList.scenario}" used for scenario "${scenario}"`);
   }
