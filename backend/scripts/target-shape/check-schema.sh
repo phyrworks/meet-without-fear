@@ -19,11 +19,13 @@
 #          pull never renders) and pull ⊆ sql-only.sql;
 #   5. drops the scratch database (also on failure).
 #
-# EXISTING-DB MODE (`--db <name>`): for TS-7, pointed at a database its
-#   migration has already built. Nothing is created, written or dropped.
+# EXISTING-DB MODE (`--db <name>`): pointed at a database the
+#   target_shape_baseline migration has already built (run-baseline.sh, TS-7c).
+#   Nothing is created, written or dropped.
 #   Runs (a), (b), and (c'') = (c') with schema.prisma itself as the reference
 #   (there is no pre-index pull of a migrated database), plus the same sql_
-#   completeness check. <name> must match ^ts[67]_[a-z0-9_]+$.
+#   completeness check. <name> must match ^ts[67]_[a-z0-9_]+$, or be one of
+#   the target branch's dev databases mwf_target_dev / mwf_target_test.
 #
 # Why the pull is staged: Prisma 7.10 `db pull` renders partial indexes (as
 # `where: raw(…)`, auto-adding the `partialIndexes` preview feature) and infers
@@ -35,10 +37,11 @@
 # other columns (the generated expression, as `db pull` renders it), which
 # Postgres rejects. Build mode therefore generates the DDL from a copy of
 # schema.prisma with that one @default removed; sql-only.sql §1 then drops the
-# plain column and re-adds it GENERATED. TS-7's generator must do the same.
+# plain column and re-adds it GENERATED. The baseline generator does the same.
 #
 # Exits non-zero on any failure. Only ever addresses a database whose name
-# matches ^ts[67]_ (build mode: exactly ts6_target).
+# matches ^ts[67]_ (build mode: exactly ts6_target), or, read-only, one of
+# mwf_target_dev / mwf_target_test.
 #
 # Usage: backend/scripts/target-shape/check-schema.sh [--db <name>] [out-dir]
 #   out-dir (default: fresh mktemp dir) receives the evidence.
@@ -57,7 +60,7 @@ OUT_ARG="${1:-}"
 
 # Hard guard: refuse every database outside the scratch prefix, and the named
 # real ones even if someone loosens the pattern.
-if ! [[ "$DB" =~ ^ts[67]_[a-z0-9_]+$ ]]; then
+if ! [[ "$DB" =~ ^ts[67]_[a-z0-9_]+$ ]] && ! { [ "$MODE" = existing ] && [[ "$DB" =~ ^mwf_target_(dev|test)$ ]]; }; then
   echo "refusing: database '$DB' does not match ^ts[67]_[a-z0-9_]+\$" >&2; exit 2
 fi
 case "$DB" in
