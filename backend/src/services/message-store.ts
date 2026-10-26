@@ -93,7 +93,7 @@ export function toMessageDTO(m: StoredMessage, ctx: MessageDTOContext): LegacyMe
   };
 }
 
-const MESSAGE_SELECT = {
+export const MESSAGE_SELECT = {
   id: true,
   conversationId: true,
   senderParticipantId: true,

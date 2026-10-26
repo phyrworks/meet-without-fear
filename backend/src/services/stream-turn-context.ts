@@ -6,17 +6,21 @@
  * partner resolution, context-bundle assembly, Stage 2B (Informed Empathy)
  * routing, Stage 4 prompt contexts, Tending context, stage prompt build, and
  * the final model message array with injected context.
+ *
+ * Target shape (TS-9): history is the participant's MAIN conversation; the
+ * context — including everything shared by the partner — comes from the
+ * single entry point `buildContextForParticipant`. The Stage 4 / Tending
+ * helpers above the assembly are the repair cluster's (TS-11) and unchanged.
  */
 
 import { logger } from '../lib/logger';
 import { prisma } from '../lib/prisma';
-import type { Message } from '../generated/prisma/client';
 import { getSessionSummary } from './conversation-summarizer';
-import { getPartnerUserId } from '../utils/session';
-import { assembleContextBundle, formatContextForPrompt } from './context-assembler';
+import { buildContextForParticipant, formatContextForPrompt } from './context-assembler';
 import type { MemoryIntentResult } from './memory-intent';
-import { getMilestoneContext, getSharedContentContext } from './shared-context';
-import { getSharedContextForGuesser } from './reconciler';
+import { getPartnerParticipant, type ResolvedParticipant } from './participant-resolver';
+import { countOwnTurns, legacyRole, listConversationMessages } from './message-store';
+import { loadStageStates } from './stage-shim';
 import { buildStagePrompt } from './stage-prompts';
 import {
   buildTendingConversationPrompt,
@@ -303,14 +307,24 @@ export interface StreamTurnContextParams {
   requestId: string;
   sessionId: string;
   user: { id: string; name?: string | null };
+  /** The caller's participant (requireSessionAccess → req.participant). */
+  participant: ResolvedParticipant;
   session: { status: string; topicFrame: string | null; topicFrameConfirmedAt: Date | null };
   currentStage: number;
   refiningNeedContext: RefiningNeedContext | null;
 }
 
+/** One history row as the prompt layer reads it: the DTO's single role. */
+export interface TurnHistoryMessage {
+  id: string;
+  role: string;
+  content: string;
+  timestamp: Date;
+}
+
 export interface StreamTurnContext {
-  /** Chronological (oldest-first) recent history for this user. */
-  history: Message[];
+  /** Chronological (oldest-first) recent history of the participant's conversation. */
+  history: TurnHistoryMessage[];
   userTurnCount: number;
   stageTurnCount: number;
   turnId: string;
@@ -328,75 +342,54 @@ export interface StreamTurnContext {
 export async function assembleStreamTurnContext(
   params: StreamTurnContextParams
 ): Promise<StreamTurnContext> {
-  const { requestId, sessionId, user, session, currentStage, refiningNeedContext } = params;
+  const { requestId, sessionId, user, participant, session, currentStage, refiningNeedContext } = params;
+  const conversationId = participant.mainConversationId;
+  if (!conversationId) throw new Error(`Participant ${participant.id} has no MAIN conversation`);
 
   // ===========================================================================
-  // Get conversation history for context (summary-aware)
+  // Conversation history (summary-aware): the participant's own conversation
   // ===========================================================================
   const existingSummary = await getSessionSummary(sessionId, user.id);
   const summaryBoundary = existingSummary?.summary.newestMessageAt;
   const historyLimit = summaryBoundary ? 30 : 20;
 
-  const historyDesc = await prisma.message.findMany({
-    where: {
-      sessionId,
-      OR: [
-        { senderId: user.id, forUserId: null },
-        { forUserId: user.id },
-      ],
-      ...(summaryBoundary ? { timestamp: { gt: summaryBoundary } } : {}),
-    },
-    orderBy: { timestamp: 'desc' },
-    take: historyLimit,
+  const historyDesc = await listConversationMessages({
+    conversationId,
+    limit: historyLimit - 1, // the store reads limit + 1
+    order: 'desc',
+    newerThan: summaryBoundary,
   });
-  const history = historyDesc.slice().reverse();
+  const history: TurnHistoryMessage[] = historyDesc
+    .slice()
+    .reverse()
+    .map(m => ({ id: m.id, role: legacyRole(m.role, m.kind), content: m.content, timestamp: m.createdAt }));
 
-  // Count ALL user messages for this session (not just from the limited history window)
-  // This prevents turn IDs from getting stuck when conversation exceeds 20 messages
-  // Also count user messages in the CURRENT stage only — stage-specific guards
-  // (e.g., feel-heard check, early-stage guidance) need stage-scoped counts so they
-  // don't fire prematurely due to accumulated turns from earlier stages.
+  // Count ALL own turns (not just the window), and the turns in the CURRENT
+  // stage — stage-specific guards (feel-heard check, early-stage guidance)
+  // need stage-scoped counts. The stage's start is the stage shim's.
+  const stageStates = await loadStageStates([{ id: participant.id, joinedAt: participant.joinedAt }]);
+  const stageStart = stageStates.get(participant.id)?.rows.find(r => r.stage === currentStage)?.startedAt ?? undefined;
   const [userTurnCount, stageTurnCount] = await Promise.all([
-    prisma.message.count({
-      where: {
-        sessionId,
-        role: 'USER',
-        senderId: user.id,
-        forUserId: null,
-      },
-    }),
-    prisma.message.count({
-      where: {
-        sessionId,
-        role: 'USER',
-        senderId: user.id,
-        forUserId: null,
-        stage: currentStage,
-      },
-    }),
+    countOwnTurns(conversationId, participant.id),
+    countOwnTurns(conversationId, participant.id, stageStart),
   ]);
   const turnId = `${sessionId}-${user.id}-${userTurnCount}`;
-  updateContext({ turnId, sessionId, userId: user.id });
+  updateContext({ turnId, sessionId, userId: user.id, participantId: participant.id });
 
-  // Get partner name for context
-  const partnerId = await getPartnerUserId(sessionId, user.id);
+  // Partner (v_co_participant), or the invitee's name before they joined.
+  const partner = await getPartnerParticipant(participant.id);
+  const partnerId = partner?.userId ?? null;
   let partnerName: string | undefined;
-  if (partnerId) {
-    const partner = await prisma.user.findUnique({
-      where: { id: partnerId },
-      select: { name: true },
-    });
-    partnerName = partner?.name || undefined;
+  if (partner) {
+    partnerName = partner.displayName || undefined;
   } else if (session.status === 'CREATED' || session.status === 'INVITED') {
-    // Partner hasn't joined yet - get name from invitation
     const invitation = await prisma.invitation.findFirst({
-      where: { sessionId, invitedById: user.id },
+      where: { sessionId, invitedByParticipantId: participant.id },
       select: { name: true },
     });
     partnerName = invitation?.name || undefined;
   }
 
-  // Build stage prompt with full context assembly (includes notable facts)
   const userName = user.name || 'there';
   const isInvitationPhase = session.status === 'CREATED';
 
@@ -411,65 +404,46 @@ export async function assembleStreamTurnContext(
     surfaceStyle: 'silent',
   };
 
-  // Assemble full context including notable facts from UserVessel
-  // Also fetch latest emotional reading for intensity-dependent prompt behavior
-  const [contextBundle, sharedContentHistory, milestoneContext, emotionalIntensity, capturedNeeds] = await Promise.all([
-    assembleContextBundle(
-      sessionId,
-      user.id,
-      currentStage,
-      streamingIntent
-    ),
-    // Stage gate: no shared content should exist for Stages 0-1 (witnessing).
-    // Defense-in-depth: even if the query has user isolation, skip entirely for early stages.
-    currentStage >= 2
-      ? getSharedContentContext(sessionId, user.id).catch((err: Error) => {
-          logger.warn(`[sendMessageStream:${requestId}] Shared content context fetch failed:`, err);
-          return null;
-        })
-      : Promise.resolve(null),
-    getMilestoneContext(sessionId, user.id).catch((err: Error) => {
-      logger.warn(`[sendMessageStream:${requestId}] Milestone context fetch failed:`, err);
-      return null;
-    }),
+  // The single entry point: everything the prompt may know beyond this
+  // participant's own rows comes from its shared vessel (TS-9).
+  const [contextBundle, emotionalIntensity, capturedNeeds] = await Promise.all([
+    buildContextForParticipant(participant.id, { intent: streamingIntent, stage: currentStage }),
     (async () => {
-      const vessel = await prisma.userVessel.findUnique({
-        where: { userId_sessionId: { userId: user.id, sessionId } },
-        select: { id: true },
+      const latest = await prisma.moodReading.findFirst({
+        where: { participantId: participant.id },
+        orderBy: { recordedAt: 'desc' },
+        select: { intensity: true },
       });
-      if (vessel) {
-        const latestReading = await prisma.emotionalReading.findFirst({
-          where: { vesselId: vessel.id },
-          orderBy: { timestamp: 'desc' },
-          select: { intensity: true },
-        });
-        if (latestReading) return latestReading.intensity;
-      }
-      return 5; // Default if no reading
+      return latest?.intensity ?? 5; // Default if no reading
     })(),
-    // Stage 3: fetch already-captured needs so the AI avoids duplicates
+    // Stage 3: the participant's own captured needs, so the AI avoids duplicates
     currentStage === 3
       ? (async () => {
-          const vessel = await prisma.userVessel.findUnique({
-            where: { userId_sessionId: { userId: user.id, sessionId } },
-            select: { id: true },
-          });
-          if (!vessel) return null;
-          const needs = await prisma.identifiedNeed.findMany({
-            where: { vesselId: vessel.id },
+          const needs = await prisma.need.findMany({
+            where: { participantId: participant.id, deletedAt: null },
             orderBy: { createdAt: 'asc' },
-            select: { id: true, need: true, confirmed: true },
+            select: { id: true, label: true, confirmedAt: true },
           });
-          return needs.length > 0 ? needs : null;
+          return needs.length > 0
+            ? needs.map(n => ({ id: n.id, need: n.label, confirmed: n.confirmedAt !== null }))
+            : null;
         })()
       : Promise.resolve(null),
   ]);
 
+  // Stage gate: no shared content for Stages 0-1 (witnessing).
+  const sharedContentHistory = currentStage >= 2 ? contextBundle.sharedContentHistory : null;
+  const milestoneContext = contextBundle.milestoneContext;
+
   logger.info(`[sendMessageStream:${requestId}] Context assembled: notableFacts=${contextBundle.notableFacts?.length ?? 0}, emotionalIntensity=${emotionalIntensity}`);
 
   // ===========================================================================
-  // Stage 2B routing: Check if user is in REFINING empathy status
-  // If so, route to Stage 21 (Informed Empathy) prompt instead of Stage 2
+  // Stage 2B routing: the participant's own attempt in REFINING → Stage 21
+  // (Informed Empathy). Gap context is the reconciler GUIDANCE about their own
+  // attempt (abstract hints only; never the subject's raw content), and the
+  // context the subject shared comes from the shared vessel — both through
+  // buildContextForParticipant. The old direct reads of the reconciler result
+  // and of the guesser's shared context are gone (plan §5; P3 §7).
   // ===========================================================================
   let effectiveStage = currentStage;
   let reconcilerGapContext: {
@@ -485,12 +459,14 @@ export async function assembleStreamTurnContext(
 
   if (currentStage === 2) {
     const refiningAttempt = await prisma.empathyAttempt.findFirst({
-      where: {
-        sessionId,
-        sourceUserId: user.id,
-        status: 'REFINING',
-      },
-      orderBy: { sharedAt: 'desc' },
+      where: { authorParticipantId: participant.id, status: 'REFINING' },
+      orderBy: { submittedAt: 'desc' },
+      select: { content: true },
+    });
+    const ownDraft = await prisma.draft.findFirst({
+      where: { participantId: participant.id, kind: 'EMPATHY' },
+      orderBy: { updatedAt: 'desc' },
+      select: { content: true },
     });
 
     if (refiningAttempt) {
@@ -499,54 +475,20 @@ export async function assembleStreamTurnContext(
       isRefiningEmpathy = true;
       logger.info(`[sendMessageStream:${requestId}] Stage 2B routing: user has REFINING empathy, using stage 21`);
 
-      // Fetch current empathy draft (may have been saved from a previous turn in this conversation)
-      const currentEmpathyDraft = await prisma.empathyDraft.findUnique({
-        where: { sessionId_userId: { sessionId, userId: user.id } },
-        select: { content: true },
-      });
-      if (currentEmpathyDraft) {
-        empathyDraftContent = currentEmpathyDraft.content;
-        logger.info(`[sendMessageStream:${requestId}] Stage 2B: found existing empathy draft (${empathyDraftContent.length} chars)`);
-      } else {
-        // Use the previous empathy attempt content as starting draft
-        empathyDraftContent = refiningAttempt.content;
-        logger.info(`[sendMessageStream:${requestId}] Stage 2B: using previous empathy attempt as draft`);
-      }
+      // The current draft, else the previous attempt as the starting draft.
+      empathyDraftContent = ownDraft?.content ?? refiningAttempt.content;
 
-      // Fetch reconciler result for gap context
-      const reconcilerResult = await prisma.reconcilerResult.findFirst({
-        where: {
-          sessionId,
-          guesserId: user.id,
-          supersededAt: null,
-        },
-        orderBy: { createdAt: 'desc' },
-      });
+      const guidance = contextBundle.sharedVessel.guidance;
+      reconcilerGapContext = guidance.length ? guidance[guidance.length - 1] : undefined;
 
-      if (reconcilerResult) {
-        // Use abstract guidance fields only — never inject raw partner content
-        // (missedFeelings, gapSummary, mostImportantGap) into the guesser's prompt
-        reconcilerGapContext = {
-          areaHint: reconcilerResult.areaHint,
-          guidanceType: reconcilerResult.guidanceType,
-          promptSeed: reconcilerResult.promptSeed,
-          iteration: reconcilerResult.iteration,
-        };
-      }
-
-      // Fetch shared context from partner
-      const sharedContextResult = await getSharedContextForGuesser(sessionId, user.id);
-      stage2BSharedContext = sharedContextResult.content;
-    } else {
-      // Regular Stage 2 — load empathy draft so AI can see/edit the current draft
-      const currentEmpathyDraft = await prisma.empathyDraft.findUnique({
-        where: { sessionId_userId: { sessionId, userId: user.id } },
-        select: { content: true },
-      });
-      if (currentEmpathyDraft) {
-        empathyDraftContent = currentEmpathyDraft.content;
-        logger.info(`[sendMessageStream:${requestId}] Stage 2: found existing empathy draft (${empathyDraftContent.length} chars)`);
-      }
+      const delivered = contextBundle.sharedVessel.sharedContexts.filter(
+        c => c.direction === 'partner_to_user' && c.content,
+      );
+      stage2BSharedContext = delivered.length ? delivered[delivered.length - 1].content ?? null : null;
+    } else if (ownDraft) {
+      // Regular Stage 2 — the AI can see/edit the current draft
+      empathyDraftContent = ownDraft.content;
+      logger.info(`[sendMessageStream:${requestId}] Stage 2: found existing empathy draft (${empathyDraftContent.length} chars)`);
     }
   }
   const stage4InventoryContext = currentStage === 4

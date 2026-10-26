@@ -12,7 +12,9 @@
  */
 
 import { logger } from '../lib/logger';
-import { prisma } from '../lib/prisma';
+import { getJobPrisma, prisma } from '../lib/prisma';
+import { getPartnerParticipant, resolveParticipant } from './participant-resolver';
+import { loadCurrentStages } from './stage-shim';
 import { getHaikuJson, BrainActivityCallType } from '../lib/bedrock';
 import { estimateTokens } from '../utils/token-budget';
 
@@ -267,68 +269,39 @@ export async function updateSessionSummary(
   hints: SummarizationHints = {}
 ): Promise<ConversationSummary | null> {
   try {
-    // Get session with messages and vessel (only this user's messages - data isolation)
-    const session = await prisma.session.findUnique({
-      where: { id: sessionId },
-      include: {
-        messages: {
-          where: {
-            OR: [
-              { senderId: userId },
-              { role: 'AI', forUserId: userId },
-            ],
-          },
-          orderBy: { timestamp: 'asc' },
-        },
-        relationship: {
-          include: {
-            members: {
-              include: { user: true },
-            },
-          },
-        },
-        userVessels: {
-          where: { userId },
-        },
-        stageProgress: {
-          where: { userId },
-          orderBy: { stage: 'desc' },
-          take: 1,
-        },
+    // Target shape (TS-9): the participant's MAIN conversation is the audience —
+    // their own turns and the AI's replies to them (delivered items excluded,
+    // as before: they were never part of the summarised dialogue).
+    const participant = await resolveParticipant(sessionId, userId);
+    if (!participant?.mainConversationId) return null;
+
+    const messages = (await prisma.message.findMany({
+      where: {
+        conversationId: participant.mainConversationId,
+        OR: [{ senderParticipantId: participant.id }, { role: 'AI' }],
       },
-    });
-
-    if (!session || !session.userVessels[0]) {
-      return null;
-    }
-
-    const vessel = session.userVessels[0];
-    const messageCount = session.messages.length;
+      orderBy: { createdAt: 'asc' },
+      select: { role: true, kind: true, content: true, createdAt: true },
+    })).map((m): SummaryMessageRecord => ({ role: m.kind === 'CHAT' ? m.role : m.kind, content: m.content, timestamp: m.createdAt }));
+    const messageCount = messages.length;
 
     // Check if we actually need to summarize
-    const existingSummary = vessel.conversationSummary as string | null;
-    const totalTokens = session.messages.reduce(
-      (sum: number, msg: SummaryMessageRecord) => sum + estimateTokens(msg.content),
-      0
-    );
-    if (!needsSummarization(messageCount, existingSummary ?? undefined, totalTokens)) {
+    const existing = await readSummaryDoc(participant.id);
+    const totalTokens = messages.reduce((sum: number, msg: SummaryMessageRecord) => sum + estimateTokens(msg.content), 0);
+    if (!needsSummarization(messageCount, existing ? JSON.stringify(existing) : undefined, totalTokens)) {
       return null;
     }
 
-    // Get user and partner names
-    const currentMember = session.relationship.members.find((m: RelationshipMemberWithUser) => m.userId === userId);
-    const partnerMember = session.relationship.members.find((m: RelationshipMemberWithUser) => m.userId !== userId);
-    const userName = currentMember?.user.name || currentMember?.user.firstName || 'User';
-    const partnerName = partnerMember?.user.name || partnerMember?.nickname || 'Partner';
+    // Names: the participant's own, and the co-participant's.
+    const partner = await getPartnerParticipant(participant.id);
+    const userName = participant.displayName || 'User';
+    const partnerName = partner?.displayName || 'Partner';
 
-    // Get current stage
-    const stage = session.stageProgress[0]?.stage ?? 1;
+    // Get current stage (stage shim)
+    const stage = (await loadCurrentStages([participant.id])).get(participant.id)?.stage ?? 1;
 
     // Determine which messages to summarize (older ones, keeping recent in full)
-    const messagesToSummarize = session.messages.slice(
-      0,
-      -SUMMARIZATION_CONFIG.recentMessagesToKeep
-    );
+    const messagesToSummarize = messages.slice(0, -SUMMARIZATION_CONFIG.recentMessagesToKeep);
 
     if (messagesToSummarize.length < 10) {
       // Not enough old messages to summarize
@@ -372,23 +345,25 @@ export async function updateSessionSummary(
         ? null
         : summaryResult.lastUnresolvedThread ?? null;
 
-    // Store in vessel
-    await prisma.userVessel.update({
-      where: { id: vessel.id },
-      data: {
-        conversationSummary: JSON.stringify({
-          ...summary,
-          keyThemes: summaryResult.keyThemes,
-          emotionalJourney: summaryResult.emotionalJourney,
-          unresolvedTopics: summaryResult.unresolvedTopics,
-          agreedFacts: summaryResult.agreedFacts ?? [],
-          userNeeds: summaryResult.userNeeds ?? [],
-          partnerNeeds: summaryResult.partnerNeeds ?? [],
-          openQuestions: summaryResult.openQuestions ?? [],
-          agreements: summaryResult.agreements ?? [],
-          lastUnresolvedThread,
-        }),
-      },
+    // Stored as the participant's ai_memory SUMMARY document (spec §1.1:
+    // `text, messageCount, generatedAt` required), written by the job
+    // connection — background classifiers write ai_memory as mwf_job.
+    const doc = JSON.parse(JSON.stringify({
+      ...summary,
+      keyThemes: summaryResult.keyThemes,
+      emotionalJourney: summaryResult.emotionalJourney,
+      unresolvedTopics: summaryResult.unresolvedTopics,
+      agreedFacts: summaryResult.agreedFacts ?? [],
+      userNeeds: summaryResult.userNeeds ?? [],
+      partnerNeeds: summaryResult.partnerNeeds ?? [],
+      openQuestions: summaryResult.openQuestions ?? [],
+      agreements: summaryResult.agreements ?? [],
+      lastUnresolvedThread,
+    }));
+    await getJobPrisma().aiMemory.upsert({
+      where: { participantId_kind: { participantId: participant.id, kind: 'SUMMARY' } },
+      create: { participantId: participant.id, kind: 'SUMMARY', doc },
+      update: { doc },
     });
 
     logger.info(
@@ -400,6 +375,16 @@ export async function updateSessionSummary(
     logger.error('[ConversationSummarizer] Failed to summarize session:', error);
     return null;
   }
+}
+
+/** The participant's stored SUMMARY document (ai_memory), or null. */
+async function readSummaryDoc(participantId: string): Promise<Record<string, unknown> | null> {
+  const row = await prisma.aiMemory.findUnique({
+    where: { participantId_kind: { participantId, kind: 'SUMMARY' } },
+    select: { doc: true },
+  });
+  const doc = row?.doc;
+  return doc && typeof doc === 'object' && !Array.isArray(doc) ? (doc as Record<string, unknown>) : null;
 }
 
 /**
@@ -445,21 +430,12 @@ export async function maybeRefreshSummaryForResumption(params: {
 
   // Cheap guard: look up existing summary timestamp. Skip the Haiku call if
   // it's already newer than the user's last message — nothing has changed.
-  const existing = await prisma.userVessel.findUnique({
-    where: { userId_sessionId: { userId, sessionId } },
-    select: { conversationSummary: true },
-  });
-
-  const existingSummaryJson = existing?.conversationSummary as string | null | undefined;
-  if (existingSummaryJson) {
-    try {
-      const parsed = JSON.parse(existingSummaryJson) as { generatedAt?: string };
-      const generatedAt = parsed.generatedAt ? new Date(parsed.generatedAt) : null;
-      if (generatedAt && generatedAt.getTime() >= lastUserTurnAt.getTime()) {
-        return 'summary_fresh';
-      }
-    } catch {
-      // Malformed stored summary — treat as missing; fall through to refresh.
+  const participant = await resolveParticipant(sessionId, userId);
+  const existing = participant ? await readSummaryDoc(participant.id) : null;
+  if (existing) {
+    const generatedAt = typeof existing.generatedAt === 'string' ? new Date(existing.generatedAt) : null;
+    if (generatedAt && !Number.isNaN(generatedAt.getTime()) && generatedAt.getTime() >= lastUserTurnAt.getTime()) {
+      return 'summary_fresh';
     }
   }
 
@@ -489,19 +465,15 @@ export async function getSessionSummary(
   agreements: string[];
   lastUnresolvedThread: string | null;
 } | null> {
-  const vessel = await prisma.userVessel.findUnique({
-    where: {
-      userId_sessionId: { userId, sessionId },
-    },
-    select: { conversationSummary: true },
-  });
-
-  if (!vessel?.conversationSummary) {
+  const participant = await resolveParticipant(sessionId, userId);
+  const doc = participant ? await readSummaryDoc(participant.id) : null;
+  if (!doc) {
     return null;
   }
 
   try {
-    const parsed = JSON.parse(vessel.conversationSummary as string);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const parsed = doc as any;
     return {
       summary: {
         text: parsed.text,
