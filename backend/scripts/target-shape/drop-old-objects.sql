@@ -21,8 +21,9 @@
 --       other resolve together; RESTRICT — an unknown dependent object, e.g. a
 --       harness view, makes it fail and roll back instead of being swept);
 --   (b) the 51 old enum types;
---   (c) TS-1's app schema objects: app.is_member(uuid),
---       app.partner_user_id(uuid), app.current_user_id(), then schema app
+--   (c) TS-1's app schema objects: app.is_member(uuid) and
+--       app.partner_user_id(uuid) (as mwf_job, their owner),
+--       app.current_user_id(), then schema app
 --       (RESTRICT: anything else in it makes the script fail);
 --   (d) _prisma_migrations (the old history; the baseline starts a new one).
 -- Then it asserts schema public holds no relation and no enum type, and
@@ -33,9 +34,20 @@
 --   * the database HAS the old shape (table public."Session" exists) and does
 --     NOT have the target shape (table public.participant absent) — a database
 --     already on the target shape is refused.
--- Idempotent: every DROP is IF EXISTS, so a re-run after a partial manual
--- clean-up finishes the job; a re-run after success is refused by the guard
--- (no "Session" any more), which is the intended no-op.
+-- Re-running: the END STATE is idempotent, the script is not. Every DROP is
+-- IF EXISTS, so a run over a partial manual clean-up (with "Session" still
+-- there) finishes the job; once "Session" is gone, a re-run is REFUSED by the
+-- guard (non-zero exit) and changes nothing.
+--
+-- Run it as the database owner (production: mwf_app today, mwf_migrator after
+-- work-a39h.11.19) or a superuser. TS-1's two definer helpers are owned by
+-- mwf_job, and the owner holds mwf_job only WITH INHERIT FALSE, SET TRUE
+-- (infra/aws/roles.sql). PostgreSQL lets a role DROP an object it owns OR an
+-- object in a schema it owns; the migrating role created schema app, so it
+-- could drop them anyway (fix round 1 probe) — but only while it owns the
+-- schema. The script drops them under SET ROLE mwf_job, their owner, so it
+-- does not depend on who created schema app (probe: a mwf_job function in a
+-- schema the dropper does not own fails "must be owner" without it).
 --
 -- Left in place on purpose: the "vector" extension (installed by the old
 -- history; the target does not use it; dropping an extension needs its owner
@@ -110,8 +122,15 @@ DROP TYPE IF EXISTS
   public."MeditationType", public."FavoriteType", public."BrainActivityCallType", public."ActivityType",
   public."ActivityStatus";
 
--- (c) TS-1's schema app (20261019173038_phase3_app_schema_helpers)
-DROP FUNCTION IF EXISTS app.is_member(uuid), app.partner_user_id(uuid), app.current_user_id();
+-- (c) TS-1's schema app (20261019173038_phase3_app_schema_helpers). The two
+-- definer helpers belong to mwf_job: drop them as mwf_job (a non-superuser
+-- owner holds mwf_job WITH INHERIT FALSE, SET TRUE, so it must SET ROLE; it
+-- does not rely on owning schema app). The rest belongs to the database
+-- owner, who created the schema.
+SET LOCAL ROLE mwf_job;
+DROP FUNCTION IF EXISTS app.is_member(uuid), app.partner_user_id(uuid);
+RESET ROLE;
+DROP FUNCTION IF EXISTS app.current_user_id();
 DROP SCHEMA IF EXISTS app;
 
 -- (d) the old migration history

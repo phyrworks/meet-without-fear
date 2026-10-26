@@ -103,11 +103,14 @@ const HEADER = `-- =============================================================
 --    backup → stop the API → drop-old-objects.sql → prisma migrate deploy →
 --    deploy the image → smoke). Section 0 refuses a database that still has
 --    table "Session", schema app, or any relation in public.
---  * One file, one transaction: prisma migrate deploy wraps it in a single
---    transaction on PostgreSQL; a RAISE anywhere rolls everything back. Prisma
---    still records the attempt as a failed _prisma_migrations row; clear it
---    with \`prisma migrate resolve --rolled-back ${MIGRATION_NAME}\`.
---    Nothing here forces a commit (no CONCURRENTLY, no ALTER TYPE … ADD VALUE).
+--  * One file, one transaction: prisma migrate deploy sends the file as one
+--    multi-statement simple query, and PostgreSQL runs such a query string in
+--    a single implicit transaction (the file has no BEGIN/COMMIT of its own);
+--    a RAISE anywhere rolls everything back. Prisma still records the attempt
+--    as a failed _prisma_migrations row; clear it with
+--    \`prisma migrate resolve --rolled-back ${MIGRATION_NAME}\`.
+--    Nothing here forces a commit (no CONCURRENTLY, no ALTER TYPE … ADD VALUE,
+--    no VACUUM, no COMMIT), so nothing breaks the implicit transaction.
 --  * Run as the database owner (or mwf_migrator) with infra/aws/roles.sql
 --    applied; the migrating role must be able to SET ROLE mwf_job (it hands
 --    the app.* helpers to mwf_job).

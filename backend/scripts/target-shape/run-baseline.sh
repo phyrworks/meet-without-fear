@@ -35,6 +35,8 @@
 #   e. drop-old-objects.sql -v target_db=<ts7_name>;
 #   f. steps 3–7 above on the same database;
 #   g. negative: drop-old-objects.sql refuses the database now on the target shape.
+#   With --as-migrator the database is OWNED BY mwf_migrator (non-superuser,
+#   mwf_job WITH INHERIT FALSE, SET TRUE) and a, c, d, e, f, g run as it.
 #
 # --dev: creates (if missing) mwf_target_dev, mwf_target_test and
 #   mwf_target_shadow — the target branch's development databases
@@ -179,14 +181,26 @@ baseline)
   ;;
 
 cutover)
-  URL="$(su_url "$DB")"
-  step "a. old shape: $DB from $BASE_REF ($BASE_DIR)"
+  # --as-migrator: the whole path runs as the NON-superuser owner mwf_migrator
+  # (it holds mwf_job WITH INHERIT FALSE, SET TRUE, as production's owner does):
+  # old history deploy, drop-old-objects.sql, baseline deploy. Only the vector
+  # extension is pre-created by the superuser (an untrusted extension; in
+  # production it already exists), so the old migration's CREATE EXTENSION IF
+  # NOT EXISTS is a no-op.
+  URL="$(su_url "$DB")"; OWNER_ROLE="$SU"
+  if [ "$AS_MIGRATOR" = 1 ]; then URL="$(mig_url "$DB")"; OWNER_ROLE=mwf_migrator; fi
+  psql_owner() { podman exec -i "$CONTAINER" psql -X -q -v ON_ERROR_STOP=1 -U "$OWNER_ROLE" -d "$DB" "$@"; }
+  step "a. old shape: $DB from $BASE_REF ($BASE_DIR), owned by and deployed as $OWNER_ROLE"
   if [ ! -d "$BASE_DIR/backend" ]; then
     git -C "$REPO" worktree add --detach "$BASE_DIR" "$BASE_REF" >/dev/null 2>&1
   fi
   echo "   base checkout at $(git -C "$BASE_DIR" log -1 --format='%h %s' | cut -c1-90)"
   ( cd "$BASE_DIR/backend" && "$PRISMA" generate >/dev/null 2>&1 )
-  psql_admin -c "DROP DATABASE IF EXISTS $DB WITH (FORCE)" -c "CREATE DATABASE $DB"
+  psql_admin -c "DROP DATABASE IF EXISTS $DB WITH (FORCE)" -c "CREATE DATABASE $DB OWNER $OWNER_ROLE"
+  if [ "$AS_MIGRATOR" = 1 ]; then
+    psql_on "$DB" -c "CREATE EXTENSION IF NOT EXISTS vector"
+    echo "   owner: $(psql_admin -Atc "SELECT pg_get_userbyid(datdba) FROM pg_database WHERE datname = '$DB'"); rolsuper=$(psql_admin -Atc "SELECT rolsuper FROM pg_roles WHERE rolname = 'mwf_migrator'"); membership in mwf_job: $(psql_admin -Atc "SELECT 'inherit=' || inherit_option || ' set=' || set_option FROM pg_auth_members WHERE roleid = 'mwf_job'::regrole AND member = 'mwf_migrator'::regrole"); vector pre-created by $SU"
+  fi
   ( cd "$BASE_DIR/backend" && DATABASE_URL="$URL" "$PRISMA" migrate deploy >"$OUT/base-deploy.log" 2>&1 ) \
     || { cat "$OUT/base-deploy.log"; exit 1; }
   echo "   $(psql_on "$DB" -Atc "SELECT count(*) FROM _prisma_migrations WHERE finished_at IS NOT NULL") old migrations applied"
@@ -237,7 +251,7 @@ SQL
 
   step "d. negative: drop-old-objects.sql outside its allow-list, and without one"
   for args in "-v target_db=some_other_db" ""; do
-    set +e; psql_on "$DB" $args -f - <"$HERE/drop-old-objects.sql" >"$OUT/drop-refused.log" 2>&1; rc=$?; set -e
+    set +e; psql_owner $args -f - <"$HERE/drop-old-objects.sql" >"$OUT/drop-refused.log" 2>&1; rc=$?; set -e
     if [ "$rc" -ne 0 ] && grep -q 'refusing' "$OUT/drop-refused.log"; then
       echo "   PASS refused ($([ -n "$args" ] && echo "$args" || echo 'no -v target_db')): $(grep -o 'drop-old-objects: refusing[^$]*' "$OUT/drop-refused.log" | head -1)"
     else
@@ -245,8 +259,8 @@ SQL
     fi
   done
 
-  step "e. drop-old-objects.sql -v target_db=$DB"
-  psql_on "$DB" -v target_db="$DB" -f - <"$HERE/drop-old-objects.sql" 2>&1 | sed 's/^NOTICE:  /   /'
+  step "e. drop-old-objects.sql -v target_db=$DB (as $OWNER_ROLE)"
+  psql_owner -v target_db="$DB" -f - <"$HERE/drop-old-objects.sql" 2>&1 | sed 's/^NOTICE:  /   /'
   echo "   left in public: $(psql_on "$DB" -Atc "SELECT count(*) || ' relations, ' || (SELECT count(*) FROM pg_type t JOIN pg_namespace n ON n.oid = t.typnamespace WHERE n.nspname = 'public' AND t.typtype = 'e') || ' enums' FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'public' AND c.relkind IN ('r','v','m','S','p','f')"); extensions: $(psql_on "$DB" -Atc "SELECT string_agg(extname, ',') FROM pg_extension")"
 
   step "3. prisma migrate deploy → $DB (the baseline, after the drop)"
@@ -255,7 +269,7 @@ SQL
   verify_target "$DB" "$URL"
 
   step "g. negative: drop-old-objects.sql refuses the database now on the target shape"
-  set +e; psql_on "$DB" -v target_db="$DB" -f - <"$HERE/drop-old-objects.sql" >"$OUT/drop-on-target.log" 2>&1; rc=$?; set -e
+  set +e; psql_owner -v target_db="$DB" -f - <"$HERE/drop-old-objects.sql" >"$OUT/drop-on-target.log" 2>&1; rc=$?; set -e
   if [ "$rc" -ne 0 ] && grep -q 'does not have the old shape' "$OUT/drop-on-target.log"; then
     echo "   PASS refused: $(grep -o 'drop-old-objects: refusing[^$]*' "$OUT/drop-on-target.log" | head -1)"
   else
