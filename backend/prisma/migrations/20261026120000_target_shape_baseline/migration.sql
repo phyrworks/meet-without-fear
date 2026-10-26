@@ -2908,6 +2908,25 @@ GRANT UPDATE (destroyed_at) ON participant_key TO mwf_job;
 GRANT SELECT (user_id, destroyed_at) ON user_key TO mwf_job;
 GRANT UPDATE (destroyed_at) ON user_key TO mwf_job;
 
+-- TS-9: the job connection's own writers in the app (spec §1.1 message
+-- "Key per row" — AI/SYSTEM rows and every delivered kind are mwf_job's;
+-- participant_milestone — system keys are mwf_job's; ai_memory — "in practice
+-- written by mwf_job").
+-- message-store createFacilitatorMessage / deliverMessage: the dedupe hash, the
+-- refining need a facilitator reply answers, and an explicit instant (fixtures, replays)
+GRANT INSERT (content_hash, refining_need_id, created_at) ON message TO mwf_job;
+-- message-store writers return the written row (INSERT … RETURNING) and getInitialMessage's
+-- Serializable idempotency probe reads the participant's first message: the MessageDTO columns
+GRANT SELECT (id, sender_participant_id, role, content, refining_need_id, created_at) ON message TO mwf_job;
+-- milestone-writer reachMilestone: system keys (invitation_sent, empathy_*, needs_shared, closed, paused …)
+GRANT INSERT (participant_id, milestone_key, reached_at, created_at) ON participant_milestone TO mwf_job;
+-- sessions.ts resumeSession: un-reaching `paused` is a DELETE by mwf_job (spec §1.1)
+GRANT DELETE ON participant_milestone TO mwf_job;
+-- conversation-summarizer updateSessionSummary: the participant's SUMMARY document (INSERT … ON CONFLICT DO UPDATE)
+GRANT SELECT (kind) ON ai_memory TO mwf_job;
+GRANT INSERT (participant_id, kind, doc) ON ai_memory TO mwf_job;
+GRANT UPDATE (doc) ON ai_memory TO mwf_job;
+
 -- mwf_ops: SELECT on exactly the tables routes/brain.ts reads, re-based
 -- (BrainActivity, Session/Relationship/RelationshipMember/User, StageProgress,
 -- Message, UserVessel.notableFacts, EmotionalReading, InnerWorkSession/Message).

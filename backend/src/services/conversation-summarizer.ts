@@ -360,11 +360,12 @@ export async function updateSessionSummary(
       agreements: summaryResult.agreements ?? [],
       lastUnresolvedThread,
     }));
-    await getJobPrisma().aiMemory.upsert({
-      where: { participantId_kind: { participantId: participant.id, kind: 'SUMMARY' } },
-      create: { participantId: participant.id, kind: 'SUMMARY', doc },
-      update: { doc },
-    });
+    // One statement, no RETURNING: the job's grants cover exactly this
+    // (trailer T7, TS-9: INSERT (participant_id, kind, doc), UPDATE (doc)).
+    await getJobPrisma().$executeRaw`
+      INSERT INTO ai_memory (participant_id, kind, doc)
+      VALUES (${participant.id}::uuid, 'SUMMARY'::ai_memory_kind, ${JSON.stringify(doc)}::jsonb)
+      ON CONFLICT (participant_id, kind) DO UPDATE SET doc = EXCLUDED.doc`;
 
     logger.info(
       `[ConversationSummarizer] Summarized ${messagesToSummarize.length} messages for session ${sessionId}`
