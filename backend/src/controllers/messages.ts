@@ -206,7 +206,8 @@ export async function confirmFeelHeard(
 
     // The participant's progress (stage shim)
     const stageState = (await loadStageStates([{ id: participant.id, joinedAt: participant.joinedAt }])).get(participant.id);
-    const hasJoined = (stageState?.milestones.length ?? 0) > 0;
+    // A participant row IS having joined (the old check was "has a StageProgress row").
+    const hasJoined = true;
 
     // Check session allows feel-heard confirmation
     // Allow ACTIVE status for all users, and INVITED status for:
@@ -294,8 +295,8 @@ export async function confirmFeelHeard(
             partnerMember.user.name ||
             undefined;
 
-          // The partner has begun when they have reached any milestone.
-          if (partnerState && partnerState.milestones.length > 0) {
+          // The partner has begun once they are a participant (old: had a StageProgress row).
+          if (partnerState) {
             partnerStatus = 'in_progress';
           }
         } else {

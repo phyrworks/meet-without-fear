@@ -222,6 +222,8 @@ export function createFacilitatorMessage(opts: {
   kind?: TargetMessageKind;
   content: string;
   sourceAttemptId?: string | null;
+  /** The participant's need this reply refines (Stage 3 refinement turns). */
+  refiningNeedId?: string | null;
   createdAt?: Date;
   /** For tests: the client the job connection resolves to. */
   client?: PrismaClient;
@@ -232,6 +234,7 @@ export function createFacilitatorMessage(opts: {
     role: opts.role ?? 'AI',
     kind: opts.kind ?? 'CHAT',
     content: opts.content,
+    refiningNeedId: opts.refiningNeedId,
     sourceAttemptId: opts.sourceAttemptId,
     createdAt: opts.createdAt,
   });

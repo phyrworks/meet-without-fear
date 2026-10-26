@@ -22,6 +22,7 @@ import { getPartnerUserId, isSessionCreator } from '../utils/session';
 import { getPartnerParticipant } from '../services/participant-resolver';
 import { loadMilestones, loadStageStates, progressDTO, rowForStage } from '../services/stage-shim';
 import { reachMilestone } from '../services/milestone-writer';
+import { displayStatus, isSessionPaused } from '../services/session-status';
 import { createFacilitatorMessage, listConversationMessages } from '../services/message-store';
 import { getOrchestratedResponse, type FullAIContext } from '../services/ai';
 import { embedSessionContent } from '../services/embedding';
@@ -98,7 +99,7 @@ export async function getSession(req: Request, res: Response): Promise<void> {
     successResponse(res, {
       session: {
         id: session.id,
-        status: session.status,
+        status: displayStatus(session.status, await isSessionPaused(sessionId)),
         currentStage: currentProgress.stage,
         stageStatus: currentProgress.status,
         relationshipId: session.relationshipId,
@@ -187,14 +188,6 @@ export async function pauseSession(req: Request, res: Response): Promise<void> {
   }
 }
 
-/** A session is paused while any of its participants holds the `paused` milestone. */
-async function isSessionPaused(sessionId: string): Promise<boolean> {
-  const n = await prisma.participantMilestone.count({
-    where: { milestoneKey: 'paused', participant: { sessionId } },
-  });
-  return n > 0;
-}
-
 /**
  * Resume a paused session
  * POST /sessions/:id/resume
@@ -244,7 +237,7 @@ export async function resumeSession(req: Request, res: Response): Promise<void> 
     successResponse(res, {
       resumed: true,
       resumedAt: now.toISOString(),
-      status: session.status,
+      status: displayStatus(session.status, false),
     });
   } catch (error) {
     logger.error('[resumeSession] Error:', error);
@@ -470,10 +463,11 @@ function checkGates(
  *
  * Target shape (TS-9): there is no stage row to complete or create. A stage
  * is complete when its terminal milestone is reached (stage shim), and the
- * next stage is current from that instant — so this endpoint writes nothing.
- * It answers as the old one did: `advanced: true` with the stage the
- * participant is now in once the previous stage's terminal milestone is
- * reached, otherwise the unsatisfied (derived) gates of the current stage.
+ * next stage is current from that instant — so this endpoint writes nothing
+ * and never reports `advanced: true` (fix round 1: it reported it for any
+ * stage > 0, and fired partner.advanced on every call). It answers with the
+ * participant's current stage and that stage's unsatisfied (derived) gates.
+ * No mobile screen calls it (useAdvanceStage is exported, unused).
  */
 export async function advanceStage(req: Request, res: Response): Promise<void> {
   try {
@@ -510,26 +504,9 @@ export async function advanceStage(req: Request, res: Response): Promise<void> {
       }
     }
 
-    const reachedCurrent = currentStage > 0 && rowForStage(state, currentStage)?.startedAt;
-    if (reachedCurrent) {
-      // The previous stage's terminal milestone moved the participant here.
-      const partner = await getPartnerParticipant(participant.id);
-      if (partner?.userId) {
-        await notifyPartner(sessionId, partner.userId, 'partner.advanced', {
-          toStage: currentStage,
-          advancedAt: current.startedAt ?? undefined,
-          triggeredByUserId: user.id,
-        });
-      }
-      successResponse(res, {
-        advanced: true,
-        newStage: currentStage,
-        newStatus: current.status,
-        advancedAt: current.startedAt,
-      });
-      return;
-    }
-
+    // Nothing changes here, so nothing is reported as advanced and no
+    // partner.advanced event is sent (the milestone writers are where a stage
+    // changes). The current stage's unsatisfied gates say what is missing.
     const gateCheck = checkGates(currentStage, (current.gatesSatisfied as Record<string, unknown> | null) ?? null);
     successResponse(res, {
       advanced: false,

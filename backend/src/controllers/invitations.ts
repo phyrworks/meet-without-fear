@@ -16,6 +16,7 @@ import { successResponse, errorResponse } from '../utils/response';
 import { generateSessionStatusSummary } from '../utils/session';
 import { getPartnerParticipant } from '../services/participant-resolver';
 import { loadStageStates, progressDTO } from '../services/stage-shim';
+import { displayStatus, parseStatusFilter, pausedSessionIds } from '../services/session-status';
 import { createInvitationUrl } from '../utils/urls';
 
 // ============================================================================
@@ -68,6 +69,14 @@ export async function listSessions(req: Request, res: Response): Promise<void> {
     const { status, limit = '20', cursor } = req.query;
     const takeLimit = parseInt(limit as string, 10);
 
+    // `?status=` onto the target (PAUSED is ACTIVE + a `paused` milestone).
+    const filter = parseStatusFilter(status);
+    if (filter.kind === 'invalid') {
+      errorResponse(res, 'VALIDATION_ERROR', `Unknown session status: ${filter.value}`, 400);
+      return;
+    }
+    const pausedWhere = { some: { leftAt: null, milestones: { some: { milestoneKey: 'paused' } } } };
+
     // Target shape (TS-9): the list is the caller's participants — one per
     // session — that they have not archived (conversation_read_state).
     const mine = await prisma.participant.findMany({
@@ -75,7 +84,13 @@ export async function listSessions(req: Request, res: Response): Promise<void> {
         userId: user.id,
         leftAt: null,
         OR: [{ readState: null }, { readState: { archivedAt: null } }],
-        ...(status && { session: { status: status as 'INVITED' | 'ACTIVE' | 'RESOLVED' | 'ABANDONED' } }),
+        ...(filter.kind === 'status' && {
+          session: {
+            status: filter.status,
+            ...(filter.paused === true ? { participants: pausedWhere } : {}),
+            ...(filter.paused === false ? { participants: { none: pausedWhere.some } } : {}),
+          },
+        }),
       },
       include: {
         session: {
@@ -109,6 +124,7 @@ export async function listSessions(req: Request, res: Response): Promise<void> {
       ...[...partners.values()].flatMap(c => (c ? [{ id: c.participantId, joinedAt: c.joinedAt }] : [])),
     ]);
     const ids = items.map(p => p.id);
+    const paused = await pausedSessionIds(items.map(p => p.sessionId));
     const unread = ids.length
       ? await prisma.$queryRaw<Array<{ participant_id: string; unread_count: bigint }>>`
           SELECT participant_id, unread_count FROM v_conversation_unread WHERE participant_id = ANY(${ids}::uuid[])`
@@ -180,8 +196,9 @@ export async function listSessions(req: Request, res: Response): Promise<void> {
         ? myMember?.nickname || partnerMember.user.firstName || partnerMember.user.name
         : myMember?.nickname || null;
 
+      const sessionStatus = displayStatus(session.status, paused.has(session.id));
       const statusSummary = generateSessionStatusSummary(
-        session.status as SessionStatus,
+        sessionStatus as SessionStatus,
         { ...dto(myProgress), stage: myProgress.stage as Stage, status: myProgress.status as StageStatus },
         { ...dto(partnerProgress), stage: partnerProgress.stage as Stage, status: partnerProgress.status as StageStatus },
         partnerDisplayName || 'Partner',
@@ -194,7 +211,7 @@ export async function listSessions(req: Request, res: Response): Promise<void> {
       return {
         id: session.id,
         relationshipId: session.relationshipId,
-        status: session.status,
+        status: sessionStatus,
         createdAt: session.createdAt.toISOString(),
         updatedAt: session.updatedAt.toISOString(),
         partner: partnerMember

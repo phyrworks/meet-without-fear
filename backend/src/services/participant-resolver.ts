@@ -72,13 +72,24 @@ function toResolved(row: ParticipantRow): ResolvedParticipant {
   };
 }
 
-/** The caller's participant in a session, or null if they have none. */
-export async function resolveParticipant(sessionId: string, userId: string): Promise<ResolvedParticipant | null> {
+/**
+ * The caller's PRESENT participant in a session, or null if they have none —
+ * a participant who left (`left_at` set) is not resolved. `includeLeft`
+ * returns the row regardless (requireSessionAccess, which must refuse a
+ * leaver rather than fall through to another rule).
+ */
+export async function resolveParticipant(
+  sessionId: string,
+  userId: string,
+  opts: { includeLeft?: boolean } = {},
+): Promise<ResolvedParticipant | null> {
   const row = (await prisma.participant.findUnique({
     where: { sessionId_userId: { sessionId, userId } },
     select: PARTICIPANT_SELECT,
   })) as ParticipantRow | null;
-  return row ? toResolved(row) : null;
+  if (!row) return null;
+  if (row.leftAt && !opts.includeLeft) return null;
+  return toResolved(row);
 }
 
 /** A participant by id (for code that was handed an id, e.g. a job). */

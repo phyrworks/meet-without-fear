@@ -23,6 +23,20 @@
  *   - a message's stage (`stageAt`): the owner's stage at the message's
  *     instant — the message table has no stage (spec §1.1 message, "derivable
  *     from participant_milestone").
+ *
+ * WRITER CONTRACT (what keeps this per-participant reading correct). The
+ * shim — like `v_current_stage` — moves a participant on the moment THEIR
+ * terminal milestone exists; it does not consult `milestone.scope`. So the
+ * writers carry the session rule: a milestone with `scope = 'session'`
+ * (compact_signed, empathy_validated, needs_validated, needs_shared,
+ * choices_shared, closed — the milestone seed) that GATES a stage is written by
+ * the job only once `v_session_readiness.all_reached` holds for the session's
+ * precondition, so no participant's stage runs ahead of the session.
+ * `compact_signed` is the exception the product keeps: each participant
+ * self-asserts it (self_assertable), and stage 1 work (the witness) is
+ * per-participant by design — the compact's session scope gates only the
+ * session's ACTIVE status (signCompact / app.session_set_status). The
+ * empathy/needs/repair writers (TS-10, TS-11) must honour this.
  */
 
 import { prisma } from '../lib/prisma';
@@ -245,11 +259,14 @@ export interface ProgressDTOShape {
 
 /**
  * The DTO progress of a participant (`StageProgressDTO` / the session view's
- * `myProgress`). A participant who has reached nothing has not started: the
- * old shape had no StageProgress row for them.
+ * `myProgress`). A present participant who has reached nothing is IN_PROGRESS
+ * in stage 0 from the instant they joined — the old shape created that
+ * stage-0 row on join/accept (mobile copy on UnifiedSessionScreen depends on
+ * it). Only a participant that does not exist (no partner yet) is
+ * NOT_STARTED.
  */
 export function progressDTO(state: ParticipantStageState | undefined, opts: { gates: boolean }): ProgressDTOShape {
-  if (!state || state.milestones.length === 0) {
+  if (!state) {
     // The old default object carried `gatesSatisfied: null` whichever side used it.
     return { stage: 0, status: 'NOT_STARTED', startedAt: null, completedAt: null, gatesSatisfied: null };
   }
@@ -265,8 +282,7 @@ export function progressDTO(state: ParticipantStageState | undefined, opts: { ga
 
 /** One stage's row, if the participant has reached that stage. */
 export function rowForStage(state: ParticipantStageState | undefined, stage: number): ShimStageRow | undefined {
-  if (!state || state.milestones.length === 0) return undefined;
-  return state.rows.find(r => r.stage === stage);
+  return state?.rows.find(r => r.stage === stage);
 }
 
 /**

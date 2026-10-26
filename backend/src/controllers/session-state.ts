@@ -33,6 +33,7 @@ import {
 } from '../services/participant-resolver';
 import { latestStageRow, loadStageStates, progressDTO, rowForStage } from '../services/stage-shim';
 import { listConversationMessages, toMessageDTO } from '../services/message-store';
+import { displayStatus, isSessionPaused } from '../services/session-status';
 
 const INITIAL_SESSION_MESSAGE_LIMIT = 500;
 
@@ -205,6 +206,7 @@ export async function getSessionState(req: Request, res: Response): Promise<void
       return;
     }
 
+    const paused = await isSessionPaused(sessionId);
     const stages = await loadStageStates([
       { id: me.id, joinedAt: me.joinedAt },
       ...(partner ? [{ id: partner.participantId, joinedAt: partner.joinedAt }] : []),
@@ -231,8 +233,7 @@ export async function getSessionState(req: Request, res: Response): Promise<void
 
     const presence = partner ? await getCoParticipantPresence(partner.participantId) : null;
     const partnerShowsActivity = presence?.showsActivity ?? true;
-    const partnerLastRow =
-      partnerState && partnerState.milestones.length ? latestStageRow(partnerState.rows) : null;
+    const partnerLastRow = partnerState ? latestStageRow(partnerState.rows) : null;
     const partnerLastActiveAt = partnerShowsActivity
       ? latestDate(presence?.lastActiveAt, presence?.lastTurnAt, partnerLastRow?.completedAt, partnerLastRow?.startedAt)
       : null;
@@ -300,7 +301,7 @@ export async function getSessionState(req: Request, res: Response): Promise<void
       // Core session data
       session: {
         id: session.id,
-        status: session.status,
+        status: displayStatus(session.status, paused),
         currentStage: myProgress.stage,
         stageStatus: myProgress.status,
         relationshipId: session.relationshipId,

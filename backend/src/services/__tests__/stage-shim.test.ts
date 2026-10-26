@@ -87,13 +87,23 @@ describe('stage shim — progressDTO', () => {
     rows: stageRowsFor(stage, milestones, t(0)),
   });
 
-  it('is NOT_STARTED with null gates for a participant who reached nothing', () => {
-    expect(progressDTO(state([], 0), { gates: false })).toEqual({
+  it('is NOT_STARTED with null gates only when there is no participant', () => {
+    expect(progressDTO(undefined, { gates: false })).toEqual({
       stage: 0,
       status: 'NOT_STARTED',
       startedAt: null,
       completedAt: null,
       gatesSatisfied: null,
+    });
+  });
+
+  it('is IN_PROGRESS in stage 0 from the join instant for a present participant who reached nothing', () => {
+    expect(progressDTO(state([], 0), { gates: true })).toEqual({
+      stage: 0,
+      status: 'IN_PROGRESS',
+      startedAt: t(0).toISOString(),
+      completedAt: null,
+      gatesSatisfied: {},
     });
   });
 

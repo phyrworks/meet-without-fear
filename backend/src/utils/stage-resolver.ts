@@ -30,7 +30,7 @@ export async function resolveStageIntervalsForSessions(
   const sessionIntervals = new Map<string, StageInterval[]>();
   for (const p of participants) {
     const state = states.get(p.id);
-    if (!state || state.milestones.length === 0) continue;
+    if (!state) continue;
     const list = sessionIntervals.get(p.sessionId) ?? [];
     for (const row of state.rows) {
       if (row.startedAt) list.push({ stage: row.stage, startedAt: row.startedAt, endedAt: row.completedAt });

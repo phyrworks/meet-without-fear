@@ -329,34 +329,25 @@ export async function persistTurnState(params: PersistTurnStateParams): Promise<
   }
 
   // Save empathy draft (Stage 2 or Stage 2B): the participant's own
-  // `draft(EMPATHY)` about their partner — one per sharing point (the
-  // sql_draft_one_per_point expression index, which Prisma cannot upsert on).
+  // `draft(EMPATHY)` about their partner. One atomic statement on the
+  // sql_draft_one_per_point expression index (as the old Prisma upsert was
+  // one statement): create at version 1, or replace the text and bump the
+  // version — concurrent turns cannot both create.
   if ((effectiveStage === 2 || effectiveStage === 21) && metadata.offerReadyToShare && metadata.proposedEmpathyStatement) {
     const partner = await getPartnerParticipant(participant.id);
     if (!partner) {
-      logger.warn(`[sendMessageStream:${requestId}] Empathy draft not saved: no partner participant`);
+      // An EMPATHY draft names its subject (CHECK chk_draft_one_arc /
+      // chk_draft_arc_matches_kind: about_participant_id required): with no
+      // partner participant there is no row the target can hold. Stage 2 is
+      // reached only with a partner, so this is the invariant failing.
+      logger.error(`[sendMessageStream:${requestId}] Empathy draft not saved: Stage 2 turn with no partner participant`);
     } else {
-      const existing = await prisma.draft.findFirst({
-        where: { participantId: participant.id, kind: 'EMPATHY', aboutParticipantId: partner.participantId },
-        select: { id: true },
-      });
-      if (existing) {
-        await prisma.draft.update({
-          where: { id: existing.id },
-          data: { content: metadata.proposedEmpathyStatement, version: { increment: 1 } },
-        });
-      } else {
-        await prisma.draft.create({
-          data: {
-            participantId: participant.id,
-            kind: 'EMPATHY',
-            aboutParticipantId: partner.participantId,
-            content: metadata.proposedEmpathyStatement,
-            readyToShare: false,
-            version: 1,
-          },
-        });
-      }
+      await prisma.$executeRaw`
+        INSERT INTO draft (participant_id, kind, about_participant_id, content, ready_to_share, version)
+        VALUES (${participant.id}::uuid, 'EMPATHY'::draft_kind, ${partner.participantId}::uuid,
+                ${metadata.proposedEmpathyStatement}, false, 1)
+        ON CONFLICT (participant_id, kind, (coalesce(about_participant_id, attempt_id, share_offer_id)))
+        DO UPDATE SET content = EXCLUDED.content, version = draft.version + 1`;
     }
   }
 

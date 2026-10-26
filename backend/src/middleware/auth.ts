@@ -374,8 +374,13 @@ export async function requireSessionAccess(
   }
 
   try {
-    const participant = await resolveParticipant(sessionId, user.id);
-    if (participant && !participant.leftAt) {
+    const participant = await resolveParticipant(sessionId, user.id, { includeLeft: true });
+    if (participant) {
+      // A participant who left is refused — never handed to the invitee
+      // fallback below (an accepted invitee who left must not get back in).
+      if (participant.leftAt) {
+        throw new ForbiddenError('Access to this session denied');
+      }
       req.participant = participant;
       updateContext({ sessionId, participantId: participant.id });
       next();
@@ -393,8 +398,10 @@ export async function requireSessionAccess(
     }
 
     // Fallback: allow access for invitees during the acceptance timing gap
-    // (the participant row is created when the invitation is accepted). Phase 3
-    // §7 schedules this fallback's deletion (W6). Until then: a live PENDING
+    // (the participant row is created when the invitation is accepted). Only
+    // reached by a caller with NO participant row. Phase 3 §7 schedules this
+    // fallback's deletion (W6) — the PENDING arm admits any non-inviter who
+    // knows the session id until then. Until then: a live PENDING
     // invitation for this session that the caller did not send, or an ACCEPTED
     // one the caller accepted (`accepted_by_user_id`, new in the target — the
     // old rule admitted ANY non-inviter once the invitation was accepted).

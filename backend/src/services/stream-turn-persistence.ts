@@ -117,16 +117,15 @@ export async function saveAiTurnMessage(params: {
   effectiveStage: number;
   refiningNeedContext: RefiningNeedContext | null;
 }): Promise<StoredMessage> {
-  const { requestId, sessionId, participant, accumulatedText, effectiveStage } = params;
+  const { requestId, sessionId, participant, accumulatedText, effectiveStage, refiningNeedContext } = params;
   if (!participant.mainConversationId) throw new Error(`Participant ${participant.id} has no MAIN conversation`);
 
   // Trim whitespace that Claude sometimes adds. The AI row is written through
   // the JOB connection (spec §1.1 message, writer-principal rule).
-  // refining_need_id stays on the user's turn only: it is not among the
-  // columns mwf_job may INSERT into message (trailer T7) — see the TS-9 report.
   const aiMessage = await createFacilitatorMessage({
     conversationId: participant.mainConversationId,
     content: accumulatedText.trim(),
+    refiningNeedId: refiningNeedContext?.id ?? null,
   });
   logger.info(`[sendMessageStream:${requestId}] AI message created: ${aiMessage.id}`);
 

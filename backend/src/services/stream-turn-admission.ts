@@ -121,7 +121,7 @@ export async function admitStreamTurn(
   // The participant's current stage (stage shim)
   const stages = await loadStageStates([{ id: participant.id, joinedAt: participant.joinedAt }]);
   const state = stages.get(participant.id);
-  const progress = state && state.milestones.length ? currentRow(state) : null;
+  const progress = state ? currentRow(state) : null;
   const currentStage = state?.current.stage ?? 0;
 
   let refiningNeedContext: RefiningNeedContext | null = null;
