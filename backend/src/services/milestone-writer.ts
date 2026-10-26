@@ -32,9 +32,12 @@ export function isSelfAssertable(key: string): boolean {
  */
 export async function reachMilestone(participantId: string, key: string, at: Date = new Date()): Promise<boolean> {
   const client = isSelfAssertable(key) ? prisma : getJobPrisma();
-  const { count } = await client.participantMilestone.createMany({
-    data: [{ participantId, milestoneKey: key, reachedAt: at }],
-    skipDuplicates: true,
-  });
+  // Exactly the columns the job may INSERT (trailer T7: participant_id,
+  // milestone_key, reached_at); created_at is the column default. Prisma's
+  // createMany would also send its client-side `@default(now())` created_at.
+  const count = await client.$executeRaw`
+    INSERT INTO participant_milestone (participant_id, milestone_key, reached_at)
+    VALUES (${participantId}::uuid, ${key}, ${at})
+    ON CONFLICT (participant_id, milestone_key) DO NOTHING`;
   return count > 0;
 }

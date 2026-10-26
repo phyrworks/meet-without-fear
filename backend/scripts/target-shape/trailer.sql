@@ -1219,11 +1219,11 @@ GRANT UPDATE (destroyed_at) ON user_key TO mwf_job;
 -- message-store createFacilitatorMessage / deliverMessage: the dedupe hash, the
 -- refining need a facilitator reply answers, and an explicit instant (fixtures, replays)
 GRANT INSERT (content_hash, refining_need_id, created_at) ON message TO mwf_job;
--- message-store writers return the written row (INSERT … RETURNING) and getInitialMessage's
--- Serializable idempotency probe reads the participant's first message: the MessageDTO columns
-GRANT SELECT (id, sender_participant_id, role, content, refining_need_id, created_at) ON message TO mwf_job;
+-- message-store insert() returns the written row's id and instant (INSERT … RETURNING id, created_at);
+-- getInitialMessage's Serializable idempotency probe reads the first message's id. Never content.
+GRANT SELECT (id, created_at) ON message TO mwf_job;
 -- milestone-writer reachMilestone: system keys (invitation_sent, empathy_*, needs_shared, closed, paused …)
-GRANT INSERT (participant_id, milestone_key, reached_at, created_at) ON participant_milestone TO mwf_job;
+GRANT INSERT (participant_id, milestone_key, reached_at) ON participant_milestone TO mwf_job;
 -- sessions.ts resumeSession: un-reaching `paused` is a DELETE by mwf_job (spec §1.1)
 GRANT DELETE ON participant_milestone TO mwf_job;
 -- conversation-summarizer updateSessionSummary: the participant's SUMMARY document (INSERT … ON CONFLICT DO UPDATE)

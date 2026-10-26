@@ -50,6 +50,49 @@ describeTarget('job path on the target, as mwf_job with identity binding on', ()
     if (harness) await harness.teardown();
   });
 
+  it('the job login cannot read message content (its message SELECT grant is id, created_at only)', async () => {
+    const { getJobPrisma } = await import('../../../lib/prisma');
+    await expect(getJobPrisma().$queryRaw`SELECT content FROM message LIMIT 1`).rejects.toThrow(/permission denied/);
+    await expect(getJobPrisma().$queryRaw`SELECT role FROM message LIMIT 1`).rejects.toThrow(/permission denied/);
+    const ok = await getJobPrisma().$queryRaw<Array<{ n: number }>>`SELECT count(id)::int AS n FROM message`;
+    expect(ok[0].n).toBeGreaterThan(0);
+  });
+
+  it('the empathy-draft write is atomic: concurrent writes leave one row, the last write wins', async () => {
+    const { persistTurnState } = await import('../../../services/stream-turn-actions');
+    const { resolveParticipant } = await import('../../../services/participant-resolver');
+    const ada = await resolveParticipant(harness.sessionId, harness.actors.userA.id);
+    const write = (text: string) =>
+      persistTurnState({
+        requestId: 'draft-test',
+        sessionId: harness.sessionId,
+        userId: harness.actors.userA.id,
+        currentStage: 2,
+        effectiveStage: 2,
+        isInvitationPhase: false,
+        session: { topicFrame: null, topicFrameConfirmedAt: null },
+        participant: ada!,
+        userMessageId: 'none',
+        userContent: 'x',
+        aiMessageContent: 'y',
+        metadata: { offerReadyToShare: true, proposedEmpathyStatement: text },
+      });
+    const drafts = () =>
+      rows<{ content: string; version: number }>(
+        `SELECT d.content, d.version FROM draft d JOIN participant p ON p.id = d.participant_id
+         JOIN "user" u ON u.id = p.user_id WHERE u.email = 'ada@e2e.test' AND d.kind = 'EMPATHY'`,
+      );
+    const before = await drafts();
+    expect(before).toHaveLength(1); // the fixture's draft
+    await Promise.all([write('DRAFT_A'), write('DRAFT_B'), write('DRAFT_C')]);
+    const mid = await drafts();
+    expect(mid).toHaveLength(1);
+    expect(['DRAFT_A', 'DRAFT_B', 'DRAFT_C']).toContain(mid[0].content);
+    expect(mid[0].version).toBe(before[0].version + 3);
+    await write('DRAFT_LAST');
+    expect(await drafts()).toEqual([{ content: 'DRAFT_LAST', version: before[0].version + 4 }]);
+  });
+
   it('the job client is mwf_job on the run database, and identity binding is on', async () => {
     const { getJobPrisma } = await import('../../../lib/prisma');
     const [who] = await getJobPrisma().$queryRaw<Array<{ u: string; db: string }>>`SELECT session_user AS u, current_database() AS db`;

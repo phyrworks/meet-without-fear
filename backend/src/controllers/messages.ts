@@ -755,19 +755,26 @@ export async function getInitialMessage(
     // rows are the job's) checks the participant's conversation, then writes.
     let aiMessage: StoredMessage;
     try {
-      aiMessage = await getJobPrisma().$transaction(async (tx) => {
+      // The probe reads only (id, created_at) — all the job may SELECT from
+      // message (trailer T7) — and an existing message is re-read on the app
+      // connection after the transaction.
+      const written = await getJobPrisma().$transaction(async (tx) => {
         const existing = await tx.message.findFirst({
           where: { conversationId },
           orderBy: { createdAt: 'asc' },
-          select: MESSAGE_SELECT,
+          select: { id: true },
         });
-        if (existing) return existing as StoredMessage;
-        return createFacilitatorMessage({
-          conversationId,
-          content: responseContent.trim(),
-          client: tx as unknown as PrismaClient,
-        });
+        if (existing) return { existingId: existing.id };
+        return {
+          created: await createFacilitatorMessage({
+            conversationId,
+            content: responseContent.trim(),
+            client: tx as unknown as PrismaClient,
+          }),
+        };
       }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+      aiMessage = written.created
+        ?? ((await prisma.message.findUniqueOrThrow({ where: { id: written.existingId! }, select: MESSAGE_SELECT })) as StoredMessage);
     } catch (error) {
       if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2034') {
         const existing = await prisma.message.findFirst({

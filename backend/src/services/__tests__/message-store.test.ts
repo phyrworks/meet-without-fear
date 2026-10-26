@@ -92,6 +92,15 @@ describe('message writer', () => {
     });
   });
 
+  it('reads back only (id, created_at) — the job may not SELECT content — and returns the row from its inputs', async () => {
+    const written = await createFacilitatorMessage({ conversationId: 'c-ada', content: 'Tell me more.', refiningNeedId: 'n1' });
+    expect(jobCreate.mock.calls[0][0].select).toEqual({ id: true, createdAt: true });
+    expect(written).toMatchObject({ id: 'm1', conversationId: 'c-ada', content: 'Tell me more.', role: 'AI', refiningNeedId: 'n1' });
+    const own = await createParticipantMessage({ conversationId: 'c-ada', participantId: 'p-ada', userId: 'u-ada', content: 'x' });
+    expect(appCreate.mock.calls[0][0].select).toEqual({ id: true, createdAt: true });
+    expect(own.senderParticipant).toEqual({ userId: 'u-ada' });
+  });
+
   it('never writes a recipient column: the conversation is the audience', async () => {
     await createParticipantMessage({ conversationId: 'c-ada', participantId: 'p-ada', content: 'x' });
     await createFacilitatorMessage({ conversationId: 'c-ada', content: 'y' });

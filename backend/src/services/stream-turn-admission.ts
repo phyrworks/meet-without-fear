@@ -147,6 +147,7 @@ export async function admitStreamTurn(
   const userMessage = await createParticipantMessage({
     conversationId: participant.mainConversationId,
     participantId: participant.id,
+    userId: user.id,
     content,
     refiningNeedId: refiningNeedContext?.id ?? null,
   });

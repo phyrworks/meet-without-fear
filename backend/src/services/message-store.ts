@@ -158,11 +158,19 @@ export async function lastOwnTurnAt(conversationId: string, participantId: strin
 // Writers
 // ----------------------------------------------------------------------------
 
+/**
+ * One INSERT … RETURNING id, created_at — nothing else: the job's SELECT
+ * grant on message is exactly (id, created_at) (trailer T7, TS-9 fix round
+ * 2), so a job writer can never read back a row's content, and the written
+ * row is built from the inputs the writer already holds.
+ */
 async function insert(
   client: PrismaClient,
   data: {
     conversationId: string;
     senderParticipantId: string | null;
+    /** The sender's user id, when the caller knows it (for the DTO's senderId). */
+    senderUserId?: string | null;
     role: TargetMessageRole;
     kind: TargetMessageKind;
     content: string;
@@ -171,7 +179,7 @@ async function insert(
     createdAt?: Date;
   },
 ): Promise<StoredMessage> {
-  return (await client.message.create({
+  const row = await client.message.create({
     data: {
       conversationId: data.conversationId,
       senderParticipantId: data.senderParticipantId,
@@ -185,8 +193,20 @@ async function insert(
       sourceAttemptId: data.sourceAttemptId ?? null,
       ...(data.createdAt ? { createdAt: data.createdAt } : {}),
     },
-    select: MESSAGE_SELECT,
-  })) as StoredMessage;
+    select: { id: true, createdAt: true },
+  });
+  return {
+    id: row.id,
+    conversationId: data.conversationId,
+    senderParticipantId: data.senderParticipantId,
+    role: data.role,
+    kind: data.kind,
+    content: data.content,
+    refiningNeedId: data.refiningNeedId ?? null,
+    sourceAttemptId: data.sourceAttemptId ?? null,
+    createdAt: row.createdAt,
+    senderParticipant: data.senderParticipantId ? { userId: data.senderUserId ?? null } : null,
+  };
 }
 
 /**
@@ -196,6 +216,8 @@ async function insert(
 export function createParticipantMessage(opts: {
   conversationId: string;
   participantId: string;
+  /** The participant's user id (the DTO's senderId). */
+  userId?: string | null;
   content: string;
   refiningNeedId?: string | null;
   createdAt?: Date;
@@ -203,6 +225,7 @@ export function createParticipantMessage(opts: {
   return insert(prisma, {
     conversationId: opts.conversationId,
     senderParticipantId: opts.participantId,
+    senderUserId: opts.userId ?? null,
     role: 'USER',
     kind: 'CHAT',
     content: opts.content,
