@@ -126,6 +126,26 @@ export function milestoneRows(
   return out;
 }
 
+/**
+ * The reveal instant of an attempt. The target CHECKs `status IN
+ * ('REVEALED','VALIDATED') → revealed_at IS NOT NULL`; some pre-rebuild
+ * scenarios (NEED_MAPPING_COMPLETE, NEEDS_CONFIRMED) carry VALIDATED attempts
+ * with no reveal instant, which the target cannot hold. FIDELITY DEVIATION:
+ * those take the validation instant (else the submission instant) — a
+ * new instant for those fixtures' concept goldens (no TS-9 golden uses them).
+ */
+export function revealedAtFor(
+  e: { status: string; revealedAt?: Stamp; validatedBy?: { at: Stamp } },
+  t: (s: Stamp) => Date,
+  submittedAt?: Stamp,
+): Date | null {
+  if (e.revealedAt) return t(e.revealedAt);
+  if (e.status !== 'REVEALED' && e.status !== 'VALIDATED') return null;
+  if (e.validatedBy) return t(e.validatedBy.at);
+  if (submittedAt) return t(submittedAt);
+  throw new Error(`An attempt ${e.status} needs a reveal instant`);
+}
+
 const q = {
   user: `INSERT INTO "user" (email, clerk_id, first_name, last_name, created_at, updated_at)
          VALUES ($1, $2, $3, $4, $5, $5)
@@ -326,7 +346,7 @@ export async function writeTargetShape(db: ClientBase, scenario: Scenario, users
           e.statement,
           e.status,
           t(submittedAt),
-          tOpt(e.revealedAt),
+          revealedAtFor(e, t, submittedAt),
           e.deliveredAt ? 'DELIVERED' : 'PENDING',
           tOpt(e.deliveredAt),
           attemptAt,

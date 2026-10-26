@@ -65,9 +65,11 @@ function SESSION_READ_FIXTURE_DELTAS(): AllowList['rules'] {
       baseline: null,
       why:
         'the current-shape fixture writes the compact gate as `compactSignedAt` (a fixture-only spelling, ' +
-        'current-shape.sql header) where the app reads `signedAt`, so today the DTO says null. The target holds ' +
-        'the instant (participant_milestone compact_signed.reached_at) and the shim returns it; as a new instant it ' +
-        'would renumber every later <ts:N> of the step, so it is masked after the test asserts its value.',
+        'current-shape.sql header) where the app reads `signedAt`, so today the DTO says null — as it does in ' +
+        'production for an inviter, whose stage-0 row confirmInvitationMessage completes with `compactSigned` and ' +
+        'no `signedAt`. The target always holds the instant (participant_milestone compact_signed.reached_at) and ' +
+        'the shim returns it (a visible behaviour change: the DTO gains an instant where it had null). As a new ' +
+        'instant it would renumber every later <ts:N> of the step, so it is masked after the test asserts its value.',
     },
     {
       kind: 'mayDiffer',

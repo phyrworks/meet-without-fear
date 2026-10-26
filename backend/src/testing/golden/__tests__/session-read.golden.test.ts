@@ -1,9 +1,10 @@
 /**
  * Golden scenario: per-user session reads.
  *
- * This is the privacy boundary. `Message.forUserId` is a nullable, un-foreign-keyed
- * text column, and it is the entire mechanism separating what each partner can
- * see. In the FEEL_HEARD_B fixture the two users see different, overlapping row
+ * This is the privacy boundary. On the current shape the old Message recipient
+ * column (a nullable, un-foreign-keyed text column) is the entire mechanism
+ * separating what each partner can see; on the target it is the conversation
+ * each message belongs to. In the FEEL_HEARD_B fixture the two users see different, overlapping row
  * sets — which is what makes a leak detectable here rather than theoretical.
  *
  * Requires a running local Postgres and a built fixture:
@@ -194,7 +195,7 @@ describe(`golden: ${SCENARIO}`, () => {
     expect(counts[0]).toBeGreaterThan(0);
     expect(counts[1]).toBeGreaterThan(0);
     // If these ever match by accident the scenario has lost its power to detect
-    // a forUserId leak, so assert the asymmetry the fixture is built to provide.
+    // a cross-conversation leak, so assert the asymmetry the fixture is built to provide.
     expect(counts[0]).not.toEqual(counts[1]);
   });
 
