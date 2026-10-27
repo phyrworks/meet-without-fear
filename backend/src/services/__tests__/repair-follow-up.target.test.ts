@@ -231,16 +231,38 @@ describeTarget('repair and follow-up on the target, as mwf_app and mwf_job with 
     ).rejects.toThrow(/Invalid check-in payload/);
     expect(await run.sql(`SELECT * FROM follow_up_checkin`)).toEqual([]);
 
+    // Fix round 1 (Important 5): an invalid reminder instant is refused before
+    // any write — no check-in left behind, so the retry below is accepted.
+    await expect(
+      asUser(ids.adaUser, () =>
+        tending.submitTendingCheckin({
+          sessionId: ids.session,
+          userId: ids.adaUser,
+          orientations: {
+            whatWorked: { reflection: 'We planned Sunday' },
+            whereMoreSupport: { reflection: '' },
+            whatComesNext: { continueChoice: 'EXTEND' as never },
+          },
+          reminders: [{ scope: 'PRIVATE' as never, remindAt: 'not-a-date' }],
+        }),
+      ),
+    ).rejects.toThrow(/valid instant/);
+    expect(await run.sql(`SELECT * FROM follow_up_checkin`)).toEqual([]);
+    expect(await run.sql(`SELECT * FROM reminder`)).toEqual([]);
+
     const result = await asUser(ids.adaUser, () =>
       tending.submitTendingCheckin({
         sessionId: ids.session,
         userId: ids.adaUser,
         orientations: {
-          whatWorked: { reflection: 'We planned Sunday' },
+          whatWorked: { reflection: 'We planned Sunday', perEntryNotes: { [shared.id]: 'PROBE_PRIVATE_ENTRY_NOTE' } },
           whereMoreSupport: { reflection: '' },
           whatComesNext: { continueChoice: 'EXTEND' as never },
         },
         entryOutcomes: [{ tendingEntryId: shared.id, followThroughStatus: 'HAPPENED' as never }],
+        // PRIVATE by default (R34): never in a SHARED follow-up's check-in.
+        adjustments: [{ tendingEntryId: shared.id, revisedCommitmentText: 'PROBE_PRIVATE_ADJUSTMENT' }],
+        reminders: [{ scope: 'PRIVATE' as never, remindAt: new Date(Date.now() + 86_400_000).toISOString() }],
       }),
     );
     expect(result.checkin?.id).toEqual(expect.any(String));
@@ -254,6 +276,20 @@ describeTarget('repair and follow-up on the target, as mwf_app and mwf_job with 
       ['adjustments', 'carriedNotes', 'entryOutcomes', 'needOutcomes', 'partialClosures', 'responses'],
     );
     expect(rows[0].payload.entryOutcomes).toHaveLength(1);
+    // R34: the SHARED follow-up's check-in (readable by Bob) carries no PRIVATE-scope item…
+    const [row] = await run.sql<{ payload: unknown; reflection_summary: string | null }>(
+      `SELECT payload, reflection_summary FROM follow_up_checkin WHERE follow_up_id = $1`,
+      [shared.id],
+    );
+    expect(JSON.stringify(row)).not.toContain('PROBE_PRIVATE');
+    expect(rows[0].payload.adjustments).toEqual([]);
+    // …they are Ada's own follow_up_note rows (P-class).
+    const notes = (await run.sql<{ content: string; participant_id: string }>(`SELECT content, participant_id FROM follow_up_note`));
+    expect(notes.every(n => n.participant_id === ids.ada)).toBe(true);
+    expect(notes.map(n => n.content).join('\n')).toContain('PROBE_PRIVATE_ADJUSTMENT');
+    expect(notes.map(n => n.content).join('\n')).toContain('PROBE_PRIVATE_ENTRY_NOTE');
+    // The reminder of the same transaction exists.
+    expect(await run.sql(`SELECT count(*)::int AS n FROM reminder`)).toEqual([{ n: 1 }]);
     // The shared follow-up waits for Bob (v_follow_up_cycle).
     expect(
       await run.as('mwf_app', ids.adaUser, `SELECT status FROM v_follow_up_cycle WHERE follow_up_id = $1`, [shared.id]),

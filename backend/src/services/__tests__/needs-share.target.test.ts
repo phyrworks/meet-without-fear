@@ -16,7 +16,7 @@
 
 import { NEEDS_CONFIRMED_TEXT } from '../../testing/fixture-scenarios/scenarios';
 import { isTargetShape } from '../../testing/golden/shape';
-import { adaAndBob, openTargetRun, type TargetRun } from './target-roles';
+import { adaAndBob, httpAs, openTargetRun, type TargetRun } from './target-roles';
 
 const describeTarget = isTargetShape() ? describe : describe.skip;
 jest.setTimeout(120_000);
@@ -30,7 +30,7 @@ describeTarget('the Stage 3 share path, as mwf_app and mwf_job with identity bin
     ctx.runWithContext({ turnId: 't', requestId: 'r', startTime: Date.now(), userId }, async () => await fn());
   const needsOf = (participant: string) =>
     run.sql<{ id: string; label: string; category: string; evidence: string[] }>(
-      `SELECT id, label, category::text AS category, evidence FROM need WHERE participant_id = $1 ORDER BY created_at, id`,
+      `SELECT id, label, category::text AS category, evidence FROM need WHERE participant_id = $1 AND deleted_at IS NULL ORDER BY created_at, id`,
       [participant],
     );
   const privateTextOf = (who: 'ada' | 'bob') => NEEDS_CONFIRMED_TEXT[who].flatMap(n => [n.need, ...(n.evidence ?? [])]);
@@ -43,6 +43,27 @@ describeTarget('the Stage 3 share path, as mwf_app and mwf_job with identity bin
   });
   afterAll(async () => {
     if (run) await run.drop();
+  });
+
+  // Fix round 1 (Important 6): a deleted need's label and evidence go to its
+  // owner only — never on the session channel the partner's device listens to.
+  it('deleting a need publishes nothing on the session channel; the owner gets a content-free nudge', async () => {
+    const realtime = await import('../realtime');
+    const sessionSpy = jest.spyOn(realtime, 'publishSessionEvent');
+    const userSpy = jest.spyOn(realtime, 'publishUserEvent');
+    const http = await httpAs();
+    const [extra] = await run.sql<{ id: string }>(
+      `INSERT INTO need (participant_id, label, category, ai_confidence, evidence) VALUES ($1, 'PROBE_DELETED_LABEL', 'SAFETY', 0.9, ARRAY['PROBE_DELETED_EVIDENCE']) RETURNING id`,
+      [ids.ada],
+    );
+    const res = await http({ id: ids.adaUser, email: 'ada@e2e.test' }, 'delete', `/sessions/${ids.session}/needs/${extra.id}`);
+    expect(res.status).toBe(200);
+    expect(sessionSpy.mock.calls.filter(c => c[1] === 'need.deleted')).toEqual([]);
+    const toOwner = userSpy.mock.calls.filter(c => (c[2] as { kind?: string }).kind === 'need.deleted');
+    expect(toOwner.map(c => c[0])).toEqual([ids.adaUser]);
+    expect(JSON.stringify(toOwner)).not.toContain('PROBE_DELETED');
+    sessionSpy.mockRestore();
+    userSpy.mockRestore();
   });
 
   it('mwf_app cannot call the need_share writer at all', async () => {

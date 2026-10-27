@@ -50,7 +50,7 @@ export async function openTargetRun(stage: string, runId: string): Promise<Targe
   // as mwf_app. Function EXECUTE stays as the baseline grants it (mwf_app has
   // none on app.need_share).
   await sql(`GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO mwf_app`);
-  const as =async <T extends Record<string, unknown>>(
+  const as = async <T extends Record<string, unknown>>(
     role: 'mwf_app' | 'mwf_job',
     userId: string | null,
     text: string,
@@ -82,6 +82,25 @@ export async function openTargetRun(stage: string, runId: string): Promise<Targe
       await disconnectJobPrisma().catch(() => undefined);
       await fx.drop();
     },
+  };
+}
+
+/**
+ * The app over HTTP as a user (E2E auth bypass, MOCK_LLM), on the run the
+ * env points at — import AFTER `openTargetRun`.
+ */
+export async function httpAs(): Promise<
+  (user: { id: string; email: string }, method: 'get' | 'post' | 'delete', path: string, body?: object) => Promise<{ status: number; body: any }>
+> {
+  process.env.E2E_AUTH_BYPASS = 'true';
+  const request = (await import('supertest')).default;
+  const appModule = await import('../../app');
+  const app = (appModule as { default?: unknown }).default ?? appModule;
+  return async (user, method, path, body) => {
+    let r = request(app as never)[method](`/api/v1${path}`).set('x-e2e-user-id', user.id).set('x-e2e-user-email', user.email);
+    if (body) r = r.send(body);
+    const res = await r;
+    return { status: res.status, body: res.body };
   };
 }
 
