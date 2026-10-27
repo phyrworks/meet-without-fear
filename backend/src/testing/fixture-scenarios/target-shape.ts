@@ -34,9 +34,17 @@
  *
  * And where the target can hold a fact the old views leave out, it is written:
  * `empathy_submitted` (TS-7 step 7 derives it from EmpathyAttempt.sharedAt; the
- * TS-4 view does not), and the user's split names (the target's `name` is
- * GENERATED from first/last; the old factory wrote only `name`). The
- * session-read allow-list names both.
+ * TS-4 view does not). The session-read allow-list names it.
+ *
+ * FIDELITY (TS-10): the user's name. The old factory wrote only `name`
+ * (first_name NULL), so the app's display name (`firstName || name`) was the
+ * full name — and run-written messages carry it ("Bob Ross's attempt to
+ * understand your experience…"). The target's `name` is GENERATED from
+ * first/last, so the writer puts the whole name in `first_name` and leaves
+ * `last_name` NULL: `name` and the display name both equal the old
+ * fixture's. (TS-9 split it, which renamed "Bob Ross" to "Bob" in every
+ * message a run writes.) The first/last columns differ from the current-shape
+ * concept view (NULL there); the allow-lists name that.
  *
  * What the target cannot hold at all: a message's journey phase (`stage` is
  * dropped; spec §1.1 message, "derivable from participant_milestone"). The
@@ -189,7 +197,9 @@ export async function writeTargetShape(db: ClientBase, scenario: Scenario, users
   // --- Users -------------------------------------------------------------------
   const userRows: WrittenUser[] = [];
   for (const u of users) {
-    const { first, last } = splitName(u.name);
+    // FIDELITY (header): the whole name as first_name, so name = display name = the old fixture's.
+    const first = u.name.trim() || null;
+    const last = null;
     const clerk = `e2e_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
     const r = await db.query<{ id: string; email: string; name: string | null }>(q.user, [
       u.email,
