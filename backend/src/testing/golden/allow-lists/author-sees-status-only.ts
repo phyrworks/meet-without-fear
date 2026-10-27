@@ -41,35 +41,22 @@ import type { AllowList, AllowRule, PendingClusterRule, RankShift, RefusedStepRu
  *
  * Ruling R37: only status and the error body are blurred. A carried timestamp
  * that the 500 shifts in its step's changes is pinned here, by step and path
- * (`rankShifts`), per scenario: the `stage4` read touches `user.updated_at`,
- * and without the 200 body's instants the user's `created_at` ranks one lower.
+ * (`rankShifts`), per scenario.
+ *
+ * TS-11 post-merge round: the TS-11 entries (needs, needs comparison, stage4,
+ * strategies, agreements, tending, tending history) are deleted — those reads
+ * answer 200 on the target now — and with them the `stage4` read's
+ * `user.created_at` rank shift (it existed only because the 500 carried none
+ * of the 200 body's instants).
  */
 const PENDING_READS: PendingClusterRule['reads'] = [
   { read: 'emotions', owner: 'TS-12' },
-  { read: 'needs', owner: 'TS-11' },
-  { read: 'needs comparison', owner: 'TS-11' },
-  { read: 'stage4', owner: 'TS-11' },
-  { read: 'strategies', owner: 'TS-11' },
-  { read: 'agreements', owner: 'TS-11' },
-  { read: 'tending', owner: 'TS-11' },
-  { read: 'tending history', owner: 'TS-11' },
   { read: 'inner thoughts', owner: 'TS-12' },
   { read: 'inner thoughts list', owner: 'TS-12' },
   { read: 'inner work list', owner: 'TS-12' },
   { read: 'knowledge base recent', owner: 'TS-12' },
   { read: 'knowledge base themes', owner: 'TS-12' },
 ];
-
-/** The `stage4` read's one shifted rank (measured: `<ts:2>` → `<ts:1>`), at the named steps. */
-export const stage4UserCreatedAtShift = (steps: string[]): RankShift[] =>
-  steps.flatMap(step =>
-    (['changes.0.after.created_at', 'changes.0.before.created_at'] as const).map(at => ({
-      step,
-      at,
-      from: '<ts:2>' as const,
-      to: '<ts:1>' as const,
-    })),
-  );
 
 export const r6r7PendingCluster = (shifts: Partial<Record<string, RankShift[]>> = {}): PendingClusterRule => ({
   kind: 'pendingCluster',
@@ -112,7 +99,7 @@ const bodyRules = (concept: boolean): AllowRule[] => [
   TARGET_COMPACT_SIGNED_MASK,
   TARGET_CONSENT_TARGET_ID_RULE,
   R6_REFUSED_UNREVEALED_DRAFT,
-  r6r7PendingCluster(concept ? { stage4: stage4UserCreatedAtShift(['author: stage4 as ada@e2e.test']) } : {}),
+  r6r7PendingCluster(),
   TARGET_ROUND_KEYS_RULE,
   ...authorAnalysisClosed({ empathyStatus: [8], reconcilerStatus: [12], reconcilerRun: [32], summary: [14], concept }),
   ...mockTurnIndex(33, concept, 'ada'),

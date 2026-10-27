@@ -15,7 +15,7 @@
  */
 
 import type { KnownLeak } from '../privacy';
-import { r6r7PendingCluster, stage4UserCreatedAtShift } from './author-sees-status-only';
+import { r6r7PendingCluster } from './author-sees-status-only';
 import {
   authorAnalysisClosed,
   byteLabelShift,
@@ -40,11 +40,7 @@ const bodyRules = (concept: boolean): AllowRule[] => [
   TARGET_COMPACT_SIGNED_MASK,
   TARGET_CONSENT_TARGET_ID_RULE,
   TARGET_ROUND_KEYS_RULE,
-  r6r7PendingCluster(
-    concept
-      ? { stage4: stage4UserCreatedAtShift(['before decline: stage4 as ada@e2e.test', 'after decline: stage4 as ada@e2e.test']) }
-      : {},
-  ),
+  r6r7PendingCluster(),
   ...authorAnalysisClosed({ empathyStatus: [7, 39], reconcilerStatus: [11, 43], summary: [13, 45], concept }),
 ];
 
