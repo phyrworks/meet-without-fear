@@ -1,3 +1,11 @@
+/*
+ * TS-12: the Prisma-mock tests of this suite are gone. Clerk resolution, user
+ * creation, the email link, the E2E bypass and requireSessionAccess run against
+ * the target user / participant / invitation tables in
+ * services/__tests__/auth.target.test.ts (and invitations.target.test.ts,
+ * job-path.target.test.ts for the invitee and leaver arms). What remains never
+ * reaches the database: configuration, token and header guards.
+ */
 /**
  * Auth Middleware Tests
  *
@@ -7,10 +15,8 @@
 import { Request, Response, NextFunction } from 'express';
 import { requireAuth, optionalAuth, getUser, requireSessionAccess } from '../auth';
 import { ForbiddenError, NotFoundError } from '../errors';
-import { prisma } from '../../lib/prisma';
 
 // Mock Prisma
-jest.mock('../../lib/prisma');
 
 
 // Mock Clerk verifyToken and clerkClient
@@ -144,182 +150,11 @@ describe('Auth Middleware', () => {
       expect(next).not.toHaveBeenCalled();
     });
 
-    it('authenticates existing user with valid Clerk token (fast path — DB only, no Clerk API call)', async () => {
-      mockVerifyToken.mockResolvedValue({ sub: 'clerk-user-123' });
-      (prisma.user.findUnique as jest.Mock).mockResolvedValue(mockUser);
 
-      const req = createMockRequest({
-        headers: { authorization: 'Bearer valid-clerk-token' },
-      });
-      const { res } = createMockResponse();
-      const next = jest.fn();
 
-      await requireAuth(req as Request, res as Response, next);
 
-      expect(prisma.user.findUnique).toHaveBeenCalledWith({
-        where: { clerkId: 'clerk-user-123' },
-      });
-      // Fast path: no Clerk API call or DB update for existing users
-      expect(mockGetUser).not.toHaveBeenCalled();
-      expect(prisma.user.update).not.toHaveBeenCalled();
-      expect(prisma.user.create).not.toHaveBeenCalled();
-      expect(next).toHaveBeenCalled();
-      expect(req.user).toEqual(mockUser);
-      expect(req.clerkUserId).toBe('clerk-user-123');
-    });
 
-    it('creates new user when not found (find + create)', async () => {
-      mockVerifyToken.mockResolvedValue({ sub: 'clerk-new-user' });
-      mockGetUser.mockResolvedValue({
-        firstName: 'New',
-        lastName: 'User',
-        emailAddresses: [{ emailAddress: 'new@example.com' }],
-      });
-      const newUser = { ...mockUser, id: 'user-new', clerkId: 'clerk-new-user', email: 'new@example.com', name: 'New User' };
-      (prisma.user.findUnique as jest.Mock).mockResolvedValue(null);
-      (prisma.user.create as jest.Mock).mockResolvedValue(newUser);
 
-      const req = createMockRequest({
-        headers: { authorization: 'Bearer valid-clerk-token' },
-      });
-      const { res } = createMockResponse();
-      const next = jest.fn();
-
-      await requireAuth(req as Request, res as Response, next);
-
-      expect(prisma.user.findUnique).toHaveBeenCalledWith({
-        where: { clerkId: 'clerk-new-user' },
-      });
-      expect(prisma.user.create).toHaveBeenCalledWith({
-        data: { clerkId: 'clerk-new-user', email: 'new@example.com', name: 'New User', firstName: 'New', lastName: 'User' },
-      });
-      expect(prisma.user.update).not.toHaveBeenCalled();
-      expect(next).toHaveBeenCalled();
-      expect(req.user).toEqual(newUser);
-    });
-
-    it('handles concurrent create race (P2002 fallback)', async () => {
-      const { PrismaClientKnownRequestError } = jest.requireActual('../../generated/prisma/client').Prisma;
-      mockVerifyToken.mockResolvedValue({ sub: 'clerk-race-user' });
-      mockGetUser.mockResolvedValue({
-        firstName: 'Race',
-        lastName: 'User',
-        emailAddresses: [{ emailAddress: 'race@example.com' }],
-      });
-      const raceUser = { ...mockUser, id: 'user-race', clerkId: 'clerk-race-user', email: 'race@example.com' };
-      // First findUnique: not found. Create fails with P2002. Second findUnique: found.
-      (prisma.user.findUnique as jest.Mock)
-        .mockResolvedValueOnce(null)
-        .mockResolvedValueOnce(raceUser);
-      const p2002Error = new PrismaClientKnownRequestError('Unique constraint failed', { code: 'P2002', clientVersion: '5.0.0' });
-      (prisma.user.create as jest.Mock).mockRejectedValue(p2002Error);
-
-      const req = createMockRequest({
-        headers: { authorization: 'Bearer valid-clerk-token' },
-      });
-      const { res } = createMockResponse();
-      const next = jest.fn();
-
-      await requireAuth(req as Request, res as Response, next);
-
-      expect(prisma.user.findUnique).toHaveBeenCalledTimes(2);
-      expect(next).toHaveBeenCalled();
-      expect(req.user).toEqual(raceUser);
-    });
-
-    it('links an existing user by email when create hits the email unique constraint', async () => {
-      const { PrismaClientKnownRequestError } = jest.requireActual('../../generated/prisma/client').Prisma;
-      mockVerifyToken.mockResolvedValue({ sub: 'clerk-new-local-user' });
-      mockGetUser.mockResolvedValue({
-        firstName: 'Local',
-        lastName: 'User',
-        emailAddresses: [{ emailAddress: 'local@example.com' }],
-      });
-      const existingUser = {
-        ...mockUser,
-        id: 'user-local',
-        clerkId: null,
-        email: 'local@example.com',
-        name: 'Local User',
-      };
-      const linkedUser = { ...existingUser, clerkId: 'clerk-new-local-user' };
-      (prisma.user.findUnique as jest.Mock)
-        .mockResolvedValueOnce(null)
-        .mockResolvedValueOnce(null)
-        .mockResolvedValueOnce(existingUser);
-      const p2002Error = new PrismaClientKnownRequestError('Unique constraint failed', { code: 'P2002', clientVersion: '5.0.0' });
-      (prisma.user.create as jest.Mock).mockRejectedValue(p2002Error);
-      (prisma.user.update as jest.Mock).mockResolvedValue(linkedUser);
-
-      const req = createMockRequest({
-        headers: { authorization: 'Bearer valid-clerk-token' },
-      });
-      const { res } = createMockResponse();
-      const next = jest.fn();
-
-      await requireAuth(req as Request, res as Response, next);
-
-      expect(prisma.user.findUnique).toHaveBeenNthCalledWith(2, {
-        where: { clerkId: 'clerk-new-local-user' },
-      });
-      expect(prisma.user.findUnique).toHaveBeenNthCalledWith(3, {
-        where: { email: 'local@example.com' },
-      });
-      expect(prisma.user.update).toHaveBeenCalledWith({
-        where: { id: 'user-local' },
-        data: {
-          clerkId: 'clerk-new-local-user',
-          email: 'local@example.com',
-          name: 'Local User',
-          firstName: 'Local',
-          lastName: 'User',
-        },
-      });
-      expect(next).toHaveBeenCalled();
-      expect(req.user).toEqual(linkedUser);
-    });
-
-    it('uses an existing local user when Clerk profile lookup fails', async () => {
-      mockVerifyToken.mockResolvedValue({ sub: 'clerk-user-123' });
-      mockGetUser.mockRejectedValue(new Error('Clerk unavailable'));
-      (prisma.user.findUnique as jest.Mock).mockResolvedValue(mockUser);
-
-      const req = createMockRequest({
-        headers: { authorization: 'Bearer valid-clerk-token' },
-      });
-      const { res, statusMock } = createMockResponse();
-      const next = jest.fn();
-
-      await requireAuth(req as Request, res as Response, next);
-
-      expect(prisma.user.findUnique).toHaveBeenCalledWith({
-        where: { clerkId: 'clerk-user-123' },
-      });
-      expect(prisma.user.update).not.toHaveBeenCalled();
-      expect(prisma.user.create).not.toHaveBeenCalled();
-      expect(statusMock).not.toHaveBeenCalled();
-      expect(next).toHaveBeenCalled();
-      expect(req.user).toEqual(mockUser);
-      expect(req.clerkUserId).toBe('clerk-user-123');
-    });
-
-    it('fails when Clerk profile lookup fails for an unknown user', async () => {
-      const clerkError = new Error('Clerk unavailable');
-      mockVerifyToken.mockResolvedValue({ sub: 'clerk-new-user' });
-      mockGetUser.mockRejectedValue(clerkError);
-      (prisma.user.findUnique as jest.Mock).mockResolvedValue(null);
-
-      const req = createMockRequest({
-        headers: { authorization: 'Bearer valid-clerk-token' },
-      });
-      const { res } = createMockResponse();
-      const next = jest.fn();
-
-      await requireAuth(req as Request, res as Response, next);
-
-      expect(next).toHaveBeenCalledWith(clerkError);
-      expect(req.user).toBeUndefined();
-    });
   });
 
   describe('optionalAuth', () => {
@@ -335,28 +170,6 @@ describe('Auth Middleware', () => {
       expect(req.user).toBeUndefined();
     });
 
-    it('populates user when valid Clerk token provided', async () => {
-      mockVerifyToken.mockResolvedValue({ sub: 'clerk-user-123' });
-      mockGetUser.mockResolvedValue({
-        firstName: 'Test',
-        lastName: 'User',
-        emailAddresses: [{ emailAddress: 'test@example.com' }],
-      });
-      (prisma.user.findUnique as jest.Mock).mockResolvedValue(mockUser);
-      (prisma.user.update as jest.Mock).mockResolvedValue(mockUser);
-
-      const req = createMockRequest({
-        headers: { authorization: 'Bearer valid-clerk-token' },
-      });
-      const { res, statusMock } = createMockResponse();
-      const next = jest.fn();
-
-      await optionalAuth(req as Request, res as Response, next);
-
-      expect(next).toHaveBeenCalled();
-      expect(statusMock).not.toHaveBeenCalled();
-      expect(req.user).toEqual(mockUser);
-    });
 
     it('continues without user when token is invalid', async () => {
       mockVerifyToken.mockRejectedValue(new Error('Invalid token'));
@@ -401,56 +214,7 @@ describe('Auth Middleware', () => {
       delete process.env.E2E_AUTH_BYPASS;
     });
 
-    it('authenticates user with e2e headers when bypass enabled', async () => {
-      const e2eUser = {
-        id: '00000000-0000-4000-8000-0000000e2e01',
-        clerkId: 'e2e_00000000-0000-4000-8000-0000000e2e01',
-        email: 'test@e2e.test',
-        name: null,
-        firstName: null,
-        lastName: null,
-        pushToken: null,
-        biometricEnabled: false,
-        biometricEnrolledAt: null,
-        lastMoodIntensity: null,
-        createdAt: new Date(),
-        updatedAt: new Date(),
-      };
-      (prisma.user.upsert as jest.Mock).mockResolvedValue(e2eUser);
 
-      const req = createMockRequest({
-        headers: {
-          'x-e2e-user-id': '00000000-0000-4000-8000-0000000e2e01',
-          'x-e2e-user-email': 'test@e2e.test',
-        },
-      });
-      const { res, statusMock } = createMockResponse();
-      const next = jest.fn();
-
-      await requireAuth(req as Request, res as Response, next);
-
-      expect(prisma.user.upsert).toHaveBeenCalledWith({
-        where: { id: '00000000-0000-4000-8000-0000000e2e01' },
-        create: { id: '00000000-0000-4000-8000-0000000e2e01', email: 'test@e2e.test', clerkId: 'e2e_00000000-0000-4000-8000-0000000e2e01' },
-        update: { email: 'test@e2e.test', clerkId: 'e2e_00000000-0000-4000-8000-0000000e2e01' },
-      });
-      expect(next).toHaveBeenCalled();
-      expect(statusMock).not.toHaveBeenCalled();
-      expect(req.user).toEqual(e2eUser);
-    });
-
-    it('rejects an x-e2e-user-id that is not a UUID before touching the database', async () => {
-      const req = createMockRequest({
-        headers: { 'x-e2e-user-id': 'test-user-123', 'x-e2e-user-email': 'test@e2e.test' },
-      });
-      const { res } = createMockResponse();
-      const next = jest.fn();
-
-      await expect(requireAuth(req as Request, res as Response, next)).rejects.toThrow(
-        'x-e2e-user-id must be a UUID'
-      );
-      expect(prisma.user.upsert).not.toHaveBeenCalled();
-    });
 
     it('returns 401 when e2e headers missing and bypass enabled', async () => {
       const req = createMockRequest({ headers: {} });
@@ -489,40 +253,6 @@ describe('Auth Middleware', () => {
       expect(statusMock).toHaveBeenCalledWith(401);
     });
 
-    it('uses e2e auth even when Clerk header is present', async () => {
-      const e2eUser = {
-        id: '00000000-0000-4000-8000-0000000e2e01',
-        clerkId: 'e2e_00000000-0000-4000-8000-0000000e2e01',
-        email: 'test@e2e.test',
-        name: null,
-        firstName: null,
-        lastName: null,
-        pushToken: null,
-        biometricEnabled: false,
-        biometricEnrolledAt: null,
-        lastMoodIntensity: null,
-        createdAt: new Date(),
-        updatedAt: new Date(),
-      };
-      (prisma.user.upsert as jest.Mock).mockResolvedValue(e2eUser);
-
-      const req = createMockRequest({
-        headers: {
-          'x-e2e-user-id': '00000000-0000-4000-8000-0000000e2e01',
-          'x-e2e-user-email': 'test@e2e.test',
-          authorization: 'Bearer some-clerk-token',
-        },
-      });
-      const { res, statusMock } = createMockResponse();
-      const next = jest.fn();
-
-      await requireAuth(req as Request, res as Response, next);
-
-      // E2E bypass should take precedence, Clerk verification should not be called
-      expect(mockVerifyToken).not.toHaveBeenCalled();
-      expect(next).toHaveBeenCalled();
-      expect(req.user).toEqual(e2eUser);
-    });
   });
 
   describe('requireSessionAccess', () => {
@@ -541,48 +271,8 @@ describe('Auth Middleware', () => {
       updatedAt: new Date(),
     };
 
-    it('passes when user is a relationship member', async () => {
-      (prisma.session.findFirst as jest.Mock).mockResolvedValueOnce({ id: 'sess-1' });
-      const req = createMockRequest({ user, params: { id: 'sess-1' } });
-      const { res } = createMockResponse();
-      const next = jest.fn();
-      await requireSessionAccess(req as Request, res as Response, next);
-      expect(next).toHaveBeenCalledWith();
-    });
 
-    it('throws NotFoundError when session does not exist', async () => {
-      (prisma.session.findFirst as jest.Mock).mockResolvedValueOnce(null);
-      (prisma.session.findUnique as jest.Mock).mockResolvedValueOnce(null);
-      const req = createMockRequest({ user, params: { id: 'missing' } });
-      const { res } = createMockResponse();
-      const next = jest.fn();
-      await requireSessionAccess(req as Request, res as Response, next);
-      expect(next).toHaveBeenCalledWith(expect.any(NotFoundError));
-      expect(next).toHaveBeenCalledWith(expect.objectContaining({ message: 'Session not found' }));
-    });
 
-    it('throws ForbiddenError when session exists but user has no access', async () => {
-      (prisma.session.findFirst as jest.Mock)
-        .mockResolvedValueOnce(null) // membership check
-        .mockResolvedValueOnce(null); // invitation fallback
-      (prisma.session.findUnique as jest.Mock).mockResolvedValueOnce({ id: 'sess-2' });
-      const req = createMockRequest({ user, params: { id: 'sess-2' } });
-      const { res } = createMockResponse();
-      const next = jest.fn();
-      await requireSessionAccess(req as Request, res as Response, next);
-      expect(next).toHaveBeenCalledWith(expect.any(ForbiddenError));
-    });
 
-    it('passes for invitee via invitation fallback', async () => {
-      (prisma.session.findFirst as jest.Mock)
-        .mockResolvedValueOnce(null) // membership
-        .mockResolvedValueOnce({ id: 'sess-3' }); // invitation
-      (prisma.session.findUnique as jest.Mock).mockResolvedValueOnce({ id: 'sess-3' });
-      const req = createMockRequest({ user, params: { id: 'sess-3' } });
-      const { res } = createMockResponse();
-      const next = jest.fn();
-      await requireSessionAccess(req as Request, res as Response, next);
-      expect(next).toHaveBeenCalledWith();
-    });
   });
 });

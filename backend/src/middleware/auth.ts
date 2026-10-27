@@ -151,8 +151,16 @@ async function handleClerkAuth(
   next: NextFunction,
   required: boolean
 ): Promise<void> {
-  // Check for E2E auth bypass first
-  const e2eBypassed = await handleE2EAuthBypass(req);
+  // Check for E2E auth bypass first. Its errors go to next(): an async
+  // middleware's rejection is not caught by Express 4, so a throw here left
+  // the request hanging (found by auth.target.test, TS-12).
+  let e2eBypassed: boolean;
+  try {
+    e2eBypassed = await handleE2EAuthBypass(req);
+  } catch (error) {
+    next(error);
+    return;
+  }
   if (e2eBypassed) {
     next();
     return;
