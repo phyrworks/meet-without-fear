@@ -60,10 +60,10 @@ import {
   hasMilestone,
   loadAgreements,
   loadClosure,
-  loadCoverage,
   loadProposal,
   loadProposals,
   loadStage4Needs,
+  loadVisibleCoverage,
   presentHumans,
   resolveNeedLabels,
   setProposalNeeds,
@@ -476,7 +476,8 @@ export async function shareStage4Selections(req: Request, res: Response): Promis
     const willing = new Set(myChoices.filter((c) => c.decision === 'WILLING').map((c) => c.proposalId));
     const active = proposals.filter((p) => p.status === 'ACTIVE');
     const declined = new Set(dispositions.map((d) => d.needId));
-    const coverage = new Map((await loadCoverage(sessionId)).map((c) => [c.needId, c]));
+    // Visible coverage only (fix round 2): a partner's unshared WILLING must not change the gate.
+    const coverage = new Map((await loadVisibleCoverage(sessionId, me)).map((c) => [c.needId, c]));
     const ungated = needs.filter((n) => {
       if ((coverage.get(n.id)?.status ?? 'OPEN') !== 'OPEN') return false;
       if (declined.has(n.id)) return false;

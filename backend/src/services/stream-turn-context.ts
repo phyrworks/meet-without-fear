@@ -22,7 +22,7 @@ import { getSessionSummary } from './conversation-summarizer';
 import { buildContextForParticipant, formatContextForPrompt } from './context-assembler';
 import type { MemoryIntentResult } from './memory-intent';
 import { getPartnerParticipant, resolveParticipant, type ResolvedParticipant } from './participant-resolver';
-import { loadCoverage, loadProposals, loadStage4Needs } from './stage4-store';
+import { loadProposals, loadStage4Needs, loadVisibleCoverage } from './stage4-store';
 import { loadFollowUpsForParticipant } from './tending.service';
 import { followUpCheckinPayloadSchema } from '@meet-without-fear/shared';
 import { countOwnTurns, legacyRole, listConversationMessages } from './message-store';
@@ -143,7 +143,7 @@ async function getStage4WalkthroughPromptContext(
  * the participant's own needs by their own label, the partner's by the
  * shared text — never the partner's private label.
  */
-async function getStage4OpenNeedsForPrompt(
+export async function getStage4OpenNeedsForPrompt(
   sessionId: string,
   userId: string
 ): Promise<Array<{ needLabel: string }> | null> {
@@ -152,7 +152,8 @@ async function getStage4OpenNeedsForPrompt(
     if (!me) return null;
     const [needs, coverage, mine, declined] = await Promise.all([
       loadStage4Needs(sessionId, me.id),
-      loadCoverage(sessionId),
+      // Visible coverage only (fix round 2): a partner's unshared WILLING must not drop a need from the prompt.
+      loadVisibleCoverage(sessionId, me.id),
       prisma.proposalChoice.findMany({
         where: { participantId: me.id, decision: 'WILLING', proposal: { sessionId } },
         select: { proposalId: true },

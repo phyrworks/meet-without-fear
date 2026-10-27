@@ -214,6 +214,41 @@ export async function loadCoverage(sessionId: string): Promise<CoverageRow[]> {
 }
 
 /**
+ * `v_need_coverage` as `viewer` may see it (TS-11 fix round 2): covering
+ * proposals limited to the proposals the viewer may see, and the status
+ * recomputed from the choices the viewer may see (their own, and a partner's
+ * once the partner has reached choices_shared) — the rule the view applies
+ * under the viewer's RLS (TS-16; R20: COVERED when every present human is
+ * WILLING on a covering proposal, PARTIAL when some are, OPEN otherwise). On
+ * the app connection today the view spans every choice, so its own `status`
+ * would let a partner's unshared WILLING change what the viewer is told
+ * (the share gate, the prompt's open needs) — the closure-oracle class (I3).
+ */
+export async function loadVisibleCoverage(sessionId: string, viewerParticipantId: string): Promise<CoverageRow[]> {
+  const [coverage, proposals, choices, humans] = await Promise.all([
+    loadCoverage(sessionId),
+    loadProposals(sessionId, viewerParticipantId),
+    loadVisibleChoices(sessionId, viewerParticipantId),
+    presentHumans(sessionId),
+  ]);
+  const visible = new Set(proposals.map((p) => p.id));
+  const humanIds = humans.map((h) => h.id);
+  return coverage.map((c) => {
+    const covering = c.coveringProposalIds.filter((id) => visible.has(id));
+    const willing = [
+      ...new Set(
+        choices
+          .filter((ch) => ch.decision === 'WILLING' && covering.includes(ch.proposalId) && humanIds.includes(ch.participantId))
+          .map((ch) => ch.participantId),
+      ),
+    ];
+    const status: CoverageRow['status'] =
+      willing.length === 0 ? 'OPEN' : willing.length >= humanIds.length ? 'COVERED' : 'PARTIAL';
+    return { ...c, coveringProposalIds: covering, willingParticipantIds: willing, status };
+  });
+}
+
+/**
  * The session's live shared needs as `viewer` names them (v_need_shared; the
  * viewer's own need labels from their own `need` rows — need_share.need_id is
  * the need's id).
