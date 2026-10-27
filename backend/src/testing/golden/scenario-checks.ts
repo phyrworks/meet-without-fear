@@ -152,8 +152,10 @@ export function targetFixtureDeltaChecks(opts: { harness: () => Harness; steps: 
     const iso = (d?: Date) => (d ? new Date(d).toISOString() : null);
     let checked = 0;
     for (const step of opts.steps()) {
-      const compact = (step.body as { data?: { compact?: { mySignedAt?: unknown; partnerSignedAt?: unknown } } } | undefined)?.data
-        ?.compact;
+      const d = (step.body as { data?: { compact?: { mySignedAt?: unknown; partnerSignedAt?: unknown }; mySignedAt?: unknown } } | undefined)
+        ?.data;
+      // GET /state nests them under `compact`; GET /compact/status returns them at the top.
+      const compact = d?.compact ?? (d && 'mySignedAt' in d ? (d as { mySignedAt?: unknown; partnerSignedAt?: unknown }) : undefined);
       const email = /as (\S+)$/.exec(step.label)?.[1];
       if (!compact || !email) continue;
       const partner = signed.find(s => s.email !== email)?.email;
@@ -258,5 +260,38 @@ export function authorClosureChecks(opts: {
       expect(steps[i].label).toMatch(/: reconciler summary as ada@e2e\.test$/);
       expect((steps[i].body as { error?: { message?: string } }).error?.message).toBe('Reconciler has not run yet');
     }
+  });
+}
+
+/**
+ * TS-10, target shape only: the pair of `mockTurnIndex` — the streamed step's
+ * text is the canned response the mock serves at the caller's own turn count
+ * (fixture `user-a-full-journey`, index = own USER CHAT turns − 1).
+ */
+export function mockIndexChecks(opts: { harness: () => Harness; steps: () => StepResult[]; step: number; email: string }): void {
+  const run = isTargetShape() ? it : it.skip;
+  run('mockTurnIndex pair: the streamed text is the fixture response at the caller’s turn count', async () => {
+    const h = opts.harness();
+    const [{ n }] = await withClient(
+      h.fixture.target,
+      async c =>
+        (
+          await c.query<{ n: number }>(
+            `SELECT count(*)::int AS n FROM message m JOIN participant p ON p.id = m.sender_participant_id
+             JOIN "user" u ON u.id = p.user_id WHERE u.email = $1 AND m.role = 'USER' AND m.kind = 'CHAT'`,
+            [opts.email],
+          )
+        ).rows,
+      h.fixture.database,
+    );
+    const { getFixtureResponseByIndex } = await import('../../lib/e2e-fixtures');
+    const served = getFixtureResponseByIndex('user-a-full-journey', n - 1);
+    const text = (opts.steps()[opts.step].sse ?? [])
+      .filter(e => e.event === 'chunk' || (e.data as { text?: string })?.text)
+      .map(e => (e.data as { text?: string }).text ?? '')
+      .join('');
+    // The visible text is the canned response without its hidden <thinking> block.
+    const visible = served.replace(/<thinking>[\s\S]*?<\/thinking>/, '').trim().split('\n')[0];
+    expect(text).toContain(visible);
   });
 }

@@ -221,7 +221,9 @@ export interface ChangesMappedRule extends RuleBase {
  * listed read (`read` = the read's name in `privacy.ts` SESSION_READS /
  * USER_READS; every step whose label is `<phase>: <read> as <email>`), the
  * run's `status` must be 500 and its body the error envelope; status and
- * body are then not compared (`changes` still are). A listed read that
+ * body are then not compared. `changes` still are, with their `<ts:N>`
+ * ranks canonicalised (the error body holds none of the 200 body's carried
+ * instants, so the remaining ones rank differently). A listed read that
  * answers anything but 500 FAILS (a stale entry — delete it when the cluster
  * lands). Only reads in `PENDING_CLUSTER_READS` may be listed, with that
  * owner: a TS-10 read can never be excused.

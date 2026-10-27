@@ -463,6 +463,15 @@ export function compareWithAllowList(expected: unknown, actual: unknown, allow: 
       for (const k of [...new Set([...Object.keys(e), ...Object.keys(a)])].sort()) {
         const kp = [...p, k];
         if (pending.length && (k === 'status' || k === 'body' || k === 'sse')) continue;
+        if (pending.length && (k === 'changes' || k === 'changesAtResponse') && !rulesAt('changesMapped', kp).length) {
+          // The error body carries none of the 200 body's instants, so the
+          // step's carried timestamps rank differently: compare the changes
+          // with every `<ts:N>` rank canonicalised (values, keys and fresh
+          // stamps still compared).
+          const unrank = (v: unknown): unknown => JSON.parse(JSON.stringify(v ?? null).replace(/<ts:\d+>/g, '<ts:N>'));
+          walk(unrank(e[k]), unrank(a[k]), kp);
+          continue;
+        }
         const inE = Object.prototype.hasOwnProperty.call(e, k);
         const inA = Object.prototype.hasOwnProperty.call(a, k);
         if (absent.has(k)) {

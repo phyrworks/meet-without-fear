@@ -323,7 +323,13 @@ export function targetByteRules(opts: {
  */
 export const TARGET_COMPACT_SIGNED_MASK: AllowRule = {
   kind: 'fixtureMask',
-  at: ['steps.*.body.data.compact.mySignedAt', 'steps.*.body.data.compact.partnerSignedAt'],
+  at: [
+    'steps.*.body.data.compact.mySignedAt',
+    'steps.*.body.data.compact.partnerSignedAt',
+    // GET /compact/status returns the same two keys at the top of `data`.
+    'steps.*.body.data.mySignedAt',
+    'steps.*.body.data.partnerSignedAt',
+  ],
   expect: 'isoTimestamp',
   baseline: null,
   why:
@@ -362,6 +368,65 @@ export function hasRunForAuthor(steps: number[]): AllowRule {
       "spec §1.2 reconciler_result is subject-only: the author's reconciler/status no longer counts the analysis of " +
       'their own attempt (it is the subject’s), so hasRun is false until an analysis they may see exists.',
   };
+}
+
+/** The reveal payloads' additive keys (plan §4: exactly `round`, `attemptId`). */
+export const TARGET_ROUND_KEYS_RULE: AllowRule = {
+  kind: 'addedKeys',
+  at: ['steps.*.body.data.myAttempt', 'steps.*.body.data.partnerAttempt', 'steps.*.body.data.attempt'],
+  keys: ['round', 'attemptId'],
+  why: 'spec §1.2 empathy_attempt: revisionCount becomes rows with a round; a reveal payload names its round and row.',
+};
+
+/**
+ * MOCK_LLM picks a streamed turn's canned response by the caller's turn
+ * count (`mockResponseIndex = userTurnCount - 1`, stream-turn-model.ts).
+ * Today's count excluded the fixture's own turns (they carry a recipient,
+ * `forUserId`), so the mock served response 0; the target counts all of the
+ * participant's own turns (TS-9 countOwnTurns), so it serves the response at
+ * her real turn count — whose metadata also proposes an empathy statement,
+ * which updates her draft. A fixture × mock artefact, not a privacy change:
+ * pinned to the one streamed step; `mockIndexChecks` asserts the served
+ * response is the fixture's at her turn count, and the leak probes still scan
+ * the stream and the captured prompt.
+ */
+export function mockTurnIndex(step: number, concept: boolean, draftOwner: string): AllowRule[] {
+  const rules: AllowRule[] = [
+    {
+      kind: 'mayDiffer',
+      at: [`steps.${step}.sse.*.data.text`, `steps.${step}.sse.*.data.metadata.offerReadyToShare`],
+      mustMatch: true,
+      why: 'MOCK_LLM serves the canned response at the caller’s own turn count (TS-9 counts every own turn).',
+    },
+    {
+      kind: 'addedKeys',
+      at: `steps.${step}.sse.*.data.metadata`,
+      keys: ['proposedEmpathyStatement'],
+      why: 'the served canned response proposes an empathy statement (its metadata).',
+    },
+  ];
+  if (concept) {
+    rules.push({
+      kind: 'mayDiffer',
+      // After the admitted draft row, the step's third change is the AI reply.
+      at: [`steps.${step}.changes.2.after.content`, `steps.${step}.changes.2.after.content_hash`],
+      mustMatch: true,
+      why: "the AI reply's row holds the served canned response (and its hash).",
+    });
+    rules.push({
+      kind: 'addedEntries',
+      at: `steps.${step}.changes`,
+      where: {
+        view: 'draft',
+        kind: 'changed',
+        key: `<draft:${draftOwner}@main/EMPATHY>`,
+        'after.kind': 'EMPATHY',
+        'after.participant_id': `<participant:${draftOwner}@main>`,
+      },
+      why: "the served canned response's proposed statement updates the caller's own EMPATHY draft (persistTurnState).",
+    });
+  }
+  return rules;
 }
 
 /**
