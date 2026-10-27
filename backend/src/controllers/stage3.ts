@@ -24,7 +24,7 @@ import { Request, Response } from 'express';
 import { logger } from '../lib/logger';
 import { prisma } from '../lib/prisma';
 import { confirmNeedsRequestSchema, MessageRole, NeedCategory } from '@meet-without-fear/shared';
-import { notifyPartner, publishMessageAIResponse, publishSessionEvent } from '../services/realtime';
+import { notifyPartner, publishMessageAIResponse, publishSessionEvent, publishUserEvent } from '../services/realtime';
 import { successResponse, errorResponse } from '../utils/response';
 import { getPartnerUserId } from '../utils/session';
 import {
@@ -636,7 +636,11 @@ export async function removeNeed(req: Request, res: Response): Promise<void> {
       return;
     }
     const need = await deleteNeed(sessionId, user.id, needId);
-    await publishSessionEvent(sessionId, 'need.deleted', { forUserId: user.id, userId: user.id, oldId: need.id, need }).catch((err) =>
+    // Fix round 1 (Important 6): the deleted need's label and evidence are the
+    // owner's alone — a session-channel event reaches the partner's device
+    // too. The owner's own device patches its cache from this response; other
+    // devices of the owner get a content-free nudge on the owner's channel.
+    await publishUserEvent(user.id, 'session.updated', { sessionId, kind: 'need.deleted', userId: user.id }).catch((err) =>
       logger.warn('[removeNeed] Failed to publish need.deleted:', err),
     );
     successResponse(res, { deleted: true, needId, need });
