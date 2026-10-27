@@ -83,6 +83,10 @@ export interface EmpathyAttemptDTO {
   statusVersion?: number;
   /** Delivery status: pending (not revealed to partner), delivered (revealed), seen (partner validated) */
   deliveryStatus?: SharedContentDeliveryStatus;
+  /** The attempt row this payload states (target shape: one row per round; additive, TS-10). */
+  attemptId?: string;
+  /** The round of the direction this attempt is (1 = first submission; additive, TS-10). */
+  round?: number;
 }
 
 /** Message included in consent response for immediate display */
