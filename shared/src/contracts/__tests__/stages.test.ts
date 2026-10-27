@@ -11,7 +11,6 @@ import {
   recordEmotionRequestSchema,
   confirmNeedsRequestSchema,
   proposeStrategyRequestSchema,
-  rankStrategiesRequestSchema,
   confirmAgreementRequestSchema,
 } from '../stages';
 
@@ -257,22 +256,6 @@ describe('proposeStrategyRequestSchema', () => {
     const result = proposeStrategyRequestSchema.safeParse({
       description: 'A valid description here',
       needsAddressed: [],
-    });
-    expect(result.success).toBe(false);
-  });
-});
-
-describe('rankStrategiesRequestSchema', () => {
-  it('accepts valid rankings', () => {
-    const result = rankStrategiesRequestSchema.safeParse({
-      rankedIds: ['0190f3a2-6c1e-7b4d-9a8e-3f2b1c0d4e51', '0190f3a2-6c1e-7b4d-9a8e-3f2b1c0d4e52'],
-    });
-    expect(result.success).toBe(true);
-  });
-
-  it('rejects empty rankings', () => {
-    const result = rankStrategiesRequestSchema.safeParse({
-      rankedIds: [],
     });
     expect(result.success).toBe(false);
   });
