@@ -352,7 +352,8 @@ export async function checkAndRevealBothIfReady(sessionId: string): Promise<bool
  * The reconciler status AS SEEN BY one participant (spec §1.2: a result is
  * its subject's only). A direction's analysis is returned only where the
  * caller is its subject; `pendingShareOffers` counts the caller's own open
- * offers (as subject); `hasRun` and `readyForStage3` come from the
+ * offers (as subject); `hasRun` is whether an analysis the caller may see
+ * exists (their own as subject, or guidance); `readyForStage3` adds the
  * content-free direction statuses (`v_empathy_direction_status`).
  *
  * A/B are the session's participants in join order (A→B = A's attempt about B).
@@ -384,21 +385,31 @@ export async function getReconcilerStatus(
     return stored ? dbResultToReconcilerResult(stored, await guidanceFor(stored.id)) : null;
   };
 
-  const [aUnderstandingB, bUnderstandingA, pendingShareOffers, ownResults] = await Promise.all([
+  const [aUnderstandingB, bUnderstandingA, pendingShareOffers, ownResults, ownGuidance] = await Promise.all([
     visibleResult(a, b),
     visibleResult(b, a),
     prisma.contextShareOffer.count({
       where: { subjectParticipantId: callerParticipantId, status: 'OFFERED', attempt: { authorParticipant: { sessionId } } },
     }),
+    // What the caller may see of the analyses: their own as subject, and the
+    // guidance (author + subject) — never the existence of a result on an
+    // attempt they authored (spec §1.2 reconciler_result RLS: subject only).
     prisma.reconcilerResult.count({ where: { subjectParticipantId: callerParticipantId, supersededAt: null } }),
+    prisma.reconcilerGuidance.count({
+      where: {
+        OR: [{ authorParticipantId: callerParticipantId }, { subjectParticipantId: callerParticipantId }],
+        result: { supersededAt: null },
+      },
+    }),
   ]);
 
   const ab = directionOf(statuses, a.participantId, b.participantId);
   const ba = directionOf(statuses, b.participantId, a.participantId);
-  const analysed = (d?: { status: TargetEmpathyStatus }) => !!d && d.status !== 'HELD';
-  const hasRun = ownResults > 0 || analysed(ab) || analysed(ba);
+  const hasRun = ownResults > 0 || ownGuidance > 0;
+  // Complete once an analysis the caller can see exists, both directions are
+  // READY or later, and the caller has no open offer.
   const readyForStage3 =
-    !!ab && !!ba && READY_OR_LATER.has(ab.status) && READY_OR_LATER.has(ba.status) && pendingShareOffers === 0;
+    hasRun && !!ab && !!ba && READY_OR_LATER.has(ab.status) && READY_OR_LATER.has(ba.status) && pendingShareOffers === 0;
 
   return { hasRun, aUnderstandingB, bUnderstandingA, pendingShareOffers, readyForStage3 };
 }
