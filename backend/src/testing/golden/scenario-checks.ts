@@ -128,3 +128,90 @@ export function targetMessageStageChecks(opts: { harness: () => Harness; steps: 
     expect(checked).toBeGreaterThan(0);
   });
 }
+
+/**
+ * TS-10, target shape only: the pairs of `TARGET_COMPACT_SIGNED_MASK` and
+ * `TARGET_CONSENT_TARGET_ID_RULE`.
+ *   - every `state` read's compact `mySignedAt` / `partnerSignedAt` is the
+ *     reader's / partner's `compact_signed` instant (raw, before the mask);
+ *   - every consent record a read returns names its row's arc target.
+ */
+export function targetFixtureDeltaChecks(opts: { harness: () => Harness; steps: () => StepResult[] }): void {
+  const run = isTargetShape() ? it : it.skip;
+  const q = async <T extends Record<string, unknown>>(sql: string, params: unknown[] = []): Promise<T[]> => {
+    const h = opts.harness();
+    return withClient(h.fixture.target, async c => (await c.query<T>(sql, params)).rows, h.fixture.database);
+  };
+
+  run("fixtureMask pair: compact signedAt is each signer's compact_signed instant", async () => {
+    const signed = await q<{ email: string; at: Date }>(
+      `SELECT u.email, pm.reached_at AS at FROM participant_milestone pm JOIN participant p ON p.id = pm.participant_id
+       JOIN "user" u ON u.id = p.user_id WHERE pm.milestone_key = 'compact_signed'`,
+    );
+    const at = (email: string) => signed.find(s => s.email === email)?.at;
+    const iso = (d?: Date) => (d ? new Date(d).toISOString() : null);
+    let checked = 0;
+    for (const step of opts.steps()) {
+      const compact = (step.body as { data?: { compact?: { mySignedAt?: unknown; partnerSignedAt?: unknown } } } | undefined)?.data
+        ?.compact;
+      const email = /as (\S+)$/.exec(step.label)?.[1];
+      if (!compact || !email) continue;
+      const partner = signed.find(s => s.email !== email)?.email;
+      expect({ step: step.label, my: compact.mySignedAt, partner: compact.partnerSignedAt }).toEqual({
+        step: step.label,
+        my: iso(at(email)),
+        partner: partner ? iso(at(partner)) : null,
+      });
+      checked++;
+    }
+    expect(checked).toBeGreaterThan(0);
+  });
+
+  run("mayDiffer pair: a consent record's targetId is its row's arc target", async () => {
+    const rows = await q<{ id: string; target: string }>(
+      `SELECT id, coalesce(need_id, empathy_attempt_id, proposal_id, share_offer_id, review_id)::text AS target FROM consent`,
+    );
+    const byId = new Map(rows.map(r => [r.id, r.target]));
+    for (const step of opts.steps()) {
+      const data = (step.body as { data?: { records?: unknown[]; pendingRequests?: unknown[] } } | undefined)?.data;
+      for (const r of [...(data?.records ?? []), ...(data?.pendingRequests ?? [])] as Array<{ id: string; targetId: string }>) {
+        expect({ step: step.label, id: r.id, targetId: r.targetId }).toEqual({ step: step.label, id: r.id, targetId: byId.get(r.id) });
+      }
+    }
+  });
+}
+
+/**
+ * TS-10, target shape only: the pair of `authorAnalysisClosed` — at the
+ * author's reads the closed values are exactly: no reconciler result in the
+ * empathy status, no analysis of her direction and no offer count in the
+ * reconciler status, `hasRun` false, and the summary's "has not run yet".
+ */
+export function authorClosureChecks(opts: {
+  steps: () => StepResult[];
+  empathyStatus?: number[];
+  reconcilerStatus?: number[];
+  summary?: number[];
+}): void {
+  const run = isTargetShape() ? it : it.skip;
+  run('closure pair: the author reads no analysis of her attempt and no offer (R6/R7 closed)', () => {
+    const steps = opts.steps();
+    const data = (i: number) => (steps[i].body as { data?: Record<string, unknown> }).data ?? {};
+    for (const i of opts.empathyStatus ?? []) {
+      expect(steps[i].label).toMatch(/: empathy status as ada@e2e\.test$/);
+      expect(data(i).myReconcilerResult).toBeNull();
+    }
+    for (const i of opts.reconcilerStatus ?? []) {
+      expect(steps[i].label).toMatch(/: reconciler status as ada@e2e\.test$/);
+      expect({ a: data(i).aUnderstandingB, hasRun: data(i).hasRun, offers: data(i).pendingShareOffers }).toEqual({
+        a: null,
+        hasRun: false,
+        offers: 0,
+      });
+    }
+    for (const i of opts.summary ?? []) {
+      expect(steps[i].label).toMatch(/: reconciler summary as ada@e2e\.test$/);
+      expect((steps[i].body as { error?: { message?: string } }).error?.message).toBe('Reconciler has not run yet');
+    }
+  });
+}

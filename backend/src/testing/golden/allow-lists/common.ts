@@ -312,3 +312,195 @@ export function targetByteRules(opts: {
   }
   return rules;
 }
+
+/**
+ * TS-9's session-read fixture delta 1, restated for the Stage 2 scenarios'
+ * `state` reads: the current-shape fixture spells the compact gate
+ * `compactSignedAt`, so today's DTO says null; the target holds the instant
+ * (`compact_signed.reached_at`). Masked before normalisation (a new instant
+ * renumbers every later `<ts:N>` of the step), paired with
+ * `targetCompactSignedChecks` (scenario-checks.ts), which asserts the value.
+ */
+export const TARGET_COMPACT_SIGNED_MASK: AllowRule = {
+  kind: 'fixtureMask',
+  at: ['steps.*.body.data.compact.mySignedAt', 'steps.*.body.data.compact.partnerSignedAt'],
+  expect: 'isoTimestamp',
+  baseline: null,
+  why:
+    "TS-9 session-read rule 1: the fixture's compact gate key (`compactSignedAt`) is not the app's (`signedAt`); " +
+    'the target holds participant_milestone compact_signed.reached_at and the shim returns it.',
+};
+
+/**
+ * Consent DTO `targetId` (ruling R32 mapping): the current shape's empathy
+ * consent targeted the DRAFT (`targetType EMPATHY_DRAFT, targetId = draft id`);
+ * the target's arc names the ATTEMPT (`consent.empathy_attempt_id`, spec §1.3).
+ * Paired with `targetConsentTargetChecks`, which asserts every record's
+ * targetId is its row's arc id.
+ */
+export const TARGET_CONSENT_TARGET_ID_RULE: AllowRule = {
+  kind: 'mayDiffer',
+  at: ['steps.*.body.data.records.*.targetId', 'steps.*.body.data.pendingRequests.*.targetId'],
+  why:
+    'spec §1.3 consent: the arc names the attempt (empathy_attempt_id); the old record named the draft. The ' +
+    "scenario asserts each targetId equals the row's arc id.",
+};
+
+/**
+ * `reconciler/status` `hasRun` for a participant who sees no analysis (spec
+ * §1.2: a result is its subject's only). Today any result in the session
+ * counts — including one on the caller's own attempt, which is its subject's.
+ * Pinned to the exact reads; the scenario's leak probes assert nothing else of
+ * the analysis reaches the caller.
+ */
+export function hasRunForAuthor(steps: number[]): AllowRule {
+  return {
+    kind: 'mayDiffer',
+    at: steps.map(s => `steps.${s}.body.data.hasRun`),
+    mustMatch: true,
+    why:
+      "spec §1.2 reconciler_result is subject-only: the author's reconciler/status no longer counts the analysis of " +
+      'their own attempt (it is the subject’s), so hasRun is false until an analysis they may see exists.',
+  };
+}
+
+/**
+ * Byte-level labels that move for a reason the concept golden pins
+ * structurally (TS-10). `consent` byte labels carry the old target type
+ * (`EMPATHY_DRAFT/empathyDraft:…`), the arc names the attempt; `message` byte
+ * labels are global created_at ranks, which the delivered copies a reveal
+ * writes shift by two for every later row. Only the exact `id` paths listed;
+ * the concept comparison of the same reads compares those rows by their
+ * structural labels.
+ */
+export function byteLabelShift(paths: string[], what: 'consent' | 'message'): AllowRule {
+  return {
+    kind: 'mayDiffer',
+    at: paths,
+    mustMatch: true,
+    why:
+      what === 'consent'
+        ? "byte-level consent labels encode the old target type and target (the draft); the arc names the attempt " +
+          '(spec §1.3). The concept golden compares the row under its structural label; targetConsentTargetChecks pins targetId.'
+        : 'byte-level message labels are global created_at ranks; the two delivered copies of the reveal precede the ' +
+          'reveal notices, so each notice ranks two later. The concept golden compares the notices structurally.',
+  };
+}
+
+/**
+ * R6 / R7 closures (work-a39h.11.22) at the AUTHOR's reads, wherever a
+ * scenario reads them on RECONCILER_SHOWN_B (the analysis of the author's own
+ * attempt is its subject's — spec §1.2, P3 D8a; P1-4 for the offer):
+ *  - `empathyStatus`: `myReconcilerResult` is null. Its `analyzedAt` was the
+ *    step's only carried instant between the attempt's and the user row's, so
+ *    the user row's `created_at` ranks one lower (`<ts:4>` → `<ts:3>`): those
+ *    two concept paths, `concept: true` only (byte-level changes are not
+ *    compared by value);
+ *  - `reconcilerStatus`: no analysis of the caller-authored direction, no
+ *    count of the subject's offers, and `hasRun` only for an analysis the
+ *    caller may see;
+ *  - `reconcilerRun`: only the directions the caller is the subject of;
+ *  - `summary`: the 400's reason follows (`has not run yet`).
+ * Paired with `authorClosureChecks` (scenario-checks.ts): the exact values.
+ */
+export function authorAnalysisClosed(opts: {
+  empathyStatus?: number[];
+  reconcilerStatus?: number[];
+  reconcilerRun?: number[];
+  summary?: number[];
+  concept: boolean;
+}): AllowRule[] {
+  const at = (steps: number[] | undefined, paths: string[]) => (steps ?? []).flatMap(s => paths.map(p => `steps.${s}.${p}`));
+  const rules: AllowRule[] = [];
+  const empathy = at(opts.empathyStatus, [
+    'body.data.myReconcilerResult',
+    ...(opts.concept ? ['changes.0.before.created_at', 'changes.0.after.created_at'] : []),
+  ]);
+  if (empathy.length) {
+    rules.push({
+      kind: 'mayDiffer',
+      at: empathy,
+      mustMatch: true,
+      why:
+        'R6 (work-a39h.11.22): the author reads no reconciler_result of her own attempt (subject-only); the closed ' +
+        "field's carried instant no longer ranks, so the user row's created_at ranks one lower.",
+    });
+  }
+  const status = at(opts.reconcilerStatus, ['body.data.aUnderstandingB', 'body.data.hasRun', 'body.data.pendingShareOffers']);
+  if (status.length) {
+    rules.push({
+      kind: 'mayDiffer',
+      at: status,
+      mustMatch: true,
+      why:
+        'R6/R7 (work-a39h.11.22): reconciler/status returns the caller only her own subject-side analyses and her own ' +
+        'offers; the author sees neither the analysis of her attempt nor that an offer exists.',
+    });
+  }
+  const run = at(opts.reconcilerRun, ['body.data.aUnderstandingB']);
+  if (run.length) {
+    rules.push({
+      kind: 'mayDiffer',
+      at: run,
+      mustMatch: true,
+      why: 'R6 (work-a39h.11.22): reconciler/run returns the caller only the directions she is the subject of.',
+    });
+  }
+  const summary = at(opts.summary, ['body.error.message']);
+  if (summary.length) {
+    rules.push({
+      kind: 'mayDiffer',
+      at: summary,
+      mustMatch: true,
+      why: 'R6: the summary gate follows the caller-visible hasRun (no analysis she may see yet → "has not run yet").',
+    });
+  }
+  return rules;
+}
+
+/** The subject's DENIED consent naming the offer (spec §1.3: no requester), written by the decline step. */
+export function declineConsent(step: number): AddedEntriesRule {
+  const key = '<consent:bob@main/SHARE_OFFER/shareOffer:ada→bob@main#1/i1>';
+  return {
+    kind: 'addedEntries',
+    at: `steps.${step}.changes`,
+    where: {
+      view: 'consent',
+      kind: 'added',
+      key,
+      'after.id': key,
+      'after.participant_id': '<participant:bob@main>',
+      'after.requested_by_participant_id': null,
+      'after.share_offer_id': '<shareOffer:ada→bob@main#1/i1>',
+      'after.target_kind': 'SHARE_OFFER',
+      'after.decision': 'DENIED',
+      'after.revoked_at': null,
+    },
+    why:
+      "spec §1.3/§1.2: the subject's answer is a consent row naming the offer, with no requester (CHECK), so the " +
+      'author can never read the decision (P1-4).',
+  };
+}
+
+/**
+ * The subject's own consent history after declining: the DENIED share-offer
+ * consent is a record of the SUBJECT's (spec §1.3: S mine(participant_id)
+ * only), with the target-only content type CONTEXT_SHARE_OFFER (ruling R32).
+ * Pinned to the read step and to the exact record; never in the author's reads.
+ */
+export function subjectDeclineRecord(step: number, byteLevel: boolean): AddedEntriesRule {
+  return {
+    kind: 'addedEntries',
+    at: `steps.${step}.body.data.records`,
+    where: {
+      contentType: 'CONTEXT_SHARE_OFFER',
+      decision: 'DENIED',
+      revokedAt: null,
+      id: byteLevel ? '<consent:bob/SHARE_OFFER/shareOffer:bob#1>' : '<consent:bob@main/SHARE_OFFER/shareOffer:ada→bob@main#1/i1>',
+      ...(byteLevel ? {} : { targetId: '<shareOffer:ada→bob@main#1/i1>' }),
+    },
+    why:
+      "spec §1.3: the subject's answer to the offer is the subject's own consent row (DENIED, no requester), listed in " +
+      'the subject’s own history only.',
+  };
+}

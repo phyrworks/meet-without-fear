@@ -18,20 +18,21 @@
  *           GOLDEN_UPDATE=reveal-all-ready-bob-first.concept npx jest reveal-all-ready-bob-first.golden
  */
 
-import { REVEAL_BOB_FIRST_ALLOW, REVEAL_BOB_FIRST_STEP } from '../allow-lists/reveal-all-ready';
+import { REVEAL_BOB_FIRST_ALLOW, REVEAL_BOB_FIRST_BYTE_TARGET_ALLOW, REVEAL_BOB_FIRST_STEP } from '../allow-lists/reveal-all-ready';
 import { listTables } from '../db';
 import type { Harness, StepResult } from '../driver';
 import { createHarness } from '../driver';
-import { EMPATHY_READS, fullRead } from '../privacy';
+import { EMPATHY_READS, fullRead, shapeTables } from '../privacy';
 import { revealChecks } from '../reveal-checks';
-import { goldenScenarioChecks } from '../scenario-checks';
+import { authorClosureChecks, goldenScenarioChecks, targetFixtureDeltaChecks, targetMessageStageChecks } from '../scenario-checks';
+import { isTargetShape } from '../shape';
 import type { SnapshotRow } from '../snapshot';
 
 const BASE_URL =
   process.env.GOLDEN_DATABASE_URL || 'postgresql://mwf_user:mwf_password@localhost:5432/meet_without_fear';
 
 const SCENARIO = 'reveal-all-ready-bob-first';
-const READ_TABLES = ['User', 'Message', 'UserVessel', 'EmpathyAttempt', 'ReconcilerResult', 'ReconcilerShareOffer'];
+const READ_TABLES = shapeTables(['User', 'Message', 'UserVessel', 'EmpathyAttempt', 'ReconcilerResult', 'ReconcilerShareOffer']);
 
 jest.setTimeout(600_000);
 
@@ -66,7 +67,8 @@ describe(`golden: ${SCENARIO}`, () => {
     ];
 
     steps = [await write(FIRST, bob, '/e2e/trigger-reconciler', { sessionId: sid, guesserId: bob.id, subjectId: ada.id })];
-    afterFirst = (await harness.snapshot(['EmpathyAttempt'])).tables.EmpathyAttempt;
+    const attemptTable = isTargetShape() ? 'empathy_attempt' : 'EmpathyAttempt';
+    afterFirst = (await harness.snapshot([attemptTable])).tables[attemptTable];
     steps.push(...(await reads('bob ready')));
     steps.push(
       await write('decline share as bob', bob, `/sessions/${sid}/reconciler/share-offer/respond`, { action: 'decline' }),
@@ -81,6 +83,7 @@ describe(`golden: ${SCENARIO}`, () => {
   goldenScenarioChecks({
     scenario: SCENARIO,
     allowList: REVEAL_BOB_FIRST_ALLOW,
+    byteTargetAllowList: REVEAL_BOB_FIRST_BYTE_TARGET_ALLOW,
     harness: () => harness,
     steps: () => steps,
   });
@@ -95,5 +98,19 @@ describe(`golden: ${SCENARIO}`, () => {
     firstReadyStep: FIRST,
     firstReady: 'bob',
     attemptsAfterFirst: () => afterFirst,
+    revealStep: 'decline share as bob',
+  });
+
+  targetMessageStageChecks({ harness: () => harness, steps: () => steps });
+  targetFixtureDeltaChecks({ harness: () => harness, steps: () => steps });
+  authorClosureChecks({ steps: () => steps, empathyStatus: [5, 36], reconcilerStatus: [9, 40], summary: [11, 42] });
+
+  // The pair of the subject's mayDiffer (allow-list BOB_FIRST_CLOSURES).
+  (isTargetShape() ? it : it.skip)("mayDiffer pair: after the reveal Bob's reconciliation is complete for him; the summary is attempted", () => {
+    expect(steps[55].label).toBe('revealed: reconciler status as bob@e2e.test');
+    expect((steps[55].body as { data: { readyForStage3: boolean; hasRun: boolean } }).data).toMatchObject({ readyForStage3: true, hasRun: true });
+    expect(steps[57].label).toBe('revealed: reconciler summary as bob@e2e.test');
+    // MOCK_LLM: no summary from the model.
+    expect(steps[57].status).toBe(500);
   });
 });
