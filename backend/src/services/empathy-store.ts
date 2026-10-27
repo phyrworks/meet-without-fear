@@ -267,8 +267,7 @@ export async function setAttemptStatus(
   opts: { actor: StatusActor; content?: string; client?: PrismaClient },
 ): Promise<string> {
   const client = opts.client ?? clientFor(opts.actor);
-  const rows = await client.$queryRaw<Array<{ id: string }>>`
-    SELECT app.empathy_set_status(${attemptId}::uuid, ${status}::empathy_status, ${opts.content ?? null}::text)::text AS id`;
+  const rows = await client.$queryRaw<Array<{ id: string }>>`SELECT app.empathy_set_status(${attemptId}::uuid, ${status}::empathy_status, ${opts.content ?? null}::text)::text AS id`;
   return rows[0].id;
 }
 
@@ -295,13 +294,11 @@ export async function jobMoveIfUnchanged(
 ): Promise<boolean> {
   return getJobPrisma().$transaction(async tx => {
     // Lock order as in app.empathy_set_status: the session row, then the attempt.
-    await tx.$queryRaw`
-      SELECT s.id FROM session s
+    await tx.$queryRaw`SELECT s.id FROM session s
       WHERE s.id = (SELECT p.session_id FROM empathy_attempt a JOIN participant p ON p.id = a.author_participant_id
                     WHERE a.id = ${attemptId}::uuid)
       FOR NO KEY UPDATE`;
-    const rows = await tx.$queryRaw<Array<{ status_version: number; status: TargetEmpathyStatus }>>`
-      SELECT status_version, status::text AS status FROM empathy_attempt WHERE id = ${attemptId}::uuid FOR NO KEY UPDATE`;
+    const rows = await tx.$queryRaw<Array<{ status_version: number; status: TargetEmpathyStatus }>>`SELECT status_version, status::text AS status FROM empathy_attempt WHERE id = ${attemptId}::uuid FOR NO KEY UPDATE`;
     const row = rows[0];
     if (!row || Number(row.status_version) !== expectedVersion) return false;
     if (row.status !== status) {
@@ -323,12 +320,10 @@ export async function markAttemptDelivery(
   client: PrismaClient = getJobPrisma(),
 ): Promise<void> {
   if (delivery === 'DELIVERED') {
-    await client.$executeRaw`
-      UPDATE empathy_attempt SET delivery_status = 'DELIVERED', delivered_at = coalesce(delivered_at, ${at})
+    await client.$executeRaw`UPDATE empathy_attempt SET delivery_status = 'DELIVERED', delivered_at = coalesce(delivered_at, ${at})
       WHERE id = ${attemptId}::uuid`;
   } else {
-    await client.$executeRaw`
-      UPDATE empathy_attempt SET delivery_status = 'SEEN', seen_at = coalesce(seen_at, ${at})
+    await client.$executeRaw`UPDATE empathy_attempt SET delivery_status = 'SEEN', seen_at = coalesce(seen_at, ${at})
       WHERE id = ${attemptId}::uuid`;
   }
 }
@@ -432,8 +427,7 @@ export async function upsertDraft(opts: {
   const about = opts.kind === 'EMPATHY' ? opts.aboutParticipantId ?? null : null;
   const attempt = opts.kind === 'VALIDATION_FEEDBACK' ? opts.attemptId ?? null : null;
   const ready = typeof opts.readyToShare === 'boolean' ? opts.readyToShare : null;
-  const rows = await prisma.$queryRaw<Array<{ id: string; content: string; ready_to_share: boolean; version: number; updated_at: Date }>>`
-    INSERT INTO draft (participant_id, kind, about_participant_id, attempt_id, content, ready_to_share, version)
+  const rows = await prisma.$queryRaw<Array<{ id: string; content: string; ready_to_share: boolean; version: number; updated_at: Date }>>`INSERT INTO draft (participant_id, kind, about_participant_id, attempt_id, content, ready_to_share, version)
     VALUES (${opts.participantId}::uuid, ${opts.kind}::draft_kind, ${about}::uuid, ${attempt}::uuid, ${opts.content},
             coalesce(${ready}::boolean, false), 1)
     ON CONFLICT (participant_id, kind, (coalesce(about_participant_id, attempt_id, share_offer_id)))

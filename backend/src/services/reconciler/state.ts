@@ -275,8 +275,7 @@ export async function checkAndRevealBothIfReady(sessionId: string): Promise<bool
 
   const revealed = await getJobPrisma().$transaction(
     async tx => {
-      const rounds = await tx.$queryRaw<CurrentRound[]>`
-        SELECT DISTINCT ON (a.author_participant_id, a.subject_participant_id)
+      const rounds = await tx.$queryRaw<CurrentRound[]>`SELECT DISTINCT ON (a.author_participant_id, a.subject_participant_id)
                a.id, a.author_participant_id, a.subject_participant_id, a.status::text AS status
         FROM empathy_attempt a
         WHERE a.author_participant_id = ANY(${pids}::uuid[])

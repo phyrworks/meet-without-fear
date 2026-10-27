@@ -953,8 +953,7 @@ Respond in JSON format:
 
     // Stage 2 sharing window closed: open offers expire (job).
     const pids = parties.map(p => p.participantId);
-    await getJobPrisma().$executeRaw`
-      UPDATE context_share_offer SET status = 'EXPIRED'
+    await getJobPrisma().$executeRaw`UPDATE context_share_offer SET status = 'EXPIRED'
       WHERE subject_participant_id = ANY(${pids}::uuid[]) AND status IN ('PENDING', 'OFFERED')`;
 
     if (parties.length > 1) {

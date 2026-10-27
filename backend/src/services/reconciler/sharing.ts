@@ -296,8 +296,7 @@ async function insertOffer(
     suggestedReason: string | null;
   },
 ): Promise<string> {
-  const rows = await client.$queryRaw<Array<{ id: string }>>`
-    INSERT INTO context_share_offer (attempt_id, result_id, subject_participant_id, iteration, status, offer_message,
+  const rows = await client.$queryRaw<Array<{ id: string }>>`INSERT INTO context_share_offer (attempt_id, result_id, subject_participant_id, iteration, status, offer_message,
                                      suggested_content, suggested_reason, offered_at)
     VALUES (${opts.attemptId}::uuid, ${opts.resultId}::uuid, ${opts.subjectParticipantId}::uuid,
             coalesce((SELECT max(o.iteration) FROM context_share_offer o WHERE o.attempt_id = ${opts.attemptId}::uuid), 0) + 1,
@@ -720,8 +719,7 @@ export async function shareAccepted(opts: {
   });
   if (opts.refinement) {
     // spec §1.2: the refined text is the subject's SHARE_CONTEXT draft.
-    await prisma.$executeRaw`
-      INSERT INTO draft (participant_id, kind, share_offer_id, content, ready_to_share, version)
+    await prisma.$executeRaw`INSERT INTO draft (participant_id, kind, share_offer_id, content, ready_to_share, version)
       VALUES (${opts.subject.participantId}::uuid, 'SHARE_CONTEXT'::draft_kind, ${opts.offerId}::uuid, ${opts.refinement}, true, 1)
       ON CONFLICT (participant_id, kind, (coalesce(about_participant_id, attempt_id, share_offer_id)))
       DO UPDATE SET content = EXCLUDED.content, version = draft.version + 1`;
@@ -757,8 +755,7 @@ export async function shareAccepted(opts: {
         client,
       });
     }
-    await tx.$executeRaw`
-      UPDATE context_share_offer SET delivery_status = 'DELIVERED', delivered_at = ${now}
+    await tx.$executeRaw`UPDATE context_share_offer SET delivery_status = 'DELIVERED', delivered_at = ${now}
       WHERE id = ${opts.offerId}::uuid`;
     // The author's round → REFINING (CONTEXT_SHARED); a VALIDATED round keeps its terminal status.
     if (canTransition(opts.attempt.status, 'CONTEXT_SHARED')) {

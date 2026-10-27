@@ -468,11 +468,9 @@ export async function persistAnalysis(opts: {
   const r = opts.result;
   try {
     return await getJobPrisma().$transaction(async tx => {
-      await tx.$executeRaw`
-        UPDATE reconciler_result SET superseded_at = now()
+      await tx.$executeRaw`UPDATE reconciler_result SET superseded_at = now()
         WHERE attempt_id = ${opts.attemptId}::uuid AND superseded_at IS NULL`;
-      const rows = await tx.$queryRaw<Array<{ id: string }>>`
-        INSERT INTO reconciler_result (attempt_id, subject_participant_id, iteration, alignment_score, alignment_summary,
+      const rows = await tx.$queryRaw<Array<{ id: string }>>`INSERT INTO reconciler_result (attempt_id, subject_participant_id, iteration, alignment_score, alignment_summary,
           gap_summary, gap_severity, correctly_identified, missed_feelings, misattributions, most_important_gap,
           recommended_action, rationale, sharing_would_help, suggested_share_focus, suggested_share_content,
           suggested_share_reason, circuit_breaker_tripped)
@@ -488,8 +486,7 @@ export async function persistAnalysis(opts: {
       const resultId = rows[0].id;
       const g = opts.guidance;
       if (g.areaHint || g.guidanceType || g.promptSeed) {
-        await tx.$executeRaw`
-          INSERT INTO reconciler_guidance (result_id, author_participant_id, subject_participant_id, area_hint, guidance_type, prompt_seed)
+        await tx.$executeRaw`INSERT INTO reconciler_guidance (result_id, author_participant_id, subject_participant_id, area_hint, guidance_type, prompt_seed)
           VALUES (${resultId}::uuid, ${opts.authorParticipantId}::uuid, ${opts.subjectParticipantId}::uuid,
                   ${g.areaHint}, ${g.guidanceType}, ${g.promptSeed})`;
       }
