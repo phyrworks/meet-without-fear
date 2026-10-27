@@ -182,6 +182,51 @@ export function targetFixtureDeltaChecks(opts: { harness: () => Harness; steps: 
 }
 
 /**
+ * TS-10, target shape only: the pairs of `notifiedOnce` and `roundTwoInstants`.
+ *   - the stamped offer carries delivery_notified_at, and the later reads
+ *     count 0;
+ *   - each empathy-status / partner-empathy instant listed is its row's
+ *     submitted_at (the current round's for an author, the revealed round's
+ *     for a subject).
+ */
+export function roundAndNotificationChecks(opts: {
+  harness: () => Harness;
+  steps: () => StepResult[];
+  notified?: { stampStep: number; laterReads: number[] };
+  instantReads?: number[];
+}): void {
+  const run = isTargetShape() ? it : it.skip;
+  const q = async <T extends Record<string, unknown>>(sql: string): Promise<T[]> => {
+    const h = opts.harness();
+    return withClient(h.fixture.target, async c => (await c.query<T>(sql)).rows, h.fixture.database);
+  };
+  if (opts.notified) {
+    run('notifiedOnce pair: the delivery is stamped once and counted once', async () => {
+      const steps = opts.steps();
+      const [offer] = await q<{ stamped: boolean }>(`SELECT delivery_notified_at IS NOT NULL AS stamped FROM context_share_offer`);
+      expect(offer.stamped).toBe(true);
+      const count = (i: number) => (steps[i].body as { data: { sentTabUpdates: number } }).data.sentTabUpdates;
+      expect(count(opts.notified!.stampStep)).toBe(1);
+      for (const i of opts.notified!.laterReads) expect(count(i)).toBe(0);
+    });
+  }
+  if (opts.instantReads) {
+    run("roundTwoInstants pair: every attempt instant a read returns is its row's submitted_at", async () => {
+      const rows = await q<{ id: string; at: Date }>(`SELECT id, submitted_at AS at FROM empathy_attempt`);
+      const at = new Map(rows.map(r => [r.id, new Date(r.at).toISOString()]));
+      const steps = opts.steps();
+      for (const i of opts.instantReads!) {
+        const d = (steps[i].body as { data: Record<string, { id: string; sharedAt: string } | null> }).data;
+        for (const key of ['myAttempt', 'partnerAttempt', 'attempt']) {
+          const a = d[key];
+          if (a) expect({ step: steps[i].label, key, sharedAt: a.sharedAt }).toEqual({ step: steps[i].label, key, sharedAt: at.get(a.id) });
+        }
+      }
+    });
+  }
+}
+
+/**
  * TS-10, target shape only: the pair of `authorAnalysisClosed` — at the
  * author's reads the closed values are exactly: no reconciler result in the
  * empathy status, no analysis of her direction and no offer count in the

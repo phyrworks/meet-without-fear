@@ -458,8 +458,61 @@ export function authorAnalysisClosed(opts: {
   return rules;
 }
 
-/** The subject's DENIED consent naming the offer (spec §1.3: no requester), written by the decline step. */
-export function declineConsent(step: number): AddedEntriesRule {
+/**
+ * The notification path writes `delivery_notified_at` (spec §1.2
+ * context_share_offer; review F4.2): the subject's first pending-actions read
+ * after the delivery counts the update and stamps it (job), so it is counted
+ * once. `stampStep`: that read — its offer row gains the stamp; `laterReads`:
+ * the subject's later pending-actions reads, whose `sentTabUpdates` is 0 where
+ * the never-written column kept it at 1. Paired with `notifiedOnceChecks`.
+ */
+export function notifiedOnce(stampStep: number, laterReads: number[], concept: boolean): AllowRule[] {
+  const rules: AllowRule[] = [
+    {
+      kind: 'mayDiffer',
+      at: laterReads.map(s => `steps.${s}.body.data.sentTabUpdates`),
+      mustMatch: true,
+      why: 'review F4.2 / spec §1.2: delivery_notified_at is written by the notification path; an update is counted once.',
+    },
+  ];
+  if (concept) {
+    rules.push({
+      kind: 'addedEntries',
+      at: `steps.${stampStep}.changes`,
+      where: {
+        view: 'context_share_offer',
+        kind: 'changed',
+        key: '<shareOffer:ada→bob@main#1/i1>',
+        changedFields: ['delivery_notified_at', 'updated_at'],
+        'after.delivery_notified_at': '<ts:fresh>',
+        'after.status': 'ACCEPTED',
+      },
+      why: "the subject's pending-actions read surfaces the delivery and stamps delivery_notified_at (job).",
+    });
+  }
+  return rules;
+}
+
+/**
+ * Round 2 is its own row (spec §1.2): its `submitted_at` is the resubmission
+ * instant (fresh), where today's rewritten row kept the first submission's. A
+ * fresh instant leaves the carried ranks, so the other carried instants of
+ * those steps rank one lower. Exact paths only, paired with
+ * `roundInstantChecks`: each DTO instant equals its row's submitted_at.
+ */
+export function roundTwoInstants(paths: string[]): AllowRule {
+  return {
+    kind: 'mayDiffer',
+    at: paths,
+    mustMatch: true,
+    why:
+      'spec §1.2 immutable rounds: round 2 carries its own submitted_at (the resubmit); with it fresh, the other ' +
+      'carried instants of the step rank one lower.',
+  };
+}
+
+/** The subject's consent naming the offer (spec §1.3: no requester), written by the step that answers it. */
+export function declineConsent(step: number, decision: 'DENIED' | 'GRANTED' = 'DENIED'): AddedEntriesRule {
   const key = '<consent:bob@main/SHARE_OFFER/shareOffer:ada→bob@main#1/i1>';
   return {
     kind: 'addedEntries',
@@ -473,7 +526,7 @@ export function declineConsent(step: number): AddedEntriesRule {
       'after.requested_by_participant_id': null,
       'after.share_offer_id': '<shareOffer:ada→bob@main#1/i1>',
       'after.target_kind': 'SHARE_OFFER',
-      'after.decision': 'DENIED',
+      'after.decision': decision,
       'after.revoked_at': null,
     },
     why:
@@ -488,13 +541,13 @@ export function declineConsent(step: number): AddedEntriesRule {
  * only), with the target-only content type CONTEXT_SHARE_OFFER (ruling R32).
  * Pinned to the read step and to the exact record; never in the author's reads.
  */
-export function subjectDeclineRecord(step: number, byteLevel: boolean): AddedEntriesRule {
+export function subjectDeclineRecord(step: number, byteLevel: boolean, decision: 'DENIED' | 'GRANTED' = 'DENIED'): AddedEntriesRule {
   return {
     kind: 'addedEntries',
     at: `steps.${step}.body.data.records`,
     where: {
       contentType: 'CONTEXT_SHARE_OFFER',
-      decision: 'DENIED',
+      decision,
       revokedAt: null,
       id: byteLevel ? '<consent:bob/SHARE_OFFER/shareOffer:bob#1>' : '<consent:bob@main/SHARE_OFFER/shareOffer:ada→bob@main#1/i1>',
       ...(byteLevel ? {} : { targetId: '<shareOffer:ada→bob@main#1/i1>' }),
