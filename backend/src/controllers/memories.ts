@@ -48,7 +48,7 @@ function mapMemoryToDTO(
     category: string;
     status: string;
     source: string;
-    suggestedBy: string | null;
+    suggestedText: string | null;
     createdAt: Date;
     updatedAt: Date;
   }
@@ -59,7 +59,7 @@ function mapMemoryToDTO(
     category: memory.category as MemoryCategory,
     status: memory.status as 'ACTIVE' | 'REJECTED',
     source: memory.source as MemorySource,
-    suggestedBy: memory.suggestedBy || undefined,
+    suggestedBy: memory.suggestedText || undefined,
     createdAt: memory.createdAt.toISOString(),
     updatedAt: memory.updatedAt.toISOString(),
   };
@@ -322,7 +322,7 @@ export const approveMemory = asyncHandler(
           category: body.category,
           status: 'ACTIVE',
           source: wasEdited ? 'USER_EDITED' : 'USER_APPROVED',
-          suggestedBy: wasEdited ? body.suggestedContent : pendingMemory.suggestedBy,
+          suggestedText: wasEdited ? body.suggestedContent : pendingMemory.suggestedText,
           sessionId: null, // Ensure it's global
           updatedAt: new Date(),
         },
@@ -336,7 +336,7 @@ export const approveMemory = asyncHandler(
           category: body.category,
           sessionId: null, // Memories are always global
           source: wasEdited ? 'USER_EDITED' : 'USER_APPROVED',
-          suggestedBy: wasEdited ? body.suggestedContent : null,
+          suggestedText: wasEdited ? body.suggestedContent : null,
           status: 'ACTIVE',
         },
       });
@@ -581,7 +581,7 @@ export const confirmMemoryUpdate = asyncHandler(
         content: body.content.trim(),
         category: body.category,
         source: 'USER_EDITED',
-        suggestedBy: existing.content, // Store original for reference
+        suggestedText: existing.content, // Store original for reference
         updatedAt: new Date(),
       },
     });

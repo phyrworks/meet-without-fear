@@ -45,6 +45,7 @@ import {
   countPatternEvidence,
 } from './surfacing-policy';
 import { DEFAULT_MEMORY_PREFERENCES, type MemoryPreferencesDTO } from '@meet-without-fear/shared';
+import { readPreferences } from './user-settings';
 import {
   buildBudgetedContext,
   CONTEXT_WINDOW,
@@ -141,11 +142,8 @@ const MIN_STAGE1_TURNS_BEFORE_FEEL_HEARD_CHECK = 5;
  */
 async function getUserMemoryPreferences(userId: string): Promise<MemoryPreferencesDTO> {
   try {
-    const user = await prisma.user.findUnique({
-      where: { id: userId },
-      select: { memoryPreferences: true },
-    });
-    return (user?.memoryPreferences as MemoryPreferencesDTO | null) ?? DEFAULT_MEMORY_PREFERENCES;
+    // user_preferences.doc.memory (spec §1.7)
+    return (await readPreferences(userId)).memory;
   } catch (error) {
     logger.warn('[AI Orchestrator] Failed to fetch memory preferences, using defaults:', error);
     return DEFAULT_MEMORY_PREFERENCES;

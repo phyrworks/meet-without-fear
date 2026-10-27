@@ -3,7 +3,15 @@ import { z } from 'zod';
 import { logger } from '../lib/logger';
 import { prisma } from '../lib/prisma';
 import { ApiResponse, ErrorCode } from '@meet-without-fear/shared';
-import { NotFoundError, ValidationError } from '../middleware/errors';
+import { loadMilestones, messageStage } from '../services/stage-shim';
+
+/*
+ * Target shape (TS-12): readings are `mood_reading` rows of the caller's
+ * participant (req.participant, resolved once by requireSessionAccess) — a
+ * reading carries no stage; the DTO's `stage` is the participant's stage at
+ * the reading's instant (stage shim). `User.lastMoodIntensity` is gone (the
+ * latest reading is the last mood). Exercises are `regulation_event` rows.
+ */
 
 // Validation schemas aligned with shared types
 const recordEmotionSchema = z.object({
@@ -56,8 +64,6 @@ interface ExerciseCompletionData {
  * Record an emotional reading for the current user in a session
  */
 export async function recordEmotion(req: Request, res: Response): Promise<void> {
-  const { id: sessionId } = req.params;
-  const userId = req.user!.id;
 
   // Validate request body
   const parseResult = recordEmotionSchema.safeParse(req.body);
@@ -77,12 +83,10 @@ export async function recordEmotion(req: Request, res: Response): Promise<void> 
   const { intensity, context } = parseResult.data;
 
   try {
-    // Get user's vessel for this session
-    const vessel = await prisma.userVessel.findUnique({
-      where: { userId_sessionId: { userId, sessionId } },
-    });
+    // The caller's participant in this session
+    const participant = req.participant;
 
-    if (!vessel) {
+    if (!participant) {
       const response: ApiResponse<never> = {
         success: false,
         error: { code: ErrorCode.NOT_FOUND, message: 'Session not found or you are not a participant' },
@@ -91,27 +95,15 @@ export async function recordEmotion(req: Request, res: Response): Promise<void> 
       return;
     }
 
-    // Get current stage (if any in progress)
-    const progress = await prisma.stageProgress.findFirst({
-      where: { sessionId, userId, status: 'IN_PROGRESS' },
-      orderBy: { stage: 'desc' },
+    // The reading (the user's last mood is now simply their latest reading)
+    const reading = await prisma.moodReading.create({
+      data: {
+        participantId: participant.id,
+        intensity,
+        context: context ?? null,
+      },
+      select: { id: true, intensity: true, recordedAt: true },
     });
-
-    // Create emotional reading and update user's lastMoodIntensity
-    const [reading] = await prisma.$transaction([
-      prisma.emotionalReading.create({
-        data: {
-          vesselId: vessel.id,
-          intensity,
-          context: context ?? null,
-          stage: progress?.stage ?? 0,
-        },
-      }),
-      prisma.user.update({
-        where: { id: userId },
-        data: { lastMoodIntensity: intensity },
-      }),
-    ]);
 
     // Check if intervention is needed (intensity >= 8)
     const needsIntervention = intensity >= 8;
@@ -122,7 +114,7 @@ export async function recordEmotion(req: Request, res: Response): Promise<void> 
         reading: {
           id: reading.id,
           intensity: reading.intensity,
-          timestamp: reading.timestamp,
+          timestamp: reading.recordedAt,
         },
         suggestExercise: needsIntervention,
       },
@@ -143,16 +135,12 @@ export async function recordEmotion(req: Request, res: Response): Promise<void> 
  * Get emotion history for the current user in a session
  */
 export async function getEmotions(req: Request, res: Response): Promise<void> {
-  const { id: sessionId } = req.params;
-  const userId = req.user!.id;
 
   try {
-    // Get user's vessel for this session
-    const vessel = await prisma.userVessel.findUnique({
-      where: { userId_sessionId: { userId, sessionId } },
-    });
+    // The caller's participant in this session
+    const participant = req.participant;
 
-    if (!vessel) {
+    if (!participant) {
       const response: ApiResponse<never> = {
         success: false,
         error: { code: ErrorCode.NOT_FOUND, message: 'Session not found or you are not a participant' },
@@ -161,12 +149,16 @@ export async function getEmotions(req: Request, res: Response): Promise<void> {
       return;
     }
 
-    // Get readings (only user's own readings for privacy)
-    const readings = await prisma.emotionalReading.findMany({
-      where: { vesselId: vessel.id },
-      orderBy: { timestamp: 'desc' },
-      take: 50,
-    });
+    // Get readings (only the participant's own readings for privacy)
+    const [readings, milestones] = await Promise.all([
+      prisma.moodReading.findMany({
+        where: { participantId: participant.id },
+        orderBy: [{ recordedAt: 'desc' }, { id: 'desc' }],
+        take: 50,
+        select: { id: true, intensity: true, context: true, recordedAt: true },
+      }),
+      loadMilestones([participant.id]),
+    ]);
 
     const response: ApiResponse<GetEmotionsData> = {
       success: true,
@@ -175,8 +167,8 @@ export async function getEmotions(req: Request, res: Response): Promise<void> {
           id: r.id,
           intensity: r.intensity,
           context: r.context,
-          stage: r.stage,
-          timestamp: r.timestamp,
+          stage: messageStage(milestones.get(participant.id) ?? [], r.recordedAt),
+          timestamp: r.recordedAt,
         })),
       },
     };
@@ -196,8 +188,6 @@ export async function getEmotions(req: Request, res: Response): Promise<void> {
  * Log completion of an emotional regulation exercise
  */
 export async function completeExercise(req: Request, res: Response): Promise<void> {
-  const { id: sessionId } = req.params;
-  const userId = req.user!.id;
 
   // Validate request body
   const parseResult = completeExerciseSchema.safeParse(req.body);
@@ -218,11 +208,9 @@ export async function completeExercise(req: Request, res: Response): Promise<voi
 
   try {
     // Verify user is participant in session
-    const vessel = await prisma.userVessel.findUnique({
-      where: { userId_sessionId: { userId, sessionId } },
-    });
+    const participant = req.participant;
 
-    if (!vessel) {
+    if (!participant) {
       const response: ApiResponse<never> = {
         success: false,
         error: { code: ErrorCode.NOT_FOUND, message: 'Session not found or you are not a participant' },
@@ -231,15 +219,15 @@ export async function completeExercise(req: Request, res: Response): Promise<voi
       return;
     }
 
-    // Log exercise completion
-    const completion = await prisma.emotionalExerciseCompletion.create({
+    // Log exercise completion (regulation_event)
+    const completion = await prisma.regulationEvent.create({
       data: {
-        sessionId,
-        userId,
+        participantId: participant.id,
         type,
         intensityBefore: intensityBefore ?? null,
         intensityAfter: intensityAfter ?? null,
       },
+      select: { id: true, type: true, completedAt: true },
     });
 
     const response: ApiResponse<ExerciseCompletionData> = {

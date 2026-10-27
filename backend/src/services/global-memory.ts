@@ -12,6 +12,7 @@
 import { getHaikuJson, BrainActivityCallType } from '../lib/bedrock';
 import { logger } from '../lib/logger';
 import { prisma } from '../lib/prisma';
+import type { Prisma } from '../generated/prisma/client';
 import { withHaikuCircuitBreaker } from '../utils/circuit-breaker';
 
 // ============================================================================
@@ -120,38 +121,15 @@ export async function consolidateGlobalFacts(
   try {
     logger.info(`${logPrefix} Starting consolidation for user ${userId}, session ${sessionId}`);
 
-    // Get user's current global facts
-    const user = await prisma.user.findUnique({
-      where: { id: userId },
-      select: { globalFacts: true },
+    // The user's current global facts (ai_memory GLOBAL_FACTS, user scope — spec §1.1 ai_memory)
+    const existingGlobalFacts = factsOf((await loadGlobalFactsDoc(userId))?.facts);
+
+    // The session facts of the user's participant in this session (ai_memory NOTABLE_FACTS)
+    const notable = await prisma.aiMemory.findFirst({
+      where: { kind: 'NOTABLE_FACTS', participant: { sessionId, userId } },
+      select: { doc: true },
     });
-
-    let existingGlobalFacts: CategorizedFact[] = [];
-    if (user?.globalFacts) {
-      try {
-        const parsed = user.globalFacts as unknown as GlobalFacts;
-        existingGlobalFacts = parsed.facts || [];
-      } catch {
-        logger.warn(`${logPrefix} Failed to parse existing global facts`);
-      }
-    }
-
-    // Get session facts from the current session
-    const vessel = await prisma.userVessel.findUnique({
-      where: {
-        userId_sessionId: { userId, sessionId },
-      },
-      select: { notableFacts: true },
-    });
-
-    let sessionFacts: CategorizedFact[] = [];
-    if (vessel?.notableFacts) {
-      try {
-        sessionFacts = vessel.notableFacts as unknown as CategorizedFact[];
-      } catch {
-        logger.warn(`${logPrefix} Failed to parse session facts`);
-      }
-    }
+    const sessionFacts = factsOf((notable?.doc as { facts?: unknown } | null)?.facts);
 
     // If no new facts and no existing facts, nothing to do
     if (sessionFacts.length === 0 && existingGlobalFacts.length === 0) {
@@ -197,28 +175,22 @@ export async function consolidateGlobalFacts(
       }
     }
 
-    // Count sessions with facts for this user
-    const sessionsWithFacts = await prisma.userVessel.count({
-      where: {
-        userId,
-        notableFacts: { not: undefined },
-      },
+    // Count sessions with facts for this user (their participants' NOTABLE_FACTS documents)
+    const sessionsWithFacts = await prisma.aiMemory.count({
+      where: { kind: 'NOTABLE_FACTS', participant: { userId } },
     });
 
-    // Save to user record
+    // Save as the user's GLOBAL_FACTS document (the CHECK requires `facts`)
     const globalFacts: GlobalFacts = {
       facts: consolidatedFacts,
       consolidatedAt: new Date().toISOString(),
       sessionCount: sessionsWithFacts,
     };
 
-    await prisma.user.update({
-      where: { id: userId },
-      data: {
-        globalFacts: globalFacts as unknown as Parameters<
-          typeof prisma.user.update
-        >['0']['data']['globalFacts'],
-      },
+    await prisma.aiMemory.upsert({
+      where: { userId_kind: { userId, kind: 'GLOBAL_FACTS' } },
+      create: { userId, kind: 'GLOBAL_FACTS', doc: globalFacts as unknown as Prisma.InputJsonObject },
+      update: { doc: globalFacts as unknown as Prisma.InputJsonObject },
     });
 
     logger.info(`${logPrefix} Saved ${consolidatedFacts.length} global facts for user ${userId}`);
@@ -239,19 +211,33 @@ export async function consolidateGlobalFacts(
  */
 export async function loadGlobalFacts(userId: string): Promise<CategorizedFact[] | undefined> {
   try {
-    const user = await prisma.user.findUnique({
-      where: { id: userId },
-      select: { globalFacts: true },
-    });
-
-    if (!user?.globalFacts) {
-      return undefined;
-    }
-
-    const parsed = user.globalFacts as unknown as GlobalFacts;
-    return parsed.facts && parsed.facts.length > 0 ? parsed.facts : undefined;
+    const facts = factsOf((await loadGlobalFactsDoc(userId))?.facts);
+    return facts.length > 0 ? facts : undefined;
   } catch (error) {
     logger.error('[GlobalMemory] Failed to load global facts:', error);
     return undefined;
   }
+}
+
+// ============================================================================
+// ai_memory documents (TS-12: `User.globalFacts` → ai_memory GLOBAL_FACTS)
+// ============================================================================
+
+/** The user's GLOBAL_FACTS document, or null. */
+async function loadGlobalFactsDoc(userId: string): Promise<Partial<GlobalFacts> | null> {
+  const row = await prisma.aiMemory.findUnique({
+    where: { userId_kind: { userId, kind: 'GLOBAL_FACTS' } },
+    select: { doc: true },
+  });
+  return (row?.doc as Partial<GlobalFacts> | null) ?? null;
+}
+
+/** The well-formed `{ category, fact }` entries of a stored facts array. */
+function factsOf(raw: unknown): CategorizedFact[] {
+  if (!Array.isArray(raw)) return [];
+  return raw.filter((f): f is CategorizedFact => {
+    if (typeof f !== 'object' || f === null) return false;
+    const o = f as Record<string, unknown>;
+    return typeof o.category === 'string' && typeof o.fact === 'string';
+  });
 }
