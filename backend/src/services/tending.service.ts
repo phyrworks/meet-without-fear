@@ -69,6 +69,7 @@ import { logger } from '../lib/logger';
 import { publishSessionEvent, publishUserEvent } from './realtime';
 import { createFacilitatorMessage } from './message-store';
 import { resolveParticipant } from './participant-resolver';
+import { loadAgreements, loadClosure, loadClosureItems, loadProposals, loadStage4Needs } from './stage4-store';
 
 // ============================================================================
 // Rows and errors
@@ -746,22 +747,25 @@ export async function setIndividualEntryShare(args: {
 }
 
 /** Write one check-in row (the participant's, app connection), its payload validated first. */
-async function insertCheckin(args: {
-  followUpId: string;
-  participantId: string;
-  nextAction: TendingNextAction | null;
-  continueChoice: ContinueChoice | null;
-  reflectionSummary: string | null;
-  payload: unknown;
-  submittedAt: Date;
-}): Promise<string> {
+async function insertCheckin(
+  db: Pick<Prisma.TransactionClient, 'followUpCheckin'>,
+  args: {
+    followUpId: string;
+    participantId: string;
+    nextAction: TendingNextAction | null;
+    continueChoice: ContinueChoice | null;
+    reflectionSummary: string | null;
+    payload: unknown;
+    submittedAt: Date;
+  },
+): Promise<string> {
   const payload = validateCheckinPayload(args.payload);
-  const existing = await prisma.followUpCheckin.findUnique({
+  const existing = await db.followUpCheckin.findUnique({
     where: { followUpId_participantId: { followUpId: args.followUpId, participantId: args.participantId } },
     select: { id: true },
   });
   if (existing) throw new TendingInvalidStateError('You have already checked in on this Tending entry');
-  const row = await prisma.followUpCheckin.create({
+  const row = await db.followUpCheckin.create({
     data: {
       followUpId: args.followUpId,
       participantId: args.participantId,
@@ -797,7 +801,7 @@ export async function submitTendingResponse(args: {
     throw new TendingInvalidStateError('Tending entry is no longer accepting responses');
   }
   const now = new Date();
-  await insertCheckin({
+  await prisma.$transaction((tx) => insertCheckin(tx, {
     followUpId: entry.id,
     participantId: viewer.participantId,
     nextAction: null,
@@ -815,7 +819,7 @@ export async function submitTendingResponse(args: {
       ],
     },
     submittedAt: now,
-  });
+  }));
   await updateEntryProgressAsJob(entry, entry.scope === 'INDIVIDUAL' ? 1 : viewer.humans.length, now);
 
   await publishSessionEvent(
@@ -827,8 +831,14 @@ export async function submitTendingResponse(args: {
   return entryDTO(entry.id, viewer);
 }
 
+/**
+ * The re-entry context. Defense in depth (fix round 1, Critical 1): the
+ * re-entry is the participant's own INDIVIDUAL follow-up (below), AND its
+ * summary carries only shared material — every need by its need_share
+ * text (never the owner's label, even their own), shared proposals and the
+ * agreements; individual commitments only once shared (`shared_at`).
+ */
 async function buildReentrySummary(viewer: Viewer, intent?: string): Promise<string> {
-  const { loadAgreements, loadClosure, loadClosureItems, loadProposals, loadStage4Needs } = await import('./stage4-store');
   const [closure, items, agreements, proposals, needs] = await Promise.all([
     loadClosure(viewer.sessionId),
     loadClosureItems(viewer.sessionId),
@@ -836,7 +846,7 @@ async function buildReentrySummary(viewer: Viewer, intent?: string): Promise<str
     loadProposals(viewer.sessionId, viewer.participantId),
     loadStage4Needs(viewer.sessionId, viewer.participantId),
   ]);
-  const commitments = proposals.filter((p) => items.individualCommitmentIds.includes(p.id));
+  const commitments = proposals.filter((p) => items.individualCommitmentIds.includes(p.id) && p.sharedAt !== null);
   const open = needs.filter((n) => items.openNeedIds.includes(n.id));
   const agreed = agreements.filter((a) => a.status === 'AGREED');
   return [
@@ -845,13 +855,18 @@ async function buildReentrySummary(viewer: Viewer, intent?: string): Promise<str
     intent ? `User intent: ${intent}` : null,
     agreed.length ? `Shared agreements: ${agreed.map((a) => a.description).join('; ')}` : null,
     commitments.length ? `Individual commitments: ${commitments.map((p) => p.description).join('; ')}` : null,
-    // The viewer's own needs by their own label, the partner's by the shared text.
-    open.length ? `Still-open needs: ${open.map((n) => n.label).join('; ')}` : null,
+    open.length ? `Still-open needs: ${open.map((n) => n.sharedText).join('; ')}` : null,
   ]
     .filter(Boolean)
     .join('\n');
 }
 
+/**
+ * A user-initiated re-entry is the participant's OWN follow-up: scope
+ * INDIVIDUAL with them as owner (spec §1.5 RLS: an INDIVIDUAL follow-up is
+ * read only by its owner unless they opt in), so its summary never reaches
+ * the co-participant's Tending list, Stage 4 preview or prompt.
+ */
 export async function createPassiveReentry(args: { sessionId: string; userId: string; intent?: string }): Promise<TendingEntryDTO> {
   const viewer = await viewerFor(args.sessionId, args.userId);
   if (viewer.sessionStatus !== 'RESOLVED') {
@@ -861,7 +876,15 @@ export async function createPassiveReentry(args: { sessionId: string; userId: st
   const summary = await buildReentrySummary(viewer, args.intent);
   // spec §1.5 follow_up: I member — a re-entry is the member's own write.
   const row = await prisma.followUp.create({
-    data: { sessionId: args.sessionId, type: 'USER_INITIATED_REENTRY', status: 'OPEN', openedAt: now, summary },
+    data: {
+      sessionId: args.sessionId,
+      type: 'USER_INITIATED_REENTRY',
+      scope: 'INDIVIDUAL',
+      ownerParticipantId: viewer.participantId,
+      status: 'OPEN',
+      openedAt: now,
+      summary,
+    },
     select: { id: true },
   });
   return entryDTO(row.id, viewer);
@@ -1060,6 +1083,9 @@ export async function submitTendingCheckin(args: {
   }
   const reminderInputs = [...(args.reminders ?? []), ...(args.orientations.whatComesNext.reminders ?? [])];
   for (const r of reminderInputs) {
+    if (Number.isNaN(new Date(r.remindAt).getTime())) {
+      throw new TendingInvalidStateError('Reminder remindAt must be a valid instant');
+    }
     if (r.tendingEntryId && !openIds.has(r.tendingEntryId)) {
       throw new TendingInvalidStateError('Reminder references a non-open Tending entry');
     }
@@ -1094,6 +1120,37 @@ export async function submitTendingCheckin(args: {
   const needOutcomes = await normalizeNeedOutcomes(viewer, args.needOutcomes);
   const resolutions = args.orientations.whatComesNext.partialClosure ?? {};
   const sharedNotes = notes.filter((n) => shareIds.includes(n.id));
+  // Ruling R34 (fix round 1): a SHARED follow-up's check-in is read by the
+  // co-participant (spec §1.5 RLS), so PRIVATE-scope items — adjustments
+  // whose privacyScope is PRIVATE (the default) and the per-entry notes —
+  // never go into its payload; they become the participant's own
+  // follow_up_note rows (P-class) instead. An INDIVIDUAL follow-up's check-in
+  // is the owner's alone and keeps them.
+  const isPrivateAdjustment = (a: TendingAdjustmentInput) => (a.privacyScope ?? TendingReminderScope.PRIVATE) === TendingReminderScope.PRIVATE;
+  const privateNotesFor = (entry: FollowUpRow): string[] => {
+    if (entry.scope !== 'SHARED') return [];
+    const out: string[] = [];
+    for (const a of (args.adjustments ?? []).filter((x) => x.tendingEntryId === entry.id && isPrivateAdjustment(x))) {
+      out.push(
+        [
+          `Private adjustment (Tending entry ${entry.id})`,
+          a.revisedCommitmentText ? `revised commitment: ${a.revisedCommitmentText}` : null,
+          a.revisedCadence ? `cadence: ${a.revisedCadence}` : null,
+          a.revisedScope ? `scope: ${a.revisedScope}` : null,
+          a.revisedSuccessCriteria ? `success: ${a.revisedSuccessCriteria}` : null,
+          a.reason ? `reason: ${a.reason}` : null,
+          a.blockerAddressed?.length ? `blockers addressed: ${a.blockerAddressed.join(', ')}` : null,
+        ]
+          .filter(Boolean)
+          .join('; '),
+      );
+    }
+    const worked = args.orientations.whatWorked.perEntryNotes?.[entry.id];
+    const support = args.orientations.whereMoreSupport.perEntryNotes?.[entry.id];
+    if (worked) out.push(`Entry note (Tending entry ${entry.id}) - what worked: ${worked}`);
+    if (support) out.push(`Entry note (Tending entry ${entry.id}) - more support: ${support}`);
+    return out;
+  };
   const payloadFor = (entry: FollowUpRow, primary: boolean): FollowUpCheckinPayload => ({
     entryOutcomes: (args.entryOutcomes ?? [])
       .filter((o) => o.tendingEntryId === entry.id)
@@ -1110,7 +1167,7 @@ export async function submitTendingCheckin(args: {
     // Session-wide answers ride on the first follow-up's check-in only.
     needOutcomes: primary ? needOutcomes : [],
     adjustments: (args.adjustments ?? [])
-      .filter((a) => a.tendingEntryId === entry.id)
+      .filter((a) => a.tendingEntryId === entry.id && !(entry.scope === 'SHARED' && isPrivateAdjustment(a)))
       .map((a) => ({
         followUpId: a.tendingEntryId,
         privacyScope: a.privacyScope ?? TendingReminderScope.PRIVATE,
@@ -1132,10 +1189,10 @@ export async function submitTendingCheckin(args: {
         reflection:
           [
             reflection || null,
-            args.orientations.whatWorked.perEntryNotes?.[entry.id]
+            entry.scope !== 'SHARED' && args.orientations.whatWorked.perEntryNotes?.[entry.id]
               ? `Entry note - what worked: ${args.orientations.whatWorked.perEntryNotes[entry.id]}`
               : null,
-            args.orientations.whereMoreSupport.perEntryNotes?.[entry.id]
+            entry.scope !== 'SHARED' && args.orientations.whereMoreSupport.perEntryNotes?.[entry.id]
               ? `Entry note - more support: ${args.orientations.whereMoreSupport.perEntryNotes[entry.id]}`
               : null,
           ]
@@ -1152,52 +1209,61 @@ export async function submitTendingCheckin(args: {
   // Validate every payload before anything is written.
   const payloads = openEntries.map((e, i) => ({ entry: e, payload: validateCheckinPayload(payloadFor(e, i === 0)) }));
 
-  const checkinIds: string[] = [];
-  for (const { entry, payload } of payloads) {
-    checkinIds.push(
-      await insertCheckin({
-        followUpId: entry.id,
-        participantId: viewer.participantId,
-        nextAction,
-        continueChoice: choice,
-        reflectionSummary: reflection || null,
-        payload,
-        submittedAt: now,
-      }),
-    );
-  }
+  // One transaction for every app-side write (check-ins, notes, private
+  // notes, reminders): a failure leaves nothing behind, so a retry is never
+  // refused as "already checked in". The job's status moves follow the commit.
+  const { checkinIds, createdReminders } = await prisma.$transaction(async (tx) => {
+    const ids: string[] = [];
+    for (const { entry, payload } of payloads) {
+      ids.push(
+        await insertCheckin(tx, {
+          followUpId: entry.id,
+          participantId: viewer.participantId,
+          nextAction,
+          continueChoice: choice,
+          reflectionSummary: reflection || null,
+          payload,
+          submittedAt: now,
+        }),
+      );
+    }
+    // Notes: included → carry_forward; shared → copied into the check-in, carried_into_checkin_id set.
+    if (included.length) {
+      await tx.followUpNote.updateMany({
+        where: { id: { in: included }, participantId: viewer.participantId },
+        data: { carryForward: true },
+      });
+    }
+    if (shareIds.length) {
+      await tx.followUpNote.updateMany({
+        where: { id: { in: shareIds }, participantId: viewer.participantId },
+        data: { carriedIntoCheckinId: ids[0] },
+      });
+    }
+    // R34: the PRIVATE-scope items of SHARED follow-ups, as the participant's own notes.
+    for (const { entry } of payloads) {
+      for (const content of privateNotesFor(entry)) {
+        await tx.followUpNote.create({ data: { participantId: viewer.participantId, content } });
+      }
+    }
+    const reminders: ReminderRow[] = [];
+    for (const r of reminderInputs) {
+      reminders.push(
+        await tx.reminder.create({
+          data: {
+            userId: viewer.userId,
+            followUpId: r.tendingEntryId ?? openEntries[0].id,
+            scope: r.scope,
+            remindAt: new Date(r.remindAt),
+            cadence: r.cadence,
+            note: r.note,
+          },
+        }),
+      );
+    }
+    return { checkinIds: ids, createdReminders: reminders };
+  });
   const primaryCheckinId = checkinIds[0];
-
-  // Notes: included → carry_forward; shared → copied into the check-in, carried_into_checkin_id set.
-  if (included.length) {
-    await prisma.followUpNote.updateMany({
-      where: { id: { in: included }, participantId: viewer.participantId },
-      data: { carryForward: true },
-    });
-  }
-  if (shareIds.length) {
-    await prisma.followUpNote.updateMany({
-      where: { id: { in: shareIds }, participantId: viewer.participantId },
-      data: { carriedIntoCheckinId: primaryCheckinId },
-    });
-  }
-
-  // Reminders: user-scoped rows.
-  const createdReminders: ReminderRow[] = [];
-  for (const r of reminderInputs) {
-    createdReminders.push(
-      await prisma.reminder.create({
-        data: {
-          userId: viewer.userId,
-          followUpId: r.tendingEntryId ?? openEntries[0].id,
-          scope: r.scope,
-          remindAt: new Date(r.remindAt),
-          cadence: r.cadence,
-          note: r.note,
-        },
-      }),
-    );
-  }
 
   // --- State transitions -------------------------------------------------------
   let nextScheduledFor: Date | null = null;
