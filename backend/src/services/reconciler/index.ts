@@ -39,6 +39,8 @@ export {
   generateShareOffer,
   respondToShareSuggestion,
   shareAccepted,
+  deliverAcceptedShare,
+  resumeUndeliveredShare,
   getShareSuggestionForUser,
   getSharedContextForGuesser,
   getSharedContentDeliveryStatus,

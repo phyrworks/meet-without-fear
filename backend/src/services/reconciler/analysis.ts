@@ -13,7 +13,7 @@
  * see: results where the caller is the subject.
  */
 
-import { getJobPrisma, prisma } from '../../lib/prisma';
+import { getJobPrisma } from '../../lib/prisma';
 import { logger } from '../../lib/logger';
 import { getSonnetResponse, getHaikuJson, BrainActivityCallType } from '../../lib/bedrock';
 import { getCurrentUserId } from '../../lib/request-context';
@@ -27,7 +27,28 @@ import { type CategorizedFact } from '../partner-session-classifier';
 import { extractJsonFromResponse } from '../../utils/json-extractor';
 import type { ReconcilerResult } from '@meet-without-fear/shared';
 import { currentAttempt, sessionParties, type SessionParty } from '../empathy-store';
-import { loadMilestones, stageAt } from '../stage-shim';
+import { stageAt, type MilestoneReached } from '../stage-shim';
+
+/**
+ * Ruling R35: the reconciler runs as the JOB. Every read and write of the
+ * analysis path goes through the job connection, whose column grants (trailer
+ * T7, TS-10 block, "reconciler reader") are the whole of what it may see. The
+ * request that triggered an analysis never reads the other participant's rows
+ * on its own (app) connection; it gets back only its caller-visible projection
+ * (`runReconciler` with `forParticipantId`). The context builder stays the one
+ * cross-participant reader on the app connection.
+ */
+const reader = () => getJobPrisma();
+
+/** A participant's milestones (key, reached_at) through the job — the stage shim's input. */
+async function milestonesOf(participantId: string): Promise<MilestoneReached[]> {
+  const rows = await reader().participantMilestone.findMany({
+    where: { participantId },
+    orderBy: [{ reachedAt: 'asc' }, { milestoneKey: 'asc' }],
+    select: { milestoneKey: true, reachedAt: true },
+  });
+  return rows.map(r => ({ key: r.milestoneKey, reachedAt: r.reachedAt }));
+}
 
 // ============================================================================
 // Types (shared across reconciler modules)
@@ -141,7 +162,7 @@ function normalizeCategorizedFacts(rawFacts: unknown): CategorizedFact[] | undef
 
 /** The subject's own NOTABLE_FACTS (ai_memory) — for the subject-side analysis only. */
 async function loadSubjectFacts(subjectParticipantId: string): Promise<CategorizedFact[] | undefined> {
-  const row = await prisma.aiMemory.findUnique({
+  const row = await reader().aiMemory.findUnique({
     where: { participantId_kind: { participantId: subjectParticipantId, kind: 'NOTABLE_FACTS' } },
     select: { doc: true },
   });
@@ -152,15 +173,14 @@ async function loadSubjectFacts(subjectParticipantId: string): Promise<Categoriz
 async function stagedChat(
   participantId: string,
 ): Promise<Array<{ role: 'USER' | 'AI'; content: string; stage: number; senderParticipantId: string | null }>> {
-  const [rows, milestones] = await Promise.all([
-    prisma.message.findMany({
+  const [rows, reached] = await Promise.all([
+    reader().message.findMany({
       where: { conversation: { participantId, kind: 'MAIN' }, kind: 'CHAT', role: { in: ['USER', 'AI'] } },
       orderBy: { createdAt: 'asc' },
       select: { role: true, content: true, createdAt: true, senderParticipantId: true },
     }),
-    loadMilestones([participantId]),
+    milestonesOf(participantId),
   ]);
-  const reached = milestones.get(participantId) ?? [];
   return rows.map(r => ({
     role: r.role as 'USER' | 'AI',
     content: r.content,
@@ -207,7 +227,7 @@ export async function loadRecentSubjectStage2Turns(
  * the reconciler only; never returned to the subject.
  */
 export async function getEmpathyData(authorParticipantId: string, subjectParticipantId: string): Promise<EmpathyData | null> {
-  const attempt = await currentAttempt(authorParticipantId, subjectParticipantId);
+  const attempt = await currentAttempt(authorParticipantId, subjectParticipantId, reader());
   if (!attempt) return null;
   return {
     statement: attempt.content,
@@ -402,9 +422,9 @@ export function dbResultToReconcilerResult(
   };
 }
 
-/** The current result of an attempt (subject-side data: app connection, reconciler paths only). */
+/** The current result of an attempt (subject-side data: the job, reconciler paths only — R35). */
 export async function currentResultFor(attemptId: string): Promise<StoredReconcilerResult | null> {
-  return prisma.reconcilerResult.findFirst({
+  return reader().reconcilerResult.findFirst({
     where: { attemptId, supersededAt: null },
     select: RESULT_SELECT,
   }) as Promise<StoredReconcilerResult | null>;
@@ -412,7 +432,7 @@ export async function currentResultFor(attemptId: string): Promise<StoredReconci
 
 /** The guidance of a result (author + subject may read it). */
 export async function guidanceFor(resultId: string): Promise<AbstractGuidance | null> {
-  return prisma.reconcilerGuidance.findUnique({
+  return reader().reconcilerGuidance.findUnique({
     where: { resultId },
     select: { areaHint: true, guidanceType: true, promptSeed: true },
   });
@@ -597,7 +617,15 @@ export async function analyzeEmpathyGap(
 export async function runReconciler(
   sessionId: string,
   forUserId?: string,
-  opts: { forParticipantId?: string } = {},
+  opts: {
+    forParticipantId?: string;
+    /**
+     * Store fresh analyses here (m6: `POST /reconciler/run` paid for an LLM
+     * analysis and threw it away). The Stage 2 trigger leaves it off: it
+     * persists each direction itself, with that direction's suggestion.
+     */
+    persist?: boolean;
+  } = {},
 ): Promise<{
   aUnderstandingB: ReconcilerResult | null;
   bUnderstandingA: ReconcilerResult | null;
@@ -609,7 +637,7 @@ export async function runReconciler(
 }> {
   logger.info('Starting reconciliation', { sessionId });
 
-  const parties = await sessionParties(sessionId);
+  const parties = await sessionParties(sessionId, reader());
   if (parties.length !== 2) {
     throw new Error(`Session ${sessionId} does not have exactly 2 participants`);
   }
@@ -661,6 +689,30 @@ export async function runReconciler(
       witnessingContent: aWitnessing,
       attemptId: bEmpathy.attemptId,
     });
+  }
+
+  if (opts.persist) {
+    const store = async (
+      r: (ReconcilerResult & { fresh?: boolean; storedResultId?: string }) | null,
+      author: UserInfo,
+      subject: UserInfo,
+      attemptId: string,
+    ) => {
+      if (!r?.fresh) return;
+      const id = await persistAnalysis({
+        attemptId,
+        authorParticipantId: author.participantId,
+        subjectParticipantId: subject.participantId,
+        result: r,
+        guidance: r.abstractGuidance ?? generateAbstractGuidance(r),
+      });
+      if (id) {
+        r.storedResultId = id;
+        r.fresh = false;
+      }
+    };
+    await store(aUnderstandingB, userA, userB, aEmpathy.attemptId);
+    await store(bUnderstandingA, userB, userA, bEmpathy.attemptId);
   }
 
   const isDirectionReady = (result: ReconcilerResult | null): boolean => {

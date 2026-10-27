@@ -59,7 +59,8 @@ export async function directionParties(
   guesserUserId: string,
   subjectUserId: string,
 ): Promise<{ guesser: UserInfo; subject: UserInfo; guesserParty: SessionParty; subjectParty: SessionParty } | null> {
-  const parties = await sessionParties(sessionId);
+  // Analysis path: the job reads (Ruling R35).
+  const parties = await sessionParties(sessionId, getJobPrisma());
   const g = partyOf(parties, { userId: guesserUserId });
   const s = partyOf(parties, { userId: subjectUserId });
   if (!g || !s) return null;
@@ -96,7 +97,7 @@ async function markEmpathyReady(
   // De-dup guard: the shortcut path can fire several times in a row with the
   // same text; do not re-post it.
   const conversationId = guesser.mainConversationId;
-  const alreadyPosted = conversationId ? (await lastAiNote(conversationId))?.trim() === alignmentMessage.trim() : true;
+  const alreadyPosted = conversationId ? (await lastAiNote(conversationId, getJobPrisma()))?.trim() === alignmentMessage.trim() : true;
 
   let saved: Awaited<ReturnType<typeof createFacilitatorMessage>> | null = null;
   const moved = await jobMoveIfUnchanged(attempt.attemptId, attempt.statusVersion, 'READY', async tx => {
@@ -268,7 +269,7 @@ interface CurrentRound {
  */
 export async function checkAndRevealBothIfReady(sessionId: string): Promise<boolean> {
   logger.debug('checkAndRevealBothIfReady called', { sessionId });
-  const parties = await sessionParties(sessionId);
+  const parties = await sessionParties(sessionId, getJobPrisma());
   if (parties.length !== 2) return false;
   const pids = parties.map(p => p.participantId);
 

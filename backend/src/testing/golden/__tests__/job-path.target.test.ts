@@ -50,11 +50,17 @@ describeTarget('job path on the target, as mwf_job with identity binding on', ()
     if (harness) await harness.teardown();
   });
 
-  it('the job login cannot read message content (its message SELECT grant is id, created_at only)', async () => {
+  // TS-9 fix 2 granted the job (id, created_at) of message only. Ruling R35 (TS-10 fix 1, I4)
+  // makes the reconciler a job-connection reader of the two parties' chat: role, content and
+  // sender are now granted ("reconciler reader", trailer T7 TS-10 block). Everything else of
+  // message stays unreadable to the job.
+  it('the job login reads exactly the message columns its grants name (R35 adds role, content, sender)', async () => {
     const { getJobPrisma } = await import('../../../lib/prisma');
-    await expect(getJobPrisma().$queryRaw`SELECT content FROM message LIMIT 1`).rejects.toThrow(/permission denied/);
-    await expect(getJobPrisma().$queryRaw`SELECT role FROM message LIMIT 1`).rejects.toThrow(/permission denied/);
-    const ok = await getJobPrisma().$queryRaw<Array<{ n: number }>>`SELECT count(id)::int AS n FROM message`;
+    await expect(getJobPrisma().$queryRaw`SELECT content_hash FROM message LIMIT 1`).rejects.toThrow(/permission denied/);
+    await expect(getJobPrisma().$queryRaw`SELECT refining_need_id FROM message LIMIT 1`).rejects.toThrow(/permission denied/);
+    await expect(getJobPrisma().$queryRaw`SELECT * FROM message LIMIT 1`).rejects.toThrow(/permission denied/);
+    const ok = await getJobPrisma().$queryRaw<Array<{ n: number }>>`SELECT count(id)::int AS n FROM message
+      WHERE role IS NOT NULL AND content IS NOT NULL AND (sender_participant_id IS NULL OR sender_participant_id IS NOT NULL)`;
     expect(ok[0].n).toBeGreaterThan(0);
   });
 

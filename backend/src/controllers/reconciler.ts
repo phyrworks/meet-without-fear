@@ -31,6 +31,7 @@ import {
   generateShareOffer,
   respondToShareSuggestion,
   shareAccepted,
+  resumeUndeliveredShare,
   getReconcilerStatus,
   generateReconcilerSummary,
   generatePostShareContinuation,
@@ -80,13 +81,17 @@ async function reconcilerCaller(req: Request, res: Response): Promise<Reconciler
   return { userId: user.id, userName: user.name || 'User', sessionId, status: session.status, me, parties };
 }
 
-const direction = (result: ReconcilerResult | null) =>
+/** m7: the direction's real parties (the caller is its subject — the only analysis they may see). */
+const direction = (
+  result: ReconcilerResult | null,
+  parties?: { guesser: { id: string; name: string }; subject: { id: string; name: string } } | null,
+) =>
   result
     ? {
-        guesserId: '',
-        guesserName: '',
-        subjectId: '',
-        subjectName: '',
+        guesserId: parties?.guesser.id ?? '',
+        guesserName: parties?.guesser.name ?? '',
+        subjectId: parties?.subject.id ?? '',
+        subjectName: parties?.subject.name ?? '',
         result,
         shareOfferStatus: 'NOT_OFFERED' as const,
         analyzedAt: new Date().toISOString(),
@@ -134,12 +139,13 @@ export async function runReconcilerHandler(req: Request, res: Response): Promise
 
     const result = await runReconciler(caller.sessionId, parseResult.data.forUserId, {
       forParticipantId: caller.me.participantId,
+      persist: true,
     });
 
     const response: RunReconcilerResponse = {
       sessionId: caller.sessionId,
-      aUnderstandingB: direction(result.aUnderstandingB),
-      bUnderstandingA: direction(result.bUnderstandingA),
+      aUnderstandingB: direction(result.aUnderstandingB, result.directions[0]),
+      bUnderstandingA: direction(result.bUnderstandingA, result.directions[1]),
       bothCompleted: result.bothCompleted,
       readyToProceed: result.readyToProceed,
       blockingReason: result.blockingReason,
@@ -581,6 +587,15 @@ export async function refinementFinalizeHandler(req: Request, res: Response): Pr
 
     const shareOffer = await myOpenOffer(sessionId, me, { id: offerId });
     if (!shareOffer) {
+      // I2: an earlier finalize accepted this offer but its delivery failed —
+      // deliver it now (idempotent) rather than answer 404 with nothing sent.
+      const resumed = await resumeUndeliveredShare(sessionId, me, parties, { offerId });
+      if (resumed) {
+        const guesser = parties.find(p => p.participantId !== me.participantId);
+        await notifyContextShared(sessionId, userId, guesser);
+        successResponse(res, { status: 'shared', messageId: resumed.sharedMessageId, sharedContent: resumed.sharedContent });
+        return;
+      }
       errorResponse(res, 'NOT_FOUND', 'Share offer not found or already finalized', 404);
       return;
     }

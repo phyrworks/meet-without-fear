@@ -92,8 +92,8 @@ export interface SessionParty {
  * relationship-member order: the inviter first). The reconciler's A/B
  * directions are this order.
  */
-export async function sessionParties(sessionId: string): Promise<SessionParty[]> {
-  const rows = await prisma.participant.findMany({
+export async function sessionParties(sessionId: string, client: PrismaClient = prisma): Promise<SessionParty[]> {
+  const rows = await client.participant.findMany({
     where: { sessionId, kind: 'human', leftAt: null },
     orderBy: [{ joinedAt: 'asc' }, { id: 'asc' }],
     select: {
@@ -128,8 +128,13 @@ export function partyOf(parties: SessionParty[], who: { userId?: string; partici
  * (as `v_empathy_direction`). Readable by its author; a subject must use
  * `revealedAttemptAbout` instead.
  */
-export async function currentAttempt(authorParticipantId: string, subjectParticipantId: string): Promise<AttemptRow | null> {
-  const rounds = (await prisma.empathyAttempt.findMany({
+export async function currentAttempt(
+  authorParticipantId: string,
+  subjectParticipantId: string,
+  /** The reconciler passes the job connection (Ruling R35). */
+  client: PrismaClient = prisma,
+): Promise<AttemptRow | null> {
+  const rounds = (await client.empathyAttempt.findMany({
     where: { authorParticipantId, subjectParticipantId },
     orderBy: { round: 'desc' },
     select: ATTEMPT_SELECT,

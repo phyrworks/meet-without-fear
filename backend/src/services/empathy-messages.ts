@@ -17,6 +17,7 @@
 
 import type { MessageDTO } from '@meet-without-fear/shared';
 import { prisma } from '../lib/prisma';
+import type { PrismaClient } from '../generated/prisma/client';
 import { contentHash } from '../utils/content-hash';
 import {
   createFacilitatorMessage,
@@ -104,8 +105,8 @@ export async function aiNoteExists(conversationId: string, content: string): Pro
 }
 
 /** The newest AI row's text in a conversation (the alignment-message de-dup guard). */
-export async function lastAiNote(conversationId: string): Promise<string | null> {
-  const last = await prisma.message.findFirst({
+export async function lastAiNote(conversationId: string, client: PrismaClient = prisma): Promise<string | null> {
+  const last = await client.message.findFirst({
     where: { conversationId, role: 'AI' },
     orderBy: { createdAt: 'desc' },
     select: { content: true },
