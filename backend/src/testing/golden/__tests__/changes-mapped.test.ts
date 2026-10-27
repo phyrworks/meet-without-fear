@@ -109,6 +109,23 @@ describe('pendingCluster', () => {
     );
   });
 
+  it("compares a listed read's changes with timestamp ranks canonicalised — values and fresh stamps still count", () => {
+    const row = (created: string, updated: string, email = 'a@x') => [{ table: 'User', after: { email, created_at: created, updated_at: updated } }];
+    const e = { steps: [step('p: needs as ada@e2e.test', 200, { data: { at: '<ts:1>' } }, row('<ts:2>', '<ts:fresh>'))] };
+    const rule = allow([{ read: 'needs', owner: 'TS-11' }]);
+    // The error body lost the body's instant: the user row's created_at now ranks <ts:1>.
+    expect(compareWithAllowList(e, { steps: [step('p: needs as ada@e2e.test', 500, err, row('<ts:1>', '<ts:fresh>'))] }, rule)).toEqual({
+      violations: [],
+      unmatchedRules: [],
+    });
+    expect(
+      compareWithAllowList(e, { steps: [step('p: needs as ada@e2e.test', 500, err, row('<ts:1>', '<ts:fresh>', 'b@x'))] }, rule).violations.join('\n'),
+    ).toMatch(/email/);
+    expect(
+      compareWithAllowList(e, { steps: [step('p: needs as ada@e2e.test', 500, err, row('<ts:1>', '<ts:3>'))] }, rule).violations.join('\n'),
+    ).toMatch(/updated_at/);
+  });
+
   it('reads it does not list are compared as usual', () => {
     const e = { steps: [step('p: stage4 as ada@e2e.test', 200, { data: 1 })] };
     const v = compareWithAllowList(e, { steps: [step('p: stage4 as ada@e2e.test', 500, err)] }, allow([{ read: 'needs', owner: 'TS-11' }]));
