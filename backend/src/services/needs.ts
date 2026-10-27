@@ -1,16 +1,25 @@
 /**
- * Needs Service
+ * Needs Service (TS-11, spec §1.4 `need`).
  *
- * Types and utilities for Stage 3 needs.
- * Extraction and common ground analysis have been removed as part of
- * the Stage 3 redesign (#247). Needs are now captured via the
- * conversational AI (summary cards) rather than a separate extraction step.
+ * A need is OWNER-ONLY, always: `need` hangs off the owner's `participant`
+ * and no code path reads another participant's `need` row. What crosses the
+ * boundary is the separate `need_share` row (services/needs-share.ts), which
+ * carries the job's transformed text and the category — never `label` or
+ * `evidence`.
+ *
+ *   - "confirmed" is `confirmed_at IS NOT NULL` (the old boolean, with its instant);
+ *   - removal is the soft delete `deleted_at` (mwf_app has no DELETE on need);
+ *   - refinement is supersession: the old row's `superseded_by_need_id` points
+ *     at the new one.
+ *
+ * The DTO (`IdentifiedNeedDTO`) is unchanged: `need` is the label.
  */
 
 import { resetBedrockClient } from '../lib/bedrock';
 import { prisma } from '../lib/prisma';
 import { NeedCategory, type CapturedNeedInput, type IdentifiedNeedDTO } from '@meet-without-fear/shared';
 import { cleanVisibleAIText } from '../utils/visible-text';
+import { resolveParticipant } from './participant-resolver';
 
 // ============================================================================
 // Types
@@ -23,9 +32,24 @@ export interface ExtractedNeed {
   aiConfidence: number;
 }
 
+/** A `need` row as the app reads it (the owner's own row only). */
+export interface NeedRecord {
+  id: string;
+  participantId: string;
+  label: string;
+  category: NeedCategory;
+  evidence: string[];
+  aiConfidence: number;
+  confirmedAt: Date | null;
+  lockedAt: Date | null;
+  supersededByNeedId: string | null;
+  deletedAt: Date | null;
+  createdAt: Date;
+}
+
+/** The legacy record shape (`need` = label, `confirmed` boolean) the DTO builders take. */
 export interface IdentifiedNeedRecord {
   id: string;
-  vesselId: string;
   need: string;
   category: NeedCategory;
   evidence: string[];
@@ -53,6 +77,27 @@ export interface UniversalNeedValidationResult {
   ok: boolean;
   warning?: string;
 }
+
+export class NeedParticipantNotFoundError extends Error {
+  constructor() {
+    super('No participant for this user in the session');
+    this.name = 'NeedParticipantNotFoundError';
+  }
+}
+
+export const NEED_SELECT = {
+  id: true,
+  participantId: true,
+  label: true,
+  category: true,
+  evidence: true,
+  aiConfidence: true,
+  confirmedAt: true,
+  lockedAt: true,
+  supersededByNeedId: true,
+  deletedAt: true,
+  createdAt: true,
+} as const;
 
 const OTHER_PERSON_PATTERNS = [
   /\bi need\s+(him|her|them|you|my partner)\s+to\b/i,
@@ -88,18 +133,35 @@ export function withNeedReframingWarning<T extends { need: string }>(
   };
 }
 
-export function toIdentifiedNeedDTO(need: IdentifiedNeedRecord): IdentifiedNeedDTO {
-  const warned = withNeedReframingWarning(need);
-  const lockedAt = need.lockedAt ?? null;
-  const deletedAt = need.deletedAt ?? null;
-  const supersededByNeedId = need.supersededByNeedId ?? null;
+/** Target row → the legacy record (`need` = label, `confirmed` = confirmed_at set). */
+export function toNeedRecord(row: NeedRecord): IdentifiedNeedRecord {
   return {
-    id: need.id,
-    need: need.need,
-    category: need.category,
-    description: need.need,
-    evidence: need.evidence,
-    confirmed: need.confirmed,
+    id: row.id,
+    need: row.label,
+    category: row.category,
+    evidence: row.evidence,
+    aiConfidence: row.aiConfidence,
+    confirmed: row.confirmedAt !== null,
+    lockedAt: row.lockedAt,
+    deletedAt: row.deletedAt,
+    supersededByNeedId: row.supersededByNeedId,
+    createdAt: row.createdAt,
+  };
+}
+
+export function toIdentifiedNeedDTO(need: IdentifiedNeedRecord | NeedRecord): IdentifiedNeedDTO {
+  const record = 'label' in need ? toNeedRecord(need) : need;
+  const warned = withNeedReframingWarning(record);
+  const lockedAt = record.lockedAt ?? null;
+  const deletedAt = record.deletedAt ?? null;
+  const supersededByNeedId = record.supersededByNeedId ?? null;
+  return {
+    id: record.id,
+    need: record.need,
+    category: record.category,
+    description: record.need,
+    evidence: record.evidence,
+    confirmed: record.confirmed,
     lockedAt: lockedAt?.toISOString() ?? null,
     deletedAt: deletedAt?.toISOString() ?? null,
     supersededByNeedId,
@@ -110,170 +172,111 @@ export function toIdentifiedNeedDTO(need: IdentifiedNeedRecord): IdentifiedNeedD
         : lockedAt
           ? 'locked'
           : 'draft',
-    aiConfidence: need.aiConfidence,
-    createdAt: need.createdAt.toISOString(),
+    aiConfidence: record.aiConfidence,
+    createdAt: record.createdAt.toISOString(),
     needsReframing: warned.needsReframing,
     reframingWarning: warned.reframingWarning,
   };
 }
 
-async function getOrCreateUserVessel(
-  sessionId: string,
-  userId: string
-): Promise<{ id: string }> {
-  const existing = await prisma.userVessel.findUnique({
-    where: { userId_sessionId: { userId, sessionId } },
-    select: { id: true },
-  });
-
-  if (existing) return existing;
-
-  return prisma.userVessel.create({
-    data: { userId, sessionId },
-    select: { id: true },
-  });
+/** The caller's present participant in the session, or throw. */
+export async function requireNeedOwner(sessionId: string, userId: string): Promise<{ id: string; sessionId: string }> {
+  const participant = await resolveParticipant(sessionId, userId);
+  if (!participant) throw new NeedParticipantNotFoundError();
+  return participant;
 }
 
+/**
+ * The participant's own needs, oldest first. `live` = not deleted and not
+ * superseded; `confirmed` = confirmed_at set.
+ */
+export async function listOwnNeeds(
+  participantId: string,
+  opts: { live?: boolean; confirmed?: boolean; notDeleted?: boolean } = {}
+): Promise<NeedRecord[]> {
+  return (await prisma.need.findMany({
+    where: {
+      participantId,
+      ...(opts.live ? { deletedAt: null, supersededByNeedId: null } : {}),
+      ...(opts.notDeleted ? { deletedAt: null } : {}),
+      ...(opts.confirmed ? { confirmedAt: { not: null } } : {}),
+    },
+    orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+    select: NEED_SELECT,
+  })) as NeedRecord[];
+}
+
+function cleanEvidence(evidence: unknown): string[] {
+  return (Array.isArray(evidence) ? evidence.filter((entry): entry is string => typeof entry === 'string') : [])
+    .map((entry) => cleanVisibleAIText(entry))
+    .filter(Boolean);
+}
+
+/**
+ * Replace the participant's unconfirmed AI-captured needs with a new set.
+ * Once the user confirms, the list is user-owned and later chat summaries do
+ * not overwrite it. "Replace" is the soft delete (no DELETE on need).
+ */
 export async function captureProposedNeedsForUser(
   sessionId: string,
   userId: string,
   needs: CapturedNeedInput[]
 ): Promise<CaptureProposedNeedsResult> {
-  const vessel = await getOrCreateUserVessel(sessionId, userId);
+  const participant = await requireNeedOwner(sessionId, userId);
   const capturedAt = new Date();
 
   await prisma.$transaction(async (tx) => {
-    // Replace only unconfirmed AI-captured needs. Once the user confirms, the
-    // list becomes user-owned and later chat summaries should not overwrite it.
-    await tx.identifiedNeed.deleteMany({
-      where: {
-        vesselId: vessel.id,
-        confirmed: false,
-      },
+    await tx.need.updateMany({
+      where: { participantId: participant.id, confirmedAt: null, deletedAt: null },
+      data: { deletedAt: capturedAt },
     });
-
     for (const item of needs) {
-      const evidence = Array.isArray(item.evidence)
-        ? item.evidence.filter((entry): entry is string => typeof entry === 'string')
-        : [];
-
-      await tx.identifiedNeed.create({
+      await tx.need.create({
         data: {
-          vesselId: vessel.id,
-          need: cleanVisibleAIText(item.description || item.need),
+          participantId: participant.id,
+          label: cleanVisibleAIText(item.description || item.need),
           category: item.category,
-          evidence: evidence.map((entry) => cleanVisibleAIText(entry)).filter(Boolean),
+          evidence: cleanEvidence(item.evidence),
           aiConfidence: 0.85,
-          confirmed: false,
-        },
-      });
-    }
-
-    const progress = await tx.stageProgress.findUnique({
-      where: {
-        sessionId_userId_stage: {
-          sessionId,
-          userId,
-          stage: 3,
-        },
-      },
-    });
-
-    if (progress) {
-      const gates = (progress.gatesSatisfied as Record<string, unknown> | null) ?? {};
-      await tx.stageProgress.update({
-        where: { id: progress.id },
-        data: {
-          gatesSatisfied: {
-            ...gates,
-            needsCaptured: true,
-            needsCapturedAt: capturedAt.toISOString(),
-          },
         },
       });
     }
   });
 
-  const capturedNeeds = await prisma.identifiedNeed.findMany({
-    where: { vesselId: vessel.id },
-    orderBy: { createdAt: 'asc' },
-  });
-
+  const captured = await listOwnNeeds(participant.id, { notDeleted: true });
   return {
-    needs: capturedNeeds.map((need) =>
-      withNeedReframingWarning({
-        ...need,
-        category: need.category as unknown as NeedCategory,
-      })
-    ),
+    needs: captured.map((need) => withNeedReframingWarning(toNeedRecord(need))),
     capturedAt,
   };
 }
 
+/** Capture one proposed need, replacing any unconfirmed draft (the AI cannot see what it proposed before). */
 export async function captureSingleNeedForUser(
   sessionId: string,
   userId: string,
   item: CapturedNeedInput
 ): Promise<CaptureSingleNeedResult> {
-  const vessel = await getOrCreateUserVessel(sessionId, userId);
+  const participant = await requireNeedOwner(sessionId, userId);
   const capturedAt = new Date();
 
-  const evidence = Array.isArray(item.evidence)
-    ? item.evidence.filter((entry): entry is string => typeof entry === 'string')
-    : [];
-
-  const created = await prisma.$transaction(async (tx) => {
-    // Prevent duplicate unconfirmed needs from accumulating across turns.
-    // The AI cannot see already-captured needs and may re-propose.
-    await tx.identifiedNeed.deleteMany({
-      where: { vesselId: vessel.id, confirmed: false },
+  const created = (await prisma.$transaction(async (tx) => {
+    await tx.need.updateMany({
+      where: { participantId: participant.id, confirmedAt: null, deletedAt: null },
+      data: { deletedAt: capturedAt },
     });
-
-    const need = await tx.identifiedNeed.create({
+    return tx.need.create({
       data: {
-        vesselId: vessel.id,
-        need: cleanVisibleAIText(item.description || item.need),
+        participantId: participant.id,
+        label: cleanVisibleAIText(item.description || item.need),
         category: item.category,
-        evidence: evidence.map((entry) => cleanVisibleAIText(entry)).filter(Boolean),
+        evidence: cleanEvidence(item.evidence),
         aiConfidence: 0.85,
-        confirmed: false,
       },
+      select: NEED_SELECT,
     });
+  })) as NeedRecord;
 
-    const progress = await tx.stageProgress.findUnique({
-      where: {
-        sessionId_userId_stage: {
-          sessionId,
-          userId,
-          stage: 3,
-        },
-      },
-    });
-
-    if (progress) {
-      const gates = (progress.gatesSatisfied as Record<string, unknown> | null) ?? {};
-      await tx.stageProgress.update({
-        where: { id: progress.id },
-        data: {
-          gatesSatisfied: {
-            ...gates,
-            needsCaptured: true,
-            needsCapturedAt: capturedAt.toISOString(),
-          },
-        },
-      });
-    }
-
-    return need;
-  });
-
-  return {
-    need: toIdentifiedNeedDTO({
-      ...created,
-      category: created.category as unknown as NeedCategory,
-    }),
-    capturedAt,
-  };
+  return { need: toIdentifiedNeedDTO(created), capturedAt };
 }
 
 /**
