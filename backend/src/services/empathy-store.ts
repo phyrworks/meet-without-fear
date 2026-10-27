@@ -462,7 +462,7 @@ export async function findDraft(opts: {
   });
 }
 
-/** The submission consent of an author's direction (the newest round's arc), if granted. */
+/** Has the author GRANTED a submission consent on any round of this direction (m12: any round, not only the newest)? */
 export async function grantedSubmissionConsent(authorParticipantId: string, subjectParticipantId: string): Promise<boolean> {
   const n = await prisma.consent.count({
     where: {

@@ -3,7 +3,9 @@
  *   - `changesMapped`: byte-level row changes on the target, compared through a
  *     table rename map (the analogue of `traceMapped`);
  *   - `pendingCluster`: a read of a cluster not yet on this branch may answer
- *     500 — and a listed read that answers anything else fails.
+ *     500 — and a listed read that answers anything else fails; its changes are
+ *     compared exactly, a shifted rank only where pinned (ruling R37);
+ *   - `refusedStep` (fix round 1, m1): a step the target refuses by a ruled fix.
  */
 
 import { compareMappedChanges, compareWithAllowList } from '../allow-lists/compare';
@@ -109,26 +111,93 @@ describe('pendingCluster', () => {
     );
   });
 
-  it("compares a listed read's changes with timestamp ranks canonicalised — values and fresh stamps still count", () => {
+  // Ruling R37: only status and the error body are blurred; a rank the 500
+  // shifts must be pinned by step and path, never canonicalised wholesale.
+  it('compares a listed read\'s changes exactly: an unpinned rank shift fails (R37)', () => {
     const row = (created: string, updated: string, email = 'a@x') => [{ table: 'User', after: { email, created_at: created, updated_at: updated } }];
     const e = { steps: [step('p: needs as ada@e2e.test', 200, { data: { at: '<ts:1>' } }, row('<ts:2>', '<ts:fresh>'))] };
-    const rule = allow([{ read: 'needs', owner: 'TS-11' }]);
-    // The error body lost the body's instant: the user row's created_at now ranks <ts:1>.
-    expect(compareWithAllowList(e, { steps: [step('p: needs as ada@e2e.test', 500, err, row('<ts:1>', '<ts:fresh>'))] }, rule)).toEqual({
-      violations: [],
-      unmatchedRules: [],
-    });
-    expect(
-      compareWithAllowList(e, { steps: [step('p: needs as ada@e2e.test', 500, err, row('<ts:1>', '<ts:fresh>', 'b@x'))] }, rule).violations.join('\n'),
-    ).toMatch(/email/);
-    expect(
-      compareWithAllowList(e, { steps: [step('p: needs as ada@e2e.test', 500, err, row('<ts:1>', '<ts:3>'))] }, rule).violations.join('\n'),
-    ).toMatch(/updated_at/);
+    const v = compareWithAllowList(e, { steps: [step('p: needs as ada@e2e.test', 500, err, row('<ts:1>', '<ts:fresh>'))] }, allow([{ read: 'needs', owner: 'TS-11' }]));
+    expect(v.violations.join('\n')).toMatch(/steps\.0\.changes\.0\.after\.created_at: value differs/);
+  });
+
+  it('a pinned rank shift (step + path + from → to) is admitted, and only that one', () => {
+    const row = (created: string, updated: string, email = 'a@x') => [{ table: 'User', after: { email, created_at: created, updated_at: updated } }];
+    const e = { steps: [step('p: needs as ada@e2e.test', 200, { data: { at: '<ts:1>' } }, row('<ts:2>', '<ts:fresh>'))] };
+    const pinned: AllowList = {
+      scenario: 's',
+      rules: [
+        {
+          kind: 'pendingCluster',
+          at: 'steps',
+          why: 'test',
+          mustMatch: true,
+          reads: [
+            {
+              read: 'needs',
+              owner: 'TS-11',
+              rankShifts: [{ step: 'p: needs as ada@e2e.test', at: 'changes.0.after.created_at', from: '<ts:2>', to: '<ts:1>' }],
+            },
+          ],
+        },
+      ],
+    };
+    const run = (r: unknown[]) => ({ steps: [step('p: needs as ada@e2e.test', 500, err, r)] });
+    expect(compareWithAllowList(e, run(row('<ts:1>', '<ts:fresh>')), pinned)).toEqual({ violations: [], unmatchedRules: [] });
+    // Values and other stamps are still compared.
+    expect(compareWithAllowList(e, run(row('<ts:1>', '<ts:fresh>', 'b@x')), pinned).violations.join('\n')).toMatch(/email/);
+    expect(compareWithAllowList(e, run(row('<ts:1>', '<ts:3>')), pinned).violations.join('\n')).toMatch(/updated_at/);
+    // A pin that does not hold fails, and so does one that never fires.
+    expect(compareWithAllowList(e, run(row('<ts:3>', '<ts:fresh>')), pinned).violations.join('\n')).toMatch(
+      /pinned rank shift <ts:2> → <ts:1> does not hold/,
+    );
+    const other = { steps: [step('q: needs as ada@e2e.test', 500, err, row('<ts:2>', '<ts:fresh>'))] };
+    const eOther = { steps: [step('q: needs as ada@e2e.test', 200, { data: {} }, row('<ts:2>', '<ts:fresh>'))] };
+    expect(compareWithAllowList(eOther, other, pinned).violations.join('\n')).toMatch(/rank pin never fired/);
   });
 
   it('reads it does not list are compared as usual', () => {
     const e = { steps: [step('p: stage4 as ada@e2e.test', 200, { data: 1 })] };
     const v = compareWithAllowList(e, { steps: [step('p: stage4 as ada@e2e.test', 500, err)] }, allow([{ read: 'needs', owner: 'TS-11' }]));
     expect(v.violations.join('\n')).toMatch(/value differs/);
+  });
+});
+
+describe('refusedStep (fix round 1, m1)', () => {
+  const allow: AllowList = {
+    scenario: 's',
+    rules: [
+      {
+        kind: 'refusedStep',
+        at: 'steps',
+        mustMatch: true,
+        why: 'test',
+        label: 'draft as bob',
+        status: 404,
+        code: 'NOT_FOUND',
+        droppedWrites: [{ table: 'draft', kind: 'added' }],
+      },
+    ],
+  };
+  const userChange = { table: 'user', kind: 'changed', key: 'u' };
+  const draftAdded = { table: 'draft', kind: 'added', key: 'd' };
+  const e = { steps: [{ label: 'draft as bob', status: 200, body: { success: true, data: { id: 'd' } }, changes: [draftAdded, userChange] }] };
+  const run = (status: number, code: string, changes: unknown[]) => ({
+    steps: [{ label: 'draft as bob', status, body: { success: false, error: { code, message: 'x' } }, changes }],
+  });
+
+  it('admits the refusal: the named status and code, the dropped write absent, every other change as recorded', () => {
+    expect(compareWithAllowList(e, run(404, 'NOT_FOUND', [userChange]), allow)).toEqual({ violations: [], unmatchedRules: [] });
+  });
+  it('fails on another status or code, on the dropped write being made, and on any other change differing', () => {
+    expect(compareWithAllowList(e, run(200, 'NOT_FOUND', [userChange]), allow).violations.join('\n')).toMatch(/refusedStep: expected 404/);
+    expect(compareWithAllowList(e, run(404, 'CONFLICT', [userChange]), allow).violations.join('\n')).toMatch(/refusedStep: expected 404/);
+    expect(compareWithAllowList(e, run(404, 'NOT_FOUND', [draftAdded, userChange]), allow).violations.join('\n')).toMatch(
+      /the run made a write the refusal must not/,
+    );
+    expect(compareWithAllowList(e, run(404, 'NOT_FOUND', []), allow).violations.join('\n')).toMatch(/steps\.0\.changes/);
+  });
+  it('a refusal the baseline never recorded as a write is a stale rule', () => {
+    const e2 = { steps: [{ ...e.steps[0], changes: [userChange] }] };
+    expect(compareWithAllowList(e2, run(404, 'NOT_FOUND', [userChange]), allow).violations.join('\n')).toMatch(/stale rule/);
   });
 });

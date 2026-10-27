@@ -159,14 +159,15 @@ describe(`golden: ${SCENARIO}`, () => {
   });
 
   it("the probes are live: Bob's unsent draft and the analysis exist", () => {
-    expect(steps[0].status).toBe(200);
-    expect(
-      steps[0].changes.some(c =>
-        isTargetShape()
-          ? c.table === 'draft' && c.kind === 'added' && (c.after as { kind?: string }).kind === 'VALIDATION_FEEDBACK'
-          : c.table === 'ValidationFeedbackDraft' && c.kind === 'added',
-      ),
-    ).toBe(true);
+    if (isTargetShape()) {
+      // Fix round 1, m1 (R6_REFUSED_UNREVEALED_DRAFT): the target refuses a
+      // feedback draft about an unrevealed round, and writes nothing.
+      expect(steps[0].status).toBe(404);
+      expect(steps[0].changes.some(c => c.table === 'draft')).toBe(false);
+    } else {
+      expect(steps[0].status).toBe(200);
+      expect(steps[0].changes.some(c => c.table === 'ValidationFeedbackDraft' && c.kind === 'added')).toBe(true);
+    }
   });
 
   it("Ada's turn built a prompt (the prompt assertion is not vacuous)", () => {

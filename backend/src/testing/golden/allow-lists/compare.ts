@@ -9,6 +9,8 @@ import { PENDING_CLUSTER_READS } from './types';
 import type {
   ChangesMappedRule,
   PendingClusterRule,
+  RankShift,
+  RefusedStepRule,
   AbsentKeysRule,
   AddedEntriesRule,
   AddedKeysRule,
@@ -366,6 +368,7 @@ export function compareWithAllowList(expected: unknown, actual: unknown, allow: 
   const rulesAt = <K extends AllowRule['kind']>(kind: K, p: string[]): Entry[] =>
     rules.filter(r => r.rule.kind === kind && r.patterns.some(pat => matchPath(pat, p)));
   const violations: string[] = [];
+  const usedPins = new Set<RankShift>();
   const show = (p: string[]): string => p.join('.') || '<root>';
   const fail = (p: string[], what: string, e?: unknown, a?: unknown): void => {
     violations.push(
@@ -460,16 +463,80 @@ export function compareWithAllowList(expected: unknown, actual: unknown, allow: 
           fail([...p, 'status'], `stale pendingCluster entry: "${pendingRead}" now answers ${a.status} — delete the entry`, 500, a.status);
         }
       }
+      // m1: a step the target refuses by a ruled fix (`refusedStep`).
+      const refused =
+        p.length === 2 && p[0] === 'steps' && typeof e.label === 'string'
+          ? rules.filter(r => r.rule.kind === 'refusedStep' && (r.rule as RefusedStepRule).label === e.label)
+          : [];
+      const refusal = refused.length ? (refused[0].rule as RefusedStepRule) : null;
+      if (refusal) {
+        refused.forEach(r => r.matched++);
+        const body = a.body as { success?: unknown; error?: { code?: unknown } } | undefined;
+        if (a.status !== refusal.status || body?.success !== false || body?.error?.code !== refusal.code) {
+          fail([...p, 'status'], `refusedStep: expected ${refusal.status} ${refusal.code}`, refusal.status, {
+            status: a.status,
+            code: body?.error?.code,
+          });
+        }
+      }
+      const dropped = (c: unknown): boolean => {
+        if (!refusal || !isObj(c)) return false;
+        const t = (c.table ?? c.view) as unknown;
+        return refusal.droppedWrites.some(w => w.table === t && w.kind === c.kind);
+      };
+      // R37: the pinned rank shifts of this step (by label), applied to a copy
+      // of the baseline before the exact compare; each must hold.
+      const pins = pending.length
+        ? pending.flatMap(r =>
+            (r.rule as PendingClusterRule).reads
+              .filter(x => x.read === pendingRead)
+              .flatMap(x => (x.rankShifts ?? []).filter(s => s.step === e.label)),
+          )
+        : [];
+      const pinned = (k: string, ev: unknown, av: unknown): unknown => {
+        const mine = pins.filter(s => s.at.split('.')[0] === k);
+        if (!mine.length) return ev;
+        const copy = JSON.parse(JSON.stringify(ev ?? null));
+        for (const s of mine) {
+          const path = s.at.split('.').slice(1);
+          const get = (v: unknown): unknown =>
+            path.reduce<unknown>((o, seg) => (o && typeof o === 'object' ? (o as Record<string, unknown>)[seg] : undefined), v);
+          const before = get(copy);
+          const after = get(av);
+          if (before !== s.from || after !== s.to) {
+            fail([...p, ...s.at.split('.')], `pinned rank shift ${s.from} → ${s.to} does not hold`, before, after);
+            continue;
+          }
+          usedPins.add(s);
+          const parent = path.slice(0, -1).reduce<Record<string, unknown>>((o, seg) => o[seg] as Record<string, unknown>, copy);
+          parent[path[path.length - 1]] = s.to;
+        }
+        return copy;
+      };
       for (const k of [...new Set([...Object.keys(e), ...Object.keys(a)])].sort()) {
         const kp = [...p, k];
         if (pending.length && (k === 'status' || k === 'body' || k === 'sse')) continue;
-        if (pending.length && (k === 'changes' || k === 'changesAtResponse') && !rulesAt('changesMapped', kp).length) {
-          // The error body carries none of the 200 body's instants, so the
-          // step's carried timestamps rank differently: compare the changes
-          // with every `<ts:N>` rank canonicalised (values, keys and fresh
-          // stamps still compared).
-          const unrank = (v: unknown): unknown => JSON.parse(JSON.stringify(v ?? null).replace(/<ts:\d+>/g, '<ts:N>'));
-          walk(unrank(e[k]), unrank(a[k]), kp);
+        if (refusal && (k === 'status' || k === 'body')) continue;
+        if (refusal && (k === 'changes' || k === 'changesAtResponse')) {
+          const ev = Array.isArray(e[k]) ? (e[k] as unknown[]) : [];
+          const av = Array.isArray(a[k]) ? (a[k] as unknown[]) : [];
+          if (!ev.some(dropped)) fail(kp, 'refusedStep: none of the dropped writes is in the baseline (stale rule)', refusal.droppedWrites, undefined);
+          for (const c of av.filter(dropped)) fail(kp, 'refusedStep: the run made a write the refusal must not', undefined, c);
+          const kept = ev.filter(c => !dropped(c));
+          const mapped = rulesAt('changesMapped', kp);
+          if (mapped.length) {
+            // Byte-level: the remaining writes through the table map, as for any step.
+            for (const r of mapped) {
+              r.matched++;
+              for (const v of compareMappedChanges(kept, av, r.rule as ChangesMappedRule, Number(kp[1]))) fail(kp, v);
+            }
+          } else {
+            walk(kept, av, kp);
+          }
+          continue;
+        }
+        if (pins.length && (k === 'changes' || k === 'changesAtResponse')) {
+          walk(pinned(k, e[k], a[k]), a[k], kp);
           continue;
         }
         const inE = Object.prototype.hasOwnProperty.call(e, k);
@@ -539,6 +606,14 @@ export function compareWithAllowList(expected: unknown, actual: unknown, allow: 
 
   walk(expected, actual, []);
   violations.push(...ruleProblems);
+  for (const r of rules) {
+    if (r.rule.kind !== 'pendingCluster') continue;
+    for (const entry of (r.rule as PendingClusterRule).reads) {
+      for (const s of entry.rankShifts ?? []) {
+        if (!usedPins.has(s)) violations.push(`  pendingCluster "${entry.read}": rank pin never fired — ${s.step} ${s.at} ${s.from} → ${s.to}`);
+      }
+    }
+  }
 
   for (const r of rules) {
     if (r.rule.kind !== 'valuesSubset') continue;

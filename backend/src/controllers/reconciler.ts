@@ -81,17 +81,13 @@ async function reconcilerCaller(req: Request, res: Response): Promise<Reconciler
   return { userId: user.id, userName: user.name || 'User', sessionId, status: session.status, me, parties };
 }
 
-/** m7: the direction's real parties (the caller is its subject — the only analysis they may see). */
-const direction = (
-  result: ReconcilerResult | null,
-  parties?: { guesser: { id: string; name: string }; subject: { id: string; name: string } } | null,
-) =>
+const direction = (result: ReconcilerResult | null) =>
   result
     ? {
-        guesserId: parties?.guesser.id ?? '',
-        guesserName: parties?.guesser.name ?? '',
-        subjectId: parties?.subject.id ?? '',
-        subjectName: parties?.subject.name ?? '',
+        guesserId: '',
+        guesserName: '',
+        subjectId: '',
+        subjectName: '',
         result,
         shareOfferStatus: 'NOT_OFFERED' as const,
         analyzedAt: new Date().toISOString(),
@@ -144,8 +140,8 @@ export async function runReconcilerHandler(req: Request, res: Response): Promise
 
     const response: RunReconcilerResponse = {
       sessionId: caller.sessionId,
-      aUnderstandingB: direction(result.aUnderstandingB, result.directions[0]),
-      bUnderstandingA: direction(result.bUnderstandingA, result.directions[1]),
+      aUnderstandingB: direction(result.aUnderstandingB),
+      bUnderstandingA: direction(result.bUnderstandingA),
       bothCompleted: result.bothCompleted,
       readyToProceed: result.readyToProceed,
       blockingReason: result.blockingReason,

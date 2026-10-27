@@ -92,6 +92,22 @@ describeTarget('the review of an attempt: what the author sees, and a sent feedb
     if (harness) await harness.teardown();
   });
 
+  it("an unsent feedback draft (after the reveal) never reaches the author's reads", async () => {
+    const UNSENT = 'You missed how lonely the evenings are once the dishes are done.';
+    const saved = await post('userB', '/empathy/validation-feedback/draft', { content: UNSENT, readyToShare: false });
+    expect(saved.status).toBe(200);
+    expect(await rows(`SELECT count(*)::int AS n FROM draft WHERE kind = 'VALIDATION_FEEDBACK' AND content = '${UNSENT}'`)).toEqual([{ n: 1 }]);
+    for (const path of ['/empathy/status', '/empathy/partner', '/messages', '/empathy/draft']) {
+      const res = await harness.step({
+        label: `${path} as ada`,
+        actor: harness.actors.userA,
+        tables: [],
+        call: agent => agent.get(`/api/v1/sessions/${harness.sessionId}${path}`),
+      });
+      expect({ path, status: res.status, leaks: JSON.stringify(res.body).includes(UNSENT) }).toEqual({ path, status: 200, leaks: false });
+    }
+  });
+
   it('m2: a verdict whose VALIDATED move failed shows the author nothing — no validatedAt', async () => {
     expect(await roundOf('bob@e2e.test')).toBe('REVEALED');
     const store = await import('../empathy-store');
