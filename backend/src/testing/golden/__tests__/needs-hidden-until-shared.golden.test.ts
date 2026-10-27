@@ -270,6 +270,9 @@ describe(`golden: ${SCENARIO}`, () => {
         expect(body(NEEDS_STEPS.state.bobShared).progress.partnerProgress.status).toBe('IN_PROGRESS');
         expect(body(NEEDS_STEPS.progress.bobShared).partnerProgress).toMatchObject({ stage: 3, status: 'IN_PROGRESS' });
         expect(body(NEEDS_STEPS.sessionList.bobShared).items[0].partnerProgress.status).toBe('IN_PROGRESS');
+        // The two values the list derives from that status (r33NeedsSharedForAll's other mayDiffer paths).
+        expect(body(NEEDS_STEPS.sessionList.bobShared).items[0].statusSummary.partnerStatus).toBe('Bob Ross is exploring what matters to them');
+        expect(body(NEEDS_STEPS.sessionList.bobShared).items[0].partnerActionNeeded).toEqual(['complete_stage']);
         const shared = (await milestones()).filter(m => m.key === 'needs_shared');
         expect(shared.map(m => m.email).sort()).toEqual(['ada@e2e.test', 'bob@e2e.test']);
         expect(new Set(shared.map(m => iso(m.at))).size).toBe(1);

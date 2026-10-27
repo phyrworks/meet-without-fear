@@ -31,6 +31,7 @@ import {
   ADA_SESSION_LIST_STEPS,
   ADA_STAGE4_READ_STEPS,
   BOB_WRITE_STEPS,
+  STAGE4_STATE_ROOTS,
 } from '../allow-lists/choices-hidden-until-shared';
 import { viewName } from '../concept-views';
 import { listTables, withClient } from '../db';
@@ -305,6 +306,63 @@ describe(`golden: ${SCENARIO}`, () => {
         const rows = await sql<{ s: Date; r: Date | null }>(`SELECT submitted_at AS s, revealed_at AS r FROM empathy_attempt`);
         expect(rows).toHaveLength(2);
         for (const r of rows) expect(iso(r.r)).toBe(iso(r.s));
+      });
+
+      // Pair of stage4ComputedRules' proposalGroups mayDiffer (fix round 3): at
+      // every Stage 4 root, the phase's needs are in need.created_at order, the
+      // current need is the first of them, and each group holds exactly the
+      // cards addressing it under the group's filter (buildWalkthrough), in the
+      // proposals' creation order.
+      it('at every Stage 4 root the current need is the phase’s first shared need by creation, and each group is exactly its cards', async () => {
+        const needRows = await sql<{ id: string; email: string }>(
+          `SELECT n.id, u.email FROM need n JOIN need_share s ON s.need_id = n.id
+           JOIN participant p ON p.id = n.participant_id JOIN "user" u ON u.id = p.user_id
+           ORDER BY n.created_at, n.id`,
+        );
+        const proposalOrder = (await sql<{ id: string }>(`SELECT id FROM proposal ORDER BY created_at, id`)).map(r => r.id);
+        const byCreation = (ids: string[]) => [...ids].sort((a, b) => proposalOrder.indexOf(a) - proposalOrder.indexOf(b));
+        type Card = { id: string; kind: string; sourceLabel: string; needsAddressed: Array<{ id?: string; label: string }> };
+        expect(STAGE4_STATE_ROOTS).toHaveLength(7);
+        let grouped = 0;
+        for (const root of STAGE4_STATE_ROOTS) {
+          const [, n, ...rest] = root.split('.');
+          let d = steps[Number(n)] as unknown as Record<string, any>;
+          for (const k of rest) d = d[k];
+          // Ada's reads end `as ada@e2e.test`; Bob's writes `as bob`.
+          const reader = /as (\S+@\S+)$/.exec(steps[Number(n)].label)?.[1] ?? 'bob@e2e.test';
+          const w = d.walkthrough;
+          const phaseList: Array<{ id: string }> = w.phase === 'PARTNER_NEEDS' ? w.partnerNeeds : w.ownNeeds;
+          const owner = w.phase === 'PARTNER_NEEDS' ? (e: string) => e !== reader : (e: string) => e === reader;
+          expect({ root, phase: w.phase }).toEqual({ root, phase: expect.stringMatching(/^(MY_NEEDS|PARTNER_NEEDS)$/) });
+          expect({ root, ids: phaseList.map(x => x.id) }).toEqual({ root, ids: needRows.filter(r => owner(r.email)).map(r => r.id) });
+          expect({ root, current: w.currentNeed?.id }).toEqual({ root, current: phaseList[0].id });
+          const cards: Card[] = [...d.inventory.sharedProposals, ...d.inventory.individualCommitments];
+          const label = w.currentNeed.label.toLowerCase();
+          const forCurrent = cards.filter(c => c.needsAddressed.some(x => x.id === w.currentNeed.id || x.label.toLowerCase() === label));
+          const filters: Record<string, (c: Card) => boolean> =
+            w.phase === 'PARTNER_NEEDS'
+              ? {
+                  partner_may_do: c => c.kind === 'INDIVIDUAL_COMMITMENT' && c.sourceLabel === 'PARTNER',
+                  shared_options: c => c.kind === 'SHARED_PROPOSAL',
+                  your_prior_suggestions: c => c.sourceLabel === 'YOU',
+                }
+              : {
+                  you_suggested: c => c.sourceLabel === 'YOU',
+                  partner_suggested: c => c.sourceLabel === 'PARTNER',
+                  ai_suggested: c => c.sourceLabel === 'AI',
+                };
+          expect({ root, keys: w.proposalGroups.map((g: { key: string }) => g.key) }).toEqual({ root, keys: Object.keys(filters) });
+          for (const g of w.proposalGroups as Array<{ key: string; proposals: Card[] }>) {
+            expect({ root, group: g.key, ids: g.proposals.map(p => p.id) }).toEqual({
+              root,
+              group: g.key,
+              ids: byCreation(forCurrent.filter(filters[g.key]).map(c => c.id)),
+            });
+            grouped += g.proposals.length;
+          }
+        }
+        // Not vacuous: the groups hold cards.
+        expect(grouped).toBeGreaterThan(0);
       });
 
       it('the rank-shifted instants are their rows’ instants', async () => {

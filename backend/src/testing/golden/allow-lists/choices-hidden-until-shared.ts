@@ -89,7 +89,11 @@ function stage4ComputedRules(): AllowRule[] {
       // order is unchanged this round): the walkthrough's current need is the
       // reader's first shared need in the NEED's creation order (Appreciation),
       // where the fixture's coverage rows put Partnership first, so each group
-      // lists the proposals addressing that need. The test asserts exactly that.
+      // lists the proposals addressing that need. The test asserts exactly that
+      // at all seven roots (choices-hidden-until-shared.golden.test.ts, "at
+      // every Stage 4 root the current need is the phase’s first shared need by
+      // creation, and each group is exactly its cards"): the phase's need order,
+      // the current need, the group keys, and each group's card ids in order.
       kind: 'mayDiffer',
       at: STAGE4_STATE_ROOTS.map(r => `${r}.walkthrough.proposalGroups.*.proposals`),
       mustMatch: true,
