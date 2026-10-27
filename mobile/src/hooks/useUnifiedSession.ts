@@ -40,9 +40,6 @@ import {
   useStrategies,
   useRequestStrategySuggestions,
   useProposeStrategy,
-  useMarkReadyToRank,
-  useSubmitRankings,
-  useStrategiesReveal,
   useAgreements,
   useConfirmAgreement,
   useCreateAgreement,
@@ -316,9 +313,6 @@ export function useUnifiedSession(
   const { data: strategyData } = useStrategies(sessionId, {
     enabled: !!sessionId && !accessDenied && stateResolved && isStage4,
   });
-  const { data: revealData } = useStrategiesReveal(sessionId, {
-    enabled: !!sessionId && !accessDenied && stateResolved && isStage4,
-  });
   const { data: agreementsData } = useAgreements(sessionId, {
     enabled: !!sessionId && !accessDenied && stateResolved && isStage4,
   });
@@ -364,8 +358,6 @@ export function useUnifiedSession(
   const { mutate: proposeStrategy, isPending: isProposing } = useProposeStrategy();
   const { mutate: requestSuggestions, isPending: isGenerating } =
     useRequestStrategySuggestions();
-  const { mutate: markReady } = useMarkReadyToRank();
-  const { mutate: submitRankings } = useSubmitRankings();
   const { mutate: confirmAgreement } = useConfirmAgreement();
   const { mutate: createAgreement } = useCreateAgreement();
   const { mutate: resolveSession } = useResolveSession();
@@ -596,7 +588,6 @@ export function useUnifiedSession(
     (myProgress?.gatesSatisfied as Record<string, unknown> | undefined)?.readyToRank === true;
   const canMarkReadyToRank = strategyData?.canMarkReadyToRank === true;
   const canRankStrategies = strategyData?.canRank === true;
-  const overlappingStrategies = useMemo(() => revealData?.overlap ?? [], [revealData?.overlap]);
   const agreements = useMemo(() => agreementsData?.agreements ?? [], [agreementsData?.agreements]);
 
   // -------------------------------------------------------------------------
@@ -768,19 +759,6 @@ export function useUnifiedSession(
         });
       }
 
-      // Overlap preview after ranking (hide after session is resolved)
-      if (strategyPhase === StrategyPhase.REVEALING && overlappingStrategies.length > 0 && agreements.length === 0 && session?.status !== SessionStatus.RESOLVED) {
-        cards.push({
-          id: 'overlap-preview',
-          type: 'overlap-preview',
-          position: 'end',
-          props: {
-            overlappingCount: overlappingStrategies.length,
-            topOverlap: overlappingStrategies[0],
-          },
-        });
-      }
-
       // Agreement preview (hide after session is resolved — no need to "Review & Confirm")
       if (agreements.length > 0 && session?.status !== SessionStatus.RESOLVED) {
         const confirmedByMe = agreements.filter(a => a.agreedByMe).length;
@@ -822,7 +800,6 @@ export function useUnifiedSession(
     myReadyToRank,
     canMarkReadyToRank,
     canRankStrategies,
-    overlappingStrategies,
     agreements,
     partnerName,
     session?.status,
@@ -1146,19 +1123,6 @@ export function useUnifiedSession(
     [sessionId, requestSuggestions]
   );
 
-  const handleMarkReadyToRank = useCallback(() => {
-    if (!sessionId) return;
-    markReady({ sessionId });
-  }, [sessionId, markReady]);
-
-  const handleSubmitRankings = useCallback(
-    (rankedIds: string[]) => {
-      if (!sessionId) return;
-      submitRankings({ sessionId, rankedIds });
-    },
-    [sessionId, submitRankings]
-  );
-
   const handleConfirmAgreement = useCallback(
     (agreementId: string, onSuccess?: (response: ConfirmAgreementResponse) => void) => {
       if (!sessionId) return;
@@ -1293,8 +1257,6 @@ export function useUnifiedSession(
     strategies,
     canMarkReadyToRank,
     canRankStrategies,
-    revealData,
-    overlappingStrategies,
     agreementsData,
     agreements,
     empathyStatusData,
@@ -1334,8 +1296,6 @@ export function useUnifiedSession(
     handleNeedsNotValidYet,
     handleAddStrategy,
     handleRequestMoreStrategies,
-    handleMarkReadyToRank,
-    handleSubmitRankings,
     handleConfirmAgreement,
     handleCreateAgreementFromOverlap,
     handleResolveSession,

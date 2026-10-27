@@ -264,6 +264,17 @@ export function gatesToJson(gates: GateEntry[], resolve: (s: Stamp) => Date): Re
 // Session, invitation, messages
 // ============================================================================
 
+/**
+ * The needs (by index) whose share the current-shape writer records as a
+ * GRANTED IDENTIFIED_NEED consent: the shared ones — none when the scenario
+ * carries `currentShape.unconsentedNeedShares` (TS-11: the repair-stage
+ * fixtures were built without those consents; their rows stay as they were).
+ */
+export function needShareConsents(s: Scenario, p: Scenario['participants'][number]): number[] {
+  if (s.currentShape?.unconsentedNeedShares) return [];
+  return (p.needs ?? []).flatMap((n, k) => (n.shared ? [k] : []));
+}
+
 export function sessionStatus(s: Scenario): 'CREATED' | 'INVITED' | 'ACTIVE' {
   if (s.invitation.acceptedAt) return 'ACTIVE';
   if (s.participants[0]?.milestones.invitation_sent) return 'INVITED';
@@ -520,13 +531,13 @@ export async function writeCurrentShape(tx: Tx, scenario: Scenario, users: UserR
   // (uuidv7). No pre-TS-5 scenario shares a need, so this writes nothing for them.
   const writeNeedShares = async (i: number): Promise<void> => {
     const p = scenario.participants[i];
-    if (!p.needs?.some(n => n.shared)) return;
+    const consented = needShareConsents(scenario, p);
+    if (consented.length === 0) return;
     const sharedAt = p.milestones.needs_shared;
     if (!sharedAt) throw new Error(`Participant "${p.key}" shares needs but has no needs_shared milestone`);
     const rows = await tx.identifiedNeed.findMany({ where: { vesselId: vessels[i]!.id }, orderBy: { id: 'asc' } });
-    if (rows.length !== p.needs.length) throw new Error(`Participant "${p.key}": need rows do not match the scenario`);
-    for (const [k, n] of p.needs.entries()) {
-      if (!n.shared) continue;
+    if (rows.length !== (p.needs ?? []).length) throw new Error(`Participant "${p.key}": need rows do not match the scenario`);
+    for (const k of consented) {
       await tx.consentRecord.create({
         data: {
           userId: userRows[i].id,

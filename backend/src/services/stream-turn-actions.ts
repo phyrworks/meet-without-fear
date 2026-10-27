@@ -26,6 +26,7 @@ import { interpretNeedEditRequest } from './needs-edit-interpreter.service';
 import { captureStage4Turn } from './stage4-capture.service';
 import { applyStage4AutoClosureFromSignal } from './stage4-auto-closure.service';
 import { getStage4State as buildStage4State } from './stage4-state';
+import { advanceWalkthrough } from './stage4-walkthrough';
 import type { SessionStateToolInput } from './stage-tools';
 import type { ParsedStage4WalkthroughAction } from '../utils/micro-tag-parser';
 import { getPartnerParticipant, type ResolvedParticipant } from './participant-resolver';
@@ -184,77 +185,13 @@ export async function applyStage4WalkthroughAction(
     return false;
   }
 
-  const progress = await prisma.stageProgress.findUnique({
-    where: { sessionId_userId_stage: { sessionId, userId, stage: 4 } },
-    select: { gatesSatisfied: true },
-  });
-  const gates = (progress?.gatesSatisfied as Record<string, unknown> | null) ?? {};
-  const existing =
-    gates.stage4Walkthrough &&
-    typeof gates.stage4Walkthrough === 'object' &&
-    !Array.isArray(gates.stage4Walkthrough)
-      ? (gates.stage4Walkthrough as Record<string, unknown>)
-      : {};
-  const covered = new Set(
-    Array.isArray(existing.coveredNeedIds)
-      ? existing.coveredNeedIds.filter((id): id is string => typeof id === 'string')
-      : []
-  );
-  const skipped = new Set(
-    Array.isArray(existing.skippedNeedIds)
-      ? existing.skippedNeedIds.filter((id): id is string => typeof id === 'string')
-      : []
-  );
-  if (action.action === 'COVERED') {
-    covered.add(currentNeed.id);
-    skipped.delete(currentNeed.id);
-  } else {
-    skipped.add(currentNeed.id);
-    covered.delete(currentNeed.id);
-  }
-
-  const remainingOwn = before.walkthrough.ownNeeds.find(
-    (need) => !covered.has(need.id) && !skipped.has(need.id)
-  );
-  const remainingPartner = before.walkthrough.partnerNeeds.find(
-    (need) => !covered.has(need.id) && !skipped.has(need.id)
-  );
-  const phase =
-    before.walkthrough.phase === 'MY_NEEDS' && remainingOwn
-      ? 'MY_NEEDS'
-      : before.walkthrough.phase === 'MY_NEEDS' && remainingPartner
-        ? 'PARTNER_NEEDS'
-        : before.walkthrough.phase === 'PARTNER_NEEDS' && remainingPartner
-          ? 'PARTNER_NEEDS'
-          : remainingOwn
-            ? 'MY_NEEDS'
-            : remainingPartner
-              ? 'PARTNER_NEEDS'
-              : 'QUALITY_REVIEW';
-  const currentNeedId =
-    phase === 'MY_NEEDS'
-      ? remainingOwn?.id ?? null
-      : phase === 'PARTNER_NEEDS'
-        ? remainingPartner?.id ?? null
-        : null;
-
-  await prisma.stageProgress.update({
-    where: { sessionId_userId_stage: { sessionId, userId, stage: 4 } },
-    data: {
-      gatesSatisfied: {
-        ...gates,
-        stage4Walkthrough: {
-          phase,
-          currentNeedId,
-          coveredNeedIds: [...covered],
-          skippedNeedIds: [...skipped],
-          updatedAt: new Date().toISOString(),
-          updatedFrom: 'ai_walkthrough_action',
-          lastAction: action.action,
-          lastReason: action.reason ?? null,
-        },
-      } satisfies Prisma.InputJsonValue,
-    },
+  // TS-11: the walkthrough is need_disposition (services/stage4-walkthrough.ts),
+  // the same writer the POST /stage4/walkthrough/needs/:needId route uses.
+  const advanced = await advanceWalkthrough({
+    sessionId,
+    userId,
+    needId: currentNeed.id,
+    action: action.action === 'COVERED' ? 'covered' : 'skip',
   });
 
   logger.info('[applyStage4WalkthroughAction] Advanced Stage 4 walkthrough from model action', {
@@ -262,8 +199,9 @@ export async function applyStage4WalkthroughAction(
     userId,
     needId: currentNeed.id,
     action: action.action,
-    nextPhase: phase,
-    nextNeedId: currentNeedId,
+    reason: action.reason ?? null,
+    nextPhase: advanced.phase,
+    nextNeedId: advanced.currentNeedId,
   });
   return true;
 }

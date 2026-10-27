@@ -1,4 +1,19 @@
-import { Prisma } from '../generated/prisma/client';
+/**
+ * Stage 4 capture (TS-11): proposals captured from the conversation, on the
+ * target tables. The extraction (typed `<stage4_proposals>` blocks, the
+ * compatibility heuristics, the destructive-intent and selection detectors)
+ * is unchanged; what it writes moved:
+ *
+ *   StrategyProposal            → proposal (created_by_participant_id; AI-sourced)
+ *   needsAddressed[] labels     → proposal_need over need_share ids (matched against the
+ *                                 session's shared needs as the actor names them);
+ *                                 unmatched labels → unresolved_need_labels
+ *   Stage4ProposalRevision      → proposal_revision (no message id: the triggering text
+ *                                 is in before/after, spec §1.4)
+ *   Stage4ProposalSelection     → proposal_choice
+ *   refreshStage4NeedCoverage   → nothing: coverage is v_need_coverage
+ */
+
 import {
   ProposalInventoryDTO,
   Stage4CoverageAuditDTO,
@@ -10,102 +25,15 @@ import {
 } from '@meet-without-fear/shared';
 import { prisma } from '../lib/prisma';
 import { logger } from '../lib/logger';
-import { refreshStage4NeedCoverage } from './stage4-coverage.service';
 import { isSupersededStrategy } from '../utils/strategy-dedupe';
-
-function normalizeNeedToken(value: string): string {
-  return value
-    .toLowerCase()
-    .replace(/[^a-z0-9 ]+/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
-}
-
-function needLabelMatches(label: string, need: string): boolean {
-  const a = normalizeNeedToken(label);
-  const b = normalizeNeedToken(need);
-  if (!a || !b) return false;
-  if (a === b) return true;
-  if (a.includes(b) || b.includes(a)) return true;
-  const tokensA = new Set(a.split(' ').filter((token) => token.length > 2));
-  const tokensB = new Set(b.split(' ').filter((token) => token.length > 2));
-  if (tokensA.size === 0 || tokensB.size === 0) return false;
-  let shared = 0;
-  for (const token of tokensA) if (tokensB.has(token)) shared += 1;
-  const denom = Math.min(tokensA.size, tokensB.size);
-  return denom > 0 && shared / denom >= 0.5;
-}
-
-async function getSessionMemberUserIds(sessionId: string): Promise<Set<string>> {
-  const session = await prisma.session.findUnique({
-    where: { id: sessionId },
-    select: {
-      relationship: {
-        select: {
-          members: { select: { userId: true } },
-        },
-      },
-    },
-  });
-  return new Set(session?.relationship.members.map((member) => member.userId) ?? []);
-}
-
-function validateOperationOwnerUserId(
-  operation: Stage4InventoryOperation,
-  memberUserIds: Set<string>,
-  fallbackUserId: string
-): Stage4InventoryOperation {
-  if (!('ownerUserId' in operation) || !operation.ownerUserId) {
-    return operation;
-  }
-  if (memberUserIds.has(operation.ownerUserId)) {
-    return operation;
-  }
-  logger.warn('[stage4-capture] Ignoring non-member ownerUserId from AI output', {
-    ownerUserId: operation.ownerUserId,
-  });
-  return { ...operation, ownerUserId: fallbackUserId };
-}
-
-export async function linkProposalToIdentifiedNeeds(
-  proposalId: string,
-  sessionId: string,
-  needLabels: string[] | null | undefined
-): Promise<number> {
-  if (!needLabels || needLabels.length === 0) return 0;
-
-  const needs = await prisma.identifiedNeed.findMany({
-    where: { vessel: { sessionId } },
-    select: { id: true, need: true },
-  });
-  if (needs.length === 0) return 0;
-  const candidates = needs;
-
-  const matchedNeedIds = new Set<string>();
-  for (const label of needLabels) {
-    for (const candidate of candidates) {
-      if (label === candidate.id || needLabelMatches(label, candidate.need)) {
-        matchedNeedIds.add(candidate.id);
-      }
-    }
-  }
-  if (matchedNeedIds.size === 0) return 0;
-
-  let createdCount = 0;
-  for (const needId of matchedNeedIds) {
-    try {
-      await prisma.strategyProposalNeed.upsert({
-        where: { proposalId_needId: { proposalId, needId } },
-        create: { proposalId, needId },
-        update: {},
-      });
-      createdCount += 1;
-    } catch (error) {
-      logger.warn('[stage4-capture] Failed to link proposal to need', { proposalId, needId, error });
-    }
-  }
-  return createdCount;
-}
+import { resolveParticipant } from './participant-resolver';
+import {
+  loadProposals,
+  resolveNeedLabels,
+  setProposalNeeds,
+  upsertChoice,
+  type ProposalRow as StoreProposalRow,
+} from './stage4-store';
 
 export type Stage4CaptureInput = {
   sessionId: string;
@@ -208,19 +136,10 @@ export type Stage4CaptureResult = {
   skippedOperationCount: number;
 };
 
-type ProposalRow = {
-  id: string;
-  sessionId: string;
-  createdByUserId: string | null;
-  description: string;
-  needsAddressed: string[];
-  duration: string | null;
-  measureOfSuccess: string | null;
-  kind: Stage4ProposalKind;
+/** A proposal as the extraction reads it (the DTO enums for status and kind). */
+type ProposalRow = Omit<StoreProposalRow, 'status' | 'kind'> & {
   status: Stage4ProposalStatus;
-  removedAt: Date | null;
-  removedByUserId: string | null;
-  removalReason: string | null;
+  kind: Stage4ProposalKind;
 };
 
 const CAPTURE_CONFIDENCE_THRESHOLD = 0.7;
@@ -606,25 +525,78 @@ function inferClosureSignalFromUserMessage(message: string): Stage4ClosureSignal
   };
 }
 
-function proposalSnapshot(proposal: ProposalRow): Prisma.JsonObject {
+
+// ============================================================================
+// Writes (target tables)
+// ============================================================================
+
+interface CaptureContext {
+  sessionId: string;
+  /** The actor's participant id. */
+  actor: string;
+  /** user id → participant id, for the session (the AI names owners by user id). */
+  participantOfUser: Map<string, string>;
+  /** The user's own text: the capture lineage recorded in a revision (no message id). */
+  userMessage: string;
+}
+
+/** The snapshot a revision records: content and the shared need ids, never a private label. */
+function proposalSnapshot(proposal: ProposalRow): Record<string, unknown> {
   return {
     description: proposal.description,
-    needsAddressed: proposal.needsAddressed,
+    needIds: proposal.needIds,
+    unresolvedNeedLabels: proposal.unresolvedNeedLabels,
     duration: proposal.duration,
     measureOfSuccess: proposal.measureOfSuccess,
     kind: proposal.kind,
     status: proposal.status,
     removedAt: proposal.removedAt?.toISOString() ?? null,
-    removedByUserId: proposal.removedByUserId,
+    removedByParticipantId: proposal.removedByParticipantId,
     removalReason: proposal.removalReason,
   };
 }
 
+async function writeRevision(
+  ctx: CaptureContext,
+  proposalId: string,
+  action: 'CREATED' | 'REVISED' | 'REMOVED' | 'RESTORED' | 'CAPTURE_SKIPPED',
+  before: Record<string, unknown> | null,
+  after: Record<string, unknown>,
+  reason?: string | null,
+): Promise<void> {
+  await prisma.proposalRevision.create({
+    data: {
+      proposalId,
+      actorParticipantId: ctx.actor,
+      action,
+      ...(before ? { before: before as object } : {}),
+      after: { ...after, capturedFromUserMessage: ctx.userMessage } as object,
+      reason: reason ?? null,
+    },
+  });
+}
+
+/** Link the proposal to the shared needs its labels name (unmatched labels kept as text). */
+async function linkNeeds(ctx: CaptureContext, proposalId: string, labels: string[] | undefined): Promise<void> {
+  if (!labels) return;
+  const { needIds, unresolved } = await resolveNeedLabels(ctx.sessionId, ctx.actor, labels);
+  await setProposalNeeds(prisma, proposalId, needIds, unresolved);
+}
+
+function ownerParticipant(ctx: CaptureContext, ownerUserId: string | undefined): string {
+  if (!ownerUserId) return ctx.actor;
+  const pid = ctx.participantOfUser.get(ownerUserId);
+  if (pid) return pid;
+  logger.warn('[stage4-capture] Ignoring non-member ownerUserId from AI output', { ownerUserId });
+  return ctx.actor;
+}
+
 async function auditSkippedDestructiveCapture(
+  ctx: CaptureContext,
   proposals: ProposalRow[],
   input: Stage4CaptureInput,
   action: string,
-  confidence: number
+  confidence: number,
 ): Promise<void> {
   const match = findReferencedProposal(input.userMessage, proposals, [
     Stage4ProposalStatus.ACTIVE,
@@ -640,286 +612,212 @@ async function auditSkippedDestructiveCapture(
     });
     return;
   }
-
-  await prisma.stage4ProposalRevision.create({
-    data: {
-      proposalId: match.proposal.id,
-      sessionId: input.sessionId,
-      actorUserId: input.userId,
-      action: 'CAPTURE_SKIPPED',
-      before: proposalSnapshot(match.proposal),
-      after: { requestedAction: action, confidence },
-      reason: 'Low-confidence destructive Stage 4 capture was not applied.',
-      messageId: input.messageId,
-    },
-  });
+  await writeRevision(
+    ctx,
+    match.proposal.id,
+    'CAPTURE_SKIPPED',
+    proposalSnapshot(match.proposal),
+    { requestedAction: action, confidence },
+    'Low-confidence destructive Stage 4 capture was not applied.',
+  );
 }
 
 async function applyOperation(
+  ctx: CaptureContext,
   operation: Stage4InventoryOperation,
-  input: Stage4CaptureInput,
-  proposals: ProposalRow[]
+  proposals: ProposalRow[],
 ): Promise<boolean> {
   if (operation.type === 'ADD_PROPOSAL') {
-    const activeProposals = proposals.filter((proposal) => proposal.status !== Stage4ProposalStatus.REMOVED);
-    const duplicate = proposals.find(
-      (proposal) =>
-        proposal.status !== Stage4ProposalStatus.REMOVED &&
-        normalizeText(proposal.description) === normalizeText(operation.description)
-    );
-    if (duplicate) return false;
-    const superseded = activeProposals.find((proposal) =>
-      isSupersededStrategy(proposal.description, operation.description)
-    );
+    const live = proposals.filter((p) => p.status !== Stage4ProposalStatus.REMOVED);
+    if (live.some((p) => normalizeText(p.description) === normalizeText(operation.description))) return false;
+    const superseded = live.find((p) => isSupersededStrategy(p.description, operation.description));
     if (superseded) {
-      await prisma.strategyProposal.update({
+      const before = proposalSnapshot(superseded);
+      await prisma.proposal.update({
         where: { id: superseded.id },
         data: {
           description: operation.description,
-          needsAddressed: operation.needsAddressed,
           duration: operation.duration,
           measureOfSuccess: operation.measureOfSuccess,
           kind: operation.kind,
           status: Stage4ProposalStatus.ACTIVE,
         },
       });
-      const beforeSnapshot = proposalSnapshot(superseded);
+      await linkNeeds(ctx, superseded.id, operation.needsAddressed);
       Object.assign(superseded, {
         description: operation.description,
-        needsAddressed: operation.needsAddressed,
         duration: operation.duration ?? null,
         measureOfSuccess: operation.measureOfSuccess ?? null,
         kind: operation.kind,
         status: Stage4ProposalStatus.ACTIVE,
       });
-      await prisma.stage4ProposalRevision.create({
-        data: {
-          proposalId: superseded.id,
-          sessionId: input.sessionId,
-          actorUserId: input.userId,
-          action: 'REVISED',
-          before: beforeSnapshot,
-          after: proposalSnapshot(superseded),
-          reason: 'Captured refined Stage 4 proposal superseding an existing draft.',
-          messageId: input.messageId,
-        },
-      });
-      await linkProposalToIdentifiedNeeds(
+      await writeRevision(
+        ctx,
         superseded.id,
-        input.sessionId,
-        operation.needsAddressed
+        'REVISED',
+        before,
+        proposalSnapshot(superseded),
+        'Captured refined Stage 4 proposal superseding an existing draft.',
       );
       return true;
     }
 
-    const created = await prisma.strategyProposal.create({
+    const created = await prisma.proposal.create({
       data: {
-        sessionId: input.sessionId,
-        createdByUserId: operation.ownerUserId ?? input.userId,
+        sessionId: ctx.sessionId,
+        createdByParticipantId: ownerParticipant(ctx, operation.ownerUserId),
         description: operation.description,
-        needsAddressed: operation.needsAddressed,
         duration: operation.duration,
         measureOfSuccess: operation.measureOfSuccess,
         source: 'AI_SUGGESTED',
         kind: operation.kind,
         status: Stage4ProposalStatus.ACTIVE,
-        capturedFromMessageId: input.messageId,
       },
+      select: { id: true, createdAt: true, updatedAt: true, createdByParticipantId: true },
     });
+    await linkNeeds(ctx, created.id, operation.needsAddressed);
     proposals.push({
       id: created.id,
-      sessionId: input.sessionId,
-      createdByUserId: operation.ownerUserId ?? input.userId,
+      sessionId: ctx.sessionId,
+      createdByParticipantId: created.createdByParticipantId,
+      source: 'AI_SUGGESTED',
+      kind: operation.kind,
+      status: Stage4ProposalStatus.ACTIVE,
+      description: operation.description,
+      duration: operation.duration ?? null,
+      measureOfSuccess: operation.measureOfSuccess ?? null,
+      unresolvedNeedLabels: [],
+      removedAt: null,
+      removedByParticipantId: null,
+      removalReason: null,
+      sharedAt: null,
+      createdAt: created.createdAt,
+      updatedAt: created.updatedAt,
+      needIds: [],
+    });
+    await writeRevision(ctx, created.id, 'CREATED', null, {
       description: operation.description,
       needsAddressed: operation.needsAddressed,
       duration: operation.duration ?? null,
       measureOfSuccess: operation.measureOfSuccess ?? null,
       kind: operation.kind,
       status: Stage4ProposalStatus.ACTIVE,
-      removedAt: null,
-      removedByUserId: null,
-      removalReason: null,
-      parentProposalId: null,
-      coverageSummary: null,
-      capturedFromMessageId: input.messageId,
-      createdAt: new Date(),
-      updatedAt: new Date(),
-      consentRecordId: null,
-    } as ProposalRow);
-    await prisma.stage4ProposalRevision.create({
-      data: {
-        proposalId: created.id,
-        sessionId: input.sessionId,
-        actorUserId: input.userId,
-        action: 'CREATED',
-        before: Prisma.JsonNull,
-        after: {
-          description: operation.description,
-          needsAddressed: operation.needsAddressed,
-          duration: operation.duration ?? null,
-          measureOfSuccess: operation.measureOfSuccess ?? null,
-          kind: operation.kind,
-          status: Stage4ProposalStatus.ACTIVE,
-          capturedQuote: operation.capturedQuote ?? null,
-        },
-        reason: 'Captured from Stage 4 conversation.',
-        messageId: input.messageId,
-      },
-    });
-    await linkProposalToIdentifiedNeeds(
-      created.id,
-      input.sessionId,
-      operation.needsAddressed
-    );
+      capturedQuote: operation.capturedQuote ?? null,
+    }, 'Captured from Stage 4 conversation.');
     return true;
   }
 
-  const proposal = proposals.find((candidate) => candidate.id === operation.proposalId);
+  const proposal = proposals.find((p) => p.id === operation.proposalId);
   if (!proposal) return false;
 
   if (operation.type === 'REMOVE_PROPOSAL') {
-    await prisma.strategyProposal.update({
+    const now = new Date();
+    await prisma.proposal.update({
       where: { id: operation.proposalId },
       data: {
         status: Stage4ProposalStatus.REMOVED,
-        removedAt: new Date(),
-        removedByUserId: input.userId,
+        removedAt: now,
+        removedByParticipantId: ctx.actor,
         removalReason: operation.reason,
       },
     });
-    await prisma.stage4ProposalRevision.create({
-      data: {
-        proposalId: operation.proposalId,
-        sessionId: input.sessionId,
-        actorUserId: input.userId,
-        action: 'REMOVED',
-        before: proposalSnapshot(proposal),
-        after: {
-          ...proposalSnapshot(proposal),
-          status: Stage4ProposalStatus.REMOVED,
-          removedByUserId: input.userId,
-          removalReason: operation.reason ?? null,
-        },
-        reason: operation.reason,
-        messageId: input.messageId,
-      },
-    });
+    await writeRevision(ctx, operation.proposalId, 'REMOVED', proposalSnapshot(proposal), {
+      ...proposalSnapshot(proposal),
+      status: Stage4ProposalStatus.REMOVED,
+      removedByParticipantId: ctx.actor,
+      removalReason: operation.reason ?? null,
+    }, operation.reason);
     return true;
   }
 
   if (operation.type === 'RESTORE_PROPOSAL') {
-    await prisma.strategyProposal.update({
+    await prisma.proposal.update({
       where: { id: operation.proposalId },
-      data: {
-        status: Stage4ProposalStatus.ACTIVE,
-        removedAt: null,
-        removedByUserId: null,
-        removalReason: null,
-      },
+      data: { status: Stage4ProposalStatus.ACTIVE, removedAt: null, removedByParticipantId: null, removalReason: null },
     });
-    await prisma.stage4ProposalRevision.create({
-      data: {
-        proposalId: operation.proposalId,
-        sessionId: input.sessionId,
-        actorUserId: input.userId,
-        action: 'RESTORED',
-        before: proposalSnapshot(proposal),
-        after: {
-          ...proposalSnapshot(proposal),
-          status: Stage4ProposalStatus.ACTIVE,
-          removedAt: null,
-          removedByUserId: null,
-          removalReason: null,
-        },
-        reason: operation.reason,
-        messageId: input.messageId,
-      },
-    });
+    await writeRevision(ctx, operation.proposalId, 'RESTORED', proposalSnapshot(proposal), {
+      ...proposalSnapshot(proposal),
+      status: Stage4ProposalStatus.ACTIVE,
+      removedAt: null,
+      removedByParticipantId: null,
+      removalReason: null,
+    }, operation.reason);
     return true;
   }
 
-  await prisma.strategyProposal.update({
+  await prisma.proposal.update({
     where: { id: operation.proposalId },
     data: {
       description: operation.description ?? proposal.description,
-      needsAddressed: operation.needsAddressed ?? proposal.needsAddressed,
       duration: operation.duration ?? proposal.duration,
       measureOfSuccess: operation.measureOfSuccess ?? proposal.measureOfSuccess,
       kind: operation.kind ?? proposal.kind,
-      createdByUserId:
+      createdByParticipantId:
         operation.kind === Stage4ProposalKind.INDIVIDUAL_COMMITMENT
-          ? input.userId
-          : operation.ownerUserId ?? proposal.createdByUserId,
+          ? ctx.actor
+          : operation.ownerUserId
+            ? ownerParticipant(ctx, operation.ownerUserId)
+            : proposal.createdByParticipantId,
       status: Stage4ProposalStatus.ACTIVE,
     },
   });
-  await prisma.stage4ProposalRevision.create({
-    data: {
-      proposalId: operation.proposalId,
-      sessionId: input.sessionId,
-      actorUserId: input.userId,
-      action: 'REVISED',
-      before: proposalSnapshot(proposal),
-      after: {
-        ...proposalSnapshot(proposal),
-        description: operation.description ?? proposal.description,
-        needsAddressed: operation.needsAddressed ?? proposal.needsAddressed,
-        duration: operation.duration ?? proposal.duration,
-        measureOfSuccess: operation.measureOfSuccess ?? proposal.measureOfSuccess,
-        kind: operation.kind ?? proposal.kind,
-        status: Stage4ProposalStatus.ACTIVE,
-      },
-      reason: operation.reason,
-      messageId: input.messageId,
-    },
-  });
-  if (operation.needsAddressed) {
-    await linkProposalToIdentifiedNeeds(
-      operation.proposalId,
-      input.sessionId,
-      operation.needsAddressed
-    );
-  }
+  if (operation.needsAddressed) await linkNeeds(ctx, operation.proposalId, operation.needsAddressed);
+  await writeRevision(ctx, operation.proposalId, 'REVISED', proposalSnapshot(proposal), {
+    ...proposalSnapshot(proposal),
+    description: operation.description ?? proposal.description,
+    needsAddressed: operation.needsAddressed ?? null,
+    duration: operation.duration ?? proposal.duration,
+    measureOfSuccess: operation.measureOfSuccess ?? proposal.measureOfSuccess,
+    kind: operation.kind ?? proposal.kind,
+    status: Stage4ProposalStatus.ACTIVE,
+  }, operation.reason);
   return true;
 }
 
 export async function captureStage4Turn(input: Stage4CaptureInput): Promise<Stage4CaptureResult> {
-  const proposals = (await prisma.strategyProposal.findMany({
-    where: { sessionId: input.sessionId },
-    orderBy: { updatedAt: 'desc' },
-  })) as ProposalRow[];
-
-  const rawOperations = extractAddOperations(input);
-  const destructiveOrRevision = extractDestructiveOrRevisionOperation(input.userMessage, proposals);
-  if (destructiveOrRevision.operation) {
-    rawOperations.push(destructiveOrRevision.operation);
+  const actor = await resolveParticipant(input.sessionId, input.userId);
+  if (!actor) {
+    return {
+      operations: [],
+      confidence: 0,
+      rationale: 'No participant for this user in the session.',
+      appliedOperationCount: 0,
+      skippedOperationCount: 0,
+    };
   }
-  const sessionMemberUserIds = await getSessionMemberUserIds(input.sessionId);
-  const operations = rawOperations.map((operation) =>
-    validateOperationOwnerUserId(operation, sessionMemberUserIds, input.userId)
-  );
+  const participants = await prisma.participant.findMany({
+    where: { sessionId: input.sessionId, leftAt: null },
+    select: { id: true, userId: true },
+  });
+  const ctx: CaptureContext = {
+    sessionId: input.sessionId,
+    actor: actor.id,
+    participantOfUser: new Map(participants.filter((p) => p.userId).map((p) => [p.userId as string, p.id])),
+    userMessage: input.userMessage,
+  };
+  const proposals = (await loadProposals(input.sessionId, actor.id)) as ProposalRow[];
+
+  const operations = extractAddOperations(input);
+  const destructiveOrRevision = extractDestructiveOrRevisionOperation(input.userMessage, proposals);
+  if (destructiveOrRevision.operation) operations.push(destructiveOrRevision.operation);
 
   const selection = extractSelection(input.userMessage, input.userId, proposals);
-  const confidence = operations.length > 0 || selection
-    ? Math.max(
-        input.structuredProposals !== undefined && operations.length > 0 ? 0.92 : 0,
-        operations.some((operation) => operation.type === 'ADD_PROPOSAL') ? 0.78 : 0,
-        destructiveOrRevision.confidence,
-        selection ? 0.82 : 0
-      )
-    : 0;
+  const confidence =
+    operations.length > 0 || selection
+      ? Math.max(
+          input.structuredProposals !== undefined && operations.length > 0 ? 0.92 : 0,
+          operations.some((operation) => operation.type === 'ADD_PROPOSAL') ? 0.78 : 0,
+          destructiveOrRevision.confidence,
+          selection ? 0.82 : 0,
+        )
+      : 0;
 
   let appliedOperationCount = 0;
   let skippedOperationCount = 0;
 
   if (destructiveOrRevision.lowConfidenceAction && destructiveOrRevision.confidence < DESTRUCTIVE_CONFIDENCE_THRESHOLD) {
     skippedOperationCount += 1;
-    await auditSkippedDestructiveCapture(
-      proposals,
-      input,
-      destructiveOrRevision.lowConfidenceAction,
-      destructiveOrRevision.confidence
-    );
+    await auditSkippedDestructiveCapture(ctx, proposals, input, destructiveOrRevision.lowConfidenceAction, destructiveOrRevision.confidence);
   }
 
   for (const operation of operations) {
@@ -930,36 +828,17 @@ export async function captureStage4Turn(input: Stage4CaptureInput): Promise<Stag
       skippedOperationCount += 1;
       continue;
     }
-    const applied = await applyOperation(operation, input, proposals);
-    if (applied) appliedOperationCount += 1;
+    if (await applyOperation(ctx, operation, proposals)) appliedOperationCount += 1;
     else skippedOperationCount += 1;
-  }
-
-  if (appliedOperationCount > 0) {
-    await refreshStage4NeedCoverage(input.sessionId);
   }
 
   if (selection) {
     for (const decision of selection.decisions) {
-      await prisma.stage4ProposalSelection.upsert({
-        where: {
-          proposalId_userId: {
-            proposalId: decision.proposalId,
-            userId: input.userId,
-          },
-        },
-        create: {
-          proposalId: decision.proposalId,
-          sessionId: input.sessionId,
-          userId: input.userId,
-          decision: decision.decision,
-          note: decision.note,
-        },
-        update: {
-          decision: decision.decision,
-          note: decision.note,
-          selectedAt: new Date(),
-        },
+      await upsertChoice({
+        proposalId: decision.proposalId,
+        participantId: actor.id,
+        decision: decision.decision as 'WILLING' | 'NOT_WILLING',
+        note: decision.note,
       });
     }
   }
@@ -969,9 +848,10 @@ export async function captureStage4Turn(input: Stage4CaptureInput): Promise<Stag
     selection,
     closureSignal: inferClosureSignalFromUserMessage(input.userMessage),
     confidence,
-    rationale: operations.length > 0 || selection
-      ? 'Captured deterministic Stage 4 inventory or selection signal from the conversation turn.'
-      : 'No high-confidence Stage 4 inventory operation detected.',
+    rationale:
+      operations.length > 0 || selection
+        ? 'Captured deterministic Stage 4 inventory or selection signal from the conversation turn.'
+        : 'No high-confidence Stage 4 inventory operation detected.',
     appliedOperationCount,
     skippedOperationCount,
   };

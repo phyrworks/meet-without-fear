@@ -118,6 +118,21 @@ export interface MayDifferRule extends RuleBase {
 }
 
 /**
+ * TS-11 (post-merge round): ONE baseline entry of a matching array (the one
+ * matching `where`, dot paths → values) MAY be missing from the run — the
+ * mirror of `addedEntries`, for a row the target writes at another step or
+ * not at all by a ruling (R33: `needs_shared` is reached by everyone once
+ * all have shared, not by the first sharer at their share). Pin `where`
+ * completely and name where the row went; pair it with an `addedEntries`
+ * at the step that now writes it. When the run still holds an entry equal
+ * to it, nothing is removed (the positional comparison runs as usual).
+ */
+export interface RemovedEntryRule extends RuleBase {
+  kind: 'removedEntry';
+  where: Record<string, unknown>;
+}
+
+/**
  * Keys that MAY be missing from the new artefact at matching objects (when
  * present they are compared as usual). Unlike `absentKeys`, it holds on the
  * current shape too — for a key whose disappearance on the target is expected
@@ -207,11 +222,20 @@ export interface TraceMappedRule extends RuleBase {
  *   - every (table, kind) the baseline wrote at the step has an image the run
  *     wrote (a write that disappeared is a violation).
  * `asyncBoundary` markers (a string) must be equal on both sides.
+ *
+ * TS-11 (post-merge round): `droppedTables` names a baseline (table, kind)
+ * the run does NOT write at that exact step, with its reason — the mirror of
+ * `addedTables`, for a structural move whose old write has no image there
+ * (a StageProgress gate update that is now a participant_milestone INSERT,
+ * or a milestone the target reaches at a later step, ruling R33). The run
+ * must write no image of it at that step (else the entry is stale and
+ * fails), and an entry naming a write the baseline step does not hold fails.
  */
 export interface ChangesMappedRule extends RuleBase {
   kind: 'changesMapped';
   tableMap: Record<string, string[]>;
   addedTables: Array<{ step: number; table: string; kind: 'added' | 'changed' | 'removed'; count: number; why: string }>;
+  droppedTables?: Array<{ step: number; table: string; kind: 'added' | 'changed' | 'removed'; why: string }>;
 }
 
 /**
@@ -298,6 +322,7 @@ export type AllowRule =
   | MayDifferRule
   | MayBeAbsentRule
   | ReplacedEntryRule
+  | RemovedEntryRule
   | TiedOrderRule;
 
 export interface AllowList {

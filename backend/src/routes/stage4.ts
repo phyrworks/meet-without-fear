@@ -5,8 +5,6 @@
  * - GET /sessions/:id/strategies - Get anonymous strategy pool
  * - POST /sessions/:id/strategies - Propose a strategy
  * - GET /sessions/:id/stage4 - Get redesigned Stage 4 state
- * - POST /sessions/:id/strategies/rank - Submit ranking
- * - GET /sessions/:id/strategies/overlap - Get ranking overlap
  * - POST /sessions/:id/agreements - Create agreement
  * - POST /sessions/:id/agreements/:agreementId/confirm - Confirm agreement
  */
@@ -32,12 +30,9 @@ import {
   undeclineStage4Need,
   closeStage4,
   proposeStrategy,
-  submitRanking,
-  getOverlap,
   createAgreement,
   confirmAgreement,
   requestSuggestions,
-  markReady,
   getAgreements,
 } from '../controllers/stage4';
 
@@ -163,22 +158,6 @@ router.post(
   asyncHandler(proposeStrategy)
 );
 
-// Submit strategy ranking
-router.post(
-  '/sessions/:id/strategies/rank',
-  requireAuth,
-  requireSessionAccess,
-  asyncHandler(submitRanking)
-);
-
-// Get ranking overlap
-router.get(
-  '/sessions/:id/strategies/overlap',
-  requireAuth,
-  requireSessionAccess,
-  asyncHandler(getOverlap)
-);
-
 // Create agreement
 router.post(
   '/sessions/:id/agreements',
@@ -201,14 +180,6 @@ router.post(
   requireAuth,
   requireSessionAccess,
   asyncHandler(requestSuggestions)
-);
-
-// Mark ready to rank
-router.post(
-  '/sessions/:id/strategies/ready',
-  requireAuth,
-  requireSessionAccess,
-  asyncHandler(markReady)
 );
 
 // Get agreements list

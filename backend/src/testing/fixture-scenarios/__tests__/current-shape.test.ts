@@ -3,6 +3,7 @@ import {
   gatesToJson,
   invitationFields,
   messageSender,
+  needShareConsents,
   phaseToStage,
   referencedClocks,
   resolveStamp,
@@ -437,6 +438,32 @@ describe('scenarios', () => {
       expect(s.participants.length).toBe(withB ? 2 : 1);
       for (const p of s.participants) expect(() => stageProgressPlan(p, s)).not.toThrow();
       expect(() => invitationFields(s)).not.toThrow();
+    }
+  });
+
+  // TS-11: the repair-stage needs gained the target's `shared` text, with the
+  // `unconsentedNeedShares` quirk. The current-shape writer reads `shared`
+  // ONLY through needShareConsents, so its rows are unchanged iff the consents
+  // it records are what they were before: none for every stage except
+  // TOMBSTONE_READY, whose needs were already shared (both partners, all needs).
+  it('the current-shape writer records exactly the share consents it did before TS-11 (rows byte-unchanged)', () => {
+    for (const stage of Object.values(TargetStage)) {
+      for (const withB of [true, false]) {
+        const s = scenarioFor(stage, { a: names.a, b: withB ? names.b : undefined });
+        for (const p of s.participants) {
+          const expected = stage === TargetStage.TOMBSTONE_READY ? (p.needs ?? []).map((_, k) => k) : [];
+          expect({ stage, p: p.key, consents: needShareConsents(s, p) }).toEqual({ stage, p: p.key, consents: expected });
+        }
+      }
+    }
+    // The repair stages do carry the target's shared text (what the target writer writes).
+    const repair = scenarioFor(TargetStage.STAGE4_REDESIGN_PARTNER_INACTIVE, names);
+    expect(repair.currentShape?.unconsentedNeedShares).toBe(true);
+    for (const p of repair.participants) {
+      for (const n of p.needs ?? []) {
+        expect(n.shared?.text).toEqual(expect.any(String));
+        expect(n.shared!.text.toLowerCase()).not.toContain(n.need.toLowerCase());
+      }
     }
   });
 

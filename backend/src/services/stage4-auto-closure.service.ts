@@ -1,43 +1,12 @@
-import { Prisma } from '../generated/prisma/client';
-import {
-  Stage4ClosureKind,
-  Stage4ClosureReason,
-  Stage4ProposalKind,
-  Stage4ProposalStatus,
-  Stage4SelectionDecision,
-} from '@meet-without-fear/shared';
+import { Stage4ClosureKind, Stage4ClosureReason } from '@meet-without-fear/shared';
 import { prisma } from '../lib/prisma';
 import { logger } from '../lib/logger';
 import { notifyPartner, publishSessionEvent } from './realtime';
 import { getPartnerUserId } from '../utils/session';
 import type { Stage4ClosureSignalDTO } from './stage4-capture.service';
-
-type SessionForClosure = {
-  id: string;
-  status: string;
-  relationship: {
-    members: Array<{ userId: string; joinedAt: Date }>;
-  };
-};
-
-type ProposalForClosure = {
-  id: string;
-  kind: Stage4ProposalKind;
-  status: Stage4ProposalStatus;
-  createdByUserId: string | null;
-};
-
-type SelectionForClosure = {
-  proposalId: string;
-  userId: string;
-  decision: Stage4SelectionDecision;
-};
-
-type CoverageForClosure = {
-  id: string;
-  needId: string | null;
-  coverageStatus: string;
-};
+import { resolveParticipant } from './participant-resolver';
+import { loadStageStates } from './stage-shim';
+import { closeStage4WithoutAgreement, Stage4CloseError } from './stage4-closure';
 
 export type Stage4AutoClosureResult =
   | { closed: true; reason: Stage4ClosureReason }
@@ -47,40 +16,11 @@ function isExplicitNoSharedClosure(signal: Stage4ClosureSignalDTO | undefined): 
   return signal?.readyToClose === true && signal.kind === Stage4ClosureKind.NO_SHARED_AGREEMENT;
 }
 
-function getIndividualCommitmentIds(
-  proposals: ProposalForClosure[],
-  selections: SelectionForClosure[],
-  closingUserId: string
-): string[] {
-  const willingIds = new Set(
-    selections
-      .filter((selection) => selection.decision === Stage4SelectionDecision.WILLING)
-      .map((selection) => selection.proposalId)
-  );
-
-  return proposals
-    .filter((proposal) => proposal.kind === Stage4ProposalKind.INDIVIDUAL_COMMITMENT)
-    .filter((proposal) => proposal.status === Stage4ProposalStatus.ACTIVE)
-    .filter(
-      (proposal) =>
-        willingIds.has(proposal.id) ||
-        proposal.createdByUserId === closingUserId
-    )
-    .map((proposal) => proposal.id);
-}
-
-function buildNoSharedSummary(
-  individualCommitmentCount: number,
-  openNeedCount: number,
-  requestedSummary?: string
-): string {
-  if (requestedSummary) return requestedSummary;
-
-  return `Closed without a shared agreement, preserving ${individualCommitmentCount} individual commitment${individualCommitmentCount === 1 ? '' : 's'} and ${openNeedCount} still-open need${openNeedCount === 1 ? '' : 's'}.`;
-}
-
 /**
- * Apply an explicit conversational no-shared-agreement close.
+ * Apply an explicit conversational no-shared-agreement close (TS-11: on the
+ * target, via stage4-closure — the job writes `session_closure` and the
+ * session RESOLVED; the open needs and individual commitments are
+ * `v_session_closure_items`).
  *
  * This is intentionally narrower than the button endpoint: it only honors
  * explicit stop/close/no-shared-agreement language captured from the user's
@@ -95,95 +35,28 @@ export async function applyStage4AutoClosureFromSignal(args: {
     return { closed: false, reason: 'no_explicit_no_shared_closure_signal' };
   }
 
-  const session = (await prisma.session.findFirst({
-    where: {
-      id: args.sessionId,
-      relationship: {
-        members: {
-          some: { userId: args.userId },
-        },
-      },
-    },
-    include: {
-      relationship: {
-        include: {
-          members: {
-            orderBy: { joinedAt: 'asc' },
-          },
-        },
-      },
-    },
-  })) as SessionForClosure | null;
-
+  const participant = await resolveParticipant(args.sessionId, args.userId);
+  if (!participant) return { closed: false, reason: 'session_not_found' };
+  const session = await prisma.session.findUnique({ where: { id: args.sessionId }, select: { status: true } });
   if (!session) return { closed: false, reason: 'session_not_found' };
   if (session.status !== 'ACTIVE') return { closed: false, reason: 'session_not_active' };
 
-  const currentProgress = await prisma.stageProgress.findFirst({
-    where: { sessionId: args.sessionId, userId: args.userId, status: 'IN_PROGRESS' },
-    orderBy: { stage: 'desc' },
-    select: { stage: true },
-  });
-  if ((currentProgress?.stage ?? 0) !== 4) {
-    return { closed: false, reason: 'not_in_stage_4' };
-  }
+  const states = await loadStageStates([{ id: participant.id, joinedAt: participant.joinedAt }]);
+  if ((states.get(participant.id)?.current.stage ?? 0) !== 4) return { closed: false, reason: 'not_in_stage_4' };
 
-  const existingClosure = await prisma.stage4Closure.findUnique({
-    where: { sessionId: args.sessionId },
-  });
-  if (existingClosure) return { closed: false, reason: 'already_closed' };
-
-  const [proposals, selections, coverageRows] = await Promise.all([
-    prisma.strategyProposal.findMany({
-      where: { sessionId: args.sessionId, status: { not: Stage4ProposalStatus.REMOVED } },
-      select: {
-        id: true,
-        kind: true,
-        status: true,
-        createdByUserId: true,
-      },
-    }) as Promise<ProposalForClosure[]>,
-    prisma.stage4ProposalSelection.findMany({
-      where: { sessionId: args.sessionId },
-      select: { proposalId: true, userId: true, decision: true },
-    }) as Promise<SelectionForClosure[]>,
-    prisma.stage4NeedCoverage.findMany({
-      where: { sessionId: args.sessionId },
-      select: { id: true, needId: true, coverageStatus: true },
-    }) as Promise<CoverageForClosure[]>,
-  ]);
-
-  const individualProposalIds = getIndividualCommitmentIds(proposals, selections, args.userId);
-  const openNeedIds = coverageRows
-    .filter((row) => row.coverageStatus === 'OPEN' || row.coverageStatus === 'PARTIAL')
-    .map((row) => row.needId ?? row.id);
-  const now = new Date();
   const reason = args.signal.reason ?? Stage4ClosureReason.USER_STOPPED;
-
-  await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
-    await tx.stage4Closure.create({
-      data: {
-        sessionId: args.sessionId,
-        kind: Stage4ClosureKind.NO_SHARED_AGREEMENT,
-        reason,
-        summary: buildNoSharedSummary(individualProposalIds.length, openNeedIds.length, args.signal?.summary),
-        sharedAgreementIds: [],
-        individualProposalIds,
-        openNeedIds,
-        closedByUserId: args.userId,
-        closedAt: now,
-      },
+  let counts: { individualCount: number; openNeedCount: number };
+  try {
+    counts = await closeStage4WithoutAgreement({
+      sessionId: args.sessionId,
+      participantId: participant.id,
+      reason,
+      summary: args.signal.summary,
     });
-
-    await tx.session.update({
-      where: { id: args.sessionId },
-      data: { status: 'RESOLVED', resolvedAt: now },
-    });
-
-    await tx.stageProgress.updateMany({
-      where: { sessionId: args.sessionId, completedAt: null },
-      data: { status: 'COMPLETED', completedAt: now },
-    });
-  });
+  } catch (error) {
+    if (error instanceof Stage4CloseError && error.code === 'CONFLICT') return { closed: false, reason: 'already_closed' };
+    throw error;
+  }
 
   const partnerId = await getPartnerUserId(args.sessionId, args.userId);
   if (partnerId) {
@@ -193,7 +66,6 @@ export async function applyStage4AutoClosureFromSignal(args: {
       agreementIds: [],
     });
   }
-
   await publishSessionEvent(args.sessionId, 'session.resolved', {
     closureKind: Stage4ClosureKind.NO_SHARED_AGREEMENT,
     agreementIds: [],
@@ -203,8 +75,8 @@ export async function applyStage4AutoClosureFromSignal(args: {
     sessionId: args.sessionId,
     userId: args.userId,
     reason,
-    individualProposalCount: individualProposalIds.length,
-    openNeedCount: openNeedIds.length,
+    individualProposalCount: counts.individualCount,
+    openNeedCount: counts.openNeedCount,
   });
 
   return { closed: true, reason };

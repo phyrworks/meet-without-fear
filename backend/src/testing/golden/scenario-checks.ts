@@ -27,26 +27,21 @@ export function goldenScenarioChecks(opts: {
   byteTargetAllowList?: AllowList;
 }): void {
   const { scenario, allowList } = opts;
+  const byte = () => ({
+    scenario,
+    harness: opts.harness(),
+    steps: opts.steps(),
+    tiedOrder: allowList.rules,
+    targetAllowList: opts.byteTargetAllowList,
+  });
 
   it('every identifier resolves to a structural label', async () => {
-    const report = await recordOrVerify({
-      scenario,
-      harness: opts.harness(),
-      steps: opts.steps(),
-      tiedOrder: allowList.rules,
-      targetAllowList: opts.byteTargetAllowList,
-    });
+    const report = await recordOrVerify(byte());
     expect(report.unresolved).toEqual([]);
   });
 
   it('matches the recorded baseline', async () => {
-    const report = await recordOrVerify({
-      scenario,
-      harness: opts.harness(),
-      steps: opts.steps(),
-      tiedOrder: allowList.rules,
-      targetAllowList: opts.byteTargetAllowList,
-    });
+    const report = await recordOrVerify(byte());
     if (report.recorded) {
       expect(process.env.GOLDEN_UPDATE?.split(',')).toContain(scenario);
       return;

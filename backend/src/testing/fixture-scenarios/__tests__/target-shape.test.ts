@@ -47,23 +47,10 @@ describe('target writer — pure helpers', () => {
     expect(revealedAtFor({ status: 'VALIDATED' }, t, at(3))).toEqual(t(at(3)));
   });
 
-  it('refuses the repair stage rather than write a partial state', () => {
-    const covered = [
-      TargetStage.CREATED,
-      TargetStage.INVITATION_READY,
-      TargetStage.EMPATHY_SHARED_A,
-      TargetStage.FEEL_HEARD_B,
-      TargetStage.RECONCILER_SHOWN_B,
-      TargetStage.CONTEXT_SHARED_B,
-      TargetStage.EMPATHY_REVEALED,
-      TargetStage.NEED_MAPPING_COMPLETE,
-      TargetStage.NEEDS_CONFIRMED,
-      TargetStage.INNER_WORK_LINKED_A,
-    ];
-    for (const stage of covered) {
+  it('covers every stage since TS-11 (the repair stage included; a ranking writes nothing — R25)', () => {
+    for (const stage of Object.values(TargetStage)) {
       expect({ stage, unsupported: unsupportedFeatures(scenarioFor(stage, { a: 'A', b: 'B' })) }).toEqual({ stage, unsupported: [] });
     }
-    expect(unsupportedFeatures(scenarioFor(TargetStage.STRATEGIC_REPAIR_COMPLETE, { a: 'A', b: 'B' }))).toContain('legacyStrategies');
   });
 });
 

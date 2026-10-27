@@ -14,7 +14,6 @@ import {
   consentToShareRequestSchema,
   confirmNeedsRequestSchema,
   proposeStrategyRequestSchema,
-  rankStrategiesRequestSchema,
   confirmAgreementRequestSchema,
 } from '../stages';
 import { Stage, StageStatus } from '../../enums';
@@ -263,22 +262,6 @@ describe('Stage 4: proposeStrategyRequestSchema', () => {
     const result = proposeStrategyRequestSchema.safeParse({
       description: 'A valid description for our strategy',
       needsAddressed: [],
-    });
-    expect(result.success).toBe(false);
-  });
-});
-
-describe('Stage 4: rankStrategiesRequestSchema', () => {
-  it('accepts valid rankings', () => {
-    const result = rankStrategiesRequestSchema.safeParse({
-      rankedIds: ['0190f3a2-6c1e-7b4d-9a8e-3f2b1c0d4e51'],
-    });
-    expect(result.success).toBe(true);
-  });
-
-  it('rejects empty rankings', () => {
-    const result = rankStrategiesRequestSchema.safeParse({
-      rankedIds: [],
     });
     expect(result.success).toBe(false);
   });

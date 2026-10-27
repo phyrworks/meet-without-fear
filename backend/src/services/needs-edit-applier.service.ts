@@ -1,3 +1,9 @@
+/**
+ * Need edits (TS-11): the owner's own `need` rows only. Removal is the soft
+ * delete; a refinement supersedes the old row (spec §1.4 `need`). Editing
+ * ends once the owner has shared (a `need_share` row of theirs exists).
+ */
+
 import {
   AffectedNeed,
   ApplyNeedEditsResponse,
@@ -10,21 +16,17 @@ import {
 import { Prisma } from '../generated/prisma/client';
 import { prisma } from '../lib/prisma';
 import { cleanVisibleAIText } from '../utils/visible-text';
-import { validateNeedIsUniversal, withNeedReframingWarning } from './needs';
+import {
+  NEED_SELECT,
+  requireNeedOwner,
+  toIdentifiedNeedDTO,
+  toNeedRecord,
+  validateNeedIsUniversal,
+  type IdentifiedNeedRecord,
+  type NeedRecord,
+} from './needs';
 
-type NeedRow = {
-  id: string;
-  vesselId: string;
-  need: string;
-  category: NeedCategory;
-  evidence: string[];
-  aiConfidence: number;
-  confirmed: boolean;
-  lockedAt?: Date | null;
-  deletedAt?: Date | null;
-  supersededByNeedId?: string | null;
-  createdAt: Date;
-};
+type NeedRow = IdentifiedNeedRecord;
 
 export class NeedEditValidationError extends Error {
   statusCode = 400;
@@ -44,33 +46,35 @@ export class NeedEditForbiddenError extends Error {
   }
 }
 
-async function getOrCreateUserVessel(
-  sessionId: string,
-  userId: string,
-  tx: typeof prisma | Prisma.TransactionClient = prisma
-): Promise<{ id: string }> {
-  const existing = await tx.userVessel.findUnique({
-    where: { userId_sessionId: { userId, sessionId } },
-    select: { id: true },
-  });
-  if (existing) return existing;
-  return tx.userVessel.create({ data: { userId, sessionId }, select: { id: true } });
+type Db = typeof prisma | Prisma.TransactionClient;
+
+/** The caller's own needs (legacy record shape), oldest first. */
+async function ownNeeds(participantId: string, db: Db = prisma, where: Prisma.NeedWhereInput = {}): Promise<NeedRow[]> {
+  const rows = (await db.need.findMany({
+    where: { participantId, ...where },
+    orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+    select: NEED_SELECT,
+  })) as NeedRecord[];
+  return rows.map(toNeedRecord);
 }
 
-export async function assertNeedsEditable(sessionId: string, userId: string): Promise<void> {
-  const progress = await prisma.stageProgress.findUnique({
-    where: { sessionId_userId_stage: { sessionId, userId, stage: 3 } },
-    select: { stage: true, gatesSatisfied: true },
-  });
+async function updateNeed(db: Db, id: string, data: Prisma.NeedUpdateInput): Promise<NeedRow> {
+  return toNeedRecord((await db.need.update({ where: { id }, data, select: NEED_SELECT })) as NeedRecord);
+}
 
-  if (!progress) {
+/**
+ * Needs are editable until their owner has shared them: once a `need_share`
+ * row of theirs exists (live or revoked), the list is delivered content.
+ */
+export async function assertNeedsEditable(sessionId: string, userId: string): Promise<{ id: string }> {
+  const participant = await requireNeedOwner(sessionId, userId).catch(() => {
     throw new NeedEditValidationError('Stage 3 progress was not found.');
-  }
-
-  const gates = (progress.gatesSatisfied as Record<string, unknown> | null) ?? {};
-  if (gates.needsShared === true) {
+  });
+  const shared = await prisma.needShare.count({ where: { participantId: participant.id } });
+  if (shared > 0) {
     throw new NeedEditForbiddenError('Needs have already been shared and can no longer be edited.');
   }
+  return participant;
 }
 
 function isNeedCategory(value: unknown): value is NeedCategory {
@@ -85,34 +89,7 @@ function cleanNeedText(value: unknown): string {
   return cleanVisibleAIText(typeof value === 'string' ? value : '').trim();
 }
 
-function toDTO(row: NeedRow): IdentifiedNeedDTO {
-  const warned = withNeedReframingWarning(row);
-  const deletedAt = row.deletedAt ?? null;
-  const lockedAt = row.lockedAt ?? null;
-  const supersededByNeedId = row.supersededByNeedId ?? null;
-  return {
-    id: row.id,
-    need: row.need,
-    category: row.category,
-    description: row.need,
-    evidence: row.evidence,
-    confirmed: row.confirmed,
-    lockedAt: lockedAt?.toISOString() ?? null,
-    deletedAt: deletedAt?.toISOString() ?? null,
-    supersededByNeedId,
-    status: deletedAt
-      ? 'deleted'
-      : supersededByNeedId
-        ? 'superseded'
-        : lockedAt
-          ? 'locked'
-          : 'draft',
-    aiConfidence: row.aiConfidence,
-    createdAt: row.createdAt.toISOString(),
-    needsReframing: warned.needsReframing,
-    reframingWarning: warned.reframingWarning,
-  };
-}
+const toDTO = (row: NeedRow): IdentifiedNeedDTO => toIdentifiedNeedDTO(row);
 
 export function previewNeedEditOperations(
   operations: NeedEditOperation[],
@@ -180,44 +157,37 @@ export async function applyNeedEdits(
     throw new NeedEditValidationError('At least one edit operation is required.');
   }
 
-  await assertNeedsEditable(sessionId, userId);
+  const participant = await assertNeedsEditable(sessionId, userId);
 
   const applied = await prisma.$transaction(async (tx) => {
-    const vessel = await getOrCreateUserVessel(sessionId, userId, tx);
-    const currentNeeds = (await tx.identifiedNeed.findMany({
-      where: { vesselId: vessel.id, deletedAt: null },
-      orderBy: { createdAt: 'asc' },
-    })) as NeedRow[];
-
+    const currentNeeds = await ownNeeds(participant.id, tx, { deletedAt: null });
     const preview = previewNeedEditOperations(operations, currentNeeds);
+    const now = new Date();
 
     for (const operation of operations) {
       if (operation.type === 'updateNeedText') {
         const current = currentNeeds.find((need) => need.id === operation.needId);
         if (!current || !operation.needId) continue;
-        await tx.identifiedNeed.update({
-          where: { id: operation.needId },
-          data: {
-            need: cleanNeedText(operation.newText),
-            category: normalizeCategory(operation.newCategory, current.category),
-            confirmed: true,
-          },
+        await updateNeed(tx, operation.needId, {
+          label: cleanNeedText(operation.newText),
+          category: normalizeCategory(operation.newCategory, current.category),
+          confirmedAt: current.confirmed ? undefined : now,
         });
       } else if (operation.type === 'addNeed') {
-        await tx.identifiedNeed.create({
+        await tx.need.create({
           data: {
-            vesselId: vessel.id,
-            need: cleanNeedText(operation.text),
+            participantId: participant.id,
+            label: cleanNeedText(operation.text),
             category: normalizeCategory(operation.category, NeedCategory.MEANING),
             evidence: [],
             aiConfidence: 0.9,
-            confirmed: true,
+            confirmedAt: now,
           },
         });
       } else if (operation.type === 'removeNeed' && operation.needId) {
-        await tx.identifiedNeed.update({
-          where: { id: operation.needId },
-          data: { deletedAt: new Date() },
+        await tx.need.updateMany({
+          where: { id: operation.needId, participantId: participant.id },
+          data: { deletedAt: now },
         });
       }
     }
@@ -225,12 +195,7 @@ export async function applyNeedEdits(
     return preview;
   });
 
-  const vessel = await getOrCreateUserVessel(sessionId, userId);
-  const needs = (await prisma.identifiedNeed.findMany({
-    where: { vesselId: vessel.id },
-    orderBy: { createdAt: 'asc' },
-  })) as NeedRow[];
-
+  const needs = await ownNeeds(participant.id);
   return {
     needs: needs.map(toDTO),
     applied,
@@ -239,17 +204,10 @@ export async function applyNeedEdits(
 }
 
 export async function deleteNeed(sessionId: string, userId: string, needId: string): Promise<IdentifiedNeedDTO> {
-  await assertNeedsEditable(sessionId, userId);
-  const vessel = await getOrCreateUserVessel(sessionId, userId);
-  const need = await prisma.identifiedNeed.findFirst({
-    where: { id: needId, vesselId: vessel.id },
-  }) as NeedRow | null;
+  const participant = await assertNeedsEditable(sessionId, userId);
+  const [need] = await ownNeeds(participant.id, prisma, { id: needId });
   if (!need) throw new NeedEditValidationError('Need not found.');
-  const deleted = await prisma.identifiedNeed.update({
-    where: { id: needId },
-    data: { deletedAt: new Date() },
-  }) as NeedRow;
-  return toDTO(deleted);
+  return toDTO(await updateNeed(prisma, needId, { deletedAt: new Date() }));
 }
 
 export async function applyNeedAction(
@@ -257,69 +215,51 @@ export async function applyNeedAction(
   userId: string,
   action: ParsedNeedAction
 ): Promise<ApplyNeedActionResponse> {
-  await assertNeedsEditable(sessionId, userId);
+  const participant = await assertNeedsEditable(sessionId, userId);
 
   const result = await prisma.$transaction(async (tx) => {
-    const vessel = await getOrCreateUserVessel(sessionId, userId, tx);
-
     if (action.type === 'refine') {
       const oldNeedId = action.supersedes;
       if (!oldNeedId) throw new NeedEditValidationError('Refine action requires supersedes.');
-      const current = await tx.identifiedNeed.findFirst({
-        where: { id: oldNeedId, vesselId: vessel.id, deletedAt: null },
-      }) as NeedRow | null;
+      const [current] = await ownNeeds(participant.id, tx, { id: oldNeedId, deletedAt: null });
       if (!current) throw new NeedEditValidationError('Need not found.');
 
       const text = cleanNeedText(action.description || action.need);
       if (!text) throw new NeedEditValidationError('Refined need text is required.');
-      const newNeed = await tx.identifiedNeed.create({
-        data: {
-          vesselId: vessel.id,
-          need: text,
-          category: normalizeCategory(action.category, current.category),
-          evidence: Array.isArray(action.evidence)
-            ? action.evidence.map((entry) => cleanVisibleAIText(entry)).filter(Boolean)
-            : current.evidence,
-          aiConfidence: 0.9,
-          confirmed: false,
-        },
-      }) as NeedRow;
-      const oldNeed = await tx.identifiedNeed.update({
-        where: { id: current.id },
-        data: { supersededByNeedId: newNeed.id },
-      }) as NeedRow;
-
+      const newNeed = toNeedRecord(
+        (await tx.need.create({
+          data: {
+            participantId: participant.id,
+            label: text,
+            category: normalizeCategory(action.category, current.category),
+            evidence: Array.isArray(action.evidence)
+              ? action.evidence.map((entry) => cleanVisibleAIText(entry)).filter(Boolean)
+              : current.evidence,
+            aiConfidence: 0.9,
+          },
+          select: NEED_SELECT,
+        })) as NeedRecord
+      );
+      const oldNeed = await updateNeed(tx, current.id, { supersededByNeed: { connect: { id: newNeed.id } } });
       return { oldNeed, newNeed };
     }
 
     const targetId = action.needId;
     if (!targetId) throw new NeedEditValidationError(`${action.type} action requires needId.`);
-    const current = await tx.identifiedNeed.findFirst({
-      where: { id: targetId, vesselId: vessel.id },
-    }) as NeedRow | null;
+    const [current] = await ownNeeds(participant.id, tx, { id: targetId });
     if (!current) throw new NeedEditValidationError('Need not found.');
 
     if (action.type === 'delete') {
-      const deleted = await tx.identifiedNeed.update({
-        where: { id: current.id },
-        data: { deletedAt: new Date() },
-      }) as NeedRow;
+      const deleted = await updateNeed(tx, current.id, { deletedAt: new Date() });
       return { oldNeed: deleted, newNeed: deleted };
     }
 
-    const locked = await tx.identifiedNeed.update({
-      where: { id: current.id },
-      data: { lockedAt: new Date(), confirmed: true },
-    }) as NeedRow;
+    const now = new Date();
+    const locked = await updateNeed(tx, current.id, { lockedAt: now, confirmedAt: current.confirmed ? undefined : now });
     return { oldNeed: locked, newNeed: locked };
   });
 
-  const vessel = await getOrCreateUserVessel(sessionId, userId);
-  const needs = (await prisma.identifiedNeed.findMany({
-    where: { vesselId: vessel.id },
-    orderBy: { createdAt: 'asc' },
-  })) as NeedRow[];
-
+  const needs = await ownNeeds(participant.id);
   return {
     action: action.type,
     oldNeed: result.oldNeed ? toDTO(result.oldNeed) : undefined,

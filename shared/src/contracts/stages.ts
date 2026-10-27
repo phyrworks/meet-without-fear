@@ -5,7 +5,17 @@
  */
 
 import { z } from 'zod';
-import { Stage, StageStatus } from '../enums';
+import {
+  Stage,
+  StageStatus,
+  TendingBlockerCategory,
+  TendingFollowThroughStatus,
+  TendingHelpfulnessStatus,
+  TendingNeedResolutionStatus,
+  TendingNextAction,
+  TendingReminderScope,
+} from '../enums';
+import { ContinueChoice, PartialClosureResolution } from '../dto/strategy';
 
 // ============================================================================
 // Stage Blocked Reason
@@ -311,21 +321,6 @@ export const proposeStrategyResponseSchema = z.object({
 
 export type ProposeStrategyResponseInput = z.infer<typeof proposeStrategyResponseSchema>;
 
-export const rankStrategiesRequestSchema = z.object({
-  rankedIds: z.array(z.string().uuid()).min(1, 'Must rank at least one strategy'),
-});
-
-export type RankStrategiesRequestInput = z.infer<typeof rankStrategiesRequestSchema>;
-
-export const rankStrategiesResponseSchema = z.object({
-  ranked: z.boolean(),
-  rankedAt: z.string().datetime(),
-  partnerRanked: z.boolean(),
-  canReveal: z.boolean(),
-});
-
-export type RankStrategiesResponseInput = z.infer<typeof rankStrategiesResponseSchema>;
-
 export const strategiesRevealResponseSchema = z.object({
   phase: z.enum(['pool', 'ranking', 'waiting', 'reveal', 'agreement', 'complete']),
   strategies: z.array(
@@ -412,3 +407,99 @@ export const getProgressResponseSchema = z.object({
 });
 
 export type GetProgressResponseInput = z.infer<typeof getProgressResponseSchema>;
+
+// ============================================================================
+// Follow-up check-in payload (target `follow_up_checkin.payload`, spec §1.5)
+// ============================================================================
+//
+// One check-in is ONE `follow_up_checkin` row; the five old response tables
+// (TendingResponse, TendingEntryOutcome, TendingNeedOutcome, TendingAdjustment,
+// TendingResponsePartialClosure) become the arrays below, and the between-period
+// notes the participant chose to share are copied into `carriedNotes` at submit.
+// The backend validates every write with this schema (zod): a payload that does
+// not parse is never written. `.strict()` everywhere: an unknown key is a
+// contract error, not something to store.
+
+const followUpId = z.string().uuid();
+const nullableText = z.string().max(4000).nullable();
+
+export const followUpEntryOutcomeSchema = z
+  .object({
+    followUpId,
+    followThroughStatus: z.nativeEnum(TendingFollowThroughStatus),
+    helpfulnessStatus: z.nativeEnum(TendingHelpfulnessStatus).nullable(),
+    blockerCategories: z.array(z.nativeEnum(TendingBlockerCategory)),
+    whatHappened: nullableText,
+    helpedNeed: nullableText,
+    blockerNote: nullableText,
+    stillWorthTrying: z.boolean().nullable(),
+  })
+  .strict();
+
+export const followUpNeedOutcomeSchema = z
+  .object({
+    /** A `need_share` id (a need that crossed the boundary), or null for a free-text need. */
+    needId: z.string().uuid().nullable(),
+    /** The shared text of `needId` when it is set (never the owner's private label). */
+    needLabel: z.string().min(1).max(500),
+    sourceParticipantId: z.string().uuid().nullable(),
+    resolutionStatus: z.nativeEnum(TendingNeedResolutionStatus),
+    note: nullableText,
+    changedNeedLabel: z.string().max(500).nullable(),
+    nextAction: z.nativeEnum(TendingNextAction).nullable(),
+  })
+  .strict();
+
+export const followUpAdjustmentSchema = z
+  .object({
+    followUpId,
+    privacyScope: z.nativeEnum(TendingReminderScope),
+    revisedCommitmentText: nullableText,
+    revisedCadence: z.string().max(500).nullable(),
+    revisedScope: z.string().max(500).nullable(),
+    revisedSuccessCriteria: nullableText,
+    reason: nullableText,
+    blockerAddressed: z.array(z.nativeEnum(TendingBlockerCategory)),
+  })
+  .strict();
+
+export const followUpPartialClosureSchema = z
+  .object({ followUpId, resolution: z.nativeEnum(PartialClosureResolution) })
+  .strict();
+
+export const followUpResponseSchema = z
+  .object({
+    followUpId,
+    status: z.enum(['CHECKIN', 'WORKED', 'PARTLY', 'DID_NOT_WORK', 'DID_NOT_TRY', 'OTHER']),
+    reflection: nullableText,
+    continueChoice: z.nativeEnum(ContinueChoice).nullable(),
+  })
+  .strict();
+
+export const followUpCarriedNoteSchema = z
+  .object({ noteId: z.string().uuid(), content: z.string().min(1).max(4000), createdAt: z.string().datetime() })
+  .strict();
+
+export const followUpCheckinPayloadSchema = z
+  .object({
+    entryOutcomes: z.array(followUpEntryOutcomeSchema),
+    needOutcomes: z.array(followUpNeedOutcomeSchema),
+    adjustments: z.array(followUpAdjustmentSchema),
+    partialClosures: z.array(followUpPartialClosureSchema),
+    responses: z.array(followUpResponseSchema),
+    carriedNotes: z.array(followUpCarriedNoteSchema),
+  })
+  .strict();
+
+export type FollowUpCheckinPayload = z.infer<typeof followUpCheckinPayloadSchema>;
+export type FollowUpEntryOutcome = z.infer<typeof followUpEntryOutcomeSchema>;
+export type FollowUpNeedOutcome = z.infer<typeof followUpNeedOutcomeSchema>;
+export type FollowUpAdjustment = z.infer<typeof followUpAdjustmentSchema>;
+export type FollowUpPartialClosure = z.infer<typeof followUpPartialClosureSchema>;
+export type FollowUpResponse = z.infer<typeof followUpResponseSchema>;
+export type FollowUpCarriedNote = z.infer<typeof followUpCarriedNoteSchema>;
+
+/** The empty payload: every array present and empty. */
+export function emptyFollowUpCheckinPayload(): FollowUpCheckinPayload {
+  return { entryOutcomes: [], needOutcomes: [], adjustments: [], partialClosures: [], responses: [], carriedNotes: [] };
+}

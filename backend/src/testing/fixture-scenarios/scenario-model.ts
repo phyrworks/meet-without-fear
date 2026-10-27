@@ -370,4 +370,14 @@ export interface CurrentShapeQuirks {
    * stay byte-identical to what their goldens were recorded against.
    */
   explicitStamps?: boolean;
+  /**
+   * TS-11: the pre-rebuild factory reached `needs_shared` for these scenarios
+   * WITHOUT writing the share consents production writes (the repair-stage
+   * fixtures: their needs carry the target's `shared` text, but today's rows
+   * hold no consent for them). The current-shape writer therefore records no
+   * share consent here, so its rows — and their concept image — stay as they
+   * were; the target writer ignores this, like every quirk, and writes the
+   * consent and the `need_share` row the target's repair stage needs.
+   */
+  unconsentedNeedShares?: boolean;
 }

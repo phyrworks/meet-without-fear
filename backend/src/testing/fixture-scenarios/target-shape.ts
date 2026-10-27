@@ -52,12 +52,24 @@
  * owner's milestones, so fixtures whose phases disagree with their milestone
  * instants read differently — named in the allow-list.
  *
- * Coverage: everything the scenario model carries except the repair stage
- * (`legacyStrategies`, `repair`, `choices`, `ranking`, `closure`) — those
- * throw rather than write a partial state. Covered stages include CREATED,
- * INVITATION_READY, EMPATHY_SHARED_A, FEEL_HEARD_B, RECONCILER_SHOWN_B,
- * CONTEXT_SHARED_B, EMPATHY_REVEALED, NEED_MAPPING_COMPLETE, NEEDS_CONFIRMED and
- * INNER_WORK_LINKED_A.
+ * Coverage (TS-11: all of the scenario model). The repair stage, marked
+ * FIDELITY where it writes the decoded value:
+ *   - legacy strategies → proposal (SHARED_PROPOSAL, USER_SUBMITTED, ACTIVE:
+ *     the concept view's defaults for a row that had none), needsAddressed →
+ *     proposal_need over need_share by label, the rest unresolved_need_labels;
+ *     the legacy agreement → agreement + agreement_party + a WILLING
+ *     proposal_choice per party (DEVIATION: T-agreement-parties needs them;
+ *     spec: proposal_choice absorbs agreedByA/B "as evidence"); a ranking
+ *     writes nothing (ruling R25);
+ *   - redesigned repair → proposal / proposal_revision / proposal_choice (at
+ *     the chooser's choices_shared instant); the fixture's Stage4NeedCoverage
+ *     rows have no table (coverage is v_need_coverage) and are not written;
+ *   - shared needs of the repair fixtures (currentShape.unconsentedNeedShares):
+ *     consent + need_share with the scenario's shared text (DEVIATION: today's
+ *     fixture wrote neither; the target's repair stage can address only a
+ *     shared need) — the consent stamped at the share instant so no new
+ *     timestamp rank appears;
+ *   - closure → session_closure + the session RESOLVED.
  */
 
 import type { ClientBase } from 'pg';
@@ -85,17 +97,14 @@ import {
 
 export type TargetShapeResult = CurrentShapeResult;
 
-/** Scenario features this writer refuses (target tables exist; no scenario in scope needs them yet). */
+/**
+ * Scenario features this writer refuses. Since TS-11 it covers the repair
+ * stage (legacy strategies + agreement, redesigned proposals/revisions/
+ * choices, closure); a ranking writes nothing (ruling R25) and is accepted.
+ */
 export function unsupportedFeatures(s: Scenario): string[] {
-  const out: string[] = [];
-  if (s.legacyStrategies) out.push('legacyStrategies');
-  if (s.repair) out.push('repair');
-  if (s.closure) out.push('closure');
-  for (const p of s.participants) {
-    if (p.choices?.length) out.push(`participant ${p.key}: choices`);
-    if (p.ranking) out.push(`participant ${p.key}: ranking`);
-  }
-  return out;
+  void s;
+  return [];
 }
 
 /** Old role → target (role, kind): event roles become a kind; role USER when a participant sent it (spec §3). */
@@ -156,7 +165,7 @@ export function revealedAtFor(
 
 const q = {
   user: `INSERT INTO "user" (email, clerk_id, first_name, last_name, created_at, updated_at)
-         VALUES ($1, $2, $3, $4, $5, $5)
+         VALUES ($1, $2, $3, $4, $5, $6)
          ON CONFLICT (email) DO UPDATE SET first_name = EXCLUDED.first_name, last_name = EXCLUDED.last_name
          RETURNING id, email, name`,
 };
@@ -186,6 +195,16 @@ export async function writeTargetShape(db: ClientBase, scenario: Scenario, users
   const tick = (): Date => new Date(++cursor);
   let autoN = 0;
   const auto = (): Date => (explicit ? new Date(base.getTime() - 60_000 + autoN++) : tick());
+  // FIDELITY (TS-11 post-merge): in `explicitStamps` mode current-shape.ts
+  // gives every `@default(now())` / `@updatedAt` column its OWN auto() (a
+  // row's createdAt and updatedAt are two instants, one ms apart). Rows that
+  // carried both take two here too, so the concept image's timestamp ranks
+  // match (measured on NEEDS_CONFIRMED: user, session and draft ranks moved).
+  // Real-clock mode is unchanged: one tick for both.
+  const autoPair = (): [Date, Date] => {
+    const c = auto();
+    return [c, explicit ? auto() : c];
+  };
   const readClock = (c: Clock): void => {
     if (!clocks.has(c)) return;
     instants[c] = explicit ? new Date(base.getTime() + CLOCK_OFFSET_MS[c]) : tick();
@@ -206,22 +225,24 @@ export async function writeTargetShape(db: ClientBase, scenario: Scenario, users
       clerk,
       first,
       last,
-      auto(),
+      ...autoPair(),
     ]);
     userRows.push(r.rows[0]);
   }
 
   // --- Relationship and members ---------------------------------------------------
-  const relAt = auto();
+  // The old nested create stamped the members before the relationship row.
+  const memberAutos = explicit ? users.map(() => auto()) : [];
+  const relAt = autoPair();
   const rel = await db.query<{ id: string }>(
-    `INSERT INTO relationship (created_at, updated_at) VALUES ($1, $1) RETURNING id`,
-    [relAt],
+    `INSERT INTO relationship (created_at, updated_at) VALUES ($1, $2) RETURNING id`,
+    relAt,
   );
   const relationshipId = rel.rows[0].id;
   const joinedAt = explicit ? null : auto(); // one instant for the nested create
   const memberJoined: Date[] = [];
   for (const [i, u] of users.entries()) {
-    const at = joinedAt ?? auto();
+    const at = joinedAt ?? memberAutos[i];
     memberJoined.push(at);
     await db.query(
       `INSERT INTO relationship_member (relationship_id, user_id, nickname, joined_at, created_at, updated_at)
@@ -233,11 +254,11 @@ export async function writeTargetShape(db: ClientBase, scenario: Scenario, users
 
   // --- Session -------------------------------------------------------------------
   readClock('session');
-  const sessionAt = auto();
+  const sessionAt = autoPair();
   const session = await db.query<{ id: string; status: string }>(
     `INSERT INTO session (relationship_id, status, topic_frame, topic_frame_confirmed_at, created_at, updated_at)
-     VALUES ($1, $2, $3, $4, $5, $5) RETURNING id, status::text AS status`,
-    [relationshipId, sessionStatus(scenario), scenario.topic?.frame ?? null, scenario.topic ? t(scenario.topic.confirmedAt) : null, sessionAt],
+     VALUES ($1, $2, $3, $4, $5, $6) RETURNING id, status::text AS status`,
+    [relationshipId, sessionStatus(scenario), scenario.topic?.frame ?? null, scenario.topic ? t(scenario.topic.confirmedAt) : null, ...sessionAt],
   );
   const sessionId = session.rows[0].id;
 
@@ -294,12 +315,11 @@ export async function writeTargetShape(db: ClientBase, scenario: Scenario, users
   // participant here (auto stamps), before the scenario clock. A vessel's
   // read-state columns are the target's conversation_read_state (one per
   // participant; the old view's updated_at is the vessel's).
-  auto();
+  autoPair();
   for (const p of scenario.participants) {
-    const at = auto();
     await db.query(
-      `INSERT INTO conversation_read_state (participant_id, created_at, updated_at) VALUES ($1, $2, $2)`,
-      [pid(p.key), at],
+      `INSERT INTO conversation_read_state (participant_id, created_at, updated_at) VALUES ($1, $2, $3)`,
+      [pid(p.key), ...autoPair()],
     );
   }
 
@@ -318,13 +338,21 @@ export async function writeTargetShape(db: ClientBase, scenario: Scenario, users
   };
 
   const attemptOf = new Map<ParticipantKey, string>();
+  const lateMilestones: Array<{ p: Scenario['participants'][number]; me: string; journeyStart: Date | undefined }> = [];
+  /** The shared needs written (need_share ids = need ids), with their owners' labels, for proposal_need label matching. */
+  const sharedNeeds: Array<{ id: string; label: string }> = [];
   for (const [i, p] of scenario.participants.entries()) {
     const me = pid(p.key);
 
     // Stage-0 startedAt: the journey start, or (journey with no instant) a
     // clock read where the old factory wrote the row.
     const journeyStart = p.journey ? (p.journey.startedAt ? t(p.journey.startedAt) : auto()) : undefined;
-    for (const m of milestoneRows(p, t, journeyStart)) {
+    // Milestones on the `late` clock (choices_shared of the redesigned repair
+    // flow) are written once that clock is read, after the repair content —
+    // as current-shape.ts records them (its "late gates").
+    const early = { ...p, milestones: Object.fromEntries(Object.entries(p.milestones).filter(([, st]) => st?.clock !== 'late')) };
+    lateMilestones.push({ p, me, journeyStart });
+    for (const m of milestoneRows(early, t, journeyStart)) {
       await db.query(
         `INSERT INTO participant_milestone (participant_id, milestone_key, reached_at, created_at) VALUES ($1, $2, $3, $3)`,
         [me, m.key, m.reachedAt],
@@ -339,13 +367,17 @@ export async function writeTargetShape(db: ClientBase, scenario: Scenario, users
       if (!submittedAt) throw new Error(`Participant "${p.key}" has an empathy attempt but no empathy_submitted milestone`);
       const subject = otherOf(p.key);
       if (!subject) throw new Error(`Participant "${p.key}": an empathy attempt needs exactly one other participant`);
-      const draftAt = auto();
       await db.query(
         `INSERT INTO draft (participant_id, kind, about_participant_id, content, ready_to_share, version, created_at, updated_at)
-         VALUES ($1, 'EMPATHY', $2, $3, true, 1, $4, $4)`,
-        [me, subject, e.statement, draftAt],
+         VALUES ($1, 'EMPATHY', $2, $3, true, 1, $4, $5)`,
+        [me, subject, e.statement, ...autoPair()],
       );
-      const attemptAt = auto();
+      // FIDELITY (TS-11 post-merge): the old factory left the attempt's stamps
+      // to the database default even in explicitStamps mode (no autoCols), so
+      // it consumed no auto stamp — taking one here moved every later auto by
+      // a millisecond (NEEDS_CONFIRMED: Bob's draft landed on the needs'
+      // instant). Its created_at/updated_at are in no concept view.
+      const attemptAt = explicit ? base : auto();
       const a = await db.query<{ id: string }>(
         `INSERT INTO empathy_attempt (author_participant_id, subject_participant_id, round, content, status, status_version,
                                       submitted_at, revealed_at, delivery_status, delivered_at, created_at, updated_at)
@@ -401,10 +433,15 @@ export async function writeTargetShape(db: ClientBase, scenario: Scenario, users
         );
         if (n.shared) {
           if (!sharedAt) throw new Error(`Participant "${p.key}" shares needs but has no needs_shared milestone`);
+          sharedNeeds.push({ id: row.rows[0].id, label: n.need });
+          // FIDELITY (TS-11): the repair fixtures had no consent row today
+          // (unconsentedNeedShares), so a fresh auto stamp would be a NEW
+          // instant renumbering every later timestamp rank of their concept
+          // image; the consent is stamped at the share instant instead.
           await db.query(
             `INSERT INTO consent (participant_id, requested_by_participant_id, need_id, decision, decided_at, created_at, updated_at)
              VALUES ($1, $1, $2, 'GRANTED', $3, $4, $4)`,
-            [me, row.rows[0].id, t(sharedAt), auto()],
+            [me, row.rows[0].id, t(sharedAt), scenario.currentShape?.unconsentedNeedShares ? t(sharedAt) : auto()],
           );
           await db.query(
             `INSERT INTO need_share (need_id, participant_id, session_id, category, shared_text, shared_at, created_at, updated_at)
@@ -471,7 +508,163 @@ export async function writeTargetShape(db: ClientBase, scenario: Scenario, users
     for (const m of messages ?? []) await writeMessage(m.to, m);
   }
 
+  // --- Legacy Stage 4: strategies, agreement (TS-11) -----------------------------
+  // StrategyProposal → proposal (kind SHARED_PROPOSAL, source the model's
+  // default USER_SUBMITTED, status ACTIVE — FIDELITY: the old row had no
+  // status/kind and the concept view projects the defaults), its
+  // needsAddressed labels → proposal_need over the session's need_share rows
+  // (label match, case-insensitive, as old_concept_proposal_need) and the
+  // labels nothing matches → unresolved_need_labels. A ranking writes NOTHING
+  // (ruling R25: ranking is not in the product). The agreement → agreement +
+  // agreement_party for agreedBy; T-agreement-parties requires every party
+  // WILLING, so the agreed proposal gets a WILLING proposal_choice per party
+  // at agreedAt (spec §1.4 proposal_choice absorbs "Agreement.agreedByA/agreedByB
+  // (as evidence)") — FIDELITY DEVIATION: the current-shape concept view shows
+  // no choice for the legacy flow.
+  const proposalIdOf = new Map<string, string>();
+  /** Labels → the shared needs they name (case-insensitive label match), and the labels nothing matches. */
+  const matchNeeds = (labels: string[]): { ids: string[]; unresolved: string[] } => {
+    const ids: string[] = [];
+    const unresolved: string[] = [];
+    for (const label of labels) {
+      const hit = sharedNeeds.filter(n => n.label.toLowerCase() === label.toLowerCase());
+      if (!hit.length) unresolved.push(label);
+      for (const n of hit) if (!ids.includes(n.id)) ids.push(n.id);
+    }
+    return { ids, unresolved };
+  };
+  const linkNeeds = async (proposalId: string, ids: string[], at: Date): Promise<void> => {
+    for (const id of ids) {
+      await db.query(`INSERT INTO proposal_need (proposal_id, need_id, created_at) VALUES ($1, $2, $3)`, [proposalId, id, at]);
+    }
+  };
+  if (scenario.legacyStrategies) {
+    const { strategies, agreement } = scenario.legacyStrategies;
+    for (const st of strategies) {
+      const createdAt = t(st.at);
+      const updatedAt = auto();
+      const linked = matchNeeds(st.needsAddressed);
+      const row = await db.query<{ id: string }>(
+        `INSERT INTO proposal (session_id, created_by_participant_id, description, duration, unresolved_need_labels, created_at, updated_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id`,
+        [sessionId, pid(st.by), st.description, st.duration, linked.unresolved, createdAt, updatedAt],
+      );
+      proposalIdOf.set(st.key, row.rows[0].id);
+      await linkNeeds(row.rows[0].id, linked.ids, createdAt);
+    }
+    if (agreement) {
+      const proposalId = proposalIdOf.get(agreement.proposal);
+      if (!proposalId) throw new Error(`Scenario ${scenario.name}: unknown strategy "${agreement.proposal}"`);
+      const agreedAt = t(agreement.agreedAt);
+      for (const key of agreement.agreedBy) {
+        await db.query(
+          `INSERT INTO proposal_choice (proposal_id, participant_id, decision, created_at, updated_at)
+           VALUES ($1, $2, 'WILLING', $3, $3)`,
+          [proposalId, pid(key), agreedAt],
+        );
+      }
+      const a = await db.query<{ id: string }>(
+        `INSERT INTO agreement (session_id, proposal_id, type, status, description, follow_up_at, created_at, updated_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $7) RETURNING id`,
+        [sessionId, proposalId, agreement.type, agreement.status, agreement.description, t(agreement.followUpAt), agreedAt],
+      );
+      for (const key of agreement.agreedBy) {
+        await db.query(
+          `INSERT INTO agreement_party (agreement_id, participant_id, agreed_at, created_at) VALUES ($1, $2, $3, $3)`,
+          [a.rows[0].id, pid(key), agreedAt],
+        );
+      }
+    }
+  }
+
   readClock('late');
+
+  // --- Redesigned Stage 4: proposals, revisions, choices (TS-11) ------------------
+  // The concept image of current-shape.ts's repair block. Its
+  // Stage4NeedCoverage rows have no table (coverage is v_need_coverage,
+  // computed) and are not written; needsAddressed labels become proposal_need
+  // rows over need_share (as above). Revisions → proposal_revision (actor,
+  // action, before/after, reason; no message id). Choices proposal-major, at
+  // the chooser's choices_shared instant (created_at ← selectedAt, as the
+  // concept view projects it; updated_at an auto stamp as the old @updatedAt).
+  if (scenario.repair) {
+    const { proposals, revisions } = scenario.repair;
+    for (const pr of proposals) {
+      const at = auto();
+      const linked = matchNeeds(pr.needsAddressed);
+      const row = await db.query<{ id: string }>(
+        `INSERT INTO proposal (session_id, created_by_participant_id, kind, status, description, duration, measure_of_success,
+                               removed_at, removed_by_participant_id, removal_reason, unresolved_need_labels, created_at, updated_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $12) RETURNING id`,
+        [
+          sessionId,
+          pid(pr.by),
+          pr.kind,
+          pr.removed ? 'REMOVED' : 'ACTIVE',
+          pr.description,
+          pr.duration,
+          pr.measureOfSuccess,
+          pr.removed ? t(pr.removed.at) : null,
+          pr.removed ? pid(pr.removed.by) : null,
+          pr.removed?.reason ?? null,
+          linked.unresolved,
+          at,
+        ],
+      );
+      proposalIdOf.set(pr.key, row.rows[0].id);
+      await linkNeeds(row.rows[0].id, linked.ids, at);
+    }
+    const proposalId = (key: string): string => {
+      const id = proposalIdOf.get(key);
+      if (!id) throw new Error(`Scenario ${scenario.name}: unknown proposal "${key}"`);
+      return id;
+    };
+    for (const r of revisions) {
+      await db.query(
+        `INSERT INTO proposal_revision (proposal_id, actor_participant_id, action, before, after, reason, created_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+        [proposalId(r.proposal), pid(r.actor), r.action, r.before ? JSON.stringify(r.before) : null, JSON.stringify(r.after), r.reason, auto()],
+      );
+    }
+    for (const pr of proposals) {
+      for (const p of scenario.participants) {
+        for (const c of (p.choices ?? []).filter(c => c.proposal === pr.key)) {
+          const sharedAt = p.milestones.choices_shared;
+          if (!sharedAt) throw new Error(`Participant "${p.key}" has choices but no choices_shared milestone`);
+          await db.query(
+            `INSERT INTO proposal_choice (proposal_id, participant_id, decision, created_at, updated_at) VALUES ($1, $2, $3, $4, $5)`,
+            [proposalId(pr.key), pid(p.key), c.decision, t(sharedAt), auto()],
+          );
+        }
+      }
+    }
+  }
+
+  for (const { p, me, journeyStart } of lateMilestones) {
+    const late = { ...p, milestones: Object.fromEntries(Object.entries(p.milestones).filter(([, st]) => st?.clock === 'late')) };
+    for (const m of milestoneRows(late, t, journeyStart)) {
+      await db.query(
+        `INSERT INTO participant_milestone (participant_id, milestone_key, reached_at, created_at) VALUES ($1, $2, $3, $3)`,
+        [me, m.key, m.reachedAt],
+      );
+    }
+  }
+
+  // --- Closure (OD5): session_closure, then the session RESOLVED ------------------
+  // The three id arrays are v_session_closure_items (computed).
+  if (scenario.closure) {
+    const c = scenario.closure;
+    await db.query(
+      `INSERT INTO session_closure (session_id, kind, reason, summary, closed_by_participant_id, check_in_at, closed_at, created_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+      [sessionId, c.kind, c.reason, c.summary, c.closedBy === null ? null : pid(c.closedBy), tOpt(c.checkInAt), t(c.at), auto()],
+    );
+    await db.query(`UPDATE session SET status = 'RESOLVED', resolved_at = $2, updated_at = $3 WHERE id = $1`, [
+      sessionId,
+      t(c.at),
+      auto(),
+    ]);
+  }
 
   // --- Inner Work and prompt captures -------------------------------------------------
   for (const [i, p] of scenario.participants.entries()) {
