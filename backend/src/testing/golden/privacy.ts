@@ -32,6 +32,7 @@
  */
 
 import type { Harness, StepResult } from './driver';
+import { isTargetShape } from './shape';
 
 /** Session-scoped GETs, as `[name, path suffix]` under `/api/v1/sessions/:id`. */
 export const SESSION_READS: ReadonlyArray<readonly [string, string]> = [
@@ -73,6 +74,27 @@ export const USER_READS: ReadonlyArray<readonly [string, string]> = [
 ];
 
 export type ReadSet = 'session' | 'user' | 'all';
+
+/** TS-10: the target table that holds each current-shape table a read scenario snapshots (spec §1 Absorbs). */
+const TARGET_READ_TABLE: Record<string, string> = {
+  User: 'user',
+  Message: 'message',
+  UserVessel: 'conversation_read_state',
+  EmpathyAttempt: 'empathy_attempt',
+  ReconcilerResult: 'reconciler_result',
+  ReconcilerShareOffer: 'context_share_offer',
+  ConsentRecord: 'consent',
+};
+
+/** A scenario's snapshot tables in the shape in use (TS-10). */
+export function shapeTables(currentShapeNames: string[]): string[] {
+  if (!isTargetShape()) return currentShapeNames;
+  return currentShapeNames.map(n => {
+    const t = TARGET_READ_TABLE[n];
+    if (!t) throw new Error(`shapeTables: no target table for ${n}`);
+    return t;
+  });
+}
 
 /**
  * The reads that can carry Stage 2 content (attempts, results, offers,

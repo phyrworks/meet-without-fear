@@ -1,0 +1,30 @@
+{
+  "//": "TS-10 file-scoped type check (phoenix/target-shape; REMOVE at TS-13 with the target jest config). The files of the empathy/reconciler/consent cluster and their tests; errors are read for these files only (imports pull in clusters not yet rewritten). Run: npx tsc --noEmit -p tsconfig.ts10.json",
+  "extends": "./tsconfig.json",
+  "compilerOptions": { "noEmit": true },
+  "include": [
+    "src/types/**/*",
+    "src/controllers/stage2.ts",
+    "src/controllers/reconciler.ts",
+    "src/controllers/consent.ts",
+    "src/controllers/notifications.ts",
+    "src/routes/stage2.ts",
+    "src/routes/reconciler.ts",
+    "src/routes/consent.ts",
+    "src/services/empathy-store.ts",
+    "src/services/empathy-messages.ts",
+    "src/services/empathy-status.ts",
+    "src/services/empathy-state-machine.ts",
+    "src/services/reconciler/*.ts",
+    "src/services/realtime.ts",
+    "src/services/__tests__/empathy-*.test.ts",
+    "src/services/__tests__/*.target.test.ts",
+    "src/testing/golden/**/*.ts",
+    "src/testing/fixture-scenarios/target-shape.ts",
+    "../shared/src/*.ts",
+    "../shared/src/contracts/*.ts",
+    "../shared/src/dto/**/*.ts",
+    "../shared/src/validation/*.ts"
+  ],
+  "exclude": ["node_modules", "dist"]
+}

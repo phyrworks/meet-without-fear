@@ -1,254 +1,160 @@
 /**
  * Empathy Status Service
  *
- * Builds the EmpathyExchangeStatusResponse for a user in a session.
- * This is extracted into a service so it can be called from both:
- * - HTTP handlers (GET /sessions/:id/empathy/status)
- * - Ably event publishers (to send full data with events)
+ * Builds the EmpathyExchangeStatusResponse for a user in a session, for the
+ * HTTP handler (GET /sessions/:id/empathy/status) and the Ably publishers.
+ *
+ * Target shape (TS-10; spec §1.2, §7):
+ *   - `myAttempt` is the caller's own current round (they are its author);
+ *   - `partnerAttempt` is the partner's latest round ABOUT the caller that has
+ *     been revealed (`revealed_at` set) — never an unrevealed round;
+ *   - the partner's waiting state (`partnerHasSubmittedEmpathy`,
+ *     `partnerEmpathyHeldStatus`, `partnerEmpathySubmittedAt`) comes from
+ *     `v_empathy_direction_status`, never from the partner's attempt row;
+ *   - `myReconcilerResult` is null: the analysis of the caller's attempt is its
+ *     subject's (reconciler_result is subject-only, P3 D8a; golden R6). The
+ *     author's view of the analysis is the direction's status and the
+ *     abstract `reconciler_guidance` (`refinementHint`).
  */
 
 import { prisma } from '../lib/prisma';
-import type { EmpathyExchangeStatusResponse, SharedContentDeliveryStatus } from '@meet-without-fear/shared';
+import type { EmpathyAttemptDTO, EmpathyExchangeStatusResponse, SharedContentDeliveryStatus } from '@meet-without-fear/shared';
+import { getSharedContextForGuesser, getSharedContentDeliveryStatus } from './reconciler';
 import {
-  hasPartnerCompletedStage1,
-  getSharedContextForGuesser,
-  getSharedContentDeliveryStatus,
-} from './reconciler';
+  currentAttempt,
+  directionOf,
+  directionStatuses,
+  partyOf,
+  revealedAttemptAbout,
+  reviewOf,
+  reviewVisibleToAuthor,
+  sessionParties,
+  type AttemptRow,
+  type ReviewRow,
+  type SessionParty,
+} from './empathy-store';
+
+const deliveryOf = (status: string): 'pending' | 'delivered' | 'seen' =>
+  status === 'VALIDATED' ? 'seen' : status === 'REVEALED' ? 'delivered' : 'pending';
+
+/** The DTO of an attempt (additive on the target: `attemptId`, `round`). */
+export function attemptDTO(
+  a: AttemptRow,
+  author: SessionParty | undefined,
+  review: ReviewRow | null,
+  opts: { delivery?: boolean; statusVersion?: boolean } = {},
+): EmpathyAttemptDTO {
+  return {
+    id: a.id,
+    sourceUserId: author?.userId ?? '',
+    content: a.content,
+    sharedAt: a.submittedAt.toISOString(),
+    consentRecordId: '',
+    status: a.status as EmpathyAttemptDTO['status'],
+    revealedAt: a.revealedAt?.toISOString() ?? null,
+    // The author's own round carries no readable review before a send (m2):
+    // VALIDATED is the verdict, and seen_at is stamped with it (validateEmpathy).
+    validatedAt: review?.validated
+      ? review.updatedAt.toISOString()
+      : a.status === 'VALIDATED' && a.seenAt
+        ? a.seenAt.toISOString()
+        : null,
+    revisionCount: a.round - 1,
+    ...(opts.statusVersion ? { statusVersion: a.statusVersion } : {}),
+    ...(opts.delivery ? { deliveryStatus: deliveryOf(a.status) } : {}),
+    attemptId: a.id,
+    round: a.round,
+  };
+}
 
 /**
  * Build the full EmpathyExchangeStatusResponse for a user.
- * This is the same logic used by the HTTP endpoint, extracted for reuse.
- *
- * @param sessionId - The session ID
- * @param userId - The user ID to build the status for
- * @returns The empathy exchange status response
  */
-export async function buildEmpathyExchangeStatus(
-  sessionId: string,
-  userId: string
-): Promise<EmpathyExchangeStatusResponse> {
-  // Get session and partner ID
-  const session = await prisma.session.findFirst({
-    where: {
-      id: sessionId,
-      relationship: {
-        members: {
-          some: { userId },
-        },
-      },
-    },
-    include: {
-      relationship: {
-        include: {
-          members: true,
-        },
-      },
-    },
-  });
-
-  if (!session) {
-    throw new Error(`Session ${sessionId} not found or user ${userId} not a member`);
+export async function buildEmpathyExchangeStatus(sessionId: string, userId: string): Promise<EmpathyExchangeStatusResponse> {
+  const parties = await sessionParties(sessionId);
+  const me = partyOf(parties, { userId });
+  if (!me) {
+    throw new Error(`Session ${sessionId} not found or user ${userId} not a participant`);
   }
+  const partner = parties.find(p => p.participantId !== me.participantId) ?? null;
 
-  const partnerId = session.relationship.members.find(m => m.userId !== userId)?.userId ?? null;
+  const [myAttempt, partnerAttempt, statuses] = await Promise.all([
+    partner ? currentAttempt(me.participantId, partner.participantId) : Promise.resolve(null),
+    partner ? revealedAttemptAbout(me.participantId, partner.participantId) : Promise.resolve(null),
+    directionStatuses(sessionId),
+  ]);
+  const partnerDirection = partner ? directionOf(statuses, partner.participantId, me.participantId) : undefined;
 
-  // Get both empathy attempts
-  const [myAttempt, partnerAttempt] = await Promise.all([
-    prisma.empathyAttempt.findFirst({
-      where: { sessionId, sourceUserId: userId },
-    }),
-    prisma.empathyAttempt.findFirst({
-      where: { sessionId, sourceUserId: partnerId ?? undefined },
-    }),
+  // The partner's review of MY attempt — visible to me only once sent;
+  // my own review of the partner's revealed attempt.
+  const [myAttemptReview, partnerAttemptReview] = await Promise.all([
+    myAttempt && partner ? reviewVisibleToAuthor(myAttempt.id, partner.participantId) : Promise.resolve(null),
+    partnerAttempt ? reviewOf(partnerAttempt.id, me.participantId) : Promise.resolve(null),
   ]);
 
-  // Look up validation events for both attempts. `validatedAt` here is the
-  // timestamp the OTHER party confirmed the attempt — the right anchor for
-  // "{partner} confirmed your understanding" indicators in the timeline.
-  const [myAttemptValidation, partnerAttemptValidation] = await Promise.all([
-    myAttempt && partnerId
-      ? prisma.empathyValidation.findUnique({
-        where: { attemptId_userId: { attemptId: myAttempt.id, userId: partnerId } },
-        select: { validatedAt: true, validated: true },
-      })
-      : Promise.resolve(null),
-    partnerAttempt
-      ? prisma.empathyValidation.findUnique({
-        where: { attemptId_userId: { attemptId: partnerAttempt.id, userId } },
-        select: { validatedAt: true, validated: true },
-      })
-      : Promise.resolve(null),
-  ]);
-
-  // Check if MY attempt is being analyzed (not partner's)
-  const analyzing = myAttempt?.status === 'ANALYZING';
-
-  // Get refinement hint if my attempt needs work
-  let refinementHint = null;
-  if (myAttempt?.status === 'NEEDS_WORK') {
-    const reconcilerResult = await prisma.reconcilerResult.findFirst({
-      where: {
-        sessionId,
-        guesserId: userId,
-        supersededAt: null,
-      },
-      select: {
-        areaHint: true,
-        guidanceType: true,
-        promptSeed: true,
-      },
+  // The abstract guidance for my attempt (reconciler_guidance: author-visible).
+  let refinementHint: EmpathyExchangeStatusResponse['refinementHint'] = null;
+  if (myAttempt && (myAttempt.status === 'AWAITING_SHARING' || myAttempt.status === 'REFINING')) {
+    const guidance = await prisma.reconcilerGuidance.findFirst({
+      where: { authorParticipantId: me.participantId, result: { attemptId: myAttempt.id, supersededAt: null } },
+      select: { areaHint: true, guidanceType: true, promptSeed: true },
     });
-
-    if (reconcilerResult) {
-      refinementHint = {
-        areaHint: reconcilerResult.areaHint,
-        guidanceType: reconcilerResult.guidanceType,
-        promptSeed: reconcilerResult.promptSeed,
-      };
-    }
+    if (guidance) refinementHint = guidance;
   }
 
-  // Check if ready for Stage 3
-  const readyForStage3 =
-    myAttempt?.status === 'VALIDATED' && partnerAttempt?.status === 'VALIDATED';
+  const readyForStage3 = myAttempt?.status === 'VALIDATED' && partnerAttempt?.status === 'VALIDATED';
 
-  // Check if partner has completed Stage 1 (for triggering reconciler)
-  let partnerStage1Completed = false;
-  if (partnerId) {
-    partnerStage1Completed = await hasPartnerCompletedStage1(sessionId, partnerId);
-  }
+  const partnerStage1Completed = partner
+    ? (await prisma.participantMilestone.count({ where: { participantId: partner.participantId, milestoneKey: 'feel_heard' } })) > 0
+    : false;
 
-  // Check if user is awaiting sharing (subject waiting to respond to share suggestion)
   const awaitingSharing = myAttempt?.status === 'AWAITING_SHARING';
-
-  // Check if user has new shared context (guesser should refine)
   const hasNewSharedContext = myAttempt?.status === 'REFINING';
 
-  // Fetch shared context if it exists
   let sharedContext: { content: string; sharedAt: string } | null = null;
   let messageCountSinceSharedContext = 0;
   const contextResult = await getSharedContextForGuesser(sessionId, userId);
   if (contextResult.hasSharedContext && contextResult.content && contextResult.sharedAt) {
-    sharedContext = {
-      content: contextResult.content,
-      sharedAt: contextResult.sharedAt,
-    };
-
-    // Count user messages sent after the shared context was received
-    const sharedAtDate = new Date(contextResult.sharedAt);
-    const messagesAfterContext = await prisma.message.count({
-      where: {
-        sessionId,
-        senderId: userId,
-        role: 'USER',
-        timestamp: { gt: sharedAtDate },
-      },
-    });
-    messageCountSinceSharedContext = messagesAfterContext;
+    sharedContext = { content: contextResult.content, sharedAt: contextResult.sharedAt };
+    if (me.mainConversationId) {
+      messageCountSinceSharedContext = await prisma.message.count({
+        where: {
+          conversationId: me.mainConversationId,
+          senderParticipantId: me.participantId,
+          role: 'USER',
+          kind: 'CHAT',
+          createdAt: { gt: new Date(contextResult.sharedAt) },
+        },
+      });
+    }
   }
 
-  // Get delivery status and content of any shared content (for subject)
   const deliveryStatusResult = await getSharedContentDeliveryStatus(sessionId, userId);
-  const sharedContentDeliveryStatus = deliveryStatusResult.hasSharedContent
-    ? deliveryStatusResult.deliveryStatus
-    : null;
-  const mySharedContext = deliveryStatusResult.hasSharedContent && deliveryStatusResult.sharedContent
-    ? {
-      content: deliveryStatusResult.sharedContent,
-      sharedAt: deliveryStatusResult.sharedAt!,
-      deliveryStatus: deliveryStatusResult.deliveryStatus,
-    }
-    : null;
+  const sharedContentDeliveryStatus = deliveryStatusResult.hasSharedContent ? deliveryStatusResult.deliveryStatus : null;
+  const mySharedContext =
+    deliveryStatusResult.hasSharedContent && deliveryStatusResult.sharedContent
+      ? {
+          content: deliveryStatusResult.sharedContent,
+          sharedAt: deliveryStatusResult.sharedAt!,
+          deliveryStatus: deliveryStatusResult.deliveryStatus,
+        }
+      : null;
 
-  // Get reconciler result for my empathy attempt
-  let myReconcilerResult: {
-    gapSeverity: 'none' | 'minor' | 'moderate' | 'significant';
-    action: 'PROCEED' | 'OFFER_OPTIONAL' | 'OFFER_SHARING';
-    analyzedAt: string;
-    gapSummary: string | null;
-  } | null = null;
-  if (myAttempt) {
-    const reconcilerResultForMe = await prisma.reconcilerResult.findFirst({
-      where: {
-        sessionId,
-        guesserId: userId,
-        supersededAt: null,
-      },
-      select: {
-        gapSeverity: true,
-        recommendedAction: true,
-        createdAt: true,
-        gapSummary: true,
-      },
-      orderBy: { createdAt: 'desc' },
-    });
-    if (reconcilerResultForMe) {
-      myReconcilerResult = {
-        gapSeverity: reconcilerResultForMe.gapSeverity as 'none' | 'minor' | 'moderate' | 'significant',
-        action: reconcilerResultForMe.recommendedAction as 'PROCEED' | 'OFFER_OPTIONAL' | 'OFFER_SHARING',
-        analyzedAt: reconcilerResultForMe.createdAt.toISOString(),
-        gapSummary: reconcilerResultForMe.gapSummary,
-      };
-    }
-  }
-
-  // Derive delivery status from empathy attempt status
-  const getEmpathyDeliveryStatus = (status: string): 'pending' | 'delivered' | 'seen' => {
-    if (status === 'VALIDATED') return 'seen';
-    if (status === 'REVEALED') return 'delivered';
-    return 'pending';
-  };
-
-  // Check if guesser has unviewed shared context (should view Share tab before continuing)
-  // True when status is REFINING, shared context exists, and user hasn't viewed the share tab
-  // since the context was delivered
   let hasUnviewedSharedContext = false;
   if (hasNewSharedContext && sharedContext !== null) {
-    const vessel = await prisma.userVessel.findUnique({
-      where: { userId_sessionId: { userId, sessionId } },
+    const readState = await prisma.conversationReadState.findUnique({
+      where: { participantId: me.participantId },
       select: { lastViewedShareTabAt: true },
     });
     const sharedAtDate = new Date(sharedContext.sharedAt);
-    hasUnviewedSharedContext = !vessel?.lastViewedShareTabAt || vessel.lastViewedShareTabAt < sharedAtDate;
+    hasUnviewedSharedContext = !readState?.lastViewedShareTabAt || readState.lastViewedShareTabAt < sharedAtDate;
   }
 
   return {
-    myAttempt: myAttempt
-      ? {
-        id: myAttempt.id,
-        sourceUserId: myAttempt.sourceUserId ?? '',
-        content: myAttempt.content,
-        sharedAt: myAttempt.sharedAt.toISOString(),
-        consentRecordId: myAttempt.consentRecordId ?? '',
-        status: myAttempt.status,
-        revealedAt: myAttempt.revealedAt?.toISOString() ?? null,
-        validatedAt:
-          myAttemptValidation?.validated
-            ? myAttemptValidation.validatedAt?.toISOString() ?? null
-            : null,
-        revisionCount: myAttempt.revisionCount,
-        deliveryStatus: getEmpathyDeliveryStatus(myAttempt.status),
-      }
-      : null,
-    partnerAttempt: partnerAttempt &&
-      (partnerAttempt.status === 'REVEALED' || partnerAttempt.status === 'VALIDATED')
-      ? {
-        id: partnerAttempt.id,
-        sourceUserId: partnerAttempt.sourceUserId ?? '',
-        content: partnerAttempt.content,
-        sharedAt: partnerAttempt.sharedAt.toISOString(),
-        consentRecordId: partnerAttempt.consentRecordId ?? '',
-        status: partnerAttempt.status,
-        revealedAt: partnerAttempt.revealedAt?.toISOString() ?? null,
-        validatedAt:
-          partnerAttemptValidation?.validated
-            ? partnerAttemptValidation.validatedAt?.toISOString() ?? null
-            : null,
-        revisionCount: partnerAttempt.revisionCount,
-      }
-      : null,
+    myAttempt: myAttempt ? attemptDTO(myAttempt, me, myAttemptReview, { delivery: true }) : null,
+    partnerAttempt: partnerAttempt && partner ? attemptDTO(partnerAttempt, partner, partnerAttemptReview) : null,
     partnerCompletedStage1: partnerStage1Completed,
-    analyzing,
+    analyzing: false,
     awaitingSharing,
     hasNewSharedContext,
     hasUnviewedSharedContext,
@@ -259,45 +165,23 @@ export async function buildEmpathyExchangeStatus(
     sharedContentDeliveryStatus: sharedContentDeliveryStatus as SharedContentDeliveryStatus | null,
     mySharedContext,
     mySharedAt: mySharedContext?.sharedAt ?? null,
-    myReconcilerResult,
-    partnerHasSubmittedEmpathy: !!partnerAttempt,
-    partnerEmpathyHeldStatus: partnerAttempt?.status ?? null,
-    partnerEmpathySubmittedAt: partnerAttempt?.sharedAt?.toISOString() ?? null,
+    myReconcilerResult: null,
+    partnerHasSubmittedEmpathy: !!partnerDirection,
+    partnerEmpathyHeldStatus: (partnerDirection?.status as EmpathyExchangeStatusResponse['partnerEmpathyHeldStatus']) ?? null,
+    partnerEmpathySubmittedAt: partnerDirection?.submittedAt.toISOString() ?? null,
   };
 }
 
 /**
- * Build empathy status for both users in a session.
- * Useful when you need to send updates to both users.
- *
- * @param sessionId - The session ID
- * @returns Object with status for each user
+ * Build empathy status for every participant user of a session.
  */
 export async function buildEmpathyExchangeStatusForBothUsers(
-  sessionId: string
+  sessionId: string,
 ): Promise<{ [userId: string]: EmpathyExchangeStatusResponse }> {
-  // Get session members
-  const session = await prisma.session.findFirst({
-    where: { id: sessionId },
-    include: {
-      relationship: {
-        include: {
-          members: true,
-        },
-      },
-    },
-  });
-
-  if (!session) {
-    throw new Error(`Session ${sessionId} not found`);
-  }
-
-  const userIds = session.relationship.members.map(m => m.userId);
+  const parties = await sessionParties(sessionId);
   const result: { [userId: string]: EmpathyExchangeStatusResponse } = {};
-
-  for (const userId of userIds) {
-    result[userId] = await buildEmpathyExchangeStatus(sessionId, userId);
+  for (const p of parties) {
+    if (p.userId) result[p.userId] = await buildEmpathyExchangeStatus(sessionId, p.userId);
   }
-
   return result;
 }

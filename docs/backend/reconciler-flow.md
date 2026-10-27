@@ -20,6 +20,33 @@ In Stage 2, both users work to imagine each other's perspective. Each user:
 
 The **Reconciler** analyzes how well each person's attempt resonated with the other and may suggest sharing additional context to help bridge gaps.
 
+## On the target schema (TS-10, phoenix/target-shape)
+
+The flow below is unchanged in product terms; the data layer under it is the target schema
+(`docs/backend/data-model/schema-target-2026-10.md` §1.2–1.3):
+
+- **Rounds.** An attempt is immutable: a resubmission is `app.empathy_set_status(round n,
+  'SUPERSEDED', content)`, which inserts round n+1 (HELD). There is no ANALYZING or NEEDS_WORK
+  status; the consent response still reports ANALYZING as a display status once both directions
+  are submitted. The circuit breaker counts rounds.
+- **Every status move** goes through `app.empathy_set_status` — the author's and subject's own
+  moves on the app connection under their identity, the reconciler's moves and the reveal on the
+  job connection (`mwf_job`, the only principal the function lets reveal; the function owns the
+  gate and writes the subject's `EMPATHY_STATEMENT` copy). Reconciler moves are guarded by the
+  attempt's `status_version`, so a late analysis never overwrites a newer decision.
+- **Who sees what.** The waiting state comes from `v_empathy_direction_status`; a subject reads an
+  attempt only once revealed. A `reconciler_result` is its subject's only — the author sees the
+  direction's status and the abstract `reconciler_guidance`, never the analysis or the existence
+  of an offer (`myReconcilerResult` is null; reconciler/status and /run return only the caller's
+  subject-side analyses). The summary is built per participant from their own results (R24).
+- **The offer** (`context_share_offer`) is the subject's: inserted by the job; answered by the
+  subject with a `consent` row naming it (no requester); the shared text is delivered by the job
+  as `SHARED_CONTEXT` in the author's conversation. The pending-actions read writes
+  `delivery_notified_at` / `seen_notified_at`, so a delivery is counted once.
+
+Code: `backend/src/services/empathy-store.ts` (the rules), `services/reconciler/*`,
+`controllers/{stage2,reconciler,consent,notifications}.ts`.
+
 ## Empathy Attempt States
 
 ```mermaid

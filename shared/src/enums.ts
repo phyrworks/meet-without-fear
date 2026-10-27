@@ -119,6 +119,10 @@ export enum ConsentContentType {
   EMPATHY_DRAFT = 'EMPATHY_DRAFT',
   EMPATHY_ATTEMPT = 'EMPATHY_ATTEMPT',
   STRATEGY_PROPOSAL = 'STRATEGY_PROPOSAL',
+  /** The subject's answer to a reconciler share suggestion (consent arc share_offer_id; TS-10, additive). */
+  CONTEXT_SHARE_OFFER = 'CONTEXT_SHARE_OFFER',
+  /** The subject's explicit send of review feedback (consent arc review_id; TS-10, additive). */
+  EMPATHY_REVIEW = 'EMPATHY_REVIEW',
 }
 
 // ============================================================================

@@ -98,7 +98,14 @@ describe('compareWithAllowList — empathy-reveal (old ⊆ new, named additions)
   it('passes trivially on the current shape', () => {
     const r = compareWithAllowList(revealBaseline(), revealBaseline(), EMPATHY_REVEAL_ALLOW);
     expect(r.violations).toEqual([]);
-    expect(r.unmatchedRules).toEqual([]);
+    // TS-10's target rules are pinned to steps of the recorded scenario
+    // (status_version at steps 1/3/6) that this synthetic baseline does not
+    // have; every other rule must match.
+    expect(r.unmatchedRules).toEqual([
+      'mayDiffer @ steps.3.body.data.attempt.statusVersion, steps.6.body.data.attempt.statusVersion',
+      'replacedEntry @ steps.1.changes',
+      'replacedEntry @ steps.1.changes',
+    ]);
   });
 
   it('accepts the target-like body: round and attemptId added on reveal payloads', () => {

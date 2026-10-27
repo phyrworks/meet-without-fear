@@ -3,12 +3,22 @@
  *
  * Share suggestion generation, refinement, and response handling.
  * Manages the flow of sharing context between users when empathy gaps are detected.
+ *
+ * Target shape (TS-10, spec §1.2 context_share_offer, §1.3 consent):
+ *   - the offer is the SUBJECT's: the job inserts it; only the subject reads it;
+ *   - the subject responds on the app connection: the offer's response columns
+ *     plus a `consent` row naming the offer (no requester — CHECK; a DENIED
+ *     decision can never be read by the author, spec §7 "declining leaves no
+ *     author-visible trace");
+ *   - the shared text is delivered by the job as a `message(kind
+ *     SHARED_CONTEXT)` in the AUTHOR's conversation, with the delivery stamp on
+ *     the offer; the author's round moves through `app.empathy_set_status`
+ *     (job).
  */
 
-import { prisma } from '../../lib/prisma';
+import type { PrismaClient } from '../../generated/prisma/client';
+import { getJobPrisma, prisma } from '../../lib/prisma';
 import { logger } from '../../lib/logger';
-import { EmpathyStatus, MessageRole } from '@meet-without-fear/shared';
-import type { Prisma } from '../../generated/prisma/client';
 import { getSonnetResponse } from '../../lib/bedrock';
 import { canTransition, transition } from '../empathy-state-machine';
 import {
@@ -20,200 +30,117 @@ import {
 import type { ContextBundle } from '../context-assembler';
 import { extractJsonFromResponse } from '../../utils/json-extractor';
 import { cleanVisibleAIText } from '../../utils/visible-text';
-import type {
-  ReconcilerResult,
-  ShareOfferMessage,
-} from '@meet-without-fear/shared';
-
-type ConversationPromptMessage = {
-  role: string;
-  content: string;
-};
+import type { ReconcilerResult, ShareOfferMessage } from '@meet-without-fear/shared';
+import { createFacilitatorMessage, deliverMessage } from '../message-store';
+import { loadCurrentStages } from '../stage-shim';
+import {
+  currentAttempt,
+  jobMoveIfUnchanged,
+  partyOf,
+  sessionParties,
+  type SessionParty,
+} from '../empathy-store';
 
 import {
   type UserInfo,
   type WitnessingContent,
   getSonnetJson,
-  dbResultToReconcilerResult,
   getWitnessingContent,
+  persistAnalysis,
+  generateAbstractGuidance,
+  currentResultFor,
+  dbResultToReconcilerResult,
+  toUserInfo,
 } from './analysis';
 import { hasContextAlreadyBeenShared } from './circuit-breaker';
 import { checkAndRevealBothIfReady } from './state';
 
 // ============================================================================
-// Helper: Find ReconcilerResult with retry
+// Helpers
 // ============================================================================
 
-/**
- * Retry up to 3 times to find ReconcilerResult to handle potential race condition
- * where the record might not be immediately visible after creation.
- * This is only used as a fallback when the DB record is not passed by reference.
- */
-async function findReconcilerResultWithRetry(
-  sessionId: string,
-  guesserId: string,
-  subjectId: string
-): Promise<any | null> {
-  let dbResult = null;
-  for (let attempt = 1; attempt <= 3; attempt++) {
-    logger.debug('Looking up ReconcilerResult', { attempt, guesserId, subjectId });
-    dbResult = await prisma.reconcilerResult.findFirst({
-      where: {
-        sessionId,
-        guesserId,
-        subjectId,
-        supersededAt: null,
-      },
-    });
-    if (dbResult) {
-      break;
+/** The name `viewer` uses for `other` (their relationship nickname, else the other's name). */
+async function displayNameForViewer(sessionId: string, viewer: SessionParty, other: SessionParty, fallback: string): Promise<string> {
+  try {
+    if (viewer.userId) {
+      const member = await prisma.relationshipMember.findFirst({
+        where: { userId: viewer.userId, relationship: { sessions: { some: { id: sessionId } } } },
+        select: { nickname: true },
+      });
+      if (member?.nickname?.trim()) return member.nickname.trim();
     }
-    if (attempt < 3) {
-      logger.warn('ReconcilerResult not found, retrying', { attempt, guesserId, subjectId });
-      await new Promise(resolve => setTimeout(resolve, 100));
-    }
+    return other.name?.trim() || fallback;
+  } catch (error) {
+    logger.warn('Failed to resolve partner display name, using fallback', { sessionId, error: (error as Error).message });
+    return fallback;
   }
+}
 
-  if (!dbResult) {
-    logger.error('CRITICAL: Could not find reconcilerResult after 3 attempts', { guesserId, subjectId, sessionId });
-  }
-
-  return dbResult;
+/** The open (PENDING/OFFERED) offer of a subject in a session, with its attempt's author. */
+async function openOfferOf(sessionId: string, subjectParticipantId: string) {
+  return prisma.contextShareOffer.findFirst({
+    where: {
+      subjectParticipantId,
+      status: { in: ['OFFERED', 'PENDING'] },
+      attempt: { authorParticipant: { sessionId } },
+    },
+    orderBy: { createdAt: 'desc' },
+    include: {
+      attempt: { select: { id: true, authorParticipantId: true, status: true, statusVersion: true } },
+      result: true,
+    },
+  });
 }
 
 // ============================================================================
 // Helper: Generate Post-Share Continuation
 // ============================================================================
 
-async function getPartnerDisplayNameForViewer(
-  sessionId: string,
-  viewerId: string,
-  partnerId: string,
-  fallbackName: string
-): Promise<string> {
-  try {
-    const membership = await prisma.relationshipMember.findFirst({
-      where: {
-        userId: viewerId,
-        relationship: {
-          sessions: { some: { id: sessionId } },
-        },
-      },
-      select: {
-        nickname: true,
-      },
-    });
-
-    if (membership?.nickname?.trim()) {
-      return membership.nickname.trim();
-    }
-
-    const partner = await prisma.user.findUnique({
-      where: { id: partnerId },
-      select: {
-        firstName: true,
-        name: true,
-      },
-    });
-
-    return partner?.firstName?.trim() || partner?.name?.trim() || fallbackName;
-  } catch (error) {
-    logger.warn('Failed to resolve partner display name, using fallback', {
-      sessionId,
-      viewerId,
-      partnerId,
-      error: (error as Error).message,
-    });
-    return fallbackName;
-  }
-}
-
 /**
- * Generate a stage-appropriate continuation message after a user shares context.
- * Uses the actual stage prompts with justSharedWithPartner context for consistency.
- * The stage prompt handles acknowledging the share and continuing appropriately.
+ * A stage-appropriate continuation for the subject after they share context.
  */
 export async function generatePostShareContinuation(
   sessionId: string,
-  subjectId: string,
+  subject: SessionParty,
   subjectName: string,
   partnerName: string,
-  sharedContent: string
+  sharedContent: string,
+  partner?: SessionParty,
 ): Promise<string> {
-  logger.info('Generating post-share continuation', { subjectId });
+  logger.info('Generating post-share continuation', { subjectParticipantId: subject.participantId });
 
-  // Get subject's current stage
-  const stageProgress = await prisma.stageProgress.findFirst({
-    where: { sessionId, userId: subjectId },
-    orderBy: { stage: 'desc' },
-  });
-  const currentStage = stageProgress?.stage ?? 2; // Default to 2 if not found
+  const currentStage = (await loadCurrentStages([subject.participantId])).get(subject.participantId)?.stage ?? 2;
 
   if (currentStage === 2) {
-    const ownAttempt = await prisma.empathyAttempt.findFirst({
-      where: {
-        sessionId,
-        sourceUserId: subjectId,
-      },
-      select: {
-        status: true,
-      },
-    });
-
-    if (ownAttempt?.status === EmpathyStatus.REFINING) {
+    const ownAttempt = partner ? await currentAttempt(subject.participantId, partner.participantId) : null;
+    if (ownAttempt?.status === 'REFINING') {
       return `Thank you for sharing that with ${partnerName}. They'll have the chance to sit with it and refine their understanding. You also have an updated draft of your own empathy statement to review. When you're ready, use "Revisit what you'll share" and resubmit it so ${partnerName} can see your updated understanding.`;
     }
-
     return `Thank you for sharing that with ${partnerName}. They'll have the chance to sit with it and refine their understanding. If your own empathy draft asks for review, use "Revisit what you'll share" before waiting. Otherwise, you don't need to do anything more on their behalf.`;
   }
 
-  // Get recent conversation history for context
-  const recentMessages = await prisma.message.findMany({
-    where: {
-      sessionId,
-      OR: [
-        { senderId: subjectId },
-        { role: 'AI', forUserId: subjectId },
-      ],
-    },
-    orderBy: { timestamp: 'desc' },
-    take: 10,
-  });
-
-  // Convert to format expected by prompt (reverse to chronological order)
-  // Only include USER and AI messages - exclude EMPATHY_STATEMENT, SHARED_CONTEXT, etc.
+  // The subject's own recent chat (their MAIN conversation).
+  const recentMessages = subject.mainConversationId
+    ? await prisma.message.findMany({
+        where: { conversationId: subject.mainConversationId, kind: 'CHAT', role: { in: ['USER', 'AI'] } },
+        orderBy: { createdAt: 'desc' },
+        take: 10,
+        select: { role: true, content: true },
+      })
+    : [];
   const conversationHistory = recentMessages
-    .filter((m: ConversationPromptMessage) => m.role === 'USER' || m.role === 'AI')
     .reverse()
-    .map((m: ConversationPromptMessage) => ({
-      role: (m.role === 'USER' ? 'user' : 'assistant') as 'user' | 'assistant',
-      content: m.content,
-    }));
+    .map(m => ({ role: (m.role === 'USER' ? 'user' : 'assistant') as 'user' | 'assistant', content: m.content }));
 
   const turnId = `${sessionId}-${Date.now()}`;
-
-  // Create a minimal context bundle for the stage prompt
-  // We don't need full memory/pattern context for post-share continuation
   const minimalContextBundle: ContextBundle = {
     conversationContext: {
-      recentTurns: conversationHistory.map((m: { role: 'user' | 'assistant'; content: string }) => ({
-        role: m.role,
-        content: m.content,
-        timestamp: new Date().toISOString(), // Approximate
-      })),
-      turnCount: conversationHistory.filter((m: { role: 'user' | 'assistant'; content: string }) => m.role === 'user').length,
-      sessionDurationMinutes: 0, // Not critical for this use case
+      recentTurns: conversationHistory.map(m => ({ role: m.role, content: m.content, timestamp: new Date().toISOString() })),
+      turnCount: conversationHistory.filter(m => m.role === 'user').length,
+      sessionDurationMinutes: 0,
     },
-    emotionalThread: {
-      initialIntensity: 5,
-      currentIntensity: 5, // Default moderate
-      trend: 'stable' as const,
-      notableShifts: [],
-    },
-    stageContext: {
-      stage: currentStage,
-      gatesSatisfied: {},
-    },
+    emotionalThread: { initialIntensity: 5, currentIntensity: 5, trend: 'stable' as const, notableShifts: [] },
+    stageContext: { stage: currentStage, gatesSatisfied: {} },
     userName: subjectName,
     partnerName,
     intent: {
@@ -228,25 +155,17 @@ export async function generatePostShareContinuation(
     assembledAt: new Date().toISOString(),
   };
 
-  // Build prompt context with justSharedWithPartner flag
-  // This injects the share acknowledgment into the normal stage prompt
   const promptContext: PromptContext = {
     userName: subjectName,
     partnerName,
-    turnCount: conversationHistory.filter((m: { role: 'user' | 'assistant'; content: string }) => m.role === 'user').length,
-    emotionalIntensity: 5, // Default moderate
+    turnCount: conversationHistory.filter(m => m.role === 'user').length,
+    emotionalIntensity: 5,
     contextBundle: minimalContextBundle,
-    justSharedWithPartner: {
-      sharedContent,
-    },
+    justSharedWithPartner: { sharedContent },
   };
 
-  // Get the stage-appropriate prompt with post-share context injected
-  const systemPrompt = buildStagePrompt(currentStage, promptContext);
-
-  // Call Sonnet with conversation history
   const response = await getSonnetResponse({
-    systemPrompt,
+    systemPrompt: buildStagePrompt(currentStage, promptContext),
     messages: conversationHistory,
     maxTokens: 512,
     sessionId,
@@ -254,34 +173,19 @@ export async function generatePostShareContinuation(
     operation: 'reconciler-post-share-continuation',
   });
 
-  if (!response) {
-    logger.warn('Failed to generate continuation, using fallback', { stage: currentStage });
-    return getFallbackContinuation(currentStage, partnerName);
-  }
+  if (!response) return getFallbackContinuation(currentStage, partnerName);
 
-  // Parse the JSON response and extract just the response field
-  // The stage prompt returns: { "response": "...", "analysis": "...", ... }
   try {
     const parsed = extractJsonFromResponse(response) as { response?: string };
-    if (parsed && typeof parsed.response === 'string') {
-      logger.debug('Generated continuation', { stage: currentStage, preview: parsed.response.substring(0, 50) });
-      return parsed.response;
-    }
+    if (parsed && typeof parsed.response === 'string') return parsed.response;
   } catch (error) {
     logger.warn('Failed to parse JSON response, attempting fallback extraction', { error: (error as Error).message });
   }
-
-  // Fallback: strip analysis tags and try to extract response field via regex
   const stripped = response.replace(/<analysis>[\s\S]*?<\/analysis>/gi, '').trim();
   const responseMatch = stripped.match(/"response"\s*:\s*"((?:[^"\\]|\\.)*)"/);
   if (responseMatch) {
-    const extracted = responseMatch[1].replace(/\\"/g, '"').replace(/\\n/g, '\n').replace(/\\\\/g, '\\');
-    logger.debug('Extracted response via regex', { preview: extracted.substring(0, 50) });
-    return extracted;
+    return responseMatch[1].replace(/\\"/g, '"').replace(/\\n/g, '\n').replace(/\\\\/g, '\\');
   }
-
-  // Last resort: use fallback
-  logger.warn('All parsing failed, using fallback', { stage: currentStage });
   return getFallbackContinuation(currentStage, partnerName);
 }
 
@@ -318,10 +222,7 @@ export function getFallbackContinuation(stage: number, partnerName: string): str
 // ============================================================================
 
 /**
- * Generate a reflection AI message for the guesser after they receive shared context.
- * Placed after the SHARED_CONTEXT card to invite the guesser to process what they read.
- *
- * Falls back to hardcoded message on AI failure.
+ * A reflection AI message for the guesser after they receive shared context.
  */
 export async function generateContextReceivedReflection(
   sessionId: string,
@@ -338,10 +239,7 @@ export async function generateContextReceivedReflection(
 // ============================================================================
 
 /**
- * Generate a reflection AI message for the guesser after they receive validation feedback.
- * Placed before the VALIDATION_FEEDBACK card to frame the situation and invite reflection.
- *
- * Falls back to hardcoded message on AI failure.
+ * A reflection AI message for the guesser after they receive validation feedback.
  */
 export async function generateValidationFeedbackReflection(
   sessionId: string,
@@ -370,18 +268,8 @@ Respond with ONLY the message text, no additional formatting.`;
       operation: 'reconciler-validation-feedback-reflection',
     });
 
-    if (!response) {
-      logger.warn('generateValidationFeedbackReflection: Sonnet returned null, using fallback');
-      return fallback;
-    }
-
-    const trimmed = response.trim();
-    if (trimmed.length > 0) {
-      logger.debug('Generated validation feedback reflection message', { sessionId });
-      return trimmed;
-    }
-
-    return fallback;
+    const trimmed = response?.trim();
+    return trimmed && trimmed.length > 0 ? trimmed : fallback;
   } catch (error) {
     logger.error('generateValidationFeedbackReflection failed', { error: (error as Error).message });
     return fallback;
@@ -393,94 +281,78 @@ Respond with ONLY the message text, no additional formatting.`;
 // ============================================================================
 
 /**
- * Generate a share suggestion for a specific direction after reconciler analysis.
- * Called when empathy status is set to AWAITING_SHARING to proactively create
- * the share offer so users see it immediately without needing to reload.
- *
- * @param sessionId - The session ID
- * @param guesserId - The user who made the empathy guess
- * @param subjectId - The user being guessed about (who will receive the share suggestion)
+ * The job's offer insert (trailer T7, TS-10 block): the next iteration of the
+ * attempt's offers.
+ */
+async function insertOffer(
+  client: PrismaClient,
+  opts: {
+    attemptId: string;
+    resultId: string;
+    subjectParticipantId: string;
+    status: 'PENDING' | 'OFFERED';
+    offerMessage?: string | null;
+    suggestedContent: string;
+    suggestedReason: string | null;
+  },
+): Promise<string> {
+  const rows = await client.$queryRaw<Array<{ id: string }>>`INSERT INTO context_share_offer (attempt_id, result_id, subject_participant_id, iteration, status, offer_message,
+                                     suggested_content, suggested_reason, offered_at)
+    VALUES (${opts.attemptId}::uuid, ${opts.resultId}::uuid, ${opts.subjectParticipantId}::uuid,
+            coalesce((SELECT max(o.iteration) FROM context_share_offer o WHERE o.attempt_id = ${opts.attemptId}::uuid), 0) + 1,
+            ${opts.status}::share_offer_status, ${opts.offerMessage ?? null}, ${opts.suggestedContent}, ${opts.suggestedReason},
+            ${opts.status === 'OFFERED' ? new Date() : null}::timestamptz)
+    RETURNING id`;
+  return rows[0].id;
+}
+
+/**
+ * Generate a share suggestion for a direction after the symmetric reconciler
+ * moved it to AWAITING_SHARING, so the subject sees it without a reload.
+ * User ids in (the caller's signature); participants inside.
  */
 export async function generateShareSuggestionForDirection(
   sessionId: string,
   guesserId: string,
-  subjectId: string
+  subjectId: string,
 ): Promise<void> {
-  logger.info('generateShareSuggestionForDirection called', { guesserId, subjectId });
-
-  // Get user names
-  const [guesser, subject] = await Promise.all([
-    prisma.user.findUnique({
-      where: { id: guesserId },
-      select: { id: true, name: true, firstName: true },
-    }),
-    prisma.user.findUnique({
-      where: { id: subjectId },
-      select: { id: true, name: true, firstName: true },
-    }),
-  ]);
-
-  if (!guesser || !subject) {
-    logger.error('generateShareSuggestionForDirection: Guesser or subject not found', { guesserId, subjectId });
+  // Analysis path: the job reads (Ruling R35).
+  const parties = await sessionParties(sessionId, getJobPrisma());
+  const g = partyOf(parties, { userId: guesserId });
+  const s = partyOf(parties, { userId: subjectId });
+  if (!g || !s) {
+    logger.error('generateShareSuggestionForDirection: guesser or subject not found', { guesserId, subjectId });
     return;
   }
-
-  const guesserInfo: UserInfo = {
-    id: guesser.id,
-    name: guesser.firstName || guesser.name || 'User',
-  };
-  const subjectInfo: UserInfo = {
-    id: subject.id,
-    name: subject.firstName || subject.name || 'User',
-  };
-
-  // Get the reconciler result
-  const dbResult = await prisma.reconcilerResult.findFirst({
-    where: {
-      sessionId,
-      guesserId,
-      subjectId,
-      supersededAt: null,
-    },
-    include: {
-      shareOffer: true,
-    },
-  });
-
-  if (!dbResult) {
+  const attempt = await currentAttempt(g.participantId, s.participantId, getJobPrisma());
+  if (!attempt) return;
+  const stored = await currentResultFor(attempt.id);
+  if (!stored) {
     logger.warn('generateShareSuggestionForDirection: No reconciler result found', { guesserId, subjectId });
     return;
   }
+  const existing = await getJobPrisma().contextShareOffer.findFirst({
+    where: { resultId: stored.id, suggestedContent: { not: null } },
+    select: { id: true },
+  });
+  if (existing) return;
 
-  // If share offer already exists, don't regenerate
-  if (dbResult.shareOffer && dbResult.shareOffer.suggestedContent) {
-    logger.debug('Share offer already exists, skipping generation', { guesserId, subjectId });
-    return;
-  }
-
-  // Convert DB result to ReconcilerResult type
-  const reconcilerResult = dbResultToReconcilerResult(dbResult);
-
-  // Get subject's witnessing content
-  const witnessingContent = await getWitnessingContent(sessionId, subjectId);
-
-  // Generate the share suggestion (calls the private function)
+  const witnessingContent = await getWitnessingContent(sessionId, s.participantId, s.userId ?? undefined);
   await generateShareSuggestion(
     sessionId,
-    guesserInfo,
-    subjectInfo,
-    reconcilerResult,
-    witnessingContent
+    toUserInfo(g, 'User'),
+    toUserInfo(s, 'User'),
+    dbResultToReconcilerResult(stored),
+    witnessingContent,
+    { attemptId: attempt.id, storedResultId: stored.id, fresh: false },
   );
-
-  logger.info('Share suggestion created', { subjectId: subjectInfo.id, guesserId });
 }
 
 /**
- * Generate a share suggestion for the subject based on reconciler gaps.
- * This creates a human-readable suggestion that the subject can accept, refine, or decline.
- *
- * @param dbReconcilerResult - Optional DB record to avoid retry loop (passed from runReconcilerForDirection)
+ * Generate the suggestion for the subject and persist it: a fresh analysis is
+ * written with the suggestion (`persistAnalysis`), then the subject's offer
+ * (PENDING) — both by the job. A suggestion that fails to generate leaves the
+ * analysis stored and no offer, as before.
  */
 export async function generateShareSuggestion(
   sessionId: string,
@@ -488,14 +360,9 @@ export async function generateShareSuggestion(
   subject: UserInfo,
   reconcilerResult: ReconcilerResult,
   witnessingContent: WitnessingContent,
-  dbReconcilerResult?: any
-): Promise<{
-  suggestedContent: string;
-  reason: string;
-} | null> {
+  persist: { attemptId: string; storedResultId?: string; fresh: boolean },
+): Promise<{ suggestedContent: string; reason: string } | null> {
   logger.info('Generating share suggestion', { subjectId: subject.id, guesserId: guesser.id });
-
-  // Generate turnId upfront so COST and RECONCILER logs group together
   const turnId = `${sessionId}-${Date.now()}`;
 
   const response = await getSonnetJson<{ suggestedContent: string; reason: string }>({
@@ -544,76 +411,53 @@ Respond in JSON:
     operation: 'reconciler-share-suggestion',
   });
 
-  if (!response) {
-    logger.warn('AI failed to generate share suggestion');
-    // Return null to signal failure - let caller handle the error state
-    return null;
-  }
-  response.suggestedContent = cleanVisibleAIText(response.suggestedContent);
-  response.reason = cleanVisibleAIText(response.reason);
-  logger.info('Share suggestion generated', { contentLength: response.suggestedContent.length, reasonLength: response.reason.length });
+  const suggestion = response
+    ? { suggestedContent: cleanVisibleAIText(response.suggestedContent), reason: cleanVisibleAIText(response.reason) }
+    : null;
+  if (!suggestion) logger.warn('AI failed to generate share suggestion');
 
-  // Use provided DB record or fall back to retry loop
-  const dbResult = dbReconcilerResult || await findReconcilerResultWithRetry(sessionId, guesser.id, subject.id);
-
-  if (dbResult) {
-    logger.debug('Updating DB result and creating share offer', { resultId: dbResult.id });
-    await prisma.reconcilerResult.update({
-      where: { id: dbResult.id },
-      data: {
-        suggestedShareContent: response.suggestedContent,
-        suggestedShareReason: response.reason,
-      },
+  let resultId = persist.storedResultId ?? null;
+  if (persist.fresh) {
+    resultId = await persistAnalysis({
+      attemptId: persist.attemptId,
+      authorParticipantId: guesser.participantId,
+      subjectParticipantId: subject.participantId,
+      result: reconcilerResult,
+      guidance: reconcilerResult.abstractGuidance ?? generateAbstractGuidance(reconcilerResult),
+      suggestion: suggestion ? { content: suggestion.suggestedContent, reason: suggestion.reason } : null,
     });
-
-    // Create share offer record
-    await prisma.reconcilerShareOffer.upsert({
-      where: { resultId: dbResult.id },
-      create: {
-        resultId: dbResult.id,
-        userId: subject.id,
-        status: 'PENDING',
-        suggestedContent: response.suggestedContent,
-        suggestedReason: response.reason,
-      },
-      update: {
-        status: 'PENDING',
-        suggestedContent: response.suggestedContent,
-        suggestedReason: response.reason,
-      },
-    });
-
-    // Note: We don't create a SHARE_SUGGESTION message in chat.
-    // The suggestion is stored in reconcilerShareOffer and displayed via the drawer only.
-    logger.debug('Share suggestion stored (drawer only)', { subjectId: subject.id });
-  } else {
-    logger.error('CRITICAL: Could not find reconcilerResult, share suggestion will not be displayed', { guesserId: guesser.id, subjectId: subject.id, sessionId });
   }
+  if (!suggestion || !resultId) return suggestion ? { suggestedContent: suggestion.suggestedContent, reason: suggestion.reason } : null;
 
-  return response;
+  const open = await getJobPrisma().contextShareOffer.findFirst({
+    where: { resultId, status: { in: ['PENDING', 'OFFERED'] } },
+    select: { id: true },
+  });
+  if (!open) {
+    await insertOffer(getJobPrisma(), {
+      attemptId: persist.attemptId,
+      resultId,
+      subjectParticipantId: subject.participantId,
+      status: 'PENDING',
+      suggestedContent: suggestion.suggestedContent,
+      suggestedReason: suggestion.reason,
+    });
+  }
+  return { suggestedContent: suggestion.suggestedContent, reason: suggestion.reason };
 }
 
 /**
  * Refine a share suggestion based on user feedback.
- * This regenerates the suggestion using AI, incorporating the user's refinement request.
  */
 async function refineShareSuggestion(
   originalContent: string,
   refinementRequest: string,
   guesserName: string,
   subjectName: string,
-  gapContext: {
-    severity: string;
-    summary: string;
-    missedFeelings: string[];
-    mostImportantGap: string | null;
-  },
-  sessionId: string
+  gapContext: { severity: string; summary: string; missedFeelings: string[]; mostImportantGap: string | null },
+  sessionId: string,
 ): Promise<string | null> {
-  logger.info('Refining share suggestion', { sessionId });
-
   const turnId = `${sessionId}-refine-${Date.now()}`;
-
   const response = await getSonnetJson<{ refinedContent: string }>({
     systemPrompt: `You are helping ${subjectName} refine a message they want to share with ${guesserName}.
 
@@ -656,13 +500,10 @@ Respond in JSON:
     turnId,
     operation: 'reconciler-refine-suggestion',
   });
-
   if (!response || !response.refinedContent) {
     logger.warn('AI failed to refine share suggestion');
     return null;
   }
-
-  logger.debug('Refined suggestion generated', { contentLength: response.refinedContent.length });
   return response.refinedContent;
 }
 
@@ -671,53 +512,40 @@ Respond in JSON:
 // ============================================================================
 
 /**
- * Get share suggestion for a user (called when they need to respond).
+ * The subject's PENDING offer (marked OFFERED now that it is viewed).
  */
 export async function getShareSuggestionForUser(
   sessionId: string,
-  userId: string
+  userId: string,
 ): Promise<{
   hasSuggestion: boolean;
-  suggestion: {
-    guesserName: string;
-    suggestedContent: string;
-    reason: string;
-    canRefine: boolean;
-  } | null;
+  suggestion: { guesserName: string; suggestedContent: string; reason: string; canRefine: boolean } | null;
 }> {
-  logger.debug('getShareSuggestionForUser called', { userId, sessionId });
+  const parties = await sessionParties(sessionId);
+  const me = partyOf(parties, { userId });
+  if (!me) return { hasSuggestion: false, suggestion: null };
 
-  // Find share offer for this user in PENDING status
-  const shareOffer = await prisma.reconcilerShareOffer.findFirst({
-    where: {
-      userId,
-      status: 'PENDING',
-      result: { sessionId },
-    },
-    include: {
-      result: true,
-    },
+  const offer = await prisma.contextShareOffer.findFirst({
+    where: { subjectParticipantId: me.participantId, status: 'PENDING', attempt: { authorParticipant: { sessionId } } },
+    orderBy: { createdAt: 'desc' },
+    include: { attempt: { select: { authorParticipantId: true } } },
+  });
+  if (!offer || !offer.suggestedContent) return { hasSuggestion: false, suggestion: null };
+
+  // The subject's own row: OFFERED once viewed (app connection).
+  await prisma.contextShareOffer.update({
+    where: { id: offer.id },
+    data: { status: 'OFFERED', offeredAt: offer.offeredAt ?? new Date() },
+    select: { id: true },
   });
 
-  if (!shareOffer || !shareOffer.suggestedContent) {
-    logger.debug('No PENDING share offer found', { userId });
-    return { hasSuggestion: false, suggestion: null };
-  }
-
-  logger.info('Found PENDING share offer, marking as OFFERED', { shareOfferId: shareOffer.id });
-
-  // Mark as OFFERED now that it's being viewed
-  await prisma.reconcilerShareOffer.update({
-    where: { id: shareOffer.id },
-    data: { status: 'OFFERED' },
-  });
-
+  const author = partyOf(parties, { participantId: offer.attempt.authorParticipantId });
   return {
     hasSuggestion: true,
     suggestion: {
-      guesserName: shareOffer.result.guesserName,
-      suggestedContent: shareOffer.suggestedContent,
-      reason: shareOffer.suggestedReason || 'This would help them understand you better.',
+      guesserName: author?.name || 'Your partner',
+      suggestedContent: offer.suggestedContent,
+      reason: offer.suggestedReason || 'This would help them understand you better.',
       canRefine: true,
     },
   };
@@ -728,326 +556,328 @@ export async function getShareSuggestionForUser(
 // ============================================================================
 
 /**
- * Respond to a share suggestion (new flow with accept/refine/decline).
+ * The subject answers their offer (accept / refine / decline).
+ *
+ *  - decline: the offer DECLINED + a DENIED consent naming it (subject, app
+ *    connection, one transaction); the author's round → READY (job,
+ *    status-version guarded); then the reveal check. Nothing the author can
+ *    read changes except the direction's status.
+ *  - accept / refine: the offer ACCEPTED with the exact shared text + a
+ *    GRANTED consent (subject, app); then the job delivers: SHARED_CONTEXT into
+ *    the author's conversation, the reflection prompt for the author, the
+ *    acknowledgement for the subject, the offer's delivery stamp, and the
+ *    author's round → REFINING — one job transaction.
  */
 export async function respondToShareSuggestion(
   sessionId: string,
   userId: string,
-  response: {
-    action: 'accept' | 'decline' | 'refine';
-    refinedContent?: string;
-  }
-): Promise<{
-  status: 'shared' | 'declined';
-  sharedContent: string | null;
-  guesserUpdated: boolean;
-}> {
+  response: { action: 'accept' | 'decline' | 'refine'; refinedContent?: string },
+): Promise<{ status: 'shared' | 'declined'; sharedContent: string | null; guesserUpdated: boolean }> {
   logger.info('respondToShareSuggestion called', { userId, action: response.action });
 
-  // Get the share offer - allow both OFFERED and PENDING status to handle race conditions
-  // where the user responds before the GET endpoint marked it as OFFERED
-  const shareOffer = await prisma.reconcilerShareOffer.findFirst({
-    where: {
-      userId,
-      status: { in: ['OFFERED', 'PENDING'] },
-      result: { sessionId },
-    },
-    include: {
-      result: true,
-    },
-  });
+  const parties = await sessionParties(sessionId);
+  const me = partyOf(parties, { userId });
+  if (!me) throw new Error('No pending share offer found');
 
-  if (!shareOffer) {
-    const processedOffer = await prisma.reconcilerShareOffer.findFirst({
+  const offer = await openOfferOf(sessionId, me.participantId);
+  if (!offer) {
+    // I2: an accept whose delivery failed left the offer ACCEPTED but
+    // undelivered. Answering "shared" without delivering would lose it; the
+    // retry re-runs the (idempotent) delivery instead.
+    if (response.action !== 'decline') {
+      const resumed = await resumeUndeliveredShare(sessionId, me, parties);
+      if (resumed) return { status: 'shared', sharedContent: resumed.sharedContent, guesserUpdated: true };
+    }
+    const processed = await prisma.contextShareOffer.findFirst({
       where: {
-        userId,
-        result: { sessionId },
+        subjectParticipantId: me.participantId,
         status: { in: ['ACCEPTED', 'DECLINED'] },
+        attempt: { authorParticipant: { sessionId } },
       },
       orderBy: { updatedAt: 'desc' },
+      select: { status: true, sharedContent: true },
     });
-
-    if (processedOffer?.status === 'ACCEPTED' && response.action !== 'decline') {
-      logger.info('Share offer already accepted; returning idempotent response', {
-        userId,
-        sessionId,
-      });
-      return {
-        status: 'shared',
-        sharedContent: processedOffer.sharedContent,
-        guesserUpdated: false,
-      };
+    if (processed?.status === 'ACCEPTED' && response.action !== 'decline') {
+      return { status: 'shared', sharedContent: processed.sharedContent, guesserUpdated: false };
     }
-
-    if (processedOffer?.status === 'DECLINED' && response.action === 'decline') {
-      logger.info('Share offer already declined; returning idempotent response', {
-        userId,
-        sessionId,
-      });
-      return {
-        status: 'declined',
-        sharedContent: null,
-        guesserUpdated: false,
-      };
+    if (processed?.status === 'DECLINED' && response.action === 'decline') {
+      return { status: 'declined', sharedContent: null, guesserUpdated: false };
     }
-
-    logger.warn('No OFFERED/PENDING share offer found', { userId, sessionId });
     throw new Error('No pending share offer found');
   }
 
-  // If status was PENDING (user responded before fetching), mark as OFFERED first for proper tracking
-  if (shareOffer.status === 'PENDING') {
-    logger.debug('Share offer was PENDING, marking as OFFERED before processing');
-    await prisma.reconcilerShareOffer.update({
-      where: { id: shareOffer.id },
-      data: { status: 'OFFERED' },
-    });
-  }
+  const author = partyOf(parties, { participantId: offer.attempt.authorParticipantId });
+  if (!author) throw new Error('No pending share offer found');
+  const attempt = offer.attempt;
 
   if (response.action === 'decline') {
-    logger.info('User declined share offer, marking guesser empathy as READY', { userId });
-
-    // Wrap decline DB writes in a transaction for consistency
-    await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
-      // Idempotency guard: only update if still in OFFERED/PENDING state
-      const updated = await tx.reconcilerShareOffer.updateMany({
-        where: {
-          id: shareOffer.id,
-          status: { in: ['OFFERED', 'PENDING'] },
-        },
-        data: {
-          status: 'DECLINED',
-          declinedAt: new Date(),
-        },
+    const now = new Date();
+    await prisma.$transaction(async tx => {
+      const updated = await tx.contextShareOffer.updateMany({
+        where: { id: offer.id, status: { in: ['OFFERED', 'PENDING'] } },
+        data: { status: 'DECLINED', declinedAt: now },
       });
-      if (updated.count === 0) {
-        throw new Error('Share offer already processed');
+      if (updated.count === 0) throw new Error('Share offer already processed');
+      await tx.consent.create({
+        data: { participantId: me.participantId, shareOfferId: offer.id, decision: 'DENIED', decidedAt: now },
+        select: { id: true },
+      });
+      // The subject's own pending suggestion card, if any.
+      if (me.mainConversationId) {
+        await tx.message.deleteMany({ where: { conversationId: me.mainConversationId, kind: 'SHARE_SUGGESTION' } });
       }
-
-      // Validate and mark guesser's empathy as READY (will reveal when both directions are ready)
-      const attemptForDecline = await tx.empathyAttempt.findFirst({
-        where: { sessionId, sourceUserId: shareOffer.result.guesserId },
-      });
-      const currentStatus = attemptForDecline?.status as EmpathyStatus | undefined;
-      if (currentStatus && canTransition(currentStatus, 'DECLINE_SHARING')) {
-        transition(currentStatus, 'DECLINE_SHARING');
-        await tx.empathyAttempt.updateMany({
-          where: { sessionId, sourceUserId: shareOffer.result.guesserId },
-          data: {
-            status: 'READY',
-            statusVersion: { increment: 1 },
-          },
-        });
-      } else if (currentStatus === EmpathyStatus.VALIDATED) {
-        logger.info('Share offer declined after empathy validation; leaving terminal status unchanged', {
-          sessionId,
-          guesserId: shareOffer.result.guesserId,
-        });
-      } else if (currentStatus) {
-        transition(currentStatus, 'DECLINE_SHARING');
-      }
-
-      // Delete the SHARE_SUGGESTION message now that user has responded
-      await tx.message.deleteMany({
-        where: {
-          sessionId,
-          forUserId: userId,
-          role: MessageRole.SHARE_SUGGESTION,
-        },
-      });
     });
 
-    logger.info('Declined share offer committed', { userId });
+    if (canTransition(attempt.status, 'DECLINE_SHARING')) {
+      await jobMoveIfUnchanged(attempt.id, attempt.statusVersion, transition(attempt.status, 'DECLINE_SHARING'));
+    } else if (attempt.status !== 'VALIDATED') {
+      transition(attempt.status, 'DECLINE_SHARING');
+    }
 
-    // Check if both directions are now READY and reveal both if so (outside transaction)
     await checkAndRevealBothIfReady(sessionId);
-
-    return {
-      status: 'declined',
-      sharedContent: null,
-      guesserUpdated: true,
-    };
+    return { status: 'declined', sharedContent: null, guesserUpdated: true };
   }
 
-  // User accepted or refined — do AI calls first (outside transaction)
+  // accept / refine — AI calls first, outside any transaction.
   let sharedContent: string;
-
   if (response.action === 'refine' && response.refinedContent) {
-    // Call AI to regenerate the suggestion based on user's feedback
-    const refinedContent = await refineShareSuggestion(
-      shareOffer.suggestedContent || '',
+    const refined = await refineShareSuggestion(
+      offer.suggestedContent || '',
       response.refinedContent,
-      shareOffer.result.guesserName,
-      shareOffer.result.subjectName,
+      author.name || 'your partner',
+      me.name || 'you',
       {
-        severity: shareOffer.result.gapSeverity,
-        summary: shareOffer.result.gapSummary,
-        missedFeelings: shareOffer.result.missedFeelings,
-        mostImportantGap: shareOffer.result.mostImportantGap,
+        severity: offer.result.gapSeverity.toLowerCase(),
+        summary: offer.result.gapSummary,
+        missedFeelings: offer.result.missedFeelings,
+        mostImportantGap: offer.result.mostImportantGap,
       },
-      sessionId
+      sessionId,
     );
-
-    if (!refinedContent) {
-      logger.warn('AI failed to refine suggestion, falling back to original');
-      sharedContent = shareOffer.suggestedContent || '';
-    } else {
-      sharedContent = refinedContent;
-    }
+    sharedContent = refined ?? offer.suggestedContent ?? '';
   } else {
-    sharedContent = shareOffer.suggestedContent || '';
+    sharedContent = offer.suggestedContent || '';
   }
   sharedContent = cleanVisibleAIText(sharedContent);
-
-  // Error if suggestedContent was somehow empty - this is a data integrity issue
   if (!sharedContent.trim()) {
-    logger.error('suggestedContent was empty, cannot proceed', { shareOfferId: shareOffer.id });
+    logger.error('suggestedContent was empty, cannot proceed', { shareOfferId: offer.id });
     throw new Error('Share suggestion content is empty - cannot share');
   }
 
-  logger.info('User responded to share offer', { userId, action: response.action, contentLength: sharedContent.length });
+  const { subjectAckMessage, reflectionMessage } = await composeShareMessages(sessionId, me, author, sharedContent, offer.id);
 
-  const subjectName = shareOffer.result.subjectName;
-  const guesserName = shareOffer.result.guesserName;
+  await shareAccepted({
+    sessionId,
+    offerId: offer.id,
+    subject: me,
+    author,
+    attempt,
+    sharedContent,
+    refinement: response.action === 'refine' ? response.refinedContent ?? null : null,
+    subjectAckMessage,
+    reflectionMessage,
+  });
+
+  return { status: 'shared', sharedContent, guesserUpdated: true };
+}
+
+/**
+ * The accept path's writes (shared by respondToShareSuggestion and the
+ * refinement-finalize endpoint): the subject's answer (app), then the job's
+ * delivery.
+ */
+export async function shareAccepted(opts: {
+  sessionId: string;
+  offerId: string;
+  subject: SessionParty;
+  author: SessionParty;
+  attempt: { id: string; status: string; statusVersion: number };
+  sharedContent: string;
+  refinement: string | null;
+  subjectAckMessage: string;
+  reflectionMessage: string;
+}): Promise<{ sharedMessageId: string | null }> {
+  const now = new Date();
+  await prisma.$transaction(async tx => {
+    const updated = await tx.contextShareOffer.updateMany({
+      where: { id: opts.offerId, status: { in: ['OFFERED', 'PENDING'] } },
+      data: { status: 'ACCEPTED', sharedContent: opts.sharedContent, sharedAt: now },
+    });
+    if (updated.count === 0) throw new Error('Share offer already processed');
+    await tx.consent.create({
+      data: { participantId: opts.subject.participantId, shareOfferId: opts.offerId, decision: 'GRANTED', decidedAt: now },
+      select: { id: true },
+    });
+    if (opts.subject.mainConversationId) {
+      await tx.message.deleteMany({ where: { conversationId: opts.subject.mainConversationId, kind: 'SHARE_SUGGESTION' } });
+    }
+  });
+  if (opts.refinement) {
+    // spec §1.2: the refined text is the subject's SHARE_CONTEXT draft.
+    await prisma.$executeRaw`INSERT INTO draft (participant_id, kind, share_offer_id, content, ready_to_share, version)
+      VALUES (${opts.subject.participantId}::uuid, 'SHARE_CONTEXT'::draft_kind, ${opts.offerId}::uuid, ${opts.refinement}, true, 1)
+      ON CONFLICT (participant_id, kind, (coalesce(about_participant_id, attempt_id, share_offer_id)))
+      DO UPDATE SET content = EXCLUDED.content, version = draft.version + 1`;
+  }
+
+  return deliverAcceptedShare({
+    offerId: opts.offerId,
+    attemptId: opts.attempt.id,
+    subject: opts.subject,
+    author: opts.author,
+    sharedContent: opts.sharedContent,
+    subjectAckMessage: opts.subjectAckMessage,
+    reflectionMessage: opts.reflectionMessage,
+    at: now,
+  });
+}
+
+/**
+ * The subject's acknowledgement and the author's reflection prompt for an
+ * accepted share. `offerId` is excluded from the "shared before" count, so a
+ * resumed delivery composes the same first-share text as the original try.
+ */
+async function composeShareMessages(
+  sessionId: string,
+  me: SessionParty,
+  author: SessionParty,
+  sharedContent: string,
+  offerId: string,
+): Promise<{ subjectAckMessage: string; reflectionMessage: string }> {
   const [subjectSeesGuesserName, guesserSeesSubjectName] = await Promise.all([
-    getPartnerDisplayNameForViewer(sessionId, userId, shareOffer.result.guesserId, guesserName),
-    getPartnerDisplayNameForViewer(sessionId, shareOffer.result.guesserId, userId, subjectName),
+    displayNameForViewer(sessionId, me, author, author.name || 'your partner'),
+    displayNameForViewer(sessionId, author, me, me.name || 'your partner'),
   ]);
-
-  // Check if this is a subsequent share (subject has already shared context before)
-  const priorShareCount = await prisma.message.count({
+  const priorShareCount = await prisma.contextShareOffer.count({
     where: {
-      sessionId,
-      senderId: userId,
-      role: 'SHARED_CONTEXT',
+      subjectParticipantId: me.participantId,
+      status: 'ACCEPTED',
+      id: { not: offerId },
+      attempt: { authorParticipant: { sessionId } },
     },
   });
-
-  // Generate AI messages outside transaction (AI calls can be slow)
-  // For subsequent shares, use a short static ack to avoid repetitive messages
-  const subjectAckPromise = priorShareCount > 0
-    ? Promise.resolve(`Thanks for sharing that additional context with ${subjectSeesGuesserName}.`)
-    : generatePostShareContinuation(sessionId, userId, subjectName, subjectSeesGuesserName, sharedContent);
-
   const [subjectAckMessage, reflectionMessage] = await Promise.all([
-    subjectAckPromise,
-    generateContextReceivedReflection(sessionId, guesserName, guesserSeesSubjectName),
+    priorShareCount > 0
+      ? Promise.resolve(`Thanks for sharing that additional context with ${subjectSeesGuesserName}.`)
+      : generatePostShareContinuation(sessionId, me, me.name || 'You', subjectSeesGuesserName, sharedContent, author),
+    generateContextReceivedReflection(sessionId, author.name || 'User', guesserSeesSubjectName),
   ]);
+  return { subjectAckMessage, reflectionMessage };
+}
 
-  // Get subject's current stage for the message
-  const subjectProgress = await prisma.stageProgress.findFirst({
-    where: { sessionId, userId },
-    orderBy: { stage: 'desc' },
+/**
+ * I2: the subject's ACCEPTED offer whose delivery never committed (subject's
+ * own row, app connection), delivered now. `offerId` narrows it to one offer
+ * (the refinement-finalize endpoint). Null when there is nothing to resume.
+ */
+export async function resumeUndeliveredShare(
+  sessionId: string,
+  me: SessionParty,
+  parties: SessionParty[],
+  opts: { offerId?: string } = {},
+): Promise<{ sharedContent: string; sharedMessageId: string | null } | null> {
+  const stuck = await prisma.contextShareOffer.findFirst({
+    where: {
+      ...(opts.offerId ? { id: opts.offerId } : {}),
+      subjectParticipantId: me.participantId,
+      status: 'ACCEPTED',
+      deliveryStatus: 'PENDING',
+      attempt: { authorParticipant: { sessionId } },
+    },
+    orderBy: { updatedAt: 'desc' },
+    select: { id: true, sharedContent: true, attempt: { select: { id: true, authorParticipantId: true } } },
   });
-  const subjectCurrentStage = subjectProgress?.stage ?? 2;
-
-  // Wrap all DB writes in a transaction for atomicity
-  await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
-    const now = new Date();
-
-    // Idempotency guard: only update if still in OFFERED/PENDING state
-    const updated = await tx.reconcilerShareOffer.updateMany({
-      where: {
-        id: shareOffer.id,
-        status: { in: ['OFFERED', 'PENDING'] },
-      },
-      data: {
-        status: 'ACCEPTED',
-        refinedContent: response.action === 'refine' ? response.refinedContent : null,
-        sharedContent,
-        sharedAt: now,
-        deliveryStatus: 'DELIVERED',
-        deliveredAt: now,
-      },
-    });
-    if (updated.count === 0) {
-      throw new Error('Share offer already processed');
-    }
-
-    // Delete the SHARE_SUGGESTION message
-    await tx.message.deleteMany({
-      where: {
-        sessionId,
-        forUserId: userId,
-        role: MessageRole.SHARE_SUGGESTION,
-      },
-    });
-
-    // Validate and update guesser's empathy attempt to REFINING
-    const attemptForRefine = await tx.empathyAttempt.findFirst({
-      where: { sessionId, sourceUserId: shareOffer.result.guesserId },
-    });
-    const currentStatus = attemptForRefine?.status as EmpathyStatus | undefined;
-    const shouldMoveToRefining = currentStatus && canTransition(currentStatus, 'CONTEXT_SHARED');
-    if (shouldMoveToRefining) {
-      transition(currentStatus, 'CONTEXT_SHARED');
-      await tx.empathyAttempt.updateMany({
-        where: { sessionId, sourceUserId: shareOffer.result.guesserId },
-        data: { status: 'REFINING', statusVersion: { increment: 1 } },
-      });
-    } else if (currentStatus === EmpathyStatus.VALIDATED) {
-      logger.info('Share offer accepted after empathy validation; delivering context without changing terminal status', {
-        sessionId,
-        guesserId: shareOffer.result.guesserId,
-      });
-    } else if (currentStatus) {
-      transition(currentStatus, 'CONTEXT_SHARED');
-    }
-
-    // Create messages with guaranteed ordering (100ms apart)
-    const baseTime = now.getTime();
-    const sharedContextTimestamp = new Date(baseTime);
-    const reflectionTimestamp = new Date(baseTime + 100);
-    const subjectAckTimestamp = new Date(baseTime + 200);
-
-    // SHARED_CONTEXT message (the actual content shared by subject)
-    // Renders as a labeled card ("NEW CONTEXT FROM {name}") in the guesser's chat
-    await tx.message.create({
-      data: {
-        sessionId,
-        senderId: userId,
-        forUserId: shareOffer.result.guesserId,
-        role: MessageRole.SHARED_CONTEXT,
-        content: sharedContent,
-        stage: 2,
-        timestamp: sharedContextTimestamp,
-      },
-    });
-
-    // Reflection prompt for guesser (Sonnet-generated, invites processing)
-    await tx.message.create({
-      data: {
-        sessionId,
-        senderId: null,
-        forUserId: shareOffer.result.guesserId,
-        role: 'AI',
-        content: reflectionMessage,
-        stage: 2,
-        timestamp: reflectionTimestamp,
-      },
-    });
-
-    // Subject acknowledgment message
-    await tx.message.create({
-      data: {
-        sessionId,
-        senderId: null,
-        forUserId: userId,
-        role: 'AI',
-        content: subjectAckMessage,
-        stage: subjectCurrentStage,
-        timestamp: subjectAckTimestamp,
-      },
-    });
+  if (!stuck?.sharedContent) return null;
+  const author = partyOf(parties, { participantId: stuck.attempt.authorParticipantId });
+  if (!author) return null;
+  logger.warn('Resuming the delivery of an accepted share', { shareOfferId: stuck.id });
+  const { subjectAckMessage, reflectionMessage } = await composeShareMessages(
+    sessionId,
+    me,
+    author,
+    stuck.sharedContent,
+    stuck.id,
+  );
+  const { sharedMessageId } = await deliverAcceptedShare({
+    offerId: stuck.id,
+    attemptId: stuck.attempt.id,
+    subject: me,
+    author,
+    sharedContent: stuck.sharedContent,
+    subjectAckMessage,
+    reflectionMessage,
   });
+  return { sharedContent: stuck.sharedContent, sharedMessageId };
+}
 
-  logger.info('Share accepted and committed', { userId });
-
-  return {
-    status: 'shared',
-    sharedContent,
-    guesserUpdated: true,
-  };
+/**
+ * The job's delivery of an accepted share, in one transaction; messages 100 ms
+ * apart for a stable order. Idempotent: the offer row is locked first and its
+ * `delivery_status` is the key — the SHARED_CONTEXT copy and the DELIVERED
+ * stamp commit together, so a second call finds DELIVERED and writes nothing.
+ * The author's round moves to REFINING only if its CURRENT status allows it
+ * (locks: the session row first, as app.empathy_set_status takes it, then the
+ * offer, then the attempt).
+ */
+export async function deliverAcceptedShare(opts: {
+  offerId: string;
+  attemptId: string;
+  subject: SessionParty;
+  author: SessionParty;
+  sharedContent: string;
+  subjectAckMessage: string;
+  reflectionMessage: string;
+  at?: Date;
+}): Promise<{ sharedMessageId: string | null; delivered: boolean }> {
+  const now = opts.at ?? new Date();
+  let sharedMessageId: string | null = null;
+  const base = now.getTime();
+  const delivered = await getJobPrisma().$transaction(async tx => {
+    const client = tx as unknown as PrismaClient;
+    // Lock order: the session row (as app.empathy_set_status), the offer, the attempt.
+    await tx.$queryRaw`SELECT s.id FROM session s
+      WHERE s.id = (SELECT p.session_id FROM empathy_attempt a JOIN participant p ON p.id = a.author_participant_id
+                    WHERE a.id = ${opts.attemptId}::uuid)
+      FOR NO KEY UPDATE`;
+    const [offerRow] = await tx.$queryRaw<Array<{ delivery_status: string }>>`
+      SELECT delivery_status::text AS delivery_status FROM context_share_offer WHERE id = ${opts.offerId}::uuid FOR UPDATE`;
+    if (!offerRow || offerRow.delivery_status !== 'PENDING') return false;
+    if (opts.author.mainConversationId) {
+      const delivered = await deliverMessage({
+        toConversationId: opts.author.mainConversationId,
+        fromParticipantId: opts.subject.participantId,
+        kind: 'SHARED_CONTEXT',
+        content: opts.sharedContent,
+        createdAt: new Date(base),
+        client,
+      });
+      sharedMessageId = delivered.id;
+      await createFacilitatorMessage({
+        conversationId: opts.author.mainConversationId,
+        content: opts.reflectionMessage,
+        createdAt: new Date(base + 100),
+        client,
+      });
+    }
+    if (opts.subject.mainConversationId) {
+      await createFacilitatorMessage({
+        conversationId: opts.subject.mainConversationId,
+        content: opts.subjectAckMessage,
+        createdAt: new Date(base + 200),
+        client,
+      });
+    }
+    await tx.$executeRaw`UPDATE context_share_offer SET delivery_status = 'DELIVERED', delivered_at = ${now}
+      WHERE id = ${opts.offerId}::uuid`;
+    // The author's round → REFINING (CONTEXT_SHARED); a VALIDATED round keeps its terminal status.
+    const [attemptRow] = await tx.$queryRaw<Array<{ status: string }>>`
+      SELECT status::text AS status FROM empathy_attempt WHERE id = ${opts.attemptId}::uuid FOR NO KEY UPDATE`;
+    if (attemptRow && canTransition(attemptRow.status, 'CONTEXT_SHARED')) {
+      await tx.$queryRaw`SELECT app.empathy_set_status(${opts.attemptId}::uuid, 'REFINING'::empathy_status, NULL::text)`;
+    }
+    return true;
+  });
+  return { sharedMessageId, delivered };
 }
 
 // ============================================================================
@@ -1055,56 +885,24 @@ export async function respondToShareSuggestion(
 // ============================================================================
 
 /**
- * Get shared context for a guesser (if subject shared something).
+ * The newest context delivered to the guesser (SHARED_CONTEXT or
+ * VALIDATION_FEEDBACK in their own conversation). The offer itself is the
+ * subject's and is not read.
  */
 export async function getSharedContextForGuesser(
   sessionId: string,
-  guesserId: string
-): Promise<{
-  hasSharedContext: boolean;
-  content: string | null;
-  sharedAt: string | null;
-}> {
-  // During REFINING, the most recent targeted message is the actionable context
-  // for the guesser. Validation feedback intentionally supersedes older shared
-  // context because it reflects the subject's latest response to the revealed
-  // empathy attempt.
+  guesserId: string,
+): Promise<{ hasSharedContext: boolean; content: string | null; sharedAt: string | null }> {
+  const parties = await sessionParties(sessionId);
+  const me = partyOf(parties, { userId: guesserId });
+  if (!me?.mainConversationId) return { hasSharedContext: false, content: null, sharedAt: null };
   const contextMessage = await prisma.message.findFirst({
-    where: {
-      sessionId,
-      forUserId: guesserId,
-      role: { in: [MessageRole.SHARED_CONTEXT, MessageRole.VALIDATION_FEEDBACK] },
-    },
-    orderBy: { timestamp: 'desc' },
+    where: { conversationId: me.mainConversationId, kind: { in: ['SHARED_CONTEXT', 'VALIDATION_FEEDBACK'] } },
+    orderBy: { createdAt: 'desc' },
+    select: { content: true, createdAt: true },
   });
-
-  if (contextMessage) {
-    return {
-      hasSharedContext: true,
-      content: contextMessage.content,
-      sharedAt: contextMessage.timestamp.toISOString(),
-    };
-  }
-
-  const shareOffer = await prisma.reconcilerShareOffer.findFirst({
-    where: {
-      result: {
-        sessionId,
-        guesserId,
-      },
-      status: 'ACCEPTED',
-    },
-  });
-
-  if (!shareOffer || !shareOffer.sharedContent) {
-    return { hasSharedContext: false, content: null, sharedAt: null };
-  }
-
-  return {
-    hasSharedContext: true,
-    content: shareOffer.sharedContent,
-    sharedAt: shareOffer.sharedAt?.toISOString() || null,
-  };
+  if (!contextMessage) return { hasSharedContext: false, content: null, sharedAt: null };
+  return { hasSharedContext: true, content: contextMessage.content, sharedAt: contextMessage.createdAt.toISOString() };
 }
 
 // ============================================================================
@@ -1112,69 +910,40 @@ export async function getSharedContextForGuesser(
 // ============================================================================
 
 /**
- * Get the delivery status of shared content for the subject (person who shared).
- * Uses the same mechanism as message read tracking (lastViewedAt on UserVessel).
- *
- * Returns the delivery status:
- * - 'pending': Share not yet accepted (no SHARED_CONTEXT message created)
- * - 'delivered': Message created but guesser hasn't viewed since then
- * - 'seen': Guesser has viewed the session after the message was created
+ * The delivery status of what the subject shared: 'delivered' once the job
+ * delivered it, 'seen' once the recipient viewed their Share tab after it.
  */
 export async function getSharedContentDeliveryStatus(
   sessionId: string,
-  subjectId: string
+  subjectId: string,
 ): Promise<{
   hasSharedContent: boolean;
   deliveryStatus: 'pending' | 'delivered' | 'seen' | null;
   sharedAt: string | null;
   sharedContent: string | null;
 }> {
-  // Find the share offer to get the guesser ID
-  const shareOffer = await prisma.reconcilerShareOffer.findFirst({
-    where: {
-      userId: subjectId,
-      result: { sessionId },
-      status: 'ACCEPTED',
-    },
-    include: {
-      result: true,
-    },
+  const parties = await sessionParties(sessionId);
+  const me = partyOf(parties, { userId: subjectId });
+  if (!me) return { hasSharedContent: false, deliveryStatus: null, sharedAt: null, sharedContent: null };
+  const offer = await prisma.contextShareOffer.findFirst({
+    where: { subjectParticipantId: me.participantId, status: 'ACCEPTED', attempt: { authorParticipant: { sessionId } } },
+    orderBy: { sharedAt: 'desc' },
+    include: { attempt: { select: { authorParticipantId: true } } },
   });
-
-  if (!shareOffer || !shareOffer.sharedContent || !shareOffer.sharedAt) {
+  if (!offer || !offer.sharedContent || !offer.sharedAt) {
     return { hasSharedContent: false, deliveryStatus: null, sharedAt: null, sharedContent: null };
   }
-
-  const guesserId = shareOffer.result.guesserId;
-  const sharedAt = shareOffer.sharedAt;
-
-  // Check if the guesser has viewed the Share/Partner tab after the content was shared
-  // We use lastViewedShareTabAt (not lastViewedAt) so content is only "seen" when
-  // the user actually views the Partner tab, not just the AI chat
-  const guesserVessel = await prisma.userVessel.findUnique({
-    where: {
-      userId_sessionId: {
-        userId: guesserId,
-        sessionId,
-      },
-    },
-    select: {
-      lastViewedShareTabAt: true,
-    },
+  // The recipient's Share-tab instant (an instant, never content — as TS-9's presence read).
+  const readState = await prisma.conversationReadState.findUnique({
+    where: { participantId: offer.attempt.authorParticipantId },
+    select: { lastViewedShareTabAt: true },
   });
-
-  let deliveryStatus: 'pending' | 'delivered' | 'seen' = 'delivered';
-
-  if (guesserVessel?.lastViewedShareTabAt && guesserVessel.lastViewedShareTabAt >= sharedAt) {
-    // Guesser has viewed the Share tab after the content was shared
-    deliveryStatus = 'seen';
-  }
-
+  const seen = !!readState?.lastViewedShareTabAt && readState.lastViewedShareTabAt >= offer.sharedAt;
   return {
     hasSharedContent: true,
-    deliveryStatus,
-    sharedAt: sharedAt.toISOString(),
-    sharedContent: shareOffer.sharedContent,
+    deliveryStatus: seen ? 'seen' : 'delivered',
+    sharedAt: offer.sharedAt.toISOString(),
+    sharedContent: offer.sharedContent,
   };
 }
 
@@ -1183,75 +952,48 @@ export async function getSharedContentDeliveryStatus(
 // ============================================================================
 
 /**
- * Generate a share offer for a user based on reconciler results.
+ * The share-offer fallback for a subject with an analysed direction about
+ * them and no offer yet: crafts one and writes it OFFERED (job).
  */
 export async function generateShareOffer(
   sessionId: string,
-  subjectId: string
-): Promise<{
-  offerMessage: string;
-  suggestedContent: string;
-  suggestedReason: string;
-  gapDescription: string;
-} | null> {
-  // Get the reconciler result for this direction
-  const result = await prisma.reconcilerResult.findFirst({
+  subjectId: string,
+): Promise<{ offerMessage: string; suggestedContent: string; suggestedReason: string; gapDescription: string } | null> {
+  // Analysis path: the job reads (Ruling R35) — the result and its attempt's
+  // status are the reconciler's inputs, not the subject's app-side reads.
+  const parties = await sessionParties(sessionId, getJobPrisma());
+  const me = partyOf(parties, { userId: subjectId });
+  if (!me) return null;
+
+  const result = await getJobPrisma().reconcilerResult.findFirst({
     where: {
-      sessionId,
-      subjectId,
+      subjectParticipantId: me.participantId,
       supersededAt: null,
+      attempt: { status: { notIn: ['SUPERSEDED'] }, authorParticipant: { sessionId } },
     },
-    include: {
-      shareOffer: true,
+    orderBy: { createdAt: 'desc' },
+    select: {
+      id: true,
+      attemptId: true,
+      gapSummary: true,
+      mostImportantGap: true,
+      shareOffers: { select: { id: true } },
+      attempt: { select: { authorParticipantId: true } },
     },
   });
+  if (!result) return null;
+  if (result.shareOffers.length > 0) return null;
 
-  if (!result) {
-    logger.warn('No reconciler result found for subject', { subjectId });
+  const author = partyOf(parties, { participantId: result.attempt.authorParticipantId });
+  if (!author) return null;
+  if (await hasContextAlreadyBeenShared(author.participantId, me.participantId)) {
+    logger.info('generateShareOffer: context already shared, skipping redundant suggestion', { sessionId });
     return null;
   }
 
-  // If share offer already exists and was processed, return null
-  if (result.shareOffer && result.shareOffer.status !== 'NOT_OFFERED') {
-    return null;
-  }
-
-  // If the subject has already shared context in this direction, don't synthesize
-  // another suggestion. The asymmetric reconciler shortcuts to READY in this case
-  // (state.ts hasContextAlreadyBeenShared branch), but the GET /share-offer
-  // fallback would otherwise keep re-drafting near-identical share suggestions
-  // every time the guesser refines, making the UX feel redundant and stuck.
-  const contextAlreadyShared = await hasContextAlreadyBeenShared(
-    sessionId,
-    result.guesserId,
-    subjectId
-  );
-  if (contextAlreadyShared) {
-    logger.info('generateShareOffer: context already shared, skipping redundant suggestion', {
-      sessionId,
-      guesserId: result.guesserId,
-      subjectId,
-    });
-    return null;
-  }
-
-  // Get the subject's witnessing content for crafting the suggestion
-  const witnessingContent = await getWitnessingContent(sessionId, subjectId);
-
-  // Get partner name
-  const guesser = await prisma.user.findUnique({
-    where: { id: result.guesserId },
-    select: { firstName: true, name: true },
-  });
-  const partnerName = guesser?.firstName || guesser?.name || 'your partner';
-
-  const subject = await prisma.user.findUnique({
-    where: { id: subjectId },
-    select: { firstName: true, name: true },
-  });
-  const userName = subject?.firstName || subject?.name || 'you';
-
-  // Generate the offer message and AI-crafted share suggestion in parallel
+  const witnessingContent = await getWitnessingContent(sessionId, me.participantId, me.userId ?? undefined);
+  const partnerName = author.name || 'your partner';
+  const userName = me.name || 'you';
   const shareOfferContext: ShareOfferContext = {
     userName,
     partnerName,
@@ -1267,7 +1009,6 @@ export async function generateShareOffer(
       sessionId,
       operation: 'reconciler-share-offer',
     }),
-    // Generate an AI-crafted, feelings-focused suggestion (not direct quotes)
     getSonnetJson<{ suggestedContent: string; reason: string }>({
       systemPrompt: `You are helping ${userName} express their feelings to ${partnerName} in a way that builds understanding.
 
@@ -1339,31 +1080,16 @@ Respond in JSON:
   const suggestedContent = cleanVisibleAIText(suggestionResult.suggestedContent);
   const suggestedReason = cleanVisibleAIText(suggestionResult.reason);
 
-  logger.debug('Generated feelings-focused suggestion', { contentLength: suggestedContent.length });
-
-  // Create or update share offer record with the crafted suggestion
-  await prisma.reconcilerShareOffer.upsert({
-    where: { resultId: result.id },
-    create: {
-      resultId: result.id,
-      userId: subjectId,
-      status: 'OFFERED',
-      offerMessage,
-      suggestedContent,
-      suggestedReason,
-    },
-    update: {
-      status: 'OFFERED',
-      offerMessage,
-      suggestedContent,
-      suggestedReason,
-    },
-  });
-
-  return {
+  await insertOffer(getJobPrisma(), {
+    attemptId: result.attemptId,
+    resultId: result.id,
+    subjectParticipantId: me.participantId,
+    status: 'OFFERED',
     offerMessage,
     suggestedContent,
     suggestedReason,
-    gapDescription: result.mostImportantGap || result.gapSummary,
-  };
+  });
+
+  return { offerMessage, suggestedContent, suggestedReason, gapDescription: result.mostImportantGap || result.gapSummary };
 }
+
