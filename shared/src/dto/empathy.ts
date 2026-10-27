@@ -150,6 +150,8 @@ export interface SkipRefinementRequest {
 
 export interface SkipRefinementResponse {
   success: true;
+  /** The author's round after the skip (TS-10 fix1: REFINING → READY, or REVEALED if the reveal ran). Additive. */
+  status?: string;
 }
 
 // ============================================================================

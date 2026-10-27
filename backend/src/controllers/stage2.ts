@@ -671,46 +671,20 @@ export async function validateEmpathy(req: Request, res: Response): Promise<void
 }
 
 /**
- * The job's walk of an author's current round to VALIDATED along the table
- * (REFINING/AWAITING_SHARING/HELD → READY → REVEALED → VALIDATED); the reveal
- * re-checks its gate and keeps the first revealed_at.
- */
-async function jobWalkToValidated(attempt: AttemptRow): Promise<boolean> {
-  let status = attempt.status;
-  const job = getJobPrisma();
-  try {
-    if (status === 'HELD' || status === 'AWAITING_SHARING' || status === 'REFINING') {
-      await setAttemptStatus(attempt.id, 'READY', { actor: 'job', client: job });
-      status = 'READY';
-    }
-    if (status === 'READY') {
-      await setAttemptStatus(attempt.id, 'REVEALED', { actor: 'job', client: job });
-      // TODO(TS-13, work-a39h.11.14): the reveal re-encrypts this attempt's
-      // content under the SESSION key here, in this job transaction, with the
-      // same plaintext (spec §1.2 empathy_attempt: "re-encrypted under the
-      // session key by the reveal job"; T-message-immutable exempts mwf_job).
-      // The key path and field map are TS-13's (ruling R26) — none is invented here.
-      await markAttemptDelivery(attempt.id, 'DELIVERED');
-      status = 'REVEALED';
-    }
-    if (status === 'REVEALED') {
-      await setAttemptStatus(attempt.id, 'VALIDATED', { actor: 'job', client: job });
-      await markAttemptDelivery(attempt.id, 'SEEN');
-      status = 'VALIDATED';
-    }
-  } catch (error) {
-    logger.warn('[skipRefinement] Could not walk the round to VALIDATED', { error: (error as Error).message, status });
-  }
-  return status === 'VALIDATED';
-}
-
-/**
  * Handle "Skip Refinement" / "Acceptance Check"
  * POST /sessions/:id/empathy/skip-refinement
  *
- * The author accepts the difference and moves on: the job walks their round to
- * VALIDATED (the author may not validate their own round; spec §1.2 table).
- * There is no review row — the reviewer of an attempt is its subject (trigger).
+ * The author accepts the difference and stops refining (fix1 I3). Only the
+ * REFINING flow: the author's own round REFINING → READY, made AS THE
+ * PARTICIPANT (the author may make that move; spec §1.2 table), then the
+ * reveal check (job, gate re-checked in the database). Never VALIDATED: that
+ * move is the subject's (or the job's on the subject's behalf), not the
+ * author's. A round that is already READY or later answers as it is.
+ *
+ * Refused (409) while the round is HELD (its analysis is pending) or
+ * AWAITING_SHARING: the subject's share offer is open, it is theirs to answer,
+ * and skipping past it would leave an accept with no REFINING round to land
+ * on. A refused or failed status move is an error, never a success.
  */
 export async function skipRefinement(req: Request, res: Response): Promise<void> {
   try {
@@ -723,7 +697,7 @@ export async function skipRefinement(req: Request, res: Response): Promise<void>
 
     const caller = await stage2Caller(req, res);
     if (!caller) return;
-    const { sessionId, me, partner, userId } = caller;
+    const { sessionId, me, partner } = caller;
 
     const attempt = partner ? await currentAttempt(me.participantId, partner.participantId) : null;
     if (!partner || !attempt) {
@@ -731,21 +705,34 @@ export async function skipRefinement(req: Request, res: Response): Promise<void>
       return;
     }
 
-    await jobWalkToValidated(attempt);
+    if (attempt.status === 'HELD' || attempt.status === 'AWAITING_SHARING') {
+      errorResponse(
+        res,
+        'CONFLICT',
+        attempt.status === 'AWAITING_SHARING'
+          ? 'Your partner is still deciding whether to share more context'
+          : 'Your understanding is still being reviewed',
+        409,
+      );
+      return;
+    }
+
+    let status: TargetEmpathyStatus = attempt.status;
+    if (status === 'REFINING') {
+      // The author's own move, on the app connection under their identity.
+      // A refusal from app.empathy_set_status propagates (500), not a success.
+      await setAttemptStatus(attempt.id, 'READY', { actor: 'participant' });
+      status = 'READY';
+      const { checkAndRevealBothIfReady } = await import('../services/reconciler');
+      await checkAndRevealBothIfReady(sessionId);
+      status = (await currentAttempt(me.participantId, partner.participantId))?.status ?? status;
+    }
 
     if (partner.userId) {
       await notifyPartner(sessionId, partner.userId, 'partner.skipped_refinement', { willingToAccept });
     }
 
-    // The partner's round about me is VALIDATED too → Stage 3.
-    const partnerAboutMe = await revealedAttemptAbout(me.participantId, partner.participantId);
-    if (partnerAboutMe?.status === 'VALIDATED') {
-      triggerStage3Transition(sessionId, userId, caller.parties).catch(e => logger.error('[Stage2] Stage 3 transition failed:', e));
-    } else {
-      logger.info('[skipRefinement] Waiting for partner Stage 2 empathy completion before Stage 3 transition', { sessionId });
-    }
-
-    successResponse(res, { success: true });
+    successResponse(res, { success: true, status });
   } catch (error) {
     logger.error('[skipRefinement] Error:', error);
     errorResponse(res, 'INTERNAL_ERROR', 'Failed to skip refinement', 500);
@@ -772,13 +759,10 @@ export async function saveValidationFeedbackDraft(req: Request, res: Response): 
     const caller = await stage2Caller(req, res);
     if (!caller) return;
     const { me, partner } = caller;
-    // The attempt the feedback answers: the revealed round about me, else the
-    // partner's current round (its id only — the subject never reads an
-    // unrevealed row's content).
-    const target = partner
-      ? (await revealedAttemptAbout(me.participantId, partner.participantId)) ??
-        (await currentAttempt(partner.participantId, me.participantId))
-      : null;
+    // The attempt the feedback answers: the revealed round about me. Nothing
+    // before the reveal (m1): the subject never reads an unrevealed row, not
+    // even for its id, and a draft never points at an unrevealed round.
+    const target = partner ? await revealedAttemptAbout(me.participantId, partner.participantId) : null;
     if (!target) {
       errorResponse(res, 'NOT_FOUND', 'Partner empathy attempt not found', 404);
       return;

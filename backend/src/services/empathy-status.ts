@@ -52,7 +52,13 @@ export function attemptDTO(
     consentRecordId: '',
     status: a.status as EmpathyAttemptDTO['status'],
     revealedAt: a.revealedAt?.toISOString() ?? null,
-    validatedAt: review?.validated ? review.updatedAt.toISOString() : null,
+    // The author's own round carries no readable review before a send (m2):
+    // VALIDATED is the verdict, and seen_at is stamped with it (validateEmpathy).
+    validatedAt: review?.validated
+      ? review.updatedAt.toISOString()
+      : a.status === 'VALIDATED' && a.seenAt
+        ? a.seenAt.toISOString()
+        : null,
     revisionCount: a.round - 1,
     ...(opts.statusVersion ? { statusVersion: a.statusVersion } : {}),
     ...(opts.delivery ? { deliveryStatus: deliveryOf(a.status) } : {}),

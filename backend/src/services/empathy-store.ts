@@ -370,19 +370,21 @@ export async function reviewOf(attemptId: string, reviewerParticipantId: string)
 /**
  * What the AUTHOR may read of the review of their attempt: nothing before the
  * feedback is sent (spec §1.2 RLS — "before send the author sees nothing, the
- * `validated` flag included"), except a positive verdict, which IS the send
- * (validated = true is delivered by the status VALIDATED it causes).
+ * `validated` flag included"; fix1 m2). A positive verdict reaches the author
+ * through their own round's status (VALIDATED), never through this row.
  */
 export async function reviewVisibleToAuthor(attemptId: string, subjectParticipantId: string): Promise<ReviewRow | null> {
   const review = await reviewOf(attemptId, subjectParticipantId);
   if (!review) return null;
-  return review.feedbackSentAt || review.validated ? review : null;
+  return review.feedbackSentAt ? review : null;
 }
 
 /**
  * The subject records a verdict (app connection; the reviewer's own row). The
  * feedback text is written only on an explicit send (`feedback_sent_at`);
- * an unsent text stays in the draft.
+ * an unsent text stays in the draft. A verdict without a send leaves an
+ * earlier sent feedback as it is (fix1 m3): validating after sending feedback
+ * must not erase what the author was sent.
  */
 export async function recordReview(opts: {
   attemptId: string;
@@ -399,7 +401,7 @@ export async function recordReview(opts: {
   return prisma.empathyReview.upsert({
     where: { attemptId_reviewerParticipantId: { attemptId: opts.attemptId, reviewerParticipantId: opts.reviewerParticipantId } },
     create: { attemptId: opts.attemptId, reviewerParticipantId: opts.reviewerParticipantId, ...data },
-    update: data,
+    update: opts.sentFeedback ? data : { validated: opts.validated },
     select: REVIEW_SELECT,
   });
 }
