@@ -7,11 +7,15 @@
  * - PATCH /people/:id - Update person info
  * - POST /people/:id/merge - Merge two people
  * - DELETE /people/:id - Delete person
+ *
+ * Target shape (TS-12): the caller's `people` feature document (persons[] with
+ * mentions[] — shared/src/dto/feature-state.ts), read-modify-write under a row
+ * lock; mention patterns are reductions over the document (no groupBy).
  */
 
 import { Request, Response } from 'express';
-import { MentionSourceType as PrismaMentionSourceType } from '../generated/prisma/client';
 import { prisma } from '../lib/prisma';
+import { readFeature, updateFeature } from '../services/feature-state';
 import { getUser } from '../middleware/auth';
 import { asyncHandler, ValidationError, NotFoundError } from '../middleware/errors';
 import {
@@ -25,6 +29,8 @@ import {
   MergePeopleResponse,
   DeletePersonResponse,
   MentionSourceType,
+  type PersonDoc,
+  type PersonMentionDoc,
 } from '@meet-without-fear/shared';
 import { z } from 'zod';
 import { mergePeople as mergePersonsService } from '../services/people-extractor';
@@ -52,25 +58,14 @@ const mergePersonSchema = z.object({
 // Helpers
 // ============================================================================
 
-function toPersonDTO(person: {
-  id: string;
-  name: string;
-  aliases: string[];
-  relationship: string | null;
-  firstMentioned: Date;
-  lastMentioned: Date;
-  mentionCountInnerThoughts: number;
-  mentionCountGratitude: number;
-  mentionCountNeeds: number;
-  mentionCountConflict: number;
-}): PersonDTO {
+function toPersonDTO(person: PersonDoc): PersonDTO {
   return {
     id: person.id,
     name: person.name,
     aliases: person.aliases,
     relationship: person.relationship,
-    firstMentioned: person.firstMentioned.toISOString(),
-    lastMentioned: person.lastMentioned.toISOString(),
+    firstMentioned: person.firstMentioned,
+    lastMentioned: person.lastMentioned,
     mentionCounts: {
       innerThoughts: person.mentionCountInnerThoughts,
       gratitude: person.mentionCountGratitude,
@@ -85,28 +80,18 @@ function toPersonDTO(person: {
   };
 }
 
-function toPersonMentionDTO(mention: {
-  id: string;
-  sourceType: PrismaMentionSourceType;
-  sourceId: string;
-  context: string | null;
-  sentiment: number | null;
-  createdAt: Date;
-}): PersonMentionDTO {
+function toPersonMentionDTO(mention: PersonMentionDoc): PersonMentionDTO {
   return {
     id: mention.id,
     sourceType: mention.sourceType as MentionSourceType,
     sourceId: mention.sourceId,
     context: mention.context,
     sentiment: mention.sentiment,
-    createdAt: mention.createdAt.toISOString(),
+    createdAt: mention.createdAt,
   };
 }
 
-function prismaSourceTypeToShared(sourceType: PrismaMentionSourceType): MentionSourceType {
-  // Map Prisma enum to shared enum (they have the same values)
-  return sourceType as unknown as MentionSourceType;
-}
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 // ============================================================================
 // Controllers
@@ -120,21 +105,16 @@ export const listPeople = asyncHandler(async (req: Request, res: Response) => {
   const user = getUser(req);
   const { limit, sortBy } = listPeopleSchema.parse(req.query);
 
-  const orderBy: Record<string, 'asc' | 'desc'> =
+  const compare: (a: PersonDoc, b: PersonDoc) => number =
     sortBy === 'recent'
-      ? { lastMentioned: 'desc' }
+      ? (a, b) => b.lastMentioned.localeCompare(a.lastMentioned)
       : sortBy === 'name'
-        ? { name: 'asc' }
-        : { mentionCountInnerThoughts: 'desc' }; // 'frequent' - TODO: sum all counts
+        ? (a, b) => a.name.localeCompare(b.name)
+        : (a, b) => b.mentionCountInnerThoughts - a.mentionCountInnerThoughts; // 'frequent' - TODO: sum all counts
 
-  const [people, total] = await Promise.all([
-    prisma.person.findMany({
-      where: { userId: user.id },
-      orderBy,
-      take: limit,
-    }),
-    prisma.person.count({ where: { userId: user.id } }),
-  ]);
+  const { persons } = await readFeature(user.id, 'people');
+  const total = persons.length;
+  const people = [...persons].sort((a, b) => compare(a, b) || a.id.localeCompare(b.id)).slice(0, limit);
 
   const response: ApiResponse<ListTrackedPeopleResponse> = {
     success: true,
@@ -155,32 +135,20 @@ export const getPerson = asyncHandler(async (req: Request, res: Response) => {
   const user = getUser(req);
   const { id } = req.params;
 
-  const person = await prisma.person.findFirst({
-    where: { id, userId: user.id },
-  });
+  const person = (await readFeature(user.id, 'people')).persons.find(p => p.id === id);
 
   if (!person) {
     throw new NotFoundError('Person not found');
   }
 
-  // Get recent mentions
-  const recentMentions = await prisma.personMention.findMany({
-    where: { personId: id },
-    orderBy: { createdAt: 'desc' },
-    take: 20,
-  });
+  // Recent mentions, newest first
+  const mentions = [...person.mentions].sort((a, b) => b.createdAt.localeCompare(a.createdAt) || b.id.localeCompare(a.id));
+  const recentMentions = mentions.slice(0, 20);
 
-  // Calculate patterns
-  const mentionsByType = await prisma.personMention.groupBy({
-    by: ['sourceType'],
-    where: { personId: id },
-    _count: true,
-  });
-
-  const topContexts = mentionsByType.map((m) => ({
-    sourceType: prismaSourceTypeToShared(m.sourceType),
-    count: m._count,
-  }));
+  // Mentions by source type (was a groupBy)
+  const byType = new Map<string, number>();
+  for (const m of mentions) byType.set(m.sourceType, (byType.get(m.sourceType) ?? 0) + 1);
+  const topContexts = [...byType].map(([sourceType, count]) => ({ sourceType: sourceType as MentionSourceType, count }));
 
   // Calculate average sentiment
   const sentimentMentions = recentMentions.filter((m) => m.sentiment !== null);
@@ -189,27 +157,17 @@ export const getPerson = asyncHandler(async (req: Request, res: Response) => {
       ? sentimentMentions.reduce((sum, m) => sum + (m.sentiment ?? 0), 0) / sentimentMentions.length
       : null;
 
-  // Get needs connections from person's needsConnections JSON
-  const needsConnections = Object.entries((person.needsConnections as Record<string, number>) || {}).map(
-    ([needName, count]) => ({
-      needName,
-      count: count as number,
-    })
-  );
+  // Needs connections from the person's needsConnections map
+  const needsConnections = Object.entries(person.needsConnections).map(([needName, count]) => ({ needName, count }));
 
-  // Fetch sessions where this person is mentioned (KNOW-02, INTEL-02)
-  const innerThoughtsMentions = await prisma.personMention.findMany({
-    where: {
-      personId: id,
-      sourceType: 'INNER_THOUGHTS',
-    },
-    select: { sourceId: true },
-  });
-
-  const sessionIds = [...new Set(innerThoughtsMentions.map((m) => m.sourceId))];
+  // Reflections where this person is mentioned (KNOW-02, INTEL-02) — the caller's own only
+  // (a mention's sourceId is free text in the document; only a uuid can name a reflection)
+  const sessionIds = [
+    ...new Set(mentions.filter((m) => m.sourceType === 'INNER_THOUGHTS' && UUID.test(m.sourceId)).map((m) => m.sourceId)),
+  ];
   const mentionedSessions =
     sessionIds.length > 0
-      ? await prisma.innerWorkSession.findMany({
+      ? await prisma.reflection.findMany({
           where: {
             id: { in: sessionIds },
             userId: user.id,
@@ -255,37 +213,20 @@ export const updatePerson = asyncHandler(async (req: Request, res: Response) => 
   const { id } = req.params;
   const body = updatePersonSchema.parse(req.body);
 
-  // Verify ownership
-  const existing = await prisma.person.findFirst({
-    where: { id, userId: user.id },
-  });
+  const updated = await updateFeature(user.id, 'people', doc => {
+    // Verify ownership
+    const existing = doc.persons.find(p => p.id === id);
+    if (!existing) throw new NotFoundError('Person not found');
 
-  if (!existing) {
-    throw new NotFoundError('Person not found');
-  }
-
-  // Check for name uniqueness if changing name
-  if (body.name && body.name !== existing.name) {
-    const duplicate = await prisma.person.findFirst({
-      where: {
-        userId: user.id,
-        name: body.name,
-        id: { not: id },
-      },
-    });
-
-    if (duplicate) {
+    // Check for name uniqueness if changing name (the old UNIQUE (userId, name))
+    if (body.name && body.name !== existing.name && doc.persons.some(p => p.id !== id && p.name === body.name)) {
       throw new ValidationError('A person with this name already exists');
     }
-  }
 
-  const updated = await prisma.person.update({
-    where: { id },
-    data: {
-      ...(body.name && { name: body.name }),
-      ...(body.relationship !== undefined && { relationship: body.relationship || null }),
-      ...(body.aliases && { aliases: body.aliases }),
-    },
+    if (body.name) existing.name = body.name;
+    if (body.relationship !== undefined) existing.relationship = body.relationship || null;
+    if (body.aliases) existing.aliases = body.aliases;
+    return { ...existing };
   });
 
   const response: ApiResponse<UpdatePersonResponse> = {
@@ -307,26 +248,8 @@ export const mergePerson = asyncHandler(async (req: Request, res: Response) => {
   const { id } = req.params; // Target person (keeps this one)
   const { mergeIntoId } = mergePersonSchema.parse(req.body); // Source person (deletes this one)
 
-  // Verify ownership of both people
-  const [target, source] = await Promise.all([
-    prisma.person.findFirst({ where: { id, userId: user.id } }),
-    prisma.person.findFirst({ where: { id: mergeIntoId, userId: user.id } }),
-  ]);
-
-  if (!target) {
-    throw new NotFoundError('Target person not found');
-  }
-  if (!source) {
-    throw new NotFoundError('Source person not found');
-  }
-
-  // Count mentions being merged for the response
-  const mergedCount = await prisma.personMention.count({
-    where: { personId: mergeIntoId },
-  });
-
-  // Merge source into target
-  const merged = await mergePersonsService(mergeIntoId, id);
+  // Merge source into target (both must be the caller's own: the merge reads one document)
+  const { person: merged, mergedCount } = await mergePersonsService(user.id, mergeIntoId, id);
 
   const response: ApiResponse<MergePeopleResponse> = {
     success: true,
@@ -347,23 +270,17 @@ export const deletePerson = asyncHandler(async (req: Request, res: Response) => 
   const user = getUser(req);
   const { id } = req.params;
 
-  // Verify ownership
-  const existing = await prisma.person.findFirst({
-    where: { id, userId: user.id },
+  // The person and their mentions leave the document together
+  const removed = await updateFeature(user.id, 'people', doc => {
+    const i = doc.persons.findIndex(p => p.id === id);
+    if (i < 0) return false;
+    doc.persons.splice(i, 1);
+    return true;
   });
 
-  if (!existing) {
+  if (!removed) {
     throw new NotFoundError('Person not found');
   }
-
-  // Delete mentions first (cascade), then person
-  await prisma.personMention.deleteMany({
-    where: { personId: id },
-  });
-
-  await prisma.person.delete({
-    where: { id },
-  });
 
   const response: ApiResponse<DeletePersonResponse> = {
     success: true,

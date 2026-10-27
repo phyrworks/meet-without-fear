@@ -8,10 +8,16 @@
  * - POST /needs/:needId/check-in - Update a single need score
  * - GET /needs/:needId/history - Get score history for a need
  * - PATCH /needs/preferences - Update check-in preferences
+ *
+ * Target shape (TS-12): the taxonomy is the shared constant (NEEDS); a user's
+ * scores and state are their `needs_assessment` feature document (scores[],
+ * state), read-modify-write under a row lock; the DISTINCT ON / ROW_NUMBER()
+ * reads are reductions (services/needs-reduction.ts).
  */
 
 import { Request, Response } from 'express';
-import { prisma } from '../lib/prisma';
+import { readFeature, updateFeature, newEntryId } from '../services/feature-state';
+import { latestNeedScores, previousNeedScores, needHistory } from '../services/needs-reduction';
 import { getUser } from '../middleware/auth';
 import { asyncHandler, ValidationError } from '../middleware/errors';
 import {
@@ -32,6 +38,9 @@ import {
   UpdateNeedsPreferencesResponse,
   NeedsCategory,
   NEEDS_CATEGORY_NAMES,
+  NEEDS,
+  needById,
+  type NeedScoreDoc,
 } from '@meet-without-fear/shared';
 import { z } from 'zod';
 
@@ -82,19 +91,13 @@ function mapNeedToDTO(need: {
   };
 }
 
-function mapScoreToDTO(score: {
-  id: string;
-  needId: number;
-  score: number;
-  clarification: string | null;
-  createdAt: Date;
-}): NeedScoreDTO {
+function mapScoreToDTO(score: NeedScoreDoc): NeedScoreDTO {
   return {
     id: score.id,
     needId: score.needId,
     score: score.score,
     clarification: score.clarification,
-    createdAt: score.createdAt.toISOString(),
+    createdAt: score.createdAt,
   };
 }
 
@@ -127,9 +130,7 @@ export const getNeedsReference = asyncHandler(
     // Auth required but no user-specific data needed
     getUser(req);
 
-    const needs = await prisma.need.findMany({
-      orderBy: [{ category: 'asc' }, { order: 'asc' }],
-    });
+    const needs = NEEDS;
 
     const response: ApiResponse<GetNeedsReferenceResponse> = {
       success: true,
@@ -149,62 +150,15 @@ export const getNeedsState = asyncHandler(
   async (req: Request, res: Response): Promise<void> => {
     const user = getUser(req);
 
-    // Get or create assessment state
-    let state = await prisma.needsAssessmentState.findUnique({
-      where: { userId: user.id },
-    });
+    // The assessment document (a user with none reads the defaults; no row is created)
+    const doc = await readFeature(user.id, 'needs_assessment');
+    const state = doc.state;
 
-    if (!state) {
-      state = await prisma.needsAssessmentState.create({
-        data: { userId: user.id },
-      });
-    }
+    const needs = NEEDS;
 
-    // Get all needs with their latest scores
-    const needs = await prisma.need.findMany({
-      orderBy: [{ category: 'asc' }, { order: 'asc' }],
-    });
-
-    // Get latest score for each need (using raw query for DISTINCT ON)
-    const latestScores = await prisma.$queryRaw<Array<{
-      needId: number;
-      score: number;
-      createdAt: Date;
-    }>>`
-      SELECT DISTINCT ON ("needId")
-        "needId",
-        "score",
-        "createdAt"
-      FROM "NeedScore"
-      WHERE "userId" = ${user.id}
-      ORDER BY "needId", "createdAt" DESC
-    `;
-
-    const scoreMap = new Map(
-      latestScores.map(s => [s.needId, { score: s.score, date: s.createdAt }])
-    );
-
-    // Get previous scores for trend calculation
-    const previousScores = await prisma.$queryRaw<Array<{
-      needId: number;
-      score: number;
-    }>>`
-      WITH ranked AS (
-        SELECT
-          "needId",
-          "score",
-          ROW_NUMBER() OVER (PARTITION BY "needId" ORDER BY "createdAt" DESC) as rn
-        FROM "NeedScore"
-        WHERE "userId" = ${user.id}
-      )
-      SELECT "needId", "score"
-      FROM ranked
-      WHERE rn = 2
-    `;
-
-    const previousScoreMap = new Map(
-      previousScores.map(s => [s.needId, s.score])
-    );
+    // Latest and previous score per need (were DISTINCT ON / ROW_NUMBER() = 2)
+    const scoreMap = new Map(latestNeedScores(doc.scores).map(s => [s.needId, { score: s.score, date: new Date(s.createdAt) }]));
+    const previousScoreMap = new Map([...previousNeedScores(doc.scores)].map(([id, s]) => [id, s.score]));
 
     // Build current scores with trends
     const currentScores: NeedWithScoreDTO[] = needs.map(need => {
@@ -244,10 +198,10 @@ export const getNeedsState = asyncHandler(
 
     const stateDTO: NeedsAssessmentStateDTO = {
       baselineCompleted: state.baselineCompleted,
-      baselineCompletedAt: state.baselineCompletedAt?.toISOString() ?? null,
+      baselineCompletedAt: state.baselineCompletedAt,
       checkInFrequencyDays: state.checkInFrequencyDays,
-      lastCheckInAt: state.lastCheckInAt?.toISOString() ?? null,
-      nextCheckInAt: state.nextCheckInAt?.toISOString() ?? null,
+      lastCheckInAt: state.lastCheckInAt,
+      nextCheckInAt: state.nextCheckInAt,
       nextCheckInNeed,
     };
 
@@ -286,38 +240,21 @@ export const submitBaseline = asyncHandler(
     }
 
     // Get all needs for summary calculation
-    const needs = await prisma.need.findMany();
-    const needMap = new Map(needs.map(n => [n.id, n]));
+    const needMap = new Map(NEEDS.map(n => [n.id, n]));
 
-    // Create all scores in a transaction
-    await prisma.$transaction(async (tx) => {
-      // Create score records
-      await tx.needScore.createMany({
-        data: scores.map(s => ({
-          userId: user.id,
-          needId: s.needId,
-          score: s.score,
-          clarification: s.clarification,
-        })),
-      });
-
-      // Update or create assessment state
-      await tx.needsAssessmentState.upsert({
-        where: { userId: user.id },
-        create: {
-          userId: user.id,
-          baselineCompleted: true,
-          baselineCompletedAt: new Date(),
-          lastCheckInAt: new Date(),
-          nextCheckInAt: calculateNextCheckInDate(7),
-        },
-        update: {
-          baselineCompleted: true,
-          baselineCompletedAt: new Date(),
-          lastCheckInAt: new Date(),
-          nextCheckInAt: calculateNextCheckInDate(7),
-        },
-      });
+    // All scores and the state in one document write
+    const now = new Date().toISOString();
+    await updateFeature(user.id, 'needs_assessment', doc => {
+      for (const s of scores) {
+        doc.scores.push({ id: newEntryId(), needId: s.needId, score: s.score, clarification: s.clarification ?? null, createdAt: now });
+      }
+      doc.state = {
+        ...doc.state,
+        baselineCompleted: true,
+        baselineCompletedAt: now,
+        lastCheckInAt: now,
+        nextCheckInAt: calculateNextCheckInDate(7).toISOString(),
+      };
     });
 
     // Calculate summary
@@ -392,38 +329,19 @@ export const checkInNeed = asyncHandler(
     const { score, clarification } = parseResult.data;
 
     // Get the need info
-    const need = await prisma.need.findUnique({
-      where: { id: needId },
-    });
+    const need = needById(needId);
 
     if (!need) {
       throw new ValidationError('Need not found');
     }
 
-    // Get previous score for trend
-    const previousScore = await prisma.needScore.findFirst({
-      where: { userId: user.id, needId },
-      orderBy: { createdAt: 'desc' },
-    });
-
-    // Create new score
-    await prisma.needScore.create({
-      data: {
-        userId: user.id,
-        needId,
-        score,
-        clarification,
-      },
-    });
-
-    // Update assessment state
-    await prisma.needsAssessmentState.update({
-      where: { userId: user.id },
-      data: {
-        lastCheckInNeedId: needId,
-        lastCheckInAt: new Date(),
-        nextCheckInAt: calculateNextCheckInDate(7),
-      },
+    // The previous score and the new one in one locked read-modify-write
+    const previousScore = await updateFeature(user.id, 'needs_assessment', doc => {
+      const previous = needHistory(doc.scores, needId, 1)[0] ?? null;
+      const now = new Date().toISOString();
+      doc.scores.push({ id: newEntryId(), needId, score, clarification: clarification ?? null, createdAt: now });
+      doc.state = { ...doc.state, lastCheckInNeedId: needId, lastCheckInAt: now, nextCheckInAt: calculateNextCheckInDate(7).toISOString() };
+      return previous;
     });
 
     const trend = calculateTrend(score, previousScore?.score ?? null);
@@ -466,20 +384,14 @@ export const getNeedHistory = asyncHandler(
     const { limit } = parseResult.data;
 
     // Get the need info
-    const need = await prisma.need.findUnique({
-      where: { id: needId },
-    });
+    const need = needById(needId);
 
     if (!need) {
       throw new ValidationError('Need not found');
     }
 
     // Get score history
-    const history = await prisma.needScore.findMany({
-      where: { userId: user.id, needId },
-      orderBy: { createdAt: 'desc' },
-      take: limit,
-    });
+    const history = needHistory((await readFeature(user.id, 'needs_assessment')).scores, needId, limit);
 
     const response: ApiResponse<GetNeedHistoryResponse> = {
       success: true,
@@ -511,18 +423,15 @@ export const updatePreferences = asyncHandler(
     const { checkInFrequencyDays } = parseResult.data;
 
     // Update or create assessment state
-    const state = await prisma.needsAssessmentState.upsert({
-      where: { userId: user.id },
-      create: {
-        userId: user.id,
-        checkInFrequencyDays: checkInFrequencyDays ?? 7,
-      },
-      update: {
-        checkInFrequencyDays: checkInFrequencyDays ?? undefined,
-        nextCheckInAt: checkInFrequencyDays
-          ? calculateNextCheckInDate(checkInFrequencyDays)
-          : undefined,
-      },
+    const state = await updateFeature(user.id, 'needs_assessment', doc => {
+      if (checkInFrequencyDays) {
+        doc.state = {
+          ...doc.state,
+          checkInFrequencyDays,
+          nextCheckInAt: calculateNextCheckInDate(checkInFrequencyDays).toISOString(),
+        };
+      }
+      return doc.state;
     });
 
     const response: ApiResponse<UpdateNeedsPreferencesResponse> = {

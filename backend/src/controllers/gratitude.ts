@@ -10,10 +10,18 @@
  * - GET /gratitude/preferences - Get preferences
  * - PATCH /gratitude/preferences - Update preferences
  * - GET /gratitude/prompt - Get contextual prompt
+ *
+ * Target shape (TS-12): the caller's `gratitude` feature document (entries[],
+ * preferences — shared/src/dto/feature-state.ts), read-modify-write under a row
+ * lock (services/feature-state.ts). Low needs come from the `needs_assessment`
+ * document, reduced in memory (no DISTINCT ON).
  */
 
 import { Request, Response } from 'express';
 import { prisma } from '../lib/prisma';
+import { readFeature, updateFeature, newEntryId } from '../services/feature-state';
+import { latestNeedScores } from '../services/needs-reduction';
+import { resolveParticipant, getCoParticipants } from '../services/participant-resolver';
 import { getUser } from '../middleware/auth';
 import { asyncHandler, ValidationError, NotFoundError } from '../middleware/errors';
 import {
@@ -32,6 +40,8 @@ import {
   UpdateGratitudePreferencesRequest,
   UpdateGratitudePreferencesResponse,
   GetGratitudePromptResponse,
+  type GratitudeEntryDoc,
+  needById,
 } from '@meet-without-fear/shared';
 import { z } from 'zod';
 import { getHaikuJson } from '../lib/bedrock';
@@ -69,20 +79,7 @@ const updatePreferencesSchema = z.object({
 // Helper Functions
 // ============================================================================
 
-function mapEntryToDTO(entry: {
-  id: string;
-  content: string;
-  voiceRecorded: boolean;
-  createdAt: Date;
-  aiResponse: string | null;
-  extractedPeople: string[];
-  extractedPlaces: string[];
-  extractedActivities: string[];
-  extractedEmotions: string[];
-  extractedThemes: string[];
-  linkedNeedIds: number[];
-  sentimentScore: number | null;
-}): GratitudeEntryDTO {
+function mapEntryToDTO(entry: GratitudeEntryDoc): GratitudeEntryDTO {
   const hasMetadata = entry.extractedPeople.length > 0 ||
     entry.extractedPlaces.length > 0 ||
     entry.extractedActivities.length > 0;
@@ -91,7 +88,7 @@ function mapEntryToDTO(entry: {
     id: entry.id,
     content: entry.content,
     voiceRecorded: entry.voiceRecorded,
-    createdAt: entry.createdAt.toISOString(),
+    createdAt: entry.createdAt,
     aiResponse: entry.aiResponse,
     metadata: hasMetadata ? {
       people: entry.extractedPeople,
@@ -142,23 +139,17 @@ async function generateGratitudeResponse(
   userId: string
 ): Promise<{ response: string; metadata: GratitudeMetadataDTO }> {
   // Get user context for richer response
-  const needsState = await prisma.needsAssessmentState.findUnique({
-    where: { userId },
-  });
+  const needs = await readFeature(userId, 'needs_assessment');
 
   let needsContext = '';
-  if (needsState?.baselineCompleted) {
-    const lowNeeds = await prisma.$queryRaw<Array<{ name: string }>>`
-      SELECT DISTINCT ON (ns."needId") n.name
-      FROM "NeedScore" ns
-      JOIN "Need" n ON n.id = ns."needId"
-      WHERE ns."userId" = ${userId}
-      AND ns.score <= 1
-      ORDER BY ns."needId", ns."createdAt" DESC
-      LIMIT 3
-    `;
+  if (needs.state.baselineCompleted) {
+    // The latest score per need, low ones first three by need id (was a DISTINCT ON).
+    const lowNeeds = latestNeedScores(needs.scores)
+      .filter(s => s.score <= 1)
+      .slice(0, 3)
+      .map(s => needById(s.needId)?.name ?? `Need ${s.needId}`);
     if (lowNeeds.length > 0) {
-      needsContext = `User's lower-scoring needs: ${lowNeeds.map(n => n.name).join(', ')}`;
+      needsContext = `User's lower-scoring needs: ${lowNeeds.join(', ')}`;
     }
   }
 
@@ -268,20 +259,23 @@ export const createGratitude = asyncHandler(
     const { response: aiResponse, metadata } = await generateGratitudeResponse(content, user.id);
 
     // Create the entry
-    const entry = await prisma.gratitudeEntry.create({
-      data: {
-        userId: user.id,
-        content,
-        voiceRecorded,
-        aiResponse,
-        extractedPeople: metadata.people,
-        extractedPlaces: metadata.places,
-        extractedActivities: metadata.activities,
-        extractedEmotions: metadata.emotions,
-        extractedThemes: metadata.themes,
-        linkedNeedIds: metadata.linkedNeedIds,
-        sentimentScore: metadata.sentiment,
-      },
+    const entry: GratitudeEntryDoc = {
+      id: newEntryId(),
+      content,
+      voiceRecorded,
+      createdAt: new Date().toISOString(),
+      aiResponse,
+      extractedPeople: metadata.people,
+      extractedPlaces: metadata.places,
+      extractedActivities: metadata.activities,
+      extractedEmotions: metadata.emotions,
+      extractedThemes: metadata.themes,
+      linkedNeedIds: metadata.linkedNeedIds,
+      linkedConflictId: null,
+      sentimentScore: metadata.sentiment,
+    };
+    await updateFeature(user.id, 'gratitude', doc => {
+      doc.entries.push(entry);
     });
 
     const response: ApiResponse<CreateGratitudeResponse> = {
@@ -312,21 +306,14 @@ export const listGratitude = asyncHandler(
 
     const { limit, offset, startDate, endDate } = parseResult.data;
 
-    const where = {
-      userId: user.id,
-      ...(startDate && { createdAt: { gte: new Date(startDate) } }),
-      ...(endDate && { createdAt: { lte: new Date(endDate) } }),
-    };
-
-    const [entries, total] = await Promise.all([
-      prisma.gratitudeEntry.findMany({
-        where,
-        orderBy: { createdAt: 'desc' },
-        take: limit,
-        skip: offset,
-      }),
-      prisma.gratitudeEntry.count({ where }),
-    ]);
+    // Both bounds apply (the old where clause let endDate's spread replace
+    // startDate's, so a range with both bounds filtered by endDate only).
+    const bound = (e: GratitudeEntryDoc) =>
+      (!startDate || new Date(e.createdAt) >= new Date(startDate)) &&
+      (!endDate || new Date(e.createdAt) <= new Date(endDate));
+    const matching = byNewest((await readFeature(user.id, 'gratitude')).entries).filter(bound);
+    const total = matching.length;
+    const entries = matching.slice(offset, offset + limit);
 
     const response: ApiResponse<ListGratitudeResponse> = {
       success: true,
@@ -349,9 +336,7 @@ export const getGratitude = asyncHandler(
     const user = getUser(req);
     const { id } = req.params;
 
-    const entry = await prisma.gratitudeEntry.findFirst({
-      where: { id, userId: user.id },
-    });
+    const entry = (await readFeature(user.id, 'gratitude')).entries.find(e => e.id === id);
 
     if (!entry) {
       throw new NotFoundError('Gratitude entry not found');
@@ -374,15 +359,16 @@ export const deleteGratitude = asyncHandler(
     const user = getUser(req);
     const { id } = req.params;
 
-    const entry = await prisma.gratitudeEntry.findFirst({
-      where: { id, userId: user.id },
+    const removed = await updateFeature(user.id, 'gratitude', doc => {
+      const i = doc.entries.findIndex(e => e.id === id);
+      if (i < 0) return false;
+      doc.entries.splice(i, 1);
+      return true;
     });
 
-    if (!entry) {
+    if (!removed) {
       throw new NotFoundError('Gratitude entry not found');
     }
-
-    await prisma.gratitudeEntry.delete({ where: { id } });
 
     const response: ApiResponse<DeleteGratitudeResponse> = {
       success: true,
@@ -410,23 +396,9 @@ export const getPatterns = asyncHandler(
     const { period } = parseResult.data;
     const periodDate = getPeriodDate(period);
 
-    const where = {
-      userId: user.id,
-      ...(periodDate && { createdAt: { gte: periodDate } }),
-    };
-
-    const entries = await prisma.gratitudeEntry.findMany({
-      where,
-      select: {
-        extractedPeople: true,
-        extractedPlaces: true,
-        extractedActivities: true,
-        extractedThemes: true,
-        linkedNeedIds: true,
-        sentimentScore: true,
-        createdAt: true,
-      },
-    });
+    const entries = (await readFeature(user.id, 'gratitude')).entries
+      .filter(e => !periodDate || new Date(e.createdAt) >= periodDate)
+      .map(e => ({ ...e, createdAt: new Date(e.createdAt) }));
 
     // Aggregate patterns
     const peopleCounts = new Map<string, number>();
@@ -451,12 +423,8 @@ export const getPatterns = asyncHandler(
       }
     }
 
-    // Get need names
-    const needIds = Array.from(needCounts.keys());
-    const needs = needIds.length > 0
-      ? await prisma.need.findMany({ where: { id: { in: needIds } } })
-      : [];
-    const needNameMap = new Map(needs.map(n => [n.id, n.name]));
+    // Need names from the shared taxonomy
+    const needNameMap = new Map(Array.from(needCounts.keys()).map(id => [id, needById(id)?.name]));
 
     // Calculate streak
     const sortedDates = entries
@@ -533,15 +501,7 @@ export const getPreferences = asyncHandler(
   async (req: Request, res: Response): Promise<void> => {
     const user = getUser(req);
 
-    let prefs = await prisma.gratitudePreferences.findUnique({
-      where: { userId: user.id },
-    });
-
-    if (!prefs) {
-      prefs = await prisma.gratitudePreferences.create({
-        data: { userId: user.id },
-      });
-    }
+    const prefs = (await readFeature(user.id, 'gratitude')).preferences;
 
     const response: ApiResponse<GetGratitudePreferencesResponse> = {
       success: true,
@@ -566,13 +526,9 @@ export const updatePreferences = asyncHandler(
       });
     }
 
-    const prefs = await prisma.gratitudePreferences.upsert({
-      where: { userId: user.id },
-      create: {
-        userId: user.id,
-        ...parseResult.data,
-      },
-      update: parseResult.data,
+    const prefs = await updateFeature(user.id, 'gratitude', doc => {
+      doc.preferences = { ...doc.preferences, ...definedOnly(parseResult.data) };
+      return doc.preferences;
     });
 
     const response: ApiResponse<UpdateGratitudePreferencesResponse> = {
@@ -592,9 +548,7 @@ export const getPrompt = asyncHandler(
     const user = getUser(req);
 
     // Check if this is first entry
-    const entryCount = await prisma.gratitudeEntry.count({
-      where: { userId: user.id },
-    });
+    const entryCount = (await readFeature(user.id, 'gratitude')).entries.length;
 
     if (entryCount === 0) {
       const response: ApiResponse<GetGratitudePromptResponse> = {
@@ -609,20 +563,14 @@ export const getPrompt = asyncHandler(
     }
 
     // Check needs scores
-    const needsState = await prisma.needsAssessmentState.findUnique({
-      where: { userId: user.id },
-    });
+    const needs = await readFeature(user.id, 'needs_assessment');
 
     let context: GetGratitudePromptResponse['context'] = 'general';
     let prompt = "What are you grateful for today?";
 
-    if (needsState?.baselineCompleted) {
-      const scores = await prisma.$queryRaw<Array<{ score: number }>>`
-        SELECT DISTINCT ON ("needId") score
-        FROM "NeedScore"
-        WHERE "userId" = ${user.id}
-        ORDER BY "needId", "createdAt" DESC
-      `;
+    if (needs.state.baselineCompleted) {
+      // The latest score per need (was a DISTINCT ON).
+      const scores = latestNeedScores(needs.scores);
 
       const avgScore = scores.reduce((a, b) => a + b.score, 0) / scores.length;
 
@@ -638,31 +586,22 @@ export const getPrompt = asyncHandler(
       }
     }
 
-    // Check for recent conflicts
+    // Check for recent conflicts: a live session of the caller's from the last week
     const recentConflict = await prisma.session.findFirst({
       where: {
-        OR: [
-          { relationship: { members: { some: { userId: user.id } } } },
-        ],
+        participants: { some: { userId: user.id, leftAt: null } },
         status: 'ACTIVE',
         createdAt: { gte: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000) },
       },
-      include: {
-        relationship: {
-          include: {
-            members: {
-              where: { userId: { not: user.id } },
-              include: { user: true },
-            },
-          },
-        },
-      },
+      select: { id: true, relationship: { select: { members: { where: { userId: user.id }, select: { nickname: true } } } } },
     });
 
     if (recentConflict) {
-      const partnerName = recentConflict.relationship.members[0]?.user?.name ||
-        recentConflict.relationship.members[0]?.nickname ||
-        'your partner';
+      // The caller's own name for the partner, then the co-participant's display name
+      // (never the partner's user row — spec §7: display_name is the only user fact a co-participant sees).
+      const me = await resolveParticipant(recentConflict.id, user.id);
+      const partner = me ? (await getCoParticipants(me.id)).find(c => c.kind === 'human' && !c.leftAt) : undefined;
+      const partnerName = recentConflict.relationship.members[0]?.nickname || partner?.displayName || 'your partner';
       context = 'recent_conflict';
       prompt = `I know things have been hard with ${partnerName}. Is there anything about them - or about yourself in this situation - you can appreciate, even while working through the difficulty?`;
     }
@@ -674,3 +613,17 @@ export const getPrompt = asyncHandler(
     res.json(response);
   }
 );
+
+// ============================================================================
+// Document helpers
+// ============================================================================
+
+/** Newest first (the old `orderBy: { createdAt: 'desc' }`). */
+function byNewest(entries: GratitudeEntryDoc[]): GratitudeEntryDoc[] {
+  return [...entries].sort((a, b) => b.createdAt.localeCompare(a.createdAt) || b.id.localeCompare(a.id));
+}
+
+/** The keys a PATCH body set (an absent key keeps the stored value, as Prisma's `undefined` did). */
+function definedOnly<T extends Record<string, unknown>>(patch: T): Partial<T> {
+  return Object.fromEntries(Object.entries(patch).filter(([, v]) => v !== undefined)) as Partial<T>;
+}

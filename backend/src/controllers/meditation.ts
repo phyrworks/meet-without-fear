@@ -13,10 +13,18 @@
  * - DELETE /meditation/favorites/:id - Delete favorite
  * - GET /meditation/preferences - Get preferences
  * - PATCH /meditation/preferences - Update preferences
+ *
+ * Target shape (TS-12): the caller's `meditation` feature document (sessions[],
+ * scripts[] = saved meditations, favorites[], preferences, stats —
+ * shared/src/dto/feature-state.ts), read-modify-write under a row lock
+ * (services/feature-state.ts). Low needs are a reduction over the
+ * `needs_assessment` document (no DISTINCT ON).
  */
 
 import { Request, Response } from 'express';
 import { prisma } from '../lib/prisma';
+import { readFeature, updateFeature, newEntryId } from '../services/feature-state';
+import { latestNeedScores } from '../services/needs-reduction';
 import { getUser } from '../middleware/auth';
 import { asyncHandler, ValidationError, NotFoundError } from '../middleware/errors';
 import {
@@ -49,6 +57,11 @@ import {
   MeditationType,
   FavoriteType,
   calculateDuration,
+  needById,
+  type MeditationDoc,
+  type MeditationSessionDoc,
+  type MeditationFavoriteDoc,
+  type SavedMeditationDoc,
 } from '@meet-without-fear/shared';
 import { z } from 'zod';
 import { getCompletion } from '../lib/bedrock';
@@ -106,29 +119,15 @@ const updatePreferencesSchema = z.object({
 // Helper Functions
 // ============================================================================
 
-function mapSessionToDTO(session: {
-  id: string;
-  type: string;
-  durationMinutes: number;
-  focusArea: string | null;
-  completed: boolean;
-  startedAt: Date;
-  completedAt: Date | null;
-  scriptGenerated: string | null;
-  voiceId: string | null;
-  backgroundSound: string | null;
-  savedAsFavorite: boolean;
-  favoriteType: string | null;
-  postNotes: string | null;
-}): MeditationSessionDTO {
+function mapSessionToDTO(session: MeditationSessionDoc): MeditationSessionDTO {
   return {
     id: session.id,
     type: session.type as MeditationType,
     durationMinutes: session.durationMinutes,
     focusArea: session.focusArea,
     completed: session.completed,
-    startedAt: session.startedAt.toISOString(),
-    completedAt: session.completedAt?.toISOString() ?? null,
+    startedAt: session.startedAt,
+    completedAt: session.completedAt,
     scriptGenerated: session.scriptGenerated,
     voiceId: session.voiceId,
     backgroundSound: session.backgroundSound,
@@ -138,35 +137,19 @@ function mapSessionToDTO(session: {
   };
 }
 
-function mapSessionToSummaryDTO(session: {
-  id: string;
-  type: string;
-  durationMinutes: number;
-  focusArea: string | null;
-  completed: boolean;
-  startedAt: Date;
-  completedAt: Date | null;
-}): MeditationSessionSummaryDTO {
+function mapSessionToSummaryDTO(session: MeditationSessionDoc): MeditationSessionSummaryDTO {
   return {
     id: session.id,
     type: session.type as MeditationType,
     durationMinutes: session.durationMinutes,
     focusArea: session.focusArea,
     completed: session.completed,
-    startedAt: session.startedAt.toISOString(),
-    completedAt: session.completedAt?.toISOString() ?? null,
+    startedAt: session.startedAt,
+    completedAt: session.completedAt,
   };
 }
 
-function mapFavoriteToDTO(fav: {
-  id: string;
-  name: string;
-  focusArea: string;
-  durationMinutes: number;
-  favoriteType: string;
-  script: string | null;
-  savedAt: Date;
-}): MeditationFavoriteDTO {
+function mapFavoriteToDTO(fav: MeditationFavoriteDoc): MeditationFavoriteDTO {
   return {
     id: fav.id,
     name: fav.name,
@@ -174,40 +157,29 @@ function mapFavoriteToDTO(fav: {
     durationMinutes: fav.durationMinutes,
     favoriteType: fav.favoriteType as FavoriteType,
     script: fav.script,
-    savedAt: fav.savedAt.toISOString(),
+    savedAt: fav.savedAt,
   };
 }
 
-function mapPreferencesToDTO(prefs: {
-  preferredVoice: string;
-  voiceSpeed: number;
-  defaultDuration: number;
-  backgroundSound: string;
-  reminderEnabled: boolean;
-  reminderTime: string | null;
-}): MeditationPreferencesDTO {
+function mapPreferencesToDTO(prefs: MeditationDoc['preferences']): MeditationPreferencesDTO {
   return prefs;
 }
 
-async function updateStats(userId: string, session: {
-  type: string;
-  durationMinutes: number;
-  focusArea: string | null;
-  completed: boolean;
-  startedAt: Date;
-}): Promise<void> {
-  const stats = await prisma.meditationStats.findUnique({
-    where: { userId },
-  });
+/** Newest first by an ISO instant key (ties by id — deterministic). */
+function newestFirst<T extends { id: string }>(rows: T[], key: (r: T) => string): T[] {
+  return [...rows].sort((a, b) => key(b).localeCompare(key(a)) || b.id.localeCompare(a.id));
+}
 
+/** The stats after one session is counted (the old MeditationStats upsert, in memory). */
+function updateStats(stats: MeditationDoc['stats'], session: MeditationSessionDoc): void {
   const today = new Date().toISOString().split('T')[0];
-  const sessionDate = session.startedAt.toISOString().split('T')[0];
-  const lastDate = stats?.lastSessionDate?.toISOString().split('T')[0];
+  const sessionDate = session.startedAt.split('T')[0];
+  const lastDate = stats.lastSessionDate?.split('T')[0];
 
   // Calculate streak
-  let currentStreak = stats?.currentStreak || 0;
-  let longestStreak = stats?.longestStreak || 0;
-  let streakStartDate = stats?.streakStartDate || null;
+  let currentStreak = stats.currentStreak;
+  let longestStreak = stats.longestStreak;
+  let streakStartDate = stats.streakStartDate;
 
   if (session.completed) {
     if (!lastDate) {
@@ -234,37 +206,29 @@ async function updateStats(userId: string, session: {
   }
 
   // Update focus areas
-  const favoriteFocusAreas = (stats?.favoriteFocusAreas as Record<string, number>) || {};
+  const favoriteFocusAreas = { ...stats.favoriteFocusAreas };
   if (session.focusArea) {
     favoriteFocusAreas[session.focusArea] = (favoriteFocusAreas[session.focusArea] || 0) + 1;
   }
 
-  await prisma.meditationStats.upsert({
-    where: { userId },
-    create: {
-      userId,
-      totalSessions: 1,
-      guidedCount: session.type === 'GUIDED' ? 1 : 0,
-      unguidedCount: session.type === 'UNGUIDED' ? 1 : 0,
-      totalMinutes: session.completed ? session.durationMinutes : 0,
-      currentStreak,
-      longestStreak,
-      streakStartDate,
-      lastSessionDate: session.completed ? session.startedAt : null,
-      favoriteFocusAreas,
-    },
-    update: {
-      totalSessions: { increment: 1 },
-      guidedCount: session.type === 'GUIDED' ? { increment: 1 } : undefined,
-      unguidedCount: session.type === 'UNGUIDED' ? { increment: 1 } : undefined,
-      totalMinutes: session.completed ? { increment: session.durationMinutes } : undefined,
-      currentStreak,
-      longestStreak,
-      streakStartDate,
-      lastSessionDate: session.completed ? session.startedAt : undefined,
-      favoriteFocusAreas,
-    },
-  });
+  stats.totalSessions += 1;
+  if (session.type === 'GUIDED') stats.guidedCount += 1;
+  if (session.type === 'UNGUIDED') stats.unguidedCount += 1;
+  if (session.completed) stats.totalMinutes += session.durationMinutes;
+  stats.currentStreak = currentStreak;
+  stats.longestStreak = longestStreak;
+  stats.streakStartDate = streakStartDate;
+  if (session.completed) stats.lastSessionDate = session.startedAt;
+  stats.favoriteFocusAreas = favoriteFocusAreas;
+}
+
+/** Up to three of the user's currently low needs (score <= 1), by need id — was a DISTINCT ON. */
+async function lowNeedNames(userId: string): Promise<string[]> {
+  const { scores } = await readFeature(userId, 'needs_assessment');
+  return latestNeedScores(scores)
+    .filter(s => s.score <= 1)
+    .slice(0, 3)
+    .map(s => needById(s.needId)?.name ?? `Need ${s.needId}`);
 }
 
 // ============================================================================
@@ -430,31 +394,28 @@ export const createSession = asyncHandler(
     let script: string | null = null;
     if (type === 'GUIDED' && focusArea) {
       // Get user context for personalization
-      const lowNeeds = await prisma.$queryRaw<Array<{ name: string }>>`
-        SELECT DISTINCT ON (ns."needId") n.name
-        FROM "NeedScore" ns
-        JOIN "Need" n ON n.id = ns."needId"
-        WHERE ns."userId" = ${user.id}
-        AND ns.score <= 1
-        ORDER BY ns."needId", ns."createdAt" DESC
-        LIMIT 3
-      `;
-
       script = await generateMeditationScript(focusArea, durationMinutes, user.id, {
-        lowNeeds: lowNeeds.map(n => n.name),
+        lowNeeds: await lowNeedNames(user.id),
       });
     }
 
-    const session = await prisma.meditationSession.create({
-      data: {
-        userId: user.id,
-        type,
-        durationMinutes,
-        focusArea,
-        voiceId,
-        backgroundSound,
-        scriptGenerated: script,
-      },
+    const session: MeditationSessionDoc = {
+      id: newEntryId(),
+      type,
+      durationMinutes,
+      focusArea: focusArea ?? null,
+      completed: false,
+      startedAt: new Date().toISOString(),
+      completedAt: null,
+      scriptGenerated: script,
+      voiceId: voiceId ?? null,
+      backgroundSound: backgroundSound ?? null,
+      savedAsFavorite: false,
+      favoriteType: null,
+      postNotes: null,
+    };
+    await updateFeature(user.id, 'meditation', doc => {
+      doc.sessions.push(session);
     });
 
     const response: ApiResponse<CreateMeditationSessionResponse> = {
@@ -484,44 +445,42 @@ export const updateSession = asyncHandler(
       });
     }
 
-    const existing = await prisma.meditationSession.findFirst({
-      where: { id, userId: user.id },
-    });
-
-    if (!existing) {
-      throw new NotFoundError('Session not found');
-    }
-
     const { completed, postNotes, savedAsFavorite, favoriteType } = parseResult.data;
 
-    const session = await prisma.meditationSession.update({
-      where: { id },
-      data: {
-        completed,
-        completedAt: completed ? new Date() : undefined,
-        postNotes,
-        savedAsFavorite,
-        favoriteType,
-      },
+    // The session, its stats and a favorite change in one locked document write.
+    const session = await updateFeature(user.id, 'meditation', doc => {
+      const current = doc.sessions.find(s => s.id === id);
+      if (!current) return null;
+      const existing = { ...current };
+
+      if (completed !== undefined) current.completed = completed;
+      if (completed) current.completedAt = new Date().toISOString();
+      if (postNotes !== undefined) current.postNotes = postNotes;
+      if (savedAsFavorite !== undefined) current.savedAsFavorite = savedAsFavorite;
+      if (favoriteType !== undefined) current.favoriteType = favoriteType;
+
+      // Update stats if completed
+      if (completed && !existing.completed) {
+        updateStats(doc.stats, current);
+      }
+
+      // Create favorite if requested
+      if (savedAsFavorite && favoriteType && !existing.savedAsFavorite) {
+        doc.favorites.push({
+          id: newEntryId(),
+          name: current.focusArea || 'Meditation',
+          focusArea: current.focusArea || 'general',
+          durationMinutes: current.durationMinutes,
+          favoriteType,
+          script: favoriteType === 'EXACT' ? current.scriptGenerated : null,
+          savedAt: new Date().toISOString(),
+        });
+      }
+      return { ...current };
     });
 
-    // Update stats if completed
-    if (completed && !existing.completed) {
-      await updateStats(user.id, session);
-    }
-
-    // Create favorite if requested
-    if (savedAsFavorite && favoriteType && !existing.savedAsFavorite) {
-      await prisma.meditationFavorite.create({
-        data: {
-          userId: user.id,
-          name: session.focusArea || 'Meditation',
-          focusArea: session.focusArea || 'general',
-          durationMinutes: session.durationMinutes,
-          favoriteType,
-          script: favoriteType === 'EXACT' ? session.scriptGenerated : null,
-        },
-      });
+    if (!session) {
+      throw new NotFoundError('Session not found');
     }
 
     const response: ApiResponse<UpdateMeditationSessionResponse> = {
@@ -549,20 +508,12 @@ export const listSessions = asyncHandler(
 
     const { limit, offset, type } = parseResult.data;
 
-    const where = {
-      userId: user.id,
-      ...(type && { type }),
-    };
-
-    const [sessions, total] = await Promise.all([
-      prisma.meditationSession.findMany({
-        where,
-        orderBy: { startedAt: 'desc' },
-        take: limit,
-        skip: offset,
-      }),
-      prisma.meditationSession.count({ where }),
-    ]);
+    const matching = newestFirst(
+      (await readFeature(user.id, 'meditation')).sessions.filter(s => !type || s.type === type),
+      s => s.startedAt,
+    );
+    const total = matching.length;
+    const sessions = matching.slice(offset, offset + limit);
 
     const response: ApiResponse<ListMeditationSessionsResponse> = {
       success: true,
@@ -585,23 +536,16 @@ export const getSuggestion = asyncHandler(
     const user = getUser(req);
 
     // Get user's needs state
-    const lowNeeds = await prisma.$queryRaw<Array<{ name: string }>>`
-      SELECT DISTINCT ON (ns."needId") n.name
-      FROM "NeedScore" ns
-      JOIN "Need" n ON n.id = ns."needId"
-      WHERE ns."userId" = ${user.id}
-      AND ns.score <= 1
-      ORDER BY ns."needId", ns."createdAt" DESC
-      LIMIT 3
-    `;
+    const lowNeeds = await lowNeedNames(user.id);
 
-    // Check for recent conflicts
+    // Check for recent conflicts: a live session of the caller's from the last week
     const recentConflict = await prisma.session.findFirst({
       where: {
-        relationship: { members: { some: { userId: user.id } } },
+        participants: { some: { userId: user.id, leftAt: null } },
         status: 'ACTIVE',
         createdAt: { gte: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000) },
       },
+      select: { id: true },
     });
 
     let suggestedFocus = 'grounding and presence';
@@ -613,7 +557,7 @@ export const getSuggestion = asyncHandler(
       reasoning = "Given you're working through something with someone, a grounding practice could help you feel more steady and clear.";
       suggestedDuration = 15;
     } else if (lowNeeds.length > 0) {
-      const needNames = lowNeeds.map(n => n.name.toLowerCase());
+      const needNames = lowNeeds.map(n => n.toLowerCase());
       if (needNames.some(n => n.includes('rest') || n.includes('calm'))) {
         suggestedFocus = 'rest and restoration';
         reasoning = `I notice rest and calm feel unmet right now. A restful practice might offer some ease.`;
@@ -675,17 +619,9 @@ export const getStats = asyncHandler(
   async (req: Request, res: Response): Promise<void> => {
     const user = getUser(req);
 
-    let stats = await prisma.meditationStats.findUnique({
-      where: { userId: user.id },
-    });
+    const stats = (await readFeature(user.id, 'meditation')).stats;
 
-    if (!stats) {
-      stats = await prisma.meditationStats.create({
-        data: { userId: user.id },
-      });
-    }
-
-    const favoriteFocusAreas = stats.favoriteFocusAreas as Record<string, number>;
+    const favoriteFocusAreas = stats.favoriteFocusAreas;
     const sortedAreas = Object.entries(favoriteFocusAreas)
       .sort((a, b) => b[1] - a[1])
       .map(([focusArea, count]) => ({ focusArea, count }));
@@ -697,8 +633,8 @@ export const getStats = asyncHandler(
       totalMinutes: stats.totalMinutes,
       currentStreak: stats.currentStreak,
       longestStreak: stats.longestStreak,
-      streakStartDate: stats.streakStartDate?.toISOString() ?? null,
-      lastSessionDate: stats.lastSessionDate?.toISOString() ?? null,
+      streakStartDate: stats.streakStartDate,
+      lastSessionDate: stats.lastSessionDate,
       favoriteFocusAreas: sortedAreas,
     };
 
@@ -718,10 +654,7 @@ export const listFavorites = asyncHandler(
   async (req: Request, res: Response): Promise<void> => {
     const user = getUser(req);
 
-    const favorites = await prisma.meditationFavorite.findMany({
-      where: { userId: user.id },
-      orderBy: { savedAt: 'desc' },
-    });
+    const favorites = newestFirst((await readFeature(user.id, 'meditation')).favorites, f => f.savedAt);
 
     const response: ApiResponse<ListMeditationFavoritesResponse> = {
       success: true,
@@ -748,24 +681,25 @@ export const createFavorite = asyncHandler(
 
     const { sessionId, name } = parseResult.data;
 
-    const session = await prisma.meditationSession.findFirst({
-      where: { id: sessionId, userId: user.id },
-    });
-
-    if (!session) {
-      throw new NotFoundError('Session not found');
-    }
-
-    const favorite = await prisma.meditationFavorite.create({
-      data: {
-        userId: user.id,
+    const favorite = await updateFeature(user.id, 'meditation', doc => {
+      const session = doc.sessions.find(s => s.id === sessionId);
+      if (!session) return null;
+      const created: MeditationFavoriteDoc = {
+        id: newEntryId(),
         name: name || session.focusArea || 'Meditation',
         focusArea: session.focusArea || 'general',
         durationMinutes: session.durationMinutes,
         favoriteType: session.favoriteType || 'THEME',
         script: session.favoriteType === 'EXACT' ? session.scriptGenerated : null,
-      },
+        savedAt: new Date().toISOString(),
+      };
+      doc.favorites.push(created);
+      return created;
     });
+
+    if (!favorite) {
+      throw new NotFoundError('Session not found');
+    }
 
     const response: ApiResponse<CreateMeditationFavoriteResponse> = {
       success: true,
@@ -784,15 +718,16 @@ export const deleteFavorite = asyncHandler(
     const user = getUser(req);
     const { id } = req.params;
 
-    const favorite = await prisma.meditationFavorite.findFirst({
-      where: { id, userId: user.id },
+    const removed = await updateFeature(user.id, 'meditation', doc => {
+      const i = doc.favorites.findIndex(f => f.id === id);
+      if (i < 0) return false;
+      doc.favorites.splice(i, 1);
+      return true;
     });
 
-    if (!favorite) {
+    if (!removed) {
       throw new NotFoundError('Favorite not found');
     }
-
-    await prisma.meditationFavorite.delete({ where: { id } });
 
     const response: ApiResponse<DeleteMeditationFavoriteResponse> = {
       success: true,
@@ -810,15 +745,7 @@ export const getPreferences = asyncHandler(
   async (req: Request, res: Response): Promise<void> => {
     const user = getUser(req);
 
-    let prefs = await prisma.meditationPreferences.findUnique({
-      where: { userId: user.id },
-    });
-
-    if (!prefs) {
-      prefs = await prisma.meditationPreferences.create({
-        data: { userId: user.id },
-      });
-    }
+    const prefs = (await readFeature(user.id, 'meditation')).preferences;
 
     const response: ApiResponse<GetMeditationPreferencesResponse> = {
       success: true,
@@ -843,13 +770,10 @@ export const updatePreferences = asyncHandler(
       });
     }
 
-    const prefs = await prisma.meditationPreferences.upsert({
-      where: { userId: user.id },
-      create: {
-        userId: user.id,
-        ...parseResult.data,
-      },
-      update: parseResult.data,
+    const prefs = await updateFeature(user.id, 'meditation', doc => {
+      const patch = Object.fromEntries(Object.entries(parseResult.data).filter(([, v]) => v !== undefined));
+      doc.preferences = { ...doc.preferences, ...patch };
+      return doc.preferences;
     });
 
     const response: ApiResponse<UpdateMeditationPreferencesResponse> = {
@@ -879,37 +803,24 @@ const parseMeditationTextSchema = z.object({
   text: z.string().min(1).max(50000),
 });
 
-function mapSavedMeditationToDTO(meditation: {
-  id: string;
-  title: string;
-  script: string;
-  durationSeconds: number;
-  conversationId: string | null;
-  createdAt: Date;
-  updatedAt: Date;
-}): SavedMeditationDTO {
+function mapSavedMeditationToDTO(meditation: SavedMeditationDoc): SavedMeditationDTO {
   return {
     id: meditation.id,
     title: meditation.title,
     script: meditation.script,
     durationSeconds: meditation.durationSeconds,
     conversationId: meditation.conversationId,
-    createdAt: meditation.createdAt.toISOString(),
-    updatedAt: meditation.updatedAt.toISOString(),
+    createdAt: meditation.createdAt,
+    updatedAt: meditation.updatedAt,
   };
 }
 
-function mapSavedMeditationToSummaryDTO(meditation: {
-  id: string;
-  title: string;
-  durationSeconds: number;
-  createdAt: Date;
-}): SavedMeditationSummaryDTO {
+function mapSavedMeditationToSummaryDTO(meditation: SavedMeditationDoc): SavedMeditationSummaryDTO {
   return {
     id: meditation.id,
     title: meditation.title,
     durationSeconds: meditation.durationSeconds,
-    createdAt: meditation.createdAt.toISOString(),
+    createdAt: meditation.createdAt,
   };
 }
 
@@ -921,19 +832,8 @@ export const listSavedMeditations = asyncHandler(
   async (req: Request, res: Response): Promise<void> => {
     const user = getUser(req);
 
-    const [meditations, total] = await Promise.all([
-      prisma.savedMeditation.findMany({
-        where: { userId: user.id },
-        orderBy: { createdAt: 'desc' },
-        select: {
-          id: true,
-          title: true,
-          durationSeconds: true,
-          createdAt: true,
-        },
-      }),
-      prisma.savedMeditation.count({ where: { userId: user.id } }),
-    ]);
+    const meditations = newestFirst((await readFeature(user.id, 'meditation')).scripts, m => m.createdAt);
+    const total = meditations.length;
 
     const response: ApiResponse<ListSavedMeditationsResponse> = {
       success: true,
@@ -955,9 +855,7 @@ export const getSavedMeditation = asyncHandler(
     const user = getUser(req);
     const { id } = req.params;
 
-    const meditation = await prisma.savedMeditation.findFirst({
-      where: { id, userId: user.id },
-    });
+    const meditation = (await readFeature(user.id, 'meditation')).scripts.find(m => m.id === id);
 
     if (!meditation) {
       throw new NotFoundError('Saved meditation not found');
@@ -989,14 +887,18 @@ export const createSavedMeditation = asyncHandler(
     const { title, script, conversationId } = parseResult.data;
     const durationSeconds = calculateDuration(script);
 
-    const meditation = await prisma.savedMeditation.create({
-      data: {
-        userId: user.id,
-        title,
-        script,
-        durationSeconds,
-        conversationId,
-      },
+    const now = new Date().toISOString();
+    const meditation: SavedMeditationDoc = {
+      id: newEntryId(),
+      title,
+      script,
+      durationSeconds,
+      conversationId: conversationId ?? null,
+      createdAt: now,
+      updatedAt: now,
+    };
+    await updateFeature(user.id, 'meditation', doc => {
+      doc.scripts.push(meditation);
     });
 
     const response: ApiResponse<CreateSavedMeditationResponse> = {
@@ -1023,27 +925,24 @@ export const updateSavedMeditation = asyncHandler(
       });
     }
 
-    const existing = await prisma.savedMeditation.findFirst({
-      where: { id, userId: user.id },
-    });
-
-    if (!existing) {
-      throw new NotFoundError('Saved meditation not found');
-    }
-
     const { title, script } = parseResult.data;
 
     // Recalculate duration if script changed
     const durationSeconds = script ? calculateDuration(script) : undefined;
 
-    const meditation = await prisma.savedMeditation.update({
-      where: { id },
-      data: {
-        ...(title && { title }),
-        ...(script && { script }),
-        ...(durationSeconds !== undefined && { durationSeconds }),
-      },
+    const meditation = await updateFeature(user.id, 'meditation', doc => {
+      const current = doc.scripts.find(m => m.id === id);
+      if (!current) return null;
+      if (title) current.title = title;
+      if (script) current.script = script;
+      if (durationSeconds !== undefined) current.durationSeconds = durationSeconds;
+      current.updatedAt = new Date().toISOString();
+      return { ...current };
     });
+
+    if (!meditation) {
+      throw new NotFoundError('Saved meditation not found');
+    }
 
     const response: ApiResponse<UpdateSavedMeditationResponse> = {
       success: true,
@@ -1062,15 +961,16 @@ export const deleteSavedMeditation = asyncHandler(
     const user = getUser(req);
     const { id } = req.params;
 
-    const meditation = await prisma.savedMeditation.findFirst({
-      where: { id, userId: user.id },
+    const removed = await updateFeature(user.id, 'meditation', doc => {
+      const i = doc.scripts.findIndex(m => m.id === id);
+      if (i < 0) return false;
+      doc.scripts.splice(i, 1);
+      return true;
     });
 
-    if (!meditation) {
+    if (!removed) {
       throw new NotFoundError('Saved meditation not found');
     }
-
-    await prisma.savedMeditation.delete({ where: { id } });
 
     const response: ApiResponse<DeleteSavedMeditationResponse> = {
       success: true,

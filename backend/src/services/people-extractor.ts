@@ -3,12 +3,19 @@
  *
  * Extracts mentions of people from user content and tracks them
  * for cross-feature intelligence.
+ *
+ * Target shape (TS-12): people and their mentions live in the user's `people`
+ * feature document (persons[] with mentions[]); every change is one
+ * read-modify-write under the row lock (services/feature-state.ts), so a
+ * mention recorded from two features at once is never lost.
  */
 
-import { MentionSourceType, Person, BrainActivityCallType } from '../generated/prisma/client';
+import { BrainCallType as BrainActivityCallType } from '../generated/prisma/client';
+import type { PersonDoc, PeopleDoc, PersonMentionDoc } from '@meet-without-fear/shared';
 import { logger } from '../lib/logger';
-import { prisma } from '../lib/prisma';
+import { readFeature, updateFeature, newEntryId } from './feature-state';
 import { getHaikuJson } from '../lib/bedrock';
+import { NotFoundError } from '../middleware/errors';
 import { getCurrentUserId } from '../lib/request-context';
 
 // ============================================================================
@@ -22,6 +29,9 @@ interface ExtractedPeople {
   relationships: Record<string, string>; // name -> relationship type
   sentiment: Record<string, number>; // name -> sentiment (-1 to 1)
 }
+
+type MentionSourceType = PersonMentionDoc['sourceType'];
+type Person = PersonDoc;
 
 interface ExtractionParams {
   userId: string;
@@ -53,11 +63,7 @@ export async function extractAndTrackPeople(params: ExtractionParams): Promise<E
   }
 
   // Get user's existing people for matching
-  const existingPeople =
-    providedPeople ||
-    (await prisma.person.findMany({
-      where: { userId },
-    }));
+  const existingPeople = providedPeople || (await readFeature(userId, 'people')).persons;
 
   // Determine session ID for cost tracking
   const sessionId = (sourceType === 'PARTNER_SESSION' || sourceType === 'INNER_THOUGHTS')
@@ -71,39 +77,32 @@ export async function extractAndTrackPeople(params: ExtractionParams): Promise<E
     return { people: [], newPeople: [] };
   }
 
-  const results: ExtractionResult = { people: [], newPeople: [] };
+  // Apply every mention in one locked document write. Matching runs against
+  // the document as locked (a person another writer just added is matched,
+  // not duplicated); the AI's ids refer to the list it was shown.
+  return updateFeature(userId, 'people', doc => {
+    const results: ExtractionResult = { people: [], newPeople: [] };
+    for (const name of extracted.names) {
+      const normalizedName = normalizeName(name);
 
-  // Process each extracted name
-  for (const name of extracted.names) {
-    const normalizedName = normalizeName(name);
-
-    // Check if AI already matched to existing
-    const matchedId = extracted.matchedToExisting[name];
-    if (matchedId) {
-      const existingPerson = existingPeople.find((p) => p.id === matchedId);
-      if (existingPerson) {
-        await updatePersonMention(existingPerson.id, params, extracted.sentiment[name]);
-        results.people.push(existingPerson.name);
-        continue;
+      // Check if AI already matched to existing
+      const matchedId = extracted.matchedToExisting[name];
+      const aiMatch = matchedId ? doc.persons.find((p) => p.id === matchedId) : undefined;
+      const match = aiMatch ?? findMatchingPerson(normalizedName, doc.persons);
+      if (match) {
+        recordMention(match, params, extracted.sentiment[name], true);
+        results.people.push(match.name);
+      } else {
+        // Create new person
+        const relationship = extracted.relationships[name] || null;
+        const newPerson = createPerson(doc, normalizedName, relationship);
+        recordMention(newPerson, params, extracted.sentiment[name], false);
+        results.newPeople.push(newPerson.name);
+        results.people.push(newPerson.name);
       }
     }
-
-    // Try local matching
-    const match = findMatchingPerson(normalizedName, existingPeople);
-    if (match) {
-      await updatePersonMention(match.id, params, extracted.sentiment[name]);
-      results.people.push(match.name);
-    } else {
-      // Create new person
-      const relationship = extracted.relationships[name] || null;
-      const newPerson = await createPerson(userId, normalizedName, relationship);
-      await createMention(newPerson.id, userId, params, extracted.sentiment[name]);
-      results.newPeople.push(newPerson.name);
-      results.people.push(newPerson.name);
-    }
-  }
-
-  return results;
+    return results;
+  });
 }
 
 // ============================================================================
@@ -214,92 +213,56 @@ function findMatchingPerson(name: string, existingPeople: Person[]): Person | nu
 }
 
 // ============================================================================
-// Database Operations
+// Document operations (inside the caller's locked read-modify-write)
 // ============================================================================
 
-async function createPerson(userId: string, name: string, relationship: string | null): Promise<Person> {
-  return prisma.person.create({
-    data: {
-      userId,
-      name,
-      relationship,
-      firstMentioned: new Date(),
-      lastMentioned: new Date(),
-    },
-  });
+function createPerson(doc: PeopleDoc, name: string, relationship: string | null): Person {
+  const now = new Date().toISOString();
+  const person: Person = {
+    id: newEntryId(),
+    name,
+    aliases: [],
+    relationship,
+    firstMentioned: now,
+    lastMentioned: now,
+    mentionCountInnerThoughts: 0,
+    mentionCountGratitude: 0,
+    mentionCountNeeds: 0,
+    mentionCountConflict: 0,
+    needsConnections: {},
+    mentions: [],
+  };
+  doc.persons.push(person);
+  return person;
 }
 
-async function createMention(
-  personId: string,
-  userId: string,
-  params: ExtractionParams,
-  sentiment: number | undefined
-): Promise<void> {
+/** One mention: the record (first 200 chars as context), the count, and — for a known person — lastMentioned. */
+function recordMention(person: Person, params: ExtractionParams, sentiment: number | undefined, known: boolean): void {
   const { sourceType, sourceId, content } = params;
-
-  // Create mention record
-  await prisma.personMention.create({
-    data: {
-      personId,
-      userId,
-      sourceType,
-      sourceId,
-      context: content.substring(0, 200), // Store first 200 chars for context
-      sentiment: sentiment ?? null,
-    },
+  const now = new Date().toISOString();
+  person.mentions.push({
+    id: newEntryId(),
+    sourceType,
+    sourceId,
+    context: content.substring(0, 200), // Store first 200 chars for context
+    sentiment: sentiment ?? null,
+    createdAt: now,
   });
-
-  // Update mention counts on person
-  await updateMentionCount(personId, sourceType);
-}
-
-async function updatePersonMention(personId: string, params: ExtractionParams, sentiment: number | undefined): Promise<void> {
-  const { userId, sourceType, sourceId, content } = params;
-
-  // Create mention record
-  await prisma.personMention.create({
-    data: {
-      personId,
-      userId,
-      sourceType,
-      sourceId,
-      context: content.substring(0, 200),
-      sentiment: sentiment ?? null,
-    },
-  });
-
-  // Update last mentioned and counts
-  await updateMentionCount(personId, sourceType);
-
-  await prisma.person.update({
-    where: { id: personId },
-    data: { lastMentioned: new Date() },
-  });
-}
-
-async function updateMentionCount(personId: string, sourceType: MentionSourceType): Promise<void> {
-  const countField = getCountFieldForSourceType(sourceType);
-  if (countField) {
-    await prisma.person.update({
-      where: { id: personId },
-      data: { [countField]: { increment: 1 } },
-    });
-  }
-}
-
-function getCountFieldForSourceType(sourceType: MentionSourceType): string | null {
   switch (sourceType) {
     case 'INNER_THOUGHTS':
-      return 'mentionCountInnerThoughts';
+      person.mentionCountInnerThoughts += 1;
+      break;
     case 'GRATITUDE':
-      return 'mentionCountGratitude';
+      person.mentionCountGratitude += 1;
+      break;
     case 'NEEDS_CHECKIN':
-      return 'mentionCountNeeds';
+      person.mentionCountNeeds += 1;
+      break;
     case 'PARTNER_SESSION':
-      return 'mentionCountConflict';
-    default:
-      return null;
+      person.mentionCountConflict += 1;
+      break;
   }
+  if (known) person.lastMentioned = now;
 }
 
 // ============================================================================
@@ -307,49 +270,35 @@ function getCountFieldForSourceType(sourceType: MentionSourceType): string | nul
 // ============================================================================
 
 /**
- * Merge two people into one. All mentions from sourcePerson are
- * transferred to targetPerson, then sourcePerson is deleted.
+ * Merge two of the user's people into one. All mentions from sourcePerson are
+ * transferred to targetPerson, then sourcePerson is deleted — one document
+ * write. Throws NOT FOUND (as the old "Person not found") when either is not
+ * the user's.
  */
-export async function mergePeople(sourcePersonId: string, targetPersonId: string): Promise<Person> {
-  // Get both people
-  const [source, target] = await Promise.all([
-    prisma.person.findUnique({ where: { id: sourcePersonId } }),
-    prisma.person.findUnique({ where: { id: targetPersonId } }),
-  ]);
+export async function mergePeople(
+  userId: string,
+  sourcePersonId: string,
+  targetPersonId: string,
+): Promise<{ person: Person; mergedCount: number }> {
+  return updateFeature(userId, 'people', doc => {
+    const source = doc.persons.find(p => p.id === sourcePersonId);
+    const target = doc.persons.find(p => p.id === targetPersonId);
+    if (!target) throw new NotFoundError('Target person not found');
+    if (!source) throw new NotFoundError('Source person not found');
 
-  if (!source || !target) {
-    throw new Error('Person not found');
-  }
-
-  if (source.userId !== target.userId) {
-    throw new Error('Cannot merge people from different users');
-  }
-
-  // Transfer all mentions to target
-  await prisma.personMention.updateMany({
-    where: { personId: sourcePersonId },
-    data: { personId: targetPersonId },
+    const mergedCount = source.mentions.length;
+    target.mentions.push(...source.mentions);
+    // Merge aliases (add source name and aliases to target)
+    target.aliases = [...new Set([...target.aliases, source.name, ...source.aliases])];
+    // Combine mention counts
+    target.mentionCountInnerThoughts += source.mentionCountInnerThoughts;
+    target.mentionCountGratitude += source.mentionCountGratitude;
+    target.mentionCountNeeds += source.mentionCountNeeds;
+    target.mentionCountConflict += source.mentionCountConflict;
+    target.firstMentioned = source.firstMentioned < target.firstMentioned ? source.firstMentioned : target.firstMentioned;
+    target.lastMentioned = source.lastMentioned > target.lastMentioned ? source.lastMentioned : target.lastMentioned;
+    // Delete source person
+    doc.persons.splice(doc.persons.indexOf(source), 1);
+    return { person: { ...target }, mergedCount };
   });
-
-  // Merge aliases (add source name and aliases to target)
-  const newAliases = [...new Set([...target.aliases, source.name, ...source.aliases])];
-
-  // Combine mention counts
-  const updatedTarget = await prisma.person.update({
-    where: { id: targetPersonId },
-    data: {
-      aliases: newAliases,
-      mentionCountInnerThoughts: target.mentionCountInnerThoughts + source.mentionCountInnerThoughts,
-      mentionCountGratitude: target.mentionCountGratitude + source.mentionCountGratitude,
-      mentionCountNeeds: target.mentionCountNeeds + source.mentionCountNeeds,
-      mentionCountConflict: target.mentionCountConflict + source.mentionCountConflict,
-      firstMentioned: source.firstMentioned < target.firstMentioned ? source.firstMentioned : target.firstMentioned,
-      lastMentioned: source.lastMentioned > target.lastMentioned ? source.lastMentioned : target.lastMentioned,
-    },
-  });
-
-  // Delete source person
-  await prisma.person.delete({ where: { id: sourcePersonId } });
-
-  return updatedTarget;
 }
