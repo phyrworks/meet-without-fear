@@ -8,9 +8,9 @@ async function main() {
     },
     select: {
       id: true,
-      sessionId: true,
+      conversationId: true,
       role: true,
-      timestamp: true,
+      createdAt: true,
     }
   });
 

@@ -348,18 +348,18 @@ export async function seedE2EInnerThoughts(
     const baseUrl = process.env.E2E_APP_BASE_URL || 'http://localhost:8081';
 
     const result = await prisma.$transaction(async (tx) => {
+      // user.name is generated from first/last (spec §1.7): the whole name goes in first_name
       const userRecord = await tx.user.upsert({
         where: { email: user.email },
-        update: { name: user.name },
+        update: { firstName: user.name, lastName: null },
         create: {
           email: user.email,
-          name: user.name,
+          firstName: user.name,
           clerkId: `e2e_inner_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
-          lastMoodIntensity: 5,
         },
       });
 
-      const session = await tx.innerWorkSession.create({
+      const session = await tx.reflection.create({
         data: {
           userId: userRecord.id,
           title: 'Repair patterns after conflict',

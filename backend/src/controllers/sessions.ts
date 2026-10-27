@@ -320,17 +320,8 @@ export async function resolveSession(req: Request, res: Response): Promise<void>
 
     const sessionId = req.params.id;
 
-    // Check session exists and user has access
-    const session = await prisma.session.findFirst({
-      where: {
-        id: sessionId,
-        relationship: {
-          members: {
-            some: { userId: user.id },
-          },
-        },
-      },
-    });
+    // requireSessionAccess resolved the caller's present participant
+    const session = req.participant ? await prisma.session.findUnique({ where: { id: sessionId } }) : null;
 
     if (!session) {
       errorResponse(res, ErrorCode.NOT_FOUND, 'Session not found', 404);
@@ -348,19 +339,14 @@ export async function resolveSession(req: Request, res: Response): Promise<void>
       return;
     }
 
-    // Check if there are agreed agreements
-    const sharedVessel = await prisma.sharedVessel.findUnique({
-      where: { sessionId },
-      include: {
-        agreements: {
-          where: {
-            status: 'AGREED',
-          },
-        },
-      },
+    // Check if there are agreed agreements (agreement rows exist only once every party was WILLING)
+    const agreements = await prisma.agreement.findMany({
+      where: { sessionId, status: 'AGREED' },
+      orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+      select: { id: true, description: true, type: true, status: true, createdAt: true, followUpAt: true },
     });
 
-    if (!sharedVessel || sharedVessel.agreements.length === 0) {
+    if (agreements.length === 0) {
       errorResponse(
         res,
         ErrorCode.VALIDATION_ERROR,
@@ -372,20 +358,15 @@ export async function resolveSession(req: Request, res: Response): Promise<void>
 
     const now = new Date();
 
-    // Update session status to RESOLVED
-    const updatedSession = await prisma.session.update({
-      where: { id: sessionId },
-      data: {
-        status: 'RESOLVED',
-        resolvedAt: now,
-      },
+    // RESOLVED through the sole status writer (it stamps resolved_at), then
+    // every present human reaches `closed` (a system milestone: the job's) —
+    // the old "mark all stage progress COMPLETED".
+    await getJobPrisma().$executeRaw`SELECT app.session_set_status(${sessionId}::uuid, 'RESOLVED'::session_status)`;
+    const present = await prisma.participant.findMany({
+      where: { sessionId, kind: 'human', leftAt: null },
+      select: { id: true },
     });
-
-    // Mark all stage progress as COMPLETED
-    await prisma.stageProgress.updateMany({
-      where: { sessionId },
-      data: { status: 'COMPLETED', completedAt: now },
-    });
+    for (const p of present) await reachMilestone(p.id, 'closed', now);
 
     // Notify partner
     const partnerId = await getPartnerUserId(sessionId, user.id);
@@ -397,20 +378,19 @@ export async function resolveSession(req: Request, res: Response): Promise<void>
     }
 
     // Get agreements with follow-up dates
-    const followUpScheduled = sharedVessel.agreements.some(
-      (a) => a.followUpDate !== null
-    );
+    const followUpScheduled = agreements.some((a) => a.followUpAt !== null);
 
     successResponse(res, {
       resolved: true,
       resolvedAt: now.toISOString(),
-      agreements: sharedVessel.agreements.map((a) => ({
+      agreements: agreements.map((a) => ({
         id: a.id,
         description: a.description,
         type: a.type,
         status: a.status,
-        agreedAt: a.agreedAt?.toISOString() ?? null,
-        followUpDate: a.followUpDate?.toISOString() ?? null,
+        // An agreement row is created at the moment all parties agreed
+        agreedAt: a.createdAt.toISOString(),
+        followUpDate: a.followUpAt?.toISOString() ?? null,
       })),
       followUpScheduled,
     });

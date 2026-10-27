@@ -1,31 +1,26 @@
 import { prisma } from '../lib/prisma';
 
-interface CategorizedFact {
-  category: string;
-  fact: string;
-}
-
 async function main() {
-  // Check all UserVessels
-  const allVessels = await prisma.userVessel.findMany({
+  // Operator tooling (every participant's facts): the NOTABLE_FACTS documents
+  // of ai_memory (TS-12; was UserVessel.notableFacts)
+  const allVessels = await prisma.aiMemory.findMany({
+    where: { kind: 'NOTABLE_FACTS' },
     select: {
-      userId: true,
-      sessionId: true,
-      notableFacts: true,
+      doc: true,
       updatedAt: true,
+      participant: { select: { userId: true, sessionId: true } },
     },
     orderBy: { updatedAt: 'desc' },
     take: 10,
   });
 
-  console.log(`Total UserVessels found: ${allVessels.length}\n`);
+  console.log(`Total NOTABLE_FACTS documents found: ${allVessels.length}\n`);
 
   for (const v of allVessels) {
-    console.log(`Session: ${v.sessionId}`);
-    console.log(`User: ${v.userId}`);
+    console.log(`Session: ${v.participant?.sessionId}`);
+    console.log(`User: ${v.participant?.userId}`);
     console.log(`Updated: ${v.updatedAt}`);
-    // Handle both old string[] and new CategorizedFact[] formats
-    const facts = v.notableFacts as unknown;
+    const facts = (v.doc as { facts?: unknown } | null)?.facts;
     if (Array.isArray(facts)) {
       console.log(`Facts (${facts.length}):`, facts);
     } else {

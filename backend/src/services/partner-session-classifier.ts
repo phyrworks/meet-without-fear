@@ -16,7 +16,7 @@ import { randomUUID } from 'crypto';
 import { getHaikuJson, BrainActivityCallType } from '../lib/bedrock';
 import { logger } from '../lib/logger';
 import { withHaikuCircuitBreaker } from '../utils/circuit-breaker';
-import { prisma } from '../lib/prisma';
+import { getJobPrisma } from '../lib/prisma';
 import { embedSessionContent } from './embedding';
 
 // ============================================================================
@@ -577,24 +577,19 @@ Output only valid JSON.`;
       });
     }
 
-    // Save notable facts to UserVessel (fire-and-forget)
+    // Save notable facts as the participant's NOTABLE_FACTS document
+    // (ai_memory; spec §1.1 "in practice written by mwf_job" — the job's
+    // INSERT … ON CONFLICT DO UPDATE, as the SUMMARY writer does; TS-12)
     if (factsToSave && factsToSave.length > 0) {
       try {
-        const updateResult = await prisma.userVessel.updateMany({
-          where: {
-            userId: input.userId,
-            sessionId: input.sessionId,
-          },
-          data: {
-            // Prisma expects InputJsonValue - cast through unknown to satisfy type checker
-            // The actual data is valid JSON: CategorizedFactWithId[]
-            notableFacts: factsToSave as unknown as Parameters<
-              typeof prisma.userVessel.update
-            >['0']['data']['notableFacts'],
-          },
-        });
-        if (updateResult.count > 0) {
-          logger.info(`${logPrefix} Saved ${factsToSave.length} notable facts to UserVessel (${updateResult.count} row(s) updated)`);
+        const job = getJobPrisma();
+        const [participant] = await job.$queryRaw<Array<{ id: string }>>`SELECT id FROM participant
+          WHERE session_id = ${input.sessionId}::uuid AND user_id = ${input.userId}::uuid`;
+        if (participant) {
+          await job.$executeRaw`INSERT INTO ai_memory (participant_id, kind, doc)
+            VALUES (${participant.id}::uuid, 'NOTABLE_FACTS'::ai_memory_kind, ${JSON.stringify({ facts: factsToSave })}::jsonb)
+            ON CONFLICT (participant_id, kind) DO UPDATE SET doc = EXCLUDED.doc`;
+          logger.info(`${logPrefix} Saved ${factsToSave.length} notable facts for participant ${participant.id}`);
 
           // Trigger session content embedding (fire-and-forget)
           // Per fact-ledger architecture, we embed at session level after facts update
@@ -602,7 +597,7 @@ Output only valid JSON.`;
             logger.warn(`${logPrefix} Failed to embed session content:`, err)
           );
         } else {
-          logger.warn(`${logPrefix} No UserVessel found to update for session=${input.sessionId}, user=${input.userId}. Facts not saved.`);
+          logger.warn(`${logPrefix} No participant found for session=${input.sessionId}, user=${input.userId}. Facts not saved.`);
         }
       } catch (err) {
         logger.error(`${logPrefix} Failed to save notable facts:`, err);

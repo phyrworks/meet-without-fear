@@ -1,13 +1,12 @@
 import { Request, Response } from 'express';
 import { logger } from '../lib/logger';
-import { prisma } from '../lib/prisma';
+import { getJobPrisma, prisma } from '../lib/prisma';
+import { readPreferences } from '../services/user-settings';
 import { notifyPartner, notifyPartnerWithFallback, publishSessionCreated } from '../services/realtime';
 import { z } from 'zod';
 import {
   ApiResponse,
-  DEFAULT_PRIVACY_PREFERENCES,
   ErrorCode,
-  PrivacyPreferencesDTO,
   SessionStatus,
   StageStatus,
   Stage,
@@ -287,12 +286,6 @@ export async function createSession(req: Request, res: Response): Promise<void> 
           },
         },
         include: {
-          user: {
-            select: {
-              firstName: true,
-              name: true,
-            },
-          },
           relationship: {
             include: {
               members: {
@@ -306,31 +299,35 @@ export async function createSession(req: Request, res: Response): Promise<void> 
 
       if (existingMember) {
         relationship = existingMember.relationship;
+        // The inviter's own name for them, else the name they last went by in
+        // a session the two shared (participant.display_name — never the other
+        // user's own row, spec §7).
+        const lastShared = await prisma.participant.findFirst({
+          where: {
+            userId: personId,
+            displayName: { not: null },
+            session: { relationshipId: existingMember.relationshipId },
+          },
+          orderBy: { joinedAt: 'desc' },
+          select: { displayName: true },
+        });
         inviteeDisplayName =
           inviteeDisplayName ||
           existingMember.relationship.members[0]?.nickname ||
-          existingMember.user.firstName ||
-          existingMember.user.name ||
+          lastShared?.displayName ||
           undefined;
       } else {
-        const existingUser = await prisma.user.findUnique({
-          where: { id: personId },
-          select: {
-            firstName: true,
-            name: true,
-          },
+        // A person the inviter shares no relationship with: they must exist,
+        // and their name is not the inviter's to read (U-class).
+        const existingUser = await prisma.user.findFirst({
+          where: { id: personId, deletedAt: null },
+          select: { id: true },
         });
 
         if (!existingUser) {
           errorResponse(res, 'NOT_FOUND', 'Person not found', 404);
           return;
         }
-
-        inviteeDisplayName =
-          inviteeDisplayName ||
-          existingUser.firstName ||
-          existingUser.name ||
-          undefined;
       }
     }
 
@@ -373,7 +370,7 @@ export async function createSession(req: Request, res: Response): Promise<void> 
     const existingActiveSession = await prisma.session.findFirst({
       where: {
         relationshipId: relationship.id,
-        status: { in: ['CREATED', 'INVITED', 'ACTIVE', 'PAUSED', 'WAITING'] },
+        status: { in: ['CREATED', 'INVITED', 'ACTIVE'] },
       },
       select: { id: true, status: true, updatedAt: true },
       orderBy: { updatedAt: 'desc' },
@@ -390,7 +387,11 @@ export async function createSession(req: Request, res: Response): Promise<void> 
       return;
     }
 
-    // Create session, invitation, stage progress, and vessels atomically
+    // Create the session, the inviter's participant (with its MAIN
+    // conversation and read state) and the invitation atomically. The inviter
+    // is in stage 0 from joined_at (stage shim: a present participant with no
+    // milestones); invitation_sent is reached when the inviter confirms the
+    // invitation message (sessions.ts confirmInvitationMessage).
     const { session, invitation } = await prisma.$transaction(async (tx) => {
       const sess = await tx.session.create({
         data: {
@@ -399,35 +400,26 @@ export async function createSession(req: Request, res: Response): Promise<void> 
         },
       });
 
+      const me = await tx.participant.create({
+        data: {
+          sessionId: sess.id,
+          userId: user.id,
+          kind: 'human',
+          // The only user fact a co-participant sees (spec §7)
+          displayName: user.name || user.firstName || null,
+        },
+        select: { id: true },
+      });
+      await tx.conversation.create({ data: { participantId: me.id, kind: 'MAIN' } });
+      await tx.conversationReadState.create({ data: { participantId: me.id } });
+
       const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
       const inv = await tx.invitation.create({
         data: {
           sessionId: sess.id,
-          invitedById: user.id,
+          invitedByParticipantId: me.id,
           name: inviteeDisplayName,
           expiresAt,
-        },
-      });
-
-      await tx.stageProgress.create({
-        data: {
-          sessionId: sess.id,
-          userId: user.id,
-          stage: 0,
-          status: 'IN_PROGRESS',
-        },
-      });
-
-      await tx.userVessel.create({
-        data: {
-          sessionId: sess.id,
-          userId: user.id,
-        },
-      });
-
-      await tx.sharedVessel.create({
-        data: {
-          sessionId: sess.id,
         },
       });
 
@@ -437,26 +429,18 @@ export async function createSession(req: Request, res: Response): Promise<void> 
     // If originated from Inner Thoughts, link it back (non-critical, outside transaction)
     if (innerThoughtsId) {
       try {
-        const validLinkedAtMessage = linkedAtMessageId
-          ? await prisma.innerWorkMessage.findFirst({
-              where: {
-                id: linkedAtMessageId,
-                sessionId: innerThoughtsId,
-              },
-              select: { id: true },
-            })
-          : null;
-
-        await prisma.innerWorkSession.updateMany({
+        // The caller's own reflection (spec §1.6: linked_session_id is context
+        // only; the branching message and the trigger are not carried).
+        void linkedAtMessageId;
+        await prisma.reflection.updateMany({
           where: {
             id: innerThoughtsId,
             userId: user.id,
           },
           data: {
-            linkedPartnerSessionId: session.id,
-            linkedTrigger: 'suggestion_start',
-            ...(validLinkedAtMessage ? { linkedAtMessageId: validLinkedAtMessage.id } : {}),
-            ...(context ? { contextSummarySnapshot: context } : {}),
+            linkedSessionId: session.id,
+            linkedAt: new Date(),
+            ...(context ? { contextSnapshot: context } : {}),
           },
         });
         logger.info(`[createSession] Linked session ${session.id} to origin inner thoughts ${innerThoughtsId}`);
@@ -515,12 +499,8 @@ export async function getInvitation(req: Request, res: Response): Promise<void> 
     const invitation = await prisma.invitation.findUnique({
       where: { id },
       include: {
-        invitedBy: {
-          select: {
-            id: true,
-            name: true,
-          },
-        },
+        // The inviter as the invitee sees them: their participant's display name
+        invitedByParticipant: { select: { userId: true, displayName: true } },
         session: {
           select: {
             id: true,
@@ -543,7 +523,7 @@ export async function getInvitation(req: Request, res: Response): Promise<void> 
       invitation: {
         id: invitation.id,
         invitedBy: {
-          name: invitation.invitedBy.name,
+          name: invitation.invitedByParticipant.displayName,
         },
         name: invitation.name,
         status,
@@ -579,9 +559,7 @@ export async function acceptInvitation(req: Request, res: Response): Promise<voi
       where: { id },
       include: {
         session: true,
-        invitedBy: {
-          select: { id: true, name: true },
-        },
+        invitedByParticipant: { select: { userId: true } },
       },
     });
 
@@ -589,9 +567,10 @@ export async function acceptInvitation(req: Request, res: Response): Promise<voi
       errorResponse(res, 'NOT_FOUND', 'Invitation not found', 404);
       return;
     }
+    const inviterUserId = invitation.invitedByParticipant.userId;
 
     // Prevent self-acceptance
-    if (invitation.invitedById === user.id) {
+    if (inviterUserId === user.id) {
       errorResponse(res, 'VALIDATION_ERROR', 'Cannot accept your own invitation', 400);
       return;
     }
@@ -619,7 +598,7 @@ export async function acceptInvitation(req: Request, res: Response): Promise<voi
 
     if (
       invitation.session.status !== 'INVITED' ||
-      !invitation.messageConfirmed ||
+      !invitation.messageConfirmedAt ||
       !invitation.session.topicFrame ||
       !invitation.session.topicFrameConfirmedAt
     ) {
@@ -627,17 +606,18 @@ export async function acceptInvitation(req: Request, res: Response): Promise<voi
       return;
     }
 
-    const acceptingUser = await prisma.user.findUnique({
-      where: { id: user.id },
-      select: { privacyPreferences: true } as any,
-    });
-    const privacyPreferences = ((acceptingUser as { privacyPreferences?: unknown } | null)?.privacyPreferences as PrivacyPreferencesDTO | null) ?? DEFAULT_PRIVACY_PREFERENCES;
+    // user_preferences.doc.privacy (spec §1.7)
+    const privacyPreferences = (await readPreferences(user.id)).privacy;
     if (!privacyPreferences.allowSessionInvites) {
       errorResponse(res, 'VALIDATION_ERROR', 'You have disabled session invitations in Privacy settings', 403);
       return;
     }
 
-    // Accept invitation, activate session, create stage progress + vessel atomically
+    // Accept the invitation, join as a participant (with a MAIN conversation
+    // and read state), and activate the session — atomically. ACTIVE goes
+    // through app.session_set_status (the sole writer; identity-bound: the new
+    // participant row makes the caller a member in this transaction), and the
+    // deferred T-cardinality-1 checks two participants at COMMIT.
     await prisma.$transaction(async (tx) => {
       // Join the relationship
       const existingMembership = await tx.relationshipMember.findUnique({
@@ -662,30 +642,24 @@ export async function acceptInvitation(req: Request, res: Response): Promise<voi
         where: { id },
         data: {
           status: 'ACCEPTED',
+          acceptedByUserId: user.id,
           acceptedAt: new Date(),
         },
       });
 
-      await tx.session.update({
-        where: { id: invitation.sessionId },
-        data: { status: 'ACTIVE' },
-      });
-
-      await tx.stageProgress.create({
+      const me = await tx.participant.create({
         data: {
           sessionId: invitation.sessionId,
           userId: user.id,
-          stage: 0,
-          status: 'IN_PROGRESS',
+          kind: 'human',
+          displayName: user.name || user.firstName || null,
         },
+        select: { id: true },
       });
+      await tx.conversation.create({ data: { participantId: me.id, kind: 'MAIN' } });
+      await tx.conversationReadState.create({ data: { participantId: me.id } });
 
-      await tx.userVessel.create({
-        data: {
-          sessionId: invitation.sessionId,
-          userId: user.id,
-        },
-      });
+      await tx.$executeRaw`SELECT app.session_set_status(${invitation.sessionId}::uuid, 'ACTIVE'::session_status)`;
     });
 
     // Get session summary for response
@@ -695,20 +669,10 @@ export async function acceptInvitation(req: Request, res: Response): Promise<voi
         id: true,
         status: true,
         createdAt: true,
-        relationship: {
-          select: {
-            id: true,
-            members: {
-              select: {
-                user: {
-                  select: {
-                    id: true,
-                    name: true,
-                  },
-                },
-              },
-            },
-          },
+        participants: {
+          where: { kind: 'human', leftAt: null },
+          orderBy: { joinedAt: 'asc' },
+          select: { userId: true, displayName: true },
         },
       },
     });
@@ -716,20 +680,23 @@ export async function acceptInvitation(req: Request, res: Response): Promise<voi
     // Notify inviter via realtime that partner joined
     // Use notifyPartnerWithFallback to ensure Ably message is always published
     // and push is sent if user is offline
-    await notifyPartnerWithFallback(invitation.sessionId, invitation.invitedById, 'session.joined', {
-      joinedBy: user.id,
-      userId: user.id,
-      userName: user.name,
-    });
+    if (inviterUserId) {
+      await notifyPartnerWithFallback(invitation.sessionId, inviterUserId, 'session.joined', {
+        joinedBy: user.id,
+        userId: user.id,
+        userName: user.name,
+      });
+    }
 
     successResponse(res, {
       session: {
         id: session?.id,
         status: session?.status,
         createdAt: session?.createdAt,
-        members: session?.relationship.members.map((m) => ({
-          id: m.user.id,
-          name: m.user.name,
+        // The session's members as each other sees them (participant display names)
+        members: session?.participants.map((m) => ({
+          id: m.userId,
+          name: m.displayName,
         })),
       },
     });
@@ -763,10 +730,18 @@ export async function declineInvitation(req: Request, res: Response): Promise<vo
 
     const invitation = await prisma.invitation.findUnique({
       where: { id },
+      include: { invitedByParticipant: { select: { userId: true } } },
     });
 
     if (!invitation) {
       errorResponse(res, 'NOT_FOUND', 'Invitation not found', 404);
+      return;
+    }
+    const inviterUserId = invitation.invitedByParticipant.userId;
+
+    // The inviter cannot decline their own invitation
+    if (inviterUserId === user.id) {
+      errorResponse(res, 'VALIDATION_ERROR', 'Cannot decline your own invitation', 400);
       return;
     }
 
@@ -791,16 +766,16 @@ export async function declineInvitation(req: Request, res: Response): Promise<vo
       },
     });
 
-    // Update session status to indicate abandonment
-    await prisma.session.update({
-      where: { id: invitation.sessionId },
-      data: { status: 'ABANDONED' },
-    });
+    // The session ends (INVITED/CREATED → ABANDONED through the sole status
+    // writer). The decliner is no participant, so the job moves it (R35).
+    await getJobPrisma().$executeRaw`SELECT app.session_set_status(${invitation.sessionId}::uuid, 'ABANDONED'::session_status)`;
 
     // Notify inviter via realtime that invitation was declined
-    await notifyPartner(invitation.sessionId, invitation.invitedById, 'invitation.declined', {
-      reason,
-    });
+    if (inviterUserId) {
+      await notifyPartner(invitation.sessionId, inviterUserId, 'invitation.declined', {
+        reason,
+      });
+    }
 
     successResponse(res, { declined: true });
   } catch (error) {
@@ -1011,7 +986,7 @@ export async function updateNickname(req: Request, res: Response): Promise<void>
 
     // Update the nickname
     const updatedMember = await prisma.relationshipMember.update({
-      where: { id: member.id },
+      where: { relationshipId_userId: { relationshipId, userId: user.id } },
       data: { nickname },
     });
 
@@ -1046,13 +1021,7 @@ export async function acknowledgeInvitation(req: Request, res: Response): Promis
     const invitation = await prisma.invitation.findUnique({
       where: { id },
       include: {
-        invitedBy: {
-          select: {
-            id: true,
-            name: true,
-            firstName: true,
-          },
-        },
+        invitedByParticipant: { select: { userId: true, displayName: true } },
         session: {
           select: {
             id: true,
@@ -1066,9 +1035,14 @@ export async function acknowledgeInvitation(req: Request, res: Response): Promis
       errorResponse(res, 'NOT_FOUND', 'Invitation not found', 404);
       return;
     }
+    // The inviter as the invitee sees them (participant display name, spec §7)
+    const invitedBy = {
+      id: invitation.invitedByParticipant.userId ?? '',
+      name: invitation.invitedByParticipant.displayName,
+    };
 
     // Can't acknowledge your own invitation
-    if (invitation.invitedById === user.id) {
+    if (invitedBy.id === user.id) {
       errorResponse(res, 'VALIDATION_ERROR', 'Cannot acknowledge your own invitation', 400);
       return;
     }
@@ -1083,10 +1057,7 @@ export async function acknowledgeInvitation(req: Request, res: Response): Promis
         invitation: {
           id: invitation.id,
           status: isExpired ? 'EXPIRED' : invitation.status,
-          invitedBy: {
-            id: invitation.invitedBy.id,
-            name: invitation.invitedBy.firstName || invitation.invitedBy.name,
-          },
+          invitedBy,
         },
       });
       return;
@@ -1097,10 +1068,7 @@ export async function acknowledgeInvitation(req: Request, res: Response): Promis
       invitation: {
         id: invitation.id,
         status: invitation.status,
-        invitedBy: {
-          id: invitation.invitedBy.id,
-          name: invitation.invitedBy.firstName || invitation.invitedBy.name,
-        },
+        invitedBy,
         session: {
           id: invitation.session.id,
           status: invitation.session.status,
