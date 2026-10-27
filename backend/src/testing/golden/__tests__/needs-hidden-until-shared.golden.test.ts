@@ -30,6 +30,8 @@ import {
   NEEDS_HIDDEN_UNTIL_SHARED_BYTE_TARGET_ALLOW,
   NEEDS_HIDDEN_UNTIL_SHARED_KNOWN_LEAKS,
   NEEDS_SHARE_WRITES_NO_NEED_SHARE,
+  NEEDS_STAGE4_READ_STEPS,
+  NEEDS_STEPS,
 } from '../allow-lists/needs-hidden-until-shared';
 import { viewName } from '../concept-views';
 import { listTables, withClient } from '../db';
@@ -37,7 +39,7 @@ import type { ActorRef, Harness, StepResult } from '../driver';
 import { createHarness } from '../driver';
 import { NEEDS_CONFIRMED_TEXT } from '../../fixture-scenarios/scenarios';
 import { findLeaks, fullRead, unexpectedLeakReport } from '../privacy';
-import { goldenScenarioChecks } from '../scenario-checks';
+import { goldenScenarioChecks, targetFixtureDeltaChecks } from '../scenario-checks';
 import { isTargetShape } from '../shape';
 
 const BASE_URL =
@@ -134,6 +136,7 @@ describe(`golden: ${SCENARIO}`, () => {
     harness: () => harness,
     steps: () => steps,
   });
+  targetFixtureDeltaChecks({ harness: () => harness, steps: () => steps });
 
   it('both shares succeeded (the shared phase is real)', () => {
     expect(steps.filter(s => s.label.startsWith('share needs as')).map(s => s.status)).toEqual([200, 200]);
@@ -209,6 +212,104 @@ describe(`golden: ${SCENARIO}`, () => {
           expect(JSON.stringify(comparison(reader))).not.toContain(probe);
         }
       }
+    });
+
+    // TS-11 post-merge: the pairs of the allow-list's fixture deltas and R33.
+    describe('fixture deltas and R33 (allow-list pairs)', () => {
+      const body = (n: number) => (steps[n].body as { data: Record<string, any> }).data;
+      const milestones = async () =>
+        sql<{ email: string; key: string; at: Date }>(
+          `SELECT u.email, pm.milestone_key AS key, pm.reached_at AS at FROM participant_milestone pm
+           JOIN participant p ON p.id = pm.participant_id JOIN "user" u ON u.id = p.user_id`,
+        );
+      const iso = (d: Date | undefined) => (d ? new Date(d).toISOString() : undefined);
+
+      it('the step layout the allow-list names', () => {
+        expect(steps[NEEDS_STEPS.bobShares].label).toBe('share needs as bob@e2e.test');
+        expect(steps[NEEDS_STEPS.adaShares].label).toBe('share needs as ada@e2e.test');
+        for (const [k, n] of Object.entries(NEEDS_STEPS.state)) expect([k, steps[n].label]).toEqual([k, expect.stringMatching(/: state as /)]);
+        for (const [k, n] of Object.entries(NEEDS_STEPS.progress)) expect([k, steps[n].label]).toEqual([k, expect.stringMatching(/: progress as /)]);
+        for (const n of Object.values(NEEDS_STEPS.consentHistory)) expect(steps[n].label).toMatch(/: consent history as /);
+        for (const n of Object.values(NEEDS_STEPS.sessionList)) expect(steps[n].label).toMatch(/: session list as ada@e2e.test$/);
+        for (const n of Object.values(NEEDS_STAGE4_READ_STEPS)) expect(steps[n].label).toMatch(/: stage4 as /);
+      });
+
+      it("feelHeardConfirmedAt is the reader's feel_heard instant; the needs gate is needsConfirmed at needs_confirmed", async () => {
+        const ms = await milestones();
+        const at = (email: string, key: string) => iso(ms.find(m => m.email === email && m.key === key)?.at);
+        for (const n of [NEEDS_STEPS.state.none, NEEDS_STEPS.state.bobShared]) {
+          const d = body(n);
+          expect(d.progress.milestones.feelHeardConfirmedAt).toBe(at('ada@e2e.test', 'feel_heard'));
+          expect(d.progress.myProgress.gatesSatisfied).toEqual({
+            needsConfirmed: true,
+            needsConfirmedAt: at('ada@e2e.test', 'needs_confirmed'),
+          });
+        }
+        for (const n of [NEEDS_STEPS.progress.none, NEEDS_STEPS.progress.bobShared]) {
+          const d = body(n);
+          expect(d.milestones.feelHeardConfirmedAt).toBe(at('ada@e2e.test', 'feel_heard'));
+          expect(d.myProgress.gatesSatisfied).toEqual({ needsConfirmed: true, needsConfirmedAt: at('ada@e2e.test', 'needs_confirmed') });
+          expect(d.partnerProgress.gatesSatisfied).toEqual({ needsConfirmed: true, needsConfirmedAt: at('bob@e2e.test', 'needs_confirmed') });
+        }
+        for (const n of [NEEDS_STEPS.state.bothBob, NEEDS_STEPS.progress.bothBob]) {
+          const d = body(n);
+          expect((d.progress ?? d).milestones.feelHeardConfirmedAt).toBe(at('bob@e2e.test', 'feel_heard'));
+        }
+      });
+
+      it('after both shares the stage-4 gates are derived and empty', () => {
+        expect(body(NEEDS_STEPS.state.bothAda).progress.myProgress.gatesSatisfied).toEqual({});
+        expect(body(NEEDS_STEPS.state.bothBob).progress.myProgress.gatesSatisfied).toEqual({});
+        for (const n of [NEEDS_STEPS.progress.bothAda, NEEDS_STEPS.progress.bothBob]) {
+          expect(body(n).myProgress.gatesSatisfied).toEqual({});
+          expect(body(n).partnerProgress.gatesSatisfied).toEqual({});
+        }
+      });
+
+      it('R33: Bob is still IN_PROGRESS in stage 3 after his share; both reach needs_shared at one instant at Ada’s', async () => {
+        expect(body(NEEDS_STEPS.state.bobShared).progress.partnerProgress.status).toBe('IN_PROGRESS');
+        expect(body(NEEDS_STEPS.progress.bobShared).partnerProgress).toMatchObject({ stage: 3, status: 'IN_PROGRESS' });
+        expect(body(NEEDS_STEPS.sessionList.bobShared).items[0].partnerProgress.status).toBe('IN_PROGRESS');
+        const shared = (await milestones()).filter(m => m.key === 'needs_shared');
+        expect(shared.map(m => m.email).sort()).toEqual(['ada@e2e.test', 'bob@e2e.test']);
+        expect(new Set(shared.map(m => iso(m.at))).size).toBe(1);
+        const [adaShare] = await sql<{ at: Date }>(
+          `SELECT min(c.decided_at) AS at FROM consent c JOIN participant p ON p.id = c.participant_id
+           JOIN "user" u ON u.id = p.user_id WHERE u.email = 'ada@e2e.test' AND c.need_id IS NOT NULL`,
+        );
+        expect(new Date(shared[0].at).getTime()).toBeGreaterThanOrEqual(new Date(adaShare.at).getTime());
+      });
+
+      it('the session list says unread only for a message after last_viewed_at not sent by the reader (none yet)', async () => {
+        for (const n of Object.values(NEEDS_STEPS.sessionList)) expect(body(n).items[0].hasUnread).toBe(false);
+        const [row] = await sql<{ n: string }>(
+          `SELECT count(*)::text AS n FROM message m JOIN conversation c ON c.id = m.conversation_id
+           JOIN participant p ON p.id = c.participant_id JOIN "user" u ON u.id = p.user_id
+           WHERE u.email = 'ada@e2e.test' AND m.sender_participant_id IS DISTINCT FROM p.id
+             AND m.created_at < (SELECT min(c2.created_at) FROM consent c2 WHERE c2.participant_id = p.id AND c2.need_id IS NOT NULL)`,
+        );
+        expect(row.n).toBe('0');
+      });
+
+      it("the fixture's VALIDATED attempts are revealed at their submission (revealedAtFor)", async () => {
+        const rows = await sql<{ s: Date; r: Date | null }>(`SELECT submitted_at AS s, revealed_at AS r FROM empathy_attempt`);
+        expect(rows).toHaveLength(2);
+        for (const r of rows) expect(iso(r.r ?? undefined)).toBe(iso(r.s));
+      });
+
+      it("R29 step 20: Bob has shared, Ada has not — her walkthrough opens on Bob's shared needs", async () => {
+        const d = body(NEEDS_STAGE4_READ_STEPS.bobShared);
+        const shares = await sql<{ need_id: string; shared_text: string }>(
+          `SELECT s.need_id, s.shared_text FROM need_share s JOIN participant p ON p.id = s.participant_id
+           JOIN "user" u ON u.id = p.user_id WHERE u.email = 'bob@e2e.test' ORDER BY s.need_id`,
+        );
+        expect(d.walkthrough.phase).toBe('PARTNER_NEEDS');
+        expect(d.walkthrough.ownNeeds).toEqual([]);
+        expect(d.walkthrough.partnerNeeds.map((n: { id: string; label: string }) => ({ id: n.id, label: n.label })).sort((a: { id: string }, b: { id: string }) => (a.id < b.id ? -1 : 1))).toEqual(
+          shares.map(s => ({ id: s.need_id, label: s.shared_text })),
+        );
+        expect(d.walkthrough.currentNeed.id).toBe(d.walkthrough.partnerNeeds[0].id);
+      });
     });
 
     // Ruling R29 (Q3): after both shares the Stage 4 walkthrough lists the

@@ -28,6 +28,8 @@ import {
   CHOICES_NEED_LABEL_KNOWN_LEAKS,
   CHOICES_BOB_WRITES_KNOWN_LEAKS,
   ADA_READ_STEPS,
+  ADA_SESSION_LIST_STEPS,
+  ADA_STAGE4_READ_STEPS,
   BOB_WRITE_STEPS,
 } from '../allow-lists/choices-hidden-until-shared';
 import { viewName } from '../concept-views';
@@ -35,7 +37,7 @@ import { listTables, withClient } from '../db';
 import type { ActorRef, Harness, StepResult } from '../driver';
 import { createHarness, jobUrlFor } from '../driver';
 import { findLeaks, fullRead, unexpectedLeakReport } from '../privacy';
-import { goldenScenarioChecks } from '../scenario-checks';
+import { goldenScenarioChecks, targetFixtureDeltaChecks } from '../scenario-checks';
 import { isTargetShape } from '../shape';
 import { Client } from 'pg';
 
@@ -157,6 +159,7 @@ describe(`golden: ${SCENARIO}`, () => {
     if (harness) await harness.teardown();
   });
 
+  targetFixtureDeltaChecks({ harness: () => harness, steps: () => steps });
   goldenScenarioChecks({
     scenario: SCENARIO,
     allowList: CHOICES_HIDDEN_UNTIL_SHARED_ALLOW,
@@ -248,6 +251,83 @@ describe(`golden: ${SCENARIO}`, () => {
     });
 
     // Ruling R29 (Q3): the target-computed Stage 4 values the byte allow-list lets differ.
+    // TS-11 post-merge: the pairs of the allow-list's fixture deltas and the
+    // newly visible / no-longer-visible Stage 4 entries.
+    describe('fixture deltas and R29/R30 (allow-list pairs)', () => {
+      const body = (n: number) => (steps[n].body as { data: Record<string, any> }).data;
+      const iso = (d: Date | null | undefined) => (d ? new Date(d).toISOString() : null);
+
+      it("feelHeardConfirmedAt is Ada's feel_heard instant on her state and progress reads", async () => {
+        const [fh] = await sql<{ at: Date }>(
+          `SELECT pm.reached_at AS at FROM participant_milestone pm JOIN participant p ON p.id = pm.participant_id
+           JOIN "user" u ON u.id = p.user_id WHERE u.email = 'ada@e2e.test' AND pm.milestone_key = 'feel_heard'`,
+        );
+        const reads = steps.filter(st => /: (state|progress) as ada@e2e.test$/.test(st.label));
+        expect(reads).toHaveLength(6);
+        for (const st of reads) {
+          const d = (st.body as { data: Record<string, any> }).data;
+          expect((d.progress ?? d).milestones.feelHeardConfirmedAt).toBe(iso(fh.at));
+        }
+      });
+
+      it('the session list says unread only for a message after last_viewed_at not sent by the reader', async () => {
+        const [u] = await sql<{ n: string }>(
+          `SELECT unread_count::text AS n FROM v_conversation_unread v JOIN participant p ON p.id = v.participant_id
+           JOIN "user" u ON u.id = p.user_id WHERE u.email = 'ada@e2e.test'`,
+        );
+        for (const n of ADA_SESSION_LIST_STEPS) {
+          expect(steps[n].label).toMatch(/: session list as ada@e2e.test$/);
+          expect(body(n).items[0].hasUnread).toBe(Number(u.n) > 0);
+        }
+      });
+
+      it("Bob never reads Ada's unshared individual commitment (proposal RLS); its labels resolved to proposal_need (R30)", async () => {
+        const [commitment] = await sql<{ id: string; shared_at: Date | null }>(
+          `SELECT id, shared_at FROM proposal WHERE kind = 'INDIVIDUAL_COMMITMENT'`,
+        );
+        expect(commitment.shared_at).toBeNull();
+        for (const n of BOB_WRITE_STEPS) expect(JSON.stringify(steps[n].body)).not.toContain(commitment.id);
+        const links = await sql<{ description: string; unresolved: string[]; labels: string[] }>(
+          `SELECT p.description, p.unresolved_need_labels AS unresolved,
+                  array_agg(n.label ORDER BY n.label) AS labels
+           FROM proposal p JOIN proposal_need pn ON pn.proposal_id = p.id JOIN need n ON n.id = pn.need_id
+           GROUP BY p.id ORDER BY p.created_at`,
+        );
+        expect(links.map(l => [l.unresolved, l.labels])).toEqual([
+          [[], ['Partnership', 'Support']],
+          [[], ['Understanding']],
+          [[], ['Appreciation']],
+          [[], ['Partnership']],
+        ]);
+      });
+
+      it("the fixture's VALIDATED attempts are revealed at their submission (revealedAtFor)", async () => {
+        const rows = await sql<{ s: Date; r: Date | null }>(`SELECT submitted_at AS s, revealed_at AS r FROM empathy_attempt`);
+        expect(rows).toHaveLength(2);
+        for (const r of rows) expect(iso(r.r)).toBe(iso(r.s));
+      });
+
+      it('the rank-shifted instants are their rows’ instants', async () => {
+        const choices = await sql<{ email: string; proposal_id: string; created_at: Date; updated_at: Date }>(
+          `SELECT u.email, c.proposal_id, c.created_at, c.updated_at FROM proposal_choice c
+           JOIN participant p ON p.id = c.participant_id JOIN "user" u ON u.id = p.user_id`,
+        );
+        const of = (email: string, pid: string) => choices.find(c => c.email === email && c.proposal_id === pid)!;
+        for (const n of ADA_STAGE4_READ_STEPS) {
+          const sel = body(n).mySelections[0];
+          expect(sel.updatedAt).toBe(iso(of('ada@e2e.test', sel.proposalId).updated_at));
+        }
+        const share = body(21).state;
+        const ps = share.partnerSelections[0];
+        expect(ps.selectedAt).toBe(iso(of('ada@e2e.test', ps.proposalId).created_at));
+        expect(ps.updatedAt).toBe(iso(of('ada@e2e.test', ps.proposalId).updated_at));
+        const [latest] = await sql<{ at: Date }>(
+          `SELECT max(updated_at) AS at FROM proposal WHERE NOT (kind = 'INDIVIDUAL_COMMITMENT' AND shared_at IS NULL)`,
+        );
+        expect(share.inventory.updatedAt).toBe(iso(latest.at));
+      });
+    });
+
     it('target: Partnership is PARTIAL before Bob chooses (only Ada is WILLING), COVERED once he has shared', () => {
       const ids0 = (p: string, k: 'covered' | 'partial' | 'open') => stage4Of(p).data!.coverageAudit![k].map(r => r.id);
       expect(ids0('before', 'partial')).toContain(ids.Partnership);
