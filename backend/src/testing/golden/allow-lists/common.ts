@@ -412,7 +412,13 @@ export const TARGET_ROUND_KEYS_RULE: AllowRule = {
  * response is the fixture's at her turn count, and the leak probes still scan
  * the stream and the captured prompt.
  */
-export function mockTurnIndex(step: number, concept: boolean, draftOwner: string): AllowRule[] {
+export function mockTurnIndex(
+  step: number,
+  concept: boolean,
+  draftOwner: string,
+  /** TS-12: 'added' when the caller had no EMPATHY draft before the turn (R1's Bob). */
+  draftKind: 'added' | 'changed' = 'changed',
+): AllowRule[] {
   const rules: AllowRule[] = [
     {
       kind: 'mayDiffer',
@@ -440,7 +446,7 @@ export function mockTurnIndex(step: number, concept: boolean, draftOwner: string
       at: `steps.${step}.changes`,
       where: {
         view: 'draft',
-        kind: 'changed',
+        kind: draftKind,
         key: `<draft:${draftOwner}@main/EMPATHY>`,
         'after.kind': 'EMPATHY',
         'after.participant_id': `<participant:${draftOwner}@main>`,

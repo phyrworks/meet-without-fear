@@ -251,9 +251,15 @@ function needStatus(args: {
   return 'not_started';
 }
 
-function defaultCheckInDate(): string {
-  const date = new Date();
-  date.setDate(date.getDate() + 10);
+/**
+ * Today (UTC) + 10 days, as a calendar date. UTC arithmetic throughout: the
+ * local-time setDate it replaced moved the wall clock across a DST change and
+ * landed on the next UTC day (+11d) within ten days before one (TS-12, found
+ * by reflection-never-crosses on 2026-10-27, before the US change on Nov 1).
+ */
+export function defaultCheckInDate(now: Date = new Date()): string {
+  const date = new Date(now.getTime());
+  date.setUTCDate(date.getUTCDate() + 10);
   return date.toISOString().slice(0, 10);
 }
 
