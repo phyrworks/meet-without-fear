@@ -669,12 +669,14 @@ export async function updateInnerThoughtsSummary(
   turnId: string
 ): Promise<ConversationSummary | null> {
   try {
-    // Get session with messages
-    const session = await prisma.innerWorkSession.findUnique({
+    // The reflection (spec §1.6; the rolling summary is `reflection.summary_doc`)
+    // with its messages and its owner's name.
+    const session = await prisma.reflection.findUnique({
       where: { id: sessionId },
       include: {
         messages: {
-          orderBy: { timestamp: 'asc' },
+          orderBy: { createdAt: 'asc' },
+          select: { role: true, content: true, createdAt: true },
         },
         user: {
           select: { name: true, firstName: true },
@@ -689,7 +691,7 @@ export async function updateInnerThoughtsSummary(
     const messageCount = session.messages.length;
 
     // Check if we actually need to summarize
-    const existingSummary = session.conversationSummary as string | null;
+    const existingSummary = session.summaryDoc ? JSON.stringify(session.summaryDoc) : null;
     if (!innerThoughtsNeedsSummarization(messageCount, existingSummary)) {
       return null;
     }
@@ -710,10 +712,10 @@ export async function updateInnerThoughtsSummary(
 
     // Generate summary
     const summaryResult = await generateInnerThoughtsSummary(
-      messagesToSummarize.map((m: SummaryMessageRecord) => ({
+      messagesToSummarize.map((m) => ({
         role: m.role === 'USER' ? 'user' as const : 'assistant' as const,
         content: m.content,
-        timestamp: m.timestamp,
+        timestamp: m.createdAt,
       })),
       userName,
       session.theme,
@@ -729,22 +731,27 @@ export async function updateInnerThoughtsSummary(
     const summary: ConversationSummary = {
       text: summaryResult.summary,
       messageCount: messagesToSummarize.length,
-      oldestMessageAt: messagesToSummarize[0].timestamp,
-      newestMessageAt: messagesToSummarize[messagesToSummarize.length - 1].timestamp,
+      oldestMessageAt: messagesToSummarize[0].createdAt,
+      newestMessageAt: messagesToSummarize[messagesToSummarize.length - 1].createdAt,
       tokenCount: estimateTokens(summaryResult.summary),
       generatedAt: new Date(),
     };
 
-    // Store in session
-    await prisma.innerWorkSession.update({
+    // Store on the reflection (summary_doc is a jsonb object, not JSON-in-text)
+    await prisma.reflection.update({
       where: { id: sessionId },
       data: {
-        conversationSummary: JSON.stringify({
-          ...summary,
-          keyThemes: summaryResult.keyThemes,
-          emotionalJourney: summaryResult.emotionalJourney,
-          unresolvedTopics: summaryResult.unresolvedTopics,
-        }),
+        summaryDoc: {
+          text: summary.text,
+          messageCount: summary.messageCount,
+          oldestMessageAt: summary.oldestMessageAt.toISOString(),
+          newestMessageAt: summary.newestMessageAt.toISOString(),
+          tokenCount: summary.tokenCount,
+          generatedAt: summary.generatedAt.toISOString(),
+          keyThemes: summaryResult.keyThemes ?? [],
+          emotionalJourney: summaryResult.emotionalJourney ?? '',
+          unresolvedTopics: summaryResult.unresolvedTopics ?? [],
+        },
       },
     });
 
@@ -770,17 +777,17 @@ export async function getInnerThoughtsSummary(
   emotionalJourney: string;
   unresolvedTopics: string[];
 } | null> {
-  const session = await prisma.innerWorkSession.findUnique({
+  const session = await prisma.reflection.findUnique({
     where: { id: sessionId },
-    select: { conversationSummary: true },
+    select: { summaryDoc: true },
   });
 
-  if (!session?.conversationSummary) {
+  const parsed = session?.summaryDoc as Record<string, any> | null | undefined;
+  if (!parsed || typeof parsed !== 'object' || typeof parsed.text !== 'string') {
     return null;
   }
 
   try {
-    const parsed = JSON.parse(session.conversationSummary as string);
     return {
       summary: {
         text: parsed.text,

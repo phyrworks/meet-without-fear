@@ -17,7 +17,7 @@
  */
 
 import type { PrismaClient } from '../../generated/prisma/client';
-import { getJobPrisma, prisma } from '../../lib/prisma';
+import { getJobPrisma, prisma, type DbClient } from '../../lib/prisma';
 import { logger } from '../../lib/logger';
 import { getSonnetResponse } from '../../lib/bedrock';
 import { canTransition, transition } from '../empathy-state-machine';
@@ -285,7 +285,7 @@ Respond with ONLY the message text, no additional formatting.`;
  * attempt's offers.
  */
 async function insertOffer(
-  client: PrismaClient,
+  client: DbClient,
   opts: {
     attemptId: string;
     resultId: string;
@@ -833,7 +833,7 @@ export async function deliverAcceptedShare(opts: {
   let sharedMessageId: string | null = null;
   const base = now.getTime();
   const delivered = await getJobPrisma().$transaction(async tx => {
-    const client = tx as unknown as PrismaClient;
+    const client = tx;
     // Lock order: the session row (as app.empathy_set_status), the offer, the attempt.
     await tx.$queryRaw`SELECT s.id FROM session s
       WHERE s.id = (SELECT p.session_id FROM empathy_attempt a JOIN participant p ON p.id = a.author_participant_id

@@ -356,6 +356,19 @@ async function buildSharedVessel(me: { id: string; sessionId: string }): Promise
   };
 }
 
+/**
+ * The shared vessel of one participant, for a non-turn prompt that needs the
+ * session's shared items about its owner (TS-12: a linked Inner Thoughts
+ * reflection names the partner's REVEALED statement). Kept here so the context
+ * builder stays the only code on the app connection that reads another
+ * participant's rows (R35); it reads exactly what `buildSharedVessel` reads.
+ */
+export async function loadSharedVesselFor(participantId: string): Promise<SharedVessel | null> {
+  const me = await getParticipant(participantId);
+  if (!me) return null;
+  return buildSharedVessel({ id: me.id, sessionId: me.sessionId });
+}
+
 /** The consented/shared lifecycle items, as the old `consentedShareState` presented them. */
 function consentedShareStateFrom(vessel: SharedVessel): ConsentedShareState | undefined {
   const items: ConsentedShareStateItem[] = [];

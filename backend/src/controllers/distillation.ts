@@ -31,8 +31,9 @@ export const distillInnerWorkSession = asyncHandler(
     const turnId = crypto.randomUUID();
 
     // Verify session exists and belongs to the authenticated user
-    const session = await (prisma as any).innerWorkSession.findFirst({
+    const session = await prisma.reflection.findFirst({
       where: { id: sessionId, userId: user.id },
+      select: { id: true },
     });
     if (!session) throw new NotFoundError('Session not found');
 

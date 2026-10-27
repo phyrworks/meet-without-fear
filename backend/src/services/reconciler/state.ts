@@ -298,7 +298,7 @@ export async function checkAndRevealBothIfReady(sessionId: string): Promise<bool
         // same plaintext (spec §1.2 empathy_attempt: "re-encrypted under the
         // session key by the reveal job"; T-message-immutable exempts mwf_job).
         // The key path and field map are TS-13's (ruling R26) — none is invented here.
-        await markAttemptDelivery(r.id, 'DELIVERED', at, tx as unknown as PrismaClient);
+        await markAttemptDelivery(r.id, 'DELIVERED', at, tx);
       }
       return toReveal;
     },

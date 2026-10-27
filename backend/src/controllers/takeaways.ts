@@ -8,38 +8,44 @@
  *
  * These endpoints are consumed by the mobile TakeawayReviewSheet for inline
  * editing (DIST-05) and swipe-to-delete (DIST-06).
+ *
+ * Target shape (TS-12): `reflection` / `takeaway` (spec §1.6), the caller's own
+ * rows only (reflection.user_id = me).
  */
 
 import { Request, Response } from 'express';
 import { asyncHandler, NotFoundError, ValidationError } from '../middleware/errors';
 import { getUser } from '../middleware/auth';
 import { prisma } from '../lib/prisma';
+import { mapTakeawayToDTO } from '../services/distillation';
 import type {
   ApiResponse,
   GetTakeawaysResponse,
   UpdateTakeawayResponse,
   DeleteTakeawayResponse,
-  TakeawayDTO,
 } from '@meet-without-fear/shared';
 
 // ============================================================================
 // Helper
 // ============================================================================
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-function mapTakeawayToDTO(t: any): TakeawayDTO {
-  return {
-    id: t.id,
-    content: t.content,
-    theme: t.theme,
-    source: t.source as 'AI' | 'USER',
-    type: t.type ?? 'INSIGHT',
-    position: t.position,
-    resolved: t.resolved ?? false,
-    resolvedAt: t.resolvedAt?.toISOString() ?? null,
-    createdAt: t.createdAt.toISOString(),
-    updatedAt: t.updatedAt.toISOString(),
-  };
+/** The caller's own reflection (spec §1.6 RLS shape: user_id = me), or a 404. */
+async function ownReflection(userId: string, reflectionId: string): Promise<{ id: string; distilledAt: Date | null }> {
+  const reflection = await prisma.reflection.findFirst({
+    where: { id: reflectionId, userId },
+    select: { id: true, distilledAt: true },
+  });
+  if (!reflection) throw new NotFoundError('Session not found');
+  return reflection;
+}
+
+/** A takeaway of that reflection, or a 404. */
+async function takeawayOf(reflectionId: string, takeawayId: string): Promise<void> {
+  const existing = await prisma.takeaway.findFirst({
+    where: { id: takeawayId, reflectionId },
+    select: { id: true },
+  });
+  if (!existing) throw new NotFoundError('Takeaway not found');
 }
 
 // ============================================================================
@@ -55,17 +61,10 @@ function mapTakeawayToDTO(t: any): TakeawayDTO {
 export const getTakeaways = asyncHandler(
   async (req: Request, res: Response): Promise<void> => {
     const user = getUser(req);
-    const sessionId = req.params.id;
+    const session = await ownReflection(user.id, req.params.id);
 
-    // Verify the session exists and belongs to the user
-    const session = await (prisma as any).innerWorkSession.findFirst({
-      where: { id: sessionId, userId: user.id },
-      select: { id: true, distilledAt: true },
-    });
-    if (!session) throw new NotFoundError('Session not found');
-
-    const rawTakeaways = await (prisma as any).sessionTakeaway.findMany({
-      where: { sessionId },
+    const rawTakeaways = await prisma.takeaway.findMany({
+      where: { reflectionId: session.id },
       orderBy: { position: 'asc' },
     });
 
@@ -100,20 +99,10 @@ export const updateTakeaway = asyncHandler(
       throw new ValidationError('content is required and must be a non-empty string');
     }
 
-    // Verify the session exists and belongs to the user
-    const session = await (prisma as any).innerWorkSession.findFirst({
-      where: { id: sessionId, userId: user.id },
-      select: { id: true },
-    });
-    if (!session) throw new NotFoundError('Session not found');
+    await ownReflection(user.id, sessionId);
+    await takeawayOf(sessionId, takeawayId);
 
-    // Verify the takeaway belongs to this session
-    const existing = await (prisma as any).sessionTakeaway.findFirst({
-      where: { id: takeawayId, sessionId },
-    });
-    if (!existing) throw new NotFoundError('Takeaway not found');
-
-    const updated = await (prisma as any).sessionTakeaway.update({
+    const updated = await prisma.takeaway.update({
       where: { id: takeawayId },
       data: {
         content: content.trim(),
@@ -143,20 +132,10 @@ export const deleteTakeaway = asyncHandler(
     const user = getUser(req);
     const { id: sessionId, takeawayId } = req.params;
 
-    // Verify the session exists and belongs to the user
-    const session = await (prisma as any).innerWorkSession.findFirst({
-      where: { id: sessionId, userId: user.id },
-      select: { id: true },
-    });
-    if (!session) throw new NotFoundError('Session not found');
+    await ownReflection(user.id, sessionId);
+    await takeawayOf(sessionId, takeawayId);
 
-    // Verify the takeaway belongs to this session
-    const existing = await (prisma as any).sessionTakeaway.findFirst({
-      where: { id: takeawayId, sessionId },
-    });
-    if (!existing) throw new NotFoundError('Takeaway not found');
-
-    await (prisma as any).sessionTakeaway.delete({
+    await prisma.takeaway.delete({
       where: { id: takeawayId },
     });
 

@@ -330,7 +330,7 @@ export async function applyClassifierResults(
     }
 
     if (Object.keys(updateData).length > 0) {
-      await prisma.innerWorkSession.update({
+      await prisma.reflection.update({
         where: { id: sessionId },
         data: updateData,
       });

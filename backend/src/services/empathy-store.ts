@@ -28,7 +28,7 @@
  */
 
 import type { PrismaClient } from '../generated/prisma/client';
-import { getJobPrisma, prisma } from '../lib/prisma';
+import { getJobPrisma, prisma, type DbClient } from '../lib/prisma';
 
 export type TargetEmpathyStatus =
   | 'HELD'
@@ -295,7 +295,7 @@ export async function jobMoveIfUnchanged(
   expectedVersion: number,
   status: TargetEmpathyStatus,
   /** More job writes in the same transaction, run only when the move is made (e.g. its chat note). */
-  alsoInTransaction?: (tx: PrismaClient) => Promise<void>,
+  alsoInTransaction?: (tx: DbClient) => Promise<void>,
 ): Promise<boolean> {
   return getJobPrisma().$transaction(async tx => {
     // Lock order as in app.empathy_set_status: the session row, then the attempt.
@@ -309,7 +309,7 @@ export async function jobMoveIfUnchanged(
     if (row.status !== status) {
       await tx.$queryRaw`SELECT app.empathy_set_status(${attemptId}::uuid, ${status}::empathy_status, NULL::text)`;
     }
-    if (alsoInTransaction) await alsoInTransaction(tx as unknown as PrismaClient);
+    if (alsoInTransaction) await alsoInTransaction(tx);
     return true;
   });
 }
@@ -322,7 +322,7 @@ export async function markAttemptDelivery(
   attemptId: string,
   delivery: 'DELIVERED' | 'SEEN',
   at: Date = new Date(),
-  client: PrismaClient = getJobPrisma(),
+  client: DbClient = getJobPrisma(),
 ): Promise<void> {
   if (delivery === 'DELIVERED') {
     await client.$executeRaw`UPDATE empathy_attempt SET delivery_status = 'DELIVERED', delivered_at = coalesce(delivered_at, ${at})

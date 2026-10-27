@@ -58,27 +58,28 @@ import { detectMemoryIntent } from '../services/memory-detector';
 import type { MemorySuggestion } from '@meet-without-fear/shared';
 import { updateContext } from '../lib/request-context';
 import { retrieveContext, formatRetrievedContext } from '../services/context-retriever';
+import { resolveParticipant, getCoParticipants } from '../services/participant-resolver';
+import { loadCurrentStages } from '../services/stage-shim';
+import { loadSharedVesselFor } from '../services/context-assembler';
 
 // ============================================================================
 // Helper Functions
 // ============================================================================
 
-function mapSessionToSummary(
-  session: {
-    id: string;
-    title: string | null;
-    summary: string | null;
-    theme: string | null;
-    status: string;
-    createdAt: Date;
-    updatedAt: Date;
-    distilledAt?: Date | null;
-    linkedPartnerSessionId?: string | null;
-    linkedAtMessageId?: string | null;
-    contextSummarySnapshot?: string | null;
-    _count?: { messages: number };
-  }
-): InnerWorkSessionSummaryDTO {
+/** A `reflection` row (spec §1.6) as the unchanged Inner Work summary DTO. */
+function mapSessionToSummary(session: {
+  id: string;
+  title: string | null;
+  summary: string | null;
+  theme: string | null;
+  status: string;
+  createdAt: Date;
+  updatedAt: Date;
+  distilledAt?: Date | null;
+  linkedSessionId?: string | null;
+  contextSnapshot?: string | null;
+  _count?: { messages: number };
+}): InnerWorkSessionSummaryDTO {
   return {
     id: session.id,
     title: session.title,
@@ -89,9 +90,10 @@ function mapSessionToSummary(
     updatedAt: session.updatedAt.toISOString(),
     distilledAt: session.distilledAt?.toISOString() ?? null,
     messageCount: session._count?.messages ?? 0,
-    linkedPartnerSessionId: session.linkedPartnerSessionId ?? null,
-    linkedAtMessageId: session.linkedAtMessageId ?? null,
-    contextSummarySnapshot: session.contextSummarySnapshot ?? null,
+    linkedPartnerSessionId: session.linkedSessionId ?? null,
+    // The target does not carry the branching message (spec §1.6 reflection Absorbs).
+    linkedAtMessageId: null,
+    contextSummarySnapshot: session.contextSnapshot ?? null,
   };
 }
 
@@ -99,13 +101,13 @@ function mapMessageToDTO(message: {
   id: string;
   role: string;
   content: string;
-  timestamp: Date;
+  createdAt: Date;
 }): InnerWorkMessageDTO {
   return {
     id: message.id,
     role: message.role as 'USER' | 'AI',
     content: message.content,
-    timestamp: message.timestamp.toISOString(),
+    timestamp: message.createdAt.toISOString(),
   };
 }
 
@@ -113,7 +115,7 @@ function mapMessageToDTO(message: {
  * Get recent themes from user's inner work sessions for context.
  */
 async function getRecentThemes(userId: string, excludeSessionId?: string): Promise<string[]> {
-  const recentSessions = await prisma.innerWorkSession.findMany({
+  const recentSessions = await prisma.reflection.findMany({
     where: {
       userId,
       theme: { not: null },
@@ -139,10 +141,10 @@ async function updateSessionMetadata(sessionId: string, turnId: string): Promise
     // Prisma 7 does not push a nested to-many `take` into SQL, so the include read
     // every message of the session on every message sent. This emits LIMIT.
     const [session, messages] = await Promise.all([
-      prisma.innerWorkSession.findUnique({ where: { id: sessionId } }),
-      prisma.innerWorkMessage.findMany({
-        where: { sessionId },
-        orderBy: { timestamp: 'asc' },
+      prisma.reflection.findUnique({ where: { id: sessionId } }),
+      prisma.reflectionMessage.findMany({
+        where: { reflectionId: sessionId },
+        orderBy: { createdAt: 'asc' },
         take: 20, // Last 20 messages for context
       }),
     ]);
@@ -169,7 +171,7 @@ async function updateSessionMetadata(sessionId: string, turnId: string): Promise
     });
 
     if (parsed && (parsed.title || parsed.summary || parsed.theme)) {
-      await prisma.innerWorkSession.update({
+      await prisma.reflection.update({
         where: { id: sessionId },
         data: {
           title: parsed.title || session.title,
@@ -186,112 +188,77 @@ async function updateSessionMetadata(sessionId: string, turnId: string): Promise
 
 /**
  * Fetch context from a linked partner session for Inner Thoughts AI.
- * Only returns the user's perspective - not partner's private messages.
+ * Only the user's own side of the session: their participant's MAIN
+ * conversation, their own empathy draft and attempt, and — through the shared
+ * vessel (the context builder, R35) — the partner's statement once REVEALED.
+ * Never the partner's private rows.
  */
 async function fetchLinkedPartnerSessionContext(
   userId: string,
   partnerSessionId: string
 ): Promise<LinkedPartnerSessionContext | null> {
   try {
-    // Fetch the partner session with relationship and invitation info
-    const session = await prisma.session.findFirst({
-      where: {
-        id: partnerSessionId,
-        relationship: {
-          members: {
-            some: { userId },
-          },
-        },
-      },
-      include: {
-        relationship: {
-          include: {
-            members: {
-              include: { user: true },
-            },
-          },
-        },
-        stageProgress: {
-          orderBy: { stage: 'desc' },
-          take: 1,
-        },
-        invitations: {
-          take: 1,
-        },
-        empathyDrafts: {
-          where: { userId },  // Only load this user's own drafts
-        },
-        empathyAttempts: {
-          where: {
-            OR: [
-              { sourceUserId: userId },  // User's own attempts
-              { status: { in: ['REVEALED', 'VALIDATED'] } },  // Partner's only if consent-revealed
-            ],
-          },
-        },
-      },
-    });
+    const me = await resolveParticipant(partnerSessionId, userId);
+    if (!me) return null;
 
-    if (!session) {
-      return null;
-    }
+    const [session, myMember, coParticipants, stages, vessel] = await Promise.all([
+      prisma.session.findUnique({ where: { id: partnerSessionId }, select: { relationshipId: true, topicFrame: true } }),
+      prisma.relationshipMember.findFirst({
+        where: { userId, relationship: { sessions: { some: { id: partnerSessionId } } } },
+        select: { nickname: true },
+      }),
+      getCoParticipants(me.id),
+      loadCurrentStages([me.id]),
+      loadSharedVesselFor(me.id),
+    ]);
+    if (!session) return null;
 
-    // Get MY membership (where my nickname for the partner is stored)
-    const myMember = session.relationship.members.find((m) => m.userId === userId);
-    // Get the partner's membership (for their actual name)
-    const partnerMember = session.relationship.members.find((m) => m.userId !== userId);
-    // Use MY nickname for the partner (what I call them), then fall back to their actual name
-    const partnerName = myMember?.nickname || partnerMember?.user?.firstName || partnerMember?.user?.name || 'Partner';
+    // MY nickname for the partner (what I call them), then their display name.
+    const partner = coParticipants.find((c) => c.kind === 'human' && !c.leftAt) ?? coParticipants[0];
+    const partnerName = myMember?.nickname || partner?.displayName || 'Partner';
 
-    // Get current stage from stageProgress
-    const currentStage = session.stageProgress[0]?.stage || 1;
+    const currentStage = stages.get(me.id)?.stage || 1;
 
-    // Get user's messages from this session (not partner's private messages)
-    const userMessages = await prisma.message.findMany({
-      where: {
-        sessionId: partnerSessionId,
-        senderId: userId,
-      },
-      orderBy: { timestamp: 'desc' },
-      take: 10,
-    });
-
-    // Get AI messages that were sent to this user
-    const aiMessages = await prisma.message.findMany({
-      where: {
-        sessionId: partnerSessionId,
-        role: 'AI',
-        forUserId: userId,
-      },
-      orderBy: { timestamp: 'desc' },
-      take: 10,
-    });
-
-    // Combine and sort messages to reconstruct the user's conversation view
+    // The user's conversation view: their own turns and the AI's replies to them.
+    const [userMessages, aiMessages] = me.mainConversationId
+      ? await Promise.all([
+          prisma.message.findMany({
+            where: { conversationId: me.mainConversationId, senderParticipantId: me.id, role: 'USER', kind: 'CHAT' },
+            orderBy: { createdAt: 'desc' },
+            take: 10,
+            select: { role: true, content: true, createdAt: true },
+          }),
+          prisma.message.findMany({
+            where: { conversationId: me.mainConversationId, role: 'AI', kind: 'CHAT' },
+            orderBy: { createdAt: 'desc' },
+            take: 10,
+            select: { role: true, content: true, createdAt: true },
+          }),
+        ])
+      : [[], []];
     const combinedMessages = [...userMessages, ...aiMessages]
-      .sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime())
+      .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime())
       .map((m) => ({
-        role: m.role === 'USER' ? 'user' as const : 'assistant' as const,
+        role: m.role === 'USER' ? ('user' as const) : ('assistant' as const),
         content: m.content,
       }));
 
-    // Get empathy data from empathyDrafts and empathyAttempts
-    const userDraft = session.empathyDrafts.find((d) => d.userId === userId);
+    const userDraft = await prisma.draft.findFirst({
+      where: { participantId: me.id, kind: 'EMPATHY' },
+      orderBy: { updatedAt: 'desc' },
+      select: { content: true, readyToShare: true },
+    });
     const empathyDraft = userDraft?.content;
     const empathyShared = userDraft?.readyToShare || false;
 
-    // Get partner's empathy ONLY if they shared it (has an attempt record)
-    const partnerAttempt = session.empathyAttempts.find((a) => a.sourceUserId !== userId);
+    // The partner's statement about me, only once revealed (the vessel admits nothing else).
+    const partnerAttempt = vessel?.empathyAttempts.filter((a) => a.direction === 'partner_to_user' && a.revealedAt).pop();
     const partnerEmpathy = partnerAttempt?.content;
 
-    // Determine waiting status
     let waitingStatus: string | undefined;
     if (currentStage === 2 && empathyShared && !partnerEmpathy) {
       waitingStatus = `Waiting for ${partnerName} to share their empathy statement`;
     }
-
-    // Use the confirmed topic frame as the session's topic context.
-    const sessionTopic = session.topicFrame || undefined;
 
     return {
       partnerName,
@@ -301,7 +268,7 @@ async function fetchLinkedPartnerSessionContext(
       empathyDraft,
       empathyShared,
       partnerEmpathy,
-      sessionTopic,
+      sessionTopic: session.topicFrame || undefined,
     };
   } catch (error) {
     logger.error('[Inner Thoughts] Failed to fetch partner context:', error);
@@ -325,36 +292,28 @@ export const createInnerWorkSession = asyncHandler(
       });
     }
 
-    const { title, initialMessage, linkedPartnerSessionId, linkedAtStage, linkedTrigger } =
-      parseResult.data;
+    // linkedAtStage / linkedTrigger are accepted and dropped: the target keeps
+    // only when the link was made (spec §1.6 reflection, linked_at).
+    const { title, initialMessage, linkedPartnerSessionId } = parseResult.data;
 
     // If linking to a partner session, verify it exists and user is a participant
     if (linkedPartnerSessionId) {
-      const partnerSession = await prisma.session.findFirst({
-        where: {
-          id: linkedPartnerSessionId,
-          relationship: {
-            members: {
-              some: { userId: user.id },
-            },
-          },
-        },
-      });
-
-      if (!partnerSession) {
+      // A present participant of the session (the link is context only: it
+      // grants no visibility either way — spec §1.6 linked_session_id).
+      const me = await resolveParticipant(linkedPartnerSessionId, user.id);
+      if (!me) {
         throw new ValidationError('Partner session not found or you are not a participant');
       }
     }
 
     // Create the session
-    const session = await prisma.innerWorkSession.create({
+    const session = await prisma.reflection.create({
       data: {
         userId: user.id,
         title,
         status: 'ACTIVE',
-        linkedPartnerSessionId,
-        linkedAtStage,
-        linkedTrigger,
+        linkedSessionId: linkedPartnerSessionId,
+        linkedAt: linkedPartnerSessionId ? new Date() : null,
       },
       include: {
         _count: { select: { messages: true } },
@@ -367,9 +326,9 @@ export const createInnerWorkSession = asyncHandler(
     // If initialMessage is provided, save user message first then generate AI response
     if (initialMessage) {
       // Save the user's initial message
-      const userMessage = await prisma.innerWorkMessage.create({
+      const userMessage = await prisma.reflectionMessage.create({
         data: {
-          sessionId: session.id,
+          reflectionId: session.id,
           role: 'USER',
           content: initialMessage,
         },
@@ -459,9 +418,9 @@ export const createInnerWorkSession = asyncHandler(
         response: fallbackResponse,
       });
 
-      const aiMessage = await prisma.innerWorkMessage.create({
+      const aiMessage = await prisma.reflectionMessage.create({
         data: {
-          sessionId: session.id,
+          reflectionId: session.id,
           role: 'AI',
           content: parsed.response || fallbackResponse,
         },
@@ -536,9 +495,9 @@ export const createInnerWorkSession = asyncHandler(
       response: fallbackMessage,
     });
 
-    const aiMessage = await prisma.innerWorkMessage.create({
+    const aiMessage = await prisma.reflectionMessage.create({
       data: {
-        sessionId: session.id,
+        reflectionId: session.id,
         role: 'AI',
         content: parsed.response || fallbackMessage,
       },
@@ -587,10 +546,10 @@ export const listInnerWorkSessions = asyncHandler(
     };
 
     // Get total count for pagination
-    const total = await prisma.innerWorkSession.count({ where: whereClause });
+    const total = await prisma.reflection.count({ where: whereClause });
 
     // Fetch sessions sorted by updatedAt (which tracks last message time)
-    const sessions = await prisma.innerWorkSession.findMany({
+    const sessions = await prisma.reflection.findMany({
       where: whereClause,
       orderBy: { updatedAt: 'desc' },
       take: limit,
@@ -622,14 +581,14 @@ export const getInnerWorkSession = asyncHandler(
     const user = getUser(req);
     const sessionId = req.params.id;
 
-    const session = await prisma.innerWorkSession.findFirst({
+    const session = await prisma.reflection.findFirst({
       where: {
         id: sessionId,
         userId: user.id,
       },
       include: {
         messages: {
-          orderBy: { timestamp: 'asc' },
+          orderBy: { createdAt: 'asc' },
         },
         _count: { select: { messages: true } },
       },
@@ -676,14 +635,14 @@ export const sendInnerWorkMessage = asyncHandler(
 
     // Verify session exists and belongs to user
     // Fetch ALL messages for accurate count, but we'll only use recent ones + summary for context
-    const session = await prisma.innerWorkSession.findFirst({
+    const session = await prisma.reflection.findFirst({
       where: {
         id: sessionId,
         userId: user.id,
       },
       include: {
         messages: {
-          orderBy: { timestamp: 'asc' },
+          orderBy: { createdAt: 'asc' },
         },
       },
     });
@@ -697,9 +656,9 @@ export const sendInnerWorkMessage = asyncHandler(
     }
 
     // Save user message
-    const userMessage = await prisma.innerWorkMessage.create({
+    const userMessage = await prisma.reflectionMessage.create({
       data: {
-        sessionId,
+        reflectionId: sessionId,
         role: 'USER',
         content,
       },
@@ -728,8 +687,8 @@ export const sendInnerWorkMessage = asyncHandler(
       // 2. Get recent themes
       getRecentThemes(user.id, sessionId),
       // 3. Fetch linked partner session context (if applicable)
-      session.linkedPartnerSessionId
-        ? fetchLinkedPartnerSessionContext(user.id, session.linkedPartnerSessionId)
+      session.linkedSessionId
+        ? fetchLinkedPartnerSessionContext(user.id, session.linkedSessionId)
         : Promise.resolve(null),
       // 4. Run semantic retrieval for cross-session context
       // Search on every message (as requested)
@@ -739,7 +698,7 @@ export const sendInnerWorkMessage = asyncHandler(
         turnId,
         includeInnerThoughts: true, // Search both partner sessions AND inner thoughts
         excludeInnerThoughtsSessionId: sessionId, // Don't include current session
-        linkedPartnerSessionId: session.linkedPartnerSessionId || undefined, // Boost linked session
+        linkedPartnerSessionId: session.linkedSessionId || undefined, // Boost linked session
         skipDetection: true, // Always search - no Haiku gating for Inner Thoughts
         includePreSession: false,
         similarityThreshold: 0.4,
@@ -852,16 +811,16 @@ export const sendInnerWorkMessage = asyncHandler(
     const aiContent = parsed.response || fallbackResponse;
 
     // Save AI message
-    const aiMessage = await prisma.innerWorkMessage.create({
+    const aiMessage = await prisma.reflectionMessage.create({
       data: {
-        sessionId,
+        reflectionId: sessionId,
         role: 'AI',
         content: aiContent,
       },
     });
 
     // Update session timestamp
-    await prisma.innerWorkSession.update({
+    await prisma.reflection.update({
       where: { id: sessionId },
       data: { updatedAt: new Date() },
     });
@@ -954,7 +913,7 @@ export const updateInnerWorkSession = asyncHandler(
     const { title, status } = parseResult.data;
 
     // Verify session exists and belongs to user
-    const existing = await prisma.innerWorkSession.findFirst({
+    const existing = await prisma.reflection.findFirst({
       where: {
         id: sessionId,
         userId: user.id,
@@ -966,7 +925,7 @@ export const updateInnerWorkSession = asyncHandler(
     }
 
     // Update session
-    const session = await prisma.innerWorkSession.update({
+    const session = await prisma.reflection.update({
       where: { id: sessionId },
       data: {
         title: title !== undefined ? title : undefined,
@@ -1007,7 +966,7 @@ export const archiveInnerWorkSession = asyncHandler(
     const sessionId = req.params.id;
 
     // Verify session exists and belongs to user
-    const existing = await prisma.innerWorkSession.findFirst({
+    const existing = await prisma.reflection.findFirst({
       where: {
         id: sessionId,
         userId: user.id,
@@ -1020,7 +979,7 @@ export const archiveInnerWorkSession = asyncHandler(
 
     // Archive (soft delete)
     const now = new Date();
-    await prisma.innerWorkSession.update({
+    await prisma.reflection.update({
       where: { id: sessionId },
       data: { status: 'ARCHIVED' },
     });
@@ -1047,14 +1006,14 @@ export const generateContext = asyncHandler(
     const sessionId = req.params.id;
 
     // Fetch session with messages
-    const session = await prisma.innerWorkSession.findFirst({
+    const session = await prisma.reflection.findFirst({
       where: {
         id: sessionId,
         userId: user.id,
       },
       include: {
         messages: {
-          orderBy: { timestamp: 'asc' },
+          orderBy: { createdAt: 'asc' },
         },
       },
     });
@@ -1123,7 +1082,7 @@ Respond ONLY with JSON:
 
     // Update session with generated summary if not already set
     if (!session.summary || !session.theme) {
-      await prisma.innerWorkSession.update({
+      await prisma.reflection.update({
         where: { id: sessionId },
         data: {
           summary: parsed.contextSummary || session.summary,
@@ -1156,29 +1115,20 @@ export const getLinkedInnerThoughts = asyncHandler(
     const partnerSessionId = req.params.id;
 
     // Verify user is a participant in the partner session
-    const partnerSession = await prisma.session.findFirst({
-      where: {
-        id: partnerSessionId,
-        relationship: {
-          members: {
-            some: { userId: user.id },
-          },
-        },
-      },
-    });
-
-    if (!partnerSession) {
+    const me = await resolveParticipant(partnerSessionId, user.id);
+    if (!me) {
       throw new ValidationError('Partner session not found or you are not a participant');
     }
 
-    // Find existing linked Inner Thoughts session
-    const linkedSession = await prisma.innerWorkSession.findFirst({
+    // The caller's OWN reflection linked to this session (reflection.user_id = me, R1).
+    const linkedSession = await prisma.reflection.findFirst({
       where: {
         userId: user.id,
-        linkedPartnerSessionId: partnerSessionId,
+        linkedSessionId: partnerSessionId,
         status: { not: 'ARCHIVED' },
       },
       orderBy: { updatedAt: 'desc' },
+      select: { id: true },
     });
 
     const response: ApiResponse<{ innerThoughtsSessionId: string | null }> = {
@@ -1193,40 +1143,20 @@ export const getLinkedInnerThoughts = asyncHandler(
 );
 
 // ============================================================================
+// Insights: the `Insight` table is dropped on the target (spec §1.7
+// feature_state Absorbs: "never populated"). The routes stay and answer as an
+// account with no insights does.
+// ============================================================================
+
+const NO_INSIGHTS: InsightDTO[] = [];
+
+// ============================================================================
 // GET /inner-work/overview - Get Inner Work hub overview
 // ============================================================================
 
 export const getInnerWorkOverview = asyncHandler(
   async (req: Request, res: Response): Promise<void> => {
-    const user = getUser(req);
-
-    // Fetch recent insights (non-dismissed, sorted by priority)
-    const recentInsights = await prisma.insight.findMany({
-      where: {
-        userId: user.id,
-        dismissed: false,
-        OR: [
-          { expiresAt: null },
-          { expiresAt: { gt: new Date() } },
-        ],
-      },
-      orderBy: [
-        { priority: 'desc' },
-        { createdAt: 'desc' },
-      ],
-      take: 5,
-    });
-
-    const insightDTOs: InsightDTO[] = recentInsights.map((insight) => ({
-      id: insight.id,
-      type: insight.type as InsightType,
-      summary: insight.summary,
-      data: insight.data as InsightDataDTO,
-      priority: insight.priority,
-      dismissed: insight.dismissed,
-      expiresAt: insight.expiresAt?.toISOString() ?? null,
-      createdAt: insight.createdAt.toISOString(),
-    }));
+    getUser(req);
 
     // For now, return stub data for other features since they're not yet fully implemented
     const response: ApiResponse<GetInnerWorkOverviewResponse> = {
@@ -1254,7 +1184,7 @@ export const getInnerWorkOverview = asyncHandler(
             totalTracked: 0,
             recentlyMentioned: [],
           },
-          recentInsights: insightDTOs,
+          recentInsights: NO_INSIGHTS,
         },
       },
     };
@@ -1269,58 +1199,15 @@ export const getInnerWorkOverview = asyncHandler(
 
 export const getInsights = asyncHandler(
   async (req: Request, res: Response): Promise<void> => {
-    const user = getUser(req);
-    const limit = parseInt(req.query.limit as string) || 20;
+    getUser(req);
     const type = req.query.type as InsightType | undefined;
-    const includeDismissed = req.query.includeDismissed === 'true';
-
-    const whereClause: {
-      userId: string;
-      type?: InsightType;
-      dismissed?: boolean;
-      OR?: { expiresAt: null | { gt: Date } }[];
-    } = {
-      userId: user.id,
-    };
-
-    if (type) {
-      whereClause.type = type;
-    }
-
-    if (!includeDismissed) {
-      whereClause.dismissed = false;
-      whereClause.OR = [
-        { expiresAt: null },
-        { expiresAt: { gt: new Date() } },
-      ];
-    }
-
-    const insights = await prisma.insight.findMany({
-      where: whereClause,
-      orderBy: [
-        { priority: 'desc' },
-        { createdAt: 'desc' },
-      ],
-      take: limit + 1, // Fetch one extra to check hasMore
-    });
-
-    const hasMore = insights.length > limit;
-    const insightDTOs: InsightDTO[] = insights.slice(0, limit).map((insight) => ({
-      id: insight.id,
-      type: insight.type as InsightType,
-      summary: insight.summary,
-      data: insight.data as InsightDataDTO,
-      priority: insight.priority,
-      dismissed: insight.dismissed,
-      expiresAt: insight.expiresAt?.toISOString() ?? null,
-      createdAt: insight.createdAt.toISOString(),
-    }));
+    void type;
 
     const response: ApiResponse<GetInsightsResponse> = {
       success: true,
       data: {
-        insights: insightDTOs,
-        hasMore,
+        insights: NO_INSIGHTS,
+        hasMore: false,
       },
     };
 
@@ -1333,34 +1220,9 @@ export const getInsights = asyncHandler(
 // ============================================================================
 
 export const dismissInsight = asyncHandler(
-  async (req: Request, res: Response): Promise<void> => {
-    const user = getUser(req);
-    const insightId = req.params.id;
-
-    // Verify the insight belongs to the user
-    const insight = await prisma.insight.findFirst({
-      where: {
-        id: insightId,
-        userId: user.id,
-      },
-    });
-
-    if (!insight) {
-      throw new ValidationError('Insight not found');
-    }
-
-    await prisma.insight.update({
-      where: { id: insightId },
-      data: { dismissed: true },
-    });
-
-    const response: ApiResponse<DismissInsightResponse> = {
-      success: true,
-      data: {
-        success: true,
-      },
-    };
-
-    res.json(response);
+  async (req: Request, _res: Response): Promise<void> => {
+    getUser(req);
+    // No insight exists on the target, so none belongs to the caller.
+    throw new ValidationError('Insight not found');
   }
 );

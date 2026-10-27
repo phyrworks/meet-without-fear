@@ -769,7 +769,7 @@ export async function getInitialMessage(
           created: await createFacilitatorMessage({
             conversationId,
             content: responseContent.trim(),
-            client: tx as unknown as PrismaClient,
+            client: tx,
           }),
         };
       }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
