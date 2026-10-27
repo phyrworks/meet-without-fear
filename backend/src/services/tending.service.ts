@@ -148,7 +148,7 @@ const FOLLOW_UP_SELECT = {
 } as const;
 
 /** The JOB connection or a transaction on it. */
-type JobDb = Pick<Prisma.TransactionClient, '$queryRaw' | '$executeRaw'>;
+type JobDb = Pick<Prisma.TransactionClient, '$queryRaw' | '$executeRaw' | '$executeRawUnsafe'>;
 
 const DEFAULT_EXTENSION_DAYS = 28;
 const DEFAULT_SHARED_RESPONSE_DEADLINE_DAYS = 14;
@@ -441,20 +441,29 @@ async function insertFollowUpAsJob(row: {
   return r.id;
 }
 
-/** A follow-up's status move (the job writes follow-up status). */
+/**
+ * A follow-up's status move (the job writes follow-up status). The SET names
+ * only the columns it assigns: the job's grant on follow_up is UPDATE on
+ * (status, opened_at, completed_at, response_deadline_at) and a SET that read
+ * an unassigned column would need SELECT on it.
+ */
 async function setFollowUpStatusAsJob(
   id: string,
   status: FollowUpRow['status'],
   extra: { openedAt?: Date | null; completedAt?: Date | null; responseDeadlineAt?: Date | null } = {},
   db: JobDb = getJobPrisma(),
 ): Promise<number> {
-  return db.$executeRaw`
-    UPDATE follow_up SET status = ${status}::follow_up_status,
-      opened_at = CASE WHEN ${extra.openedAt !== undefined} THEN ${extra.openedAt ?? null}::timestamptz ELSE opened_at END,
-      completed_at = CASE WHEN ${extra.completedAt !== undefined} THEN ${extra.completedAt ?? null}::timestamptz ELSE completed_at END,
-      response_deadline_at = CASE WHEN ${extra.responseDeadlineAt !== undefined}
-                                  THEN ${extra.responseDeadlineAt ?? null}::timestamptz ELSE response_deadline_at END
-    WHERE id = ${id}::uuid`;
+  const params: unknown[] = [id, status];
+  const sets = ['status = $2::follow_up_status'];
+  const put = (column: string, value: Date | null | undefined) => {
+    if (value === undefined) return;
+    params.push(value);
+    sets.push(`${column} = $${params.length}::timestamptz`);
+  };
+  put('opened_at', extra.openedAt);
+  put('completed_at', extra.completedAt);
+  put('response_deadline_at', extra.responseDeadlineAt);
+  return db.$executeRawUnsafe(`UPDATE follow_up SET ${sets.join(', ')} WHERE id = $1::uuid`, ...params);
 }
 
 /** The next round of a follow-up: the current one COMPLETED, a new SCHEDULED row for the same subject. */
