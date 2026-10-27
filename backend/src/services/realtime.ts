@@ -329,32 +329,27 @@ export async function notifySessionMembers(
     const now = new Date();
     logger.info(`[notifySessionMembers] Updating session.updatedAt to ${now.toISOString()}`);
 
+    // TS-10: the members are the session's participants (user-keyed channels).
     const session = await prisma.session.update({
       where: { id: sessionId },
       data: { updatedAt: now },
       select: {
         updatedAt: true,
-        relationship: {
-          select: {
-            members: {
-              select: { userId: true },
-            },
-          },
-        },
+        participants: { where: { userId: { not: null }, leftAt: null }, select: { userId: true } },
       },
     });
 
     logger.info(`[notifySessionMembers] Session updated, new updatedAt: ${session.updatedAt.toISOString()}`);
 
-    if (!session?.relationship?.members) {
+    if (!session?.participants) {
       logger.warn(`[notifySessionMembers] Session ${sessionId} not found or has no members`);
       return;
     }
 
     // Publish to each member's user channel (except the excluded user)
-    const memberIds = session.relationship.members
-      .map((m: { userId: string }) => m.userId)
-      .filter((id: string) => id !== excludeUserId);
+    const memberIds = session.participants
+      .map((m: { userId: string | null }) => m.userId)
+      .filter((id): id is string => !!id && id !== excludeUserId);
 
     logger.info(`[notifySessionMembers] Publishing to ${memberIds.length} members: ${memberIds.join(', ')}`);
 

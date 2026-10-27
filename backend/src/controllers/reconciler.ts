@@ -7,6 +7,12 @@
  * - GET /sessions/:id/reconciler/share-offer - Get pending share offer for user
  * - POST /sessions/:id/reconciler/share-offer/respond - Respond to share offer
  * - GET /sessions/:id/reconciler/summary - Get reconciler summary
+ *
+ * Target shape (TS-10; spec §1.2): a `reconciler_result` is its SUBJECT's
+ * only. Every handler returns the caller what the caller may see — their own
+ * subject-side analyses, their own offers (as subject), and the direction
+ * statuses — never the analysis of an attempt they authored nor the
+ * existence of an offer made to their partner (golden R6, R7).
  */
 
 import { Request, Response } from 'express';
@@ -18,12 +24,13 @@ import {
   type RunReconcilerResponse,
   type ReconcilerStatusResponse,
   type RespondToShareOfferResponse,
-  MessageRole,
+  type ReconcilerResult,
 } from '@meet-without-fear/shared';
 import {
   runReconciler,
   generateShareOffer,
   respondToShareSuggestion,
+  shareAccepted,
   getReconcilerStatus,
   generateReconcilerSummary,
   generatePostShareContinuation,
@@ -31,39 +38,72 @@ import {
   generateContextReceivedReflection,
 } from '../services/reconciler';
 import { successResponse, errorResponse } from '../utils/response';
-import { notifyPartner } from '../services/realtime';
+import { notifyPartner, publishMessageAIResponse } from '../services/realtime';
 import { routeModel, scoreAmbiguity } from '../services/model-router';
 import { suggestSendableRewrite } from '../services/attacking-language';
 import { getModelCompletion, BrainActivityCallType } from '../lib/bedrock';
+import { partyOf, sessionParties, type SessionParty } from '../services/empathy-store';
+import { aiNote, messageDTO } from '../services/empathy-messages';
+import { loadCurrentStages } from '../services/stage-shim';
 
 // ============================================================================
 // Helpers
 // ============================================================================
 
-/**
- * Check if user has access to the session
- */
-async function checkSessionAccess(
-  sessionId: string,
-  userId: string
-): Promise<{ session: { id: string; status: string } | null; error: string | null }> {
-  const session = await prisma.session.findFirst({
-    where: {
-      id: sessionId,
-      relationship: {
-        members: {
-          some: { userId },
-        },
-      },
-    },
-    select: { id: true, status: true },
-  });
+interface ReconcilerCaller {
+  userId: string;
+  userName: string;
+  sessionId: string;
+  status: string;
+  me: SessionParty;
+  parties: SessionParty[];
+}
 
-  if (!session) {
-    return { session: null, error: 'Session not found or access denied' };
+/** The caller's participant (requireSessionAccess) and the session's status. */
+async function reconcilerCaller(req: Request, res: Response): Promise<ReconcilerCaller | null> {
+  const user = req.user;
+  if (!user) {
+    errorResponse(res, 'UNAUTHORIZED', 'Authentication required', 401);
+    return null;
   }
+  const sessionId = req.params.id;
+  const [session, parties] = await Promise.all([
+    prisma.session.findUnique({ where: { id: sessionId }, select: { status: true } }),
+    sessionParties(sessionId),
+  ]);
+  const me = partyOf(parties, { participantId: req.participant?.id }) ?? partyOf(parties, { userId: user.id });
+  if (!session || !me) {
+    errorResponse(res, 'NOT_FOUND', 'Session not found or access denied', 404);
+    return null;
+  }
+  return { userId: user.id, userName: user.name || 'User', sessionId, status: session.status, me, parties };
+}
 
-  return { session, error: null };
+const direction = (result: ReconcilerResult | null) =>
+  result
+    ? {
+        guesserId: '',
+        guesserName: '',
+        subjectId: '',
+        subjectName: '',
+        result,
+        shareOfferStatus: 'NOT_OFFERED' as const,
+        analyzedAt: new Date().toISOString(),
+      }
+    : null;
+
+/** The caller's open offer (as subject), with its result and the attempt's author. */
+async function myOpenOffer(sessionId: string, me: SessionParty, where: { id?: string } = {}) {
+  return prisma.contextShareOffer.findFirst({
+    where: {
+      ...(where.id ? { id: where.id } : {}),
+      subjectParticipantId: me.participantId,
+      status: { in: ['OFFERED', 'PENDING'] },
+      attempt: { authorParticipant: { sessionId } },
+    },
+    orderBy: { createdAt: 'desc' },
+    include: { result: true, attempt: { select: { id: true, authorParticipantId: true, status: true, statusVersion: true } } },
+  });
 }
 
 // ============================================================================
@@ -73,81 +113,36 @@ async function checkSessionAccess(
 /**
  * Run reconciler analysis for a session
  * POST /sessions/:id/reconciler/run
+ *
+ * The analysis runs for both directions (the job's), but the response carries
+ * only the directions whose SUBJECT is the caller.
  */
-export async function runReconcilerHandler(
-  req: Request,
-  res: Response
-): Promise<void> {
+export async function runReconcilerHandler(req: Request, res: Response): Promise<void> {
   try {
-    const user = req.user;
-    if (!user) {
-      errorResponse(res, 'UNAUTHORIZED', 'Authentication required', 401);
-      return;
-    }
-
-    const { id: sessionId } = req.params;
-
-    // Validate request body
     const parseResult = runReconcilerRequestSchema.safeParse(req.body);
     if (!parseResult.success) {
-      errorResponse(
-        res,
-        'VALIDATION_ERROR',
-        'Invalid request body',
-        400,
-        parseResult.error.issues
-      );
+      errorResponse(res, 'VALIDATION_ERROR', 'Invalid request body', 400, parseResult.error.issues);
       return;
     }
-
-    const { forUserId } = parseResult.data;
-
-    // Check session access
-    const { session, error } = await checkSessionAccess(sessionId, user.id);
-    if (error || !session) {
-      errorResponse(res, 'NOT_FOUND', error || 'Session not found', 404);
-      return;
-    }
-
-    // Check session is active
-    if (session.status !== 'ACTIVE') {
+    const caller = await reconcilerCaller(req, res);
+    if (!caller) return;
+    if (caller.status !== 'ACTIVE') {
       errorResponse(res, 'SESSION_NOT_ACTIVE', 'Session is not active', 400);
       return;
     }
 
-    // Run the reconciler
-    const result = await runReconciler(sessionId, forUserId);
+    const result = await runReconciler(caller.sessionId, parseResult.data.forUserId, {
+      forParticipantId: caller.me.participantId,
+    });
 
-    // Build response
     const response: RunReconcilerResponse = {
-      sessionId,
-      aUnderstandingB: result.aUnderstandingB
-        ? {
-          guesserId: '', // Will be filled from DB
-          guesserName: '',
-          subjectId: '',
-          subjectName: '',
-          result: result.aUnderstandingB,
-          shareOfferStatus: 'NOT_OFFERED',
-          analyzedAt: new Date().toISOString(),
-        }
-        : null,
-      bUnderstandingA: result.bUnderstandingA
-        ? {
-          guesserId: '',
-          guesserName: '',
-          subjectId: '',
-          subjectName: '',
-          result: result.bUnderstandingA,
-          shareOfferStatus: 'NOT_OFFERED',
-          analyzedAt: new Date().toISOString(),
-        }
-        : null,
+      sessionId: caller.sessionId,
+      aUnderstandingB: direction(result.aUnderstandingB),
+      bUnderstandingA: direction(result.bUnderstandingA),
       bothCompleted: result.bothCompleted,
       readyToProceed: result.readyToProceed,
       blockingReason: result.blockingReason,
     };
-
     successResponse(res, response);
   } catch (error) {
     logger.error('[runReconcilerHandler] Error:', error);
@@ -159,58 +154,19 @@ export async function runReconcilerHandler(
  * Get reconciler status for a session
  * GET /sessions/:id/reconciler/status
  */
-export async function getReconcilerStatusHandler(
-  req: Request,
-  res: Response
-): Promise<void> {
+export async function getReconcilerStatusHandler(req: Request, res: Response): Promise<void> {
   try {
-    const user = req.user;
-    if (!user) {
-      errorResponse(res, 'UNAUTHORIZED', 'Authentication required', 401);
-      return;
-    }
-
-    const { id: sessionId } = req.params;
-
-    // Check session access
-    const { session, error } = await checkSessionAccess(sessionId, user.id);
-    if (error || !session) {
-      errorResponse(res, 'NOT_FOUND', error || 'Session not found', 404);
-      return;
-    }
-
-    // Get reconciler status
-    const status = await getReconcilerStatus(sessionId);
-
+    const caller = await reconcilerCaller(req, res);
+    if (!caller) return;
+    const status = await getReconcilerStatus(caller.sessionId, caller.me.participantId);
     const response: ReconcilerStatusResponse = {
-      sessionId,
+      sessionId: caller.sessionId,
       hasRun: status.hasRun,
-      aUnderstandingB: status.aUnderstandingB
-        ? {
-          guesserId: '',
-          guesserName: '',
-          subjectId: '',
-          subjectName: '',
-          result: status.aUnderstandingB,
-          shareOfferStatus: 'NOT_OFFERED',
-          analyzedAt: new Date().toISOString(),
-        }
-        : null,
-      bUnderstandingA: status.bUnderstandingA
-        ? {
-          guesserId: '',
-          guesserName: '',
-          subjectId: '',
-          subjectName: '',
-          result: status.bUnderstandingA,
-          shareOfferStatus: 'NOT_OFFERED',
-          analyzedAt: new Date().toISOString(),
-        }
-        : null,
+      aUnderstandingB: direction(status.aUnderstandingB),
+      bUnderstandingA: direction(status.bUnderstandingA),
       pendingShareOffers: status.pendingShareOffers,
       readyForStage3: status.readyForStage3,
     };
-
     successResponse(res, response);
   } catch (error) {
     logger.error('[getReconcilerStatusHandler] Error:', error);
@@ -219,45 +175,18 @@ export async function getReconcilerStatusHandler(
 }
 
 /**
- * Get pending share offer for the current user
+ * Get pending share offer for the current user (as subject)
  * GET /sessions/:id/reconciler/share-offer
  */
-export async function getShareOfferHandler(
-  req: Request,
-  res: Response
-): Promise<void> {
+export async function getShareOfferHandler(req: Request, res: Response): Promise<void> {
   try {
-    const user = req.user;
-    if (!user) {
-      errorResponse(res, 'UNAUTHORIZED', 'Authentication required', 401);
-      return;
-    }
+    const caller = await reconcilerCaller(req, res);
+    if (!caller) return;
+    const { sessionId, me, parties } = caller;
 
-    const { id: sessionId } = req.params;
-
-    // Check session access
-    const { session, error } = await checkSessionAccess(sessionId, user.id);
-    if (error || !session) {
-      errorResponse(res, 'NOT_FOUND', error || 'Session not found', 404);
-      return;
-    }
-
-    // Check if there's a pending share offer for this user
-    const shareOffer = await prisma.reconcilerShareOffer.findFirst({
-      where: {
-        userId: user.id,
-        result: { sessionId },
-        status: { in: ['OFFERED', 'PENDING'] },
-      },
-      include: {
-        result: true,
-      },
-    }) as any;
-
+    const shareOffer = await myOpenOffer(sessionId, me);
     if (!shareOffer) {
-      // Try to generate one for legacy reciprocal flow if applicable
-      const offer = await generateShareOffer(sessionId, user.id);
-
+      const offer = await generateShareOffer(sessionId, caller.userId);
       if (offer) {
         successResponse(res, {
           hasSuggestion: true,
@@ -266,44 +195,39 @@ export async function getShareOfferHandler(
             suggestedContent: offer.suggestedContent,
             reason: offer.suggestedReason || offer.gapDescription || 'To help them understand better',
             canRefine: true,
-          }
+          },
         });
         return;
       }
-
-      successResponse(res, {
-        hasSuggestion: false,
-        suggestion: null,
-      });
+      successResponse(res, { hasSuggestion: false, suggestion: null });
       return;
     }
 
-    // Get partner name (the one who made the guess) from the result
-    const guesserName = shareOffer.result.guesserName || 'Your partner';
-
-    // If it was PENDING, mark as OFFERED now that it's being retrieved
+    const guesser = partyOf(parties, { participantId: shareOffer.attempt.authorParticipantId });
     if (shareOffer.status === 'PENDING') {
-      await prisma.reconcilerShareOffer.update({
+      // The subject's own row (app connection).
+      await prisma.contextShareOffer.update({
         where: { id: shareOffer.id },
-        data: { status: 'OFFERED' },
+        data: { status: 'OFFERED', offeredAt: shareOffer.offeredAt ?? new Date() },
+        select: { id: true },
       });
-      logger.info(`[Reconciler] Marked share offer ${shareOffer.id} as OFFERED for user ${user.id}`);
+      logger.info(`[Reconciler] Marked share offer ${shareOffer.id} as OFFERED`);
     }
 
     successResponse(res, {
       hasSuggestion: true,
       suggestion: {
         offerId: shareOffer.id,
-        guesserName,
-        // For the new two-phase flow: suggestedShareFocus is the topic (shown first)
+        guesserName: guesser?.name || 'Your partner',
         suggestedShareFocus: shareOffer.result.suggestedShareFocus || null,
-        // suggestedContent is the AI-crafted, feelings-focused suggestion
         suggestedContent: shareOffer.suggestedContent || shareOffer.offerMessage || '',
-        reason: shareOffer.suggestedReason || shareOffer.result.mostImportantGap || 'This will help them understand your perspective more fully.',
+        reason:
+          shareOffer.suggestedReason ||
+          shareOffer.result.mostImportantGap ||
+          'This will help them understand your perspective more fully.',
         canRefine: true,
-        // Action determines styling: OFFER_SHARING (strong language) vs OFFER_OPTIONAL (soft language)
         action: shareOffer.result.recommendedAction as 'PROCEED' | 'OFFER_OPTIONAL' | 'OFFER_SHARING',
-      }
+      },
     });
   } catch (error) {
     logger.error('[getShareOfferHandler] Error:', error);
@@ -311,91 +235,60 @@ export async function getShareOfferHandler(
   }
 }
 
+/** Tell the guesser that context arrived (realtime; user-keyed envelope). */
+async function notifyContextShared(sessionId: string, actorUserId: string, guesser: SessionParty | undefined, content: string | null) {
+  if (!guesser?.userId) return;
+  const { buildEmpathyExchangeStatus } = await import('../services/empathy-status');
+  const partnerEmpathyStatus = await buildEmpathyExchangeStatus(sessionId, guesser.userId);
+  await notifyPartner(
+    sessionId,
+    guesser.userId,
+    'empathy.context_shared',
+    {
+      stage: 2,
+      sharedBy: actorUserId,
+      content,
+      forUserId: guesser.userId,
+      empathyStatus: partnerEmpathyStatus,
+      triggeredByUserId: actorUserId,
+    },
+    { excludeUserId: actorUserId },
+  );
+}
+
 /**
  * Respond to a share offer
  * POST /sessions/:id/reconciler/share-offer/respond
  */
-export async function respondToShareOfferHandler(
-  req: Request,
-  res: Response
-): Promise<void> {
+export async function respondToShareOfferHandler(req: Request, res: Response): Promise<void> {
   try {
-    const user = req.user;
-    if (!user) {
-      errorResponse(res, 'UNAUTHORIZED', 'Authentication required', 401);
-      return;
-    }
-
-    const { id: sessionId } = req.params;
-
-    // Validate request body
     const parseResult = respondToShareOfferRequestSchema.safeParse(req.body);
     if (!parseResult.success) {
-      errorResponse(
-        res,
-        'VALIDATION_ERROR',
-        'Invalid request body',
-        400,
-        parseResult.error.issues
-      );
+      errorResponse(res, 'VALIDATION_ERROR', 'Invalid request body', 400, parseResult.error.issues);
       return;
     }
-
-    // Check session access
-    const { session, error } = await checkSessionAccess(sessionId, user.id);
-    if (error || !session) {
-      errorResponse(res, 'NOT_FOUND', error || 'Session not found', 404);
-      return;
-    }
-
-    // Check session is active
-    if (session.status !== 'ACTIVE') {
+    const caller = await reconcilerCaller(req, res);
+    if (!caller) return;
+    if (caller.status !== 'ACTIVE') {
       errorResponse(res, 'SESSION_NOT_ACTIVE', 'Session is not active', 400);
       return;
     }
 
-    // Respond to the share offer using the asymmetric reconciler service
-    const result = await respondToShareSuggestion(sessionId, user.id, {
+    const result = await respondToShareSuggestion(caller.sessionId, caller.userId, {
       action: parseResult.data.action as 'accept' | 'decline' | 'refine',
       refinedContent: parseResult.data.refinedContent,
     });
 
-    // Notify partner if content was shared
     if (result.status === 'shared' && result.guesserUpdated) {
-      // Get partner ID
-      const members = await prisma.relationshipMember.findMany({
-        where: {
-          relationship: {
-            sessions: { some: { id: sessionId } },
-          },
-        },
-        select: { userId: true },
-      });
-
-      const partnerId = members.find((m) => m.userId !== user.id)?.userId;
-
-      if (partnerId) {
-        // Include full empathy status to avoid extra HTTP round-trip
-        const { buildEmpathyExchangeStatus } = await import('../services/empathy-status');
-        const partnerEmpathyStatus = await buildEmpathyExchangeStatus(sessionId, partnerId);
-
-        await notifyPartner(sessionId, partnerId, 'empathy.context_shared', {
-          stage: 2,
-          sharedBy: user.id,
-          content: result.sharedContent,
-          forUserId: partnerId,
-          empathyStatus: partnerEmpathyStatus,
-          triggeredByUserId: user.id,
-        }, { excludeUserId: user.id });
-      }
+      const guesser = caller.parties.find(p => p.participantId !== caller.me.participantId);
+      await notifyContextShared(caller.sessionId, caller.userId, guesser, result.sharedContent);
     }
 
     const response: RespondToShareOfferResponse = {
-      status: result.status as any,
+      status: result.status as RespondToShareOfferResponse['status'],
       sharedContent: result.sharedContent,
-      guesserUpdated: (result as any).guesserUpdated,
+      guesserUpdated: result.guesserUpdated,
     };
-
     successResponse(res, response);
   } catch (error) {
     if (error instanceof Error && error.message === 'Share offer already processed') {
@@ -410,63 +303,28 @@ export async function respondToShareOfferHandler(
 /**
  * Get reconciler summary after completion
  * GET /sessions/:id/reconciler/summary
+ *
+ * Ruling R24: built for the caller from their own results (as subject), their
+ * own attempt and the direction statuses.
  */
-export async function getReconcilerSummaryHandler(
-  req: Request,
-  res: Response
-): Promise<void> {
+export async function getReconcilerSummaryHandler(req: Request, res: Response): Promise<void> {
   try {
-    const user = req.user;
-    if (!user) {
-      errorResponse(res, 'UNAUTHORIZED', 'Authentication required', 401);
-      return;
-    }
-
-    const { id: sessionId } = req.params;
-
-    // Check session access
-    const { session, error } = await checkSessionAccess(sessionId, user.id);
-    if (error || !session) {
-      errorResponse(res, 'NOT_FOUND', error || 'Session not found', 404);
-      return;
-    }
-
-    // Check if reconciler has completed
-    const status = await getReconcilerStatus(sessionId);
-
+    const caller = await reconcilerCaller(req, res);
+    if (!caller) return;
+    const status = await getReconcilerStatus(caller.sessionId, caller.me.participantId);
     if (!status.hasRun) {
-      errorResponse(
-        res,
-        'VALIDATION_ERROR',
-        'Reconciler has not run yet',
-        400
-      );
+      errorResponse(res, 'VALIDATION_ERROR', 'Reconciler has not run yet', 400);
       return;
     }
-
     if (!status.readyForStage3) {
-      errorResponse(
-        res,
-        'VALIDATION_ERROR',
-        'Reconciliation not yet complete - pending share offers',
-        400
-      );
+      errorResponse(res, 'VALIDATION_ERROR', 'Reconciliation not yet complete - pending share offers', 400);
       return;
     }
-
-    // Generate summary
-    const summary = await generateReconcilerSummary(sessionId);
-
+    const summary = await generateReconcilerSummary(caller.sessionId, caller.me.participantId);
     if (!summary) {
-      errorResponse(
-        res,
-        'INTERNAL_ERROR',
-        'Failed to generate reconciler summary',
-        500
-      );
+      errorResponse(res, 'INTERNAL_ERROR', 'Failed to generate reconciler summary', 500);
       return;
     }
-
     successResponse(res, summary);
   } catch (error) {
     logger.error('[getReconcilerSummaryHandler] Error:', error);
@@ -475,55 +333,27 @@ export async function getReconcilerSummaryHandler(
 }
 
 /**
- * Skip share offer (decline without explicit response)
+ * Skip share offer
  * POST /sessions/:id/reconciler/share-offer/skip
+ *
+ * The target has no SKIPPED status (spec §3 share_offer_status): a skip is the
+ * subject's decline — the offer DECLINED with a DENIED consent, the author's
+ * direction released. The response keeps its shape.
  */
-export async function skipShareOfferHandler(
-  req: Request,
-  res: Response
-): Promise<void> {
+export async function skipShareOfferHandler(req: Request, res: Response): Promise<void> {
   try {
-    const user = req.user;
-    if (!user) {
-      errorResponse(res, 'UNAUTHORIZED', 'Authentication required', 401);
-      return;
-    }
-
-    const { id: sessionId } = req.params;
-
-    // Check session access
-    const { session, error } = await checkSessionAccess(sessionId, user.id);
-    if (error || !session) {
-      errorResponse(res, 'NOT_FOUND', error || 'Session not found', 404);
-      return;
-    }
-
-    // Find and update the share offer
-    const shareOffer = await prisma.reconcilerShareOffer.findFirst({
-      where: {
-        userId: user.id,
-        result: { sessionId },
-        status: 'OFFERED',
-      },
+    const caller = await reconcilerCaller(req, res);
+    if (!caller) return;
+    const open = await prisma.contextShareOffer.findFirst({
+      where: { subjectParticipantId: caller.me.participantId, status: 'OFFERED', attempt: { authorParticipant: { sessionId: caller.sessionId } } },
+      select: { id: true },
     });
-
-    if (!shareOffer) {
+    if (!open) {
       errorResponse(res, 'NOT_FOUND', 'No pending share offer found', 404);
       return;
     }
-
-    await prisma.reconcilerShareOffer.update({
-      where: { id: shareOffer.id },
-      data: {
-        status: 'SKIPPED',
-        skippedAt: new Date(),
-      },
-    });
-
-    successResponse(res, {
-      status: 'SKIPPED',
-      message: 'Share offer skipped. You can proceed to the next stage.',
-    });
+    await respondToShareSuggestion(caller.sessionId, caller.userId, { action: 'decline' });
+    successResponse(res, { status: 'SKIPPED', message: 'Share offer skipped. You can proceed to the next stage.' });
   } catch (error) {
     logger.error('[skipShareOfferHandler] Error:', error);
     errorResponse(res, 'INTERNAL_ERROR', 'Failed to skip share offer', 500);
@@ -532,83 +362,41 @@ export async function skipShareOfferHandler(
 
 /**
  * Generate a share draft for the user based on suggestedShareFocus.
- * This is called when the user taps "Yes, help me share" in the ShareTopicDrawer.
  * POST /sessions/:id/reconciler/share-offer/generate-draft
- *
- * The draft is generated and saved as a message so it persists.
- * The response includes the draft and metadata for the UI to show the "Review and share" button.
  */
-export async function generateShareDraftHandler(
-  req: Request,
-  res: Response
-): Promise<void> {
+export async function generateShareDraftHandler(req: Request, res: Response): Promise<void> {
   try {
-    const user = req.user;
-    if (!user) {
-      errorResponse(res, 'UNAUTHORIZED', 'Authentication required', 401);
-      return;
-    }
+    const caller = await reconcilerCaller(req, res);
+    if (!caller) return;
+    const { sessionId, me, parties, userName } = caller;
 
-    const { id: sessionId } = req.params;
-
-    // Check session access
-    const { session, error } = await checkSessionAccess(sessionId, user.id);
-    if (error || !session) {
-      errorResponse(res, 'NOT_FOUND', error || 'Session not found', 404);
-      return;
-    }
-
-    // Find the share offer with reconciler result
-    const shareOffer = await prisma.reconcilerShareOffer.findFirst({
-      where: {
-        userId: user.id,
-        result: { sessionId },
-        status: { in: ['OFFERED', 'PENDING'] },
-      },
-      include: {
-        result: true,
-      },
-    });
-
+    const shareOffer = await myOpenOffer(sessionId, me);
     if (!shareOffer) {
       errorResponse(res, 'NOT_FOUND', 'No pending share offer found', 404);
       return;
     }
-
     const suggestedShareFocus = shareOffer.result.suggestedShareFocus;
-    const guesserName = shareOffer.result.guesserName;
-
+    const guesser = partyOf(parties, { participantId: shareOffer.attempt.authorParticipantId });
+    const guesserName = guesser?.name || 'your partner';
     if (!suggestedShareFocus) {
       errorResponse(res, 'VALIDATION_ERROR', 'No share focus available', 400);
       return;
     }
 
-    // Get the full conversation history for this user (all stages, both user and AI)
-    // This gives the AI proper context about what the user has already shared
-    const conversationMessages = await prisma.message.findMany({
-      where: {
-        sessionId,
-        OR: [
-          // Messages user sent (broadcast)
-          { senderId: user.id, forUserId: null },
-          // Messages specifically for this user (AI responses)
-          { forUserId: user.id },
-        ],
-      },
-      orderBy: { timestamp: 'asc' },
-      take: 30, // Limit to recent context
-      select: { content: true, role: true },
-    });
-
-    // Format as conversation transcript
+    // The caller's own conversation (their turns and the AI's replies to them).
+    const conversationMessages = me.mainConversationId
+      ? await prisma.message.findMany({
+          where: { conversationId: me.mainConversationId, kind: 'CHAT' },
+          orderBy: { createdAt: 'asc' },
+          take: 30,
+          select: { content: true, role: true },
+        })
+      : [];
     const conversationTranscript = conversationMessages
-      .map((m) => `${m.role === 'USER' ? user.name : 'AI'}: ${m.content}`)
+      .map(m => `${m.role === 'USER' ? userName : 'AI'}: ${m.content}`)
       .join('\n\n');
 
-    // Generate the draft using AI
-    const { getModelCompletion, BrainActivityCallType } = await import('../lib/bedrock');
     const turnId = `${sessionId}-share-draft-${Date.now()}`;
-
     const routingDecision = routeModel({
       requestType: 'draft',
       conflictIntensity: 4,
@@ -616,19 +404,19 @@ export async function generateShareDraftHandler(
       messageLength: suggestedShareFocus.length,
     });
 
-    const prompt = `You are helping ${user.name} prepare something to share with ${guesserName} to help them understand ${user.name}'s perspective better.
+    const prompt = `You are helping ${userName} prepare something to share with ${guesserName} to help them understand ${userName}'s perspective better.
 
 The reconciler identified this topic as important for ${guesserName} to understand:
 "${suggestedShareFocus}"
 
-Conversation history (${user.name}'s messages and AI responses):
+Conversation history (${userName}'s messages and AI responses):
 ---
 ${conversationTranscript || 'No previous conversation available.'}
 ---
 
-Generate a brief, personal message (1-3 sentences) that ${user.name} could share with ${guesserName} about the topic above. The message should:
-1. Be written in first person as if ${user.name} is speaking directly to ${guesserName}
-2. Draw from what ${user.name} actually shared in the conversation above (don't invent new content)
+Generate a brief, personal message (1-3 sentences) that ${userName} could share with ${guesserName} about the topic above. The message should:
+1. Be written in first person as if ${userName} is speaking directly to ${guesserName}
+2. Draw from what ${userName} actually shared in the conversation above (don't invent new content)
 3. Address the specific topic mentioned
 4. Feel natural and genuine, not forced
 
@@ -643,7 +431,6 @@ Respond with ONLY the message text, no additional formatting or explanation.`;
       operation: `share-draft-generation-${routingDecision.model}`,
       callType: BrainActivityCallType.ORCHESTRATED_RESPONSE,
     });
-
     if (!draftContent) {
       errorResponse(res, 'INTERNAL_ERROR', 'Failed to generate draft', 500);
       return;
@@ -653,51 +440,23 @@ Respond with ONLY the message text, no additional formatting or explanation.`;
       text: draftContent.trim(),
       sessionId,
       turnId,
-      requesterName: user.name || 'User',
-      targetName: guesserName || 'partner',
+      requesterName: userName,
+      targetName: guesserName,
     });
 
-    // Update the share offer with the generated draft
-    await prisma.reconcilerShareOffer.update({
+    // The subject's own offer row (app connection).
+    await prisma.contextShareOffer.update({
       where: { id: shareOffer.id },
-      data: {
-        suggestedContent: draftContent.trim(),
-      },
+      data: { suggestedContent: draftContent.trim() },
+      select: { id: true },
     });
 
-    // Create an AI message with the draft so it persists in chat
-    // The message content includes a marker that the mobile can parse to show the button
-    const aiMessage = await prisma.message.create({
-      data: {
-        sessionId,
-        senderId: null, // AI message
-        forUserId: user.id,
-        role: 'AI',
-        content: `Here's what you could share with ${guesserName}:\n\n"${draftContent.trim()}"`,
-        stage: 2,
-      },
-    });
-
-    // Publish via Ably so UI updates immediately
-    // The metadata will be included in the Ably message for the mobile to detect
-    const { publishMessageAIResponse } = await import('../services/realtime');
-    await publishMessageAIResponse(
-      sessionId,
-      user.id,
-      {
-        id: aiMessage.id,
-        sessionId,
-        senderId: null,
-        content: aiMessage.content,
-        timestamp: aiMessage.timestamp.toISOString(),
-        role: MessageRole.AI,
-        stage: aiMessage.stage,
-      },
-      {
-        // Standard metadata fields that the realtime handler expects
-        // The mobile will detect this is a share draft via the response payload
-      }
-    );
+    if (!me.mainConversationId) {
+      errorResponse(res, 'INTERNAL_ERROR', 'Failed to generate share draft', 500);
+      return;
+    }
+    const aiMessage = await aiNote(me.mainConversationId, `Here's what you could share with ${guesserName}:\n\n"${draftContent.trim()}"`);
+    await publishMessageAIResponse(sessionId, caller.userId, await messageDTO(aiMessage, sessionId, me.participantId), {});
 
     successResponse(res, {
       success: true,
@@ -721,57 +480,31 @@ Respond with ONLY the message text, no additional formatting or explanation.`;
 /**
  * Refinement chat message — stateless AI coaching for refining shared content.
  * POST /sessions/:id/reconciler/refinement/message
- *
- * Client manages conversation history and sends the full history each time.
- * Uses Haiku for cost/latency. No DB writes for chat messages.
  */
-export async function refinementChatMessageHandler(
-  req: Request,
-  res: Response
-): Promise<void> {
+export async function refinementChatMessageHandler(req: Request, res: Response): Promise<void> {
   try {
-    const user = req.user;
-    if (!user) {
-      errorResponse(res, 'UNAUTHORIZED', 'Authentication required', 401);
-      return;
-    }
-
-    const { id: sessionId } = req.params;
     const { offerId, messages, proposedContent } = req.body as {
       offerId: string;
       messages: Array<{ role: 'user' | 'assistant'; content: string }>;
       proposedContent?: string;
     };
-
     if (!offerId || !messages || !Array.isArray(messages)) {
       errorResponse(res, 'VALIDATION_ERROR', 'offerId and messages are required', 400);
       return;
     }
+    const caller = await reconcilerCaller(req, res);
+    if (!caller) return;
+    const { sessionId, me, parties, userName } = caller;
 
-    // Check session access
-    const { session, error } = await checkSessionAccess(sessionId, user.id);
-    if (error || !session) {
-      errorResponse(res, 'NOT_FOUND', error || 'Session not found', 404);
-      return;
-    }
-
-    // Fetch the share offer for context
-    const shareOffer = await prisma.reconcilerShareOffer.findFirst({
-      where: {
-        id: offerId,
-        userId: user.id,
-        result: { sessionId },
-      },
-      include: { result: true },
+    const shareOffer = await prisma.contextShareOffer.findFirst({
+      where: { id: offerId, subjectParticipantId: me.participantId, attempt: { authorParticipant: { sessionId } } },
+      include: { result: true, attempt: { select: { authorParticipantId: true } } },
     });
-
     if (!shareOffer) {
       errorResponse(res, 'NOT_FOUND', 'Share offer not found', 404);
       return;
     }
-
-    const partnerName = shareOffer.result.guesserName || 'your partner';
-    const userName = user.name || 'you';
+    const partnerName = partyOf(parties, { participantId: shareOffer.attempt.authorParticipantId })?.name || 'your partner';
 
     const systemPrompt = `You are Meet Without Fear, a brief coaching companion helping ${userName} refine what to share with ${partnerName}.
 
@@ -800,42 +533,31 @@ WHEN NOT PROVIDING A REVISED VERSION:
 - Keep your response to 1-2 sentences
 - Sound like a thoughtful friend, not a therapist`;
 
-    const turnId = `${sessionId}-refinement-${Date.now()}`;
-
     const aiResponse = await getModelCompletion('haiku', {
       systemPrompt,
       messages: messages.length > 0 ? messages : [{ role: 'user', content: 'Help me refine what to share.' }],
       maxTokens: 512,
       sessionId,
-      turnId,
+      turnId: `${sessionId}-refinement-${Date.now()}`,
       operation: 'refinement-chat',
       callType: BrainActivityCallType.ORCHESTRATED_RESPONSE,
     });
-
     if (!aiResponse) {
       errorResponse(res, 'INTERNAL_ERROR', 'Failed to generate response', 500);
       return;
     }
 
-    // Extract proposed content from <content> tags (or common AI variations)
-    let extractedContent: string | null = null;
-    const contentMatch = aiResponse.match(/<content>([\s\S]*?)<\/content>/i)
-      || aiResponse.match(/<revised[_ ]?text>([\s\S]*?)<\/revised[_ ]?text>/i)
-      || aiResponse.match(/<revised>([\s\S]*?)<\/revised>/i)
-      || aiResponse.match(/<draft>([\s\S]*?)<\/draft>/i);
-    if (contentMatch) {
-      extractedContent = contentMatch[1].trim();
-    }
-
-    // Strip entire content blocks (tags + content between them) from visible response
+    const contentMatch =
+      aiResponse.match(/<content>([\s\S]*?)<\/content>/i) ||
+      aiResponse.match(/<revised[_ ]?text>([\s\S]*?)<\/revised[_ ]?text>/i) ||
+      aiResponse.match(/<revised>([\s\S]*?)<\/revised>/i) ||
+      aiResponse.match(/<draft>([\s\S]*?)<\/draft>/i);
+    const extractedContent = contentMatch ? contentMatch[1].trim() : null;
     const visibleResponse = aiResponse
       .replace(/<(?:content|revised[_ ]?text|revised|draft)>[\s\S]*?<\/(?:content|revised[_ ]?text|revised|draft)>/gi, '')
       .trim();
 
-    successResponse(res, {
-      response: visibleResponse,
-      proposedContent: extractedContent,
-    });
+    successResponse(res, { response: visibleResponse, proposedContent: extractedContent });
   } catch (error) {
     logger.error('[refinementChatMessageHandler] Error:', error);
     errorResponse(res, 'INTERNAL_ERROR', 'Failed to process refinement message', 500);
@@ -845,200 +567,62 @@ WHEN NOT PROVIDING A REVISED VERSION:
 /**
  * Finalize refinement — share the refined content with partner.
  * POST /sessions/:id/reconciler/refinement/finalize
- *
- * Creates a SHARED_CONTEXT message, updates offer status, and notifies partner.
  */
-export async function refinementFinalizeHandler(
-  req: Request,
-  res: Response
-): Promise<void> {
+export async function refinementFinalizeHandler(req: Request, res: Response): Promise<void> {
   try {
-    const user = req.user;
-    if (!user) {
-      errorResponse(res, 'UNAUTHORIZED', 'Authentication required', 401);
-      return;
-    }
-
-    const { id: sessionId } = req.params;
-    const { offerId, content } = req.body as {
-      offerId: string;
-      content: string;
-    };
-
+    const { offerId, content } = req.body as { offerId: string; content: string };
     if (!offerId || !content) {
       errorResponse(res, 'VALIDATION_ERROR', 'offerId and content are required', 400);
       return;
     }
+    const caller = await reconcilerCaller(req, res);
+    if (!caller) return;
+    const { sessionId, me, parties, userId } = caller;
 
-    // Check session access
-    const { session, error } = await checkSessionAccess(sessionId, user.id);
-    if (error || !session) {
-      errorResponse(res, 'NOT_FOUND', error || 'Session not found', 404);
-      return;
-    }
-
-    // Find the share offer
-    const shareOffer = await prisma.reconcilerShareOffer.findFirst({
-      where: {
-        id: offerId,
-        userId: user.id,
-        result: { sessionId },
-        status: { in: ['OFFERED', 'PENDING'] },
-      },
-      include: { result: true },
-    });
-
+    const shareOffer = await myOpenOffer(sessionId, me, { id: offerId });
     if (!shareOffer) {
       errorResponse(res, 'NOT_FOUND', 'Share offer not found or already finalized', 404);
       return;
     }
+    const guesser = partyOf(parties, { participantId: shareOffer.attempt.authorParticipantId });
+    if (!guesser) {
+      errorResponse(res, 'NOT_FOUND', 'Share offer not found or already finalized', 404);
+      return;
+    }
+    const subjectName = me.name || 'You';
+    const guesserName = guesser.name || 'your partner';
 
-    const guesserId = shareOffer.result.guesserId;
-    const subjectName = shareOffer.result.subjectName;
-    const guesserName = shareOffer.result.guesserName;
-
-    // Check if this is a subsequent share (subject has already shared context before)
-    const priorShareCount = await prisma.message.count({
-      where: {
-        sessionId,
-        senderId: user.id,
-        role: 'SHARED_CONTEXT',
-      },
+    const priorShareCount = await prisma.contextShareOffer.count({
+      where: { subjectParticipantId: me.participantId, status: 'ACCEPTED', attempt: { authorParticipant: { sessionId } } },
     });
-
-    // Generate AI messages outside transaction (AI calls can be slow)
     let subjectAckMessage: string;
     if (priorShareCount > 0) {
-      // Subsequent share — short static ack to avoid repetitive LLM-generated messages
       subjectAckMessage = `Thanks for sharing that additional context with ${guesserName}.`;
     } else {
       try {
-        subjectAckMessage = await generatePostShareContinuation(
-          sessionId, user.id, subjectName, guesserName, content
-        );
+        subjectAckMessage = await generatePostShareContinuation(sessionId, me, subjectName, guesserName, content, guesser);
       } catch (error) {
         logger.error('[refinementFinalizeHandler] generatePostShareContinuation failed:', error);
-        const subjectProgress = await prisma.stageProgress.findFirst({
-          where: { sessionId, userId: user.id },
-          orderBy: { stage: 'desc' },
-        });
-        subjectAckMessage = getFallbackContinuation(subjectProgress?.stage ?? 2, guesserName);
+        const stage = (await loadCurrentStages([me.participantId])).get(me.participantId)?.stage ?? 2;
+        subjectAckMessage = getFallbackContinuation(stage, guesserName);
       }
     }
-
     const reflectionMessage = await generateContextReceivedReflection(sessionId, guesserName, subjectName);
 
-    // Get subject's current stage for the ack message
-    const subjectProgress = await prisma.stageProgress.findFirst({
-      where: { sessionId, userId: user.id },
-      orderBy: { stage: 'desc' },
-    });
-    const subjectCurrentStage = subjectProgress?.stage ?? 2;
-
-    // Wrap all DB writes in a transaction for atomicity
-    let sharedMessageId: string;
-    await prisma.$transaction(async (tx) => {
-      const now = new Date();
-
-      // Update share offer
-      await tx.reconcilerShareOffer.update({
-        where: { id: shareOffer.id },
-        data: {
-          status: 'ACCEPTED',
-          sharedContent: content,
-          refinedContent: content,
-          sharedAt: now,
-          deliveryStatus: 'DELIVERED',
-          deliveredAt: now,
-        },
-      });
-
-      // Update guesser's empathy attempt to REFINING so they can
-      // chat and refine with the new context. No status filter — after
-      // multiple reconciler cycles the guesser may be in READY, HELD,
-      // or another status, not just AWAITING_SHARING.
-      await tx.empathyAttempt.updateMany({
-        where: {
-          sessionId,
-          sourceUserId: guesserId,
-        },
-        data: {
-          status: 'REFINING',
-          statusVersion: { increment: 1 },
-        },
-      });
-
-      // Create messages with guaranteed ordering (100ms apart)
-      const baseTime = now.getTime();
-      const sharedContextTimestamp = new Date(baseTime);
-      const reflectionTimestamp = new Date(baseTime + 100);
-      const subjectAckTimestamp = new Date(baseTime + 200);
-
-      // 1. SHARED_CONTEXT message (the actual content shared by subject)
-      // Renders as a labeled card ("NEW CONTEXT FROM {name}") in the guesser's chat
-      const sharedMessage = await tx.message.create({
-        data: {
-          sessionId,
-          senderId: user.id,
-          forUserId: guesserId,
-          role: 'SHARED_CONTEXT',
-          content,
-          stage: 2,
-          timestamp: sharedContextTimestamp,
-        },
-      });
-      sharedMessageId = sharedMessage.id;
-
-      // 2. Reflection prompt for guesser (Sonnet-generated, invites processing)
-      await tx.message.create({
-        data: {
-          sessionId,
-          senderId: null,
-          forUserId: guesserId,
-          role: 'AI',
-          content: reflectionMessage,
-          stage: 2,
-          timestamp: reflectionTimestamp,
-        },
-      });
-
-      // 3. Subject acknowledgment message
-      await tx.message.create({
-        data: {
-          sessionId,
-          senderId: null,
-          forUserId: user.id,
-          role: 'AI',
-          content: subjectAckMessage,
-          stage: subjectCurrentStage,
-          timestamp: subjectAckTimestamp,
-        },
-      });
-    });
-
-    logger.info(`[refinementFinalizeHandler] Share finalized for user ${user.id} (4 messages created in transaction)`);
-
-    // Notify guesser via Ably
-    if (guesserId) {
-      const { buildEmpathyExchangeStatus } = await import('../services/empathy-status');
-      const partnerEmpathyStatus = await buildEmpathyExchangeStatus(sessionId, guesserId);
-
-      await notifyPartner(sessionId, guesserId, 'empathy.context_shared', {
-        stage: 2,
-        sharedBy: user.id,
-        content,
-        forUserId: guesserId,
-        empathyStatus: partnerEmpathyStatus,
-        triggeredByUserId: user.id,
-      }, { excludeUserId: user.id });
-
-    }
-
-    successResponse(res, {
-      status: 'shared',
-      messageId: sharedMessageId!,
+    const { sharedMessageId } = await shareAccepted({
+      sessionId,
+      offerId: shareOffer.id,
+      subject: me,
+      author: guesser,
+      attempt: shareOffer.attempt,
       sharedContent: content,
+      refinement: content,
+      subjectAckMessage,
+      reflectionMessage,
     });
+
+    await notifyContextShared(sessionId, userId, guesser, content);
+    successResponse(res, { status: 'shared', messageId: sharedMessageId, sharedContent: content });
   } catch (error) {
     logger.error('[refinementFinalizeHandler] Error:', error);
     errorResponse(res, 'INTERNAL_ERROR', 'Failed to finalize refinement', 500);

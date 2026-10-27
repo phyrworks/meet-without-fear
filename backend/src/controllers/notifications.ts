@@ -4,12 +4,23 @@
  * Provides pending action items and badge counts for the activity menu.
  * - GET /sessions/:id/pending-actions - Get pending actions for a session
  * - GET /notifications/badge-count - Get aggregate badge count across sessions
+ *
+ * Target shape (TS-10): everything counted is the caller's own — their offers
+ * (as subject), the partner's rounds REVEALED to them and not yet reviewed,
+ * and delivered context in their own conversation. The "sent tab" count is
+ * the caller's accepted offers whose delivery / seen change they have not
+ * been shown: this endpoint is the notification path that surfaces them, so
+ * it WRITES `delivery_notified_at` / `seen_notified_at` (job) for what it
+ * counted — an update is counted once (review F4.2; spec §1.2
+ * context_share_offer).
  */
 
 import { Request, Response } from 'express';
 import { logger } from '../lib/logger';
-import { prisma } from '../lib/prisma';
+import { getJobPrisma, prisma } from '../lib/prisma';
 import { successResponse, errorResponse } from '../utils/response';
+import { loadCurrentStages } from '../services/stage-shim';
+import { partyOf, sessionParties, type SessionParty } from '../services/empathy-store';
 
 // ============================================================================
 // Types
@@ -21,6 +32,48 @@ interface PendingAction {
   data: Record<string, unknown>;
 }
 
+const TERMINAL = new Set(['RESOLVED', 'ABANDONED', 'ARCHIVED']);
+
+/** Partner rounds revealed to `me` (latest revealed round per direction) that `me` has not reviewed. */
+async function unreviewedRevealed(me: SessionParty) {
+  const rounds = await prisma.empathyAttempt.findMany({
+    where: { subjectParticipantId: me.participantId, status: 'REVEALED', revealedAt: { not: null } },
+    select: {
+      id: true,
+      content: true,
+      authorParticipant: { select: { userId: true } },
+      reviews: { where: { reviewerParticipantId: me.participantId }, select: { id: true } },
+    },
+  });
+  return rounds.filter(r => r.reviews.length === 0);
+}
+
+/** Delivered context in `me`'s own conversation since they last viewed the Share tab. */
+async function unreadContext(me: SessionParty) {
+  if (!me.mainConversationId) return [];
+  const readState = await prisma.conversationReadState.findUnique({
+    where: { participantId: me.participantId },
+    select: { lastViewedShareTabAt: true },
+  });
+  return prisma.message.findMany({
+    where: {
+      conversationId: me.mainConversationId,
+      kind: 'SHARED_CONTEXT',
+      senderParticipantId: { not: me.participantId },
+      ...(readState?.lastViewedShareTabAt ? { createdAt: { gt: readState.lastViewedShareTabAt } } : {}),
+    },
+    orderBy: { createdAt: 'desc' },
+    select: { id: true, content: true, createdAt: true, senderParticipant: { select: { userId: true } } },
+  });
+}
+
+async function openOffers(me: SessionParty) {
+  return prisma.contextShareOffer.findMany({
+    where: { subjectParticipantId: me.participantId, status: { in: ['PENDING', 'OFFERED'] } },
+    include: { result: true, attempt: { select: { authorParticipantId: true } } },
+  });
+}
+
 // ============================================================================
 // Controllers
 // ============================================================================
@@ -28,156 +81,97 @@ interface PendingAction {
 /**
  * Get pending actions for a session
  * GET /sessions/:id/pending-actions
- *
- * Returns action items the user needs to attend to:
- * - Share offers (PENDING/OFFERED from reconciler)
- * - Empathy validation (partner's revealed empathy needing feedback)
- * - Received shared context (unread)
  */
-export async function getPendingActionsHandler(
-  req: Request,
-  res: Response
-): Promise<void> {
+export async function getPendingActionsHandler(req: Request, res: Response): Promise<void> {
   try {
     const user = req.user;
     if (!user) {
       errorResponse(res, 'UNAUTHORIZED', 'Authentication required', 401);
       return;
     }
-
     const { id: sessionId } = req.params;
 
-    // Verify session access
-    const session = await prisma.session.findFirst({
-      where: {
-        id: sessionId,
-        relationship: {
-          members: { some: { userId: user.id } },
-        },
-      },
-    });
-
-    if (!session) {
+    const [session, parties] = await Promise.all([
+      prisma.session.findUnique({ where: { id: sessionId }, select: { status: true } }),
+      sessionParties(sessionId),
+    ]);
+    const me = partyOf(parties, { participantId: req.participant?.id }) ?? partyOf(parties, { userId: user.id });
+    if (!session || !me) {
       errorResponse(res, 'NOT_FOUND', 'Session not found', 404);
       return;
     }
-
-    // Don't return pending actions for resolved/terminal sessions
-    if (session.status === 'RESOLVED' || session.status === 'ABANDONED' || session.status === 'ARCHIVED') {
+    if (TERMINAL.has(session.status)) {
       successResponse(res, { actions: [], sentTabUpdates: 0 });
       return;
     }
 
     const actions: PendingAction[] = [];
+    const userMaxStage = (await loadCurrentStages([me.participantId])).get(me.participantId)?.stage ?? 0;
 
-    const userStageProgress = await prisma.stageProgress.findFirst({
-      where: { sessionId, userId: user.id },
-      orderBy: { stage: 'desc' },
-      select: { stage: true },
-    });
-    const userMaxStage = userStageProgress?.stage ?? 0;
-
-    // 1. Pending share offers (reconciler suggested sharing). These are only
-    // actionable while the user is still in Stage 2.
-    const shareOffers = userMaxStage === 2
-      ? await prisma.reconcilerShareOffer.findMany({
-          where: {
-            userId: user.id,
-            result: { sessionId },
-            status: { in: ['PENDING', 'OFFERED'] },
-          },
-          include: { result: true },
-        })
-      : [];
-
-    for (const offer of shareOffers) {
-      actions.push({
-        type: 'share_offer',
-        id: offer.id,
-        data: {
-          guesserName: offer.result.guesserName,
-          suggestedContent: offer.suggestedContent,
-          suggestedShareFocus: offer.result.suggestedShareFocus,
-          action: offer.result.recommendedAction,
-        },
-      });
-    }
-
-    // 2. Partner empathy needing validation (REVEALED, no validation from this user)
-    const partnerAttempts = await prisma.empathyAttempt.findMany({
-      where: {
-        sessionId,
-        sourceUserId: { not: user.id },
-        status: 'REVEALED',
-      },
-      include: {
-        validations: {
-          where: { userId: user.id },
-        },
-      },
-    });
-
-    for (const attempt of partnerAttempts) {
-      if (attempt.validations.length === 0) {
+    // 1. My open share offers (as subject) — actionable only in Stage 2.
+    if (userMaxStage === 2) {
+      for (const offer of await openOffers(me)) {
         actions.push({
-          type: 'validate_empathy',
-          id: attempt.id,
+          type: 'share_offer',
+          id: offer.id,
           data: {
-            content: attempt.content,
-            sourceUserId: attempt.sourceUserId,
+            guesserName: partyOf(parties, { participantId: offer.attempt.authorParticipantId })?.name ?? null,
+            suggestedContent: offer.suggestedContent,
+            suggestedShareFocus: offer.result.suggestedShareFocus,
+            action: offer.result.recommendedAction,
           },
         });
       }
     }
 
-    // 3. Unread shared context (SHARED_CONTEXT messages for this user)
-    // Only show if user has completed Stage 1 (advanced to stage >= 2).
-    // Partner may share context before this user finishes Stage 1, but we
-    // suppress the notification until the user is ready to see it.
+    // 2. The partner's rounds revealed to me, awaiting my review.
+    for (const attempt of await unreviewedRevealed(me)) {
+      actions.push({
+        type: 'validate_empathy',
+        id: attempt.id,
+        data: { content: attempt.content, sourceUserId: attempt.authorParticipant.userId },
+      });
+    }
+
+    // 3. Unread delivered context — only once I am past Stage 1.
     if (userMaxStage >= 2) {
-      const vessel = await prisma.userVessel.findUnique({
-        where: { userId_sessionId: { userId: user.id, sessionId } },
-        select: { lastViewedShareTabAt: true },
-      });
-
-      const unreadContext = await prisma.message.findMany({
-        where: {
-          sessionId,
-          forUserId: user.id,
-          senderId: { not: user.id },
-          role: 'SHARED_CONTEXT',
-          ...(vessel?.lastViewedShareTabAt
-            ? { timestamp: { gt: vessel.lastViewedShareTabAt } }
-            : {}),
-        },
-        orderBy: { timestamp: 'desc' },
-      });
-
-      for (const msg of unreadContext) {
+      for (const msg of await unreadContext(me)) {
         actions.push({
           type: 'context_received',
           id: msg.id,
-          data: {
-            content: msg.content,
-            senderId: msg.senderId,
-            timestamp: msg.timestamp.toISOString(),
-          },
+          data: { content: msg.content, senderId: msg.senderParticipant?.userId ?? null, timestamp: msg.createdAt.toISOString() },
         });
       }
     }
 
-    // 4. Count sent tab updates (delivery/seen status changes the user hasn't been notified about)
-    const sentTabUpdates = await prisma.reconcilerShareOffer.count({
+    // 4. Sent-tab updates: my accepted offers whose delivery / seen I have not
+    // been shown. Counted, then stamped as notified (job) — this response is
+    // the notification.
+    const unnotified = await prisma.contextShareOffer.findMany({
       where: {
-        userId: user.id, // items I sent (I am the subject)
-        result: { sessionId },
+        subjectParticipantId: me.participantId,
         status: 'ACCEPTED',
         OR: [
-          { deliveryStatus: 'DELIVERED', lastDeliveryNotifiedAt: null },
-          { deliveryStatus: 'SEEN', lastSeenNotifiedAt: null },
+          { deliveryStatus: 'DELIVERED', deliveryNotifiedAt: null },
+          { deliveryStatus: 'SEEN', seenNotifiedAt: null },
         ],
       },
+      select: { id: true, deliveryStatus: true },
     });
+    const sentTabUpdates = unnotified.length;
+    if (unnotified.length > 0) {
+      const delivered = unnotified.filter(o => o.deliveryStatus === 'DELIVERED').map(o => o.id);
+      const seen = unnotified.filter(o => o.deliveryStatus === 'SEEN').map(o => o.id);
+      const job = getJobPrisma();
+      if (delivered.length) {
+        await job.$executeRaw`UPDATE context_share_offer SET delivery_notified_at = now()
+                              WHERE id = ANY(${delivered}::uuid[]) AND delivery_notified_at IS NULL`;
+      }
+      if (seen.length) {
+        await job.$executeRaw`UPDATE context_share_offer SET seen_notified_at = now()
+                              WHERE id = ANY(${seen}::uuid[]) AND seen_notified_at IS NULL`;
+      }
+    }
 
     successResponse(res, { actions, sentTabUpdates });
   } catch (error) {
@@ -189,13 +183,8 @@ export async function getPendingActionsHandler(
 /**
  * Get badge count across all active sessions
  * GET /notifications/badge-count
- *
- * Aggregates pending action counts for the app-level badge.
  */
-export async function getBadgeCountHandler(
-  req: Request,
-  res: Response
-): Promise<void> {
+export async function getBadgeCountHandler(req: Request, res: Response): Promise<void> {
   try {
     const user = req.user;
     if (!user) {
@@ -203,77 +192,34 @@ export async function getBadgeCountHandler(
       return;
     }
 
-    // Get all active sessions for this user
-    const sessions = await prisma.session.findMany({
-      where: {
-        status: { in: ['ACTIVE', 'INVITED'] },
-        relationship: {
-          members: { some: { userId: user.id } },
-        },
-      },
-      select: { id: true },
+    // The caller's present participants in active sessions.
+    const rows = await prisma.participant.findMany({
+      where: { userId: user.id, leftAt: null, session: { status: { in: ['ACTIVE', 'INVITED'] } } },
+      select: { id: true, sessionId: true, userId: true, joinedAt: true, conversations: { where: { kind: 'MAIN' }, select: { id: true } } },
     });
+    const stages = await loadCurrentStages(rows.map(r => r.id));
 
     const bySession: Record<string, number> = {};
     let total = 0;
-
-    for (const session of sessions) {
+    for (const r of rows) {
+      const me: SessionParty = {
+        participantId: r.id,
+        userId: r.userId,
+        name: null,
+        joinedAt: r.joinedAt,
+        mainConversationId: r.conversations[0]?.id ?? null,
+      };
+      const stage = stages.get(r.id)?.stage ?? 0;
       let count = 0;
-
-      const badgeStageProgress = await prisma.stageProgress.findFirst({
-        where: { sessionId: session.id, userId: user.id },
-        orderBy: { stage: 'desc' },
-        select: { stage: true },
-      });
-      const userMaxStage = badgeStageProgress?.stage ?? 0;
-
-      // Share offers are only actionable while the user is still in Stage 2.
-      const shareOfferCount = userMaxStage === 2
-        ? await prisma.reconcilerShareOffer.count({
-            where: {
-              userId: user.id,
-              result: { sessionId: session.id },
-              status: { in: ['PENDING', 'OFFERED'] },
-            },
-          })
-        : 0;
-      count += shareOfferCount;
-
-      // Unvalidated partner empathy
-      const unvalidatedCount = await prisma.empathyAttempt.count({
-        where: {
-          sessionId: session.id,
-          sourceUserId: { not: user.id },
-          status: 'REVEALED',
-          validations: { none: { userId: user.id } },
-        },
-      });
-      count += unvalidatedCount;
-
-      // Unread shared context messages (from partner, not self-sent)
-      // Only count if user has completed Stage 1 (advanced to stage >= 2)
-      if (userMaxStage >= 2) {
-        const vessel = await prisma.userVessel.findUnique({
-          where: { userId_sessionId: { userId: user.id, sessionId: session.id } },
-          select: { lastViewedShareTabAt: true },
+      if (stage === 2) {
+        count += await prisma.contextShareOffer.count({
+          where: { subjectParticipantId: me.participantId, status: { in: ['PENDING', 'OFFERED'] } },
         });
-
-        const unreadContextCount = await prisma.message.count({
-          where: {
-            sessionId: session.id,
-            forUserId: user.id,
-            senderId: { not: user.id },
-            role: 'SHARED_CONTEXT',
-            ...(vessel?.lastViewedShareTabAt
-              ? { timestamp: { gt: vessel.lastViewedShareTabAt } }
-              : {}),
-          },
-        });
-        count += unreadContextCount;
       }
-
+      count += (await unreviewedRevealed(me)).length;
+      if (stage >= 2) count += (await unreadContext(me)).length;
       if (count > 0) {
-        bySession[session.id] = count;
+        bySession[r.sessionId] = count;
         total += count;
       }
     }
