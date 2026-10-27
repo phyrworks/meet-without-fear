@@ -101,6 +101,12 @@ describeTarget('empathy rounds, the status writer and the review path (mwf_app +
     expect(mine[0].content).not.toBe(REVISED);
   });
 
+  it('the circuit breaker counts resubmissions as rounds − 1 (RefinementAttemptCounter → rounds)', async () => {
+    const { checkAttempts } = await import('../reconciler/circuit-breaker');
+    expect(await checkAttempts(ada.participantId, bob.participantId)).toEqual({ shouldSkipReconciler: false, attempts: 1 });
+    expect(await checkAttempts(bob.participantId, ada.participantId)).toEqual({ shouldSkipReconciler: false, attempts: 0 });
+  });
+
   it('only the author resubmits', async () => {
     const { resubmitAttempt, currentAttempt } = await store();
     const round2 = (await currentAttempt(ada.participantId, bob.participantId))!;
