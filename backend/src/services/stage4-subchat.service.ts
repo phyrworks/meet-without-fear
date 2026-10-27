@@ -232,6 +232,18 @@ export async function openOrGetActiveSubChat(input: OpenSubChatInput): Promise<S
   });
   if (match) return toRecord(match);
 
+  // The anchor must be something this participant may see: a shared need of
+  // the session (NEEDS_BRAINSTORM) or a visible proposal (PROPOSAL_REFINEMENT).
+  const anchorNeed =
+    input.anchorKind === Stage4SubChatAnchor.NEEDS_BRAINSTORM && anchorId
+      ? (await loadStage4Needs(input.sessionId, participant.id)).find((n) => n.id === anchorId)
+      : undefined;
+  if (input.anchorKind === Stage4SubChatAnchor.NEEDS_BRAINSTORM && anchorId && !anchorNeed) throw new SubChatNotFoundError();
+  if (input.anchorKind === Stage4SubChatAnchor.PROPOSAL_REFINEMENT && anchorId) {
+    const visible = (await loadProposals(input.sessionId, participant.id)).some((p) => p.id === anchorId);
+    if (!visible) throw new SubChatNotFoundError();
+  }
+
   const created = (await prisma.conversation.create({
     data: {
       participantId: participant.id,
@@ -242,9 +254,21 @@ export async function openOrGetActiveSubChat(input: OpenSubChatInput): Promise<S
     },
     select: SUBCHAT_SELECT,
   })) as unknown as SubchatConversation;
-  const record = toRecord(created);
-  // The NEEDS_BRAINSTORM anchor is remembered with the first message; report what was asked for meanwhile.
-  return input.anchorKind === Stage4SubChatAnchor.NEEDS_BRAINSTORM ? { ...record, anchorId } : record;
+  // Fix round 1 (Important 4): `conversation` has no column for a need anchor,
+  // so the NEEDS_BRAINSTORM anchor is persisted AT OPEN as the sub-chat's
+  // opening facilitator line, whose `refining_need_id` is the shared need (a
+  // need_share id is its need's id). The need is named as this participant
+  // names it (their own label, or the partner's shared text).
+  if (anchorNeed) {
+    await createFacilitatorMessage({
+      conversationId: created.id,
+      content: `Let's look for small, concrete ways to honor this need: ${anchorNeed.label}. What comes to mind?`,
+      refiningNeedId: anchorNeed.id,
+    });
+    const reread = await loadSubChat(created.id);
+    if (reread) return toRecord(reread);
+  }
+  return toRecord(created);
 }
 
 async function loadSubChat(subChatId: string): Promise<SubchatConversation | null> {
@@ -296,7 +320,10 @@ export async function loadAnchorContext(
     return { anchorKind, needLabel: needs.find((n) => n.id === anchorId)?.label ?? null };
   }
   if (anchorKind === Stage4SubChatAnchor.PROPOSAL_REFINEMENT && anchorId) {
-    const proposal = await prisma.proposal.findFirst({ where: { id: anchorId, sessionId }, select: { description: true } });
+    // Only a proposal the participant may see (spec §1.4 proposal RLS arm).
+    const proposal = viewerParticipantId
+      ? (await loadProposals(sessionId, viewerParticipantId)).find((p) => p.id === anchorId)
+      : undefined;
     return { anchorKind, proposalDescription: proposal?.description ?? null };
   }
   return { anchorKind };
@@ -488,6 +515,7 @@ export async function resolveSubChat(input: ResolveInput): Promise<ResolveResult
   const anchorNeedId = record.anchorKind === Stage4SubChatAnchor.NEEDS_BRAINSTORM ? record.anchorId : null;
 
   const links: Array<{ proposalId: string; labels: string[] | undefined; extraNeedIds: string[] }> = [];
+  const editable = new Set((await loadProposals(sessionId, me)).map((p) => p.id));
   await prisma.$transaction(async (tx) => {
     for (const draft of accepted) {
       const created = await tx.proposal.create({
@@ -509,6 +537,8 @@ export async function resolveSubChat(input: ResolveInput): Promise<ResolveResult
 
     for (const draft of updated) {
       if (!draft.proposalId) continue;
+      // Only a proposal of this session the participant may see.
+      if (!editable.has(draft.proposalId)) continue;
       const row = await tx.proposal.update({
         where: { id: draft.proposalId },
         data: {

@@ -72,6 +72,10 @@ export async function openStage4SubChat(req: Request, res: Response): Promise<vo
     });
     successResponse(res, { subChat: toSubChatDTO(record) });
   } catch (err) {
+    if (err instanceof SubChatNotFoundError) {
+      errorResponse(res, 'NOT_FOUND', 'Sub-chat anchor not found', 404);
+      return;
+    }
     logger.error('[openStage4SubChat]', err);
     errorResponse(res, 'INTERNAL_ERROR', 'Could not open sub-chat', 500);
   }
