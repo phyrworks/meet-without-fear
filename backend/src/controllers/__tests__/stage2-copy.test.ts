@@ -1,3 +1,13 @@
+/**
+ * Stage 2 user-facing copy (source checks).
+ *
+ * TS-12: two cases are gone — they grepped stage2.ts for the symmetric
+ * reconciliation branch (OFFER_SHARING / OFFER_OPTIONAL mapping, the
+ * alreadyProcessed set) that TS-10 replaced with the per-direction reconciler;
+ * the recommendation-to-share-offer mapping
+ * runs on real roles in reconciler-reader.target.test.ts (an
+ * OFFER_SHARING analysis opens a share offer per direction).
+ */
 import fs from 'fs';
 import path from 'path';
 
@@ -44,37 +54,6 @@ describe('Stage 2 user-facing copy', () => {
     expect(messagesSource).not.toContain('What you just did really mattered');
     expect(messagesSource).not.toContain('real honesty');
     expect(messagesSource).not.toContain('protected attempt');
-  });
-
-  it('maps reconciler sharing recommendations into the Stage 2 sharing flow', () => {
-    const source = fs.readFileSync(
-      path.join(__dirname, '..', 'stage2.ts'),
-      'utf8'
-    );
-
-    expect(source).toContain(
-      "result.aUnderstandingB.recommendation.action === 'OFFER_SHARING'"
-    );
-    expect(source).toContain(
-      "result.bUnderstandingA.recommendation.action === 'OFFER_SHARING'"
-    );
-    expect(source).toContain(
-      "result.aUnderstandingB.recommendation.action === 'OFFER_OPTIONAL'"
-    );
-    expect(source).toContain(
-      "result.bUnderstandingA.recommendation.action === 'OFFER_OPTIONAL'"
-    );
-  });
-
-  it('treats validated empathy attempts as already processed in symmetric reconciliation', () => {
-    const source = fs.readFileSync(
-      path.join(__dirname, '..', 'stage2.ts'),
-      'utf8'
-    );
-
-    expect(source).toContain(
-      "const alreadyProcessed = new Set(['READY', 'AWAITING_SHARING', 'REFINING', 'REVEALED', 'VALIDATED'])"
-    );
   });
 
   it('does not frame Stage 2 empathy as repair or working things out', () => {
