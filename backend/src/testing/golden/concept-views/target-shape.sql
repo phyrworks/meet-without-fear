@@ -245,7 +245,9 @@ SELECT
   n.label,
   n.category::text AS category,
   n.evidence,
-  n.ai_confidence::double precision AS ai_confidence,
+  -- real (spec) → its shortest decimal, then double: 0.9 stays 0.9 (a plain
+  -- real→double cast widens it to 0.8999999761581421; TS-11 post-merge).
+  n.ai_confidence::text::double precision AS ai_confidence,
   n.confirmed_at IS NOT NULL AS confirmed,
   n.locked_at AT TIME ZONE 'UTC' AS locked_at,
   n.superseded_by_need_id,

@@ -165,7 +165,7 @@ export function revealedAtFor(
 
 const q = {
   user: `INSERT INTO "user" (email, clerk_id, first_name, last_name, created_at, updated_at)
-         VALUES ($1, $2, $3, $4, $5, $5)
+         VALUES ($1, $2, $3, $4, $5, $6)
          ON CONFLICT (email) DO UPDATE SET first_name = EXCLUDED.first_name, last_name = EXCLUDED.last_name
          RETURNING id, email, name`,
 };
@@ -195,6 +195,16 @@ export async function writeTargetShape(db: ClientBase, scenario: Scenario, users
   const tick = (): Date => new Date(++cursor);
   let autoN = 0;
   const auto = (): Date => (explicit ? new Date(base.getTime() - 60_000 + autoN++) : tick());
+  // FIDELITY (TS-11 post-merge): in `explicitStamps` mode current-shape.ts
+  // gives every `@default(now())` / `@updatedAt` column its OWN auto() (a
+  // row's createdAt and updatedAt are two instants, one ms apart). Rows that
+  // carried both take two here too, so the concept image's timestamp ranks
+  // match (measured on NEEDS_CONFIRMED: user, session and draft ranks moved).
+  // Real-clock mode is unchanged: one tick for both.
+  const autoPair = (): [Date, Date] => {
+    const c = auto();
+    return [c, explicit ? auto() : c];
+  };
   const readClock = (c: Clock): void => {
     if (!clocks.has(c)) return;
     instants[c] = explicit ? new Date(base.getTime() + CLOCK_OFFSET_MS[c]) : tick();
@@ -215,22 +225,24 @@ export async function writeTargetShape(db: ClientBase, scenario: Scenario, users
       clerk,
       first,
       last,
-      auto(),
+      ...autoPair(),
     ]);
     userRows.push(r.rows[0]);
   }
 
   // --- Relationship and members ---------------------------------------------------
-  const relAt = auto();
+  // The old nested create stamped the members before the relationship row.
+  const memberAutos = explicit ? users.map(() => auto()) : [];
+  const relAt = autoPair();
   const rel = await db.query<{ id: string }>(
-    `INSERT INTO relationship (created_at, updated_at) VALUES ($1, $1) RETURNING id`,
-    [relAt],
+    `INSERT INTO relationship (created_at, updated_at) VALUES ($1, $2) RETURNING id`,
+    relAt,
   );
   const relationshipId = rel.rows[0].id;
   const joinedAt = explicit ? null : auto(); // one instant for the nested create
   const memberJoined: Date[] = [];
   for (const [i, u] of users.entries()) {
-    const at = joinedAt ?? auto();
+    const at = joinedAt ?? memberAutos[i];
     memberJoined.push(at);
     await db.query(
       `INSERT INTO relationship_member (relationship_id, user_id, nickname, joined_at, created_at, updated_at)
@@ -242,11 +254,11 @@ export async function writeTargetShape(db: ClientBase, scenario: Scenario, users
 
   // --- Session -------------------------------------------------------------------
   readClock('session');
-  const sessionAt = auto();
+  const sessionAt = autoPair();
   const session = await db.query<{ id: string; status: string }>(
     `INSERT INTO session (relationship_id, status, topic_frame, topic_frame_confirmed_at, created_at, updated_at)
-     VALUES ($1, $2, $3, $4, $5, $5) RETURNING id, status::text AS status`,
-    [relationshipId, sessionStatus(scenario), scenario.topic?.frame ?? null, scenario.topic ? t(scenario.topic.confirmedAt) : null, sessionAt],
+     VALUES ($1, $2, $3, $4, $5, $6) RETURNING id, status::text AS status`,
+    [relationshipId, sessionStatus(scenario), scenario.topic?.frame ?? null, scenario.topic ? t(scenario.topic.confirmedAt) : null, ...sessionAt],
   );
   const sessionId = session.rows[0].id;
 
@@ -303,12 +315,11 @@ export async function writeTargetShape(db: ClientBase, scenario: Scenario, users
   // participant here (auto stamps), before the scenario clock. A vessel's
   // read-state columns are the target's conversation_read_state (one per
   // participant; the old view's updated_at is the vessel's).
-  auto();
+  autoPair();
   for (const p of scenario.participants) {
-    const at = auto();
     await db.query(
-      `INSERT INTO conversation_read_state (participant_id, created_at, updated_at) VALUES ($1, $2, $2)`,
-      [pid(p.key), at],
+      `INSERT INTO conversation_read_state (participant_id, created_at, updated_at) VALUES ($1, $2, $3)`,
+      [pid(p.key), ...autoPair()],
     );
   }
 
@@ -356,13 +367,17 @@ export async function writeTargetShape(db: ClientBase, scenario: Scenario, users
       if (!submittedAt) throw new Error(`Participant "${p.key}" has an empathy attempt but no empathy_submitted milestone`);
       const subject = otherOf(p.key);
       if (!subject) throw new Error(`Participant "${p.key}": an empathy attempt needs exactly one other participant`);
-      const draftAt = auto();
       await db.query(
         `INSERT INTO draft (participant_id, kind, about_participant_id, content, ready_to_share, version, created_at, updated_at)
-         VALUES ($1, 'EMPATHY', $2, $3, true, 1, $4, $4)`,
-        [me, subject, e.statement, draftAt],
+         VALUES ($1, 'EMPATHY', $2, $3, true, 1, $4, $5)`,
+        [me, subject, e.statement, ...autoPair()],
       );
-      const attemptAt = auto();
+      // FIDELITY (TS-11 post-merge): the old factory left the attempt's stamps
+      // to the database default even in explicitStamps mode (no autoCols), so
+      // it consumed no auto stamp — taking one here moved every later auto by
+      // a millisecond (NEEDS_CONFIRMED: Bob's draft landed on the needs'
+      // instant). Its created_at/updated_at are in no concept view.
+      const attemptAt = explicit ? base : auto();
       const a = await db.query<{ id: string }>(
         `INSERT INTO empathy_attempt (author_participant_id, subject_participant_id, round, content, status, status_version,
                                       submitted_at, revealed_at, delivery_status, delivered_at, created_at, updated_at)
