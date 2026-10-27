@@ -253,8 +253,19 @@ export const TARGET_RELATION_MAP: Record<string, string[]> = {
   GlobalFacts: ['ai_memory'],
 };
 
-/** Physical tables (changesMapped): the same map, `user` only (preferences are never written here). */
-export const TARGET_TABLE_MAP: Record<string, string[]> = { ...TARGET_RELATION_MAP, User: ['user'] };
+/**
+ * Physical tables (changesMapped): the same map, `user` only (preferences are
+ * never written here), plus the repair-stage tables TS-11's write scenarios
+ * touch (spec §1.4 Absorbs: Stage4ProposalSelection → proposal_choice,
+ * Stage4NeedDeclination → need_disposition, IdentifiedNeed → need).
+ */
+export const TARGET_TABLE_MAP: Record<string, string[]> = {
+  ...TARGET_RELATION_MAP,
+  User: ['user'],
+  IdentifiedNeed: ['need'],
+  Stage4ProposalSelection: ['proposal_choice'],
+  Stage4NeedDeclination: ['need_disposition'],
+};
 
 /**
  * Relations the target's reads add, each with its reason (traceMapped) —
@@ -274,6 +285,8 @@ export const TARGET_ADDED_RELATIONS: Record<string, string> = {
  */
 export function targetByteRules(opts: {
   addedTables: ChangesMappedRule['addedTables'];
+  /** TS-11: baseline writes with no image at their exact step (see ChangesMappedRule). */
+  droppedTables?: ChangesMappedRule['droppedTables'];
   trace?: boolean;
 }): AllowRule[] {
   const rules: AllowRule[] = [
@@ -282,6 +295,7 @@ export function targetByteRules(opts: {
       at: ['steps.*.changes', 'steps.*.changesAtResponse'],
       tableMap: TARGET_TABLE_MAP,
       addedTables: opts.addedTables,
+      ...(opts.droppedTables ? { droppedTables: opts.droppedTables } : {}),
       why:
         'byte-level changes are keyed by physical tables and columns, which are shape-bound; the row values are ' +
         "asserted by the same step's concept comparison (ruling R32).",
@@ -325,6 +339,24 @@ export const TARGET_COMPACT_SIGNED_MASK: AllowRule = {
   why:
     "TS-9 session-read rule 1: the fixture's compact gate key (`compactSignedAt`) is not the app's (`signedAt`); " +
     'the target holds participant_milestone compact_signed.reached_at and the shim returns it.',
+};
+
+/**
+ * TS-11 post-merge, the Stage 3/4 fixtures' stage-1 gate: the current-shape
+ * fixture wrote `feelHeardConfirmed` without its instant (gatesToJson writes
+ * the gate value only), so today's DTO says null; the target holds
+ * feel_heard.reached_at and the shim returns it. A new instant renumbers every
+ * later <ts:N> of the step, so it is masked; paired with a scenario assertion
+ * that the raw value is the reader's feel_heard instant.
+ */
+export const TARGET_FEEL_HEARD_MASK: AllowRule = {
+  kind: 'fixtureMask',
+  at: ['steps.*.body.data.milestones.feelHeardConfirmedAt', 'steps.*.body.data.progress.milestones.feelHeardConfirmedAt'],
+  expect: 'isoTimestamp',
+  baseline: null,
+  why:
+    'the current-shape fixture wrote the stage-1 gate `feelHeardConfirmed` without its instant; the target holds ' +
+    'feel_heard.reached_at and the shim returns it (masked: a new instant renumbers the step’s later ranks).',
 };
 
 /**

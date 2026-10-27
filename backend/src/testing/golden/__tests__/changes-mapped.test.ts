@@ -201,3 +201,54 @@ describe('refusedStep (fix round 1, m1)', () => {
     expect(compareWithAllowList(e2, run(404, 'NOT_FOUND', [userChange]), allow).violations.join('\n')).toMatch(/stale rule/);
   });
 });
+
+describe('changesMapped droppedTables (TS-11 post-merge)', () => {
+  const dropRule: ChangesMappedRule = {
+    ...rule,
+    addedTables: [{ step: 3, table: 'participant_milestone', kind: 'added', count: 2, why: 'milestone rows' }],
+    droppedTables: [{ step: 3, table: 'StageProgress', kind: 'changed', why: 'a gate update is a milestone insert' }],
+  };
+
+  it('admits a named dropped write at its exact step, with the named additions', () => {
+    const base = [ch('StageProgress', 'changed'), ch('Message', 'added')];
+    const run = [ch('participant_milestone', 'added'), ch('participant_milestone', 'added'), ch('message', 'added')];
+    expect(compareMappedChanges(base, run, dropRule, 3)).toEqual([]);
+  });
+
+  it('is pinned to its step: the same drop at another step is a violation', () => {
+    expect(compareMappedChanges([ch('StageProgress', 'changed')], [], dropRule, 4).join('\n')).toMatch(/no changed image/);
+  });
+
+  it('fails when the run still writes the image (stale), or the baseline step has no such write', () => {
+    const still = [ch('participant_milestone', 'changed'), ch('participant_milestone', 'added'), ch('participant_milestone', 'added')];
+    expect(compareMappedChanges([ch('StageProgress', 'changed')], still, dropRule, 3).join('\n')).toMatch(
+      /but the run writes its changed image \(stale\)/,
+    );
+    const noBase = [ch('participant_milestone', 'added'), ch('participant_milestone', 'added')];
+    expect(compareMappedChanges([], noBase, dropRule, 3).join('\n')).toMatch(/which the baseline step does not write \(stale\)/);
+  });
+});
+
+describe('removedEntry (TS-11 post-merge)', () => {
+  const allow: AllowList = {
+    scenario: 's',
+    rules: [{ kind: 'removedEntry', at: 'steps.0.changes', where: { key: 'm1' }, mustMatch: true, why: 'test' }],
+  };
+  const e = { steps: [{ label: 'x', changes: [{ key: 'm0', v: 1 }, { key: 'm1', v: 2 }] }] };
+
+  it('admits the one pinned baseline entry missing from the run', () => {
+    const run = { steps: [{ label: 'x', changes: [{ key: 'm0', v: 1 }] }] };
+    expect(compareWithAllowList(e, run, allow)).toEqual({ violations: [], unmatchedRules: [] });
+  });
+
+  it('admits nothing else: another missing entry is still a violation', () => {
+    const run = { steps: [{ label: 'x', changes: [{ key: 'm1', v: 2 }] }] };
+    expect(compareWithAllowList(e, run, allow).violations.length).toBeGreaterThan(0);
+  });
+
+  it('keeps the entry when the run still holds it, and goes unmatched when the baseline lacks it', () => {
+    expect(compareWithAllowList(e, e, allow)).toEqual({ violations: [], unmatchedRules: [] });
+    const none = { steps: [{ label: 'x', changes: [{ key: 'm0', v: 1 }] }] };
+    expect(compareWithAllowList(none, none, allow).unmatchedRules).toHaveLength(1);
+  });
+});

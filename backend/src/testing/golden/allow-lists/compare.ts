@@ -18,6 +18,7 @@ import type {
   AllowRule,
   FixtureMaskRule,
   MayBeAbsentRule,
+  RemovedEntryRule,
   ReplacedEntryRule,
   TiedOrderRule,
   TraceMappedRule,
@@ -292,6 +293,10 @@ export function compareMappedChanges(e0: unknown, a0: unknown, rule: ChangesMapp
   const base = count(e0 as ChangeLike[]);
   const run = count(a0 as ChangeLike[]);
   const added = rule.addedTables.filter(t => t.step === step);
+  const dropped = (rule.droppedTables ?? []).filter(t => t.step === step);
+  for (const d of dropped) {
+    if (!base.has(`${d.table}|${d.kind}`)) out.push(`changes: droppedTables names ${d.kind} ${d.table} at step ${step}, which the baseline step does not write (stale)`);
+  }
   const addedCount = (table: string, kind: string) =>
     added.filter(t => t.table === table && t.kind === kind).reduce((n, t) => n + t.count, 0);
   // Which of the tables this baseline step wrote map onto each target table
@@ -308,6 +313,13 @@ export function compareMappedChanges(e0: unknown, a0: unknown, rule: ChangesMapp
     const tos = rule.tableMap[table];
     if (!tos) {
       out.push(`changes: baseline table ${table} has no entry in the table map`);
+      continue;
+    }
+    if (dropped.some(d => d.table === table && d.kind === kind)) {
+      // Named as dropped at this step: the run must write no image of it.
+      if (tos.some(to => run.has(`${to}|${kind}`))) {
+        out.push(`changes: droppedTables names ${kind} ${table} at step ${step}, but the run writes its ${kind} image (stale)`);
+      }
       continue;
     }
     for (const to of tos) image.add(`${to}|${kind}`);
@@ -423,6 +435,16 @@ export function compareWithAllowList(expected: unknown, actual: unknown, allow: 
         if (ai < 0) continue;
         e = e.filter((_, i) => i !== ei);
         a = a.filter((_, i) => i !== ai);
+      }
+      // `removedEntry` (TS-11): the baseline entry matching `where` may be
+      // missing from the run; when the run holds an entry equal to it, it stays.
+      for (const r of rulesAt('removedEntry', p)) {
+        const rule = r.rule as RemovedEntryRule;
+        const ei = e.findIndex(x => satisfies(x, rule.where));
+        if (ei < 0) continue;
+        r.matched++;
+        if (a.some(x => canon(x) === canon(e[ei]))) continue;
+        e = e.filter((_, i) => i !== ei);
       }
       const adders = rulesAt('addedEntries', p);
       adders.forEach(r => r.matched++);
