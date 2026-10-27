@@ -1,4 +1,4 @@
-import { prisma } from '../lib/prisma';
+import { prisma, type DbClient } from '../lib/prisma';
 import { loadStageStates } from '../services/stage-shim';
 
 interface StageInterval {
@@ -18,14 +18,16 @@ interface StageInterval {
  */
 export async function resolveStageIntervalsForSessions(
   sessionIds: string[],
+  /** The connection to read with (the ops dashboard passes mwf_ops; default the app's). */
+  client: DbClient = prisma,
 ): Promise<Map<string, StageInterval[]>> {
   if (sessionIds.length === 0) return new Map();
 
-  const participants = await prisma.participant.findMany({
+  const participants = await client.participant.findMany({
     where: { sessionId: { in: sessionIds } },
     select: { id: true, sessionId: true, joinedAt: true },
   });
-  const states = await loadStageStates(participants.map(p => ({ id: p.id, joinedAt: p.joinedAt })));
+  const states = await loadStageStates(participants.map(p => ({ id: p.id, joinedAt: p.joinedAt })), client);
 
   const sessionIntervals = new Map<string, StageInterval[]>();
   for (const p of participants) {

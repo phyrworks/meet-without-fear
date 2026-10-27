@@ -65,11 +65,27 @@ export function getJobPrisma(): PrismaClient {
   return globalForJob.jobPrisma;
 }
 
+/**
+ * The ops connection (`OPS_DATABASE_URL`, `mwf_ops`; falls back to
+ * DATABASE_URL when unset): the read-only Neural Monitor dashboard
+ * (routes/brain.ts; TS-12). mwf_ops holds SELECT on the tables the dashboard
+ * reads and nothing else (trailer T7). Created on first use.
+ */
+const globalForOps = globalThis as unknown as { opsPrisma: PrismaClient | undefined };
+
+export function getOpsPrisma(): PrismaClient {
+  if (!globalForOps.opsPrisma) globalForOps.opsPrisma = createPrismaClient({ role: 'ops' });
+  return globalForOps.opsPrisma;
+}
+
 /** Disconnect the job client if one was opened (tests, shutdown). */
 export async function disconnectJobPrisma(): Promise<void> {
   const client = globalForJob.jobPrisma;
   globalForJob.jobPrisma = undefined;
   await client?.$disconnect();
+  const ops = globalForOps.opsPrisma;
+  globalForOps.opsPrisma = undefined;
+  await ops?.$disconnect();
 }
 
 export default prisma;
