@@ -15,7 +15,7 @@ import type { Express } from 'express';
 import * as http from 'http';
 import request from 'supertest';
 import { applyConceptViews, CONCEPT_NAMES, ConceptName, conceptSqlForShape, takeConceptSnapshot } from './concept-views';
-import { dropDatabase, mark, openMarkerClient } from './db';
+import { dropDatabase, mark, openMarkerClient, withClient } from './db';
 import { restoreFixture, RestoredFixture } from './fixtures';
 import { isTargetShape } from './shape';
 import type { FreshWindow } from './normalize';
@@ -167,6 +167,12 @@ export function jobUrlFor(t: { host: string; port: number }, database: string): 
   return `postgresql://mwf_job:${pw}@${t.host}:${t.port}/${database}?application_name=${APP_UNDER_TEST}`;
 }
 
+/** TS-10: the request role (`mwf_app`) on a run database (dev password, local-setup.md; GOLDEN_APP_PASSWORD overrides). */
+export function appUrlFor(t: { host: string; port: number }, database: string): string {
+  const pw = encodeURIComponent(process.env.GOLDEN_APP_PASSWORD ?? 'mwf_app_dev');
+  return `postgresql://mwf_app:${pw}@${t.host}:${t.port}/${database}?application_name=${APP_UNDER_TEST}`;
+}
+
 export function authHeaders(actor: ActorRef): Record<string, string> {
   return { 'x-e2e-user-id': actor.id, 'x-e2e-user-email': actor.email };
 }
@@ -241,6 +247,13 @@ export async function createHarness(opts: {
    * representable.
    */
   conceptUnrepresentable?: 'throw' | 'record';
+  /**
+   * TS-10: on the target, log the APP in as `mwf_app` on the run database
+   * (default: the fixture's owner login, as every golden runs). For the
+   * real-role unit tests: the request path then runs under mwf_app's
+   * privileges with identity binding on, the job under mwf_job's.
+   */
+  appLogin?: 'owner' | 'mwf_app';
 }): Promise<Harness> {
   const traceOpts: TraceOptions | null = opts.trace === true ? {} : opts.trace ? opts.trace : null;
   const conceptViews: readonly ConceptName[] =
@@ -296,7 +309,21 @@ export async function createHarness(opts: {
   // harness's own connections — which are the overwhelming majority of
   // statements against this database. Set unconditionally: it costs nothing and
   // it also makes `pg_stat_activity` legible while debugging a stuck run.
-  process.env.DATABASE_URL = `${fixture.url}?application_name=${APP_UNDER_TEST}`;
+  if (opts.appLogin === 'mwf_app' && isTargetShape()) {
+    // mwf_app owns the tables in production; on a local clone (owned by the
+    // fixture's superuser) it gets exactly the privileges that ownership gives
+    // the request path — as functions-caller-tests.sql and smoke-baseline.sql
+    // do — so every refusal a test sees comes from a function or trigger.
+    await withClient(
+      fixture.target,
+      c => c.query('GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO mwf_app'),
+      fixture.database,
+    );
+  }
+  process.env.DATABASE_URL =
+    opts.appLogin === 'mwf_app' && isTargetShape()
+      ? appUrlFor(fixture.target, fixture.database)
+      : `${fixture.url}?application_name=${APP_UNDER_TEST}`;
   // lib/prisma prefers APP_DATABASE_URL over DATABASE_URL (database-urls.ts);
   // one left in a developer's environment would point the app elsewhere.
   delete process.env.APP_DATABASE_URL;
