@@ -188,7 +188,68 @@ export interface TraceMappedRule extends RuleBase {
   sameRowsRead: Array<{ steps: string; relation: string; as: string }>;
 }
 
+/**
+ * TARGET SHAPE ONLY (TS-10, ruling R32). A byte-level step's row `changes`
+ * (and `changesAtResponse`) recorded on the current shape, compared on the
+ * target through a TABLE rename map — the analogue of `traceMapped`. Byte
+ * changes are keyed by physical table and column names, which are
+ * shape-bound; the row VALUES are asserted by the concept comparison of the
+ * same step (the shape-independent oracle, with its own pinned rules), so
+ * this rule checks the shape of the write only:
+ *   - every (table, change kind) the run writes is the image of a (table,
+ *     kind) the baseline wrote at that step (`tableMap`), or is named in
+ *     `addedTables` at that exact step with its count and reason;
+ *   - for a baseline table whose mapping is 1:1 (one target table, not the
+ *     image of any other baseline table), the run's row count per (target
+ *     table, kind) equals the baseline's plus the added count named for it
+ *     at that step;
+ *   - every (table, kind) the baseline wrote at the step has an image the run
+ *     wrote (a write that disappeared is a violation).
+ * `asyncBoundary` markers (a string) must be equal on both sides.
+ */
+export interface ChangesMappedRule extends RuleBase {
+  kind: 'changesMapped';
+  tableMap: Record<string, string[]>;
+  addedTables: Array<{ step: number; table: string; kind: 'added' | 'changed' | 'removed'; count: number; why: string }>;
+}
+
+/**
+ * TARGET SHAPE ONLY (TS-10, ruling R31). A read owned by a cluster not yet
+ * rewritten on this branch (TS-11 needs/repair/follow-up, TS-12 reflection/
+ * wellbeing) answers 500 on the target until that cluster lands. For each
+ * listed read (`read` = the read's name in `privacy.ts` SESSION_READS /
+ * USER_READS; every step whose label is `<phase>: <read> as <email>`), the
+ * run's `status` must be 500 and its body the error envelope; status and
+ * body are then not compared (`changes` still are). A listed read that
+ * answers anything but 500 FAILS (a stale entry — delete it when the cluster
+ * lands). Only reads in `PENDING_CLUSTER_READS` may be listed, with that
+ * owner: a TS-10 read can never be excused.
+ */
+export interface PendingClusterRule extends RuleBase {
+  kind: 'pendingCluster';
+  reads: Array<{ read: string; owner: 'TS-11' | 'TS-12' }>;
+}
+
+/** The reads a `pendingCluster` entry may name, with their owning task (ruling R31). */
+export const PENDING_CLUSTER_READS: Readonly<Record<string, 'TS-11' | 'TS-12'>> = {
+  needs: 'TS-11',
+  'needs comparison': 'TS-11',
+  stage4: 'TS-11',
+  strategies: 'TS-11',
+  agreements: 'TS-11',
+  tending: 'TS-11',
+  'tending history': 'TS-11',
+  emotions: 'TS-12',
+  'inner thoughts': 'TS-12',
+  'inner thoughts list': 'TS-12',
+  'inner work list': 'TS-12',
+  'knowledge base recent': 'TS-12',
+  'knowledge base themes': 'TS-12',
+};
+
 export type AllowRule =
+  | ChangesMappedRule
+  | PendingClusterRule
   | TraceMappedRule
   | FixtureMaskRule
   | AbsentKeysRule

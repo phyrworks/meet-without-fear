@@ -5,7 +5,10 @@
  * whether a run is accepted under a scenario's allow-list (`./types.ts`).
  */
 
+import { PENDING_CLUSTER_READS } from './types';
 import type {
+  ChangesMappedRule,
+  PendingClusterRule,
   AbsentKeysRule,
   AddedEntriesRule,
   AddedKeysRule,
@@ -267,6 +270,65 @@ export function compareMappedTrace(e0: unknown, a0: unknown, rule: TraceMappedRu
   return out;
 }
 
+type ChangeLike = { table?: string; kind?: string };
+
+/**
+ * `changesMapped` (TS-10) — see ChangesMappedRule. `e0`/`a0` are one step's
+ * byte-level `changes` (or `changesAtResponse`) arrays, or equal
+ * async-boundary markers. Returns the violations.
+ */
+export function compareMappedChanges(e0: unknown, a0: unknown, rule: ChangesMappedRule, step: number): string[] {
+  if (!Array.isArray(e0) || !Array.isArray(a0)) {
+    return JSON.stringify(e0) === JSON.stringify(a0) ? [] : [`changes: ${brief(e0)} → ${brief(a0)}`];
+  }
+  const out: string[] = [];
+  const count = (xs: ChangeLike[]) => {
+    const m = new Map<string, number>();
+    for (const x of xs) m.set(`${x.table}|${x.kind}`, (m.get(`${x.table}|${x.kind}`) ?? 0) + 1);
+    return m;
+  };
+  const base = count(e0 as ChangeLike[]);
+  const run = count(a0 as ChangeLike[]);
+  const added = rule.addedTables.filter(t => t.step === step);
+  const addedCount = (table: string, kind: string) =>
+    added.filter(t => t.table === table && t.kind === kind).reduce((n, t) => n + t.count, 0);
+  // Which baseline tables map onto each target table.
+  const sources = new Map<string, string[]>();
+  for (const [from, tos] of Object.entries(rule.tableMap)) for (const to of tos) sources.set(to, [...(sources.get(to) ?? []), from]);
+
+  const image = new Set<string>();
+  for (const key of base.keys()) {
+    const [table, kind] = key.split('|');
+    const tos = rule.tableMap[table];
+    if (!tos) {
+      out.push(`changes: baseline table ${table} has no entry in the table map`);
+      continue;
+    }
+    for (const to of tos) image.add(`${to}|${kind}`);
+    if (!tos.some(to => run.has(`${to}|${kind}`))) out.push(`changes: the baseline's ${kind} ${table} row(s) have no ${kind} image in [${tos.join(', ')}]`);
+    const oneToOne = tos.length === 1 && (sources.get(tos[0]) ?? []).length === 1;
+    if (oneToOne) {
+      const want = base.get(key)! + addedCount(tos[0], kind);
+      const got = run.get(`${tos[0]}|${kind}`) ?? 0;
+      if (got !== want) out.push(`changes: ${kind} ${table}=${base.get(key)} (+${addedCount(tos[0], kind)} named) → ${tos[0]}=${got}`);
+    }
+  }
+  for (const key of run.keys()) {
+    const [table, kind] = key.split('|');
+    if (image.has(key)) continue;
+    const named = addedCount(table, kind);
+    if (!named) out.push(`changes: the run writes ${kind} ${table}, which no baseline write maps to and the rule does not add at step ${step}`);
+    else if (run.get(key) !== named) out.push(`changes: ${kind} ${table} added ${run.get(key)}, the rule names ${named} at step ${step}`);
+  }
+  return out;
+}
+
+/** `<phase>: <read> as <email>` → `<read>` (the full-read step labels, privacy.ts). */
+function readNameOf(label: string): string | null {
+  const m = /^[^:]+: (.+) as \S+$/.exec(label);
+  return m ? m[1] : null;
+}
+
 /**
  * Compare a run against its normalised baseline under an allow-list:
  * "subset plus named changes". Every baseline value must be present and equal
@@ -286,6 +348,17 @@ export function compareWithAllowList(expected: unknown, actual: unknown, allow: 
     actValues: new Set<string>(),
   }));
   type Entry = (typeof rules)[number];
+  const ruleProblems: string[] = [];
+  for (const r of rules) {
+    if (r.rule.kind !== 'pendingCluster') continue;
+    for (const entry of (r.rule as PendingClusterRule).reads) {
+      if (PENDING_CLUSTER_READS[entry.read] !== entry.owner) {
+        ruleProblems.push(
+          `  pendingCluster may not list "${entry.read}" (owner ${entry.owner}): only another cluster's read, with its owner, can be pending`,
+        );
+      }
+    }
+  }
   const rulesAt = <K extends AllowRule['kind']>(kind: K, p: string[]): Entry[] =>
     rules.filter(r => r.rule.kind === kind && r.patterns.some(pat => matchPath(pat, p)));
   const violations: string[] = [];
@@ -371,8 +444,21 @@ export function compareWithAllowList(expected: unknown, actual: unknown, allow: 
       const adders = rulesAt('addedEntries', p);
       adders.forEach(r => r.matched++);
       const used = new Set<Entry>();
+      // pendingCluster: a step (`steps.N`) that is a listed read of a cluster not yet on this branch.
+      const pendingRead = p.length === 2 && p[0] === 'steps' && typeof e.label === 'string' ? readNameOf(e.label) : null;
+      const pending = pendingRead
+        ? rules.filter(r => r.rule.kind === 'pendingCluster' && (r.rule as PendingClusterRule).reads.some(x => x.read === pendingRead))
+        : [];
+      if (pending.length) {
+        pending.forEach(r => r.matched++);
+        const body = a.body as { success?: unknown; error?: { code?: unknown } } | undefined;
+        if (a.status !== 500 || body?.success !== false || !body?.error) {
+          fail([...p, 'status'], `stale pendingCluster entry: "${pendingRead}" now answers ${a.status} — delete the entry`, 500, a.status);
+        }
+      }
       for (const k of [...new Set([...Object.keys(e), ...Object.keys(a)])].sort()) {
         const kp = [...p, k];
+        if (pending.length && (k === 'status' || k === 'body' || k === 'sse')) continue;
         const inE = Object.prototype.hasOwnProperty.call(e, k);
         const inA = Object.prototype.hasOwnProperty.call(a, k);
         if (absent.has(k)) {
@@ -397,6 +483,14 @@ export function compareWithAllowList(expected: unknown, actual: unknown, allow: 
             }
           } else if (!admitEntry(adders, used, a[k], k)) {
             fail(kp, 'added and not on the allow-list', undefined, a[k]);
+          }
+          continue;
+        }
+        const changeRules = inE && inA ? rulesAt('changesMapped', kp) : [];
+        if (changeRules.length) {
+          for (const r of changeRules) {
+            r.matched++;
+            for (const v of compareMappedChanges(e[k], a[k], r.rule as ChangesMappedRule, Number(kp[1]))) fail(kp, v);
           }
           continue;
         }
@@ -431,6 +525,7 @@ export function compareWithAllowList(expected: unknown, actual: unknown, allow: 
   };
 
   walk(expected, actual, []);
+  violations.push(...ruleProblems);
 
   for (const r of rules) {
     if (r.rule.kind !== 'valuesSubset') continue;
