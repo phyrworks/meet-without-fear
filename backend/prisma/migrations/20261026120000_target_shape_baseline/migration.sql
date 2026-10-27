@@ -2952,14 +2952,16 @@ GRANT UPDATE (status) ON proposal TO mwf_job;
 GRANT INSERT (proposal_id, actor_participant_id, action, before, after, reason) ON proposal_revision TO mwf_job;
 -- repair-store closeSessionAsJob: how the repair stage ended (the three id arrays are v_session_closure_items)
 GRANT INSERT (session_id, kind, reason, summary, closed_by_participant_id, check_in_at, closed_at) ON session_closure TO mwf_job;
--- tending scheduleFollowUpsAsJob: SHARED agreements and INDIVIDUAL commitments scheduled at closure (RETURNING id: SELECT id granted above)
-GRANT INSERT (session_id, agreement_id, proposal_id, type, scope, owner_participant_id, status, scheduled_for, response_deadline_at, summary) ON follow_up TO mwf_job;
--- open-due-tending-entries (runs as the job): find due SCHEDULED rows (sql_follow_up_due) and the cycle columns it moves
-GRANT SELECT (session_id, agreement_id, status, scheduled_for, response_deadline_at) ON follow_up TO mwf_job;
+-- tending scheduleFollowUpsAsJob: SHARED agreements and INDIVIDUAL commitments scheduled at closure, and the
+-- next round a check-in schedules (EXTEND / PARTIAL_CLOSURE continuing: a follow-up is one cycle) (RETURNING id: SELECT id granted above)
+GRANT INSERT (session_id, agreement_id, proposal_id, type, scope, owner_participant_id, opted_in_shared, status, scheduled_for,
+              response_deadline_at, summary) ON follow_up TO mwf_job;
+-- open-due-tending-entries (runs as the job): find due SCHEDULED rows (sql_follow_up_due), whom to notify, the cycle columns it moves
+GRANT SELECT (session_id, agreement_id, type, owner_participant_id, status, scheduled_for, response_deadline_at) ON follow_up TO mwf_job;
 -- open-due / cycle resolution: SCHEDULED → OPEN (opened_at, the response deadline), OPEN/PARTIAL → COMPLETED | EXPIRED
 GRANT UPDATE (status, opened_at, completed_at, response_deadline_at) ON follow_up TO mwf_job;
 -- processDueTendingReminders (job): due SCHEDULED reminders (sql_reminder_due) → DELIVERED, or the next remind_at for a cadence
-GRANT SELECT (id, follow_up_id, remind_at, cadence, status) ON reminder TO mwf_job;
+GRANT SELECT (id, follow_up_id, scope, remind_at, cadence, status) ON reminder TO mwf_job;
 GRANT UPDATE (status, remind_at) ON reminder TO mwf_job;
 
 -- mwf_ops: SELECT on exactly the tables routes/brain.ts reads, re-based

@@ -10,7 +10,10 @@
  * Target shape (TS-9): history is the participant's MAIN conversation; the
  * context — including everything shared by the partner — comes from the
  * single entry point `buildContextForParticipant`. The Stage 4 / Tending
- * helpers above the assembly are the repair cluster's (TS-11) and unchanged.
+ * helpers above the assembly are the repair cluster's (TS-11): they read the
+ * participant's own rows and the session's S-class repair rows only (shared
+ * proposals, need_share via v_need_shared, coverage) — never a partner's
+ * need label, unshared choice or private individual commitment.
  */
 
 import { logger } from '../lib/logger';
@@ -18,7 +21,10 @@ import { prisma } from '../lib/prisma';
 import { getSessionSummary } from './conversation-summarizer';
 import { buildContextForParticipant, formatContextForPrompt } from './context-assembler';
 import type { MemoryIntentResult } from './memory-intent';
-import { getPartnerParticipant, type ResolvedParticipant } from './participant-resolver';
+import { getPartnerParticipant, resolveParticipant, type ResolvedParticipant } from './participant-resolver';
+import { loadCoverage, loadProposals, loadStage4Needs } from './stage4-store';
+import { loadFollowUpsForParticipant } from './tending.service';
+import { followUpCheckinPayloadSchema } from '@meet-without-fear/shared';
 import { countOwnTurns, legacyRole, listConversationMessages } from './message-store';
 import { loadStageStates } from './stage-shim';
 import { buildStagePrompt } from './stage-prompts';
@@ -37,21 +43,25 @@ import type { RefiningNeedContext } from './stream-turn-actions';
 // Stage 4 / Tending prompt-context helpers
 // ============================================================================
 
+/**
+ * The Stage 4 inventory for the prompt: the proposals THIS participant may
+ * see (TS-11: proposal — every shared proposal, their own or shared
+ * individual commitments; never the partner's private ones).
+ */
 async function getStage4InventoryPromptContext(sessionId: string, currentUserId: string): Promise<string | null> {
-  const proposals = await prisma.strategyProposal.findMany({
-    where: { sessionId },
-    orderBy: { updatedAt: 'asc' },
-    take: 12,
-  });
+  const me = await resolveParticipant(sessionId, currentUserId);
+  if (!me) return null;
+  const proposals = (await loadProposals(sessionId, me.id))
+    .sort((a, b) => a.updatedAt.getTime() - b.updatedAt.getTime())
+    .slice(0, 12)
+    .filter((proposal) => proposal.status !== 'REMOVED');
+  if (proposals.length === 0) return null;
 
-  const activeProposals = proposals.filter((proposal) => proposal.status !== 'REMOVED');
-  if (activeProposals.length === 0) return null;
-
-  return activeProposals
+  return proposals
     .map((proposal) => {
-      const owner = proposal.createdByUserId === currentUserId
+      const owner = proposal.createdByParticipantId === me.id
         ? 'current user'
-        : proposal.createdByUserId
+        : proposal.createdByParticipantId
           ? 'partner'
           : 'shared/no owner';
       const details = [
@@ -127,55 +137,39 @@ async function getStage4WalkthroughPromptContext(
 }
 
 /**
- * Stage 4 Phase 6 — open needs (not declined, not yet willing-covered) with
- * their labels, so the AI can surface one at a time in main chat with the
- * user's own phrasing.
+ * Stage 4 Phase 6 — open needs (not declined, not yet covered by a proposal
+ * this participant is WILLING on), so the AI can surface one at a time in
+ * main chat. TS-11: over the shared needs (v_need_shared / v_need_coverage);
+ * the participant's own needs by their own label, the partner's by the
+ * shared text — never the partner's private label.
  */
 async function getStage4OpenNeedsForPrompt(
   sessionId: string,
   userId: string
 ): Promise<Array<{ needLabel: string }> | null> {
   try {
-    const [coverageRows, willingSelections, declinations] = await Promise.all([
-      prisma.stage4NeedCoverage.findMany({
-        where: { sessionId, coverageStatus: { in: ['OPEN', 'PARTIAL'] } },
-        select: { id: true, needId: true, needLabel: true, coveringProposalIds: true },
-      }),
-      prisma.stage4ProposalSelection.findMany({
-        where: { sessionId, userId, decision: 'WILLING' },
+    const me = await resolveParticipant(sessionId, userId);
+    if (!me) return null;
+    const [needs, coverage, mine, declined] = await Promise.all([
+      loadStage4Needs(sessionId, me.id),
+      loadCoverage(sessionId),
+      prisma.proposalChoice.findMany({
+        where: { participantId: me.id, decision: 'WILLING', proposal: { sessionId } },
         select: { proposalId: true },
       }),
-      prisma.stage4NeedDeclination.findMany({
-        where: { sessionId, userId },
-        select: { needId: true },
-      }),
+      prisma.needDisposition.findMany({ where: { participantId: me.id, status: 'DECLINED' }, select: { needId: true } }),
     ]);
-    if (coverageRows.length === 0) return null;
-    const willingIds = new Set(willingSelections.map((s) => s.proposalId));
-    const declined = new Set(declinations.map((d) => d.needId));
-    const candidateRows = coverageRows.filter((row) => {
-      const needId = row.needId ?? row.id;
-      if (declined.has(needId)) return false;
-      const covered = row.coveringProposalIds.some((pid) => willingIds.has(pid));
-      return !covered;
-    });
-    if (candidateRows.length === 0) return null;
-    const needIds = candidateRows.map((r) => r.needId).filter((n): n is string => Boolean(n));
-    const needs = needIds.length > 0
-      ? await prisma.identifiedNeed.findMany({
-          where: { id: { in: needIds }, vessel: { userId } },
-          select: { id: true, need: true },
-        })
-      : [];
-    const byId = new Map(needs.map((n) => [n.id, n.need] as const));
-    const labels: Array<{ needLabel: string }> = [];
-    for (const row of candidateRows) {
-      // Prefer the user's exact phrasing from IdentifiedNeed; fall back to the
-      // coverage row's needLabel so coverage rows without an IdentifiedNeed
-      // link (or whose link belongs to the partner's vessel) still surface.
-      const label = (row.needId && byId.get(row.needId)) || row.needLabel;
-      if (label) labels.push({ needLabel: label });
-    }
+    const willing = new Set(mine.map((c) => c.proposalId));
+    const declinedIds = new Set(declined.map((d) => d.needId));
+    const byNeed = new Map(coverage.map((c) => [c.needId, c]));
+    const labels = needs
+      .filter((n) => {
+        const c = byNeed.get(n.id);
+        if (c?.status === 'COVERED') return false;
+        if (declinedIds.has(n.id)) return false;
+        return !(c?.coveringProposalIds ?? []).some((pid) => willing.has(pid));
+      })
+      .map((n) => ({ needLabel: n.label }));
     return labels.length > 0 ? labels : null;
   } catch (err) {
     logger.warn('[getStage4OpenNeedsForPrompt] failed', { error: err });
@@ -207,89 +201,67 @@ async function getTendingConversationContextForPrompt(
   userId: string
 ): Promise<TendingConversationPromptContext | null> {
   try {
+    const me = await resolveParticipant(sessionId, userId);
+    if (!me) return null;
+    // TS-11: follow_up (what the participant may see), the participant's OWN
+    // shared needs (their labels), their carried-forward notes, and their own
+    // latest check-ins' payloads.
     const [entries, needs, selectedNotes, latestCheckins] = await Promise.all([
-      prisma.tendingEntry.findMany({
-        where: {
-          sessionId,
-          OR: [
-            { scope: 'SHARED' },
-            { scope: 'INDIVIDUAL', ownerUserId: userId },
-            { scope: 'INDIVIDUAL', optedInShared: true },
-          ],
-        },
-        orderBy: [{ scheduledFor: 'asc' }, { createdAt: 'asc' }],
-        take: 8,
-        select: {
-          id: true,
-          summary: true,
-          scope: true,
-          agreement: { select: { measureOfSuccess: true } },
-        },
-      }),
-      prisma.stage4NeedCoverage.findMany({
-        where: { sessionId, sourceUserId: userId },
-        orderBy: [{ updatedAt: 'desc' }],
-        take: 8,
-        select: { needId: true, needLabel: true },
-      }),
-      prisma.tendingBetweenPeriodNote.findMany({
-        where: {
-          sessionId,
-          userId,
-          carryForwardSelected: true,
-        },
+      loadFollowUpsForParticipant(sessionId, me.id).then((rows) => rows.slice(0, 8)),
+      loadStage4Needs(sessionId, me.id).then((rows) => rows.filter((n) => n.ownerParticipantId === me.id).slice(0, 8)),
+      prisma.followUpNote.findMany({
+        where: { participantId: me.id, carryForward: true },
         orderBy: [{ createdAt: 'asc' }],
         take: 8,
-        select: {
-          id: true,
-          content: true,
-          consentToShareWithPartner: true,
-        },
+        select: { id: true, content: true, carriedIntoCheckinId: true },
       }),
-      prisma.tendingCheckin.findMany({
-        where: { sessionId, userId },
+      prisma.followUpCheckin.findMany({
+        where: { participantId: me.id },
         orderBy: [{ submittedAt: 'desc' }],
         take: 3,
-        include: {
-          entryOutcomes: true,
-          needOutcomes: true,
-          adjustments: true,
-        },
+        select: { id: true, continueChoice: true, nextAction: true, payload: true },
       }),
     ]);
 
     if (entries.length === 0 && selectedNotes.length === 0 && latestCheckins.length === 0) {
       return null;
     }
+    const agreementIds = entries.map((e) => e.agreementId).filter((id): id is string => Boolean(id));
+    const agreements = new Map(
+      (await prisma.agreement.findMany({ where: { id: { in: agreementIds } }, select: { id: true, measureOfSuccess: true } })).map(
+        (a) => [a.id, a.measureOfSuccess] as const,
+      ),
+    );
 
-    const latestStructuredOutcomes = latestCheckins.flatMap((checkin) => [
-      `Check-in ${checkin.id}: continueChoice=${checkin.continueChoice ?? 'none'} nextAction=${checkin.nextAction ?? 'none'}`,
-      ...checkin.entryOutcomes.map((outcome) =>
-        `Entry ${outcome.tendingEntryId}: followThrough=${outcome.followThroughStatus}; helpfulness=${outcome.helpfulnessStatus ?? 'none'}; blockers=${outcome.blockerCategories.join(', ') || 'none'}; stillWorthTrying=${outcome.stillWorthTrying ?? 'unknown'}`
-      ),
-      ...checkin.needOutcomes.map((outcome) =>
-        `Need ${outcome.needLabel}: ${outcome.resolutionStatus}${outcome.nextAction ? `; nextAction=${outcome.nextAction}` : ''}`
-      ),
-      ...checkin.adjustments.map((adjustment) =>
-        `Adjustment ${adjustment.tendingEntryId}: ${adjustment.revisedCommitmentText ?? 'no text'}${adjustment.revisedCadence ? `; cadence=${adjustment.revisedCadence}` : ''}${adjustment.revisedSuccessCriteria ? `; success=${adjustment.revisedSuccessCriteria}` : ''}`
-      ),
-    ]).join('\n');
+    const latestStructuredOutcomes = latestCheckins.flatMap((checkin) => {
+      const parsed = followUpCheckinPayloadSchema.safeParse(checkin.payload);
+      const payload = parsed.success ? parsed.data : null;
+      return [
+        `Check-in ${checkin.id}: continueChoice=${checkin.continueChoice ?? 'none'} nextAction=${checkin.nextAction ?? 'none'}`,
+        ...(payload?.entryOutcomes ?? []).map((outcome) =>
+          `Entry ${outcome.followUpId}: followThrough=${outcome.followThroughStatus}; helpfulness=${outcome.helpfulnessStatus ?? 'none'}; blockers=${outcome.blockerCategories.join(', ') || 'none'}; stillWorthTrying=${outcome.stillWorthTrying ?? 'unknown'}`
+        ),
+        ...(payload?.needOutcomes ?? []).map((outcome) =>
+          `Need ${outcome.needLabel}: ${outcome.resolutionStatus}${outcome.nextAction ? `; nextAction=${outcome.nextAction}` : ''}`
+        ),
+        ...(payload?.adjustments ?? []).map((adjustment) =>
+          `Adjustment ${adjustment.followUpId}: ${adjustment.revisedCommitmentText ?? 'no text'}${adjustment.revisedCadence ? `; cadence=${adjustment.revisedCadence}` : ''}${adjustment.revisedSuccessCriteria ? `; success=${adjustment.revisedSuccessCriteria}` : ''}`
+        ),
+      ];
+    }).join('\n');
 
     return {
       entries: entries.map((entry) => ({
         id: entry.id,
         summary: entry.summary,
         scope: entry.scope,
-        successCriteria: entry.agreement?.measureOfSuccess ?? null,
+        successCriteria: entry.agreementId ? (agreements.get(entry.agreementId) ?? null) : null,
       })),
-      needs: needs.map((need) => ({
-        id: need.needId,
-        label: need.needLabel,
-      })),
+      needs: needs.map((need) => ({ id: need.id, label: need.label })),
       selectedBetweenPeriodNotes: selectedNotes.map((note) => ({
         id: note.id,
         content: note.content,
-        consentToShareWithPartner: note.consentToShareWithPartner,
+        consentToShareWithPartner: note.carriedIntoCheckinId !== null,
       })),
       latestStructuredOutcomes: latestStructuredOutcomes || null,
     };

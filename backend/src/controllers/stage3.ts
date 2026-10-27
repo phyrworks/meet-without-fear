@@ -1,25 +1,40 @@
 /**
- * Stage 3 Controller
+ * Stage 3 Controller (TS-11: needs on the target — `need`, `need_share`,
+ * `consent`, milestones).
  *
- * Handles the What Matters stage endpoints:
- * - GET /sessions/:id/needs - Get identified needs (simple read)
- * - POST /sessions/:id/needs/capture - Capture needs from an AI summary card
- * - POST /sessions/:id/needs/confirm - Confirm needs
- * - POST /sessions/:id/needs/consent - Consent to share needs
- * - POST /sessions/:id/needs/validate - Validate revealed needs
- * - POST /sessions/:id/needs - Add custom need
- * - GET /sessions/:id/needs/comparison - Side-by-side needs comparison
+ * - GET    /sessions/:id/needs                  - the caller's own needs
+ * - POST   /sessions/:id/needs/capture          - capture needs from an AI summary card
+ * - POST   /sessions/:id/needs/confirm          - confirm needs (needs_confirmed)
+ * - POST   /sessions/:id/needs/consent          - share needs (consent GRANTED, then the job's
+ *                                                 app.need_share with transformed text)
+ * - POST   /sessions/:id/needs/validate         - validate the revealed lists (needs_validated)
+ * - POST   /sessions/:id/needs                  - add a custom need
+ * - POST   /sessions/:id/needs/interpret-edit-request, /apply-edits, DELETE /needs/:needId
+ * - GET    /sessions/:id/needs/comparison       - side by side: the caller's own needs and the
+ *                                                 partner's SHARED needs (v_need_shared: shared
+ *                                                 text and category, never the label)
+ *
+ * "Shared" is a fact of `need_share`: a participant has shared once a live
+ * share of theirs exists. The session-scoped `needs_shared` milestone (stage
+ * 3's terminal) is written by the job for everyone once all present humans
+ * have shared (services/needs-share.ts).
  */
 
 import { Request, Response } from 'express';
-import { Prisma, StageProgress } from '../generated/prisma/client';
 import { logger } from '../lib/logger';
 import { prisma } from '../lib/prisma';
-import { confirmNeedsRequestSchema, ConsentContentType, MessageRole, NeedCategory } from '@meet-without-fear/shared';
+import { confirmNeedsRequestSchema, MessageRole, NeedCategory } from '@meet-without-fear/shared';
 import { notifyPartner, publishMessageAIResponse, publishSessionEvent } from '../services/realtime';
 import { successResponse, errorResponse } from '../utils/response';
 import { getPartnerUserId } from '../utils/session';
-import { captureProposedNeedsForUser, toIdentifiedNeedDTO, withNeedReframingWarning } from '../services/needs';
+import {
+  captureProposedNeedsForUser,
+  listOwnNeeds,
+  NEED_SELECT,
+  toIdentifiedNeedDTO,
+  withNeedReframingWarning,
+  type NeedRecord,
+} from '../services/needs';
 import { interpretNeedEditRequest } from '../services/needs-edit-interpreter.service';
 import {
   applyNeedEdits,
@@ -27,6 +42,11 @@ import {
   NeedEditForbiddenError,
   NeedEditValidationError,
 } from '../services/needs-edit-applier.service';
+import { completeNeedsSharingIfReady, listSharedNeeds, participantsWhoShared, shareNeeds } from '../services/needs-share';
+import { getPartnerParticipant, resolveParticipant, type ResolvedParticipant } from '../services/participant-resolver';
+import { loadStageStates } from '../services/stage-shim';
+import { reachMilestone } from '../services/milestone-writer';
+import { createFacilitatorMessage } from '../services/message-store';
 
 // ============================================================================
 // Helpers
@@ -34,193 +54,43 @@ import {
 
 function buildStage4TransitionContent(firstNeed?: string | null): string {
   const needText = firstNeed?.trim();
-  const needLine = needText
-    ? `Let's start with one of yours: ${needText}.`
-    : "Let's start with one of yours.";
-
+  const needLine = needText ? `Let's start with one of yours: ${needText}.` : "Let's start with one of yours.";
   return [
     'You have both sent your needs and can now see what each of you named.',
     `${needLine} The work now is not to decide everything, just to put ideas on the table. What might help honor that need?`,
   ].join('\n\n');
 }
 
-async function getFirstStage4NeedText(sessionId: string, userId: string): Promise<string | null> {
-  const vessel = await getOrCreateUserVessel(sessionId, userId);
-  const firstNeed = await prisma.identifiedNeed.findFirst({
-    where: {
-      vesselId: vessel.id,
-      confirmed: true,
-      deletedAt: null,
-      supersededByNeedId: null,
-    },
-    orderBy: { createdAt: 'asc' },
-    select: { need: true },
-  });
-
-  return firstNeed?.need ?? null;
+/** The participant's first live confirmed need (their own label, in their own conversation). */
+async function firstNeedText(participantId: string): Promise<string | null> {
+  const [first] = await listOwnNeeds(participantId, { live: true, confirmed: true });
+  return first?.label ?? null;
 }
 
-async function createStage4TransitionMessage(
-  sessionId: string,
-  forUserId: string
-): Promise<{ id: string; content: string; timestamp: Date; forUserId: string }> {
-  const firstNeed = await getFirstStage4NeedText(sessionId, forUserId);
-  const message = await prisma.message.create({
-    data: {
-      sessionId,
-      senderId: null,
-      forUserId,
-      role: 'AI',
-      content: buildStage4TransitionContent(firstNeed),
-      stage: 4,
-    },
-  });
-
-  return { id: message.id, content: message.content, timestamp: message.timestamp, forUserId };
+interface NeedsContext {
+  participant: ResolvedParticipant;
+  sessionStatus: string;
+  stage: number;
 }
 
-/**
- * Get or create user vessel for a session
- */
-async function getOrCreateUserVessel(
-  sessionId: string,
-  userId: string
-): Promise<{ id: string }> {
-  let vessel = await prisma.userVessel.findUnique({
-    where: {
-      userId_sessionId: { userId, sessionId },
-    },
-  });
-
-  if (!vessel) {
-    vessel = await prisma.userVessel.create({
-      data: { userId, sessionId },
-    });
-  }
-
-  return vessel;
+async function needsContext(req: Request, sessionId: string, userId: string): Promise<NeedsContext | null> {
+  const participant = req.participant ?? (await resolveParticipant(sessionId, userId));
+  if (!participant) return null;
+  const [session, states] = await Promise.all([
+    prisma.session.findUnique({ where: { id: sessionId }, select: { status: true } }),
+    loadStageStates([{ id: participant.id, joinedAt: participant.joinedAt }]),
+  ]);
+  if (!session) return null;
+  return { participant, sessionStatus: session.status, stage: states.get(participant.id)?.current.stage ?? 0 };
 }
 
-/**
- * Check if partner has shared their needs (consented to share)
- */
-async function hasPartnerSharedNeeds(
-  sessionId: string,
-  currentUserId: string
-): Promise<boolean> {
-  const partnerId = await getPartnerUserId(sessionId, currentUserId);
-  if (!partnerId) return false;
-
-  const partnerProgress = await prisma.stageProgress.findUnique({
-    where: {
-      sessionId_userId_stage: {
-        sessionId,
-        userId: partnerId,
-        stage: 3,
-      },
-    },
-  });
-
-  if (!partnerProgress) return false;
-
-  const gates = partnerProgress.gatesSatisfied as Record<string, unknown> | null;
-  return gates?.needsShared === true;
+async function hasMilestone(participantId: string, key: string): Promise<boolean> {
+  return (await prisma.participantMilestone.count({ where: { participantId, milestoneKey: key } })) > 0;
 }
 
-async function completeStage3AfterMutualNeedsShare(
-  sessionId: string,
-  currentUserId: string,
-  partnerId: string,
-  now: Date,
-  currentProgress: Pick<StageProgress, 'gatesSatisfied'> | null | undefined,
-  partnerProgress: Pick<StageProgress, 'gatesSatisfied'> | null | undefined
-): Promise<void> {
-  const reviewedAt = now.toISOString();
-  const mergeGates = (progress: Pick<StageProgress, 'gatesSatisfied'> | null | undefined) => ({
-    ...((progress?.gatesSatisfied as Record<string, unknown> | null) || {}),
-    needsShared: true,
-    needsValidated: true,
-    needsValidatedAt: reviewedAt,
-    needsRevealReviewedAt: reviewedAt,
-  }) satisfies Prisma.InputJsonValue;
-
-  for (const uid of [currentUserId, partnerId]) {
-    const progress = uid === currentUserId ? currentProgress : partnerProgress;
-    await prisma.stageProgress.update({
-      where: {
-        sessionId_userId_stage: {
-          sessionId,
-          userId: uid,
-          stage: 3,
-        },
-      },
-      data: {
-        gatesSatisfied: mergeGates(progress),
-        status: 'COMPLETED',
-        completedAt: now,
-      },
-    });
-
-    await prisma.stageProgress.upsert({
-      where: {
-        sessionId_userId_stage: {
-          sessionId,
-          userId: uid,
-          stage: 4,
-        },
-      },
-      create: {
-        sessionId,
-        userId: uid,
-        stage: 4,
-        status: 'IN_PROGRESS',
-        startedAt: now,
-      },
-      update: {},
-    });
-  }
-
-  const transitionMessages: Array<{ id: string; content: string; timestamp: Date; forUserId: string }> = [];
-  for (const uid of [currentUserId, partnerId]) {
-    transitionMessages.push(await createStage4TransitionMessage(sessionId, uid));
-  }
-
-  for (const transitionMessage of transitionMessages) {
-    await publishSessionEvent(sessionId, 'partner.stage_completed', {
-      forUserId: transitionMessage.forUserId,
-      previousStage: 3,
-      currentStage: 4,
-      userId: currentUserId,
-      triggeredByUserId: currentUserId,
-      message: {
-        id: transitionMessage.id,
-        content: transitionMessage.content,
-        timestamp: transitionMessage.timestamp,
-        forUserId: transitionMessage.forUserId,
-      },
-    });
-  }
-}
-
-async function hasPartnerValidatedNeeds(
-  sessionId: string,
-  currentUserId: string
-): Promise<boolean> {
-  const partnerId = await getPartnerUserId(sessionId, currentUserId);
-  if (!partnerId) return false;
-
-  const partnerProgress = await prisma.stageProgress.findUnique({
-    where: {
-      sessionId_userId_stage: {
-        sessionId,
-        userId: partnerId,
-        stage: 3,
-      },
-    },
-  });
-
-  const gates = partnerProgress?.gatesSatisfied as Record<string, unknown> | null;
-  return gates?.needsValidated === true;
+/** A participant has shared once a live `need_share` of theirs exists. */
+async function hasShared(sessionId: string, participantId: string): Promise<boolean> {
+  return (await participantsWhoShared(sessionId)).has(participantId);
 }
 
 function isNeedCategory(value: unknown): value is NeedCategory {
@@ -239,13 +109,59 @@ function needEditErrorResponse(res: Response, error: unknown): boolean {
   return false;
 }
 
+/**
+ * The mutual share completed: one Stage 4 transition message into each
+ * present human's MAIN conversation (job), and the stage-completed events.
+ */
+async function announceStage4(sessionId: string, triggeredBy: { userId: string }): Promise<void> {
+  const humans = await prisma.participant.findMany({
+    where: { sessionId, kind: 'human', leftAt: null },
+    orderBy: [{ joinedAt: 'asc' }, { id: 'asc' }],
+    select: { id: true, userId: true, conversations: { where: { kind: 'MAIN' }, select: { id: true } } },
+  });
+  for (const h of humans) {
+    const conversationId = h.conversations[0]?.id;
+    if (!conversationId || !h.userId) continue;
+    const message = await createFacilitatorMessage({ conversationId, content: buildStage4TransitionContent(await firstNeedText(h.id)) });
+    const eventData = {
+      forUserId: h.userId,
+      previousStage: 3,
+      currentStage: 4,
+      userId: triggeredBy.userId,
+      triggeredByUserId: triggeredBy.userId,
+      message: { id: message.id, content: message.content, timestamp: message.createdAt, forUserId: h.userId },
+    };
+    if (h.userId === triggeredBy.userId) {
+      await publishSessionEvent(sessionId, 'partner.stage_completed', eventData);
+    } else {
+      await notifyPartner(sessionId, h.userId, 'partner.stage_completed', eventData);
+    }
+  }
+}
+
+/** An AI line in the caller's own conversation (job), published to them. */
+async function guidance(sessionId: string, participant: ResolvedParticipant, userId: string, content: string): Promise<void> {
+  if (!participant.mainConversationId) return;
+  const message = await createFacilitatorMessage({ conversationId: participant.mainConversationId, content });
+  await publishMessageAIResponse(sessionId, userId, {
+    id: message.id,
+    sessionId,
+    senderId: null,
+    content: message.content,
+    timestamp: message.createdAt.toISOString(),
+    role: MessageRole.AI,
+    stage: 3,
+  });
+}
+
+const EMPTY_COMPARISON = { myNeeds: [], partnerNeeds: [], commonGround: [], analysisComplete: false, noOverlap: false };
+
 // ============================================================================
 // Controllers
 // ============================================================================
 
 /**
- * Get identified needs for the current user (simple read, no auto-extraction)
- * GET /sessions/:id/needs
+ * GET /sessions/:id/needs — the caller's own needs (no auto-extraction).
  */
 export async function getNeeds(req: Request, res: Response): Promise<void> {
   try {
@@ -254,72 +170,18 @@ export async function getNeeds(req: Request, res: Response): Promise<void> {
       errorResponse(res, 'UNAUTHORIZED', 'Authentication required', 401);
       return;
     }
-
-    const { id: sessionId } = req.params;
-
-    // Check session exists and user has access
-    const session = await prisma.session.findFirst({
-      where: {
-        id: sessionId,
-        relationship: {
-          members: {
-            some: { userId: user.id },
-          },
-        },
-      },
-    });
-
-    if (!session) {
+    const ctx = await needsContext(req, req.params.id, user.id);
+    if (!ctx) {
       errorResponse(res, 'NOT_FOUND', 'Session not found', 404);
       return;
     }
-
-    // Return empty data for non-active sessions (allows parallel fetching)
-    if (session.status !== 'ACTIVE') {
-      successResponse(res, {
-        needs: [],
-        synthesizedAt: null,
-        isDirty: false,
-      });
+    if (ctx.sessionStatus !== 'ACTIVE' || ctx.stage < 3) {
+      successResponse(res, { needs: [], synthesizedAt: null, isDirty: false });
       return;
     }
-
-    // Get user's current stage progress
-    const progress = await prisma.stageProgress.findFirst({
-      where: {
-        sessionId,
-        userId: user.id,
-      },
-      orderBy: { stage: 'desc' },
-    });
-
-    // If not in stage 3 yet, return empty data instead of error
-    const currentStage = progress?.stage ?? 0;
-    if (currentStage < 3) {
-      successResponse(res, {
-        needs: [],
-        synthesizedAt: null,
-        isDirty: false,
-      });
-      return;
-    }
-
-    // Get user's vessel
-    const userVessel = await getOrCreateUserVessel(sessionId, user.id);
-
-    // Get existing needs for this user
-    const needs = await prisma.identifiedNeed.findMany({
-      where: {
-        vesselId: userVessel.id,
-      },
-      orderBy: { createdAt: 'asc' },
-    });
-
+    const needs = await listOwnNeeds(ctx.participant.id);
     successResponse(res, {
-      needs: needs.map((need) => toIdentifiedNeedDTO({
-        ...need,
-        category: need.category as NeedCategory,
-      })),
+      needs: needs.map((need) => toIdentifiedNeedDTO(need)),
       extracting: false,
       synthesizedAt: needs[0]?.createdAt.toISOString() ?? null,
     });
@@ -330,7 +192,6 @@ export async function getNeeds(req: Request, res: Response): Promise<void> {
 }
 
 /**
- * Capture needs from an AI summary card
  * POST /sessions/:id/needs/capture
  */
 export async function captureNeeds(req: Request, res: Response): Promise<void> {
@@ -340,17 +201,10 @@ export async function captureNeeds(req: Request, res: Response): Promise<void> {
       errorResponse(res, 'UNAUTHORIZED', 'Authentication required', 401);
       return;
     }
-
     const { id: sessionId } = req.params;
     const { needs } = req.body as {
-      needs?: Array<{
-        need?: string;
-        category?: unknown;
-        description?: string;
-        evidence?: unknown;
-      }>;
+      needs?: Array<{ need?: string; category?: unknown; description?: string; evidence?: unknown }>;
     };
-
     if (!Array.isArray(needs) || needs.length === 0) {
       errorResponse(res, 'VALIDATION_ERROR', 'needs array is required', 400);
       return;
@@ -359,73 +213,39 @@ export async function captureNeeds(req: Request, res: Response): Promise<void> {
       errorResponse(res, 'VALIDATION_ERROR', 'A maximum of 50 needs can be captured at once', 400);
       return;
     }
-
     for (const need of needs) {
       if (!need.need || !need.description || !isNeedCategory(need.category)) {
-        errorResponse(
-          res,
-          'VALIDATION_ERROR',
-          'Each need requires need, description, and a valid category',
-          400
-        );
+        errorResponse(res, 'VALIDATION_ERROR', 'Each need requires need, description, and a valid category', 400);
         return;
       }
     }
-
-    const session = await prisma.session.findFirst({
-      where: {
-        id: sessionId,
-        relationship: {
-          members: {
-            some: { userId: user.id },
-          },
-        },
-      },
-    });
-
-    if (!session) {
+    const ctx = await needsContext(req, sessionId, user.id);
+    if (!ctx) {
       errorResponse(res, 'NOT_FOUND', 'Session not found', 404);
       return;
     }
-
-    if (session.status !== 'ACTIVE') {
+    if (ctx.sessionStatus !== 'ACTIVE') {
       errorResponse(res, 'SESSION_NOT_ACTIVE', 'Session is not active', 400);
       return;
     }
-
-    const progress = await prisma.stageProgress.findFirst({
-      where: { sessionId, userId: user.id },
-      orderBy: { stage: 'desc' },
-    });
-
-    const currentStage = progress?.stage ?? 0;
-    if (currentStage !== 3) {
-      errorResponse(
-        res,
-        'VALIDATION_ERROR',
-        `Cannot capture needs: you are in stage ${currentStage}, but stage 3 is required`,
-        400
-      );
+    if (ctx.stage !== 3) {
+      errorResponse(res, 'VALIDATION_ERROR', `Cannot capture needs: you are in stage ${ctx.stage}, but stage 3 is required`, 400);
       return;
     }
-
-    const { needs: capturedNeeds, capturedAt } = await captureProposedNeedsForUser(
+    const { needs: captured, capturedAt } = await captureProposedNeedsForUser(
       sessionId,
       user.id,
       needs.map((item) => ({
         need: item.need!,
         category: item.category as NeedCategory,
         description: item.description!,
-        evidence: Array.isArray(item.evidence)
-          ? item.evidence.filter((entry): entry is string => typeof entry === 'string')
-          : [],
-      }))
+        evidence: Array.isArray(item.evidence) ? item.evidence.filter((e): e is string => typeof e === 'string') : [],
+      })),
     );
-
     successResponse(
       res,
       {
-        needs: capturedNeeds.map((n) => ({
+        needs: captured.map((n) => ({
           id: n.id,
           need: n.need,
           category: n.category,
@@ -438,7 +258,7 @@ export async function captureNeeds(req: Request, res: Response): Promise<void> {
         })),
         capturedAt: capturedAt.toISOString(),
       },
-      201
+      201,
     );
   } catch (error) {
     logger.error('[captureNeeds] Error:', error);
@@ -447,7 +267,6 @@ export async function captureNeeds(req: Request, res: Response): Promise<void> {
 }
 
 /**
- * Confirm user's needs
  * POST /sessions/:id/needs/confirm
  */
 export async function confirmNeeds(req: Request, res: Response): Promise<void> {
@@ -457,168 +276,66 @@ export async function confirmNeeds(req: Request, res: Response): Promise<void> {
       errorResponse(res, 'UNAUTHORIZED', 'Authentication required', 401);
       return;
     }
-
     const { id: sessionId } = req.params;
-
-    // Validate request body
     const parseResult = confirmNeedsRequestSchema.safeParse(req.body);
     if (!parseResult.success) {
-      errorResponse(
-        res,
-        'VALIDATION_ERROR',
-        'Invalid request body',
-        400,
-        parseResult.error.issues
-      );
+      errorResponse(res, 'VALIDATION_ERROR', 'Invalid request body', 400, parseResult.error.issues);
       return;
     }
-
     const { needIds, adjustments } = parseResult.data;
-
-    // Check session exists and user has access
-    const session = await prisma.session.findFirst({
-      where: {
-        id: sessionId,
-        relationship: {
-          members: {
-            some: { userId: user.id },
-          },
-        },
-      },
-    });
-
-    if (!session) {
+    const ctx = await needsContext(req, sessionId, user.id);
+    if (!ctx) {
       errorResponse(res, 'NOT_FOUND', 'Session not found', 404);
       return;
     }
-
-    // Check session is active
-    if (session.status !== 'ACTIVE') {
+    if (ctx.sessionStatus !== 'ACTIVE') {
       errorResponse(res, 'SESSION_NOT_ACTIVE', 'Session is not active', 400);
       return;
     }
-
-    // Get user's current stage progress
-    const progress = await prisma.stageProgress.findFirst({
-      where: {
-        sessionId,
-        userId: user.id,
-      },
-      orderBy: { stage: 'desc' },
-    });
-
-    // Check user is in stage 3
-    const currentStage = progress?.stage ?? 0;
-    if (currentStage !== 3) {
-      errorResponse(
-        res,
-        'VALIDATION_ERROR',
-        `Cannot confirm needs: you are in stage ${currentStage}, but stage 3 is required`,
-        400
-      );
+    if (ctx.stage !== 3) {
+      errorResponse(res, 'VALIDATION_ERROR', `Cannot confirm needs: you are in stage ${ctx.stage}, but stage 3 is required`, 400);
       return;
     }
-
-    const gates = (progress?.gatesSatisfied as Record<string, unknown> | null) ?? {};
-    if (gates.needsShared === true) {
+    const me = ctx.participant.id;
+    if (await hasShared(sessionId, me)) {
       errorResponse(res, 'FORBIDDEN', 'Needs have already been shared and can no longer be edited', 403);
       return;
     }
-
-    // Get user's vessel
-    const userVessel = await getOrCreateUserVessel(sessionId, user.id);
-
-    // Verify the needs belong to this user's vessel
-    const userNeeds = await prisma.identifiedNeed.findMany({
-      where: {
-        id: { in: needIds },
-        vesselId: userVessel.id,
-      },
-    });
-
-    if (userNeeds.length !== needIds.length) {
-      errorResponse(
-        res,
-        'VALIDATION_ERROR',
-        'Some need IDs are invalid or do not belong to you',
-        400
-      );
+    const own = await prisma.need.findMany({ where: { id: { in: needIds }, participantId: me }, select: { id: true } });
+    if (own.length !== needIds.length) {
+      errorResponse(res, 'VALIDATION_ERROR', 'Some need IDs are invalid or do not belong to you', 400);
       return;
     }
-
-    // Process adjustments if provided
+    const now = new Date();
     if (adjustments && adjustments.length > 0) {
-      const userNeedIds = new Set(userNeeds.map((need) => need.id));
-      if (adjustments.some((adj) => !userNeedIds.has(adj.needId))) {
-        errorResponse(
-          res,
-          'VALIDATION_ERROR',
-          'Some adjustment need IDs are invalid or do not belong to you',
-          400
-        );
+      const ownIds = new Set(own.map((n) => n.id));
+      if (adjustments.some((adj) => !ownIds.has(adj.needId))) {
+        errorResponse(res, 'VALIDATION_ERROR', 'Some adjustment need IDs are invalid or do not belong to you', 400);
         return;
       }
-
       for (const adj of adjustments) {
         if (adj.correction) {
-          await prisma.identifiedNeed.updateMany({
-            where: { id: adj.needId, vesselId: userVessel.id },
-            data: {
-              need: adj.correction,
-              confirmed: adj.confirmed,
-            },
+          await prisma.need.updateMany({
+            where: { id: adj.needId, participantId: me },
+            data: { label: adj.correction, confirmedAt: adj.confirmed ? now : null },
           });
         }
       }
     }
+    // Confirm all specified needs: confirmed_at (kept when already set) and locked_at.
+    await prisma.need.updateMany({ where: { id: { in: needIds }, participantId: me, confirmedAt: null }, data: { confirmedAt: now } });
+    await prisma.need.updateMany({ where: { id: { in: needIds }, participantId: me }, data: { lockedAt: now } });
+    await reachMilestone(me, 'needs_confirmed', now);
 
-    // Confirm all specified needs
-    const now = new Date();
-    await prisma.identifiedNeed.updateMany({
-      where: {
-        id: { in: needIds },
-        vesselId: userVessel.id,
-      },
-      data: { confirmed: true, lockedAt: now },
-    });
-
-    // Update stage progress with needsIdentifiedAt milestone
-    const gatesSatisfied = {
-      ...(progress?.gatesSatisfied as Record<string, unknown> || {}),
-      needsConfirmed: true,
-      confirmedAt: now.toISOString(),
-      needsIdentifiedAt: now.toISOString(),
-    } satisfies Prisma.InputJsonValue;
-
-    await prisma.stageProgress.update({
-      where: {
-        sessionId_userId_stage: {
-          sessionId,
-          userId: user.id,
-          stage: 3,
-        },
-      },
-      data: {
-        gatesSatisfied,
-      },
-    });
-
-    // Notify partner that needs were confirmed
     const partnerId = await getPartnerUserId(sessionId, user.id);
     if (partnerId) {
-      await notifyPartner(sessionId, partnerId, 'partner.needs_confirmed', {
-        stage: 3,
-        confirmedBy: user.id,
-      });
+      await notifyPartner(sessionId, partnerId, 'partner.needs_confirmed', { stage: 3, confirmedBy: user.id });
     }
-
-    // Check if partner has also shared
-    const partnerShared = await hasPartnerSharedNeeds(sessionId, user.id);
-
+    const partner = await getPartnerParticipant(me);
     successResponse(res, {
       confirmed: true,
       confirmedAt: now.toISOString(),
-      partnerConfirmed: partnerShared,
+      partnerConfirmed: partner ? await hasShared(sessionId, partner.participantId) : false,
       canAdvance: false, // Need to share needs first
     });
   } catch (error) {
@@ -628,229 +345,81 @@ export async function confirmNeeds(req: Request, res: Response): Promise<void> {
 }
 
 /**
- * Consent to share needs with partner
+ * Share the caller's needs with their partner.
  * POST /sessions/:id/needs/consent
  */
-export async function consentToShareNeeds(
-  req: Request,
-  res: Response
-): Promise<void> {
+export async function consentToShareNeeds(req: Request, res: Response): Promise<void> {
   try {
     const user = req.user;
     if (!user) {
       errorResponse(res, 'UNAUTHORIZED', 'Authentication required', 401);
       return;
     }
-
     const { id: sessionId } = req.params;
     const { needIds } = req.body as { needIds?: string[] };
-
     if (!needIds || !Array.isArray(needIds) || needIds.length === 0) {
       errorResponse(res, 'VALIDATION_ERROR', 'needIds array is required', 400);
       return;
     }
-
-    // Check session exists and user has access
-    const session = await prisma.session.findFirst({
-      where: {
-        id: sessionId,
-        relationship: {
-          members: {
-            some: { userId: user.id },
-          },
-        },
-      },
-      include: {
-        relationship: {
-          include: {
-            members: true,
-          },
-        },
-      },
-    });
-
-    if (!session) {
+    const ctx = await needsContext(req, sessionId, user.id);
+    if (!ctx) {
       errorResponse(res, 'NOT_FOUND', 'Session not found', 404);
       return;
     }
-
-    // Check session is active
-    if (session.status !== 'ACTIVE') {
+    if (ctx.sessionStatus !== 'ACTIVE') {
       errorResponse(res, 'SESSION_NOT_ACTIVE', 'Session is not active', 400);
       return;
     }
-
-    // Get user's current stage progress
-    const progress = await prisma.stageProgress.findFirst({
-      where: {
-        sessionId,
-        userId: user.id,
-      },
-      orderBy: { stage: 'desc' },
-    });
-
-    // Check user is in stage 3
-    const currentStage = progress?.stage ?? 0;
-    if (currentStage !== 3) {
-      errorResponse(
-        res,
-        'VALIDATION_ERROR',
-        `Cannot consent to share: you are in stage ${currentStage}, but stage 3 is required`,
-        400
-      );
+    if (ctx.stage !== 3) {
+      errorResponse(res, 'VALIDATION_ERROR', `Cannot consent to share: you are in stage ${ctx.stage}, but stage 3 is required`, 400);
+      return;
+    }
+    const me = ctx.participant.id;
+    // Every shared need is a live confirmed need of the caller's, and every live need is shared together.
+    const live = (await listOwnNeeds(me, { live: true })) as NeedRecord[];
+    const requested = new Set(needIds);
+    const chosen = live.filter((n) => requested.has(n.id) && n.confirmedAt !== null);
+    if (chosen.length !== needIds.length) {
+      errorResponse(res, 'VALIDATION_ERROR', 'All live needs must be confirmed before sharing', 400);
+      return;
+    }
+    if (live.length !== needIds.length || !live.every((n) => requested.has(n.id))) {
+      errorResponse(res, 'VALIDATION_ERROR', 'Every live need must be shared together', 400);
       return;
     }
 
-    // Get user's vessel
-    const userVessel = await getOrCreateUserVessel(sessionId, user.id);
-
-    // Verify every shared need is a live confirmed need owned by this user.
-    const confirmedLiveNeeds = await prisma.identifiedNeed.findMany({
-      where: {
-        id: { in: needIds },
-        vesselId: userVessel.id,
-        confirmed: true,
-        deletedAt: null,
-        supersededByNeedId: null,
-      },
+    const result = await shareNeeds({
+      sessionId,
+      participantId: me,
+      needs: chosen.map((n) => ({ id: n.id, label: n.label, category: n.category, evidence: n.evidence })),
     });
 
-    if (confirmedLiveNeeds.length !== needIds.length) {
-      errorResponse(
-        res,
-        'VALIDATION_ERROR',
-        'All live needs must be confirmed before sharing',
-        400
-      );
-      return;
-    }
-
-    const liveNeeds = await prisma.identifiedNeed.findMany({
-      where: {
-        vesselId: userVessel.id,
-        deletedAt: null,
-        supersededByNeedId: null,
-      },
-      select: { id: true },
-    });
-    const requestedNeedIds = new Set(needIds);
-    const allLiveNeedsRequested = liveNeeds.every((need) => requestedNeedIds.has(need.id));
-    if (liveNeeds.length !== needIds.length || !allLiveNeedsRequested) {
-      errorResponse(
-        res,
-        'VALIDATION_ERROR',
-        'Every live need must be shared together',
-        400
-      );
-      return;
-    }
-
-    const now = new Date();
-    const gatesSatisfied = {
-      ...(progress?.gatesSatisfied as Record<string, unknown> || {}),
-      needsShared: true,
-      sharedAt: now.toISOString(),
-    } satisfies Prisma.InputJsonValue;
-
-    await prisma.$transaction(async (tx) => {
-      for (const needId of needIds) {
-        await tx.consentRecord.create({
-          data: {
-            sessionId,
-            userId: user.id,
-            targetType: ConsentContentType.IDENTIFIED_NEED,
-            targetId: needId,
-            requestedByUserId: user.id,
-            decision: 'GRANTED',
-            decidedAt: now,
-          },
-        });
-      }
-
-      await tx.stageProgress.update({
-        where: {
-          sessionId_userId_stage: {
-            sessionId,
-            userId: user.id,
-            stage: 3,
-          },
-        },
-        data: {
-          gatesSatisfied,
-          status: 'GATE_PENDING',
-        },
-      });
-    });
-
-    // Notify partner via real-time
     const partnerId = await getPartnerUserId(sessionId, user.id);
-    const partnerProgress = partnerId
-      ? await prisma.stageProgress.findUnique({
-          where: {
-            sessionId_userId_stage: {
-              sessionId,
-              userId: partnerId,
-              stage: 3,
-            },
-          },
-        })
-      : null;
-    const partnerGates = partnerProgress?.gatesSatisfied as Record<string, unknown> | null;
-    const partnerShared = partnerGates?.needsShared === true;
-
     if (partnerId) {
       await notifyPartner(sessionId, partnerId, 'partner.needs_shared', {
         stage: 3,
         sharedBy: user.id,
-        needsRevealReady: partnerShared,
+        needsRevealReady: result.allShared,
       });
     }
-
-    // If both have shared, notify clients that the side-by-side reveal is ready.
-    if (partnerShared && partnerId) {
-      await publishSessionEvent(sessionId, 'session.needs_reveal_ready', {
-        stage: 3,
-        needsRevealReady: true,
-      });
-      await completeStage3AfterMutualNeedsShare(
+    if (result.completedNow) {
+      await publishSessionEvent(sessionId, 'session.needs_reveal_ready', { stage: 3, needsRevealReady: true });
+      await announceStage4(sessionId, { userId: user.id });
+    }
+    if (!result.allShared) {
+      await guidance(
         sessionId,
+        ctx.participant,
         user.id,
-        partnerId,
-        now,
-        { gatesSatisfied },
-        partnerProgress
+        "Your needs have been shared. Once your partner shares theirs, you'll be able to review them side by side.",
       );
     }
-
-    if (!partnerShared) {
-      const guidanceMessage = await prisma.message.create({
-        data: {
-          sessionId,
-          senderId: null,
-          forUserId: user.id,
-          role: 'AI',
-          content: 'Your needs have been shared. Once your partner shares theirs, you\'ll be able to review them side by side.',
-          stage: 3,
-        },
-      });
-
-      await publishMessageAIResponse(sessionId, user.id, {
-        id: guidanceMessage.id,
-        sessionId,
-        senderId: null,
-        content: guidanceMessage.content,
-        timestamp: guidanceMessage.timestamp.toISOString(),
-        role: MessageRole.AI,
-        stage: guidanceMessage.stage,
-      });
-    }
-
     successResponse(res, {
       consented: true,
-      sharedAt: now.toISOString(),
-      waitingForPartner: !partnerShared,
-      needsRevealReady: partnerShared,
-      advancedToStage4: partnerShared,
+      sharedAt: result.sharedAt.toISOString(),
+      waitingForPartner: !result.allShared,
+      needsRevealReady: result.allShared,
+      advancedToStage4: result.allShared,
     });
   } catch (error) {
     logger.error('[consentToShareNeeds] Error:', error);
@@ -859,7 +428,7 @@ export async function consentToShareNeeds(
 }
 
 /**
- * Validate revealed needs lists.
+ * Validate the revealed needs lists (needs_validated, by the job: a system key).
  * POST /sessions/:id/needs/validate
  */
 export async function validateNeeds(req: Request, res: Response): Promise<void> {
@@ -869,96 +438,36 @@ export async function validateNeeds(req: Request, res: Response): Promise<void> 
       errorResponse(res, 'UNAUTHORIZED', 'Authentication required', 401);
       return;
     }
-
     const { id: sessionId } = req.params;
     const { validated = true } = req.body as { validated?: boolean };
-
     if (typeof validated !== 'boolean') {
       errorResponse(res, 'VALIDATION_ERROR', 'validated boolean is required', 400);
       return;
     }
-
-    const session = await prisma.session.findFirst({
-      where: {
-        id: sessionId,
-        relationship: {
-          members: {
-            some: { userId: user.id },
-          },
-        },
-      },
-      include: {
-        relationship: {
-          include: {
-            members: {
-              orderBy: { joinedAt: 'asc' },
-            },
-          },
-        },
-      },
-    });
-
-    if (!session) {
+    const ctx = await needsContext(req, sessionId, user.id);
+    if (!ctx) {
       errorResponse(res, 'NOT_FOUND', 'Session not found', 404);
       return;
     }
-
-    if (session.status !== 'ACTIVE') {
+    if (ctx.sessionStatus !== 'ACTIVE') {
       errorResponse(res, 'SESSION_NOT_ACTIVE', 'Session is not active', 400);
       return;
     }
-
-    const progress = await prisma.stageProgress.findFirst({
-      where: { sessionId, userId: user.id },
-      orderBy: { stage: 'desc' },
-    });
-
-    const currentStage = progress?.stage ?? 0;
-    if (currentStage !== 3) {
-      errorResponse(
-        res,
-        'VALIDATION_ERROR',
-        `Cannot validate needs: you are in stage ${currentStage}, but stage 3 is required`,
-        400
-      );
+    if (ctx.stage !== 3) {
+      errorResponse(res, 'VALIDATION_ERROR', `Cannot validate needs: you are in stage ${ctx.stage}, but stage 3 is required`, 400);
       return;
     }
-
-    const userGates = progress?.gatesSatisfied as Record<string, unknown> | null;
-    if (userGates?.needsShared !== true || !(await hasPartnerSharedNeeds(sessionId, user.id))) {
-      errorResponse(
-        res,
-        'VALIDATION_ERROR',
-        'Both partners must consent to reveal needs before validation',
-        400
-      );
+    const me = ctx.participant.id;
+    const partner = await getPartnerParticipant(me);
+    const shared = await participantsWhoShared(sessionId);
+    if (!shared.has(me) || !partner || !shared.has(partner.participantId)) {
+      errorResponse(res, 'VALIDATION_ERROR', 'Both partners must consent to reveal needs before validation', 400);
       return;
     }
-
     const now = new Date();
-    const gatesSatisfied = {
-      ...(progress?.gatesSatisfied as Record<string, unknown> || {}),
-      needsValidated: validated,
-      needsValidatedAt: validated ? now.toISOString() : null,
-    } satisfies Prisma.InputJsonValue;
-
-    await prisma.stageProgress.update({
-      where: {
-        sessionId_userId_stage: {
-          sessionId,
-          userId: user.id,
-          stage: 3,
-        },
-      },
-      data: {
-        gatesSatisfied,
-        status: 'GATE_PENDING',
-        completedAt: null,
-      },
-    });
-
-    const partnerValidated = await hasPartnerValidatedNeeds(sessionId, user.id);
-    const partnerId = await getPartnerUserId(sessionId, user.id);
+    if (validated) await reachMilestone(me, 'needs_validated', now);
+    const partnerValidated = await hasMilestone(partner.participantId, 'needs_validated');
+    const partnerId = partner.userId;
     if (partnerId) {
       await notifyPartner(sessionId, partnerId, 'partner.needs_validated', {
         stage: 3,
@@ -967,118 +476,18 @@ export async function validateNeeds(req: Request, res: Response): Promise<void> 
         allValidatedByBoth: validated && partnerValidated,
       });
     }
-
     const canAdvance = validated && partnerValidated;
-    if (canAdvance && partnerId) {
-      const transitionInputs = await Promise.all(
-        [user.id, partnerId].map(async (uid) => ({
-          uid,
-          firstNeed: await getFirstStage4NeedText(sessionId, uid),
-        }))
-      );
-
-      const transitionMessages = await prisma.$transaction(async (tx) => {
-        await tx.stageProgress.updateMany({
-          where: {
-            sessionId,
-            stage: 3,
-            userId: { in: [user.id, partnerId] },
-          },
-          data: {
-            status: 'COMPLETED',
-            completedAt: now,
-          },
-        });
-
-        for (const uid of [user.id, partnerId]) {
-          await tx.stageProgress.upsert({
-            where: {
-              sessionId_userId_stage: {
-                sessionId,
-                userId: uid,
-                stage: 4,
-              },
-            },
-            create: {
-              sessionId,
-              userId: uid,
-              stage: 4,
-              status: 'IN_PROGRESS',
-              startedAt: now,
-            },
-            update: {},
-          });
-        }
-
-        const createdMessages: Array<{ id: string; content: string; timestamp: Date; forUserId: string }> = [];
-        for (const input of transitionInputs) {
-          const message = await tx.message.create({
-            data: {
-              sessionId,
-              senderId: null,
-              forUserId: input.uid,
-              role: 'AI',
-              content: buildStage4TransitionContent(input.firstNeed),
-              stage: 4,
-            },
-          });
-          createdMessages.push({ id: message.id, content: message.content, timestamp: message.timestamp, forUserId: input.uid });
-        }
-        return createdMessages;
-      });
-
-      for (const transitionMessage of transitionMessages) {
-        const eventData = {
-          forUserId: transitionMessage.forUserId,
-          previousStage: 3,
-          currentStage: 4,
-          stage: 3,
-          userId: user.id,
-          triggeredByUserId: user.id,
-          message: {
-            id: transitionMessage.id,
-            content: transitionMessage.content,
-            timestamp: transitionMessage.timestamp,
-            forUserId: transitionMessage.forUserId,
-          },
-        };
-
-        if (transitionMessage.forUserId === partnerId) {
-          // Use notifyPartner so the partner gets a push notification if offline
-          await notifyPartner(sessionId, partnerId, 'partner.stage_completed', eventData);
-        } else {
-          await publishSessionEvent(sessionId, 'partner.stage_completed', eventData);
-        }
-      }
+    if (canAdvance && (await completeNeedsSharingIfReady(sessionId, now))) {
+      await announceStage4(sessionId, { userId: user.id });
     }
-
-    // Send AI guidance for the "not reviewed yet" path
     if (!validated) {
-      const guidanceContent =
-        'No problem — take your time reviewing. You can chat about anything that doesn\'t feel right, and review the needs again when you\'re ready.';
-
-      const guidanceMessage = await prisma.message.create({
-        data: {
-          sessionId,
-          senderId: null,
-          forUserId: user.id,
-          role: 'AI',
-          content: guidanceContent,
-          stage: 3,
-        },
-      });
-
-      await publishMessageAIResponse(sessionId, user.id, {
-        id: guidanceMessage.id,
+      await guidance(
         sessionId,
-        senderId: null,
-        content: guidanceMessage.content,
-        timestamp: guidanceMessage.timestamp.toISOString(),
-        role: MessageRole.AI,
-        stage: guidanceMessage.stage,
-      });
+        ctx.participant,
+        user.id,
+        "No problem — take your time reviewing. You can chat about anything that doesn't feel right, and review the needs again when you're ready.",
+      );
     }
-
     successResponse(res, {
       validated,
       validatedAt: validated ? now.toISOString() : null,
@@ -1092,8 +501,7 @@ export async function validateNeeds(req: Request, res: Response): Promise<void> 
 }
 
 /**
- * Add custom need
- * POST /sessions/:id/needs
+ * POST /sessions/:id/needs — a custom need (auto-confirmed).
  */
 export async function addCustomNeed(req: Request, res: Response): Promise<void> {
   try {
@@ -1102,93 +510,54 @@ export async function addCustomNeed(req: Request, res: Response): Promise<void> 
       errorResponse(res, 'UNAUTHORIZED', 'Authentication required', 401);
       return;
     }
-
     const { id: sessionId } = req.params;
-    const { need, category, description } = req.body as {
-      need?: string;
-      category?: unknown;
-      description?: string;
-    };
-
+    const { need, category } = req.body as { need?: string; category?: unknown; description?: string };
     if (!need || !isNeedCategory(category)) {
       errorResponse(res, 'VALIDATION_ERROR', 'need and valid category are required', 400);
       return;
     }
-
-    // Check session exists and user has access
-    const session = await prisma.session.findFirst({
-      where: {
-        id: sessionId,
-        relationship: {
-          members: {
-            some: { userId: user.id },
-          },
-        },
-      },
-    });
-
-    if (!session) {
+    const ctx = await needsContext(req, sessionId, user.id);
+    if (!ctx) {
       errorResponse(res, 'NOT_FOUND', 'Session not found', 404);
       return;
     }
-
-    // Check session is active
-    if (session.status !== 'ACTIVE') {
+    if (ctx.sessionStatus !== 'ACTIVE') {
       errorResponse(res, 'SESSION_NOT_ACTIVE', 'Session is not active', 400);
       return;
     }
-
-    // Get user's current stage progress
-    const progress = await prisma.stageProgress.findFirst({
-      where: {
-        sessionId,
-        userId: user.id,
-      },
-      orderBy: { stage: 'desc' },
-    });
-
-    // Check user is in stage 3
-    const currentStage = progress?.stage ?? 0;
-    if (currentStage !== 3) {
-      errorResponse(
-        res,
-        'VALIDATION_ERROR',
-        `Cannot add need: you are in stage ${currentStage}, but stage 3 is required`,
-        400
-      );
+    if (ctx.stage !== 3) {
+      errorResponse(res, 'VALIDATION_ERROR', `Cannot add need: you are in stage ${ctx.stage}, but stage 3 is required`, 400);
       return;
     }
-
-    // Get user's vessel
-    const userVessel = await getOrCreateUserVessel(sessionId, user.id);
-
-    // Create custom need
-    const customNeed = await prisma.identifiedNeed.create({
+    const custom = (await prisma.need.create({
       data: {
-        vesselId: userVessel.id,
-        need,
+        participantId: ctx.participant.id,
+        label: need,
         category,
         evidence: [],
         aiConfidence: 1.0, // User-added needs are considered 100% confident
-        confirmed: true, // User-added needs are auto-confirmed
+        confirmedAt: new Date(), // User-added needs are auto-confirmed
       },
-    });
-
-    const warning = withNeedReframingWarning({ need: customNeed.need });
-
-    successResponse(res, {
-      need: {
-        id: customNeed.id,
-        need: customNeed.need,
-        category: customNeed.category,
-        description: customNeed.need,
-        evidence: customNeed.evidence,
-        aiConfidence: customNeed.aiConfidence,
-        confirmed: customNeed.confirmed,
-        needsReframing: warning.needsReframing,
-        reframingWarning: warning.reframingWarning,
+      select: NEED_SELECT,
+    })) as NeedRecord;
+    const warning = withNeedReframingWarning({ need: custom.label });
+    successResponse(
+      res,
+      {
+        need: {
+          id: custom.id,
+          need: custom.label,
+          category: custom.category,
+          description: custom.label,
+          evidence: custom.evidence,
+          aiConfidence: custom.aiConfidence,
+          confirmed: true,
+          needsReframing: warning.needsReframing,
+          reframingWarning: warning.reframingWarning,
+        },
       },
-    }, 201);
+      201,
+    );
   } catch (error) {
     logger.error('[addCustomNeed] Error:', error);
     errorResponse(res, 'INTERNAL_ERROR', 'Failed to add custom need', 500);
@@ -1196,7 +565,6 @@ export async function addCustomNeed(req: Request, res: Response): Promise<void> 
 }
 
 /**
- * Interpret a natural-language edit request without mutating needs.
  * POST /sessions/:id/needs/interpret-edit-request
  */
 export async function interpretNeedEdit(req: Request, res: Response): Promise<void> {
@@ -1206,23 +574,20 @@ export async function interpretNeedEdit(req: Request, res: Response): Promise<vo
       errorResponse(res, 'UNAUTHORIZED', 'Authentication required', 401);
       return;
     }
-
     const { id: sessionId } = req.params;
     const { request, targetNeedId, conversationHistory } = req.body as {
       request?: string;
       targetNeedId?: string;
       conversationHistory?: unknown;
     };
-
     if (!request || typeof request !== 'string') {
       errorResponse(res, 'VALIDATION_ERROR', 'request is required', 400);
       return;
     }
-
     const result = await interpretNeedEditRequest(sessionId, user.id, {
       request,
       targetNeedId,
-      conversationHistory: Array.isArray(conversationHistory) ? conversationHistory as any : undefined,
+      conversationHistory: Array.isArray(conversationHistory) ? (conversationHistory as never) : undefined,
     });
     successResponse(res, result);
   } catch (error) {
@@ -1233,7 +598,6 @@ export async function interpretNeedEdit(req: Request, res: Response): Promise<vo
 }
 
 /**
- * Apply a previously previewed need edit plan.
  * POST /sessions/:id/needs/apply-edits
  */
 export async function applyNeedEditPlan(req: Request, res: Response): Promise<void> {
@@ -1243,17 +607,12 @@ export async function applyNeedEditPlan(req: Request, res: Response): Promise<vo
       errorResponse(res, 'UNAUTHORIZED', 'Authentication required', 401);
       return;
     }
-
-    const { id: sessionId } = req.params;
     const { operations } = req.body as { operations?: unknown };
-
     if (!Array.isArray(operations)) {
       errorResponse(res, 'VALIDATION_ERROR', 'operations array is required', 400);
       return;
     }
-
-    const result = await applyNeedEdits(sessionId, user.id, operations as any);
-    successResponse(res, result);
+    successResponse(res, await applyNeedEdits(req.params.id, user.id, operations as never));
   } catch (error) {
     if (needEditErrorResponse(res, error)) return;
     logger.error('[applyNeedEditPlan] Error:', error);
@@ -1262,8 +621,7 @@ export async function applyNeedEditPlan(req: Request, res: Response): Promise<vo
 }
 
 /**
- * Remove a need before it has been shared.
- * DELETE /sessions/:id/needs/:needId
+ * DELETE /sessions/:id/needs/:needId — remove a need before it is shared (soft delete).
  */
 export async function removeNeed(req: Request, res: Response): Promise<void> {
   try {
@@ -1272,21 +630,14 @@ export async function removeNeed(req: Request, res: Response): Promise<void> {
       errorResponse(res, 'UNAUTHORIZED', 'Authentication required', 401);
       return;
     }
-
     const { id: sessionId, needId } = req.params;
     if (!needId) {
       errorResponse(res, 'VALIDATION_ERROR', 'needId is required', 400);
       return;
     }
-
     const need = await deleteNeed(sessionId, user.id, needId);
-    await publishSessionEvent(sessionId, 'need.deleted', {
-      forUserId: user.id,
-      userId: user.id,
-      oldId: need.id,
-      need,
-    }).catch((err) =>
-      logger.warn('[removeNeed] Failed to publish need.deleted:', err)
+    await publishSessionEvent(sessionId, 'need.deleted', { forUserId: user.id, userId: user.id, oldId: need.id, need }).catch((err) =>
+      logger.warn('[removeNeed] Failed to publish need.deleted:', err),
     );
     successResponse(res, { deleted: true, needId, need });
   } catch (error) {
@@ -1297,168 +648,57 @@ export async function removeNeed(req: Request, res: Response): Promise<void> {
 }
 
 /**
- * Get needs comparison (side-by-side view of both users' needs)
+ * Side by side, once both have shared: the caller's own confirmed needs
+ * (their labels), and the partner's SHARED needs — `v_need_shared`, the
+ * job's transformed text and the category; the partner's `need` row is never
+ * read (work-a39h.11.21: the old code returned the partner's private label).
  * GET /sessions/:id/needs/comparison
- *
- * Only available after both users have shared their needs.
  */
-export async function getNeedsComparison(
-  req: Request,
-  res: Response
-): Promise<void> {
+export async function getNeedsComparison(req: Request, res: Response): Promise<void> {
   try {
     const user = req.user;
     if (!user) {
       errorResponse(res, 'UNAUTHORIZED', 'Authentication required', 401);
       return;
     }
-
     const { id: sessionId } = req.params;
-
-    // Check session exists and user has access
-    const session = await prisma.session.findFirst({
-      where: {
-        id: sessionId,
-        relationship: {
-          members: {
-            some: { userId: user.id },
-          },
-        },
-      },
-      include: {
-        relationship: {
-          include: {
-            members: true,
-          },
-        },
-      },
-    });
-
-    if (!session) {
+    const ctx = await needsContext(req, sessionId, user.id);
+    if (!ctx) {
       errorResponse(res, 'NOT_FOUND', 'Session not found', 404);
       return;
     }
-
-    if (session.status !== 'ACTIVE') {
-      successResponse(res, {
-        myNeeds: [],
-        partnerNeeds: [],
-        commonGround: [],
-        analysisComplete: false,
-        noOverlap: false,
-      });
+    if (ctx.sessionStatus !== 'ACTIVE' || ctx.stage < 3) {
+      successResponse(res, EMPTY_COMPARISON);
       return;
     }
-
-    // The latest progress determines whether the user has reached Stage 3,
-    // while the Stage 3 record remains the source of truth for needs gates
-    // after automatic advancement creates a Stage 4 progress record.
-    const [latestProgress, stage3Progress] = await Promise.all([
-      prisma.stageProgress.findFirst({
-        where: { sessionId, userId: user.id },
-        orderBy: { stage: 'desc' },
-      }),
-      prisma.stageProgress.findUnique({
-        where: {
-          sessionId_userId_stage: {
-            sessionId,
-            userId: user.id,
-            stage: 3,
-          },
-        },
-      }),
-    ]);
-
-    const currentStage = latestProgress?.stage ?? 0;
-    if (currentStage < 3) {
-      successResponse(res, {
-        myNeeds: [],
-        partnerNeeds: [],
-        commonGround: [],
-        analysisComplete: false,
-        noOverlap: false,
-      });
-      return;
-    }
-
-    // Get partner ID
-    const partnerId = await getPartnerUserId(sessionId, user.id);
-    if (!partnerId) {
+    const me = ctx.participant.id;
+    const partner = await getPartnerParticipant(me);
+    if (!partner) {
       errorResponse(res, 'INTERNAL_ERROR', 'Could not find partner', 500);
       return;
     }
-
-    // Check both users have shared needs
-    const userGates = stage3Progress?.gatesSatisfied as Record<string, unknown> | null;
-    const userShared = userGates?.needsShared === true;
-    const partnerShared = await hasPartnerSharedNeeds(sessionId, user.id);
-
-    if (!userShared || !partnerShared) {
-      successResponse(res, {
-        myNeeds: [],
-        partnerNeeds: [],
-        commonGround: [],
-        analysisComplete: false,
-        noOverlap: false,
-      });
+    const shared = await listSharedNeeds(sessionId);
+    const mineShared = shared.some((n) => n.participantId === me);
+    const partnerShared = shared.filter((n) => n.participantId === partner.participantId);
+    if (!mineShared || partnerShared.length === 0) {
+      successResponse(res, EMPTY_COMPARISON);
       return;
     }
-
-    // Fetch both users' vessels and needs
-    const [myVessel, partnerVessel] = await Promise.all([
-      getOrCreateUserVessel(sessionId, user.id),
-      getOrCreateUserVessel(sessionId, partnerId),
-    ]);
-
-    const [myNeeds, partnerNeeds] = await Promise.all([
-      prisma.identifiedNeed.findMany({
-        where: { vesselId: myVessel.id, confirmed: true },
-        orderBy: { createdAt: 'asc' },
-      }),
-      prisma.identifiedNeed.findMany({
-        where: { vesselId: partnerVessel.id, confirmed: true },
-        orderBy: { createdAt: 'asc' },
-      }),
-    ]);
-
-    if (myNeeds.length === 0 || partnerNeeds.length === 0) {
-      successResponse(res, {
-        myNeeds: [],
-        partnerNeeds: [],
-        commonGround: [],
-        analysisComplete: false,
-        noOverlap: false,
-      });
+    const myNeeds = await listOwnNeeds(me, { confirmed: true });
+    if (myNeeds.length === 0) {
+      successResponse(res, EMPTY_COMPARISON);
       return;
     }
-
-    const partnerProgress = await prisma.stageProgress.findUnique({
-      where: {
-        sessionId_userId_stage: {
-          sessionId,
-          userId: partnerId,
-          stage: 3,
-        },
-      },
-    });
-    const partnerGates = partnerProgress?.gatesSatisfied as Record<string, unknown> | null;
-
+    const [myValidated, partnerValidated] = await Promise.all([
+      hasMilestone(me, 'needs_validated'),
+      hasMilestone(partner.participantId, 'needs_validated'),
+    ]);
     successResponse(res, {
-      myNeeds: myNeeds.map((n) => ({
-        id: n.id,
-        category: n.category,
-        need: n.need,
-        confirmed: n.confirmed,
-      })),
-      partnerNeeds: partnerNeeds.map((n) => ({
-        id: n.id,
-        category: n.category,
-        need: n.need,
-        confirmed: n.confirmed,
-      })),
-      myValidated: userGates?.needsValidated === true,
-      partnerValidated: partnerGates?.needsValidated === true,
-      canAdvance: userGates?.needsValidated === true && partnerGates?.needsValidated === true,
+      myNeeds: myNeeds.map((n) => ({ id: n.id, category: n.category, need: n.label, confirmed: true })),
+      partnerNeeds: partnerShared.map((n) => ({ id: n.needId, category: n.category, need: n.sharedText, confirmed: true })),
+      myValidated,
+      partnerValidated,
+      canAdvance: myValidated && partnerValidated,
       commonGround: [],
       analysisComplete: true,
       noOverlap: false,

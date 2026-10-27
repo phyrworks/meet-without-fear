@@ -134,8 +134,15 @@ export type RevealOverlapResponse = {
 // ============================================================================
 
 export interface AgreementDTO {
+  /**
+   * The agreement's id — or, in the legacy create/confirm flow before every
+   * party has confirmed (no agreement row exists yet on the target; TS-11),
+   * the proposal's id, which is also `proposalId`.
+   */
   id: string;
   strategyId?: string | null;
+  /** The proposal the agreement is (or will be) made from (TS-11, additive). */
+  proposalId?: string | null;
   description: string;
   type?: AgreementType;
   duration: string | null;

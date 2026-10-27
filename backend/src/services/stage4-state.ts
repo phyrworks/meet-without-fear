@@ -1,3 +1,23 @@
+/**
+ * The redesigned Stage 4 state DTO (`GetStage4StateResponse`), on the target
+ * tables (TS-11). The DTO shape is unchanged; its sources moved:
+ *
+ *   coverage rows   v_need_coverage (computed; ruling R20: ACTIVE, REVISED and
+ *                   CONVERTED_TO_AGREEMENT cover) — the coverage `note` has no
+ *                   table and is dropped (null; "Still open" on an open need)
+ *   need names      the viewer's OWN needs by their own label; the partner's by
+ *                   `need_share.shared_text` — never the partner's label
+ *   need ids        need_share ids (= the need's id)
+ *   walkthrough     need_disposition (covered / skipped / current); the phase
+ *                   follows the current need's owner
+ *   declinations    need_disposition DECLINED
+ *   "submitted"     participant_milestone choices_shared
+ *   partner choices only once the partner has reached choices_shared AND the
+ *                   viewer has (unchanged rule: both shared)
+ *   outcome         session_closure + v_session_closure_items
+ *   Tending preview follow_up
+ */
+
 import {
   AgreementDTO,
   CoverageRowDTO,
@@ -8,7 +28,6 @@ import {
   Stage4QualityWarningDTO,
   Stage4CoverageAuditDTO,
   Stage4ClosureKind,
-  Stage4ClosureReason,
   Stage4Phase,
   Stage4ProposalKind,
   Stage4SelectionDecision,
@@ -19,95 +38,43 @@ import {
   TendingPreviewDTO,
   UnaddressedNeedDTO,
 } from '@meet-without-fear/shared';
-import { prisma } from '../lib/prisma';
+import { getPartnerParticipant, resolveParticipant } from './participant-resolver';
+import {
+  hasMilestone,
+  loadAgreements,
+  loadClosure,
+  loadClosureItems,
+  loadCoverage,
+  loadDispositions,
+  loadProposals,
+  loadStage4Needs,
+  loadVisibleChoices,
+  type AgreementRow,
+  type ChoiceRow,
+  type ClosureItems,
+  type ClosureRow,
+  type CoverageRow,
+  type DispositionRow,
+  type ProposalRow,
+  type Stage4Need,
+} from './stage4-store';
+import { loadFollowUpsForParticipant, toTendingEntryType, type FollowUpRow } from './tending.service';
 
-type SessionForStage4 = {
+/** One shared need as the Stage 4 state names it (the old coverage row's role). */
+type CoverageView = {
   id: string;
-  status: string;
-  relationship: {
-    members: Array<{ userId: string; joinedAt: Date }>;
-  };
-};
-
-type Stage4ProposalRow = {
-  id: string;
-  description: string;
-  needsAddressed: string[];
-  duration: string | null;
-  measureOfSuccess: string | null;
-  kind: Stage4ProposalKind;
-  status: Stage4ProposalStatus;
-  source: string;
-  createdByUserId: string | null;
-  updatedAt: Date;
-};
-
-type Stage4SelectionRow = {
-  proposalId: string;
-  userId: string;
-  decision: Stage4SelectionDecision;
-  note: string | null;
-  selectedAt: Date;
-  updatedAt: Date;
-};
-
-type Stage4NeedCoverageRow = {
-  id: string;
-  needId: string | null;
-  needLabel: string;
-  sourceUserId: string | null;
-  coverageStatus: string;
+  label: string;
+  ownerParticipantId: string;
+  coverageStatus: 'COVERED' | 'PARTIAL' | 'OPEN';
   coveringProposalIds: string[];
   note: string | null;
-  updatedAt: Date;
 };
 
-type Stage4WalkthroughStoredState = {
+type WalkthroughStored = {
   phase?: Stage4WalkthroughPhase;
   currentNeedId?: string | null;
-  coveredNeedIds?: string[];
-  skippedNeedIds?: string[];
-};
-
-type Stage4ClosureRow = {
-  kind: Stage4ClosureKind;
-  reason: Stage4ClosureReason;
-  summary: string;
-  sharedAgreementIds: string[];
-  individualProposalIds: string[];
-  openNeedIds: string[];
-  closedAt: Date;
-  checkInAt: Date | null;
-};
-
-type Stage4ProgressRow = {
-  userId: string;
-  gatesSatisfied: unknown;
-};
-
-type AgreementRow = {
-  id: string;
-  proposalId: string | null;
-  description: string;
-  type: AgreementDTO['type'];
-  duration: string | null;
-  measureOfSuccess: string | null;
-  status: AgreementDTO['status'];
-  agreedByA: boolean;
-  agreedByB: boolean;
-  agreedAt: Date | null;
-  followUpDate: Date | null;
-};
-
-type TendingEntryRow = {
-  id: string;
-  type: NonNullable<TendingPreviewDTO['nextEntry']>['type'];
-  status: NonNullable<TendingPreviewDTO['nextEntry']>['status'];
-  agreementId: string | null;
-  scheduledFor: Date | null;
-  openedAt: Date | null;
-  completedAt: Date | null;
-  summary: string | null;
+  coveredNeedIds: string[];
+  skippedNeedIds: string[];
 };
 
 export class Stage4StateNotFoundError extends Error {
@@ -121,168 +88,117 @@ function iso(value: Date | null | undefined): string | null {
   return value ? value.toISOString() : null;
 }
 
-function getPartnerId(session: SessionForStage4, userId: string): string | null {
-  return session.relationship.members.find((member) => member.userId !== userId)?.userId ?? null;
-}
-
-function getSourceLabel(
-  sourceUserId: string | null,
-  userId: string,
-  partnerUserId: string | null
-): CoverageRowDTO['source'] {
-  if (!sourceUserId) return 'UNKNOWN';
-  if (sourceUserId === userId) return 'YOU';
-  if (sourceUserId === partnerUserId) return 'PARTNER';
+function sourceLabel(owner: string | null, me: string, partner: string | null): CoverageRowDTO['source'] {
+  if (!owner) return 'UNKNOWN';
+  if (owner === me) return 'YOU';
+  if (owner === partner) return 'PARTNER';
   return 'UNKNOWN';
 }
 
-function getProposalSourceLabel(
-  proposal: Stage4ProposalRow,
-  userId: string,
-  partnerUserId: string | null
-): Stage4ProposalSourceLabel {
-  if (proposal.createdByUserId === userId) return 'YOU';
-  if (proposal.createdByUserId === partnerUserId) return 'PARTNER';
+function proposalSourceLabel(proposal: ProposalRow, me: string, partner: string | null): Stage4ProposalSourceLabel {
+  if (proposal.createdByParticipantId === me) return 'YOU';
+  if (proposal.createdByParticipantId && proposal.createdByParticipantId === partner) return 'PARTNER';
   if (proposal.source === 'AI_SUGGESTED') return 'AI';
   return 'UNKNOWN';
 }
 
-function getWalkthroughState(progressRows: Stage4ProgressRow[], userId: string): Stage4WalkthroughStoredState {
-  const gates = progressRows.find((row) => row.userId === userId)?.gatesSatisfied;
-  if (!gates || typeof gates !== 'object' || Array.isArray(gates)) return {};
-  const value = (gates as Record<string, unknown>).stage4Walkthrough;
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
-  const stored = value as Record<string, unknown>;
+function buildCoverageViews(needs: Stage4Need[], coverage: CoverageRow[]): CoverageView[] {
+  const byNeed = new Map(coverage.map((c) => [c.needId, c]));
+  return needs.map((n) => {
+    const c = byNeed.get(n.id);
+    return {
+      id: n.id,
+      label: n.label,
+      ownerParticipantId: n.ownerParticipantId,
+      coverageStatus: c?.status ?? 'OPEN',
+      coveringProposalIds: c?.coveringProposalIds ?? [],
+      note: null,
+    };
+  });
+}
+
+function walkthroughStored(dispositions: DispositionRow[], needs: Stage4Need[], me: string): WalkthroughStored {
+  const current = dispositions.find((d) => d.isCurrent);
+  const currentOwner = current ? needs.find((n) => n.id === current.needId)?.ownerParticipantId : undefined;
   return {
-    phase:
-      stored.phase === 'PARTNER_NEEDS' ||
-      stored.phase === 'QUALITY_REVIEW' ||
-      stored.phase === 'SUMMARY' ||
-      stored.phase === 'MY_NEEDS'
-        ? stored.phase
-        : undefined,
-    currentNeedId: typeof stored.currentNeedId === 'string' ? stored.currentNeedId : undefined,
-    coveredNeedIds: Array.isArray(stored.coveredNeedIds)
-      ? stored.coveredNeedIds.filter((id): id is string => typeof id === 'string')
-      : [],
-    skippedNeedIds: Array.isArray(stored.skippedNeedIds)
-      ? stored.skippedNeedIds.filter((id): id is string => typeof id === 'string')
-      : [],
+    phase: current && currentOwner ? (currentOwner === me ? 'MY_NEEDS' : 'PARTNER_NEEDS') : undefined,
+    currentNeedId: current?.needId,
+    coveredNeedIds: dispositions.filter((d) => d.status === 'COVERED').map((d) => d.needId),
+    skippedNeedIds: dispositions.filter((d) => d.status === 'SKIPPED').map((d) => d.needId),
   };
 }
 
 function buildCoverageAudit(
-  coverageRows: Stage4NeedCoverageRow[],
-  userId: string,
-  partnerUserId: string | null,
-  declinedNeedIds: Set<string>
+  rows: CoverageView[],
+  me: string,
+  partner: string | null,
+  declined: Set<string>,
+  updatedAt: Date | null,
 ): Stage4CoverageAuditDTO {
-  const rows = coverageRows.map((row): CoverageRowDTO => {
-    const rowNeedId = row.needId ?? row.id;
-    return {
-      id: rowNeedId,
-      label: row.needLabel,
-      source: getSourceLabel(row.sourceUserId, userId, partnerUserId),
-      coveringProposalIds: row.coveringProposalIds,
-      note: row.note,
-      userDeclinedToAddress: declinedNeedIds.has(rowNeedId),
-    };
-  });
-
-  const byStatus = (status: string) =>
-    rows.filter((_, index) => coverageRows[index].coverageStatus === status);
-
-  const updatedAt = coverageRows.reduce<Date | null>((latest, row) => {
-    if (!latest || row.updatedAt > latest) return row.updatedAt;
-    return latest;
-  }, null);
-
-  return {
-    covered: byStatus('COVERED'),
-    partial: byStatus('PARTIAL'),
-    open: byStatus('OPEN'),
-    updatedAt: iso(updatedAt),
-  };
+  const dto = rows.map((row): CoverageRowDTO & { status: string } => ({
+    id: row.id,
+    label: row.label,
+    source: sourceLabel(row.ownerParticipantId, me, partner),
+    coveringProposalIds: row.coveringProposalIds,
+    note: row.note,
+    userDeclinedToAddress: declined.has(row.id),
+    status: row.coverageStatus,
+  }));
+  const byStatus = (status: string): CoverageRowDTO[] =>
+    dto.filter((r) => r.status === status).map(({ status: _s, ...r }) => r);
+  return { covered: byStatus('COVERED'), partial: byStatus('PARTIAL'), open: byStatus('OPEN'), updatedAt: iso(updatedAt) };
 }
 
-function buildUnaddressedNeeds(
-  coverageRows: Stage4NeedCoverageRow[],
-  userId: string,
-  partnerUserId: string | null
-): UnaddressedNeedDTO[] {
-  return coverageRows
+function buildUnaddressedNeeds(rows: CoverageView[], me: string, partner: string | null): UnaddressedNeedDTO[] {
+  return rows
     .filter((row) => row.coverageStatus === 'OPEN')
     .map((row) => ({
-      id: row.needId ?? row.id,
-      label: row.needLabel,
-      source: getSourceLabel(row.sourceUserId, userId, partnerUserId),
+      id: row.id,
+      label: row.label,
+      source: sourceLabel(row.ownerParticipantId, me, partner),
       note: row.note ?? 'Still open',
     }));
 }
 
 function buildProposalCard(
-  proposal: Stage4ProposalRow,
-  userId: string,
-  partnerUserId: string | null,
-  selections: Stage4SelectionRow[],
-  coverageRows: Stage4NeedCoverageRow[],
-  revealPartnerSelections: boolean,
-  needLinks: Array<{ needId: string; needText: string }> = [],
-  needIdToLabel: Map<string, string> = new Map()
+  proposal: ProposalRow,
+  me: string,
+  partner: string | null,
+  choices: ChoiceRow[],
+  rows: CoverageView[],
+  revealPartner: boolean,
 ): ProposalCardDTO {
-  const mySelection = selections.find(
-    (selection) => selection.proposalId === proposal.id && selection.userId === userId
-  );
-  const partnerSelection = partnerUserId
-    ? selections.find(
-        (selection) => selection.proposalId === proposal.id && selection.userId === partnerUserId
-      )
-    : undefined;
-
-  const linkedCoverage = coverageRows
-    .filter(
-      (row) =>
-        row.coveringProposalIds.includes(proposal.id) &&
-        (row.coverageStatus === 'COVERED' || row.coverageStatus === 'PARTIAL')
-    )
-    .map((row) => ({
-      id: row.needId ?? row.id,
-      label: row.needLabel,
-      coverage: row.coverageStatus as 'COVERED' | 'PARTIAL',
+  const mine = choices.find((c) => c.proposalId === proposal.id && c.participantId === me);
+  const theirs = partner ? choices.find((c) => c.proposalId === proposal.id && c.participantId === partner) : undefined;
+  const byId = new Map(rows.map((r) => [r.id, r]));
+  const linked = proposal.needIds
+    .map((id) => byId.get(id))
+    .filter((r): r is CoverageView => Boolean(r))
+    .map((r) => ({
+      id: r.id,
+      label: r.label,
+      coverage: (r.coverageStatus === 'PARTIAL' ? 'PARTIAL' : 'COVERED') as 'COVERED' | 'PARTIAL',
     }));
-
   return {
     id: proposal.id,
-    kind: proposal.kind,
+    kind: proposal.kind as Stage4ProposalKind,
     description: proposal.description,
-    sourceLabel: getProposalSourceLabel(proposal, userId, partnerUserId),
+    sourceLabel: proposalSourceLabel(proposal, me, partner),
     ownerLabel:
       proposal.kind === Stage4ProposalKind.INDIVIDUAL_COMMITMENT
-        ? proposal.createdByUserId === userId
+        ? proposal.createdByParticipantId === me
           ? 'You'
           : 'Partner'
         : undefined,
     needsAddressed:
-      needLinks.length > 0
-        ? needLinks.map((link) => {
-            const coverage = linkedCoverage.find((row) => row.id === link.needId);
-            return {
-              id: link.needId,
-              label: link.needText,
-              coverage: coverage?.coverage ?? 'COVERED',
-            };
-          })
-        : linkedCoverage.length > 0
-          ? linkedCoverage
-          : proposal.needsAddressed.map((raw) => ({
-              label: needIdToLabel.get(raw) ?? raw,
-              coverage: 'COVERED',
-            })),
+      linked.length > 0
+        ? linked
+        : proposal.unresolvedNeedLabels.map((label) => ({ label, coverage: 'COVERED' as const })),
     duration: proposal.duration,
     measureOfSuccess: proposal.measureOfSuccess,
-    status: proposal.status,
-    myDecision: mySelection?.decision,
-    partnerDecisionVisible: revealPartnerSelections ? partnerSelection?.decision : undefined,
+    status: proposal.status as Stage4ProposalStatus,
+    myDecision: mine?.decision as Stage4SelectionDecision | undefined,
+    partnerDecisionVisible: revealPartner ? (theirs?.decision as Stage4SelectionDecision | undefined) : undefined,
   };
 }
 
@@ -294,9 +210,8 @@ function proposalMatchesNeed(proposal: ProposalCardDTO, needId: string, needLabe
   });
 }
 
-function buildNeedStatus(args: {
+function needStatus(args: {
   needId: string;
-  phase: Stage4WalkthroughPhase;
   currentNeedId?: string | null;
   coveringProposalIds: string[];
   coveredIds: Set<string>;
@@ -318,157 +233,104 @@ function defaultCheckInDate(): string {
 function buildQualityWarnings(proposals: ProposalCardDTO[]): Stage4QualityWarningDTO[] {
   const warnings: Stage4QualityWarningDTO[] = [];
   for (const proposal of proposals.filter((item) => item.myDecision === Stage4SelectionDecision.WILLING)) {
-      const vague =
-        !proposal.duration ||
-        !proposal.measureOfSuccess ||
-        /\b(communicate better|be better|try harder|more supportive|more present)\b/i.test(
-          proposal.description
-        );
-      if (!vague) continue;
-      warnings.push({
-        proposalId: proposal.id,
-        description: proposal.description,
-        warning: 'This may be hard to check later. You can still continue for now.',
-        suggestedRevision: 'Make it concrete: who does what, when, and how you will know it happened.',
-      });
-    }
+    const vague =
+      !proposal.duration ||
+      !proposal.measureOfSuccess ||
+      /\b(communicate better|be better|try harder|more supportive|more present)\b/i.test(proposal.description);
+    if (!vague) continue;
+    warnings.push({
+      proposalId: proposal.id,
+      description: proposal.description,
+      warning: 'This may be hard to check later. You can still continue for now.',
+      suggestedRevision: 'Make it concrete: who does what, when, and how you will know it happened.',
+    });
+  }
   return warnings;
 }
 
-function buildWalkthrough(args: {
-  coverageRows: Stage4NeedCoverageRow[];
-  proposalCards: ProposalCardDTO[];
-  userId: string;
-  partnerUserId: string | null;
-  stored: Stage4WalkthroughStoredState;
-}): Stage4WalkthroughDTO {
-  const coveredIds = new Set(args.stored.coveredNeedIds ?? []);
-  const skippedIds = new Set(args.stored.skippedNeedIds ?? []);
-  const toNeed = (row: Stage4NeedCoverageRow) => {
-    const id = row.needId ?? row.id;
-    return {
-      id,
-      label: row.needLabel,
-      source: getSourceLabel(row.sourceUserId, args.userId, args.partnerUserId) as 'YOU' | 'PARTNER' | 'UNKNOWN',
-      status: 'not_started' as Stage4NeedWalkthroughStatus,
-      coveringProposalIds: row.coveringProposalIds,
-    };
-  };
-
-  const ownRows = args.coverageRows
-    .filter((row) => row.sourceUserId === args.userId)
-    .map(toNeed);
-  const partnerRows = args.coverageRows
-    .filter((row) => row.sourceUserId !== args.userId)
-    .map(toNeed);
-
-  const ownRemaining = ownRows.find((need) => !coveredIds.has(need.id) && !skippedIds.has(need.id));
-  const partnerRemaining = partnerRows.find((need) => !coveredIds.has(need.id) && !skippedIds.has(need.id));
-  const phase =
-    args.stored.phase ??
-    (ownRemaining ? 'MY_NEEDS' : partnerRemaining ? 'PARTNER_NEEDS' : 'QUALITY_REVIEW');
-  const phaseNeeds = phase === 'PARTNER_NEEDS' ? partnerRows : ownRows;
+/** The walkthrough's needs in the order the walkthrough visits them, with the current one. */
+export function walkthroughOrder(
+  rows: CoverageView[],
+  me: string,
+  stored: WalkthroughStored,
+): { own: CoverageView[]; partner: CoverageView[]; phase: Stage4WalkthroughPhase; currentNeedId: string | null } {
+  const covered = new Set(stored.coveredNeedIds);
+  const skipped = new Set(stored.skippedNeedIds);
+  const own = rows.filter((r) => r.ownerParticipantId === me);
+  const partner = rows.filter((r) => r.ownerParticipantId !== me);
+  const ownRemaining = own.find((n) => !covered.has(n.id) && !skipped.has(n.id));
+  const partnerRemaining = partner.find((n) => !covered.has(n.id) && !skipped.has(n.id));
+  const phase = stored.phase ?? (ownRemaining ? 'MY_NEEDS' : partnerRemaining ? 'PARTNER_NEEDS' : 'QUALITY_REVIEW');
+  const phaseNeeds = phase === 'PARTNER_NEEDS' ? partner : own;
   const currentNeedId =
-    args.stored.currentNeedId && phaseNeeds.some((need) => need.id === args.stored.currentNeedId)
-      ? args.stored.currentNeedId
+    stored.currentNeedId && phaseNeeds.some((n) => n.id === stored.currentNeedId)
+      ? stored.currentNeedId
       : phase === 'MY_NEEDS'
-        ? ownRemaining?.id
+        ? (ownRemaining?.id ?? null)
         : phase === 'PARTNER_NEEDS'
-          ? partnerRemaining?.id
+          ? (partnerRemaining?.id ?? null)
           : null;
+  return { own, partner, phase, currentNeedId };
+}
 
-  const ownNeeds = ownRows.map((need) => ({
-    id: need.id,
-    label: need.label,
-    source: need.source,
-    status: buildNeedStatus({
-      needId: need.id,
-      phase,
+function buildWalkthrough(args: {
+  rows: CoverageView[];
+  cards: ProposalCardDTO[];
+  me: string;
+  partner: string | null;
+  stored: WalkthroughStored;
+}): Stage4WalkthroughDTO {
+  const coveredIds = new Set(args.stored.coveredNeedIds);
+  const skippedIds = new Set(args.stored.skippedNeedIds);
+  const { own, partner, phase, currentNeedId } = walkthroughOrder(args.rows, args.me, args.stored);
+  const phaseNeeds = phase === 'PARTNER_NEEDS' ? partner : own;
+  const toDTO = (n: CoverageView) => ({
+    id: n.id,
+    label: n.label,
+    source: sourceLabel(n.ownerParticipantId, args.me, args.partner) as 'YOU' | 'PARTNER' | 'UNKNOWN',
+    status: needStatus({
+      needId: n.id,
       currentNeedId,
-      coveringProposalIds: need.coveringProposalIds,
+      coveringProposalIds: n.coveringProposalIds,
       coveredIds,
       skippedIds,
     }),
-  }));
-  const partnerNeeds = partnerRows.map((need) => ({
-    id: need.id,
-    label: need.label,
-    source: need.source,
-    status: buildNeedStatus({
-      needId: need.id,
-      phase,
-      currentNeedId,
-      coveringProposalIds: need.coveringProposalIds,
-      coveredIds,
-      skippedIds,
-    }),
-  }));
-
+  });
+  const ownNeeds = own.map(toDTO);
+  const partnerNeeds = partner.map(toDTO);
   const currentNeed =
     phase === 'MY_NEEDS'
-      ? ownNeeds.find((need) => need.id === currentNeedId) ?? null
+      ? (ownNeeds.find((n) => n.id === currentNeedId) ?? null)
       : phase === 'PARTNER_NEEDS'
-        ? partnerNeeds.find((need) => need.id === currentNeedId) ?? null
+        ? (partnerNeeds.find((n) => n.id === currentNeedId) ?? null)
         : null;
-  const currentIndex = currentNeed
-    ? Math.max(0, phaseNeeds.findIndex((need) => need.id === currentNeed.id))
-    : 0;
-  const currentLabel = currentNeed?.label ?? '';
-  const proposalsForCurrent = currentNeed
-    ? args.proposalCards.filter((proposal) =>
-        proposalMatchesNeed(proposal, currentNeed.id, currentLabel)
-      )
+  const currentIndex = currentNeed ? Math.max(0, phaseNeeds.findIndex((n) => n.id === currentNeed.id)) : 0;
+  const forCurrent = currentNeed
+    ? args.cards.filter((p) => proposalMatchesNeed(p, currentNeed.id, currentNeed.label))
     : [];
-
   const group = (
     key: Stage4WalkthroughDTO['proposalGroups'][number]['key'],
     title: string,
     proposals: ProposalCardDTO[],
-    readOnly = false
+    readOnly = false,
   ) => ({ key, title, proposals, readOnly });
-
   const proposalGroups =
     phase === 'PARTNER_NEEDS'
       ? [
           group(
             'partner_may_do',
             'Things your partner may do themselves',
-            proposalsForCurrent.filter(
-              (proposal) =>
-                proposal.kind === Stage4ProposalKind.INDIVIDUAL_COMMITMENT &&
-                proposal.sourceLabel === 'PARTNER'
-            ),
-            true
+            forCurrent.filter((p) => p.kind === Stage4ProposalKind.INDIVIDUAL_COMMITMENT && p.sourceLabel === 'PARTNER'),
+            true,
           ),
-          group(
-            'shared_options',
-            'Things you could do together',
-            proposalsForCurrent.filter((proposal) => proposal.kind === Stage4ProposalKind.SHARED_PROPOSAL)
-          ),
-          group(
-            'your_prior_suggestions',
-            'Things you already suggested',
-            proposalsForCurrent.filter((proposal) => proposal.sourceLabel === 'YOU')
-          ),
+          group('shared_options', 'Things you could do together', forCurrent.filter((p) => p.kind === Stage4ProposalKind.SHARED_PROPOSAL)),
+          group('your_prior_suggestions', 'Things you already suggested', forCurrent.filter((p) => p.sourceLabel === 'YOU')),
         ]
       : [
-          group(
-            'you_suggested',
-            'Options you suggested',
-            proposalsForCurrent.filter((proposal) => proposal.sourceLabel === 'YOU')
-          ),
-          group(
-            'partner_suggested',
-            'Options your partner suggested',
-            proposalsForCurrent.filter((proposal) => proposal.sourceLabel === 'PARTNER')
-          ),
-          group(
-            'ai_suggested',
-            'MWF ideas',
-            proposalsForCurrent.filter((proposal) => proposal.sourceLabel === 'AI')
-          ),
+          group('you_suggested', 'Options you suggested', forCurrent.filter((p) => p.sourceLabel === 'YOU')),
+          group('partner_suggested', 'Options your partner suggested', forCurrent.filter((p) => p.sourceLabel === 'PARTNER')),
+          group('ai_suggested', 'MWF ideas', forCurrent.filter((p) => p.sourceLabel === 'AI')),
         ];
-
   return {
     phase,
     currentNeed,
@@ -477,301 +339,182 @@ function buildWalkthrough(args: {
     ownNeeds,
     partnerNeeds,
     proposalGroups,
-    qualityWarnings: buildQualityWarnings(args.proposalCards),
+    qualityWarnings: buildQualityWarnings(args.cards),
     defaultCheckInDate: defaultCheckInDate(),
   };
 }
 
-
-function hasSubmittedSelectionGate(progressRows: Stage4ProgressRow[], userId: string | null): boolean {
-  if (!userId) return false;
-
-  const progress = progressRows.find((row) => row.userId === userId);
-  const gates = progress?.gatesSatisfied;
-  return Boolean(
-    gates &&
-      typeof gates === 'object' &&
-      !Array.isArray(gates) &&
-      (gates as Record<string, unknown>).selectionSubmitted === true
-  );
-}
-
-function buildAgreementDTO(agreement: AgreementRow, userIsA: boolean): AgreementDTO {
+export function toAgreementDTO(agreement: AgreementRow, me: string, partner: string | null): AgreementDTO {
+  const myParty = agreement.parties.find((p) => p.participantId === me);
   return {
     id: agreement.id,
     strategyId: agreement.proposalId,
     description: agreement.description,
-    type: agreement.type,
+    type: agreement.type as AgreementDTO['type'],
     duration: agreement.duration,
     measureOfSuccess: agreement.measureOfSuccess,
-    status: agreement.status,
-    agreedByMe: userIsA ? agreement.agreedByA : agreement.agreedByB,
-    agreedByPartner: userIsA ? agreement.agreedByB : agreement.agreedByA,
-    agreedAt: iso(agreement.agreedAt),
-    followUpDate: iso(agreement.followUpDate),
+    status: agreement.status as AgreementDTO['status'],
+    agreedByMe: Boolean(myParty),
+    agreedByPartner: partner ? agreement.parties.some((p) => p.participantId === partner) : false,
+    agreedAt: iso(myParty?.agreedAt ?? agreement.parties[0]?.agreedAt ?? null),
+    followUpDate: iso(agreement.followUpAt),
   };
 }
 
 function derivePhase(args: {
-  closure: Stage4ClosureRow | null;
-  agreements: AgreementRow[];
-  coverageRows: Stage4NeedCoverageRow[];
-  mySelections: Stage4SelectionRow[];
-  partnerSelections: Stage4SelectionRow[];
-  mySelectionSubmitted: boolean;
-  partnerSelectionSubmitted: boolean;
+  closure: ClosureRow | null;
+  hasLiveProposals: boolean;
+  hasCoverage: boolean;
+  mySelections: ChoiceRow[];
+  partnerSelections: ChoiceRow[];
+  mySubmitted: boolean;
+  partnerSubmitted: boolean;
 }): Stage4Phase {
-  if (args.closure?.kind === Stage4ClosureKind.SHARED_AGREEMENT) {
-    return Stage4Phase.CLOSED_SHARED_AGREEMENT;
-  }
-
-  if (args.closure?.kind === Stage4ClosureKind.NO_SHARED_AGREEMENT) {
-    return Stage4Phase.CLOSED_NO_SHARED_AGREEMENT;
-  }
-
-  if (args.agreements.some((agreement) => agreement.status === 'PROPOSED')) {
-    return Stage4Phase.CLOSING;
-  }
-
-  if (args.mySelectionSubmitted && args.partnerSelectionSubmitted) {
-    return Stage4Phase.OUTCOME_REVIEW;
-  }
-
-  if (
-    args.mySelectionSubmitted ||
-    args.partnerSelectionSubmitted ||
-    args.mySelections.length > 0 ||
-    args.partnerSelections.length > 0
-  ) {
+  if (args.closure?.kind === Stage4ClosureKind.SHARED_AGREEMENT) return Stage4Phase.CLOSED_SHARED_AGREEMENT;
+  if (args.closure?.kind === Stage4ClosureKind.NO_SHARED_AGREEMENT) return Stage4Phase.CLOSED_NO_SHARED_AGREEMENT;
+  if (args.mySubmitted && args.partnerSubmitted) return Stage4Phase.OUTCOME_REVIEW;
+  if (args.mySubmitted || args.partnerSubmitted || args.mySelections.length > 0 || args.partnerSelections.length > 0) {
     return Stage4Phase.SELECTION;
   }
-
-  if (args.coverageRows.length > 0) {
-    return Stage4Phase.COVERAGE_REVIEW;
-  }
-
+  // Coverage is computed from proposals: it is "under review" once there is a proposal to cover anything.
+  if (args.hasCoverage && args.hasLiveProposals) return Stage4Phase.COVERAGE_REVIEW;
   return Stage4Phase.INVENTORY_BUILDING;
 }
 
-function buildTendingPreview(
-  closure: Stage4ClosureRow | null,
-  tendingEntries: TendingEntryRow[]
-): TendingPreviewDTO | null {
-  if (!closure && tendingEntries.length === 0) return null;
-
-  const nextEntry = tendingEntries[0] ?? null;
-
+function buildTendingPreview(closure: ClosureRow | null, entries: FollowUpRow[]): TendingPreviewDTO | null {
+  if (!closure && entries.length === 0) return null;
+  const next = entries[0] ?? null;
   return {
-    nextEntry: nextEntry
+    nextEntry: next
       ? {
-          id: nextEntry.id,
-          type: nextEntry.type,
-          status: nextEntry.status,
-          agreementId: nextEntry.agreementId,
-          scheduledFor: iso(nextEntry.scheduledFor),
-          openedAt: iso(nextEntry.openedAt),
-          completedAt: iso(nextEntry.completedAt),
-          summary: nextEntry.summary,
+          id: next.id,
+          type: toTendingEntryType(next.type),
+          status: next.status as NonNullable<TendingPreviewDTO['nextEntry']>['status'],
+          agreementId: next.agreementId,
+          scheduledFor: iso(next.scheduledFor),
+          openedAt: iso(next.openedAt),
+          completedAt: iso(next.completedAt),
+          summary: next.summary,
         }
       : null,
-    scheduledCount: tendingEntries.filter((entry) => entry.status === 'SCHEDULED').length,
-    openCount: tendingEntries.filter((entry) => entry.status === 'OPEN').length,
+    scheduledCount: entries.filter((e) => e.status === 'SCHEDULED').length,
+    openCount: entries.filter((e) => e.status === 'OPEN').length,
     passiveReentryAvailable: Boolean(closure),
   };
 }
 
-export async function getStage4State(
-  sessionId: string,
-  userId: string
-): Promise<GetStage4StateResponse> {
-  const session = (await prisma.session.findFirst({
-    where: {
-      id: sessionId,
-      relationship: {
-        members: {
-          some: { userId },
-        },
-      },
-    },
-    include: {
-      relationship: {
-        include: {
-          members: {
-            orderBy: { joinedAt: 'asc' },
-          },
-        },
-      },
-    },
-  })) as SessionForStage4 | null;
+const latest = (dates: Array<Date | null | undefined>): Date | null =>
+  dates.reduce<Date | null>((acc, d) => (d && (!acc || d > acc) ? d : acc), null);
 
-  if (!session) {
-    throw new Stage4StateNotFoundError();
-  }
-
-  const partnerUserId = getPartnerId(session, userId);
-  const userIsA = session.relationship.members[0]?.userId === userId;
-
-  const [
+/** Everything the state needs, for one viewer. */
+export async function loadStage4View(sessionId: string, userId: string) {
+  const me = await resolveParticipant(sessionId, userId);
+  if (!me) throw new Stage4StateNotFoundError();
+  const partner = (await getPartnerParticipant(me.id))?.participantId ?? null;
+  const [proposals, choices, needs, coverage, dispositions, closure, items, agreements, followUps, mySubmitted, partnerSubmitted] =
+    await Promise.all([
+      loadProposals(sessionId, me.id),
+      loadVisibleChoices(sessionId, me.id),
+      loadStage4Needs(sessionId, me.id),
+      loadCoverage(sessionId),
+      loadDispositions(me.id),
+      loadClosure(sessionId),
+      loadClosureItems(sessionId),
+      loadAgreements(sessionId),
+      loadFollowUpsForParticipant(sessionId, me.id),
+      hasMilestone(me.id, 'choices_shared'),
+      partner ? hasMilestone(partner, 'choices_shared') : Promise.resolve(false),
+    ]);
+  return {
+    me: me.id,
+    partner,
     proposals,
-    selections,
-    coverageRows,
+    choices,
+    needs,
+    rows: buildCoverageViews(needs, coverage),
+    dispositions,
     closure,
+    items,
     agreements,
-    tendingEntries,
-    progressRows,
-    declinations,
-    proposalNeedLinks,
-  ] = await Promise.all([
-    prisma.strategyProposal.findMany({
-      where: { sessionId },
-      orderBy: { updatedAt: 'desc' },
-    }) as Promise<Stage4ProposalRow[]>,
-    prisma.stage4ProposalSelection.findMany({
-      where: { sessionId },
-      orderBy: { updatedAt: 'desc' },
-    }) as Promise<Stage4SelectionRow[]>,
-    prisma.stage4NeedCoverage.findMany({
-      where: { sessionId },
-      orderBy: { updatedAt: 'desc' },
-    }) as Promise<Stage4NeedCoverageRow[]>,
-    prisma.stage4Closure.findUnique({
-      where: { sessionId },
-    }) as Promise<Stage4ClosureRow | null>,
-    prisma.agreement.findMany({
-      where: { sharedVessel: { sessionId } },
-      orderBy: { agreedAt: 'desc' },
-    }) as Promise<AgreementRow[]>,
-    prisma.tendingEntry.findMany({
-      where: { sessionId },
-      orderBy: [{ scheduledFor: 'asc' }, { createdAt: 'asc' }],
-    }) as Promise<TendingEntryRow[]>,
-    prisma.stageProgress.findMany({
-      where: { sessionId, stage: 4 },
-      select: { userId: true, gatesSatisfied: true },
-    }) as Promise<Stage4ProgressRow[]>,
-    prisma.stage4NeedDeclination.findMany({
-      where: { sessionId, userId },
-      select: { needId: true },
-    }) as Promise<{ needId: string }[]>,
-    prisma.strategyProposalNeed.findMany({
-      where: { proposal: { sessionId } },
-      select: {
-        proposalId: true,
-        needId: true,
-        need: { select: { need: true } },
-      },
-    }) as Promise<Array<{ proposalId: string; needId: string; need: { need: string } | null }>>,
-  ]);
+    followUps,
+    mySubmitted,
+    partnerSubmitted,
+  };
+}
 
-  const mySelections = selections.filter((selection) => selection.userId === userId);
-  const partnerSelections = selections.filter((selection) => selection.userId === partnerUserId);
-  const activeProposals = proposals.filter((proposal) => proposal.status === Stage4ProposalStatus.ACTIVE);
-  // "Submitted" must be an explicit act now (POST /stage4/share-selections),
-  // not an implicit consequence of having decided on every proposal. Otherwise
-  // partners would see each others' stances mid-deliberation.
-  const mySelectionSubmitted = hasSubmittedSelectionGate(progressRows ?? [], userId);
-  const partnerSelectionSubmitted = hasSubmittedSelectionGate(progressRows ?? [], partnerUserId);
-  const revealPartnerSelections = mySelectionSubmitted && partnerSelectionSubmitted;
-  const linksByProposal = new Map<string, Array<{ needId: string; needText: string }>>();
-  for (const link of proposalNeedLinks) {
-    const text = link.need?.need;
-    if (!text) continue;
-    const arr = linksByProposal.get(link.proposalId) ?? [];
-    arr.push({ needId: link.needId, needText: text });
-    linksByProposal.set(link.proposalId, arr);
-  }
-  const needIdToLabel = new Map<string, string>();
-  for (const row of coverageRows) {
-    if (row.needId) needIdToLabel.set(row.needId, row.needLabel);
-  }
-  const proposalCards = activeProposals.map((proposal) =>
-    buildProposalCard(
-      proposal,
-      userId,
-      partnerUserId,
-      selections,
-      coverageRows,
-      revealPartnerSelections,
-      linksByProposal.get(proposal.id) ?? [],
-      needIdToLabel
-    )
-  );
-  const unaddressedNeeds = buildUnaddressedNeeds(coverageRows, userId, partnerUserId);
-  const agreementsDTO = agreements.map((agreement) => buildAgreementDTO(agreement, userIsA));
-  const closedIndividualIds = new Set(closure?.individualProposalIds ?? []);
-  const openNeedIds = new Set(closure?.openNeedIds ?? []);
+export type Stage4View = Awaited<ReturnType<typeof loadStage4View>>;
 
-  const latestInventoryUpdate = proposals.reduce<Date | null>((latest, proposal) => {
-    if (!latest || proposal.updatedAt > latest) return proposal.updatedAt;
-    return latest;
-  }, null);
+export function walkthroughStoredFor(view: Stage4View): WalkthroughStored {
+  return walkthroughStored(view.dispositions, view.needs, view.me);
+}
+
+export async function getStage4State(sessionId: string, userId: string): Promise<GetStage4StateResponse> {
+  return buildStage4StateFromView(await loadStage4View(sessionId, userId));
+}
+
+export function buildStage4StateFromView(view: Stage4View): GetStage4StateResponse {
+  const { me, partner, proposals, choices, rows, closure, items, agreements, followUps } = view;
+  const mySelections = choices.filter((c) => c.participantId === me);
+  const partnerSelections = choices.filter((c) => c.participantId === partner);
+  const reveal = view.mySubmitted && view.partnerSubmitted;
+  const active = proposals.filter((p) => p.status === 'ACTIVE');
+  const cards = active.map((p) => buildProposalCard(p, me, partner, choices, rows, reveal));
+  const unaddressed = buildUnaddressedNeeds(rows, me, partner);
+  const agreementDTOs = agreements.map((a) => toAgreementDTO(a, me, partner));
+  const declined = new Set(view.dispositions.filter((d) => d.status === 'DECLINED').map((d) => d.needId));
+  const closureItems: ClosureItems = items;
+  const individualIds = new Set(closureItems.individualCommitmentIds);
+  const openIds = new Set(closureItems.openNeedIds);
+  const coverageUpdatedAt = rows.length
+    ? latest([...view.needs.map((n) => n.sharedAt), ...proposals.map((p) => p.updatedAt), ...choices.map((c) => c.updatedAt)])
+    : null;
+  const selectionDTO = (c: ChoiceRow): Stage4SelectionDTO => ({
+    proposalId: c.proposalId,
+    decision: c.decision as Stage4SelectionDecision,
+    note: c.note,
+    selectedAt: c.createdAt.toISOString(),
+    updatedAt: c.updatedAt.toISOString(),
+  });
 
   return {
     phase: derivePhase({
       closure,
-      agreements,
-      coverageRows,
+      hasLiveProposals: proposals.some((p) => p.status !== 'REMOVED'),
+      hasCoverage: rows.length > 0,
       mySelections,
       partnerSelections,
-      mySelectionSubmitted,
-      partnerSelectionSubmitted,
+      mySubmitted: view.mySubmitted,
+      partnerSubmitted: view.partnerSubmitted,
     }),
-    walkthrough: buildWalkthrough({
-      coverageRows,
-      proposalCards,
-      userId,
-      partnerUserId,
-      stored: getWalkthroughState(progressRows ?? [], userId),
-    }),
+    walkthrough: buildWalkthrough({ rows, cards, me, partner, stored: walkthroughStored(view.dispositions, view.needs, me) }),
     inventory: {
-      sharedProposals: proposalCards.filter(
-        (proposal) => proposal.kind === Stage4ProposalKind.SHARED_PROPOSAL
-      ),
-      individualCommitments: proposalCards.filter(
-        (proposal) => proposal.kind === Stage4ProposalKind.INDIVIDUAL_COMMITMENT
-      ),
-      unaddressedNeeds,
-      removedProposalCount: proposals.filter((proposal) => proposal.status === Stage4ProposalStatus.REMOVED).length,
-      updatedAt: iso(latestInventoryUpdate) ?? new Date(0).toISOString(),
+      sharedProposals: cards.filter((p) => p.kind === Stage4ProposalKind.SHARED_PROPOSAL),
+      individualCommitments: cards.filter((p) => p.kind === Stage4ProposalKind.INDIVIDUAL_COMMITMENT),
+      unaddressedNeeds: unaddressed,
+      removedProposalCount: proposals.filter((p) => p.status === 'REMOVED').length,
+      updatedAt: iso(latest(proposals.map((p) => p.updatedAt))) ?? new Date(0).toISOString(),
     },
-    coverageAudit: buildCoverageAudit(
-      coverageRows,
-      userId,
-      partnerUserId,
-      new Set(declinations.map((d) => d.needId))
-    ),
-    mySelections: mySelections.map((selection): Stage4SelectionDTO => ({
-      proposalId: selection.proposalId,
-      decision: selection.decision,
-      note: selection.note,
-      selectedAt: selection.selectedAt.toISOString(),
-      updatedAt: selection.updatedAt.toISOString(),
-    })),
-    partnerSelections: revealPartnerSelections
-      ? partnerSelections.map((selection): Stage4SelectionDTO => ({
-          proposalId: selection.proposalId,
-          decision: selection.decision,
-          note: selection.note,
-          selectedAt: selection.selectedAt.toISOString(),
-          updatedAt: selection.updatedAt.toISOString(),
-        }))
-      : [],
-    mySelectionStatus: mySelectionSubmitted ? 'SUBMITTED' : 'NOT_STARTED',
-    partnerSelectionStatus: partnerSelectionSubmitted ? 'SUBMITTED' : 'NOT_STARTED',
+    coverageAudit: buildCoverageAudit(rows, me, partner, declined, coverageUpdatedAt),
+    mySelections: mySelections.map(selectionDTO),
+    partnerSelections: reveal ? partnerSelections.map(selectionDTO) : [],
+    mySelectionStatus: view.mySubmitted ? 'SUBMITTED' : 'NOT_STARTED',
+    partnerSelectionStatus: view.partnerSubmitted ? 'SUBMITTED' : 'NOT_STARTED',
     outcome: closure
       ? {
-          kind: closure.kind,
-          reason: closure.reason,
+          kind: closure.kind as Stage4ClosureKind,
+          reason: closure.reason as NonNullable<GetStage4StateResponse['outcome']>['reason'],
           summary: closure.summary,
-          agreements: agreementsDTO.filter((agreement) =>
-            closure.sharedAgreementIds.includes(agreement.id)
-          ),
-          individualCommitments: proposalCards.filter((proposal) => closedIndividualIds.has(proposal.id)),
-          openNeeds: unaddressedNeeds.filter((need) => need.id && openNeedIds.has(need.id)),
+          agreements: agreementDTOs.filter((a) => closureItems.agreementIds.includes(a.id)),
+          individualCommitments: proposals
+            .filter((p) => individualIds.has(p.id))
+            .map((p) => buildProposalCard(p, me, partner, choices, rows, reveal)),
+          openNeeds: rows
+            .filter((r) => openIds.has(r.id))
+            .map((r) => ({ id: r.id, label: r.label, source: sourceLabel(r.ownerParticipantId, me, partner), note: r.note ?? 'Still open' })),
           closedAt: closure.closedAt.toISOString(),
           checkInAt: closure.checkInAt ? closure.checkInAt.toISOString() : null,
         }
       : null,
-    tendingPreview: buildTendingPreview(closure, tendingEntries),
+    tendingPreview: buildTendingPreview(closure, followUps),
   };
 }

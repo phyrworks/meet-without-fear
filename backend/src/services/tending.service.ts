@@ -1,4 +1,34 @@
-import { Prisma } from '../generated/prisma/client';
+/**
+ * Follow-up (was Tending) on the target tables (TS-11; spec §1.5).
+ *
+ * Old model → target:
+ *
+ *   TendingEntry                        → follow_up (type, scope, owner_participant_id,
+ *                                         response_deadline_at); ONE follow-up is ONE cycle:
+ *                                         a further round (EXTEND, PARTIAL_CLOSURE continuing) is a
+ *                                         new follow_up row and the old one COMPLETED
+ *   TendingCoordinationCycle            → v_follow_up_cycle (computed: waiting_on, status by deadline)
+ *   TendingCheckin + TendingResponse +
+ *   TendingEntryOutcome + TendingNeedOutcome +
+ *   TendingAdjustment + TendingResponsePartialClosure
+ *                                       → ONE follow_up_checkin per (follow_up, participant) with a
+ *                                         `payload` validated by the shared zod contract
+ *                                         `followUpCheckinPayloadSchema` (the five tables are its arrays)
+ *   TendingBetweenPeriodNote            → follow_up_note (private); sharing = copying the note into
+ *                                         the check-in's payload.carriedNotes[] and setting
+ *                                         carried_into_checkin_id
+ *   TendingReminder                     → reminder (user-scoped)
+ *
+ * Writers: the participant's own rows (check-ins, notes, reminders, the
+ * owner's opt-in) on the APP connection; the scheduler, the open-due job,
+ * status moves of a follow-up and reminder delivery on the JOB connection
+ * (spec: follow_up "I member / job (scheduler) · U owner or job (status)",
+ * reminder "status → DELIVERED by mwf_job").
+ *
+ * The DTOs (`shared/src/dto/strategy.ts` Tending*) keep their shape: ids are
+ * the follow-up / check-in ids, user ids are the participants' user ids.
+ */
+
 import {
   ContinueChoice,
   PartialClosureResolution,
@@ -19,7 +49,6 @@ import {
   TendingEntryType,
   TendingFollowThroughStatus,
   TendingHistoryCycleDTO,
-  TendingHistoryEntryReviewDTO,
   TendingHelpfulnessStatus,
   TendingNeedOutcomeDTO,
   TendingNeedResolutionStatus,
@@ -30,82 +59,53 @@ import {
   TendingReminderStatus,
   TendingResponseDTO,
   TendingResponseStatus,
+  emptyFollowUpCheckinPayload,
+  followUpCheckinPayloadSchema,
+  type FollowUpCheckinPayload,
 } from '@meet-without-fear/shared';
-import { prisma } from '../lib/prisma';
+import type { Prisma } from '../generated/prisma/client';
+import { getJobPrisma, prisma } from '../lib/prisma';
 import { logger } from '../lib/logger';
 import { publishSessionEvent, publishUserEvent } from './realtime';
+import { createFacilitatorMessage } from './message-store';
+import { resolveParticipant } from './participant-resolver';
 
-type Tx = Prisma.TransactionClient;
+// ============================================================================
+// Rows and errors
+// ============================================================================
 
-function buildTendingCoordinationKey(sessionId: string, entryIds: string[]): string {
-  return `${sessionId}:${[...entryIds].sort().join('|')}`;
-}
+export type FollowUpType = 'SCHEDULED_SHARED_AGREEMENT' | 'SCHEDULED_INDIVIDUAL_COMMITMENT' | 'USER_INITIATED_REENTRY';
 
-function isUniqueConstraintError(error: unknown): boolean {
-  return error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002';
-}
-
-type AgreementForScheduling = {
-  id: string;
-  description: string;
-  followUpDate: Date | null;
-};
-
-type TendingEntryWithResponses = {
+export interface FollowUpRow {
   id: string;
   sessionId: string;
   agreementId: string | null;
-  type: TendingEntryType;
-  scope: TendingEntryScope;
-  ownerUserId: string | null;
+  proposalId: string | null;
+  type: FollowUpType;
+  scope: 'SHARED' | 'INDIVIDUAL';
+  ownerParticipantId: string | null;
   optedInShared: boolean;
-  status: TendingEntryStatus;
+  status: 'SCHEDULED' | 'OPEN' | 'PARTIAL' | 'COMPLETED' | 'EXPIRED' | 'CANCELLED';
   scheduledFor: Date | null;
+  responseDeadlineAt: Date | null;
   openedAt: Date | null;
   completedAt: Date | null;
   summary: string | null;
   createdAt: Date;
   updatedAt: Date;
-  responses: Array<{
-    id: string;
-    tendingEntryId: string;
-    userId: string;
-    checkinId: string | null;
-    status: string;
-    reflection: string | null;
-    continueChoice: ContinueChoice | null;
-    submittedAt: Date;
-  }>;
-  entryOutcomes?: Array<{
-    id: string;
-    checkinId: string;
-    tendingEntryId: string;
-    responseId: string | null;
-    userId: string;
-    followThroughStatus: any;
-    helpfulnessStatus: any | null;
-    blockerCategories: any[];
-    whatHappened: string | null;
-    helpedNeed: string | null;
-    blockerNote: string | null;
-    stillWorthTrying: boolean | null;
-    createdAt: Date;
-  }>;
-  reminders?: Array<{
-    id: string;
-    sessionId: string;
-    checkinId: string | null;
-    tendingEntryId: string | null;
-    userId: string;
-    scope: any;
-    remindAt: Date;
-    cadence: string | null;
-    note: string | null;
-    status: string;
-    createdAt: Date;
-    updatedAt: Date;
-  }>;
-};
+}
+
+export interface CheckinRow {
+  id: string;
+  followUpId: string;
+  participantId: string;
+  nextAction: TendingNextAction | null;
+  continueChoice: ContinueChoice | null;
+  reflectionSummary: string | null;
+  payload: FollowUpCheckinPayload;
+  submittedAt: Date;
+  createdAt: Date;
+}
 
 export class TendingNotFoundError extends Error {
   constructor() {
@@ -128,47 +128,182 @@ export class TendingInvalidStateError extends Error {
   }
 }
 
+const FOLLOW_UP_SELECT = {
+  id: true,
+  sessionId: true,
+  agreementId: true,
+  proposalId: true,
+  type: true,
+  scope: true,
+  ownerParticipantId: true,
+  optedInShared: true,
+  status: true,
+  scheduledFor: true,
+  responseDeadlineAt: true,
+  openedAt: true,
+  completedAt: true,
+  summary: true,
+  createdAt: true,
+  updatedAt: true,
+} as const;
+
+/** The JOB connection or a transaction on it. */
+type JobDb = Pick<Prisma.TransactionClient, '$queryRaw' | '$executeRaw'>;
+
+const DEFAULT_EXTENSION_DAYS = 28;
+const DEFAULT_SHARED_RESPONSE_DEADLINE_DAYS = 14;
+
 function iso(value: Date | null | undefined): string | null {
   return value ? value.toISOString() : null;
 }
 
-function toResponseDTO(response: TendingEntryWithResponses['responses'][number]): TendingResponseDTO {
+function addDays(date: Date, days: number): Date {
+  const next = new Date(date.getTime());
+  next.setUTCDate(next.getUTCDate() + days);
+  return next;
+}
+
+/** follow_up.type → the DTO's TendingEntryType (names only). */
+export function toTendingEntryType(type: FollowUpType): TendingEntryType {
+  switch (type) {
+    case 'SCHEDULED_SHARED_AGREEMENT':
+      return TendingEntryType.SCHEDULED_SHARED_AGREEMENT_CHECKIN;
+    case 'SCHEDULED_INDIVIDUAL_COMMITMENT':
+      return TendingEntryType.SCHEDULED_INDIVIDUAL_COMMITMENT_CHECKIN;
+    default:
+      return TendingEntryType.USER_INITIATED_REENTRY;
+  }
+}
+
+/**
+ * Validate a check-in payload against the shared contract. Every write goes
+ * through here: an invalid payload is never stored.
+ */
+export function validateCheckinPayload(payload: unknown): FollowUpCheckinPayload {
+  const parsed = followUpCheckinPayloadSchema.safeParse(payload);
+  if (!parsed.success) {
+    throw new TendingInvalidStateError(
+      `Invalid check-in payload: ${parsed.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; ')}`,
+    );
+  }
+  return parsed.data;
+}
+
+/** A stored payload, read back (a row written before validation existed reads as empty). */
+function readPayload(raw: unknown): FollowUpCheckinPayload {
+  const parsed = followUpCheckinPayloadSchema.safeParse(raw);
+  return parsed.success ? parsed.data : emptyFollowUpCheckinPayload();
+}
+
+// ============================================================================
+// Context
+// ============================================================================
+
+interface Viewer {
+  sessionId: string;
+  participantId: string;
+  userId: string;
+  sessionStatus: string;
+  relationshipId: string;
+  /** participant id → user id, for every participant of the session (DTOs carry user ids). */
+  userOf: Map<string, string | null>;
+  /** user id → participant id. */
+  participantOfUser: Map<string, string>;
+  /** Present human participants. */
+  humans: string[];
+}
+
+async function viewerFor(sessionId: string, userId: string): Promise<Viewer> {
+  const me = await resolveParticipant(sessionId, userId);
+  if (!me) throw new TendingNotFoundError();
+  const [session, participants] = await Promise.all([
+    prisma.session.findUnique({ where: { id: sessionId }, select: { status: true, relationshipId: true } }),
+    prisma.participant.findMany({
+      where: { sessionId },
+      select: { id: true, userId: true, kind: true, leftAt: true },
+      orderBy: [{ joinedAt: 'asc' }, { id: 'asc' }],
+    }),
+  ]);
+  if (!session) throw new TendingNotFoundError();
   return {
-    id: response.id,
-    tendingEntryId: response.tendingEntryId,
-    userId: response.userId,
-    checkinId: response.checkinId ?? null,
-    status: response.status as TendingResponseStatus,
-    reflection: response.reflection,
-    continueChoice: response.continueChoice,
-    submittedAt: response.submittedAt.toISOString(),
+    sessionId,
+    participantId: me.id,
+    userId,
+    sessionStatus: session.status,
+    relationshipId: session.relationshipId,
+    userOf: new Map(participants.map((p) => [p.id, p.userId])),
+    participantOfUser: new Map(participants.filter((p) => p.userId).map((p) => [p.userId as string, p.id])),
+    humans: participants.filter((p) => p.kind === 'human' && !p.leftAt).map((p) => p.id),
   };
 }
 
-function toEntryOutcomeDTO(outcome: NonNullable<TendingEntryWithResponses['entryOutcomes']>[number]): TendingEntryOutcomeDTO {
-  return {
-    id: outcome.id,
-    checkinId: outcome.checkinId,
-    tendingEntryId: outcome.tendingEntryId,
-    responseId: outcome.responseId,
-    userId: outcome.userId,
-    followThroughStatus: outcome.followThroughStatus,
-    helpfulnessStatus: outcome.helpfulnessStatus,
-    blockerCategories: outcome.blockerCategories,
-    whatHappened: outcome.whatHappened,
-    helpedNeed: outcome.helpedNeed,
-    blockerNote: outcome.blockerNote,
-    stillWorthTrying: outcome.stillWorthTrying,
-    createdAt: outcome.createdAt.toISOString(),
-  };
+const userIdOf = (v: Viewer, participantId: string | null): string | null =>
+  participantId ? (v.userOf.get(participantId) ?? null) : null;
+
+/**
+ * The follow-ups a participant may see (spec RLS: SHARED, their own
+ * INDIVIDUAL ones, or an INDIVIDUAL one its owner opted in to share).
+ */
+export async function loadFollowUpsForParticipant(sessionId: string, participantId: string): Promise<FollowUpRow[]> {
+  return (await prisma.followUp.findMany({
+    where: {
+      sessionId,
+      OR: [{ scope: 'SHARED' }, { ownerParticipantId: participantId }, { optedInShared: true }],
+    },
+    orderBy: [{ scheduledFor: 'asc' }, { createdAt: 'asc' }, { id: 'asc' }],
+    select: FOLLOW_UP_SELECT,
+  })) as FollowUpRow[];
 }
 
-function toReminderDTO(reminder: NonNullable<TendingEntryWithResponses['reminders']>[number]): TendingReminderDTO {
+/** Check-ins the viewer may read: their own, and every check-in on a SHARED follow-up. */
+async function loadCheckins(followUpIds: string[], viewerParticipantId: string): Promise<CheckinRow[]> {
+  if (followUpIds.length === 0) return [];
+  const rows = await prisma.followUpCheckin.findMany({
+    where: {
+      followUpId: { in: followUpIds },
+      OR: [{ participantId: viewerParticipantId }, { followUp: { scope: 'SHARED' } }],
+    },
+    orderBy: [{ submittedAt: 'asc' }, { id: 'asc' }],
+    select: {
+      id: true,
+      followUpId: true,
+      participantId: true,
+      nextAction: true,
+      continueChoice: true,
+      reflectionSummary: true,
+      payload: true,
+      submittedAt: true,
+      createdAt: true,
+    },
+  });
+  return rows.map((r) => ({
+    ...r,
+    nextAction: r.nextAction as TendingNextAction | null,
+    continueChoice: r.continueChoice as ContinueChoice | null,
+    payload: readPayload(r.payload),
+  }));
+}
+
+async function loadReminders(viewer: Viewer, followUpIds: string[]) {
+  if (followUpIds.length === 0) return [];
+  return prisma.reminder.findMany({
+    where: { followUpId: { in: followUpIds }, userId: viewer.userId },
+    orderBy: [{ remindAt: 'asc' }, { id: 'asc' }],
+  });
+}
+
+type ReminderRow = Awaited<ReturnType<typeof loadReminders>>[number];
+
+// ============================================================================
+// DTOs
+// ============================================================================
+
+function toReminderDTO(viewer: Viewer, reminder: ReminderRow): TendingReminderDTO {
   return {
     id: reminder.id,
-    sessionId: reminder.sessionId,
-    checkinId: reminder.checkinId,
-    tendingEntryId: reminder.tendingEntryId,
+    sessionId: viewer.sessionId,
+    checkinId: null,
+    tendingEntryId: reminder.followUpId,
     userId: reminder.userId,
     scope: reminder.scope as TendingReminderScope,
     remindAt: reminder.remindAt.toISOString(),
@@ -180,259 +315,318 @@ function toReminderDTO(reminder: NonNullable<TendingEntryWithResponses['reminder
   };
 }
 
-function toAdjustmentDTO(adjustment: {
-  id: string;
-  sessionId: string;
-  checkinId: string;
-  tendingEntryId: string;
-  userId: string;
-  privacyScope: any;
-  revisedCommitmentText: string | null;
-  revisedCadence: string | null;
-  revisedScope: string | null;
-  revisedSuccessCriteria: string | null;
-  reason: string | null;
-  blockerAddressed: any[];
-  createdAt: Date;
-}): TendingAdjustmentDTO {
+function toResponseDTO(viewer: Viewer, checkin: CheckinRow): TendingResponseDTO {
+  const response = checkin.payload.responses.find((r) => r.followUpId === checkin.followUpId);
   return {
-    id: adjustment.id,
-    sessionId: adjustment.sessionId,
-    checkinId: adjustment.checkinId,
-    tendingEntryId: adjustment.tendingEntryId,
-    userId: adjustment.userId,
-    privacyScope: adjustment.privacyScope as TendingReminderScope,
-    revisedCommitmentText: adjustment.revisedCommitmentText,
-    revisedCadence: adjustment.revisedCadence,
-    revisedScope: adjustment.revisedScope,
-    revisedSuccessCriteria: adjustment.revisedSuccessCriteria,
-    reason: adjustment.reason,
-    blockerAddressed: adjustment.blockerAddressed,
-    createdAt: adjustment.createdAt.toISOString(),
+    id: checkin.id,
+    tendingEntryId: checkin.followUpId,
+    userId: userIdOf(viewer, checkin.participantId) ?? '',
+    checkinId: checkin.id,
+    status: (response?.status ?? 'CHECKIN') as TendingResponseStatus,
+    reflection: response?.reflection ?? checkin.reflectionSummary,
+    continueChoice: response?.continueChoice ?? checkin.continueChoice,
+    submittedAt: checkin.submittedAt.toISOString(),
   };
 }
 
-function toHistoryEntryReviewDTO(outcome: {
-  tendingEntryId: string;
-  tendingEntry?: { summary: string | null; scope: any } | null;
-  followThroughStatus: any;
-  helpfulnessStatus: any | null;
-  blockerCategories: any[];
-  whatHappened: string | null;
-  helpedNeed: string | null;
-  stillWorthTrying: boolean | null;
-}): TendingHistoryEntryReviewDTO {
-  return {
-    tendingEntryId: outcome.tendingEntryId,
-    summary: outcome.tendingEntry?.summary ?? null,
-    scope: outcome.tendingEntry?.scope as TendingEntryScope,
-    followThroughStatus: outcome.followThroughStatus as TendingFollowThroughStatus,
-    helpfulnessStatus: outcome.helpfulnessStatus as TendingHelpfulnessStatus | null,
-    blockerCategories: outcome.blockerCategories as TendingBlockerCategory[],
-    whatHappened: outcome.whatHappened,
-    helpedNeed: outcome.helpedNeed,
-    stillWorthTrying: outcome.stillWorthTrying,
-  };
+function entryOutcomeDTOs(viewer: Viewer, checkin: CheckinRow): TendingEntryOutcomeDTO[] {
+  return checkin.payload.entryOutcomes.map((o, i) => ({
+    id: `${checkin.id}:entry:${i}`,
+    checkinId: checkin.id,
+    tendingEntryId: o.followUpId,
+    responseId: checkin.id,
+    userId: userIdOf(viewer, checkin.participantId) ?? '',
+    followThroughStatus: o.followThroughStatus,
+    helpfulnessStatus: o.helpfulnessStatus,
+    blockerCategories: o.blockerCategories,
+    whatHappened: o.whatHappened,
+    helpedNeed: o.helpedNeed,
+    blockerNote: o.blockerNote,
+    stillWorthTrying: o.stillWorthTrying,
+    createdAt: checkin.submittedAt.toISOString(),
+  }));
 }
 
-function toBetweenPeriodNoteDTO(note: {
-  id: string;
-  sessionId: string;
-  userId: string;
-  content: string;
-  carryForwardSelected: boolean;
-  consentToShareWithPartner: boolean;
-  shareConsentAt: Date | null;
-  selectedForCheckinId: string | null;
-  createdAt: Date;
-  updatedAt: Date;
-}): TendingBetweenPeriodNoteDTO {
-  return {
-    id: note.id,
-    sessionId: note.sessionId,
-    userId: note.userId,
-    content: note.content,
-    carryForwardSelected: note.carryForwardSelected,
-    consentToShareWithPartner: note.consentToShareWithPartner,
-    shareConsentAt: iso(note.shareConsentAt),
-    selectedForCheckinId: note.selectedForCheckinId,
-    createdAt: note.createdAt.toISOString(),
-    updatedAt: note.updatedAt.toISOString(),
-  };
+function needOutcomeDTOs(viewer: Viewer, checkin: CheckinRow): TendingNeedOutcomeDTO[] {
+  return checkin.payload.needOutcomes.map((o, i) => ({
+    id: `${checkin.id}:need:${i}`,
+    checkinId: checkin.id,
+    sessionId: viewer.sessionId,
+    needId: o.needId,
+    needLabel: o.needLabel,
+    sourceUserId: userIdOf(viewer, o.sourceParticipantId),
+    resolutionStatus: o.resolutionStatus,
+    note: o.note,
+    changedNeedLabel: o.changedNeedLabel,
+    nextAction: o.nextAction,
+    createdAt: checkin.submittedAt.toISOString(),
+  }));
 }
 
-function toEntryDTO(entry: TendingEntryWithResponses, userId: string): TendingEntryDTO {
-  const myResponse = entry.responses.find((response) => response.userId === userId) ?? null;
-  const latestOutcome = (entry.entryOutcomes ?? [])
-    .filter((outcome) => outcome.userId === userId)
-    .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())[0] ?? null;
+function adjustmentDTOs(viewer: Viewer, checkin: CheckinRow): TendingAdjustmentDTO[] {
+  return checkin.payload.adjustments.map((a, i) => ({
+    id: `${checkin.id}:adjustment:${i}`,
+    sessionId: viewer.sessionId,
+    checkinId: checkin.id,
+    tendingEntryId: a.followUpId,
+    userId: userIdOf(viewer, checkin.participantId) ?? '',
+    privacyScope: a.privacyScope,
+    revisedCommitmentText: a.revisedCommitmentText,
+    revisedCadence: a.revisedCadence,
+    revisedScope: a.revisedScope,
+    revisedSuccessCriteria: a.revisedSuccessCriteria,
+    reason: a.reason,
+    blockerAddressed: a.blockerAddressed,
+    createdAt: checkin.submittedAt.toISOString(),
+  }));
+}
 
+function toEntryDTO(viewer: Viewer, entry: FollowUpRow, checkins: CheckinRow[], reminders: ReminderRow[]): TendingEntryDTO {
+  const onEntry = checkins.filter((c) => c.followUpId === entry.id);
+  const mine = onEntry.find((c) => c.participantId === viewer.participantId) ?? null;
+  const latestOutcome = mine ? (entryOutcomeDTOs(viewer, mine).find((o) => o.tendingEntryId === entry.id) ?? null) : null;
   return {
     id: entry.id,
     sessionId: entry.sessionId,
     agreementId: entry.agreementId,
-    type: entry.type,
-    scope: entry.scope,
-    ownerUserId: entry.ownerUserId,
+    type: toTendingEntryType(entry.type),
+    scope: entry.scope as TendingEntryScope,
+    ownerUserId: userIdOf(viewer, entry.ownerParticipantId),
     optedInShared: entry.optedInShared,
-    status: entry.status,
+    status: entry.status as TendingEntryStatus,
     scheduledFor: iso(entry.scheduledFor),
     openedAt: iso(entry.openedAt),
     completedAt: iso(entry.completedAt),
     summary: entry.summary,
     createdAt: entry.createdAt.toISOString(),
     updatedAt: entry.updatedAt.toISOString(),
-    myResponse: myResponse ? toResponseDTO(myResponse) : null,
-    responseCount: entry.responses.length,
-    latestOutcome: latestOutcome ? toEntryOutcomeDTO(latestOutcome) : null,
-    reminders: (entry.reminders ?? [])
-      .filter((reminder) => reminder.userId === userId || reminder.scope === TendingReminderScope.SHARED)
-      .map(toReminderDTO),
+    myResponse: mine ? toResponseDTO(viewer, mine) : null,
+    responseCount: onEntry.length,
+    latestOutcome,
+    reminders: reminders.filter((r) => r.followUpId === entry.id).map((r) => toReminderDTO(viewer, r)),
   };
 }
 
-async function assertSessionMember(sessionId: string, userId: string) {
-  const session = await prisma.session.findFirst({
-    where: {
-      id: sessionId,
-      relationship: { members: { some: { userId } } },
-    },
-    include: {
-      relationship: {
-        include: {
-          members: { select: { userId: true } },
-        },
-      },
-    },
+async function entryDTOs(viewer: Viewer, entries: FollowUpRow[]): Promise<TendingEntryDTO[]> {
+  const ids = entries.map((e) => e.id);
+  const [checkins, reminders] = await Promise.all([loadCheckins(ids, viewer.participantId), loadReminders(viewer, ids)]);
+  return entries.map((e) => toEntryDTO(viewer, e, checkins, reminders));
+}
+
+// ============================================================================
+// Scheduling (JOB connection)
+// ============================================================================
+
+async function insertFollowUpAsJob(row: {
+  sessionId: string;
+  agreementId?: string | null;
+  proposalId?: string | null;
+  type: FollowUpType;
+  scope: 'SHARED' | 'INDIVIDUAL';
+  ownerParticipantId?: string | null;
+  optedInShared?: boolean;
+  status: 'SCHEDULED' | 'OPEN';
+  scheduledFor: Date | null;
+  responseDeadlineAt?: Date | null;
+  summary: string | null;
+}, db: JobDb = getJobPrisma()): Promise<string> {
+  const [r] = await db.$queryRaw<Array<{ id: string }>>`
+    INSERT INTO follow_up (session_id, agreement_id, proposal_id, type, scope, owner_participant_id, opted_in_shared,
+                           status, scheduled_for, response_deadline_at, summary)
+    VALUES (${row.sessionId}::uuid, ${row.agreementId ?? null}::uuid, ${row.proposalId ?? null}::uuid,
+            ${row.type}::follow_up_type, ${row.scope}::follow_up_scope, ${row.ownerParticipantId ?? null}::uuid,
+            ${row.optedInShared ?? false}, ${row.status}::follow_up_status, ${row.scheduledFor},
+            ${row.responseDeadlineAt ?? null}, ${row.summary})
+    RETURNING id`;
+  return r.id;
+}
+
+/** A follow-up's status move (the job writes follow-up status). */
+async function setFollowUpStatusAsJob(
+  id: string,
+  status: FollowUpRow['status'],
+  extra: { openedAt?: Date | null; completedAt?: Date | null; responseDeadlineAt?: Date | null } = {},
+  db: JobDb = getJobPrisma(),
+): Promise<number> {
+  return db.$executeRaw`
+    UPDATE follow_up SET status = ${status}::follow_up_status,
+      opened_at = CASE WHEN ${extra.openedAt !== undefined} THEN ${extra.openedAt ?? null}::timestamptz ELSE opened_at END,
+      completed_at = CASE WHEN ${extra.completedAt !== undefined} THEN ${extra.completedAt ?? null}::timestamptz ELSE completed_at END,
+      response_deadline_at = CASE WHEN ${extra.responseDeadlineAt !== undefined}
+                                  THEN ${extra.responseDeadlineAt ?? null}::timestamptz ELSE response_deadline_at END
+    WHERE id = ${id}::uuid`;
+}
+
+/** The next round of a follow-up: the current one COMPLETED, a new SCHEDULED row for the same subject. */
+async function scheduleNextRoundAsJob(entry: FollowUpRow, scheduledFor: Date, now: Date): Promise<string> {
+  await setFollowUpStatusAsJob(entry.id, 'COMPLETED', { completedAt: now });
+  return insertFollowUpAsJob({
+    sessionId: entry.sessionId,
+    agreementId: entry.agreementId,
+    proposalId: entry.proposalId,
+    type: entry.type,
+    scope: entry.scope,
+    ownerParticipantId: entry.ownerParticipantId,
+    optedInShared: entry.optedInShared,
+    status: 'SCHEDULED',
+    scheduledFor,
+    summary: entry.summary,
   });
-
-  if (!session) throw new TendingNotFoundError();
-  return session;
 }
 
-function buildScheduledSummary(agreement: AgreementForScheduling): string {
-  return `Check in on the shared agreement: ${agreement.description}`;
-}
+type AgreementForScheduling = { id: string; description: string; followUpDate: Date | null };
 
 export async function scheduleSharedAgreementTendingEntries(
-  tx: Tx,
   sessionId: string,
   agreements: AgreementForScheduling[],
-  now = new Date()
+  now = new Date(),
+  db: JobDb = getJobPrisma(),
 ): Promise<string[]> {
-  const createdIds: string[] = [];
-
+  const ids: string[] = [];
   for (const agreement of agreements) {
     if (!agreement.followUpDate) continue;
-
-    const entry = await tx.tendingEntry.create({
-      data: {
+    const due = agreement.followUpDate <= now;
+    ids.push(
+      await insertFollowUpAsJob({
         sessionId,
         agreementId: agreement.id,
-        type: TendingEntryType.SCHEDULED_SHARED_AGREEMENT_CHECKIN,
-        scope: TendingEntryScope.SHARED,
-        status:
-          agreement.followUpDate <= now
-            ? TendingEntryStatus.OPEN
-            : TendingEntryStatus.SCHEDULED,
+        type: 'SCHEDULED_SHARED_AGREEMENT',
+        scope: 'SHARED',
+        status: due ? 'OPEN' : 'SCHEDULED',
         scheduledFor: agreement.followUpDate,
-        openedAt: agreement.followUpDate <= now ? now : null,
-        summary: buildScheduledSummary(agreement),
-      },
-    });
-    createdIds.push(entry.id);
+        responseDeadlineAt: due ? addDays(now, DEFAULT_SHARED_RESPONSE_DEADLINE_DAYS) : null,
+        summary: `Check in on the shared agreement: ${agreement.description}`,
+      }, db),
+    );
+    if (due) await setFollowUpStatusAsJob(ids[ids.length - 1], 'OPEN', { openedAt: now }, db);
   }
-
-  return createdIds;
+  return ids;
 }
 
-type IndividualCommitmentForScheduling = {
-  proposalId: string;
-  ownerUserId: string;
-  description: string;
-};
-
-function buildIndividualCommitmentSummary(commitment: IndividualCommitmentForScheduling): string {
-  return `Check in on your individual commitment: ${commitment.description}`;
-}
+type IndividualCommitmentForScheduling = { proposalId: string; ownerParticipantId: string; description: string };
 
 export async function scheduleIndividualCommitmentTendingEntries(
-  tx: Tx,
   sessionId: string,
   commitments: IndividualCommitmentForScheduling[],
   scheduledFor: Date,
-  now = new Date()
+  now = new Date(),
+  db: JobDb = getJobPrisma(),
 ): Promise<string[]> {
-  const createdIds: string[] = [];
-  for (const commitment of commitments) {
-    const isDue = scheduledFor <= now;
-    const entry = await tx.tendingEntry.create({
-      data: {
-        sessionId,
-        type: TendingEntryType.SCHEDULED_INDIVIDUAL_COMMITMENT_CHECKIN,
-        scope: TendingEntryScope.INDIVIDUAL,
-        ownerUserId: commitment.ownerUserId,
-        optedInShared: false,
-        status: isDue ? TendingEntryStatus.OPEN : TendingEntryStatus.SCHEDULED,
-        scheduledFor,
-        openedAt: isDue ? now : null,
-        summary: buildIndividualCommitmentSummary(commitment),
-      },
-    });
-    createdIds.push(entry.id);
+  const ids: string[] = [];
+  const due = scheduledFor <= now;
+  for (const c of commitments) {
+    const id = await insertFollowUpAsJob({
+      sessionId,
+      proposalId: c.proposalId,
+      type: 'SCHEDULED_INDIVIDUAL_COMMITMENT',
+      scope: 'INDIVIDUAL',
+      ownerParticipantId: c.ownerParticipantId,
+      status: due ? 'OPEN' : 'SCHEDULED',
+      scheduledFor,
+      summary: `Check in on your individual commitment: ${c.description}`,
+    }, db);
+    if (due) await setFollowUpStatusAsJob(id, 'OPEN', { openedAt: now }, db);
+    ids.push(id);
   }
-  return createdIds;
+  return ids;
 }
+
+// ============================================================================
+// Reads
+// ============================================================================
 
 export async function listTendingEntries(sessionId: string, userId: string): Promise<TendingEntryDTO[]> {
-  await assertSessionMember(sessionId, userId);
-
-  const entries = (await prisma.tendingEntry.findMany({
-    where: {
-      sessionId,
-      OR: [
-        { scope: TendingEntryScope.SHARED },
-        { scope: TendingEntryScope.INDIVIDUAL, ownerUserId: userId },
-        { scope: TendingEntryScope.INDIVIDUAL, optedInShared: true },
-      ],
-    },
-    orderBy: [{ scheduledFor: 'asc' }, { createdAt: 'asc' }],
-    include: { responses: true, entryOutcomes: true, reminders: true },
-  })) as TendingEntryWithResponses[];
-
-  return entries.map((entry) => toEntryDTO(entry, userId));
+  const viewer = await viewerFor(sessionId, userId);
+  return entryDTOs(viewer, await loadFollowUpsForParticipant(sessionId, viewer.participantId));
 }
 
-export async function listTendingCoordinationCycles(
-  sessionId: string,
-  userId: string
-): Promise<TendingCoordinationCycleDTO[]> {
-  await assertSessionMember(sessionId, userId);
-
-  const cycles = await prisma.tendingCoordinationCycle.findMany({
-    where: {
-      sessionId,
-      participantUserIds: { has: userId },
-    },
-    orderBy: [{ createdAt: 'desc' }],
-    take: 10,
-  });
-
-  return cycles.map(toCoordinationCycleDTO);
+interface CycleRow {
+  followUpId: string;
+  participantIds: string[];
+  submittedParticipantIds: string[];
+  waitingOn: string[];
+  responseDeadlineAt: Date | null;
+  status: TendingCoordinationStatus;
 }
 
-export async function listTendingBetweenPeriodNotes(
-  sessionId: string,
-  userId: string
-): Promise<TendingBetweenPeriodNoteDTO[]> {
-  await assertSessionMember(sessionId, userId);
+/** `v_follow_up_cycle` for the session's follow-ups. */
+async function loadCycles(sessionId: string): Promise<CycleRow[]> {
+  return prisma.$queryRaw<CycleRow[]>`
+    SELECT follow_up_id AS "followUpId", participant_ids AS "participantIds",
+           submitted_participant_ids AS "submittedParticipantIds", waiting_on AS "waitingOn",
+           response_deadline_at AS "responseDeadlineAt", status
+    FROM v_follow_up_cycle WHERE session_id = ${sessionId}::uuid`;
+}
 
-  const notes = await prisma.tendingBetweenPeriodNote.findMany({
-    where: { sessionId, userId },
-    orderBy: [{ createdAt: 'asc' }],
+function cycleSummary(status: TendingCoordinationStatus): string {
+  switch (status) {
+    case TendingCoordinationStatus.WAITING_FOR_PARTNER:
+      return 'Shared Tending choices are being held privately until the partner submits or the response window expires.';
+    case TendingCoordinationStatus.READY_TO_RESOLVE:
+      return 'All participants have submitted; shared Tending choices are ready for coordinated resolution.';
+    case TendingCoordinationStatus.TIMED_OUT:
+      return 'Tending proceeded with submitted responses after timeout.';
+    default:
+      return 'Shared Tending check-in resolved.';
+  }
+}
+
+export async function listTendingCoordinationCycles(sessionId: string, userId: string): Promise<TendingCoordinationCycleDTO[]> {
+  const viewer = await viewerFor(sessionId, userId);
+  const entries = (await loadFollowUpsForParticipant(sessionId, viewer.participantId)).filter((e) => e.scope === 'SHARED');
+  const byId = new Map(entries.map((e) => [e.id, e]));
+  const cycles = (await loadCycles(sessionId))
+    .filter((c) => byId.has(c.followUpId) && c.participantIds.includes(viewer.participantId))
+    // A cycle exists once someone has checked in on an opened follow-up.
+    .filter((c) => c.submittedParticipantIds.length > 0);
+  return cycles
+    .map((c) => {
+      const e = byId.get(c.followUpId)!;
+      return {
+        id: e.id,
+        sessionId,
+        status: c.status,
+        entryIds: [e.id],
+        participantUserIds: c.participantIds.map((p) => userIdOf(viewer, p) ?? '').sort(),
+        submittedUserIds: c.submittedParticipantIds.map((p) => userIdOf(viewer, p) ?? '').sort(),
+        responseDeadlineAt: (c.responseDeadlineAt ?? addDays(e.openedAt ?? e.createdAt, DEFAULT_SHARED_RESPONSE_DEADLINE_DAYS)).toISOString(),
+        resolvedAt: iso(e.completedAt),
+        resultSummary: cycleSummary(c.status),
+        createdAt: (e.openedAt ?? e.createdAt).toISOString(),
+        updatedAt: e.updatedAt.toISOString(),
+      };
+    })
+    .sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1))
+    .slice(0, 10);
+}
+
+function toNoteDTO(
+  viewer: Viewer,
+  note: { id: string; content: string; carryForward: boolean; carriedIntoCheckinId: string | null; createdAt: Date; updatedAt: Date },
+  sharedAt: Date | null,
+): TendingBetweenPeriodNoteDTO {
+  return {
+    id: note.id,
+    sessionId: viewer.sessionId,
+    userId: viewer.userId,
+    content: note.content,
+    carryForwardSelected: note.carryForward,
+    consentToShareWithPartner: note.carriedIntoCheckinId !== null,
+    shareConsentAt: iso(sharedAt),
+    selectedForCheckinId: note.carriedIntoCheckinId,
+    createdAt: note.createdAt.toISOString(),
+    updatedAt: note.updatedAt.toISOString(),
+  };
+}
+
+export async function listTendingBetweenPeriodNotes(sessionId: string, userId: string): Promise<TendingBetweenPeriodNoteDTO[]> {
+  const viewer = await viewerFor(sessionId, userId);
+  const notes = await prisma.followUpNote.findMany({
+    where: { participantId: viewer.participantId },
+    orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+    include: { carriedIntoCheckin: { select: { submittedAt: true } } },
   });
-
-  return notes.map(toBetweenPeriodNoteDTO);
+  return notes.map((n) => toNoteDTO(viewer, n, n.carriedIntoCheckin?.submittedAt ?? null));
 }
 
 export async function createTendingBetweenPeriodNote(args: {
@@ -440,119 +634,144 @@ export async function createTendingBetweenPeriodNote(args: {
   userId: string;
   content: string;
 }): Promise<TendingBetweenPeriodNoteDTO> {
-  const session = await assertSessionMember(args.sessionId, args.userId);
-  if (session.status !== 'RESOLVED') {
+  const viewer = await viewerFor(args.sessionId, args.userId);
+  if (viewer.sessionStatus !== 'RESOLVED') {
     throw new TendingInvalidStateError('Between-period Tending notes require a resolved session');
   }
-
-  const note = await prisma.tendingBetweenPeriodNote.create({
-    data: {
-      sessionId: args.sessionId,
-      userId: args.userId,
-      content: args.content,
-    },
-  });
-
-  return toBetweenPeriodNoteDTO(note);
+  const note = await prisma.followUpNote.create({ data: { participantId: viewer.participantId, content: args.content } });
+  return toNoteDTO(viewer, note, null);
 }
 
-export async function listTendingHistory(
-  sessionId: string,
-  userId: string
-): Promise<TendingHistoryCycleDTO[]> {
-  await assertSessionMember(sessionId, userId);
-
-  const checkins = await prisma.tendingCheckin.findMany({
-    where: { sessionId, userId },
-    orderBy: [{ submittedAt: 'desc' }],
-    take: 20,
-    include: {
-      coordinationCycle: true,
-      entryOutcomes: {
-        include: {
-          tendingEntry: { select: { summary: true, scope: true } },
-        },
-        orderBy: [{ createdAt: 'asc' }],
-      },
-      needOutcomes: { orderBy: [{ createdAt: 'asc' }] },
-      reminders: { orderBy: [{ remindAt: 'asc' }] },
-      adjustments: { orderBy: [{ createdAt: 'asc' }] },
-    },
-  });
-
-  return checkins.map((checkin) => ({
-    checkinId: checkin.id,
-    sessionId: checkin.sessionId,
-    userId: checkin.userId,
-    submittedAt: checkin.submittedAt.toISOString(),
-    continueChoice: checkin.continueChoice as ContinueChoice | null,
-    nextAction: checkin.nextAction as TendingNextAction | null,
-    reflectionSummary: checkin.reflectionSummary,
-    entryReviews: checkin.entryOutcomes.map(toHistoryEntryReviewDTO),
-    needOutcomes: checkin.needOutcomes.map(toNeedOutcomeDTO),
-    adjustments: checkin.adjustments.map(toAdjustmentDTO),
-    reminders: checkin.reminders.map(toReminderDTO),
-    coordinationStatus: checkin.coordinationCycle?.status as TendingCoordinationStatus | null | undefined,
-    coordinationSummary: checkin.coordinationCycle?.resultSummary ?? null,
-  }));
+export async function listTendingHistory(sessionId: string, userId: string): Promise<TendingHistoryCycleDTO[]> {
+  const viewer = await viewerFor(sessionId, userId);
+  const entries = await loadFollowUpsForParticipant(sessionId, viewer.participantId);
+  const byId = new Map(entries.map((e) => [e.id, e]));
+  const [checkins, cycles, reminders] = await Promise.all([
+    loadCheckins(entries.map((e) => e.id), viewer.participantId),
+    loadCycles(sessionId),
+    loadReminders(viewer, entries.map((e) => e.id)),
+  ]);
+  const cycleOf = new Map(cycles.map((c) => [c.followUpId, c]));
+  return checkins
+    .filter((c) => c.participantId === viewer.participantId)
+    .sort((a, b) => b.submittedAt.getTime() - a.submittedAt.getTime())
+    .slice(0, 20)
+    .map((c) => {
+      const entry = byId.get(c.followUpId);
+      const cycle = entry?.scope === 'SHARED' ? cycleOf.get(c.followUpId) : undefined;
+      return {
+        checkinId: c.id,
+        sessionId,
+        userId: viewer.userId,
+        submittedAt: c.submittedAt.toISOString(),
+        continueChoice: c.continueChoice,
+        nextAction: c.nextAction,
+        reflectionSummary: c.reflectionSummary,
+        entryReviews: c.payload.entryOutcomes.map((o) => ({
+          tendingEntryId: o.followUpId,
+          summary: byId.get(o.followUpId)?.summary ?? null,
+          scope: (byId.get(o.followUpId)?.scope ?? 'SHARED') as TendingEntryScope,
+          followThroughStatus: o.followThroughStatus,
+          helpfulnessStatus: o.helpfulnessStatus,
+          blockerCategories: o.blockerCategories,
+          whatHappened: o.whatHappened,
+          helpedNeed: o.helpedNeed,
+          stillWorthTrying: o.stillWorthTrying,
+        })),
+        needOutcomes: needOutcomeDTOs(viewer, c),
+        adjustments: adjustmentDTOs(viewer, c),
+        reminders: reminders.filter((r) => r.followUpId === c.followUpId).map((r) => toReminderDTO(viewer, r)),
+        coordinationStatus: cycle?.status ?? null,
+        coordinationSummary: cycle ? cycleSummary(cycle.status) : null,
+      };
+    });
 }
+
+async function getEntryForViewer(entryId: string, userId: string): Promise<{ viewer: Viewer; entry: FollowUpRow }> {
+  const row = (await prisma.followUp.findUnique({ where: { id: entryId }, select: FOLLOW_UP_SELECT })) as FollowUpRow | null;
+  if (!row) throw new TendingNotFoundError();
+  const viewer = await viewerFor(row.sessionId, userId).catch(() => {
+    throw new TendingNotFoundError();
+  });
+  const visible = row.scope === 'SHARED' || row.ownerParticipantId === viewer.participantId || row.optedInShared;
+  if (!visible) throw new TendingNotFoundError();
+  return { viewer, entry: row };
+}
+
+async function entryDTO(entryId: string, viewer: Viewer): Promise<TendingEntryDTO> {
+  const row = (await prisma.followUp.findUnique({ where: { id: entryId }, select: FOLLOW_UP_SELECT })) as FollowUpRow;
+  return (await entryDTOs(viewer, [row]))[0];
+}
+
+// ============================================================================
+// Participant writes (APP connection)
+// ============================================================================
 
 export async function setIndividualEntryShare(args: {
   entryId: string;
   userId: string;
   optedInShared: boolean;
 }): Promise<TendingEntryDTO> {
-  const entry = await getEntryForUser(args.entryId, args.userId);
-  if (entry.scope !== TendingEntryScope.INDIVIDUAL) {
-    throw new TendingInvalidStateError('Only INDIVIDUAL entries can be shared');
-  }
-  if (entry.ownerUserId !== args.userId) {
-    throw new TendingForbiddenError();
-  }
+  const { viewer, entry } = await getEntryForViewer(args.entryId, args.userId);
+  if (entry.scope !== 'INDIVIDUAL') throw new TendingInvalidStateError('Only INDIVIDUAL entries can be shared');
+  if (entry.ownerParticipantId !== viewer.participantId) throw new TendingForbiddenError();
 
-  await prisma.tendingEntry.update({
-    where: { id: args.entryId },
-    data: { optedInShared: args.optedInShared },
-  });
+  // spec §1.5 follow_up: U owner — the owner's opt-in is the owner's write.
+  await prisma.followUp.update({ where: { id: entry.id }, data: { optedInShared: args.optedInShared } });
 
   try {
-    await publishSessionEvent(entry.sessionId, 'notification.pending_action', {
-      kind: args.optedInShared ? 'tending_entry_shared' : 'tending_entry_unshared',
-      tendingEntryId: args.entryId,
-      ownerUserId: args.userId,
-    }, args.userId);
+    await publishSessionEvent(
+      entry.sessionId,
+      'notification.pending_action',
+      {
+        kind: args.optedInShared ? 'tending_entry_shared' : 'tending_entry_unshared',
+        tendingEntryId: args.entryId,
+        ownerUserId: args.userId,
+      },
+      args.userId,
+    );
   } catch (error) {
     logger.warn('[tending] Failed to publish share-toggle event', { entryId: args.entryId, error });
   }
-
-  const updated = await getEntryForUser(args.entryId, args.userId);
-  return toEntryDTO(updated, args.userId);
+  return entryDTO(entry.id, viewer);
 }
 
-async function getEntryForUser(entryId: string, userId: string) {
-  const entry = (await prisma.tendingEntry.findFirst({
-    where: {
-      id: entryId,
-      session: { relationship: { members: { some: { userId } } } },
+/** Write one check-in row (the participant's, app connection), its payload validated first. */
+async function insertCheckin(args: {
+  followUpId: string;
+  participantId: string;
+  nextAction: TendingNextAction | null;
+  continueChoice: ContinueChoice | null;
+  reflectionSummary: string | null;
+  payload: unknown;
+  submittedAt: Date;
+}): Promise<string> {
+  const payload = validateCheckinPayload(args.payload);
+  const existing = await prisma.followUpCheckin.findUnique({
+    where: { followUpId_participantId: { followUpId: args.followUpId, participantId: args.participantId } },
+    select: { id: true },
+  });
+  if (existing) throw new TendingInvalidStateError('You have already checked in on this Tending entry');
+  const row = await prisma.followUpCheckin.create({
+    data: {
+      followUpId: args.followUpId,
+      participantId: args.participantId,
+      nextAction: args.nextAction,
+      continueChoice: args.continueChoice,
+      reflectionSummary: args.reflectionSummary,
+      payload,
+      submittedAt: args.submittedAt,
     },
-    include: {
-      responses: true,
-      session: {
-        include: {
-          relationship: {
-            include: {
-              members: { select: { userId: true } },
-            },
-          },
-        },
-      },
-    },
-  })) as (TendingEntryWithResponses & {
-    session: { relationship: { members: Array<{ userId: string }> } };
-  }) | null;
+    select: { id: true },
+  });
+  return row.id;
+}
 
-  if (!entry) throw new TendingNotFoundError();
-  return entry;
+/** After a check-in: the follow-up is COMPLETED once every expected participant has checked in, else PARTIAL. */
+async function updateEntryProgressAsJob(entry: FollowUpRow, expected: number, now: Date): Promise<void> {
+  const count = await prisma.followUpCheckin.count({ where: { followUpId: entry.id } });
+  if (count >= expected) await setFollowUpStatusAsJob(entry.id, 'COMPLETED', { completedAt: now });
+  else await setFollowUpStatusAsJob(entry.id, 'PARTIAL');
 }
 
 export async function submitTendingResponse(args: {
@@ -562,139 +781,81 @@ export async function submitTendingResponse(args: {
   reflection?: string;
   continueChoice?: ContinueChoice;
 }): Promise<TendingEntryDTO> {
-  const entry = await getEntryForUser(args.entryId, args.userId);
-  if (entry.scope === TendingEntryScope.INDIVIDUAL && entry.ownerUserId !== args.userId) {
-    throw new TendingForbiddenError();
-  }
-  if (entry.status === TendingEntryStatus.SCHEDULED) {
-    throw new TendingInvalidStateError('Tending entry is not open yet');
-  }
-  if (entry.status === TendingEntryStatus.CANCELLED || entry.status === TendingEntryStatus.EXPIRED) {
+  const { viewer, entry } = await getEntryForViewer(args.entryId, args.userId);
+  if (entry.scope === 'INDIVIDUAL' && entry.ownerParticipantId !== viewer.participantId) throw new TendingForbiddenError();
+  if (entry.status === 'SCHEDULED') throw new TendingInvalidStateError('Tending entry is not open yet');
+  if (entry.status === 'CANCELLED' || entry.status === 'EXPIRED' || entry.status === 'COMPLETED') {
     throw new TendingInvalidStateError('Tending entry is no longer accepting responses');
   }
-
   const now = new Date();
-  const memberCount = entry.scope === TendingEntryScope.INDIVIDUAL
-    ? 1
-    : entry.session.relationship.members.length;
-  await prisma.$transaction(async (tx) => {
-    await tx.tendingResponse.upsert({
-      where: {
-        tendingEntryId_userId: {
-          tendingEntryId: args.entryId,
-          userId: args.userId,
+  await insertCheckin({
+    followUpId: entry.id,
+    participantId: viewer.participantId,
+    nextAction: null,
+    continueChoice: args.continueChoice ?? null,
+    reflectionSummary: args.reflection ?? null,
+    payload: {
+      ...emptyFollowUpCheckinPayload(),
+      responses: [
+        {
+          followUpId: entry.id,
+          status: args.status,
+          reflection: args.reflection ?? null,
+          continueChoice: args.continueChoice ?? null,
         },
-      },
-      create: {
-        tendingEntryId: args.entryId,
-        userId: args.userId,
-        status: args.status,
-        reflection: args.reflection,
-        continueChoice: args.continueChoice,
-        submittedAt: now,
-      },
-      update: {
-        status: args.status,
-        reflection: args.reflection,
-        continueChoice: args.continueChoice,
-        submittedAt: now,
-      },
-    });
-
-    const responseCount = await tx.tendingResponse.count({
-      where: { tendingEntryId: args.entryId },
-    });
-
-    await tx.tendingEntry.update({
-      where: { id: args.entryId },
-      data: {
-        status:
-          responseCount >= memberCount
-            ? TendingEntryStatus.COMPLETED
-            : TendingEntryStatus.PARTIAL,
-        completedAt: responseCount >= memberCount ? now : null,
-      },
-    });
+      ],
+    },
+    submittedAt: now,
   });
+  await updateEntryProgressAsJob(entry, entry.scope === 'INDIVIDUAL' ? 1 : viewer.humans.length, now);
 
-  await publishSessionEvent(entry.sessionId, 'notification.pending_action', {
-    kind: 'tending_response_submitted',
-    tendingEntryId: args.entryId,
-    submittedBy: args.userId,
-  }, args.userId);
-
-  const updated = await getEntryForUser(args.entryId, args.userId);
-  return toEntryDTO(updated, args.userId);
+  await publishSessionEvent(
+    entry.sessionId,
+    'notification.pending_action',
+    { kind: 'tending_response_submitted', tendingEntryId: args.entryId, submittedBy: args.userId },
+    args.userId,
+  );
+  return entryDTO(entry.id, viewer);
 }
 
-async function buildReentrySummary(sessionId: string, userId: string, intent?: string): Promise<string> {
-  const [closure, sharedVessel, openNeeds] = await Promise.all([
-    prisma.stage4Closure.findUnique({ where: { sessionId } }),
-    prisma.sharedVessel.findUnique({
-      where: { sessionId },
-      include: {
-        agreements: {
-          where: { status: 'AGREED' },
-          orderBy: { agreedAt: 'desc' },
-        },
-      },
-    }),
-    prisma.stage4NeedCoverage.findMany({
-      where: { sessionId, coverageStatus: { in: ['OPEN', 'PARTIAL'] } },
-      orderBy: { updatedAt: 'desc' },
-    }),
+async function buildReentrySummary(viewer: Viewer, intent?: string): Promise<string> {
+  const { loadAgreements, loadClosure, loadClosureItems, loadProposals, loadStage4Needs } = await import('./stage4-store');
+  const [closure, items, agreements, proposals, needs] = await Promise.all([
+    loadClosure(viewer.sessionId),
+    loadClosureItems(viewer.sessionId),
+    loadAgreements(viewer.sessionId),
+    loadProposals(viewer.sessionId, viewer.participantId),
+    loadStage4Needs(viewer.sessionId, viewer.participantId),
   ]);
-
-  const individualIds = closure?.individualProposalIds ?? [];
-  const commitments = individualIds.length > 0
-    ? await prisma.strategyProposal.findMany({
-        where: { sessionId, id: { in: individualIds } },
-        orderBy: { updatedAt: 'desc' },
-      })
-    : [];
-
-  const lines = [
+  const commitments = proposals.filter((p) => items.individualCommitmentIds.includes(p.id));
+  const open = needs.filter((n) => items.openNeedIds.includes(n.id));
+  const agreed = agreements.filter((a) => a.status === 'AGREED');
+  return [
     'Passive Tending re-entry context.',
     closure ? `Stage 4 closed as ${closure.kind}: ${closure.summary}` : null,
     intent ? `User intent: ${intent}` : null,
-    sharedVessel?.agreements.length
-      ? `Shared agreements: ${sharedVessel.agreements.map((agreement) => agreement.description).join('; ')}`
-      : null,
-    commitments.length
-      ? `Individual commitments: ${commitments.map((proposal) => proposal.description).join('; ')}`
-      : null,
-    openNeeds.length
-      ? `Still-open needs: ${openNeeds.map((need) => need.needLabel).join('; ')}`
-      : null,
-  ];
-
-  return lines.filter(Boolean).join('\n');
+    agreed.length ? `Shared agreements: ${agreed.map((a) => a.description).join('; ')}` : null,
+    commitments.length ? `Individual commitments: ${commitments.map((p) => p.description).join('; ')}` : null,
+    // The viewer's own needs by their own label, the partner's by the shared text.
+    open.length ? `Still-open needs: ${open.map((n) => n.label).join('; ')}` : null,
+  ]
+    .filter(Boolean)
+    .join('\n');
 }
 
-export async function createPassiveReentry(args: {
-  sessionId: string;
-  userId: string;
-  intent?: string;
-}): Promise<TendingEntryDTO> {
-  const session = await assertSessionMember(args.sessionId, args.userId);
-  if (session.status !== 'RESOLVED') {
+export async function createPassiveReentry(args: { sessionId: string; userId: string; intent?: string }): Promise<TendingEntryDTO> {
+  const viewer = await viewerFor(args.sessionId, args.userId);
+  if (viewer.sessionStatus !== 'RESOLVED') {
     throw new TendingInvalidStateError('Passive Tending re-entry requires a resolved session');
   }
-
   const now = new Date();
-  const summary = await buildReentrySummary(args.sessionId, args.userId, args.intent);
-  const entry = (await prisma.tendingEntry.create({
-    data: {
-      sessionId: args.sessionId,
-      type: TendingEntryType.USER_INITIATED_REENTRY,
-      status: TendingEntryStatus.OPEN,
-      openedAt: now,
-      summary,
-    },
-    include: { responses: true, entryOutcomes: true, reminders: true },
-  })) as TendingEntryWithResponses;
-
-  return toEntryDTO(entry, args.userId);
+  const summary = await buildReentrySummary(viewer, args.intent);
+  // spec §1.5 follow_up: I member — a re-entry is the member's own write.
+  const row = await prisma.followUp.create({
+    data: { sessionId: args.sessionId, type: 'USER_INITIATED_REENTRY', status: 'OPEN', openedAt: now, summary },
+    select: { id: true },
+  });
+  return entryDTO(row.id, viewer);
 }
 
 export async function publishPartnerInvolvingReentryChoice(args: {
@@ -702,29 +863,17 @@ export async function publishPartnerInvolvingReentryChoice(args: {
   userId: string;
   tendingEntryId: string;
 }): Promise<void> {
-  await publishSessionEvent(args.sessionId, 'notification.pending_action', {
-    kind: 'tending_reentry_partner_action_requested',
-    tendingEntryId: args.tendingEntryId,
-    createdBy: args.userId,
-  }, args.userId);
+  await publishSessionEvent(
+    args.sessionId,
+    'notification.pending_action',
+    { kind: 'tending_reentry_partner_action_requested', tendingEntryId: args.tendingEntryId, createdBy: args.userId },
+    args.userId,
+  );
 }
 
-/**
- * Stage 4 Phase 5 — submit the structured three-orientation check-in covering all
- * currently-open Tending entries on a session in one shot. Returns the affected entries
- * and metadata about the chosen forward path.
- *
- * Scope decision (documented in PR): partial-closure resolutions target TendingEntry
- * rather than Agreement so individual commitments can be partially closed too.
- */
-const DEFAULT_EXTENSION_DAYS = 28;
-const DEFAULT_SHARED_RESPONSE_DEADLINE_DAYS = 14;
-
-function addDays(date: Date, days: number): Date {
-  const next = new Date(date.getTime());
-  next.setUTCDate(next.getUTCDate() + days);
-  return next;
-}
+// ============================================================================
+// The structured check-in
+// ============================================================================
 
 export type SubmitTendingCheckinResult = {
   entries: TendingEntryDTO[];
@@ -734,34 +883,6 @@ export type SubmitTendingCheckinResult = {
   continueChoice: ContinueChoice;
   nextScheduledFor?: Date | null;
 };
-
-function toCoordinationCycleDTO(cycle: {
-  id: string;
-  sessionId: string;
-  status: any;
-  entryIds: string[];
-  participantUserIds: string[];
-  submittedUserIds: string[];
-  responseDeadlineAt: Date;
-  resolvedAt: Date | null;
-  resultSummary: string | null;
-  createdAt: Date;
-  updatedAt: Date;
-}): TendingCoordinationCycleDTO {
-  return {
-    id: cycle.id,
-    sessionId: cycle.sessionId,
-    status: cycle.status as TendingCoordinationStatus,
-    entryIds: cycle.entryIds,
-    participantUserIds: cycle.participantUserIds,
-    submittedUserIds: cycle.submittedUserIds,
-    responseDeadlineAt: cycle.responseDeadlineAt.toISOString(),
-    resolvedAt: iso(cycle.resolvedAt),
-    resultSummary: cycle.resultSummary,
-    createdAt: cycle.createdAt.toISOString(),
-    updatedAt: cycle.updatedAt.toISOString(),
-  };
-}
 
 function nextActionFromChoice(choice: ContinueChoice): TendingNextAction {
   switch (choice) {
@@ -783,113 +904,92 @@ export function recommendTendingNextAction(args: {
   entryOutcomes?: TendingCheckinEntryOutcomeInput[];
   needOutcomes?: TendingCheckinNeedOutcomeInput[];
 }): TendingNextAction {
-  const hasStillOpenNeed = (args.needOutcomes ?? []).some((outcome) =>
-    outcome.resolutionStatus === TendingNeedResolutionStatus.STILL_OPEN ||
-    outcome.resolutionStatus === TendingNeedResolutionStatus.CHANGED
+  const hasStillOpenNeed = (args.needOutcomes ?? []).some(
+    (o) => o.resolutionStatus === TendingNeedResolutionStatus.STILL_OPEN || o.resolutionStatus === TendingNeedResolutionStatus.CHANGED,
   );
-  const hasWeakFollowThrough = (args.entryOutcomes ?? []).some((outcome) =>
-    outcome.followThroughStatus === TendingFollowThroughStatus.DID_NOT_HAPPEN ||
-    outcome.helpfulnessStatus === TendingHelpfulnessStatus.DID_NOT_HELP ||
-    outcome.stillWorthTrying === false
+  const hasWeakFollowThrough = (args.entryOutcomes ?? []).some(
+    (o) =>
+      o.followThroughStatus === TendingFollowThroughStatus.DID_NOT_HAPPEN ||
+      o.helpfulnessStatus === TendingHelpfulnessStatus.DID_NOT_HELP ||
+      o.stillWorthTrying === false,
   );
-  const hasPartialFollowThrough = (args.entryOutcomes ?? []).some((outcome) =>
-    outcome.followThroughStatus === TendingFollowThroughStatus.PARTLY_HAPPENED ||
-    outcome.helpfulnessStatus === TendingHelpfulnessStatus.PARTLY_HELPED ||
-    (outcome.blockerCategories?.length ?? 0) > 0
+  const hasPartialFollowThrough = (args.entryOutcomes ?? []).some(
+    (o) =>
+      o.followThroughStatus === TendingFollowThroughStatus.PARTLY_HAPPENED ||
+      o.helpfulnessStatus === TendingHelpfulnessStatus.PARTLY_HELPED ||
+      (o.blockerCategories?.length ?? 0) > 0,
   );
   const hasOnlyResolvedNeeds =
     (args.needOutcomes?.length ?? 0) > 0 &&
-    args.needOutcomes!.every((outcome) => outcome.resolutionStatus === TendingNeedResolutionStatus.RESOLVED);
-
-  if (hasStillOpenNeed && hasWeakFollowThrough) {
-    return TendingNextAction.REOPEN_STRATEGY_WORK;
-  }
-  if (hasStillOpenNeed || hasPartialFollowThrough) {
-    return TendingNextAction.ADJUST_COMMITMENT;
-  }
-  if (hasOnlyResolvedNeeds && args.continueChoice === ContinueChoice.FULL_CLOSURE) {
-    return TendingNextAction.FULL_CLOSURE;
-  }
+    args.needOutcomes!.every((o) => o.resolutionStatus === TendingNeedResolutionStatus.RESOLVED);
+  if (hasStillOpenNeed && hasWeakFollowThrough) return TendingNextAction.REOPEN_STRATEGY_WORK;
+  if (hasStillOpenNeed || hasPartialFollowThrough) return TendingNextAction.ADJUST_COMMITMENT;
+  if (hasOnlyResolvedNeeds && args.continueChoice === ContinueChoice.FULL_CLOSURE) return TendingNextAction.FULL_CLOSURE;
   return nextActionFromChoice(args.continueChoice);
-}
-
-function buildEntryReflection(args: {
-  baseReflection: string;
-  entryId: string;
-  whatWorkedNote?: string;
-  supportNote?: string;
-  outcome?: TendingCheckinEntryOutcomeInput;
-}): string | null {
-  const lines = [
-    args.baseReflection || null,
-    args.whatWorkedNote ? `Entry note - what worked: ${args.whatWorkedNote}` : null,
-    args.supportNote ? `Entry note - more support: ${args.supportNote}` : null,
-    args.outcome?.whatHappened ? `What actually happened: ${args.outcome.whatHappened}` : null,
-    args.outcome?.helpedNeed ? `Need impact: ${args.outcome.helpedNeed}` : null,
-    args.outcome?.blockerNote ? `Blocker: ${args.outcome.blockerNote}` : null,
-    args.outcome?.note ? `Entry note: ${args.outcome.note}` : null,
-  ];
-
-  return lines.filter(Boolean).join('\n') || null;
-}
-
-function toNeedOutcomeDTO(outcome: {
-  id: string;
-  checkinId: string;
-  sessionId: string;
-  needId: string | null;
-  needLabel: string;
-  sourceUserId: string | null;
-  resolutionStatus: any;
-  note: string | null;
-  changedNeedLabel: string | null;
-  nextAction: any;
-  createdAt: Date;
-}): TendingNeedOutcomeDTO {
-  return {
-    id: outcome.id,
-    checkinId: outcome.checkinId,
-    sessionId: outcome.sessionId,
-    needId: outcome.needId,
-    needLabel: outcome.needLabel,
-    sourceUserId: outcome.sourceUserId,
-    resolutionStatus: outcome.resolutionStatus,
-    note: outcome.note,
-    changedNeedLabel: outcome.changedNeedLabel,
-    nextAction: outcome.nextAction as TendingNextAction | null,
-    createdAt: outcome.createdAt.toISOString(),
-  };
 }
 
 function buildNewProcessHandoffSummary(args: {
   reflection: string;
   entryOutcomes?: TendingCheckinEntryOutcomeInput[];
-  needOutcomes?: TendingCheckinNeedOutcomeInput[];
+  needOutcomes?: Array<{ needLabel: string; resolutionStatus: string; changedNeedLabel?: string | null; note?: string | null }>;
 }): string {
-  const lines = [
-    'Prior Tending handoff for linked new process.',
-    args.reflection || null,
-  ];
-
-  for (const outcome of args.entryOutcomes ?? []) {
-    lines.push([
-      `Entry ${outcome.tendingEntryId}: ${outcome.followThroughStatus}`,
-      outcome.helpfulnessStatus ? `helpfulness=${outcome.helpfulnessStatus}` : null,
-      outcome.blockerCategories?.length ? `blockers=${outcome.blockerCategories.join(', ')}` : null,
-      outcome.whatHappened ? `what happened=${outcome.whatHappened}` : null,
-      outcome.helpedNeed ? `need impact=${outcome.helpedNeed}` : null,
-    ].filter(Boolean).join('; '));
+  const lines: Array<string | null> = ['Prior Tending handoff for linked new process.', args.reflection || null];
+  for (const o of args.entryOutcomes ?? []) {
+    lines.push(
+      [
+        `Entry ${o.tendingEntryId}: ${o.followThroughStatus}`,
+        o.helpfulnessStatus ? `helpfulness=${o.helpfulnessStatus}` : null,
+        o.blockerCategories?.length ? `blockers=${o.blockerCategories.join(', ')}` : null,
+        o.whatHappened ? `what happened=${o.whatHappened}` : null,
+        o.helpedNeed ? `need impact=${o.helpedNeed}` : null,
+      ]
+        .filter(Boolean)
+        .join('; '),
+    );
   }
-
-  for (const outcome of args.needOutcomes ?? []) {
-    lines.push([
-      `Need "${outcome.needLabel}": ${outcome.resolutionStatus}`,
-      outcome.changedNeedLabel ? `changed to "${outcome.changedNeedLabel}"` : null,
-      outcome.note ? `note=${outcome.note}` : null,
-    ].filter(Boolean).join('; '));
+  for (const o of args.needOutcomes ?? []) {
+    lines.push(
+      [
+        `Need "${o.needLabel}": ${o.resolutionStatus}`,
+        o.changedNeedLabel ? `changed to "${o.changedNeedLabel}"` : null,
+        o.note ? `note=${o.note}` : null,
+      ]
+        .filter(Boolean)
+        .join('; '),
+    );
   }
-
   return lines.filter(Boolean).join('\n');
+}
+
+/**
+ * A need outcome names a shared need by its `need_share` id; its label is the
+ * SHARED text (a SHARED-scope check-in is read by the co-participant — the
+ * owner's private label must not ride into it).
+ */
+async function normalizeNeedOutcomes(
+  viewer: Viewer,
+  outcomes: TendingCheckinNeedOutcomeInput[] = [],
+): Promise<FollowUpCheckinPayload['needOutcomes']> {
+  const ids = outcomes.map((o) => o.needId).filter((id): id is string => Boolean(id));
+  const shared = ids.length
+    ? await prisma.needShare.findMany({
+        where: { needId: { in: ids }, sessionId: viewer.sessionId },
+        select: { needId: true, sharedText: true, participantId: true },
+      })
+    : [];
+  const byId = new Map(shared.map((s) => [s.needId, s]));
+  return outcomes.map((o) => {
+    const s = o.needId ? byId.get(o.needId) : undefined;
+    return {
+      needId: s ? s.needId : null,
+      needLabel: s ? s.sharedText : o.needLabel,
+      sourceParticipantId: s ? s.participantId : o.sourceUserId ? (viewer.participantOfUser.get(o.sourceUserId) ?? null) : null,
+      resolutionStatus: o.resolutionStatus,
+      note: o.note ?? null,
+      changedNeedLabel: o.changedNeedLabel ?? null,
+      nextAction: o.nextAction ?? null,
+    };
+  });
 }
 
 export async function submitTendingCheckin(args: {
@@ -908,113 +1008,72 @@ export async function submitTendingCheckin(args: {
   now?: Date;
 }): Promise<SubmitTendingCheckinResult> {
   const now = args.now ?? new Date();
-  const session = await assertSessionMember(args.sessionId, args.userId);
+  const viewer = await viewerFor(args.sessionId, args.userId);
 
-  const openEntries = (await prisma.tendingEntry.findMany({
-    where: {
-      sessionId: args.sessionId,
-      status: { in: [TendingEntryStatus.OPEN, TendingEntryStatus.PARTIAL] },
-      OR: [
-        { scope: TendingEntryScope.SHARED },
-        { scope: TendingEntryScope.INDIVIDUAL, ownerUserId: args.userId },
-      ],
-    },
-    include: { responses: true, entryOutcomes: true, reminders: true },
-  })) as TendingEntryWithResponses[];
-
-  if (openEntries.length === 0) {
-    throw new TendingInvalidStateError('No open Tending entries to check in on');
-  }
+  const open = (await loadFollowUpsForParticipant(args.sessionId, viewer.participantId)).filter(
+    (e) => (e.status === 'OPEN' || e.status === 'PARTIAL') && (e.scope === 'SHARED' || e.ownerParticipantId === viewer.participantId),
+  );
+  if (open.length === 0) throw new TendingInvalidStateError('No open Tending entries to check in on');
+  const already = new Set(
+    (await prisma.followUpCheckin.findMany({
+      where: { followUpId: { in: open.map((e) => e.id) }, participantId: viewer.participantId },
+      select: { followUpId: true },
+    })).map((c) => c.followUpId),
+  );
+  const openEntries = open.filter((e) => !already.has(e.id));
+  if (openEntries.length === 0) throw new TendingInvalidStateError('You have already checked in on every open Tending entry');
 
   const choice = args.orientations.whatComesNext.continueChoice;
-  const nextAction = args.nextAction
-    ?? args.orientations.whatComesNext.nextAction
-    ?? recommendTendingNextAction({
-      continueChoice: choice,
-      entryOutcomes: args.entryOutcomes,
-      needOutcomes: args.needOutcomes,
-    });
-  const entryOutcomeByEntryId = new Map(
-    (args.entryOutcomes ?? []).map((outcome) => [outcome.tendingEntryId, outcome])
-  );
-  const openEntryIds = new Set(openEntries.map((entry) => entry.id));
-  const sharedEntries = openEntries.filter((entry) => entry.scope === TendingEntryScope.SHARED);
-  const hasSharedEntry = sharedEntries.length > 0;
-  const sharedEntryIds = sharedEntries.map((entry) => entry.id).sort();
-  const participantUserIds = session.relationship.members.map((member) => member.userId).sort();
-  const includedBetweenPeriodNoteIds = Array.from(new Set(args.includedBetweenPeriodNoteIds ?? []));
-  const shareBetweenPeriodNoteIds = Array.from(new Set(args.shareBetweenPeriodNoteIds ?? []));
-  const shareWithoutCarryForward = shareBetweenPeriodNoteIds.filter(
-    (noteId) => !includedBetweenPeriodNoteIds.includes(noteId)
-  );
-  if (shareWithoutCarryForward.length > 0) {
+  const nextAction =
+    args.nextAction ??
+    args.orientations.whatComesNext.nextAction ??
+    recommendTendingNextAction({ continueChoice: choice, entryOutcomes: args.entryOutcomes, needOutcomes: args.needOutcomes });
+  const openIds = new Set(openEntries.map((e) => e.id));
+
+  // --- Validation (as before) -----------------------------------------------
+  const included = Array.from(new Set(args.includedBetweenPeriodNoteIds ?? []));
+  const shareIds = Array.from(new Set(args.shareBetweenPeriodNoteIds ?? []));
+  if (shareIds.some((id) => !included.includes(id))) {
     throw new TendingInvalidStateError('Shared between-period notes must also be selected for carry-forward');
   }
-  const referencedBetweenPeriodNoteIds = Array.from(new Set([
-    ...includedBetweenPeriodNoteIds,
-    ...shareBetweenPeriodNoteIds,
-  ]));
-  if (referencedBetweenPeriodNoteIds.length > 0) {
-    const notes = await prisma.tendingBetweenPeriodNote.findMany({
-      where: {
-        id: { in: referencedBetweenPeriodNoteIds },
-        sessionId: args.sessionId,
-        userId: args.userId,
-      },
-      select: { id: true },
-    });
-    const foundIds = new Set(notes.map((note) => note.id));
-    if (referencedBetweenPeriodNoteIds.some((noteId) => !foundIds.has(noteId))) {
-      throw new TendingInvalidStateError('Between-period note references a non-private or non-session note');
-    }
+  const referenced = Array.from(new Set([...included, ...shareIds]));
+  const notes = referenced.length
+    ? await prisma.followUpNote.findMany({
+        where: { id: { in: referenced }, participantId: viewer.participantId },
+        select: { id: true, content: true, createdAt: true },
+      })
+    : [];
+  if (notes.length !== referenced.length) {
+    throw new TendingInvalidStateError('Between-period note references a non-private or non-session note');
   }
-  for (const outcome of args.entryOutcomes ?? []) {
-    if (!openEntryIds.has(outcome.tendingEntryId)) {
-      throw new TendingInvalidStateError('Entry outcome references a non-open Tending entry');
-    }
+  for (const o of args.entryOutcomes ?? []) {
+    if (!openIds.has(o.tendingEntryId)) throw new TendingInvalidStateError('Entry outcome references a non-open Tending entry');
   }
-  for (const reminder of [
-    ...(args.reminders ?? []),
-    ...(args.orientations.whatComesNext.reminders ?? []),
-  ]) {
-    if (reminder.tendingEntryId && !openEntryIds.has(reminder.tendingEntryId)) {
+  const reminderInputs = [...(args.reminders ?? []), ...(args.orientations.whatComesNext.reminders ?? [])];
+  for (const r of reminderInputs) {
+    if (r.tendingEntryId && !openIds.has(r.tendingEntryId)) {
       throw new TendingInvalidStateError('Reminder references a non-open Tending entry');
     }
-    if (reminder.scope === TendingReminderScope.SHARED) {
-      const linkedEntry = reminder.tendingEntryId
-        ? openEntries.find((entry) => entry.id === reminder.tendingEntryId)
-        : null;
-      if (!linkedEntry || linkedEntry.scope !== TendingEntryScope.SHARED) {
-        throw new TendingInvalidStateError('Shared reminders require a shared Tending entry');
-      }
+    if (r.scope === TendingReminderScope.SHARED) {
+      const linked = r.tendingEntryId ? openEntries.find((e) => e.id === r.tendingEntryId) : null;
+      if (!linked || linked.scope !== 'SHARED') throw new TendingInvalidStateError('Shared reminders require a shared Tending entry');
     }
   }
-  for (const adjustment of args.adjustments ?? []) {
-    if (!openEntryIds.has(adjustment.tendingEntryId)) {
-      throw new TendingInvalidStateError('Adjustment references a non-open Tending entry');
-    }
-    const linkedEntry = openEntries.find((entry) => entry.id === adjustment.tendingEntryId);
-    if (linkedEntry?.scope === TendingEntryScope.INDIVIDUAL && linkedEntry.ownerUserId !== args.userId) {
-      throw new TendingForbiddenError();
-    }
+  for (const a of args.adjustments ?? []) {
+    if (!openIds.has(a.tendingEntryId)) throw new TendingInvalidStateError('Adjustment references a non-open Tending entry');
+    const linked = openEntries.find((e) => e.id === a.tendingEntryId);
+    if (linked?.scope === 'INDIVIDUAL' && linked.ownerParticipantId !== viewer.participantId) throw new TendingForbiddenError();
   }
   if (choice === ContinueChoice.FULL_CLOSURE && !args.resolvedEnoughOverride) {
-    const unresolvedNeeds = (args.needOutcomes ?? []).filter(
-      (outcome) => outcome.resolutionStatus !== TendingNeedResolutionStatus.RESOLVED
-    );
-    if (unresolvedNeeds.length > 0) {
+    if ((args.needOutcomes ?? []).some((o) => o.resolutionStatus !== TendingNeedResolutionStatus.RESOLVED)) {
       throw new TendingInvalidStateError(
-        'Full closure requires submitted needs to be resolved or an explicit resolved-enough override'
+        'Full closure requires submitted needs to be resolved or an explicit resolved-enough override',
       );
     }
   }
   const reflection = [
-    args.orientations.whatWorked.reflection
-      ? `What worked: ${args.orientations.whatWorked.reflection}`
-      : null,
-    args.orientations.whereMoreSupport.reflection
-      ? `Where more support: ${args.orientations.whereMoreSupport.reflection}`
-      : null,
+    args.orientations.whatWorked.reflection ? `What worked: ${args.orientations.whatWorked.reflection}` : null,
+    args.orientations.whereMoreSupport.reflection ? `Where more support: ${args.orientations.whereMoreSupport.reflection}` : null,
     args.resolvedEnoughOverride
       ? `Resolved-enough override: ${args.resolvedEnoughOverrideNote ?? 'User explicitly chose to proceed.'}`
       : null,
@@ -1022,497 +1081,293 @@ export async function submitTendingCheckin(args: {
     .filter(Boolean)
     .join('\n');
 
-  let nextScheduledFor: Date | null = null;
-  let newSessionId: string | undefined;
-  let checkinDTO: TendingCheckinDTO | undefined;
-  let coordinationCycleDTO: TendingCoordinationCycleDTO | undefined;
+  // --- The payload of each follow-up's check-in ------------------------------
+  const needOutcomes = await normalizeNeedOutcomes(viewer, args.needOutcomes);
+  const resolutions = args.orientations.whatComesNext.partialClosure ?? {};
+  const sharedNotes = notes.filter((n) => shareIds.includes(n.id));
+  const payloadFor = (entry: FollowUpRow, primary: boolean): FollowUpCheckinPayload => ({
+    entryOutcomes: (args.entryOutcomes ?? [])
+      .filter((o) => o.tendingEntryId === entry.id)
+      .map((o) => ({
+        followUpId: o.tendingEntryId,
+        followThroughStatus: o.followThroughStatus,
+        helpfulnessStatus: o.helpfulnessStatus ?? null,
+        blockerCategories: o.blockerCategories ?? [],
+        whatHappened: o.whatHappened ?? null,
+        helpedNeed: o.helpedNeed ?? null,
+        blockerNote: o.blockerNote ?? o.note ?? null,
+        stillWorthTrying: o.stillWorthTrying ?? null,
+      })),
+    // Session-wide answers ride on the first follow-up's check-in only.
+    needOutcomes: primary ? needOutcomes : [],
+    adjustments: (args.adjustments ?? [])
+      .filter((a) => a.tendingEntryId === entry.id)
+      .map((a) => ({
+        followUpId: a.tendingEntryId,
+        privacyScope: a.privacyScope ?? TendingReminderScope.PRIVATE,
+        revisedCommitmentText: a.revisedCommitmentText ?? null,
+        revisedCadence: a.revisedCadence ?? null,
+        revisedScope: a.revisedScope ?? null,
+        revisedSuccessCriteria: a.revisedSuccessCriteria ?? null,
+        reason: a.reason ?? null,
+        blockerAddressed: a.blockerAddressed ?? [],
+      })),
+    partialClosures:
+      choice === ContinueChoice.PARTIAL_CLOSURE
+        ? [{ followUpId: entry.id, resolution: resolutions[entry.id] ?? PartialClosureResolution.CONTINUING }]
+        : [],
+    responses: [
+      {
+        followUpId: entry.id,
+        status: 'CHECKIN',
+        reflection:
+          [
+            reflection || null,
+            args.orientations.whatWorked.perEntryNotes?.[entry.id]
+              ? `Entry note - what worked: ${args.orientations.whatWorked.perEntryNotes[entry.id]}`
+              : null,
+            args.orientations.whereMoreSupport.perEntryNotes?.[entry.id]
+              ? `Entry note - more support: ${args.orientations.whereMoreSupport.perEntryNotes[entry.id]}`
+              : null,
+          ]
+            .filter(Boolean)
+            .join('\n') || null,
+        continueChoice: choice,
+      },
+    ],
+    carriedNotes: primary
+      ? sharedNotes.map((n) => ({ noteId: n.id, content: n.content, createdAt: n.createdAt.toISOString() }))
+      : [],
+  });
 
-  await prisma.$transaction(async (tx) => {
-    let coordinationCycle: {
-      id: string;
-      sessionId: string;
-      status: any;
-      entryIds: string[];
-      participantUserIds: string[];
-      submittedUserIds: string[];
-      responseDeadlineAt: Date;
-      resolvedAt: Date | null;
-      resultSummary: string | null;
-      createdAt: Date;
-      updatedAt: Date;
-    } | null = null;
+  // Validate every payload before anything is written.
+  const payloads = openEntries.map((e, i) => ({ entry: e, payload: validateCheckinPayload(payloadFor(e, i === 0)) }));
 
-    if (hasSharedEntry) {
-      const coordinationKey = buildTendingCoordinationKey(args.sessionId, sharedEntryIds);
-      let existingCycle = await tx.tendingCoordinationCycle.findFirst({
-        where: {
-          coordinationKey,
-          status: { in: [TendingCoordinationStatus.WAITING_FOR_PARTNER, TendingCoordinationStatus.READY_TO_RESOLVE] },
-        },
-        orderBy: { createdAt: 'desc' },
-      });
-
-      if (!existingCycle) {
-        try {
-          existingCycle = await tx.tendingCoordinationCycle.create({
-            data: {
-              sessionId: args.sessionId,
-              createdByUserId: args.userId,
-              coordinationKey,
-              status: TendingCoordinationStatus.WAITING_FOR_PARTNER,
-              entryIds: sharedEntryIds,
-              participantUserIds,
-              submittedUserIds: [args.userId],
-              responseDeadlineAt: addDays(now, DEFAULT_SHARED_RESPONSE_DEADLINE_DAYS),
-              resultSummary: 'Shared Tending choices are being held privately until the partner submits or the response window expires.',
-            },
-          });
-        } catch (error) {
-          if (!isUniqueConstraintError(error)) throw error;
-          existingCycle = await tx.tendingCoordinationCycle.findFirst({
-            where: {
-              coordinationKey,
-              status: { in: [TendingCoordinationStatus.WAITING_FOR_PARTNER, TendingCoordinationStatus.READY_TO_RESOLVE] },
-            },
-            orderBy: { createdAt: 'desc' },
-          });
-          if (!existingCycle) throw error;
-        }
-      }
-
-      const submittedUserIds = Array.from(new Set([
-        ...((existingCycle?.submittedUserIds as string[] | undefined) ?? []),
-        args.userId,
-      ])).sort();
-      const allSubmitted = participantUserIds.every((id) => submittedUserIds.includes(id));
-
-      coordinationCycle = await tx.tendingCoordinationCycle.update({
-        where: { id: existingCycle.id },
-        data: {
-          submittedUserIds,
-          status: allSubmitted
-            ? TendingCoordinationStatus.READY_TO_RESOLVE
-            : TendingCoordinationStatus.WAITING_FOR_PARTNER,
-          resultSummary: allSubmitted
-            ? 'All participants have submitted; shared Tending choices are ready for coordinated resolution.'
-            : 'Shared Tending choices are being held privately until the partner submits or the response window expires.',
-        },
-      });
-      coordinationCycleDTO = toCoordinationCycleDTO(coordinationCycle);
-    }
-
-    const createdCheckin = await tx.tendingCheckin.create({
-      data: {
-        sessionId: args.sessionId,
-        userId: args.userId,
-        coordinationCycleId: coordinationCycle?.id,
+  const checkinIds: string[] = [];
+  for (const { entry, payload } of payloads) {
+    checkinIds.push(
+      await insertCheckin({
+        followUpId: entry.id,
+        participantId: viewer.participantId,
         nextAction,
         continueChoice: choice,
         reflectionSummary: reflection || null,
+        payload,
         submittedAt: now,
-      },
+      }),
+    );
+  }
+  const primaryCheckinId = checkinIds[0];
+
+  // Notes: included → carry_forward; shared → copied into the check-in, carried_into_checkin_id set.
+  if (included.length) {
+    await prisma.followUpNote.updateMany({
+      where: { id: { in: included }, participantId: viewer.participantId },
+      data: { carryForward: true },
     });
+  }
+  if (shareIds.length) {
+    await prisma.followUpNote.updateMany({
+      where: { id: { in: shareIds }, participantId: viewer.participantId },
+      data: { carriedIntoCheckinId: primaryCheckinId },
+    });
+  }
 
-    // 1) Persist a TendingResponse for each open entry that the user can respond to.
-    const responseIds: Record<string, string> = {};
-    for (const entry of openEntries) {
-      if (entry.scope === TendingEntryScope.INDIVIDUAL && entry.ownerUserId !== args.userId) {
-        continue;
-      }
-      const entryOutcome = entryOutcomeByEntryId.get(entry.id);
-      const upserted = await tx.tendingResponse.upsert({
-        where: {
-          tendingEntryId_userId: {
-            tendingEntryId: entry.id,
-            userId: args.userId,
-          },
-        },
-        create: {
-          tendingEntryId: entry.id,
-          userId: args.userId,
-          checkinId: createdCheckin.id,
-          status: 'CHECKIN',
-          reflection: buildEntryReflection({
-            baseReflection: reflection,
-            entryId: entry.id,
-            whatWorkedNote: args.orientations.whatWorked.perEntryNotes?.[entry.id],
-            supportNote: args.orientations.whereMoreSupport.perEntryNotes?.[entry.id],
-            outcome: entryOutcome,
-          }),
-          continueChoice: choice,
-          submittedAt: now,
-        },
-        update: {
-          checkinId: createdCheckin.id,
-          status: 'CHECKIN',
-          reflection: buildEntryReflection({
-            baseReflection: reflection,
-            entryId: entry.id,
-            whatWorkedNote: args.orientations.whatWorked.perEntryNotes?.[entry.id],
-            supportNote: args.orientations.whereMoreSupport.perEntryNotes?.[entry.id],
-            outcome: entryOutcome,
-          }),
-          continueChoice: choice,
-          submittedAt: now,
-        },
-      });
-      responseIds[entry.id] = upserted.id;
-
-      if (entryOutcome) {
-        await tx.tendingEntryOutcome.upsert({
-          where: {
-            checkinId_tendingEntryId: {
-              checkinId: createdCheckin.id,
-              tendingEntryId: entry.id,
-            },
-          },
-          create: {
-            checkinId: createdCheckin.id,
-            tendingEntryId: entry.id,
-            responseId: upserted.id,
-            userId: args.userId,
-            followThroughStatus: entryOutcome.followThroughStatus,
-            helpfulnessStatus: entryOutcome.helpfulnessStatus,
-            blockerCategories: entryOutcome.blockerCategories ?? [],
-            whatHappened: entryOutcome.whatHappened,
-            helpedNeed: entryOutcome.helpedNeed,
-            blockerNote: entryOutcome.blockerNote ?? entryOutcome.note,
-            stillWorthTrying: entryOutcome.stillWorthTrying,
-          },
-          update: {
-            responseId: upserted.id,
-            followThroughStatus: entryOutcome.followThroughStatus,
-            helpfulnessStatus: entryOutcome.helpfulnessStatus,
-            blockerCategories: entryOutcome.blockerCategories ?? [],
-            whatHappened: entryOutcome.whatHappened,
-            helpedNeed: entryOutcome.helpedNeed,
-            blockerNote: entryOutcome.blockerNote ?? entryOutcome.note,
-            stillWorthTrying: entryOutcome.stillWorthTrying,
-          },
-        });
-      }
-    }
-
-    const createdNeedOutcomes = [];
-    for (const needOutcome of args.needOutcomes ?? []) {
-      createdNeedOutcomes.push(await tx.tendingNeedOutcome.create({
+  // Reminders: user-scoped rows.
+  const createdReminders: ReminderRow[] = [];
+  for (const r of reminderInputs) {
+    createdReminders.push(
+      await prisma.reminder.create({
         data: {
-          checkinId: createdCheckin.id,
-          sessionId: args.sessionId,
-          needId: needOutcome.needId,
-          needLabel: needOutcome.needLabel,
-          sourceUserId: needOutcome.sourceUserId,
-          resolutionStatus: needOutcome.resolutionStatus,
-          note: needOutcome.note,
-          changedNeedLabel: needOutcome.changedNeedLabel,
-          nextAction: needOutcome.nextAction,
+          userId: viewer.userId,
+          followUpId: r.tendingEntryId ?? openEntries[0].id,
+          scope: r.scope,
+          remindAt: new Date(r.remindAt),
+          cadence: r.cadence,
+          note: r.note,
         },
-      }));
-    }
+      }),
+    );
+  }
 
-    const reminderInputs = [
-      ...(args.reminders ?? []),
-      ...(args.orientations.whatComesNext.reminders ?? []),
-    ];
-    const createdReminders = [];
-    for (const reminder of reminderInputs) {
-      createdReminders.push(await tx.tendingReminder.create({
-        data: {
-          sessionId: args.sessionId,
-          checkinId: createdCheckin.id,
-          tendingEntryId: reminder.tendingEntryId,
-          userId: args.userId,
-          scope: reminder.scope,
-          remindAt: new Date(reminder.remindAt),
-          cadence: reminder.cadence,
-          note: reminder.note,
-        },
-      }));
-    }
+  // --- State transitions -------------------------------------------------------
+  let nextScheduledFor: Date | null = null;
+  let newSessionId: string | undefined;
+  const sharedEntries = openEntries.filter((e) => e.scope === 'SHARED');
+  const individualEntries = openEntries.filter((e) => e.scope === 'INDIVIDUAL');
 
-    const createdAdjustments = [];
-    for (const adjustment of args.adjustments ?? []) {
-      createdAdjustments.push(await tx.tendingAdjustment.create({
-        data: {
-          sessionId: args.sessionId,
-          checkinId: createdCheckin.id,
-          tendingEntryId: adjustment.tendingEntryId,
-          userId: args.userId,
-          privacyScope: adjustment.privacyScope ?? TendingReminderScope.PRIVATE,
-          revisedCommitmentText: adjustment.revisedCommitmentText,
-          revisedCadence: adjustment.revisedCadence,
-          revisedScope: adjustment.revisedScope,
-          revisedSuccessCriteria: adjustment.revisedSuccessCriteria,
-          reason: adjustment.reason,
-          blockerAddressed: adjustment.blockerAddressed ?? [],
-        },
-      }));
-    }
+  // A shared follow-up is held for coordination: PARTIAL until every present human has checked in.
+  for (const e of sharedEntries) {
+    const count = await prisma.followUpCheckin.count({ where: { followUpId: e.id } });
+    if (count < viewer.humans.length) await setFollowUpStatusAsJob(e.id, 'PARTIAL');
+  }
 
-    if (includedBetweenPeriodNoteIds.length > 0) {
-      await tx.tendingBetweenPeriodNote.updateMany({
-        where: {
-          id: { in: includedBetweenPeriodNoteIds },
-          sessionId: args.sessionId,
-          userId: args.userId,
-        },
-        data: {
-          carryForwardSelected: true,
-          selectedForCheckinId: createdCheckin.id,
-        },
-      });
-    }
-    if (shareBetweenPeriodNoteIds.length > 0) {
-      await tx.tendingBetweenPeriodNote.updateMany({
-        where: {
-          id: { in: shareBetweenPeriodNoteIds },
-          sessionId: args.sessionId,
-          userId: args.userId,
-        },
-        data: {
-          consentToShareWithPartner: true,
-          shareConsentAt: now,
-        },
-      });
-    }
-
-    checkinDTO = {
-      id: createdCheckin.id,
-      sessionId: createdCheckin.sessionId,
-      userId: createdCheckin.userId,
-      coordinationCycleId: createdCheckin.coordinationCycleId ?? null,
-      nextAction: createdCheckin.nextAction as TendingNextAction | null,
-      continueChoice: createdCheckin.continueChoice as ContinueChoice | null,
-      reflectionSummary: createdCheckin.reflectionSummary,
-      submittedAt: createdCheckin.submittedAt.toISOString(),
-      createdAt: createdCheckin.createdAt.toISOString(),
-      needOutcomes: createdNeedOutcomes.map(toNeedOutcomeDTO),
-      reminders: createdReminders.map(toReminderDTO),
-      adjustments: createdAdjustments.map(toAdjustmentDTO),
-    };
-
-    if (hasSharedEntry) {
-      for (const entry of sharedEntries) {
-        await tx.tendingEntry.update({
-          where: { id: entry.id },
-          data: { status: TendingEntryStatus.PARTIAL },
-        });
-      }
-    }
-
-    const entriesToTransition = hasSharedEntry
-      ? openEntries.filter((entry) => entry.scope === TendingEntryScope.INDIVIDUAL)
-      : openEntries;
-
-    // 2) Apply path-specific state transitions. Shared entries are held for the
-    // coordination resolver; individual entries still advance immediately.
+  const toTransition = sharedEntries.length ? individualEntries : openEntries;
+  if (toTransition.length) {
     switch (choice) {
-      case ContinueChoice.ANOTHER_ROUND: {
-        if (entriesToTransition.length === 0) break;
-        // Do not reset session-wide Stage 4 state from a single user's Tending
-        // check-in. Reopening strategy work is coordinated separately once both
-        // partners have had a chance to respond.
-        for (const entry of entriesToTransition) {
-          await tx.tendingEntry.update({
-            where: { id: entry.id },
-            data: { status: TendingEntryStatus.COMPLETED, completedAt: now },
-          });
+      case ContinueChoice.ANOTHER_ROUND:
+      case ContinueChoice.FULL_CLOSURE:
+        for (const e of toTransition) await setFollowUpStatusAsJob(e.id, 'COMPLETED', { completedAt: now });
+        break;
+      case ContinueChoice.EXTEND: {
+        nextScheduledFor = addDays(now, DEFAULT_EXTENSION_DAYS);
+        const allResolved =
+          (args.needOutcomes?.length ?? 0) > 0 &&
+          args.needOutcomes!.every((o) => o.resolutionStatus === TendingNeedResolutionStatus.RESOLVED);
+        for (const e of toTransition) {
+          const outcome = (args.entryOutcomes ?? []).find((o) => o.tendingEntryId === e.id);
+          if (outcome?.stillWorthTrying === false || allResolved) {
+            await setFollowUpStatusAsJob(e.id, 'COMPLETED', { completedAt: now });
+          } else {
+            await scheduleNextRoundAsJob(e, nextScheduledFor, now);
+          }
         }
         break;
       }
-      case ContinueChoice.EXTEND: {
-        if (entriesToTransition.length === 0) break;
+      case ContinueChoice.PARTIAL_CLOSURE: {
         nextScheduledFor = addDays(now, DEFAULT_EXTENSION_DAYS);
-        const allNeedsResolved =
-          (args.needOutcomes?.length ?? 0) > 0 &&
-          args.needOutcomes!.every((outcome) => outcome.resolutionStatus === TendingNeedResolutionStatus.RESOLVED);
-        for (const entry of entriesToTransition) {
-          const entryOutcome = entryOutcomeByEntryId.get(entry.id);
-          if (entryOutcome?.stillWorthTrying === false || allNeedsResolved) {
-            await tx.tendingEntry.update({
-              where: { id: entry.id },
-              data: { status: TendingEntryStatus.COMPLETED, completedAt: now },
-            });
-            continue;
+        for (const e of toTransition) {
+          if ((resolutions[e.id] ?? PartialClosureResolution.CONTINUING) === PartialClosureResolution.RESOLVED) {
+            await setFollowUpStatusAsJob(e.id, 'COMPLETED', { completedAt: now });
+          } else {
+            await scheduleNextRoundAsJob(e, nextScheduledFor, now);
           }
-          await tx.tendingEntry.update({
-            where: { id: entry.id },
-            data: {
-              status: TendingEntryStatus.SCHEDULED,
-              scheduledFor: nextScheduledFor,
-              openedAt: null,
-              completedAt: null,
-            },
-          });
         }
         break;
       }
       case ContinueChoice.NEW_PROCESS: {
-        if (entriesToTransition.length === 0) break;
-        const handoffSummary = buildNewProcessHandoffSummary({
+        for (const e of toTransition) await setFollowUpStatusAsJob(e.id, 'COMPLETED', { completedAt: now });
+        newSessionId = await startLinkedProcess(viewer, buildNewProcessHandoffSummary({
           reflection,
           entryOutcomes: args.entryOutcomes,
-          needOutcomes: args.needOutcomes,
-        });
-        // Create a new Session linked back to this one. Both users start at Stage 0.
-        const created = await tx.session.create({
-          data: {
-            relationshipId: session.relationshipId,
-            status: 'CREATED',
-            type: session.type,
-            previousSessionId: args.sessionId,
-            topicFrame: 'Tending follow-up',
-          },
-        });
-        newSessionId = created.id;
-        await tx.message.create({
-          data: {
-            sessionId: created.id,
-            senderId: null,
-            forUserId: args.userId,
-            role: 'SYSTEM',
-            content: handoffSummary,
-            stage: 0,
-            timestamp: now,
-          },
-        });
-        // Mark current entries COMPLETED and the current session RESOLVED.
-        for (const entry of entriesToTransition) {
-          await tx.tendingEntry.update({
-            where: { id: entry.id },
-            data: { status: TendingEntryStatus.COMPLETED, completedAt: now },
-          });
-        }
-        await tx.session.update({
-          where: { id: args.sessionId },
-          data: { status: 'RESOLVED', resolvedAt: now },
-        });
-        break;
-      }
-      case ContinueChoice.PARTIAL_CLOSURE: {
-        if (entriesToTransition.length === 0) break;
-        const resolutions = args.orientations.whatComesNext.partialClosure ?? {};
-        nextScheduledFor = addDays(now, DEFAULT_EXTENSION_DAYS);
-        for (const entry of entriesToTransition) {
-          const resolution = resolutions[entry.id] ?? PartialClosureResolution.CONTINUING;
-          const responseId = responseIds[entry.id];
-          if (responseId) {
-            await tx.tendingResponsePartialClosure.upsert({
-              where: {
-                tendingResponseId_tendingEntryId: {
-                  tendingResponseId: responseId,
-                  tendingEntryId: entry.id,
-                },
-              },
-              create: {
-                tendingResponseId: responseId,
-                tendingEntryId: entry.id,
-                resolution,
-              },
-              update: { resolution },
-            });
-          }
-          if (resolution === PartialClosureResolution.RESOLVED) {
-            await tx.tendingEntry.update({
-              where: { id: entry.id },
-              data: { status: TendingEntryStatus.COMPLETED, completedAt: now },
-            });
-          } else {
-            await tx.tendingEntry.update({
-              where: { id: entry.id },
-              data: {
-                status: TendingEntryStatus.SCHEDULED,
-                scheduledFor: nextScheduledFor,
-                openedAt: null,
-                completedAt: null,
-              },
-            });
-          }
-        }
-        break;
-      }
-      case ContinueChoice.FULL_CLOSURE: {
-        if (entriesToTransition.length === 0) break;
-        for (const entry of entriesToTransition) {
-          await tx.tendingEntry.update({
-            where: { id: entry.id },
-            data: { status: TendingEntryStatus.COMPLETED, completedAt: now },
-          });
-        }
-        await tx.session.update({
-          where: { id: args.sessionId },
-          data: { status: 'RESOLVED', resolvedAt: now },
-        });
+          needOutcomes,
+        }), now);
         break;
       }
       default:
         throw new TendingInvalidStateError(`Unsupported continueChoice: ${choice as string}`);
     }
-  });
+    if (choice === ContinueChoice.FULL_CLOSURE) {
+      await getJobPrisma().$executeRaw`SELECT app.session_set_status(${args.sessionId}::uuid, 'RESOLVED'::session_status)`;
+    }
+  }
 
-  if (hasSharedEntry) {
+  if (sharedEntries.length) {
     try {
-      await publishSessionEvent(args.sessionId, 'notification.pending_action', {
-        kind: 'tending_checkin_submitted',
-        continueChoice: choice,
-        nextAction,
-        submittedBy: args.userId,
-        newSessionId,
-      }, args.userId);
+      await publishSessionEvent(
+        args.sessionId,
+        'notification.pending_action',
+        { kind: 'tending_checkin_submitted', continueChoice: choice, nextAction, submittedBy: args.userId, newSessionId },
+        args.userId,
+      );
     } catch (error) {
       logger.warn('[tending] Failed to publish check-in event', { sessionId: args.sessionId, error });
     }
   }
 
-  const refreshed = (await prisma.tendingEntry.findMany({
+  const refreshed = (await prisma.followUp.findMany({
     where: { id: { in: openEntries.map((e) => e.id) } },
-    include: { responses: true, entryOutcomes: true, reminders: true },
-  })) as TendingEntryWithResponses[];
-
+    orderBy: [{ scheduledFor: 'asc' }, { createdAt: 'asc' }, { id: 'asc' }],
+    select: FOLLOW_UP_SELECT,
+  })) as FollowUpRow[];
+  const entries = await entryDTOs(viewer, refreshed);
+  const [primaryCheckin] = await loadCheckins([openEntries[0].id], viewer.participantId).then((rows) =>
+    rows.filter((c) => c.id === primaryCheckinId),
+  );
+  const cycles = sharedEntries.length ? await listTendingCoordinationCycles(args.sessionId, args.userId) : [];
   return {
-    entries: refreshed.map((entry) => toEntryDTO(entry, args.userId)),
-    checkin: checkinDTO,
-    coordinationCycle: coordinationCycleDTO,
+    entries,
+    checkin: primaryCheckin
+      ? {
+          id: primaryCheckin.id,
+          sessionId: args.sessionId,
+          userId: viewer.userId,
+          coordinationCycleId: sharedEntries[0]?.id ?? null,
+          nextAction: primaryCheckin.nextAction,
+          continueChoice: primaryCheckin.continueChoice,
+          reflectionSummary: primaryCheckin.reflectionSummary,
+          submittedAt: primaryCheckin.submittedAt.toISOString(),
+          createdAt: primaryCheckin.createdAt.toISOString(),
+          entryOutcomes: entryOutcomeDTOs(viewer, primaryCheckin),
+          needOutcomes: needOutcomeDTOs(viewer, primaryCheckin),
+          reminders: createdReminders.map((r) => toReminderDTO(viewer, r)),
+          adjustments: adjustmentDTOs(viewer, primaryCheckin),
+        }
+      : undefined,
+    coordinationCycle: cycles.find((c) => sharedEntries.some((e) => e.id === c.id)),
     newSessionId,
     continueChoice: choice,
     nextScheduledFor,
   };
 }
 
-export async function openDueTendingEntries(now = new Date()): Promise<{ opened: number; entryIds: string[] }> {
-  const dueEntries = await prisma.tendingEntry.findMany({
-    where: {
-      status: TendingEntryStatus.SCHEDULED,
-      scheduledFor: { lte: now },
-      type: {
-        in: [
-          TendingEntryType.SCHEDULED_SHARED_AGREEMENT_CHECKIN,
-          TendingEntryType.SCHEDULED_INDIVIDUAL_COMMITMENT_CHECKIN,
-        ],
-      },
-    },
-    select: { id: true, sessionId: true, scope: true, ownerUserId: true, type: true },
-  });
-
-  const entryIds: string[] = [];
-  for (const entry of dueEntries) {
-    const updated = await prisma.tendingEntry.updateMany({
-      where: { id: entry.id, status: TendingEntryStatus.SCHEDULED },
-      data: { status: TendingEntryStatus.OPEN, openedAt: now },
+/**
+ * NEW_PROCESS: the current session RESOLVED, a new CREATED session linked
+ * back to it (previous_session_id) with the caller as its first participant,
+ * and the hand-off summary as a SYSTEM message in their MAIN conversation (job).
+ */
+async function startLinkedProcess(viewer: Viewer, handoff: string, now: Date): Promise<string> {
+  await getJobPrisma().$executeRaw`SELECT app.session_set_status(${viewer.sessionId}::uuid, 'RESOLVED'::session_status)`;
+  const { sessionId, conversationId } = await prisma.$transaction(async (tx) => {
+    const session = await tx.session.create({
+      data: { relationshipId: viewer.relationshipId, status: 'CREATED', previousSessionId: viewer.sessionId, topicFrame: 'Tending follow-up' },
+      select: { id: true },
     });
-    if (updated.count === 0) continue;
-    entryIds.push(entry.id);
+    const participant = await tx.participant.create({
+      data: { sessionId: session.id, userId: viewer.userId, kind: 'human' },
+      select: { id: true },
+    });
+    const conversation = await tx.conversation.create({
+      data: { participantId: participant.id, kind: 'MAIN' },
+      select: { id: true },
+    });
+    return { sessionId: session.id, conversationId: conversation.id };
+  });
+  await createFacilitatorMessage({ conversationId, role: 'SYSTEM', content: handoff, createdAt: now });
+  return sessionId;
+}
 
+// ============================================================================
+// Jobs (JOB connection)
+// ============================================================================
+
+/**
+ * Open every due scheduled follow-up (sql_follow_up_due: status SCHEDULED by
+ * scheduled_for) — runs as the job. A SHARED follow-up gets its response
+ * deadline (the coordination window) when it opens.
+ */
+export async function openDueTendingEntries(now = new Date()): Promise<{ opened: number; entryIds: string[] }> {
+  const job = getJobPrisma();
+  const due = await job.$queryRaw<
+    Array<{ id: string; session_id: string; scope: 'SHARED' | 'INDIVIDUAL'; owner_participant_id: string | null }>
+  >`
+    SELECT id, session_id, scope::text AS scope, owner_participant_id FROM follow_up
+    WHERE status = 'SCHEDULED' AND scheduled_for <= ${now}
+      AND type IN ('SCHEDULED_SHARED_AGREEMENT', 'SCHEDULED_INDIVIDUAL_COMMITMENT')
+    ORDER BY scheduled_for, id`;
+  const entryIds: string[] = [];
+  for (const entry of due) {
+    const n = await job.$executeRaw`
+      UPDATE follow_up SET status = 'OPEN', opened_at = ${now},
+        response_deadline_at = CASE WHEN scope = 'SHARED' THEN ${addDays(now, DEFAULT_SHARED_RESPONSE_DEADLINE_DAYS)}::timestamptz
+                                    ELSE response_deadline_at END
+      WHERE id = ${entry.id}::uuid AND status = 'SCHEDULED'`;
+    if (n === 0) continue;
+    entryIds.push(entry.id);
     try {
-      if (entry.scope === TendingEntryScope.INDIVIDUAL && entry.ownerUserId) {
-        await publishUserEvent(entry.ownerUserId, 'session.updated', {
-          sessionId: entry.sessionId,
-          kind: 'tending_checkin_opened',
-          tendingEntryId: entry.id,
-          scope: entry.scope,
-        });
+      if (entry.scope === 'INDIVIDUAL' && entry.owner_participant_id) {
+        const [owner] = await job.$queryRaw<Array<{ user_id: string | null }>>`
+          SELECT user_id FROM participant WHERE id = ${entry.owner_participant_id}::uuid`;
+        if (owner?.user_id) {
+          await publishUserEvent(owner.user_id, 'session.updated', {
+            sessionId: entry.session_id,
+            kind: 'tending_checkin_opened',
+            tendingEntryId: entry.id,
+            scope: entry.scope,
+          });
+        }
       } else {
-        await publishSessionEvent(entry.sessionId, 'notification.pending_action', {
+        await publishSessionEvent(entry.session_id, 'notification.pending_action', {
           kind: 'tending_checkin_opened',
           tendingEntryId: entry.id,
           scope: entry.scope,
@@ -1522,7 +1377,6 @@ export async function openDueTendingEntries(now = new Date()): Promise<{ opened:
       logger.warn('[tending] Failed to publish opened check-in event', { entryId: entry.id, error });
     }
   }
-
   return { opened: entryIds.length, entryIds };
 }
 
@@ -1541,274 +1395,146 @@ function nextReminderDate(remindAt: Date, cadence: string | null): Date | null {
     case 'BIMONTHLY':
       next.setUTCMonth(next.getUTCMonth() + 2);
       return next;
-    case 'ONCE':
-    case 'ONE_TIME':
     default:
       return null;
   }
 }
 
-export async function processDueTendingReminders(
-  now = new Date()
-): Promise<{ delivered: number; reminderIds: string[] }> {
-  const dueReminders = await prisma.tendingReminder.findMany({
-    where: {
-      status: 'SCHEDULED',
-      remindAt: { lte: now },
-    },
-    orderBy: [{ remindAt: 'asc' }],
-  });
-
+/** Deliver due reminders (sql_reminder_due) — the job moves status / the next instant. */
+export async function processDueTendingReminders(now = new Date()): Promise<{ delivered: number; reminderIds: string[] }> {
+  const job = getJobPrisma();
+  const due = await job.$queryRaw<
+    Array<{ id: string; follow_up_id: string | null; remind_at: Date; cadence: string | null; user_id: string; scope: string; note: string | null }>
+  >`
+    SELECT r.id, r.follow_up_id, r.remind_at, r.cadence, r.user_id, r.scope::text AS scope, NULL::text AS note
+    FROM reminder r WHERE r.status = 'SCHEDULED' AND r.remind_at <= ${now} ORDER BY r.remind_at, r.id`;
   const reminderIds: string[] = [];
-  for (const reminder of dueReminders) {
-    const nextDate = nextReminderDate(reminder.remindAt, reminder.cadence);
-    if (nextDate) {
-      await prisma.tendingReminder.update({
-        where: { id: reminder.id },
-        data: {
-          remindAt: nextDate,
-          status: 'SCHEDULED',
-        },
-      });
-    } else {
-      await prisma.tendingReminder.update({
-        where: { id: reminder.id },
-        data: { status: 'DELIVERED' },
-      });
-    }
-    reminderIds.push(reminder.id);
-
-    const payload = {
-      kind: 'tending_reminder_due',
-      reminderId: reminder.id,
-      tendingEntryId: reminder.tendingEntryId,
-      scope: reminder.scope,
-      note: reminder.note,
-      userId: reminder.userId,
-    };
-
+  for (const r of due) {
+    const next = nextReminderDate(r.remind_at, r.cadence);
+    if (next) await job.$executeRaw`UPDATE reminder SET remind_at = ${next}, status = 'SCHEDULED' WHERE id = ${r.id}::uuid`;
+    else await job.$executeRaw`UPDATE reminder SET status = 'DELIVERED' WHERE id = ${r.id}::uuid`;
+    reminderIds.push(r.id);
     try {
-      if (reminder.scope === TendingReminderScope.PRIVATE) {
-        await publishUserEvent(reminder.userId, 'session.updated', {
-          sessionId: reminder.sessionId,
-          ...payload,
-        });
+      const [fu] = r.follow_up_id
+        ? await job.$queryRaw<Array<{ session_id: string }>>`SELECT session_id FROM follow_up WHERE id = ${r.follow_up_id}::uuid`
+        : [];
+      const payload = { kind: 'tending_reminder_due', reminderId: r.id, tendingEntryId: r.follow_up_id, scope: r.scope, userId: r.user_id };
+      if (r.scope === 'PRIVATE' || !fu) {
+        await publishUserEvent(r.user_id, 'session.updated', { sessionId: fu?.session_id, ...payload });
       } else {
-        await publishSessionEvent(reminder.sessionId, 'notification.pending_action', payload);
+        await publishSessionEvent(fu.session_id, 'notification.pending_action', payload);
       }
     } catch (error) {
-      logger.warn('[tending] Failed to publish reminder due event', { reminderId: reminder.id, error });
+      logger.warn('[tending] Failed to publish reminder due event', { reminderId: r.id, error });
     }
   }
-
   return { delivered: reminderIds.length, reminderIds };
 }
 
-export async function resolveTimedOutTendingCoordinationCycles(
-  now = new Date()
-): Promise<{ resolved: number; cycleIds: string[] }> {
-  const timedOutCycles = await prisma.tendingCoordinationCycle.findMany({
-    where: {
-      status: TendingCoordinationStatus.WAITING_FOR_PARTNER,
-      responseDeadlineAt: { lte: now },
-    },
-  });
-
-  const cycleIds: string[] = [];
-  for (const cycle of timedOutCycles) {
-    const missingUserIds = cycle.participantUserIds.filter(
-      (userId) => !cycle.submittedUserIds.includes(userId)
-    );
-    const updated = await prisma.tendingCoordinationCycle.update({
-      where: { id: cycle.id },
-      data: {
-        status: TendingCoordinationStatus.TIMED_OUT,
-        resolvedAt: now,
-        resultSummary: missingUserIds.length
-          ? `Tending proceeded with submitted responses after timeout. Missing participant(s): ${missingUserIds.join(', ')}.`
-          : 'Tending proceeded after timeout with all available submitted responses.',
-      },
-    });
-    cycleIds.push(updated.id);
-
+/**
+ * Report the shared follow-ups whose coordination window has passed
+ * (`v_follow_up_cycle` status TIMED_OUT is computed from response_deadline_at;
+ * nothing is stored). Publishes one event per follow-up.
+ */
+export async function resolveTimedOutTendingCoordinationCycles(now = new Date()): Promise<{ resolved: number; cycleIds: string[] }> {
+  const rows = await prisma.$queryRaw<Array<{ follow_up_id: string; session_id: string; waiting_on: string[]; submitted: string[] }>>`
+    SELECT c.follow_up_id, c.session_id,
+           ARRAY(SELECT p.user_id::text FROM participant p WHERE p.id = ANY(c.waiting_on) ORDER BY p.joined_at, p.id) AS waiting_on,
+           ARRAY(SELECT p.user_id::text FROM participant p WHERE p.id = ANY(c.submitted_participant_ids) ORDER BY p.joined_at, p.id) AS submitted
+    FROM v_follow_up_cycle c JOIN follow_up f ON f.id = c.follow_up_id
+    WHERE f.scope = 'SHARED' AND f.status IN ('OPEN', 'PARTIAL') AND f.response_deadline_at <= ${now}`;
+  for (const r of rows) {
     try {
-      await publishSessionEvent(cycle.sessionId, 'notification.pending_action', {
+      await publishSessionEvent(r.session_id, 'notification.pending_action', {
         kind: 'tending_coordination_timed_out',
-        coordinationCycleId: cycle.id,
-        submittedUserIds: cycle.submittedUserIds,
-        missingUserIds,
+        coordinationCycleId: r.follow_up_id,
+        submittedUserIds: r.submitted,
+        missingUserIds: r.waiting_on,
       });
     } catch (error) {
-      logger.warn('[tending] Failed to publish coordination timeout event', { cycleId: cycle.id, error });
+      logger.warn('[tending] Failed to publish coordination timeout event', { followUpId: r.follow_up_id, error });
     }
   }
-
-  return { resolved: cycleIds.length, cycleIds };
+  return { resolved: rows.length, cycleIds: rows.map((r) => r.follow_up_id) };
 }
 
-export async function resolveReadyTendingCoordinationCycles(
-  now = new Date()
-): Promise<{ resolved: number; cycleIds: string[] }> {
-  const readyCycles = await prisma.tendingCoordinationCycle.findMany({
-    where: { status: TendingCoordinationStatus.READY_TO_RESOLVE },
-    include: {
-      checkins: {
-        include: {
-          responses: {
-            include: { partialClosures: true },
-          },
-          entryOutcomes: true,
-          needOutcomes: true,
-        },
-      },
-    },
-  });
-
+/**
+ * Resolve shared follow-ups every present human has checked in on
+ * (`v_follow_up_cycle` READY_TO_RESOLVE): the check-ins' choices decide
+ * (extend together → the next round; full closure with nothing open →
+ * COMPLETED; partial closure → COMPLETED, plus a next round unless both
+ * closed it; anything else is held for a mediated prompt).
+ */
+export async function resolveReadyTendingCoordinationCycles(now = new Date()): Promise<{ resolved: number; cycleIds: string[] }> {
+  const ready = await prisma.$queryRaw<Array<{ follow_up_id: string }>>`
+    SELECT c.follow_up_id FROM v_follow_up_cycle c JOIN follow_up f ON f.id = c.follow_up_id
+    WHERE c.status = 'READY_TO_RESOLVE' AND f.scope = 'SHARED' AND f.status IN ('OPEN', 'PARTIAL')`;
   const cycleIds: string[] = [];
-  for (const cycle of readyCycles) {
-    const choices = cycle.checkins
-      .map((checkin) => checkin.continueChoice)
-      .filter(Boolean);
-    const allExtend = choices.length > 0 && choices.every((choice) => choice === ContinueChoice.EXTEND);
-    const allFullClosure = choices.length > 0 && choices.every((choice) => choice === ContinueChoice.FULL_CLOSURE);
-    const allPartialClosure = choices.length > 0 && choices.every((choice) => choice === ContinueChoice.PARTIAL_CLOSURE);
-    const anyNewProcess = choices.some((choice) => choice === ContinueChoice.NEW_PROCESS);
-    const anyReopen = choices.some((choice) => choice === ContinueChoice.ANOTHER_ROUND);
-    const partialClosureByEntryId = new Map<string, PartialClosureResolution[]>();
-    for (const checkin of cycle.checkins) {
-      for (const response of checkin.responses ?? []) {
-        for (const partialClosure of response.partialClosures ?? []) {
-          const current = partialClosureByEntryId.get(partialClosure.tendingEntryId) ?? [];
-          current.push(partialClosure.resolution as PartialClosureResolution);
-          partialClosureByEntryId.set(partialClosure.tendingEntryId, current);
-        }
-      }
-    }
-    const entryIdsBothClosed = cycle.entryIds.filter((entryId) => {
-      const resolutions = partialClosureByEntryId.get(entryId) ?? [];
-      return (
-        resolutions.length >= cycle.participantUserIds.length &&
-        resolutions.every((resolution) => resolution === PartialClosureResolution.RESOLVED)
-      );
-    });
-    const entryIdsContinuing = cycle.entryIds.filter((entryId) => !entryIdsBothClosed.includes(entryId));
-    const anyFailedFollowThrough = cycle.checkins.some((checkin) =>
-      (checkin.entryOutcomes ?? []).some((outcome) =>
-        outcome.followThroughStatus === TendingFollowThroughStatus.DID_NOT_HAPPEN ||
-        outcome.helpfulnessStatus === TendingHelpfulnessStatus.DID_NOT_HELP ||
-        outcome.stillWorthTrying === false
-      )
+  for (const { follow_up_id: id } of ready) {
+    const entry = (await prisma.followUp.findUnique({ where: { id }, select: FOLLOW_UP_SELECT })) as FollowUpRow;
+    const checkins = (
+      await prisma.followUpCheckin.findMany({ where: { followUpId: id }, select: { continueChoice: true, payload: true } })
+    ).map((c) => ({ continueChoice: c.continueChoice as ContinueChoice | null, payload: readPayload(c.payload) }));
+    const choices = checkins.map((c) => c.continueChoice).filter((c): c is ContinueChoice => Boolean(c));
+    const every = (c: ContinueChoice) => choices.length > 0 && choices.every((x) => x === c);
+    const failed = checkins.some((c) =>
+      c.payload.entryOutcomes.some(
+        (o) =>
+          o.followThroughStatus === TendingFollowThroughStatus.DID_NOT_HAPPEN ||
+          o.helpfulnessStatus === TendingHelpfulnessStatus.DID_NOT_HELP ||
+          o.stillWorthTrying === false,
+      ),
     );
-    const anyStillOpenNeed = cycle.checkins.some((checkin) =>
-      (checkin.needOutcomes ?? []).some((outcome) =>
-        outcome.resolutionStatus === TendingNeedResolutionStatus.STILL_OPEN ||
-        outcome.resolutionStatus === TendingNeedResolutionStatus.CHANGED ||
-        outcome.resolutionStatus === TendingNeedResolutionStatus.NOT_SURE
-      )
+    const stillOpen = checkins.some((c) =>
+      c.payload.needOutcomes.some((o) =>
+        [TendingNeedResolutionStatus.STILL_OPEN, TendingNeedResolutionStatus.CHANGED, TendingNeedResolutionStatus.NOT_SURE].includes(
+          o.resolutionStatus,
+        ),
+      ),
     );
-
-    let resultSummary = '';
+    const bothClosed =
+      checkins.length > 0 &&
+      checkins.every((c) => c.payload.partialClosures.some((p) => p.followUpId === id && p.resolution === PartialClosureResolution.RESOLVED));
+    let resultSummary: string;
     let nextScheduledFor: Date | null = null;
-    let nextScheduledForIso: string | null = null;
-
-    await prisma.$transaction(async (tx) => {
-      if (allExtend && !(anyFailedFollowThrough && anyStillOpenNeed)) {
-        nextScheduledFor = addDays(now, DEFAULT_EXTENSION_DAYS);
-        nextScheduledForIso = nextScheduledFor.toISOString();
-        await tx.tendingEntry.updateMany({
-          where: { id: { in: cycle.entryIds } },
-          data: {
-            status: TendingEntryStatus.SCHEDULED,
-            scheduledFor: nextScheduledFor,
-            openedAt: null,
-            completedAt: null,
-          },
-        });
-        resultSummary = `Both participants chose extension. Shared Tending entries continue until ${nextScheduledForIso}.`;
-      } else if (allFullClosure && !anyStillOpenNeed) {
-        await tx.tendingEntry.updateMany({
-          where: { id: { in: cycle.entryIds } },
-          data: { status: TendingEntryStatus.COMPLETED, completedAt: now },
-        });
-        await tx.session.update({
-          where: { id: cycle.sessionId },
-          data: { status: 'RESOLVED', resolvedAt: now },
-        });
-        resultSummary = 'Both participants chose full closure and no submitted need remains open. Shared Tending entries are complete.';
-      } else if (allPartialClosure) {
-        nextScheduledFor = entryIdsContinuing.length > 0 ? addDays(now, DEFAULT_EXTENSION_DAYS) : null;
-        nextScheduledForIso = nextScheduledFor?.toISOString() ?? null;
-        if (entryIdsBothClosed.length > 0) {
-          await tx.tendingEntry.updateMany({
-            where: { id: { in: entryIdsBothClosed } },
-            data: { status: TendingEntryStatus.COMPLETED, completedAt: now },
-          });
-        }
-        if (entryIdsContinuing.length > 0) {
-          await tx.tendingEntry.updateMany({
-            where: { id: { in: entryIdsContinuing } },
-            data: {
-              status: TendingEntryStatus.SCHEDULED,
-              scheduledFor: nextScheduledFor,
-              openedAt: null,
-              completedAt: null,
-            },
-          });
-        }
-        resultSummary = entryIdsBothClosed.length > 0
-          ? `Both participants chose partial closure. Closed ${entryIdsBothClosed.length} shared entr${entryIdsBothClosed.length === 1 ? 'y' : 'ies'} and continued ${entryIdsContinuing.length}.`
-          : 'Both participants chose partial closure, but no shared entry had explicit closure from both sides. Shared entries continue for another check-in.';
-      } else if (anyNewProcess) {
-        resultSummary = 'At least one participant chose a new process. Partner-involving consent and mediated coordination are required before creating a linked shared session.';
-      } else if (choices.includes(ContinueChoice.EXTEND) && choices.includes(ContinueChoice.PARTIAL_CLOSURE)) {
-        nextScheduledFor = entryIdsContinuing.length > 0 ? addDays(now, DEFAULT_EXTENSION_DAYS) : null;
-        nextScheduledForIso = nextScheduledFor?.toISOString() ?? null;
-        if (entryIdsContinuing.length > 0) {
-          await tx.tendingEntry.updateMany({
-            where: { id: { in: entryIdsContinuing } },
-            data: {
-              status: TendingEntryStatus.SCHEDULED,
-              scheduledFor: nextScheduledFor,
-              openedAt: null,
-              completedAt: null,
-            },
-          });
-        }
-        if (entryIdsBothClosed.length > 0) {
-          await tx.tendingEntry.updateMany({
-            where: { id: { in: entryIdsBothClosed } },
-            data: { status: TendingEntryStatus.COMPLETED, completedAt: now },
-          });
-        }
-        resultSummary = 'One participant chose extension and one chose partial closure. Entries only close where both explicitly closed them; unresolved shared entries continue for a mediated next-step prompt.';
-      } else if (anyReopen || (anyFailedFollowThrough && anyStillOpenNeed)) {
-        resultSummary = 'At least one participant reported failed follow-through or a still-open need. Shared Tending should move to adjustment or strategy reopening instead of blind extension.';
+    if (every(ContinueChoice.EXTEND) && !(failed && stillOpen)) {
+      nextScheduledFor = addDays(now, DEFAULT_EXTENSION_DAYS);
+      await scheduleNextRoundAsJob(entry, nextScheduledFor, now);
+      resultSummary = `Both participants chose extension. Shared Tending continues until ${nextScheduledFor.toISOString()}.`;
+    } else if (every(ContinueChoice.FULL_CLOSURE) && !stillOpen) {
+      await setFollowUpStatusAsJob(id, 'COMPLETED', { completedAt: now });
+      await getJobPrisma().$executeRaw`SELECT app.session_set_status(${entry.sessionId}::uuid, 'RESOLVED'::session_status)`;
+      resultSummary = 'Both participants chose full closure and no submitted need remains open. Shared Tending is complete.';
+    } else if (every(ContinueChoice.PARTIAL_CLOSURE) || (choices.includes(ContinueChoice.EXTEND) && choices.includes(ContinueChoice.PARTIAL_CLOSURE))) {
+      if (bothClosed) {
+        await setFollowUpStatusAsJob(id, 'COMPLETED', { completedAt: now });
+        resultSummary = 'Both participants closed this shared entry.';
       } else {
-        resultSummary = 'Participants submitted mixed Tending choices. Shared entries remain held for a mediated next-step prompt.';
+        nextScheduledFor = addDays(now, DEFAULT_EXTENSION_DAYS);
+        await scheduleNextRoundAsJob(entry, nextScheduledFor, now);
+        resultSummary = 'Not every participant closed this shared entry; it continues for another check-in.';
       }
-
-      await tx.tendingCoordinationCycle.update({
-        where: { id: cycle.id },
-        data: {
-          status: TendingCoordinationStatus.RESOLVED,
-          resolvedAt: now,
-          resultSummary,
-        },
-      });
-    });
-
-    cycleIds.push(cycle.id);
+    } else if (choices.includes(ContinueChoice.NEW_PROCESS)) {
+      resultSummary = 'At least one participant chose a new process. Partner-involving consent and mediated coordination are required before creating a linked shared session.';
+    } else if (choices.includes(ContinueChoice.ANOTHER_ROUND) || (failed && stillOpen)) {
+      resultSummary = 'At least one participant reported failed follow-through or a still-open need. Shared Tending should move to adjustment or strategy reopening instead of blind extension.';
+    } else {
+      resultSummary = 'Participants submitted mixed Tending choices. Shared entries remain held for a mediated next-step prompt.';
+    }
+    cycleIds.push(id);
     try {
-      await publishSessionEvent(cycle.sessionId, 'notification.pending_action', {
+      await publishSessionEvent(entry.sessionId, 'notification.pending_action', {
         kind: 'tending_coordination_resolved',
-        coordinationCycleId: cycle.id,
+        coordinationCycleId: id,
         resultSummary,
-        nextScheduledFor: nextScheduledForIso,
+        nextScheduledFor: nextScheduledFor?.toISOString() ?? null,
       });
     } catch (error) {
-      logger.warn('[tending] Failed to publish coordination resolved event', { cycleId: cycle.id, error });
+      logger.warn('[tending] Failed to publish coordination resolved event', { followUpId: id, error });
     }
   }
-
   return { resolved: cycleIds.length, cycleIds };
 }
+
+// Re-exported for prompt context (stream-turn-context's Tending helper).
+export { TendingBlockerCategory };

@@ -5,29 +5,11 @@ import {
   NeedEditOperation,
 } from '@meet-without-fear/shared';
 import { getModelCompletion } from '../lib/bedrock';
-import { prisma } from '../lib/prisma';
 import { extractJsonFromResponse } from '../utils/json-extractor';
 import { previewNeedEditOperations } from './needs-edit-applier.service';
+import { listOwnNeeds, requireNeedOwner, toNeedRecord, type IdentifiedNeedRecord } from './needs';
 
-type NeedRow = {
-  id: string;
-  vesselId: string;
-  need: string;
-  category: NeedCategory;
-  evidence: string[];
-  aiConfidence: number;
-  confirmed: boolean;
-  createdAt: Date;
-};
-
-async function getOrCreateUserVessel(sessionId: string, userId: string): Promise<{ id: string }> {
-  const existing = await prisma.userVessel.findUnique({
-    where: { userId_sessionId: { userId, sessionId } },
-    select: { id: true },
-  });
-  if (existing) return existing;
-  return prisma.userVessel.create({ data: { userId, sessionId }, select: { id: true } });
-}
+type NeedRow = IdentifiedNeedRecord;
 
 function numberedNeeds(needs: NeedRow[]): string {
   return needs.map((need, index) => `[${index + 1}] (${need.id}) ${need.need}`).join('\n');
@@ -109,11 +91,9 @@ export async function interpretNeedEditRequest(
   userId: string,
   request: InterpretNeedEditRequest
 ): Promise<InterpretNeedEditResponse> {
-  const vessel = await getOrCreateUserVessel(sessionId, userId);
-  const needs = (await prisma.identifiedNeed.findMany({
-    where: { vesselId: vessel.id },
-    orderBy: { createdAt: 'asc' },
-  })) as NeedRow[];
+  // The owner's own needs only (spec §1.4: need is owner-only, always).
+  const participant = await requireNeedOwner(sessionId, userId);
+  const needs: NeedRow[] = (await listOwnNeeds(participant.id)).map(toNeedRecord);
 
   if (needs.length === 0 && !/\b(add|missing|also)\b/i.test(request.request)) {
     return {
