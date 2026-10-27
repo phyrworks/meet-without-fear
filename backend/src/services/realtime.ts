@@ -822,15 +822,21 @@ export async function publishMessageAIResponse<T extends MessageAIResponseMetada
 
   const ably = getAbly();
 
+  // R36 / work-t4zp: the session channel reaches every participant's device
+  // (forUserId is a client-side filter), so the private reply never rides it:
+  // no message, no proposed statement — the addressed flags and the message id
+  // only. The addressed client refetches its own conversation over the API.
   // Typed against BOTH the DTO and the contract, so the two cannot drift apart
   // without a compile error.
+  const { proposedEmpathyStatement: _private, ...flags } = (metadata ?? {}) as MessageAIResponseMetadata;
+  void _private;
   const payload: MessageAIResponsePayload &
     SessionEventPublishData<'message.ai_response'> = {
     sessionId,
     timestamp: Date.now(),
     forUserId,
-    message,
-    ...metadata,
+    messageId: message.id,
+    ...flags,
   };
 
   try {

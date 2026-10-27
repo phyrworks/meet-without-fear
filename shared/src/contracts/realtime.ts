@@ -587,6 +587,8 @@ const SESSION_EVENT_SHAPES = {
   'message.ai_response': {
     forUserId: z.string().optional(),
     message: messageDto().optional(),
+    /** TS-12 (R36): the reply's id; the session channel carries no message text — the addressed client refetches. */
+    messageId: z.string().optional(),
     offerFeelHeardCheck: z.boolean().optional(),
     offerReadyToShare: z.boolean().optional(),
     proposedEmpathyStatement: z.string().nullish(),

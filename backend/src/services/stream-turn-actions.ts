@@ -95,11 +95,14 @@ export async function applyStage3NeedActions(params: Stage3NeedActionParams): Pr
             : affected.operation === 'add'
               ? 'need.captured'
               : 'need.refined';
+          // R36 / work-a39h.11.26: the session channel reaches every
+          // participant's device, so the owner's need (label, evidence) never
+          // rides it — ids only; the owner's client refetches their needs.
           await publishSessionEvent(sessionId, eventType, {
             forUserId: userId,
             userId,
-            need: updatedNeed,
-            affectedNeed: affected,
+            ...(updatedNeed ? { newId: updatedNeed.id } : {}),
+            ...(affected.needId ? { oldId: affected.needId } : {}),
           }).catch((err) =>
             logger.warn(`[sendMessageStream:${requestId}] Failed to publish ${eventType}:`, err)
           );
@@ -115,10 +118,10 @@ export async function applyStage3NeedActions(params: Stage3NeedActionParams): Pr
     metadata.needsCaptured = true;
     logger.info(`[sendMessageStream:${requestId}] Captured single need ${captured.need.id} for user ${userId}`);
 
+    // Ids only on the session channel (R36; work-a39h.11.26)
     await publishSessionEvent(sessionId, 'need.captured', {
       forUserId: userId,
       userId,
-      need: captured.need,
       capturedAt: captured.capturedAt.toISOString(),
     }).catch((err) =>
       logger.warn(`[sendMessageStream:${requestId}] Failed to publish need.captured:`, err)
@@ -131,13 +134,12 @@ export async function applyStage3NeedActions(params: Stage3NeedActionParams): Pr
       : applied.action === 'delete'
         ? 'need.deleted'
         : 'need.locked';
+    // Ids only on the session channel (R36; work-a39h.11.26)
     await publishSessionEvent(sessionId, eventType, {
       forUserId: userId,
       userId,
       oldId: applied.oldNeed?.id,
-      oldNeed: applied.oldNeed,
       newId: applied.action === 'refine' ? applied.need?.id : undefined,
-      need: applied.need,
     }).catch((err) =>
       logger.warn(`[sendMessageStream:${requestId}] Failed to publish ${eventType}:`, err)
     );

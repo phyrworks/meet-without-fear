@@ -19,7 +19,8 @@ import { ApiResponse, DEFAULT_PRIVACY_PREFERENCES, ErrorCode, MessageRole, Priva
 import { notifyPartner, publishSessionEvent, publishMessageAIResponse, publishMessageError } from '../services/realtime';
 import { successResponse, errorResponse } from '../utils/response';
 import { getPartnerUserId, isSessionCreator } from '../utils/session';
-import { getPartnerParticipant } from '../services/participant-resolver';
+import { getCoParticipants, getPartnerParticipant } from '../services/participant-resolver';
+import { pingStage2Refresh } from '../services/empathy-realtime';
 import { loadMilestones, loadStageStates, progressDTO, rowForStage } from '../services/stage-shim';
 import { reachMilestone } from '../services/milestone-writer';
 import { displayStatus, isSessionPaused } from '../services/session-status';
@@ -790,18 +791,20 @@ export async function markSessionViewed(req: Request, res: Response): Promise<vo
     });
 
     // Notify partner that this user viewed the session (for delivery status updates)
-    // Fire-and-forget - don't block the response. Include empathy status for cache update.
+    // Fire-and-forget - don't block the response. R36 / work-t4zp: the session
+    // channel reaches every participant's device, so it carries presence only —
+    // never a status DTO (each holds its owner's own round). The co-participants,
+    // whose delivered content this view may have marked seen, get an addressed,
+    // content-free status ping and refetch their own status over the API.
     (async () => {
       try {
-        const { buildEmpathyExchangeStatusForBothUsers } = await import('../services/empathy-status');
-        const allStatuses = await buildEmpathyExchangeStatusForBothUsers(sessionId);
         const showActivityStatus = await getShowActivityStatus(user.id);
         await publishSessionEvent(sessionId, 'partner.session_viewed', {
           viewedAt: showActivityStatus ? now.toISOString() : null,
           activeAt: showActivityStatus ? now.toISOString() : null,
           presenceVisible: showActivityStatus,
-          empathyStatuses: allStatuses,
         }, user.id);
+        await pingCoParticipants(sessionId, participant.id);
       } catch (err) {
         logger.error('[markSessionViewed] Failed to publish session_viewed event:', err);
       }
@@ -815,6 +818,17 @@ export async function markSessionViewed(req: Request, res: Response): Promise<vo
   } catch (error) {
     logger.error('[markSessionViewed] Error:', error);
     errorResponse(res, ErrorCode.INTERNAL_ERROR, 'Failed to mark session as viewed', 500);
+  }
+}
+
+/**
+ * An addressed, content-free status ping to each present human co-participant
+ * (R36): their client invalidates and refetches its own empathy status, whose
+ * delivery stamps this participant's view may just have moved to SEEN.
+ */
+async function pingCoParticipants(sessionId: string, participantId: string): Promise<void> {
+  for (const co of await getCoParticipants(participantId)) {
+    if (co.kind === 'human' && !co.leftAt && co.userId) await pingStage2Refresh(sessionId, co.userId);
   }
 }
 
@@ -849,18 +863,17 @@ export async function markShareTabViewed(req: Request, res: Response): Promise<v
     });
 
     // Notify partner that this user viewed the Share tab (for delivery status updates)
-    // Fire-and-forget - don't block the response. Include empathy status for cache update.
+    // Fire-and-forget - don't block the response. Presence only on the session
+    // channel; addressed content-free status pings to the co-participants (R36 / work-t4zp).
     (async () => {
       try {
-        const { buildEmpathyExchangeStatusForBothUsers } = await import('../services/empathy-status');
-        const allStatuses = await buildEmpathyExchangeStatusForBothUsers(sessionId);
         const showActivityStatus = await getShowActivityStatus(user.id);
         await publishSessionEvent(sessionId, 'partner.share_tab_viewed', {
           viewedAt: showActivityStatus ? now.toISOString() : null,
           activeAt: showActivityStatus ? now.toISOString() : null,
           presenceVisible: showActivityStatus,
-          empathyStatuses: allStatuses,
         }, user.id);
+        await pingCoParticipants(sessionId, participant.id);
       } catch (err) {
         logger.error('[markShareTabViewed] Failed to publish share_tab_viewed event:', err);
       }

@@ -258,8 +258,14 @@ import type { MessageDTO } from './message';
 export interface MessageAIResponsePayload extends RealtimeEventBase {
   /** The user ID this response is for (fire-and-forget is per-user) */
   forUserId: string;
-  /** The AI response message */
-  message: MessageDTO;
+  /**
+   * The AI response message. Omitted on the session channel since TS-12 (R36:
+   * that channel reaches every participant's device): the addressed client
+   * refetches its conversation; `messageId` names the reply.
+   */
+  message?: MessageDTO;
+  /** The AI response message's id (TS-12) */
+  messageId?: string;
   /** Stage 1: AI recommends showing feel-heard confirmation */
   offerFeelHeardCheck?: boolean;
   /** Stage 2: AI recommends showing ready-to-share confirmation */

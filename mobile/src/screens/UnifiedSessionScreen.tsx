@@ -857,26 +857,17 @@ export function UnifiedSessionScreen({
         refreshStage2RealtimeState();
       }
 
-      if (event === 'partner.session_viewed' && data.empathyStatuses && user?.id) {
-        // Partner viewed the session - update delivery status
-        console.log('[UnifiedSessionScreen] Partner viewed session, updating cache');
+      // Partner viewed the session / the Share tab. Since TS-12 (R36) these
+      // carry presence only; the delivery-status change arrives as an
+      // addressed empathy.status_updated ping (handled above). A status map,
+      // if an older server still sends one, is still applied.
+      if ((event === 'partner.session_viewed' || event === 'partner.share_tab_viewed') && user?.id) {
+        console.log('[UnifiedSessionScreen] Partner viewed', event, '- updating presence');
         if (data.presenceVisible !== false) {
           updatePartnerLastActiveAt(data.activeAt, data.viewedAt);
         }
-        const statuses = data.empathyStatuses as Record<string, unknown>;
-        if (statuses[user.id]) {
-          queryClient.setQueryData(stageKeys.empathyStatus(sessionId), statuses[user.id]);
-        }
-      }
-
-      if (event === 'partner.share_tab_viewed' && data.empathyStatuses && user?.id) {
-        // Partner viewed the Share tab - update delivery status
-        console.log('[UnifiedSessionScreen] Partner viewed Share tab, updating cache');
-        if (data.presenceVisible !== false) {
-          updatePartnerLastActiveAt(data.activeAt, data.viewedAt);
-        }
-        const statuses = data.empathyStatuses as Record<string, unknown>;
-        if (statuses[user.id]) {
+        const statuses = data.empathyStatuses as Record<string, unknown> | undefined;
+        if (statuses?.[user.id]) {
           queryClient.setQueryData(stageKeys.empathyStatus(sessionId), statuses[user.id]);
         }
       }
@@ -1119,6 +1110,11 @@ export function UnifiedSessionScreen({
         if (payload.forUserId === user?.id && payload.need) {
           patchNeedsCacheWithNeed(queryClient, sessionId, payload.need);
         }
+        // Since TS-12 (R36) the session channel carries need ids only — never
+        // the need itself — so the owner pulls their needs once.
+        if (payload.forUserId === user?.id && !payload.need && !payload.oldNeed) {
+          queryClient.refetchQueries({ queryKey: stageKeys.needs(sessionId) });
+        }
         if (payload.forUserId === user?.id) {
           refetchPersistedMessages();
         }
@@ -1240,8 +1236,14 @@ export function UnifiedSessionScreen({
       setIsAwaitingInvitationFollowUp(false);
       setIsAwaitingEmpathyValidationFollowUp(false);
       // Add AI message to the cache - this automatically hides ghost dots
-      // because ChatInterface derives showTypingIndicator from last message role
-      addAIMessage(sessionId, payload.message);
+      // because ChatInterface derives showTypingIndicator from last message role.
+      // Since TS-12 (R36) the session channel carries no message text: the
+      // reply is pulled with the conversation (one fetch later).
+      if (payload.message) {
+        addAIMessage(sessionId, payload.message);
+      } else {
+        refetchPersistedMessages();
+      }
       // During Stage 0 invitation phase, the AI may emit a <draft> inline that
       // the backend extracts and persists to Session.topicFrame. Refresh
       // session state so the new topic flows into the proposal panel.
