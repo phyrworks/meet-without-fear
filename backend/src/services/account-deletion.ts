@@ -1,20 +1,32 @@
 /**
- * Account Deletion Service
+ * Account Deletion Service — the tombstone walk (TS-12; spec §4
+ * `app.anonymize_user_account` "the complete walk", P3 D9).
  *
- * Handles complete account deletion including:
- * - Notifying partners in active sessions
- * - Marking sessions as abandoned
- * - Anonymizing shared content (preserving for remaining partner)
- * - Cleaning up private user data
+ * The walk is ONE SQL function, run by the JOB (`mwf_job`, the principal for
+ * work that crosses participants — R35) as one statement, so it is one
+ * transaction: every live session → ABANDONED; each of the user's
+ * participants loses its display name and leaves; the leaver's private-only
+ * rows are deleted (own conversations, drafts, ai_memory, mood, regulation,
+ * dispositions, notes, unshared needs, unshared choices, individual
+ * check-ins, unrevealed attempts); their brain_activity (incl. ruling R17's
+ * unattributed session rows); their reflections, feature documents, user
+ * memories, devices, preferences, reminders and user-scoped ai_memory; the
+ * `user` row is scrubbed to a tombstone (never deleted — every FK to `user` is
+ * RESTRICT); every participant key and the user key are shredded.
  *
- * Key principles:
- * 1. Data shared with partner stays (content they've seen belongs to them too)
- * 2. Active sessions get ABANDONED status + partner notification
- * 3. Private data (inner work, vessels, drafts) gets deleted
- * 4. User references in shared content become null (anonymized)
+ * What survives, attributed to the tombstone: delivered messages in the
+ * co-participants' conversations, revealed attempts and their reviews,
+ * need_share, shared choices, proposals, agreements and their parties, shared
+ * check-ins, milestones, relationship membership.
+ *
+ * The application does no hard delete of its own here: there is no row the
+ * walk leaves that this service then removes (contrast session-deletion.ts).
+ * Around the walk it only reads the caller's own rows (for the notification
+ * and the summary) and, after the commit, notifies partners and deletes the
+ * Clerk identity.
  */
 
-import { prisma } from '../lib/prisma';
+import { getJobPrisma, prisma } from '../lib/prisma';
 import { logger } from '../lib/logger';
 import { publishSessionEvent } from './realtime';
 
@@ -24,147 +36,68 @@ export interface AccountDeletionSummary {
   dataRecordsDeleted: number;
 }
 
+/** Live session statuses (the walk's step 1 moves exactly these to ABANDONED). */
+const LIVE = ['CREATED', 'INVITED', 'ACTIVE'] as const;
+
 /**
- * Delete a user account with proper notifications and data handling.
- *
- * @param userId - The user ID to delete
- * @param displayName - The user's display name for notifications
- * @returns Summary of what was deleted/affected
+ * Count the caller's own private rows the walk deletes (read on the app
+ * connection, before the walk; the user's own rows only).
  */
-export async function deleteAccountWithNotifications(
-  userId: string,
-  displayName: string
-): Promise<AccountDeletionSummary> {
-  // Track what we're doing
-  let sessionsAbandoned = 0;
-  let partnersNotified = 0;
-  let dataRecordsDeleted = 0;
+async function countPrivateRows(userId: string): Promise<number> {
+  const mine = { participant: { userId } };
+  const counts = await Promise.all([
+    prisma.message.count({ where: { conversation: mine } }),
+    prisma.draft.count({ where: mine }),
+    prisma.aiMemory.count({ where: { OR: [mine, { userId }] } }),
+    prisma.moodReading.count({ where: mine }),
+    prisma.regulationEvent.count({ where: mine }),
+    prisma.empathyAttempt.count({ where: { authorParticipant: { userId }, revealedAt: null } }),
+    prisma.reflection.count({ where: { userId } }),
+    prisma.featureState.count({ where: { userId } }),
+    prisma.userMemory.count({ where: { userId } }),
+    prisma.userDevice.count({ where: { userId } }),
+    prisma.userPreferences.count({ where: { userId } }),
+  ]);
+  return counts.reduce((a, b) => a + b, 0);
+}
 
-  // Step 1: Find all active sessions where this user is a member
-  const activeSessions = await prisma.session.findMany({
-    where: {
-      relationship: {
-        members: {
-          some: { userId },
-        },
-      },
-      status: {
-        in: ['CREATED', 'INVITED', 'ACTIVE', 'WAITING', 'PAUSED'],
-      },
-    },
-    include: {
-      relationship: {
-        include: {
-          members: {
-            include: {
-              user: true,
-            },
-          },
-        },
-      },
-    },
+/**
+ * Delete a user account: the tombstone walk, partner notifications, and the
+ * Clerk identity.
+ *
+ * @param userId - The user to tombstone (the caller)
+ * @param displayName - The user's display name for the partner's notification
+ */
+export async function deleteAccountWithNotifications(userId: string, displayName: string): Promise<AccountDeletionSummary> {
+  // Before the walk: the caller's live sessions (to notify) and own rows (to count)
+  const liveSessions = await prisma.participant.findMany({
+    where: { userId, leftAt: null, session: { status: { in: [...LIVE] } } },
+    select: { sessionId: true },
   });
+  const dataRecordsDeleted = await countPrivateRows(userId);
+  const user = await prisma.user.findUnique({ where: { id: userId }, select: { clerkId: true } });
+  const clerkId = user?.clerkId;
 
-  // Step 2: Mark active sessions as ABANDONED and notify partners
-  for (const session of activeSessions) {
-    await prisma.session.update({
-      where: { id: session.id },
-      data: { status: 'ABANDONED' },
-    });
-    sessionsAbandoned++;
+  // The walk: one statement, one transaction, as the job
+  await getJobPrisma().$executeRaw`SELECT app.anonymize_user_account(${userId}::uuid)`;
 
-    // Notify partner that the session has been abandoned
-    const partner = session.relationship.members.find((m: { userId: string }) => m.userId !== userId);
-    if (partner) {
-      try {
-        await publishSessionEvent(session.id, 'session.abandoned', {
-          reason: 'partner_deleted_account',
-          partnerName: displayName,
-        });
-        partnersNotified++;
-      } catch (error) {
-        logger.warn(`[AccountDeletion] Failed to notify partner ${partner.userId}:`, { error });
-      }
+  // After the commit: tell each live session's other side that it ended.
+  // The event carries no private content (R36): a reason and the leaver's
+  // display name, which the partner already saw.
+  let partnersNotified = 0;
+  for (const { sessionId } of liveSessions) {
+    try {
+      await publishSessionEvent(sessionId, 'session.abandoned', {
+        reason: 'partner_deleted_account',
+        partnerName: displayName,
+      });
+      partnersNotified++;
+    } catch (error) {
+      logger.warn(`[AccountDeletion] Failed to notify session ${sessionId}:`, { error });
     }
   }
 
-  // Step 3: Anonymize GlobalLibraryItem contributions (keep content, remove reference)
-  const libraryUpdate = await prisma.globalLibraryItem.updateMany({
-    where: { contributedBy: userId },
-    data: { contributedBy: null },
-  });
-  dataRecordsDeleted += libraryUpdate.count;
-
-  // Step 4: Clean up ReconcilerResult records (remove user references)
-  // These store comparison data that references the deleted user
-  await prisma.reconcilerResult.updateMany({
-    where: { guesserId: userId },
-    data: { guesserName: '[Deleted User]' },
-  });
-  await prisma.reconcilerResult.updateMany({
-    where: { subjectId: userId },
-    data: { subjectName: '[Deleted User]' },
-  });
-
-  // Step 5: Delete PreSessionMessages for this user
-  const preSessionDelete = await prisma.preSessionMessage.deleteMany({
-    where: { userId },
-  });
-  dataRecordsDeleted += preSessionDelete.count;
-
-  // Step 6: Count data that will be cascade deleted
-  // (These will be automatically deleted by Prisma cascades when we delete the user)
-  const [
-    innerWorkSessions,
-    stageProgress,
-    userVessels,
-    empathyDrafts,
-    strategyRankings,
-    exerciseCompletions,
-    consentRecords,
-    invitations,
-    relationshipMembers,
-  ] = await Promise.all([
-    prisma.innerWorkSession.count({ where: { userId } }),
-    prisma.stageProgress.count({ where: { userId } }),
-    prisma.userVessel.count({ where: { userId } }),
-    prisma.empathyDraft.count({ where: { userId } }),
-    prisma.strategyRanking.count({ where: { userId } }),
-    prisma.emotionalExerciseCompletion.count({ where: { userId } }),
-    prisma.consentRecord.count({ where: { userId } }),
-    prisma.invitation.count({ where: { invitedById: userId } }),
-    prisma.relationshipMember.count({ where: { userId } }),
-  ]);
-
-  dataRecordsDeleted +=
-    innerWorkSessions +
-    stageProgress +
-    userVessels +
-    empathyDrafts +
-    strategyRankings +
-    exerciseCompletions +
-    consentRecords +
-    invitations +
-    relationshipMembers;
-
-  // Step 7: Delete the user (Prisma cascades will handle related data)
-  // The schema is configured with:
-  // - onDelete: Cascade for user's private data (auto-deleted)
-  // - onDelete: SetNull for shared content (anonymized, preserved for partner)
-  const user = await prisma.user.findUnique({
-    where: { id: userId },
-    select: { clerkId: true },
-  });
-  const clerkId = user?.clerkId;
-
-  await prisma.user.delete({
-    where: { id: userId },
-  });
-
-  // Add 1 for the user record itself
-  dataRecordsDeleted += 1;
-
-  // Step 8: Delete Clerk user (after Prisma delete so DB is clean even if Clerk fails)
+  // Delete the Clerk user (after the walk, so the DB is clean even if Clerk fails)
   if (clerkId) {
     try {
       const { clerkClient } = await import('@clerk/express');
@@ -175,8 +108,9 @@ export async function deleteAccountWithNotifications(
   }
 
   return {
-    sessionsAbandoned,
+    sessionsAbandoned: liveSessions.length,
     partnersNotified,
-    dataRecordsDeleted,
+    // + 1: the user row itself, scrubbed to a tombstone
+    dataRecordsDeleted: dataRecordsDeleted + 1,
   };
 }
