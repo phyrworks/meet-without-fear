@@ -154,6 +154,35 @@ describeTarget('deletion and retention on the target (the job as mwf_job, the ap
     expect(await count(`SELECT count(*)::int AS n FROM "user" WHERE email LIKE 'ts12-r%'`)).toBe(2);
   });
 
+  it('session retention reads activity from messages, falling back to updated_at: a recent message keeps a stale-updated session', async () => {
+    const { enforceSessionRetention, ACTIVE_SESSION_RETENTION_MS } = await import('../session-retention');
+    const old = new Date(Date.now() - ACTIVE_SESSION_RETENTION_MS - DAY);
+    const staleActive = async (email: string, messageAt: Date | null) => {
+      const [r] = await run.sql<{ id: string }>(`INSERT INTO relationship DEFAULT VALUES RETURNING id`);
+      const [s] = await run.sql<{ id: string }>(`INSERT INTO session (relationship_id, status) VALUES ($1, 'CREATED') RETURNING id`, [r.id]);
+      const [u, u2] = await run.sql<{ id: string }>(`INSERT INTO "user" (email, first_name) VALUES ($1, 'R'), ('x' || $1, 'R2') RETURNING id`, [email]);
+      await run.sql(`INSERT INTO participant (session_id, user_id) VALUES ($1, $2)`, [s.id, u2.id]);
+      const [p] = await run.sql<{ id: string }>(`INSERT INTO participant (session_id, user_id) VALUES ($1, $2) RETURNING id`, [s.id, u.id]);
+      const [c] = await run.sql<{ id: string }>(`INSERT INTO conversation (participant_id) VALUES ($1) RETURNING id`, [p.id]);
+      if (messageAt)
+        await run.sql(`INSERT INTO message (conversation_id, sender_participant_id, role, content, created_at) VALUES ($1, $2, 'USER', 'recent', $3)`, [c.id, p.id, messageAt]);
+      await run.sql(`UPDATE session SET status = 'INVITED' WHERE id = $1`, [s.id]);
+      await run.sql(`UPDATE session SET status = 'ACTIVE' WHERE id = $1`, [s.id]);
+      await run.sql(`ALTER TABLE session DISABLE TRIGGER USER`);
+      await run.sql(`UPDATE session SET updated_at = $2 WHERE id = $1`, [s.id, old]);
+      await run.sql(`ALTER TABLE session ENABLE TRIGGER USER`);
+      return s.id;
+    };
+    const talking = await staleActive('ts12-talking@e2e.test', new Date());
+    const silent = await staleActive('ts12-silent@e2e.test', null);
+
+    const result = await enforceSessionRetention();
+    expect(result).toMatchObject({ inspected: 2, archived: 1 });
+    const status = async (id: string) => (await run.sql<{ status: string }>(`SELECT status::text AS status FROM session WHERE id = $1`, [id]))[0].status;
+    expect(await status(talking)).toBe('ACTIVE');
+    expect(await status(silent)).toBe('ARCHIVED');
+  });
+
   it('brain_activity retention as the job: sessionless blobs purged within days, session blobs at 30, rows at 90', async () => {
     const { enforceDataRetention } = await import('../data-retention');
     const at = (days: number) => new Date(Date.now() - days * DAY);
