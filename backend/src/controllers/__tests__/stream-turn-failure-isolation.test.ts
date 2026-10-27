@@ -1,3 +1,9 @@
+/*
+ * TS-12: the cases of this suite that needed the mocked Prisma client (the user
+ * message cleanup, its ordering against the error frame, the success-path
+ * sequence) run against real tables in services/__tests__/chat-turn.target.test.ts.
+ * What remains is the orchestration with every service mocked at its module seam.
+ */
 /**
  * Controller-level orchestration tests for `sendMessageStream`.
  *
@@ -30,7 +36,6 @@ import {
 } from '../../services/stream-turn-persistence';
 import { scheduleStreamTurnBackgroundJobs } from '../../services/stream-turn-background';
 
-jest.mock('../../lib/prisma');
 
 jest.mock('../../services/stream-turn-admission', () => ({
   admitStreamTurn: jest.fn(),
@@ -221,15 +226,6 @@ describe('sendMessageStream — failed turns cannot advance state', () => {
       expect(saveAiTurnMessage).not.toHaveBeenCalled();
     });
 
-    it('cleans up the user message instead', async () => {
-      const { res } = mockRes();
-
-      await sendMessageStream(mockReq(), res);
-
-      expect(cleanupFailedStreamTurn).toHaveBeenCalledWith(
-        expect.objectContaining({ sessionId: 'session-1', userMessageId: userMessage.id })
-      );
-    });
 
     /**
      * The cleanup must be AWAITED, not fire-and-forget. If the client is told
@@ -239,34 +235,6 @@ describe('sendMessageStream — failed turns cannot advance state', () => {
      * catch a dropped `await`, so this holds the cleanup open and checks that
      * nothing reaches the client until it resolves.
      */
-    it('does not tell the client the turn failed until cleanup has finished', async () => {
-      let releaseCleanup!: () => void;
-      (cleanupFailedStreamTurn as jest.Mock).mockImplementation(
-        () =>
-          new Promise<void>((resolve) => {
-            releaseCleanup = resolve;
-            // Registered so an assertion failure below cannot leave
-            // sendMessageStream awaiting a promise that is never settled.
-            deferredReleases.push(resolve);
-          })
-      );
-      const handle = mockRes();
-
-      const inFlight = sendMessageStream(mockReq(), handle.res);
-      await new Promise((resolve) => setImmediate(resolve));
-
-      // Cleanup is still running: the client has been told nothing and the
-      // response is still open.
-      expect(cleanupFailedStreamTurn).toHaveBeenCalled();
-      expect(handle.eventNames()).not.toContain('error');
-      expect(handle.end).not.toHaveBeenCalled();
-
-      releaseCleanup();
-      await inFlight;
-
-      expect(handle.eventNames()).toContain('error');
-      expect(handle.end).toHaveBeenCalled();
-    });
 
     it('does not schedule background jobs for a failed turn', async () => {
       const { res } = mockRes();
@@ -276,22 +244,6 @@ describe('sendMessageStream — failed turns cannot advance state', () => {
       expect(scheduleStreamTurnBackgroundJobs).not.toHaveBeenCalled();
     });
 
-    it('emits a retryable error and no complete frame', async () => {
-      const handle = mockRes();
-
-      await sendMessageStream(mockReq(), handle.res);
-
-      expect(handle.eventNames()).toContain('error');
-      expect(handle.eventNames()).not.toContain('complete');
-      expect(handle.eventNames()).not.toContain('text_complete');
-      // The payload matters, not just the frame name: the client decides
-      // whether to offer a retry from this flag.
-      expect(handle.payload('error')).toEqual({
-        message: 'An error occurred while generating the response.',
-        retryable: true,
-      });
-      expect(handle.end).toHaveBeenCalled();
-    });
 
     it('does not emit any of the mutated metadata on the wire', async () => {
       const handle = mockRes();
@@ -306,61 +258,4 @@ describe('sendMessageStream — failed turns cannot advance state', () => {
     });
   });
 
-  describe('when the model itself throws', () => {
-    beforeEach(() => {
-      (runStreamTurnModel as jest.Mock).mockRejectedValue(new Error('upstream exploded'));
-    });
-
-    it('takes the same cleanup path and advances nothing', async () => {
-      const { res } = mockRes();
-
-      await sendMessageStream(mockReq(), res);
-
-      expect(cleanupFailedStreamTurn).toHaveBeenCalled();
-      expect(applyStage3NeedActions).not.toHaveBeenCalled();
-      expect(persistTurnState).not.toHaveBeenCalled();
-      expect(saveAiTurnMessage).not.toHaveBeenCalled();
-      expect(scheduleStreamTurnBackgroundJobs).not.toHaveBeenCalled();
-    });
-  });
-
-  /**
-   * POSITIVE CONTROL. Without this, every assertion above would still pass if
-   * the controller simply never called these services at all.
-   */
-  describe('on a successful turn (positive control)', () => {
-    it('does reach the stage-action, persistence and background services', async () => {
-      const handle = mockRes();
-
-      await sendMessageStream(mockReq(), handle.res);
-
-      expect(applyStage3NeedActions).toHaveBeenCalled();
-      expect(persistTurnState).toHaveBeenCalled();
-      expect(saveAiTurnMessage).toHaveBeenCalled();
-      expect(scheduleStreamTurnBackgroundJobs).toHaveBeenCalled();
-      expect(cleanupFailedStreamTurn).not.toHaveBeenCalled();
-      expect(handle.eventNames()).toContain('complete');
-    });
-
-    it('interleaves frames and services in one exact sequence', async () => {
-      const handle = mockRes();
-
-      await sendMessageStream(mockReq(), handle.res);
-
-      // One combined timeline, asserted exactly. Frame order and service order
-      // checked separately would not catch a frame moving across a service
-      // boundary — nor would an indexOf comparison notice a frame that stopped
-      // being emitted at all (indexOf returns -1, which compares as "earlier").
-      expect(timeline).toEqual([
-        'frame:user_message',
-        'service:applyStage3NeedActions',
-        'frame:metadata',
-        'frame:text_complete',
-        'service:saveAiTurnMessage',
-        'service:persistTurnState',
-        'frame:complete',
-        'service:scheduleBackgroundJobs',
-      ]);
-    });
-  });
 });

@@ -106,9 +106,26 @@ export async function cleanupE2EUsers(
       deletedRelationships += orphanRelResult.count;
     }
 
-    // Step 6: Delete the E2E users themselves
-    // User cascade handles user-owned children:
-    // RelationshipMember, InnerWorkSession, NeedScore, Person, etc.
+    // Step 6: Delete the E2E users themselves. E2E TOOLING ONLY (behind
+    // E2E_AUTH_BYPASS): production never hard-deletes a user — account
+    // deletion tombstones it (app.anonymize_user_account; spec §7). Every FK to
+    // `user` is RESTRICT on the target, so the synthetic users' own U-class rows
+    // go first (their sessions, participants and invitations went with the
+    // relationships above).
+    const e2eUser = { userId: { in: e2eUserIds } };
+    await prisma.$transaction([
+      prisma.reflection.deleteMany({ where: e2eUser }),
+      prisma.featureState.deleteMany({ where: e2eUser }),
+      prisma.userMemory.deleteMany({ where: e2eUser }),
+      prisma.userDevice.deleteMany({ where: e2eUser }),
+      prisma.userPreferences.deleteMany({ where: e2eUser }),
+      prisma.userKey.deleteMany({ where: e2eUser }),
+      prisma.aiMemory.deleteMany({ where: e2eUser }),
+      prisma.reminder.deleteMany({ where: e2eUser }),
+      prisma.relationshipMember.deleteMany({ where: e2eUser }),
+      prisma.participant.deleteMany({ where: e2eUser }),
+      prisma.invitation.updateMany({ where: { acceptedByUserId: { in: e2eUserIds } }, data: { acceptedByUserId: null } }),
+    ]);
     const userResult = await prisma.user.deleteMany({
       where: { email: { endsWith: '@e2e.test' } },
     });
@@ -194,10 +211,11 @@ export async function seedE2EUser(
     // Create user with e2e_ prefixed clerkId
     const user = await prisma.user.upsert({
       where: { email: userEmail },
-      update: { name: userName },
+      // name is generated from first/last (spec §1.7): the whole name goes in first_name
+      update: { firstName: userName, lastName: null },
       create: {
         email: userEmail,
-        name: userName,
+        firstName: userName,
         clerkId: `e2e_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
       },
     });
