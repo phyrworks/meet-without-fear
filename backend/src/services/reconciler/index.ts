@@ -14,35 +14,31 @@
  *    a. Generate a suggestion for B to share with A (status = AWAITING_SHARING)
  *    b. B can accept, refine, or decline
  *    c. If B shares, A receives the context and can refine their empathy (status = REFINING)
- * 5. Once A's empathy is approved (or B declines to share), A's empathy is REVEALED to B
+ * 5. Once every direction is READY (or B declines to share), the attempts are REVEALED
+ *
+ * Target shape (TS-10): attempts are immutable rounds; every status move is
+ * app.empathy_set_status; results are the subject's only. See empathy-store.ts.
  *
  * Module structure:
- * - circuit-breaker.ts: Attempt tracking and skip logic
- * - analysis.ts: Gap analysis, AI prompt building (runReconciler)
- * - sharing.ts: Share suggestion generation/refinement
- * - state.ts: Empathy status transitions, reveal logic
+ * - circuit-breaker.ts: round counting and the already-shared check
+ * - analysis.ts: gap analysis, persistence (job), runReconciler
+ * - sharing.ts: share suggestion generation/refinement, the subject's response
+ * - state.ts: empathy status transitions, reveal logic, status and summary
  */
 
 // Circuit Breaker
-export {
-  checkAttempts,
-  incrementAttempts,
-  hasContextAlreadyBeenShared,
-  markResultHandledAlreadyShared,
-} from './circuit-breaker';
+export { checkAttempts, hasContextAlreadyBeenShared } from './circuit-breaker';
 
 // Analysis
-export {
-  analyzeEmpathyGap,
-  loadRecentSubjectStage2Turns,
-  runReconciler,
-} from './analysis';
+export { analyzeEmpathyGap, loadRecentSubjectStage2Turns, runReconciler, persistAnalysis } from './analysis';
 
 // Sharing
 export {
   generateShareSuggestionForDirection,
+  generateShareSuggestion,
   generateShareOffer,
   respondToShareSuggestion,
+  shareAccepted,
   getShareSuggestionForUser,
   getSharedContextForGuesser,
   getSharedContentDeliveryStatus,
@@ -59,4 +55,5 @@ export {
   hasPartnerCompletedStage1,
   getReconcilerStatus,
   generateReconcilerSummary,
+  directionParties,
 } from './state';

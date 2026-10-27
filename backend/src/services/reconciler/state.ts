@@ -3,32 +3,34 @@
  *
  * Empathy status transitions, reveal logic, and orchestration of the full
  * reconciler flow including state transitions for a single direction.
+ *
+ * Target shape (TS-10): every status move is `app.empathy_set_status` on the
+ * JOB connection, guarded by the `status_version` the analysis started from
+ * (a late result never overwrites a newer decision — spec §7 service rule).
+ * The reveal is the job's: one Serializable transaction calls the function for
+ * every READY current round; the function owns the reveal gate and writes the
+ * subject's delivered EMPATHY_STATEMENT, and the job stamps the delivery.
  */
 
-import { prisma } from '../../lib/prisma';
+import type { PrismaClient } from '../../generated/prisma/client';
+import { getJobPrisma, prisma } from '../../lib/prisma';
 import { logger } from '../../lib/logger';
-import { EmpathyStatus, MessageRole } from '@meet-without-fear/shared';
-import type { Prisma } from '../../generated/prisma/client';
 import { publishMessageAIResponse } from '../realtime';
 import { transition } from '../empathy-state-machine';
+import { createFacilitatorMessage } from '../message-store';
+import { aiNote, lastAiNote, messageDTO } from '../empathy-messages';
 import {
-  buildReconcilerSummaryPrompt,
-  type ReconcilerSummaryContext,
-} from '../stage-prompts';
-import type {
-  ReconcilerResult,
-  ReconcilerSummary,
-} from '@meet-without-fear/shared';
-
-type EmpathyAttemptState = {
-  sourceUserId: string | null;
-  status: string;
-};
-
-type ReconcilerResultWithOffer = {
-  recommendedAction: string;
-  shareOffer?: { status: string } | null;
-};
+  directionOf,
+  directionStatuses,
+  jobMoveIfUnchanged,
+  markAttemptDelivery,
+  partyOf,
+  READY_OR_LATER,
+  sessionParties,
+  type SessionParty,
+  type TargetEmpathyStatus,
+} from '../empathy-store';
+import type { ReconcilerResult, ReconcilerSummary } from '@meet-without-fear/shared';
 
 import {
   type UserInfo,
@@ -37,109 +39,82 @@ import {
   getEmpathyData,
   getWitnessingContent,
   analyzeEmpathyGap,
+  persistAnalysis,
+  generateAbstractGuidance,
+  currentResultFor,
+  guidanceFor,
+  toUserInfo,
+  RESULT_SELECT,
+  type StoredReconcilerResult,
 } from './analysis';
-import { checkAttempts, hasContextAlreadyBeenShared, markResultHandledAlreadyShared } from './circuit-breaker';
+import { checkAttempts, hasContextAlreadyBeenShared } from './circuit-breaker';
 import { generateShareSuggestion } from './sharing';
+
+// ============================================================================
+// Helper: resolve the two parties of a direction
+// ============================================================================
+
+export async function directionParties(
+  sessionId: string,
+  guesserUserId: string,
+  subjectUserId: string,
+): Promise<{ guesser: UserInfo; subject: UserInfo; guesserParty: SessionParty; subjectParty: SessionParty } | null> {
+  const parties = await sessionParties(sessionId);
+  const g = partyOf(parties, { userId: guesserUserId });
+  const s = partyOf(parties, { userId: subjectUserId });
+  if (!g || !s) return null;
+  return { guesser: toUserInfo(g, 'User'), subject: toUserInfo(s, 'User'), guesserParty: g, subjectParty: s };
+}
 
 // ============================================================================
 // Helper: Mark empathy as READY
 // ============================================================================
 
 /**
- * Mark guesser's empathy attempt as READY, create alignment message, and check reveal.
- * This helper extracts the common logic when no sharing is needed.
+ * Move the guesser's current round to READY (job, guarded by the status
+ * version the caller read), write the alignment message into the guesser's
+ * own conversation in the same job transaction, and check the reveal.
  *
  * @param circuitBreakerTripped - If true, uses a natural transition message instead of accuracy feedback
  */
 async function markEmpathyReady(
   sessionId: string,
-  guesserId: string,
+  guesser: SessionParty,
   subjectName: string,
-  circuitBreakerTripped = false
-): Promise<void> {
-  logger.info('Marking empathy as READY', { guesserId });
+  attempt: { attemptId: string; statusVersion: number; status: string },
+  circuitBreakerTripped = false,
+): Promise<boolean> {
+  logger.info('Marking empathy as READY', { guesserParticipantId: guesser.participantId });
 
-  // Choose message based on whether circuit breaker tripped
   const alignmentMessage = circuitBreakerTripped
     ? `You've shared your perspective on what ${subjectName} might be experiencing. ${subjectName} is also reflecting on your perspective — once they're done, you'll both see what each other shared.`
     : `${subjectName} has felt heard. Your attempt to imagine what they're feeling was quite accurate. ${subjectName} is now considering your perspective, and once they're done, you'll both see what each other shared.`;
 
-  // De-dup guard: reconciliation iterates every time either side refines, so
-  // the shortcut path can fire several times in a row with the same message
-  // content. If the last AI message to this guesser already says the same
-  // thing, just update the empathy status without re-posting the chat line.
-  const lastAiMessageForGuesser = await prisma.message.findFirst({
-    where: { sessionId, forUserId: guesserId, role: 'AI' },
-    orderBy: { timestamp: 'desc' },
-    select: { content: true },
+  // Validates the move against the table before asking the database.
+  transition(attempt.status, 'MARK_READY');
+
+  // De-dup guard: the shortcut path can fire several times in a row with the
+  // same text; do not re-post it.
+  const conversationId = guesser.mainConversationId;
+  const alreadyPosted = conversationId ? (await lastAiNote(conversationId))?.trim() === alignmentMessage.trim() : true;
+
+  let saved: Awaited<ReturnType<typeof createFacilitatorMessage>> | null = null;
+  const moved = await jobMoveIfUnchanged(attempt.attemptId, attempt.statusVersion, 'READY', async tx => {
+    if (alreadyPosted || !conversationId) return;
+    saved = await createFacilitatorMessage({ conversationId, content: alignmentMessage, client: tx });
   });
-  const alreadyPosted = lastAiMessageForGuesser?.content?.trim() === alignmentMessage.trim();
-
-  // Wrap state transition + status update + message creation in a transaction
-  // to ensure atomicity — a partial write here could leave the attempt READY
-  // without a corresponding alignment message, or vice versa.
-  const savedMessage = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
-    // Validate state transition before updating
-    const attempt = await tx.empathyAttempt.findFirst({
-      where: { sessionId, sourceUserId: guesserId },
-    });
-    if (attempt) {
-      transition(attempt.status as EmpathyStatus, 'MARK_READY');
-    }
-
-    // Update empathy attempt status to READY
-    await tx.empathyAttempt.updateMany({
-      where: { sessionId, sourceUserId: guesserId },
-      data: { status: 'READY', statusVersion: { increment: 1 } },
-    });
-
-    if (alreadyPosted) {
-      return null;
-    }
-
-    // Create alignment message
-    const msg = await tx.message.create({
-      data: {
-        sessionId,
-        senderId: null, // AI message
-        forUserId: guesserId,
-        role: 'AI',
-        content: alignmentMessage,
-        stage: 2,
-      },
-    });
-
-    return msg;
-  });
-
-  if (!savedMessage) {
-    logger.info('Skipping duplicate alignment message', { guesserId });
-    // Still need to check mutual reveal after the status update above.
-    await checkAndRevealBothIfReady(sessionId);
-    return;
+  if (!moved) {
+    logger.info('Attempt moved on since the analysis started; READY not written', { attemptId: attempt.attemptId });
+    return false;
   }
 
-  logger.debug('Created alignment message', { guesserId, alignmentMessage });
+  const note = saved as Awaited<ReturnType<typeof createFacilitatorMessage>> | null;
+  if (note && guesser.userId) {
+    await publishMessageAIResponse(sessionId, guesser.userId, await messageDTO(note, sessionId, guesser.participantId), {});
+  }
 
-  // Side effects (Ably publish, reveal check) stay outside the transaction
-  // so they don't hold the DB connection open during network I/O.
-  await publishMessageAIResponse(
-    sessionId,
-    guesserId,
-    {
-      id: savedMessage.id,
-      sessionId,
-      senderId: null,
-      content: savedMessage.content,
-      timestamp: savedMessage.timestamp.toISOString(),
-      role: MessageRole.AI,
-      stage: savedMessage.stage,
-    },
-    {} // No metadata needed
-  );
-
-  // Check if both directions are now READY and reveal both if so
   await checkAndRevealBothIfReady(sessionId);
+  return true;
 }
 
 // ============================================================================
@@ -147,405 +122,226 @@ async function markEmpathyReady(
 // ============================================================================
 
 /**
- * Run the reconciler for a SINGLE direction when subject completes Stage 1.
- * This is the new asymmetric flow - reconciler runs as soon as:
- * 1. Guesser has submitted empathy (status = HELD)
- * 2. Subject completes Stage 1 (confirms feelHeard)
- *
- * @param sessionId - The session ID
- * @param guesserId - The user who submitted the empathy statement (guesser)
- * @param subjectId - The user whose Stage 1 content will be compared (subject)
- * @returns The reconciler result for this direction
+ * Run the reconciler for a SINGLE direction when the subject completes Stage 1
+ * (or after the guesser resubmits). User ids in, as before (realtime and the
+ * e2e hook are user-keyed); participants inside.
  */
 export async function runReconcilerForDirection(
   sessionId: string,
   guesserId: string,
-  subjectId: string
+  subjectId: string,
 ): Promise<{
   result: ReconcilerResult | null;
   empathyStatus: 'READY' | 'AWAITING_SHARING';
-  shareOffer: {
-    suggestedContent: string;
-    reason: string;
-  } | null;
+  shareOffer: { suggestedContent: string; reason: string } | null;
 }> {
   logger.info('Running asymmetric reconciliation', { guesserId, subjectId });
 
-  // Get user names
-  const [guesser, subject] = await Promise.all([
-    prisma.user.findUnique({
-      where: { id: guesserId },
-      select: { id: true, name: true, firstName: true },
-    }),
-    prisma.user.findUnique({
-      where: { id: subjectId },
-      select: { id: true, name: true, firstName: true },
-    }),
-  ]);
-
-  if (!guesser || !subject) {
-    logger.error('Guesser or subject not found in DB', { guesserId, subjectId });
+  const parties = await directionParties(sessionId, guesserId, subjectId);
+  if (!parties) {
+    logger.error('Guesser or subject is not a participant of the session', { guesserId, subjectId });
     throw new Error('Guesser or subject not found');
   }
+  const { guesser, subject, guesserParty } = parties;
 
-  const guesserInfo: UserInfo = {
-    id: guesser.id,
-    name: guesser.firstName || guesser.name || 'User',
-  };
-  const subjectInfo: UserInfo = {
-    id: subject.id,
-    name: subject.firstName || subject.name || 'User',
-  };
-
-  logger.debug('Reconciler participants', { guesserId: guesserInfo.id, subjectId: subjectInfo.id });
-
-  // ============================================================================
-  // CIRCUIT BREAKER CHECK
-  // ============================================================================
-  const { shouldSkipReconciler, attempts } = await checkAttempts(
-    sessionId,
-    guesserId,
-    subjectId
-  );
-
-  if (shouldSkipReconciler) {
-    logger.info('Circuit breaker tripped, forcing READY', { attempts, guesserId: guesserInfo.id, subjectId: subjectInfo.id });
-    await markEmpathyReady(sessionId, guesserId, subjectInfo.name, true);
-    return {
-      result: null,
-      empathyStatus: 'READY',
-      shareOffer: null,
-    };
-  }
-
-  // Get guesser's empathy statement
-  const empathyData = await getEmpathyData(sessionId, guesserId);
+  const empathyData = await getEmpathyData(guesser.participantId, subject.participantId);
   if (!empathyData) {
-    logger.error('Guesser has not submitted empathy statement', { guesserId: guesserInfo.id, sessionId });
+    logger.error('Guesser has not submitted empathy statement', { guesserId, sessionId });
     throw new Error('Guesser has not submitted empathy statement');
   }
-  logger.debug('Found guesser empathy statement', { length: empathyData.statement.length });
 
-  // Get subject's witnessing content (Stage 1)
-  const witnessingContent = await getWitnessingContent(sessionId, subjectId);
+  // CIRCUIT BREAKER: rounds − 1 resubmissions (spec §1.2 RefinementAttemptCounter → rounds).
+  const { shouldSkipReconciler, attempts } = await checkAttempts(guesser.participantId, subject.participantId);
+  if (shouldSkipReconciler) {
+    logger.info('Circuit breaker tripped, forcing READY', { attempts, guesserId, subjectId });
+    await markEmpathyReady(sessionId, guesserParty, subject.name, empathyData, true);
+    return { result: null, empathyStatus: 'READY', shareOffer: null };
+  }
+
+  const witnessingContent = await getWitnessingContent(sessionId, subject.participantId, subject.id);
   if (!witnessingContent.userMessages) {
-    logger.error('Subject has no Stage 1 content', { subjectId: subjectInfo.id, sessionId });
+    logger.error('Subject has no Stage 1 content', { subjectId, sessionId });
     throw new Error('Subject has no Stage 1 content');
   }
-  logger.debug('Found subject witnessing content', { themes: witnessingContent.themes.length, chars: witnessingContent.userMessages.length });
 
-  // Run the analysis
   const result = await analyzeEmpathyGap({
     sessionId,
-    guesser: guesserInfo,
-    subject: subjectInfo,
+    guesser,
+    subject,
     empathyStatement: empathyData.statement,
     witnessingContent,
+    attemptId: empathyData.attemptId,
   });
 
-  // Determine outcome based on gaps
-  // OFFER_SHARING: Significant gaps - strongly recommend sharing
-  // OFFER_OPTIONAL: Moderate gaps - optionally offer sharing (only if suggestedShareFocus exists)
-  // PROCEED: No/minor gaps - proceed without sharing
   const action = result.recommendation.action;
   const hasSuggestedFocus = !!result.recommendation.suggestedShareFocus;
-
-  // Treat OFFER_OPTIONAL with null suggestedShareFocus as PROCEED (US-8)
-  const shouldOfferSharing =
-    action === 'OFFER_SHARING' ||
-    (action === 'OFFER_OPTIONAL' && hasSuggestedFocus);
-
+  const shouldOfferSharing = action === 'OFFER_SHARING' || (action === 'OFFER_OPTIONAL' && hasSuggestedFocus);
   logger.info('Reconciler outcome', { severity: result.gaps.severity, action, hasSuggestedFocus, shouldOfferSharing });
 
-  if (!shouldOfferSharing) {
-    // No sharing needed - mark as READY (will reveal when both directions are ready)
-    logger.info('No sharing needed, marking READY', { action, hasSuggestedFocus, guesserId: guesserInfo.id, subjectId: subjectInfo.id });
-    await markEmpathyReady(sessionId, guesserId, subjectInfo.name);
+  const contextAlreadyShared =
+    shouldOfferSharing && (await hasContextAlreadyBeenShared(guesser.participantId, subject.participantId));
 
-    return {
-      result,
-      empathyStatus: 'READY',
-      shareOffer: null,
-    };
-  }
-
-  // Check if context has already been shared for this direction
-  const contextAlreadyShared = await hasContextAlreadyBeenShared(sessionId, guesserId, subjectId);
-  if (contextAlreadyShared) {
-    logger.info('Context already shared, skipping AWAITING_SHARING and marking READY', { subjectId, guesserId });
-    // Context was already shared but gaps remain after resubmission.
-    // Mark READY to prevent infinite loop, using the circuit breaker message
-    // (neutral waiting language) instead of the false "quite accurate" claim.
-    await markEmpathyReady(sessionId, guesserId, subjectInfo.name, true);
-
-    // Mark the reconciler result "handled" so the GET /share-offer fallback
-    // (and any other downstream reader) won't synthesize a redundant suggestion.
-    await markResultHandledAlreadyShared(sessionId, guesserId, subjectId);
-
-    return {
-      result,
-      empathyStatus: 'READY',
-      shareOffer: null,
-    };
-  }
-
-  // Significant gaps - generate share suggestion for subject
-  logger.info('Significant gaps found, generating share suggestion', { subjectId: subjectInfo.id });
-
-  // Query the DB record once (it was just created in analyzeEmpathyGap)
-  const dbReconcilerResult = await prisma.reconcilerResult.findFirst({
-    where: {
-      sessionId,
-      guesserId,
-      subjectId,
-      supersededAt: null,
-    },
-  });
-
-  const shareOffer = await generateShareSuggestion(
-    sessionId,
-    guesserInfo,
-    subjectInfo,
-    result,
-    witnessingContent,
-    dbReconcilerResult || undefined
-  );
-
-  // Validate and update empathy attempt status to AWAITING_SHARING atomically.
-  // The read (for state-machine validation) and write must be in one transaction
-  // to prevent a concurrent caller from seeing stale status.
-  logger.info('Updating empathy status to AWAITING_SHARING', { guesserId: guesserInfo.id });
-  await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
-    const attemptForAwait = await tx.empathyAttempt.findFirst({
-      where: { sessionId, sourceUserId: guesserId },
-    });
-    if (attemptForAwait) {
-      transition(attemptForAwait.status as EmpathyStatus, 'GAPS_DETECTED');
+  if (!shouldOfferSharing || contextAlreadyShared) {
+    if (result.fresh) {
+      const stored = await persistAnalysis({
+        attemptId: empathyData.attemptId,
+        authorParticipantId: guesser.participantId,
+        subjectParticipantId: subject.participantId,
+        result,
+        guidance: result.abstractGuidance ?? generateAbstractGuidance(result),
+      });
+      if (!stored) return { result, empathyStatus: 'READY', shareOffer: null };
     }
-    await tx.empathyAttempt.updateMany({
-      where: { sessionId, sourceUserId: guesserId },
-      data: { status: 'AWAITING_SHARING', statusVersion: { increment: 1 } },
+    // Context already shared but gaps remain after resubmission: READY, with
+    // the neutral circuit-breaker text instead of the false "quite accurate".
+    await markEmpathyReady(sessionId, guesserParty, subject.name, empathyData, contextAlreadyShared);
+    return { result, empathyStatus: 'READY', shareOffer: null };
+  }
+
+  // Significant gaps: the share suggestion for the subject, persisted with the
+  // analysis (job), then the guesser's round → AWAITING_SHARING (guarded).
+  const shareOffer = await generateShareSuggestion(sessionId, guesser, subject, result, witnessingContent, {
+    attemptId: empathyData.attemptId,
+    storedResultId: result.storedResultId,
+    fresh: !!result.fresh,
+  });
+
+  const moved = await jobMoveIfUnchanged(empathyData.attemptId, empathyData.statusVersion, 'AWAITING_SHARING');
+  if (!moved) {
+    logger.info('Attempt moved on since the analysis started; AWAITING_SHARING not written', {
+      attemptId: empathyData.attemptId,
     });
-  });
+  }
 
-  // Notify the guesser that the subject is considering a share suggestion (US-5)
-  // Include full empathy status to avoid extra HTTP round-trip
-  const { notifyPartner } = await import('../realtime');
-  const { buildEmpathyExchangeStatus } = await import('../empathy-status');
-  const guesserEmpathyStatus = await buildEmpathyExchangeStatus(sessionId, guesserId);
-  await notifyPartner(sessionId, guesserId, 'empathy.status_updated', {
-    sessionId,
-    timestamp: Date.now(),
-    status: 'AWAITING_SHARING',
-    forUserId: guesserId,
-    empathyStatus: guesserEmpathyStatus,
-    subjectName: subjectInfo.name,
-    message: `${subjectInfo.name} is considering a suggestion to share more`,
-  }).catch((err) => {
-    logger.warn('Failed to notify guesser of AWAITING_SHARING status', { error: (err as Error).message });
-  });
+  // Notify the guesser that the subject is considering a share suggestion (US-5).
+  if (guesser.id) {
+    const { notifyPartner } = await import('../realtime');
+    const { buildEmpathyExchangeStatus } = await import('../empathy-status');
+    const guesserEmpathyStatus = await buildEmpathyExchangeStatus(sessionId, guesser.id);
+    await notifyPartner(sessionId, guesser.id, 'empathy.status_updated', {
+      sessionId,
+      timestamp: Date.now(),
+      status: 'AWAITING_SHARING',
+      forUserId: guesser.id,
+      empathyStatus: guesserEmpathyStatus,
+      subjectName: subject.name,
+      message: `${subject.name} is considering a suggestion to share more`,
+    }).catch(err => {
+      logger.warn('Failed to notify guesser of AWAITING_SHARING status', { error: (err as Error).message });
+    });
+  }
 
-  return {
-    result,
-    empathyStatus: 'AWAITING_SHARING',
-    shareOffer,
-  };
+  return { result, empathyStatus: 'AWAITING_SHARING', shareOffer };
 }
 
 // ============================================================================
 // Check Partner Stage 1 Completion
 // ============================================================================
 
-/**
- * Check if partner has completed Stage 1 (used to determine if reconciler should run).
- */
-export async function hasPartnerCompletedStage1(
-  sessionId: string,
-  partnerId: string
-): Promise<boolean> {
-  const progress = await prisma.stageProgress.findUnique({
-    where: {
-      sessionId_userId_stage: {
-        sessionId,
-        userId: partnerId,
-        stage: 1,
-      },
-    },
+/** Has this user (a participant of the session) reached `feel_heard`? */
+export async function hasPartnerCompletedStage1(sessionId: string, partnerId: string): Promise<boolean> {
+  const n = await prisma.participantMilestone.count({
+    where: { milestoneKey: 'feel_heard', participant: { sessionId, userId: partnerId } },
   });
-
-  if (!progress) return false;
-
-  const gates = progress.gatesSatisfied as Record<string, unknown> | null;
-  return gates?.feelHeard === true || gates?.feelHeardConfirmed === true;
+  return n > 0;
 }
 
 // ============================================================================
-// Mutual Reveal: Both directions must be READY before revealing either
+// Mutual Reveal: every direction must be ready before revealing any
 // ============================================================================
 
+interface CurrentRound {
+  id: string;
+  author_participant_id: string;
+  subject_participant_id: string;
+  status: TargetEmpathyStatus;
+}
+
 /**
- * Check if both empathy attempts are ready for review and reveal any unrevealed
- * READY attempt. This also handles the refinement path where one direction was
- * already VALIDATED and the other partner resubmits a READY revision.
+ * Reveal every READY current round once every direction of the session is
+ * READY or VALIDATED (the refinement path: one direction already validated,
+ * the other resubmitted). JOB connection, one Serializable transaction: the
+ * read, the `app.empathy_set_status(…, 'REVEALED')` calls (the function
+ * re-checks the gate and writes each subject's delivered copy) and the
+ * delivery stamps.
  *
- * @returns true if both were revealed, false otherwise
+ * @returns true if anything was revealed
  */
 export async function checkAndRevealBothIfReady(sessionId: string): Promise<boolean> {
   logger.debug('checkAndRevealBothIfReady called', { sessionId });
+  const parties = await sessionParties(sessionId);
+  if (parties.length !== 2) return false;
+  const pids = parties.map(p => p.participantId);
 
-  // Use a Serializable transaction to prevent the TOCTOU race where two
-  // concurrent callers both read "both READY" and both try to reveal.
-  // Serializable isolation ensures the read-check-write is atomic.
-  const revealResult = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
-    // Get both empathy attempts for this session
-    const attempts = await tx.empathyAttempt.findMany({
-      where: { sessionId },
-    });
+  const revealed = await getJobPrisma().$transaction(
+    async tx => {
+      const rounds = await tx.$queryRaw<CurrentRound[]>`
+        SELECT DISTINCT ON (a.author_participant_id, a.subject_participant_id)
+               a.id, a.author_participant_id, a.subject_participant_id, a.status::text AS status
+        FROM empathy_attempt a
+        WHERE a.author_participant_id = ANY(${pids}::uuid[])
+        ORDER BY a.author_participant_id, a.subject_participant_id,
+                 (a.status NOT IN ('SUPERSEDED', 'VALIDATED')) DESC, a.round DESC`;
+      if (rounds.length !== 2) {
+        logger.debug('Not enough empathy attempts for mutual reveal', { sessionId, count: rounds.length });
+        return null;
+      }
+      const ready = rounds.every(r => r.status === 'READY' || r.status === 'VALIDATED');
+      const toReveal = rounds.filter(r => r.status === 'READY');
+      if (!ready || toReveal.length === 0) return null;
 
-    if (attempts.length !== 2) {
-      logger.debug('Not enough empathy attempts for mutual reveal', { sessionId, count: attempts.length });
-      return null;
-    }
+      const at = new Date();
+      for (const r of toReveal) {
+        transition(r.status, 'MUTUAL_REVEAL');
+        await tx.$queryRaw`SELECT app.empathy_set_status(${r.id}::uuid, 'REVEALED'::empathy_status, NULL::text)`;
+        await markAttemptDelivery(r.id, 'DELIVERED', at, tx as unknown as PrismaClient);
+      }
+      return toReveal;
+    },
+    { isolationLevel: 'Serializable' },
+  );
 
-    const readyStatuses = new Set(['READY', 'VALIDATED']);
-    const readyForReview = attempts.every((a: EmpathyAttemptState) => readyStatuses.has(a.status));
-    const hasUnrevealedReadyAttempt = attempts.some((a: EmpathyAttemptState) => a.status === 'READY');
-    if (!readyForReview || !hasUnrevealedReadyAttempt) {
-      const statuses = Object.fromEntries(attempts.map((a: EmpathyAttemptState) => [a.sourceUserId, a.status]));
-      logger.debug('Not ready to reveal empathy attempts yet', { statuses });
-      return null;
-    }
+  if (!revealed) return false;
 
-    logger.info('Empathy attempts ready for review, revealing READY attempts', { sessionId });
-
-    // Validate state transition for unrevealed attempts.
-    for (const attempt of attempts.filter((a: EmpathyAttemptState) => a.status === 'READY')) {
-      transition(attempt.status as EmpathyStatus, 'MUTUAL_REVEAL');
-    }
-
-    const attemptsToReveal = attempts.filter((a: EmpathyAttemptState) => a.status === 'READY');
-
-    // Reveal any READY attempt. VALIDATED attempts were already revealed and
-    // seen; leave their terminal state intact.
-    const revealedNow = new Date();
-    await tx.empathyAttempt.updateMany({
-      where: {
-        sessionId,
-        status: 'READY',
-      },
-      data: {
-        status: 'REVEALED',
-        statusVersion: { increment: 1 },
-        revealedAt: revealedNow,
-        deliveryStatus: 'DELIVERED',
-        deliveredAt: revealedNow,
-      },
-    });
-
-    return { allAttempts: attempts, revealedAttempts: attemptsToReveal };
-  }, {
-    isolationLevel: 'Serializable',
-  });
-
-  if (!revealResult) {
-    return false;
-  }
-
-  const { allAttempts, revealedAttempts } = revealResult;
-
-  // Notifications stay outside the transaction to avoid holding the DB
-  // connection open during network I/O.
+  const byPid = new Map(parties.map(p => [p.participantId, p]));
   const { notifyPartner } = await import('../realtime');
   const { buildEmpathyExchangeStatusForBothUsers } = await import('../empathy-status');
   const allStatuses = await buildEmpathyExchangeStatusForBothUsers(sessionId);
 
-  for (const attempt of revealedAttempts) {
-    const userId = attempt.sourceUserId!;
-    // Notify the guesser that their empathy was revealed to their partner
-    // Include guesserUserId so mobile can filter - only the SUBJECT (non-guesser) should see validation_needed modal
-    await notifyPartner(sessionId, userId, 'empathy.revealed', {
+  for (const r of revealed) {
+    const author = byPid.get(r.author_participant_id);
+    if (!author?.userId) continue;
+    await notifyPartner(sessionId, author.userId, 'empathy.revealed', {
       direction: 'outgoing',
-      guesserUserId: userId,
-      forUserId: userId,
-      empathyStatus: allStatuses[userId],
+      guesserUserId: author.userId,
+      forUserId: author.userId,
+      empathyStatus: allStatuses[author.userId],
     });
   }
 
-  // Create quality commentary messages so each subject knows what to expect
-  // when reviewing their partner's empathy attempt (issue #497)
+  // Quality commentary so each subject knows what to expect (issue #497):
+  // into the SUBJECT's conversation, from the subject's own result.
   try {
-    const justRevealed = revealedAttempts;
-    if (justRevealed.length > 0) {
-      const allUserIds = allAttempts.map((a: EmpathyAttemptState) => a.sourceUserId!);
-
-      // Get reconciler results and user names
-      const [reconcilerResults, users] = await Promise.all([
-        prisma.reconcilerResult.findMany({
-          where: { sessionId, supersededAt: null },
-        }),
-        prisma.user.findMany({
-          where: { id: { in: allUserIds } },
-          select: { id: true, firstName: true, name: true },
-        }),
-      ]);
-
-      const nameOf = (id: string) => {
-        const match = users.find((u: { id: string }) => u.id === id);
-        return match?.firstName || match?.name || 'Your partner';
-      };
-
-      for (const attempt of justRevealed) {
-        const guesserId = attempt.sourceUserId!;
-        const subjectId = allUserIds.find((uid: string) => uid !== guesserId);
-        if (!subjectId) continue;
-
-        // Find the reconciler result for this direction (guesser → subject)
-        const result = reconcilerResults.find(
-          (r: { guesserId: string; subjectId: string }) => r.guesserId === guesserId && r.subjectId === subjectId
-        );
-
-        const guesserName = nameOf(guesserId);
-        const hasGaps = result && (result.gapSeverity === 'moderate' || result.gapSeverity === 'significant');
-
-        const qualityMessage = hasGaps
-          ? `${guesserName}'s attempt to understand your experience is ready for you to review. It may not fully capture everything you shared — if something feels off or missing, you can share feedback to help them understand better.`
-          : `${guesserName}'s attempt to understand your experience is ready for you to review. Take a moment to read it and let us know how it feels.`;
-
-        const savedMsg = await prisma.message.create({
-          data: {
-            sessionId,
-            senderId: null,
-            forUserId: subjectId,
-            role: 'AI',
-            content: qualityMessage,
-            stage: 2,
-          },
-        });
-
-        await publishMessageAIResponse(
-          sessionId,
-          subjectId,
-          {
-            id: savedMsg.id,
-            sessionId,
-            senderId: null,
-            content: savedMsg.content,
-            timestamp: savedMsg.timestamp.toISOString(),
-            role: MessageRole.AI,
-            stage: savedMsg.stage,
-          },
-          {}
-        );
-
-        logger.debug('Created reveal quality message', { subjectId, gapSeverity: result?.gapSeverity ?? 'unknown' });
+    for (const r of revealed) {
+      const author = byPid.get(r.author_participant_id);
+      const subject = byPid.get(r.subject_participant_id);
+      if (!author || !subject?.mainConversationId) continue;
+      const result = await currentResultFor(r.id);
+      const hasGaps = result && (result.gapSeverity === 'MODERATE' || result.gapSeverity === 'SIGNIFICANT');
+      const guesserName = author.name || 'Your partner';
+      const qualityMessage = hasGaps
+        ? `${guesserName}'s attempt to understand your experience is ready for you to review. It may not fully capture everything you shared — if something feels off or missing, you can share feedback to help them understand better.`
+        : `${guesserName}'s attempt to understand your experience is ready for you to review. Take a moment to read it and let us know how it feels.`;
+      const saved = await aiNote(subject.mainConversationId, qualityMessage);
+      if (subject.userId) {
+        await publishMessageAIResponse(sessionId, subject.userId, await messageDTO(saved, sessionId, subject.participantId), {});
       }
     }
   } catch (err) {
-    // Not critical — don't block the reveal flow
     logger.warn('Failed to create reveal quality messages', { error: (err as Error).message });
   }
 
-  logger.info('Both empathy attempts revealed and notifications sent', { sessionId });
+  logger.info('Empathy attempts revealed and notifications sent', { sessionId });
   return true;
 }
 
@@ -554,108 +350,137 @@ export async function checkAndRevealBothIfReady(sessionId: string): Promise<bool
 // ============================================================================
 
 /**
- * Get the reconciler status for a session.
+ * The reconciler status AS SEEN BY one participant (spec §1.2: a result is
+ * its subject's only). A direction's analysis is returned only where the
+ * caller is its subject; `pendingShareOffers` counts the caller's own open
+ * offers (as subject); `hasRun` and `readyForStage3` come from the
+ * content-free direction statuses (`v_empathy_direction_status`).
+ *
+ * A/B are the session's participants in join order (A→B = A's attempt about B).
  */
-export async function getReconcilerStatus(sessionId: string): Promise<{
+export async function getReconcilerStatus(
+  sessionId: string,
+  callerParticipantId: string,
+): Promise<{
   hasRun: boolean;
   aUnderstandingB: ReconcilerResult | null;
   bUnderstandingA: ReconcilerResult | null;
   pendingShareOffers: number;
   readyForStage3: boolean;
 }> {
-  const results = await prisma.reconcilerResult.findMany({
-    where: { sessionId, supersededAt: null },
-    include: { shareOffer: true },
-    orderBy: { guesserId: 'asc' },
-  });
-
-  if (results.length === 0) {
-    return {
-      hasRun: false,
-      aUnderstandingB: null,
-      bUnderstandingA: null,
-      pendingShareOffers: 0,
-      readyForStage3: false,
-    };
+  const parties = await sessionParties(sessionId);
+  const statuses = await directionStatuses(sessionId);
+  if (parties.length !== 2) {
+    return { hasRun: false, aUnderstandingB: null, bUnderstandingA: null, pendingShareOffers: 0, readyForStage3: false };
   }
+  const [a, b] = parties;
 
-  // Count pending share offers (status = OFFERED)
-  const pendingShareOffers = results.filter(
-    (r: ReconcilerResultWithOffer) => r.shareOffer?.status === 'OFFERED'
-  ).length;
-
-  // Ready for Stage 3 if:
-  // 1. Both directions have been analyzed
-  // 2. No pending share offers
-  // 3. All recommendations are PROCEED, or sharing was completed/declined
-  const readyForStage3 =
-    results.length === 2 &&
-    pendingShareOffers === 0 &&
-    results.every(
-      (r: ReconcilerResultWithOffer) =>
-        r.recommendedAction === 'PROCEED' ||
-        !r.shareOffer ||
-        r.shareOffer.status === 'ACCEPTED' ||
-        r.shareOffer.status === 'DECLINED' ||
-        r.shareOffer.status === 'SKIPPED'
-    );
-
-  return {
-    hasRun: true,
-    aUnderstandingB: results[0] ? dbResultToReconcilerResult(results[0]) : null,
-    bUnderstandingA: results[1] ? dbResultToReconcilerResult(results[1]) : null,
-    pendingShareOffers,
-    readyForStage3,
+  const visibleResult = async (author: SessionParty, subject: SessionParty): Promise<ReconcilerResult | null> => {
+    if (subject.participantId !== callerParticipantId) return null;
+    const stored = (await prisma.reconcilerResult.findFirst({
+      where: { subjectParticipantId: subject.participantId, supersededAt: null, attempt: { authorParticipantId: author.participantId } },
+      orderBy: { createdAt: 'desc' },
+      select: RESULT_SELECT,
+    })) as StoredReconcilerResult | null;
+    return stored ? dbResultToReconcilerResult(stored, await guidanceFor(stored.id)) : null;
   };
+
+  const [aUnderstandingB, bUnderstandingA, pendingShareOffers, ownResults] = await Promise.all([
+    visibleResult(a, b),
+    visibleResult(b, a),
+    prisma.contextShareOffer.count({
+      where: { subjectParticipantId: callerParticipantId, status: 'OFFERED', attempt: { authorParticipant: { sessionId } } },
+    }),
+    prisma.reconcilerResult.count({ where: { subjectParticipantId: callerParticipantId, supersededAt: null } }),
+  ]);
+
+  const ab = directionOf(statuses, a.participantId, b.participantId);
+  const ba = directionOf(statuses, b.participantId, a.participantId);
+  const analysed = (d?: { status: TargetEmpathyStatus }) => !!d && d.status !== 'HELD';
+  const hasRun = ownResults > 0 || analysed(ab) || analysed(ba);
+  const readyForStage3 =
+    !!ab && !!ba && READY_OR_LATER.has(ab.status) && READY_OR_LATER.has(ba.status) && pendingShareOffers === 0;
+
+  return { hasRun, aUnderstandingB, bUnderstandingA, pendingShareOffers, readyForStage3 };
 }
 
 // ============================================================================
-// Reconciler Summary
+// Reconciler Summary (Ruling R24)
 // ============================================================================
 
+const SEVERITY = (s: string) => s.toLowerCase() as 'none' | 'minor' | 'moderate' | 'significant';
+
 /**
- * Generate a summary after reconciliation is complete.
+ * The summary built FOR participant X (ruling R24): from X's own
+ * `reconciler_result` rows (X as subject — how the partner understood X),
+ * X's own attempt, and the direction statuses. Never the co-participant's
+ * result (how X understood them — subject-private to the partner) nor the
+ * co-participant's unrevealed attempt.
  */
 export async function generateReconcilerSummary(
-  sessionId: string
+  sessionId: string,
+  callerParticipantId: string,
 ): Promise<ReconcilerSummary | null> {
-  const results = await prisma.reconcilerResult.findMany({
-    where: { sessionId, supersededAt: null },
-    include: { shareOffer: true },
-    orderBy: { guesserId: 'asc' },
-  });
+  const parties = await sessionParties(sessionId);
+  const me = parties.find(p => p.participantId === callerParticipantId);
+  const partner = parties.find(p => p.participantId !== callerParticipantId);
+  if (!me || !partner) return null;
 
-  if (results.length !== 2) {
-    return null;
-  }
+  const [aboutMe, statuses, sharedAboutMe, sharedByMe] = await Promise.all([
+    prisma.reconcilerResult.findFirst({
+      where: { subjectParticipantId: me.participantId, supersededAt: null, attempt: { authorParticipantId: partner.participantId } },
+      orderBy: { createdAt: 'desc' },
+      select: { alignmentScore: true, alignmentSummary: true, gapSeverity: true },
+    }),
+    directionStatuses(sessionId),
+    // Sharing that reached me (delivered to my conversation) / that I did (my offers).
+    prisma.message.count({ where: { conversation: { participantId: me.participantId }, kind: 'SHARED_CONTEXT' } }),
+    prisma.contextShareOffer.count({ where: { subjectParticipantId: me.participantId, status: 'ACCEPTED' } }),
+  ]);
+  if (!aboutMe) return null;
+  const mine = directionOf(statuses, me.participantId, partner.participantId);
+  const meName = me.name || 'You';
+  const partnerName = partner.name || 'your partner';
 
-  const [resultA, resultB] = results;
+  const prompt = `You are Meet Without Fear, summarizing the empathy exchange for ${meName}, speaking to ${meName} privately.
 
-  const context: ReconcilerSummaryContext = {
-    userAName: resultA.guesserName,
-    userBName: resultB.guesserName,
-    aUnderstandingB: {
-      alignmentScore: resultA.alignmentScore,
-      alignmentSummary: resultA.alignmentSummary,
-      gapSeverity: resultA.gapSeverity as 'none' | 'minor' | 'moderate' | 'significant',
-    },
-    bUnderstandingA: {
-      alignmentScore: resultB.alignmentScore,
-      alignmentSummary: resultB.alignmentSummary,
-      gapSeverity: resultB.gapSeverity as 'none' | 'minor' | 'moderate' | 'significant',
-    },
-    additionalSharingOccurred:
-      resultA.shareOffer?.status === 'ACCEPTED' ||
-      resultB.shareOffer?.status === 'ACCEPTED',
-  };
+EMPATHY EXCHANGE (what ${meName} may know):
 
-  const summary = await getSonnetJson<ReconcilerSummary>({
-    systemPrompt: buildReconcilerSummaryPrompt(context),
+${partnerName}'s understanding of ${meName}:
+- Alignment: ${aboutMe.alignmentScore}%
+- ${aboutMe.alignmentSummary}
+- Gap severity: ${SEVERITY(aboutMe.gapSeverity)}
+
+${meName}'s own understanding of ${partnerName}:
+- Status: ${mine?.status ?? 'not submitted'} (round ${mine?.round ?? 0})
+- The analysis of it is ${partnerName}'s to read; do not guess at it.
+
+Additional sharing occurred: ${sharedAboutMe + sharedByMe > 0 ? 'Yes' : 'No'}
+
+YOUR TASK:
+Generate a brief, warm summary (3-4 sentences) that:
+1. Acknowledges the empathy work both have done
+2. Highlights what went well (without specific scores)
+3. If gaps existed, note that understanding deepened through sharing
+4. Transitions toward the next stage (What Matters)
+
+Keep it encouraging without being effusive. Focus on progress, not perfection.
+
+Respond in JSON:
+\`\`\`json
+{
+  "summary": "The summary text",
+  "readyForNextStage": true
+}
+\`\`\``;
+
+  return getSonnetJson<ReconcilerSummary>({
+    systemPrompt: prompt,
     messages: [{ role: 'user', content: 'Generate the reconciler summary.' }],
     maxTokens: 512,
     sessionId,
     operation: 'reconciler-summary',
   });
-
-  return summary;
 }
+
+export type { UserInfo };
