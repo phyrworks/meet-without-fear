@@ -2927,6 +2927,41 @@ GRANT SELECT (kind) ON ai_memory TO mwf_job;
 GRANT INSERT (participant_id, kind, doc) ON ai_memory TO mwf_job;
 GRANT UPDATE (doc) ON ai_memory TO mwf_job;
 
+-- TS-11: the job's writers in needs, repair and follow-up (spec §1.4 agreement
+-- "I job (the mutual-willingness path)", agreement_party "I job",
+-- session_closure "I job", proposal "U … mwf_job (status, shared_at)",
+-- proposal_revision "I … job", follow_up "I … job (scheduler) · U … job
+-- (status)", reminder "status → DELIVERED by mwf_job"). Every job write is a
+-- raw INSERT/UPDATE naming exactly these columns (no client-side defaults).
+-- repair-store createAgreementsAsJob: the agreement row (snapshot of the proposal) and its id (RETURNING id)
+GRANT INSERT (session_id, proposal_id, type, status, description, duration, measure_of_success, follow_up_at) ON agreement TO mwf_job;
+-- repair-store: RETURNING id; T-agreement-parties (invoker = mwf_job) reads the agreement's session, proposal and instant;
+-- tending: the agreement a follow-up is about (status moves)
+GRANT SELECT (id, session_id, proposal_id, status, created_at) ON agreement TO mwf_job;
+-- tending resolve/closure paths: an agreement moves AGREED → IN_PROGRESS → COMPLETED | ABANDONED
+GRANT UPDATE (status, completed_at) ON agreement TO mwf_job;
+-- repair-store createAgreementsAsJob: one party row per present human
+GRANT INSERT (agreement_id, participant_id, agreed_at) ON agreement_party TO mwf_job;
+-- T-agreement-parties (deferred, invoker = mwf_job): the party set
+GRANT SELECT (agreement_id, participant_id) ON agreement_party TO mwf_job;
+-- T-agreement-parties: every party WILLING on the proposal
+GRANT SELECT (proposal_id, participant_id, decision) ON proposal_choice TO mwf_job;
+-- repair-store convertProposalsAsJob: ACTIVE/REVISED → CONVERTED_TO_AGREEMENT (WHERE id = …: SELECT id is granted above)
+GRANT UPDATE (status) ON proposal TO mwf_job;
+-- repair-store: the conversion's audit row (append-only; no message id, lineage in before/after)
+GRANT INSERT (proposal_id, actor_participant_id, action, before, after, reason) ON proposal_revision TO mwf_job;
+-- repair-store closeSessionAsJob: how the repair stage ended (the three id arrays are v_session_closure_items)
+GRANT INSERT (session_id, kind, reason, summary, closed_by_participant_id, check_in_at, closed_at) ON session_closure TO mwf_job;
+-- tending scheduleFollowUpsAsJob: SHARED agreements and INDIVIDUAL commitments scheduled at closure (RETURNING id: SELECT id granted above)
+GRANT INSERT (session_id, agreement_id, proposal_id, type, scope, owner_participant_id, status, scheduled_for, response_deadline_at, summary) ON follow_up TO mwf_job;
+-- open-due-tending-entries (runs as the job): find due SCHEDULED rows (sql_follow_up_due) and the cycle columns it moves
+GRANT SELECT (session_id, agreement_id, status, scheduled_for, response_deadline_at) ON follow_up TO mwf_job;
+-- open-due / cycle resolution: SCHEDULED → OPEN (opened_at, the response deadline), OPEN/PARTIAL → COMPLETED | EXPIRED
+GRANT UPDATE (status, opened_at, completed_at, response_deadline_at) ON follow_up TO mwf_job;
+-- processDueTendingReminders (job): due SCHEDULED reminders (sql_reminder_due) → DELIVERED, or the next remind_at for a cadence
+GRANT SELECT (id, follow_up_id, remind_at, cadence, status) ON reminder TO mwf_job;
+GRANT UPDATE (status, remind_at) ON reminder TO mwf_job;
+
 -- mwf_ops: SELECT on exactly the tables routes/brain.ts reads, re-based
 -- (BrainActivity, Session/Relationship/RelationshipMember/User, StageProgress,
 -- Message, UserVessel.notableFacts, EmotionalReading, InnerWorkSession/Message).
