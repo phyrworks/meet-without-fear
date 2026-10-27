@@ -173,7 +173,15 @@ describeTarget('job path on the target, as mwf_job with identity binding on', ()
       { turnId: 't', requestId: 'r', startTime: Date.now(), userId: harness.actors.userB!.id },
       async () => await q(),
     );
-    expect(asBob.map(r => r.status)).toEqual(['HELD']);
+    // The feel-heard test above ran the reconciler for this direction (TS-10:
+    // it now completes on the target), so the status is whatever the row
+    // holds — HELD, or READY once the background analysis landed.
+    const actual = await rows<{ status: string }>(
+      `SELECT status::text AS status FROM empathy_attempt WHERE subject_participant_id = $1`,
+      [bob.id],
+    );
+    expect(asBob.map(r => r.status)).toEqual(actual.map(r => r.status));
+    expect(['HELD', 'READY']).toContain(asBob[0]?.status);
     expect(await q()).toEqual([]); // no identity → fail-closed
     const list = await get(harness.actors.userB!, 'list as bob', '/api/v1/sessions');
     expect(list.status).toBe(200);
