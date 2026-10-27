@@ -1,10 +1,8 @@
 /**
- * TS-10 rule kinds (rulings R31, R32):
+ * TS-10 rule kinds (ruling R32; the R31/R37 `pendingCluster` kind is gone since
+ * TS-12 — no cluster is pending on the target any more):
  *   - `changesMapped`: byte-level row changes on the target, compared through a
  *     table rename map (the analogue of `traceMapped`);
- *   - `pendingCluster`: a read of a cluster not yet on this branch may answer
- *     500 — and a listed read that answers anything else fails; its changes are
- *     compared exactly, a shifted rank only where pinned (ruling R37);
  *   - `refusedStep` (fix round 1, m1): a step the target refuses by a ruled fix.
  */
 
@@ -75,90 +73,6 @@ describe('changesMapped', () => {
       unmatchedRules: [],
     });
     expect(compareWithAllowList(e, { steps: [{ label: 'x', changes: [] }] }, allow).violations.join('\n')).toMatch(/no added image/);
-  });
-});
-
-describe('pendingCluster', () => {
-  const allow = (reads: Array<{ read: string; owner: 'TS-11' | 'TS-12' }>): AllowList => ({
-    scenario: 's',
-    rules: [{ kind: 'pendingCluster', at: 'steps', reads, why: 'test', mustMatch: true }],
-  });
-  const step = (label: string, status: number, body: unknown, changes: unknown[] = []) => ({ label, status, body, changes });
-  const err = { success: false, error: { code: 'INTERNAL_ERROR', message: 'Failed to get needs' } };
-
-  it('lets a listed read of another cluster answer 500 (status and body), and still compares its changes', () => {
-    const e = { steps: [step('author: needs as ada@e2e.test', 200, { data: { needs: [1] } }, [{ table: 'User' }])] };
-    const ok = compareWithAllowList(e, { steps: [step('author: needs as ada@e2e.test', 500, err, [{ table: 'User' }])] }, allow([{ read: 'needs', owner: 'TS-11' }]));
-    expect(ok).toEqual({ violations: [], unmatchedRules: [] });
-    const changed = compareWithAllowList(e, { steps: [step('author: needs as ada@e2e.test', 500, err, [])] }, allow([{ read: 'needs', owner: 'TS-11' }]));
-    expect(changed.violations.join('\n')).toMatch(/changes/);
-  });
-
-  it('FAILS when a listed read answers 200 — a stale entry, like a stale KNOWN leak', () => {
-    const e = { steps: [step('p: tending as bob@e2e.test', 200, { data: {} })] };
-    const v = compareWithAllowList(e, { steps: [step('p: tending as bob@e2e.test', 200, { data: {} })] }, allow([{ read: 'tending', owner: 'TS-11' }]));
-    expect(v.violations.join('\n')).toMatch(/stale pendingCluster entry: "tending" now answers 200/);
-  });
-
-  it('never excuses a TS-10 read, nor a read under the wrong owner', () => {
-    const e = { steps: [step('p: empathy status as ada@e2e.test', 200, { data: {} })] };
-    const a = { steps: [step('p: empathy status as ada@e2e.test', 500, err)] };
-    const v = compareWithAllowList(e, a, allow([{ read: 'empathy status', owner: 'TS-11' }]));
-    expect(v.violations.join('\n')).toMatch(/may not list "empathy status"/);
-    expect(v.violations.join('\n')).toMatch(/stale pendingCluster entry|status/);
-    expect(compareWithAllowList({ steps: [] }, { steps: [] }, allow([{ read: 'emotions', owner: 'TS-11' }])).violations.join('\n')).toMatch(
-      /may not list "emotions" \(owner TS-11\)/,
-    );
-  });
-
-  // Ruling R37: only status and the error body are blurred; a rank the 500
-  // shifts must be pinned by step and path, never canonicalised wholesale.
-  it('compares a listed read\'s changes exactly: an unpinned rank shift fails (R37)', () => {
-    const row = (created: string, updated: string, email = 'a@x') => [{ table: 'User', after: { email, created_at: created, updated_at: updated } }];
-    const e = { steps: [step('p: needs as ada@e2e.test', 200, { data: { at: '<ts:1>' } }, row('<ts:2>', '<ts:fresh>'))] };
-    const v = compareWithAllowList(e, { steps: [step('p: needs as ada@e2e.test', 500, err, row('<ts:1>', '<ts:fresh>'))] }, allow([{ read: 'needs', owner: 'TS-11' }]));
-    expect(v.violations.join('\n')).toMatch(/steps\.0\.changes\.0\.after\.created_at: value differs/);
-  });
-
-  it('a pinned rank shift (step + path + from → to) is admitted, and only that one', () => {
-    const row = (created: string, updated: string, email = 'a@x') => [{ table: 'User', after: { email, created_at: created, updated_at: updated } }];
-    const e = { steps: [step('p: needs as ada@e2e.test', 200, { data: { at: '<ts:1>' } }, row('<ts:2>', '<ts:fresh>'))] };
-    const pinned: AllowList = {
-      scenario: 's',
-      rules: [
-        {
-          kind: 'pendingCluster',
-          at: 'steps',
-          why: 'test',
-          mustMatch: true,
-          reads: [
-            {
-              read: 'needs',
-              owner: 'TS-11',
-              rankShifts: [{ step: 'p: needs as ada@e2e.test', at: 'changes.0.after.created_at', from: '<ts:2>', to: '<ts:1>' }],
-            },
-          ],
-        },
-      ],
-    };
-    const run = (r: unknown[]) => ({ steps: [step('p: needs as ada@e2e.test', 500, err, r)] });
-    expect(compareWithAllowList(e, run(row('<ts:1>', '<ts:fresh>')), pinned)).toEqual({ violations: [], unmatchedRules: [] });
-    // Values and other stamps are still compared.
-    expect(compareWithAllowList(e, run(row('<ts:1>', '<ts:fresh>', 'b@x')), pinned).violations.join('\n')).toMatch(/email/);
-    expect(compareWithAllowList(e, run(row('<ts:1>', '<ts:3>')), pinned).violations.join('\n')).toMatch(/updated_at/);
-    // A pin that does not hold fails, and so does one that never fires.
-    expect(compareWithAllowList(e, run(row('<ts:3>', '<ts:fresh>')), pinned).violations.join('\n')).toMatch(
-      /pinned rank shift <ts:2> → <ts:1> does not hold/,
-    );
-    const other = { steps: [step('q: needs as ada@e2e.test', 500, err, row('<ts:2>', '<ts:fresh>'))] };
-    const eOther = { steps: [step('q: needs as ada@e2e.test', 200, { data: {} }, row('<ts:2>', '<ts:fresh>'))] };
-    expect(compareWithAllowList(eOther, other, pinned).violations.join('\n')).toMatch(/rank pin never fired/);
-  });
-
-  it('reads it does not list are compared as usual', () => {
-    const e = { steps: [step('p: stage4 as ada@e2e.test', 200, { data: 1 })] };
-    const v = compareWithAllowList(e, { steps: [step('p: stage4 as ada@e2e.test', 500, err)] }, allow([{ read: 'needs', owner: 'TS-11' }]));
-    expect(v.violations.join('\n')).toMatch(/value differs/);
   });
 });
 

@@ -5,11 +5,8 @@
  * whether a run is accepted under a scenario's allow-list (`./types.ts`).
  */
 
-import { PENDING_CLUSTER_READS } from './types';
 import type {
   ChangesMappedRule,
-  PendingClusterRule,
-  RankShift,
   RefusedStepRule,
   AbsentKeysRule,
   AddedEntriesRule,
@@ -341,12 +338,6 @@ export function compareMappedChanges(e0: unknown, a0: unknown, rule: ChangesMapp
   return out;
 }
 
-/** `<phase>: <read> as <email>` → `<read>` (the full-read step labels, privacy.ts). */
-function readNameOf(label: string): string | null {
-  const m = /^[^:]+: (.+) as \S+$/.exec(label);
-  return m ? m[1] : null;
-}
-
 /**
  * Compare a run against its normalised baseline under an allow-list:
  * "subset plus named changes". Every baseline value must be present and equal
@@ -366,21 +357,9 @@ export function compareWithAllowList(expected: unknown, actual: unknown, allow: 
     actValues: new Set<string>(),
   }));
   type Entry = (typeof rules)[number];
-  const ruleProblems: string[] = [];
-  for (const r of rules) {
-    if (r.rule.kind !== 'pendingCluster') continue;
-    for (const entry of (r.rule as PendingClusterRule).reads) {
-      if (PENDING_CLUSTER_READS[entry.read] !== entry.owner) {
-        ruleProblems.push(
-          `  pendingCluster may not list "${entry.read}" (owner ${entry.owner}): only another cluster's read, with its owner, can be pending`,
-        );
-      }
-    }
-  }
   const rulesAt = <K extends AllowRule['kind']>(kind: K, p: string[]): Entry[] =>
     rules.filter(r => r.rule.kind === kind && r.patterns.some(pat => matchPath(pat, p)));
   const violations: string[] = [];
-  const usedPins = new Set<RankShift>();
   const show = (p: string[]): string => p.join('.') || '<root>';
   const fail = (p: string[], what: string, e?: unknown, a?: unknown): void => {
     violations.push(
@@ -473,18 +452,6 @@ export function compareWithAllowList(expected: unknown, actual: unknown, allow: 
       const adders = rulesAt('addedEntries', p);
       adders.forEach(r => r.matched++);
       const used = new Set<Entry>();
-      // pendingCluster: a step (`steps.N`) that is a listed read of a cluster not yet on this branch.
-      const pendingRead = p.length === 2 && p[0] === 'steps' && typeof e.label === 'string' ? readNameOf(e.label) : null;
-      const pending = pendingRead
-        ? rules.filter(r => r.rule.kind === 'pendingCluster' && (r.rule as PendingClusterRule).reads.some(x => x.read === pendingRead))
-        : [];
-      if (pending.length) {
-        pending.forEach(r => r.matched++);
-        const body = a.body as { success?: unknown; error?: { code?: unknown } } | undefined;
-        if (a.status !== 500 || body?.success !== false || !body?.error) {
-          fail([...p, 'status'], `stale pendingCluster entry: "${pendingRead}" now answers ${a.status} — delete the entry`, 500, a.status);
-        }
-      }
       // m1: a step the target refuses by a ruled fix (`refusedStep`).
       const refused =
         p.length === 2 && p[0] === 'steps' && typeof e.label === 'string'
@@ -506,38 +473,8 @@ export function compareWithAllowList(expected: unknown, actual: unknown, allow: 
         const t = (c.table ?? c.view) as unknown;
         return refusal.droppedWrites.some(w => w.table === t && w.kind === c.kind);
       };
-      // R37: the pinned rank shifts of this step (by label), applied to a copy
-      // of the baseline before the exact compare; each must hold.
-      const pins = pending.length
-        ? pending.flatMap(r =>
-            (r.rule as PendingClusterRule).reads
-              .filter(x => x.read === pendingRead)
-              .flatMap(x => (x.rankShifts ?? []).filter(s => s.step === e.label)),
-          )
-        : [];
-      const pinned = (k: string, ev: unknown, av: unknown): unknown => {
-        const mine = pins.filter(s => s.at.split('.')[0] === k);
-        if (!mine.length) return ev;
-        const copy = JSON.parse(JSON.stringify(ev ?? null));
-        for (const s of mine) {
-          const path = s.at.split('.').slice(1);
-          const get = (v: unknown): unknown =>
-            path.reduce<unknown>((o, seg) => (o && typeof o === 'object' ? (o as Record<string, unknown>)[seg] : undefined), v);
-          const before = get(copy);
-          const after = get(av);
-          if (before !== s.from || after !== s.to) {
-            fail([...p, ...s.at.split('.')], `pinned rank shift ${s.from} → ${s.to} does not hold`, before, after);
-            continue;
-          }
-          usedPins.add(s);
-          const parent = path.slice(0, -1).reduce<Record<string, unknown>>((o, seg) => o[seg] as Record<string, unknown>, copy);
-          parent[path[path.length - 1]] = s.to;
-        }
-        return copy;
-      };
       for (const k of [...new Set([...Object.keys(e), ...Object.keys(a)])].sort()) {
         const kp = [...p, k];
-        if (pending.length && (k === 'status' || k === 'body' || k === 'sse')) continue;
         if (refusal && (k === 'status' || k === 'body')) continue;
         if (refusal && (k === 'changes' || k === 'changesAtResponse')) {
           const ev = Array.isArray(e[k]) ? (e[k] as unknown[]) : [];
@@ -555,10 +492,6 @@ export function compareWithAllowList(expected: unknown, actual: unknown, allow: 
           } else {
             walk(kept, av, kp);
           }
-          continue;
-        }
-        if (pins.length && (k === 'changes' || k === 'changesAtResponse')) {
-          walk(pinned(k, e[k], a[k]), a[k], kp);
           continue;
         }
         const inE = Object.prototype.hasOwnProperty.call(e, k);
@@ -627,16 +560,6 @@ export function compareWithAllowList(expected: unknown, actual: unknown, allow: 
   };
 
   walk(expected, actual, []);
-  violations.push(...ruleProblems);
-  for (const r of rules) {
-    if (r.rule.kind !== 'pendingCluster') continue;
-    for (const entry of (r.rule as PendingClusterRule).reads) {
-      for (const s of entry.rankShifts ?? []) {
-        if (!usedPins.has(s)) violations.push(`  pendingCluster "${entry.read}": rank pin never fired — ${s.step} ${s.at} ${s.from} → ${s.to}`);
-      }
-    }
-  }
-
   for (const r of rules) {
     if (r.rule.kind !== 'valuesSubset') continue;
     const extra = [...r.actValues].filter(v => !r.expValues.has(v));

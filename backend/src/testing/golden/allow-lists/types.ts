@@ -239,40 +239,6 @@ export interface ChangesMappedRule extends RuleBase {
 }
 
 /**
- * TARGET SHAPE ONLY (TS-10, ruling R31). A read owned by a cluster not yet
- * rewritten on this branch (TS-11 needs/repair/follow-up, TS-12 reflection/
- * wellbeing) answers 500 on the target until that cluster lands. For each
- * listed read (`read` = the read's name in `privacy.ts` SESSION_READS /
- * USER_READS; every step whose label is `<phase>: <read> as <email>`), the
- * run's `status` must be 500 and its body the error envelope; status and
- * body are then not compared — and nothing else is blurred (ruling R37).
- * `changes` / `changesAtResponse` are compared exactly. The error body holds
- * none of the 200 body's carried instants, so a carried timestamp in the
- * step's changes can rank differently: each such shift is PINNED on the read's
- * entry, by step label and path, from the baseline's token to the run's
- * (`rankShifts`). A pin that does not hold, or never fires, fails. A listed
- * read that answers anything but 500 FAILS (a stale entry — delete it when the
- * cluster lands). Only reads in `PENDING_CLUSTER_READS` may be listed, with
- * that owner: a TS-10 read can never be excused.
- */
-export interface PendingClusterRule extends RuleBase {
-  kind: 'pendingCluster';
-  reads: Array<{ read: string; owner: 'TS-11' | 'TS-12'; rankShifts?: RankShift[] }>;
-}
-
-/**
- * One `<ts:N>` token a pending (500) read shifts in its step's changes (R37):
- * `step` is the step's exact label, `at` the path under the step
- * (`changes.0.after.created_at`), `from` the baseline's token, `to` the run's.
- */
-export interface RankShift {
-  step: string;
-  at: string;
-  from: `<ts:${number}>`;
-  to: `<ts:${number}>`;
-}
-
-/**
  * TARGET SHAPE ONLY (TS-10 fix round 1, m1). A step the target REFUSES by a
  * ruled fix, where the baseline recorded it succeeding: e.g. R6's
  * validation-feedback draft about an unrevealed round, which the target
@@ -292,26 +258,8 @@ export interface RefusedStepRule extends RuleBase {
   droppedWrites: Array<{ table: string; kind: 'added' | 'changed' | 'removed' }>;
 }
 
-/** The reads a `pendingCluster` entry may name, with their owning task (ruling R31). */
-export const PENDING_CLUSTER_READS: Readonly<Record<string, 'TS-11' | 'TS-12'>> = {
-  needs: 'TS-11',
-  'needs comparison': 'TS-11',
-  stage4: 'TS-11',
-  strategies: 'TS-11',
-  agreements: 'TS-11',
-  tending: 'TS-11',
-  'tending history': 'TS-11',
-  emotions: 'TS-12',
-  'inner thoughts': 'TS-12',
-  'inner thoughts list': 'TS-12',
-  'inner work list': 'TS-12',
-  'knowledge base recent': 'TS-12',
-  'knowledge base themes': 'TS-12',
-};
-
 export type AllowRule =
   | ChangesMappedRule
-  | PendingClusterRule
   | RefusedStepRule
   | TraceMappedRule
   | FixtureMaskRule
