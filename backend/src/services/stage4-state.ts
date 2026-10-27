@@ -49,6 +49,7 @@ import {
   loadProposals,
   loadStage4Needs,
   loadVisibleChoices,
+  presentHumans,
   type AgreementRow,
   type ChoiceRow,
   type ClosureItems,
@@ -102,16 +103,38 @@ function proposalSourceLabel(proposal: ProposalRow, me: string, partner: string 
   return 'UNKNOWN';
 }
 
-function buildCoverageViews(needs: Stage4Need[], coverage: CoverageRow[]): CoverageView[] {
+/**
+ * The coverage a viewer may see. The covering proposals come from
+ * v_need_coverage; the WILLING side is recomputed over the choices the viewer
+ * may read (their own, and a co-participant's only after choices_shared) —
+ * the rule the view applies under the viewer's RLS (TS-16): a partner's
+ * unshared WILLING must not flip a need to COVERED in the viewer's state.
+ * Rule as the view's (R20): COVERED when every present human is WILLING on a
+ * covering proposal, PARTIAL when some are, OPEN otherwise.
+ */
+function buildCoverageViews(
+  needs: Stage4Need[],
+  coverage: CoverageRow[],
+  visibleChoices: ChoiceRow[],
+  humans: string[],
+): CoverageView[] {
   const byNeed = new Map(coverage.map((c) => [c.needId, c]));
   return needs.map((n) => {
     const c = byNeed.get(n.id);
+    const covering = c?.coveringProposalIds ?? [];
+    const willing = new Set(
+      visibleChoices
+        .filter((choice) => choice.decision === 'WILLING' && covering.includes(choice.proposalId) && humans.includes(choice.participantId))
+        .map((choice) => choice.participantId),
+    );
+    const status: CoverageView['coverageStatus'] =
+      willing.size === 0 ? 'OPEN' : willing.size >= humans.length ? 'COVERED' : 'PARTIAL';
     return {
       id: n.id,
       label: n.label,
       ownerParticipantId: n.ownerParticipantId,
-      coverageStatus: c?.status ?? 'OPEN',
-      coveringProposalIds: c?.coveringProposalIds ?? [],
+      coverageStatus: status,
+      coveringProposalIds: covering,
       note: null,
     };
   });
@@ -411,7 +434,7 @@ export async function loadStage4View(sessionId: string, userId: string) {
   const me = await resolveParticipant(sessionId, userId);
   if (!me) throw new Stage4StateNotFoundError();
   const partner = (await getPartnerParticipant(me.id))?.participantId ?? null;
-  const [proposals, choices, needs, coverage, dispositions, closure, items, agreements, followUps, mySubmitted, partnerSubmitted] =
+  const [proposals, choices, needs, coverage, dispositions, closure, items, agreements, followUps, mySubmitted, partnerSubmitted, humans] =
     await Promise.all([
       loadProposals(sessionId, me.id),
       loadVisibleChoices(sessionId, me.id),
@@ -424,6 +447,7 @@ export async function loadStage4View(sessionId: string, userId: string) {
       loadFollowUpsForParticipant(sessionId, me.id),
       hasMilestone(me.id, 'choices_shared'),
       partner ? hasMilestone(partner, 'choices_shared') : Promise.resolve(false),
+      presentHumans(sessionId).then((list) => list.map((h) => h.id)),
     ]);
   return {
     me: me.id,
@@ -431,7 +455,7 @@ export async function loadStage4View(sessionId: string, userId: string) {
     proposals,
     choices,
     needs,
-    rows: buildCoverageViews(needs, coverage),
+    rows: buildCoverageViews(needs, coverage, choices, humans),
     dispositions,
     closure,
     items,

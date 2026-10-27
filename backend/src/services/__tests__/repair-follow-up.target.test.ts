@@ -87,6 +87,11 @@ describeTarget('repair and follow-up on the target, as mwf_app and mwf_job with 
     const dtoBefore = await asUser(ids.adaUser, () => state.getStage4State(ids.session, ids.adaUser));
     expect(dtoBefore.partnerSelections).toEqual([]);
     expect(JSON.stringify(dtoBefore)).not.toContain('"partnerDecisionVisible"');
+    // Coverage is computed over the choices Ada may read: Bob's unshared WILLING
+    // on "checkin" does not move her Partnership to COVERED (only Ada is WILLING).
+    const [partnership] = await run.sql<{ id: string }>(`SELECT id FROM need WHERE label = 'Partnership'`);
+    expect(dtoBefore.coverageAudit.partial.map(r => r.id)).toContain(partnership.id);
+    expect(dtoBefore.coverageAudit.covered.map(r => r.id)).not.toContain(partnership.id);
 
     await asUser(ids.bobUser, () => store.shareChoices(ids.bob));
     const after = await asUser(ids.adaUser, () => store.loadVisibleChoices(ids.session, ids.ada));
@@ -94,6 +99,7 @@ describeTarget('repair and follow-up on the target, as mwf_app and mwf_job with 
     const dtoAfter = await asUser(ids.adaUser, () => state.getStage4State(ids.session, ids.adaUser));
     expect(dtoAfter.partnerSelectionStatus).toBe('SUBMITTED');
     expect(dtoAfter.partnerSelections).toHaveLength(2);
+    expect(dtoAfter.coverageAudit.covered.map(r => r.id)).toContain(partnership.id);
   });
 
   it('agreement creation (job) is refused at COMMIT when a party is not WILLING, and when a present human is left out', async () => {
