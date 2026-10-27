@@ -11,9 +11,10 @@
  *   Bob chose, not shared    Ada reads: no partner selection, no partner decision on any card
  *   Bob shared               Ada reads: Bob's decisions visible
  *
- * Probes are Bob's selection rows' ids: before sharing they must appear in no
- * read of Ada's. The concept half: every need id `proposal_need` and
- * `need_disposition` name is a `need_share` id.
+ * Probes are Bob's selection rows (today their ids; on the target, where
+ * proposal_choice has no id, the instants his choices were written): before
+ * sharing they must appear in no read of Ada's. The concept half: every need
+ * id `proposal_need` and `need_disposition` name is a `need_share` id.
  *
  * Requires: npx tsx src/testing/golden/cli.ts build STAGE4_REDESIGN_PARTNER_INACTIVE
  * Record:   GOLDEN_UPDATE=choices-hidden-until-shared npx jest choices-hidden-until-shared.golden
@@ -22,6 +23,7 @@
 
 import {
   CHOICES_HIDDEN_UNTIL_SHARED_ALLOW,
+  CHOICES_HIDDEN_UNTIL_SHARED_BYTE_TARGET_ALLOW,
   CHOICES_HIDDEN_UNTIL_SHARED_KNOWN_LEAKS,
   CHOICES_NEED_LABEL_KNOWN_LEAKS,
   CHOICES_BOB_WRITES_KNOWN_LEAKS,
@@ -29,25 +31,38 @@ import {
   BOB_WRITE_STEPS,
 } from '../allow-lists/choices-hidden-until-shared';
 import { viewName } from '../concept-views';
-import { listTables } from '../db';
+import { listTables, withClient } from '../db';
 import type { ActorRef, Harness, StepResult } from '../driver';
-import { createHarness } from '../driver';
+import { createHarness, jobUrlFor } from '../driver';
 import { findLeaks, fullRead, unexpectedLeakReport } from '../privacy';
 import { goldenScenarioChecks } from '../scenario-checks';
+import { isTargetShape } from '../shape';
+import { Client } from 'pg';
 
 const BASE_URL =
   process.env.GOLDEN_DATABASE_URL || 'postgresql://mwf_user:mwf_password@localhost:5432/meet_without_fear';
 
 const SCENARIO = 'choices-hidden-until-shared';
-const READ_TABLES = ['User', 'Message', 'UserVessel', 'StageProgress', 'Stage4ProposalSelection', 'Stage4NeedDeclination'];
-// Not 'strategies': GET /strategies shuffles its list on every call
-// (controllers/stage4.ts shuffleArray — the anonymous legacy pool), so with
-// more than one proposal it cannot be a recorded baseline (measured: two
-// orders in three runs). It carries no choices.
+const TARGET = isTargetShape();
+// TS-11 renames: Stage4ProposalSelection → proposal_choice, Stage4NeedDeclination → need_disposition.
+const READ_TABLES = TARGET
+  ? ['user', 'message', 'conversation_read_state', 'participant_milestone', 'proposal_choice', 'need_disposition']
+  : ['User', 'Message', 'UserVessel', 'StageProgress', 'Stage4ProposalSelection', 'Stage4NeedDeclination'];
+// Not 'strategies': GET /strategies shuffled its list on every call (the old
+// anonymous pool), so with more than one proposal it could not be a recorded
+// baseline. It carries no choices.
 const CHOICE_READS = ['session', 'state', 'progress', 'messages', 'stage4', 'agreements', 'pending actions',
   'session list', 'badge count'];
 
-type Stage4 = { data?: { partnerSelections?: unknown[]; partnerSelectionStatus?: string } };
+type Stage4 = {
+  data?: {
+    partnerSelections?: unknown[];
+    partnerSelectionStatus?: string;
+    coverageAudit?: Record<'covered' | 'partial' | 'open', Array<{ id: string; note: string | null }>>;
+    walkthrough?: { partnerNeeds: Array<{ id: string; label: string }> };
+    inventory?: { sharedProposals: Array<{ id: string; needsAddressed: Array<{ id?: string }> }> };
+  };
+};
 
 jest.setTimeout(600_000);
 
@@ -55,8 +70,11 @@ describe(`golden: ${SCENARIO}`, () => {
   let harness: Harness;
   let steps: StepResult[];
   const phase: Record<string, StepResult[]> = {};
-  let bobSelectionIds: string[] = [];
+  let bobSelectionProbes: string[] = [];
   let aliases: Array<{ id: string; sameAs: string }> = [];
+  const ids: Record<string, string> = {};
+  const sql = <T extends Record<string, unknown>>(text: string, params: unknown[] = []): Promise<T[]> =>
+    withClient(harness.fixture.target, async c => (await c.query<T>(text, params)).rows, harness.fixture.database);
 
   beforeAll(async () => {
     harness = await createHarness({
@@ -71,16 +89,28 @@ describe(`golden: ${SCENARIO}`, () => {
     const sid = harness.sessionId;
     steps = [];
 
-    const fixtureRows = await harness.snapshot(['StrategyProposal', 'Stage4NeedCoverage', 'IdentifiedNeed', 'UserVessel']);
-    // A coverage row with no needId stands for the need it covers (the DTOs
-    // name the need by the row's id): the owner's need with that label.
-    aliases = fixtureRows.tables.Stage4NeedCoverage.flatMap(c => {
-      const vessel = fixtureRows.tables.UserVessel.find(v => v.userId === c.sourceUserId);
-      const need = fixtureRows.tables.IdentifiedNeed.find(n => n.vesselId === vessel?.id && n.need === c.needLabel);
-      return need && !c.needId ? [{ id: String(c.id), sameAs: String(need.id) }] : [];
-    });
-    const proposal = (prefix: string) =>
-      String(fixtureRows.tables.StrategyProposal.find(p => String(p.description).startsWith(prefix))!.id);
+    let proposal: (prefix: string) => string;
+    let openNeedId: string;
+    if (TARGET) {
+      const rows = await harness.snapshot(['proposal', 'need']);
+      proposal = prefix => String(rows.tables.proposal.find(p => String(p.description).startsWith(prefix))!.id);
+      const needId = (label: string) => String(rows.tables.need.find(n => n.label === label)!.id);
+      openNeedId = needId('Appreciation');
+      for (const label of ['Partnership', 'Appreciation', 'Understanding', 'Support']) ids[label] = needId(label);
+      ids.pause = proposal('Use a pause phrase');
+    } else {
+      const fixtureRows = await harness.snapshot(['StrategyProposal', 'Stage4NeedCoverage', 'IdentifiedNeed', 'UserVessel']);
+      // A coverage row with no needId stands for the need it covers (the DTOs
+      // name the need by the row's id): the owner's need with that label.
+      aliases = fixtureRows.tables.Stage4NeedCoverage.flatMap(c => {
+        const vessel = fixtureRows.tables.UserVessel.find(v => v.userId === c.sourceUserId);
+        const need = fixtureRows.tables.IdentifiedNeed.find(n => n.vesselId === vessel?.id && n.need === c.needLabel);
+        return need && !c.needId ? [{ id: String(c.id), sameAs: String(need.id) }] : [];
+      });
+      proposal = prefix => String(fixtureRows.tables.StrategyProposal.find(p => String(p.description).startsWith(prefix))!.id);
+      const open = fixtureRows.tables.Stage4NeedCoverage.find(c => c.needLabel === 'Appreciation')!;
+      openNeedId = String(open.needId ?? open.id);
+    }
     const read = async (label: string, actor: ActorRef): Promise<StepResult[]> => {
       const r = await fullRead(harness, actor, label, { tables: READ_TABLES, set: 'all', only: CHOICE_READS });
       steps.push(...r);
@@ -104,14 +134,21 @@ describe(`golden: ${SCENARIO}`, () => {
     ] as const) {
       await post(`choose ${name} as bob`, bob, `/stage4/proposals/${proposal(prefix)}/selection`, { decision: 'WILLING' });
     }
-    bobSelectionIds = (await harness.snapshot(['Stage4ProposalSelection'])).tables.Stage4ProposalSelection.filter(
-      s => s.userId === bob.id,
-    ).map(s => String(s.id));
+    if (TARGET) {
+      // proposal_choice has no id: the instants Bob's choices were written are their probes (ISO, as a DTO would carry them).
+      const iso = (v: unknown) => new Date(`${String(v).replace(' ', 'T')}Z`).toISOString();
+      const rows = (await harness.snapshot(['proposal_choice', 'participant'])).tables;
+      const bobP = rows.participant.find(p => p.user_id === bob.id)!.id;
+      bobSelectionProbes = rows.proposal_choice.filter(c => c.participant_id === bobP).flatMap(c => [iso(c.created_at), iso(c.updated_at)]);
+    } else {
+      bobSelectionProbes = (await harness.snapshot(['Stage4ProposalSelection'])).tables.Stage4ProposalSelection.filter(
+        s => s.userId === bob.id,
+      ).map(s => String(s.id));
+    }
     phase.unshared = await read('bob chose, not shared', ada);
     // Ada's "Appreciation" is the open need no shared proposal covers: Bob must
     // set it aside before the share gate lets him through.
-    const open = fixtureRows.tables.Stage4NeedCoverage.find(c => c.needLabel === 'Appreciation')!;
-    await post('set aside open need as bob', bob, `/stage4/needs/${String(open.needId ?? open.id)}/decline`, {});
+    await post('set aside open need as bob', bob, `/stage4/needs/${openNeedId}/decline`, {});
     await post('share selections as bob', bob, '/stage4/share-selections', {});
     phase.shared = await read('bob shared', ada);
   });
@@ -123,6 +160,7 @@ describe(`golden: ${SCENARIO}`, () => {
   goldenScenarioChecks({
     scenario: SCENARIO,
     allowList: CHOICES_HIDDEN_UNTIL_SHARED_ALLOW,
+    byteTargetAllowList: CHOICES_HIDDEN_UNTIL_SHARED_BYTE_TARGET_ALLOW,
     harness: () => harness,
     steps: () => steps,
     conceptAliases: () => aliases,
@@ -137,13 +175,13 @@ describe(`golden: ${SCENARIO}`, () => {
       ['set aside open need as bob', 200],
       ['share selections as bob', 200],
     ]);
-    expect(bobSelectionIds).toHaveLength(2);
+    expect(bobSelectionProbes).toHaveLength(TARGET ? 4 : 2);
   });
 
   it("before Bob shares, none of Ada's reads carries his choices (known leaks aside)", () => {
     expect(stage4Of('unshared').data?.partnerSelections).toEqual([]);
     expect(JSON.stringify(stage4Of('unshared'))).not.toContain('"partnerDecisionVisible":"WILLING"');
-    const probes = Object.fromEntries(bobSelectionIds.map((id, i) => [`bob selection ${i + 1}`, id]));
+    const probes = Object.fromEntries(bobSelectionProbes.map((id, i) => [`bob selection ${i + 1}`, id]));
     const observed = findLeaks([...phase.before, ...phase.unshared], probes);
     expect(unexpectedLeakReport(observed, CHOICES_HIDDEN_UNTIL_SHARED_KNOWN_LEAKS)).toEqual({ unexpected: [], stale: [] });
   });
@@ -184,15 +222,97 @@ describe(`golden: ${SCENARIO}`, () => {
     expect(unexpectedLeakReport(observed, CHOICES_BOB_WRITES_KNOWN_LEAKS)).toEqual({ unexpected: [], stale: [] });
   });
 
-  // TAUTOLOGICAL ON THE CURRENT SHAPE (fix round 1, I4): the current-shape
-  // proposal_need / need_disposition views join old_concept_need_share, so they
-  // can only name need_share ids, and this fixture has no need_share row at all.
-  // The real assertion is target-only (allow-list targetOnly): non-empty rows,
-  // every id a need_share id. Here it only pins that the vacuity is what it is.
-  it('proposal_need and need_disposition are empty on the current shape (the junction check is targetOnly)', () => {
-    const last = steps[steps.length - 1].concept!.after!.tables;
-    expect(last[viewName('need_share')]).toEqual([]);
-    expect(last[viewName('proposal_need')]).toEqual([]);
-    expect(last[viewName('need_disposition')]).toEqual([]);
-  });
+  if (!TARGET) {
+    // TAUTOLOGICAL ON THE CURRENT SHAPE (fix round 1, I4): the current-shape
+    // proposal_need / need_disposition views join old_concept_need_share, and
+    // this fixture has no need_share row at all. The real assertion is target-only.
+    it('proposal_need and need_disposition are empty on the current shape (the junction check is targetOnly)', () => {
+      const last = steps[steps.length - 1].concept!.after!.tables;
+      expect(last[viewName('need_share')]).toEqual([]);
+      expect(last[viewName('proposal_need')]).toEqual([]);
+      expect(last[viewName('need_disposition')]).toEqual([]);
+    });
+  } else {
+    // targetOnly #1.
+    it('target: proposal_need and need_disposition are non-empty after the share, naming only need_share ids', () => {
+      const last = steps[steps.length - 1].concept!.after!.tables;
+      const shareIds = new Set(last[viewName('need_share')].map(r => r.need_id));
+      expect(shareIds.size).toBe(4);
+      const pn = last[viewName('proposal_need')];
+      const nd = last[viewName('need_disposition')];
+      expect(pn.length).toBeGreaterThan(0);
+      expect(nd.length).toBeGreaterThan(0);
+      for (const r of [...pn, ...nd]) expect(shareIds.has(r.need_id)).toBe(true);
+      // Bob's "leave for now" is a DECLINED disposition over Ada's shared Appreciation.
+      expect(nd).toEqual(expect.arrayContaining([expect.objectContaining({ status: 'DECLINED' })]));
+    });
+
+    // Ruling R29 (Q3): the target-computed Stage 4 values the byte allow-list lets differ.
+    it('target: Partnership is PARTIAL before Bob chooses (only Ada is WILLING), COVERED once he has shared', () => {
+      const ids0 = (p: string, k: 'covered' | 'partial' | 'open') => stage4Of(p).data!.coverageAudit![k].map(r => r.id);
+      expect(ids0('before', 'partial')).toContain(ids.Partnership);
+      // Bob's unshared WILLING does not move it (choices hidden until choices_shared).
+      expect(ids0('unshared', 'partial')).toContain(ids.Partnership);
+      expect(ids0('shared', 'covered')).toContain(ids.Partnership);
+      // The coverage note has no table: dropped.
+      for (const p of ['before', 'unshared', 'shared']) {
+        const audit = stage4Of(p).data!.coverageAudit!;
+        for (const r of [...audit.covered, ...audit.partial, ...audit.open]) expect(r.note).toBeNull();
+      }
+    });
+
+    it("target: Bob's Understanding appears in Ada's walkthrough by its shared text, because 'pause' covers it", async () => {
+      const [u] = await sql<{ shared_text: string }>(`SELECT shared_text FROM need_share WHERE need_id = $1`, [ids.Understanding]);
+      for (const p of ['before', 'unshared', 'shared']) {
+        const s = stage4Of(p).data!;
+        expect(s.walkthrough!.partnerNeeds).toEqual(
+          expect.arrayContaining([expect.objectContaining({ id: ids.Understanding, label: u.shared_text })]),
+        );
+        const pause = s.inventory!.sharedProposals.find(card => card.id === ids.pause)!;
+        expect(pause.needsAddressed.map(n => n.id)).toContain(ids.Understanding);
+      }
+    });
+
+    // targetOnly #2: closure names only need_share ids — an open SHARED need is
+    // in v_session_closure_items, an UNSHARED one never. Runs after the golden
+    // checks (outside the recorded steps), on the same run database.
+    it('target: closing Stage 4 lists an open shared need in the closure items and never an unshared one', async () => {
+      const [bobP] = await sql<{ id: string }>(
+        `SELECT p.id FROM participant p JOIN "user" u ON u.id = p.user_id WHERE u.email = 'bob@e2e.test'`,
+      );
+      const [unshared] = await sql<{ id: string }>(
+        `INSERT INTO need (participant_id, label, category, ai_confidence, confirmed_at) VALUES ($1, 'PROBE_UNSHARED_AT_CLOSE', 'MEANING', 0.9, now()) RETURNING id`,
+        [bobP.id],
+      );
+      const [open] = await sql<{ id: string }>(
+        `INSERT INTO need (participant_id, label, category, ai_confidence, confirmed_at) VALUES ($1, 'PROBE_OPEN_AT_CLOSE', 'MEANING', 0.9, now()) RETURNING id`,
+        [bobP.id],
+      );
+      await sql(`INSERT INTO consent (participant_id, need_id, decision, decided_at) VALUES ($1, $2, 'GRANTED', now())`, [bobP.id, open.id]);
+      const job = new Client({ connectionString: jobUrlFor(harness.fixture.target, harness.fixture.database) });
+      await job.connect();
+      try {
+        await job.query(`SELECT app.need_share($1::uuid, 'An open shared need at closure')`, [open.id]);
+      } finally {
+        await job.end();
+      }
+      const close = await harness.step({
+        label: 'close as ada (outside the recorded steps)',
+        actor: harness.actors.userA,
+        tables: [],
+        call: agent => agent.post(`/api/v1/sessions/${harness.sessionId}/stage4/close`).send({}),
+      });
+      expect(close.status).toBe(200);
+      const [items] = await sql<{ open_need_ids: string[] }>(
+        `SELECT open_need_ids FROM v_session_closure_items WHERE session_id = $1`,
+        [harness.sessionId],
+      );
+      expect(items.open_need_ids).toContain(open.id);
+      expect(items.open_need_ids).not.toContain(unshared.id);
+      const shareIds = (await sql<{ need_id: string }>(`SELECT need_id FROM need_share`)).map(r => r.need_id);
+      for (const id of items.open_need_ids) expect(shareIds).toContain(id);
+      expect(JSON.stringify(close.body)).not.toContain('PROBE_OPEN_AT_CLOSE');
+      expect(JSON.stringify(close.body)).not.toContain('PROBE_UNSHARED_AT_CLOSE');
+    });
+  }
 });

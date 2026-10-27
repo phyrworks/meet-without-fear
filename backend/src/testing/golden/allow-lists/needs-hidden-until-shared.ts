@@ -16,7 +16,7 @@
 
 import type { KnownLeak } from '../privacy';
 import { READ_DTO_RULES } from './common';
-import type { AllowList } from './types';
+import type { AllowList, AllowRule } from './types';
 
 export const NEEDS_HIDDEN_UNTIL_SHARED_ALLOW: AllowList = {
   scenario: 'needs-hidden-until-shared',
@@ -72,26 +72,17 @@ export const NEEDS_HIDDEN_UNTIL_SHARED_ALLOW: AllowList = {
   ],
 };
 
-const F_LABEL =
-  'R4: GET /sessions/:id/needs/comparison returns the partner’s IdentifiedNeed.need (the private label) — there is no shared text in today’s shape';
-
-/** Observed against the current code; see `privacy.ts` for the contract. */
-export const NEEDS_HIDDEN_UNTIL_SHARED_KNOWN_LEAKS: KnownLeak[] = [
-  ...(
-    [
-      ['ada', 'bob'],
-      ['bob', 'ada'],
-    ] as const
-  ).flatMap(([reader, owner]) =>
-    [1, 2].map(i => ({
-      at: `both shared: needs comparison as ${reader}@e2e.test ⊃ ${owner} need ${i} label`,
-      finding: F_LABEL,
-      evidence:
-        `body.data.partnerNeeds[${i - 1}].need = ${owner}'s IdentifiedNeed.need verbatim (controllers/stage3.ts ` +
-        'getNeedsComparison maps partner needs from IdentifiedNeed); evidence is not returned.',
-    })),
-  ),
-];
+/**
+ * Observed against the current code; see `privacy.ts` for the contract.
+ *
+ * TS-11 (work-a39h.11.21): EMPTY on the target. The four entries recorded
+ * `both shared: needs comparison as <reader> ⊃ <owner> need <i> label`
+ * (finding "R4: GET /sessions/:id/needs/comparison returns the partner's
+ * IdentifiedNeed.need (the private label)"); the target's comparison reads
+ * the partner's needs from v_need_shared (shared text and category only), so
+ * they are closed and deleted — any reappearance fails the scenario.
+ */
+export const NEEDS_HIDDEN_UNTIL_SHARED_KNOWN_LEAKS: KnownLeak[] = [];
 
 /**
  * Not a leak but the reason the target cannot reproduce the shared phase from
@@ -103,3 +94,84 @@ export const NEEDS_SHARE_WRITES_NO_NEED_SHARE =
   'F2: production’s needs share (POST /needs/consent → stage3.ts consentToShareNeeds) writes GRANTED IDENTIFIED_NEED ' +
   'ConsentRecords and no ConsentedContent; plan §3 step 12 builds need_share from ConsentedContent alone, so every ' +
   'need shared in production migrates as unshared.';
+
+// ============================================================================
+// TS-11 — the byte-level golden on the TARGET shape
+// ============================================================================
+//
+// Recorded on the current shape, never re-recorded (runner): compared under
+// the concept rules above plus what the target computes differently by design
+// (ruling R29 / Q3): the Stage 4 state is computed from v_need_coverage over
+// need_share, so once both have shared (steps 32, 43) the walkthrough,
+// inventory and coverage audit list the four shared needs where today's
+// fixture had no coverage rows. Every rule is keyed by exact DTO keys under
+// the enumerated Stage 4 paths, over the named Stage 4 read steps; each
+// newly visible need is one pinned `addedEntries`. The scenario asserts the
+// real values (target-only checks in the test). The step changes
+// (`changes`/`changesAtResponse`, in the current shape's table names) are
+// compared by TS-10's `changesMapped` once phoenix/target-shape carries it
+// (rulings R27/R28) — added in the post-merge round.
+
+/** The Stage 4 reads of this scenario (the step layout the test pins). */
+export const NEEDS_STAGE4_READ_STEPS = { nothingShared: 8, bobShared: 20, bothAda: 32, bothBob: 43 } as const;
+
+/** The partner's shared text under MOCK_LLM: the job's category fallback (services/needs-share.ts). */
+const SHARED_TEXT: Record<string, string> = {
+  SAFETY: 'Feeling safe and settled',
+  RECOGNITION: 'Being seen and appreciated',
+  AUTONOMY: 'Having room to choose for myself',
+};
+
+function stage4SharedNeedRules(): AllowRule[] {
+  const own = (step: number) => `steps.${step}.body.data`;
+  const needs = {
+    ada: [
+      { id: '<need:ada#1>', label: 'Rest without having to earn it first', category: 'AUTONOMY' },
+      { id: '<need:ada#2>', label: 'Being thanked out loud for the invisible work', category: 'RECOGNITION' },
+    ],
+    bob: [
+      { id: '<need:bob#1>', label: 'A quiet first hour after work', category: 'SAFETY' },
+      { id: '<need:bob#2>', label: 'Credit for the effort even when the result is late', category: 'RECOGNITION' },
+    ],
+  };
+  const rules: AllowRule[] = [];
+  for (const [step, reader, partner] of [
+    [NEEDS_STAGE4_READ_STEPS.bothAda, 'ada', 'bob'],
+    [NEEDS_STAGE4_READ_STEPS.bothBob, 'bob', 'ada'],
+  ] as const) {
+    const base = own(step);
+    const named = [
+      ...needs[reader].map(n => ({ id: n.id, label: n.label, source: 'YOU' })),
+      ...needs[partner].map(n => ({ id: n.id, label: SHARED_TEXT[n.category], source: 'PARTNER' })),
+    ];
+    rules.push({
+      kind: 'mayDiffer',
+      at: [`${base}.walkthrough.currentNeed`, `${base}.walkthrough.phase`, `${base}.walkthrough.totalInPhase`, `${base}.coverageAudit.updatedAt`],
+      mustMatch: true,
+      why: 'R29: the walkthrough starts on the reader’s first shared need (MY_NEEDS) instead of the empty QUALITY_REVIEW today’s coverage-less fixture gives.',
+    });
+    for (const n of named) {
+      const list = n.source === 'YOU' ? 'ownNeeds' : 'partnerNeeds';
+      rules.push({
+        kind: 'addedEntries',
+        at: `${base}.walkthrough.${list}`,
+        where: { id: n.id, label: n.label, source: n.source },
+        why: `R29: ${n.id} is a shared need (need_share) the walkthrough lists — ${n.source === 'YOU' ? 'by the owner’s label' : 'by its shared text'}.`,
+      });
+      for (const at of [`${base}.coverageAudit.open`, `${base}.inventory.unaddressedNeeds`]) {
+        rules.push({
+          kind: 'addedEntries',
+          at,
+          where: { id: n.id, label: n.label, source: n.source },
+          why: `R29: ${n.id} is a shared need no proposal covers (v_need_coverage OPEN); its coverage note is dropped (no table).`,
+        });
+      }
+    }
+  }
+  return rules;
+}
+
+export const NEEDS_HIDDEN_UNTIL_SHARED_BYTE_TARGET_ALLOW: AllowList = {
+  scenario: 'needs-hidden-until-shared',
+  rules: [...NEEDS_HIDDEN_UNTIL_SHARED_ALLOW.rules, ...stage4SharedNeedRules()],
+};

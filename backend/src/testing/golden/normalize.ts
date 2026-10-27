@@ -375,6 +375,16 @@ async function labelTargetRows(target: DbTarget, database: string, labels: Map<s
       await rankWithin(`SELECT id, participant_id FROM need ORDER BY created_at, id`, 'need', r => who(r.participant_id));
       await rankWithin(`SELECT id, session_id FROM proposal ORDER BY created_at, id`, 'proposal', r => bare(r.session_id));
       await rankWithin(`SELECT id FROM agreement ORDER BY id`, 'agreement', () => 'main');
+      // TS-11, the 1:1 renames the repair/follow-up scenarios name: TendingEntry
+      // → follow_up (same natural owner and order). The rest of the cluster
+      // carries no id of its own on the target (proposal_choice,
+      // need_disposition, agreement_party are composite keys; session_closure
+      // is keyed by its session; need_share by its need — labelled above).
+      await rankWithin(
+        `SELECT id, session_id FROM follow_up ORDER BY created_at, id`,
+        'tendingEntry',
+        r => bare(r.session_id),
+      );
       await rankWithin(
         `SELECT id, reviewer_participant_id FROM empathy_review ORDER BY created_at, id`,
         'validation',

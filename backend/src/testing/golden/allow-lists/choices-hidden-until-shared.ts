@@ -16,7 +16,7 @@
 
 import type { KnownLeak } from '../privacy';
 import { READ_DTO_RULES } from './common';
-import type { AllowList } from './types';
+import type { AllowList, AllowRule } from './types';
 
 /**
  * Step layout (the scenario asserts it): Ada's 9 reads (0–8), Bob chooses
@@ -79,37 +79,83 @@ export const CHOICES_HIDDEN_UNTIL_SHARED_ALLOW: AllowList = {
 /** Choices: observed against the current code (none); see `privacy.ts` for the contract. */
 export const CHOICES_HIDDEN_UNTIL_SHARED_KNOWN_LEAKS: KnownLeak[] = [];
 
-/** The partner's need labels in Ada's reads: observed against the current code. */
-export const CHOICES_NEED_LABEL_KNOWN_LEAKS: KnownLeak[] = [
-  'before bob chooses',
-  'bob chose, not shared',
-  'bob shared',
-].map(phase => ({
-  at: `${phase}: stage4 as ada@e2e.test ⊃ bob need label Support`,
-  finding:
-    'R4: GET /sessions/:id/stage4 shows a partner’s private need label (Stage4NeedCoverage.needLabel) in the ' +
-    'walkthrough, coverage audit and proposal cards — the F-R4-1 class (label, not shared text)',
-  evidence:
-    'body.data.walkthrough.partnerNeeds[0].label, coverageAudit.partial[0].label and needsAddressed[].label = "Support" ' +
-    '(Bob’s IdentifiedNeed.need, copied into Stage4NeedCoverage.needLabel by the fixture as Stage 4 coverage does); ' +
-    'services/stage4-state.ts builds them from coverage rows. Bob’s other need ("Understanding") has no coverage row ' +
-    'and is not shown.',
-}));
+/**
+ * The partner's need labels in Ada's reads — TS-11 (work-a39h.11.21): EMPTY.
+ * The three entries recorded `<phase>: stage4 as ada@e2e.test ⊃ bob need label
+ * Support` (finding "R4: GET /sessions/:id/stage4 shows a partner's private
+ * need label (Stage4NeedCoverage.needLabel)"); on the target a partner's need
+ * is named by its need_share.shared_text, so they are closed and deleted.
+ */
+export const CHOICES_NEED_LABEL_KNOWN_LEAKS: KnownLeak[] = [];
 
-/** Ada's need labels in Bob's write responses: observed against the current code (fix round 2). */
-export const CHOICES_BOB_WRITES_KNOWN_LEAKS: KnownLeak[] = [
-  'choose pause as bob',
-  'choose checkin as bob',
-  'set aside open need as bob',
-  'share selections as bob',
-].flatMap(step =>
-  ['Partnership', 'Appreciation'].map(label => ({
-    at: `${step} ⊃ ada need label ${label}`,
-    finding:
-      'R4: Stage 4 write responses (selection, need decline, share-selections) return the Stage 4 state with the ' +
-      'partner’s private need labels — the mirror of F-R4-2 (F-R4-3)',
-    evidence:
-      `body.data.state (walkthrough.partnerNeeds / proposalGroups[].proposals[].needsAddressed / coverageAudit) names ` +
-      `Ada's need "${label}" (Stage4NeedCoverage.needLabel) in the response to Bob's own write.`,
-  })),
-);
+/**
+ * Ada's need labels in Bob's write responses — TS-11 (work-a39h.11.21): EMPTY.
+ * The eight entries recorded `<write step> ⊃ ada need label Partnership|Appreciation`
+ * (finding F-R4-3, "Stage 4 write responses return the Stage 4 state with the
+ * partner's private need labels"); closed on the target the same way.
+ */
+export const CHOICES_BOB_WRITES_KNOWN_LEAKS: KnownLeak[] = [];
+
+// ============================================================================
+// TS-11 — the byte-level golden on the TARGET shape
+// ============================================================================
+//
+// Recorded on the current shape, never re-recorded: compared under the
+// concept rules above plus what the target computes differently by design
+// (ruling R29 / Q3). The Stage 4 state is built from v_need_coverage over
+// need_share (no Stage4NeedCoverage table): need ids are need_share ids, the
+// coverage buckets are computed (Partnership is PARTIAL while only Ada is
+// WILLING), the coverage note is dropped, and Bob's "Understanding" appears
+// because "pause" covers it. The rules are keyed by exact DTO keys under the
+// enumerated Stage 4 paths, over the named Stage 4 steps (Ada's three Stage 4
+// reads and Bob's four write responses, whose `state` is the same DTO). The
+// scenario asserts the real values (the target-only checks in the test).
+// The step changes are compared by TS-10's `changesMapped` once
+// phoenix/target-shape carries it (R27/R28), and each newly visible need's
+// `addedEntries` is pinned from the comparison output, in the post-merge round.
+
+/** Ada's Stage 4 reads (the 6th read of each block of nine). */
+export const ADA_STAGE4_READ_STEPS = [5, 16, 27];
+
+/** Every Stage 4 state DTO of the scenario, as a path prefix. */
+export const STAGE4_STATE_ROOTS = [
+  ...ADA_STAGE4_READ_STEPS.map(i => `steps.${i}.body.data`),
+  ...BOB_WRITE_STEPS.map(i => `steps.${i}.body.data.state`),
+];
+
+function stage4ComputedRules(): AllowRule[] {
+  const needKeys = (prefix: string, keys: string[]) => keys.map(k => `${prefix}.${k}`);
+  const at = STAGE4_STATE_ROOTS.flatMap(r => [
+    ...needKeys(`${r}.walkthrough.currentNeed`, ['id', 'label', 'status']),
+    ...needKeys(`${r}.walkthrough.ownNeeds.*`, ['id', 'label', 'status']),
+    ...needKeys(`${r}.walkthrough.partnerNeeds.*`, ['id', 'label', 'status']),
+    ...needKeys(`${r}.walkthrough.proposalGroups.*.proposals.*.needsAddressed.*`, ['id', 'label', 'coverage']),
+    ...needKeys(`${r}.inventory.sharedProposals.*.needsAddressed.*`, ['id', 'label', 'coverage']),
+    ...needKeys(`${r}.inventory.individualCommitments.*.needsAddressed.*`, ['id', 'label', 'coverage']),
+    ...needKeys(`${r}.inventory.unaddressedNeeds.*`, ['id', 'label', 'note']),
+    // The coverage status buckets and their instant are computed (v_need_coverage).
+    ...needKeys(`${r}.coverageAudit`, ['covered', 'partial', 'open', 'updatedAt']),
+  ]);
+  return [
+    {
+      kind: 'mayDiffer',
+      at,
+      mustMatch: true,
+      why:
+        'R29: a need named in the Stage 4 state is a need_share id, named by the reader’s own label or the partner’s ' +
+        'shared text; coverage is computed from v_need_coverage over the choices the reader may see (R20), and its ' +
+        'note has no table.',
+    },
+    {
+      kind: 'addedKeys',
+      at: STAGE4_STATE_ROOTS.map(r => `${r}.inventory.individualCommitments.*.needsAddressed.*`),
+      keys: ['id'],
+      why: 'R29: the individual commitment’s need is a proposal_need link (a need_share id) — today a bare label with no id.',
+    },
+  ];
+}
+
+export const CHOICES_HIDDEN_UNTIL_SHARED_BYTE_TARGET_ALLOW: AllowList = {
+  scenario: 'choices-hidden-until-shared',
+  rules: [...CHOICES_HIDDEN_UNTIL_SHARED_ALLOW.rules, ...stage4ComputedRules()],
+};
