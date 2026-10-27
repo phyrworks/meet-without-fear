@@ -256,25 +256,15 @@ export const TARGET_RELATION_MAP: Record<string, string[]> = {
 /** Physical tables (changesMapped): the same map, `user` only (preferences are never written here). */
 export const TARGET_TABLE_MAP: Record<string, string[]> = { ...TARGET_RELATION_MAP, User: ['user'] };
 
-/** Relations the target's Stage 2 / reconciler reads add, each with its reason (traceMapped). */
+/**
+ * Relations the target's reads add, each with its reason (traceMapped) —
+ * exactly the ones a run needed (measured on empathy-reveal by emptying the
+ * list: participant and conversation on 8 steps, participant_milestone on 2).
+ */
 export const TARGET_ADDED_RELATIONS: Record<string, string> = {
   participant: 'membership and the caller are the participant row (requireSessionAccess; v_co_participant; sessionParties)',
   conversation: "the audience of a read or a delivered row is a participant's MAIN conversation",
-  participant_milestone: "a message's DTO stage and the stage-2 gates are derived from milestones (stage shim)",
-  milestone: 'v_current_stage joins the milestone lookup',
-  empathy_attempt: 'v_empathy_direction_status (the waiting state) reads the attempt rows through app.empathy_direction_status',
-  reconciler_guidance: 'the author-visible abstract hints of a result (P3 D8a split)',
-  context_share_offer: "the subject's own offers (pending actions, badge, empathy status)",
-  consent: 'the submission consent of an attempt (empathy draft read)',
-  empathy_review: "the subject's verdict (empathy status, partner empathy)",
-  draft: 'the Stage 2 drafts (EmpathyDraft, ValidationFeedbackDraft)',
-  reconciler_result: "the subject's own analysis (reconciler status, the reveal notice's gap severity)",
-  conversation_read_state: "the Share-tab instant (unviewed context, the subject's delivery status)",
-  session: 'the session status (Stage 2 writers; the reveal locks the session row)',
-  ai_memory: "the subject's own NOTABLE_FACTS (reconciler analysis input)",
-  user: 'display names of the session parties',
-  relationship_member: "the viewer's nickname for the partner (share continuation)",
-  message: "a participant's own conversation rows (messages, shared context)",
+  participant_milestone: "a message's DTO stage and the Stage 2 stage checks are derived from milestones (stage shim)",
 };
 
 /**
