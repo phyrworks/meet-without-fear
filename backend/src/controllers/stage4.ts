@@ -26,7 +26,7 @@
 
 import { Request, Response } from 'express';
 import { logger } from '../lib/logger';
-import { prisma } from '../lib/prisma';
+import { getJobPrisma, prisma } from '../lib/prisma';
 import {
   proposeStrategyRequestSchema,
   confirmAgreementRequestSchema,
@@ -60,6 +60,7 @@ import {
   hasMilestone,
   loadAgreements,
   loadClosure,
+  loadCoverage,
   loadProposal,
   loadProposals,
   loadStage4Needs,
@@ -268,8 +269,26 @@ async function notifyStrategiesUpdated(sessionId: string, userId: string, change
   }
 }
 
-/** The legacy agreement handle: a proposal whose creator proposed it as an agreement (revision mark). */
+/**
+ * The legacy agreement flow's explicit acts, recorded as proposal_revision
+ * rows (S-class: every member reads them): proposing a proposal as an
+ * agreement, and confirming it. A proposal is a legacy agreement handle only
+ * with a PROPOSED mark; a participant is a legacy party only by their own
+ * PROPOSED/CONFIRMED act — never by a WILLING choice alone (which may be an
+ * unshared redesigned-flow selection).
+ */
 const LEGACY_AGREEMENT_MARK = 'agreementProposed';
+const LEGACY_PROPOSED = 'Proposed as an agreement';
+const LEGACY_CONFIRMED = 'Confirmed as an agreement';
+
+/** Participants who proposed or confirmed this proposal as an agreement (their own acts). */
+async function legacyParties(proposalId: string): Promise<Set<string>> {
+  const rows = await prisma.proposalRevision.findMany({
+    where: { proposalId, reason: { in: [LEGACY_PROPOSED, LEGACY_CONFIRMED] } },
+    select: { actorParticipantId: true },
+  });
+  return new Set(rows.map((r) => r.actorParticipantId).filter((id): id is string => Boolean(id)));
+}
 
 // ============================================================================
 // Controllers
@@ -457,7 +476,6 @@ export async function shareStage4Selections(req: Request, res: Response): Promis
     const willing = new Set(myChoices.filter((c) => c.decision === 'WILLING').map((c) => c.proposalId));
     const active = proposals.filter((p) => p.status === 'ACTIVE');
     const declined = new Set(dispositions.map((d) => d.needId));
-    const { loadCoverage } = await import('../services/stage4-store');
     const coverage = new Map((await loadCoverage(sessionId)).map((c) => [c.needId, c]));
     const ungated = needs.filter((n) => {
       if ((coverage.get(n.id)?.status ?? 'OPEN') !== 'OPEN') return false;
@@ -725,11 +743,16 @@ export async function proposeStrategy(req: Request, res: Response): Promise<void
   }
 }
 
-/** A legacy agreement handle before the agreement exists: the proposal, with who is WILLING. */
+/**
+ * A legacy agreement handle before the agreement exists: the proposal. Who
+ * "agreed" is who proposed or confirmed it (their own acts, S-class
+ * revisions) — never read from proposal_choice, so a partner's unshared
+ * WILLING is never revealed (fix round 1, Important 2).
+ */
 async function pendingAgreementDTO(proposalId: string, me: string, partner: string | null, followUpDate: string | null): Promise<AgreementDTO | null> {
   const proposal = await loadProposal(proposalId);
   if (!proposal) return null;
-  const choices = await prisma.proposalChoice.findMany({ where: { proposalId, decision: 'WILLING' }, select: { participantId: true, updatedAt: true } });
+  const parties = await legacyParties(proposalId);
   return {
     id: proposal.id,
     strategyId: proposal.id,
@@ -739,14 +762,20 @@ async function pendingAgreementDTO(proposalId: string, me: string, partner: stri
     duration: proposal.duration,
     measureOfSuccess: proposal.measureOfSuccess,
     status: 'PROPOSED' as AgreementDTO['status'],
-    agreedByMe: choices.some((c) => c.participantId === me),
-    agreedByPartner: partner ? choices.some((c) => c.participantId === partner) : false,
+    agreedByMe: parties.has(me),
+    agreedByPartner: partner ? parties.has(partner) : false,
     agreedAt: null,
     followUpDate,
   };
 }
 
-/** When every present human is WILLING on the proposal, the job creates the agreement (+ parties). */
+/**
+ * The job decides (fix round 1, Important 2): every present human has
+ * proposed or confirmed the proposal as an agreement AND is WILLING on it
+ * (read on the job connection, which sees every choice) — then the job
+ * creates the agreement and its parties (T-agreement-parties re-checks at
+ * COMMIT).
+ */
 async function agreeIfEveryoneWilling(args: {
   sessionId: string;
   proposalId: string;
@@ -754,19 +783,25 @@ async function agreeIfEveryoneWilling(args: {
   type: AgreementType;
   followUpAt: Date | null;
 }): Promise<string | null> {
-  const proposal = await loadProposal(args.proposalId);
+  const job = getJobPrisma();
+  const [[proposal], humans, willing, parties] = await Promise.all([
+    job.$queryRaw<Array<{ id: string; status: string; description: string; duration: string | null; measureOfSuccess: string | null }>>`
+      SELECT id, status::text AS status, description, duration, measure_of_success AS "measureOfSuccess"
+      FROM proposal WHERE id = ${args.proposalId}::uuid AND session_id = ${args.sessionId}::uuid`,
+    job.$queryRaw<Array<{ id: string }>>`
+      SELECT id FROM participant WHERE session_id = ${args.sessionId}::uuid AND kind = 'human' AND left_at IS NULL ORDER BY id`,
+    job.$queryRaw<Array<{ participant_id: string }>>`
+      SELECT participant_id FROM proposal_choice WHERE proposal_id = ${args.proposalId}::uuid AND decision = 'WILLING'`,
+    legacyParties(args.proposalId),
+  ]);
   if (!proposal || proposal.status === 'CONVERTED_TO_AGREEMENT' || proposal.status === 'REMOVED') return null;
-  const humans = (await presentHumans(args.sessionId)).map((h) => h.id);
-  const willing = new Set(
-    (await prisma.proposalChoice.findMany({ where: { proposalId: args.proposalId, decision: 'WILLING' }, select: { participantId: true } })).map(
-      (c) => c.participantId,
-    ),
-  );
-  if (humans.length === 0 || !humans.every((h) => willing.has(h))) return null;
+  const willingIds = new Set(willing.map((w) => w.participant_id));
+  const ids = humans.map((h) => h.id);
+  if (ids.length === 0 || !ids.every((h) => willingIds.has(h) && parties.has(h))) return null;
   const [id] = await createAgreementsAsJob({
     sessionId: args.sessionId,
     actorParticipantId: args.actor,
-    partyParticipantIds: humans,
+    partyParticipantIds: ids,
     reason: 'Every party confirmed the agreement',
     agreements: [
       {
@@ -776,7 +811,7 @@ async function agreeIfEveryoneWilling(args: {
         duration: proposal.duration,
         measureOfSuccess: proposal.measureOfSuccess,
         followUpAt: args.followUpAt,
-        fromStatus: proposal.status,
+        fromStatus: proposal.status as 'ACTIVE',
       },
     ],
   });
@@ -839,7 +874,7 @@ export async function createAgreement(req: Request, res: Response): Promise<void
         actorParticipantId: me,
         action: 'REVISED',
         after: { [LEGACY_AGREEMENT_MARK]: true, type, followUpDate: followUpDate ?? null },
-        reason: 'Proposed as an agreement',
+        reason: LEGACY_PROPOSED,
       },
     });
 
@@ -897,13 +932,20 @@ export async function confirmAgreement(req: Request, res: Response): Promise<voi
     const partner = (await getPartnerParticipant(me))?.participantId ?? null;
 
     const existing = await prisma.agreement.findFirst({ where: { id: agreementId, sessionId }, select: { id: true, proposalId: true } });
-    const proposalId = existing?.proposalId ?? (await prisma.proposal.findFirst({ where: { id: agreementId, sessionId }, select: { id: true } }))?.id;
+    // A handle is an agreement id, or a proposal of this session that was PROPOSED as an
+    // agreement — never an arbitrary proposal id (fix round 1, Important 2).
+    const proposalId =
+      existing?.proposalId ??
+      (await prisma.proposal.findFirst({
+        where: { id: agreementId, sessionId, revisions: { some: { reason: LEGACY_PROPOSED } } },
+        select: { id: true },
+      }))?.id;
     if (!proposalId) {
       errorResponse(res, 'NOT_FOUND', 'Agreement not found', 404);
       return;
     }
     const mark = await prisma.proposalRevision.findFirst({
-      where: { proposalId, reason: 'Proposed as an agreement' },
+      where: { proposalId, reason: LEGACY_PROPOSED },
       orderBy: { createdAt: 'desc' },
       select: { after: true },
     });
@@ -912,6 +954,9 @@ export async function confirmAgreement(req: Request, res: Response): Promise<voi
     let createdId: string | null = existing?.id ?? null;
     if (confirmed && !existing) {
       await upsertChoice({ proposalId, participantId: me, decision: 'WILLING' });
+      await prisma.proposalRevision.create({
+        data: { proposalId, actorParticipantId: me, action: 'REVISED', after: { [LEGACY_AGREEMENT_MARK]: true, confirmed: true }, reason: LEGACY_CONFIRMED },
+      });
       createdId = await agreeIfEveryoneWilling({
         sessionId,
         proposalId,
@@ -923,7 +968,7 @@ export async function confirmAgreement(req: Request, res: Response): Promise<voi
 
     // The session resolves once every agreement proposed this way exists.
     const pending = await prisma.proposal.count({
-      where: { sessionId, status: { in: ['ACTIVE', 'REVISED'] }, revisions: { some: { reason: 'Proposed as an agreement' } } },
+      where: { sessionId, status: { in: ['ACTIVE', 'REVISED'] }, revisions: { some: { reason: LEGACY_PROPOSED } } },
     });
     const agreements = await loadAgreements(sessionId);
     const sessionCanResolve = agreements.length > 0 && pending === 0;
@@ -1043,7 +1088,7 @@ export async function getAgreements(req: Request, res: Response): Promise<void> 
     const [agreements, pendingProposals] = await Promise.all([
       loadAgreements(sessionId),
       prisma.proposal.findMany({
-        where: { sessionId, status: { in: ['ACTIVE', 'REVISED'] }, revisions: { some: { reason: 'Proposed as an agreement' } } },
+        where: { sessionId, status: { in: ['ACTIVE', 'REVISED'] }, revisions: { some: { reason: LEGACY_PROPOSED } } },
         orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
         select: { id: true },
       }),
