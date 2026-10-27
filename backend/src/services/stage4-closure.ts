@@ -13,14 +13,12 @@
  */
 
 import { AgreementType, MAX_AGREEMENTS, Stage4ClosureKind, Stage4ClosureReason } from '@meet-without-fear/shared';
-import { getJobPrisma, prisma } from '../lib/prisma';
+import { getJobPrisma } from '../lib/prisma';
 import {
   insertAgreementsTx,
   insertClosureTx,
   loadClosure,
   loadClosureItems,
-  loadProposals,
-  presentHumans,
   reachClosedForAll,
   type ProposalRow,
 } from './stage4-store';
@@ -61,18 +59,44 @@ function buildClosureSummary(
   return `Closed without a shared agreement, preserving ${individual} individual commitment${individual === 1 ? '' : 's'} and ${open} still-open need${open === 1 ? '' : 's'}.`;
 }
 
-async function allChoices(sessionId: string): Promise<Array<{ proposalId: string; participantId: string; decision: string }>> {
-  return prisma.proposalChoice.findMany({
-    where: { proposal: { sessionId } },
-    select: { proposalId: true, participantId: true, decision: true },
-  });
+type ClosureChoice = { proposalId: string; participantId: string; decision: string };
+type ClosureProposal = Pick<
+  ProposalRow,
+  'id' | 'kind' | 'status' | 'description' | 'duration' | 'measureOfSuccess' | 'createdByParticipantId' | 'sharedAt'
+>;
+
+/**
+ * What the closure decides on, read on the JOB connection (fix round 1,
+ * Important 3): the closure is the job's decision across every participant,
+ * not a cross-participant read of the closer's request connection (and under
+ * TS-16 RLS the closer could not see the partner's unshared rows anyway).
+ */
+async function closureInputsAsJob(sessionId: string): Promise<{
+  humans: string[];
+  sharedBy: Set<string>;
+  proposals: ClosureProposal[];
+  choices: ClosureChoice[];
+}> {
+  const job = getJobPrisma();
+  const [humans, shared, proposals, choices] = await Promise.all([
+    job.$queryRaw<Array<{ id: string }>>`
+      SELECT id FROM participant WHERE session_id = ${sessionId}::uuid AND kind = 'human' AND left_at IS NULL ORDER BY id`,
+    job.$queryRaw<Array<{ participant_id: string }>>`
+      SELECT pm.participant_id FROM participant_milestone pm JOIN participant p ON p.id = pm.participant_id
+      WHERE p.session_id = ${sessionId}::uuid AND pm.milestone_key = 'choices_shared'`,
+    job.$queryRaw<ClosureProposal[]>`
+      SELECT id, kind::text AS kind, status::text AS status, description, duration, measure_of_success AS "measureOfSuccess",
+             created_by_participant_id AS "createdByParticipantId", shared_at AS "sharedAt"
+      FROM proposal WHERE session_id = ${sessionId}::uuid ORDER BY id`,
+    job.$queryRaw<ClosureChoice[]>`
+      SELECT c.proposal_id AS "proposalId", c.participant_id AS "participantId", c.decision::text AS decision
+      FROM proposal_choice c JOIN proposal pr ON pr.id = c.proposal_id WHERE pr.session_id = ${sessionId}::uuid`,
+  ]);
+  return { humans: humans.map((h) => h.id), sharedBy: new Set(shared.map((s) => s.participant_id)), proposals, choices };
 }
 
 /** Individual commitments a closure keeps: not removed, its creator WILLING on it (v_session_closure_items' rule). */
-function willingIndividualCommitments(
-  proposals: ProposalRow[],
-  choices: Array<{ proposalId: string; participantId: string; decision: string }>,
-): ProposalRow[] {
+function willingIndividualCommitments(proposals: ClosureProposal[], choices: ClosureChoice[]): ClosureProposal[] {
   return proposals.filter(
     (p) =>
       p.kind === 'INDIVIDUAL_COMMITMENT' &&
@@ -81,6 +105,9 @@ function willingIndividualCommitments(
   );
 }
 
+/** What the closer may count in the summary: their own commitments and shared ones. */
+const visibleToCloser = (closer: string) => (p: ClosureProposal) => p.createdByParticipantId === closer || p.sharedAt !== null;
+
 export async function closeStage4(req: CloseStage4Request): Promise<{
   kind: Stage4ClosureKind;
   reason: Stage4ClosureReason;
@@ -88,24 +115,23 @@ export async function closeStage4(req: CloseStage4Request): Promise<{
   closedAt: Date;
 }> {
   if (await loadClosure(req.sessionId)) throw new Stage4CloseError('Stage 4 is already closed', 'CONFLICT', 409);
-  const humans = (await presentHumans(req.sessionId)).map((h) => h.id);
-  const [proposals, choices, items, shared] = await Promise.all([
-    loadProposals(req.sessionId),
-    allChoices(req.sessionId),
+  const [{ humans, sharedBy, proposals, choices }, items] = await Promise.all([
+    closureInputsAsJob(req.sessionId),
     loadClosureItems(req.sessionId),
-    prisma.participantMilestone.findMany({
-      where: { participantId: { in: humans }, milestoneKey: 'choices_shared' },
-      select: { participantId: true },
-    }),
   ]);
-  const sharedBy = new Set(shared.map((s) => s.participantId));
   const allSubmitted = humans.length > 0 && humans.every((h) => sharedBy.has(h));
+  // A partner's choices count only once every present human has shared: before
+  // that, mutual willingness is not known to the closer, and neither the
+  // closure kind nor any refusal may depend on it (no oracle on unshared choices).
   const willing = (proposalId: string) =>
     humans.every((h) => choices.some((c) => c.proposalId === proposalId && c.participantId === h && c.decision === 'WILLING'));
-  const mutual = proposals
-    .filter((p) => p.kind === 'SHARED_PROPOSAL' && p.status === 'ACTIVE' && willing(p.id))
-    .slice(0, MAX_AGREEMENTS);
+  const mutual = allSubmitted
+    ? proposals.filter((p) => p.kind === 'SHARED_PROPOSAL' && p.status === 'ACTIVE' && willing(p.id)).slice(0, MAX_AGREEMENTS)
+    : [];
+  // Each creator's own WILLING on their own commitment schedules its follow-up
+  // (an INDIVIDUAL one, theirs alone); the summary counts only what the closer may see.
   const individual = willingIndividualCommitments(proposals, choices);
+  const individualVisible = individual.filter(visibleToCloser(req.participantId));
 
   const kind =
     req.kind ??
@@ -139,7 +165,7 @@ export async function closeStage4(req: CloseStage4Request): Promise<{
       : allSubmitted
         ? Stage4ClosureReason.NO_OVERLAP
         : Stage4ClosureReason.USER_STOPPED);
-  const summary = buildClosureSummary(kind, mutual.length, individual.length, items.openNeedIds.length, req.summary);
+  const summary = buildClosureSummary(kind, mutual.length, individualVisible.length, items.openNeedIds.length, req.summary);
   const checkInAt = req.checkInDate ? new Date(req.checkInDate) : new Date(now.getTime() + 10 * 24 * 60 * 60 * 1000);
 
   const agreementIds = await getJobPrisma().$transaction(async (tx) => {
@@ -213,12 +239,11 @@ export async function closeStage4WithoutAgreement(args: {
   summary?: string;
 }): Promise<{ individualCount: number; openNeedCount: number }> {
   if (await loadClosure(args.sessionId)) throw new Stage4CloseError('Stage 4 is already closed', 'CONFLICT', 409);
-  const [proposals, choices, items] = await Promise.all([
-    loadProposals(args.sessionId),
-    allChoices(args.sessionId),
+  const [{ proposals, choices }, items] = await Promise.all([
+    closureInputsAsJob(args.sessionId),
     loadClosureItems(args.sessionId),
   ]);
-  const individual = willingIndividualCommitments(proposals, choices);
+  const individual = willingIndividualCommitments(proposals, choices).filter(visibleToCloser(args.participantId));
   const now = new Date();
   await getJobPrisma().$transaction((tx) =>
     insertClosureTx(tx, {

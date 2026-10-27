@@ -2946,6 +2946,9 @@ GRANT INSERT (agreement_id, participant_id, agreed_at) ON agreement_party TO mwf
 GRANT SELECT (agreement_id, participant_id) ON agreement_party TO mwf_job;
 -- T-agreement-parties: every party WILLING on the proposal
 GRANT SELECT (proposal_id, participant_id, decision) ON proposal_choice TO mwf_job;
+-- stage4-closure closureInputsAsJob (fix round 1): the closure decides across every participant on the
+-- job connection — the proposals it converts / schedules (snapshot text for the agreement and follow-up)
+GRANT SELECT (session_id, kind, status, description, duration, measure_of_success, shared_at) ON proposal TO mwf_job;
 -- repair-store convertProposalsAsJob: ACTIVE/REVISED → CONVERTED_TO_AGREEMENT (WHERE id = …: SELECT id is granted above)
 GRANT UPDATE (status) ON proposal TO mwf_job;
 -- repair-store: the conversion's audit row (append-only; no message id, lineage in before/after)
