@@ -292,9 +292,13 @@ export function compareMappedChanges(e0: unknown, a0: unknown, rule: ChangesMapp
   const added = rule.addedTables.filter(t => t.step === step);
   const addedCount = (table: string, kind: string) =>
     added.filter(t => t.table === table && t.kind === kind).reduce((n, t) => n + t.count, 0);
-  // Which baseline tables map onto each target table.
-  const sources = new Map<string, string[]>();
-  for (const [from, tos] of Object.entries(rule.tableMap)) for (const to of tos) sources.set(to, [...(sources.get(to) ?? []), from]);
+  // Which of the tables this baseline step wrote map onto each target table
+  // (1:1 = one target table, the image of no other table written at the step).
+  const sources = new Map<string, Set<string>>();
+  for (const key of base.keys()) {
+    const table = key.split('|')[0];
+    for (const to of rule.tableMap[table] ?? []) sources.set(to, new Set([...(sources.get(to) ?? []), table]));
+  }
 
   const image = new Set<string>();
   for (const key of base.keys()) {
@@ -306,7 +310,7 @@ export function compareMappedChanges(e0: unknown, a0: unknown, rule: ChangesMapp
     }
     for (const to of tos) image.add(`${to}|${kind}`);
     if (!tos.some(to => run.has(`${to}|${kind}`))) out.push(`changes: the baseline's ${kind} ${table} row(s) have no ${kind} image in [${tos.join(', ')}]`);
-    const oneToOne = tos.length === 1 && (sources.get(tos[0]) ?? []).length === 1;
+    const oneToOne = tos.length === 1 && (sources.get(tos[0])?.size ?? 0) === 1;
     if (oneToOne) {
       const want = base.get(key)! + addedCount(tos[0], kind);
       const got = run.get(`${tos[0]}|${kind}`) ?? 0;

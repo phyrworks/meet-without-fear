@@ -199,8 +199,9 @@ export interface TraceMappedRule extends RuleBase {
  *   - every (table, change kind) the run writes is the image of a (table,
  *     kind) the baseline wrote at that step (`tableMap`), or is named in
  *     `addedTables` at that exact step with its count and reason;
- *   - for a baseline table whose mapping is 1:1 (one target table, not the
- *     image of any other baseline table), the run's row count per (target
+ *   - for a baseline table whose mapping is 1:1 at that step (one target
+ *     table, not the image of any other table the baseline step wrote), the
+ *     run's row count per (target
  *     table, kind) equals the baseline's plus the added count named for it
  *     at that step;
  *   - every (table, kind) the baseline wrote at the step has an image the run

@@ -34,9 +34,17 @@ import { TS4_CONCEPT_NAMES } from '../concept-views';
 import { listTables } from '../db';
 import type { Harness, StepResult } from '../driver';
 import { createHarness } from '../driver';
-import { EMPATHY_REVEAL_ALLOW } from '../allow-lists/empathy-reveal';
+import { EMPATHY_REVEAL_ALLOW, EMPATHY_REVEAL_BYTE_TARGET_ALLOW } from '../allow-lists/empathy-reveal';
 import { conceptGoldenName, recordOrVerify, recordOrVerifyConcept } from '../runner';
 import type { SnapshotRow } from '../snapshot';
+import { isTargetShape } from '../shape';
+import { withClient } from '../db';
+import { targetMessageStageChecks } from '../scenario-checks';
+
+/** TS-10: the target's names for the facts these checks read. */
+const T = isTargetShape();
+const ATTEMPT_TABLE = T ? 'empathy_attempt' : 'EmpathyAttempt';
+const MESSAGE_TABLE = T ? 'message' : 'Message';
 
 const BASE_URL =
   process.env.GOLDEN_DATABASE_URL ||
@@ -171,7 +179,7 @@ describe(`golden: ${SCENARIO}`, () => {
       }
     }
 
-    attemptsAfter = (await harness.snapshot(['EmpathyAttempt'])).tables.EmpathyAttempt;
+    attemptsAfter = (await harness.snapshot([ATTEMPT_TABLE])).tables[ATTEMPT_TABLE];
   });
 
   afterAll(async () => {
@@ -179,12 +187,12 @@ describe(`golden: ${SCENARIO}`, () => {
   });
 
   it('every identifier resolves to a structural label', async () => {
-    const report = await recordOrVerify({ scenario: SCENARIO, harness, steps });
+    const report = await recordOrVerify({ scenario: SCENARIO, harness, steps, targetAllowList: EMPATHY_REVEAL_BYTE_TARGET_ALLOW });
     expect(report.unresolved).toEqual([]);
   });
 
   it('matches the recorded baseline', async () => {
-    const report = await recordOrVerify({ scenario: SCENARIO, harness, steps });
+    const report = await recordOrVerify({ scenario: SCENARIO, harness, steps, targetAllowList: EMPATHY_REVEAL_BYTE_TARGET_ALLOW });
     if (report.recorded) {
       expect(process.env.GOLDEN_UPDATE?.split(',')).toContain(SCENARIO);
       return;
@@ -258,19 +266,34 @@ describe(`golden: ${SCENARIO}`, () => {
   // asserting nothing about writes at all.
   it('the consent step actually writes rows', () => {
     expect(consentStep.changes.length).toBeGreaterThan(0);
-    expect(consentStep.changes.some((c) => c.table === 'EmpathyAttempt')).toBe(true);
+    expect(consentStep.changes.some((c) => c.table === ATTEMPT_TABLE)).toBe(true);
   });
 
   // The reveal commentary is written by the background reconciler, one message
   // per subject, and each must reach exactly one inbox. Asserting the routing
   // rather than the count is what makes this a privacy test: a reveal that wrote
   // both messages to the same user would satisfy any count-based check.
-  it('routes one reveal message to each partner', () => {
-    const inboxes = consentStep.changes
-      .filter((c) => c.table === 'Message' && c.kind === 'added')
-      .map((c) => (c.after as { forUserId?: string; role?: string; content?: string }))
-      .filter((m) => m.role === 'AI' && m.content?.includes('is ready for you to review'))
-      .map((m) => m.forUserId);
+  it('routes one reveal message to each partner', async () => {
+    const notices = consentStep.changes
+      .filter((c) => c.table === MESSAGE_TABLE && c.kind === 'added')
+      .map((c) => c.after as { forUserId?: string; conversation_id?: string; role?: string; content?: string })
+      .filter((m) => m.role === 'AI' && m.content?.includes('is ready for you to review'));
+    // Target: the audience is the conversation's owner (spec §1.1 message).
+    const ownerOf = async (m: { forUserId?: string; conversation_id?: string }) =>
+      T
+        ? (
+            await withClient(
+              harness.fixture.target,
+              c => c.query<{ user_id: string }>(
+                `SELECT p.user_id FROM conversation c JOIN participant p ON p.id = c.participant_id WHERE c.id = $1`,
+                [m.conversation_id],
+              ),
+              harness.fixture.database,
+            )
+          ).rows[0]?.user_id
+        : m.forUserId;
+    const inboxes = await Promise.all(notices.map(ownerOf));
+    expect(inboxes).toHaveLength(2);
     expect(new Set(inboxes)).toEqual(new Set([harness.actors.userA.id, harness.actors.userB?.id]));
   });
 
@@ -281,18 +304,53 @@ describe(`golden: ${SCENARIO}`, () => {
     // revealedAt is the field a hand-written UPDATE is most likely to drop: the
     // status alone still reads as revealed, and every downstream "when" is wrong.
     for (const a of attemptsAfter) {
-      expect(a.revealedAt).not.toBeNull();
-      expect(a.deliveredAt).not.toBeNull();
-      expect(a.deliveryStatus).toBe('DELIVERED');
+      expect(T ? a.revealed_at : a.revealedAt).not.toBeNull();
+      expect(T ? a.delivered_at : a.deliveredAt).not.toBeNull();
+      expect(T ? a.delivery_status : a.deliveryStatus).toBe('DELIVERED');
     }
   });
 
   it('bumps statusVersion on every status change', () => {
-    // Ada's attempt entered the run at statusVersion 0 and passes through
-    // ANALYZING, READY and REVEALED. Event ordering on the client is derived from
+    // Current shape: Ada's attempt entered the run at statusVersion 0 and passes
+    // through ANALYZING, READY and REVEALED (3). Target (ruling R32): there is no
+    // ANALYZING status, so each round goes HELD → READY → REVEALED through
+    // app.empathy_set_status — exactly 2, which the allow-list's pinned
+    // statusVersion rules rely on. Event ordering on the client is derived from
     // this counter, so a lost increment is a silent ordering bug.
     for (const a of attemptsAfter) {
-      expect(Number(a.statusVersion)).toBeGreaterThanOrEqual(3);
+      if (T) expect(Number(a.status_version)).toBe(2);
+      else expect(Number(a.statusVersion)).toBeGreaterThanOrEqual(3);
     }
+  });
+
+  // TS-10 target pairs of the allow-list's rules.
+  const targetOnly = T ? it : it.skip;
+  targetMessageStageChecks({ harness: () => harness, steps: () => steps });
+
+  targetOnly('mayDiffer pair: the partner-empathy statusVersion is the row\'s status_version (2)', () => {
+    for (const step of steps.filter((s) => s.label.startsWith('partner empathy as'))) {
+      const attempt = (step.body as { data: { attempt: { id: string; statusVersion: number } } }).data.attempt;
+      const row = attemptsAfter.find((a) => a.id === attempt.id);
+      expect(attempt.statusVersion).toBe(Number(row?.status_version));
+      expect(attempt.statusVersion).toBe(2);
+    }
+  });
+
+  targetOnly("addedEntries pair: Bob's empathy_submitted is reached at his round's submitted_at", async () => {
+    const rows = await withClient(
+      harness.fixture.target,
+      async c =>
+        (
+          await c.query<{ reached: Date; submitted: Date }>(
+            `SELECT pm.reached_at AS reached, a.submitted_at AS submitted
+             FROM participant_milestone pm JOIN participant p ON p.id = pm.participant_id JOIN "user" u ON u.id = p.user_id
+             JOIN empathy_attempt a ON a.author_participant_id = p.id
+             WHERE u.email = 'bob@e2e.test' AND pm.milestone_key = 'empathy_submitted'`,
+          )
+        ).rows,
+      harness.fixture.database,
+    );
+    expect(rows).toHaveLength(1);
+    expect(new Date(rows[0].reached).toISOString()).toBe(new Date(rows[0].submitted).toISOString());
   });
 });
