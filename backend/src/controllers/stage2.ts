@@ -723,6 +723,12 @@ export async function skipRefinement(req: Request, res: Response): Promise<void>
       // A refusal from app.empathy_set_status propagates (500), not a success.
       await setAttemptStatus(attempt.id, 'READY', { actor: 'participant' });
       status = 'READY';
+    }
+    if (status === 'READY') {
+      // The reveal check (job; idempotent — it reveals only READY rounds once
+      // every direction is ready). Also on a retry that finds the round
+      // already READY: a check that failed after the READY move committed is
+      // re-run, not skipped (fix round 2).
       const { checkAndRevealBothIfReady } = await import('../services/reconciler');
       await checkAndRevealBothIfReady(sessionId);
       status = (await currentAttempt(me.participantId, partner.participantId))?.status ?? status;

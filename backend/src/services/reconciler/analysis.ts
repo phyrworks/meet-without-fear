@@ -8,9 +8,12 @@
  * by `persistAnalysis` through the JOB connection — `reconciler_result`
  * (subject-only, one current per attempt, `superseded_at` on re-analysis) and
  * `reconciler_guidance` (the abstract hints the author may see). Inputs are
- * read on the app connection (the job never reads message content — trailer
- * T7, TS-9). `runReconciler` returns to its caller only what the caller may
- * see: results where the caller is the subject.
+ * read through the JOB connection too (Ruling R35, `reader()` below): the
+ * job's "reconciler reader" column grants in trailer T7 (TS-10 block) — the
+ * parties' MAIN-conversation chat, the subject's NOTABLE_FACTS, the author's
+ * attempt, the stored analysis — are all it may read. `runReconciler` returns
+ * to its caller only what the caller may see: results where the caller is the
+ * subject.
  */
 
 import { getJobPrisma } from '../../lib/prisma';

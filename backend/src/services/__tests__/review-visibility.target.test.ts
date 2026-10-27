@@ -19,12 +19,18 @@
 import { createHarness, type Harness } from '../../testing/golden/driver';
 import { listTables, withClient } from '../../testing/golden/db';
 import { isTargetShape } from '../../testing/golden/shape';
+import { capturePrompts, findLeaks, findPromptLeaks, fullRead, shapeTables } from '../../testing/golden/privacy';
 
 const BASE_URL =
   process.env.GOLDEN_DATABASE_URL || 'postgresql://mwf_user:mwf_password@localhost:5432/meet_without_fear';
 const describeTarget = isTargetShape() ? describe : describe.skip;
 jest.setTimeout(180_000);
 
+const UNSENT = 'You missed how lonely the evenings are once the dishes are done.';
+const ADA_TURN = 'I am still waiting. Is there anything I should be thinking about?';
+const TURN = 'chat turn as ada@e2e.test';
+/** R6's read tables (author-sees-status-only.golden.test.ts). */
+const READ_TABLES = shapeTables(['User', 'Message', 'UserVessel', 'EmpathyAttempt', 'ReconcilerResult', 'ReconcilerShareOffer']);
 const FEEDBACK = 'It was less about the plans and more about not being asked.';
 
 describeTarget('the review of an attempt: what the author sees, and a sent feedback survives a verdict', () => {
@@ -92,20 +98,44 @@ describeTarget('the review of an attempt: what the author sees, and a sent feedb
     if (harness) await harness.teardown();
   });
 
-  it("an unsent feedback draft (after the reveal) never reaches the author's reads", async () => {
-    const UNSENT = 'You missed how lonely the evenings are once the dishes are done.';
+  // Fix round 2, N1: R6's `unsent feedback` probe cannot hold on the target
+  // (m1: no draft before the reveal), so the property is exercised here, after
+  // the reveal, the way R6 exercises it: Ada's FULL author read set (every
+  // session and user read) with findLeaks, and an Ada chat turn with
+  // findPromptLeaks — the context builder is the cross-participant reader most
+  // likely to carry an unsent draft.
+  it("an unsent feedback draft (after the reveal) reaches none of the author's reads, nor her prompt", async () => {
     const saved = await post('userB', '/empathy/validation-feedback/draft', { content: UNSENT, readyToShare: false });
     expect(saved.status).toBe(200);
-    expect(await rows(`SELECT count(*)::int AS n FROM draft WHERE kind = 'VALIDATION_FEEDBACK' AND content = '${UNSENT}'`)).toEqual([{ n: 1 }]);
-    for (const path of ['/empathy/status', '/empathy/partner', '/messages', '/empathy/draft']) {
-      const res = await harness.step({
-        label: `${path} as ada`,
-        actor: harness.actors.userA,
-        tables: [],
-        call: agent => agent.get(`/api/v1/sessions/${harness.sessionId}${path}`),
-      });
-      expect({ path, status: res.status, leaks: JSON.stringify(res.body).includes(UNSENT) }).toEqual({ path, status: 200, leaks: false });
-    }
+    // The probe is live: the draft exists, about Ada's revealed round.
+    expect(
+      await rows(`SELECT count(*)::int AS n FROM draft d JOIN empathy_attempt a ON a.id = d.attempt_id
+                  WHERE d.kind = 'VALIDATION_FEEDBACK' AND d.content = '${UNSENT}' AND a.revealed_at IS NOT NULL`),
+    ).toEqual([{ n: 1 }]);
+
+    const ada = harness.actors.userA;
+    const scope = await listTables(harness.fixture.target, harness.fixture.database);
+    const prompts = await capturePrompts();
+    const reads = await prompts.during('post-reveal reads', () =>
+      fullRead(harness, ada, 'post-reveal author', { tables: READ_TABLES, set: 'all' }),
+    );
+    const turn = await prompts.during(TURN, () =>
+      harness.step({
+        label: TURN,
+        actor: ada,
+        tables: scope,
+        sse: true,
+        asyncBoundary: true,
+        call: agent => agent.post(`/api/v1/sessions/${harness.sessionId}/messages/stream`).send({ content: ADA_TURN }),
+      }),
+    );
+    // Not vacuous: R6's full read set (31 reads) ran, and the turn built one prompt.
+    expect(reads).toHaveLength(31);
+    expect(prompts.calls.filter(c => c.step === TURN && c.fn === 'getSonnetStreamingResponse')).toHaveLength(1);
+
+    const probes = { 'unsent feedback (post-reveal)': UNSENT };
+    expect([...findLeaks([...reads, turn], probes), ...findPromptLeaks(prompts.calls, probes)]).toEqual([]);
+    jest.restoreAllMocks();
   });
 
   it('m2: a verdict whose VALIDATED move failed shows the author nothing — no validatedAt', async () => {
@@ -143,8 +173,17 @@ describeTarget('the review of an attempt: what the author sees, and a sent feedb
     expect(await roundOf('ada@e2e.test')).toBe('REFINING');
 
     // Ada accepts the difference: her round READY, and (Bob's being VALIDATED) revealed again.
+    // Fix round 2: the reveal check fails once AFTER the READY move commits —
+    // 500, the round left READY; the retry re-runs the check and reveals it.
+    const state = await import('../reconciler/state');
+    jest.spyOn(state, 'checkAndRevealBothIfReady').mockRejectedValueOnce(new Error('injected: reveal check failed'));
+    const failed = await post('userA', '/empathy/skip-refinement', { willingToAccept: true });
+    jest.restoreAllMocks();
+    expect(failed.status).toBe(500);
+    expect(await roundOf('ada@e2e.test')).toBe('READY');
     const skip = await post('userA', '/empathy/skip-refinement', { willingToAccept: true });
     expect(skip.status).toBe(200);
+    expect((skip.body as { data: { status: string } }).data.status).toBe('REVEALED');
     expect(await roundOf('ada@e2e.test')).toBe('REVEALED');
 
     const verdict = await post('userB', '/empathy/validate', { validated: true });
