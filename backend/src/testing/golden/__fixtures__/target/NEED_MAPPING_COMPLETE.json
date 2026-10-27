@@ -2,21 +2,22 @@
   "stage": "NEED_MAPPING_COMPLETE",
   "database": "mwf_tfx_need_mapping_complete",
   "seeded": {
-    "sessionId": "01a179f3-6e51-7846-a82f-3755347e861a",
-    "relationshipId": "01a179f3-6e4e-7cd2-9db6-8a4a14f5e1b7",
-    "invitationId": "01a179f3-6e56-737a-b485-548fd206617c",
+    "sessionId": "01a17e6c-fd99-7c48-b8c2-2eb6be36e73f",
+    "relationshipId": "01a17e6c-fd96-77ba-9ee3-7b57fd5452b1",
+    "invitationId": "01a17e6c-fd9d-7c11-ba8b-8eacfdd71f50",
     "userA": {
-      "id": "01a179f3-6e4c-7362-be5f-8e37dbe1cc2b",
+      "id": "01a17e6c-fd93-7d7c-8e8a-46e852b0ad58",
       "email": "ada@e2e.test",
       "name": "Ada Lovelace"
     },
     "userB": {
-      "id": "01a179f3-6e4d-7f8e-be1b-9d4d21f2ff1d",
+      "id": "01a17e6c-fd95-7a40-bad5-01d16de9f6e9",
       "email": "bob@e2e.test",
       "name": "Bob Ross"
     }
   },
   "counts": {
+    "consent": 4,
     "conversation": 2,
     "conversation_read_state": 2,
     "draft": 2,
@@ -24,6 +25,7 @@
     "invitation": 1,
     "milestone": 13,
     "need": 4,
+    "need_share": 4,
     "participant": 2,
     "participant_milestone": 15,
     "relationship": 1,
@@ -80,5 +82,5 @@
     "user_memory",
     "user_preferences"
   ],
-  "builtAt": "2026-10-26T20:42:39.133Z"
+  "builtAt": "2026-10-27T17:33:54.536Z"
 }

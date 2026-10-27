@@ -346,6 +346,7 @@ const BUILDERS: Record<TargetStage, Build> = {
       currentShape: {
         untimedGates: ['compact_signed', 'feel_heard', 'empathy_validated', 'needs_confirmed', 'needs_validated'],
         batchNeeds: true,
+        unconsentedNeedShares: true,
       },
       participants: [
         {
@@ -711,14 +712,28 @@ export const TOMBSTONE_TEXT = {
   bobNeedShares: ['Bob wants to be understood before being asked for more.', 'Bob wants practical help on hard work days.'],
 };
 
-const need = (n: string, category: 'RECOGNITION' | 'FAIRNESS' | 'CONNECTION') => ({
+/**
+ * A need of the repair-stage scenarios. They reach `needs_shared`, so each
+ * need is shared; `sharedText` is the target's `need_share.shared_text` (the
+ * job's "heat removed" text — deliberately NOT the label, which a partner must
+ * never read; R4). Today's fixture recorded no share consent for them
+ * (`currentShape.unconsentedNeedShares`).
+ */
+const need = (n: string, category: 'RECOGNITION' | 'FAIRNESS' | 'CONNECTION', sharedText: string): NeedContent => ({
   need: n,
   category,
   aiConfidence: 0.95,
   confirmed: true,
+  shared: { text: sharedText },
 });
-const ADA_NEEDS = [need('Appreciation', 'RECOGNITION'), need('Partnership', 'FAIRNESS')];
-const BOB_NEEDS = [need('Understanding', 'CONNECTION'), need('Support', 'CONNECTION')];
+const ADA_NEEDS = [
+  need('Appreciation', 'RECOGNITION', 'Being seen for what I put in'),
+  need('Partnership', 'FAIRNESS', 'Carrying the load as a team'),
+];
+const BOB_NEEDS = [
+  need('Understanding', 'CONNECTION', 'Being heard all the way through'),
+  need('Support', 'CONNECTION', 'Having backup when things pile up'),
+];
 
 /** Stages 0–3 complete for both (Stage 3 now); both in Stage 4. */
 function needMappingComplete(): ReturnType<Build> {
@@ -738,7 +753,7 @@ function needMappingComplete(): ReturnType<Build> {
   });
   return {
     invitation: ACCEPTED,
-    currentShape: { untimedGates: ['compact_signed', 'feel_heard', 'empathy_validated'] },
+    currentShape: { untimedGates: ['compact_signed', 'feel_heard', 'empathy_validated'], unconsentedNeedShares: true },
     participants: [
       {
         key: A,
