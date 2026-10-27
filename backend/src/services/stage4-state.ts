@@ -117,11 +117,16 @@ function buildCoverageViews(
   coverage: CoverageRow[],
   visibleChoices: ChoiceRow[],
   humans: string[],
+  visibleProposalIds: Set<string>,
 ): CoverageView[] {
   const byNeed = new Map(coverage.map((c) => [c.needId, c]));
   return needs.map((n) => {
     const c = byNeed.get(n.id);
-    const covering = c?.coveringProposalIds ?? [];
+    // Only proposals the viewer may see (spec §1.4 proposal RLS arm; TS-11
+    // post-merge, found by choices-hidden-until-shared): the view spans every
+    // proposal of the session, so a partner's unshared INDIVIDUAL_COMMITMENT
+    // id would otherwise reach the viewer in coveringProposalIds.
+    const covering = (c?.coveringProposalIds ?? []).filter((id) => visibleProposalIds.has(id));
     const willing = new Set(
       visibleChoices
         .filter((choice) => choice.decision === 'WILLING' && covering.includes(choice.proposalId) && humans.includes(choice.participantId))
@@ -455,7 +460,7 @@ export async function loadStage4View(sessionId: string, userId: string) {
     proposals,
     choices,
     needs,
-    rows: buildCoverageViews(needs, coverage, choices, humans),
+    rows: buildCoverageViews(needs, coverage, choices, humans, new Set(proposals.map((p) => p.id))),
     dispositions,
     closure,
     items,
