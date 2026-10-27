@@ -50,6 +50,7 @@ import {
   loadStage4Needs,
   loadVisibleChoices,
   presentHumans,
+  visibleCoverageOf,
   type AgreementRow,
   type ChoiceRow,
   type ClosureItems,
@@ -109,8 +110,8 @@ function proposalSourceLabel(proposal: ProposalRow, me: string, partner: string 
  * may read (their own, and a co-participant's only after choices_shared) —
  * the rule the view applies under the viewer's RLS (TS-16): a partner's
  * unshared WILLING must not flip a need to COVERED in the viewer's state.
- * Rule as the view's (R20): COVERED when every present human is WILLING on a
- * covering proposal, PARTIAL when some are, OPEN otherwise.
+ * Rule as the view's (R20), from the one shared implementation
+ * (stage4-store `visibleCoverageOf`, also behind `loadVisibleCoverage`).
  */
 function buildCoverageViews(
   needs: Stage4Need[],
@@ -126,14 +127,12 @@ function buildCoverageViews(
     // post-merge, found by choices-hidden-until-shared): the view spans every
     // proposal of the session, so a partner's unshared INDIVIDUAL_COMMITMENT
     // id would otherwise reach the viewer in coveringProposalIds.
-    const covering = (c?.coveringProposalIds ?? []).filter((id) => visibleProposalIds.has(id));
-    const willing = new Set(
-      visibleChoices
-        .filter((choice) => choice.decision === 'WILLING' && covering.includes(choice.proposalId) && humans.includes(choice.participantId))
-        .map((choice) => choice.participantId),
+    const { coveringProposalIds: covering, status } = visibleCoverageOf(
+      c?.coveringProposalIds ?? [],
+      visibleProposalIds,
+      visibleChoices,
+      humans,
     );
-    const status: CoverageView['coverageStatus'] =
-      willing.size === 0 ? 'OPEN' : willing.size >= humans.length ? 'COVERED' : 'PARTIAL';
     return {
       id: n.id,
       label: n.label,

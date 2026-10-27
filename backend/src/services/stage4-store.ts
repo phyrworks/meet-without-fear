@@ -214,6 +214,31 @@ export async function loadCoverage(sessionId: string): Promise<CoverageRow[]> {
 }
 
 /**
+ * Coverage of one need from the proposals and choices a viewer may see — the
+ * ONE implementation of R20 the app uses (the view's rule under the viewer's
+ * RLS): the covering proposals the viewer may see, the present humans WILLING
+ * on one of them (from the viewer's visible choices), and COVERED when every
+ * present human is, PARTIAL when some are, OPEN otherwise. Pure.
+ */
+export function visibleCoverageOf(
+  coveringProposalIds: string[],
+  visibleProposalIds: Set<string>,
+  visibleChoices: Array<{ proposalId: string; participantId: string; decision: string }>,
+  humanIds: string[],
+): { coveringProposalIds: string[]; willingParticipantIds: string[]; status: CoverageRow['status'] } {
+  const covering = coveringProposalIds.filter((id) => visibleProposalIds.has(id));
+  const willing = [
+    ...new Set(
+      visibleChoices
+        .filter((ch) => ch.decision === 'WILLING' && covering.includes(ch.proposalId) && humanIds.includes(ch.participantId))
+        .map((ch) => ch.participantId),
+    ),
+  ];
+  const status: CoverageRow['status'] = willing.length === 0 ? 'OPEN' : willing.length >= humanIds.length ? 'COVERED' : 'PARTIAL';
+  return { coveringProposalIds: covering, willingParticipantIds: willing, status };
+}
+
+/**
  * `v_need_coverage` as `viewer` may see it (TS-11 fix round 2): covering
  * proposals limited to the proposals the viewer may see, and the status
  * recomputed from the choices the viewer may see (their own, and a partner's
@@ -233,19 +258,7 @@ export async function loadVisibleCoverage(sessionId: string, viewerParticipantId
   ]);
   const visible = new Set(proposals.map((p) => p.id));
   const humanIds = humans.map((h) => h.id);
-  return coverage.map((c) => {
-    const covering = c.coveringProposalIds.filter((id) => visible.has(id));
-    const willing = [
-      ...new Set(
-        choices
-          .filter((ch) => ch.decision === 'WILLING' && covering.includes(ch.proposalId) && humanIds.includes(ch.participantId))
-          .map((ch) => ch.participantId),
-      ),
-    ];
-    const status: CoverageRow['status'] =
-      willing.length === 0 ? 'OPEN' : willing.length >= humanIds.length ? 'COVERED' : 'PARTIAL';
-    return { ...c, coveringProposalIds: covering, willingParticipantIds: willing, status };
-  });
+  return coverage.map((c) => ({ ...c, ...visibleCoverageOf(c.coveringProposalIds, visible, choices, humanIds) }));
 }
 
 /**
