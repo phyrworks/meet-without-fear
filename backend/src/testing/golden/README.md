@@ -259,6 +259,28 @@ The harness runs against whichever schema the branch carries (`shape.ts` reads
 fixture-representation deltas (`allow-lists/session-read.ts`: the compact `signedAt` instant,
 a message's DTO stage, the user's split names, Ada's `empathy_submitted` milestone).
 
+### TS-10 additions (Stage 2 / reconciler scenarios)
+
+The six Stage 2 scenarios (`empathy-reveal`, R2, both R3 orders, R6, R7) verify on the target.
+What it took, beyond TS-9's pieces:
+
+| Piece | What it does |
+|---|---|
+| `changesMapped` rule (ruling R32) | Byte-level row `changes` are physical tables; compared through a table map (`TARGET_TABLE_MAP`, spec Absorbs). Every (table, kind) the run writes is an image of a baseline write at that step or a named addition with its count at that exact step; 1:1 tables keep their row count. Values are the concept comparison's. |
+| `pendingCluster` rule (rulings R31, R37) | A full read of a TS-11 / TS-12 endpoint answers 500 on this branch. Listed reads (fixed table `PENDING_CLUSTER_READS`) may differ only as a 500 + error envelope; a listed read answering anything else fails as a stale entry. A TS-10 read cannot be listed. The step's changes are compared exactly: a `<ts:N>` rank the 500 shifts is pinned on the read's entry (`rankShifts`: step label, path, from → to), and a pin that does not hold or never fires fails. |
+| `refusedStep` rule (TS-10 fix round 1, m1) | A step the target refuses by a ruled fix where the baseline recorded it succeeding (R6's feedback draft about an unrevealed round → 404). The run must answer the named status and error code; the named baseline writes must be absent; every other change of the step is compared as recorded. Pair it with a scenario assertion. |
+| `appLogin: 'mwf_app'` harness option | The app logs in as `mwf_app` on the run database (with the DML that ownership gives it in production), the job as `mwf_job`: the real-role unit tests. |
+| `shapeTables()` (privacy.ts) | A scenario's snapshot tables in the shape in use. |
+| Pair checks (scenario-checks.ts) | `targetMessageStageChecks`, `targetFixtureDeltaChecks` (compact signedAt, consent targetId), `authorClosureChecks` (R6/R7 closed values), `roundAndNotificationChecks`, `mockIndexChecks` — each pinned rule's real value. |
+| Fixture names (FIDELITY) | The target writer puts the whole name in `first_name` so `name` and the display name equal the old fixture's; a split name renamed "Bob Ross" to "Bob" in every message a run writes. |
+
+Hazard found: a test module that imports `lib/prisma` at load (here, through `stage-shim`)
+creates the app's client BEFORE the harness repoints `DATABASE_URL` — the app then reads the
+developer's database while the job writes the run database. Import such modules inside the test.
+
+Hazard found: the trace classifies a statement by its first line; a `$queryRaw` template that
+opens with a newline is traced as `other`. Start raw SQL on the template's first line.
+
 ## Four hazards found by running it, not by reading
 
 **`node-postgres` and naive timestamps.** All 144 timestamp columns are

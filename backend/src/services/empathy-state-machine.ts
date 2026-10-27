@@ -1,30 +1,26 @@
 /**
- * Empathy State Machine
+ * Empathy State Machine — the transition table of spec §1.2 (TS-10).
  *
- * Formalizes the EmpathyAttempt status transitions to prevent
- * invalid state changes. All empathy status mutations should go
- * through this module.
+ * `app.empathy_set_status` is the ONLY executor of a status move: it enforces
+ * this table and its actors in the database and refuses anything else. This
+ * module is the application's copy of the table, used to DECIDE a move (which
+ * status an event leads to) and to skip a call that would be refused. It
+ * never writes.
  *
- * Valid transitions:
- *   HELD → ANALYZING (reconciler starts comparing)
- *   HELD → AWAITING_SHARING (gaps detected, skip ANALYZING)
- *   HELD → READY (minor/no gaps, skip sharing)
- *   ANALYZING → AWAITING_SHARING (gaps detected)
- *   ANALYZING → READY (no significant gaps)
- *   AWAITING_SHARING → REFINING (subject shares context, guesser refines)
- *   AWAITING_SHARING → READY (subject declines sharing)
- *   REFINING → READY (guesser submits refined statement)
- *   REFINING → AWAITING_SHARING (re-analysis after resubmit shows gaps)
- *   READY → REVEALED (both users ready, mutual reveal)
- *   REVEALED → VALIDATED (recipient validates accuracy)
- *   REVEALED → REFINING (recipient sends validation feedback)
+ *   HELD → AWAITING_SHARING (gaps), READY (no significant gaps)       job / author
+ *   AWAITING_SHARING → REFINING (subject shared), READY (declined)     job / author
+ *   REFINING → READY, AWAITING_SHARING (re-analysis)                   job / author
+ *   READY → REVEALED                                                   job only, reveal gate
+ *   REVEALED → VALIDATED (subject), REFINING (subject sent feedback)   subject / job
+ *   any except VALIDATED → SUPERSEDED (resubmission inserts round n+1) author / job
+ *
+ * The legacy ANALYZING and NEEDS_WORK statuses do not exist on the target.
  */
 
-import { EmpathyStatus } from '@meet-without-fear/shared';
+import type { TargetEmpathyStatus } from './empathy-store';
 
 /** Events that trigger empathy status transitions */
 export type EmpathyEvent =
-  | 'START_ANALYSIS'
   | 'GAPS_DETECTED'
   | 'NO_SIGNIFICANT_GAPS'
   | 'MARK_READY'
@@ -33,86 +29,58 @@ export type EmpathyEvent =
   | 'RESUBMIT_WITH_GAPS'
   | 'MUTUAL_REVEAL'
   | 'VALIDATE'
-  | 'VALIDATION_FEEDBACK_SENT';
+  | 'VALIDATION_FEEDBACK_SENT'
+  | 'RESUBMIT';
 
-/**
- * Transition table: maps (currentStatus, event) → newStatus
- */
-const TRANSITIONS: Record<string, EmpathyStatus | undefined> = {
-  // From HELD
-  [`${EmpathyStatus.HELD}:START_ANALYSIS`]: EmpathyStatus.ANALYZING,
-  [`${EmpathyStatus.HELD}:GAPS_DETECTED`]: EmpathyStatus.AWAITING_SHARING,
-  [`${EmpathyStatus.HELD}:MARK_READY`]: EmpathyStatus.READY,
+const TRANSITIONS: Record<string, TargetEmpathyStatus | undefined> = {
+  'HELD:GAPS_DETECTED': 'AWAITING_SHARING',
+  'HELD:NO_SIGNIFICANT_GAPS': 'READY',
+  'HELD:MARK_READY': 'READY',
 
-  // From ANALYZING
-  [`${EmpathyStatus.ANALYZING}:GAPS_DETECTED`]: EmpathyStatus.AWAITING_SHARING,
-  [`${EmpathyStatus.ANALYZING}:NO_SIGNIFICANT_GAPS`]: EmpathyStatus.READY,
-  [`${EmpathyStatus.ANALYZING}:MARK_READY`]: EmpathyStatus.READY,
+  'AWAITING_SHARING:CONTEXT_SHARED': 'REFINING',
+  'AWAITING_SHARING:DECLINE_SHARING': 'READY',
+  'AWAITING_SHARING:MARK_READY': 'READY',
 
-  // From AWAITING_SHARING
-  [`${EmpathyStatus.AWAITING_SHARING}:CONTEXT_SHARED`]: EmpathyStatus.REFINING,
-  [`${EmpathyStatus.AWAITING_SHARING}:DECLINE_SHARING`]: EmpathyStatus.READY,
-  [`${EmpathyStatus.AWAITING_SHARING}:MARK_READY`]: EmpathyStatus.READY,
+  'REFINING:MARK_READY': 'READY',
+  'REFINING:NO_SIGNIFICANT_GAPS': 'READY',
+  'REFINING:GAPS_DETECTED': 'AWAITING_SHARING',
+  'REFINING:RESUBMIT_WITH_GAPS': 'AWAITING_SHARING',
 
-  // From REFINING
-  [`${EmpathyStatus.REFINING}:MARK_READY`]: EmpathyStatus.READY,
-  [`${EmpathyStatus.REFINING}:RESUBMIT_WITH_GAPS`]: EmpathyStatus.AWAITING_SHARING,
+  'READY:MUTUAL_REVEAL': 'REVEALED',
 
-  // From READY
-  [`${EmpathyStatus.READY}:MUTUAL_REVEAL`]: EmpathyStatus.REVEALED,
+  'REVEALED:VALIDATE': 'VALIDATED',
+  'REVEALED:VALIDATION_FEEDBACK_SENT': 'REFINING',
 
-  // From REVEALED
-  [`${EmpathyStatus.REVEALED}:VALIDATE`]: EmpathyStatus.VALIDATED,
-  [`${EmpathyStatus.REVEALED}:VALIDATION_FEEDBACK_SENT`]: EmpathyStatus.REFINING,
-
-  // Legacy: NEEDS_WORK is treated as equivalent to AWAITING_SHARING
-  [`${EmpathyStatus.NEEDS_WORK}:CONTEXT_SHARED`]: EmpathyStatus.REFINING,
-  [`${EmpathyStatus.NEEDS_WORK}:DECLINE_SHARING`]: EmpathyStatus.READY,
-  [`${EmpathyStatus.NEEDS_WORK}:MARK_READY`]: EmpathyStatus.READY,
+  'HELD:RESUBMIT': 'SUPERSEDED',
+  'AWAITING_SHARING:RESUBMIT': 'SUPERSEDED',
+  'REFINING:RESUBMIT': 'SUPERSEDED',
+  'READY:RESUBMIT': 'SUPERSEDED',
+  'REVEALED:RESUBMIT': 'SUPERSEDED',
 };
 
 /**
- * Validates and returns the new status for an empathy state transition.
- *
- * @param currentStatus - The current EmpathyStatus
- * @param event - The event triggering the transition
- * @returns The new EmpathyStatus
- * @throws Error if the transition is invalid
+ * The status an event leads to from `currentStatus`.
+ * @throws Error if the transition is not in the table
  */
-export function transition(
-  currentStatus: EmpathyStatus,
-  event: EmpathyEvent
-): EmpathyStatus {
-  const key = `${currentStatus}:${event}`;
-  const newStatus = TRANSITIONS[key];
-
+export function transition(currentStatus: TargetEmpathyStatus | string, event: EmpathyEvent): TargetEmpathyStatus {
+  const newStatus = TRANSITIONS[`${currentStatus}:${event}`];
   if (newStatus === undefined) {
     throw new Error(
-      `Invalid empathy state transition: ${currentStatus} + ${event}. ` +
-      `No valid transition defined for this combination.`
+      `Invalid empathy state transition: ${currentStatus} + ${event}. No valid transition defined for this combination.`,
     );
   }
-
   return newStatus;
 }
 
-/**
- * Checks if a transition is valid without throwing.
- */
-export function canTransition(
-  currentStatus: EmpathyStatus,
-  event: EmpathyEvent
-): boolean {
-  const key = `${currentStatus}:${event}`;
-  return TRANSITIONS[key] !== undefined;
+/** Checks if a transition is valid without throwing. */
+export function canTransition(currentStatus: TargetEmpathyStatus | string, event: EmpathyEvent): boolean {
+  return TRANSITIONS[`${currentStatus}:${event}`] !== undefined;
 }
 
-/**
- * Returns all valid events for a given status.
- */
-export function validEventsFor(status: EmpathyStatus): EmpathyEvent[] {
+/** Returns all valid events for a given status. */
+export function validEventsFor(status: TargetEmpathyStatus | string): EmpathyEvent[] {
   const prefix = `${status}:`;
   return Object.keys(TRANSITIONS)
-    .filter((key) => key.startsWith(prefix) && TRANSITIONS[key] !== undefined)
-    .map((key) => key.slice(prefix.length) as EmpathyEvent);
+    .filter(key => key.startsWith(prefix))
+    .map(key => key.slice(prefix.length) as EmpathyEvent);
 }

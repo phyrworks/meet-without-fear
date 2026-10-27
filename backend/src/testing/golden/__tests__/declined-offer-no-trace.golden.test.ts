@@ -24,21 +24,23 @@
 
 import {
   DECLINED_OFFER_NO_TRACE_ALLOW,
+  DECLINED_OFFER_NO_TRACE_BYTE_TARGET_ALLOW,
   DECLINE_STATUS_PATHS,
   DECLINED_OFFER_NO_TRACE_KNOWN_TRACES,
 } from '../allow-lists/declined-offer-no-trace';
-import { listTables } from '../db';
+import { listTables, withClient } from '../db';
 import type { Harness, StepResult } from '../driver';
 import { createHarness } from '../driver';
 import { buildLabelMap, normalize } from '../normalize';
-import { fullRead } from '../privacy';
-import { goldenScenarioChecks } from '../scenario-checks';
+import { fullRead, shapeTables } from '../privacy';
+import { authorClosureChecks, goldenScenarioChecks, targetFixtureDeltaChecks, targetMessageStageChecks } from '../scenario-checks';
+import { isTargetShape } from '../shape';
 
 const BASE_URL =
   process.env.GOLDEN_DATABASE_URL || 'postgresql://mwf_user:mwf_password@localhost:5432/meet_without_fear';
 
 const SCENARIO = 'declined-offer-no-trace';
-const READ_TABLES = ['User', 'Message', 'UserVessel', 'EmpathyAttempt', 'ReconcilerShareOffer', 'ConsentRecord'];
+const READ_TABLES = shapeTables(['User', 'Message', 'UserVessel', 'EmpathyAttempt', 'ReconcilerShareOffer', 'ConsentRecord']);
 
 jest.setTimeout(600_000);
 
@@ -60,6 +62,8 @@ describe(`golden: ${SCENARIO}`, () => {
   let before: StepResult[];
   let after: StepResult[];
   let decline: StepResult;
+  /** TARGET ONLY: Ada's full read in a world where the offer never existed (allow-list targetOnly). */
+  let neverOffered: StepResult[] = [];
 
   beforeAll(async () => {
     harness = await createHarness({
@@ -83,6 +87,8 @@ describe(`golden: ${SCENARIO}`, () => {
     });
     after = await fullRead(harness, ada, 'after decline', { tables: READ_TABLES, set: 'all' });
     steps = [...before, decline, ...after];
+
+
   });
 
   afterAll(async () => {
@@ -92,13 +98,17 @@ describe(`golden: ${SCENARIO}`, () => {
   goldenScenarioChecks({
     scenario: SCENARIO,
     allowList: DECLINED_OFFER_NO_TRACE_ALLOW,
+    byteTargetAllowList: DECLINED_OFFER_NO_TRACE_BYTE_TARGET_ALLOW,
     harness: () => harness,
     steps: () => steps,
   });
+  targetMessageStageChecks({ harness: () => harness, steps: () => steps });
+  targetFixtureDeltaChecks({ harness: () => harness, steps: () => steps });
+  authorClosureChecks({ steps: () => steps, empathyStatus: [7, 39], reconcilerStatus: [11, 43], summary: [13, 45] });
 
   it('the decline happened (the offer is DECLINED and the direction released)', () => {
     expect(decline.status).toBe(200);
-    const offer = decline.changes.find(c => c.table === 'ReconcilerShareOffer');
+    const offer = decline.changes.find(c => c.table === (isTargetShape() ? 'context_share_offer' : 'ReconcilerShareOffer'));
     expect((offer?.after as { status?: string })?.status).toBe('DECLINED');
   });
 
@@ -124,5 +134,48 @@ describe(`golden: ${SCENARIO}`, () => {
       unexpected: traces.filter(t => !DECLINED_OFFER_NO_TRACE_KNOWN_TRACES.some(k => k.at === t)).sort(),
       stale: DECLINED_OFFER_NO_TRACE_KNOWN_TRACES.filter(k => !traces.includes(k.at)).map(k => k.at).sort(),
     }).toEqual({ unexpected: [], stale: [] });
+  });
+
+  // allow-list targetOnly: after the decline Ada's reads equal her reads where the offer never existed.
+  // Runs LAST (it deletes rows the goldens above label): remove every trace of
+  // the offer — the analysis of Ada's attempt with its offer and Bob's consent
+  // (CASCADE) — and read again as Ada. Her reads after the decline must equal
+  // her reads in a world where no offer was ever made (the direction status
+  // is READY in both). Not part of the recorded baseline.
+  (isTargetShape() ? it : it.skip)("the author's reads after the decline equal her reads where no offer was ever made", async () => {
+    await withClient(
+      harness.fixture.target,
+      c =>
+        c.query(
+          `DELETE FROM reconciler_result r USING empathy_attempt a, participant p, "user" u
+           WHERE r.attempt_id = a.id AND a.author_participant_id = p.id AND p.user_id = u.id AND u.email = 'ada@e2e.test'`,
+        ),
+      harness.fixture.database,
+    );
+    expect(
+      (await withClient(harness.fixture.target, async c => (await c.query(`SELECT count(*)::int AS n FROM context_share_offer`)).rows, harness.fixture.database))[0],
+    ).toEqual({ n: 0 });
+    neverOffered = await fullRead(harness, harness.actors.userA, 'never offered', { tables: READ_TABLES, set: 'all' });
+    expect(neverOffered.length).toBe(after.length);
+    const map = await buildLabelMap(
+      harness.fixture.target,
+      harness.fixture.database,
+      harness.fixture.manifest,
+      harness.fixture.seededClerkIds,
+    );
+    const window = { from: harness.startedAt, to: new Date(Date.now() + 60_000).toISOString() };
+    const differences: string[] = [];
+    for (const [i, a] of after.entries()) {
+      const n = neverOffered[i];
+      const read = a.label.replace('after decline: ', '');
+      expect(n.label).toBe(`never offered: ${read}`);
+      // Normalised together so the two bodies share one timestamp universe.
+      const both = normalize({ a: { status: a.status, body: a.body }, n: { status: n.status, body: n.body } }, map, window).value as {
+        a: unknown;
+        n: unknown;
+      };
+      for (const p of differingPaths(both.a, both.n)) differences.push(`${read} @ ${p}`);
+    }
+    expect(differences).toEqual([]);
   });
 });

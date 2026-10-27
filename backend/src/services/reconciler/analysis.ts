@@ -3,9 +3,20 @@
  *
  * Core AI gap analysis: analyzes the gap between what one person guessed
  * about the other's feelings vs what they actually expressed.
+ *
+ * Target shape (TS-10, spec §1.2): the analysis is computed here and persisted
+ * by `persistAnalysis` through the JOB connection — `reconciler_result`
+ * (subject-only, one current per attempt, `superseded_at` on re-analysis) and
+ * `reconciler_guidance` (the abstract hints the author may see). Inputs are
+ * read through the JOB connection too (Ruling R35, `reader()` below): the
+ * job's "reconciler reader" column grants in trailer T7 (TS-10 block) — the
+ * parties' MAIN-conversation chat, the subject's NOTABLE_FACTS, the author's
+ * attempt, the stored analysis — are all it may read. `runReconciler` returns
+ * to its caller only what the caller may see: results where the caller is the
+ * subject.
  */
 
-import { prisma } from '../../lib/prisma';
+import { getJobPrisma } from '../../lib/prisma';
 import { logger } from '../../lib/logger';
 import { getSonnetResponse, getHaikuJson, BrainActivityCallType } from '../../lib/bedrock';
 import { getCurrentUserId } from '../../lib/request-context';
@@ -17,22 +28,41 @@ import {
 } from '../stage-prompts';
 import { type CategorizedFact } from '../partner-session-classifier';
 import { extractJsonFromResponse } from '../../utils/json-extractor';
-import type {
-  ReconcilerResult,
-} from '@meet-without-fear/shared';
+import type { ReconcilerResult } from '@meet-without-fear/shared';
+import { currentAttempt, sessionParties, type SessionParty } from '../empathy-store';
+import { stageAt, type MilestoneReached } from '../stage-shim';
+
+/**
+ * Ruling R35: the reconciler runs as the JOB. Every read and write of the
+ * analysis path goes through the job connection, whose column grants (trailer
+ * T7, TS-10 block, "reconciler reader") are the whole of what it may see. The
+ * request that triggered an analysis never reads the other participant's rows
+ * on its own (app) connection; it gets back only its caller-visible projection
+ * (`runReconciler` with `forParticipantId`). The context builder stays the one
+ * cross-participant reader on the app connection.
+ */
+const reader = () => getJobPrisma();
+
+/** A participant's milestones (key, reached_at) through the job — the stage shim's input. */
+async function milestonesOf(participantId: string): Promise<MilestoneReached[]> {
+  const rows = await reader().participantMilestone.findMany({
+    where: { participantId },
+    orderBy: [{ reachedAt: 'asc' }, { milestoneKey: 'asc' }],
+    select: { milestoneKey: true, reachedAt: true },
+  });
+  return rows.map(r => ({ key: r.milestoneKey, reachedAt: r.reachedAt }));
+}
 
 // ============================================================================
 // Types (shared across reconciler modules)
 // ============================================================================
 
-type StageOneMessageForThemes = {
-  content: string;
-  extractedEmotions: string[] | null;
-};
-
 export interface UserInfo {
+  /** The participant's user id (the realtime envelope and the old signatures are user-keyed). */
   id: string;
   name: string;
+  /** The participant row (target shape, TS-10). */
+  participantId: string;
 }
 
 export interface SessionParticipants {
@@ -52,6 +82,10 @@ export interface EmpathyData {
   statement: string;
   /** When it was shared */
   sharedAt: Date;
+  /** The attempt (current round), its status and the status version an analysis starts from. */
+  attemptId: string;
+  statusVersion: number;
+  status: string;
 }
 
 export interface ReconcilerAnalysisInput {
@@ -60,6 +94,12 @@ export interface ReconcilerAnalysisInput {
   subject: UserInfo;
   empathyStatement: string;
   witnessingContent: WitnessingContent;
+  /** The attempt the analysis is about; its current result is reused. */
+  attemptId?: string;
+}
+
+export function toUserInfo(p: SessionParty, fallback: string): UserInfo {
+  return { id: p.userId ?? '', name: p.name || fallback, participantId: p.participantId };
 }
 
 // ============================================================================
@@ -77,7 +117,6 @@ export async function getSonnetJson<T>(options: {
   operation?: string;
   turnId?: string;
 }): Promise<T | null> {
-  // Ensure sessionId, turnId, and operation are always strings
   const effectiveSessionId = options.sessionId || 'reconciler';
   const effectiveTurnId = options.turnId || (options.sessionId ? `${options.sessionId}-${Date.now()}` : `reconciler-${Date.now()}`);
   const effectiveOperation = options.operation || 'reconciler';
@@ -102,96 +141,80 @@ export async function getSonnetJson<T>(options: {
     logger.debug('Parsed AI JSON response', { operation: effectiveOperation });
     return json;
   } catch (error) {
-    logger.warn('Failed to parse AI JSON response', { operation: effectiveOperation, error: (error as Error).message, responseLength: response.length });
+    logger.warn('Failed to parse AI JSON response', {
+      operation: effectiveOperation,
+      error: (error as Error).message,
+      responseLength: response.length,
+    });
     return null;
   }
 }
 
 function normalizeCategorizedFacts(rawFacts: unknown): CategorizedFact[] | undefined {
-  if (!Array.isArray(rawFacts)) {
-    return undefined;
-  }
-
+  if (!Array.isArray(rawFacts)) return undefined;
   const facts = rawFacts
     .filter((fact): fact is { category: string; fact: string } => {
       if (typeof fact !== 'object' || fact === null) return false;
       const candidate = fact as Record<string, unknown>;
       return typeof candidate.category === 'string' && typeof candidate.fact === 'string';
     })
-    .map((fact) => ({
-      category: fact.category.trim(),
-      fact: fact.fact.trim(),
-    }))
-    .filter((fact) => fact.category.length > 0 && fact.fact.length > 0);
-
+    .map(fact => ({ category: fact.category.trim(), fact: fact.fact.trim() }))
+    .filter(fact => fact.category.length > 0 && fact.fact.length > 0);
   return facts.length > 0 ? facts : undefined;
 }
 
-async function loadSubjectFacts(
-  sessionId: string,
-  subjectId: string
-): Promise<CategorizedFact[] | undefined> {
-  const vessel = await prisma.userVessel.findUnique({
-    where: {
-      userId_sessionId: {
-        userId: subjectId,
-        sessionId,
-      },
-    },
-    select: { notableFacts: true },
+/** The subject's own NOTABLE_FACTS (ai_memory) — for the subject-side analysis only. */
+async function loadSubjectFacts(subjectParticipantId: string): Promise<CategorizedFact[] | undefined> {
+  const row = await reader().aiMemory.findUnique({
+    where: { participantId_kind: { participantId: subjectParticipantId, kind: 'NOTABLE_FACTS' } },
+    select: { doc: true },
   });
+  return normalizeCategorizedFacts((row?.doc as { facts?: unknown } | null)?.facts);
+}
 
-  return normalizeCategorizedFacts(vessel?.notableFacts);
+/** A participant's MAIN-conversation chat rows, each with the stage it was written in (stage shim). */
+async function stagedChat(
+  participantId: string,
+): Promise<Array<{ role: 'USER' | 'AI'; content: string; stage: number; senderParticipantId: string | null }>> {
+  const [rows, reached] = await Promise.all([
+    reader().message.findMany({
+      where: { conversation: { participantId, kind: 'MAIN' }, kind: 'CHAT', role: { in: ['USER', 'AI'] } },
+      orderBy: { createdAt: 'asc' },
+      select: { role: true, content: true, createdAt: true, senderParticipantId: true },
+    }),
+    milestonesOf(participantId),
+  ]);
+  return rows.map(r => ({
+    role: r.role as 'USER' | 'AI',
+    content: r.content,
+    stage: stageAt(reached, r.createdAt),
+    senderParticipantId: r.senderParticipantId,
+  }));
 }
 
 export async function loadRecentSubjectStage2Turns(
-  sessionId: string,
-  subjectId: string,
-  maxSubjectUserTurns = 5
+  subjectParticipantId: string,
+  maxSubjectUserTurns = 5,
 ): Promise<Array<{ role: 'user' | 'assistant'; content: string; stage: number }>> {
-  const messages = await prisma.message.findMany({
-    where: {
-      sessionId,
-      stage: 2,
-      OR: [
-        {
-          senderId: subjectId,
-          role: 'USER',
-        },
-        {
-          forUserId: subjectId,
-          role: 'AI',
-        },
-      ],
-    },
-    orderBy: { timestamp: 'asc' },
-    select: {
-      role: true,
-      content: true,
-      stage: true,
-    },
-  });
+  const messages = (await stagedChat(subjectParticipantId)).filter(m => m.stage === 2);
 
   const subjectUserIndexes = messages
-    .map((message, index) => message.role === 'USER' ? index : -1)
-    .filter((index) => index >= 0)
+    .map((message, index) => (message.role === 'USER' ? index : -1))
+    .filter(index => index >= 0)
     .slice(-maxSubjectUserTurns);
 
   const selectedIndexes = new Set<number>();
   for (const userIndex of subjectUserIndexes) {
-    const previousMessage = messages[userIndex - 1];
-    if (previousMessage?.role === 'AI') {
-      selectedIndexes.add(userIndex - 1);
-    }
+    if (messages[userIndex - 1]?.role === 'AI') selectedIndexes.add(userIndex - 1);
     selectedIndexes.add(userIndex);
   }
 
   return Array.from(selectedIndexes)
     .sort((a, b) => a - b)
-    .map((index) => {
+    .map(index => {
       const message = messages[index];
       return {
-        role: message.role === 'AI' ? 'assistant' as const : 'user' as const,
+        role: message.role === 'AI' ? ('assistant' as const) : ('user' as const),
         content: message.content,
         stage: message.stage,
       };
@@ -203,26 +226,18 @@ export async function loadRecentSubjectStage2Turns(
 // ============================================================================
 
 /**
- * Get empathy data for a user (their shared empathy statement).
+ * The author's current round about the subject (the analysis input). Read by
+ * the reconciler only; never returned to the subject.
  */
-export async function getEmpathyData(
-  sessionId: string,
-  userId: string
-): Promise<EmpathyData | null> {
-  const attempt = await prisma.empathyAttempt.findFirst({
-    where: {
-      sessionId,
-      sourceUserId: userId,
-    },
-  });
-
-  if (!attempt) {
-    return null;
-  }
-
+export async function getEmpathyData(authorParticipantId: string, subjectParticipantId: string): Promise<EmpathyData | null> {
+  const attempt = await currentAttempt(authorParticipantId, subjectParticipantId, reader());
+  if (!attempt) return null;
   return {
     statement: attempt.content,
-    sharedAt: attempt.sharedAt ?? new Date(),
+    sharedAt: attempt.submittedAt,
+    attemptId: attempt.id,
+    statusVersion: attempt.statusVersion,
+    status: attempt.status,
   };
 }
 
@@ -230,51 +245,23 @@ export async function getEmpathyData(
 // Helper: Get witnessing content (shared across reconciler modules)
 // ============================================================================
 
-/**
- * Get witnessing content for a user (their Stage 1 messages).
- */
+/** The subject's Stage 1 turns: their own chat turns written while they were in stage 1. */
 export async function getWitnessingContent(
   sessionId: string,
-  userId: string
+  subjectParticipantId: string,
+  subjectUserId?: string,
 ): Promise<WitnessingContent> {
-  // Get all user messages from Stage 1
-  const messages = await prisma.message.findMany({
-    where: {
-      sessionId,
-      senderId: userId,
-      stage: 1,
-      role: 'USER',
-    },
-    orderBy: { timestamp: 'asc' },
-    select: { content: true, extractedEmotions: true },
-  });
-
-  // Combine all messages
-  const userMessages = messages.map((m: StageOneMessageForThemes) => m.content).join('\n\n');
-
-  // Extract unique themes/emotions
-  const themes = new Set<string>();
-  messages.forEach((m: StageOneMessageForThemes) => {
-    m.extractedEmotions?.forEach((e: string) => themes.add(e));
-  });
-
-  // If no extracted emotions, try to extract key themes using AI (quick analysis)
-  let themesList = Array.from(themes);
-  if (themesList.length === 0 && userMessages.length > 0) {
-    themesList = await extractThemes(userMessages, sessionId, userId);
-  }
-
-  return {
-    userMessages,
-    themes: themesList,
-  };
+  const messages = (await stagedChat(subjectParticipantId)).filter(
+    m => m.stage === 1 && m.role === 'USER' && m.senderParticipantId === subjectParticipantId,
+  );
+  const userMessages = messages.map(m => m.content).join('\n\n');
+  // The target has no per-message extracted emotions (review F4.2): themes come
+  // from the quick AI pass.
+  const themes = userMessages.length > 0 ? await extractThemes(userMessages, sessionId, subjectUserId) : [];
+  return { userMessages, themes };
 }
 
-/**
- * Extract key themes from witnessing content using AI.
- */
 async function extractThemes(content: string, sessionId: string, userId?: string): Promise<string[]> {
-  // Include userId in turnId for proper attribution
   const effectiveUserId = userId || getCurrentUserId() || 'system';
   const turnId = `${sessionId}-${effectiveUserId}-extract-themes-${Date.now()}`;
   const result = await getHaikuJson<{ themes: string[] }>({
@@ -286,7 +273,6 @@ async function extractThemes(content: string, sessionId: string, userId?: string
     operation: 'reconciler-extract-themes',
     callType: BrainActivityCallType.THEME_EXTRACTION,
   });
-
   return result?.themes || [];
 }
 
@@ -294,37 +280,24 @@ async function extractThemes(content: string, sessionId: string, userId?: string
 // Abstract Guidance
 // ============================================================================
 
-/**
- * Abstract guidance type for refinement conversations.
- */
-interface AbstractGuidance {
+/** The abstract hints the author may see (reconciler_guidance). */
+export interface AbstractGuidance {
   areaHint: string | null;
   guidanceType: string | null;
   promptSeed: string | null;
 }
 
 /**
- * Generate abstract guidance for refinement conversation.
- * This extracts general themes without revealing partner's specific content.
- *
- * Key constraint: The guidance should help the refinement AI ask good questions
- * without revealing what the partner actually said.
+ * Generate abstract guidance for refinement conversation. General themes,
+ * never the partner's specific content.
  */
-function generateAbstractGuidance(result: ReconcilerResult): AbstractGuidance {
-  // If no significant gaps, no guidance needed
+export function generateAbstractGuidance(result: ReconcilerResult): AbstractGuidance {
   if (result.gaps.severity === 'none' || result.gaps.severity === 'minor') {
-    return {
-      areaHint: null,
-      guidanceType: null,
-      promptSeed: null,
-    };
+    return { areaHint: null, guidanceType: null, promptSeed: null };
   }
 
-  // Extract abstract area hint from missed feelings
-  // e.g., ["unappreciated", "unseen at work"] -> "work and effort"
   let areaHint: string | null = null;
   if (result.gaps.missedFeelings.length > 0) {
-    // Look for common themes in missed feelings
     const feelingText = result.gaps.missedFeelings.join(' ').toLowerCase();
     if (feelingText.includes('work') || feelingText.includes('effort') || feelingText.includes('appreciate')) {
       areaHint = 'work and effort';
@@ -337,80 +310,102 @@ function generateAbstractGuidance(result: ReconcilerResult): AbstractGuidance {
     } else if (feelingText.includes('respect') || feelingText.includes('value')) {
       areaHint = 'respect and value';
     } else {
-      // Generic fallback based on first missed feeling category
       areaHint = 'deeper emotional experiences';
     }
   }
 
-  // Determine guidance type based on gap characteristics
-  let guidanceType: string | null = null;
-  if (result.gaps.misattributions.length > 0) {
-    // User made incorrect assumptions
-    guidanceType = 'challenge_assumptions';
-  } else if (result.gaps.missedFeelings.length > 2) {
-    // Multiple missed feelings - need broader exploration
-    guidanceType = 'explore_breadth';
-  } else {
-    // Default: help user explore deeper
-    guidanceType = 'explore_deeper_feelings';
-  }
+  let guidanceType: string;
+  if (result.gaps.misattributions.length > 0) guidanceType = 'challenge_assumptions';
+  else if (result.gaps.missedFeelings.length > 2) guidanceType = 'explore_breadth';
+  else guidanceType = 'explore_deeper_feelings';
 
-  // Generate prompt seed (abstract starting point for questions)
-  let promptSeed: string | null = null;
-  switch (guidanceType) {
-    case 'challenge_assumptions':
-      promptSeed = 'what might be different from your initial understanding';
-      break;
-    case 'explore_breadth':
-      promptSeed = 'other aspects of their experience';
-      break;
-    case 'explore_deeper_feelings':
-    default:
-      promptSeed = 'what might be underneath the surface';
-      break;
-  }
+  const promptSeed =
+    guidanceType === 'challenge_assumptions'
+      ? 'what might be different from your initial understanding'
+      : guidanceType === 'explore_breadth'
+        ? 'other aspects of their experience'
+        : 'what might be underneath the surface';
 
-  return {
-    areaHint,
-    guidanceType,
-    promptSeed,
-  };
+  return { areaHint, guidanceType, promptSeed };
 }
 
 // ============================================================================
 // DB Result Conversion (shared across reconciler modules)
 // ============================================================================
 
+const SEVERITY_TO_DB = { none: 'NONE', minor: 'MINOR', moderate: 'MODERATE', significant: 'SIGNIFICANT' } as const;
+
+/** The shape both the stored row and the DTO conversion read. */
+export interface StoredReconcilerResult {
+  id: string;
+  attemptId: string;
+  subjectParticipantId: string;
+  iteration: number;
+  alignmentScore: number;
+  alignmentSummary: string;
+  correctlyIdentified: string[];
+  gapSeverity: string;
+  gapSummary: string;
+  missedFeelings: string[];
+  misattributions: string[];
+  mostImportantGap: string | null;
+  recommendedAction: string;
+  rationale: string;
+  sharingWouldHelp: boolean;
+  suggestedShareFocus: string | null;
+  suggestedShareContent: string | null;
+  suggestedShareReason: string | null;
+  createdAt: Date;
+}
+
+export const RESULT_SELECT = {
+  id: true,
+  attemptId: true,
+  subjectParticipantId: true,
+  iteration: true,
+  alignmentScore: true,
+  alignmentSummary: true,
+  correctlyIdentified: true,
+  gapSeverity: true,
+  gapSummary: true,
+  missedFeelings: true,
+  misattributions: true,
+  mostImportantGap: true,
+  recommendedAction: true,
+  rationale: true,
+  sharingWouldHelp: true,
+  suggestedShareFocus: true,
+  suggestedShareContent: true,
+  suggestedShareReason: true,
+  createdAt: true,
+} as const;
+
 /**
- * Convert database result to ReconcilerResult type.
+ * Convert a stored result (plus its guidance, when the caller may see it) to
+ * the shared ReconcilerResult type.
  */
 export function dbResultToReconcilerResult(
-  db: {
-    alignmentScore: number;
-    alignmentSummary: string;
-    correctlyIdentified: string[];
-    gapSeverity: string;
-    gapSummary: string;
-    missedFeelings: string[];
-    misattributions: string[];
-    mostImportantGap: string | null;
-    recommendedAction: string;
-    rationale: string;
-    sharingWouldHelp: boolean;
-    suggestedShareFocus: string | null;
-    areaHint?: string | null;
-    guidanceType?: string | null;
-    promptSeed?: string | null;
-  }
+  db: Pick<
+    StoredReconcilerResult,
+    | 'alignmentScore'
+    | 'alignmentSummary'
+    | 'correctlyIdentified'
+    | 'gapSeverity'
+    | 'gapSummary'
+    | 'missedFeelings'
+    | 'misattributions'
+    | 'mostImportantGap'
+    | 'recommendedAction'
+    | 'rationale'
+    | 'sharingWouldHelp'
+    | 'suggestedShareFocus'
+  >,
+  guidance?: AbstractGuidance | null,
 ): ReconcilerResult {
   return {
-    alignment: {
-      score: db.alignmentScore,
-      summary: db.alignmentSummary,
-      correctlyIdentified: db.correctlyIdentified,
-    },
+    alignment: { score: db.alignmentScore, summary: db.alignmentSummary, correctlyIdentified: db.correctlyIdentified },
     gaps: {
-      severity: db.gapSeverity as 'none' | 'minor' | 'moderate' | 'significant',
+      severity: db.gapSeverity.toLowerCase() as 'none' | 'minor' | 'moderate' | 'significant',
       summary: db.gapSummary,
       missedFeelings: db.missedFeelings,
       misattributions: db.misattributions,
@@ -423,11 +418,27 @@ export function dbResultToReconcilerResult(
       suggestedShareFocus: db.suggestedShareFocus,
     },
     abstractGuidance: {
-      areaHint: db.areaHint ?? null,
-      guidanceType: db.guidanceType ?? null,
-      promptSeed: db.promptSeed ?? null,
+      areaHint: guidance?.areaHint ?? null,
+      guidanceType: guidance?.guidanceType ?? null,
+      promptSeed: guidance?.promptSeed ?? null,
     },
   };
+}
+
+/** The current result of an attempt (subject-side data: the job, reconciler paths only — R35). */
+export async function currentResultFor(attemptId: string): Promise<StoredReconcilerResult | null> {
+  return reader().reconcilerResult.findFirst({
+    where: { attemptId, supersededAt: null },
+    select: RESULT_SELECT,
+  }) as Promise<StoredReconcilerResult | null>;
+}
+
+/** The guidance of a result (author + subject may read it). */
+export async function guidanceFor(resultId: string): Promise<AbstractGuidance | null> {
+  return reader().reconcilerGuidance.findUnique({
+    where: { resultId },
+    select: { areaHint: true, guidanceType: true, promptSeed: true },
+  });
 }
 
 /**
@@ -457,45 +468,104 @@ export function getDefaultReconcilerResult(): ReconcilerResult {
 }
 
 // ============================================================================
+// Persisting an analysis (job connection)
+// ============================================================================
+
+/**
+ * Write one analysis of an attempt: supersede the attempt's current result
+ * (re-analysis), insert the new one with the next iteration, and its guidance
+ * when there is any. JOB connection, one transaction, exactly the columns
+ * trailer T7 grants (TS-10 block). T-result-live-attempt refuses a result on
+ * a SUPERSEDED round; that refusal is returned as null (a late result for a
+ * retired round is dropped, spec §1.2).
+ */
+export async function persistAnalysis(opts: {
+  attemptId: string;
+  authorParticipantId: string;
+  subjectParticipantId: string;
+  result: ReconcilerResult;
+  guidance: AbstractGuidance;
+  suggestion?: { content: string; reason: string } | null;
+  circuitBreakerTripped?: boolean;
+}): Promise<string | null> {
+  const r = opts.result;
+  try {
+    return await getJobPrisma().$transaction(async tx => {
+      await tx.$executeRaw`UPDATE reconciler_result SET superseded_at = now()
+        WHERE attempt_id = ${opts.attemptId}::uuid AND superseded_at IS NULL`;
+      const rows = await tx.$queryRaw<Array<{ id: string }>>`INSERT INTO reconciler_result (attempt_id, subject_participant_id, iteration, alignment_score, alignment_summary,
+          gap_summary, gap_severity, correctly_identified, missed_feelings, misattributions, most_important_gap,
+          recommended_action, rationale, sharing_would_help, suggested_share_focus, suggested_share_content,
+          suggested_share_reason, circuit_breaker_tripped)
+        VALUES (${opts.attemptId}::uuid, ${opts.subjectParticipantId}::uuid,
+          coalesce((SELECT max(x.iteration) FROM reconciler_result x WHERE x.attempt_id = ${opts.attemptId}::uuid), 0) + 1,
+          ${Math.max(0, Math.min(100, Math.round(r.alignment.score)))}, ${r.alignment.summary}, ${r.gaps.summary},
+          ${SEVERITY_TO_DB[r.gaps.severity] ?? 'MINOR'}::gap_severity, ${r.alignment.correctlyIdentified}::text[],
+          ${r.gaps.missedFeelings}::text[], ${r.gaps.misattributions}::text[], ${r.gaps.mostImportantGap},
+          ${r.recommendation.action}::recommender_action, ${r.recommendation.rationale},
+          ${r.recommendation.sharingWouldHelp}, ${r.recommendation.suggestedShareFocus},
+          ${opts.suggestion?.content ?? null}, ${opts.suggestion?.reason ?? null}, ${opts.circuitBreakerTripped ?? false})
+        RETURNING id`;
+      const resultId = rows[0].id;
+      const g = opts.guidance;
+      if (g.areaHint || g.guidanceType || g.promptSeed) {
+        await tx.$executeRaw`INSERT INTO reconciler_guidance (result_id, author_participant_id, subject_participant_id, area_hint, guidance_type, prompt_seed)
+          VALUES (${resultId}::uuid, ${opts.authorParticipantId}::uuid, ${opts.subjectParticipantId}::uuid,
+                  ${g.areaHint}, ${g.guidanceType}, ${g.promptSeed})`;
+      }
+      return resultId;
+    });
+  } catch (err) {
+    if (String((err as Error)?.message ?? '').includes('needs a live attempt')) {
+      logger.info('Dropped a late reconciler result for a retired round', { attemptId: opts.attemptId });
+      return null;
+    }
+    throw err;
+  }
+}
+
+/**
+ * Retire an attempt's current result (job): a resubmitted round's analysis is
+ * no longer current — the new round gets its own. `superseded_at` is the one
+ * column a result ever changes (spec §1.2).
+ */
+export async function supersedeCurrentResult(attemptId: string): Promise<void> {
+  await getJobPrisma().$executeRaw`UPDATE reconciler_result SET superseded_at = now()
+    WHERE attempt_id = ${attemptId}::uuid AND superseded_at IS NULL`;
+}
+
+// ============================================================================
 // Core Analysis Function
 // ============================================================================
 
 /**
- * Analyze the empathy gap for one direction (guesser -> subject).
+ * Analyze the empathy gap for one direction (guesser -> subject). Returns the
+ * analysis and whether it is a fresh one that still has to be persisted
+ * (`persistAnalysis`); a current stored result is reused as is.
  */
 export async function analyzeEmpathyGap(
-  input: ReconcilerAnalysisInput
-): Promise<ReconcilerResult> {
+  input: ReconcilerAnalysisInput,
+): Promise<ReconcilerResult & { storedResultId?: string; fresh?: boolean }> {
   logger.info('Analyzing empathy gap', {
     guesserId: input.guesser.id,
     subjectId: input.subject.id,
-    empathyPreview: input.empathyStatement.substring(0, 100),
     themes: input.witnessingContent.themes,
   });
 
-  // Check if we already have a result for this direction
-  const existingResult = await prisma.reconcilerResult.findFirst({
-    where: {
-      sessionId: input.sessionId,
-      guesserId: input.guesser.id,
-      subjectId: input.subject.id,
-      supersededAt: null,
-    },
-  });
-
-  if (existingResult) {
-    logger.info('Using cached reconciler result', { guesserId: input.guesser.id, subjectId: input.subject.id });
-    return dbResultToReconcilerResult(existingResult);
+  if (input.attemptId) {
+    const existing = await currentResultFor(input.attemptId);
+    if (existing) {
+      logger.info('Using cached reconciler result', { guesserId: input.guesser.id, subjectId: input.subject.id });
+      return { ...dbResultToReconcilerResult(existing, await guidanceFor(existing.id)), storedResultId: existing.id };
+    }
   }
 
-  // Generate turnId upfront so COST and RECONCILER logs group together
   const turnId = `${input.sessionId}-${Date.now()}`;
   const [subjectFacts, recentSubjectTurns] = await Promise.all([
-    loadSubjectFacts(input.sessionId, input.subject.id),
-    loadRecentSubjectStage2Turns(input.sessionId, input.subject.id),
+    loadSubjectFacts(input.subject.participantId),
+    loadRecentSubjectStage2Turns(input.subject.participantId),
   ]);
 
-  // Build context for the AI prompt
   const context: ReconcilerContext = {
     guesserName: input.guesser.name,
     subjectName: input.subject.name,
@@ -508,15 +578,7 @@ export async function analyzeEmpathyGap(
 
   const prompt = buildReconcilerPrompt(context);
   const evidencePacket = buildReconcilerEvidencePacket(context);
-  logger.debug('Built analysis prompt', {
-    staticPromptLength: prompt.staticBlock.length,
-    dynamicPromptLength: prompt.dynamicBlock.length,
-    evidencePacketLength: evidencePacket.length,
-    subjectFactCount: subjectFacts?.length ?? 0,
-    recentSubjectTurnCount: recentSubjectTurns.length,
-  });
 
-  // Call AI to analyze the gap
   const result = await getSonnetJson<ReconcilerResult>({
     systemPrompt: prompt,
     messages: [{ role: 'user', content: evidencePacket }],
@@ -527,59 +589,18 @@ export async function analyzeEmpathyGap(
   });
 
   if (!result) {
-    // Fallback result if AI fails
+    // Fallback result if AI fails (not persisted, as before).
     logger.warn('AI analysis failed, using fallback result');
     return getDefaultReconcilerResult();
   }
 
+  result.abstractGuidance = generateAbstractGuidance(result);
   logger.info('AI analysis complete', {
     alignmentScore: result.alignment.score,
     gapSeverity: result.gaps.severity,
-    missedFeelings: result.gaps.missedFeelings.length,
     action: result.recommendation.action,
   });
-
-  // Generate abstract guidance for refinement (doesn't expose partner's specific content)
-  const abstractGuidance = generateAbstractGuidance(result);
-
-  // Save result to database with abstract guidance fields
-  logger.debug('Saving reconciler result to database', { guesserId: input.guesser.id, subjectId: input.subject.id });
-  await prisma.reconcilerResult.create({
-    data: {
-      sessionId: input.sessionId,
-      guesserId: input.guesser.id,
-      guesserName: input.guesser.name,
-      subjectId: input.subject.id,
-      subjectName: input.subject.name,
-      alignmentScore: result.alignment.score,
-      alignmentSummary: result.alignment.summary,
-      correctlyIdentified: result.alignment.correctlyIdentified,
-      gapSeverity: result.gaps.severity,
-      gapSummary: result.gaps.summary,
-      missedFeelings: result.gaps.missedFeelings,
-      misattributions: result.gaps.misattributions,
-      mostImportantGap: result.gaps.mostImportantGap,
-      recommendedAction: result.recommendation.action,
-      rationale: result.recommendation.rationale,
-      sharingWouldHelp: result.recommendation.sharingWouldHelp,
-      suggestedShareFocus: result.recommendation.suggestedShareFocus,
-      // Abstract guidance for refinement conversation
-      areaHint: abstractGuidance.areaHint,
-      guidanceType: abstractGuidance.guidanceType,
-      promptSeed: abstractGuidance.promptSeed,
-    },
-  });
-
-  // Add abstract guidance to the result for returning
-  result.abstractGuidance = abstractGuidance;
-
-  logger.info('Reconciler analysis saved', {
-    alignmentScore: result.alignment.score,
-    gapSeverity: result.gaps.severity,
-    action: result.recommendation.action,
-  });
-
-  return result;
+  return { ...result, fresh: true };
 }
 
 // ============================================================================
@@ -587,115 +608,116 @@ export async function analyzeEmpathyGap(
 // ============================================================================
 
 /**
- * Run the reconciler for a session after both users complete Stage 2.
- * This analyzes empathy gaps in both directions.
+ * Run the reconciler for both directions of a two-party session.
+ *
+ * With `forParticipantId`, the returned analyses are filtered to what that
+ * participant may read (spec §1.2: `reconciler_result` is subject-only): a
+ * direction's analysis is returned only where the caller is its SUBJECT. The
+ * readiness verdict over a hidden direction is computed from its status
+ * (`v_empathy_direction_status`'s content-free projection), never from its
+ * analysis.
  */
 export async function runReconciler(
   sessionId: string,
-  forUserId?: string
+  forUserId?: string,
+  opts: {
+    forParticipantId?: string;
+    /**
+     * Store fresh analyses here (m6: `POST /reconciler/run` paid for an LLM
+     * analysis and threw it away). The Stage 2 trigger leaves it off: it
+     * persists each direction itself, with that direction's suggestion.
+     */
+    persist?: boolean;
+  } = {},
 ): Promise<{
   aUnderstandingB: ReconcilerResult | null;
   bUnderstandingA: ReconcilerResult | null;
   bothCompleted: boolean;
   readyToProceed: boolean;
   blockingReason: string | null;
+  /** Per direction (A→B, B→A): the attempt analysed and whether its analysis is new (to persist). */
+  directions: Array<{ guesser: UserInfo; subject: UserInfo; data: EmpathyData; result: ReconcilerResult & { fresh?: boolean; storedResultId?: string } } | null>;
 }> {
   logger.info('Starting reconciliation', { sessionId });
 
-  // Get session with participants
-  const session = await prisma.session.findUnique({
-    where: { id: sessionId },
-    include: {
-      relationship: {
-        include: {
-          members: {
-            include: {
-              user: {
-                select: { id: true, name: true, firstName: true },
-              },
-            },
-          },
-        },
-      },
-    },
-  });
-
-  if (!session) {
-    throw new Error(`Session ${sessionId} not found`);
+  const parties = await sessionParties(sessionId, reader());
+  if (parties.length !== 2) {
+    throw new Error(`Session ${sessionId} does not have exactly 2 participants`);
   }
+  const userA = toUserInfo(parties[0], 'User A');
+  const userB = toUserInfo(parties[1], 'User B');
 
-  // Get participants
-  const members = session.relationship.members;
-  if (members.length !== 2) {
-    throw new Error(`Session ${sessionId} does not have exactly 2 members`);
-  }
-
-  const participants: SessionParticipants = {
-    userA: {
-      id: members[0].user.id,
-      name: members[0].user.firstName || members[0].user.name || 'User A',
-    },
-    userB: {
-      id: members[1].user.id,
-      name: members[1].user.firstName || members[1].user.name || 'User B',
-    },
-  };
-
-  // Check if both users have completed Stage 2 (shared empathy statements)
-  const [userAEmpathy, userBEmpathy] = await Promise.all([
-    getEmpathyData(sessionId, participants.userA.id),
-    getEmpathyData(sessionId, participants.userB.id),
+  const [aEmpathy, bEmpathy] = await Promise.all([
+    getEmpathyData(userA.participantId, userB.participantId),
+    getEmpathyData(userB.participantId, userA.participantId),
   ]);
 
-  if (!userAEmpathy || !userBEmpathy) {
+  if (!aEmpathy || !bEmpathy) {
     return {
       aUnderstandingB: null,
       bUnderstandingA: null,
       bothCompleted: false,
       readyToProceed: false,
-      blockingReason: !userAEmpathy
-        ? `${participants.userA.name} has not shared their empathy statement yet`
-        : `${participants.userB.name} has not shared their empathy statement yet`,
+      blockingReason: !aEmpathy
+        ? `${userA.name} has not shared their empathy statement yet`
+        : `${userB.name} has not shared their empathy statement yet`,
+      directions: [null, null],
     };
   }
 
-  // Get witnessing content for both users
-  const [userAWitnessing, userBWitnessing] = await Promise.all([
-    getWitnessingContent(sessionId, participants.userA.id),
-    getWitnessingContent(sessionId, participants.userB.id),
+  const [aWitnessing, bWitnessing] = await Promise.all([
+    getWitnessingContent(sessionId, userA.participantId, userA.id),
+    getWitnessingContent(sessionId, userB.participantId, userB.id),
   ]);
 
-  // Run analysis for each direction (or just one if forUserId is specified)
-  let aUnderstandingB: ReconcilerResult | null = null;
-  let bUnderstandingA: ReconcilerResult | null = null;
+  let aUnderstandingB: (ReconcilerResult & { fresh?: boolean; storedResultId?: string }) | null = null;
+  let bUnderstandingA: (ReconcilerResult & { fresh?: boolean; storedResultId?: string }) | null = null;
 
-  // A's guess about B (how well A understood B)
-  if (!forUserId || forUserId === participants.userA.id) {
+  if (!forUserId || forUserId === userA.id) {
     aUnderstandingB = await analyzeEmpathyGap({
       sessionId,
-      guesser: participants.userA,
-      subject: participants.userB,
-      empathyStatement: userAEmpathy.statement,
-      witnessingContent: userBWitnessing,
+      guesser: userA,
+      subject: userB,
+      empathyStatement: aEmpathy.statement,
+      witnessingContent: bWitnessing,
+      attemptId: aEmpathy.attemptId,
     });
   }
-
-  // B's guess about A (how well B understood A)
-  if (!forUserId || forUserId === participants.userB.id) {
+  if (!forUserId || forUserId === userB.id) {
     bUnderstandingA = await analyzeEmpathyGap({
       sessionId,
-      guesser: participants.userB,
-      subject: participants.userA,
-      empathyStatement: userBEmpathy.statement,
-      witnessingContent: userAWitnessing,
+      guesser: userB,
+      subject: userA,
+      empathyStatement: bEmpathy.statement,
+      witnessingContent: aWitnessing,
+      attemptId: bEmpathy.attemptId,
     });
   }
 
-  // Determine if ready to proceed
-  // A direction is "ready" if:
-  // - No result (skipped), OR
-  // - Action is PROCEED, OR
-  // - Action is OFFER_OPTIONAL but there's no suggestedShareFocus (treat as PROCEED per US-8)
+  if (opts.persist) {
+    const store = async (
+      r: (ReconcilerResult & { fresh?: boolean; storedResultId?: string }) | null,
+      author: UserInfo,
+      subject: UserInfo,
+      attemptId: string,
+    ) => {
+      if (!r?.fresh) return;
+      const id = await persistAnalysis({
+        attemptId,
+        authorParticipantId: author.participantId,
+        subjectParticipantId: subject.participantId,
+        result: r,
+        guidance: r.abstractGuidance ?? generateAbstractGuidance(r),
+      });
+      if (id) {
+        r.storedResultId = id;
+        r.fresh = false;
+      }
+    };
+    await store(aUnderstandingB, userA, userB, aEmpathy.attemptId);
+    await store(bUnderstandingA, userB, userA, bEmpathy.attemptId);
+  }
+
   const isDirectionReady = (result: ReconcilerResult | null): boolean => {
     if (!result) return true;
     const { action, suggestedShareFocus } = result.recommendation;
@@ -703,18 +725,35 @@ export async function runReconciler(
     if (action === 'OFFER_OPTIONAL' && !suggestedShareFocus) return true;
     return false;
   };
+  const statusReady = (status: string): boolean => status !== 'AWAITING_SHARING' && status !== 'REFINING';
 
-  const aReady = isDirectionReady(aUnderstandingB);
-  const bReady = isDirectionReady(bUnderstandingA);
+  const caller = opts.forParticipantId;
+  // What the caller may see: a direction's analysis only as its subject.
+  const visibleA = !caller || caller === userB.participantId ? aUnderstandingB : null;
+  const visibleB = !caller || caller === userA.participantId ? bUnderstandingA : null;
+  // Readiness: from the analysis where the caller may see it, else from the
+  // direction's status alone.
+  const aReady = !caller || visibleA ? isDirectionReady(aUnderstandingB) : statusReady(aEmpathy.status);
+  const bReady = !caller || visibleB ? isDirectionReady(bUnderstandingA) : statusReady(bEmpathy.status);
   const readyToProceed = aReady && bReady;
 
+  const strip = (r: (ReconcilerResult & { fresh?: boolean; storedResultId?: string }) | null): ReconcilerResult | null => {
+    if (!r) return null;
+    const { fresh: _f, storedResultId: _s, ...rest } = r;
+    void _f;
+    void _s;
+    return rest;
+  };
+
   return {
-    aUnderstandingB,
-    bUnderstandingA,
+    aUnderstandingB: strip(visibleA),
+    bUnderstandingA: strip(visibleB),
     bothCompleted: true,
     readyToProceed,
-    blockingReason: readyToProceed
-      ? null
-      : 'There are empathy gaps that could benefit from additional sharing',
+    blockingReason: readyToProceed ? null : 'There are empathy gaps that could benefit from additional sharing',
+    directions: [
+      aUnderstandingB ? { guesser: userA, subject: userB, data: aEmpathy, result: aUnderstandingB } : null,
+      bUnderstandingA ? { guesser: userB, subject: userA, data: bEmpathy, result: bUnderstandingA } : null,
+    ],
   };
 }

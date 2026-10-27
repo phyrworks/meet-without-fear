@@ -22,6 +22,7 @@
 
 import {
   AUTHOR_SEES_STATUS_ONLY_ALLOW,
+  AUTHOR_SEES_STATUS_ONLY_BYTE_TARGET_ALLOW,
   AUTHOR_SEES_STATUS_ONLY_KNOWN_LEAKS,
 } from '../allow-lists/author-sees-status-only';
 import { listTables } from '../db';
@@ -35,9 +36,17 @@ import {
   findLeaks,
   findPromptLeaks,
   fullRead,
+  shapeTables,
   unexpectedLeakReport,
 } from '../privacy';
-import { goldenScenarioChecks } from '../scenario-checks';
+import {
+  authorClosureChecks,
+  goldenScenarioChecks,
+  mockIndexChecks,
+  targetFixtureDeltaChecks,
+  targetMessageStageChecks,
+} from '../scenario-checks';
+import { isTargetShape } from '../shape';
 
 const BASE_URL =
   process.env.GOLDEN_DATABASE_URL || 'postgresql://mwf_user:mwf_password@localhost:5432/meet_without_fear';
@@ -45,7 +54,7 @@ const BASE_URL =
 const SCENARIO = 'author-sees-status-only';
 const UNSENT_FEEDBACK = 'You missed how lonely the evenings are once the dishes are done.';
 const ADA_TURN = 'I am still waiting. Is there anything I should be thinking about?';
-const READ_TABLES = ['User', 'Message', 'UserVessel', 'EmpathyAttempt', 'ReconcilerResult', 'ReconcilerShareOffer'];
+const READ_TABLES = shapeTables(['User', 'Message', 'UserVessel', 'EmpathyAttempt', 'ReconcilerResult', 'ReconcilerShareOffer']);
 
 const fixture = scenarioFor(TargetStage.RECONCILER_SHOWN_B, { a: 'Ada Lovelace', b: 'Bob Ross' });
 const result = fixture.reconciliation!.result;
@@ -134,13 +143,31 @@ describe(`golden: ${SCENARIO}`, () => {
   goldenScenarioChecks({
     scenario: SCENARIO,
     allowList: AUTHOR_SEES_STATUS_ONLY_ALLOW,
+    byteTargetAllowList: AUTHOR_SEES_STATUS_ONLY_BYTE_TARGET_ALLOW,
     harness: () => harness,
     steps: () => steps,
   });
+  targetMessageStageChecks({ harness: () => harness, steps: () => steps });
+  targetFixtureDeltaChecks({ harness: () => harness, steps: () => steps });
+  authorClosureChecks({ steps: () => steps, empathyStatus: [8], reconcilerStatus: [12], summary: [14] });
+  mockIndexChecks({ harness: () => harness, steps: () => steps, step: 33, email: 'ada@e2e.test' });
+  (isTargetShape() ? it : it.skip)('closure pair: reconciler/run returns Ada only the direction she is the subject of', () => {
+    const run = (steps[32].body as { data: { aUnderstandingB: unknown; bUnderstandingA: unknown } }).data;
+    expect(steps[32].label).toBe('reconciler run as ada@e2e.test');
+    expect(run.aUnderstandingB).toBeNull();
+    expect(run.bUnderstandingA).not.toBeNull();
+  });
 
   it("the probes are live: Bob's unsent draft and the analysis exist", () => {
-    expect(steps[0].status).toBe(200);
-    expect(steps[0].changes.some(c => c.table === 'ValidationFeedbackDraft' && c.kind === 'added')).toBe(true);
+    if (isTargetShape()) {
+      // Fix round 1, m1 (R6_REFUSED_UNREVEALED_DRAFT): the target refuses a
+      // feedback draft about an unrevealed round, and writes nothing.
+      expect(steps[0].status).toBe(404);
+      expect(steps[0].changes.some(c => c.table === 'draft')).toBe(false);
+    } else {
+      expect(steps[0].status).toBe(200);
+      expect(steps[0].changes.some(c => c.table === 'ValidationFeedbackDraft' && c.kind === 'added')).toBe(true);
+    }
   });
 
   it("Ada's turn built a prompt (the prompt assertion is not vacuous)", () => {

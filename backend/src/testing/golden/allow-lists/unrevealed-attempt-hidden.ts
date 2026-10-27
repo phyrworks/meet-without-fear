@@ -28,8 +28,25 @@
  */
 
 import type { KnownLeak } from '../privacy';
-import { deliveredStatementCopy, READ_DTO_RULES } from './common';
-import type { AllowList } from './types';
+import { BOB_HELD_EMPATHY_STATEMENT } from '../../fixture-scenarios/scenarios';
+import {
+  declineConsent,
+  notifiedOnce,
+  roundTwoInstants,
+  subjectDeclineRecord,
+  authorAnalysisClosed,
+  byteLabelShift,
+  deliveredCopyInRead,
+  deliveredStatementCopy,
+  empathySubmittedMilestone,
+  READ_DTO_RULES,
+  targetByteRules,
+  TARGET_COMPACT_SIGNED_MASK,
+  TARGET_CONSENT_TARGET_ID_RULE,
+  TARGET_MESSAGE_STAGE_RULE,
+  TARGET_USER_NAME_RULE,
+} from './common';
+import type { AllowList, AllowRule } from './types';
 
 /** Step layout (the scenario asserts the labels): 30 reads, accept 30, 15 reads, resubmit 46, 15 reads, reveal 62. */
 export const R2_RESUBMIT_STEP = 46;
@@ -167,3 +184,87 @@ export const UNREVEALED_ATTEMPT_HIDDEN_ALLOW: AllowList = {
 
 /** Observed against the current code; see `privacy.ts` for the contract. */
 export const UNREVEALED_ATTEMPT_HIDDEN_KNOWN_LEAKS: KnownLeak[] = [];
+
+/** TS-10 rules over bodies, for the concept and the byte-level comparison alike. */
+const TARGET_BODY_RULES = (concept: boolean): AllowRule[] => [
+  TARGET_MESSAGE_STAGE_RULE,
+  TARGET_COMPACT_SIGNED_MASK,
+  TARGET_CONSENT_TARGET_ID_RULE,
+  // Ada, the author, reads at "awaiting sharing" (15–29): the R6/R7 closures.
+  ...authorAnalysisClosed({ empathyStatus: [19], reconcilerStatus: [23], summary: [25], concept }),
+  // Bob's own consent history after he accepted the offer (refining 43, ready 59, revealed 75).
+  ...[43, 59, 75].map(step => subjectDeclineRecord(step, !concept, 'GRANTED')),
+  // After the reveal each subject's own conversation holds the partner's
+  // statement: Bob (state 64, messages 65) round 2's, Ada (79, 80) Bob's.
+  deliveredCopyInRead(64, 'ada', 'bob', ADA_REVISED, { byteLevel: !concept, at: 'steps.64.body.data.messages.messages' }),
+  deliveredCopyInRead(65, 'ada', 'bob', ADA_REVISED, { byteLevel: !concept }),
+  deliveredCopyInRead(79, 'bob', 'ada', BOB_HELD_EMPATHY_STATEMENT, { byteLevel: !concept, at: 'steps.79.body.data.messages.messages' }),
+  deliveredCopyInRead(80, 'bob', 'ada', BOB_HELD_EMPATHY_STATEMENT, { byteLevel: !concept }),
+  // Bob's pending actions: refining (34) stamps the delivery; ready (50), revealed (66) count 0.
+  ...notifiedOnce(34, [50, 66], concept),
+  roundTwoInstants([
+    'steps.51.body.data.myAttempt.sharedAt',
+    'steps.51.body.data.partnerEmpathySubmittedAt',
+    'steps.67.body.data.myAttempt.sharedAt',
+    'steps.67.body.data.partnerAttempt.sharedAt',
+    'steps.67.body.data.partnerEmpathySubmittedAt',
+    'steps.68.body.data.attempt.sharedAt',
+    'steps.82.body.data.myAttempt.sharedAt',
+    'steps.82.body.data.partnerAttempt.sharedAt',
+    'steps.82.body.data.partnerEmpathySubmittedAt',
+    ...(concept
+      ? [51, 67, 68, 82].flatMap(s => [`steps.${s}.changes.0.before.created_at`, `steps.${s}.changes.0.after.created_at`]).concat([
+          'steps.62.changes.0.before.submitted_at',
+          'steps.62.changes.0.after.submitted_at',
+        ])
+      : []),
+  ]),
+  {
+    kind: 'mayDiffer',
+    at: ['steps.68.body.data.attempt.statusVersion'],
+    mustMatch: true,
+    why:
+      'ruling R32 + rounds: round 2 is a new row (HELD → READY → REVEALED = 2); today the one rewritten row counted ' +
+      'every move of both submissions (4). The scenario asserts the row value.',
+  },
+];
+
+UNREVEALED_ATTEMPT_HIDDEN_ALLOW.rules.push(
+  ...TARGET_BODY_RULES(true),
+  TARGET_USER_NAME_RULE,
+  empathySubmittedMilestone('ada', 'initial', '<ts:14>'),
+  empathySubmittedMilestone('bob', 'initial', '<ts:24>'),
+  declineConsent(30, 'GRANTED'),
+);
+
+/** The byte-level golden on the TARGET shape (TS-10): body rules + changesMapped (ruling R32). */
+export const UNREVEALED_ATTEMPT_HIDDEN_BYTE_TARGET_ALLOW: AllowList = {
+  scenario: 'unrevealed-attempt-hidden',
+  rules: [
+    ...READ_DTO_RULES,
+    UNREVEALED_ATTEMPT_HIDDEN_ALLOW.rules.find(r => r.kind === 'addedKeys')!,
+    ...TARGET_BODY_RULES(false),
+    ...targetByteRules({
+      addedTables: [
+        { step: R2_REVEAL_STEP, table: 'message', kind: 'added', count: 2, why: 'the two delivered EMPATHY_STATEMENT copies' },
+        { step: 30, table: 'consent', kind: 'added', count: 1, why: "the subject's GRANTED consent naming the offer" },
+        { step: 34, table: 'context_share_offer', kind: 'changed', count: 1, why: 'pending actions stamps delivery_notified_at (job)' },
+      ],
+    }),
+  ],
+};
+UNREVEALED_ATTEMPT_HIDDEN_BYTE_TARGET_ALLOW.rules.push(
+  byteLabelShift(
+    [12, 27, 43, 59, 75, 90].map(s => `steps.${s}.body.data.records.0.id`),
+    'consent',
+  ),
+  byteLabelShift(
+    [
+      'steps.64.body.data.messages.messages.12.id',
+      'steps.65.body.data.messages.12.id',
+      'steps.79.body.data.messages.messages.18.id',
+      'steps.80.body.data.messages.18.id',
+    ],
+    'message',
+  ),
+);

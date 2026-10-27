@@ -19,13 +19,14 @@
  *           GOLDEN_UPDATE=reveal-all-ready-ada-first.concept npx jest reveal-all-ready-ada-first.golden
  */
 
-import { REVEAL_ADA_FIRST_ALLOW, REVEAL_ADA_FIRST_STEP } from '../allow-lists/reveal-all-ready';
+import { REVEAL_ADA_FIRST_ALLOW, REVEAL_ADA_FIRST_BYTE_TARGET_ALLOW, REVEAL_ADA_FIRST_STEP } from '../allow-lists/reveal-all-ready';
 import { listTables } from '../db';
 import type { Harness, StepResult } from '../driver';
 import { createHarness } from '../driver';
-import { EMPATHY_READS, fullRead } from '../privacy';
+import { EMPATHY_READS, fullRead, shapeTables } from '../privacy';
 import { revealChecks } from '../reveal-checks';
-import { goldenScenarioChecks } from '../scenario-checks';
+import { goldenScenarioChecks, targetFixtureDeltaChecks, targetMessageStageChecks } from '../scenario-checks';
+import { isTargetShape } from '../shape';
 import type { SnapshotRow } from '../snapshot';
 
 const BASE_URL =
@@ -33,7 +34,7 @@ const BASE_URL =
 
 const SCENARIO = 'reveal-all-ready-ada-first';
 const BOB_EMPATHY = 'I think you feel unseen when the chores pile up and nobody says anything.';
-const READ_TABLES = ['User', 'Message', 'UserVessel', 'EmpathyAttempt', 'ReconcilerResult'];
+const READ_TABLES = shapeTables(['User', 'Message', 'UserVessel', 'EmpathyAttempt', 'ReconcilerResult']);
 
 jest.setTimeout(600_000);
 
@@ -68,7 +69,8 @@ describe(`golden: ${SCENARIO}`, () => {
     ];
 
     steps = [await write(FIRST, ada, '/e2e/trigger-reconciler', { sessionId: sid, guesserId: ada.id, subjectId: bob.id })];
-    afterFirst = (await harness.snapshot(['EmpathyAttempt'])).tables.EmpathyAttempt;
+    const attemptTable = isTargetShape() ? 'empathy_attempt' : 'EmpathyAttempt';
+    afterFirst = (await harness.snapshot([attemptTable])).tables[attemptTable];
     steps.push(...(await reads('ada ready')));
     steps.push(await write('draft as bob', bob, `/sessions/${sid}/empathy/draft`, { content: BOB_EMPATHY, readyToShare: true }));
     steps.push(await write('consent as bob', bob, `/sessions/${sid}/empathy/consent`, { consent: true }));
@@ -82,6 +84,7 @@ describe(`golden: ${SCENARIO}`, () => {
   goldenScenarioChecks({
     scenario: SCENARIO,
     allowList: REVEAL_ADA_FIRST_ALLOW,
+    byteTargetAllowList: REVEAL_ADA_FIRST_BYTE_TARGET_ALLOW,
     harness: () => harness,
     steps: () => steps,
   });
@@ -96,5 +99,16 @@ describe(`golden: ${SCENARIO}`, () => {
     firstReadyStep: FIRST,
     firstReady: 'ada',
     attemptsAfterFirst: () => afterFirst,
+    revealStep: 'consent as bob',
+  });
+
+  targetMessageStageChecks({ harness: () => harness, steps: () => steps });
+  targetFixtureDeltaChecks({ harness: () => harness, steps: () => steps });
+
+  // Ruling R32 pair: the revealed rounds are at status_version 2 (no ANALYZING).
+  (isTargetShape() ? it : it.skip)("mayDiffer pair: Ada's partner-empathy read shows Bob's round at status_version 2", () => {
+    const step = steps[38];
+    expect(step.label).toBe('revealed: partner empathy as ada@e2e.test');
+    expect((step.body as { data: { attempt: { statusVersion: number } } }).data.attempt.statusVersion).toBe(2);
   });
 });
