@@ -1231,6 +1231,34 @@ GRANT SELECT (kind) ON ai_memory TO mwf_job;
 GRANT INSERT (participant_id, kind, doc) ON ai_memory TO mwf_job;
 GRANT UPDATE (doc) ON ai_memory TO mwf_job;
 
+-- TS-10: the reconciler's and the reveal's job writers (spec §1.2 — reconciler_result
+-- "I/U job", reconciler_guidance "I job", context_share_offer "I job … mwf_job for
+-- delivery/notification columns"; services/reconciler/*, controllers/notifications.ts).
+-- reconciler/analysis.ts persistAnalysis: one current result per attempt — the next
+-- iteration (max(iteration) of the attempt), RETURNING id, and the re-analysis
+-- supersede (WHERE attempt_id … AND superseded_at IS NULL). Never the analysis text.
+GRANT SELECT (id, attempt_id, iteration, superseded_at) ON reconciler_result TO mwf_job;
+-- persistAnalysis: the analysis row itself (id, created_at, updated_at are column defaults)
+GRANT INSERT (attempt_id, subject_participant_id, iteration, alignment_score, alignment_summary, gap_summary,
+              gap_severity, correctly_identified, missed_feelings, misattributions, most_important_gap,
+              recommended_action, rationale, sharing_would_help, suggested_share_focus, suggested_share_content,
+              suggested_share_reason, circuit_breaker_tripped) ON reconciler_result TO mwf_job;
+-- persistAnalysis: re-analysis of the same attempt retires the current result
+GRANT UPDATE (superseded_at) ON reconciler_result TO mwf_job;
+-- persistAnalysis: the author-visible abstract hints of a result (P3 D8a split)
+GRANT INSERT (result_id, author_participant_id, subject_participant_id, area_hint, guidance_type, prompt_seed)
+  ON reconciler_guidance TO mwf_job;
+-- reconciler/sharing.ts insertOffer: the next iteration of an attempt's offers (max(iteration)),
+-- RETURNING id; triggerStage3Transition: open offers (status) of the session's participants expire
+GRANT SELECT (attempt_id, iteration, status) ON context_share_offer TO mwf_job;
+-- insertOffer: the subject's offer (PENDING from the reconciler; OFFERED with offered_at from the share-offer fallback)
+GRANT INSERT (attempt_id, result_id, subject_participant_id, iteration, status, offer_message, suggested_content,
+              suggested_reason, offered_at) ON context_share_offer TO mwf_job;
+-- sharing.ts shareAccepted: the delivery stamp of the shared text; notifications.ts getPendingActionsHandler:
+-- the notification path writes delivery_notified_at / seen_notified_at (review F4.2); stage2.ts
+-- triggerStage3Transition: status → EXPIRED when the Stage 2 sharing window closes
+GRANT UPDATE (status, delivery_status, delivered_at, delivery_notified_at, seen_notified_at) ON context_share_offer TO mwf_job;
+
 -- mwf_ops: SELECT on exactly the tables routes/brain.ts reads, re-based
 -- (BrainActivity, Session/Relationship/RelationshipMember/User, StageProgress,
 -- Message, UserVessel.notableFacts, EmotionalReading, InnerWorkSession/Message).
