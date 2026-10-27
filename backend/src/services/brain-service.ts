@@ -160,6 +160,25 @@ export class BrainService {
   }
 
   /**
+   * Merge a turn's pipeline trace into the metadata of its latest
+   * ORCHESTRATED_RESPONSE activity (ai-orchestrator storeTurnTrace; TS-12: as
+   * the job — brain_activity has no mwf_app grant). One statement; a missing
+   * activity is a no-op. Never throws.
+   */
+  public async mergeTurnTrace(sessionId: string, turnId: string, turnTrace: unknown): Promise<void> {
+    try {
+      await getJobPrisma().$executeRaw`UPDATE brain_activity
+        SET metadata = coalesce(metadata, '{}'::jsonb) || jsonb_build_object('turnTrace', ${JSON.stringify(turnTrace)}::jsonb)
+        WHERE id = (SELECT b.id FROM brain_activity b
+                    WHERE b.session_id = ${sessionId}::uuid AND b.turn_id = ${turnId}
+                      AND b.call_type = 'ORCHESTRATED_RESPONSE'::brain_call_type
+                    ORDER BY b.created_at DESC LIMIT 1)`;
+    } catch (error) {
+      logger.warn('[BrainService] Failed to store turn trace:', error);
+    }
+  }
+
+  /**
    * Mark an activity as FAILED.
    */
   public async failActivity(activityId: string, error: any): Promise<BrainActivity | null> {

@@ -15,7 +15,6 @@
 
 import { logger } from '../lib/logger';
 import { getModelCompletionWithTools, BrainActivityCallType } from '../lib/bedrock';
-import { prisma } from '../lib/prisma';
 import {
   determineMemoryIntent,
   type MemoryIntentContext,
@@ -813,25 +812,8 @@ function buildMessagesWithContext(
  * Merges turnTrace into the activity's metadata (fire-and-forget).
  */
 function storeTurnTrace(sessionId: string, turnId: string, turnTrace: TurnTrace): void {
-  prisma.brainActivity.findFirst({
-    where: {
-      sessionId,
-      turnId,
-      callType: 'ORCHESTRATED_RESPONSE',
-    },
-    orderBy: { createdAt: 'desc' },
-  }).then(async (activity) => {
-    if (!activity) return;
-    const existingMeta = (activity.metadata as Record<string, unknown>) || {};
-    await prisma.brainActivity.update({
-      where: { id: activity.id },
-      data: {
-        metadata: { ...existingMeta, turnTrace: JSON.parse(JSON.stringify(turnTrace)) },
-      },
-    });
-  }).catch((err) => {
-    logger.warn('[AI Orchestrator] Failed to store turn trace:', err);
-  });
+  // The job's telemetry writer merges it (TS-12: brain_activity has no mwf_app grant)
+  void brainService.mergeTurnTrace(sessionId, turnId, JSON.parse(JSON.stringify(turnTrace)));
 }
 
 // Legacy JSON parsing functions removed - now using micro-tag parser (parseMicroTagResponse)

@@ -13,7 +13,12 @@
 // Mocks — must be declared before imports
 // ============================================================================
 
-jest.mock('../../lib/prisma');
+// TS-12: no Prisma mock. The orchestrator's two database touch points are
+// service modules — the user's memory preferences (user-settings) and the
+// turn-trace merge (brain-service, the job's writer) — mocked at that seam.
+jest.mock('../user-settings', () => ({
+  readPreferences: jest.fn(),
+}));
 jest.mock('../../lib/bedrock');
 jest.mock('../realtime', () => ({
   publishContextUpdated: jest.fn().mockResolvedValue(undefined),
@@ -24,6 +29,7 @@ jest.mock('../brain-service', () => ({
     startActivity: jest.fn().mockResolvedValue({ id: 'mock-activity-id' }),
     completeActivity: jest.fn().mockResolvedValue(undefined),
     failActivity: jest.fn().mockResolvedValue(undefined),
+    mergeTurnTrace: jest.fn().mockResolvedValue(undefined),
   },
   BrainActivityCallType: {
     ORCHESTRATED_RESPONSE: 'ORCHESTRATED_RESPONSE',
@@ -117,7 +123,8 @@ jest.mock('../dispatch-handler', () => ({
 
 import { orchestrateResponse, type OrchestratorContext } from '../ai-orchestrator';
 import { getModelCompletionWithTools } from '../../lib/bedrock';
-import { prisma } from '../../lib/prisma';
+import { readPreferences } from '../user-settings';
+import { DEFAULT_MEMORY_PREFERENCES, DEFAULT_NOTIFICATION_PREFERENCES, DEFAULT_PRIVACY_PREFERENCES } from '@meet-without-fear/shared';
 import { publishContextUpdated } from '../realtime';
 import { handleDispatch } from '../dispatch-handler';
 
@@ -202,13 +209,11 @@ describe('AI Orchestrator', () => {
     jest.clearAllMocks();
 
     // Default: user has no special memory preferences
-    (prisma.user.findUnique as jest.Mock).mockResolvedValue({
-      id: 'user-1',
-      memoryPreferences: null,
+    (readPreferences as jest.Mock).mockResolvedValue({
+      memory: DEFAULT_MEMORY_PREFERENCES,
+      notifications: DEFAULT_NOTIFICATION_PREFERENCES,
+      privacy: DEFAULT_PRIVACY_PREFERENCES,
     });
-
-    // Default: brainActivity lookups for storeTurnTrace
-    (prisma.brainActivity.findFirst as jest.Mock).mockResolvedValue(null);
   });
 
   // --------------------------------------------------------------------------

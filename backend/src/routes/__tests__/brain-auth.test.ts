@@ -3,7 +3,6 @@ import request from 'supertest';
 import brainRoutes from '../brain';
 import { verifyToken } from '@clerk/express';
 
-jest.mock('../../lib/prisma');
 jest.mock('@clerk/express', () => ({
   verifyToken: jest.fn(),
 }));

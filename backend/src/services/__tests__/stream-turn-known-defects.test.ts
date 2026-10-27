@@ -20,7 +20,6 @@ import { resolveStreamTurn } from '../stream-turn-resolution';
 import { getModelCompletionWithTools, getSonnetStreamingResponse } from '../../lib/bedrock';
 import { SESSION_STATE_TOOL_NAME } from '../stage-tools';
 
-jest.mock('../../lib/prisma');
 
 jest.mock('../../lib/bedrock', () => ({
   getModelCompletionWithTools: jest.fn().mockResolvedValue({ text: null, toolInvocations: [] }),

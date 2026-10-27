@@ -1347,6 +1347,10 @@ GRANT UPDATE (output, token_count_input, token_count_output, cost, duration_ms, 
   ON brain_activity TO mwf_job;
 -- data-retention: the short-retention purge sets the four blobs NULL (spec §1.8)
 GRANT UPDATE (input) ON brain_activity TO mwf_job;
+-- brain-service mergeTurnTrace (ai-orchestrator storeTurnTrace): find the turn's latest
+-- ORCHESTRATED_RESPONSE row and merge the pipeline trace into its metadata (metadata holds
+-- cache/tool/trace telemetry, never a prompt — the prompt is input/output, still unreadable)
+GRANT SELECT (turn_id, call_type, metadata) ON brain_activity TO mwf_job;
 -- push.ts sendPushNotification: the recipient's devices — another user than the caller, so the
 -- job reads them (user_device RLS is user_id = me); newest device first (last_seen_at)
 GRANT SELECT (user_id, push_token, last_seen_at) ON user_device TO mwf_job;
