@@ -501,6 +501,16 @@ export async function persistAnalysis(opts: {
   }
 }
 
+/**
+ * Retire an attempt's current result (job): a resubmitted round's analysis is
+ * no longer current — the new round gets its own. `superseded_at` is the one
+ * column a result ever changes (spec §1.2).
+ */
+export async function supersedeCurrentResult(attemptId: string): Promise<void> {
+  await getJobPrisma().$executeRaw`UPDATE reconciler_result SET superseded_at = now()
+    WHERE attempt_id = ${attemptId}::uuid AND superseded_at IS NULL`;
+}
+
 // ============================================================================
 // Core Analysis Function
 // ============================================================================

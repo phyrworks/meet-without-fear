@@ -43,6 +43,7 @@ import {
   hasContextAlreadyBeenShared,
   generateValidationFeedbackReflection,
   persistAnalysis,
+  supersedeCurrentResult,
 } from '../services/reconciler';
 import { generateAbstractGuidance, getWitnessingContent } from '../services/reconciler/analysis';
 import { isSessionCreator } from '../utils/session';
@@ -1156,6 +1157,8 @@ export async function resubmitEmpathy(req: Request, res: Response): Promise<void
     }
 
     const newRoundId = await resubmitAttempt(attempt.id, content);
+    // The retired round's analysis is no longer current (job).
+    await supersedeCurrentResult(attempt.id);
 
     const newMessage = me.mainConversationId
       ? await ownStatementCopy({

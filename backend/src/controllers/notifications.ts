@@ -165,11 +165,11 @@ export async function getPendingActionsHandler(req: Request, res: Response): Pro
       const job = getJobPrisma();
       if (delivered.length) {
         await job.$executeRaw`UPDATE context_share_offer SET delivery_notified_at = now()
-                              WHERE id = ANY(${delivered}::uuid[]) AND delivery_notified_at IS NULL`;
+                              WHERE id = ANY(${delivered}::uuid[])`;
       }
       if (seen.length) {
         await job.$executeRaw`UPDATE context_share_offer SET seen_notified_at = now()
-                              WHERE id = ANY(${seen}::uuid[]) AND seen_notified_at IS NULL`;
+                              WHERE id = ANY(${seen}::uuid[])`;
       }
     }
 
