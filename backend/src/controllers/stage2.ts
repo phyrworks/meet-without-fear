@@ -681,6 +681,11 @@ async function jobWalkToValidated(attempt: AttemptRow): Promise<boolean> {
     }
     if (status === 'READY') {
       await setAttemptStatus(attempt.id, 'REVEALED', { actor: 'job', client: job });
+      // TODO(TS-13, work-a39h.11.14): the reveal re-encrypts this attempt's
+      // content under the SESSION key here, in this job transaction, with the
+      // same plaintext (spec §1.2 empathy_attempt: "re-encrypted under the
+      // session key by the reveal job"; T-message-immutable exempts mwf_job).
+      // The key path and field map are TS-13's (ruling R26) — none is invented here.
       await markAttemptDelivery(attempt.id, 'DELIVERED');
       status = 'REVEALED';
     }
