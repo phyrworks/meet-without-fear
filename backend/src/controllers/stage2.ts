@@ -189,24 +189,28 @@ async function triggerReconcilerAndUpdateStatuses(sessionId: string): Promise<vo
       });
 
       if (moved && next === 'AWAITING_SHARING' && d.subject.id) {
-        const { buildEmpathyExchangeStatus } = await import('../services/empathy-status');
-        const subjectStatus = await buildEmpathyExchangeStatus(sessionId, d.subject.id);
+        // Session channel, content-free (I1/R36): the author's device is on
+        // this channel too. Mobile handles this event only on the session
+        // channel and refetches the subject's status and offer itself.
         await notifyPartner(sessionId, d.subject.id, 'empathy.share_suggestion', {
           forUserId: d.subject.id,
           guesserName: 'your partner',
-          empathyStatus: subjectStatus,
           triggeredByUserId: d.subject.id,
         });
       }
     }
 
-    const { buildEmpathyExchangeStatusForBothUsers } = await import('../services/empathy-status');
-    const allStatuses = await buildEmpathyExchangeStatusForBothUsers(sessionId);
-    await publishSessionEvent(sessionId, 'empathy.status_updated', {
-      stage: 2,
-      statuses: statuses as Record<string, EmpathyStatus | null>,
-      empathyStatuses: allStatuses,
-    });
+    // One addressed, content-free ping per participant (I1/R36). The old
+    // broadcast carried both users' full status DTOs, each holding that user's
+    // unrevealed round. `statuses` is direction status, which both may read.
+    for (const p of await sessionParties(sessionId)) {
+      if (!p.userId) continue;
+      await publishSessionEvent(sessionId, 'empathy.status_updated', {
+        stage: 2,
+        statuses: statuses as Record<string, EmpathyStatus | null>,
+        forUserId: p.userId,
+      });
+    }
 
     const { checkAndRevealBothIfReady } = await import('../services/reconciler');
     await checkAndRevealBothIfReady(sessionId);
@@ -426,13 +430,15 @@ export async function consentToShare(req: Request, res: Response): Promise<void>
     }
 
     if (partner.userId) {
-      const { buildEmpathyExchangeStatus } = await import('../services/empathy-status');
-      const partnerEmpathyStatus = await buildEmpathyExchangeStatus(sessionId, partner.userId);
-      await notifyPartner(sessionId, partner.userId, 'partner.empathy_shared', {
-        stage: 2,
-        sharedBy: userId,
-        empathyStatus: partnerEmpathyStatus,
-      });
+      // Content-free (I1/R36): the partner's status DTO holds the partner's own
+      // unrevealed round, and this goes out on the shared session channel.
+      await notifyPartner(
+        sessionId,
+        partner.userId,
+        'partner.empathy_shared',
+        { stage: 2, sharedBy: userId },
+        { excludeUserId: userId },
+      );
     }
 
     let transitionMessage: { id: string; content: string; timestamp: string; stage: number } | null = null;
@@ -607,14 +613,14 @@ export async function validateEmpathy(req: Request, res: Response): Promise<void
     }
 
     if (partner.userId) {
-      const { buildEmpathyExchangeStatus } = await import('../services/empathy-status');
-      const partnerEmpathyStatus = await buildEmpathyExchangeStatus(sessionId, partner.userId);
+      // Content-free (I1/R36): no status DTO, no feedback text. The addressed
+      // status_updated makes the partner's device refetch its own status.
       if (validated) {
         await notifyPartner(
           sessionId,
           partner.userId,
           'partner.stage_completed',
-          { stage: 2, validated, completedBy: userId, empathyStatus: partnerEmpathyStatus, triggeredByUserId: userId },
+          { stage: 2, validated, completedBy: userId, triggeredByUserId: userId },
           { excludeUserId: userId },
         );
       }
@@ -625,10 +631,8 @@ export async function validateEmpathy(req: Request, res: Response): Promise<void
         {
           status: validated ? 'VALIDATED' : 'REFINING',
           forUserId: partner.userId,
-          empathyStatus: partnerEmpathyStatus,
           validatedBy: userId,
           feedbackShared: !validated,
-          validationFeedback: !validated ? trimmedFeedback : undefined,
           triggeredByUserId: userId,
         },
         { excludeUserId: userId },
@@ -970,7 +974,8 @@ Respond in JSON format:
           currentStage: 3,
           userId,
           triggeredByUserId: userId,
-          message: { id: m.id, content: m.content, timestamp: m.timestamp, forUserId: m.forUserId },
+          // No `message` (I1/R36): the transition note is private to its
+          // owner; mobile refetches messages on previousStage 2.
         });
       }
       await publishSessionEvent(sessionId, 'stage.progress', { previousStage: 2, stage: 3, userId, triggeredByUserId: userId });
@@ -1314,14 +1319,14 @@ export async function respondToShareSuggestion(req: Request, res: Response): Pro
     }
 
     if ((action === 'accept' || action === 'refine') && partner?.userId) {
-      const { buildEmpathyExchangeStatus } = await import('../services/empathy-status');
-      const guesserEmpathyStatus = await buildEmpathyExchangeStatus(sessionId, partner.userId);
-      await publishSessionEvent(sessionId, 'empathy.refining', {
-        guesserId: partner.userId,
-        forUserId: partner.userId,
-        empathyStatus: guesserEmpathyStatus,
-        hasNewContext: true,
-      });
+      // Content-free (I1/R36): the guesser's status DTO holds the guesser's
+      // unrevealed round. Mobile refetches on this event.
+      await publishSessionEvent(
+        sessionId,
+        'empathy.refining',
+        { guesserId: partner.userId, forUserId: partner.userId, hasNewContext: true },
+        userId,
+      );
     }
 
     successResponse(res, { success: true, status: result.status, sharedContent: result.sharedContent });

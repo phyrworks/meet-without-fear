@@ -15,10 +15,10 @@
 import type { PrismaClient } from '../../generated/prisma/client';
 import { getJobPrisma, prisma } from '../../lib/prisma';
 import { logger } from '../../lib/logger';
-import { publishMessageAIResponse } from '../realtime';
+import { pingStage2Refresh } from '../empathy-realtime';
 import { transition } from '../empathy-state-machine';
 import { createFacilitatorMessage } from '../message-store';
-import { aiNote, lastAiNote, messageDTO } from '../empathy-messages';
+import { aiNote, lastAiNote } from '../empathy-messages';
 import {
   directionOf,
   directionStatuses,
@@ -110,7 +110,8 @@ async function markEmpathyReady(
 
   const note = saved as Awaited<ReturnType<typeof createFacilitatorMessage>> | null;
   if (note && guesser.userId) {
-    await publishMessageAIResponse(sessionId, guesser.userId, await messageDTO(note, sessionId, guesser.participantId), {});
+    // Content-free (I1/R36): the note is the guesser's private AI message.
+    await pingStage2Refresh(sessionId, guesser.userId);
   }
 
   await checkAndRevealBothIfReady(sessionId);
@@ -216,14 +217,12 @@ export async function runReconcilerForDirection(
   // Notify the guesser that the subject is considering a share suggestion (US-5).
   if (guesser.id) {
     const { notifyPartner } = await import('../realtime');
-    const { buildEmpathyExchangeStatus } = await import('../empathy-status');
-    const guesserEmpathyStatus = await buildEmpathyExchangeStatus(sessionId, guesser.id);
+    // Content-free (I1/R36): no status DTO on the shared session channel.
     await notifyPartner(sessionId, guesser.id, 'empathy.status_updated', {
       sessionId,
       timestamp: Date.now(),
       status: 'AWAITING_SHARING',
       forUserId: guesser.id,
-      empathyStatus: guesserEmpathyStatus,
       subjectName: subject.name,
       message: `${subject.name} is considering a suggestion to share more`,
     }).catch(err => {
@@ -309,9 +308,9 @@ export async function checkAndRevealBothIfReady(sessionId: string): Promise<bool
 
   const byPid = new Map(parties.map(p => [p.participantId, p]));
   const { notifyPartner } = await import('../realtime');
-  const { buildEmpathyExchangeStatusForBothUsers } = await import('../empathy-status');
-  const allStatuses = await buildEmpathyExchangeStatusForBothUsers(sessionId);
 
+  // Content-free (I1/R36): both devices are on the session channel; mobile
+  // refetches the addressed user's status on this event.
   for (const r of revealed) {
     const author = byPid.get(r.author_participant_id);
     if (!author?.userId) continue;
@@ -319,7 +318,6 @@ export async function checkAndRevealBothIfReady(sessionId: string): Promise<bool
       direction: 'outgoing',
       guesserUserId: author.userId,
       forUserId: author.userId,
-      empathyStatus: allStatuses[author.userId],
     });
   }
 
@@ -336,9 +334,11 @@ export async function checkAndRevealBothIfReady(sessionId: string): Promise<bool
       const qualityMessage = hasGaps
         ? `${guesserName}'s attempt to understand your experience is ready for you to review. It may not fully capture everything you shared — if something feels off or missing, you can share feedback to help them understand better.`
         : `${guesserName}'s attempt to understand your experience is ready for you to review. Take a moment to read it and let us know how it feels.`;
-      const saved = await aiNote(subject.mainConversationId, qualityMessage);
+      await aiNote(subject.mainConversationId, qualityMessage);
       if (subject.userId) {
-        await publishMessageAIResponse(sessionId, subject.userId, await messageDTO(saved, sessionId, subject.participantId), {});
+        // Content-free (I1/R36): the text follows the subject-only result's
+        // gap severity, so it must not reach the author's device.
+        await pingStage2Refresh(sessionId, subject.userId);
       }
     }
   } catch (err) {

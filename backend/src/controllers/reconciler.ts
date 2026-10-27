@@ -38,12 +38,13 @@ import {
   generateContextReceivedReflection,
 } from '../services/reconciler';
 import { successResponse, errorResponse } from '../utils/response';
-import { notifyPartner, publishMessageAIResponse } from '../services/realtime';
+import { notifyPartner } from '../services/realtime';
+import { pingStage2Refresh } from '../services/empathy-realtime';
 import { routeModel, scoreAmbiguity } from '../services/model-router';
 import { suggestSendableRewrite } from '../services/attacking-language';
 import { getModelCompletion, BrainActivityCallType } from '../lib/bedrock';
 import { partyOf, sessionParties, type SessionParty } from '../services/empathy-store';
-import { aiNote, messageDTO } from '../services/empathy-messages';
+import { aiNote } from '../services/empathy-messages';
 import { loadCurrentStages } from '../services/stage-shim';
 
 // ============================================================================
@@ -236,10 +237,10 @@ export async function getShareOfferHandler(req: Request, res: Response): Promise
 }
 
 /** Tell the guesser that context arrived (realtime; user-keyed envelope). */
-async function notifyContextShared(sessionId: string, actorUserId: string, guesser: SessionParty | undefined, content: string | null) {
+async function notifyContextShared(sessionId: string, actorUserId: string, guesser: SessionParty | undefined) {
   if (!guesser?.userId) return;
-  const { buildEmpathyExchangeStatus } = await import('../services/empathy-status');
-  const partnerEmpathyStatus = await buildEmpathyExchangeStatus(sessionId, guesser.userId);
+  // Content-free (I1/R36): no status DTO (the guesser's unrevealed round) and
+  // no shared text on the session channel; mobile refetches messages + status.
   await notifyPartner(
     sessionId,
     guesser.userId,
@@ -247,9 +248,7 @@ async function notifyContextShared(sessionId: string, actorUserId: string, guess
     {
       stage: 2,
       sharedBy: actorUserId,
-      content,
       forUserId: guesser.userId,
-      empathyStatus: partnerEmpathyStatus,
       triggeredByUserId: actorUserId,
     },
     { excludeUserId: actorUserId },
@@ -281,7 +280,7 @@ export async function respondToShareOfferHandler(req: Request, res: Response): P
 
     if (result.status === 'shared' && result.guesserUpdated) {
       const guesser = caller.parties.find(p => p.participantId !== caller.me.participantId);
-      await notifyContextShared(caller.sessionId, caller.userId, guesser, result.sharedContent);
+      await notifyContextShared(caller.sessionId, caller.userId, guesser);
     }
 
     const response: RespondToShareOfferResponse = {
@@ -456,7 +455,8 @@ Respond with ONLY the message text, no additional formatting or explanation.`;
       return;
     }
     const aiMessage = await aiNote(me.mainConversationId, `Here's what you could share with ${guesserName}:\n\n"${draftContent.trim()}"`);
-    await publishMessageAIResponse(sessionId, caller.userId, await messageDTO(aiMessage, sessionId, me.participantId), {});
+    // Content-free (I1/R36): the draft is the subject's private offer text.
+    await pingStage2Refresh(sessionId, caller.userId);
 
     successResponse(res, {
       success: true,
@@ -621,7 +621,7 @@ export async function refinementFinalizeHandler(req: Request, res: Response): Pr
       reflectionMessage,
     });
 
-    await notifyContextShared(sessionId, userId, guesser, content);
+    await notifyContextShared(sessionId, userId, guesser);
     successResponse(res, { status: 'shared', messageId: sharedMessageId, sharedContent: content });
   } catch (error) {
     logger.error('[refinementFinalizeHandler] Error:', error);
