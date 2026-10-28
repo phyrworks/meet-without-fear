@@ -30,5 +30,17 @@
         "allowDeclarations": true
       }
     ]
-  }
+  },
+  "overrides": [
+    {
+      "files": [
+        "src/**/__tests__/**/*.ts",
+        "src/**/__mocks__/**/*.ts"
+      ],
+      "rules": {
+        "@typescript-eslint/no-explicit-any": "off",
+        "@typescript-eslint/no-require-imports": "off"
+      }
+    }
+  ]
 }

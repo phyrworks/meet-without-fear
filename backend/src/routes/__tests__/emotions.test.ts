@@ -5,7 +5,7 @@
  * validation, which never reaches the database.
  */
 import { Request, Response } from 'express';
-import { recordEmotion, getEmotions, completeExercise } from '../../controllers/emotions';
+import { recordEmotion, completeExercise } from '../../controllers/emotions';
 
 // Mock Prisma
 
@@ -48,15 +48,6 @@ describe('Emotional Barometer API', () => {
 
   describe('POST /sessions/:id/emotions (recordEmotion)', () => {
     const mockUser = { id: 'user-1', email: 'user@example.com', name: 'Test User' };
-    const mockVessel = { id: 'vessel-1', userId: 'user-1', sessionId: 'session-1' };
-    const mockReading = {
-      id: 'reading-1',
-      intensity: 7,
-      context: 'Feeling overwhelmed',
-      stage: 1,
-      timestamp: new Date(),
-      vesselId: 'vessel-1',
-    };
 
     it('validates intensity must be at least 1', async () => {
       const req = createMockRequest({
@@ -144,39 +135,10 @@ describe('Emotional Barometer API', () => {
     });
   });
 
-  describe('GET /sessions/:id/emotions (getEmotions)', () => {
-    const mockUser = { id: 'user-1', email: 'user@example.com', name: 'Test User' };
-    const mockVessel = { id: 'vessel-1', userId: 'user-1', sessionId: 'session-1' };
-    const mockReadings = [
-      {
-        id: 'reading-1',
-        intensity: 7,
-        context: 'Feeling overwhelmed',
-        stage: 1,
-        timestamp: new Date(),
-      },
-      {
-        id: 'reading-2',
-        intensity: 5,
-        context: null,
-        stage: 1,
-        timestamp: new Date(Date.now() - 60000),
-      },
-    ];
-  });
+  describe('GET /sessions/:id/emotions (getEmotions)', () => {});
 
   describe('POST /sessions/:id/exercises/complete (completeExercise)', () => {
     const mockUser = { id: 'user-1', email: 'user@example.com', name: 'Test User' };
-    const mockVessel = { id: 'vessel-1', userId: 'user-1', sessionId: 'session-1' };
-    const mockCompletion = {
-      id: 'completion-1',
-      sessionId: 'session-1',
-      userId: 'user-1',
-      type: 'BREATHING_EXERCISE',
-      completedAt: new Date(),
-      intensityBefore: 8,
-      intensityAfter: 5,
-    };
 
     it('rejects invalid exercise type', async () => {
       const req = createMockRequest({
@@ -278,7 +240,5 @@ describe('Emotional Barometer API', () => {
     });
   });
 
-  describe('Error Handling', () => {
-    const mockUser = { id: 'user-1', email: 'user@example.com', name: 'Test User' };
-  });
+  describe('Error Handling', () => {});
 });

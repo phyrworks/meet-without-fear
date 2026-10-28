@@ -13,8 +13,7 @@
 
 import { isTargetShape } from '../../testing/golden/shape';
 import { adaAndBob, openTargetRun, type TargetRun } from './target-roles';
-import { parseStreamEvents, STREAM_EVENT_NAMES, type StreamEvent } from '../../../../shared/src/testing/sse-fixtures';
-import { streamEventSchema } from '../../../../shared/src/contracts/stream';
+import { parseStreamEvents, type StreamEvent } from '../../../../shared/src/testing/sse-fixtures';
 
 const describeTarget = isTargetShape() ? describe : describe.skip;
 jest.setTimeout(180_000);
@@ -61,13 +60,6 @@ describeTarget('the Stage 3 reveal gate on the target (mwf_app, the gate reply b
         yield { type: 'done' };
       })(),
     );
-  const stubThrows = () =>
-    streamSpy.mockImplementation(() =>
-      (async function* () {
-        yield { type: 'text', text: 'partial ' };
-        throw new Error('upstream exploded');
-      })(),
-    );
 
   const turn = async (who: 'ada' | 'bob', body: Record<string, unknown>) => {
     const userId = who === 'ada' ? ids.adaUser : ids.bobUser;
@@ -87,19 +79,12 @@ describeTarget('the Stage 3 reveal gate on the target (mwf_app, the gate reply b
     const raw = String(res.body ?? '');
     return { status: res.status, raw, events: raw.includes('event:') ? parseStreamEvents(raw) : ([] as StreamEvent[]) };
   };
-  const chunkText = (events: StreamEvent[]) =>
-    events
-      .filter((e): e is Extract<StreamEvent, { event: 'chunk' }> => e.event === 'chunk')
-      .map(c => c.data.text)
-      .join('');
   const ownMessages = async (participantId: string) =>
     run.sql<{ role: string; content: string }>(
       `SELECT m.role::text AS role, m.content FROM message m JOIN conversation c ON c.id = m.conversation_id
        WHERE c.participant_id = $1 ORDER BY m.created_at, m.id`,
       [participantId],
     );
-  const milestones = async () =>
-    (await run.sql<{ n: number }>(`SELECT count(*)::int AS n FROM participant_milestone`))[0].n;
 
   const READY = "I'm ready to see the needs lists";
   let bobLabels: string[] = [];

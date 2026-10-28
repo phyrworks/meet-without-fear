@@ -12,7 +12,6 @@
  * subject's delivered EMPATHY_STATEMENT, and the job stamps the delivery.
  */
 
-import type { PrismaClient } from '../../generated/prisma/client';
 import { getJobPrisma, prisma } from '../../lib/prisma';
 import { logger } from '../../lib/logger';
 import { pingStage2Refresh } from '../empathy-realtime';

@@ -1,5 +1,4 @@
 import { detectCrisis } from '../crisis-detector';
-import type { CrisisDetectionResult } from '../crisis-detector';
 
 describe('Crisis Detector', () => {
   // ---- Suicide / Self-Harm Detection ----

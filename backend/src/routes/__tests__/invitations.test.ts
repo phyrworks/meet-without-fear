@@ -5,7 +5,7 @@
  * What remains is the auth guard and request validation.
  */
 import { Request, Response } from 'express';
-import { createSession, getInvitation, acceptInvitation, declineInvitation } from '../../controllers/invitations';
+import { createSession } from '../../controllers/invitations';
 
 // Mock Prisma
 

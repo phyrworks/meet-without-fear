@@ -5,7 +5,7 @@ import {
   applyFieldEncryption,
   SENSITIVE_FIELD_MAP,
 } from '../prisma-encryption-middleware';
-import { encrypt, decrypt, isEncrypted, FieldDecryptionError, _resetForTesting } from '../../utils/field-encryption';
+import { encrypt, isEncrypted, FieldDecryptionError, _resetForTesting } from '../../utils/field-encryption';
 import { contentHash } from '../../utils/content-hash';
 
 const TEST_KEY = crypto.randomBytes(32).toString('base64');

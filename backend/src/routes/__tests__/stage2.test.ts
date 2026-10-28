@@ -16,8 +16,6 @@
  * - POST /sessions/:id/empathy/validate - Validate partner's empathy
  */
 
-import { notifyPartner, publishSessionEvent } from '../../services/realtime';
-
 // Mock realtime
 jest.mock('../../services/realtime');
 
@@ -58,16 +56,7 @@ jest.mock('../../services/empathy-status', () => ({
 }));
 
 // Import controllers after mocks
-import {
-  saveDraft,
-  getDraft,
-  consentToShare,
-  getPartnerEmpathy,
-  validateEmpathy,
-  saveValidationFeedbackDraft,
-  refineValidationFeedback,
-  skipRefinement,
-} from '../../controllers/stage2';
+import { saveDraft, refineValidationFeedback } from '../../controllers/stage2';
 
 // Mock Express request/response
 function mockRequest(overrides: Record<string, unknown> = {}) {
@@ -88,17 +77,6 @@ function mockResponse() {
 }
 
 // Helper to create mock session
-function mockSession(overrides: Record<string, unknown> = {}) {
-  return {
-    id: 'session-123',
-    status: 'ACTIVE',
-    currentStage: 2,
-    relationship: {
-      members: [{ userId: 'user-1' }, { userId: 'partner-1' }],
-    },
-    ...overrides,
-  };
-}
 
 describe('Stage 2 API', () => {
   beforeEach(() => {

@@ -16,7 +16,6 @@
  *     (job).
  */
 
-import type { PrismaClient } from '../../generated/prisma/client';
 import { getJobPrisma, prisma, type DbClient } from '../../lib/prisma';
 import { logger } from '../../lib/logger';
 import { getSonnetResponse } from '../../lib/bedrock';

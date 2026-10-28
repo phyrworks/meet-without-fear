@@ -10,16 +10,9 @@ import { Request, Response } from 'express';
 import {
   // eslint-disable-next-line @typescript-eslint/no-deprecated
   sendMessage,
-  sendMessageStream,
-  confirmFeelHeard,
-  getConversationHistory,
   scrubVisibleAIText,
   isReadyForStage3RevealText,
 } from '../../controllers/messages';
-import { getModelCompletionWithTools, getSonnetStreamingResponse } from '../../lib/bedrock';
-import { buildStagePrompt } from '../../services/stage-prompts';
-import { interpretNeedEditRequest } from '../../services/needs-edit-interpreter.service';
-import { applyNeedEdits } from '../../services/needs-edit-applier.service';
 
 // Mock Prisma
 

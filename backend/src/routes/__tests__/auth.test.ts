@@ -11,7 +11,7 @@
  * Tests for auth API endpoints.
  */
 
-import { Request, Response, NextFunction } from 'express';
+import { Request, Response } from 'express';
 import { getMe, updateProfile, updatePushToken, deletePushToken, getAblyToken } from '../../controllers/auth';
 import { UnauthorizedError, ValidationError } from '../../middleware/errors';
 

@@ -302,6 +302,7 @@ describe('getSonnetStreamingResponse', () => {
   it('should include error flag that consumer can use to detect failures', async () => {
     // Verify the consumer pattern: check event.error to distinguish success from failure
     const streamObj = {
+      // eslint-disable-next-line require-yield -- a stream that fails before its first event
       [Symbol.asyncIterator]: async function* () {
         throw new Error('Bedrock throttling');
       },

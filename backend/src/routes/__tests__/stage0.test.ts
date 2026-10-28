@@ -45,7 +45,6 @@ function createMockResponse(): {
 
 describe('Stage 0 API', () => {
   const mockUser = { id: 'user-1', email: 'user1@example.com', name: 'User 1' };
-  const mockPartner = { id: 'user-2', email: 'user2@example.com', name: 'User 2' };
   const mockSessionId = 'session-123';
 
   beforeEach(() => {

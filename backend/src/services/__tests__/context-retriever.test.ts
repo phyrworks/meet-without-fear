@@ -60,40 +60,16 @@ jest.mock('../../utils/circuit-breaker', () => ({
 // ============================================================================
 
 import {
-  retrieveContext,
   formatRetrievedContext,
   buildMessagesWithFullContext,
   type RetrievedContext,
   type RelevantMessage,
-  type RetrievalOptions,
   type DetectedReference,
 } from '../context-retriever';
-import { getHaikuJson } from '../../lib/bedrock';
-import { searchSessionContent, searchInnerWorkSessionContent } from '../embedding';
-
-const mockGetHaikuJson = getHaikuJson as jest.MockedFunction<typeof getHaikuJson>;
-const mockSearchSessionContent = searchSessionContent as jest.MockedFunction<typeof searchSessionContent>;
-const mockSearchInnerWorkSessionContent = searchInnerWorkSessionContent as jest.MockedFunction<
-  typeof searchInnerWorkSessionContent
->;
 
 // ============================================================================
 // Fixtures
 // ============================================================================
-
-function buildOptions(overrides?: Partial<RetrievalOptions>): RetrievalOptions {
-  return {
-    userId: 'user-1',
-    currentMessage: 'I feel really frustrated with Bob.',
-    currentSessionId: 'session-1',
-    turnId: 'session-1-1',
-    maxCrossSessionMessages: 10,
-    similarityThreshold: 0.5,
-    includePreSession: true,
-    skipDetection: false,
-    ...overrides,
-  };
-}
 
 function buildRetrievedContext(overrides?: Partial<RetrievedContext>): RetrievedContext {
   return {

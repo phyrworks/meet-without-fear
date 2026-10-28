@@ -12,9 +12,8 @@
  * Tests for Clerk-based authentication middleware.
  */
 
-import { Request, Response, NextFunction } from 'express';
-import { requireAuth, optionalAuth, getUser, requireSessionAccess } from '../auth';
-import { ForbiddenError, NotFoundError } from '../errors';
+import { Request, Response } from 'express';
+import { requireAuth, optionalAuth, getUser } from '../auth';
 
 // Mock Prisma
 
@@ -140,7 +139,7 @@ describe('Auth Middleware', () => {
       const req = createMockRequest({
         headers: { authorization: 'Bearer invalid-token' },
       });
-      const { res, statusMock, jsonMock } = createMockResponse();
+      const { res, statusMock } = createMockResponse();
       const next = jest.fn();
 
       await requireAuth(req as Request, res as Response, next);
@@ -234,7 +233,7 @@ describe('Auth Middleware', () => {
           'x-e2e-user-email': 'test@e2e.test',
         },
       });
-      const { res, statusMock, jsonMock } = createMockResponse();
+      const { res, statusMock } = createMockResponse();
       const next = jest.fn();
 
       await requireAuth(req as Request, res as Response, next);
@@ -244,20 +243,5 @@ describe('Auth Middleware', () => {
     });
   });
 
-  describe('requireSessionAccess', () => {
-    const user = {
-      id: 'user-1',
-      clerkId: 'clerk-1',
-      email: 'a@b.com',
-      name: null,
-      firstName: null,
-      lastName: null,
-      pushToken: null,
-      biometricEnabled: false,
-      biometricEnrolledAt: null,
-      lastMoodIntensity: null,
-      createdAt: new Date(),
-      updatedAt: new Date(),
-    };
-  });
+  describe('requireSessionAccess', () => {});
 });

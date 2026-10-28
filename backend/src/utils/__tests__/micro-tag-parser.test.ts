@@ -1,4 +1,4 @@
-import { parseMicroTagResponse, ParsedMicroTagResponse } from '../micro-tag-parser';
+import { parseMicroTagResponse } from '../micro-tag-parser';
 
 describe('micro-tag-parser', () => {
   describe('parseMicroTagResponse', () => {

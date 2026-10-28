@@ -370,7 +370,7 @@ describeTarget('partner-session classifier on the target (NOTABLE_FACTS by mwf_j
 
       // First, we need to capture the short IDs that will be generated
       // We do this by spying on the call and extracting from the prompt
-      let capturedShortIds: { [fullId: string]: string } = {};
+      const capturedShortIds: { [fullId: string]: string } = {};
 
       (getHaikuJson as jest.Mock).mockImplementationOnce(args => {
         // Extract short IDs from the prompt
