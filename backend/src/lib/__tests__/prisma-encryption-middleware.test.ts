@@ -105,14 +105,43 @@ const SPEC_ENCRYPTED: Record<string, string> = {
   'feature_state.doc': 'user',
 };
 
+/**
+ * Ruling R46 (TS-13 fix round 1; provisional pending the owner): free-text
+ * columns derived from a participant's or user's content that §1 does not
+ * mark, encrypted all the same (the marks are a floor). Recorded in the spec's
+ * Conventions "Encryption amendments (TS-13, R46)" note.
+ */
+const R46_AMENDED: Record<string, string> = {
+  'invitation.decline_reason': 'session',
+  'reconciler_result.most_important_gap': 'participant',
+  'reconciler_result.rationale': 'participant',
+  'reconciler_result.suggested_share_focus': 'participant',
+  'reconciler_result.suggested_share_content': 'participant',
+  'reconciler_result.suggested_share_reason': 'participant',
+  'reconciler_guidance.area_hint': 'participant',
+  'reconciler_guidance.prompt_seed': 'participant',
+  'proposal.duration': 'session',
+  'proposal.measure_of_success': 'session',
+  'proposal.removal_reason': 'session',
+  'proposal.unresolved_need_labels': 'session',
+  'proposal_revision.before': 'session',
+  'proposal_revision.after': 'session',
+  'agreement.duration': 'session',
+  'agreement.measure_of_success': 'session',
+  'user_memory.suggested_text': 'user',
+  'reminder.note': 'user',
+};
+
 describe('SENSITIVE_FIELD_MAP — the target columns', () => {
   const entries = Object.entries(SENSITIVE_FIELD_MAP).flatMap(([model, c]) =>
     Object.entries(c.fields).map(([field, f]) => ({ model, table: c.table, field, f })),
   );
 
-  it('is exactly the columns the spec marks encrypted, each with its key class', () => {
+  it('is exactly the columns the spec marks encrypted plus the R46 amendments, each with its key class', () => {
     const map = Object.fromEntries(entries.map(e => [`${e.table}.${e.f.column}`, e.f.key]));
-    expect(map).toEqual(SPEC_ENCRYPTED);
+    expect(map).toEqual({ ...SPEC_ENCRYPTED, ...R46_AMENDED });
+    const amended = entries.filter(e => e.f.amended).map(e => `${e.table}.${e.f.column}`);
+    expect(amended.sort()).toEqual(Object.keys(R46_AMENDED).sort());
   });
 
   it('names target Prisma models, fields and columns that exist in the generated client', () => {
@@ -155,7 +184,7 @@ describe('SENSITIVE_FIELD_MAP — the target columns', () => {
   it('the at-rest suites (encryption-at-rest-*.target.test.ts) together prove every column of the map', () => {
     const proven = Object.values(COVERAGE).flat();
     expect(new Set(proven).size).toBe(proven.length);
-    expect([...proven].sort()).toEqual(Object.keys(SPEC_ENCRYPTED).sort());
+    expect([...proven].sort()).toEqual(Object.keys({ ...SPEC_ENCRYPTED, ...R46_AMENDED }).sort());
   });
 
   it('jsonb modes (R43): envelope wherever the CHECK allows, leaves only for ai_memory.doc', () => {
@@ -165,6 +194,8 @@ describe('SENSITIVE_FIELD_MAP — the target columns', () => {
       'follow_up_checkin.payload': 'jsonb-envelope',
       'reflection.summary_doc': 'jsonb-envelope',
       'feature_state.doc': 'jsonb-envelope',
+      'proposal_revision.before': 'jsonb-envelope',
+      'proposal_revision.after': 'jsonb-envelope',
     });
   });
 });
@@ -172,10 +203,9 @@ describe('SENSITIVE_FIELD_MAP — the target columns', () => {
 describe('values by kind', () => {
   const field = (kind: EncryptedField['kind']): EncryptedField => ({ column: 'c', kind, key: 'user' });
 
-  it('text: enc:v1 at rest, plaintext back; already-encrypted values are not sealed twice', () => {
+  it('text: enc:v1 at rest, plaintext back', () => {
     const sealed = sealFieldValue(field('text'), 'secret') as string;
     expect(isEncrypted(sealed)).toBe(true);
-    expect(sealFieldValue(field('text'), sealed)).toBe(sealed);
     expect(openFieldValue(field('text'), sealed)).toBe('secret');
     expect(openFieldValue(field('text'), 'legacy plaintext')).toBe('legacy plaintext');
   });
@@ -195,7 +225,6 @@ describe('values by kind', () => {
     expect(isEncrypted(sealed[ENVELOPE_KEY])).toBe(true);
     expect(JSON.stringify(sealed)).not.toContain('thanks');
     expect(openFieldValue(field('jsonb-envelope'), sealed)).toEqual(doc);
-    expect(sealFieldValue(field('jsonb-envelope'), sealed)).toBe(sealed);
     expect(openFieldValue(field('jsonb-envelope'), doc)).toBe(doc);
     expect(sealFieldValue(field('jsonb-envelope'), null)).toBeNull();
   });
@@ -215,6 +244,36 @@ describe('values by kind', () => {
     expect(isEncrypted(sealed.generatedAt as string)).toBe(true);
     expect(isEncrypted((sealed.facts as Array<Record<string, string>>)[0].fact)).toBe(true);
     expect(openFieldValue(field('jsonb-leaves'), sealed)).toEqual(doc);
+  });
+
+  // Fix round 1 (I1): sealing never skips a value because it looks encrypted.
+  // A user can type the format; it must be stored as ciphertext and read back
+  // as typed, in every mode.
+  it('a user string shaped like ciphertext round-trips as plaintext in every mode (I1)', () => {
+    const typed = 'enc:v1:a:b:c';
+    expect(isEncrypted(typed)).toBe(true); // the format check alone would pass it
+    const t = sealFieldValue(field('text'), typed) as string;
+    expect(t).not.toBe(typed);
+    expect(openFieldValue(field('text'), t)).toBe(typed);
+    const a = sealFieldValue(field('text[]'), [typed, 'x']) as string[];
+    expect(a[0]).not.toBe(typed);
+    expect(openFieldValue(field('text[]'), a)).toEqual([typed, 'x']);
+    const looksSealed = { [ENVELOPE_KEY]: typed };
+    const e = sealFieldValue(field('jsonb-envelope'), looksSealed) as Record<string, string>;
+    expect(e[ENVELOPE_KEY]).not.toBe(typed);
+    expect(openFieldValue(field('jsonb-envelope'), e)).toEqual(looksSealed);
+    const doc = { text: typed, facts: [{ fact: typed }] };
+    const l = sealFieldValue(field('jsonb-leaves'), doc);
+    expect(JSON.stringify(l)).not.toContain(`"${typed}"`);
+    expect(openFieldValue(field('jsonb-leaves'), l)).toEqual(doc);
+    // and the raw helper, by table.column
+    expect(decryptColumnValue('message', 'content', encryptColumnValue('message', 'content', typed))).toBe(typed);
+  });
+
+  it('keyless: a user document shaped like an envelope reads back as it is', () => {
+    noKey();
+    const looksSealed = { [ENVELOPE_KEY]: 'enc:v1:a:b:c' };
+    expect(openFieldValue(field('jsonb-envelope'), looksSealed)).toBe(looksSealed);
   });
 
   it('keyless: every kind passes through unchanged (the goldens run keyless)', () => {

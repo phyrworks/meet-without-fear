@@ -45,7 +45,11 @@ describeTarget(
     const asUser = <T>(userId: string, fn: () => Promise<T>): Promise<T> =>
       ctx.runWithContext({ turnId: 't', requestId: 'r', startTime: Date.now(), userId }, async () => await fn());
     const momentsCalled = (moment: string) =>
-      hook.mock.calls.filter(([e]) => (e as { moment: string }).moment === moment).map(([e]) => e);
+      hook.mock.calls.filter(([e]) => (e as { moment: string }).moment === moment).map(([e, client]) => {
+        // fix round 1 (minor 6): every hook runs inside the share's transaction, which it is handed
+        expect(client).toBeDefined();
+        return e;
+      });
     const REVISED = 'PROBE_TS13_ROUND_TWO I see you are running on empty';
 
     beforeAll(async () => {
@@ -107,6 +111,22 @@ describeTarget(
       proven.add('message.content');
     });
 
+    it('fix round 1 (I1): text the author types in the ciphertext format is stored encrypted and the partner still reads their conversation', async () => {
+      const typed = 'enc:v1:a:b:c';
+      const delivered = await messages.deliverMessage({
+        toConversationId: conv.bob,
+        fromParticipantId: ids.ada,
+        kind: 'SHARED_CONTEXT',
+        content: typed,
+      });
+      const [stored] = (await expectSealed(run, 'message', 'content', `id = $1`, [delivered.id])) as string[];
+      expect(stored).not.toBe(typed);
+      const bobs = await asUser(ids.bobUser, () =>
+        messages.listConversationMessages({ conversationId: conv.bob, limit: 500, order: 'asc' }),
+      );
+      expect(bobs.find(m => m.id === delivered.id)?.content).toBe(typed);
+    });
+
     it('mood_reading.context (POST /emotions as mwf_app): sealed, read back', async () => {
       const res = await http(bob, 'post', `/sessions/${ids.session}/emotions`, {
         intensity: 6,
@@ -150,15 +170,25 @@ describeTarget(
       result.gaps.summary = 'PROBE_TS13_GAP';
       result.gaps.missedFeelings = ['PROBE_TS13_MISSED'];
       result.gaps.misattributions = ['PROBE_TS13_WRONG'];
+      // R46 (fix round 1): the subject's private analysis and suggestion
+      result.gaps.mostImportantGap = 'PROBE_TS13_MOST_IMPORTANT';
+      result.recommendation.rationale = 'PROBE_TS13_RATIONALE';
+      result.recommendation.suggestedShareFocus = 'PROBE_TS13_FOCUS';
       const id = await analysis.persistAnalysis({
         attemptId: bobRound1,
         authorParticipantId: ids.bob,
         subjectParticipantId: ids.ada,
         result,
-        guidance: analysis.generateAbstractGuidance(result),
+        guidance: { areaHint: 'PROBE_TS13_AREA', guidanceType: 'challenge_assumptions', promptSeed: 'PROBE_TS13_SEED' },
+        suggestion: { content: 'PROBE_TS13_SUGGESTION', reason: 'PROBE_TS13_SUGGESTION_REASON' },
       });
       expect(id).toEqual(expect.any(String));
       for (const column of [
+        'most_important_gap',
+        'rationale',
+        'suggested_share_focus',
+        'suggested_share_content',
+        'suggested_share_reason',
         'alignment_summary',
         'gap_summary',
         'correctly_identified',
@@ -175,6 +205,20 @@ describeTarget(
         correctlyIdentified: ['PROBE_TS13_RIGHT'],
         missedFeelings: ['PROBE_TS13_MISSED'],
         misattributions: ['PROBE_TS13_WRONG'],
+        mostImportantGap: 'PROBE_TS13_MOST_IMPORTANT',
+        rationale: 'PROBE_TS13_RATIONALE',
+        suggestedShareFocus: 'PROBE_TS13_FOCUS',
+        suggestedShareContent: 'PROBE_TS13_SUGGESTION',
+        suggestedShareReason: 'PROBE_TS13_SUGGESTION_REASON',
+      });
+      for (const column of ['area_hint', 'prompt_seed']) {
+        await expectSealed(run, 'reconciler_guidance', column, `result_id = $1`, [id]);
+        proven.add(`reconciler_guidance.${column}`);
+      }
+      expect(await analysis.guidanceFor(id!)).toEqual({
+        areaHint: 'PROBE_TS13_AREA',
+        guidanceType: 'challenge_assumptions',
+        promptSeed: 'PROBE_TS13_SEED',
       });
     });
 
@@ -290,6 +334,9 @@ describeTarget(
           rows: expect.arrayContaining([
             { table: 'empathy_attempt', id: round2.id },
             { table: 'empathy_attempt', id: bobRound1 },
+            // the subjects' EMPATHY_STATEMENT copies (fix round 1, minor 6)
+            expect.objectContaining({ table: 'message', id: round2.id, by: 'source_attempt_id' }),
+            expect.objectContaining({ table: 'message', id: bobRound1, by: 'source_attempt_id' }),
           ]),
         },
       ]);
@@ -321,6 +368,15 @@ describeTarget(
         prisma.invitation.findUnique({ where: { id: invitationId }, select: { name: true } }),
       );
       expect(inv?.name).toBe('PROBE_TS13_CAROL');
+    // R46: the decliner's reason (POST /invitations/:id/decline as Bob)
+    const declined = await http(bob, 'post', `/invitations/${invitationId}/decline`, { reason: 'PROBE_TS13_DECLINE' });
+    expect(declined.status).toBeLessThan(300);
+    await expectSealed(run, 'invitation', 'decline_reason', `id = $1`, [invitationId]);
+    const back = await asUser(ids.adaUser, () =>
+      prisma.invitation.findUnique({ where: { id: invitationId }, select: { declineReason: true } }),
+    );
+    expect(back?.declineReason).toBe('PROBE_TS13_DECLINE');
+    proven.add('invitation.decline_reason');
       await asUser(ids.adaUser, () =>
         prisma.session.update({ where: { id: sessionId }, data: { topicFrame: 'PROBE_TS13_TOPIC chores' } }),
       );

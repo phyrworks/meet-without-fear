@@ -181,14 +181,15 @@ export async function decideConsent(req: Request, res: Response): Promise<void> 
       typeof editedContent === 'string' &&
       editedContent.trim()
     ) {
-      // need_share.shared_text is written under the session key by the job (ciphertext in; TS-13).
-      await getJobPrisma()
-        .$queryRaw`SELECT app.need_share(${record.needId}::uuid, ${encryptColumnValue('need_share', 'shared_text', editedContent)})`;
-      // Share moment (writer-principal rule): W13 re-encrypts here.
-      await reencryptForSession({
-        moment: 'need-share',
-        sessionId,
-        rows: [{ table: 'need_share', id: record.needId }],
+      // need_share.shared_text is written under the session key by the job
+      // (ciphertext in; TS-13). Share moment (writer-principal rule): the hook
+      // runs in the share's own job transaction; W13 re-encrypts here.
+      await getJobPrisma().$transaction(async tx => {
+        await tx.$queryRaw`SELECT app.need_share(${record.needId}::uuid, ${encryptColumnValue('need_share', 'shared_text', editedContent)})`;
+        await reencryptForSession(
+          { moment: 'need-share', sessionId, rows: [{ table: 'need_share', id: record.needId! }] },
+          tx,
+        );
       });
       sharedContent = {
         id: record.needId,

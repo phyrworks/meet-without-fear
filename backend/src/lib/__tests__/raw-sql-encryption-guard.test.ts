@@ -100,7 +100,7 @@ function rawStatements(): RawStatement[] {
             line: s.slice(0, m.index).split('\n').length,
             ...t,
             before: s.slice(Math.max(0, m.index - 240), m.index),
-            after: s.slice(end, end + 160),
+            after: s.slice(end, end + 600),
           });
         }
       }
@@ -159,7 +159,8 @@ function violationsOf(st: RawStatement): Violation[] {
   const flat = st.sql.replace(/\s+/g, ' ');
   const expr = (val: string) => val.replace(/\$P(\d+)/g, (_, n) => `\${${st.exprs[Number(n)]}}`);
 
-  const ins = /INSERT INTO "?([a-z_]+)"? ?\(/i.exec(flat);
+  // `INSERT INTO t (`, also aliased `INSERT INTO t AS x (` (fix round 1)
+  const ins = /INSERT INTO "?([a-z_]+)"?(?: (?:AS )?[a-z_]+)? ?\(/i.exec(flat);
   if (ins) {
     const table = ins[1];
     const [colList, after] = group(flat, ins.index + ins[0].length - 1);
@@ -190,7 +191,8 @@ function violationsOf(st: RawStatement): Violation[] {
 
   // UPDATE t SET a = …, b = … [WHERE …] and ON CONFLICT … DO UPDATE SET …
   const sets: Array<{ table: string; body: string; conflict: boolean }> = [];
-  const upd = /\bUPDATE "?([a-z_]+)"? SET (.*?)(?: WHERE | RETURNING |$)/i.exec(flat);
+  // `UPDATE t SET`, also aliased `UPDATE t x SET` / `UPDATE t AS x SET` (fix round 1)
+  const upd = /\bUPDATE "?([a-z_]+)"?(?: (?:AS )?(?!SET\b)[a-z_]+)? SET (.*?)(?: WHERE | FROM | RETURNING |$)/i.exec(flat);
   if (upd && !/DO UPDATE/i.test(flat.slice(0, upd.index + 9)))
     sets.push({ table: upd[1], body: upd[2], conflict: false });
   const doUpd = /DO UPDATE SET (.*?)(?: WHERE | RETURNING |$)/i.exec(flat);
@@ -229,6 +231,8 @@ function violationsOf(st: RawStatement): Violation[] {
   }
   return v;
 }
+
+const ENCRYPTED_TABLES = new Set(Object.values(SENSITIVE_FIELD_MAP).map(c => c.table));
 
 /** Views that expose an encrypted column, by the table that holds it. */
 const VIEW_TABLE: Record<string, string> = { v_need_shared: 'need_share' };
@@ -270,6 +274,14 @@ function encryptedReadsOf(st: RawStatement): string[] {
   const out: string[] = [];
   for (const list of lists) {
     for (const item of splitTop(list)) {
+      // `*` / `x.*` on a table with encrypted columns cannot be checked against a
+      // decrypt map: reported as `table.*`, which the reader test refuses (fix round 1)
+      const star = /^(?:([a-z_]+)\.)?\*$/i.exec(item.trim());
+      if (star) {
+        const ts = star[1] ? [aliases.get(star[1]) ?? VIEW_TABLE[star[1]] ?? star[1]] : tables;
+        for (const t of ts) if (ENCRYPTED_TABLES.has(t)) out.push(`${t}.*`);
+        continue;
+      }
       if (item.includes('(')) continue;
       const ref = item
         .replace(/\s+AS\s+.*$/i, '')
@@ -283,13 +295,27 @@ function encryptedReadsOf(st: RawStatement): string[] {
   return [...new Set(out)];
 }
 
-/** Is the statement's result passed through decryptRawRows (around the call, or in a `.then`)? */
-const decrypted = (st: RawStatement) =>
+/**
+ * The decrypt map the statement's result is passed through (around the call,
+ * or in a `.then`), as source text — or null when it is not decrypted.
+ */
+const decryptMapOf = (st: RawStatement): string | null => {
+  const after = st.after ?? '';
   // decryptRawRows(await client.$queryRaw<…>`…`, { … })
-  (/decryptRawRows\(\s*await\s+[\w.()]+\.\s*$/.test((st.before ?? '').replace(/\s+/g, ' ').replace(/\$?\s*$/, '')) &&
-    /^\s*,\s*\{[^}]*\}\s*,?\s*\)/.test(st.after ?? '')) ||
+  if (/decryptRawRows\(\s*await\s+[\w.()]+\.\s*$/.test((st.before ?? '').replace(/\s+/g, ' ').replace(/\$?\s*$/, ''))) {
+    const m = /^\s*,\s*(\{[^}]*\})\s*,?\s*\)/.exec(after);
+    if (m) return m[1];
+  }
   // client.$queryRaw<…>`…`.then(rows => decryptRawRows(rows, { … }))
-  /^\s*\.then\(\s*rows\s*=>\s*decryptRawRows\(/.test(st.after ?? '');
+  const t = /^\s*\.then\(\s*rows\s*=>\s*decryptRawRows\(\s*rows\s*,\s*(\{[^}]*\})/.exec(after);
+  return t ? t[1] : null;
+};
+
+/** The encrypted columns a read leaves undecrypted: not in its decrypt map (a `table.*` read always). */
+const undecrypted = (st: RawStatement, columns: string[]): string[] => {
+  const map = decryptMapOf(st);
+  return columns.filter(c => c.endsWith('.*') || !map || !map.includes(`'${c}'`));
+};
 
 describe('raw SQL writers route every encrypted column through encryptColumnValue', () => {
   const statements = rawStatements();
@@ -322,7 +348,10 @@ describe('raw SQL writers route every encrypted column through encryptColumnValu
 
   it('every raw read of an encrypted column (SELECT list, RETURNING, v_need_shared) goes through decryptRawRows', () => {
     const reads = statements
-      .map(st => ({ where: `${st.file}:${st.line}`, columns: encryptedReadsOf(st), decrypted: decrypted(st) }))
+      .map(st => {
+        const columns = encryptedReadsOf(st);
+        return { where: `${st.file}:${st.line}`, columns, undecrypted: undecrypted(st, columns) };
+      })
       .filter(r => r.columns.length > 0);
     // the known readers are found (the scan is alive)
     expect(reads.map(r => r.where).sort()).toEqual(
@@ -335,7 +364,7 @@ describe('raw SQL writers route every encrypted column through encryptColumnValu
         expect.stringMatching(/^services\/empathy-store\.ts:/),
       ]),
     );
-    expect(reads.filter(r => !r.decrypted)).toEqual([]);
+    expect(reads.filter(r => r.undecrypted.length > 0)).toEqual([]);
   });
 
   it('no $executeRawUnsafe/$queryRawUnsafe statement touches an encrypted table', () => {
@@ -411,6 +440,27 @@ describe('raw SQL writers route every encrypted column through encryptColumnValu
           ]),
         ),
       ).toHaveLength(1);
+    });
+
+    it('fix round 1: aliased UPDATE / INSERT AS are checked; star reads and partial decrypt maps are refused', () => {
+      expect(violationsOf(st('UPDATE need n SET label = $P0 WHERE n.id = $P1', ['l', 'id']))).toEqual([
+        { where: 'x.ts:1', column: 'need.label', value: '${l}' },
+      ]);
+      expect(violationsOf(st('UPDATE need AS n SET label = $P0 WHERE n.id = $P1', ['l', 'id']))).toHaveLength(1);
+      expect(
+        violationsOf(st('INSERT INTO draft AS d (participant_id, content) VALUES ($P0, $P1)', ['p', 'text'])),
+      ).toHaveLength(1);
+      const read = (sql: string, after = ''): RawStatement => ({ ...st(sql, []), before: 'await prisma.', after });
+      expect(encryptedReadsOf(read('SELECT * FROM need WHERE id = $P0'))).toEqual(['need.*']);
+      expect(encryptedReadsOf(read('SELECT n.* FROM need n'))).toEqual(['need.*']);
+      expect(encryptedReadsOf(read('INSERT INTO draft (content) VALUES ($P0) RETURNING *'))).toEqual(['draft.*']);
+      expect(undecrypted(read('SELECT n.* FROM need n'), ['need.*'])).toEqual(['need.*']);
+      const two = read(
+        'SELECT description, duration FROM proposal',
+        ".then(rows => decryptRawRows(rows, { description: 'proposal.description' }))",
+      );
+      expect(encryptedReadsOf(two)).toEqual(['proposal.description', 'proposal.duration']);
+      expect(undecrypted(two, encryptedReadsOf(two))).toEqual(['proposal.duration']);
     });
   });
 });

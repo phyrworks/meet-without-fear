@@ -400,16 +400,22 @@ export async function withdrawChoice(proposalId: string, participantId: string):
 
 /** The participant shares their choices: `choices_shared` (self-assertable, app connection). */
 export async function shareChoices(participantId: string): Promise<boolean> {
-  const reached = await reachMilestone(participantId, 'choices_shared');
   // Share moment (writer-principal rule): the participant's choices — their
-  // notes — become the co-participant's to read. W13 re-encrypts here.
-  const me = await prisma.participant.findUnique({ where: { id: participantId }, select: { sessionId: true } });
-  await reencryptForSession({
-    moment: 'choices-shared',
-    sessionId: me?.sessionId ?? null,
-    rows: [{ table: 'proposal_choice', id: participantId, by: 'participant_id' }],
+  // notes — become the co-participant's to read with the milestone, so the
+  // hook runs in the milestone's transaction. W13 re-encrypts here.
+  return prisma.$transaction(async tx => {
+    const reached = await reachMilestone(participantId, 'choices_shared', new Date(), tx);
+    const me = await tx.participant.findUnique({ where: { id: participantId }, select: { sessionId: true } });
+    await reencryptForSession(
+      {
+        moment: 'choices-shared',
+        sessionId: me?.sessionId ?? null,
+        rows: [{ table: 'proposal_choice', id: participantId, by: 'participant_id' }],
+      },
+      tx,
+    );
+    return reached;
   });
-  return reached;
 }
 
 /** Withdraw the share so the participant can revise: un-reaching a milestone is the job's DELETE. */
@@ -536,7 +542,9 @@ export async function insertAgreementsTx(tx: JobTx, args: CreateAgreementsArgs):
       const [row] = await tx.$queryRaw<Array<{ id: string }>>`
         INSERT INTO agreement (session_id, proposal_id, type, status, description, duration, measure_of_success, follow_up_at)
         VALUES (${args.sessionId}::uuid, ${a.proposalId}::uuid, ${a.type}::agreement_type, 'AGREED',
-                ${encryptColumnValue('agreement', 'description', a.description)}, ${a.duration}, ${a.measureOfSuccess}, ${a.followUpAt})
+                ${encryptColumnValue('agreement', 'description', a.description)},
+                ${encryptColumnValue('agreement', 'duration', a.duration)},
+                ${encryptColumnValue('agreement', 'measure_of_success', a.measureOfSuccess)}, ${a.followUpAt})
         RETURNING id`;
       ids.push(row.id);
       for (const pid of args.partyParticipantIds) {
@@ -549,8 +557,8 @@ export async function insertAgreementsTx(tx: JobTx, args: CreateAgreementsArgs):
       await tx.$executeRaw`
         INSERT INTO proposal_revision (proposal_id, actor_participant_id, action, before, after, reason)
         VALUES (${a.proposalId}::uuid, ${args.actorParticipantId}::uuid, 'CONVERTED',
-                ${JSON.stringify({ status: a.fromStatus })}::jsonb,
-                ${JSON.stringify({ agreementId: row.id, status: 'CONVERTED_TO_AGREEMENT' })}::jsonb,
+                ${JSON.stringify(encryptColumnValue('proposal_revision', 'before', { status: a.fromStatus }))}::jsonb,
+                ${JSON.stringify(encryptColumnValue('proposal_revision', 'after', { agreementId: row.id, status: 'CONVERTED_TO_AGREEMENT' }))}::jsonb,
                 ${args.reason ?? 'Mutual Stage 4 willingness closure'})`;
     }
     return ids;

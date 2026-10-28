@@ -306,7 +306,20 @@ export async function checkAndRevealBothIfReady(sessionId: string): Promise<bool
       // there is nothing to re-encrypt; W13 re-encrypts here, in this job
       // transaction, with the same plaintext (T-message-immutable exempts mwf_job).
       await reencryptForSession(
-        { moment: 'empathy-reveal', sessionId, rows: toReveal.map(r => ({ table: 'empathy_attempt', id: r.id })) },
+        {
+          moment: 'empathy-reveal',
+          sessionId,
+          rows: toReveal.flatMap(r => [
+            { table: 'empathy_attempt', id: r.id },
+            // the subject's EMPATHY_STATEMENT copy app.empathy_set_status wrote
+            {
+              table: 'message',
+              id: r.id,
+              by: 'source_attempt_id',
+              scope: "kind = 'EMPATHY_STATEMENT' in the subject's conversation",
+            },
+          ]),
+        },
         tx,
       );
       return toReveal;

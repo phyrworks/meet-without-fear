@@ -31,6 +31,21 @@ import {
   ConfirmMemoryUpdateRequest,
 } from '@meet-without-fear/shared';
 import { validateMemory } from '../services/memory-validator';
+
+/**
+ * The user's ACTIVE global memory with exactly this content, if any.
+ * `user_memory.content` is encrypted with a random IV (TS-13), so SQL cannot
+ * match it: the user's ACTIVE global memories are read (the extension decrypts
+ * them) and compared in the app — the scope the probe always had (ruling R45).
+ */
+async function findActiveGlobalDuplicate(userId: string, content: string): Promise<{ id: string } | null> {
+  const active = await prisma.userMemory.findMany({
+    where: { userId, sessionId: null, status: 'ACTIVE' },
+    select: { id: true, content: true },
+  });
+  const hit = active.find(m => m.content === content);
+  return hit ? { id: hit.id } : null;
+}
 import { formatMemoryRequest, processMemoryUpdate } from '../services/memory-formatter';
 
 // ============================================================================
@@ -242,14 +257,7 @@ export const approveMemory = asyncHandler(async (req: Request, res: Response): P
   }
 
   // Check for duplicate content (prevent approving same suggestion twice).
-  // `content` is encrypted with a random IV (TS-13), so SQL cannot match it:
-  // compare plaintext in the app over the user's ACTIVE global memories — the
-  // same scope the probe always had (ruling R45; the extension decrypts them).
-  const activeGlobal = await prisma.userMemory.findMany({
-    where: { userId: user.id, sessionId: null, status: 'ACTIVE' },
-    select: { id: true, content: true },
-  });
-  const existingDuplicate = activeGlobal.find(m => m.content === finalContent) ?? null;
+  const existingDuplicate = await findActiveGlobalDuplicate(user.id, finalContent);
 
   if (existingDuplicate) {
     throw new ValidationError('A memory with this content already exists');
@@ -413,14 +421,7 @@ export const confirmMemory = asyncHandler(async (req: Request, res: Response): P
   }
 
   // Check for duplicate (memories are always global)
-  const existingDuplicate = await prisma.userMemory.findFirst({
-    where: {
-      userId: user.id,
-      content: body.content.trim(),
-      sessionId: null,
-      status: 'ACTIVE',
-    },
-  });
+  const existingDuplicate = await findActiveGlobalDuplicate(user.id, body.content.trim());
 
   if (existingDuplicate) {
     throw new ValidationError('A memory with this content already exists');

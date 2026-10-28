@@ -96,6 +96,7 @@ export const COVERAGE: Record<string, string[]> = {
     'reflection_message.content',
     'takeaway.content',
     'user_memory.content',
+    'user_memory.suggested_text',
     'feature_state.doc',
   ],
   empathy: [
@@ -115,6 +116,15 @@ export const COVERAGE: Record<string, string[]> = {
     'context_share_offer.suggested_content',
     'context_share_offer.suggested_reason',
     'context_share_offer.shared_content',
+    // R46
+    'invitation.decline_reason',
+    'reconciler_result.most_important_gap',
+    'reconciler_result.rationale',
+    'reconciler_result.suggested_share_focus',
+    'reconciler_result.suggested_share_content',
+    'reconciler_result.suggested_share_reason',
+    'reconciler_guidance.area_hint',
+    'reconciler_guidance.prompt_seed',
   ],
   repair: [
     'need.label',
@@ -129,5 +139,15 @@ export const COVERAGE: Record<string, string[]> = {
     'follow_up_checkin.reflection_summary',
     'follow_up_checkin.payload',
     'follow_up_note.content',
+    // R46
+    'proposal.duration',
+    'proposal.measure_of_success',
+    'proposal.removal_reason',
+    'proposal.unresolved_need_labels',
+    'proposal_revision.before',
+    'proposal_revision.after',
+    'agreement.duration',
+    'agreement.measure_of_success',
+    'reminder.note',
   ],
 };

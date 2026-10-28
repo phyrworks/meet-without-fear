@@ -848,7 +848,11 @@ async function agreeIfEveryoneWilling(args: {
     >`
       SELECT id, status::text AS status, description, duration, measure_of_success AS "measureOfSuccess"
       FROM proposal WHERE id = ${args.proposalId}::uuid AND session_id = ${args.sessionId}::uuid`.then(rows =>
-      decryptRawRows(rows, { description: 'proposal.description' }),
+      decryptRawRows(rows, {
+        description: 'proposal.description',
+        duration: 'proposal.duration',
+        measureOfSuccess: 'proposal.measure_of_success',
+      }),
     ),
     job.$queryRaw<Array<{ id: string }>>`
       SELECT id FROM participant WHERE session_id = ${args.sessionId}::uuid AND kind = 'human' AND left_at IS NULL ORDER BY id`,

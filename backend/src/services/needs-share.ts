@@ -184,13 +184,15 @@ export async function shareNeeds(args: {
   const job = getJobPrisma();
   for (const need of args.needs) {
     const text = await transformNeedForSharing({ ...need, sessionId: args.sessionId });
-    // need_share.shared_text is written under the session key by the job (ciphertext in; TS-13).
-    await job.$executeRaw`SELECT app.need_share(${need.id}::uuid, ${encryptColumnValue('need_share', 'shared_text', text)})`;
-    // Share moment (writer-principal rule): W13 re-encrypts here.
-    await reencryptForSession({
-      moment: 'need-share',
-      sessionId: args.sessionId,
-      rows: [{ table: 'need_share', id: need.id }],
+    // need_share.shared_text is written under the session key by the job
+    // (ciphertext in; TS-13). Share moment (writer-principal rule): the hook
+    // runs in the share's own job transaction; W13 re-encrypts here.
+    await job.$transaction(async tx => {
+      await tx.$executeRaw`SELECT app.need_share(${need.id}::uuid, ${encryptColumnValue('need_share', 'shared_text', text)})`;
+      await reencryptForSession(
+        { moment: 'need-share', sessionId: args.sessionId, rows: [{ table: 'need_share', id: need.id }] },
+        tx,
+      );
     });
   }
 

@@ -512,17 +512,23 @@ export async function persistAnalysis(opts: {
           ${SEVERITY_TO_DB[r.gaps.severity] ?? 'MINOR'}::gap_severity,
           ${encryptColumnValue('reconciler_result', 'correctly_identified', r.alignment.correctlyIdentified)}::text[],
           ${encryptColumnValue('reconciler_result', 'missed_feelings', r.gaps.missedFeelings)}::text[],
-          ${encryptColumnValue('reconciler_result', 'misattributions', r.gaps.misattributions)}::text[], ${r.gaps.mostImportantGap},
-          ${r.recommendation.action}::recommender_action, ${r.recommendation.rationale},
-          ${r.recommendation.sharingWouldHelp}, ${r.recommendation.suggestedShareFocus},
-          ${opts.suggestion?.content ?? null}, ${opts.suggestion?.reason ?? null}, ${opts.circuitBreakerTripped ?? false})
+          ${encryptColumnValue('reconciler_result', 'misattributions', r.gaps.misattributions)}::text[],
+          ${encryptColumnValue('reconciler_result', 'most_important_gap', r.gaps.mostImportantGap)},
+          ${r.recommendation.action}::recommender_action,
+          ${encryptColumnValue('reconciler_result', 'rationale', r.recommendation.rationale)},
+          ${r.recommendation.sharingWouldHelp},
+          ${encryptColumnValue('reconciler_result', 'suggested_share_focus', r.recommendation.suggestedShareFocus)},
+          ${encryptColumnValue('reconciler_result', 'suggested_share_content', opts.suggestion?.content ?? null)},
+          ${encryptColumnValue('reconciler_result', 'suggested_share_reason', opts.suggestion?.reason ?? null)},
+          ${opts.circuitBreakerTripped ?? false})
         RETURNING id`;
       const resultId = rows[0].id;
       const g = opts.guidance;
       if (g.areaHint || g.guidanceType || g.promptSeed) {
         await tx.$executeRaw`INSERT INTO reconciler_guidance (result_id, author_participant_id, subject_participant_id, area_hint, guidance_type, prompt_seed)
           VALUES (${resultId}::uuid, ${opts.authorParticipantId}::uuid, ${opts.subjectParticipantId}::uuid,
-                  ${g.areaHint}, ${g.guidanceType}, ${g.promptSeed})`;
+                  ${encryptColumnValue('reconciler_guidance', 'area_hint', g.areaHint)}, ${g.guidanceType},
+                  ${encryptColumnValue('reconciler_guidance', 'prompt_seed', g.promptSeed)})`;
       }
       return resultId;
     });

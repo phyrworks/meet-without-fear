@@ -8,8 +8,8 @@
  * the one `FIELD_ENCRYPTION_KEY` (lib/prisma-encryption-middleware.ts), so there
  * is nothing to re-encrypt and `reencryptForSession` does nothing.
  *
- * It is called at every share moment the rule names, inside the job
- * transaction that makes the content visible, with the rows that become
+ * It is called at every share moment the rule names, inside the transaction
+ * that makes the content visible (passed as `client`), with the rows that become
  * readable by the co-participant. It is the single place W13 changes: decrypt
  * each named column under the owner's participant key and write it back under
  * the session key (same plaintext; `mwf_job` is exempt from the immutability
@@ -37,6 +37,8 @@ export interface SharedRow {
   /** The row's key value — of `by`, `id` by default (proposal_choice: every choice of a participant). */
   id: string;
   by?: string;
+  /** Narrows the rows `by` selects (e.g. the subject's copy among a source attempt's messages). */
+  scope?: string;
 }
 
 export interface ShareMomentEvent {

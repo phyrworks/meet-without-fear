@@ -34,7 +34,11 @@ describeTarget('encryption at rest: needs, repair and follow-up columns (FIELD_E
   const asUser = <T>(userId: string, fn: () => Promise<T>): Promise<T> =>
     ctx.runWithContext({ turnId: 't', requestId: 'r', startTime: Date.now(), userId }, async () => await fn());
   const momentsCalled = (moment: string) =>
-    hook.mock.calls.filter(([e]) => (e as { moment: string }).moment === moment).map(([e]) => e);
+    hook.mock.calls.filter(([e]) => (e as { moment: string }).moment === moment).map(([e, client]) => {
+        // fix round 1 (minor 6): every hook runs inside the share's transaction, which it is handed
+        expect(client).toBeDefined();
+        return e;
+      });
 
   beforeAll(async () => {
     run = await openTargetRun('STAGE4_REDESIGN_PARTNER_INACTIVE', `ts13_repair_${process.pid}`);
@@ -151,6 +155,8 @@ describeTarget('encryption at rest: needs, repair and follow-up columns (FIELD_E
     const res = await http({ id: ids.bobUser, email: 'bob@e2e.test' }, 'post', `/sessions/${ids.session}/strategies`, {
       description: 'PROBE_TS13_PROPOSAL take a walk on Sundays',
       needsAddressed: ['Partnership'],
+      duration: 'PROBE_TS13_DURATION two weeks',
+      measureOfSuccess: 'PROBE_TS13_MEASURE we both feel rested'
     });
     expect({ status: res.status, body: res.body }).toMatchObject({ status: 201 });
     const row = { id: res.body.data.strategy.id as string };
@@ -158,6 +164,27 @@ describeTarget('encryption at rest: needs, repair and follow-up columns (FIELD_E
     const p = await asUser(ids.bobUser, () => store.loadProposal(row.id));
     expect(p?.description).toBe('PROBE_TS13_PROPOSAL take a walk on Sundays');
     proven.add('proposal.description');
+    // R46: duration, measure of success, the unresolved need labels, a removal reason
+    await asUser(ids.bobUser, () =>
+      prisma.proposal.update({ where: { id: row.id }, data: { removalReason: 'PROBE_TS13_REMOVED because' } }),
+    );
+    for (const column of ['duration', 'measure_of_success', 'unresolved_need_labels', 'removal_reason']) {
+      await expectSealed(run, 'proposal', column, `id = $1`, [row.id]);
+      proven.add(`proposal.${column}`);
+    }
+    const back = await asUser(ids.bobUser, () =>
+      prisma.proposal.findUnique({
+        where: { id: row.id },
+        select: { duration: true, measureOfSuccess: true, unresolvedNeedLabels: true, removalReason: true },
+      }),
+    );
+    expect(back).toMatchObject({
+      duration: 'PROBE_TS13_DURATION two weeks',
+      measureOfSuccess: 'PROBE_TS13_MEASURE we both feel rested',
+      removalReason: 'PROBE_TS13_REMOVED because',
+    });
+    // 'Partnership' is Ada's private label: Bob reads only its shared text, so it stays unresolved
+    expect(back?.unresolvedNeedLabels).toEqual(['Partnership']);
   });
 
   it('proposal_choice.note (upsertChoice, raw INSERT as mwf_app): sealed; loadVisibleChoices (raw) decrypts; sharing calls the hook', async () => {
@@ -197,6 +224,17 @@ describeTarget('encryption at rest: needs, repair and follow-up columns (FIELD_E
     await asUser(ids.adaUser, () =>
       store.upsertChoice({ proposalId: proposal.pause, participantId: ids.ada, decision: 'NOT_WILLING' }),
     );
+    // the agreed proposal carries a duration and a measure (R46), set by its creator through the model API
+    const [creator] = await run.sql<{ user_id: string }>(
+      `SELECT p.user_id FROM proposal pr JOIN participant p ON p.id = pr.created_by_participant_id WHERE pr.id = $1`,
+      [proposal.checkin],
+    );
+    await asUser(creator.user_id, () =>
+      prisma.proposal.update({
+        where: { id: proposal.checkin },
+        data: { duration: 'PROBE_TS13_AGREED_DURATION', measureOfSuccess: 'PROBE_TS13_AGREED_MEASURE' },
+      }),
+    );
     const closure = await import('../stage4-closure');
     const result = await asUser(ids.adaUser, () =>
       closure.closeStage4({ sessionId: ids.session, participantId: ids.ada }),
@@ -212,6 +250,23 @@ describeTarget('encryption at rest: needs, repair and follow-up columns (FIELD_E
     ]);
     const agreements = await asUser(ids.adaUser, () => store.loadAgreements(ids.session));
     expect(agreements.map(a => a.description)).toEqual([fixtureProposal.description]);
+    // R46: duration / measure copied from the (raw-read, decrypted) proposal; the revision snapshots
+    await expectSealed(run, 'agreement', 'duration', `id = $1`, [result.agreementIds[0]]);
+    await expectSealed(run, 'agreement', 'measure_of_success', `id = $1`, [result.agreementIds[0]]);
+    expect(agreements.map(a => [a.duration, a.measureOfSuccess])).toEqual([
+      ['PROBE_TS13_AGREED_DURATION', 'PROBE_TS13_AGREED_MEASURE'],
+    ]);
+    await expectSealed(run, 'proposal_revision', 'before', `proposal_id = $1 AND action = 'CONVERTED'`, [proposal.checkin]);
+    await expectSealed(run, 'proposal_revision', 'after', `proposal_id = $1 AND action = 'CONVERTED'`, [proposal.checkin]);
+    const revision = await asUser(ids.adaUser, () =>
+      prisma.proposalRevision.findFirst({
+        where: { proposalId: proposal.checkin, action: 'CONVERTED' },
+        select: { before: true, after: true },
+      }),
+    );
+    expect(revision?.after).toEqual({ agreementId: result.agreementIds[0], status: 'CONVERTED_TO_AGREEMENT' });
+    for (const c of ['agreement.duration', 'agreement.measure_of_success', 'proposal_revision.before', 'proposal_revision.after'])
+      proven.add(c);
     const closed = await asUser(ids.adaUser, () => store.loadClosure(ids.session));
     expect(closed?.summary).toEqual(expect.any(String));
     expect(closed?.summary).not.toContain('enc:v1:');
@@ -257,9 +312,19 @@ describeTarget('encryption at rest: needs, repair and follow-up columns (FIELD_E
           whatComesNext: { continueChoice: 'EXTEND' as never },
         },
         entryOutcomes: [{ tendingEntryId: shared.id, followThroughStatus: 'HAPPENED' as never }],
+        reminders: [
+          { scope: 'PRIVATE' as never, remindAt: new Date(Date.now() + 86_400_000).toISOString(), note: 'PROBE_TS13_REMINDER' },
+        ],
       }),
     );
     expect(result.checkin?.id).toEqual(expect.any(String));
+    // R46: the reminder's note (user key)
+    await expectSealed(run, 'reminder', 'note', `user_id = $1 AND note IS NOT NULL`, [ids.adaUser]);
+    const reminder = await asUser(ids.adaUser, () =>
+      prisma.reminder.findFirst({ where: { userId: ids.adaUser, note: { not: null } }, select: { note: true } }),
+    );
+    expect(reminder?.note).toBe('PROBE_TS13_REMINDER');
+    proven.add('reminder.note');
     await expectSealed(run, 'follow_up_checkin', 'payload', `follow_up_id = $1`, [shared.id]);
     await expectSealed(run, 'follow_up_checkin', 'reflection_summary', `follow_up_id = $1`, [shared.id]);
     const checkin = await asUser(ids.adaUser, () =>

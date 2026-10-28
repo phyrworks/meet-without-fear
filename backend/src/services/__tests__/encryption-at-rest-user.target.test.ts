@@ -244,10 +244,31 @@ describeTarget('encryption at rest: user-scope columns (FIELD_ENCRYPTION_KEY set
       suggestedContent: 'PROBE_TS13_MEMORY call me Ada',
       category: 'PERSONAL_INFO',
     });
-    spy.mockRestore();
     expect(dup.status).toBe(400);
     expect(JSON.stringify(dup.body)).toContain('already exists');
+    // fix round 1 (I3): POST /memories/confirm refuses the same text too (app-side compare)
+    const confirmDup = await http(ada, 'post', '/memories/confirm', {
+      content: 'PROBE_TS13_MEMORY call me Ada',
+      category: 'PERSONAL_INFO',
+    });
+    expect(confirmDup.status).toBe(400);
+    expect(JSON.stringify(confirmDup.body)).toContain('already exists');
+    // R46: the AI's original of an edited memory (user_memory.suggested_text)
+    const edited = await http(ada, 'post', '/memories/approve', {
+      suggestedContent: 'PROBE_TS13_SUGGESTED_ORIGINAL',
+      editedContent: 'PROBE_TS13_EDITED',
+      category: 'PREFERENCE',
+    });
+    spy.mockRestore();
+    expect(edited.status).toBe(201);
+    const editedId = edited.body.data.memory.id as string;
+    await expectSealed(run, 'user_memory', 'suggested_text', `id = $1`, [editedId]);
+    const row = await asAda(() =>
+      prisma.userMemory.findUnique({ where: { id: editedId }, select: { content: true, suggestedText: true } }),
+    );
+    expect(row).toEqual({ content: 'PROBE_TS13_EDITED', suggestedText: 'PROBE_TS13_SUGGESTED_ORIGINAL' });
     proven.add('user_memory.content');
+    proven.add('user_memory.suggested_text');
   });
 
   it('feature_state.doc (updateFeature as mwf_app: empty-row raw INSERT, then the model update): an envelope; read back in full shape', async () => {

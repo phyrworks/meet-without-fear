@@ -89,7 +89,11 @@ async function closureInputsAsJob(sessionId: string): Promise<{
       SELECT id, kind::text AS kind, status::text AS status, description, duration, measure_of_success AS "measureOfSuccess",
              created_by_participant_id AS "createdByParticipantId", shared_at AS "sharedAt"
       FROM proposal WHERE session_id = ${sessionId}::uuid ORDER BY id`.then(rows =>
-      decryptRawRows(rows, { description: 'proposal.description' }),
+      decryptRawRows(rows, {
+        description: 'proposal.description',
+        duration: 'proposal.duration',
+        measureOfSuccess: 'proposal.measure_of_success',
+      }),
     ),
     job.$queryRaw<ClosureChoice[]>`
       SELECT c.proposal_id AS "proposalId", c.participant_id AS "participantId", c.decision::text AS decision

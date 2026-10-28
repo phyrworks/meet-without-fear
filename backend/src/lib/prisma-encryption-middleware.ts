@@ -62,6 +62,33 @@
  * | user_memory.content                           | text           | user        |
  * | feature_state.doc                             | jsonb (envelope) | user      |
  *
+ * ## Amendments (ruling R46, TS-13 fix round 1; provisional pending the owner)
+ *
+ * Every column holding free text derived from a participant's or user's
+ * content is encrypted, marked in §1 or not (the marks are a floor). These
+ * entries carry `amended: true`:
+ *
+ * | table.column                                  | kind           | key class   |
+ * |-----------------------------------------------|----------------|-------------|
+ * | invitation.decline_reason                     | text           | session     |
+ * | reconciler_result.most_important_gap, rationale, suggested_share_focus, suggested_share_content, suggested_share_reason | text | participant (subject) |
+ * | reconciler_guidance.area_hint, prompt_seed    | text           | participant (author) |
+ * | proposal.duration, measure_of_success, removal_reason | text   | session     |
+ * | proposal.unresolved_need_labels               | text[]         | session     |
+ * | proposal_revision.before, after               | jsonb (envelope) | session   |
+ * | agreement.duration, measure_of_success        | text           | session     |
+ * | user_memory.suggested_text                    | text           | user        |
+ * | reminder.note                                 | text           | user        |
+ *
+ * Left plain, with why: proposal_revision.reason (app marker strings, filtered
+ * by value); reconciler_guidance.guidance_type, reminder.cadence (categories);
+ * reflection.theme, takeaway.theme (taxonomy labels SQL groups on —
+ * v_reflection_theme); participant.display_name, relationship_member.nickname,
+ * user.* (identity, read by views and the dashboard search); user_device.push_token
+ * (a secret, keyed by ON CONFLICT); user_preferences.doc (settings, read by SQL
+ * jsonb operators); brain_activity.* (T class — prompts and outputs, flagged
+ * for the owner, see the TS-13 report).
+ *
  * ## Value shapes (rulings R43, R44)
  *
  *   - `text`: the column holds `enc:v1:…`.
@@ -105,6 +132,12 @@ export interface EncryptedField {
   key: KeyClass;
   /** For `per-row`: the rule that decides the key of a row. */
   rule?: string;
+  /**
+   * Encrypted by ruling R46 (2026-10-28: every column holding free text derived
+   * from a participant's or user's content is encrypted; the spec's marks are a
+   * floor), not by a §1 "encrypted" mark. Provisional pending the owner.
+   */
+  amended?: boolean;
 }
 
 export interface SensitiveFieldConfig {
@@ -120,11 +153,12 @@ export interface SensitiveFieldConfig {
   hashedFields?: Array<{ from: string; to: string }>;
 }
 
-const text = (column: string, key: KeyClass, rule?: string): EncryptedField => ({
+const text = (column: string, key: KeyClass, rule?: string, amended?: boolean): EncryptedField => ({
   column,
   kind: 'text',
   key,
   ...(rule ? { rule } : {}),
+  ...(amended ? { amended } : {}),
 });
 const textArray = (column: string, key: KeyClass): EncryptedField => ({ column, kind: 'text[]', key });
 
@@ -152,7 +186,10 @@ export const SENSITIVE_FIELD_MAP: Record<string, SensitiveFieldConfig> = {
     fields: { doc: { column: 'doc', kind: 'jsonb-leaves', key: 'per-row', rule: AI_MEMORY_KEY_RULE } },
   },
   MoodReading: { table: 'mood_reading', fields: { context: text('context', 'participant') } },
-  Invitation: { table: 'invitation', fields: { name: text('name', 'session') } },
+  Invitation: {
+    table: 'invitation',
+    fields: { name: text('name', 'session'), declineReason: text('decline_reason', 'session', undefined, true) },
+  },
   EmpathyAttempt: {
     table: 'empathy_attempt',
     fields: { content: text('content', 'per-row', EMPATHY_ATTEMPT_KEY_RULE) },
@@ -166,6 +203,20 @@ export const SENSITIVE_FIELD_MAP: Record<string, SensitiveFieldConfig> = {
       correctlyIdentified: textArray('correctly_identified', 'participant'),
       missedFeelings: textArray('missed_feelings', 'participant'),
       misattributions: textArray('misattributions', 'participant'),
+      // R46: free text from the subject's private material, not marked in §1
+      mostImportantGap: text('most_important_gap', 'participant', undefined, true),
+      rationale: text('rationale', 'participant', undefined, true),
+      suggestedShareFocus: text('suggested_share_focus', 'participant', undefined, true),
+      suggestedShareContent: text('suggested_share_content', 'participant', undefined, true),
+      suggestedShareReason: text('suggested_share_reason', 'participant', undefined, true),
+    },
+  },
+  ReconcilerGuidance: {
+    table: 'reconciler_guidance',
+    // R46: the LLM's free-text hints about the subject's material (guidance_type is a category, left plain)
+    fields: {
+      areaHint: text('area_hint', 'participant', undefined, true),
+      promptSeed: text('prompt_seed', 'participant', undefined, true),
     },
   },
   ContextShareOffer: {
@@ -183,9 +234,37 @@ export const SENSITIVE_FIELD_MAP: Record<string, SensitiveFieldConfig> = {
   },
   NeedShare: { table: 'need_share', fields: { sharedText: text('shared_text', 'session') } },
   NeedDisposition: { table: 'need_disposition', fields: { note: text('note', 'participant') } },
-  Proposal: { table: 'proposal', fields: { description: text('description', 'session') } },
+  Proposal: {
+    table: 'proposal',
+    fields: {
+      description: text('description', 'session'),
+      // R46
+      duration: text('duration', 'session', undefined, true),
+      measureOfSuccess: text('measure_of_success', 'session', undefined, true),
+      removalReason: text('removal_reason', 'session', undefined, true),
+      unresolvedNeedLabels: { ...textArray('unresolved_need_labels', 'session'), amended: true },
+    },
+  },
+  ProposalRevision: {
+    table: 'proposal_revision',
+    // R46: free-form snapshots of a proposal. `reason` stays plain: it holds the
+    // app's marker strings (LEGACY_PROPOSED / LEGACY_CONFIRMED) and is filtered by
+    // value (controllers/stage4.ts), which a random-IV cipher cannot serve.
+    fields: {
+      before: { column: 'before', kind: 'jsonb-envelope', key: 'session', amended: true },
+      after: { column: 'after', kind: 'jsonb-envelope', key: 'session', amended: true },
+    },
+  },
   ProposalChoice: { table: 'proposal_choice', fields: { note: text('note', 'session') } },
-  Agreement: { table: 'agreement', fields: { description: text('description', 'session') } },
+  Agreement: {
+    table: 'agreement',
+    fields: {
+      description: text('description', 'session'),
+      // R46
+      duration: text('duration', 'session', undefined, true),
+      measureOfSuccess: text('measure_of_success', 'session', undefined, true),
+    },
+  },
   SessionClosure: { table: 'session_closure', fields: { summary: text('summary', 'session') } },
   FollowUp: { table: 'follow_up', fields: { summary: text('summary', 'session') } },
   FollowUpCheckin: {
@@ -207,7 +286,11 @@ export const SENSITIVE_FIELD_MAP: Record<string, SensitiveFieldConfig> = {
   },
   ReflectionMessage: { table: 'reflection_message', fields: { content: text('content', 'user') } },
   Takeaway: { table: 'takeaway', fields: { content: text('content', 'user') } },
-  UserMemory: { table: 'user_memory', fields: { content: text('content', 'user') } },
+  UserMemory: {
+    table: 'user_memory',
+    fields: { content: text('content', 'user'), suggestedText: text('suggested_text', 'user', undefined, true) },
+  },
+  Reminder: { table: 'reminder', fields: { note: text('note', 'user', undefined, true) } },
   FeatureState: { table: 'feature_state', fields: { doc: { column: 'doc', kind: 'jsonb-envelope', key: 'user' } } },
 };
 
@@ -220,12 +303,14 @@ export const ENVELOPE_KEY = '$enc';
 
 /**
  * Encrypt one string under `field`'s key. The single place W13 resolves a key
- * per class. A value already in the encrypted format is left alone, so a raw
- * path that copies ciphertext (or re-saves a row it read raw) never
- * double-encrypts.
+ * per class. ALWAYS encrypts (TS-13 fix round 1, I1): a value is never skipped
+ * because it looks encrypted — `isEncrypted` is a format check a user can
+ * satisfy by typing `enc:v1:a:b:c`, which would be stored in plaintext and then
+ * fail every read of its result set. No writer passes ciphertext: every raw
+ * reader decrypts (decryptRawRows) before the value is written anywhere else.
  */
 function sealText(plaintext: string, _field: EncryptedField): string {
-  return isEncrypted(plaintext) ? plaintext : encrypt(plaintext);
+  return encrypt(plaintext);
 }
 
 /** Decrypt one string (plaintext passes through — rows written keyless). The W13 read-side key lookup. */
@@ -272,7 +357,7 @@ export function sealFieldValue(field: EncryptedField, value: unknown): unknown {
     case 'text[]':
       return Array.isArray(value) ? value.map(v => (typeof v === 'string' ? sealText(v, field) : v)) : value;
     case 'jsonb-envelope': {
-      if (!isJsonDocument(value) || isEnvelope(value)) return value;
+      if (!isJsonDocument(value)) return value;
       const json = JSON.stringify(value);
       const sealed = sealText(json, field);
       // No key configured: encrypt() returned the plaintext — store the document as it is.
@@ -295,6 +380,9 @@ export function openFieldValue(field: EncryptedField, value: unknown): unknown {
       // decrypt() throws FieldDecryptionError on an undecryptable value; that
       // propagates deliberately — see utils/field-encryption.ts.
       const json = openText(value[ENVELOPE_KEY], field);
+      // Keyless, decrypt() passes its input through: the document is not one
+      // this code sealed (a user object that happens to have this shape) — as is.
+      if (json === value[ENVELOPE_KEY]) return value;
       try {
         return JSON.parse(json);
       } catch (err) {
