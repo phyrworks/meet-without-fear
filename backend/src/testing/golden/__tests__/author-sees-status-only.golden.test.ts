@@ -54,7 +54,14 @@ const BASE_URL =
 const SCENARIO = 'author-sees-status-only';
 const UNSENT_FEEDBACK = 'You missed how lonely the evenings are once the dishes are done.';
 const ADA_TURN = 'I am still waiting. Is there anything I should be thinking about?';
-const READ_TABLES = shapeTables(['User', 'Message', 'UserVessel', 'EmpathyAttempt', 'ReconcilerResult', 'ReconcilerShareOffer']);
+const READ_TABLES = shapeTables([
+  'User',
+  'Message',
+  'UserVessel',
+  'EmpathyAttempt',
+  'ReconcilerResult',
+  'ReconcilerShareOffer',
+]);
 
 const fixture = scenarioFor(TargetStage.RECONCILER_SHOWN_B, { a: 'Ada Lovelace', b: 'Bob Ross' });
 const result = fixture.reconciliation!.result;
@@ -151,12 +158,15 @@ describe(`golden: ${SCENARIO}`, () => {
   targetFixtureDeltaChecks({ harness: () => harness, steps: () => steps });
   authorClosureChecks({ steps: () => steps, empathyStatus: [8], reconcilerStatus: [12], summary: [14] });
   mockIndexChecks({ harness: () => harness, steps: () => steps, step: 33, email: 'ada@e2e.test' });
-  (isTargetShape() ? it : it.skip)('closure pair: reconciler/run returns Ada only the direction she is the subject of', () => {
-    const run = (steps[32].body as { data: { aUnderstandingB: unknown; bUnderstandingA: unknown } }).data;
-    expect(steps[32].label).toBe('reconciler run as ada@e2e.test');
-    expect(run.aUnderstandingB).toBeNull();
-    expect(run.bUnderstandingA).not.toBeNull();
-  });
+  (isTargetShape() ? it : it.skip)(
+    'closure pair: reconciler/run returns Ada only the direction she is the subject of',
+    () => {
+      const run = (steps[32].body as { data: { aUnderstandingB: unknown; bUnderstandingA: unknown } }).data;
+      expect(steps[32].label).toBe('reconciler run as ada@e2e.test');
+      expect(run.aUnderstandingB).toBeNull();
+      expect(run.bUnderstandingA).not.toBeNull();
+    },
+  );
 
   it("the probes are live: Bob's unsent draft and the analysis exist", () => {
     if (isTargetShape()) {

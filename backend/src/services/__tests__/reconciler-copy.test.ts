@@ -26,7 +26,6 @@ import {
 import { transition } from '../empathy-state-machine';
 
 describe('State Transitions', () => {
-
   it('transitions from HELD to READY on MARK_READY', () => {
     expect(transition(EmpathyStatus.HELD, 'MARK_READY')).toBe(EmpathyStatus.READY);
   });
@@ -56,17 +55,12 @@ describe('State Transitions', () => {
   });
 
   it('throws on invalid transition', () => {
-    expect(() => transition(EmpathyStatus.HELD, 'MUTUAL_REVEAL')).toThrow(
-      'Invalid empathy state transition'
-    );
+    expect(() => transition(EmpathyStatus.HELD, 'MUTUAL_REVEAL')).toThrow('Invalid empathy state transition');
   });
 
   it('throws when trying to transition from REVEALED to READY', () => {
-    expect(() => transition(EmpathyStatus.REVEALED, 'MARK_READY')).toThrow(
-      'Invalid empathy state transition'
-    );
+    expect(() => transition(EmpathyStatus.REVEALED, 'MARK_READY')).toThrow('Invalid empathy state transition');
   });
-
 });
 
 describe('getFallbackContinuation', () => {
@@ -110,8 +104,8 @@ describe('getFallbackContinuation', () => {
   it('always includes acknowledgment section', () => {
     for (const stage of [1, 2, 3, 4, 5]) {
       const result = getFallbackContinuation(stage, 'TestPartner');
-      expect(result).toContain("Thank you for sharing that with TestPartner");
-      expect(result).toContain("refine their understanding");
+      expect(result).toContain('Thank you for sharing that with TestPartner');
+      expect(result).toContain('refine their understanding');
     }
   });
 });
@@ -139,7 +133,7 @@ describe('generateValidationFeedbackReflection', () => {
       expect.objectContaining({
         sessionId: 'session-1',
         operation: 'reconciler-validation-feedback-reflection',
-      })
+      }),
     );
   });
 

@@ -109,7 +109,7 @@ describe('Crisis Detector', () => {
   });
 
   it('does NOT trigger on "dying laughing"', () => {
-    const result = detectCrisis("I was dying laughing when he said that");
+    const result = detectCrisis('I was dying laughing when he said that');
     expect(result.detected).toBe(false);
     expect(result.severity).toBe('none');
   });

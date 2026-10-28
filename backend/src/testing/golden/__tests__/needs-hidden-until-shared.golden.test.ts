@@ -54,8 +54,19 @@ const TARGET = isTargetShape();
 const READ_TABLES = TARGET
   ? ['user', 'message', 'conversation_read_state', 'participant_milestone', 'need', 'consent']
   : ['User', 'Message', 'UserVessel', 'StageProgress', 'IdentifiedNeed', 'ConsentRecord'];
-const NEED_READS = ['session', 'state', 'progress', 'messages', 'needs', 'needs comparison', 'stage4', 'strategies',
-  'pending consent', 'consent history', 'session list'];
+const NEED_READS = [
+  'session',
+  'state',
+  'progress',
+  'messages',
+  'needs',
+  'needs comparison',
+  'stage4',
+  'strategies',
+  'pending consent',
+  'consent history',
+  'session list',
+];
 
 const probesOf = (who: 'ada' | 'bob'): Record<string, string> =>
   Object.fromEntries(
@@ -151,7 +162,10 @@ describe(`golden: ${SCENARIO}`, () => {
       ...findLeaks([...phase.none, ...phase.bobShared, ...phase.bothAda], probesOf('bob')),
       ...findLeaks(phase.bothBob, probesOf('ada')),
     ];
-    expect(unexpectedLeakReport(observed, NEEDS_HIDDEN_UNTIL_SHARED_KNOWN_LEAKS)).toEqual({ unexpected: [], stale: [] });
+    expect(unexpectedLeakReport(observed, NEEDS_HIDDEN_UNTIL_SHARED_KNOWN_LEAKS)).toEqual({
+      unexpected: [],
+      stale: [],
+    });
   });
 
   if (!TARGET) {
@@ -195,9 +209,11 @@ describe(`golden: ${SCENARIO}`, () => {
          FROM need_share s JOIN participant p ON p.id = s.participant_id JOIN "user" u ON u.id = p.user_id`,
       );
       const comparison = (who: string) =>
-        (phase[who === 'ada' ? 'bothAda' : 'bothBob'].find(s => s.label.includes(': needs comparison as'))!.body as {
-          data: { partnerNeeds: Array<{ id: string; category: string; need: string }> };
-        }).data.partnerNeeds;
+        (
+          phase[who === 'ada' ? 'bothAda' : 'bothBob'].find(s => s.label.includes(': needs comparison as'))!.body as {
+            data: { partnerNeeds: Array<{ id: string; category: string; need: string }> };
+          }
+        ).data.partnerNeeds;
       for (const [reader, owner] of [
         ['ada', 'bob@e2e.test'],
         ['bob', 'ada@e2e.test'],
@@ -206,7 +222,9 @@ describe(`golden: ${SCENARIO}`, () => {
           .filter(s => s.email === owner)
           .map(s => ({ id: s.need_id, category: s.category, need: s.shared_text }))
           .sort((a, b) => (a.id < b.id ? -1 : 1));
-        const got = comparison(reader).map(n => ({ id: n.id, category: n.category, need: n.need })).sort((a, b) => (a.id < b.id ? -1 : 1));
+        const got = comparison(reader)
+          .map(n => ({ id: n.id, category: n.category, need: n.need }))
+          .sort((a, b) => (a.id < b.id ? -1 : 1));
         expect(got).toEqual(expected);
         for (const probe of Object.values(probesOf(reader === 'ada' ? 'bob' : 'ada'))) {
           expect(JSON.stringify(comparison(reader))).not.toContain(probe);
@@ -227,10 +245,14 @@ describe(`golden: ${SCENARIO}`, () => {
       it('the step layout the allow-list names', () => {
         expect(steps[NEEDS_STEPS.bobShares].label).toBe('share needs as bob@e2e.test');
         expect(steps[NEEDS_STEPS.adaShares].label).toBe('share needs as ada@e2e.test');
-        for (const [k, n] of Object.entries(NEEDS_STEPS.state)) expect([k, steps[n].label]).toEqual([k, expect.stringMatching(/: state as /)]);
-        for (const [k, n] of Object.entries(NEEDS_STEPS.progress)) expect([k, steps[n].label]).toEqual([k, expect.stringMatching(/: progress as /)]);
-        for (const n of Object.values(NEEDS_STEPS.consentHistory)) expect(steps[n].label).toMatch(/: consent history as /);
-        for (const n of Object.values(NEEDS_STEPS.sessionList)) expect(steps[n].label).toMatch(/: session list as ada@e2e.test$/);
+        for (const [k, n] of Object.entries(NEEDS_STEPS.state))
+          expect([k, steps[n].label]).toEqual([k, expect.stringMatching(/: state as /)]);
+        for (const [k, n] of Object.entries(NEEDS_STEPS.progress))
+          expect([k, steps[n].label]).toEqual([k, expect.stringMatching(/: progress as /)]);
+        for (const n of Object.values(NEEDS_STEPS.consentHistory))
+          expect(steps[n].label).toMatch(/: consent history as /);
+        for (const n of Object.values(NEEDS_STEPS.sessionList))
+          expect(steps[n].label).toMatch(/: session list as ada@e2e.test$/);
         for (const n of Object.values(NEEDS_STAGE4_READ_STEPS)) expect(steps[n].label).toMatch(/: stage4 as /);
       });
 
@@ -248,8 +270,14 @@ describe(`golden: ${SCENARIO}`, () => {
         for (const n of [NEEDS_STEPS.progress.none, NEEDS_STEPS.progress.bobShared]) {
           const d = body(n);
           expect(d.milestones.feelHeardConfirmedAt).toBe(at('ada@e2e.test', 'feel_heard'));
-          expect(d.myProgress.gatesSatisfied).toEqual({ needsConfirmed: true, needsConfirmedAt: at('ada@e2e.test', 'needs_confirmed') });
-          expect(d.partnerProgress.gatesSatisfied).toEqual({ needsConfirmed: true, needsConfirmedAt: at('bob@e2e.test', 'needs_confirmed') });
+          expect(d.myProgress.gatesSatisfied).toEqual({
+            needsConfirmed: true,
+            needsConfirmedAt: at('ada@e2e.test', 'needs_confirmed'),
+          });
+          expect(d.partnerProgress.gatesSatisfied).toEqual({
+            needsConfirmed: true,
+            needsConfirmedAt: at('bob@e2e.test', 'needs_confirmed'),
+          });
         }
         for (const n of [NEEDS_STEPS.state.bothBob, NEEDS_STEPS.progress.bothBob]) {
           const d = body(n);
@@ -271,7 +299,9 @@ describe(`golden: ${SCENARIO}`, () => {
         expect(body(NEEDS_STEPS.progress.bobShared).partnerProgress).toMatchObject({ stage: 3, status: 'IN_PROGRESS' });
         expect(body(NEEDS_STEPS.sessionList.bobShared).items[0].partnerProgress.status).toBe('IN_PROGRESS');
         // The two values the list derives from that status (r33NeedsSharedForAll's other mayDiffer paths).
-        expect(body(NEEDS_STEPS.sessionList.bobShared).items[0].statusSummary.partnerStatus).toBe('Bob Ross is exploring what matters to them');
+        expect(body(NEEDS_STEPS.sessionList.bobShared).items[0].statusSummary.partnerStatus).toBe(
+          'Bob Ross is exploring what matters to them',
+        );
         expect(body(NEEDS_STEPS.sessionList.bobShared).items[0].partnerActionNeeded).toEqual(['complete_stage']);
         const shared = (await milestones()).filter(m => m.key === 'needs_shared');
         expect(shared.map(m => m.email).sort()).toEqual(['ada@e2e.test', 'bob@e2e.test']);
@@ -295,7 +325,9 @@ describe(`golden: ${SCENARIO}`, () => {
       });
 
       it("the fixture's VALIDATED attempts are revealed at their submission (revealedAtFor)", async () => {
-        const rows = await sql<{ s: Date; r: Date | null }>(`SELECT submitted_at AS s, revealed_at AS r FROM empathy_attempt`);
+        const rows = await sql<{ s: Date; r: Date | null }>(
+          `SELECT submitted_at AS s, revealed_at AS r FROM empathy_attempt`,
+        );
         expect(rows).toHaveLength(2);
         for (const r of rows) expect(iso(r.r ?? undefined)).toBe(iso(r.s));
       });
@@ -308,9 +340,11 @@ describe(`golden: ${SCENARIO}`, () => {
         );
         expect(d.walkthrough.phase).toBe('PARTNER_NEEDS');
         expect(d.walkthrough.ownNeeds).toEqual([]);
-        expect(d.walkthrough.partnerNeeds.map((n: { id: string; label: string }) => ({ id: n.id, label: n.label })).sort((a: { id: string }, b: { id: string }) => (a.id < b.id ? -1 : 1))).toEqual(
-          shares.map(s => ({ id: s.need_id, label: s.shared_text })),
-        );
+        expect(
+          d.walkthrough.partnerNeeds
+            .map((n: { id: string; label: string }) => ({ id: n.id, label: n.label }))
+            .sort((a: { id: string }, b: { id: string }) => (a.id < b.id ? -1 : 1)),
+        ).toEqual(shares.map(s => ({ id: s.need_id, label: s.shared_text })));
         expect(d.walkthrough.currentNeed.id).toBe(d.walkthrough.partnerNeeds[0].id);
       });
     });
@@ -320,7 +354,12 @@ describe(`golden: ${SCENARIO}`, () => {
     // the shared text.
     it('target: after both shares Ada’s Stage 4 walkthrough lists the four shared needs', async () => {
       const stage4 = phase.bothAda.find(s => s.label.includes(': stage4 as'))!.body as {
-        data: { walkthrough: { ownNeeds: Array<{ id: string; label: string }>; partnerNeeds: Array<{ id: string; label: string }> } };
+        data: {
+          walkthrough: {
+            ownNeeds: Array<{ id: string; label: string }>;
+            partnerNeeds: Array<{ id: string; label: string }>;
+          };
+        };
       };
       const shares = await sql<{ need_id: string; email: string; shared_text: string; label: string }>(
         `SELECT s.need_id, u.email, s.shared_text, n.label

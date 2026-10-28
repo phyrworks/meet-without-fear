@@ -21,7 +21,9 @@ const MIGRATIONS = path.join(BACKEND, 'prisma/migrations');
 
 /** The committed baseline migration. Throws when the branch has none. */
 export function baselineMigrationPath(): string {
-  const dirs = fs.existsSync(MIGRATIONS) ? fs.readdirSync(MIGRATIONS).filter(d => /_target_shape_baseline$/.test(d)) : [];
+  const dirs = fs.existsSync(MIGRATIONS)
+    ? fs.readdirSync(MIGRATIONS).filter(d => /_target_shape_baseline$/.test(d))
+    : [];
   if (dirs.length !== 1) {
     throw new Error(
       `target-baseline: expected exactly one *_target_shape_baseline migration in ${MIGRATIONS}, found ${dirs.length} ` +

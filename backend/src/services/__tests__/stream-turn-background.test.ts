@@ -54,7 +54,7 @@ function params(overrides: Record<string, unknown> = {}) {
 }
 
 /** Lets any already-scheduled microtasks settle. */
-const settle = () => new Promise((resolve) => setImmediate(resolve));
+const settle = () => new Promise(resolve => setImmediate(resolve));
 
 describe('stream-turn-background', () => {
   beforeEach(() => {
@@ -75,7 +75,7 @@ describe('stream-turn-background', () => {
   /** A promise the test controls, instead of relying on a timer to be slow. */
   function deferred() {
     let release!: () => void;
-    const promise = new Promise<void>((resolve) => {
+    const promise = new Promise<void>(resolve => {
       release = resolve;
     });
     pending.push(release);
@@ -230,7 +230,12 @@ describe('stream-turn-background', () => {
 
     it('maps stored roles onto the classifier role vocabulary', async () => {
       scheduleStreamTurnBackgroundJobs(
-        params({ history: [{ role: 'USER', content: 'u' }, { role: 'AI', content: 'a' }] })
+        params({
+          history: [
+            { role: 'USER', content: 'u' },
+            { role: 'AI', content: 'a' },
+          ],
+        }),
       );
       await settle();
 

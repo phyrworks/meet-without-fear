@@ -5,15 +5,9 @@
  * What remains is the auth guard and request validation.
  */
 import { Request, Response } from 'express';
-import {
-  createSession,
-  getInvitation,
-  acceptInvitation,
-  declineInvitation,
-} from '../../controllers/invitations';
+import { createSession, getInvitation, acceptInvitation, declineInvitation } from '../../controllers/invitations';
 
 // Mock Prisma
-
 
 // Mock email service
 jest.mock('../../services/email', () => ({
@@ -37,7 +31,6 @@ jest.mock('../../services/realtime', () => ({
     },
   }),
 }));
-
 
 // Helper to create mock request
 function createMockRequest(options: {
@@ -77,10 +70,6 @@ describe('Invitations API', () => {
   });
 
   describe('POST /sessions (createSession)', () => {
-
-
-
-
     it('requires authentication', async () => {
       const req = createMockRequest({
         body: { inviteName: 'Partner Name' },
@@ -94,7 +83,7 @@ describe('Invitations API', () => {
         expect.objectContaining({
           success: false,
           error: expect.objectContaining({ code: 'UNAUTHORIZED' }),
-        })
+        }),
       );
     });
 
@@ -113,25 +102,14 @@ describe('Invitations API', () => {
         expect.objectContaining({
           success: false,
           error: expect.objectContaining({ code: 'VALIDATION_ERROR' }),
-        })
+        }),
       );
     });
   });
 
-  describe('GET /invitations/:id (getInvitation)', () => {
+  describe('GET /invitations/:id (getInvitation)', () => {});
 
+  describe('POST /invitations/:id/accept (acceptInvitation)', () => {});
 
-  });
-
-  describe('POST /invitations/:id/accept (acceptInvitation)', () => {
-
-
-
-
-  });
-
-  describe('POST /invitations/:id/decline (declineInvitation)', () => {
-
-  });
-
+  describe('POST /invitations/:id/decline (declineInvitation)', () => {});
 });

@@ -2,11 +2,7 @@
  * Tests for time-language utility functions
  */
 
-import {
-  getTimeContext,
-  formatMessageWithTimeContext,
-  getRecencyGuidance,
-} from '../time-language';
+import { getTimeContext, formatMessageWithTimeContext, getRecencyGuidance } from '../time-language';
 
 describe('time-language utilities', () => {
   // Pin the wall clock to a fixed local midday. Two reasons:
@@ -132,12 +128,7 @@ describe('time-language utilities', () => {
       // For today (useRememberingLanguage = false), when partnerName is given but no sessionContext,
       // it still uses session context format
       const twoHoursAgo = new Date(NOW.getTime() - 2 * 60 * 60 * 1000);
-      const formatted = formatMessageWithTimeContext(
-        'I feel upset',
-        twoHoursAgo.toISOString(),
-        'user',
-        'Sarah'
-      );
+      const formatted = formatMessageWithTimeContext('I feel upset', twoHoursAgo.toISOString(), 'user', 'Sarah');
 
       // Today content - no memory language but still includes session info
       expect(formatted).toContain('User: I feel upset');
@@ -145,12 +136,7 @@ describe('time-language utilities', () => {
 
     it('should format older content with time phrase', () => {
       const tenDaysAgo = new Date(NOW.getTime() - 10 * 24 * 60 * 60 * 1000);
-      const formatted = formatMessageWithTimeContext(
-        'I feel upset',
-        tenDaysAgo.toISOString(),
-        'user',
-        'Sarah'
-      );
+      const formatted = formatMessageWithTimeContext('I feel upset', tenDaysAgo.toISOString(), 'user', 'Sarah');
 
       expect(formatted).toContain('Session with Sarah');
       expect(formatted).toContain('last week');
@@ -165,7 +151,7 @@ describe('time-language utilities', () => {
         thirtyMinAgo.toISOString(),
         'assistant',
         undefined,
-        'Session with John'
+        'Session with John',
       );
 
       expect(formatted).toContain('Session with John');

@@ -72,7 +72,15 @@ export const DECLINED_OFFER_NO_TRACE_BYTE_TARGET_ALLOW: AllowList = {
     ...bodyRules(false),
     byteLabelShift(['steps.15.body.data.records.0.id', 'steps.47.body.data.records.0.id'], 'consent'),
     ...targetByteRules({
-      addedTables: [{ step: DECLINE_STEP, table: 'consent', kind: 'added', count: 1, why: "the subject's DENIED consent naming the offer" }],
+      addedTables: [
+        {
+          step: DECLINE_STEP,
+          table: 'consent',
+          kind: 'added',
+          count: 1,
+          why: "the subject's DENIED consent naming the offer",
+        },
+      ],
     }),
   ],
 };

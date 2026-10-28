@@ -65,7 +65,15 @@ const PROBES: Record<string, string> = {
 };
 
 /** Tables a read can touch (the auth bypass writes User; GETs may stamp vessels). */
-const READ_TABLES = shapeTables(['User', 'Message', 'UserVessel', 'StageProgress', 'InnerWorkSession', 'InnerWorkMessage', 'BrainActivity']);
+const READ_TABLES = shapeTables([
+  'User',
+  'Message',
+  'UserVessel',
+  'StageProgress',
+  'InnerWorkSession',
+  'InnerWorkMessage',
+  'BrainActivity',
+]);
 
 jest.setTimeout(600_000);
 
@@ -144,27 +152,36 @@ describe(`golden: ${SCENARIO}`, () => {
     expect(steps[R1_AFTER_DRAFT_STEP].label).toBe('after turn: empathy draft as bob@e2e.test');
   });
 
-  targetIt("pair (mayDiffer): Bob's after-turn reads show the streamed reply and the streamed proposed statement as his draft", () => {
-    const sse = steps[R1_TURN_STEP].sse ?? [];
-    const streamed = sse
-      .filter(e => e.event === 'chunk')
-      .map(e => (e.data as { text?: string }).text ?? '')
-      .join('')
-      .trim();
-    const proposed = sse
-      .map(e => (e.data as { metadata?: { proposedEmpathyStatement?: string } })?.metadata?.proposedEmpathyStatement)
-      .find(Boolean);
-    expect(streamed.length).toBeGreaterThan(0);
-    expect(proposed).toBeTruthy();
-    const stateMsgs = (steps[R1_AFTER_STATE_STEP].body as { data: { messages: { messages: Array<{ content: string; role: string }> } } }).data.messages.messages;
-    const msgs = (steps[R1_AFTER_MESSAGES_STEP].body as { data: { messages: Array<{ content: string; role: string }> } }).data.messages;
-    for (const list of [stateMsgs, msgs]) {
-      expect(list[11].role).toBe('AI');
-      expect(list[11].content.trim()).toBe(streamed);
-    }
-    const draft = (steps[R1_AFTER_DRAFT_STEP].body as { data: { draft: { content: string } | null } }).data.draft;
-    expect(draft?.content).toBe(proposed);
-  });
+  targetIt(
+    "pair (mayDiffer): Bob's after-turn reads show the streamed reply and the streamed proposed statement as his draft",
+    () => {
+      const sse = steps[R1_TURN_STEP].sse ?? [];
+      const streamed = sse
+        .filter(e => e.event === 'chunk')
+        .map(e => (e.data as { text?: string }).text ?? '')
+        .join('')
+        .trim();
+      const proposed = sse
+        .map(e => (e.data as { metadata?: { proposedEmpathyStatement?: string } })?.metadata?.proposedEmpathyStatement)
+        .find(Boolean);
+      expect(streamed.length).toBeGreaterThan(0);
+      expect(proposed).toBeTruthy();
+      const stateMsgs = (
+        steps[R1_AFTER_STATE_STEP].body as {
+          data: { messages: { messages: Array<{ content: string; role: string }> } };
+        }
+      ).data.messages.messages;
+      const msgs = (
+        steps[R1_AFTER_MESSAGES_STEP].body as { data: { messages: Array<{ content: string; role: string }> } }
+      ).data.messages;
+      for (const list of [stateMsgs, msgs]) {
+        expect(list[11].role).toBe('AI');
+        expect(list[11].content.trim()).toBe(streamed);
+      }
+      const draft = (steps[R1_AFTER_DRAFT_STEP].body as { data: { draft: { content: string } | null } }).data.draft;
+      expect(draft?.content).toBe(proposed);
+    },
+  );
 
   targetIt('pair (mayDiffer): every brain_activity cost is numerically the baseline 0', async () => {
     const rows = await withClient(
@@ -176,22 +193,25 @@ describe(`golden: ${SCENARIO}`, () => {
     for (const r of rows) expect(Number(r.cost)).toBe(0);
   });
 
-  targetIt("pair (addedEntries): Ada's empathy_submitted milestone is reached at her attempt's submitted_at", async () => {
-    const [row] = await withClient(
-      harness.fixture.target,
-      async c =>
-        (
-          await c.query<{ same: boolean }>(
-            `SELECT pm.reached_at = a.submitted_at AS same
+  targetIt(
+    "pair (addedEntries): Ada's empathy_submitted milestone is reached at her attempt's submitted_at",
+    async () => {
+      const [row] = await withClient(
+        harness.fixture.target,
+        async c =>
+          (
+            await c.query<{ same: boolean }>(
+              `SELECT pm.reached_at = a.submitted_at AS same
              FROM participant_milestone pm JOIN empathy_attempt a ON a.author_participant_id = pm.participant_id
              JOIN participant p ON p.id = pm.participant_id JOIN "user" u ON u.id = p.user_id
              WHERE u.email = 'ada@e2e.test' AND pm.milestone_key = 'empathy_submitted'`,
-          )
-        ).rows,
-      harness.fixture.database,
-    );
-    expect(row).toEqual({ same: true });
-  });
+            )
+          ).rows,
+        harness.fixture.database,
+      );
+      expect(row).toEqual({ same: true });
+    },
+  );
 
   it('the probes are live: Ada can read her own reflection', () => {
     expect(findLeaks(adaControl, PROBES).map(l => l.probe)).toContain('reflection title');
@@ -217,6 +237,10 @@ describe(`golden: ${SCENARIO}`, () => {
     const sessionRows = last.filter(r => r.session_id !== null);
     expect(sessionRows.length).toBeGreaterThan(0);
     const text = JSON.stringify(sessionRows.map(r => r.input));
-    expect(Object.entries(PROBES).filter(([, p]) => text.includes(p)).map(([k]) => k)).toEqual([]);
+    expect(
+      Object.entries(PROBES)
+        .filter(([, p]) => text.includes(p))
+        .map(([k]) => k),
+    ).toEqual([]);
   });
 });

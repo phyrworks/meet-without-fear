@@ -17,7 +17,6 @@ import { UnauthorizedError, ValidationError } from '../../middleware/errors';
 
 // Mock Prisma
 
-
 // Helper to create mock request
 function createMockRequest(options: {
   user?: {
@@ -75,8 +74,6 @@ describe('Auth API', () => {
   });
 
   describe('GET /auth/me (getMe)', () => {
-
-
     it('throws UnauthorizedError when no user', async () => {
       const req = createMockRequest({});
       const { res } = createMockResponse();
@@ -88,7 +85,6 @@ describe('Auth API', () => {
   });
 
   describe('PATCH /auth/me (updateProfile)', () => {
-
     it('throws ValidationError for empty name', async () => {
       const req = createMockRequest({
         user: mockUser,
@@ -113,7 +109,6 @@ describe('Auth API', () => {
       expect(mockNext).toHaveBeenCalledWith(expect.any(ValidationError));
     });
 
-
     it('throws UnauthorizedError when no user', async () => {
       const req = createMockRequest({ body: { name: 'Test' } });
       const { res } = createMockResponse();
@@ -125,8 +120,6 @@ describe('Auth API', () => {
   });
 
   describe('POST /auth/push-token (updatePushToken)', () => {
-
-
     it('throws ValidationError for missing pushToken', async () => {
       const req = createMockRequest({
         user: mockUser,
@@ -164,7 +157,6 @@ describe('Auth API', () => {
   });
 
   describe('DELETE /auth/push-token (deletePushToken)', () => {
-
     it('throws UnauthorizedError when no user', async () => {
       const req = createMockRequest({});
       const { res } = createMockResponse();
@@ -176,8 +168,6 @@ describe('Auth API', () => {
   });
 
   describe('GET /auth/ably-token (getAblyToken)', () => {
-
-
     it('throws UnauthorizedError when no user', async () => {
       const req = createMockRequest({});
       const { res } = createMockResponse();

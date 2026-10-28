@@ -15,7 +15,9 @@ async function main(): Promise<void> {
   const args = process.argv.slice(2);
   const replace = args.includes('--replace');
   const names = args.filter(a => !a.startsWith('--'));
-  const base = parseDbUrl(process.env.GOLDEN_DATABASE_URL || 'postgresql://mwf_user:mwf_password@localhost:5432/postgres');
+  const base = parseDbUrl(
+    process.env.GOLDEN_DATABASE_URL || 'postgresql://mwf_user:mwf_password@localhost:5432/postgres',
+  );
   for (const name of names) {
     if (!replace && (await databaseExists(base, name))) {
       console.log(`${name}: exists, left alone (pass --replace to rebuild)`);

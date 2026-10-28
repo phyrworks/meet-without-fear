@@ -57,7 +57,14 @@ const BASE_URL =
 
 const SCENARIO = 'unrevealed-attempt-hidden';
 
-const READ_TABLES = shapeTables(['User', 'Message', 'UserVessel', 'EmpathyAttempt', 'ReconcilerShareOffer', 'ReconcilerResult']);
+const READ_TABLES = shapeTables([
+  'User',
+  'Message',
+  'UserVessel',
+  'EmpathyAttempt',
+  'ReconcilerShareOffer',
+  'ReconcilerResult',
+]);
 /** Ada's round 3 (target only): resubmitted after Bob's feedback on the revealed round 2. */
 const ADA_ROUND_THREE = 'TS10_ROUND_THREE: what I missed is the evenings — you carry them alone.';
 
@@ -119,13 +126,25 @@ describe(`golden: ${SCENARIO}`, () => {
     // current shape has no rounds), so they are kept apart from `steps`.
     if (isTargetShape()) {
       const extra = async (label: string, actor: ActorRef, path: string, body: object) =>
-        harness.step({ label, actor, tables: scope, asyncBoundary: true, call: agent => agent.post(`/api/v1${path}`).send(body) });
+        harness.step({
+          label,
+          actor,
+          tables: scope,
+          asyncBoundary: true,
+          call: agent => agent.post(`/api/v1${path}`).send(body),
+        });
       roundThree.feedback = await extra('feedback on round 2 as bob', bob, `/sessions/${sid}/empathy/validate`, {
         validated: false,
         feedback: 'TS10_FEEDBACK: it is the evenings I needed you to see.',
       });
-      roundThree.resubmit = await extra('resubmit round 3 as ada', ada, `/sessions/${sid}/empathy/resubmit`, { content: ADA_ROUND_THREE });
-      roundThree.bob = await fullRead(harness, bob, 'round three', { tables: READ_TABLES, set: 'all', only: EMPATHY_READS });
+      roundThree.resubmit = await extra('resubmit round 3 as ada', ada, `/sessions/${sid}/empathy/resubmit`, {
+        content: ADA_ROUND_THREE,
+      });
+      roundThree.bob = await fullRead(harness, bob, 'round three', {
+        tables: READ_TABLES,
+        set: 'all',
+        only: EMPATHY_READS,
+      });
     }
   });
 
@@ -149,18 +168,23 @@ describe(`golden: ${SCENARIO}`, () => {
     notified: { stampStep: 34, laterReads: [50, 66] },
     instantReads: [51, 67, 68, 82],
   });
-  (isTargetShape() ? it : it.skip)("mayDiffer pair: Bob's partner-empathy read after the reveal shows round 2 at status_version 2", () => {
-    expect(steps[68].label).toBe('revealed: partner empathy as bob@e2e.test');
-    expect((steps[68].body as { data: { attempt: { statusVersion: number; round: number } } }).data.attempt).toMatchObject({
-      statusVersion: 2,
-      round: 2,
-    });
-  });
+  (isTargetShape() ? it : it.skip)(
+    "mayDiffer pair: Bob's partner-empathy read after the reveal shows round 2 at status_version 2",
+    () => {
+      expect(steps[68].label).toBe('revealed: partner empathy as bob@e2e.test');
+      expect(
+        (steps[68].body as { data: { attempt: { statusVersion: number; round: number } } }).data.attempt,
+      ).toMatchObject({
+        statusVersion: 2,
+        round: 2,
+      });
+    },
+  );
 
   const targetOnly = isTargetShape() ? it : it.skip;
 
   // allow-list targetOnly (plan §4 R2 "still present after the author's next round supersedes it").
-  targetOnly("after round 3 supersedes the revealed round 2, Bob still reads round 2 and never round 3", async () => {
+  targetOnly('after round 3 supersedes the revealed round 2, Bob still reads round 2 and never round 3', async () => {
     expect(roundThree.feedback?.status).toBe(200);
     expect(roundThree.resubmit?.status).toBe(200);
     const rounds = await withClient(
@@ -198,12 +222,17 @@ describe(`golden: ${SCENARIO}`, () => {
       ...['awaiting', 'refining', 'ready'].flatMap(p => findLeaks(phases[p].bob, adaProbes)),
       ...findLeaks(phases.awaiting.ada, bobProbes),
     ];
-    expect(unexpectedLeakReport(observed, UNREVEALED_ATTEMPT_HIDDEN_KNOWN_LEAKS)).toEqual({ unexpected: [], stale: [] });
+    expect(unexpectedLeakReport(observed, UNREVEALED_ATTEMPT_HIDDEN_KNOWN_LEAKS)).toEqual({
+      unexpected: [],
+      stale: [],
+    });
   });
 
   it('the subject sees the status of an unrevealed attempt, with no content', () => {
     const partnerView = (p: string) => {
-      const s = phases[p].bob.find(x => x.label.startsWith(`${p === 'awaiting' ? 'awaiting sharing' : p}: partner empathy`));
+      const s = phases[p].bob.find(x =>
+        x.label.startsWith(`${p === 'awaiting' ? 'awaiting sharing' : p}: partner empathy`),
+      );
       return (s?.body as { data?: { attempt: unknown; partnerStatus: string } })?.data;
     };
     expect(partnerView('awaiting')).toMatchObject({ attempt: null, partnerStatus: 'AWAITING_SHARING' });

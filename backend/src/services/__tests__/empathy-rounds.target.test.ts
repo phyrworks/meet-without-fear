@@ -39,14 +39,27 @@ describeTarget('empathy rounds, the status writer and the review path (mwf_app +
   };
   const store = () => import('../empathy-store');
   const attempts = () =>
-    rows<{ id: string; author: string; round: number; status: string; content: string; supersedes: string | null; revealed: boolean }>(
+    rows<{
+      id: string;
+      author: string;
+      round: number;
+      status: string;
+      content: string;
+      supersedes: string | null;
+      revealed: boolean;
+    }>(
       `SELECT a.id, u.email AS author, a.round, a.status::text AS status, a.content, a.supersedes_attempt_id AS supersedes,
               a.revealed_at IS NOT NULL AS revealed
        FROM empathy_attempt a JOIN participant p ON p.id = a.author_participant_id JOIN "user" u ON u.id = p.user_id
        ORDER BY u.email, a.round`,
     );
   const get = (actor: Harness['actors']['userA'], path: string) =>
-    harness.step({ label: path, actor, tables: [], call: agent => agent.get(`/api/v1/sessions/${harness.sessionId}${path}`) });
+    harness.step({
+      label: path,
+      actor,
+      tables: [],
+      call: agent => agent.get(`/api/v1/sessions/${harness.sessionId}${path}`),
+    });
 
   beforeAll(async () => {
     harness = await createHarness({
@@ -74,8 +87,12 @@ describeTarget('empathy rounds, the status writer and the review path (mwf_app +
 
   it('runs as the real roles: the app is mwf_app with an identity, the job is mwf_job', async () => {
     const { prisma, getJobPrisma } = await import('../../lib/prisma');
-    const [app] = await as(ada.userId, () =>
-      prisma.$queryRaw<Array<{ u: string; me: string | null }>>`SELECT session_user AS u, app.current_user_id()::text AS me`,
+    const [app] = await as(
+      ada.userId,
+      () =>
+        prisma.$queryRaw<
+          Array<{ u: string; me: string | null }>
+        >`SELECT session_user AS u, app.current_user_id()::text AS me`,
     );
     expect(app).toEqual({ u: 'mwf_app', me: ada.userId });
     const [job] = await getJobPrisma().$queryRaw<Array<{ u: string }>>`SELECT session_user AS u`;
@@ -103,14 +120,22 @@ describeTarget('empathy rounds, the status writer and the review path (mwf_app +
 
   it('the circuit breaker counts resubmissions as rounds − 1 (RefinementAttemptCounter → rounds)', async () => {
     const { checkAttempts } = await import('../reconciler/circuit-breaker');
-    expect(await checkAttempts(ada.participantId, bob.participantId)).toEqual({ shouldSkipReconciler: false, attempts: 1 });
-    expect(await checkAttempts(bob.participantId, ada.participantId)).toEqual({ shouldSkipReconciler: false, attempts: 0 });
+    expect(await checkAttempts(ada.participantId, bob.participantId)).toEqual({
+      shouldSkipReconciler: false,
+      attempts: 1,
+    });
+    expect(await checkAttempts(bob.participantId, ada.participantId)).toEqual({
+      shouldSkipReconciler: false,
+      attempts: 0,
+    });
   });
 
   it('only the author resubmits', async () => {
     const { resubmitAttempt, currentAttempt } = await store();
     const round2 = (await currentAttempt(ada.participantId, bob.participantId))!;
-    await expect(as(bob.userId, () => resubmitAttempt(round2.id, 'not mine to write'))).rejects.toThrow(/only the author resubmits/);
+    await expect(as(bob.userId, () => resubmitAttempt(round2.id, 'not mine to write'))).rejects.toThrow(
+      /only the author resubmits/,
+    );
     await expect(as(undefined, () => resubmitAttempt(round2.id, 'no identity'))).rejects.toThrow(/attempt not found/);
   });
 
@@ -130,9 +155,9 @@ describeTarget('empathy rounds, the status writer and the review path (mwf_app +
   it('a non-job cannot reveal — neither the author nor the owner login', async () => {
     const { setAttemptStatus } = await store();
     await as(bob.userId, () => setAttemptStatus(bobRound1, 'READY', { actor: 'participant' }));
-    await expect(as(bob.userId, () => setAttemptStatus(bobRound1, 'REVEALED', { actor: 'participant' }))).rejects.toThrow(
-      /only the job reveals/,
-    );
+    await expect(
+      as(bob.userId, () => setAttemptStatus(bobRound1, 'REVEALED', { actor: 'participant' })),
+    ).rejects.toThrow(/only the job reveals/);
     await expect(
       rows(`SELECT set_config('app.current_user_id', $1, false), app.empathy_set_status($2, 'REVEALED', NULL)`, [
         bob.userId,
@@ -183,7 +208,13 @@ describeTarget('empathy rounds, the status writer and the review path (mwf_app +
     });
     expect(draft.status).toBe(200);
     await as(ada.userId, () =>
-      recordReview({ attemptId: bobRound1, reviewerParticipantId: ada.participantId, validated: false, sentFeedback: null, at: new Date() }),
+      recordReview({
+        attemptId: bobRound1,
+        reviewerParticipantId: ada.participantId,
+        validated: false,
+        sentFeedback: null,
+        at: new Date(),
+      }),
     );
 
     expect(await reviewVisibleToAuthor(bobRound1, ada.participantId)).toBeNull();
@@ -197,7 +228,8 @@ describeTarget('empathy rounds, the status writer and the review path (mwf_app +
       expect(r.status).toBe(200);
       expect(JSON.stringify(r.body)).not.toContain(UNSENT);
     }
-    const status = (bobReads[0].body as { data: { myAttempt: { validatedAt: string | null; status: string } } }).data.myAttempt;
+    const status = (bobReads[0].body as { data: { myAttempt: { validatedAt: string | null; status: string } } }).data
+      .myAttempt;
     expect(status).toMatchObject({ validatedAt: null, status: 'REVEALED' });
 
     // The explicit send delivers it.
@@ -206,7 +238,8 @@ describeTarget('empathy rounds, the status writer and the review path (mwf_app +
       actor: harness.actors.userA,
       tables: [],
       asyncBoundary: true,
-      call: agent => agent.post(`/api/v1/sessions/${harness.sessionId}/empathy/validate`).send({ validated: false, feedback: SENT }),
+      call: agent =>
+        agent.post(`/api/v1/sessions/${harness.sessionId}/empathy/validate`).send({ validated: false, feedback: SENT }),
     });
     expect(send.status).toBe(200);
     const [review] = await rows<{ feedback: string | null; sent: boolean }>(

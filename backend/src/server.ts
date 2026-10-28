@@ -3,10 +3,20 @@ import * as Sentry from '@sentry/node';
 
 /** Keys that may contain user names / PII — strip from Sentry context. */
 const PII_KEYS = new Set([
-  'name', 'firstName', 'guesser', 'subject',
-  'guesserName', 'subjectName', 'partnerName',
-  'userName', 'userAName', 'userBName',
-  'email', 'clerkId', 'content', 'conversationSummary',
+  'name',
+  'firstName',
+  'guesser',
+  'subject',
+  'guesserName',
+  'subjectName',
+  'partnerName',
+  'userName',
+  'userAName',
+  'userBName',
+  'email',
+  'clerkId',
+  'content',
+  'conversationSummary',
 ]);
 
 Sentry.init({
@@ -56,8 +66,8 @@ import { attachRealtimeWebSocket } from './services/realtime-transcription';
 if (process.env.E2E_AUTH_BYPASS === 'true' && process.env.NODE_ENV === 'production') {
   throw new Error(
     'FATAL: E2E_AUTH_BYPASS=true is set in a production environment. ' +
-    'This disables all authentication and security controls. ' +
-    'Remove E2E_AUTH_BYPASS from the production environment variables.'
+      'This disables all authentication and security controls. ' +
+      'Remove E2E_AUTH_BYPASS from the production environment variables.',
   );
 }
 
@@ -71,15 +81,15 @@ if (!process.env.FIELD_ENCRYPTION_KEY && process.env.NODE_ENV === 'production') 
   if (process.env.REQUIRE_FIELD_ENCRYPTION === 'true') {
     throw new Error(
       'FATAL: FIELD_ENCRYPTION_KEY is not set but REQUIRE_FIELD_ENCRYPTION=true. ' +
-      'All sensitive fields (messages, empathy drafts, conversation summaries) would be stored as plaintext. ' +
-      'Generate a key with: openssl rand -base64 32'
+        'All sensitive fields (messages, empathy drafts, conversation summaries) would be stored as plaintext. ' +
+        'Generate a key with: openssl rand -base64 32',
     );
   }
   console.warn(
     '[WARN] FIELD_ENCRYPTION_KEY is not set in production — sensitive fields ' +
-    '(messages, empathy drafts, conversation summaries) are stored as PLAINTEXT. ' +
-    'This is intentional for the test phase; set FIELD_ENCRYPTION_KEY (and optionally ' +
-    'REQUIRE_FIELD_ENCRYPTION=true) before launch.'
+      '(messages, empathy drafts, conversation summaries) are stored as PLAINTEXT. ' +
+      'This is intentional for the test phase; set FIELD_ENCRYPTION_KEY (and optionally ' +
+      'REQUIRE_FIELD_ENCRYPTION=true) before launch.',
   );
 }
 

@@ -2,9 +2,7 @@ import { pgSettingsFromUrl, createPrismaPgAdapter, databaseUrlFromEnv } from '..
 
 describe('pgSettingsFromUrl', () => {
   it('maps connection_limit to pool max and strips it (production URL shape)', () => {
-    const { pool, schema } = pgSettingsFromUrl(
-      'postgresql://mwf_app:s3cr%40t@db:5432/mwf?connection_limit=12'
-    );
+    const { pool, schema } = pgSettingsFromUrl('postgresql://mwf_app:s3cr%40t@db:5432/mwf?connection_limit=12');
     expect(pool.max).toBe(12);
     expect(pool.connectionString).toBe('postgresql://mwf_app:s3cr%40t@db:5432/mwf');
     expect(schema).toBeUndefined();
@@ -21,7 +19,7 @@ describe('pgSettingsFromUrl', () => {
   it('honours the other Prisma pool parameters and passes libpq ones through', () => {
     const { pool, schema } = pgSettingsFromUrl(
       'postgresql://u:p@h/db?sslmode=require&pool_timeout=0&max_idle_connection_lifetime=30' +
-        '&max_connection_lifetime=600&connect_timeout=5&pgbouncer=true&schema=app'
+        '&max_connection_lifetime=600&connect_timeout=5&pgbouncer=true&schema=app',
     );
     expect(pool.connectionTimeoutMillis).toBe(0);
     expect(pool.idleTimeoutMillis).toBe(30_000);

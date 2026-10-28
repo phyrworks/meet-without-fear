@@ -17,8 +17,8 @@ jest.mock('../embedding', () => ({
 
 // Mock circuit breaker to execute immediately without timeout
 jest.mock('../../utils/circuit-breaker', () => ({
-  withHaikuCircuitBreaker: jest.fn().mockImplementation(async (fn) => fn()),
-  withTimeout: jest.fn().mockImplementation(async (fn) => fn()),
+  withHaikuCircuitBreaker: jest.fn().mockImplementation(async fn => fn()),
+  withTimeout: jest.fn().mockImplementation(async fn => fn()),
   HAIKU_TIMEOUT_MS: 20000,
 }));
 
@@ -35,7 +35,6 @@ jest.mock('../../lib/bedrock', () => ({
     PARTNER_SESSION_CLASSIFICATION: 'PARTNER_SESSION_CLASSIFICATION',
   },
 }));
-
 
 import { isTargetShape } from '../../testing/golden/shape';
 import { adaAndBob, openTargetRun, type TargetRun } from './target-roles';
@@ -78,7 +77,11 @@ describeTarget('partner-session classifier on the target (NOTABLE_FACTS by mwf_j
 
   it('writes nothing for another session’s participant (the job resolves the caller’s own participant)', async () => {
     await runPartnerSessionClassifier({
-      userMessage: 'x', conversationHistory: [], sessionId: SESSION, userId: '019a0000-0000-7000-8000-0000000000dd', turnId: 't',
+      userMessage: 'x',
+      conversationHistory: [],
+      sessionId: SESSION,
+      userId: '019a0000-0000-7000-8000-0000000000dd',
+      turnId: 't',
     });
     expect(await run.sql(`SELECT count(*)::int AS n FROM ai_memory WHERE kind = 'NOTABLE_FACTS'`)).toEqual([{ n: 0 }]);
   });
@@ -151,7 +154,7 @@ describeTarget('partner-session classifier on the target (NOTABLE_FACTS by mwf_j
 
       it('passes Sonnet analysis to Haiku for better fact extraction', async () => {
         const sonnetAnalysis = 'The user is expressing frustration about work-life balance';
-        const sonnetResponse = 'I hear that you\'re feeling overwhelmed by competing priorities...';
+        const sonnetResponse = "I hear that you're feeling overwhelmed by competing priorities...";
 
         await runPartnerSessionClassifier({
           userMessage: 'I just cant seem to balance everything',
@@ -369,7 +372,7 @@ describeTarget('partner-session classifier on the target (NOTABLE_FACTS by mwf_j
       // We do this by spying on the call and extracting from the prompt
       let capturedShortIds: { [fullId: string]: string } = {};
 
-      (getHaikuJson as jest.Mock).mockImplementationOnce((args) => {
+      (getHaikuJson as jest.Mock).mockImplementationOnce(args => {
         // Extract short IDs from the prompt
         const prompt = args.messages[0].content;
         const lines = prompt.split('\n').filter((l: string) => l.includes('[') && l.includes(']'));
@@ -413,7 +416,7 @@ describeTarget('partner-session classifier on the target (NOTABLE_FACTS by mwf_j
       expect(savedFacts).toHaveLength(3);
       // Verify full UUID is preserved after short ID resolution
       expect(savedFacts.find((f: CategorizedFactWithId) => f.id === 'fact-1')?.fact).toBe(
-        'User has a daughter named Emma who is 14'
+        'User has a daughter named Emma who is 14',
       );
       expect(savedFacts.find((f: CategorizedFactWithId) => f.id === 'fact-2')).toBeDefined();
       expect(savedFacts.find((f: CategorizedFactWithId) => f.id === 'fact-3')).toBeUndefined();
@@ -478,9 +481,7 @@ describeTarget('partner-session classifier on the target (NOTABLE_FACTS by mwf_j
 
     it('assigns IDs to legacy facts from DB that lack them before sending to LLM', async () => {
       // Simulate legacy facts from DB without IDs
-      const legacyFacts = [
-        { category: 'People', fact: 'Legacy fact without ID' },
-      ];
+      const legacyFacts = [{ category: 'People', fact: 'Legacy fact without ID' }];
 
       (getHaikuJson as jest.Mock).mockResolvedValueOnce({
         topicContext: 'test',
@@ -494,7 +495,7 @@ describeTarget('partner-session classifier on the target (NOTABLE_FACTS by mwf_j
         sessionId: SESSION,
         userId: USER,
         turnId: 'turn-1',
-        existingFacts: legacyFacts.map((f) => `[${f.category}] ${f.fact}`),
+        existingFacts: legacyFacts.map(f => `[${f.category}] ${f.fact}`),
       });
 
       // The prompt should contain the legacy fact (as string for backward compat)
@@ -502,5 +503,4 @@ describeTarget('partner-session classifier on the target (NOTABLE_FACTS by mwf_j
       expect(call.messages[0].content).toContain('Legacy fact without ID');
     });
   });
-
 });

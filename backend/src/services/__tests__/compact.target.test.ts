@@ -35,9 +35,11 @@ describeTarget('the compact on the target, as mwf_app', () => {
   });
 
   const signed = async () =>
-    (await run.sql<{ participant_id: string }>(`SELECT participant_id FROM participant_milestone WHERE milestone_key = 'compact_signed' ORDER BY reached_at`)).map(
-      r => r.participant_id,
-    );
+    (
+      await run.sql<{ participant_id: string }>(
+        `SELECT participant_id FROM participant_milestone WHERE milestone_key = 'compact_signed' ORDER BY reached_at`,
+      )
+    ).map(r => r.participant_id);
 
   it('sign, refuse a second signature, report status; ACTIVE once both signed', async () => {
     const first = await http(ada, 'post', `/sessions/${ids.session}/compact/sign`, { agreed: true });
@@ -59,11 +61,15 @@ describeTarget('the compact on the target, as mwf_app', () => {
 
     // The status write is the job's, fire-and-forget after the response
     for (let i = 0; i < 50; i++) {
-      const [s] = await run.sql<{ status: string }>(`SELECT status::text AS status FROM session WHERE id = $1`, [ids.session]);
+      const [s] = await run.sql<{ status: string }>(`SELECT status::text AS status FROM session WHERE id = $1`, [
+        ids.session,
+      ]);
       if (s.status === 'ACTIVE') break;
       await new Promise(r => setTimeout(r, 100));
     }
-    expect(await run.sql(`SELECT status::text AS status FROM session WHERE id = $1`, [ids.session])).toEqual([{ status: 'ACTIVE' }]);
+    expect(await run.sql(`SELECT status::text AS status FROM session WHERE id = $1`, [ids.session])).toEqual([
+      { status: 'ACTIVE' },
+    ]);
   });
 
   it('a non-participant signs nothing (the live PENDING arm lets them reach the handler, which has no participant: 404); a missing session 404', async () => {

@@ -73,7 +73,9 @@ import { searchSessionContent, searchInnerWorkSessionContent } from '../embeddin
 
 const mockGetHaikuJson = getHaikuJson as jest.MockedFunction<typeof getHaikuJson>;
 const mockSearchSessionContent = searchSessionContent as jest.MockedFunction<typeof searchSessionContent>;
-const mockSearchInnerWorkSessionContent = searchInnerWorkSessionContent as jest.MockedFunction<typeof searchInnerWorkSessionContent>;
+const mockSearchInnerWorkSessionContent = searchInnerWorkSessionContent as jest.MockedFunction<
+  typeof searchInnerWorkSessionContent
+>;
 
 // ============================================================================
 // Fixtures
@@ -209,9 +211,7 @@ describe('formatRetrievedContext', () => {
   it('truncates long content to 500 characters', () => {
     const longContent = 'x'.repeat(600);
     const context = buildRetrievedContext({
-      preSessionMessages: [
-        { role: 'user', content: longContent },
-      ],
+      preSessionMessages: [{ role: 'user', content: longContent }],
     });
 
     const formatted = formatRetrievedContext(context);
@@ -304,9 +304,7 @@ describe('buildMessagesWithFullContext', () => {
   it('injects retrieved context as prefix to current message', () => {
     const context = buildRetrievedContext({
       conversationHistory: [],
-      relevantFromOtherSessions: [
-        buildRelevantMessage({ content: 'Past insight about trust' }),
-      ],
+      relevantFromOtherSessions: [buildRelevantMessage({ content: 'Past insight about trust' })],
     });
 
     const messages = buildMessagesWithFullContext(context, 'I want to talk about trust');

@@ -39,7 +39,7 @@ describe('stage shim — stageRowsFor', () => {
 });
 
 describe('stage shim — gatesFor (derived gatesSatisfied)', () => {
-  it('derives each stage\'s gate keys from its milestones, with ISO instants', () => {
+  it("derives each stage's gate keys from its milestones, with ISO instants", () => {
     expect(gatesFor(0, ADA)).toEqual({ compactSigned: true, signedAt: t(30).toISOString(), invitationSent: true });
     expect(gatesFor(1, ADA)).toEqual({ feelHeardConfirmed: true, feelHeardConfirmedAt: t(60).toISOString() });
     // empathy_submitted is not a gate: Ada's stage-2 gates are empty, as the old row's were.
@@ -48,8 +48,18 @@ describe('stage shim — gatesFor (derived gatesSatisfied)', () => {
 
   it('never produces the four keys the target dropped', () => {
     const everything = [
-      'compact_signed', 'invitation_sent', 'feel_heard', 'empathy_submitted', 'empathy_ready', 'empathy_validated',
-      'needs_confirmed', 'needs_validated', 'needs_shared', 'repair_walkthrough_started', 'choices_shared', 'closed',
+      'compact_signed',
+      'invitation_sent',
+      'feel_heard',
+      'empathy_submitted',
+      'empathy_ready',
+      'empathy_validated',
+      'needs_confirmed',
+      'needs_validated',
+      'needs_shared',
+      'repair_walkthrough_started',
+      'choices_shared',
+      'closed',
     ].map((k, i) => m(k, i));
     const keys = [0, 1, 2, 3, 4].flatMap(stage => Object.keys(gatesFor(stage, everything)));
     for (const dropped of ['feelHeardCheckOffered', 'readyToRank', 'rankingSubmitted', 'finalEmotionalReading']) {
@@ -58,7 +68,7 @@ describe('stage shim — gatesFor (derived gatesSatisfied)', () => {
   });
 });
 
-describe('stage shim — stageAt (a message\'s stage)', () => {
+describe("stage shim — stageAt (a message's stage)", () => {
   it('is the number of terminal milestones reached by the instant, in order', () => {
     expect(stageAt(ADA, t(10))).toBe(0);
     expect(stageAt(ADA, t(30))).toBe(1); // at the signing instant

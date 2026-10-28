@@ -279,7 +279,9 @@ export async function recordOrVerify(opts: {
     harness.fixture.seededClerkIds,
   );
   const labels = opts.fixtureLabelsFirst ? fixtureMap : map;
-  const collisions = opts.fixtureLabelsFirst ? mergeFallbackLabels(fixtureMap, map) : mergeFallbackLabels(map, fixtureMap);
+  const collisions = opts.fixtureLabelsFirst
+    ? mergeFallbackLabels(fixtureMap, map)
+    : mergeFallbackLabels(map, fixtureMap);
   if (opts.extraLabels) {
     const used = new Map([...labels.labels].map(([id, label]) => [label, id] as const));
     for (const [id, label] of Object.entries(opts.extraLabels)) {
@@ -363,7 +365,12 @@ export async function recordOrVerify(opts: {
       ...cmp.violations,
       ...cmp.unmatchedRules.map(r => `  rule matched nothing in the baseline: ${r}`),
     ];
-    return { scenario, recorded: false, unresolved: [...new Set(unresolved)], diff: problems.length ? problems.join('\n') : null };
+    return {
+      scenario,
+      recorded: false,
+      unresolved: [...new Set(unresolved)],
+      diff: problems.length ? problems.join('\n') : null,
+    };
   }
   const diff = diffJson(e, a);
   return { scenario, recorded: false, unresolved: [...new Set(unresolved)], diff };
@@ -499,7 +506,13 @@ export async function recordOrVerifyConcept(opts: {
   const { scenario, harness, allowList } = opts;
   const masking = maskTargetSteps(opts.steps, allowList.rules);
   if (masking.problems.length) {
-    return { scenario, recorded: false, unresolved: [], violations: masking.problems.map(p => `  ${p}`), unmatchedRules: [] };
+    return {
+      scenario,
+      recorded: false,
+      unresolved: [],
+      violations: masking.problems.map(p => `  ${p}`),
+      unmatchedRules: [],
+    };
   }
   const steps = masking.steps;
   if (allowList.scenario !== scenario) {

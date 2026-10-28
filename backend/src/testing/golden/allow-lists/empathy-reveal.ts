@@ -119,8 +119,20 @@ export const EMPATHY_REVEAL_BYTE_TARGET_ALLOW: AllowList = {
     ...targetByteRules({
       trace: true,
       addedTables: [
-        { step: 1, table: 'message', kind: 'added', count: 2, why: 'the two delivered EMPATHY_STATEMENT copies (the reveal)' },
-        { step: 1, table: 'participant_milestone', kind: 'added', count: 1, why: "Bob's empathy_submitted (TS-10 consentToShare)" },
+        {
+          step: 1,
+          table: 'message',
+          kind: 'added',
+          count: 2,
+          why: 'the two delivered EMPATHY_STATEMENT copies (the reveal)',
+        },
+        {
+          step: 1,
+          table: 'participant_milestone',
+          kind: 'added',
+          count: 1,
+          why: "Bob's empathy_submitted (TS-10 consentToShare)",
+        },
       ],
     }),
   ],

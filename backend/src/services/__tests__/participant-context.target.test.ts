@@ -73,13 +73,27 @@ describeTarget('participant resolution and the single context entry point (targe
     process.env.JOB_DATABASE_URL = jobUrlFor(fx.target, fx.database);
     process.env.DB_IDENTITY_BINDING = 'on';
 
-    const [p] = await sql<{ session: string; ada: string; bob: string; ada_user: string; bob_user: string; attempt: string }>(
+    const [p] = await sql<{
+      session: string;
+      ada: string;
+      bob: string;
+      ada_user: string;
+      bob_user: string;
+      attempt: string;
+    }>(
       `SELECT pa.session_id AS session, pa.id AS ada, pb.id AS bob, pa.user_id AS ada_user, pb.user_id AS bob_user,
               (SELECT id FROM empathy_attempt WHERE author_participant_id = pa.id) AS attempt
        FROM participant pa JOIN "user" ua ON ua.id = pa.user_id AND ua.email = 'ada@e2e.test'
        JOIN participant pb ON pb.session_id = pa.session_id AND pb.id <> pa.id`,
     );
-    ids = { session: p.session, ada: p.ada, bob: p.bob, adaUser: p.ada_user, bobUser: p.bob_user, adaAttempt: p.attempt };
+    ids = {
+      session: p.session,
+      ada: p.ada,
+      bob: p.bob,
+      adaUser: p.ada_user,
+      bobUser: p.bob_user,
+      adaAttempt: p.attempt,
+    };
 
     // --- Bob's private rows -------------------------------------------------------------
     await sql(`INSERT INTO need (participant_id, label, category, ai_confidence) VALUES ($1, $2, 'RECOGNITION', 0.9)`, [
@@ -118,7 +132,10 @@ describeTarget('participant resolution and the single context entry point (targe
       ids.bob,
       JSON.stringify({ text: BOB_PRIVATE.summary, messageCount: 20, generatedAt: new Date().toISOString() }),
     ]);
-    await sql(`INSERT INTO mood_reading (participant_id, intensity, context) VALUES ($1, 9, $2)`, [ids.bob, BOB_PRIVATE.mood]);
+    await sql(`INSERT INTO mood_reading (participant_id, intensity, context) VALUES ($1, 9, $2)`, [
+      ids.bob,
+      BOB_PRIVATE.mood,
+    ]);
     // Ada's own readings: distinct from Bob's, so whose thread a bundle carries is visible.
     await sql(
       `INSERT INTO mood_reading (participant_id, intensity, context, recorded_at) VALUES ($1, 3, $2, now() - interval '2 minutes'), ($1, 6, $2, now() - interval '1 minute')`,
@@ -184,10 +201,13 @@ describeTarget('participant resolution and the single context entry point (targe
   // Participant resolution
   // -------------------------------------------------------------------------------------------
 
-  it('resolves the caller\'s participant with its MAIN conversation', async () => {
+  it("resolves the caller's participant with its MAIN conversation", async () => {
     const p = await resolver.resolveParticipant(ids.session, ids.adaUser);
     expect(p).toMatchObject({ id: ids.ada, sessionId: ids.session, userId: ids.adaUser, kind: 'human', leftAt: null });
-    const [conv] = await sql<{ id: string }>(`SELECT id FROM conversation WHERE participant_id = $1 AND kind = 'MAIN'`, [ids.ada]);
+    const [conv] = await sql<{ id: string }>(
+      `SELECT id FROM conversation WHERE participant_id = $1 AND kind = 'MAIN'`,
+      [ids.ada],
+    );
     expect(p?.mainConversationId).toBe(conv.id);
     expect(await resolver.resolveParticipant(ids.session, '00000000-0000-7000-8000-000000000000')).toBeNull();
   });
@@ -200,11 +220,15 @@ describeTarget('participant resolution and the single context entry point (targe
   });
 
   it('is N-party safe: a modeled participant is a co-participant but not "the partner"; a second human makes the partner ambiguous (null)', async () => {
-    await sql(`INSERT INTO participant (session_id, kind, display_name) VALUES ($1, 'modeled', 'Coach')`, [ids.session]);
+    await sql(`INSERT INTO participant (session_id, kind, display_name) VALUES ($1, 'modeled', 'Coach')`, [
+      ids.session,
+    ]);
     expect((await resolver.getCoParticipants(ids.ada)).length).toBe(2);
     expect((await resolver.getPartnerParticipant(ids.ada))?.participantId).toBe(ids.bob);
 
-    const [carol] = await sql<{ id: string }>(`INSERT INTO "user" (email, first_name) VALUES ('carol@e2e.test', 'Carol') RETURNING id`);
+    const [carol] = await sql<{ id: string }>(
+      `INSERT INTO "user" (email, first_name) VALUES ('carol@e2e.test', 'Carol') RETURNING id`,
+    );
     const [carolP] = await sql<{ id: string }>(
       `INSERT INTO participant (session_id, user_id, display_name) VALUES ($1, $2, 'Carol') RETURNING id`,
       [ids.session, carol.id],
@@ -235,7 +259,9 @@ describeTarget('participant resolution and the single context entry point (targe
     expect(seen).toBe(ids.ada);
 
     // A non-member is refused, and a missing session is a 404.
-    const [stranger] = await sql<{ id: string }>(`INSERT INTO "user" (email) VALUES ('stranger@e2e.test') RETURNING id`);
+    const [stranger] = await sql<{ id: string }>(
+      `INSERT INTO "user" (email) VALUES ('stranger@e2e.test') RETURNING id`,
+    );
     const denied = { user: { id: stranger.id }, params: { id: ids.session } } as unknown as import('express').Request;
     let deniedErr: unknown;
     await requireSessionAccess(denied, {} as import('express').Response, (e?: unknown) => (deniedErr = e));
@@ -336,7 +362,9 @@ describeTarget('participant resolution and the single context entry point (targe
   });
 
   it('the compatibility wrapper resolves (session, user) to the same single entry point', async () => {
-    const viaWrapper = await asUser(ids.adaUser, () => assembler.assembleContextBundle(ids.session, ids.adaUser, 2, INTENT));
+    const viaWrapper = await asUser(ids.adaUser, () =>
+      assembler.assembleContextBundle(ids.session, ids.adaUser, 2, INTENT),
+    );
     expect(viaWrapper.participantId).toBe(ids.ada);
     expect(JSON.stringify(viaWrapper)).not.toContain(BOB_PRIVATE.unrevealedAttempt);
   });

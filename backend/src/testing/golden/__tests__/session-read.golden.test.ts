@@ -34,8 +34,7 @@ import { isTargetShape } from '../shape';
 import { withClient } from '../db';
 
 const BASE_URL =
-  process.env.GOLDEN_DATABASE_URL ||
-  'postgresql://mwf_user:mwf_password@localhost:5432/meet_without_fear';
+  process.env.GOLDEN_DATABASE_URL || 'postgresql://mwf_user:mwf_password@localhost:5432/meet_without_fear';
 
 const SCENARIO = 'session-read';
 
@@ -75,16 +74,16 @@ describe(`golden: ${SCENARIO}`, () => {
           label: `messages as ${actor.email}`,
           actor,
           tables: scope,
-          call: (agent) => agent.get(`/api/v1/sessions/${harness.sessionId}/messages`),
-        })
+          call: agent => agent.get(`/api/v1/sessions/${harness.sessionId}/messages`),
+        }),
       );
       steps.push(
         await harness.step({
           label: `session state as ${actor.email}`,
           actor,
           tables: scope,
-          call: (agent) => agent.get(`/api/v1/sessions/${harness.sessionId}/state`),
-        })
+          call: agent => agent.get(`/api/v1/sessions/${harness.sessionId}/state`),
+        }),
       );
       // A page smaller than the row count, so `take` actually binds. Mutation
       // testing showed a dropped LIMIT escaping undetected without this: the
@@ -95,8 +94,8 @@ describe(`golden: ${SCENARIO}`, () => {
           label: `messages page of 5 as ${actor.email}`,
           actor,
           tables: scope,
-          call: (agent) => agent.get(`/api/v1/sessions/${harness.sessionId}/messages?limit=5`),
-        })
+          call: agent => agent.get(`/api/v1/sessions/${harness.sessionId}/messages?limit=5`),
+        }),
       );
     }
   });
@@ -106,14 +105,24 @@ describe(`golden: ${SCENARIO}`, () => {
   });
 
   it('every identifier resolves to a structural label', async () => {
-    const report = await recordOrVerify({ scenario: SCENARIO, harness, steps, targetAllowList: SESSION_READ_BYTE_TARGET_ALLOW });
+    const report = await recordOrVerify({
+      scenario: SCENARIO,
+      harness,
+      steps,
+      targetAllowList: SESSION_READ_BYTE_TARGET_ALLOW,
+    });
     // An unresolved cuid means a row appeared that the label map does not know
     // about — exactly what a regression that leaks extra rows would produce.
     expect(report.unresolved).toEqual([]);
   });
 
   it('matches the recorded baseline', async () => {
-    const report = await recordOrVerify({ scenario: SCENARIO, harness, steps, targetAllowList: SESSION_READ_BYTE_TARGET_ALLOW });
+    const report = await recordOrVerify({
+      scenario: SCENARIO,
+      harness,
+      steps,
+      targetAllowList: SESSION_READ_BYTE_TARGET_ALLOW,
+    });
     if (report.recorded) {
       // Recording is an explicit, deliberate act, and it has to name this
       // scenario. Reaching here in a normal run would mean the oracle rewrote
@@ -162,7 +171,7 @@ describe(`golden: ${SCENARIO}`, () => {
 
   it('every step captured a complete SQL trace', () => {
     expect(
-      steps.filter(s => !s.trace?.complete).map(s => `${s.label}: ${s.trace?.incompleteReason ?? 'no trace'}`)
+      steps.filter(s => !s.trace?.complete).map(s => `${s.label}: ${s.trace?.incompleteReason ?? 'no trace'}`),
     ).toEqual([]);
   });
 
@@ -186,8 +195,8 @@ describe(`golden: ${SCENARIO}`, () => {
 
   it('the two participants see different message sets', () => {
     const counts = steps
-      .filter((s) => s.label.startsWith('messages as'))
-      .map((s) => {
+      .filter(s => s.label.startsWith('messages as'))
+      .map(s => {
         const body = s.body as { data?: { messages?: unknown[] } };
         return body?.data?.messages?.length ?? 0;
       });
@@ -225,10 +234,14 @@ describe(`golden: ${SCENARIO}`, () => {
     return out;
   };
 
-  targetOnly('fixtureMask pair: compact signedAt is each signer\'s compact_signed instant', async () => {
+  targetOnly("fixtureMask pair: compact signedAt is each signer's compact_signed instant", async () => {
     const ms = await milestonesByEmail();
     const { userA, userB } = harness.actors;
-    const signed = (email: string) => ms.get(email)?.find(m => m.key === 'compact_signed')?.at.toISOString();
+    const signed = (email: string) =>
+      ms
+        .get(email)
+        ?.find(m => m.key === 'compact_signed')
+        ?.at.toISOString();
     for (const [step, me, partner] of [
       [steps[1], userA, userB!],
       [steps[4], userB!, userA],
@@ -240,7 +253,7 @@ describe(`golden: ${SCENARIO}`, () => {
     }
   });
 
-  targetOnly('mayDiffer pair: a message\'s stage is its owner\'s stage at the message instant', async () => {
+  targetOnly("mayDiffer pair: a message's stage is its owner's stage at the message instant", async () => {
     const ms = await milestonesByEmail();
     const TERMINALS = ['compact_signed', 'feel_heard', 'empathy_validated', 'needs_shared'];
     const stageAt = (email: string, at: Date): number => {
@@ -257,7 +270,9 @@ describe(`golden: ${SCENARIO}`, () => {
     let checked = 0;
     steps.forEach((step, i) => {
       const data = (step.body as { data: { messages: unknown } }).data;
-      const list = (Array.isArray(data.messages) ? data.messages : (data.messages as { messages: unknown[] }).messages) as Array<{
+      const list = (
+        Array.isArray(data.messages) ? data.messages : (data.messages as { messages: unknown[] }).messages
+      ) as Array<{
         stage: number;
         timestamp: string;
       }>;

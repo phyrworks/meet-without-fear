@@ -7,15 +7,20 @@ import { logger } from '../../lib/logger';
 function run(err: Error) {
   const json = jest.fn();
   const status = jest.fn().mockReturnValue({ json });
-  errorHandler(err, { path: '/x', method: 'GET' } as Request, { status } as unknown as Response, jest.fn() as NextFunction);
+  errorHandler(
+    err,
+    { path: '/x', method: 'GET' } as Request,
+    { status } as unknown as Response,
+    jest.fn() as NextFunction,
+  );
   return { status, json };
 }
 
 const malformed = () =>
-  new Prisma.PrismaClientKnownRequestError(
-    'Invalid input value: invalid input syntax for type uuid: "not-a-uuid"',
-    { code: 'P2007', clientVersion: 'test' },
-  );
+  new Prisma.PrismaClientKnownRequestError('Invalid input value: invalid input syntax for type uuid: "not-a-uuid"', {
+    code: 'P2007',
+    clientVersion: 'test',
+  });
 
 describe('errorHandler: malformed ids', () => {
   // Ids are Postgres uuids since cuid_to_uuidv7. A lookup by a string that is
@@ -81,9 +86,13 @@ const shapes: Array<{ name: string; err: () => Error; status: number; code: Erro
   {
     name: 'raw-query CHECK (P2010, kind postgres, detail in meta)',
     err: () =>
-      known('P2010', 'Raw query failed. Code: `23514`. Message: `new row for relation "t" violates check constraint "t_n_pos"`', {
-        driverAdapterError: adapterError(checkCause),
-      }),
+      known(
+        'P2010',
+        'Raw query failed. Code: `23514`. Message: `new row for relation "t" violates check constraint "t_n_pos"`',
+        {
+          driverAdapterError: adapterError(checkCause),
+        },
+      ),
     status: 400,
     code: ErrorCode.VALIDATION_ERROR,
     constraint: 't_n_pos',
@@ -91,14 +100,18 @@ const shapes: Array<{ name: string; err: () => Error; status: number; code: Erro
   {
     name: 'model CHECK (P2039 database error)',
     err: () =>
-      known('P2039', 'Database error. Code: `23514`. Message: `new row for relation "User" violates check constraint "user_chk"`', {
-        modelName: 'User',
-        driverAdapterError: adapterError({
-          ...checkCause,
-          originalMessage: 'new row for relation "User" violates check constraint "user_chk"',
-          message: 'new row for relation "User" violates check constraint "user_chk"',
-        }),
-      }),
+      known(
+        'P2039',
+        'Database error. Code: `23514`. Message: `new row for relation "User" violates check constraint "user_chk"`',
+        {
+          modelName: 'User',
+          driverAdapterError: adapterError({
+            ...checkCause,
+            originalMessage: 'new row for relation "User" violates check constraint "user_chk"',
+            message: 'new row for relation "User" violates check constraint "user_chk"',
+          }),
+        },
+      ),
     status: 400,
     code: ErrorCode.VALIDATION_ERROR,
     constraint: 'user_chk',
@@ -121,13 +134,17 @@ const shapes: Array<{ name: string; err: () => Error; status: number; code: Erro
   {
     name: 'raw NOT NULL (P2010, NullConstraintViolation)',
     err: () =>
-      known('P2010', 'Raw query failed. Code: `23502`. Message: `null value in column "body" of relation "t" violates not-null constraint`', {
-        driverAdapterError: adapterError({
-          originalCode: '23502',
-          originalMessage: 'null value in column "body" of relation "t" violates not-null constraint',
-          kind: 'NullConstraintViolation',
-        }),
-      }),
+      known(
+        'P2010',
+        'Raw query failed. Code: `23502`. Message: `null value in column "body" of relation "t" violates not-null constraint`',
+        {
+          driverAdapterError: adapterError({
+            originalCode: '23502',
+            originalMessage: 'null value in column "body" of relation "t" violates not-null constraint',
+            kind: 'NullConstraintViolation',
+          }),
+        },
+      ),
     status: 400,
     code: ErrorCode.VALIDATION_ERROR,
     constraint: 'body',
@@ -162,7 +179,8 @@ const shapes: Array<{ name: string; err: () => Error; status: number; code: Erro
         modelName: 'Session',
         driverAdapterError: adapterError({
           originalCode: '23503',
-          originalMessage: 'insert or update on table "Session" violates foreign key constraint "Session_relationshipId_fkey"',
+          originalMessage:
+            'insert or update on table "Session" violates foreign key constraint "Session_relationshipId_fkey"',
           kind: 'ForeignKeyConstraintViolation',
           constraint: { index: 'Session_relationshipId_fkey' },
         }),
@@ -211,7 +229,7 @@ const shapes: Array<{ name: string; err: () => Error; status: number; code: Erro
 ];
 
 function spyAllLogLevels() {
-  return (['error', 'warn', 'info', 'debug'] as const).map((level) =>
+  return (['error', 'warn', 'info', 'debug'] as const).map(level =>
     jest.spyOn(logger, level).mockImplementation((() => logger) as never),
   );
 }
@@ -222,25 +240,28 @@ describe('errorHandler: Postgres constraint violations', () => {
     process.env.NODE_ENV = originalEnv;
   });
 
-  describe.each(['development', 'production'])('NODE_ENV=%s', (env) => {
-    it.each(shapes)('$name -> stable 4xx naming the constraint, no row values in body or log', ({ err, status, code, constraint }) => {
-      process.env.NODE_ENV = env; // anything but 'test', so the logging branch runs
-      const spies = spyAllLogLevels();
-      const { status: st, json } = run(err());
+  describe.each(['development', 'production'])('NODE_ENV=%s', env => {
+    it.each(shapes)(
+      '$name -> stable 4xx naming the constraint, no row values in body or log',
+      ({ err, status, code, constraint }) => {
+        process.env.NODE_ENV = env; // anything but 'test', so the logging branch runs
+        const spies = spyAllLogLevels();
+        const { status: st, json } = run(err());
 
-      expect(st).toHaveBeenCalledWith(status);
-      const body = json.mock.calls[0][0];
-      expect(body.success).toBe(false);
-      expect(body.error.code).toBe(code);
-      expect(body.error.message).toContain(constraint);
-      expect(JSON.stringify(body)).not.toContain(SENTINEL);
-      expect(JSON.stringify(body)).not.toMatch(/Failing row|Key \(/);
+        expect(st).toHaveBeenCalledWith(status);
+        const body = json.mock.calls[0][0];
+        expect(body.success).toBe(false);
+        expect(body.error.code).toBe(code);
+        expect(body.error.message).toContain(constraint);
+        expect(JSON.stringify(body)).not.toContain(SENTINEL);
+        expect(JSON.stringify(body)).not.toMatch(/Failing row|Key \(/);
 
-      const logged = spies.flatMap((s) => s.mock.calls);
-      expect(logged.length).toBeGreaterThan(0);
-      expect(JSON.stringify(logged)).not.toContain(SENTINEL);
-      expect(JSON.stringify(logged)).toContain(constraint);
-    });
+        const logged = spies.flatMap(s => s.mock.calls);
+        expect(logged.length).toBeGreaterThan(0);
+        expect(JSON.stringify(logged)).not.toContain(SENTINEL);
+        expect(JSON.stringify(logged)).toContain(constraint);
+      },
+    );
   });
 });
 
@@ -254,13 +275,13 @@ describe('errorHandler: generic errors are scrubbed too', () => {
     `insert failed: Failing row contains (1, ${SENTINEL}, -1).`,
     `ERROR: something\nDETAIL: Key (body)=(${SENTINEL}) already exists.`,
     `Key (lower(email))=(${SENTINEL}) conflicts with existing key (lower(email))=(${SENTINEL}x).`,
-  ])('development echo and log never carry %j', (message) => {
+  ])('development echo and log never carry %j', message => {
     process.env.NODE_ENV = 'development';
     const spies = spyAllLogLevels();
     const { status, json } = run(new Error(message));
     expect(status).toHaveBeenCalledWith(500);
     expect(JSON.stringify(json.mock.calls[0][0])).not.toContain(SENTINEL);
-    const logged = spies.flatMap((s) => s.mock.calls);
+    const logged = spies.flatMap(s => s.mock.calls);
     expect(logged.length).toBeGreaterThan(0);
     expect(JSON.stringify(logged)).not.toContain(SENTINEL);
   });
@@ -271,16 +292,21 @@ describe('errorHandler: generic errors are scrubbed too', () => {
     const e = new Error('boom: widget 42 missing');
     const { json } = run(e);
     expect(json.mock.calls[0][0].error.message).toBe('boom: widget 42 missing');
-    expect(errorSpy).toHaveBeenCalledWith('[Error] boom: widget 42 missing', expect.objectContaining({ stack: e.stack }));
+    expect(errorSpy).toHaveBeenCalledWith(
+      '[Error] boom: widget 42 missing',
+      expect.objectContaining({ stack: e.stack }),
+    );
   });
 
   it('scrubs an AppError whose message embeds a detail string', () => {
     process.env.NODE_ENV = 'development';
     const spies = spyAllLogLevels();
-    const { status, json } = run(new AppError(ErrorCode.CONFLICT, `dup: Key (email)=(${SENTINEL}) already exists.`, 409));
+    const { status, json } = run(
+      new AppError(ErrorCode.CONFLICT, `dup: Key (email)=(${SENTINEL}) already exists.`, 409),
+    );
     expect(status).toHaveBeenCalledWith(409);
     expect(JSON.stringify(json.mock.calls[0][0])).not.toContain(SENTINEL);
-    expect(JSON.stringify(spies.flatMap((s) => s.mock.calls))).not.toContain(SENTINEL);
+    expect(JSON.stringify(spies.flatMap(s => s.mock.calls))).not.toContain(SENTINEL);
   });
 });
 

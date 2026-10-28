@@ -32,7 +32,8 @@ describeTarget('accepted share: a failed delivery is delivered by the retry, onc
       label: 'accept as bob',
       actor: harness.actors.userB!,
       tables: [],
-      call: agent => agent.post(`/api/v1/sessions/${harness.sessionId}/reconciler/share-offer/respond`).send({ action: 'accept' }),
+      call: agent =>
+        agent.post(`/api/v1/sessions/${harness.sessionId}/reconciler/share-offer/respond`).send({ action: 'accept' }),
     });
   const state = async () => {
     const [offer] = await rows<{ status: string; delivery: string; shared: string | null }>(
@@ -68,7 +69,7 @@ describeTarget('accepted share: a failed delivery is delivered by the retry, onc
     if (harness) await harness.teardown();
   });
 
-  it('the delivery fails after the answer commits: ACCEPTED, undelivered, nothing in the author\'s conversation', async () => {
+  it("the delivery fails after the answer commits: ACCEPTED, undelivered, nothing in the author's conversation", async () => {
     const before = await state();
     const store = await import('../message-store');
     const real = store.deliverMessage;
@@ -132,7 +133,13 @@ describeTarget('accepted share: a failed delivery is delivered by the retry, onc
       offerId: o.id,
       attemptId: o.attempt_id,
       subject: { participantId: o.subject, userId: null, name: 'Bob', joinedAt: new Date(), mainConversationId: null },
-      author: { participantId: author.id, userId: null, name: 'Ada', joinedAt: new Date(), mainConversationId: author.conv },
+      author: {
+        participantId: author.id,
+        userId: null,
+        name: 'Ada',
+        joinedAt: new Date(),
+        mainConversationId: author.conv,
+      },
       sharedContent: 'must never be written',
       subjectAckMessage: 'x',
       reflectionMessage: 'y',

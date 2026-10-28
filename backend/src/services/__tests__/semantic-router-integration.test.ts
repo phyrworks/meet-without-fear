@@ -13,9 +13,11 @@ import { handleDispatch, type DispatchContext } from '../dispatch-handler';
 
 // Mock the bedrock module to avoid actual API calls in dispatch handler
 jest.mock('../../lib/bedrock', () => ({
-  getSonnetResponse: jest.fn().mockResolvedValue(
-    'In the Witness Stage you get to be fully heard. Then Perspective Stretch helps you understand your partner. What Matters helps you explore what truly matters to each of you. Finally, Strategic Repair helps you find solutions.'
-  ),
+  getSonnetResponse: jest
+    .fn()
+    .mockResolvedValue(
+      'In the Witness Stage you get to be fully heard. Then Perspective Stretch helps you understand your partner. What Matters helps you explore what truly matters to each of you. Finally, Strategic Repair helps you find solutions.',
+    ),
   BrainActivityCallType: {
     ORCHESTRATED_RESPONSE: 'ORCHESTRATED_RESPONSE',
   },
@@ -107,7 +109,7 @@ That's a really thoughtful attempt to step into their shoes. Here's how I'd summ
       expect(parsed.draft).toContain('overwhelmed');
       expect(parsed.draft).toContain('scared');
       expect(parsed.response).not.toContain('overwhelmed');
-      expect(parsed.response).toContain("thoughtful attempt");
+      expect(parsed.response).toContain('thoughtful attempt');
     });
 
     it('handles Stage 2 without ReadyShare', () => {
@@ -143,9 +145,9 @@ Here's a draft invitation that captures what you've shared. Take a look and let 
       const parsed = parseMicroTagResponse(simulatedResponse);
 
       expect(parsed.draft).toContain("I've been thinking about us");
-      expect(parsed.draft).toContain("Would you join me?");
-      expect(parsed.response).toContain("draft invitation");
-      expect(parsed.response).not.toContain("<draft>");
+      expect(parsed.draft).toContain('Would you join me?');
+      expect(parsed.response).toContain('draft invitation');
+      expect(parsed.response).not.toContain('<draft>');
     });
   });
 

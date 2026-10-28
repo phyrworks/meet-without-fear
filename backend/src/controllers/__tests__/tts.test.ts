@@ -132,7 +132,7 @@ describe('streamTTS controller', () => {
         expect.objectContaining({
           method: 'POST',
           headers: expect.objectContaining({
-            'Authorization': 'Bearer test-openai-key',
+            Authorization: 'Bearer test-openai-key',
           }),
           body: expect.stringContaining('"model":"tts-1"'),
         }),
@@ -211,7 +211,8 @@ describe('streamTTS controller', () => {
       const pipeMock = jest.fn();
       const mockBody = { pipe: pipeMock };
 
-      global.fetch = jest.fn()
+      global.fetch = jest
+        .fn()
         .mockResolvedValueOnce({
           ok: false,
           status: 429,
@@ -267,7 +268,8 @@ describe('streamTTS controller', () => {
       const pipeMock = jest.fn();
       const mockBody = { pipe: pipeMock };
 
-      global.fetch = jest.fn()
+      global.fetch = jest
+        .fn()
         .mockResolvedValueOnce({
           ok: false,
           status: 502,

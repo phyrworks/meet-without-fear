@@ -76,7 +76,12 @@ export function goldenScenarioChecks(opts: {
   });
 
   it('every step reached quiescence (a timed-out step is not a baseline)', () => {
-    expect(opts.steps().filter(s => !s.settled).map(s => s.label)).toEqual([]);
+    expect(
+      opts
+        .steps()
+        .filter(s => !s.settled)
+        .map(s => s.label),
+    ).toEqual([]);
   });
 }
 
@@ -107,13 +112,16 @@ export function targetMessageStageChecks(opts: { harness: () => Harness; steps: 
       h.fixture.database,
     );
     const byEmail = new Map<string, Array<{ key: string; reachedAt: Date }>>();
-    for (const r of rows) byEmail.set(r.email, [...(byEmail.get(r.email) ?? []), { key: r.key, reachedAt: new Date(r.at) }]);
+    for (const r of rows)
+      byEmail.set(r.email, [...(byEmail.get(r.email) ?? []), { key: r.key, reachedAt: new Date(r.at) }]);
     let checked = 0;
     for (const step of opts.steps()) {
       const email = /as (\S+)$/.exec(step.label)?.[1];
       const data = (step.body as { data?: { messages?: unknown } } | undefined)?.data;
       if (!email || !data?.messages) continue;
-      const list = (Array.isArray(data.messages) ? data.messages : (data.messages as { messages?: unknown[] }).messages ?? []) as Array<{
+      const list = (
+        Array.isArray(data.messages) ? data.messages : ((data.messages as { messages?: unknown[] }).messages ?? [])
+      ) as Array<{
         stage: number;
         timestamp: string;
       }>;
@@ -161,11 +169,15 @@ export function targetFixtureDeltaChecks(opts: {
     const iso = (d?: Date) => (d ? new Date(d).toISOString() : null);
     let checked = 0;
     for (const [index, step] of opts.steps().entries()) {
-      const d = (step.body as { data?: { compact?: { mySignedAt?: unknown; partnerSignedAt?: unknown }; mySignedAt?: unknown } } | undefined)
-        ?.data;
+      const d = (
+        step.body as
+          | { data?: { compact?: { mySignedAt?: unknown; partnerSignedAt?: unknown }; mySignedAt?: unknown } }
+          | undefined
+      )?.data;
       const partnerLeft = opts.partnerLeftFromStep !== undefined && index >= opts.partnerLeftFromStep;
       // GET /state nests them under `compact`; GET /compact/status returns them at the top.
-      const compact = d?.compact ?? (d && 'mySignedAt' in d ? (d as { mySignedAt?: unknown; partnerSignedAt?: unknown }) : undefined);
+      const compact =
+        d?.compact ?? (d && 'mySignedAt' in d ? (d as { mySignedAt?: unknown; partnerSignedAt?: unknown }) : undefined);
       const email = /as (\S+)$/.exec(step.label)?.[1];
       if (!compact || !email) continue;
       const partner = signed.find(s => s.email !== email)?.email;
@@ -186,8 +198,15 @@ export function targetFixtureDeltaChecks(opts: {
     const byId = new Map(rows.map(r => [r.id, r.target]));
     for (const step of opts.steps()) {
       const data = (step.body as { data?: { records?: unknown[]; pendingRequests?: unknown[] } } | undefined)?.data;
-      for (const r of [...(data?.records ?? []), ...(data?.pendingRequests ?? [])] as Array<{ id: string; targetId: string }>) {
-        expect({ step: step.label, id: r.id, targetId: r.targetId }).toEqual({ step: step.label, id: r.id, targetId: byId.get(r.id) });
+      for (const r of [...(data?.records ?? []), ...(data?.pendingRequests ?? [])] as Array<{
+        id: string;
+        targetId: string;
+      }>) {
+        expect({ step: step.label, id: r.id, targetId: r.targetId }).toEqual({
+          step: step.label,
+          id: r.id,
+          targetId: byId.get(r.id),
+        });
       }
     }
   });
@@ -215,7 +234,9 @@ export function roundAndNotificationChecks(opts: {
   if (opts.notified) {
     run('notifiedOnce pair: the delivery is stamped once and counted once', async () => {
       const steps = opts.steps();
-      const [offer] = await q<{ stamped: boolean }>(`SELECT delivery_notified_at IS NOT NULL AS stamped FROM context_share_offer`);
+      const [offer] = await q<{ stamped: boolean }>(
+        `SELECT delivery_notified_at IS NOT NULL AS stamped FROM context_share_offer`,
+      );
       expect(offer.stamped).toBe(true);
       const count = (i: number) => (steps[i].body as { data: { sentTabUpdates: number } }).data.sentTabUpdates;
       expect(count(opts.notified!.stampStep)).toBe(1);
@@ -231,7 +252,12 @@ export function roundAndNotificationChecks(opts: {
         const d = (steps[i].body as { data: Record<string, { id: string; sharedAt: string } | null> }).data;
         for (const key of ['myAttempt', 'partnerAttempt', 'attempt']) {
           const a = d[key];
-          if (a) expect({ step: steps[i].label, key, sharedAt: a.sharedAt }).toEqual({ step: steps[i].label, key, sharedAt: at.get(a.id) });
+          if (a)
+            expect({ step: steps[i].label, key, sharedAt: a.sharedAt }).toEqual({
+              step: steps[i].label,
+              key,
+              sharedAt: at.get(a.id),
+            });
         }
       }
     });
@@ -281,7 +307,12 @@ export function authorClosureChecks(opts: {
  * text is the canned response the mock serves at the caller's own turn count
  * (fixture `user-a-full-journey`, index = own USER CHAT turns − 1).
  */
-export function mockIndexChecks(opts: { harness: () => Harness; steps: () => StepResult[]; step: number; email: string }): void {
+export function mockIndexChecks(opts: {
+  harness: () => Harness;
+  steps: () => StepResult[];
+  step: number;
+  email: string;
+}): void {
   const run = isTargetShape() ? it : it.skip;
   run('mockTurnIndex pair: the streamed text is the fixture response at the caller’s turn count', async () => {
     const h = opts.harness();
@@ -304,7 +335,10 @@ export function mockIndexChecks(opts: { harness: () => Harness; steps: () => Ste
       .map(e => (e.data as { text?: string }).text ?? '')
       .join('');
     // The visible text is the canned response without its hidden <thinking> block.
-    const visible = served.replace(/<thinking>[\s\S]*?<\/thinking>/, '').trim().split('\n')[0];
+    const visible = served
+      .replace(/<thinking>[\s\S]*?<\/thinking>/, '')
+      .trim()
+      .split('\n')[0];
     expect(text).toContain(visible);
   });
 }

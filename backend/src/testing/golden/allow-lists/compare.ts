@@ -227,7 +227,10 @@ function labelOf(root: unknown, p: string[]): string {
 type TraceLike = {
   complete?: boolean;
   rowsRead?: Record<string, number> | string;
-  shapes?: Array<{ isolation?: string | null; statements?: Array<{ kind: string; protocol: string; relations: string[] }> }>;
+  shapes?: Array<{
+    isolation?: string | null;
+    statements?: Array<{ kind: string; protocol: string; relations: string[] }>;
+  }>;
 };
 
 const TX_CONTROL = new Set(['BEGIN', 'COMMIT', 'ROLLBACK', 'SET_TX']);
@@ -237,7 +240,7 @@ export function compareMappedTrace(e0: unknown, a0: unknown, rule: TraceMappedRu
   const e = (e0 ?? {}) as TraceLike;
   const a = (a0 ?? {}) as TraceLike;
   const out: string[] = [];
-  if (a.complete !== true) out.push('trace: the run\'s trace is not complete');
+  if (a.complete !== true) out.push("trace: the run's trace is not complete");
   const statements = (t: TraceLike) => (t.shapes ?? []).flatMap(sh => sh.statements ?? []);
   for (const st of statements(a)) {
     // Exempt only genuine transaction control: the keyword AND no relation
@@ -245,7 +248,9 @@ export function compareMappedTrace(e0: unknown, a0: unknown, rule: TraceMappedRu
     // the trace parser, and anything that touched a relation is data).
     const txControl = TX_CONTROL.has(st.kind) && st.relations.length === 0;
     if (st.protocol !== 'extended' && !txControl) {
-      out.push(`trace: a ${st.kind} on [${st.relations.join(', ')}] used protocol ${st.protocol} (data statements must bind parameters)`);
+      out.push(
+        `trace: a ${st.kind} on [${st.relations.join(', ')}] used protocol ${st.protocol} (data statements must bind parameters)`,
+      );
     }
   }
   const isolations = (t: TraceLike) =>
@@ -259,7 +264,8 @@ export function compareMappedTrace(e0: unknown, a0: unknown, rule: TraceMappedRu
     for (const m of mapped ?? []) allowed.add(m);
   }
   for (const r of new Set(statements(a).flatMap(st => st.relations))) {
-    if (!allowed.has(r)) out.push(`trace: the run touches ${r}, which no baseline relation maps to and the rule does not add`);
+    if (!allowed.has(r))
+      out.push(`trace: the run touches ${r}, which no baseline relation maps to and the rule does not add`);
   }
   for (const s of rule.sameRowsRead) {
     if (!label.startsWith(s.steps)) continue;
@@ -292,7 +298,10 @@ export function compareMappedChanges(e0: unknown, a0: unknown, rule: ChangesMapp
   const added = rule.addedTables.filter(t => t.step === step);
   const dropped = (rule.droppedTables ?? []).filter(t => t.step === step);
   for (const d of dropped) {
-    if (!base.has(`${d.table}|${d.kind}`)) out.push(`changes: droppedTables names ${d.kind} ${d.table} at step ${step}, which the baseline step does not write (stale)`);
+    if (!base.has(`${d.table}|${d.kind}`))
+      out.push(
+        `changes: droppedTables names ${d.kind} ${d.table} at step ${step}, which the baseline step does not write (stale)`,
+      );
   }
   const addedCount = (table: string, kind: string) =>
     added.filter(t => t.table === table && t.kind === kind).reduce((n, t) => n + t.count, 0);
@@ -315,25 +324,33 @@ export function compareMappedChanges(e0: unknown, a0: unknown, rule: ChangesMapp
     if (dropped.some(d => d.table === table && d.kind === kind)) {
       // Named as dropped at this step: the run must write no image of it.
       if (tos.some(to => run.has(`${to}|${kind}`))) {
-        out.push(`changes: droppedTables names ${kind} ${table} at step ${step}, but the run writes its ${kind} image (stale)`);
+        out.push(
+          `changes: droppedTables names ${kind} ${table} at step ${step}, but the run writes its ${kind} image (stale)`,
+        );
       }
       continue;
     }
     for (const to of tos) image.add(`${to}|${kind}`);
-    if (!tos.some(to => run.has(`${to}|${kind}`))) out.push(`changes: the baseline's ${kind} ${table} row(s) have no ${kind} image in [${tos.join(', ')}]`);
+    if (!tos.some(to => run.has(`${to}|${kind}`)))
+      out.push(`changes: the baseline's ${kind} ${table} row(s) have no ${kind} image in [${tos.join(', ')}]`);
     const oneToOne = tos.length === 1 && (sources.get(tos[0])?.size ?? 0) === 1;
     if (oneToOne) {
       const want = base.get(key)! + addedCount(tos[0], kind);
       const got = run.get(`${tos[0]}|${kind}`) ?? 0;
-      if (got !== want) out.push(`changes: ${kind} ${table}=${base.get(key)} (+${addedCount(tos[0], kind)} named) → ${tos[0]}=${got}`);
+      if (got !== want)
+        out.push(`changes: ${kind} ${table}=${base.get(key)} (+${addedCount(tos[0], kind)} named) → ${tos[0]}=${got}`);
     }
   }
   for (const key of run.keys()) {
     const [table, kind] = key.split('|');
     if (image.has(key)) continue;
     const named = addedCount(table, kind);
-    if (!named) out.push(`changes: the run writes ${kind} ${table}, which no baseline write maps to and the rule does not add at step ${step}`);
-    else if (run.get(key) !== named) out.push(`changes: ${kind} ${table} added ${run.get(key)}, the rule names ${named} at step ${step}`);
+    if (!named)
+      out.push(
+        `changes: the run writes ${kind} ${table}, which no baseline write maps to and the rule does not add at step ${step}`,
+      );
+    else if (run.get(key) !== named)
+      out.push(`changes: ${kind} ${table} added ${run.get(key)}, the rule names ${named} at step ${step}`);
   }
   return out;
 }
@@ -479,8 +496,15 @@ export function compareWithAllowList(expected: unknown, actual: unknown, allow: 
         if (refusal && (k === 'changes' || k === 'changesAtResponse')) {
           const ev = Array.isArray(e[k]) ? (e[k] as unknown[]) : [];
           const av = Array.isArray(a[k]) ? (a[k] as unknown[]) : [];
-          if (!ev.some(dropped)) fail(kp, 'refusedStep: none of the dropped writes is in the baseline (stale rule)', refusal.droppedWrites, undefined);
-          for (const c of av.filter(dropped)) fail(kp, 'refusedStep: the run made a write the refusal must not', undefined, c);
+          if (!ev.some(dropped))
+            fail(
+              kp,
+              'refusedStep: none of the dropped writes is in the baseline (stale rule)',
+              refusal.droppedWrites,
+              undefined,
+            );
+          for (const c of av.filter(dropped))
+            fail(kp, 'refusedStep: the run made a write the refusal must not', undefined, c);
           const kept = ev.filter(c => !dropped(c));
           const mapped = rulesAt('changesMapped', kp);
           if (mapped.length) {

@@ -65,24 +65,20 @@ describe('normalizeTakeaways', () => {
 
 describe('buildDistillationPrompt', () => {
   it('formats AI messages as "Journal Guide"', () => {
-    const messages = [
-      { role: 'AI', content: 'How are you feeling?' },
-    ];
+    const messages = [{ role: 'AI', content: 'How are you feeling?' }];
     const prompt = buildDistillationPrompt(messages);
     expect(prompt).toContain('Journal Guide');
     expect(prompt).toContain('How are you feeling?');
   });
 
   it('formats USER messages as "Me"', () => {
-    const messages = [
-      { role: 'USER', content: 'I felt really ignored today' },
-    ];
+    const messages = [{ role: 'USER', content: 'I felt really ignored today' }];
     const prompt = buildDistillationPrompt(messages);
     expect(prompt).toContain('Me');
     expect(prompt).toContain('I felt really ignored today');
   });
 
-  it('includes the rule about using the person\'s own words', () => {
+  it("includes the rule about using the person's own words", () => {
     const messages = [{ role: 'USER', content: 'test' }];
     const prompt = buildDistillationPrompt(messages);
     expect(prompt.toLowerCase()).toMatch(/own words|verbatim/);

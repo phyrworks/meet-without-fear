@@ -131,7 +131,8 @@ describeTarget('Stage 2 realtime payloads (I1): what each participant receives',
       }
     }
     for (const p of mockPush) {
-      for (const k of FORBIDDEN_KEYS) expect({ event: p.event, key: k, present: k in p.data }).toEqual({ event: p.event, key: k, present: false });
+      for (const k of FORBIDDEN_KEYS)
+        expect({ event: p.event, key: k, present: k in p.data }).toEqual({ event: p.event, key: k, present: false });
     }
   };
 
@@ -162,7 +163,8 @@ describeTarget('Stage 2 realtime payloads (I1): what each participant receives',
       label: 'draft as bob',
       actor: bob,
       tables: scope,
-      call: agent => agent.post(`/api/v1/sessions/${sid}/empathy/draft`).send({ content: BOB_EMPATHY, readyToShare: true }),
+      call: agent =>
+        agent.post(`/api/v1/sessions/${sid}/empathy/draft`).send({ content: BOB_EMPATHY, readyToShare: true }),
     });
     expect(draft.status).toBe(200);
     take();
@@ -214,13 +216,14 @@ describeTarget('Stage 2 realtime payloads (I1): what each participant receives',
     expect(wire.filter(w => w.name === 'empathy.share_suggestion' && w.data.forUserId === ada.id).length).toBe(1);
   });
 
-  it("accepting the offer: Ada learns context arrived, with no text and no status DTO on the wire", async () => {
+  it('accepting the offer: Ada learns context arrived, with no text and no status DTO on the wire', async () => {
     const accept = await harness.step({
       label: 'accept as bob',
       actor: bob,
       tables: scope,
       asyncBoundary: true,
-      call: agent => agent.post(`/api/v1/sessions/${harness.sessionId}/reconciler/share-offer/respond`).send({ action: 'accept' }),
+      call: agent =>
+        agent.post(`/api/v1/sessions/${harness.sessionId}/reconciler/share-offer/respond`).send({ action: 'accept' }),
     });
     expect(accept.status).toBe(200);
     await quiesce();
@@ -277,19 +280,24 @@ describeTarget('Stage 2 realtime payloads (I1): what each participant receives',
     const { applyStage3NeedActions } = await import('../stream-turn-actions');
     const ctx = await import('../../lib/request-context');
     const PROBE = 'PROBE_TS12_NEED Bob needs his effort to be noticed without asking';
-    const metadata = { proposedNeed: { need: PROBE, category: 'RECOGNITION', evidence: ['PROBE_TS12_EVIDENCE he said it twice'] } } as never;
-    await ctx.runWithContext({ turnId: 't', requestId: 'r', startTime: Date.now(), userId: bob.id, sessionId: harness.sessionId }, async () => {
-      await applyStage3NeedActions({
-        requestId: 'ts12',
-        sessionId: harness.sessionId,
-        userId: bob.id,
-        currentStage: 3,
-        refiningNeedContext: null,
-        userContent: 'x',
-        aiResponseText: 'y',
-        metadata,
-      });
-    });
+    const metadata = {
+      proposedNeed: { need: PROBE, category: 'RECOGNITION', evidence: ['PROBE_TS12_EVIDENCE he said it twice'] },
+    } as never;
+    await ctx.runWithContext(
+      { turnId: 't', requestId: 'r', startTime: Date.now(), userId: bob.id, sessionId: harness.sessionId },
+      async () => {
+        await applyStage3NeedActions({
+          requestId: 'ts12',
+          sessionId: harness.sessionId,
+          userId: bob.id,
+          currentStage: 3,
+          refiningNeedContext: null,
+          userContent: 'x',
+          aiResponseText: 'y',
+          metadata,
+        });
+      },
+    );
     await quiesce();
     const wire = take();
     const [needRow] = await rows<{ id: string }>(`SELECT id FROM need WHERE label LIKE 'PROBE_TS12_NEED%'`);

@@ -98,10 +98,31 @@ export const CONCEPT_NAMES = Object.keys(CONCEPT_VIEWS) as ConceptName[];
  * effect of a new view. Every other scenario snapshots every concept.
  */
 export const TS4_CONCEPT_NAMES: readonly ConceptName[] = [
-  'user', 'session', 'participant', 'conversation', 'participant_milestone', 'message', 'empathy_attempt',
-  'empathy_review', 'reconciler_result', 'reconciler_guidance', 'context_share_offer', 'draft', 'consent', 'need',
-  'need_share', 'need_disposition', 'proposal', 'proposal_need', 'proposal_choice', 'agreement', 'agreement_party',
-  'reflection', 'reflection_message', 'takeaway', 'takeaway_link',
+  'user',
+  'session',
+  'participant',
+  'conversation',
+  'participant_milestone',
+  'message',
+  'empathy_attempt',
+  'empathy_review',
+  'reconciler_result',
+  'reconciler_guidance',
+  'context_share_offer',
+  'draft',
+  'consent',
+  'need',
+  'need_share',
+  'need_disposition',
+  'proposal',
+  'proposal_need',
+  'proposal_choice',
+  'agreement',
+  'agreement_party',
+  'reflection',
+  'reflection_message',
+  'takeaway',
+  'takeaway_link',
 ];
 
 export function viewName(concept: ConceptName): string {

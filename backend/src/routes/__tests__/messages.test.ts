@@ -190,11 +190,13 @@ describe('Messages API (Fire-and-Forget)', () => {
   describe('planner text safety helpers', () => {
     describe('scrubVisibleAIText', () => {
       it('removes visible planner lines and flags the scrub', () => {
-        const result = scrubVisibleAIText([
-          'I should compare both lists before showing anything.',
-          'That sounds like a need for more steadiness.',
-          "Here's my plan: reveal the comparison.",
-        ].join('\n'));
+        const result = scrubVisibleAIText(
+          [
+            'I should compare both lists before showing anything.',
+            'That sounds like a need for more steadiness.',
+            "Here's my plan: reveal the comparison.",
+          ].join('\n'),
+        );
 
         expect(result.scrubbed).toBe(true);
         expect(result.text).toBe('That sounds like a need for more steadiness.');
@@ -217,29 +219,33 @@ describe('Messages API (Fire-and-Forget)', () => {
       });
 
       it('removes untagged Stage 4 reasoning before the visible answer', () => {
-        const result = scrubVisibleAIText([
-          'This is them accepting my invitation to add another option for the same need.',
-          '',
-          'So I have:',
-          '- Previous proposal idea: play 20 Questions',
-          '- Current addition: Would You Rather',
-          '',
-          'These are both specific games. capture them as options and then check if they are done brainstorming.',
-          '',
-          'For stage4_walkthrough: The user is still actively brainstorming for the current need, so action=NONE.',
-          '',
-          '',
-          'Got it — so 20 Questions or Would You Rather, both could create that shared lightness.',
-          '',
-          'Is that enough to work with, or do you want one more option for this need?',
-        ].join('\n'));
+        const result = scrubVisibleAIText(
+          [
+            'This is them accepting my invitation to add another option for the same need.',
+            '',
+            'So I have:',
+            '- Previous proposal idea: play 20 Questions',
+            '- Current addition: Would You Rather',
+            '',
+            'These are both specific games. capture them as options and then check if they are done brainstorming.',
+            '',
+            'For stage4_walkthrough: The user is still actively brainstorming for the current need, so action=NONE.',
+            '',
+            '',
+            'Got it — so 20 Questions or Would You Rather, both could create that shared lightness.',
+            '',
+            'Is that enough to work with, or do you want one more option for this need?',
+          ].join('\n'),
+        );
 
         expect(result.scrubbed).toBe(true);
-        expect(result.text).toBe([
-          'Got it — so 20 Questions or Would You Rather, both could create that shared lightness.',
-          '',
-          'Is that enough to work with, or do you want one more option for this need?',
-        ].join('\n'));
+        expect(result.text).toBe(
+          [
+            'Got it — so 20 Questions or Would You Rather, both could create that shared lightness.',
+            '',
+            'Is that enough to work with, or do you want one more option for this need?',
+          ].join('\n'),
+        );
       });
     });
 
@@ -258,7 +264,6 @@ describe('Messages API (Fire-and-Forget)', () => {
         expect(isReadyForStage3RevealText("Yes, I'm ready")).toBe(false);
       });
     });
-
   });
 
   describe('POST /sessions/:id/messages (sendMessage - DEPRECATED)', () => {
@@ -283,7 +288,7 @@ describe('Messages API (Fire-and-Forget)', () => {
             code: 'ENDPOINT_DEPRECATED',
             message: expect.stringContaining('deprecated'),
           }),
-        })
+        }),
       );
     });
   });

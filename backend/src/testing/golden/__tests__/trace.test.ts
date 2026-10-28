@@ -227,16 +227,22 @@ describe('buildTrace', () => {
         `\t          ->  ${nodeLine}`,
       ].join('\n');
 
-    const pg18 = buildTrace(parsePostgresLog(plan('Seq Scan on "Message" m  (cost=0.00..1.16 rows=6 width=0) (actual rows=6.50 loops=2)')), {
-      database: 'probe',
-      application: APP,
-    })[0];
+    const pg18 = buildTrace(
+      parsePostgresLog(plan('Seq Scan on "Message" m  (cost=0.00..1.16 rows=6 width=0) (actual rows=6.50 loops=2)')),
+      {
+        database: 'probe',
+        application: APP,
+      },
+    )[0];
     expect(pg18.rowsRead.Message).toBe(13);
 
-    const pg16 = buildTrace(parsePostgresLog(plan('Seq Scan on "Message" m  (cost=0.00..1.16 rows=6 width=0) (actual rows=6 loops=2)')), {
-      database: 'probe',
-      application: APP,
-    })[0];
+    const pg16 = buildTrace(
+      parsePostgresLog(plan('Seq Scan on "Message" m  (cost=0.00..1.16 rows=6 width=0) (actual rows=6 loops=2)')),
+      {
+        database: 'probe',
+        application: APP,
+      },
+    )[0];
     expect(pg16.rowsRead.Message).toBe(12);
   });
 
@@ -597,14 +603,20 @@ describe('extractWindow', () => {
   });
 
   it('is incomplete when the end marker never arrived', () => {
-    const raw = [markLine('s0b'), `2026-08-17 22:20:20.100 UTC [48189] db=probe,app=${APP},vxid=3/2,xid=0 LOG:  statement: SELECT 1`].join('\n');
+    const raw = [
+      markLine('s0b'),
+      `2026-08-17 22:20:20.100 UTC [48189] db=probe,app=${APP},vxid=3/2,xid=0 LOG:  statement: SELECT 1`,
+    ].join('\n');
     const w = extractWindow(parsePostgresLog(raw), { beginToken: 's0b', endToken: 's0e' });
     expect(w.complete).toBe(false);
     expect(w.incompleteReason).toBe('end-marker-missing');
   });
 
   it('is incomplete when the begin marker has already scrolled out of the read', () => {
-    const raw = [`2026-08-17 22:20:20.100 UTC [48189] db=probe,app=${APP},vxid=3/2,xid=0 LOG:  statement: SELECT 1`, markLine('s0e')].join('\n');
+    const raw = [
+      `2026-08-17 22:20:20.100 UTC [48189] db=probe,app=${APP},vxid=3/2,xid=0 LOG:  statement: SELECT 1`,
+      markLine('s0e'),
+    ].join('\n');
     const w = extractWindow(parsePostgresLog(raw), { beginToken: 's0b', endToken: 's0e' });
     expect(w.complete).toBe(false);
     expect(w.incompleteReason).toBe('begin-marker-missing');
@@ -638,7 +650,11 @@ describe('extractWindow', () => {
     expect(REASONS).toContain(w.incompleteReason);
     expect(JSON.stringify(w)).not.toContain('chores');
 
-    const s = summarize([], { complete: false, incompleteReason: w.incompleteReason, incompleteCounts: w.incompleteCounts });
+    const s = summarize([], {
+      complete: false,
+      incompleteReason: w.incompleteReason,
+      incompleteCounts: w.incompleteCounts,
+    });
     expect(JSON.stringify(s)).not.toContain('chores');
     expect(REASONS).toContain(s.incompleteReason);
   });
@@ -651,7 +667,14 @@ describe('statementsOutsideWindows', () => {
     `2026-08-17 22:20:20.100 UTC [48189] db=probe,app=${APP},vxid=${vxid},xid=0 LOG:  statement: SELECT 1`;
 
   it('counts nothing when every statement is inside a window', () => {
-    const raw = [markLine('a_b'), appLine('3/1'), markLine('a_e'), markLine('b_b'), appLine('3/2'), markLine('b_e')].join('\n');
+    const raw = [
+      markLine('a_b'),
+      appLine('3/1'),
+      markLine('a_e'),
+      markLine('b_b'),
+      appLine('3/2'),
+      markLine('b_e'),
+    ].join('\n');
     const n = statementsOutsideWindows(parsePostgresLog(raw), {
       database: 'probe',
       windows: [
@@ -667,7 +690,15 @@ describe('statementsOutsideWindows', () => {
     // it. Undetected, that statement either contaminates the next window or is
     // seen by nobody — and an undeclared fire-and-forget path added later looks
     // exactly like this.
-    const raw = [markLine('a_b'), appLine('3/1'), markLine('a_e'), appLine('3/9'), markLine('b_b'), appLine('3/2'), markLine('b_e')].join('\n');
+    const raw = [
+      markLine('a_b'),
+      appLine('3/1'),
+      markLine('a_e'),
+      appLine('3/9'),
+      markLine('b_b'),
+      appLine('3/2'),
+      markLine('b_e'),
+    ].join('\n');
     const n = statementsOutsideWindows(parsePostgresLog(raw), {
       database: 'probe',
       windows: [

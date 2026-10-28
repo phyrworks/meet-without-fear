@@ -1,11 +1,5 @@
 import crypto from 'crypto';
-import {
-  encrypt,
-  decrypt,
-  isEncrypted,
-  FieldDecryptionError,
-  _resetForTesting,
-} from '../field-encryption';
+import { encrypt, decrypt, isEncrypted, FieldDecryptionError, _resetForTesting } from '../field-encryption';
 
 // Generate a deterministic 32-byte key for tests
 const TEST_KEY = crypto.randomBytes(32).toString('base64');

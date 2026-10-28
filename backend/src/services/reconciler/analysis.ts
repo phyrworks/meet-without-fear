@@ -118,7 +118,8 @@ export async function getSonnetJson<T>(options: {
   turnId?: string;
 }): Promise<T | null> {
   const effectiveSessionId = options.sessionId || 'reconciler';
-  const effectiveTurnId = options.turnId || (options.sessionId ? `${options.sessionId}-${Date.now()}` : `reconciler-${Date.now()}`);
+  const effectiveTurnId =
+    options.turnId || (options.sessionId ? `${options.sessionId}-${Date.now()}` : `reconciler-${Date.now()}`);
   const effectiveOperation = options.operation || 'reconciler';
 
   logger.debug('Starting AI request', { operation: effectiveOperation });
@@ -229,7 +230,10 @@ export async function loadRecentSubjectStage2Turns(
  * The author's current round about the subject (the analysis input). Read by
  * the reconciler only; never returned to the subject.
  */
-export async function getEmpathyData(authorParticipantId: string, subjectParticipantId: string): Promise<EmpathyData | null> {
+export async function getEmpathyData(
+  authorParticipantId: string,
+  subjectParticipantId: string,
+): Promise<EmpathyData | null> {
   const attempt = await currentAttempt(authorParticipantId, subjectParticipantId, reader());
   if (!attempt) return null;
   return {
@@ -493,7 +497,9 @@ export async function persistAnalysis(opts: {
     return await getJobPrisma().$transaction(async tx => {
       await tx.$executeRaw`UPDATE reconciler_result SET superseded_at = now()
         WHERE attempt_id = ${opts.attemptId}::uuid AND superseded_at IS NULL`;
-      const rows = await tx.$queryRaw<Array<{ id: string }>>`INSERT INTO reconciler_result (attempt_id, subject_participant_id, iteration, alignment_score, alignment_summary,
+      const rows = await tx.$queryRaw<
+        Array<{ id: string }>
+      >`INSERT INTO reconciler_result (attempt_id, subject_participant_id, iteration, alignment_score, alignment_summary,
           gap_summary, gap_severity, correctly_identified, missed_feelings, misattributions, most_important_gap,
           recommended_action, rationale, sharing_would_help, suggested_share_focus, suggested_share_content,
           suggested_share_reason, circuit_breaker_tripped)
@@ -636,7 +642,12 @@ export async function runReconciler(
   readyToProceed: boolean;
   blockingReason: string | null;
   /** Per direction (A→B, B→A): the attempt analysed and whether its analysis is new (to persist). */
-  directions: Array<{ guesser: UserInfo; subject: UserInfo; data: EmpathyData; result: ReconcilerResult & { fresh?: boolean; storedResultId?: string } } | null>;
+  directions: Array<{
+    guesser: UserInfo;
+    subject: UserInfo;
+    data: EmpathyData;
+    result: ReconcilerResult & { fresh?: boolean; storedResultId?: string };
+  } | null>;
 }> {
   logger.info('Starting reconciliation', { sessionId });
 
@@ -737,7 +748,9 @@ export async function runReconciler(
   const bReady = !caller || visibleB ? isDirectionReady(bUnderstandingA) : statusReady(bEmpathy.status);
   const readyToProceed = aReady && bReady;
 
-  const strip = (r: (ReconcilerResult & { fresh?: boolean; storedResultId?: string }) | null): ReconcilerResult | null => {
+  const strip = (
+    r: (ReconcilerResult & { fresh?: boolean; storedResultId?: string }) | null,
+  ): ReconcilerResult | null => {
     if (!r) return null;
     const { fresh: _f, storedResultId: _s, ...rest } = r;
     void _f;

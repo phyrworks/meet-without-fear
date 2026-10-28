@@ -8,9 +8,12 @@ describe('databaseUrlFor', () => {
     expect(databaseUrlFor(role as keyof typeof DATABASE_URL_VARS, { DATABASE_URL: ROOT, [variable]: own })).toBe(own);
   });
 
-  it.each(Object.keys(DATABASE_URL_VARS).filter(r => r !== 'ops'))('%s falls back to DATABASE_URL when its own variable is unset', (role) => {
-    expect(databaseUrlFor(role as keyof typeof DATABASE_URL_VARS, { DATABASE_URL: ROOT })).toBe(ROOT);
-  });
+  it.each(Object.keys(DATABASE_URL_VARS).filter(r => r !== 'ops'))(
+    '%s falls back to DATABASE_URL when its own variable is unset',
+    role => {
+      expect(databaseUrlFor(role as keyof typeof DATABASE_URL_VARS, { DATABASE_URL: ROOT })).toBe(ROOT);
+    },
+  );
 
   it('treats an empty role variable as unset (compose passes empty strings through)', () => {
     expect(databaseUrlFor('job', { DATABASE_URL: ROOT, JOB_DATABASE_URL: '' })).toBe(ROOT);
@@ -34,7 +37,7 @@ describe('databaseUrlFor', () => {
 
   it('rejects a role variable that is not a URL, naming the variable', () => {
     expect(() => databaseUrlFor('auth', { DATABASE_URL: ROOT, AUTH_DATABASE_URL: 'not a url' })).toThrow(
-      /AUTH_DATABASE_URL/
+      /AUTH_DATABASE_URL/,
     );
   });
 });

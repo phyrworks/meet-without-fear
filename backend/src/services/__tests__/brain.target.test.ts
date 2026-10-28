@@ -38,14 +38,23 @@ describeTarget('brain_activity (job) and the dashboard (mwf_ops) on the target',
   });
 
   it('the app role cannot touch brain_activity at all', async () => {
-    await expect(run.as('mwf_app', ids.adaUser, `SELECT count(*) FROM brain_activity`)).rejects.toThrow(/permission denied/);
+    await expect(run.as('mwf_app', ids.adaUser, `SELECT count(*) FROM brain_activity`)).rejects.toThrow(
+      /permission denied/,
+    );
   });
 
   it('capture: the job writes the row — attributed to the request’s participant only when the call opts in (R40) — and completes it', async () => {
     const { brainService } = await import('../brain-service');
     const ctx = await import('../../lib/request-context');
     const activity = await ctx.runWithContext(
-      { turnId: 't', requestId: 'r', startTime: Date.now(), userId: ids.bobUser, sessionId: ids.session, participantId: ids.bob },
+      {
+        turnId: 't',
+        requestId: 'r',
+        startTime: Date.now(),
+        userId: ids.bobUser,
+        sessionId: ids.session,
+        participantId: ids.bob,
+      },
       () =>
         brainService.startActivity({
           sessionId: ids.session,
@@ -57,33 +66,75 @@ describeTarget('brain_activity (job) and the dashboard (mwf_ops) on the target',
         }),
     );
     expect(activity.id).not.toBe('');
-    await brainService.completeActivity(activity.id, { output: { text: 'done' }, tokenCountInput: 10, tokenCountOutput: 5, cost: 0.0012, durationMs: 33 });
+    await brainService.completeActivity(activity.id, {
+      output: { text: 'done' },
+      tokenCountInput: 10,
+      tokenCountOutput: 5,
+      cost: 0.0012,
+      durationMs: 33,
+    });
     expect(
-      await run.sql(`SELECT participant_id, reflection_id, status::text AS status, token_count_input, cost::text AS cost FROM brain_activity WHERE id = $1`, [activity.id]),
-    ).toEqual([{ participant_id: ids.bob, reflection_id: null, status: 'COMPLETED', token_count_input: 10, cost: '0.001200' }]);
+      await run.sql(
+        `SELECT participant_id, reflection_id, status::text AS status, token_count_input, cost::text AS cost FROM brain_activity WHERE id = $1`,
+        [activity.id],
+      ),
+    ).toEqual([
+      { participant_id: ids.bob, reflection_id: null, status: 'COMPLETED', token_count_input: 10, cost: '0.001200' },
+    ]);
 
     // No participant on the request context: the job resolves the user's participant
-    const viaLookup = await ctx.runWithContext({ turnId: 't', requestId: 'r', startTime: Date.now(), userId: ids.adaUser }, () =>
-      brainService.startActivity({ sessionId: ids.session, activityType: 'RETRIEVAL', model: 'system-retrieval', input: {}, attributeToCaller: true }),
+    const viaLookup = await ctx.runWithContext(
+      { turnId: 't', requestId: 'r', startTime: Date.now(), userId: ids.adaUser },
+      () =>
+        brainService.startActivity({
+          sessionId: ids.session,
+          activityType: 'RETRIEVAL',
+          model: 'system-retrieval',
+          input: {},
+          attributeToCaller: true,
+        }),
     );
-    expect(await run.sql(`SELECT participant_id FROM brain_activity WHERE id = $1`, [viaLookup.id])).toEqual([{ participant_id: ids.ada }]);
+    expect(await run.sql(`SELECT participant_id FROM brain_activity WHERE id = $1`, [viaLookup.id])).toEqual([
+      { participant_id: ids.ada },
+    ]);
 
     // R40 (fix round 1, I1): without the opt-in — every call that reads or produces another
     // participant's content — the row is unattributed (session only), so R17 removes it on either leave.
     const cross = await ctx.runWithContext(
-      { turnId: 't', requestId: 'r', startTime: Date.now(), userId: ids.bobUser, sessionId: ids.session, participantId: ids.bob },
-      () => brainService.startActivity({ sessionId: ids.session, activityType: 'LLM_CALL', model: 'claude-sonnet', input: {}, callType: 'RECONCILER_ANALYSIS' as never }),
+      {
+        turnId: 't',
+        requestId: 'r',
+        startTime: Date.now(),
+        userId: ids.bobUser,
+        sessionId: ids.session,
+        participantId: ids.bob,
+      },
+      () =>
+        brainService.startActivity({
+          sessionId: ids.session,
+          activityType: 'LLM_CALL',
+          model: 'claude-sonnet',
+          input: {},
+          callType: 'RECONCILER_ANALYSIS' as never,
+        }),
     );
     expect(await run.sql(`SELECT session_id, participant_id FROM brain_activity WHERE id = $1`, [cross.id])).toEqual([
       { session_id: ids.session, participant_id: null },
     ]);
 
     // A reflection turn: reflection_id, no session
-    const inner = await brainService.startActivity({ innerWorkSessionId: reflectionId, activityType: 'LLM_CALL', model: 'claude-haiku', input: {} });
+    const inner = await brainService.startActivity({
+      innerWorkSessionId: reflectionId,
+      activityType: 'LLM_CALL',
+      model: 'claude-haiku',
+      input: {},
+    });
     await brainService.failActivity(inner.id, new Error('boom'));
-    expect(await run.sql(`SELECT session_id, reflection_id, status::text AS status FROM brain_activity WHERE id = $1`, [inner.id])).toEqual([
-      { session_id: null, reflection_id: reflectionId, status: 'FAILED' },
-    ]);
+    expect(
+      await run.sql(`SELECT session_id, reflection_id, status::text AS status FROM brain_activity WHERE id = $1`, [
+        inner.id,
+      ]),
+    ).toEqual([{ session_id: null, reflection_id: reflectionId, status: 'FAILED' }]);
   });
 
   it('a telemetry failure never breaks the call: an unsaved record, and complete/fail are no-ops', async () => {
@@ -109,7 +160,11 @@ describeTarget('brain_activity (job) and the dashboard (mwf_ops) on the target',
     const partner = list.body.data.sessions.find((s: { id: string }) => s.id === ids.session);
     expect(partner).toMatchObject({ type: 'PARTNER', participants: 'Ada Lovelace & Bob Ross' });
     expect(partner.stats.activityCount).toBeGreaterThanOrEqual(2);
-    expect(list.body.data.sessions.some((s: { id: string; type: string }) => s.id === reflectionId && s.type === 'INNER_WORK')).toBe(true);
+    expect(
+      list.body.data.sessions.some(
+        (s: { id: string; type: string }) => s.id === reflectionId && s.type === 'INNER_WORK',
+      ),
+    ).toBe(true);
 
     const detail = await request(app).get(`/api/v1/brain/sessions/${ids.session}`);
     expect(detail.status).toBe(200);
@@ -145,8 +200,12 @@ describeTarget('brain_activity (job) and the dashboard (mwf_ops) on the target',
     process.env.DASHBOARD_API_SECRET = 'ts12-secret';
     try {
       expect((await request(app).get('/api/v1/brain/sessions')).status).toBe(401);
-      expect((await request(app).get('/api/v1/brain/sessions').set('x-dashboard-secret', 'wrong-secret')).status).toBe(401);
-      expect((await request(app).get('/api/v1/brain/sessions').set('x-dashboard-secret', 'ts12-secret')).status).toBe(200);
+      expect((await request(app).get('/api/v1/brain/sessions').set('x-dashboard-secret', 'wrong-secret')).status).toBe(
+        401,
+      );
+      expect((await request(app).get('/api/v1/brain/sessions').set('x-dashboard-secret', 'ts12-secret')).status).toBe(
+        200,
+      );
     } finally {
       process.env.DASHBOARD_API_SECRET = '';
     }

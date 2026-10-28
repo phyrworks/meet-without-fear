@@ -16,7 +16,8 @@ import { adaAndBob, openTargetRun, type TargetRun } from './target-roles';
 const mockSend = jest.fn();
 jest.mock('expo-server-sdk', () => {
   const Expo = jest.fn().mockImplementation(() => ({ sendPushNotificationsAsync: mockSend }));
-  (Expo as unknown as { isExpoPushToken: (t: string) => boolean }).isExpoPushToken = (t: string) => t.startsWith('ExponentPushToken[');
+  (Expo as unknown as { isExpoPushToken: (t: string) => boolean }).isExpoPushToken = (t: string) =>
+    t.startsWith('ExponentPushToken[');
   return { Expo };
 });
 
@@ -33,7 +34,10 @@ describeTarget('push on the target: the job reads the recipient’s devices', ()
   let ctx: typeof import('../../lib/request-context');
   /** Ada's request (her identity), sending to Bob. */
   const asAda = <T>(fn: () => Promise<T>): Promise<T> =>
-    ctx.runWithContext({ turnId: 't', requestId: 'r', startTime: Date.now(), userId: ids.adaUser }, async () => await fn());
+    ctx.runWithContext(
+      { turnId: 't', requestId: 'r', startTime: Date.now(), userId: ids.adaUser },
+      async () => await fn(),
+    );
 
   beforeAll(async () => {
     run = await openTargetRun('INNER_WORK_LINKED_A', `ts12_push_${process.pid}`);
@@ -50,23 +54,34 @@ describeTarget('push on the target: the job reads the recipient’s devices', ()
   });
 
   it('no device: nothing is sent', async () => {
-    expect(await asAda(() => push.sendPushNotification(ids.bobUser, 'partner.empathy_shared', {}, ids.session))).toBe(false);
+    expect(await asAda(() => push.sendPushNotification(ids.bobUser, 'partner.empathy_shared', {}, ids.session))).toBe(
+      false,
+    );
     expect(mockSend).not.toHaveBeenCalled();
   });
 
   it('one notification per device, named by the recipient’s nickname for the actor', async () => {
-    await run.sql(`INSERT INTO user_device (user_id, push_token, last_seen_at) VALUES ($1, $2, now()), ($1, $3, now() - interval '1 day')`, [
-      ids.bobUser,
-      BOB_PHONE,
-      BOB_TABLET,
-    ]);
+    await run.sql(
+      `INSERT INTO user_device (user_id, push_token, last_seen_at) VALUES ($1, $2, now()), ($1, $3, now() - interval '1 day')`,
+      [ids.bobUser, BOB_PHONE, BOB_TABLET],
+    );
     await run.sql(`UPDATE relationship_member SET nickname = 'Ads' WHERE user_id = $1`, [ids.bobUser]);
     mockSend.mockResolvedValue([{ status: 'ok' }, { status: 'ok' }]);
     const sent = await asAda(() =>
-      push.sendPushNotification(ids.bobUser, 'partner.stage_completed', { completedBy: ids.adaUser, stage: 1 }, ids.session),
+      push.sendPushNotification(
+        ids.bobUser,
+        'partner.stage_completed',
+        { completedBy: ids.adaUser, stage: 1 },
+        ids.session,
+      ),
     );
     expect(sent).toBe(true);
-    const messages = mockSend.mock.calls[0][0] as Array<{ to: string; title: string; body: string; data: Record<string, unknown> }>;
+    const messages = mockSend.mock.calls[0][0] as Array<{
+      to: string;
+      title: string;
+      body: string;
+      data: Record<string, unknown>;
+    }>;
     expect(messages.map(m => m.to)).toEqual([BOB_PHONE, BOB_TABLET]);
     // Bob is past Stage 1 (feel_heard reached in the fixture), so the copy is the progress nudge
     expect(messages[0]).toMatchObject({
@@ -80,7 +95,14 @@ describeTarget('push on the target: the job reads the recipient’s devices', ()
     await run.sql(`UPDATE relationship_member SET nickname = NULL WHERE user_id = $1`, [ids.bobUser]);
     await run.sql(`UPDATE participant SET display_name = 'PROBE_TS12_DISPLAY' WHERE id = $1`, [ids.ada]);
     mockSend.mockResolvedValue([{ status: 'ok' }, { status: 'ok' }]);
-    await asAda(() => push.sendPushNotification(ids.bobUser, 'partner.stage_completed', { completedBy: ids.adaUser, stage: 2 }, ids.session));
+    await asAda(() =>
+      push.sendPushNotification(
+        ids.bobUser,
+        'partner.stage_completed',
+        { completedBy: ids.adaUser, stage: 2 },
+        ids.session,
+      ),
+    );
     expect((mockSend.mock.calls[0][0] as Array<{ title: string }>)[0].title).toBe('PROBE_TS12_DISPLAY is progressing');
   });
 
@@ -89,12 +111,18 @@ describeTarget('push on the target: the job reads the recipient’s devices', ()
       { status: 'error', message: 'gone', details: { error: 'DeviceNotRegistered' } },
       { status: 'ok' },
     ]);
-    expect(await asAda(() => push.sendPushNotification(ids.bobUser, 'partner.empathy_shared', {}, ids.session))).toBe(true);
-    expect(await run.sql(`SELECT push_token FROM user_device WHERE user_id = $1 AND push_token IS NOT NULL`, [ids.bobUser])).toEqual([
-      { push_token: BOB_TABLET },
-    ]);
+    expect(await asAda(() => push.sendPushNotification(ids.bobUser, 'partner.empathy_shared', {}, ids.session))).toBe(
+      true,
+    );
+    expect(
+      await run.sql(`SELECT push_token FROM user_device WHERE user_id = $1 AND push_token IS NOT NULL`, [ids.bobUser]),
+    ).toEqual([{ push_token: BOB_TABLET }]);
 
     mockSend.mockResolvedValue([{ status: 'error', message: 'x', details: {} }]);
-    expect(await asAda(() => push.sendPushNotifications([ids.bobUser, ids.adaUser], 'partner.needs_shared', {}, ids.session))).toBe(0);
+    expect(
+      await asAda(() =>
+        push.sendPushNotifications([ids.bobUser, ids.adaUser], 'partner.needs_shared', {}, ids.session),
+      ),
+    ).toBe(0);
   });
 });

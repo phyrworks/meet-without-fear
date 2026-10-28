@@ -92,7 +92,7 @@ describe('Realtime Service', () => {
       resetAblyClient();
 
       await expect(
-        publishSessionEvent(testSessionId, 'partner.signed_compact', { signedBy: testUserId })
+        publishSessionEvent(testSessionId, 'partner.signed_compact', { signedBy: testUserId }),
       ).rejects.toThrow('ABLY_API_KEY not configured');
     });
 
@@ -107,24 +107,19 @@ describe('Realtime Service', () => {
           sessionId: testSessionId,
           stage: 2,
           timestamp: expect.any(Number),
-        })
+        }),
       );
     });
 
     it('includes excludeUserId in event data when provided', async () => {
-      await publishSessionEvent(
-        testSessionId,
-        'agreement.proposed',
-        { agreementId: 'agr-1' },
-        testUserId
-      );
+      await publishSessionEvent(testSessionId, 'agreement.proposed', { agreementId: 'agr-1' }, testUserId);
 
       expect(mockPublish).toHaveBeenCalledWith(
         'agreement.proposed',
         expect.objectContaining({
           excludeUserId: testUserId,
           agreementId: 'agr-1',
-        })
+        }),
       );
     });
 
@@ -216,12 +211,7 @@ describe('Realtime Service', () => {
 
       await notifyPartner(testSessionId, testPartnerId, 'session.paused', {});
 
-      expect(mockSendPush).toHaveBeenCalledWith(
-        testPartnerId,
-        'session.paused',
-        {},
-        testSessionId
-      );
+      expect(mockSendPush).toHaveBeenCalledWith(testPartnerId, 'session.paused', {}, testSessionId);
     });
   });
 
@@ -237,7 +227,7 @@ describe('Realtime Service', () => {
         notifyPartnerWithFallback(testSessionId, testPartnerId, 'session.joined', {
           joinedBy: testPartnerId,
           userName: 'Test Partner',
-        })
+        }),
       ).resolves.toBeUndefined();
 
       expect(mockPublish).not.toHaveBeenCalled();
@@ -253,12 +243,7 @@ describe('Realtime Service', () => {
       await notifyPartnerWithFallback(testSessionId, testPartnerId, 'partner.advanced', {});
 
       expect(mockPublish).toHaveBeenCalled();
-      expect(mockSendPush).toHaveBeenCalledWith(
-        testPartnerId,
-        'partner.advanced',
-        {},
-        testSessionId
-      );
+      expect(mockSendPush).toHaveBeenCalledWith(testPartnerId, 'partner.advanced', {}, testSessionId);
     });
 
     it('publishes to Ably but does not send push when partner is online', async () => {
@@ -287,7 +272,7 @@ describe('Realtime Service', () => {
           expect.objectContaining({
             userId: testUserId,
             isTyping: true,
-          })
+          }),
         );
       });
 
@@ -303,7 +288,7 @@ describe('Realtime Service', () => {
           expect.objectContaining({
             userId: testUserId,
             isTyping: false,
-          })
+          }),
         );
       });
 
@@ -324,7 +309,7 @@ describe('Realtime Service', () => {
           'typing.start',
           expect.objectContaining({
             excludeUserId: testUserId,
-          })
+          }),
         );
       });
     });
@@ -398,7 +383,7 @@ describe('Realtime Service', () => {
             userId: testUserId,
             stage: 2,
             status: 'in_progress',
-          })
+          }),
         );
       });
 
@@ -409,7 +394,7 @@ describe('Realtime Service', () => {
           'stage.progress',
           expect.objectContaining({
             excludeUserId: testUserId,
-          })
+          }),
         );
       });
     });
@@ -424,7 +409,7 @@ describe('Realtime Service', () => {
             userId: testUserId,
             stage: 3,
             status: 'gate_pending',
-          })
+          }),
         );
       });
     });
@@ -445,7 +430,7 @@ describe('Realtime Service', () => {
             userId: testUserId,
             name: 'Test User',
             status: PresenceStatus.ONLINE,
-          })
+          }),
         );
       });
 
@@ -457,7 +442,7 @@ describe('Realtime Service', () => {
           expect.objectContaining({
             userId: testUserId,
             status: PresenceStatus.OFFLINE,
-          })
+          }),
         );
       });
 
@@ -469,7 +454,7 @@ describe('Realtime Service', () => {
           expect.objectContaining({
             userId: testUserId,
             status: PresenceStatus.AWAY,
-          })
+          }),
         );
       });
     });
@@ -489,7 +474,7 @@ describe('Realtime Service', () => {
           expect.objectContaining({
             pausedBy: testUserId,
             reason: 'Need a break',
-          })
+          }),
         );
       });
 
@@ -512,7 +497,7 @@ describe('Realtime Service', () => {
           'session.resumed',
           expect.objectContaining({
             resumedBy: testUserId,
-          })
+          }),
         );
       });
     });
@@ -525,7 +510,7 @@ describe('Realtime Service', () => {
           'session.resolved',
           expect.objectContaining({
             resolvedBy: testUserId,
-          })
+          }),
         );
       });
 

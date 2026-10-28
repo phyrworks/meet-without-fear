@@ -57,7 +57,13 @@ describeTarget('repair privacy fixes (fix round 1) — closure oracle and the pa
   it('closing before the partner has shared reveals nothing of their unshared WILLING and creates no agreement', async () => {
     const sid = ids.session;
     // Bob is WILLING on "checkin" (Ada is too, and has shared) — but Bob has not shared.
-    expect((await http(bob(), 'post', `/sessions/${sid}/stage4/proposals/${proposal.checkin}/selection`, { decision: 'WILLING' })).status).toBe(200);
+    expect(
+      (
+        await http(bob(), 'post', `/sessions/${sid}/stage4/proposals/${proposal.checkin}/selection`, {
+          decision: 'WILLING',
+        })
+      ).status,
+    ).toBe(200);
     const closed = await http(ada(), 'post', `/sessions/${sid}/stage4/close`, {});
     // Old behaviour: 400 "Mutual willingness exists …" — an oracle on Bob's hidden choice.
     expect(closed.status).toBe(200);

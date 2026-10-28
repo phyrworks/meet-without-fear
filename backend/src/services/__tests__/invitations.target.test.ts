@@ -48,7 +48,9 @@ describeTarget('invitations on the target, as mwf_app (the decline as the job)',
 
   /** Make a created session acceptable (the topic frame and the invitation message confirmed, INVITED). */
   const ready = async (sessionId: string) => {
-    await run.sql(`UPDATE session SET topic_frame = 'the chores', topic_frame_confirmed_at = now() WHERE id = $1`, [sessionId]);
+    await run.sql(`UPDATE session SET topic_frame = 'the chores', topic_frame_confirmed_at = now() WHERE id = $1`, [
+      sessionId,
+    ]);
     await run.sql(`UPDATE invitation SET message_confirmed_at = now() WHERE session_id = $1`, [sessionId]);
     await run.as('mwf_job', null, `SELECT app.session_set_status($1::uuid, 'INVITED')`, [sessionId]);
   };
@@ -83,21 +85,33 @@ describeTarget('invitations on the target, as mwf_app (the decline as the job)',
 
     await ready(sessionId);
     const ack = await http(carol, 'post', `/invitations/${invitationId}/acknowledge`);
-    expect(ack.body.data).toMatchObject({ acknowledged: true, invitation: { invitedBy: { id: ada.id, name: 'Ada Lovelace' } } });
+    expect(ack.body.data).toMatchObject({
+      acknowledged: true,
+      invitation: { invitedBy: { id: ada.id, name: 'Ada Lovelace' } },
+    });
 
     const accepted = await http(carol, 'post', `/invitations/${invitationId}/accept`);
     expect(accepted.status).toBe(200);
     expect(accepted.body.data.session.status).toBe('ACTIVE');
-    expect(accepted.body.data.session.members.map((m: { id: string }) => m.id).sort()).toEqual([ada.id, carol.id].sort());
-    expect(await run.sql(`SELECT status::text AS status, accepted_by_user_id FROM invitation WHERE id = $1`, [invitationId])).toEqual([
-      { status: 'ACCEPTED', accepted_by_user_id: carol.id },
-    ]);
-    expect(await run.sql(`SELECT count(*)::int AS n FROM participant WHERE session_id = $1 AND user_id = $2`, [sessionId, carol.id])).toEqual([{ n: 1 }]);
+    expect(accepted.body.data.session.members.map((m: { id: string }) => m.id).sort()).toEqual(
+      [ada.id, carol.id].sort(),
+    );
+    expect(
+      await run.sql(`SELECT status::text AS status, accepted_by_user_id FROM invitation WHERE id = $1`, [invitationId]),
+    ).toEqual([{ status: 'ACCEPTED', accepted_by_user_id: carol.id }]);
+    expect(
+      await run.sql(`SELECT count(*)::int AS n FROM participant WHERE session_id = $1 AND user_id = $2`, [
+        sessionId,
+        carol.id,
+      ]),
+    ).toEqual([{ n: 1 }]);
     expect((await http(carol, 'post', `/invitations/${invitationId}/accept`)).status).toBe(400); // already accepted
     expect((await http(carol, 'get', `/sessions/${sessionId}/state`)).status).toBe(200);
 
     // Nickname by the composite key
-    const [rel] = await run.sql<{ relationship_id: string }>(`SELECT relationship_id FROM session WHERE id = $1`, [sessionId]);
+    const [rel] = await run.sql<{ relationship_id: string }>(`SELECT relationship_id FROM session WHERE id = $1`, [
+      sessionId,
+    ]);
     const nick = await http(ada, 'patch', `/relationships/${rel.relationship_id}/nickname`, { nickname: 'Caz' });
     expect(nick.body.data).toEqual({ nickname: 'Caz' });
   });
@@ -109,16 +123,22 @@ describeTarget('invitations on the target, as mwf_app (the decline as the job)',
     // The live PENDING arm admits the invitee (the handler then finds no participant: 404, not 403).
     // (Not /state: under the E2E bypass that read auto-accepts a pending invitation.)
     expect((await http(dan, 'get', `/sessions/${sessionId}/emotions`)).status).toBe(404);
-    const declined = await http(dan, 'post', `/invitations/${created.body.data.invitationId}/decline`, { reason: 'not now' });
+    const declined = await http(dan, 'post', `/invitations/${created.body.data.invitationId}/decline`, {
+      reason: 'not now',
+    });
     expect(declined.status).toBe(200);
-    expect(await run.sql(`SELECT status::text AS status FROM session WHERE id = $1`, [sessionId])).toEqual([{ status: 'ABANDONED' }]);
-    expect(await run.sql(`SELECT status::text AS status, decline_reason FROM invitation WHERE session_id = $1`, [sessionId])).toEqual([
-      { status: 'DECLINED', decline_reason: 'not now' },
+    expect(await run.sql(`SELECT status::text AS status FROM session WHERE id = $1`, [sessionId])).toEqual([
+      { status: 'ABANDONED' },
     ]);
+    expect(
+      await run.sql(`SELECT status::text AS status, decline_reason FROM invitation WHERE session_id = $1`, [sessionId]),
+    ).toEqual([{ status: 'DECLINED', decline_reason: 'not now' }]);
     expect((await http(dan, 'get', `/sessions/${sessionId}/emotions`)).status).toBe(403);
 
     const other = await http(ada, 'post', '/sessions', { inviteName: 'Erin' });
-    await run.sql(`UPDATE invitation SET expires_at = now() - interval '1 minute' WHERE session_id = $1`, [other.body.data.session.id]);
+    await run.sql(`UPDATE invitation SET expires_at = now() - interval '1 minute' WHERE session_id = $1`, [
+      other.body.data.session.id,
+    ]);
     expect((await http(erin, 'get', `/sessions/${other.body.data.session.id}/emotions`)).status).toBe(403);
     expect((await http(erin, 'post', `/invitations/${other.body.data.invitationId}/accept`)).status).toBe(410);
   });

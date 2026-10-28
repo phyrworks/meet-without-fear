@@ -8,10 +8,8 @@ import { signCompact, getCompactStatus } from '../../controllers/stage0';
 
 // Mock Prisma
 
-
 // Mock realtime service
 jest.mock('../../services/realtime');
-
 
 // Helper to create mock request
 function createMockRequest(options: {
@@ -55,9 +53,6 @@ describe('Stage 0 API', () => {
   });
 
   describe('POST /sessions/:id/compact/sign (signCompact)', () => {
-
-
-
     it('validates agreed field is true', async () => {
       const req = createMockRequest({
         user: mockUser,
@@ -75,7 +70,7 @@ describe('Stage 0 API', () => {
           error: expect.objectContaining({
             code: 'VALIDATION_ERROR',
           }),
-        })
+        }),
       );
     });
 
@@ -95,16 +90,12 @@ describe('Stage 0 API', () => {
           error: expect.objectContaining({
             code: 'UNAUTHORIZED',
           }),
-        })
+        }),
       );
     });
-
   });
 
   describe('GET /sessions/:id/compact/status (getCompactStatus)', () => {
-
-
-
     it('requires authentication', async () => {
       const req = createMockRequest({
         params: { id: mockSessionId },
@@ -120,9 +111,8 @@ describe('Stage 0 API', () => {
           error: expect.objectContaining({
             code: 'UNAUTHORIZED',
           }),
-        })
+        }),
       );
     });
-
   });
 });

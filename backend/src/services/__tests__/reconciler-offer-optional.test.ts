@@ -21,10 +21,7 @@ function isDirectionReady(result: ReconcilerResult | null): boolean {
 
 // Helper function to test - mirrors the logic in reconciler.ts
 function shouldOfferSharing(action: string, suggestedShareFocus: string | null): boolean {
-  return (
-    action === 'OFFER_SHARING' ||
-    (action === 'OFFER_OPTIONAL' && !!suggestedShareFocus)
-  );
+  return action === 'OFFER_SHARING' || (action === 'OFFER_OPTIONAL' && !!suggestedShareFocus);
 }
 
 describe('OFFER_OPTIONAL Handling', () => {
@@ -91,7 +88,7 @@ describe('OFFER_OPTIONAL Handling', () => {
 // Helper to create mock ReconcilerResult
 function createMockResult(
   action: 'PROCEED' | 'OFFER_OPTIONAL' | 'OFFER_SHARING',
-  suggestedShareFocus: string | null
+  suggestedShareFocus: string | null,
 ): ReconcilerResult {
   return {
     alignment: {

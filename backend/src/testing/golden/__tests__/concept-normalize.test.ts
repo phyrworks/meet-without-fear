@@ -73,8 +73,12 @@ describe('concept labels — participants and conversations', () => {
   });
 
   it('is independent of the order rows arrive in', () => {
-    const a = buildConceptLabelMap(input({ message: [msg('m1', C_ADA, '2026-01-01 00:00:01'), msg('m2', C_ADA, '2026-01-01 00:00:02')] }));
-    const b = buildConceptLabelMap(input({ message: [msg('m2', C_ADA, '2026-01-01 00:00:02'), msg('m1', C_ADA, '2026-01-01 00:00:01')] }));
+    const a = buildConceptLabelMap(
+      input({ message: [msg('m1', C_ADA, '2026-01-01 00:00:01'), msg('m2', C_ADA, '2026-01-01 00:00:02')] }),
+    );
+    const b = buildConceptLabelMap(
+      input({ message: [msg('m2', C_ADA, '2026-01-01 00:00:02'), msg('m1', C_ADA, '2026-01-01 00:00:01')] }),
+    );
     expect([...a.labels.entries()].sort()).toEqual([...b.labels.entries()].sort());
   });
 });
@@ -154,7 +158,9 @@ describe('concept labels — messages', () => {
   });
 
   it('leaves a message with no conversation unresolved', () => {
-    const map = buildConceptLabelMap(input({ message: [msg('orphan', null as unknown as string, '2026-01-01 00:00:01')] }));
+    const map = buildConceptLabelMap(
+      input({ message: [msg('orphan', null as unknown as string, '2026-01-01 00:00:01')] }),
+    );
     expect(map.labels.has('orphan')).toBe(false);
   });
 });
@@ -187,7 +193,9 @@ describe('concept labels — content rows', () => {
   it('leaves an attempt with no resolvable subject unresolved, so the run fails', () => {
     const attempt = '33333333-3333-3333-3333-33333333bbbb';
     const map = buildConceptLabelMap(
-      input({ empathy_attempt: [{ id: attempt, author_participant_id: P_ADA, subject_participant_id: null, round: 1 }] }),
+      input({
+        empathy_attempt: [{ id: attempt, author_participant_id: P_ADA, subject_participant_id: null, round: 1 }],
+      }),
     );
     expect(map.labels.has(attempt)).toBe(false);
     expect(normalize({ id: attempt }, map).unresolved).toEqual([attempt]);
@@ -209,9 +217,9 @@ describe('conceptRowKey — structural row keys', () => {
   });
 
   it('renders a milestone row as <milestone:who@session/key>', () => {
-    expect(conceptRowKey('participant_milestone', { participant_id: '<participant:ada@main>', milestone_key: 'feel_heard' })).toBe(
-      '<milestone:ada@main/feel_heard>',
-    );
+    expect(
+      conceptRowKey('participant_milestone', { participant_id: '<participant:ada@main>', milestone_key: 'feel_heard' }),
+    ).toBe('<milestone:ada@main/feel_heard>');
   });
 
   it('renders other junctions from their labelled parts', () => {

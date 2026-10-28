@@ -44,7 +44,9 @@ describeTarget('the Stage 3 reveal gate on the target (mwf_app, the gate reply b
     if (run) await run.drop();
   });
   beforeEach(() => {
-    toolSpy = jest.spyOn(bedrock, 'getModelCompletionWithTools').mockResolvedValue({ text: null, toolInvocations: [] } as never);
+    toolSpy = jest
+      .spyOn(bedrock, 'getModelCompletionWithTools')
+      .mockResolvedValue({ text: null, toolInvocations: [] } as never);
     streamSpy = jest.spyOn(bedrock, 'getSonnetStreamingResponse');
   });
   afterEach(() => {
@@ -86,14 +88,18 @@ describeTarget('the Stage 3 reveal gate on the target (mwf_app, the gate reply b
     return { status: res.status, raw, events: raw.includes('event:') ? parseStreamEvents(raw) : ([] as StreamEvent[]) };
   };
   const chunkText = (events: StreamEvent[]) =>
-    events.filter((e): e is Extract<StreamEvent, { event: 'chunk' }> => e.event === 'chunk').map(c => c.data.text).join('');
+    events
+      .filter((e): e is Extract<StreamEvent, { event: 'chunk' }> => e.event === 'chunk')
+      .map(c => c.data.text)
+      .join('');
   const ownMessages = async (participantId: string) =>
     run.sql<{ role: string; content: string }>(
       `SELECT m.role::text AS role, m.content FROM message m JOIN conversation c ON c.id = m.conversation_id
        WHERE c.participant_id = $1 ORDER BY m.created_at, m.id`,
       [participantId],
     );
-  const milestones = async () => (await run.sql<{ n: number }>(`SELECT count(*)::int AS n FROM participant_milestone`))[0].n;
+  const milestones = async () =>
+    (await run.sql<{ n: number }>(`SELECT count(*)::int AS n FROM participant_milestone`))[0].n;
 
   const READY = "I'm ready to see the needs lists";
   let bobLabels: string[] = [];
@@ -115,13 +121,18 @@ describeTarget('the Stage 3 reveal gate on the target (mwf_app, the gate reply b
   };
 
   beforeAll(async () => {
-    bobLabels = (await run.sql<{ label: string }>(`SELECT label FROM need WHERE participant_id = $1`, [ids.bob])).map(r => r.label);
+    bobLabels = (await run.sql<{ label: string }>(`SELECT label FROM need WHERE participant_id = $1`, [ids.bob])).map(
+      r => r.label,
+    );
     expect(bobLabels.length).toBeGreaterThan(0);
   });
 
   it('a non-reveal turn and a negated reveal both go to the model', async () => {
     for (const content of ['I keep thinking about the weekend.', "I'm not ready to see the lists"]) {
-      stub([{ type: 'text', text: '<thinking>t</thinking>\n' }, { type: 'text', text: 'PROBE_TS12_MODEL_REPLY' }]);
+      stub([
+        { type: 'text', text: '<thinking>t</thinking>\n' },
+        { type: 'text', text: 'PROBE_TS12_MODEL_REPLY' },
+      ]);
       const t = await turn('ada', { content });
       expect(streamSpy).toHaveBeenCalled();
       expect(t.raw).toContain('PROBE_TS12_MODEL_REPLY');
@@ -131,19 +142,23 @@ describeTarget('the Stage 3 reveal gate on the target (mwf_app, the gate reply b
 
   it('the gate advances through own needs, own confirmation, own share, then the partner\u2019s share', async () => {
     const ms = (pid: string, key: string) =>
-      run.sql(`INSERT INTO participant_milestone (participant_id, milestone_key) VALUES ($1, $2) ON CONFLICT DO NOTHING`, [pid, key]);
+      run.sql(
+        `INSERT INTO participant_milestone (participant_id, milestone_key) VALUES ($1, $2) ON CONFLICT DO NOTHING`,
+        [pid, key],
+      );
 
     await run.sql(`UPDATE need SET deleted_at = now() WHERE participant_id = $1`, [ids.ada]);
     await gateTurn("Let's first put words to what matters most");
 
     await run.sql(`UPDATE need SET deleted_at = NULL, confirmed_at = NULL WHERE participant_id = $1`, [ids.ada]);
-    await run.sql(`DELETE FROM participant_milestone WHERE participant_id = $1 AND milestone_key = 'needs_confirmed'`, [ids.ada]);
+    await run.sql(`DELETE FROM participant_milestone WHERE participant_id = $1 AND milestone_key = 'needs_confirmed'`, [
+      ids.ada,
+    ]);
     await gateTurn('Please review and confirm your needs');
 
     await run.sql(`UPDATE need SET confirmed_at = now() WHERE participant_id = $1`, [ids.ada]);
     await ms(ids.ada, 'needs_confirmed');
     await gateTurn('you can choose to share them');
-
   });
 
   it('PINNED (stage shim, work-yk0q): own needs_shared is Stage 3’s terminal milestone, so the caller is in Stage 4 and the gate no longer answers', async () => {
@@ -152,8 +167,14 @@ describeTarget('the Stage 3 reveal gate on the target (mwf_app, the gate reply b
     // (TERMINAL_MILESTONE) ends the caller's Stage 3 at their own needs_shared.
     // Filed as work-yk0q (stage shim): when the shim ends Stage 3 at both-shared, this pin must
     // flip to asserting the gate's "wait for your partner" answer.
-    await run.sql(`INSERT INTO participant_milestone (participant_id, milestone_key) VALUES ($1, 'needs_shared') ON CONFLICT DO NOTHING`, [ids.ada]);
-    stub([{ type: 'text', text: '<thinking>t</thinking>\n' }, { type: 'text', text: 'PROBE_TS12_MODEL_REPLY' }]);
+    await run.sql(
+      `INSERT INTO participant_milestone (participant_id, milestone_key) VALUES ($1, 'needs_shared') ON CONFLICT DO NOTHING`,
+      [ids.ada],
+    );
+    stub([
+      { type: 'text', text: '<thinking>t</thinking>\n' },
+      { type: 'text', text: 'PROBE_TS12_MODEL_REPLY' },
+    ]);
     const t = await turn('ada', { content: READY });
     expect(streamSpy).toHaveBeenCalled();
     expect(t.raw).toContain('PROBE_TS12_MODEL_REPLY');

@@ -5,13 +5,7 @@ import {
   applyFieldEncryption,
   SENSITIVE_FIELD_MAP,
 } from '../prisma-encryption-middleware';
-import {
-  encrypt,
-  decrypt,
-  isEncrypted,
-  FieldDecryptionError,
-  _resetForTesting,
-} from '../../utils/field-encryption';
+import { encrypt, decrypt, isEncrypted, FieldDecryptionError, _resetForTesting } from '../../utils/field-encryption';
 import { contentHash } from '../../utils/content-hash';
 
 const TEST_KEY = crypto.randomBytes(32).toString('base64');
@@ -195,7 +189,7 @@ describe('prisma-encryption-middleware', () => {
 
         const original = { ...data };
         for (const field of config.jsonFields) {
-          original[field] = { ...data[field] as object };
+          original[field] = { ...(data[field] as object) };
         }
 
         encryptDataFields(data, config);
@@ -281,7 +275,7 @@ describe('prisma-encryption-middleware', () => {
       };
       await applyFieldEncryption({ model: 'Message', operation: 'create', args, query });
 
-      const data = (captured[0].data as Record<string, unknown>);
+      const data = captured[0].data as Record<string, unknown>;
       expect(data.contentHash).toBe(contentHash('a system message'));
       expect(isEncrypted(data.content as string)).toBe(true);
     });
@@ -293,7 +287,7 @@ describe('prisma-encryption-middleware', () => {
       const args: Record<string, unknown> = { data: { content: 'a system message' } };
       await applyFieldEncryption({ model: 'Message', operation: 'create', args, query });
 
-      const data = (captured[0].data as Record<string, unknown>);
+      const data = captured[0].data as Record<string, unknown>;
       expect(data.contentHash).toBe(contentHash('a system message'));
       expect(data.content).toBe('a system message');
     });
@@ -317,7 +311,7 @@ describe('prisma-encryption-middleware', () => {
       };
       await applyFieldEncryption({ model: 'Message', operation: 'update', args, query });
 
-      const data = (captured[0].data as Record<string, unknown>);
+      const data = captured[0].data as Record<string, unknown>;
       expect(data.contentHash).toBe(contentHash('edited content'));
     });
 
@@ -329,12 +323,8 @@ describe('prisma-encryption-middleware', () => {
       };
       await applyFieldEncryption({ model: 'Message', operation: 'upsert', args, query });
 
-      expect((captured[0].create as Record<string, unknown>).contentHash).toBe(
-        contentHash('created'),
-      );
-      expect((captured[0].update as Record<string, unknown>).contentHash).toBe(
-        contentHash('updated'),
-      );
+      expect((captured[0].create as Record<string, unknown>).contentHash).toBe(contentHash('created'));
+      expect((captured[0].update as Record<string, unknown>).contentHash).toBe(contentHash('updated'));
     });
 
     it('leaves contentHash alone on an update that does not touch content', async () => {

@@ -68,7 +68,9 @@ describeTarget('reflection cluster on the target, as mwf_app with identity bindi
     const bobGet = await http(bob, 'get', `/inner-thoughts/${reflectionId}`);
     expect(bobGet.status).toBe(400);
     expect(JSON.stringify(bobGet.body)).not.toContain('Keeping score');
-    expect((await http(bob, 'get', `/sessions/${ids.session}/inner-thoughts`)).body.data).toEqual({ innerThoughtsSessionId: null });
+    expect((await http(bob, 'get', `/sessions/${ids.session}/inner-thoughts`)).body.data).toEqual({
+      innerThoughtsSessionId: null,
+    });
 
     const adaGet = await http(ada, 'get', `/inner-thoughts/${reflectionId}`);
     expect(adaGet.status).toBe(200);
@@ -93,36 +95,63 @@ describeTarget('reflection cluster on the target, as mwf_app with identity bindi
     ]);
     expect((await http(bob, 'get', `/inner-thoughts/${reflectionId}/takeaways`)).status).toBe(404);
     expect((await http(bob, 'get', `/knowledge-base/recent`)).body.data.takeaways).toEqual([]);
-    expect((await http(ada, 'get', `/knowledge-base/recent`)).body.data.takeaways.map((t: { id: string }) => t.id).sort()).toEqual(
-      [takeaway.insight, takeaway.action].sort(),
-    );
+    expect(
+      (await http(ada, 'get', `/knowledge-base/recent`)).body.data.takeaways.map((t: { id: string }) => t.id).sort(),
+    ).toEqual([takeaway.insight, takeaway.action].sort());
   });
 
   it('links: composite id, both directions, owner only, USER_MANUAL only deletes', async () => {
-    const created = await http(ada, 'post', `/knowledge-base/takeaways/${takeaway.insight}/links`, { targetId: takeaway.action });
+    const created = await http(ada, 'post', `/knowledge-base/takeaways/${takeaway.insight}/links`, {
+      targetId: takeaway.action,
+    });
     expect(created.status).toBe(201);
     const linkId = `${takeaway.insight}.${takeaway.action}`;
-    expect(created.body.data.link).toMatchObject({ id: linkId, linkType: 'USER_MANUAL', linkedTakeaway: { id: takeaway.action } });
-    expect((await http(ada, 'post', `/knowledge-base/takeaways/${takeaway.insight}/links`, { targetId: takeaway.action })).status).toBe(409);
+    expect(created.body.data.link).toMatchObject({
+      id: linkId,
+      linkType: 'USER_MANUAL',
+      linkedTakeaway: { id: takeaway.action },
+    });
+    expect(
+      (await http(ada, 'post', `/knowledge-base/takeaways/${takeaway.insight}/links`, { targetId: takeaway.action }))
+        .status,
+    ).toBe(409);
 
     const fromTarget = await http(ada, 'get', `/knowledge-base/takeaways/${takeaway.action}/links`);
-    expect(fromTarget.body.data.links.map((l: { id: string; linkedTakeaway: { id: string } }) => [l.id, l.linkedTakeaway.id])).toEqual([
-      [linkId, takeaway.insight],
-    ]);
+    expect(
+      fromTarget.body.data.links.map((l: { id: string; linkedTakeaway: { id: string } }) => [
+        l.id,
+        l.linkedTakeaway.id,
+      ]),
+    ).toEqual([[linkId, takeaway.insight]]);
     const thread = await http(ada, 'get', `/knowledge-base/takeaways/${takeaway.insight}/thread`);
     expect(thread.body.data.thread.map((t: { id: string }) => t.id)).toEqual([takeaway.action]);
 
     expect((await http(bob, 'get', `/knowledge-base/takeaways/${takeaway.action}/links`)).status).toBe(404);
-    expect((await http(bob, 'post', `/knowledge-base/takeaways/${takeaway.insight}/links`, { targetId: takeaway.action })).status).toBe(404);
-    expect((await http(bob, 'delete', `/knowledge-base/takeaways/${takeaway.insight}/links/${linkId}`)).status).toBe(404);
+    expect(
+      (await http(bob, 'post', `/knowledge-base/takeaways/${takeaway.insight}/links`, { targetId: takeaway.action }))
+        .status,
+    ).toBe(404);
+    expect((await http(bob, 'delete', `/knowledge-base/takeaways/${takeaway.insight}/links/${linkId}`)).status).toBe(
+      404,
+    );
 
     // An AI link cannot be deleted by the user.
-    await run.sql(`INSERT INTO takeaway_link (source_id, target_id, link_type, similarity) VALUES ($1, $2, 'AI_SEMANTIC', 0.8)`, [
-      takeaway.action,
-      takeaway.insight,
-    ]);
-    expect((await http(ada, 'delete', `/knowledge-base/takeaways/${takeaway.action}/links/${takeaway.action}.${takeaway.insight}`)).status).toBe(400);
-    expect((await http(ada, 'delete', `/knowledge-base/takeaways/${takeaway.insight}/links/${linkId}`)).status).toBe(200);
+    await run.sql(
+      `INSERT INTO takeaway_link (source_id, target_id, link_type, similarity) VALUES ($1, $2, 'AI_SEMANTIC', 0.8)`,
+      [takeaway.action, takeaway.insight],
+    );
+    expect(
+      (
+        await http(
+          ada,
+          'delete',
+          `/knowledge-base/takeaways/${takeaway.action}/links/${takeaway.action}.${takeaway.insight}`,
+        )
+      ).status,
+    ).toBe(400);
+    expect((await http(ada, 'delete', `/knowledge-base/takeaways/${takeaway.insight}/links/${linkId}`)).status).toBe(
+      200,
+    );
     expect(await run.sql(`SELECT link_type::text AS t FROM takeaway_link ORDER BY 1`)).toEqual([{ t: 'AI_SEMANTIC' }]);
   });
 
@@ -131,9 +160,11 @@ describeTarget('reflection cluster on the target, as mwf_app with identity bindi
     expect(r1.status).toBe(200);
     expect(r1.body.data.takeaway.resolved).toBe(true);
     expect(r1.body.data.takeaway.resolvedAt).not.toBeNull();
-    expect((await http(ada, 'get', `/knowledge-base/actions?status=resolved`)).body.data.actions.map((a: { id: string }) => a.id)).toEqual([
-      takeaway.action,
-    ]);
+    expect(
+      (await http(ada, 'get', `/knowledge-base/actions?status=resolved`)).body.data.actions.map(
+        (a: { id: string }) => a.id,
+      ),
+    ).toEqual([takeaway.action]);
     expect((await http(ada, 'get', `/knowledge-base/actions?status=open`)).body.data.actions).toEqual([]);
     expect((await http(bob, 'patch', `/knowledge-base/takeaways/${takeaway.action}/resolve`)).status).toBe(404);
     const r2 = await http(ada, 'patch', `/knowledge-base/takeaways/${takeaway.action}/resolve`);
@@ -161,9 +192,10 @@ describeTarget('reflection cluster on the target, as mwf_app with identity bindi
         { content: 'PROBE_DISTILLED two', type: 'action_item' },
       ],
     } as never);
-    await run.sql(`INSERT INTO reflection_message (reflection_id, role, content) VALUES ($1, 'USER', 'a second line of mine')`, [
-      reflectionId,
-    ]);
+    await run.sql(
+      `INSERT INTO reflection_message (reflection_id, role, content) VALUES ($1, 'USER', 'a second line of mine')`,
+      [reflectionId],
+    );
     expect((await http(bob, 'post', `/inner-thoughts/${reflectionId}/distill`)).status).toBe(404);
     const res = await http(ada, 'post', `/inner-thoughts/${reflectionId}/distill`);
     expect(res.status).toBe(200);
@@ -177,7 +209,10 @@ describeTarget('reflection cluster on the target, as mwf_app with identity bindi
       { content: 'PROBE_TAKEAWAY_ACTION ask Bob to split the Sunday chores', source: 'USER', type: 'ACTION_ITEM' },
     ]);
     expect(res.body.data.takeaways).toHaveLength(3);
-    const [r] = await run.sql<{ distilled: boolean }>(`SELECT distilled_at IS NOT NULL AS distilled FROM reflection WHERE id = $1`, [reflectionId]);
+    const [r] = await run.sql<{ distilled: boolean }>(
+      `SELECT distilled_at IS NOT NULL AS distilled FROM reflection WHERE id = $1`,
+      [reflectionId],
+    );
     expect(r.distilled).toBe(true);
   });
 

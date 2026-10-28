@@ -16,7 +16,7 @@ describe('isExplicitAskForInput', () => {
   it.each([
     'what should I do?',
     'What should I do here, honestly',
-    "help me think about this please",
+    'help me think about this please',
     'Can you weigh in?',
     'weigh in on this',
     'any advice?',
@@ -27,7 +27,7 @@ describe('isExplicitAskForInput', () => {
     'what would you do',
     'give me your take',
     'give me advice',
-  ])('matches explicit ask: %s', (text) => {
+  ])('matches explicit ask: %s', text => {
     expect(isExplicitAskForInput(text)).toBe(true);
   });
 
@@ -38,7 +38,7 @@ describe('isExplicitAskForInput', () => {
     'I stopped doing it last week.',
     "I don't know what to feel.",
     'what a day',
-  ])('does not match passive/reflective text: %s', (text) => {
+  ])('does not match passive/reflective text: %s', text => {
     expect(isExplicitAskForInput(text)).toBe(false);
   });
 });
@@ -136,9 +136,7 @@ describe('Tending conversation prompt support', () => {
         { id: 'entry-1', summary: 'Weekly walk', scope: 'SHARED', successCriteria: 'Both feel less alone.' },
         { id: 'entry-2', summary: 'Saturday mornings', scope: 'INDIVIDUAL' },
       ],
-      needs: [
-        { id: 'need-1', label: 'not being alone on the inside' },
-      ],
+      needs: [{ id: 'need-1', label: 'not being alone on the inside' }],
       selectedBetweenPeriodNotes: [
         {
           id: 'note-1',

@@ -2,8 +2,8 @@ import { detectMemoryIntent, detectMemoryIntentMock } from '../memory-detector';
 
 // Mock circuit breaker to execute immediately without timeout
 jest.mock('../../utils/circuit-breaker', () => ({
-  withHaikuCircuitBreaker: jest.fn().mockImplementation(async (fn) => fn()),
-  withTimeout: jest.fn().mockImplementation(async (fn) => fn()),
+  withHaikuCircuitBreaker: jest.fn().mockImplementation(async fn => fn()),
+  withTimeout: jest.fn().mockImplementation(async fn => fn()),
   HAIKU_TIMEOUT_MS: 20000,
 }));
 
@@ -140,9 +140,7 @@ describe('Memory Detector Service', () => {
 
     describe('No memory intent', () => {
       it('returns no suggestions for regular messages', () => {
-        const result = detectMemoryIntentMock(
-          "I'm feeling frustrated with my partner"
-        );
+        const result = detectMemoryIntentMock("I'm feeling frustrated with my partner");
 
         expect(result.hasMemoryIntent).toBe(false);
         expect(result.suggestions).toHaveLength(0);
@@ -165,14 +163,12 @@ describe('Memory Detector Service', () => {
 
     describe('Multiple detections', () => {
       it('can detect multiple memory intents in one message', () => {
-        const result = detectMemoryIntentMock(
-          "Call me Alex. My partner's name is Jordan. Keep responses brief."
-        );
+        const result = detectMemoryIntentMock("Call me Alex. My partner's name is Jordan. Keep responses brief.");
 
         expect(result.hasMemoryIntent).toBe(true);
         expect(result.suggestions.length).toBeGreaterThanOrEqual(2);
 
-        const categories = result.suggestions.map((s) => s.category);
+        const categories = result.suggestions.map(s => s.category);
         expect(categories).toContain('PERSONAL_INFO');
         expect(categories).toContain('RELATIONSHIP');
       });
@@ -210,9 +206,7 @@ describe('Memory Detector Service', () => {
 
     it('returns empty result when Haiku is unavailable', async () => {
       // Without AWS credentials, Haiku will return null
-      const result = await detectMemoryIntent(
-        "I'll call you Alex and keep responses short"
-      );
+      const result = await detectMemoryIntent("I'll call you Alex and keep responses short");
 
       // Should return a valid result structure even without Haiku
       expect(result).toHaveProperty('hasMemoryIntent');

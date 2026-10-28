@@ -118,8 +118,8 @@ describe('stream-turn-model', () => {
       (getSonnetStreamingResponse as jest.Mock).mockReturnValue(
         streamOf(
           { type: 'tool_use', toolUseId: 't1', name: SESSION_STATE_TOOL_NAME, input: { topicFrame: 'second' } },
-          text('visible')
-        )
+          text('visible'),
+        ),
       );
 
       const result = await runStreamTurnModel(params());
@@ -131,8 +131,8 @@ describe('stream-turn-model', () => {
       (getSonnetStreamingResponse as jest.Mock).mockReturnValue(
         streamOf(
           { type: 'tool_use', toolUseId: 't1', name: 'delete_everything', input: { topicFrame: 'evil' } },
-          text('visible')
-        )
+          text('visible'),
+        ),
       );
 
       const result = await runStreamTurnModel(params());
@@ -207,7 +207,7 @@ describe('stream-turn-model', () => {
 
     it('captures hidden tags from the visible stream for post-stream resolution', async () => {
       (getSonnetStreamingResponse as jest.Mock).mockReturnValue(
-        streamOf(text('<thinking>secret plan</thinking><draft>a draft</draft>Visible text.'))
+        streamOf(text('<thinking>secret plan</thinking><draft>a draft</draft>Visible text.')),
       );
 
       const result = await runStreamTurnModel(params());
@@ -220,7 +220,7 @@ describe('stream-turn-model', () => {
   describe('hidden reasoning never reaches the client', () => {
     it('does not emit thinking content', async () => {
       (getSonnetStreamingResponse as jest.Mock).mockReturnValue(
-        streamOf(text('<thinking>internal reasoning</thinking>Visible answer.'))
+        streamOf(text('<thinking>internal reasoning</thinking>Visible answer.')),
       );
       const emitVisibleChunk = jest.fn();
 
@@ -235,7 +235,7 @@ describe('stream-turn-model', () => {
 
     it('keeps unterminated thinking hidden rather than flushing it', async () => {
       (getSonnetStreamingResponse as jest.Mock).mockReturnValue(
-        streamOf(text('<thinking>reasoning that never closes'))
+        streamOf(text('<thinking>reasoning that never closes')),
       );
 
       const result = await runStreamTurnModel(params());
@@ -244,14 +244,10 @@ describe('stream-turn-model', () => {
     });
 
     it('emits accumulated text equal to the concatenation of emitted chunks', async () => {
-      (getSonnetStreamingResponse as jest.Mock).mockReturnValue(
-        streamOf(text('Part one. '), text('Part two.'))
-      );
+      (getSonnetStreamingResponse as jest.Mock).mockReturnValue(streamOf(text('Part one. '), text('Part two.')));
       const emitted: string[] = [];
 
-      const result = await runStreamTurnModel(
-        params({ emitVisibleChunk: (t: string) => emitted.push(t) })
-      );
+      const result = await runStreamTurnModel(params({ emitVisibleChunk: (t: string) => emitted.push(t) }));
 
       // Assert the actual content too: without this, deleting both emission
       // and accumulation would leave '' === '' and pass.
@@ -271,17 +267,13 @@ describe('stream-turn-model', () => {
     const THIRD = 'It kept happening all week.';
 
     it('stops emitting once the client is gone', async () => {
-      (getSonnetStreamingResponse as jest.Mock).mockReturnValue(
-        streamOf(text(FIRST), text(SECOND), text(THIRD))
-      );
+      (getSonnetStreamingResponse as jest.Mock).mockReturnValue(streamOf(text(FIRST), text(SECOND), text(THIRD)));
       let disconnected = false;
       const emitVisibleChunk = jest.fn(() => {
         disconnected = true; // disconnect right after the first emission
       });
 
-      await runStreamTurnModel(
-        params({ emitVisibleChunk, isClientDisconnected: () => disconnected })
-      );
+      await runStreamTurnModel(params({ emitVisibleChunk, isClientDisconnected: () => disconnected }));
 
       expect(emitVisibleChunk).toHaveBeenCalledTimes(1);
     });
@@ -299,17 +291,13 @@ describe('stream-turn-model', () => {
      * reason.
      */
     it('drops post-disconnect text from the returned response, not just from the wire', async () => {
-      (getSonnetStreamingResponse as jest.Mock).mockReturnValue(
-        streamOf(text(FIRST), text(SECOND), text(THIRD))
-      );
+      (getSonnetStreamingResponse as jest.Mock).mockReturnValue(streamOf(text(FIRST), text(SECOND), text(THIRD)));
       let disconnected = false;
       const emitVisibleChunk = jest.fn(() => {
         disconnected = true;
       });
 
-      const result = await runStreamTurnModel(
-        params({ emitVisibleChunk, isClientDisconnected: () => disconnected })
-      );
+      const result = await runStreamTurnModel(params({ emitVisibleChunk, isClientDisconnected: () => disconnected }));
 
       const full = `${FIRST}${SECOND}${THIRD}`;
       expect(result.accumulatedText.length).toBeGreaterThan(0);
@@ -319,9 +307,7 @@ describe('stream-turn-model', () => {
     });
 
     it('reads the disconnect state fresh on every emission rather than capturing it once', async () => {
-      (getSonnetStreamingResponse as jest.Mock).mockReturnValue(
-        streamOf(text(FIRST), text(SECOND), text(THIRD))
-      );
+      (getSonnetStreamingResponse as jest.Mock).mockReturnValue(streamOf(text(FIRST), text(SECOND), text(THIRD)));
       let checks = 0;
 
       await runStreamTurnModel(
@@ -331,7 +317,7 @@ describe('stream-turn-model', () => {
             checks += 1;
             return false;
           },
-        })
+        }),
       );
 
       // Consulted per emission attempt, not read once up front.
@@ -342,7 +328,7 @@ describe('stream-turn-model', () => {
   describe('stream failure', () => {
     it('throws when the generator reports an error on the done event', async () => {
       (getSonnetStreamingResponse as jest.Mock).mockReturnValue(
-        streamOf(text('partial'), { type: 'done', error: 'upstream exploded' })
+        streamOf(text('partial'), { type: 'done', error: 'upstream exploded' }),
       );
 
       await expect(runStreamTurnModel(params())).rejects.toThrow('upstream exploded');

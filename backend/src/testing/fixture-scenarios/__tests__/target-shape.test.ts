@@ -37,7 +37,12 @@ describe('target writer — pure helpers', () => {
     const rows = milestoneRows(ada, t, t(ada.journey!.startedAt!));
     expect(rows.find(r => r.key === 'invitation_sent')?.reachedAt).toEqual(t(ada.journey!.startedAt!));
     expect(rows.find(r => r.key === 'empathy_submitted')?.reachedAt).toEqual(t(ada.milestones.empathy_submitted!));
-    expect(rows.map(r => r.key).sort()).toEqual(['compact_signed', 'empathy_submitted', 'feel_heard', 'invitation_sent']);
+    expect(rows.map(r => r.key).sort()).toEqual([
+      'compact_signed',
+      'empathy_submitted',
+      'feel_heard',
+      'invitation_sent',
+    ]);
   });
 
   it('gives a VALIDATED attempt without a reveal instant its validation instant (target CHECK)', () => {
@@ -49,7 +54,10 @@ describe('target writer — pure helpers', () => {
 
   it('covers every stage since TS-11 (the repair stage included; a ranking writes nothing — R25)', () => {
     for (const stage of Object.values(TargetStage)) {
-      expect({ stage, unsupported: unsupportedFeatures(scenarioFor(stage, { a: 'A', b: 'B' })) }).toEqual({ stage, unsupported: [] });
+      expect({ stage, unsupported: unsupportedFeatures(scenarioFor(stage, { a: 'A', b: 'B' })) }).toEqual({
+        stage,
+        unsupported: [],
+      });
     }
   });
 });
@@ -65,7 +73,9 @@ describeTarget('target writer — FEEL_HEARD_B as written (target fixture templa
     const fx = await restoreFixture({ baseUrl: BASE_URL, stage: 'FEEL_HEARD_B', runId: `writer_${process.pid}` });
     try {
       const q = async (sql: string) => withClient(fx.target, async c => (await c.query(sql)).rows, fx.database);
-      expect(await q(`SELECT kind::text, count(*)::int AS n FROM conversation GROUP BY kind`)).toEqual([{ kind: 'MAIN', n: 2 }]);
+      expect(await q(`SELECT kind::text, count(*)::int AS n FROM conversation GROUP BY kind`)).toEqual([
+        { kind: 'MAIN', n: 2 },
+      ]);
       expect(
         await q(
           `SELECT u.email, array_agg(pm.milestone_key ORDER BY pm.milestone_key) AS keys
@@ -77,7 +87,10 @@ describeTarget('target writer — FEEL_HEARD_B as written (target fixture templa
         { email: 'bob@e2e.test', keys: ['compact_signed', 'feel_heard'] },
       ]);
       expect(await q(`SELECT count(*)::int AS n FROM message`)).toEqual([{ n: 23 }]);
-      expect(await q(`SELECT name FROM "user" ORDER BY email`)).toEqual([{ name: 'Ada Lovelace' }, { name: 'Bob Ross' }]);
+      expect(await q(`SELECT name FROM "user" ORDER BY email`)).toEqual([
+        { name: 'Ada Lovelace' },
+        { name: 'Bob Ross' },
+      ]);
       // Every message is in its owner's conversation: the sender, when there is one, owns it — except the AI.
       expect(
         await q(

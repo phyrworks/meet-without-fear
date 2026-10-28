@@ -28,7 +28,10 @@ describeTarget('Stage 4 capture on the target (mwf_app, identity-bound)', () => 
   let ctx: typeof import('../../lib/request-context');
   let capture: typeof import('../stage4-capture.service');
   const asAda = <T>(fn: () => Promise<T>): Promise<T> =>
-    ctx.runWithContext({ turnId: 't', requestId: 'r', startTime: Date.now(), userId: ids.adaUser }, async () => await fn());
+    ctx.runWithContext(
+      { turnId: 't', requestId: 'r', startTime: Date.now(), userId: ids.adaUser },
+      async () => await fn(),
+    );
   const turn = (over: Partial<Parameters<typeof capture.captureStage4Turn>[0]>) =>
     asAda(() =>
       capture.captureStage4Turn({
@@ -40,7 +43,14 @@ describeTarget('Stage 4 capture on the target (mwf_app, identity-bound)', () => 
         ...over,
       }),
     );
-  type P = { id: string; description: string; kind: string; status: string; owner: string | null; duration: string | null };
+  type P = {
+    id: string;
+    description: string;
+    kind: string;
+    status: string;
+    owner: string | null;
+    duration: string | null;
+  };
   const proposals = () =>
     run.sql<P>(
       `SELECT id, description, kind::text AS kind, status::text AS status, created_by_participant_id AS owner, duration
@@ -69,7 +79,12 @@ describeTarget('Stage 4 capture on the target (mwf_app, identity-bound)', () => 
     expect(result.appliedOperationCount).toBe(1);
     const added = (await proposals()).filter(p => !before.some(b => b.id === p.id));
     expect(added).toHaveLength(1);
-    expect(added[0]).toMatchObject({ description: 'send a Sunday planning text each week for a month', kind: 'INDIVIDUAL_COMMITMENT', status: 'ACTIVE', owner: ids.ada });
+    expect(added[0]).toMatchObject({
+      description: 'send a Sunday planning text each week for a month',
+      kind: 'INDIVIDUAL_COMMITMENT',
+      status: 'ACTIVE',
+      owner: ids.ada,
+    });
     expect(await revisions(added[0].id)).toEqual([{ action: 'CREATED', actor: ids.ada }]);
   });
 
@@ -82,10 +97,20 @@ describeTarget('Stage 4 capture on the target (mwf_app, identity-bound)', () => 
         userMessage: 'ok sure',
         topicFrame: "Ada's son leaves his bike on Bob's lawn",
         structuredProposals: [
-          { action: 'ADD', classification: 'PROPOSAL', description: "When her son leaves his bike on Bob's lawn, Ada moves it immediately", kind: 'INDIVIDUAL_COMMITMENT', needsAddressed: [] },
+          {
+            action: 'ADD',
+            classification: 'PROPOSAL',
+            description: "When her son leaves his bike on Bob's lawn, Ada moves it immediately",
+            kind: 'INDIVIDUAL_COMMITMENT',
+            needsAddressed: [],
+          },
         ],
       },
-      { userMessage: 'I can water the plants each week for a month.', structuredProposals: [], compatibilityProposedStrategies: ['water the plants each week for a month'] },
+      {
+        userMessage: 'I can water the plants each week for a month.',
+        structuredProposals: [],
+        compatibilityProposedStrategies: ['water the plants each week for a month'],
+      },
     ]) {
       const result = await turn(over as never);
       expect(result.appliedOperationCount).toBe(0);
@@ -96,7 +121,8 @@ describeTarget('Stage 4 capture on the target (mwf_app, identity-bound)', () => 
   it('a typed block wins over text inference: one SHARED proposal with its duration, linked to Ada’s shared need by label', async () => {
     const before = await proposals();
     const result = await turn({
-      userMessage: 'I can own that I got sharp sometimes. What I would actually try is one quiet conversation this Friday without the kids in the room.',
+      userMessage:
+        'I can own that I got sharp sometimes. What I would actually try is one quiet conversation this Friday without the kids in the room.',
       structuredProposals: [
         { action: 'IGNORE', classification: 'REFLECTION', description: 'I can own that I got sharp sometimes' },
         {
@@ -112,7 +138,13 @@ describeTarget('Stage 4 capture on the target (mwf_app, identity-bound)', () => 
     });
     expect(result.appliedOperationCount).toBe(1);
     const added = (await proposals()).filter(p => !before.some(b => b.id === p.id));
-    expect(added).toEqual([expect.objectContaining({ description: 'one quiet conversation this Friday without the kids in the room', kind: 'SHARED_PROPOSAL', duration: 'this Friday' })]);
+    expect(added).toEqual([
+      expect.objectContaining({
+        description: 'one quiet conversation this Friday without the kids in the room',
+        kind: 'SHARED_PROPOSAL',
+        duration: 'this Friday',
+      }),
+    ]);
     const links = await run.sql<{ label: string }>(
       `SELECT n.label FROM proposal_need pn JOIN need n ON n.id = pn.need_id WHERE pn.proposal_id = $1`,
       [added[0].id],
@@ -122,18 +154,27 @@ describeTarget('Stage 4 capture on the target (mwf_app, identity-bound)', () => 
 
   it('removing a referenced proposal is a soft remove by Ada with a REMOVED revision', async () => {
     const target = (await proposals()).find(p => p.description.startsWith('Use a pause phrase'))!;
-    const result = await turn({ userMessage: 'Please remove the proposal "Use a pause phrase when either person starts to shut down".' });
+    const result = await turn({
+      userMessage: 'Please remove the proposal "Use a pause phrase when either person starts to shut down".',
+    });
     expect(result.appliedOperationCount).toBe(1);
     const [row] = await run.sql<{ status: string; by: string; reason: string }>(
       `SELECT status::text AS status, removed_by_participant_id AS by, removal_reason AS reason FROM proposal WHERE id = $1`,
       [target.id],
     );
-    expect(row).toEqual({ status: 'REMOVED', by: ids.ada, reason: 'Please remove the proposal "Use a pause phrase when either person starts to shut down".' });
+    expect(row).toEqual({
+      status: 'REMOVED',
+      by: ids.ada,
+      reason: 'Please remove the proposal "Use a pause phrase when either person starts to shut down".',
+    });
     expect((await revisions(target.id)).map(r => r.action)).toContain('REMOVED');
   });
 
   it('“complete enough to start” is not a closure signal', async () => {
-    const result = await turn({ userMessage: 'That feels complete enough to start. I am nervous, but this list feels small enough that I could actually try it.' });
+    const result = await turn({
+      userMessage:
+        'That feels complete enough to start. I am nervous, but this list feels small enough that I could actually try it.',
+    });
     expect(result.closureSignal).toBeUndefined();
   });
 });

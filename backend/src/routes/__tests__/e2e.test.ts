@@ -33,8 +33,6 @@ describe('E2E Routes', () => {
   });
 
   describe('POST /api/e2e/cleanup', () => {
-
-
     it('returns 403 when E2E_AUTH_BYPASS is not enabled', async () => {
       process.env.E2E_AUTH_BYPASS = 'false';
 
@@ -55,7 +53,6 @@ describe('E2E Routes', () => {
   });
 
   describe('POST /api/e2e/seed', () => {
-
     it('returns 400 if email does not end with @e2e.test', async () => {
       const req = {
         body: { email: 'test@example.com', name: 'Test User' },
@@ -109,6 +106,5 @@ describe('E2E Routes', () => {
         error: 'E2E seed only available when E2E_AUTH_BYPASS is enabled',
       });
     });
-
   });
 });

@@ -85,7 +85,13 @@ export const REFLECTION_NEVER_CROSSES_BYTE_TARGET_ALLOW: AllowList = {
     ...bodyRules(false),
     ...targetByteRules({
       addedTables: [
-        { step: R1_TURN_STEP, table: 'draft', kind: 'added', count: 1, why: "the mock response's proposed statement (mockTurnIndex): Bob's first EMPATHY draft" },
+        {
+          step: R1_TURN_STEP,
+          table: 'draft',
+          kind: 'added',
+          count: 1,
+          why: "the mock response's proposed statement (mockTurnIndex): Bob's first EMPATHY draft",
+        },
       ],
     }),
   ],

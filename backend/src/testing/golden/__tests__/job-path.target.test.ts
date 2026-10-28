@@ -56,8 +56,12 @@ describeTarget('job path on the target, as mwf_job with identity binding on', ()
   // message stays unreadable to the job.
   it('the job login reads exactly the message columns its grants name (R35 adds role, content, sender)', async () => {
     const { getJobPrisma } = await import('../../../lib/prisma');
-    await expect(getJobPrisma().$queryRaw`SELECT content_hash FROM message LIMIT 1`).rejects.toThrow(/permission denied/);
-    await expect(getJobPrisma().$queryRaw`SELECT refining_need_id FROM message LIMIT 1`).rejects.toThrow(/permission denied/);
+    await expect(getJobPrisma().$queryRaw`SELECT content_hash FROM message LIMIT 1`).rejects.toThrow(
+      /permission denied/,
+    );
+    await expect(getJobPrisma().$queryRaw`SELECT refining_need_id FROM message LIMIT 1`).rejects.toThrow(
+      /permission denied/,
+    );
     await expect(getJobPrisma().$queryRaw`SELECT * FROM message LIMIT 1`).rejects.toThrow(/permission denied/);
     const ok = await getJobPrisma().$queryRaw<Array<{ n: number }>>`SELECT count(id)::int AS n FROM message
       WHERE role IS NOT NULL AND content IS NOT NULL AND (sender_participant_id IS NULL OR sender_participant_id IS NOT NULL)`;
@@ -101,7 +105,9 @@ describeTarget('job path on the target, as mwf_job with identity binding on', ()
 
   it('the job client is mwf_job on the run database, and identity binding is on', async () => {
     const { getJobPrisma } = await import('../../../lib/prisma');
-    const [who] = await getJobPrisma().$queryRaw<Array<{ u: string; db: string }>>`SELECT session_user AS u, current_database() AS db`;
+    const [who] = await getJobPrisma().$queryRaw<
+      Array<{ u: string; db: string }>
+    >`SELECT session_user AS u, current_database() AS db`;
     expect(who).toEqual({ u: 'mwf_job', db: harness.fixture.database });
     expect(process.env.DB_IDENTITY_BINDING).toBe('on');
   });
@@ -115,7 +121,8 @@ describeTarget('job path on the target, as mwf_job with identity binding on', ()
       tables: ['message'],
       sse: true,
       asyncBoundary: true,
-      call: agent => agent.post(`/api/v1/sessions/${harness.sessionId}/messages/stream`).send({ content: 'TS9_JOB_TURN' }),
+      call: agent =>
+        agent.post(`/api/v1/sessions/${harness.sessionId}/messages/stream`).send({ content: 'TS9_JOB_TURN' }),
     });
     expect(step.status).toBe(200);
     const events = (step.sse ?? []).map(e => e.event);
@@ -125,7 +132,13 @@ describeTarget('job path on the target, as mwf_job with identity binding on', ()
     const after = await counts();
     const delta = Object.fromEntries(after.map(a => [a.email, a.n - (before.find(b => b.email === a.email)?.n ?? 0)]));
     expect(delta).toEqual({ 'ada@e2e.test': 2, 'bob@e2e.test': 0 });
-    const written = await rows<{ role: string; kind: string; sender: string | null; content: string; hash: string | null }>(
+    const written = await rows<{
+      role: string;
+      kind: string;
+      sender: string | null;
+      content: string;
+      hash: string | null;
+    }>(
       `SELECT m.role::text AS role, m.kind::text AS kind, u.email AS sender, m.content, m.content_hash AS hash
        FROM message m LEFT JOIN participant p ON p.id = m.sender_participant_id LEFT JOIN "user" u ON u.id = p.user_id
        ORDER BY m.created_at DESC, m.id DESC LIMIT 2`,
@@ -147,9 +160,14 @@ describeTarget('job path on the target, as mwf_job with identity binding on', ()
        WHERE pm.participant_id = p.id AND p.user_id = u.id AND u.email = 'bob@e2e.test' AND pm.milestone_key = 'feel_heard'`,
     );
     const before = await counts();
-    const step = await post(harness.actors.userB!, 'feel-heard as bob', `/api/v1/sessions/${harness.sessionId}/feel-heard`, {
-      confirmed: true,
-    });
+    const step = await post(
+      harness.actors.userB!,
+      'feel-heard as bob',
+      `/api/v1/sessions/${harness.sessionId}/feel-heard`,
+      {
+        confirmed: true,
+      },
+    );
     expect(step.status).toBe(200);
     const data = (step.body as { data: Record<string, unknown> }).data;
     expect(data).toMatchObject({ confirmed: true, advancedToStage: 2 });
@@ -165,7 +183,7 @@ describeTarget('job path on the target, as mwf_job with identity binding on', ()
     expect(after.find(a => a.email === 'bob@e2e.test')!.n - before.find(b => b.email === 'bob@e2e.test')!.n).toBe(1);
   });
 
-  it('the session list\'s identity-bound read returns the direction under the caller\'s identity, nothing without one', async () => {
+  it("the session list's identity-bound read returns the direction under the caller's identity, nothing without one", async () => {
     const { prisma } = await import('../../../lib/prisma');
     const { runWithContext } = await import('../../../lib/request-context');
     const [bob] = await rows<{ id: string }>(
@@ -199,25 +217,42 @@ describeTarget('job path on the target, as mwf_job with identity binding on', ()
     const paused = await post(ada, 'pause', `/api/v1/sessions/${sid}/pause`);
     expect(paused.status).toBe(200);
     expect((paused.body as { data: { status: string } }).data.status).toBe('PAUSED');
-    const [pm] = await rows<{ n: number }>(`SELECT count(*)::int AS n FROM participant_milestone WHERE milestone_key = 'paused'`);
+    const [pm] = await rows<{ n: number }>(
+      `SELECT count(*)::int AS n FROM participant_milestone WHERE milestone_key = 'paused'`,
+    );
     expect(pm.n).toBe(2);
     expect(await rows(`SELECT status::text AS status FROM session`)).toEqual([{ status: 'ACTIVE' }]);
 
-    const status = (b: unknown, path: string[]) => path.reduce((o: unknown, k) => (o as Record<string, unknown>)?.[k], b);
-    expect(status((await get(ada, 'get', `/api/v1/sessions/${sid}`)).body, ['data', 'session', 'status'])).toBe('PAUSED');
-    expect(status((await get(ada, 'state', `/api/v1/sessions/${sid}/state`)).body, ['data', 'session', 'status'])).toBe('PAUSED');
-    const list = (await get(ada, 'list', '/api/v1/sessions')).body as { data: { items: Array<{ id: string; status: string }> } };
+    const status = (b: unknown, path: string[]) =>
+      path.reduce((o: unknown, k) => (o as Record<string, unknown>)?.[k], b);
+    expect(status((await get(ada, 'get', `/api/v1/sessions/${sid}`)).body, ['data', 'session', 'status'])).toBe(
+      'PAUSED',
+    );
+    expect(status((await get(ada, 'state', `/api/v1/sessions/${sid}/state`)).body, ['data', 'session', 'status'])).toBe(
+      'PAUSED',
+    );
+    const list = (await get(ada, 'list', '/api/v1/sessions')).body as {
+      data: { items: Array<{ id: string; status: string }> };
+    };
     expect(list.data.items.find(i => i.id === sid)?.status).toBe('PAUSED');
-    const onlyPaused = (await get(ada, 'list paused', '/api/v1/sessions?status=PAUSED')).body as { data: { items: Array<{ id: string }> } };
+    const onlyPaused = (await get(ada, 'list paused', '/api/v1/sessions?status=PAUSED')).body as {
+      data: { items: Array<{ id: string }> };
+    };
     expect(onlyPaused.data.items.map(i => i.id)).toEqual([sid]);
-    const onlyActive = (await get(ada, 'list active', '/api/v1/sessions?status=ACTIVE')).body as { data: { items: unknown[] } };
+    const onlyActive = (await get(ada, 'list active', '/api/v1/sessions?status=ACTIVE')).body as {
+      data: { items: unknown[] };
+    };
     expect(onlyActive.data.items).toEqual([]);
     expect((await get(ada, 'list bad', '/api/v1/sessions?status=NOPE')).status).toBe(400);
 
     const resumed = await post(ada, 'resume', `/api/v1/sessions/${sid}/resume`);
     expect(resumed.status).toBe(200);
     expect((resumed.body as { data: { status: string } }).data.status).toBe('ACTIVE');
-    expect(await rows(`SELECT count(*)::int AS n FROM participant_milestone WHERE milestone_key = 'paused'`)).toEqual([{ n: 0 }]);
-    expect(status((await get(ada, 'get again', `/api/v1/sessions/${sid}`)).body, ['data', 'session', 'status'])).toBe('ACTIVE');
+    expect(await rows(`SELECT count(*)::int AS n FROM participant_milestone WHERE milestone_key = 'paused'`)).toEqual([
+      { n: 0 },
+    ]);
+    expect(status((await get(ada, 'get again', `/api/v1/sessions/${sid}`)).body, ['data', 'session', 'status'])).toBe(
+      'ACTIVE',
+    );
   });
 });

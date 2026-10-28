@@ -97,7 +97,9 @@ async function markEmpathyReady(
   // De-dup guard: the shortcut path can fire several times in a row with the
   // same text; do not re-post it.
   const conversationId = guesser.mainConversationId;
-  const alreadyPosted = conversationId ? (await lastAiNote(conversationId, getJobPrisma()))?.trim() === alignmentMessage.trim() : true;
+  const alreadyPosted = conversationId
+    ? (await lastAiNote(conversationId, getJobPrisma()))?.trim() === alignmentMessage.trim()
+    : true;
 
   let saved: Awaited<ReturnType<typeof createFacilitatorMessage>> | null = null;
   const moved = await jobMoveIfUnchanged(attempt.attemptId, attempt.statusVersion, 'READY', async tx => {
@@ -275,7 +277,9 @@ export async function checkAndRevealBothIfReady(sessionId: string): Promise<bool
 
   const revealed = await getJobPrisma().$transaction(
     async tx => {
-      const rounds = await tx.$queryRaw<CurrentRound[]>`SELECT DISTINCT ON (a.author_participant_id, a.subject_participant_id)
+      const rounds = await tx.$queryRaw<
+        CurrentRound[]
+      >`SELECT DISTINCT ON (a.author_participant_id, a.subject_participant_id)
                a.id, a.author_participant_id, a.subject_participant_id, a.status::text AS status
         FROM empathy_attempt a
         WHERE a.author_participant_id = ANY(${pids}::uuid[])
@@ -377,14 +381,24 @@ export async function getReconcilerStatus(
   const parties = await sessionParties(sessionId);
   const statuses = await directionStatuses(sessionId);
   if (parties.length !== 2) {
-    return { hasRun: false, aUnderstandingB: null, bUnderstandingA: null, pendingShareOffers: 0, readyForStage3: false };
+    return {
+      hasRun: false,
+      aUnderstandingB: null,
+      bUnderstandingA: null,
+      pendingShareOffers: 0,
+      readyForStage3: false,
+    };
   }
   const [a, b] = parties;
 
   const visibleResult = async (author: SessionParty, subject: SessionParty): Promise<ReconcilerResult | null> => {
     if (subject.participantId !== callerParticipantId) return null;
     const stored = (await prisma.reconcilerResult.findFirst({
-      where: { subjectParticipantId: subject.participantId, supersededAt: null, attempt: { authorParticipantId: author.participantId } },
+      where: {
+        subjectParticipantId: subject.participantId,
+        supersededAt: null,
+        attempt: { authorParticipantId: author.participantId },
+      },
       orderBy: { createdAt: 'desc' },
       select: RESULT_SELECT,
     })) as StoredReconcilerResult | null;
@@ -395,7 +409,11 @@ export async function getReconcilerStatus(
     visibleResult(a, b),
     visibleResult(b, a),
     prisma.contextShareOffer.count({
-      where: { subjectParticipantId: callerParticipantId, status: 'OFFERED', attempt: { authorParticipant: { sessionId } } },
+      where: {
+        subjectParticipantId: callerParticipantId,
+        status: 'OFFERED',
+        attempt: { authorParticipant: { sessionId } },
+      },
     }),
     // What the caller may see of the analyses: their own as subject, and the
     // guidance (author + subject) — never the existence of a result on an
@@ -415,7 +433,12 @@ export async function getReconcilerStatus(
   // Complete once an analysis the caller can see exists, both directions are
   // READY or later, and the caller has no open offer.
   const readyForStage3 =
-    hasRun && !!ab && !!ba && READY_OR_LATER.has(ab.status) && READY_OR_LATER.has(ba.status) && pendingShareOffers === 0;
+    hasRun &&
+    !!ab &&
+    !!ba &&
+    READY_OR_LATER.has(ab.status) &&
+    READY_OR_LATER.has(ba.status) &&
+    pendingShareOffers === 0;
 
   return { hasRun, aUnderstandingB, bUnderstandingA, pendingShareOffers, readyForStage3 };
 }
@@ -444,7 +467,11 @@ export async function generateReconcilerSummary(
 
   const [aboutMe, statuses, sharedAboutMe, sharedByMe] = await Promise.all([
     prisma.reconcilerResult.findFirst({
-      where: { subjectParticipantId: me.participantId, supersededAt: null, attempt: { authorParticipantId: partner.participantId } },
+      where: {
+        subjectParticipantId: me.participantId,
+        supersededAt: null,
+        attempt: { authorParticipantId: partner.participantId },
+      },
       orderBy: { createdAt: 'desc' },
       select: { alignmentScore: true, alignmentSummary: true, gapSeverity: true },
     }),

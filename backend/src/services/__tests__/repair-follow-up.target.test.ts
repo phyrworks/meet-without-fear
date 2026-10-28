@@ -63,7 +63,9 @@ describeTarget('repair and follow-up on the target, as mwf_app and mwf_job with 
   it('the fixture: every proposal_need names a need_share id; four shared needs', async () => {
     expect(await run.sql(`SELECT count(*)::int AS n FROM need_share`)).toEqual([{ n: 4 }]);
     expect(
-      await run.sql(`SELECT count(*)::int AS n FROM proposal_need pn WHERE NOT EXISTS (SELECT 1 FROM need_share s WHERE s.need_id = pn.need_id)`),
+      await run.sql(
+        `SELECT count(*)::int AS n FROM proposal_need pn WHERE NOT EXISTS (SELECT 1 FROM need_share s WHERE s.need_id = pn.need_id)`,
+      ),
     ).toEqual([{ n: 0 }]);
     expect((await run.sql<{ n: number }>(`SELECT count(*)::int AS n FROM proposal_need`))[0].n).toBeGreaterThan(0);
   });
@@ -74,13 +76,20 @@ describeTarget('repair and follow-up on the target, as mwf_app and mwf_job with 
       [ids.ada],
     );
     await expect(
-      run.as('mwf_app', ids.adaUser, `INSERT INTO proposal_need (proposal_id, need_id) VALUES ($1, $2)`, [proposal.checkin, unshared.id]),
+      run.as('mwf_app', ids.adaUser, `INSERT INTO proposal_need (proposal_id, need_id) VALUES ($1, $2)`, [
+        proposal.checkin,
+        unshared.id,
+      ]),
     ).rejects.toThrow(/proposal_need_need_id_fkey|foreign key/);
   });
 
   it("Bob's choice is hidden from Ada before his choices_shared and visible after", async () => {
-    await asUser(ids.bobUser, () => store.upsertChoice({ proposalId: proposal.checkin, participantId: ids.bob, decision: 'WILLING' }));
-    await asUser(ids.bobUser, () => store.upsertChoice({ proposalId: proposal.pause, participantId: ids.bob, decision: 'WILLING' }));
+    await asUser(ids.bobUser, () =>
+      store.upsertChoice({ proposalId: proposal.checkin, participantId: ids.bob, decision: 'WILLING' }),
+    );
+    await asUser(ids.bobUser, () =>
+      store.upsertChoice({ proposalId: proposal.pause, participantId: ids.bob, decision: 'WILLING' }),
+    );
     const before = await asUser(ids.adaUser, () => store.loadVisibleChoices(ids.session, ids.ada));
     expect(before.filter(c => c.participantId === ids.bob)).toEqual([]);
     expect(before.filter(c => c.participantId === ids.ada).map(c => c.proposalId)).toEqual([proposal.checkin]);
@@ -95,7 +104,12 @@ describeTarget('repair and follow-up on the target, as mwf_app and mwf_job with 
 
     await asUser(ids.bobUser, () => store.shareChoices(ids.bob));
     const after = await asUser(ids.adaUser, () => store.loadVisibleChoices(ids.session, ids.ada));
-    expect(after.filter(c => c.participantId === ids.bob).map(c => c.proposalId).sort()).toEqual([proposal.checkin, proposal.pause].sort());
+    expect(
+      after
+        .filter(c => c.participantId === ids.bob)
+        .map(c => c.proposalId)
+        .sort(),
+    ).toEqual([proposal.checkin, proposal.pause].sort());
     const dtoAfter = await asUser(ids.adaUser, () => state.getStage4State(ids.session, ids.adaUser));
     expect(dtoAfter.partnerSelectionStatus).toBe('SUBMITTED');
     expect(dtoAfter.partnerSelections).toHaveLength(2);
@@ -109,7 +123,15 @@ describeTarget('repair and follow-up on the target, as mwf_app and mwf_job with 
         actorParticipantId: ids.ada,
         partyParticipantIds: parties,
         agreements: [
-          { proposalId, type: 'MICRO_EXPERIMENT', description: 'x', duration: null, measureOfSuccess: null, followUpAt: null, fromStatus: 'ACTIVE' },
+          {
+            proposalId,
+            type: 'MICRO_EXPERIMENT',
+            description: 'x',
+            duration: null,
+            measureOfSuccess: null,
+            followUpAt: null,
+            fromStatus: 'ACTIVE',
+          },
         ],
       });
     // Ada is not WILLING on "pause" (Bob is).
@@ -117,7 +139,9 @@ describeTarget('repair and follow-up on the target, as mwf_app and mwf_job with 
     // Both WILLING on "checkin", but Bob left out of the party set.
     await expect(make(proposal.checkin, [ids.ada])).rejects.toThrow(/every present participant, each WILLING/);
     expect(await run.sql(`SELECT * FROM agreement`)).toEqual([]);
-    expect(await run.sql(`SELECT status::text AS status FROM proposal WHERE id = $1`, [proposal.pause])).toEqual([{ status: 'ACTIVE' }]);
+    expect(await run.sql(`SELECT status::text AS status FROM proposal WHERE id = $1`, [proposal.pause])).toEqual([
+      { status: 'ACTIVE' },
+    ]);
   });
 
   it('closure (job): the agreement with both parties, session_closure, RESOLVED, closed for both; arrays from v_session_closure_items', async () => {
@@ -126,17 +150,25 @@ describeTarget('repair and follow-up on the target, as mwf_app and mwf_job with 
       `INSERT INTO need (participant_id, label, category, ai_confidence, confirmed_at) VALUES ($1, 'PROBE_OPEN_LABEL', 'MEANING', 0.9, now()) RETURNING id`,
       [ids.bob],
     );
-    await run.as('mwf_app', ids.bobUser, `INSERT INTO consent (participant_id, need_id, decision, decided_at) VALUES ($1, $2, 'GRANTED', now())`, [
-      ids.bob,
-      open.id,
-    ]);
+    await run.as(
+      'mwf_app',
+      ids.bobUser,
+      `INSERT INTO consent (participant_id, need_id, decision, decided_at) VALUES ($1, $2, 'GRANTED', now())`,
+      [ids.bob, open.id],
+    );
     await run.as('mwf_job', null, `SELECT app.need_share($1::uuid, 'An open shared need')`, [open.id]);
     // Ada keeps her individual commitment (she is WILLING on it).
-    await asUser(ids.adaUser, () => store.upsertChoice({ proposalId: proposal.individual, participantId: ids.ada, decision: 'WILLING' }));
+    await asUser(ids.adaUser, () =>
+      store.upsertChoice({ proposalId: proposal.individual, participantId: ids.ada, decision: 'WILLING' }),
+    );
     // Ada set aside nothing; both have shared their choices (Ada in the fixture, Bob above).
-    await asUser(ids.adaUser, () => store.upsertChoice({ proposalId: proposal.pause, participantId: ids.ada, decision: 'NOT_WILLING' }));
+    await asUser(ids.adaUser, () =>
+      store.upsertChoice({ proposalId: proposal.pause, participantId: ids.ada, decision: 'NOT_WILLING' }),
+    );
 
-    const result = await asUser(ids.adaUser, () => closure.closeStage4({ sessionId: ids.session, participantId: ids.ada }));
+    const result = await asUser(ids.adaUser, () =>
+      closure.closeStage4({ sessionId: ids.session, participantId: ids.ada }),
+    );
     expect(result.kind).toBe('SHARED_AGREEMENT');
     expect(result.agreementIds).toHaveLength(1);
 
@@ -145,7 +177,9 @@ describeTarget('repair and follow-up on the target, as mwf_app and mwf_job with 
     );
     expect(agreements).toEqual([{ id: result.agreementIds[0], proposal_id: proposal.checkin, status: 'AGREED' }]);
     expect(
-      (await run.sql<{ participant_id: string }>(`SELECT participant_id FROM agreement_party ORDER BY participant_id`)).map(r => r.participant_id),
+      (
+        await run.sql<{ participant_id: string }>(`SELECT participant_id FROM agreement_party ORDER BY participant_id`)
+      ).map(r => r.participant_id),
     ).toEqual([ids.ada, ids.bob].sort());
     expect(await run.sql(`SELECT status::text AS status FROM proposal WHERE id = $1`, [proposal.checkin])).toEqual([
       { status: 'CONVERTED_TO_AGREEMENT' },
@@ -154,9 +188,15 @@ describeTarget('repair and follow-up on the target, as mwf_app and mwf_job with 
       { kind: 'SHARED_AGREEMENT', reason: 'MUTUAL_SELECTION' },
     ]);
     expect(await run.sql(`SELECT status::text AS status FROM session`)).toEqual([{ status: 'RESOLVED' }]);
-    expect(await run.sql(`SELECT count(*)::int AS n FROM participant_milestone WHERE milestone_key = 'closed'`)).toEqual([{ n: 2 }]);
+    expect(
+      await run.sql(`SELECT count(*)::int AS n FROM participant_milestone WHERE milestone_key = 'closed'`),
+    ).toEqual([{ n: 2 }]);
 
-    const [items] = await run.as<{ agreement_ids: string[]; individual_commitment_ids: string[]; open_need_ids: string[] }>(
+    const [items] = await run.as<{
+      agreement_ids: string[];
+      individual_commitment_ids: string[];
+      open_need_ids: string[];
+    }>(
       'mwf_app',
       ids.adaUser,
       `SELECT agreement_ids, individual_commitment_ids, open_need_ids FROM v_session_closure_items WHERE session_id = $1`,
@@ -179,7 +219,9 @@ describeTarget('repair and follow-up on the target, as mwf_app and mwf_job with 
 
     // Follow-ups scheduled at closure (job): the shared agreement and Ada's commitment.
     expect(
-      await run.sql(`SELECT type::text AS type, scope::text AS scope, status::text AS status FROM follow_up ORDER BY type`),
+      await run.sql(
+        `SELECT type::text AS type, scope::text AS scope, status::text AS status FROM follow_up ORDER BY type`,
+      ),
     ).toEqual([
       { type: 'SCHEDULED_INDIVIDUAL_COMMITMENT', scope: 'INDIVIDUAL', status: 'SCHEDULED' },
       { type: 'SCHEDULED_SHARED_AGREEMENT', scope: 'SHARED', status: 'SCHEDULED' },
@@ -212,7 +254,9 @@ describeTarget('repair and follow-up on the target, as mwf_app and mwf_job with 
   });
 
   it('a check-in payload is rejected by the shared zod contract and accepted when valid (one follow_up_checkin row)', async () => {
-    expect(() => tending.validateCheckinPayload({ entryOutcomes: [{ followUpId: 'nope' }] })).toThrow(/Invalid check-in payload/);
+    expect(() => tending.validateCheckinPayload({ entryOutcomes: [{ followUpId: 'nope' }] })).toThrow(
+      /Invalid check-in payload/,
+    );
     expect(() =>
       tending.validateCheckinPayload({
         entryOutcomes: [],
@@ -224,10 +268,14 @@ describeTarget('repair and follow-up on the target, as mwf_app and mwf_job with 
         extra: true,
       }),
     ).toThrow(/Invalid check-in payload/);
-    const [shared] = await run.sql<{ id: string }>(`SELECT id FROM follow_up WHERE type = 'SCHEDULED_SHARED_AGREEMENT' AND status = 'OPEN'`);
+    const [shared] = await run.sql<{ id: string }>(
+      `SELECT id FROM follow_up WHERE type = 'SCHEDULED_SHARED_AGREEMENT' AND status = 'OPEN'`,
+    );
     // An invalid response status never reaches the table.
     await expect(
-      asUser(ids.adaUser, () => tending.submitTendingResponse({ entryId: shared.id, userId: ids.adaUser, status: 'BOGUS' })),
+      asUser(ids.adaUser, () =>
+        tending.submitTendingResponse({ entryId: shared.id, userId: ids.adaUser, status: 'BOGUS' }),
+      ),
     ).rejects.toThrow(/Invalid check-in payload/);
     expect(await run.sql(`SELECT * FROM follow_up_checkin`)).toEqual([]);
 
@@ -272,9 +320,14 @@ describeTarget('repair and follow-up on the target, as mwf_app and mwf_job with 
     );
     expect(rows).toHaveLength(1);
     expect(rows[0].participant_id).toBe(ids.ada);
-    expect(Object.keys(rows[0].payload).sort()).toEqual(
-      ['adjustments', 'carriedNotes', 'entryOutcomes', 'needOutcomes', 'partialClosures', 'responses'],
-    );
+    expect(Object.keys(rows[0].payload).sort()).toEqual([
+      'adjustments',
+      'carriedNotes',
+      'entryOutcomes',
+      'needOutcomes',
+      'partialClosures',
+      'responses',
+    ]);
     expect(rows[0].payload.entryOutcomes).toHaveLength(1);
     // R34: the SHARED follow-up's check-in (readable by Bob) carries no PRIVATE-scope item…
     const [row] = await run.sql<{ payload: unknown; reflection_summary: string | null }>(
@@ -284,7 +337,9 @@ describeTarget('repair and follow-up on the target, as mwf_app and mwf_job with 
     expect(JSON.stringify(row)).not.toContain('PROBE_PRIVATE');
     expect(rows[0].payload.adjustments).toEqual([]);
     // …they are Ada's own follow_up_note rows (P-class).
-    const notes = (await run.sql<{ content: string; participant_id: string }>(`SELECT content, participant_id FROM follow_up_note`));
+    const notes = await run.sql<{ content: string; participant_id: string }>(
+      `SELECT content, participant_id FROM follow_up_note`,
+    );
     expect(notes.every(n => n.participant_id === ids.ada)).toBe(true);
     expect(notes.map(n => n.content).join('\n')).toContain('PROBE_PRIVATE_ADJUSTMENT');
     expect(notes.map(n => n.content).join('\n')).toContain('PROBE_PRIVATE_ENTRY_NOTE');

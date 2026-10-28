@@ -21,25 +21,14 @@ import { getJobPrisma, prisma, type DbClient } from '../../lib/prisma';
 import { logger } from '../../lib/logger';
 import { getSonnetResponse } from '../../lib/bedrock';
 import { canTransition, transition } from '../empathy-state-machine';
-import {
-  buildShareOfferPrompt,
-  buildStagePrompt,
-  type ShareOfferContext,
-  type PromptContext,
-} from '../stage-prompts';
+import { buildShareOfferPrompt, buildStagePrompt, type ShareOfferContext, type PromptContext } from '../stage-prompts';
 import type { ContextBundle } from '../context-assembler';
 import { extractJsonFromResponse } from '../../utils/json-extractor';
 import { cleanVisibleAIText } from '../../utils/visible-text';
 import type { ReconcilerResult, ShareOfferMessage } from '@meet-without-fear/shared';
 import { createFacilitatorMessage, deliverMessage } from '../message-store';
 import { loadCurrentStages } from '../stage-shim';
-import {
-  currentAttempt,
-  jobMoveIfUnchanged,
-  partyOf,
-  sessionParties,
-  type SessionParty,
-} from '../empathy-store';
+import { currentAttempt, jobMoveIfUnchanged, partyOf, sessionParties, type SessionParty } from '../empathy-store';
 
 import {
   type UserInfo,
@@ -60,7 +49,12 @@ import { checkAndRevealBothIfReady } from './state';
 // ============================================================================
 
 /** The name `viewer` uses for `other` (their relationship nickname, else the other's name). */
-async function displayNameForViewer(sessionId: string, viewer: SessionParty, other: SessionParty, fallback: string): Promise<string> {
+async function displayNameForViewer(
+  sessionId: string,
+  viewer: SessionParty,
+  other: SessionParty,
+  fallback: string,
+): Promise<string> {
   try {
     if (viewer.userId) {
       const member = await prisma.relationshipMember.findFirst({
@@ -71,7 +65,10 @@ async function displayNameForViewer(sessionId: string, viewer: SessionParty, oth
     }
     return other.name?.trim() || fallback;
   } catch (error) {
-    logger.warn('Failed to resolve partner display name, using fallback', { sessionId, error: (error as Error).message });
+    logger.warn('Failed to resolve partner display name, using fallback', {
+      sessionId,
+      error: (error as Error).message,
+    });
     return fallback;
   }
 }
@@ -135,7 +132,11 @@ export async function generatePostShareContinuation(
   const turnId = `${sessionId}-${Date.now()}`;
   const minimalContextBundle: ContextBundle = {
     conversationContext: {
-      recentTurns: conversationHistory.map(m => ({ role: m.role, content: m.content, timestamp: new Date().toISOString() })),
+      recentTurns: conversationHistory.map(m => ({
+        role: m.role,
+        content: m.content,
+        timestamp: new Date().toISOString(),
+      })),
       turnCount: conversationHistory.filter(m => m.role === 'user').length,
       sessionDurationMinutes: 0,
     },
@@ -296,7 +297,9 @@ async function insertOffer(
     suggestedReason: string | null;
   },
 ): Promise<string> {
-  const rows = await client.$queryRaw<Array<{ id: string }>>`INSERT INTO context_share_offer (attempt_id, result_id, subject_participant_id, iteration, status, offer_message,
+  const rows = await client.$queryRaw<
+    Array<{ id: string }>
+  >`INSERT INTO context_share_offer (attempt_id, result_id, subject_participant_id, iteration, status, offer_message,
                                      suggested_content, suggested_reason, offered_at)
     VALUES (${opts.attemptId}::uuid, ${opts.resultId}::uuid, ${opts.subjectParticipantId}::uuid,
             coalesce((SELECT max(o.iteration) FROM context_share_offer o WHERE o.attempt_id = ${opts.attemptId}::uuid), 0) + 1,
@@ -427,7 +430,8 @@ Respond in JSON:
       suggestion: suggestion ? { content: suggestion.suggestedContent, reason: suggestion.reason } : null,
     });
   }
-  if (!suggestion || !resultId) return suggestion ? { suggestedContent: suggestion.suggestedContent, reason: suggestion.reason } : null;
+  if (!suggestion || !resultId)
+    return suggestion ? { suggestedContent: suggestion.suggestedContent, reason: suggestion.reason } : null;
 
   const open = await getJobPrisma().contextShareOffer.findFirst({
     where: { resultId, status: { in: ['PENDING', 'OFFERED'] } },
@@ -664,7 +668,13 @@ export async function respondToShareSuggestion(
     throw new Error('Share suggestion content is empty - cannot share');
   }
 
-  const { subjectAckMessage, reflectionMessage } = await composeShareMessages(sessionId, me, author, sharedContent, offer.id);
+  const { subjectAckMessage, reflectionMessage } = await composeShareMessages(
+    sessionId,
+    me,
+    author,
+    sharedContent,
+    offer.id,
+  );
 
   await shareAccepted({
     sessionId,
@@ -673,7 +683,7 @@ export async function respondToShareSuggestion(
     author,
     attempt,
     sharedContent,
-    refinement: response.action === 'refine' ? response.refinedContent ?? null : null,
+    refinement: response.action === 'refine' ? (response.refinedContent ?? null) : null,
     subjectAckMessage,
     reflectionMessage,
   });
@@ -705,11 +715,18 @@ export async function shareAccepted(opts: {
     });
     if (updated.count === 0) throw new Error('Share offer already processed');
     await tx.consent.create({
-      data: { participantId: opts.subject.participantId, shareOfferId: opts.offerId, decision: 'GRANTED', decidedAt: now },
+      data: {
+        participantId: opts.subject.participantId,
+        shareOfferId: opts.offerId,
+        decision: 'GRANTED',
+        decidedAt: now,
+      },
       select: { id: true },
     });
     if (opts.subject.mainConversationId) {
-      await tx.message.deleteMany({ where: { conversationId: opts.subject.mainConversationId, kind: 'SHARE_SUGGESTION' } });
+      await tx.message.deleteMany({
+        where: { conversationId: opts.subject.mainConversationId, kind: 'SHARE_SUGGESTION' },
+      });
     }
   });
   if (opts.refinement) {
@@ -926,7 +943,11 @@ export async function getSharedContentDeliveryStatus(
   const me = partyOf(parties, { userId: subjectId });
   if (!me) return { hasSharedContent: false, deliveryStatus: null, sharedAt: null, sharedContent: null };
   const offer = await prisma.contextShareOffer.findFirst({
-    where: { subjectParticipantId: me.participantId, status: 'ACCEPTED', attempt: { authorParticipant: { sessionId } } },
+    where: {
+      subjectParticipantId: me.participantId,
+      status: 'ACCEPTED',
+      attempt: { authorParticipant: { sessionId } },
+    },
     orderBy: { sharedAt: 'desc' },
     include: { attempt: { select: { authorParticipantId: true } } },
   });
@@ -1090,6 +1111,10 @@ Respond in JSON:
     suggestedReason,
   });
 
-  return { offerMessage, suggestedContent, suggestedReason, gapDescription: result.mostImportantGap || result.gapSummary };
+  return {
+    offerMessage,
+    suggestedContent,
+    suggestedReason,
+    gapDescription: result.mostImportantGap || result.gapSummary,
+  };
 }
-

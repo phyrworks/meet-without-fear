@@ -29,7 +29,8 @@ describe('token-budget utilities', () => {
     });
 
     it('should handle long paragraphs', () => {
-      const paragraph = 'This is a longer paragraph with multiple sentences. It contains various words and punctuation marks. The goal is to test token estimation for realistic content.';
+      const paragraph =
+        'This is a longer paragraph with multiple sentences. It contains various words and punctuation marks. The goal is to test token estimation for realistic content.';
       const tokens = estimateTokens(paragraph);
       // 163 chars -> ~41 tokens
       expect(tokens).toBeGreaterThan(30);
@@ -55,7 +56,10 @@ describe('token-budget utilities', () => {
     it('should estimate conversation accurately', () => {
       const conversation = [
         { role: 'user', content: 'I have been feeling frustrated with my partner lately.' },
-        { role: 'assistant', content: 'I hear that you are experiencing frustration. Can you tell me more about what has been happening?' },
+        {
+          role: 'assistant',
+          content: 'I hear that you are experiencing frustration. Can you tell me more about what has been happening?',
+        },
         { role: 'user', content: 'They never seem to listen when I talk about my day.' },
       ];
       const tokens = estimateMessagesTokens(conversation);
@@ -114,12 +118,7 @@ describe('token-budget utilities', () => {
     ];
 
     it('should include all content when under budget', () => {
-      const result = buildBudgetedContext(
-        systemPrompt,
-        shortHistory,
-        'Some retrieved context',
-        10000
-      );
+      const result = buildBudgetedContext(systemPrompt, shortHistory, 'Some retrieved context', 10000);
 
       expect(result.conversationMessages.length).toBe(2);
       expect(result.truncated).toBe(0);
@@ -132,14 +131,14 @@ describe('token-budget utilities', () => {
         (_, i) => ({
           role: (i % 2 === 0 ? 'user' : 'assistant') as 'user' | 'assistant',
           content: `This is message number ${i + 1}. `.repeat(10),
-        })
+        }),
       );
 
       const result = buildBudgetedContext(
         systemPrompt,
         longHistory,
         'Very long retrieved context '.repeat(100),
-        500 // Very small budget
+        500, // Very small budget
       );
 
       expect(result.conversationMessages.length).toBeLessThan(100);
@@ -147,12 +146,7 @@ describe('token-budget utilities', () => {
     });
 
     it('should preserve message type constraint', () => {
-      const result = buildBudgetedContext(
-        systemPrompt,
-        shortHistory,
-        'context',
-        10000
-      );
+      const result = buildBudgetedContext(systemPrompt, shortHistory, 'context', 10000);
 
       // TypeScript should ensure these are 'user' | 'assistant', not just string
       expect(result.conversationMessages[0].role).toBe('user');
@@ -160,17 +154,12 @@ describe('token-budget utilities', () => {
     });
 
     it('should report token usage', () => {
-      const result = buildBudgetedContext(
-        systemPrompt,
-        shortHistory,
-        'Some context',
-        10000
-      );
+      const result = buildBudgetedContext(systemPrompt, shortHistory, 'Some context', 10000);
 
       expect(result.conversationTokens).toBeGreaterThan(0);
       expect(result.retrievedTokens).toBeGreaterThan(0);
       expect(result.totalTokens).toBe(
-        estimateTokens(systemPrompt) + result.conversationTokens + result.retrievedTokens
+        estimateTokens(systemPrompt) + result.conversationTokens + result.retrievedTokens,
       );
     });
   });

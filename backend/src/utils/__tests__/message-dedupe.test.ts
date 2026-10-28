@@ -7,9 +7,7 @@ import { isEncrypted, _resetForTesting } from '../field-encryption';
 describe('contentHash', () => {
   it('is the SHA-256 hex digest of the plaintext', () => {
     const plaintext = "We'll hold here while your partner reviews what you shared.";
-    expect(contentHash(plaintext)).toBe(
-      crypto.createHash('sha256').update(plaintext, 'utf8').digest('hex'),
-    );
+    expect(contentHash(plaintext)).toBe(crypto.createHash('sha256').update(plaintext, 'utf8').digest('hex'));
   });
 
   it('is 64 lowercase hex characters', () => {
@@ -30,9 +28,7 @@ describe('contentHash', () => {
 
   it('is stable across unicode content', () => {
     const plaintext = 'Estoy muy triste \u{1F622}';
-    expect(contentHash(plaintext)).toBe(
-      crypto.createHash('sha256').update(plaintext, 'utf8').digest('hex'),
-    );
+    expect(contentHash(plaintext)).toBe(crypto.createHash('sha256').update(plaintext, 'utf8').digest('hex'));
   });
 });
 
@@ -44,9 +40,7 @@ describe('findMessageByContent', () => {
       findFirst: jest.fn(async (args: Record<string, unknown>) => {
         calls.push(args);
         const where = args.where as Record<string, unknown>;
-        const match = rows.find((row) =>
-          Object.entries(where).every(([key, value]) => row[key] === value),
-        );
+        const match = rows.find(row => Object.entries(where).every(([key, value]) => row[key] === value));
         return match ? { id: match.id as string } : null;
       }),
     };
@@ -166,11 +160,9 @@ describe('insert-once dedupe round trip (middleware write -> probe read)', () =>
           model: 'Message',
           operation: 'findFirst',
           args: args as unknown as Record<string, unknown>,
-          query: async (a) => {
+          query: async a => {
             const where = (a.where ?? {}) as Record<string, unknown>;
-            const match = rows.find((row) =>
-              Object.entries(where).every(([key, value]) => row[key] === value),
-            );
+            const match = rows.find(row => Object.entries(where).every(([key, value]) => row[key] === value));
             return match ? { id: match.id } : null;
           },
         }) as Promise<{ id: string } | null>,
@@ -179,7 +171,7 @@ describe('insert-once dedupe round trip (middleware write -> probe read)', () =>
           model: 'Message',
           operation: 'create',
           args: args as unknown as Record<string, unknown>,
-          query: async (a) => {
+          query: async a => {
             const row = { id: `m${nextId++}`, ...(a.data as Record<string, unknown>) };
             rows.push(row);
             return { ...row };
@@ -193,10 +185,7 @@ describe('insert-once dedupe round trip (middleware write -> probe read)', () =>
   const systemMessage = "We'll hold here while your partner reviews what you shared.";
 
   /** The shape both controller probes now use. */
-  async function createOnce(
-    table: ReturnType<typeof fakeMessageTable>,
-    content: string,
-  ): Promise<boolean> {
+  async function createOnce(table: ReturnType<typeof fakeMessageTable>, content: string): Promise<boolean> {
     const existing = await findMessageByContent(table, { ...base, content });
     if (existing) return false;
     await table.create({ data: { ...base, content, stage: 2 } });
@@ -228,7 +217,7 @@ describe('insert-once dedupe round trip (middleware write -> probe read)', () =>
     await createOnce(table, systemMessage);
 
     // The old probe compared the ciphertext column to the plaintext.
-    const oldStyleMatch = table.rows.find((row) => row.content === systemMessage);
+    const oldStyleMatch = table.rows.find(row => row.content === systemMessage);
     expect(oldStyleMatch).toBeUndefined();
   });
 

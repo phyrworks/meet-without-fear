@@ -30,7 +30,14 @@ const UNSENT = 'You missed how lonely the evenings are once the dishes are done.
 const ADA_TURN = 'I am still waiting. Is there anything I should be thinking about?';
 const TURN = 'chat turn as ada@e2e.test';
 /** R6's read tables (author-sees-status-only.golden.test.ts). */
-const READ_TABLES = shapeTables(['User', 'Message', 'UserVessel', 'EmpathyAttempt', 'ReconcilerResult', 'ReconcilerShareOffer']);
+const READ_TABLES = shapeTables([
+  'User',
+  'Message',
+  'UserVessel',
+  'EmpathyAttempt',
+  'ReconcilerResult',
+  'ReconcilerShareOffer',
+]);
 const FEEDBACK = 'It was less about the plans and more about not being asked.';
 
 describeTarget('the review of an attempt: what the author sees, and a sent feedback survives a verdict', () => {

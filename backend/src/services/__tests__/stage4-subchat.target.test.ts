@@ -36,46 +36,67 @@ describeTarget('a PROPOSAL_REFINEMENT sub-chat on the target (mwf_app)', () => {
     ada = { id: ids.adaUser, email: 'ada@e2e.test' };
     bob = { id: ids.bobUser, email: 'bob@e2e.test' };
     http = await httpAs();
-    [{ id: proposalId }] = await run.sql<{ id: string }>(`SELECT id FROM proposal WHERE description LIKE 'Use a pause phrase%'`);
+    [{ id: proposalId }] = await run.sql<{ id: string }>(
+      `SELECT id FROM proposal WHERE description LIKE 'Use a pause phrase%'`,
+    );
   });
   afterAll(async () => {
     if (run) await run.drop();
   });
 
   const choices = () =>
-    run.sql(`SELECT participant_id, decision::text AS decision FROM proposal_choice WHERE proposal_id = $1 ORDER BY participant_id`, [proposalId]);
+    run.sql(
+      `SELECT participant_id, decision::text AS decision FROM proposal_choice WHERE proposal_id = $1 ORDER BY participant_id`,
+      [proposalId],
+    );
 
   it('open is idempotent per anchor; the conversation is Ada’s SUBCHAT anchored to the proposal', async () => {
-    const open = () => http(ada, 'post', `/sessions/${ids.session}/stage4/subchat`, { anchorKind: 'PROPOSAL_REFINEMENT', anchorId: proposalId });
+    const open = () =>
+      http(ada, 'post', `/sessions/${ids.session}/stage4/subchat`, {
+        anchorKind: 'PROPOSAL_REFINEMENT',
+        anchorId: proposalId,
+      });
     const first = await open();
     expect(first.status).toBe(200);
     subId = first.body.data.subChat.id;
     expect(first.body.data.subChat.anchorId).toBe(proposalId);
     expect((await open()).body.data.subChat.id).toBe(subId);
     expect(
-      await run.sql(`SELECT participant_id, kind::text AS kind, anchor_proposal_id FROM conversation WHERE kind = 'SUBCHAT'`),
+      await run.sql(
+        `SELECT participant_id, kind::text AS kind, anchor_proposal_id FROM conversation WHERE kind = 'SUBCHAT'`,
+      ),
     ).toEqual([{ participant_id: ids.ada, kind: 'SUBCHAT', anchor_proposal_id: proposalId }]);
   });
 
   it('the prompt carries Ada’s main-chat history and the anchored proposal', async () => {
-    const [main] = await run.sql<{ id: string }>(`SELECT id FROM conversation WHERE participant_id = $1 AND kind = 'MAIN'`, [ids.ada]);
-    await run.sql(`INSERT INTO message (conversation_id, sender_participant_id, role, content) VALUES ($1, $2, 'USER', 'PROBE_TS12_MAIN_HISTORY')`, [main.id, ids.ada]);
+    const [main] = await run.sql<{ id: string }>(
+      `SELECT id FROM conversation WHERE participant_id = $1 AND kind = 'MAIN'`,
+      [ids.ada],
+    );
+    await run.sql(
+      `INSERT INTO message (conversation_id, sender_participant_id, role, content) VALUES ($1, $2, 'USER', 'PROBE_TS12_MAIN_HISTORY')`,
+      [main.id, ids.ada],
+    );
     const { buildSystemPrompt, loadAnchorContext } = await import('../stage4-subchat.service');
     const { runWithContext } = await import('../../lib/request-context');
-    const prompt = await runWithContext({ turnId: 't', requestId: 'r', startTime: Date.now(), userId: ids.adaUser }, async () =>
-      buildSystemPrompt({
-        sessionId: ids.session,
-        userId: ids.adaUser,
-        anchorId: proposalId,
-        anchor: await loadAnchorContext(ids.session, 'PROPOSAL_REFINEMENT' as never, proposalId, ids.ada),
-      }),
+    const prompt = await runWithContext(
+      { turnId: 't', requestId: 'r', startTime: Date.now(), userId: ids.adaUser },
+      async () =>
+        buildSystemPrompt({
+          sessionId: ids.session,
+          userId: ids.adaUser,
+          anchorId: proposalId,
+          anchor: await loadAnchorContext(ids.session, 'PROPOSAL_REFINEMENT' as never, proposalId, ids.ada),
+        }),
     );
     expect(prompt.systemPrompt).toContain('PROBE_TS12_MAIN_HISTORY');
     expect(prompt.systemPrompt).toContain('Use a pause phrase when either person starts to shut down');
   });
 
   it('the partner can neither read nor resolve Ada’s sub-chat', async () => {
-    expect((await http(bob, 'get', `/sessions/${ids.session}/stage4/subchat/${subId}`)).status).toBeGreaterThanOrEqual(403);
+    expect((await http(bob, 'get', `/sessions/${ids.session}/stage4/subchat/${subId}`)).status).toBeGreaterThanOrEqual(
+      403,
+    );
     const resolve = await http(bob, 'post', `/sessions/${ids.session}/stage4/subchat/${subId}/resolve`, {
       updatedProposals: [{ proposalId, description: 'PROBE_TS12_BOB_REWRITE' }],
     });
@@ -89,7 +110,9 @@ describeTarget('a PROPOSAL_REFINEMENT sub-chat on the target (mwf_app)', () => {
     const before = await choices();
     expect(before).toHaveLength(2);
     const res = await http(ada, 'post', `/sessions/${ids.session}/stage4/subchat/${subId}/resolve`, {
-      updatedProposals: [{ proposalId, description: 'Use a pause phrase, then come back within ten minutes', duration: 'two weeks' }],
+      updatedProposals: [
+        { proposalId, description: 'Use a pause phrase, then come back within ten minutes', duration: 'two weeks' },
+      ],
     });
     expect(res.status).toBe(200);
     expect(res.body.data).toMatchObject({ createdProposalIds: [], updatedProposalIds: [proposalId] });
@@ -98,17 +121,23 @@ describeTarget('a PROPOSAL_REFINEMENT sub-chat on the target (mwf_app)', () => {
     ]);
     expect(await choices()).toEqual(before);
     expect(
-      await run.sql(`SELECT actor_participant_id AS actor FROM proposal_revision WHERE proposal_id = $1 AND action = 'SUBCHAT_REFINED'`, [proposalId]),
+      await run.sql(
+        `SELECT actor_participant_id AS actor FROM proposal_revision WHERE proposal_id = $1 AND action = 'SUBCHAT_REFINED'`,
+        [proposalId],
+      ),
     ).toEqual([{ actor: ids.ada }]);
-    expect(await run.sql(`SELECT status::text AS status FROM conversation WHERE id = $1`, [subId])).toEqual([{ status: 'RESOLVED' }]);
+    expect(await run.sql(`SELECT status::text AS status FROM conversation WHERE id = $1`, [subId])).toEqual([
+      { status: 'RESOLVED' },
+    ]);
 
     const again = await http(ada, 'post', `/sessions/${ids.session}/stage4/subchat/${subId}/resolve`, {
       updatedProposals: [{ proposalId, description: 'PROBE_TS12_SECOND_RESOLVE' }],
     });
     expect(again.status).toBe(200);
     expect(again.body.data).toMatchObject({ createdProposalIds: [], updatedProposalIds: [] });
-    expect((await run.sql<{ description: string }>(`SELECT description FROM proposal WHERE id = $1`, [proposalId]))[0].description).not.toBe(
-      'PROBE_TS12_SECOND_RESOLVE',
-    );
+    expect(
+      (await run.sql<{ description: string }>(`SELECT description FROM proposal WHERE id = $1`, [proposalId]))[0]
+        .description,
+    ).not.toBe('PROBE_TS12_SECOND_RESOLVE');
   });
 });

@@ -44,7 +44,15 @@ describeTarget('Stage 3 need edits on the target (mwf_app, identity-bound)', () 
     if (run) await run.drop();
   });
 
-  type Row = { id: string; label: string; category: string; confirmed: boolean; deleted: boolean; locked: boolean; superseded_by: string | null };
+  type Row = {
+    id: string;
+    label: string;
+    category: string;
+    confirmed: boolean;
+    deleted: boolean;
+    locked: boolean;
+    superseded_by: string | null;
+  };
   const needsOf = (participantId: string) =>
     run.sql<Row>(
       `SELECT id, label, category::text AS category, confirmed_at IS NOT NULL AS confirmed, deleted_at IS NOT NULL AS deleted,
@@ -58,11 +66,20 @@ describeTarget('Stage 3 need edits on the target (mwf_app, identity-bound)', () 
     jest.spyOn(bedrock, 'getModelCompletion').mockResolvedValue(
       JSON.stringify({
         summary: 'I made this less about what they must do.',
-        operations: [{ type: 'updateNeedText', needId: first.id, newText: 'I need more care around our shared space.', newCategory: NeedCategory.FAIRNESS }],
+        operations: [
+          {
+            type: 'updateNeedText',
+            needId: first.id,
+            newText: 'I need more care around our shared space.',
+            newCategory: NeedCategory.FAIRNESS,
+          },
+        ],
       }) as never,
     );
     const before = await run.sql(`SELECT * FROM need ORDER BY id`);
-    const result = await asUser(ids.adaUser, () => interpreter.interpretNeedEditRequest(ids.session, ids.adaUser, { request: 'Make the first one less about him.' }));
+    const result = await asUser(ids.adaUser, () =>
+      interpreter.interpretNeedEditRequest(ids.session, ids.adaUser, { request: 'Make the first one less about him.' }),
+    );
     expect(result.plan?.summary).toContain('less about');
     expect(result.plan?.affectedNeeds[0]).toMatchObject({
       needId: first.id,
@@ -77,20 +94,35 @@ describeTarget('Stage 3 need edits on the target (mwf_app, identity-bound)', () 
     const [b1] = await needsOf(ids.bob);
     const result = await asUser(ids.adaUser, () =>
       applier.applyNeedEdits(ids.session, ids.adaUser, [
-        { type: 'updateNeedText', needId: a1.id, newText: 'I need more care around our shared space.', newCategory: NeedCategory.FAIRNESS },
+        {
+          type: 'updateNeedText',
+          needId: a1.id,
+          newText: 'I need more care around our shared space.',
+          newCategory: NeedCategory.FAIRNESS,
+        },
         { type: 'addNeed', text: 'I need a calmer start to the day.', category: NeedCategory.SAFETY },
         { type: 'removeNeed', needId: a2.id },
       ]),
     );
     expect(result.applied).toHaveLength(3);
     const after = await needsOf(ids.ada);
-    expect(after.find(n => n.id === a1.id)).toMatchObject({ label: 'I need more care around our shared space.', category: 'FAIRNESS', confirmed: true, deleted: false });
+    expect(after.find(n => n.id === a1.id)).toMatchObject({
+      label: 'I need more care around our shared space.',
+      category: 'FAIRNESS',
+      confirmed: true,
+      deleted: false,
+    });
     expect(after.find(n => n.id === a2.id)).toMatchObject({ deleted: true });
-    expect(after.find(n => n.label === 'I need a calmer start to the day.')).toMatchObject({ category: 'SAFETY', confirmed: true });
+    expect(after.find(n => n.label === 'I need a calmer start to the day.')).toMatchObject({
+      category: 'SAFETY',
+      confirmed: true,
+    });
 
     // Bob's need as the target of Ada's edit: refused, Bob's row untouched
     await expect(
-      asUser(ids.adaUser, () => applier.applyNeedEdits(ids.session, ids.adaUser, [{ type: 'removeNeed', needId: b1.id }])),
+      asUser(ids.adaUser, () =>
+        applier.applyNeedEdits(ids.session, ids.adaUser, [{ type: 'removeNeed', needId: b1.id }]),
+      ),
     ).rejects.toThrow(applier.NeedEditValidationError);
     expect((await needsOf(ids.bob)).find(n => n.id === b1.id)).toMatchObject({ deleted: false });
   });
@@ -98,14 +130,23 @@ describeTarget('Stage 3 need edits on the target (mwf_app, identity-bound)', () 
   it('refine supersedes with a new need; delete and lock keep the rows', async () => {
     const live = (await needsOf(ids.ada)).filter(n => !n.deleted);
     const refined = await asUser(ids.adaUser, () =>
-      applier.applyNeedAction(ids.session, ids.adaUser, { type: 'refine', supersedes: live[0].id, need: 'PROBE_TS12_REFINED', description: 'PROBE_TS12_REFINED' } as never),
+      applier.applyNeedAction(ids.session, ids.adaUser, {
+        type: 'refine',
+        supersedes: live[0].id,
+        need: 'PROBE_TS12_REFINED',
+        description: 'PROBE_TS12_REFINED',
+      } as never),
     );
     const rows = await needsOf(ids.ada);
     expect(rows.find(n => n.id === live[0].id)?.superseded_by).toBe(refined.need!.id);
     expect(rows.find(n => n.id === refined.need!.id)).toMatchObject({ label: 'PROBE_TS12_REFINED' });
 
-    await asUser(ids.adaUser, () => applier.applyNeedAction(ids.session, ids.adaUser, { type: 'lock', needId: live[1].id } as never));
-    await asUser(ids.adaUser, () => applier.applyNeedAction(ids.session, ids.adaUser, { type: 'delete', needId: refined.need!.id } as never));
+    await asUser(ids.adaUser, () =>
+      applier.applyNeedAction(ids.session, ids.adaUser, { type: 'lock', needId: live[1].id } as never),
+    );
+    await asUser(ids.adaUser, () =>
+      applier.applyNeedAction(ids.session, ids.adaUser, { type: 'delete', needId: refined.need!.id } as never),
+    );
     const final = await needsOf(ids.ada);
     expect(final.find(n => n.id === live[1].id)).toMatchObject({ locked: true, confirmed: true, deleted: false });
     expect(final.find(n => n.id === refined.need!.id)).toMatchObject({ deleted: true });
@@ -114,13 +155,22 @@ describeTarget('Stage 3 need edits on the target (mwf_app, identity-bound)', () 
 
   it('once the caller has shared, every edit is forbidden and nothing changes', async () => {
     const live = (await needsOf(ids.ada)).filter(n => !n.deleted);
-    await run.sql(`INSERT INTO need_share (participant_id, need_id, session_id, category, shared_text) SELECT $1, n.id, $3, n.category, n.label FROM need n WHERE n.id = $2`, [ids.ada, live[0].id, ids.session]);
+    await run.sql(
+      `INSERT INTO need_share (participant_id, need_id, session_id, category, shared_text) SELECT $1, n.id, $3, n.category, n.label FROM need n WHERE n.id = $2`,
+      [ids.ada, live[0].id, ids.session],
+    );
     const before = await needsOf(ids.ada);
     await expect(
-      asUser(ids.adaUser, () => applier.applyNeedEdits(ids.session, ids.adaUser, [{ type: 'addNeed', text: 'I need rest.', category: NeedCategory.SAFETY }])),
+      asUser(ids.adaUser, () =>
+        applier.applyNeedEdits(ids.session, ids.adaUser, [
+          { type: 'addNeed', text: 'I need rest.', category: NeedCategory.SAFETY },
+        ]),
+      ),
     ).rejects.toThrow(applier.NeedEditForbiddenError);
     await expect(
-      asUser(ids.adaUser, () => applier.applyNeedAction(ids.session, ids.adaUser, { type: 'delete', needId: live[0].id } as never)),
+      asUser(ids.adaUser, () =>
+        applier.applyNeedAction(ids.session, ids.adaUser, { type: 'delete', needId: live[0].id } as never),
+      ),
     ).rejects.toThrow(applier.NeedEditForbiddenError);
     expect(await needsOf(ids.ada)).toEqual(before);
   });

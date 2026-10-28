@@ -91,7 +91,7 @@ describe('json-extractor', () => {
     // Error case
     it('throws on completely unparseable response', () => {
       expect(() => extractJsonFromResponse('just some random text')).toThrow(
-        'Failed to extract JSON from LLM response'
+        'Failed to extract JSON from LLM response',
       );
     });
   });

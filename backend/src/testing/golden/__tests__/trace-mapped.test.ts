@@ -20,7 +20,9 @@ const stmt = (kind: string, protocol: string, relations: string[]) => ({ kind, p
 const base = {
   complete: true,
   rowsRead: { Message: 6 },
-  shapes: [{ isolation: null, statements: [stmt('SELECT', 'extended', ['Message']), stmt('INSERT', 'extended', ['User'])] }],
+  shapes: [
+    { isolation: null, statements: [stmt('SELECT', 'extended', ['Message']), stmt('INSERT', 'extended', ['User'])] },
+  ],
 };
 const run = (over: Record<string, unknown> = {}) => ({
   complete: true,
@@ -44,12 +46,22 @@ describe('traceMapped', () => {
   });
 
   it('flags a DATA statement sent without bind parameters (the SQL-injection tripwire)', () => {
-    const v = compareMappedTrace(base, run({ shapes: [{ isolation: null, statements: [stmt('SELECT', 'simple', ['message'])] }] }), rule, 'x');
+    const v = compareMappedTrace(
+      base,
+      run({ shapes: [{ isolation: null, statements: [stmt('SELECT', 'simple', ['message'])] }] }),
+      rule,
+      'x',
+    );
     expect(v.join('\n')).toMatch(/protocol simple/);
   });
 
   it('flags a relation no baseline relation maps to', () => {
-    const v = compareMappedTrace(base, run({ shapes: [{ isolation: null, statements: [stmt('SELECT', 'extended', ['need'])] }] }), rule, 'x');
+    const v = compareMappedTrace(
+      base,
+      run({ shapes: [{ isolation: null, statements: [stmt('SELECT', 'extended', ['need'])] }] }),
+      rule,
+      'x',
+    );
     expect(v.join('\n')).toMatch(/touches need/);
   });
 
@@ -68,7 +80,10 @@ describe('traceMapped', () => {
 
   it('flags an incomplete run trace and an unmapped baseline relation', () => {
     expect(compareMappedTrace(base, run({ complete: false }), rule, 'x').join('\n')).toMatch(/not complete/);
-    const unmapped = { ...base, shapes: [{ isolation: null, statements: [stmt('SELECT', 'extended', ['StageProgress'])] }] };
+    const unmapped = {
+      ...base,
+      shapes: [{ isolation: null, statements: [stmt('SELECT', 'extended', ['StageProgress'])] }],
+    };
     expect(compareMappedTrace(unmapped, run(), rule, 'x').join('\n')).toMatch(/StageProgress has no entry/);
   });
 
@@ -121,4 +136,3 @@ describe('trace parser: transaction control (TS-9 fix round 2)', () => {
     expect(stmts[1].rowsRead).toEqual({ message: 3 });
   });
 });
-

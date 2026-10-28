@@ -46,8 +46,14 @@ describeTarget('Stage 3 route refusals (NEEDS_CONFIRMED)', () => {
   });
 
   it('needs/confirm with an adjustment of the partner’s need is refused; the partner’s need is untouched', async () => {
-    const [own] = await run.sql<{ id: string }>(`SELECT id FROM need WHERE participant_id = $1 ORDER BY created_at LIMIT 1`, [ids.ada]);
-    const [bobs] = await run.sql<{ id: string }>(`SELECT id FROM need WHERE participant_id = $1 ORDER BY created_at LIMIT 1`, [ids.bob]);
+    const [own] = await run.sql<{ id: string }>(
+      `SELECT id FROM need WHERE participant_id = $1 ORDER BY created_at LIMIT 1`,
+      [ids.ada],
+    );
+    const [bobs] = await run.sql<{ id: string }>(
+      `SELECT id FROM need WHERE participant_id = $1 ORDER BY created_at LIMIT 1`,
+      [ids.bob],
+    );
     const before = await snapshot(run, 'need');
     const res = await http(ada, 'post', `/sessions/${ids.session}/needs/confirm`, {
       needIds: [own.id],

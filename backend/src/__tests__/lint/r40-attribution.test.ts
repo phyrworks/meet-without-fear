@@ -53,8 +53,18 @@ describe('R40: brain_activity attribution is opt-in per call site', () => {
   });
 
   it('the cross-participant call sites never opt in', () => {
-    for (const file of ['services/reconciler/analysis.ts', 'services/reconciler/sharing.ts', 'controllers/stage2.ts', 'controllers/reconciler.ts', 'services/dispatch-handler.ts', 'services/empathy-reply-classifier.ts']) {
-      expect({ file, attributes: /\bownContent:\s*true\b/.test(fs.readFileSync(path.join(SRC, file), 'utf8')) }).toEqual({ file, attributes: false });
+    for (const file of [
+      'services/reconciler/analysis.ts',
+      'services/reconciler/sharing.ts',
+      'controllers/stage2.ts',
+      'controllers/reconciler.ts',
+      'services/dispatch-handler.ts',
+      'services/empathy-reply-classifier.ts',
+    ]) {
+      expect({
+        file,
+        attributes: /\bownContent:\s*true\b/.test(fs.readFileSync(path.join(SRC, file), 'utf8')),
+      }).toEqual({ file, attributes: false });
     }
   });
 });

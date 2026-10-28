@@ -54,8 +54,17 @@ const READ_TABLES = TARGET
 // Not 'strategies': GET /strategies shuffled its list on every call (the old
 // anonymous pool), so with more than one proposal it could not be a recorded
 // baseline. It carries no choices.
-const CHOICE_READS = ['session', 'state', 'progress', 'messages', 'stage4', 'agreements', 'pending actions',
-  'session list', 'badge count'];
+const CHOICE_READS = [
+  'session',
+  'state',
+  'progress',
+  'messages',
+  'stage4',
+  'agreements',
+  'pending actions',
+  'session list',
+  'badge count',
+];
 
 type Stage4 = {
   data?: {
@@ -102,7 +111,12 @@ describe(`golden: ${SCENARIO}`, () => {
       for (const label of ['Partnership', 'Appreciation', 'Understanding', 'Support']) ids[label] = needId(label);
       ids.pause = proposal('Use a pause phrase');
     } else {
-      const fixtureRows = await harness.snapshot(['StrategyProposal', 'Stage4NeedCoverage', 'IdentifiedNeed', 'UserVessel']);
+      const fixtureRows = await harness.snapshot([
+        'StrategyProposal',
+        'Stage4NeedCoverage',
+        'IdentifiedNeed',
+        'UserVessel',
+      ]);
       // A coverage row with no needId stands for the need it covers (the DTOs
       // name the need by the row's id): the owner's need with that label.
       aliases = fixtureRows.tables.Stage4NeedCoverage.flatMap(c => {
@@ -110,7 +124,8 @@ describe(`golden: ${SCENARIO}`, () => {
         const need = fixtureRows.tables.IdentifiedNeed.find(n => n.vesselId === vessel?.id && n.need === c.needLabel);
         return need && !c.needId ? [{ id: String(c.id), sameAs: String(need.id) }] : [];
       });
-      proposal = prefix => String(fixtureRows.tables.StrategyProposal.find(p => String(p.description).startsWith(prefix))!.id);
+      proposal = prefix =>
+        String(fixtureRows.tables.StrategyProposal.find(p => String(p.description).startsWith(prefix))!.id);
       const open = fixtureRows.tables.Stage4NeedCoverage.find(c => c.needLabel === 'Appreciation')!;
       openNeedId = String(open.needId ?? open.id);
     }
@@ -135,14 +150,18 @@ describe(`golden: ${SCENARIO}`, () => {
       ['pause', 'Use a pause phrase'],
       ['checkin', 'Try a Sunday'],
     ] as const) {
-      await post(`choose ${name} as bob`, bob, `/stage4/proposals/${proposal(prefix)}/selection`, { decision: 'WILLING' });
+      await post(`choose ${name} as bob`, bob, `/stage4/proposals/${proposal(prefix)}/selection`, {
+        decision: 'WILLING',
+      });
     }
     if (TARGET) {
       // proposal_choice has no id: the instants Bob's choices were written are their probes (ISO, as a DTO would carry them).
       const iso = (v: unknown) => new Date(`${String(v).replace(' ', 'T')}Z`).toISOString();
       const rows = (await harness.snapshot(['proposal_choice', 'participant'])).tables;
       const bobP = rows.participant.find(p => p.user_id === bob.id)!.id;
-      bobSelectionProbes = rows.proposal_choice.filter(c => c.participant_id === bobP).flatMap(c => [iso(c.created_at), iso(c.updated_at)]);
+      bobSelectionProbes = rows.proposal_choice
+        .filter(c => c.participant_id === bobP)
+        .flatMap(c => [iso(c.created_at), iso(c.updated_at)]);
     } else {
       bobSelectionProbes = (await harness.snapshot(['Stage4ProposalSelection'])).tables.Stage4ProposalSelection.filter(
         s => s.userId === bob.id,
@@ -187,7 +206,10 @@ describe(`golden: ${SCENARIO}`, () => {
     expect(JSON.stringify(stage4Of('unshared'))).not.toContain('"partnerDecisionVisible":"WILLING"');
     const probes = Object.fromEntries(bobSelectionProbes.map((id, i) => [`bob selection ${i + 1}`, id]));
     const observed = findLeaks([...phase.before, ...phase.unshared], probes);
-    expect(unexpectedLeakReport(observed, CHOICES_HIDDEN_UNTIL_SHARED_KNOWN_LEAKS)).toEqual({ unexpected: [], stale: [] });
+    expect(unexpectedLeakReport(observed, CHOICES_HIDDEN_UNTIL_SHARED_KNOWN_LEAKS)).toEqual({
+      unexpected: [],
+      stale: [],
+    });
   });
 
   it('after Bob shares, Ada reads his decisions', () => {
@@ -303,7 +325,9 @@ describe(`golden: ${SCENARIO}`, () => {
       });
 
       it("the fixture's VALIDATED attempts are revealed at their submission (revealedAtFor)", async () => {
-        const rows = await sql<{ s: Date; r: Date | null }>(`SELECT submitted_at AS s, revealed_at AS r FROM empathy_attempt`);
+        const rows = await sql<{ s: Date; r: Date | null }>(
+          `SELECT submitted_at AS s, revealed_at AS r FROM empathy_attempt`,
+        );
         expect(rows).toHaveLength(2);
         for (const r of rows) expect(iso(r.r)).toBe(iso(r.s));
       });
@@ -319,9 +343,17 @@ describe(`golden: ${SCENARIO}`, () => {
            JOIN participant p ON p.id = n.participant_id JOIN "user" u ON u.id = p.user_id
            ORDER BY n.created_at, n.id`,
         );
-        const proposalOrder = (await sql<{ id: string }>(`SELECT id FROM proposal ORDER BY created_at, id`)).map(r => r.id);
-        const byCreation = (ids: string[]) => [...ids].sort((a, b) => proposalOrder.indexOf(a) - proposalOrder.indexOf(b));
-        type Card = { id: string; kind: string; sourceLabel: string; needsAddressed: Array<{ id?: string; label: string }> };
+        const proposalOrder = (await sql<{ id: string }>(`SELECT id FROM proposal ORDER BY created_at, id`)).map(
+          r => r.id,
+        );
+        const byCreation = (ids: string[]) =>
+          [...ids].sort((a, b) => proposalOrder.indexOf(a) - proposalOrder.indexOf(b));
+        type Card = {
+          id: string;
+          kind: string;
+          sourceLabel: string;
+          needsAddressed: Array<{ id?: string; label: string }>;
+        };
         expect(STAGE4_STATE_ROOTS).toHaveLength(7);
         let grouped = 0;
         for (const root of STAGE4_STATE_ROOTS) {
@@ -333,12 +365,20 @@ describe(`golden: ${SCENARIO}`, () => {
           const w = d.walkthrough;
           const phaseList: Array<{ id: string }> = w.phase === 'PARTNER_NEEDS' ? w.partnerNeeds : w.ownNeeds;
           const owner = w.phase === 'PARTNER_NEEDS' ? (e: string) => e !== reader : (e: string) => e === reader;
-          expect({ root, phase: w.phase }).toEqual({ root, phase: expect.stringMatching(/^(MY_NEEDS|PARTNER_NEEDS)$/) });
-          expect({ root, ids: phaseList.map(x => x.id) }).toEqual({ root, ids: needRows.filter(r => owner(r.email)).map(r => r.id) });
+          expect({ root, phase: w.phase }).toEqual({
+            root,
+            phase: expect.stringMatching(/^(MY_NEEDS|PARTNER_NEEDS)$/),
+          });
+          expect({ root, ids: phaseList.map(x => x.id) }).toEqual({
+            root,
+            ids: needRows.filter(r => owner(r.email)).map(r => r.id),
+          });
           expect({ root, current: w.currentNeed?.id }).toEqual({ root, current: phaseList[0].id });
           const cards: Card[] = [...d.inventory.sharedProposals, ...d.inventory.individualCommitments];
           const label = w.currentNeed.label.toLowerCase();
-          const forCurrent = cards.filter(c => c.needsAddressed.some(x => x.id === w.currentNeed.id || x.label.toLowerCase() === label));
+          const forCurrent = cards.filter(c =>
+            c.needsAddressed.some(x => x.id === w.currentNeed.id || x.label.toLowerCase() === label),
+          );
           const filters: Record<string, (c: Card) => boolean> =
             w.phase === 'PARTNER_NEEDS'
               ? {
@@ -351,7 +391,10 @@ describe(`golden: ${SCENARIO}`, () => {
                   partner_suggested: c => c.sourceLabel === 'PARTNER',
                   ai_suggested: c => c.sourceLabel === 'AI',
                 };
-          expect({ root, keys: w.proposalGroups.map((g: { key: string }) => g.key) }).toEqual({ root, keys: Object.keys(filters) });
+          expect({ root, keys: w.proposalGroups.map((g: { key: string }) => g.key) }).toEqual({
+            root,
+            keys: Object.keys(filters),
+          });
           for (const g of w.proposalGroups as Array<{ key: string; proposals: Card[] }>) {
             expect({ root, group: g.key, ids: g.proposals.map(p => p.id) }).toEqual({
               root,
@@ -400,7 +443,9 @@ describe(`golden: ${SCENARIO}`, () => {
     });
 
     it("target: Bob's Understanding appears in Ada's walkthrough by its shared text, because 'pause' covers it", async () => {
-      const [u] = await sql<{ shared_text: string }>(`SELECT shared_text FROM need_share WHERE need_id = $1`, [ids.Understanding]);
+      const [u] = await sql<{ shared_text: string }>(`SELECT shared_text FROM need_share WHERE need_id = $1`, [
+        ids.Understanding,
+      ]);
       for (const p of ['before', 'unshared', 'shared']) {
         const s = stage4Of(p).data!;
         expect(s.walkthrough!.partnerNeeds).toEqual(
@@ -426,7 +471,10 @@ describe(`golden: ${SCENARIO}`, () => {
         `INSERT INTO need (participant_id, label, category, ai_confidence, confirmed_at) VALUES ($1, 'PROBE_OPEN_AT_CLOSE', 'MEANING', 0.9, now()) RETURNING id`,
         [bobP.id],
       );
-      await sql(`INSERT INTO consent (participant_id, need_id, decision, decided_at) VALUES ($1, $2, 'GRANTED', now())`, [bobP.id, open.id]);
+      await sql(
+        `INSERT INTO consent (participant_id, need_id, decision, decided_at) VALUES ($1, $2, 'GRANTED', now())`,
+        [bobP.id, open.id],
+      );
       const job = new Client({ connectionString: jobUrlFor(harness.fixture.target, harness.fixture.database) });
       await job.connect();
       try {

@@ -50,7 +50,7 @@ function envelopes(log: Wire[]): Array<{ boundTo?: string; kinds: string[] }> {
     open.kinds.push(w.kind);
     if (w.kind === 'SET_ID' && open.boundTo === undefined) {
       const before = open.kinds.slice(1, -1);
-      if (before.every((k) => k === 'SET_TX')) open.boundTo = w.userId;
+      if (before.every(k => k === 'SET_TX')) open.boundTo = w.userId;
     }
     if (w.kind === 'COMMIT' || w.kind === 'ROLLBACK') {
       out.push(open);
@@ -115,7 +115,7 @@ describeDb('identity binding over Prisma 7 + adapter-pg (database)', () => {
       expect(g.kinds[0]).toBe('BEGIN');
       expect(g.boundTo).toBe(userId);
     }
-    return groups.map((g) => g.kinds.join(' '));
+    return groups.map(g => g.kinds.join(' '));
   }
 
   it('findMany', async () => {
@@ -133,22 +133,25 @@ describeDb('identity binding over Prisma 7 + adapter-pg (database)', () => {
   });
 
   it('batch $transaction([...])', async () => {
-    await runWithContext(ctx(alice), async () =>
-      await prisma.$transaction([prisma.user.findMany({ where: { id: alice } }), prisma.user.count()])
+    await runWithContext(
+      ctx(alice),
+      async () => await prisma.$transaction([prisma.user.findMany({ where: { id: alice } }), prisma.user.count()]),
     );
     expect(expectAllBoundTo(alice)).toEqual(['BEGIN SET_ID STMT STMT COMMIT']);
   });
 
   it('interactive $transaction(async tx => ...), with an isolation level', async () => {
-    const inside = await runWithContext(ctx(bob), async () =>
-      await prisma.$transaction(
-        async (tx) => {
-          await tx.user.findMany({ where: { id: bob } });
-          await new Promise((r) => setTimeout(r, 5));
-          return tx.$queryRaw<Array<{ id: string }>>`SELECT current_setting('app.current_user_id', true) AS id`;
-        },
-        { isolationLevel: 'Serializable' }
-      )
+    const inside = await runWithContext(
+      ctx(bob),
+      async () =>
+        await prisma.$transaction(
+          async tx => {
+            await tx.user.findMany({ where: { id: bob } });
+            await new Promise(r => setTimeout(r, 5));
+            return tx.$queryRaw<Array<{ id: string }>>`SELECT current_setting('app.current_user_id', true) AS id`;
+          },
+          { isolationLevel: 'Serializable' },
+        ),
     );
     expect(inside[0].id).toBe(bob);
     expect(expectAllBoundTo(bob)).toEqual(['BEGIN SET_TX SET_ID STMT STMT COMMIT']);
@@ -161,19 +164,24 @@ describeDb('identity binding over Prisma 7 + adapter-pg (database)', () => {
   });
 
   it('$executeRaw', async () => {
-    await runWithContext(ctx(alice), async () => await prisma.$executeRaw`UPDATE "User" SET "firstName" = 'a' WHERE id = ${alice}::uuid`);
+    await runWithContext(
+      ctx(alice),
+      async () => await prisma.$executeRaw`UPDATE "User" SET "firstName" = 'a' WHERE id = ${alice}::uuid`,
+    );
     expect(expectAllBoundTo(alice)).toEqual(['BEGIN SET_ID STMT COMMIT']);
   });
 
   it('a query issued from a setImmediate / promise continuation inside the request', async () => {
-    const rows = await runWithContext(ctx(bob), () =>
-      new Promise<Array<{ id: string }>>((resolve, reject) => {
-        setImmediate(() => {
-          Promise.resolve()
-            .then(() => seen())
-            .then(resolve, reject);
-        });
-      })
+    const rows = await runWithContext(
+      ctx(bob),
+      () =>
+        new Promise<Array<{ id: string }>>((resolve, reject) => {
+          setImmediate(() => {
+            Promise.resolve()
+              .then(() => seen())
+              .then(resolve, reject);
+          });
+        }),
     );
     expect(rows[0].id).toBe(bob);
     expectAllBoundTo(bob);
@@ -194,16 +202,14 @@ describeDb('identity binding over Prisma 7 + adapter-pg (database)', () => {
     wire = [];
     const rows = await runWithContext(ctx(undefined), async () => await seen());
     expect(rows[0].id ?? '').toBe('');
-    expect(wire.map((w) => w.kind)).toEqual(['STMT']);
+    expect(wire.map(w => w.kind)).toEqual(['STMT']);
     const outside = await seen();
     expect(outside[0].id ?? '').toBe('');
   });
 
   it('a failing statement rolls back and releases the connection with the identity gone', async () => {
-    await expect(
-      runWithContext(ctx(alice), async () => await prisma.$executeRaw`SELECT 1/0`)
-    ).rejects.toThrow();
-    expect(envelopes(wire).map((g) => g.kinds.join(' '))).toEqual(['BEGIN SET_ID STMT ROLLBACK']);
+    await expect(runWithContext(ctx(alice), async () => await prisma.$executeRaw`SELECT 1/0`)).rejects.toThrow();
+    expect(envelopes(wire).map(g => g.kinds.join(' '))).toEqual(['BEGIN SET_ID STMT ROLLBACK']);
     const rows = await seen();
     expect(rows[0].id ?? '').toBe('');
   });
@@ -229,8 +235,8 @@ describeDb('identity binding over Prisma 7 + adapter-pg (database)', () => {
       runWithContext(ctx(bob), async () => await prisma.user.findUnique({ where: { id: bob } })),
     ]);
     const groups = envelopes(wire);
-    expect(groups.map((g) => g.kinds.join(' '))).toEqual(['BEGIN SET_ID STMT COMMIT', 'BEGIN SET_ID STMT COMMIT']);
-    expect(groups.map((g) => g.boundTo).sort()).toEqual([alice, bob].sort());
+    expect(groups.map(g => g.kinds.join(' '))).toEqual(['BEGIN SET_ID STMT COMMIT', 'BEGIN SET_ID STMT COMMIT']);
+    expect(groups.map(g => g.boundTo).sort()).toEqual([alice, bob].sort());
   });
 
   it('$transaction([...]) dispatched in the same tick as another request: bound to its own request', async () => {
@@ -248,14 +254,14 @@ describeDb('identity binding over Prisma 7 + adapter-pg (database)', () => {
         for (let i = 0; i < 10; i++) {
           const [a, b] = await Promise.all([
             seen(),
-            prisma.$transaction(async (tx) => {
-              await new Promise((r) => setTimeout(r, Math.random() * 3));
+            prisma.$transaction(async tx => {
+              await new Promise(r => setTimeout(r, Math.random() * 3));
               return tx.$queryRaw<Array<{ id: string }>>`SELECT current_setting('app.current_user_id', true) AS id`;
             }),
             prisma.user.findMany({ where: { id: userId } }),
           ]);
           observed.push(a[0].id, b[0].id);
-          await new Promise((r) => setImmediate(r));
+          await new Promise(r => setImmediate(r));
         }
         return observed;
       });
@@ -264,6 +270,6 @@ describeDb('identity binding over Prisma 7 + adapter-pg (database)', () => {
     expect(new Set(fromBob)).toEqual(new Set([bob]));
     // And on the wire, every group carried exactly one of the two ids.
     for (const g of envelopes(wire)) expect([alice, bob]).toContain(g.boundTo);
-    expect(new Set(wire.map((w) => w.pid)).size).toBe(1);
+    expect(new Set(wire.map(w => w.pid)).size).toBe(1);
   });
 });

@@ -46,7 +46,12 @@ describeTarget('Stage 0 confirmations on the target (mwf_app; status by mwf_job)
       )
     )[0];
   const adaMilestones = async () =>
-    (await run.sql<{ k: string }>(`SELECT milestone_key AS k FROM participant_milestone WHERE participant_id = $1 ORDER BY k`, [ids.ada])).map(r => r.k);
+    (
+      await run.sql<{ k: string }>(
+        `SELECT milestone_key AS k FROM participant_milestone WHERE participant_id = $1 ORDER BY k`,
+        [ids.ada],
+      )
+    ).map(r => r.k);
 
   it('before a topic frame: both confirmations refuse with 400 and write nothing', async () => {
     expect((await http(ada, 'post', `/sessions/${ids.session}/topic-frame/confirm`)).status).toBe(400);
@@ -67,7 +72,10 @@ describeTarget('Stage 0 confirmations on the target (mwf_app; status by mwf_job)
     const after = await session();
     expect(after.status).toBe('INVITED');
     expect(after.confirmed).not.toBeNull();
-    const [inv] = await run.sql<{ c: Date | null }>(`SELECT message_confirmed_at AS c FROM invitation WHERE session_id = $1`, [ids.session]);
+    const [inv] = await run.sql<{ c: Date | null }>(
+      `SELECT message_confirmed_at AS c FROM invitation WHERE session_id = $1`,
+      [ids.session],
+    );
     expect(inv.c).not.toBeNull();
 
     const again = await http(ada, 'post', `/sessions/${ids.session}/topic-frame/confirm`);
@@ -75,16 +83,26 @@ describeTarget('Stage 0 confirmations on the target (mwf_app; status by mwf_job)
     expect(again.body.data.confirmedAt).toBe(first.body.data.confirmedAt);
     expect((await session()).confirmed).toEqual(after.confirmed);
 
-    expect((await http(ada, 'post', `/sessions/00000000-0000-7000-8000-000000000000/topic-frame/confirm`)).status).toBe(404);
+    expect((await http(ada, 'post', `/sessions/00000000-0000-7000-8000-000000000000/topic-frame/confirm`)).status).toBe(
+      404,
+    );
   });
 
   it('invitation confirm: Stage 0 → 1 by milestones, no message text on the invitation; idempotent', async () => {
-    const before = await run.sql(`SELECT name, status::text AS status FROM invitation WHERE session_id = $1`, [ids.session]);
+    const before = await run.sql(`SELECT name, status::text AS status FROM invitation WHERE session_id = $1`, [
+      ids.session,
+    ]);
     const res = await http(ada, 'post', `/sessions/${ids.session}/invitation/confirm`);
     expect(res.status).toBe(200);
-    expect(res.body.data).toMatchObject({ confirmed: true, advancedToStage: 1, invitation: { messageConfirmed: true } });
+    expect(res.body.data).toMatchObject({
+      confirmed: true,
+      advancedToStage: 1,
+      invitation: { messageConfirmed: true },
+    });
     expect(await adaMilestones()).toEqual(['compact_signed', 'invitation_sent']);
-    expect(await run.sql(`SELECT name, status::text AS status FROM invitation WHERE session_id = $1`, [ids.session])).toEqual(before);
+    expect(
+      await run.sql(`SELECT name, status::text AS status FROM invitation WHERE session_id = $1`, [ids.session]),
+    ).toEqual(before);
 
     const again = await http(ada, 'post', `/sessions/${ids.session}/invitation/confirm`);
     expect(again.status).toBe(200);

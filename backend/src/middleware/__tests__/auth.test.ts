@@ -18,7 +18,6 @@ import { ForbiddenError, NotFoundError } from '../errors';
 
 // Mock Prisma
 
-
 // Mock Clerk verifyToken and clerkClient
 const mockVerifyToken = jest.fn();
 const mockGetUser = jest.fn();
@@ -110,7 +109,7 @@ describe('Auth Middleware', () => {
             code: 'INTERNAL_ERROR',
             message: expect.stringContaining('CLERK_SECRET_KEY'),
           }),
-        })
+        }),
       );
       expect(next).not.toHaveBeenCalled();
     });
@@ -130,7 +129,7 @@ describe('Auth Middleware', () => {
             code: 'UNAUTHORIZED',
             message: 'Authentication required',
           }),
-        })
+        }),
       );
       expect(next).not.toHaveBeenCalled();
     });
@@ -149,12 +148,6 @@ describe('Auth Middleware', () => {
       expect(statusMock).toHaveBeenCalledWith(401);
       expect(next).not.toHaveBeenCalled();
     });
-
-
-
-
-
-
   });
 
   describe('optionalAuth', () => {
@@ -169,7 +162,6 @@ describe('Auth Middleware', () => {
       expect(statusMock).not.toHaveBeenCalled();
       expect(req.user).toBeUndefined();
     });
-
 
     it('continues without user when token is invalid', async () => {
       mockVerifyToken.mockRejectedValue(new Error('Invalid token'));
@@ -214,8 +206,6 @@ describe('Auth Middleware', () => {
       delete process.env.E2E_AUTH_BYPASS;
     });
 
-
-
     it('returns 401 when e2e headers missing and bypass enabled', async () => {
       const req = createMockRequest({ headers: {} });
       const { res, statusMock, jsonMock } = createMockResponse();
@@ -230,7 +220,7 @@ describe('Auth Middleware', () => {
           error: expect.objectContaining({
             code: 'UNAUTHORIZED',
           }),
-        })
+        }),
       );
       expect(next).not.toHaveBeenCalled();
     });
@@ -252,7 +242,6 @@ describe('Auth Middleware', () => {
       // Without valid Clerk token, should fail
       expect(statusMock).toHaveBeenCalledWith(401);
     });
-
   });
 
   describe('requireSessionAccess', () => {
@@ -270,9 +259,5 @@ describe('Auth Middleware', () => {
       createdAt: new Date(),
       updatedAt: new Date(),
     };
-
-
-
-
   });
 });

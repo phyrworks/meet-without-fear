@@ -55,9 +55,15 @@ describeTarget('E2E tooling routes on the target', () => {
   });
 
   it('cleanup: every @e2e.test user goes, with their sessions and their own rows', async () => {
-    await run.sql(`INSERT INTO user_device (user_id, push_token) SELECT id, 'ExponentPushToken[e2e]' FROM "user" WHERE email = 'ada@e2e.test'`);
-    await run.sql(`INSERT INTO feature_state (user_id, feature, doc) SELECT id, 'people', '{}' FROM "user" WHERE email = 'bob@e2e.test'`);
-    const res = await (request as never as (a: never) => import('supertest').SuperTest<import('supertest').Test>)(app).post('/api/v1/e2e/cleanup').send({});
+    await run.sql(
+      `INSERT INTO user_device (user_id, push_token) SELECT id, 'ExponentPushToken[e2e]' FROM "user" WHERE email = 'ada@e2e.test'`,
+    );
+    await run.sql(
+      `INSERT INTO feature_state (user_id, feature, doc) SELECT id, 'people', '{}' FROM "user" WHERE email = 'bob@e2e.test'`,
+    );
+    const res = await (request as never as (a: never) => import('supertest').SuperTest<import('supertest').Test>)(app)
+      .post('/api/v1/e2e/cleanup')
+      .send({});
     expect(res.status).toBe(200);
     expect(res.body.deletedUsers).toBe(4);
     expect(res.body.deletedSessions).toBe(1);

@@ -41,14 +41,26 @@ const BASE_URL =
 const describeTarget = isTargetShape() ? describe : describe.skip;
 jest.setTimeout(240_000);
 
-const FORBIDDEN_KEYS = ['empathyStatus', 'empathyStatuses', 'suggestedContent', 'suggestedReason', 'shareOffer', 'content'];
+const FORBIDDEN_KEYS = [
+  'empathyStatus',
+  'empathyStatuses',
+  'suggestedContent',
+  'suggestedReason',
+  'shareOffer',
+  'content',
+];
 
 describeTarget('confirmFeelHeard share suggestion on the session channel (R36)', () => {
   let harness: Harness;
 
   beforeAll(async () => {
     process.env.ABLY_API_KEY = 'test-app.key:secret';
-    harness = await createHarness({ baseUrl: BASE_URL, stage: 'FEEL_HEARD_B', runId: `ts12_rtfh_${process.pid}`, appLogin: 'mwf_app' });
+    harness = await createHarness({
+      baseUrl: BASE_URL,
+      stage: 'FEEL_HEARD_B',
+      runId: `ts12_rtfh_${process.pid}`,
+      appLogin: 'mwf_app',
+    });
     const { resetAblyClient } = await import('../realtime');
     resetAblyClient();
   });
@@ -81,7 +93,10 @@ describeTarget('confirmFeelHeard share suggestion on the session channel (R36)',
       [bob.id],
     );
     expect(
-      await rows(`SELECT a.status::text AS status FROM empathy_attempt a JOIN participant p ON p.id = a.subject_participant_id WHERE p.user_id = $1`, [bob.id]),
+      await rows(
+        `SELECT a.status::text AS status FROM empathy_attempt a JOIN participant p ON p.id = a.subject_participant_id WHERE p.user_id = $1`,
+        [bob.id],
+      ),
     ).toEqual([{ status: 'HELD' }]);
     mockWire.length = 0;
 
@@ -91,7 +106,11 @@ describeTarget('confirmFeelHeard share suggestion on the session channel (R36)',
       actor: bob,
       tables: scope,
       asyncBoundary: true,
-      call: agent => agent.post(`/api/v1/sessions/${sid}/feel-heard`).set('x-e2e-fixture-id', 'reconciler-offer-sharing').send({ confirmed: true }),
+      call: agent =>
+        agent
+          .post(`/api/v1/sessions/${sid}/feel-heard`)
+          .set('x-e2e-fixture-id', 'reconciler-offer-sharing')
+          .send({ confirmed: true }),
     });
     expect(res.status).toBe(200);
     await quiesce();
@@ -108,7 +127,8 @@ describeTarget('confirmFeelHeard share suggestion on the session channel (R36)',
     expect(suggestion).toHaveLength(1);
     expect(suggestion[0].data).toMatchObject({ forUserId: bob.id, guesserName: 'your partner' });
     for (const w of session) {
-      for (const k of FORBIDDEN_KEYS) expect({ event: w.name, key: k, present: k in w.data }).toEqual({ event: w.name, key: k, present: false });
+      for (const k of FORBIDDEN_KEYS)
+        expect({ event: w.name, key: k, present: k in w.data }).toEqual({ event: w.name, key: k, present: false });
       if (offers[0].suggested) expect(JSON.stringify(w.data)).not.toContain(offers[0].suggested);
       // The guesser's notice (reconciler/state.ts, TS-10) is canned copy, never row text.
       if ('message' in w.data) expect(w.data.message).toMatch(/ is considering a suggestion to share more$/);

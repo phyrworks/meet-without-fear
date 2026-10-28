@@ -92,18 +92,57 @@ const ADA_PRIVATE_PROBES: Record<string, string> = {
   "Ada's reflection reply": ADA_REFLECTION.aiLine,
 };
 
-const READS = { tables: shapeTables(['User', 'Message', 'UserVessel']), set: 'all' as const, except: TOMBSTONE_READ_EXCEPT };
+const READS = {
+  tables: shapeTables(['User', 'Message', 'UserVessel']),
+  set: 'all' as const,
+  except: TOMBSTONE_READ_EXCEPT,
+};
 
 const AFTER_TABLES = isTargetShape()
   ? [
-      'session', 'user', 'participant', 'conversation', 'message', 'empathy_attempt', 'draft', 'need', 'need_share',
-      'proposal_choice', 'agreement', 'agreement_party', 'reflection', 'reflection_message', 'brain_activity',
-      'conversation_read_state', 'participant_milestone', 'consent', 'invitation', 'ai_memory', 'mood_reading',
-      'feature_state', 'user_device', 'user_preferences', 'user_memory', 'user_key', 'participant_key',
+      'session',
+      'user',
+      'participant',
+      'conversation',
+      'message',
+      'empathy_attempt',
+      'draft',
+      'need',
+      'need_share',
+      'proposal_choice',
+      'agreement',
+      'agreement_party',
+      'reflection',
+      'reflection_message',
+      'brain_activity',
+      'conversation_read_state',
+      'participant_milestone',
+      'consent',
+      'invitation',
+      'ai_memory',
+      'mood_reading',
+      'feature_state',
+      'user_device',
+      'user_preferences',
+      'user_memory',
+      'user_key',
+      'participant_key',
     ]
   : [
-      'Session', 'User', 'Message', 'EmpathyAttempt', 'EmpathyDraft', 'IdentifiedNeed', 'Agreement', 'InnerWorkSession',
-      'InnerWorkMessage', 'BrainActivity', 'UserVessel', 'StageProgress', 'ConsentRecord', 'Invitation',
+      'Session',
+      'User',
+      'Message',
+      'EmpathyAttempt',
+      'EmpathyDraft',
+      'IdentifiedNeed',
+      'Agreement',
+      'InnerWorkSession',
+      'InnerWorkMessage',
+      'BrainActivity',
+      'UserVessel',
+      'StageProgress',
+      'ConsentRecord',
+      'Invitation',
     ];
 
 /**
@@ -132,7 +171,10 @@ async function seedLeaverPrivateRows(h: Harness, adaUser: string): Promise<Recor
         )
       ).rows;
       const [{ attempt }] = (
-        await c.query<{ attempt: string }>(`SELECT id AS attempt FROM empathy_attempt WHERE author_participant_id = $1`, [pid])
+        await c.query<{ attempt: string }>(
+          `SELECT id AS attempt FROM empathy_attempt WHERE author_participant_id = $1`,
+          [pid],
+        )
       ).rows;
       await one(
         'ai_memory/SUMMARY',
@@ -144,8 +186,16 @@ async function seedLeaverPrivateRows(h: Harness, adaUser: string): Promise<Recor
         `INSERT INTO ai_memory (user_id, kind, doc) VALUES ($1, 'GLOBAL_FACTS', jsonb_build_object('facts', jsonb_build_array($2::text))) RETURNING id`,
         [adaUser, SEEDED_PRIVATE],
       );
-      await one('mood_reading', `INSERT INTO mood_reading (participant_id, intensity, context) VALUES ($1, 7, $2) RETURNING id`, [pid, SEEDED_PRIVATE]);
-      await one('need/unshared', `INSERT INTO need (participant_id, label, category, ai_confidence) VALUES ($1, $2, 'SAFETY', 0.9) RETURNING id`, [pid, SEEDED_PRIVATE]);
+      await one(
+        'mood_reading',
+        `INSERT INTO mood_reading (participant_id, intensity, context) VALUES ($1, 7, $2) RETURNING id`,
+        [pid, SEEDED_PRIVATE],
+      );
+      await one(
+        'need/unshared',
+        `INSERT INTO need (participant_id, label, category, ai_confidence) VALUES ($1, $2, 'SAFETY', 0.9) RETURNING id`,
+        [pid, SEEDED_PRIVATE],
+      );
       await one(
         'empathy_attempt/unrevealed',
         `INSERT INTO empathy_attempt (author_participant_id, subject_participant_id, round, supersedes_attempt_id, content, status)
@@ -153,20 +203,46 @@ async function seedLeaverPrivateRows(h: Harness, adaUser: string): Promise<Recor
         [pid, bob, attempt, SEEDED_PRIVATE],
       );
       await c.query(`INSERT INTO feature_state (user_id, feature, doc) VALUES ($1, 'people', '{}')`, [adaUser]);
-      await one('user_device', `INSERT INTO user_device (user_id, push_token, platform) VALUES ($1, 'ExponentPushToken[ts12]', 'ios') RETURNING id`, [adaUser]);
-      await c.query(`INSERT INTO user_preferences (user_id, doc) VALUES ($1, '{"memory": {}, "notifications": {}, "privacy": {}}')`, [adaUser]);
-      await one('user_memory', `INSERT INTO user_memory (user_id, content, category) VALUES ($1, $2, 'PREFERENCE') RETURNING id`, [adaUser, SEEDED_PRIVATE]);
-      await one('user_key', `INSERT INTO user_key (user_id, key_id, wrapped_dek) VALUES ($1, 'ts12-user-key', '\\x00') RETURNING id`, [adaUser]);
-      await one('participant_key', `INSERT INTO participant_key (participant_id, key_id, wrapped_dek) VALUES ($1, 'ts12-participant-key', '\\x00') RETURNING id`, [pid]);
+      await one(
+        'user_device',
+        `INSERT INTO user_device (user_id, push_token, platform) VALUES ($1, 'ExponentPushToken[ts12]', 'ios') RETURNING id`,
+        [adaUser],
+      );
+      await c.query(
+        `INSERT INTO user_preferences (user_id, doc) VALUES ($1, '{"memory": {}, "notifications": {}, "privacy": {}}')`,
+        [adaUser],
+      );
+      await one(
+        'user_memory',
+        `INSERT INTO user_memory (user_id, content, category) VALUES ($1, $2, 'PREFERENCE') RETURNING id`,
+        [adaUser, SEEDED_PRIVATE],
+      );
+      await one(
+        'user_key',
+        `INSERT INTO user_key (user_id, key_id, wrapped_dek) VALUES ($1, 'ts12-user-key', '\\x00') RETURNING id`,
+        [adaUser],
+      );
+      await one(
+        'participant_key',
+        `INSERT INTO participant_key (participant_id, key_id, wrapped_dek) VALUES ($1, 'ts12-participant-key', '\\x00') RETURNING id`,
+        [pid],
+      );
       // Fix round 1 (M5): the rest of spec §4 steps 3/5 — a regulation event, a need disposition,
       // a follow-up note, a check-in on her INDIVIDUAL follow-up, and her reminder of it.
-      await one('regulation_event', `INSERT INTO regulation_event (participant_id, type) VALUES ($1, 'BREATHING_EXERCISE') RETURNING id`, [pid]);
+      await one(
+        'regulation_event',
+        `INSERT INTO regulation_event (participant_id, type) VALUES ($1, 'BREATHING_EXERCISE') RETURNING id`,
+        [pid],
+      );
       await c.query(
         `INSERT INTO need_disposition (participant_id, need_id, status, note)
          SELECT $1, n.id, 'OPEN', $2 FROM need n WHERE n.participant_id = $1 AND n.label <> $2 ORDER BY n.created_at LIMIT 1`,
         [pid, SEEDED_PRIVATE],
       );
-      await one('follow_up_note', `INSERT INTO follow_up_note (participant_id, content) VALUES ($1, $2) RETURNING id`, [pid, SEEDED_PRIVATE]);
+      await one('follow_up_note', `INSERT INTO follow_up_note (participant_id, content) VALUES ($1, $2) RETURNING id`, [
+        pid,
+        SEEDED_PRIVATE,
+      ]);
       const [{ id: individual }] = (
         await c.query<{ id: string }>(
           `INSERT INTO follow_up (session_id, type, scope, owner_participant_id, status, scheduled_for)
@@ -180,17 +256,16 @@ async function seedLeaverPrivateRows(h: Harness, adaUser: string): Promise<Recor
         `INSERT INTO follow_up_checkin (follow_up_id, participant_id, payload) VALUES ($1, $2, jsonb_build_object('note', $3::text)) RETURNING id`,
         [individual, pid, SEEDED_PRIVATE],
       );
-      await one('reminder', `INSERT INTO reminder (user_id, follow_up_id, remind_at, note) VALUES ($1, $2, now() + interval '1 day', $3) RETURNING id`, [
-        adaUser,
-        individual,
-        SEEDED_PRIVATE,
-      ]);
+      await one(
+        'reminder',
+        `INSERT INTO reminder (user_id, follow_up_id, remind_at, note) VALUES ($1, $2, now() + interval '1 day', $3) RETURNING id`,
+        [adaUser, individual, SEEDED_PRIVATE],
+      );
     },
     h.fixture.database,
   );
   return labels;
 }
-
 
 /**
  * Fix round 1 (M5): one count per seeded private row class of the leaver, taken right after
@@ -223,7 +298,8 @@ async function leaverCensus(h: Harness, adaUser: string): Promise<Record<string,
   await withClient(
     h.fixture.target,
     async c => {
-      for (const [k, sql] of Object.entries(LEAVER_ROW_CENSUS)) out[k] = (await c.query<{ n: number }>(sql, [adaUser])).rows[0].n;
+      for (const [k, sql] of Object.entries(LEAVER_ROW_CENSUS))
+        out[k] = (await c.query<{ n: number }>(sql, [adaUser])).rows[0].n;
     },
     h.fixture.database,
   );
@@ -309,7 +385,11 @@ describe(`golden: ${SCENARIO}`, () => {
   });
 
   targetMessageStageChecks({ harness: () => harness, steps: () => steps });
-  targetFixtureDeltaChecks({ harness: () => harness, steps: () => steps, partnerLeftFromStep: TOMBSTONE_DELETION_STEP });
+  targetFixtureDeltaChecks({
+    harness: () => harness,
+    steps: () => steps,
+    partnerLeftFromStep: TOMBSTONE_DELETION_STEP,
+  });
   authorClosureChecks({
     steps: () => steps,
     email: 'bob@e2e.test',
@@ -324,20 +404,31 @@ describe(`golden: ${SCENARIO}`, () => {
     withClient(harness.fixture.target, async c => (await c.query<T>(sql, params)).rows, harness.fixture.database);
   const data = (i: number) => (steps[i].body as { data?: Record<string, any> }).data ?? {};
 
-  targetIt('stage 4 completion pair: a legacy completion without `closed` is IN_PROGRESS with the selection gate', async () => {
-    const ms = await q<{ user_id: string; key: string }>(
-      `SELECT p.user_id, pm.milestone_key AS key FROM participant_milestone pm JOIN participant p ON p.id = pm.participant_id`,
-    );
-    expect(ms.filter(m => m.key === 'closed')).toEqual([]);
-    expect(ms.filter(m => m.key === 'choices_shared').map(m => m.user_id).sort()).toEqual([adaId, bobId].sort());
-    for (const i of [beforeRead('progress'), afterRead('progress')]) {
-      expect(data(i).myProgress).toMatchObject({ stage: 4, status: 'IN_PROGRESS', completedAt: null });
-      expect(data(i).myProgress.gatesSatisfied.selectionSubmitted).toBe(true);
-    }
-    for (const i of [beforeRead('session'), afterRead('session')]) {
-      expect(data(i).session).toMatchObject({ stageStatus: 'IN_PROGRESS', myProgress: { stage: 4, status: 'IN_PROGRESS' } });
-    }
-  });
+  targetIt(
+    'stage 4 completion pair: a legacy completion without `closed` is IN_PROGRESS with the selection gate',
+    async () => {
+      const ms = await q<{ user_id: string; key: string }>(
+        `SELECT p.user_id, pm.milestone_key AS key FROM participant_milestone pm JOIN participant p ON p.id = pm.participant_id`,
+      );
+      expect(ms.filter(m => m.key === 'closed')).toEqual([]);
+      expect(
+        ms
+          .filter(m => m.key === 'choices_shared')
+          .map(m => m.user_id)
+          .sort(),
+      ).toEqual([adaId, bobId].sort());
+      for (const i of [beforeRead('progress'), afterRead('progress')]) {
+        expect(data(i).myProgress).toMatchObject({ stage: 4, status: 'IN_PROGRESS', completedAt: null });
+        expect(data(i).myProgress.gatesSatisfied.selectionSubmitted).toBe(true);
+      }
+      for (const i of [beforeRead('session'), afterRead('session')]) {
+        expect(data(i).session).toMatchObject({
+          stageStatus: 'IN_PROGRESS',
+          myProgress: { stage: 4, status: 'IN_PROGRESS' },
+        });
+      }
+    },
+  );
 
   targetIt("needs comparison pair: partnerNeeds are Ada's need_share texts, myNeeds Bob's own needs", async () => {
     const [bobNeeds, adaShares] = await Promise.all([
@@ -352,47 +443,80 @@ describe(`golden: ${SCENARIO}`, () => {
     ]);
     const d = data(beforeRead('needs comparison'));
     expect(d.myNeeds.map((n: { need: string }) => n.need)).toEqual(bobNeeds.map(n => n.label));
-    expect(d.partnerNeeds.map((n: { need: string }) => n.need).sort()).toEqual(adaShares.map(s => s.shared_text).sort());
+    expect(d.partnerNeeds.map((n: { need: string }) => n.need).sort()).toEqual(
+      adaShares.map(s => s.shared_text).sort(),
+    );
     expect(adaShares.map(s => s.shared_text).sort()).toEqual([...TOMBSTONE_TEXT.adaNeedShares].sort());
   });
 
-  targetIt('stage 4 state pair: the selections are the choice rows; the open needs are the four shares no proposal covers', async () => {
-    const choices = await q<{ user_id: string; proposal_id: string; decision: string }>(
-      `SELECT p.user_id, c.proposal_id, c.decision::text AS decision FROM proposal_choice c JOIN participant p ON p.id = c.participant_id`,
-    );
-    const shares = await q<{ need_id: string }>(
-      `SELECT s.need_id FROM need_share s WHERE NOT EXISTS (SELECT 1 FROM proposal_need pn WHERE pn.need_id = s.need_id)`,
-    );
-    for (const i of [beforeRead('stage4'), afterRead('stage4')]) {
-      const d = data(i);
-      const mine = choices.filter(c => c.user_id === bobId).map(c => ({ proposalId: c.proposal_id, decision: c.decision }));
-      const theirs = choices.filter(c => c.user_id === adaId).map(c => ({ proposalId: c.proposal_id, decision: c.decision }));
-      expect(d.mySelections.map((x: { proposalId: string; decision: string }) => ({ proposalId: x.proposalId, decision: x.decision }))).toEqual(mine);
-      expect(d.partnerSelections.map((x: { proposalId: string; decision: string }) => ({ proposalId: x.proposalId, decision: x.decision }))).toEqual(theirs);
-      expect(d.inventory.unaddressedNeeds.map((n: { id: string }) => n.id).sort()).toEqual(shares.map(x => x.need_id).sort());
-    }
-  });
+  targetIt(
+    'stage 4 state pair: the selections are the choice rows; the open needs are the four shares no proposal covers',
+    async () => {
+      const choices = await q<{ user_id: string; proposal_id: string; decision: string }>(
+        `SELECT p.user_id, c.proposal_id, c.decision::text AS decision FROM proposal_choice c JOIN participant p ON p.id = c.participant_id`,
+      );
+      const shares = await q<{ need_id: string }>(
+        `SELECT s.need_id FROM need_share s WHERE NOT EXISTS (SELECT 1 FROM proposal_need pn WHERE pn.need_id = s.need_id)`,
+      );
+      for (const i of [beforeRead('stage4'), afterRead('stage4')]) {
+        const d = data(i);
+        const mine = choices
+          .filter(c => c.user_id === bobId)
+          .map(c => ({ proposalId: c.proposal_id, decision: c.decision }));
+        const theirs = choices
+          .filter(c => c.user_id === adaId)
+          .map(c => ({ proposalId: c.proposal_id, decision: c.decision }));
+        expect(
+          d.mySelections.map((x: { proposalId: string; decision: string }) => ({
+            proposalId: x.proposalId,
+            decision: x.decision,
+          })),
+        ).toEqual(mine);
+        expect(
+          d.partnerSelections.map((x: { proposalId: string; decision: string }) => ({
+            proposalId: x.proposalId,
+            decision: x.decision,
+          })),
+        ).toEqual(theirs);
+        expect(d.inventory.unaddressedNeeds.map((n: { id: string }) => n.id).sort()).toEqual(
+          shares.map(x => x.need_id).sort(),
+        );
+      }
+    },
+  );
 
-  targetIt("tombstone attribution pair: the partner id and the delivered rows' sender are Ada's tombstone user", async () => {
-    const after = (read: string) => data(afterRead(read));
-    expect(after('session').session.partner).toEqual({ id: adaId, name: null, nickname: null });
-    expect(after('state').session.partner).toEqual({ id: adaId, name: null, nickname: null });
-    expect(after('session list').items[0].partner).toEqual({ id: adaId, name: null, nickname: null });
-    const delivered = (after('messages').messages as Array<{ senderId: string | null; role: string }>).filter(m => m.senderId === adaId);
-    expect(delivered.length).toBe(2);
-    const [inv] = await q<{ id: string }>(`SELECT id FROM invitation WHERE session_id = $1`, [harness.sessionId]);
-    expect(after('state').invitation?.id).toBe(inv.id);
-  });
+  targetIt(
+    "tombstone attribution pair: the partner id and the delivered rows' sender are Ada's tombstone user",
+    async () => {
+      const after = (read: string) => data(afterRead(read));
+      expect(after('session').session.partner).toEqual({ id: adaId, name: null, nickname: null });
+      expect(after('state').session.partner).toEqual({ id: adaId, name: null, nickname: null });
+      expect(after('session list').items[0].partner).toEqual({ id: adaId, name: null, nickname: null });
+      const delivered = (after('messages').messages as Array<{ senderId: string | null; role: string }>).filter(
+        m => m.senderId === adaId,
+      );
+      expect(delivered.length).toBe(2);
+      const [inv] = await q<{ id: string }>(`SELECT id FROM invitation WHERE session_id = $1`, [harness.sessionId]);
+      expect(after('state').invitation?.id).toBe(inv.id);
+    },
+  );
 
-  targetIt("revealed-round pair: after the deletion Bob's empathy status shows Ada's revealed round, his own as his", async () => {
-    const [adaAttempt] = await q<{ id: string }>(
-      `SELECT a.id FROM empathy_attempt a JOIN participant p ON p.id = a.author_participant_id WHERE p.user_id = $1 AND a.revealed_at IS NOT NULL`,
-      [adaId],
-    );
-    const d = data(afterRead('empathy status'));
-    expect(d.partnerAttempt).toMatchObject({ id: adaAttempt.id, content: TOMBSTONE_TEXT.adaEmpathy, sourceUserId: adaId });
-    expect(d.myAttempt).toMatchObject({ content: TOMBSTONE_TEXT.bobEmpathy, sourceUserId: bobId });
-  });
+  targetIt(
+    "revealed-round pair: after the deletion Bob's empathy status shows Ada's revealed round, his own as his",
+    async () => {
+      const [adaAttempt] = await q<{ id: string }>(
+        `SELECT a.id FROM empathy_attempt a JOIN participant p ON p.id = a.author_participant_id WHERE p.user_id = $1 AND a.revealed_at IS NOT NULL`,
+        [adaId],
+      );
+      const d = data(afterRead('empathy status'));
+      expect(d.partnerAttempt).toMatchObject({
+        id: adaAttempt.id,
+        content: TOMBSTONE_TEXT.adaEmpathy,
+        sourceUserId: adaId,
+      });
+      expect(d.myAttempt).toMatchObject({ content: TOMBSTONE_TEXT.bobEmpathy, sourceUserId: bobId });
+    },
+  );
 
   targetIt('initial rank pair: the target writer stamps the offer once (updated_at = created_at)', async () => {
     const rows = await q<{ same: boolean }>(`SELECT updated_at = created_at AS same FROM context_share_offer`);
@@ -433,15 +557,15 @@ describe(`golden: ${SCENARIO}`, () => {
     const adaAttempt = t.EmpathyAttempt.find(a => a.content === TOMBSTONE_TEXT.adaEmpathy);
     rule('revealed attempt survives', !!adaAttempt);
     rule('revealed attempt keeps its author (the tombstone)', !!adaAttempt && adaAttempt.sourceUserId !== null);
-    rule('agreement survives', t.Agreement.some(a => a.description === AGREEMENT));
+    rule(
+      'agreement survives',
+      t.Agreement.some(a => a.description === AGREEMENT),
+    );
     rule(
       'shared needs survive',
       fixture.participants[0].needs!.every(n => t.IdentifiedNeed.some(r => r.need === n.need)),
     );
-    rule(
-      "leaver's own conversation is gone",
-      !t.Message.some(m => ADA_PRIVATE_LINES.includes(String(m.content))),
-    );
+    rule("leaver's own conversation is gone", !t.Message.some(m => ADA_PRIVATE_LINES.includes(String(m.content))));
     rule("leaver's drafts are gone", !t.EmpathyDraft.some(d => d.userId === adaId));
     rule("leaver's reflections are gone", adaReflections.length === 0);
     // Ada's two captures: her session turn (her private lines) and her
@@ -479,7 +603,6 @@ describe(`golden: ${SCENARIO}`, () => {
     expect(unexpectedLeakReport(deviations, TOMBSTONE_KNOWN_DEVIATIONS)).toEqual({ unexpected: [], stale: [] });
   });
 
-
   /**
    * TS-12: the walk on the TARGET (spec §4 app.anonymize_user_account →
    * app.anonymize_user_in_session; R17), asserted on the database after the
@@ -495,31 +618,57 @@ describe(`golden: ${SCENARIO}`, () => {
     const [ada] = t.participant.filter(p => p.user_id === adaId);
     const [bobP] = t.participant.filter(p => p.user_id === bobId);
     const bobConversations = t.conversation.filter(c => c.participant_id === bobP.id).map(c => c.id);
-    const has = (rows: Array<Record<string, unknown>>, pred: (r: Record<string, unknown>) => boolean) => rows.some(pred);
+    const has = (rows: Array<Record<string, unknown>>, pred: (r: Record<string, unknown>) => boolean) =>
+      rows.some(pred);
 
     rule('live session → ABANDONED', t.session[0].status === 'ABANDONED');
     rule('participant left (left_at set)', !!ada && ada.left_at !== null);
     rule(
       'delivered message survives',
-      has(t.message, m => m.content === TOMBSTONE_TEXT.adaSharedContext && bobConversations.includes(m.conversation_id as string)),
+      has(
+        t.message,
+        m => m.content === TOMBSTONE_TEXT.adaSharedContext && bobConversations.includes(m.conversation_id as string),
+      ),
     );
     const adaAttempt = t.empathy_attempt.find(a => a.content === TOMBSTONE_TEXT.adaEmpathy);
     rule('revealed attempt survives', !!adaAttempt && adaAttempt.revealed_at !== null);
-    rule('revealed attempt keeps its author (the tombstone)', !!adaAttempt && adaAttempt.author_participant_id === ada.id);
-    rule("leaver's unrevealed attempts are gone", !has(t.empathy_attempt, a => a.author_participant_id === ada.id && a.revealed_at === null));
-    rule('agreement survives', has(t.agreement, a => a.description === AGREEMENT));
-    rule('agreement keeps the tombstone as a party', has(t.agreement_party, a => a.participant_id === ada.id));
+    rule(
+      'revealed attempt keeps its author (the tombstone)',
+      !!adaAttempt && adaAttempt.author_participant_id === ada.id,
+    );
+    rule(
+      "leaver's unrevealed attempts are gone",
+      !has(t.empathy_attempt, a => a.author_participant_id === ada.id && a.revealed_at === null),
+    );
+    rule(
+      'agreement survives',
+      has(t.agreement, a => a.description === AGREEMENT),
+    );
+    rule(
+      'agreement keeps the tombstone as a party',
+      has(t.agreement_party, a => a.participant_id === ada.id),
+    );
     rule(
       'shared needs survive',
-      TOMBSTONE_TEXT.adaNeedShares.every(text => has(t.need_share, s => s.participant_id === ada.id && s.shared_text === text)) &&
-        t.need_share.filter(s => s.participant_id === ada.id).every(s => has(t.need, n => n.id === s.need_id)),
+      TOMBSTONE_TEXT.adaNeedShares.every(text =>
+        has(t.need_share, s => s.participant_id === ada.id && s.shared_text === text),
+      ) && t.need_share.filter(s => s.participant_id === ada.id).every(s => has(t.need, n => n.id === s.need_id)),
     );
-    rule("leaver's unshared needs are gone", !has(t.need, n => n.participant_id === ada.id && !has(t.need_share, s => s.need_id === n.id)));
-    rule('shared choices survive', has(t.proposal_choice, c => c.participant_id === ada.id));
+    rule(
+      "leaver's unshared needs are gone",
+      !has(t.need, n => n.participant_id === ada.id && !has(t.need_share, s => s.need_id === n.id)),
+    );
+    rule(
+      'shared choices survive',
+      has(t.proposal_choice, c => c.participant_id === ada.id),
+    );
     rule("leaver's own conversation is gone", !has(t.conversation, c => c.participant_id === ada.id));
     rule(
       "none of the leaver's private lines remain (her copy of the delivered context included)",
-      !has(t.message, m => ADA_PRIVATE_LINES.includes(String(m.content)) && !bobConversations.includes(m.conversation_id as string)),
+      !has(
+        t.message,
+        m => ADA_PRIVATE_LINES.includes(String(m.content)) && !bobConversations.includes(m.conversation_id as string),
+      ),
     );
     rule("leaver's read state is gone", !has(t.conversation_read_state, r => r.participant_id === ada.id));
     rule("leaver's drafts are gone", !has(t.draft, d => d.participant_id === ada.id));
@@ -540,9 +689,16 @@ describe(`golden: ${SCENARIO}`, () => {
     // Fix round 1 (I1): the prompt is input/output on the target; scan every blob.
     const adaCapture = (b: Record<string, unknown>) => {
       const blobs = JSON.stringify([b.input, b.output, b.structured_output]);
-      return ADA_PRIVATE_LINES.some(l => blobs.includes(l)) || blobs.includes("Ada's private reflection guide") || blobs.includes(SEEDED_PRIVATE);
+      return (
+        ADA_PRIVATE_LINES.some(l => blobs.includes(l)) ||
+        blobs.includes("Ada's private reflection guide") ||
+        blobs.includes(SEEDED_PRIVATE)
+      );
     };
-    rule("leaver's brain_activity is gone", !has(t.brain_activity, adaCapture) && !has(t.brain_activity, b => b.participant_id === ada.id));
+    rule(
+      "leaver's brain_activity is gone",
+      !has(t.brain_activity, adaCapture) && !has(t.brain_activity, b => b.participant_id === ada.id),
+    );
     rule('participant.display_name is NULL', adaDisplayNames.length === 1 && adaDisplayNames[0] === null);
     rule(
       "the partner no longer reads the leaver's name",
@@ -562,10 +718,14 @@ describe(`golden: ${SCENARIO}`, () => {
         adaUser.clerk_id === null &&
         adaUser.deleted_at !== null,
     );
-    rule('the concept views represent the state after the deletion', !steps.some(s => s.concept?.unrepresentable !== undefined));
+    rule(
+      'the concept views represent the state after the deletion',
+      !steps.some(s => s.concept?.unrepresentable !== undefined),
+    );
     rule(
       'the seeded private rows were there to delete (the absence rules are not vacuous)',
-      Object.values(censusBefore).every(n => n >= 1) && Object.keys(censusBefore).length === Object.keys(LEAVER_ROW_CENSUS).length,
+      Object.values(censusBefore).every(n => n >= 1) &&
+        Object.keys(censusBefore).length === Object.keys(LEAVER_ROW_CENSUS).length,
     );
     for (const k of Object.keys(LEAVER_ROW_CENSUS)) rule(`leaver's ${k} is gone (census)`, censusAfter[k] === 0);
   }
@@ -601,7 +761,11 @@ describe(`golden: ${SCENARIO}`, () => {
       ),
     );
     expect(nameReads).toHaveLength(3);
-    const observed = findLeaks(nameReads, { "Ada's email": 'ada@e2e.test', "Ada's first name": 'Ada', "Ada's last name": 'Lovelace' });
+    const observed = findLeaks(nameReads, {
+      "Ada's email": 'ada@e2e.test',
+      "Ada's first name": 'Ada',
+      "Ada's last name": 'Lovelace',
+    });
     expect(unexpectedLeakReport(observed, TOMBSTONE_NAME_KNOWN_LEAKS)).toEqual({ unexpected: [], stale: [] });
   });
 });

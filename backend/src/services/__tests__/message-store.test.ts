@@ -36,10 +36,13 @@ describe('message DTO mapping', () => {
   });
 
   it("maps a row to the shared MessageDTO: sender's user id, owner's stage at the instant", () => {
-    const dto = toMessageDTO(row({ role: 'USER', senderParticipantId: 'p-ada', senderParticipant: { userId: 'u-ada' } }), {
-      sessionId: 's1',
-      ownerMilestones: [{ key: 'compact_signed', reachedAt: new Date('2026-10-26T11:00:00.000Z') }],
-    });
+    const dto = toMessageDTO(
+      row({ role: 'USER', senderParticipantId: 'p-ada', senderParticipant: { userId: 'u-ada' } }),
+      {
+        sessionId: 's1',
+        ownerMilestones: [{ key: 'compact_signed', reachedAt: new Date('2026-10-26T11:00:00.000Z') }],
+      },
+    );
     expect(dto).toEqual({
       id: 'm1',
       sessionId: 's1',

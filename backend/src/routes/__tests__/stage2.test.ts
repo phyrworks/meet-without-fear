@@ -21,11 +21,12 @@ import { notifyPartner, publishSessionEvent } from '../../services/realtime';
 // Mock realtime
 jest.mock('../../services/realtime');
 
-
 // Mock bedrock
 jest.mock('../../lib/bedrock', () => ({
   getSonnetResponse: jest.fn().mockResolvedValue('{"response": "Test transition"}'),
-  getModelCompletion: jest.fn().mockResolvedValue('{"response": "AI response", "proposedFeedback": "Refined feedback"}'),
+  getModelCompletion: jest
+    .fn()
+    .mockResolvedValue('{"response": "AI response", "proposedFeedback": "Refined feedback"}'),
   BrainActivityCallType: {
     ORCHESTRATED_RESPONSE: 'ORCHESTRATED_RESPONSE',
   },
@@ -68,8 +69,6 @@ import {
   skipRefinement,
 } from '../../controllers/stage2';
 
-
-
 // Mock Express request/response
 function mockRequest(overrides: Record<string, unknown> = {}) {
   return {
@@ -107,8 +106,6 @@ describe('Stage 2 API', () => {
   });
 
   describe('POST /sessions/:id/empathy/draft (saveDraft)', () => {
-
-
     it('rejects empty content', async () => {
       const req = mockRequest({
         body: { content: '', readyToShare: false },
@@ -122,36 +119,22 @@ describe('Stage 2 API', () => {
         expect.objectContaining({
           success: false,
           error: expect.objectContaining({ code: 'VALIDATION_ERROR' }),
-        })
+        }),
       );
     });
-
   });
 
-  describe('GET /sessions/:id/empathy/draft (getDraft)', () => {
+  describe('GET /sessions/:id/empathy/draft (getDraft)', () => {});
 
-  });
+  describe('POST /sessions/:id/empathy/consent (consentToShare)', () => {});
 
-  describe('POST /sessions/:id/empathy/consent (consentToShare)', () => {
+  describe('GET /sessions/:id/empathy/partner (getPartnerEmpathy)', () => {});
 
-
-  });
-
-  describe('GET /sessions/:id/empathy/partner (getPartnerEmpathy)', () => {
-
-  });
-
-  describe('POST /sessions/:id/empathy/validate (validateEmpathy)', () => {
-
-
-
-
-  });
+  describe('POST /sessions/:id/empathy/validate (validateEmpathy)', () => {});
 });
 
 describe('Validation Feedback Routes', () => {
-  describe('POST /sessions/:id/empathy/feedback/draft', () => {
-  });
+  describe('POST /sessions/:id/empathy/feedback/draft', () => {});
 
   describe('POST /sessions/:id/empathy/feedback/refine', () => {
     it('returns refined feedback from AI', async () => {
@@ -177,7 +160,7 @@ describe('Validation Feedback Routes', () => {
             response: 'AI response',
             proposedFeedback: 'Refined feedback',
           }),
-        })
+        }),
       );
     });
 
@@ -211,13 +194,10 @@ describe('Validation Feedback Routes', () => {
             { role: 'assistant', content: 'Proposed feedback: serious incidents at drop-off' },
             { role: 'user', content: "Don't water that down" },
           ],
-        })
+        }),
       );
     });
   });
 
-  describe('POST /sessions/:id/empathy/skip-refinement', () => {
-
-
-  });
+  describe('POST /sessions/:id/empathy/skip-refinement', () => {});
 });

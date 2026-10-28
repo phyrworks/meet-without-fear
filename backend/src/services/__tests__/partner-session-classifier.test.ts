@@ -19,7 +19,6 @@ import {
   IdMapping,
 } from '../partner-session-classifier';
 
-
 // ============================================================================
 // Short ID Mapping Tests
 // ============================================================================
@@ -144,9 +143,7 @@ describe('Short ID Mapping', () => {
       };
 
       const factUpdates: FactUpdatePayload = {
-        upsert: [
-          { id: 'unknown-id', category: 'People', fact: 'Some fact' },
-        ],
+        upsert: [{ id: 'unknown-id', category: 'People', fact: 'Some fact' }],
         delete: ['unknown-delete-id'],
       };
 
@@ -231,11 +228,11 @@ describe('applyFactUpdates', () => {
 
     expect(result).toHaveLength(4);
     // Original facts preserved
-    expect(result.find((f) => f.id === 'fact-1')).toBeDefined();
-    expect(result.find((f) => f.id === 'fact-2')).toBeDefined();
-    expect(result.find((f) => f.id === 'fact-3')).toBeDefined();
+    expect(result.find(f => f.id === 'fact-1')).toBeDefined();
+    expect(result.find(f => f.id === 'fact-2')).toBeDefined();
+    expect(result.find(f => f.id === 'fact-3')).toBeDefined();
     // New fact added with generated ID
-    const newFact = result.find((f) => f.fact === 'Married for 10 years');
+    const newFact = result.find(f => f.fact === 'Married for 10 years');
     expect(newFact).toBeDefined();
     expect(newFact?.id).toBeDefined();
     expect(newFact?.id).toMatch(/^[a-f0-9-]{36}$/);
@@ -243,16 +240,14 @@ describe('applyFactUpdates', () => {
 
   it('updates existing facts (upsert with matching ID)', () => {
     const llmOutput: FactUpdatePayload = {
-      upsert: [
-        { id: 'fact-1', category: 'People', fact: 'User has a daughter named Emma who is 14' },
-      ],
+      upsert: [{ id: 'fact-1', category: 'People', fact: 'User has a daughter named Emma who is 14' }],
       delete: [],
     };
 
     const result = applyFactUpdates(existingFacts, llmOutput);
 
     expect(result).toHaveLength(3);
-    const updatedFact = result.find((f) => f.id === 'fact-1');
+    const updatedFact = result.find(f => f.id === 'fact-1');
     expect(updatedFact?.fact).toBe('User has a daughter named Emma who is 14');
     expect(updatedFact?.category).toBe('People');
   });
@@ -282,13 +277,13 @@ describe('applyFactUpdates', () => {
 
     expect(result).toHaveLength(3); // 3 original - 1 deleted + 1 new = 3
     // Updated fact
-    expect(result.find((f) => f.id === 'fact-1')?.fact).toBe('UPDATED: User has a daughter');
+    expect(result.find(f => f.id === 'fact-1')?.fact).toBe('UPDATED: User has a daughter');
     // Deleted fact gone
-    expect(result.find((f) => f.id === 'fact-2')).toBeUndefined();
+    expect(result.find(f => f.id === 'fact-2')).toBeUndefined();
     // Preserved fact
-    expect(result.find((f) => f.id === 'fact-3')).toBeDefined();
+    expect(result.find(f => f.id === 'fact-3')).toBeDefined();
     // New fact added
-    expect(result.find((f) => f.fact === 'NEW: Married for 10 years')).toBeDefined();
+    expect(result.find(f => f.fact === 'NEW: Married for 10 years')).toBeDefined();
   });
 
   it('preserves all facts when LLM returns empty upsert/delete', () => {
@@ -305,9 +300,7 @@ describe('applyFactUpdates', () => {
 
   it('handles empty existing facts with new additions', () => {
     const llmOutput: FactUpdatePayload = {
-      upsert: [
-        { category: 'People', fact: 'First fact ever' },
-      ],
+      upsert: [{ category: 'People', fact: 'First fact ever' }],
       delete: [],
     };
 
@@ -365,7 +358,7 @@ describe('applyFactUpdates', () => {
     const result = applyFactUpdates([], llmOutput);
 
     expect(result).toHaveLength(2);
-    expect(result.map((f) => f.fact)).toEqual(['Valid fact', 'Another valid fact']);
+    expect(result.map(f => f.fact)).toEqual(['Valid fact', 'Another valid fact']);
   });
 
   it('handles null/undefined llmOutput gracefully (preserves existing)', () => {
@@ -376,4 +369,3 @@ describe('applyFactUpdates', () => {
     expect(result2).toEqual(existingFacts);
   });
 });
-

@@ -124,7 +124,11 @@ jest.mock('../dispatch-handler', () => ({
 import { orchestrateResponse, type OrchestratorContext } from '../ai-orchestrator';
 import { getModelCompletionWithTools } from '../../lib/bedrock';
 import { readPreferences } from '../user-settings';
-import { DEFAULT_MEMORY_PREFERENCES, DEFAULT_NOTIFICATION_PREFERENCES, DEFAULT_PRIVACY_PREFERENCES } from '@meet-without-fear/shared';
+import {
+  DEFAULT_MEMORY_PREFERENCES,
+  DEFAULT_NOTIFICATION_PREFERENCES,
+  DEFAULT_PRIVACY_PREFERENCES,
+} from '@meet-without-fear/shared';
 import { publishContextUpdated } from '../realtime';
 import { handleDispatch } from '../dispatch-handler';
 
@@ -330,7 +334,7 @@ Take a look at that framing when you're ready.`;
       expect(publishContextUpdated).toHaveBeenCalledWith(
         'session-1',
         'user-1',
-        expect.any(String) // assembledAt timestamp
+        expect.any(String), // assembledAt timestamp
       );
     });
 
@@ -449,9 +453,7 @@ Take a look at that framing when you're ready.`;
         });
       }
 
-      const result = await orchestrateResponse(
-        buildContext({ conversationHistory: longHistory, turnCount: 40 })
-      );
+      const result = await orchestrateResponse(buildContext({ conversationHistory: longHistory, turnCount: 40 }));
 
       expect(result.usedMock).toBe(false);
 
@@ -619,9 +621,7 @@ Take a look at that framing when you're ready.`;
     it('returns dispatched response when dispatch tag is present', async () => {
       mockGetModelCompletion.mockResolvedValue(DISPATCH_RESPONSE);
 
-      const result = await orchestrateResponse(
-        buildContext({ userMessage: 'How does this process work?' })
-      );
+      const result = await orchestrateResponse(buildContext({ userMessage: 'How does this process work?' }));
 
       expect(result.dispatchTag).toBe('EXPLAIN_PROCESS');
       expect(result.usedMock).toBe(false);
@@ -630,9 +630,7 @@ Take a look at that framing when you're ready.`;
     it('includes initial response for two-message dispatch flow', async () => {
       mockGetModelCompletion.mockResolvedValue(DISPATCH_RESPONSE_WITH_INITIAL);
 
-      const result = await orchestrateResponse(
-        buildContext({ userMessage: 'What happens in this process?' })
-      );
+      const result = await orchestrateResponse(buildContext({ userMessage: 'What happens in this process?' }));
 
       expect(result.dispatchTag).toBe('EXPLAIN_PROCESS');
       // The initial response (text outside dispatch tags) is returned
@@ -643,9 +641,7 @@ Take a look at that framing when you're ready.`;
     it('calls handleDispatch with the correct tag', async () => {
       mockGetModelCompletion.mockResolvedValue(DISPATCH_RESPONSE);
 
-      await orchestrateResponse(
-        buildContext({ userMessage: 'How does this process work?' })
-      );
+      await orchestrateResponse(buildContext({ userMessage: 'How does this process work?' }));
 
       expect(handleDispatch).toHaveBeenCalledWith(
         'EXPLAIN_PROCESS',
@@ -653,7 +649,7 @@ Take a look at that framing when you're ready.`;
           userMessage: 'How does this process work?',
           sessionId: 'session-1',
           turnId: 'session-1-1',
-        })
+        }),
       );
     });
 

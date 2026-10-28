@@ -56,7 +56,11 @@ describeTarget('the Stage 3 share path, as mwf_app and mwf_job with identity bin
       `INSERT INTO need (participant_id, label, category, ai_confidence, evidence) VALUES ($1, 'PROBE_DELETED_LABEL', 'SAFETY', 0.9, ARRAY['PROBE_DELETED_EVIDENCE']) RETURNING id`,
       [ids.ada],
     );
-    const res = await http({ id: ids.adaUser, email: 'ada@e2e.test' }, 'delete', `/sessions/${ids.session}/needs/${extra.id}`);
+    const res = await http(
+      { id: ids.adaUser, email: 'ada@e2e.test' },
+      'delete',
+      `/sessions/${ids.session}/needs/${extra.id}`,
+    );
     expect(res.status).toBe(200);
     expect(sessionSpy.mock.calls.filter(c => c[1] === 'need.deleted')).toEqual([]);
     const toOwner = userSpy.mock.calls.filter(c => (c[2] as { kind?: string }).kind === 'need.deleted');
@@ -68,9 +72,9 @@ describeTarget('the Stage 3 share path, as mwf_app and mwf_job with identity bin
 
   it('mwf_app cannot call the need_share writer at all', async () => {
     const [need] = await needsOf(ids.bob);
-    await expect(
-      run.as('mwf_app', ids.bobUser, `SELECT app.need_share($1::uuid, 'x')`, [need.id]),
-    ).rejects.toThrow(/permission denied for function need_share/);
+    await expect(run.as('mwf_app', ids.bobUser, `SELECT app.need_share($1::uuid, 'x')`, [need.id])).rejects.toThrow(
+      /permission denied for function need_share/,
+    );
   });
 
   it('app.need_share (as mwf_job) refuses a need without its owner’s GRANTED consent', async () => {
@@ -98,11 +102,17 @@ describeTarget('the Stage 3 share path, as mwf_app and mwf_job with identity bin
       [ids.bob],
     );
     expect(consents).toEqual(
-      needs.map(n => ({ need_id: n.id, decision: 'GRANTED', decided: true, target_kind: 'NEED' })).sort((a, b) =>
-        a.need_id < b.need_id ? -1 : 1,
-      ),
+      needs
+        .map(n => ({ need_id: n.id, decision: 'GRANTED', decided: true, target_kind: 'NEED' }))
+        .sort((a, b) => (a.need_id < b.need_id ? -1 : 1)),
     );
-    const shares = await run.sql<{ need_id: string; participant_id: string; session_id: string; shared_text: string; category: string }>(
+    const shares = await run.sql<{
+      need_id: string;
+      participant_id: string;
+      session_id: string;
+      shared_text: string;
+      category: string;
+    }>(
       `SELECT need_id, participant_id, session_id, shared_text, category::text AS category FROM need_share ORDER BY need_id`,
     );
     expect(shares.map(s => s.need_id).sort()).toEqual(needs.map(n => n.id).sort());
@@ -149,9 +159,9 @@ describeTarget('the Stage 3 share path, as mwf_app and mwf_job with identity bin
        WHERE milestone_key IN ('needs_shared', 'needs_validated') ORDER BY participant_id, milestone_key`,
     );
     expect(reached).toHaveLength(4);
-    expect(
-      await run.sql(`SELECT all_reached FROM v_session_readiness WHERE milestone_key = 'needs_shared'`),
-    ).toEqual([{ all_reached: true }]);
+    expect(await run.sql(`SELECT all_reached FROM v_session_readiness WHERE milestone_key = 'needs_shared'`)).toEqual([
+      { all_reached: true },
+    ]);
   });
 
   it('revocation: need_share.revoked_at and the consent REVOKED in one transaction; the partner read is empty after', async () => {
@@ -166,14 +176,16 @@ describeTarget('the Stage 3 share path, as mwf_app and mwf_job with identity bin
     expect(c.decision).toBe('REVOKED');
     // now() is the transaction's instant: equal stamps = one transaction.
     expect(c.revoked_at.getTime()).toBe(s.revoked_at.getTime());
-    const adaRead = await run.as('mwf_app', ids.adaUser, `SELECT need_id FROM v_need_shared WHERE need_id = $1`, [need.id]);
+    const adaRead = await run.as('mwf_app', ids.adaUser, `SELECT need_id FROM v_need_shared WHERE need_id = $1`, [
+      need.id,
+    ]);
     expect(adaRead).toEqual([]);
   });
 
   it('a need of someone else cannot be revoked by the caller (identity-bound owner check)', async () => {
     const [need] = await needsOf(ids.ada);
-    await expect(
-      run.as('mwf_app', ids.bobUser, `SELECT app.need_revoke_share($1::uuid)`, [need.id]),
-    ).rejects.toThrow(/need not found/);
+    await expect(run.as('mwf_app', ids.bobUser, `SELECT app.need_revoke_share($1::uuid)`, [need.id])).rejects.toThrow(
+      /need not found/,
+    );
   });
 });

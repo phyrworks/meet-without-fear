@@ -41,7 +41,9 @@ describe('concept views — declaration', () => {
     const defined = viewsDefinedIn(fs.readFileSync(TARGET_SHAPE_SQL, 'utf8'));
     expect(defined.filter(v => !v.startsWith('concept_check_'))).toEqual(CONCEPT_NAMES.map(viewName).sort());
     // Every check it keeps is one current-shape.sql has too.
-    const currentChecks = viewsDefinedIn(fs.readFileSync(CURRENT_SHAPE_SQL, 'utf8')).filter(v => v.startsWith('concept_check_'));
+    const currentChecks = viewsDefinedIn(fs.readFileSync(CURRENT_SHAPE_SQL, 'utf8')).filter(v =>
+      v.startsWith('concept_check_'),
+    );
     for (const v of defined.filter(x => x.startsWith('concept_check_'))) expect(currentChecks).toContain(v);
   });
 });
@@ -69,7 +71,9 @@ describe('concept views — declaration', () => {
     for (const f of fs.readdirSync(dir).filter(x => x.endsWith('.concept.json'))) {
       const g = JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8')) as {
         initial: Record<string, Record<string, Record<string, unknown>>>;
-        steps: Array<{ changes?: Array<{ view: string; before?: Record<string, unknown>; after?: Record<string, unknown> }> }>;
+        steps: Array<{
+          changes?: Array<{ view: string; before?: Record<string, unknown>; after?: Record<string, unknown> }>;
+        }>;
       };
       const add = (concept: string, row: Record<string, unknown> | undefined) => {
         if (!row) return;
@@ -144,7 +148,9 @@ describe('concept views — declaration', () => {
 
   it('resolves every participant to a user', async () => {
     expect(
-      await q(`SELECT p.id FROM old_concept_participant p LEFT JOIN old_concept_user u ON u.id = p.user_id WHERE u.id IS NULL`),
+      await q(
+        `SELECT p.id FROM old_concept_participant p LEFT JOIN old_concept_user u ON u.id = p.user_id WHERE u.id IS NULL`,
+      ),
     ).toEqual([]);
   });
 

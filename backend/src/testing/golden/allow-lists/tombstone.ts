@@ -113,7 +113,7 @@ function legacyStage4Completion(): AllowRule[] {
         'TOMBSTONE_READY is a legacy completion: StageProgress stage 4 COMPLETED without a session closure. The ' +
         'target (stage shim) completes Stage 4 at the `closed` milestone, which the legacy journey never reached, so ' +
         'Stage 4 is IN_PROGRESS (no completedAt, no advance; the list asks both to complete it, and its copy ' +
-        'follows). The partner-activity instant is the shim\'s newest own turn, not the legacy stage row.',
+        "follows). The partner-activity instant is the shim's newest own turn, not the legacy stage row.",
     },
     {
       kind: 'absentKeys',
@@ -244,8 +244,8 @@ function tombstoneAttribution(): AllowRule[] {
       ],
       mustMatch: true,
       why:
-        'spec §7: the revealed round stays in its subject\'s SELECT arm forever (deviation closed): Bob reads Ada\'s ' +
-        'revealed round. Today the partner lookup lost her and the read showed Bob his own round as the partner\'s. ' +
+        "spec §7: the revealed round stays in its subject's SELECT arm forever (deviation closed): Bob reads Ada's " +
+        "revealed round. Today the partner lookup lost her and the read showed Bob his own round as the partner's. " +
         'Paired with the "Ada\'s revealed statement" survives-probe.',
     },
   ];
@@ -289,7 +289,7 @@ function rankShifts(concept: boolean): AllowRule {
         : []),
     ],
     mustMatch: true,
-    why: 'rank shifts of the closed analysis instant (before) and of the after-reads\' new concept changes (after); see rankShifts().',
+    why: "rank shifts of the closed analysis instant (before) and of the after-reads' new concept changes (after); see rankShifts().",
   };
 }
 
@@ -298,7 +298,12 @@ function initialTargetRows(): AllowRule[] {
   const share = (who: string, n: number, text: string): AllowRule => ({
     kind: 'addedEntries',
     at: 'initial.need_share',
-    where: { $key: `<need:${who}@main#${n}>`, need_id: `<need:${who}@main#${n}>`, participant_id: `<participant:${who}@main>`, shared_text: text },
+    where: {
+      $key: `<need:${who}@main#${n}>`,
+      need_id: `<need:${who}@main#${n}>`,
+      participant_id: `<participant:${who}@main>`,
+      shared_text: text,
+    },
     why: `plan §3: ${who}'s shared need becomes a need_share row with its shared text (the TS-4 view had no shares).`,
   });
   const choice = (who: string): AllowRule => ({
@@ -346,7 +351,7 @@ function initialTargetRows(): AllowRule[] {
       mustMatch: true,
       why:
         'the TS-10 target writer stamps context_share_offer.updated_at = created_at (the offer is written once), so ' +
-        'the baseline\'s <ts:48> has no instant and every later initial rank is one lower (measured: all and only these).',
+        "the baseline's <ts:48> has no instant and every later initial rank is one lower (measured: all and only these).",
     },
   ];
 }
@@ -374,7 +379,8 @@ const DEVIATION_FIX_RULES: AllowRule[] = [
     kind: 'mayDiffer',
     at: [at('needs comparison', 'body.data.partnerNeeds'), at('needs comparison', 'body.data.analysisComplete')],
     mustMatch: true,
-    why: 'spec §4 walk: need_share survives the leaver (deviation: the comparison is empty today). Paired with the ' +
+    why:
+      'spec §4 walk: need_share survives the leaver (deviation: the comparison is empty today). Paired with the ' +
       '"Ada\'s shared need" survives-probes and the need label/evidence private probes.',
   },
   {
@@ -384,7 +390,8 @@ const DEVIATION_FIX_RULES: AllowRule[] = [
       at(r, 'body.data.**.partner.nickname'),
     ]),
     mustMatch: true,
-    why: 'spec §7 v_participant: the leaver’s display_name is NULL; the partner sees the fallback, not the name. ' +
+    why:
+      'spec §7 v_participant: the leaver’s display_name is NULL; the partner sees the fallback, not the name. ' +
       'Paired with the rule check "the partner no longer reads the leaver\'s name" (name and nickname).',
   },
 ];
@@ -494,7 +501,10 @@ export const TOMBSTONE_BYTE_TARGET_ALLOW: AllowList = {
     ),
     {
       kind: 'mayDiffer',
-      at: [atBefore('empathy status', 'body.data.partnerAttempt.id'), atBefore('partner empathy', 'body.data.attempt.id')],
+      at: [
+        atBefore('empathy status', 'body.data.partnerAttempt.id'),
+        atBefore('partner empathy', 'body.data.attempt.id'),
+      ],
       mustMatch: true,
       why:
         "byte-level attempt labels: today's labeller names an attempt by a user its fixture row left null " +

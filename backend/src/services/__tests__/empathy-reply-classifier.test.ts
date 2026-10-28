@@ -12,10 +12,7 @@ jest.mock('../../lib/bedrock', () => ({
   BrainActivityCallType: { INTENT_DETECTION: 'INTENT_DETECTION' },
 }));
 
-import {
-  classifyEmpathyValidationReply,
-  type EmpathyReplyClassification,
-} from '../empathy-reply-classifier';
+import { classifyEmpathyValidationReply, type EmpathyReplyClassification } from '../empathy-reply-classifier';
 
 const BASE_INPUT = {
   replyText: 'yes, exactly',

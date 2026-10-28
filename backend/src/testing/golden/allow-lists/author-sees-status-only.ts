@@ -85,7 +85,15 @@ export const AUTHOR_SEES_STATUS_ONLY_BYTE_TARGET_ALLOW: AllowList = {
     ...bodyRules(false),
     byteLabelShift(['steps.16.body.data.records.0.id'], 'consent'),
     ...targetByteRules({
-      addedTables: [{ step: 33, table: 'draft', kind: 'changed', count: 1, why: 'the mock response’s proposed statement (mockTurnIndex)' }],
+      addedTables: [
+        {
+          step: 33,
+          table: 'draft',
+          kind: 'changed',
+          count: 1,
+          why: 'the mock response’s proposed statement (mockTurnIndex)',
+        },
+      ],
     }),
   ],
 };

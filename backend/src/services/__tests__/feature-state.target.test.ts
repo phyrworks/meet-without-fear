@@ -50,8 +50,12 @@ describeTarget('wellbeing feature documents on the target, as mwf_app with ident
   });
 
   const docOf = async (userId: string, feature: string) =>
-    (await run.sql<{ doc: Record<string, unknown> }>(`SELECT doc FROM feature_state WHERE user_id = $1 AND feature = $2`, [userId, feature]))[0]
-      ?.doc;
+    (
+      await run.sql<{ doc: Record<string, unknown> }>(
+        `SELECT doc FROM feature_state WHERE user_id = $1 AND feature = $2`,
+        [userId, feature],
+      )
+    )[0]?.doc;
 
   it('a read writes nothing: the defaults come from the contract', async () => {
     const prefs = await http(ada, 'get', '/gratitude/preferences');
@@ -96,20 +100,29 @@ describeTarget('wellbeing feature documents on the target, as mwf_app with ident
     releaseA();
     await Promise.all([writerA, writerB]);
     const doc = await docOf(ada.id, 'gratitude');
-    expect((doc!.entries as Array<{ content: string }>).map(e => e.content).sort()).toEqual(['PROBE_DEVICE_A', 'PROBE_DEVICE_B']);
+    expect((doc!.entries as Array<{ content: string }>).map(e => e.content).sort()).toEqual([
+      'PROBE_DEVICE_A',
+      'PROBE_DEVICE_B',
+    ]);
   });
 
   it('five concurrent gratitude POSTs from two devices: five entries, one row', async () => {
     const posts = await Promise.all(
-      [1, 2, 3, 4, 5].map(i => http(ada, 'post', '/gratitude', { content: `PROBE_CONCURRENT ${i}: the morning light` })),
+      [1, 2, 3, 4, 5].map(i =>
+        http(ada, 'post', '/gratitude', { content: `PROBE_CONCURRENT ${i}: the morning light` }),
+      ),
     );
     expect(posts.map(p => p.status)).toEqual([201, 201, 201, 201, 201]);
     const list = await http(ada, 'get', '/gratitude?limit=100');
     expect(list.body.data.total).toBe(7);
-    expect(list.body.data.entries.filter((e: { content: string }) => e.content.startsWith('PROBE_CONCURRENT'))).toHaveLength(5);
-    expect(await run.sql(`SELECT count(*)::int AS n FROM feature_state WHERE user_id = $1 AND feature = 'gratitude'`, [ada.id])).toEqual([
-      { n: 1 },
-    ]);
+    expect(
+      list.body.data.entries.filter((e: { content: string }) => e.content.startsWith('PROBE_CONCURRENT')),
+    ).toHaveLength(5);
+    expect(
+      await run.sql(`SELECT count(*)::int AS n FROM feature_state WHERE user_id = $1 AND feature = 'gratitude'`, [
+        ada.id,
+      ]),
+    ).toEqual([{ n: 1 }]);
   });
 
   it("Bob reads none of Ada's documents", async () => {
@@ -132,13 +145,21 @@ describeTarget('wellbeing feature documents on the target, as mwf_app with ident
     expect(baseline.body.data.summary.overall).toEqual({ notMet: 1, somewhatMet: 0, fullyMet: 18 });
 
     const checkIn = await http(ada, 'post', '/needs/3/check-in', { score: 1, clarification: 'a little better' });
-    expect(checkIn.body.data).toMatchObject({ previousScore: 0, newScore: 1, trend: 'up', needName: 'Rest & Restoration' });
+    expect(checkIn.body.data).toMatchObject({
+      previousScore: 0,
+      newScore: 1,
+      trend: 'up',
+      needName: 'Rest & Restoration',
+    });
 
     const state = (await http(ada, 'get', '/needs/state')).body.data;
     expect(state.state.baselineCompleted).toBe(true);
     const rest = state.currentScores.find((n: { id: number }) => n.id === 3);
     expect(rest).toMatchObject({ currentScore: 1, trend: 'up' });
-    expect(state.currentScores.find((n: { id: number }) => n.id === 1)).toMatchObject({ currentScore: 2, trend: 'stable' });
+    expect(state.currentScores.find((n: { id: number }) => n.id === 1)).toMatchObject({
+      currentScore: 2,
+      trend: 'stable',
+    });
 
     const history = (await http(ada, 'get', '/needs/3/history')).body.data.history;
     expect(history.map((h: { score: number }) => h.score)).toEqual([1, 0]);
@@ -146,16 +167,27 @@ describeTarget('wellbeing feature documents on the target, as mwf_app with ident
   });
 
   it('meditation: sessions, stats, favorites, scripts and preferences live in one document', async () => {
-    const created = await http(ada, 'post', '/meditation/sessions', { type: 'UNGUIDED', durationMinutes: 10, focusArea: 'grounding' });
+    const created = await http(ada, 'post', '/meditation/sessions', {
+      type: 'UNGUIDED',
+      durationMinutes: 10,
+      focusArea: 'grounding',
+    });
     expect(created.status).toBe(201);
     const id = created.body.data.session.id;
-    const done = await http(ada, 'patch', `/meditation/sessions/${id}`, { completed: true, savedAsFavorite: true, favoriteType: 'THEME' });
+    const done = await http(ada, 'patch', `/meditation/sessions/${id}`, {
+      completed: true,
+      savedAsFavorite: true,
+      favoriteType: 'THEME',
+    });
     expect(done.body.data.session.completed).toBe(true);
     const stats = (await http(ada, 'get', '/meditation/stats')).body.data.stats;
     expect(stats).toMatchObject({ totalSessions: 1, unguidedCount: 1, totalMinutes: 10, currentStreak: 1 });
     expect(stats.favoriteFocusAreas).toEqual([{ focusArea: 'grounding', count: 1 }]);
     expect((await http(ada, 'get', '/meditation/favorites')).body.data.favorites).toHaveLength(1);
-    const saved = await http(ada, 'post', '/meditation/saved', { title: 'Mine', script: '[BELL] breathe [PAUSE:30s] [BELL]' });
+    const saved = await http(ada, 'post', '/meditation/saved', {
+      title: 'Mine',
+      script: '[BELL] breathe [PAUSE:30s] [BELL]',
+    });
     expect(saved.status).toBe(201);
     expect((await http(ada, 'get', '/meditation/saved')).body.data.total).toBe(1);
     expect((await http(bob, 'get', `/meditation/saved/${saved.body.data.meditation.id}`)).status).toBe(404);
@@ -173,10 +205,22 @@ describeTarget('wellbeing feature documents on the target, as mwf_app with ident
     const bedrock = await import('../../lib/bedrock');
     const spy = jest.spyOn(bedrock, 'getHaikuJson');
     const extract = (names: string[], content: string, sourceType: 'GRATITUDE' | 'INNER_THOUGHTS') => {
-      spy.mockResolvedValueOnce({ names, matchedToExisting: {}, newPeople: [], relationships: { Sarah: 'friend' }, sentiment: { Sarah: 0.5 } } as never);
-      return asUser(ada.id, () => extractor.extractAndTrackPeople({ userId: ada.id, content, sourceType, sourceId: 'src-1' }));
+      spy.mockResolvedValueOnce({
+        names,
+        matchedToExisting: {},
+        newPeople: [],
+        relationships: { Sarah: 'friend' },
+        sentiment: { Sarah: 0.5 },
+      } as never);
+      return asUser(ada.id, () =>
+        extractor.extractAndTrackPeople({ userId: ada.id, content, sourceType, sourceId: 'src-1' }),
+      );
     };
-    expect(await asUser(ada.id, () => extractor.extractAndTrackPeople({ userId: ada.id, content: 'short', sourceType: 'GRATITUDE', sourceId: 'x' }))).toEqual({
+    expect(
+      await asUser(ada.id, () =>
+        extractor.extractAndTrackPeople({ userId: ada.id, content: 'short', sourceType: 'GRATITUDE', sourceId: 'x' }),
+      ),
+    ).toEqual({
       people: [],
       newPeople: [],
     });
@@ -184,9 +228,19 @@ describeTarget('wellbeing feature documents on the target, as mwf_app with ident
       people: ['Sarah', 'Tom'],
       newPeople: ['Sarah', 'Tom'],
     });
-    expect(await extract(['sarah'], 'Talked to sarah about the move, it helped a lot.', 'INNER_THOUGHTS')).toEqual({ people: ['Sarah'], newPeople: [] });
+    expect(await extract(['sarah'], 'Talked to sarah about the move, it helped a lot.', 'INNER_THOUGHTS')).toEqual({
+      people: ['Sarah'],
+      newPeople: [],
+    });
     const doc = await docOf(ada.id, 'people');
-    const persons = doc!.persons as Array<{ id: string; name: string; relationship: string | null; mentionCountGratitude: number; mentionCountInnerThoughts: number; mentions: unknown[] }>;
+    const persons = doc!.persons as Array<{
+      id: string;
+      name: string;
+      relationship: string | null;
+      mentionCountGratitude: number;
+      mentionCountInnerThoughts: number;
+      mentions: unknown[];
+    }>;
     const sarah = persons.find(p => p.name === 'Sarah')!;
     const tom = persons.find(p => p.name === 'Tom')!;
     expect(sarah).toMatchObject({ relationship: 'friend', mentionCountGratitude: 1, mentionCountInnerThoughts: 1 });
@@ -195,13 +249,19 @@ describeTarget('wellbeing feature documents on the target, as mwf_app with ident
     const detail = await http(ada, 'get', `/people/${sarah.id}`);
     expect(detail.status).toBe(200);
     expect(detail.body.data.person.patterns.topContexts).toEqual(
-      expect.arrayContaining([{ sourceType: 'GRATITUDE', count: 1 }, { sourceType: 'INNER_THOUGHTS', count: 1 }]),
+      expect.arrayContaining([
+        { sourceType: 'GRATITUDE', count: 1 },
+        { sourceType: 'INNER_THOUGHTS', count: 1 },
+      ]),
     );
     expect((await http(bob, 'get', `/people/${sarah.id}`)).status).toBe(404);
 
     const merged = await http(ada, 'post', `/people/${sarah.id}/merge`, { mergeIntoId: tom.id });
     expect(merged.status).toBe(200);
-    expect(merged.body.data).toMatchObject({ mergedCount: 1, person: { name: 'Sarah', aliases: ['Tom'], mentionCounts: { gratitude: 2, innerThoughts: 1 } } });
+    expect(merged.body.data).toMatchObject({
+      mergedCount: 1,
+      person: { name: 'Sarah', aliases: ['Tom'], mentionCounts: { gratitude: 2, innerThoughts: 1 } },
+    });
     expect((await http(ada, 'post', `/people/${sarah.id}/merge`, { mergeIntoId: tom.id })).status).toBe(404);
     expect((await http(ada, 'delete', `/people/${sarah.id}`)).status).toBe(200);
     expect((await docOf(ada.id, 'people'))!.persons).toEqual([]);

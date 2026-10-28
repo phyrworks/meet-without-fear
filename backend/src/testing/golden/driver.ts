@@ -14,7 +14,13 @@
 import type { Express } from 'express';
 import * as http from 'http';
 import request from 'supertest';
-import { applyConceptViews, CONCEPT_NAMES, ConceptName, conceptSqlForShape, takeConceptSnapshot } from './concept-views';
+import {
+  applyConceptViews,
+  CONCEPT_NAMES,
+  ConceptName,
+  conceptSqlForShape,
+  takeConceptSnapshot,
+} from './concept-views';
 import { dropDatabase, mark, openMarkerClient, withClient } from './db';
 import { restoreFixture, RestoredFixture } from './fixtures';
 import { isTargetShape } from './shape';

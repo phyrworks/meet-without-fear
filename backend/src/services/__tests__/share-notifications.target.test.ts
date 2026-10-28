@@ -45,10 +45,17 @@ describeTarget('share acceptance and the notification path (mwf_app + mwf_job, i
       actor: harness.actors.userB!,
       tables: [],
       asyncBoundary: true,
-      call: agent => agent.post(`/api/v1/sessions/${harness.sessionId}/reconciler/share-offer/respond`).send({ action: 'accept' }),
+      call: agent =>
+        agent.post(`/api/v1/sessions/${harness.sessionId}/reconciler/share-offer/respond`).send({ action: 'accept' }),
     });
     expect(accept.status).toBe(200);
-    const [offer] = await rows<{ status: string; delivery: string; delivered: boolean; notified: boolean; shared: string }>(
+    const [offer] = await rows<{
+      status: string;
+      delivery: string;
+      delivered: boolean;
+      notified: boolean;
+      shared: string;
+    }>(
       `SELECT status::text AS status, delivery_status::text AS delivery, delivered_at IS NOT NULL AS delivered,
               delivery_notified_at IS NOT NULL AS notified, shared_content AS shared FROM context_share_offer`,
     );
@@ -60,7 +67,9 @@ describeTarget('share acceptance and the notification path (mwf_app + mwf_job, i
        JOIN participant sp ON sp.id = m.sender_participant_id JOIN "user" su ON su.id = sp.user_id
        WHERE m.kind = 'SHARED_CONTEXT'`,
     );
-    expect(delivered).toEqual([{ owner: 'ada@e2e.test', sender: 'bob@e2e.test', kind: 'SHARED_CONTEXT', content: offer.shared }]);
+    expect(delivered).toEqual([
+      { owner: 'ada@e2e.test', sender: 'bob@e2e.test', kind: 'SHARED_CONTEXT', content: offer.shared },
+    ]);
     const [attempt] = await rows<{ status: string }>(
       `SELECT a.status::text AS status FROM empathy_attempt a JOIN participant p ON p.id = a.author_participant_id
        JOIN "user" u ON u.id = p.user_id WHERE u.email = 'ada@e2e.test'`,
@@ -76,7 +85,9 @@ describeTarget('share acceptance and the notification path (mwf_app + mwf_job, i
     const first = await get(harness.actors.userB!, `/sessions/${harness.sessionId}/pending-actions`);
     expect(first.status).toBe(200);
     expect((first.body as { data: { sentTabUpdates: number } }).data.sentTabUpdates).toBe(1);
-    expect(await rows(`SELECT delivery_notified_at IS NOT NULL AS notified FROM context_share_offer`)).toEqual([{ notified: true }]);
+    expect(await rows(`SELECT delivery_notified_at IS NOT NULL AS notified FROM context_share_offer`)).toEqual([
+      { notified: true },
+    ]);
     const second = await get(harness.actors.userB!, `/sessions/${harness.sessionId}/pending-actions`);
     expect((second.body as { data: { sentTabUpdates: number } }).data.sentTabUpdates).toBe(0);
   });

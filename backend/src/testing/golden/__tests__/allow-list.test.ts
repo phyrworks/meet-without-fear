@@ -144,7 +144,12 @@ describe('compareWithAllowList — empathy-reveal (old ⊆ new, named additions)
 
   it('rejects an added row that is not a delivered EMPATHY_STATEMENT', () => {
     const t = revealTargetLike();
-    t.steps[0].changes.push({ view: 'message', kind: 'added', key: '<message:bob@main#11>', after: { kind: 'CHAT', role: 'AI' } });
+    t.steps[0].changes.push({
+      view: 'message',
+      kind: 'added',
+      key: '<message:bob@main#11>',
+      after: { kind: 'CHAT', role: 'AI' },
+    });
     const r = compareWithAllowList(revealBaseline(), t, EMPATHY_REVEAL_ALLOW);
     expect(r.violations.join('\n')).toContain('steps.0.changes');
   });
@@ -210,7 +215,9 @@ describe('compareWithAllowList — empathy-reveal (old ⊆ new, named additions)
       content: 'unrevealed bob text',
     };
     const r = compareWithAllowList(base, t, EMPATHY_REVEAL_ALLOW);
-    expect(r.violations).toEqual([expect.stringContaining('initial.message.<message:ada@main/EMPATHY_STATEMENT:bob#1>')]);
+    expect(r.violations).toEqual([
+      expect.stringContaining('initial.message.<message:ada@main/EMPATHY_STATEMENT:bob#1>'),
+    ]);
   });
 });
 
@@ -248,7 +255,12 @@ describe('compareWithAllowList — session-read (identical except named)', () =>
   });
 
   it('accepts the dropped gate keys being absent, and a narrowed targetType', () => {
-    const base = readBaseline({ compactSigned: true, feelHeardConfirmed: true, readyToRank: true, feelHeardCheckOffered: true });
+    const base = readBaseline({
+      compactSigned: true,
+      feelHeardConfirmed: true,
+      readyToRank: true,
+      feelHeardCheckOffered: true,
+    });
     const target = readBaseline({ compactSigned: true, feelHeardConfirmed: true });
     (target.steps[1].body.data as Array<Record<string, unknown>>)[1].targetType = 'IDENTIFIED_NEED';
     const r = compareWithAllowList(base, target, SESSION_READ_ALLOW);
@@ -359,7 +371,10 @@ describe('compareWithAllowList — unrevealed-attempt-hidden (R2 rounds, TS-5 fi
   });
 
   it('passes trivially on the current shape', () => {
-    expect(compareWithAllowList(baseline, baseline, UNREVEALED_ATTEMPT_HIDDEN_ALLOW)).toEqual({ violations: [], unmatchedRules: [] });
+    expect(compareWithAllowList(baseline, baseline, UNREVEALED_ATTEMPT_HIDDEN_ALLOW)).toEqual({
+      violations: [],
+      unmatchedRules: [],
+    });
   });
 
   it('rejects a delivered copy of the superseded round 1', () => {
@@ -459,13 +474,24 @@ describe('compareWithAllowList — mechanics', () => {
   it('addedKeys with `each` admits the key only if every entry of its array satisfies the predicate (TS-5)', () => {
     const list: AllowList = {
       scenario: 'x',
-      rules: [{ kind: 'addedKeys', at: 'steps.1', keys: ['changes'], each: { view: 'user', key: '<user:bob>' }, why: 'test' }],
+      rules: [
+        { kind: 'addedKeys', at: 'steps.1', keys: ['changes'], each: { view: 'user', key: '<user:bob>' }, why: 'test' },
+      ],
     };
     const base = { steps: [{ changes: [] }, { label: 'after' }] };
     const ok = { steps: [{ changes: [] }, { label: 'after', changes: [{ view: 'user', key: '<user:bob>' }] }] };
     const empty = { steps: [{ changes: [] }, { label: 'after', changes: [] }] };
     const bad = {
-      steps: [{ changes: [] }, { label: 'after', changes: [{ view: 'user', key: '<user:bob>' }, { view: 'message', key: 'm' }] }],
+      steps: [
+        { changes: [] },
+        {
+          label: 'after',
+          changes: [
+            { view: 'user', key: '<user:bob>' },
+            { view: 'message', key: 'm' },
+          ],
+        },
+      ],
     };
     expect(compareWithAllowList(base, ok, list).violations).toEqual([]);
     expect(compareWithAllowList(base, empty, list).violations).toEqual([]);
@@ -493,7 +519,15 @@ describe('compareWithAllowList — mechanics', () => {
     const ok = { steps: [{ changes: [{ key: '<attempt:#2>', after: { status: 'REVEALED' } }, { key: 'm' }] }] };
     const wrong = { steps: [{ changes: [{ key: '<attempt:#2>', after: { status: 'READY' } }, { key: 'm' }] }] };
     const both = {
-      steps: [{ changes: [{ key: '<attempt:#1>', after: { status: 'REVEALED' } }, { key: '<attempt:#2>', after: { status: 'REVEALED' } }, { key: 'm' }] }],
+      steps: [
+        {
+          changes: [
+            { key: '<attempt:#1>', after: { status: 'REVEALED' } },
+            { key: '<attempt:#2>', after: { status: 'REVEALED' } },
+            { key: 'm' },
+          ],
+        },
+      ],
     };
     expect(compareWithAllowList(base, base, list).violations).toEqual([]);
     expect(compareWithAllowList(base, ok, list).violations).toEqual([]);
@@ -519,18 +553,31 @@ describe('compareWithAllowList — mechanics', () => {
     /** One step's golden as the runner builds it: the normalised payload plus its raw tie ranges. */
     const step = (raw: Json): Json => {
       const tiedRanges = rawTieRanges(raw, rules, ['steps', '0']);
-      return { ...(normalize(raw, map, window).value as Json), ...(Object.keys(tiedRanges).length ? { tiedRanges } : {}) };
+      return {
+        ...(normalize(raw, map, window).value as Json),
+        ...(Object.keys(tiedRanges).length ? { tiedRanges } : {}),
+      };
     };
     const golden = (rows: Array<[number, string, Json?]>): Json => ({
-      steps: [step({ body: { data: { records: rows.map(([n, at, extra]) => ({ id: id(n), createdAt: at, ...extra })) } } })],
+      steps: [
+        step({ body: { data: { records: rows.map(([n, at, extra]) => ({ id: id(n), createdAt: at, ...extra })) } } }),
+      ],
     });
     /** Both comparisons, as the runner makes them. */
     const concept = (e: Json, a: Json) => compareWithAllowList(...alignTies(e, a), list).violations;
     const byte = (e: Json, a: Json) => diffJson(...alignTies(e, a));
 
     it('rows in the same millisecond compare equal in either order — normalised and byte-level', () => {
-      const a = golden([[3, OLD], [1, T0], [2, T0]]);
-      const b = golden([[3, OLD], [2, T0], [1, T0]]);
+      const a = golden([
+        [3, OLD],
+        [1, T0],
+        [2, T0],
+      ]);
+      const b = golden([
+        [3, OLD],
+        [2, T0],
+        [1, T0],
+      ]);
       expect(a.steps[0].body.data.records[1].createdAt).toBe('<ts:fresh>');
       expect(a.steps[0].tiedRanges).toEqual({ 'body.data.records': [[1, 3]] });
       expect(concept(a, b)).toEqual([]);
@@ -538,16 +585,32 @@ describe('compareWithAllowList — mechanics', () => {
     });
 
     it('a tie on only one side (recorded tied, verified 1 ms apart, or the reverse) still compares equal', () => {
-      const tiedHeap = golden([[3, OLD], [1, T0], [2, T0]]); // heap order in the recording run
-      const apart = golden([[3, OLD], [2, T1], [1, T0]]); // the endpoint's order when not tied
+      const tiedHeap = golden([
+        [3, OLD],
+        [1, T0],
+        [2, T0],
+      ]); // heap order in the recording run
+      const apart = golden([
+        [3, OLD],
+        [2, T1],
+        [1, T0],
+      ]); // the endpoint's order when not tied
       expect(apart.steps[0].tiedRanges).toBeUndefined();
       expect(concept(tiedHeap, apart)).toEqual([]);
       expect(byte(apart, tiedHeap)).toBeNull();
     });
 
     it('rows 1 ms apart that normalise to the same <ts:fresh> keep their order: a swap FAILS', () => {
-      const a = golden([[3, OLD], [1, T0], [2, T1]]);
-      const b = golden([[3, OLD], [2, T1], [1, T0]]);
+      const a = golden([
+        [3, OLD],
+        [1, T0],
+        [2, T1],
+      ]);
+      const b = golden([
+        [3, OLD],
+        [2, T1],
+        [1, T0],
+      ]);
       expect(JSON.stringify(a.steps[0].body.data.records.map((r: Json) => r.createdAt))).toBe(
         JSON.stringify(b.steps[0].body.data.records.map((r: Json) => r.createdAt)),
       );
@@ -556,9 +619,20 @@ describe('compareWithAllowList — mechanics', () => {
     });
 
     it('a changed value or a missing row in a genuine tie still fails', () => {
-      const a = golden([[3, OLD], [1, T0], [2, T0]]);
-      const changed = golden([[3, OLD], [2, T0], [1, T0, { decision: 'DENIED' }]]);
-      const missing = golden([[3, OLD], [1, T0]]);
+      const a = golden([
+        [3, OLD],
+        [1, T0],
+        [2, T0],
+      ]);
+      const changed = golden([
+        [3, OLD],
+        [2, T0],
+        [1, T0, { decision: 'DENIED' }],
+      ]);
+      const missing = golden([
+        [3, OLD],
+        [1, T0],
+      ]);
       for (const bad of [changed, missing]) {
         expect(concept(a, bad)).not.toEqual([]);
         expect(byte(a, bad)).not.toBeNull();
@@ -580,7 +654,9 @@ describe('compareWithAllowList — mechanics', () => {
       rules: [{ kind: 'addedEntries', at: 'initial.message', where: { kind: 'EMPATHY_STATEMENT' }, why: 'test' }],
     };
     const base = { initial: { message: { '<message:a#1>': { kind: 'CHAT' } } } };
-    const ok = { initial: { message: { '<message:a#1>': { kind: 'CHAT' }, '<message:b/E:a#1>': { kind: 'EMPATHY_STATEMENT' } } } };
+    const ok = {
+      initial: { message: { '<message:a#1>': { kind: 'CHAT' }, '<message:b/E:a#1>': { kind: 'EMPATHY_STATEMENT' } } },
+    };
     const bad = { initial: { message: { '<message:a#1>': { kind: 'CHAT' }, '<message:a#2>': { kind: 'CHAT' } } } };
     expect(compareWithAllowList(base, ok, list).violations).toEqual([]);
     expect(compareWithAllowList(base, bad, list).violations).toEqual([expect.stringContaining('<message:a#2>')]);

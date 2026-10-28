@@ -56,7 +56,9 @@ describeTarget('the streaming chat turn on the target (mwf_app, the reply by mwf
     if (run) await run.drop();
   });
   beforeEach(() => {
-    toolSpy = jest.spyOn(bedrock, 'getModelCompletionWithTools').mockResolvedValue({ text: null, toolInvocations: [] } as never);
+    toolSpy = jest
+      .spyOn(bedrock, 'getModelCompletionWithTools')
+      .mockResolvedValue({ text: null, toolInvocations: [] } as never);
     streamSpy = jest.spyOn(bedrock, 'getSonnetStreamingResponse');
   });
   afterEach(() => {
@@ -98,14 +100,18 @@ describeTarget('the streaming chat turn on the target (mwf_app, the reply by mwf
     return { status: res.status, raw, events: raw.includes('event:') ? parseStreamEvents(raw) : ([] as StreamEvent[]) };
   };
   const chunkText = (events: StreamEvent[]) =>
-    events.filter((e): e is Extract<StreamEvent, { event: 'chunk' }> => e.event === 'chunk').map(c => c.data.text).join('');
+    events
+      .filter((e): e is Extract<StreamEvent, { event: 'chunk' }> => e.event === 'chunk')
+      .map(c => c.data.text)
+      .join('');
   const ownMessages = async (participantId: string) =>
     run.sql<{ role: string; content: string }>(
       `SELECT m.role::text AS role, m.content FROM message m JOIN conversation c ON c.id = m.conversation_id
        WHERE c.participant_id = $1 ORDER BY m.created_at, m.id`,
       [participantId],
     );
-  const milestones = async () => (await run.sql<{ n: number }>(`SELECT count(*)::int AS n FROM participant_milestone`))[0].n;
+  const milestones = async () =>
+    (await run.sql<{ n: number }>(`SELECT count(*)::int AS n FROM participant_milestone`))[0].n;
 
   it('wire protocol: canonical order, schema-valid frames, thinking never streamed; the reply is the job’s row', async () => {
     stub([
@@ -131,9 +137,14 @@ describeTarget('the streaming chat turn on the target (mwf_app, the reply by mwf
   it('structured metadata from the tool pass rides the frames; malformed tool input is dropped without failing', async () => {
     toolSpy.mockResolvedValue({
       text: null,
-      toolInvocations: [{ name: 'update_session_state', input: { offerReadyToShare: true, offerFeelHeardCheck: 'yes please' } }],
+      toolInvocations: [
+        { name: 'update_session_state', input: { offerReadyToShare: true, offerFeelHeardCheck: 'yes please' } },
+      ],
     } as never);
-    stub([{ type: 'text', text: '<thinking>t</thinking>\n' }, { type: 'text', text: 'Thank you for staying with this.' }]);
+    stub([
+      { type: 'text', text: '<thinking>t</thinking>\n' },
+      { type: 'text', text: 'Thank you for staying with this.' },
+    ]);
     const t = await turn('ada', { content: 'I think I get it now.' });
     const complete = t.events.find((e): e is Extract<StreamEvent, { event: 'complete' }> => e.event === 'complete');
     expect(complete).toBeDefined();
@@ -154,14 +165,21 @@ describeTarget('the streaming chat turn on the target (mwf_app, the reply by mwf
     expect(chunkText(t.events)).not.toContain('PROBE_TS12_DRAFT');
     expect(chunkText(t.events)).not.toContain('<draft');
     expect(chunkText(t.events)).toContain('Want to try saying it like this?');
-    const textComplete = t.events.find((e): e is Extract<StreamEvent, { event: 'text_complete' }> => e.event === 'text_complete');
+    const textComplete = t.events.find(
+      (e): e is Extract<StreamEvent, { event: 'text_complete' }> => e.event === 'text_complete',
+    );
     expect(textComplete!.data.metadata.proposedEmpathyStatement).toContain('PROBE_TS12_DRAFT');
     const bobMessages = await ownMessages(ids.bob);
-    expect(bobMessages.some(m => m.role === 'USER' && m.content.includes('<dispatch>send_invitation</dispatch>'))).toBe(true);
+    expect(bobMessages.some(m => m.role === 'USER' && m.content.includes('<dispatch>send_invitation</dispatch>'))).toBe(
+      true,
+    );
   });
 
   it('a failed turn advances nothing: unterminated <thinking>, and a stream that throws', async () => {
-    for (const fail of [() => stub([{ type: 'text', text: '<thinking>PROBE_TS12_HIDDEN reasoning that never closes...' }]), stubThrows]) {
+    for (const fail of [
+      () => stub([{ type: 'text', text: '<thinking>PROBE_TS12_HIDDEN reasoning that never closes...' }]),
+      stubThrows,
+    ]) {
       fail();
       const before = await ownMessages(ids.ada);
       const m0 = await milestones();
@@ -194,7 +212,10 @@ describeTarget('the streaming chat turn on the target (mwf_app, the reply by mwf
       [ids.bob],
     );
     // Ada into Stage 3 for the refining path, then point at Bob's need
-    await run.sql(`INSERT INTO participant_milestone (participant_id, milestone_key) SELECT $1, k FROM unnest(ARRAY['empathy_validated']) k ON CONFLICT DO NOTHING`, [ids.ada]);
+    await run.sql(
+      `INSERT INTO participant_milestone (participant_id, milestone_key) SELECT $1, k FROM unnest(ARRAY['empathy_validated']) k ON CONFLICT DO NOTHING`,
+      [ids.ada],
+    );
     const before = await ownMessages(ids.ada);
     stub([{ type: 'text', text: 'should never stream' }]);
     const foreign = await turn('ada', { content: 'refine it', refiningNeedId: bobNeed.id });
@@ -217,12 +238,18 @@ describeTarget('the streaming chat turn on the target (mwf_app, the reply by mwf
     };
     try {
       await setShow(false);
-      stub([{ type: 'text', text: '<thinking>t</thinking>\n' }, { type: 'text', text: 'Mm.' }]);
+      stub([
+        { type: 'text', text: '<thinking>t</thinking>\n' },
+        { type: 'text', text: 'Mm.' },
+      ]);
       await turn('ada', { content: 'quiet turn' });
       await new Promise(r => setTimeout(r, 50));
       expect(activity()).toEqual([]);
       await setShow(true);
-      stub([{ type: 'text', text: '<thinking>t</thinking>\n' }, { type: 'text', text: 'Mm.' }]);
+      stub([
+        { type: 'text', text: '<thinking>t</thinking>\n' },
+        { type: 'text', text: 'Mm.' },
+      ]);
       await turn('ada', { content: 'visible turn' });
       await new Promise(r => setTimeout(r, 50));
       expect(activity()).toHaveLength(1);
@@ -234,7 +261,10 @@ describeTarget('the streaming chat turn on the target (mwf_app, the reply by mwf
   });
 
   it('status gate: ABANDONED and ARCHIVED sessions refuse the turn with nothing written', async () => {
-    const [{ status: original }] = await run.sql<{ status: string }>(`SELECT status::text AS status FROM session WHERE id = $1`, [ids.session]);
+    const [{ status: original }] = await run.sql<{ status: string }>(
+      `SELECT status::text AS status FROM session WHERE id = $1`,
+      [ids.session],
+    );
     try {
       for (const status of ['ABANDONED', 'ARCHIVED']) {
         await run.sql(`UPDATE session SET status = $2::session_status WHERE id = $1`, [ids.session, status]);

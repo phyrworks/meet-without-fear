@@ -36,7 +36,6 @@ import {
 } from '../../services/stream-turn-persistence';
 import { scheduleStreamTurnBackgroundJobs } from '../../services/stream-turn-background';
 
-
 jest.mock('../../services/stream-turn-admission', () => ({
   admitStreamTurn: jest.fn(),
 }));
@@ -129,7 +128,7 @@ function mockRes() {
     raw,
     end,
     payload,
-    eventNames: () => Array.from(raw().matchAll(/^event: (.+)$/gm)).map((m) => m[1]),
+    eventNames: () => Array.from(raw().matchAll(/^event: (.+)$/gm)).map(m => m[1]),
   };
 }
 
@@ -204,14 +203,12 @@ describe('sendMessageStream — failed turns cannot advance state', () => {
     // Release anything a test held open, including on the failure path, so a
     // failed assertion cannot leave sendMessageStream pending forever.
     while (deferredReleases.length > 0) deferredReleases.pop()!();
-    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise(resolve => setImmediate(resolve));
   });
 
   describe('when resolution throws (empty response, stream failure)', () => {
     beforeEach(() => {
-      (resolveStreamTurn as jest.Mock).mockRejectedValue(
-        new Error('AI response was empty after tag stripping')
-      );
+      (resolveStreamTurn as jest.Mock).mockRejectedValue(new Error('AI response was empty after tag stripping'));
     });
 
     it('never reaches the stage-action or persistence services', async () => {
@@ -225,7 +222,6 @@ describe('sendMessageStream — failed turns cannot advance state', () => {
       expect(persistTurnState).not.toHaveBeenCalled();
       expect(saveAiTurnMessage).not.toHaveBeenCalled();
     });
-
 
     /**
      * The cleanup must be AWAITED, not fire-and-forget. If the client is told
@@ -244,7 +240,6 @@ describe('sendMessageStream — failed turns cannot advance state', () => {
       expect(scheduleStreamTurnBackgroundJobs).not.toHaveBeenCalled();
     });
 
-
     it('does not emit any of the mutated metadata on the wire', async () => {
       const handle = mockRes();
 
@@ -257,5 +252,4 @@ describe('sendMessageStream — failed turns cannot advance state', () => {
       }
     });
   });
-
 });

@@ -86,7 +86,12 @@ function stage4SharedNeedRules(concept: boolean): AllowRule[] {
     ];
     rules.push({
       kind: 'mayDiffer',
-      at: [`${base}.walkthrough.currentNeed`, `${base}.walkthrough.phase`, `${base}.walkthrough.totalInPhase`, `${base}.coverageAudit.updatedAt`],
+      at: [
+        `${base}.walkthrough.currentNeed`,
+        `${base}.walkthrough.phase`,
+        `${base}.walkthrough.totalInPhase`,
+        `${base}.coverageAudit.updatedAt`,
+      ],
       mustMatch: true,
       why: readerShared
         ? 'R29: the walkthrough starts on the reader’s first shared need (MY_NEEDS) instead of the empty QUALITY_REVIEW today’s coverage-less fixture gives.'
@@ -196,7 +201,10 @@ function stage3FixtureDeltas(): AllowRule[] {
     },
     {
       kind: 'mayDiffer',
-      at: [`steps.${S.sessionList.none}.body.data.items.0.hasUnread`, `steps.${S.sessionList.bobShared}.body.data.items.0.hasUnread`],
+      at: [
+        `steps.${S.sessionList.none}.body.data.items.0.hasUnread`,
+        `steps.${S.sessionList.bobShared}.body.data.items.0.hasUnread`,
+      ],
       mustMatch: true,
       why:
         'TS-9: unread comes from v_conversation_unread (messages after last_viewed_at not sent by the reader); the old ' +
@@ -287,20 +295,20 @@ function initialFixtureDeltas(): AllowRule[] {
 }
 
 const SHARED_RULES = (concept: boolean): AllowRule[] => [
-    ...READ_DTO_RULES,
-    TARGET_USER_NAME_RULE,
-    TARGET_COMPACT_SIGNED_MASK,
-    ...stage3FixtureDeltas(),
-    ...r33NeedsSharedForAll(),
-    {
-      kind: 'mayDiffer',
-      at: 'steps.*.body.data.partnerNeeds.*.need',
-      mustMatch: true,
-      why:
-        'spec §1.4 v_need_shared / §7: the partner reads need_share.shared_text, never need.label. The scenario’s ' +
-        'probe assertion pins that the label is gone; this rule only lets the text differ.',
-    },
-    ...stage4SharedNeedRules(concept),
+  ...READ_DTO_RULES,
+  TARGET_USER_NAME_RULE,
+  TARGET_COMPACT_SIGNED_MASK,
+  ...stage3FixtureDeltas(),
+  ...r33NeedsSharedForAll(),
+  {
+    kind: 'mayDiffer',
+    at: 'steps.*.body.data.partnerNeeds.*.need',
+    mustMatch: true,
+    why:
+      'spec §1.4 v_need_shared / §7: the partner reads need_share.shared_text, never need.label. The scenario’s ' +
+      'probe assertion pins that the label is gone; this rule only lets the text differ.',
+  },
+  ...stage4SharedNeedRules(concept),
 ];
 
 export const NEEDS_HIDDEN_UNTIL_SHARED_ALLOW: AllowList = {
@@ -380,7 +388,11 @@ export const NEEDS_HIDDEN_UNTIL_SHARED_BYTE_TARGET_ALLOW: AllowList = {
     ...SHARED_RULES(false),
     {
       kind: 'mayDiffer',
-      at: [0, 1].flatMap(i => [NEEDS_STEPS.consentHistory.bothAda, NEEDS_STEPS.consentHistory.bothBob].map(n => `steps.${n}.body.data.records.${i}.id`)),
+      at: [0, 1].flatMap(i =>
+        [NEEDS_STEPS.consentHistory.bothAda, NEEDS_STEPS.consentHistory.bothBob].map(
+          n => `steps.${n}.body.data.records.${i}.id`,
+        ),
+      ),
       mustMatch: true,
       why:
         'byte-level consent labels encode the old target type (IDENTIFIED_NEED, by need index); the target’s arc names the ' +

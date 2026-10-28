@@ -62,7 +62,8 @@ const ATTEMPT_ID_PATHS = [
   'steps.82.body.data.myAttempt.revisionCount',
 ];
 
-export const ADA_ORIGINAL = 'I understand you might be feeling stressed from work. I want us to support each other better.';
+export const ADA_ORIGINAL =
+  'I understand you might be feeling stressed from work. I want us to support each other better.';
 export const ADA_REVISED = 'I see now that you are running on empty and need someone to notice how hard you try.';
 
 const R1 = '<empathyAttempt:ada→bob@main#1>';
@@ -196,9 +197,15 @@ const TARGET_BODY_RULES = (concept: boolean): AllowRule[] => [
   ...[43, 59, 75].map(step => subjectDeclineRecord(step, !concept, 'GRANTED')),
   // After the reveal each subject's own conversation holds the partner's
   // statement: Bob (state 64, messages 65) round 2's, Ada (79, 80) Bob's.
-  deliveredCopyInRead(64, 'ada', 'bob', ADA_REVISED, { byteLevel: !concept, at: 'steps.64.body.data.messages.messages' }),
+  deliveredCopyInRead(64, 'ada', 'bob', ADA_REVISED, {
+    byteLevel: !concept,
+    at: 'steps.64.body.data.messages.messages',
+  }),
   deliveredCopyInRead(65, 'ada', 'bob', ADA_REVISED, { byteLevel: !concept }),
-  deliveredCopyInRead(79, 'bob', 'ada', BOB_HELD_EMPATHY_STATEMENT, { byteLevel: !concept, at: 'steps.79.body.data.messages.messages' }),
+  deliveredCopyInRead(79, 'bob', 'ada', BOB_HELD_EMPATHY_STATEMENT, {
+    byteLevel: !concept,
+    at: 'steps.79.body.data.messages.messages',
+  }),
   deliveredCopyInRead(80, 'bob', 'ada', BOB_HELD_EMPATHY_STATEMENT, { byteLevel: !concept }),
   // Bob's pending actions: refining (34) stamps the delivery; ready (50), revealed (66) count 0.
   ...notifiedOnce(34, [50, 66], concept),
@@ -213,10 +220,9 @@ const TARGET_BODY_RULES = (concept: boolean): AllowRule[] => [
     'steps.82.body.data.partnerAttempt.sharedAt',
     'steps.82.body.data.partnerEmpathySubmittedAt',
     ...(concept
-      ? [51, 67, 68, 82].flatMap(s => [`steps.${s}.changes.0.before.created_at`, `steps.${s}.changes.0.after.created_at`]).concat([
-          'steps.62.changes.0.before.submitted_at',
-          'steps.62.changes.0.after.submitted_at',
-        ])
+      ? [51, 67, 68, 82]
+          .flatMap(s => [`steps.${s}.changes.0.before.created_at`, `steps.${s}.changes.0.after.created_at`])
+          .concat(['steps.62.changes.0.before.submitted_at', 'steps.62.changes.0.after.submitted_at'])
       : []),
   ]),
   {
@@ -246,9 +252,21 @@ export const UNREVEALED_ATTEMPT_HIDDEN_BYTE_TARGET_ALLOW: AllowList = {
     ...TARGET_BODY_RULES(false),
     ...targetByteRules({
       addedTables: [
-        { step: R2_REVEAL_STEP, table: 'message', kind: 'added', count: 2, why: 'the two delivered EMPATHY_STATEMENT copies' },
+        {
+          step: R2_REVEAL_STEP,
+          table: 'message',
+          kind: 'added',
+          count: 2,
+          why: 'the two delivered EMPATHY_STATEMENT copies',
+        },
         { step: 30, table: 'consent', kind: 'added', count: 1, why: "the subject's GRANTED consent naming the offer" },
-        { step: 34, table: 'context_share_offer', kind: 'changed', count: 1, why: 'pending actions stamps delivery_notified_at (job)' },
+        {
+          step: 34,
+          table: 'context_share_offer',
+          kind: 'changed',
+          count: 1,
+          why: 'pending actions stamps delivery_notified_at (job)',
+        },
       ],
     }),
   ],

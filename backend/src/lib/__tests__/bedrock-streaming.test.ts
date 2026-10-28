@@ -104,9 +104,17 @@ describe('getSonnetStreamingResponse', () => {
   it('should accumulate and yield tool use results', async () => {
     const mockEvents = [
       { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'I will update the state.' } },
-      { type: 'content_block_start', index: 1, content_block: { type: 'tool_use', id: 'tool-123', name: 'update_session_state' } },
+      {
+        type: 'content_block_start',
+        index: 1,
+        content_block: { type: 'tool_use', id: 'tool-123', name: 'update_session_state' },
+      },
       { type: 'content_block_delta', index: 1, delta: { type: 'input_json_delta', partial_json: '{"offer' } },
-      { type: 'content_block_delta', index: 1, delta: { type: 'input_json_delta', partial_json: 'FeelHeardCheck":true}' } },
+      {
+        type: 'content_block_delta',
+        index: 1,
+        delta: { type: 'input_json_delta', partial_json: 'FeelHeardCheck":true}' },
+      },
       { type: 'content_block_stop', index: 1 },
     ];
 
@@ -258,9 +266,7 @@ describe('getSonnetStreamingResponse', () => {
 
   it('should yield done with error flag when finalMessage() rejects', async () => {
     // Stream iterates fine but finalMessage() throws (e.g., incomplete response)
-    const mockEvents = [
-      { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'Hello' } },
-    ];
+    const mockEvents = [{ type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'Hello' } }];
 
     const streamObj = {
       [Symbol.asyncIterator]: async function* () {

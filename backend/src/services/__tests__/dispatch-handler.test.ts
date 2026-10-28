@@ -2,9 +2,7 @@ import { handleDispatch, type DispatchContext } from '../dispatch-handler';
 
 // Mock the bedrock module to avoid actual API calls
 jest.mock('../../lib/bedrock', () => ({
-  getSonnetResponse: jest.fn().mockResolvedValue(
-    'Sure, let me explain what happens next in the process.'
-  ),
+  getSonnetResponse: jest.fn().mockResolvedValue('Sure, let me explain what happens next in the process.'),
   BrainActivityCallType: {
     ORCHESTRATED_RESPONSE: 'ORCHESTRATED_RESPONSE',
   },
@@ -13,9 +11,7 @@ jest.mock('../../lib/bedrock', () => ({
 describe('dispatch-handler', () => {
   const mockContext: DispatchContext = {
     userMessage: 'How does this process work?',
-    conversationHistory: [
-      { role: 'assistant', content: 'Hi there, how can I help?' },
-    ],
+    conversationHistory: [{ role: 'assistant', content: 'Hi there, how can I help?' }],
     userName: 'Test User',
     partnerName: 'Partner',
     sessionId: 'test-session-123',

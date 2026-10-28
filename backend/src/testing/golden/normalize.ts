@@ -210,10 +210,8 @@ export async function buildLabelMap(
           labels.set(String(row.id), `<${name}:${o}#${n.get(o)}>`);
         }
       };
-      await rankWithin(
-        `SELECT id, "userId" FROM "InnerWorkSession" ORDER BY "createdAt", id`,
-        'innerWork',
-        r => bare(r.userId),
+      await rankWithin(`SELECT id, "userId" FROM "InnerWorkSession" ORDER BY "createdAt", id`, 'innerWork', r =>
+        bare(r.userId),
       );
       await rankWithin(
         `SELECT id, "sessionId" FROM "InnerWorkMessage" ORDER BY "sessionId", timestamp, id`,
@@ -230,10 +228,8 @@ export async function buildLabelMap(
         'reconcilerResult',
         r => `${bare(r.guesserId)}→${bare(r.subjectId)}`,
       );
-      await rankWithin(
-        `SELECT id, "userId" FROM "ReconcilerShareOffer" ORDER BY "createdAt", id`,
-        'shareOffer',
-        r => bare(r.userId),
+      await rankWithin(`SELECT id, "userId" FROM "ReconcilerShareOffer" ORDER BY "createdAt", id`, 'shareOffer', r =>
+        bare(r.userId),
       );
       await rankWithin(
         `SELECT n.id, uv."userId" FROM "IdentifiedNeed" n JOIN "UserVessel" uv ON uv.id = n."vesselId"
@@ -241,19 +237,15 @@ export async function buildLabelMap(
         'need',
         r => bare(r.userId),
       );
-      await rankWithin(
-        `SELECT id, "sessionId" FROM "StrategyProposal" ORDER BY "createdAt", id`,
-        'proposal',
-        r => bare(r.sessionId),
+      await rankWithin(`SELECT id, "sessionId" FROM "StrategyProposal" ORDER BY "createdAt", id`, 'proposal', r =>
+        bare(r.sessionId),
       );
       // Agreement has no createdAt; its uuidv7 id is insertion-ordered.
       await rankWithin(`SELECT id FROM "Agreement" ORDER BY id`, 'agreement', () => 'main');
       await rankWithin(`SELECT id, "sessionId" FROM "SharedVessel"`, 'sharedVessel', r => bare(r.sessionId));
       await rankWithin(`SELECT id, "sessionId" FROM "Stage4Closure"`, 'closure', r => bare(r.sessionId));
-      await rankWithin(
-        `SELECT id, "sessionId" FROM "TendingEntry" ORDER BY "createdAt", id`,
-        'tendingEntry',
-        r => bare(r.sessionId),
+      await rankWithin(`SELECT id, "sessionId" FROM "TendingEntry" ORDER BY "createdAt", id`, 'tendingEntry', r =>
+        bare(r.sessionId),
       );
       await rankWithin(
         `SELECT id, direction FROM "RefinementAttemptCounter" ORDER BY "createdAt", id`,
@@ -270,10 +262,8 @@ export async function buildLabelMap(
         'validation',
         r => bare(r.userId),
       );
-      await rankWithin(
-        `SELECT id, "userId" FROM "Stage4ProposalSelection" ORDER BY "selectedAt", id`,
-        'selection',
-        r => bare(r.userId),
+      await rankWithin(`SELECT id, "userId" FROM "Stage4ProposalSelection" ORDER BY "selectedAt", id`, 'selection', r =>
+        bare(r.userId),
       );
       await rankWithin(
         `SELECT id, "sourceUserId" FROM "ConsentedContent" ORDER BY "consentedAt", id`,
@@ -287,10 +277,8 @@ export async function buildLabelMap(
       );
       await rankWithin(`SELECT id, "userId" FROM "RelationshipMember" ORDER BY id`, 'member', r => bare(r.userId));
       await rankWithin(`SELECT id, "userId" FROM "StrategyRanking" ORDER BY id`, 'ranking', r => bare(r.userId));
-      await rankWithin(
-        `SELECT id, "userId" FROM "Stage4NeedDeclination" ORDER BY "declinedAt", id`,
-        'declination',
-        r => bare(r.userId),
+      await rankWithin(`SELECT id, "userId" FROM "Stage4NeedDeclination" ORDER BY "declinedAt", id`, 'declination', r =>
+        bare(r.userId),
       );
     },
     database,
@@ -330,7 +318,8 @@ async function labelTargetRows(target: DbTarget, database: string, labels: Map<s
       }
       const userOf = new Map<string, string>();
       for (const p of await rows(`SELECT id, user_id FROM participant`)) userOf.set(String(p.id), String(p.user_id));
-      const who = (participantId: string | null): string => bare(participantId ? (userOf.get(participantId) ?? null) : null);
+      const who = (participantId: string | null): string =>
+        bare(participantId ? (userOf.get(participantId) ?? null) : null);
 
       for (const m of await rows(`SELECT id, row_number() OVER (ORDER BY created_at, id)::text AS rank FROM message`)) {
         labels.set(String(m.id), `<message:${m.rank}>`);
@@ -339,7 +328,8 @@ async function labelTargetRows(target: DbTarget, database: string, labels: Map<s
         labels.set(String(a.id), `<empathyAttempt:${who(a.author_participant_id)}>`);
       }
       for (const d of await rows(`SELECT id, participant_id, kind::text AS kind FROM draft ORDER BY id`)) {
-        const name = d.kind === 'EMPATHY' ? 'empathyDraft' : d.kind === 'VALIDATION_FEEDBACK' ? 'feedbackDraft' : 'shareDraft';
+        const name =
+          d.kind === 'EMPATHY' ? 'empathyDraft' : d.kind === 'VALIDATION_FEEDBACK' ? 'feedbackDraft' : 'shareDraft';
         labels.set(String(d.id), `<${name}:${who(d.participant_id)}>`);
       }
       const rankWithin = async (sql: string, name: string, owner: (r: Record<string, string | null>) => string) => {
@@ -372,18 +362,20 @@ async function labelTargetRows(target: DbTarget, database: string, labels: Map<s
         'shareOffer',
         r => who(r.subject_participant_id),
       );
-      await rankWithin(`SELECT id, participant_id FROM need ORDER BY created_at, id`, 'need', r => who(r.participant_id));
-      await rankWithin(`SELECT id, session_id FROM proposal ORDER BY created_at, id`, 'proposal', r => bare(r.session_id));
+      await rankWithin(`SELECT id, participant_id FROM need ORDER BY created_at, id`, 'need', r =>
+        who(r.participant_id),
+      );
+      await rankWithin(`SELECT id, session_id FROM proposal ORDER BY created_at, id`, 'proposal', r =>
+        bare(r.session_id),
+      );
       await rankWithin(`SELECT id FROM agreement ORDER BY id`, 'agreement', () => 'main');
       // TS-11, the 1:1 renames the repair/follow-up scenarios name: TendingEntry
       // → follow_up (same natural owner and order). The rest of the cluster
       // carries no id of its own on the target (proposal_choice,
       // need_disposition, agreement_party are composite keys; session_closure
       // is keyed by its session; need_share by its need — labelled above).
-      await rankWithin(
-        `SELECT id, session_id FROM follow_up ORDER BY created_at, id`,
-        'tendingEntry',
-        r => bare(r.session_id),
+      await rankWithin(`SELECT id, session_id FROM follow_up ORDER BY created_at, id`, 'tendingEntry', r =>
+        bare(r.session_id),
       );
       await rankWithin(
         `SELECT id, reviewer_participant_id FROM empathy_review ORDER BY created_at, id`,
@@ -534,7 +526,9 @@ export function normalize<T>(value: T, map: LabelMap, window?: FreshWindow): Nor
     // UTC midnight (TS-5 fix round 2). Within a run window it becomes its day
     // offset from the window's start date: `<date:today+10d>`.
     if (window && DATE_ONLY_RE.test(s)) {
-      const days = Math.round((Date.parse(`${s}T00:00:00Z`) - Date.parse(`${window.from.slice(0, 10)}T00:00:00Z`)) / 86_400_000);
+      const days = Math.round(
+        (Date.parse(`${s}T00:00:00Z`) - Date.parse(`${window.from.slice(0, 10)}T00:00:00Z`)) / 86_400_000,
+      );
       return `<date:today${days >= 0 ? '+' : ''}${days}d>`;
     }
     let out = s.replace(TIMESTAMP_RE, m => {

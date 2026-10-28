@@ -234,7 +234,13 @@ export interface TraceMappedRule extends RuleBase {
 export interface ChangesMappedRule extends RuleBase {
   kind: 'changesMapped';
   tableMap: Record<string, string[]>;
-  addedTables: Array<{ step: number; table: string; kind: 'added' | 'changed' | 'removed'; count: number; why: string }>;
+  addedTables: Array<{
+    step: number;
+    table: string;
+    kind: 'added' | 'changed' | 'removed';
+    count: number;
+    why: string;
+  }>;
   droppedTables?: Array<{ step: number; table: string; kind: 'added' | 'changed' | 'removed'; why: string }>;
 }
 

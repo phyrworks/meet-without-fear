@@ -5,14 +5,9 @@
  * validation, which never reaches the database.
  */
 import { Request, Response } from 'express';
-import {
-  recordEmotion,
-  getEmotions,
-  completeExercise,
-} from '../../controllers/emotions';
+import { recordEmotion, getEmotions, completeExercise } from '../../controllers/emotions';
 
 // Mock Prisma
-
 
 // Helper to create mock request
 function createMockRequest(options: {
@@ -63,8 +58,6 @@ describe('Emotional Barometer API', () => {
       vesselId: 'vessel-1',
     };
 
-
-
     it('validates intensity must be at least 1', async () => {
       const req = createMockRequest({
         user: mockUser,
@@ -82,7 +75,7 @@ describe('Emotional Barometer API', () => {
           error: expect.objectContaining({
             code: 'VALIDATION_ERROR',
           }),
-        })
+        }),
       );
     });
 
@@ -103,7 +96,7 @@ describe('Emotional Barometer API', () => {
           error: expect.objectContaining({
             code: 'VALIDATION_ERROR',
           }),
-        })
+        }),
       );
     });
 
@@ -124,12 +117,9 @@ describe('Emotional Barometer API', () => {
           error: expect.objectContaining({
             code: 'VALIDATION_ERROR',
           }),
-        })
+        }),
       );
     });
-
-
-
 
     it('validates context length (max 500)', async () => {
       const longContext = 'x'.repeat(501);
@@ -149,7 +139,7 @@ describe('Emotional Barometer API', () => {
           error: expect.objectContaining({
             code: 'VALIDATION_ERROR',
           }),
-        })
+        }),
       );
     });
   });
@@ -173,12 +163,6 @@ describe('Emotional Barometer API', () => {
         timestamp: new Date(Date.now() - 60000),
       },
     ];
-
-
-
-
-
-
   });
 
   describe('POST /sessions/:id/exercises/complete (completeExercise)', () => {
@@ -193,10 +177,6 @@ describe('Emotional Barometer API', () => {
       intensityBefore: 8,
       intensityAfter: 5,
     };
-
-
-
-
 
     it('rejects invalid exercise type', async () => {
       const req = createMockRequest({
@@ -219,12 +199,9 @@ describe('Emotional Barometer API', () => {
           error: expect.objectContaining({
             code: 'VALIDATION_ERROR',
           }),
-        })
+        }),
       );
     });
-
-
-
 
     it('validates intensityBefore 1-10 range', async () => {
       const req = createMockRequest({
@@ -247,7 +224,7 @@ describe('Emotional Barometer API', () => {
           error: expect.objectContaining({
             code: 'VALIDATION_ERROR',
           }),
-        })
+        }),
       );
     });
 
@@ -272,7 +249,7 @@ describe('Emotional Barometer API', () => {
           error: expect.objectContaining({
             code: 'VALIDATION_ERROR',
           }),
-        })
+        }),
       );
     });
 
@@ -296,15 +273,12 @@ describe('Emotional Barometer API', () => {
           error: expect.objectContaining({
             code: 'VALIDATION_ERROR',
           }),
-        })
+        }),
       );
     });
   });
 
   describe('Error Handling', () => {
     const mockUser = { id: 'user-1', email: 'user@example.com', name: 'Test User' };
-
-
-
   });
 });

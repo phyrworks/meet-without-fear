@@ -27,11 +27,25 @@ describeTarget('the session summary on the target (read by mwf_app, written by m
   let bedrock: typeof import('../../lib/bedrock');
   let haiku: jest.SpyInstance;
   const asAda = <T>(fn: () => Promise<T>): Promise<T> =>
-    ctx.runWithContext({ turnId: 't', requestId: 'r', startTime: Date.now(), userId: ids.adaUser }, async () => await fn());
+    ctx.runWithContext(
+      { turnId: 't', requestId: 'r', startTime: Date.now(), userId: ids.adaUser },
+      async () => await fn(),
+    );
   const modelSays = (extra: Record<string, unknown> = {}) =>
-    haiku.mockResolvedValue({ summary: 'PROBE_TS12_SUMMARY', keyThemes: ['t'], emotionalJourney: 'j', unresolvedTopics: [], ...extra } as never);
+    haiku.mockResolvedValue({
+      summary: 'PROBE_TS12_SUMMARY',
+      keyThemes: ['t'],
+      emotionalJourney: 'j',
+      unresolvedTopics: [],
+      ...extra,
+    } as never);
   const stored = async () =>
-    (await run.sql<{ doc: Record<string, unknown> }>(`SELECT doc FROM ai_memory WHERE participant_id = $1 AND kind = 'SUMMARY'`, [ids.ada]))[0]?.doc ?? null;
+    (
+      await run.sql<{ doc: Record<string, unknown> }>(
+        `SELECT doc FROM ai_memory WHERE participant_id = $1 AND kind = 'SUMMARY'`,
+        [ids.ada],
+      )
+    )[0]?.doc ?? null;
   const prompt = () => (haiku.mock.calls[0][0] as { systemPrompt: string }).systemPrompt;
 
   beforeAll(async () => {
@@ -41,13 +55,22 @@ describeTarget('the session summary on the target (read by mwf_app, written by m
     summarizer = await import('../conversation-summarizer');
     bedrock = await import('../../lib/bedrock');
     // 30 more turns in Ada's MAIN conversation, an hour ago and older
-    const [c] = await run.sql<{ id: string }>(`SELECT id FROM conversation WHERE participant_id = $1 AND kind = 'MAIN'`, [ids.ada]);
+    const [c] = await run.sql<{ id: string }>(
+      `SELECT id FROM conversation WHERE participant_id = $1 AND kind = 'MAIN'`,
+      [ids.ada],
+    );
     for (let i = 0; i < 30; i++) {
       const user = i % 2 === 0;
       await run.sql(
         `INSERT INTO message (conversation_id, sender_participant_id, role, content, created_at)
          VALUES ($1, $2, $3::message_role, $4, now() - make_interval(mins => 60 + 30 - $5::int))`,
-        [c.id, user ? ids.ada : null, user ? 'USER' : 'AI', `turn ${i} with enough content to make token estimation meaningful`, i],
+        [
+          c.id,
+          user ? ids.ada : null,
+          user ? 'USER' : 'AI',
+          `turn ${i} with enough content to make token estimation meaningful`,
+          i,
+        ],
       );
     }
   });
@@ -66,7 +89,10 @@ describeTarget('the session summary on the target (read by mwf_app, written by m
     const summary = await asAda(() => summarizer.updateSessionSummary(ids.session, ids.adaUser, 'turn-1'));
     expect(summary).not.toBeNull();
     const doc = await stored();
-    expect(doc).toMatchObject({ text: 'PROBE_TS12_SUMMARY', lastUnresolvedThread: expect.stringContaining('trust had been eroding') });
+    expect(doc).toMatchObject({
+      text: 'PROBE_TS12_SUMMARY',
+      lastUnresolvedThread: expect.stringContaining('trust had been eroding'),
+    });
     expect(prompt()).not.toContain('STRUCTURAL CONTEXT');
   });
 
@@ -80,7 +106,9 @@ describeTarget('the session summary on the target (read by mwf_app, written by m
 
   it('an omitted lastUnresolvedThread is stored as null; partner-not-joined framing reaches the prompt', async () => {
     modelSays();
-    await asAda(() => summarizer.updateSessionSummary(ids.session, ids.adaUser, 'turn-3', { partnerStatus: 'not_joined' }));
+    await asAda(() =>
+      summarizer.updateSessionSummary(ids.session, ids.adaUser, 'turn-3', { partnerStatus: 'not_joined' }),
+    );
     expect(await stored()).toMatchObject({ lastUnresolvedThread: null });
     expect(prompt()).toContain('has not yet joined this session');
     expect(prompt()).toContain('do NOT anticipate a direct partner response');
@@ -90,7 +118,15 @@ describeTarget('the session summary on the target (read by mwf_app, written by m
     const now = new Date();
     const idle = new Date(now.getTime() - 25 * 60 * 60 * 1000);
     const call = (lastUserTurnAt: Date | null) =>
-      asAda(() => summarizer.maybeRefreshSummaryForResumption({ sessionId: ids.session, userId: ids.adaUser, turnId: 't', lastUserTurnAt, now }));
+      asAda(() =>
+        summarizer.maybeRefreshSummaryForResumption({
+          sessionId: ids.session,
+          userId: ids.adaUser,
+          turnId: 't',
+          lastUserTurnAt,
+          now,
+        }),
+      );
     modelSays();
     expect(await call(null)).toBe('no_user_activity');
     expect(await call(new Date(now.getTime() - 10 * 60 * 1000))).toBe('not_idle');
@@ -102,10 +138,10 @@ describeTarget('the session summary on the target (read by mwf_app, written by m
     expect(await call(idle)).toBe('summary_fresh'); // generatedAt is after the last user turn
     expect(haiku).toHaveBeenCalledTimes(1);
 
-    await run.sql(`UPDATE ai_memory SET doc = jsonb_set(doc, '{generatedAt}', to_jsonb($2::text)) WHERE participant_id = $1 AND kind = 'SUMMARY'`, [
-      ids.ada,
-      new Date(idle.getTime() - 60_000).toISOString(),
-    ]);
+    await run.sql(
+      `UPDATE ai_memory SET doc = jsonb_set(doc, '{generatedAt}', to_jsonb($2::text)) WHERE participant_id = $1 AND kind = 'SUMMARY'`,
+      [ids.ada, new Date(idle.getTime() - 60_000).toISOString()],
+    );
     expect(await call(idle)).toBe('refreshed');
   });
 

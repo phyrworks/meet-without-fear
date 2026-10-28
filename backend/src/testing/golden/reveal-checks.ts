@@ -26,7 +26,9 @@ function changesOf(steps: StepResult[], table: string): Array<RowChange & { step
 }
 
 /** Target: participant id → user id, conversation id → owner's user id (run database). */
-async function owners(h: Harness): Promise<{ ofParticipant: Map<string, string>; ofConversation: Map<string, string> }> {
+async function owners(
+  h: Harness,
+): Promise<{ ofParticipant: Map<string, string>; ofConversation: Map<string, string> }> {
   return withClient(
     h.fixture.target,
     async c => {
@@ -138,7 +140,10 @@ export function revealChecks(opts: {
       );
       const revealed = await withClient(
         opts.harness().fixture.target,
-        async c => (await c.query<{ id: string }>(`SELECT id FROM empathy_attempt WHERE revealed_at IS NOT NULL`)).rows.map(r => r.id),
+        async c =>
+          (await c.query<{ id: string }>(`SELECT id FROM empathy_attempt WHERE revealed_at IS NOT NULL`)).rows.map(
+            r => r.id,
+          ),
         opts.harness().fixture.database,
       );
       expect(copies.map(c => c.source).sort()).toEqual([...revealed].sort());
