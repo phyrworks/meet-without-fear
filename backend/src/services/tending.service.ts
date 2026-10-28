@@ -65,6 +65,8 @@ import {
 } from '@meet-without-fear/shared';
 import type { Prisma } from '../generated/prisma/client';
 import { getJobPrisma, prisma } from '../lib/prisma';
+import { encryptColumnValue } from '../lib/prisma-encryption-middleware';
+import { reencryptForSession } from '../lib/share-moments';
 import { logger } from '../lib/logger';
 import { publishSessionEvent, publishUserEvent } from './realtime';
 import { createFacilitatorMessage } from './message-store';
@@ -448,7 +450,7 @@ async function insertFollowUpAsJob(
     VALUES (${row.sessionId}::uuid, ${row.agreementId ?? null}::uuid, ${row.proposalId ?? null}::uuid,
             ${row.type}::follow_up_type, ${row.scope}::follow_up_scope, ${row.ownerParticipantId ?? null}::uuid,
             ${row.optedInShared ?? false}, ${row.status}::follow_up_status, ${row.scheduledFor},
-            ${row.responseDeadlineAt ?? null}, ${row.summary})
+            ${row.responseDeadlineAt ?? null}, ${encryptColumnValue('follow_up', 'summary', row.summary)})
     RETURNING id`;
   return r.id;
 }
@@ -802,6 +804,8 @@ async function insertCheckin(
     reflectionSummary: string | null;
     payload: unknown;
     submittedAt: Date;
+    /** Set for a SHARED follow-up: the check-in is the co-participant's to read (a share moment). */
+    sharedInSession?: string | null;
   },
 ): Promise<string> {
   const payload = validateCheckinPayload(args.payload);
@@ -822,6 +826,14 @@ async function insertCheckin(
     },
     select: { id: true },
   });
+  if (args.sharedInSession) {
+    // Share moment (writer-principal rule): a SHARED check-in, with the notes
+    // copied into its payload, is read by the co-participant. W13 re-encrypts here.
+    await reencryptForSession(
+      { moment: 'checkin-shared-submit', sessionId: args.sharedInSession, rows: [{ table: 'follow_up_checkin', id: row.id }] },
+      db,
+    );
+  }
   return row.id;
 }
 
@@ -854,6 +866,7 @@ export async function submitTendingResponse(args: {
       nextAction: null,
       continueChoice: args.continueChoice ?? null,
       reflectionSummary: args.reflection ?? null,
+      sharedInSession: entry.scope === 'SHARED' ? entry.sessionId : null,
       payload: {
         ...emptyFollowUpCheckinPayload(),
         responses: [
@@ -1304,6 +1317,7 @@ export async function submitTendingCheckin(args: {
           reflectionSummary: reflection || null,
           payload,
           submittedAt: now,
+          sharedInSession: entry.scope === 'SHARED' ? entry.sessionId : null,
         }),
       );
     }

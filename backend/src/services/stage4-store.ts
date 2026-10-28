@@ -27,6 +27,8 @@ import type { Prisma, PrismaClient } from '../generated/prisma/client';
 /** A transaction on the JOB connection. */
 export type JobTx = Prisma.TransactionClient;
 import { getJobPrisma, prisma } from '../lib/prisma';
+import { decryptRawRows, encryptColumnValue } from '../lib/prisma-encryption-middleware';
+import { reencryptForSession } from '../lib/share-moments';
 import { reachMilestone } from './milestone-writer';
 
 // ============================================================================
@@ -194,7 +196,8 @@ export async function loadProposal(proposalId: string): Promise<ProposalRow | nu
  * that participant has reached `choices_shared` (the proposal_choice RLS arm).
  */
 export async function loadVisibleChoices(sessionId: string, viewerParticipantId: string): Promise<ChoiceRow[]> {
-  return prisma.$queryRaw<ChoiceRow[]>`
+  return decryptRawRows(
+    await prisma.$queryRaw<ChoiceRow[]>`
     SELECT c.proposal_id AS "proposalId", c.participant_id AS "participantId", c.decision::text AS decision,
            c.note, c.created_at AS "createdAt", c.updated_at AS "updatedAt"
     FROM proposal_choice c
@@ -202,7 +205,9 @@ export async function loadVisibleChoices(sessionId: string, viewerParticipantId:
     WHERE c.participant_id = ${viewerParticipantId}::uuid
        OR EXISTS (SELECT 1 FROM participant_milestone pm
                   WHERE pm.participant_id = c.participant_id AND pm.milestone_key = 'choices_shared')
-    ORDER BY c.updated_at DESC, c.proposal_id`;
+    ORDER BY c.updated_at DESC, c.proposal_id`,
+    { note: 'proposal_choice.note' },
+  );
 }
 
 /** `v_need_coverage` for the session (shared needs only). */
@@ -271,12 +276,15 @@ export async function loadVisibleCoverage(sessionId: string, viewerParticipantId
  * the need's id).
  */
 export async function loadStage4Needs(sessionId: string, viewerParticipantId: string): Promise<Stage4Need[]> {
-  const shared = await prisma.$queryRaw<
-    Array<{ needId: string; participantId: string; category: NeedCategory; sharedText: string; sharedAt: Date }>
-  >`
+  const shared = decryptRawRows(
+    await prisma.$queryRaw<
+      Array<{ needId: string; participantId: string; category: NeedCategory; sharedText: string; sharedAt: Date }>
+    >`
     SELECT need_id AS "needId", participant_id AS "participantId", category::text AS category,
            shared_text AS "sharedText", shared_at AS "sharedAt"
-    FROM v_need_shared WHERE session_id = ${sessionId}::uuid`;
+    FROM v_need_shared WHERE session_id = ${sessionId}::uuid`,
+    { sharedText: 'need_share.shared_text' },
+  );
   const ownIds = shared.filter(n => n.participantId === viewerParticipantId).map(n => n.needId);
   const own = ownIds.length
     ? await prisma.need.findMany({
@@ -380,7 +388,7 @@ export async function upsertChoice(args: {
   await prisma.$executeRaw`
     INSERT INTO proposal_choice (proposal_id, participant_id, decision, note, created_at, updated_at)
     VALUES (${args.proposalId}::uuid, ${args.participantId}::uuid, ${args.decision}::choice_decision,
-            ${args.note ?? null}, ${at}, ${at})
+            ${encryptColumnValue('proposal_choice', 'note', args.note ?? null)}, ${at}, ${at})
     ON CONFLICT (proposal_id, participant_id)
     DO UPDATE SET decision = EXCLUDED.decision, note = EXCLUDED.note, created_at = EXCLUDED.created_at`;
 }
@@ -392,7 +400,16 @@ export async function withdrawChoice(proposalId: string, participantId: string):
 
 /** The participant shares their choices: `choices_shared` (self-assertable, app connection). */
 export async function shareChoices(participantId: string): Promise<boolean> {
-  return reachMilestone(participantId, 'choices_shared');
+  const reached = await reachMilestone(participantId, 'choices_shared');
+  // Share moment (writer-principal rule): the participant's choices — their
+  // notes — become the co-participant's to read. W13 re-encrypts here.
+  const me = await prisma.participant.findUnique({ where: { id: participantId }, select: { sessionId: true } });
+  await reencryptForSession({
+    moment: 'choices-shared',
+    sessionId: me?.sessionId ?? null,
+    rows: [{ table: 'proposal_choice', id: participantId, by: 'participant_id' }],
+  });
+  return reached;
 }
 
 /** Withdraw the share so the participant can revise: un-reaching a milestone is the job's DELETE. */
@@ -519,7 +536,7 @@ export async function insertAgreementsTx(tx: JobTx, args: CreateAgreementsArgs):
       const [row] = await tx.$queryRaw<Array<{ id: string }>>`
         INSERT INTO agreement (session_id, proposal_id, type, status, description, duration, measure_of_success, follow_up_at)
         VALUES (${args.sessionId}::uuid, ${a.proposalId}::uuid, ${a.type}::agreement_type, 'AGREED',
-                ${a.description}, ${a.duration}, ${a.measureOfSuccess}, ${a.followUpAt})
+                ${encryptColumnValue('agreement', 'description', a.description)}, ${a.duration}, ${a.measureOfSuccess}, ${a.followUpAt})
         RETURNING id`;
       ids.push(row.id);
       for (const pid of args.partyParticipantIds) {
@@ -565,7 +582,7 @@ export async function insertClosureTx(tx: JobTx, args: CloseSessionArgs): Promis
   const at = args.at ?? new Date();
   await tx.$executeRaw`
     INSERT INTO session_closure (session_id, kind, reason, summary, closed_by_participant_id, check_in_at, closed_at)
-    VALUES (${args.sessionId}::uuid, ${args.kind}::closure_kind, ${args.reason}::closure_reason, ${args.summary},
+    VALUES (${args.sessionId}::uuid, ${args.kind}::closure_kind, ${args.reason}::closure_reason, ${encryptColumnValue('session_closure', 'summary', args.summary)},
             ${args.closedByParticipantId}::uuid, ${args.checkInAt}, ${at})`;
   await tx.$executeRaw`SELECT app.session_set_status(${args.sessionId}::uuid, 'RESOLVED'::session_status)`;
 }

@@ -14,6 +14,7 @@
 
 import { AgreementType, MAX_AGREEMENTS, Stage4ClosureKind, Stage4ClosureReason } from '@meet-without-fear/shared';
 import { getJobPrisma } from '../lib/prisma';
+import { decryptRawRows } from '../lib/prisma-encryption-middleware';
 import {
   insertAgreementsTx,
   insertClosureTx,
@@ -87,7 +88,9 @@ async function closureInputsAsJob(sessionId: string): Promise<{
     job.$queryRaw<ClosureProposal[]>`
       SELECT id, kind::text AS kind, status::text AS status, description, duration, measure_of_success AS "measureOfSuccess",
              created_by_participant_id AS "createdByParticipantId", shared_at AS "sharedAt"
-      FROM proposal WHERE session_id = ${sessionId}::uuid ORDER BY id`,
+      FROM proposal WHERE session_id = ${sessionId}::uuid ORDER BY id`.then(rows =>
+      decryptRawRows(rows, { description: 'proposal.description' }),
+    ),
     job.$queryRaw<ClosureChoice[]>`
       SELECT c.proposal_id AS "proposalId", c.participant_id AS "participantId", c.decision::text AS decision
       FROM proposal_choice c JOIN proposal pr ON pr.id = c.proposal_id WHERE pr.session_id = ${sessionId}::uuid`,

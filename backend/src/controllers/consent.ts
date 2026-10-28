@@ -25,6 +25,8 @@
 import { Request, Response } from 'express';
 import { logger } from '../lib/logger';
 import { getJobPrisma, prisma } from '../lib/prisma';
+import { encryptColumnValue } from '../lib/prisma-encryption-middleware';
+import { reencryptForSession } from '../lib/share-moments';
 import { ErrorCode, ConsentContentType } from '@meet-without-fear/shared';
 import { notifyPartner } from '../services/realtime';
 import { successResponse, errorResponse } from '../utils/response';
@@ -179,7 +181,10 @@ export async function decideConsent(req: Request, res: Response): Promise<void> 
       typeof editedContent === 'string' &&
       editedContent.trim()
     ) {
-      await getJobPrisma().$queryRaw`SELECT app.need_share(${record.needId}::uuid, ${editedContent})`;
+      // need_share.shared_text is written under the session key by the job (ciphertext in; TS-13).
+      await getJobPrisma().$queryRaw`SELECT app.need_share(${record.needId}::uuid, ${encryptColumnValue('need_share', 'shared_text', editedContent)})`;
+      // Share moment (writer-principal rule): W13 re-encrypts here.
+      await reencryptForSession({ moment: 'need-share', sessionId, rows: [{ table: 'need_share', id: record.needId }] });
       sharedContent = {
         id: record.needId,
         sourceUserId: me.userId ?? '',

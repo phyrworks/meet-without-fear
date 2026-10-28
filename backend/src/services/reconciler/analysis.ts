@@ -17,6 +17,7 @@
  */
 
 import { getJobPrisma } from '../../lib/prisma';
+import { encryptColumnValue } from '../../lib/prisma-encryption-middleware';
 import { logger } from '../../lib/logger';
 import { getSonnetResponse, getHaikuJson, BrainActivityCallType } from '../../lib/bedrock';
 import { getCurrentUserId } from '../../lib/request-context';
@@ -505,9 +506,13 @@ export async function persistAnalysis(opts: {
           suggested_share_reason, circuit_breaker_tripped)
         VALUES (${opts.attemptId}::uuid, ${opts.subjectParticipantId}::uuid,
           coalesce((SELECT max(x.iteration) FROM reconciler_result x WHERE x.attempt_id = ${opts.attemptId}::uuid), 0) + 1,
-          ${Math.max(0, Math.min(100, Math.round(r.alignment.score)))}, ${r.alignment.summary}, ${r.gaps.summary},
-          ${SEVERITY_TO_DB[r.gaps.severity] ?? 'MINOR'}::gap_severity, ${r.alignment.correctlyIdentified}::text[],
-          ${r.gaps.missedFeelings}::text[], ${r.gaps.misattributions}::text[], ${r.gaps.mostImportantGap},
+          ${Math.max(0, Math.min(100, Math.round(r.alignment.score)))},
+          ${encryptColumnValue('reconciler_result', 'alignment_summary', r.alignment.summary)},
+          ${encryptColumnValue('reconciler_result', 'gap_summary', r.gaps.summary)},
+          ${SEVERITY_TO_DB[r.gaps.severity] ?? 'MINOR'}::gap_severity,
+          ${encryptColumnValue('reconciler_result', 'correctly_identified', r.alignment.correctlyIdentified)}::text[],
+          ${encryptColumnValue('reconciler_result', 'missed_feelings', r.gaps.missedFeelings)}::text[],
+          ${encryptColumnValue('reconciler_result', 'misattributions', r.gaps.misattributions)}::text[], ${r.gaps.mostImportantGap},
           ${r.recommendation.action}::recommender_action, ${r.recommendation.rationale},
           ${r.recommendation.sharingWouldHelp}, ${r.recommendation.suggestedShareFocus},
           ${opts.suggestion?.content ?? null}, ${opts.suggestion?.reason ?? null}, ${opts.circuitBreakerTripped ?? false})

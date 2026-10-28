@@ -27,6 +27,7 @@
 import { Request, Response } from 'express';
 import { logger } from '../lib/logger';
 import { getJobPrisma, prisma } from '../lib/prisma';
+import { decryptRawRows } from '../lib/prisma-encryption-middleware';
 import {
   proposeStrategyRequestSchema,
   confirmAgreementRequestSchema,
@@ -846,7 +847,9 @@ async function agreeIfEveryoneWilling(args: {
       }>
     >`
       SELECT id, status::text AS status, description, duration, measure_of_success AS "measureOfSuccess"
-      FROM proposal WHERE id = ${args.proposalId}::uuid AND session_id = ${args.sessionId}::uuid`,
+      FROM proposal WHERE id = ${args.proposalId}::uuid AND session_id = ${args.sessionId}::uuid`.then(rows =>
+      decryptRawRows(rows, { description: 'proposal.description' }),
+    ),
     job.$queryRaw<Array<{ id: string }>>`
       SELECT id FROM participant WHERE session_id = ${args.sessionId}::uuid AND kind = 'human' AND left_at IS NULL ORDER BY id`,
     job.$queryRaw<Array<{ participant_id: string }>>`
