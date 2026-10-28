@@ -38,7 +38,7 @@ import {
   TendingPreviewDTO,
   UnaddressedNeedDTO,
 } from '@meet-without-fear/shared';
-import { getPartnerParticipant, resolveParticipant } from './participant-resolver';
+import { getCounterpartParticipant, getPartnerParticipant, resolveParticipant } from './participant-resolver';
 import {
   hasMilestone,
   loadAgreements,
@@ -443,7 +443,8 @@ const latest = (dates: Array<Date | null | undefined>): Date | null =>
 export async function loadStage4View(sessionId: string, userId: string) {
   const me = await resolveParticipant(sessionId, userId);
   if (!me) throw new Stage4StateNotFoundError();
-  const partner = (await getPartnerParticipant(me.id))?.participantId ?? null;
+  // A read: the partner, or the tombstone of one who left (TS-12, R5).
+  const partner = (await getCounterpartParticipant(me.id))?.participantId ?? null;
   const [proposals, choices, needs, coverage, dispositions, closure, items, agreements, followUps, mySubmitted, partnerSubmitted, humans] =
     await Promise.all([
       loadProposals(sessionId, me.id),

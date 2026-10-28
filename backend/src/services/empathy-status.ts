@@ -28,6 +28,7 @@ import {
   revealedAttemptAbout,
   reviewOf,
   reviewVisibleToAuthor,
+  departedCounterpart,
   sessionParties,
   type AttemptRow,
   type ReviewRow,
@@ -76,7 +77,11 @@ export async function buildEmpathyExchangeStatus(sessionId: string, userId: stri
   if (!me) {
     throw new Error(`Session ${sessionId} not found or user ${userId} not a participant`);
   }
-  const partner = parties.find(p => p.participantId !== me.participantId) ?? null;
+  // TS-12 (R5): a departed partner (the tombstone) still answers the reads of
+  // what they delivered — the status is a read.
+  const partner =
+    parties.find(p => p.participantId !== me.participantId) ??
+    (parties.length === 1 ? await departedCounterpart(sessionId, me.participantId) : null);
 
   const [myAttempt, partnerAttempt, statuses] = await Promise.all([
     partner ? currentAttempt(me.participantId, partner.participantId) : Promise.resolve(null),

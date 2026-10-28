@@ -18,7 +18,7 @@ import { getJobPrisma, prisma } from '../lib/prisma';
 import { ApiResponse, DEFAULT_PRIVACY_PREFERENCES, ErrorCode, MessageRole, PrivacyPreferencesDTO, Stage } from '@meet-without-fear/shared';
 import { notifyPartner, publishSessionEvent, publishMessageAIResponse, publishMessageError } from '../services/realtime';
 import { successResponse, errorResponse } from '../utils/response';
-import { getPartnerUserId, isSessionCreator } from '../utils/session';
+import { getPartnerUserId, isSessionCreator, departedParticipantUsers } from '../utils/session';
 import { getCoParticipants, getPartnerParticipant } from '../services/participant-resolver';
 import { pingStage2Refresh } from '../services/empathy-realtime';
 import { loadMilestones, loadStageStates, progressDTO, rowForStage } from '../services/stage-shim';
@@ -91,11 +91,12 @@ export async function getSession(req: Request, res: Response): Promise<void> {
     const state = (await loadStageStates([{ id: participant.id, joinedAt: participant.joinedAt }])).get(participant.id);
     const currentProgress = progressDTO(state, { gates: false });
 
+    // A partner who left (account deletion, leaving) shows no name (TS-12, R5).
+    const partnerLeft = !!partnerMember && (await departedParticipantUsers([sessionId])).has(`${sessionId}:${partnerMember.userId}`);
     // Use nickname (what I call my partner) with fallback to their actual name
-    const partnerDisplayName = myMember?.nickname ||
-      partnerMember?.user.firstName ||
-      partnerMember?.user.name ||
-      null;
+    const partnerDisplayName = partnerLeft
+      ? null
+      : myMember?.nickname || partnerMember?.user.firstName || partnerMember?.user.name || null;
 
     successResponse(res, {
       session: {
@@ -108,7 +109,7 @@ export async function getSession(req: Request, res: Response): Promise<void> {
           ? {
               id: partnerMember.userId,
               name: partnerDisplayName,
-              nickname: myMember?.nickname || null,
+              nickname: partnerLeft ? null : myMember?.nickname || null,
             }
           : { id: '', name: myMember?.nickname || null, nickname: myMember?.nickname || null },
         myProgress: {

@@ -68,6 +68,7 @@ import {
   resubmitAttempt,
   revealedAttemptAbout,
   reviewOf,
+  departedCounterpart,
   sessionParties,
   setAttemptStatus,
   submitAttempt,
@@ -87,6 +88,11 @@ interface Stage2Caller {
   sessionId: string;
   me: SessionParty;
   partner: SessionParty | null;
+  /**
+   * TS-12 (R5): for READS only — the present partner, or else the one departed
+   * human co-participant (the tombstone), whose delivered rows stay readable.
+   */
+  counterpart: SessionParty | null;
   parties: SessionParty[];
 }
 
@@ -109,7 +115,9 @@ async function stage2Caller(req: Request, res: Response): Promise<Stage2Caller |
     return null;
   }
   const others = parties.filter(p => p.participantId !== me.participantId);
-  return { userId: user.id, sessionId, me, partner: others.length === 1 ? others[0] : null, parties };
+  const partner = others.length === 1 ? others[0] : null;
+  const counterpart = partner ?? (others.length === 0 ? await departedCounterpart(sessionId, me.participantId) : null);
+  return { userId: user.id, sessionId, me, partner, counterpart, parties };
 }
 
 /** ACTIVE for everyone; INVITED for the session's creator only (as before). */
@@ -276,7 +284,7 @@ export async function getDraft(req: Request, res: Response): Promise<void> {
   try {
     const caller = await stage2Caller(req, res);
     if (!caller) return;
-    const { me, partner } = caller;
+    const { me, counterpart: partner } = caller;
 
     const draft = partner
       ? await findDraft({ participantId: me.participantId, kind: 'EMPATHY', aboutParticipantId: partner.participantId })
@@ -499,7 +507,7 @@ export async function getPartnerEmpathy(req: Request, res: Response): Promise<vo
   try {
     const caller = await stage2Caller(req, res);
     if (!caller) return;
-    const { me, partner, sessionId } = caller;
+    const { me, counterpart: partner, sessionId } = caller;
 
     const revealed = partner ? await revealedAttemptAbout(me.participantId, partner.participantId) : null;
     const direction = partner ? directionOf(await directionStatuses(sessionId), partner.participantId, me.participantId) : undefined;

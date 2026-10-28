@@ -114,6 +114,30 @@ export async function sessionParties(sessionId: string, client: PrismaClient = p
   }));
 }
 
+/**
+ * TS-12 (R5): the one human co-participant who has LEFT the session (account
+ * deletion or leaving: app.anonymize_user_in_session sets left_at and NULLs
+ * display_name), when there is no present partner. Reads of what the leaver
+ * delivered — their revealed round, the caller's own draft and round about
+ * them — resolve the tombstone through this (spec §7: the revealed row stays
+ * in the subject's SELECT arm forever). Writes never do: they keep requiring a
+ * present partner. `name` is always null (the tombstone has none).
+ */
+export async function departedCounterpart(
+  sessionId: string,
+  meParticipantId: string,
+  client: PrismaClient = prisma,
+): Promise<SessionParty | null> {
+  const rows = await client.participant.findMany({
+    where: { sessionId, kind: 'human', leftAt: { not: null }, id: { not: meParticipantId } },
+    orderBy: [{ joinedAt: 'asc' }, { id: 'asc' }],
+    select: { id: true, userId: true, joinedAt: true, conversations: { where: { kind: 'MAIN' }, select: { id: true } } },
+  });
+  if (rows.length !== 1) return null;
+  const r = rows[0];
+  return { participantId: r.id, userId: r.userId, name: null, joinedAt: r.joinedAt, mainConversationId: r.conversations[0]?.id ?? null };
+}
+
 /** The party with this user id, or this participant id. */
 export function partyOf(parties: SessionParty[], who: { userId?: string; participantId?: string }): SessionParty | undefined {
   return parties.find(p => (who.participantId ? p.participantId === who.participantId : p.userId === who.userId));

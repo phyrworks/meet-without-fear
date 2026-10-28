@@ -12,7 +12,7 @@ import {
   Stage,
 } from '@meet-without-fear/shared';
 import { successResponse, errorResponse } from '../utils/response';
-import { generateSessionStatusSummary } from '../utils/session';
+import { generateSessionStatusSummary, departedParticipantUsers, FORMER_PARTICIPANT_NAME } from '../utils/session';
 import { getPartnerParticipant } from '../services/participant-resolver';
 import { loadStageStates, progressDTO } from '../services/stage-shim';
 import { displayStatus, parseStatusFilter, pausedSessionIds } from '../services/session-status';
@@ -143,6 +143,9 @@ export async function listSessions(req: Request, res: Response): Promise<void> {
           FROM v_empathy_direction_status WHERE subject_participant_id = ANY(${ids}::uuid[])`
       : [];
 
+    // Partners who left (account deletion, leaving) show no name (TS-12, R5).
+    const departed = await departedParticipantUsers(items.map(p => p.sessionId));
+
     const formattedSessions = items.map((me) => {
       const session = me.session;
       const partner = partners.get(me.id) ?? null;
@@ -190,17 +193,20 @@ export async function listSessions(req: Request, res: Response): Promise<void> {
         partnerActionNeeded.push('complete_stage');
       }
 
-      // Nickname (what I call them), then their names.
-      const partnerDisplayName = partnerMember
-        ? myMember?.nickname || partnerMember.user.firstName || partnerMember.user.name
-        : myMember?.nickname || null;
+      // Nickname (what I call them), then their names — none for a partner who left.
+      const partnerLeft = !!partnerMember && departed.has(`${session.id}:${partnerMember.user.id}`);
+      const partnerDisplayName = partnerLeft
+        ? null
+        : partnerMember
+          ? myMember?.nickname || partnerMember.user.firstName || partnerMember.user.name
+          : myMember?.nickname || null;
 
       const sessionStatus = displayStatus(session.status, paused.has(session.id));
       const statusSummary = generateSessionStatusSummary(
         sessionStatus as SessionStatus,
         { ...dto(myProgress), stage: myProgress.stage as Stage, status: myProgress.status as StageStatus },
         { ...dto(partnerProgress), stage: partnerProgress.stage as Stage, status: partnerProgress.status as StageStatus },
-        partnerDisplayName || 'Partner',
+        partnerLeft ? FORMER_PARTICIPANT_NAME : partnerDisplayName || 'Partner',
         { userHasSentEmpathy: !!userEmpathy, partnerHasSentEmpathy: !!partnerEmpathy },
       );
 
@@ -214,7 +220,7 @@ export async function listSessions(req: Request, res: Response): Promise<void> {
         createdAt: session.createdAt.toISOString(),
         updatedAt: session.updatedAt.toISOString(),
         partner: partnerMember
-          ? { id: partnerMember.user.id, name: partnerDisplayName, nickname: myMember?.nickname || null }
+          ? { id: partnerMember.user.id, name: partnerDisplayName, nickname: partnerLeft ? null : myMember?.nickname || null }
           : { id: '', name: partnerDisplayName, nickname: myMember?.nickname || null },
         myProgress: dto(myProgress),
         partnerProgress: dto(partnerProgress),
@@ -810,6 +816,7 @@ export async function listPeople(req: Request, res: Response): Promise<void> {
                     name: true,
                     firstName: true,
                     lastName: true,
+                    deletedAt: true,
                   },
                 },
               },
@@ -836,8 +843,10 @@ export async function listPeople(req: Request, res: Response): Promise<void> {
           (m) => m.userId !== user.id
         );
 
-        // Skip if no partner yet (invitation not accepted)
-        if (!partnerMember) return null;
+        // Skip if no partner yet (invitation not accepted), or the partner deleted
+        // their account: the tombstone (spec §4 walk step 6) is not a person
+        // (TS-12, R5 — today the cascade removed the member row).
+        if (!partnerMember || partnerMember.user.deletedAt) return null;
 
         const sessions = membership.relationship.sessions;
         const latestSession = sessions[0];

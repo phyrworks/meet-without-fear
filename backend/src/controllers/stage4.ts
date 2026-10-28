@@ -51,7 +51,7 @@ import { getModelCompletion } from '../lib/bedrock';
 import { extractJsonFromResponse } from '../utils/json-extractor';
 import { contentHash } from '../utils/content-hash';
 import { z } from 'zod';
-import { getPartnerParticipant, resolveParticipant, type ResolvedParticipant } from '../services/participant-resolver';
+import { getCounterpartParticipant, getPartnerParticipant, resolveParticipant, type ResolvedParticipant } from '../services/participant-resolver';
 import { loadStageStates } from '../services/stage-shim';
 import { createFacilitatorMessage } from '../services/message-store';
 import {
@@ -1085,7 +1085,8 @@ export async function getAgreements(req: Request, res: Response): Promise<void> 
       errorResponse(res, 'NOT_FOUND', 'Session not found', 404);
       return;
     }
-    const partner = (await getPartnerParticipant(participant.id))?.participantId ?? null;
+    // A read: the partner, or the tombstone of one who left (TS-12, R5).
+    const partner = (await getCounterpartParticipant(participant.id))?.participantId ?? null;
     const [agreements, pendingProposals] = await Promise.all([
       loadAgreements(sessionId),
       prisma.proposal.findMany({

@@ -57,6 +57,26 @@ type SessionWithIncludes = {
 };
 
 /**
+ * TS-12 (R5, spec §7 v_participant): the users who have LEFT each session —
+ * account deletion and leaving set participant.left_at (and NULL its
+ * display_name) through app.anonymize_user_in_session. The partner DTOs show
+ * such a partner without a name or nickname (the relationship member row keeps
+ * the caller's old nickname for them), and the status copy calls them
+ * FORMER_PARTICIPANT_NAME. Keyed `${sessionId}:${userId}`.
+ */
+export async function departedParticipantUsers(sessionIds: string[]): Promise<Set<string>> {
+  if (sessionIds.length === 0) return new Set();
+  const rows = await prisma.participant.findMany({
+    where: { sessionId: { in: sessionIds }, leftAt: { not: null }, userId: { not: null } },
+    select: { sessionId: true, userId: true },
+  });
+  return new Set(rows.map(r => `${r.sessionId}:${r.userId}`));
+}
+
+/** How the status copy names a partner who has left (spec §7: the UI's fallback). */
+export const FORMER_PARTICIPANT_NAME = 'Former participant';
+
+/**
  * Records that a participant actively did something in their session — the
  * `last_active_at` of their `conversation_read_state` (target shape, TS-9).
  *
