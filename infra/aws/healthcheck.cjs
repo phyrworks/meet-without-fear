@@ -1,7 +1,6 @@
 // Process and real database readiness; do not expose connection details publicly.
 // Exit 0 only if GET /health is OK and `SELECT 1` succeeds; exit 1 otherwise.
-// Uses `pg` (Prisma 7 era). If `pg` is not installed (Prisma 6 releases), falls
-// back to the Prisma client so the same script works on both.
+// Uses `pg`; if it cannot be resolved the image is broken, so the check fails (exit 1).
 const HEALTH_URL = process.env.HEALTHCHECK_URL || 'http://127.0.0.1:3000/health';
 const DB_TIMEOUT_MS = 3000;
 
@@ -31,28 +30,11 @@ async function checkWithPg(pg) {
   }
 }
 
-async function checkWithPrisma(prismaModule) {
-  const db = new prismaModule.PrismaClient({ log: [] });
-  try {
-    await Promise.race([
-      db.$queryRaw`SELECT 1`,
-      new Promise((_, reject) => setTimeout(() => reject(new Error('db timeout')), DB_TIMEOUT_MS * 2).unref()),
-    ]);
-  } finally {
-    await db.$disconnect().catch(() => {});
-  }
-}
-
 (async () => {
   const response = await fetch(HEALTH_URL, { signal: AbortSignal.timeout(4000) });
   if (!response.ok) throw new Error('HTTP health failed');
   const pg = resolveModule('pg');
-  if (pg) {
-    if (!connectionString) throw new Error('no database url');
-    await checkWithPg(pg);
-  } else {
-    const prismaModule = resolveModule('@prisma/client');
-    if (!prismaModule) throw new Error('no database driver');
-    await checkWithPrisma(prismaModule);
-  }
+  if (!pg) throw new Error('pg not installed');
+  if (!connectionString) throw new Error('no database url');
+  await checkWithPg(pg);
 })().then(() => process.exit(0), () => process.exit(1));

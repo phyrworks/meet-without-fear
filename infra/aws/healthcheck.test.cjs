@@ -25,7 +25,7 @@ function run(env) {
 
 function serve(status) {
   return new Promise(resolve => {
-    const server = http.createServer((req, res) => { res.statusCode = status; res.end('{}'); });
+    const server = http.createServer((_req, res) => { res.statusCode = status; res.end('{}'); });
     server.listen(0, '127.0.0.1', () => resolve({ server, url: `http://127.0.0.1:${server.address().port}/health` }));
   });
 }
