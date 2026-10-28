@@ -90,10 +90,21 @@ function modelWriters(file: string, text: string): { count: number; bad: Finding
       if (arg && ts.isObjectLiteralExpression(arg)) {
         for (const d of datas(arg)) {
           for (const p of d.properties) {
-            if (ts.isPropertyAssignment(p) && ts.isIdentifier(p.name) && p.name.text === 'reason' && !isMarker(p.initializer, aliases))
-              bad.push({ where: `${file}:${sf.getLineAndCharacterOfPosition(p.getStart()).line + 1}`, reason: p.initializer.getText() });
+            if (
+              ts.isPropertyAssignment(p) &&
+              ts.isIdentifier(p.name) &&
+              p.name.text === 'reason' &&
+              !isMarker(p.initializer, aliases)
+            )
+              bad.push({
+                where: `${file}:${sf.getLineAndCharacterOfPosition(p.getStart()).line + 1}`,
+                reason: p.initializer.getText(),
+              });
             if (ts.isShorthandPropertyAssignment(p) && p.name.text === 'reason')
-              bad.push({ where: `${file}:${sf.getLineAndCharacterOfPosition(p.getStart()).line + 1}`, reason: 'reason (shorthand)' });
+              bad.push({
+                where: `${file}:${sf.getLineAndCharacterOfPosition(p.getStart()).line + 1}`,
+                reason: 'reason (shorthand)',
+              });
           }
         }
       }
@@ -169,7 +180,8 @@ describe('proposal_revision.reason holds only app markers (R47)', () => {
     ).bad;
     expect(bad).toEqual([{ where: 'x.ts:1', reason: 'operation.reason' }]);
     expect(
-      rawWriters('y.ts', 'INSERT INTO proposal_revision (proposal_id, reason) VALUES (${id}::uuid, ${args.reason})').bad,
+      rawWriters('y.ts', 'INSERT INTO proposal_revision (proposal_id, reason) VALUES (${id}::uuid, ${args.reason})')
+        .bad,
     ).toHaveLength(1);
   });
 });

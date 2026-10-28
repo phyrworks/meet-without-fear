@@ -29,7 +29,11 @@ export type JobTx = Prisma.TransactionClient;
 import { getJobPrisma, prisma } from '../lib/prisma';
 import { decryptRawRows, encryptColumnValue } from '../lib/prisma-encryption-middleware';
 import { reencryptForSession } from '../lib/share-moments';
-import { PROPOSAL_REVISION_REASONS, proposalRevisionReason, type ProposalRevisionReason } from './proposal-revision-reasons';
+import {
+  PROPOSAL_REVISION_REASONS,
+  proposalRevisionReason,
+  type ProposalRevisionReason,
+} from './proposal-revision-reasons';
 import { reachMilestone } from './milestone-writer';
 
 // ============================================================================

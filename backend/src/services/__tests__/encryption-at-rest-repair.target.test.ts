@@ -194,7 +194,8 @@ describeTarget('encryption at rest: needs, repair and follow-up columns (FIELD_E
   it('fix round 2 (R47): a captured REVISE and a captured REMOVE keep the chat text out of proposal_revision.reason, in the encrypted after', async () => {
     const capture = await import('../stage4-capture.service');
     const asBob = <T>(fn: () => Promise<T>) => asUser(ids.bobUser, fn);
-    const revise = 'Please change "PROBE_TS13_PROPOSAL take a walk on Sundays" to take a long walk together every Sunday morning.';
+    const revise =
+      'Please change "PROBE_TS13_PROPOSAL take a walk on Sundays" to take a long walk together every Sunday morning.';
     const remove = 'Please remove the proposal "take a long walk together every Sunday morning".';
     for (const userMessage of [revise, remove]) {
       await asBob(() =>
