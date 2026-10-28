@@ -31,6 +31,13 @@ if [ ! -f "$LOCAL/secrets.env" ]; then
   } >"$LOCAL/secrets.env"
   echo "   generated $LOCAL/secrets.env"
 fi
+# A development field-encryption key, so the replica encrypts the target
+# columns as production will (keyless is a pass-through). Added once; a
+# volume built under one key cannot be read with another (reset.sh keeps it).
+if ! grep -q '^FIELD_ENCRYPTION_KEY=' "$LOCAL/secrets.env"; then
+  printf 'FIELD_ENCRYPTION_KEY=%s\n' "$(openssl rand -base64 32)" >>"$LOCAL/secrets.env"
+  echo "   added FIELD_ENCRYPTION_KEY to $LOCAL/secrets.env"
+fi
 # shellcheck source=/dev/null
 source "$LOCAL/secrets.env"
 write_if_changed() {  # $1 = path; content on stdin
@@ -64,6 +71,7 @@ JOB_DATABASE_URL=postgresql://mwf_job:$JOB_DB_PASSWORD@db:5432/mwf?connection_li
 OPS_DATABASE_URL=postgresql://mwf_ops:$OPS_DB_PASSWORD@db:5432/mwf?connection_limit=2
 AUTH_DATABASE_URL=postgresql://mwf_auth:$AUTH_DB_PASSWORD@db:5432/mwf?connection_limit=2
 DB_IDENTITY_BINDING=on
+FIELD_ENCRYPTION_KEY=$FIELD_ENCRYPTION_KEY
 E2E_FIXTURE_ID=user-a-full-journey
 GOLDEN_SHAPE=target
 E2E_APP_BASE_URL=$ORIGIN
