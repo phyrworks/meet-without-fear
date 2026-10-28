@@ -145,12 +145,7 @@ async function handleE2EAuthBypass(req: Request): Promise<boolean> {
 /**
  * Clerk authentication handler
  */
-async function handleClerkAuth(
-  req: Request,
-  res: Response,
-  next: NextFunction,
-  required: boolean
-): Promise<void> {
+async function handleClerkAuth(req: Request, res: Response, next: NextFunction, required: boolean): Promise<void> {
   // Check for E2E auth bypass first. Its errors go to next(): an async
   // middleware's rejection is not caught by Express 4, so a throw here left
   // the request hanging (found by auth.target.test, TS-12).
@@ -274,11 +269,7 @@ async function handleClerkAuth(
 /**
  * Requires authentication - returns 401 if not authenticated
  */
-export async function requireAuth(
-  req: Request,
-  res: Response,
-  next: NextFunction
-): Promise<void> {
+export async function requireAuth(req: Request, res: Response, next: NextFunction): Promise<void> {
   await handleClerkAuth(req, res, bindRequestIdentity(req, next), true);
 }
 
@@ -299,11 +290,7 @@ function bindRequestIdentity(req: Request, next: NextFunction): NextFunction {
 /**
  * Optional authentication - populates req.user if authenticated, continues if not
  */
-export async function optionalAuth(
-  req: Request,
-  res: Response,
-  next: NextFunction
-): Promise<void> {
+export async function optionalAuth(req: Request, res: Response, next: NextFunction): Promise<void> {
   await handleClerkAuth(req, res, bindRequestIdentity(req, next), false);
 }
 
@@ -320,11 +307,7 @@ export function getUser(req: Request): AuthUser {
 /**
  * Checks if the current user has access to a relationship
  */
-export async function requireRelationshipAccess(
-  req: Request,
-  res: Response,
-  next: NextFunction
-): Promise<void> {
+export async function requireRelationshipAccess(req: Request, res: Response, next: NextFunction): Promise<void> {
   const user = req.user;
   if (!user) {
     throw new UnauthorizedError();
@@ -364,11 +347,7 @@ export async function requireRelationshipAccess(
  * context's `participantId` carry it to everything below the route. A session
  * that does not exist is a 404, one the caller does not belong to a 403.
  */
-export async function requireSessionAccess(
-  req: Request,
-  res: Response,
-  next: NextFunction
-): Promise<void> {
+export async function requireSessionAccess(req: Request, res: Response, next: NextFunction): Promise<void> {
   const user = req.user;
   if (!user) {
     throw new UnauthorizedError();

@@ -66,9 +66,7 @@ export async function extractAndTrackPeople(params: ExtractionParams): Promise<E
   const existingPeople = providedPeople || (await readFeature(userId, 'people')).persons;
 
   // Determine session ID for cost tracking
-  const sessionId = (sourceType === 'PARTNER_SESSION' || sourceType === 'INNER_THOUGHTS')
-    ? sourceId
-    : undefined;
+  const sessionId = sourceType === 'PARTNER_SESSION' || sourceType === 'INNER_THOUGHTS' ? sourceId : undefined;
 
   // Extract names using AI
   const extracted = await extractNamesWithAI(content, existingPeople, sessionId);
@@ -87,7 +85,7 @@ export async function extractAndTrackPeople(params: ExtractionParams): Promise<E
 
       // Check if AI already matched to existing
       const matchedId = extracted.matchedToExisting[name];
-      const aiMatch = matchedId ? doc.persons.find((p) => p.id === matchedId) : undefined;
+      const aiMatch = matchedId ? doc.persons.find(p => p.id === matchedId) : undefined;
       const match = aiMatch ?? findMatchingPerson(normalizedName, doc.persons);
       if (match) {
         recordMention(match, params, extracted.sentiment[name], true);
@@ -109,15 +107,19 @@ export async function extractAndTrackPeople(params: ExtractionParams): Promise<E
 // AI Extraction
 // ============================================================================
 
-async function extractNamesWithAI(content: string, existingPeople: Person[], sessionId?: string): Promise<ExtractedPeople | null> {
+async function extractNamesWithAI(
+  content: string,
+  existingPeople: Person[],
+  sessionId?: string,
+): Promise<ExtractedPeople | null> {
   const existingPeopleList =
     existingPeople.length > 0
       ? existingPeople
-        .map(
-          (p) =>
-            `- ${p.name} (id: ${p.id})${p.aliases.length ? ` [aliases: ${p.aliases.join(', ')}]` : ''}${p.relationship ? ` [${p.relationship}]` : ''}`
-        )
-        .join('\n')
+          .map(
+            p =>
+              `- ${p.name} (id: ${p.id})${p.aliases.length ? ` [aliases: ${p.aliases.join(', ')}]` : ''}${p.relationship ? ` [${p.relationship}]` : ''}`,
+          )
+          .join('\n')
       : '(none yet)';
 
   const prompt = `Extract people mentioned in this text.
@@ -193,17 +195,17 @@ function findMatchingPerson(name: string, existingPeople: Person[]): Person | nu
   const normalized = name.toLowerCase().trim();
 
   // Exact name match
-  const exactMatch = existingPeople.find((p) => p.name.toLowerCase() === normalized);
+  const exactMatch = existingPeople.find(p => p.name.toLowerCase() === normalized);
   if (exactMatch) return exactMatch;
 
   // Alias match
-  const aliasMatch = existingPeople.find((p) => p.aliases.some((a) => a.toLowerCase() === normalized));
+  const aliasMatch = existingPeople.find(p => p.aliases.some(a => a.toLowerCase() === normalized));
   if (aliasMatch) return aliasMatch;
 
   // Partial match (first name only, but only if unique)
   const firstName = normalized.split(' ')[0];
   if (firstName.length >= 3) {
-    const partialMatches = existingPeople.filter((p) => p.name.toLowerCase().split(' ')[0] === firstName);
+    const partialMatches = existingPeople.filter(p => p.name.toLowerCase().split(' ')[0] === firstName);
     if (partialMatches.length === 1) {
       return partialMatches[0];
     }
@@ -295,7 +297,8 @@ export async function mergePeople(
     target.mentionCountGratitude += source.mentionCountGratitude;
     target.mentionCountNeeds += source.mentionCountNeeds;
     target.mentionCountConflict += source.mentionCountConflict;
-    target.firstMentioned = source.firstMentioned < target.firstMentioned ? source.firstMentioned : target.firstMentioned;
+    target.firstMentioned =
+      source.firstMentioned < target.firstMentioned ? source.firstMentioned : target.firstMentioned;
     target.lastMentioned = source.lastMentioned > target.lastMentioned ? source.lastMentioned : target.lastMentioned;
     // Delete source person
     doc.persons.splice(doc.persons.indexOf(source), 1);

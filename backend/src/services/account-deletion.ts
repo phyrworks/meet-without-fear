@@ -68,7 +68,10 @@ async function countPrivateRows(userId: string): Promise<number> {
  * @param userId - The user to tombstone (the caller)
  * @param displayName - The user's display name for the partner's notification
  */
-export async function deleteAccountWithNotifications(userId: string, displayName: string): Promise<AccountDeletionSummary> {
+export async function deleteAccountWithNotifications(
+  userId: string,
+  displayName: string,
+): Promise<AccountDeletionSummary> {
   // Before the walk: the caller's live sessions (to notify) and own rows (to count)
   const liveSessions = await prisma.participant.findMany({
     where: { userId, leftAt: null, session: { status: { in: [...LIVE] } } },

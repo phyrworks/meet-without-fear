@@ -139,7 +139,11 @@ export async function getPendingActionsHandler(req: Request, res: Response): Pro
         actions.push({
           type: 'context_received',
           id: msg.id,
-          data: { content: msg.content, senderId: msg.senderParticipant?.userId ?? null, timestamp: msg.createdAt.toISOString() },
+          data: {
+            content: msg.content,
+            senderId: msg.senderParticipant?.userId ?? null,
+            timestamp: msg.createdAt.toISOString(),
+          },
         });
       }
     }
@@ -195,7 +199,13 @@ export async function getBadgeCountHandler(req: Request, res: Response): Promise
     // The caller's present participants in active sessions.
     const rows = await prisma.participant.findMany({
       where: { userId: user.id, leftAt: null, session: { status: { in: ['ACTIVE', 'INVITED'] } } },
-      select: { id: true, sessionId: true, userId: true, joinedAt: true, conversations: { where: { kind: 'MAIN' }, select: { id: true } } },
+      select: {
+        id: true,
+        sessionId: true,
+        userId: true,
+        joinedAt: true,
+        conversations: { where: { kind: 'MAIN' }, select: { id: true } },
+      },
     });
     const stages = await loadCurrentStages(rows.map(r => r.id));
 

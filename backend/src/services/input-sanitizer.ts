@@ -48,7 +48,7 @@ const INJECTION_PATTERNS: RegExp[] = [
  * Check whether a string contains any known injection patterns.
  */
 function detectInjection(input: string): boolean {
-  return INJECTION_PATTERNS.some((pattern) => pattern.test(input));
+  return INJECTION_PATTERNS.some(pattern => pattern.test(input));
 }
 
 // ============================================================================

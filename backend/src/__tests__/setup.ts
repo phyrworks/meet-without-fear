@@ -8,9 +8,9 @@ const originalConsoleError = console.error;
 
 // Patterns for expected console output that should be silenced
 const silencedLogPatterns = [
-  /^\[Realtime\]/,  // Realtime service logs
-  /^\[Push\]/,       // Push notification logs
-  /^\[sendMessage[:\]]/,  // Stage1 controller debug logs (with or without request ID)
+  /^\[Realtime\]/, // Realtime service logs
+  /^\[Push\]/, // Push notification logs
+  /^\[sendMessage[:\]]/, // Stage1 controller debug logs (with or without request ID)
   /^\[getConversationHistory[:\]]/, // Conversation history logs
   /^\[confirmFeelHeard\]/, // Feel-heard confirmation logs
   /^\[ConversationSummarizer\]/, // Summarizer logs
@@ -26,10 +26,10 @@ const silencedLogPatterns = [
 
 const silencedWarnPatterns = [
   /^\[Bedrock\] AWS credentials not configured/, // Expected when testing without AWS creds
-  /^\[Push\]/,  // Push service warnings
+  /^\[Push\]/, // Push service warnings
   /^No JSON found in invitation text/, // Expected when testing invitation parsing
   /^\[JSON Extractor\]/, // Expected when testing invitation response extraction
-  /^\[sendMessage[:\]]/,  // Stage1 controller warnings (with or without request ID)
+  /^\[sendMessage[:\]]/, // Stage1 controller warnings (with or without request ID)
   /^\[confirmFeelHeard\]/, // Feel-heard confirmation warnings
   /^\[ConversationSummarizer\]/, // Summarizer warnings
   /^\[Embedding\]/, // Embedding service warnings (expected with mocked DB)
@@ -39,12 +39,12 @@ const silencedWarnPatterns = [
 
 const silencedErrorPatterns = [
   /^Error recording emotion:/, // Expected in error handling tests
-  /^Error getting emotions:/,  // Expected in error handling tests
+  /^Error getting emotions:/, // Expected in error handling tests
   /^Error completing exercise:/, // Expected in error handling tests
   /^\[AI Service\]/, // Expected in AI service error handling tests
   /^\[ConversationSummarizer\]/, // Summarizer errors (expected with mocked DB)
   /^\[confirmFeelHeard\]/, // Feel-heard confirmation errors (expected with mocked DB)
-  /^\[sendMessage[:\]]/,  // Stage1 controller errors (with or without request ID)
+  /^\[sendMessage[:\]]/, // Stage1 controller errors (with or without request ID)
   /^\[Embedding\]/, // Embedding service errors (expected with mocked DB)
   /^\[notifySessionMembers\]/, // Session notification errors (expected with mocked DB)
   /^prisma:/, // Prisma errors (expected with mocked/disconnected DB)

@@ -27,7 +27,10 @@ export async function resolveStageIntervalsForSessions(
     where: { sessionId: { in: sessionIds } },
     select: { id: true, sessionId: true, joinedAt: true },
   });
-  const states = await loadStageStates(participants.map(p => ({ id: p.id, joinedAt: p.joinedAt })), client);
+  const states = await loadStageStates(
+    participants.map(p => ({ id: p.id, joinedAt: p.joinedAt })),
+    client,
+  );
 
   const sessionIntervals = new Map<string, StageInterval[]>();
   for (const p of participants) {
@@ -48,10 +51,7 @@ export async function resolveStageIntervalsForSessions(
  * Given stage intervals for a session, resolves the stage active at a specific timestamp.
  * Falls back to stage 0 if no stage progress exists.
  */
-export function resolveStageForTimestamp(
-  intervals: StageInterval[] | undefined,
-  timestamp: Date,
-): number {
+export function resolveStageForTimestamp(intervals: StageInterval[] | undefined, timestamp: Date): number {
   if (!intervals || intervals.length === 0) return 0;
 
   // Find the latest stage that started before or at this timestamp

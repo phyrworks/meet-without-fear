@@ -41,11 +41,7 @@ export function loadFixture(fixtureId: string): E2EFixture {
  * Get AI response from fixture for a specific user and response index.
  * @deprecated Use getFixtureResponseByIndex instead
  */
-export function getFixtureResponse(
-  fixture: E2EFixture,
-  userId: string,
-  responseIndex: number
-): string {
+export function getFixtureResponse(fixture: E2EFixture, userId: string, responseIndex: number): string {
   if (!fixture.storyline) {
     throw new Error(`No storyline found in fixture`);
   }
@@ -58,7 +54,7 @@ export function getFixtureResponse(
 
   if (responseIndex >= userStoryline.length) {
     throw new Error(
-      `Response index ${responseIndex} out of bounds for user ${userId} (has ${userStoryline.length} responses)`
+      `Response index ${responseIndex} out of bounds for user ${userId} (has ${userStoryline.length} responses)`,
     );
   }
 
@@ -89,7 +85,7 @@ export function getFixtureResponseByIndex(fixtureId: string, index: number): str
   if (fixture.responses && fixture.responses.length > 0) {
     if (index < 0 || index >= fixture.responses.length) {
       throw new Error(
-        `Response index ${index} out of bounds for fixture ${fixtureId} (has ${fixture.responses.length} responses)`
+        `Response index ${index} out of bounds for fixture ${fixtureId} (has ${fixture.responses.length} responses)`,
       );
     }
     return fixture.responses[index].ai;
@@ -101,7 +97,7 @@ export function getFixtureResponseByIndex(fixtureId: string, index: number): str
     const storyline = fixture.storyline[userKeys[0]];
     if (index < 0 || index >= storyline.length) {
       throw new Error(
-        `Response index ${index} out of bounds for fixture ${fixtureId} (has ${storyline.length} responses)`
+        `Response index ${index} out of bounds for fixture ${fixtureId} (has ${storyline.length} responses)`,
       );
     }
     return storyline[index].ai;

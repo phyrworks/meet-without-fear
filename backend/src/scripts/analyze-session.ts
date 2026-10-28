@@ -45,7 +45,15 @@ async function analyzeSession() {
   const participants = await prisma.participant.findMany({
     where: { sessionId },
     orderBy: [{ joinedAt: 'asc' }, { id: 'asc' }],
-    select: { id: true, userId: true, kind: true, displayName: true, joinedAt: true, leftAt: true, user: { select: { name: true } } },
+    select: {
+      id: true,
+      userId: true,
+      kind: true,
+      displayName: true,
+      joinedAt: true,
+      leftAt: true,
+      user: { select: { name: true } },
+    },
   });
   const names: Record<string, string> = {};
   for (const p of participants) names[p.id] = p.displayName || p.user?.name || p.userId || p.id;
@@ -54,7 +62,9 @@ async function analyzeSession() {
   console.log('\n## PARTICIPANTS');
   console.log('-'.repeat(40));
   for (const p of participants) {
-    console.log(`  ${names[p.id]}: participant ${p.id} (user ${p.userId ?? '—'}, ${p.kind}${p.leftAt ? `, left ${p.leftAt.toISOString()}` : ''})`);
+    console.log(
+      `  ${names[p.id]}: participant ${p.id} (user ${p.userId ?? '—'}, ${p.kind}${p.leftAt ? `, left ${p.leftAt.toISOString()}` : ''})`,
+    );
   }
 
   console.log('\n## SESSION STATUS');
@@ -96,7 +106,9 @@ async function analyzeSession() {
     orderBy: [{ submittedAt: 'asc' }, { round: 'asc' }],
   });
   for (const attempt of attempts) {
-    console.log(`\n  ${nameOf(attempt.authorParticipantId)} → ${nameOf(attempt.subjectParticipantId)}, round ${attempt.round}:`);
+    console.log(
+      `\n  ${nameOf(attempt.authorParticipantId)} → ${nameOf(attempt.subjectParticipantId)}, round ${attempt.round}:`,
+    );
     console.log(`    ID: ${attempt.id}`);
     console.log(`    Status: ${attempt.status} (v${attempt.statusVersion})`);
     console.log(`    Delivery: ${attempt.deliveryStatus}`);
@@ -106,7 +118,9 @@ async function analyzeSession() {
     console.log(`    Delivered At: ${attempt.deliveredAt?.toISOString() || 'N/A'}`);
     console.log(`    Seen At: ${attempt.seenAt?.toISOString() || 'N/A'}`);
     for (const v of attempt.reviews) {
-      console.log(`    Review by ${nameOf(v.reviewerParticipantId)}: validated=${v.validated} at ${v.createdAt.toISOString()}`);
+      console.log(
+        `    Review by ${nameOf(v.reviewerParticipantId)}: validated=${v.validated} at ${v.createdAt.toISOString()}`,
+      );
       if (v.feedback) console.log(`      Feedback: "${v.feedback.substring(0, 50)}..."`);
     }
   }
@@ -119,9 +133,12 @@ async function analyzeSession() {
     include: { shareOffers: { orderBy: { iteration: 'asc' } }, attempt: { select: { authorParticipantId: true } } },
     orderBy: { createdAt: 'asc' },
   });
-  const direction = (r: (typeof results)[number]) => `${nameOf(r.attempt.authorParticipantId)} → ${nameOf(r.subjectParticipantId)}`;
+  const direction = (r: (typeof results)[number]) =>
+    `${nameOf(r.attempt.authorParticipantId)} → ${nameOf(r.subjectParticipantId)}`;
   for (const result of results) {
-    console.log(`\n  [${direction(result)}] iteration ${result.iteration}${result.supersededAt ? ' (superseded)' : ''}`);
+    console.log(
+      `\n  [${direction(result)}] iteration ${result.iteration}${result.supersededAt ? ' (superseded)' : ''}`,
+    );
     console.log(`    ID: ${result.id}`);
     console.log(`    Created: ${result.createdAt.toISOString()}`);
     console.log(`    Alignment: ${result.alignmentScore}%`);
@@ -154,9 +171,19 @@ async function analyzeSession() {
   }
   for (const attempt of attempts) {
     const name = nameOf(attempt.authorParticipantId);
-    timeline.push({ timestamp: attempt.submittedAt, type: 'EMPATHY', actor: name, details: `Submitted round ${attempt.round}` });
+    timeline.push({
+      timestamp: attempt.submittedAt,
+      type: 'EMPATHY',
+      actor: name,
+      details: `Submitted round ${attempt.round}`,
+    });
     if (attempt.revealedAt) {
-      timeline.push({ timestamp: attempt.revealedAt, type: 'EMPATHY', actor: name, details: `Round ${attempt.round} revealed (status: ${attempt.status})` });
+      timeline.push({
+        timestamp: attempt.revealedAt,
+        type: 'EMPATHY',
+        actor: name,
+        details: `Round ${attempt.round} revealed (status: ${attempt.status})`,
+      });
     }
     for (const v of attempt.reviews) {
       timeline.push({
@@ -175,9 +202,26 @@ async function analyzeSession() {
     });
     for (const offer of result.shareOffers) {
       const subject = nameOf(offer.subjectParticipantId);
-      timeline.push({ timestamp: offer.createdAt, type: 'SHARE_OFFER', actor: subject, details: `Share offer created (status: ${offer.status})` });
-      if (offer.declinedAt) timeline.push({ timestamp: offer.declinedAt, type: 'SHARE_OFFER', actor: subject, details: 'Share offer DECLINED' });
-      if (offer.sharedAt) timeline.push({ timestamp: offer.sharedAt, type: 'SHARE_OFFER', actor: subject, details: 'Context shared with partner' });
+      timeline.push({
+        timestamp: offer.createdAt,
+        type: 'SHARE_OFFER',
+        actor: subject,
+        details: `Share offer created (status: ${offer.status})`,
+      });
+      if (offer.declinedAt)
+        timeline.push({
+          timestamp: offer.declinedAt,
+          type: 'SHARE_OFFER',
+          actor: subject,
+          details: 'Share offer DECLINED',
+        });
+      if (offer.sharedAt)
+        timeline.push({
+          timestamp: offer.sharedAt,
+          type: 'SHARE_OFFER',
+          actor: subject,
+          details: 'Context shared with partner',
+        });
     }
   }
 
@@ -187,13 +231,27 @@ async function analyzeSession() {
       conversation: { participant: { sessionId } },
       OR: [{ role: 'AI' }, { kind: { not: 'CHAT' } }, { content: { contains: 'feel heard' } }],
     },
-    select: { content: true, role: true, kind: true, createdAt: true, senderParticipantId: true, conversation: { select: { participantId: true } } },
+    select: {
+      content: true,
+      role: true,
+      kind: true,
+      createdAt: true,
+      senderParticipantId: true,
+      conversation: { select: { participantId: true } },
+    },
     orderBy: { createdAt: 'asc' },
     take: 50,
   });
   for (const msg of keyMessages) {
-    const actor = msg.senderParticipantId ? nameOf(msg.senderParticipantId) : `AI → ${nameOf(msg.conversation.participantId)}`;
-    timeline.push({ timestamp: msg.createdAt, type: msg.kind === 'CHAT' ? 'MESSAGE' : msg.kind, actor, details: msg.content.substring(0, 100) });
+    const actor = msg.senderParticipantId
+      ? nameOf(msg.senderParticipantId)
+      : `AI → ${nameOf(msg.conversation.participantId)}`;
+    timeline.push({
+      timestamp: msg.createdAt,
+      type: msg.kind === 'CHAT' ? 'MESSAGE' : msg.kind,
+      actor,
+      details: msg.content.substring(0, 100),
+    });
   }
 
   timeline.sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime());
@@ -220,7 +278,9 @@ async function analyzeSession() {
       if (offer.status === 'DECLINED' && offer.declinedAt) {
         const gapMs = offer.declinedAt.getTime() - offer.createdAt.getTime();
         if (gapMs > 60000) {
-          console.log(`  [?] ${nameOf(offer.subjectParticipantId)}'s share offer: created ${offer.createdAt.toISOString()}, declined ${offer.declinedAt.toISOString()} (${Math.round(gapMs / 1000)}s gap)`);
+          console.log(
+            `  [?] ${nameOf(offer.subjectParticipantId)}'s share offer: created ${offer.createdAt.toISOString()}, declined ${offer.declinedAt.toISOString()} (${Math.round(gapMs / 1000)}s gap)`,
+          );
           issues++;
         }
       }
@@ -228,7 +288,9 @@ async function analyzeSession() {
   }
   for (const attempt of attempts) {
     if ((attempt.status === 'REVEALED' || attempt.status === 'VALIDATED') && !attempt.revealedAt) {
-      console.log(`  [!] ${nameOf(attempt.authorParticipantId)}'s round ${attempt.round}: status ${attempt.status} but no revealedAt`);
+      console.log(
+        `  [!] ${nameOf(attempt.authorParticipantId)}'s round ${attempt.round}: status ${attempt.status} but no revealedAt`,
+      );
       issues++;
     }
   }

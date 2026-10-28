@@ -33,10 +33,13 @@ import {
  * @param stage - The stage number (0-4)
  * @param options - Optional configuration for draft support
  */
-function buildResponseProtocol(stage: number, options?: {
-  includesDraft?: boolean;
-  draftPurpose?: 'topic' | 'empathy';
-}): string {
+function buildResponseProtocol(
+  stage: number,
+  options?: {
+    includesDraft?: boolean;
+    draftPurpose?: 'topic' | 'empathy';
+  },
+): string {
   const flags: string[] = ['UserIntensity: [1-10]'];
   if (stage === 1) {
     flags.push('FeelHeardCheck: [Y/N]');
@@ -54,12 +57,14 @@ If you prepared a ${options.draftPurpose} draft, put it in update_session_state.
     : '';
 
   // Stage 2 gets an extra off-ramp for empathy purpose questions
-  const empathyOffRamp = stage === 2
-    ? `\n- If asked why they're doing this / why guess partner's feelings / what's the point: <dispatch>EXPLAIN_EMPATHY_PURPOSE</dispatch>`
-    : '';
+  const empathyOffRamp =
+    stage === 2
+      ? `\n- If asked why they're doing this / why guess partner's feelings / what's the point: <dispatch>EXPLAIN_EMPATHY_PURPOSE</dispatch>`
+      : '';
 
-  const strategySection = stage === 4
-    ? `\nStructured Stage 4 capture primarily reads the user's conversation turn. StrategyProposed/ProposedStrategy is only a compatibility fallback.
+  const strategySection =
+    stage === 4
+      ? `\nStructured Stage 4 capture primarily reads the user's conversation turn. StrategyProposed/ProposedStrategy is only a compatibility fallback.
 Set StrategyProposed to Y only when the user clearly volunteered, accepted, or committed to a specific actionable proposal in their own turn.
 Do NOT list AI ideas the user has not accepted, declined ideas, removed items, vague intentions like "communicate better", desired-outcome fragments like what they would walk away knowing or could live with, or one person's willingness as if it were a shared agreement.
 Do NOT write generic labels such as "User will..." in ProposedStrategy lines; preserve the user's own actor or role language so ownership stays clear.
@@ -75,20 +80,22 @@ Also include exactly one stage4WalkthroughAction in update_session_state for eve
 Execution protocol:
 1. Call update_session_state before visible conversational text whenever the current turn requires Stage 4 proposal capture or walkthrough progress.
 2. Then write only the user-facing response as plain prose. Do not include internal reasoning, XML tags, JSON, tool arguments, or state summaries in the conversational text.`
-    : '';
+      : '';
 
-  const toolProtocolSection = stage !== 4
-    ? `\nStructured state protocol:
+  const toolProtocolSection =
+    stage !== 4
+      ? `\nStructured state protocol:
 Use the update_session_state tool for persisted state. Do not put structured JSON, draft text, internal reasoning, or state summaries in visible text.
 ${stage === 0 ? '- Stage 0: when proposing or revising the topic, call update_session_state with topicFrame.' : ''}
 ${stage === 1 ? '- Stage 1: when the feel-heard check is ready, call update_session_state with offerFeelHeardCheck=true. Otherwise use false or omit it.' : ''}
 ${stage === 2 ? '- Stage 2: when the empathy draft is ready, call update_session_state with offerReadyToShare=true and proposedEmpathyStatement.' : ''}
 ${stage === 3 ? '- Stage 3: when capturing one need, call update_session_state with proposedNeed. For refine/delete/lock, call it with needAction.' : ''}
 Call update_session_state before visible conversational text whenever the current turn requires one of these state updates.`
-    : '';
+      : '';
 
-  const needsSection = stage === 3
-    ? `
+  const needsSection =
+    stage === 3
+      ? `
 When a single need is ready to capture, call update_session_state with proposedNeed:
 {
   "need": "short needs label using the user's words",
@@ -102,7 +109,7 @@ For revisions, removals, or locks, call update_session_state with needAction:
 { "type": "lock", "needId": "need-id" }
 Only include needs this user clearly named or accepted. Never include partner needs. Do not infer extra needs.
 Never capture more than one proposedNeed or needAction per turn; if ambiguous, ask before calling the tool. Do not emit <need>, <needs>, or <need-action> tags except as a legacy fallback.`
-    : '';
+      : '';
 
   const allowedTags = '<thinking> and <dispatch>';
 
@@ -238,7 +245,7 @@ function isProcessQuestion(message: string): boolean {
     'stages',
     'process',
   ];
-  return keywords.some((kw) => lower.includes(kw));
+  return keywords.some(kw => lower.includes(kw));
 }
 
 /**
@@ -424,8 +431,8 @@ Acknowledge their request warmly, explain why that approach won't work here, and
  * The dynamic block changes every turn and is NOT cached.
  */
 export interface PromptBlocks {
-  staticBlock: string;   // Cached: universal guidance + stage rules
-  dynamicBlock: string;  // Not cached: turn-specific context
+  staticBlock: string; // Cached: universal guidance + stage rules
+  dynamicBlock: string; // Not cached: turn-specific context
 }
 
 export interface PromptContext {
@@ -599,7 +606,9 @@ Themes: ${context.innerThoughtsContext.themes.join(', ')}`
     : '';
   if (innerThoughtsSection) dynamicParts.push(innerThoughtsSection);
 
-  dynamicParts.push(`GOAL: Help ${context.userName} surface what's been going on with ${partnerName} so the topic becomes clear.`);
+  dynamicParts.push(
+    `GOAL: Help ${context.userName} surface what's been going on with ${partnerName} so the topic becomes clear.`,
+  );
   dynamicParts.push(`Turn: ${context.turnCount}`);
 
   return { staticBlock, dynamicBlock: dynamicParts.join('\n\n') };
@@ -658,7 +667,9 @@ ${buildResponseProtocol(1)}`;
   }
   dynamicParts.push(`Turn: ${context.turnCount}`);
   if (isTooEarlyForFeelHeard) {
-    dynamicParts.push('Feel-heard guard: Too early for most Stage 1 cases (turn < 5) — keep FeelHeardCheck:N unless the user explicitly asks to move on.');
+    dynamicParts.push(
+      'Feel-heard guard: Too early for most Stage 1 cases (turn < 5) — keep FeelHeardCheck:N unless the user explicitly asks to move on.',
+    );
   }
 
   return { staticBlock, dynamicBlock: dynamicParts.join('\n') };
@@ -730,10 +741,14 @@ ${buildResponseProtocol(2, { includesDraft: true, draftPurpose: 'empathy' })}`;
   const tooEarlyForDraft = context.turnCount < 5 && !context.isRefiningEmpathy;
 
   if (earlyStage2) {
-    dynamicParts.push(`EARLY IN THIS STEP: ${userName} may still have leftover feelings. Start in LISTENING or BRIDGING mode. Give space before trying to shift their focus, and do not draft yet.`);
+    dynamicParts.push(
+      `EARLY IN THIS STEP: ${userName} may still have leftover feelings. Start in LISTENING or BRIDGING mode. Give space before trying to shift their focus, and do not draft yet.`,
+    );
   }
   if (context.emotionalIntensity >= 8) {
-    dynamicParts.push(`HIGH INTENSITY: ${userName} is really upset right now. Stay in LISTENING mode. Be calm and steady — don't match their intensity. Let them settle first.`);
+    dynamicParts.push(
+      `HIGH INTENSITY: ${userName} is really upset right now. Stay in LISTENING mode. Be calm and steady — don't match their intensity. Let them settle first.`,
+    );
   }
 
   // Draft context (for refinement flow)
@@ -764,7 +779,9 @@ ${partnerName} shared this so ${userName} can understand them better. Use it to 
   dynamicParts.push(`Turn: ${context.turnCount}`);
 
   if (tooEarlyForDraft) {
-    dynamicParts.push('ReadyShare guard: TOO EARLY (fewer than 4 substantive Stage 2 user turns). Keep exploring through conversation. Don\'t rush to a draft.');
+    dynamicParts.push(
+      "ReadyShare guard: TOO EARLY (fewer than 4 substantive Stage 2 user turns). Keep exploring through conversation. Don't rush to a draft.",
+    );
   }
 
   return { staticBlock, dynamicBlock: dynamicParts.join('\n') };
@@ -933,7 +950,9 @@ ${buildResponseProtocol(3)}`;
 
   const earlyStage3 = context.turnCount <= 2;
   if (earlyStage3) {
-    dynamicParts.push('EARLY STAGE 3: User just arrived from empathy work. They may still be processing emotions — give them a breath before asking what matters.');
+    dynamicParts.push(
+      'EARLY STAGE 3: User just arrived from empathy work. They may still be processing emotions — give them a breath before asking what matters.',
+    );
   }
 
   if (context.refiningNeed) {
@@ -947,16 +966,22 @@ Focus on this need only this turn. If the user's update is clear, call update_se
     const needsList = context.capturedNeeds
       .map((n, i) => `${i + 1}. "${n.need}" (${n.confirmed ? 'confirmed' : 'draft'})`)
       .join('\n');
-    dynamicParts.push(`ALREADY CAPTURED NEEDS:\n${needsList}\nDo NOT propose a need that duplicates an existing one. If ${context.userName} says this is enough, stop proposing new needs.`);
+    dynamicParts.push(
+      `ALREADY CAPTURED NEEDS:\n${needsList}\nDo NOT propose a need that duplicates an existing one. If ${context.userName} says this is enough, stop proposing new needs.`,
+    );
   }
 
   // Content-aware pacing (every turn): let what the user said drive the mode,
   // not a turn counter. A user who names three clear needs in one rich message
   // should be validated; a user still venting in positions should be excavated.
-  dynamicParts.push('PACING — LET CONTENT DRIVE THE MODE, NOT TURN COUNT: If the user has clearly named what matters to them (e.g., "partnership", "to feel safe", "to be heard"), either capture it or ask one concrete clarifying question only if you do not yet understand what they mean. If they are still framing things in terms of the other person, redirect gently to what matters to them. Do not rush users who are still exploring, and do not stall users who have already landed.');
+  dynamicParts.push(
+    'PACING — LET CONTENT DRIVE THE MODE, NOT TURN COUNT: If the user has clearly named what matters to them (e.g., "partnership", "to feel safe", "to be heard"), either capture it or ask one concrete clarifying question only if you do not yet understand what they mean. If they are still framing things in terms of the other person, redirect gently to what matters to them. Do not rush users who are still exploring, and do not stall users who have already landed.',
+  );
 
   if (context.emotionalIntensity >= 8) {
-    dynamicParts.push('HIGH USER INTENSITY: The user is very activated/distressed. Slow down. Validate first, reframe gently. Your tone should be calm and grounding, not matching their intensity.');
+    dynamicParts.push(
+      'HIGH USER INTENSITY: The user is very activated/distressed. Slow down. Validate first, reframe gently. Your tone should be calm and grounding, not matching their intensity.',
+    );
   }
 
   // POST-REVEAL: only inject when both partners have shared needs through
@@ -981,7 +1006,9 @@ When ${context.userName} can see both their own needs and their partner's needs:
   // directly instead of redirecting. Without this, any mention of the
   // partner's name in a process question triggers REDIRECTING mode, which
   // produces a response loop (issue #312).
-  dynamicParts.push(`PROCESS QUESTIONS: If ${context.userName} asks about what you shared, what stage they're in, how this process works, or questions your behavior — answer directly and honestly. These are legitimate process questions, not "framing things in terms of the other person." Do not redirect process questions.`);
+  dynamicParts.push(
+    `PROCESS QUESTIONS: If ${context.userName} asks about what you shared, what stage they're in, how this process works, or questions your behavior — answer directly and honestly. These are legitimate process questions, not "framing things in terms of the other person." Do not redirect process questions.`,
+  );
 
   dynamicParts.push(`User's emotional intensity: ${context.emotionalIntensity}/10`);
   dynamicParts.push(`Turn: ${context.turnCount}`);
@@ -1100,10 +1127,14 @@ Use these IDs in update_session_state.stage4Proposals. If the latest user turn r
 When calling update_session_state.stage4Proposals, set ownerUserId to currentUserId for INDIVIDUAL_COMMITMENT proposals this user volunteers to do. For SHARED_PROPOSAL, set ownerUserId to null. If the text is a reflection, success marker, or process statement, classify it that way and set kind and ownerUserId to null.`);
   }
   if (earlyStage4) {
-    dynamicParts.push('EARLY STAGE 4: User may need help shifting from needs to action. Start in INVITING mode. Keep proposals provisional and reversible; the point is learning what is actually workable, not proving anything.');
+    dynamicParts.push(
+      'EARLY STAGE 4: User may need help shifting from needs to action. Start in INVITING mode. Keep proposals provisional and reversible; the point is learning what is actually workable, not proving anything.',
+    );
   }
   if (context.emotionalIntensity >= 8) {
-    dynamicParts.push('HIGH USER INTENSITY: The user is very activated/distressed. Slow down. Validate first. This is not the moment for brainstorming — ground them before moving to action. Your tone should be calm and steady.');
+    dynamicParts.push(
+      'HIGH USER INTENSITY: The user is very activated/distressed. Slow down. Validate first. This is not the moment for brainstorming — ground them before moving to action. Your tone should be calm and steady.',
+    );
   }
 
   if (context.stage4OpenNeeds && context.stage4OpenNeeds.length > 0) {
@@ -1265,9 +1296,11 @@ ${SIMPLE_LANGUAGE_PROMPT}
 ${PRIVACY_GUIDANCE}
 
 YOUR TASK:
-Generate a warm, brief opening message (1-2 sentences).${context.partnerName
+Generate a warm, brief opening message (1-2 sentences).${
+      context.partnerName
         ? ` Use this exact framing (you may lightly adjust phrasing but keep the meaning): "First, let's write a short topic for ${context.partnerName} so they know what this is about. The goal is to share the topic, not the details — I'll get the details from both of you later. What's going on?"`
-        : ` Ask who they want to talk about, then say: "First, let's write a short topic for your partner so they know what this is about. The goal is to share the topic, not the details — I'll get the details from both of you later. What's going on?"`}
+        : ` Ask who they want to talk about, then say: "First, let's write a short topic for your partner so they know what this is about. The goal is to share the topic, not the details — I'll get the details from both of you later. What's going on?"`
+    }
 
 Do NOT emit <draft> tags in this opening message. The topic gets drafted later, after ${context.userName} shares some context.
 
@@ -1450,7 +1483,7 @@ function formatInsightsForPrompt(insights: InsightContext[]): string {
   if (!insights || insights.length === 0) return '';
 
   const formattedInsights = insights
-    .map((insight) => {
+    .map(insight => {
       const typeLabel =
         insight.type === 'PATTERN'
           ? 'Pattern noticed'
@@ -1604,7 +1637,15 @@ export function buildLinkedInnerThoughtsPrompt(context: {
   linkedContext: LinkedPartnerSessionContext;
   insights?: InsightContext[];
 }): PromptBlocks {
-  const { userName, turnCount, emotionalIntensity = 5, sessionSummary, recentThemes, linkedContext, insights } = context;
+  const {
+    userName,
+    turnCount,
+    emotionalIntensity = 5,
+    sessionSummary,
+    recentThemes,
+    linkedContext,
+    insights,
+  } = context;
 
   const isEarlySession = turnCount < 3;
   const isHighIntensity = emotionalIntensity >= 8;
@@ -1663,16 +1704,16 @@ ${linkedContext.waitingStatus ? `Status: ${linkedContext.waitingStatus}` : ''}
 ${linkedContext.sessionTopic ? `Session Topic: ${linkedContext.sessionTopic}` : ''}
 
 ${
-  linkedContext.empathyDraft
-    ? `${userName}'s Empathy Draft (not yet shared):\n"${linkedContext.empathyDraft}"\n`
-    : ''
+  linkedContext.empathyDraft ? `${userName}'s Empathy Draft (not yet shared):\n"${linkedContext.empathyDraft}"\n` : ''
 }${
-  linkedContext.empathyShared ? `${userName} has shared their empathy statement with ${linkedContext.partnerName}.\n` : ''
-}${
-  linkedContext.partnerEmpathy
-    ? `${linkedContext.partnerName}'s understanding of ${userName}:\n"${linkedContext.partnerEmpathy}"\n`
-    : ''
-}
+    linkedContext.empathyShared
+      ? `${userName} has shared their empathy statement with ${linkedContext.partnerName}.\n`
+      : ''
+  }${
+    linkedContext.partnerEmpathy
+      ? `${linkedContext.partnerName}'s understanding of ${userName}:\n"${linkedContext.partnerEmpathy}"\n`
+      : ''
+  }
 RECENT CONVERSATION WITH ${linkedContext.partnerName.toUpperCase()} (${userName}'s perspective):
 ${
   linkedContext.userMessages.length > 0
@@ -1892,7 +1933,11 @@ The acknowledgment should feel like a natural transition, not a restart. Look at
  * Build the appropriate stage prompt based on current stage.
  * Returns PromptBlocks with static (cacheable) and dynamic (per-turn) content.
  */
-export function buildStagePrompt(stage: number, context: PromptContext, options?: BuildStagePromptOptions): PromptBlocks {
+export function buildStagePrompt(
+  stage: number,
+  context: PromptContext,
+  options?: BuildStagePromptOptions,
+): PromptBlocks {
   const promptContext =
     context.topicFrame === undefined && context.contextBundle.topicFrame?.text
       ? { ...context, topicFrame: context.contextBundle.topicFrame.text }
@@ -1929,9 +1974,7 @@ export function buildStagePrompt(stage: number, context: PromptContext, options?
     // render in a Slack DM. Keeping this in the static block preserves prompt
     // caching — the rules are identical across turns.
     const staticBlock =
-      options?.surface === 'slack'
-        ? `${blocks.staticBlock}\n${SLACK_FORMATTING_RULES}`
-        : blocks.staticBlock;
+      options?.surface === 'slack' ? `${blocks.staticBlock}\n${SLACK_FORMATTING_RULES}` : blocks.staticBlock;
     return { staticBlock, dynamicBlock };
   };
 
@@ -1976,7 +2019,11 @@ export function buildStagePrompt(stage: number, context: PromptContext, options?
  * Build the stage prompt as a single string (both blocks joined).
  * Use for callers that don't need cache optimization (e.g., one-shot calls, test tooling).
  */
-export function buildStagePromptString(stage: number, context: PromptContext, options?: BuildStagePromptOptions): string {
+export function buildStagePromptString(
+  stage: number,
+  context: PromptContext,
+  options?: BuildStagePromptOptions,
+): string {
   const blocks = buildStagePrompt(stage, context, options);
   return `${blocks.staticBlock}\n\n${blocks.dynamicBlock}`;
 }
@@ -2119,12 +2166,12 @@ export function buildReconcilerEvidencePacket(context: ReconcilerContext): strin
     : '\nKey themes/feelings: none extracted';
 
   const factLines = context.subjectFacts?.length
-    ? context.subjectFacts.map((fact) => `- [${fact.category}] ${fact.fact}`).join('\n')
+    ? context.subjectFacts.map(fact => `- [${fact.category}] ${fact.fact}`).join('\n')
     : '- No current ledger facts available.';
 
   const recentSignal = context.recentSubjectTurns?.length
     ? context.recentSubjectTurns
-        .map((turn) => {
+        .map(turn => {
           const label = turn.role === 'assistant' ? 'AI framing prompt' : `${context.subjectName} subject-owned reply`;
           return `- Stage ${turn.stage} ${label}: ${turn.content}`;
         })

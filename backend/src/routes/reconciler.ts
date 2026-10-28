@@ -60,7 +60,12 @@ router.get('/sessions/:id/reconciler/share-offer', requireSessionAccess, getShar
  *
  * Accept (with selected quote or custom content) or decline the share offer.
  */
-router.post('/sessions/:id/reconciler/share-offer/respond', requireSessionAccess, empathyRateLimit, respondToShareOfferHandler);
+router.post(
+  '/sessions/:id/reconciler/share-offer/respond',
+  requireSessionAccess,
+  empathyRateLimit,
+  respondToShareOfferHandler,
+);
 
 /**
  * Skip share offer without explicit response
@@ -77,7 +82,12 @@ router.post('/sessions/:id/reconciler/share-offer/skip', requireSessionAccess, e
  * Called when user taps "Yes, help me share" in the ShareTopicDrawer.
  * Generates a draft based on suggestedShareFocus and saves as AI message.
  */
-router.post('/sessions/:id/reconciler/share-offer/generate-draft', requireSessionAccess, empathyRateLimit, generateShareDraftHandler);
+router.post(
+  '/sessions/:id/reconciler/share-offer/generate-draft',
+  requireSessionAccess,
+  empathyRateLimit,
+  generateShareDraftHandler,
+);
 
 /**
  * Get reconciler summary after completion
@@ -95,7 +105,12 @@ router.get('/sessions/:id/reconciler/summary', requireSessionAccess, getReconcil
  * Client sends full conversation history each time. No DB writes.
  * Returns AI coaching response and optional proposed content.
  */
-router.post('/sessions/:id/reconciler/refinement/message', requireSessionAccess, empathyRateLimit, refinementChatMessageHandler);
+router.post(
+  '/sessions/:id/reconciler/refinement/message',
+  requireSessionAccess,
+  empathyRateLimit,
+  refinementChatMessageHandler,
+);
 
 /**
  * Finalize refinement — share refined content with partner
@@ -103,6 +118,11 @@ router.post('/sessions/:id/reconciler/refinement/message', requireSessionAccess,
  *
  * Creates SHARED_CONTEXT message and notifies partner via Ably.
  */
-router.post('/sessions/:id/reconciler/refinement/finalize', requireSessionAccess, empathyRateLimit, refinementFinalizeHandler);
+router.post(
+  '/sessions/:id/reconciler/refinement/finalize',
+  requireSessionAccess,
+  empathyRateLimit,
+  refinementFinalizeHandler,
+);
 
 export default router;

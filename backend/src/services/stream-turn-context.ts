@@ -54,16 +54,17 @@ async function getStage4InventoryPromptContext(sessionId: string, currentUserId:
   const proposals = (await loadProposals(sessionId, me.id))
     .sort((a, b) => a.updatedAt.getTime() - b.updatedAt.getTime())
     .slice(0, 12)
-    .filter((proposal) => proposal.status !== 'REMOVED');
+    .filter(proposal => proposal.status !== 'REMOVED');
   if (proposals.length === 0) return null;
 
   return proposals
-    .map((proposal) => {
-      const owner = proposal.createdByParticipantId === me.id
-        ? 'current user'
-        : proposal.createdByParticipantId
-          ? 'partner'
-          : 'shared/no owner';
+    .map(proposal => {
+      const owner =
+        proposal.createdByParticipantId === me.id
+          ? 'current user'
+          : proposal.createdByParticipantId
+            ? 'partner'
+            : 'shared/no owner';
       const details = [
         `id=${proposal.id}`,
         `kind=${proposal.kind}`,
@@ -77,10 +78,7 @@ async function getStage4InventoryPromptContext(sessionId: string, currentUserId:
     .join('\n');
 }
 
-async function getStage4WalkthroughPromptContext(
-  sessionId: string,
-  currentUserId: string
-): Promise<string | null> {
+async function getStage4WalkthroughPromptContext(sessionId: string, currentUserId: string): Promise<string | null> {
   try {
     const state = await buildStage4State(sessionId, currentUserId);
     const walkthrough = state.walkthrough;
@@ -101,7 +99,7 @@ async function getStage4WalkthroughPromptContext(
       lines.push('currentNeedId=null');
     }
 
-    const formatNeed = (need: typeof walkthrough.ownNeeds[number]) =>
+    const formatNeed = (need: (typeof walkthrough.ownNeeds)[number]) =>
       `- id=${need.id} | status=${need.status} | label="${need.label}"`;
     if (walkthrough.ownNeeds.length > 0) {
       lines.push('ownNeeds:', ...walkthrough.ownNeeds.map(formatNeed));
@@ -110,20 +108,19 @@ async function getStage4WalkthroughPromptContext(
       lines.push('partnerNeeds:', ...walkthrough.partnerNeeds.map(formatNeed));
     }
 
-    const currentProposalLines = walkthrough.proposalGroups
-      .flatMap((group) =>
-        group.proposals.map((proposal) => {
-          const details = [
-            `- group=${group.key}`,
-            `id=${proposal.id}`,
-            `kind=${proposal.kind}`,
-            `description="${proposal.description}"`,
-          ];
-          if (proposal.duration) details.push(`duration="${proposal.duration}"`);
-          if (proposal.measureOfSuccess) details.push(`success="${proposal.measureOfSuccess}"`);
-          return details.join(' | ');
-        })
-      );
+    const currentProposalLines = walkthrough.proposalGroups.flatMap(group =>
+      group.proposals.map(proposal => {
+        const details = [
+          `- group=${group.key}`,
+          `id=${proposal.id}`,
+          `kind=${proposal.kind}`,
+          `description="${proposal.description}"`,
+        ];
+        if (proposal.duration) details.push(`duration="${proposal.duration}"`);
+        if (proposal.measureOfSuccess) details.push(`success="${proposal.measureOfSuccess}"`);
+        return details.join(' | ');
+      }),
+    );
     if (currentProposalLines.length > 0) {
       lines.push('currentNeedProposals:', ...currentProposalLines);
     }
@@ -145,7 +142,7 @@ async function getStage4WalkthroughPromptContext(
  */
 export async function getStage4OpenNeedsForPrompt(
   sessionId: string,
-  userId: string
+  userId: string,
 ): Promise<Array<{ needLabel: string }> | null> {
   try {
     const me = await resolveParticipant(sessionId, userId);
@@ -158,19 +155,22 @@ export async function getStage4OpenNeedsForPrompt(
         where: { participantId: me.id, decision: 'WILLING', proposal: { sessionId } },
         select: { proposalId: true },
       }),
-      prisma.needDisposition.findMany({ where: { participantId: me.id, status: 'DECLINED' }, select: { needId: true } }),
+      prisma.needDisposition.findMany({
+        where: { participantId: me.id, status: 'DECLINED' },
+        select: { needId: true },
+      }),
     ]);
-    const willing = new Set(mine.map((c) => c.proposalId));
-    const declinedIds = new Set(declined.map((d) => d.needId));
-    const byNeed = new Map(coverage.map((c) => [c.needId, c]));
+    const willing = new Set(mine.map(c => c.proposalId));
+    const declinedIds = new Set(declined.map(d => d.needId));
+    const byNeed = new Map(coverage.map(c => [c.needId, c]));
     const labels = needs
-      .filter((n) => {
+      .filter(n => {
         const c = byNeed.get(n.id);
         if (c?.status === 'COVERED') return false;
         if (declinedIds.has(n.id)) return false;
-        return !(c?.coveringProposalIds ?? []).some((pid) => willing.has(pid));
+        return !(c?.coveringProposalIds ?? []).some(pid => willing.has(pid));
       })
-      .map((n) => ({ needLabel: n.label }));
+      .map(n => ({ needLabel: n.label }));
     return labels.length > 0 ? labels : null;
   } catch (err) {
     logger.warn('[getStage4OpenNeedsForPrompt] failed', { error: err });
@@ -188,18 +188,16 @@ async function isStage4ListenFirstMode(
   _sessionId: string,
   _userId: string,
   sessionStatus: string,
-  history: Array<{ role: string; content: string }>
+  history: Array<{ role: string; content: string }>,
 ): Promise<boolean> {
   if (sessionStatus !== 'RESOLVED') return false;
-  const askedForInput = history.some(
-    (m) => m.role === 'USER' && isExplicitAskForInput(m.content)
-  );
+  const askedForInput = history.some(m => m.role === 'USER' && isExplicitAskForInput(m.content));
   return !askedForInput;
 }
 
 async function getTendingConversationContextForPrompt(
   sessionId: string,
-  userId: string
+  userId: string,
 ): Promise<TendingConversationPromptContext | null> {
   try {
     const me = await resolveParticipant(sessionId, userId);
@@ -208,8 +206,8 @@ async function getTendingConversationContextForPrompt(
     // shared needs (their labels), their carried-forward notes, and their own
     // latest check-ins' payloads.
     const [entries, needs, selectedNotes, latestCheckins] = await Promise.all([
-      loadFollowUpsForParticipant(sessionId, me.id).then((rows) => rows.slice(0, 8)),
-      loadStage4Needs(sessionId, me.id).then((rows) => rows.filter((n) => n.ownerParticipantId === me.id).slice(0, 8)),
+      loadFollowUpsForParticipant(sessionId, me.id).then(rows => rows.slice(0, 8)),
+      loadStage4Needs(sessionId, me.id).then(rows => rows.filter(n => n.ownerParticipantId === me.id).slice(0, 8)),
       prisma.followUpNote.findMany({
         where: { participantId: me.id, carryForward: true },
         orderBy: [{ createdAt: 'asc' }],
@@ -227,39 +225,47 @@ async function getTendingConversationContextForPrompt(
     if (entries.length === 0 && selectedNotes.length === 0 && latestCheckins.length === 0) {
       return null;
     }
-    const agreementIds = entries.map((e) => e.agreementId).filter((id): id is string => Boolean(id));
+    const agreementIds = entries.map(e => e.agreementId).filter((id): id is string => Boolean(id));
     const agreements = new Map(
-      (await prisma.agreement.findMany({ where: { id: { in: agreementIds } }, select: { id: true, measureOfSuccess: true } })).map(
-        (a) => [a.id, a.measureOfSuccess] as const,
-      ),
+      (
+        await prisma.agreement.findMany({
+          where: { id: { in: agreementIds } },
+          select: { id: true, measureOfSuccess: true },
+        })
+      ).map(a => [a.id, a.measureOfSuccess] as const),
     );
 
-    const latestStructuredOutcomes = latestCheckins.flatMap((checkin) => {
-      const parsed = followUpCheckinPayloadSchema.safeParse(checkin.payload);
-      const payload = parsed.success ? parsed.data : null;
-      return [
-        `Check-in ${checkin.id}: continueChoice=${checkin.continueChoice ?? 'none'} nextAction=${checkin.nextAction ?? 'none'}`,
-        ...(payload?.entryOutcomes ?? []).map((outcome) =>
-          `Entry ${outcome.followUpId}: followThrough=${outcome.followThroughStatus}; helpfulness=${outcome.helpfulnessStatus ?? 'none'}; blockers=${outcome.blockerCategories.join(', ') || 'none'}; stillWorthTrying=${outcome.stillWorthTrying ?? 'unknown'}`
-        ),
-        ...(payload?.needOutcomes ?? []).map((outcome) =>
-          `Need ${outcome.needLabel}: ${outcome.resolutionStatus}${outcome.nextAction ? `; nextAction=${outcome.nextAction}` : ''}`
-        ),
-        ...(payload?.adjustments ?? []).map((adjustment) =>
-          `Adjustment ${adjustment.followUpId}: ${adjustment.revisedCommitmentText ?? 'no text'}${adjustment.revisedCadence ? `; cadence=${adjustment.revisedCadence}` : ''}${adjustment.revisedSuccessCriteria ? `; success=${adjustment.revisedSuccessCriteria}` : ''}`
-        ),
-      ];
-    }).join('\n');
+    const latestStructuredOutcomes = latestCheckins
+      .flatMap(checkin => {
+        const parsed = followUpCheckinPayloadSchema.safeParse(checkin.payload);
+        const payload = parsed.success ? parsed.data : null;
+        return [
+          `Check-in ${checkin.id}: continueChoice=${checkin.continueChoice ?? 'none'} nextAction=${checkin.nextAction ?? 'none'}`,
+          ...(payload?.entryOutcomes ?? []).map(
+            outcome =>
+              `Entry ${outcome.followUpId}: followThrough=${outcome.followThroughStatus}; helpfulness=${outcome.helpfulnessStatus ?? 'none'}; blockers=${outcome.blockerCategories.join(', ') || 'none'}; stillWorthTrying=${outcome.stillWorthTrying ?? 'unknown'}`,
+          ),
+          ...(payload?.needOutcomes ?? []).map(
+            outcome =>
+              `Need ${outcome.needLabel}: ${outcome.resolutionStatus}${outcome.nextAction ? `; nextAction=${outcome.nextAction}` : ''}`,
+          ),
+          ...(payload?.adjustments ?? []).map(
+            adjustment =>
+              `Adjustment ${adjustment.followUpId}: ${adjustment.revisedCommitmentText ?? 'no text'}${adjustment.revisedCadence ? `; cadence=${adjustment.revisedCadence}` : ''}${adjustment.revisedSuccessCriteria ? `; success=${adjustment.revisedSuccessCriteria}` : ''}`,
+          ),
+        ];
+      })
+      .join('\n');
 
     return {
-      entries: entries.map((entry) => ({
+      entries: entries.map(entry => ({
         id: entry.id,
         summary: entry.summary,
         scope: entry.scope,
         successCriteria: entry.agreementId ? (agreements.get(entry.agreementId) ?? null) : null,
       })),
-      needs: needs.map((need) => ({ id: need.id, label: need.label })),
-      selectedBetweenPeriodNotes: selectedNotes.map((note) => ({
+      needs: needs.map(need => ({ id: need.id, label: need.label })),
+      selectedBetweenPeriodNotes: selectedNotes.map(note => ({
         id: note.id,
         content: note.content,
         consentToShareWithPartner: note.carriedIntoCheckinId !== null,
@@ -312,9 +318,7 @@ export interface StreamTurnContext {
   messagesWithContext: Array<{ role: 'user' | 'assistant'; content: string }>;
 }
 
-export async function assembleStreamTurnContext(
-  params: StreamTurnContextParams
-): Promise<StreamTurnContext> {
+export async function assembleStreamTurnContext(params: StreamTurnContextParams): Promise<StreamTurnContext> {
   const { requestId, sessionId, user, participant, session, currentStage, refiningNeedContext } = params;
   const conversationId = participant.mainConversationId;
   if (!conversationId) throw new Error(`Participant ${participant.id} has no MAIN conversation`);
@@ -371,7 +375,7 @@ export async function assembleStreamTurnContext(
     intent: 'stage_enforcement',
     depth: 'light', // Changed from 'minimal' to ensure notable facts are included
     reason: 'Streaming response',
-    threshold: 0.60,
+    threshold: 0.6,
     maxCrossSession: 0,
     allowCrossSession: false,
     surfaceStyle: 'silent',
@@ -408,7 +412,9 @@ export async function assembleStreamTurnContext(
   const sharedContentHistory = currentStage >= 2 ? contextBundle.sharedContentHistory : null;
   const milestoneContext = contextBundle.milestoneContext;
 
-  logger.info(`[sendMessageStream:${requestId}] Context assembled: notableFacts=${contextBundle.notableFacts?.length ?? 0}, emotionalIntensity=${emotionalIntensity}`);
+  logger.info(
+    `[sendMessageStream:${requestId}] Context assembled: notableFacts=${contextBundle.notableFacts?.length ?? 0}, emotionalIntensity=${emotionalIntensity}`,
+  );
 
   // ===========================================================================
   // Stage 2B routing: the participant's own attempt in REFINING → Stage 21
@@ -419,12 +425,14 @@ export async function assembleStreamTurnContext(
   // and of the guesser's shared context are gone (plan §5; P3 §7).
   // ===========================================================================
   let effectiveStage = currentStage;
-  let reconcilerGapContext: {
-    areaHint: string | null;
-    guidanceType: string | null;
-    promptSeed: string | null;
-    iteration: number;
-  } | undefined;
+  let reconcilerGapContext:
+    | {
+        areaHint: string | null;
+        guidanceType: string | null;
+        promptSeed: string | null;
+        iteration: number;
+      }
+    | undefined;
   let previousEmpathyContent: string | null = null;
   let stage2BSharedContext: string | null = null;
   let isRefiningEmpathy = false;
@@ -457,34 +465,25 @@ export async function assembleStreamTurnContext(
       const delivered = contextBundle.sharedVessel.sharedContexts.filter(
         c => c.direction === 'partner_to_user' && c.content,
       );
-      stage2BSharedContext = delivered.length ? delivered[delivered.length - 1].content ?? null : null;
+      stage2BSharedContext = delivered.length ? (delivered[delivered.length - 1].content ?? null) : null;
     } else if (ownDraft) {
       // Regular Stage 2 — the AI can see/edit the current draft
       empathyDraftContent = ownDraft.content;
-      logger.info(`[sendMessageStream:${requestId}] Stage 2: found existing empathy draft (${empathyDraftContent.length} chars)`);
+      logger.info(
+        `[sendMessageStream:${requestId}] Stage 2: found existing empathy draft (${empathyDraftContent.length} chars)`,
+      );
     }
   }
-  const stage4InventoryContext = currentStage === 4
-    ? await getStage4InventoryPromptContext(sessionId, user.id)
-    : null;
+  const stage4InventoryContext = currentStage === 4 ? await getStage4InventoryPromptContext(sessionId, user.id) : null;
 
-  const stage4WalkthroughContext = currentStage === 4
-    ? await getStage4WalkthroughPromptContext(sessionId, user.id)
-    : null;
+  const stage4WalkthroughContext =
+    currentStage === 4 ? await getStage4WalkthroughPromptContext(sessionId, user.id) : null;
 
-  const stage4OpenNeeds = currentStage === 4
-    ? await getStage4OpenNeedsForPrompt(sessionId, user.id)
-    : null;
+  const stage4OpenNeeds = currentStage === 4 ? await getStage4OpenNeedsForPrompt(sessionId, user.id) : null;
 
-  const stage4ListenFirstMode = await isStage4ListenFirstMode(
-    sessionId,
-    user.id,
-    session.status,
-    history
-  );
-  const tendingConversationContext = session.status === 'RESOLVED'
-    ? await getTendingConversationContextForPrompt(sessionId, user.id)
-    : null;
+  const stage4ListenFirstMode = await isStage4ListenFirstMode(sessionId, user.id, session.status, history);
+  const tendingConversationContext =
+    session.status === 'RESOLVED' ? await getTendingConversationContextForPrompt(sessionId, user.id) : null;
   const tendingConversationPrompt = tendingConversationContext
     ? buildTendingConversationPrompt('whatHappened', {
         ...tendingConversationContext,
@@ -493,31 +492,35 @@ export async function assembleStreamTurnContext(
       })
     : null;
 
-  const prompt = buildStagePrompt(effectiveStage, {
-    userName,
-    currentUserId: user.id,
-    partnerUserId: partnerId,
-    partnerName,
-    turnCount: stageTurnCount,
-    emotionalIntensity,
-    contextBundle,
-    sharedContentHistory,
-    milestoneContext,
-    reconcilerGapContext,
-    previousEmpathyContent,
-    sharedContextFromPartner: stage2BSharedContext || undefined,
-    empathyDraft: empathyDraftContent || undefined,
-    isRefiningEmpathy: isRefiningEmpathy || undefined,
-    refiningNeed: refiningNeedContext,
-    capturedNeeds,
-    stage4InventoryContext,
-    stage4WalkthroughContext,
-    stage4OpenNeeds,
-    stage4ListenFirstMode,
-    tendingConversationContext,
-    tendingConversationPrompt,
-    topicFrame: session.topicFrameConfirmedAt ? session.topicFrame : undefined,
-  }, { isInvitationPhase });
+  const prompt = buildStagePrompt(
+    effectiveStage,
+    {
+      userName,
+      currentUserId: user.id,
+      partnerUserId: partnerId,
+      partnerName,
+      turnCount: stageTurnCount,
+      emotionalIntensity,
+      contextBundle,
+      sharedContentHistory,
+      milestoneContext,
+      reconcilerGapContext,
+      previousEmpathyContent,
+      sharedContextFromPartner: stage2BSharedContext || undefined,
+      empathyDraft: empathyDraftContent || undefined,
+      isRefiningEmpathy: isRefiningEmpathy || undefined,
+      refiningNeed: refiningNeedContext,
+      capturedNeeds,
+      stage4InventoryContext,
+      stage4WalkthroughContext,
+      stage4OpenNeeds,
+      stage4ListenFirstMode,
+      tendingConversationContext,
+      tendingConversationPrompt,
+      topicFrame: session.topicFrameConfirmedAt ? session.topicFrame : undefined,
+    },
+    { isInvitationPhase },
+  );
 
   // Format context bundle and inject into last user message (includes notable facts)
   const formattedContext = formatContextForPrompt(contextBundle, {
@@ -527,18 +530,20 @@ export async function assembleStreamTurnContext(
   logger.info(`[sendMessageStream:${requestId}] Formatted context: ${formattedContext.length} chars`);
 
   // Filter out empty messages to prevent Bedrock ValidationException
-  const validHistory = history.filter((m) => m.content && m.content.trim().length > 0);
+  const validHistory = history.filter(m => m.content && m.content.trim().length > 0);
   if (validHistory.length !== history.length) {
-    logger.warn(`[sendMessageStream:${requestId}] Filtered out ${history.length - validHistory.length} empty message(s) from history`);
+    logger.warn(
+      `[sendMessageStream:${requestId}] Filtered out ${history.length - validHistory.length} empty message(s) from history`,
+    );
   }
 
   const summaryExists = Boolean(summaryBoundary);
   const { trimmed: trimmedHistory, truncated } = trimConversationHistory(
-    validHistory.map((m) => ({
-      role: m.role === 'USER' ? 'user' as const : 'assistant' as const,
+    validHistory.map(m => ({
+      role: m.role === 'USER' ? ('user' as const) : ('assistant' as const),
       content: m.content,
     })),
-    summaryExists ? CONTEXT_WINDOW.recentTurnsWithSummary : CONTEXT_WINDOW.recentTurnsWithoutSummary
+    summaryExists ? CONTEXT_WINDOW.recentTurnsWithSummary : CONTEXT_WINDOW.recentTurnsWithoutSummary,
   );
 
   if (truncated > 0) {
@@ -548,21 +553,25 @@ export async function assembleStreamTurnContext(
   // Build messages with context injected into the last user message
   const messagesWithContext = trimmedHistory.map((m, i) => {
     const isLastUserMessage = i === trimmedHistory.length - 1 && m.role === 'user';
-    const content = isLastUserMessage && formattedContext.trim()
-      ? `Context:\n${formattedContext}\n\nUser message: ${m.content}`
-      : m.content;
+    const content =
+      isLastUserMessage && formattedContext.trim()
+        ? `Context:\n${formattedContext}\n\nUser message: ${m.content}`
+        : m.content;
     return {
       role: m.role,
       content,
     };
   });
 
-  recordContextSizes(turnId, estimateContextSizes({
-    pinned: `${prompt.staticBlock}\n\n${prompt.dynamicBlock}`,
-    summary: formattedContext,
-    recentMessages: trimmedHistory,
-    rag: '',
-  }));
+  recordContextSizes(
+    turnId,
+    estimateContextSizes({
+      pinned: `${prompt.staticBlock}\n\n${prompt.dynamicBlock}`,
+      summary: formattedContext,
+      recentMessages: trimmedHistory,
+      rag: '',
+    }),
+  );
 
   return {
     history,

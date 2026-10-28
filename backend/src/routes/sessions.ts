@@ -103,7 +103,12 @@ router.get('/sessions/:id/invitation', requireAuth, requireSessionAccess, asyncH
  * @description Confirm invitation message (ready to share)
  * @access Private - requires authentication and session access
  */
-router.post('/sessions/:id/invitation/confirm', requireAuth, requireSessionAccess, asyncHandler(confirmInvitationMessage));
+router.post(
+  '/sessions/:id/invitation/confirm',
+  requireAuth,
+  requireSessionAccess,
+  asyncHandler(confirmInvitationMessage),
+);
 
 /**
  * @route POST /api/v1/sessions/:id/topic-frame/confirm

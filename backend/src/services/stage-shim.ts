@@ -42,7 +42,13 @@
 import { prisma, type DbClient } from '../lib/prisma';
 
 /** Terminal milestone of each stage (stage index → key). */
-export const TERMINAL_MILESTONE = ['compact_signed', 'feel_heard', 'empathy_validated', 'needs_shared', 'closed'] as const;
+export const TERMINAL_MILESTONE = [
+  'compact_signed',
+  'feel_heard',
+  'empathy_validated',
+  'needs_shared',
+  'closed',
+] as const;
 
 export const LAST_STAGE = 4;
 
@@ -176,7 +182,10 @@ export function latestStageRow(rows: ShimStageRow[]): ShimStageRow | null {
 // ----------------------------------------------------------------------------
 
 /** `v_current_stage` for these participants. */
-export async function loadCurrentStages(participantIds: string[], client: DbClient = prisma): Promise<Map<string, CurrentStage>> {
+export async function loadCurrentStages(
+  participantIds: string[],
+  client: DbClient = prisma,
+): Promise<Map<string, CurrentStage>> {
   if (participantIds.length === 0) return new Map();
   const rows = await client.$queryRaw<
     Array<{
@@ -205,7 +214,10 @@ export async function loadCurrentStages(participantIds: string[], client: DbClie
 }
 
 /** Milestones reached, per participant, oldest first. */
-export async function loadMilestones(participantIds: string[], client: DbClient = prisma): Promise<Map<string, MilestoneReached[]>> {
+export async function loadMilestones(
+  participantIds: string[],
+  client: DbClient = prisma,
+): Promise<Map<string, MilestoneReached[]>> {
   const out = new Map<string, MilestoneReached[]>(participantIds.map(id => [id, []]));
   if (participantIds.length === 0) return out;
   const rows = await client.participantMilestone.findMany({

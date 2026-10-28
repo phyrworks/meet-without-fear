@@ -6,15 +6,15 @@
  */
 
 export type RecencyBucket =
-  | 'just_now'      // < 1 hour
-  | 'today'         // Same day
-  | 'yesterday'     // Previous day
-  | 'recently'      // 2-6 days ago
-  | 'last_week'     // 7-13 days
-  | 'weeks_ago'     // 14-29 days
-  | 'last_month'    // 30-59 days
-  | 'months_ago'    // 60+ days
-  | 'long_ago';     // 6+ months
+  | 'just_now' // < 1 hour
+  | 'today' // Same day
+  | 'yesterday' // Previous day
+  | 'recently' // 2-6 days ago
+  | 'last_week' // 7-13 days
+  | 'weeks_ago' // 14-29 days
+  | 'last_month' // 30-59 days
+  | 'months_ago' // 60+ days
+  | 'long_ago'; // 6+ months
 
 export interface TimeContext {
   bucket: RecencyBucket;
@@ -84,7 +84,8 @@ export function getTimeContext(timestamp: string | Date, now: Date = new Date())
       hoursAgo: Math.round(diffHours),
       phrase: phrases[Math.floor(Math.random() * phrases.length)],
       useRememberingLanguage: true,
-      promptGuidance: 'Recent enough that user likely remembers. Can use light framing like "recently" or "a few days ago".',
+      promptGuidance:
+        'Recent enough that user likely remembers. Can use light framing like "recently" or "a few days ago".',
     };
   }
 
@@ -160,7 +161,7 @@ export function formatMessageWithTimeContext(
   timestamp: string | Date,
   role: 'user' | 'assistant',
   partnerName?: string,
-  sessionContext?: string
+  sessionContext?: string,
 ): string {
   const timeCtx = getTimeContext(timestamp);
   const speaker = role === 'user' ? 'User' : 'AI';
@@ -189,8 +190,8 @@ export function getRecencyGuidance(timestamps: (string | Date)[]): string {
     return '';
   }
 
-  const contexts = timestamps.map((t) => getTimeContext(t));
-  const buckets = new Set(contexts.map((c) => c.bucket));
+  const contexts = timestamps.map(t => getTimeContext(t));
+  const buckets = new Set(contexts.map(c => c.bucket));
 
   // If all content is from today/yesterday, no special guidance needed
   if (buckets.size === 1 && (buckets.has('just_now') || buckets.has('today') || buckets.has('yesterday'))) {
@@ -199,7 +200,8 @@ export function getRecencyGuidance(timestamps: (string | Date)[]): string {
 
   // If there's a mix, provide nuanced guidance
   const hasRecent = buckets.has('just_now') || buckets.has('today') || buckets.has('yesterday');
-  const hasOld = buckets.has('weeks_ago') || buckets.has('last_month') || buckets.has('months_ago') || buckets.has('long_ago');
+  const hasOld =
+    buckets.has('weeks_ago') || buckets.has('last_month') || buckets.has('months_ago') || buckets.has('long_ago');
 
   if (hasRecent && hasOld) {
     return 'Context spans different time periods. Recent content can be referenced naturally, older content should use appropriate time framing like "a few weeks ago" or "some time back".';
@@ -218,11 +220,7 @@ export function getRecencyGuidance(timestamps: (string | Date)[]): string {
 // ============================================================================
 
 function isSameDay(d1: Date, d2: Date): boolean {
-  return (
-    d1.getFullYear() === d2.getFullYear() &&
-    d1.getMonth() === d2.getMonth() &&
-    d1.getDate() === d2.getDate()
-  );
+  return d1.getFullYear() === d2.getFullYear() && d1.getMonth() === d2.getMonth() && d1.getDate() === d2.getDate();
 }
 
 function isYesterday(then: Date, now: Date): boolean {

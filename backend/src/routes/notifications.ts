@@ -7,10 +7,7 @@
 
 import { Router } from 'express';
 import { requireAuth } from '../middleware/auth';
-import {
-  getPendingActionsHandler,
-  getBadgeCountHandler,
-} from '../controllers/notifications';
+import { getPendingActionsHandler, getBadgeCountHandler } from '../controllers/notifications';
 
 const router = Router();
 

@@ -67,7 +67,8 @@ export async function deleteSessionForUser(
   // The walk and the explicit deletes: one job transaction
   const extra = await getJobPrisma().$transaction(async tx => {
     await tx.$executeRaw`SELECT app.anonymize_user_in_session(${sessionId}::uuid, ${me.id}::uuid)`;
-    const memories = await tx.$executeRaw`DELETE FROM user_memory WHERE user_id = ${userId}::uuid AND session_id = ${sessionId}::uuid`;
+    const memories =
+      await tx.$executeRaw`DELETE FROM user_memory WHERE user_id = ${userId}::uuid AND session_id = ${sessionId}::uuid`;
     const reminders = await tx.$executeRaw`DELETE FROM reminder r USING follow_up f
       WHERE r.follow_up_id = f.id AND f.session_id = ${sessionId}::uuid AND r.user_id = ${userId}::uuid`;
     return memories + reminders;

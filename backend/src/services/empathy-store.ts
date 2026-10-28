@@ -131,15 +131,29 @@ export async function departedCounterpart(
   const rows = await client.participant.findMany({
     where: { sessionId, kind: 'human', leftAt: { not: null }, id: { not: meParticipantId } },
     orderBy: [{ joinedAt: 'asc' }, { id: 'asc' }],
-    select: { id: true, userId: true, joinedAt: true, conversations: { where: { kind: 'MAIN' }, select: { id: true } } },
+    select: {
+      id: true,
+      userId: true,
+      joinedAt: true,
+      conversations: { where: { kind: 'MAIN' }, select: { id: true } },
+    },
   });
   if (rows.length !== 1) return null;
   const r = rows[0];
-  return { participantId: r.id, userId: r.userId, name: null, joinedAt: r.joinedAt, mainConversationId: r.conversations[0]?.id ?? null };
+  return {
+    participantId: r.id,
+    userId: r.userId,
+    name: null,
+    joinedAt: r.joinedAt,
+    mainConversationId: r.conversations[0]?.id ?? null,
+  };
 }
 
 /** The party with this user id, or this participant id. */
-export function partyOf(parties: SessionParty[], who: { userId?: string; participantId?: string }): SessionParty | undefined {
+export function partyOf(
+  parties: SessionParty[],
+  who: { userId?: string; participantId?: string },
+): SessionParty | undefined {
   return parties.find(p => (who.participantId ? p.participantId === who.participantId : p.userId === who.userId));
 }
 
@@ -180,7 +194,10 @@ export async function roundsOf(authorParticipantId: string, subjectParticipantId
  * `revealed_at` set (a later, unrevealed round is invisible to them; a
  * superseded round they already read stays readable — spec §7).
  */
-export async function revealedAttemptAbout(subjectParticipantId: string, authorParticipantId: string): Promise<AttemptRow | null> {
+export async function revealedAttemptAbout(
+  subjectParticipantId: string,
+  authorParticipantId: string,
+): Promise<AttemptRow | null> {
   return (await prisma.empathyAttempt.findFirst({
     where: { authorParticipantId, subjectParticipantId, revealedAt: { not: null } },
     orderBy: { round: 'desc' },
@@ -208,7 +225,14 @@ export interface DirectionStatus {
  */
 export async function directionStatuses(sessionId: string): Promise<DirectionStatus[]> {
   const rows = await prisma.$queryRaw<
-    Array<{ a: string; s: string; round: number; status: TargetEmpathyStatus; submitted_at: Date; revealed_at: Date | null }>
+    Array<{
+      a: string;
+      s: string;
+      round: number;
+      status: TargetEmpathyStatus;
+      submitted_at: Date;
+      revealed_at: Date | null;
+    }>
   >`SELECT v.author_participant_id AS a, v.subject_participant_id AS s, v.round, v.status::text AS status,
            v.submitted_at, v.revealed_at
     FROM v_empathy_direction_status v
@@ -229,7 +253,9 @@ export function directionOf(
   authorParticipantId: string,
   subjectParticipantId: string,
 ): DirectionStatus | undefined {
-  return statuses.find(d => d.authorParticipantId === authorParticipantId && d.subjectParticipantId === subjectParticipantId);
+  return statuses.find(
+    d => d.authorParticipantId === authorParticipantId && d.subjectParticipantId === subjectParticipantId,
+  );
 }
 
 /**
@@ -296,7 +322,9 @@ export async function setAttemptStatus(
   opts: { actor: StatusActor; content?: string; client?: PrismaClient },
 ): Promise<string> {
   const client = opts.client ?? clientFor(opts.actor);
-  const rows = await client.$queryRaw<Array<{ id: string }>>`SELECT app.empathy_set_status(${attemptId}::uuid, ${status}::empathy_status, ${opts.content ?? null}::text)::text AS id`;
+  const rows = await client.$queryRaw<
+    Array<{ id: string }>
+  >`SELECT app.empathy_set_status(${attemptId}::uuid, ${status}::empathy_status, ${opts.content ?? null}::text)::text AS id`;
   return rows[0].id;
 }
 
@@ -327,7 +355,9 @@ export async function jobMoveIfUnchanged(
       WHERE s.id = (SELECT p.session_id FROM empathy_attempt a JOIN participant p ON p.id = a.author_participant_id
                     WHERE a.id = ${attemptId}::uuid)
       FOR NO KEY UPDATE`;
-    const rows = await tx.$queryRaw<Array<{ status_version: number; status: TargetEmpathyStatus }>>`SELECT status_version, status::text AS status FROM empathy_attempt WHERE id = ${attemptId}::uuid FOR NO KEY UPDATE`;
+    const rows = await tx.$queryRaw<
+      Array<{ status_version: number; status: TargetEmpathyStatus }>
+    >`SELECT status_version, status::text AS status FROM empathy_attempt WHERE id = ${attemptId}::uuid FOR NO KEY UPDATE`;
     const row = rows[0];
     if (!row || Number(row.status_version) !== expectedVersion) return false;
     if (row.status !== status) {
@@ -397,7 +427,10 @@ export async function reviewOf(attemptId: string, reviewerParticipantId: string)
  * `validated` flag included"; fix1 m2). A positive verdict reaches the author
  * through their own round's status (VALIDATED), never through this row.
  */
-export async function reviewVisibleToAuthor(attemptId: string, subjectParticipantId: string): Promise<ReviewRow | null> {
+export async function reviewVisibleToAuthor(
+  attemptId: string,
+  subjectParticipantId: string,
+): Promise<ReviewRow | null> {
   const review = await reviewOf(attemptId, subjectParticipantId);
   if (!review) return null;
   return review.feedbackSentAt ? review : null;
@@ -423,7 +456,9 @@ export async function recordReview(opts: {
     feedbackSentAt: opts.sentFeedback ? opts.at : null,
   };
   return prisma.empathyReview.upsert({
-    where: { attemptId_reviewerParticipantId: { attemptId: opts.attemptId, reviewerParticipantId: opts.reviewerParticipantId } },
+    where: {
+      attemptId_reviewerParticipantId: { attemptId: opts.attemptId, reviewerParticipantId: opts.reviewerParticipantId },
+    },
     create: { attemptId: opts.attemptId, reviewerParticipantId: opts.reviewerParticipantId, ...data },
     update: opts.sentFeedback ? data : { validated: opts.validated },
     select: REVIEW_SELECT,
@@ -455,10 +490,12 @@ export async function upsertDraft(opts: {
   content: string;
   readyToShare?: boolean;
 }): Promise<DraftRow> {
-  const about = opts.kind === 'EMPATHY' ? opts.aboutParticipantId ?? null : null;
-  const attempt = opts.kind === 'VALIDATION_FEEDBACK' ? opts.attemptId ?? null : null;
+  const about = opts.kind === 'EMPATHY' ? (opts.aboutParticipantId ?? null) : null;
+  const attempt = opts.kind === 'VALIDATION_FEEDBACK' ? (opts.attemptId ?? null) : null;
   const ready = typeof opts.readyToShare === 'boolean' ? opts.readyToShare : null;
-  const rows = await prisma.$queryRaw<Array<{ id: string; content: string; ready_to_share: boolean; version: number; updated_at: Date }>>`INSERT INTO draft (participant_id, kind, about_participant_id, attempt_id, content, ready_to_share, version)
+  const rows = await prisma.$queryRaw<
+    Array<{ id: string; content: string; ready_to_share: boolean; version: number; updated_at: Date }>
+  >`INSERT INTO draft (participant_id, kind, about_participant_id, attempt_id, content, ready_to_share, version)
     VALUES (${opts.participantId}::uuid, ${opts.kind}::draft_kind, ${about}::uuid, ${attempt}::uuid, ${opts.content},
             coalesce(${ready}::boolean, false), 1)
     ON CONFLICT (participant_id, kind, (coalesce(about_participant_id, attempt_id, share_offer_id)))
@@ -467,7 +504,13 @@ export async function upsertDraft(opts: {
                   version = draft.version + 1
     RETURNING id, content, ready_to_share, version, updated_at`;
   const r = rows[0];
-  return { id: r.id, content: r.content, readyToShare: r.ready_to_share, version: Number(r.version), updatedAt: r.updated_at };
+  return {
+    id: r.id,
+    content: r.content,
+    readyToShare: r.ready_to_share,
+    version: Number(r.version),
+    updatedAt: r.updated_at,
+  };
 }
 
 export async function findDraft(opts: {
@@ -487,7 +530,10 @@ export async function findDraft(opts: {
 }
 
 /** Has the author GRANTED a submission consent on any round of this direction (m12: any round, not only the newest)? */
-export async function grantedSubmissionConsent(authorParticipantId: string, subjectParticipantId: string): Promise<boolean> {
+export async function grantedSubmissionConsent(
+  authorParticipantId: string,
+  subjectParticipantId: string,
+): Promise<boolean> {
   const n = await prisma.consent.count({
     where: {
       participantId: authorParticipantId,

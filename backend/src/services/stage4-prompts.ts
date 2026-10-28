@@ -36,9 +36,7 @@ export function needsBrainstormPersona(needLabel: string | null | undefined): st
   ].join('\n');
 }
 
-export function proposalRefinementPersona(
-  proposalDescription: string | null | undefined
-): string {
+export function proposalRefinementPersona(proposalDescription: string | null | undefined): string {
   const proposal = proposalDescription?.trim() || 'this proposal';
   return [
     `You're inside a focused side-conversation about one specific proposal: "${proposal}".`,
@@ -84,11 +82,9 @@ export function noOverlapPersona(): string {
  * Open-needs clause for COVERAGE_REVIEW: list open-and-not-declined needs and
  * instruct the AI to raise one at a time with the gold's exact tone.
  */
-export function coverageReviewOpenNeedsClause(
-  openNeeds: Array<{ needLabel: string }>
-): string {
+export function coverageReviewOpenNeedsClause(openNeeds: Array<{ needLabel: string }>): string {
   if (openNeeds.length === 0) return '';
-  const list = openNeeds.map((n) => `  - "${n.needLabel}"`).join('\n');
+  const list = openNeeds.map(n => `  - "${n.needLabel}"`).join('\n');
   return [
     `COVERAGE_REVIEW — OPEN NEEDS NOT YET ADDRESSED OR DECLINED:`,
     list,
@@ -137,7 +133,7 @@ export function isExplicitAskForInput(text: string): boolean {
     /\bwhat\s+would\s+you\s+(?:suggest|recommend|do)\b/,
     /\bgive\s+me\s+(?:advice|ideas|suggestions|your\s+take)\b/,
   ];
-  return patterns.some((rx) => rx.test(t));
+  return patterns.some(rx => rx.test(t));
 }
 
 // ---------------------------------------------------------------------------
@@ -236,28 +232,37 @@ export interface TendingConversationPromptContext {
 function formatTendingEntryList(entries: TendingConversationPromptContext['entries']): string {
   if (!entries || entries.length === 0) return '- No structured Tending entries were provided.';
   return entries
-    .map((entry) => [
-      `- ${entry.id}: ${entry.summary || 'Tending entry'}${entry.scope ? ` (${entry.scope})` : ''}`,
-      entry.successCriteria ? `success criteria: ${entry.successCriteria}` : null,
-    ].filter(Boolean).join('; '))
+    .map(entry =>
+      [
+        `- ${entry.id}: ${entry.summary || 'Tending entry'}${entry.scope ? ` (${entry.scope})` : ''}`,
+        entry.successCriteria ? `success criteria: ${entry.successCriteria}` : null,
+      ]
+        .filter(Boolean)
+        .join('; '),
+    )
     .join('\n');
 }
 
 function formatTendingNeedList(needs: TendingConversationPromptContext['needs']): string {
   if (!needs || needs.length === 0) return '- No linked needs were provided.';
-  return needs.map((need) => `- ${need.id ?? 'need'}: ${need.label}`).join('\n');
+  return needs.map(need => `- ${need.id ?? 'need'}: ${need.label}`).join('\n');
 }
 
-function formatTendingBetweenPeriodNotes(notes: TendingConversationPromptContext['selectedBetweenPeriodNotes']): string {
+function formatTendingBetweenPeriodNotes(
+  notes: TendingConversationPromptContext['selectedBetweenPeriodNotes'],
+): string {
   if (!notes || notes.length === 0) return '- No between-period notes were selected for this conversation.';
-  return notes.map((note) =>
-    `- ${note.id}: ${note.content}${note.consentToShareWithPartner ? ' (share consent recorded)' : ' (private; do not relay)'}`
-  ).join('\n');
+  return notes
+    .map(
+      note =>
+        `- ${note.id}: ${note.content}${note.consentToShareWithPartner ? ' (share consent recorded)' : ' (private; do not relay)'}`,
+    )
+    .join('\n');
 }
 
 export function buildTendingConversationPrompt(
   phase: TendingConversationPhase,
-  context: TendingConversationPromptContext = {}
+  context: TendingConversationPromptContext = {},
 ): string {
   const userName = context.userName?.trim() || 'the user';
   const partnerName = context.partnerName?.trim() || 'their partner';
@@ -284,10 +289,10 @@ export function buildTendingConversationPrompt(
     ``,
     `SELECTED BETWEEN-PERIOD NOTES:`,
     formatTendingBetweenPeriodNotes(context.selectedBetweenPeriodNotes),
-    context.latestStructuredOutcomes
-      ? `\nLATEST STRUCTURED OUTCOMES:\n${context.latestStructuredOutcomes}`
-      : '',
+    context.latestStructuredOutcomes ? `\nLATEST STRUCTURED OUTCOMES:\n${context.latestStructuredOutcomes}` : '',
     ``,
     `Ask one thing at a time. Keep the full list available as context, but do not dump it into the user's lap.`,
-  ].filter((part) => part !== '').join('\n');
+  ]
+    .filter(part => part !== '')
+    .join('\n');
 }

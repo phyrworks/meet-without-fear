@@ -153,7 +153,7 @@ const PROPOSAL_SELECT = {
 
 type RawProposal = Omit<ProposalRow, 'needIds'> & { needs: Array<{ needId: string }> };
 
-const toProposal = ({ needs, ...p }: RawProposal): ProposalRow => ({ ...p, needIds: needs.map((n) => n.needId) });
+const toProposal = ({ needs, ...p }: RawProposal): ProposalRow => ({ ...p, needIds: needs.map(n => n.needId) });
 
 /**
  * The session's proposals a viewer may see, newest update first: every
@@ -182,9 +182,10 @@ export async function loadProposals(sessionId: string, viewerParticipantId?: str
 }
 
 export async function loadProposal(proposalId: string): Promise<ProposalRow | null> {
-  const row = (await prisma.proposal.findUnique({ where: { id: proposalId }, select: PROPOSAL_SELECT })) as unknown as
-    | RawProposal
-    | null;
+  const row = (await prisma.proposal.findUnique({
+    where: { id: proposalId },
+    select: PROPOSAL_SELECT,
+  })) as unknown as RawProposal | null;
   return row ? toProposal(row) : null;
 }
 
@@ -226,15 +227,18 @@ export function visibleCoverageOf(
   visibleChoices: Array<{ proposalId: string; participantId: string; decision: string }>,
   humanIds: string[],
 ): { coveringProposalIds: string[]; willingParticipantIds: string[]; status: CoverageRow['status'] } {
-  const covering = coveringProposalIds.filter((id) => visibleProposalIds.has(id));
+  const covering = coveringProposalIds.filter(id => visibleProposalIds.has(id));
   const willing = [
     ...new Set(
       visibleChoices
-        .filter((ch) => ch.decision === 'WILLING' && covering.includes(ch.proposalId) && humanIds.includes(ch.participantId))
-        .map((ch) => ch.participantId),
+        .filter(
+          ch => ch.decision === 'WILLING' && covering.includes(ch.proposalId) && humanIds.includes(ch.participantId),
+        )
+        .map(ch => ch.participantId),
     ),
   ];
-  const status: CoverageRow['status'] = willing.length === 0 ? 'OPEN' : willing.length >= humanIds.length ? 'COVERED' : 'PARTIAL';
+  const status: CoverageRow['status'] =
+    willing.length === 0 ? 'OPEN' : willing.length >= humanIds.length ? 'COVERED' : 'PARTIAL';
   return { coveringProposalIds: covering, willingParticipantIds: willing, status };
 }
 
@@ -256,9 +260,9 @@ export async function loadVisibleCoverage(sessionId: string, viewerParticipantId
     loadVisibleChoices(sessionId, viewerParticipantId),
     presentHumans(sessionId),
   ]);
-  const visible = new Set(proposals.map((p) => p.id));
-  const humanIds = humans.map((h) => h.id);
-  return coverage.map((c) => ({ ...c, ...visibleCoverageOf(c.coveringProposalIds, visible, choices, humanIds) }));
+  const visible = new Set(proposals.map(p => p.id));
+  const humanIds = humans.map(h => h.id);
+  return coverage.map(c => ({ ...c, ...visibleCoverageOf(c.coveringProposalIds, visible, choices, humanIds) }));
 }
 
 /**
@@ -273,16 +277,16 @@ export async function loadStage4Needs(sessionId: string, viewerParticipantId: st
     SELECT need_id AS "needId", participant_id AS "participantId", category::text AS category,
            shared_text AS "sharedText", shared_at AS "sharedAt"
     FROM v_need_shared WHERE session_id = ${sessionId}::uuid`;
-  const ownIds = shared.filter((n) => n.participantId === viewerParticipantId).map((n) => n.needId);
+  const ownIds = shared.filter(n => n.participantId === viewerParticipantId).map(n => n.needId);
   const own = ownIds.length
     ? await prisma.need.findMany({
         where: { id: { in: ownIds }, participantId: viewerParticipantId },
         select: { id: true, label: true, createdAt: true },
       })
     : [];
-  const ownById = new Map(own.map((n) => [n.id, n]));
+  const ownById = new Map(own.map(n => [n.id, n]));
   return shared
-    .map((n) => ({
+    .map(n => ({
       id: n.needId,
       ownerParticipantId: n.participantId,
       category: n.category,
@@ -418,7 +422,10 @@ export async function setProposalNeeds(
       update: {},
     });
   }
-  await db.proposal.update({ where: { id: proposalId }, data: { unresolvedNeedLabels: [...new Set(unresolvedLabels)] } });
+  await db.proposal.update({
+    where: { id: proposalId },
+    data: { unresolvedNeedLabels: [...new Set(unresolvedLabels)] },
+  });
 }
 
 function normalizeNeedToken(value: string): string {
@@ -435,8 +442,8 @@ export function needLabelMatches(label: string, need: string): boolean {
   if (!a || !b) return false;
   if (a === b) return true;
   if (a.includes(b) || b.includes(a)) return true;
-  const tokensA = new Set(a.split(' ').filter((token) => token.length > 2));
-  const tokensB = new Set(b.split(' ').filter((token) => token.length > 2));
+  const tokensA = new Set(a.split(' ').filter(token => token.length > 2));
+  const tokensB = new Set(b.split(' ').filter(token => token.length > 2));
   if (tokensA.size === 0 || tokensB.size === 0) return false;
   let shared = 0;
   for (const token of tokensA) if (tokensB.has(token)) shared += 1;
@@ -459,7 +466,9 @@ export async function resolveNeedLabels(
   const needIds = new Set<string>();
   const unresolved: string[] = [];
   for (const label of labels) {
-    const hits = needs.filter((n) => label === n.id || needLabelMatches(label, n.label) || needLabelMatches(label, n.sharedText));
+    const hits = needs.filter(
+      n => label === n.id || needLabelMatches(label, n.label) || needLabelMatches(label, n.sharedText),
+    );
     if (hits.length === 0) unresolved.push(label);
     for (const h of hits) needIds.add(h.id);
   }
@@ -498,7 +507,7 @@ export interface CreateAgreementsArgs {
 }
 
 export async function createAgreementsAsJob(args: CreateAgreementsArgs): Promise<string[]> {
-  return getJobPrisma().$transaction((tx) => insertAgreementsTx(tx, args));
+  return getJobPrisma().$transaction(tx => insertAgreementsTx(tx, args));
 }
 
 /** The writes of `createAgreementsAsJob`, inside a caller's JOB transaction. */
@@ -547,7 +556,7 @@ export interface CloseSessionArgs {
 }
 
 export async function closeSessionAsJob(args: CloseSessionArgs): Promise<void> {
-  await getJobPrisma().$transaction((tx) => insertClosureTx(tx, args));
+  await getJobPrisma().$transaction(tx => insertClosureTx(tx, args));
   await reachClosedForAll(args.sessionId, args.at ?? new Date());
 }
 

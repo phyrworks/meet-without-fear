@@ -52,9 +52,7 @@ export function scheduleStreamTurnBackgroundJobs(params: StreamTurnBackgroundPar
   // Per fact-ledger architecture, we embed at session level after summary updates
   updateSessionSummary(sessionId, userId, turnId)
     .then(() => embedSessionContent(sessionId, userId, turnId))
-    .catch((err: unknown) =>
-      logger.warn(`[sendMessageStream:${requestId}] Failed to update summary/embedding:`, err)
-    );
+    .catch((err: unknown) => logger.warn(`[sendMessageStream:${requestId}] Failed to update summary/embedding:`, err));
 
   // Run partner session classifier (fire-and-forget)
   // This extracts notable facts and detects memory intents
@@ -77,9 +75,7 @@ export function scheduleStreamTurnBackgroundJobs(params: StreamTurnBackgroundPar
           }
           // Old format: string[] - convert to CategorizedFactWithId
           return ensureFactIds(
-            facts
-              .filter((f): f is string => typeof f === 'string')
-              .map((f) => ({ category: 'Unknown', fact: f }))
+            facts.filter((f): f is string => typeof f === 'string').map(f => ({ category: 'Unknown', fact: f })),
           );
         }
         return [];
@@ -87,8 +83,8 @@ export function scheduleStreamTurnBackgroundJobs(params: StreamTurnBackgroundPar
 
       const result = await runPartnerSessionClassifier({
         userMessage: content,
-        conversationHistory: history.slice(-5).map((m) => ({
-          role: m.role === 'USER' ? 'user' as const : 'assistant' as const,
+        conversationHistory: history.slice(-5).map(m => ({
+          role: m.role === 'USER' ? ('user' as const) : ('assistant' as const),
           content: m.content,
         })),
         sessionId,

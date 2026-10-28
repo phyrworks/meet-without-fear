@@ -334,7 +334,7 @@ export const scheduleTestPushNotification = asyncHandler(async (req: Request, re
     throw new ForbiddenError('Test push notifications are not available for this account');
   }
 
-  await new Promise((resolve) => setTimeout(resolve, 10_000));
+  await new Promise(resolve => setTimeout(resolve, 10_000));
   const result = await sendTestPushNotification(user.id);
 
   const response: ApiResponse<{ sent: boolean; delaySeconds: number; reason?: string }> = {

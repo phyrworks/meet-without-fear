@@ -3,8 +3,7 @@ import { FIXTURE_USER_IDS } from './ids';
 
 export const reconcilerOfferSharing: E2EFixture = {
   name: 'Reconciler OFFER_SHARING',
-  description:
-    'Partner journey where reconciler detects significant gaps and strongly recommends sharing',
+  description: 'Partner journey where reconciler detects significant gaps and strongly recommends sharing',
 
   seed: {
     users: [
@@ -164,10 +163,7 @@ Does this capture what you'd like to express to them?
           score: 45,
           summary:
             "Shantam's empathy addresses surface-level tension but significantly misses the depth of exhaustion and feeling taken for granted that Darryl is experiencing at work.",
-          correctlyIdentified: [
-            'desire to reconnect',
-            'frustration with miscommunication',
-          ],
+          correctlyIdentified: ['desire to reconnect', 'frustration with miscommunication'],
         },
         gaps: {
           severity: 'significant',

@@ -101,12 +101,19 @@ export async function deviceSummary(userId: string): Promise<DeviceSummary> {
     pushNotificationsEnabled: devices.some(d => d.pushToken !== null),
     biometricEnabled: enrolled.length > 0,
     biometricEnrolledAt:
-      enrolled.map(d => d.biometricEnrolledAt).filter((t): t is Date => t !== null).sort((a, b) => b.getTime() - a.getTime())[0] ?? null,
+      enrolled
+        .map(d => d.biometricEnrolledAt)
+        .filter((t): t is Date => t !== null)
+        .sort((a, b) => b.getTime() - a.getTime())[0] ?? null,
   };
 }
 
 /** Register a device's push token (idempotent per (user, token); seen now). */
-export async function registerPushToken(userId: string, pushToken: string, platform?: 'ios' | 'android' | 'web'): Promise<void> {
+export async function registerPushToken(
+  userId: string,
+  pushToken: string,
+  platform?: 'ios' | 'android' | 'web',
+): Promise<void> {
   await prisma.$executeRaw`INSERT INTO user_device (user_id, push_token, platform, last_seen_at)
     VALUES (${userId}::uuid, ${pushToken}, ${platform ?? null}::device_platform, now())
     ON CONFLICT (user_id, push_token) WHERE push_token IS NOT NULL
@@ -150,7 +157,8 @@ export async function pushTokensAsJob(userId: string): Promise<string[]> {
 
 /** THE JOB clears a token Expo reports as unregistered. */
 export async function clearPushTokenAsJob(userId: string, pushToken: string): Promise<void> {
-  await getJobPrisma().$executeRaw`UPDATE user_device SET push_token = NULL WHERE user_id = ${userId}::uuid AND push_token = ${pushToken}`;
+  await getJobPrisma()
+    .$executeRaw`UPDATE user_device SET push_token = NULL WHERE user_id = ${userId}::uuid AND push_token = ${pushToken}`;
 }
 
 // ============================================================================

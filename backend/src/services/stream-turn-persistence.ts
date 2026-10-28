@@ -32,8 +32,10 @@ export function isReadyForStage3RevealText(content: string): boolean {
   if (/\bnot\s+ready\b/.test(normalized) || /\b(?:don'?t|do not)\s+(?:want|feel ready)\b/.test(normalized)) {
     return false;
   }
-  return /\b(i'?m|i am|we are)?\s*ready\b/.test(normalized) &&
-    /(list|lists|needs|side by side|reveal|see them|see it|show)/.test(normalized);
+  return (
+    /\b(i'?m|i am|we are)?\s*ready\b/.test(normalized) &&
+    /(list|lists|needs|side by side|reveal|see them|see it|show)/.test(normalized)
+  );
 }
 
 async function getStage3GateResponse(participant: ResolvedParticipant): Promise<string | null> {
@@ -53,7 +55,8 @@ async function getStage3GateResponse(participant: ResolvedParticipant): Promise<
   });
   const gates = stage3.gatesSatisfied;
   const ownShared = gates.needsShared === true;
-  const ownConfirmed = gates.needsConfirmed === true || (needs.length > 0 && needs.every((need) => need.confirmedAt !== null));
+  const ownConfirmed =
+    gates.needsConfirmed === true || (needs.length > 0 && needs.every(need => need.confirmedAt !== null));
 
   if (needs.length === 0) {
     return "Let's first put words to what matters most for you here. What do you need in order to feel clear, grounded, or able to move forward from this?";
@@ -64,7 +67,7 @@ async function getStage3GateResponse(participant: ResolvedParticipant): Promise<
   }
 
   if (!ownShared) {
-    return "Your needs are ready for your review. If they still feel right, you can choose to share them for the side-by-side step.";
+    return 'Your needs are ready for your review. If they still feel right, you can choose to share them for the side-by-side step.';
   }
 
   if (!partner) {
@@ -77,7 +80,7 @@ async function getStage3GateResponse(participant: ResolvedParticipant): Promise<
     return "Your needs are shared. We'll wait until your partner has shared theirs before showing anything side by side.";
   }
 
-  return "Both needs lists are ready to review side by side. Take a look at them and notice what stands out before deciding whether they feel accurate.";
+  return 'Both needs lists are ready to review side by side. Take a look at them and notice what stands out before deciding whether they feel accurate.';
 }
 
 /**
@@ -159,7 +162,7 @@ export async function cleanupFailedStreamTurn(params: {
   logger.error(`[sendMessageStream:${requestId}] Stream failed, cleaning up user message`);
 
   // Delete user message so retry creates fresh conversation turn
-  await deleteMessage(userMessageId).catch((deleteErr) => {
+  await deleteMessage(userMessageId).catch(deleteErr => {
     logger.warn(`[sendMessageStream:${requestId}] Failed to delete user message on error:`, deleteErr);
   });
 
@@ -169,8 +172,8 @@ export async function cleanupFailedStreamTurn(params: {
     userId,
     userMessageId, // ID for frontend to identify which optimistic message failed
     'Sorry, I had trouble generating a response. Please try again.',
-    true // canRetry
-  ).catch((ablyErr) => {
+    true, // canRetry
+  ).catch(ablyErr => {
     logger.warn(`[sendMessageStream:${requestId}] Failed to publish error via Ably:`, ablyErr);
   });
 }

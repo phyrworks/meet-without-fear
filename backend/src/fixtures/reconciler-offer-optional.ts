@@ -3,8 +3,7 @@ import { FIXTURE_USER_IDS } from './ids';
 
 export const reconcilerOfferOptional: E2EFixture = {
   name: 'Reconciler OFFER_OPTIONAL',
-  description:
-    'Partner journey where reconciler detects moderate gaps and offers optional sharing suggestion',
+  description: 'Partner journey where reconciler detects moderate gaps and offers optional sharing suggestion',
 
   seed: {
     users: [
@@ -174,10 +173,7 @@ Does this capture what you'd like to express to them?
           severity: 'moderate',
           summary:
             'Shantam understands the relationship tension but may not fully grasp the work-related stress that is contributing to the situation.',
-          missedFeelings: [
-            'feeling unappreciated at work',
-            'exhaustion from work demands',
-          ],
+          missedFeelings: ['feeling unappreciated at work', 'exhaustion from work demands'],
           misattributions: [],
           mostImportantGap: 'The extent of work stress and its impact on emotional availability',
         },

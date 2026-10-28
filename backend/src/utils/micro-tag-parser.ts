@@ -92,25 +92,25 @@ function parseNeedsBlock(rawNeeds: string | null): CapturedNeedInput[] {
       if (!item || typeof item !== 'object') return [];
       const candidate = item as Record<string, unknown>;
       const need = typeof candidate.need === 'string' ? cleanVisibleAIText(candidate.need) : '';
-      const description = typeof candidate.description === 'string'
-        ? cleanVisibleAIText(candidate.description)
-        : need;
+      const description = typeof candidate.description === 'string' ? cleanVisibleAIText(candidate.description) : need;
       const category = candidate.category;
       const evidence = Array.isArray(candidate.evidence)
         ? candidate.evidence
             .filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0)
-            .map((entry) => cleanVisibleAIText(entry))
+            .map(entry => cleanVisibleAIText(entry))
             .filter(Boolean)
         : [];
 
       if (!need || !description || !isNeedCategory(category)) return [];
 
-      return [{
-        need,
-        category,
-        description,
-        evidence,
-      }];
+      return [
+        {
+          need,
+          category,
+          description,
+          evidence,
+        },
+      ];
     });
   } catch (error) {
     logger.warn('[micro-tag-parser] Failed to parse <needs> block', error);
@@ -122,14 +122,12 @@ function normalizeNeedItem(item: unknown): CapturedNeedInput | null {
   if (!item || typeof item !== 'object') return null;
   const candidate = item as Record<string, unknown>;
   const need = typeof candidate.need === 'string' ? cleanVisibleAIText(candidate.need) : '';
-  const description = typeof candidate.description === 'string'
-    ? cleanVisibleAIText(candidate.description)
-    : need;
+  const description = typeof candidate.description === 'string' ? cleanVisibleAIText(candidate.description) : need;
   const category = candidate.category;
   const evidence = Array.isArray(candidate.evidence)
     ? candidate.evidence
         .filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0)
-        .map((entry) => cleanVisibleAIText(entry))
+        .map(entry => cleanVisibleAIText(entry))
         .filter(Boolean)
     : [];
 
@@ -222,43 +220,46 @@ function parseStage4ProposalsBlock(rawProposals: string | null): ParsedStage4Pro
       const candidate = item as Record<string, unknown>;
       if (!isStage4ProposalClassification(candidate.classification)) return [];
       const action = isStage4ProposalAction(candidate.action) ? candidate.action : 'ADD';
-      const targetProposalId = typeof candidate.targetProposalId === 'string' && candidate.targetProposalId.trim().length > 0
-        ? candidate.targetProposalId.trim()
-        : undefined;
+      const targetProposalId =
+        typeof candidate.targetProposalId === 'string' && candidate.targetProposalId.trim().length > 0
+          ? candidate.targetProposalId.trim()
+          : undefined;
 
-      const description = typeof candidate.description === 'string'
-        ? cleanVisibleAIText(candidate.description)
-        : '';
-      const kind = typeof candidate.kind === 'string' && Object.values(Stage4ProposalKind).includes(candidate.kind as Stage4ProposalKind)
-        ? candidate.kind as Stage4ProposalKind
-        : undefined;
-      const ownerUserId = typeof candidate.ownerUserId === 'string' && candidate.ownerUserId.trim().length > 0
-        ? candidate.ownerUserId.trim()
-        : undefined;
+      const description = typeof candidate.description === 'string' ? cleanVisibleAIText(candidate.description) : '';
+      const kind =
+        typeof candidate.kind === 'string' &&
+        Object.values(Stage4ProposalKind).includes(candidate.kind as Stage4ProposalKind)
+          ? (candidate.kind as Stage4ProposalKind)
+          : undefined;
+      const ownerUserId =
+        typeof candidate.ownerUserId === 'string' && candidate.ownerUserId.trim().length > 0
+          ? candidate.ownerUserId.trim()
+          : undefined;
       const needsAddressed = Array.isArray(candidate.needsAddressed)
         ? candidate.needsAddressed
             .filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0)
-            .map((entry) => cleanVisibleAIText(entry))
+            .map(entry => cleanVisibleAIText(entry))
             .filter(Boolean)
         : undefined;
       const duration = typeof candidate.duration === 'string' ? cleanVisibleAIText(candidate.duration) : undefined;
-      const measureOfSuccess = typeof candidate.measureOfSuccess === 'string'
-        ? cleanVisibleAIText(candidate.measureOfSuccess)
-        : undefined;
+      const measureOfSuccess =
+        typeof candidate.measureOfSuccess === 'string' ? cleanVisibleAIText(candidate.measureOfSuccess) : undefined;
 
       if (!description) return [];
 
-      return [{
-        action,
-        targetProposalId,
-        classification: candidate.classification,
-        description,
-        kind,
-        ownerUserId,
-        needsAddressed,
-        duration,
-        measureOfSuccess,
-      }];
+      return [
+        {
+          action,
+          targetProposalId,
+          classification: candidate.classification,
+          description,
+          kind,
+          ownerUserId,
+          needsAddressed,
+          duration,
+          measureOfSuccess,
+        },
+      ];
     });
   } catch (error) {
     logger.warn('[micro-tag-parser] Failed to parse <stage4_proposals> block', error);
@@ -280,12 +281,12 @@ function parseStage4WalkthroughBlock(rawAction: string | null): ParsedStage4Walk
     const candidate = parsed as Record<string, unknown>;
     const action = candidate.action;
     if (action !== 'COVERED' && action !== 'SKIP' && action !== 'NONE') return null;
-    const needId = typeof candidate.needId === 'string' && candidate.needId.trim().length > 0
-      ? candidate.needId.trim()
-      : undefined;
-    const reason = typeof candidate.reason === 'string' && candidate.reason.trim().length > 0
-      ? cleanVisibleAIText(candidate.reason)
-      : undefined;
+    const needId =
+      typeof candidate.needId === 'string' && candidate.needId.trim().length > 0 ? candidate.needId.trim() : undefined;
+    const reason =
+      typeof candidate.reason === 'string' && candidate.reason.trim().length > 0
+        ? cleanVisibleAIText(candidate.reason)
+        : undefined;
     return { action, needId, reason };
   } catch (error) {
     logger.warn('[micro-tag-parser] Failed to parse <stage4_walkthrough> block', error);
@@ -294,7 +295,11 @@ function parseStage4WalkthroughBlock(rawAction: string | null): ParsedStage4Walk
 }
 
 function isFollowUpTimingOnlyStrategy(strategy: string): boolean {
-  const normalized = strategy.toLowerCase().replace(/[^a-z0-9\s-]/g, ' ').replace(/\s+/g, ' ').trim();
+  const normalized = strategy
+    .toLowerCase()
+    .replace(/[^a-z0-9\s-]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
   if (!normalized) return true;
 
   const mentionsFollowUpTiming =
@@ -304,7 +309,10 @@ function isFollowUpTimingOnlyStrategy(strategy: string): boolean {
     /\bwhen should we check in\b/.test(normalized);
   if (!mentionsFollowUpTiming) return false;
 
-  const hasExperimentAction = /\b(?:try|do|take|schedule|practice|write|use|pause|walk|talk|meet|plan|attend|share|listen|ask|choose|spend|set aside|commit)\b/.test(normalized);
+  const hasExperimentAction =
+    /\b(?:try|do|take|schedule|practice|write|use|pause|walk|talk|meet|plan|attend|share|listen|ask|choose|spend|set aside|commit)\b/.test(
+      normalized,
+    );
   return !hasExperimentAction;
 }
 
@@ -320,7 +328,7 @@ function stripVisibleProposedStrategyLines(responseText: string): {
   visibleStrategies: string[];
 } {
   const visibleStrategies: string[] = [];
-  const cleanedLines = responseText.split('\n').filter((line) => {
+  const cleanedLines = responseText.split('\n').filter(line => {
     const match = line.match(/^\s*ProposedStrategy:\s*(.+?)\s*$/i);
     if (!match) return true;
     visibleStrategies.push(match[1]);
@@ -373,9 +381,7 @@ export function parseMicroTagResponse(rawResponse: string): ParsedMicroTagRespon
   const singularNeedCount = countTagOccurrences(rawResponse, 'need');
   const needActionCount = countTagOccurrences(rawResponse, 'need-action');
   const totalNewNeedTags = singularNeedCount + needActionCount;
-  const needParseError = totalNewNeedTags > 1
-    ? 'Only one <need> or <need-action> tag is allowed per turn.'
-    : null;
+  const needParseError = totalNewNeedTags > 1 ? 'Only one <need> or <need-action> tag is allowed per turn.' : null;
   const proposedNeed = needParseError ? null : parseNeedBlock(needRaw);
   const needAction = needParseError ? null : parseNeedActionTag(rawResponse);
   const proposedNeeds = parseNeedsBlock(needsRaw);

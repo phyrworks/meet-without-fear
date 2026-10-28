@@ -59,9 +59,7 @@ const VALID_CATEGORIES: MemoryCategory[] = [
  * Validates against therapeutic values.
  * All memories are global (no session-scoped memories).
  */
-export async function formatMemoryRequest(
-  userInput: string
-): Promise<FormatMemoryResponse> {
+export async function formatMemoryRequest(userInput: string): Promise<FormatMemoryResponse> {
   const logPrefix = '[Memory Formatter]';
 
   logger.info(`${logPrefix} Formatting user input: "${userInput.substring(0, 100)}..."`);
@@ -135,8 +133,7 @@ Note: This memory will apply globally to all sessions.`;
     if (!response.valid || !response.content) {
       return {
         valid: false,
-        rejectionReason: response.rejectionReason ||
-          'This request conflicts with our therapeutic approach.',
+        rejectionReason: response.rejectionReason || 'This request conflicts with our therapeutic approach.',
       };
     }
 
@@ -156,8 +153,7 @@ Note: This memory will apply globally to all sessions.`;
       logger.info(`${logPrefix} Validation failed: ${validationResult.reason}`);
       return {
         valid: false,
-        rejectionReason: validationResult.reason ||
-          'This memory conflicts with our therapeutic values.',
+        rejectionReason: validationResult.reason || 'This memory conflicts with our therapeutic values.',
       };
     }
 
@@ -193,7 +189,7 @@ Note: This memory will apply globally to all sessions.`;
 export async function processMemoryUpdate(
   originalContent: string,
   originalCategory: MemoryCategory,
-  changeRequest: string
+  changeRequest: string,
 ): Promise<UpdateMemoryAIResponse> {
   const logPrefix = '[Memory Formatter]';
 
@@ -278,8 +274,7 @@ Apply the requested changes while keeping the memory clear and concise.`;
         valid: false,
         originalContent,
         originalCategory,
-        rejectionReason: response.rejectionReason ||
-          'This change conflicts with our therapeutic approach.',
+        rejectionReason: response.rejectionReason || 'This change conflicts with our therapeutic approach.',
       };
     }
 
@@ -296,8 +291,7 @@ Apply the requested changes while keeping the memory clear and concise.`;
         valid: false,
         originalContent,
         originalCategory,
-        rejectionReason: validationResult.reason ||
-          'This update conflicts with our therapeutic values.',
+        rejectionReason: validationResult.reason || 'This update conflicts with our therapeutic values.',
       };
     }
 

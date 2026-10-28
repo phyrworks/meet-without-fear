@@ -34,24 +34,57 @@ describe('Prisma schema (target)', () => {
     expect(models).toEqual(
       expect.arrayContaining([
         // identity & sessions
-        'User', 'Relationship', 'RelationshipMember', 'Session', 'Participant', 'Invitation',
+        'User',
+        'Relationship',
+        'RelationshipMember',
+        'Session',
+        'Participant',
+        'Invitation',
         // chat
-        'Conversation', 'Message', 'Draft', 'ParticipantMilestone', 'AiMemory',
+        'Conversation',
+        'Message',
+        'Draft',
+        'ParticipantMilestone',
+        'AiMemory',
         // empathy / reconciler / consent
-        'EmpathyAttempt', 'EmpathyReview', 'ReconcilerResult', 'ContextShareOffer', 'Consent',
+        'EmpathyAttempt',
+        'EmpathyReview',
+        'ReconcilerResult',
+        'ContextShareOffer',
+        'Consent',
         // needs / repair / follow-up
-        'Need', 'NeedShare', 'Proposal', 'ProposalChoice', 'Agreement', 'FollowUp',
+        'Need',
+        'NeedShare',
+        'Proposal',
+        'ProposalChoice',
+        'Agreement',
+        'FollowUp',
         // reflection, wellbeing, memory & preferences, telemetry (TS-12)
-        'Reflection', 'ReflectionMessage', 'Takeaway', 'TakeawayLink', 'FeatureState',
-        'UserPreferences', 'UserDevice', 'UserMemory', 'BrainActivity',
+        'Reflection',
+        'ReflectionMessage',
+        'Takeaway',
+        'TakeawayLink',
+        'FeatureState',
+        'UserPreferences',
+        'UserDevice',
+        'UserMemory',
+        'BrainActivity',
       ]),
     );
   });
 
   it('exports none of the pre-migration models', () => {
     for (const legacy of [
-      'UserVessel', 'StageProgress', 'IdentifiedNeed', 'StrategyProposal', 'InnerWorkSession',
-      'InnerWorkMessage', 'SessionTakeaway', 'MeditationSession', 'GratitudeEntry', 'ConsentRecord',
+      'UserVessel',
+      'StageProgress',
+      'IdentifiedNeed',
+      'StrategyProposal',
+      'InnerWorkSession',
+      'InnerWorkMessage',
+      'SessionTakeaway',
+      'MeditationSession',
+      'GratitudeEntry',
+      'ConsentRecord',
     ]) {
       expect(models).not.toContain(legacy);
     }
@@ -61,9 +94,23 @@ describe('Prisma schema (target)', () => {
     expect(values(SessionStatus)).toEqual(['CREATED', 'INVITED', 'ACTIVE', 'RESOLVED', 'ABANDONED', 'ARCHIVED']);
     expect(values(MessageRole)).toEqual(['USER', 'AI', 'SYSTEM']);
     expect(values(MessageKind)).toEqual(
-      expect.arrayContaining(['CHAT', 'EMPATHY_STATEMENT', 'SHARED_CONTEXT', 'VALIDATION_FEEDBACK', 'SHARE_SUGGESTION']),
+      expect.arrayContaining([
+        'CHAT',
+        'EMPATHY_STATEMENT',
+        'SHARED_CONTEXT',
+        'VALIDATION_FEEDBACK',
+        'SHARE_SUGGESTION',
+      ]),
     );
-    expect(values(EmpathyStatus)).toEqual(['HELD', 'AWAITING_SHARING', 'REFINING', 'READY', 'REVEALED', 'VALIDATED', 'SUPERSEDED']);
+    expect(values(EmpathyStatus)).toEqual([
+      'HELD',
+      'AWAITING_SHARING',
+      'REFINING',
+      'READY',
+      'REVEALED',
+      'VALIDATED',
+      'SUPERSEDED',
+    ]);
     expect(values(ReflectionStatus)).toEqual(['ACTIVE', 'COMPLETED', 'ARCHIVED']);
   });
 

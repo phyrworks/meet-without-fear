@@ -55,13 +55,13 @@ const MAX_FACTS_LIMIT = 20;
  * Facts that already have IDs are preserved.
  */
 export function ensureFactIds(
-  facts: CategorizedFactWithId[] | CategorizedFact[] | null | undefined
+  facts: CategorizedFactWithId[] | CategorizedFact[] | null | undefined,
 ): CategorizedFactWithId[] {
   if (!facts || !Array.isArray(facts)) {
     return [];
   }
 
-  return facts.map((fact) => {
+  return facts.map(fact => {
     const factWithId = fact as CategorizedFactWithId;
     if (factWithId.id) {
       return factWithId;
@@ -89,7 +89,7 @@ export function ensureFactIds(
  */
 export function applyFactUpdates(
   currentFacts: CategorizedFactWithId[],
-  llmOutput: FactUpdatePayload | null | undefined
+  llmOutput: FactUpdatePayload | null | undefined,
 ): CategorizedFactWithId[] {
   // If no LLM output, preserve existing facts
   if (!llmOutput) {
@@ -202,7 +202,7 @@ export function createIdMapping(facts: CategorizedFactWithId[]): IdMapping {
   const fullToShort = new Map<string, string>();
   const usedIds = new Set<string>();
 
-  facts.forEach((fact) => {
+  facts.forEach(fact => {
     let shortId = generateRandomShortId();
 
     // Collision check (statistically unlikely for ~20 items, but safe)
@@ -222,20 +222,17 @@ export function createIdMapping(facts: CategorizedFactWithId[]): IdMapping {
  * Resolve short IDs back to full UUIDs in the LLM response.
  * @internal Exported for testing
  */
-export function resolveShortIds(
-  factUpdates: FactUpdatePayload,
-  mapping: IdMapping
-): FactUpdatePayload {
+export function resolveShortIds(factUpdates: FactUpdatePayload, mapping: IdMapping): FactUpdatePayload {
   const { shortToFull } = mapping;
 
   return {
-    upsert: factUpdates.upsert.map((item) => {
+    upsert: factUpdates.upsert.map(item => {
       if (item.id && shortToFull.has(item.id)) {
         return { ...item, id: shortToFull.get(item.id)! };
       }
       return item;
     }),
-    delete: factUpdates.delete.map((id) => shortToFull.get(id) || id),
+    delete: factUpdates.delete.map(id => shortToFull.get(id) || id),
   };
 }
 
@@ -267,7 +264,7 @@ function buildClassifierPrompt(input: PartnerSessionClassifierInput): BuildPromp
   // Format conversation history
   const historyText = conversationHistory
     .slice(-5)
-    .map((m) => `${m.role === 'user' ? 'User' : 'AI'}: ${m.content}`)
+    .map(m => `${m.role === 'user' ? 'User' : 'AI'}: ${m.content}`)
     .join('\n');
 
   const personContext = partnerName ? `Person discussed: ${partnerName}` : '';
@@ -284,7 +281,7 @@ function buildClassifierPrompt(input: PartnerSessionClassifierInput): BuildPromp
     // New format: use short IDs for token efficiency and better Haiku accuracy
     idMapping = createIdMapping(existingFactsWithIds);
     existingFactsText = `CURRENT NOTABLE FACTS (with IDs for reference):
-${existingFactsWithIds.map((f) => `- [${idMapping!.fullToShort.get(f.id)}] ${f.category}: ${f.fact}`).join('\n')}`;
+${existingFactsWithIds.map(f => `- [${idMapping!.fullToShort.get(f.id)}] ${f.category}: ${f.fact}`).join('\n')}`;
   } else if (existingFacts && existingFacts.length > 0) {
     // Legacy format: plain strings
     existingFactsText = `CURRENT NOTABLE FACTS:\n${existingFacts.map((f, i) => `${i + 1}. ${f}`).join('\n')}`;
@@ -293,8 +290,9 @@ ${existingFactsWithIds.map((f) => `- [${idMapping!.fullToShort.get(f.id)}] ${f.c
   }
 
   // Format Sonnet's analysis if available (Phase 5 enhancement)
-  const sonnetAnalysisText = sonnetAnalysis || sonnetResponse
-    ? `
+  const sonnetAnalysisText =
+    sonnetAnalysis || sonnetResponse
+      ? `
 SONNET'S ANALYSIS (use this to inform your fact extraction):
 ${sonnetAnalysis || '(no analysis available)'}
 
@@ -304,7 +302,7 @@ ${sonnetResponse || '(no response available)'}
 Use the analysis above to help identify facts. The analysis contains Sonnet's
 interpretation of the user's situation, which can help you extract accurate facts.
 `
-    : '';
+      : '';
 
   // Use diff-based output format when we have facts with IDs
   if (useDiffFormat) {
@@ -426,9 +424,7 @@ const VALID_FACT_CATEGORIES = ['People', 'Logistics', 'Conflict', 'Emotional', '
  * Normalize a fact's category to title case if it's a known category
  */
 function normalizeCategory(category: string): string {
-  return VALID_FACT_CATEGORIES.find(
-    (c) => c.toLowerCase() === category.toLowerCase()
-  ) || category.trim();
+  return VALID_FACT_CATEGORIES.find(c => c.toLowerCase() === category.toLowerCase()) || category.trim();
 }
 
 /**
@@ -437,8 +433,12 @@ function normalizeCategory(category: string): string {
 function isValidFact(f: unknown): f is { category: string; fact: string; id?: string } {
   if (typeof f !== 'object' || f === null) return false;
   const obj = f as Record<string, unknown>;
-  return typeof obj.category === 'string' && typeof obj.fact === 'string' &&
-         obj.category.trim().length > 0 && obj.fact.trim().length > 0;
+  return (
+    typeof obj.category === 'string' &&
+    typeof obj.fact === 'string' &&
+    obj.category.trim().length > 0 &&
+    obj.fact.trim().length > 0
+  );
 }
 
 /**
@@ -456,17 +456,15 @@ function normalizeResult(raw: unknown): PartnerSessionClassifierResult {
 
   if (usedDiffFormat) {
     // New diff-based format
-    const upsert = (result.upsert as unknown[] || [])
-      .filter(isValidFact)
-      .map((f) => ({
-        ...(f.id ? { id: f.id } : {}),
-        category: normalizeCategory(f.category),
-        fact: f.fact.trim(),
-      }));
+    const upsert = ((result.upsert as unknown[]) || []).filter(isValidFact).map(f => ({
+      ...(f.id ? { id: f.id } : {}),
+      category: normalizeCategory(f.category),
+      fact: f.fact.trim(),
+    }));
 
-    const deleteIds = (result.delete as unknown[] || [])
+    const deleteIds = ((result.delete as unknown[]) || [])
       .filter((id): id is string => typeof id === 'string' && id.trim().length > 0)
-      .map((id) => id.trim());
+      .map(id => id.trim());
 
     return {
       topicContext,
@@ -481,7 +479,7 @@ function normalizeResult(raw: unknown): PartnerSessionClassifierResult {
   if (Array.isArray(rawFacts)) {
     notableFacts = rawFacts
       .filter(isValidFact)
-      .map((f) => ({
+      .map(f => ({
         category: normalizeCategory(f.category),
         fact: f.fact.trim(),
       }))
@@ -502,7 +500,7 @@ function normalizeResult(raw: unknown): PartnerSessionClassifierResult {
  * Extracts notable facts about the user's situation and saves them to UserVessel.
  */
 export async function runPartnerSessionClassifier(
-  input: PartnerSessionClassifierInput
+  input: PartnerSessionClassifierInput,
 ): Promise<PartnerSessionClassifierResult | null> {
   const logPrefix = '[PartnerSessionClassifier]';
 
@@ -536,7 +534,7 @@ Output only valid JSON.`;
         });
       },
       null,
-      'partner-session-classifier'
+      'partner-session-classifier',
     );
 
     if (!result) {
@@ -594,10 +592,12 @@ Output only valid JSON.`;
           // Trigger session content embedding (fire-and-forget)
           // Per fact-ledger architecture, we embed at session level after facts update
           embedSessionContent(input.sessionId, input.userId, input.turnId).catch((err: unknown) =>
-            logger.warn(`${logPrefix} Failed to embed session content:`, err)
+            logger.warn(`${logPrefix} Failed to embed session content:`, err),
           );
         } else {
-          logger.warn(`${logPrefix} No participant found for session=${input.sessionId}, user=${input.userId}. Facts not saved.`);
+          logger.warn(
+            `${logPrefix} No participant found for session=${input.sessionId}, user=${input.userId}. Facts not saved.`,
+          );
         }
       } catch (err) {
         logger.error(`${logPrefix} Failed to save notable facts:`, err);

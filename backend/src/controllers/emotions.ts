@@ -64,7 +64,6 @@ interface ExerciseCompletionData {
  * Record an emotional reading for the current user in a session
  */
 export async function recordEmotion(req: Request, res: Response): Promise<void> {
-
   // Validate request body
   const parseResult = recordEmotionSchema.safeParse(req.body);
   if (!parseResult.success) {
@@ -135,7 +134,6 @@ export async function recordEmotion(req: Request, res: Response): Promise<void> 
  * Get emotion history for the current user in a session
  */
 export async function getEmotions(req: Request, res: Response): Promise<void> {
-
   try {
     // The caller's participant in this session
     const participant = req.participant;
@@ -163,7 +161,7 @@ export async function getEmotions(req: Request, res: Response): Promise<void> {
     const response: ApiResponse<GetEmotionsData> = {
       success: true,
       data: {
-        readings: readings.map((r) => ({
+        readings: readings.map(r => ({
           id: r.id,
           intensity: r.intensity,
           context: r.context,
@@ -188,7 +186,6 @@ export async function getEmotions(req: Request, res: Response): Promise<void> {
  * Log completion of an emotional regulation exercise
  */
 export async function completeExercise(req: Request, res: Response): Promise<void> {
-
   // Validate request body
   const parseResult = completeExerciseSchema.safeParse(req.body);
   if (!parseResult.success) {
@@ -238,10 +235,7 @@ export async function completeExercise(req: Request, res: Response): Promise<voi
           id: completion.id,
           type: completion.type,
           completedAt: completion.completedAt,
-          intensityDelta:
-            intensityBefore != null && intensityAfter != null
-              ? intensityBefore - intensityAfter
-              : null,
+          intensityDelta: intensityBefore != null && intensityAfter != null ? intensityBefore - intensityAfter : null,
         },
       },
     };

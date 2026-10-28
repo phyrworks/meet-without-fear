@@ -272,9 +272,7 @@ function isStillWorkingAtOrPast(progress: StageProgressSnapshot | null, stage: n
   return !!progress && progress.stage >= stage && progress.status === 'IN_PROGRESS';
 }
 
-async function getStageCompletedTemplate(
-  context: PushMessageSelectionContext,
-): Promise<PushMessageTemplate> {
+async function getStageCompletedTemplate(context: PushMessageSelectionContext): Promise<PushMessageTemplate> {
   const completedStage = typeof context.data.stage === 'number' ? context.data.stage : null;
   const progress = await getSessionProgressContext(context.userId, context.actorUserId, context.sessionId);
 
@@ -380,10 +378,12 @@ async function getPushMessageTemplate(
     }
   }
 
-  return PUSH_MESSAGES[event] || {
-    title: 'Meet Without Fear',
-    body: 'You have an update',
-  };
+  return (
+    PUSH_MESSAGES[event] || {
+      title: 'Meet Without Fear',
+      body: 'You have an update',
+    }
+  );
 }
 
 async function getNotificationActorName(
@@ -402,7 +402,9 @@ async function getNotificationActorName(
     const [session, actor] = await Promise.all([
       prisma.session.findUnique({
         where: { id: sessionId },
-        select: { relationship: { select: { members: { where: { userId: recipientUserId }, select: { nickname: true } } } } },
+        select: {
+          relationship: { select: { members: { where: { userId: recipientUserId }, select: { nickname: true } } } },
+        },
       }),
       prisma.participant.findUnique({
         where: { sessionId_userId: { sessionId, userId: actorUserId } },

@@ -22,7 +22,7 @@ async function main(): Promise<void> {
 }
 
 main()
-  .catch((err) => {
+  .catch(err => {
     // eslint-disable-next-line no-console
     console.error('[sweep-session-retention] failed:', err);
     process.exit(1);

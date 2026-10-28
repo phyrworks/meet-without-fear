@@ -72,7 +72,7 @@ function parseCleanJson(jsonStr: string): unknown {
   // Step 2: Handle other common LLM quirks
   cleanedJson = cleanedJson
     .replace(/:\s*undefined\b/g, ': null')
-    .replace(/,\s*}/g, '}')  // Remove trailing commas before }
+    .replace(/,\s*}/g, '}') // Remove trailing commas before }
     .replace(/,\s*]/g, ']'); // Remove trailing commas before ]
   return JSON.parse(cleanedJson);
 }
@@ -90,10 +90,7 @@ function parseCleanJson(jsonStr: string): unknown {
  * @param options - Extraction options
  * @returns Parsed JSON object or throws error
  */
-export function extractJsonFromResponse(
-  response: string,
-  options: ExtractJsonOptions = {}
-): unknown {
+export function extractJsonFromResponse(response: string, options: ExtractJsonOptions = {}): unknown {
   const { debug = false } = options;
 
   if (debug) {
@@ -176,11 +173,7 @@ export function extractJsonFromResponse(
  * Safely extract JSON with a fallback value.
  * Never throws - returns fallback on any error.
  */
-export function extractJsonSafe<T>(
-  response: string,
-  fallback: T,
-  options: ExtractJsonOptions = {}
-): T {
+export function extractJsonSafe<T>(response: string, fallback: T, options: ExtractJsonOptions = {}): T {
   try {
     return extractJsonFromResponse(response, options) as T;
   } catch (error) {
@@ -192,4 +185,3 @@ export function extractJsonSafe<T>(
 // ============================================================================
 // Typed Extraction Helpers
 // ============================================================================
-

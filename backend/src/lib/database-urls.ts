@@ -32,7 +32,7 @@ const urlSchema = z.string().url();
 /** Pure: the URL the given role connects with, or undefined if none is configured. */
 export function databaseUrlFor(
   role: DatabaseRole,
-  env: Record<string, string | undefined> = process.env
+  env: Record<string, string | undefined> = process.env,
 ): string | undefined {
   const variable = DATABASE_URL_VARS[role];
   const own = env[variable];

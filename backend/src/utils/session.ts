@@ -98,7 +98,7 @@ export async function touchParticipantActivity(participantId: string, at: Date =
 export async function touchUserSessionActivity(
   sessionId: string,
   userId: string,
-  at: Date = new Date()
+  at: Date = new Date(),
 ): Promise<void> {
   const participant = await resolveParticipant(sessionId, userId);
   if (participant) await touchParticipantActivity(participant.id, at);
@@ -109,10 +109,7 @@ export async function touchUserSessionActivity(
  * participant, through `v_co_participant` (participant-resolver). Null when
  * the caller is not a participant or there is no single partner.
  */
-export async function getPartnerUserId(
-  sessionId: string,
-  currentUserId: string
-): Promise<string | null> {
+export async function getPartnerUserId(sessionId: string, currentUserId: string): Promise<string | null> {
   return getPartnerUserIdFor(sessionId, currentUserId);
 }
 
@@ -120,10 +117,7 @@ export async function getPartnerUserId(
  * Checks if a user is the creator of a session (the one who sent the invitation).
  * Used to allow the creator to work on Stages 0-1 while waiting for partner to accept.
  */
-export async function isSessionCreator(
-  sessionId: string,
-  userId: string
-): Promise<boolean> {
+export async function isSessionCreator(sessionId: string, userId: string): Promise<boolean> {
   const invitation = await prisma.invitation.findFirst({
     where: { sessionId, invitedByParticipant: { userId } },
     select: { id: true },
@@ -159,7 +153,7 @@ export function generateSessionStatusSummary(
   myProgress: StageProgressDTO,
   partnerProgress: StageProgressDTO,
   partnerName: string,
-  options: StatusSummaryOptions = {}
+  options: StatusSummaryOptions = {},
 ): SessionStatusSummary {
   const name = partnerName || 'Partner';
 
@@ -197,8 +191,7 @@ export function generateSessionStatusSummary(
         const userStatus =
           myProgress.status === StageStatus.IN_PROGRESS
             ? getInProgressStageMessage(myProgress.stage, options.userHasSentEmpathy)
-            : myProgress.status === StageStatus.GATE_PENDING ||
-                myProgress.status === StageStatus.COMPLETED
+            : myProgress.status === StageStatus.GATE_PENDING || myProgress.status === StageStatus.COMPLETED
               ? getCompletedStageMessage(myProgress.stage)
               : `Ready for ${STAGE_FRIENDLY_NAMES[myProgress.stage]}`;
 
@@ -314,15 +307,15 @@ export function generateSessionStatusSummary(
 function getInProgressStageMessage(stage: Stage, hasSentEmpathy?: boolean): string {
   switch (stage) {
     case Stage.ONBOARDING:
-      return "Reviewing the agreement";
+      return 'Reviewing the agreement';
     case Stage.WITNESS:
-      return "Sharing your story";
+      return 'Sharing your story';
     case Stage.PERSPECTIVE_STRETCH:
-      return hasSentEmpathy ? "You've shared your understanding" : "Working on understanding their perspective";
+      return hasSentEmpathy ? "You've shared your understanding" : 'Working on understanding their perspective';
     case Stage.NEED_MAPPING:
-      return "Exploring what matters to you";
+      return 'Exploring what matters to you';
     case Stage.STRATEGIC_REPAIR:
-      return "Considering next steps";
+      return 'Considering next steps';
     default:
       return 'Working on current stage';
   }
@@ -371,34 +364,23 @@ function getWaitingForPartnerMessage(stage: Stage, partnerName: string): string 
 /**
  * Map a session with includes to a SessionSummaryDTO
  */
-export function mapSessionToSummary(
-  session: SessionWithIncludes,
-  currentUserId: string
-): SessionSummaryDTO {
+export function mapSessionToSummary(session: SessionWithIncludes, currentUserId: string): SessionSummaryDTO {
   // Find partner member
-  const partnerMember = session.relationship.members.find(
-    (m) => m.userId !== currentUserId
-  );
-  const myMember = session.relationship.members.find(
-    (m) => m.userId === currentUserId
-  );
+  const partnerMember = session.relationship.members.find(m => m.userId !== currentUserId);
+  const myMember = session.relationship.members.find(m => m.userId === currentUserId);
 
   // Find progress for each user
-  const myProgressRecords = session.stageProgress.filter(
-    (p) => p.userId === currentUserId
-  );
-  const partnerProgressRecords = session.stageProgress.filter(
-    (p) => p.userId !== currentUserId
-  );
+  const myProgressRecords = session.stageProgress.filter(p => p.userId === currentUserId);
+  const partnerProgressRecords = session.stageProgress.filter(p => p.userId !== currentUserId);
 
   // Get current stage progress (highest stage)
   const myCurrentProgress = myProgressRecords.reduce(
     (max, p) => (p.stage > (max?.stage ?? -1) ? p : max),
-    myProgressRecords[0]
+    myProgressRecords[0],
   );
   const partnerCurrentProgress = partnerProgressRecords.reduce(
     (max, p) => (p.stage > (max?.stage ?? -1) ? p : max),
-    partnerProgressRecords[0]
+    partnerProgressRecords[0],
   );
 
   const myProgress: StageProgressDTO = myCurrentProgress
@@ -443,19 +425,14 @@ export function mapSessionToSummary(
   // showing "Ready for you" when user is actually waiting on partner/system
   if (myProgress.status === StageStatus.IN_PROGRESS) {
     if (myProgress.stage === Stage.PERSPECTIVE_STRETCH && session.empathyAttempts?.length) {
-      const userEmpathy = session.empathyAttempts.find(
-        (a) => a.sourceUserId === currentUserId
-      );
-      const partnerEmpathy = session.empathyAttempts.find(
-        (a) => a.sourceUserId !== currentUserId
-      );
+      const userEmpathy = session.empathyAttempts.find(a => a.sourceUserId === currentUserId);
+      const partnerEmpathy = session.empathyAttempts.find(a => a.sourceUserId !== currentUserId);
 
       // User has action if:
       // - Their empathy needs refinement
       // - Partner's empathy is revealed (needs validation)
       // - Partner's empathy is awaiting sharing (user must respond)
-      const userNeedsToRefine =
-        userEmpathy?.status === 'REFINING' || userEmpathy?.status === 'NEEDS_WORK';
+      const userNeedsToRefine = userEmpathy?.status === 'REFINING' || userEmpathy?.status === 'NEEDS_WORK';
       const userNeedsToValidate = partnerEmpathy?.status === 'REVEALED';
       const userNeedsToRespondToShare = partnerEmpathy?.status === 'AWAITING_SHARING';
 
@@ -474,10 +451,7 @@ export function mapSessionToSummary(
 
   // User at gate, waiting for partner to also reach gate
   if (myProgress.status === StageStatus.GATE_PENDING) {
-    if (
-      partnerProgress.status !== StageStatus.GATE_PENDING &&
-      partnerProgress.status !== StageStatus.COMPLETED
-    ) {
+    if (partnerProgress.status !== StageStatus.GATE_PENDING && partnerProgress.status !== StageStatus.COMPLETED) {
       // Partner hasn't reached the gate yet — waiting on them
       partnerActionNeeded.push('complete_stage');
     }
@@ -486,18 +460,11 @@ export function mapSessionToSummary(
 
   // Get partner display name (prefer nickname, then firstName, then name)
   const partnerDisplayName =
-    myMember?.nickname ??
-    partnerMember?.user.firstName ??
-    partnerMember?.user.name ??
-    'Partner';
+    myMember?.nickname ?? partnerMember?.user.firstName ?? partnerMember?.user.name ?? 'Partner';
 
   // Check for empathy attempts (if included in query)
-  const userHasSentEmpathy = session.empathyAttempts?.some(
-    (a) => a.sourceUserId === currentUserId
-  ) ?? false;
-  const partnerHasSentEmpathy = session.empathyAttempts?.some(
-    (a) => a.sourceUserId !== currentUserId
-  ) ?? false;
+  const userHasSentEmpathy = session.empathyAttempts?.some(a => a.sourceUserId === currentUserId) ?? false;
+  const partnerHasSentEmpathy = session.empathyAttempts?.some(a => a.sourceUserId !== currentUserId) ?? false;
 
   // Generate human-readable status summary
   const statusSummary = generateSessionStatusSummary(
@@ -505,20 +472,21 @@ export function mapSessionToSummary(
     myProgress,
     partnerProgress,
     partnerDisplayName,
-    { userHasSentEmpathy, partnerHasSentEmpathy }
+    { userHasSentEmpathy, partnerHasSentEmpathy },
   );
 
   // Get user's read state from UserVessel (if included)
-  const userVessel = session.userVessels?.find((v) => v.userId === currentUserId);
+  const userVessel = session.userVessels?.find(v => v.userId === currentUserId);
   const lastViewedAt = userVessel?.lastViewedAt ?? null;
   const lastSeenChatItemId = userVessel?.lastSeenChatItemId ?? null;
 
   // Determine if there's unread content:
   // - If never viewed (lastViewedAt is null), consider unread if session has any activity
   // - If viewed, compare session's updatedAt with lastViewedAt
-  const hasUnread = lastViewedAt === null
-    ? session.status !== SessionStatus.CREATED // Unread if not a fresh draft
-    : session.updatedAt > lastViewedAt;
+  const hasUnread =
+    lastViewedAt === null
+      ? session.status !== SessionStatus.CREATED // Unread if not a fresh draft
+      : session.updatedAt > lastViewedAt;
 
   return {
     id: session.id,

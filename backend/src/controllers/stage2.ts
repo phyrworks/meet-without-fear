@@ -166,7 +166,8 @@ async function triggerReconcilerAndUpdateStatuses(sessionId: string): Promise<vo
         continue;
       }
       const rec = d.result.recommendation;
-      const hasSignificantGaps = rec.action === 'OFFER_SHARING' || (rec.action === 'OFFER_OPTIONAL' && !!rec.suggestedShareFocus);
+      const hasSignificantGaps =
+        rec.action === 'OFFER_SHARING' || (rec.action === 'OFFER_OPTIONAL' && !!rec.suggestedShareFocus);
       const alreadyShared =
         hasSignificantGaps && (await hasContextAlreadyBeenShared(d.guesser.participantId, d.subject.participantId));
       const next: TargetEmpathyStatus = hasSignificantGaps && !alreadyShared ? 'AWAITING_SHARING' : 'READY';
@@ -251,7 +252,12 @@ export async function saveDraft(req: Request, res: Response): Promise<void> {
 
     const currentStage = await stageOf(caller.me.participantId);
     if (currentStage !== 2) {
-      errorResponse(res, 'VALIDATION_ERROR', `Cannot save empathy draft: you are in stage ${currentStage}, but stage 2 is required`, 400);
+      errorResponse(
+        res,
+        'VALIDATION_ERROR',
+        `Cannot save empathy draft: you are in stage ${currentStage}, but stage 2 is required`,
+        400,
+      );
       return;
     }
     // spec §1.1 draft: an EMPATHY draft is about a participant (CHECK) — there
@@ -269,7 +275,11 @@ export async function saveDraft(req: Request, res: Response): Promise<void> {
       readyToShare,
     });
 
-    successResponse(res, { draftId: draft.id, savedAt: draft.updatedAt.toISOString(), readyToShare: draft.readyToShare });
+    successResponse(res, {
+      draftId: draft.id,
+      savedAt: draft.updatedAt.toISOString(),
+      readyToShare: draft.readyToShare,
+    });
   } catch (error) {
     logger.error('[saveDraft] Error:', error);
     errorResponse(res, 'INTERNAL_ERROR', 'Failed to save draft', 500);
@@ -351,7 +361,12 @@ export async function consentToShare(req: Request, res: Response): Promise<void>
 
     const currentStage = await stageOf(me.participantId);
     if (currentStage !== 2) {
-      errorResponse(res, 'VALIDATION_ERROR', `Cannot consent to share: you are in stage ${currentStage}, but stage 2 is required`, 400);
+      errorResponse(
+        res,
+        'VALIDATION_ERROR',
+        `Cannot consent to share: you are in stage ${currentStage}, but stage 2 is required`,
+        400,
+      );
       return;
     }
     if (!partner) {
@@ -359,13 +374,18 @@ export async function consentToShare(req: Request, res: Response): Promise<void>
       return;
     }
 
-    const draft = await findDraft({ participantId: me.participantId, kind: 'EMPATHY', aboutParticipantId: partner.participantId });
+    const draft = await findDraft({
+      participantId: me.participantId,
+      kind: 'EMPATHY',
+      aboutParticipantId: partner.participantId,
+    });
     if (!draft || !draft.readyToShare) {
       errorResponse(res, 'VALIDATION_ERROR', 'Draft must be marked as ready to share before consenting', 400);
       return;
     }
 
-    const partnerSubmitted = async () => !!directionOf(await directionStatuses(sessionId), partner.participantId, me.participantId);
+    const partnerSubmitted = async () =>
+      !!directionOf(await directionStatuses(sessionId), partner.participantId, me.participantId);
 
     const respondWithExistingAttempt = async (existing: AttemptRow) => {
       const [partnerHas, message] = await Promise.all([partnerSubmitted(), ownStatementMessage(me)]);
@@ -465,7 +485,9 @@ export async function consentToShare(req: Request, res: Response): Promise<void>
         const aiMessage = await aiNote(me.mainConversationId, transitionContent);
         updateSessionSummary(sessionId, userId, turnId)
           .then(() => embedSessionContent(sessionId, userId, turnId))
-          .catch((err: unknown) => logger.warn('[consentToShare] Failed to update summary/embedding after transition:', err));
+          .catch((err: unknown) =>
+            logger.warn('[consentToShare] Failed to update summary/embedding after transition:', err),
+          );
         const dto = await messageDTO(aiMessage, sessionId, me.participantId);
         transitionMessage = { id: dto.id, content: dto.content, timestamp: dto.timestamp, stage: dto.stage };
       }
@@ -510,7 +532,9 @@ export async function getPartnerEmpathy(req: Request, res: Response): Promise<vo
     const { me, counterpart: partner, sessionId } = caller;
 
     const revealed = partner ? await revealedAttemptAbout(me.participantId, partner.participantId) : null;
-    const direction = partner ? directionOf(await directionStatuses(sessionId), partner.participantId, me.participantId) : undefined;
+    const direction = partner
+      ? directionOf(await directionStatuses(sessionId), partner.participantId, me.participantId)
+      : undefined;
     const review = revealed ? await reviewOf(revealed.id, me.participantId) : null;
 
     successResponse(res, {
@@ -559,7 +583,12 @@ export async function validateEmpathy(req: Request, res: Response): Promise<void
 
     const currentStage = await stageOf(me.participantId);
     if (currentStage !== 2) {
-      errorResponse(res, 'VALIDATION_ERROR', `Cannot validate empathy: you are in stage ${currentStage}, but stage 2 is required`, 400);
+      errorResponse(
+        res,
+        'VALIDATION_ERROR',
+        `Cannot validate empathy: you are in stage ${currentStage}, but stage 2 is required`,
+        400,
+      );
       return;
     }
 
@@ -574,7 +603,7 @@ export async function validateEmpathy(req: Request, res: Response): Promise<void
     }
 
     const now = new Date();
-    const sentFeedback = validated ? null : trimmedFeedback ?? null;
+    const sentFeedback = validated ? null : (trimmedFeedback ?? null);
     const review = await recordReview({
       attemptId: partnerAttempt.id,
       reviewerParticipantId: me.participantId,
@@ -790,7 +819,11 @@ export async function saveValidationFeedbackDraft(req: Request, res: Response): 
       readyToShare: readyToShare ?? false,
     });
 
-    successResponse(res, { draftId: draft.id, savedAt: draft.updatedAt.toISOString(), readyToShare: draft.readyToShare });
+    successResponse(res, {
+      draftId: draft.id,
+      savedAt: draft.updatedAt.toISOString(),
+      readyToShare: draft.readyToShare,
+    });
   } catch (error) {
     logger.error('[saveValidationFeedbackDraft] Error:', error);
     errorResponse(res, 'INTERNAL_ERROR', 'Failed to save feedback draft', 500);
@@ -839,8 +872,12 @@ User's current message: "${message}"
    - Ask the partner to revise their empathy attempt in the app, not to start a direct side conversation.
    - Do not include wording like "ask me directly", "can we talk about this", "can we try that", or other language that implies the next step is an outside conversation.
    - End with an in-app revision request, such as "Could you revise your understanding with that in mind?"
-${isRefinement ? `
-IMPORTANT — This is a refinement round. The user has already seen your previous proposed feedback and is now telling you what to adjust. Their current message is a correction directed at YOU (the coach), not new raw feedback about the partner. Apply their adjustment to the most recent proposed feedback, using the history for the original context.` : ''}
+${
+  isRefinement
+    ? `
+IMPORTANT — This is a refinement round. The user has already seen your previous proposed feedback and is now telling you what to adjust. Their current message is a correction directed at YOU (the coach), not new raw feedback about the partner. Apply their adjustment to the most recent proposed feedback, using the history for the original context.`
+    : ''
+}
 
 Respond in JSON format:
 \`\`\`json
@@ -955,7 +992,12 @@ Respond in JSON format:
       await reachMilestone(p.participantId, 'empathy_validated');
       if (p.mainConversationId && p.userId) {
         const msg = await aiNote(p.mainConversationId, content);
-        messages.push({ id: msg.id, content: msg.content, timestamp: msg.createdAt.toISOString(), forUserId: p.userId });
+        messages.push({
+          id: msg.id,
+          content: msg.content,
+          timestamp: msg.createdAt.toISOString(),
+          forUserId: p.userId,
+        });
       }
     }
 
@@ -976,7 +1018,12 @@ Respond in JSON format:
           // owner; mobile refetches messages on previousStage 2.
         });
       }
-      await publishSessionEvent(sessionId, 'stage.progress', { previousStage: 2, stage: 3, userId, triggeredByUserId: userId });
+      await publishSessionEvent(sessionId, 'stage.progress', {
+        previousStage: 2,
+        stage: 3,
+        userId,
+        triggeredByUserId: userId,
+      });
     }
 
     void actor;
@@ -1039,7 +1086,12 @@ export async function refineEmpathy(req: Request, res: Response): Promise<void> 
       return;
     }
     if (!REFINABLE.has(attempt.status)) {
-      errorResponse(res, 'VALIDATION_ERROR', 'Empathy refinement is only available when status is NEEDS_WORK or REFINING', 400);
+      errorResponse(
+        res,
+        'VALIDATION_ERROR',
+        'Empathy refinement is only available when status is NEEDS_WORK or REFINING',
+        400,
+      );
       return;
     }
 
@@ -1073,10 +1125,14 @@ Guiding question theme: ${promptSeed}${sharedContextSection}
 
 Guidelines:
 - Ask curious, open-ended questions
-- Help them imagine ${partnerName}'s experience${attempt.status === 'REFINING' ? `
-- You CAN reference the shared context above to help them refine their understanding` : `
+- Help them imagine ${partnerName}'s experience${
+      attempt.status === 'REFINING'
+        ? `
+- You CAN reference the shared context above to help them refine their understanding`
+        : `
 - DO NOT reveal specific things ${partnerName} said
-- DO NOT tell them what they "missed"`}
+- DO NOT tell them what they "missed"`
+    }
 - Validate their insights while encouraging deeper exploration
 - If they express new understanding, offer to help incorporate it
 
@@ -1102,7 +1158,8 @@ When they seem ready to revise their statement, propose a revision in JSON forma
       callType: BrainActivityCallType.ORCHESTRATED_RESPONSE,
     });
 
-    let response = "I'd love to help you explore this further. What do you think might be going on for them beneath the surface?";
+    let response =
+      "I'd love to help you explore this further. What do you think might be going on for them beneath the surface?";
     let proposedRevision: string | null = null;
     let canResubmit = false;
     if (aiResponse) {

@@ -94,11 +94,13 @@ const listSessionsSchema = z.object({
 const generateScriptSchema = z.object({
   focusArea: z.string().min(1).max(100),
   durationMinutes: z.number().int().min(5).max(60),
-  context: z.object({
-    preparingForConflict: z.boolean().optional(),
-    recentEmotions: z.array(z.string()).optional(),
-    lowNeeds: z.array(z.string()).optional(),
-  }).optional(),
+  context: z
+    .object({
+      preparingForConflict: z.boolean().optional(),
+      recentEmotions: z.array(z.string()).optional(),
+      lowNeeds: z.array(z.string()).optional(),
+    })
+    .optional(),
 });
 
 const createFavoriteSchema = z.object({
@@ -112,7 +114,11 @@ const updatePreferencesSchema = z.object({
   defaultDuration: z.number().int().min(5).max(60).optional(),
   backgroundSound: z.string().max(50).optional(),
   reminderEnabled: z.boolean().optional(),
-  reminderTime: z.string().regex(/^\d{2}:\d{2}$/).nullable().optional(),
+  reminderTime: z
+    .string()
+    .regex(/^\d{2}:\d{2}$/)
+    .nullable()
+    .optional(),
 });
 
 // ============================================================================
@@ -239,7 +245,7 @@ async function generateMeditationScript(
   focusArea: string,
   durationMinutes: number,
   userId: string,
-  context?: GenerateScriptRequest['context']
+  context?: GenerateScriptRequest['context'],
 ): Promise<string> {
   const totalWords = durationMinutes * 100; // ~100 wpm with pauses
 
@@ -277,13 +283,15 @@ CLOSING (${Math.round(durationMinutes * 0.05)} min):
 - Brief acknowledgment
 
 TONE GUIDANCE:
-${focusArea.toLowerCase().includes('rest') || focusArea.toLowerCase().includes('grounding')
+${
+  focusArea.toLowerCase().includes('rest') || focusArea.toLowerCase().includes('grounding')
     ? '- Softer, slower voice'
     : focusArea.toLowerCase().includes('courage') || focusArea.toLowerCase().includes('clarity')
-    ? '- Steadier, firmer voice'
-    : focusArea.toLowerCase().includes('compassion')
-    ? '- Warmer, gentler voice'
-    : '- Calm, neutral voice'}
+      ? '- Steadier, firmer voice'
+      : focusArea.toLowerCase().includes('compassion')
+        ? '- Warmer, gentler voice'
+        : '- Calm, neutral voice'
+}
 
 REQUIREMENTS:
 - Use specific sensory language (embodied, not intellectual)
@@ -378,411 +386,390 @@ When you're ready, gently open your eyes.
  * POST /api/v1/meditation/sessions
  * Create a new meditation session.
  */
-export const createSession = asyncHandler(
-  async (req: Request, res: Response): Promise<void> => {
-    const user = getUser(req);
+export const createSession = asyncHandler(async (req: Request, res: Response): Promise<void> => {
+  const user = getUser(req);
 
-    const parseResult = createSessionSchema.safeParse(req.body);
-    if (!parseResult.success) {
-      throw new ValidationError('Invalid session data', {
-        errors: parseResult.error.flatten().fieldErrors,
-      });
-    }
-
-    const { type, durationMinutes, focusArea, voiceId, backgroundSound } = parseResult.data;
-
-    let script: string | null = null;
-    if (type === 'GUIDED' && focusArea) {
-      // Get user context for personalization
-      script = await generateMeditationScript(focusArea, durationMinutes, user.id, {
-        lowNeeds: await lowNeedNames(user.id),
-      });
-    }
-
-    const session: MeditationSessionDoc = {
-      id: newEntryId(),
-      type,
-      durationMinutes,
-      focusArea: focusArea ?? null,
-      completed: false,
-      startedAt: new Date().toISOString(),
-      completedAt: null,
-      scriptGenerated: script,
-      voiceId: voiceId ?? null,
-      backgroundSound: backgroundSound ?? null,
-      savedAsFavorite: false,
-      favoriteType: null,
-      postNotes: null,
-    };
-    await updateFeature(user.id, 'meditation', doc => {
-      doc.sessions.push(session);
+  const parseResult = createSessionSchema.safeParse(req.body);
+  if (!parseResult.success) {
+    throw new ValidationError('Invalid session data', {
+      errors: parseResult.error.flatten().fieldErrors,
     });
-
-    const response: ApiResponse<CreateMeditationSessionResponse> = {
-      success: true,
-      data: {
-        session: mapSessionToDTO(session),
-        script: script ?? undefined,
-      },
-    };
-    res.status(201).json(response);
   }
-);
+
+  const { type, durationMinutes, focusArea, voiceId, backgroundSound } = parseResult.data;
+
+  let script: string | null = null;
+  if (type === 'GUIDED' && focusArea) {
+    // Get user context for personalization
+    script = await generateMeditationScript(focusArea, durationMinutes, user.id, {
+      lowNeeds: await lowNeedNames(user.id),
+    });
+  }
+
+  const session: MeditationSessionDoc = {
+    id: newEntryId(),
+    type,
+    durationMinutes,
+    focusArea: focusArea ?? null,
+    completed: false,
+    startedAt: new Date().toISOString(),
+    completedAt: null,
+    scriptGenerated: script,
+    voiceId: voiceId ?? null,
+    backgroundSound: backgroundSound ?? null,
+    savedAsFavorite: false,
+    favoriteType: null,
+    postNotes: null,
+  };
+  await updateFeature(user.id, 'meditation', doc => {
+    doc.sessions.push(session);
+  });
+
+  const response: ApiResponse<CreateMeditationSessionResponse> = {
+    success: true,
+    data: {
+      session: mapSessionToDTO(session),
+      script: script ?? undefined,
+    },
+  };
+  res.status(201).json(response);
+});
 
 /**
  * PATCH /api/v1/meditation/sessions/:id
  * Update a meditation session.
  */
-export const updateSession = asyncHandler(
-  async (req: Request, res: Response): Promise<void> => {
-    const user = getUser(req);
-    const { id } = req.params;
+export const updateSession = asyncHandler(async (req: Request, res: Response): Promise<void> => {
+  const user = getUser(req);
+  const { id } = req.params;
 
-    const parseResult = updateSessionSchema.safeParse(req.body);
-    if (!parseResult.success) {
-      throw new ValidationError('Invalid update data', {
-        errors: parseResult.error.flatten().fieldErrors,
+  const parseResult = updateSessionSchema.safeParse(req.body);
+  if (!parseResult.success) {
+    throw new ValidationError('Invalid update data', {
+      errors: parseResult.error.flatten().fieldErrors,
+    });
+  }
+
+  const { completed, postNotes, savedAsFavorite, favoriteType } = parseResult.data;
+
+  // The session, its stats and a favorite change in one locked document write.
+  const session = await updateFeature(user.id, 'meditation', doc => {
+    const current = doc.sessions.find(s => s.id === id);
+    if (!current) return null;
+    const existing = { ...current };
+
+    if (completed !== undefined) current.completed = completed;
+    if (completed) current.completedAt = new Date().toISOString();
+    if (postNotes !== undefined) current.postNotes = postNotes;
+    if (savedAsFavorite !== undefined) current.savedAsFavorite = savedAsFavorite;
+    if (favoriteType !== undefined) current.favoriteType = favoriteType;
+
+    // Update stats if completed
+    if (completed && !existing.completed) {
+      updateStats(doc.stats, current);
+    }
+
+    // Create favorite if requested
+    if (savedAsFavorite && favoriteType && !existing.savedAsFavorite) {
+      doc.favorites.push({
+        id: newEntryId(),
+        name: current.focusArea || 'Meditation',
+        focusArea: current.focusArea || 'general',
+        durationMinutes: current.durationMinutes,
+        favoriteType,
+        script: favoriteType === 'EXACT' ? current.scriptGenerated : null,
+        savedAt: new Date().toISOString(),
       });
     }
+    return { ...current };
+  });
 
-    const { completed, postNotes, savedAsFavorite, favoriteType } = parseResult.data;
-
-    // The session, its stats and a favorite change in one locked document write.
-    const session = await updateFeature(user.id, 'meditation', doc => {
-      const current = doc.sessions.find(s => s.id === id);
-      if (!current) return null;
-      const existing = { ...current };
-
-      if (completed !== undefined) current.completed = completed;
-      if (completed) current.completedAt = new Date().toISOString();
-      if (postNotes !== undefined) current.postNotes = postNotes;
-      if (savedAsFavorite !== undefined) current.savedAsFavorite = savedAsFavorite;
-      if (favoriteType !== undefined) current.favoriteType = favoriteType;
-
-      // Update stats if completed
-      if (completed && !existing.completed) {
-        updateStats(doc.stats, current);
-      }
-
-      // Create favorite if requested
-      if (savedAsFavorite && favoriteType && !existing.savedAsFavorite) {
-        doc.favorites.push({
-          id: newEntryId(),
-          name: current.focusArea || 'Meditation',
-          focusArea: current.focusArea || 'general',
-          durationMinutes: current.durationMinutes,
-          favoriteType,
-          script: favoriteType === 'EXACT' ? current.scriptGenerated : null,
-          savedAt: new Date().toISOString(),
-        });
-      }
-      return { ...current };
-    });
-
-    if (!session) {
-      throw new NotFoundError('Session not found');
-    }
-
-    const response: ApiResponse<UpdateMeditationSessionResponse> = {
-      success: true,
-      data: { session: mapSessionToDTO(session) },
-    };
-    res.json(response);
+  if (!session) {
+    throw new NotFoundError('Session not found');
   }
-);
+
+  const response: ApiResponse<UpdateMeditationSessionResponse> = {
+    success: true,
+    data: { session: mapSessionToDTO(session) },
+  };
+  res.json(response);
+});
 
 /**
  * GET /api/v1/meditation/sessions
  * List meditation sessions.
  */
-export const listSessions = asyncHandler(
-  async (req: Request, res: Response): Promise<void> => {
-    const user = getUser(req);
+export const listSessions = asyncHandler(async (req: Request, res: Response): Promise<void> => {
+  const user = getUser(req);
 
-    const parseResult = listSessionsSchema.safeParse(req.query);
-    if (!parseResult.success) {
-      throw new ValidationError('Invalid query parameters', {
-        errors: parseResult.error.flatten().fieldErrors,
-      });
-    }
-
-    const { limit, offset, type } = parseResult.data;
-
-    const matching = newestFirst(
-      (await readFeature(user.id, 'meditation')).sessions.filter(s => !type || s.type === type),
-      s => s.startedAt,
-    );
-    const total = matching.length;
-    const sessions = matching.slice(offset, offset + limit);
-
-    const response: ApiResponse<ListMeditationSessionsResponse> = {
-      success: true,
-      data: {
-        sessions: sessions.map(mapSessionToSummaryDTO),
-        total,
-        hasMore: offset + sessions.length < total,
-      },
-    };
-    res.json(response);
+  const parseResult = listSessionsSchema.safeParse(req.query);
+  if (!parseResult.success) {
+    throw new ValidationError('Invalid query parameters', {
+      errors: parseResult.error.flatten().fieldErrors,
+    });
   }
-);
+
+  const { limit, offset, type } = parseResult.data;
+
+  const matching = newestFirst(
+    (await readFeature(user.id, 'meditation')).sessions.filter(s => !type || s.type === type),
+    s => s.startedAt,
+  );
+  const total = matching.length;
+  const sessions = matching.slice(offset, offset + limit);
+
+  const response: ApiResponse<ListMeditationSessionsResponse> = {
+    success: true,
+    data: {
+      sessions: sessions.map(mapSessionToSummaryDTO),
+      total,
+      hasMore: offset + sessions.length < total,
+    },
+  };
+  res.json(response);
+});
 
 /**
  * POST /api/v1/meditation/suggest
  * Get AI suggestion for meditation.
  */
-export const getSuggestion = asyncHandler(
-  async (req: Request, res: Response): Promise<void> => {
-    const user = getUser(req);
+export const getSuggestion = asyncHandler(async (req: Request, res: Response): Promise<void> => {
+  const user = getUser(req);
 
-    // Get user's needs state
-    const lowNeeds = await lowNeedNames(user.id);
+  // Get user's needs state
+  const lowNeeds = await lowNeedNames(user.id);
 
-    // Check for recent conflicts: a live session of the caller's from the last week
-    const recentConflict = await prisma.session.findFirst({
-      where: {
-        participants: { some: { userId: user.id, leftAt: null } },
-        status: 'ACTIVE',
-        createdAt: { gte: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000) },
-      },
-      select: { id: true },
-    });
+  // Check for recent conflicts: a live session of the caller's from the last week
+  const recentConflict = await prisma.session.findFirst({
+    where: {
+      participants: { some: { userId: user.id, leftAt: null } },
+      status: 'ACTIVE',
+      createdAt: { gte: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000) },
+    },
+    select: { id: true },
+  });
 
-    let suggestedFocus = 'grounding and presence';
-    let reasoning = 'A practice to help you feel centered and connected to the present moment.';
-    let suggestedDuration = 10;
+  let suggestedFocus = 'grounding and presence';
+  let reasoning = 'A practice to help you feel centered and connected to the present moment.';
+  let suggestedDuration = 10;
 
-    if (recentConflict) {
-      suggestedFocus = 'grounding and inner steadiness';
-      reasoning = "Given you're working through something with someone, a grounding practice could help you feel more steady and clear.";
+  if (recentConflict) {
+    suggestedFocus = 'grounding and inner steadiness';
+    reasoning =
+      "Given you're working through something with someone, a grounding practice could help you feel more steady and clear.";
+    suggestedDuration = 15;
+  } else if (lowNeeds.length > 0) {
+    const needNames = lowNeeds.map(n => n.toLowerCase());
+    if (needNames.some(n => n.includes('rest') || n.includes('calm'))) {
+      suggestedFocus = 'rest and restoration';
+      reasoning = `I notice rest and calm feel unmet right now. A restful practice might offer some ease.`;
       suggestedDuration = 15;
-    } else if (lowNeeds.length > 0) {
-      const needNames = lowNeeds.map(n => n.toLowerCase());
-      if (needNames.some(n => n.includes('rest') || n.includes('calm'))) {
-        suggestedFocus = 'rest and restoration';
-        reasoning = `I notice rest and calm feel unmet right now. A restful practice might offer some ease.`;
-        suggestedDuration = 15;
-      } else if (needNames.some(n => n.includes('compassion'))) {
-        suggestedFocus = 'self-compassion';
-        reasoning = `Self-compassion seems like it could use some attention. A loving-kindness practice might feel supportive.`;
-        suggestedDuration = 15;
-      }
+    } else if (needNames.some(n => n.includes('compassion'))) {
+      suggestedFocus = 'self-compassion';
+      reasoning = `Self-compassion seems like it could use some attention. A loving-kindness practice might feel supportive.`;
+      suggestedDuration = 15;
     }
-
-    const response: ApiResponse<GetMeditationSuggestionResponse> = {
-      success: true,
-      data: {
-        suggestedFocus,
-        reasoning,
-        suggestedDuration,
-      },
-    };
-    res.json(response);
   }
-);
+
+  const response: ApiResponse<GetMeditationSuggestionResponse> = {
+    success: true,
+    data: {
+      suggestedFocus,
+      reasoning,
+      suggestedDuration,
+    },
+  };
+  res.json(response);
+});
 
 /**
  * POST /api/v1/meditation/generate-script
  * Generate a meditation script.
  */
-export const generateScript = asyncHandler(
-  async (req: Request, res: Response): Promise<void> => {
-    const user = getUser(req);
+export const generateScript = asyncHandler(async (req: Request, res: Response): Promise<void> => {
+  const user = getUser(req);
 
-    const parseResult = generateScriptSchema.safeParse(req.body);
-    if (!parseResult.success) {
-      throw new ValidationError('Invalid request', {
-        errors: parseResult.error.flatten().fieldErrors,
-      });
-    }
-
-    const { focusArea, durationMinutes, context } = parseResult.data;
-
-    const script = await generateMeditationScript(focusArea, durationMinutes, user.id, context);
-
-    const response: ApiResponse<GenerateScriptResponse> = {
-      success: true,
-      data: {
-        script,
-        estimatedMinutes: durationMinutes,
-      },
-    };
-    res.json(response);
+  const parseResult = generateScriptSchema.safeParse(req.body);
+  if (!parseResult.success) {
+    throw new ValidationError('Invalid request', {
+      errors: parseResult.error.flatten().fieldErrors,
+    });
   }
-);
+
+  const { focusArea, durationMinutes, context } = parseResult.data;
+
+  const script = await generateMeditationScript(focusArea, durationMinutes, user.id, context);
+
+  const response: ApiResponse<GenerateScriptResponse> = {
+    success: true,
+    data: {
+      script,
+      estimatedMinutes: durationMinutes,
+    },
+  };
+  res.json(response);
+});
 
 /**
  * GET /api/v1/meditation/stats
  * Get meditation stats.
  */
-export const getStats = asyncHandler(
-  async (req: Request, res: Response): Promise<void> => {
-    const user = getUser(req);
+export const getStats = asyncHandler(async (req: Request, res: Response): Promise<void> => {
+  const user = getUser(req);
 
-    const stats = (await readFeature(user.id, 'meditation')).stats;
+  const stats = (await readFeature(user.id, 'meditation')).stats;
 
-    const favoriteFocusAreas = stats.favoriteFocusAreas;
-    const sortedAreas = Object.entries(favoriteFocusAreas)
-      .sort((a, b) => b[1] - a[1])
-      .map(([focusArea, count]) => ({ focusArea, count }));
+  const favoriteFocusAreas = stats.favoriteFocusAreas;
+  const sortedAreas = Object.entries(favoriteFocusAreas)
+    .sort((a, b) => b[1] - a[1])
+    .map(([focusArea, count]) => ({ focusArea, count }));
 
-    const statsDTO: MeditationStatsDTO = {
-      totalSessions: stats.totalSessions,
-      guidedCount: stats.guidedCount,
-      unguidedCount: stats.unguidedCount,
-      totalMinutes: stats.totalMinutes,
-      currentStreak: stats.currentStreak,
-      longestStreak: stats.longestStreak,
-      streakStartDate: stats.streakStartDate,
-      lastSessionDate: stats.lastSessionDate,
-      favoriteFocusAreas: sortedAreas,
-    };
+  const statsDTO: MeditationStatsDTO = {
+    totalSessions: stats.totalSessions,
+    guidedCount: stats.guidedCount,
+    unguidedCount: stats.unguidedCount,
+    totalMinutes: stats.totalMinutes,
+    currentStreak: stats.currentStreak,
+    longestStreak: stats.longestStreak,
+    streakStartDate: stats.streakStartDate,
+    lastSessionDate: stats.lastSessionDate,
+    favoriteFocusAreas: sortedAreas,
+  };
 
-    const response: ApiResponse<GetMeditationStatsResponse> = {
-      success: true,
-      data: { stats: statsDTO },
-    };
-    res.json(response);
-  }
-);
+  const response: ApiResponse<GetMeditationStatsResponse> = {
+    success: true,
+    data: { stats: statsDTO },
+  };
+  res.json(response);
+});
 
 /**
  * GET /api/v1/meditation/favorites
  * List meditation favorites.
  */
-export const listFavorites = asyncHandler(
-  async (req: Request, res: Response): Promise<void> => {
-    const user = getUser(req);
+export const listFavorites = asyncHandler(async (req: Request, res: Response): Promise<void> => {
+  const user = getUser(req);
 
-    const favorites = newestFirst((await readFeature(user.id, 'meditation')).favorites, f => f.savedAt);
+  const favorites = newestFirst((await readFeature(user.id, 'meditation')).favorites, f => f.savedAt);
 
-    const response: ApiResponse<ListMeditationFavoritesResponse> = {
-      success: true,
-      data: { favorites: favorites.map(mapFavoriteToDTO) },
-    };
-    res.json(response);
-  }
-);
+  const response: ApiResponse<ListMeditationFavoritesResponse> = {
+    success: true,
+    data: { favorites: favorites.map(mapFavoriteToDTO) },
+  };
+  res.json(response);
+});
 
 /**
  * POST /api/v1/meditation/favorites
  * Save a session as favorite.
  */
-export const createFavorite = asyncHandler(
-  async (req: Request, res: Response): Promise<void> => {
-    const user = getUser(req);
+export const createFavorite = asyncHandler(async (req: Request, res: Response): Promise<void> => {
+  const user = getUser(req);
 
-    const parseResult = createFavoriteSchema.safeParse(req.body);
-    if (!parseResult.success) {
-      throw new ValidationError('Invalid request', {
-        errors: parseResult.error.flatten().fieldErrors,
-      });
-    }
-
-    const { sessionId, name } = parseResult.data;
-
-    const favorite = await updateFeature(user.id, 'meditation', doc => {
-      const session = doc.sessions.find(s => s.id === sessionId);
-      if (!session) return null;
-      const created: MeditationFavoriteDoc = {
-        id: newEntryId(),
-        name: name || session.focusArea || 'Meditation',
-        focusArea: session.focusArea || 'general',
-        durationMinutes: session.durationMinutes,
-        favoriteType: session.favoriteType || 'THEME',
-        script: session.favoriteType === 'EXACT' ? session.scriptGenerated : null,
-        savedAt: new Date().toISOString(),
-      };
-      doc.favorites.push(created);
-      return created;
+  const parseResult = createFavoriteSchema.safeParse(req.body);
+  if (!parseResult.success) {
+    throw new ValidationError('Invalid request', {
+      errors: parseResult.error.flatten().fieldErrors,
     });
-
-    if (!favorite) {
-      throw new NotFoundError('Session not found');
-    }
-
-    const response: ApiResponse<CreateMeditationFavoriteResponse> = {
-      success: true,
-      data: { favorite: mapFavoriteToDTO(favorite) },
-    };
-    res.status(201).json(response);
   }
-);
+
+  const { sessionId, name } = parseResult.data;
+
+  const favorite = await updateFeature(user.id, 'meditation', doc => {
+    const session = doc.sessions.find(s => s.id === sessionId);
+    if (!session) return null;
+    const created: MeditationFavoriteDoc = {
+      id: newEntryId(),
+      name: name || session.focusArea || 'Meditation',
+      focusArea: session.focusArea || 'general',
+      durationMinutes: session.durationMinutes,
+      favoriteType: session.favoriteType || 'THEME',
+      script: session.favoriteType === 'EXACT' ? session.scriptGenerated : null,
+      savedAt: new Date().toISOString(),
+    };
+    doc.favorites.push(created);
+    return created;
+  });
+
+  if (!favorite) {
+    throw new NotFoundError('Session not found');
+  }
+
+  const response: ApiResponse<CreateMeditationFavoriteResponse> = {
+    success: true,
+    data: { favorite: mapFavoriteToDTO(favorite) },
+  };
+  res.status(201).json(response);
+});
 
 /**
  * DELETE /api/v1/meditation/favorites/:id
  * Delete a favorite.
  */
-export const deleteFavorite = asyncHandler(
-  async (req: Request, res: Response): Promise<void> => {
-    const user = getUser(req);
-    const { id } = req.params;
+export const deleteFavorite = asyncHandler(async (req: Request, res: Response): Promise<void> => {
+  const user = getUser(req);
+  const { id } = req.params;
 
-    const removed = await updateFeature(user.id, 'meditation', doc => {
-      const i = doc.favorites.findIndex(f => f.id === id);
-      if (i < 0) return false;
-      doc.favorites.splice(i, 1);
-      return true;
-    });
+  const removed = await updateFeature(user.id, 'meditation', doc => {
+    const i = doc.favorites.findIndex(f => f.id === id);
+    if (i < 0) return false;
+    doc.favorites.splice(i, 1);
+    return true;
+  });
 
-    if (!removed) {
-      throw new NotFoundError('Favorite not found');
-    }
-
-    const response: ApiResponse<DeleteMeditationFavoriteResponse> = {
-      success: true,
-      data: { success: true },
-    };
-    res.json(response);
+  if (!removed) {
+    throw new NotFoundError('Favorite not found');
   }
-);
+
+  const response: ApiResponse<DeleteMeditationFavoriteResponse> = {
+    success: true,
+    data: { success: true },
+  };
+  res.json(response);
+});
 
 /**
  * GET /api/v1/meditation/preferences
  * Get meditation preferences.
  */
-export const getPreferences = asyncHandler(
-  async (req: Request, res: Response): Promise<void> => {
-    const user = getUser(req);
+export const getPreferences = asyncHandler(async (req: Request, res: Response): Promise<void> => {
+  const user = getUser(req);
 
-    const prefs = (await readFeature(user.id, 'meditation')).preferences;
+  const prefs = (await readFeature(user.id, 'meditation')).preferences;
 
-    const response: ApiResponse<GetMeditationPreferencesResponse> = {
-      success: true,
-      data: { preferences: mapPreferencesToDTO(prefs) },
-    };
-    res.json(response);
-  }
-);
+  const response: ApiResponse<GetMeditationPreferencesResponse> = {
+    success: true,
+    data: { preferences: mapPreferencesToDTO(prefs) },
+  };
+  res.json(response);
+});
 
 /**
  * PATCH /api/v1/meditation/preferences
  * Update meditation preferences.
  */
-export const updatePreferences = asyncHandler(
-  async (req: Request, res: Response): Promise<void> => {
-    const user = getUser(req);
+export const updatePreferences = asyncHandler(async (req: Request, res: Response): Promise<void> => {
+  const user = getUser(req);
 
-    const parseResult = updatePreferencesSchema.safeParse(req.body);
-    if (!parseResult.success) {
-      throw new ValidationError('Invalid preferences', {
-        errors: parseResult.error.flatten().fieldErrors,
-      });
-    }
-
-    const prefs = await updateFeature(user.id, 'meditation', doc => {
-      const patch = Object.fromEntries(Object.entries(parseResult.data).filter(([, v]) => v !== undefined));
-      doc.preferences = { ...doc.preferences, ...patch };
-      return doc.preferences;
+  const parseResult = updatePreferencesSchema.safeParse(req.body);
+  if (!parseResult.success) {
+    throw new ValidationError('Invalid preferences', {
+      errors: parseResult.error.flatten().fieldErrors,
     });
-
-    const response: ApiResponse<UpdateMeditationPreferencesResponse> = {
-      success: true,
-      data: { preferences: mapPreferencesToDTO(prefs) },
-    };
-    res.json(response);
   }
-);
+
+  const prefs = await updateFeature(user.id, 'meditation', doc => {
+    const patch = Object.fromEntries(Object.entries(parseResult.data).filter(([, v]) => v !== undefined));
+    doc.preferences = { ...doc.preferences, ...patch };
+    return doc.preferences;
+  });
+
+  const response: ApiResponse<UpdateMeditationPreferencesResponse> = {
+    success: true,
+    data: { preferences: mapPreferencesToDTO(prefs) },
+  };
+  res.json(response);
+});
 
 // ============================================================================
 // Saved Meditations
@@ -828,180 +815,169 @@ function mapSavedMeditationToSummaryDTO(meditation: SavedMeditationDoc): SavedMe
  * GET /api/v1/meditation/saved
  * List user's saved meditations.
  */
-export const listSavedMeditations = asyncHandler(
-  async (req: Request, res: Response): Promise<void> => {
-    const user = getUser(req);
+export const listSavedMeditations = asyncHandler(async (req: Request, res: Response): Promise<void> => {
+  const user = getUser(req);
 
-    const meditations = newestFirst((await readFeature(user.id, 'meditation')).scripts, m => m.createdAt);
-    const total = meditations.length;
+  const meditations = newestFirst((await readFeature(user.id, 'meditation')).scripts, m => m.createdAt);
+  const total = meditations.length;
 
-    const response: ApiResponse<ListSavedMeditationsResponse> = {
-      success: true,
-      data: {
-        meditations: meditations.map(mapSavedMeditationToSummaryDTO),
-        total,
-      },
-    };
-    res.json(response);
-  }
-);
+  const response: ApiResponse<ListSavedMeditationsResponse> = {
+    success: true,
+    data: {
+      meditations: meditations.map(mapSavedMeditationToSummaryDTO),
+      total,
+    },
+  };
+  res.json(response);
+});
 
 /**
  * GET /api/v1/meditation/saved/:id
  * Get a specific saved meditation.
  */
-export const getSavedMeditation = asyncHandler(
-  async (req: Request, res: Response): Promise<void> => {
-    const user = getUser(req);
-    const { id } = req.params;
+export const getSavedMeditation = asyncHandler(async (req: Request, res: Response): Promise<void> => {
+  const user = getUser(req);
+  const { id } = req.params;
 
-    const meditation = (await readFeature(user.id, 'meditation')).scripts.find(m => m.id === id);
+  const meditation = (await readFeature(user.id, 'meditation')).scripts.find(m => m.id === id);
 
-    if (!meditation) {
-      throw new NotFoundError('Saved meditation not found');
-    }
-
-    const response: ApiResponse<GetSavedMeditationResponse> = {
-      success: true,
-      data: { meditation: mapSavedMeditationToDTO(meditation) },
-    };
-    res.json(response);
+  if (!meditation) {
+    throw new NotFoundError('Saved meditation not found');
   }
-);
+
+  const response: ApiResponse<GetSavedMeditationResponse> = {
+    success: true,
+    data: { meditation: mapSavedMeditationToDTO(meditation) },
+  };
+  res.json(response);
+});
 
 /**
  * POST /api/v1/meditation/saved
  * Save a custom meditation.
  */
-export const createSavedMeditation = asyncHandler(
-  async (req: Request, res: Response): Promise<void> => {
-    const user = getUser(req);
+export const createSavedMeditation = asyncHandler(async (req: Request, res: Response): Promise<void> => {
+  const user = getUser(req);
 
-    const parseResult = createSavedMeditationSchema.safeParse(req.body);
-    if (!parseResult.success) {
-      throw new ValidationError('Invalid meditation data', {
-        errors: parseResult.error.flatten().fieldErrors,
-      });
-    }
-
-    const { title, script, conversationId } = parseResult.data;
-    const durationSeconds = calculateDuration(script);
-
-    const now = new Date().toISOString();
-    const meditation: SavedMeditationDoc = {
-      id: newEntryId(),
-      title,
-      script,
-      durationSeconds,
-      conversationId: conversationId ?? null,
-      createdAt: now,
-      updatedAt: now,
-    };
-    await updateFeature(user.id, 'meditation', doc => {
-      doc.scripts.push(meditation);
+  const parseResult = createSavedMeditationSchema.safeParse(req.body);
+  if (!parseResult.success) {
+    throw new ValidationError('Invalid meditation data', {
+      errors: parseResult.error.flatten().fieldErrors,
     });
-
-    const response: ApiResponse<CreateSavedMeditationResponse> = {
-      success: true,
-      data: { meditation: mapSavedMeditationToDTO(meditation) },
-    };
-    res.status(201).json(response);
   }
-);
+
+  const { title, script, conversationId } = parseResult.data;
+  const durationSeconds = calculateDuration(script);
+
+  const now = new Date().toISOString();
+  const meditation: SavedMeditationDoc = {
+    id: newEntryId(),
+    title,
+    script,
+    durationSeconds,
+    conversationId: conversationId ?? null,
+    createdAt: now,
+    updatedAt: now,
+  };
+  await updateFeature(user.id, 'meditation', doc => {
+    doc.scripts.push(meditation);
+  });
+
+  const response: ApiResponse<CreateSavedMeditationResponse> = {
+    success: true,
+    data: { meditation: mapSavedMeditationToDTO(meditation) },
+  };
+  res.status(201).json(response);
+});
 
 /**
  * PATCH /api/v1/meditation/saved/:id
  * Update a saved meditation.
  */
-export const updateSavedMeditation = asyncHandler(
-  async (req: Request, res: Response): Promise<void> => {
-    const user = getUser(req);
-    const { id } = req.params;
+export const updateSavedMeditation = asyncHandler(async (req: Request, res: Response): Promise<void> => {
+  const user = getUser(req);
+  const { id } = req.params;
 
-    const parseResult = updateSavedMeditationSchema.safeParse(req.body);
-    if (!parseResult.success) {
-      throw new ValidationError('Invalid update data', {
-        errors: parseResult.error.flatten().fieldErrors,
-      });
-    }
-
-    const { title, script } = parseResult.data;
-
-    // Recalculate duration if script changed
-    const durationSeconds = script ? calculateDuration(script) : undefined;
-
-    const meditation = await updateFeature(user.id, 'meditation', doc => {
-      const current = doc.scripts.find(m => m.id === id);
-      if (!current) return null;
-      if (title) current.title = title;
-      if (script) current.script = script;
-      if (durationSeconds !== undefined) current.durationSeconds = durationSeconds;
-      current.updatedAt = new Date().toISOString();
-      return { ...current };
+  const parseResult = updateSavedMeditationSchema.safeParse(req.body);
+  if (!parseResult.success) {
+    throw new ValidationError('Invalid update data', {
+      errors: parseResult.error.flatten().fieldErrors,
     });
-
-    if (!meditation) {
-      throw new NotFoundError('Saved meditation not found');
-    }
-
-    const response: ApiResponse<UpdateSavedMeditationResponse> = {
-      success: true,
-      data: { meditation: mapSavedMeditationToDTO(meditation) },
-    };
-    res.json(response);
   }
-);
+
+  const { title, script } = parseResult.data;
+
+  // Recalculate duration if script changed
+  const durationSeconds = script ? calculateDuration(script) : undefined;
+
+  const meditation = await updateFeature(user.id, 'meditation', doc => {
+    const current = doc.scripts.find(m => m.id === id);
+    if (!current) return null;
+    if (title) current.title = title;
+    if (script) current.script = script;
+    if (durationSeconds !== undefined) current.durationSeconds = durationSeconds;
+    current.updatedAt = new Date().toISOString();
+    return { ...current };
+  });
+
+  if (!meditation) {
+    throw new NotFoundError('Saved meditation not found');
+  }
+
+  const response: ApiResponse<UpdateSavedMeditationResponse> = {
+    success: true,
+    data: { meditation: mapSavedMeditationToDTO(meditation) },
+  };
+  res.json(response);
+});
 
 /**
  * DELETE /api/v1/meditation/saved/:id
  * Delete a saved meditation.
  */
-export const deleteSavedMeditation = asyncHandler(
-  async (req: Request, res: Response): Promise<void> => {
-    const user = getUser(req);
-    const { id } = req.params;
+export const deleteSavedMeditation = asyncHandler(async (req: Request, res: Response): Promise<void> => {
+  const user = getUser(req);
+  const { id } = req.params;
 
-    const removed = await updateFeature(user.id, 'meditation', doc => {
-      const i = doc.scripts.findIndex(m => m.id === id);
-      if (i < 0) return false;
-      doc.scripts.splice(i, 1);
-      return true;
-    });
+  const removed = await updateFeature(user.id, 'meditation', doc => {
+    const i = doc.scripts.findIndex(m => m.id === id);
+    if (i < 0) return false;
+    doc.scripts.splice(i, 1);
+    return true;
+  });
 
-    if (!removed) {
-      throw new NotFoundError('Saved meditation not found');
-    }
-
-    const response: ApiResponse<DeleteSavedMeditationResponse> = {
-      success: true,
-      data: { success: true },
-    };
-    res.json(response);
+  if (!removed) {
+    throw new NotFoundError('Saved meditation not found');
   }
-);
+
+  const response: ApiResponse<DeleteSavedMeditationResponse> = {
+    success: true,
+    data: { success: true },
+  };
+  res.json(response);
+});
 
 /**
  * POST /api/v1/meditation/parse
  * Parse user-provided text into a structured meditation script with timing tokens.
  */
-export const parseMeditationText = asyncHandler(
-  async (req: Request, res: Response): Promise<void> => {
-    const user = getUser(req);
+export const parseMeditationText = asyncHandler(async (req: Request, res: Response): Promise<void> => {
+  const user = getUser(req);
 
-    const parseResult = parseMeditationTextSchema.safeParse(req.body);
-    if (!parseResult.success) {
-      throw new ValidationError('Invalid request', {
-        errors: parseResult.error.flatten().fieldErrors,
-      });
-    }
+  const parseResult = parseMeditationTextSchema.safeParse(req.body);
+  if (!parseResult.success) {
+    throw new ValidationError('Invalid request', {
+      errors: parseResult.error.flatten().fieldErrors,
+    });
+  }
 
-    const { text } = parseResult.data;
+  const { text } = parseResult.data;
 
-    // Use AI to convert raw text to structured script with timing tokens
-    const syntheticSessionId = `meditation-parse-${user.id}`;
-    const syntheticTurnId = `${syntheticSessionId}-${Date.now()}`;
+  // Use AI to convert raw text to structured script with timing tokens
+  const syntheticSessionId = `meditation-parse-${user.id}`;
+  const syntheticTurnId = `${syntheticSessionId}-${Date.now()}`;
 
-    const prompt = `You are a meditation script formatter. Your task is to take user-provided meditation text and convert it to a structured format with proper timing tokens.
+  const prompt = `You are a meditation script formatter. Your task is to take user-provided meditation text and convert it to a structured format with proper timing tokens.
 
 INPUT TEXT:
 ${text}
@@ -1026,52 +1002,53 @@ RESPOND IN THIS EXACT JSON FORMAT:
 
 Output only valid JSON, no markdown or explanation.`;
 
-    const rawResponse = await getCompletion({
-      systemPrompt: prompt,
-      messages: [{ role: 'user', content: 'Convert this meditation text to structured format.' }],
-      maxTokens: 8000,
-      operation: 'meditation-parse',
-      sessionId: syntheticSessionId,
-      turnId: syntheticTurnId,
-    });
+  const rawResponse = await getCompletion({
+    systemPrompt: prompt,
+    messages: [{ role: 'user', content: 'Convert this meditation text to structured format.' }],
+    maxTokens: 8000,
+    operation: 'meditation-parse',
+    sessionId: syntheticSessionId,
+    turnId: syntheticTurnId,
+  });
 
-    // Parse the AI response
-    let parsedResult: {
-      script: string;
-      suggestedTitle: string;
-      hasAmbiguousPauses: boolean;
-      ambiguityQuestions: string[];
-    };
+  // Parse the AI response
+  let parsedResult: {
+    script: string;
+    suggestedTitle: string;
+    hasAmbiguousPauses: boolean;
+    ambiguityQuestions: string[];
+  };
 
-    try {
-      // Try to extract JSON from the response
-      const jsonMatch = rawResponse?.match(/\{[\s\S]*\}/);
-      if (!jsonMatch) {
-        throw new Error('No JSON found in response');
-      }
-      parsedResult = JSON.parse(jsonMatch[0]);
-    } catch {
-      // Fallback: treat the text as-is with default pauses
-      parsedResult = {
-        script: `[BELL]\n\n${text}\n\n[BELL]`,
-        suggestedTitle: 'Custom Meditation',
-        hasAmbiguousPauses: true,
-        ambiguityQuestions: ['Could not automatically detect pause timing. Please review and add [PAUSE:Xs] tokens manually.'],
-      };
+  try {
+    // Try to extract JSON from the response
+    const jsonMatch = rawResponse?.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) {
+      throw new Error('No JSON found in response');
     }
-
-    const durationSeconds = calculateDuration(parsedResult.script);
-
-    const response: ApiResponse<ParseMeditationTextResponse> = {
-      success: true,
-      data: {
-        script: parsedResult.script,
-        durationSeconds,
-        suggestedTitle: parsedResult.suggestedTitle,
-        hasAmbiguousPauses: parsedResult.hasAmbiguousPauses,
-        ambiguityQuestions: parsedResult.ambiguityQuestions.length > 0 ? parsedResult.ambiguityQuestions : undefined,
-      },
+    parsedResult = JSON.parse(jsonMatch[0]);
+  } catch {
+    // Fallback: treat the text as-is with default pauses
+    parsedResult = {
+      script: `[BELL]\n\n${text}\n\n[BELL]`,
+      suggestedTitle: 'Custom Meditation',
+      hasAmbiguousPauses: true,
+      ambiguityQuestions: [
+        'Could not automatically detect pause timing. Please review and add [PAUSE:Xs] tokens manually.',
+      ],
     };
-    res.json(response);
   }
-);
+
+  const durationSeconds = calculateDuration(parsedResult.script);
+
+  const response: ApiResponse<ParseMeditationTextResponse> = {
+    success: true,
+    data: {
+      script: parsedResult.script,
+      durationSeconds,
+      suggestedTitle: parsedResult.suggestedTitle,
+      hasAmbiguousPauses: parsedResult.hasAmbiguousPauses,
+      ambiguityQuestions: parsedResult.ambiguityQuestions.length > 0 ? parsedResult.ambiguityQuestions : undefined,
+    },
+  };
+  res.json(response);
+});

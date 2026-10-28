@@ -168,7 +168,12 @@ export interface CoParticipantPresence {
  */
 export async function getCoParticipantPresence(coParticipantId: string): Promise<CoParticipantPresence> {
   const rows = await prisma.$queryRaw<
-    Array<{ shows: boolean | null; last_viewed_at: Date | null; last_active_at: Date | null; last_turn_at: Date | null }>
+    Array<{
+      shows: boolean | null;
+      last_viewed_at: Date | null;
+      last_active_at: Date | null;
+      last_turn_at: Date | null;
+    }>
   >`
     SELECT (up.doc -> 'privacy' ->> 'showActivityStatus')::boolean AS shows,
            r.last_viewed_at, r.last_active_at,

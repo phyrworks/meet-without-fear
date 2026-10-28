@@ -34,7 +34,7 @@ export async function advanceWalkthrough(args: {
   action: WalkthroughAction;
 }): Promise<{ state: GetStage4StateResponse; phase: string; currentNeedId: string | null }> {
   const view = await loadStage4View(args.sessionId, args.userId);
-  const target = view.rows.find((r) => r.id === args.needId);
+  const target = view.rows.find(r => r.id === args.needId);
   if (!target) throw new Stage4WalkthroughNeedNotFoundError();
 
   const stored = walkthroughStoredFor(view);
@@ -52,8 +52,8 @@ export async function advanceWalkthrough(args: {
     skipped.delete(args.needId);
   }
 
-  const remainingOwn = before.own.find((n) => !covered.has(n.id) && !skipped.has(n.id));
-  const remainingPartner = before.partner.find((n) => !covered.has(n.id) && !skipped.has(n.id));
+  const remainingOwn = before.own.find(n => !covered.has(n.id) && !skipped.has(n.id));
+  const remainingPartner = before.partner.find(n => !covered.has(n.id) && !skipped.has(n.id));
   const isOwn = target.ownerParticipantId === view.me;
   let phase: 'MY_NEEDS' | 'PARTNER_NEEDS' | 'QUALITY_REVIEW';
   let currentNeedId: string | null;
@@ -82,7 +82,7 @@ export async function advanceWalkthrough(args: {
 
   const status = args.action === 'covered' ? 'COVERED' : args.action === 'skip' ? 'SKIPPED' : 'OPEN';
   const me = view.me;
-  await prisma.$transaction(async (tx) => {
+  await prisma.$transaction(async tx => {
     // The partial unique allows one current row: clear first.
     await tx.needDisposition.updateMany({ where: { participantId: me, isCurrent: true }, data: { isCurrent: false } });
     await tx.needDisposition.upsert({

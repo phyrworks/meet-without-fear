@@ -10,10 +10,7 @@
 
 import { Request, Response } from 'express';
 import { z } from 'zod';
-import {
-  Stage4SubChatAnchor,
-  ResolveStage4SubChatRequest,
-} from '@meet-without-fear/shared';
+import { Stage4SubChatAnchor, ResolveStage4SubChatRequest } from '@meet-without-fear/shared';
 import { errorResponse, successResponse } from '../utils/response';
 import { getPartnerUserId } from '../utils/session';
 import { notifyPartner, publishSessionEvent } from '../services/realtime';
@@ -100,10 +97,7 @@ export async function getStage4SubChat(req: Request, res: Response): Promise<voi
   successResponse(res, { subChat: toSubChatDTO(record) });
 }
 
-export async function sendStage4SubChatMessage(
-  req: Request,
-  res: Response
-): Promise<void> {
+export async function sendStage4SubChatMessage(req: Request, res: Response): Promise<void> {
   const user = req.user;
   if (!user) {
     errorResponse(res, 'UNAUTHORIZED', 'Authentication required', 401);
@@ -140,10 +134,7 @@ export async function sendStage4SubChatMessage(
   }
 }
 
-export async function resolveStage4SubChat(
-  req: Request,
-  res: Response
-): Promise<void> {
+export async function resolveStage4SubChat(req: Request, res: Response): Promise<void> {
   const user = req.user;
   if (!user) {
     errorResponse(res, 'UNAUTHORIZED', 'Authentication required', 401);
@@ -163,8 +154,7 @@ export async function resolveStage4SubChat(
       updatedProposals: parsed.data.updatedProposals,
     });
 
-    const inventoryChanged =
-      result.createdProposalIds.length > 0 || result.updatedProposalIds.length > 0;
+    const inventoryChanged = result.createdProposalIds.length > 0 || result.updatedProposalIds.length > 0;
     if (inventoryChanged) {
       try {
         await publishSessionEvent(sessionId, 'session.strategies_updated', {

@@ -76,11 +76,9 @@ export function normalizeTakeaways(raw: unknown): RawTakeaway[] {
   const valid = candidates
     .filter(
       (item): item is RawTakeaway =>
-        item !== null &&
-        typeof item === 'object' &&
-        typeof (item as RawTakeaway).content === 'string',
+        item !== null && typeof item === 'object' && typeof (item as RawTakeaway).content === 'string',
     )
-    .map((item) => ({
+    .map(item => ({
       ...item,
       // Normalize type — default to 'insight' if missing or invalid
       type: item.type && VALID_TYPES.has(item.type) ? item.type : ('insight' as const),
@@ -97,11 +95,9 @@ export function normalizeTakeaways(raw: unknown): RawTakeaway[] {
 // AI messages are labeled "Journal Guide", USER messages are labeled "Me".
 // ============================================================================
 
-export function buildDistillationPrompt(
-  messages: Array<{ role: string; content: string }>,
-): string {
+export function buildDistillationPrompt(messages: Array<{ role: string; content: string }>): string {
   const transcript = messages
-    .map((m) => {
+    .map(m => {
       const speaker = m.role === 'USER' ? 'Me' : 'Journal Guide';
       return `${speaker}: ${m.content}`;
     })
@@ -150,11 +146,7 @@ Output ONLY valid JSON in this exact shape:
 // 7. Fetch and return all takeaways (all sources, ordered by position)
 // ============================================================================
 
-export async function distillSession({
-  sessionId,
-  userId,
-  turnId,
-}: DistillSessionInput): Promise<TakeawayDTO[]> {
+export async function distillSession({ sessionId, userId, turnId }: DistillSessionInput): Promise<TakeawayDTO[]> {
   logger.info(`[Distillation] Starting distillation for session ${sessionId}`);
   void userId; // the caller verified ownership; every read below is by the reflection id
 
@@ -166,11 +158,9 @@ export async function distillSession({
   });
 
   // 2. Guard: sparse session (< 2 user messages)
-  const userMessages = messages.filter((m) => m.role === 'USER');
+  const userMessages = messages.filter(m => m.role === 'USER');
   if (userMessages.length < 2) {
-    logger.info(
-      `[Distillation] Skipping Haiku — session ${sessionId} has only ${userMessages.length} user message(s)`,
-    );
+    logger.info(`[Distillation] Skipping Haiku — session ${sessionId} has only ${userMessages.length} user message(s)`);
     await prisma.reflection.update({
       where: { id: sessionId },
       data: { distilledAt: new Date() },
@@ -183,7 +173,7 @@ export async function distillSession({
     async () =>
       getHaikuJson<{ takeaways: Array<{ content: string; theme?: string }> }>({
         systemPrompt:
-          'You are an organizational assistant. You ONLY output valid JSON. Never add psychological labels, clinical terms, or interpretations. Extract verbatim phrases in the user\'s own language.',
+          "You are an organizational assistant. You ONLY output valid JSON. Never add psychological labels, clinical terms, or interpretations. Extract verbatim phrases in the user's own language.",
         messages: [{ role: 'user', content: buildDistillationPrompt(messages) }],
         maxTokens: 1024,
         innerWorkSessionId: sessionId,
@@ -219,7 +209,12 @@ export async function distillSession({
         content: t.content,
         theme: t.theme ?? null,
         source: 'AI' as const,
-        type: t.type === 'action_item' ? ('ACTION_ITEM' as const) : t.type === 'intention' ? ('INTENTION' as const) : ('INSIGHT' as const),
+        type:
+          t.type === 'action_item'
+            ? ('ACTION_ITEM' as const)
+            : t.type === 'intention'
+              ? ('INTENTION' as const)
+              : ('INSIGHT' as const),
         position: i,
       })),
     }),
@@ -235,11 +230,9 @@ export async function distillSession({
     orderBy: { position: 'asc' },
   });
 
-  logger.info(
-    `[Distillation] Session ${sessionId} distilled: ${allTakeaways.length} takeaway(s)`,
-  );
+  logger.info(`[Distillation] Session ${sessionId} distilled: ${allTakeaways.length} takeaway(s)`);
 
-  return allTakeaways.map((t) => mapTakeawayToDTO(t));
+  return allTakeaways.map(t => mapTakeawayToDTO(t));
 }
 
 // ============================================================================

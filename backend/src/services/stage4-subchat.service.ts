@@ -28,7 +28,13 @@ import { getCompletion } from '../lib/bedrock';
 import { needsBrainstormPersona, noOverlapPersona, proposalRefinementPersona } from './stage4-prompts';
 import { createFacilitatorMessage, createParticipantMessage } from './message-store';
 import { resolveParticipant } from './participant-resolver';
-import { loadProposals, loadStage4Needs, loadVisibleChoices, resolveNeedLabels, setProposalNeeds } from './stage4-store';
+import {
+  loadProposals,
+  loadStage4Needs,
+  loadVisibleChoices,
+  resolveNeedLabels,
+  setProposalNeeds,
+} from './stage4-store';
 
 const MAIN_CHAT_HISTORY_LIMIT = 60;
 
@@ -58,10 +64,7 @@ export interface Stage4SubChatRecord {
 // ---------------------------------------------------------------------------
 
 export function toSubChatDTO(record: Stage4SubChatRecord): Stage4SubChatDTO {
-  const refinementAnchorId =
-    record.anchorKind === Stage4SubChatAnchor.PROPOSAL_REFINEMENT
-      ? record.anchorId
-      : null;
+  const refinementAnchorId = record.anchorKind === Stage4SubChatAnchor.PROPOSAL_REFINEMENT ? record.anchorId : null;
   return {
     id: record.id,
     sessionId: record.sessionId,
@@ -71,7 +74,7 @@ export function toSubChatDTO(record: Stage4SubChatRecord): Stage4SubChatDTO {
     status: record.status,
     createdAt: record.createdAt.toISOString(),
     resolvedAt: record.resolvedAt ? record.resolvedAt.toISOString() : null,
-    messages: record.messages.map((m) => toMessageDTO(m, refinementAnchorId)),
+    messages: record.messages.map(m => toMessageDTO(m, refinementAnchorId)),
   };
 }
 
@@ -94,8 +97,7 @@ function extractCandidate(content: string): {
   const stripped = content.slice(0, match.index).trimEnd();
   try {
     const parsed = JSON.parse(match[1].trim()) as Partial<Stage4ProposalDraft>;
-    const description =
-      typeof parsed.description === 'string' ? parsed.description.trim() : '';
+    const description = typeof parsed.description === 'string' ? parsed.description.trim() : '';
     if (!description) return { content: stripped, candidate: null };
     return {
       content: stripped,
@@ -182,7 +184,7 @@ function toRecord(c: SubchatConversation): Stage4SubChatRecord {
     anchorKind === Stage4SubChatAnchor.PROPOSAL_REFINEMENT
       ? c.anchorProposalId
       : anchorKind === Stage4SubChatAnchor.NEEDS_BRAINSTORM
-        ? (c.messages.find((m) => m.refiningNeedId)?.refiningNeedId ?? null)
+        ? (c.messages.find(m => m.refiningNeedId)?.refiningNeedId ?? null)
         : null;
   return {
     id: c.id,
@@ -193,7 +195,7 @@ function toRecord(c: SubchatConversation): Stage4SubChatRecord {
     status: c.status as Stage4SubChatStatus,
     createdAt: c.createdAt,
     resolvedAt: c.resolvedAt,
-    messages: c.messages.map((m) => ({
+    messages: c.messages.map(m => ({
       id: m.id,
       role: (m.role === 'AI' ? SharedMessageRole.AI : SharedMessageRole.USER) as SharedMessageRole,
       content: m.content,
@@ -222,10 +224,10 @@ export async function openOrGetActiveSubChat(input: OpenSubChatInput): Promise<S
     orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
     select: SUBCHAT_SELECT,
   })) as unknown as SubchatConversation[];
-  const match = active.find((c) => {
+  const match = active.find(c => {
     if (input.anchorKind === Stage4SubChatAnchor.PROPOSAL_REFINEMENT) return c.anchorProposalId === anchorId;
     if (input.anchorKind === Stage4SubChatAnchor.NEEDS_BRAINSTORM) {
-      const anchored = c.messages.find((m) => m.refiningNeedId)?.refiningNeedId ?? null;
+      const anchored = c.messages.find(m => m.refiningNeedId)?.refiningNeedId ?? null;
       return anchored === anchorId || (anchored === null && c.messages.length === 0);
     }
     return true;
@@ -236,11 +238,12 @@ export async function openOrGetActiveSubChat(input: OpenSubChatInput): Promise<S
   // the session (NEEDS_BRAINSTORM) or a visible proposal (PROPOSAL_REFINEMENT).
   const anchorNeed =
     input.anchorKind === Stage4SubChatAnchor.NEEDS_BRAINSTORM && anchorId
-      ? (await loadStage4Needs(input.sessionId, participant.id)).find((n) => n.id === anchorId)
+      ? (await loadStage4Needs(input.sessionId, participant.id)).find(n => n.id === anchorId)
       : undefined;
-  if (input.anchorKind === Stage4SubChatAnchor.NEEDS_BRAINSTORM && anchorId && !anchorNeed) throw new SubChatNotFoundError();
+  if (input.anchorKind === Stage4SubChatAnchor.NEEDS_BRAINSTORM && anchorId && !anchorNeed)
+    throw new SubChatNotFoundError();
   if (input.anchorKind === Stage4SubChatAnchor.PROPOSAL_REFINEMENT && anchorId) {
-    const visible = (await loadProposals(input.sessionId, participant.id)).some((p) => p.id === anchorId);
+    const visible = (await loadProposals(input.sessionId, participant.id)).some(p => p.id === anchorId);
     if (!visible) throw new SubChatNotFoundError();
   }
 
@@ -317,12 +320,12 @@ export async function loadAnchorContext(
 ): Promise<AnchorContext> {
   if (anchorKind === Stage4SubChatAnchor.NEEDS_BRAINSTORM && anchorId) {
     const needs = viewerParticipantId ? await loadStage4Needs(sessionId, viewerParticipantId) : [];
-    return { anchorKind, needLabel: needs.find((n) => n.id === anchorId)?.label ?? null };
+    return { anchorKind, needLabel: needs.find(n => n.id === anchorId)?.label ?? null };
   }
   if (anchorKind === Stage4SubChatAnchor.PROPOSAL_REFINEMENT && anchorId) {
     // Only a proposal the participant may see (spec §1.4 proposal RLS arm).
     const proposal = viewerParticipantId
-      ? (await loadProposals(sessionId, viewerParticipantId)).find((p) => p.id === anchorId)
+      ? (await loadProposals(sessionId, viewerParticipantId)).find(p => p.id === anchorId)
       : undefined;
     return { anchorKind, proposalDescription: proposal?.description ?? null };
   }
@@ -375,16 +378,16 @@ export async function buildSystemPrompt(input: PromptBuildInput): Promise<BuiltP
     : [[], [], []];
 
   const mainChatTranscript = conversationMessages
-    .map((m) => `${m.role === 'USER' ? 'USER' : 'AI'}: ${m.content}`)
+    .map(m => `${m.role === 'USER' ? 'USER' : 'AI'}: ${m.content}`)
     .join('\n\n');
 
-  const active = proposals.filter((p) => p.status === 'ACTIVE');
+  const active = proposals.filter(p => p.status === 'ACTIVE');
   const inventoryBlock = active.length
     ? active
-        .map((p) => {
+        .map(p => {
           const stances = choices
-            .filter((s) => s.proposalId === p.id)
-            .map((s) => `${s.participantId === participant?.id ? 'self' : 'partner'}=${s.decision}`)
+            .filter(s => s.proposalId === p.id)
+            .map(s => `${s.participantId === participant?.id ? 'self' : 'partner'}=${s.decision}`)
             .join(', ');
           return `- [${p.kind}] ${p.description}${stances ? ` (stances: ${stances})` : ''}`;
         })
@@ -446,7 +449,7 @@ export async function appendUserMessageAndRespond(input: SendMessageInput): Prom
   });
 
   const llmMessages = [
-    ...record.messages.map((m) => ({
+    ...record.messages.map(m => ({
       role: (m.role === SharedMessageRole.AI ? 'assistant' : 'user') as 'user' | 'assistant',
       content: m.content,
     })),
@@ -515,8 +518,8 @@ export async function resolveSubChat(input: ResolveInput): Promise<ResolveResult
   const anchorNeedId = record.anchorKind === Stage4SubChatAnchor.NEEDS_BRAINSTORM ? record.anchorId : null;
 
   const links: Array<{ proposalId: string; labels: string[] | undefined; extraNeedIds: string[] }> = [];
-  const editable = new Set((await loadProposals(sessionId, me)).map((p) => p.id));
-  await prisma.$transaction(async (tx) => {
+  const editable = new Set((await loadProposals(sessionId, me)).map(p => p.id));
+  await prisma.$transaction(async tx => {
     for (const draft of accepted) {
       const created = await tx.proposal.create({
         data: {
@@ -532,7 +535,11 @@ export async function resolveSubChat(input: ResolveInput): Promise<ResolveResult
         select: { id: true },
       });
       createdIds.push(created.id);
-      links.push({ proposalId: created.id, labels: draft.needsAddressed, extraNeedIds: anchorNeedId ? [anchorNeedId] : [] });
+      links.push({
+        proposalId: created.id,
+        labels: draft.needsAddressed,
+        extraNeedIds: anchorNeedId ? [anchorNeedId] : [],
+      });
     }
 
     for (const draft of updated) {

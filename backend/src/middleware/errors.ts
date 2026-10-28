@@ -19,7 +19,7 @@ export class AppError extends Error {
     public code: ErrorCode,
     message: string,
     public statusCode: number = 500,
-    public details?: Record<string, unknown>
+    public details?: Record<string, unknown>,
   ) {
     super(message);
     this.name = 'AppError';
@@ -108,7 +108,7 @@ export function errorHandler(
   req: Request,
   res: Response,
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  _next: NextFunction
+  _next: NextFunction,
 ): void {
   // A Postgres constraint violation carries the offending row (or key values)
   // in its detail. Classify it from the safe fields only, before anything is
@@ -191,10 +191,7 @@ export function errorHandler(
     success: false,
     error: {
       code: ErrorCode.INTERNAL_ERROR,
-      message:
-        process.env.NODE_ENV === 'production'
-          ? 'An unexpected error occurred'
-          : scrubPgDetail(err.message),
+      message: process.env.NODE_ENV === 'production' ? 'An unexpected error occurred' : scrubPgDetail(err.message),
     },
   };
   res.status(500).json(response);
@@ -342,11 +339,7 @@ function safeStack(err: Error, safeMessage: string): string | undefined {
 
 /** Prisma's error for a value Postgres rejects as a uuid ("invalid input syntax for type uuid"). */
 export function isMalformedIdError(err: unknown): boolean {
-  return (
-    err instanceof Prisma.PrismaClientKnownRequestError &&
-    err.code === 'P2007' &&
-    /type uuid/.test(err.message)
-  );
+  return err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2007' && /type uuid/.test(err.message);
 }
 
 /**
@@ -367,7 +360,7 @@ export function notFoundHandler(req: Request, res: Response): void {
  * Async handler wrapper to catch async errors
  */
 export function asyncHandler<T>(
-  fn: (req: Request, res: Response, next: NextFunction) => Promise<T>
+  fn: (req: Request, res: Response, next: NextFunction) => Promise<T>,
 ): (req: Request, res: Response, next: NextFunction) => void {
   return (req: Request, res: Response, next: NextFunction): void => {
     Promise.resolve(fn(req, res, next)).catch(next);

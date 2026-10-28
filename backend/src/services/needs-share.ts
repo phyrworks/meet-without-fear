@@ -54,7 +54,7 @@ export async function listSharedNeeds(sessionId: string): Promise<SharedNeedRow[
 
 /** The present human participants of the session who have at least one live share. */
 export async function participantsWhoShared(sessionId: string): Promise<Set<string>> {
-  return new Set((await listSharedNeeds(sessionId)).map((n) => n.participantId));
+  return new Set((await listSharedNeeds(sessionId)).map(n => n.participantId));
 }
 
 // ----------------------------------------------------------------------------
@@ -80,7 +80,7 @@ const norm = (s: string): string => s.toLowerCase().replace(/\s+/g, ' ').trim();
 /** True when `text` contains the label (or one of the evidence quotes) verbatim, case-insensitively. */
 export function carriesPrivateText(text: string, label: string, evidence: string[] = []): boolean {
   const t = norm(text);
-  return [label, ...evidence].some((p) => {
+  return [label, ...evidence].some(p => {
     const n = norm(p);
     return n.length >= 3 && t.includes(n);
   });
@@ -107,7 +107,7 @@ export async function transformNeedForSharing(need: {
   try {
     out = await getModelCompletion('haiku', {
       systemPrompt: [
-        'You rewrite one person\'s need so their partner can read it without feeling blamed.',
+        "You rewrite one person's need so their partner can read it without feeling blamed.",
         'Keep what matters to the person; remove accusation, heat and any mention of the partner.',
         'Do not quote the original wording. One short sentence, first person, no more than 12 words.',
         'Return only the sentence.',
@@ -121,7 +121,11 @@ export async function transformNeedForSharing(need: {
   } catch (error) {
     logger.warn('[transformNeedForSharing] model call failed; using the category text', { error });
   }
-  const text = out ? cleanVisibleAIText(out).replace(/^["“]|["”]$/g, '').trim() : '';
+  const text = out
+    ? cleanVisibleAIText(out)
+        .replace(/^["“]|["”]$/g, '')
+        .trim()
+    : '';
   if (!text || text.length > 200 || carriesPrivateText(text, need.label, need.evidence ?? [])) {
     return fallbackSharedText(need.label, need.category);
   }
@@ -152,7 +156,7 @@ export async function shareNeeds(args: {
   const sharedAt = new Date();
 
   // 1. The owner's decision (app connection).
-  await prisma.$transaction(async (tx) => {
+  await prisma.$transaction(async tx => {
     for (const need of args.needs) {
       const existing = await tx.consent.findFirst({
         where: { needId: need.id, participantId: args.participantId, decision: 'GRANTED' },
@@ -205,7 +209,7 @@ export async function completeNeedsSharingIfReady(sessionId: string, at: Date = 
   });
   if (humans.length < 2) return false;
   const shared = await participantsWhoShared(sessionId);
-  if (!humans.every((h) => shared.has(h.id))) return false;
+  if (!humans.every(h => shared.has(h.id))) return false;
   let wrote = false;
   for (const h of humans) {
     await reachMilestone(h.id, 'needs_validated', at);

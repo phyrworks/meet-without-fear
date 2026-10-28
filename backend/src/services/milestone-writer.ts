@@ -20,7 +20,12 @@
 import { getJobPrisma, prisma } from '../lib/prisma';
 
 /** Spec §1.1: the keys a participant may insert themselves. */
-export const SELF_ASSERTABLE_MILESTONES = ['compact_signed', 'feel_heard', 'needs_confirmed', 'choices_shared'] as const;
+export const SELF_ASSERTABLE_MILESTONES = [
+  'compact_signed',
+  'feel_heard',
+  'needs_confirmed',
+  'choices_shared',
+] as const;
 
 export function isSelfAssertable(key: string): boolean {
   return (SELF_ASSERTABLE_MILESTONES as readonly string[]).includes(key);

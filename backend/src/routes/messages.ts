@@ -23,13 +23,7 @@ import {
 const router = Router();
 
 // Send message and get AI witness response
-router.post(
-  '/sessions/:id/messages',
-  requireAuth,
-  requireSessionAccess,
-  streamingRateLimit,
-  asyncHandler(sendMessage)
-);
+router.post('/sessions/:id/messages', requireAuth, requireSessionAccess, streamingRateLimit, asyncHandler(sendMessage));
 
 // Send message with streaming AI response (SSE)
 router.post(
@@ -37,24 +31,14 @@ router.post(
   requireAuth,
   requireSessionAccess,
   streamingRateLimit,
-  asyncHandler(sendMessageStream)
+  asyncHandler(sendMessageStream),
 );
 
 // Confirm user feels heard
-router.post(
-  '/sessions/:id/feel-heard',
-  requireAuth,
-  requireSessionAccess,
-  asyncHandler(confirmFeelHeard)
-);
+router.post('/sessions/:id/feel-heard', requireAuth, requireSessionAccess, asyncHandler(confirmFeelHeard));
 
 // Get conversation history
-router.get(
-  '/sessions/:id/messages',
-  requireAuth,
-  requireSessionAccess,
-  asyncHandler(getConversationHistory)
-);
+router.get('/sessions/:id/messages', requireAuth, requireSessionAccess, asyncHandler(getConversationHistory));
 
 // Get AI-generated initial message for a session/stage
 router.post(
@@ -62,7 +46,7 @@ router.post(
   requireAuth,
   requireSessionAccess,
   streamingRateLimit,
-  asyncHandler(getInitialMessage)
+  asyncHandler(getInitialMessage),
 );
 
 export default router;

@@ -142,16 +142,21 @@ export const getPerson = asyncHandler(async (req: Request, res: Response) => {
   }
 
   // Recent mentions, newest first
-  const mentions = [...person.mentions].sort((a, b) => b.createdAt.localeCompare(a.createdAt) || b.id.localeCompare(a.id));
+  const mentions = [...person.mentions].sort(
+    (a, b) => b.createdAt.localeCompare(a.createdAt) || b.id.localeCompare(a.id),
+  );
   const recentMentions = mentions.slice(0, 20);
 
   // Mentions by source type (was a groupBy)
   const byType = new Map<string, number>();
   for (const m of mentions) byType.set(m.sourceType, (byType.get(m.sourceType) ?? 0) + 1);
-  const topContexts = [...byType].map(([sourceType, count]) => ({ sourceType: sourceType as MentionSourceType, count }));
+  const topContexts = [...byType].map(([sourceType, count]) => ({
+    sourceType: sourceType as MentionSourceType,
+    count,
+  }));
 
   // Calculate average sentiment
-  const sentimentMentions = recentMentions.filter((m) => m.sentiment !== null);
+  const sentimentMentions = recentMentions.filter(m => m.sentiment !== null);
   const avgSentiment =
     sentimentMentions.length > 0
       ? sentimentMentions.reduce((sum, m) => sum + (m.sentiment ?? 0), 0) / sentimentMentions.length
@@ -163,7 +168,7 @@ export const getPerson = asyncHandler(async (req: Request, res: Response) => {
   // Reflections where this person is mentioned (KNOW-02, INTEL-02) — the caller's own only
   // (a mention's sourceId is free text in the document; only a uuid can name a reflection)
   const sessionIds = [
-    ...new Set(mentions.filter((m) => m.sourceType === 'INNER_THOUGHTS' && UUID.test(m.sourceId)).map((m) => m.sourceId)),
+    ...new Set(mentions.filter(m => m.sourceType === 'INNER_THOUGHTS' && UUID.test(m.sourceId)).map(m => m.sourceId)),
   ];
   const mentionedSessions =
     sessionIds.length > 0
@@ -186,7 +191,7 @@ export const getPerson = asyncHandler(async (req: Request, res: Response) => {
       needsConnections,
       averageSentiment: avgSentiment,
     },
-    sessions: mentionedSessions.map((s) => ({
+    sessions: mentionedSessions.map(s => ({
       sessionId: s.id,
       title: s.title,
       theme: s.theme,

@@ -70,9 +70,7 @@ export interface StreamTurnAdmissionParams {
   req: Request;
 }
 
-export async function admitStreamTurn(
-  params: StreamTurnAdmissionParams
-): Promise<StreamTurnAdmissionResult> {
+export async function admitStreamTurn(params: StreamTurnAdmissionParams): Promise<StreamTurnAdmissionResult> {
   const { requestId, req } = params;
 
   const user = req.user;
@@ -153,15 +151,18 @@ export async function admitStreamTurn(
   });
   await touchParticipantActivity(participant.id, userMessage.createdAt);
   getShowActivityStatus(user.id)
-    .then((showActivityStatus) => {
+    .then(showActivityStatus => {
       if (!showActivityStatus) return;
-      return publishSessionEvent(sessionId, 'partner.activity', {
-        activeAt: userMessage.createdAt.toISOString(),
-      }, user.id);
+      return publishSessionEvent(
+        sessionId,
+        'partner.activity',
+        {
+          activeAt: userMessage.createdAt.toISOString(),
+        },
+        user.id,
+      );
     })
-    .catch((err) =>
-      logger.warn(`[sendMessageStream:${requestId}] Failed to publish partner activity:`, err)
-    );
+    .catch(err => logger.warn(`[sendMessageStream:${requestId}] Failed to publish partner activity:`, err));
   logger.info(`[sendMessageStream:${requestId}] User message created: ${userMessage.id}`);
 
   // Broadcast to Status Site

@@ -58,26 +58,24 @@ async function takeawayOf(reflectionId: string, takeawayId: string): Promise<voi
  * Returns the takeaway list and the session's `distilledAt` timestamp.
  * Returns an empty array (not 404) when no takeaways exist.
  */
-export const getTakeaways = asyncHandler(
-  async (req: Request, res: Response): Promise<void> => {
-    const user = getUser(req);
-    const session = await ownReflection(user.id, req.params.id);
+export const getTakeaways = asyncHandler(async (req: Request, res: Response): Promise<void> => {
+  const user = getUser(req);
+  const session = await ownReflection(user.id, req.params.id);
 
-    const rawTakeaways = await prisma.takeaway.findMany({
-      where: { reflectionId: session.id },
-      orderBy: { position: 'asc' },
-    });
+  const rawTakeaways = await prisma.takeaway.findMany({
+    where: { reflectionId: session.id },
+    orderBy: { position: 'asc' },
+  });
 
-    const response: ApiResponse<GetTakeawaysResponse> = {
-      success: true,
-      data: {
-        takeaways: rawTakeaways.map(mapTakeawayToDTO),
-        distilledAt: session.distilledAt?.toISOString() ?? null,
-      },
-    };
-    res.json(response);
-  }
-);
+  const response: ApiResponse<GetTakeawaysResponse> = {
+    success: true,
+    data: {
+      takeaways: rawTakeaways.map(mapTakeawayToDTO),
+      distilledAt: session.distilledAt?.toISOString() ?? null,
+    },
+  };
+  res.json(response);
+});
 
 // ============================================================================
 // PATCH /inner-thoughts/:id/takeaways/:takeawayId
@@ -89,34 +87,32 @@ export const getTakeaways = asyncHandler(
  * Changes the source from 'AI' to 'USER' to mark it as user-edited.
  * USER-sourced takeaways are preserved during re-distillation.
  */
-export const updateTakeaway = asyncHandler(
-  async (req: Request, res: Response): Promise<void> => {
-    const user = getUser(req);
-    const { id: sessionId, takeawayId } = req.params;
-    const { content } = req.body as { content?: string };
+export const updateTakeaway = asyncHandler(async (req: Request, res: Response): Promise<void> => {
+  const user = getUser(req);
+  const { id: sessionId, takeawayId } = req.params;
+  const { content } = req.body as { content?: string };
 
-    if (!content || typeof content !== 'string' || content.trim().length === 0) {
-      throw new ValidationError('content is required and must be a non-empty string');
-    }
-
-    await ownReflection(user.id, sessionId);
-    await takeawayOf(sessionId, takeawayId);
-
-    const updated = await prisma.takeaway.update({
-      where: { id: takeawayId },
-      data: {
-        content: content.trim(),
-        source: 'USER', // Mark as user-edited to preserve on re-distillation
-      },
-    });
-
-    const response: ApiResponse<UpdateTakeawayResponse> = {
-      success: true,
-      data: { takeaway: mapTakeawayToDTO(updated) },
-    };
-    res.json(response);
+  if (!content || typeof content !== 'string' || content.trim().length === 0) {
+    throw new ValidationError('content is required and must be a non-empty string');
   }
-);
+
+  await ownReflection(user.id, sessionId);
+  await takeawayOf(sessionId, takeawayId);
+
+  const updated = await prisma.takeaway.update({
+    where: { id: takeawayId },
+    data: {
+      content: content.trim(),
+      source: 'USER', // Mark as user-edited to preserve on re-distillation
+    },
+  });
+
+  const response: ApiResponse<UpdateTakeawayResponse> = {
+    success: true,
+    data: { takeaway: mapTakeawayToDTO(updated) },
+  };
+  res.json(response);
+});
 
 // ============================================================================
 // DELETE /inner-thoughts/:id/takeaways/:takeawayId
@@ -127,22 +123,20 @@ export const updateTakeaway = asyncHandler(
  *
  * Permanently removes the takeaway. Cannot be undone.
  */
-export const deleteTakeaway = asyncHandler(
-  async (req: Request, res: Response): Promise<void> => {
-    const user = getUser(req);
-    const { id: sessionId, takeawayId } = req.params;
+export const deleteTakeaway = asyncHandler(async (req: Request, res: Response): Promise<void> => {
+  const user = getUser(req);
+  const { id: sessionId, takeawayId } = req.params;
 
-    await ownReflection(user.id, sessionId);
-    await takeawayOf(sessionId, takeawayId);
+  await ownReflection(user.id, sessionId);
+  await takeawayOf(sessionId, takeawayId);
 
-    await prisma.takeaway.delete({
-      where: { id: takeawayId },
-    });
+  await prisma.takeaway.delete({
+    where: { id: takeawayId },
+  });
 
-    const response: ApiResponse<DeleteTakeawayResponse> = {
-      success: true,
-      data: { success: true },
-    };
-    res.json(response);
-  }
-);
+  const response: ApiResponse<DeleteTakeawayResponse> = {
+    success: true,
+    data: { success: true },
+  };
+  res.json(response);
+});

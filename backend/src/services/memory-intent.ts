@@ -75,11 +75,11 @@ export interface MemoryIntentResult {
 
 /**
  * Patterns that indicate user is referencing a past commitment.
- * 
+ *
  * NOTE: This is a fallback for when Haiku-based detection in context-retriever
  * fails. The primary detection happens in detectReferences() which uses Haiku
  * to catch implicit patterns like "But I thought...", "I assumed...", etc.
- * 
+ *
  * These explicit patterns are kept here as a safety net.
  */
 const COMMITMENT_PATTERNS = [
@@ -145,29 +145,29 @@ export function getStageConfig(stage: number, turnCount: number): StageMemoryCon
       // Cross-session disabled until consent UI is implemented
       return {
         threshold: 0.55,
-        maxCrossSession: 0,  // was 5
-        allowCrossSession: false,  // was true
+        maxCrossSession: 0, // was 5
+        allowCrossSession: false, // was true
         surfaceStyle: 'tentative',
       };
     case 3:
       // Cross-session disabled until consent UI is implemented
       return {
-        threshold: 0.50,
-        maxCrossSession: 0,  // was 10
-        allowCrossSession: false,  // was true
+        threshold: 0.5,
+        maxCrossSession: 0, // was 10
+        allowCrossSession: false, // was true
         surfaceStyle: 'explicit',
       };
     case 4:
       // Cross-session disabled until consent UI is implemented
       return {
-        threshold: 0.50,
-        maxCrossSession: 0,  // was 10
-        allowCrossSession: false,  // was true
+        threshold: 0.5,
+        maxCrossSession: 0, // was 10
+        allowCrossSession: false, // was true
         surfaceStyle: 'explicit',
       };
     default:
       return {
-        threshold: 0.60,
+        threshold: 0.6,
         maxCrossSession: 3,
         allowCrossSession: false,
         surfaceStyle: 'silent',
@@ -185,7 +185,7 @@ export function getStageConfig(stage: number, turnCount: number): StageMemoryCon
 function buildResult(
   base: { intent: MemoryIntent; depth: RetrievalDepth; reason: string },
   stageConfig: StageMemoryConfig,
-  overrides?: Partial<StageMemoryConfig>
+  overrides?: Partial<StageMemoryConfig>,
 ): MemoryIntentResult {
   return {
     ...base,
@@ -201,9 +201,7 @@ function buildResult(
  *
  * This is called BEFORE any retrieval to set the scope and depth.
  */
-export function determineMemoryIntent(
-  context: MemoryIntentContext
-): MemoryIntentResult {
+export function determineMemoryIntent(context: MemoryIntentContext): MemoryIntentResult {
   const { stage, emotionalIntensity, userMessage, turnCount, sessionDurationMinutes, isFirstTurnInSession } = context;
 
   // Get stage-aware config
@@ -212,7 +210,7 @@ export function determineMemoryIntent(
   // Safety first: critical distress (intensity >= 9) means avoid deep recall
   // For intensities 8-9, we use a caution flag instead of hard block to allow
   // Sonnet to use memory if it helps de-escalate
-  if (emotionalIntensity >= 9 || DISTRESS_PATTERNS.some((p) => p.test(userMessage))) {
+  if (emotionalIntensity >= 9 || DISTRESS_PATTERNS.some(p => p.test(userMessage))) {
     return buildResult(
       {
         intent: 'avoid_recall',
@@ -220,7 +218,7 @@ export function determineMemoryIntent(
         reason: 'Critical emotional distress detected - staying present without triggering past content',
       },
       stageConfig,
-      { allowCrossSession: false, maxCrossSession: 0, surfaceStyle: 'silent' }
+      { allowCrossSession: false, maxCrossSession: 0, surfaceStyle: 'silent' },
     );
   }
 
@@ -235,12 +233,12 @@ export function determineMemoryIntent(
         reason: 'High emotional intensity - focusing on validation with minimal context (caution advised)',
       },
       stageConfig,
-      { allowCrossSession: false, maxCrossSession: 0, surfaceStyle: 'silent' }
+      { allowCrossSession: false, maxCrossSession: 0, surfaceStyle: 'silent' },
     );
   }
 
   // User explicitly referencing past agreements/commitments
-  if (COMMITMENT_PATTERNS.some((p) => p.test(userMessage))) {
+  if (COMMITMENT_PATTERNS.some(p => p.test(userMessage))) {
     return buildResult(
       {
         intent: 'recall_commitment',
@@ -249,12 +247,12 @@ export function determineMemoryIntent(
       },
       stageConfig,
       // Allow cross-session when user explicitly references past
-      { allowCrossSession: true }
+      { allowCrossSession: true },
     );
   }
 
   // User trying to skip ahead
-  if (SKIP_PATTERNS.some((p) => p.test(userMessage))) {
+  if (SKIP_PATTERNS.some(p => p.test(userMessage))) {
     return buildResult(
       {
         intent: 'stage_enforcement',
@@ -262,7 +260,7 @@ export function determineMemoryIntent(
         reason: 'User attempting to skip stage - enforce process without deep recall',
       },
       stageConfig,
-      { allowCrossSession: false, maxCrossSession: 0 }
+      { allowCrossSession: false, maxCrossSession: 0 },
     );
   }
 
@@ -274,7 +272,7 @@ export function determineMemoryIntent(
         depth: 'light',
         reason: 'New session start - light continuity from previous session',
       },
-      stageConfig
+      stageConfig,
     );
   }
 
@@ -289,7 +287,7 @@ function getDefaultIntentForStage(
   stage: number,
   turnCount: number,
   emotionalIntensity: number,
-  stageConfig: StageMemoryConfig
+  stageConfig: StageMemoryConfig,
 ): MemoryIntentResult {
   switch (stage) {
     case 0:
@@ -301,7 +299,7 @@ function getDefaultIntentForStage(
           reason: 'Stage 0 - onboarding with minimal context',
         },
         stageConfig,
-        { allowCrossSession: false, maxCrossSession: 0 }
+        { allowCrossSession: false, maxCrossSession: 0 },
       );
 
     case 1:
@@ -314,7 +312,7 @@ function getDefaultIntentForStage(
             depth: 'minimal',
             reason: 'Stage 1 witnessing - prioritizing presence over recall',
           },
-          stageConfig
+          stageConfig,
         );
       }
       return buildResult(
@@ -323,7 +321,7 @@ function getDefaultIntentForStage(
           depth: 'light',
           reason: 'Stage 1 witnessing - light context for continuity',
         },
-        stageConfig
+        stageConfig,
       );
 
     case 2:
@@ -334,7 +332,7 @@ function getDefaultIntentForStage(
           depth: 'light',
           reason: 'Stage 2 perspective - context needed for empathy building',
         },
-        stageConfig
+        stageConfig,
       );
 
     case 3:
@@ -345,7 +343,7 @@ function getDefaultIntentForStage(
           depth: 'full',
           reason: 'Stage 3 What Matters - full context for needs exploration',
         },
-        stageConfig
+        stageConfig,
       );
 
     case 4:
@@ -356,7 +354,7 @@ function getDefaultIntentForStage(
           depth: 'full',
           reason: 'Stage 4 repair - full context for negotiation',
         },
-        stageConfig
+        stageConfig,
       );
 
     default:
@@ -366,7 +364,7 @@ function getDefaultIntentForStage(
           depth: 'minimal',
           reason: 'Unknown stage - defaulting to minimal recall',
         },
-        stageConfig
+        stageConfig,
       );
   }
 }
@@ -420,12 +418,12 @@ export function getTurnBufferSize(stage: number, intent: MemoryIntent): number {
     case 1:
       return 10; // was 5: more witnessing context helps emotional continuity
     case 2:
-      return 8;  // was 4: empathy building benefits from more shared context
+      return 8; // was 4: empathy building benefits from more shared context
     case 3:
-      return 8;  // was 4: need mapping benefits from seeing the full arc
+      return 8; // was 4: need mapping benefits from seeing the full arc
     case 4:
       return 10; // was 5: negotiation needs full context for agreements
     default:
-      return 8;  // was 4
+      return 8; // was 4
   }
 }

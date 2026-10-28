@@ -21,10 +21,7 @@ import { contentHash } from './content-hash';
 
 /** The subset of Prisma's Message delegate this probe needs. */
 export interface MessageFindFirstDelegate {
-  findFirst(args: {
-    where: Record<string, unknown>;
-    select: { id: true };
-  }): Promise<{ id: string } | null>;
+  findFirst(args: { where: Record<string, unknown>; select: { id: true } }): Promise<{ id: string } | null>;
 }
 
 export interface MessageContentCriteria {

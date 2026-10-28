@@ -113,9 +113,9 @@ Does this memory request conflict with therapeutic values?`;
 
   // Use circuit breaker to prevent slow Haiku calls from blocking the response
   // If validation times out, reject to be safe (fail-secure)
-  const fallbackResult: ValidationResult = { 
-    valid: false, 
-    reason: 'Unable to validate this memory request. Please try again.' 
+  const fallbackResult: ValidationResult = {
+    valid: false,
+    reason: 'Unable to validate this memory request. Please try again.',
   };
 
   const response = await withHaikuCircuitBreaker(
@@ -131,7 +131,7 @@ Does this memory request conflict with therapeutic values?`;
       });
     },
     null, // Fallback to null if timeout/failure
-    'memory-validation'
+    'memory-validation',
   );
 
   if (!response) {

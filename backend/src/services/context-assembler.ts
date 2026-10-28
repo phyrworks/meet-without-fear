@@ -260,7 +260,12 @@ export interface SharedVessel {
     sharedAt: Date;
   }>;
   /** Reconciler guidance about attempts this participant AUTHORED — abstract hints only (P3 D8a). */
-  guidance: Array<{ areaHint: string | null; guidanceType: string | null; promptSeed: string | null; iteration: number }>;
+  guidance: Array<{
+    areaHint: string | null;
+    guidanceType: string | null;
+    promptSeed: string | null;
+    iteration: number;
+  }>;
 }
 
 /** The bundle for one participant, plus the shared vessel and its two prompt renderings. */
@@ -278,10 +283,7 @@ async function buildSharedVessel(me: { id: string; sessionId: string }): Promise
   const [attempts, offers, needs, guidance] = await Promise.all([
     prisma.empathyAttempt.findMany({
       where: {
-        OR: [
-          { authorParticipantId: me.id },
-          { subjectParticipantId: me.id, revealedAt: { not: null } },
-        ],
+        OR: [{ authorParticipantId: me.id }, { subjectParticipantId: me.id, revealedAt: { not: null } }],
       },
       orderBy: [{ submittedAt: 'asc' }, { id: 'asc' }],
       select: {
@@ -318,7 +320,12 @@ async function buildSharedVessel(me: { id: string; sessionId: string }): Promise
     prisma.reconcilerGuidance.findMany({
       where: { authorParticipantId: me.id },
       orderBy: { createdAt: 'asc' },
-      select: { areaHint: true, guidanceType: true, promptSeed: true, result: { select: { iteration: true, supersededAt: true } } },
+      select: {
+        areaHint: true,
+        guidanceType: true,
+        promptSeed: true,
+        result: { select: { iteration: true, supersededAt: true } },
+      },
     }),
   ]);
 
@@ -352,7 +359,12 @@ async function buildSharedVessel(me: { id: string; sessionId: string }): Promise
     })),
     guidance: guidance
       .filter(g => g.result.supersededAt === null)
-      .map(g => ({ areaHint: g.areaHint, guidanceType: g.guidanceType, promptSeed: g.promptSeed, iteration: g.result.iteration })),
+      .map(g => ({
+        areaHint: g.areaHint,
+        guidanceType: g.guidanceType,
+        promptSeed: g.promptSeed,
+        iteration: g.result.iteration,
+      })),
   };
 }
 
@@ -425,7 +437,10 @@ export function formatSharedContentHistory(vessel: SharedVessel): string | null 
   }
   if (items.length === 0) return null;
   items.sort((a, b) => a.at.getTime() - b.at.getTime());
-  return ['## What has been shared in this conversation:', ...items.map(i => `- [${i.at.toISOString()}] ${i.who} ${i.line}`)].join('\n');
+  return [
+    '## What has been shared in this conversation:',
+    ...items.map(i => `- [${i.at.toISOString()}] ${i.who} ${i.line}`),
+  ].join('\n');
 }
 
 /**
@@ -439,7 +454,8 @@ export function formatMilestoneContext(input: {
   milestones: MilestoneReached[];
 }): string | null {
   const lines: Array<{ label: string; at: Date }> = [];
-  if (input.isInviter && input.invitationConfirmedAt) lines.push({ label: 'Invitation ready', at: input.invitationConfirmedAt });
+  if (input.isInviter && input.invitationConfirmedAt)
+    lines.push({ label: 'Invitation ready', at: input.invitationConfirmedAt });
   if (input.invitationAcceptedAt) {
     lines.push({
       label: input.isInviter ? 'Partner accepted invitation' : 'You accepted the invitation',
@@ -512,7 +528,10 @@ export async function buildContextForParticipant(
   // Names. The partner MUST be named by the nickname this participant gave
   // them (relationship_member.nickname), then the co-participant's display name.
   const partner = coParticipants.find(c => c.kind === 'human' && !c.leftAt) ?? coParticipants[0];
-  const userName = me.displayName || (await prisma.user.findUnique({ where: { id: userId }, select: { name: true } }))?.name || 'there';
+  const userName =
+    me.displayName ||
+    (await prisma.user.findUnique({ where: { id: userId }, select: { name: true } }))?.name ||
+    'there';
   const partnerName = session.relationship.members[0]?.nickname || partner?.displayName || 'your partner';
 
   const turnBufferSize = getTurnBufferSize(stage, intent.intent);
@@ -520,7 +539,9 @@ export async function buildContextForParticipant(
 
   const [emotionalThread, priorThemes, sessionSummary, userMemories, aiMemory, sharedVessel] = await Promise.all([
     buildEmotionalThread(me.id, depth),
-    depth === 'full' || depth === 'light' ? buildPriorThemes(me.sessionId, session.relationshipId) : Promise.resolve(undefined),
+    depth === 'full' || depth === 'light'
+      ? buildPriorThemes(me.sessionId, session.relationshipId)
+      : Promise.resolve(undefined),
     depth !== 'none' ? buildSessionSummary(me.sessionId, userId) : Promise.resolve(undefined),
     buildUserMemoriesContext(userId, me.sessionId),
     loadAiMemory(me.id),
@@ -529,10 +550,13 @@ export async function buildContextForParticipant(
 
   const conversationContext = buildConversationContext(ownMessages, turnBufferSize, depth);
   const finalInnerThoughts =
-    depth === 'full' || depth === 'light' ? await buildInnerThoughtsContext(me.sessionId, userId, conversationContext) : undefined;
+    depth === 'full' || depth === 'light'
+      ? await buildInnerThoughtsContext(me.sessionId, userId, conversationContext)
+      : undefined;
 
-  const lastUserTurnAt = [...ownMessages].reverse().find(m => m.senderParticipantId === me.id && m.role === 'USER' && m.kind === 'CHAT')
-    ?.createdAt;
+  const lastUserTurnAt = [...ownMessages]
+    .reverse()
+    .find(m => m.senderParticipantId === me.id && m.role === 'USER' && m.kind === 'CHAT')?.createdAt;
 
   logger.info(
     `[Context Assembler] buildContextForParticipant: participant=${me.id}, notableFacts=${aiMemory.notableFacts ? `${aiMemory.notableFacts.length} facts` : 'undefined'}`,
@@ -711,7 +735,12 @@ function buildPriorStageSummaries(
 
 /** Emotional thread from the participant's own mood readings. */
 async function buildEmotionalThread(participantId: string, depth: RetrievalDepth): Promise<EmotionalThread> {
-  const empty: EmotionalThread = { initialIntensity: null, currentIntensity: null, trend: 'unknown', notableShifts: [] };
+  const empty: EmotionalThread = {
+    initialIntensity: null,
+    currentIntensity: null,
+    trend: 'unknown',
+    notableShifts: [],
+  };
   if (depth === 'none') return empty;
   const readings = await prisma.moodReading.findMany({
     where: { participantId },

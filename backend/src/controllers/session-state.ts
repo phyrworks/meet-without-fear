@@ -231,7 +231,8 @@ export async function getSessionState(req: Request, res: Response): Promise<void
 
     // Partner display name
     // A partner who left (account deletion, leaving) shows no name (TS-12, R5).
-    const partnerLeft = !!partnerMember && (await departedParticipantUsers([sessionId])).has(`${sessionId}:${partnerMember.userId}`);
+    const partnerLeft =
+      !!partnerMember && (await departedParticipantUsers([sessionId])).has(`${sessionId}:${partnerMember.userId}`);
     const partnerDisplayName = partnerLeft
       ? null
       : myMember?.nickname || partnerMember?.user.firstName || partnerMember?.user.name || null;

@@ -45,17 +45,12 @@ const MAX_GLOBAL_FACTS = 50;
 /**
  * Build prompt for Haiku to consolidate facts.
  */
-function buildConsolidationPrompt(
-  existingGlobalFacts: CategorizedFact[],
-  newSessionFacts: CategorizedFact[]
-): string {
-  const existingText = existingGlobalFacts.length > 0
-    ? existingGlobalFacts.map((f) => `[${f.category}] ${f.fact}`).join('\n')
-    : '(none)';
+function buildConsolidationPrompt(existingGlobalFacts: CategorizedFact[], newSessionFacts: CategorizedFact[]): string {
+  const existingText =
+    existingGlobalFacts.length > 0 ? existingGlobalFacts.map(f => `[${f.category}] ${f.fact}`).join('\n') : '(none)';
 
-  const newText = newSessionFacts.length > 0
-    ? newSessionFacts.map((f) => `[${f.category}] ${f.fact}`).join('\n')
-    : '(none)';
+  const newText =
+    newSessionFacts.length > 0 ? newSessionFacts.map(f => `[${f.category}] ${f.fact}`).join('\n') : '(none)';
 
   return `Consolidate these facts into a unified user profile. Maximum ${MAX_GLOBAL_FACTS} facts.
 
@@ -114,7 +109,7 @@ function normalizeConsolidationResult(raw: unknown): CategorizedFact[] {
 export async function consolidateGlobalFacts(
   userId: string,
   sessionId: string,
-  turnId: string
+  turnId: string,
 ): Promise<GlobalFacts | null> {
   const logPrefix = '[GlobalMemory]';
 
@@ -163,7 +158,7 @@ export async function consolidateGlobalFacts(
           });
         },
         null,
-        'global-facts-consolidation'
+        'global-facts-consolidation',
       );
 
       if (!result) {

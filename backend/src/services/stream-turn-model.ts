@@ -20,11 +20,7 @@
  */
 
 import { logger } from '../lib/logger';
-import {
-  getModelCompletionWithTools,
-  getSonnetStreamingResponse,
-  BrainActivityCallType,
-} from '../lib/bedrock';
+import { getModelCompletionWithTools, getSonnetStreamingResponse, BrainActivityCallType } from '../lib/bedrock';
 import { parseMicroTagResponse } from '../utils/micro-tag-parser';
 import {
   getToolsForStage,
@@ -60,9 +56,7 @@ export interface StreamTurnModelResult {
   captured: CapturedHiddenTags;
 }
 
-export async function runStreamTurnModel(
-  params: StreamTurnModelParams
-): Promise<StreamTurnModelResult> {
+export async function runStreamTurnModel(params: StreamTurnModelParams): Promise<StreamTurnModelResult> {
   const {
     requestId,
     sessionId,
@@ -83,8 +77,8 @@ export async function runStreamTurnModel(
   // streaming with late-tag buffering) lives in StreamTagSanitizer; this
   // service only routes deltas through it and emits what it returns.
   const sanitizer = new StreamTagSanitizer({
-    info: (message) => logger.info(`[sendMessageStream:${requestId}] ${message}`),
-    warn: (message) => logger.warn(`[sendMessageStream:${requestId}] ${message}`),
+    info: message => logger.info(`[sendMessageStream:${requestId}] ${message}`),
+    warn: message => logger.warn(`[sendMessageStream:${requestId}] ${message}`),
   });
 
   const stateCapturePrompt = {
@@ -104,7 +98,7 @@ Call update_session_state with any persisted state required by the latest user t
     operation: 'structured-state-capture',
     callType: BrainActivityCallType.ORCHESTRATED_RESPONSE,
   });
-  const sessionStateTool = stateCapture?.toolInvocations.find((tool) => tool.name === SESSION_STATE_TOOL_NAME);
+  const sessionStateTool = stateCapture?.toolInvocations.find(tool => tool.name === SESSION_STATE_TOOL_NAME);
   if (sessionStateTool) {
     metadata = { ...metadata, ...parseSessionStateToolInput(sessionStateTool.input) };
     logger.info(`[sendMessageStream:${requestId}] [PRESTREAM TOOL ${sessionStateTool.name}]:`, {
@@ -120,14 +114,21 @@ Call update_session_state with any persisted state required by the latest user t
     const parsedStateFallback = parseMicroTagResponse(stateCapture.text);
     metadata.offerFeelHeardCheck = parsedStateFallback.offerFeelHeardCheck;
     metadata.offerReadyToShare = parsedStateFallback.offerReadyToShare;
-    if (currentStage === 3 && parsedStateFallback.proposedNeed) metadata.proposedNeed = parsedStateFallback.proposedNeed;
+    if (currentStage === 3 && parsedStateFallback.proposedNeed)
+      metadata.proposedNeed = parsedStateFallback.proposedNeed;
     if (currentStage === 3 && parsedStateFallback.needAction) metadata.needAction = parsedStateFallback.needAction;
-    if (currentStage === 3 && parsedStateFallback.proposedNeeds.length > 0) metadata.proposedNeeds = parsedStateFallback.proposedNeeds;
-    if (currentStage === 4 && parsedStateFallback.stage4ProposalBlockPresent) metadata.stage4Proposals = parsedStateFallback.stage4Proposals;
-    if (currentStage === 4 && parsedStateFallback.stage4WalkthroughAction) metadata.stage4WalkthroughAction = parsedStateFallback.stage4WalkthroughAction;
-    if ((currentStage === 0 || isInvitationPhase) && parsedStateFallback.topicFrame) metadata.topicFrame = parsedStateFallback.topicFrame;
+    if (currentStage === 3 && parsedStateFallback.proposedNeeds.length > 0)
+      metadata.proposedNeeds = parsedStateFallback.proposedNeeds;
+    if (currentStage === 4 && parsedStateFallback.stage4ProposalBlockPresent)
+      metadata.stage4Proposals = parsedStateFallback.stage4Proposals;
+    if (currentStage === 4 && parsedStateFallback.stage4WalkthroughAction)
+      metadata.stage4WalkthroughAction = parsedStateFallback.stage4WalkthroughAction;
+    if ((currentStage === 0 || isInvitationPhase) && parsedStateFallback.topicFrame)
+      metadata.topicFrame = parsedStateFallback.topicFrame;
     if (currentStage === 2 && parsedStateFallback.draft) metadata.proposedEmpathyStatement = parsedStateFallback.draft;
-    logger.warn(`[sendMessageStream:${requestId}] Structured state capture returned text without tool; parsed legacy fallback.`);
+    logger.warn(
+      `[sendMessageStream:${requestId}] Structured state capture returned text without tool; parsed legacy fallback.`,
+    );
   }
 
   const visiblePrompt = {
@@ -137,15 +138,15 @@ Call update_session_state with any persisted state required by the latest user t
 VISIBLE RESPONSE PASS:
 Persisted state has already been captured for this turn. The update_session_state tool is intentionally unavailable now. Ignore any instruction to call it in this pass.
 Captured state summary for your private context: ${JSON.stringify({
-  topicFrame: metadata.topicFrame,
-  offerFeelHeardCheck: metadata.offerFeelHeardCheck,
-  offerReadyToShare: metadata.offerReadyToShare,
-  proposedEmpathyStatement: metadata.proposedEmpathyStatement ? '[captured]' : undefined,
-  proposedNeed: metadata.proposedNeed,
-  needAction: metadata.needAction,
-  stage4ProposalCount: metadata.stage4Proposals?.length,
-  stage4WalkthroughAction: metadata.stage4WalkthroughAction,
-})}
+      topicFrame: metadata.topicFrame,
+      offerFeelHeardCheck: metadata.offerFeelHeardCheck,
+      offerReadyToShare: metadata.offerReadyToShare,
+      proposedEmpathyStatement: metadata.proposedEmpathyStatement ? '[captured]' : undefined,
+      proposedNeed: metadata.proposedNeed,
+      needAction: metadata.needAction,
+      stage4ProposalCount: metadata.stage4Proposals?.length,
+      stage4WalkthroughAction: metadata.stage4WalkthroughAction,
+    })}
 Write only the user-facing conversational response. Do not include tool JSON, XML tags beyond the normal hidden <thinking> protocol, or state summaries.`,
   };
   const streamGenerator = getSonnetStreamingResponse({
@@ -176,9 +177,9 @@ Write only the user-facing conversational response. Do not include tool JSON, XM
     // Strip ALL semantic tags as defense-in-depth (thinking trap should catch these,
     // but this prevents leaks if the trap fails due to stream errors or chunk splitting)
     let cleanText = text
-      .replace(/<thinking>[\s\S]*?<\/thinking>/gi, '')  // Complete thinking blocks
-      .replace(/<thinking>[\s\S]*/gi, '')                // Unclosed thinking (strip to end)
-      .replace(/<\/thinking>/gi, '')                     // Orphaned closing tag
+      .replace(/<thinking>[\s\S]*?<\/thinking>/gi, '') // Complete thinking blocks
+      .replace(/<thinking>[\s\S]*/gi, '') // Unclosed thinking (strip to end)
+      .replace(/<\/thinking>/gi, '') // Orphaned closing tag
       .replace(/<draft>[\s\S]*?<\/draft>/gi, '')
       .replace(/<need>[\s\S]*?<\/need>/gi, '')
       .replace(/<need-action\b[^>]*>[\s\S]*?<\/need-action>/gi, '')
@@ -223,7 +224,9 @@ Write only the user-facing conversational response. Do not include tool JSON, XM
         thinkingEndTime === null
       ) {
         thinkingEndTime = Date.now();
-        logger.info(`[sendMessageStream:${requestId}] [TIMING] Thinking phase complete at ${thinkingEndTime - streamStartTime}ms`);
+        logger.info(
+          `[sendMessageStream:${requestId}] [TIMING] Thinking phase complete at ${thinkingEndTime - streamStartTime}ms`,
+        );
       }
     }
     if (event.type === 'tool_use') {
@@ -262,11 +265,13 @@ Write only the user-facing conversational response. Do not include tool JSON, XM
   sendCleanText(sanitizer.flush());
 
   const streamEndTime = Date.now();
-  logger.info(`[sendMessageStream:${requestId}] [TIMING] Stream complete:`,
+  logger.info(
+    `[sendMessageStream:${requestId}] [TIMING] Stream complete:`,
     `total=${streamEndTime - streamStartTime}ms`,
     `thinkingEnd=${thinkingEndTime ? thinkingEndTime - streamStartTime : 'none'}ms`,
     `firstVisibleChunk=${firstChunkTime ? firstChunkTime - streamStartTime : 'none'}ms`,
-    `lastChunk=${lastChunkTime ? lastChunkTime - streamStartTime : 'none'}ms`);
+    `lastChunk=${lastChunkTime ? lastChunkTime - streamStartTime : 'none'}ms`,
+  );
 
   return { accumulatedText, metadata, captured: sanitizer.captured };
 }

@@ -196,20 +196,20 @@ Does this capture what you'd like to express to them?
           {
             category: 'CONNECTION',
             need: 'To feel emotionally connected despite stress',
-            evidence: ['I want them to know I still care, even when I\'m stressed'],
+            evidence: ["I want them to know I still care, even when I'm stressed"],
             aiConfidence: 0.87,
           },
           {
             category: 'UNDERSTANDING',
             need: 'To be understood when communicating',
-            evidence: ['I feel like we\'ve just been miscommunicating'],
+            evidence: ["I feel like we've just been miscommunicating"],
             aiConfidence: 0.83,
           },
           {
             category: 'SAFETY',
             need: 'To feel safe and secure in the relationship',
             evidence: ['I just want us to be on the same page again'],
-            aiConfidence: 0.80,
+            aiConfidence: 0.8,
           },
         ],
       },

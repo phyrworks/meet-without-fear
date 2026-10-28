@@ -83,7 +83,7 @@ function mapSessionToTopicEntry(session: {
     sessionId: session.id,
     title: session.title,
     createdAt: session.createdAt.toISOString(),
-    takeaways: session.takeaways.map((t) => ({
+    takeaways: session.takeaways.map(t => ({
       id: t.id,
       content: t.content,
       theme: t.theme,
@@ -212,7 +212,9 @@ export const RECURRING_THEME_MIN_REFLECTIONS = 3;
 export const listRecurringThemes = asyncHandler(async (req: Request, res: Response) => {
   const user = getUser(req);
 
-  const themes = await prisma.$queryRaw<Array<{ theme: string; reflection_count: number; latest_updated_at: Date }>>`SELECT theme, reflection_count::int AS reflection_count, latest_updated_at
+  const themes = await prisma.$queryRaw<
+    Array<{ theme: string; reflection_count: number; latest_updated_at: Date }>
+  >`SELECT theme, reflection_count::int AS reflection_count, latest_updated_at
     FROM v_reflection_theme
     WHERE user_id = ${user.id}::uuid AND reflection_count >= ${RECURRING_THEME_MIN_REFLECTIONS}
     ORDER BY reflection_count DESC, latest_updated_at DESC, theme`;
@@ -227,7 +229,7 @@ export const listRecurringThemes = asyncHandler(async (req: Request, res: Respon
           summary: '',
           summaryAt: new Date(t.latest_updated_at).toISOString(),
           updatedAt: new Date(t.latest_updated_at).toISOString(),
-        })
+        }),
       ),
     },
   };
@@ -284,7 +286,7 @@ export const listRecentTakeaways = asyncHandler(async (req: Request, res: Respon
   const response: ApiResponse<RecentTakeawaysResponse> = {
     success: true,
     data: {
-      takeaways: takeaways.map((t) => ({
+      takeaways: takeaways.map(t => ({
         id: t.id,
         content: t.content,
         theme: t.theme,
@@ -316,10 +318,7 @@ async function linksOf(takeawayId: string) {
       orderBy: { createdAt: 'asc' },
     }),
   ]);
-  return [
-    ...outgoing.map((l) => ({ link: l, other: l.target })),
-    ...incoming.map((l) => ({ link: l, other: l.source })),
-  ];
+  return [...outgoing.map(l => ({ link: l, other: l.target })), ...incoming.map(l => ({ link: l, other: l.source }))];
 }
 
 /**
@@ -346,7 +345,7 @@ export const getTakeawayLinks = asyncHandler(async (req: Request, res: Response)
 
   // Deduplicate by linked takeaway ID (a pair could exist in both directions)
   const seen = new Set<string>();
-  const uniqueLinks = links.filter((link) => {
+  const uniqueLinks = links.filter(link => {
     if (seen.has(link.linkedTakeaway.id)) return false;
     seen.add(link.linkedTakeaway.id);
     return true;
@@ -447,7 +446,9 @@ export const deleteTakeawayLink = asyncHandler(async (req: Request, res: Respons
     throw new ValidationError('Only manually created links can be deleted');
   }
 
-  await prisma.takeawayLink.delete({ where: { sourceId_targetId: { sourceId: link.sourceId, targetId: link.targetId } } });
+  await prisma.takeawayLink.delete({
+    where: { sourceId_targetId: { sourceId: link.sourceId, targetId: link.targetId } },
+  });
 
   const response: ApiResponse<DeleteTakeawayLinkResponse> = {
     success: true,
@@ -507,7 +508,7 @@ export const getTakeawayThread = asyncHandler(async (req: Request, res: Response
     success: true,
     data: {
       root: rootDTO,
-      thread: threadItems.map((item) => ({
+      thread: threadItems.map(item => ({
         ...mapTakeawayToDTO(item.takeaway),
         sessionDate: item.takeaway.reflection.createdAt.toISOString(),
         linkType: item.linkType,
@@ -585,7 +586,7 @@ export const listActions = asyncHandler(async (req: Request, res: Response) => {
   const response: ApiResponse<ListActionsResponse> = {
     success: true,
     data: {
-      actions: takeaways.map((t) => ({
+      actions: takeaways.map(t => ({
         ...mapTakeawayToDTO(t),
         sessionDate: t.reflection.createdAt.toISOString(),
         topicTag: t.reflection.theme,

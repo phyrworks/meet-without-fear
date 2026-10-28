@@ -23,8 +23,8 @@ const SCANNER_PATH_PREFIXES = [
 
 function isScannerProbe(path: string): boolean {
   const lower = path.toLowerCase();
-  if (SCANNER_PATH_SUFFIXES.some((s) => lower.endsWith(s))) return true;
-  if (SCANNER_PATH_PREFIXES.some((p) => lower.startsWith(p))) return true;
+  if (SCANNER_PATH_SUFFIXES.some(s => lower.endsWith(s))) return true;
+  if (SCANNER_PATH_PREFIXES.some(p => lower.startsWith(p))) return true;
   return false;
 }
 

@@ -96,13 +96,14 @@ function buildClassifierPrompt(input: BackgroundClassifierInput): string {
   // Format conversation history
   const historyText = conversationHistory
     .slice(-5)
-    .map((m) => `${m.role === 'user' ? 'User' : 'AI'}: ${m.content}`)
+    .map(m => `${m.role === 'user' ? 'User' : 'AI'}: ${m.content}`)
     .join('\n');
 
   // Format existing facts if any
-  const existingFactsText = existingFacts && existingFacts.length > 0
-    ? `CURRENT NOTABLE FACTS:\n${existingFacts.map((f, i) => `${i + 1}. ${f}`).join('\n')}`
-    : 'CURRENT NOTABLE FACTS: (none yet)';
+  const existingFactsText =
+    existingFacts && existingFacts.length > 0
+      ? `CURRENT NOTABLE FACTS:\n${existingFacts.map((f, i) => `${i + 1}. ${f}`).join('\n')}`
+      : 'CURRENT NOTABLE FACTS: (none yet)';
 
   return `Analyze this Inner Thoughts conversation and provide:
 
@@ -177,9 +178,10 @@ function normalizeResult(raw: unknown): BackgroundClassifierResult {
   // Normalize memory intent
   const memoryIntent = result.memoryIntent as Record<string, unknown> | undefined;
   const category = memoryIntent?.category as string | undefined;
-  const normalizedCategory = category && VALID_CATEGORIES.includes(category.toUpperCase() as MemoryCategory)
-    ? (category.toUpperCase() as MemoryCategory)
-    : undefined;
+  const normalizedCategory =
+    category && VALID_CATEGORIES.includes(category.toUpperCase() as MemoryCategory)
+      ? (category.toUpperCase() as MemoryCategory)
+      : undefined;
 
   // Normalize notable facts to CategorizedFact[] format
   const rawFacts = result.notableFacts;
@@ -190,14 +192,16 @@ function normalizeResult(raw: unknown): BackgroundClassifierResult {
         // Validate shape: must have category and fact strings
         if (typeof f !== 'object' || f === null) return false;
         const obj = f as Record<string, unknown>;
-        return typeof obj.category === 'string' && typeof obj.fact === 'string' &&
-               obj.category.trim().length > 0 && obj.fact.trim().length > 0;
+        return (
+          typeof obj.category === 'string' &&
+          typeof obj.fact === 'string' &&
+          obj.category.trim().length > 0 &&
+          obj.fact.trim().length > 0
+        );
       })
-      .map((f) => ({
+      .map(f => ({
         // Normalize category to title case if it's a known category
-        category: VALID_FACT_CATEGORIES.find(
-          (c) => c.toLowerCase() === f.category.toLowerCase()
-        ) || f.category.trim(),
+        category: VALID_FACT_CATEGORIES.find(c => c.toLowerCase() === f.category.toLowerCase()) || f.category.trim(),
         fact: f.fact.trim(),
       }))
       .slice(0, 20); // Limit to 20 facts
@@ -221,7 +225,7 @@ function normalizeResult(raw: unknown): BackgroundClassifierResult {
       mood: (result.sessionMetadata as Record<string, unknown>)?.mood as string | undefined,
       topics: Array.isArray((result.sessionMetadata as Record<string, unknown>)?.topics)
         ? ((result.sessionMetadata as Record<string, unknown>)?.topics as string[]).filter(
-            (t): t is string => typeof t === 'string'
+            (t): t is string => typeof t === 'string',
           )
         : undefined,
     },
@@ -235,7 +239,7 @@ function normalizeResult(raw: unknown): BackgroundClassifierResult {
  * This is a fire-and-forget function - errors are logged but not thrown.
  */
 export async function runBackgroundClassifier(
-  input: BackgroundClassifierInput
+  input: BackgroundClassifierInput,
 ): Promise<BackgroundClassifierResult | null> {
   const logPrefix = '[BackgroundClassifier]';
 
@@ -276,7 +280,7 @@ Output only valid JSON.`;
         });
       },
       null,
-      'background-classifier'
+      'background-classifier',
     );
 
     if (!result) {
@@ -295,7 +299,7 @@ Output only valid JSON.`;
     // Trigger session content embedding (fire-and-forget)
     // Per fact-ledger architecture, we embed at session level after summary/facts update
     embedInnerWorkSessionContent(input.sessionId, input.turnId).catch((err: unknown) =>
-      logger.warn(`${logPrefix} Failed to embed session content:`, err)
+      logger.warn(`${logPrefix} Failed to embed session content:`, err),
     );
 
     return normalized;
@@ -311,7 +315,7 @@ Output only valid JSON.`;
  */
 export async function applyClassifierResults(
   sessionId: string,
-  results: BackgroundClassifierResult
+  results: BackgroundClassifierResult,
 ): Promise<{ memorySuggestion?: MemorySuggestion }> {
   const output: { memorySuggestion?: MemorySuggestion } = {};
 
