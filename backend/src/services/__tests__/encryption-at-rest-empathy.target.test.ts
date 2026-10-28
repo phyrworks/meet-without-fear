@@ -45,11 +45,13 @@ describeTarget(
     const asUser = <T>(userId: string, fn: () => Promise<T>): Promise<T> =>
       ctx.runWithContext({ turnId: 't', requestId: 'r', startTime: Date.now(), userId }, async () => await fn());
     const momentsCalled = (moment: string) =>
-      hook.mock.calls.filter(([e]) => (e as { moment: string }).moment === moment).map(([e, client]) => {
-        // fix round 1 (minor 6): every hook runs inside the share's transaction, which it is handed
-        expect(client).toBeDefined();
-        return e;
-      });
+      hook.mock.calls
+        .filter(([e]) => (e as { moment: string }).moment === moment)
+        .map(([e, client]) => {
+          // fix round 1 (minor 6): every hook runs inside the share's transaction, which it is handed
+          expect(client).toBeDefined();
+          return e;
+        });
     const REVISED = 'PROBE_TS13_ROUND_TWO I see you are running on empty';
 
     beforeAll(async () => {
@@ -368,15 +370,17 @@ describeTarget(
         prisma.invitation.findUnique({ where: { id: invitationId }, select: { name: true } }),
       );
       expect(inv?.name).toBe('PROBE_TS13_CAROL');
-    // R46: the decliner's reason (POST /invitations/:id/decline as Bob)
-    const declined = await http(bob, 'post', `/invitations/${invitationId}/decline`, { reason: 'PROBE_TS13_DECLINE' });
-    expect(declined.status).toBeLessThan(300);
-    await expectSealed(run, 'invitation', 'decline_reason', `id = $1`, [invitationId]);
-    const back = await asUser(ids.adaUser, () =>
-      prisma.invitation.findUnique({ where: { id: invitationId }, select: { declineReason: true } }),
-    );
-    expect(back?.declineReason).toBe('PROBE_TS13_DECLINE');
-    proven.add('invitation.decline_reason');
+      // R46: the decliner's reason (POST /invitations/:id/decline as Bob)
+      const declined = await http(bob, 'post', `/invitations/${invitationId}/decline`, {
+        reason: 'PROBE_TS13_DECLINE',
+      });
+      expect(declined.status).toBeLessThan(300);
+      await expectSealed(run, 'invitation', 'decline_reason', `id = $1`, [invitationId]);
+      const back = await asUser(ids.adaUser, () =>
+        prisma.invitation.findUnique({ where: { id: invitationId }, select: { declineReason: true } }),
+      );
+      expect(back?.declineReason).toBe('PROBE_TS13_DECLINE');
+      proven.add('invitation.decline_reason');
       await asUser(ids.adaUser, () =>
         prisma.session.update({ where: { id: sessionId }, data: { topicFrame: 'PROBE_TS13_TOPIC chores' } }),
       );

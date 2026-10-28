@@ -192,7 +192,9 @@ function violationsOf(st: RawStatement): Violation[] {
   // UPDATE t SET a = …, b = … [WHERE …] and ON CONFLICT … DO UPDATE SET …
   const sets: Array<{ table: string; body: string; conflict: boolean }> = [];
   // `UPDATE t SET`, also aliased `UPDATE t x SET` / `UPDATE t AS x SET` (fix round 1)
-  const upd = /\bUPDATE "?([a-z_]+)"?(?: (?:AS )?(?!SET\b)[a-z_]+)? SET (.*?)(?: WHERE | FROM | RETURNING |$)/i.exec(flat);
+  const upd = /\bUPDATE "?([a-z_]+)"?(?: (?:AS )?(?!SET\b)[a-z_]+)? SET (.*?)(?: WHERE | FROM | RETURNING |$)/i.exec(
+    flat,
+  );
   if (upd && !/DO UPDATE/i.test(flat.slice(0, upd.index + 9)))
     sets.push({ table: upd[1], body: upd[2], conflict: false });
   const doUpd = /DO UPDATE SET (.*?)(?: WHERE | RETURNING |$)/i.exec(flat);

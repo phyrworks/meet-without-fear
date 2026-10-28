@@ -122,7 +122,8 @@ function checkWhere(obj: ts.ObjectLiteralExpression, model: string, report: (fie
       for (const o of objectsOf(value)) {
         const nested = o.properties.filter(q => ['some', 'every', 'none', 'is', 'isNot'].includes(propName(q) ?? ''));
         if (nested.length) {
-          for (const q of nested) if (ts.isPropertyAssignment(q)) for (const n of objectsOf(q.initializer)) checkWhere(n, target, report);
+          for (const q of nested)
+            if (ts.isPropertyAssignment(q)) for (const n of objectsOf(q.initializer)) checkWhere(n, target, report);
         } else checkWhere(o, target, report);
       }
     }
@@ -142,7 +143,11 @@ function scanFile(file: string, src: string): Hit[] {
   const hits: Hit[] = [];
   const typed = new Map<string, string>(); // variable → model of its WhereInput type
   const report = (field: string, n: ts.Node) =>
-    hits.push({ site: `${file}: ${field}`, line: sf.getLineAndCharacterOfPosition(n.getStart()).line + 1, filter: n.getText().slice(0, 120) });
+    hits.push({
+      site: `${file}: ${field}`,
+      line: sf.getLineAndCharacterOfPosition(n.getStart()).line + 1,
+      filter: n.getText().slice(0, 120),
+    });
   const visit = (n: ts.Node) => {
     if (ts.isCallExpression(n) && ts.isPropertyAccessExpression(n.expression) && OPS.has(n.expression.name.text)) {
       const delegate = n.expression.expression;

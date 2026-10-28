@@ -34,7 +34,9 @@ describeTarget('encryption at rest: needs, repair and follow-up columns (FIELD_E
   const asUser = <T>(userId: string, fn: () => Promise<T>): Promise<T> =>
     ctx.runWithContext({ turnId: 't', requestId: 'r', startTime: Date.now(), userId }, async () => await fn());
   const momentsCalled = (moment: string) =>
-    hook.mock.calls.filter(([e]) => (e as { moment: string }).moment === moment).map(([e, client]) => {
+    hook.mock.calls
+      .filter(([e]) => (e as { moment: string }).moment === moment)
+      .map(([e, client]) => {
         // fix round 1 (minor 6): every hook runs inside the share's transaction, which it is handed
         expect(client).toBeDefined();
         return e;
@@ -156,7 +158,7 @@ describeTarget('encryption at rest: needs, repair and follow-up columns (FIELD_E
       description: 'PROBE_TS13_PROPOSAL take a walk on Sundays',
       needsAddressed: ['Partnership'],
       duration: 'PROBE_TS13_DURATION two weeks',
-      measureOfSuccess: 'PROBE_TS13_MEASURE we both feel rested'
+      measureOfSuccess: 'PROBE_TS13_MEASURE we both feel rested',
     });
     expect({ status: res.status, body: res.body }).toMatchObject({ status: 201 });
     const row = { id: res.body.data.strategy.id as string };
@@ -256,8 +258,12 @@ describeTarget('encryption at rest: needs, repair and follow-up columns (FIELD_E
     expect(agreements.map(a => [a.duration, a.measureOfSuccess])).toEqual([
       ['PROBE_TS13_AGREED_DURATION', 'PROBE_TS13_AGREED_MEASURE'],
     ]);
-    await expectSealed(run, 'proposal_revision', 'before', `proposal_id = $1 AND action = 'CONVERTED'`, [proposal.checkin]);
-    await expectSealed(run, 'proposal_revision', 'after', `proposal_id = $1 AND action = 'CONVERTED'`, [proposal.checkin]);
+    await expectSealed(run, 'proposal_revision', 'before', `proposal_id = $1 AND action = 'CONVERTED'`, [
+      proposal.checkin,
+    ]);
+    await expectSealed(run, 'proposal_revision', 'after', `proposal_id = $1 AND action = 'CONVERTED'`, [
+      proposal.checkin,
+    ]);
     const revision = await asUser(ids.adaUser, () =>
       prisma.proposalRevision.findFirst({
         where: { proposalId: proposal.checkin, action: 'CONVERTED' },
@@ -265,7 +271,12 @@ describeTarget('encryption at rest: needs, repair and follow-up columns (FIELD_E
       }),
     );
     expect(revision?.after).toEqual({ agreementId: result.agreementIds[0], status: 'CONVERTED_TO_AGREEMENT' });
-    for (const c of ['agreement.duration', 'agreement.measure_of_success', 'proposal_revision.before', 'proposal_revision.after'])
+    for (const c of [
+      'agreement.duration',
+      'agreement.measure_of_success',
+      'proposal_revision.before',
+      'proposal_revision.after',
+    ])
       proven.add(c);
     const closed = await asUser(ids.adaUser, () => store.loadClosure(ids.session));
     expect(closed?.summary).toEqual(expect.any(String));
@@ -313,7 +324,11 @@ describeTarget('encryption at rest: needs, repair and follow-up columns (FIELD_E
         },
         entryOutcomes: [{ tendingEntryId: shared.id, followThroughStatus: 'HAPPENED' as never }],
         reminders: [
-          { scope: 'PRIVATE' as never, remindAt: new Date(Date.now() + 86_400_000).toISOString(), note: 'PROBE_TS13_REMINDER' },
+          {
+            scope: 'PRIVATE' as never,
+            remindAt: new Date(Date.now() + 86_400_000).toISOString(),
+            note: 'PROBE_TS13_REMINDER',
+          },
         ],
       }),
     );
