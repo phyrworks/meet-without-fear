@@ -182,7 +182,8 @@ function violationsOf(st: RawStatement): Violation[] {
       }
     } else {
       for (const column of cols) {
-        if (isEncryptedColumn(table, column)) v.push({ where: at, column: `${table}.${column}`, value: 'INSERT … SELECT' });
+        if (isEncryptedColumn(table, column))
+          v.push({ where: at, column: `${table}.${column}`, value: 'INSERT … SELECT' });
       }
     }
   }
@@ -190,7 +191,8 @@ function violationsOf(st: RawStatement): Violation[] {
   // UPDATE t SET a = …, b = … [WHERE …] and ON CONFLICT … DO UPDATE SET …
   const sets: Array<{ table: string; body: string; conflict: boolean }> = [];
   const upd = /\bUPDATE "?([a-z_]+)"? SET (.*?)(?: WHERE | RETURNING |$)/i.exec(flat);
-  if (upd && !/DO UPDATE/i.test(flat.slice(0, upd.index + 9))) sets.push({ table: upd[1], body: upd[2], conflict: false });
+  if (upd && !/DO UPDATE/i.test(flat.slice(0, upd.index + 9)))
+    sets.push({ table: upd[1], body: upd[2], conflict: false });
   const doUpd = /DO UPDATE SET (.*?)(?: WHERE | RETURNING |$)/i.exec(flat);
   if (doUpd && ins) sets.push({ table: ins[1], body: doUpd[1], conflict: true });
   for (const { table, body, conflict } of sets) {
@@ -200,7 +202,8 @@ function violationsOf(st: RawStatement): Violation[] {
       const val = assignment.slice(eq + 1).trim();
       if (!isEncryptedColumn(table, column)) continue;
       if (conflict && new RegExp(`^EXCLUDED\\.${column}$`, 'i').test(val)) continue;
-      if (!encryptedBind(val, st.exprs, table, column)) v.push({ where: at, column: `${table}.${column}`, value: expr(val) });
+      if (!encryptedBind(val, st.exprs, table, column))
+        v.push({ where: at, column: `${table}.${column}`, value: expr(val) });
     }
   }
 
@@ -240,7 +243,20 @@ function encryptedReadsOf(st: RawStatement): string[] {
   const flat = st.sql.replace(/\s+/g, ' ');
   const aliases = new Map<string, string>();
   const tables: string[] = [];
-  const KEYWORDS = new Set(['on', 'where', 'join', 'left', 'inner', 'order', 'group', 'limit', 'for', 'using', 'cross', 'and']);
+  const KEYWORDS = new Set([
+    'on',
+    'where',
+    'join',
+    'left',
+    'inner',
+    'order',
+    'group',
+    'limit',
+    'for',
+    'using',
+    'cross',
+    'and',
+  ]);
   for (const m of flat.matchAll(/\b(?:FROM|JOIN|INSERT INTO|UPDATE)\s+"?([a-z_]+)"?(?:\s+(?:AS\s+)?([a-z_]+))?/gi)) {
     const table = VIEW_TABLE[m[1]] ?? m[1];
     tables.push(table);
@@ -255,7 +271,10 @@ function encryptedReadsOf(st: RawStatement): string[] {
   for (const list of lists) {
     for (const item of splitTop(list)) {
       if (item.includes('(')) continue;
-      const ref = item.replace(/\s+AS\s+.*$/i, '').replace(/::[a-z_[\]]+$/i, '').trim();
+      const ref = item
+        .replace(/\s+AS\s+.*$/i, '')
+        .replace(/::[a-z_[\]]+$/i, '')
+        .trim();
       const [q, c] = ref.includes('.') ? ref.split('.') : [null, ref];
       const candidates = q ? [aliases.get(q) ?? VIEW_TABLE[q] ?? q] : tables;
       for (const t of candidates) if (isEncryptedColumn(t, c)) out.push(`${t}.${c}`);
@@ -351,32 +370,46 @@ describe('raw SQL writers route every encrypted column through encryptColumnValu
     const st = (sql: string, exprs: string[]): RawStatement => ({ file: 'x.ts', line: 1, sql, exprs });
 
     it('flags a plaintext bind, a literal and a sub-select; passes the helper and EXCLUDED', () => {
-      expect(violationsOf(st('INSERT INTO draft (participant_id, content) VALUES ($P0::uuid, $P1)', ['p', 'text']))).toEqual([
-        { where: 'x.ts:1', column: 'draft.content', value: '${text}' },
-      ]);
+      expect(
+        violationsOf(st('INSERT INTO draft (participant_id, content) VALUES ($P0::uuid, $P1)', ['p', 'text'])),
+      ).toEqual([{ where: 'x.ts:1', column: 'draft.content', value: '${text}' }]);
       expect(
         violationsOf(
-          st('INSERT INTO draft (participant_id, content) VALUES ($P0::uuid, $P1) ON CONFLICT (x) DO UPDATE SET content = EXCLUDED.content', [
-            'p',
-            "encryptColumnValue('draft', 'content', text)",
+          st(
+            'INSERT INTO draft (participant_id, content) VALUES ($P0::uuid, $P1) ON CONFLICT (x) DO UPDATE SET content = EXCLUDED.content',
+            ['p', "encryptColumnValue('draft', 'content', text)"],
+          ),
+        ),
+      ).toEqual([]);
+      expect(
+        violationsOf(st(`INSERT INTO feature_state (user_id, doc) VALUES ($P0, '{}'::jsonb)`, ['u'])),
+      ).toHaveLength(1);
+      expect(
+        violationsOf(
+          st('INSERT INTO feature_state (user_id, doc) VALUES ($P0, $P1::jsonb)', [
+            'u',
+            "JSON.stringify(encryptColumnValue('feature_state', 'doc', {}))",
           ]),
         ),
       ).toEqual([]);
-      expect(violationsOf(st(`INSERT INTO feature_state (user_id, doc) VALUES ($P0, '{}'::jsonb)`, ['u']))).toHaveLength(1);
-      expect(
-        violationsOf(st('INSERT INTO feature_state (user_id, doc) VALUES ($P0, $P1::jsonb)', ['u', "JSON.stringify(encryptColumnValue('feature_state', 'doc', {}))"])),
-      ).toEqual([]);
       expect(violationsOf(st('UPDATE proposal SET description = $P0 WHERE id = $P1', ['d', 'id']))).toHaveLength(1);
       expect(violationsOf(st('SELECT app.need_share($P0::uuid, $P1)', ['id', 'text']))).toHaveLength(1);
-      expect(violationsOf(st("SELECT app.empathy_set_status($P0::uuid, 'REVEALED'::empathy_status, NULL::text)", ['id']))).toEqual(
-        [],
-      );
       expect(
-        violationsOf(st('SELECT app.empathy_set_status($P0::uuid, $P1::empathy_status, $P2::text)', ['id', 's', 'content'])),
+        violationsOf(st("SELECT app.empathy_set_status($P0::uuid, 'REVEALED'::empathy_status, NULL::text)", ['id'])),
+      ).toEqual([]);
+      expect(
+        violationsOf(
+          st('SELECT app.empathy_set_status($P0::uuid, $P1::empathy_status, $P2::text)', ['id', 's', 'content']),
+        ),
       ).toHaveLength(1);
       // a helper call for the wrong column does not count
       expect(
-        violationsOf(st('INSERT INTO draft (participant_id, content) VALUES ($P0, $P1)', ['p', "encryptColumnValue('need', 'label', t)"])),
+        violationsOf(
+          st('INSERT INTO draft (participant_id, content) VALUES ($P0, $P1)', [
+            'p',
+            "encryptColumnValue('need', 'label', t)",
+          ]),
+        ),
       ).toHaveLength(1);
     });
   });

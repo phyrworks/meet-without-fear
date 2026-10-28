@@ -53,9 +53,11 @@ interface RuntimeField {
   dbName?: string | null;
 }
 const base = new PrismaClient({ adapter: createPrismaPgAdapter('postgresql://nobody@127.0.0.1:1/none') });
-const dataModel = (base as unknown as {
-  _runtimeDataModel: { models: Record<string, { dbName?: string | null; fields: RuntimeField[] }> };
-})._runtimeDataModel;
+const dataModel = (
+  base as unknown as {
+    _runtimeDataModel: { models: Record<string, { dbName?: string | null; fields: RuntimeField[] }> };
+  }
+)._runtimeDataModel;
 const relations: RelationIndex = relationIndexOf(dataModel);
 
 /**
@@ -119,7 +121,10 @@ describe('SENSITIVE_FIELD_MAP — the target columns', () => {
       expect({ model, exists: Boolean(m) }).toEqual({ model, exists: true });
       expect({ model, table: m.dbName ?? model }).toEqual({ model, table });
       const rf = m.fields.find(x => x.name === field);
-      expect({ field: `${model}.${field}`, scalar: rf?.kind }).toEqual({ field: `${model}.${field}`, scalar: 'scalar' });
+      expect({ field: `${model}.${field}`, scalar: rf?.kind }).toEqual({
+        field: `${model}.${field}`,
+        scalar: 'scalar',
+      });
       expect({ field: `${model}.${field}`, column: rf?.dbName ?? field }).toEqual({
         field: `${model}.${field}`,
         column: f.column,
@@ -128,7 +133,14 @@ describe('SENSITIVE_FIELD_MAP — the target columns', () => {
       expect({ field: `${model}.${field}`, type: rf?.type }).toEqual({ field: `${model}.${field}`, type: wantType });
     }
     // none of the pre-rebuild models survives
-    for (const old of ['InnerWorkMessage', 'UserVessel', 'Boundary', 'UserDocument', 'EmpathyDraft', 'GratitudeEntry']) {
+    for (const old of [
+      'InnerWorkMessage',
+      'UserVessel',
+      'Boundary',
+      'UserDocument',
+      'EmpathyDraft',
+      'GratitudeEntry',
+    ]) {
       expect(SENSITIVE_FIELD_MAP[old]).toBeUndefined();
     }
     expect(SENSITIVE_FIELD_MAP.User).toBeUndefined();
@@ -189,7 +201,12 @@ describe('values by kind', () => {
   });
 
   it('jsonb leaves (R43): keys, numbers and array shape stay (the ai_memory CHECKs), every string leaf is sealed', () => {
-    const doc = { text: 'summary', messageCount: 12, generatedAt: '2026-10-27T00:00:00Z', facts: [{ category: 'People', fact: 'x' }] };
+    const doc = {
+      text: 'summary',
+      messageCount: 12,
+      generatedAt: '2026-10-27T00:00:00Z',
+      facts: [{ category: 'People', fact: 'x' }],
+    };
     const sealed = sealFieldValue(field('jsonb-leaves'), doc) as Record<string, unknown>;
     expect(Object.keys(sealed)).toEqual(['text', 'messageCount', 'generatedAt', 'facts']);
     expect(sealed.messageCount).toBe(12);
@@ -314,7 +331,11 @@ describe('applyFieldEncryption — model operations', () => {
         {
           id: 'c',
           messages: [{ id: 'm', content: encrypt('hello'), senderParticipant: null }],
-          participant: { id: 'p', drafts: [{ content: encrypt('draft') }], needs: [{ label: encrypt('Safety'), evidence: [encrypt('q')] }] },
+          participant: {
+            id: 'p',
+            drafts: [{ content: encrypt('draft') }],
+            needs: [{ label: encrypt('Safety'), evidence: [encrypt('q')] }],
+          },
         },
       ],
     });
@@ -409,7 +430,12 @@ describe('encryptDataFields / decryptRecordFields (exported for manual paths)', 
     for (const [model, config] of Object.entries(SENSITIVE_FIELD_MAP)) {
       const record: Record<string, unknown> = {};
       for (const [name, f] of Object.entries(config.fields)) {
-        record[name] = f.kind === 'text' ? `${model}.${name}` : f.kind === 'text[]' ? [`${model}.${name}`] : { v: `${model}.${name}` };
+        record[name] =
+          f.kind === 'text'
+            ? `${model}.${name}`
+            : f.kind === 'text[]'
+              ? [`${model}.${name}`]
+              : { v: `${model}.${name}` };
       }
       const copy = JSON.parse(JSON.stringify(record));
       encryptDataFields(record, config);

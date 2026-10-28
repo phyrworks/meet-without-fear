@@ -42,7 +42,10 @@ describeTarget('encryption at rest: user-scope columns (FIELD_ENCRYPTION_KEY set
   let prisma: typeof import('../../lib/prisma').prisma;
   let ada: { id: string; email: string };
   const asAda = <T>(fn: () => Promise<T>): Promise<T> =>
-    ctx.runWithContext({ turnId: 't', requestId: 'r', startTime: Date.now(), userId: ids.adaUser }, async () => await fn());
+    ctx.runWithContext(
+      { turnId: 't', requestId: 'r', startTime: Date.now(), userId: ids.adaUser },
+      async () => await fn(),
+    );
   const proven = new Set<string>();
 
   beforeAll(async () => {
@@ -62,9 +65,10 @@ describeTarget('encryption at rest: user-scope columns (FIELD_ENCRYPTION_KEY set
   });
 
   it('ai_memory SUMMARY (summarizer, raw INSERT as mwf_job): leaves sealed, the CHECK holds, the app reads the text', async () => {
-    const [c] = await run.sql<{ id: string }>(`SELECT id FROM conversation WHERE participant_id = $1 AND kind = 'MAIN'`, [
-      ids.ada,
-    ]);
+    const [c] = await run.sql<{ id: string }>(
+      `SELECT id FROM conversation WHERE participant_id = $1 AND kind = 'MAIN'`,
+      [ids.ada],
+    );
     for (let i = 0; i < 30; i++) {
       await run.sql(
         `INSERT INTO message (conversation_id, sender_participant_id, role, content, created_at)
@@ -162,9 +166,10 @@ describeTarget('encryption at rest: user-scope columns (FIELD_ENCRYPTION_KEY set
   });
 
   it('reflection.summary_doc (inner-thoughts summarizer, model API): an envelope the object CHECK accepts', async () => {
-    const [r] = await run.sql<{ id: string }>(`SELECT id FROM reflection WHERE user_id = $1 ORDER BY created_at LIMIT 1`, [
-      ids.adaUser,
-    ]);
+    const [r] = await run.sql<{ id: string }>(
+      `SELECT id FROM reflection WHERE user_id = $1 ORDER BY created_at LIMIT 1`,
+      [ids.adaUser],
+    );
     for (let i = 0; i < 40; i++) {
       await run.sql(
         `INSERT INTO reflection_message (reflection_id, role, content, created_at)
@@ -189,9 +194,10 @@ describeTarget('encryption at rest: user-scope columns (FIELD_ENCRYPTION_KEY set
   });
 
   it('reflection.summary / context_snapshot and takeaway.content (model API as mwf_app): sealed, read back', async () => {
-    const [r] = await run.sql<{ id: string }>(`SELECT id FROM reflection WHERE user_id = $1 ORDER BY created_at LIMIT 1`, [
-      ids.adaUser,
-    ]);
+    const [r] = await run.sql<{ id: string }>(
+      `SELECT id FROM reflection WHERE user_id = $1 ORDER BY created_at LIMIT 1`,
+      [ids.adaUser],
+    );
     await asAda(() =>
       prisma.reflection.update({
         where: { id: r.id },
@@ -225,7 +231,10 @@ describeTarget('encryption at rest: user-scope columns (FIELD_ENCRYPTION_KEY set
 
   it('user_memory.content (POST /memories as mwf_app): sealed; the duplicate probe still refuses the same text (R45)', async () => {
     const spy = jest.spyOn(bedrock, 'getHaikuJson').mockResolvedValue({ valid: true } as never);
-    const created = await http(ada, 'post', '/memories', { content: 'PROBE_TS13_MEMORY call me Ada', category: 'PERSONAL_INFO' });
+    const created = await http(ada, 'post', '/memories', {
+      content: 'PROBE_TS13_MEMORY call me Ada',
+      category: 'PERSONAL_INFO',
+    });
     expect(created.status).toBe(201);
     await expectSealed(run, 'user_memory', 'content', `id = $1`, [created.body.data.memory.id]);
     const list = await http(ada, 'get', '/memories');

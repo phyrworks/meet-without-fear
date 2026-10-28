@@ -107,7 +107,8 @@ describeTarget('encryption at rest: needs, repair and follow-up columns (FIELD_E
     expect(s4.find(n => n.id === need.id)?.sharedText).toBe(expected);
     // context-assembler.ts: the third raw reader
     const assembler = await import('../context-assembler');
-    const bundle = await asUser(ids.adaUser, () => assembler.buildContextForParticipant(ids.ada, {
+    const bundle = await asUser(ids.adaUser, () =>
+      assembler.buildContextForParticipant(ids.ada, {
         intent: {
           intent: 'stage_enforcement',
           depth: 'full',
@@ -117,7 +118,8 @@ describeTarget('encryption at rest: needs, repair and follow-up columns (FIELD_E
           allowCrossSession: false,
           surfaceStyle: 'silent',
         } as never,
-      }));
+      }),
+    );
     expect(JSON.stringify(bundle)).not.toContain('enc:v1:');
     expect(JSON.stringify(bundle)).toContain(expected);
     // W13 hook at the share moment
@@ -128,9 +130,10 @@ describeTarget('encryption at rest: needs, repair and follow-up columns (FIELD_E
   });
 
   it('need_disposition.note (model API as mwf_app; no app writer sets it today): sealed, read back', async () => {
-    const [need] = await run.sql<{ id: string }>(`SELECT need_id AS id FROM need_share WHERE participant_id = $1 LIMIT 1`, [
-      ids.ada,
-    ]);
+    const [need] = await run.sql<{ id: string }>(
+      `SELECT need_id AS id FROM need_share WHERE participant_id = $1 LIMIT 1`,
+      [ids.ada],
+    );
     await asUser(ids.adaUser, () =>
       prisma.needDisposition.upsert({
         where: { participantId_needId: { participantId: ids.ada, needId: need.id } },
@@ -159,12 +162,20 @@ describeTarget('encryption at rest: needs, repair and follow-up columns (FIELD_E
 
   it('proposal_choice.note (upsertChoice, raw INSERT as mwf_app): sealed; loadVisibleChoices (raw) decrypts; sharing calls the hook', async () => {
     await asUser(ids.bobUser, () =>
-      store.upsertChoice({ proposalId: proposal.checkin, participantId: ids.bob, decision: 'WILLING', note: 'PROBE_TS13_NOTE yes' }),
+      store.upsertChoice({
+        proposalId: proposal.checkin,
+        participantId: ids.bob,
+        decision: 'WILLING',
+        note: 'PROBE_TS13_NOTE yes',
+      }),
     );
     await asUser(ids.bobUser, () =>
       store.upsertChoice({ proposalId: proposal.pause, participantId: ids.bob, decision: 'WILLING' }),
     );
-    await expectSealed(run, 'proposal_choice', 'note', `proposal_id = $1 AND participant_id = $2`, [proposal.checkin, ids.bob]);
+    await expectSealed(run, 'proposal_choice', 'note', `proposal_id = $1 AND participant_id = $2`, [
+      proposal.checkin,
+      ids.bob,
+    ]);
     const own = await asUser(ids.bobUser, () => store.loadVisibleChoices(ids.session, ids.bob));
     expect(own.find(c => c.proposalId === proposal.checkin)?.note).toBe('PROBE_TS13_NOTE yes');
     hook.mockClear();
@@ -187,7 +198,9 @@ describeTarget('encryption at rest: needs, repair and follow-up columns (FIELD_E
       store.upsertChoice({ proposalId: proposal.pause, participantId: ids.ada, decision: 'NOT_WILLING' }),
     );
     const closure = await import('../stage4-closure');
-    const result = await asUser(ids.adaUser, () => closure.closeStage4({ sessionId: ids.session, participantId: ids.ada }));
+    const result = await asUser(ids.adaUser, () =>
+      closure.closeStage4({ sessionId: ids.session, participantId: ids.ada }),
+    );
     expect(result.agreementIds).toHaveLength(1);
     await expectSealed(run, 'agreement', 'description', `id = $1`, [result.agreementIds[0]]);
     await expectSealed(run, 'session_closure', 'summary', `session_id = $1`, [ids.session]);
@@ -214,7 +227,11 @@ describeTarget('encryption at rest: needs, repair and follow-up columns (FIELD_E
   it('follow_up_note.content (createTendingBetweenPeriodNote, model API): sealed, read back', async () => {
     const tending = await import('../tending.service');
     const note = await asUser(ids.adaUser, () =>
-      tending.createTendingBetweenPeriodNote({ sessionId: ids.session, userId: ids.adaUser, content: 'PROBE_TS13_NOTE_BETWEEN' }),
+      tending.createTendingBetweenPeriodNote({
+        sessionId: ids.session,
+        userId: ids.adaUser,
+        content: 'PROBE_TS13_NOTE_BETWEEN',
+      }),
     );
     await expectSealed(run, 'follow_up_note', 'content', `id = $1`, [note.id]);
     const notes = await asUser(ids.adaUser, () => tending.listTendingBetweenPeriodNotes(ids.session, ids.adaUser));
@@ -246,7 +263,10 @@ describeTarget('encryption at rest: needs, repair and follow-up columns (FIELD_E
     await expectSealed(run, 'follow_up_checkin', 'payload', `follow_up_id = $1`, [shared.id]);
     await expectSealed(run, 'follow_up_checkin', 'reflection_summary', `follow_up_id = $1`, [shared.id]);
     const checkin = await asUser(ids.adaUser, () =>
-      prisma.followUpCheckin.findFirst({ where: { followUpId: shared.id }, select: { payload: true, reflectionSummary: true } }),
+      prisma.followUpCheckin.findFirst({
+        where: { followUpId: shared.id },
+        select: { payload: true, reflectionSummary: true },
+      }),
     );
     expect(checkin?.reflectionSummary).toContain('PROBE_TS13_REFLECTION');
     expect(Object.keys(checkin?.payload as object).sort()).toEqual([
@@ -258,7 +278,11 @@ describeTarget('encryption at rest: needs, repair and follow-up columns (FIELD_E
       'responses',
     ]);
     expect(momentsCalled('checkin-shared-submit')).toEqual([
-      { moment: 'checkin-shared-submit', sessionId: ids.session, rows: [{ table: 'follow_up_checkin', id: expect.any(String) }] },
+      {
+        moment: 'checkin-shared-submit',
+        sessionId: ids.session,
+        rows: [{ table: 'follow_up_checkin', id: expect.any(String) }],
+      },
     ]);
     proven.add('follow_up_checkin.payload');
     proven.add('follow_up_checkin.reflection_summary');

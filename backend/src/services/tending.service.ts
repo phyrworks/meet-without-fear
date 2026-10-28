@@ -830,7 +830,11 @@ async function insertCheckin(
     // Share moment (writer-principal rule): a SHARED check-in, with the notes
     // copied into its payload, is read by the co-participant. W13 re-encrypts here.
     await reencryptForSession(
-      { moment: 'checkin-shared-submit', sessionId: args.sharedInSession, rows: [{ table: 'follow_up_checkin', id: row.id }] },
+      {
+        moment: 'checkin-shared-submit',
+        sessionId: args.sharedInSession,
+        rows: [{ table: 'follow_up_checkin', id: row.id }],
+      },
       db,
     );
   }

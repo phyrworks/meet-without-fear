@@ -187,7 +187,11 @@ export async function shareNeeds(args: {
     // need_share.shared_text is written under the session key by the job (ciphertext in; TS-13).
     await job.$executeRaw`SELECT app.need_share(${need.id}::uuid, ${encryptColumnValue('need_share', 'shared_text', text)})`;
     // Share moment (writer-principal rule): W13 re-encrypts here.
-    await reencryptForSession({ moment: 'need-share', sessionId: args.sessionId, rows: [{ table: 'need_share', id: need.id }] });
+    await reencryptForSession({
+      moment: 'need-share',
+      sessionId: args.sessionId,
+      rows: [{ table: 'need_share', id: need.id }],
+    });
   }
 
   // 3. Session-scoped completion: every present human has shared.

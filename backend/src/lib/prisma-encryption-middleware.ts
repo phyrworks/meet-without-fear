@@ -177,7 +177,10 @@ export const SENSITIVE_FIELD_MAP: Record<string, SensitiveFieldConfig> = {
       sharedContent: text('shared_content', 'session'),
     },
   },
-  Need: { table: 'need', fields: { label: text('label', 'participant'), evidence: textArray('evidence', 'participant') } },
+  Need: {
+    table: 'need',
+    fields: { label: text('label', 'participant'), evidence: textArray('evidence', 'participant') },
+  },
   NeedShare: { table: 'need_share', fields: { sharedText: text('shared_text', 'session') } },
   NeedDisposition: { table: 'need_disposition', fields: { note: text('note', 'participant') } },
   Proposal: { table: 'proposal', fields: { description: text('description', 'session') } },
@@ -379,7 +382,9 @@ function sealUpdateValue(field: EncryptedField, value: unknown): unknown {
     const out = { ...value };
     if ('set' in out) out.set = sealFieldValue(field, out.set);
     if ('push' in out) {
-      out.push = Array.isArray(out.push) ? sealFieldValue(field, out.push) : sealFieldValue({ ...field, kind: 'text' }, out.push);
+      out.push = Array.isArray(out.push)
+        ? sealFieldValue(field, out.push)
+        : sealFieldValue({ ...field, kind: 'text' }, out.push);
     }
     return out;
   }
@@ -477,7 +482,12 @@ const RESULT_BEARING_OPERATIONS = new Set([
   'updateManyAndReturn',
 ]);
 
-function encryptWriteArgs(operation: string, args: Record<string, unknown>, model: string, relations?: RelationIndex): void {
+function encryptWriteArgs(
+  operation: string,
+  args: Record<string, unknown>,
+  model: string,
+  relations?: RelationIndex,
+): void {
   const config = SENSITIVE_FIELD_MAP[model];
   const seal = (d: unknown) => {
     if (isPlainObject(d)) encryptDataFields(d, config, model, relations);
@@ -540,7 +550,9 @@ export function withEncryption(prisma: PrismaClient) {
   const dataModel = (prisma as unknown as { _runtimeDataModel?: RuntimeDataModelLike })._runtimeDataModel;
   if (!dataModel?.models) {
     // Fail closed: without the relations a nested write would store plaintext.
-    throw new Error('[FieldEncryption] the Prisma client exposes no runtime data model; nested writes cannot be encrypted');
+    throw new Error(
+      '[FieldEncryption] the Prisma client exposes no runtime data model; nested writes cannot be encrypted',
+    );
   }
   const relations = relationIndexOf(dataModel);
   return prisma.$extends({
