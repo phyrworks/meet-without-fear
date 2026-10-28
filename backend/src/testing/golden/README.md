@@ -276,6 +276,29 @@ What it took, beyond TS-9's pieces:
 | Pair checks (scenario-checks.ts) | `targetMessageStageChecks`, `targetFixtureDeltaChecks` (compact signedAt, consent targetId), `authorClosureChecks` (R6/R7 closed values), `roundAndNotificationChecks`, `mockIndexChecks` — each pinned rule's real value. |
 | Fixture names (FIDELITY) | The target writer puts the whole name in `first_name` so `name` and the display name equal the old fixture's; a split name renamed "Bob Ross" to "Bob" in every message a run writes. |
 
+### TS-12 additions (R1 reflection-never-crosses, R5 tombstone)
+
+Both verify on the target against their current-shape baselines (never re-recorded, R39); the
+other nine stay green. What it took:
+
+| Piece | What it does |
+|---|---|
+| `byteFixtureLabels` (goldenScenarioChecks → recordOrVerify `fixtureLabelsFirst`) | For a scenario that DELETES ranked rows (R5's walk deletes the leaver's conversation): every row the fixture template holds is labelled by the TEMPLATE's label, only rows new in the run by the run's. The survivors would otherwise re-rank (`<message:N>` is a global rank) and collide with the deleted rows' labels; the baseline was recorded with the fixture's ranks. A collision still fails. |
+| `byteExtraLabels` (→ `extraLabels`) | Labels for rows the scenario wrote itself and the run deleted (R5 seeds the leaver's private rows right before the deletion so every absence rule of the walk has a row to find gone); each label must be unused. |
+| `targetByteRules({ steps })` | The physical-table map for only these steps — R5's deletion step is the walk, pinned (`mayDiffer` on its `changes`) and asserted row by row against the database by the scenario. |
+| `targetFixtureDeltaChecks({ partnerLeftFromStep })` | From that step on the partner has left: their compact instant is not shown (null). |
+| `authorClosureChecks({ email })` | The author whose reads the closure pair checks (R5: Bob). |
+| `GOLDEN_DUMP_DIR=<dir>` | A verify run also writes the run's normalised result (`<scenario>.json`, `<scenario>.concept.json`) there — to read a mismatch (e.g. which instant moved a rank); never compared or committed. |
+| `pendingCluster` removed | With TS-12 no cluster is pending: the last six reads answer 200 and are compared; the rule kind, `PENDING_CLUSTER_READS` and the comparator branch are gone. |
+
+Found by running R5: TOMBSTONE_READY is a LEGACY completion (StageProgress stage 4 COMPLETED,
+rankings, no session closure). The stage shim completes Stage 4 at `closed`, so on the target
+the journey's Stage 4 is IN_PROGRESS with the migrated selection gate, and the migrated shares
+and choices fill the needs comparison and the Stage 4 state that today returned empty — pinned
+in `allow-lists/tombstone.ts` with their pairs. Found by running R1: Stage 4's
+`defaultCheckInDate` added ten days in LOCAL time and formatted in UTC, so within ten days before
+a DST change it was a day late (fixed: UTC arithmetic; stage4-state.check-in-date.test.ts).
+
 Hazard found: a test module that imports `lib/prisma` at load (here, through `stage-shim`)
 creates the app's client BEFORE the harness repoints `DATABASE_URL` — the app then reads the
 developer's database while the job writes the run database. Import such modules inside the test.
