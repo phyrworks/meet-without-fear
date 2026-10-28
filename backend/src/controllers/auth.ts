@@ -585,7 +585,7 @@ export const deleteAccount = asyncHandler(async (req: Request, res: Response): P
   const user = getUser(req);
 
   // Perform the deletion with notifications
-  const summary = await deleteAccountWithNotifications(user.id, user.name ?? user.firstName ?? 'Your partner');
+  const summary = await deleteAccountWithNotifications(user.id);
 
   const response: ApiResponse<DeleteAccountResponse> = {
     success: true,

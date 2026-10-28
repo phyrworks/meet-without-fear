@@ -66,8 +66,8 @@ export function getJobPrisma(): PrismaClient {
 }
 
 /**
- * The ops connection (`OPS_DATABASE_URL`, `mwf_ops`; falls back to
- * DATABASE_URL when unset): the read-only Neural Monitor dashboard
+ * The ops connection (`OPS_DATABASE_URL`, `mwf_ops`; REQUIRED — it fails
+ * closed when unset, never the root DATABASE_URL): the read-only Neural Monitor dashboard
  * (routes/brain.ts; TS-12). mwf_ops holds SELECT on the tables the dashboard
  * reads and nothing else (trailer T7). Created on first use.
  */

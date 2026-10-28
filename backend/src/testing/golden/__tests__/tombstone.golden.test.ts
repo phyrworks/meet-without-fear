@@ -158,10 +158,76 @@ async function seedLeaverPrivateRows(h: Harness, adaUser: string): Promise<Recor
       await one('user_memory', `INSERT INTO user_memory (user_id, content, category) VALUES ($1, $2, 'PREFERENCE') RETURNING id`, [adaUser, SEEDED_PRIVATE]);
       await one('user_key', `INSERT INTO user_key (user_id, key_id, wrapped_dek) VALUES ($1, 'ts12-user-key', '\\x00') RETURNING id`, [adaUser]);
       await one('participant_key', `INSERT INTO participant_key (participant_id, key_id, wrapped_dek) VALUES ($1, 'ts12-participant-key', '\\x00') RETURNING id`, [pid]);
+      // Fix round 1 (M5): the rest of spec §4 steps 3/5 — a regulation event, a need disposition,
+      // a follow-up note, a check-in on her INDIVIDUAL follow-up, and her reminder of it.
+      await one('regulation_event', `INSERT INTO regulation_event (participant_id, type) VALUES ($1, 'BREATHING_EXERCISE') RETURNING id`, [pid]);
+      await c.query(
+        `INSERT INTO need_disposition (participant_id, need_id, status, note)
+         SELECT $1, n.id, 'OPEN', $2 FROM need n WHERE n.participant_id = $1 AND n.label <> $2 ORDER BY n.created_at LIMIT 1`,
+        [pid, SEEDED_PRIVATE],
+      );
+      await one('follow_up_note', `INSERT INTO follow_up_note (participant_id, content) VALUES ($1, $2) RETURNING id`, [pid, SEEDED_PRIVATE]);
+      const [{ id: individual }] = (
+        await c.query<{ id: string }>(
+          `INSERT INTO follow_up (session_id, type, scope, owner_participant_id, status, scheduled_for)
+           SELECT p.session_id, 'SCHEDULED_INDIVIDUAL_COMMITMENT', 'INDIVIDUAL', p.id, 'OPEN', now() FROM participant p WHERE p.id = $1 RETURNING id`,
+          [pid],
+        )
+      ).rows;
+      labels[individual] = '<seeded:follow_up/individual>';
+      await one(
+        'follow_up_checkin/individual',
+        `INSERT INTO follow_up_checkin (follow_up_id, participant_id, payload) VALUES ($1, $2, jsonb_build_object('note', $3::text)) RETURNING id`,
+        [individual, pid, SEEDED_PRIVATE],
+      );
+      await one('reminder', `INSERT INTO reminder (user_id, follow_up_id, remind_at, note) VALUES ($1, $2, now() + interval '1 day', $3) RETURNING id`, [
+        adaUser,
+        individual,
+        SEEDED_PRIVATE,
+      ]);
     },
     h.fixture.database,
   );
   return labels;
+}
+
+
+/**
+ * Fix round 1 (M5): one count per seeded private row class of the leaver, taken right after
+ * seeding (each must be ≥ 1: the absence rules are not vacuous) and again after the walk (each
+ * must be 0 — keys: 0 live). Per row class, not an aggregate.
+ */
+const LEAVER_ROW_CENSUS: Record<string, string> = {
+  'ai_memory SUMMARY': `SELECT count(*)::int AS n FROM ai_memory m JOIN participant p ON p.id = m.participant_id WHERE p.user_id = $1 AND m.kind = 'SUMMARY'`,
+  'ai_memory GLOBAL_FACTS': `SELECT count(*)::int AS n FROM ai_memory WHERE user_id = $1 AND kind = 'GLOBAL_FACTS'`,
+  mood_reading: `SELECT count(*)::int AS n FROM mood_reading m JOIN participant p ON p.id = m.participant_id WHERE p.user_id = $1`,
+  'unshared need': `SELECT count(*)::int AS n FROM need n JOIN participant p ON p.id = n.participant_id WHERE p.user_id = $1 AND NOT EXISTS (SELECT 1 FROM need_share s WHERE s.need_id = n.id)`,
+  'unrevealed attempt': `SELECT count(*)::int AS n FROM empathy_attempt a JOIN participant p ON p.id = a.author_participant_id WHERE p.user_id = $1 AND a.revealed_at IS NULL`,
+  feature_state: `SELECT count(*)::int AS n FROM feature_state WHERE user_id = $1`,
+  user_device: `SELECT count(*)::int AS n FROM user_device WHERE user_id = $1`,
+  user_preferences: `SELECT count(*)::int AS n FROM user_preferences WHERE user_id = $1`,
+  user_memory: `SELECT count(*)::int AS n FROM user_memory WHERE user_id = $1`,
+  'live user_key': `SELECT count(*)::int AS n FROM user_key WHERE user_id = $1 AND destroyed_at IS NULL`,
+  'live participant_key': `SELECT count(*)::int AS n FROM participant_key k JOIN participant p ON p.id = k.participant_id WHERE p.user_id = $1 AND k.destroyed_at IS NULL`,
+  regulation_event: `SELECT count(*)::int AS n FROM regulation_event r JOIN participant p ON p.id = r.participant_id WHERE p.user_id = $1`,
+  need_disposition: `SELECT count(*)::int AS n FROM need_disposition d JOIN participant p ON p.id = d.participant_id WHERE p.user_id = $1`,
+  follow_up_note: `SELECT count(*)::int AS n FROM follow_up_note x JOIN participant p ON p.id = x.participant_id WHERE p.user_id = $1`,
+  'INDIVIDUAL check-in': `SELECT count(*)::int AS n FROM follow_up_checkin c JOIN follow_up f ON f.id = c.follow_up_id JOIN participant p ON p.id = c.participant_id WHERE p.user_id = $1 AND f.scope = 'INDIVIDUAL'`,
+  reminder: `SELECT count(*)::int AS n FROM reminder WHERE user_id = $1`,
+  draft: `SELECT count(*)::int AS n FROM draft d JOIN participant p ON p.id = d.participant_id WHERE p.user_id = $1`,
+  conversation: `SELECT count(*)::int AS n FROM conversation c JOIN participant p ON p.id = c.participant_id WHERE p.user_id = $1`,
+  reflection: `SELECT count(*)::int AS n FROM reflection WHERE user_id = $1`,
+};
+async function leaverCensus(h: Harness, adaUser: string): Promise<Record<string, number>> {
+  const out: Record<string, number> = {};
+  await withClient(
+    h.fixture.target,
+    async c => {
+      for (const [k, sql] of Object.entries(LEAVER_ROW_CENSUS)) out[k] = (await c.query<{ n: number }>(sql, [adaUser])).rows[0].n;
+    },
+    h.fixture.database,
+  );
+  return out;
 }
 
 jest.setTimeout(600_000);
@@ -176,6 +242,8 @@ describe(`golden: ${SCENARIO}`, () => {
   let bobId: string;
   let adaDisplayNames: Array<string | null>;
   let seededLabels: Record<string, string> = {};
+  let censusBefore: Record<string, number> = {};
+  let censusAfter: Record<string, number> = {};
 
   beforeAll(async () => {
     // The deletion calls Clerk's API with the account's clerkId when a secret is
@@ -195,7 +263,10 @@ describe(`golden: ${SCENARIO}`, () => {
     const scope = await listTables(harness.fixture.target, harness.fixture.database);
 
     const before = await fullRead(harness, bob, 'before deletion', READS);
-    if (isTargetShape()) seededLabels = await seedLeaverPrivateRows(harness, adaId);
+    if (isTargetShape()) {
+      seededLabels = await seedLeaverPrivateRows(harness, adaId);
+      censusBefore = await leaverCensus(harness, adaId);
+    }
     deletion = await harness.step({
       label: 'delete account as ada@e2e.test',
       actor: ada,
@@ -207,6 +278,7 @@ describe(`golden: ${SCENARIO}`, () => {
     steps = [...before, deletion, ...bobAfter];
 
     after = await harness.snapshot(AFTER_TABLES);
+    if (isTargetShape()) censusAfter = await leaverCensus(harness, adaId);
     adaDisplayNames = await withClient(
       harness.fixture.target,
       async c =>
@@ -465,9 +537,10 @@ describe(`golden: ${SCENARIO}`, () => {
         t.participant_key.filter(k => k.participant_id === ada.id).length === 1 &&
         t.participant_key.filter(k => k.participant_id === ada.id).every(k => k.destroyed_at !== null),
     );
+    // Fix round 1 (I1): the prompt is input/output on the target; scan every blob.
     const adaCapture = (b: Record<string, unknown>) => {
-      const input = JSON.stringify(b.input);
-      return ADA_PRIVATE_LINES.some(l => input.includes(l)) || input.includes("Ada's private reflection guide");
+      const blobs = JSON.stringify([b.input, b.output, b.structured_output]);
+      return ADA_PRIVATE_LINES.some(l => blobs.includes(l)) || blobs.includes("Ada's private reflection guide") || blobs.includes(SEEDED_PRIVATE);
     };
     rule("leaver's brain_activity is gone", !has(t.brain_activity, adaCapture) && !has(t.brain_activity, b => b.participant_id === ada.id));
     rule('participant.display_name is NULL', adaDisplayNames.length === 1 && adaDisplayNames[0] === null);
@@ -492,8 +565,9 @@ describe(`golden: ${SCENARIO}`, () => {
     rule('the concept views represent the state after the deletion', !steps.some(s => s.concept?.unrepresentable !== undefined));
     rule(
       'the seeded private rows were there to delete (the absence rules are not vacuous)',
-      deletion.changes.filter(c => c.kind === 'removed').length >= 10,
+      Object.values(censusBefore).every(n => n >= 1) && Object.keys(censusBefore).length === Object.keys(LEAVER_ROW_CENSUS).length,
     );
+    for (const k of Object.keys(LEAVER_ROW_CENSUS)) rule(`leaver's ${k} is gone (census)`, censusAfter[k] === 0);
   }
 
   it("none of the leaver's private material is in Bob's reads after the deletion (known leaks aside)", () => {

@@ -146,11 +146,12 @@ describeTarget('the Stage 3 reveal gate on the target (mwf_app, the gate reply b
 
   });
 
-  it('PINNED (stage shim): own needs_shared is Stage 3’s terminal milestone, so the caller is in Stage 4 and the gate no longer answers', async () => {
+  it('PINNED (stage shim, work-yk0q): own needs_shared is Stage 3’s terminal milestone, so the caller is in Stage 4 and the gate no longer answers', async () => {
     // The "wait for your partner" / "both lists ready" branches of
     // getStage3GateResponse are unreachable on the target: the stage shim
     // (TERMINAL_MILESTONE) ends the caller's Stage 3 at their own needs_shared.
-    // Reported as a TS-12 concern; this pins the current behaviour.
+    // Filed as work-yk0q (stage shim): when the shim ends Stage 3 at both-shared, this pin must
+    // flip to asserting the gate's "wait for your partner" answer.
     await run.sql(`INSERT INTO participant_milestone (participant_id, milestone_key) VALUES ($1, 'needs_shared') ON CONFLICT DO NOTHING`, [ids.ada]);
     stub([{ type: 'text', text: '<thinking>t</thinking>\n' }, { type: 'text', text: 'PROBE_TS12_MODEL_REPLY' }]);
     const t = await turn('ada', { content: READY });

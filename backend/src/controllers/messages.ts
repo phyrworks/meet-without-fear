@@ -385,17 +385,12 @@ export async function confirmFeelHeard(req: Request, res: Response): Promise<voi
               logger.info(
                 `[confirmFeelHeard] Significant gaps found - notifying subject ${user.id} of share suggestion`,
               );
-              const { buildEmpathyExchangeStatus } = await import('../services/empathy-status');
-              const empathyStatus = await buildEmpathyExchangeStatus(sessionId, user.id);
+              // Session channel, content-free (R36; fix round 1, I2): the guesser's device is on
+              // this channel too. Same addressed ping as stage2's consent path; the subject's
+              // device refetches its own status and share offer.
               await notifyPartner(sessionId, user.id, 'empathy.share_suggestion', {
                 forUserId: user.id,
                 guesserName: 'your partner',
-                suggestedContent: result.shareOffer.suggestedContent,
-                suggestedReason:
-                  (result.shareOffer as { reason?: string; suggestedReason?: string }).reason ||
-                  (result.shareOffer as { reason?: string; suggestedReason?: string }).suggestedReason,
-                empathyStatus,
-                // Include triggeredByUserId for event tracing
                 triggeredByUserId: user.id,
               });
             }

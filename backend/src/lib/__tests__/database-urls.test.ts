@@ -8,7 +8,7 @@ describe('databaseUrlFor', () => {
     expect(databaseUrlFor(role as keyof typeof DATABASE_URL_VARS, { DATABASE_URL: ROOT, [variable]: own })).toBe(own);
   });
 
-  it.each(Object.keys(DATABASE_URL_VARS))('%s falls back to DATABASE_URL when its own variable is unset', (role) => {
+  it.each(Object.keys(DATABASE_URL_VARS).filter(r => r !== 'ops'))('%s falls back to DATABASE_URL when its own variable is unset', (role) => {
     expect(databaseUrlFor(role as keyof typeof DATABASE_URL_VARS, { DATABASE_URL: ROOT })).toBe(ROOT);
   });
 
@@ -17,7 +17,15 @@ describe('databaseUrlFor', () => {
   });
 
   it('does not let one role pick up another role variable', () => {
-    expect(databaseUrlFor('ops', { DATABASE_URL: ROOT, APP_DATABASE_URL: 'postgresql://a@h/db' })).toBe(ROOT);
+    expect(databaseUrlFor('job', { DATABASE_URL: ROOT, APP_DATABASE_URL: 'postgresql://a@h/db' })).toBe(ROOT);
+  });
+
+  // TS-12 fix round 1 (M13): the ops connection is the read-only dashboard role; falling back to
+  // DATABASE_URL (the migration/root URL) would silently lose it. Fail closed.
+  it('ops never falls back to DATABASE_URL (or another role variable): unset is undefined', () => {
+    expect(databaseUrlFor('ops', { DATABASE_URL: ROOT })).toBeUndefined();
+    expect(databaseUrlFor('ops', { DATABASE_URL: ROOT, OPS_DATABASE_URL: '' })).toBeUndefined();
+    expect(databaseUrlFor('ops', { DATABASE_URL: ROOT, APP_DATABASE_URL: 'postgresql://a@h/db' })).toBeUndefined();
   });
 
   it('is undefined when neither is set', () => {

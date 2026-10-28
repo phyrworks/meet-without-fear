@@ -820,9 +820,14 @@ export function UnifiedSessionScreen({
 
       // Handle reconciler events - use setQueryData with data included in events (no extra HTTP round-trips)
       if (event === 'empathy.share_suggestion' && data.forUserId === user?.id) {
-        // Subject received a share suggestion - update cache directly
-        console.log('[UnifiedSessionScreen] Share suggestion received, updating cache');
-        queryClient.setQueryData(stageKeys.empathyStatus(sessionId), data.empathyStatus);
+        // Subject received a share suggestion. Since TS-12 (R36) the ping is
+        // content-free: the subject pulls their own status and offer.
+        console.log('[UnifiedSessionScreen] Share suggestion received, refreshing status and offer');
+        if (data.empathyStatus) {
+          queryClient.setQueryData(stageKeys.empathyStatus(sessionId), data.empathyStatus);
+        } else {
+          queryClient.refetchQueries({ queryKey: stageKeys.empathyStatus(sessionId) });
+        }
         queryClient.refetchQueries({ queryKey: stageKeys.shareOffer(sessionId) });
         refreshStage2RealtimeState();
       }

@@ -283,8 +283,9 @@ export async function recordOrVerify(opts: {
   if (opts.extraLabels) {
     const used = new Map([...labels.labels].map(([id, label]) => [label, id] as const));
     for (const [id, label] of Object.entries(opts.extraLabels)) {
+      if (labels.labels.has(id)) continue; // the run or the template names it already
       const owner = used.get(label);
-      if (labels.labels.has(id) || (owner !== undefined && owner !== id)) {
+      if (owner !== undefined && owner !== id) {
         collisions.push(`${label}: ${id} (extra) and ${owner ?? labels.labels.get(id)} (run)`);
         continue;
       }

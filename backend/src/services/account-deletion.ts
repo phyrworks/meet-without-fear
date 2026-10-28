@@ -66,12 +66,8 @@ async function countPrivateRows(userId: string): Promise<number> {
  * Clerk identity.
  *
  * @param userId - The user to tombstone (the caller)
- * @param displayName - The user's display name for the partner's notification
  */
-export async function deleteAccountWithNotifications(
-  userId: string,
-  displayName: string,
-): Promise<AccountDeletionSummary> {
+export async function deleteAccountWithNotifications(userId: string): Promise<AccountDeletionSummary> {
   // Before the walk: the caller's live sessions (to notify) and own rows (to count)
   const liveSessions = await prisma.participant.findMany({
     where: { userId, leftAt: null, session: { status: { in: [...LIVE] } } },
@@ -85,14 +81,13 @@ export async function deleteAccountWithNotifications(
   await getJobPrisma().$executeRaw`SELECT app.anonymize_user_account(${userId}::uuid)`;
 
   // After the commit: tell each live session's other side that it ended.
-  // The event carries no private content (R36): a reason and the leaver's
-  // display name, which the partner already saw.
+  // The event carries no private content (R36) and no name (fix round 1, M1):
+  // the walk NULLs display_name and every partner read says "Former participant".
   let partnersNotified = 0;
   for (const { sessionId } of liveSessions) {
     try {
       await publishSessionEvent(sessionId, 'session.abandoned', {
         reason: 'partner_deleted_account',
-        partnerName: displayName,
       });
       partnersNotified++;
     } catch (error) {
