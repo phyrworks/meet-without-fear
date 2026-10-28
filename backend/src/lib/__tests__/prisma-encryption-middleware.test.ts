@@ -27,6 +27,7 @@ import {
 } from '../prisma-encryption-middleware';
 import { encrypt, isEncrypted, FieldDecryptionError, _resetForTesting } from '../../utils/field-encryption';
 import { contentHash } from '../../utils/content-hash';
+import { COVERAGE } from '../../services/__tests__/encryption-at-rest';
 
 const TEST_KEY = crypto.randomBytes(32).toString('base64');
 
@@ -137,6 +138,12 @@ describe('SENSITIVE_FIELD_MAP — the target columns', () => {
     for (const { f } of entries) if (f.key === 'per-row') expect(f.rule).toEqual(expect.any(String));
     expect(SENSITIVE_FIELD_MAP.Message.hashedFields).toEqual([{ from: 'content', to: 'contentHash' }]);
     expect(dataModel.models.Message.fields.find(x => x.name === 'contentHash')?.dbName).toBe('content_hash');
+  });
+
+  it('the at-rest suites (encryption-at-rest-*.target.test.ts) together prove every column of the map', () => {
+    const proven = Object.values(COVERAGE).flat();
+    expect(new Set(proven).size).toBe(proven.length);
+    expect([...proven].sort()).toEqual(Object.keys(SPEC_ENCRYPTED).sort());
   });
 
   it('jsonb modes (R43): envelope wherever the CHECK allows, leaves only for ai_memory.doc', () => {

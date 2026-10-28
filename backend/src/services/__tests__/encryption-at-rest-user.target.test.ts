@@ -53,6 +53,8 @@ describeTarget('encryption at rest: user-scope columns (FIELD_ENCRYPTION_KEY set
     bedrock = await import('../../lib/bedrock');
     http = await httpAs();
     ({ prisma } = await import('../../lib/prisma'));
+    const pw = encodeURIComponent(process.env.GOLDEN_OPS_PASSWORD ?? 'mwf_ops_dev');
+    process.env.OPS_DATABASE_URL = `postgresql://mwf_ops:${pw}@${run.fx.target.host}:${run.fx.target.port}/${run.fx.database}`;
   });
   afterAll(async () => {
     jest.restoreAllMocks();
@@ -142,6 +144,21 @@ describeTarget('encryption at rest: user-scope columns (FIELD_ENCRYPTION_KEY set
     );
     proven.add('reflection.title');
     proven.add('reflection_message.content');
+  });
+
+  it('the ops dashboard (mwf_ops) reads the title as plaintext, and says it cannot search the encrypted title (R45)', async () => {
+    const request = (await import('supertest')).default;
+    const appModule = await import('../../app');
+    const app = ((appModule as { default?: unknown }).default ?? appModule) as never;
+    process.env.DASHBOARD_API_SECRET = '';
+    const list = await request(app).get('/api/v1/brain/sessions?type=INNER_WORK');
+    expect(list.status).toBe(200);
+    expect(list.body.data.titleSearch).toBeUndefined();
+    expect(list.body.data.sessions.map((s: { title: string | null }) => s.title)).toContain('PROBE_TS13_TITLE');
+    const searched = await request(app).get('/api/v1/brain/sessions?type=INNER_WORK&search=PROBE_TS13_TITLE');
+    expect(searched.status).toBe(200);
+    expect(searched.body.data.titleSearch).toBe('unavailable-when-encrypted');
+    expect(searched.body.data.sessions).toEqual([]);
   });
 
   it('reflection.summary_doc (inner-thoughts summarizer, model API): an envelope the object CHECK accepts', async () => {

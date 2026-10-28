@@ -583,6 +583,8 @@ async function cleanup(olderThanMs: number): Promise<Record<string, number>> {
   const cutoff = new Date(Date.now() - olderThanMs);
   const sessions = await prisma.session.findMany({
     where: {
+      // session.topic_frame is encrypted (TS-13): this prefix match works only
+      // against a keyless dev database (dev script; ruling R45, documented only).
       topicFrame: { startsWith: TEST_TOPIC_PREFIX },
       createdAt: { lt: cutoff },
     },
