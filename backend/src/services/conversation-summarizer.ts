@@ -13,6 +13,7 @@
 
 import { logger } from '../lib/logger';
 import { getJobPrisma, prisma } from '../lib/prisma';
+import { encryptColumnValue } from '../lib/prisma-encryption-middleware';
 import { getPartnerParticipant, resolveParticipant } from './participant-resolver';
 import { loadCurrentStages } from './stage-shim';
 import { getHaikuJson, BrainActivityCallType } from '../lib/bedrock';
@@ -361,7 +362,7 @@ export async function updateSessionSummary(
     // (trailer T7, TS-9: INSERT (participant_id, kind, doc), UPDATE (doc)).
     await getJobPrisma().$executeRaw`
       INSERT INTO ai_memory (participant_id, kind, doc)
-      VALUES (${participant.id}::uuid, 'SUMMARY'::ai_memory_kind, ${JSON.stringify(doc)}::jsonb)
+      VALUES (${participant.id}::uuid, 'SUMMARY'::ai_memory_kind, ${JSON.stringify(encryptColumnValue('ai_memory', 'doc', doc))}::jsonb)
       ON CONFLICT (participant_id, kind) DO UPDATE SET doc = EXCLUDED.doc`;
 
     logger.info(`[ConversationSummarizer] Summarized ${messagesToSummarize.length} messages for session ${sessionId}`);

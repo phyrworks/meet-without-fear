@@ -14,13 +14,16 @@
  * Every row is the caller's own (RLS shape: user_id = me); the store takes the
  * user id from the authenticated request and never another.
  *
- * TODO(TS-13): `doc` is encrypted under the user key (spec §1.7); the field map
- * is TS-13's. The document itself goes through the Prisma model API (so the
- * encryption middleware sees it); only the empty-row INSERT and the lock are raw.
+ * `doc` is encrypted (spec §1.7, user key; jsonb envelope, ruling R43 — see
+ * lib/prisma-encryption-middleware.ts). The document itself goes through the
+ * Prisma model API, so the encryption extension seals it on write and opens it
+ * on read; the empty-row INSERT is raw and seals its `{}` through
+ * `encryptColumnValue`, and the lock reads no column.
  */
 
 import { parseFeatureDoc, FEATURE_DOC_SCHEMAS, type Feature, type FeatureDocs } from '@meet-without-fear/shared';
 import { prisma } from '../lib/prisma';
+import { encryptColumnValue } from '../lib/prisma-encryption-middleware';
 import { randomUUID } from 'crypto';
 import type { Prisma } from '../generated/prisma/client';
 
@@ -45,7 +48,9 @@ export async function updateFeature<F extends Feature, R>(
   mutate: (doc: FeatureDocs[F]) => R | Promise<R>,
 ): Promise<R> {
   return prisma.$transaction(async tx => {
-    await tx.$executeRaw`INSERT INTO feature_state (user_id, feature, doc) VALUES (${userId}::uuid, ${feature}, '{}'::jsonb) ON CONFLICT (user_id, feature) DO NOTHING`;
+    // The empty row the lock is taken on: sealed like every write of `doc`
+    // (raw SQL bypasses the encryption extension; TS-13).
+    await tx.$executeRaw`INSERT INTO feature_state (user_id, feature, doc) VALUES (${userId}::uuid, ${feature}, ${JSON.stringify(encryptColumnValue('feature_state', 'doc', {}))}::jsonb) ON CONFLICT (user_id, feature) DO NOTHING`;
     await tx.$queryRaw`SELECT 1 FROM feature_state WHERE user_id = ${userId}::uuid AND feature = ${feature} FOR UPDATE`;
     const row = await tx.featureState.findUniqueOrThrow({
       where: { userId_feature: { userId, feature } },

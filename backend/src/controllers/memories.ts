@@ -241,15 +241,15 @@ export const approveMemory = asyncHandler(async (req: Request, res: Response): P
     throw new ValidationError(validationResult.reason || 'Memory validation failed');
   }
 
-  // Check for duplicate content (prevent approving same suggestion twice)
-  const existingDuplicate = await prisma.userMemory.findFirst({
-    where: {
-      userId: user.id,
-      content: finalContent,
-      sessionId: null, // Only check global memories
-      status: 'ACTIVE',
-    },
+  // Check for duplicate content (prevent approving same suggestion twice).
+  // `content` is encrypted with a random IV (TS-13), so SQL cannot match it:
+  // compare plaintext in the app over the user's ACTIVE global memories — the
+  // same scope the probe always had (ruling R45; the extension decrypts them).
+  const activeGlobal = await prisma.userMemory.findMany({
+    where: { userId: user.id, sessionId: null, status: 'ACTIVE' },
+    select: { id: true, content: true },
   });
+  const existingDuplicate = activeGlobal.find(m => m.content === finalContent) ?? null;
 
   if (existingDuplicate) {
     throw new ValidationError('A memory with this content already exists');
