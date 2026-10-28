@@ -189,6 +189,7 @@ If no references, return empty arrays and needsRetrieval: false.`;
         turnId,
         operation: 'retrieval-planning',
         callType: BrainActivityCallType.REFERENCE_DETECTION,
+        ownContent: true, // R40: the caller's own content only
       });
       return result;
     },

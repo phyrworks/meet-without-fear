@@ -118,6 +118,7 @@ Note: This memory will apply globally to all sessions.`;
       operation: 'memory-format',
       turnId: syntheticTurnId,
       callType: BrainActivityCallType.MEMORY_FORMATTING,
+      ownContent: true, // R40: the caller's own content only
     });
 
     logger.info(`${logPrefix} Haiku response:`, JSON.stringify(response, null, 2));
@@ -255,6 +256,7 @@ Apply the requested changes while keeping the memory clear and concise.`;
       operation: 'memory-update',
       turnId: syntheticTurnId,
       callType: BrainActivityCallType.MEMORY_FORMATTING,
+      ownContent: true, // R40: the caller's own content only
     });
 
     logger.info(`${logPrefix} Haiku update response:`, JSON.stringify(response, null, 2));

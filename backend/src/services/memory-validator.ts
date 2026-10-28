@@ -128,6 +128,7 @@ Does this memory request conflict with therapeutic values?`;
         turnId: effectiveTurnId,
         operation: 'memory-validation',
         callType: BrainActivityCallType.MEMORY_VALIDATION,
+        ownContent: true, // R40: the caller's own content only
       });
     },
     null, // Fallback to null if timeout/failure

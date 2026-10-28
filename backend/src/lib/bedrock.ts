@@ -253,6 +253,15 @@ export interface CompletionOptions {
   callType?: BrainActivityCallType;
   /** Optional Claude tools for structured metadata delivery */
   tools?: AnthropicToolDef[];
+  /**
+   * R40 (TS-12 fix round 1): true ONLY when every piece of content in the
+   * call's input and output is the calling participant's alone (their own
+   * chat turn, their own message or memory, their own conversation's summary).
+   * Then the telemetry row is attributed to them; otherwise it is written with
+   * participant_id NULL and its session_id, so the anonymise walk's R17 arm
+   * removes it when EITHER participant leaves. Default: not attributed.
+   */
+  ownContent?: boolean;
 }
 
 /**
@@ -273,6 +282,15 @@ export interface HaikuCompletionOptions {
   turnId: string;
   /** Call type for dashboard display categorization */
   callType?: BrainActivityCallType;
+  /**
+   * R40 (TS-12 fix round 1): true ONLY when every piece of content in the
+   * call's input and output is the calling participant's alone (their own
+   * chat turn, their own message or memory, their own conversation's summary).
+   * Then the telemetry row is attributed to them; otherwise it is written with
+   * participant_id NULL and its session_id, so the anonymise walk's R17 arm
+   * removes it when EITHER participant leaves. Default: not attributed.
+   */
+  ownContent?: boolean;
 }
 
 /**
@@ -425,6 +443,7 @@ export async function getModelCompletionWithTools(
     input: { operation, messageCount: messages.length, systemPromptLength: systemPromptText.length },
     metadata: { maxTokens, toolCount: tools?.length ?? 0 },
     callType: options.callType,
+    attributeToCaller: options.ownContent === true,
   });
 
   try {
@@ -750,6 +769,15 @@ export interface SonnetStreamingOptions {
   callType?: BrainActivityCallType;
   /** Response index for mock mode - used to select which fixture response to return */
   mockResponseIndex?: number;
+  /**
+   * R40 (TS-12 fix round 1): true ONLY when every piece of content in the
+   * call's input and output is the calling participant's alone (their own
+   * chat turn, their own message or memory, their own conversation's summary).
+   * Then the telemetry row is attributed to them; otherwise it is written with
+   * participant_id NULL and its session_id, so the anonymise walk's R17 arm
+   * removes it when EITHER participant leaves. Default: not attributed.
+   */
+  ownContent?: boolean;
 }
 
 /**
@@ -850,6 +878,7 @@ export async function* getSonnetStreamingResponse(
       toolCount: tools?.length ?? 0,
     },
     callType: options.callType,
+    attributeToCaller: options.ownContent === true,
   });
 
   try {

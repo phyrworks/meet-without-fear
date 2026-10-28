@@ -217,6 +217,7 @@ Output only valid JSON with no markdown formatting or extra text.`;
         turnId: effectiveTurnId,
         operation: 'memory-detection',
         callType: BrainActivityCallType.MEMORY_DETECTION,
+        ownContent: true, // R40: the caller's own content only
       });
     },
     null, // Fallback to null if timeout/failure

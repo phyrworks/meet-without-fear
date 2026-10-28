@@ -531,6 +531,7 @@ Output only valid JSON.`;
           turnId: input.turnId,
           operation: 'partner-session-classifier',
           callType: BrainActivityCallType.PARTNER_SESSION_CLASSIFICATION,
+          ownContent: true, // R40: the caller's own content only
         });
       },
       null,

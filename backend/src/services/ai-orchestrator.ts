@@ -539,6 +539,7 @@ Call update_session_state with any persisted state required by the latest user t
       operation: `orchestrator-state-capture-${routingDecision.model}`,
       turnId,
       callType: BrainActivityCallType.ORCHESTRATED_RESPONSE,
+      ownContent: true, // R40: the caller's own content only
       // thinkingBudget: 1024, // Disabled - not supported on Bedrock Sonnet v2
     });
     const completion =
@@ -574,6 +575,7 @@ Write only the user-facing conversational response. Do not include tool JSON, XM
         operation: `orchestrator-visible-response-${routingDecision.model}`,
         turnId,
         callType: BrainActivityCallType.ORCHESTRATED_RESPONSE,
+        ownContent: true, // R40: the caller's own content only
       });
       modelResponse = typeof visibleCompletion === 'string' ? visibleCompletion : (visibleCompletion?.text ?? null);
     }

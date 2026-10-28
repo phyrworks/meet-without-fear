@@ -174,6 +174,7 @@ OUTPUT (JSON):
       sessionId: effectiveSessionId,
       turnId,
       callType: BrainActivityCallType.PEOPLE_EXTRACTION,
+      ownContent: true, // R40: the caller's own content only
     });
 
     return result;

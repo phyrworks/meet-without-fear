@@ -41,12 +41,20 @@ describeTarget('brain_activity (job) and the dashboard (mwf_ops) on the target',
     await expect(run.as('mwf_app', ids.adaUser, `SELECT count(*) FROM brain_activity`)).rejects.toThrow(/permission denied/);
   });
 
-  it('capture: the job writes the row, attributed to the request’s participant, and completes it', async () => {
+  it('capture: the job writes the row — attributed to the request’s participant only when the call opts in (R40) — and completes it', async () => {
     const { brainService } = await import('../brain-service');
     const ctx = await import('../../lib/request-context');
     const activity = await ctx.runWithContext(
       { turnId: 't', requestId: 'r', startTime: Date.now(), userId: ids.bobUser, sessionId: ids.session, participantId: ids.bob },
-      () => brainService.startActivity({ sessionId: ids.session, turnId: 'ts12-turn', activityType: 'LLM_CALL', model: 'claude-sonnet', input: { prompt: 'PROBE_TS12' } }),
+      () =>
+        brainService.startActivity({
+          sessionId: ids.session,
+          turnId: 'ts12-turn',
+          activityType: 'LLM_CALL',
+          model: 'claude-sonnet',
+          input: { prompt: 'PROBE_TS12' },
+          attributeToCaller: true, // R40: the caller's own content
+        }),
     );
     expect(activity.id).not.toBe('');
     await brainService.completeActivity(activity.id, { output: { text: 'done' }, tokenCountInput: 10, tokenCountOutput: 5, cost: 0.0012, durationMs: 33 });
@@ -56,9 +64,19 @@ describeTarget('brain_activity (job) and the dashboard (mwf_ops) on the target',
 
     // No participant on the request context: the job resolves the user's participant
     const viaLookup = await ctx.runWithContext({ turnId: 't', requestId: 'r', startTime: Date.now(), userId: ids.adaUser }, () =>
-      brainService.startActivity({ sessionId: ids.session, activityType: 'RETRIEVAL', model: 'system-retrieval', input: {} }),
+      brainService.startActivity({ sessionId: ids.session, activityType: 'RETRIEVAL', model: 'system-retrieval', input: {}, attributeToCaller: true }),
     );
     expect(await run.sql(`SELECT participant_id FROM brain_activity WHERE id = $1`, [viaLookup.id])).toEqual([{ participant_id: ids.ada }]);
+
+    // R40 (fix round 1, I1): without the opt-in — every call that reads or produces another
+    // participant's content — the row is unattributed (session only), so R17 removes it on either leave.
+    const cross = await ctx.runWithContext(
+      { turnId: 't', requestId: 'r', startTime: Date.now(), userId: ids.bobUser, sessionId: ids.session, participantId: ids.bob },
+      () => brainService.startActivity({ sessionId: ids.session, activityType: 'LLM_CALL', model: 'claude-sonnet', input: {}, callType: 'RECONCILER_ANALYSIS' as never }),
+    );
+    expect(await run.sql(`SELECT session_id, participant_id FROM brain_activity WHERE id = $1`, [cross.id])).toEqual([
+      { session_id: ids.session, participant_id: null },
+    ]);
 
     // A reflection turn: reflection_id, no session
     const inner = await brainService.startActivity({ innerWorkSessionId: reflectionId, activityType: 'LLM_CALL', model: 'claude-haiku', input: {} });

@@ -97,6 +97,7 @@ Call update_session_state with any persisted state required by the latest user t
     turnId,
     operation: 'structured-state-capture',
     callType: BrainActivityCallType.ORCHESTRATED_RESPONSE,
+    ownContent: true, // R40: the caller's own content only
   });
   const sessionStateTool = stateCapture?.toolInvocations.find(tool => tool.name === SESSION_STATE_TOOL_NAME);
   if (sessionStateTool) {
@@ -157,6 +158,7 @@ Write only the user-facing conversational response. Do not include tool JSON, XM
     turnId,
     operation: 'streaming-response',
     callType: BrainActivityCallType.ORCHESTRATED_RESPONSE,
+    ownContent: true, // R40: the caller's own content only
     // For E2E mock mode: response index is 0-based (userTurnCount is 1-based after save)
     mockResponseIndex: Math.max(0, userTurnCount - 1),
   });

@@ -67,6 +67,11 @@ describeTarget('deletion and retention on the target (the job as mwf_job, the ap
       followUp.id,
       bob.id,
     ]);
+    // Fix round 1 (M5): Ada's choices UNSHARED (no choices_shared): the walk deletes them (spec §4 step 3);
+    // Bob's shared choice stays.
+    await run.sql(`DELETE FROM participant_milestone WHERE participant_id = $1 AND milestone_key = 'choices_shared'`, [ids.ada]);
+    expect(await count(`SELECT count(*)::int AS n FROM proposal_choice WHERE participant_id = $1`, [ids.ada])).toBeGreaterThan(0);
+    const bobChoices = await count(`SELECT count(*)::int AS n FROM proposal_choice WHERE participant_id = $1`, [ids.bob]);
     const bobMessagesBefore = await count(`SELECT count(*)::int AS n FROM message m JOIN conversation c ON c.id = m.conversation_id WHERE c.participant_id = $1`, [ids.bob]);
 
     const res = await http(ada, 'delete', `/sessions/${ids.session}`);
@@ -78,6 +83,8 @@ describeTarget('deletion and retention on the target (the job as mwf_job, the ap
     expect(await run.sql(`SELECT status::text AS status FROM session WHERE id = $1`, [ids.session])).toEqual([{ status: 'ABANDONED' }]);
     expect(await count(`SELECT count(*)::int AS n FROM conversation WHERE participant_id = $1`, [ids.ada])).toBe(0);
     expect(await count(`SELECT count(*)::int AS n FROM draft WHERE participant_id = $1`, [ids.ada])).toBe(0);
+    expect(await count(`SELECT count(*)::int AS n FROM proposal_choice WHERE participant_id = $1`, [ids.ada])).toBe(0);
+    expect(await count(`SELECT count(*)::int AS n FROM proposal_choice WHERE participant_id = $1`, [ids.bob])).toBe(bobChoices);
     // The explicit deletes: Ada's session-scoped memory and her reminder go; her global memory and Bob's reminder stay
     expect(await run.sql(`SELECT content FROM user_memory WHERE user_id = $1 ORDER BY content`, [ada.id])).toEqual([
       { content: 'PROBE_TS12_GLOBAL_MEMORY' },
@@ -103,8 +110,54 @@ describeTarget('deletion and retention on the target (the job as mwf_job, the ap
     await run.sql(`INSERT INTO user_key (user_id, key_id, wrapped_dek) VALUES ($1, 'k-bob', '\\x00')`, [bob.id]);
     await run.sql(`INSERT INTO participant_key (participant_id, key_id, wrapped_dek) VALUES ($1, 'pk-bob', '\\x00')`, [ids.bob]);
 
+    // R40 (fix round 1, I1): telemetry written inside ADA's request. The reconciler call reads Bob's
+    // round (cross-participant: not attributed, its call site passes no ownContent); Ada's own chat
+    // turn is attributed to her. Both rows carry Bob's private line in output.
+    const { brainService, BrainActivityCallType } = await import('../brain-service');
+    const { runWithContext } = await import('../../lib/request-context');
+    const asAdaRequest = <T>(fn: () => Promise<T>) =>
+      runWithContext(
+        { turnId: 't', requestId: 'r', startTime: Date.now(), userId: ada.id, sessionId: ids.session, participantId: ids.ada },
+        fn,
+      );
+    const reconcilerRow = await asAdaRequest(() =>
+      brainService.startActivity({
+        sessionId: ids.session,
+        turnId: 'ts12-r40-reconciler',
+        activityType: 'LLM_CALL' as never,
+        model: 'claude-sonnet',
+        input: { operation: 'reconciler-analysis' },
+        callType: BrainActivityCallType.RECONCILER_ANALYSIS,
+      }),
+    );
+    const ownRow = await asAdaRequest(() =>
+      brainService.startActivity({
+        sessionId: ids.session,
+        turnId: 'ts12-r40-own-turn',
+        activityType: 'LLM_CALL' as never,
+        model: 'claude-sonnet',
+        input: { operation: 'orchestrator-response' },
+        callType: BrainActivityCallType.ORCHESTRATED_RESPONSE,
+        attributeToCaller: true,
+      }),
+    );
+    for (const row of [reconcilerRow, ownRow]) {
+      await brainService.completeActivity(row.id, { output: { text: 'PROBE_TS12_BOB_PRIVATE_LINE' } });
+    }
+    expect(
+      await run.sql(`SELECT turn_id, participant_id FROM brain_activity WHERE turn_id LIKE 'ts12-r40-%' ORDER BY turn_id`),
+    ).toEqual([
+      { turn_id: 'ts12-r40-own-turn', participant_id: ids.ada },
+      { turn_id: 'ts12-r40-reconciler', participant_id: null },
+    ]);
+
     const res = await http(bob, 'delete', '/auth/me');
     expect(res.status).toBe(200);
+    // The cross-participant row is gone with Bob's leave (R17: the session's unattributed rows);
+    // no row of the session carries Bob's line in output or structured_output any more except the
+    // one attributed to Ada's own turn (a fixture probe, not his content in production).
+    expect(await count(`SELECT count(*)::int AS n FROM brain_activity WHERE turn_id = 'ts12-r40-reconciler'`)).toBe(0);
+    expect(await count(`SELECT count(*)::int AS n FROM brain_activity WHERE turn_id = 'ts12-r40-own-turn'`)).toBe(1);
 
     const [u] = await run.sql<{ email: string; clerk_id: string | null; first_name: string | null; deleted: boolean }>(
       `SELECT email, clerk_id, first_name, deleted_at IS NOT NULL AS deleted FROM "user" WHERE id = $1`,

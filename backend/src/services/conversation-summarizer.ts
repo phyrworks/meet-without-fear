@@ -191,6 +191,7 @@ ${conversationText}`;
     operation: 'conversation-summary',
     turnId,
     callType: BrainActivityCallType.SUMMARIZATION,
+    ownContent: true, // R40: the caller's own content only
   });
 
   return result;

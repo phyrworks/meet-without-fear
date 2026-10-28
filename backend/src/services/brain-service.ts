@@ -18,6 +18,8 @@ export type ActivityInput = {
   input: unknown;
   metadata?: unknown;
   callType?: BrainActivityCallType;
+  /** R40: attribute the row to the request's participant (their own content only). */
+  attributeToCaller?: boolean;
 };
 
 export { BrainActivityCallType };
@@ -29,9 +31,13 @@ const json = (v: unknown): string | null => (v === undefined || v === null ? nul
 /**
  * The telemetry writer (TS-12, spec §1.8 brain_activity): rows are written by
  * the JOB (`mwf_job`) — `brain_activity` has no `mwf_app` grant at all — and
- * attributed at capture: `participant_id` is the caller's participant in the
- * row's session (the request's resolved participant, else looked up by the
- * job), `reflection_id` the reflection a turn belongs to. The job writes
+ * attributed at capture. Ruling R40: `participant_id` is set ONLY for a call
+ * whose whole content is the calling participant's (`attributeToCaller`, from
+ * the call site's `ownContent`); every call that reads or produces another
+ * participant's content (reconciler, share suggestion/offer, empathy analysis
+ * and refinement, transitions, dispatch) stays NULL with its session_id, so
+ * the anonymise walk's R17 arm removes it when either participant leaves.
+ * `reflection_id` is the reflection a turn belongs to. The job writes
  * through raw statements naming exactly its granted columns and never reads a
  * prompt back (RETURNING id, created_at only).
  *
@@ -95,7 +101,7 @@ export class BrainService {
       updatedAt: now,
     };
     try {
-      record.participantId = await this.participantFor(sessionId);
+      record.participantId = params.attributeToCaller ? await this.participantFor(sessionId) : null;
       const rows = await getJobPrisma().$queryRaw<Array<{ id: string; created_at: Date }>>`INSERT INTO brain_activity
           (session_id, reflection_id, participant_id, turn_id, activity_type, call_type, model, input, metadata, status)
         VALUES (${sessionId}::uuid, ${reflectionId}::uuid, ${record.participantId}::uuid, ${record.turnId},

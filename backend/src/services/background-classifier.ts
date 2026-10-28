@@ -277,6 +277,7 @@ Output only valid JSON.`;
           turnId: input.turnId,
           operation: 'background-classifier',
           callType: BrainActivityCallType.BACKGROUND_CLASSIFICATION,
+          ownContent: true, // R40: the caller's own content only
         });
       },
       null,
