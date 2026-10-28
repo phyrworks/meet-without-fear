@@ -288,11 +288,19 @@ export function targetByteRules(opts: {
   /** TS-11: baseline writes with no image at their exact step (see ChangesMappedRule). */
   droppedTables?: ChangesMappedRule['droppedTables'];
   trace?: boolean;
+  /**
+   * TS-12: only these steps' changes go through the table map (default: every
+   * step). R5's deletion step is the walk itself, asserted against the
+   * database by its scenario, and pinned there instead.
+   */
+  steps?: number[];
 }): AllowRule[] {
   const rules: AllowRule[] = [
     {
       kind: 'changesMapped',
-      at: ['steps.*.changes', 'steps.*.changesAtResponse'],
+      at: opts.steps
+        ? opts.steps.flatMap(s => [`steps.${s}.changes`, `steps.${s}.changesAtResponse`])
+        : ['steps.*.changes', 'steps.*.changesAtResponse'],
       tableMap: TARGET_TABLE_MAP,
       addedTables: opts.addedTables,
       ...(opts.droppedTables ? { droppedTables: opts.droppedTables } : {}),

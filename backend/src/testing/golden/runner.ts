@@ -200,6 +200,18 @@ export function maskTargetSteps(
   return { steps: out, problems };
 }
 
+/**
+ * TS-12: with GOLDEN_DUMP_DIR set, a verify run also writes the run's
+ * normalised result there (`<scenario>.json` / `<scenario>.concept.json`) —
+ * for reading a mismatch, never compared or committed.
+ */
+function dumpActual(name: string, value: unknown): void {
+  const dir = process.env.GOLDEN_DUMP_DIR;
+  if (!dir) return;
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, `${name}.json`), JSON.stringify(value, null, 2) + '\n');
+}
+
 export interface RunReport {
   scenario: string;
   recorded: boolean;
@@ -226,6 +238,22 @@ export async function recordOrVerify(opts: {
    * Required there; ignored on the current shape.
    */
   targetAllowList?: AllowList;
+  /**
+   * TS-12 (R5 on the target): label every row the fixture template holds by
+   * the TEMPLATE's label, and only rows new in the run by the run's. For a
+   * scenario that deletes ranked rows (the walk deletes the leaver's
+   * conversation): the survivors re-rank in the run, so the run's labels for
+   * fixture rows would collide with the deleted rows' fixture labels — and the
+   * baseline was recorded with the fixture's ranks. A collision still fails.
+   */
+  fixtureLabelsFirst?: boolean;
+  /**
+   * TS-12 (R5 on the target): labels for rows a scenario wrote itself and the
+   * run then deleted, so neither the run database nor the fixture template
+   * holds them (the leaver's private rows seeded right before the deletion).
+   * Each label must be unused; a collision fails like a template collision.
+   */
+  extraLabels?: Record<string, string>;
 }): Promise<RunReport> {
   const { scenario, harness } = opts;
   const masking = maskTargetSteps(opts.steps, opts.targetAllowList?.rules ?? []);
@@ -250,7 +278,20 @@ export async function recordOrVerify(opts: {
     harness.fixture.manifest,
     harness.fixture.seededClerkIds,
   );
-  const collisions = mergeFallbackLabels(map, fixtureMap);
+  const labels = opts.fixtureLabelsFirst ? fixtureMap : map;
+  const collisions = opts.fixtureLabelsFirst ? mergeFallbackLabels(fixtureMap, map) : mergeFallbackLabels(map, fixtureMap);
+  if (opts.extraLabels) {
+    const used = new Map([...labels.labels].map(([id, label]) => [label, id] as const));
+    for (const [id, label] of Object.entries(opts.extraLabels)) {
+      const owner = used.get(label);
+      if (labels.labels.has(id) || (owner !== undefined && owner !== id)) {
+        collisions.push(`${label}: ${id} (extra) and ${owner ?? labels.labels.get(id)} (run)`);
+        continue;
+      }
+      labels.labels.set(id, label);
+      used.set(label, id);
+    }
+  }
   if (collisions.length) {
     // A deleted row keeps the rank it had in the fixture while the owner's
     // surviving rows re-rank in the run: two ids would read as one row.
@@ -262,7 +303,7 @@ export async function recordOrVerify(opts: {
   const normalized: GoldenStep[] = [];
   const unresolved: string[] = [];
   for (const [index, s] of steps.entries()) {
-    const n = normalizeStep(s, map, { rules: opts.tiedOrder ?? [], index });
+    const n = normalizeStep(s, labels, { rules: opts.tiedOrder ?? [], index });
     normalized.push(n.golden);
     unresolved.push(...n.unresolved);
   }
@@ -272,6 +313,7 @@ export async function recordOrVerify(opts: {
     stage: harness.fixture.manifest.stage,
     steps: normalized,
   };
+  dumpActual(scenario, actual);
 
   const p = goldenPath(scenario);
   const recording = isRecording(scenario);
@@ -593,6 +635,7 @@ export async function recordOrVerifyConcept(opts: {
   };
 
   const name = conceptGoldenName(scenario);
+  dumpActual(name, actual);
   const p = goldenPath(name);
   const base = { scenario, unresolved: [...unresolved] };
 

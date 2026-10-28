@@ -25,6 +25,10 @@ export function goldenScenarioChecks(opts: {
    * allow-list (recordOrVerify's `targetAllowList`); required there.
    */
   byteTargetAllowList?: AllowList;
+  /** TS-12: see recordOrVerify's `fixtureLabelsFirst` (target only). */
+  byteFixtureLabels?: boolean;
+  /** TS-12: see recordOrVerify's `extraLabels` (read when the checks run). */
+  byteExtraLabels?: () => Record<string, string>;
 }): void {
   const { scenario, allowList } = opts;
   const byte = () => ({
@@ -33,6 +37,8 @@ export function goldenScenarioChecks(opts: {
     steps: opts.steps(),
     tiedOrder: allowList.rules,
     targetAllowList: opts.byteTargetAllowList,
+    fixtureLabelsFirst: isTargetShape() && opts.byteFixtureLabels === true,
+    extraLabels: opts.byteExtraLabels?.(),
   });
 
   it('every identifier resolves to a structural label', async () => {
@@ -131,7 +137,15 @@ export function targetMessageStageChecks(opts: { harness: () => Harness; steps: 
  *     reader's / partner's `compact_signed` instant (raw, before the mask);
  *   - every consent record a read returns names its row's arc target.
  */
-export function targetFixtureDeltaChecks(opts: { harness: () => Harness; steps: () => StepResult[] }): void {
+export function targetFixtureDeltaChecks(opts: {
+  harness: () => Harness;
+  steps: () => StepResult[];
+  /**
+   * TS-12 (R5): from this step index on the partner has LEFT (account
+   * deletion): their compact instant is no longer shown (null), as today.
+   */
+  partnerLeftFromStep?: number;
+}): void {
   const run = isTargetShape() ? it : it.skip;
   const q = async <T extends Record<string, unknown>>(sql: string, params: unknown[] = []): Promise<T[]> => {
     const h = opts.harness();
@@ -146,9 +160,10 @@ export function targetFixtureDeltaChecks(opts: { harness: () => Harness; steps: 
     const at = (email: string) => signed.find(s => s.email === email)?.at;
     const iso = (d?: Date) => (d ? new Date(d).toISOString() : null);
     let checked = 0;
-    for (const step of opts.steps()) {
+    for (const [index, step] of opts.steps().entries()) {
       const d = (step.body as { data?: { compact?: { mySignedAt?: unknown; partnerSignedAt?: unknown }; mySignedAt?: unknown } } | undefined)
         ?.data;
+      const partnerLeft = opts.partnerLeftFromStep !== undefined && index >= opts.partnerLeftFromStep;
       // GET /state nests them under `compact`; GET /compact/status returns them at the top.
       const compact = d?.compact ?? (d && 'mySignedAt' in d ? (d as { mySignedAt?: unknown; partnerSignedAt?: unknown }) : undefined);
       const email = /as (\S+)$/.exec(step.label)?.[1];
@@ -157,7 +172,7 @@ export function targetFixtureDeltaChecks(opts: { harness: () => Harness; steps: 
       expect({ step: step.label, my: compact.mySignedAt, partner: compact.partnerSignedAt }).toEqual({
         step: step.label,
         my: iso(at(email)),
-        partner: partner ? iso(at(partner)) : null,
+        partner: partner && !partnerLeft ? iso(at(partner)) : null,
       });
       checked++;
     }
@@ -234,17 +249,20 @@ export function authorClosureChecks(opts: {
   empathyStatus?: number[];
   reconcilerStatus?: number[];
   summary?: number[];
+  /** The author whose reads these are (TS-12: R5's Bob; default Ada). */
+  email?: string;
 }): void {
   const run = isTargetShape() ? it : it.skip;
+  const who = (opts.email ?? 'ada@e2e.test').replace(/[.@]/g, m => '\\' + m);
   run('closure pair: the author reads no analysis of her attempt and no offer (R6/R7 closed)', () => {
     const steps = opts.steps();
     const data = (i: number) => (steps[i].body as { data?: Record<string, unknown> }).data ?? {};
     for (const i of opts.empathyStatus ?? []) {
-      expect(steps[i].label).toMatch(/: empathy status as ada@e2e\.test$/);
+      expect(steps[i].label).toMatch(new RegExp(`: empathy status as ${who}$`));
       expect(data(i).myReconcilerResult).toBeNull();
     }
     for (const i of opts.reconcilerStatus ?? []) {
-      expect(steps[i].label).toMatch(/: reconciler status as ada@e2e\.test$/);
+      expect(steps[i].label).toMatch(new RegExp(`: reconciler status as ${who}$`));
       expect({ a: data(i).aUnderstandingB, hasRun: data(i).hasRun, offers: data(i).pendingShareOffers }).toEqual({
         a: null,
         hasRun: false,
@@ -252,7 +270,7 @@ export function authorClosureChecks(opts: {
       });
     }
     for (const i of opts.summary ?? []) {
-      expect(steps[i].label).toMatch(/: reconciler summary as ada@e2e\.test$/);
+      expect(steps[i].label).toMatch(new RegExp(`: reconciler summary as ${who}$`));
       expect((steps[i].body as { error?: { message?: string } }).error?.message).toBe('Reconciler has not run yet');
     }
   });
