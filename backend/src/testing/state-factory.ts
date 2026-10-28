@@ -10,24 +10,22 @@
  *   shape-independent scenario: participants, the milestones each has reached
  *   (with timestamps), and the content they produced. See
  *   `fixture-scenarios/scenario-model.ts`.
- * - `fixture-scenarios/current-shape.ts` — writes a scenario into today's
- *   tables (StageProgress rows, `gatesSatisfied` JSON, stage integers,
- *   `Session.status`, …), reproducing the pre-rebuild factory's rows exactly so
- *   recorded goldens stay valid.
- * - `fixture-scenarios/target-shape.ts` — writes the same scenario into the
+ * - `fixture-scenarios/target-shape.ts` — writes the scenario into the
  *   target tables (participant, conversation, participant_milestone, …)
- *   through `pg` (TS-9). Which writer runs is decided by the schema in use
- *   (`golden/shape.ts`).
+ *   through `pg` (TS-9).
+ *
+ * The current-shape writer (`fixture-scenarios/current-shape.ts`, the
+ * pre-rebuild Prisma models) was removed from phoenix/target-shape at TS-13
+ * (ruling R42); phoenix/base keeps it, and its recorded concept goldens stay
+ * the oracle (R39).
  *
  * This file is the stable public surface (`StateFactory`, `stateFactory`,
  * `TargetStage`, `UserConfig`, `StateFactoryOptions`, `StateFactoryResult`).
  */
 
 import { Client } from 'pg';
-import { prisma } from '../lib/prisma';
-import { writeCurrentShape, type CurrentShapeResult } from './fixture-scenarios/current-shape';
 import { writeTargetShape } from './fixture-scenarios/target-shape';
-import { isTargetShape } from './golden/shape';
+import type { WrittenScenario } from './fixture-scenarios/scenario-helpers';
 import { scenarioFor } from './fixture-scenarios/scenarios';
 import { TargetStage } from './fixture-scenarios/target-stage';
 
@@ -101,7 +99,7 @@ export class StateFactory {
     const scenario = scenarioFor(targetStage, { a: userA.name, b: userB?.name });
     const users = userB ? [userA, userB] : [userA];
 
-    const write = async (written: CurrentShapeResult): Promise<StateFactoryResult> => {
+    const write = async (written: WrittenScenario): Promise<StateFactoryResult> => {
       const [userARecord, userBRecord] = written.users;
 
       const result: StateFactoryResult = {
@@ -129,25 +127,21 @@ export class StateFactory {
       return result;
     };
 
-    if (isTargetShape()) {
-      // Target shape: through pg in one transaction, never through the app's
-      // Prisma client (the fixture must not depend on the code under test).
-      const db = new Client({ connectionString: process.env.DATABASE_URL });
-      await db.connect();
-      try {
-        await db.query('BEGIN');
-        const written = await writeTargetShape(db, scenario, users);
-        await db.query('COMMIT');
-        return write(written);
-      } catch (e) {
-        await db.query('ROLLBACK').catch(() => undefined);
-        throw e;
-      } finally {
-        await db.end();
-      }
+    // Through pg in one transaction, never through the app's Prisma client
+    // (the fixture must not depend on the code under test).
+    const db = new Client({ connectionString: process.env.DATABASE_URL });
+    await db.connect();
+    try {
+      await db.query('BEGIN');
+      const written = await writeTargetShape(db, scenario, users);
+      await db.query('COMMIT');
+      return write(written);
+    } catch (e) {
+      await db.query('ROLLBACK').catch(() => undefined);
+      throw e;
+    } finally {
+      await db.end();
     }
-
-    return prisma.$transaction(async tx => write(await writeCurrentShape(tx, scenario, users)));
   }
 
   private pageUrl(sessionId: string, user: { id: string; email: string }): string {
