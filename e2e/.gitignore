@@ -4,3 +4,5 @@ test-results/
 
 # Temp files
 .temp-*
+playwright-report-local-deploy/
+test-results-local-deploy/
