@@ -20,6 +20,10 @@ Terraform entry point: `infra/aws/main.tf`. Runtime configuration, backup/restor
 
 Production secrets live in root-only `/etc/mwf/application.env`, supplied outside Git and Terraform. PostgreSQL is accessible only inside Docker and through a loopback SSH tunnel. The application role is not a superuser. Nightly S3 backups retain seven days; pre-migration/final-source backups retain 30 days.
 
+### Local production replica
+
+[`local-replica.md`](local-replica.md): the same image, database initialisation and Caddy on a Mac under podman (`infra/local/`), with mocked AI and the E2E auth bypass, on `127.0.0.1` only — for end-to-end tests and cutover smoke rehearsals.
+
 ### Mobile: EAS Build (Expo)
 
 Mobile builds and submissions use Expo Application Services (EAS). The following scripts are defined in the root `package.json`:
