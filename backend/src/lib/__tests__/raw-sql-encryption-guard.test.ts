@@ -142,7 +142,7 @@ const helperCall = (table: string, column: string) =>
 
 /** Is this SQL value expression an encrypted bind of table.column? */
 function encryptedBind(value: string, exprs: string[], table: string, column: string): boolean {
-  const m = /^\$P(\d+)(::[a-z_\[\]]+)?$/.exec(value.trim());
+  const m = /^\$P(\d+)(::[a-z_[\]]+)?$/.exec(value.trim());
   return !!m && helperCall(table, column).test(exprs[Number(m[1])]);
 }
 
@@ -255,7 +255,7 @@ function encryptedReadsOf(st: RawStatement): string[] {
   for (const list of lists) {
     for (const item of splitTop(list)) {
       if (item.includes('(')) continue;
-      const ref = item.replace(/\s+AS\s+.*$/i, '').replace(/::[a-z_\[\]]+$/i, '').trim();
+      const ref = item.replace(/\s+AS\s+.*$/i, '').replace(/::[a-z_[\]]+$/i, '').trim();
       const [q, c] = ref.includes('.') ? ref.split('.') : [null, ref];
       const candidates = q ? [aliases.get(q) ?? VIEW_TABLE[q] ?? q] : tables;
       for (const t of candidates) if (isEncryptedColumn(t, c)) out.push(`${t}.${c}`);
