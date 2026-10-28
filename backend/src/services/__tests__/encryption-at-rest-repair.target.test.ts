@@ -30,6 +30,7 @@ describeTarget('encryption at rest: needs, repair and follow-up columns (FIELD_E
   let store: typeof import('../stage4-store');
   let prisma: typeof import('../../lib/prisma').prisma;
   const proposal: Record<string, string> = {};
+  let probeProposalId = '';
   const proven = new Set<string>();
   const asUser = <T>(userId: string, fn: () => Promise<T>): Promise<T> =>
     ctx.runWithContext({ turnId: 't', requestId: 'r', startTime: Date.now(), userId }, async () => await fn());
@@ -162,6 +163,7 @@ describeTarget('encryption at rest: needs, repair and follow-up columns (FIELD_E
     });
     expect({ status: res.status, body: res.body }).toMatchObject({ status: 201 });
     const row = { id: res.body.data.strategy.id as string };
+    probeProposalId = row.id;
     await expectSealed(run, 'proposal', 'description', `id = $1`, [row.id]);
     const p = await asUser(ids.bobUser, () => store.loadProposal(row.id));
     expect(p?.description).toBe('PROBE_TS13_PROPOSAL take a walk on Sundays');
@@ -187,6 +189,55 @@ describeTarget('encryption at rest: needs, repair and follow-up columns (FIELD_E
     });
     // 'Partnership' is Ada's private label: Bob reads only its shared text, so it stays unresolved
     expect(back?.unresolvedNeedLabels).toEqual(['Partnership']);
+  });
+
+  it('fix round 2 (R47): a captured REVISE and a captured REMOVE keep the chat text out of proposal_revision.reason, in the encrypted after', async () => {
+    const capture = await import('../stage4-capture.service');
+    const asBob = <T>(fn: () => Promise<T>) => asUser(ids.bobUser, fn);
+    const revise = 'Please change "PROBE_TS13_PROPOSAL take a walk on Sundays" to take a long walk together every Sunday morning.';
+    const remove = 'Please remove the proposal "take a long walk together every Sunday morning".';
+    for (const userMessage of [revise, remove]) {
+      await asBob(() =>
+        capture.captureStage4Turn({
+          sessionId: ids.session,
+          userId: ids.bobUser,
+          messageId: '019a0000-0000-7000-8000-0000000000ef',
+          userMessage,
+          aiResponse: 'Noted.',
+        }),
+      );
+    }
+    const rows = await run.sql<{ action: string; reason: string | null; after: unknown; before: unknown }>(
+      `SELECT action::text AS action, reason, after, before FROM proposal_revision
+       WHERE proposal_id = $1 AND action IN ('REVISED', 'REMOVED') ORDER BY created_at, id`,
+      [probeProposalId],
+    );
+    expect(rows.map(r => r.action)).toEqual(['REVISED', 'REMOVED']);
+    for (const r of rows) {
+      // the marker column never holds the participant's text; the row nowhere holds it in plaintext
+      expect(r.reason).toBeNull();
+      expect(JSON.stringify(r)).not.toContain('Please');
+      expect(JSON.stringify(r)).not.toContain('PROBE_TS13_PROPOSAL');
+    }
+    await expectSealed(run, 'proposal_revision', 'after', `proposal_id = $1 AND action IN ('REVISED', 'REMOVED')`, [
+      probeProposalId,
+    ]);
+    await expectSealed(run, 'proposal_revision', 'before', `proposal_id = $1 AND action IN ('REVISED', 'REMOVED')`, [
+      probeProposalId,
+    ]);
+    // the app reads the explaining text back from the encrypted after
+    const back = await asBob(() =>
+      prisma.proposalRevision.findMany({
+        where: { proposalId: probeProposalId, action: { in: ['REVISED', 'REMOVED'] } },
+        orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+        select: { action: true, after: true },
+      }),
+    );
+    expect(back.map(b => (b.after as { reasonText?: string }).reasonText)).toEqual([revise, remove]);
+    const removed = await asBob(() =>
+      prisma.proposal.findUnique({ where: { id: probeProposalId }, select: { status: true, removalReason: true } }),
+    );
+    expect(removed).toEqual({ status: 'REMOVED', removalReason: remove });
   });
 
   it('proposal_choice.note (upsertChoice, raw INSERT as mwf_app): sealed; loadVisibleChoices (raw) decrypts; sharing calls the hook', async () => {

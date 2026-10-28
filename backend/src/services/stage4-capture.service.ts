@@ -576,16 +576,20 @@ async function writeRevision(
   action: 'CREATED' | 'REVISED' | 'REMOVED' | 'RESTORED' | 'CAPTURE_SKIPPED',
   before: Record<string, unknown> | null,
   after: Record<string, unknown>,
-  reason?: string | null,
+  /** The text that explains the revision (a chat turn, the coach's proposal text): user/model-derived. */
+  reasonText?: string | null,
 ): Promise<void> {
+  // R47: `reason` is a plaintext marker column filtered by value; the explaining
+  // text is user/model-derived, so it goes into the encrypted `after` envelope
+  // (proposal_revision.after, R46) and `reason` stays null.
   await prisma.proposalRevision.create({
     data: {
       proposalId,
       actorParticipantId: ctx.actor,
       action,
       ...(before ? { before: before as object } : {}),
-      after: { ...after, capturedFromUserMessage: ctx.userMessage } as object,
-      reason: reason ?? null,
+      after: { ...after, capturedFromUserMessage: ctx.userMessage, reasonText: reasonText ?? null } as object,
+      reason: null,
     },
   });
 }

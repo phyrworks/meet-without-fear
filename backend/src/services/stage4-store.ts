@@ -29,6 +29,7 @@ export type JobTx = Prisma.TransactionClient;
 import { getJobPrisma, prisma } from '../lib/prisma';
 import { decryptRawRows, encryptColumnValue } from '../lib/prisma-encryption-middleware';
 import { reencryptForSession } from '../lib/share-moments';
+import { PROPOSAL_REVISION_REASONS, proposalRevisionReason, type ProposalRevisionReason } from './proposal-revision-reasons';
 import { reachMilestone } from './milestone-writer';
 
 // ============================================================================
@@ -526,7 +527,8 @@ export interface CreateAgreementsArgs {
   partyParticipantIds: string[];
   agreements: AgreementToCreate[];
   at?: Date;
-  reason?: string;
+  /** A proposal_revision.reason marker (R47); never free text. */
+  reason?: ProposalRevisionReason;
 }
 
 export async function createAgreementsAsJob(args: CreateAgreementsArgs): Promise<string[]> {
@@ -559,7 +561,7 @@ export async function insertAgreementsTx(tx: JobTx, args: CreateAgreementsArgs):
         VALUES (${a.proposalId}::uuid, ${args.actorParticipantId}::uuid, 'CONVERTED',
                 ${JSON.stringify(encryptColumnValue('proposal_revision', 'before', { status: a.fromStatus }))}::jsonb,
                 ${JSON.stringify(encryptColumnValue('proposal_revision', 'after', { agreementId: row.id, status: 'CONVERTED_TO_AGREEMENT' }))}::jsonb,
-                ${args.reason ?? 'Mutual Stage 4 willingness closure'})`;
+                ${proposalRevisionReason(args.reason ?? PROPOSAL_REVISION_REASONS.MUTUAL_CLOSURE)})`;
     }
     return ids;
   }

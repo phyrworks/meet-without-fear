@@ -80,8 +80,10 @@
  * | user_memory.suggested_text                    | text           | user        |
  * | reminder.note                                 | text           | user        |
  *
- * Left plain, with why: proposal_revision.reason (app marker strings, filtered
- * by value); reconciler_guidance.guidance_type, reminder.cadence (categories);
+ * Left plain, with why: proposal_revision.reason — by ruling R47 it holds only
+ * the closed set of app markers in services/proposal-revision-reasons.ts
+ * (filtered by value in controllers/stage4.ts); every user- or model-derived
+ * text of a revision is written into its encrypted `after`/`before`; reconciler_guidance.guidance_type, reminder.cadence (categories);
  * reflection.theme, takeaway.theme (taxonomy labels SQL groups on —
  * v_reflection_theme); participant.display_name, relationship_member.nickname,
  * user.* (identity, read by views and the dashboard search); user_device.push_token
@@ -247,9 +249,9 @@ export const SENSITIVE_FIELD_MAP: Record<string, SensitiveFieldConfig> = {
   },
   ProposalRevision: {
     table: 'proposal_revision',
-    // R46: free-form snapshots of a proposal. `reason` stays plain: it holds the
-    // app's marker strings (LEGACY_PROPOSED / LEGACY_CONFIRMED) and is filtered by
-    // value (controllers/stage4.ts), which a random-IV cipher cannot serve.
+    // R46: free-form snapshots of a proposal. `reason` stays plain (R47): it may
+    // hold only the app markers of services/proposal-revision-reasons.ts, which
+    // controllers/stage4.ts filters by value; explaining text goes into `after`.
     fields: {
       before: { column: 'before', kind: 'jsonb-envelope', key: 'session', amended: true },
       after: { column: 'after', kind: 'jsonb-envelope', key: 'session', amended: true },

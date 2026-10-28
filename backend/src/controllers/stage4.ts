@@ -27,6 +27,7 @@
 import { Request, Response } from 'express';
 import { logger } from '../lib/logger';
 import { getJobPrisma, prisma } from '../lib/prisma';
+import { PROPOSAL_REVISION_REASONS } from '../services/proposal-revision-reasons';
 import { decryptRawRows } from '../lib/prisma-encryption-middleware';
 import {
   proposeStrategyRequestSchema,
@@ -293,8 +294,8 @@ async function notifyStrategiesUpdated(sessionId: string, userId: string, change
  * unshared redesigned-flow selection).
  */
 const LEGACY_AGREEMENT_MARK = 'agreementProposed';
-const LEGACY_PROPOSED = 'Proposed as an agreement';
-const LEGACY_CONFIRMED = 'Confirmed as an agreement';
+const LEGACY_PROPOSED = PROPOSAL_REVISION_REASONS.LEGACY_PROPOSED;
+const LEGACY_CONFIRMED = PROPOSAL_REVISION_REASONS.LEGACY_CONFIRMED;
 
 /** Participants who proposed or confirmed this proposal as an agreement (their own acts). */
 async function legacyParties(proposalId: string): Promise<Set<string>> {
@@ -868,7 +869,7 @@ async function agreeIfEveryoneWilling(args: {
     sessionId: args.sessionId,
     actorParticipantId: args.actor,
     partyParticipantIds: ids,
-    reason: 'Every party confirmed the agreement',
+    reason: PROPOSAL_REVISION_REASONS.EVERY_PARTY_CONFIRMED,
     agreements: [
       {
         proposalId: proposal.id,
@@ -947,7 +948,7 @@ export async function createAgreement(req: Request, res: Response): Promise<void
         actorParticipantId: me,
         action: 'REVISED',
         after: { [LEGACY_AGREEMENT_MARK]: true, type, followUpDate: followUpDate ?? null },
-        reason: LEGACY_PROPOSED,
+        reason: PROPOSAL_REVISION_REASONS.LEGACY_PROPOSED,
       },
     });
 
@@ -1039,7 +1040,7 @@ export async function confirmAgreement(req: Request, res: Response): Promise<voi
           actorParticipantId: me,
           action: 'REVISED',
           after: { [LEGACY_AGREEMENT_MARK]: true, confirmed: true },
-          reason: LEGACY_CONFIRMED,
+          reason: PROPOSAL_REVISION_REASONS.LEGACY_CONFIRMED,
         },
       });
       createdId = await agreeIfEveryoneWilling({

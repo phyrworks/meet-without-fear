@@ -31,6 +31,7 @@ import {
   ConfirmMemoryUpdateRequest,
 } from '@meet-without-fear/shared';
 import { validateMemory } from '../services/memory-validator';
+import { formatMemoryRequest, processMemoryUpdate } from '../services/memory-formatter';
 
 /**
  * The user's ACTIVE global memory with exactly this content, if any.
@@ -46,7 +47,6 @@ async function findActiveGlobalDuplicate(userId: string, content: string): Promi
   const hit = active.find(m => m.content === content);
   return hit ? { id: hit.id } : null;
 }
-import { formatMemoryRequest, processMemoryUpdate } from '../services/memory-formatter';
 
 // ============================================================================
 // Helper Functions
