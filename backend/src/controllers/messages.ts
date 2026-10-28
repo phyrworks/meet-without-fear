@@ -8,7 +8,7 @@
  */
 
 import { Request, Response } from 'express';
-import { Prisma, type PrismaClient } from '../generated/prisma/client';
+import { Prisma } from '../generated/prisma/client';
 import { logger } from '../lib/logger';
 import { getJobPrisma, prisma } from '../lib/prisma';
 import { getSonnetResponse, BrainActivityCallType } from '../lib/bedrock';
@@ -27,11 +27,7 @@ import {
 import { assembleStreamTurnContext } from '../services/stream-turn-context';
 import { runStreamTurnModel } from '../services/stream-turn-model';
 import { resolveStreamTurn } from '../services/stream-turn-resolution';
-import {
-  feelHeardRequestSchema,
-  getMessagesQuerySchema,
-  type StreamEvent,
-} from '@meet-without-fear/shared';
+import { feelHeardRequestSchema, getMessagesQuerySchema, type StreamEvent } from '@meet-without-fear/shared';
 import { notifyPartner, publishSessionEvent } from '../services/realtime';
 import { successResponse, errorResponse } from '../utils/response';
 import { isSessionCreator } from '../utils/session';
@@ -66,7 +62,7 @@ function getFallbackInitialMessage(
   userName: string,
   partnerName: string | undefined,
   isInvitationPhase: boolean,
-  isInvitee: boolean
+  isInvitee: boolean,
 ): string {
   const partner = partnerName || 'them';
 
@@ -81,17 +77,17 @@ function getFallbackInitialMessage(
   return `Hey ${userName}, what's on your mind?`;
 }
 
-const STAGE2_ROADMAP_COPY =
-  `Here's what comes next: there are a few more steps in this process. First, each of you tries to understand what the other person might be going through. Then you'll each explore what matters most to you, and eventually use that to get clearer about what is possible next, whether together or separately.`;
+const STAGE2_ROADMAP_COPY = `Here's what comes next: there are a few more steps in this process. First, each of you tries to understand what the other person might be going through. Then you'll each explore what matters most to you, and eventually use that to get clearer about what is possible next, whether together or separately.`;
 
 function buildStage2TransitionFallback(
   partnerName: string | undefined,
-  partnerStatus: 'not_joined' | 'in_progress' | 'completed'
+  partnerStatus: 'not_joined' | 'in_progress' | 'completed',
 ): string {
   const partner = partnerName || 'your partner';
-  const mutualPhrase = partnerStatus === 'not_joined'
-    ? `${partnerName || 'Your partner'} will be doing this same thing for you on their side.`
-    : `${partnerName || 'Your partner'} is doing this same thing for you on their side.`;
+  const mutualPhrase =
+    partnerStatus === 'not_joined'
+      ? `${partnerName || 'Your partner'} will be doing this same thing for you on their side.`
+      : `${partnerName || 'Your partner'} is doing this same thing for you on their side.`;
 
   return `That gives us enough to move to the next step.\n\n${STAGE2_ROADMAP_COPY}\n\nThis next part may feel unusual: try to imagine what ${partner} might be experiencing, even if you are still upset with them. This is not about excusing, agreeing, softening your boundary, or deciding what happens next. It is a guess about how this may be landing for ${partner}, while keeping your own truth intact. ${mutualPhrase}\n\nWhat do you think might be going on for ${partner} in all of this?`;
 }
@@ -103,20 +99,15 @@ function scrubStage2RepairFraming(content: string): string {
       'genuinely tr(?:y|ies)ing to see',
       'work things out',
     ].join('[^.]*'),
-    'gi'
+    'gi',
   );
-  const moveForwardTogetherRegex = new RegExp(
-    ['once you both feel', 'move forward together'].join('[^.]*'),
-    'gi'
-  );
+  const moveForwardTogetherRegex = new RegExp(['once you both feel', 'move forward together'].join('[^.]*'), 'gi');
 
   return content
+    .replace(researchToRepairRegex, 'This is not about excusing, agreeing, or deciding what happens next')
     .replace(
-      researchToRepairRegex,
-      "This is not about excusing, agreeing, or deciding what happens next"
-    )
-    .replace(moveForwardTogetherRegex,
-      "If something feels off, you can say what is missing before the process continues."
+      moveForwardTogetherRegex,
+      'If something feels off, you can say what is missing before the process continues.',
     );
 }
 
@@ -132,25 +123,23 @@ function scrubStage2RepairFraming(content: string): string {
  * The streaming endpoint provides real-time token streaming and better error handling.
  */
 export async function sendMessage(req: Request, res: Response): Promise<void> {
-  logger.warn('[sendMessage] DEPRECATED: Fire-and-forget endpoint called. Clients should use /messages/stream instead.');
+  logger.warn(
+    '[sendMessage] DEPRECATED: Fire-and-forget endpoint called. Clients should use /messages/stream instead.',
+  );
 
   errorResponse(
     res,
     'ENDPOINT_DEPRECATED',
     'This endpoint is deprecated. Please use POST /sessions/:id/messages/stream for SSE streaming.',
-    410 // HTTP 410 Gone
+    410, // HTTP 410 Gone
   );
 }
-
 
 /**
  * Confirm that user feels heard and can proceed
  * POST /sessions/:id/feel-heard
  */
-export async function confirmFeelHeard(
-  req: Request,
-  res: Response
-): Promise<void> {
+export async function confirmFeelHeard(req: Request, res: Response): Promise<void> {
   try {
     const user = req.user;
     if (!user) {
@@ -163,13 +152,7 @@ export async function confirmFeelHeard(
     // Validate request body
     const parseResult = feelHeardRequestSchema.safeParse(req.body);
     if (!parseResult.success) {
-      errorResponse(
-        res,
-        'VALIDATION_ERROR',
-        'Invalid request body',
-        400,
-        parseResult.error.issues
-      );
+      errorResponse(res, 'VALIDATION_ERROR', 'Invalid request body', 400, parseResult.error.issues);
       return;
     }
 
@@ -205,7 +188,9 @@ export async function confirmFeelHeard(
     }
 
     // The participant's progress (stage shim)
-    const stageState = (await loadStageStates([{ id: participant.id, joinedAt: participant.joinedAt }])).get(participant.id);
+    const stageState = (await loadStageStates([{ id: participant.id, joinedAt: participant.joinedAt }])).get(
+      participant.id,
+    );
     // A participant row IS having joined (the old check was "has a StageProgress row").
     const hasJoined = true;
 
@@ -226,7 +211,8 @@ export async function confirmFeelHeard(
         // ACTIVE — through app.session_set_status, the only writer of
         // session.status (spec §4), as the job (a two-party fact).
         if (hasJoined && !isCreator) {
-          await getJobPrisma().$executeRaw`SELECT app.session_set_status(${sessionId}::uuid, 'ACTIVE'::public.session_status)`;
+          await getJobPrisma()
+            .$executeRaw`SELECT app.session_set_status(${sessionId}::uuid, 'ACTIVE'::public.session_status)`;
           logger.info(`[confirmFeelHeard] Updated session ${sessionId} status to ACTIVE (user has joined)`);
         }
         // Creator can proceed while session is INVITED
@@ -243,7 +229,7 @@ export async function confirmFeelHeard(
         res,
         'VALIDATION_ERROR',
         `Cannot confirm feel-heard: you are in stage ${currentStage}, but stage 1 is required`,
-        400
+        400,
       );
       return;
     }
@@ -282,18 +268,15 @@ export async function confirmFeelHeard(
     if (confirmed && participant.mainConversationId) {
       try {
         // Get partner name (using nickname) and status for the transition message
-        const myMember = session.relationship.members.find((m) => m.userId === user.id);
-        const partnerMember = session.relationship.members.find((m) => m.userId !== user.id);
+        const myMember = session.relationship.members.find(m => m.userId === user.id);
+        const partnerMember = session.relationship.members.find(m => m.userId !== user.id);
 
         let partnerName: string | undefined;
         let partnerStatus: 'not_joined' | 'in_progress' | 'completed' = 'not_joined';
 
         if (partnerMember) {
           // Use nickname (what I call my partner) → firstName → name
-          partnerName = myMember?.nickname ||
-            partnerMember.user.firstName ||
-            partnerMember.user.name ||
-            undefined;
+          partnerName = myMember?.nickname || partnerMember.user.firstName || partnerMember.user.name || undefined;
 
           // The partner has begun once they are a participant (old: had a StageProgress row).
           if (partnerState) {
@@ -308,9 +291,7 @@ export async function confirmFeelHeard(
           partnerName = myMember?.nickname || invitation?.name || undefined;
         }
 
-        const transitionContent = scrubStage2RepairFraming(
-          buildStage2TransitionFallback(partnerName, partnerStatus)
-        );
+        const transitionContent = scrubStage2RepairFraming(buildStage2TransitionFallback(partnerName, partnerStatus));
 
         // The facilitator's first Stage 2 message, into the participant's
         // conversation (job connection).
@@ -322,7 +303,7 @@ export async function confirmFeelHeard(
         // Embed session content for cross-session retrieval (non-blocking)
         // Per fact-ledger architecture, we embed at session level
         embedSessionContent(sessionId, user.id, turnId).catch((err: unknown) =>
-          logger.warn('[confirmFeelHeard] Failed to embed session content:', err)
+          logger.warn('[confirmFeelHeard] Failed to embed session content:', err),
         );
 
         transitionMessage = {
@@ -340,7 +321,7 @@ export async function confirmFeelHeard(
     }
 
     // Check if partner has also completed (their feel_heard milestone — S-class)
-    const partnerCompleted = partnerState?.milestones.some((m) => m.key === 'feel_heard') ?? false;
+    const partnerCompleted = partnerState?.milestones.some(m => m.key === 'feel_heard') ?? false;
     const canAdvance = confirmed && partnerCompleted;
 
     // Notify partner of stage completion
@@ -355,7 +336,7 @@ export async function confirmFeelHeard(
       // Consolidate global facts when Stage 1 completes (fire-and-forget)
       // Per fact-ledger architecture, we merge session facts into user's global profile
       consolidateGlobalFacts(user.id, sessionId, turnId).catch((err: unknown) =>
-        logger.warn('[confirmFeelHeard] Failed to consolidate global facts:', err)
+        logger.warn('[confirmFeelHeard] Failed to consolidate global facts:', err),
       );
     }
 
@@ -388,23 +369,31 @@ export async function confirmFeelHeard(
         // Trigger reconciler in the background
         (async () => {
           try {
-            logger.info(`[confirmFeelHeard] Calling runReconcilerForDirection for sessionId=${sessionId}, guesserId=${partnerId}, subjectId=${user.id}`);
+            logger.info(
+              `[confirmFeelHeard] Calling runReconcilerForDirection for sessionId=${sessionId}, guesserId=${partnerId}, subjectId=${user.id}`,
+            );
             const result = await runReconcilerForDirection(sessionId, partnerId, user.id);
 
-            logger.info(`[confirmFeelHeard] Reconciler completed: status=${result.empathyStatus}, hasSuggestion=${!!result.shareOffer}`);
+            logger.info(
+              `[confirmFeelHeard] Reconciler completed: status=${result.empathyStatus}, hasSuggestion=${!!result.shareOffer}`,
+            );
 
             // If there's a share suggestion, notify the current user (subject).
             // The event's audience field is the realtime envelope's user id
             // (shared contract, plan §5 "Realtime"); mobile filters on it.
             if (result.empathyStatus === 'AWAITING_SHARING' && result.shareOffer) {
-              logger.info(`[confirmFeelHeard] Significant gaps found - notifying subject ${user.id} of share suggestion`);
+              logger.info(
+                `[confirmFeelHeard] Significant gaps found - notifying subject ${user.id} of share suggestion`,
+              );
               const { buildEmpathyExchangeStatus } = await import('../services/empathy-status');
               const empathyStatus = await buildEmpathyExchangeStatus(sessionId, user.id);
               await notifyPartner(sessionId, user.id, 'empathy.share_suggestion', {
                 forUserId: user.id,
                 guesserName: 'your partner',
                 suggestedContent: result.shareOffer.suggestedContent,
-                suggestedReason: (result.shareOffer as any).reason || (result.shareOffer as any).suggestedReason,
+                suggestedReason:
+                  (result.shareOffer as { reason?: string; suggestedReason?: string }).reason ||
+                  (result.shareOffer as { reason?: string; suggestedReason?: string }).suggestedReason,
                 empathyStatus,
                 // Include triggeredByUserId for event tracing
                 triggeredByUserId: user.id,
@@ -412,7 +401,9 @@ export async function confirmFeelHeard(
             }
 
             if (result.empathyStatus === 'READY') {
-              logger.info(`[confirmFeelHeard] No significant gaps - empathy marked READY, waiting for partner to complete Stage 2`);
+              logger.info(
+                `[confirmFeelHeard] No significant gaps - empathy marked READY, waiting for partner to complete Stage 2`,
+              );
             }
           } catch (error) {
             logger.error('[confirmFeelHeard] Reconciler background task failed:', error);
@@ -443,10 +434,7 @@ export async function confirmFeelHeard(
  * Get conversation history for the current user in a session
  * GET /sessions/:id/messages
  */
-export async function getConversationHistory(
-  req: Request,
-  res: Response
-): Promise<void> {
+export async function getConversationHistory(req: Request, res: Response): Promise<void> {
   const requestId = `get-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
   try {
     logger.info(`[getConversationHistory:${requestId}] ========== REQUEST START ==========`);
@@ -463,13 +451,7 @@ export async function getConversationHistory(
     // Validate query params
     const parseResult = getMessagesQuerySchema.safeParse(req.query);
     if (!parseResult.success) {
-      errorResponse(
-        res,
-        'VALIDATION_ERROR',
-        'Invalid query parameters',
-        400,
-        parseResult.error.issues
-      );
+      errorResponse(res, 'VALIDATION_ERROR', 'Invalid query parameters', 400, parseResult.error.issues);
       return;
     }
 
@@ -485,7 +467,9 @@ export async function getConversationHistory(
 
     // The caller's MAIN conversation IS the audience: no sender/recipient
     // filter exists any more (target shape: no recipient column).
-    logger.info(`[getConversationHistory:${requestId}] Fetching messages with limit=${limit}, before=${before || 'none'}, after=${after || 'none'}, order=${order}`);
+    logger.info(
+      `[getConversationHistory:${requestId}] Fetching messages with limit=${limit}, before=${before || 'none'}, after=${after || 'none'}, order=${order}`,
+    );
     const [messages, milestones] = await Promise.all([
       listConversationMessages({
         conversationId: participant.mainConversationId,
@@ -503,7 +487,9 @@ export async function getConversationHistory(
     const hasMore = messages.length > limit;
     let resultMessages = hasMore ? messages.slice(0, limit) : messages;
 
-    logger.info(`[getConversationHistory:${requestId}] Returning ${resultMessages.length} messages (hasMore=${hasMore})`);
+    logger.info(
+      `[getConversationHistory:${requestId}] Returning ${resultMessages.length} messages (hasMore=${hasMore})`,
+    );
 
     // If fetched in descending order, reverse to return chronological order for display
     // This allows us to fetch the latest N messages but display them oldest-first
@@ -513,7 +499,7 @@ export async function getConversationHistory(
 
     const ownerMilestones = milestones.get(participant.id) ?? [];
     successResponse(res, {
-      messages: resultMessages.map((m) => ({
+      messages: resultMessages.map(m => ({
         ...toMessageDTO(m, { sessionId, ownerMilestones }),
         refiningNeedId: m.refiningNeedId ?? null,
       })),
@@ -529,10 +515,7 @@ export async function getConversationHistory(
  * Get AI-generated initial message for a session/stage
  * POST /sessions/:id/messages/initial
  */
-export async function getInitialMessage(
-  req: Request,
-  res: Response
-): Promise<void> {
+export async function getInitialMessage(req: Request, res: Response): Promise<void> {
   try {
     const user = req.user;
     if (!user) {
@@ -564,7 +547,9 @@ export async function getInitialMessage(
     }
 
     // The participant's current stage (stage shim)
-    const stageState = (await loadStageStates([{ id: participant.id, joinedAt: participant.joinedAt }])).get(participant.id);
+    const stageState = (await loadStageStates([{ id: participant.id, joinedAt: participant.joinedAt }])).get(
+      participant.id,
+    );
     const currentStage = stageState?.current.stage ?? 0;
 
     // Determine if this is the invitation phase
@@ -624,10 +609,7 @@ export async function getInitialMessage(
         });
 
         partnerName =
-          inviterMembership?.nickname ||
-          partnerMember?.user.firstName ||
-          partnerMember?.user.name ||
-          undefined;
+          inviterMembership?.nickname || partnerMember?.user.firstName || partnerMember?.user.name || undefined;
       }
     }
 
@@ -645,8 +627,8 @@ export async function getInitialMessage(
           theme: true,
           messages: {
             orderBy: { createdAt: 'asc' },
-            select: { role: true, content: true }
-          }
+            select: { role: true, content: true },
+          },
         },
       });
 
@@ -662,7 +644,7 @@ export async function getInitialMessage(
         innerThoughtsContext = {
           summary: originInnerThoughts.summary || '',
           themes: originInnerThoughts.theme ? [originInnerThoughts.theme] : [],
-          fullContext: fullContext || undefined
+          fullContext: fullContext || undefined,
         };
       }
     }
@@ -672,47 +654,51 @@ export async function getInitialMessage(
     if (!isInvitee && isInvitationPhase && innerThoughtsContext) {
       // Use the actual invitation crafting prompt with extra context
       // This allows the AI to propose an invitation in the first message
-      prompt = buildStagePromptString(0, {
-        userName,
-        partnerName,
-        turnCount: 1,
-        emotionalIntensity: 5,
-        contextBundle: {
-          conversationContext: {
-            recentTurns: [],
-            turnCount: 0,
-            sessionDurationMinutes: 0,
-          },
-          emotionalThread: {
-            initialIntensity: null,
-            currentIntensity: null,
-            trend: 'unknown',
-            notableShifts: [],
-          },
-          stageContext: {
-            stage: 0,
-            gatesSatisfied: {},
-          },
+      prompt = buildStagePromptString(
+        0,
+        {
           userName,
           partnerName,
-          intent: {
-            intent: 'stage_enforcement',
-            depth: 'minimal',
-            reason: 'Stage 0 - onboarding with minimal context',
-            threshold: 0.60,
-            maxCrossSession: 0,
-            allowCrossSession: false,
-            surfaceStyle: 'silent',
+          turnCount: 1,
+          emotionalIntensity: 5,
+          contextBundle: {
+            conversationContext: {
+              recentTurns: [],
+              turnCount: 0,
+              sessionDurationMinutes: 0,
+            },
+            emotionalThread: {
+              initialIntensity: null,
+              currentIntensity: null,
+              trend: 'unknown',
+              notableShifts: [],
+            },
+            stageContext: {
+              stage: 0,
+              gatesSatisfied: {},
+            },
+            userName,
+            partnerName,
+            intent: {
+              intent: 'stage_enforcement',
+              depth: 'minimal',
+              reason: 'Stage 0 - onboarding with minimal context',
+              threshold: 0.6,
+              maxCrossSession: 0,
+              allowCrossSession: false,
+              surfaceStyle: 'silent',
+            },
+            assembledAt: new Date().toISOString(),
           },
-          assembledAt: new Date().toISOString(),
+          innerThoughtsContext,
         },
-        innerThoughtsContext,
-      }, { isInvitationPhase: true });
+        { isInvitationPhase: true },
+      );
     } else {
       prompt = buildInitialMessagePrompt(
         currentStage,
         { userName, partnerName, isInvitee, topicFrame: session.topicFrame, innerThoughtsContext },
-        isInvitationPhase
+        isInvitationPhase,
       );
     }
 
@@ -738,7 +724,8 @@ export async function getInitialMessage(
       if (aiResponse) {
         // Parse the semantic tag response (micro-tag format)
         const parsed = parseMicroTagResponse(aiResponse);
-        responseContent = parsed.response.trim() || getFallbackInitialMessage(userName, partnerName, isInvitationPhase, isInvitee);
+        responseContent =
+          parsed.response.trim() || getFallbackInitialMessage(userName, partnerName, isInvitationPhase, isInvitee);
       } else {
         // Fallback if AI unavailable
         responseContent = getFallbackInitialMessage(userName, partnerName, isInvitationPhase, isInvitee);
@@ -758,23 +745,30 @@ export async function getInitialMessage(
       // The probe reads only (id, created_at) — all the job may SELECT from
       // message (trailer T7) — and an existing message is re-read on the app
       // connection after the transaction.
-      const written = await getJobPrisma().$transaction(async (tx) => {
-        const existing = await tx.message.findFirst({
-          where: { conversationId },
-          orderBy: { createdAt: 'asc' },
-          select: { id: true },
-        });
-        if (existing) return { existingId: existing.id };
-        return {
-          created: await createFacilitatorMessage({
-            conversationId,
-            content: responseContent.trim(),
-            client: tx,
-          }),
-        };
-      }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
-      aiMessage = written.created
-        ?? ((await prisma.message.findUniqueOrThrow({ where: { id: written.existingId! }, select: MESSAGE_SELECT })) as StoredMessage);
+      const written = await getJobPrisma().$transaction(
+        async tx => {
+          const existing = await tx.message.findFirst({
+            where: { conversationId },
+            orderBy: { createdAt: 'asc' },
+            select: { id: true },
+          });
+          if (existing) return { existingId: existing.id };
+          return {
+            created: await createFacilitatorMessage({
+              conversationId,
+              content: responseContent.trim(),
+              client: tx,
+            }),
+          };
+        },
+        { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+      );
+      aiMessage =
+        written.created ??
+        ((await prisma.message.findUniqueOrThrow({
+          where: { id: written.existingId! },
+          select: MESSAGE_SELECT,
+        })) as StoredMessage);
     } catch (error) {
       if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2034') {
         const existing = await prisma.message.findFirst({
@@ -795,7 +789,7 @@ export async function getInitialMessage(
     // Embed session content for cross-session retrieval (non-blocking)
     // Per fact-ledger architecture, we embed at session level
     embedSessionContent(sessionId, user.id, turnId).catch((err: unknown) =>
-      logger.warn('[getInitialMessage] Failed to embed session content:', err)
+      logger.warn('[getInitialMessage] Failed to embed session content:', err),
     );
 
     logger.info(`[getInitialMessage] Generated initial message for session ${sessionId}, stage ${currentStage}`);
@@ -857,16 +851,8 @@ export async function sendMessageStream(req: Request, res: Response): Promise<vo
       return;
     }
 
-    const {
-      user,
-      sessionId,
-      participant,
-      content,
-      session,
-      currentStage,
-      refiningNeedContext,
-      userMessage,
-    } = admission;
+    const { user, sessionId, participant, content, session, currentStage, refiningNeedContext, userMessage } =
+      admission;
 
     // Set up SSE headers
     res.setHeader('Content-Type', 'text/event-stream');
@@ -934,7 +920,7 @@ export async function sendMessageStream(req: Request, res: Response): Promise<vo
         userTurnCount,
         prompt,
         messagesWithContext,
-        emitVisibleChunk: (text) => sendSSE(res, { event: 'chunk', data: { text } }),
+        emitVisibleChunk: text => sendSSE(res, { event: 'chunk', data: { text } }),
         isClientDisconnected: () => clientDisconnected,
       });
 
@@ -953,14 +939,13 @@ export async function sendMessageStream(req: Request, res: Response): Promise<vo
         accumulatedText: modelResult.accumulatedText,
         metadata: modelResult.metadata,
         captured: modelResult.captured,
-        emitVisibleChunk: (text) => sendSSE(res, { event: 'chunk', data: { text } }),
+        emitVisibleChunk: text => sendSSE(res, { event: 'chunk', data: { text } }),
       });
       accumulatedText = resolution.accumulatedText;
       metadata = resolution.metadata;
       isDispatchMessage = resolution.isDispatchMessage;
 
       finalizeTurnMetrics(turnId);
-
     } catch (error) {
       logger.error(`[sendMessageStream:${requestId}] Stream error:`, error);
       streamError = error instanceof Error ? error : new Error(String(error));
@@ -1053,7 +1038,6 @@ export async function sendMessageStream(req: Request, res: Response): Promise<vo
     // End response
     res.end();
     logger.info(`[sendMessageStream:${requestId}] ========== SSE STREAM COMPLETE ==========`);
-
   } catch (error) {
     logger.error(`[sendMessageStream:${requestId}] Error:`, error);
 

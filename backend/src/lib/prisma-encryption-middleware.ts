@@ -18,7 +18,7 @@
  * to the caller. It is never converted into empty content.
  */
 
-import { Prisma, PrismaClient } from '../generated/prisma/client';
+import { PrismaClient } from '../generated/prisma/client';
 import { encrypt, decrypt, isEncrypted } from '../utils/field-encryption';
 import { contentHash } from '../utils/content-hash';
 
@@ -54,14 +54,7 @@ export const SENSITIVE_FIELD_MAP: Record<string, SensitiveFieldConfig> = {
   User: { stringFields: [], jsonFields: ['globalFacts'] },
 };
 
-const WRITE_OPERATIONS = new Set([
-  'create',
-  'update',
-  'upsert',
-  'createMany',
-  'createManyAndReturn',
-  'updateMany',
-]);
+const WRITE_OPERATIONS = new Set(['create', 'update', 'upsert', 'createMany', 'createManyAndReturn', 'updateMany']);
 
 const RESULT_BEARING_OPERATIONS = new Set([
   'findFirst',
@@ -77,10 +70,7 @@ const RESULT_BEARING_OPERATIONS = new Set([
 ]);
 
 /** Encrypt a single data object's sensitive fields in place. */
-export function encryptDataFields(
-  data: Record<string, unknown>,
-  config: SensitiveFieldConfig,
-): void {
+export function encryptDataFields(data: Record<string, unknown>, config: SensitiveFieldConfig): void {
   // Hash BEFORE encrypting — the digest must cover the plaintext. Written on
   // every write that supplies the source field, including when no encryption
   // key is configured, so probes behave identically in both modes.
@@ -104,10 +94,7 @@ export function encryptDataFields(
 }
 
 /** Decrypt a single record's sensitive fields in place. */
-export function decryptRecordFields(
-  record: Record<string, unknown>,
-  config: SensitiveFieldConfig,
-): void {
+export function decryptRecordFields(record: Record<string, unknown>, config: SensitiveFieldConfig): void {
   for (const field of config.stringFields) {
     if (field in record && typeof record[field] === 'string') {
       record[field] = decrypt(record[field] as string);
@@ -134,11 +121,7 @@ export function decryptRecordFields(
 }
 
 /** Encrypt write args based on the operation type. */
-function encryptWriteArgs(
-  operation: string,
-  args: Record<string, unknown>,
-  config: SensitiveFieldConfig,
-): void {
+function encryptWriteArgs(operation: string, args: Record<string, unknown>, config: SensitiveFieldConfig): void {
   if (operation === 'upsert') {
     if (args.create && typeof args.create === 'object') {
       encryptDataFields(args.create as Record<string, unknown>, config);
@@ -160,10 +143,7 @@ function encryptWriteArgs(
 }
 
 /** Decrypt result records. Handles single objects, arrays, and null. */
-function decryptResult(
-  result: unknown,
-  config: SensitiveFieldConfig,
-): void {
+function decryptResult(result: unknown, config: SensitiveFieldConfig): void {
   if (result == null) return;
   if (Array.isArray(result)) {
     for (const item of result) {

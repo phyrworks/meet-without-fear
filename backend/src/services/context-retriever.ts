@@ -18,11 +18,7 @@ import { resolveParticipant } from './participant-resolver';
 import { getHaikuJson } from '../lib/bedrock';
 import { MemoryIntentResult } from './memory-intent';
 import { MemoryPreferencesDTO } from '@meet-without-fear/shared';
-import {
-  getTimeContext,
-  getRecencyGuidance,
-  type TimeContext,
-} from '../utils/time-language';
+import { getTimeContext, getRecencyGuidance, type TimeContext } from '../utils/time-language';
 import { CONTEXT_LIMITS } from '../utils/token-budget';
 import { withHaikuCircuitBreaker } from '../utils/circuit-breaker';
 import { brainService } from '../services/brain-service';
@@ -143,15 +139,11 @@ interface ReferenceDetectionResult {
 /**
  * Detect references to past content in the user's message.
  * Uses Haiku for fast detection with circuit breaker protection.
- * 
+ *
  * Enhanced to catch commitment patterns like "But I thought...", "I thought we...",
  * "I assumed...", "I believed..." which are more common than explicit "we agreed".
  */
-async function detectReferences(
-  message: string,
-  sessionId: string,
-  turnId: string
-): Promise<ReferenceDetectionResult> {
+async function detectReferences(message: string, sessionId: string, turnId: string): Promise<ReferenceDetectionResult> {
   const prompt = `Analyze this message for references to past events, people, agreements, or time periods.
 
 Message: "${message}"
@@ -201,7 +193,7 @@ If no references, return empty arrays and needsRetrieval: false.`;
       return result;
     },
     fallback,
-    'detectReferences'
+    'detectReferences',
   );
 }
 
@@ -221,18 +213,19 @@ async function searchAcrossSessionsContent(
   _relationshipId: string,
   limit: number = 5,
   threshold: number = 0.5,
-  turnId?: string
+  turnId?: string,
 ): Promise<RelevantMessage[]> {
   // Use session-level search
   const sessionMatches = await searchSessionContent(userId, queryText, limit, threshold, turnId);
 
   // Convert session matches to RelevantMessage format for backward compatibility
   // Note: This is a lossy conversion - we no longer have individual messages
-  return sessionMatches.map((match) => {
+  return sessionMatches.map(match => {
     // Format facts as content if available
-    const factsContent = match.facts && match.facts.length > 0
-      ? match.facts.map((f) => `[${f.category}] ${f.fact}`).join('; ')
-      : 'No facts available';
+    const factsContent =
+      match.facts && match.facts.length > 0
+        ? match.facts.map(f => `[${f.category}] ${f.fact}`).join('; ')
+        : 'No facts available';
 
     return {
       content: factsContent,
@@ -247,24 +240,6 @@ async function searchAcrossSessionsContent(
   });
 }
 
-/**
- * Search within a specific session.
- * @deprecated Per fact-ledger architecture, within-session search is no longer used.
- * Session content is retrieved via facts + summary, not individual message search.
- * This function returns empty results - kept for backward compatibility.
- */
-async function searchWithinSession(
-  _sessionId: string,
-  _userId: string,
-  _queryEmbedding: number[],
-  _limit: number = 5,
-  _threshold: number = 0.5
-): Promise<RelevantMessage[]> {
-  // Per fact-ledger architecture, we no longer search within sessions at message level
-  // Session content (facts + summary) is available via assembleContextBundle
-  return [];
-}
-
 // ============================================================================
 // Conversation History
 // ============================================================================
@@ -273,16 +248,13 @@ async function searchWithinSession(
  * Get full conversation history for current session.
  * No arbitrary limits - we trust the model's context window.
  * Data isolation: only returns this user's messages and AI responses to them.
- * 
+ *
  * IMPORTANT: This fetches raw rows from the database, NOT from the vector store.
  * This ensures the AI sees messages sent 1 second ago even if they haven't been
  * embedded yet. This prevents the "async blind spot" where recent messages
  * might be missing from context.
  */
-async function getSessionHistory(
-  sessionId: string,
-  userId: string
-): Promise<ConversationMessage[]> {
+async function getSessionHistory(sessionId: string, userId: string): Promise<ConversationMessage[]> {
   // Target shape (TS-9): the user's participant's MAIN conversation — their
   // own turns and the AI's replies (delivered items excluded, as before).
   const participant = await resolveParticipant(sessionId, userId);
@@ -300,8 +272,8 @@ async function getSessionHistory(
     },
   });
 
-  return messages.map((m) => ({
-    role: m.role === 'USER' ? 'user' as const : 'assistant' as const,
+  return messages.map(m => ({
+    role: m.role === 'USER' ? ('user' as const) : ('assistant' as const),
     content: m.content,
     timestamp: m.createdAt.toISOString(),
   }));
@@ -314,53 +286,6 @@ async function getPreSessionMessages(_userId: string): Promise<ConversationMessa
   // Target shape (TS-9): pre-session chat is dropped (spec A-Q6 — PreSessionMessage
   // was never populated); there is nothing to read.
   return [];
-}
-
-/**
- * Search pre-session messages by semantic similarity.
- */
-async function searchPreSessionMessages(
-  userId: string,
-  queryEmbedding: number[],
-  limit: number = 5,
-  threshold: number = 0.5
-): Promise<RelevantMessage[]> {
-  const vectorSql = `[${queryEmbedding.join(',')}]`;
-
-  const results = await prisma.$queryRaw<
-    Array<{
-      id: string;
-      content: string;
-      role: string;
-      timestamp: Date;
-      distance: number;
-    }>
-  >`
-    SELECT
-      id,
-      content,
-      role,
-      timestamp,
-      embedding <=> ${vectorSql}::vector as distance
-    FROM "PreSessionMessage"
-    WHERE "userId" = ${userId}
-      AND embedding IS NOT NULL
-      AND "associatedSessionId" IS NULL
-      AND "expiresAt" > NOW()
-    ORDER BY distance ASC
-    LIMIT ${limit}
-  `;
-
-  return results
-    .map((r) => ({
-      content: r.content,
-      sessionId: 'pre-session',
-      partnerName: 'Pre-session',
-      similarity: 1 - r.distance / 2,
-      timestamp: r.timestamp.toISOString(),
-      role: r.role === 'USER' ? 'user' as const : 'assistant' as const,
-    }))
-    .filter((r) => r.similarity >= threshold);
 }
 
 // ============================================================================
@@ -378,7 +303,7 @@ async function searchInnerWorkSessionsContent(
   boostFactor: number = 1.3,
   limit: number = 15,
   threshold: number = 0.75,
-  turnId?: string
+  turnId?: string,
 ): Promise<RelevantMessage[]> {
   // Use session-level search with linked session boosting
   const sessionMatches = await searchInnerWorkSessionContent(
@@ -388,11 +313,11 @@ async function searchInnerWorkSessionsContent(
     boostFactor,
     limit,
     threshold,
-    turnId
+    turnId,
   );
 
   // Convert session matches to RelevantMessage format
-  return sessionMatches.map((match) => ({
+  return sessionMatches.map(match => ({
     content: match.theme || 'Inner reflection session',
     sessionId: match.sessionId,
     partnerName: 'Your reflections',
@@ -474,18 +399,22 @@ export async function retrieveContext(options: RetrievalOptions): Promise<Retrie
   // This is critical for performance - sequential execution would kill user experience
   // All three operations are independent and can run simultaneously
   // When skipDetection is true (for Inner Thoughts), we bypass Haiku detection and always search
-  const fallbackReferenceResult: ReferenceDetectionResult = { references: [], needsRetrieval: false, searchQueries: [] };
-  const alwaysSearchResult: ReferenceDetectionResult = { references: [], needsRetrieval: true, searchQueries: [currentMessage] };
-  const [
-    referenceDetection,
-    conversationHistory,
-    preSessionMessages,
-  ] = await Promise.all([
+  const fallbackReferenceResult: ReferenceDetectionResult = {
+    references: [],
+    needsRetrieval: false,
+    searchQueries: [],
+  };
+  const alwaysSearchResult: ReferenceDetectionResult = {
+    references: [],
+    needsRetrieval: true,
+    searchQueries: [currentMessage],
+  };
+  const [referenceDetection, conversationHistory, preSessionMessages] = await Promise.all([
     skipDetection
       ? Promise.resolve(alwaysSearchResult) // Skip Haiku detection - always search with current message
-      : (currentSessionId
+      : currentSessionId
         ? detectReferences(currentMessage, currentSessionId, turnId) // Haiku call (with circuit breaker)
-        : Promise.resolve(fallbackReferenceResult)), // No session context - skip detection
+        : Promise.resolve(fallbackReferenceResult), // No session context - skip detection
     currentSessionId ? getSessionHistory(currentSessionId, userId) : Promise.resolve([]), // DB query
     includePreSession ? getPreSessionMessages(userId) : Promise.resolve([]), // DB query
   ]);
@@ -510,14 +439,21 @@ export async function retrieveContext(options: RetrievalOptions): Promise<Retrie
 
     // Search using the generated queries
     // Per fact-ledger architecture, we now search at session level (facts + summary)
-    const searchPromises = referenceDetection.searchQueries.map(async (query) => {
+    const searchPromises = referenceDetection.searchQueries.map(async query => {
       // Build search operations array
       const searchOps: Promise<RelevantMessage[]>[] = [];
 
       // Search partner session content (cross-session) - uses session-level embeddings
       if (shouldSearchCrossSession && relationshipId) {
         searchOps.push(
-          searchAcrossSessionsContent(userId, query, relationshipId, effectiveMaxCrossSession, effectiveThreshold, turnId)
+          searchAcrossSessionsContent(
+            userId,
+            query,
+            relationshipId,
+            effectiveMaxCrossSession,
+            effectiveThreshold,
+            turnId,
+          ),
         );
       } else {
         searchOps.push(Promise.resolve([]));
@@ -534,10 +470,10 @@ export async function retrieveContext(options: RetrievalOptions): Promise<Retrie
             query,
             linkedPartnerSessionId,
             1.3, // boost factor for linked sessions
-            15,  // limit
+            15, // limit
             innerThoughtsThreshold,
-            turnId
-          )
+            turnId,
+          ),
         );
       }
 
@@ -579,55 +515,56 @@ export async function retrieveContext(options: RetrievalOptions): Promise<Retrie
     }
 
     // Log search results via BrainService (fire-and-forget — telemetry must not block AI response)
-    brainService.startActivity({
-      ...(currentSessionId ? { sessionId: currentSessionId } : {}),
-      ...(excludeInnerThoughtsSessionId ? { innerWorkSessionId: excludeInnerThoughtsSessionId } : {}),
-      turnId,
-      activityType: ActivityType.RETRIEVAL,
-      model: 'system-retrieval',
-      input: {
-        userId,
-        searchQueries: referenceDetection.searchQueries,
-        referencesDetected: referenceDetection.references,
-        threshold: effectiveThreshold,
-        maxCrossSession: effectiveMaxCrossSession,
-      },
-      metadata: {
-        queryCount: referenceDetection.searchQueries.length,
-      }
-    }).then(async (activity) => {
-      // Complete immediately as we already have results
-      await brainService.completeActivity(activity.id, {
-        output: {
-          crossSessionResultsCount: relevantFromOtherSessions.length,
-          withinSessionResultsCount: relevantFromCurrentSession.length,
-          topMatches: [
-            ...relevantFromOtherSessions.slice(0, 5).map(m => ({
-              content: m.content, // Full content, NO TRUNCATION
-              similarity: m.similarity,
-              source: 'cross-session',
-              timestamp: m.timestamp
-            })),
-            ...relevantFromCurrentSession.slice(0, 5).map(m => ({
-              content: m.content, // Full content, NO TRUNCATION
-              similarity: m.similarity,
-              source: 'within-session',
-              timestamp: m.timestamp
-            })),
-          ]
+    brainService
+      .startActivity({
+        ...(currentSessionId ? { sessionId: currentSessionId } : {}),
+        ...(excludeInnerThoughtsSessionId ? { innerWorkSessionId: excludeInnerThoughtsSessionId } : {}),
+        turnId,
+        activityType: ActivityType.RETRIEVAL,
+        model: 'system-retrieval',
+        input: {
+          userId,
+          searchQueries: referenceDetection.searchQueries,
+          referencesDetected: referenceDetection.references,
+          threshold: effectiveThreshold,
+          maxCrossSession: effectiveMaxCrossSession,
         },
-        durationMs: 0 // Already elapsed in search time effectively
-      });
-    }).catch((err) => logger.warn('[ContextRetriever] Brain activity logging failed:', err));
+        metadata: {
+          queryCount: referenceDetection.searchQueries.length,
+        },
+      })
+      .then(async activity => {
+        // Complete immediately as we already have results
+        await brainService.completeActivity(activity.id, {
+          output: {
+            crossSessionResultsCount: relevantFromOtherSessions.length,
+            withinSessionResultsCount: relevantFromCurrentSession.length,
+            topMatches: [
+              ...relevantFromOtherSessions.slice(0, 5).map(m => ({
+                content: m.content, // Full content, NO TRUNCATION
+                similarity: m.similarity,
+                source: 'cross-session',
+                timestamp: m.timestamp,
+              })),
+              ...relevantFromCurrentSession.slice(0, 5).map(m => ({
+                content: m.content, // Full content, NO TRUNCATION
+                similarity: m.similarity,
+                source: 'within-session',
+                timestamp: m.timestamp,
+              })),
+            ],
+          },
+          durationMs: 0, // Already elapsed in search time effectively
+        });
+      })
+      .catch(err => logger.warn('[ContextRetriever] Brain activity logging failed:', err));
 
     // Sort by similarity and limit
     relevantFromOtherSessions = relevantFromOtherSessions
       .sort((a, b) => b.similarity - a.similarity)
       .slice(0, effectiveMaxCrossSession);
 
-    relevantFromCurrentSession = relevantFromCurrentSession
-      .sort((a, b) => b.similarity - a.similarity)
-      .slice(0, 5);
+    relevantFromCurrentSession = relevantFromCurrentSession.sort((a, b) => b.similarity - a.similarity).slice(0, 5);
   }
 
   // Build retrieval summary
@@ -653,12 +590,10 @@ export async function retrieveContext(options: RetrievalOptions): Promise<Retrie
 
   // Generate recency guidance for retrieved content
   const allTimestamps = [
-    ...relevantFromOtherSessions.map((m) => m.timestamp),
-    ...relevantFromCurrentSession.map((m) => m.timestamp),
+    ...relevantFromOtherSessions.map(m => m.timestamp),
+    ...relevantFromCurrentSession.map(m => m.timestamp),
   ];
-  const recencyGuidance = allTimestamps.length > 0
-    ? getRecencyGuidance(allTimestamps)
-    : undefined;
+  const recencyGuidance = allTimestamps.length > 0 ? getRecencyGuidance(allTimestamps) : undefined;
 
   return {
     conversationHistory,
@@ -685,10 +620,10 @@ export function formatRetrievedContext(context: RetrievedContext): string {
     text.length > maxChars ? `${text.slice(0, maxChars - 20)}…[truncated]` : text;
 
   // Add recency guidance at the top if we have retrieved content
-  if (context.recencyGuidance && (
-    context.relevantFromOtherSessions.length > 0 ||
-    context.relevantFromCurrentSession.length > 0
-  )) {
+  if (
+    context.recencyGuidance &&
+    (context.relevantFromOtherSessions.length > 0 || context.relevantFromCurrentSession.length > 0)
+  ) {
     sections.push(`[MEMORY CONTEXT GUIDANCE: ${context.recencyGuidance}]`);
   }
 
@@ -758,7 +693,7 @@ export function formatRetrievedContext(context: RetrievedContext): string {
  */
 export function buildMessagesWithFullContext(
   context: RetrievedContext,
-  currentMessage: string
+  currentMessage: string,
 ): Array<{ role: 'user' | 'assistant'; content: string }> {
   const messages: Array<{ role: 'user' | 'assistant'; content: string }> = [];
 

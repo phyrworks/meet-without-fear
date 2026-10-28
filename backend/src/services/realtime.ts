@@ -11,7 +11,6 @@ import {
   PresenceStatus,
   REALTIME_CHANNELS,
   UserEventType,
-  UserEventData,
   MessageAIResponsePayload,
   MessageErrorPayload,
   MessageDTO,
@@ -156,10 +155,12 @@ const TRANSIENT_EVENTS = new Set([
 export async function publishTopicFrameUpdated(
   sessionId: string,
   topicFrame: string,
-  confirmed: boolean
+  confirmed: boolean,
 ): Promise<void> {
   if (shouldSkipAblyInE2E()) {
-    logger.info(`[Realtime] E2E mode without ABLY_API_KEY - skipping session.topic_frame_updated publish for session ${sessionId}`);
+    logger.info(
+      `[Realtime] E2E mode without ABLY_API_KEY - skipping session.topic_frame_updated publish for session ${sessionId}`,
+    );
     return;
   }
 
@@ -198,14 +199,11 @@ export async function publishTopicFrameUpdated(
  * visible at the call site (see the scope note in the contract's docblock). To
  * add a field, add it to the contract first; both sides then pick it up.
  */
-export async function publishSessionEvent<
-  E extends SessionEventType,
-  T extends SessionEventPublishData<E>,
->(
+export async function publishSessionEvent<E extends SessionEventType, T extends SessionEventPublishData<E>>(
   sessionId: string,
   event: E,
   data: T & NoExtraSessionEventKeys<E, T>,
-  excludeUserId?: string
+  excludeUserId?: string,
 ): Promise<void> {
   if (shouldSkipAblyInE2E()) {
     logger.info(`[Realtime] E2E mode without ABLY_API_KEY - skipping ${event} publish for session ${sessionId}`);
@@ -246,8 +244,8 @@ export async function publishSessionEvent<
     // This updates their session list without requiring each caller to remember
     if (!TRANSIENT_EVENTS.has(event)) {
       // Fire and forget - don't block on user channel updates
-      notifySessionMembers(sessionId, excludeUserId).catch((err) =>
-        logger.warn(`[Realtime] Failed to notify session members:`, err)
+      notifySessionMembers(sessionId, excludeUserId).catch(err =>
+        logger.warn(`[Realtime] Failed to notify session members:`, err),
       );
     }
   } catch (error) {
@@ -266,13 +264,10 @@ export async function publishSessionEvent<
  * @param data - The event data payload (must include sessionId)
  * @returns Promise<void>
  */
-export async function publishUserEvent<
-  E extends UserEventType,
-  T extends UserEventPublishData<E>,
->(
+export async function publishUserEvent<E extends UserEventType, T extends UserEventPublishData<E>>(
   userId: string,
   event: E,
-  data: T & NoExtraUserEventKeys<E, T>
+  data: T & NoExtraUserEventKeys<E, T>,
 ): Promise<void> {
   if (shouldSkipAblyInE2E()) {
     logger.info(`[Realtime] E2E mode without ABLY_API_KEY - skipping ${event} publish for user ${userId}`);
@@ -315,10 +310,7 @@ export async function publishUserEvent<
  * @param sessionId - The session ID
  * @param excludeUserId - Optional user ID to exclude (e.g., the user who caused the update)
  */
-export async function notifySessionMembers(
-  sessionId: string,
-  excludeUserId?: string
-): Promise<void> {
+export async function notifySessionMembers(sessionId: string, excludeUserId?: string): Promise<void> {
   logger.info(`[notifySessionMembers] Called for session ${sessionId}, excludeUserId=${excludeUserId}`);
   try {
     // Import prisma here to avoid circular dependency
@@ -353,11 +345,7 @@ export async function notifySessionMembers(
 
     logger.info(`[notifySessionMembers] Publishing to ${memberIds.length} members: ${memberIds.join(', ')}`);
 
-    await Promise.all(
-      memberIds.map((userId: string) =>
-        publishUserEvent(userId, 'session.updated', { sessionId })
-      )
-    );
+    await Promise.all(memberIds.map((userId: string) => publishUserEvent(userId, 'session.updated', { sessionId })));
 
     logger.info(`[notifySessionMembers] Notified ${memberIds.length} members of session ${sessionId}`);
   } catch (error) {
@@ -432,13 +420,14 @@ export async function publishPresenceUpdate(
   sessionId: string,
   userId: string,
   status: PresenceStatus,
-  userName?: string
+  userName?: string,
 ): Promise<void> {
-  const event = status === PresenceStatus.ONLINE
-    ? 'presence.online'
-    : status === PresenceStatus.OFFLINE
-      ? 'presence.offline'
-      : 'presence.away';
+  const event =
+    status === PresenceStatus.ONLINE
+      ? 'presence.online'
+      : status === PresenceStatus.OFFLINE
+        ? 'presence.offline'
+        : 'presence.away';
 
   await publishSessionEvent(sessionId, event, {
     userId,
@@ -458,11 +447,7 @@ export async function publishPresenceUpdate(
  * @param userId - The user ID who is typing
  * @param isTyping - Whether the user is typing
  */
-export async function publishTypingIndicator(
-  sessionId: string,
-  userId: string,
-  isTyping: boolean
-): Promise<void> {
+export async function publishTypingIndicator(sessionId: string, userId: string, isTyping: boolean): Promise<void> {
   const key = getTypingKey(sessionId, userId);
   const currentState = typingStates.get(key);
 
@@ -475,10 +460,15 @@ export async function publishTypingIndicator(
   typingStates.set(key, { isTyping, lastUpdate: Date.now() });
 
   const event = isTyping ? 'typing.start' : 'typing.stop';
-  await publishSessionEvent(sessionId, event, {
+  await publishSessionEvent(
+    sessionId,
+    event,
+    {
+      userId,
+      isTyping,
+    },
     userId,
-    isTyping,
-  }, userId); // Exclude the typing user from receiving their own typing event
+  ); // Exclude the typing user from receiving their own typing event
 }
 
 /**
@@ -543,13 +533,18 @@ export async function publishStageProgress(
   sessionId: string,
   userId: string,
   stage: number,
-  status: 'in_progress' | 'gate_pending' | 'completed'
+  status: 'in_progress' | 'gate_pending' | 'completed',
 ): Promise<void> {
-  await publishSessionEvent(sessionId, 'stage.progress', {
+  await publishSessionEvent(
+    sessionId,
+    'stage.progress',
+    {
+      userId,
+      stage,
+      status,
+    },
     userId,
-    stage,
-    status,
-  }, userId);
+  );
 }
 
 /**
@@ -559,16 +554,17 @@ export async function publishStageProgress(
  * @param waitingUserId - The user who is waiting
  * @param stage - The stage they are waiting at
  */
-export async function publishStageWaiting(
-  sessionId: string,
-  waitingUserId: string,
-  stage: number
-): Promise<void> {
-  await publishSessionEvent(sessionId, 'stage.waiting', {
-    userId: waitingUserId,
-    stage,
-    status: 'gate_pending',
-  }, waitingUserId);
+export async function publishStageWaiting(sessionId: string, waitingUserId: string, stage: number): Promise<void> {
+  await publishSessionEvent(
+    sessionId,
+    'stage.waiting',
+    {
+      userId: waitingUserId,
+      stage,
+      status: 'gate_pending',
+    },
+    waitingUserId,
+  );
 }
 
 // ============================================================================
@@ -582,11 +578,7 @@ export async function publishStageWaiting(
  * @param pausedByUserId - The user who paused the session
  * @param reason - Optional reason for pausing
  */
-export async function publishSessionPaused(
-  sessionId: string,
-  pausedByUserId: string,
-  reason?: string
-): Promise<void> {
+export async function publishSessionPaused(sessionId: string, pausedByUserId: string, reason?: string): Promise<void> {
   await publishSessionEvent(sessionId, 'session.paused', {
     pausedBy: pausedByUserId,
     reason,
@@ -602,10 +594,7 @@ export async function publishSessionPaused(
  * @param sessionId - The session ID
  * @param resumedByUserId - The user who resumed the session
  */
-export async function publishSessionResumed(
-  sessionId: string,
-  resumedByUserId: string
-): Promise<void> {
+export async function publishSessionResumed(sessionId: string, resumedByUserId: string): Promise<void> {
   await publishSessionEvent(sessionId, 'session.resumed', {
     resumedBy: resumedByUserId,
   });
@@ -617,10 +606,7 @@ export async function publishSessionResumed(
  * @param sessionId - The session ID
  * @param resolvedByUserId - The user who resolved the session
  */
-export async function publishSessionResolved(
-  sessionId: string,
-  resolvedByUserId: string
-): Promise<void> {
+export async function publishSessionResolved(sessionId: string, resolvedByUserId: string): Promise<void> {
   await publishSessionEvent(sessionId, 'session.resolved', {
     resolvedBy: resolvedByUserId,
   });
@@ -646,18 +632,17 @@ export async function publishSessionResolved(
  * @param options - Optional configuration
  * @param options.excludeUserId - User ID to exclude from receiving the Ably event (typically the actor)
  */
-export async function notifyPartner<
-  E extends SessionEvent,
-  T extends SessionEventPublishData<E>,
->(
+export async function notifyPartner<E extends SessionEvent, T extends SessionEventPublishData<E>>(
   sessionId: string,
   partnerId: string,
   event: E,
   data: T & NoExtraSessionEventKeys<E, T>,
-  options?: { excludeUserId?: string }
+  options?: { excludeUserId?: string },
 ): Promise<void> {
   if (shouldSkipAblyInE2E()) {
-    logger.info(`[Realtime] E2E mode without ABLY_API_KEY - skipping partner ${event} notification for session ${sessionId}`);
+    logger.info(
+      `[Realtime] E2E mode without ABLY_API_KEY - skipping partner ${event} notification for session ${sessionId}`,
+    );
     return;
   }
 
@@ -684,17 +669,16 @@ export async function notifyPartner<
  * @param event - The event type
  * @param data - The event data payload
  */
-export async function notifyPartnerWithFallback<
-  E extends SessionEvent,
-  T extends SessionEventPublishData<E>,
->(
+export async function notifyPartnerWithFallback<E extends SessionEvent, T extends SessionEventPublishData<E>>(
   sessionId: string,
   partnerId: string,
   event: E,
-  data: T & NoExtraSessionEventKeys<E, T>
+  data: T & NoExtraSessionEventKeys<E, T>,
 ): Promise<void> {
   if (shouldSkipAblyInE2E()) {
-    logger.info(`[Realtime] E2E mode without ABLY_API_KEY - skipping partner ${event} fallback notification for session ${sessionId}`);
+    logger.info(
+      `[Realtime] E2E mode without ABLY_API_KEY - skipping partner ${event} fallback notification for session ${sessionId}`,
+    );
     return;
   }
 
@@ -751,7 +735,7 @@ export async function publishSessionCreated(
     status: string;
     createdAt: string;
     members?: Array<{ userId: string; name?: string }>;
-  }
+  },
 ): Promise<void> {
   if (process.env.ENABLE_AUDIT_STREAM !== 'true') {
     return; // Audit stream disabled
@@ -813,10 +797,12 @@ export async function publishMessageAIResponse<T extends MessageAIResponseMetada
   sessionId: string,
   forUserId: string,
   message: MessageDTO,
-  metadata?: T & NoExtraMetadataKeys<T>
+  metadata?: T & NoExtraMetadataKeys<T>,
 ): Promise<void> {
   if (shouldSkipAblyInE2E()) {
-    logger.info(`[Realtime] E2E mode without ABLY_API_KEY - skipping message.ai_response publish for session ${sessionId}`);
+    logger.info(
+      `[Realtime] E2E mode without ABLY_API_KEY - skipping message.ai_response publish for session ${sessionId}`,
+    );
     return;
   }
 
@@ -830,8 +816,7 @@ export async function publishMessageAIResponse<T extends MessageAIResponseMetada
   // without a compile error.
   const { proposedEmpathyStatement: _private, ...flags } = (metadata ?? {}) as MessageAIResponseMetadata;
   void _private;
-  const payload: MessageAIResponsePayload &
-    SessionEventPublishData<'message.ai_response'> = {
+  const payload: MessageAIResponsePayload & SessionEventPublishData<'message.ai_response'> = {
     sessionId,
     timestamp: Date.now(),
     forUserId,
@@ -846,8 +831,8 @@ export async function publishMessageAIResponse<T extends MessageAIResponseMetada
 
     // Also notify session members for list updates (but exclude the user who sent the message
     // since they're already subscribed to the session channel)
-    notifySessionMembers(sessionId).catch((err) =>
-      logger.warn(`[Realtime] Failed to notify session members after AI response:`, err)
+    notifySessionMembers(sessionId).catch(err =>
+      logger.warn(`[Realtime] Failed to notify session members after AI response:`, err),
     );
   } catch (error) {
     logger.error(`[Realtime] Failed to publish message.ai_response to session ${sessionId}:`, error);
@@ -870,7 +855,7 @@ export async function publishMessageError(
   forUserId: string,
   userMessageId: string,
   errorMessage: string,
-  canRetry: boolean = true
+  canRetry: boolean = true,
 ): Promise<void> {
   if (shouldSkipAblyInE2E()) {
     logger.info(`[Realtime] E2E mode without ABLY_API_KEY - skipping message.error publish for session ${sessionId}`);
@@ -923,7 +908,7 @@ export async function publishPendingAction(
   sessionId: string,
   userId: string,
   actionType: 'share_offer' | 'validate_empathy' | 'context_received',
-  actionId: string
+  actionId: string,
 ): Promise<void> {
   await publishSessionEvent(sessionId, 'notification.pending_action', {
     forUserId: userId,
@@ -943,7 +928,7 @@ export async function publishPendingAction(
 export async function publishEmpathyResubmitted(
   sessionId: string,
   forUserId: string,
-  guesserUserId: string
+  guesserUserId: string,
 ): Promise<void> {
   await publishSessionEvent(sessionId, 'empathy.resubmitted', {
     forUserId,
@@ -951,11 +936,7 @@ export async function publishEmpathyResubmitted(
   });
 }
 
-export async function publishContextUpdated(
-  sessionId: string,
-  userId: string,
-  assembledAt: string
-): Promise<void> {
+export async function publishContextUpdated(sessionId: string, userId: string, assembledAt: string): Promise<void> {
   if (shouldSkipAblyInE2E()) {
     logger.info(`[Realtime] E2E mode without ABLY_API_KEY - skipping context.updated publish for session ${sessionId}`);
     return;

@@ -1,4 +1,3 @@
-
 import { logger } from '../lib/logger';
 import { getJobPrisma } from '../lib/prisma';
 import { getRequestContext } from '../lib/request-context';
@@ -16,8 +15,8 @@ export type ActivityInput = {
   turnId?: string;
   activityType: ActivityType;
   model: string;
-  input: any;
-  metadata?: any;
+  input: unknown;
+  metadata?: unknown;
   callType?: BrainActivityCallType;
 };
 
@@ -46,7 +45,7 @@ export class BrainService {
   // Ably channel name for real-time updates
   private readonly CHANNEL_NAME = 'ai-audit-stream';
 
-  private constructor() { }
+  private constructor() {}
 
   public static getInstance(): BrainService {
     if (!BrainService.instance) {
@@ -119,14 +118,14 @@ export class BrainService {
   public async completeActivity(
     activityId: string,
     result: {
-      output: any;
+      output: unknown;
       tokenCountInput?: number;
       tokenCountOutput?: number;
       cost?: number;
       durationMs?: number;
-      metadata?: any;
-      structuredOutput?: any;
-    }
+      metadata?: unknown;
+      structuredOutput?: unknown;
+    },
   ): Promise<BrainActivity | null> {
     if (!activityId) return null;
     try {
@@ -181,7 +180,7 @@ export class BrainService {
   /**
    * Mark an activity as FAILED.
    */
-  public async failActivity(activityId: string, error: any): Promise<BrainActivity | null> {
+  public async failActivity(activityId: string, error: unknown): Promise<BrainActivity | null> {
     if (!activityId) return null;
     try {
       const completedAt = new Date();
@@ -189,7 +188,12 @@ export class BrainService {
       await getJobPrisma().$executeRaw`UPDATE brain_activity
         SET status = 'FAILED'::activity_status, completed_at = ${completedAt}, metadata = ${JSON.stringify(metadata)}::jsonb
         WHERE id = ${activityId}::uuid`;
-      const activity = { id: activityId, status: ActivityStatus.FAILED, completedAt, metadata } as unknown as BrainActivity;
+      const activity = {
+        id: activityId,
+        status: ActivityStatus.FAILED,
+        completedAt,
+        metadata,
+      } as unknown as BrainActivity;
       this.broadcastUpdate(activity);
       return activity;
     } catch (e) {
@@ -209,7 +213,7 @@ export class BrainService {
 
     const channel = ably.channels.get(this.CHANNEL_NAME);
     // We publish 'brain-activity' event. Status site will need to listen for this.
-    channel.publish('brain-activity', activity).catch((err: any) => {
+    channel.publish('brain-activity', activity).catch((err: Error) => {
       logger.warn('[BrainService] Telemetry push failed:', err.message);
     });
   }
@@ -217,7 +221,15 @@ export class BrainService {
   /**
    * Broadcast a user/AI message to the audit stream
    */
-  public broadcastMessage(message: any) {
+  public broadcastMessage(message: {
+    id?: string;
+    sessionId?: string;
+    senderId?: string | null;
+    role?: string;
+    content?: string;
+    stage?: number;
+    timestamp?: string | Date;
+  }) {
     if (process.env.ENABLE_AUDIT_STREAM !== 'true') return;
 
     const ably = getAbly();
@@ -234,7 +246,7 @@ export class BrainService {
       stage: message.stage,
       timestamp: message.timestamp,
     };
-    channel.publish('new-message', payload).catch((err: any) => {
+    channel.publish('new-message', payload).catch((err: Error) => {
       logger.warn('[BrainService] Message push failed:', err.message);
     });
   }

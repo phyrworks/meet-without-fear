@@ -48,7 +48,7 @@ export interface CircuitBreakerStats {
 const DEFAULT_OPTIONS: Omit<CircuitBreakerOptions, 'name'> = {
   failureThreshold: 5,
   cooldownMs: 30_000, // 30 seconds
-  timeoutMs: 20_000,  // 20 seconds
+  timeoutMs: 20_000, // 20 seconds
 };
 
 export class CircuitBreaker {
@@ -120,11 +120,7 @@ export class CircuitBreaker {
    * Execute with a fallback value on failure.
    * Never throws - returns fallback on any error including CircuitOpenError.
    */
-  async executeWithFallback<T>(
-    operation: () => Promise<T>,
-    fallback: T,
-    operationName?: string,
-  ): Promise<T> {
+  async executeWithFallback<T>(operation: () => Promise<T>, fallback: T, operationName?: string): Promise<T> {
     try {
       return await this.execute(operation, operationName);
     } catch (_error) {
@@ -162,7 +158,7 @@ export class CircuitBreaker {
 
   // ---- Internal state transitions ----
 
-  private onSuccess(opName: string, durationMs: number): void {
+  private onSuccess(opName: string, _durationMs: number): void {
     const previousState = this._state;
     this._consecutiveFailures = 0;
     this._totalSuccesses++;
@@ -188,7 +184,7 @@ export class CircuitBreaker {
     if (this._consecutiveFailures >= this.options.failureThreshold) {
       this._state = CircuitState.OPEN;
       logger.error(
-        `[CircuitBreaker:${this.options.name}] OPENED after ${this._consecutiveFailures} consecutive failures (cooldown: ${this.options.cooldownMs}ms)`
+        `[CircuitBreaker:${this.options.name}] OPENED after ${this._consecutiveFailures} consecutive failures (cooldown: ${this.options.cooldownMs}ms)`,
       );
     }
   }
@@ -255,8 +251,8 @@ export const ablyCircuitBreaker = new CircuitBreaker({
 export function getAllCircuitBreakerStats(): Record<string, CircuitBreakerStats> {
   return {
     'bedrock-ai': bedrockCircuitBreaker.getStats(),
-    'embedding': embeddingCircuitBreaker.getStats(),
-    'ably': ablyCircuitBreaker.getStats(),
+    embedding: embeddingCircuitBreaker.getStats(),
+    ably: ablyCircuitBreaker.getStats(),
   };
 }
 
@@ -281,11 +277,7 @@ class TimeoutError extends Error {
 export { TimeoutError };
 
 /** Internal: timeout that throws (for CircuitBreaker.execute) */
-async function withTimeoutThrow<T>(
-  promise: Promise<T>,
-  timeoutMs: number,
-  operationName: string,
-): Promise<T> {
+async function withTimeoutThrow<T>(promise: Promise<T>, timeoutMs: number, operationName: string): Promise<T> {
   let timeoutId: ReturnType<typeof setTimeout>;
   const timeoutPromise = new Promise<never>((_resolve, reject) => {
     timeoutId = setTimeout(() => reject(new TimeoutError(operationName, timeoutMs)), timeoutMs);
@@ -305,12 +297,8 @@ async function withTimeoutThrow<T>(
 // ============================================================================
 
 /** Execute a promise with a timeout. Returns null on timeout/error. */
-export async function withTimeout<T>(
-  promise: Promise<T>,
-  timeoutMs: number,
-  operationName: string
-): Promise<T | null> {
-  const timeoutPromise = new Promise<null>((resolve) => {
+export async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, operationName: string): Promise<T | null> {
+  const timeoutPromise = new Promise<null>(resolve => {
     setTimeout(() => {
       logger.warn(`[CircuitBreaker] ${operationName} timed out after ${timeoutMs}ms`);
       resolve(null);

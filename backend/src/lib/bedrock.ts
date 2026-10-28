@@ -7,10 +7,7 @@
  * - Sonnet: Empathetic responses for user-facing interactions
  */
 
-import {
-  BedrockRuntimeClient,
-  InvokeModelCommand,
-} from '@aws-sdk/client-bedrock-runtime';
+import { BedrockRuntimeClient, InvokeModelCommand } from '@aws-sdk/client-bedrock-runtime';
 import AnthropicBedrock from '@anthropic-ai/bedrock-sdk';
 import { extractJsonFromResponse } from '../utils/json-extractor';
 import type { PromptBlocks } from '../services/stage-prompts';
@@ -30,8 +27,18 @@ export { bedrockCircuitBreaker, embeddingCircuitBreaker };
 
 // AWS Bedrock Pricing (USD per 1,000 tokens) - Updated Feb 2026
 const PRICING: Record<string, { input: number; output: number; cacheRead: number; cacheWrite: number }> = {
-  'global.anthropic.claude-sonnet-4-5-20250929-v1:0': { input: 0.003, output: 0.015, cacheRead: 0.0003, cacheWrite: 0.00375 },
-  'global.anthropic.claude-haiku-4-5-20251001-v1:0': { input: 0.001, output: 0.005, cacheRead: 0.0001, cacheWrite: 0.00125 },
+  'global.anthropic.claude-sonnet-4-5-20250929-v1:0': {
+    input: 0.003,
+    output: 0.015,
+    cacheRead: 0.0003,
+    cacheWrite: 0.00375,
+  },
+  'global.anthropic.claude-haiku-4-5-20251001-v1:0': {
+    input: 0.001,
+    output: 0.005,
+    cacheRead: 0.0001,
+    cacheWrite: 0.00125,
+  },
   'amazon.titan-embed-text-v2:0': { input: 0.00002, output: 0.0, cacheRead: 0, cacheWrite: 0 },
   // Legacy entries for historical cost lookups
   'global.anthropic.claude-sonnet-4-6': { input: 0.003, output: 0.015, cacheRead: 0.0003, cacheWrite: 0.00375 },
@@ -91,11 +98,7 @@ function logPromptToFile(params: {
 
     // Create timestamp for filename: YYYY-MM-DD_HH-MM-SS-mmm
     const now = new Date();
-    const timestamp = now.toISOString()
-      .replace(/:/g, '-')
-      .replace(/\./g, '-')
-      .replace('T', '_')
-      .replace('Z', '');
+    const timestamp = now.toISOString().replace(/:/g, '-').replace(/\./g, '-').replace('T', '_').replace('Z', '');
 
     // Use callType if available, otherwise operation name
     const identifier = params.callType || params.operation || 'unknown';
@@ -109,9 +112,10 @@ function logPromptToFile(params: {
     const filepath = path.join(PROMPT_LOG_DIR, filename);
 
     // Build plain text prompt (exactly what gets sent to the model)
-    const systemText = typeof params.systemPrompt === 'string'
-      ? params.systemPrompt
-      : `[STATIC BLOCK]\n${params.systemPrompt.staticBlock}\n\n[DYNAMIC BLOCK]\n${params.systemPrompt.dynamicBlock}`;
+    const systemText =
+      typeof params.systemPrompt === 'string'
+        ? params.systemPrompt
+        : `[STATIC BLOCK]\n${params.systemPrompt.staticBlock}\n\n[DYNAMIC BLOCK]\n${params.systemPrompt.dynamicBlock}`;
     let promptText = `[SYSTEM]\n${systemText}\n`;
 
     for (const msg of params.messages) {
@@ -164,8 +168,7 @@ export const BEDROCK_SONNET_MODEL_ID =
 
 // Titan: Embedding model for semantic search
 // Outputs 1024-dimensional vectors for similarity matching
-export const BEDROCK_TITAN_EMBED_MODEL_ID =
-  process.env.BEDROCK_TITAN_EMBED_MODEL_ID || 'amazon.titan-embed-text-v2:0';
+export const BEDROCK_TITAN_EMBED_MODEL_ID = process.env.BEDROCK_TITAN_EMBED_MODEL_ID || 'amazon.titan-embed-text-v2:0';
 
 // Legacy export for backward compatibility
 export const BEDROCK_MODEL_ID = BEDROCK_SONNET_MODEL_ID;
@@ -309,7 +312,7 @@ type AnthropicMessageParam = {
  * Adds cache_control to the second-to-last message to cache conversation history prefix.
  */
 function toAnthropicMessages(messages: SimpleMessage[]): AnthropicMessageParam[] {
-  const result: AnthropicMessageParam[] = messages.map((m) => ({
+  const result: AnthropicMessageParam[] = messages.map(m => ({
     role: m.role as 'user' | 'assistant',
     content: m.content,
   }));
@@ -320,16 +323,17 @@ function toAnthropicMessages(messages: SimpleMessage[]): AnthropicMessageParam[]
   if (result.length >= 2) {
     const target = result[result.length - 2];
     const text = typeof target.content === 'string' ? target.content : '';
-    target.content = [{
-      type: 'text' as const,
-      text,
-      cache_control: { type: 'ephemeral' as const },
-    }];
+    target.content = [
+      {
+        type: 'text' as const,
+        text,
+        cache_control: { type: 'ephemeral' as const },
+      },
+    ];
   }
 
   return result;
 }
-
 
 /**
  * Simple completion helper for text-based AI requests.
@@ -345,10 +349,7 @@ export async function getCompletion(options: CompletionOptions): Promise<string 
  * Get completion from a specific model (Haiku or Sonnet).
  * Uses Anthropic Bedrock SDK with prompt caching for Claude models.
  */
-export async function getModelCompletion(
-  model: ModelType,
-  options: CompletionOptions
-): Promise<string | null> {
+export async function getModelCompletion(model: ModelType, options: CompletionOptions): Promise<string | null> {
   const result = await getModelCompletionWithTools(model, options);
   return result?.text ?? null;
 }
@@ -360,7 +361,7 @@ export async function getModelCompletion(
  */
 export async function getModelCompletionWithTools(
   model: ModelType,
-  options: CompletionOptions
+  options: CompletionOptions,
 ): Promise<CompletionWithToolsResult | null> {
   // E2E Mock Mode: Return null immediately to trigger mock response path
   if (isMockLLMEnabled()) {
@@ -386,9 +387,8 @@ export async function getModelCompletionWithTools(
   const startTime = Date.now();
 
   // Resolve system prompt text for logging
-  const systemPromptText = typeof systemPrompt === 'string'
-    ? systemPrompt
-    : `${systemPrompt.staticBlock}\n\n${systemPrompt.dynamicBlock}`;
+  const systemPromptText =
+    typeof systemPrompt === 'string' ? systemPrompt : `${systemPrompt.staticBlock}\n\n${systemPrompt.dynamicBlock}`;
 
   // Log prompt to file for debugging
   const promptFilepath = logPromptToFile({
@@ -404,12 +404,13 @@ export async function getModelCompletionWithTools(
 
   // System prompt with cache_control — split into static (cached) and dynamic (uncached) blocks
   type SystemBlock = { type: 'text'; text: string; cache_control?: { type: 'ephemeral' } };
-  const system: SystemBlock[] = typeof systemPrompt === 'string'
-    ? [{ type: 'text', text: systemPrompt, cache_control: { type: 'ephemeral' as const } }]
-    : [
-        { type: 'text', text: systemPrompt.staticBlock, cache_control: { type: 'ephemeral' as const } },
-        { type: 'text', text: systemPrompt.dynamicBlock },
-      ];
+  const system: SystemBlock[] =
+    typeof systemPrompt === 'string'
+      ? [{ type: 'text', text: systemPrompt, cache_control: { type: 'ephemeral' as const } }]
+      : [
+          { type: 'text', text: systemPrompt.staticBlock, cache_control: { type: 'ephemeral' as const } },
+          { type: 'text', text: systemPrompt.dynamicBlock },
+        ];
 
   // Messages with cache_control on second-to-last for history caching
   const anthropicMessages = toAnthropicMessages(messages);
@@ -433,6 +434,7 @@ export async function getModelCompletionWithTools(
       system,
       messages: anthropicMessages,
       ...(tools && tools.length > 0 ? { tools } : {}),
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- the Bedrock SDK param types lag the API (cached system blocks, tools)
     } as any);
 
     // Record success with circuit breaker (resets consecutive failure count)
@@ -441,8 +443,12 @@ export async function getModelCompletionWithTools(
     const durationMs = Date.now() - startTime;
     const inputTokens = result.usage.input_tokens;
     const outputTokens = result.usage.output_tokens;
-    const cacheReadTokens = (result.usage as any).cache_read_input_tokens ?? 0;
-    const cacheWriteTokens = (result.usage as any).cache_creation_input_tokens ?? 0;
+    const cacheReadTokens =
+      (result.usage as { cache_read_input_tokens?: number; cache_creation_input_tokens?: number })
+        .cache_read_input_tokens ?? 0;
+    const cacheWriteTokens =
+      (result.usage as { cache_read_input_tokens?: number; cache_creation_input_tokens?: number })
+        .cache_creation_input_tokens ?? 0;
 
     // Cost with cache pricing
     // NOTE: input_tokens from the Bedrock SDK already excludes cache_read and cache_creation tokens.
@@ -455,19 +461,17 @@ export async function getModelCompletionWithTools(
       (outputTokens / 1000) * price.output;
 
     // Extract text
-    const textBlocks = result.content.filter((block) => block.type === 'text');
-    const responseText = textBlocks.length > 0
-      ? textBlocks.map((block) => block.type === 'text' ? block.text : '').join('')
-      : null;
+    const textBlocks = result.content.filter(block => block.type === 'text');
+    const responseText =
+      textBlocks.length > 0 ? textBlocks.map(block => (block.type === 'text' ? block.text : '')).join('') : null;
     const toolInvocations = result.content
-      .filter((block) => block.type === 'tool_use')
-      .map((block) => {
+      .filter(block => block.type === 'tool_use')
+      .map(block => {
         const toolBlock = block as unknown as { name?: string; input?: unknown };
         return {
           name: toolBlock.name ?? 'unknown',
-          input: toolBlock.input && typeof toolBlock.input === 'object'
-            ? toolBlock.input as Record<string, unknown>
-            : {},
+          input:
+            toolBlock.input && typeof toolBlock.input === 'object' ? (toolBlock.input as Record<string, unknown>) : {},
         };
       });
 
@@ -481,7 +485,7 @@ export async function getModelCompletionWithTools(
       metadata: {
         cacheReadInputTokens: cacheReadTokens,
         cacheWriteInputTokens: cacheWriteTokens,
-        toolInvocations: toolInvocations.map((tool) => ({ name: tool.name })),
+        toolInvocations: toolInvocations.map(tool => ({ name: tool.name })),
         ...(contextSizes ? { contextSizes } : {}),
       },
     });
@@ -518,9 +522,7 @@ export async function getModelCompletionWithTools(
  *
  * @returns Parsed JSON object or null if parsing fails
  */
-export async function getHaikuJson<T>(
-  options: HaikuCompletionOptions
-): Promise<T | null> {
+export async function getHaikuJson<T>(options: HaikuCompletionOptions): Promise<T | null> {
   const response = await getModelCompletion('haiku', {
     ...options,
     maxTokens: options.maxTokens ?? 1024,
@@ -557,9 +559,7 @@ export async function getHaikuJson<T>(
  * Use for: user-facing responses, witnessing, empathy building.
  * Better at nuance and natural conversation.
  */
-export async function getSonnetResponse(
-  options: SonnetCompletionOptions
-): Promise<string | null> {
+export async function getSonnetResponse(options: SonnetCompletionOptions): Promise<string | null> {
   // E2E Mock Mode: Check for operation-specific fixture response first
   if (isMockLLMEnabled()) {
     const fixtureId = getE2EFixtureId();
@@ -600,7 +600,10 @@ export const EMBEDDING_DIMENSIONS = 1024;
  * @param text - The text to embed (max ~8000 tokens)
  * @returns Float array of embedding dimensions, or null if unavailable
  */
-export async function getEmbedding(text: string, options?: { sessionId?: string; innerWorkSessionId?: string; turnId?: string }): Promise<number[] | null> {
+export async function getEmbedding(
+  text: string,
+  options?: { sessionId?: string; innerWorkSessionId?: string; turnId?: string },
+): Promise<number[] | null> {
   const client = getBedrockClient();
   if (!client) {
     return null;
@@ -643,7 +646,10 @@ export async function getEmbedding(text: string, options?: { sessionId?: string;
           input: { textLength: truncatedText.length },
         });
       } catch (logError) {
-        logger.warn('[Bedrock] Failed to log embedding activity (continuing without logging):', (logError as Error).message);
+        logger.warn(
+          '[Bedrock] Failed to log embedding activity (continuing without logging):',
+          (logError as Error).message,
+        );
       }
     }
 
@@ -659,7 +665,8 @@ export async function getEmbedding(text: string, options?: { sessionId?: string;
 
     // Extract actual token count from response headers (Bedrock returns this for InvokeModel)
     // Fallback to estimation if not available
-    const headerTokenCount = (response as any).$metadata?.httpHeaders?.['x-amzn-bedrock-input-token-count'];
+    const headerTokenCount = (response as { $metadata?: { httpHeaders?: Record<string, string> } }).$metadata
+      ?.httpHeaders?.['x-amzn-bedrock-input-token-count'];
     const inputTokens = headerTokenCount ? parseInt(headerTokenCount, 10) : Math.ceil(truncatedText.length / 4);
 
     // Calculate cost (Titan Embeddings V2)
@@ -667,12 +674,14 @@ export async function getEmbedding(text: string, options?: { sessionId?: string;
     const cost = (inputTokens / 1000) * 0.00002;
 
     if (activity) {
-      await brainService.completeActivity(activity.id, {
-        output: { success: true }, // Don't log vector to avoid bloat
-        tokenCountInput: inputTokens,
-        cost,
-        durationMs,
-      }).catch(() => {});
+      await brainService
+        .completeActivity(activity.id, {
+          output: { success: true }, // Don't log vector to avoid bloat
+          tokenCountInput: inputTokens,
+          cost,
+          durationMs,
+        })
+        .catch(() => {});
     }
 
     // Record success with embedding circuit breaker
@@ -697,7 +706,7 @@ export async function getEmbedding(text: string, options?: { sessionId?: string;
  */
 export async function getEmbeddings(texts: string[]): Promise<(number[] | null)[]> {
   // Titan doesn't support batch embeddings natively, so we parallelize
-  const results = await Promise.all(texts.map((text) => getEmbedding(text)));
+  const results = await Promise.all(texts.map(text => getEmbedding(text)));
   return results;
 }
 
@@ -754,7 +763,7 @@ export interface SonnetStreamingOptions {
  * - { type: 'done', usage: { inputTokens, outputTokens } } - Final event with token usage
  */
 export async function* getSonnetStreamingResponse(
-  options: SonnetStreamingOptions
+  options: SonnetStreamingOptions,
 ): AsyncGenerator<StreamEvent, void, unknown> {
   // E2E Mock Mode: Yield fixture response as text events
   if (isMockLLMEnabled()) {
@@ -796,9 +805,8 @@ export async function* getSonnetStreamingResponse(
   const startTime = Date.now();
 
   // Resolve system prompt text for logging
-  const systemPromptText = typeof systemPrompt === 'string'
-    ? systemPrompt
-    : `${systemPrompt.staticBlock}\n\n${systemPrompt.dynamicBlock}`;
+  const systemPromptText =
+    typeof systemPrompt === 'string' ? systemPrompt : `${systemPrompt.staticBlock}\n\n${systemPrompt.dynamicBlock}`;
 
   // Log prompt to file for debugging
   const promptFilepath = logPromptToFile({
@@ -814,12 +822,13 @@ export async function* getSonnetStreamingResponse(
 
   // System prompt with cache_control — split into static (cached) and dynamic (uncached) blocks
   type SystemBlock = { type: 'text'; text: string; cache_control?: { type: 'ephemeral' } };
-  const system: SystemBlock[] = typeof systemPrompt === 'string'
-    ? [{ type: 'text', text: systemPrompt, cache_control: { type: 'ephemeral' as const } }]
-    : [
-        { type: 'text', text: systemPrompt.staticBlock, cache_control: { type: 'ephemeral' as const } },
-        { type: 'text', text: systemPrompt.dynamicBlock },
-      ];
+  const system: SystemBlock[] =
+    typeof systemPrompt === 'string'
+      ? [{ type: 'text', text: systemPrompt, cache_control: { type: 'ephemeral' as const } }]
+      : [
+          { type: 'text', text: systemPrompt.staticBlock, cache_control: { type: 'ephemeral' as const } },
+          { type: 'text', text: systemPrompt.dynamicBlock },
+        ];
 
   // Messages with cache_control on second-to-last for history caching
   const anthropicMessages = toAnthropicMessages(messages);
@@ -850,6 +859,7 @@ export async function* getSonnetStreamingResponse(
       system,
       messages: anthropicMessages,
       ...(tools && tools.length > 0 ? { tools } : {}),
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- the Bedrock SDK param types lag the API (cached system blocks, tools)
     } as any);
 
     // Track visible prose separately from tool invocations. Tool payloads must
@@ -907,8 +917,12 @@ export async function* getSonnetStreamingResponse(
     const durationMs = Date.now() - startTime;
     const inputTokens = finalMessage.usage.input_tokens;
     const outputTokens = finalMessage.usage.output_tokens;
-    const cacheReadTokens = (finalMessage.usage as any).cache_read_input_tokens ?? 0;
-    const cacheWriteTokens = (finalMessage.usage as any).cache_creation_input_tokens ?? 0;
+    const cacheReadTokens =
+      (finalMessage.usage as { cache_read_input_tokens?: number; cache_creation_input_tokens?: number })
+        .cache_read_input_tokens ?? 0;
+    const cacheWriteTokens =
+      (finalMessage.usage as { cache_read_input_tokens?: number; cache_creation_input_tokens?: number })
+        .cache_creation_input_tokens ?? 0;
 
     // Calculate cost with cache pricing
     // NOTE: input_tokens from the Bedrock SDK already excludes cache_read and cache_creation tokens.
@@ -931,7 +945,7 @@ export async function* getSonnetStreamingResponse(
       metadata: {
         cacheReadInputTokens: cacheReadTokens,
         cacheWriteInputTokens: cacheWriteTokens,
-        toolInvocations: toolInvocations.map((tool) => ({ name: tool.name })),
+        toolInvocations: toolInvocations.map(tool => ({ name: tool.name })),
         ...(streamContextSizes ? { contextSizes: streamContextSizes } : {}),
       },
     });

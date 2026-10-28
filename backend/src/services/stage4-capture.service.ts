@@ -172,29 +172,31 @@ function hasEnoughSpecificity(description: string): boolean {
 
 function getOverlapScore(haystack: string, needle: string): number {
   const haystackWords = new Set(normalizeText(haystack).split(' ').filter(Boolean));
-  const needleWords = normalizeText(needle).split(' ').filter((word) => word.length > 2);
+  const needleWords = normalizeText(needle)
+    .split(' ')
+    .filter(word => word.length > 2);
   if (needleWords.length === 0) return 0;
-  const overlap = needleWords.filter((word) => haystackWords.has(word)).length;
+  const overlap = needleWords.filter(word => haystackWords.has(word)).length;
   return overlap / needleWords.length;
 }
 
 function findReferencedProposal(
   text: string,
   proposals: ProposalRow[],
-  allowedStatus: Stage4ProposalStatus[]
+  allowedStatus: Stage4ProposalStatus[],
 ): { proposal: ProposalRow | null; confidence: number } {
-  const candidates = proposals.filter((proposal) => allowedStatus.includes(proposal.status));
+  const candidates = proposals.filter(proposal => allowedStatus.includes(proposal.status));
   if (candidates.length === 0) return { proposal: null, confidence: 0 };
 
   const quoted = text.match(/["'“”](.+?)["'“”]/)?.[1];
   const referenceText = quoted ?? text;
-  const direct = candidates.find((proposal) =>
-    normalizeText(referenceText).includes(normalizeText(proposal.description))
+  const direct = candidates.find(proposal =>
+    normalizeText(referenceText).includes(normalizeText(proposal.description)),
   );
   if (direct) return { proposal: direct, confidence: quoted ? 0.95 : 0.9 };
 
   const scored = candidates
-    .map((proposal) => ({ proposal, score: getOverlapScore(referenceText, proposal.description) }))
+    .map(proposal => ({ proposal, score: getOverlapScore(referenceText, proposal.description) }))
     .sort((a, b) => b.score - a.score);
   if (scored[0] && scored[0].score >= 0.6) return { proposal: scored[0].proposal, confidence: 0.82 };
 
@@ -205,12 +207,15 @@ function findReferencedProposal(
   return { proposal: null, confidence: 0 };
 }
 
-function findLooseRevisionProposal(text: string, proposals: ProposalRow[]): { proposal: ProposalRow | null; confidence: number } {
-  const candidates = proposals.filter((proposal) =>
-    [Stage4ProposalStatus.ACTIVE, Stage4ProposalStatus.REVISED].includes(proposal.status)
+function findLooseRevisionProposal(
+  text: string,
+  proposals: ProposalRow[],
+): { proposal: ProposalRow | null; confidence: number } {
+  const candidates = proposals.filter(proposal =>
+    [Stage4ProposalStatus.ACTIVE, Stage4ProposalStatus.REVISED].includes(proposal.status),
   );
   const scored = candidates
-    .map((proposal) => ({ proposal, score: getOverlapScore(text, proposal.description) }))
+    .map(proposal => ({ proposal, score: getOverlapScore(text, proposal.description) }))
     .sort((a, b) => b.score - a.score);
   if (scored[0] && scored[0].score >= 0.35 && (!scored[1] || scored[0].score - scored[1].score >= 0.15)) {
     return { proposal: scored[0].proposal, confidence: 0.86 };
@@ -236,10 +241,7 @@ function inferProposalKind(text: string): Stage4ProposalKind {
     return Stage4ProposalKind.INDIVIDUAL_COMMITMENT;
   }
   // Generic shared/joint phrasing.
-  if (
-    /\b(?:we|both of us|together|each of us|we each|one thing each)\b/i.test(text) ||
-    /\blet's\b/i.test(text)
-  ) {
+  if (/\b(?:we|both of us|together|each of us|we each|one thing each)\b/i.test(text) || /\blet's\b/i.test(text)) {
     return Stage4ProposalKind.SHARED_PROPOSAL;
   }
   // First-person commitment phrasing.
@@ -256,11 +258,7 @@ function isNonCommitmentFirstPerson(raw: string): boolean {
     /\bi\s+could\s+(?:see|understand|recognize|hear|imagine|tell|appreciate)\b/i,
     /\bi\s+would\s+(?:worry|be worried|be concerned|feel|think)\b/i,
     /\bi\s+(?:think|feel|worry|wonder|guess)\b/i,
-  ].some((pattern) => pattern.test(raw));
-}
-
-function proposalWordCount(value: string): number {
-  return normalizeText(value).split(' ').filter(Boolean).length;
+  ].some(pattern => pattern.test(raw));
 }
 
 function isConcreteProposal(description: string): boolean {
@@ -284,9 +282,11 @@ function fuzzyWordMatch(a: string, b: string): boolean {
 
 function getTopicOverlapScore(haystack: string, needle: string): number {
   const haystackWords = normalizeText(haystack).split(' ').filter(Boolean);
-  const needleWords = normalizeText(needle).split(' ').filter((word) => word.length > 2);
+  const needleWords = normalizeText(needle)
+    .split(' ')
+    .filter(word => word.length > 2);
   if (needleWords.length === 0) return 0;
-  const overlap = needleWords.filter((nw) => haystackWords.some((hw) => fuzzyWordMatch(hw, nw))).length;
+  const overlap = needleWords.filter(nw => haystackWords.some(hw => fuzzyWordMatch(hw, nw))).length;
   return overlap / needleWords.length;
 }
 
@@ -302,7 +302,7 @@ function hasRemoveIntent(text: string): boolean {
     /\b(?:take|taking)\s+(?:that|this|it|one|that one|this one|proposal|idea|strategy|that proposal|this proposal|that idea|this idea)\s+(?:off|back)\b/i,
     /\b(?:that|this|it|one|that one|this one)\s+comes\s+off(?:\s+the\s+list)?\b/i,
     /\bi'?m\s+taking\s+(?:that|this|it|one|that one|this one)\s+back\b/i,
-  ].some((pattern) => pattern.test(text));
+  ].some(pattern => pattern.test(text));
 }
 
 function extractAddOperations(input: Stage4CaptureInput): Stage4InventoryOperation[] {
@@ -328,9 +328,10 @@ function extractAddOperations(input: Stage4CaptureInput): Stage4InventoryOperati
         proposalId: proposal.targetProposalId,
         description,
         kind: proposal.kind,
-        ownerUserId: proposal.kind === Stage4ProposalKind.INDIVIDUAL_COMMITMENT
-          ? proposal.ownerUserId ?? input.userId
-          : proposal.ownerUserId,
+        ownerUserId:
+          proposal.kind === Stage4ProposalKind.INDIVIDUAL_COMMITMENT
+            ? (proposal.ownerUserId ?? input.userId)
+            : proposal.ownerUserId,
         needsAddressed: proposal.needsAddressed ?? [],
         duration: proposal.duration,
         measureOfSuccess: proposal.measureOfSuccess,
@@ -342,9 +343,10 @@ function extractAddOperations(input: Stage4CaptureInput): Stage4InventoryOperati
       type: 'ADD_PROPOSAL',
       tempKey: `structured-${operations.length}`,
       kind: proposal.kind,
-      ownerUserId: proposal.kind === Stage4ProposalKind.INDIVIDUAL_COMMITMENT
-        ? proposal.ownerUserId ?? input.userId
-        : proposal.ownerUserId,
+      ownerUserId:
+        proposal.kind === Stage4ProposalKind.INDIVIDUAL_COMMITMENT
+          ? (proposal.ownerUserId ?? input.userId)
+          : proposal.ownerUserId,
       description,
       needsAddressed: proposal.needsAddressed ?? [],
       duration: proposal.duration,
@@ -379,7 +381,7 @@ function extractAddOperations(input: Stage4CaptureInput): Stage4InventoryOperati
     /\b(?:i can|i could|i will|i'll|i would|i want to|i am going to|i'm going to)\s+(.+?)(?:$|[.!?]\s)/gi,
   ];
 
-  addPatterns.forEach((pattern) => {
+  addPatterns.forEach(pattern => {
     for (const match of input.userMessage.matchAll(pattern)) {
       const raw = match[0];
       if (/\b(?:not willing|willing|remove|delete|take .* off|drop that|change|revise|update)\b/i.test(raw)) {
@@ -407,7 +409,7 @@ function extractAddOperations(input: Stage4CaptureInput): Stage4InventoryOperati
 
 function extractDestructiveOrRevisionOperation(
   text: string,
-  proposals: ProposalRow[]
+  proposals: ProposalRow[],
 ): { operation: Stage4InventoryOperation | null; confidence: number; lowConfidenceAction?: string } {
   if (hasRemoveIntent(text)) {
     const match = findReferencedProposal(text, proposals, [Stage4ProposalStatus.ACTIVE, Stage4ProposalStatus.REVISED]);
@@ -457,7 +459,10 @@ function extractDestructiveOrRevisionOperation(
     return { operation: null, confidence: 0.45, lowConfidenceAction: 'REVISE_PROPOSAL' };
   }
 
-  if (/\b(?:should be|is|make it|mark it|keep it)\s+(?:an?\s+)?individual\b/i.test(text) || /\bnot shared\b/i.test(text)) {
+  if (
+    /\b(?:should be|is|make it|mark it|keep it)\s+(?:an?\s+)?individual\b/i.test(text) ||
+    /\bnot shared\b/i.test(text)
+  ) {
     const directMatch = findReferencedProposal(text, proposals, [
       Stage4ProposalStatus.ACTIVE,
       Stage4ProposalStatus.REVISED,
@@ -480,7 +485,11 @@ function extractDestructiveOrRevisionOperation(
   return { operation: null, confidence: 0 };
 }
 
-function extractSelection(text: string, userId: string, proposals: ProposalRow[]): Stage4SelectionCaptureDTO | undefined {
+function extractSelection(
+  text: string,
+  userId: string,
+  proposals: ProposalRow[],
+): Stage4SelectionCaptureDTO | undefined {
   let decision: Stage4SelectionDecision | null = null;
   if (/\b(?:not willing|won't|do not want|don't want|no to)\b/i.test(text)) {
     decision = Stage4SelectionDecision.NOT_WILLING;
@@ -506,11 +515,17 @@ function extractSelection(text: string, userId: string, proposals: ProposalRow[]
 
 function inferClosureSignalFromUserMessage(message: string): Stage4ClosureSignalDTO | undefined {
   const explicitStop =
-    /\b(?:stop here|stop this|close here|close this|right place to close|ready to close|no agreement|no shared agreement|without a shared agreement)\b/i.test(message) ||
+    /\b(?:stop here|stop this|close here|close this|right place to close|ready to close|no agreement|no shared agreement|without a shared agreement)\b/i.test(
+      message,
+    ) ||
     /\b(?:feels|feel|is)\s+complete\s+(?:for now|enough to close|as a stopping point|to stop here)\b/i.test(message);
   const declinesSharedRepair =
-    /\b(?:not|don't|do not|can't|cannot)\s+(?:want|need|looking for|make|making|seeking)\s+(?:a\s+|another\s+)?(?:shared|couple|joint)\s+(?:strategy|agreement|plan|repair)\b/i.test(message) ||
-    /\b(?:not|don't|do not|can't|cannot)\s+(?:ready\s+to\s+)?(?:turn|make)\s+this\s+into\s+(?:a\s+|another\s+)?(?:shared|couple|joint)\s+(?:strategy|agreement|plan|repair)\b/i.test(message) ||
+    /\b(?:not|don't|do not|can't|cannot)\s+(?:want|need|looking for|make|making|seeking)\s+(?:a\s+|another\s+)?(?:shared|couple|joint)\s+(?:strategy|agreement|plan|repair)\b/i.test(
+      message,
+    ) ||
+    /\b(?:not|don't|do not|can't|cannot)\s+(?:ready\s+to\s+)?(?:turn|make)\s+this\s+into\s+(?:a\s+|another\s+)?(?:shared|couple|joint)\s+(?:strategy|agreement|plan|repair)\b/i.test(
+      message,
+    ) ||
     /\b(?:no|not another)\s+(?:shared|couple|joint)\s+(?:strategy|agreement|plan|repair)\b/i.test(message);
 
   if (!explicitStop && !declinesSharedRepair) return undefined;
@@ -524,7 +539,6 @@ function inferClosureSignalFromUserMessage(message: string): Stage4ClosureSignal
     summary: message,
   };
 }
-
 
 // ============================================================================
 // Writes (target tables)
@@ -628,9 +642,9 @@ async function applyOperation(
   proposals: ProposalRow[],
 ): Promise<boolean> {
   if (operation.type === 'ADD_PROPOSAL') {
-    const live = proposals.filter((p) => p.status !== Stage4ProposalStatus.REMOVED);
-    if (live.some((p) => normalizeText(p.description) === normalizeText(operation.description))) return false;
-    const superseded = live.find((p) => isSupersededStrategy(p.description, operation.description));
+    const live = proposals.filter(p => p.status !== Stage4ProposalStatus.REMOVED);
+    if (live.some(p => normalizeText(p.description) === normalizeText(operation.description))) return false;
+    const superseded = live.find(p => isSupersededStrategy(p.description, operation.description));
     if (superseded) {
       const before = proposalSnapshot(superseded);
       await prisma.proposal.update({
@@ -695,19 +709,26 @@ async function applyOperation(
       updatedAt: created.updatedAt,
       needIds: [],
     });
-    await writeRevision(ctx, created.id, 'CREATED', null, {
-      description: operation.description,
-      needsAddressed: operation.needsAddressed,
-      duration: operation.duration ?? null,
-      measureOfSuccess: operation.measureOfSuccess ?? null,
-      kind: operation.kind,
-      status: Stage4ProposalStatus.ACTIVE,
-      capturedQuote: operation.capturedQuote ?? null,
-    }, 'Captured from Stage 4 conversation.');
+    await writeRevision(
+      ctx,
+      created.id,
+      'CREATED',
+      null,
+      {
+        description: operation.description,
+        needsAddressed: operation.needsAddressed,
+        duration: operation.duration ?? null,
+        measureOfSuccess: operation.measureOfSuccess ?? null,
+        kind: operation.kind,
+        status: Stage4ProposalStatus.ACTIVE,
+        capturedQuote: operation.capturedQuote ?? null,
+      },
+      'Captured from Stage 4 conversation.',
+    );
     return true;
   }
 
-  const proposal = proposals.find((p) => p.id === operation.proposalId);
+  const proposal = proposals.find(p => p.id === operation.proposalId);
   if (!proposal) return false;
 
   if (operation.type === 'REMOVE_PROPOSAL') {
@@ -721,12 +742,19 @@ async function applyOperation(
         removalReason: operation.reason,
       },
     });
-    await writeRevision(ctx, operation.proposalId, 'REMOVED', proposalSnapshot(proposal), {
-      ...proposalSnapshot(proposal),
-      status: Stage4ProposalStatus.REMOVED,
-      removedByParticipantId: ctx.actor,
-      removalReason: operation.reason ?? null,
-    }, operation.reason);
+    await writeRevision(
+      ctx,
+      operation.proposalId,
+      'REMOVED',
+      proposalSnapshot(proposal),
+      {
+        ...proposalSnapshot(proposal),
+        status: Stage4ProposalStatus.REMOVED,
+        removedByParticipantId: ctx.actor,
+        removalReason: operation.reason ?? null,
+      },
+      operation.reason,
+    );
     return true;
   }
 
@@ -735,13 +763,20 @@ async function applyOperation(
       where: { id: operation.proposalId },
       data: { status: Stage4ProposalStatus.ACTIVE, removedAt: null, removedByParticipantId: null, removalReason: null },
     });
-    await writeRevision(ctx, operation.proposalId, 'RESTORED', proposalSnapshot(proposal), {
-      ...proposalSnapshot(proposal),
-      status: Stage4ProposalStatus.ACTIVE,
-      removedAt: null,
-      removedByParticipantId: null,
-      removalReason: null,
-    }, operation.reason);
+    await writeRevision(
+      ctx,
+      operation.proposalId,
+      'RESTORED',
+      proposalSnapshot(proposal),
+      {
+        ...proposalSnapshot(proposal),
+        status: Stage4ProposalStatus.ACTIVE,
+        removedAt: null,
+        removedByParticipantId: null,
+        removalReason: null,
+      },
+      operation.reason,
+    );
     return true;
   }
 
@@ -762,15 +797,22 @@ async function applyOperation(
     },
   });
   if (operation.needsAddressed) await linkNeeds(ctx, operation.proposalId, operation.needsAddressed);
-  await writeRevision(ctx, operation.proposalId, 'REVISED', proposalSnapshot(proposal), {
-    ...proposalSnapshot(proposal),
-    description: operation.description ?? proposal.description,
-    needsAddressed: operation.needsAddressed ?? null,
-    duration: operation.duration ?? proposal.duration,
-    measureOfSuccess: operation.measureOfSuccess ?? proposal.measureOfSuccess,
-    kind: operation.kind ?? proposal.kind,
-    status: Stage4ProposalStatus.ACTIVE,
-  }, operation.reason);
+  await writeRevision(
+    ctx,
+    operation.proposalId,
+    'REVISED',
+    proposalSnapshot(proposal),
+    {
+      ...proposalSnapshot(proposal),
+      description: operation.description ?? proposal.description,
+      needsAddressed: operation.needsAddressed ?? null,
+      duration: operation.duration ?? proposal.duration,
+      measureOfSuccess: operation.measureOfSuccess ?? proposal.measureOfSuccess,
+      kind: operation.kind ?? proposal.kind,
+      status: Stage4ProposalStatus.ACTIVE,
+    },
+    operation.reason,
+  );
   return true;
 }
 
@@ -792,7 +834,7 @@ export async function captureStage4Turn(input: Stage4CaptureInput): Promise<Stag
   const ctx: CaptureContext = {
     sessionId: input.sessionId,
     actor: actor.id,
-    participantOfUser: new Map(participants.filter((p) => p.userId).map((p) => [p.userId as string, p.id])),
+    participantOfUser: new Map(participants.filter(p => p.userId).map(p => [p.userId as string, p.id])),
     userMessage: input.userMessage,
   };
   const proposals = (await loadProposals(input.sessionId, actor.id)) as ProposalRow[];
@@ -806,7 +848,7 @@ export async function captureStage4Turn(input: Stage4CaptureInput): Promise<Stag
     operations.length > 0 || selection
       ? Math.max(
           input.structuredProposals !== undefined && operations.length > 0 ? 0.92 : 0,
-          operations.some((operation) => operation.type === 'ADD_PROPOSAL') ? 0.78 : 0,
+          operations.some(operation => operation.type === 'ADD_PROPOSAL') ? 0.78 : 0,
           destructiveOrRevision.confidence,
           selection ? 0.82 : 0,
         )
@@ -815,9 +857,18 @@ export async function captureStage4Turn(input: Stage4CaptureInput): Promise<Stag
   let appliedOperationCount = 0;
   let skippedOperationCount = 0;
 
-  if (destructiveOrRevision.lowConfidenceAction && destructiveOrRevision.confidence < DESTRUCTIVE_CONFIDENCE_THRESHOLD) {
+  if (
+    destructiveOrRevision.lowConfidenceAction &&
+    destructiveOrRevision.confidence < DESTRUCTIVE_CONFIDENCE_THRESHOLD
+  ) {
     skippedOperationCount += 1;
-    await auditSkippedDestructiveCapture(ctx, proposals, input, destructiveOrRevision.lowConfidenceAction, destructiveOrRevision.confidence);
+    await auditSkippedDestructiveCapture(
+      ctx,
+      proposals,
+      input,
+      destructiveOrRevision.lowConfidenceAction,
+      destructiveOrRevision.confidence,
+    );
   }
 
   for (const operation of operations) {

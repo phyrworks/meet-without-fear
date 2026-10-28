@@ -15,41 +15,20 @@
 
 import { logger } from '../lib/logger';
 import { getModelCompletionWithTools, BrainActivityCallType } from '../lib/bedrock';
-import {
-  determineMemoryIntent,
-  type MemoryIntentContext,
-  type MemoryIntentResult,
-} from './memory-intent';
+import { determineMemoryIntent, type MemoryIntentContext, type MemoryIntentResult } from './memory-intent';
 // Memory detection and validation moved to fire-and-forget (partner-session-classifier.ts)
-import {
-  assembleContextBundle,
-  formatContextForPrompt,
-  type ContextBundle,
-} from './context-assembler';
+import { assembleContextBundle, formatContextForPrompt, type ContextBundle } from './context-assembler';
 import { planRetrieval, getMockRetrievalPlan, type RetrievalPlan } from './retrieval-planner';
-import { buildStagePrompt, type PromptBlocks } from './stage-prompts';
-import {
-  retrieveContext,
-  formatRetrievedContext,
-  type RetrievedContext,
-} from './context-retriever';
+import { buildStagePrompt } from './stage-prompts';
+import { retrieveContext, formatRetrievedContext, type RetrievedContext } from './context-retriever';
 import { brainService } from '../services/brain-service';
-import { ActivityType } from '../generated/prisma/client';
 import { parseMicroTagResponse } from '../utils/micro-tag-parser';
 import { handleDispatch, type DispatchContext } from './dispatch-handler';
 import { getToolsForStage, parseSessionStateToolInput, SESSION_STATE_TOOL_NAME } from './stage-tools';
-import {
-  decideSurfacing,
-  userAskedForPattern,
-  countPatternEvidence,
-} from './surfacing-policy';
+import { decideSurfacing, userAskedForPattern, countPatternEvidence } from './surfacing-policy';
 import { DEFAULT_MEMORY_PREFERENCES, type MemoryPreferencesDTO } from '@meet-without-fear/shared';
 import { readPreferences } from './user-settings';
-import {
-  buildBudgetedContext,
-  CONTEXT_WINDOW,
-  trimConversationHistory,
-} from '../utils/token-budget';
+import { buildBudgetedContext, CONTEXT_WINDOW, trimConversationHistory } from '../utils/token-budget';
 import { getSharedContentContext, getMilestoneContext } from './shared-context';
 import { publishContextUpdated } from './realtime';
 import { routeModel, scoreAmbiguity } from './model-router';
@@ -157,9 +136,7 @@ async function getUserMemoryPreferences(userId: string): Promise<MemoryPreferenc
  * Orchestrate the full AI response pipeline.
  * This is the main entry point for generating AI responses.
  */
-export async function orchestrateResponse(
-  context: OrchestratorContext
-): Promise<OrchestratorResult> {
+export async function orchestrateResponse(context: OrchestratorContext): Promise<OrchestratorResult> {
   const startTime = Date.now();
   const traceSteps: TraceStep[] = [];
   const decisionStartTime = Date.now();
@@ -200,7 +177,9 @@ export async function orchestrateResponse(
     result: `${memoryIntent.intent} (${memoryIntent.depth})`,
     status: 'success',
   });
-  logger.info(`[AI Orchestrator] Memory intent: ${memoryIntent.intent} (${memoryIntent.depth}) [Decision: ${decisionTime}ms]`);
+  logger.info(
+    `[AI Orchestrator] Memory intent: ${memoryIntent.intent} (${memoryIntent.depth}) [Decision: ${decisionTime}ms]`,
+  );
 
   if (decisionTime > 1000) {
     logger.warn(`[AI Orchestrator] Decision layer took ${decisionTime}ms (>1s) - consider optimization`);
@@ -213,12 +192,7 @@ export async function orchestrateResponse(
 
   const [userPrefs, contextBundle, retrievedContext, sharedContentHistory, milestoneContext] = await Promise.all([
     getUserMemoryPreferences(context.userId),
-    assembleContextBundle(
-      context.sessionId,
-      context.userId,
-      context.stage,
-      memoryIntent
-    ),
+    assembleContextBundle(context.sessionId, context.userId, context.stage, memoryIntent),
     retrieveContext({
       userId: context.userId,
       currentMessage: context.userMessage,
@@ -243,25 +217,49 @@ export async function orchestrateResponse(
     getMilestoneContext(context.sessionId, context.userId).catch((err: Error) => {
       logger.warn('[AI Orchestrator] Milestone context fetch failed:', err);
       return null;
-    })
+    }),
   ]);
 
   const parallelTime = Date.now() - parallelStartTime;
   const parallelStartMs = parallelStartTime - startTime;
   traceSteps.push(
-    { name: 'Context Assembly', type: 'retrieval', startMs: parallelStartMs, durationMs: parallelTime, result: `${contextBundle.conversationContext.turnCount} turns`, status: 'success' },
-    { name: 'Context Retrieval', type: 'retrieval', startMs: parallelStartMs, durationMs: parallelTime, result: retrievedContext ? retrievedContext.retrievalSummary : 'skipped', status: retrievedContext ? 'success' : 'skipped' },
-    { name: 'Shared Content', type: 'retrieval', startMs: parallelStartMs, durationMs: parallelTime, result: sharedContentHistory ? 'loaded' : 'none', status: 'success' },
-    { name: 'Milestones', type: 'retrieval', startMs: parallelStartMs, durationMs: parallelTime, result: milestoneContext ? 'loaded' : 'none', status: 'success' },
+    {
+      name: 'Context Assembly',
+      type: 'retrieval',
+      startMs: parallelStartMs,
+      durationMs: parallelTime,
+      result: `${contextBundle.conversationContext.turnCount} turns`,
+      status: 'success',
+    },
+    {
+      name: 'Context Retrieval',
+      type: 'retrieval',
+      startMs: parallelStartMs,
+      durationMs: parallelTime,
+      result: retrievedContext ? retrievedContext.retrievalSummary : 'skipped',
+      status: retrievedContext ? 'success' : 'skipped',
+    },
+    {
+      name: 'Shared Content',
+      type: 'retrieval',
+      startMs: parallelStartMs,
+      durationMs: parallelTime,
+      result: sharedContentHistory ? 'loaded' : 'none',
+      status: 'success',
+    },
+    {
+      name: 'Milestones',
+      type: 'retrieval',
+      startMs: parallelStartMs,
+      durationMs: parallelTime,
+      result: milestoneContext ? 'loaded' : 'none',
+      status: 'success',
+    },
   );
   logger.info(`[AI Orchestrator] Parallel pre-processing completed in ${parallelTime}ms`);
 
   // Publish context.updated event for Neural Monitor dashboard (fire-and-forget)
-  publishContextUpdated(
-    context.sessionId,
-    context.userId,
-    contextBundle.assembledAt
-  ).catch((err) => {
+  publishContextUpdated(context.sessionId, context.userId, contextBundle.assembledAt).catch(err => {
     logger.warn('[AI Orchestrator] Failed to publish context.updated event:', err);
   });
 
@@ -284,7 +282,7 @@ export async function orchestrateResponse(
     userAskedForPattern(context.userMessage),
     userPrefs.patternInsights,
     countPatternEvidence(retrievedContext ?? null),
-    undefined // lastSurfacingTurn
+    undefined, // lastSurfacingTurn
   );
   traceSteps.push({
     name: 'Surfacing Policy',
@@ -294,17 +292,18 @@ export async function orchestrateResponse(
     result: `shouldSurface=${surfacingDecision.shouldSurface}, style=${surfacingDecision.style}`,
     status: 'success',
   });
-  logger.info(`[AI Orchestrator] Surfacing decision: shouldSurface=${surfacingDecision.shouldSurface}, style=${surfacingDecision.style}`);
+  logger.info(
+    `[AI Orchestrator] Surfacing decision: shouldSurface=${surfacingDecision.shouldSurface}, style=${surfacingDecision.style}`,
+  );
 
   // Step 3: Plan retrieval (for full depth, use Haiku)
   let retrievalPlan: RetrievalPlan | undefined;
-  const shouldPlanRetrieval = memoryIntent.depth === 'full'
-    && !!retrievedContext
-    && (
-      retrievedContext.detectedReferences.length > 0
-      || retrievedContext.relevantFromOtherSessions.length > 0
-      || retrievedContext.relevantFromCurrentSession.length > 0
-    );
+  const shouldPlanRetrieval =
+    memoryIntent.depth === 'full' &&
+    !!retrievedContext &&
+    (retrievedContext.detectedReferences.length > 0 ||
+      retrievedContext.relevantFromOtherSessions.length > 0 ||
+      retrievedContext.relevantFromCurrentSession.length > 0);
 
   if (shouldPlanRetrieval) {
     const retrievalPlanStart = Date.now();
@@ -315,7 +314,7 @@ export async function orchestrateResponse(
         context.sessionId,
         turnId,
         context.userMessage,
-        memoryIntent.intent
+        memoryIntent.intent,
       );
       traceSteps.push({
         name: 'Retrieval Planning',
@@ -380,7 +379,7 @@ export async function orchestrateResponse(
       isStageTransition: context.isStageTransition,
       previousStage: context.previousStage,
       isOnboarding: context.isOnboarding,
-    }
+    },
   );
 
   // Combined text for token estimation (blocks are passed to bedrock separately for caching)
@@ -427,32 +426,30 @@ export async function orchestrateResponse(
   const summaryExists = Boolean(contextBundle.sessionSummary?.currentFocus);
   const { trimmed: trimmedHistory, truncated } = trimConversationHistory(
     context.conversationHistory,
-    summaryExists ? CONTEXT_WINDOW.recentTurnsWithSummary : CONTEXT_WINDOW.recentTurnsWithoutSummary
+    summaryExists ? CONTEXT_WINDOW.recentTurnsWithSummary : CONTEXT_WINDOW.recentTurnsWithoutSummary,
   );
 
   if (truncated > 0) {
     logger.info(`[AI Orchestrator] Trimmed ${truncated} old messages (summaryExists=${summaryExists})`);
   }
 
-  const budgetedContext = buildBudgetedContext(
-    systemPromptText,
-    trimmedHistory,
-    fullContext
-  );
+  const budgetedContext = buildBudgetedContext(systemPromptText, trimmedHistory, fullContext);
 
   if (budgetedContext.truncated > 0) {
     logger.info(
-      `[AI Orchestrator] Token budget applied: included ${budgetedContext.conversationMessages.length} of ${context.conversationHistory.length} messages, ${budgetedContext.truncated} truncated`
+      `[AI Orchestrator] Token budget applied: included ${budgetedContext.conversationMessages.length} of ${context.conversationHistory.length} messages, ${budgetedContext.truncated} truncated`,
     );
   }
 
   // Debug: Log the context that will be injected
-  logger.info(`[AI Orchestrator] Context for injection: ${budgetedContext.retrievedContext.length} chars, will inject: ${budgetedContext.retrievedContext.trim().length > 0}`);
+  logger.info(
+    `[AI Orchestrator] Context for injection: ${budgetedContext.retrievedContext.length} chars, will inject: ${budgetedContext.retrievedContext.trim().length > 0}`,
+  );
 
   const messagesWithContext = buildMessagesWithContext(
     budgetedContext.conversationMessages,
     context.userMessage,
-    budgetedContext.retrievedContext
+    budgetedContext.retrievedContext,
   );
 
   const summaryText = contextBundle.sessionSummary
@@ -468,16 +465,19 @@ export async function orchestrateResponse(
           ? `Partner needs: ${contextBundle.sessionSummary.partnerNeeds.join('; ')}`
           : '',
       ]
-        .filter((line) => line.trim().length > 0)
+        .filter(line => line.trim().length > 0)
         .join('\n')
     : '';
 
-  recordContextSizes(context.turnId, estimateContextSizes({
-    pinned: systemPromptText,
-    summary: summaryText,
-    recentMessages: budgetedContext.conversationMessages,
-    rag: budgetedContext.retrievedContext,
-  }));
+  recordContextSizes(
+    context.turnId,
+    estimateContextSizes({
+      pinned: systemPromptText,
+      summary: summaryText,
+      recentMessages: budgetedContext.conversationMessages,
+      rag: budgetedContext.retrievedContext,
+    }),
+  );
 
   traceSteps.push({
     name: 'Token Budget',
@@ -512,7 +512,9 @@ export async function orchestrateResponse(
     result: `model=${routingDecision.model}, score=${routingDecision.score}`,
     status: 'success',
   });
-  logger.info(`[AI Orchestrator] Routing decision: model=${routingDecision.model}, score=${routingDecision.score}, reasons=${routingDecision.reasons.join(',')}`);
+  logger.info(
+    `[AI Orchestrator] Routing decision: model=${routingDecision.model}, score=${routingDecision.score}, reasons=${routingDecision.reasons.join(',')}`,
+  );
 
   // Time to First Byte (response generation)
   const responseStartTime = Date.now();
@@ -539,11 +541,10 @@ Call update_session_state with any persisted state required by the latest user t
       callType: BrainActivityCallType.ORCHESTRATED_RESPONSE,
       // thinkingBudget: 1024, // Disabled - not supported on Bedrock Sonnet v2
     });
-    const completion = typeof completionOrText === 'string'
-      ? { text: completionOrText, toolInvocations: [] }
-      : completionOrText;
+    const completion =
+      typeof completionOrText === 'string' ? { text: completionOrText, toolInvocations: [] } : completionOrText;
     modelResponse = completion?.text ?? null;
-    const sessionStateTool = completion?.toolInvocations.find((tool) => tool.name === SESSION_STATE_TOOL_NAME);
+    const sessionStateTool = completion?.toolInvocations.find(tool => tool.name === SESSION_STATE_TOOL_NAME);
     const toolMetadata = sessionStateTool ? parseSessionStateToolInput(sessionStateTool.input) : {};
 
     if (!modelResponse && sessionStateTool) {
@@ -554,15 +555,15 @@ Call update_session_state with any persisted state required by the latest user t
 VISIBLE RESPONSE PASS:
 Persisted state has already been captured for this turn. The update_session_state tool is intentionally unavailable now. Ignore any instruction to call it in this pass.
 Captured state summary for your private context: ${JSON.stringify({
-  topicFrame: toolMetadata.topicFrame,
-  offerFeelHeardCheck: toolMetadata.offerFeelHeardCheck,
-  offerReadyToShare: toolMetadata.offerReadyToShare,
-  proposedEmpathyStatement: toolMetadata.proposedEmpathyStatement ? '[captured]' : undefined,
-  proposedNeed: toolMetadata.proposedNeed,
-  needAction: toolMetadata.needAction,
-  stage4ProposalCount: toolMetadata.stage4Proposals?.length,
-  stage4WalkthroughAction: toolMetadata.stage4WalkthroughAction,
-})}
+          topicFrame: toolMetadata.topicFrame,
+          offerFeelHeardCheck: toolMetadata.offerFeelHeardCheck,
+          offerReadyToShare: toolMetadata.offerReadyToShare,
+          proposedEmpathyStatement: toolMetadata.proposedEmpathyStatement ? '[captured]' : undefined,
+          proposedNeed: toolMetadata.proposedNeed,
+          needAction: toolMetadata.needAction,
+          stage4ProposalCount: toolMetadata.stage4Proposals?.length,
+          stage4WalkthroughAction: toolMetadata.stage4WalkthroughAction,
+        })}
 Write only the user-facing conversational response. Do not include tool JSON, XML tags beyond the normal hidden <thinking> protocol, or state summaries.`,
       };
       const visibleCompletion = await getModelCompletionWithTools(routingDecision.model, {
@@ -574,9 +575,7 @@ Write only the user-facing conversational response. Do not include tool JSON, XM
         turnId,
         callType: BrainActivityCallType.ORCHESTRATED_RESPONSE,
       });
-      modelResponse = typeof visibleCompletion === 'string'
-        ? visibleCompletion
-        : visibleCompletion?.text ?? null;
+      modelResponse = typeof visibleCompletion === 'string' ? visibleCompletion : (visibleCompletion?.text ?? null);
     }
 
     const responseTime = Date.now() - responseStartTime;
@@ -648,12 +647,19 @@ Write only the user-facing conversational response. Do not include tool JSON, XM
           });
 
           const totalDuration = Date.now() - startTime;
-          const turnTrace: TurnTrace = { totalDurationMs: totalDuration, modelUsed: routingDecision.model, usedMock: false, steps: traceSteps };
+          const turnTrace: TurnTrace = {
+            totalDurationMs: totalDuration,
+            modelUsed: routingDecision.model,
+            usedMock: false,
+            steps: traceSteps,
+          };
 
           // If AI provided an initial response along with dispatch, return both
           // This enables two-message flow: acknowledgment first, then detailed response
           if (parsed.response && parsed.response.trim()) {
-            logger.info(`[AI Orchestrator] Two-message dispatch flow: initial="${parsed.response.substring(0, 50)}..."`);
+            logger.info(
+              `[AI Orchestrator] Two-message dispatch flow: initial="${parsed.response.substring(0, 50)}..."`,
+            );
             finalizeTurnMetrics(context.turnId);
             // Store trace on the ORCHESTRATED_RESPONSE activity via brain service
             storeTurnTrace(context.sessionId, turnId, turnTrace);
@@ -717,7 +723,9 @@ Write only the user-facing conversational response. Do not include tool JSON, XM
 
       // Debug logging for Stage 2 readiness signal
       if (context.stage === 2) {
-        logger.info(`[AI Orchestrator] Stage 2 - Turn ${context.turnCount}, offerReadyToShare: ${offerReadyToShare}, proposedEmpathyStatement: ${proposedEmpathyStatement ? 'present' : 'null'}`);
+        logger.info(
+          `[AI Orchestrator] Stage 2 - Turn ${context.turnCount}, offerReadyToShare: ${offerReadyToShare}, proposedEmpathyStatement: ${proposedEmpathyStatement ? 'present' : 'null'}`,
+        );
       }
 
       if (parsed.thinking) {
@@ -746,7 +754,12 @@ Write only the user-facing conversational response. Do not include tool JSON, XM
   finalizeTurnMetrics(context.turnId);
 
   // Store turn trace on the ORCHESTRATED_RESPONSE activity
-  const turnTrace: TurnTrace = { totalDurationMs: totalDuration, modelUsed: routingDecision.model, usedMock, steps: traceSteps };
+  const turnTrace: TurnTrace = {
+    totalDurationMs: totalDuration,
+    modelUsed: routingDecision.model,
+    usedMock,
+    steps: traceSteps,
+  };
   storeTurnTrace(context.sessionId, turnId, turnTrace);
 
   // Log latency breakdown for monitoring
@@ -782,7 +795,7 @@ Write only the user-facing conversational response. Do not include tool JSON, XM
 function buildMessagesWithContext(
   history: Array<{ role: 'user' | 'assistant'; content: string }>,
   currentMessage: string,
-  formattedContext: string
+  formattedContext: string,
 ): Array<{ role: 'user' | 'assistant'; content: string }> {
   const messages: Array<{ role: 'user' | 'assistant'; content: string }> = [];
 

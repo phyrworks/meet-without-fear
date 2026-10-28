@@ -1,0 +1,18 @@
+{
+  "//": "TS-12: the program ESLint type-checks against \u2014 tsconfig.json plus the tests and scripts it excludes from the build, so `npm run lint` can parse every file it lints.",
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true
+  },
+  "include": [
+    "src/**/*",
+    "../shared/src/*.ts",
+    "../shared/src/contracts/*.ts",
+    "../shared/src/dto/**/*.ts",
+    "../shared/src/validation/*.ts"
+  ],
+  "exclude": [
+    "node_modules",
+    "dist"
+  ]
+}

@@ -1,5 +1,5 @@
 import { prisma } from '../lib/prisma';
-import { UserMemory, MemoryStatus, MemorySource, MemoryCategory } from '../generated/prisma/client';
+import { MemoryStatus, MemorySource, MemoryCategory } from '../generated/prisma/client';
 
 export const memoryService = {
   /**
@@ -56,5 +56,5 @@ export const memoryService = {
       },
       orderBy: { createdAt: 'desc' },
     });
-  }
+  },
 };

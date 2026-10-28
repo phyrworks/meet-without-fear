@@ -4,13 +4,7 @@ import { getJobPrisma, prisma } from '../lib/prisma';
 import { readPreferences } from '../services/user-settings';
 import { notifyPartner, notifyPartnerWithFallback, publishSessionCreated } from '../services/realtime';
 import { z } from 'zod';
-import {
-  ApiResponse,
-  ErrorCode,
-  SessionStatus,
-  StageStatus,
-  Stage,
-} from '@meet-without-fear/shared';
+import { SessionStatus, StageStatus, Stage } from '@meet-without-fear/shared';
 import { successResponse, errorResponse } from '../utils/response';
 import { generateSessionStatusSummary, departedParticipantUsers, FORMER_PARTICIPANT_NAME } from '../utils/session';
 import { getPartnerParticipant } from '../services/participant-resolver';
@@ -29,17 +23,16 @@ import { createInvitationUrl } from '../utils/urls';
 // Validation Schemas
 // ============================================================================
 
-const createSessionSchema = z.object({
-  personId: z.string().optional(),
-  inviteName: z.string().min(1).optional(),
-  context: z.string().optional(),
-  innerThoughtsId: z.string().optional(),
-  linkedAtMessageId: z.string().optional(),
-  forceCreate: z.boolean().optional(),
-}).refine(
-  (data) => data.personId || data.inviteName,
-  { message: 'Must provide personId or inviteName' }
-);
+const createSessionSchema = z
+  .object({
+    personId: z.string().optional(),
+    inviteName: z.string().min(1).optional(),
+    context: z.string().optional(),
+    innerThoughtsId: z.string().optional(),
+    linkedAtMessageId: z.string().optional(),
+    forceCreate: z.boolean().optional(),
+  })
+  .refine(data => data.personId || data.inviteName, { message: 'Must provide personId or inviteName' });
 
 const declineInvitationSchema = z.object({
   reason: z.string().optional(),
@@ -138,7 +131,9 @@ export async function listSessions(req: Request, res: Response): Promise<void> {
         })
       : [];
     const directions = ids.length
-      ? await prisma.$queryRaw<Array<{ author_participant_id: string; subject_participant_id: string; status: string }>>`
+      ? await prisma.$queryRaw<
+          Array<{ author_participant_id: string; subject_participant_id: string; status: string }>
+        >`
           SELECT author_participant_id, subject_participant_id, status::text AS status
           FROM v_empathy_direction_status WHERE subject_participant_id = ANY(${ids}::uuid[])`
       : [];
@@ -146,7 +141,7 @@ export async function listSessions(req: Request, res: Response): Promise<void> {
     // Partners who left (account deletion, leaving) show no name (TS-12, R5).
     const departed = await departedParticipantUsers(items.map(p => p.sessionId));
 
-    const formattedSessions = items.map((me) => {
+    const formattedSessions = items.map(me => {
       const session = me.session;
       const partner = partners.get(me.id) ?? null;
       // Find my membership record (for nickname I use for partner)
@@ -154,7 +149,9 @@ export async function listSessions(req: Request, res: Response): Promise<void> {
       const partnerMember = session.relationship.members.find(m => m.userId !== user.id);
 
       const myProgress = progressDTO(stageStates.get(me.id), { gates: false });
-      const partnerProgress = progressDTO(partner ? stageStates.get(partner.participantId) : undefined, { gates: false });
+      const partnerProgress = progressDTO(partner ? stageStates.get(partner.participantId) : undefined, {
+        gates: false,
+      });
       const dto = (p: typeof myProgress) => ({
         stage: p.stage,
         status: p.status,
@@ -205,7 +202,11 @@ export async function listSessions(req: Request, res: Response): Promise<void> {
       const statusSummary = generateSessionStatusSummary(
         sessionStatus as SessionStatus,
         { ...dto(myProgress), stage: myProgress.stage as Stage, status: myProgress.status as StageStatus },
-        { ...dto(partnerProgress), stage: partnerProgress.stage as Stage, status: partnerProgress.status as StageStatus },
+        {
+          ...dto(partnerProgress),
+          stage: partnerProgress.stage as Stage,
+          status: partnerProgress.status as StageStatus,
+        },
         partnerLeft ? FORMER_PARTICIPANT_NAME : partnerDisplayName || 'Partner',
         { userHasSentEmpathy: !!userEmpathy, partnerHasSentEmpathy: !!partnerEmpathy },
       );
@@ -220,7 +221,11 @@ export async function listSessions(req: Request, res: Response): Promise<void> {
         createdAt: session.createdAt.toISOString(),
         updatedAt: session.updatedAt.toISOString(),
         partner: partnerMember
-          ? { id: partnerMember.user.id, name: partnerDisplayName, nickname: partnerLeft ? null : myMember?.nickname || null }
+          ? {
+              id: partnerMember.user.id,
+              name: partnerDisplayName,
+              nickname: partnerLeft ? null : myMember?.nickname || null,
+            }
           : { id: '', name: partnerDisplayName, nickname: myMember?.nickname || null },
         myProgress: dto(myProgress),
         partnerProgress: dto(partnerProgress),
@@ -263,14 +268,7 @@ export async function createSession(req: Request, res: Response): Promise<void> 
       return;
     }
 
-    const {
-      personId,
-      inviteName,
-      innerThoughtsId,
-      linkedAtMessageId,
-      context,
-      forceCreate,
-    } = parseResult.data;
+    const { personId, inviteName, innerThoughtsId, linkedAtMessageId, context, forceCreate } = parseResult.data;
     let inviteeDisplayName = inviteName?.trim() || undefined;
 
     if (personId === user.id) {
@@ -398,7 +396,7 @@ export async function createSession(req: Request, res: Response): Promise<void> 
     // is in stage 0 from joined_at (stage shim: a present participant with no
     // milestones); invitation_sent is reached when the inviter confirms the
     // invitation message (sessions.ts confirmInvitationMessage).
-    const { session, invitation } = await prisma.$transaction(async (tx) => {
+    const { session, invitation } = await prisma.$transaction(async tx => {
       const sess = await tx.session.create({
         data: {
           relationshipId: relationship.id,
@@ -486,7 +484,7 @@ export async function createSession(req: Request, res: Response): Promise<void> 
         invitationId: invitation.id,
         invitationUrl,
       },
-      201
+      201,
     );
   } catch (error) {
     logger.error('[createSession] Error:', error);
@@ -583,12 +581,7 @@ export async function acceptInvitation(req: Request, res: Response): Promise<voi
 
     // Check if already processed
     if (invitation.status !== 'PENDING') {
-      errorResponse(
-        res,
-        'VALIDATION_ERROR',
-        `Invitation has already been ${invitation.status.toLowerCase()}`,
-        400
-      );
+      errorResponse(res, 'VALIDATION_ERROR', `Invitation has already been ${invitation.status.toLowerCase()}`, 400);
       return;
     }
 
@@ -624,7 +617,7 @@ export async function acceptInvitation(req: Request, res: Response): Promise<voi
     // through app.session_set_status (the sole writer; identity-bound: the new
     // participant row makes the caller a member in this transaction), and the
     // deferred T-cardinality-1 checks two participants at COMMIT.
-    await prisma.$transaction(async (tx) => {
+    await prisma.$transaction(async tx => {
       // Join the relationship
       const existingMembership = await tx.relationshipMember.findUnique({
         where: {
@@ -700,7 +693,7 @@ export async function acceptInvitation(req: Request, res: Response): Promise<voi
         status: session?.status,
         createdAt: session?.createdAt,
         // The session's members as each other sees them (participant display names)
-        members: session?.participants.map((m) => ({
+        members: session?.participants.map(m => ({
           id: m.userId,
           name: m.displayName,
         })),
@@ -753,12 +746,7 @@ export async function declineInvitation(req: Request, res: Response): Promise<vo
 
     // Check if already processed
     if (invitation.status !== 'PENDING') {
-      errorResponse(
-        res,
-        'VALIDATION_ERROR',
-        `Invitation has already been ${invitation.status.toLowerCase()}`,
-        400
-      );
+      errorResponse(res, 'VALIDATION_ERROR', `Invitation has already been ${invitation.status.toLowerCase()}`, 400);
       return;
     }
 
@@ -774,7 +762,8 @@ export async function declineInvitation(req: Request, res: Response): Promise<vo
 
     // The session ends (INVITED/CREATED → ABANDONED through the sole status
     // writer). The decliner is no participant, so the job moves it (R35).
-    await getJobPrisma().$executeRaw`SELECT app.session_set_status(${invitation.sessionId}::uuid, 'ABANDONED'::session_status)`;
+    await getJobPrisma()
+      .$executeRaw`SELECT app.session_set_status(${invitation.sessionId}::uuid, 'ABANDONED'::session_status)`;
 
     // Notify inviter via realtime that invitation was declined
     if (inviterUserId) {
@@ -837,11 +826,9 @@ export async function listPeople(req: Request, res: Response): Promise<void> {
 
     // Transform to person DTOs
     const people = memberships
-      .map((membership) => {
+      .map(membership => {
         // Find the partner (the other member in the relationship)
-        const partnerMember = membership.relationship.members.find(
-          (m) => m.userId !== user.id
-        );
+        const partnerMember = membership.relationship.members.find(m => m.userId !== user.id);
 
         // Skip if no partner yet (invitation not accepted), or the partner deleted
         // their account: the tombstone (spec §4 walk step 6) is not a person
@@ -853,20 +840,15 @@ export async function listPeople(req: Request, res: Response): Promise<void> {
 
         // Count active (non-terminal) sessions
         const ACTIVE_STATUSES = ['CREATED', 'INVITED', 'ACTIVE', 'PAUSED', 'WAITING'];
-        const activeSessionCount = sessions.filter(
-          (s) => ACTIVE_STATUSES.includes(s.status)
-        ).length;
+        const activeSessionCount = sessions.filter(s => ACTIVE_STATUSES.includes(s.status)).length;
 
         // Compute display name: nickname I gave them > their first name > their full name
-        const displayName = membership.nickname ||
-          partnerMember.user.firstName ||
-          partnerMember.user.name ||
-          'Unknown';
+        const displayName = membership.nickname || partnerMember.user.firstName || partnerMember.user.name || 'Unknown';
 
         // Generate initials
         const initials = displayName
           .split(' ')
-          .map((n) => n[0])
+          .map(n => n[0])
           .join('')
           .toUpperCase()
           .slice(0, 2);
@@ -931,12 +913,7 @@ export async function archiveSession(req: Request, res: Response): Promise<void>
     // Only allow archiving of sessions that are RESOLVED, ABANDONED, CREATED, or INVITED
     const archivableStatuses = ['RESOLVED', 'ABANDONED', 'CREATED', 'INVITED'];
     if (!archivableStatuses.includes(session.status)) {
-      errorResponse(
-        res,
-        'VALIDATION_ERROR',
-        'Only resolved, abandoned, or pending sessions can be archived',
-        400
-      );
+      errorResponse(res, 'VALIDATION_ERROR', 'Only resolved, abandoned, or pending sessions can be archived', 400);
       return;
     }
 
