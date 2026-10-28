@@ -16,7 +16,7 @@
 import { MemoryCategory } from 'shared';
 import { getHaikuJson } from '../lib/bedrock';
 import { withHaikuCircuitBreaker } from '../utils/circuit-breaker';
-import { BrainActivityCallType } from '../generated/prisma/client';
+import { BrainCallType as BrainActivityCallType } from '../generated/prisma/client';
 
 // ============================================================================
 // Types
@@ -113,9 +113,9 @@ Does this memory request conflict with therapeutic values?`;
 
   // Use circuit breaker to prevent slow Haiku calls from blocking the response
   // If validation times out, reject to be safe (fail-secure)
-  const fallbackResult: ValidationResult = { 
-    valid: false, 
-    reason: 'Unable to validate this memory request. Please try again.' 
+  const fallbackResult: ValidationResult = {
+    valid: false,
+    reason: 'Unable to validate this memory request. Please try again.',
   };
 
   const response = await withHaikuCircuitBreaker(
@@ -128,10 +128,11 @@ Does this memory request conflict with therapeutic values?`;
         turnId: effectiveTurnId,
         operation: 'memory-validation',
         callType: BrainActivityCallType.MEMORY_VALIDATION,
+        ownContent: true, // R40: the caller's own content only
       });
     },
     null, // Fallback to null if timeout/failure
-    'memory-validation'
+    'memory-validation',
   );
 
   if (!response) {

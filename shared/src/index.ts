@@ -34,6 +34,10 @@ export * from './dto/meditation';
 export * from './dto/cross-feature';
 export * from './dto/voice';
 export * from './dto/version';
+export * from './dto/feature-state';
+
+// Reference data
+export * from './constants/needs';
 
 // Validation schemas
 export * from './validation';

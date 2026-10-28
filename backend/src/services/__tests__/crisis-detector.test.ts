@@ -1,5 +1,4 @@
 import { detectCrisis } from '../crisis-detector';
-import type { CrisisDetectionResult } from '../crisis-detector';
 
 describe('Crisis Detector', () => {
   // ---- Suicide / Self-Harm Detection ----
@@ -109,7 +108,7 @@ describe('Crisis Detector', () => {
   });
 
   it('does NOT trigger on "dying laughing"', () => {
-    const result = detectCrisis("I was dying laughing when he said that");
+    const result = detectCrisis('I was dying laughing when he said that');
     expect(result.detected).toBe(false);
     expect(result.severity).toBe('none');
   });

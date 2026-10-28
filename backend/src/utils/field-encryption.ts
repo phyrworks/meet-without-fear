@@ -95,12 +95,7 @@ export function encrypt(plaintext: string): string {
   const authTag = cipher.getAuthTag();
 
   return (
-    ENCRYPTED_PREFIX +
-    iv.toString('base64') +
-    ':' +
-    authTag.toString('base64') +
-    ':' +
-    encrypted.toString('base64')
+    ENCRYPTED_PREFIX + iv.toString('base64') + ':' + authTag.toString('base64') + ':' + encrypted.toString('base64')
   );
 }
 

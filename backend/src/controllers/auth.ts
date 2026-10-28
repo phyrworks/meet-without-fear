@@ -3,13 +3,18 @@
  *
  * Handles authentication-related endpoints including user profile,
  * push notifications, and Ably realtime token generation.
+ *
+ * Target shape (TS-12, spec §1.7): `user` keeps identity only. Preferences are
+ * `user_preferences.doc` (memory / notifications / privacy), push tokens and
+ * biometrics `user_device`, the last mood the latest `mood_reading`
+ * (services/user-settings.ts). The `auth` contract is unchanged.
  */
 
 import { Request, Response } from 'express';
 import { logger } from '../lib/logger';
 import { prisma } from '../lib/prisma';
 import { getUser, AuthUser } from '../middleware/auth';
-import { asyncHandler, ForbiddenError, NotFoundError, ValidationError } from '../middleware/errors';
+import { asyncHandler, ForbiddenError, ValidationError } from '../middleware/errors';
 import {
   ApiResponse,
   GetMeResponse,
@@ -24,12 +29,6 @@ import {
   GetPrivacyPreferencesResponse,
   UpdatePrivacyPreferencesResponse,
   DeleteAccountResponse,
-  MemoryPreferencesDTO,
-  NotificationPreferencesDTO,
-  PrivacyPreferencesDTO,
-  DEFAULT_MEMORY_PREFERENCES,
-  DEFAULT_NOTIFICATION_PREFERENCES,
-  DEFAULT_PRIVACY_PREFERENCES,
   updateProfileRequestSchema,
   updatePushTokenRequestSchema,
   updateBiometricPreferenceRequestSchema,
@@ -39,23 +38,41 @@ import {
 } from '@meet-without-fear/shared';
 import { deleteAccountWithNotifications } from '../services/account-deletion';
 import { sendTestPushNotification } from '../services/push';
+import {
+  clearPushTokens,
+  deviceSummary,
+  lastMoodIntensity,
+  readPreferences,
+  recordUserMood,
+  registerPushToken,
+  setBiometric,
+  updatePreferences,
+} from '../services/user-settings';
 
 // ============================================================================
 // Helper Functions
 // ============================================================================
 
-function toUserDTO(user: AuthUser) {
+/** The unchanged user DTO: identity from `user`, biometric from `user_device`, mood from `mood_reading`. */
+async function toUserDTO(user: Pick<AuthUser, 'id' | 'email' | 'name' | 'firstName' | 'lastName' | 'createdAt'>) {
+  const [devices, mood] = await Promise.all([deviceSummary(user.id), lastMoodIntensity(user.id)]);
   return {
-    id: user.id,
-    email: user.email,
-    name: user.name,
-    firstName: user.firstName,
-    lastName: user.lastName,
-    biometricEnabled: user.biometricEnabled,
-    lastMoodIntensity: user.lastMoodIntensity,
-    createdAt: user.createdAt.toISOString(),
+    dto: {
+      id: user.id,
+      email: user.email,
+      name: user.name,
+      firstName: user.firstName,
+      lastName: user.lastName,
+      biometricEnabled: devices.biometricEnabled,
+      lastMoodIntensity: mood,
+      createdAt: user.createdAt.toISOString(),
+    },
+    devices,
   };
 }
+
+/** Live sessions the user is a present participant of (the old ACTIVE / WAITING / PAUSED; PAUSED is ACTIVE + a `paused` milestone). */
+const ACTIVE_SESSION_STATUSES = ['ACTIVE'] as const;
 
 // ============================================================================
 // GET /auth/me
@@ -67,21 +84,18 @@ export const getMe = asyncHandler(async (req: Request, res: Response): Promise<v
   // Count active sessions for this user
   const activeSessions = await prisma.session.count({
     where: {
-      relationship: {
-        members: {
-          some: { userId: user.id },
-        },
-      },
-      status: { in: ['ACTIVE', 'WAITING', 'PAUSED'] },
+      participants: { some: { userId: user.id, leftAt: null } },
+      status: { in: [...ACTIVE_SESSION_STATUSES] },
     },
   });
 
+  const { dto, devices } = await toUserDTO(user);
   const response: ApiResponse<GetMeResponse> = {
     success: true,
     data: {
-      user: toUserDTO(user),
+      user: dto,
       activeSessions,
-      pushNotificationsEnabled: !!user.pushToken,
+      pushNotificationsEnabled: devices.pushNotificationsEnabled,
     },
   };
 
@@ -105,9 +119,14 @@ export const updateProfile = asyncHandler(async (req: Request, res: Response): P
 
   const { name, firstName, lastName } = parseResult.data;
 
-  // Build update data - only include fields that were provided
-  const updateData: { name?: string; firstName?: string; lastName?: string } = {};
-  if (name !== undefined) updateData.name = name;
+  // Build update data - only include fields that were provided. `name` is
+  // generated from the first and last names (spec §1.7); a `name` alone is
+  // stored as the first name with no last name (it then reads back whole).
+  const updateData: { firstName?: string | null; lastName?: string | null } = {};
+  if (name !== undefined && firstName === undefined && lastName === undefined) {
+    updateData.firstName = name;
+    updateData.lastName = null;
+  }
   if (firstName !== undefined) updateData.firstName = firstName;
   if (lastName !== undefined) updateData.lastName = lastName;
 
@@ -120,16 +139,7 @@ export const updateProfile = asyncHandler(async (req: Request, res: Response): P
   const response: ApiResponse<UpdateProfileResponse> = {
     success: true,
     data: {
-      user: {
-        id: updatedUser.id,
-        email: updatedUser.email,
-        name: updatedUser.name,
-        firstName: updatedUser.firstName,
-        lastName: updatedUser.lastName,
-        biometricEnabled: updatedUser.biometricEnabled,
-        lastMoodIntensity: updatedUser.lastMoodIntensity,
-        createdAt: updatedUser.createdAt.toISOString(),
-      },
+      user: (await toUserDTO(updatedUser)).dto,
     },
   };
 
@@ -151,13 +161,10 @@ export const updatePushToken = asyncHandler(async (req: Request, res: Response):
     });
   }
 
-  const { pushToken } = parseResult.data;
+  const { pushToken, platform } = parseResult.data;
 
-  // Update user push token
-  await prisma.user.update({
-    where: { id: user.id },
-    data: { pushToken },
-  });
+  // Register this device's token (user_device; one row per device)
+  await registerPushToken(user.id, pushToken, platform);
 
   const response: ApiResponse<UpdatePushTokenResponse> = {
     success: true,
@@ -219,10 +226,8 @@ export const getAblyToken = asyncHandler(async (req: Request, res: Response): Pr
   // Include all non-resolved sessions so users can connect during invitation phase too
   const sessions = await prisma.session.findMany({
     where: {
-      relationship: {
-        members: { some: { userId: user.id } },
-      },
-      status: { in: ['CREATED', 'INVITED', 'ACTIVE', 'WAITING', 'PAUSED'] },
+      participants: { some: { userId: user.id, leftAt: null } },
+      status: { in: ['CREATED', 'INVITED', 'ACTIVE'] },
     },
     select: { id: true },
   });
@@ -304,10 +309,9 @@ export const getAblyToken = asyncHandler(async (req: Request, res: Response): Pr
 export const deletePushToken = asyncHandler(async (req: Request, res: Response): Promise<void> => {
   const user = getUser(req);
 
-  await prisma.user.update({
-    where: { id: user.id },
-    data: { pushToken: null },
-  });
+  // A body may name the device's token; without one every token of the user goes (the old single-token logout)
+  const token = typeof req.body?.pushToken === 'string' ? (req.body.pushToken as string) : undefined;
+  await clearPushTokens(user.id, token);
 
   const response: ApiResponse<UpdatePushTokenResponse> = {
     success: true,
@@ -330,7 +334,7 @@ export const scheduleTestPushNotification = asyncHandler(async (req: Request, re
     throw new ForbiddenError('Test push notifications are not available for this account');
   }
 
-  await new Promise((resolve) => setTimeout(resolve, 10_000));
+  await new Promise(resolve => setTimeout(resolve, 10_000));
   const result = await sendTestPushNotification(user.id);
 
   const response: ApiResponse<{ sent: boolean; delaySeconds: number; reason?: string }> = {
@@ -362,20 +366,14 @@ export const updateBiometricPreference = asyncHandler(async (req: Request, res: 
 
   const { enabled } = parseResult.data;
 
-  // Update biometric preference
-  const updatedUser = await prisma.user.update({
-    where: { id: user.id },
-    data: {
-      biometricEnabled: enabled,
-      biometricEnrolledAt: enabled ? new Date() : null,
-    },
-  });
+  // Update biometric preference (user_device)
+  const devices = await setBiometric(user.id, enabled);
 
   const response: ApiResponse<UpdateBiometricPreferenceResponse> = {
     success: true,
     data: {
-      biometricEnabled: updatedUser.biometricEnabled,
-      biometricEnrolledAt: updatedUser.biometricEnrolledAt?.toISOString() ?? null,
+      biometricEnabled: devices.biometricEnabled,
+      biometricEnrolledAt: devices.biometricEnrolledAt?.toISOString() ?? null,
     },
   };
 
@@ -389,15 +387,7 @@ export const updateBiometricPreference = asyncHandler(async (req: Request, res: 
 export const getMemoryPreferences = asyncHandler(async (req: Request, res: Response): Promise<void> => {
   const user = getUser(req);
 
-  // Get user with memory preferences
-  const dbUser = await prisma.user.findUnique({
-    where: { id: user.id },
-    select: { memoryPreferences: true },
-  });
-
-  // Parse stored preferences or use defaults
-  const storedPrefs = dbUser?.memoryPreferences as MemoryPreferencesDTO | null;
-  const preferences: MemoryPreferencesDTO = storedPrefs ?? DEFAULT_MEMORY_PREFERENCES;
+  const preferences = (await readPreferences(user.id)).memory;
 
   const response: ApiResponse<GetMemoryPreferencesResponse> = {
     success: true,
@@ -426,26 +416,12 @@ export const updateMemoryPreferences = asyncHandler(async (req: Request, res: Re
 
   const updates = parseResult.data;
 
-  // Get current preferences
-  const dbUser = await prisma.user.findUnique({
-    where: { id: user.id },
-    select: { memoryPreferences: true },
-  });
-
-  const currentPrefs = (dbUser?.memoryPreferences as MemoryPreferencesDTO | null) ?? DEFAULT_MEMORY_PREFERENCES;
-
-  // Merge updates with current preferences
-  const newPreferences: MemoryPreferencesDTO = {
-    sessionContinuity: updates.sessionContinuity ?? currentPrefs.sessionContinuity,
-    crossSessionRecall: updates.crossSessionRecall ?? currentPrefs.crossSessionRecall,
-    patternInsights: updates.patternInsights ?? currentPrefs.patternInsights,
-    rememberAgreements: updates.rememberAgreements ?? currentPrefs.rememberAgreements,
-  };
-
-  // Update user preferences
-  await prisma.user.update({
-    where: { id: user.id },
-    data: { memoryPreferences: newPreferences as object },
+  // Merge updates into the stored preferences (locked read-modify-write)
+  const newPreferences = await updatePreferences(user.id, 'memory', {
+    sessionContinuity: updates.sessionContinuity,
+    crossSessionRecall: updates.crossSessionRecall,
+    patternInsights: updates.patternInsights,
+    rememberAgreements: updates.rememberAgreements,
   });
 
   const response: ApiResponse<UpdateMemoryPreferencesResponse> = {
@@ -477,11 +453,8 @@ export const updateMood = asyncHandler(async (req: Request, res: Response): Prom
     });
   }
 
-  // Update user's lastMoodIntensity
-  await prisma.user.update({
-    where: { id: user.id },
-    data: { lastMoodIntensity: intensity },
-  });
+  // A mood reading on the user's live participant (the last mood is the latest reading)
+  await recordUserMood(user.id, intensity);
 
   const response: ApiResponse<UpdateMoodResponse> = {
     success: true,
@@ -500,15 +473,7 @@ export const updateMood = asyncHandler(async (req: Request, res: Response): Prom
 export const getNotificationPreferences = asyncHandler(async (req: Request, res: Response): Promise<void> => {
   const user = getUser(req);
 
-  // Get user with notification preferences
-  const dbUser = await prisma.user.findUnique({
-    where: { id: user.id },
-    select: { notificationPreferences: true },
-  });
-
-  // Parse stored preferences or use defaults
-  const storedPrefs = dbUser?.notificationPreferences as NotificationPreferencesDTO | null;
-  const preferences: NotificationPreferencesDTO = storedPrefs ?? DEFAULT_NOTIFICATION_PREFERENCES;
+  const preferences = (await readPreferences(user.id)).notifications;
 
   const response: ApiResponse<GetNotificationPreferencesResponse> = {
     success: true,
@@ -537,27 +502,13 @@ export const updateNotificationPreferences = asyncHandler(async (req: Request, r
 
   const updates = parseResult.data;
 
-  // Get current preferences
-  const dbUser = await prisma.user.findUnique({
-    where: { id: user.id },
-    select: { notificationPreferences: true },
-  });
-
-  const currentPrefs = (dbUser?.notificationPreferences as NotificationPreferencesDTO | null) ?? DEFAULT_NOTIFICATION_PREFERENCES;
-
-  // Merge updates with current preferences
-  const newPreferences: NotificationPreferencesDTO = {
-    pushEnabled: updates.pushEnabled ?? currentPrefs.pushEnabled,
-    emailEnabled: updates.emailEnabled ?? currentPrefs.emailEnabled,
-    newInvitations: updates.newInvitations ?? currentPrefs.newInvitations,
-    partnerActions: updates.partnerActions ?? currentPrefs.partnerActions,
-    followUpReminders: updates.followUpReminders ?? currentPrefs.followUpReminders,
-  };
-
-  // Update user preferences
-  await prisma.user.update({
-    where: { id: user.id },
-    data: { notificationPreferences: newPreferences as object },
+  // Merge updates into the stored preferences (locked read-modify-write)
+  const newPreferences = await updatePreferences(user.id, 'notifications', {
+    pushEnabled: updates.pushEnabled,
+    emailEnabled: updates.emailEnabled,
+    newInvitations: updates.newInvitations,
+    partnerActions: updates.partnerActions,
+    followUpReminders: updates.followUpReminders,
   });
 
   const response: ApiResponse<UpdateNotificationPreferencesResponse> = {
@@ -577,13 +528,7 @@ export const updateNotificationPreferences = asyncHandler(async (req: Request, r
 export const getPrivacyPreferences = asyncHandler(async (req: Request, res: Response): Promise<void> => {
   const user = getUser(req);
 
-  const dbUser = await prisma.user.findUnique({
-    where: { id: user.id },
-    select: { privacyPreferences: true } as any,
-  });
-
-  const storedPrefs = (dbUser as { privacyPreferences?: unknown } | null)?.privacyPreferences as PrivacyPreferencesDTO | null;
-  const preferences: PrivacyPreferencesDTO = storedPrefs ?? DEFAULT_PRIVACY_PREFERENCES;
+  const preferences = (await readPreferences(user.id)).privacy;
 
   const response: ApiResponse<GetPrivacyPreferencesResponse> = {
     success: true,
@@ -608,21 +553,10 @@ export const updatePrivacyPreferences = asyncHandler(async (req: Request, res: R
   }
 
   const updates = parseResult.data;
-  const dbUser = await prisma.user.findUnique({
-    where: { id: user.id },
-    select: { privacyPreferences: true } as any,
-  });
-
-  const currentPrefs = ((dbUser as { privacyPreferences?: unknown } | null)?.privacyPreferences as PrivacyPreferencesDTO | null) ?? DEFAULT_PRIVACY_PREFERENCES;
-  const newPreferences: PrivacyPreferencesDTO = {
-    showActivityStatus: updates.showActivityStatus ?? currentPrefs.showActivityStatus,
-    allowSessionInvites: updates.allowSessionInvites ?? currentPrefs.allowSessionInvites,
-    analyticsOptOut: updates.analyticsOptOut ?? currentPrefs.analyticsOptOut,
-  };
-
-  await prisma.user.update({
-    where: { id: user.id },
-    data: { privacyPreferences: newPreferences as object } as any,
+  const newPreferences = await updatePreferences(user.id, 'privacy', {
+    showActivityStatus: updates.showActivityStatus,
+    allowSessionInvites: updates.allowSessionInvites,
+    analyticsOptOut: updates.analyticsOptOut,
   });
 
   const response: ApiResponse<UpdatePrivacyPreferencesResponse> = {
@@ -651,7 +585,7 @@ export const deleteAccount = asyncHandler(async (req: Request, res: Response): P
   const user = getUser(req);
 
   // Perform the deletion with notifications
-  const summary = await deleteAccountWithNotifications(user.id, user.name ?? user.firstName ?? 'Your partner');
+  const summary = await deleteAccountWithNotifications(user.id);
 
   const response: ApiResponse<DeleteAccountResponse> = {
     success: true,

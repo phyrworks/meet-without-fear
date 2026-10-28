@@ -174,13 +174,19 @@ const q = {
  * Write a scenario into the target tables. `users[i]` is the account for
  * `scenario.participants[i]`. Runs in the caller's transaction.
  */
-export async function writeTargetShape(db: ClientBase, scenario: Scenario, users: UserRef[]): Promise<TargetShapeResult> {
+export async function writeTargetShape(
+  db: ClientBase,
+  scenario: Scenario,
+  users: UserRef[],
+): Promise<TargetShapeResult> {
   const unsupported = unsupportedFeatures(scenario);
   if (unsupported.length) {
     throw new Error(`Scenario ${scenario.name}: the target writer does not cover ${unsupported.join(', ')} yet`);
   }
   if (users.length !== scenario.participants.length) {
-    throw new Error(`Scenario ${scenario.name} has ${scenario.participants.length} participants but ${users.length} users`);
+    throw new Error(
+      `Scenario ${scenario.name} has ${scenario.participants.length} participants but ${users.length} users`,
+    );
   }
 
   // --- Clocks and auto stamps (FIDELITY: current-shape.ts's order) -----------
@@ -258,7 +264,13 @@ export async function writeTargetShape(db: ClientBase, scenario: Scenario, users
   const session = await db.query<{ id: string; status: string }>(
     `INSERT INTO session (relationship_id, status, topic_frame, topic_frame_confirmed_at, created_at, updated_at)
      VALUES ($1, $2, $3, $4, $5, $6) RETURNING id, status::text AS status`,
-    [relationshipId, sessionStatus(scenario), scenario.topic?.frame ?? null, scenario.topic ? t(scenario.topic.confirmedAt) : null, ...sessionAt],
+    [
+      relationshipId,
+      sessionStatus(scenario),
+      scenario.topic?.frame ?? null,
+      scenario.topic ? t(scenario.topic.confirmedAt) : null,
+      ...sessionAt,
+    ],
   );
   const sessionId = session.rows[0].id;
 
@@ -317,10 +329,10 @@ export async function writeTargetShape(db: ClientBase, scenario: Scenario, users
   // participant; the old view's updated_at is the vessel's).
   autoPair();
   for (const p of scenario.participants) {
-    await db.query(
-      `INSERT INTO conversation_read_state (participant_id, created_at, updated_at) VALUES ($1, $2, $3)`,
-      [pid(p.key), ...autoPair()],
-    );
+    await db.query(`INSERT INTO conversation_read_state (participant_id, created_at, updated_at) VALUES ($1, $2, $3)`, [
+      pid(p.key),
+      ...autoPair(),
+    ]);
   }
 
   readClock('scenario');
@@ -333,7 +345,16 @@ export async function writeTargetShape(db: ClientBase, scenario: Scenario, users
     await db.query(
       `INSERT INTO message (conversation_id, sender_participant_id, role, kind, content, content_hash, source_attempt_id, created_at)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-      [conversationId, from === null ? null : pid(from), role, kind, m.content, contentHash(m.content), sourceAttemptId, t(m.at)],
+      [
+        conversationId,
+        from === null ? null : pid(from),
+        role,
+        kind,
+        m.content,
+        contentHash(m.content),
+        sourceAttemptId,
+        t(m.at),
+      ],
     );
   };
 
@@ -350,7 +371,10 @@ export async function writeTargetShape(db: ClientBase, scenario: Scenario, users
     // Milestones on the `late` clock (choices_shared of the redesigned repair
     // flow) are written once that clock is read, after the repair content —
     // as current-shape.ts records them (its "late gates").
-    const early = { ...p, milestones: Object.fromEntries(Object.entries(p.milestones).filter(([, st]) => st?.clock !== 'late')) };
+    const early = {
+      ...p,
+      milestones: Object.fromEntries(Object.entries(p.milestones).filter(([, st]) => st?.clock !== 'late')),
+    };
     lateMilestones.push({ p, me, journeyStart });
     for (const m of milestoneRows(early, t, journeyStart)) {
       await db.query(
@@ -364,7 +388,8 @@ export async function writeTargetShape(db: ClientBase, scenario: Scenario, users
     if (p.empathy) {
       const e = p.empathy;
       const submittedAt = p.milestones.empathy_submitted;
-      if (!submittedAt) throw new Error(`Participant "${p.key}" has an empathy attempt but no empathy_submitted milestone`);
+      if (!submittedAt)
+        throw new Error(`Participant "${p.key}" has an empathy attempt but no empathy_submitted milestone`);
       const subject = otherOf(p.key);
       if (!subject) throw new Error(`Participant "${p.key}": an empathy attempt needs exactly one other participant`);
       await db.query(
@@ -535,7 +560,11 @@ export async function writeTargetShape(db: ClientBase, scenario: Scenario, users
   };
   const linkNeeds = async (proposalId: string, ids: string[], at: Date): Promise<void> => {
     for (const id of ids) {
-      await db.query(`INSERT INTO proposal_need (proposal_id, need_id, created_at) VALUES ($1, $2, $3)`, [proposalId, id, at]);
+      await db.query(`INSERT INTO proposal_need (proposal_id, need_id, created_at) VALUES ($1, $2, $3)`, [
+        proposalId,
+        id,
+        at,
+      ]);
     }
   };
   if (scenario.legacyStrategies) {
@@ -566,7 +595,15 @@ export async function writeTargetShape(db: ClientBase, scenario: Scenario, users
       const a = await db.query<{ id: string }>(
         `INSERT INTO agreement (session_id, proposal_id, type, status, description, follow_up_at, created_at, updated_at)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $7) RETURNING id`,
-        [sessionId, proposalId, agreement.type, agreement.status, agreement.description, t(agreement.followUpAt), agreedAt],
+        [
+          sessionId,
+          proposalId,
+          agreement.type,
+          agreement.status,
+          agreement.description,
+          t(agreement.followUpAt),
+          agreedAt,
+        ],
       );
       for (const key of agreement.agreedBy) {
         await db.query(
@@ -623,7 +660,15 @@ export async function writeTargetShape(db: ClientBase, scenario: Scenario, users
       await db.query(
         `INSERT INTO proposal_revision (proposal_id, actor_participant_id, action, before, after, reason, created_at)
          VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-        [proposalId(r.proposal), pid(r.actor), r.action, r.before ? JSON.stringify(r.before) : null, JSON.stringify(r.after), r.reason, auto()],
+        [
+          proposalId(r.proposal),
+          pid(r.actor),
+          r.action,
+          r.before ? JSON.stringify(r.before) : null,
+          JSON.stringify(r.after),
+          r.reason,
+          auto(),
+        ],
       );
     }
     for (const pr of proposals) {
@@ -641,7 +686,10 @@ export async function writeTargetShape(db: ClientBase, scenario: Scenario, users
   }
 
   for (const { p, me, journeyStart } of lateMilestones) {
-    const late = { ...p, milestones: Object.fromEntries(Object.entries(p.milestones).filter(([, st]) => st?.clock === 'late')) };
+    const late = {
+      ...p,
+      milestones: Object.fromEntries(Object.entries(p.milestones).filter(([, st]) => st?.clock === 'late')),
+    };
     for (const m of milestoneRows(late, t, journeyStart)) {
       await db.query(
         `INSERT INTO participant_milestone (participant_id, milestone_key, reached_at, created_at) VALUES ($1, $2, $3, $3)`,
@@ -657,7 +705,16 @@ export async function writeTargetShape(db: ClientBase, scenario: Scenario, users
     await db.query(
       `INSERT INTO session_closure (session_id, kind, reason, summary, closed_by_participant_id, check_in_at, closed_at, created_at)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-      [sessionId, c.kind, c.reason, c.summary, c.closedBy === null ? null : pid(c.closedBy), tOpt(c.checkInAt), t(c.at), auto()],
+      [
+        sessionId,
+        c.kind,
+        c.reason,
+        c.summary,
+        c.closedBy === null ? null : pid(c.closedBy),
+        tOpt(c.checkInAt),
+        t(c.at),
+        auto(),
+      ],
     );
     await db.query(`UPDATE session SET status = 'RESOLVED', resolved_at = $2, updated_at = $3 WHERE id = $1`, [
       sessionId,

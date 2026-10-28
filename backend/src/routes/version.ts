@@ -14,37 +14,32 @@ function readPlatformBuild(
   platform: 'ios' | 'android',
   iosKey: string,
   androidKey: string,
-  fallbackKey: string
+  fallbackKey: string,
 ): number {
   return readPositiveInt(
-    (platform === 'ios' ? process.env[iosKey] : process.env[androidKey]) ??
-      process.env[fallbackKey]
+    (platform === 'ios' ? process.env[iosKey] : process.env[androidKey]) ?? process.env[fallbackKey],
   );
 }
 
 router.get('/version/check', (req, res) => {
   const platform = req.query.platform === 'android' ? 'android' : 'ios';
-  const buildNumber = readPositiveInt(
-    typeof req.query.buildNumber === 'string' ? req.query.buildNumber : undefined
-  );
+  const buildNumber = readPositiveInt(typeof req.query.buildNumber === 'string' ? req.query.buildNumber : undefined);
 
   const minBuild = readPlatformBuild(
     platform,
     'APP_MIN_BUILD_NUMBER_IOS',
     'APP_MIN_BUILD_NUMBER_ANDROID',
-    'APP_MIN_BUILD_NUMBER'
+    'APP_MIN_BUILD_NUMBER',
   );
   const latestBuild = readPlatformBuild(
     platform,
     'APP_LATEST_BUILD_NUMBER_IOS',
     'APP_LATEST_BUILD_NUMBER_ANDROID',
-    'APP_LATEST_BUILD_NUMBER'
+    'APP_LATEST_BUILD_NUMBER',
   );
   const latestVersion = process.env.APP_LATEST_VERSION ?? '0.0.1';
   const downloadUrl =
-    (platform === 'ios'
-      ? process.env.APP_DOWNLOAD_URL_IOS
-      : process.env.APP_DOWNLOAD_URL_ANDROID) ??
+    (platform === 'ios' ? process.env.APP_DOWNLOAD_URL_IOS : process.env.APP_DOWNLOAD_URL_ANDROID) ??
     process.env.APP_DOWNLOAD_URL ??
     DEFAULT_DOWNLOAD_URL;
 

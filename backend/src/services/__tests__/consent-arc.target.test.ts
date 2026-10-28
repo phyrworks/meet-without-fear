@@ -39,20 +39,24 @@ describeTarget('the consent arc and the share-offer decline (mwf_app + mwf_job, 
   const asApp = async <T = unknown>(userId: string, sql: string, ...params: unknown[]): Promise<T[]> => {
     const { prisma } = await import('../../lib/prisma');
     const { runWithContext } = await import('../../lib/request-context');
-    return runWithContext({ turnId: 't', requestId: 'r', startTime: Date.now(), userId }, async () =>
-      (await prisma.$queryRawUnsafe(sql, ...params)) as T[],
+    return runWithContext(
+      { turnId: 't', requestId: 'r', startTime: Date.now(), userId },
+      async () => (await prisma.$queryRawUnsafe(sql, ...params)) as T[],
     );
   };
-  const step = (actor: Harness['actors']['userA'], label: string, method: 'get' | 'post', path: string, body?: object) =>
+  const step = (
+    actor: Harness['actors']['userA'],
+    label: string,
+    method: 'get' | 'post',
+    path: string,
+    body?: object,
+  ) =>
     harness.step({
       label,
       actor,
       tables: [],
       asyncBoundary: method === 'post',
-      call: agent =>
-        method === 'get'
-          ? agent.get(`/api/v1${path}`)
-          : agent.post(`/api/v1${path}`).send(body ?? {}),
+      call: agent => (method === 'get' ? agent.get(`/api/v1${path}`) : agent.post(`/api/v1${path}`).send(body ?? {})),
     });
 
   beforeAll(async () => {
@@ -71,7 +75,9 @@ describeTarget('the consent arc and the share-offer decline (mwf_app + mwf_job, 
     };
     ada = pick('ada@e2e.test');
     bob = pick('bob@e2e.test');
-    const a = await rows<{ id: string; author: string }>(`SELECT id, author_participant_id AS author FROM empathy_attempt`);
+    const a = await rows<{ id: string; author: string }>(
+      `SELECT id, author_participant_id AS author FROM empathy_attempt`,
+    );
     adaAttempt = a.find(x => x.author === ada.participantId)!.id;
     bobAttempt = a.find(x => x.author === bob.participantId)!.id;
     offerId = (await rows<{ id: string }>(`SELECT id FROM context_share_offer`))[0].id;
@@ -91,7 +97,12 @@ describeTarget('the consent arc and the share-offer decline (mwf_app + mwf_job, 
       ['empathy_attempt_id', '01990000-0000-7000-8000-000000000000'],
     ];
     for (const [col, id] of tries) {
-      const err = await asApp(ada.userId, `INSERT INTO consent (participant_id, ${col}) VALUES ($1::uuid, $2::uuid)`, ada.participantId, id).then(
+      const err = await asApp(
+        ada.userId,
+        `INSERT INTO consent (participant_id, ${col}) VALUES ($1::uuid, $2::uuid)`,
+        ada.participantId,
+        id,
+      ).then(
         () => null,
         (e: Error) => e,
       );
@@ -114,11 +125,18 @@ describeTarget('the consent arc and the share-offer decline (mwf_app + mwf_job, 
     await expect(move(`decision = 'REVOKED', revoked_at = now()`)).rejects.toThrow(/not permitted/);
     await move(`decision = 'GRANTED', decided_at = now()`);
     await expect(move(`decision = 'DENIED'`)).rejects.toThrow(/not permitted/);
-    await expect(move(`decision = 'REVOKED'`)).rejects.toThrow(/revocation keeps decided_at and records revoked_at|check/);
+    await expect(move(`decision = 'REVOKED'`)).rejects.toThrow(
+      /revocation keeps decided_at and records revoked_at|check/,
+    );
     await move(`decision = 'REVOKED', revoked_at = now()`);
     await expect(move(`decision = 'GRANTED', revoked_at = NULL`)).rejects.toThrow(/not permitted/);
     await expect(
-      asApp(ada.userId, `INSERT INTO consent (participant_id, empathy_attempt_id, decision, decided_at, revoked_at) VALUES ($1::uuid, $2::uuid, 'REVOKED', now(), now())`, ada.participantId, adaAttempt),
+      asApp(
+        ada.userId,
+        `INSERT INTO consent (participant_id, empathy_attempt_id, decision, decided_at, revoked_at) VALUES ($1::uuid, $2::uuid, 'REVOKED', now(), now())`,
+        ada.participantId,
+        adaAttempt,
+      ),
     ).rejects.toThrow(/not created revoked/);
     // target_kind is generated: it cannot be written.
     await expect(move(`target_kind = 'NEED'`)).rejects.toThrow(/can only be updated to DEFAULT/);
@@ -126,7 +144,13 @@ describeTarget('the consent arc and the share-offer decline (mwf_app + mwf_job, 
 
   it('a share-offer consent has no requester', async () => {
     await expect(
-      asApp(bob.userId, `INSERT INTO consent (participant_id, requested_by_participant_id, share_offer_id) VALUES ($1::uuid, $2::uuid, $3::uuid)`, bob.participantId, ada.participantId, offerId),
+      asApp(
+        bob.userId,
+        `INSERT INTO consent (participant_id, requested_by_participant_id, share_offer_id) VALUES ($1::uuid, $2::uuid, $3::uuid)`,
+        bob.participantId,
+        ada.participantId,
+        offerId,
+      ),
     ).rejects.toThrow(/chk_consent_requester/);
   });
 
@@ -143,9 +167,10 @@ describeTarget('the consent arc and the share-offer decline (mwf_app + mwf_job, 
     const adaPending = await step(harness.actors.userA, 'ada pending', 'get', `/sessions/${sid}/consent/pending`);
     expect(JSON.stringify(adaPending.body)).not.toContain(mine.id);
     const bobPending = await step(harness.actors.userB!, 'bob pending', 'get', `/sessions/${sid}/consent/pending`);
-    expect((bobPending.body as { data: { pendingRequests: Array<{ id: string; contentType: string; targetId: string }> } }).data.pendingRequests).toEqual([
-      expect.objectContaining({ id: mine.id, contentType: 'EMPATHY_DRAFT', targetId: bobAttempt }),
-    ]);
+    expect(
+      (bobPending.body as { data: { pendingRequests: Array<{ id: string; contentType: string; targetId: string }> } })
+        .data.pendingRequests,
+    ).toEqual([expect.objectContaining({ id: mine.id, contentType: 'EMPATHY_DRAFT', targetId: bobAttempt })]);
 
     const foreign = await step(harness.actors.userA, 'ada decides bob’s', 'post', `/sessions/${sid}/consent/decide`, {
       consentRequestId: mine.id,
@@ -156,16 +181,29 @@ describeTarget('the consent arc and the share-offer decline (mwf_app + mwf_job, 
       consentRequestId: mine.id,
       decision: 'GRANTED',
     });
-    expect((decided.body as { data: { consentRecord: { decision: string; contentType: string } } }).data.consentRecord).toMatchObject({
+    expect(
+      (decided.body as { data: { consentRecord: { decision: string; contentType: string } } }).data.consentRecord,
+    ).toMatchObject({
       decision: 'GRANTED',
       contentType: 'EMPATHY_DRAFT',
     });
-    expect((await step(harness.actors.userA, 'ada revokes bob’s', 'post', `/sessions/${sid}/consent/revoke`, { consentRecordId: mine.id })).status).toBe(404);
-    const revoked = await step(harness.actors.userB!, 'bob revokes', 'post', `/sessions/${sid}/consent/revoke`, { consentRecordId: mine.id });
+    expect(
+      (
+        await step(harness.actors.userA, 'ada revokes bob’s', 'post', `/sessions/${sid}/consent/revoke`, {
+          consentRecordId: mine.id,
+        })
+      ).status,
+    ).toBe(404);
+    const revoked = await step(harness.actors.userB!, 'bob revokes', 'post', `/sessions/${sid}/consent/revoke`, {
+      consentRecordId: mine.id,
+    });
     expect(revoked.status).toBe(200);
-    expect(await rows(`SELECT decision::text AS decision, decided_at IS NOT NULL AS decided, revoked_at IS NOT NULL AS revoked FROM consent WHERE id = $1`, [mine.id])).toEqual([
-      { decision: 'REVOKED', decided: true, revoked: true },
-    ]);
+    expect(
+      await rows(
+        `SELECT decision::text AS decision, decided_at IS NOT NULL AS decided, revoked_at IS NOT NULL AS revoked FROM consent WHERE id = $1`,
+        [mine.id],
+      ),
+    ).toEqual([{ decision: 'REVOKED', decided: true, revoked: true }]);
 
     const history = await step(harness.actors.userA, 'ada history', 'get', `/sessions/${sid}/consent/history`);
     const records = (history.body as { data: { records: Array<{ id: string }> } }).data.records;
@@ -199,9 +237,15 @@ describeTarget('the consent arc and the share-offer decline (mwf_app + mwf_job, 
       return out;
     };
     const before = await readAll('before');
-    const decline = await step(harness.actors.userB!, 'bob declines', 'post', `/sessions/${sid}/reconciler/share-offer/respond`, {
-      action: 'decline',
-    });
+    const decline = await step(
+      harness.actors.userB!,
+      'bob declines',
+      'post',
+      `/sessions/${sid}/reconciler/share-offer/respond`,
+      {
+        action: 'decline',
+      },
+    );
     expect(decline.status).toBe(200);
     const after = await readAll('after');
 
@@ -226,7 +270,11 @@ describeTarget('the consent arc and the share-offer decline (mwf_app + mwf_job, 
         [offerId],
       ),
     ).toEqual([{ who: bob.participantId, requester: null, decision: 'DENIED', kind: 'SHARE_OFFER' }]);
-    expect(await rows(`SELECT status::text AS status FROM context_share_offer WHERE id = $1`, [offerId])).toEqual([{ status: 'DECLINED' }]);
-    expect(await rows(`SELECT status::text AS status FROM empathy_attempt WHERE id = $1`, [adaAttempt])).toEqual([{ status: 'READY' }]);
+    expect(await rows(`SELECT status::text AS status FROM context_share_offer WHERE id = $1`, [offerId])).toEqual([
+      { status: 'DECLINED' },
+    ]);
+    expect(await rows(`SELECT status::text AS status FROM empathy_attempt WHERE id = $1`, [adaAttempt])).toEqual([
+      { status: 'READY' },
+    ]);
   });
 });

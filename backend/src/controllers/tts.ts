@@ -1,3 +1,5 @@
+import { Readable } from 'stream';
+import type { ReadableStream as WebReadableStream } from 'stream/web';
 import { Request, Response } from 'express';
 import { logger } from '../lib/logger';
 
@@ -7,13 +9,16 @@ const TTS_MAX_RETRIES = 2;
 const TTS_BASE_DELAY_MS = 500;
 const RETRYABLE_STATUS_CODES = new Set([429, 500, 502, 503, 504]);
 
-async function callOpenAITTS(
-  params: { model: string; input: string; voice: string; speed: number },
-): Promise<globalThis.Response> {
+async function callOpenAITTS(params: {
+  model: string;
+  input: string;
+  voice: string;
+  speed: number;
+}): Promise<globalThis.Response> {
   return fetch('https://api.openai.com/v1/audio/speech', {
     method: 'POST',
     headers: {
-      'Authorization': `Bearer ${OPENAI_API_KEY}`,
+      Authorization: `Bearer ${OPENAI_API_KEY}`,
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({
@@ -43,7 +48,7 @@ export const streamTTS = async (req: Request, res: Response): Promise<void | Res
     // Default to 'alloy' and 'tts-1' if not provided
     const voiceId = voice || 'alloy';
     let modelId = model || 'tts-1';
-    const speechSpeed = typeof speed === 'string' ? parseFloat(speed) : (speed || 1.0);
+    const speechSpeed = typeof speed === 'string' ? parseFloat(speed) : speed || 1.0;
 
     // Validate model - only allow OpenAI TTS models
     if (modelId !== 'tts-1' && modelId !== 'tts-1-hd') {
@@ -62,7 +67,7 @@ export const streamTTS = async (req: Request, res: Response): Promise<void | Res
       if (attempt > 0) {
         const delay = TTS_BASE_DELAY_MS * Math.pow(2, attempt - 1);
         logger.warn('[TTS] Retrying OpenAI API call', { attempt, delay, lastStatus, ...logContext });
-        await new Promise((resolve) => setTimeout(resolve, delay));
+        await new Promise(resolve => setTimeout(resolve, delay));
       }
 
       response = await callOpenAITTS(ttsParams);
@@ -99,14 +104,11 @@ export const streamTTS = async (req: Request, res: Response): Promise<void | Res
 
     if (response.body) {
       // Convert Web Stream to Node Stream for Express compatibility
-      const { Readable } = require('stream');
-      // @ts-ignore - Readable.fromWeb might not be in the types yet depending on node version
-      const nodeStream = Readable.fromWeb(response.body);
+      const nodeStream = Readable.fromWeb(response.body as unknown as WebReadableStream);
       nodeStream.pipe(res);
     } else {
       throw new Error('No response body from OpenAI');
     }
-
   } catch (error) {
     logger.error('[TTS] Error streaming audio', {
       error: error instanceof Error ? error.message : String(error),

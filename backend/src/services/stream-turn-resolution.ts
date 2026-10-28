@@ -28,7 +28,9 @@ function isClarifyingStage4Response(content: string): boolean {
   const trimmed = content.trim();
   if (!trimmed.endsWith('?')) return false;
 
-  return /\b(?:do you mean|what do you mean|which|or something else|clarify|more specific|can you say more|are you saying)\b/i.test(trimmed);
+  return /\b(?:do you mean|what do you mean|which|or something else|clarify|more specific|can you say more|are you saying)\b/i.test(
+    trimmed,
+  );
 }
 
 export interface StreamTurnResolutionParams {
@@ -61,9 +63,7 @@ export interface StreamTurnResolution {
   isDispatchMessage: boolean;
 }
 
-export async function resolveStreamTurn(
-  params: StreamTurnResolutionParams
-): Promise<StreamTurnResolution> {
+export async function resolveStreamTurn(params: StreamTurnResolutionParams): Promise<StreamTurnResolution> {
   const {
     requestId,
     sessionId,
@@ -91,8 +91,12 @@ export async function resolveStreamTurn(
   const needsBlock = captured.needs ? `<needs>${captured.needs}</needs>\n` : '';
   const needBlock = captured.need ? `<need>${captured.need}</need>\n` : '';
   const needActionBlock = captured.needAction ? `${captured.needAction}\n` : '';
-  const stage4ProposalsBlock = captured.stage4Proposals ? `<stage4_proposals>${captured.stage4Proposals}</stage4_proposals>\n` : '';
-  const stage4WalkthroughBlock = captured.stage4Walkthrough ? `<stage4_walkthrough>${captured.stage4Walkthrough}</stage4_walkthrough>\n` : '';
+  const stage4ProposalsBlock = captured.stage4Proposals
+    ? `<stage4_proposals>${captured.stage4Proposals}</stage4_proposals>\n`
+    : '';
+  const stage4WalkthroughBlock = captured.stage4Walkthrough
+    ? `<stage4_walkthrough>${captured.stage4Walkthrough}</stage4_walkthrough>\n`
+    : '';
   const fullResponse = `<thinking>${captured.thinking}</thinking>\n${needBlock}${needActionBlock}${needsBlock}${stage4ProposalsBlock}${stage4WalkthroughBlock}${accumulatedText}`;
   const parsed = parseMicroTagResponse(fullResponse);
 
@@ -156,11 +160,14 @@ export async function resolveStreamTurn(
     metadata.stage4WalkthroughAction.action !== 'NONE' &&
     isClarifyingStage4Response(accumulatedText)
   ) {
-    logger.warn(`[sendMessageStream:${requestId}] Ignoring Stage 4 state capture because visible response asks for clarification`, {
-      action: metadata.stage4WalkthroughAction.action,
-      needId: metadata.stage4WalkthroughAction.needId ?? null,
-      stage4ProposalCount: metadata.stage4Proposals?.length ?? 0,
-    });
+    logger.warn(
+      `[sendMessageStream:${requestId}] Ignoring Stage 4 state capture because visible response asks for clarification`,
+      {
+        action: metadata.stage4WalkthroughAction.action,
+        needId: metadata.stage4WalkthroughAction.needId ?? null,
+        stage4ProposalCount: metadata.stage4Proposals?.length ?? 0,
+      },
+    );
     metadata.stage4WalkthroughAction = {
       ...metadata.stage4WalkthroughAction,
       action: 'NONE',
@@ -182,8 +189,8 @@ export async function resolveStreamTurn(
     // Build dispatch context with conversation history and session state
     const dispatchContext: DispatchContext = {
       userMessage: content,
-      conversationHistory: history.map((m) => ({
-        role: m.role === 'USER' ? 'user' as const : 'assistant' as const,
+      conversationHistory: history.map(m => ({
+        role: m.role === 'USER' ? ('user' as const) : ('assistant' as const),
         content: m.content,
       })),
       userName,
@@ -205,7 +212,9 @@ export async function resolveStreamTurn(
       accumulatedText = dispatchedResponse;
     } else {
       // Unknown dispatch tag — fall through and use the AI's original streamed response
-      logger.info(`[sendMessageStream:${requestId}] Unknown dispatch tag "${dispatchTag}" — using original AI response`);
+      logger.info(
+        `[sendMessageStream:${requestId}] Unknown dispatch tag "${dispatchTag}" — using original AI response`,
+      );
       isDispatchMessage = false;
     }
   }

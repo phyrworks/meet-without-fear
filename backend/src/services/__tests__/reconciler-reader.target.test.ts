@@ -49,7 +49,9 @@ describeTarget('the reconciler reads through the job, not the triggering request
   it('the app login cannot read the analysis inputs in this clone', async () => {
     const { prisma } = await import('../../lib/prisma');
     await expect(prisma.$queryRaw`SELECT doc FROM ai_memory LIMIT 1`).rejects.toThrow(/permission denied/);
-    await expect(prisma.$queryRaw`SELECT gap_summary FROM reconciler_result LIMIT 1`).rejects.toThrow(/permission denied/);
+    await expect(prisma.$queryRaw`SELECT gap_summary FROM reconciler_result LIMIT 1`).rejects.toThrow(
+      /permission denied/,
+    );
   });
 
   it("Bob's submission runs both analyses, stores them and offers each subject a share", async () => {
@@ -60,7 +62,8 @@ describeTarget('the reconciler reads through the job, not the triggering request
       label: 'draft as bob',
       actor: bob,
       tables: scope,
-      call: agent => agent.post(`/api/v1/sessions/${sid}/empathy/draft`).send({ content: BOB_EMPATHY, readyToShare: true }),
+      call: agent =>
+        agent.post(`/api/v1/sessions/${sid}/empathy/draft`).send({ content: BOB_EMPATHY, readyToShare: true }),
     });
     expect(draft.status).toBe(200);
     const consent = await harness.step({

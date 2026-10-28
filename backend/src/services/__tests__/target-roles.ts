@@ -90,14 +90,22 @@ export async function openTargetRun(stage: string, runId: string): Promise<Targe
  * env points at — import AFTER `openTargetRun`.
  */
 export async function httpAs(): Promise<
-  (user: { id: string; email: string }, method: 'get' | 'post' | 'delete', path: string, body?: object) => Promise<{ status: number; body: any }>
+  (
+    user: { id: string; email: string },
+    method: 'get' | 'post' | 'patch' | 'put' | 'delete',
+    path: string,
+    body?: object,
+  ) => Promise<{ status: number; body: any }>
 > {
   process.env.E2E_AUTH_BYPASS = 'true';
   const request = (await import('supertest')).default;
   const appModule = await import('../../app');
   const app = (appModule as { default?: unknown }).default ?? appModule;
   return async (user, method, path, body) => {
-    let r = request(app as never)[method](`/api/v1${path}`).set('x-e2e-user-id', user.id).set('x-e2e-user-email', user.email);
+    let r = request(app as never)
+      [method](`/api/v1${path}`)
+      .set('x-e2e-user-id', user.id)
+      .set('x-e2e-user-email', user.email);
     if (body) r = r.send(body);
     const res = await r;
     return { status: res.status, body: res.body };

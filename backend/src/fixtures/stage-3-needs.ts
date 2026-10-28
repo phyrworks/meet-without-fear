@@ -3,8 +3,7 @@ import { FIXTURE_USER_IDS } from './ids';
 
 export const stage3Needs: E2EFixture = {
   name: 'Stage 3 Needs',
-  description:
-    'Deterministic AI responses for needs extraction and common ground discovery in Stage 3',
+  description: 'Deterministic AI responses for needs extraction and common ground discovery in Stage 3',
 
   seed: {
     users: [
@@ -149,6 +148,5 @@ Does this capture what you'd like to express to them?
     'topic-frame-confirm': {
       response: 'Household chores disagreement',
     },
-
   },
 };

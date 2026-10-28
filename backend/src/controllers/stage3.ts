@@ -42,7 +42,12 @@ import {
   NeedEditForbiddenError,
   NeedEditValidationError,
 } from '../services/needs-edit-applier.service';
-import { completeNeedsSharingIfReady, listSharedNeeds, participantsWhoShared, shareNeeds } from '../services/needs-share';
+import {
+  completeNeedsSharingIfReady,
+  listSharedNeeds,
+  participantsWhoShared,
+  shareNeeds,
+} from '../services/needs-share';
 import { getPartnerParticipant, resolveParticipant, type ResolvedParticipant } from '../services/participant-resolver';
 import { loadStageStates } from '../services/stage-shim';
 import { reachMilestone } from '../services/milestone-writer';
@@ -122,7 +127,10 @@ async function announceStage4(sessionId: string, triggeredBy: { userId: string }
   for (const h of humans) {
     const conversationId = h.conversations[0]?.id;
     if (!conversationId || !h.userId) continue;
-    const message = await createFacilitatorMessage({ conversationId, content: buildStage4TransitionContent(await firstNeedText(h.id)) });
+    const message = await createFacilitatorMessage({
+      conversationId,
+      content: buildStage4TransitionContent(await firstNeedText(h.id)),
+    });
     const eventData = {
       forUserId: h.userId,
       previousStage: 3,
@@ -140,7 +148,12 @@ async function announceStage4(sessionId: string, triggeredBy: { userId: string }
 }
 
 /** An AI line in the caller's own conversation (job), published to them. */
-async function guidance(sessionId: string, participant: ResolvedParticipant, userId: string, content: string): Promise<void> {
+async function guidance(
+  sessionId: string,
+  participant: ResolvedParticipant,
+  userId: string,
+  content: string,
+): Promise<void> {
   if (!participant.mainConversationId) return;
   const message = await createFacilitatorMessage({ conversationId: participant.mainConversationId, content });
   await publishMessageAIResponse(sessionId, userId, {
@@ -181,7 +194,7 @@ export async function getNeeds(req: Request, res: Response): Promise<void> {
     }
     const needs = await listOwnNeeds(ctx.participant.id);
     successResponse(res, {
-      needs: needs.map((need) => toIdentifiedNeedDTO(need)),
+      needs: needs.map(need => toIdentifiedNeedDTO(need)),
       extracting: false,
       synthesizedAt: needs[0]?.createdAt.toISOString() ?? null,
     });
@@ -229,13 +242,18 @@ export async function captureNeeds(req: Request, res: Response): Promise<void> {
       return;
     }
     if (ctx.stage !== 3) {
-      errorResponse(res, 'VALIDATION_ERROR', `Cannot capture needs: you are in stage ${ctx.stage}, but stage 3 is required`, 400);
+      errorResponse(
+        res,
+        'VALIDATION_ERROR',
+        `Cannot capture needs: you are in stage ${ctx.stage}, but stage 3 is required`,
+        400,
+      );
       return;
     }
     const { needs: captured, capturedAt } = await captureProposedNeedsForUser(
       sessionId,
       user.id,
-      needs.map((item) => ({
+      needs.map(item => ({
         need: item.need!,
         category: item.category as NeedCategory,
         description: item.description!,
@@ -245,7 +263,7 @@ export async function captureNeeds(req: Request, res: Response): Promise<void> {
     successResponse(
       res,
       {
-        needs: captured.map((n) => ({
+        needs: captured.map(n => ({
           id: n.id,
           need: n.need,
           category: n.category,
@@ -293,7 +311,12 @@ export async function confirmNeeds(req: Request, res: Response): Promise<void> {
       return;
     }
     if (ctx.stage !== 3) {
-      errorResponse(res, 'VALIDATION_ERROR', `Cannot confirm needs: you are in stage ${ctx.stage}, but stage 3 is required`, 400);
+      errorResponse(
+        res,
+        'VALIDATION_ERROR',
+        `Cannot confirm needs: you are in stage ${ctx.stage}, but stage 3 is required`,
+        400,
+      );
       return;
     }
     const me = ctx.participant.id;
@@ -308,8 +331,8 @@ export async function confirmNeeds(req: Request, res: Response): Promise<void> {
     }
     const now = new Date();
     if (adjustments && adjustments.length > 0) {
-      const ownIds = new Set(own.map((n) => n.id));
-      if (adjustments.some((adj) => !ownIds.has(adj.needId))) {
+      const ownIds = new Set(own.map(n => n.id));
+      if (adjustments.some(adj => !ownIds.has(adj.needId))) {
         errorResponse(res, 'VALIDATION_ERROR', 'Some adjustment need IDs are invalid or do not belong to you', 400);
         return;
       }
@@ -323,7 +346,10 @@ export async function confirmNeeds(req: Request, res: Response): Promise<void> {
       }
     }
     // Confirm all specified needs: confirmed_at (kept when already set) and locked_at.
-    await prisma.need.updateMany({ where: { id: { in: needIds }, participantId: me, confirmedAt: null }, data: { confirmedAt: now } });
+    await prisma.need.updateMany({
+      where: { id: { in: needIds }, participantId: me, confirmedAt: null },
+      data: { confirmedAt: now },
+    });
     await prisma.need.updateMany({ where: { id: { in: needIds }, participantId: me }, data: { lockedAt: now } });
     await reachMilestone(me, 'needs_confirmed', now);
 
@@ -371,19 +397,24 @@ export async function consentToShareNeeds(req: Request, res: Response): Promise<
       return;
     }
     if (ctx.stage !== 3) {
-      errorResponse(res, 'VALIDATION_ERROR', `Cannot consent to share: you are in stage ${ctx.stage}, but stage 3 is required`, 400);
+      errorResponse(
+        res,
+        'VALIDATION_ERROR',
+        `Cannot consent to share: you are in stage ${ctx.stage}, but stage 3 is required`,
+        400,
+      );
       return;
     }
     const me = ctx.participant.id;
     // Every shared need is a live confirmed need of the caller's, and every live need is shared together.
     const live = (await listOwnNeeds(me, { live: true })) as NeedRecord[];
     const requested = new Set(needIds);
-    const chosen = live.filter((n) => requested.has(n.id) && n.confirmedAt !== null);
+    const chosen = live.filter(n => requested.has(n.id) && n.confirmedAt !== null);
     if (chosen.length !== needIds.length) {
       errorResponse(res, 'VALIDATION_ERROR', 'All live needs must be confirmed before sharing', 400);
       return;
     }
-    if (live.length !== needIds.length || !live.every((n) => requested.has(n.id))) {
+    if (live.length !== needIds.length || !live.every(n => requested.has(n.id))) {
       errorResponse(res, 'VALIDATION_ERROR', 'Every live need must be shared together', 400);
       return;
     }
@@ -391,7 +422,7 @@ export async function consentToShareNeeds(req: Request, res: Response): Promise<
     const result = await shareNeeds({
       sessionId,
       participantId: me,
-      needs: chosen.map((n) => ({ id: n.id, label: n.label, category: n.category, evidence: n.evidence })),
+      needs: chosen.map(n => ({ id: n.id, label: n.label, category: n.category, evidence: n.evidence })),
     });
 
     const partnerId = await getPartnerUserId(sessionId, user.id);
@@ -454,7 +485,12 @@ export async function validateNeeds(req: Request, res: Response): Promise<void> 
       return;
     }
     if (ctx.stage !== 3) {
-      errorResponse(res, 'VALIDATION_ERROR', `Cannot validate needs: you are in stage ${ctx.stage}, but stage 3 is required`, 400);
+      errorResponse(
+        res,
+        'VALIDATION_ERROR',
+        `Cannot validate needs: you are in stage ${ctx.stage}, but stage 3 is required`,
+        400,
+      );
       return;
     }
     const me = ctx.participant.id;
@@ -526,7 +562,12 @@ export async function addCustomNeed(req: Request, res: Response): Promise<void> 
       return;
     }
     if (ctx.stage !== 3) {
-      errorResponse(res, 'VALIDATION_ERROR', `Cannot add need: you are in stage ${ctx.stage}, but stage 3 is required`, 400);
+      errorResponse(
+        res,
+        'VALIDATION_ERROR',
+        `Cannot add need: you are in stage ${ctx.stage}, but stage 3 is required`,
+        400,
+      );
       return;
     }
     const custom = (await prisma.need.create({
@@ -640,8 +681,8 @@ export async function removeNeed(req: Request, res: Response): Promise<void> {
     // owner's alone — a session-channel event reaches the partner's device
     // too. The owner's own device patches its cache from this response; other
     // devices of the owner get a content-free nudge on the owner's channel.
-    await publishUserEvent(user.id, 'session.updated', { sessionId, kind: 'need.deleted', userId: user.id }).catch((err) =>
-      logger.warn('[removeNeed] Failed to publish need.deleted:', err),
+    await publishUserEvent(user.id, 'session.updated', { sessionId, kind: 'need.deleted', userId: user.id }).catch(
+      err => logger.warn('[removeNeed] Failed to publish need.deleted:', err),
     );
     successResponse(res, { deleted: true, needId, need });
   } catch (error) {
@@ -682,8 +723,8 @@ export async function getNeedsComparison(req: Request, res: Response): Promise<v
       return;
     }
     const shared = await listSharedNeeds(sessionId);
-    const mineShared = shared.some((n) => n.participantId === me);
-    const partnerShared = shared.filter((n) => n.participantId === partner.participantId);
+    const mineShared = shared.some(n => n.participantId === me);
+    const partnerShared = shared.filter(n => n.participantId === partner.participantId);
     if (!mineShared || partnerShared.length === 0) {
       successResponse(res, EMPTY_COMPARISON);
       return;
@@ -698,8 +739,13 @@ export async function getNeedsComparison(req: Request, res: Response): Promise<v
       hasMilestone(partner.participantId, 'needs_validated'),
     ]);
     successResponse(res, {
-      myNeeds: myNeeds.map((n) => ({ id: n.id, category: n.category, need: n.label, confirmed: true })),
-      partnerNeeds: partnerShared.map((n) => ({ id: n.needId, category: n.category, need: n.sharedText, confirmed: true })),
+      myNeeds: myNeeds.map(n => ({ id: n.id, category: n.category, need: n.label, confirmed: true })),
+      partnerNeeds: partnerShared.map(n => ({
+        id: n.needId,
+        category: n.category,
+        need: n.sharedText,
+        confirmed: true,
+      })),
       myValidated,
       partnerValidated,
       canAdvance: myValidated && partnerValidated,

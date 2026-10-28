@@ -5,16 +5,8 @@
  * and reference STAGE_FRIENDLY_NAMES consistently.
  */
 
-import {
-  generateSessionStatusSummary,
-  mapSessionToSummary,
-} from '../session';
-import {
-  SessionStatus,
-  Stage,
-  StageStatus,
-  StageProgressDTO,
-} from '@meet-without-fear/shared';
+import { generateSessionStatusSummary, mapSessionToSummary } from '../session';
+import { SessionStatus, Stage, StageStatus, StageProgressDTO } from '@meet-without-fear/shared';
 
 // Helper to create progress objects
 function makeProgress(stage: Stage, status: StageStatus): StageProgressDTO {
@@ -33,7 +25,7 @@ describe('generateSessionStatusSummary', () => {
         SessionStatus.CREATED,
         makeProgress(Stage.ONBOARDING, StageStatus.NOT_STARTED),
         makeProgress(Stage.ONBOARDING, StageStatus.NOT_STARTED),
-        'Alex'
+        'Alex',
       );
       expect(result.userStatus).toBe('Draft invitation');
       expect(result.partnerStatus).toBe('Not sent yet');
@@ -44,7 +36,7 @@ describe('generateSessionStatusSummary', () => {
         SessionStatus.INVITED,
         makeProgress(Stage.ONBOARDING, StageStatus.NOT_STARTED),
         makeProgress(Stage.ONBOARDING, StageStatus.NOT_STARTED),
-        'Alex'
+        'Alex',
       );
       expect(result.userStatus).toBe('Invitation ready');
       expect(result.partnerStatus).toBe("Alex hasn't joined yet");
@@ -55,7 +47,7 @@ describe('generateSessionStatusSummary', () => {
         SessionStatus.INVITED,
         makeProgress(Stage.WITNESS, StageStatus.IN_PROGRESS),
         makeProgress(Stage.ONBOARDING, StageStatus.NOT_STARTED),
-        'Alex'
+        'Alex',
       );
       expect(result.userStatus).toBe('Sharing your story');
       expect(result.partnerStatus).toBe("Alex hasn't joined yet");
@@ -66,7 +58,7 @@ describe('generateSessionStatusSummary', () => {
         SessionStatus.PAUSED,
         makeProgress(Stage.WITNESS, StageStatus.IN_PROGRESS),
         makeProgress(Stage.WITNESS, StageStatus.IN_PROGRESS),
-        'Alex'
+        'Alex',
       );
       expect(result.userStatus).toBe('Session paused');
     });
@@ -76,7 +68,7 @@ describe('generateSessionStatusSummary', () => {
         SessionStatus.RESOLVED,
         makeProgress(Stage.STRATEGIC_REPAIR, StageStatus.COMPLETED),
         makeProgress(Stage.STRATEGIC_REPAIR, StageStatus.COMPLETED),
-        'Alex'
+        'Alex',
       );
       expect(result.userStatus).toBe('Session complete');
       expect(result.partnerStatus).toBe('You both reached resolution');
@@ -87,7 +79,7 @@ describe('generateSessionStatusSummary', () => {
         SessionStatus.ABANDONED,
         makeProgress(Stage.WITNESS, StageStatus.IN_PROGRESS),
         makeProgress(Stage.WITNESS, StageStatus.IN_PROGRESS),
-        'Alex'
+        'Alex',
       );
       expect(result.userStatus).toBe('Session ended');
     });
@@ -99,7 +91,7 @@ describe('generateSessionStatusSummary', () => {
         SessionStatus.ACTIVE,
         makeProgress(Stage.WITNESS, StageStatus.NOT_STARTED),
         makeProgress(Stage.WITNESS, StageStatus.NOT_STARTED),
-        'Alex'
+        'Alex',
       );
       expect(result.userStatus).toBe('Ready for Your Story');
     });
@@ -118,7 +110,7 @@ describe('generateSessionStatusSummary', () => {
           SessionStatus.ACTIVE,
           makeProgress(stage, StageStatus.IN_PROGRESS),
           makeProgress(stage, StageStatus.IN_PROGRESS),
-          'Alex'
+          'Alex',
         );
         expect(result.userStatus).toBe(expected);
       }
@@ -130,7 +122,7 @@ describe('generateSessionStatusSummary', () => {
         makeProgress(Stage.PERSPECTIVE_STRETCH, StageStatus.IN_PROGRESS),
         makeProgress(Stage.PERSPECTIVE_STRETCH, StageStatus.IN_PROGRESS),
         'Alex',
-        { userHasSentEmpathy: true }
+        { userHasSentEmpathy: true },
       );
       expect(result.userStatus).toBe("You've shared your understanding");
     });
@@ -140,7 +132,7 @@ describe('generateSessionStatusSummary', () => {
         SessionStatus.ACTIVE,
         makeProgress(Stage.WITNESS, StageStatus.GATE_PENDING),
         makeProgress(Stage.WITNESS, StageStatus.IN_PROGRESS),
-        'Alex'
+        'Alex',
       );
       expect(result.userStatus).toBe("You've shared your story");
     });
@@ -152,7 +144,7 @@ describe('generateSessionStatusSummary', () => {
         SessionStatus.ACTIVE,
         makeProgress(Stage.PERSPECTIVE_STRETCH, StageStatus.IN_PROGRESS),
         makeProgress(Stage.WITNESS, StageStatus.IN_PROGRESS),
-        'Alex'
+        'Alex',
       );
       expect(result.partnerStatus).toBe('Alex is working on Your Story');
     });
@@ -162,7 +154,7 @@ describe('generateSessionStatusSummary', () => {
         SessionStatus.ACTIVE,
         makeProgress(Stage.PERSPECTIVE_STRETCH, StageStatus.IN_PROGRESS),
         makeProgress(Stage.WITNESS, StageStatus.GATE_PENDING),
-        'Alex'
+        'Alex',
       );
       expect(result.partnerStatus).toBe('Alex is working at their own pace');
     });
@@ -172,7 +164,7 @@ describe('generateSessionStatusSummary', () => {
         SessionStatus.ACTIVE,
         makeProgress(Stage.WITNESS, StageStatus.GATE_PENDING),
         makeProgress(Stage.WITNESS, StageStatus.GATE_PENDING),
-        'Alex'
+        'Alex',
       );
       expect(result.partnerStatus).toBe('Alex is also ready');
     });
@@ -182,7 +174,7 @@ describe('generateSessionStatusSummary', () => {
         SessionStatus.ACTIVE,
         makeProgress(Stage.WITNESS, StageStatus.IN_PROGRESS),
         makeProgress(Stage.WITNESS, StageStatus.NOT_STARTED),
-        'Alex'
+        'Alex',
       );
       expect(result.partnerStatus).toBe('Alex will join when ready');
     });
@@ -192,7 +184,7 @@ describe('generateSessionStatusSummary', () => {
         SessionStatus.ACTIVE,
         makeProgress(Stage.WITNESS, StageStatus.IN_PROGRESS),
         makeProgress(Stage.WITNESS, StageStatus.IN_PROGRESS),
-        'Alex'
+        'Alex',
       );
       expect(result.partnerStatus).toBe('Alex is working on their story');
     });
@@ -202,7 +194,7 @@ describe('generateSessionStatusSummary', () => {
         SessionStatus.ACTIVE,
         makeProgress(Stage.WITNESS, StageStatus.IN_PROGRESS),
         makeProgress(Stage.PERSPECTIVE_STRETCH, StageStatus.IN_PROGRESS),
-        'Alex'
+        'Alex',
       );
       expect(result.partnerStatus).toBe("You can continue when you're ready");
       expect(result.userStatus).toBe("You're making progress on Your Story");
@@ -213,7 +205,7 @@ describe('generateSessionStatusSummary', () => {
         SessionStatus.ACTIVE,
         makeProgress(Stage.WITNESS, StageStatus.NOT_STARTED),
         makeProgress(Stage.PERSPECTIVE_STRETCH, StageStatus.IN_PROGRESS),
-        'Alex'
+        'Alex',
       );
       expect(result.userStatus).toBe('Ready for Your Story when you are');
     });
@@ -255,7 +247,7 @@ describe('generateSessionStatusSummary', () => {
                   sessionStatus,
                   makeProgress(myStage, myStatus),
                   makeProgress(partnerStage, partnerStatus),
-                  'Alex'
+                  'Alex',
                 );
                 expect(result.userStatus).not.toMatch(/Waiting for .+ to /);
                 expect(result.partnerStatus).not.toMatch(/Waiting for .+ to /);
@@ -274,7 +266,7 @@ describe('generateSessionStatusSummary', () => {
               sessionStatus,
               makeProgress(myStage, StageStatus.IN_PROGRESS),
               makeProgress(partnerStage, StageStatus.IN_PROGRESS),
-              'Alex'
+              'Alex',
             );
             expect(result.userStatus).not.toMatch(/is ahead/);
             expect(result.partnerStatus).not.toMatch(/is ahead/);
@@ -290,7 +282,7 @@ describe('generateSessionStatusSummary', () => {
             SessionStatus.ACTIVE,
             makeProgress(myStage, StageStatus.IN_PROGRESS),
             makeProgress(partnerStage, StageStatus.IN_PROGRESS),
-            'Alex'
+            'Alex',
           );
           expect(result.userStatus).not.toMatch(/is waiting for you/);
           expect(result.partnerStatus).not.toMatch(/is waiting for you/);
@@ -305,7 +297,7 @@ describe('generateSessionStatusSummary', () => {
         SessionStatus.ACTIVE,
         makeProgress(Stage.WITNESS, StageStatus.IN_PROGRESS),
         makeProgress(Stage.WITNESS, StageStatus.NOT_STARTED),
-        ''
+        '',
       );
       expect(result.partnerStatus).toBe('Partner will join when ready');
     });
@@ -316,11 +308,13 @@ describe('mapSessionToSummary - Stage 2 selfActionNeeded', () => {
   const USER_ID = 'user-1';
   const PARTNER_ID = 'user-2';
 
-  function makeSession(overrides: {
-    empathyAttempts?: Array<{ sourceUserId: string | null; status?: string }>;
-    myStage?: number;
-    myStatus?: string;
-  } = {}) {
+  function makeSession(
+    overrides: {
+      empathyAttempts?: Array<{ sourceUserId: string | null; status?: string }>;
+      myStage?: number;
+      myStatus?: string;
+    } = {},
+  ) {
     return {
       id: 'session-1',
       relationshipId: 'rel-1',

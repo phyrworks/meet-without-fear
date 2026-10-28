@@ -18,7 +18,11 @@
  */
 
 import { prisma } from '../lib/prisma';
-import type { EmpathyAttemptDTO, EmpathyExchangeStatusResponse, SharedContentDeliveryStatus } from '@meet-without-fear/shared';
+import type {
+  EmpathyAttemptDTO,
+  EmpathyExchangeStatusResponse,
+  SharedContentDeliveryStatus,
+} from '@meet-without-fear/shared';
 import { getSharedContextForGuesser, getSharedContentDeliveryStatus } from './reconciler';
 import {
   currentAttempt,
@@ -28,6 +32,7 @@ import {
   revealedAttemptAbout,
   reviewOf,
   reviewVisibleToAuthor,
+  departedCounterpart,
   sessionParties,
   type AttemptRow,
   type ReviewRow,
@@ -70,13 +75,20 @@ export function attemptDTO(
 /**
  * Build the full EmpathyExchangeStatusResponse for a user.
  */
-export async function buildEmpathyExchangeStatus(sessionId: string, userId: string): Promise<EmpathyExchangeStatusResponse> {
+export async function buildEmpathyExchangeStatus(
+  sessionId: string,
+  userId: string,
+): Promise<EmpathyExchangeStatusResponse> {
   const parties = await sessionParties(sessionId);
   const me = partyOf(parties, { userId });
   if (!me) {
     throw new Error(`Session ${sessionId} not found or user ${userId} not a participant`);
   }
-  const partner = parties.find(p => p.participantId !== me.participantId) ?? null;
+  // TS-12 (R5): a departed partner (the tombstone) still answers the reads of
+  // what they delivered — the status is a read.
+  const partner =
+    parties.find(p => p.participantId !== me.participantId) ??
+    (parties.length === 1 ? await departedCounterpart(sessionId, me.participantId) : null);
 
   const [myAttempt, partnerAttempt, statuses] = await Promise.all([
     partner ? currentAttempt(me.participantId, partner.participantId) : Promise.resolve(null),
@@ -105,7 +117,9 @@ export async function buildEmpathyExchangeStatus(sessionId: string, userId: stri
   const readyForStage3 = myAttempt?.status === 'VALIDATED' && partnerAttempt?.status === 'VALIDATED';
 
   const partnerStage1Completed = partner
-    ? (await prisma.participantMilestone.count({ where: { participantId: partner.participantId, milestoneKey: 'feel_heard' } })) > 0
+    ? (await prisma.participantMilestone.count({
+        where: { participantId: partner.participantId, milestoneKey: 'feel_heard' },
+      })) > 0
     : false;
 
   const awaitingSharing = myAttempt?.status === 'AWAITING_SHARING';
@@ -130,7 +144,9 @@ export async function buildEmpathyExchangeStatus(sessionId: string, userId: stri
   }
 
   const deliveryStatusResult = await getSharedContentDeliveryStatus(sessionId, userId);
-  const sharedContentDeliveryStatus = deliveryStatusResult.hasSharedContent ? deliveryStatusResult.deliveryStatus : null;
+  const sharedContentDeliveryStatus = deliveryStatusResult.hasSharedContent
+    ? deliveryStatusResult.deliveryStatus
+    : null;
   const mySharedContext =
     deliveryStatusResult.hasSharedContent && deliveryStatusResult.sharedContent
       ? {
@@ -167,7 +183,8 @@ export async function buildEmpathyExchangeStatus(sessionId: string, userId: stri
     mySharedAt: mySharedContext?.sharedAt ?? null,
     myReconcilerResult: null,
     partnerHasSubmittedEmpathy: !!partnerDirection,
-    partnerEmpathyHeldStatus: (partnerDirection?.status as EmpathyExchangeStatusResponse['partnerEmpathyHeldStatus']) ?? null,
+    partnerEmpathyHeldStatus:
+      (partnerDirection?.status as EmpathyExchangeStatusResponse['partnerEmpathyHeldStatus']) ?? null,
     partnerEmpathySubmittedAt: partnerDirection?.submittedAt.toISOString() ?? null,
   };
 }

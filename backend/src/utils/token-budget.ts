@@ -76,9 +76,7 @@ export function estimateTokens(text: string): number {
 /**
  * Estimate tokens for a message array.
  */
-export function estimateMessagesTokens(
-  messages: Array<{ role: string; content: string }>
-): number {
+export function estimateMessagesTokens(messages: Array<{ role: string; content: string }>): number {
   let tokens = 0;
   for (const msg of messages) {
     // Add overhead for role markup (~4 tokens per message)
@@ -93,7 +91,7 @@ export function estimateMessagesTokens(
  */
 export function trimConversationHistory<T extends { role: 'user' | 'assistant'; content: string }>(
   messages: T[],
-  maxTurns: number
+  maxTurns: number,
 ): { trimmed: T[]; truncated: number } {
   if (messages.length === 0 || maxTurns <= 0) {
     return { trimmed: [], truncated: messages.length };
@@ -151,7 +149,7 @@ export interface BudgetedContext {
 export function calculateMessageBudget(
   messages: Array<{ role: string; content: string }>,
   maxTokens: number,
-  minMessages: number = 4
+  minMessages: number = 4,
 ): { included: number; tokens: number } {
   if (messages.length === 0) {
     return { included: 0, tokens: 0 };
@@ -203,7 +201,7 @@ export function buildBudgetedContext<T extends { role: 'user' | 'assistant'; con
   systemPrompt: string,
   conversationHistory: T[],
   retrievedContext: string,
-  maxTotalTokens: number = MODEL_LIMITS.contextBudget
+  maxTotalTokens: number = MODEL_LIMITS.contextBudget,
 ): BudgetedContext {
   const systemTokens = estimateTokens(systemPrompt);
   const availableForContext = maxTotalTokens - systemTokens - MODEL_LIMITS.outputReservation;
@@ -211,29 +209,29 @@ export function buildBudgetedContext<T extends { role: 'user' | 'assistant'; con
   // STRICT HIERARCHY: Protect last N turns at all costs
   const PROTECTED_TURNS = 8;
   const PROTECTED_MESSAGES = PROTECTED_TURNS * 2; // user + assistant pairs
-  
+
   // Split conversation into protected (last 10 turns) and evictable (older)
   const protectedMessages = conversationHistory.slice(-PROTECTED_MESSAGES);
   const evictableMessages = conversationHistory.slice(0, -PROTECTED_MESSAGES);
-  
+
   // Calculate tokens for protected messages (these are NEVER dropped)
   const protectedTokens = estimateMessagesTokens(protectedMessages);
-  
+
   // Remaining budget after protecting recent history
   const remainingBudget = availableForContext - protectedTokens;
-  
+
   // Allocate remaining budget: 60% to older conversation, 40% to retrieved context
   // If we're over budget, retrieved context gets dropped first (lowest priority)
   const olderConversationBudget = Math.floor(remainingBudget * 0.6);
   const retrievedBudget = Math.floor(remainingBudget * 0.4);
-  
+
   // Calculate how many older messages to include
   const olderConversationPlan = calculateMessageBudget(evictableMessages, olderConversationBudget, 0);
   const includedOlderMessages = evictableMessages.slice(-olderConversationPlan.included);
-  
+
   // Combine protected + older messages
   const includedMessages = [...includedOlderMessages, ...protectedMessages];
-  
+
   // Truncate retrieved context if needed (lowest priority - drop first)
   let finalRetrievedContext = retrievedContext;
   let retrievedTokens = estimateTokens(retrievedContext);
@@ -246,22 +244,19 @@ export function buildBudgetedContext<T extends { role: 'user' | 'assistant'; con
     retrievedTokens = estimateTokens(finalRetrievedContext);
     truncatedRetrieved = true;
   }
-  
+
   // If still over budget after truncating retrieved context, drop oldest conversation
   const totalUsed = protectedTokens + olderConversationPlan.tokens + retrievedTokens;
   let finalIncludedMessages = includedMessages;
   let truncatedConversation = 0;
-  
+
   if (totalUsed > availableForContext) {
     // We're still over budget - drop oldest messages (but keep protected ones)
     const overage = totalUsed - availableForContext;
     const overageMessages = Math.ceil(overage / 50); // Rough estimate: ~50 tokens per message
-    
+
     // Drop from the oldest (beginning of includedOlderMessages)
-    finalIncludedMessages = [
-      ...includedOlderMessages.slice(overageMessages),
-      ...protectedMessages
-    ];
+    finalIncludedMessages = [...includedOlderMessages.slice(overageMessages), ...protectedMessages];
     truncatedConversation = overageMessages;
   }
 
@@ -272,8 +267,8 @@ export function buildBudgetedContext<T extends { role: 'user' | 'assistant'; con
   if (totalTruncated > 0 || truncatedRetrieved) {
     logger.info(
       `[TokenBudget] Truncated: ${totalTruncated} conversation messages, ` +
-      `${truncatedRetrieved ? 'retrieved context' : 'none'} | ` +
-      `Protected: ${protectedMessages.length} messages (last ${PROTECTED_TURNS} turns)`
+        `${truncatedRetrieved ? 'retrieved context' : 'none'} | ` +
+        `Protected: ${protectedMessages.length} messages (last ${PROTECTED_TURNS} turns)`,
     );
   }
 

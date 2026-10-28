@@ -10,11 +10,7 @@
 import { logger } from '../lib/logger';
 import { getSonnetResponse, BrainActivityCallType } from '../lib/bedrock';
 
-export type DispatchTag =
-  | 'EXPLAIN_PROCESS'
-  | 'EXPLAIN_EMPATHY_PURPOSE'
-  | 'HANDLE_MEMORY_REQUEST'
-  | string; // Allow unknown tags
+export type DispatchTag = 'EXPLAIN_PROCESS' | 'EXPLAIN_EMPATHY_PURPOSE' | 'HANDLE_MEMORY_REQUEST' | string; // Allow unknown tags
 
 export interface DispatchContext {
   /** The user's current message */
@@ -96,10 +92,7 @@ NEVER say things like "you'd need to set up in real life" - the conversation hap
  * Returns a contextual AI response for the specific scenario,
  * or null if the tag is unrecognized (letting the original AI response through).
  */
-export async function handleDispatch(
-  dispatchTag: DispatchTag,
-  context: DispatchContext
-): Promise<string | null> {
+export async function handleDispatch(dispatchTag: DispatchTag, context: DispatchContext): Promise<string | null> {
   logger.info(`[Dispatch Handler] Triggered: ${dispatchTag}`);
 
   switch (dispatchTag) {
@@ -236,10 +229,7 @@ async function handleEmpathyPurposeExplanation(context: DispatchContext): Promis
   const { userMessage, conversationHistory, sessionId, turnId } = context;
 
   try {
-    const messages = [
-      ...conversationHistory.slice(-6),
-      { role: 'user' as const, content: userMessage },
-    ];
+    const messages = [...conversationHistory.slice(-6), { role: 'user' as const, content: userMessage }];
 
     const response = await getSonnetResponse({
       systemPrompt: buildEmpathyPurposePrompt(context),

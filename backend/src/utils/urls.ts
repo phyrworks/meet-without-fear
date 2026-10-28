@@ -39,4 +39,3 @@ export function createInvitationUrl(invitationId: string): string {
   const websiteUrl = getWebsiteUrl();
   return `${websiteUrl}/invitation/${invitationId}`;
 }
-

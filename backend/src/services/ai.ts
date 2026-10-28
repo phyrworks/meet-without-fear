@@ -11,11 +11,7 @@
  */
 
 import { getCompletion, resetBedrockClient, getBedrockClient } from '../lib/bedrock';
-import {
-  orchestrateResponse,
-  type OrchestratorContext,
-  type OrchestratorResult,
-} from './ai-orchestrator';
+import { orchestrateResponse, type OrchestratorContext, type OrchestratorResult } from './ai-orchestrator';
 
 // ============================================================================
 // Types
@@ -114,7 +110,7 @@ export function resetAIClient(): void {
  */
 export async function getOrchestratedResponse(
   messages: ConversationMessage[],
-  context: FullAIContext
+  context: FullAIContext,
 ): Promise<OrchestratorResult> {
   const lastMessage = messages[messages.length - 1];
   const userMessage = lastMessage?.content || '';

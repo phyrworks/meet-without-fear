@@ -77,7 +77,7 @@ function SESSION_READ_FIXTURE_DELTAS(): AllowList['rules'] {
       why:
         'spec §1.1 message: `stage` is dropped ("derivable from participant_milestone"). The fixture tags messages ' +
         'with journey phases that run ahead of its milestone instants (Ada\'s messages 3–6 are "witness" before ' +
-        'her compact_signed). The target DTO stage is the owner\'s stage at the message instant (stage shim); the ' +
+        "her compact_signed). The target DTO stage is the owner's stage at the message instant (stage shim); the " +
         'test asserts exactly that for every message.',
     },
     {
@@ -106,7 +106,7 @@ function SESSION_READ_FIXTURE_DELTAS(): AllowList['rules'] {
       why:
         'Ada submitted her attempt (scenario milestone empathy_submitted; TS-7 step 7 derives it from ' +
         'EmpathyAttempt.sharedAt). The TS-4 view decodes only gate keys and omits it; the target stores it. ' +
-        'Pinned to its instant: the attempt\'s submitted_at (<ts:14>).',
+        "Pinned to its instant: the attempt's submitted_at (<ts:14>).",
     },
   ];
 }

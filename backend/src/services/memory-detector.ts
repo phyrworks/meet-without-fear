@@ -8,9 +8,9 @@
 
 import { getHaikuJson } from '../lib/bedrock';
 import { logger } from '../lib/logger';
-import { withHaikuCircuitBreaker, HAIKU_TIMEOUT_MS } from '../utils/circuit-breaker';
+import { withHaikuCircuitBreaker } from '../utils/circuit-breaker';
 import type { MemoryDetectionResult, MemoryCategory } from 'shared';
-import { BrainActivityCallType } from '../generated/prisma/client';
+import { BrainCallType as BrainActivityCallType } from '../generated/prisma/client';
 
 // ============================================================================
 // Types
@@ -213,16 +213,15 @@ Output only valid JSON with no markdown formatting or extra text.`;
         systemPrompt,
         messages: [{ role: 'user', content: userPrompt }],
         maxTokens: 512,
-        ...(context === 'inner-thoughts'
-          ? { innerWorkSessionId: sessionId }
-          : { sessionId }),
+        ...(context === 'inner-thoughts' ? { innerWorkSessionId: sessionId } : { sessionId }),
         turnId: effectiveTurnId,
         operation: 'memory-detection',
         callType: BrainActivityCallType.MEMORY_DETECTION,
+        ownContent: true, // R40: the caller's own content only
       });
     },
     null, // Fallback to null if timeout/failure
-    'memory-detection'
+    'memory-detection',
   );
 
   if (!response) {

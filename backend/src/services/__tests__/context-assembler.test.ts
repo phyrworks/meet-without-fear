@@ -227,8 +227,12 @@ describe('Context Assembler', () => {
         expect(formatted).toContain('Use this only for orientation');
         expect(formatted).toContain('Stage gates still come from StageProgress');
         expect(formatted).toContain('empathy/share/validation lifecycle state');
-        expect(formatted).toContain('- You shared empathy attempt (VALIDATED; shared 2026-05-12T00:00:00.000Z; revealed 2026-05-12T00:05:00.000Z; validated 2026-05-12T00:10:00.000Z): I think you felt shut out when I made the decision alone.');
-        expect(formatted).toContain('- Partner shared additional context (ACCEPTED/DELIVERED; shared 2026-05-12T00:02:00.000Z; delivered 2026-05-12T00:03:00.000Z): I needed to know my effort still mattered.');
+        expect(formatted).toContain(
+          '- You shared empathy attempt (VALIDATED; shared 2026-05-12T00:00:00.000Z; revealed 2026-05-12T00:05:00.000Z; validated 2026-05-12T00:10:00.000Z): I think you felt shut out when I made the decision alone.',
+        );
+        expect(formatted).toContain(
+          '- Partner shared additional context (ACCEPTED/DELIVERED; shared 2026-05-12T00:02:00.000Z; delivered 2026-05-12T00:03:00.000Z): I needed to know my effort still mattered.',
+        );
       });
 
       it('omits consented share state when no items are present', () => {
@@ -259,7 +263,9 @@ describe('Context Assembler', () => {
 
         const formatted = formatContextForPrompt(bundle);
 
-        expect(formatted).toContain('- Partner shared empathy attempt (READY; shared 2026-05-12T00:00:00.000Z) (content not yet visible to this user)');
+        expect(formatted).toContain(
+          '- Partner shared empathy attempt (READY; shared 2026-05-12T00:00:00.000Z) (content not yet visible to this user)',
+        );
       });
 
       it('truncates long share-state content to keep prompt size bounded', () => {
@@ -323,8 +329,12 @@ describe('Context Assembler', () => {
         expect(formatted).toContain('--- Prior stage summaries (current user lane only) ---');
         expect(formatted).toContain('Use this only for continuity');
         expect(formatted).toContain('Stage gates still come from StageProgress');
-        expect(formatted).toContain('Stage 1 (COMPLETED; completed 2026-05-12T00:10:00.000Z): 2 user turn(s), 2 AI turn(s).');
-        expect(formatted).toContain('- User: I felt like every practical objection meant she was already halfway gone.');
+        expect(formatted).toContain(
+          'Stage 1 (COMPLETED; completed 2026-05-12T00:10:00.000Z): 2 user turn(s), 2 AI turn(s).',
+        );
+        expect(formatted).toContain(
+          '- User: I felt like every practical objection meant she was already halfway gone.',
+        );
         expect(formatted).toContain('- AI: The fear is not just about the trip, it is about losing the marriage.');
       });
 

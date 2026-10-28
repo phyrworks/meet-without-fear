@@ -55,7 +55,7 @@ const PATTERN_REQUEST_PATTERNS = [
  * Check if user is explicitly asking about patterns
  */
 export function userAskedForPattern(message: string): boolean {
-  return PATTERN_REQUEST_PATTERNS.some((p) => p.test(message));
+  return PATTERN_REQUEST_PATTERNS.some(p => p.test(message));
 }
 
 // ============================================================================
@@ -77,7 +77,7 @@ export function decideSurfacing(
   userAskedForPatternFlag: boolean,
   patternInsightsEnabled: boolean,
   evidenceCount: number,
-  lastSurfacingTurn?: number
+  lastSurfacingTurn?: number,
 ): SurfacingDecision {
   // Cooldown: Don't surface if we surfaced recently (within last 5 turns)
   // This prevents the AI from nagging the user with insights on every turn
@@ -167,7 +167,7 @@ export function countPatternEvidence(
   retrievedContext: {
     relevantFromCurrentSession?: Array<{ content: string }>;
     relevantFromOtherSessions?: Array<{ content: string }>;
-  } | null
+  } | null,
 ): number {
   if (!retrievedContext) {
     return 0;

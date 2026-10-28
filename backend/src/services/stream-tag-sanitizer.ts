@@ -128,7 +128,7 @@ export class StreamTagSanitizer {
             // Definitely not a <thinking> opener — treat everything as visible
             // output, but run it through the tag trap so hidden tags are still caught.
             this.logger.warn?.(
-              `Response did not open with <thinking>; routing ${this.thinkingBuffer.length} buffered chars as visible response.`
+              `Response did not open with <thinking>; routing ${this.thinkingBuffer.length} buffered chars as visible response.`,
             );
             this.isInsideThinking = false;
             this.isTrappingTags = true;
@@ -157,7 +157,7 @@ export class StreamTagSanitizer {
       // tag. Flushing here can expose chain-of-thought to the user.
       if (this.thinkingBuffer.length > THINKING_BUFFER_WARN_LIMIT) {
         this.logger.warn?.(
-          `Thinking buffer exceeded ${THINKING_BUFFER_WARN_LIMIT} chars without closing tag; continuing to trap hidden text`
+          `Thinking buffer exceeded ${THINKING_BUFFER_WARN_LIMIT} chars without closing tag; continuing to trap hidden text`,
         );
       }
       return '';
@@ -214,7 +214,7 @@ export class StreamTagSanitizer {
         // hidden: avoiding leaked chain-of-thought matters more than salvaging
         // malformed output.
         this.logger.warn?.(
-          `Stream ended while still in thinking trap. Buffer has ${this.thinkingBuffer.length} chars. Keeping it hidden.`
+          `Stream ended while still in thinking trap. Buffer has ${this.thinkingBuffer.length} chars. Keeping it hidden.`,
         );
         this.extractAndStrip(this.thinkingBuffer);
         this.captured.thinking = this.thinkingBuffer;
@@ -222,7 +222,7 @@ export class StreamTagSanitizer {
         // We never confirmed a <thinking> opener, so the buffered text is the
         // visible reply — flush it rather than dropping the whole turn.
         this.logger.warn?.(
-          `Stream ended with no <thinking> opener; flushing ${this.thinkingBuffer.length} buffered chars as visible response.`
+          `Stream ended with no <thinking> opener; flushing ${this.thinkingBuffer.length} buffered chars as visible response.`,
         );
         visible += this.extractAndStrip(this.thinkingBuffer);
       }
@@ -267,8 +267,7 @@ export class StreamTagSanitizer {
     const waitingForDispatch = hasDispatchStart && !hasDispatchEnd;
 
     const trimmedStripped = stripHiddenTags(buffer).trim();
-    const hasResponseContent =
-      trimmedStripped.length > TAG_TRAP_MIN_RESPONSE_CHARS && !trimmedStripped.startsWith('<');
+    const hasResponseContent = trimmedStripped.length > TAG_TRAP_MIN_RESPONSE_CHARS && !trimmedStripped.startsWith('<');
     const safeToExit =
       !waitingForDraft &&
       !waitingForNeed &&
@@ -306,9 +305,7 @@ export class StreamTagSanitizer {
       this.logger.info?.(`[HIDDEN NEED]: ${truncateForLog(this.captured.need)}`);
     }
 
-    const needActionMatch = buffer.match(
-      /<need-action\b[^>]*>[\s\S]*?<\/need-action>|<need-action\b[^>]*\/>/i
-    );
+    const needActionMatch = buffer.match(/<need-action\b[^>]*>[\s\S]*?<\/need-action>|<need-action\b[^>]*\/>/i);
     if (needActionMatch) {
       this.captured.needAction = needActionMatch[0].trim();
       this.logger.info?.(`[HIDDEN NEED ACTION]: ${truncateForLog(this.captured.needAction)}`);
@@ -326,9 +323,7 @@ export class StreamTagSanitizer {
       this.logger.info?.(`[HIDDEN STAGE 4 PROPOSALS]: {length: ${this.captured.stage4Proposals.length}}`);
     }
 
-    const stage4WalkthroughMatch = buffer.match(
-      /<stage4_walkthrough>([\s\S]*?)<\/stage4_walkthrough>/i
-    );
+    const stage4WalkthroughMatch = buffer.match(/<stage4_walkthrough>([\s\S]*?)<\/stage4_walkthrough>/i);
     if (stage4WalkthroughMatch) {
       this.captured.stage4Walkthrough = stage4WalkthroughMatch[1].trim();
       this.logger.info?.(`[HIDDEN STAGE 4 WALKTHROUGH]: ${truncateForLog(this.captured.stage4Walkthrough)}`);

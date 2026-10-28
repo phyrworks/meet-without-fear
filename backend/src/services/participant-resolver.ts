@@ -134,6 +134,20 @@ export async function getPartnerParticipant(participantId: string): Promise<CoPa
   return present.length === 1 ? present[0] : null;
 }
 
+/**
+ * TS-12 (R5): for READS only — the present partner, or else the one human
+ * co-participant who has left (the tombstone after account deletion). What the
+ * leaver shared stays readable to the partner (spec §7), and attributed to
+ * them; writes keep requiring a present partner (getPartnerParticipant).
+ */
+export async function getCounterpartParticipant(participantId: string): Promise<CoParticipant | null> {
+  const humans = (await getCoParticipants(participantId)).filter(p => p.kind === 'human');
+  const present = humans.filter(p => !p.leftAt);
+  if (present.length === 1) return present[0];
+  if (present.length === 0 && humans.length === 1) return humans[0];
+  return null;
+}
+
 export interface CoParticipantPresence {
   /** The co-participant's `privacy.showActivityStatus` (default true). */
   showsActivity: boolean;
@@ -154,7 +168,12 @@ export interface CoParticipantPresence {
  */
 export async function getCoParticipantPresence(coParticipantId: string): Promise<CoParticipantPresence> {
   const rows = await prisma.$queryRaw<
-    Array<{ shows: boolean | null; last_viewed_at: Date | null; last_active_at: Date | null; last_turn_at: Date | null }>
+    Array<{
+      shows: boolean | null;
+      last_viewed_at: Date | null;
+      last_active_at: Date | null;
+      last_turn_at: Date | null;
+    }>
   >`
     SELECT (up.doc -> 'privacy' ->> 'showActivityStatus')::boolean AS shows,
            r.last_viewed_at, r.last_active_at,

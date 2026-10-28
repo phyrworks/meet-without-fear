@@ -13,25 +13,15 @@ export interface CleanVisibleAITextOptions {
   preserveBoundaryWhitespace?: boolean;
 }
 
-export function cleanVisibleAIText(
-  text: string,
-  options: CleanVisibleAITextOptions = {}
-): string {
+export function cleanVisibleAIText(text: string, options: CleanVisibleAITextOptions = {}): string {
   if (options.preserveBoundaryWhitespace && text.trim().length === 0) {
     return text;
   }
 
-  const leadingWhitespace = options.preserveBoundaryWhitespace
-    ? text.match(/^\s*/)?.[0] ?? ''
-    : '';
-  const trailingWhitespace = options.preserveBoundaryWhitespace
-    ? text.match(/\s*$/)?.[0] ?? ''
-    : '';
+  const leadingWhitespace = options.preserveBoundaryWhitespace ? (text.match(/^\s*/)?.[0] ?? '') : '';
+  const trailingWhitespace = options.preserveBoundaryWhitespace ? (text.match(/\s*$/)?.[0] ?? '') : '';
 
-  let cleaned = text
-    .replace(/\\"/g, '"')
-    .replace(/\r\n/g, '\n')
-    .trim();
+  let cleaned = text.replace(/\\"/g, '"').replace(/\r\n/g, '\n').trim();
 
   for (let i = 0; i < 4; i += 1) {
     const before = cleaned;
@@ -48,8 +38,7 @@ export function cleanVisibleAIText(
       .replace(/^---+\s*/, '')
       .trim();
 
-    const emphasisMatch = cleaned.match(/^\*\*([\s\S]*?)\*\*$/) ??
-      cleaned.match(/^__([\s\S]*?)__$/);
+    const emphasisMatch = cleaned.match(/^\*\*([\s\S]*?)\*\*$/) ?? cleaned.match(/^__([\s\S]*?)__$/);
     if (emphasisMatch) {
       cleaned = emphasisMatch[1].trim();
     }
@@ -103,15 +92,15 @@ function stripUntaggedReasoningPreamble(text: string): string {
  */
 export function scrubVisibleAIText(
   text: string,
-  options: { preserveBoundaryWhitespace?: boolean } = {}
+  options: { preserveBoundaryWhitespace?: boolean } = {},
 ): { text: string; scrubbed: boolean } {
   const before = text;
   const preambleScrubbed = stripUntaggedReasoningPreamble(text);
   const plannerScrubbed = preambleScrubbed
     .split(/\r?\n/)
-    .filter((line) => {
+    .filter(line => {
       const trimmed = line.trim().toLowerCase();
-      return !PLANNER_LINE_PREFIXES.some((prefix) => trimmed.startsWith(prefix));
+      return !PLANNER_LINE_PREFIXES.some(prefix => trimmed.startsWith(prefix));
     })
     .join('\n')
     .replace(/\bI should\b/gi, '')

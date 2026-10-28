@@ -20,8 +20,6 @@ import { resolveStreamTurn } from '../stream-turn-resolution';
 import { getModelCompletionWithTools, getSonnetStreamingResponse } from '../../lib/bedrock';
 import { SESSION_STATE_TOOL_NAME } from '../stage-tools';
 
-jest.mock('../../lib/prisma');
-
 jest.mock('../../lib/bedrock', () => ({
   getModelCompletionWithTools: jest.fn().mockResolvedValue({ text: null, toolInvocations: [] }),
   getSonnetStreamingResponse: jest.fn(),
@@ -112,12 +110,10 @@ describe('streaming turn — known pre-existing defects', () => {
   it('CHARACTERIZATION (known defect): malformed boolean tool input is backfilled to a definite false', async () => {
     (getModelCompletionWithTools as jest.Mock).mockResolvedValue({
       text: null,
-      toolInvocations: [
-        { name: SESSION_STATE_TOOL_NAME, input: { offerFeelHeardCheck: 'yes please' } },
-      ],
+      toolInvocations: [{ name: SESSION_STATE_TOOL_NAME, input: { offerFeelHeardCheck: 'yes please' } }],
     });
     (getSonnetStreamingResponse as jest.Mock).mockReturnValue(
-      streamOf(t('Thanks for telling me that. It sounds like it landed hard for you.'))
+      streamOf(t('Thanks for telling me that. It sounds like it landed hard for you.')),
     );
 
     const modelResult = await runStreamTurnModel(modelParams());
@@ -137,12 +133,10 @@ describe('streaming turn — known pre-existing defects', () => {
   it('CHARACTERIZATION (known defect): a malformed object input is also backfilled to false', async () => {
     (getModelCompletionWithTools as jest.Mock).mockResolvedValue({
       text: null,
-      toolInvocations: [
-        { name: SESSION_STATE_TOOL_NAME, input: { offerReadyToShare: { nested: 'object' } } },
-      ],
+      toolInvocations: [{ name: SESSION_STATE_TOOL_NAME, input: { offerReadyToShare: { nested: 'object' } } }],
     });
     (getSonnetStreamingResponse as jest.Mock).mockReturnValue(
-      streamOf(t('That makes sense, and I want to stay with it a moment longer.'))
+      streamOf(t('That makes sense, and I want to stay with it a moment longer.')),
     );
 
     const modelResult = await runStreamTurnModel(modelParams());

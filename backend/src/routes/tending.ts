@@ -14,60 +14,40 @@ import {
 
 const router = Router();
 
-router.get(
-  '/sessions/:id/tending',
-  requireAuth,
-  requireSessionAccess,
-  asyncHandler(getTendingEntries)
-);
+router.get('/sessions/:id/tending', requireAuth, requireSessionAccess, asyncHandler(getTendingEntries));
 
-router.get(
-  '/sessions/:id/tending/history',
-  requireAuth,
-  requireSessionAccess,
-  asyncHandler(getTendingHistory)
-);
+router.get('/sessions/:id/tending/history', requireAuth, requireSessionAccess, asyncHandler(getTendingHistory));
 
-router.post(
-  '/sessions/:id/tending/checkin',
-  requireAuth,
-  requireSessionAccess,
-  asyncHandler(postTendingCheckin)
-);
+router.post('/sessions/:id/tending/checkin', requireAuth, requireSessionAccess, asyncHandler(postTendingCheckin));
 
 router.post(
   '/sessions/:id/tending/notes',
   requireAuth,
   requireSessionAccess,
-  asyncHandler(postTendingBetweenPeriodNote)
+  asyncHandler(postTendingBetweenPeriodNote),
 );
 
-router.post(
-  '/sessions/:id/tending/reentry',
-  requireAuth,
-  requireSessionAccess,
-  asyncHandler(postTendingReentry)
-);
+router.post('/sessions/:id/tending/reentry', requireAuth, requireSessionAccess, asyncHandler(postTendingReentry));
 
 router.post(
   '/sessions/:id/tending/:entryId/responses',
   requireAuth,
   requireSessionAccess,
-  asyncHandler(postTendingResponse)
+  asyncHandler(postTendingResponse),
 );
 
 router.post(
   '/sessions/:id/tending/:entryId/share',
   requireAuth,
   requireSessionAccess,
-  asyncHandler(postTendingEntryShare)
+  asyncHandler(postTendingEntryShare),
 );
 
 router.post(
   '/sessions/:id/tending/:entryId/unshare',
   requireAuth,
   requireSessionAccess,
-  asyncHandler(postTendingEntryUnshare)
+  asyncHandler(postTendingEntryUnshare),
 );
 
 export default router;

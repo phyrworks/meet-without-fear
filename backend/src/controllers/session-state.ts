@@ -20,6 +20,7 @@
  * unchanged.
  */
 
+import { departedParticipantUsers } from '../utils/session';
 import { Request, Response } from 'express';
 import { logger } from '../lib/logger';
 import { prisma } from '../lib/prisma';
@@ -229,7 +230,12 @@ export async function getSessionState(req: Request, res: Response): Promise<void
     };
 
     // Partner display name
-    const partnerDisplayName = myMember?.nickname || partnerMember?.user.firstName || partnerMember?.user.name || null;
+    // A partner who left (account deletion, leaving) shows no name (TS-12, R5).
+    const partnerLeft =
+      !!partnerMember && (await departedParticipantUsers([sessionId])).has(`${sessionId}:${partnerMember.userId}`);
+    const partnerDisplayName = partnerLeft
+      ? null
+      : myMember?.nickname || partnerMember?.user.firstName || partnerMember?.user.name || null;
 
     const presence = partner ? await getCoParticipantPresence(partner.participantId) : null;
     const partnerShowsActivity = presence?.showsActivity ?? true;
@@ -309,7 +315,7 @@ export async function getSessionState(req: Request, res: Response): Promise<void
           ? {
               id: partnerMember.userId,
               name: partnerDisplayName,
-              nickname: myMember?.nickname || null,
+              nickname: partnerLeft ? null : myMember?.nickname || null,
             }
           : { id: '', name: myMember?.nickname || null, nickname: myMember?.nickname || null },
         myProgress: {

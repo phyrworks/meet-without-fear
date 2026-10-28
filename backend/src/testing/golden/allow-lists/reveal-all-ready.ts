@@ -72,7 +72,10 @@ const bodyRules = (
   TARGET_COMPACT_SIGNED_MASK,
   TARGET_CONSENT_TARGET_ID_RULE,
   ...reads.flatMap(r => [
-    deliveredCopyInRead(r.state, r.author, r.subject, r.statement, { byteLevel, at: `steps.${r.state}.body.data.messages.messages` }),
+    deliveredCopyInRead(r.state, r.author, r.subject, r.statement, {
+      byteLevel,
+      at: `steps.${r.state}.body.data.messages.messages`,
+    }),
     deliveredCopyInRead(r.messages, r.author, r.subject, r.statement, { byteLevel }),
   ]),
 ];
@@ -157,7 +160,10 @@ export const REVEAL_ADA_FIRST_BYTE_TARGET_ALLOW: AllowList = {
   rules: [
     ...bodyRules(ADA_FIRST_READS, true),
     ADA_FIRST_STATUS_VERSION,
-    byteLabelShift(['steps.13.body.data.records.0.id', 'steps.45.body.data.records.0.id', 'steps.60.body.data.records.0.id'], 'consent'),
+    byteLabelShift(
+      ['steps.13.body.data.records.0.id', 'steps.45.body.data.records.0.id', 'steps.60.body.data.records.0.id'],
+      'consent',
+    ),
     byteLabelShift(
       [
         'steps.34.body.data.messages.messages.14.id',
@@ -169,8 +175,20 @@ export const REVEAL_ADA_FIRST_BYTE_TARGET_ALLOW: AllowList = {
     ),
     ...targetByteRules({
       addedTables: [
-        { step: REVEAL_ADA_FIRST_STEP, table: 'message', kind: 'added', count: 2, why: 'the two delivered EMPATHY_STATEMENT copies' },
-        { step: REVEAL_ADA_FIRST_STEP, table: 'participant_milestone', kind: 'added', count: 1, why: "Bob's empathy_submitted" },
+        {
+          step: REVEAL_ADA_FIRST_STEP,
+          table: 'message',
+          kind: 'added',
+          count: 2,
+          why: 'the two delivered EMPATHY_STATEMENT copies',
+        },
+        {
+          step: REVEAL_ADA_FIRST_STEP,
+          table: 'participant_milestone',
+          kind: 'added',
+          count: 1,
+          why: "Bob's empathy_submitted",
+        },
       ],
     }),
   ],
@@ -181,7 +199,15 @@ export const REVEAL_BOB_FIRST_BYTE_TARGET_ALLOW: AllowList = {
     ...bodyRules(BOB_FIRST_READS, true),
     ...BOB_FIRST_CLOSURES(false),
     subjectDeclineRecord(59, true),
-    byteLabelShift(['steps.13.body.data.records.0.id', 'steps.28.body.data.records.0.id', 'steps.44.body.data.records.0.id', 'steps.59.body.data.records.0.id'], 'consent'),
+    byteLabelShift(
+      [
+        'steps.13.body.data.records.0.id',
+        'steps.28.body.data.records.0.id',
+        'steps.44.body.data.records.0.id',
+        'steps.59.body.data.records.0.id',
+      ],
+      'consent',
+    ),
     byteLabelShift(
       [
         'steps.33.body.data.messages.messages.13.id',
@@ -193,8 +219,20 @@ export const REVEAL_BOB_FIRST_BYTE_TARGET_ALLOW: AllowList = {
     ),
     ...targetByteRules({
       addedTables: [
-        { step: REVEAL_BOB_FIRST_STEP, table: 'message', kind: 'added', count: 2, why: 'the two delivered EMPATHY_STATEMENT copies' },
-        { step: REVEAL_BOB_FIRST_STEP, table: 'consent', kind: 'added', count: 1, why: "the subject's DENIED consent naming the offer" },
+        {
+          step: REVEAL_BOB_FIRST_STEP,
+          table: 'message',
+          kind: 'added',
+          count: 2,
+          why: 'the two delivered EMPATHY_STATEMENT copies',
+        },
+        {
+          step: REVEAL_BOB_FIRST_STEP,
+          table: 'consent',
+          kind: 'added',
+          count: 1,
+          why: "the subject's DENIED consent naming the offer",
+        },
       ],
     }),
   ],

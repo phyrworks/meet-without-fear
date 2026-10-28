@@ -111,11 +111,10 @@ export function validateNeedIsUniversal(need: string): UniversalNeedValidationRe
   const text = cleanVisibleAIText(need).trim();
   if (!text) return { ok: false, warning: 'Need text is empty.' };
 
-  if (OTHER_PERSON_PATTERNS.some((pattern) => pattern.test(text))) {
+  if (OTHER_PERSON_PATTERNS.some(pattern => pattern.test(text))) {
     return {
       ok: false,
-      warning:
-        'This may still be framed around what the other person should do. Reword it toward what matters to you.',
+      warning: 'This may still be framed around what the other person should do. Reword it toward what matters to you.',
     };
   }
 
@@ -123,7 +122,7 @@ export function validateNeedIsUniversal(need: string): UniversalNeedValidationRe
 }
 
 export function withNeedReframingWarning<T extends { need: string }>(
-  need: T
+  need: T,
 ): T & { needsReframing: boolean; reframingWarning?: string } {
   const validation = validateNeedIsUniversal(need.need);
   return {
@@ -165,13 +164,7 @@ export function toIdentifiedNeedDTO(need: IdentifiedNeedRecord | NeedRecord): Id
     lockedAt: lockedAt?.toISOString() ?? null,
     deletedAt: deletedAt?.toISOString() ?? null,
     supersededByNeedId,
-    status: deletedAt
-      ? 'deleted'
-      : supersededByNeedId
-        ? 'superseded'
-        : lockedAt
-          ? 'locked'
-          : 'draft',
+    status: deletedAt ? 'deleted' : supersededByNeedId ? 'superseded' : lockedAt ? 'locked' : 'draft',
     aiConfidence: record.aiConfidence,
     createdAt: record.createdAt.toISOString(),
     needsReframing: warned.needsReframing,
@@ -192,7 +185,7 @@ export async function requireNeedOwner(sessionId: string, userId: string): Promi
  */
 export async function listOwnNeeds(
   participantId: string,
-  opts: { live?: boolean; confirmed?: boolean; notDeleted?: boolean } = {}
+  opts: { live?: boolean; confirmed?: boolean; notDeleted?: boolean } = {},
 ): Promise<NeedRecord[]> {
   return (await prisma.need.findMany({
     where: {
@@ -208,7 +201,7 @@ export async function listOwnNeeds(
 
 function cleanEvidence(evidence: unknown): string[] {
   return (Array.isArray(evidence) ? evidence.filter((entry): entry is string => typeof entry === 'string') : [])
-    .map((entry) => cleanVisibleAIText(entry))
+    .map(entry => cleanVisibleAIText(entry))
     .filter(Boolean);
 }
 
@@ -220,12 +213,12 @@ function cleanEvidence(evidence: unknown): string[] {
 export async function captureProposedNeedsForUser(
   sessionId: string,
   userId: string,
-  needs: CapturedNeedInput[]
+  needs: CapturedNeedInput[],
 ): Promise<CaptureProposedNeedsResult> {
   const participant = await requireNeedOwner(sessionId, userId);
   const capturedAt = new Date();
 
-  await prisma.$transaction(async (tx) => {
+  await prisma.$transaction(async tx => {
     await tx.need.updateMany({
       where: { participantId: participant.id, confirmedAt: null, deletedAt: null },
       data: { deletedAt: capturedAt },
@@ -245,7 +238,7 @@ export async function captureProposedNeedsForUser(
 
   const captured = await listOwnNeeds(participant.id, { notDeleted: true });
   return {
-    needs: captured.map((need) => withNeedReframingWarning(toNeedRecord(need))),
+    needs: captured.map(need => withNeedReframingWarning(toNeedRecord(need))),
     capturedAt,
   };
 }
@@ -254,12 +247,12 @@ export async function captureProposedNeedsForUser(
 export async function captureSingleNeedForUser(
   sessionId: string,
   userId: string,
-  item: CapturedNeedInput
+  item: CapturedNeedInput,
 ): Promise<CaptureSingleNeedResult> {
   const participant = await requireNeedOwner(sessionId, userId);
   const capturedAt = new Date();
 
-  const created = (await prisma.$transaction(async (tx) => {
+  const created = (await prisma.$transaction(async tx => {
     await tx.need.updateMany({
       where: { participantId: participant.id, confirmedAt: null, deletedAt: null },
       data: { deletedAt: capturedAt },

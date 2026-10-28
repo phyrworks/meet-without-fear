@@ -1,4 +1,4 @@
-import { parseMicroTagResponse, ParsedMicroTagResponse } from '../micro-tag-parser';
+import { parseMicroTagResponse } from '../micro-tag-parser';
 
 describe('micro-tag-parser', () => {
   describe('parseMicroTagResponse', () => {
@@ -261,7 +261,7 @@ Hey Shantam. First, let's write a short topic for Darryl so they know what this 
       const result = parseMicroTagResponse(raw);
 
       expect(result.response).toBe(
-        "Hey Shantam. First, let's write a short topic for Darryl so they know what this is about. What's going on?"
+        "Hey Shantam. First, let's write a short topic for Darryl so they know what this is about. What's going on?",
       );
       expect(result.response).not.toContain('<tool_calls>');
       expect(result.response).not.toContain('<invoke');
@@ -385,9 +385,7 @@ That gives you a concrete experiment and a time to revisit it.`;
 
       const result = parseMicroTagResponse(raw);
 
-      expect(result.proposedStrategies).toEqual([
-        'Ceramics class on Tuesday evenings for eight weeks',
-      ]);
+      expect(result.proposedStrategies).toEqual(['Ceramics class on Tuesday evenings for eight weeks']);
     });
 
     it('extracts typed Stage 4 proposal classifications from a hidden block', () => {

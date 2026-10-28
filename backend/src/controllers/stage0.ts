@@ -28,7 +28,7 @@ import { reachMilestone } from '../services/milestone-writer';
 /** When `participantId` signed the compact, or null. */
 async function signedAt(participantId: string): Promise<Date | null> {
   const milestones = (await loadMilestones([participantId])).get(participantId) ?? [];
-  return milestones.find((m) => m.key === 'compact_signed')?.reachedAt ?? null;
+  return milestones.find(m => m.key === 'compact_signed')?.reachedAt ?? null;
 }
 
 /** The caller's participant, or a 404 written to `res`. */
@@ -66,7 +66,7 @@ export async function signCompact(req: Request, res: Response): Promise<void> {
         ErrorCode.VALIDATION_ERROR,
         'Invalid request: agreed must be true',
         400,
-        parseResult.error.issues
+        parseResult.error.issues,
       );
       return;
     }

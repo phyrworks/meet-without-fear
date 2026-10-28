@@ -38,7 +38,7 @@ import {
   TendingPreviewDTO,
   UnaddressedNeedDTO,
 } from '@meet-without-fear/shared';
-import { getPartnerParticipant, resolveParticipant } from './participant-resolver';
+import { getCounterpartParticipant, resolveParticipant } from './participant-resolver';
 import {
   hasMilestone,
   loadAgreements,
@@ -120,8 +120,8 @@ function buildCoverageViews(
   humans: string[],
   visibleProposalIds: Set<string>,
 ): CoverageView[] {
-  const byNeed = new Map(coverage.map((c) => [c.needId, c]));
-  return needs.map((n) => {
+  const byNeed = new Map(coverage.map(c => [c.needId, c]));
+  return needs.map(n => {
     const c = byNeed.get(n.id);
     // Only proposals the viewer may see (spec §1.4 proposal RLS arm; TS-11
     // post-merge, found by choices-hidden-until-shared): the view spans every
@@ -145,13 +145,13 @@ function buildCoverageViews(
 }
 
 function walkthroughStored(dispositions: DispositionRow[], needs: Stage4Need[], me: string): WalkthroughStored {
-  const current = dispositions.find((d) => d.isCurrent);
-  const currentOwner = current ? needs.find((n) => n.id === current.needId)?.ownerParticipantId : undefined;
+  const current = dispositions.find(d => d.isCurrent);
+  const currentOwner = current ? needs.find(n => n.id === current.needId)?.ownerParticipantId : undefined;
   return {
     phase: current && currentOwner ? (currentOwner === me ? 'MY_NEEDS' : 'PARTNER_NEEDS') : undefined,
     currentNeedId: current?.needId,
-    coveredNeedIds: dispositions.filter((d) => d.status === 'COVERED').map((d) => d.needId),
-    skippedNeedIds: dispositions.filter((d) => d.status === 'SKIPPED').map((d) => d.needId),
+    coveredNeedIds: dispositions.filter(d => d.status === 'COVERED').map(d => d.needId),
+    skippedNeedIds: dispositions.filter(d => d.status === 'SKIPPED').map(d => d.needId),
   };
 }
 
@@ -172,14 +172,19 @@ function buildCoverageAudit(
     status: row.coverageStatus,
   }));
   const byStatus = (status: string): CoverageRowDTO[] =>
-    dto.filter((r) => r.status === status).map(({ status: _s, ...r }) => r);
-  return { covered: byStatus('COVERED'), partial: byStatus('PARTIAL'), open: byStatus('OPEN'), updatedAt: iso(updatedAt) };
+    dto.filter(r => r.status === status).map(({ status: _s, ...r }) => r);
+  return {
+    covered: byStatus('COVERED'),
+    partial: byStatus('PARTIAL'),
+    open: byStatus('OPEN'),
+    updatedAt: iso(updatedAt),
+  };
 }
 
 function buildUnaddressedNeeds(rows: CoverageView[], me: string, partner: string | null): UnaddressedNeedDTO[] {
   return rows
-    .filter((row) => row.coverageStatus === 'OPEN')
-    .map((row) => ({
+    .filter(row => row.coverageStatus === 'OPEN')
+    .map(row => ({
       id: row.id,
       label: row.label,
       source: sourceLabel(row.ownerParticipantId, me, partner),
@@ -195,13 +200,13 @@ function buildProposalCard(
   rows: CoverageView[],
   revealPartner: boolean,
 ): ProposalCardDTO {
-  const mine = choices.find((c) => c.proposalId === proposal.id && c.participantId === me);
-  const theirs = partner ? choices.find((c) => c.proposalId === proposal.id && c.participantId === partner) : undefined;
-  const byId = new Map(rows.map((r) => [r.id, r]));
+  const mine = choices.find(c => c.proposalId === proposal.id && c.participantId === me);
+  const theirs = partner ? choices.find(c => c.proposalId === proposal.id && c.participantId === partner) : undefined;
+  const byId = new Map(rows.map(r => [r.id, r]));
   const linked = proposal.needIds
-    .map((id) => byId.get(id))
+    .map(id => byId.get(id))
     .filter((r): r is CoverageView => Boolean(r))
-    .map((r) => ({
+    .map(r => ({
       id: r.id,
       label: r.label,
       coverage: (r.coverageStatus === 'PARTIAL' ? 'PARTIAL' : 'COVERED') as 'COVERED' | 'PARTIAL',
@@ -220,7 +225,7 @@ function buildProposalCard(
     needsAddressed:
       linked.length > 0
         ? linked
-        : proposal.unresolvedNeedLabels.map((label) => ({ label, coverage: 'COVERED' as const })),
+        : proposal.unresolvedNeedLabels.map(label => ({ label, coverage: 'COVERED' as const })),
     duration: proposal.duration,
     measureOfSuccess: proposal.measureOfSuccess,
     status: proposal.status as Stage4ProposalStatus,
@@ -231,7 +236,7 @@ function buildProposalCard(
 
 function proposalMatchesNeed(proposal: ProposalCardDTO, needId: string, needLabel: string): boolean {
   const normalizedLabel = needLabel.toLowerCase();
-  return proposal.needsAddressed.some((need) => {
+  return proposal.needsAddressed.some(need => {
     if (need.id && need.id === needId) return true;
     return need.label.toLowerCase() === normalizedLabel;
   });
@@ -251,15 +256,21 @@ function needStatus(args: {
   return 'not_started';
 }
 
-function defaultCheckInDate(): string {
-  const date = new Date();
-  date.setDate(date.getDate() + 10);
+/**
+ * Today (UTC) + 10 days, as a calendar date. UTC arithmetic throughout: the
+ * local-time setDate it replaced moved the wall clock across a DST change and
+ * landed on the next UTC day (+11d) within ten days before one (TS-12, found
+ * by reflection-never-crosses on 2026-10-27, before the US change on Nov 1).
+ */
+export function defaultCheckInDate(now: Date = new Date()): string {
+  const date = new Date(now.getTime());
+  date.setUTCDate(date.getUTCDate() + 10);
   return date.toISOString().slice(0, 10);
 }
 
 function buildQualityWarnings(proposals: ProposalCardDTO[]): Stage4QualityWarningDTO[] {
   const warnings: Stage4QualityWarningDTO[] = [];
-  for (const proposal of proposals.filter((item) => item.myDecision === Stage4SelectionDecision.WILLING)) {
+  for (const proposal of proposals.filter(item => item.myDecision === Stage4SelectionDecision.WILLING)) {
     const vague =
       !proposal.duration ||
       !proposal.measureOfSuccess ||
@@ -283,14 +294,14 @@ export function walkthroughOrder(
 ): { own: CoverageView[]; partner: CoverageView[]; phase: Stage4WalkthroughPhase; currentNeedId: string | null } {
   const covered = new Set(stored.coveredNeedIds);
   const skipped = new Set(stored.skippedNeedIds);
-  const own = rows.filter((r) => r.ownerParticipantId === me);
-  const partner = rows.filter((r) => r.ownerParticipantId !== me);
-  const ownRemaining = own.find((n) => !covered.has(n.id) && !skipped.has(n.id));
-  const partnerRemaining = partner.find((n) => !covered.has(n.id) && !skipped.has(n.id));
+  const own = rows.filter(r => r.ownerParticipantId === me);
+  const partner = rows.filter(r => r.ownerParticipantId !== me);
+  const ownRemaining = own.find(n => !covered.has(n.id) && !skipped.has(n.id));
+  const partnerRemaining = partner.find(n => !covered.has(n.id) && !skipped.has(n.id));
   const phase = stored.phase ?? (ownRemaining ? 'MY_NEEDS' : partnerRemaining ? 'PARTNER_NEEDS' : 'QUALITY_REVIEW');
   const phaseNeeds = phase === 'PARTNER_NEEDS' ? partner : own;
   const currentNeedId =
-    stored.currentNeedId && phaseNeeds.some((n) => n.id === stored.currentNeedId)
+    stored.currentNeedId && phaseNeeds.some(n => n.id === stored.currentNeedId)
       ? stored.currentNeedId
       : phase === 'MY_NEEDS'
         ? (ownRemaining?.id ?? null)
@@ -327,13 +338,18 @@ function buildWalkthrough(args: {
   const partnerNeeds = partner.map(toDTO);
   const currentNeed =
     phase === 'MY_NEEDS'
-      ? (ownNeeds.find((n) => n.id === currentNeedId) ?? null)
+      ? (ownNeeds.find(n => n.id === currentNeedId) ?? null)
       : phase === 'PARTNER_NEEDS'
-        ? (partnerNeeds.find((n) => n.id === currentNeedId) ?? null)
+        ? (partnerNeeds.find(n => n.id === currentNeedId) ?? null)
         : null;
-  const currentIndex = currentNeed ? Math.max(0, phaseNeeds.findIndex((n) => n.id === currentNeed.id)) : 0;
+  const currentIndex = currentNeed
+    ? Math.max(
+        0,
+        phaseNeeds.findIndex(n => n.id === currentNeed.id),
+      )
+    : 0;
   const forCurrent = currentNeed
-    ? args.cards.filter((p) => proposalMatchesNeed(p, currentNeed.id, currentNeed.label))
+    ? args.cards.filter(p => proposalMatchesNeed(p, currentNeed.id, currentNeed.label))
     : [];
   const group = (
     key: Stage4WalkthroughDTO['proposalGroups'][number]['key'],
@@ -347,16 +363,36 @@ function buildWalkthrough(args: {
           group(
             'partner_may_do',
             'Things your partner may do themselves',
-            forCurrent.filter((p) => p.kind === Stage4ProposalKind.INDIVIDUAL_COMMITMENT && p.sourceLabel === 'PARTNER'),
+            forCurrent.filter(p => p.kind === Stage4ProposalKind.INDIVIDUAL_COMMITMENT && p.sourceLabel === 'PARTNER'),
             true,
           ),
-          group('shared_options', 'Things you could do together', forCurrent.filter((p) => p.kind === Stage4ProposalKind.SHARED_PROPOSAL)),
-          group('your_prior_suggestions', 'Things you already suggested', forCurrent.filter((p) => p.sourceLabel === 'YOU')),
+          group(
+            'shared_options',
+            'Things you could do together',
+            forCurrent.filter(p => p.kind === Stage4ProposalKind.SHARED_PROPOSAL),
+          ),
+          group(
+            'your_prior_suggestions',
+            'Things you already suggested',
+            forCurrent.filter(p => p.sourceLabel === 'YOU'),
+          ),
         ]
       : [
-          group('you_suggested', 'Options you suggested', forCurrent.filter((p) => p.sourceLabel === 'YOU')),
-          group('partner_suggested', 'Options your partner suggested', forCurrent.filter((p) => p.sourceLabel === 'PARTNER')),
-          group('ai_suggested', 'MWF ideas', forCurrent.filter((p) => p.sourceLabel === 'AI')),
+          group(
+            'you_suggested',
+            'Options you suggested',
+            forCurrent.filter(p => p.sourceLabel === 'YOU'),
+          ),
+          group(
+            'partner_suggested',
+            'Options your partner suggested',
+            forCurrent.filter(p => p.sourceLabel === 'PARTNER'),
+          ),
+          group(
+            'ai_suggested',
+            'MWF ideas',
+            forCurrent.filter(p => p.sourceLabel === 'AI'),
+          ),
         ];
   return {
     phase,
@@ -372,7 +408,7 @@ function buildWalkthrough(args: {
 }
 
 export function toAgreementDTO(agreement: AgreementRow, me: string, partner: string | null): AgreementDTO {
-  const myParty = agreement.parties.find((p) => p.participantId === me);
+  const myParty = agreement.parties.find(p => p.participantId === me);
   return {
     id: agreement.id,
     strategyId: agreement.proposalId,
@@ -382,7 +418,7 @@ export function toAgreementDTO(agreement: AgreementRow, me: string, partner: str
     measureOfSuccess: agreement.measureOfSuccess,
     status: agreement.status as AgreementDTO['status'],
     agreedByMe: Boolean(myParty),
-    agreedByPartner: partner ? agreement.parties.some((p) => p.participantId === partner) : false,
+    agreedByPartner: partner ? agreement.parties.some(p => p.participantId === partner) : false,
     agreedAt: iso(myParty?.agreedAt ?? agreement.parties[0]?.agreedAt ?? null),
     followUpDate: iso(agreement.followUpAt),
   };
@@ -424,8 +460,8 @@ function buildTendingPreview(closure: ClosureRow | null, entries: FollowUpRow[])
           summary: next.summary,
         }
       : null,
-    scheduledCount: entries.filter((e) => e.status === 'SCHEDULED').length,
-    openCount: entries.filter((e) => e.status === 'OPEN').length,
+    scheduledCount: entries.filter(e => e.status === 'SCHEDULED').length,
+    openCount: entries.filter(e => e.status === 'OPEN').length,
     passiveReentryAvailable: Boolean(closure),
   };
 }
@@ -437,29 +473,42 @@ const latest = (dates: Array<Date | null | undefined>): Date | null =>
 export async function loadStage4View(sessionId: string, userId: string) {
   const me = await resolveParticipant(sessionId, userId);
   if (!me) throw new Stage4StateNotFoundError();
-  const partner = (await getPartnerParticipant(me.id))?.participantId ?? null;
-  const [proposals, choices, needs, coverage, dispositions, closure, items, agreements, followUps, mySubmitted, partnerSubmitted, humans] =
-    await Promise.all([
-      loadProposals(sessionId, me.id),
-      loadVisibleChoices(sessionId, me.id),
-      loadStage4Needs(sessionId, me.id),
-      loadCoverage(sessionId),
-      loadDispositions(me.id),
-      loadClosure(sessionId),
-      loadClosureItems(sessionId),
-      loadAgreements(sessionId),
-      loadFollowUpsForParticipant(sessionId, me.id),
-      hasMilestone(me.id, 'choices_shared'),
-      partner ? hasMilestone(partner, 'choices_shared') : Promise.resolve(false),
-      presentHumans(sessionId).then((list) => list.map((h) => h.id)),
-    ]);
+  // A read: the partner, or the tombstone of one who left (TS-12, R5).
+  const partner = (await getCounterpartParticipant(me.id))?.participantId ?? null;
+  const [
+    proposals,
+    choices,
+    needs,
+    coverage,
+    dispositions,
+    closure,
+    items,
+    agreements,
+    followUps,
+    mySubmitted,
+    partnerSubmitted,
+    humans,
+  ] = await Promise.all([
+    loadProposals(sessionId, me.id),
+    loadVisibleChoices(sessionId, me.id),
+    loadStage4Needs(sessionId, me.id),
+    loadCoverage(sessionId),
+    loadDispositions(me.id),
+    loadClosure(sessionId),
+    loadClosureItems(sessionId),
+    loadAgreements(sessionId),
+    loadFollowUpsForParticipant(sessionId, me.id),
+    hasMilestone(me.id, 'choices_shared'),
+    partner ? hasMilestone(partner, 'choices_shared') : Promise.resolve(false),
+    presentHumans(sessionId).then(list => list.map(h => h.id)),
+  ]);
   return {
     me: me.id,
     partner,
     proposals,
     choices,
     needs,
-    rows: buildCoverageViews(needs, coverage, choices, humans, new Set(proposals.map((p) => p.id))),
+    rows: buildCoverageViews(needs, coverage, choices, humans, new Set(proposals.map(p => p.id))),
     dispositions,
     closure,
     items,
@@ -482,19 +531,19 @@ export async function getStage4State(sessionId: string, userId: string): Promise
 
 export function buildStage4StateFromView(view: Stage4View): GetStage4StateResponse {
   const { me, partner, proposals, choices, rows, closure, items, agreements, followUps } = view;
-  const mySelections = choices.filter((c) => c.participantId === me);
-  const partnerSelections = choices.filter((c) => c.participantId === partner);
+  const mySelections = choices.filter(c => c.participantId === me);
+  const partnerSelections = choices.filter(c => c.participantId === partner);
   const reveal = view.mySubmitted && view.partnerSubmitted;
-  const active = proposals.filter((p) => p.status === 'ACTIVE');
-  const cards = active.map((p) => buildProposalCard(p, me, partner, choices, rows, reveal));
+  const active = proposals.filter(p => p.status === 'ACTIVE');
+  const cards = active.map(p => buildProposalCard(p, me, partner, choices, rows, reveal));
   const unaddressed = buildUnaddressedNeeds(rows, me, partner);
-  const agreementDTOs = agreements.map((a) => toAgreementDTO(a, me, partner));
-  const declined = new Set(view.dispositions.filter((d) => d.status === 'DECLINED').map((d) => d.needId));
+  const agreementDTOs = agreements.map(a => toAgreementDTO(a, me, partner));
+  const declined = new Set(view.dispositions.filter(d => d.status === 'DECLINED').map(d => d.needId));
   const closureItems: ClosureItems = items;
   const individualIds = new Set(closureItems.individualCommitmentIds);
   const openIds = new Set(closureItems.openNeedIds);
   const coverageUpdatedAt = rows.length
-    ? latest([...view.needs.map((n) => n.sharedAt), ...proposals.map((p) => p.updatedAt), ...choices.map((c) => c.updatedAt)])
+    ? latest([...view.needs.map(n => n.sharedAt), ...proposals.map(p => p.updatedAt), ...choices.map(c => c.updatedAt)])
     : null;
   const selectionDTO = (c: ChoiceRow): Stage4SelectionDTO => ({
     proposalId: c.proposalId,
@@ -507,20 +556,26 @@ export function buildStage4StateFromView(view: Stage4View): GetStage4StateRespon
   return {
     phase: derivePhase({
       closure,
-      hasLiveProposals: proposals.some((p) => p.status !== 'REMOVED'),
+      hasLiveProposals: proposals.some(p => p.status !== 'REMOVED'),
       hasCoverage: rows.length > 0,
       mySelections,
       partnerSelections,
       mySubmitted: view.mySubmitted,
       partnerSubmitted: view.partnerSubmitted,
     }),
-    walkthrough: buildWalkthrough({ rows, cards, me, partner, stored: walkthroughStored(view.dispositions, view.needs, me) }),
+    walkthrough: buildWalkthrough({
+      rows,
+      cards,
+      me,
+      partner,
+      stored: walkthroughStored(view.dispositions, view.needs, me),
+    }),
     inventory: {
-      sharedProposals: cards.filter((p) => p.kind === Stage4ProposalKind.SHARED_PROPOSAL),
-      individualCommitments: cards.filter((p) => p.kind === Stage4ProposalKind.INDIVIDUAL_COMMITMENT),
+      sharedProposals: cards.filter(p => p.kind === Stage4ProposalKind.SHARED_PROPOSAL),
+      individualCommitments: cards.filter(p => p.kind === Stage4ProposalKind.INDIVIDUAL_COMMITMENT),
       unaddressedNeeds: unaddressed,
-      removedProposalCount: proposals.filter((p) => p.status === 'REMOVED').length,
-      updatedAt: iso(latest(proposals.map((p) => p.updatedAt))) ?? new Date(0).toISOString(),
+      removedProposalCount: proposals.filter(p => p.status === 'REMOVED').length,
+      updatedAt: iso(latest(proposals.map(p => p.updatedAt))) ?? new Date(0).toISOString(),
     },
     coverageAudit: buildCoverageAudit(rows, me, partner, declined, coverageUpdatedAt),
     mySelections: mySelections.map(selectionDTO),
@@ -532,13 +587,18 @@ export function buildStage4StateFromView(view: Stage4View): GetStage4StateRespon
           kind: closure.kind as Stage4ClosureKind,
           reason: closure.reason as NonNullable<GetStage4StateResponse['outcome']>['reason'],
           summary: closure.summary,
-          agreements: agreementDTOs.filter((a) => closureItems.agreementIds.includes(a.id)),
+          agreements: agreementDTOs.filter(a => closureItems.agreementIds.includes(a.id)),
           individualCommitments: proposals
-            .filter((p) => individualIds.has(p.id))
-            .map((p) => buildProposalCard(p, me, partner, choices, rows, reveal)),
+            .filter(p => individualIds.has(p.id))
+            .map(p => buildProposalCard(p, me, partner, choices, rows, reveal)),
           openNeeds: rows
-            .filter((r) => openIds.has(r.id))
-            .map((r) => ({ id: r.id, label: r.label, source: sourceLabel(r.ownerParticipantId, me, partner), note: r.note ?? 'Still open' })),
+            .filter(r => openIds.has(r.id))
+            .map(r => ({
+              id: r.id,
+              label: r.label,
+              source: sourceLabel(r.ownerParticipantId, me, partner),
+              note: r.note ?? 'Still open',
+            })),
           closedAt: closure.closedAt.toISOString(),
           checkInAt: closure.checkInAt ? closure.checkInAt.toISOString() : null,
         }

@@ -28,7 +28,12 @@ const T = `ts2_errors_pg_${process.pid}`;
 function run(err: Error) {
   const json = jest.fn();
   const status = jest.fn().mockReturnValue({ json });
-  errorHandler(err, { path: '/x', method: 'POST' } as Request, { status } as unknown as Response, jest.fn() as NextFunction);
+  errorHandler(
+    err,
+    { path: '/x', method: 'POST' } as Request,
+    { status } as unknown as Response,
+    jest.fn() as NextFunction,
+  );
   return { status, json };
 }
 
@@ -52,7 +57,9 @@ describeDb('errorHandler against real Postgres constraint violations', () => {
       `CREATE TABLE ${T} (id int PRIMARY KEY, body text NOT NULL, n int,
          CONSTRAINT ${T}_n_pos CHECK (n > 0), CONSTRAINT ${T}_body_uq UNIQUE (body))`,
     );
-    await prisma.$executeRawUnsafe(`CREATE TABLE ${T}_child (id int PRIMARY KEY, parent int REFERENCES ${T}(id), note text)`);
+    await prisma.$executeRawUnsafe(
+      `CREATE TABLE ${T}_child (id int PRIMARY KEY, parent int REFERENCES ${T}(id), note text)`,
+    );
     await prisma.$executeRawUnsafe(`INSERT INTO ${T} VALUES (1, '${SENTINEL}', 5)`);
   });
 
@@ -88,7 +95,7 @@ describeDb('errorHandler against real Postgres constraint violations', () => {
       trigger: async () => {
         let err: Error | undefined;
         await prisma
-          .$transaction(async (tx) => {
+          .$transaction(async tx => {
             await tx.$executeRawUnsafe(`SET LOCAL lock_timeout = '5s'`);
             await tx.$executeRawUnsafe(
               `ALTER TABLE "User" ADD CONSTRAINT ${T}_user_chk CHECK (email NOT LIKE '%${SENTINEL}%') NOT VALID`,
@@ -132,35 +139,38 @@ describeDb('errorHandler against real Postgres constraint violations', () => {
     },
   ];
 
-  describe.each(['development', 'production'])('NODE_ENV=%s', (env) => {
-    it.each(cases)('$name: body and logs carry no row values', async ({ trigger, status, code, constraint, sentinelOnError }) => {
-      const err = await trigger();
-      expect(err).toBeInstanceOf(Error);
-      if (sentinelOnError) {
-        // Guard against a vacuous pass: the row really is on the error object.
-        expect(util.inspect(err, { depth: 20 })).toContain(SENTINEL);
-      }
+  describe.each(['development', 'production'])('NODE_ENV=%s', env => {
+    it.each(cases)(
+      '$name: body and logs carry no row values',
+      async ({ trigger, status, code, constraint, sentinelOnError }) => {
+        const err = await trigger();
+        expect(err).toBeInstanceOf(Error);
+        if (sentinelOnError) {
+          // Guard against a vacuous pass: the row really is on the error object.
+          expect(util.inspect(err, { depth: 20 })).toContain(SENTINEL);
+        }
 
-      process.env.NODE_ENV = env; // not 'test': exercise the logging branch
-      const spies = (['error', 'warn', 'info', 'debug'] as const).map((level) =>
-        jest.spyOn(logger, level).mockImplementation((() => logger) as never),
-      );
-      const { status: st, json } = run(err);
+        process.env.NODE_ENV = env; // not 'test': exercise the logging branch
+        const spies = (['error', 'warn', 'info', 'debug'] as const).map(level =>
+          jest.spyOn(logger, level).mockImplementation((() => logger) as never),
+        );
+        const { status: st, json } = run(err);
 
-      expect(st).toHaveBeenCalledWith(status);
-      const body = json.mock.calls[0][0];
-      expect(body.error.code).toBe(code);
-      expect(body.error.message).toContain(constraint);
-      expect(JSON.stringify(body)).not.toContain(SENTINEL);
+        expect(st).toHaveBeenCalledWith(status);
+        const body = json.mock.calls[0][0];
+        expect(body.error.code).toBe(code);
+        expect(body.error.message).toContain(constraint);
+        expect(JSON.stringify(body)).not.toContain(SENTINEL);
 
-      const logged = spies.flatMap((s) => s.mock.calls);
-      expect(logged.length).toBeGreaterThan(0);
-      expect(JSON.stringify(logged)).not.toContain(SENTINEL);
-      // The logged message is the scrubbed one, not err.message verbatim.
-      for (const [message] of logged) {
-        expect(String(message)).not.toContain(SENTINEL);
-        expect(String(message)).not.toMatch(/Failing row|Key \(/);
-      }
-    });
+        const logged = spies.flatMap(s => s.mock.calls);
+        expect(logged.length).toBeGreaterThan(0);
+        expect(JSON.stringify(logged)).not.toContain(SENTINEL);
+        // The logged message is the scrubbed one, not err.message verbatim.
+        for (const [message] of logged) {
+          expect(String(message)).not.toContain(SENTINEL);
+          expect(String(message)).not.toMatch(/Failing row|Key \(/);
+        }
+      },
+    );
   });
 });

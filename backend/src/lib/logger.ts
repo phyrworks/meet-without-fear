@@ -22,7 +22,7 @@ const isTest = process.env.NODE_ENV === 'test';
  * Custom format that injects request context (turnId, sessionId, userId, requestId)
  * into every log entry when available.
  */
-const contextFormat = winston.format((info) => {
+const contextFormat = winston.format(info => {
   const ctx = getRequestContext();
   if (ctx) {
     if (ctx.turnId) info.turnId = ctx.turnId;
@@ -77,9 +77,7 @@ export const logger = winston.createLogger({
       ? winston.format.combine(
           winston.format.colorize(),
           winston.format.printf(({ timestamp, level, message, ...meta }) => {
-            const metaStr = Object.keys(meta).length
-              ? ' ' + JSON.stringify(meta)
-              : '';
+            const metaStr = Object.keys(meta).length ? ' ' + JSON.stringify(meta) : '';
             return `${timestamp} ${level}: ${message}${metaStr}`;
           }),
         )

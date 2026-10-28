@@ -29,7 +29,7 @@ interface NeedPromptContext {
  * Build a conversational prompt for checking in on a specific need.
  */
 export function buildNeedCheckInPrompt(context: NeedPromptContext): string {
-  const { needName, category, currentScore, previousScore, daysSinceLastCheckIn  } = context;
+  const { needName, category, currentScore, previousScore, daysSinceLastCheckIn } = context;
 
   const categoryContext = getCategoryContext(category);
   const scoreContext = getScoreContext(currentScore, previousScore);
@@ -71,7 +71,7 @@ START by asking about their current experience with ${needName}. Keep it simple 
  */
 export function buildBaselineAssessmentPrompt(
   needsToAssess: { id: number; name: string; category: NeedsCategory; description: string }[],
-  assessedSoFar: number
+  assessedSoFar: number,
 ): string {
   const totalNeeds = 19;
   const progress = `${assessedSoFar}/${totalNeeds}`;
@@ -109,7 +109,7 @@ After all 19 needs are rated, congratulate them briefly and explain that they ca
  * Build prompt for suggesting which need to check in on.
  */
 export function buildNeedSuggestionPrompt(
-  needsWithScores: { name: string; score: number; daysSinceCheckIn: number }[]
+  needsWithScores: { name: string; score: number; daysSinceCheckIn: number }[],
 ): string {
   const lowNeeds = needsWithScores.filter(n => n.score <= 1);
   const staleNeeds = needsWithScores.filter(n => n.daysSinceCheckIn > 14);
@@ -168,7 +168,8 @@ function getScoreContext(currentScore: number | null, previousScore: number | nu
   }
 
   const previous = scoreLabels[previousScore] || 'unknown';
-  const trend = currentScore > previousScore ? 'improved' : currentScore < previousScore ? 'declined' : 'stayed the same';
+  const trend =
+    currentScore > previousScore ? 'improved' : currentScore < previousScore ? 'declined' : 'stayed the same';
 
   return `Last check-in: ${current} (${currentScore}/2). Previously: ${previous}. Trend: ${trend}.`;
 }
@@ -207,37 +208,37 @@ function getTimeContext(daysSinceLastCheckIn: number | null): string {
 export function getNeedOpeningQuestion(needName: string): string {
   const questions: Record<string, string> = {
     // Physical
-    'Rest': 'How has your sleep and rest been feeling lately?',
-    'Nourishment': 'How are you feeling about how you\'ve been eating and drinking?',
-    'Movement': 'Have you been able to move your body in ways that feel good?',
-    'Safety': 'How safe and secure do you feel in your day-to-day life?',
-    'Comfort': 'How comfortable is your physical environment right now?',
+    Rest: 'How has your sleep and rest been feeling lately?',
+    Nourishment: "How are you feeling about how you've been eating and drinking?",
+    Movement: 'Have you been able to move your body in ways that feel good?',
+    Safety: 'How safe and secure do you feel in your day-to-day life?',
+    Comfort: 'How comfortable is your physical environment right now?',
 
     // Emotional
-    'Peace': 'How calm or anxious have you been feeling?',
-    'Joy': 'What\'s been bringing you joy lately, if anything?',
-    'Acceptance': 'How accepted do you feel - by others, by yourself?',
-    'Expression': 'Have you been able to express what you\'re really feeling?',
-    'Validation': 'Do you feel like your experiences and feelings are being acknowledged?',
+    Peace: 'How calm or anxious have you been feeling?',
+    Joy: "What's been bringing you joy lately, if anything?",
+    Acceptance: 'How accepted do you feel - by others, by yourself?',
+    Expression: "Have you been able to express what you're really feeling?",
+    Validation: 'Do you feel like your experiences and feelings are being acknowledged?',
 
     // Mental
-    'Clarity': 'How clear or foggy has your thinking been?',
-    'Stimulation': 'Are you getting enough mental challenge and engagement?',
-    'Learning': 'Have you been learning or growing in ways that matter to you?',
-    'Autonomy': 'How much control do you feel over your choices right now?',
-    'Creativity': 'Have you had space to create or express yourself creatively?',
+    Clarity: 'How clear or foggy has your thinking been?',
+    Stimulation: 'Are you getting enough mental challenge and engagement?',
+    Learning: 'Have you been learning or growing in ways that matter to you?',
+    Autonomy: 'How much control do you feel over your choices right now?',
+    Creativity: 'Have you had space to create or express yourself creatively?',
 
     // Social
-    'Connection': 'How connected do you feel to the people in your life?',
-    'Belonging': 'Do you feel like you belong somewhere, with some group or community?',
-    'Recognition': 'Do you feel seen and appreciated for who you are?',
-    'Intimacy': 'How\'s the depth and closeness in your important relationships?',
+    Connection: 'How connected do you feel to the people in your life?',
+    Belonging: 'Do you feel like you belong somewhere, with some group or community?',
+    Recognition: 'Do you feel seen and appreciated for who you are?',
+    Intimacy: "How's the depth and closeness in your important relationships?",
 
     // Spiritual
-    'Purpose': 'How connected do you feel to a sense of purpose or meaning?',
-    'Contribution': 'Do you feel like you\'re making a meaningful contribution?',
-    'Transcendence': 'Have you had moments of feeling connected to something larger than yourself?',
-    'Gratitude': 'How much gratitude have you been feeling lately?',
+    Purpose: 'How connected do you feel to a sense of purpose or meaning?',
+    Contribution: "Do you feel like you're making a meaningful contribution?",
+    Transcendence: 'Have you had moments of feeling connected to something larger than yourself?',
+    Gratitude: 'How much gratitude have you been feeling lately?',
   };
 
   return questions[needName] || `How has your sense of ${needName.toLowerCase()} been lately?`;

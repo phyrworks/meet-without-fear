@@ -3,9 +3,21 @@
  *
  * Gathers context from across all Inner Work features to enable
  * pattern recognition, contradiction detection, and insights.
+ *
+ * Target shape (TS-12): needs, gratitude, meditation and people are the
+ * user's feature documents (spec §1.7), reduced in memory — the DISTINCT ON
+ * over NeedScore is latestNeedScores. Active conflicts are the user's own
+ * present participants; the partner is named by the user's nickname for them
+ * or the co-participant's display name (never the partner's user row), and
+ * the stage comes from the stage shim (v_current_stage).
  */
 
 import { prisma } from '../lib/prisma';
+import { readFeature } from './feature-state';
+import { latestNeedScores } from './needs-reduction';
+import { getCoParticipants } from './participant-resolver';
+import { loadCurrentStages } from './stage-shim';
+import { needById } from '@meet-without-fear/shared';
 import {
   CrossFeatureContextDTO,
   ContradictionDTO,
@@ -63,7 +75,7 @@ function subDays(date: Date, days: number): Date {
  */
 export async function gatherCrossFeatureContext(
   userId: string,
-  options?: { includePatterns?: boolean }
+  options?: { includePatterns?: boolean },
 ): Promise<GetCrossFeatureContextResponse> {
   // Parallel queries for efficiency
   const [needsData, gratitudeData, meditationData, conflictData, peopleData] = await Promise.all([
@@ -76,7 +88,7 @@ export async function gatherCrossFeatureContext(
 
   const context: CrossFeatureContextDTO = {
     // Needs
-    needsScores: needsData.needsScores.map((n) => ({
+    needsScores: needsData.needsScores.map(n => ({
       needId: n.needId,
       name: n.name,
       score: n.score,
@@ -127,66 +139,53 @@ export async function gatherCrossFeatureContext(
 // ============================================================================
 
 async function fetchNeedsContext(userId: string): Promise<NeedsContext> {
-  const state = await prisma.needsAssessmentState.findUnique({
-    where: { userId },
-  });
+  const needs = await readFeature(userId, 'needs_assessment');
 
-  if (!state?.baselineCompleted) {
+  if (!needs.state.baselineCompleted) {
     return { needsScores: [], lowNeeds: [], highNeeds: [] };
   }
 
-  // Get latest scores for each need
-  const latestScores = await prisma.$queryRaw<
-    { needId: number; name: string; score: number; lastUpdated: Date }[]
-  >`
-    SELECT DISTINCT ON (ns."needId")
-      ns."needId" as "needId",
-      n.name,
-      ns.score,
-      ns."createdAt" as "lastUpdated"
-    FROM "NeedScore" ns
-    JOIN "Need" n ON n.id = ns."needId"
-    WHERE ns."userId" = ${userId}
-    ORDER BY ns."needId", ns."createdAt" DESC
-  `;
+  // Latest score for each need (was a DISTINCT ON)
+  const latestScores = latestNeedScores(needs.scores).map(s => ({
+    needId: s.needId,
+    name: needById(s.needId)?.name ?? `Need ${s.needId}`,
+    score: s.score,
+    lastUpdated: new Date(s.createdAt),
+  }));
 
   return {
     needsScores: latestScores,
-    lowNeeds: latestScores.filter((s) => s.score <= 1).map((s) => s.name),
-    highNeeds: latestScores.filter((s) => s.score === 2).map((s) => s.name),
+    lowNeeds: latestScores.filter(s => s.score <= 1).map(s => s.name),
+    highNeeds: latestScores.filter(s => s.score === 2).map(s => s.name),
   };
 }
 
 async function fetchGratitudeContext(userId: string): Promise<GratitudeContext> {
   const thirtyDaysAgo = subDays(new Date(), 30);
 
-  const entries = await prisma.gratitudeEntry.findMany({
-    where: {
-      userId,
-      createdAt: { gte: thirtyDaysAgo },
-    },
-    orderBy: { createdAt: 'desc' },
-    take: 50,
-  });
+  const entries = (await readFeature(userId, 'gratitude')).entries
+    .filter(e => new Date(e.createdAt) >= thirtyDaysAgo)
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+    .slice(0, 50);
 
   // Aggregate themes
   const themeCounts = new Map<string, number>();
-  entries.forEach((e) => {
-    (e.extractedThemes as string[]).forEach((t) => {
+  entries.forEach(e => {
+    (e.extractedThemes as string[]).forEach(t => {
       themeCounts.set(t, (themeCounts.get(t) || 0) + 1);
     });
   });
 
   // Aggregate people
   const personCounts = new Map<string, number>();
-  entries.forEach((e) => {
-    (e.extractedPeople as string[]).forEach((p) => {
+  entries.forEach(e => {
+    (e.extractedPeople as string[]).forEach(p => {
       personCounts.set(p, (personCounts.get(p) || 0) + 1);
     });
   });
 
   // Calculate sentiment trend
-  const sentiments = entries.filter((e) => e.sentimentScore !== null).map((e) => e.sentimentScore!);
+  const sentiments = entries.filter(e => e.sentimentScore !== null).map(e => e.sentimentScore!);
   const avgSentiment = sentiments.length > 0 ? sentiments.reduce((a, b) => a + b, 0) / sentiments.length : 0;
 
   return {
@@ -202,32 +201,27 @@ async function fetchGratitudeContext(userId: string): Promise<GratitudeContext> 
 }
 
 async function fetchMeditationContext(userId: string): Promise<MeditationContext> {
-  const stats = await prisma.meditationStats.findUnique({
-    where: { userId },
-  });
+  const meditation = await readFeature(userId, 'meditation');
+  const stats = meditation.stats;
 
   const thirtyDaysAgo = subDays(new Date(), 30);
   const fifteenDaysAgo = subDays(new Date(), 15);
 
   // Get recent sessions for focus areas
-  const recentSessions = await prisma.meditationSession.findMany({
-    where: {
-      userId,
-      completed: true,
-      startedAt: { gte: thirtyDaysAgo },
-    },
-    orderBy: { startedAt: 'desc' },
-    take: 20,
-    select: { focusArea: true, startedAt: true },
-  });
+  const recentSessions = meditation.sessions
+    .filter(s => s.completed && new Date(s.startedAt) >= thirtyDaysAgo)
+    .sort((a, b) => b.startedAt.localeCompare(a.startedAt))
+    .slice(0, 20)
+    .map(s => ({ focusArea: s.focusArea, startedAt: new Date(s.startedAt) }));
 
   // Extract unique focus areas
-  const focusAreas = [...new Set(recentSessions.filter((s) => s.focusArea).map((s) => s.focusArea!))];
+  const focusAreas = [...new Set(recentSessions.filter(s => s.focusArea).map(s => s.focusArea!))];
 
   // Calculate frequency trend
-  const recentCount = recentSessions.filter((s) => s.startedAt >= fifteenDaysAgo).length;
-  const olderCount = recentSessions.filter((s) => s.startedAt < fifteenDaysAgo).length;
-  const trend = recentCount > olderCount * 1.2 ? 'increasing' : recentCount < olderCount * 0.8 ? 'decreasing' : 'stable';
+  const recentCount = recentSessions.filter(s => s.startedAt >= fifteenDaysAgo).length;
+  const olderCount = recentSessions.filter(s => s.startedAt < fifteenDaysAgo).length;
+  const trend =
+    recentCount > olderCount * 1.2 ? 'increasing' : recentCount < olderCount * 0.8 ? 'decreasing' : 'stable';
 
   return {
     meditationStreak: stats?.currentStreak ?? 0,
@@ -237,52 +231,30 @@ async function fetchMeditationContext(userId: string): Promise<MeditationContext
 }
 
 async function fetchConflictContext(userId: string): Promise<ConflictContext> {
-  // Find relationships where user is a member
-  const memberships = await prisma.relationshipMember.findMany({
-    where: { userId },
-    select: { relationshipId: true },
-  });
-
-  if (memberships.length === 0) {
-    return { activeConflicts: [], recentConflictThemes: [] };
-  }
-
-  const relationshipIds = memberships.map((m) => m.relationshipId);
-
-  // Get active sessions for those relationships
-  const activeSessions = await prisma.session.findMany({
-    where: {
-      relationshipId: { in: relationshipIds },
-      status: { in: ['CREATED', 'ACTIVE', 'WAITING'] },
-    },
-    include: {
-      relationship: {
-        include: {
-          members: {
-            include: {
-              user: { select: { firstName: true, name: true } },
-            },
-          },
-        },
-      },
-      stageProgress: {
-        orderBy: { stage: 'desc' },
-        take: 1,
-      },
+  // The user's present participants in live sessions
+  const mine = await prisma.participant.findMany({
+    where: { userId, leftAt: null, session: { status: { in: ['CREATED', 'INVITED', 'ACTIVE'] } } },
+    select: {
+      id: true,
+      session: { select: { relationship: { select: { members: { where: { userId }, select: { nickname: true } } } } } },
     },
     take: 5,
   });
 
+  if (mine.length === 0) {
+    return { activeConflicts: [], recentConflictThemes: [] };
+  }
+
+  const stages = await loadCurrentStages(mine.map(p => p.id));
   const activeConflicts: { partnerName: string; stage: number; topic?: string }[] = [];
 
-  for (const session of activeSessions) {
-    // Find the other member (partner)
-    const partner = session.relationship.members.find((m) => m.userId !== userId);
-    const partnerName = partner?.user?.firstName || partner?.user?.name || 'Partner';
+  for (const p of mine) {
+    const partner = (await getCoParticipants(p.id)).find(c => c.kind === 'human' && !c.leftAt);
+    const partnerName = p.session.relationship.members[0]?.nickname || partner?.displayName || 'Partner';
 
     activeConflicts.push({
       partnerName,
-      stage: session.stageProgress[0]?.stage ?? 1,
+      stage: stages.get(p.id)?.stage || 1,
       topic: undefined, // Could extract from session data
     });
   }
@@ -299,25 +271,24 @@ async function fetchConflictContext(userId: string): Promise<ConflictContext> {
 
 async function fetchPeopleContext(userId: string): Promise<PeopleContext> {
   // Get frequently mentioned people
-  const people = await prisma.person.findMany({
-    where: { userId },
-    orderBy: [
-      { mentionCountInnerThoughts: 'desc' },
-      { mentionCountGratitude: 'desc' },
-      { mentionCountConflict: 'desc' },
-    ],
-    take: 10,
-  });
+  const people = [...(await readFeature(userId, 'people')).persons]
+    .sort(
+      (a, b) =>
+        b.mentionCountInnerThoughts - a.mentionCountInnerThoughts ||
+        b.mentionCountGratitude - a.mentionCountGratitude ||
+        b.mentionCountConflict - a.mentionCountConflict,
+    )
+    .slice(0, 10);
 
-  const frequentlyMentioned = people.slice(0, 5).map((p) => ({
+  const frequentlyMentioned = people.slice(0, 5).map(p => ({
     name: p.name,
     contexts: getTopContexts(p),
   }));
 
   // Find people in conflicts but rarely in gratitude
   const rarelyMentionedInGratitude = people
-    .filter((p) => p.mentionCountConflict > 0 && p.mentionCountGratitude < 2)
-    .map((p) => p.name);
+    .filter(p => p.mentionCountConflict > 0 && p.mentionCountGratitude < 2)
+    .map(p => p.name);
 
   return {
     frequentlyMentioned,
@@ -339,10 +310,10 @@ function getTopContexts(person: {
   ];
 
   return contexts
-    .filter((c) => c.count > 0)
+    .filter(c => c.count > 0)
     .sort((a, b) => b.count - a.count)
     .slice(0, 2)
-    .map((c) => c.name);
+    .map(c => c.name);
 }
 
 // ============================================================================
@@ -353,10 +324,10 @@ async function detectContradictions(userId: string, context: CrossFeatureContext
   const contradictions: ContradictionDTO[] = [];
 
   // Check for high needs but negative patterns
-  for (const need of context.needsScores.filter((n) => n.score === 2)) {
+  for (const need of context.needsScores.filter(n => n.score === 2)) {
     // Look for this need in low mentions in gratitude or high in conflict
     const hasConflictMentions = context.frequentlyMentioned.some(
-      (p) => p.contexts.includes('Conflict') && !p.contexts.includes('Gratitude')
+      p => p.contexts.includes('Conflict') && !p.contexts.includes('Gratitude'),
     );
 
     if (hasConflictMentions && ['trust', 'respect', 'connection', 'belonging'].includes(need.name.toLowerCase())) {
@@ -374,9 +345,8 @@ async function detectContradictions(userId: string, context: CrossFeatureContext
   // Check gratitude patterns vs partner conflicts
   for (const conflict of context.activeConflicts) {
     const gratitudeCount =
-      context.gratitudeFrequencyByPerson.find((p) =>
-        p.name.toLowerCase().includes(conflict.partnerName.toLowerCase())
-      )?.count || 0;
+      context.gratitudeFrequencyByPerson.find(p => p.name.toLowerCase().includes(conflict.partnerName.toLowerCase()))
+        ?.count || 0;
 
     if (gratitudeCount < 2 && context.gratitudeFrequencyByPerson.length > 3) {
       contradictions.push({
@@ -418,15 +388,15 @@ async function detectCorrelations(userId: string, context: CrossFeatureContextDT
 
   for (const highNeed of context.highNeeds) {
     const themes = needThemeMapping[highNeed.toLowerCase()] || [];
-    const matchingThemes = context.recentGratitudeThemes.filter((t) =>
-      themes.some((theme) => t.toLowerCase().includes(theme))
+    const matchingThemes = context.recentGratitudeThemes.filter(t =>
+      themes.some(theme => t.toLowerCase().includes(theme)),
     );
 
     if (matchingThemes.length >= 2) {
       correlations.push({
         type: 'gratitude_needs',
         description: `Gratitude themes (${matchingThemes.join(', ')}) connect to ${highNeed} being well met`,
-        dataPoints: matchingThemes.map((t) => ({ x: t, y: highNeed })),
+        dataPoints: matchingThemes.map(t => ({ x: t, y: highNeed })),
         strength: matchingThemes.length / 5,
       });
     }
@@ -441,8 +411,8 @@ async function detectGaps(userId: string, context: CrossFeatureContextDTO): Prom
 
   // Partner with conflicts but no gratitude
   for (const conflict of context.activeConflicts) {
-    const hasGratitude = context.gratitudeFrequencyByPerson.some((p) =>
-      p.name.toLowerCase().includes(conflict.partnerName.toLowerCase())
+    const hasGratitude = context.gratitudeFrequencyByPerson.some(p =>
+      p.name.toLowerCase().includes(conflict.partnerName.toLowerCase()),
     );
 
     if (!hasGratitude) {
@@ -455,7 +425,7 @@ async function detectGaps(userId: string, context: CrossFeatureContextDTO): Prom
   }
 
   // Low need without recent check-in
-  for (const need of context.needsScores.filter((n) => n.score <= 1)) {
+  for (const need of context.needsScores.filter(n => n.score <= 1)) {
     const lastUpdated = new Date(need.lastUpdated);
     if (lastUpdated < twoWeeksAgo) {
       gaps.push({
@@ -513,24 +483,24 @@ export function formatCrossFeatureContextForPrompt(response: GetCrossFeatureCont
   // Active conflicts
   if (context.activeConflicts.length > 0) {
     sections.push(`ACTIVE CONFLICTS:
-${context.activeConflicts.map((c) => `- Working through something with ${c.partnerName} (Stage ${c.stage})`).join('\n')}`);
+${context.activeConflicts.map(c => `- Working through something with ${c.partnerName} (Stage ${c.stage})`).join('\n')}`);
   }
 
   // Key people
   if (context.frequentlyMentioned.length > 0) {
     sections.push(`KEY PEOPLE:
-${context.frequentlyMentioned.map((p) => `- ${p.name} (mentioned in: ${p.contexts.join(', ')})`).join('\n')}`);
+${context.frequentlyMentioned.map(p => `- ${p.name} (mentioned in: ${p.contexts.join(', ')})`).join('\n')}`);
   }
 
   // Detected patterns (use carefully)
   if (patterns.contradictions.length > 0) {
     sections.push(`PATTERNS TO POTENTIALLY EXPLORE (use judgment on when to surface):
-${patterns.contradictions.map((c) => `- ${c.description}`).join('\n')}`);
+${patterns.contradictions.map(c => `- ${c.description}`).join('\n')}`);
   }
 
   if (patterns.gaps.length > 0) {
     sections.push(`GAPS TO CONSIDER:
-${patterns.gaps.map((g) => `- ${g.suggestion}`).join('\n')}`);
+${patterns.gaps.map(g => `- ${g.suggestion}`).join('\n')}`);
   }
 
   if (sections.length === 0) {

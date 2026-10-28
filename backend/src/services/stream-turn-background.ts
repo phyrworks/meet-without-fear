@@ -15,12 +15,11 @@
  */
 
 import { logger } from '../lib/logger';
-import { prisma } from '../lib/prisma';
+import { loadOwnNotableFacts } from './participant-memory';
 import { isMockLLMEnabled } from '../lib/bedrock';
 import { embedSessionContent } from './embedding';
 import { updateSessionSummary } from './conversation-summarizer';
 import { runPartnerSessionClassifier, ensureFactIds, CategorizedFactWithId } from './partner-session-classifier';
-import { resolveParticipant } from './participant-resolver';
 
 export interface StreamTurnBackgroundParams {
   requestId: string;
@@ -53,9 +52,7 @@ export function scheduleStreamTurnBackgroundJobs(params: StreamTurnBackgroundPar
   // Per fact-ledger architecture, we embed at session level after summary updates
   updateSessionSummary(sessionId, userId, turnId)
     .then(() => embedSessionContent(sessionId, userId, turnId))
-    .catch((err: unknown) =>
-      logger.warn(`[sendMessageStream:${requestId}] Failed to update summary/embedding:`, err)
-    );
+    .catch((err: unknown) => logger.warn(`[sendMessageStream:${requestId}] Failed to update summary/embedding:`, err));
 
   // Run partner session classifier (fire-and-forget)
   // This extracts notable facts and detects memory intents
@@ -63,18 +60,12 @@ export function scheduleStreamTurnBackgroundJobs(params: StreamTurnBackgroundPar
   (async () => {
     try {
       // Fetch existing facts for the classifier: the participant's own
-      // ai_memory NOTABLE_FACTS document (`{ facts: [...] }`; TS-9).
-      const participant = await resolveParticipant(sessionId, userId);
-      const memory = participant
-        ? await prisma.aiMemory.findUnique({
-            where: { participantId_kind: { participantId: participant.id, kind: 'NOTABLE_FACTS' } },
-            select: { doc: true },
-          })
-        : null;
+      // ai_memory NOTABLE_FACTS document (`{ facts: [...] }`; TS-9/TS-12).
+      const storedFacts = await loadOwnNotableFacts(sessionId, userId);
       // Extract existing facts with IDs for diff-based updates
       // Legacy facts (without IDs) get UUIDs assigned via ensureFactIds
       const existingFactsWithIds: CategorizedFactWithId[] = (() => {
-        const facts = (memory?.doc as { facts?: unknown } | null)?.facts;
+        const facts = storedFacts;
         if (!facts) return [];
         if (Array.isArray(facts)) {
           // Check if it's CategorizedFact[] or CategorizedFactWithId[] format
@@ -84,9 +75,7 @@ export function scheduleStreamTurnBackgroundJobs(params: StreamTurnBackgroundPar
           }
           // Old format: string[] - convert to CategorizedFactWithId
           return ensureFactIds(
-            facts
-              .filter((f): f is string => typeof f === 'string')
-              .map((f) => ({ category: 'Unknown', fact: f }))
+            facts.filter((f): f is string => typeof f === 'string').map(f => ({ category: 'Unknown', fact: f })),
           );
         }
         return [];
@@ -94,8 +83,8 @@ export function scheduleStreamTurnBackgroundJobs(params: StreamTurnBackgroundPar
 
       const result = await runPartnerSessionClassifier({
         userMessage: content,
-        conversationHistory: history.slice(-5).map((m) => ({
-          role: m.role === 'USER' ? 'user' as const : 'assistant' as const,
+        conversationHistory: history.slice(-5).map(m => ({
+          role: m.role === 'USER' ? ('user' as const) : ('assistant' as const),
           content: m.content,
         })),
         sessionId,

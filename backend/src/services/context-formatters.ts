@@ -46,7 +46,9 @@ function renderResumptionSection(bundle: ContextBundle): string | null {
     lines.push('Weave a gentle re-orientation into your first response before picking up where they left off.');
   } else {
     lines.push(`Status: Just entered Stage ${stage}. Awaiting your orientation.`);
-    lines.push('Welcome them back without manufacturing unresolved tension — they reached a clean point before the gap.');
+    lines.push(
+      'Welcome them back without manufacturing unresolved tension — they reached a clean point before the gap.',
+    );
   }
   return lines.join('\n');
 }
@@ -145,10 +147,7 @@ export function formatContextForPromptLegacy(bundle: ContextBundle): string {
   return result;
 }
 
-export function formatContextForPrompt(
-  bundle: ContextBundle,
-  options?: ContextFormattingOptions
-): string {
+export function formatContextForPrompt(bundle: ContextBundle, options?: ContextFormattingOptions): string {
   const parts: string[] = [];
 
   const intensity = bundle.emotionalThread.currentIntensity;
@@ -209,14 +208,14 @@ export function formatContextForPrompt(
   if (bundle.userMemories) {
     const allMemories = [...bundle.userMemories.global, ...bundle.userMemories.session];
     if (allMemories.length > 0) {
-      const memoryLines = allMemories.slice(0, 5).map((memory) => `- ${memory.content}`);
+      const memoryLines = allMemories.slice(0, 5).map(memory => `- ${memory.content}`);
       parts.push('--- User preferences to honor ---');
       parts.push(...memoryLines);
     }
   }
 
   if (bundle.notableFacts && bundle.notableFacts.length > 0) {
-    const factLines = bundle.notableFacts.slice(0, 5).map((fact) => `- ${fact.fact}`);
+    const factLines = bundle.notableFacts.slice(0, 5).map(fact => `- ${fact.fact}`);
     parts.push('--- Notable facts ---');
     parts.push(...factLines);
   }
@@ -224,12 +223,16 @@ export function formatContextForPrompt(
   if (bundle.topicFrame?.text) {
     parts.push('--- Conversation topic ---');
     parts.push(`Confirmed topic: "${bundle.topicFrame.text}"`);
-    parts.push('Use this as orientation only. Stage gates still come from StageProgress and explicit product lifecycle state.');
+    parts.push(
+      'Use this as orientation only. Stage gates still come from StageProgress and explicit product lifecycle state.',
+    );
   }
 
   if (bundle.priorStageSummaries?.stages.length) {
     parts.push('--- Prior stage summaries (current user lane only) ---');
-    parts.push('Use this only for continuity. Stage gates still come from StageProgress and explicit product lifecycle state.');
+    parts.push(
+      'Use this only for continuity. Stage gates still come from StageProgress and explicit product lifecycle state.',
+    );
     for (const summary of bundle.priorStageSummaries.stages) {
       parts.push(renderPriorStageSummary(summary));
     }
@@ -237,7 +240,9 @@ export function formatContextForPrompt(
 
   if (bundle.consentedShareState?.items.length) {
     parts.push('--- Consented partner/share state ---');
-    parts.push('Use this only for orientation. Stage gates still come from StageProgress and empathy/share/validation lifecycle state.');
+    parts.push(
+      'Use this only for orientation. Stage gates still come from StageProgress and empathy/share/validation lifecycle state.',
+    );
     for (const item of bundle.consentedShareState.items) {
       parts.push(renderConsentedShareStateItem(item));
     }
@@ -245,7 +250,9 @@ export function formatContextForPrompt(
 
   if (bundle.currentStageHistory?.messages.length) {
     parts.push(`--- Current Stage ${bundle.currentStageHistory.stage} history (current user lane only) ---`);
-    parts.push('Use this only for continuity. Stage gates still come from StageProgress and explicit product lifecycle state.');
+    parts.push(
+      'Use this only for continuity. Stage gates still come from StageProgress and explicit product lifecycle state.',
+    );
     for (const message of bundle.currentStageHistory.messages) {
       parts.push(`- ${renderStageHistoryRole(message.role)}: ${truncateStageHistoryContent(message.content)}`);
     }
@@ -268,10 +275,12 @@ export function formatContextForPrompt(
     parts.push(options.milestoneContext);
   }
 
-  return parts.filter((part) => part.trim().length > 0).join('\n');
+  return parts.filter(part => part.trim().length > 0).join('\n');
 }
 
-function renderStageHistoryRole(role: NonNullable<ContextBundle['currentStageHistory']>['messages'][number]['role']): string {
+function renderStageHistoryRole(
+  role: NonNullable<ContextBundle['currentStageHistory']>['messages'][number]['role'],
+): string {
   switch (role) {
     case 'user':
       return 'User';
@@ -292,10 +301,10 @@ function truncateStageHistoryContent(content: string): string {
   return `${compact.slice(0, STAGE_HISTORY_CONTENT_LIMIT - 1)}…`;
 }
 
-function renderPriorStageSummary(
-  summary: NonNullable<ContextBundle['priorStageSummaries']>['stages'][number]
-): string {
-  const status = summary.lifecycleStatus ? ` (${summary.lifecycleStatus}${summary.completedAt ? `; completed ${summary.completedAt}` : ''})` : '';
+function renderPriorStageSummary(summary: NonNullable<ContextBundle['priorStageSummaries']>['stages'][number]): string {
+  const status = summary.lifecycleStatus
+    ? ` (${summary.lifecycleStatus}${summary.completedAt ? `; completed ${summary.completedAt}` : ''})`
+    : '';
   const lines = [
     `Stage ${summary.stage}${status}: ${summary.userTurnCount} user turn(s), ${summary.assistantTurnCount} AI turn(s).`,
   ];
@@ -314,7 +323,7 @@ function truncatePriorStageContent(content: string): string {
 }
 
 function renderConsentedShareStateItem(
-  item: NonNullable<ContextBundle['consentedShareState']>['items'][number]
+  item: NonNullable<ContextBundle['consentedShareState']>['items'][number],
 ): string {
   const direction = item.direction === 'user_to_partner' ? 'You shared' : 'Partner shared';
   const kind = item.kind === 'empathy_attempt' ? 'empathy attempt' : 'additional context';
@@ -325,7 +334,9 @@ function renderConsentedShareStateItem(
     item.validatedAt ? `validated ${item.validatedAt}` : null,
   ].filter(Boolean);
   const lifecycle = [item.lifecycleStatus, ...timestamps].join('; ');
-  const content = item.content ? `: ${truncateShareStateContent(item.content)}` : ' (content not yet visible to this user)';
+  const content = item.content
+    ? `: ${truncateShareStateContent(item.content)}`
+    : ' (content not yet visible to this user)';
 
   return `- ${direction} ${kind} (${lifecycle})${content}`;
 }

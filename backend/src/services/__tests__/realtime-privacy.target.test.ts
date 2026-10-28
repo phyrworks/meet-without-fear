@@ -64,6 +64,11 @@ const FORBIDDEN_KEYS = [
   'shareOffer',
   'validationFeedback',
   'messagesByUserId',
+  // TS-12 (work-a39h.11.26, work-t4zp): the need itself, and the private AI reply
+  'need',
+  'oldNeed',
+  'message',
+  'proposedEmpathyStatement',
 ];
 
 describeTarget('Stage 2 realtime payloads (I1): what each participant receives', () => {
@@ -126,7 +131,8 @@ describeTarget('Stage 2 realtime payloads (I1): what each participant receives',
       }
     }
     for (const p of mockPush) {
-      for (const k of FORBIDDEN_KEYS) expect({ event: p.event, key: k, present: k in p.data }).toEqual({ event: p.event, key: k, present: false });
+      for (const k of FORBIDDEN_KEYS)
+        expect({ event: p.event, key: k, present: k in p.data }).toEqual({ event: p.event, key: k, present: false });
     }
   };
 
@@ -157,7 +163,8 @@ describeTarget('Stage 2 realtime payloads (I1): what each participant receives',
       label: 'draft as bob',
       actor: bob,
       tables: scope,
-      call: agent => agent.post(`/api/v1/sessions/${sid}/empathy/draft`).send({ content: BOB_EMPATHY, readyToShare: true }),
+      call: agent =>
+        agent.post(`/api/v1/sessions/${sid}/empathy/draft`).send({ content: BOB_EMPATHY, readyToShare: true }),
     });
     expect(draft.status).toBe(200);
     take();
@@ -209,13 +216,14 @@ describeTarget('Stage 2 realtime payloads (I1): what each participant receives',
     expect(wire.filter(w => w.name === 'empathy.share_suggestion' && w.data.forUserId === ada.id).length).toBe(1);
   });
 
-  it("accepting the offer: Ada learns context arrived, with no text and no status DTO on the wire", async () => {
+  it('accepting the offer: Ada learns context arrived, with no text and no status DTO on the wire', async () => {
     const accept = await harness.step({
       label: 'accept as bob',
       actor: bob,
       tables: scope,
       asyncBoundary: true,
-      call: agent => agent.post(`/api/v1/sessions/${harness.sessionId}/reconciler/share-offer/respond`).send({ action: 'accept' }),
+      call: agent =>
+        agent.post(`/api/v1/sessions/${harness.sessionId}/reconciler/share-offer/respond`).send({ action: 'accept' }),
     });
     expect(accept.status).toBe(200);
     await quiesce();
@@ -226,5 +234,105 @@ describeTarget('Stage 2 realtime payloads (I1): what each participant receives',
     const bobView = viewOf(bob.id, wire);
     expect(adaView).toContain('session:empathy.context_shared');
     expect(bobView).not.toContain('session:empathy.context_shared');
+  });
+
+  // ---------------------------------------------------------------------------
+  // TS-12: the TS-9 / TS-11 leftovers (work-t4zp, work-a39h.11.26), R36
+  // ---------------------------------------------------------------------------
+
+  it('TS-12: partner.session_viewed / share_tab_viewed carry presence only; the partner gets an addressed content-free ping', async () => {
+    // Mobile: UnifiedSessionScreen.tsx onSessionEvent handles both on the
+    // SESSION channel (presence), and empathy.status_updated (addressed,
+    // invalidates the empathy status) — no user-channel handler exists for them.
+    const sid = harness.sessionId;
+    for (const [path, event] of [
+      ['viewed', 'partner.session_viewed'],
+      ['share-tab-viewed', 'partner.share_tab_viewed'],
+    ] as const) {
+      const r = await harness.step({
+        label: `${path} as ada`,
+        actor: ada,
+        tables: scope,
+        asyncBoundary: true,
+        call: agent => agent.post(`/api/v1/sessions/${sid}/${path}`).send({}),
+      });
+      expect(r.status).toBe(200);
+      await quiesce();
+      const wire = take();
+      await wireChecks(wire);
+      const viewed = wire.filter(w => w.name === event);
+      expect(viewed).toHaveLength(1);
+      expect(Object.keys(viewed[0].data).sort()).toEqual(
+        ['activeAt', 'excludeUserId', 'presenceVisible', 'sessionId', 'timestamp', 'viewedAt'].sort(),
+      );
+      expect(viewOf(bob.id, wire)).toContain(`session:${event}`);
+      expect(viewOf(ada.id, wire)).not.toContain(`session:${event}`);
+      // Bob — whose delivered content Ada's view may mark seen — gets an addressed status ping, content-free
+      const pings = wire.filter(w => w.name === 'empathy.status_updated');
+      expect(pings.map(p => p.data.forUserId)).toEqual([bob.id]);
+      expect(pings.every(p => !('empathyStatus' in p.data))).toBe(true);
+    }
+  });
+
+  it("TS-12: need events carry ids only on the session channel (Bob's need never reaches Ada's device)", async () => {
+    // Mobile: UnifiedSessionScreen.tsx onSessionEvent `need.*` (session channel;
+    // patches the cache only from a payload need, now refetches the owner's needs).
+    const { applyStage3NeedActions } = await import('../stream-turn-actions');
+    const ctx = await import('../../lib/request-context');
+    const PROBE = 'PROBE_TS12_NEED Bob needs his effort to be noticed without asking';
+    const metadata = {
+      proposedNeed: { need: PROBE, category: 'RECOGNITION', evidence: ['PROBE_TS12_EVIDENCE he said it twice'] },
+    } as never;
+    await ctx.runWithContext(
+      { turnId: 't', requestId: 'r', startTime: Date.now(), userId: bob.id, sessionId: harness.sessionId },
+      async () => {
+        await applyStage3NeedActions({
+          requestId: 'ts12',
+          sessionId: harness.sessionId,
+          userId: bob.id,
+          currentStage: 3,
+          refiningNeedContext: null,
+          userContent: 'x',
+          aiResponseText: 'y',
+          metadata,
+        });
+      },
+    );
+    await quiesce();
+    const wire = take();
+    const [needRow] = await rows<{ id: string }>(`SELECT id FROM need WHERE label LIKE 'PROBE_TS12_NEED%'`);
+    expect(needRow).toBeDefined();
+    await wireChecks(wire);
+    const captured = wire.filter(w => w.name === 'need.captured');
+    expect(captured).toHaveLength(1);
+    expect(captured[0].data.forUserId).toBe(bob.id);
+    expect(JSON.stringify(wire)).not.toContain('PROBE_TS12');
+  });
+
+  it('TS-12: message.ai_response carries no reply text and no proposed statement on the session channel', async () => {
+    // Mobile: useRealtime.ts `message.ai_response` (session channel) →
+    // UnifiedSessionScreen onAIResponse, which now refetches the conversation when no message rides along.
+    const { publishMessageAIResponse } = await import('../realtime');
+    await publishMessageAIResponse(
+      harness.sessionId,
+      bob.id,
+      {
+        id: 'm-ts12',
+        sessionId: harness.sessionId,
+        senderId: null,
+        role: 'AI',
+        content: 'PROBE_TS12_AI_REPLY only Bob should read this',
+        stage: 3,
+        timestamp: new Date().toISOString(),
+      } as never,
+      { offerFeelHeardCheck: true, proposedEmpathyStatement: 'PROBE_TS12_PROPOSED statement' },
+    );
+    await quiesce();
+    const wire = take();
+    await wireChecks(wire);
+    const ai = wire.filter(w => w.name === 'message.ai_response');
+    expect(ai).toHaveLength(1);
+    expect(ai[0].data).toMatchObject({ forUserId: bob.id, messageId: 'm-ts12', offerFeelHeardCheck: true });
+    expect(JSON.stringify(wire)).not.toContain('PROBE_TS12');
   });
 });

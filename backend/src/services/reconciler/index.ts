@@ -30,7 +30,13 @@
 export { checkAttempts, hasContextAlreadyBeenShared } from './circuit-breaker';
 
 // Analysis
-export { analyzeEmpathyGap, loadRecentSubjectStage2Turns, runReconciler, persistAnalysis, supersedeCurrentResult } from './analysis';
+export {
+  analyzeEmpathyGap,
+  loadRecentSubjectStage2Turns,
+  runReconciler,
+  persistAnalysis,
+  supersedeCurrentResult,
+} from './analysis';
 
 // Sharing
 export {

@@ -30,43 +30,7 @@ import {
   TARGET_MESSAGE_STAGE_RULE,
   TARGET_USER_NAME_RULE,
 } from './common';
-import type { AllowList, AllowRule, PendingClusterRule, RankShift, RefusedStepRule } from './types';
-
-/**
- * Ruling R31: the author's full read includes reads of clusters not yet on
- * this branch, which answer 500 on the target until they land. The leak
- * probes still scan them; their bodies (an error envelope) cannot carry a
- * probe. Delete each entry when its cluster lands (a listed read answering
- * 200 fails).
- *
- * Ruling R37: only status and the error body are blurred. A carried timestamp
- * that the 500 shifts in its step's changes is pinned here, by step and path
- * (`rankShifts`), per scenario.
- *
- * TS-11 post-merge round: the TS-11 entries (needs, needs comparison, stage4,
- * strategies, agreements, tending, tending history) are deleted — those reads
- * answer 200 on the target now — and with them the `stage4` read's
- * `user.created_at` rank shift (it existed only because the 500 carried none
- * of the 200 body's instants).
- */
-const PENDING_READS: PendingClusterRule['reads'] = [
-  { read: 'emotions', owner: 'TS-12' },
-  { read: 'inner thoughts', owner: 'TS-12' },
-  { read: 'inner thoughts list', owner: 'TS-12' },
-  { read: 'inner work list', owner: 'TS-12' },
-  { read: 'knowledge base recent', owner: 'TS-12' },
-  { read: 'knowledge base themes', owner: 'TS-12' },
-];
-
-export const r6r7PendingCluster = (shifts: Partial<Record<string, RankShift[]>> = {}): PendingClusterRule => ({
-  kind: 'pendingCluster',
-  at: 'steps',
-  mustMatch: true,
-  reads: PENDING_READS.map(r => (shifts[r.read] ? { ...r, rankShifts: shifts[r.read] } : r)),
-  why:
-    'ruling R31: these reads belong to TS-11 (needs, repair, follow-up) and TS-12 (reflection, wellbeing), which are ' +
-    'not on this branch; on the target they answer 500 until their cluster lands. Ruling R37: rank shifts pinned.',
-});
+import type { AllowList, AllowRule, RefusedStepRule } from './types';
 
 /**
  * Fix round 1, m1: on the target Bob cannot save a validation-feedback draft
@@ -99,7 +63,6 @@ const bodyRules = (concept: boolean): AllowRule[] => [
   TARGET_COMPACT_SIGNED_MASK,
   TARGET_CONSENT_TARGET_ID_RULE,
   R6_REFUSED_UNREVEALED_DRAFT,
-  r6r7PendingCluster(),
   TARGET_ROUND_KEYS_RULE,
   ...authorAnalysisClosed({ empathyStatus: [8], reconcilerStatus: [12], reconcilerRun: [32], summary: [14], concept }),
   ...mockTurnIndex(33, concept, 'ada'),
@@ -122,7 +85,15 @@ export const AUTHOR_SEES_STATUS_ONLY_BYTE_TARGET_ALLOW: AllowList = {
     ...bodyRules(false),
     byteLabelShift(['steps.16.body.data.records.0.id'], 'consent'),
     ...targetByteRules({
-      addedTables: [{ step: 33, table: 'draft', kind: 'changed', count: 1, why: 'the mock response’s proposed statement (mockTurnIndex)' }],
+      addedTables: [
+        {
+          step: 33,
+          table: 'draft',
+          kind: 'changed',
+          count: 1,
+          why: 'the mock response’s proposed statement (mockTurnIndex)',
+        },
+      ],
     }),
   ],
 };

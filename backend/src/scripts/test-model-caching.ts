@@ -118,17 +118,26 @@ Strategy: [brief]
 Then write the user-facing response (plain text, no tags).`;
 
 const MESSAGES = [
-  { role: 'user' as const, content: 'My partner and I keep fighting about money. She got promoted and now acts like she makes all the decisions.' },
-  { role: 'assistant' as const, content: 'That sounds frustrating — feeling like the balance shifted when her role changed. What does that look like day to day?' },
-  { role: 'user' as const, content: 'She questions everything I spend. Even small stuff like coffee. It makes me feel like a child.' },
+  {
+    role: 'user' as const,
+    content:
+      'My partner and I keep fighting about money. She got promoted and now acts like she makes all the decisions.',
+  },
+  {
+    role: 'assistant' as const,
+    content:
+      'That sounds frustrating — feeling like the balance shifted when her role changed. What does that look like day to day?',
+  },
+  {
+    role: 'user' as const,
+    content: 'She questions everything I spend. Even small stuff like coffee. It makes me feel like a child.',
+  },
 ];
 
 type SystemBlock = { type: 'text'; text: string; cache_control?: { type: 'ephemeral' } };
 
 async function testModel(client: AnthropicBedrock, modelId: string, label: string) {
-  const system: SystemBlock[] = [
-    { type: 'text', text: SYSTEM_PROMPT, cache_control: { type: 'ephemeral' as const } },
-  ];
+  const system: SystemBlock[] = [{ type: 'text', text: SYSTEM_PROMPT, cache_control: { type: 'ephemeral' as const } }];
 
   // Conversation with cache_control on second-to-last message
   const messages = MESSAGES.map((m, i) => {
@@ -151,17 +160,27 @@ async function testModel(client: AnthropicBedrock, modelId: string, label: strin
       max_tokens: 256,
       system,
       messages,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- the Bedrock SDK param types lag the API (cached system blocks)
     } as any);
 
-    const u1 = r1.usage as any;
-    console.log(`    input=${u1.input_tokens} cache_read=${u1.cache_read_input_tokens ?? 0} cache_write=${u1.cache_creation_input_tokens ?? 0}`);
+    const u1 = r1.usage as {
+      input_tokens?: number;
+      cache_read_input_tokens?: number;
+      cache_creation_input_tokens?: number;
+    };
+    console.log(
+      `    input=${u1.input_tokens} cache_read=${u1.cache_read_input_tokens ?? 0} cache_write=${u1.cache_creation_input_tokens ?? 0}`,
+    );
 
     // Call 2: SAME request — should produce a cache READ if caching works
     // Add one more user message to simulate next turn
     const messages2 = [
       ...MESSAGES,
-      { role: 'assistant' as const, content: (r1.content[0] as any).text?.substring(0, 100) || 'I hear you.' },
-      { role: 'user' as const, content: 'Yeah, and when I bring it up she says I\'m being irresponsible. But I\'m not.' },
+      {
+        role: 'assistant' as const,
+        content: (r1.content[0] as { text?: string }).text?.substring(0, 100) || 'I hear you.',
+      },
+      { role: 'user' as const, content: "Yeah, and when I bring it up she says I'm being irresponsible. But I'm not." },
     ];
 
     const messages2Formatted = messages2.map((m, i) => {
@@ -180,9 +199,14 @@ async function testModel(client: AnthropicBedrock, modelId: string, label: strin
       max_tokens: 256,
       system,
       messages: messages2Formatted,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- the Bedrock SDK param types lag the API (cached system blocks)
     } as any);
 
-    const u2 = r2.usage as any;
+    const u2 = r2.usage as {
+      input_tokens?: number;
+      cache_read_input_tokens?: number;
+      cache_creation_input_tokens?: number;
+    };
     const cacheRead = u2.cache_read_input_tokens ?? 0;
     const cacheWrite = u2.cache_creation_input_tokens ?? 0;
     console.log(`    input=${u2.input_tokens} cache_read=${cacheRead} cache_write=${cacheWrite}`);
@@ -190,9 +214,10 @@ async function testModel(client: AnthropicBedrock, modelId: string, label: strin
     const cacheWorked = cacheRead > 0;
     console.log(`  Result: ${cacheWorked ? '✅ CACHING WORKS' : '❌ NO CACHE READS'}`);
     return { modelId, label, cacheWorked, error: null };
-  } catch (err: any) {
-    console.log(`  ❌ ERROR: ${err.message}`);
-    return { modelId, label, cacheWorked: false, error: err.message };
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.log(`  ❌ ERROR: ${message}`);
+    return { modelId, label, cacheWorked: false, error: message };
   }
 }
 
@@ -209,7 +234,7 @@ async function main() {
   console.log('╚═══════════════════════════════════════════════════╝');
 
   const client = new AnthropicBedrock({ awsRegion: AWS_REGION });
-  const results: Array<{ modelId: string; label: string; cacheWorked: boolean; error: any }> = [];
+  const results: Array<{ modelId: string; label: string; cacheWorked: boolean; error: string | null }> = [];
 
   for (const model of MODELS) {
     const result = await testModel(client, model.id, model.label);

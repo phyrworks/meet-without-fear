@@ -4,7 +4,7 @@ async function main() {
   if (!process.argv.includes('--i-understand-this-deletes-everything')) {
     console.error(
       'Refusing to run without --i-understand-this-deletes-everything flag.\n' +
-      'This script TRUNCATEs every application table. Set DATABASE_URL explicitly.',
+        'This script TRUNCATEs every application table. Set DATABASE_URL explicitly.',
     );
     process.exit(1);
   }
@@ -25,7 +25,7 @@ async function main() {
   }
 
   const names = rows.map((r: { tablename: string }) => r.tablename);
-  const quoted = names.map((n) => `"${n}"`).join(', ');
+  const quoted = names.map(n => `"${n}"`).join(', ');
   console.log(`Truncating ${rows.length} tables: ${names.join(', ')}`);
 
   await prisma.$executeRawUnsafe(`TRUNCATE TABLE ${quoted} RESTART IDENTITY CASCADE`);
@@ -33,7 +33,7 @@ async function main() {
 }
 
 main()
-  .catch((err) => {
+  .catch(err => {
     console.error(err);
     process.exit(1);
   })

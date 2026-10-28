@@ -18,11 +18,7 @@ const router = Router();
  * Deletes users with emails matching *@e2e.test pattern.
  * Cascades to related data through Prisma's referential actions.
  */
-export async function cleanupE2EUsers(
-  req: Request,
-  res: Response,
-  next: NextFunction
-): Promise<void> {
+export async function cleanupE2EUsers(req: Request, res: Response, next: NextFunction): Promise<void> {
   // Only allow when E2E mode is enabled
   if (process.env.E2E_AUTH_BYPASS !== 'true') {
     res.status(403).json({
@@ -38,7 +34,7 @@ export async function cleanupE2EUsers(
       where: { email: { endsWith: '@e2e.test' } },
       select: { id: true },
     });
-    const e2eUserIds = e2eUsers.map((u) => u.id);
+    const e2eUserIds = e2eUsers.map(u => u.id);
 
     if (e2eUserIds.length === 0) {
       res.status(200).json({
@@ -59,7 +55,7 @@ export async function cleanupE2EUsers(
       },
       select: { id: true },
     });
-    const e2eRelationshipIds = e2eRelationships.map((r) => r.id);
+    const e2eRelationshipIds = e2eRelationships.map(r => r.id);
 
     // Step 3: Delete sessions linked to those relationships
     // Session cascade (onDelete: Cascade) handles all children:
@@ -94,7 +90,7 @@ export async function cleanupE2EUsers(
       select: { id: true },
     });
     if (orphanedRelationships.length > 0) {
-      const orphanRelIds = orphanedRelationships.map((r) => r.id);
+      const orphanRelIds = orphanedRelationships.map(r => r.id);
       // Delete sessions under orphaned relationships first
       const orphanSessionResult = await prisma.session.deleteMany({
         where: { relationshipId: { in: orphanRelIds } },
@@ -106,9 +102,29 @@ export async function cleanupE2EUsers(
       deletedRelationships += orphanRelResult.count;
     }
 
-    // Step 6: Delete the E2E users themselves
-    // User cascade handles user-owned children:
-    // RelationshipMember, InnerWorkSession, NeedScore, Person, etc.
+    // Step 6: Delete the E2E users themselves. E2E TOOLING ONLY (behind
+    // E2E_AUTH_BYPASS): production never hard-deletes a user — account
+    // deletion tombstones it (app.anonymize_user_account; spec §7). Every FK to
+    // `user` is RESTRICT on the target, so the synthetic users' own U-class rows
+    // go first (their sessions, participants and invitations went with the
+    // relationships above).
+    const e2eUser = { userId: { in: e2eUserIds } };
+    await prisma.$transaction([
+      prisma.reflection.deleteMany({ where: e2eUser }),
+      prisma.featureState.deleteMany({ where: e2eUser }),
+      prisma.userMemory.deleteMany({ where: e2eUser }),
+      prisma.userDevice.deleteMany({ where: e2eUser }),
+      prisma.userPreferences.deleteMany({ where: e2eUser }),
+      prisma.userKey.deleteMany({ where: e2eUser }),
+      prisma.aiMemory.deleteMany({ where: e2eUser }),
+      prisma.reminder.deleteMany({ where: e2eUser }),
+      prisma.relationshipMember.deleteMany({ where: e2eUser }),
+      prisma.participant.deleteMany({ where: e2eUser }),
+      prisma.invitation.updateMany({
+        where: { acceptedByUserId: { in: e2eUserIds } },
+        data: { acceptedByUserId: null },
+      }),
+    ]);
     const userResult = await prisma.user.deleteMany({
       where: { email: { endsWith: '@e2e.test' } },
     });
@@ -138,11 +154,7 @@ router.post('/cleanup', cleanupE2EUsers);
  * Returns 400 if email doesn't end in @e2e.test
  * Returns 403 if E2E_AUTH_BYPASS is not true
  */
-export async function seedE2EUser(
-  req: Request,
-  res: Response,
-  next: NextFunction
-): Promise<void> {
+export async function seedE2EUser(req: Request, res: Response, next: NextFunction): Promise<void> {
   // Only allow when E2E mode is enabled
   if (process.env.E2E_AUTH_BYPASS !== 'true') {
     res.status(403).json({
@@ -194,10 +206,11 @@ export async function seedE2EUser(
     // Create user with e2e_ prefixed clerkId
     const user = await prisma.user.upsert({
       where: { email: userEmail },
-      update: { name: userName },
+      // name is generated from first/last (spec §1.7): the whole name goes in first_name
+      update: { firstName: userName, lastName: null },
       create: {
         email: userEmail,
-        name: userName,
+        firstName: userName,
         clerkId: `e2e_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
       },
     });
@@ -229,11 +242,7 @@ router.post('/seed', seedE2EUser);
  * Returns 400 if validation fails.
  * Returns 403 if E2E_AUTH_BYPASS is not true.
  */
-export async function seedE2ESession(
-  req: Request,
-  res: Response,
-  next: NextFunction
-): Promise<void> {
+export async function seedE2ESession(req: Request, res: Response, next: NextFunction): Promise<void> {
   // Only allow when E2E mode is enabled
   if (process.env.E2E_AUTH_BYPASS !== 'true') {
     res.status(403).json({
@@ -313,11 +322,7 @@ router.post('/seed-session', seedE2ESession);
  *   user: { email: string, name: string }
  * }
  */
-export async function seedE2EInnerThoughts(
-  req: Request,
-  res: Response,
-  next: NextFunction
-): Promise<void> {
+export async function seedE2EInnerThoughts(req: Request, res: Response, next: NextFunction): Promise<void> {
   if (process.env.E2E_AUTH_BYPASS !== 'true') {
     res.status(403).json({
       success: false,
@@ -347,24 +352,25 @@ export async function seedE2EInnerThoughts(
 
     const baseUrl = process.env.E2E_APP_BASE_URL || 'http://localhost:8081';
 
-    const result = await prisma.$transaction(async (tx) => {
+    const result = await prisma.$transaction(async tx => {
+      // user.name is generated from first/last (spec §1.7): the whole name goes in first_name
       const userRecord = await tx.user.upsert({
         where: { email: user.email },
-        update: { name: user.name },
+        update: { firstName: user.name, lastName: null },
         create: {
           email: user.email,
-          name: user.name,
+          firstName: user.name,
           clerkId: `e2e_inner_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
-          lastMoodIntensity: 5,
         },
       });
 
-      const session = await tx.innerWorkSession.create({
+      const session = await tx.reflection.create({
         data: {
           userId: userRecord.id,
           title: 'Repair patterns after conflict',
           theme: 'Relationship repair',
-          summary: 'The reflection identified a need for a short pause before repair conversations and a clearer opening sentence.',
+          summary:
+            'The reflection identified a need for a short pause before repair conversations and a clearer opening sentence.',
           status: 'COMPLETED',
           distilledAt: new Date(),
           messages: {
@@ -450,11 +456,7 @@ router.post('/seed-inner-thoughts', seedE2EInnerThoughts);
  * Returns 400 if validation fails.
  * Returns 403 if E2E_AUTH_BYPASS is not true.
  */
-export async function triggerE2EReconciler(
-  req: Request,
-  res: Response,
-  next: NextFunction
-): Promise<void> {
+export async function triggerE2EReconciler(req: Request, res: Response, next: NextFunction): Promise<void> {
   // Only allow when E2E mode is enabled
   if (process.env.E2E_AUTH_BYPASS !== 'true') {
     res.status(403).json({

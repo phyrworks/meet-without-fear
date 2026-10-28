@@ -5,13 +5,19 @@
  * - GET /knowledge-base/topics - Sessions grouped by theme tag
  * - GET /knowledge-base/topics/:tag - Chronological timeline for a given theme
  * - GET /knowledge-base/themes - Recurring themes sorted by frequency
+ *
+ * Target shape (TS-12): reflections are `reflection`, takeaways `takeaway`,
+ * links `takeaway_link` (composite key: a link's id is `<source>.<target>`),
+ * themes are `v_reflection_theme`. Everything is the caller's own
+ * (reflection.user_id = me, spec §1.6). Semantic search is disabled until the
+ * takeaway embeddings are rebuilt app-side — TODO(D8).
  */
 
 import { Request, Response } from 'express';
 import { prisma } from '../lib/prisma';
+import type { Prisma } from '../generated/prisma/client';
 import { getUser } from '../middleware/auth';
 import { asyncHandler, NotFoundError, ValidationError } from '../middleware/errors';
-import { searchTakeaways } from '../services/embedding';
 import { mapTakeawayToDTO } from '../services/distillation';
 import type {
   ApiResponse,
@@ -38,27 +44,62 @@ import type {
 // Helpers
 // ============================================================================
 
+const TAKEAWAY_WITH_DATE = {
+  include: { reflection: { select: { createdAt: true } } },
+} as const;
+
+type TakeawayRow = Prisma.TakeawayGetPayload<Record<string, never>>;
+type TakeawayWithDate = Prisma.TakeawayGetPayload<typeof TAKEAWAY_WITH_DATE>;
+
+/** A link's public id: the composite key (`takeaway_link` has no id column). */
+export function linkIdOf(link: { sourceId: string; targetId: string }): string {
+  return `${link.sourceId}.${link.targetId}`;
+}
+
+function parseLinkId(linkId: string): { sourceId: string; targetId: string } | null {
+  const [sourceId, targetId, extra] = linkId.split('.');
+  if (!sourceId || !targetId || extra !== undefined) return null;
+  return { sourceId, targetId };
+}
+
+/** A takeaway the caller owns (through its reflection), or null. */
+function ownTakeaway(userId: string, takeawayId: string) {
+  return prisma.takeaway.findFirst({
+    where: { id: takeawayId, reflection: { userId } },
+    ...TAKEAWAY_WITH_DATE,
+  });
+}
+
 /**
- * Maps a session (with takeaways) to a TopicSessionEntryDTO.
+ * Maps a reflection (with takeaways) to a TopicSessionEntryDTO.
  */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
 function mapSessionToTopicEntry(session: {
   id: string;
   title: string | null;
   createdAt: Date;
-  takeaways: any[];
+  takeaways: TakeawayRow[];
 }): TopicSessionEntryDTO {
   return {
     sessionId: session.id,
     title: session.title,
     createdAt: session.createdAt.toISOString(),
-    takeaways: session.takeaways.map((t) => ({
+    takeaways: session.takeaways.map(t => ({
       id: t.id,
       content: t.content,
       theme: t.theme,
-      type: t.type ?? 'INSIGHT',
-      resolved: t.resolved ?? false,
+      type: t.type,
+      resolved: t.resolvedAt !== null,
     })),
+  };
+}
+
+function linkedTakeawayOf(t: TakeawayWithDate): TakeawayLinkDTO['linkedTakeaway'] {
+  return {
+    id: t.id,
+    content: t.content,
+    theme: t.theme,
+    type: t.type,
+    sessionDate: t.reflection.createdAt.toISOString(),
   };
 }
 
@@ -75,7 +116,7 @@ function mapSessionToTopicEntry(session: {
 export const listTopics = asyncHandler(async (req: Request, res: Response) => {
   const user = getUser(req);
 
-  const sessions = await prisma.innerWorkSession.findMany({
+  const sessions = await prisma.reflection.findMany({
     where: {
       userId: user.id,
       status: { not: 'ARCHIVED' },
@@ -94,8 +135,8 @@ export const listTopics = asyncHandler(async (req: Request, res: Response) => {
     const tag = session.theme!; // guaranteed non-null by where clause
     const entry = mapSessionToTopicEntry(session);
 
-    if (topicMap.has(tag)) {
-      const existing = topicMap.get(tag)!;
+    const existing = topicMap.get(tag);
+    if (existing) {
       existing.sessionCount += 1;
       existing.takeawayCount += session.takeaways.length;
       // Track the most recent updatedAt as lastActivity
@@ -115,9 +156,7 @@ export const listTopics = asyncHandler(async (req: Request, res: Response) => {
   }
 
   // Sort groups by lastActivity descending (most recent first)
-  const topics = Array.from(topicMap.values()).sort((a, b) =>
-    b.lastActivity.localeCompare(a.lastActivity)
-  );
+  const topics = Array.from(topicMap.values()).sort((a, b) => b.lastActivity.localeCompare(a.lastActivity));
 
   const response: ApiResponse<ListTopicsResponse> = {
     success: true,
@@ -137,7 +176,7 @@ export const getTopicTimeline = asyncHandler(async (req: Request, res: Response)
   // CRITICAL: always decode to handle spaces and special characters
   const tag = decodeURIComponent(req.params.tag);
 
-  const sessions = await prisma.innerWorkSession.findMany({
+  const sessions = await prisma.reflection.findMany({
     where: {
       userId: user.id,
       theme: tag,
@@ -160,31 +199,37 @@ export const getTopicTimeline = asyncHandler(async (req: Request, res: Response)
   res.json(response);
 });
 
+/** A theme recurs once this many of the user's reflections carry it (the old threshold, unchanged). */
+export const RECURRING_THEME_MIN_REFLECTIONS = 3;
+
 /**
  * GET /knowledge-base/themes
- * Returns recurring themes for the user, sorted by sessionCount descending
- * (most frequently recurring themes first). Only themes with 3+ sessions are
- * stored (enforced by the background-classifier service).
+ * Recurring themes for the user from `v_reflection_theme` (spec §4; replaces
+ * RecurringTheme), sorted by count descending. Only themes on 3+ reflections
+ * are recurring (the old background threshold). The view stores no LLM
+ * summary: `summary` is empty and `summaryAt` is the theme's latest activity.
  */
 export const listRecurringThemes = asyncHandler(async (req: Request, res: Response) => {
   const user = getUser(req);
 
-  const themes = await prisma.recurringTheme.findMany({
-    where: { userId: user.id },
-    orderBy: { sessionCount: 'desc' },
-  });
+  const themes = await prisma.$queryRaw<
+    Array<{ theme: string; reflection_count: number; latest_updated_at: Date }>
+  >`SELECT theme, reflection_count::int AS reflection_count, latest_updated_at
+    FROM v_reflection_theme
+    WHERE user_id = ${user.id}::uuid AND reflection_count >= ${RECURRING_THEME_MIN_REFLECTIONS}
+    ORDER BY reflection_count DESC, latest_updated_at DESC, theme`;
 
   const response: ApiResponse<ListRecurringThemesResponse> = {
     success: true,
     data: {
       themes: themes.map(
         (t): RecurringThemeDTO => ({
-          tag: t.tag,
-          sessionCount: t.sessionCount,
-          summary: t.summary,
-          summaryAt: t.summaryAt.toISOString(),
-          updatedAt: t.updatedAt.toISOString(),
-        })
+          tag: t.theme,
+          sessionCount: t.reflection_count,
+          summary: '',
+          summaryAt: new Date(t.latest_updated_at).toISOString(),
+          updatedAt: new Date(t.latest_updated_at).toISOString(),
+        }),
       ),
     },
   };
@@ -198,37 +243,17 @@ export const listRecurringThemes = asyncHandler(async (req: Request, res: Respon
 
 /**
  * GET /knowledge-base/search?q=<text>&limit=10
- * Semantic search across all takeaways via vector embeddings.
+ * Semantic search across takeaways. TODO(D8): the takeaway embedding column
+ * is dropped on the target (spec §1.6 takeaway, D8); until the search is
+ * rebuilt app-side every query answers an empty result.
  */
 export const searchKnowledgeBase = asyncHandler(async (req: Request, res: Response): Promise<void> => {
-  const user = getUser(req);
+  getUser(req);
   const query = (req.query.q as string) || '';
-  const limit = Math.min(parseInt(req.query.limit as string, 10) || 10, 50);
-
-  if (query.length < 2) {
-    res.json({
-      success: true,
-      data: { results: [], query },
-    } as ApiResponse<SearchKnowledgeBaseResponse>);
-    return;
-  }
-
-  const matches = await searchTakeaways(user.id, query, limit, 0.45);
 
   const response: ApiResponse<SearchKnowledgeBaseResponse> = {
     success: true,
-    data: {
-      query,
-      results: matches.map((m) => ({
-        takeawayId: m.takeawayId,
-        content: m.content,
-        theme: m.theme,
-        type: m.type as 'INSIGHT' | 'ACTION_ITEM' | 'INTENTION',
-        sessionDate: m.sessionDate,
-        sessionId: m.sessionId,
-        similarity: m.similarity,
-      })),
-    },
+    data: { query, results: [] },
   };
 
   res.json(response);
@@ -246,31 +271,28 @@ export const listRecentTakeaways = asyncHandler(async (req: Request, res: Respon
   const user = getUser(req);
   const limit = Math.min(parseInt(req.query.limit as string, 10) || 3, 20);
 
-  const takeaways = await prisma.sessionTakeaway.findMany({
+  const takeaways = await prisma.takeaway.findMany({
     where: {
-      session: {
+      reflection: {
         userId: user.id,
         status: { not: 'ARCHIVED' },
       },
     },
     orderBy: { createdAt: 'desc' },
     take: limit,
-    include: {
-      session: { select: { createdAt: true } },
-    },
+    ...TAKEAWAY_WITH_DATE,
   });
 
   const response: ApiResponse<RecentTakeawaysResponse> = {
     success: true,
     data: {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      takeaways: takeaways.map((t: any) => ({
+      takeaways: takeaways.map(t => ({
         id: t.id,
         content: t.content,
         theme: t.theme,
-        type: t.type ?? 'INSIGHT',
-        sessionDate: t.session.createdAt.toISOString(),
-        sessionId: t.sessionId,
+        type: t.type,
+        sessionDate: t.reflection.createdAt.toISOString(),
+        sessionId: t.reflectionId,
       })),
     },
   };
@@ -282,6 +304,23 @@ export const listRecentTakeaways = asyncHandler(async (req: Request, res: Respon
 // Takeaway Links (LINK-01 through LINK-04)
 // ============================================================================
 
+/** Both directions of a takeaway's links, with the other end (outgoing first). */
+async function linksOf(takeawayId: string) {
+  const [outgoing, incoming] = await Promise.all([
+    prisma.takeawayLink.findMany({
+      where: { sourceId: takeawayId },
+      include: { target: TAKEAWAY_WITH_DATE },
+      orderBy: { createdAt: 'asc' },
+    }),
+    prisma.takeawayLink.findMany({
+      where: { targetId: takeawayId },
+      include: { source: TAKEAWAY_WITH_DATE },
+      orderBy: { createdAt: 'asc' },
+    }),
+  ]);
+  return [...outgoing.map(l => ({ link: l, other: l.target })), ...incoming.map(l => ({ link: l, other: l.source }))];
+}
+
 /**
  * GET /knowledge-base/takeaways/:id/links
  * Returns all linked takeaways (both directions: outgoing + incoming).
@@ -291,74 +330,22 @@ export const getTakeawayLinks = asyncHandler(async (req: Request, res: Response)
   const takeawayId = req.params.id;
 
   // Verify ownership
-  const takeaway = await prisma.sessionTakeaway.findFirst({
-    where: {
-      id: takeawayId,
-      session: { userId: user.id },
-    },
-  });
-
+  const takeaway = await ownTakeaway(user.id, takeawayId);
   if (!takeaway) {
     throw new NotFoundError('Takeaway not found');
   }
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const prismaAny = prisma as any;
-
-  // Fetch outgoing links (this takeaway → other)
-  const outgoing = await prismaAny.takeawayLink.findMany({
-    where: { sourceId: takeawayId },
-    include: {
-      target: {
-        include: { session: { select: { createdAt: true } } },
-      },
-    },
-  });
-
-  // Fetch incoming links (other → this takeaway)
-  const incoming = await prismaAny.takeawayLink.findMany({
-    where: { targetId: takeawayId },
-    include: {
-      source: {
-        include: { session: { select: { createdAt: true } } },
-      },
-    },
-  });
-
-  const links: TakeawayLinkDTO[] = [
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    ...outgoing.map((link: any) => ({
-      id: link.id,
-      linkedTakeaway: {
-        id: link.target.id,
-        content: link.target.content,
-        theme: link.target.theme,
-        type: link.target.type ?? 'INSIGHT',
-        sessionDate: link.target.session.createdAt.toISOString(),
-      },
-      linkType: link.linkType,
-      similarity: link.similarity,
-      createdAt: link.createdAt.toISOString(),
-    })),
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    ...incoming.map((link: any) => ({
-      id: link.id,
-      linkedTakeaway: {
-        id: link.source.id,
-        content: link.source.content,
-        theme: link.source.theme,
-        type: link.source.type ?? 'INSIGHT',
-        sessionDate: link.source.session.createdAt.toISOString(),
-      },
-      linkType: link.linkType,
-      similarity: link.similarity,
-      createdAt: link.createdAt.toISOString(),
-    })),
-  ];
+  const links: TakeawayLinkDTO[] = (await linksOf(takeawayId)).map(({ link, other }) => ({
+    id: linkIdOf(link),
+    linkedTakeaway: linkedTakeawayOf(other),
+    linkType: link.linkType,
+    similarity: link.similarity,
+    createdAt: link.createdAt.toISOString(),
+  }));
 
   // Deduplicate by linked takeaway ID (a pair could exist in both directions)
   const seen = new Set<string>();
-  const uniqueLinks = links.filter((link) => {
+  const uniqueLinks = links.filter(link => {
     if (seen.has(link.linkedTakeaway.id)) return false;
     seen.add(link.linkedTakeaway.id);
     return true;
@@ -390,26 +377,14 @@ export const createTakeawayLink = asyncHandler(async (req: Request, res: Respons
   }
 
   // Verify both takeaways belong to this user
-  const [source, target] = await Promise.all([
-    prisma.sessionTakeaway.findFirst({
-      where: { id: sourceId, session: { userId: user.id } },
-      include: { session: { select: { createdAt: true } } },
-    }),
-    prisma.sessionTakeaway.findFirst({
-      where: { id: targetId, session: { userId: user.id } },
-      include: { session: { select: { createdAt: true } } },
-    }),
-  ]);
+  const [source, target] = await Promise.all([ownTakeaway(user.id, sourceId), ownTakeaway(user.id, targetId)]);
 
   if (!source || !target) {
     throw new NotFoundError('One or both takeaways not found');
   }
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const prismaAny = prisma as any;
-
   try {
-    const link = await prismaAny.takeawayLink.create({
+    const link = await prisma.takeawayLink.create({
       data: {
         sourceId,
         targetId,
@@ -421,14 +396,8 @@ export const createTakeawayLink = asyncHandler(async (req: Request, res: Respons
       success: true,
       data: {
         link: {
-          id: link.id,
-          linkedTakeaway: {
-            id: target.id,
-            content: target.content,
-            theme: target.theme,
-            type: (target as any).type ?? 'INSIGHT',
-            sessionDate: target.session.createdAt.toISOString(),
-          },
+          id: linkIdOf(link),
+          linkedTakeaway: linkedTakeawayOf(target),
           linkType: 'USER_MANUAL',
           similarity: null,
           createdAt: link.createdAt.toISOString(),
@@ -437,8 +406,8 @@ export const createTakeawayLink = asyncHandler(async (req: Request, res: Respons
     };
 
     res.status(201).json(response);
-  } catch (err: any) {
-    if (err?.code === 'P2002') {
+  } catch (err: unknown) {
+    if (err && typeof err === 'object' && 'code' in err && (err as { code: string }).code === 'P2002') {
       res.status(409).json({ success: false, error: 'Link already exists' });
       return;
     }
@@ -453,30 +422,20 @@ export const createTakeawayLink = asyncHandler(async (req: Request, res: Respons
 export const deleteTakeawayLink = asyncHandler(async (req: Request, res: Response): Promise<void> => {
   const user = getUser(req);
   const takeawayId = req.params.id;
-  const linkId = req.params.linkId;
+  const key = parseLinkId(req.params.linkId);
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const prismaAny = prisma as any;
-
-  // Verify the link exists and belongs to the user's takeaway
-  const link = await prismaAny.takeawayLink.findFirst({
-    where: {
-      id: linkId,
-      OR: [
-        { sourceId: takeawayId },
-        { targetId: takeawayId },
-      ],
-    },
-  });
+  // Verify the link exists and touches the named takeaway
+  const link =
+    key && (key.sourceId === takeawayId || key.targetId === takeawayId)
+      ? await prisma.takeawayLink.findUnique({ where: { sourceId_targetId: key } })
+      : null;
 
   if (!link) {
     throw new NotFoundError('Link not found');
   }
 
   // Verify user ownership via the takeaway
-  const takeaway = await prisma.sessionTakeaway.findFirst({
-    where: { id: takeawayId, session: { userId: user.id } },
-  });
+  const takeaway = await ownTakeaway(user.id, takeawayId);
 
   if (!takeaway) {
     throw new NotFoundError('Takeaway not found');
@@ -487,7 +446,9 @@ export const deleteTakeawayLink = asyncHandler(async (req: Request, res: Respons
     throw new ValidationError('Only manually created links can be deleted');
   }
 
-  await prismaAny.takeawayLink.delete({ where: { id: linkId } });
+  await prisma.takeawayLink.delete({
+    where: { sourceId_targetId: { sourceId: link.sourceId, targetId: link.targetId } },
+  });
 
   const response: ApiResponse<DeleteTakeawayLinkResponse> = {
     success: true,
@@ -511,79 +472,46 @@ export const getTakeawayThread = asyncHandler(async (req: Request, res: Response
   const rootId = req.params.id;
 
   // Verify root ownership
-  const root = await prisma.sessionTakeaway.findFirst({
-    where: { id: rootId, session: { userId: user.id } },
-    include: { session: { select: { createdAt: true } } },
-  });
+  const root = await ownTakeaway(user.id, rootId);
 
   if (!root) {
     throw new NotFoundError('Takeaway not found');
   }
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const prismaAny = prisma as any;
-
   // BFS traversal — max depth 3
   const visited = new Set<string>([rootId]);
   const queue: Array<{ id: string; depth: number }> = [{ id: rootId, depth: 0 }];
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const threadItems: Array<{ takeaway: any; linkType: string }> = [];
+  const threadItems: Array<{ takeaway: TakeawayWithDate; linkType: TakeawayLinkDTO['linkType'] }> = [];
 
   while (queue.length > 0) {
     const current = queue.shift()!;
     if (current.depth >= 3) continue;
 
-    const outgoing = await prismaAny.takeawayLink.findMany({
-      where: { sourceId: current.id },
-      include: {
-        target: { include: { session: { select: { createdAt: true } } } },
-      },
-    });
-
-    const incoming = await prismaAny.takeawayLink.findMany({
-      where: { targetId: current.id },
-      include: {
-        source: { include: { session: { select: { createdAt: true } } } },
-      },
-    });
-
-    for (const link of outgoing) {
-      if (!visited.has(link.targetId)) {
-        visited.add(link.targetId);
-        threadItems.push({ takeaway: link.target, linkType: link.linkType });
-        queue.push({ id: link.targetId, depth: current.depth + 1 });
-      }
-    }
-
-    for (const link of incoming) {
-      if (!visited.has(link.sourceId)) {
-        visited.add(link.sourceId);
-        threadItems.push({ takeaway: link.source, linkType: link.linkType });
-        queue.push({ id: link.sourceId, depth: current.depth + 1 });
+    for (const { link, other } of await linksOf(current.id)) {
+      if (!visited.has(other.id)) {
+        visited.add(other.id);
+        threadItems.push({ takeaway: other, linkType: link.linkType });
+        queue.push({ id: other.id, depth: current.depth + 1 });
       }
     }
   }
 
   // Sort thread chronologically
-  threadItems.sort(
-    (a, b) =>
-      new Date(a.takeaway.session.createdAt).getTime() -
-      new Date(b.takeaway.session.createdAt).getTime()
-  );
+  threadItems.sort((a, b) => a.takeaway.reflection.createdAt.getTime() - b.takeaway.reflection.createdAt.getTime());
 
   const rootDTO: TakeawayDTO & { sessionDate: string } = {
-    ...mapTakeawayToDTO(root as any),
-    sessionDate: root.session.createdAt.toISOString(),
+    ...mapTakeawayToDTO(root),
+    sessionDate: root.reflection.createdAt.toISOString(),
   };
 
   const response: ApiResponse<TakeawayThreadDTO> = {
     success: true,
     data: {
       root: rootDTO,
-      thread: threadItems.map((item) => ({
+      thread: threadItems.map(item => ({
         ...mapTakeawayToDTO(item.takeaway),
-        sessionDate: item.takeaway.session.createdAt.toISOString(),
-        linkType: item.linkType as any,
+        sessionDate: item.takeaway.reflection.createdAt.toISOString(),
+        linkType: item.linkType,
       })),
     },
   };
@@ -597,36 +525,28 @@ export const getTakeawayThread = asyncHandler(async (req: Request, res: Response
 
 /**
  * PATCH /knowledge-base/takeaways/:id/resolve
- * Toggles the resolved state of a takeaway.
+ * Toggles the resolved state of a takeaway (`resolved_at` set or cleared).
  */
 export const resolveTakeaway = asyncHandler(async (req: Request, res: Response): Promise<void> => {
   const user = getUser(req);
   const takeawayId = req.params.id;
 
-  const takeaway = await prisma.sessionTakeaway.findFirst({
-    where: { id: takeawayId, session: { userId: user.id } },
-  });
+  const takeaway = await ownTakeaway(user.id, takeawayId);
 
   if (!takeaway) {
     throw new NotFoundError('Takeaway not found');
   }
 
   // Toggle resolved state
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const currentResolved = (takeaway as any).resolved ?? false;
-  const updated = await prisma.sessionTakeaway.update({
+  const currentResolved = takeaway.resolvedAt !== null;
+  const updated = await prisma.takeaway.update({
     where: { id: takeawayId },
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    data: {
-      resolved: !currentResolved,
-      resolvedAt: !currentResolved ? new Date() : null,
-    } as any,
+    data: { resolvedAt: !currentResolved ? new Date() : null },
   });
 
   const response: ApiResponse<ResolveTakeawayResponse> = {
     success: true,
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    data: { takeaway: mapTakeawayToDTO(updated as any) },
+    data: { takeaway: mapTakeawayToDTO(updated) },
   };
 
   res.json(response);
@@ -640,9 +560,8 @@ export const listActions = asyncHandler(async (req: Request, res: Response) => {
   const user = getUser(req);
   const status = (req.query.status as string) || 'open';
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const where: any = {
-    session: {
+  const where: Prisma.TakeawayWhereInput = {
+    reflection: {
       userId: user.id,
       status: { not: 'ARCHIVED' },
     },
@@ -650,28 +569,27 @@ export const listActions = asyncHandler(async (req: Request, res: Response) => {
   };
 
   if (status === 'open') {
-    where.resolved = false;
+    where.resolvedAt = null;
   } else if (status === 'resolved') {
-    where.resolved = true;
+    where.resolvedAt = { not: null };
   }
   // 'all' — no additional filter
 
-  const takeaways = await prisma.sessionTakeaway.findMany({
+  const takeaways = await prisma.takeaway.findMany({
     where,
     orderBy: { createdAt: 'desc' },
     include: {
-      session: { select: { createdAt: true, theme: true } },
+      reflection: { select: { createdAt: true, theme: true } },
     },
   });
 
   const response: ApiResponse<ListActionsResponse> = {
     success: true,
     data: {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      actions: takeaways.map((t: any) => ({
+      actions: takeaways.map(t => ({
         ...mapTakeawayToDTO(t),
-        sessionDate: t.session.createdAt.toISOString(),
-        topicTag: t.session.theme,
+        sessionDate: t.reflection.createdAt.toISOString(),
+        topicTag: t.reflection.theme,
       })),
     },
   };

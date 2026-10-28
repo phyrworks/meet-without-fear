@@ -1,37 +1,37 @@
+/**
+ * Stage 2 user-facing copy (source checks).
+ *
+ * TS-12: two cases are gone — they grepped stage2.ts for the symmetric
+ * reconciliation branch (OFFER_SHARING / OFFER_OPTIONAL mapping, the
+ * alreadyProcessed set) that TS-10 replaced with the per-direction reconciler;
+ * the recommendation-to-share-offer mapping
+ * runs on real roles in reconciler-reader.target.test.ts (an
+ * OFFER_SHARING analysis opens a share offer per direction).
+ */
 import fs from 'fs';
 import path from 'path';
 
 describe('Stage 2 user-facing copy', () => {
   it('does not expose internal reconciler wording in controller prompts or responses', () => {
-    const source = fs.readFileSync(
-      path.join(__dirname, '..', 'stage2.ts'),
-      'utf8'
-    );
+    const source = fs.readFileSync(path.join(__dirname, '..', 'stage2.ts'), 'utf8');
 
     expect(source.toLowerCase()).not.toContain('internal reconciler');
   });
 
   it('uses deterministic privacy-review copy for empathy resubmission acknowledgments', () => {
-    const source = fs.readFileSync(
-      path.join(__dirname, '..', 'stage2.ts'),
-      'utf8'
-    );
+    const source = fs.readFileSync(path.join(__dirname, '..', 'stage2.ts'), 'utf8');
 
-    expect(source).toContain('separate privacy-protected review to check whether your updated perspective is ready to share');
+    expect(source).toContain(
+      'separate privacy-protected review to check whether your updated perspective is ready to share',
+    );
     expect(source).not.toContain('Priya');
     expect(source).not.toContain('honors');
     expect(source).not.toContain('honour');
   });
 
   it('does not promise partner empathy validation before reveal is ready', () => {
-    const source = fs.readFileSync(
-      path.join(__dirname, '..', 'stage2.ts'),
-      'utf8'
-    );
-    const messagesSource = fs.readFileSync(
-      path.join(__dirname, '..', 'messages.ts'),
-      'utf8'
-    );
+    const source = fs.readFileSync(path.join(__dirname, '..', 'stage2.ts'), 'utf8');
+    const messagesSource = fs.readFileSync(path.join(__dirname, '..', 'messages.ts'), 'utf8');
 
     expect(source).toContain('Both empathy statements are now submitted');
     expect(source).toContain('privacy-protected review is ready');
@@ -46,37 +46,6 @@ describe('Stage 2 user-facing copy', () => {
     expect(messagesSource).not.toContain('protected attempt');
   });
 
-  it('maps reconciler sharing recommendations into the Stage 2 sharing flow', () => {
-    const source = fs.readFileSync(
-      path.join(__dirname, '..', 'stage2.ts'),
-      'utf8'
-    );
-
-    expect(source).toContain(
-      "result.aUnderstandingB.recommendation.action === 'OFFER_SHARING'"
-    );
-    expect(source).toContain(
-      "result.bUnderstandingA.recommendation.action === 'OFFER_SHARING'"
-    );
-    expect(source).toContain(
-      "result.aUnderstandingB.recommendation.action === 'OFFER_OPTIONAL'"
-    );
-    expect(source).toContain(
-      "result.bUnderstandingA.recommendation.action === 'OFFER_OPTIONAL'"
-    );
-  });
-
-  it('treats validated empathy attempts as already processed in symmetric reconciliation', () => {
-    const source = fs.readFileSync(
-      path.join(__dirname, '..', 'stage2.ts'),
-      'utf8'
-    );
-
-    expect(source).toContain(
-      "const alreadyProcessed = new Set(['READY', 'AWAITING_SHARING', 'REFINING', 'REVEALED', 'VALIDATED'])"
-    );
-  });
-
   it('does not frame Stage 2 empathy as repair or working things out', () => {
     const files = [
       path.join(__dirname, '..', 'stage2.ts'),
@@ -84,7 +53,7 @@ describe('Stage 2 user-facing copy', () => {
       path.join(__dirname, '..', '..', 'services', 'dispatch-handler.ts'),
     ];
 
-    const sources = files.map((file) => fs.readFileSync(file, 'utf8').toLowerCase());
+    const sources = files.map(file => fs.readFileSync(file, 'utf8').toLowerCase());
 
     for (const source of sources) {
       expect(source).not.toContain('strongest things you can do to actually work things out');

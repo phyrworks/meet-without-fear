@@ -5,8 +5,8 @@ describe('strategy dedupe', () => {
     expect(
       isSupersededStrategy(
         'Monthly low-stakes exploration plan where we pick one new experience together',
-        'Monthly low-stakes exploration plan where we pick one new experience together and Adam can say what feels exciting and what feels scary'
-      )
+        'Monthly low-stakes exploration plan where we pick one new experience together and Adam can say what feels exciting and what feels scary',
+      ),
     ).toBe(true);
   });
 
@@ -25,7 +25,7 @@ describe('strategy dedupe', () => {
       [
         'Monthly low-stakes exploration plan where we pick one new experience together and Adam can say what feels exciting and what feels scary',
         'Check in after one month',
-      ]
+      ],
     );
 
     expect(result.supersededIds).toEqual(['old-monthly']);
@@ -35,7 +35,7 @@ describe('strategy dedupe', () => {
   it('drops exact duplicates', () => {
     const result = filterNewStrategiesAgainstExisting(
       [{ id: 'existing', description: 'Check in after one month' }],
-      ['Check in after one month']
+      ['Check in after one month'],
     );
 
     expect(result.supersededIds).toEqual([]);
@@ -46,8 +46,8 @@ describe('strategy dedupe', () => {
     expect(
       isSupersededStrategy(
         'Sunday morning walk, 45 minutes, once a week for four weeks, no relationship agenda',
-        'Sunday morning walk once a week'
-      )
+        'Sunday morning walk once a week',
+      ),
     ).toBe(false);
   });
 });

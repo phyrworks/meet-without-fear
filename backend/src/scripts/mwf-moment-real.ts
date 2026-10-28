@@ -57,7 +57,7 @@ type MomentPayload = {
 };
 
 function requireEnv(names: string[]): void {
-  const missing = names.filter((name) => !process.env[name]);
+  const missing = names.filter(name => !process.env[name]);
   if (missing.length > 0) {
     throw new Error(`Missing required environment variable(s): ${missing.join(', ')}`);
   }
@@ -69,7 +69,7 @@ async function seedStage1FactReflection(): Promise<SeedResult> {
   const actorEmail = `moment-stage1-adam-${suffix}@example.test`;
   const partnerEmail = `moment-stage1-eve-${suffix}@example.test`;
 
-  const result = await prisma.$transaction(async (tx) => {
+  const result = await prisma.$transaction(async tx => {
     const [actor, partner] = await Promise.all([
       tx.user.create({
         data: {
@@ -116,7 +116,10 @@ async function seedStage1FactReflection(): Promise<SeedResult> {
           notableFacts: [
             { category: 'Conflict', fact: 'Adam feels Eve keeps pushing for more experiences and change.' },
             { category: 'Emotion', fact: 'Adam is scared Eve may leave because he cannot give her enough.' },
-            { category: 'Pattern', fact: 'When Eve raises travel or growth, Adam gets quiet and then feels he made things worse.' },
+            {
+              category: 'Pattern',
+              fact: 'When Eve raises travel or growth, Adam gets quiet and then feels he made things worse.',
+            },
           ],
         },
       }),
@@ -200,8 +203,7 @@ async function seedStage1FactReflection(): Promise<SeedResult> {
           forUserId: actor.id,
           role: 'AI',
           stage: 1,
-          content:
-            "You've built something that feels solid to you, and you're not experiencing it as appreciated.",
+          content: "You've built something that feels solid to you, and you're not experiencing it as appreciated.",
         },
       }),
       tx.message.create({
@@ -210,8 +212,7 @@ async function seedStage1FactReflection(): Promise<SeedResult> {
           senderId: actor.id,
           role: 'USER',
           stage: 1,
-          content:
-            'She brings up travel and new experiences, and every time I hear that, something in me contracts.',
+          content: 'She brings up travel and new experiences, and every time I hear that, something in me contracts.',
         },
       }),
       tx.message.create({
@@ -230,8 +231,7 @@ async function seedStage1FactReflection(): Promise<SeedResult> {
           senderId: actor.id,
           role: 'USER',
           stage: 1,
-          content:
-            "I love her, but I'm constantly bracing, like the next thing she says will confirm I'm not enough.",
+          content: "I love her, but I'm constantly bracing, like the next thing she says will confirm I'm not enough.",
         },
       }),
     ]);
@@ -255,13 +255,13 @@ async function seedStage1FactReflection(): Promise<SeedResult> {
         StageProgress: stageProgress.length,
         Message: history.length,
       },
-      messages: history.map((message) => ({
+      messages: history.map(message => ({
         id: message.id,
         role: message.role,
         content: message.content,
         stage: message.stage,
       })),
-      stageProgress: stageProgress.map((progress) => ({
+      stageProgress: stageProgress.map(progress => ({
         userId: progress.userId,
         stage: progress.stage,
         status: progress.status,
@@ -275,7 +275,7 @@ async function seedStage1FactReflection(): Promise<SeedResult> {
 
 async function seedGenericMoment(moment: MomentPayload): Promise<SeedResult> {
   requireEnv(['DATABASE_URL']);
-  const currentStage = Math.max(...moment.stages.filter((stage) => stage <= 4));
+  const currentStage = Math.max(...moment.stages.filter(stage => stage <= 4));
   const suffix = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   const participants = moment.seed.participants.slice(0, 2);
   if (participants.length < 2) {
@@ -283,7 +283,7 @@ async function seedGenericMoment(moment: MomentPayload): Promise<SeedResult> {
   }
   const actorName = moment.trigger?.actor || participants[0].name;
 
-  const result = await prisma.$transaction(async (tx) => {
+  const result = await prisma.$transaction(async tx => {
     const users = await Promise.all(
       participants.map((participant, index) =>
         tx.user.create({
@@ -293,12 +293,12 @@ async function seedGenericMoment(moment: MomentPayload): Promise<SeedResult> {
             name: participant.name,
             firstName: participant.name,
           },
-        })
-      )
+        }),
+      ),
     );
     const userByName = new Map(participants.map((participant, index) => [participant.name, users[index]]));
     const actor = userByName.get(actorName) || users[0];
-    const partner = users.find((user) => user.id !== actor.id) || users[1];
+    const partner = users.find(user => user.id !== actor.id) || users[1];
 
     const relationship = await tx.relationship.create({
       data: {
@@ -333,11 +333,11 @@ async function seedGenericMoment(moment: MomentPayload): Promise<SeedResult> {
               },
             ],
           },
-        })
-      )
+        }),
+      ),
     );
     await Promise.all(
-      vessels.map((vessel) =>
+      vessels.map(vessel =>
         tx.emotionalReading.create({
           data: {
             vesselId: vessel.id,
@@ -345,8 +345,8 @@ async function seedGenericMoment(moment: MomentPayload): Promise<SeedResult> {
             stage: currentStage,
             context: `Seeded baseline for ${moment.id}.`,
           },
-        })
-      )
+        }),
+      ),
     );
 
     const progressRows = participants.flatMap((participant, index) => {
@@ -357,7 +357,7 @@ async function seedGenericMoment(moment: MomentPayload): Promise<SeedResult> {
           sessionId: session.id,
           userId: users[index].id,
           stage,
-          status: stage < currentStage ? 'COMPLETED' as const : 'IN_PROGRESS' as const,
+          status: stage < currentStage ? ('COMPLETED' as const) : ('IN_PROGRESS' as const),
           completedAt: stage < currentStage ? new Date() : null,
           gatesSatisfied: (gates[String(stage)] as object | undefined) || {},
         });
@@ -378,7 +378,7 @@ async function seedGenericMoment(moment: MomentPayload): Promise<SeedResult> {
             stage: currentStage,
             content: summary,
           },
-        })
+        }),
       );
     }
 
@@ -427,13 +427,13 @@ async function seedGenericMoment(moment: MomentPayload): Promise<SeedResult> {
         StageProgress: stageProgress.length,
         Message: history.length,
       },
-      messages: history.map((message) => ({
+      messages: history.map(message => ({
         id: message.id,
         role: message.role,
         content: message.content,
         stage: message.stage,
       })),
-      stageProgress: stageProgress.map((progress) => ({
+      stageProgress: stageProgress.map(progress => ({
         userId: progress.userId,
         stage: progress.stage,
         status: progress.status,
@@ -448,9 +448,9 @@ async function seedGenericMoment(moment: MomentPayload): Promise<SeedResult> {
 function parseSse(raw: string): Array<{ event: string; data: unknown }> {
   return raw
     .split(/\n\n+/)
-    .map((block) => block.trim())
+    .map(block => block.trim())
     .filter(Boolean)
-    .map((block) => {
+    .map(block => {
       const event = block.match(/^event:\s*(.+)$/m)?.[1] || 'message';
       const dataText = block.match(/^data:\s*(.+)$/m)?.[1] || '{}';
       let data: unknown = {};
@@ -480,7 +480,7 @@ async function invokeStage1(seed: SeedResult, content: string): Promise<Record<s
     .parse((res, callback) => {
       let raw = '';
       res.setEncoding('utf8');
-      res.on('data', (chunk) => {
+      res.on('data', chunk => {
         raw += chunk;
       });
       res.on('end', () => callback(null, raw));
@@ -494,8 +494,8 @@ async function invokeStage1(seed: SeedResult, content: string): Promise<Record<s
   const rawSse = String(response.body || response.text || '');
   const events = parseSse(rawSse);
   const aiResponse = events
-    .filter((event) => event.event === 'chunk')
-    .map((event) => {
+    .filter(event => event.event === 'chunk')
+    .map(event => {
       const data = event.data as { text?: string };
       return data.text || '';
     })
@@ -505,10 +505,10 @@ async function invokeStage1(seed: SeedResult, content: string): Promise<Record<s
     where: { sessionId: seed.sessionId },
     orderBy: { timestamp: 'asc' },
   });
-  const beforeIds = new Set(before.map((message) => message.id));
+  const beforeIds = new Set(before.map(message => message.id));
   const newMessages = after
-    .filter((message) => !beforeIds.has(message.id))
-    .map((message) => ({
+    .filter(message => !beforeIds.has(message.id))
+    .map(message => ({
       id: message.id,
       role: message.role,
       senderId: message.senderId,
@@ -528,7 +528,7 @@ async function invokeStage1(seed: SeedResult, content: string): Promise<Record<s
     events,
     stateDelta: {
       new_messages_in_db: newMessages,
-      stage_progress: stageProgress.map((progress) => ({
+      stage_progress: stageProgress.map(progress => ({
         userId: progress.userId,
         stage: progress.stage,
         status: progress.status,
@@ -546,7 +546,9 @@ async function invokeTrajectory(moment: MomentPayload): Promise<Record<string, u
   const seed = await seedGenericMoment(moment);
   const steps = [];
   const responses = [];
-  for (const [index, step] of (moment as MomentPayload & { trajectory?: Array<{ user_turn: string }> }).trajectory?.entries() || []) {
+  for (const [index, step] of (
+    moment as MomentPayload & { trajectory?: Array<{ user_turn: string }> }
+  ).trajectory?.entries() || []) {
     const run = await invokeSeed(seed, step.user_turn);
     const aiResponse = String(run.aiResponse || '');
     responses.push(aiResponse);
@@ -566,7 +568,9 @@ async function invokeTrajectory(moment: MomentPayload): Promise<Record<string, u
     aiResponse: responses.join('\n\n'),
     stateDelta: {
       trajectory_steps: steps,
-      new_messages_in_db: steps.flatMap((step) => (step.stateDelta as { new_messages_in_db?: unknown[] }).new_messages_in_db || []),
+      new_messages_in_db: steps.flatMap(
+        step => (step.stateDelta as { new_messages_in_db?: unknown[] }).new_messages_in_db || [],
+      ),
       stage_progress: steps.at(-1)?.stateDelta
         ? (steps.at(-1)?.stateDelta as { stage_progress?: unknown[] }).stage_progress || []
         : [],
@@ -584,7 +588,7 @@ async function cleanup(olderThanMs: number): Promise<Record<string, number>> {
     },
     select: { id: true, relationshipId: true },
   });
-  const relationshipIds = Array.from(new Set(sessions.map((session) => session.relationshipId)));
+  const relationshipIds = Array.from(new Set(sessions.map(session => session.relationshipId)));
   const userIds = await prisma.relationshipMember.findMany({
     where: { relationshipId: { in: relationshipIds } },
     select: { userId: true },
@@ -592,7 +596,7 @@ async function cleanup(olderThanMs: number): Promise<Record<string, number>> {
   await prisma.relationship.deleteMany({ where: { id: { in: relationshipIds } } });
   await prisma.user.deleteMany({
     where: {
-      id: { in: userIds.map((user) => user.userId) },
+      id: { in: userIds.map(user => user.userId) },
       email: { contains: '@example.test' },
     },
   });
@@ -623,11 +627,16 @@ async function judge(input: {
       },
     ],
   });
-  const textBlock = result.content.find((block) => block.type === 'text');
+  const textBlock = result.content.find(block => block.type === 'text');
   const text = textBlock && textBlock.type === 'text' ? textBlock.text : '{}';
   let parsed: unknown;
   try {
-    const cleaned = text.trim().replace(/^```json\s*/i, '').replace(/^```\s*/i, '').replace(/\s*```$/i, '').trim();
+    const cleaned = text
+      .trim()
+      .replace(/^```json\s*/i, '')
+      .replace(/^```\s*/i, '')
+      .replace(/\s*```$/i, '')
+      .trim();
     parsed = JSON.parse(cleaned);
   } catch {
     parsed = { parse_error: true, raw: text };
@@ -694,11 +703,16 @@ async function generateRubric(input: {
       },
     ],
   });
-  const textBlock = result.content.find((block) => block.type === 'text');
+  const textBlock = result.content.find(block => block.type === 'text');
   const text = textBlock && textBlock.type === 'text' ? textBlock.text : '{}';
   let parsed: unknown;
   try {
-    const cleaned = text.trim().replace(/^```json\s*/i, '').replace(/^```\s*/i, '').replace(/\s*```$/i, '').trim();
+    const cleaned = text
+      .trim()
+      .replace(/^```json\s*/i, '')
+      .replace(/^```\s*/i, '')
+      .replace(/\s*```$/i, '')
+      .trim();
     parsed = JSON.parse(cleaned);
   } catch {
     parsed = { parse_error: true, raw: text };
@@ -776,7 +790,7 @@ async function main(): Promise<void> {
   }
 }
 
-main().catch(async (error) => {
+main().catch(async error => {
   console.error(error instanceof Error ? error.message : String(error));
   await prisma.$disconnect();
   process.exit(2);

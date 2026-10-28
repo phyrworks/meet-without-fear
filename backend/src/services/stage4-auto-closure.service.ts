@@ -8,9 +8,7 @@ import { resolveParticipant } from './participant-resolver';
 import { loadStageStates } from './stage-shim';
 import { closeStage4WithoutAgreement, Stage4CloseError } from './stage4-closure';
 
-export type Stage4AutoClosureResult =
-  | { closed: true; reason: Stage4ClosureReason }
-  | { closed: false; reason: string };
+export type Stage4AutoClosureResult = { closed: true; reason: Stage4ClosureReason } | { closed: false; reason: string };
 
 function isExplicitNoSharedClosure(signal: Stage4ClosureSignalDTO | undefined): signal is Stage4ClosureSignalDTO {
   return signal?.readyToClose === true && signal.kind === Stage4ClosureKind.NO_SHARED_AGREEMENT;
@@ -54,7 +52,8 @@ export async function applyStage4AutoClosureFromSignal(args: {
       summary: args.signal.summary,
     });
   } catch (error) {
-    if (error instanceof Stage4CloseError && error.code === 'CONFLICT') return { closed: false, reason: 'already_closed' };
+    if (error instanceof Stage4CloseError && error.code === 'CONFLICT')
+      return { closed: false, reason: 'already_closed' };
     throw error;
   }
 

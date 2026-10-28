@@ -22,7 +22,7 @@
  * owner's stage at the message's instant (stage shim), `timestamp` created_at.
  */
 
-import type { PrismaClient } from '../generated/prisma/client';
+import type { DbClient } from '../lib/prisma';
 import { getJobPrisma, prisma } from '../lib/prisma';
 import { contentHash } from '../utils/content-hash';
 import { messageStage, type MilestoneReached } from './stage-shim';
@@ -165,7 +165,7 @@ export async function lastOwnTurnAt(conversationId: string, participantId: strin
  * row is built from the inputs the writer already holds.
  */
 async function insert(
-  client: PrismaClient,
+  client: DbClient,
   data: {
     conversationId: string;
     senderParticipantId: string | null;
@@ -249,7 +249,7 @@ export function createFacilitatorMessage(opts: {
   refiningNeedId?: string | null;
   createdAt?: Date;
   /** For tests: the client the job connection resolves to. */
-  client?: PrismaClient;
+  client?: DbClient;
 }): Promise<StoredMessage> {
   return insert(opts.client ?? getJobPrisma(), {
     conversationId: opts.conversationId,
@@ -276,7 +276,7 @@ export function deliverMessage(opts: {
   content: string;
   sourceAttemptId?: string | null;
   createdAt?: Date;
-  client?: PrismaClient;
+  client?: DbClient;
 }): Promise<StoredMessage> {
   return insert(opts.client ?? getJobPrisma(), {
     conversationId: opts.toConversationId,

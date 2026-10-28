@@ -3,8 +3,8 @@ import { getHaikuJson } from '../../lib/bedrock';
 
 // Mock circuit breaker to execute immediately without timeout
 jest.mock('../../utils/circuit-breaker', () => ({
-  withHaikuCircuitBreaker: jest.fn().mockImplementation(async (fn) => fn()),
-  withTimeout: jest.fn().mockImplementation(async (fn) => fn()),
+  withHaikuCircuitBreaker: jest.fn().mockImplementation(async fn => fn()),
+  withTimeout: jest.fn().mockImplementation(async fn => fn()),
   HAIKU_TIMEOUT_MS: 20000,
 }));
 
@@ -148,7 +148,10 @@ describe('Memory Validator Service', () => {
       });
 
       it('rejects "never blame me"', async () => {
-        (getHaikuJson as jest.Mock).mockResolvedValue({ valid: false, reason: 'Rejecting avoidance of responsibility' });
+        (getHaikuJson as jest.Mock).mockResolvedValue({
+          valid: false,
+          reason: 'Rejecting avoidance of responsibility',
+        });
         const result = await validateMemory('Never blame me for anything', 'PREFERENCE');
 
         expect(result.valid).toBe(false);
@@ -266,7 +269,6 @@ describe('Memory Validator Service', () => {
           expect(result.valid).toBe(false);
           expect(result.reason).toContain('too long');
         });
-
       });
 
       describe('RELATIONSHIP', () => {

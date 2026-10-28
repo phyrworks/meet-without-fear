@@ -4,10 +4,18 @@
  * Usage: npx ts-node src/scripts/analyze-session.ts <sessionId>
  *
  * This script provides a comprehensive view of a session's state and timeline,
- * useful for debugging flow issues.
+ * useful for debugging flow issues. Operator tooling: it reads every
+ * participant's rows, so run it with an operator DATABASE_URL, never as the
+ * request role.
+ *
+ * Target shape (TS-12): participants and their milestones (the stage is
+ * derived from them), drafts, empathy rounds with their reviews, reconciler
+ * results with their share offers, and the AI/marker messages of every
+ * participant's conversation.
  */
 
 import { prisma } from '../lib/prisma';
+import { loadStageStates } from '../services/stage-shim';
 
 const sessionId = process.argv[2];
 
@@ -21,7 +29,6 @@ interface TimelineEvent {
   type: string;
   actor?: string;
   details: string;
-  data?: Record<string, unknown>;
 }
 
 async function analyzeSession() {
@@ -29,37 +36,35 @@ async function analyzeSession() {
   console.log(`SESSION ANALYSIS: ${sessionId}`);
   console.log('='.repeat(80));
 
-  // Get session with relationships
-  const session = await prisma.session.findUnique({
-    where: { id: sessionId },
-    include: {
-      relationship: {
-        include: {
-          members: {
-            include: {
-              user: { select: { id: true, name: true, firstName: true } }
-            }
-          }
-        }
-      }
-    }
-  });
-
+  const session = await prisma.session.findUnique({ where: { id: sessionId } });
   if (!session) {
     console.error(`Session ${sessionId} not found`);
     process.exit(1);
   }
 
-  // Build user lookup
-  const users: Record<string, string> = {};
-  for (const member of session.relationship.members) {
-    users[member.userId] = member.user.firstName || member.user.name || member.userId;
-  }
+  const participants = await prisma.participant.findMany({
+    where: { sessionId },
+    orderBy: [{ joinedAt: 'asc' }, { id: 'asc' }],
+    select: {
+      id: true,
+      userId: true,
+      kind: true,
+      displayName: true,
+      joinedAt: true,
+      leftAt: true,
+      user: { select: { name: true } },
+    },
+  });
+  const names: Record<string, string> = {};
+  for (const p of participants) names[p.id] = p.displayName || p.user?.name || p.userId || p.id;
+  const nameOf = (participantId: string | null | undefined) => (participantId && names[participantId]) || 'Unknown';
 
   console.log('\n## PARTICIPANTS');
   console.log('-'.repeat(40));
-  for (const [id, name] of Object.entries(users)) {
-    console.log(`  ${name}: ${id}`);
+  for (const p of participants) {
+    console.log(
+      `  ${names[p.id]}: participant ${p.id} (user ${p.userId ?? '—'}, ${p.kind}${p.leftAt ? `, left ${p.leftAt.toISOString()}` : ''})`,
+    );
   }
 
   console.log('\n## SESSION STATUS');
@@ -67,91 +72,73 @@ async function analyzeSession() {
   console.log(`  Status: ${session.status}`);
   console.log(`  Created: ${session.createdAt.toISOString()}`);
 
-  // Get stage progress for each user
-  console.log('\n## STAGE PROGRESS');
+  // Stage progress, reconstructed from milestones (stage shim)
+  console.log('\n## STAGE PROGRESS (from milestones)');
   console.log('-'.repeat(40));
-  const stageProgress = await prisma.stageProgress.findMany({
-    where: { sessionId },
-    orderBy: [{ userId: 'asc' }, { stage: 'asc' }]
-  });
-
-  for (const [userId, name] of Object.entries(users)) {
-    console.log(`\n  ${name}:`);
-    const userProgress = stageProgress.filter(p => p.userId === userId);
-    for (const p of userProgress) {
-      console.log(`    Stage ${p.stage}: ${p.status} (started: ${p.startedAt?.toISOString() || 'N/A'})`);
-      if (p.gatesSatisfied) {
-        console.log(`      Gates: ${JSON.stringify(p.gatesSatisfied)}`);
-      }
+  const states = await loadStageStates(participants.map(p => ({ id: p.id, joinedAt: p.joinedAt })));
+  for (const p of participants) {
+    const state = states.get(p.id);
+    console.log(`\n  ${names[p.id]}: current stage ${state?.current.stage ?? 0}`);
+    for (const row of state?.rows ?? []) {
+      console.log(`    Stage ${row.stage}: ${row.status} (started: ${row.startedAt?.toISOString() || 'N/A'})`);
     }
+    for (const m of state?.milestones ?? []) console.log(`      ✓ ${m.key} at ${m.reachedAt.toISOString()}`);
   }
 
-  // Get empathy drafts
-  console.log('\n## EMPATHY DRAFTS');
+  // Drafts
+  console.log('\n## DRAFTS');
   console.log('-'.repeat(40));
-  const drafts = await prisma.empathyDraft.findMany({
-    where: { sessionId },
-    include: { user: { select: { name: true, firstName: true } } }
-  });
-
+  const drafts = await prisma.draft.findMany({ where: { participant: { sessionId } }, orderBy: { updatedAt: 'asc' } });
   for (const draft of drafts) {
-    const name = draft.user?.firstName || draft.user?.name || 'Unknown';
-    console.log(`\n  ${name}'s draft:`);
+    console.log(`\n  ${nameOf(draft.participantId)}'s ${draft.kind} draft:`);
     console.log(`    Ready to Share: ${draft.readyToShare}`);
     console.log(`    Version: ${draft.version}`);
     console.log(`    Content: "${draft.content?.substring(0, 80)}..."`);
     console.log(`    Updated: ${draft.updatedAt.toISOString()}`);
   }
 
-  // Get empathy attempts
-  console.log('\n## EMPATHY ATTEMPTS');
+  // Empathy rounds
+  console.log('\n## EMPATHY ATTEMPTS (rounds)');
   console.log('-'.repeat(40));
   const attempts = await prisma.empathyAttempt.findMany({
-    where: { sessionId },
-    include: {
-      sourceUser: { select: { name: true, firstName: true } },
-      validations: {
-        include: { user: { select: { name: true, firstName: true } } }
-      }
-    },
-    orderBy: { sharedAt: 'asc' }
+    where: { authorParticipant: { sessionId } },
+    include: { reviews: true },
+    orderBy: [{ submittedAt: 'asc' }, { round: 'asc' }],
   });
-
   for (const attempt of attempts) {
-    const guesserName = attempt.sourceUser?.firstName || attempt.sourceUser?.name || 'Unknown';
-    console.log(`\n  ${guesserName}'s empathy attempt:`);
+    console.log(
+      `\n  ${nameOf(attempt.authorParticipantId)} → ${nameOf(attempt.subjectParticipantId)}, round ${attempt.round}:`,
+    );
     console.log(`    ID: ${attempt.id}`);
-    console.log(`    Status: ${attempt.status}`);
+    console.log(`    Status: ${attempt.status} (v${attempt.statusVersion})`);
     console.log(`    Delivery: ${attempt.deliveryStatus}`);
     console.log(`    Content: "${attempt.content.substring(0, 80)}..."`);
-    console.log(`    Shared At: ${attempt.sharedAt.toISOString()}`);
+    console.log(`    Submitted At: ${attempt.submittedAt.toISOString()}`);
     console.log(`    Revealed At: ${attempt.revealedAt?.toISOString() || 'N/A'}`);
     console.log(`    Delivered At: ${attempt.deliveredAt?.toISOString() || 'N/A'}`);
     console.log(`    Seen At: ${attempt.seenAt?.toISOString() || 'N/A'}`);
-
-    if (attempt.validations.length > 0) {
-      console.log(`    Validations:`);
-      for (const v of attempt.validations) {
-        const validatorName = v.user?.firstName || v.user?.name || 'Unknown';
-        console.log(`      - ${validatorName}: validated=${v.validated} at ${v.validatedAt?.toISOString()}`);
-        if (v.feedback) {
-          console.log(`        Feedback: "${v.feedback.substring(0, 50)}..."`);
-        }
-      }
+    for (const v of attempt.reviews) {
+      console.log(
+        `    Review by ${nameOf(v.reviewerParticipantId)}: validated=${v.validated} at ${v.createdAt.toISOString()}`,
+      );
+      if (v.feedback) console.log(`      Feedback: "${v.feedback.substring(0, 50)}..."`);
     }
   }
 
-  // Get reconciler results
+  // Reconciler results
   console.log('\n## RECONCILER RESULTS');
   console.log('-'.repeat(40));
-  const reconcilerResults = await prisma.reconcilerResult.findMany({
-    where: { sessionId },
-    include: { shareOffer: true },
-    orderBy: { createdAt: 'asc' }
+  const results = await prisma.reconcilerResult.findMany({
+    where: { attemptId: { in: attempts.map(a => a.id) } },
+    include: { shareOffers: { orderBy: { iteration: 'asc' } }, attempt: { select: { authorParticipantId: true } } },
+    orderBy: { createdAt: 'asc' },
   });
-
-  for (const result of reconcilerResults) {
-    console.log(`\n  [${result.guesserName} → ${result.subjectName}]`);
+  const direction = (r: (typeof results)[number]) =>
+    `${nameOf(r.attempt.authorParticipantId)} → ${nameOf(r.subjectParticipantId)}`;
+  for (const result of results) {
+    console.log(
+      `\n  [${direction(result)}] iteration ${result.iteration}${result.supersededAt ? ' (superseded)' : ''}`,
+    );
     console.log(`    ID: ${result.id}`);
     console.log(`    Created: ${result.createdAt.toISOString()}`);
     console.log(`    Alignment: ${result.alignmentScore}%`);
@@ -160,191 +147,154 @@ async function analyzeSession() {
     console.log(`    Most Important Gap: ${result.mostImportantGap?.substring(0, 80) || 'N/A'}`);
     console.log(`    suggestedShareContent: ${result.suggestedShareContent?.substring(0, 50) || 'NONE'}`);
     console.log(`    suggestedShareReason: ${result.suggestedShareReason?.substring(0, 50) || 'NONE'}`);
-
-    if (result.shareOffer) {
-      console.log(`    Share Offer:`);
-      console.log(`      ID: ${result.shareOffer.id}`);
-      console.log(`      Status: ${result.shareOffer.status}`);
-      console.log(`      Created: ${result.shareOffer.createdAt.toISOString()}`);
-      console.log(`      suggestedContent: ${result.shareOffer.suggestedContent?.substring(0, 50) || 'NONE'}`);
-      console.log(`      offerMessage: ${result.shareOffer.offerMessage?.substring(0, 50) || 'NONE'}`);
-      console.log(`      Declined At: ${result.shareOffer.declinedAt?.toISOString() || 'N/A'}`);
-      console.log(`      Shared At: ${result.shareOffer.sharedAt?.toISOString() || 'N/A'}`);
-      console.log(`      Delivery: ${result.shareOffer.deliveryStatus}`);
+    for (const offer of result.shareOffers) {
+      console.log(`    Share Offer ${offer.iteration}:`);
+      console.log(`      ID: ${offer.id}`);
+      console.log(`      Status: ${offer.status}`);
+      console.log(`      Created: ${offer.createdAt.toISOString()}`);
+      console.log(`      suggestedContent: ${offer.suggestedContent?.substring(0, 50) || 'NONE'}`);
+      console.log(`      offerMessage: ${offer.offerMessage?.substring(0, 50) || 'NONE'}`);
+      console.log(`      Declined At: ${offer.declinedAt?.toISOString() || 'N/A'}`);
+      console.log(`      Shared At: ${offer.sharedAt?.toISOString() || 'N/A'}`);
+      console.log(`      Delivery: ${offer.deliveryStatus}`);
     }
   }
 
-  // Build timeline
+  // Timeline
   console.log('\n## TIMELINE');
   console.log('-'.repeat(40));
-
-  const timeline: TimelineEvent[] = [];
-
-  // Add session creation
-  timeline.push({
-    timestamp: session.createdAt,
-    type: 'SESSION',
-    details: 'Session created'
-  });
-
-  // Add stage progress events
-  for (const p of stageProgress) {
-    if (p.startedAt) {
-      timeline.push({
-        timestamp: p.startedAt,
-        type: 'STAGE',
-        actor: users[p.userId],
-        details: `Started Stage ${p.stage}`
-      });
+  const timeline: TimelineEvent[] = [{ timestamp: session.createdAt, type: 'SESSION', details: 'Session created' }];
+  for (const p of participants) {
+    for (const m of states.get(p.id)?.milestones ?? []) {
+      timeline.push({ timestamp: m.reachedAt, type: 'MILESTONE', actor: names[p.id], details: `Reached ${m.key}` });
     }
   }
-
-  // Add empathy events
   for (const attempt of attempts) {
-    const name = attempt.sourceUser?.firstName || attempt.sourceUser?.name || 'Unknown';
-
+    const name = nameOf(attempt.authorParticipantId);
     timeline.push({
-      timestamp: attempt.sharedAt,
+      timestamp: attempt.submittedAt,
       type: 'EMPATHY',
       actor: name,
-      details: `Shared empathy (status: HELD)`
+      details: `Submitted round ${attempt.round}`,
     });
-
     if (attempt.revealedAt) {
       timeline.push({
         timestamp: attempt.revealedAt,
         type: 'EMPATHY',
         actor: name,
-        details: `Empathy revealed (status: ${attempt.status})`
+        details: `Round ${attempt.round} revealed (status: ${attempt.status})`,
       });
     }
-
-    for (const v of attempt.validations) {
-      if (v.validatedAt) {
-        const validatorName = v.user?.firstName || v.user?.name || 'Unknown';
-        timeline.push({
-          timestamp: v.validatedAt,
-          type: 'VALIDATION',
-          actor: validatorName,
-          details: `Validated ${name}'s empathy: ${v.validated ? 'ACCURATE' : 'INACCURATE'}`
-        });
-      }
+    for (const v of attempt.reviews) {
+      timeline.push({
+        timestamp: v.createdAt,
+        type: 'VALIDATION',
+        actor: nameOf(v.reviewerParticipantId),
+        details: `Reviewed ${name}'s round ${attempt.round}: ${v.validated ? 'ACCURATE' : 'INACCURATE'}`,
+      });
     }
   }
-
-  // Add reconciler events
-  for (const result of reconcilerResults) {
+  for (const result of results) {
     timeline.push({
       timestamp: result.createdAt,
       type: 'RECONCILER',
-      details: `Analyzed ${result.guesserName} → ${result.subjectName}: ${result.recommendedAction} (${result.alignmentScore}%)`
+      details: `Analyzed ${direction(result)}: ${result.recommendedAction} (${result.alignmentScore}%)`,
     });
-
-    if (result.shareOffer) {
+    for (const offer of result.shareOffers) {
+      const subject = nameOf(offer.subjectParticipantId);
       timeline.push({
-        timestamp: result.shareOffer.createdAt,
+        timestamp: offer.createdAt,
         type: 'SHARE_OFFER',
-        actor: result.subjectName,
-        details: `Share offer created (status: ${result.shareOffer.status})`
+        actor: subject,
+        details: `Share offer created (status: ${offer.status})`,
       });
-
-      if (result.shareOffer.declinedAt) {
+      if (offer.declinedAt)
         timeline.push({
-          timestamp: result.shareOffer.declinedAt,
+          timestamp: offer.declinedAt,
           type: 'SHARE_OFFER',
-          actor: result.subjectName,
-          details: 'Share offer DECLINED'
+          actor: subject,
+          details: 'Share offer DECLINED',
         });
-      }
-
-      if (result.shareOffer.sharedAt) {
+      if (offer.sharedAt)
         timeline.push({
-          timestamp: result.shareOffer.sharedAt,
+          timestamp: offer.sharedAt,
           type: 'SHARE_OFFER',
-          actor: result.subjectName,
-          details: 'Context shared with partner'
+          actor: subject,
+          details: 'Context shared with partner',
         });
-      }
     }
   }
 
-  // Add key messages (feel heard, etc.)
+  // Key messages: AI replies and markers across every participant's conversation
   const keyMessages = await prisma.message.findMany({
     where: {
-      sessionId,
-      OR: [
-        { role: 'AI' },
-        { content: { contains: 'feel heard' } },
-        { content: { contains: 'SHARED_CONTEXT' } }
-      ]
+      conversation: { participant: { sessionId } },
+      OR: [{ role: 'AI' }, { kind: { not: 'CHAT' } }, { content: { contains: 'feel heard' } }],
     },
-    include: { sender: { select: { name: true, firstName: true } } },
-    orderBy: { timestamp: 'asc' },
-    take: 50
+    select: {
+      content: true,
+      role: true,
+      kind: true,
+      createdAt: true,
+      senderParticipantId: true,
+      conversation: { select: { participantId: true } },
+    },
+    orderBy: { createdAt: 'asc' },
+    take: 50,
   });
-
   for (const msg of keyMessages) {
-    if (msg.role === 'AI' || msg.content.includes('[')) {
-      const actor = msg.sender?.firstName || msg.sender?.name || 'AI';
-      timeline.push({
-        timestamp: msg.timestamp,
-        type: 'MESSAGE',
-        actor,
-        details: msg.content.substring(0, 100)
-      });
-    }
+    const actor = msg.senderParticipantId
+      ? nameOf(msg.senderParticipantId)
+      : `AI → ${nameOf(msg.conversation.participantId)}`;
+    timeline.push({
+      timestamp: msg.createdAt,
+      type: msg.kind === 'CHAT' ? 'MESSAGE' : msg.kind,
+      actor,
+      details: msg.content.substring(0, 100),
+    });
   }
 
-  // Sort and print timeline
   timeline.sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime());
-
   for (const event of timeline) {
     const time = event.timestamp.toISOString().replace('T', ' ').substring(0, 23);
     const actor = event.actor ? `[${event.actor}]` : '';
     console.log(`  ${time} ${event.type.padEnd(12)} ${actor.padEnd(15)} ${event.details}`);
   }
 
-  // Print summary of issues
+  // Potential issues
   console.log('\n## POTENTIAL ISSUES');
   console.log('-'.repeat(40));
-
   let issues = 0;
-
-  for (const result of reconcilerResults) {
-    if (result.recommendedAction === 'OFFER_SHARING') {
-      if (!result.suggestedShareContent) {
-        console.log(`  [!] ${result.guesserName} → ${result.subjectName}: OFFER_SHARING but no suggestedShareContent`);
-        issues++;
-      }
-      if (result.shareOffer && !result.shareOffer.suggestedContent && !result.shareOffer.offerMessage) {
-        console.log(`  [!] ${result.guesserName} → ${result.subjectName}: Share offer has no content`);
-        issues++;
-      }
+  for (const result of results) {
+    if (result.recommendedAction === 'OFFER_SHARING' && !result.suggestedShareContent) {
+      console.log(`  [!] ${direction(result)}: OFFER_SHARING but no suggestedShareContent`);
+      issues++;
     }
-
-    if (result.shareOffer) {
-      // Check if share offer was declined without being offered first
-      if (result.shareOffer.status === 'DECLINED' && result.shareOffer.declinedAt) {
-        const createToDeclineMs = result.shareOffer.declinedAt.getTime() - result.shareOffer.createdAt.getTime();
-        if (createToDeclineMs > 60000) { // More than 1 minute
-          console.log(`  [?] ${result.subjectName}'s share offer: Created at ${result.shareOffer.createdAt.toISOString()}, declined at ${result.shareOffer.declinedAt.toISOString()} (${Math.round(createToDeclineMs/1000)}s gap)`);
+    for (const offer of result.shareOffers) {
+      if (result.recommendedAction === 'OFFER_SHARING' && !offer.suggestedContent && !offer.offerMessage) {
+        console.log(`  [!] ${direction(result)}: Share offer ${offer.iteration} has no content`);
+        issues++;
+      }
+      if (offer.status === 'DECLINED' && offer.declinedAt) {
+        const gapMs = offer.declinedAt.getTime() - offer.createdAt.getTime();
+        if (gapMs > 60000) {
+          console.log(
+            `  [?] ${nameOf(offer.subjectParticipantId)}'s share offer: created ${offer.createdAt.toISOString()}, declined ${offer.declinedAt.toISOString()} (${Math.round(gapMs / 1000)}s gap)`,
+          );
           issues++;
         }
       }
     }
   }
-
   for (const attempt of attempts) {
-    if (attempt.status === 'REVEALED' && !attempt.revealedAt) {
-      const name = attempt.sourceUser?.firstName || attempt.sourceUser?.name || 'Unknown';
-      console.log(`  [!] ${name}'s empathy: Status is REVEALED but no revealedAt timestamp`);
+    if ((attempt.status === 'REVEALED' || attempt.status === 'VALIDATED') && !attempt.revealedAt) {
+      console.log(
+        `  [!] ${nameOf(attempt.authorParticipantId)}'s round ${attempt.round}: status ${attempt.status} but no revealedAt`,
+      );
       issues++;
     }
   }
-
-  if (issues === 0) {
-    console.log('  No obvious issues detected');
-  }
+  if (issues === 0) console.log('  No obvious issues detected');
 
   console.log('\n' + '='.repeat(80));
 }

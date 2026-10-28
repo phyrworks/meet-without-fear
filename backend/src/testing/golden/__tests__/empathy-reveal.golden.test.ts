@@ -47,8 +47,7 @@ const ATTEMPT_TABLE = T ? 'empathy_attempt' : 'EmpathyAttempt';
 const MESSAGE_TABLE = T ? 'message' : 'Message';
 
 const BASE_URL =
-  process.env.GOLDEN_DATABASE_URL ||
-  'postgresql://mwf_user:mwf_password@localhost:5432/meet_without_fear';
+  process.env.GOLDEN_DATABASE_URL || 'postgresql://mwf_user:mwf_password@localhost:5432/meet_without_fear';
 
 const SCENARIO = 'empathy-reveal';
 
@@ -94,7 +93,7 @@ describe(`golden: ${SCENARIO}`, () => {
       label: 'draft as bob',
       actor: userB,
       tables: scope,
-      call: (agent) =>
+      call: agent =>
         agent
           .post(`/api/v1/sessions/${harness.sessionId}/empathy/draft`)
           .send({ content: BOB_EMPATHY, readyToShare: true }),
@@ -152,8 +151,7 @@ describe(`golden: ${SCENARIO}`, () => {
         connections: true,
         rowCounts: ['Message'],
       },
-      call: (agent) =>
-        agent.post(`/api/v1/sessions/${harness.sessionId}/empathy/consent`).send({ consent: true }),
+      call: agent => agent.post(`/api/v1/sessions/${harness.sessionId}/empathy/consent`).send({ consent: true }),
     });
     consentStep = consent;
 
@@ -173,8 +171,8 @@ describe(`golden: ${SCENARIO}`, () => {
             label: `${label} as ${actor.email}`,
             actor,
             tables: scope,
-            call: (agent) => agent.get(`/api/v1/sessions/${harness.sessionId}/${path}`),
-          })
+            call: agent => agent.get(`/api/v1/sessions/${harness.sessionId}/${path}`),
+          }),
         );
       }
     }
@@ -187,12 +185,22 @@ describe(`golden: ${SCENARIO}`, () => {
   });
 
   it('every identifier resolves to a structural label', async () => {
-    const report = await recordOrVerify({ scenario: SCENARIO, harness, steps, targetAllowList: EMPATHY_REVEAL_BYTE_TARGET_ALLOW });
+    const report = await recordOrVerify({
+      scenario: SCENARIO,
+      harness,
+      steps,
+      targetAllowList: EMPATHY_REVEAL_BYTE_TARGET_ALLOW,
+    });
     expect(report.unresolved).toEqual([]);
   });
 
   it('matches the recorded baseline', async () => {
-    const report = await recordOrVerify({ scenario: SCENARIO, harness, steps, targetAllowList: EMPATHY_REVEAL_BYTE_TARGET_ALLOW });
+    const report = await recordOrVerify({
+      scenario: SCENARIO,
+      harness,
+      steps,
+      targetAllowList: EMPATHY_REVEAL_BYTE_TARGET_ALLOW,
+    });
     if (report.recorded) {
       expect(process.env.GOLDEN_UPDATE?.split(',')).toContain(SCENARIO);
       return;
@@ -221,7 +229,7 @@ describe(`golden: ${SCENARIO}`, () => {
   });
 
   it('every step reached quiescence (a timed-out step is not a baseline)', () => {
-    expect(steps.filter((s) => !s.settled).map((s) => s.label)).toEqual([]);
+    expect(steps.filter(s => !s.settled).map(s => s.label)).toEqual([]);
   });
 
   // An empty or rate-limited window reads as a *smaller* trace, which looks
@@ -236,9 +244,7 @@ describe(`golden: ${SCENARIO}`, () => {
 
   it('every step captured a complete SQL trace', () => {
     expect(
-      steps
-        .filter((s) => !s.trace?.complete)
-        .map((s) => `${s.label}: ${s.trace?.incompleteReason ?? 'no trace'}`)
+      steps.filter(s => !s.trace?.complete).map(s => `${s.label}: ${s.trace?.incompleteReason ?? 'no trace'}`),
     ).toEqual([]);
   });
 
@@ -248,7 +254,7 @@ describe(`golden: ${SCENARIO}`, () => {
   // bodies. Only the envelope differs — and the envelope is the TOCTOU
   // protection, so its loss is the whole defect.
   it('the reveal runs inside one Serializable transaction', () => {
-    const serializable = (consentStep.trace?.shapes ?? []).filter((t) => t.isolation === 'SERIALIZABLE');
+    const serializable = (consentStep.trace?.shapes ?? []).filter(t => t.isolation === 'SERIALIZABLE');
     expect(serializable).toHaveLength(1);
     // One occurrence, not two: the reveal is a single read-check-write.
     expect(serializable[0].occurrences).toBe(1);
@@ -266,7 +272,7 @@ describe(`golden: ${SCENARIO}`, () => {
   // asserting nothing about writes at all.
   it('the consent step actually writes rows', () => {
     expect(consentStep.changes.length).toBeGreaterThan(0);
-    expect(consentStep.changes.some((c) => c.table === ATTEMPT_TABLE)).toBe(true);
+    expect(consentStep.changes.some(c => c.table === ATTEMPT_TABLE)).toBe(true);
   });
 
   // The reveal commentary is written by the background reconciler, one message
@@ -275,19 +281,20 @@ describe(`golden: ${SCENARIO}`, () => {
   // both messages to the same user would satisfy any count-based check.
   it('routes one reveal message to each partner', async () => {
     const notices = consentStep.changes
-      .filter((c) => c.table === MESSAGE_TABLE && c.kind === 'added')
-      .map((c) => c.after as { forUserId?: string; conversation_id?: string; role?: string; content?: string })
-      .filter((m) => m.role === 'AI' && m.content?.includes('is ready for you to review'));
+      .filter(c => c.table === MESSAGE_TABLE && c.kind === 'added')
+      .map(c => c.after as { forUserId?: string; conversation_id?: string; role?: string; content?: string })
+      .filter(m => m.role === 'AI' && m.content?.includes('is ready for you to review'));
     // Target: the audience is the conversation's owner (spec §1.1 message).
     const ownerOf = async (m: { forUserId?: string; conversation_id?: string }) =>
       T
         ? (
             await withClient(
               harness.fixture.target,
-              c => c.query<{ user_id: string }>(
-                `SELECT p.user_id FROM conversation c JOIN participant p ON p.id = c.participant_id WHERE c.id = $1`,
-                [m.conversation_id],
-              ),
+              c =>
+                c.query<{ user_id: string }>(
+                  `SELECT p.user_id FROM conversation c JOIN participant p ON p.id = c.participant_id WHERE c.id = $1`,
+                  [m.conversation_id],
+                ),
               harness.fixture.database,
             )
           ).rows[0]?.user_id
@@ -299,7 +306,7 @@ describe(`golden: ${SCENARIO}`, () => {
 
   it('reveals both attempts or neither', () => {
     expect(attemptsAfter).toHaveLength(2);
-    const revealed = attemptsAfter.filter((a) => a.status === 'REVEALED');
+    const revealed = attemptsAfter.filter(a => a.status === 'REVEALED');
     expect(revealed).toHaveLength(attemptsAfter.length);
     // revealedAt is the field a hand-written UPDATE is most likely to drop: the
     // status alone still reads as revealed, and every downstream "when" is wrong.
@@ -327,10 +334,10 @@ describe(`golden: ${SCENARIO}`, () => {
   const targetOnly = T ? it : it.skip;
   targetMessageStageChecks({ harness: () => harness, steps: () => steps });
 
-  targetOnly('mayDiffer pair: the partner-empathy statusVersion is the row\'s status_version (2)', () => {
-    for (const step of steps.filter((s) => s.label.startsWith('partner empathy as'))) {
+  targetOnly("mayDiffer pair: the partner-empathy statusVersion is the row's status_version (2)", () => {
+    for (const step of steps.filter(s => s.label.startsWith('partner empathy as'))) {
       const attempt = (step.body as { data: { attempt: { id: string; statusVersion: number } } }).data.attempt;
-      const row = attemptsAfter.find((a) => a.id === attempt.id);
+      const row = attemptsAfter.find(a => a.id === attempt.id);
       expect(attempt.statusVersion).toBe(Number(row?.status_version));
       expect(attempt.statusVersion).toBe(2);
     }

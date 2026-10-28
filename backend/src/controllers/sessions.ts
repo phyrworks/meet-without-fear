@@ -15,11 +15,17 @@
 import { Request, Response } from 'express';
 import { logger } from '../lib/logger';
 import { getJobPrisma, prisma } from '../lib/prisma';
-import { ApiResponse, DEFAULT_PRIVACY_PREFERENCES, ErrorCode, MessageRole, PrivacyPreferencesDTO, Stage } from '@meet-without-fear/shared';
-import { notifyPartner, publishSessionEvent, publishMessageAIResponse, publishMessageError } from '../services/realtime';
+import { DEFAULT_PRIVACY_PREFERENCES, ErrorCode, MessageRole, Stage } from '@meet-without-fear/shared';
+import {
+  notifyPartner,
+  publishSessionEvent,
+  publishMessageAIResponse,
+  publishMessageError,
+} from '../services/realtime';
 import { successResponse, errorResponse } from '../utils/response';
-import { getPartnerUserId, isSessionCreator } from '../utils/session';
-import { getPartnerParticipant } from '../services/participant-resolver';
+import { getPartnerUserId, isSessionCreator, departedParticipantUsers } from '../utils/session';
+import { getCoParticipants, getPartnerParticipant } from '../services/participant-resolver';
+import { pingStage2Refresh } from '../services/empathy-realtime';
 import { loadMilestones, loadStageStates, progressDTO, rowForStage } from '../services/stage-shim';
 import { reachMilestone } from '../services/milestone-writer';
 import { displayStatus, isSessionPaused } from '../services/session-status';
@@ -81,20 +87,22 @@ export async function getSession(req: Request, res: Response): Promise<void> {
     }
 
     // Get my membership (for nickname I use for partner)
-    const myMember = session.relationship.members.find((m) => m.userId === user.id);
+    const myMember = session.relationship.members.find(m => m.userId === user.id);
 
     // Get partner info
-    const partnerMember = session.relationship.members.find((m) => m.userId !== user.id);
+    const partnerMember = session.relationship.members.find(m => m.userId !== user.id);
 
     // Current progress (stage shim)
     const state = (await loadStageStates([{ id: participant.id, joinedAt: participant.joinedAt }])).get(participant.id);
     const currentProgress = progressDTO(state, { gates: false });
 
+    // A partner who left (account deletion, leaving) shows no name (TS-12, R5).
+    const partnerLeft =
+      !!partnerMember && (await departedParticipantUsers([sessionId])).has(`${sessionId}:${partnerMember.userId}`);
     // Use nickname (what I call my partner) with fallback to their actual name
-    const partnerDisplayName = myMember?.nickname ||
-      partnerMember?.user.firstName ||
-      partnerMember?.user.name ||
-      null;
+    const partnerDisplayName = partnerLeft
+      ? null
+      : myMember?.nickname || partnerMember?.user.firstName || partnerMember?.user.name || null;
 
     successResponse(res, {
       session: {
@@ -107,7 +115,7 @@ export async function getSession(req: Request, res: Response): Promise<void> {
           ? {
               id: partnerMember.userId,
               name: partnerDisplayName,
-              nickname: myMember?.nickname || null,
+              nickname: partnerLeft ? null : myMember?.nickname || null,
             }
           : { id: '', name: myMember?.nickname || null, nickname: myMember?.nickname || null },
         myProgress: {
@@ -156,7 +164,7 @@ export async function pauseSession(req: Request, res: Response): Promise<void> {
         res,
         ErrorCode.SESSION_NOT_ACTIVE,
         `Cannot pause session: current status is ${paused ? 'PAUSED' : session.status}`,
-        400
+        400,
       );
       return;
     }
@@ -211,12 +219,7 @@ export async function resumeSession(req: Request, res: Response): Promise<void> 
     }
 
     if (!(await isSessionPaused(sessionId))) {
-      errorResponse(
-        res,
-        ErrorCode.VALIDATION_ERROR,
-        `Cannot resume session: current status is ${session.status}`,
-        400
-      );
+      errorResponse(res, ErrorCode.VALIDATION_ERROR, `Cannot resume session: current status is ${session.status}`, 400);
       return;
     }
 
@@ -286,7 +289,7 @@ export async function getProgress(req: Request, res: Response): Promise<void> {
     // commonGroundFoundAt) have no milestone: needs_confirmed is the
     // identification instant; common ground is not a milestone (null).
     const myStage1 = rowForStage(myState, 1);
-    const needsConfirmed = myState?.milestones.find((m) => m.key === 'needs_confirmed');
+    const needsConfirmed = myState?.milestones.find(m => m.key === 'needs_confirmed');
     const milestones = {
       witnessStartedAt: myStage1?.startedAt?.toISOString() ?? null,
       feelHeardConfirmedAt: (myStage1?.gatesSatisfied.feelHeardConfirmedAt as string | undefined) ?? null,
@@ -320,17 +323,8 @@ export async function resolveSession(req: Request, res: Response): Promise<void>
 
     const sessionId = req.params.id;
 
-    // Check session exists and user has access
-    const session = await prisma.session.findFirst({
-      where: {
-        id: sessionId,
-        relationship: {
-          members: {
-            some: { userId: user.id },
-          },
-        },
-      },
-    });
+    // requireSessionAccess resolved the caller's present participant
+    const session = req.participant ? await prisma.session.findUnique({ where: { id: sessionId } }) : null;
 
     if (!session) {
       errorResponse(res, ErrorCode.NOT_FOUND, 'Session not found', 404);
@@ -343,49 +337,34 @@ export async function resolveSession(req: Request, res: Response): Promise<void>
         res,
         ErrorCode.SESSION_NOT_ACTIVE,
         `Cannot resolve session: current status is ${session.status}`,
-        400
+        400,
       );
       return;
     }
 
-    // Check if there are agreed agreements
-    const sharedVessel = await prisma.sharedVessel.findUnique({
-      where: { sessionId },
-      include: {
-        agreements: {
-          where: {
-            status: 'AGREED',
-          },
-        },
-      },
+    // Check if there are agreed agreements (agreement rows exist only once every party was WILLING)
+    const agreements = await prisma.agreement.findMany({
+      where: { sessionId, status: 'AGREED' },
+      orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+      select: { id: true, description: true, type: true, status: true, createdAt: true, followUpAt: true },
     });
 
-    if (!sharedVessel || sharedVessel.agreements.length === 0) {
-      errorResponse(
-        res,
-        ErrorCode.VALIDATION_ERROR,
-        'Cannot resolve session: no agreed agreements found',
-        400
-      );
+    if (agreements.length === 0) {
+      errorResponse(res, ErrorCode.VALIDATION_ERROR, 'Cannot resolve session: no agreed agreements found', 400);
       return;
     }
 
     const now = new Date();
 
-    // Update session status to RESOLVED
-    const updatedSession = await prisma.session.update({
-      where: { id: sessionId },
-      data: {
-        status: 'RESOLVED',
-        resolvedAt: now,
-      },
+    // RESOLVED through the sole status writer (it stamps resolved_at), then
+    // every present human reaches `closed` (a system milestone: the job's) —
+    // the old "mark all stage progress COMPLETED".
+    await getJobPrisma().$executeRaw`SELECT app.session_set_status(${sessionId}::uuid, 'RESOLVED'::session_status)`;
+    const present = await prisma.participant.findMany({
+      where: { sessionId, kind: 'human', leftAt: null },
+      select: { id: true },
     });
-
-    // Mark all stage progress as COMPLETED
-    await prisma.stageProgress.updateMany({
-      where: { sessionId },
-      data: { status: 'COMPLETED', completedAt: now },
-    });
+    for (const p of present) await reachMilestone(p.id, 'closed', now);
 
     // Notify partner
     const partnerId = await getPartnerUserId(sessionId, user.id);
@@ -397,20 +376,19 @@ export async function resolveSession(req: Request, res: Response): Promise<void>
     }
 
     // Get agreements with follow-up dates
-    const followUpScheduled = sharedVessel.agreements.some(
-      (a) => a.followUpDate !== null
-    );
+    const followUpScheduled = agreements.some(a => a.followUpAt !== null);
 
     successResponse(res, {
       resolved: true,
       resolvedAt: now.toISOString(),
-      agreements: sharedVessel.agreements.map((a) => ({
+      agreements: agreements.map(a => ({
         id: a.id,
         description: a.description,
         type: a.type,
         status: a.status,
-        agreedAt: a.agreedAt?.toISOString() ?? null,
-        followUpDate: a.followUpDate?.toISOString() ?? null,
+        // An agreement row is created at the moment all parties agreed
+        agreedAt: a.createdAt.toISOString(),
+        followUpDate: a.followUpAt?.toISOString() ?? null,
       })),
       followUpScheduled,
     });
@@ -440,7 +418,7 @@ const STAGE_GATES: Record<number, string[]> = {
  */
 function checkGates(
   stage: number,
-  gatesSatisfied: Record<string, unknown> | null
+  gatesSatisfied: Record<string, unknown> | null,
 ): { satisfied: boolean; unsatisfiedGates: string[] } {
   const requiredGates = STAGE_GATES[stage] || [];
   const unsatisfiedGates: string[] = [];
@@ -492,13 +470,14 @@ export async function advanceStage(req: Request, res: Response): Promise<void> {
     // Check session status allows advancement (ACTIVE; the creator from
     // stage 0 while INVITED).
     if (session.status !== 'ACTIVE') {
-      const creatorAtStart = session.status === 'INVITED' && currentStage <= 1 && (await isSessionCreator(sessionId, user.id));
+      const creatorAtStart =
+        session.status === 'INVITED' && currentStage <= 1 && (await isSessionCreator(sessionId, user.id));
       if (!creatorAtStart) {
         errorResponse(
           res,
           ErrorCode.SESSION_NOT_ACTIVE,
           `Cannot advance stage: session status is ${session.status}`,
-          400
+          400,
         );
         return;
       }
@@ -618,7 +597,7 @@ export async function confirmInvitationMessage(req: Request, res: Response): Pro
     // not enough: confirmTopicFrame sets it eagerly so the partner can accept
     // the link before the inviter closes the share modal.
     const milestones = (await loadMilestones([participant.id])).get(participant.id) ?? [];
-    if (invitation.messageConfirmedAt && milestones.some((m) => m.key === 'invitation_sent')) {
+    if (invitation.messageConfirmedAt && milestones.some(m => m.key === 'invitation_sent')) {
       successResponse(res, {
         confirmed: true,
         invitation: {
@@ -646,7 +625,8 @@ export async function confirmInvitationMessage(req: Request, res: Response): Pro
 
     // Session → INVITED (ready for partner to accept), through its only writer.
     if (session.status === 'CREATED') {
-      await getJobPrisma().$executeRaw`SELECT app.session_set_status(${sessionId}::uuid, 'INVITED'::public.session_status)`;
+      await getJobPrisma()
+        .$executeRaw`SELECT app.session_set_status(${sessionId}::uuid, 'INVITED'::public.session_status)`;
     }
 
     // Stage 0 complete: compact signed (if not yet) and invitation sent.
@@ -660,7 +640,12 @@ export async function confirmInvitationMessage(req: Request, res: Response): Pro
     const historyLimit = summaryBoundary ? 30 : 20;
     const conversationId = participant.mainConversationId;
     const historyDesc = conversationId
-      ? await listConversationMessages({ conversationId, limit: historyLimit - 1, order: 'desc', newerThan: summaryBoundary })
+      ? await listConversationMessages({
+          conversationId,
+          limit: historyLimit - 1,
+          order: 'desc',
+          newerThan: summaryBoundary,
+        })
       : [];
     const history = historyDesc.slice().reverse();
 
@@ -715,8 +700,8 @@ export async function confirmInvitationMessage(req: Request, res: Response): Pro
     (async () => {
       try {
         const historyWithTrigger = [
-          ...history.map((m) => ({
-            role: m.role === 'USER' && m.kind === 'CHAT' ? 'user' as const : 'assistant' as const,
+          ...history.map(m => ({
+            role: m.role === 'USER' && m.kind === 'CHAT' ? ('user' as const) : ('assistant' as const),
             content: m.content,
           })),
           { role: 'user' as const, content: '[I just sent the invitation and am ready to continue.]' },
@@ -746,13 +731,13 @@ export async function confirmInvitationMessage(req: Request, res: Response): Pro
         // Summarize and embed (non-blocking)
         updateSessionSummary(sessionId, user.id, turnId)
           .then(() => embedSessionContent(sessionId, user.id, turnId))
-          .catch((err: unknown) =>
-            logger.warn('[confirmInvitationMessage] Failed to update summary/embedding:', err)
-          );
+          .catch((err: unknown) => logger.warn('[confirmInvitationMessage] Failed to update summary/embedding:', err));
       } catch (err) {
         logger.error('[confirmInvitationMessage] Failed to generate transition message:', err);
         // Notify client of the error so they can retry
-        await publishMessageError(sessionId, user.id, '', 'Failed to generate transition message', true).catch(() => {});
+        await publishMessageError(sessionId, user.id, '', 'Failed to generate transition message', true).catch(
+          () => {},
+        );
       }
     })();
   } catch (error) {
@@ -797,31 +782,45 @@ export async function markSessionViewed(req: Request, res: Response): Promise<vo
     // migration mapped it).
     const seenMessage =
       typeof lastSeenChatItemId === 'string' && participant.mainConversationId
-        ? await prisma.message.findFirst({
-            where: { id: lastSeenChatItemId, conversationId: participant.mainConversationId },
-            select: { id: true },
-          }).catch(() => null)
+        ? await prisma.message
+            .findFirst({
+              where: { id: lastSeenChatItemId, conversationId: participant.mainConversationId },
+              select: { id: true },
+            })
+            .catch(() => null)
         : null;
 
     const readState = await prisma.conversationReadState.upsert({
       where: { participantId: participant.id },
       update: { lastViewedAt: now, lastActiveAt: now, lastSeenMessageId: seenMessage?.id ?? null },
-      create: { participantId: participant.id, lastViewedAt: now, lastActiveAt: now, lastSeenMessageId: seenMessage?.id ?? null },
+      create: {
+        participantId: participant.id,
+        lastViewedAt: now,
+        lastActiveAt: now,
+        lastSeenMessageId: seenMessage?.id ?? null,
+      },
     });
 
     // Notify partner that this user viewed the session (for delivery status updates)
-    // Fire-and-forget - don't block the response. Include empathy status for cache update.
+    // Fire-and-forget - don't block the response. R36 / work-t4zp: the session
+    // channel reaches every participant's device, so it carries presence only —
+    // never a status DTO (each holds its owner's own round). The co-participants,
+    // whose delivered content this view may have marked seen, get an addressed,
+    // content-free status ping and refetch their own status over the API.
     (async () => {
       try {
-        const { buildEmpathyExchangeStatusForBothUsers } = await import('../services/empathy-status');
-        const allStatuses = await buildEmpathyExchangeStatusForBothUsers(sessionId);
         const showActivityStatus = await getShowActivityStatus(user.id);
-        await publishSessionEvent(sessionId, 'partner.session_viewed', {
-          viewedAt: showActivityStatus ? now.toISOString() : null,
-          activeAt: showActivityStatus ? now.toISOString() : null,
-          presenceVisible: showActivityStatus,
-          empathyStatuses: allStatuses,
-        }, user.id);
+        await publishSessionEvent(
+          sessionId,
+          'partner.session_viewed',
+          {
+            viewedAt: showActivityStatus ? now.toISOString() : null,
+            activeAt: showActivityStatus ? now.toISOString() : null,
+            presenceVisible: showActivityStatus,
+          },
+          user.id,
+        );
+        await pingCoParticipants(sessionId, participant.id);
       } catch (err) {
         logger.error('[markSessionViewed] Failed to publish session_viewed event:', err);
       }
@@ -835,6 +834,17 @@ export async function markSessionViewed(req: Request, res: Response): Promise<vo
   } catch (error) {
     logger.error('[markSessionViewed] Error:', error);
     errorResponse(res, ErrorCode.INTERNAL_ERROR, 'Failed to mark session as viewed', 500);
+  }
+}
+
+/**
+ * An addressed, content-free status ping to each present human co-participant
+ * (R36): their client invalidates and refetches its own empathy status, whose
+ * delivery stamps this participant's view may just have moved to SEEN.
+ */
+async function pingCoParticipants(sessionId: string, participantId: string): Promise<void> {
+  for (const co of await getCoParticipants(participantId)) {
+    if (co.kind === 'human' && !co.leftAt && co.userId) await pingStage2Refresh(sessionId, co.userId);
   }
 }
 
@@ -869,18 +879,22 @@ export async function markShareTabViewed(req: Request, res: Response): Promise<v
     });
 
     // Notify partner that this user viewed the Share tab (for delivery status updates)
-    // Fire-and-forget - don't block the response. Include empathy status for cache update.
+    // Fire-and-forget - don't block the response. Presence only on the session
+    // channel; addressed content-free status pings to the co-participants (R36 / work-t4zp).
     (async () => {
       try {
-        const { buildEmpathyExchangeStatusForBothUsers } = await import('../services/empathy-status');
-        const allStatuses = await buildEmpathyExchangeStatusForBothUsers(sessionId);
         const showActivityStatus = await getShowActivityStatus(user.id);
-        await publishSessionEvent(sessionId, 'partner.share_tab_viewed', {
-          viewedAt: showActivityStatus ? now.toISOString() : null,
-          activeAt: showActivityStatus ? now.toISOString() : null,
-          presenceVisible: showActivityStatus,
-          empathyStatuses: allStatuses,
-        }, user.id);
+        await publishSessionEvent(
+          sessionId,
+          'partner.share_tab_viewed',
+          {
+            viewedAt: showActivityStatus ? now.toISOString() : null,
+            activeAt: showActivityStatus ? now.toISOString() : null,
+            presenceVisible: showActivityStatus,
+          },
+          user.id,
+        );
+        await pingCoParticipants(sessionId, participant.id);
       } catch (err) {
         logger.error('[markShareTabViewed] Failed to publish share_tab_viewed event:', err);
       }

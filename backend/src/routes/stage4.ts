@@ -39,41 +39,31 @@ import {
 const router = Router();
 
 // Get redesigned Stage 4 state
-router.get(
-  '/sessions/:id/stage4',
-  requireAuth,
-  requireSessionAccess,
-  asyncHandler(getStage4State)
-);
+router.get('/sessions/:id/stage4', requireAuth, requireSessionAccess, asyncHandler(getStage4State));
 
 // Submit one redesigned Stage 4 per-proposal willingness decision
 router.post(
   '/sessions/:id/stage4/proposals/:proposalId/selection',
   requireAuth,
   requireSessionAccess,
-  asyncHandler(submitStage4ProposalSelection)
+  asyncHandler(submitStage4ProposalSelection),
 );
 
 // Submit redesigned Stage 4 per-proposal willingness decisions
-router.post(
-  '/sessions/:id/stage4/selections',
-  requireAuth,
-  requireSessionAccess,
-  asyncHandler(submitStage4Selections)
-);
+router.post('/sessions/:id/stage4/selections', requireAuth, requireSessionAccess, asyncHandler(submitStage4Selections));
 
 router.post(
   '/sessions/:id/stage4/walkthrough/needs/:needId',
   requireAuth,
   requireSessionAccess,
-  asyncHandler(updateStage4WalkthroughNeedStatus)
+  asyncHandler(updateStage4WalkthroughNeedStatus),
 );
 
 router.post(
   '/sessions/:id/stage4/proposals/suggest',
   requireAuth,
   requireSessionAccess,
-  asyncHandler(requestSuggestions)
+  asyncHandler(requestSuggestions),
 );
 
 // Share current user's Stage 4 selections with their partner
@@ -81,7 +71,7 @@ router.post(
   '/sessions/:id/stage4/share-selections',
   requireAuth,
   requireSessionAccess,
-  asyncHandler(shareStage4Selections)
+  asyncHandler(shareStage4Selections),
 );
 
 // Mark a need as "leave for now"
@@ -89,7 +79,7 @@ router.post(
   '/sessions/:id/stage4/needs/:needId/decline',
   requireAuth,
   requireSessionAccess,
-  asyncHandler(declineStage4Need)
+  asyncHandler(declineStage4Need),
 );
 
 // Remove a "leave for now" declination
@@ -97,7 +87,7 @@ router.delete(
   '/sessions/:id/stage4/needs/:needId/decline',
   requireAuth,
   requireSessionAccess,
-  asyncHandler(undeclineStage4Need)
+  asyncHandler(undeclineStage4Need),
 );
 
 // Withdraw current user's shared Stage 4 selections so they can revise
@@ -105,89 +95,54 @@ router.post(
   '/sessions/:id/stage4/unshare-selections',
   requireAuth,
   requireSessionAccess,
-  asyncHandler(unshareStage4Selections)
+  asyncHandler(unshareStage4Selections),
 );
 
 // Close redesigned Stage 4 from willingness selections
-router.post(
-  '/sessions/:id/stage4/close',
-  requireAuth,
-  requireSessionAccess,
-  asyncHandler(closeStage4)
-);
+router.post('/sessions/:id/stage4/close', requireAuth, requireSessionAccess, asyncHandler(closeStage4));
 
 // Stage 4 Sub-chat (Phase 3)
-router.post(
-  '/sessions/:id/stage4/subchat',
-  requireAuth,
-  requireSessionAccess,
-  asyncHandler(openStage4SubChat)
-);
+router.post('/sessions/:id/stage4/subchat', requireAuth, requireSessionAccess, asyncHandler(openStage4SubChat));
 router.get(
   '/sessions/:id/stage4/subchat/:subChatId',
   requireAuth,
   requireSessionAccess,
-  asyncHandler(getStage4SubChat)
+  asyncHandler(getStage4SubChat),
 );
 router.post(
   '/sessions/:id/stage4/subchat/:subChatId/messages',
   requireAuth,
   requireSessionAccess,
-  asyncHandler(sendStage4SubChatMessage)
+  asyncHandler(sendStage4SubChatMessage),
 );
 router.post(
   '/sessions/:id/stage4/subchat/:subChatId/resolve',
   requireAuth,
   requireSessionAccess,
-  asyncHandler(resolveStage4SubChat)
+  asyncHandler(resolveStage4SubChat),
 );
 
 // Get anonymous strategy pool
-router.get(
-  '/sessions/:id/strategies',
-  requireAuth,
-  requireSessionAccess,
-  asyncHandler(getStrategies)
-);
+router.get('/sessions/:id/strategies', requireAuth, requireSessionAccess, asyncHandler(getStrategies));
 
 // Propose a new strategy
-router.post(
-  '/sessions/:id/strategies',
-  requireAuth,
-  requireSessionAccess,
-  asyncHandler(proposeStrategy)
-);
+router.post('/sessions/:id/strategies', requireAuth, requireSessionAccess, asyncHandler(proposeStrategy));
 
 // Create agreement
-router.post(
-  '/sessions/:id/agreements',
-  requireAuth,
-  requireSessionAccess,
-  asyncHandler(createAgreement)
-);
+router.post('/sessions/:id/agreements', requireAuth, requireSessionAccess, asyncHandler(createAgreement));
 
 // Confirm agreement
 router.post(
   '/sessions/:id/agreements/:agreementId/confirm',
   requireAuth,
   requireSessionAccess,
-  asyncHandler(confirmAgreement)
+  asyncHandler(confirmAgreement),
 );
 
 // Request AI strategy suggestions
-router.post(
-  '/sessions/:id/strategies/suggest',
-  requireAuth,
-  requireSessionAccess,
-  asyncHandler(requestSuggestions)
-);
+router.post('/sessions/:id/strategies/suggest', requireAuth, requireSessionAccess, asyncHandler(requestSuggestions));
 
 // Get agreements list
-router.get(
-  '/sessions/:id/agreements',
-  requireAuth,
-  requireSessionAccess,
-  asyncHandler(getAgreements)
-);
+router.get('/sessions/:id/agreements', requireAuth, requireSessionAccess, asyncHandler(getAgreements));
 
 export default router;

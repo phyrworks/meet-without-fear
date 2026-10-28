@@ -1,17 +1,33 @@
 /**
- * Session Deletion Service
+ * Session Deletion Service — leaving one session (TS-12; spec §4
+ * `app.anonymize_user_in_session` = steps 1–4 and 7 of the account walk for
+ * one session).
  *
- * Handles session deletion for a single user, similar to account deletion but scoped to one session.
+ * The walk runs on the JOB connection in one transaction: a live session →
+ * ABANDONED; the leaver's participant loses its display name and leaves
+ * (`left_at`); their private-only rows in the session are deleted (own
+ * conversations with every message, read state, drafts, ai_memory, mood,
+ * regulation, dispositions, notes, unshared needs, unshared choices,
+ * individual check-ins, unrevealed attempts with their results/offers);
+ * their brain_activity of the session (and, ruling R17, the session's
+ * unattributed rows); their participant key is shredded. Delivered content —
+ * messages in the partner's conversation, revealed attempts, need_share,
+ * shared choices, agreements — stays, attributed to the leaver's participant.
  *
- * Key principles:
- * 1. Data shared with partner stays (content they've seen belongs to them too)
- * 2. Active sessions become ABANDONED + partner notification
- * 3. Private user data for this session gets deleted (vessel, messages, stage progress, drafts)
- * 4. User references in shared content become null (anonymized)
- * 5. Partner keeps access to their own data and the session (in ABANDONED state)
+ * Explicit deletes the function does not cover, in the same job transaction
+ * (each the leaver's own row, scoped to this session):
+ *   - `user_memory` rows with `session_id` = this session — spec §1.7
+ *     user_memory "optionally session-scoped" (`session_id` FK session;
+ *     "NULL = global"): a standing instruction for a session the user left
+ *     has no session to apply to;
+ *   - `reminder` rows of the leaver for this session's follow-ups — spec §1.5
+ *     reminder (`user_id`, the leaver's own nudge): a leaver gets no further
+ *     reminders about a session they left. (The account walk's step 5 deletes
+ *     every reminder of the user; leaving one session deletes that session's.)
  */
 
-import { prisma } from '../lib/prisma';
+import { getJobPrisma, prisma } from '../lib/prisma';
+import { resolveParticipant } from './participant-resolver';
 
 export interface SessionDeletionSummary {
   sessionAbandoned: boolean;
@@ -20,206 +36,47 @@ export interface SessionDeletionSummary {
 }
 
 /**
- * Delete a user's participation in a session with proper notifications and data handling.
+ * Leave a session: the per-session walk plus the two explicit deletes above.
  *
- * @param sessionId - The session ID to delete from
- * @param userId - The user ID who is deleting
- * @param displayName - The user's display name for notifications
- * @returns Summary of what was deleted/affected
+ * @param sessionId - The session to leave
+ * @param userId - The leaving user (the caller)
+ * @param displayName - Unused (kept for the caller's signature; no event names the leaver)
  */
 export async function deleteSessionForUser(
   sessionId: string,
   userId: string,
-  displayName: string
+  displayName: string,
 ): Promise<SessionDeletionSummary> {
-  let partnerNotified = false;
-  let dataRecordsDeleted = 0;
-  let sessionAbandoned = false;
+  void displayName;
 
-  // Step 1: Find the session and verify user has access
-  const session = await prisma.session.findFirst({
-    where: {
-      id: sessionId,
-      relationship: {
-        members: {
-          some: { userId },
-        },
-      },
-    },
-    include: {
-      relationship: {
-        include: {
-          members: {
-            include: {
-              user: true,
-            },
-          },
-        },
-      },
-    },
-  });
-
-  if (!session) {
+  // The caller's present participant (a leaver cannot leave twice)
+  const me = await resolveParticipant(sessionId, userId);
+  if (!me) {
     throw new Error('Session not found or access denied');
   }
 
-  // Step 2: Find the partner (the other member)
-  const partner = session.relationship.members.find((m) => m.userId !== userId);
+  // Before the walk: what the summary reports (the caller's own rows)
+  const session = await prisma.session.findUnique({ where: { id: sessionId }, select: { status: true } });
+  const live = !!session && ['CREATED', 'INVITED', 'ACTIVE'].includes(session.status);
+  const [messages, drafts, moods] = await Promise.all([
+    prisma.message.count({ where: { conversation: { participantId: me.id } } }),
+    prisma.draft.count({ where: { participantId: me.id } }),
+    prisma.moodReading.count({ where: { participantId: me.id } }),
+  ]);
 
-  // Step 3: If session is active, mark as ABANDONED and notify partner
-  const activeStatuses = ['CREATED', 'INVITED', 'ACTIVE', 'WAITING', 'PAUSED'];
-  if (activeStatuses.includes(session.status)) {
-    // Mark session as abandoned
-    await prisma.session.update({
-      where: { id: sessionId },
-      data: { status: 'ABANDONED' },
-    });
-    sessionAbandoned = true;
-  } else {
-    // For already resolved/abandoned sessions, just mark as archived from this user's perspective
-    // The partner can still see it
-    sessionAbandoned = session.status === 'ABANDONED';
-  }
-
-  // Step 4: Delete user's private data for this session
-
-  // 4a: Delete user's stage progress
-  const stageProgressDelete = await prisma.stageProgress.deleteMany({
-    where: { sessionId, userId },
+  // The walk and the explicit deletes: one job transaction
+  const extra = await getJobPrisma().$transaction(async tx => {
+    await tx.$executeRaw`SELECT app.anonymize_user_in_session(${sessionId}::uuid, ${me.id}::uuid)`;
+    const memories =
+      await tx.$executeRaw`DELETE FROM user_memory WHERE user_id = ${userId}::uuid AND session_id = ${sessionId}::uuid`;
+    const reminders = await tx.$executeRaw`DELETE FROM reminder r USING follow_up f
+      WHERE r.follow_up_id = f.id AND f.session_id = ${sessionId}::uuid AND r.user_id = ${userId}::uuid`;
+    return memories + reminders;
   });
-  dataRecordsDeleted += stageProgressDelete.count;
-
-  // 4b: Delete user's messages (their sent messages)
-  // Note: We set senderId to null to anonymize rather than delete,
-  // so partner can still see the conversation history
-  const messageUpdate = await prisma.message.updateMany({
-    where: { sessionId, senderId: userId },
-    data: { senderId: null },
-  });
-  dataRecordsDeleted += messageUpdate.count;
-
-  // Also delete AI messages that were specifically for this user
-  const aiMessageDelete = await prisma.message.deleteMany({
-    where: { sessionId, forUserId: userId },
-  });
-  dataRecordsDeleted += aiMessageDelete.count;
-
-  // 4c: Delete user's vessel and all related data (cascades handle nested items)
-  const userVessel = await prisma.userVessel.findFirst({
-    where: { sessionId, userId },
-  });
-  if (userVessel) {
-    await prisma.userEvent.deleteMany({ where: { vesselId: userVessel.id } });
-    await prisma.emotionalReading.deleteMany({ where: { vesselId: userVessel.id } });
-    await prisma.identifiedNeed.deleteMany({ where: { vesselId: userVessel.id } });
-    await prisma.boundary.deleteMany({ where: { vesselId: userVessel.id } });
-    await prisma.userDocument.deleteMany({ where: { vesselId: userVessel.id } });
-    await prisma.userVessel.update({
-      where: { id: userVessel.id },
-      data: {
-        archivedAt: new Date(),
-        conversationSummary: null,
-        notableFacts: undefined,
-        lastViewedAt: null,
-        lastSeenChatItemId: null,
-        lastViewedShareTabAt: null,
-      },
-    });
-    dataRecordsDeleted += 1;
-  } else {
-    await prisma.userVessel.create({
-      data: {
-        sessionId,
-        userId,
-        archivedAt: new Date(),
-      },
-    });
-    dataRecordsDeleted += 1;
-  }
-
-  // 4d: Delete user's empathy drafts
-  const empathyDraftDelete = await prisma.empathyDraft.deleteMany({
-    where: { sessionId, userId },
-  });
-  dataRecordsDeleted += empathyDraftDelete.count;
-
-  // 4e: Anonymize user's empathy attempts (keep for partner reference)
-  await prisma.empathyAttempt.updateMany({
-    where: { sessionId, sourceUserId: userId },
-    data: { sourceUserId: null },
-  });
-
-  // 4f: Anonymize user's empathy validations
-  await prisma.empathyValidation.updateMany({
-    where: { sessionId, userId },
-    data: { userId: null },
-  });
-
-  // 4g: Delete user's strategy rankings
-  const strategyRankingDelete = await prisma.strategyRanking.deleteMany({
-    where: { sessionId, userId },
-  });
-  dataRecordsDeleted += strategyRankingDelete.count;
-
-  // 4h: Anonymize user's strategy proposals (keep for partner reference)
-  await prisma.strategyProposal.updateMany({
-    where: { sessionId, createdByUserId: userId },
-    data: { createdByUserId: null },
-  });
-
-  // 4i: Delete user's emotional exercise completions
-  const exerciseDelete = await prisma.emotionalExerciseCompletion.deleteMany({
-    where: { sessionId, userId },
-  });
-  dataRecordsDeleted += exerciseDelete.count;
-
-  // 4j: Delete user's consent records for this session
-  const consentDelete = await prisma.consentRecord.deleteMany({
-    where: { sessionId, userId },
-  });
-  dataRecordsDeleted += consentDelete.count;
-
-  // 4k: Anonymize consented content from this user
-  await prisma.consentedContent.updateMany({
-    where: {
-      sharedVessel: { sessionId },
-      sourceUserId: userId,
-    },
-    data: { sourceUserId: null },
-  });
-
-  // 4l: Anonymize reconciler results
-  await prisma.reconcilerResult.updateMany({
-    where: { sessionId, guesserId: userId },
-    data: { guesserName: '[Deleted User]' },
-  });
-  await prisma.reconcilerResult.updateMany({
-    where: { sessionId, subjectId: userId },
-    data: { subjectName: '[Deleted User]' },
-  });
-
-  // 4m: Delete invitations sent by this user for this session
-  const invitationDelete = await prisma.invitation.deleteMany({
-    where: { sessionId, invitedById: userId },
-  });
-  dataRecordsDeleted += invitationDelete.count;
-
-  // Step 5: Remove user from the relationship membership for this session's relationship
-  // Note: We don't delete the membership if there's a partner, as the relationship still exists
-  // The partner can still see the session in their list
-  // We only delete if this was a pending session with no partner
-  if (!partner) {
-    // No partner means this was a pending invitation that was never accepted
-    // Safe to delete the relationship membership
-    await prisma.relationshipMember.deleteMany({
-      where: { relationshipId: session.relationshipId, userId },
-    });
-    dataRecordsDeleted += 1;
-  }
 
   return {
-    sessionAbandoned,
-    partnerNotified,
-    dataRecordsDeleted,
+    sessionAbandoned: live || session?.status === 'ABANDONED',
+    partnerNotified: false,
+    dataRecordsDeleted: messages + drafts + moods + extra,
   };
 }

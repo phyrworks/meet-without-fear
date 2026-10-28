@@ -70,14 +70,19 @@ const CONSENT_SELECT = {
 } as const;
 
 /** The arc's target id. */
-export function targetIdOf(r: Pick<ConsentRow, 'needId' | 'empathyAttemptId' | 'proposalId' | 'shareOfferId' | 'reviewId'>): string | null {
+export function targetIdOf(
+  r: Pick<ConsentRow, 'needId' | 'empathyAttemptId' | 'proposalId' | 'shareOfferId' | 'reviewId'>,
+): string | null {
   return r.needId ?? r.empathyAttemptId ?? r.proposalId ?? r.shareOfferId ?? r.reviewId ?? null;
 }
 
 /** Kinds whose decision the co-participant learns of (they asked); a share-offer or review decision never notifies. */
 const NOTIFIES_PARTNER: ReadonlySet<ConsentTargetKind> = new Set(['NEED', 'EMPATHY_ATTEMPT', 'PROPOSAL']);
 
-async function consentCaller(req: Request, res: Response): Promise<{ me: SessionParty; parties: SessionParty[]; sessionId: string } | null> {
+async function consentCaller(
+  req: Request,
+  res: Response,
+): Promise<{ me: SessionParty; parties: SessionParty[]; sessionId: string } | null> {
   const user = req.user;
   if (!user) {
     errorResponse(res, ErrorCode.UNAUTHORIZED, 'Authentication required', 401);
@@ -167,7 +172,13 @@ export async function decideConsent(req: Request, res: Response): Promise<void> 
       consentedAt: string;
       consentActive: boolean;
     } | null = null;
-    if (decision === 'GRANTED' && record.targetKind === 'NEED' && record.needId && typeof editedContent === 'string' && editedContent.trim()) {
+    if (
+      decision === 'GRANTED' &&
+      record.targetKind === 'NEED' &&
+      record.needId &&
+      typeof editedContent === 'string' &&
+      editedContent.trim()
+    ) {
       await getJobPrisma().$queryRaw`SELECT app.need_share(${record.needId}::uuid, ${editedContent})`;
       sharedContent = {
         id: record.needId,

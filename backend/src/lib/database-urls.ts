@@ -9,8 +9,9 @@
  *   OPS_DATABASE_URL   /api/brain/* (mwf_ops)
  *   AUTH_DATABASE_URL  first-login user creation (mwf_auth)
  *
- * Every one falls back to DATABASE_URL when unset or empty, so a deployment
- * that sets only DATABASE_URL behaves exactly as before. DATABASE_URL itself
+ * Every one but OPS falls back to DATABASE_URL when unset or empty, so a
+ * deployment that sets only DATABASE_URL behaves exactly as before; OPS fails
+ * closed (TS-12: never the root URL for the read-only dashboard). DATABASE_URL itself
  * stays the migration/root URL (prisma.config.ts, deploy.sh).
  *
  * Only the app role is wired today (lib/prisma.ts). Moving job, brain and
@@ -32,7 +33,7 @@ const urlSchema = z.string().url();
 /** Pure: the URL the given role connects with, or undefined if none is configured. */
 export function databaseUrlFor(
   role: DatabaseRole,
-  env: Record<string, string | undefined> = process.env
+  env: Record<string, string | undefined> = process.env,
 ): string | undefined {
   const variable = DATABASE_URL_VARS[role];
   const own = env[variable];
@@ -42,5 +43,8 @@ export function databaseUrlFor(
     }
     return own;
   }
+  // TS-12 fix round 1 (M13): the ops role is the read-only dashboard; DATABASE_URL is the
+  // migration/root URL. Falling back would silently drop the read-only role, so ops fails closed.
+  if (role === 'ops') return undefined;
   return env.DATABASE_URL || undefined;
 }

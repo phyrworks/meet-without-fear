@@ -78,22 +78,23 @@ export function finalizeTurnMetrics(turnId: string | undefined): void {
     .map(([model, count]) => `${model}x${count}`)
     .join(', ');
 
-  const cacheInfo = aggregate.cacheReadInputTokens > 0 || aggregate.cacheWriteInputTokens > 0
-    ? ` cache_read=${aggregate.cacheReadInputTokens} cache_write=${aggregate.cacheWriteInputTokens}` +
-      ` cache_hit_rate=${aggregate.inputTokens > 0 ? Math.round((aggregate.cacheReadInputTokens / aggregate.inputTokens) * 100) : 0}%`
-    : '';
+  const cacheInfo =
+    aggregate.cacheReadInputTokens > 0 || aggregate.cacheWriteInputTokens > 0
+      ? ` cache_read=${aggregate.cacheReadInputTokens} cache_write=${aggregate.cacheWriteInputTokens}` +
+        ` cache_hit_rate=${aggregate.inputTokens > 0 ? Math.round((aggregate.cacheReadInputTokens / aggregate.inputTokens) * 100) : 0}%`
+      : '';
 
   logger.info(
     `[LLM Metrics] turn=${turnId} calls=${aggregate.callCount} ` +
       `tokens_in=${aggregate.inputTokens} tokens_out=${aggregate.outputTokens} ` +
-      `duration_ms=${aggregate.durationMs} models=[${modelSummary}]${cacheInfo}`
+      `duration_ms=${aggregate.durationMs} models=[${modelSummary}]${cacheInfo}`,
   );
 
   if (aggregate.contextSizes) {
     const { pinnedTokens, summaryTokens, recentTokens, ragTokens } = aggregate.contextSizes;
     logger.info(
       `[Context Metrics] turn=${turnId} pinned=${pinnedTokens} summary=${summaryTokens} ` +
-        `recent=${recentTokens} rag=${ragTokens}`
+        `recent=${recentTokens} rag=${ragTokens}`,
     );
   }
 

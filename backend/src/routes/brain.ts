@@ -1,13 +1,31 @@
-
 import { Router, Request, Response, NextFunction } from 'express';
 import { timingSafeEqual } from 'node:crypto';
-import { prisma } from '../lib/prisma';
+import { getOpsPrisma } from '../lib/prisma';
+import type { BrainActivity, Prisma, ReflectionStatus, SessionStatus } from '../generated/prisma/client';
 import { errorResponse, successResponse } from '../utils/response';
 import { assembleContextBundle, type ContextBundle } from '../services/context-assembler';
 import { determineMemoryIntent } from '../services/memory-intent';
 import { resolveStageIntervalsForSessions, resolveStageForTimestamp } from '../utils/stage-resolver';
+import { loadStageStates } from '../services/stage-shim';
 import { verifyToken } from '@clerk/express';
 import { logger } from '../lib/logger';
+
+/**
+ * A brain_activity jsonb column (input / output / metadata) as the dashboard reads it: arbitrary
+ * JSON written by every LLM call site, read field by field with optional chaining.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any -- arbitrary jsonb, read defensively
+type ActivityBlob = any;
+
+/*
+ * Neural Monitor dashboard (TS-12, spec §6 "Brain dashboard"). Read-only,
+ * through the `mwf_ops` role (OPS_DATABASE_URL; trailer T7 grants it SELECT on
+ * exactly the tables read here). `brain_activity` rows are attributed at
+ * capture by the job (`participant_id`, `reflection_id`); a reflection's
+ * telemetry carries `reflection_id`, not `session_id`, so the dashboard keys an
+ * activity by its session, else its reflection.
+ */
+const db = () => getOpsPrisma();
 
 const router = Router();
 
@@ -63,10 +81,19 @@ async function requireDashboardAuth(req: Request, res: Response, next: NextFunct
         const allowedEmails = process.env.DASHBOARD_ALLOWED_EMAILS;
 
         if (allowedUserIds || allowedEmails) {
-          const userIdAllowList = allowedUserIds?.split(',').map(id => id.trim()).filter(Boolean) ?? [];
-          const emailAllowList = allowedEmails?.split(',').map(e => e.trim().toLowerCase()).filter(Boolean) ?? [];
+          const userIdAllowList =
+            allowedUserIds
+              ?.split(',')
+              .map(id => id.trim())
+              .filter(Boolean) ?? [];
+          const emailAllowList =
+            allowedEmails
+              ?.split(',')
+              .map(e => e.trim().toLowerCase())
+              .filter(Boolean) ?? [];
           const userId = payload.sub;
-          const email = (payload as any)?.email || (payload as any)?.sub_email;
+          const claims = payload as { email?: string; sub_email?: string };
+          const email = claims?.email || claims?.sub_email;
 
           const userIdAllowed = Boolean(userId && userIdAllowList.includes(userId));
           const emailAllowed = Boolean(email && emailAllowList.includes(email.toLowerCase()));
@@ -98,10 +125,14 @@ router.use(requireDashboardAuth);
 function getPeriodStartDate(period: string): Date {
   const now = new Date();
   switch (period) {
-    case '24h': return new Date(now.getTime() - 24 * 60 * 60 * 1000);
-    case '7d': return new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
-    case '30d': return new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
-    default: return new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+    case '24h':
+      return new Date(now.getTime() - 24 * 60 * 60 * 1000);
+    case '7d':
+      return new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+    case '30d':
+      return new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+    default:
+      return new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
   }
 }
 
@@ -139,6 +170,94 @@ function formatDateKey(date: Date): string {
   return date.toISOString().split('T')[0];
 }
 
+/** `cost` is numeric(10,6) on the target (a Prisma Decimal): the dashboard works in numbers. */
+const num = (v: unknown): number => (v === null || v === undefined ? 0 : Number(v));
+
+/** The key an activity is grouped under: its session, else its reflection (inner work). */
+const activityKey = (a: { sessionId: string | null; reflectionId?: string | null }): string | null =>
+  a.sessionId ?? a.reflectionId ?? null;
+
+/** An activity as the dashboard reads it (cost as a number). */
+function activityDTO(a: BrainActivity) {
+  return { ...a, cost: num(a.cost) };
+}
+
+/** "A & B" per session from its participants' display names (falling back to the user's name). */
+async function participantLabels(sessionIds: string[]): Promise<Map<string, string>> {
+  const out = new Map<string, string>();
+  if (sessionIds.length === 0) return out;
+  const rows = await db().participant.findMany({
+    where: { sessionId: { in: sessionIds } },
+    orderBy: [{ joinedAt: 'asc' }, { id: 'asc' }],
+    select: { sessionId: true, displayName: true, user: { select: { name: true, deletedAt: true } } },
+  });
+  const names = new Map<string, string[]>();
+  for (const r of rows) {
+    const name = r.displayName || (r.user?.deletedAt ? 'Former participant' : r.user?.name) || 'Unknown';
+    names.set(r.sessionId, [...(names.get(r.sessionId) ?? []), name]);
+  }
+  for (const id of sessionIds) out.set(id, (names.get(id) ?? []).join(' & ') || 'No Participants');
+  return out;
+}
+
+/** User chat turns per session: USER/CHAT messages each participant sent in their own MAIN conversation. */
+async function userTurnCounts(sessionIds: string[]): Promise<Map<string, number>> {
+  if (sessionIds.length === 0) return new Map();
+  const rows = await db().$queryRaw<Array<{ session_id: string; n: number }>>`SELECT p.session_id, count(*)::int AS n
+    FROM message m
+    JOIN conversation c ON c.id = m.conversation_id AND c.kind = 'MAIN'
+    JOIN participant p ON p.id = c.participant_id
+    WHERE p.session_id = ANY(${sessionIds}::uuid[]) AND m.role = 'USER' AND m.kind = 'CHAT' AND m.sender_participant_id = p.id
+    GROUP BY p.session_id`;
+  return new Map(rows.map(r => [r.session_id, Number(r.n)]));
+}
+
+/** USER turns per reflection. */
+async function reflectionTurnCounts(reflectionIds: string[]): Promise<Map<string, number>> {
+  if (reflectionIds.length === 0) return new Map();
+  const rows = await db().reflectionMessage.groupBy({
+    by: ['reflectionId'],
+    where: { reflectionId: { in: reflectionIds }, role: 'USER' },
+    _count: { id: true },
+  });
+  return new Map(rows.map(r => [r.reflectionId, r._count.id]));
+}
+
+/** The furthest stage any participant of each session is in (v_current_stage; was max StageProgress.stage). */
+async function maxStages(sessionIds: string[]): Promise<Map<string, number>> {
+  if (sessionIds.length === 0) return new Map();
+  const rows = await db().$queryRaw<
+    Array<{ session_id: string; stage: number }>
+  >`SELECT session_id, max(least(active_stage, 4))::int AS stage
+    FROM v_current_stage WHERE session_id = ANY(${sessionIds}::uuid[]) GROUP BY session_id`;
+  return new Map(rows.map(r => [r.session_id, Number(r.stage)]));
+}
+
+/** Cost / token / count totals of each key's activities (by session id, or by reflection id). */
+async function activityStats(
+  ids: string[],
+  by: 'sessionId' | 'reflectionId',
+): Promise<Map<string, { cost: number; tokens: number; count: number }>> {
+  if (ids.length === 0) return new Map();
+  const where = by === 'sessionId' ? { sessionId: { in: ids } } : { reflectionId: { in: ids } };
+  const rows = await db().brainActivity.groupBy({
+    by: [by],
+    where,
+    _sum: { cost: true, tokenCountInput: true, tokenCountOutput: true },
+    _count: { id: true },
+  });
+  return new Map(
+    rows.map(r => [
+      String((r as Record<string, unknown>)[by]),
+      {
+        cost: num(r._sum.cost),
+        tokens: (r._sum.tokenCountInput ?? 0) + (r._sum.tokenCountOutput ?? 0),
+        count: r._count.id,
+      },
+    ]),
+  );
+}
+
 // ============================================================================
 // Response Types
 // ============================================================================
@@ -164,13 +283,13 @@ router.get('/dashboard', async (req, res) => {
     const period = (req.query.period as string) || '7d';
     const periodStart = getPeriodStartDate(period);
 
-    // 1. Active sessions count (ACTIVE or WAITING partner sessions)
-    const activeSessions = await prisma.session.count({
-      where: { status: { in: ['ACTIVE', 'WAITING'] } },
+    // 1. Active sessions count (live partner sessions; the target's WAITING is ACTIVE)
+    const activeSessions = await db().session.count({
+      where: { status: 'ACTIVE' },
     });
 
     // 2. Fetch all activities in period for aggregation
-    const activities = await prisma.brainActivity.findMany({
+    const activities = await db().brainActivity.findMany({
       where: { createdAt: { gte: periodStart } },
       select: {
         cost: true,
@@ -196,7 +315,8 @@ router.get('/dashboard', async (req, res) => {
     const modelMap = new Map<string, { count: number; cost: number }>();
 
     for (const a of activities) {
-      periodCost += a.cost;
+      const cost = num(a.cost);
+      periodCost += cost;
       totalDurationMs += a.durationMs;
       totalInput += a.tokenCountInput;
 
@@ -206,7 +326,7 @@ router.get('/dashboard', async (req, res) => {
       // Cost trend
       const dateKey = formatDateKey(a.createdAt);
       const dayEntry = costByDate.get(dateKey) || { cost: 0, cacheRead: 0, cacheWrite: 0, uncached: 0 };
-      dayEntry.cost += a.cost;
+      dayEntry.cost += cost;
       dayEntry.cacheRead += cacheRead;
       dayEntry.cacheWrite += cacheWrite;
       dayEntry.uncached += Math.max(0, a.tokenCountInput - cacheRead - cacheWrite);
@@ -216,7 +336,7 @@ router.get('/dashboard', async (req, res) => {
       const modelNorm = normalizeModel(a.model);
       const modelEntry = modelMap.get(modelNorm) || { count: 0, cost: 0 };
       modelEntry.count += 1;
-      modelEntry.cost += a.cost;
+      modelEntry.cost += cost;
       modelMap.set(modelNorm, modelEntry);
     }
 
@@ -227,58 +347,33 @@ router.get('/dashboard', async (req, res) => {
       .sort(([a], [b]) => a.localeCompare(b))
       .map(([date, data]) => ({ date, ...data }));
 
-    const modelDistribution = Array.from(modelMap.entries())
-      .map(([model, data]) => ({ model, ...data }));
+    const modelDistribution = Array.from(modelMap.entries()).map(([model, data]) => ({ model, ...data }));
 
     // 4. Recent sessions (last 10 by updatedAt)
-    const recentPartnerSessions = await prisma.session.findMany({
+    const recentPartnerSessions = await db().session.findMany({
       take: 10,
       orderBy: { updatedAt: 'desc' },
-      include: {
-        relationship: {
-          include: { members: { include: { user: { select: { name: true } } } } },
-        },
-        stageProgress: { orderBy: { stage: 'desc' }, take: 1 },
-      },
+      select: { id: true, status: true, createdAt: true },
     });
 
-    // Get cost stats and user-message turn counts for recent sessions
+    // Get cost stats, turn counts, names and stages for recent sessions
     const recentSessionIds = recentPartnerSessions.map(s => s.id);
-    let recentStats: any[] = [];
-    let recentTurnCounts: any[] = [];
-    if (recentSessionIds.length > 0) {
-      [recentStats, recentTurnCounts] = await Promise.all([
-        (prisma.brainActivity.groupBy as any)({
-          by: ['sessionId'],
-          _sum: { cost: true },
-          _count: { id: true },
-          where: { sessionId: { in: recentSessionIds } },
-        }),
-        (prisma.message.groupBy as any)({
-          by: ['sessionId'],
-          _count: { id: true },
-          where: { sessionId: { in: recentSessionIds }, role: 'USER' },
-        }),
-      ]);
-    }
+    const [recentStats, recentTurnCounts, labels, stages] = await Promise.all([
+      activityStats(recentSessionIds, 'sessionId'),
+      userTurnCounts(recentSessionIds),
+      participantLabels(recentSessionIds),
+      maxStages(recentSessionIds),
+    ]);
 
-    const recentSessions = recentPartnerSessions.map(session => {
-      const stat = recentStats.find((s: any) => s.sessionId === session.id);
-      const turnStat = recentTurnCounts.find((t: any) => t.sessionId === session.id);
-      const participants = session.relationship?.members?.length
-        ? session.relationship.members.map(m => m.user.name || 'Unknown').join(' & ')
-        : session.relationship ? 'Deleted Users' : 'No Relationship';
-      const maxStage = session.stageProgress[0]?.stage ?? 0;
-      return {
-        id: session.id,
-        participants,
-        status: session.status,
-        stage: maxStage,
-        turns: turnStat?._count?.id ?? 0,
-        cost: stat?._sum?.cost ?? 0,
-        age: session.createdAt.toISOString(),
-      };
-    });
+    const recentSessions = recentPartnerSessions.map(session => ({
+      id: session.id,
+      participants: labels.get(session.id) ?? 'No Participants',
+      status: session.status,
+      stage: stages.get(session.id) ?? 0,
+      turns: recentTurnCounts.get(session.id) ?? 0,
+      cost: recentStats.get(session.id)?.cost ?? 0,
+      age: session.createdAt.toISOString(),
+    }));
 
     return successResponse(res, {
       activeSessions,
@@ -311,32 +406,34 @@ router.get('/costs', async (req, res) => {
     const previousPeriodEnd = from;
 
     // Fetch current period activities
-    const activities = await prisma.brainActivity.findMany({
-      where: { createdAt: { gte: from, lte: to } },
-      select: {
-        cost: true,
-        tokenCountInput: true,
-        tokenCountOutput: true,
-        durationMs: true,
-        model: true,
-        metadata: true,
-        createdAt: true,
-        sessionId: true,
-        callType: true,
-      },
-    });
+    const activities = (
+      await db().brainActivity.findMany({
+        where: { createdAt: { gte: from, lte: to } },
+        select: {
+          cost: true,
+          tokenCountInput: true,
+          tokenCountOutput: true,
+          durationMs: true,
+          model: true,
+          metadata: true,
+          createdAt: true,
+          sessionId: true,
+          reflectionId: true,
+          callType: true,
+        },
+      })
+    ).map(a => ({ ...a, cost: num(a.cost), sessionId: activityKey(a) }));
 
     // Fetch previous period total for comparison
-    const prevAggregate = await prisma.brainActivity.aggregate({
+    const prevAggregate = await db().brainActivity.aggregate({
       where: { createdAt: { gte: previousPeriodStart, lt: previousPeriodEnd } },
       _sum: { cost: true },
     });
 
     const periodTotal = activities.reduce((sum, a) => sum + a.cost, 0);
-    const previousPeriodTotal = prevAggregate._sum.cost ?? 0;
-    const changePercent = previousPeriodTotal > 0
-      ? ((periodTotal - previousPeriodTotal) / previousPeriodTotal) * 100
-      : 0;
+    const previousPeriodTotal = num(prevAggregate._sum.cost);
+    const changePercent =
+      previousPeriodTotal > 0 ? ((periodTotal - previousPeriodTotal) / previousPeriodTotal) * 100 : 0;
 
     // Unique sessions for per-session average
     const uniqueSessions = new Set(activities.map(a => a.sessionId));
@@ -345,7 +442,10 @@ router.get('/costs', async (req, res) => {
     // Cost timeline by date, split by model
     const timelineMap = new Map<string, { sonnetCost: number; haikuCost: number; titanCost: number; total: number }>();
     // Model breakdown
-    const modelBreakdownMap = new Map<string, { count: number; cost: number; inputTokens: number; outputTokens: number }>();
+    const modelBreakdownMap = new Map<
+      string,
+      { count: number; cost: number; inputTokens: number; outputTokens: number }
+    >();
     // Call type breakdown
     const callTypeMap = new Map<string, { count: number; cost: number; totalDuration: number }>();
     // Cache metrics
@@ -354,7 +454,10 @@ router.get('/costs', async (req, res) => {
     let totalUncached = 0;
 
     // Session costs
-    const sessionCostMap = new Map<string, { sonnetCost: number; haikuCost: number; titanCost: number; totalCost: number; activityCount: number }>();
+    const sessionCostMap = new Map<
+      string,
+      { sonnetCost: number; haikuCost: number; titanCost: number; totalCost: number; activityCount: number }
+    >();
 
     for (const a of activities) {
       const modelNorm = normalizeModel(a.model);
@@ -392,7 +495,13 @@ router.get('/costs', async (req, res) => {
 
       // Session costs — group by sessionId, treating null/empty as 'unattributed'
       const sessKey = a.sessionId || 'unattributed';
-      const sessEntry = sessionCostMap.get(sessKey) || { sonnetCost: 0, haikuCost: 0, titanCost: 0, totalCost: 0, activityCount: 0 };
+      const sessEntry = sessionCostMap.get(sessKey) || {
+        sonnetCost: 0,
+        haikuCost: 0,
+        titanCost: 0,
+        totalCost: 0,
+        activityCount: 0,
+      };
       if (modelNorm === 'sonnet') sessEntry.sonnetCost += a.cost;
       else if (modelNorm === 'haiku') sessEntry.haikuCost += a.cost;
       else if (modelNorm === 'titan') sessEntry.titanCost += a.cost;
@@ -433,55 +542,26 @@ router.get('/costs', async (req, res) => {
       estimatedSavings: Math.round(cacheSavings * 1000000) / 1000000,
     };
 
-    // Fetch participant info and user-message turn counts for session costs
+    // Participant names and user turn counts: partner sessions first, the rest as reflections
     const sessionIds = Array.from(sessionCostMap.keys()).filter(id => id !== 'unattributed');
-    let sessionParticipants = new Map<string, string>();
-    let sessionTurnCounts = new Map<string, number>();
+    const sessionParticipants = new Map<string, string>();
+    const sessionTurnCounts = new Map<string, number>();
     if (sessionIds.length > 0) {
-      const sessions = await prisma.session.findMany({
-        where: { id: { in: sessionIds } },
-        include: {
-          relationship: {
-            include: { members: { include: { user: { select: { name: true } } } } },
-          },
-        },
-      });
-      for (const s of sessions) {
-        const names = s.relationship?.members?.length
-          ? s.relationship.members.map(m => m.user.name || 'Unknown').join(' & ')
-          : s.relationship ? 'Deleted Users' : 'No Relationship';
-        sessionParticipants.set(s.id, names);
-      }
+      const sessions = await db().session.findMany({ where: { id: { in: sessionIds } }, select: { id: true } });
+      const partnerIds = sessions.map(s => s.id);
+      const [labels, turns] = await Promise.all([participantLabels(partnerIds), userTurnCounts(partnerIds)]);
+      for (const [id, label] of labels) sessionParticipants.set(id, label);
+      for (const [id, n] of turns) sessionTurnCounts.set(id, n);
 
-      // Query user-message turn counts (consistent with sessions endpoint)
-      const partnerTurnCounts = await (prisma.message.groupBy as any)({
-        by: ['sessionId'],
-        _count: { id: true },
-        where: { sessionId: { in: sessionIds }, role: 'USER' },
-      });
-      for (const tc of partnerTurnCounts) {
-        sessionTurnCounts.set(tc.sessionId, tc._count.id);
-      }
-
-      // Also check inner work sessions for any that weren't partner sessions
-      const foundPartnerIds = new Set(sessions.map(s => s.id));
+      const foundPartnerIds = new Set(partnerIds);
       const missingIds = sessionIds.filter(id => !foundPartnerIds.has(id));
       if (missingIds.length > 0) {
-        const innerSessions = await prisma.innerWorkSession.findMany({
+        const reflections = await db().reflection.findMany({
           where: { id: { in: missingIds } },
-          include: { user: { select: { name: true } } },
+          select: { id: true, user: { select: { name: true } } },
         });
-        for (const s of innerSessions) {
-          sessionParticipants.set(s.id, s.user?.name || 'Unknown');
-        }
-        const innerTurnCounts = await (prisma.innerWorkMessage.groupBy as any)({
-          by: ['sessionId'],
-          _count: { id: true },
-          where: { sessionId: { in: missingIds }, role: 'USER' },
-        });
-        for (const tc of innerTurnCounts) {
-          sessionTurnCounts.set(tc.sessionId, tc._count.id);
-        }
+        for (const r of reflections) sessionParticipants.set(r.id, r.user?.name || 'Unknown');
+        for (const [id, n] of await reflectionTurnCounts(reflections.map(r => r.id))) sessionTurnCounts.set(id, n);
       }
     }
 
@@ -490,9 +570,7 @@ router.get('/costs', async (req, res) => {
       .slice(0, 20)
       .map(([sessionId, data]) => ({
         sessionId,
-        participants: sessionId === 'unattributed'
-          ? 'Unattributed'
-          : sessionParticipants.get(sessionId) || sessionId,
+        participants: sessionId === 'unattributed' ? 'Unattributed' : sessionParticipants.get(sessionId) || sessionId,
         ...data,
         turnCount: sessionTurnCounts.get(sessionId) ?? 0,
       }));
@@ -528,7 +606,7 @@ router.get('/costs/cache-heatmap', async (req, res) => {
     }
     const periodStart = getPeriodStartDate(period);
 
-    const activities = await prisma.brainActivity.findMany({
+    const activities = await db().brainActivity.findMany({
       where: { createdAt: { gte: periodStart } },
       select: {
         sessionId: true,
@@ -540,7 +618,7 @@ router.get('/costs/cache-heatmap', async (req, res) => {
 
     // Resolve stage intervals for all sessions
     const sessionIds = [...new Set(activities.map(a => a.sessionId).filter((id): id is string => id !== null))];
-    const stageIntervals = await resolveStageIntervalsForSessions(sessionIds);
+    const stageIntervals = await resolveStageIntervalsForSessions(sessionIds, db());
 
     // Aggregate by (stage, day)
     const cellMap = new Map<string, { totalTokens: number; cacheReadTokens: number }>();
@@ -562,9 +640,7 @@ router.get('/costs/cache-heatmap', async (req, res) => {
       return {
         stage: parseInt(stageStr, 10),
         day,
-        hitRate: data.totalTokens > 0
-          ? Math.round((data.cacheReadTokens / data.totalTokens) * 10000) / 100
-          : 0,
+        hitRate: data.totalTokens > 0 ? Math.round((data.cacheReadTokens / data.totalTokens) * 10000) / 100 : 0,
         totalTokens: data.totalTokens,
         cacheReadTokens: data.cacheReadTokens,
       };
@@ -588,19 +664,21 @@ router.get('/costs/by-stage', async (req, res) => {
     }
     const periodStart = getPeriodStartDate(period);
 
-    const activities = await prisma.brainActivity.findMany({
-      where: { createdAt: { gte: periodStart } },
-      select: {
-        sessionId: true,
-        cost: true,
-        model: true,
-        createdAt: true,
-      },
-    });
+    const activities = (
+      await db().brainActivity.findMany({
+        where: { createdAt: { gte: periodStart } },
+        select: {
+          sessionId: true,
+          cost: true,
+          model: true,
+          createdAt: true,
+        },
+      })
+    ).map(a => ({ ...a, cost: num(a.cost) }));
 
     // Resolve stage intervals
     const sessionIds = [...new Set(activities.map(a => a.sessionId).filter((id): id is string => id !== null))];
-    const stageIntervals = await resolveStageIntervalsForSessions(sessionIds);
+    const stageIntervals = await resolveStageIntervalsForSessions(sessionIds, db());
 
     // Aggregate by stage
     const stageMap = new Map<number, { sonnetCost: number; haikuCost: number; titanCost: number; totalCost: number }>();
@@ -645,20 +723,22 @@ router.get('/costs/flow', async (req, res) => {
     }
     const periodStart = getPeriodStartDate(period);
 
-    const activities = await prisma.brainActivity.findMany({
-      where: { createdAt: { gte: periodStart } },
-      select: {
-        sessionId: true,
-        cost: true,
-        model: true,
-        callType: true,
-        createdAt: true,
-      },
-    });
+    const activities = (
+      await db().brainActivity.findMany({
+        where: { createdAt: { gte: periodStart } },
+        select: {
+          sessionId: true,
+          cost: true,
+          model: true,
+          callType: true,
+          createdAt: true,
+        },
+      })
+    ).map(a => ({ ...a, cost: num(a.cost) }));
 
     // Resolve stage intervals
     const sessionIds = [...new Set(activities.map(a => a.sessionId).filter((id): id is string => id !== null))];
-    const stageIntervals = await resolveStageIntervalsForSessions(sessionIds);
+    const stageIntervals = await resolveStageIntervalsForSessions(sessionIds, db());
 
     // Build Sankey: Stage -> Model -> Call Type
     const stageNames = new Map<number, string>([
@@ -672,12 +752,12 @@ router.get('/costs/flow', async (req, res) => {
     const nodeSet = new Map<string, number>();
     const linkMap = new Map<string, number>();
 
-    function getNodeIndex(name: string): number {
+    const getNodeIndex = (name: string): number => {
       if (!nodeSet.has(name)) {
         nodeSet.set(name, nodeSet.size);
       }
       return nodeSet.get(name)!;
-    }
+    };
 
     for (const a of activities) {
       const stage = resolveStageForTimestamp(stageIntervals.get(a.sessionId ?? ''), a.createdAt);
@@ -721,7 +801,7 @@ router.get('/activity/:activityId/prompt', async (req, res) => {
   try {
     const { activityId } = req.params;
 
-    const activity = await prisma.brainActivity.findUnique({
+    const activity = await db().brainActivity.findUnique({
       where: { id: activityId },
     });
 
@@ -729,9 +809,9 @@ router.get('/activity/:activityId/prompt', async (req, res) => {
       return errorResponse(res, 'NOT_FOUND', 'Activity not found', 404);
     }
 
-    const input = activity.input as any;
-    const output = activity.output as any;
-    const metadata = activity.metadata as any;
+    const input = activity.input as ActivityBlob;
+    const output = activity.output as ActivityBlob;
+    const metadata = activity.metadata as ActivityBlob;
 
     // Parse system prompt blocks
     const systemPromptBlocks: Array<{ type: string; content: string; tokenCount: number; cached: boolean }> = [];
@@ -766,7 +846,7 @@ router.get('/activity/:activityId/prompt', async (req, res) => {
 
     // Parse messages
     const messages = Array.isArray(input?.messages)
-      ? input.messages.map((m: any) => ({
+      ? input.messages.map((m: ActivityBlob) => ({
           role: m.role || 'unknown',
           content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content),
           hasCacheControl: !!m.cache_control,
@@ -774,7 +854,7 @@ router.get('/activity/:activityId/prompt', async (req, res) => {
       : [];
 
     // Parse response - extract thinking/draft/dispatch tags
-    const responseText = output?.text || output?.streaming ? (output?.text || '') : '';
+    const responseText = output?.text || output?.streaming ? output?.text || '' : '';
     let thinking: string | null = null;
     let draft: string | null = null;
     let dispatch: string | null = null;
@@ -833,25 +913,31 @@ router.get('/activity/:activityId/prompt', async (req, res) => {
         callType: activity.callType,
         status: activity.status,
       },
-      ...(metadata?.contextSizes ? {
-        contextWindow: {
-          pinnedTokens: metadata.contextSizes.pinnedTokens ?? 0,
-          summaryTokens: metadata.contextSizes.summaryTokens ?? 0,
-          recentTokens: metadata.contextSizes.recentTokens ?? 0,
-          ragTokens: metadata.contextSizes.ragTokens ?? 0,
-          totalUsed: (metadata.contextSizes.pinnedTokens ?? 0) +
-            (metadata.contextSizes.summaryTokens ?? 0) +
-            (metadata.contextSizes.recentTokens ?? 0) +
-            (metadata.contextSizes.ragTokens ?? 0),
-          budgetLimit: TOKEN_BUDGET_LIMIT,
-          utilizationPercent: Math.round(
-            (((metadata.contextSizes.pinnedTokens ?? 0) +
-              (metadata.contextSizes.summaryTokens ?? 0) +
-              (metadata.contextSizes.recentTokens ?? 0) +
-              (metadata.contextSizes.ragTokens ?? 0)) / TOKEN_BUDGET_LIMIT) * 10000
-          ) / 100,
-        },
-      } : {}),
+      ...(metadata?.contextSizes
+        ? {
+            contextWindow: {
+              pinnedTokens: metadata.contextSizes.pinnedTokens ?? 0,
+              summaryTokens: metadata.contextSizes.summaryTokens ?? 0,
+              recentTokens: metadata.contextSizes.recentTokens ?? 0,
+              ragTokens: metadata.contextSizes.ragTokens ?? 0,
+              totalUsed:
+                (metadata.contextSizes.pinnedTokens ?? 0) +
+                (metadata.contextSizes.summaryTokens ?? 0) +
+                (metadata.contextSizes.recentTokens ?? 0) +
+                (metadata.contextSizes.ragTokens ?? 0),
+              budgetLimit: TOKEN_BUDGET_LIMIT,
+              utilizationPercent:
+                Math.round(
+                  (((metadata.contextSizes.pinnedTokens ?? 0) +
+                    (metadata.contextSizes.summaryTokens ?? 0) +
+                    (metadata.contextSizes.recentTokens ?? 0) +
+                    (metadata.contextSizes.ragTokens ?? 0)) /
+                    TOKEN_BUDGET_LIMIT) *
+                    10000,
+                ) / 100,
+            },
+          }
+        : {}),
     });
   } catch (error) {
     logger.error('[BrainRoutes] Failed to fetch prompt detail:', error);
@@ -864,45 +950,52 @@ router.get('/activity/:sessionId', async (req, res) => {
   try {
     const { sessionId } = req.params;
 
-    const activities = await prisma.brainActivity.findMany({
-      where: { sessionId },
-      orderBy: { createdAt: 'asc' },
-    });
+    // The session's activities, or a reflection's (inner work telemetry carries reflection_id)
+    const activities = (
+      await db().brainActivity.findMany({
+        where: { OR: [{ sessionId }, { reflectionId: sessionId }] },
+        orderBy: { createdAt: 'asc' },
+      })
+    ).map(activityDTO);
 
-    // Try fetching as partner session messages first
-    let messages = await prisma.message.findMany({
-      where: { sessionId, role: 'USER' },
-      orderBy: { timestamp: 'asc' },
-      select: { id: true, content: true, timestamp: true, senderId: true }
-    });
+    // Partner session: every participant's own chat turns (their MAIN conversation)
+    let messages: Array<{ id: string; content: string; timestamp: Date; senderId: string | null }> = (
+      await db().message.findMany({
+        where: { role: 'USER', kind: 'CHAT', conversation: { kind: 'MAIN', participant: { sessionId } } },
+        orderBy: { createdAt: 'asc' },
+        select: { id: true, content: true, createdAt: true, senderParticipant: { select: { userId: true } } },
+      })
+    ).map(m => ({
+      id: m.id,
+      content: m.content,
+      timestamp: m.createdAt,
+      senderId: m.senderParticipant?.userId ?? null,
+    }));
 
-    // If no messages found, it might be an Inner Work session
+    // If no messages found, it might be a reflection
     if (messages.length === 0) {
-      const innerMessages = await prisma.innerWorkMessage.findMany({
-        where: { sessionId, role: 'USER' },
-        orderBy: { timestamp: 'asc' },
-        select: { id: true, content: true, timestamp: true }
-      });
-
-      // Map to same structure (senderId is not needed for Inner Work as it's implied)
-      messages = innerMessages.map(m => ({
-        ...m,
-        senderId: null
-      }));
+      messages = (
+        await db().reflectionMessage.findMany({
+          where: { reflectionId: sessionId, role: 'USER' },
+          orderBy: { createdAt: 'asc' },
+          select: { id: true, content: true, createdAt: true },
+        })
+      ).map(m => ({ id: m.id, content: m.content, timestamp: m.createdAt, senderId: null }));
     }
 
-    // Fetch notable facts from UserVessel for this session
-    const userVessels = await prisma.userVessel.findMany({
-      where: { sessionId },
-      select: { userId: true, notableFacts: true }
+    // Notable facts: every participant's NOTABLE_FACTS document of this session (ai_memory)
+    const facts = await db().aiMemory.findMany({
+      where: { kind: 'NOTABLE_FACTS', participant: { sessionId } },
+      select: { doc: true },
+    });
+    const notableFacts = facts.flatMap(f => {
+      const list = (f.doc as { facts?: unknown } | null)?.facts;
+      return Array.isArray(list) ? list : [];
     });
 
-    // Combine all notable facts from all users in this session
-    const notableFacts = userVessels.flatMap(v => v.notableFacts);
-
     // Calculate summary stats
-    const totalCost = activities.reduce((sum: number, a: any) => sum + (a.cost || 0), 0);
-    const totalTokens = activities.reduce((sum: number, a: any) => sum + ((a.tokenCountInput || 0) + (a.tokenCountOutput || 0)), 0);
+    const totalCost = activities.reduce((sum, a) => sum + a.cost, 0);
+    const totalTokens = activities.reduce((sum, a) => sum + a.tokenCountInput + a.tokenCountOutput, 0);
 
     return successResponse(res, {
       activities,
@@ -911,10 +1004,9 @@ router.get('/activity/:sessionId', async (req, res) => {
       summary: {
         totalCost,
         totalTokens,
-        count: activities.length
-      }
+        count: activities.length,
+      },
     });
-
   } catch (error) {
     logger.error('[BrainRoutes] Failed to fetch activities:', error);
     return errorResponse(res, 'INTERNAL_ERROR', 'Failed to fetch session activity', 500);
@@ -928,92 +1020,64 @@ router.get('/sessions/:sessionId/context', async (req, res) => {
   try {
     const { sessionId } = req.params;
 
-    // First try as partner session
-    const partnerSession = await prisma.session.findUnique({
-      where: { id: sessionId },
-      include: {
-        relationship: {
-          include: {
-            members: {
-              include: { user: true }
-            }
-          }
-        },
-        stageProgress: {
-          orderBy: { stage: 'desc' }
-        }
-      }
+    // First try as partner session: its human participants
+    const participants = await db().participant.findMany({
+      where: { sessionId, kind: 'human', userId: { not: null } },
+      orderBy: [{ joinedAt: 'asc' }, { id: 'asc' }],
+      select: { id: true, userId: true, displayName: true, joinedAt: true, user: { select: { name: true } } },
     });
 
-    if (partnerSession) {
-      // Partner session - assemble context for all users
-      const users = partnerSession.relationship.members;
+    if (participants.length > 0) {
+      // Partner session - assemble context for every participant
       const now = new Date().toISOString();
+      const states = await loadStageStates(
+        participants.map(p => ({ id: p.id, joinedAt: p.joinedAt })),
+        db(),
+      );
 
-      // Get the current stage for each user (use their latest stage progress)
       const contextResults = await Promise.all(
-        users.map(async (member) => {
-          const userProgress = partnerSession.stageProgress.find(
-            (p) => p.userId === member.userId
-          );
-          const stage = userProgress?.stage ?? 1;
+        participants.map(
+          async (member): Promise<{ userId: string; userName: string; context: ContextBundle | null }> => {
+            const userId = member.userId!;
+            const userName = member.displayName || member.user?.name || 'Unknown';
+            const stage = states.get(member.id)?.current.stage || 1;
 
-          try {
-            // Get emotional intensity from UserVessel
-            const vessel = await prisma.userVessel.findUnique({
-              where: { userId_sessionId: { userId: member.userId, sessionId } },
-              select: { id: true },
-            });
-
-            let emotionalIntensity = 5; // Default moderate intensity
-            if (vessel) {
-              const latestReading = await prisma.emotionalReading.findFirst({
-                where: { vesselId: vessel.id },
-                orderBy: { timestamp: 'desc' },
+            try {
+              // Emotional intensity: the participant's latest mood reading
+              const latestReading = await db().moodReading.findFirst({
+                where: { participantId: member.id },
+                orderBy: [{ recordedAt: 'desc' }, { id: 'desc' }],
                 select: { intensity: true },
               });
-              if (latestReading) {
-                emotionalIntensity = latestReading.intensity;
-              }
+              const emotionalIntensity = latestReading?.intensity ?? 5; // Default moderate intensity
+
+              // Turn count: the participant's own chat turns
+              const turnCount = await db().message.count({
+                where: { senderParticipantId: member.id, role: 'USER', kind: 'CHAT' },
+              });
+
+              // Determine memory intent (required for context assembly)
+              const intent = determineMemoryIntent({
+                stage,
+                emotionalIntensity,
+                userMessage: '', // Empty - we're just assembling current context
+                turnCount,
+                isFirstTurnInSession: turnCount === 0,
+              });
+
+              // Assemble the context bundle — the app's single context builder, per
+              // participant (TODO(TS-16): under RLS it reads as that participant's
+              // identity; the dashboard has none, so it needs a definer path).
+              const context = await assembleContextBundle(sessionId, userId, stage, intent);
+
+              return { userId, userName, context };
+            } catch (error) {
+              logger.error(`[BrainRoutes] Failed to assemble context for user ${userId}:`, error);
+              // Return placeholder for failed user
+              return { userId, userName, context: null };
             }
-
-            // Get turn count from messages
-            const turnCount = await prisma.message.count({
-              where: { sessionId, senderId: member.userId },
-            });
-
-            // Determine memory intent (required for context assembly)
-            const intent = determineMemoryIntent({
-              stage,
-              emotionalIntensity,
-              userMessage: '', // Empty - we're just assembling current context
-              turnCount,
-              isFirstTurnInSession: turnCount === 0,
-            });
-
-            // Assemble the context bundle
-            const context = await assembleContextBundle(
-              sessionId,
-              member.userId,
-              stage,
-              intent
-            );
-
-            return {
-              userId: member.userId,
-              userName: member.user.name || 'Unknown',
-              context,
-            };
-          } catch (error) {
-            logger.error(`[BrainRoutes] Failed to assemble context for user ${member.userId}:`, error);
-            // Return placeholder for failed user
-            return {
-              userId: member.userId,
-              userName: member.user.name || 'Unknown',
-              context: null,
-            };
-          }
-        })
+          },
+        ),
       );
 
       const response: ContextResponse = {
@@ -1026,12 +1090,10 @@ router.get('/sessions/:sessionId/context', async (req, res) => {
       return successResponse(res, response);
     }
 
-    // Try as inner work session
-    const innerWorkSession = await prisma.innerWorkSession.findUnique({
+    // Try as a reflection (inner work)
+    const innerWorkSession = await db().reflection.findUnique({
       where: { id: sessionId },
-      include: {
-        user: true
-      }
+      select: { userId: true, user: { select: { name: true } } },
     });
 
     if (innerWorkSession) {
@@ -1041,40 +1103,42 @@ router.get('/sessions/:sessionId/context', async (req, res) => {
         sessionId,
         sessionType: 'inner_thoughts',
         assembledAt: new Date().toISOString(),
-        users: [{
-          userId: innerWorkSession.userId,
-          userName: innerWorkSession.user.name || 'Unknown',
-          // For inner work sessions, create a minimal context bundle
-          // This could be enhanced later if needed
-          context: {
-            conversationContext: {
-              recentTurns: [],
-              turnCount: 0,
-              sessionDurationMinutes: 0,
-            },
-            emotionalThread: {
-              initialIntensity: null,
-              currentIntensity: null,
-              trend: 'unknown',
-              notableShifts: [],
-            },
-            stageContext: {
-              stage: 0,
-              gatesSatisfied: {},
-            },
+        users: [
+          {
+            userId: innerWorkSession.userId,
             userName: innerWorkSession.user.name || 'Unknown',
-            intent: {
-              intent: 'avoid_recall',
-              depth: 'none',
-              allowCrossSession: false,
-              surfaceStyle: 'silent',
-              reason: 'Inner work sessions have different context flow',
-              threshold: 0.5,
-              maxCrossSession: 0,
+            // For inner work sessions, create a minimal context bundle
+            // This could be enhanced later if needed
+            context: {
+              conversationContext: {
+                recentTurns: [],
+                turnCount: 0,
+                sessionDurationMinutes: 0,
+              },
+              emotionalThread: {
+                initialIntensity: null,
+                currentIntensity: null,
+                trend: 'unknown',
+                notableShifts: [],
+              },
+              stageContext: {
+                stage: 0,
+                gatesSatisfied: {},
+              },
+              userName: innerWorkSession.user.name || 'Unknown',
+              intent: {
+                intent: 'avoid_recall',
+                depth: 'none',
+                allowCrossSession: false,
+                surfaceStyle: 'silent',
+                reason: 'Inner work sessions have different context flow',
+                threshold: 0.5,
+                maxCrossSession: 0,
+              },
+              assembledAt: new Date().toISOString(),
             },
-            assembledAt: new Date().toISOString(),
           },
-        }],
+        ],
       };
 
       return successResponse(res, response);
@@ -1082,7 +1146,6 @@ router.get('/sessions/:sessionId/context', async (req, res) => {
 
     // Session not found
     return errorResponse(res, 'NOT_FOUND', 'Session not found', 404);
-
   } catch (error) {
     logger.error('[BrainRoutes] Failed to fetch session context:', error);
     return errorResponse(res, 'INTERNAL_ERROR', 'Failed to fetch session context', 500);
@@ -1096,7 +1159,7 @@ router.get('/turn/:turnId/trace', async (req, res) => {
   try {
     const { turnId } = req.params;
 
-    const activity = await prisma.brainActivity.findFirst({
+    const activity = await db().brainActivity.findFirst({
       where: {
         turnId,
         callType: 'ORCHESTRATED_RESPONSE',
@@ -1109,7 +1172,7 @@ router.get('/turn/:turnId/trace', async (req, res) => {
       return errorResponse(res, 'NOT_FOUND', 'No orchestrated response found for this turn', 404);
     }
 
-    const metadata = activity.metadata as any;
+    const metadata = activity.metadata as ActivityBlob;
     const turnTrace = metadata?.turnTrace ?? null;
 
     if (!turnTrace) {
@@ -1127,7 +1190,7 @@ router.get('/turn/:turnId/trace', async (req, res) => {
 router.get('/sessions', async (req, res) => {
   try {
     const cursor = req.query.cursor as string | undefined;
-    const limit = parseInt(req.query.limit as string || '20', 10);
+    const limit = parseInt((req.query.limit as string) || '20', 10);
     const fetchLimit = limit + 1; // Fetch one extra to detect next page
 
     // Filter params
@@ -1141,41 +1204,42 @@ router.get('/sessions', async (req, res) => {
     const order = (req.query.order as string) || 'desc';
 
     const statusValues = statusFilter ? statusFilter.split(',').map(s => s.trim()) : undefined;
-    const stageValues = stageFilter ? stageFilter.split(',').map(s => parseInt(s, 10)).filter(n => !isNaN(n)) : undefined;
+    const stageValues = stageFilter
+      ? stageFilter
+          .split(',')
+          .map(s => parseInt(s, 10))
+          .filter(n => !isNaN(n))
+      : undefined;
 
     // Determine which session types to fetch
     const fetchPartner = !typeFilter || typeFilter === 'PARTNER';
     const fetchInnerWork = !typeFilter || typeFilter === 'INNER_WORK';
 
     // Build partner session where clause
-    const partnerWhere: any = {};
+    const partnerWhere: Prisma.SessionWhereInput = {};
     if (cursor) partnerWhere.updatedAt = { lt: new Date(cursor) };
-    if (fromDate || toDate) {
-      partnerWhere.createdAt = {};
-      if (fromDate) partnerWhere.createdAt.gte = fromDate;
-      if (toDate) partnerWhere.createdAt.lte = toDate;
-    }
-    if (statusValues) partnerWhere.status = { in: statusValues };
+    if (fromDate || toDate)
+      partnerWhere.createdAt = { ...(fromDate ? { gte: fromDate } : {}), ...(toDate ? { lte: toDate } : {}) };
+    if (statusValues) partnerWhere.status = { in: statusValues as SessionStatus[] };
 
-    // Build inner work session where clause
-    const innerWhere: any = {};
+    // Build reflection where clause
+    const innerWhere: Prisma.ReflectionWhereInput = {};
     if (cursor) innerWhere.updatedAt = { lt: new Date(cursor) };
-    if (fromDate || toDate) {
-      innerWhere.createdAt = {};
-      if (fromDate) innerWhere.createdAt.gte = fromDate;
-      if (toDate) innerWhere.createdAt.lte = toDate;
-    }
-    if (statusValues) innerWhere.status = { in: statusValues };
+    if (fromDate || toDate)
+      innerWhere.createdAt = { ...(fromDate ? { gte: fromDate } : {}), ...(toDate ? { lte: toDate } : {}) };
+    if (statusValues) innerWhere.status = { in: statusValues as ReflectionStatus[] };
 
-    // Search filter - for partner sessions, search by user names/emails or session ID
+    // Search filter - partner sessions by a participant's name/email or the session id; reflections also by title
     if (search) {
+      const isId = /^[0-9a-f-]{36}$/i.test(search);
       partnerWhere.OR = [
-        { id: { contains: search } },
-        { relationship: { members: { some: { user: { name: { contains: search, mode: 'insensitive' } } } } } },
-        { relationship: { members: { some: { user: { email: { contains: search, mode: 'insensitive' } } } } } },
+        ...(isId ? [{ id: search }] : []),
+        { participants: { some: { displayName: { contains: search, mode: 'insensitive' } } } },
+        { participants: { some: { user: { name: { contains: search, mode: 'insensitive' } } } } },
+        { participants: { some: { user: { email: { contains: search, mode: 'insensitive' } } } } },
       ];
       innerWhere.OR = [
-        { id: { contains: search } },
+        ...(isId ? [{ id: search }] : []),
         { user: { name: { contains: search, mode: 'insensitive' } } },
         { user: { email: { contains: search, mode: 'insensitive' } } },
         { title: { contains: search, mode: 'insensitive' } },
@@ -1183,109 +1247,82 @@ router.get('/sessions', async (req, res) => {
     }
 
     // 1. Fetch Partner Sessions
-    let partnerSessions: any[] = [];
+    let partnerSessions: Array<{ id: string; status: string; createdAt: Date; updatedAt: Date }> = [];
     if (fetchPartner) {
-      partnerSessions = await prisma.session.findMany({
+      partnerSessions = await db().session.findMany({
         take: fetchLimit,
         where: partnerWhere,
         orderBy: { updatedAt: 'desc' },
-        include: {
-          relationship: {
-            include: { members: { include: { user: true } } },
-          },
-          stageProgress: { orderBy: { stage: 'desc' } },
-        },
+        select: { id: true, status: true, createdAt: true, updatedAt: true },
       });
+    }
+    const partnerSessionIds = partnerSessions.map(s => s.id);
+    const [stages, labels, partnerTurns, partnerStats] = await Promise.all([
+      maxStages(partnerSessionIds),
+      participantLabels(partnerSessionIds),
+      userTurnCounts(partnerSessionIds),
+      activityStats(partnerSessionIds, 'sessionId'),
+    ]);
 
-      // Post-filter by stage if needed (stage is per-user, so check max stage)
-      if (stageValues && stageValues.length > 0) {
-        partnerSessions = partnerSessions.filter(s => {
-          const maxStage = s.stageProgress.length > 0
-            ? Math.max(...s.stageProgress.map((p: any) => p.stage))
-            : 0;
-          return stageValues.includes(maxStage);
-        });
-      }
+    // Post-filter by stage if needed (stage is per participant, so the session's max)
+    if (stageValues && stageValues.length > 0) {
+      partnerSessions = partnerSessions.filter(s => stageValues.includes(stages.get(s.id) ?? 0));
     }
 
-    // 2. Fetch Inner Work Sessions
-    let innerWorkSessions: any[] = [];
+    // 2. Fetch reflections (inner work)
+    let innerWorkSessions: Array<{
+      id: string;
+      status: string;
+      title: string | null;
+      createdAt: Date;
+      updatedAt: Date;
+      user: { id: string; name: string | null; email: string };
+    }> = [];
     if (fetchInnerWork) {
-      innerWorkSessions = await prisma.innerWorkSession.findMany({
+      innerWorkSessions = await db().reflection.findMany({
         take: fetchLimit,
         where: innerWhere,
         orderBy: { updatedAt: 'desc' },
-        include: { user: true },
+        select: {
+          id: true,
+          status: true,
+          title: true,
+          createdAt: true,
+          updatedAt: true,
+          user: { select: { id: true, name: true, email: true } },
+        },
       });
     }
+    const innerSessionIds = innerWorkSessions.map(s => s.id);
+    const [innerTurns, innerStats] = await Promise.all([
+      reflectionTurnCounts(innerSessionIds),
+      activityStats(innerSessionIds, 'reflectionId'),
+    ]);
 
-    // 3. Aggregate stats for ALL sessions
-    const partnerSessionIds = partnerSessions.map((s: any) => s.id);
-    const innerSessionIds = innerWorkSessions.map((s: any) => s.id);
-    const allSessionIds = [...partnerSessionIds, ...innerSessionIds];
-
-    let stats: any[] = [];
-    if (allSessionIds.length > 0) {
-      stats = await (prisma.brainActivity.groupBy as any)({
-        by: ['sessionId'],
-        _sum: { cost: true, tokenCountInput: true, tokenCountOutput: true },
-        _count: { id: true },
-        where: { sessionId: { in: allSessionIds } },
-      });
-    }
-
-    // 4. Estimate user turns (Partner Sessions)
-    let partnerTurnCounts: any[] = [];
-    if (partnerSessionIds.length > 0) {
-      partnerTurnCounts = await (prisma.message.groupBy as any)({
-        by: ['sessionId'],
-        _count: { id: true },
-        where: { sessionId: { in: partnerSessionIds }, role: 'USER' },
-      });
-    }
-
-    // 5. Estimate user turns (Inner Work Sessions)
-    let innerTurnCounts: any[] = [];
-    if (innerSessionIds.length > 0) {
-      innerTurnCounts = await (prisma.innerWorkMessage.groupBy as any)({
-        by: ['sessionId'],
-        _count: { id: true },
-        where: { sessionId: { in: innerSessionIds }, role: 'USER' },
-      });
-    }
-
-    // 6. Map and Merge
-    const mappedPartnerSessions = partnerSessions.map((session: any) => {
-      const stat = stats.find((s: any) => s.sessionId === session.id);
-      const turns = partnerTurnCounts.find((t: any) => t.sessionId === session.id);
-      const maxStage = session.stageProgress?.length > 0
-        ? Math.max(...session.stageProgress.map((p: any) => p.stage))
-        : 0;
-      const participants = session.relationship?.members?.length
-        ? session.relationship.members.map((m: any) => m.user.name || 'Unknown').join(' & ')
-        : session.relationship ? 'Deleted Users' : 'No Relationship';
+    // 3. Map and Merge
+    const mappedPartnerSessions = partnerSessions.map(session => {
+      const stat = partnerStats.get(session.id);
       return {
         id: session.id,
         type: 'PARTNER' as const,
         status: session.status,
-        stage: maxStage,
+        stage: stages.get(session.id) ?? 0,
         createdAt: session.createdAt,
         updatedAt: session.updatedAt,
         title: null,
-        participants,
-        relationship: session.relationship,
+        participants: labels.get(session.id) ?? 'No Participants',
+        relationship: null,
         stats: {
-          totalCost: stat?._sum.cost || 0,
-          totalTokens: (stat?._sum.tokenCountInput || 0) + (stat?._sum.tokenCountOutput || 0),
-          activityCount: stat?._count.id || 0,
-          turnCount: turns?._count.id || 0,
+          totalCost: stat?.cost ?? 0,
+          totalTokens: stat?.tokens ?? 0,
+          activityCount: stat?.count ?? 0,
+          turnCount: partnerTurns.get(session.id) ?? 0,
         },
       };
     });
 
-    const mappedInnerSessions = innerWorkSessions.map((session: any) => {
-      const stat = stats.find((s: any) => s.sessionId === session.id);
-      const turns = innerTurnCounts.find((t: any) => t.sessionId === session.id);
+    const mappedInnerSessions = innerWorkSessions.map(session => {
+      const stat = innerStats.get(session.id);
       return {
         id: session.id,
         type: 'INNER_WORK' as const,
@@ -1298,10 +1335,10 @@ router.get('/sessions', async (req, res) => {
         relationship: null,
         user: session.user,
         stats: {
-          totalCost: stat?._sum.cost || 0,
-          totalTokens: (stat?._sum.tokenCountInput || 0) + (stat?._sum.tokenCountOutput || 0),
-          activityCount: stat?._count.id || 0,
-          turnCount: turns?._count.id || 0,
+          totalCost: stat?.cost ?? 0,
+          totalTokens: stat?.tokens ?? 0,
+          activityCount: stat?.count ?? 0,
+          turnCount: innerTurns.get(session.id) ?? 0,
         },
       };
     });
@@ -1335,9 +1372,8 @@ router.get('/sessions', async (req, res) => {
       allSessions = allSessions.slice(0, limit);
     }
 
-    const nextCursor = hasNextPage && allSessions.length > 0
-      ? allSessions[allSessions.length - 1].updatedAt.toISOString()
-      : null;
+    const nextCursor =
+      hasNextPage && allSessions.length > 0 ? allSessions[allSessions.length - 1].updatedAt.toISOString() : null;
 
     return successResponse(res, {
       sessions: allSessions,
@@ -1357,68 +1393,58 @@ router.get('/sessions/:sessionId', async (req, res) => {
     const { sessionId } = req.params;
 
     // Try as partner session first
-    const partnerSession = await prisma.session.findUnique({
+    const partnerSession = await db().session.findUnique({
       where: { id: sessionId },
-      include: {
-        relationship: {
-          include: { members: { include: { user: true } } },
-        },
-        stageProgress: { orderBy: { stage: 'desc' } },
-      },
+      select: { id: true, status: true, createdAt: true, updatedAt: true },
     });
 
     if (partnerSession) {
-      // Get stats
-      const [stat, turnCount] = await Promise.all([
-        (prisma.brainActivity.aggregate as any)({
-          where: { sessionId },
-          _sum: { cost: true, tokenCountInput: true, tokenCountOutput: true },
-          _count: { id: true },
-        }),
-        prisma.message.count({ where: { sessionId, role: 'USER' } }),
+      const [stats, turns, labels, stages] = await Promise.all([
+        activityStats([sessionId], 'sessionId'),
+        userTurnCounts([sessionId]),
+        participantLabels([sessionId]),
+        maxStages([sessionId]),
       ]);
-
-      const maxStage = partnerSession.stageProgress?.length > 0
-        ? Math.max(...partnerSession.stageProgress.map((p: any) => p.stage))
-        : 0;
-      const participants = partnerSession.relationship?.members?.length
-        ? partnerSession.relationship.members.map((m: any) => m.user.name || 'Unknown').join(' & ')
-        : partnerSession.relationship ? 'Deleted Users' : 'No Relationship';
+      const stat = stats.get(sessionId);
 
       return successResponse(res, {
         id: partnerSession.id,
         type: 'PARTNER' as const,
         status: partnerSession.status,
-        stage: maxStage,
+        stage: stages.get(sessionId) ?? 0,
         createdAt: partnerSession.createdAt,
         updatedAt: partnerSession.updatedAt,
         title: null,
-        participants,
-        relationship: partnerSession.relationship,
+        participants: labels.get(sessionId) ?? 'No Participants',
+        relationship: null,
         stats: {
-          totalCost: stat?._sum?.cost || 0,
-          totalTokens: (stat?._sum?.tokenCountInput || 0) + (stat?._sum?.tokenCountOutput || 0),
-          activityCount: stat?._count?.id || 0,
-          turnCount,
+          totalCost: stat?.cost ?? 0,
+          totalTokens: stat?.tokens ?? 0,
+          activityCount: stat?.count ?? 0,
+          turnCount: turns.get(sessionId) ?? 0,
         },
       });
     }
 
-    // Try as inner work session
-    const innerSession = await prisma.innerWorkSession.findUnique({
+    // Try as a reflection (inner work)
+    const innerSession = await db().reflection.findUnique({
       where: { id: sessionId },
-      include: { user: true },
+      select: {
+        id: true,
+        status: true,
+        title: true,
+        createdAt: true,
+        updatedAt: true,
+        user: { select: { id: true, name: true, email: true } },
+      },
     });
 
     if (innerSession) {
-      const [stat, turnCount] = await Promise.all([
-        (prisma.brainActivity.aggregate as any)({
-          where: { sessionId },
-          _sum: { cost: true, tokenCountInput: true, tokenCountOutput: true },
-          _count: { id: true },
-        }),
-        prisma.innerWorkMessage.count({ where: { sessionId, role: 'USER' } }),
+      const [stats, turns] = await Promise.all([
+        activityStats([sessionId], 'reflectionId'),
+        reflectionTurnCounts([sessionId]),
       ]);
+      const stat = stats.get(sessionId);
 
       return successResponse(res, {
         id: innerSession.id,
@@ -1432,10 +1458,10 @@ router.get('/sessions/:sessionId', async (req, res) => {
         relationship: null,
         user: innerSession.user,
         stats: {
-          totalCost: stat?._sum?.cost || 0,
-          totalTokens: (stat?._sum?.tokenCountInput || 0) + (stat?._sum?.tokenCountOutput || 0),
-          activityCount: stat?._count?.id || 0,
-          turnCount,
+          totalCost: stat?.cost ?? 0,
+          totalTokens: stat?.tokens ?? 0,
+          activityCount: stat?.count ?? 0,
+          turnCount: turns.get(sessionId) ?? 0,
         },
       });
     }

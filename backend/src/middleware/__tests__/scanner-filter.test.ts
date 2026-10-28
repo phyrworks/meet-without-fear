@@ -45,7 +45,7 @@ describe('scannerFilter', () => {
       '/exploit.cgi',
     ];
 
-    test.each(scannerPaths)('rejects %s with 404', (path) => {
+    test.each(scannerPaths)('rejects %s with 404', path => {
       const req = createMockReq(path);
       const res = createMockRes();
 
@@ -66,7 +66,7 @@ describe('scannerFilter', () => {
       '/api/invitations/accept',
     ];
 
-    test.each(legitimatePaths)('allows %s', (path) => {
+    test.each(legitimatePaths)('allows %s', path => {
       const req = createMockReq(path);
       const res = createMockRes();
 

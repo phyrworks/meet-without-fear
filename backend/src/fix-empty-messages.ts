@@ -8,10 +8,10 @@ async function main() {
     },
     select: {
       id: true,
-      sessionId: true,
+      conversationId: true,
       role: true,
-      timestamp: true,
-    }
+      createdAt: true,
+    },
   });
 
   console.log('Found empty messages:', emptyMessages);
@@ -20,10 +20,12 @@ async function main() {
     const deleted = await prisma.message.deleteMany({
       where: {
         content: '',
-      }
+      },
     });
     console.log('Deleted', deleted.count, 'empty messages');
   }
 }
 
-main().catch(console.error).finally(() => prisma.$disconnect());
+main()
+  .catch(console.error)
+  .finally(() => prisma.$disconnect());

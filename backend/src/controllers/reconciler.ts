@@ -104,7 +104,10 @@ async function myOpenOffer(sessionId: string, me: SessionParty, where: { id?: st
       attempt: { authorParticipant: { sessionId } },
     },
     orderBy: { createdAt: 'desc' },
-    include: { result: true, attempt: { select: { id: true, authorParticipantId: true, status: true, statusVersion: true } } },
+    include: {
+      result: true,
+      attempt: { select: { id: true, authorParticipantId: true, status: true, statusVersion: true } },
+    },
   });
 }
 
@@ -346,7 +349,11 @@ export async function skipShareOfferHandler(req: Request, res: Response): Promis
     const caller = await reconcilerCaller(req, res);
     if (!caller) return;
     const open = await prisma.contextShareOffer.findFirst({
-      where: { subjectParticipantId: caller.me.participantId, status: 'OFFERED', attempt: { authorParticipant: { sessionId: caller.sessionId } } },
+      where: {
+        subjectParticipantId: caller.me.participantId,
+        status: 'OFFERED',
+        attempt: { authorParticipant: { sessionId: caller.sessionId } },
+      },
       select: { id: true },
     });
     if (!open) {
@@ -456,7 +463,10 @@ Respond with ONLY the message text, no additional formatting or explanation.`;
       errorResponse(res, 'INTERNAL_ERROR', 'Failed to generate share draft', 500);
       return;
     }
-    const aiMessage = await aiNote(me.mainConversationId, `Here's what you could share with ${guesserName}:\n\n"${draftContent.trim()}"`);
+    const aiMessage = await aiNote(
+      me.mainConversationId,
+      `Here's what you could share with ${guesserName}:\n\n"${draftContent.trim()}"`,
+    );
     // Content-free (I1/R36): the draft is the subject's private offer text.
     await pingStage2Refresh(sessionId, caller.userId);
 
@@ -506,7 +516,8 @@ export async function refinementChatMessageHandler(req: Request, res: Response):
       errorResponse(res, 'NOT_FOUND', 'Share offer not found', 404);
       return;
     }
-    const partnerName = partyOf(parties, { participantId: shareOffer.attempt.authorParticipantId })?.name || 'your partner';
+    const partnerName =
+      partyOf(parties, { participantId: shareOffer.attempt.authorParticipantId })?.name || 'your partner';
 
     const systemPrompt = `You are Meet Without Fear, a brief coaching companion helping ${userName} refine what to share with ${partnerName}.
 
@@ -556,7 +567,10 @@ WHEN NOT PROVIDING A REVISED VERSION:
       aiResponse.match(/<draft>([\s\S]*?)<\/draft>/i);
     const extractedContent = contentMatch ? contentMatch[1].trim() : null;
     const visibleResponse = aiResponse
-      .replace(/<(?:content|revised[_ ]?text|revised|draft)>[\s\S]*?<\/(?:content|revised[_ ]?text|revised|draft)>/gi, '')
+      .replace(
+        /<(?:content|revised[_ ]?text|revised|draft)>[\s\S]*?<\/(?:content|revised[_ ]?text|revised|draft)>/gi,
+        '',
+      )
       .trim();
 
     successResponse(res, { response: visibleResponse, proposedContent: extractedContent });
@@ -589,7 +603,11 @@ export async function refinementFinalizeHandler(req: Request, res: Response): Pr
       if (resumed) {
         const guesser = parties.find(p => p.participantId !== me.participantId);
         await notifyContextShared(sessionId, userId, guesser);
-        successResponse(res, { status: 'shared', messageId: resumed.sharedMessageId, sharedContent: resumed.sharedContent });
+        successResponse(res, {
+          status: 'shared',
+          messageId: resumed.sharedMessageId,
+          sharedContent: resumed.sharedContent,
+        });
         return;
       }
       errorResponse(res, 'NOT_FOUND', 'Share offer not found or already finalized', 404);
@@ -604,14 +622,25 @@ export async function refinementFinalizeHandler(req: Request, res: Response): Pr
     const guesserName = guesser.name || 'your partner';
 
     const priorShareCount = await prisma.contextShareOffer.count({
-      where: { subjectParticipantId: me.participantId, status: 'ACCEPTED', attempt: { authorParticipant: { sessionId } } },
+      where: {
+        subjectParticipantId: me.participantId,
+        status: 'ACCEPTED',
+        attempt: { authorParticipant: { sessionId } },
+      },
     });
     let subjectAckMessage: string;
     if (priorShareCount > 0) {
       subjectAckMessage = `Thanks for sharing that additional context with ${guesserName}.`;
     } else {
       try {
-        subjectAckMessage = await generatePostShareContinuation(sessionId, me, subjectName, guesserName, content, guesser);
+        subjectAckMessage = await generatePostShareContinuation(
+          sessionId,
+          me,
+          subjectName,
+          guesserName,
+          content,
+          guesser,
+        );
       } catch (error) {
         logger.error('[refinementFinalizeHandler] generatePostShareContinuation failed:', error);
         const stage = (await loadCurrentStages([me.participantId])).get(me.participantId)?.stage ?? 2;

@@ -1,6 +1,8 @@
 import { Expo, ExpoPushMessage } from 'expo-server-sdk';
 import { logger } from '../lib/logger';
 import { prisma } from '../lib/prisma';
+import { clearPushTokenAsJob, pushTokensAsJob } from './user-settings';
+import { currentRow, loadStageStates } from './stage-shim';
 import type { SessionEvent } from './realtime';
 import { Stage, STAGE_FRIENDLY_NAMES } from '@meet-without-fear/shared';
 
@@ -228,17 +230,6 @@ function getStageName(data: Record<string, unknown>): string {
   }
 }
 
-function latestProgressForUser(
-  progress: StageProgressSnapshot[],
-  userId: string,
-): StageProgressSnapshot | null {
-  const userProgress = progress
-    .filter((entry) => (entry as StageProgressSnapshot & { userId?: string }).userId === userId)
-    .sort((a, b) => b.stage - a.stage);
-
-  return userProgress[0] ?? null;
-}
-
 async function getSessionProgressContext(
   userId: string,
   actorUserId: string | null,
@@ -249,22 +240,23 @@ async function getSessionProgressContext(
   }
 
   try {
-    const progress = await prisma.stageProgress.findMany({
-      where: {
-        sessionId,
-        userId: { in: [userId, actorUserId] },
-      },
-      select: {
-        userId: true,
-        stage: true,
-        status: true,
-      },
-      orderBy: { stage: 'desc' },
-    }) as Array<StageProgressSnapshot & { userId: string }>;
+    // Both participants' current stage rows from their milestones (stage shim; TS-12)
+    const participants = await prisma.participant.findMany({
+      where: { sessionId, userId: { in: [userId, actorUserId] } },
+      select: { id: true, userId: true, joinedAt: true },
+    });
+    const states = await loadStageStates(participants.map(p => ({ id: p.id, joinedAt: p.joinedAt })));
+    const snapshotOf = (uid: string): StageProgressSnapshot | null => {
+      const p = participants.find(x => x.userId === uid);
+      const state = p ? states.get(p.id) : undefined;
+      if (!state) return null;
+      const row = currentRow(state);
+      return { stage: row.stage, status: row.status };
+    };
 
     return {
-      recipient: latestProgressForUser(progress, userId),
-      actor: latestProgressForUser(progress, actorUserId),
+      recipient: snapshotOf(userId),
+      actor: snapshotOf(actorUserId),
     };
   } catch (error) {
     logger.warn(`[Push] Failed to resolve progress context for session ${sessionId}:`, error);
@@ -280,9 +272,7 @@ function isStillWorkingAtOrPast(progress: StageProgressSnapshot | null, stage: n
   return !!progress && progress.stage >= stage && progress.status === 'IN_PROGRESS';
 }
 
-async function getStageCompletedTemplate(
-  context: PushMessageSelectionContext,
-): Promise<PushMessageTemplate> {
+async function getStageCompletedTemplate(context: PushMessageSelectionContext): Promise<PushMessageTemplate> {
   const completedStage = typeof context.data.stage === 'number' ? context.data.stage : null;
   const progress = await getSessionProgressContext(context.userId, context.actorUserId, context.sessionId);
 
@@ -340,11 +330,11 @@ async function getPushMessageTemplate(
       const invitation = await prisma.invitation.findFirst({
         where: {
           sessionId,
-          invitedById: userId,
+          invitedByParticipant: { userId },
           status: 'ACCEPTED',
         },
         select: {
-          invitedById: true,
+          id: true,
         },
       });
 
@@ -388,10 +378,12 @@ async function getPushMessageTemplate(
     }
   }
 
-  return PUSH_MESSAGES[event] || {
-    title: 'Meet Without Fear',
-    body: 'You have an update',
-  };
+  return (
+    PUSH_MESSAGES[event] || {
+      title: 'Meet Without Fear',
+      body: 'You have an update',
+    }
+  );
 }
 
 async function getNotificationActorName(
@@ -405,34 +397,22 @@ async function getNotificationActorName(
   }
 
   try {
-    const session = await prisma.session.findUnique({
-      where: { id: sessionId },
-      select: {
-        relationship: {
-          select: {
-            members: {
-              where: { userId: { in: [recipientUserId, actorUserId] } },
-              select: {
-                userId: true,
-                nickname: true,
-                user: {
-                  select: {
-                    firstName: true,
-                    name: true,
-                  },
-                },
-              },
-            },
-          },
+    // The recipient's own name for the actor, then the actor's display name
+    // (participant.display_name — never the actor's user row, spec §7).
+    const [session, actor] = await Promise.all([
+      prisma.session.findUnique({
+        where: { id: sessionId },
+        select: {
+          relationship: { select: { members: { where: { userId: recipientUserId }, select: { nickname: true } } } },
         },
-      },
-    });
+      }),
+      prisma.participant.findUnique({
+        where: { sessionId_userId: { sessionId, userId: actorUserId } },
+        select: { displayName: true },
+      }),
+    ]);
 
-    const members = session?.relationship.members ?? [];
-    const recipientMember = members.find(member => member.userId === recipientUserId);
-    const actorMember = members.find(member => member.userId === actorUserId);
-
-    return recipientMember?.nickname || actorMember?.user.firstName || actorMember?.user.name || 'They';
+    return session?.relationship.members[0]?.nickname || actor?.displayName || 'They';
   } catch (error) {
     logger.warn(`[Push] Failed to resolve notification actor name for session ${sessionId}:`, error);
     return 'They';
@@ -469,20 +449,16 @@ export async function sendPushNotification(
   sessionId: string,
 ): Promise<boolean> {
   try {
-    // Fetch user's push token from database
-    const user = await prisma.user.findUnique({
-      where: { id: userId },
-      select: { pushToken: true },
+    // The recipient's devices (user_device), read by the job: the push is
+    // delivered to another user than the caller (services/user-settings.ts)
+    const tokens = (await pushTokensAsJob(userId)).filter(token => {
+      if (Expo.isExpoPushToken(token)) return true;
+      logger.warn(`[Push] Invalid push token format for user ${userId}: ${token}`);
+      return false;
     });
 
-    if (!user?.pushToken) {
+    if (tokens.length === 0) {
       logger.info(`[Push] No push token for user ${userId}`);
-      return false;
-    }
-
-    // Validate the push token format
-    if (!Expo.isExpoPushToken(user.pushToken)) {
-      logger.warn(`[Push] Invalid push token format for user ${userId}: ${user.pushToken}`);
       return false;
     }
 
@@ -494,9 +470,9 @@ export async function sendPushNotification(
       stageName: getStageName(data),
     });
 
-    // Construct the push notification
-    const pushMessage: ExpoPushMessage = {
-      to: user.pushToken,
+    // One notification per device
+    const pushMessages: ExpoPushMessage[] = tokens.map(to => ({
+      to,
       sound: 'default',
       title: message.title,
       body: message.body,
@@ -506,33 +482,27 @@ export async function sendPushNotification(
         event,
         ...data,
       },
-    };
+    }));
 
-    // Send the notification via Expo
+    // Send the notifications via Expo
     const expo = getExpo();
-    const tickets = await expo.sendPushNotificationsAsync([pushMessage]);
+    const tickets = await expo.sendPushNotificationsAsync(pushMessages);
 
-    // Check if the notification was sent successfully
-    const ticket = tickets[0];
-    if (ticket.status === 'ok') {
-      logger.info(`[Push] Sent ${event} notification to user ${userId}`);
-      return true;
-    } else {
-      // Handle error cases
-      if (ticket.status === 'error') {
-        logger.error(`[Push] Failed to send notification to user ${userId}:`, ticket.message);
-
-        // If token is invalid, we could clean it up here
-        if (ticket.details?.error === 'DeviceNotRegistered' || ticket.details?.error === 'InvalidCredentials') {
-          logger.info(`[Push] Clearing invalid token for user ${userId}`);
-          await prisma.user.update({
-            where: { id: userId },
-            data: { pushToken: null },
-          });
-        }
+    let sent = false;
+    for (const [i, ticket] of tickets.entries()) {
+      if (ticket.status === 'ok') {
+        sent = true;
+        continue;
       }
-      return false;
+      logger.error(`[Push] Failed to send notification to user ${userId}:`, ticket.message);
+      // An unregistered device's token is cleared
+      if (ticket.details?.error === 'DeviceNotRegistered' || ticket.details?.error === 'InvalidCredentials') {
+        logger.info(`[Push] Clearing invalid token for user ${userId}`);
+        await clearPushTokenAsJob(userId, tokens[i]);
+      }
     }
+    if (sent) logger.info(`[Push] Sent ${event} notification to user ${userId}`);
+    return sent;
   } catch (error) {
     logger.error(`[Push] Error sending notification to user ${userId}:`, error);
     return false;
@@ -568,25 +538,23 @@ export interface TestPushNotificationResult {
  */
 export async function sendTestPushNotification(userId: string): Promise<TestPushNotificationResult> {
   try {
-    const user = await prisma.user.findUnique({
-      where: { id: userId },
-      select: { pushToken: true },
-    });
+    // The caller's own most recently seen device (the test is sent to oneself)
+    const [pushToken] = await pushTokensAsJob(userId);
 
-    if (!user?.pushToken) {
+    if (!pushToken) {
       logger.info(`[Push] No push token for test notification user ${userId}`);
       return { sent: false, reason: 'No push token is registered for this account' };
     }
 
-    if (!Expo.isExpoPushToken(user.pushToken)) {
-      logger.warn(`[Push] Invalid test push token format for user ${userId}: ${user.pushToken}`);
+    if (!Expo.isExpoPushToken(pushToken)) {
+      logger.warn(`[Push] Invalid test push token format for user ${userId}: ${pushToken}`);
       return { sent: false, reason: 'The stored push token is not a valid Expo token' };
     }
 
     const expo = getExpo();
     const tickets = await expo.sendPushNotificationsAsync([
       {
-        to: user.pushToken,
+        to: pushToken,
         sound: 'default',
         title: 'Push notification test',
         body: 'This is your scheduled Meet Without Fear test notification.',
@@ -605,10 +573,7 @@ export async function sendTestPushNotification(userId: string): Promise<TestPush
 
     logger.error(`[Push] Failed to send test notification to user ${userId}:`, ticket.message);
     if (ticket.details?.error === 'DeviceNotRegistered' || ticket.details?.error === 'InvalidCredentials') {
-      await prisma.user.update({
-        where: { id: userId },
-        data: { pushToken: null },
-      });
+      await clearPushTokenAsJob(userId, pushToken);
     }
     return { sent: false, reason: ticket.message };
   } catch (error) {

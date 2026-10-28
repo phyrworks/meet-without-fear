@@ -1,4 +1,15 @@
-import { buildStagePrompt, buildStagePromptString, buildInitialMessagePrompt, PromptContext, PromptBlocks, BuildStagePromptOptions, buildInnerWorkPrompt, InsightContext, buildReconcilerPrompt, buildReconcilerEvidencePacket } from '../stage-prompts';
+import {
+  buildStagePrompt,
+  buildStagePromptString,
+  buildInitialMessagePrompt,
+  PromptContext,
+  PromptBlocks,
+  BuildStagePromptOptions,
+  buildInnerWorkPrompt,
+  InsightContext,
+  buildReconcilerPrompt,
+  buildReconcilerEvidencePacket,
+} from '../stage-prompts';
 import type { ContextBundle } from '../context-assembler';
 import type { MemoryIntentResult } from '../memory-intent';
 
@@ -448,7 +459,7 @@ describe('Stage Prompts Service', () => {
       const options: BuildStagePromptOptions = { isInvitationPhase: true };
       const prompt = fullPrompt(buildStagePrompt(0, context, options));
 
-      expect(prompt).toContain('Preserve the user\'s concrete behavioral signal');
+      expect(prompt).toContain("Preserve the user's concrete behavioral signal");
       expect(prompt).toContain('yelling');
       expect(prompt).toContain('personal attacks');
       expect(prompt).toContain('Do not flatten');
@@ -647,7 +658,7 @@ describe('Stage Prompts Service', () => {
       expect(prompt).toContain('Do not offer the felt-heard gate after only naming the pattern');
       expect(prompt).toContain('high-resistance/non-resolution case');
       expect(prompt).toContain('do not set FeelHeardCheck:Y before at least five substantive user turns');
-      expect(prompt).toContain('does not count as the user\'s answer to that check');
+      expect(prompt).toContain("does not count as the user's answer to that check");
       expect(prompt).toContain('what they have already tried');
       expect(prompt).toContain('care underneath resentment');
       expect(prompt).toContain('maybe I need to know I really tried');
@@ -733,7 +744,7 @@ describe('Stage Prompts Service', () => {
       });
 
       expect(result.staticBlock).toContain('VOICE & STYLE');
-      expect(result.staticBlock).toContain('Say it like you\'d say it to a friend');
+      expect(result.staticBlock).toContain("Say it like you'd say it to a friend");
       expect(result.staticBlock).toContain('1-3 sentences by default');
     });
 
@@ -828,11 +839,13 @@ describe('Stage Prompts Service', () => {
         },
       ];
 
-      const prompt = fullPrompt(buildInnerWorkPrompt({
-        userName: 'Test User',
-        turnCount: 5,
-        insights,
-      }));
+      const prompt = fullPrompt(
+        buildInnerWorkPrompt({
+          userName: 'Test User',
+          turnCount: 5,
+          insights,
+        }),
+      );
 
       expect(prompt).toContain('CROSS-FEATURE INSIGHTS');
       expect(prompt).toContain('Pattern noticed: You frequently mention work stress');
@@ -842,20 +855,24 @@ describe('Stage Prompts Service', () => {
     });
 
     it('does not include insights section when no insights provided', () => {
-      const prompt = fullPrompt(buildInnerWorkPrompt({
-        userName: 'Test User',
-        turnCount: 5,
-        insights: [],
-      }));
+      const prompt = fullPrompt(
+        buildInnerWorkPrompt({
+          userName: 'Test User',
+          turnCount: 5,
+          insights: [],
+        }),
+      );
 
       expect(prompt).not.toContain('CROSS-FEATURE INSIGHTS');
     });
 
     it('does not include insights section when insights is undefined', () => {
-      const prompt = fullPrompt(buildInnerWorkPrompt({
-        userName: 'Test User',
-        turnCount: 5,
-      }));
+      const prompt = fullPrompt(
+        buildInnerWorkPrompt({
+          userName: 'Test User',
+          turnCount: 5,
+        }),
+      );
 
       expect(prompt).not.toContain('CROSS-FEATURE INSIGHTS');
     });
@@ -868,11 +885,13 @@ describe('Stage Prompts Service', () => {
         },
       ];
 
-      const prompt = fullPrompt(buildInnerWorkPrompt({
-        userName: 'Test User',
-        turnCount: 3,
-        insights,
-      }));
+      const prompt = fullPrompt(
+        buildInnerWorkPrompt({
+          userName: 'Test User',
+          turnCount: 3,
+          insights,
+        }),
+      );
 
       expect(prompt).toContain('Something to explore: You say trust is important');
     });
@@ -885,14 +904,16 @@ describe('Stage Prompts Service', () => {
         },
       ];
 
-      const prompt = fullPrompt(buildInnerWorkPrompt({
-        userName: 'Test User',
-        turnCount: 3,
-        insights,
-      }));
+      const prompt = fullPrompt(
+        buildInnerWorkPrompt({
+          userName: 'Test User',
+          turnCount: 3,
+          insights,
+        }),
+      );
 
       expect(prompt).toContain('HOW TO USE INSIGHTS');
-      expect(prompt).toContain('Don\'t force insights');
+      expect(prompt).toContain("Don't force insights");
       expect(prompt).toContain('EXAMPLES OF NATURAL INTEGRATION');
     });
   });
@@ -904,9 +925,7 @@ describe('Stage Prompts Service', () => {
       empathyStatement: 'I think you felt wrongly accused and scared.',
       witnessingContent: 'I felt scared, but I also denied yelling at first.',
       extractedThemes: ['scared', 'defensive'],
-      subjectFacts: [
-        { category: 'Conflict', fact: 'Eve later acknowledged yelling during the argument.' },
-      ],
+      subjectFacts: [{ category: 'Conflict', fact: 'Eve later acknowledged yelling during the argument.' }],
       recentSubjectTurns: [
         { role: 'assistant' as const, content: 'Did you actually yell?', stage: 2 },
         { role: 'user' as const, content: 'Yeah, I did.', stage: 2 },
@@ -989,9 +1008,13 @@ describe('Stage Prompts Service', () => {
       const prompt = fullPrompt(buildStagePrompt(3, context));
 
       expect(prompt).toContain('The only XML-style tags you may use are exactly <thinking> and <dispatch>.');
-      expect(prompt).toContain('Flags such as FeelHeardCheck, ReadyShare, NeedsReady, Mode, and Strategy must be plain lines inside <thinking>');
+      expect(prompt).toContain(
+        'Flags such as FeelHeardCheck, ReadyShare, NeedsReady, Mode, and Strategy must be plain lines inside <thinking>',
+      );
       expect(prompt).toContain('never turn them into tags like <needs_ready>, <ready_share>, or <feel_heard_check>');
-      expect(prompt).toContain('Never capture more than one proposedNeed or needAction per turn; if ambiguous, ask before calling update_session_state');
+      expect(prompt).toContain(
+        'Never capture more than one proposedNeed or needAction per turn; if ambiguous, ask before calling update_session_state',
+      );
       expect(prompt).toContain('SURFACE-ONE');
       expect(prompt).toContain('CONFIRM-AND-LOCK');
     });
@@ -1221,7 +1244,7 @@ describe('Stage Prompts Service', () => {
         createContext({
           invitedSessionNudge: 'Session waiting 5 days. Re-share code `abc123`.',
         }),
-        { surface: 'slack' }
+        { surface: 'slack' },
       );
       expect(blocks.dynamicBlock).toContain('OPERATIONAL NUDGE:');
       expect(blocks.dynamicBlock).toContain('abc123');
@@ -1233,28 +1256,20 @@ describe('Stage Prompts Service', () => {
         createContext({
           invitedSessionNudge: 'anything',
         }),
-        { surface: 'slack' }
+        { surface: 'slack' },
       );
       expect(blocks.staticBlock).not.toContain('OPERATIONAL NUDGE');
     });
 
     it('does not fire when invitedSessionNudge is explicitly null', () => {
-      const blocks = buildStagePrompt(
-        0,
-        createContext({ invitedSessionNudge: null }),
-        { surface: 'slack' }
-      );
+      const blocks = buildStagePrompt(0, createContext({ invitedSessionNudge: null }), { surface: 'slack' });
       expect(blocks.dynamicBlock).not.toContain('OPERATIONAL NUDGE');
     });
   });
 
   describe('buildInitialMessagePrompt — Stage 0 opening', () => {
     it('Stage 0 invitation-phase opener references the partner name and topic-not-details framing', () => {
-      const prompt = buildInitialMessagePrompt(
-        0,
-        { userName: 'Alice', partnerName: 'Bob' },
-        true
-      );
+      const prompt = buildInitialMessagePrompt(0, { userName: 'Alice', partnerName: 'Bob' }, true);
 
       expect(prompt).toContain('Bob');
       expect(prompt).toContain('topic');
@@ -1264,11 +1279,7 @@ describe('Stage Prompts Service', () => {
     });
 
     it('falls back to "your partner" when no partner name is provided', () => {
-      const prompt = buildInitialMessagePrompt(
-        0,
-        { userName: 'Alice' },
-        true
-      );
+      const prompt = buildInitialMessagePrompt(0, { userName: 'Alice' }, true);
 
       expect(prompt).toContain('your partner');
     });
@@ -1282,7 +1293,7 @@ describe('Stage Prompts Service', () => {
           isInvitee: true,
           topicFrame: 'Giving each other heads up before stopping by',
         },
-        false
+        false,
       );
 
       expect(prompt).toContain('TOPIC ALREADY SHOWN ABOVE THIS MESSAGE');
@@ -1312,30 +1323,36 @@ describe('Stage Prompts Service', () => {
     });
 
     it('uses confirmed topicFrame from the context bundle when explicit topicFrame is undefined', () => {
-      const blocks = buildStagePrompt(1, createContext({
-        contextBundle: {
-          ...mockContextBundle,
-          topicFrame: {
-            text: 'Trust around late-night texting',
-            confirmedAt: '2026-05-12T00:00:00.000Z',
+      const blocks = buildStagePrompt(
+        1,
+        createContext({
+          contextBundle: {
+            ...mockContextBundle,
+            topicFrame: {
+              text: 'Trust around late-night texting',
+              confirmedAt: '2026-05-12T00:00:00.000Z',
+            },
           },
-        },
-      }));
+        }),
+      );
 
       expect(blocks.dynamicBlock).toContain('CONVERSATION TOPIC: "Trust around late-night texting"');
     });
 
     it('does not use context bundle topicFrame when explicit topicFrame is null', () => {
-      const blocks = buildStagePrompt(1, createContext({
-        topicFrame: null,
-        contextBundle: {
-          ...mockContextBundle,
-          topicFrame: {
-            text: 'Trust around late-night texting',
-            confirmedAt: '2026-05-12T00:00:00.000Z',
+      const blocks = buildStagePrompt(
+        1,
+        createContext({
+          topicFrame: null,
+          contextBundle: {
+            ...mockContextBundle,
+            topicFrame: {
+              text: 'Trust around late-night texting',
+              confirmedAt: '2026-05-12T00:00:00.000Z',
+            },
           },
-        },
-      }));
+        }),
+      );
 
       expect(blocks.dynamicBlock).not.toContain('CONVERSATION TOPIC');
     });
@@ -1346,9 +1363,13 @@ describe('Stage Prompts Service', () => {
       const blocks = buildStagePrompt(1, createContext({ turnCount: 5 }));
 
       expect(blocks.staticBlock).toContain('make one final open-floor move with FeelHeardCheck:N');
-      expect(blocks.staticBlock).toContain('do not set FeelHeardCheck:Y in the same response as the first final open-floor check');
+      expect(blocks.staticBlock).toContain(
+        'do not set FeelHeardCheck:Y in the same response as the first final open-floor check',
+      );
       expect(blocks.staticBlock).toContain('Never end a response with an open question while setting FeelHeardCheck:Y');
-      expect(blocks.staticBlock).toContain('Keep FeelHeardCheck:N until the user has had a chance to answer it and you have reflected that answer');
+      expect(blocks.staticBlock).toContain(
+        'Keep FeelHeardCheck:N until the user has had a chance to answer it and you have reflected that answer',
+      );
     });
 
     it('keeps the dynamic feel-heard guard active before turn 5', () => {

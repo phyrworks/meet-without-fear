@@ -515,7 +515,10 @@ function bobSessionCapture(p: ParticipantScenario, when: Stamp): PromptCapture {
     at: when,
     input: {
       systemPrompt: 'You are a calm facilitator witnessing Bob in his private conversation. Stage: witness.',
-      messages: msgs.map(m => ({ role: m.role === 'USER' ? ('user' as const) : ('assistant' as const), content: m.content })),
+      messages: msgs.map(m => ({
+        role: m.role === 'USER' ? ('user' as const) : ('assistant' as const),
+        content: m.content,
+      })),
     },
     output: msgs[msgs.length - 1]?.content ?? '',
   };
@@ -614,8 +617,22 @@ function tombstoneReady(a: string, b: string): ReturnType<Build> {
         deliveredAt: sec(-310),
       },
       messages: [
-        { to: B, from: A, role: 'SHARED_CONTEXT', content: TOMBSTONE_TEXT.adaSharedContext, phase: 'perspective', at: sec(-310) },
-        { to: A, from: A, role: 'SHARED_CONTEXT', content: TOMBSTONE_TEXT.adaSharedContext, phase: 'perspective', at: sec(-310) },
+        {
+          to: B,
+          from: A,
+          role: 'SHARED_CONTEXT',
+          content: TOMBSTONE_TEXT.adaSharedContext,
+          phase: 'perspective',
+          at: sec(-310),
+        },
+        {
+          to: A,
+          from: A,
+          role: 'SHARED_CONTEXT',
+          content: TOMBSTONE_TEXT.adaSharedContext,
+          phase: 'perspective',
+          at: sec(-310),
+        },
       ],
     },
     legacyStrategies: {
@@ -690,7 +707,8 @@ export const NEEDS_CONFIRMED_TEXT: Record<'ada' | 'bob', NeedContent[]> = {
 export const TOMBSTONE_TEXT = {
   adaEmpathy: 'I think you come home hollowed out and the chores feel like a verdict on you.',
   bobEmpathy: 'I think you feel invisible when you are the only one tracking the house.',
-  adaSharedContext: 'What I need you to know is that I am exhausted too, and I stopped saying it because it never seemed to count.',
+  adaSharedContext:
+    'What I need you to know is that I am exhausted too, and I stopped saying it because it never seemed to count.',
   adaNeedShares: ['Ada wants her effort to be noticed out loud.', 'Ada wants the house to feel like a joint project.'],
   /** Ada's private needs (label + evidence): probes R5 checks are gone from Bob's reads after she leaves. */
   adaNeeds: [
@@ -709,7 +727,10 @@ export const TOMBSTONE_TEXT = {
       evidence: ['Ada said the mental load of planning meals is hers alone'],
     },
   ] as NeedContent[],
-  bobNeedShares: ['Bob wants to be understood before being asked for more.', 'Bob wants practical help on hard work days.'],
+  bobNeedShares: [
+    'Bob wants to be understood before being asked for more.',
+    'Bob wants practical help on hard work days.',
+  ],
 };
 
 /**

@@ -83,7 +83,7 @@ describe('getVoiceToken controller', () => {
           headers: expect.objectContaining({
             Authorization: 'test-api-key',
           }),
-        })
+        }),
       );
       expect(jsonMock).toHaveBeenCalledWith({
         success: true,

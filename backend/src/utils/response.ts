@@ -17,13 +17,7 @@ export function successResponse<T>(res: Response, data: T, status = 200): void {
 /**
  * Send an error API response
  */
-export function errorResponse(
-  res: Response,
-  code: string,
-  message: string,
-  status = 400,
-  details?: unknown
-): void {
+export function errorResponse(res: Response, code: string, message: string, status = 400, details?: unknown): void {
   res.status(status).json({
     success: false,
     error: { code, message, details },
@@ -43,7 +37,7 @@ export function success<T>(data: T): ApiResponse<T> {
 export function error(
   code: ErrorCode | string,
   message: string,
-  details?: Record<string, unknown>
+  details?: Record<string, unknown>,
 ): ApiResponse<never> {
   return {
     success: false,

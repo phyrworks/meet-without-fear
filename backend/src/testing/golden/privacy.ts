@@ -84,6 +84,11 @@ const TARGET_READ_TABLE: Record<string, string> = {
   ReconcilerResult: 'reconciler_result',
   ReconcilerShareOffer: 'context_share_offer',
   ConsentRecord: 'consent',
+  // TS-12 (R1): the reflection cluster and telemetry a full read can touch
+  StageProgress: 'participant_milestone',
+  InnerWorkSession: 'reflection',
+  InnerWorkMessage: 'reflection_message',
+  BrainActivity: 'brain_activity',
 };
 
 /** A scenario's snapshot tables in the shape in use (TS-10). */

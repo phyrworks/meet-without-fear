@@ -41,17 +41,18 @@ import {
 import { notifyPartner, publishSessionEvent } from '../services/realtime';
 import { successResponse, errorResponse } from '../utils/response';
 import { getPartnerUserId } from '../utils/session';
-import {
-  getStage4State as buildStage4State,
-  Stage4StateNotFoundError,
-  toAgreementDTO,
-} from '../services/stage4-state';
+import { getStage4State as buildStage4State, Stage4StateNotFoundError, toAgreementDTO } from '../services/stage4-state';
 import { stage4HandoffBridgeMessage } from '../services/stage4-prompts';
 import { getModelCompletion } from '../lib/bedrock';
 import { extractJsonFromResponse } from '../utils/json-extractor';
 import { contentHash } from '../utils/content-hash';
 import { z } from 'zod';
-import { getPartnerParticipant, resolveParticipant, type ResolvedParticipant } from '../services/participant-resolver';
+import {
+  getCounterpartParticipant,
+  getPartnerParticipant,
+  resolveParticipant,
+  type ResolvedParticipant,
+} from '../services/participant-resolver';
 import { loadStageStates } from '../services/stage-shim';
 import { createFacilitatorMessage } from '../services/message-store';
 import {
@@ -64,14 +65,18 @@ import {
   loadProposals,
   loadStage4Needs,
   loadVisibleCoverage,
-  presentHumans,
   resolveNeedLabels,
   setProposalNeeds,
   shareChoices,
   unshareChoices,
   upsertChoice,
 } from '../services/stage4-store';
-import { advanceWalkthrough, declineNeed, Stage4WalkthroughNeedNotFoundError, undeclineNeed } from '../services/stage4-walkthrough';
+import {
+  advanceWalkthrough,
+  declineNeed,
+  Stage4WalkthroughNeedNotFoundError,
+  undeclineNeed,
+} from '../services/stage4-walkthrough';
 import { closeStage4 as closeStage4Service, Stage4CloseError } from '../services/stage4-closure';
 
 // ============================================================================
@@ -100,7 +105,9 @@ function normalizeSuggestionDrafts(value: unknown, count: number): Stage4Suggest
         description,
         duration: typeof draft.duration === 'string' && draft.duration.trim() ? draft.duration.trim() : null,
         measureOfSuccess:
-          typeof draft.measureOfSuccess === 'string' && draft.measureOfSuccess.trim() ? draft.measureOfSuccess.trim() : null,
+          typeof draft.measureOfSuccess === 'string' && draft.measureOfSuccess.trim()
+            ? draft.measureOfSuccess.trim()
+            : null,
       };
     })
     .filter((draft): draft is Stage4SuggestionDraft => draft !== null)
@@ -205,7 +212,9 @@ const closeStage4RequestSchema = z.object({
   checkInDate: z
     .string()
     .min(1, 'checkInDate is required')
-    .refine((value) => !Number.isNaN(new Date(value).getTime()), { message: 'checkInDate must be a valid ISO date string' })
+    .refine(value => !Number.isNaN(new Date(value).getTime()), {
+      message: 'checkInDate must be a valid ISO date string',
+    })
     .optional(),
   // Optional, deprecated. Kept for backward compatibility — Phase 4 removes it.
   followUpDatesByProposalId: z.record(z.string()).optional(),
@@ -252,7 +261,12 @@ function refuse(
     return true;
   }
   if (opts.stage !== false && ctx.stage !== 4) {
-    errorResponse(res, 'VALIDATION_ERROR', `Cannot ${what}: you are in stage ${ctx.stage}, but stage 4 is required`, 400);
+    errorResponse(
+      res,
+      'VALIDATION_ERROR',
+      `Cannot ${what}: you are in stage ${ctx.stage}, but stage 4 is required`,
+      400,
+    );
     return true;
   }
   if (opts.open !== false && ctx.closed) {
@@ -287,7 +301,7 @@ async function legacyParties(proposalId: string): Promise<Set<string>> {
     where: { proposalId, reason: { in: [LEGACY_PROPOSED, LEGACY_CONFIRMED] } },
     select: { actorParticipantId: true },
   });
-  return new Set(rows.map((r) => r.actorParticipantId).filter((id): id is string => Boolean(id)));
+  return new Set(rows.map(r => r.actorParticipantId).filter((id): id is string => Boolean(id)));
 }
 
 // ============================================================================
@@ -330,7 +344,9 @@ export async function submitStage4ProposalSelection(req: Request, res: Response)
       errorResponse(res, 'VALIDATION_ERROR', 'Invalid request body', 400, parseResult.error.issues);
       return;
     }
-    await submitStage4SelectionsInternal(req, res, req.params.id, user.id, [{ proposalId: req.params.proposalId, ...parseResult.data }]);
+    await submitStage4SelectionsInternal(req, res, req.params.id, user.id, [
+      { proposalId: req.params.proposalId, ...parseResult.data },
+    ]);
   } catch (error) {
     logger.error('[submitStage4ProposalSelection] Error:', error);
     errorResponse(res, 'INTERNAL_ERROR', 'Failed to submit Stage 4 selection', 500);
@@ -403,22 +419,30 @@ async function submitStage4SelectionsInternal(
   const ctx = await stage4Context(req, sessionId, userId);
   if (refuse(res, ctx, 'submit Stage 4 selections')) return;
 
-  const ids = [...new Set(selections.map((s) => s.proposalId))];
+  const ids = [...new Set(selections.map(s => s.proposalId))];
   if (ids.length !== selections.length) {
     errorResponse(res, 'VALIDATION_ERROR', 'Proposal selections must be unique per request', 400);
     return;
   }
   const valid = new Set(
-    (await prisma.proposal.findMany({ where: { sessionId, id: { in: ids }, status: 'ACTIVE' }, select: { id: true } })).map((p) => p.id),
+    (
+      await prisma.proposal.findMany({ where: { sessionId, id: { in: ids }, status: 'ACTIVE' }, select: { id: true } })
+    ).map(p => p.id),
   );
-  if (ids.some((id) => !valid.has(id))) {
+  if (ids.some(id => !valid.has(id))) {
     errorResponse(res, 'VALIDATION_ERROR', 'Selections must reference active proposals in this session', 400);
     return;
   }
 
   const submittedAt = new Date();
   for (const s of selections) {
-    await upsertChoice({ proposalId: s.proposalId, participantId: ctx.participant.id, decision: s.decision, note: s.note ?? null, at: submittedAt });
+    await upsertChoice({
+      proposalId: s.proposalId,
+      participantId: ctx.participant.id,
+      decision: s.decision,
+      note: s.note ?? null,
+      at: submittedAt,
+    });
   }
 
   // Choices stay private until the participant explicitly shares; a revision
@@ -457,31 +481,34 @@ export async function shareStage4Selections(req: Request, res: Response): Promis
 
     const [proposals, myChoices, needs, dispositions] = await Promise.all([
       loadProposals(sessionId, me),
-      prisma.proposalChoice.findMany({ where: { participantId: me, proposal: { sessionId } }, select: { proposalId: true, decision: true } }),
+      prisma.proposalChoice.findMany({
+        where: { participantId: me, proposal: { sessionId } },
+        select: { proposalId: true, decision: true },
+      }),
       loadStage4Needs(sessionId, me),
       prisma.needDisposition.findMany({ where: { participantId: me, status: 'DECLINED' }, select: { needId: true } }),
     ]);
-    const activeShared = proposals.filter((p) => p.status === 'ACTIVE' && p.kind === 'SHARED_PROPOSAL');
+    const activeShared = proposals.filter(p => p.status === 'ACTIVE' && p.kind === 'SHARED_PROPOSAL');
     if (activeShared.length === 0) {
       errorResponse(res, 'VALIDATION_ERROR', 'No shared proposals to share stances on yet', 400);
       return;
     }
-    const chosen = new Set(myChoices.map((c) => c.proposalId));
-    if (activeShared.some((p) => !chosen.has(p.id))) {
+    const chosen = new Set(myChoices.map(c => c.proposalId));
+    if (activeShared.some(p => !chosen.has(p.id))) {
       errorResponse(res, 'VALIDATION_ERROR', 'Take a stance on every shared proposal before sharing', 400);
       return;
     }
     // Gate: every shared need with no live covering proposal (v_need_coverage OPEN)
     // must be covered by an active proposal this participant is WILLING on, or set aside.
-    const willing = new Set(myChoices.filter((c) => c.decision === 'WILLING').map((c) => c.proposalId));
-    const active = proposals.filter((p) => p.status === 'ACTIVE');
-    const declined = new Set(dispositions.map((d) => d.needId));
+    const willing = new Set(myChoices.filter(c => c.decision === 'WILLING').map(c => c.proposalId));
+    const active = proposals.filter(p => p.status === 'ACTIVE');
+    const declined = new Set(dispositions.map(d => d.needId));
     // Visible coverage only (fix round 2): a partner's unshared WILLING must not change the gate.
-    const coverage = new Map((await loadVisibleCoverage(sessionId, me)).map((c) => [c.needId, c]));
-    const ungated = needs.filter((n) => {
+    const coverage = new Map((await loadVisibleCoverage(sessionId, me)).map(c => [c.needId, c]));
+    const ungated = needs.filter(n => {
       if ((coverage.get(n.id)?.status ?? 'OPEN') !== 'OPEN') return false;
       if (declined.has(n.id)) return false;
-      return !active.some((p) => willing.has(p.id) && p.needIds.includes(n.id));
+      return !active.some(p => willing.has(p.id) && p.needIds.includes(n.id));
     });
     if (ungated.length > 0) {
       errorResponse(res, 'VALIDATION_ERROR', 'Address or set aside every open need before sharing', 400);
@@ -625,7 +652,10 @@ export async function closeStage4(req: Request, res: Response): Promise<void> {
         agreementIds: result.agreementIds,
       });
     }
-    await publishSessionEvent(sessionId, 'session.resolved', { closureKind: result.kind, agreementIds: result.agreementIds });
+    await publishSessionEvent(sessionId, 'session.resolved', {
+      closureKind: result.kind,
+      agreementIds: result.agreementIds,
+    });
 
     const state = await buildStage4State(sessionId, user.id);
     if (!state.outcome) {
@@ -670,16 +700,26 @@ export async function getStrategies(req: Request, res: Response): Promise<void> 
       prisma.proposal.findMany({
         where: { sessionId, createdByParticipantId: participant.id },
         orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
-        select: { id: true, description: true, duration: true, measureOfSuccess: true, unresolvedNeedLabels: true, needs: { select: { needId: true } } },
+        select: {
+          id: true,
+          description: true,
+          duration: true,
+          measureOfSuccess: true,
+          unresolvedNeedLabels: true,
+          needs: { select: { needId: true } },
+        },
       }),
       loadStage4Needs(sessionId, participant.id),
     ]);
-    const labelOf = new Map(needs.map((n) => [n.id, n.label]));
+    const labelOf = new Map(needs.map(n => [n.id, n.label]));
     successResponse(res, {
-      strategies: own.map((p) => ({
+      strategies: own.map(p => ({
         id: p.id,
         description: p.description,
-        needsAddressed: [...p.needs.map((n) => labelOf.get(n.needId)).filter((l): l is string => Boolean(l)), ...p.unresolvedNeedLabels],
+        needsAddressed: [
+          ...p.needs.map(n => labelOf.get(n.needId)).filter((l): l is string => Boolean(l)),
+          ...p.unresolvedNeedLabels,
+        ],
         duration: p.duration,
         measureOfSuccess: p.measureOfSuccess,
       })),
@@ -733,7 +773,12 @@ export async function proposeStrategy(req: Request, res: Response): Promise<void
     successResponse(
       res,
       {
-        strategy: { id: strategy.id, description: strategy.description, duration: strategy.duration, measureOfSuccess: strategy.measureOfSuccess },
+        strategy: {
+          id: strategy.id,
+          description: strategy.description,
+          duration: strategy.duration,
+          measureOfSuccess: strategy.measureOfSuccess,
+        },
         createdAt: strategy.createdAt.toISOString(),
       },
       201,
@@ -750,7 +795,12 @@ export async function proposeStrategy(req: Request, res: Response): Promise<void
  * revisions) — never read from proposal_choice, so a partner's unshared
  * WILLING is never revealed (fix round 1, Important 2).
  */
-async function pendingAgreementDTO(proposalId: string, me: string, partner: string | null, followUpDate: string | null): Promise<AgreementDTO | null> {
+async function pendingAgreementDTO(
+  proposalId: string,
+  me: string,
+  partner: string | null,
+  followUpDate: string | null,
+): Promise<AgreementDTO | null> {
   const proposal = await loadProposal(proposalId);
   if (!proposal) return null;
   const parties = await legacyParties(proposalId);
@@ -786,7 +836,15 @@ async function agreeIfEveryoneWilling(args: {
 }): Promise<string | null> {
   const job = getJobPrisma();
   const [[proposal], humans, willing, parties] = await Promise.all([
-    job.$queryRaw<Array<{ id: string; status: string; description: string; duration: string | null; measureOfSuccess: string | null }>>`
+    job.$queryRaw<
+      Array<{
+        id: string;
+        status: string;
+        description: string;
+        duration: string | null;
+        measureOfSuccess: string | null;
+      }>
+    >`
       SELECT id, status::text AS status, description, duration, measure_of_success AS "measureOfSuccess"
       FROM proposal WHERE id = ${args.proposalId}::uuid AND session_id = ${args.sessionId}::uuid`,
     job.$queryRaw<Array<{ id: string }>>`
@@ -796,9 +854,9 @@ async function agreeIfEveryoneWilling(args: {
     legacyParties(args.proposalId),
   ]);
   if (!proposal || proposal.status === 'CONVERTED_TO_AGREEMENT' || proposal.status === 'REMOVED') return null;
-  const willingIds = new Set(willing.map((w) => w.participant_id));
-  const ids = humans.map((h) => h.id);
-  if (ids.length === 0 || !ids.every((h) => willingIds.has(h) && parties.has(h))) return null;
+  const willingIds = new Set(willing.map(w => w.participant_id));
+  const ids = humans.map(h => h.id);
+  if (ids.length === 0 || !ids.every(h => willingIds.has(h) && parties.has(h))) return null;
   const [id] = await createAgreementsAsJob({
     sessionId: args.sessionId,
     actorParticipantId: args.actor,
@@ -863,7 +921,14 @@ export async function createAgreement(req: Request, res: Response): Promise<void
     } else {
       proposalId = (
         await prisma.proposal.create({
-          data: { sessionId, createdByParticipantId: me, description, duration, measureOfSuccess, source: 'USER_SUBMITTED' },
+          data: {
+            sessionId,
+            createdByParticipantId: me,
+            description,
+            duration,
+            measureOfSuccess,
+            source: 'USER_SUBMITTED',
+          },
           select: { id: true },
         })
       ).id;
@@ -884,11 +949,12 @@ export async function createAgreement(req: Request, res: Response): Promise<void
     const partner = (await getPartnerParticipant(me))?.participantId ?? null;
     const partnerId = await getPartnerUserId(sessionId, user.id);
     if (partnerId) {
-      await notifyPartner(sessionId, partnerId, 'agreement.proposed', { agreementId: agreementId ?? proposalId, proposedBy: user.id });
+      await notifyPartner(sessionId, partnerId, 'agreement.proposed', {
+        agreementId: agreementId ?? proposalId,
+        proposedBy: user.id,
+      });
     }
-    const agreement = agreementId
-      ? (await loadAgreements(sessionId)).find((a) => a.id === agreementId)!
-      : null;
+    const agreement = agreementId ? (await loadAgreements(sessionId)).find(a => a.id === agreementId)! : null;
     successResponse(
       res,
       {
@@ -932,15 +998,20 @@ export async function confirmAgreement(req: Request, res: Response): Promise<voi
     const me = ctx.participant.id;
     const partner = (await getPartnerParticipant(me))?.participantId ?? null;
 
-    const existing = await prisma.agreement.findFirst({ where: { id: agreementId, sessionId }, select: { id: true, proposalId: true } });
+    const existing = await prisma.agreement.findFirst({
+      where: { id: agreementId, sessionId },
+      select: { id: true, proposalId: true },
+    });
     // A handle is an agreement id, or a proposal of this session that was PROPOSED as an
     // agreement — never an arbitrary proposal id (fix round 1, Important 2).
     const proposalId =
       existing?.proposalId ??
-      (await prisma.proposal.findFirst({
-        where: { id: agreementId, sessionId, revisions: { some: { reason: LEGACY_PROPOSED } } },
-        select: { id: true },
-      }))?.id;
+      (
+        await prisma.proposal.findFirst({
+          where: { id: agreementId, sessionId, revisions: { some: { reason: LEGACY_PROPOSED } } },
+          select: { id: true },
+        })
+      )?.id;
     if (!proposalId) {
       errorResponse(res, 'NOT_FOUND', 'Agreement not found', 404);
       return;
@@ -956,7 +1027,13 @@ export async function confirmAgreement(req: Request, res: Response): Promise<voi
     if (confirmed && !existing) {
       await upsertChoice({ proposalId, participantId: me, decision: 'WILLING' });
       await prisma.proposalRevision.create({
-        data: { proposalId, actorParticipantId: me, action: 'REVISED', after: { [LEGACY_AGREEMENT_MARK]: true, confirmed: true }, reason: LEGACY_CONFIRMED },
+        data: {
+          proposalId,
+          actorParticipantId: me,
+          action: 'REVISED',
+          after: { [LEGACY_AGREEMENT_MARK]: true, confirmed: true },
+          reason: LEGACY_CONFIRMED,
+        },
       });
       createdId = await agreeIfEveryoneWilling({
         sessionId,
@@ -984,7 +1061,7 @@ export async function confirmAgreement(req: Request, res: Response): Promise<voi
       });
     }
 
-    const agreement = createdId ? agreements.find((a) => a.id === createdId) : undefined;
+    const agreement = createdId ? agreements.find(a => a.id === createdId) : undefined;
     const dto = agreement
       ? { ...toAgreementDTO(agreement, me, partner), proposalId }
       : await pendingAgreementDTO(proposalId, me, partner, markAfter.followUpDate ?? null);
@@ -1030,12 +1107,12 @@ export async function requestSuggestions(req: Request, res: Response): Promise<v
 
     // A shared need, named as this participant names it (own label / the partner's shared text).
     const needs = await loadStage4Needs(sessionId, ctx.participant.id);
-    const target = needId ? needs.find((n) => n.id === needId) : undefined;
+    const target = needId ? needs.find(n => n.id === needId) : undefined;
     if (needId && !target) {
       errorResponse(res, 'NOT_FOUND', 'Need not found', 404);
       return;
     }
-    const needLabel = target?.label ?? focusNeeds?.find((n) => n.trim().length > 0)?.trim();
+    const needLabel = target?.label ?? focusNeeds?.find(n => n.trim().length > 0)?.trim();
     if (!needLabel) {
       errorResponse(res, 'VALIDATION_ERROR', 'A needId or focusNeeds value is required', 400);
       return;
@@ -1085,7 +1162,8 @@ export async function getAgreements(req: Request, res: Response): Promise<void> 
       errorResponse(res, 'NOT_FOUND', 'Session not found', 404);
       return;
     }
-    const partner = (await getPartnerParticipant(participant.id))?.participantId ?? null;
+    // A read: the partner, or the tombstone of one who left (TS-12, R5).
+    const partner = (await getCounterpartParticipant(participant.id))?.participantId ?? null;
     const [agreements, pendingProposals] = await Promise.all([
       loadAgreements(sessionId),
       prisma.proposal.findMany({
@@ -1100,7 +1178,10 @@ export async function getAgreements(req: Request, res: Response): Promise<void> 
       if (dto) pending.push(dto);
     }
     successResponse(res, {
-      agreements: [...agreements.map((a) => ({ ...toAgreementDTO(a, participant.id, partner), proposalId: a.proposalId })), ...pending],
+      agreements: [
+        ...agreements.map(a => ({ ...toAgreementDTO(a, participant.id, partner), proposalId: a.proposalId })),
+        ...pending,
+      ],
     });
   } catch (error) {
     logger.error('[getAgreements] Error:', error);

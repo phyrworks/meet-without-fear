@@ -28,7 +28,6 @@ function createMockReqRes(overrides?: { body?: Record<string, unknown>; query?: 
   const jsonMock = jest.fn().mockReturnThis();
   const statusMock = jest.fn().mockReturnValue({ json: jsonMock });
   const setHeaderMock = jest.fn();
-  const pipeMock = jest.fn();
 
   const req = {
     body: overrides?.body || { text: 'Hello world', voice: 'alloy', model: 'tts-1' },
@@ -121,7 +120,7 @@ describe('streamTTS controller', () => {
   describe('successful requests', () => {
     it('calls OpenAI with correct parameters and streams response', async () => {
       streamTTS = await loadController();
-      const { pipeMock } = mockFetchOk();
+      mockFetchOk();
       const { req, res, setHeaderMock } = createMockReqRes();
 
       await streamTTS(req, res);
@@ -132,7 +131,7 @@ describe('streamTTS controller', () => {
         expect.objectContaining({
           method: 'POST',
           headers: expect.objectContaining({
-            'Authorization': 'Bearer test-openai-key',
+            Authorization: 'Bearer test-openai-key',
           }),
           body: expect.stringContaining('"model":"tts-1"'),
         }),
@@ -172,7 +171,7 @@ describe('streamTTS controller', () => {
     it('returns immediately for 400 errors without retrying', async () => {
       streamTTS = await loadController();
       mockFetchError(400, 'Bad Request');
-      const { req, res, statusMock, jsonMock } = createMockReqRes();
+      const { req, res, statusMock } = createMockReqRes();
 
       await streamTTS(req, res);
 
@@ -211,7 +210,8 @@ describe('streamTTS controller', () => {
       const pipeMock = jest.fn();
       const mockBody = { pipe: pipeMock };
 
-      global.fetch = jest.fn()
+      global.fetch = jest
+        .fn()
         .mockResolvedValueOnce({
           ok: false,
           status: 429,
@@ -245,7 +245,7 @@ describe('streamTTS controller', () => {
         text: jest.fn().mockResolvedValue('Internal Server Error'),
       });
 
-      const { req, res, statusMock, jsonMock } = createMockReqRes();
+      const { req, res, statusMock } = createMockReqRes();
 
       await streamTTS(req, res);
 
@@ -267,7 +267,8 @@ describe('streamTTS controller', () => {
       const pipeMock = jest.fn();
       const mockBody = { pipe: pipeMock };
 
-      global.fetch = jest.fn()
+      global.fetch = jest
+        .fn()
         .mockResolvedValueOnce({
           ok: false,
           status: 502,

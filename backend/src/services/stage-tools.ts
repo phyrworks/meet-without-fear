@@ -43,8 +43,7 @@ Call this tool before your visible conversational response whenever the latest t
     properties: {
       topicFrame: {
         type: 'string',
-        description:
-          'Stage 0 only: short neutral topic phrase/sentence, maximum 20 words, no names.',
+        description: 'Stage 0 only: short neutral topic phrase/sentence, maximum 20 words, no names.',
       },
       offerFeelHeardCheck: {
         type: 'boolean',
@@ -53,13 +52,11 @@ Call this tool before your visible conversational response whenever the latest t
       },
       offerReadyToShare: {
         type: 'boolean',
-        description:
-          'Stage 2 only: Set to true when the empathy statement is ready to share with their partner.',
+        description: 'Stage 2 only: Set to true when the empathy statement is ready to share with their partner.',
       },
       proposedEmpathyStatement: {
         type: 'string',
-        description:
-          'Stage 2 only: The empathy statement draft in first person from the partner\'s perspective.',
+        description: "Stage 2 only: The empathy statement draft in first person from the partner's perspective.",
       },
       proposedNeed: {
         description: 'Stage 3 only: one need to capture from the latest turn.',
@@ -67,7 +64,8 @@ Call this tool before your visible conversational response whenever the latest t
       },
       proposedNeeds: {
         type: 'array',
-        description: 'Stage 3 legacy/bulk fallback: multiple needs to capture. Prefer proposedNeed for normal chat turns.',
+        description:
+          'Stage 3 legacy/bulk fallback: multiple needs to capture. Prefer proposedNeed for normal chat turns.',
         items: needInputSchema(),
       },
       needAction: {
@@ -97,7 +95,11 @@ Call this tool before your visible conversational response whenever the latest t
             description: { type: 'string' },
             kind: { type: ['string', 'null'], enum: ['SHARED_PROPOSAL', 'INDIVIDUAL_COMMITMENT', null] },
             ownerUserId: { type: ['string', 'null'] },
-            needsAddressed: { type: 'array', items: { type: 'string' }, description: 'Human-readable need labels (e.g. "Partnership", "Understanding"). Never use internal IDs.' },
+            needsAddressed: {
+              type: 'array',
+              items: { type: 'string' },
+              description: 'Human-readable need labels (e.g. "Partnership", "Understanding"). Never use internal IDs.',
+            },
             duration: { type: ['string', 'null'] },
             measureOfSuccess: { type: ['string', 'null'] },
           },
@@ -139,9 +141,7 @@ export type SessionStateToolInput = StreamMetadata;
  * Validate and normalize session state tool input.
  * Ensures type safety and default values.
  */
-export function parseSessionStateToolInput(
-  input: Record<string, unknown>
-): SessionStateToolInput {
+export function parseSessionStateToolInput(input: Record<string, unknown>): SessionStateToolInput {
   const stage4Proposals = parseStage4Proposals(input.stage4Proposals);
   const stage4WalkthroughAction = parseStage4WalkthroughAction(input.stage4WalkthroughAction);
   const proposedNeed = parseNeedInput(input.proposedNeed);
@@ -149,16 +149,11 @@ export function parseSessionStateToolInput(
   const needAction = parseNeedAction(input.needAction);
 
   return {
-    offerFeelHeardCheck: typeof input.offerFeelHeardCheck === 'boolean'
-      ? input.offerFeelHeardCheck
-      : undefined,
-    offerReadyToShare: typeof input.offerReadyToShare === 'boolean'
-      ? input.offerReadyToShare
-      : undefined,
+    offerFeelHeardCheck: typeof input.offerFeelHeardCheck === 'boolean' ? input.offerFeelHeardCheck : undefined,
+    offerReadyToShare: typeof input.offerReadyToShare === 'boolean' ? input.offerReadyToShare : undefined,
     topicFrame: parseOptionalString(input.topicFrame),
-    proposedEmpathyStatement: typeof input.proposedEmpathyStatement === 'string'
-      ? input.proposedEmpathyStatement.trim()
-      : undefined,
+    proposedEmpathyStatement:
+      typeof input.proposedEmpathyStatement === 'string' ? input.proposedEmpathyStatement.trim() : undefined,
     ...(proposedNeed ? { proposedNeed } : {}),
     ...(proposedNeeds.length > 0 ? { proposedNeeds } : {}),
     ...(needAction ? { needAction } : {}),
@@ -192,9 +187,7 @@ function parseNeedInput(value: unknown): CapturedNeedInput | undefined {
   const description = parseOptionalString(candidate.description);
   if (!need || !description || !isNeedCategory(candidate.category)) return undefined;
   const evidence = Array.isArray(candidate.evidence)
-    ? candidate.evidence
-      .map((entry) => parseOptionalString(entry))
-      .filter((entry): entry is string => Boolean(entry))
+    ? candidate.evidence.map(entry => parseOptionalString(entry)).filter((entry): entry is string => Boolean(entry))
     : [];
   return {
     need,
@@ -219,9 +212,7 @@ function parseNeedAction(value: unknown): ParsedNeedAction | undefined {
   if (type !== 'refine' && type !== 'delete' && type !== 'lock') return undefined;
   const category = isNeedCategory(candidate.category) ? candidate.category : undefined;
   const evidence = Array.isArray(candidate.evidence)
-    ? candidate.evidence
-      .map((entry) => parseOptionalString(entry))
-      .filter((entry): entry is string => Boolean(entry))
+    ? candidate.evidence.map(entry => parseOptionalString(entry)).filter((entry): entry is string => Boolean(entry))
     : undefined;
   return {
     type,
@@ -256,26 +247,30 @@ function parseStage4Proposals(value: unknown): ParsedStage4ProposalInput[] {
     if (!isStage4ProposalClassification(candidate.classification)) return [];
     const description = parseOptionalString(candidate.description);
     if (!description) return [];
-    const kind = typeof candidate.kind === 'string' &&
+    const kind =
+      typeof candidate.kind === 'string' &&
       Object.values(Stage4ProposalKind).includes(candidate.kind as Stage4ProposalKind)
-      ? candidate.kind as Stage4ProposalKind
-      : undefined;
+        ? (candidate.kind as Stage4ProposalKind)
+        : undefined;
     const needsAddressed = Array.isArray(candidate.needsAddressed)
-      ? candidate.needsAddressed.filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0)
-        .map((entry) => entry.trim())
+      ? candidate.needsAddressed
+          .filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0)
+          .map(entry => entry.trim())
       : undefined;
 
-    return [{
-      action: candidate.action,
-      targetProposalId: parseOptionalString(candidate.targetProposalId),
-      classification: candidate.classification,
-      description,
-      kind,
-      ownerUserId: parseOptionalString(candidate.ownerUserId),
-      needsAddressed,
-      duration: parseOptionalString(candidate.duration),
-      measureOfSuccess: parseOptionalString(candidate.measureOfSuccess),
-    }];
+    return [
+      {
+        action: candidate.action,
+        targetProposalId: parseOptionalString(candidate.targetProposalId),
+        classification: candidate.classification,
+        description,
+        kind,
+        ownerUserId: parseOptionalString(candidate.ownerUserId),
+        needsAddressed,
+        duration: parseOptionalString(candidate.duration),
+        measureOfSuccess: parseOptionalString(candidate.measureOfSuccess),
+      },
+    ];
   });
 }
 

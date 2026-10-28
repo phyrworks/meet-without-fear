@@ -88,15 +88,6 @@ type SummaryMessageRecord = {
   timestamp: Date;
 };
 
-type RelationshipMemberWithUser = {
-  userId: string;
-  nickname?: string | null;
-  user: {
-    name: string | null;
-    firstName: string | null;
-  };
-};
-
 // ============================================================================
 // Configuration
 // ============================================================================
@@ -136,16 +127,14 @@ async function generateConversationSummary(
   stage: number,
   sessionId: string,
   turnId: string,
-  hints: SummarizationHints = {}
+  hints: SummarizationHints = {},
 ): Promise<SummarizationResult | null> {
   if (messages.length === 0) {
     return null;
   }
 
   // Build conversation text
-  const conversationText = messages
-    .map((m) => `${m.role === 'user' ? userName : 'MWF'}: ${m.content}`)
-    .join('\n\n');
+  const conversationText = messages.map(m => `${m.role === 'user' ? userName : 'MWF'}: ${m.content}`).join('\n\n');
 
   const stageContext = getStageContext(stage);
 
@@ -161,7 +150,9 @@ async function generateConversationSummary(
     hints.partnerStatus === 'completed'
       ? `STRUCTURAL CONTEXT: ${partnerName} has completed their side of this stage. Unresolved threads should reflect what the user alone still needs to work through.`
       : '',
-  ].filter(Boolean).join('\n');
+  ]
+    .filter(Boolean)
+    .join('\n');
 
   const systemPrompt = `You are summarizing a conflict resolution conversation to preserve context for an AI assistant.
 
@@ -200,6 +191,7 @@ ${conversationText}`;
     operation: 'conversation-summary',
     turnId,
     callType: BrainActivityCallType.SUMMARIZATION,
+    ownContent: true, // R40: the caller's own content only
   });
 
   return result;
@@ -212,7 +204,7 @@ function getStageContext(stage: number): string {
     case 1:
       return 'Witnessing - user is sharing their experience and being heard';
     case 2:
-      return 'Perspective Stretch - user is trying to understand their partner\'s viewpoint';
+      return "Perspective Stretch - user is trying to understand their partner's viewpoint";
     case 3:
       return 'What Matters - user is identifying underlying needs';
     case 4:
@@ -229,28 +221,23 @@ function getStageContext(stage: number): string {
 /**
  * Check if a session needs summarization based on message count.
  */
-export function needsSummarization(
-  messageCount: number,
-  existingSummary?: string,
-  totalTokens?: number
-): boolean {
+export function needsSummarization(messageCount: number, existingSummary?: string, totalTokens?: number): boolean {
   if (messageCount < SUMMARIZATION_CONFIG.minMessagesForSummary && !totalTokens) {
     return false;
   }
 
   // If no summary exists yet, we need one
   if (!existingSummary) {
-    return messageCount >= SUMMARIZATION_CONFIG.minMessagesForSummary
-      || (totalTokens ?? 0) >= SUMMARIZATION_CONFIG.tokenThreshold;
+    return (
+      messageCount >= SUMMARIZATION_CONFIG.minMessagesForSummary ||
+      (totalTokens ?? 0) >= SUMMARIZATION_CONFIG.tokenThreshold
+    );
   }
 
   // Check if we've accumulated enough new messages since last summary
   // This would require tracking when the summary was made
   // For simplicity, we re-summarize every resummaryInterval messages beyond the threshold
-  const messagesOverThreshold = Math.max(
-    messageCount - SUMMARIZATION_CONFIG.minMessagesForSummary,
-    0
-  );
+  const messagesOverThreshold = Math.max(messageCount - SUMMARIZATION_CONFIG.minMessagesForSummary, 0);
   const shouldResummarizeByCount = messagesOverThreshold % SUMMARIZATION_CONFIG.resummaryInterval === 0;
   const shouldResummarizeByTokens = (totalTokens ?? 0) >= SUMMARIZATION_CONFIG.tokenThreshold;
   return shouldResummarizeByCount || shouldResummarizeByTokens;
@@ -266,7 +253,7 @@ export async function updateSessionSummary(
   sessionId: string,
   userId: string,
   turnId: string,
-  hints: SummarizationHints = {}
+  hints: SummarizationHints = {},
 ): Promise<ConversationSummary | null> {
   try {
     // Target shape (TS-9): the participant's MAIN conversation is the audience —
@@ -275,19 +262,30 @@ export async function updateSessionSummary(
     const participant = await resolveParticipant(sessionId, userId);
     if (!participant?.mainConversationId) return null;
 
-    const messages = (await prisma.message.findMany({
-      where: {
-        conversationId: participant.mainConversationId,
-        OR: [{ senderParticipantId: participant.id }, { role: 'AI' }],
-      },
-      orderBy: { createdAt: 'asc' },
-      select: { role: true, kind: true, content: true, createdAt: true },
-    })).map((m): SummaryMessageRecord => ({ role: m.kind === 'CHAT' ? m.role : m.kind, content: m.content, timestamp: m.createdAt }));
+    const messages = (
+      await prisma.message.findMany({
+        where: {
+          conversationId: participant.mainConversationId,
+          OR: [{ senderParticipantId: participant.id }, { role: 'AI' }],
+        },
+        orderBy: { createdAt: 'asc' },
+        select: { role: true, kind: true, content: true, createdAt: true },
+      })
+    ).map(
+      (m): SummaryMessageRecord => ({
+        role: m.kind === 'CHAT' ? m.role : m.kind,
+        content: m.content,
+        timestamp: m.createdAt,
+      }),
+    );
     const messageCount = messages.length;
 
     // Check if we actually need to summarize
     const existing = await readSummaryDoc(participant.id);
-    const totalTokens = messages.reduce((sum: number, msg: SummaryMessageRecord) => sum + estimateTokens(msg.content), 0);
+    const totalTokens = messages.reduce(
+      (sum: number, msg: SummaryMessageRecord) => sum + estimateTokens(msg.content),
+      0,
+    );
     if (!needsSummarization(messageCount, existing ? JSON.stringify(existing) : undefined, totalTokens)) {
       return null;
     }
@@ -311,7 +309,7 @@ export async function updateSessionSummary(
     // Generate summary
     const summaryResult = await generateConversationSummary(
       messagesToSummarize.map((m: SummaryMessageRecord) => ({
-        role: m.role === 'USER' ? 'user' as const : 'assistant' as const,
+        role: m.role === 'USER' ? ('user' as const) : ('assistant' as const),
         content: m.content,
         timestamp: m.timestamp,
       })),
@@ -320,7 +318,7 @@ export async function updateSessionSummary(
       stage,
       sessionId,
       turnId,
-      hints
+      hints,
     );
 
     if (!summaryResult) {
@@ -340,26 +338,25 @@ export async function updateSessionSummary(
     // Structural guardrail: if the caller told us the stage just advanced,
     // force lastUnresolvedThread to null regardless of what the model emitted.
     // This is defense-in-depth against prompt-following lapses.
-    const lastUnresolvedThread =
-      hints.stageJustAdvanced
-        ? null
-        : summaryResult.lastUnresolvedThread ?? null;
+    const lastUnresolvedThread = hints.stageJustAdvanced ? null : (summaryResult.lastUnresolvedThread ?? null);
 
     // Stored as the participant's ai_memory SUMMARY document (spec §1.1:
     // `text, messageCount, generatedAt` required), written by the job
     // connection — background classifiers write ai_memory as mwf_job.
-    const doc = JSON.parse(JSON.stringify({
-      ...summary,
-      keyThemes: summaryResult.keyThemes,
-      emotionalJourney: summaryResult.emotionalJourney,
-      unresolvedTopics: summaryResult.unresolvedTopics,
-      agreedFacts: summaryResult.agreedFacts ?? [],
-      userNeeds: summaryResult.userNeeds ?? [],
-      partnerNeeds: summaryResult.partnerNeeds ?? [],
-      openQuestions: summaryResult.openQuestions ?? [],
-      agreements: summaryResult.agreements ?? [],
-      lastUnresolvedThread,
-    }));
+    const doc = JSON.parse(
+      JSON.stringify({
+        ...summary,
+        keyThemes: summaryResult.keyThemes,
+        emotionalJourney: summaryResult.emotionalJourney,
+        unresolvedTopics: summaryResult.unresolvedTopics,
+        agreedFacts: summaryResult.agreedFacts ?? [],
+        userNeeds: summaryResult.userNeeds ?? [],
+        partnerNeeds: summaryResult.partnerNeeds ?? [],
+        openQuestions: summaryResult.openQuestions ?? [],
+        agreements: summaryResult.agreements ?? [],
+        lastUnresolvedThread,
+      }),
+    );
     // One statement, no RETURNING: the job's grants cover exactly this
     // (trailer T7, TS-9: INSERT (participant_id, kind, doc), UPDATE (doc)).
     await getJobPrisma().$executeRaw`
@@ -367,9 +364,7 @@ export async function updateSessionSummary(
       VALUES (${participant.id}::uuid, 'SUMMARY'::ai_memory_kind, ${JSON.stringify(doc)}::jsonb)
       ON CONFLICT (participant_id, kind) DO UPDATE SET doc = EXCLUDED.doc`;
 
-    logger.info(
-      `[ConversationSummarizer] Summarized ${messagesToSummarize.length} messages for session ${sessionId}`
-    );
+    logger.info(`[ConversationSummarizer] Summarized ${messagesToSummarize.length} messages for session ${sessionId}`);
 
     return summary;
   } catch (error) {
@@ -453,7 +448,7 @@ export async function maybeRefreshSummaryForResumption(params: {
  */
 export async function getSessionSummary(
   sessionId: string,
-  userId: string
+  userId: string,
 ): Promise<{
   summary: ConversationSummary;
   keyThemes: string[];
@@ -502,19 +497,17 @@ export async function getSessionSummary(
 /**
  * Format a conversation summary for prompt injection.
  */
-export function formatSummaryForPrompt(
-  summaryData: {
-    summary: ConversationSummary;
-    keyThemes: string[];
-    emotionalJourney: string;
-    unresolvedTopics: string[];
-    agreedFacts?: string[];
-    userNeeds?: string[];
-    partnerNeeds?: string[];
-    openQuestions?: string[];
-    agreements?: string[];
-  }
-): string {
+export function formatSummaryForPrompt(summaryData: {
+  summary: ConversationSummary;
+  keyThemes: string[];
+  emotionalJourney: string;
+  unresolvedTopics: string[];
+  agreedFacts?: string[];
+  userNeeds?: string[];
+  partnerNeeds?: string[];
+  openQuestions?: string[];
+  agreements?: string[];
+}): string {
   const parts: string[] = [];
 
   parts.push('[ROLLING SUMMARY]');
@@ -545,7 +538,7 @@ export function formatSummaryForPrompt(
   if (summaryData.openQuestions?.length || summaryData.unresolvedTopics?.length) {
     const openQuestions = summaryData.openQuestions?.length
       ? summaryData.openQuestions.join('; ')
-      : summaryData.unresolvedTopics?.join('; ') ?? '';
+      : (summaryData.unresolvedTopics?.join('; ') ?? '');
     if (openQuestions) {
       parts.push(`Open questions: ${openQuestions}`);
     }
@@ -585,16 +578,14 @@ async function generateInnerThoughtsSummary(
   userName: string,
   existingTheme: string | null | undefined,
   sessionId: string,
-  turnId: string
+  turnId: string,
 ): Promise<SummarizationResult | null> {
   if (messages.length === 0) {
     return null;
   }
 
   // Build conversation text
-  const conversationText = messages
-    .map((m) => `${m.role === 'user' ? userName : 'MWF'}: ${m.content}`)
-    .join('\n\n');
+  const conversationText = messages.map(m => `${m.role === 'user' ? userName : 'MWF'}: ${m.content}`).join('\n\n');
 
   const themeContext = existingTheme
     ? `The session has been themed as "${existingTheme}".`
@@ -640,10 +631,7 @@ ${conversationText}`;
 /**
  * Check if an Inner Thoughts session needs summarization.
  */
-export function innerThoughtsNeedsSummarization(
-  messageCount: number,
-  existingSummary?: string | null
-): boolean {
+export function innerThoughtsNeedsSummarization(messageCount: number, existingSummary?: string | null): boolean {
   if (messageCount < INNER_THOUGHTS_SUMMARIZATION_CONFIG.minMessagesForSummary) {
     return false;
   }
@@ -666,15 +654,17 @@ export function innerThoughtsNeedsSummarization(
  */
 export async function updateInnerThoughtsSummary(
   sessionId: string,
-  turnId: string
+  turnId: string,
 ): Promise<ConversationSummary | null> {
   try {
-    // Get session with messages
-    const session = await prisma.innerWorkSession.findUnique({
+    // The reflection (spec §1.6; the rolling summary is `reflection.summary_doc`)
+    // with its messages and its owner's name.
+    const session = await prisma.reflection.findUnique({
       where: { id: sessionId },
       include: {
         messages: {
-          orderBy: { timestamp: 'asc' },
+          orderBy: { createdAt: 'asc' },
+          select: { role: true, content: true, createdAt: true },
         },
         user: {
           select: { name: true, firstName: true },
@@ -689,7 +679,7 @@ export async function updateInnerThoughtsSummary(
     const messageCount = session.messages.length;
 
     // Check if we actually need to summarize
-    const existingSummary = session.conversationSummary as string | null;
+    const existingSummary = session.summaryDoc ? JSON.stringify(session.summaryDoc) : null;
     if (!innerThoughtsNeedsSummarization(messageCount, existingSummary)) {
       return null;
     }
@@ -698,10 +688,7 @@ export async function updateInnerThoughtsSummary(
     const userName = session.user.firstName || session.user.name || 'User';
 
     // Determine which messages to summarize (older ones, keeping recent in full)
-    const messagesToSummarize = session.messages.slice(
-      0,
-      -INNER_THOUGHTS_SUMMARIZATION_CONFIG.recentMessagesToKeep
-    );
+    const messagesToSummarize = session.messages.slice(0, -INNER_THOUGHTS_SUMMARIZATION_CONFIG.recentMessagesToKeep);
 
     if (messagesToSummarize.length < 8) {
       // Not enough old messages to summarize
@@ -710,15 +697,15 @@ export async function updateInnerThoughtsSummary(
 
     // Generate summary
     const summaryResult = await generateInnerThoughtsSummary(
-      messagesToSummarize.map((m: SummaryMessageRecord) => ({
-        role: m.role === 'USER' ? 'user' as const : 'assistant' as const,
+      messagesToSummarize.map(m => ({
+        role: m.role === 'USER' ? ('user' as const) : ('assistant' as const),
         content: m.content,
-        timestamp: m.timestamp,
+        timestamp: m.createdAt,
       })),
       userName,
       session.theme,
       sessionId,
-      turnId
+      turnId,
     );
 
     if (!summaryResult) {
@@ -729,27 +716,32 @@ export async function updateInnerThoughtsSummary(
     const summary: ConversationSummary = {
       text: summaryResult.summary,
       messageCount: messagesToSummarize.length,
-      oldestMessageAt: messagesToSummarize[0].timestamp,
-      newestMessageAt: messagesToSummarize[messagesToSummarize.length - 1].timestamp,
+      oldestMessageAt: messagesToSummarize[0].createdAt,
+      newestMessageAt: messagesToSummarize[messagesToSummarize.length - 1].createdAt,
       tokenCount: estimateTokens(summaryResult.summary),
       generatedAt: new Date(),
     };
 
-    // Store in session
-    await prisma.innerWorkSession.update({
+    // Store on the reflection (summary_doc is a jsonb object, not JSON-in-text)
+    await prisma.reflection.update({
       where: { id: sessionId },
       data: {
-        conversationSummary: JSON.stringify({
-          ...summary,
-          keyThemes: summaryResult.keyThemes,
-          emotionalJourney: summaryResult.emotionalJourney,
-          unresolvedTopics: summaryResult.unresolvedTopics,
-        }),
+        summaryDoc: {
+          text: summary.text,
+          messageCount: summary.messageCount,
+          oldestMessageAt: summary.oldestMessageAt.toISOString(),
+          newestMessageAt: summary.newestMessageAt.toISOString(),
+          tokenCount: summary.tokenCount,
+          generatedAt: summary.generatedAt.toISOString(),
+          keyThemes: summaryResult.keyThemes ?? [],
+          emotionalJourney: summaryResult.emotionalJourney ?? '',
+          unresolvedTopics: summaryResult.unresolvedTopics ?? [],
+        },
       },
     });
 
     logger.info(
-      `[ConversationSummarizer] Summarized ${messagesToSummarize.length} Inner Thoughts messages for session ${sessionId}`
+      `[ConversationSummarizer] Summarized ${messagesToSummarize.length} Inner Thoughts messages for session ${sessionId}`,
     );
 
     return summary;
@@ -762,25 +754,36 @@ export async function updateInnerThoughtsSummary(
 /**
  * Get the conversation summary for an Inner Thoughts session, if one exists.
  */
-export async function getInnerThoughtsSummary(
-  sessionId: string
-): Promise<{
+export async function getInnerThoughtsSummary(sessionId: string): Promise<{
   summary: ConversationSummary;
   keyThemes: string[];
   emotionalJourney: string;
   unresolvedTopics: string[];
 } | null> {
-  const session = await prisma.innerWorkSession.findUnique({
+  const session = await prisma.reflection.findUnique({
     where: { id: sessionId },
-    select: { conversationSummary: true },
+    select: { summaryDoc: true },
   });
 
-  if (!session?.conversationSummary) {
+  const parsed = session?.summaryDoc as
+    | {
+        text: string;
+        messageCount: number;
+        oldestMessageAt: string;
+        newestMessageAt: string;
+        tokenCount: number;
+        generatedAt: string;
+        keyThemes?: string[];
+        emotionalJourney?: string;
+        unresolvedTopics?: string[];
+      }
+    | null
+    | undefined;
+  if (!parsed || typeof parsed !== 'object' || typeof parsed.text !== 'string') {
     return null;
   }
 
   try {
-    const parsed = JSON.parse(session.conversationSummary as string);
     return {
       summary: {
         text: parsed.text,
@@ -802,14 +805,12 @@ export async function getInnerThoughtsSummary(
 /**
  * Format an Inner Thoughts conversation summary for prompt injection.
  */
-export function formatInnerThoughtsSummaryForPrompt(
-  summaryData: {
-    summary: ConversationSummary;
-    keyThemes: string[];
-    emotionalJourney: string;
-    unresolvedTopics: string[];
-  }
-): string {
+export function formatInnerThoughtsSummaryForPrompt(summaryData: {
+  summary: ConversationSummary;
+  keyThemes: string[];
+  emotionalJourney: string;
+  unresolvedTopics: string[];
+}): string {
   const parts: string[] = [];
 
   parts.push('[EARLIER IN THIS CONVERSATION]');

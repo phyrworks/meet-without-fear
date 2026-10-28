@@ -58,9 +58,7 @@ describe('urls', () => {
     });
 
     it('uses the production URL when env vars are unset', () => {
-      expect(createInvitationUrl('abc-123')).toBe(
-        'https://meetwithoutfear.com/invitation/abc-123',
-      );
+      expect(createInvitationUrl('abc-123')).toBe('https://meetwithoutfear.com/invitation/abc-123');
     });
   });
 });

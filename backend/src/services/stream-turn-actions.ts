@@ -16,7 +16,6 @@
  * raw model prose.
  */
 
-import { Prisma } from '../generated/prisma/client';
 import { logger } from '../lib/logger';
 import { prisma } from '../lib/prisma';
 import { publishSessionEvent, publishTopicFrameUpdated } from './realtime';
@@ -56,7 +55,8 @@ export interface Stage3NeedActionParams {
 }
 
 export async function applyStage3NeedActions(params: Stage3NeedActionParams): Promise<void> {
-  const { requestId, sessionId, userId, currentStage, refiningNeedContext, userContent, aiResponseText, metadata } = params;
+  const { requestId, sessionId, userId, currentStage, refiningNeedContext, userContent, aiResponseText, metadata } =
+    params;
 
   if (currentStage !== 3) return;
 
@@ -84,25 +84,27 @@ export async function applyStage3NeedActions(params: Stage3NeedActionParams): Pr
       if (interpretedEdit.plan?.operations?.length) {
         const applied = await applyNeedEdits(sessionId, userId, interpretedEdit.plan.operations);
         metadata.needsCaptured = true;
-        logger.info(`[sendMessageStream:${requestId}] Applied ${applied.applied.length} fallback need refinement operation(s) for ${refiningNeedContext.id}`);
+        logger.info(
+          `[sendMessageStream:${requestId}] Applied ${applied.applied.length} fallback need refinement operation(s) for ${refiningNeedContext.id}`,
+        );
 
         for (const affected of applied.applied) {
-          const updatedNeed = affected.needId
-            ? applied.needs.find((need) => need.id === affected.needId)
-            : undefined;
-          const eventType = affected.operation === 'remove'
-            ? 'need.deleted'
-            : affected.operation === 'add'
-              ? 'need.captured'
-              : 'need.refined';
+          const updatedNeed = affected.needId ? applied.needs.find(need => need.id === affected.needId) : undefined;
+          const eventType =
+            affected.operation === 'remove'
+              ? 'need.deleted'
+              : affected.operation === 'add'
+                ? 'need.captured'
+                : 'need.refined';
+          // R36 / work-a39h.11.26: the session channel reaches every
+          // participant's device, so the owner's need (label, evidence) never
+          // rides it — ids only; the owner's client refetches their needs.
           await publishSessionEvent(sessionId, eventType, {
             forUserId: userId,
             userId,
-            need: updatedNeed,
-            affectedNeed: affected,
-          }).catch((err) =>
-            logger.warn(`[sendMessageStream:${requestId}] Failed to publish ${eventType}:`, err)
-          );
+            ...(updatedNeed ? { newId: updatedNeed.id } : {}),
+            ...(affected.needId ? { oldId: affected.needId } : {}),
+          }).catch(err => logger.warn(`[sendMessageStream:${requestId}] Failed to publish ${eventType}:`, err));
         }
       }
     } catch (error) {
@@ -115,32 +117,24 @@ export async function applyStage3NeedActions(params: Stage3NeedActionParams): Pr
     metadata.needsCaptured = true;
     logger.info(`[sendMessageStream:${requestId}] Captured single need ${captured.need.id} for user ${userId}`);
 
+    // Ids only on the session channel (R36; work-a39h.11.26)
     await publishSessionEvent(sessionId, 'need.captured', {
       forUserId: userId,
       userId,
-      need: captured.need,
       capturedAt: captured.capturedAt.toISOString(),
-    }).catch((err) =>
-      logger.warn(`[sendMessageStream:${requestId}] Failed to publish need.captured:`, err)
-    );
+    }).catch(err => logger.warn(`[sendMessageStream:${requestId}] Failed to publish need.captured:`, err));
   } else if (metadata.needAction) {
     const applied = await applyNeedAction(sessionId, userId, metadata.needAction);
     metadata.needsCaptured = applied.action === 'refine';
-    const eventType = applied.action === 'refine'
-      ? 'need.refined'
-      : applied.action === 'delete'
-        ? 'need.deleted'
-        : 'need.locked';
+    const eventType =
+      applied.action === 'refine' ? 'need.refined' : applied.action === 'delete' ? 'need.deleted' : 'need.locked';
+    // Ids only on the session channel (R36; work-a39h.11.26)
     await publishSessionEvent(sessionId, eventType, {
       forUserId: userId,
       userId,
       oldId: applied.oldNeed?.id,
-      oldNeed: applied.oldNeed,
       newId: applied.action === 'refine' ? applied.need?.id : undefined,
-      need: applied.need,
-    }).catch((err) =>
-      logger.warn(`[sendMessageStream:${requestId}] Failed to publish ${eventType}:`, err)
-    );
+    }).catch(err => logger.warn(`[sendMessageStream:${requestId}] Failed to publish ${eventType}:`, err));
   } else if (metadata.proposedNeeds && metadata.proposedNeeds.length > 0) {
     const captured = await captureProposedNeedsForUser(sessionId, userId, metadata.proposedNeeds);
     metadata.needsCaptured = captured.needs.length > 0;
@@ -151,9 +145,7 @@ export async function applyStage3NeedActions(params: Stage3NeedActionParams): Pr
       userId,
       needsCount: captured.needs.length,
       capturedAt: captured.capturedAt.toISOString(),
-    }).catch((err) =>
-      logger.warn(`[sendMessageStream:${requestId}] Failed to publish needs_extracted:`, err)
-    );
+    }).catch(err => logger.warn(`[sendMessageStream:${requestId}] Failed to publish needs_extracted:`, err));
   }
 }
 
@@ -164,7 +156,7 @@ export async function applyStage3NeedActions(params: Stage3NeedActionParams): Pr
 export async function applyStage4WalkthroughAction(
   sessionId: string,
   userId: string,
-  action: ParsedStage4WalkthroughAction
+  action: ParsedStage4WalkthroughAction,
 ): Promise<boolean> {
   if (action.action === 'NONE') return false;
 
@@ -257,8 +249,8 @@ export async function persistTurnState(params: PersistTurnStateParams): Promise<
           data: { topicFrame: newTopicFrame },
         });
         logger.info(`[sendMessageStream:${requestId}] Stage 0: Persisted topic frame "${newTopicFrame}"`);
-        publishTopicFrameUpdated(sessionId, newTopicFrame, false).catch((err) =>
-          logger.warn(`[sendMessageStream:${requestId}] Failed to publish topic_frame_updated:`, err)
+        publishTopicFrameUpdated(sessionId, newTopicFrame, false).catch(err =>
+          logger.warn(`[sendMessageStream:${requestId}] Failed to publish topic_frame_updated:`, err),
         );
       }
     } catch (err) {
@@ -271,14 +263,20 @@ export async function persistTurnState(params: PersistTurnStateParams): Promise<
   // sql_draft_one_per_point expression index (as the old Prisma upsert was
   // one statement): create at version 1, or replace the text and bump the
   // version — concurrent turns cannot both create.
-  if ((effectiveStage === 2 || effectiveStage === 21) && metadata.offerReadyToShare && metadata.proposedEmpathyStatement) {
+  if (
+    (effectiveStage === 2 || effectiveStage === 21) &&
+    metadata.offerReadyToShare &&
+    metadata.proposedEmpathyStatement
+  ) {
     const partner = await getPartnerParticipant(participant.id);
     if (!partner) {
       // An EMPATHY draft names its subject (CHECK chk_draft_one_arc /
       // chk_draft_arc_matches_kind: about_participant_id required): with no
       // partner participant there is no row the target can hold. Stage 2 is
       // reached only with a partner, so this is the invariant failing.
-      logger.error(`[sendMessageStream:${requestId}] Empathy draft not saved: Stage 2 turn with no partner participant`);
+      logger.error(
+        `[sendMessageStream:${requestId}] Empathy draft not saved: Stage 2 turn with no partner participant`,
+      );
     } else {
       await prisma.$executeRaw`
         INSERT INTO draft (participant_id, kind, about_participant_id, content, ready_to_share, version)
@@ -328,11 +326,7 @@ export async function persistTurnState(params: PersistTurnStateParams): Promise<
     }
 
     if (metadata.stage4WalkthroughAction) {
-      const advanced = await applyStage4WalkthroughAction(
-        sessionId,
-        userId,
-        metadata.stage4WalkthroughAction
-      );
+      const advanced = await applyStage4WalkthroughAction(sessionId, userId, metadata.stage4WalkthroughAction);
       if (advanced) {
         await publishSessionEvent(sessionId, 'session.strategies_updated', {
           stage: 4,

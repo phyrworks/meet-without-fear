@@ -11,12 +11,7 @@
 import { Router } from 'express';
 import { requireAuth, requireSessionAccess } from '../middleware/auth';
 import { asyncHandler } from '../middleware/errors';
-import {
-  getPendingConsents,
-  decideConsent,
-  revokeConsent,
-  getConsentHistory,
-} from '../controllers/consent';
+import { getPendingConsents, decideConsent, revokeConsent, getConsentHistory } from '../controllers/consent';
 
 const router = Router();
 

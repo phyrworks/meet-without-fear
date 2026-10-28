@@ -4,12 +4,7 @@
  * Tests for loading TypeScript fixtures for E2E testing.
  */
 
-import {
-  loadFixture,
-  getFixtureResponse,
-  getFixtureResponseByIndex,
-  clearFixtureCache,
-} from '../e2e-fixtures';
+import { loadFixture, getFixtureResponse, getFixtureResponseByIndex, clearFixtureCache } from '../e2e-fixtures';
 import { FIXTURE_USER_IDS } from '../../fixtures/ids';
 
 const USER_A = FIXTURE_USER_IDS.userA;
@@ -75,16 +70,14 @@ describe('E2E Fixture Loader', () => {
     it('throws error when user not in storyline', () => {
       const fixture = loadFixture('test-fixture');
 
-      expect(() => getFixtureResponse(fixture, 'unknown-user', 0)).toThrow(
-        'No storyline found for user: unknown-user'
-      );
+      expect(() => getFixtureResponse(fixture, 'unknown-user', 0)).toThrow('No storyline found for user: unknown-user');
     });
 
     it('throws error when index out of bounds', () => {
       const fixture = loadFixture('test-fixture');
 
       expect(() => getFixtureResponse(fixture, USER_A, 99)).toThrow(
-        `Response index 99 out of bounds for user ${USER_A} (has 2 responses)`
+        `Response index 99 out of bounds for user ${USER_A} (has 2 responses)`,
       );
     });
   });
@@ -104,20 +97,18 @@ describe('E2E Fixture Loader', () => {
     });
 
     it('throws error when fixture not found', () => {
-      expect(() => getFixtureResponseByIndex('non-existent', 0)).toThrow(
-        'Fixture not found: non-existent'
-      );
+      expect(() => getFixtureResponseByIndex('non-existent', 0)).toThrow('Fixture not found: non-existent');
     });
 
     it('throws error when index out of bounds', () => {
       expect(() => getFixtureResponseByIndex('test-fixture', 99)).toThrow(
-        'Response index 99 out of bounds for fixture test-fixture (has 2 responses)'
+        'Response index 99 out of bounds for fixture test-fixture (has 2 responses)',
       );
     });
 
     it('throws error when index is negative', () => {
       expect(() => getFixtureResponseByIndex('test-fixture', -1)).toThrow(
-        'Response index -1 out of bounds for fixture test-fixture (has 2 responses)'
+        'Response index -1 out of bounds for fixture test-fixture (has 2 responses)',
       );
     });
 

@@ -18,18 +18,20 @@ function numberedNeeds(needs: NeedRow[]): string {
 function findNeedByOrdinal(request: string, needs: NeedRow[]): NeedRow | null {
   const lower = request.toLowerCase();
   const words = ['first', 'second', 'third', 'fourth', 'fifth'];
-  const index = words.findIndex((word) => lower.includes(word));
+  const index = words.findIndex(word => lower.includes(word));
   if (index >= 0) return needs[index] ?? null;
   const match = lower.match(/\b(?:need\s*)?(\d+)\b/);
   if (match) return needs[Number(match[1]) - 1] ?? null;
   return null;
 }
 
-function fallbackInterpret(request: string, targetNeedId: string | undefined, needs: NeedRow[]): InterpretNeedEditResponse {
+function fallbackInterpret(
+  request: string,
+  targetNeedId: string | undefined,
+  needs: NeedRow[],
+): InterpretNeedEditResponse {
   const lower = request.toLowerCase();
-  const target = targetNeedId
-    ? needs.find((need) => need.id === targetNeedId)
-    : findNeedByOrdinal(request, needs);
+  const target = targetNeedId ? needs.find(need => need.id === targetNeedId) : findNeedByOrdinal(request, needs);
 
   if (lower.includes('remove') || lower.includes('delete')) {
     if (!target) {
@@ -76,7 +78,7 @@ function normalizeOperations(value: unknown): NeedEditOperation[] {
   if (!Array.isArray(operations)) return [];
   return operations
     .filter((operation): operation is Record<string, unknown> => Boolean(operation) && typeof operation === 'object')
-    .map((operation) => ({
+    .map(operation => ({
       type: operation.type as NeedEditOperation['type'],
       needId: typeof operation.needId === 'string' ? operation.needId : undefined,
       newText: typeof operation.newText === 'string' ? operation.newText : undefined,
@@ -89,7 +91,7 @@ function normalizeOperations(value: unknown): NeedEditOperation[] {
 export async function interpretNeedEditRequest(
   sessionId: string,
   userId: string,
-  request: InterpretNeedEditRequest
+  request: InterpretNeedEditRequest,
 ): Promise<InterpretNeedEditResponse> {
   // The owner's own needs only (spec §1.4: need is owner-only, always).
   const participant = await requireNeedOwner(sessionId, userId);
@@ -118,7 +120,7 @@ Otherwise return { "summary": string, "operations": [...] }.
 Numbered needs refer to the displayed list and targets refer to the original list.`;
 
   const history = request.conversationHistory
-    ?.map((turn) => `User: ${turn.request}\nAssistant: ${turn.clarification ?? turn.plan?.summary ?? ''}`)
+    ?.map(turn => `User: ${turn.request}\nAssistant: ${turn.clarification ?? turn.plan?.summary ?? ''}`)
     .join('\n\n');
 
   const response = await getModelCompletion('haiku', {

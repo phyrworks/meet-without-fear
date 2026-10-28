@@ -5,11 +5,8 @@
  * whether a run is accepted under a scenario's allow-list (`./types.ts`).
  */
 
-import { PENDING_CLUSTER_READS } from './types';
 import type {
   ChangesMappedRule,
-  PendingClusterRule,
-  RankShift,
   RefusedStepRule,
   AbsentKeysRule,
   AddedEntriesRule,
@@ -230,7 +227,10 @@ function labelOf(root: unknown, p: string[]): string {
 type TraceLike = {
   complete?: boolean;
   rowsRead?: Record<string, number> | string;
-  shapes?: Array<{ isolation?: string | null; statements?: Array<{ kind: string; protocol: string; relations: string[] }> }>;
+  shapes?: Array<{
+    isolation?: string | null;
+    statements?: Array<{ kind: string; protocol: string; relations: string[] }>;
+  }>;
 };
 
 const TX_CONTROL = new Set(['BEGIN', 'COMMIT', 'ROLLBACK', 'SET_TX']);
@@ -240,7 +240,7 @@ export function compareMappedTrace(e0: unknown, a0: unknown, rule: TraceMappedRu
   const e = (e0 ?? {}) as TraceLike;
   const a = (a0 ?? {}) as TraceLike;
   const out: string[] = [];
-  if (a.complete !== true) out.push('trace: the run\'s trace is not complete');
+  if (a.complete !== true) out.push("trace: the run's trace is not complete");
   const statements = (t: TraceLike) => (t.shapes ?? []).flatMap(sh => sh.statements ?? []);
   for (const st of statements(a)) {
     // Exempt only genuine transaction control: the keyword AND no relation
@@ -248,7 +248,9 @@ export function compareMappedTrace(e0: unknown, a0: unknown, rule: TraceMappedRu
     // the trace parser, and anything that touched a relation is data).
     const txControl = TX_CONTROL.has(st.kind) && st.relations.length === 0;
     if (st.protocol !== 'extended' && !txControl) {
-      out.push(`trace: a ${st.kind} on [${st.relations.join(', ')}] used protocol ${st.protocol} (data statements must bind parameters)`);
+      out.push(
+        `trace: a ${st.kind} on [${st.relations.join(', ')}] used protocol ${st.protocol} (data statements must bind parameters)`,
+      );
     }
   }
   const isolations = (t: TraceLike) =>
@@ -262,7 +264,8 @@ export function compareMappedTrace(e0: unknown, a0: unknown, rule: TraceMappedRu
     for (const m of mapped ?? []) allowed.add(m);
   }
   for (const r of new Set(statements(a).flatMap(st => st.relations))) {
-    if (!allowed.has(r)) out.push(`trace: the run touches ${r}, which no baseline relation maps to and the rule does not add`);
+    if (!allowed.has(r))
+      out.push(`trace: the run touches ${r}, which no baseline relation maps to and the rule does not add`);
   }
   for (const s of rule.sameRowsRead) {
     if (!label.startsWith(s.steps)) continue;
@@ -295,7 +298,10 @@ export function compareMappedChanges(e0: unknown, a0: unknown, rule: ChangesMapp
   const added = rule.addedTables.filter(t => t.step === step);
   const dropped = (rule.droppedTables ?? []).filter(t => t.step === step);
   for (const d of dropped) {
-    if (!base.has(`${d.table}|${d.kind}`)) out.push(`changes: droppedTables names ${d.kind} ${d.table} at step ${step}, which the baseline step does not write (stale)`);
+    if (!base.has(`${d.table}|${d.kind}`))
+      out.push(
+        `changes: droppedTables names ${d.kind} ${d.table} at step ${step}, which the baseline step does not write (stale)`,
+      );
   }
   const addedCount = (table: string, kind: string) =>
     added.filter(t => t.table === table && t.kind === kind).reduce((n, t) => n + t.count, 0);
@@ -318,33 +324,35 @@ export function compareMappedChanges(e0: unknown, a0: unknown, rule: ChangesMapp
     if (dropped.some(d => d.table === table && d.kind === kind)) {
       // Named as dropped at this step: the run must write no image of it.
       if (tos.some(to => run.has(`${to}|${kind}`))) {
-        out.push(`changes: droppedTables names ${kind} ${table} at step ${step}, but the run writes its ${kind} image (stale)`);
+        out.push(
+          `changes: droppedTables names ${kind} ${table} at step ${step}, but the run writes its ${kind} image (stale)`,
+        );
       }
       continue;
     }
     for (const to of tos) image.add(`${to}|${kind}`);
-    if (!tos.some(to => run.has(`${to}|${kind}`))) out.push(`changes: the baseline's ${kind} ${table} row(s) have no ${kind} image in [${tos.join(', ')}]`);
+    if (!tos.some(to => run.has(`${to}|${kind}`)))
+      out.push(`changes: the baseline's ${kind} ${table} row(s) have no ${kind} image in [${tos.join(', ')}]`);
     const oneToOne = tos.length === 1 && (sources.get(tos[0])?.size ?? 0) === 1;
     if (oneToOne) {
       const want = base.get(key)! + addedCount(tos[0], kind);
       const got = run.get(`${tos[0]}|${kind}`) ?? 0;
-      if (got !== want) out.push(`changes: ${kind} ${table}=${base.get(key)} (+${addedCount(tos[0], kind)} named) → ${tos[0]}=${got}`);
+      if (got !== want)
+        out.push(`changes: ${kind} ${table}=${base.get(key)} (+${addedCount(tos[0], kind)} named) → ${tos[0]}=${got}`);
     }
   }
   for (const key of run.keys()) {
     const [table, kind] = key.split('|');
     if (image.has(key)) continue;
     const named = addedCount(table, kind);
-    if (!named) out.push(`changes: the run writes ${kind} ${table}, which no baseline write maps to and the rule does not add at step ${step}`);
-    else if (run.get(key) !== named) out.push(`changes: ${kind} ${table} added ${run.get(key)}, the rule names ${named} at step ${step}`);
+    if (!named)
+      out.push(
+        `changes: the run writes ${kind} ${table}, which no baseline write maps to and the rule does not add at step ${step}`,
+      );
+    else if (run.get(key) !== named)
+      out.push(`changes: ${kind} ${table} added ${run.get(key)}, the rule names ${named} at step ${step}`);
   }
   return out;
-}
-
-/** `<phase>: <read> as <email>` → `<read>` (the full-read step labels, privacy.ts). */
-function readNameOf(label: string): string | null {
-  const m = /^[^:]+: (.+) as \S+$/.exec(label);
-  return m ? m[1] : null;
 }
 
 /**
@@ -366,21 +374,9 @@ export function compareWithAllowList(expected: unknown, actual: unknown, allow: 
     actValues: new Set<string>(),
   }));
   type Entry = (typeof rules)[number];
-  const ruleProblems: string[] = [];
-  for (const r of rules) {
-    if (r.rule.kind !== 'pendingCluster') continue;
-    for (const entry of (r.rule as PendingClusterRule).reads) {
-      if (PENDING_CLUSTER_READS[entry.read] !== entry.owner) {
-        ruleProblems.push(
-          `  pendingCluster may not list "${entry.read}" (owner ${entry.owner}): only another cluster's read, with its owner, can be pending`,
-        );
-      }
-    }
-  }
   const rulesAt = <K extends AllowRule['kind']>(kind: K, p: string[]): Entry[] =>
     rules.filter(r => r.rule.kind === kind && r.patterns.some(pat => matchPath(pat, p)));
   const violations: string[] = [];
-  const usedPins = new Set<RankShift>();
   const show = (p: string[]): string => p.join('.') || '<root>';
   const fail = (p: string[], what: string, e?: unknown, a?: unknown): void => {
     violations.push(
@@ -473,18 +469,6 @@ export function compareWithAllowList(expected: unknown, actual: unknown, allow: 
       const adders = rulesAt('addedEntries', p);
       adders.forEach(r => r.matched++);
       const used = new Set<Entry>();
-      // pendingCluster: a step (`steps.N`) that is a listed read of a cluster not yet on this branch.
-      const pendingRead = p.length === 2 && p[0] === 'steps' && typeof e.label === 'string' ? readNameOf(e.label) : null;
-      const pending = pendingRead
-        ? rules.filter(r => r.rule.kind === 'pendingCluster' && (r.rule as PendingClusterRule).reads.some(x => x.read === pendingRead))
-        : [];
-      if (pending.length) {
-        pending.forEach(r => r.matched++);
-        const body = a.body as { success?: unknown; error?: { code?: unknown } } | undefined;
-        if (a.status !== 500 || body?.success !== false || !body?.error) {
-          fail([...p, 'status'], `stale pendingCluster entry: "${pendingRead}" now answers ${a.status} — delete the entry`, 500, a.status);
-        }
-      }
       // m1: a step the target refuses by a ruled fix (`refusedStep`).
       const refused =
         p.length === 2 && p[0] === 'steps' && typeof e.label === 'string'
@@ -506,44 +490,21 @@ export function compareWithAllowList(expected: unknown, actual: unknown, allow: 
         const t = (c.table ?? c.view) as unknown;
         return refusal.droppedWrites.some(w => w.table === t && w.kind === c.kind);
       };
-      // R37: the pinned rank shifts of this step (by label), applied to a copy
-      // of the baseline before the exact compare; each must hold.
-      const pins = pending.length
-        ? pending.flatMap(r =>
-            (r.rule as PendingClusterRule).reads
-              .filter(x => x.read === pendingRead)
-              .flatMap(x => (x.rankShifts ?? []).filter(s => s.step === e.label)),
-          )
-        : [];
-      const pinned = (k: string, ev: unknown, av: unknown): unknown => {
-        const mine = pins.filter(s => s.at.split('.')[0] === k);
-        if (!mine.length) return ev;
-        const copy = JSON.parse(JSON.stringify(ev ?? null));
-        for (const s of mine) {
-          const path = s.at.split('.').slice(1);
-          const get = (v: unknown): unknown =>
-            path.reduce<unknown>((o, seg) => (o && typeof o === 'object' ? (o as Record<string, unknown>)[seg] : undefined), v);
-          const before = get(copy);
-          const after = get(av);
-          if (before !== s.from || after !== s.to) {
-            fail([...p, ...s.at.split('.')], `pinned rank shift ${s.from} → ${s.to} does not hold`, before, after);
-            continue;
-          }
-          usedPins.add(s);
-          const parent = path.slice(0, -1).reduce<Record<string, unknown>>((o, seg) => o[seg] as Record<string, unknown>, copy);
-          parent[path[path.length - 1]] = s.to;
-        }
-        return copy;
-      };
       for (const k of [...new Set([...Object.keys(e), ...Object.keys(a)])].sort()) {
         const kp = [...p, k];
-        if (pending.length && (k === 'status' || k === 'body' || k === 'sse')) continue;
         if (refusal && (k === 'status' || k === 'body')) continue;
         if (refusal && (k === 'changes' || k === 'changesAtResponse')) {
           const ev = Array.isArray(e[k]) ? (e[k] as unknown[]) : [];
           const av = Array.isArray(a[k]) ? (a[k] as unknown[]) : [];
-          if (!ev.some(dropped)) fail(kp, 'refusedStep: none of the dropped writes is in the baseline (stale rule)', refusal.droppedWrites, undefined);
-          for (const c of av.filter(dropped)) fail(kp, 'refusedStep: the run made a write the refusal must not', undefined, c);
+          if (!ev.some(dropped))
+            fail(
+              kp,
+              'refusedStep: none of the dropped writes is in the baseline (stale rule)',
+              refusal.droppedWrites,
+              undefined,
+            );
+          for (const c of av.filter(dropped))
+            fail(kp, 'refusedStep: the run made a write the refusal must not', undefined, c);
           const kept = ev.filter(c => !dropped(c));
           const mapped = rulesAt('changesMapped', kp);
           if (mapped.length) {
@@ -555,10 +516,6 @@ export function compareWithAllowList(expected: unknown, actual: unknown, allow: 
           } else {
             walk(kept, av, kp);
           }
-          continue;
-        }
-        if (pins.length && (k === 'changes' || k === 'changesAtResponse')) {
-          walk(pinned(k, e[k], a[k]), a[k], kp);
           continue;
         }
         const inE = Object.prototype.hasOwnProperty.call(e, k);
@@ -627,16 +584,6 @@ export function compareWithAllowList(expected: unknown, actual: unknown, allow: 
   };
 
   walk(expected, actual, []);
-  violations.push(...ruleProblems);
-  for (const r of rules) {
-    if (r.rule.kind !== 'pendingCluster') continue;
-    for (const entry of (r.rule as PendingClusterRule).reads) {
-      for (const s of entry.rankShifts ?? []) {
-        if (!usedPins.has(s)) violations.push(`  pendingCluster "${entry.read}": rank pin never fired — ${s.step} ${s.at} ${s.from} → ${s.to}`);
-      }
-    }
-  }
-
   for (const r of rules) {
     if (r.rule.kind !== 'valuesSubset') continue;
     const extra = [...r.actValues].filter(v => !r.expValues.has(v));

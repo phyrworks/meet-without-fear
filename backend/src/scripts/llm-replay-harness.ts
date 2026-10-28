@@ -61,24 +61,20 @@ function buildBundle(fixture: Fixture, useSummary: boolean): ContextBundle {
       turnCount: fixture.messages.length,
     }),
     assembledAt: new Date().toISOString(),
-    sessionSummary: useSummary && fixture.summary
-      ? {
-          ...fixture.summary,
-        }
-      : undefined,
+    sessionSummary:
+      useSummary && fixture.summary
+        ? {
+            ...fixture.summary,
+          }
+        : undefined,
   };
 }
 
-function buildMessagesWithContext(
-  history: FixtureMessage[],
-  contextText: string,
-): FixtureMessage[] {
+function buildMessagesWithContext(history: FixtureMessage[], contextText: string): FixtureMessage[] {
   if (history.length === 0) return [];
   const base = history.slice(0, -1);
   const current = history[history.length - 1];
-  const prefix = contextText.trim()
-    ? `Context:\n${contextText}\n\nUser message: ${current.content}`
-    : current.content;
+  const prefix = contextText.trim() ? `Context:\n${contextText}\n\nUser message: ${current.content}` : current.content;
   return [...base, { role: 'user', content: prefix }];
 }
 
@@ -109,8 +105,8 @@ function simulateFixture(fixture: Fixture) {
     const contextText = formatContextForPrompt(bundle);
 
     const { trimmed } = trimConversationHistory(
-      history.map((m) => ({ role: m.role, content: m.content })),
-      useSummary ? CONTEXT_WINDOW.recentTurnsWithSummary : CONTEXT_WINDOW.recentTurnsWithoutSummary
+      history.map(m => ({ role: m.role, content: m.content })),
+      useSummary ? CONTEXT_WINDOW.recentTurnsWithSummary : CONTEXT_WINDOW.recentTurnsWithoutSummary,
     );
 
     const messagesWithContext = buildMessagesWithContext(trimmed, contextText);
@@ -140,7 +136,7 @@ function simulateFixture(fixture: Fixture) {
 
 function main() {
   const fixtures = loadFixtures();
-  const results = fixtures.map((fixture) => {
+  const results = fixtures.map(fixture => {
     const stats = simulateFixture(fixture);
     return { fixture: fixture.id, stats };
   });

@@ -92,7 +92,7 @@ type AnthropicMessageParam = {
 };
 
 function toAnthropicMessages(messages: SimpleMessage[]): AnthropicMessageParam[] {
-  const result: AnthropicMessageParam[] = messages.map((m) => ({
+  const result: AnthropicMessageParam[] = messages.map(m => ({
     role: m.role,
     content: m.content,
   }));
@@ -101,11 +101,13 @@ function toAnthropicMessages(messages: SimpleMessage[]): AnthropicMessageParam[]
   if (result.length >= 2) {
     const target = result[result.length - 2];
     const text = typeof target.content === 'string' ? target.content : '';
-    target.content = [{
-      type: 'text' as const,
-      text,
-      cache_control: { type: 'ephemeral' as const },
-    }];
+    target.content = [
+      {
+        type: 'text' as const,
+        text,
+        cache_control: { type: 'ephemeral' as const },
+      },
+    ];
   }
 
   return result;
@@ -132,7 +134,7 @@ const STAGE1_USER_MESSAGES = [
   "Yeah, it really hurts. We used to make decisions together and now I feel like I'm just along for the ride. Like I don't have a say in anything.",
   "I guess what's at stake is... our partnership. I don't want to feel like I'm living in someone else's house following their rules. I want to feel like we're a team.",
   "That's exactly it. I need to feel like we're equals in this relationship, regardless of who makes more money.",
-  "Yeah, I do feel heard. You really got it.",
+  'Yeah, I do feel heard. You really got it.',
 ];
 
 const STAGE2_USER_MESSAGES = [
@@ -216,9 +218,14 @@ async function makeCachedCall(
   });
 
   const durationMs = Date.now() - startTime;
-  const usage = result.usage as any;
+  const usage = result.usage as {
+    input_tokens?: number;
+    output_tokens?: number;
+    cache_read_input_tokens?: number;
+    cache_creation_input_tokens?: number;
+  };
 
-  const textBlock = result.content.find((block) => block.type === 'text');
+  const textBlock = result.content.find(block => block.type === 'text');
   const response = textBlock && textBlock.type === 'text' ? textBlock.text : '';
 
   return {
@@ -284,8 +291,12 @@ async function runSimulation() {
 
     console.log(`━━━ Turn ${turnNumber} [${stageName}] ━━━`);
     console.log(`  User: "${userMessage.substring(0, 70)}..."`);
-    console.log(`  Static block: ${prompt.staticBlock.length} chars (~${Math.ceil(prompt.staticBlock.length / 4)} tokens)`);
-    console.log(`  Dynamic block: ${prompt.dynamicBlock.length} chars (~${Math.ceil(prompt.dynamicBlock.length / 4)} tokens)`);
+    console.log(
+      `  Static block: ${prompt.staticBlock.length} chars (~${Math.ceil(prompt.staticBlock.length / 4)} tokens)`,
+    );
+    console.log(
+      `  Dynamic block: ${prompt.dynamicBlock.length} chars (~${Math.ceil(prompt.dynamicBlock.length / 4)} tokens)`,
+    );
     console.log(`  Messages: ${conversationHistory.length}`);
 
     try {
@@ -308,8 +319,7 @@ async function runSimulation() {
         (apiResult.outputTokens / 1000) * PRICING.output;
 
       const costWithoutCaching =
-        (totalContentTokens / 1000) * PRICING.input +
-        (apiResult.outputTokens / 1000) * PRICING.output;
+        (totalContentTokens / 1000) * PRICING.input + (apiResult.outputTokens / 1000) * PRICING.output;
 
       const savings = costWithoutCaching - costWithCaching;
       const savingsPercent = costWithoutCaching > 0 ? (savings / costWithoutCaching) * 100 : 0;
@@ -336,20 +346,27 @@ async function runSimulation() {
       results.push(result);
 
       // Cache status indicator
-      const cacheStatus = apiResult.cacheReadTokens > 0
-        ? `✅ CACHE HIT (${apiResult.cacheReadTokens} read)`
-        : apiResult.cacheWriteTokens > 0
-          ? `📝 CACHE WRITE (${apiResult.cacheWriteTokens} written)`
-          : '❌ NO CACHE';
+      const cacheStatus =
+        apiResult.cacheReadTokens > 0
+          ? `✅ CACHE HIT (${apiResult.cacheReadTokens} read)`
+          : apiResult.cacheWriteTokens > 0
+            ? `📝 CACHE WRITE (${apiResult.cacheWriteTokens} written)`
+            : '❌ NO CACHE';
 
       console.log(`  ${cacheStatus}`);
-      console.log(`  Input: ${apiResult.inputTokens} | Output: ${apiResult.outputTokens} | Time: ${apiResult.durationMs}ms`);
-      console.log(`  Cache: read=${apiResult.cacheReadTokens}, write=${apiResult.cacheWriteTokens}, total=${totalContentTokens}`);
-      console.log(`  Cost: $${costWithCaching.toFixed(5)} (vs $${costWithoutCaching.toFixed(5)} without cache, saving ${savingsPercent.toFixed(1)}%)`);
+      console.log(
+        `  Input: ${apiResult.inputTokens} | Output: ${apiResult.outputTokens} | Time: ${apiResult.durationMs}ms`,
+      );
+      console.log(
+        `  Cache: read=${apiResult.cacheReadTokens}, write=${apiResult.cacheWriteTokens}, total=${totalContentTokens}`,
+      );
+      console.log(
+        `  Cost: $${costWithCaching.toFixed(5)} (vs $${costWithoutCaching.toFixed(5)} without cache, saving ${savingsPercent.toFixed(1)}%)`,
+      );
       console.log(`  AI: "${cleanResponse.substring(0, 80)}..."`);
       console.log();
-    } catch (err: any) {
-      console.error(`  ❌ API Error: ${err.message}`);
+    } catch (err: unknown) {
+      console.error(`  ❌ API Error: ${err instanceof Error ? err.message : String(err)}`);
       console.log();
       // Add a mock response so we can continue
       conversationHistory.push({ role: 'assistant', content: 'I hear you. Tell me more about that.' });
@@ -420,7 +437,9 @@ function printSummary(results: TurnResult[]) {
     const uncached = String(r.totalContentTokens).padStart(6);
     const cost = `$${r.costWithCaching.toFixed(4)}`.padStart(7);
     const savings = `${r.savingsPercent.toFixed(1)}%`.padStart(7);
-    console.log(`│ ${String(r.turn).padStart(4)} │ ${stage} │ ${input} │ ${read} │ ${write} │ ${uncached} │ ${cost} │ ${savings} │`);
+    console.log(
+      `│ ${String(r.turn).padStart(4)} │ ${stage} │ ${input} │ ${read} │ ${write} │ ${uncached} │ ${cost} │ ${savings} │`,
+    );
   }
   console.log('└──────┴───────────┴────────┴────────┴────────┴────────┴─────────┴─────────┘');
 
@@ -440,7 +459,9 @@ function printSummary(results: TurnResult[]) {
   console.log('\n📊 AGGREGATE METRICS');
   console.log('─'.repeat(50));
   console.log(`  Total turns:              ${results.length}`);
-  console.log(`  Turns with cache READ:    ${turnsWithCacheRead} / ${results.length} (${((turnsWithCacheRead / results.length) * 100).toFixed(0)}%)`);
+  console.log(
+    `  Turns with cache READ:    ${turnsWithCacheRead} / ${results.length} (${((turnsWithCacheRead / results.length) * 100).toFixed(0)}%)`,
+  );
   console.log(`  Turns with cache WRITE:   ${turnsWithCacheWrite} / ${results.length}`);
   console.log(`  Total input tokens:       ${totalInputTokens.toLocaleString()}`);
   console.log(`  Total output tokens:      ${totalOutputTokens.toLocaleString()}`);
@@ -464,8 +485,12 @@ function printSummary(results: TurnResult[]) {
   console.log();
   console.log('📈 CACHE HIT RATE BY STAGE');
   console.log('─'.repeat(50));
-  console.log(`  Stage 1 (${stage1Results.length} turns): ${stage1Reads} cache reads (${((stage1Reads / Math.max(1, stage1Results.length)) * 100).toFixed(0)}%)`);
-  console.log(`  Stage 2 (${stage2Results.length} turns): ${stage2Reads} cache reads (${((stage2Reads / Math.max(1, stage2Results.length)) * 100).toFixed(0)}%)`);
+  console.log(
+    `  Stage 1 (${stage1Results.length} turns): ${stage1Reads} cache reads (${((stage1Reads / Math.max(1, stage1Results.length)) * 100).toFixed(0)}%)`,
+  );
+  console.log(
+    `  Stage 2 (${stage2Results.length} turns): ${stage2Reads} cache reads (${((stage2Reads / Math.max(1, stage2Results.length)) * 100).toFixed(0)}%)`,
+  );
 
   // Caching verdict
   console.log();
@@ -496,19 +521,25 @@ function printSummary(results: TurnResult[]) {
   const firstStage2 = results.find(r => r.stage === 'Stage 2');
 
   if (firstStage1 && firstStage1.cacheWriteTokens > 0) {
-    console.log(`  • Stage 1 turn 1: Cache WRITE of ${firstStage1.cacheWriteTokens} tokens (expected: system prompt + no history to read)`);
+    console.log(
+      `  • Stage 1 turn 1: Cache WRITE of ${firstStage1.cacheWriteTokens} tokens (expected: system prompt + no history to read)`,
+    );
   } else if (firstStage1) {
     console.log(`  • Stage 1 turn 1: NO cache activity (system prompt may be below 1,024 token minimum)`);
   }
 
   if (firstStage2 && firstStage2.cacheWriteTokens > 0) {
-    console.log(`  • Stage 2 turn 1: Cache WRITE of ${firstStage2.cacheWriteTokens} tokens (new system prompt after stage transition)`);
+    console.log(
+      `  • Stage 2 turn 1: Cache WRITE of ${firstStage2.cacheWriteTokens} tokens (new system prompt after stage transition)`,
+    );
   }
 
   // Check message count growth
   const lastResult = results[results.length - 1];
   console.log(`  • Final message count: ${lastResult?.messageCount ?? 0} messages in history`);
-  console.log(`  • Static block range: ${Math.min(...results.map(r => r.staticBlockChars))} - ${Math.max(...results.map(r => r.staticBlockChars))} chars`);
+  console.log(
+    `  • Static block range: ${Math.min(...results.map(r => r.staticBlockChars))} - ${Math.max(...results.map(r => r.staticBlockChars))} chars`,
+  );
 
   // Cache read tokens as % of total input
   if (totalCacheReads > 0) {
@@ -529,7 +560,7 @@ function printSummary(results: TurnResult[]) {
 // Run
 // ============================================================================
 
-runSimulation().catch((err) => {
+runSimulation().catch(err => {
   console.error('Fatal error:', err);
   process.exit(1);
 });

@@ -267,7 +267,7 @@ What it took, beyond TS-9's pieces:
 | Piece | What it does |
 |---|---|
 | `changesMapped` rule (ruling R32) | Byte-level row `changes` are physical tables; compared through a table map (`TARGET_TABLE_MAP`, spec Absorbs). Every (table, kind) the run writes is an image of a baseline write at that step or a named addition with its count at that exact step; 1:1 tables keep their row count. Values are the concept comparison's. |
-| `pendingCluster` rule (rulings R31, R37) | A full read of a TS-11 / TS-12 endpoint answers 500 on this branch. Listed reads (fixed table `PENDING_CLUSTER_READS`) may differ only as a 500 + error envelope; a listed read answering anything else fails as a stale entry. A TS-10 read cannot be listed. The step's changes are compared exactly: a `<ts:N>` rank the 500 shifts is pinned on the read's entry (`rankShifts`: step label, path, from → to), and a pin that does not hold or never fires fails. |
+| ~~`pendingCluster` rule~~ (rulings R31, R37; removed in TS-12) | A full read of a TS-11 / TS-12 endpoint answered 500 on this branch until its cluster landed; listed reads could differ only as a 500 + error envelope (rank shifts pinned). TS-11 deleted its entries, TS-12 the last six (emotions, inner thoughts, inner thoughts list, inner work list, knowledge base recent/themes); with no cluster pending, the rule kind, `PENDING_CLUSTER_READS` and the comparator branch are deleted. |
 | `changesMapped.droppedTables` (TS-11) | A baseline (table, kind) the run does not write at that exact step, with its reason — the mirror of `addedTables`, for a structural move (a StageProgress gate update that is a participant_milestone INSERT now; a milestone reached at a later step, R33). The run must write no image of it there, and an entry naming a write the baseline step lacks fails (stale). |
 | `removedEntry` rule (TS-11) | ONE baseline array entry (pinned by `where`) may be missing from the run — the mirror of `addedEntries`: a row the target writes at another step (pair it with an `addedEntries` there) or hides by a ruling (a partner's unshared individual commitment). An equal run entry keeps it. |
 | `refusedStep` rule (TS-10 fix round 1, m1) | A step the target refuses by a ruled fix where the baseline recorded it succeeding (R6's feedback draft about an unrevealed round → 404). The run must answer the named status and error code; the named baseline writes must be absent; every other change of the step is compared as recorded. Pair it with a scenario assertion. |
@@ -275,6 +275,29 @@ What it took, beyond TS-9's pieces:
 | `shapeTables()` (privacy.ts) | A scenario's snapshot tables in the shape in use. |
 | Pair checks (scenario-checks.ts) | `targetMessageStageChecks`, `targetFixtureDeltaChecks` (compact signedAt, consent targetId), `authorClosureChecks` (R6/R7 closed values), `roundAndNotificationChecks`, `mockIndexChecks` — each pinned rule's real value. |
 | Fixture names (FIDELITY) | The target writer puts the whole name in `first_name` so `name` and the display name equal the old fixture's; a split name renamed "Bob Ross" to "Bob" in every message a run writes. |
+
+### TS-12 additions (R1 reflection-never-crosses, R5 tombstone)
+
+Both verify on the target against their current-shape baselines (never re-recorded, R39); the
+other nine stay green. What it took:
+
+| Piece | What it does |
+|---|---|
+| `byteFixtureLabels` (goldenScenarioChecks → recordOrVerify `fixtureLabelsFirst`) | For a scenario that DELETES ranked rows (R5's walk deletes the leaver's conversation): every row the fixture template holds is labelled by the TEMPLATE's label, only rows new in the run by the run's. The survivors would otherwise re-rank (`<message:N>` is a global rank) and collide with the deleted rows' labels; the baseline was recorded with the fixture's ranks. A collision still fails. |
+| `byteExtraLabels` (→ `extraLabels`) | Labels for rows the scenario wrote itself and the run deleted (R5 seeds the leaver's private rows right before the deletion so every absence rule of the walk has a row to find gone); each label must be unused. |
+| `targetByteRules({ steps })` | The physical-table map for only these steps — R5's deletion step is the walk, pinned (`mayDiffer` on its `changes`) and asserted row by row against the database by the scenario. |
+| `targetFixtureDeltaChecks({ partnerLeftFromStep })` | From that step on the partner has left: their compact instant is not shown (null). |
+| `authorClosureChecks({ email })` | The author whose reads the closure pair checks (R5: Bob). |
+| `GOLDEN_DUMP_DIR=<dir>` | A verify run also writes the run's normalised result (`<scenario>.json`, `<scenario>.concept.json`) there — to read a mismatch (e.g. which instant moved a rank); never compared or committed. |
+| `pendingCluster` removed | With TS-12 no cluster is pending: the last six reads answer 200 and are compared; the rule kind, `PENDING_CLUSTER_READS` and the comparator branch are gone. |
+
+Found by running R5: TOMBSTONE_READY is a LEGACY completion (StageProgress stage 4 COMPLETED,
+rankings, no session closure). The stage shim completes Stage 4 at `closed`, so on the target
+the journey's Stage 4 is IN_PROGRESS with the migrated selection gate, and the migrated shares
+and choices fill the needs comparison and the Stage 4 state that today returned empty — pinned
+in `allow-lists/tombstone.ts` with their pairs. Found by running R1: Stage 4's
+`defaultCheckInDate` added ten days in LOCAL time and formatted in UTC, so within ten days before
+a DST change it was a day late (fixed: UTC arithmetic; stage4-state.check-in-date.test.ts).
 
 Hazard found: a test module that imports `lib/prisma` at load (here, through `stage-shim`)
 creates the app's client BEFORE the harness repoints `DATABASE_URL` — the app then reads the

@@ -4,12 +4,7 @@
  * Tests for memory intent determination and buffer size configuration.
  */
 
-import {
-  determineMemoryIntent,
-  getTurnBufferSize,
-  getStageConfig,
-  type MemoryIntentContext,
-} from '../memory-intent';
+import { determineMemoryIntent, getTurnBufferSize, getStageConfig, type MemoryIntentContext } from '../memory-intent';
 
 describe('Memory Intent', () => {
   describe('getTurnBufferSize', () => {
@@ -88,7 +83,7 @@ describe('Memory Intent', () => {
 
     it('returns session-isolated config for Stage 3 (cross-session disabled until consent UI)', () => {
       const config = getStageConfig(3, 5);
-      expect(config.threshold).toBe(0.50);
+      expect(config.threshold).toBe(0.5);
       // Cross-session disabled until consent UI is implemented
       expect(config.maxCrossSession).toBe(0);
       expect(config.allowCrossSession).toBe(false);
@@ -97,7 +92,7 @@ describe('Memory Intent', () => {
 
     it('returns session-isolated config for Stage 4 (cross-session disabled until consent UI)', () => {
       const config = getStageConfig(4, 5);
-      expect(config.threshold).toBe(0.50);
+      expect(config.threshold).toBe(0.5);
       // Cross-session disabled until consent UI is implemented
       expect(config.maxCrossSession).toBe(0);
       expect(config.allowCrossSession).toBe(false);

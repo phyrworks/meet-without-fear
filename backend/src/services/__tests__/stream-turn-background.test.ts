@@ -7,13 +7,17 @@
  */
 
 import { scheduleStreamTurnBackgroundJobs } from '../stream-turn-background';
-import { prisma } from '../../lib/prisma';
+import { loadOwnNotableFacts } from '../participant-memory';
 import { isMockLLMEnabled } from '../../lib/bedrock';
 import { updateSessionSummary } from '../conversation-summarizer';
 import { embedSessionContent } from '../embedding';
 import { runPartnerSessionClassifier, ensureFactIds } from '../partner-session-classifier';
 
-jest.mock('../../lib/prisma');
+// TS-12: the facts read is its own module (participant-memory), mocked at that
+// seam — no Prisma mock.
+jest.mock('../participant-memory', () => ({
+  loadOwnNotableFacts: jest.fn(),
+}));
 
 jest.mock('../../lib/bedrock', () => ({
   isMockLLMEnabled: jest.fn().mockReturnValue(false),
@@ -50,13 +54,13 @@ function params(overrides: Record<string, unknown> = {}) {
 }
 
 /** Lets any already-scheduled microtasks settle. */
-const settle = () => new Promise((resolve) => setImmediate(resolve));
+const settle = () => new Promise(resolve => setImmediate(resolve));
 
 describe('stream-turn-background', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     (isMockLLMEnabled as jest.Mock).mockReturnValue(false);
-    (prisma.userVessel.findUnique as jest.Mock).mockResolvedValue({ notableFacts: [] });
+    (loadOwnNotableFacts as jest.Mock).mockResolvedValue([]);
   });
 
   // These tests deliberately schedule work that outlives the call. Any job
@@ -71,7 +75,7 @@ describe('stream-turn-background', () => {
   /** A promise the test controls, instead of relying on a timer to be slow. */
   function deferred() {
     let release!: () => void;
-    const promise = new Promise<void>((resolve) => {
+    const promise = new Promise<void>(resolve => {
       release = resolve;
     });
     pending.push(release);
@@ -159,8 +163,8 @@ describe('stream-turn-background', () => {
       await settle();
     });
 
-    it('does not throw when the vessel lookup rejects', async () => {
-      (prisma.userVessel.findUnique as jest.Mock).mockRejectedValue(new Error('db down'));
+    it('does not throw when the facts lookup rejects', async () => {
+      (loadOwnNotableFacts as jest.Mock).mockRejectedValue(new Error('db down'));
 
       expect(() => scheduleStreamTurnBackgroundJobs(params())).not.toThrow();
       await settle();
@@ -226,7 +230,12 @@ describe('stream-turn-background', () => {
 
     it('maps stored roles onto the classifier role vocabulary', async () => {
       scheduleStreamTurnBackgroundJobs(
-        params({ history: [{ role: 'USER', content: 'u' }, { role: 'AI', content: 'a' }] })
+        params({
+          history: [
+            { role: 'USER', content: 'u' },
+            { role: 'AI', content: 'a' },
+          ],
+        }),
       );
       await settle();
 
@@ -237,8 +246,8 @@ describe('stream-turn-background', () => {
       ]);
     });
 
-    it('treats a vessel with no facts as an empty fact list', async () => {
-      (prisma.userVessel.findUnique as jest.Mock).mockResolvedValue(null);
+    it('treats a participant with no facts document as an empty fact list', async () => {
+      (loadOwnNotableFacts as jest.Mock).mockResolvedValue(undefined);
 
       scheduleStreamTurnBackgroundJobs(params());
       await settle();
@@ -247,9 +256,7 @@ describe('stream-turn-background', () => {
     });
 
     it('upgrades legacy string facts before handing them to the classifier', async () => {
-      (prisma.userVessel.findUnique as jest.Mock).mockResolvedValue({
-        notableFacts: ['likes mornings', 'dislikes surprises'],
-      });
+      (loadOwnNotableFacts as jest.Mock).mockResolvedValue(['likes mornings', 'dislikes surprises']);
 
       scheduleStreamTurnBackgroundJobs(params());
       await settle();
@@ -262,7 +269,7 @@ describe('stream-turn-background', () => {
 
     it('passes categorized facts through unchanged', async () => {
       const facts = [{ category: 'Preference', fact: 'likes mornings' }];
-      (prisma.userVessel.findUnique as jest.Mock).mockResolvedValue({ notableFacts: facts });
+      (loadOwnNotableFacts as jest.Mock).mockResolvedValue(facts);
 
       scheduleStreamTurnBackgroundJobs(params());
       await settle();
@@ -270,14 +277,11 @@ describe('stream-turn-background', () => {
       expect(ensureFactIds).toHaveBeenCalledWith(facts);
     });
 
-    it('scopes the vessel lookup to the acting user and session', async () => {
+    it('scopes the facts lookup to the acting user and session', async () => {
       scheduleStreamTurnBackgroundJobs(params());
       await settle();
 
-      expect(prisma.userVessel.findUnique).toHaveBeenCalledWith({
-        where: { userId_sessionId: { userId, sessionId } },
-        select: { notableFacts: true },
-      });
+      expect(loadOwnNotableFacts).toHaveBeenCalledWith(sessionId, userId);
     });
   });
 });

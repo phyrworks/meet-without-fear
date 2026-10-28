@@ -107,7 +107,11 @@ export function databaseUrlFromEnv(role: DatabaseRole = 'app'): string {
   }
   const databaseUrl = databaseUrlFor(role);
   if (!databaseUrl) {
-    throw new Error(`Neither ${DATABASE_URL_VARS[role]} nor DATABASE_URL is set`);
+    throw new Error(
+      role === 'ops'
+        ? 'OPS_DATABASE_URL is not set (the read-only dashboard role never falls back to DATABASE_URL)'
+        : `Neither ${DATABASE_URL_VARS[role]} nor DATABASE_URL is set`,
+    );
   }
   return databaseUrl;
 }

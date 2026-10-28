@@ -41,10 +41,9 @@ describeDb('app.* helpers (database)', () => {
     await client.connect();
     await client.query('BEGIN');
     const user = async (tag: string) =>
-      scalar<string>(
-        `INSERT INTO "User" (email, "updatedAt") VALUES ($1, now()) RETURNING id`,
-        [`ts1-${tag}-${Date.now()}@example.test`]
-      );
+      scalar<string>(`INSERT INTO "User" (email, "updatedAt") VALUES ($1, now()) RETURNING id`, [
+        `ts1-${tag}-${Date.now()}@example.test`,
+      ]);
     ids.alice = await user('alice');
     ids.bob = await user('bob');
     ids.carol = await user('carol');
@@ -55,10 +54,9 @@ describeDb('app.* helpers (database)', () => {
       for (const m of members) {
         await client.query(`INSERT INTO "RelationshipMember" ("relationshipId", "userId") VALUES ($1, $2)`, [rel, m]);
       }
-      return scalar<string>(
-        `INSERT INTO "Session" ("relationshipId", "updatedAt") VALUES ($1, now()) RETURNING id`,
-        [rel]
-      );
+      return scalar<string>(`INSERT INTO "Session" ("relationshipId", "updatedAt") VALUES ($1, now()) RETURNING id`, [
+        rel,
+      ]);
     };
     ids.pairSession = await relationship([ids.alice, ids.bob]);
     ids.trioSession = await relationship([ids.alice, ids.bob, ids.dave]);
@@ -97,7 +95,7 @@ describeDb('app.* helpers (database)', () => {
     it('is SECURITY INVOKER and STABLE', async () => {
       await client.query('RESET ROLE');
       const { rows } = await client.query(
-        `SELECT prosecdef, provolatile FROM pg_proc WHERE oid = 'app.current_user_id()'::regprocedure`
+        `SELECT prosecdef, provolatile FROM pg_proc WHERE oid = 'app.current_user_id()'::regprocedure`,
       );
       expect(rows[0]).toEqual({ prosecdef: false, provolatile: 's' });
     });
@@ -166,8 +164,22 @@ describeDb('app.* helpers (database)', () => {
         WHERE n.nspname = 'app' AND p.proname IN ('is_member', 'partner_user_id')
         ORDER BY p.proname`);
       expect(rows).toEqual([
-        { proname: 'is_member', prosecdef: true, owner: 'mwf_job', proconfig: ['search_path=pg_catalog, public'], public_exec: false, app_exec: true },
-        { proname: 'partner_user_id', prosecdef: true, owner: 'mwf_job', proconfig: ['search_path=pg_catalog, public'], public_exec: false, app_exec: true },
+        {
+          proname: 'is_member',
+          prosecdef: true,
+          owner: 'mwf_job',
+          proconfig: ['search_path=pg_catalog, public'],
+          public_exec: false,
+          app_exec: true,
+        },
+        {
+          proname: 'partner_user_id',
+          prosecdef: true,
+          owner: 'mwf_job',
+          proconfig: ['search_path=pg_catalog, public'],
+          public_exec: false,
+          app_exec: true,
+        },
       ]);
     });
 

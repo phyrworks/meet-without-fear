@@ -536,7 +536,8 @@ export async function writeCurrentShape(tx: Tx, scenario: Scenario, users: UserR
     const sharedAt = p.milestones.needs_shared;
     if (!sharedAt) throw new Error(`Participant "${p.key}" shares needs but has no needs_shared milestone`);
     const rows = await tx.identifiedNeed.findMany({ where: { vesselId: vessels[i]!.id }, orderBy: { id: 'asc' } });
-    if (rows.length !== (p.needs ?? []).length) throw new Error(`Participant "${p.key}": need rows do not match the scenario`);
+    if (rows.length !== (p.needs ?? []).length)
+      throw new Error(`Participant "${p.key}": need rows do not match the scenario`);
     for (const k of consented) {
       await tx.consentRecord.create({
         data: {
@@ -580,7 +581,13 @@ export async function writeCurrentShape(tx: Tx, scenario: Scenario, users: UserR
       if (!submittedAt)
         throw new Error(`Participant "${p.key}" has an empathy attempt but no empathy_submitted milestone`);
       const draft = await tx.empathyDraft.create({
-        data: { sessionId, userId: uid, content: e.statement, readyToShare: true, ...autoCols('createdAt', 'updatedAt') },
+        data: {
+          sessionId,
+          userId: uid,
+          content: e.statement,
+          readyToShare: true,
+          ...autoCols('createdAt', 'updatedAt'),
+        },
       });
       await tx.empathyAttempt.create({
         data: {

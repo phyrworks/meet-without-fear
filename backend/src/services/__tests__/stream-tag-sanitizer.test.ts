@@ -8,8 +8,7 @@
 
 import { StreamTagSanitizer } from '../stream-tag-sanitizer';
 
-const LONG_VISIBLE =
-  'This is a long enough visible response to satisfy the fifty character minimum for trap exit.';
+const LONG_VISIBLE = 'This is a long enough visible response to satisfy the fifty character minimum for trap exit.';
 
 describe('StreamTagSanitizer', () => {
   describe('thinking trap (phase 1)', () => {

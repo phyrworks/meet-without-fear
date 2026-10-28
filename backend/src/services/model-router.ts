@@ -1,13 +1,6 @@
 import type { ModelType } from '../lib/bedrock';
 
-export type RequestType =
-  | 'mediate'
-  | 'summarize'
-  | 'rewrite'
-  | 'classify'
-  | 'draft'
-  | 'retrieve'
-  | 'unknown';
+export type RequestType = 'mediate' | 'summarize' | 'rewrite' | 'classify' | 'draft' | 'retrieve' | 'unknown';
 
 export interface RoutingInput {
   requestType: RequestType;
@@ -25,7 +18,7 @@ export interface RoutingDecision {
 export function scoreAmbiguity(message: string): number {
   const questionMarks = (message.match(/\?/g) ?? []).length;
   const vagueTerms = ['maybe', 'not sure', 'kinda', 'sort of', 'something', 'stuff'];
-  const vaguenessHits = vagueTerms.filter((term) => message.toLowerCase().includes(term)).length;
+  const vaguenessHits = vagueTerms.filter(term => message.toLowerCase().includes(term)).length;
   const lengthFactor = Math.min(message.length / 600, 1);
   return Math.min(1, questionMarks * 0.2 + vaguenessHits * 0.15 + lengthFactor * 0.2);
 }

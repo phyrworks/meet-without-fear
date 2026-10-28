@@ -15,7 +15,6 @@
  */
 
 import type { KnownLeak } from '../privacy';
-import { r6r7PendingCluster } from './author-sees-status-only';
 import {
   authorAnalysisClosed,
   byteLabelShift,
@@ -40,7 +39,6 @@ const bodyRules = (concept: boolean): AllowRule[] => [
   TARGET_COMPACT_SIGNED_MASK,
   TARGET_CONSENT_TARGET_ID_RULE,
   TARGET_ROUND_KEYS_RULE,
-  r6r7PendingCluster(),
   ...authorAnalysisClosed({ empathyStatus: [7, 39], reconcilerStatus: [11, 43], summary: [13, 45], concept }),
 ];
 
@@ -74,7 +72,15 @@ export const DECLINED_OFFER_NO_TRACE_BYTE_TARGET_ALLOW: AllowList = {
     ...bodyRules(false),
     byteLabelShift(['steps.15.body.data.records.0.id', 'steps.47.body.data.records.0.id'], 'consent'),
     ...targetByteRules({
-      addedTables: [{ step: DECLINE_STEP, table: 'consent', kind: 'added', count: 1, why: "the subject's DENIED consent naming the offer" }],
+      addedTables: [
+        {
+          step: DECLINE_STEP,
+          table: 'consent',
+          kind: 'added',
+          count: 1,
+          why: "the subject's DENIED consent naming the offer",
+        },
+      ],
     }),
   ],
 };

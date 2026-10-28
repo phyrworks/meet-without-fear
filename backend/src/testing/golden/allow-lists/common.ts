@@ -43,8 +43,7 @@ export const READ_DTO_RULES: AllowRule[] = [
   {
     kind: 'valuesSubset',
     at: ['steps.*.body.**.targetType', 'steps.*.body.**.contentType'],
-    why:
-      'spec §3 consent_target: 7 ConsentContentType values become 5 real targets. A value may disappear, none may appear.',
+    why: 'spec §3 consent_target: 7 ConsentContentType values become 5 real targets. A value may disappear, none may appear.',
   },
 ];
 
@@ -70,11 +69,11 @@ export function deliveredStatementCopy(
 ): AddedEntriesRule {
   const key = `<message:${subject}@main/EMPATHY_STATEMENT:${author}#1>`;
   const row = {
-    'kind': 'EMPATHY_STATEMENT',
-    'role': 'USER',
-    'conversation_id': `<conversation:${subject}@main/MAIN>`,
-    'sender_participant_id': `<participant:${author}@main>`,
-    'source_attempt_id': `<empathyAttempt:${author}→${subject}@main#${round}>`,
+    kind: 'EMPATHY_STATEMENT',
+    role: 'USER',
+    conversation_id: `<conversation:${subject}@main/MAIN>`,
+    sender_participant_id: `<participant:${author}@main>`,
+    source_attempt_id: `<empathyAttempt:${author}→${subject}@main#${round}>`,
   };
   return where === 'initial'
     ? {
@@ -136,7 +135,11 @@ export const TARGET_USER_NAME_RULE: AllowRule = {
  *    it at the round's submitted_at — the scenario asserts the instant).
  */
 export function empathySubmittedMilestone(who: string, where: 'initial' | number, reachedAt: string): AddedEntriesRule {
-  const row = { milestone_key: 'empathy_submitted', participant_id: `<participant:${who}@main>`, reached_at: reachedAt };
+  const row = {
+    milestone_key: 'empathy_submitted',
+    participant_id: `<participant:${who}@main>`,
+    reached_at: reachedAt,
+  };
   const key = `<milestone:${who}@main/empathy_submitted>`;
   return where === 'initial'
     ? {
@@ -166,11 +169,21 @@ export function empathySubmittedMilestone(who: string, where: 'initial' | number
  * `kind` is the row's change kind at that step ('changed' for a fixture round,
  * 'added' for a round the step inserted).
  */
-export function statusVersionTwo(step: number, author: string, subject: string, kind: 'changed' | 'added'): ReplacedEntryRule {
+export function statusVersionTwo(
+  step: number,
+  author: string,
+  subject: string,
+  kind: 'changed' | 'added',
+): ReplacedEntryRule {
   return {
     kind: 'replacedEntry',
     at: `steps.${step}.changes`,
-    where: { view: 'empathy_attempt', kind, key: `<empathyAttempt:${author}→${subject}@main#1>`, 'after.status_version': 3 },
+    where: {
+      view: 'empathy_attempt',
+      kind,
+      key: `<empathyAttempt:${author}→${subject}@main#1>`,
+      'after.status_version': 3,
+    },
     with: { 'after.status_version': 2 },
     mustMatch: true,
     why: 'ruling R32: no ANALYZING on the target — HELD → READY → REVEALED is two status moves (app.empathy_set_status).',
@@ -219,7 +232,7 @@ export function deliveredCopyInRead(
     },
     why:
       `spec §7: after the reveal ${subject}'s own conversation holds ${author}'s statement (the delivered copy ` +
-      'app.empathy_set_status writes); today it existed only in the author\'s chat (P0-2).',
+      "app.empathy_set_status writes); today it existed only in the author's chat (P0-2).",
   };
 }
 
@@ -273,7 +286,8 @@ export const TARGET_TABLE_MAP: Record<string, string[]> = {
  * list: participant and conversation on 8 steps, participant_milestone on 2).
  */
 export const TARGET_ADDED_RELATIONS: Record<string, string> = {
-  participant: 'membership and the caller are the participant row (requireSessionAccess; v_co_participant; sessionParties)',
+  participant:
+    'membership and the caller are the participant row (requireSessionAccess; v_co_participant; sessionParties)',
   conversation: "the audience of a read or a delivered row is a participant's MAIN conversation",
   participant_milestone: "a message's DTO stage and the Stage 2 stage checks are derived from milestones (stage shim)",
 };
@@ -288,11 +302,19 @@ export function targetByteRules(opts: {
   /** TS-11: baseline writes with no image at their exact step (see ChangesMappedRule). */
   droppedTables?: ChangesMappedRule['droppedTables'];
   trace?: boolean;
+  /**
+   * TS-12: only these steps' changes go through the table map (default: every
+   * step). R5's deletion step is the walk itself, asserted against the
+   * database by its scenario, and pinned there instead.
+   */
+  steps?: number[];
 }): AllowRule[] {
   const rules: AllowRule[] = [
     {
       kind: 'changesMapped',
-      at: ['steps.*.changes', 'steps.*.changesAtResponse'],
+      at: opts.steps
+        ? opts.steps.flatMap(s => [`steps.${s}.changes`, `steps.${s}.changesAtResponse`])
+        : ['steps.*.changes', 'steps.*.changesAtResponse'],
       tableMap: TARGET_TABLE_MAP,
       addedTables: opts.addedTables,
       ...(opts.droppedTables ? { droppedTables: opts.droppedTables } : {}),
@@ -351,7 +373,10 @@ export const TARGET_COMPACT_SIGNED_MASK: AllowRule = {
  */
 export const TARGET_FEEL_HEARD_MASK: AllowRule = {
   kind: 'fixtureMask',
-  at: ['steps.*.body.data.milestones.feelHeardConfirmedAt', 'steps.*.body.data.progress.milestones.feelHeardConfirmedAt'],
+  at: [
+    'steps.*.body.data.milestones.feelHeardConfirmedAt',
+    'steps.*.body.data.progress.milestones.feelHeardConfirmedAt',
+  ],
   expect: 'isoTimestamp',
   baseline: null,
   why:
@@ -412,7 +437,13 @@ export const TARGET_ROUND_KEYS_RULE: AllowRule = {
  * response is the fixture's at her turn count, and the leak probes still scan
  * the stream and the captured prompt.
  */
-export function mockTurnIndex(step: number, concept: boolean, draftOwner: string): AllowRule[] {
+export function mockTurnIndex(
+  step: number,
+  concept: boolean,
+  draftOwner: string,
+  /** TS-12: 'added' when the caller had no EMPATHY draft before the turn (R1's Bob). */
+  draftKind: 'added' | 'changed' = 'changed',
+): AllowRule[] {
   const rules: AllowRule[] = [
     {
       kind: 'mayDiffer',
@@ -440,7 +471,7 @@ export function mockTurnIndex(step: number, concept: boolean, draftOwner: string
       at: `steps.${step}.changes`,
       where: {
         view: 'draft',
-        kind: 'changed',
+        kind: draftKind,
         key: `<draft:${draftOwner}@main/EMPATHY>`,
         'after.kind': 'EMPATHY',
         'after.participant_id': `<participant:${draftOwner}@main>`,
@@ -467,7 +498,7 @@ export function byteLabelShift(paths: string[], what: 'consent' | 'message'): Al
     mustMatch: true,
     why:
       what === 'consent'
-        ? "byte-level consent labels encode the old target type and target (the draft); the arc names the attempt " +
+        ? 'byte-level consent labels encode the old target type and target (the draft); the arc names the attempt ' +
           '(spec §1.3). The concept golden compares the row under its structural label; targetConsentTargetChecks pins targetId.'
         : 'byte-level message labels are global created_at ranks; the two delivered copies of the reveal precede the ' +
           'reveal notices, so each notice ranks two later. The concept golden compares the notices structurally.',
@@ -497,7 +528,8 @@ export function authorAnalysisClosed(opts: {
   summary?: number[];
   concept: boolean;
 }): AllowRule[] {
-  const at = (steps: number[] | undefined, paths: string[]) => (steps ?? []).flatMap(s => paths.map(p => `steps.${s}.${p}`));
+  const at = (steps: number[] | undefined, paths: string[]) =>
+    (steps ?? []).flatMap(s => paths.map(p => `steps.${s}.${p}`));
   const rules: AllowRule[] = [];
   const empathy = at(opts.empathyStatus, [
     'body.data.myReconcilerResult',
@@ -513,7 +545,11 @@ export function authorAnalysisClosed(opts: {
         "field's carried instant no longer ranks, so the user row's created_at ranks one lower.",
     });
   }
-  const status = at(opts.reconcilerStatus, ['body.data.aUnderstandingB', 'body.data.hasRun', 'body.data.pendingShareOffers']);
+  const status = at(opts.reconcilerStatus, [
+    'body.data.aUnderstandingB',
+    'body.data.hasRun',
+    'body.data.pendingShareOffers',
+  ]);
   if (status.length) {
     rules.push({
       kind: 'mayDiffer',
@@ -628,7 +664,11 @@ export function declineConsent(step: number, decision: 'DENIED' | 'GRANTED' = 'D
  * only), with the target-only content type CONTEXT_SHARE_OFFER (ruling R32).
  * Pinned to the read step and to the exact record; never in the author's reads.
  */
-export function subjectDeclineRecord(step: number, byteLevel: boolean, decision: 'DENIED' | 'GRANTED' = 'DENIED'): AddedEntriesRule {
+export function subjectDeclineRecord(
+  step: number,
+  byteLevel: boolean,
+  decision: 'DENIED' | 'GRANTED' = 'DENIED',
+): AddedEntriesRule {
   return {
     kind: 'addedEntries',
     at: `steps.${step}.body.data.records`,
@@ -636,7 +676,9 @@ export function subjectDeclineRecord(step: number, byteLevel: boolean, decision:
       contentType: 'CONTEXT_SHARE_OFFER',
       decision,
       revokedAt: null,
-      id: byteLevel ? '<consent:bob/SHARE_OFFER/shareOffer:bob#1>' : '<consent:bob@main/SHARE_OFFER/shareOffer:ada→bob@main#1/i1>',
+      id: byteLevel
+        ? '<consent:bob/SHARE_OFFER/shareOffer:bob#1>'
+        : '<consent:bob@main/SHARE_OFFER/shareOffer:ada→bob@main#1/i1>',
       ...(byteLevel ? {} : { targetId: '<shareOffer:ada→bob@main#1/i1>' }),
     },
     why:

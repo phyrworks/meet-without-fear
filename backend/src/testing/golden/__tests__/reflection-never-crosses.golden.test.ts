@@ -18,7 +18,12 @@
  */
 
 import {
+  R1_AFTER_DRAFT_STEP,
+  R1_AFTER_MESSAGES_STEP,
+  R1_AFTER_STATE_STEP,
+  R1_TURN_STEP,
   REFLECTION_NEVER_CROSSES_ALLOW,
+  REFLECTION_NEVER_CROSSES_BYTE_TARGET_ALLOW,
   REFLECTION_NEVER_CROSSES_KNOWN_LEAKS,
 } from '../allow-lists/reflection-never-crosses';
 import { viewName } from '../concept-views';
@@ -32,9 +37,17 @@ import {
   findLeaks,
   findPromptLeaks,
   fullRead,
+  shapeTables,
   unexpectedLeakReport,
 } from '../privacy';
-import { goldenScenarioChecks } from '../scenario-checks';
+import {
+  goldenScenarioChecks,
+  mockIndexChecks,
+  targetFixtureDeltaChecks,
+  targetMessageStageChecks,
+} from '../scenario-checks';
+import { isTargetShape } from '../shape';
+import { withClient } from '../db';
 
 const BASE_URL =
   process.env.GOLDEN_DATABASE_URL || 'postgresql://mwf_user:mwf_password@localhost:5432/meet_without_fear';
@@ -52,7 +65,15 @@ const PROBES: Record<string, string> = {
 };
 
 /** Tables a read can touch (the auth bypass writes User; GETs may stamp vessels). */
-const READ_TABLES = ['User', 'Message', 'UserVessel', 'StageProgress', 'InnerWorkSession', 'InnerWorkMessage', 'BrainActivity'];
+const READ_TABLES = shapeTables([
+  'User',
+  'Message',
+  'UserVessel',
+  'StageProgress',
+  'InnerWorkSession',
+  'InnerWorkMessage',
+  'BrainActivity',
+]);
 
 jest.setTimeout(600_000);
 
@@ -117,7 +138,80 @@ describe(`golden: ${SCENARIO}`, () => {
     allowList: REFLECTION_NEVER_CROSSES_ALLOW,
     harness: () => harness,
     steps: () => steps,
+    byteTargetAllowList: REFLECTION_NEVER_CROSSES_BYTE_TARGET_ALLOW,
   });
+  targetMessageStageChecks({ harness: () => harness, steps: () => steps });
+  targetFixtureDeltaChecks({ harness: () => harness, steps: () => steps });
+  mockIndexChecks({ harness: () => harness, steps: () => steps, step: R1_TURN_STEP, email: 'bob@e2e.test' });
+
+  const targetIt = isTargetShape() ? it : it.skip;
+  targetIt('pairs: the step indices the rules pin are the turn and Bob’s own after-turn reads', () => {
+    expect(steps[R1_TURN_STEP].label).toBe(turnLabel);
+    expect(steps[R1_AFTER_STATE_STEP].label).toBe('after turn: state as bob@e2e.test');
+    expect(steps[R1_AFTER_MESSAGES_STEP].label).toBe('after turn: messages as bob@e2e.test');
+    expect(steps[R1_AFTER_DRAFT_STEP].label).toBe('after turn: empathy draft as bob@e2e.test');
+  });
+
+  targetIt(
+    "pair (mayDiffer): Bob's after-turn reads show the streamed reply and the streamed proposed statement as his draft",
+    () => {
+      const sse = steps[R1_TURN_STEP].sse ?? [];
+      const streamed = sse
+        .filter(e => e.event === 'chunk')
+        .map(e => (e.data as { text?: string }).text ?? '')
+        .join('')
+        .trim();
+      const proposed = sse
+        .map(e => (e.data as { metadata?: { proposedEmpathyStatement?: string } })?.metadata?.proposedEmpathyStatement)
+        .find(Boolean);
+      expect(streamed.length).toBeGreaterThan(0);
+      expect(proposed).toBeTruthy();
+      const stateMsgs = (
+        steps[R1_AFTER_STATE_STEP].body as {
+          data: { messages: { messages: Array<{ content: string; role: string }> } };
+        }
+      ).data.messages.messages;
+      const msgs = (
+        steps[R1_AFTER_MESSAGES_STEP].body as { data: { messages: Array<{ content: string; role: string }> } }
+      ).data.messages;
+      for (const list of [stateMsgs, msgs]) {
+        expect(list[11].role).toBe('AI');
+        expect(list[11].content.trim()).toBe(streamed);
+      }
+      const draft = (steps[R1_AFTER_DRAFT_STEP].body as { data: { draft: { content: string } | null } }).data.draft;
+      expect(draft?.content).toBe(proposed);
+    },
+  );
+
+  targetIt('pair (mayDiffer): every brain_activity cost is numerically the baseline 0', async () => {
+    const rows = await withClient(
+      harness.fixture.target,
+      async c => (await c.query<{ cost: string }>(`SELECT cost::text AS cost FROM brain_activity`)).rows,
+      harness.fixture.database,
+    );
+    expect(rows.length).toBeGreaterThan(0);
+    for (const r of rows) expect(Number(r.cost)).toBe(0);
+  });
+
+  targetIt(
+    "pair (addedEntries): Ada's empathy_submitted milestone is reached at her attempt's submitted_at",
+    async () => {
+      const [row] = await withClient(
+        harness.fixture.target,
+        async c =>
+          (
+            await c.query<{ same: boolean }>(
+              `SELECT pm.reached_at = a.submitted_at AS same
+             FROM participant_milestone pm JOIN empathy_attempt a ON a.author_participant_id = pm.participant_id
+             JOIN participant p ON p.id = pm.participant_id JOIN "user" u ON u.id = p.user_id
+             WHERE u.email = 'ada@e2e.test' AND pm.milestone_key = 'empathy_submitted'`,
+            )
+          ).rows,
+        harness.fixture.database,
+      );
+      expect(row).toEqual({ same: true });
+    },
+  );
 
   it('the probes are live: Ada can read her own reflection', () => {
     expect(findLeaks(adaControl, PROBES).map(l => l.probe)).toContain('reflection title');
@@ -143,6 +237,10 @@ describe(`golden: ${SCENARIO}`, () => {
     const sessionRows = last.filter(r => r.session_id !== null);
     expect(sessionRows.length).toBeGreaterThan(0);
     const text = JSON.stringify(sessionRows.map(r => r.input));
-    expect(Object.entries(PROBES).filter(([, p]) => text.includes(p)).map(([k]) => k)).toEqual([]);
+    expect(
+      Object.entries(PROBES)
+        .filter(([, p]) => text.includes(p))
+        .map(([k]) => k),
+    ).toEqual([]);
   });
 });

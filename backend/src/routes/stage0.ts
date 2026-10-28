@@ -16,23 +16,13 @@ const router = Router();
  * @description Sign the Curiosity Compact for a session
  * @access Private - requires authentication and session access
  */
-router.post(
-  '/sessions/:id/compact/sign',
-  requireAuth,
-  requireSessionAccess,
-  asyncHandler(signCompact)
-);
+router.post('/sessions/:id/compact/sign', requireAuth, requireSessionAccess, asyncHandler(signCompact));
 
 /**
  * @route GET /api/v1/sessions/:id/compact/status
  * @description Get the compact signing status for a session
  * @access Private - requires authentication and session access
  */
-router.get(
-  '/sessions/:id/compact/status',
-  requireAuth,
-  requireSessionAccess,
-  asyncHandler(getCompactStatus)
-);
+router.get('/sessions/:id/compact/status', requireAuth, requireSessionAccess, asyncHandler(getCompactStatus));
 
 export default router;

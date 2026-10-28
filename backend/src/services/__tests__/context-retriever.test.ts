@@ -1,3 +1,10 @@
+/*
+ * TS-12: the retrieveContext half of this suite mocked the Prisma client and is
+ * gone; retrieval reads the caller's own rows on the target and is exercised
+ * against real tables by services/__tests__/participant-context.target.test.ts
+ * (the context builder) and the chat-turn goldens. What remains is pure: the
+ * formatters.
+ */
 /**
  * Context Retriever Tests
  *
@@ -12,7 +19,6 @@
 // Mocks — must be declared before imports
 // ============================================================================
 
-jest.mock('../../lib/prisma');
 jest.mock('../../lib/bedrock', () => ({
   getHaikuJson: jest.fn().mockResolvedValue(null),
   getModelCompletion: jest.fn().mockResolvedValue(null),
@@ -54,39 +60,16 @@ jest.mock('../../utils/circuit-breaker', () => ({
 // ============================================================================
 
 import {
-  retrieveContext,
   formatRetrievedContext,
   buildMessagesWithFullContext,
   type RetrievedContext,
   type RelevantMessage,
-  type RetrievalOptions,
   type DetectedReference,
 } from '../context-retriever';
-import { getHaikuJson } from '../../lib/bedrock';
-import { prisma } from '../../lib/prisma';
-import { searchSessionContent, searchInnerWorkSessionContent } from '../embedding';
-
-const mockGetHaikuJson = getHaikuJson as jest.MockedFunction<typeof getHaikuJson>;
-const mockSearchSessionContent = searchSessionContent as jest.MockedFunction<typeof searchSessionContent>;
-const mockSearchInnerWorkSessionContent = searchInnerWorkSessionContent as jest.MockedFunction<typeof searchInnerWorkSessionContent>;
 
 // ============================================================================
 // Fixtures
 // ============================================================================
-
-function buildOptions(overrides?: Partial<RetrievalOptions>): RetrievalOptions {
-  return {
-    userId: 'user-1',
-    currentMessage: 'I feel really frustrated with Bob.',
-    currentSessionId: 'session-1',
-    turnId: 'session-1-1',
-    maxCrossSessionMessages: 10,
-    similarityThreshold: 0.5,
-    includePreSession: true,
-    skipDetection: false,
-    ...overrides,
-  };
-}
 
 function buildRetrievedContext(overrides?: Partial<RetrievedContext>): RetrievedContext {
   return {
@@ -112,318 +95,6 @@ function buildRelevantMessage(overrides?: Partial<RelevantMessage>): RelevantMes
     ...overrides,
   };
 }
-
-// ============================================================================
-// Tests — retrieveContext
-// ============================================================================
-
-describe('Context Retriever', () => {
-  beforeEach(() => {
-    jest.clearAllMocks();
-
-    // Default: session lookup
-    (prisma.session.findUnique as jest.Mock).mockResolvedValue({
-      id: 'session-1',
-      relationshipId: 'rel-1',
-    });
-
-    // Default: no messages
-    (prisma.message.findMany as jest.Mock).mockResolvedValue([]);
-
-    // Default: no pre-session messages
-    (prisma.preSessionMessage.findMany as jest.Mock).mockResolvedValue([]);
-
-    // Default: no user prefs
-    (prisma.user.findUnique as jest.Mock).mockResolvedValue({
-      id: 'user-1',
-      memoryPreferences: null,
-    });
-  });
-
-  // --------------------------------------------------------------------------
-  // Reference detection via public API
-  // --------------------------------------------------------------------------
-
-  describe('reference detection (via retrieveContext)', () => {
-    it('calls Haiku for reference detection when not skipDetection', async () => {
-      mockGetHaikuJson.mockResolvedValue({
-        references: [
-          { type: 'agreement', text: 'we agreed to talk weekly', confidence: 'high' },
-        ],
-        needsRetrieval: true,
-        searchQueries: ['weekly conversation agreement'],
-      });
-
-      const result = await retrieveContext(buildOptions());
-
-      expect(mockGetHaikuJson).toHaveBeenCalled();
-      expect(result.detectedReferences).toHaveLength(1);
-      expect(result.detectedReferences[0].type).toBe('agreement');
-    });
-
-    it('skips Haiku detection when skipDetection=true and always searches', async () => {
-      const result = await retrieveContext(
-        buildOptions({ skipDetection: true })
-      );
-
-      // When skipDetection is true, Haiku should NOT be called
-      expect(mockGetHaikuJson).not.toHaveBeenCalled();
-      // But retrieval summary should indicate search was attempted
-      // (since needsRetrieval=true when skipDetection is set)
-      expect(result).toBeDefined();
-    });
-
-    it('returns empty references when Haiku returns null (circuit breaker fallback)', async () => {
-      mockGetHaikuJson.mockResolvedValue(null);
-
-      const result = await retrieveContext(buildOptions());
-
-      expect(result.detectedReferences).toHaveLength(0);
-    });
-
-    it('returns empty references when no session ID is provided', async () => {
-      const result = await retrieveContext(
-        buildOptions({ currentSessionId: undefined })
-      );
-
-      // Without a session ID, reference detection is skipped
-      expect(result.detectedReferences).toHaveLength(0);
-    });
-  });
-
-  // --------------------------------------------------------------------------
-  // Conversation history retrieval
-  // --------------------------------------------------------------------------
-
-  describe('conversation history', () => {
-    it('retrieves messages for the current session', async () => {
-      (prisma.message.findMany as jest.Mock).mockResolvedValue([
-        {
-          content: 'Hello',
-          role: 'USER',
-          timestamp: new Date('2025-12-01T10:00:00Z'),
-        },
-        {
-          content: 'Hi, how can I help?',
-          role: 'AI',
-          timestamp: new Date('2025-12-01T10:00:05Z'),
-        },
-      ]);
-
-      const result = await retrieveContext(buildOptions());
-
-      expect(result.conversationHistory).toHaveLength(2);
-      expect(result.conversationHistory[0].role).toBe('user');
-      expect(result.conversationHistory[0].content).toBe('Hello');
-      expect(result.conversationHistory[1].role).toBe('assistant');
-    });
-
-    it('returns empty history when no session ID', async () => {
-      const result = await retrieveContext(
-        buildOptions({ currentSessionId: undefined })
-      );
-
-      expect(result.conversationHistory).toHaveLength(0);
-    });
-  });
-
-  // --------------------------------------------------------------------------
-  // Pre-session messages
-  // --------------------------------------------------------------------------
-
-  describe('pre-session messages', () => {
-    it('retrieves pre-session messages when enabled', async () => {
-      (prisma.preSessionMessage.findMany as jest.Mock).mockResolvedValue([
-        {
-          content: 'I need help with something',
-          role: 'USER',
-          timestamp: new Date(),
-        },
-      ]);
-
-      const result = await retrieveContext(
-        buildOptions({ includePreSession: true })
-      );
-
-      expect(result.preSessionMessages).toHaveLength(1);
-      expect(result.preSessionMessages[0].content).toBe('I need help with something');
-    });
-
-    it('skips pre-session messages when disabled', async () => {
-      const result = await retrieveContext(
-        buildOptions({ includePreSession: false })
-      );
-
-      expect(result.preSessionMessages).toHaveLength(0);
-      // Pre-session message query should not have been called
-      expect(prisma.preSessionMessage.findMany).not.toHaveBeenCalled();
-    });
-  });
-
-  // --------------------------------------------------------------------------
-  // Semantic search (cross-session)
-  // --------------------------------------------------------------------------
-
-  describe('semantic search', () => {
-    it('searches when detection says needsRetrieval=true', async () => {
-      mockGetHaikuJson.mockResolvedValue({
-        references: [],
-        needsRetrieval: true,
-        searchQueries: ['Bob not listening'],
-      });
-
-      // Cross-session is currently disabled (shouldSearchCrossSession = false)
-      // but inner thoughts can still be searched
-      await retrieveContext(
-        buildOptions({ includeInnerThoughts: true })
-      );
-
-      expect(mockSearchInnerWorkSessionContent).toHaveBeenCalled();
-    });
-
-    it('does not search when detection says needsRetrieval=false', async () => {
-      mockGetHaikuJson.mockResolvedValue({
-        references: [],
-        needsRetrieval: false,
-        searchQueries: [],
-      });
-
-      await retrieveContext(buildOptions());
-
-      // No search should happen
-      expect(mockSearchSessionContent).not.toHaveBeenCalled();
-    });
-
-    it('includes inner thoughts results in relevantFromOtherSessions', async () => {
-      mockGetHaikuJson.mockResolvedValue({
-        references: [],
-        needsRetrieval: true,
-        searchQueries: ['frustration with communication'],
-      });
-
-      mockSearchInnerWorkSessionContent.mockResolvedValue([
-        {
-          sessionId: 'inner-session-1',
-          similarity: 0.88,
-          theme: 'Reflecting on communication patterns',
-        } as any,
-      ]);
-
-      const result = await retrieveContext(
-        buildOptions({ includeInnerThoughts: true })
-      );
-
-      expect(result.relevantFromOtherSessions.length).toBeGreaterThanOrEqual(1);
-      const innerThought = result.relevantFromOtherSessions.find(
-        (m) => m.source === 'inner-thoughts'
-      );
-      expect(innerThought).toBeDefined();
-    });
-  });
-
-  // --------------------------------------------------------------------------
-  // Error handling
-  // --------------------------------------------------------------------------
-
-  describe('error handling', () => {
-    it('handles session lookup failure gracefully', async () => {
-      (prisma.session.findUnique as jest.Mock).mockRejectedValue(new Error('DB error'));
-
-      // Should not throw
-      const result = await retrieveContext(buildOptions());
-
-      expect(result).toBeDefined();
-      expect(result.conversationHistory).toBeDefined();
-    });
-
-    it('handles user preferences lookup failure', async () => {
-      (prisma.user.findUnique as jest.Mock).mockRejectedValue(new Error('DB error'));
-
-      // Should not throw
-      const result = await retrieveContext(buildOptions());
-
-      expect(result).toBeDefined();
-    });
-
-    it('handles embedding search failure gracefully', async () => {
-      // Haiku says we need retrieval
-      mockGetHaikuJson.mockResolvedValue({
-        references: [],
-        needsRetrieval: true,
-        searchQueries: ['test query'],
-      });
-
-      // But the embedding search itself throws
-      mockSearchInnerWorkSessionContent.mockRejectedValue(
-        new Error('Embedding service down')
-      );
-
-      // The search error propagates through Promise.all in the search pipeline,
-      // so retrieveContext will reject. Verify it rejects rather than silently succeeding.
-      await expect(
-        retrieveContext(buildOptions({ includeInnerThoughts: true }))
-      ).rejects.toThrow('Embedding service down');
-    });
-  });
-
-  // --------------------------------------------------------------------------
-  // Namespace isolation
-  // --------------------------------------------------------------------------
-
-  describe('namespace isolation', () => {
-    it('does not search inner thoughts content when includeInnerThoughts is false (default)', async () => {
-      // Partner sessions do NOT pass includeInnerThoughts — they rely on the default (false).
-      // This test confirms the namespace boundary: partner session context never searches
-      // inner thoughts / journal content.
-      await retrieveContext(buildOptions({ skipDetection: true }));
-
-      expect(mockSearchInnerWorkSessionContent).not.toHaveBeenCalled();
-    });
-
-    it('searches inner thoughts content when includeInnerThoughts is true', async () => {
-      // Inner Thoughts sessions explicitly opt in via includeInnerThoughts: true.
-      // This test confirms that the opt-in path works correctly.
-      mockSearchInnerWorkSessionContent.mockResolvedValue([]);
-
-      await retrieveContext(buildOptions({ skipDetection: true, includeInnerThoughts: true }));
-
-      expect(mockSearchInnerWorkSessionContent).toHaveBeenCalled();
-    });
-  });
-
-  // --------------------------------------------------------------------------
-  // Retrieval summary
-  // --------------------------------------------------------------------------
-
-  describe('retrieval summary', () => {
-    it('builds summary with conversation history count', async () => {
-      (prisma.message.findMany as jest.Mock).mockResolvedValue([
-        { content: 'msg1', role: 'USER', timestamp: new Date() },
-        { content: 'msg2', role: 'AI', timestamp: new Date() },
-      ]);
-
-      const result = await retrieveContext(buildOptions());
-
-      expect(result.retrievalSummary).toContain('2 messages in current conversation');
-    });
-
-    it('builds summary with pre-session count', async () => {
-      (prisma.preSessionMessage.findMany as jest.Mock).mockResolvedValue([
-        { content: 'pre1', role: 'USER', timestamp: new Date() },
-      ]);
-
-      const result = await retrieveContext(buildOptions());
-
-      expect(result.retrievalSummary).toContain('1 pre-session messages');
-    });
-
-    it('returns default summary when no context is found', async () => {
-      const result = await retrieveContext(buildOptions());
-
-      expect(result.retrievalSummary).toBe('No additional context retrieved');
-    });
-  });
-});
 
 // ============================================================================
 // Tests — formatRetrievedContext
@@ -516,9 +187,7 @@ describe('formatRetrievedContext', () => {
   it('truncates long content to 500 characters', () => {
     const longContent = 'x'.repeat(600);
     const context = buildRetrievedContext({
-      preSessionMessages: [
-        { role: 'user', content: longContent },
-      ],
+      preSessionMessages: [{ role: 'user', content: longContent }],
     });
 
     const formatted = formatRetrievedContext(context);
@@ -611,9 +280,7 @@ describe('buildMessagesWithFullContext', () => {
   it('injects retrieved context as prefix to current message', () => {
     const context = buildRetrievedContext({
       conversationHistory: [],
-      relevantFromOtherSessions: [
-        buildRelevantMessage({ content: 'Past insight about trust' }),
-      ],
+      relevantFromOtherSessions: [buildRelevantMessage({ content: 'Past insight about trust' })],
     });
 
     const messages = buildMessagesWithFullContext(context, 'I want to talk about trust');

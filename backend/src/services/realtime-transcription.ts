@@ -46,7 +46,7 @@ const wsConnectionTimestamps = new Map<string, number[]>();
 function isWsRateLimited(userId: string): boolean {
   const now = Date.now();
   const timestamps = wsConnectionTimestamps.get(userId) || [];
-  const recent = timestamps.filter((t) => now - t < WS_RATE_WINDOW_MS);
+  const recent = timestamps.filter(t => now - t < WS_RATE_WINDOW_MS);
   if (recent.length >= WS_RATE_MAX) {
     wsConnectionTimestamps.set(userId, recent);
     return true;
@@ -167,10 +167,7 @@ export function attachRealtimeWebSocket(server: Server): void {
         'min_end_of_turn_silence_when_confident',
         url.searchParams.get('minEndOfTurnSilenceWhenConfident') || '1500',
       );
-      wsUrl.searchParams.append(
-        'max_turn_silence',
-        url.searchParams.get('maxTurnSilence') || '3000',
-      );
+      wsUrl.searchParams.append('max_turn_silence', url.searchParams.get('maxTurnSilence') || '3000');
       wsUrl.searchParams.append('max_turn_duration', '15000');
       wsUrl.searchParams.append('end_of_turn_silence_threshold', '800');
 
@@ -207,12 +204,14 @@ export function attachRealtimeWebSocket(server: Server): void {
                 if (isNewContent) {
                   lastTranscriptByTurn.set(turnOrder, message.transcript);
 
-                  clientWs.send(JSON.stringify({
-                    message_type: message.end_of_turn ? 'FinalTranscript' : 'PartialTranscript',
-                    text: message.transcript,
-                    confidence: message.confidence,
-                    turnOrder,
-                  }));
+                  clientWs.send(
+                    JSON.stringify({
+                      message_type: message.end_of_turn ? 'FinalTranscript' : 'PartialTranscript',
+                      text: message.transcript,
+                      confidence: message.confidence,
+                      turnOrder,
+                    }),
+                  );
 
                   // Prevent memory growth — keep only last 5 turns
                   if (message.end_of_turn && lastTranscriptByTurn.size > 5) {
@@ -261,6 +260,7 @@ export function attachRealtimeWebSocket(server: Server): void {
         }
       });
 
+      // eslint-disable-next-line no-inner-declarations -- hoisted: the message handler above calls it
       function bufferAndForward(chunk: Buffer): void {
         audioBuffer.push(chunk);
         audioBufferSize += chunk.length;
@@ -289,13 +289,14 @@ export function attachRealtimeWebSocket(server: Server): void {
           assemblyAiWs = null;
         }
       });
-
     } catch (error) {
       logger.error('[Realtime] Failed to initialize:', error);
-      clientWs.send(JSON.stringify({
-        type: 'error',
-        data: 'Failed to initialize transcription: ' + (error instanceof Error ? error.message : 'Unknown error'),
-      }));
+      clientWs.send(
+        JSON.stringify({
+          type: 'error',
+          data: 'Failed to initialize transcription: ' + (error instanceof Error ? error.message : 'Unknown error'),
+        }),
+      );
     }
   }
 }

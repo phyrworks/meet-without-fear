@@ -35,7 +35,9 @@ describeTarget('validation-feedback draft before the reveal (m1)', () => {
   });
 
   it("404s and writes no draft while the author's round is unrevealed", async () => {
-    expect(await rows(`SELECT count(*)::int AS n FROM empathy_attempt WHERE revealed_at IS NOT NULL`)).toEqual([{ n: 0 }]);
+    expect(await rows(`SELECT count(*)::int AS n FROM empathy_attempt WHERE revealed_at IS NOT NULL`)).toEqual([
+      { n: 0 },
+    ]);
     const res = await harness.step({
       label: 'feedback draft as bob',
       actor: harness.actors.userB!,

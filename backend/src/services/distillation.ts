@@ -10,16 +10,20 @@
  * 2. On-demand via POST /inner-thoughts/:id/distill (synchronous)
  *
  * Re-distillation: replaces all AI-origin takeaways, preserves USER-origin.
+ *
+ * Target shape (TS-12): the reflection is `reflection`, its messages
+ * `reflection_message`, takeaways `takeaway` (spec §1.6). The embed-and-link
+ * step is gone with the takeaway embedding column (D8): TODO(D8) rebuild the
+ * auto-links app-side. Recurring themes are `v_reflection_theme`, computed on
+ * read, so nothing is detected here any more.
  */
 
-import crypto from 'crypto';
 import { logger } from '../lib/logger';
 import { getHaikuJson, BrainActivityCallType } from '../lib/bedrock';
 import { withHaikuCircuitBreaker } from '../utils/circuit-breaker';
 import { prisma } from '../lib/prisma';
-import { detectRecurringTheme } from './theme-detector';
-import { embedTakeawayBatch, findSimilarTakeaways } from './embedding';
-import type { TakeawayDTO, TakeawayType } from '@meet-without-fear/shared';
+import type { Takeaway } from '../generated/prisma/client';
+import type { TakeawayDTO } from '@meet-without-fear/shared';
 
 // ============================================================================
 // Types
@@ -72,11 +76,9 @@ export function normalizeTakeaways(raw: unknown): RawTakeaway[] {
   const valid = candidates
     .filter(
       (item): item is RawTakeaway =>
-        item !== null &&
-        typeof item === 'object' &&
-        typeof (item as RawTakeaway).content === 'string',
+        item !== null && typeof item === 'object' && typeof (item as RawTakeaway).content === 'string',
     )
-    .map((item) => ({
+    .map(item => ({
       ...item,
       // Normalize type — default to 'insight' if missing or invalid
       type: item.type && VALID_TYPES.has(item.type) ? item.type : ('insight' as const),
@@ -93,11 +95,9 @@ export function normalizeTakeaways(raw: unknown): RawTakeaway[] {
 // AI messages are labeled "Journal Guide", USER messages are labeled "Me".
 // ============================================================================
 
-export function buildDistillationPrompt(
-  messages: Array<{ role: string; content: string }>,
-): string {
+export function buildDistillationPrompt(messages: Array<{ role: string; content: string }>): string {
   const transcript = messages
-    .map((m) => {
+    .map(m => {
       const speaker = m.role === 'USER' ? 'Me' : 'Journal Guide';
       return `${speaker}: ${m.content}`;
     })
@@ -146,26 +146,22 @@ Output ONLY valid JSON in this exact shape:
 // 7. Fetch and return all takeaways (all sources, ordered by position)
 // ============================================================================
 
-export async function distillSession({
-  sessionId,
-  userId,
-  turnId,
-}: DistillSessionInput): Promise<TakeawayDTO[]> {
+export async function distillSession({ sessionId, userId, turnId }: DistillSessionInput): Promise<TakeawayDTO[]> {
   logger.info(`[Distillation] Starting distillation for session ${sessionId}`);
+  void userId; // the caller verified ownership; every read below is by the reflection id
 
   // 1. Fetch messages
-  const messages = await prisma.innerWorkMessage.findMany({
-    where: { sessionId },
-    orderBy: { timestamp: 'asc' },
+  const messages = await prisma.reflectionMessage.findMany({
+    where: { reflectionId: sessionId },
+    orderBy: { createdAt: 'asc' },
+    select: { role: true, content: true },
   });
 
   // 2. Guard: sparse session (< 2 user messages)
-  const userMessages = messages.filter((m) => m.role === 'USER');
+  const userMessages = messages.filter(m => m.role === 'USER');
   if (userMessages.length < 2) {
-    logger.info(
-      `[Distillation] Skipping Haiku — session ${sessionId} has only ${userMessages.length} user message(s)`,
-    );
-    await prisma.innerWorkSession.update({
+    logger.info(`[Distillation] Skipping Haiku — session ${sessionId} has only ${userMessages.length} user message(s)`);
+    await prisma.reflection.update({
       where: { id: sessionId },
       data: { distilledAt: new Date() },
     });
@@ -177,7 +173,7 @@ export async function distillSession({
     async () =>
       getHaikuJson<{ takeaways: Array<{ content: string; theme?: string }> }>({
         systemPrompt:
-          'You are an organizational assistant. You ONLY output valid JSON. Never add psychological labels, clinical terms, or interpretations. Extract verbatim phrases in the user\'s own language.',
+          "You are an organizational assistant. You ONLY output valid JSON. Never add psychological labels, clinical terms, or interpretations. Extract verbatim phrases in the user's own language.",
         messages: [{ role: 'user', content: buildDistillationPrompt(messages) }],
         maxTokens: 1024,
         innerWorkSessionId: sessionId,
@@ -195,7 +191,7 @@ export async function distillSession({
   // 5. Empty after normalization — just update distilledAt
   if (normalized.length === 0) {
     logger.info(`[Distillation] No valid takeaways from Haiku for session ${sessionId}`);
-    await prisma.innerWorkSession.update({
+    await prisma.reflection.update({
       where: { id: sessionId },
       data: { distilledAt: new Date() },
     });
@@ -204,88 +200,55 @@ export async function distillSession({
 
   // 6. Atomic transaction: replace AI takeaways, update distilledAt
   await prisma.$transaction([
-    prisma.sessionTakeaway.deleteMany({
-      where: { sessionId, source: 'AI' },
+    prisma.takeaway.deleteMany({
+      where: { reflectionId: sessionId, source: 'AI' },
     }),
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    prisma.sessionTakeaway.createMany({
+    prisma.takeaway.createMany({
       data: normalized.map((t, i) => ({
-        sessionId,
+        reflectionId: sessionId,
         content: t.content,
         theme: t.theme ?? null,
         source: 'AI' as const,
-        // 'type' column added in migration — cast needed until prisma generate runs
-        type: (t.type?.toUpperCase() ?? 'INSIGHT'),
+        type:
+          t.type === 'action_item'
+            ? ('ACTION_ITEM' as const)
+            : t.type === 'intention'
+              ? ('INTENTION' as const)
+              : ('INSIGHT' as const),
         position: i,
-      } as any)),
+      })),
     }),
-    prisma.innerWorkSession.update({
+    prisma.reflection.update({
       where: { id: sessionId },
       data: { distilledAt: new Date() },
     }),
   ]);
 
-  // Fire-and-forget theme detection — check for recurring themes across sessions (INTEL-01)
-  // CRITICAL: Trigger AFTER transaction commits so theme detector sees the new takeaways
-  // CRITICAL: Never await — must not slow down distillation response
-  detectRecurringTheme({
-    sessionId,
-    userId,
-    turnId: crypto.randomUUID(),
-  }).catch(
-    (err: unknown) => logger.warn('[Distillation] Fire-and-forget theme detection failed:', err),
-  );
-
   // 7. Fetch and return all takeaways (preserves USER-origin alongside new AI ones)
-  const allTakeaways = await prisma.sessionTakeaway.findMany({
-    where: { sessionId },
+  const allTakeaways = await prisma.takeaway.findMany({
+    where: { reflectionId: sessionId },
     orderBy: { position: 'asc' },
   });
 
-  logger.info(
-    `[Distillation] Session ${sessionId} distilled: ${allTakeaways.length} takeaway(s)`,
-  );
+  logger.info(`[Distillation] Session ${sessionId} distilled: ${allTakeaways.length} takeaway(s)`);
 
-  // 8. Fire-and-forget: embed takeaways and auto-link to similar existing takeaways
-  const newAiTakeaways = allTakeaways.filter((t) => t.source === 'AI');
-  if (newAiTakeaways.length > 0) {
-    embedAndLinkTakeaways(
-      newAiTakeaways.map((t) => ({ id: t.id, content: t.content })),
-      userId,
-      sessionId,
-    ).catch(
-      (err: unknown) => logger.warn('[Distillation] Fire-and-forget embed+link failed:', err),
-    );
-  }
-
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  return allTakeaways.map((t: any) => mapTakeawayToDTO(t));
+  return allTakeaways.map(t => mapTakeawayToDTO(t));
 }
 
 // ============================================================================
 // Helpers
 // ============================================================================
 
-function mapTakeawayToDTO(t: {
-  id: string;
-  content: string;
-  theme: string | null;
-  source: string;
-  type: string;
-  position: number;
-  resolved: boolean;
-  resolvedAt: Date | null;
-  createdAt: Date;
-  updatedAt: Date;
-}): TakeawayDTO {
+/** A `takeaway` row as the DTO; `resolved` is `resolved_at IS NOT NULL` (the target has no flag). */
+function mapTakeawayToDTO(t: Takeaway): TakeawayDTO {
   return {
     id: t.id,
     content: t.content,
     theme: t.theme,
-    source: t.source as 'AI' | 'USER',
-    type: t.type as TakeawayType,
+    source: t.source,
+    type: t.type,
     position: t.position,
-    resolved: t.resolved,
+    resolved: t.resolvedAt !== null,
     resolvedAt: t.resolvedAt?.toISOString() ?? null,
     createdAt: t.createdAt.toISOString(),
     updatedAt: t.updatedAt.toISOString(),
@@ -293,47 +256,3 @@ function mapTakeawayToDTO(t: {
 }
 
 export { mapTakeawayToDTO };
-
-/**
- * Embed new takeaways and create auto-links to similar existing ones.
- * Called fire-and-forget after distillation transaction commits.
- */
-async function embedAndLinkTakeaways(
-  takeaways: Array<{ id: string; content: string }>,
-  userId: string,
-  sessionId: string,
-): Promise<void> {
-  // Step 1: Embed all new takeaways
-  const embeddedIds = await embedTakeawayBatch(takeaways);
-  logger.info(`[Distillation] Embedded ${embeddedIds.length}/${takeaways.length} takeaways`);
-
-  // Step 2: For each embedded takeaway, find and create links to similar ones
-  for (const takeawayId of embeddedIds) {
-    const matches = await findSimilarTakeaways(takeawayId, userId, sessionId);
-    if (matches.length === 0) continue;
-
-    // Create TakeawayLink records (bidirectional: we store source→target)
-    for (const match of matches) {
-      try {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        await (prisma as any).takeawayLink.create({
-          data: {
-            sourceId: takeawayId,
-            targetId: match.takeawayId,
-            linkType: 'AI_SEMANTIC',
-            similarity: match.similarity,
-          },
-        });
-        logger.info(
-          `[Distillation] Auto-linked takeaway ${takeawayId} → ${match.takeawayId} (similarity: ${match.similarity.toFixed(3)})`,
-        );
-      } catch (err: unknown) {
-        // Unique constraint violation = link already exists — safe to ignore
-        if (err && typeof err === 'object' && 'code' in err && (err as { code: string }).code === 'P2002') {
-          continue;
-        }
-        throw err;
-      }
-    }
-  }
-}

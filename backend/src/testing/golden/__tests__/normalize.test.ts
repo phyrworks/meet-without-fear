@@ -106,7 +106,10 @@ describe('clerkId normalization — the two formats', () => {
     // bypass rewrite on `after`.
     const map = labelMap({ e2e_1787097373886_xa944v: '<clerkId:bob>' });
     const r = normalize(
-      { before: { clerkId: 'e2e_1787097373886_xa944v' }, after: { clerkId: 'e2e_0190f3a2-6c1e-7b4d-9a8e-00000000000b' } },
+      {
+        before: { clerkId: 'e2e_1787097373886_xa944v' },
+        after: { clerkId: 'e2e_0190f3a2-6c1e-7b4d-9a8e-00000000000b' },
+      },
       map,
     );
     expect(r.value).toEqual({ before: { clerkId: '<clerkId:bob>' }, after: { clerkId: 'e2e_<user:bob>' } });

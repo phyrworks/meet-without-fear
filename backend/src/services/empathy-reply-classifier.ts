@@ -58,7 +58,7 @@ export interface ClassifyEmpathyValidationReplyInput {
  * because it keeps the conversation moving without falsely advancing a gate.
  */
 export async function classifyEmpathyValidationReply(
-  input: ClassifyEmpathyValidationReplyInput
+  input: ClassifyEmpathyValidationReplyInput,
 ): Promise<EmpathyReplyClassification> {
   const { replyText, empathyAttempt, sessionId, turnId } = input;
 
@@ -107,9 +107,8 @@ Classify.`;
 
     return {
       intent: result.intent,
-      correction: typeof result.correction === 'string' && result.correction.trim().length > 0
-        ? result.correction.trim()
-        : null,
+      correction:
+        typeof result.correction === 'string' && result.correction.trim().length > 0 ? result.correction.trim() : null,
     };
   } catch (err) {
     logger.warn('[EmpathyReplyClassifier] Haiku call failed; defaulting to revise:', err);

@@ -107,7 +107,7 @@ Before we continue, I want to check in with you: Do you feel like I understand w
         gaps: {
           severity: 'significant',
           summary:
-            "Shantam focused primarily on conflict dynamics but missed the underlying feelings of exhaustion, being unseen at work and home, and the loneliness of carrying burdens alone.",
+            'Shantam focused primarily on conflict dynamics but missed the underlying feelings of exhaustion, being unseen at work and home, and the loneliness of carrying burdens alone.',
           missedFeelings: [
             'deep exhaustion from work demands',
             'feeling unseen and unappreciated',
@@ -123,8 +123,7 @@ Before we continue, I want to check in with you: Do you feel like I understand w
           rationale:
             "There is a significant gap between what Shantam guessed and what Darryl actually shared. Sharing more context would help Shantam understand the depth of Darryl's exhaustion.",
           sharingWouldHelp: true,
-          suggestedShareFocus:
-            'The exhaustion from work and the feeling of being unseen despite all the effort.',
+          suggestedShareFocus: 'The exhaustion from work and the feeling of being unseen despite all the effort.',
         },
       },
     },

@@ -219,6 +219,7 @@ export async function planRetrieval(
         turnId,
         operation: 'retrieval-planning',
         callType: BrainActivityCallType.RETRIEVAL_PLANNING,
+        ownContent: true, // R40: the caller's own content only
       });
     },
     fallbackPlan,

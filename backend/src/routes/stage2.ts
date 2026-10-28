@@ -41,87 +41,42 @@ import {
 const router = Router();
 
 // Save empathy draft
-router.post(
-  '/sessions/:id/empathy/draft',
-  requireAuth,
-  requireSessionAccess,
-  asyncHandler(saveDraft)
-);
+router.post('/sessions/:id/empathy/draft', requireAuth, requireSessionAccess, asyncHandler(saveDraft));
 
 // Get current empathy draft
-router.get(
-  '/sessions/:id/empathy/draft',
-  requireAuth,
-  requireSessionAccess,
-  asyncHandler(getDraft)
-);
+router.get('/sessions/:id/empathy/draft', requireAuth, requireSessionAccess, asyncHandler(getDraft));
 
 // Consent to share empathy with partner
-router.post(
-  '/sessions/:id/empathy/consent',
-  requireAuth,
-  requireSessionAccess,
-  asyncHandler(consentToShare)
-);
+router.post('/sessions/:id/empathy/consent', requireAuth, requireSessionAccess, asyncHandler(consentToShare));
 
 // Get partner's empathy attempt
-router.get(
-  '/sessions/:id/empathy/partner',
-  requireAuth,
-  requireSessionAccess,
-  asyncHandler(getPartnerEmpathy)
-);
+router.get('/sessions/:id/empathy/partner', requireAuth, requireSessionAccess, asyncHandler(getPartnerEmpathy));
 
 // Validate partner's empathy attempt
-router.post(
-  '/sessions/:id/empathy/validate',
-  requireAuth,
-  requireSessionAccess,
-  asyncHandler(validateEmpathy)
-);
+router.post('/sessions/:id/empathy/validate', requireAuth, requireSessionAccess, asyncHandler(validateEmpathy));
 
 // Get empathy exchange status (for UI state management)
-router.get(
-  '/sessions/:id/empathy/status',
-  requireAuth,
-  requireSessionAccess,
-  asyncHandler(getEmpathyExchangeStatus)
-);
+router.get('/sessions/:id/empathy/status', requireAuth, requireSessionAccess, asyncHandler(getEmpathyExchangeStatus));
 
 // Refinement conversation (when status is NEEDS_WORK)
-router.post(
-  '/sessions/:id/empathy/refine',
-  requireAuth,
-  requireSessionAccess,
-  asyncHandler(refineEmpathy)
-);
+router.post('/sessions/:id/empathy/refine', requireAuth, requireSessionAccess, asyncHandler(refineEmpathy));
 
 // Resubmit revised empathy statement
-router.post(
-  '/sessions/:id/empathy/resubmit',
-  requireAuth,
-  requireSessionAccess,
-  asyncHandler(resubmitEmpathy)
-);
+router.post('/sessions/:id/empathy/resubmit', requireAuth, requireSessionAccess, asyncHandler(resubmitEmpathy));
 
 // ============================================================================
 // Validation Feedback / Feedback Coach Flow
 // ============================================================================
 
 // Skip refinement (accept the difference or decline)
-router.post(
-  '/sessions/:id/empathy/skip-refinement',
-  requireAuth,
-  requireSessionAccess,
-  asyncHandler(skipRefinement)
-);
+router.post('/sessions/:id/empathy/skip-refinement', requireAuth, requireSessionAccess, asyncHandler(skipRefinement));
 
 // Save validation feedback draft (Feedback Coach)
 router.post(
   '/sessions/:id/empathy/validation-feedback/draft',
   requireAuth,
   requireSessionAccess,
-  asyncHandler(saveValidationFeedbackDraft)
+  asyncHandler(saveValidationFeedbackDraft),
 );
 
 // Refine validation feedback (Feedback Coach)
@@ -129,7 +84,7 @@ router.post(
   '/sessions/:id/empathy/validation-feedback/refine',
   requireAuth,
   requireSessionAccess,
-  asyncHandler(refineValidationFeedback)
+  asyncHandler(refineValidationFeedback),
 );
 
 // ============================================================================
@@ -141,7 +96,7 @@ router.get(
   '/sessions/:id/empathy/share-suggestion',
   requireAuth,
   requireSessionAccess,
-  asyncHandler(getShareSuggestion)
+  asyncHandler(getShareSuggestion),
 );
 
 // Respond to share suggestion (accept, decline, or refine)
@@ -149,7 +104,7 @@ router.post(
   '/sessions/:id/empathy/share-suggestion/respond',
   requireAuth,
   requireSessionAccess,
-  asyncHandler(respondToShareSuggestion)
+  asyncHandler(respondToShareSuggestion),
 );
 
 export default router;

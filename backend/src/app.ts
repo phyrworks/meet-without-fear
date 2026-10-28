@@ -41,8 +41,11 @@ if (process.env.E2E_AUTH_BYPASS === 'true' && process.env.NODE_ENV !== 'producti
   corsOptions.allowedHeaders = '*';
 } else {
   corsOptions.allowedHeaders = [
-    'Content-Type', 'Authorization', 'Cache-Control',
-    'X-Requested-With', 'x-dashboard-secret',
+    'Content-Type',
+    'Authorization',
+    'Cache-Control',
+    'X-Requested-With',
+    'x-dashboard-secret',
   ];
 }
 app.use(cors(corsOptions));
@@ -58,7 +61,7 @@ app.use(
       // Use default compression filter for other requests
       return compression.filter(req, res);
     },
-  })
+  }),
 );
 
 // Body parsing

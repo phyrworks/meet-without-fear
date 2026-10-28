@@ -3027,6 +3027,39 @@ GRANT UPDATE (status, opened_at, completed_at, response_deadline_at) ON follow_u
 GRANT SELECT (id, follow_up_id, scope, remind_at, cadence, status) ON reminder TO mwf_job;
 GRANT UPDATE (status, remind_at) ON reminder TO mwf_job;
 
+-- TS-12: the job's writers and readers in telemetry, notifications, deletion and
+-- retention (spec §1.8 brain_activity "mwf_job writes, mwf_ops reads"; R35 — the
+-- job is the principal for work that crosses users, the anonymise walk and
+-- retention). Every job statement is raw and names exactly these columns.
+-- brain-service startActivity: the telemetry row, attributed at capture (participant_id,
+-- reflection_id); id / created_at are column defaults returned by RETURNING
+GRANT INSERT (session_id, reflection_id, participant_id, turn_id, activity_type, call_type, model, input, metadata, status)
+  ON brain_activity TO mwf_job;
+-- startActivity RETURNING id, created_at; completeActivity / failActivity WHERE id = …;
+-- data-retention's purge and delete windows (WHERE created_at < …; session_id granted above). Never a blob.
+GRANT SELECT (id, created_at) ON brain_activity TO mwf_job;
+-- completeActivity / failActivity: the outcome of the call (metadata replaced, never read back)
+GRANT UPDATE (output, token_count_input, token_count_output, cost, duration_ms, status, completed_at, structured_output, metadata)
+  ON brain_activity TO mwf_job;
+-- data-retention: the short-retention purge sets the four blobs NULL (spec §1.8)
+GRANT UPDATE (input) ON brain_activity TO mwf_job;
+-- brain-service mergeTurnTrace (ai-orchestrator storeTurnTrace): find the turn's latest
+-- ORCHESTRATED_RESPONSE row and merge the pipeline trace into its metadata (metadata holds
+-- cache/tool/trace telemetry, never a prompt — the prompt is input/output, still unreadable)
+GRANT SELECT (turn_id, call_type, metadata) ON brain_activity TO mwf_job;
+-- push.ts sendPushNotification: the recipient's devices — another user than the caller, so the
+-- job reads them (user_device RLS is user_id = me); newest device first (last_seen_at)
+GRANT SELECT (user_id, push_token, last_seen_at) ON user_device TO mwf_job;
+-- push.ts: a token Expo reports as unregistered is cleared (WHERE user_id = … AND push_token = …)
+GRANT UPDATE (push_token) ON user_device TO mwf_job;
+-- session-deletion: the leaver's session-scoped user_memory goes with the leave (DELETE granted above)
+GRANT SELECT (session_id) ON user_memory TO mwf_job;
+-- session-retention: staleness of an ACTIVE session and the purge window of an ARCHIVED one
+GRANT SELECT (updated_at) ON session TO mwf_job;
+-- session-retention: an ARCHIVED session past the purge window is hard-deleted (every child
+-- FKs session ON DELETE CASCADE; spec Conventions "retention hard-deletes whole sessions")
+GRANT DELETE ON session TO mwf_job;
+
 -- mwf_ops: SELECT on exactly the tables routes/brain.ts reads, re-based
 -- (BrainActivity, Session/Relationship/RelationshipMember/User, StageProgress,
 -- Message, UserVessel.notableFacts, EmotionalReading, InnerWorkSession/Message).

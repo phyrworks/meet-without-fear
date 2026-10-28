@@ -114,27 +114,27 @@ function stage4ComputedRules(): AllowRule[] {
 export const ADA_SESSION_LIST_STEPS = [7, 18, 29];
 
 const NEED_LABEL_RULE: AllowRule = {
-      // Only the keys that name a need in the Stage 4 state — never a
-      // proposal's text or source label. Paired with the scenario's probe of
-      // the partner's need labels (KNOWN leaks below): on the target the text
-      // may change, the label may not reappear.
-      // Fix round 2: pinned to Ada's READ steps (the probed ones); Bob's write
-      // responses (which carry Ada's labels) are compared byte for byte.
-      kind: 'mayDiffer',
-      at: ADA_READ_STEPS.flatMap(i =>
-        [
-          'walkthrough.currentNeed.label',
-          'walkthrough.ownNeeds.*.label',
-          'walkthrough.partnerNeeds.*.label',
-          '**.needsAddressed.*.label',
-          'inventory.unaddressedNeeds.*.label',
-          'coverageAudit.*.*.label',
-        ].map(s => `steps.${i}.body.data.${s}`),
-      ),
-      mustMatch: true,
-      why:
-        'spec §1.4 v_need_coverage over need_share: a need named in Stage 4 is its shared text, not the label ' +
-        'Stage4NeedCoverage copied (plan step 8: coverage is computed, not copied).',
+  // Only the keys that name a need in the Stage 4 state — never a
+  // proposal's text or source label. Paired with the scenario's probe of
+  // the partner's need labels (KNOWN leaks below): on the target the text
+  // may change, the label may not reappear.
+  // Fix round 2: pinned to Ada's READ steps (the probed ones); Bob's write
+  // responses (which carry Ada's labels) are compared byte for byte.
+  kind: 'mayDiffer',
+  at: ADA_READ_STEPS.flatMap(i =>
+    [
+      'walkthrough.currentNeed.label',
+      'walkthrough.ownNeeds.*.label',
+      'walkthrough.partnerNeeds.*.label',
+      '**.needsAddressed.*.label',
+      'inventory.unaddressedNeeds.*.label',
+      'coverageAudit.*.*.label',
+    ].map(s => `steps.${i}.body.data.${s}`),
+  ),
+  mustMatch: true,
+  why:
+    'spec §1.4 v_need_coverage over need_share: a need named in Stage 4 is its shared text, not the label ' +
+    'Stage4NeedCoverage copied (plan step 8: coverage is computed, not copied).',
 };
 
 /**
@@ -277,7 +277,12 @@ function initialRepairFixtureDeltas(): AllowRule[] {
     ...needs.map(n => ({
       kind: 'addedEntries' as const,
       at: 'initial.need_share',
-      where: { $key: `<need:${n}>`, need_id: `<need:${n}>`, participant_id: `<participant:${who(n)}@main>`, revoked_at: null },
+      where: {
+        $key: `<need:${n}>`,
+        need_id: `<need:${n}>`,
+        participant_id: `<participant:${who(n)}@main>`,
+        revoked_at: null,
+      },
       mustMatch: true,
       why: `R30: ${n} is shared in the repair fixture (scenario \`shared: { text }\`); the target writes its need_share row.`,
     })),
@@ -296,7 +301,11 @@ function initialRepairFixtureDeltas(): AllowRule[] {
     ...links.map(([i, n]) => ({
       kind: 'addedEntries' as const,
       at: 'initial.proposal_need',
-      where: { $key: `<proposalNeed:proposal:main#${i}/need:${n}>`, proposal_id: `<proposal:main#${i}>`, need_id: `<need:${n}>` },
+      where: {
+        $key: `<proposalNeed:proposal:main#${i}/need:${n}>`,
+        proposal_id: `<proposal:main#${i}>`,
+        need_id: `<need:${n}>`,
+      },
       mustMatch: true,
       why: `R30: proposal ${i} addresses ${n} — a proposal_need over need_share (today an unresolved label).`,
     })),
@@ -381,10 +390,21 @@ export const CHOICES_HIDDEN_UNTIL_SHARED_BYTE_TARGET_ALLOW: AllowList = {
     ...SHARED_RULES(false),
     ...targetByteRules({
       addedTables: [
-        { step: 21, table: 'participant_milestone', kind: 'added', count: 1, why: 'Bob’s choices_shared milestone (the old selectionSubmitted gate)' },
+        {
+          step: 21,
+          table: 'participant_milestone',
+          kind: 'added',
+          count: 1,
+          why: 'Bob’s choices_shared milestone (the old selectionSubmitted gate)',
+        },
       ],
       droppedTables: [
-        { step: 21, table: 'StageProgress', kind: 'changed', why: 'the selectionSubmitted gate update is a participant_milestone INSERT on the target' },
+        {
+          step: 21,
+          table: 'StageProgress',
+          kind: 'changed',
+          why: 'the selectionSubmitted gate update is a participant_milestone INSERT on the target',
+        },
       ],
     }),
   ],

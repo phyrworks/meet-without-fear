@@ -13,7 +13,12 @@
 // Mocks — must be declared before imports
 // ============================================================================
 
-jest.mock('../../lib/prisma');
+// TS-12: no Prisma mock. The orchestrator's two database touch points are
+// service modules — the user's memory preferences (user-settings) and the
+// turn-trace merge (brain-service, the job's writer) — mocked at that seam.
+jest.mock('../user-settings', () => ({
+  readPreferences: jest.fn(),
+}));
 jest.mock('../../lib/bedrock');
 jest.mock('../realtime', () => ({
   publishContextUpdated: jest.fn().mockResolvedValue(undefined),
@@ -24,6 +29,7 @@ jest.mock('../brain-service', () => ({
     startActivity: jest.fn().mockResolvedValue({ id: 'mock-activity-id' }),
     completeActivity: jest.fn().mockResolvedValue(undefined),
     failActivity: jest.fn().mockResolvedValue(undefined),
+    mergeTurnTrace: jest.fn().mockResolvedValue(undefined),
   },
   BrainActivityCallType: {
     ORCHESTRATED_RESPONSE: 'ORCHESTRATED_RESPONSE',
@@ -117,7 +123,12 @@ jest.mock('../dispatch-handler', () => ({
 
 import { orchestrateResponse, type OrchestratorContext } from '../ai-orchestrator';
 import { getModelCompletionWithTools } from '../../lib/bedrock';
-import { prisma } from '../../lib/prisma';
+import { readPreferences } from '../user-settings';
+import {
+  DEFAULT_MEMORY_PREFERENCES,
+  DEFAULT_NOTIFICATION_PREFERENCES,
+  DEFAULT_PRIVACY_PREFERENCES,
+} from '@meet-without-fear/shared';
 import { publishContextUpdated } from '../realtime';
 import { handleDispatch } from '../dispatch-handler';
 
@@ -202,13 +213,11 @@ describe('AI Orchestrator', () => {
     jest.clearAllMocks();
 
     // Default: user has no special memory preferences
-    (prisma.user.findUnique as jest.Mock).mockResolvedValue({
-      id: 'user-1',
-      memoryPreferences: null,
+    (readPreferences as jest.Mock).mockResolvedValue({
+      memory: DEFAULT_MEMORY_PREFERENCES,
+      notifications: DEFAULT_NOTIFICATION_PREFERENCES,
+      privacy: DEFAULT_PRIVACY_PREFERENCES,
     });
-
-    // Default: brainActivity lookups for storeTurnTrace
-    (prisma.brainActivity.findFirst as jest.Mock).mockResolvedValue(null);
   });
 
   // --------------------------------------------------------------------------
@@ -325,7 +334,7 @@ Take a look at that framing when you're ready.`;
       expect(publishContextUpdated).toHaveBeenCalledWith(
         'session-1',
         'user-1',
-        expect.any(String) // assembledAt timestamp
+        expect.any(String), // assembledAt timestamp
       );
     });
 
@@ -444,9 +453,7 @@ Take a look at that framing when you're ready.`;
         });
       }
 
-      const result = await orchestrateResponse(
-        buildContext({ conversationHistory: longHistory, turnCount: 40 })
-      );
+      const result = await orchestrateResponse(buildContext({ conversationHistory: longHistory, turnCount: 40 }));
 
       expect(result.usedMock).toBe(false);
 
@@ -614,9 +621,7 @@ Take a look at that framing when you're ready.`;
     it('returns dispatched response when dispatch tag is present', async () => {
       mockGetModelCompletion.mockResolvedValue(DISPATCH_RESPONSE);
 
-      const result = await orchestrateResponse(
-        buildContext({ userMessage: 'How does this process work?' })
-      );
+      const result = await orchestrateResponse(buildContext({ userMessage: 'How does this process work?' }));
 
       expect(result.dispatchTag).toBe('EXPLAIN_PROCESS');
       expect(result.usedMock).toBe(false);
@@ -625,9 +630,7 @@ Take a look at that framing when you're ready.`;
     it('includes initial response for two-message dispatch flow', async () => {
       mockGetModelCompletion.mockResolvedValue(DISPATCH_RESPONSE_WITH_INITIAL);
 
-      const result = await orchestrateResponse(
-        buildContext({ userMessage: 'What happens in this process?' })
-      );
+      const result = await orchestrateResponse(buildContext({ userMessage: 'What happens in this process?' }));
 
       expect(result.dispatchTag).toBe('EXPLAIN_PROCESS');
       // The initial response (text outside dispatch tags) is returned
@@ -638,9 +641,7 @@ Take a look at that framing when you're ready.`;
     it('calls handleDispatch with the correct tag', async () => {
       mockGetModelCompletion.mockResolvedValue(DISPATCH_RESPONSE);
 
-      await orchestrateResponse(
-        buildContext({ userMessage: 'How does this process work?' })
-      );
+      await orchestrateResponse(buildContext({ userMessage: 'How does this process work?' }));
 
       expect(handleDispatch).toHaveBeenCalledWith(
         'EXPLAIN_PROCESS',
@@ -648,7 +649,7 @@ Take a look at that framing when you're ready.`;
           userMessage: 'How does this process work?',
           sessionId: 'session-1',
           turnId: 'session-1-1',
-        })
+        }),
       );
     });
 

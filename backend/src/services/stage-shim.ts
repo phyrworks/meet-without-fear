@@ -39,10 +39,16 @@
  * empathy/needs/repair writers (TS-10, TS-11) must honour this.
  */
 
-import { prisma } from '../lib/prisma';
+import { prisma, type DbClient } from '../lib/prisma';
 
 /** Terminal milestone of each stage (stage index → key). */
-export const TERMINAL_MILESTONE = ['compact_signed', 'feel_heard', 'empathy_validated', 'needs_shared', 'closed'] as const;
+export const TERMINAL_MILESTONE = [
+  'compact_signed',
+  'feel_heard',
+  'empathy_validated',
+  'needs_shared',
+  'closed',
+] as const;
 
 export const LAST_STAGE = 4;
 
@@ -176,9 +182,12 @@ export function latestStageRow(rows: ShimStageRow[]): ShimStageRow | null {
 // ----------------------------------------------------------------------------
 
 /** `v_current_stage` for these participants. */
-export async function loadCurrentStages(participantIds: string[]): Promise<Map<string, CurrentStage>> {
+export async function loadCurrentStages(
+  participantIds: string[],
+  client: DbClient = prisma,
+): Promise<Map<string, CurrentStage>> {
   if (participantIds.length === 0) return new Map();
-  const rows = await prisma.$queryRaw<
+  const rows = await client.$queryRaw<
     Array<{
       participant_id: string;
       milestone_key: string | null;
@@ -205,10 +214,13 @@ export async function loadCurrentStages(participantIds: string[]): Promise<Map<s
 }
 
 /** Milestones reached, per participant, oldest first. */
-export async function loadMilestones(participantIds: string[]): Promise<Map<string, MilestoneReached[]>> {
+export async function loadMilestones(
+  participantIds: string[],
+  client: DbClient = prisma,
+): Promise<Map<string, MilestoneReached[]>> {
   const out = new Map<string, MilestoneReached[]>(participantIds.map(id => [id, []]));
   if (participantIds.length === 0) return out;
-  const rows = await prisma.participantMilestone.findMany({
+  const rows = await client.participantMilestone.findMany({
     where: { participantId: { in: participantIds } },
     orderBy: [{ reachedAt: 'asc' }, { milestoneKey: 'asc' }],
     select: { participantId: true, milestoneKey: true, reachedAt: true },
@@ -220,9 +232,11 @@ export async function loadMilestones(participantIds: string[]): Promise<Map<stri
 /** Everything the DTO shim needs about each participant's progress. */
 export async function loadStageStates(
   participants: Array<{ id: string; joinedAt: Date | null }>,
+  /** The connection to read with (the ops dashboard passes mwf_ops; default the app's). */
+  client: DbClient = prisma,
 ): Promise<Map<string, ParticipantStageState>> {
   const ids = participants.map(p => p.id);
-  const [currents, milestones] = await Promise.all([loadCurrentStages(ids), loadMilestones(ids)]);
+  const [currents, milestones] = await Promise.all([loadCurrentStages(ids, client), loadMilestones(ids, client)]);
   const out = new Map<string, ParticipantStageState>();
   for (const p of participants) {
     const current = currents.get(p.id) ?? {

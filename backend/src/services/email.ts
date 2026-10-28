@@ -27,7 +27,7 @@ export interface EmailResult {
 export async function sendInvitationEmail(
   to: string,
   inviterName: string,
-  invitationUrl: string
+  invitationUrl: string,
 ): Promise<EmailResult> {
   if (!process.env.RESEND_API_KEY) {
     logger.error('[Email] RESEND_API_KEY not configured');
@@ -156,5 +156,5 @@ function escapeHtml(text: string): string {
     '"': '&quot;',
     "'": '&#x27;',
   };
-  return text.replace(/[&<>"']/g, (char) => htmlEscapes[char] || char);
+  return text.replace(/[&<>"']/g, char => htmlEscapes[char] || char);
 }

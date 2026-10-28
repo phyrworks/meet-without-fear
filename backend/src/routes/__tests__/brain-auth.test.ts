@@ -3,7 +3,6 @@ import request from 'supertest';
 import brainRoutes from '../brain';
 import { verifyToken } from '@clerk/express';
 
-jest.mock('../../lib/prisma');
 jest.mock('@clerk/express', () => ({
   verifyToken: jest.fn(),
 }));
@@ -40,9 +39,7 @@ describe('brain dashboard auth', () => {
     process.env.DASHBOARD_ALLOWED_USER_IDS = 'user_allowed,user_other';
     verifyTokenMock.mockResolvedValue({ sub: 'user_allowed' } as any);
 
-    const res = await request(createApp())
-      .get('/brain/ably-token')
-      .set('Authorization', 'Bearer valid-token');
+    const res = await request(createApp()).get('/brain/ably-token').set('Authorization', 'Bearer valid-token');
 
     expect(res.status).toBe(503);
     expect(res.body.error).toMatchObject({ code: 'NOT_CONFIGURED', message: 'Ably not configured' });
@@ -52,9 +49,7 @@ describe('brain dashboard auth', () => {
     process.env.DASHBOARD_ALLOWED_EMAILS = 'admin@example.com';
     verifyTokenMock.mockResolvedValue({ sub: 'user_any', email: 'Admin@Example.com' } as any);
 
-    const res = await request(createApp())
-      .get('/brain/ably-token')
-      .set('Authorization', 'Bearer valid-token');
+    const res = await request(createApp()).get('/brain/ably-token').set('Authorization', 'Bearer valid-token');
 
     expect(res.status).toBe(503);
     expect(res.body.error).toMatchObject({ code: 'NOT_CONFIGURED', message: 'Ably not configured' });
@@ -65,9 +60,7 @@ describe('brain dashboard auth', () => {
     process.env.DASHBOARD_ALLOWED_EMAILS = 'admin@example.com';
     verifyTokenMock.mockResolvedValue({ sub: 'user_blocked', email: 'blocked@example.com' } as any);
 
-    const res = await request(createApp())
-      .get('/brain/ably-token')
-      .set('Authorization', 'Bearer valid-token');
+    const res = await request(createApp()).get('/brain/ably-token').set('Authorization', 'Bearer valid-token');
 
     expect(res.status).toBe(403);
     expect(res.body.error).toMatchObject({ code: 'FORBIDDEN', message: 'Not authorized for dashboard access' });
@@ -77,9 +70,7 @@ describe('brain dashboard auth', () => {
     process.env.DASHBOARD_ALLOWED_USER_IDS = 'user_allowed';
     verifyTokenMock.mockResolvedValue({ sub: 'user_blocked' } as any);
 
-    const res = await request(createApp())
-      .get('/brain/ably-token')
-      .set('Authorization', 'Bearer valid-token');
+    const res = await request(createApp()).get('/brain/ably-token').set('Authorization', 'Bearer valid-token');
 
     expect(res.status).toBe(403);
     expect(res.body.error).toMatchObject({ code: 'FORBIDDEN', message: 'Not authorized for dashboard access' });

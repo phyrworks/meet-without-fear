@@ -12,16 +12,13 @@
 import { openDueTendingEntries, processDueTendingReminders } from '../services/tending.service';
 
 async function main(): Promise<void> {
-  const [entries, reminders] = await Promise.all([
-    openDueTendingEntries(),
-    processDueTendingReminders(),
-  ]);
+  const [entries, reminders] = await Promise.all([openDueTendingEntries(), processDueTendingReminders()]);
   // eslint-disable-next-line no-console
   console.log(JSON.stringify({ ok: true, entries, reminders }, null, 2));
 }
 
 main()
-  .catch((err) => {
+  .catch(err => {
     // eslint-disable-next-line no-console
     console.error('[open-due-tending-entries] failed:', err);
     process.exit(1);

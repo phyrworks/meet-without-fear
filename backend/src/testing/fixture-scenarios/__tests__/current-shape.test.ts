@@ -197,7 +197,13 @@ describe('stageProgressPlan — milestone set → StageProgress rows', () => {
     const p: ParticipantScenario = {
       key: 'a',
       journey: {},
-      milestones: { compact_signed: at(-4), feel_heard: at(-3), empathy_validated: at(-2), needs_shared: at(-1), choices_shared: at(0) },
+      milestones: {
+        compact_signed: at(-4),
+        feel_heard: at(-3),
+        empathy_validated: at(-2),
+        needs_shared: at(-1),
+        choices_shared: at(0),
+      },
     };
     expect(() => stageProgressPlan(p, base([p]))).toThrow(/choices_shared needs choices/);
   });
@@ -452,7 +458,11 @@ describe('scenarios', () => {
         const s = scenarioFor(stage, { a: names.a, b: withB ? names.b : undefined });
         for (const p of s.participants) {
           const expected = stage === TargetStage.TOMBSTONE_READY ? (p.needs ?? []).map((_, k) => k) : [];
-          expect({ stage, p: p.key, consents: needShareConsents(s, p) }).toEqual({ stage, p: p.key, consents: expected });
+          expect({ stage, p: p.key, consents: needShareConsents(s, p) }).toEqual({
+            stage,
+            p: p.key,
+            consents: expected,
+          });
         }
       }
     }

@@ -91,11 +91,8 @@ function cleanNeedText(value: unknown): string {
 
 const toDTO = (row: NeedRow): IdentifiedNeedDTO => toIdentifiedNeedDTO(row);
 
-export function previewNeedEditOperations(
-  operations: NeedEditOperation[],
-  needs: NeedRow[]
-): AffectedNeed[] {
-  const byId = new Map(needs.map((need) => [need.id, need]));
+export function previewNeedEditOperations(operations: NeedEditOperation[], needs: NeedRow[]): AffectedNeed[] {
+  const byId = new Map(needs.map(need => [need.id, need]));
   const affected: AffectedNeed[] = [];
 
   for (const operation of operations) {
@@ -151,7 +148,7 @@ export function previewNeedEditOperations(
 export async function applyNeedEdits(
   sessionId: string,
   userId: string,
-  operations: NeedEditOperation[]
+  operations: NeedEditOperation[],
 ): Promise<ApplyNeedEditsResponse> {
   if (!Array.isArray(operations) || operations.length === 0) {
     throw new NeedEditValidationError('At least one edit operation is required.');
@@ -159,14 +156,14 @@ export async function applyNeedEdits(
 
   const participant = await assertNeedsEditable(sessionId, userId);
 
-  const applied = await prisma.$transaction(async (tx) => {
+  const applied = await prisma.$transaction(async tx => {
     const currentNeeds = await ownNeeds(participant.id, tx, { deletedAt: null });
     const preview = previewNeedEditOperations(operations, currentNeeds);
     const now = new Date();
 
     for (const operation of operations) {
       if (operation.type === 'updateNeedText') {
-        const current = currentNeeds.find((need) => need.id === operation.needId);
+        const current = currentNeeds.find(need => need.id === operation.needId);
         if (!current || !operation.needId) continue;
         await updateNeed(tx, operation.needId, {
           label: cleanNeedText(operation.newText),
@@ -199,7 +196,7 @@ export async function applyNeedEdits(
   return {
     needs: needs.map(toDTO),
     applied,
-    warnings: applied.map((item) => item.warning).filter((warning): warning is string => Boolean(warning)),
+    warnings: applied.map(item => item.warning).filter((warning): warning is string => Boolean(warning)),
   };
 }
 
@@ -213,11 +210,11 @@ export async function deleteNeed(sessionId: string, userId: string, needId: stri
 export async function applyNeedAction(
   sessionId: string,
   userId: string,
-  action: ParsedNeedAction
+  action: ParsedNeedAction,
 ): Promise<ApplyNeedActionResponse> {
   const participant = await assertNeedsEditable(sessionId, userId);
 
-  const result = await prisma.$transaction(async (tx) => {
+  const result = await prisma.$transaction(async tx => {
     if (action.type === 'refine') {
       const oldNeedId = action.supersedes;
       if (!oldNeedId) throw new NeedEditValidationError('Refine action requires supersedes.');
@@ -233,12 +230,12 @@ export async function applyNeedAction(
             label: text,
             category: normalizeCategory(action.category, current.category),
             evidence: Array.isArray(action.evidence)
-              ? action.evidence.map((entry) => cleanVisibleAIText(entry)).filter(Boolean)
+              ? action.evidence.map(entry => cleanVisibleAIText(entry)).filter(Boolean)
               : current.evidence,
             aiConfidence: 0.9,
           },
           select: NEED_SELECT,
-        })) as NeedRecord
+        })) as NeedRecord,
       );
       const oldNeed = await updateNeed(tx, current.id, { supersededByNeed: { connect: { id: newNeed.id } } });
       return { oldNeed, newNeed };
@@ -255,7 +252,10 @@ export async function applyNeedAction(
     }
 
     const now = new Date();
-    const locked = await updateNeed(tx, current.id, { lockedAt: now, confirmedAt: current.confirmed ? undefined : now });
+    const locked = await updateNeed(tx, current.id, {
+      lockedAt: now,
+      confirmedAt: current.confirmed ? undefined : now,
+    });
     return { oldNeed: locked, newNeed: locked };
   });
 

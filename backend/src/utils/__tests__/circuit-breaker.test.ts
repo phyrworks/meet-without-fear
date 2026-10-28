@@ -44,7 +44,9 @@ describe('CircuitBreaker', () => {
     });
 
     it('records failures but stays CLOSED below threshold', async () => {
-      const failingOp = async () => { throw new Error('fail'); };
+      const failingOp = async () => {
+        throw new Error('fail');
+      };
 
       // Fail twice (threshold is 3)
       await expect(breaker.execute(failingOp)).rejects.toThrow('fail');
@@ -57,7 +59,9 @@ describe('CircuitBreaker', () => {
     });
 
     it('resets consecutive failures on success', async () => {
-      const failingOp = async () => { throw new Error('fail'); };
+      const failingOp = async () => {
+        throw new Error('fail');
+      };
 
       // Fail twice
       await expect(breaker.execute(failingOp)).rejects.toThrow();
@@ -75,7 +79,9 @@ describe('CircuitBreaker', () => {
 
   describe('CLOSED -> OPEN transition', () => {
     it('opens circuit after reaching failure threshold', async () => {
-      const failingOp = async () => { throw new Error('fail'); };
+      const failingOp = async () => {
+        throw new Error('fail');
+      };
 
       for (let i = 0; i < 3; i++) {
         await expect(breaker.execute(failingOp)).rejects.toThrow('fail');
@@ -87,7 +93,9 @@ describe('CircuitBreaker', () => {
     });
 
     it('fast-fails with CircuitOpenError when OPEN', async () => {
-      const failingOp = async () => { throw new Error('fail'); };
+      const failingOp = async () => {
+        throw new Error('fail');
+      };
 
       // Trip the breaker
       for (let i = 0; i < 3; i++) {
@@ -95,8 +103,7 @@ describe('CircuitBreaker', () => {
       }
 
       // Next call should fast-fail
-      await expect(breaker.execute(async () => 'should not run'))
-        .rejects.toThrow(CircuitOpenError);
+      await expect(breaker.execute(async () => 'should not run')).rejects.toThrow(CircuitOpenError);
     });
   });
 
@@ -110,7 +117,9 @@ describe('CircuitBreaker', () => {
         timeoutMs: 0,
       });
 
-      const failingOp = async () => { throw new Error('fail'); };
+      const failingOp = async () => {
+        throw new Error('fail');
+      };
 
       // Trip it
       await expect(fastBreaker.execute(failingOp)).rejects.toThrow();
@@ -118,7 +127,7 @@ describe('CircuitBreaker', () => {
       expect(fastBreaker.getStats().state).toBe(CircuitState.OPEN);
 
       // Wait for cooldown
-      await new Promise((r) => setTimeout(r, 60));
+      await new Promise(r => setTimeout(r, 60));
 
       const stats = fastBreaker.getStats();
       expect(stats.state).toBe(CircuitState.HALF_OPEN);
@@ -136,12 +145,14 @@ describe('CircuitBreaker', () => {
         timeoutMs: 0,
       });
 
-      const failingOp = async () => { throw new Error('fail'); };
+      const failingOp = async () => {
+        throw new Error('fail');
+      };
       await expect(fastBreaker.execute(failingOp)).rejects.toThrow();
       await expect(fastBreaker.execute(failingOp)).rejects.toThrow();
 
       // Wait for cooldown
-      await new Promise((r) => setTimeout(r, 60));
+      await new Promise(r => setTimeout(r, 60));
       expect(fastBreaker.getStats().state).toBe(CircuitState.HALF_OPEN);
     });
 
@@ -153,7 +164,9 @@ describe('CircuitBreaker', () => {
 
     it('re-opens circuit on probe failure', async () => {
       await expect(
-        fastBreaker.execute(async () => { throw new Error('probe-fail'); })
+        fastBreaker.execute(async () => {
+          throw new Error('probe-fail');
+        }),
       ).rejects.toThrow('probe-fail');
 
       expect(fastBreaker.getStats().state).toBe(CircuitState.OPEN);
@@ -162,33 +175,28 @@ describe('CircuitBreaker', () => {
 
   describe('executeWithFallback', () => {
     it('returns result on success', async () => {
-      const result = await breaker.executeWithFallback(
-        async () => 42,
-        -1,
-      );
+      const result = await breaker.executeWithFallback(async () => 42, -1);
       expect(result).toBe(42);
     });
 
     it('returns fallback on failure', async () => {
-      const result = await breaker.executeWithFallback(
-        async () => { throw new Error('fail'); },
-        -1,
-      );
+      const result = await breaker.executeWithFallback(async () => {
+        throw new Error('fail');
+      }, -1);
       expect(result).toBe(-1);
     });
 
     it('returns fallback when circuit is OPEN', async () => {
-      const failingOp = async () => { throw new Error('fail'); };
+      const failingOp = async () => {
+        throw new Error('fail');
+      };
 
       // Trip the breaker
       for (let i = 0; i < 3; i++) {
         await breaker.executeWithFallback(failingOp, null);
       }
 
-      const result = await breaker.executeWithFallback(
-        async () => 'should not run',
-        'fallback-value',
-      );
+      const result = await breaker.executeWithFallback(async () => 'should not run', 'fallback-value');
       expect(result).toBe('fallback-value');
     });
   });
@@ -222,7 +230,7 @@ describe('CircuitBreaker', () => {
       fastBreaker.recordFailure();
       expect(fastBreaker.getStats().state).toBe(CircuitState.OPEN);
 
-      await new Promise((r) => setTimeout(r, 60));
+      await new Promise(r => setTimeout(r, 60));
       expect(fastBreaker.getStats().state).toBe(CircuitState.HALF_OPEN);
 
       fastBreaker.recordSuccess();
@@ -232,7 +240,9 @@ describe('CircuitBreaker', () => {
 
   describe('reset', () => {
     it('resets circuit to CLOSED state', async () => {
-      const failingOp = async () => { throw new Error('fail'); };
+      const failingOp = async () => {
+        throw new Error('fail');
+      };
 
       // Trip the breaker
       for (let i = 0; i < 3; i++) {
@@ -252,7 +262,7 @@ describe('CircuitBreaker', () => {
   describe('timeout handling', () => {
     it('times out slow operations', async () => {
       const slowOp = async () => {
-        await new Promise((r) => setTimeout(r, 1000));
+        await new Promise(r => setTimeout(r, 1000));
         return 'too slow';
       };
 
@@ -310,26 +320,20 @@ describe('withHaikuCircuitBreaker (legacy API)', () => {
   });
 
   it('returns result on success', async () => {
-    const result = await withHaikuCircuitBreaker(
-      async () => 'hello',
-      'fallback',
-      'test-op',
-    );
+    const result = await withHaikuCircuitBreaker(async () => 'hello', 'fallback', 'test-op');
     expect(result).toBe('hello');
   });
 
   it('returns fallback when operation returns null', async () => {
-    const result = await withHaikuCircuitBreaker(
-      async () => null,
-      'fallback',
-      'test-op',
-    );
+    const result = await withHaikuCircuitBreaker(async () => null, 'fallback', 'test-op');
     expect(result).toBe('fallback');
   });
 
   it('returns fallback when operation throws', async () => {
     const result = await withHaikuCircuitBreaker(
-      async () => { throw new Error('boom'); },
+      async () => {
+        throw new Error('boom');
+      },
       'fallback',
       'test-op',
     );

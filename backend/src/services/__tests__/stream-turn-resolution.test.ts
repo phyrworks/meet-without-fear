@@ -75,7 +75,7 @@ describe('stream-turn-resolution', () => {
         params({
           metadata: { offerFeelHeardCheck: true },
           captured: captured({ thinking: 'FeelHeardCheck:N' }),
-        })
+        }),
       );
 
       expect(result.metadata.offerFeelHeardCheck).toBe(true);
@@ -83,7 +83,7 @@ describe('stream-turn-resolution', () => {
 
     it('backfills booleans from the thinking block only when the tool left them undefined', async () => {
       const result = await resolveStreamTurn(
-        params({ metadata: {}, captured: captured({ thinking: 'FeelHeardCheck:Y ReadyShare:Y' }) })
+        params({ metadata: {}, captured: captured({ thinking: 'FeelHeardCheck:Y ReadyShare:Y' }) }),
       );
 
       expect(result.metadata.offerFeelHeardCheck).toBe(true);
@@ -95,7 +95,7 @@ describe('stream-turn-resolution', () => {
     // reason (nothing to overwrite rather than tool-wins).
     it('uses a Stage 3 need from the tag when the tool captured none', async () => {
       const result = await resolveStreamTurn(
-        params({ currentStage: 3, metadata: {}, captured: captured({ need: NEED_TAG_JSON }) })
+        params({ currentStage: 3, metadata: {}, captured: captured({ need: NEED_TAG_JSON }) }),
       );
 
       expect(result.metadata.proposedNeed).toMatchObject({ need: 'from tag' });
@@ -109,7 +109,7 @@ describe('stream-turn-resolution', () => {
           // Identical, parseable input to the control above — so the only
           // difference is that the tool already captured a need.
           captured: captured({ need: NEED_TAG_JSON }),
-        })
+        }),
       );
 
       expect(result.metadata.proposedNeed).toMatchObject({ need: 'from tool' });
@@ -121,24 +121,20 @@ describe('stream-turn-resolution', () => {
     // input is captured at Stage 3 and ignored at Stage 1. Either half alone
     // would pass with the guard deleted.
     it('captures a parseable <need> tag when the caller is in Stage 3', async () => {
-      const result = await resolveStreamTurn(
-        params({ currentStage: 3, captured: captured({ need: NEED_TAG_JSON }) })
-      );
+      const result = await resolveStreamTurn(params({ currentStage: 3, captured: captured({ need: NEED_TAG_JSON }) }));
 
       expect(result.metadata.proposedNeed).toMatchObject({ need: 'from tag' });
     });
 
     it('ignores the same <need> tag when the caller is not in Stage 3', async () => {
-      const result = await resolveStreamTurn(
-        params({ currentStage: 1, captured: captured({ need: NEED_TAG_JSON }) })
-      );
+      const result = await resolveStreamTurn(params({ currentStage: 1, captured: captured({ need: NEED_TAG_JSON }) }));
 
       expect(result.metadata.proposedNeed).toBeUndefined();
     });
 
     it('treats a <draft> as the empathy statement in Stage 2', async () => {
       const result = await resolveStreamTurn(
-        params({ currentStage: 2, captured: captured({ draft: 'You felt dismissed.' }) })
+        params({ currentStage: 2, captured: captured({ draft: 'You felt dismissed.' }) }),
       );
 
       expect(result.metadata.proposedEmpathyStatement).toBe('You felt dismissed.');
@@ -147,7 +143,7 @@ describe('stream-turn-resolution', () => {
 
     it('treats a <draft> as the topic frame in Stage 0', async () => {
       const result = await resolveStreamTurn(
-        params({ currentStage: 0, captured: captured({ draft: '  chores and fairness  ' }) })
+        params({ currentStage: 0, captured: captured({ draft: '  chores and fairness  ' }) }),
       );
 
       expect(result.metadata.topicFrame).toBe('chores and fairness');
@@ -156,7 +152,7 @@ describe('stream-turn-resolution', () => {
 
     it('treats a <draft> as the topic frame during the invitation phase at any stage', async () => {
       const result = await resolveStreamTurn(
-        params({ currentStage: 1, isInvitationPhase: true, captured: captured({ draft: 'the trip' }) })
+        params({ currentStage: 1, isInvitationPhase: true, captured: captured({ draft: 'the trip' }) }),
       );
 
       expect(result.metadata.topicFrame).toBe('the trip');
@@ -175,7 +171,7 @@ describe('stream-turn-resolution', () => {
           currentStage: 4,
           metadata: { stage4WalkthroughAction: walkthrough, stage4Proposals: [{ description: 'x' }] },
           accumulatedText: 'Which of those did you mean?',
-        })
+        }),
       );
 
       expect(result.metadata.stage4WalkthroughAction).toMatchObject({
@@ -191,7 +187,7 @@ describe('stream-turn-resolution', () => {
           currentStage: 4,
           metadata: { stage4WalkthroughAction: walkthrough },
           accumulatedText: 'Got it, I have recorded that.',
-        })
+        }),
       );
 
       expect(result.metadata.stage4WalkthroughAction).toMatchObject({ action: 'COVERED' });
@@ -203,7 +199,7 @@ describe('stream-turn-resolution', () => {
           currentStage: 3,
           metadata: { stage4WalkthroughAction: walkthrough },
           accumulatedText: 'Which one did you mean?',
-        })
+        }),
       );
 
       expect(result.metadata.stage4WalkthroughAction).toMatchObject({ action: 'COVERED' });
@@ -215,7 +211,7 @@ describe('stream-turn-resolution', () => {
           currentStage: 4,
           metadata: { stage4WalkthroughAction: { action: 'NONE' } as any },
           accumulatedText: 'Do you mean the weekly one?',
-        })
+        }),
       );
 
       expect(result.metadata.stage4WalkthroughAction).toMatchObject({ action: 'NONE' });
@@ -229,7 +225,7 @@ describe('stream-turn-resolution', () => {
       const emitVisibleChunk = jest.fn();
 
       const result = await resolveStreamTurn(
-        params({ captured: captured({ dispatch: 'SEND_INVITATION' }), emitVisibleChunk })
+        params({ captured: captured({ dispatch: 'SEND_INVITATION' }), emitVisibleChunk }),
       );
 
       expect(result.accumulatedText).toBe('Dispatched answer.');
@@ -248,7 +244,7 @@ describe('stream-turn-resolution', () => {
           captured: captured({ dispatch: 'NOT_A_REAL_TAG' }),
           accumulatedText: 'Original streamed text.',
           emitVisibleChunk,
-        })
+        }),
       );
 
       expect(result.accumulatedText).toBe('Original streamed text.');
@@ -259,26 +255,22 @@ describe('stream-turn-resolution', () => {
     it('passes session join state into the dispatch context', async () => {
       (handleDispatch as jest.Mock).mockResolvedValue('ok');
 
-      await resolveStreamTurn(
-        params({ captured: captured({ dispatch: 'X' }), session: { status: 'CREATED' } })
-      );
+      await resolveStreamTurn(params({ captured: captured({ dispatch: 'X' }), session: { status: 'CREATED' } }));
 
       expect(handleDispatch).toHaveBeenCalledWith(
         'X',
-        expect.objectContaining({ invitationSent: false, partnerJoined: false })
+        expect.objectContaining({ invitationSent: false, partnerJoined: false }),
       );
     });
 
     it('marks the invitation as sent and the partner joined for an ACTIVE session', async () => {
       (handleDispatch as jest.Mock).mockResolvedValue('ok');
 
-      await resolveStreamTurn(
-        params({ captured: captured({ dispatch: 'X' }), session: { status: 'ACTIVE' } })
-      );
+      await resolveStreamTurn(params({ captured: captured({ dispatch: 'X' }), session: { status: 'ACTIVE' } }));
 
       expect(handleDispatch).toHaveBeenCalledWith(
         'X',
-        expect.objectContaining({ invitationSent: true, partnerJoined: true })
+        expect.objectContaining({ invitationSent: true, partnerJoined: true }),
       );
     });
 
@@ -291,23 +283,21 @@ describe('stream-turn-resolution', () => {
 
   describe('empty-response guard', () => {
     it('throws rather than resolving a turn with no visible text', async () => {
-      await expect(
-        resolveStreamTurn(params({ accumulatedText: '   ' }))
-      ).rejects.toThrow('AI response was empty after tag stripping');
+      await expect(resolveStreamTurn(params({ accumulatedText: '   ' }))).rejects.toThrow(
+        'AI response was empty after tag stripping',
+      );
     });
 
     it('throws when the response was only hidden tags', async () => {
       await expect(
-        resolveStreamTurn(params({ accumulatedText: '', captured: captured({ thinking: 'planning' }) }))
+        resolveStreamTurn(params({ accumulatedText: '', captured: captured({ thinking: 'planning' }) })),
       ).rejects.toThrow('AI response was empty after tag stripping');
     });
 
     it('sends nothing to the client when the turn fails the guard', async () => {
       const emitVisibleChunk = jest.fn();
 
-      await expect(
-        resolveStreamTurn(params({ accumulatedText: '', emitVisibleChunk }))
-      ).rejects.toThrow();
+      await expect(resolveStreamTurn(params({ accumulatedText: '', emitVisibleChunk }))).rejects.toThrow();
 
       expect(emitVisibleChunk).not.toHaveBeenCalled();
     });
@@ -322,9 +312,7 @@ describe('stream-turn-resolution', () => {
     it('leaves already-merged metadata mutations in place when the guard throws', async () => {
       const metadata: SessionStateToolInput = {};
 
-      await expect(
-        resolveStreamTurn(params({ accumulatedText: '', metadata }))
-      ).rejects.toThrow();
+      await expect(resolveStreamTurn(params({ accumulatedText: '', metadata }))).rejects.toThrow();
 
       expect(metadata.offerFeelHeardCheck).toBe(false);
     });
@@ -339,7 +327,7 @@ describe('stream-turn-resolution', () => {
 
   it('scrubs planner prose out of the persisted visible text', async () => {
     const result = await resolveStreamTurn(
-      params({ accumulatedText: "I should ask about the weekend.\nWhat happened over the weekend?" })
+      params({ accumulatedText: 'I should ask about the weekend.\nWhat happened over the weekend?' }),
     );
 
     expect(result.accumulatedText).not.toMatch(/I should/);

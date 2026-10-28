@@ -1,8 +1,15 @@
-import { PrismaClient } from '../generated/prisma/client';
+import { PrismaClient, type Prisma } from '../generated/prisma/client';
 import { withEncryption } from './prisma-encryption-middleware';
 import { createPrismaPgAdapter } from './prisma-pg';
 import type { DatabaseRole } from './database-urls';
 import { bindIdentity, identityBindingEnabled, keepRequestContextAcrossBatching } from './prisma-identity';
+
+/**
+ * A client a writer may be handed: the root client, or the client of an
+ * interactive transaction (`$transaction(async tx => …)`), which has every
+ * model delegate but no `$transaction`/`$connect` of its own.
+ */
+export type DbClient = PrismaClient | Prisma.TransactionClient;
 
 export interface PrismaClientOptions {
   /** Connect with this URL instead of the role's environment variable. */
@@ -31,7 +38,7 @@ export function createPrismaClient({ url, role = 'app' }: PrismaClientOptions = 
   // Cast back to PrismaClient so all existing $transaction call sites
   // continue to type-check correctly. The $extends middleware is still
   // active at runtime — this is a type-only cast.
-  return withEncryption(base) as unknown as PrismaClient;
+  return withEncryption(base) as PrismaClient;
 }
 
 const globalForPrisma = globalThis as unknown as {
@@ -58,11 +65,27 @@ export function getJobPrisma(): PrismaClient {
   return globalForJob.jobPrisma;
 }
 
+/**
+ * The ops connection (`OPS_DATABASE_URL`, `mwf_ops`; REQUIRED — it fails
+ * closed when unset, never the root DATABASE_URL): the read-only Neural Monitor dashboard
+ * (routes/brain.ts; TS-12). mwf_ops holds SELECT on the tables the dashboard
+ * reads and nothing else (trailer T7). Created on first use.
+ */
+const globalForOps = globalThis as unknown as { opsPrisma: PrismaClient | undefined };
+
+export function getOpsPrisma(): PrismaClient {
+  if (!globalForOps.opsPrisma) globalForOps.opsPrisma = createPrismaClient({ role: 'ops' });
+  return globalForOps.opsPrisma;
+}
+
 /** Disconnect the job client if one was opened (tests, shutdown). */
 export async function disconnectJobPrisma(): Promise<void> {
   const client = globalForJob.jobPrisma;
   globalForJob.jobPrisma = undefined;
   await client?.$disconnect();
+  const ops = globalForOps.opsPrisma;
+  globalForOps.opsPrisma = undefined;
+  await ops?.$disconnect();
 }
 
 export default prisma;

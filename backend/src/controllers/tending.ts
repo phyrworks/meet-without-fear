@@ -48,52 +48,72 @@ const submitTendingCheckinSchema = z.object({
       continueChoice: z.nativeEnum(ContinueChoice),
       nextAction: z.nativeEnum(TendingNextAction).optional(),
       partialClosure: z.record(z.string(), z.nativeEnum(PartialClosureResolution)).optional(),
-      reminders: z.array(z.object({
+      reminders: z
+        .array(
+          z.object({
+            tendingEntryId: z.string().optional(),
+            scope: z.nativeEnum(TendingReminderScope),
+            remindAt: z.string().datetime(),
+            cadence: z.string().max(80).optional(),
+            note: z.string().max(1000).optional(),
+          }),
+        )
+        .optional(),
+    }),
+  }),
+  entryOutcomes: z
+    .array(
+      z.object({
+        tendingEntryId: z.string(),
+        followThroughStatus: z.nativeEnum(TendingFollowThroughStatus),
+        helpfulnessStatus: z.nativeEnum(TendingHelpfulnessStatus).optional(),
+        blockerCategories: z.array(z.nativeEnum(TendingBlockerCategory)).optional(),
+        whatHappened: z.string().max(2000).optional(),
+        helpedNeed: z.string().max(2000).optional(),
+        blockerNote: z.string().max(2000).optional(),
+        stillWorthTrying: z.boolean().optional(),
+        note: z.string().max(2000).optional(),
+      }),
+    )
+    .optional(),
+  needOutcomes: z
+    .array(
+      z.object({
+        needId: z.string().optional(),
+        needLabel: z.string().min(1).max(500),
+        sourceUserId: z.string().optional(),
+        resolutionStatus: z.nativeEnum(TendingNeedResolutionStatus),
+        note: z.string().max(2000).optional(),
+        changedNeedLabel: z.string().max(500).optional(),
+        nextAction: z.nativeEnum(TendingNextAction).optional(),
+      }),
+    )
+    .optional(),
+  reminders: z
+    .array(
+      z.object({
         tendingEntryId: z.string().optional(),
         scope: z.nativeEnum(TendingReminderScope),
         remindAt: z.string().datetime(),
         cadence: z.string().max(80).optional(),
         note: z.string().max(1000).optional(),
-      })).optional(),
-    }),
-  }),
-  entryOutcomes: z.array(z.object({
-    tendingEntryId: z.string(),
-    followThroughStatus: z.nativeEnum(TendingFollowThroughStatus),
-    helpfulnessStatus: z.nativeEnum(TendingHelpfulnessStatus).optional(),
-    blockerCategories: z.array(z.nativeEnum(TendingBlockerCategory)).optional(),
-    whatHappened: z.string().max(2000).optional(),
-    helpedNeed: z.string().max(2000).optional(),
-    blockerNote: z.string().max(2000).optional(),
-    stillWorthTrying: z.boolean().optional(),
-    note: z.string().max(2000).optional(),
-  })).optional(),
-  needOutcomes: z.array(z.object({
-    needId: z.string().optional(),
-    needLabel: z.string().min(1).max(500),
-    sourceUserId: z.string().optional(),
-    resolutionStatus: z.nativeEnum(TendingNeedResolutionStatus),
-    note: z.string().max(2000).optional(),
-    changedNeedLabel: z.string().max(500).optional(),
-    nextAction: z.nativeEnum(TendingNextAction).optional(),
-  })).optional(),
-  reminders: z.array(z.object({
-    tendingEntryId: z.string().optional(),
-    scope: z.nativeEnum(TendingReminderScope),
-    remindAt: z.string().datetime(),
-    cadence: z.string().max(80).optional(),
-    note: z.string().max(1000).optional(),
-  })).optional(),
-  adjustments: z.array(z.object({
-    tendingEntryId: z.string(),
-    privacyScope: z.nativeEnum(TendingReminderScope).optional(),
-    revisedCommitmentText: z.string().max(2000).optional(),
-    revisedCadence: z.string().max(200).optional(),
-    revisedScope: z.string().max(1000).optional(),
-    revisedSuccessCriteria: z.string().max(1000).optional(),
-    reason: z.string().max(2000).optional(),
-    blockerAddressed: z.array(z.nativeEnum(TendingBlockerCategory)).optional(),
-  })).optional(),
+      }),
+    )
+    .optional(),
+  adjustments: z
+    .array(
+      z.object({
+        tendingEntryId: z.string(),
+        privacyScope: z.nativeEnum(TendingReminderScope).optional(),
+        revisedCommitmentText: z.string().max(2000).optional(),
+        revisedCadence: z.string().max(200).optional(),
+        revisedScope: z.string().max(1000).optional(),
+        revisedSuccessCriteria: z.string().max(1000).optional(),
+        reason: z.string().max(2000).optional(),
+        blockerAddressed: z.array(z.nativeEnum(TendingBlockerCategory)).optional(),
+      }),
+    )
+    .optional(),
   includedBetweenPeriodNoteIds: z.array(z.string()).optional(),
   shareBetweenPeriodNoteIds: z.array(z.string()).optional(),
   nextAction: z.nativeEnum(TendingNextAction).optional(),

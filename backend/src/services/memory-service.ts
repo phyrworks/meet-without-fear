@@ -1,5 +1,5 @@
 import { prisma } from '../lib/prisma';
-import { UserMemory, MemoryStatus, MemorySource, MemoryCategory } from '../generated/prisma/client';
+import { MemoryStatus, MemorySource, MemoryCategory } from '../generated/prisma/client';
 
 export const memoryService = {
   /**
@@ -10,7 +10,7 @@ export const memoryService = {
     sessionId?: string;
     content: string;
     category: MemoryCategory;
-    suggestedBy?: string; // AI confidence/logic summary
+    suggestedText?: string; // AI confidence/logic summary
   }) {
     return prisma.userMemory.create({
       data: {
@@ -20,7 +20,7 @@ export const memoryService = {
         category: params.category,
         status: MemoryStatus.PENDING,
         source: MemorySource.USER_APPROVED, // Techincally pending user approval
-        suggestedBy: params.suggestedBy,
+        suggestedText: params.suggestedText,
       },
     });
   },
@@ -56,5 +56,5 @@ export const memoryService = {
       },
       orderBy: { createdAt: 'desc' },
     });
-  }
+  },
 };

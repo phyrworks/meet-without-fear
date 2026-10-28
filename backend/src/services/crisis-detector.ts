@@ -80,7 +80,11 @@ const CRISIS_PATTERNS: CrisisPattern[] = [
   { pattern: /\bi('m|\s+am)\s+going\s+to\s+hurt\s+myself\b/i, category: 'self-harm', severity: 'emergency' },
 
   // ---- Domestic Violence (urgent/emergency) ----
-  { pattern: /\b(he|she|they|my\s+partner|my\s+husband|my\s+wife)\s+hits?\s+me\b/i, category: 'domestic-violence', severity: 'urgent' },
+  {
+    pattern: /\b(he|she|they|my\s+partner|my\s+husband|my\s+wife)\s+hits?\s+me\b/i,
+    category: 'domestic-violence',
+    severity: 'urgent',
+  },
   { pattern: /\b(he|she|they)\s+(is|are)\s+hitting\s+me\b/i, category: 'domestic-violence', severity: 'emergency' },
   { pattern: /\bphysically\s+abus(ing|ed|e)\b/i, category: 'domestic-violence', severity: 'urgent' },
   { pattern: /\bi('m|\s+am)\s+being\s+beaten\b/i, category: 'domestic-violence', severity: 'emergency' },
@@ -92,17 +96,38 @@ const CRISIS_PATTERNS: CrisisPattern[] = [
   // ---- Imminent Danger (emergency) ----
   { pattern: /\bi('m|\s+am)\s+scared\s+for\s+my\s+life\b/i, category: 'imminent-danger', severity: 'emergency' },
   { pattern: /\bi\s+don'?t\s+feel\s+safe\b/i, category: 'imminent-danger', severity: 'urgent' },
-  { pattern: /\b(he|she|they)\s+(has|have)\s+a\s+(gun|knife|weapon)\b/i, category: 'imminent-danger', severity: 'emergency' },
-  { pattern: /\bi\s+think\s+(he|she|they)('s|\s+is|\s+are)\s+going\s+to\s+kill\s+me\b/i, category: 'imminent-danger', severity: 'emergency' },
+  {
+    pattern: /\b(he|she|they)\s+(has|have)\s+a\s+(gun|knife|weapon)\b/i,
+    category: 'imminent-danger',
+    severity: 'emergency',
+  },
+  {
+    pattern: /\bi\s+think\s+(he|she|they)('s|\s+is|\s+are)\s+going\s+to\s+kill\s+me\b/i,
+    category: 'imminent-danger',
+    severity: 'emergency',
+  },
 
   // ---- Child Abuse (urgent/emergency) ----
   { pattern: /\b(child|children|kid|kids)\s+(abuse|abusing|abused)\b/i, category: 'child-abuse', severity: 'urgent' },
-  { pattern: /\bhurt(ing|s)?\s+(my|the|a)\s+(child|children|kid|kids|baby|son|daughter)\b/i, category: 'child-abuse', severity: 'emergency' },
-  { pattern: /\b(he|she|they)\s+(hit|hits|beat|beats|abuse|abuses)\s+(my|the|our)\s+(child|children|kid|kids|son|daughter)\b/i, category: 'child-abuse', severity: 'emergency' },
+  {
+    pattern: /\bhurt(ing|s)?\s+(my|the|a)\s+(child|children|kid|kids|baby|son|daughter)\b/i,
+    category: 'child-abuse',
+    severity: 'emergency',
+  },
+  {
+    pattern:
+      /\b(he|she|they)\s+(hit|hits|beat|beats|abuse|abuses)\s+(my|the|our)\s+(child|children|kid|kids|son|daughter)\b/i,
+    category: 'child-abuse',
+    severity: 'emergency',
+  },
 
   // ---- General Safety Concern (concern) ----
   { pattern: /\bi\s+feel\s+unsafe\b/i, category: 'safety-concern', severity: 'concern' },
-  { pattern: /\bi('m|\s+am)\s+afraid\s+(he|she|they)\s+will\s+hurt\b/i, category: 'safety-concern', severity: 'urgent' },
+  {
+    pattern: /\bi('m|\s+am)\s+afraid\s+(he|she|they)\s+will\s+hurt\b/i,
+    category: 'safety-concern',
+    severity: 'urgent',
+  },
 ];
 
 // ============================================================================

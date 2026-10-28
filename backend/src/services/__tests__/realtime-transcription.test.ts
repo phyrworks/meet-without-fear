@@ -43,7 +43,7 @@ function makeClientWs() {
 /** Flush microtasks so async handlers complete */
 async function flushPromises() {
   for (let i = 0; i < 5; i++) {
-    await new Promise((r) => process.nextTick(r));
+    await new Promise(r => process.nextTick(r));
   }
 }
 
@@ -67,9 +67,7 @@ describe('attachRealtimeWebSocket — first-message auth', () => {
 
     wssInstance = MockServer.mock.results[0].value as typeof wssInstance;
 
-    const connectionCall = wssInstance.on.mock.calls.find(
-      ([event]: [string]) => event === 'connection',
-    );
+    const connectionCall = wssInstance.on.mock.calls.find(([event]: [string]) => event === 'connection');
     connectionHandler = connectionCall[1];
   });
 
@@ -81,8 +79,8 @@ describe('attachRealtimeWebSocket — first-message auth', () => {
     const socket = makeSocket();
     const head = Buffer.alloc(0);
 
-    wssInstance.handleUpgrade.mockImplementation(
-      (_req: any, _sock: any, _head: any, cb: (ws: any) => void) => cb(makeClientWs()),
+    wssInstance.handleUpgrade.mockImplementation((_req: any, _sock: any, _head: any, cb: (ws: any) => void) =>
+      cb(makeClientWs()),
     );
 
     server.emit('upgrade', makeRequest('/realtime'), socket, head);

@@ -70,7 +70,7 @@ class IdentityBoundAdapter implements SqlDriverAdapter {
 
   constructor(
     private readonly inner: SqlDriverAdapter,
-    private readonly userId: UserIdSource
+    private readonly userId: UserIdSource,
   ) {
     this.provider = inner.provider;
     this.adapterName = inner.adapterName;
@@ -79,13 +79,13 @@ class IdentityBoundAdapter implements SqlDriverAdapter {
   queryRaw(query: SqlQuery): Promise<SqlResultSet> {
     const userId = this.userId();
     if (!userId) return this.inner.queryRaw(query);
-    return this.inIdentityTransaction(userId, (tx) => tx.queryRaw(query));
+    return this.inIdentityTransaction(userId, tx => tx.queryRaw(query));
   }
 
   executeRaw(query: SqlQuery): Promise<number> {
     const userId = this.userId();
     if (!userId) return this.inner.executeRaw(query);
-    return this.inIdentityTransaction(userId, (tx) => tx.executeRaw(query));
+    return this.inIdentityTransaction(userId, tx => tx.executeRaw(query));
   }
 
   async startTransaction(isolationLevel?: IsolationLevel): Promise<Transaction> {
@@ -135,7 +135,7 @@ class IdentityBoundAdapter implements SqlDriverAdapter {
  */
 export function bindIdentity(
   factory: PgAdapterFactory,
-  userId: UserIdSource = getCurrentUserId
+  userId: UserIdSource = getCurrentUserId,
 ): SqlMigrationAwareDriverAdapterFactory {
   return {
     provider: factory.provider,
@@ -186,17 +186,17 @@ export function keepRequestContextAcrossBatching(client: object): void {
   ) {
     throw new Error(
       'DB_IDENTITY_BINDING: Prisma client internals (_requestHandler.dataloader.options) not found; ' +
-        'per-request identity cannot be guaranteed for batched queries with this Prisma version'
+        'per-request identity cannot be guaranteed for batched queries with this Prisma version',
     );
   }
   const { batchBy, singleLoader, batchLoader } = options as DataLoaderOptions;
-  options.batchBy = (request) => {
+  options.batchBy = request => {
     // Called synchronously in the caller's context, before either loader.
     const context = getRequestContext();
     request[CAPTURED] = context;
     const key = batchBy(request);
     return key === undefined ? undefined : `${key}|identity:${context?.userId ?? ''}`;
   };
-  options.singleLoader = (request) => runInCapturedContext(request[CAPTURED], () => singleLoader(request));
-  options.batchLoader = (requests) => runInCapturedContext(requests[0]?.[CAPTURED], () => batchLoader(requests));
+  options.singleLoader = request => runInCapturedContext(request[CAPTURED], () => singleLoader(request));
+  options.batchLoader = requests => runInCapturedContext(requests[0]?.[CAPTURED], () => batchLoader(requests));
 }

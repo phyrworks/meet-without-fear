@@ -18,8 +18,10 @@ const BASE_URL =
 const describeTarget = isTargetShape() ? describe : describe.skip;
 jest.setTimeout(180_000);
 
-const rowsOf = (harness: Harness) => async <T extends Record<string, unknown>>(sql: string): Promise<T[]> =>
-  withClient(harness.fixture.target, async c => (await c.query<T>(sql)).rows, harness.fixture.database);
+const rowsOf =
+  (harness: Harness) =>
+  async <T extends Record<string, unknown>>(sql: string): Promise<T[]> =>
+    withClient(harness.fixture.target, async c => (await c.query<T>(sql)).rows, harness.fixture.database);
 const adaRound = `SELECT a.status::text AS status, a.status_version AS version, a.revealed_at IS NOT NULL AS revealed
   FROM empathy_attempt a JOIN participant p ON p.id = a.author_participant_id JOIN "user" u ON u.id = p.user_id
   WHERE u.email = 'ada@e2e.test' ORDER BY a.round DESC LIMIT 1`;
@@ -65,7 +67,10 @@ describeTarget('skip-refinement from REFINING (CONTEXT_SHARED_B)', () => {
     const spy = jest.spyOn(store, 'setAttemptStatus');
     const res = await skip(harness);
     expect(res.status).toBe(200);
-    expect((res.body as { data: { success: boolean; status: string } }).data).toEqual({ success: true, status: 'READY' });
+    expect((res.body as { data: { success: boolean; status: string } }).data).toEqual({
+      success: true,
+      status: 'READY',
+    });
     expect(spy.mock.calls.map(c => [c[1], c[2]])).toEqual([['READY', { actor: 'participant' }]]);
     // Bob has no round yet, so the reveal gate holds it at READY.
     expect(await rows(adaRound)).toEqual([{ status: 'READY', version: before.version + 1, revealed: false }]);

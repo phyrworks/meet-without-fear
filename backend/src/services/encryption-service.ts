@@ -15,10 +15,7 @@ import { encrypt, decrypt } from '../utils/field-encryption';
  * Encrypt specified string fields on a record, returning a shallow copy.
  * Non-string fields in the list are silently skipped.
  */
-export function encryptSensitiveFields<T extends Record<string, unknown>>(
-  record: T,
-  fields: (keyof T)[],
-): T {
+export function encryptSensitiveFields<T extends Record<string, unknown>>(record: T, fields: (keyof T)[]): T {
   const copy = { ...record };
   for (const field of fields) {
     const value = copy[field];
@@ -36,10 +33,7 @@ export function encryptSensitiveFields<T extends Record<string, unknown>>(
  * @throws {FieldDecryptionError} if a field is in the encrypted format but cannot
  * be decrypted. This propagates deliberately — see utils/field-encryption.ts.
  */
-export function decryptSensitiveFields<T extends Record<string, unknown>>(
-  record: T,
-  fields: (keyof T)[],
-): T {
+export function decryptSensitiveFields<T extends Record<string, unknown>>(record: T, fields: (keyof T)[]): T {
   const copy = { ...record };
   for (const field of fields) {
     const value = copy[field];
