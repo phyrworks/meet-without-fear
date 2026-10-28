@@ -17,6 +17,7 @@
  */
 
 import { getJobPrisma } from '../../lib/prisma';
+import { encryptColumnValue } from '../../lib/prisma-encryption-middleware';
 import { logger } from '../../lib/logger';
 import { getSonnetResponse, getHaikuJson, BrainActivityCallType } from '../../lib/bedrock';
 import { getCurrentUserId } from '../../lib/request-context';
@@ -505,19 +506,29 @@ export async function persistAnalysis(opts: {
           suggested_share_reason, circuit_breaker_tripped)
         VALUES (${opts.attemptId}::uuid, ${opts.subjectParticipantId}::uuid,
           coalesce((SELECT max(x.iteration) FROM reconciler_result x WHERE x.attempt_id = ${opts.attemptId}::uuid), 0) + 1,
-          ${Math.max(0, Math.min(100, Math.round(r.alignment.score)))}, ${r.alignment.summary}, ${r.gaps.summary},
-          ${SEVERITY_TO_DB[r.gaps.severity] ?? 'MINOR'}::gap_severity, ${r.alignment.correctlyIdentified}::text[],
-          ${r.gaps.missedFeelings}::text[], ${r.gaps.misattributions}::text[], ${r.gaps.mostImportantGap},
-          ${r.recommendation.action}::recommender_action, ${r.recommendation.rationale},
-          ${r.recommendation.sharingWouldHelp}, ${r.recommendation.suggestedShareFocus},
-          ${opts.suggestion?.content ?? null}, ${opts.suggestion?.reason ?? null}, ${opts.circuitBreakerTripped ?? false})
+          ${Math.max(0, Math.min(100, Math.round(r.alignment.score)))},
+          ${encryptColumnValue('reconciler_result', 'alignment_summary', r.alignment.summary)},
+          ${encryptColumnValue('reconciler_result', 'gap_summary', r.gaps.summary)},
+          ${SEVERITY_TO_DB[r.gaps.severity] ?? 'MINOR'}::gap_severity,
+          ${encryptColumnValue('reconciler_result', 'correctly_identified', r.alignment.correctlyIdentified)}::text[],
+          ${encryptColumnValue('reconciler_result', 'missed_feelings', r.gaps.missedFeelings)}::text[],
+          ${encryptColumnValue('reconciler_result', 'misattributions', r.gaps.misattributions)}::text[],
+          ${encryptColumnValue('reconciler_result', 'most_important_gap', r.gaps.mostImportantGap)},
+          ${r.recommendation.action}::recommender_action,
+          ${encryptColumnValue('reconciler_result', 'rationale', r.recommendation.rationale)},
+          ${r.recommendation.sharingWouldHelp},
+          ${encryptColumnValue('reconciler_result', 'suggested_share_focus', r.recommendation.suggestedShareFocus)},
+          ${encryptColumnValue('reconciler_result', 'suggested_share_content', opts.suggestion?.content ?? null)},
+          ${encryptColumnValue('reconciler_result', 'suggested_share_reason', opts.suggestion?.reason ?? null)},
+          ${opts.circuitBreakerTripped ?? false})
         RETURNING id`;
       const resultId = rows[0].id;
       const g = opts.guidance;
       if (g.areaHint || g.guidanceType || g.promptSeed) {
         await tx.$executeRaw`INSERT INTO reconciler_guidance (result_id, author_participant_id, subject_participant_id, area_hint, guidance_type, prompt_seed)
           VALUES (${resultId}::uuid, ${opts.authorParticipantId}::uuid, ${opts.subjectParticipantId}::uuid,
-                  ${g.areaHint}, ${g.guidanceType}, ${g.promptSeed})`;
+                  ${encryptColumnValue('reconciler_guidance', 'area_hint', g.areaHint)}, ${g.guidanceType},
+                  ${encryptColumnValue('reconciler_guidance', 'prompt_seed', g.promptSeed)})`;
       }
       return resultId;
     });

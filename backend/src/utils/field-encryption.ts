@@ -141,6 +141,15 @@ export function decrypt(encrypted: string): string {
 }
 
 /**
+ * Is a field-encryption key configured (values are written as ciphertext)?
+ * Code that must behave differently when content is encrypted — a search that
+ * cannot match ciphertext — asks here rather than reading the env var.
+ */
+export function fieldEncryptionEnabled(): boolean {
+  return getKey() !== null;
+}
+
+/**
  * Check whether a value matches the encrypted format.
  */
 export function isEncrypted(value: string): boolean {

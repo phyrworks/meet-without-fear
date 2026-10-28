@@ -86,9 +86,13 @@ being deleted.
 ## Changing the fixture factory without moving a golden
 
 `state-factory.ts` is two layers: shape-independent scenarios
-(`../fixture-scenarios/scenarios.ts`) and a current-shape writer
-(`../fixture-scenarios/current-shape.ts`) that must write exactly the rows the
-goldens were recorded against. Any change to either is checked with:
+(`../fixture-scenarios/scenarios.ts`) and a writer. On phoenix/base the writer is
+the current-shape one (`../fixture-scenarios/current-shape.ts`), which must write
+exactly the rows the goldens were recorded against; on phoenix/target-shape it was
+removed at TS-13 (ruling R42) and the writer is `../fixture-scenarios/target-shape.ts`
+(its shape-independent helpers are in `../fixture-scenarios/scenario-helpers.ts`).
+The recorded current-shape baselines stay the oracle (R39). On phoenix/base, any
+change to either layer is checked with:
 
 ```bash
 npx tsx src/testing/golden/tools/fidelity.ts run --old-ref phoenix/base

@@ -166,6 +166,17 @@ describeTarget('brain_activity (job) and the dashboard (mwf_ops) on the target',
       ),
     ).toBe(true);
 
+    // keyless (no FIELD_ENCRYPTION_KEY): the title search arm applies (TS-13, ruling R45)
+    const [{ title }] = await run.sql<{ title: string | null }>(`SELECT title FROM reflection WHERE id = $1`, [
+      reflectionId,
+    ]);
+    expect(title).toEqual(expect.any(String));
+    const searched = await request(app).get(
+      `/api/v1/brain/sessions?type=INNER_WORK&search=${encodeURIComponent(title!)}`,
+    );
+    expect(searched.body.data.titleSearch).toBe('applied');
+    expect(searched.body.data.sessions.map((s: { id: string }) => s.id)).toContain(reflectionId);
+
     const detail = await request(app).get(`/api/v1/brain/sessions/${ids.session}`);
     expect(detail.status).toBe(200);
     expect(typeof detail.body.data.stats.totalCost).toBe('number');
