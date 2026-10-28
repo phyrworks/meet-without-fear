@@ -229,6 +229,8 @@ async function analyzeSession() {
   const keyMessages = await prisma.message.findMany({
     where: {
       conversation: { participant: { sessionId } },
+      // message.content is encrypted (TS-13): the `contains` arm matches only on a
+      // keyless dev database (dev script; ruling R45, documented only).
       OR: [{ role: 'AI' }, { kind: { not: 'CHAT' } }, { content: { contains: 'feel heard' } }],
     },
     select: {

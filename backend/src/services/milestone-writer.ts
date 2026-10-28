@@ -18,6 +18,7 @@
  */
 
 import { getJobPrisma, prisma } from '../lib/prisma';
+import type { Prisma } from '../generated/prisma/client';
 
 /** Spec §1.1: the keys a participant may insert themselves. */
 export const SELF_ASSERTABLE_MILESTONES = [
@@ -35,8 +36,14 @@ export function isSelfAssertable(key: string): boolean {
  * Record that `participantId` reached `key` (at `at`, default now). Returns
  * true when this call recorded it, false when it was already reached.
  */
-export async function reachMilestone(participantId: string, key: string, at: Date = new Date()): Promise<boolean> {
-  const client = isSelfAssertable(key) ? prisma : getJobPrisma();
+export async function reachMilestone(
+  participantId: string,
+  key: string,
+  at: Date = new Date(),
+  /** A transaction of the role that may write `key` (the caller's own for a self-assertable key). */
+  tx?: Pick<Prisma.TransactionClient, '$executeRaw'>,
+): Promise<boolean> {
+  const client = tx ?? (isSelfAssertable(key) ? prisma : getJobPrisma());
   // Exactly the columns the job may INSERT (trailer T7: participant_id,
   // milestone_key, reached_at); created_at is the column default. Prisma's
   // createMany would also send its client-side `@default(now())` created_at.

@@ -30,6 +30,8 @@ import { NeedCategory } from '@meet-without-fear/shared';
 import { getModelCompletion } from '../lib/bedrock';
 import { logger } from '../lib/logger';
 import { getJobPrisma, prisma } from '../lib/prisma';
+import { decryptRawRows, encryptColumnValue } from '../lib/prisma-encryption-middleware';
+import { reencryptForSession } from '../lib/share-moments';
 import { cleanVisibleAIText } from '../utils/visible-text';
 import { reachMilestone } from './milestone-writer';
 
@@ -44,12 +46,15 @@ export interface SharedNeedRow {
 
 /** Every live shared need of the session (`v_need_shared`: need_share alone). */
 export async function listSharedNeeds(sessionId: string): Promise<SharedNeedRow[]> {
-  return prisma.$queryRaw<SharedNeedRow[]>`
+  return decryptRawRows(
+    await prisma.$queryRaw<SharedNeedRow[]>`
     SELECT need_id AS "needId", participant_id AS "participantId", session_id AS "sessionId",
            category::text AS category, shared_text AS "sharedText", shared_at AS "sharedAt"
     FROM v_need_shared
     WHERE session_id = ${sessionId}::uuid
-    ORDER BY shared_at, need_id`;
+    ORDER BY shared_at, need_id`,
+    { sharedText: 'need_share.shared_text' },
+  );
 }
 
 /** The present human participants of the session who have at least one live share. */
@@ -179,7 +184,16 @@ export async function shareNeeds(args: {
   const job = getJobPrisma();
   for (const need of args.needs) {
     const text = await transformNeedForSharing({ ...need, sessionId: args.sessionId });
-    await job.$executeRaw`SELECT app.need_share(${need.id}::uuid, ${text})`;
+    // need_share.shared_text is written under the session key by the job
+    // (ciphertext in; TS-13). Share moment (writer-principal rule): the hook
+    // runs in the share's own job transaction; W13 re-encrypts here.
+    await job.$transaction(async tx => {
+      await tx.$executeRaw`SELECT app.need_share(${need.id}::uuid, ${encryptColumnValue('need_share', 'shared_text', text)})`;
+      await reencryptForSession(
+        { moment: 'need-share', sessionId: args.sessionId, rows: [{ table: 'need_share', id: need.id }] },
+        tx,
+      );
+    });
   }
 
   // 3. Session-scoped completion: every present human has shared.

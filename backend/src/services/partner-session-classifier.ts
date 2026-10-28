@@ -17,6 +17,7 @@ import { getHaikuJson, BrainActivityCallType } from '../lib/bedrock';
 import { logger } from '../lib/logger';
 import { withHaikuCircuitBreaker } from '../utils/circuit-breaker';
 import { getJobPrisma } from '../lib/prisma';
+import { encryptColumnValue } from '../lib/prisma-encryption-middleware';
 import { embedSessionContent } from './embedding';
 
 // ============================================================================
@@ -586,7 +587,7 @@ Output only valid JSON.`;
           WHERE session_id = ${input.sessionId}::uuid AND user_id = ${input.userId}::uuid`;
         if (participant) {
           await job.$executeRaw`INSERT INTO ai_memory (participant_id, kind, doc)
-            VALUES (${participant.id}::uuid, 'NOTABLE_FACTS'::ai_memory_kind, ${JSON.stringify({ facts: factsToSave })}::jsonb)
+            VALUES (${participant.id}::uuid, 'NOTABLE_FACTS'::ai_memory_kind, ${JSON.stringify(encryptColumnValue('ai_memory', 'doc', { facts: factsToSave }))}::jsonb)
             ON CONFLICT (participant_id, kind) DO UPDATE SET doc = EXCLUDED.doc`;
           logger.info(`${logPrefix} Saved ${factsToSave.length} notable facts for participant ${participant.id}`);
 

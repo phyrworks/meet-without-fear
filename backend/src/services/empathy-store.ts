@@ -29,6 +29,7 @@
 
 import type { PrismaClient } from '../generated/prisma/client';
 import { getJobPrisma, prisma, type DbClient } from '../lib/prisma';
+import { decryptRawRows, encryptColumnValue } from '../lib/prisma-encryption-middleware';
 
 export type TargetEmpathyStatus =
   | 'HELD'
@@ -324,7 +325,7 @@ export async function setAttemptStatus(
   const client = opts.client ?? clientFor(opts.actor);
   const rows = await client.$queryRaw<
     Array<{ id: string }>
-  >`SELECT app.empathy_set_status(${attemptId}::uuid, ${status}::empathy_status, ${opts.content ?? null}::text)::text AS id`;
+  >`SELECT app.empathy_set_status(${attemptId}::uuid, ${status}::empathy_status, ${encryptColumnValue('empathy_attempt', 'content', opts.content ?? null)}::text)::text AS id`;
   return rows[0].id;
 }
 
@@ -493,16 +494,19 @@ export async function upsertDraft(opts: {
   const about = opts.kind === 'EMPATHY' ? (opts.aboutParticipantId ?? null) : null;
   const attempt = opts.kind === 'VALIDATION_FEEDBACK' ? (opts.attemptId ?? null) : null;
   const ready = typeof opts.readyToShare === 'boolean' ? opts.readyToShare : null;
-  const rows = await prisma.$queryRaw<
-    Array<{ id: string; content: string; ready_to_share: boolean; version: number; updated_at: Date }>
-  >`INSERT INTO draft (participant_id, kind, about_participant_id, attempt_id, content, ready_to_share, version)
-    VALUES (${opts.participantId}::uuid, ${opts.kind}::draft_kind, ${about}::uuid, ${attempt}::uuid, ${opts.content},
+  const rows = decryptRawRows(
+    await prisma.$queryRaw<
+      Array<{ id: string; content: string; ready_to_share: boolean; version: number; updated_at: Date }>
+    >`INSERT INTO draft (participant_id, kind, about_participant_id, attempt_id, content, ready_to_share, version)
+    VALUES (${opts.participantId}::uuid, ${opts.kind}::draft_kind, ${about}::uuid, ${attempt}::uuid, ${encryptColumnValue('draft', 'content', opts.content)},
             coalesce(${ready}::boolean, false), 1)
     ON CONFLICT (participant_id, kind, (coalesce(about_participant_id, attempt_id, share_offer_id)))
     DO UPDATE SET content = EXCLUDED.content,
                   ready_to_share = coalesce(${ready}::boolean, draft.ready_to_share),
                   version = draft.version + 1
-    RETURNING id, content, ready_to_share, version, updated_at`;
+    RETURNING id, content, ready_to_share, version, updated_at`,
+    { content: 'draft.content' },
+  );
   const r = rows[0];
   return {
     id: r.id,

@@ -9,6 +9,7 @@ import { resolveStageIntervalsForSessions, resolveStageForTimestamp } from '../u
 import { loadStageStates } from '../services/stage-shim';
 import { verifyToken } from '@clerk/express';
 import { logger } from '../lib/logger';
+import { fieldEncryptionEnabled } from '../utils/field-encryption';
 
 /**
  * A brain_activity jsonb column (input / output / metadata) as the dashboard reads it: arbitrary
@@ -1230,6 +1231,12 @@ router.get('/sessions', async (req, res) => {
     if (statusValues) innerWhere.status = { in: statusValues as ReflectionStatus[] };
 
     // Search filter - partner sessions by a participant's name/email or the session id; reflections also by title
+    // (by title only while content is unencrypted — see below)
+    const titleSearch: 'applied' | 'unavailable-when-encrypted' | undefined = search
+      ? fieldEncryptionEnabled()
+        ? 'unavailable-when-encrypted'
+        : 'applied'
+      : undefined;
     if (search) {
       const isId = /^[0-9a-f-]{36}$/i.test(search);
       partnerWhere.OR = [
@@ -1242,7 +1249,11 @@ router.get('/sessions', async (req, res) => {
         ...(isId ? [{ id: search }] : []),
         { user: { name: { contains: search, mode: 'insensitive' } } },
         { user: { email: { contains: search, mode: 'insensitive' } } },
-        { title: { contains: search, mode: 'insensitive' } },
+        // reflection.title is encrypted with a random IV (TS-13): with a key set,
+        // SQL cannot match it, so the arm is skipped explicitly and the response
+        // says so (ruling R45) rather than silently matching nothing. Restoring it
+        // means decrypt-then-filter in the app, which W13 (per-user keys) decides.
+        ...(titleSearch === 'applied' ? [{ title: { contains: search, mode: 'insensitive' as const } }] : []),
       ];
     }
 
@@ -1378,6 +1389,7 @@ router.get('/sessions', async (req, res) => {
     return successResponse(res, {
       sessions: allSessions,
       nextCursor,
+      ...(titleSearch ? { titleSearch } : {}),
     });
   } catch (error) {
     logger.error('[BrainRoutes] Failed to fetch sessions:', error);

@@ -18,6 +18,7 @@
 
 import { logger } from '../lib/logger';
 import { prisma } from '../lib/prisma';
+import { encryptColumnValue } from '../lib/prisma-encryption-middleware';
 import { publishSessionEvent, publishTopicFrameUpdated } from './realtime';
 import { captureProposedNeedsForUser, captureSingleNeedForUser } from './needs';
 import { applyNeedAction, applyNeedEdits } from './needs-edit-applier.service';
@@ -281,7 +282,7 @@ export async function persistTurnState(params: PersistTurnStateParams): Promise<
       await prisma.$executeRaw`
         INSERT INTO draft (participant_id, kind, about_participant_id, content, ready_to_share, version)
         VALUES (${participant.id}::uuid, 'EMPATHY'::draft_kind, ${partner.participantId}::uuid,
-                ${metadata.proposedEmpathyStatement}, false, 1)
+                ${encryptColumnValue('draft', 'content', metadata.proposedEmpathyStatement)}, false, 1)
         ON CONFLICT (participant_id, kind, (coalesce(about_participant_id, attempt_id, share_offer_id)))
         DO UPDATE SET content = EXCLUDED.content, version = draft.version + 1`;
     }

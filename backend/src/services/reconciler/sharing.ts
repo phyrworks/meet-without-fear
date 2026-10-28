@@ -17,6 +17,8 @@
  */
 
 import { getJobPrisma, prisma, type DbClient } from '../../lib/prisma';
+import { encryptColumnValue } from '../../lib/prisma-encryption-middleware';
+import { reencryptForSession } from '../../lib/share-moments';
 import { logger } from '../../lib/logger';
 import { getSonnetResponse } from '../../lib/bedrock';
 import { canTransition, transition } from '../empathy-state-machine';
@@ -302,7 +304,9 @@ async function insertOffer(
                                      suggested_content, suggested_reason, offered_at)
     VALUES (${opts.attemptId}::uuid, ${opts.resultId}::uuid, ${opts.subjectParticipantId}::uuid,
             coalesce((SELECT max(o.iteration) FROM context_share_offer o WHERE o.attempt_id = ${opts.attemptId}::uuid), 0) + 1,
-            ${opts.status}::share_offer_status, ${opts.offerMessage ?? null}, ${opts.suggestedContent}, ${opts.suggestedReason},
+            ${opts.status}::share_offer_status, ${encryptColumnValue('context_share_offer', 'offer_message', opts.offerMessage ?? null)},
+            ${encryptColumnValue('context_share_offer', 'suggested_content', opts.suggestedContent)},
+            ${encryptColumnValue('context_share_offer', 'suggested_reason', opts.suggestedReason)},
             ${opts.status === 'OFFERED' ? new Date() : null}::timestamptz)
     RETURNING id`;
   return rows[0].id;
@@ -731,7 +735,7 @@ export async function shareAccepted(opts: {
   if (opts.refinement) {
     // spec §1.2: the refined text is the subject's SHARE_CONTEXT draft.
     await prisma.$executeRaw`INSERT INTO draft (participant_id, kind, share_offer_id, content, ready_to_share, version)
-      VALUES (${opts.subject.participantId}::uuid, 'SHARE_CONTEXT'::draft_kind, ${opts.offerId}::uuid, ${opts.refinement}, true, 1)
+      VALUES (${opts.subject.participantId}::uuid, 'SHARE_CONTEXT'::draft_kind, ${opts.offerId}::uuid, ${encryptColumnValue('draft', 'content', opts.refinement)}, true, 1)
       ON CONFLICT (participant_id, kind, (coalesce(about_participant_id, attempt_id, share_offer_id)))
       DO UPDATE SET content = EXCLUDED.content, version = draft.version + 1`;
   }
@@ -851,7 +855,7 @@ export async function deliverAcceptedShare(opts: {
   const delivered = await getJobPrisma().$transaction(async tx => {
     const client = tx;
     // Lock order: the session row (as app.empathy_set_status), the offer, the attempt.
-    await tx.$queryRaw`SELECT s.id FROM session s
+    const [sessionRow] = await tx.$queryRaw<Array<{ id: string }>>`SELECT s.id FROM session s
       WHERE s.id = (SELECT p.session_id FROM empathy_attempt a JOIN participant p ON p.id = a.author_participant_id
                     WHERE a.id = ${opts.attemptId}::uuid)
       FOR NO KEY UPDATE`;
@@ -885,6 +889,19 @@ export async function deliverAcceptedShare(opts: {
     }
     await tx.$executeRaw`UPDATE context_share_offer SET delivery_status = 'DELIVERED', delivered_at = ${now}
       WHERE id = ${opts.offerId}::uuid`;
+    // Share moment (writer-principal rule): the offer's shared_content and its
+    // SHARED_CONTEXT copy become the author's to read. W13 re-encrypts here.
+    await reencryptForSession(
+      {
+        moment: 'share-offer-delivery',
+        sessionId: sessionRow?.id ?? null,
+        rows: [
+          { table: 'context_share_offer', id: opts.offerId },
+          ...(sharedMessageId ? [{ table: 'message', id: sharedMessageId }] : []),
+        ],
+      },
+      tx,
+    );
     // The author's round → REFINING (CONTEXT_SHARED); a VALIDATED round keeps its terminal status.
     const [attemptRow] = await tx.$queryRaw<Array<{ status: string }>>`
       SELECT status::text AS status FROM empathy_attempt WHERE id = ${opts.attemptId}::uuid FOR NO KEY UPDATE`;

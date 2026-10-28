@@ -80,10 +80,10 @@ import {
   referencedClocks,
   resolveStamp,
   sessionStatus,
-  type CurrentShapeResult,
   type UserRef,
+  type WrittenScenario,
   type WrittenUser,
-} from './current-shape';
+} from './scenario-helpers';
 import {
   CLOCKS,
   Clock,
@@ -95,7 +95,7 @@ import {
   Stamp,
 } from './scenario-model';
 
-export type TargetShapeResult = CurrentShapeResult;
+export type TargetShapeResult = WrittenScenario;
 
 /**
  * Scenario features this writer refuses. Since TS-11 it covers the repair

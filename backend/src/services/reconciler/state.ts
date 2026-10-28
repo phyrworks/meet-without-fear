@@ -13,6 +13,7 @@
  */
 
 import { getJobPrisma, prisma } from '../../lib/prisma';
+import { reencryptForSession } from '../../lib/share-moments';
 import { logger } from '../../lib/logger';
 import { pingStage2Refresh } from '../empathy-realtime';
 import { transition } from '../empathy-state-machine';
@@ -296,13 +297,31 @@ export async function checkAndRevealBothIfReady(sessionId: string): Promise<bool
       for (const r of toReveal) {
         transition(r.status, 'MUTUAL_REVEAL');
         await tx.$queryRaw`SELECT app.empathy_set_status(${r.id}::uuid, 'REVEALED'::empathy_status, NULL::text)`;
-        // TODO(TS-13, work-a39h.11.14): the reveal re-encrypts this attempt's
-        // content under the SESSION key here, in this job transaction, with the
-        // same plaintext (spec §1.2 empathy_attempt: "re-encrypted under the
-        // session key by the reveal job"; T-message-immutable exempts mwf_job).
-        // The key path and field map are TS-13's (ruling R26) — none is invented here.
         await markAttemptDelivery(r.id, 'DELIVERED', at, tx);
       }
+      // Share moment (writer-principal rule; spec §1.2 empathy_attempt: "re-encrypted
+      // under the session key by the reveal job"; ruling R26): the revealed rounds'
+      // content, and the EMPATHY_STATEMENT copies app.empathy_set_status wrote with
+      // that ciphertext verbatim, become the subject's to read. Under the single key
+      // there is nothing to re-encrypt; W13 re-encrypts here, in this job
+      // transaction, with the same plaintext (T-message-immutable exempts mwf_job).
+      await reencryptForSession(
+        {
+          moment: 'empathy-reveal',
+          sessionId,
+          rows: toReveal.flatMap(r => [
+            { table: 'empathy_attempt', id: r.id },
+            // the subject's EMPATHY_STATEMENT copy app.empathy_set_status wrote
+            {
+              table: 'message',
+              id: r.id,
+              by: 'source_attempt_id',
+              scope: "kind = 'EMPATHY_STATEMENT' in the subject's conversation",
+            },
+          ]),
+        },
+        tx,
+      );
       return toReveal;
     },
     { isolationLevel: 'Serializable' },

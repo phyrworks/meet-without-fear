@@ -16,6 +16,7 @@
 
 import { logger } from '../lib/logger';
 import { prisma } from '../lib/prisma';
+import { decryptRawRows } from '../lib/prisma-encryption-middleware';
 import { type MemoryIntentResult, type RetrievalDepth, getTurnBufferSize } from './memory-intent';
 import { getSessionSummary } from './conversation-summarizer';
 import { getCoParticipants, getParticipant, resolveParticipant } from './participant-resolver';
@@ -316,7 +317,9 @@ async function buildSharedVessel(me: { id: string; sessionId: string }): Promise
     }),
     prisma.$queryRaw<Array<{ participant_id: string; category: string; shared_text: string; shared_at: Date }>>`
       SELECT participant_id, category::text AS category, shared_text, shared_at
-      FROM v_need_shared WHERE session_id = ${me.sessionId}::uuid ORDER BY shared_at, need_id`,
+      FROM v_need_shared WHERE session_id = ${me.sessionId}::uuid ORDER BY shared_at, need_id`.then(rows =>
+      decryptRawRows(rows, { shared_text: 'need_share.shared_text' }),
+    ),
     prisma.reconcilerGuidance.findMany({
       where: { authorParticipantId: me.id },
       orderBy: { createdAt: 'asc' },
