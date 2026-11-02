@@ -21,7 +21,7 @@
 
 import { randomUUID } from 'crypto';
 import { isTargetShape } from '../../testing/golden/shape';
-import { adaAndBob, httpAs, openTargetRun, type TargetRun } from './target-roles';
+import { adaAndInvitee, httpAs, openTargetRun, type TargetRun } from './target-roles';
 
 const describeTarget = isTargetShape() ? describe : describe.skip;
 jest.setTimeout(180_000);
@@ -38,7 +38,7 @@ describeTarget('invitations on the target, as mwf_app (the decline as the job)',
 
   beforeAll(async () => {
     run = await openTargetRun('CREATED', `ts12_invitations_${process.pid}`);
-    const ids = await adaAndBob(run);
+    const ids = await adaAndInvitee(run);
     ada = { id: ids.adaUser, email: 'ada@e2e.test' };
     http = await httpAs();
   });

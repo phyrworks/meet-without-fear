@@ -13,7 +13,7 @@
  * `invitation_sent`, confirmed at the invitation's message_confirmed_at.
  *
  * The database half needs built target templates:
- *   npx tsx src/testing/golden/cli.ts build EMPATHY_SHARED_A   (etc.)
+ *   npx tsx src/testing/golden/cli.ts build INVITATION_READY   (and EMPATHY_SHARED_A)
  */
 
 import { invitationFields } from '../scenario-helpers';
@@ -55,14 +55,14 @@ describe('scenario model — the topic frame (work-9klf)', () => {
 const describeTarget = isTargetShape() ? describe : describe.skip;
 jest.setTimeout(120_000);
 
-describeTarget('target writer — the invitation is acceptable at EMPATHY_SHARED_A (work-9klf)', () => {
+describeTarget('target writer — the seeded invitation and accept (work-9klf, work-2km7)', () => {
   const BASE_URL =
     process.env.GOLDEN_DATABASE_URL || 'postgresql://mwf_user:mwf_password@localhost:5432/meet_without_fear';
 
   it("writes the session INVITED with its topic frame confirmed at the invitation's message instant", async () => {
     const fx = await restoreFixture({
       baseUrl: BASE_URL,
-      stage: 'EMPATHY_SHARED_A',
+      stage: 'INVITATION_READY', // EMPATHY_SHARED_A until work-2km7 made it post-accept (ACTIVE)
       runId: `9klf_topic_${process.pid}`,
     });
     try {
@@ -88,12 +88,11 @@ describeTarget('target writer — the invitation is acceptable at EMPATHY_SHARED
     }
   });
 
-  /** Bob accepts the seeded invitation; `prepare` runs on the run database first. */
-  const acceptAsBob = async (stage: string, runId: string, prepare?: string) => {
+  /** Bob accepts the seeded invitation. */
+  const acceptAsBob = async (stage: string, runId: string) => {
     const { createHarness } = await import('../../golden/driver');
     const harness = await createHarness({ baseUrl: BASE_URL, stage, runId: `9klf_${runId}_${process.pid}` });
     try {
-      if (prepare) await withClient(harness.fixture.target, c => c.query(prepare), harness.fixture.database);
       const invitationId = harness.fixture.manifest.seeded.invitationId;
       const step = await harness.step({
         label: 'accept as bob',
@@ -119,25 +118,15 @@ describeTarget('target writer — the invitation is acceptable at EMPATHY_SHARED
     }
   };
 
-  // The writer attaches a not-yet-joined invitee as a participant (EMPATHY_SHARED_A's
-  // held attempt needs one as its subject), which the app never does: accept then
-  // collides on participant (session_id, user_id). Removing that row restores the
-  // state the app would hold; the readiness check is then all that stood between
-  // the seeded state and an accepted invitation.
-  it('the partner can accept a sent invitation (INVITATION_READY, invitee not pre-attached)', async () => {
-    const r = await acceptAsBob(
-      'INVITATION_READY',
-      'accept_ready',
-      `DELETE FROM participant WHERE user_id = (SELECT id FROM "user" WHERE email = 'bob@e2e.test')`,
-    );
+  // work-2km7: the writer no longer attaches a not-yet-joined invitee, so the
+  // seeded INVITATION_READY is acceptable as it stands.
+  it('the partner can accept a sent invitation (INVITATION_READY)', async () => {
+    const r = await acceptAsBob('INVITATION_READY', 'accept_ready');
     expect({ status: r.status, rows: r.rows }).toEqual({
       status: 200,
       rows: [{ session: 'ACTIVE', invitation: 'ACCEPTED', participants: 2 }],
     });
   });
-
-  it('accept at EMPATHY_SHARED_A is no longer refused as not ready (the topic frame is there)', async () => {
-    const r = await acceptAsBob('EMPATHY_SHARED_A', 'accept_esa');
-    expect(r.body?.error?.message).not.toBe('Invitation is not ready to accept');
-  });
+  // EMPATHY_SHARED_A's accept: post-accept-seed.test.ts (one app harness per test file —
+  // lib/prisma caches its client on globalThis, pointed at the first run database).
 });

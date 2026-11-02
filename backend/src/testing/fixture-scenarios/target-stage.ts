@@ -6,10 +6,16 @@ export enum TargetStage {
   /** Session just created, compact not signed */
   CREATED = 'CREATED',
 
-  /** Topic has been confirmed and the invitation-ready modal can be opened */
+  /**
+   * Topic confirmed and the invitation confirmed (compact signed, invitation sent); the
+   * invitation is PENDING and User B is not a participant yet. Accept is tested from here.
+   */
   INVITATION_READY = 'INVITATION_READY',
 
-  /** User A completed Stage 1 (witnessed, felt heard) and shared empathy */
+  /**
+   * User A completed Stage 1 (witnessed, felt heard) and shared empathy; User B has accepted
+   * (session ACTIVE, both participants) and not begun (work-2km7: post-accept, no accept step).
+   */
   EMPATHY_SHARED_A = 'EMPATHY_SHARED_A',
 
   /** User B has completed Stage 1 (felt heard), reconciler has run. Ready for reconciler tests. */

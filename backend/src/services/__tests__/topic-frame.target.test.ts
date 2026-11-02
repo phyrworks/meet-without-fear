@@ -15,7 +15,7 @@
  */
 
 import { isTargetShape } from '../../testing/golden/shape';
-import { adaAndBob, httpAs, openTargetRun, type TargetRun } from './target-roles';
+import { adaAndInvitee, httpAs, openTargetRun, type TargetRun } from './target-roles';
 
 const describeTarget = isTargetShape() ? describe : describe.skip;
 jest.setTimeout(180_000);
@@ -23,13 +23,13 @@ jest.setTimeout(180_000);
 describeTarget('Stage 0 confirmations on the target (mwf_app; status by mwf_job)', () => {
   let run: TargetRun;
   let http: Awaited<ReturnType<typeof httpAs>>;
-  let ids: Awaited<ReturnType<typeof adaAndBob>>;
+  let ids: Awaited<ReturnType<typeof adaAndInvitee>>;
   let ada: { id: string; email: string };
   let bob: { id: string; email: string };
 
   beforeAll(async () => {
     run = await openTargetRun('CREATED', `ts12_topic_${process.pid}`);
-    ids = await adaAndBob(run);
+    ids = await adaAndInvitee(run);
     ada = { id: ids.adaUser, email: 'ada@e2e.test' };
     bob = { id: ids.bobUser, email: 'bob@e2e.test' };
     http = await httpAs();

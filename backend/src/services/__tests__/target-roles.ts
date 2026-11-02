@@ -112,7 +112,32 @@ export async function httpAs(): Promise<
   };
 }
 
-/** Participant ids and user ids of Ada and Bob in the run's session. */
+/**
+ * Ada's participant and both user ids, for a pre-accept fixture (CREATED,
+ * INVITATION_READY): Bob has not joined, so he is a user and a relationship
+ * member but no participant (work-2km7, fixture-scenarios/reachability.ts).
+ */
+export async function adaAndInvitee(run: TargetRun): Promise<{
+  session: string;
+  ada: string;
+  adaUser: string;
+  bobUser: string;
+  invitation: string;
+}> {
+  const [p] = await run.sql<{ session: string; ada: string; ada_user: string; bob_user: string; invitation: string }>(
+    `SELECT pa.session_id AS session, pa.id AS ada, pa.user_id AS ada_user, ub.id AS bob_user, i.id AS invitation
+     FROM participant pa JOIN "user" ua ON ua.id = pa.user_id AND ua.email = 'ada@e2e.test'
+     JOIN invitation i ON i.session_id = pa.session_id
+     JOIN "user" ub ON ub.email = 'bob@e2e.test'`,
+  );
+  if (!p) throw new Error('adaAndInvitee: no session of Ada with an invitation, or no user bob@e2e.test');
+  return { session: p.session, ada: p.ada, adaUser: p.ada_user, bobUser: p.bob_user, invitation: p.invitation };
+}
+
+/**
+ * Participant ids and user ids of Ada and Bob in the run's session — a fixture
+ * at or after Bob's accept (pre-accept fixtures: `adaAndInvitee`).
+ */
 export async function adaAndBob(run: TargetRun): Promise<{
   session: string;
   ada: string;
@@ -125,5 +150,6 @@ export async function adaAndBob(run: TargetRun): Promise<{
      FROM participant pa JOIN "user" ua ON ua.id = pa.user_id AND ua.email = 'ada@e2e.test'
      JOIN participant pb ON pb.session_id = pa.session_id AND pb.id <> pa.id`,
   );
+  if (!p) throw new Error('adaAndBob: Bob is not a participant — a pre-accept fixture? Use adaAndInvitee (work-2km7)');
   return { session: p.session, ada: p.ada, bob: p.bob, adaUser: p.ada_user, bobUser: p.bob_user };
 }
