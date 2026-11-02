@@ -14,9 +14,8 @@
  * Requires: npx tsx src/testing/golden/cli.ts build CREATED
  */
 
-import { randomUUID } from 'crypto';
 import { isTargetShape } from '../../testing/golden/shape';
-import { adaAndBob, httpAs, openTargetRun, type TargetRun } from './target-roles';
+import { adaAndBob, httpAs, openTargetRun, randomUuidV7, type TargetRun } from './target-roles';
 
 const describeTarget = isTargetShape() ? describe : describe.skip;
 jest.setTimeout(180_000);
@@ -158,14 +157,14 @@ describeTarget('Inviter stage while crafting the invitation (work-qmgc)', () => 
 
   it('a partner who accepts before the inviter ever confirms still moves the inviter out of stage 0', async () => {
     const { sessionId, invitationId, inviter } = await craftedButUnconfirmed('Carol');
-    const carol = { id: randomUUID(), email: `carol-qmgc-${process.pid}@e2e.test` };
+    const carol = { id: randomUuidV7(), email: `carol-qmgc-${process.pid}@e2e.test` };
     expect((await http(carol, 'post', `/invitations/${invitationId}/accept`)).status).toBe(200);
     await expectInviterPastStage0(sessionId, invitationId, inviter);
   });
 
   it('the E2E auto-accept on the partner’s first /state read does the same', async () => {
     const { sessionId, invitationId, inviter } = await craftedButUnconfirmed('Dan');
-    const dan = { id: randomUUID(), email: `dan-qmgc-${process.pid}@e2e.test` };
+    const dan = { id: randomUuidV7(), email: `dan-qmgc-${process.pid}@e2e.test` };
     expect((await http(dan, 'get', `/sessions/${sessionId}/state`)).status).toBe(200);
     expect(await run.sql(`SELECT status::text AS status FROM invitation WHERE id = $1`, [invitationId])).toEqual([
       { status: 'ACCEPTED' },

@@ -19,9 +19,8 @@
  * Requires: npx tsx src/testing/golden/cli.ts build CREATED
  */
 
-import { randomUUID } from 'crypto';
 import { isTargetShape } from '../../testing/golden/shape';
-import { adaAndBob, httpAs, openTargetRun, type TargetRun } from './target-roles';
+import { adaAndBob, httpAs, openTargetRun, randomUuidV7, type TargetRun } from './target-roles';
 
 const describeTarget = isTargetShape() ? describe : describe.skip;
 jest.setTimeout(180_000);
@@ -32,9 +31,9 @@ describeTarget('invitations on the target, as mwf_app (the decline as the job)',
   let run: TargetRun;
   let http: Http;
   let ada: { id: string; email: string };
-  const carol = { id: randomUUID(), email: `carol-${process.pid}@e2e.test` };
-  const dan = { id: randomUUID(), email: `dan-${process.pid}@e2e.test` };
-  const erin = { id: randomUUID(), email: `erin-${process.pid}@e2e.test` };
+  const carol = { id: randomUuidV7(), email: `carol-${process.pid}@e2e.test` };
+  const dan = { id: randomUuidV7(), email: `dan-${process.pid}@e2e.test` };
+  const erin = { id: randomUuidV7(), email: `erin-${process.pid}@e2e.test` };
 
   beforeAll(async () => {
     run = await openTargetRun('CREATED', `ts12_invitations_${process.pid}`);

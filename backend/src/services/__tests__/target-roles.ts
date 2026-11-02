@@ -6,6 +6,7 @@
  * when it is first loaded).
  */
 
+import { randomBytes } from 'crypto';
 import { Client } from 'pg';
 import { withClient } from '../../testing/golden/db';
 import { jobUrlFor } from '../../testing/golden/driver';
@@ -13,6 +14,21 @@ import { restoreFixture, type RestoredFixture } from '../../testing/golden/fixtu
 
 export const BASE_URL =
   process.env.GOLDEN_DATABASE_URL || 'postgresql://mwf_user:mwf_password@localhost:5432/meet_without_fear';
+
+/**
+ * A fresh RFC 9562 version-7 UUID (48-bit ms timestamp, version 7, variant
+ * 10). Every uuid column of the target is the uuid7 domain, which refuses
+ * crypto.randomUUID()'s v4 — use this for ids a test makes up (e.g. the
+ * x-e2e-user-id of a new user, which the auth bypass inserts as user.id).
+ */
+export function randomUuidV7(): string {
+  const b = randomBytes(16);
+  b.writeUIntBE(Date.now(), 0, 6);
+  b[6] = 0x70 | (b[6] & 0x0f);
+  b[8] = 0x80 | (b[8] & 0x3f);
+  const h = b.toString('hex');
+  return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`;
+}
 
 /** The request role on a run database (dev password, docs/development/local-setup.md). */
 export function appUrlFor(t: { host: string; port: number }, database: string): string {
