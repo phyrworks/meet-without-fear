@@ -419,8 +419,7 @@ export function compare(oldM: Model, newM: Model): Result {
     if (isStep20(oo[i]) && isStep20(no[i]) && step20Delta(oo[i], no[i]) === null) {
       allow('A5 step-20 assertion block gained the uuid7 check', `statement #${i + 1}`);
       allow('A7 step-20 block gained the array-of-domain assertion', `statement #${i + 1}`);
-    }
-    else if (isStep20(oo[i]) && isStep20(no[i]))
+    } else if (isStep20(oo[i]) && isStep20(no[i]))
       failures.push(`step-20 block differs beyond the uuid7 check (statement #${i + 1}): ${step20Delta(oo[i], no[i])}`);
     else
       failures.push(
@@ -612,7 +611,11 @@ function selfTest(oldSql: string, newSql: string): void {
     ],
     [
       'view cast: other change in the same view',
-      s => s.replace('array_agg(DISTINCT c.participant_id)::uuid[] AS willing', 'array_agg(c.participant_id)::uuid[] AS willing'),
+      s =>
+        s.replace(
+          'array_agg(DISTINCT c.participant_id)::uuid[] AS willing',
+          'array_agg(c.participant_id)::uuid[] AS willing',
+        ),
     ],
     [
       'step-20 block: array-of-domain assertion altered',
