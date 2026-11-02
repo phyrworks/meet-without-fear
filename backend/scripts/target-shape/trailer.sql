@@ -1364,13 +1364,17 @@ GRANT SELECT (updated_at) ON session TO mwf_job;
 -- FKs session ON DELETE CASCADE; spec Conventions "retention hard-deletes whole sessions")
 GRANT DELETE ON session TO mwf_job;
 
--- mwf_ops: SELECT on exactly the tables routes/brain.ts reads, re-based
+-- mwf_ops: SELECT on exactly the tables routes/brain.ts reads (directly or through the stage shim), re-based
 -- (BrainActivity, Session/Relationship/RelationshipMember/User, StageProgress,
 -- Message, UserVessel.notableFacts, EmotionalReading, InnerWorkSession/Message).
 GRANT USAGE ON SCHEMA public TO mwf_ops;
 GRANT SELECT ON brain_activity, session, relationship, relationship_member, "user", participant, participant_milestone,
                 milestone, conversation, message, ai_memory, mood_reading, reflection, reflection_message, v_current_stage
   TO mwf_ops;
+-- The stage shim's invitationPending probe (stage-shim.ts loadCurrentStages / loadInvitationPending:
+-- "authored an invitation", work-qmgc), which the dashboard's stage reads run as mwf_ops. Column-level:
+-- ops sees metadata only — never the invitation's name, message or token.
+GRANT SELECT (invited_by_participant_id) ON invitation TO mwf_ops;
 
 -- mwf_auth: the bootstrap function only (granted in T4); nothing on tables.
 
