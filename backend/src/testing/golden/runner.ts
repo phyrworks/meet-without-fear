@@ -10,7 +10,14 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
-import { alignTies, applyFixtureMasks, compareWithAllowList, rawTieRanges, TiedRanges } from './allow-lists/compare';
+import {
+  alignTies,
+  applyFixtureMasks,
+  compareWithAllowList,
+  isInitialMask,
+  rawTieRanges,
+  TiedRanges,
+} from './allow-lists/compare';
 import type { AllowList, AllowRule } from './allow-lists/types';
 import type { Harness, StepResult } from './driver';
 import { CONCEPT_VIEWS, conceptOf } from './concept-views';
@@ -183,8 +190,10 @@ export function normalizeStep(
  */
 export function maskTargetSteps(
   steps: StepResult[],
-  rules: readonly AllowRule[],
+  allRules: readonly AllowRule[],
 ): { steps: StepResult[]; problems: string[] } {
+  // Masks on the restored state are applied by `maskConceptInitial`.
+  const rules = allRules.filter(r => !isInitialMask(r));
   if (!isTargetShape() || !rules.some(r => r.kind === 'fixtureMask')) return { steps, problems: [] };
   const problems: string[] = [];
   const total = new Map<AllowRule, number>();
@@ -198,6 +207,28 @@ export function maskTargetSteps(
     if (n === 0) problems.push(`fixtureMask @ ${[rule.at].flat().join(', ')} matched nothing in the run`);
   }
   return { steps: out, problems };
+}
+
+/**
+ * work-9klf: on the target shape, apply the allow-list's `initial.` masks
+ * (`isInitialMask`) to the concept views as restored, before normalisation —
+ * the restored-state counterpart of `maskTargetSteps`, for a fixture fact
+ * that would add a timestamp rank to the initial state (and renumber every
+ * later `<ts:N>` there). Paths are `initial.<concept>.<row index>.<column>`.
+ * A mask that matched nothing is a problem, as for the steps.
+ */
+export function maskConceptInitial(
+  tables: Record<string, SnapshotRow[]>,
+  rules: readonly AllowRule[],
+): { tables: Record<string, SnapshotRow[]>; problems: string[] } {
+  const masks = rules.filter(isInitialMask);
+  if (!isTargetShape() || !masks.length) return { tables, problems: [] };
+  const { payload, masked, errors } = applyFixtureMasks(tables, masks, ['initial']);
+  const problems = [...errors];
+  for (const [rule, n] of masked) {
+    if (n === 0) problems.push(`fixtureMask @ ${[rule.at].flat().join(', ')} matched nothing in the restored state`);
+  }
+  return { tables: payload, problems };
 }
 
 /**
@@ -575,7 +606,17 @@ export async function recordOrVerifyConcept(opts: {
     return Object.fromEntries(Object.entries(out).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)));
   };
 
-  const n0 = normalize(conceptTables(initial), map);
+  const initialMasking = maskConceptInitial(conceptTables(initial), allowList.rules);
+  if (initialMasking.problems.length) {
+    return {
+      scenario,
+      recorded: false,
+      unresolved: [],
+      violations: initialMasking.problems.map(p => `  ${p}`),
+      unmatchedRules: [],
+    };
+  }
+  const n0 = normalize(initialMasking.tables, map);
   n0.unresolved.forEach(u => unresolved.add(u));
   const initialOut: ConceptGoldenFile['initial'] = {};
   for (const [concept, rows] of Object.entries(n0.value).sort(([a], [b]) => (a < b ? -1 : 1))) {
