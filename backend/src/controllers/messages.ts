@@ -44,7 +44,7 @@ import {
   toMessageDTO,
   type StoredMessage,
 } from '../services/message-store';
-import { loadMilestones, loadStageStates } from '../services/stage-shim';
+import { loadInvitationPending, loadMilestones, loadStageStates } from '../services/stage-shim';
 import { getPartnerParticipant } from '../services/participant-resolver';
 import { reachMilestone } from '../services/milestone-writer';
 
@@ -465,7 +465,7 @@ export async function getConversationHistory(req: Request, res: Response): Promi
     logger.info(
       `[getConversationHistory:${requestId}] Fetching messages with limit=${limit}, before=${before || 'none'}, after=${after || 'none'}, order=${order}`,
     );
-    const [messages, milestones] = await Promise.all([
+    const [messages, milestones, invitationPending] = await Promise.all([
       listConversationMessages({
         conversationId: participant.mainConversationId,
         limit,
@@ -474,6 +474,7 @@ export async function getConversationHistory(req: Request, res: Response): Promi
         after: after ? new Date(after) : undefined,
       }),
       loadMilestones([participant.id]),
+      loadInvitationPending([participant.id]),
     ]);
 
     logger.info(`[getConversationHistory:${requestId}] Fetched ${messages.length} messages from database`);
@@ -493,9 +494,10 @@ export async function getConversationHistory(req: Request, res: Response): Promi
     }
 
     const ownerMilestones = milestones.get(participant.id) ?? [];
+    const ownerInvitationPending = invitationPending.has(participant.id);
     successResponse(res, {
       messages: resultMessages.map(m => ({
-        ...toMessageDTO(m, { sessionId, ownerMilestones }),
+        ...toMessageDTO(m, { sessionId, ownerMilestones, ownerInvitationPending }),
         refiningNeedId: m.refiningNeedId ?? null,
       })),
       hasMore,
@@ -790,7 +792,11 @@ export async function getInitialMessage(req: Request, res: Response): Promise<vo
     logger.info(`[getInitialMessage] Generated initial message for session ${sessionId}, stage ${currentStage}`);
 
     successResponse(res, {
-      message: toMessageDTO(aiMessage, { sessionId, ownerMilestones: stageState?.milestones ?? [] }),
+      message: toMessageDTO(aiMessage, {
+        sessionId,
+        ownerMilestones: stageState?.milestones ?? [],
+        ownerInvitationPending: stageState?.invitationPending ?? false,
+      }),
     });
   } catch (error) {
     logger.error('[getInitialMessage] Error:', error);

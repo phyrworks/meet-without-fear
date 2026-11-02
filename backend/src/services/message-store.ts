@@ -69,6 +69,8 @@ export interface MessageDTOContext {
   sessionId: string;
   /** The conversation owner's milestones, for the stage shim. */
   ownerMilestones: MilestoneReached[];
+  /** The owner's invitation is unsent (stage shim `invitationPending`); default false. */
+  ownerInvitationPending?: boolean;
 }
 
 export interface LegacyMessageDTO {
@@ -88,7 +90,7 @@ export function toMessageDTO(m: StoredMessage, ctx: MessageDTOContext): LegacyMe
     senderId: m.senderParticipant?.userId ?? null,
     role: legacyRole(m.role, m.kind),
     content: m.content,
-    stage: messageStage(ctx.ownerMilestones, m.createdAt),
+    stage: messageStage(ctx.ownerMilestones, m.createdAt, { invitationPending: ctx.ownerInvitationPending }),
     timestamp: m.createdAt.toISOString(),
   };
 }

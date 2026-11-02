@@ -248,8 +248,11 @@ export async function getSessionState(req: Request, res: Response): Promise<void
     const hasMoreMessages = messages.length > INITIAL_SESSION_MESSAGE_LIMIT;
     const messageSlice = hasMoreMessages ? messages.slice(0, INITIAL_SESSION_MESSAGE_LIMIT) : messages;
     const ownerMilestones = myState?.milestones ?? [];
+    const ownerInvitationPending = myState?.invitationPending ?? false;
     const messagesResponse = {
-      messages: messageSlice.reverse().map(m => toMessageDTO(m, { sessionId, ownerMilestones })),
+      messages: messageSlice
+        .reverse()
+        .map(m => toMessageDTO(m, { sessionId, ownerMilestones, ownerInvitationPending })),
       hasMore: hasMoreMessages,
       cursor: hasMoreMessages ? messageSlice[0]?.id : undefined,
     };

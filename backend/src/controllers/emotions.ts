@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { logger } from '../lib/logger';
 import { prisma } from '../lib/prisma';
 import { ApiResponse, ErrorCode } from '@meet-without-fear/shared';
-import { loadMilestones, messageStage } from '../services/stage-shim';
+import { loadInvitationPending, loadMilestones, messageStage } from '../services/stage-shim';
 
 /*
  * Target shape (TS-12): readings are `mood_reading` rows of the caller's
@@ -148,7 +148,7 @@ export async function getEmotions(req: Request, res: Response): Promise<void> {
     }
 
     // Get readings (only the participant's own readings for privacy)
-    const [readings, milestones] = await Promise.all([
+    const [readings, milestones, invitationPending] = await Promise.all([
       prisma.moodReading.findMany({
         where: { participantId: participant.id },
         orderBy: [{ recordedAt: 'desc' }, { id: 'desc' }],
@@ -156,6 +156,7 @@ export async function getEmotions(req: Request, res: Response): Promise<void> {
         select: { id: true, intensity: true, context: true, recordedAt: true },
       }),
       loadMilestones([participant.id]),
+      loadInvitationPending([participant.id]),
     ]);
 
     const response: ApiResponse<GetEmotionsData> = {
@@ -165,7 +166,9 @@ export async function getEmotions(req: Request, res: Response): Promise<void> {
           id: r.id,
           intensity: r.intensity,
           context: r.context,
-          stage: messageStage(milestones.get(participant.id) ?? [], r.recordedAt),
+          stage: messageStage(milestones.get(participant.id) ?? [], r.recordedAt, {
+            invitationPending: invitationPending.has(participant.id),
+          }),
           timestamp: r.recordedAt,
         })),
       },
