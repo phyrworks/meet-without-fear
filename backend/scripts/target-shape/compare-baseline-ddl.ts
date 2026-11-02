@@ -26,7 +26,9 @@
  *       same name and columns (PostgreSQL backs it with an index of that name);
  *   A3  the new domain uuid7;
  *   A4  Prisma's `CREATE SCHEMA IF NOT EXISTS "public"` is gone (a no-op);
- *   A5  the step-20 assertion block (T8) changed — it gained the uuid7 check.
+ *   A5  the step-20 assertion block (T8) gained exactly the two uuid7 assertions
+ *       (no uuid typed plain uuid; 128 uuid7 columns) and a reworded jsonb
+ *       comment, and nothing else.
  */
 
 import { execFileSync } from 'child_process';
@@ -314,7 +316,7 @@ export function compare(oldM: Model, newM: Model): Result {
     ['A2 unique index → UNIQUE constraint', []],
     ['A3 new domain uuid7', []],
     ['A4 CREATE SCHEMA IF NOT EXISTS public dropped', []],
-    ['A5 step-20 assertion block changed', []],
+    ['A5 step-20 assertion block gained the uuid7 check', []],
   ]);
   const allow = (k: string, v: string) => allowed.get(k)!.push(v);
 
@@ -402,7 +404,10 @@ export function compare(oldM: Model, newM: Model): Result {
   if (oo.length !== no.length) failures.push(`other statements: ${oo.length} → ${no.length}`);
   for (let i = 0; i < Math.min(oo.length, no.length); i++) {
     if (oo[i] === no[i]) continue;
-    if (isStep20(oo[i]) && isStep20(no[i])) allow('A5 step-20 assertion block changed', `statement #${i + 1}`);
+    if (isStep20(oo[i]) && isStep20(no[i]) && step20Delta(oo[i], no[i]) === null)
+      allow('A5 step-20 assertion block gained the uuid7 check', `statement #${i + 1}`);
+    else if (isStep20(oo[i]) && isStep20(no[i]))
+      failures.push(`step-20 block differs beyond the uuid7 check (statement #${i + 1}): ${step20Delta(oo[i], no[i])}`);
     else
       failures.push(
         `other statement #${i + 1} differs:\n    old ${oo[i].slice(0, 160)}\n    new ${no[i].slice(0, 160)}`,
@@ -437,6 +442,43 @@ function readOld(args: string[]): string {
 function readNew(args: string[]): string {
   const n = args.indexOf('--new');
   return fs.readFileSync(n >= 0 ? args[n + 1] : path.join(REPO, BASELINE_REL), 'utf8');
+}
+
+/**
+ * A5, exactly: the new step-20 block is the old one plus the two uuid7
+ * assertions (normalised) plus one comment reworded; any other change fails.
+ * Returns null when that holds, else a description of the first difference.
+ */
+const A5_OLD_COMMENT = norm('-- Every jsonb column has a jsonb_typeof CHECK.');
+const A5_NEW_COMMENT = norm(`-- Every jsonb column has a jsonb_typeof CHECK (inline in its CREATE TABLE in
+  -- tables.sql; the catalog, not the source, is what this reads).`);
+const A5_ADDED = norm(`
+  -- Every uuid column of a table is a uuid7 (tables.sql): 33 primary keys
+  -- defaulting to uuidv7() and the 95 columns that reference them.
+  SELECT string_agg(c.relname || '.' || a.attname, ', ' ORDER BY c.relname, a.attname) INTO bad
+  FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid JOIN pg_namespace s ON s.oid = c.relnamespace
+  WHERE s.nspname = 'public' AND c.relkind = 'r' AND a.attnum > 0 AND NOT a.attisdropped
+    AND a.atttypid = 'pg_catalog.uuid'::regtype;
+  IF bad IS NOT NULL THEN RAISE EXCEPTION 'step 20: uuid column(s) not typed uuid7: %', bad; END IF;
+  SELECT count(*) INTO n
+  FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid JOIN pg_namespace s ON s.oid = c.relnamespace
+  WHERE s.nspname = 'public' AND c.relkind = 'r' AND a.attnum > 0 AND NOT a.attisdropped
+    AND a.atttypid = 'public.uuid7'::regtype;
+  IF n <> 128 THEN RAISE EXCEPTION 'step 20: % uuid7 columns, expected 128', n; END IF;
+`);
+
+export function step20Delta(oldStmt: string, newStmt: string): string | null {
+  if (oldStmt === newStmt) return null;
+  if (!newStmt.includes(A5_NEW_COMMENT)) return 'the jsonb comment change is missing or altered';
+  newStmt = newStmt.replace(A5_NEW_COMMENT, A5_OLD_COMMENT);
+  const at = newStmt.indexOf(A5_ADDED);
+  if (at < 0) return 'the uuid7 assertions are missing or altered';
+  if (newStmt.indexOf(A5_ADDED, at + 1) >= 0) return 'the uuid7 assertions appear twice';
+  const rest = `${newStmt.slice(0, at).trimEnd()} ${newStmt.slice(at + A5_ADDED.length).trimStart()}`;
+  if (rest === oldStmt) return null;
+  let k = 0;
+  while (k < rest.length && rest[k] === oldStmt[k]) k++;
+  return `near …${rest.slice(Math.max(0, k - 40), k + 80)}…`;
 }
 
 /** Each mutation of the new file must make the comparison fail. */
@@ -495,6 +537,15 @@ function selfTest(oldSql: string, newSql: string): void {
         ),
     ],
     ['enum value', s => s.replace("'MAIN', 'SUBCHAT'", "'MAIN', 'SUB'")],
+    [
+      'step-20 block: other assertion changed',
+      s =>
+        s.replace(
+          "'step 20: jsonb column(s) without a jsonb_typeof CHECK: %'",
+          "'step 20: jsonb column(s) lacking CHECK: %'",
+        ),
+    ],
+    ['step-20 block: uuid7 count changed', s => s.replace('IF n <> 128 THEN', 'IF n <> 127 THEN')],
     [
       'uuid7 domain allowed but intensity changed',
       s => s.replace('CHECK (VALUE BETWEEN 1 AND 10)', 'CHECK (VALUE BETWEEN 0 AND 10)'),
