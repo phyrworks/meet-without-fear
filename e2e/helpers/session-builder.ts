@@ -12,8 +12,9 @@ import type { APIRequestContext } from '@playwright/test';
 // ============================================================================
 
 export type TargetStage = 
-  | 'CREATED' 
-  | 'EMPATHY_SHARED_A' 
+  | 'CREATED'
+  | 'INVITATION_READY'
+  | 'EMPATHY_SHARED_A'
   | 'FEEL_HEARD_B' 
   | 'RECONCILER_SHOWN_B' 
   | 'CONTEXT_SHARED_B'
@@ -126,8 +127,11 @@ export class SessionBuilder {
   /**
    * Set the target stage for the session.
    *
-   * - CREATED: Session just created, compact not signed
-   * - EMPATHY_SHARED_A: User A completed through empathy, User B at Stage 0
+   * - CREATED: Session just created, compact not signed; User B is not a participant
+   * - INVITATION_READY: User A sent the invitation (compact signed); it is PENDING and User B
+   *   is not a participant yet — seed this to test accept
+   * - EMPATHY_SHARED_A: User A completed through empathy; User B has accepted (session ACTIVE,
+   *   both participants) and is at Stage 0 — do not accept again (work-2km7)
    * - FEEL_HEARD_B: User B has felt heard, reconciler ready to run
    * - RECONCILER_SHOWN_B: User B has felt heard, reconciler has run with gaps, share offer OFFERED (ready for modal UI tests)
    * - CONTEXT_SHARED_B: User B has shared context with User A

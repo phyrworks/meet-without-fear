@@ -57,7 +57,6 @@ test.describe('Reconciler: Gaps Detected → Share Accepted', () => {
   let sessionId: string;
   let userAId: string;
   let userBId: string;
-  let invitationId: string;
   let userAContext: BrowserContext;
   let userAPage: Page;
   let userBContext: BrowserContext;
@@ -75,7 +74,6 @@ test.describe('Reconciler: Gaps Detected → Share Accepted', () => {
     sessionId = setup.session.id;
     userAId = setup.userA.id;
     userBId = setup.userB!.id;
-    invitationId = setup.invitation.id;
 
     const userASetup = await createUserContext(browser, userA.email, userAId, FIXTURE_ID, { x: 0, y: 0 });
     userAContext = userASetup.context;
@@ -112,12 +110,9 @@ test.describe('Reconciler: Gaps Detected → Share Accepted', () => {
   /**
    * Completes User B's Stage 1 journey through feeling heard.
    */
-  async function completeUserBStage1(request: import('@playwright/test').APIRequestContext) {
+  async function completeUserBStage1() {
     // Accept invitation
-    await request.post(`${API_BASE_URL}/api/invitations/${invitationId}/accept`, {
-      headers: { ...getE2EHeaders(userB.email, userBId, FIXTURE_ID), 'Content-Type': 'application/json' },
-    });
-
+    // EMPATHY_SHARED_A is seeded post-accept (work-2km7): User B has already joined.
     // Navigate to session
     const userBParams = new URLSearchParams({
       'e2e-user-id': userBId,
@@ -179,7 +174,7 @@ test.describe('Reconciler: Gaps Detected → Share Accepted', () => {
       await userAPage.screenshot({ path: 'test-results/share-accepted-01-userA-initial.png' });
       console.log(`${elapsed()} User A connected, empathy already shared`);
 
-      await completeUserBStage1(request);
+      await completeUserBStage1();
       console.log(`${elapsed()} User B completed Stage 1, reconciler triggered`);
 
       // === USER A: Should see "Almost There" popup ===
@@ -271,7 +266,7 @@ test.describe('Reconciler: Gaps Detected → Share Accepted', () => {
       });
 
       await setupUserA();
-      await completeUserBStage1(request);
+      await completeUserBStage1();
 
       // User B shares
       await navigateToShareFromSession(userBPage);

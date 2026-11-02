@@ -57,7 +57,6 @@ test.describe('Reconciler: Gaps Detected → Share Declined', () => {
   let sessionId: string;
   let userAId: string;
   let userBId: string;
-  let invitationId: string;
   let userAContext: BrowserContext;
   let userAPage: Page;
   let userBContext: BrowserContext;
@@ -75,7 +74,6 @@ test.describe('Reconciler: Gaps Detected → Share Declined', () => {
     sessionId = setup.session.id;
     userAId = setup.userA.id;
     userBId = setup.userB!.id;
-    invitationId = setup.invitation.id;
 
     const userASetup = await createUserContext(browser, userA.email, userAId, FIXTURE_ID, { x: 0, y: 0 });
     userAContext = userASetup.context;
@@ -106,11 +104,8 @@ test.describe('Reconciler: Gaps Detected → Share Declined', () => {
     await userAPage.waitForTimeout(2000);
   }
 
-  async function completeUserBStage1(request: import('@playwright/test').APIRequestContext) {
-    await request.post(`${API_BASE_URL}/api/invitations/${invitationId}/accept`, {
-      headers: { ...getE2EHeaders(userB.email, userBId, FIXTURE_ID), 'Content-Type': 'application/json' },
-    });
-
+  async function completeUserBStage1() {
+    // EMPATHY_SHARED_A is seeded post-accept (work-2km7): User B has already joined.
     const userBParams = new URLSearchParams({
       'e2e-user-id': userBId,
       'e2e-user-email': userB.email,
@@ -182,7 +177,7 @@ test.describe('Reconciler: Gaps Detected → Share Declined', () => {
       const elapsed = () => `[${((Date.now() - testStart) / 1000).toFixed(1)}s]`;
 
       await setupUserA();
-      await completeUserBStage1(request);
+      await completeUserBStage1();
       console.log(`${elapsed()} User B completed Stage 1, reconciler triggered`);
 
       await navigateToShareAndDecline();
@@ -235,7 +230,7 @@ test.describe('Reconciler: Gaps Detected → Share Declined', () => {
       const elapsed = () => `[${((Date.now() - testStart) / 1000).toFixed(1)}s]`;
 
       await setupUserA();
-      await completeUserBStage1(request);
+      await completeUserBStage1();
       await navigateToShareAndDecline();
 
       console.log(`${elapsed()} User B declined - checking empathy status`);

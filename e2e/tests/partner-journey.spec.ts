@@ -3,7 +3,7 @@
  *
  * Tests the complete two-user flow:
  * 1. User A (Shantam) is already in Stage 2, waiting for partner to feel heard
- * 2. User B (Darryl) accepts invitation, signs compact, chats, feels heard
+ * 2. User B (Darryl) has accepted (seeded post-accept, work-2km7), signs compact, chats, feels heard
  * 3. Reconciler runs and finds gaps in Shantam's empathy guess
  * 4. Darryl sees share suggestion and can share context to help Shantam understand
  */
@@ -89,7 +89,7 @@ test.describe('Partner Journey (Two Browser Contexts)', () => {
     await cleanupE2EData().catch(() => {});
 
     // Seed session at EMPATHY_SHARED_A stage
-    // User A has completed through empathy sharing, waiting for User B
+    // User A has completed through empathy sharing; User B has joined but not begun
     const setup = await new SessionBuilder()
       .userA(userA.email, userA.name)
       .userB(userB.email, userB.name)
@@ -195,25 +195,11 @@ test.describe('Partner Journey (Two Browser Contexts)', () => {
     console.log(`${elapsed()} User A Ably console logs so far:`, userAConsoleLogs);
 
     // ==========================================
-    // PHASE 2: User B accepts invitation
+    // PHASE 2: (none) User B has already accepted
     // ==========================================
-    console.log(`${elapsed()} === PHASE 2: User B accepts invitation ===`);
-
-    const acceptResponse = await request.post(`${API_BASE_URL}/api/invitations/${invitationId}/accept`, {
-      headers: {
-        ...getE2EHeaders(userB.email, userBId, FIXTURE_ID),
-        'Content-Type': 'application/json',
-      },
-    });
-
-    if (!acceptResponse.ok()) {
-      const errorText = await acceptResponse.text();
-      console.log('Invitation acceptance failed:', acceptResponse.status(), errorText);
-      test.skip(true, 'Backend API not ready for invitation acceptance');
-      return;
-    }
-
-    console.log(`${elapsed()} User B accepted invitation`);
+    // EMPATHY_SHARED_A is seeded post-accept (work-2km7): the invitation is ACCEPTED, the
+    // session ACTIVE and User B a participant who has not begun. Accept itself is tested
+    // from INVITATION_READY (backend fixture-scenarios/__tests__/topic-frame.test.ts).
 
     // ==========================================
     // PHASE 3: User B navigates to session and signs compact
