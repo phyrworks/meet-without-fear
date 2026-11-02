@@ -21,8 +21,9 @@ datasource db {
 // diff` can see. Everything it cannot see — RLS, policies, triggers, CHECKs,
 // the `intensity` domain, views, `app.*` functions, grants, the milestone
 // seed — lives in the migration SQL. The SQL-only objects that `prisma db
-// pull` CAN see (the two generated columns and the `sql_`-prefixed partial /
-// expression indexes) are in backend/scripts/target-shape/sql-only.sql.
+// pull` CAN see are the two generated columns (inline in their CREATE TABLE
+// in backend/scripts/target-shape/tables.sql) and the `sql_`-prefixed partial /
+// expression indexes (backend/scripts/target-shape/sql-only.sql).
 //
 // Rules (spec §5): never declare a partial unique; never give a Prisma index
 // a `sql_` name; every relation has an explicit onDelete and
@@ -527,8 +528,8 @@ model ContextShareOffer {
 // 1.3 Consent (1)
 // ----------------------------------------------------------------------------
 
-/// target_kind is GENERATED ALWAYS AS (CASE … END) STORED — created by
-/// sql-only.sql; declared here exactly as `prisma db pull` renders it.
+/// target_kind is GENERATED ALWAYS AS (CASE … END) STORED — created inline in
+/// backend/scripts/target-shape/tables.sql; declared here exactly as `prisma db pull` renders it.
 model Consent {
   id                       String           @id @default(dbgenerated("uuidv7()")) @db.Uuid
   participantId            String           @map("participant_id") @db.Uuid
@@ -956,8 +957,8 @@ model TakeawayLink {
 // 1.7 User, preferences, feature state (6)
 // ----------------------------------------------------------------------------
 
-/// name is GENERATED ALWAYS AS (nullif(trim(…), '')) STORED — created by
-/// sql-only.sql; declared exactly as `prisma db pull` renders it (plain, no
+/// name is GENERATED ALWAYS AS (nullif(trim(…), '')) STORED — created inline in
+/// backend/scripts/target-shape/tables.sql; declared exactly as `prisma db pull` renders it (plain, no
 /// default). The app never writes it.
 model User {
   id        String    @id @default(dbgenerated("uuidv7()")) @db.Uuid
