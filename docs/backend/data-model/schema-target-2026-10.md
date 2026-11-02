@@ -30,7 +30,7 @@ The review's Q3–Q7 are still open. The target is designed under these; each ca
 
 | Rule | Detail |
 |---|---|
-| Ids | `id uuid PRIMARY KEY DEFAULT uuidv7()`. Junctions use composite PKs |
+| Ids | `id uuid7 PRIMARY KEY DEFAULT uuidv7()`; every column referencing an id is `uuid7` too (domain, §3; owner decision 2026-11-02, work-a39h.11.40). Junctions use composite PKs |
 | Timestamps | all `timestamptz`; `created_at timestamptz NOT NULL DEFAULT now()` on every table; `updated_at timestamptz NOT NULL DEFAULT now()` on tables updated in place, maintained by one `BEFORE UPDATE` trigger `app.touch_updated_at()`; append-only tables have no `updated_at` and `mwf_app` holds no `UPDATE` grant on them |
 | Names | snake_case tables and columns; enums `snake_case` types; Prisma models PascalCase via `@@map`, fields camelCase via `@map` |
 | FK delete rules | → `user`: **RESTRICT, always** (soft delete, P3 D9). → `session`: CASCADE (retention hard-deletes whole sessions). → `participant`: CASCADE (a participant row is removed only with its session; a leaver's row survives, pointing at the tombstone). → `conversation`, `reflection`, `empathy_attempt`, `follow_up`: CASCADE. → `need` from `need_share`: **RESTRICT** (a shared need is delivered content and survives its owner; N-3). → `consent`: nothing references it (P0-3) — a consent row is never deleted by `mwf_app` (no DELETE policy) and goes only with its target/session. → `proposal`: RESTRICT from `agreement`, CASCADE from its own children. → `milestone`: RESTRICT |
@@ -994,6 +994,7 @@ erDiagram
 | `device_platform` | ios, android, web | new |
 | `activity_type` / `activity_status` / `brain_call_type` | unchanged | |
 | **Domain** `intensity` | `int CHECK (VALUE BETWEEN 1 AND 10)` | new |
+| **Domain** `uuid7` | `uuid CONSTRAINT uuid7_version CHECK (VALUE IS NULL OR coalesce(uuid_extract_version(VALUE), 0) = 7)` — every uuid column (33 PKs, 95 FK columns); `gen_random_uuid()` and other non-v7 values are refused. Invisible to Prisma (`String @db.Uuid`). Source: `backend/scripts/target-shape/tables.sql` | new (2026-11-02) |
 
 **Become lookup tables:** `milestone` (the stage vocabulary, D3). **Become zod unions inside documents, not DB types:** `TendingFollowThroughStatus`, `TendingHelpfulnessStatus`, `TendingBlockerCategory`, `TendingNeedResolutionStatus`, `PartialClosureResolution` (inside `follow_up_checkin.payload`); `MeditationType`, `FavoriteType`, `NeedsCategory`, `MentionSourceType`, `InsightType`, `GlobalLibrarySource`, `TakeawayLinkType`-style enums of dropped tables (inside `feature_state.doc` or gone). **Dropped:** `SessionType`, `StageStatus`, `Attribution`, `MemoryCategory` is kept. Enum members are declared in the migration in the order listed; the five sort-order drifts (census §7) disappear with the rebuild.
 

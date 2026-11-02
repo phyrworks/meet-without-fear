@@ -16,70 +16,60 @@
  *   0  scripts/target-shape/preamble.sql — refuse a non-empty database; the
  *      roles assertion and the SET ROLE mwf_job check; schema app;
  *      app.current_user_id();
- *   1  Prisma's DDL: `prisma migrate diff --from-empty --to-schema <copy of
- *      schema.prisma without the consent.target_kind @default> --script`
- *      (sql-only.sql re-adds that column GENERATED);
+ *   1  scripts/target-shape/tables.sql — the domains (uuid7, intensity), the
+ *      enums and the 47 tables, hand-written, each table complete in its
+ *      CREATE TABLE (PK, UNIQUE, FK, CHECK, generated columns) in dependency
+ *      order (owner decision 2026-11-02, work-a39h.11.40: it replaced the
+ *      `prisma migrate diff --from-empty` DDL; check-schema.sh proves
+ *      schema.prisma still matches it);
  *   2  the milestone seed (gen/maps.ts MILESTONES);
  *   3  scripts/target-shape/trailer.sql, with scripts/target-shape/sql-only.sql
  *      spliced in verbatim at its `-- @@include sql-only.sql` line.
  *
- * Deterministic: it reads only repository files and runs `prisma migrate
- * diff --from-empty` (no database), so two runs are byte-identical.
+ * Deterministic: it reads only repository files (no Prisma, no database),
+ * so two runs are byte-identical.
  */
 
-import { execFileSync } from 'child_process';
 import * as fs from 'fs';
-import * as os from 'os';
 import * as path from 'path';
 import { milestoneSeed, section } from './target-shape/gen/maps';
 
 export const MIGRATION_NAME = '20261026120000_target_shape_baseline';
 
 const BACKEND = path.resolve(__dirname, '..');
-const SCHEMA = path.join(BACKEND, 'prisma', 'schema.prisma');
 const DIR = path.join(BACKEND, 'scripts', 'target-shape');
 const PREAMBLE = path.join(DIR, 'preamble.sql');
+const TABLES = path.join(DIR, 'tables.sql');
 const TRAILER = path.join(DIR, 'trailer.sql');
 const SQL_ONLY = path.join(DIR, 'sql-only.sql');
 const OUT = path.join(BACKEND, 'prisma', 'migrations', MIGRATION_NAME, 'migration.sql');
 const INCLUDE = '-- @@include sql-only.sql';
 
-/** Prisma's DDL for the target, from a copy of schema.prisma without the target_kind @default. */
-function prismaDdl(): string {
-  const schema = fs.readFileSync(SCHEMA, 'utf8');
-  const stripped = schema.replace(/(\n\s*targetKind\s+ConsentTarget\s+)@default\(dbgenerated\("\\nCASE[\s\S]*?END"\)\)\s*/, '$1');
-  if (stripped === schema) throw new Error('could not strip the consent.target_kind @default (sql-only.sql trap)');
-  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ts7c-gen-'));
-  try {
-    const copy = path.join(tmp, 'schema.prisma');
-    fs.writeFileSync(copy, stripped);
-    return execFileSync('npx', ['prisma', 'migrate', 'diff', '--from-empty', '--to-schema', copy, '--script'], {
-      cwd: BACKEND,
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
-  } finally {
-    fs.rmSync(tmp, { recursive: true, force: true });
-  }
-}
-
-/** The DDL creates exactly the 47 target tables, all with lower-case names. */
-function checkDdl(ddl: string): number {
+/**
+ * tables.sql creates exactly the 47 target tables, every name lower-case, and
+ * types every uuid column uuid7. Returns the counts for the section title.
+ */
+export function checkTables(sql: string): { names: number; uuid7: number } {
   const names = new Set<string>();
-  for (const m of ddl.matchAll(/CREATE (?:TYPE|TABLE|UNIQUE INDEX|INDEX) "([^"]+)"/g)) names.add(m[1]);
-  for (const m of ddl.matchAll(/CONSTRAINT "([^"]+)"/g)) names.add(m[1]);
-  const bad = [...names].filter((n) => !/^[a-z_]/.test(n));
-  if (bad.length) throw new Error(`target DDL creates names that are not lower-case: ${bad.join(', ')}`);
-  const tables = (ddl.match(/^CREATE TABLE /gm) ?? []).length;
-  if (tables !== 47) throw new Error(`target DDL creates ${tables} tables, expected 47`);
-  return names.size;
+  for (const m of sql.matchAll(/CREATE (?:DOMAIN|TYPE|TABLE|UNIQUE INDEX|INDEX) "?([A-Za-z0-9_]+)"?/g)) names.add(m[1]);
+  for (const m of sql.matchAll(/CONSTRAINT "?([A-Za-z0-9_]+)"?/g)) names.add(m[1]);
+  const bad = [...names].filter(n => !/^[a-z_][a-z0-9_]*$/.test(n));
+  if (bad.length) throw new Error(`tables.sql creates names that are not lower-case: ${bad.join(', ')}`);
+  const tables = (sql.match(/^CREATE TABLE /gm) ?? []).length;
+  if (tables !== 47) throw new Error(`tables.sql creates ${tables} tables, expected 47`);
+  // A column line is `    "name" <type>…` inside a CREATE TABLE.
+  const plainUuid = [...sql.matchAll(/^ {4}"([a-z0-9_]+)" uuid\b/gim)].map(m => m[1]);
+  if (plainUuid.length) throw new Error(`tables.sql has uuid columns not typed uuid7: ${plainUuid.join(', ')}`);
+  const uuid7 = (sql.match(/^ {4}"[a-z0-9_]+" uuid7\b/gm) ?? []).length;
+  return { names: names.size, uuid7 };
 }
 
 function trailer(): string {
   const t = fs.readFileSync(TRAILER, 'utf8');
   const lines = t.split('\n');
   const at = lines.indexOf(INCLUDE);
-  if (at < 0 || lines.lastIndexOf(INCLUDE) !== at) throw new Error(`trailer.sql must contain exactly one "${INCLUDE}" line`);
+  if (at < 0 || lines.lastIndexOf(INCLUDE) !== at)
+    throw new Error(`trailer.sql must contain exactly one "${INCLUDE}" line`);
   const sqlOnly = fs.readFileSync(SQL_ONLY, 'utf8').replace(/\n$/, '');
   return [...lines.slice(0, at), sqlOnly, ...lines.slice(at + 1)].join('\n');
 }
@@ -128,21 +118,26 @@ const HEADER = `-- =============================================================
 -- SECTIONS
 --   0  preamble: empty-database guard, roles, schema app, app.current_user_id()
 --      (backend/scripts/target-shape/preamble.sql)
---   1  enums and the 47 tables (Prisma DDL, prisma migrate diff --from-empty)
+--   1  domains (uuid7, intensity), enums and the 47 tables, hand-written,
+--      each table complete in its CREATE TABLE, in dependency order
+--      (backend/scripts/target-shape/tables.sql)
 --   2  milestone seed (reference data)
---   3  trailer: intensity domain, sql-only.sql, CHECKs, app.* functions,
+--   3  trailer: sql-only.sql (sql_ indexes), app.* functions,
 --      triggers, views, grants, catalog assertions
 --      (backend/scripts/target-shape/trailer.sql)
 -- ============================================================================
 `;
 
 export function generate(): string {
-  const ddl = prismaDdl();
-  const nNames = checkDdl(ddl);
+  const tables = fs.readFileSync(TABLES, 'utf8');
+  const n = checkTables(tables);
   const out = [
     HEADER,
     section('0. Preamble (backend/scripts/target-shape/preamble.sql)', fs.readFileSync(PREAMBLE, 'utf8')),
-    section(`1. Enums and the 47 target tables — prisma migrate diff --from-empty (${nNames} named objects, all lower-case)`, ddl),
+    section(
+      `1. Domains, enums and the 47 target tables (backend/scripts/target-shape/tables.sql; ${n.names} named objects, all lower-case; ${n.uuid7} uuid7 columns)`,
+      tables,
+    ),
     section('2. Milestone seed (backend/scripts/target-shape/gen/maps.ts)', milestoneSeed()),
     section('3. Trailer (backend/scripts/target-shape/trailer.sql, sql-only.sql spliced in)', trailer()),
   ].join('\n');
@@ -166,10 +161,12 @@ function main(): void {
     if (committed !== a) throw new Error(`${OUT} differs from the generator output: regenerate it`);
     const others = fs
       .readdirSync(path.dirname(path.dirname(OUT)), { withFileTypes: true })
-      .filter((d) => d.isDirectory() && d.name !== MIGRATION_NAME)
-      .map((d) => d.name);
+      .filter(d => d.isDirectory() && d.name !== MIGRATION_NAME)
+      .map(d => d.name);
     if (others.length) throw new Error(`prisma/migrations holds more than the baseline: ${others.join(', ')}`);
-    process.stdout.write(`ok: two runs byte-identical and equal to ${MIGRATION_NAME}/migration.sql (${Buffer.byteLength(a)} bytes)\n`);
+    process.stdout.write(
+      `ok: two runs byte-identical and equal to ${MIGRATION_NAME}/migration.sql (${Buffer.byteLength(a)} bytes)\n`,
+    );
   } else {
     throw new Error(`unknown argument ${arg} (use --stdout or --check)`);
   }
