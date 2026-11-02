@@ -147,6 +147,7 @@ interface AcceptInvitationResponse {
 3. The accepter's `StageProgress` row for Stage 0 is created here. The inviter's `StageProgress` row was already created when the session was originally created.
 4. `SharedVessel` was already created at session creation; no new vessel is created on accept.
 5. The accepting user's `UserVessel` is created here.
+6. The inviter reaches the `invitation_sent` milestone (job connection, at the accept instant; a no-op if `POST /sessions/:id/invitation/confirm` already wrote it). An accepted invitation was necessarily sent, and the app's share modal — the only caller of confirm — is not shown again once the partner accepted, so without this the inviter would stay in stage 0 (`backend/src/services/milestone-writer.ts` `reachInvitationSentOnAccept`; the E2E auto-accept on `GET /sessions/:id/state` does the same). A later confirm is a no-op.
 
 ### Example
 

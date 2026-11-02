@@ -290,6 +290,8 @@ export const TARGET_ADDED_RELATIONS: Record<string, string> = {
     'membership and the caller are the participant row (requireSessionAccess; v_co_participant; sessionParties)',
   conversation: "the audience of a read or a delivered row is a participant's MAIN conversation",
   participant_milestone: "a message's DTO stage and the Stage 2 stage checks are derived from milestones (stage shim)",
+  invitation:
+    "a participant's stage 0 stays open while the invitation they authored is unsent (stage shim invitationPending, work-qmgc)",
 };
 
 /**
@@ -686,3 +688,59 @@ export function subjectDeclineRecord(
       'the subject’s own history only.',
   };
 }
+
+/**
+ * work-9klf: the session's confirmed topic frame. The current-shape fixtures
+ * (and so the recorded baselines) wrote none, but the app cannot send or
+ * accept an invitation without one (confirmInvitationMessage,
+ * acceptInvitation), so the target fixture writes it for every sent session:
+ * `TOPIC_FRAME` (fixture-scenarios/scenarios.ts), confirmed at the
+ * invitation's message_confirmed_at, as confirmTopicFrame stamps both. A body's
+ * `topicFrameConfirmedAt` is masked against the baseline's null (the instant
+ * equals the body's messageConfirmedAt, so it renumbers no ranks; a mayDiffer
+ * would also do — the mask is the stricter choice), the text may differ; both
+ * paired with `targetTopicFrameChecks` (scenario-checks.ts), which asserts the
+ * raw values (frame text; topicFrameConfirmedAt == messageConfirmedAt).
+ */
+export const TARGET_TOPIC_FRAME_RULES: AllowRule[] = [
+  {
+    kind: 'fixtureMask',
+    at: 'steps.*.body.data.invitation.topicFrameConfirmedAt',
+    expect: 'isoTimestamp',
+    baseline: null,
+    why:
+      'work-9klf: the target fixture confirms the topic frame of a sent session (the old one wrote none); ' +
+      'masked against the baseline’s null; raw value pinned by targetTopicFrameChecks.',
+  },
+  {
+    kind: 'mayDiffer',
+    at: 'steps.*.body.data.invitation.topicFrame',
+    mustMatch: true,
+    why: 'work-9klf: the target fixture writes the topic frame of a sent session (the old one wrote none).',
+  },
+];
+
+/**
+ * work-9klf: `TARGET_TOPIC_FRAME_RULES` for the normalised baseline's
+ * restored state (concept allow-lists only): the session row's frame and its
+ * confirmation instant, masked before normalisation because the instant can
+ * be new to the restored state (FEEL_HEARD_B) and renumber every later
+ * `<ts:N>` there. Paired with `targetTopicFrameChecks`.
+ */
+export const TARGET_TOPIC_FRAME_INITIAL_RULES: AllowRule[] = [
+  {
+    kind: 'fixtureMask',
+    at: 'initial.session.*.topic_frame_confirmed_at',
+    expect: 'sqlTimestamp',
+    baseline: null,
+    why:
+      'work-9klf: the target fixture confirms the topic frame of a sent session (the old one wrote none); ' +
+      'masked: a new instant renumbers the restored state’s later ranks.',
+  },
+  {
+    kind: 'mayDiffer',
+    at: 'initial.session.*.topic_frame',
+    mustMatch: true,
+    why: 'work-9klf: the target fixture writes the topic frame of a sent session (the old one wrote none).',
+  },
+];

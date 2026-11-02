@@ -146,6 +146,13 @@ export function rawTieRanges(rawPayload: unknown, rules: readonly AllowRule[], s
 }
 
 const ISO_INSTANT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$/;
+/** A snapshot's timestamp text (`snapshot.ts`: `::text`, UTC, no zone). */
+const SQL_INSTANT = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}(\.\d+)?$/;
+
+/** work-9klf: a fixtureMask on the normalised baseline's restored state (every path under `initial.`). */
+export function isInitialMask(rule: AllowRule): boolean {
+  return rule.kind === 'fixtureMask' && [rule.at].flat().every(p => p.startsWith('initial.'));
+}
 
 /**
  * `fixtureMask` (TS-9, target shape only): a deep copy of one step's RAW
@@ -168,7 +175,9 @@ export function applyFixtureMasks<T>(
     for (const m of masks) {
       const pats = (Array.isArray(m.at) ? m.at : [m.at]).map(x => x.split('.'));
       if (!pats.some(pat => matchPath(pat, [...stepPath, ...p]))) continue;
-      const ok = m.expect === 'isoTimestamp' && typeof v === 'string' && ISO_INSTANT.test(v);
+      const ok =
+        typeof v === 'string' &&
+        ((m.expect === 'isoTimestamp' && ISO_INSTANT.test(v)) || (m.expect === 'sqlTimestamp' && SQL_INSTANT.test(v)));
       if (!ok) {
         errors.push(`fixtureMask @ ${[...stepPath, ...p].join('.')}: expected ${m.expect}, got ${brief(v)}`);
         return v;

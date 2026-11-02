@@ -27,6 +27,8 @@ import {
   TARGET_MESSAGE_STAGE_RULE,
   TARGET_ROUND_KEYS_RULE,
   TARGET_USER_NAME_RULE,
+  TARGET_TOPIC_FRAME_INITIAL_RULES,
+  TARGET_TOPIC_FRAME_RULES,
 } from './common';
 import type { AllowList, AllowRule } from './types';
 
@@ -45,6 +47,8 @@ const bodyRules = (concept: boolean): AllowRule[] => [
 export const DECLINED_OFFER_NO_TRACE_ALLOW: AllowList = {
   scenario: 'declined-offer-no-trace',
   rules: [
+    ...TARGET_TOPIC_FRAME_RULES,
+    ...TARGET_TOPIC_FRAME_INITIAL_RULES,
     ...bodyRules(true),
     TARGET_USER_NAME_RULE,
     empathySubmittedMilestone('ada', 'initial', '<ts:14>'),
@@ -69,6 +73,7 @@ export const DECLINED_OFFER_NO_TRACE_ALLOW: AllowList = {
 export const DECLINED_OFFER_NO_TRACE_BYTE_TARGET_ALLOW: AllowList = {
   scenario: 'declined-offer-no-trace',
   rules: [
+    ...TARGET_TOPIC_FRAME_RULES,
     ...bodyRules(false),
     byteLabelShift(['steps.15.body.data.records.0.id', 'steps.47.body.data.records.0.id'], 'consent'),
     ...targetByteRules({

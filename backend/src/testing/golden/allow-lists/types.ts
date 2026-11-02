@@ -169,11 +169,19 @@ export interface TiedOrderRule extends RuleBase {
  * hold, the step fails. Never applied on the current shape. Give the
  * fixture fact and pair it with a scenario assertion of the real value.
  *
- *   expect 'isoTimestamp' — the raw value is an ISO-8601 instant.
+ *   expect 'isoTimestamp' — the raw value is an ISO-8601 instant (a body);
+ *   expect 'sqlTimestamp' — the raw value is a snapshot's timestamp text
+ *                           (`YYYY-MM-DD HH:MM:SS.fff`, UTC).
+ *
+ * work-9klf: a mask whose every path starts with `initial.` applies to the
+ * normalised baseline's restored state instead of a step
+ * (`initial.<concept>.*.<column>`; the row segment must be `*`). Such a
+ * mask belongs in a concept allow-list only; it must match in the run like
+ * any other.
  */
 export interface FixtureMaskRule extends RuleBase {
   kind: 'fixtureMask';
-  expect: 'isoTimestamp';
+  expect: 'isoTimestamp' | 'sqlTimestamp';
   /** What the baseline holds at this path (substituted into the run). */
   baseline: unknown;
 }

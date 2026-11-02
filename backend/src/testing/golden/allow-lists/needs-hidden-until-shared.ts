@@ -22,6 +22,8 @@ import {
   TARGET_USER_NAME_RULE,
   empathySubmittedMilestone,
   targetByteRules,
+  TARGET_TOPIC_FRAME_INITIAL_RULES,
+  TARGET_TOPIC_FRAME_RULES,
 } from './common';
 import type { AllowList, AllowRule } from './types';
 
@@ -314,6 +316,8 @@ const SHARED_RULES = (concept: boolean): AllowRule[] => [
 export const NEEDS_HIDDEN_UNTIL_SHARED_ALLOW: AllowList = {
   scenario: 'needs-hidden-until-shared',
   rules: [
+    ...TARGET_TOPIC_FRAME_RULES,
+    ...TARGET_TOPIC_FRAME_INITIAL_RULES,
     ...SHARED_RULES(true),
     ...initialFixtureDeltas(),
     ...r33ConceptChanges(),
@@ -385,6 +389,7 @@ export const NEEDS_SHARE_WRITES_NO_NEED_SHARE =
 export const NEEDS_HIDDEN_UNTIL_SHARED_BYTE_TARGET_ALLOW: AllowList = {
   scenario: 'needs-hidden-until-shared',
   rules: [
+    ...TARGET_TOPIC_FRAME_RULES,
     ...SHARED_RULES(false),
     {
       kind: 'mayDiffer',

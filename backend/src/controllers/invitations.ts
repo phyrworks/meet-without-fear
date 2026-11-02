@@ -11,6 +11,7 @@ import { getPartnerParticipant } from '../services/participant-resolver';
 import { loadStageStates, progressDTO } from '../services/stage-shim';
 import { displayStatus, parseStatusFilter, pausedSessionIds } from '../services/session-status';
 import { createInvitationUrl } from '../utils/urls';
+import { reachInvitationSentOnAccept } from '../services/milestone-writer';
 
 // ============================================================================
 // Types
@@ -612,6 +613,8 @@ export async function acceptInvitation(req: Request, res: Response): Promise<voi
       return;
     }
 
+    const acceptedAt = new Date();
+
     // Accept the invitation, join as a participant (with a MAIN conversation
     // and read state), and activate the session — atomically. ACTIVE goes
     // through app.session_set_status (the sole writer; identity-bound: the new
@@ -642,7 +645,7 @@ export async function acceptInvitation(req: Request, res: Response): Promise<voi
         data: {
           status: 'ACCEPTED',
           acceptedByUserId: user.id,
-          acceptedAt: new Date(),
+          acceptedAt,
         },
       });
 
@@ -660,6 +663,10 @@ export async function acceptInvitation(req: Request, res: Response): Promise<voi
 
       await tx.$executeRaw`SELECT app.session_set_status(${invitation.sessionId}::uuid, 'ACTIVE'::session_status)`;
     });
+
+    // An accepted invitation was necessarily sent: the inviter's stage 0 ends here even if their app
+    // never called POST /invitation/confirm (work-qmgc).
+    await reachInvitationSentOnAccept(invitation.invitedByParticipantId, acceptedAt);
 
     // Get session summary for response
     const session = await prisma.session.findUnique({

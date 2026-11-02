@@ -25,6 +25,7 @@
     { "code": "backend/src/scripts/open-due-tending-entries.ts", "label": "backend/src/scripts/open-due-tending-entries.ts", "docs": ["docs/backend/api/tending.md"] },
     { "code": "backend/src/routes/consent.ts",           "label": "backend/src/routes/consent.ts", "docs": ["docs/backend/api/consent.md"] },
     { "code": "backend/src/controllers/consent.ts",      "label": "backend/src/controllers/consent.ts", "docs": ["docs/backend/api/consent.md"] },
+    { "code": "backend/src/services/stage-shim.ts",     "label": "backend/src/services/stage-shim.ts", "docs": ["docs/backend/state-machine/index.md"] },
     { "code": "backend/src/routes/invitations.ts",       "label": "backend/src/routes/invitations.ts", "docs": ["docs/backend/api/invitations.md"] },
     { "code": "backend/src/controllers/invitations.ts",  "label": "backend/src/controllers/invitations.ts", "docs": ["docs/backend/api/invitations.md"] },
     { "code": "backend/src/routes/sessions.ts",          "label": "backend/src/routes/sessions.ts", "docs": ["docs/backend/api/sessions.md"] },

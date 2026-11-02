@@ -6,7 +6,7 @@ import { errorResponse, successResponse } from '../utils/response';
 import { assembleContextBundle, type ContextBundle } from '../services/context-assembler';
 import { determineMemoryIntent } from '../services/memory-intent';
 import { resolveStageIntervalsForSessions, resolveStageForTimestamp } from '../utils/stage-resolver';
-import { loadStageStates } from '../services/stage-shim';
+import { loadCurrentStages, loadStageStates } from '../services/stage-shim';
 import { verifyToken } from '@clerk/express';
 import { logger } from '../lib/logger';
 import { fieldEncryptionEnabled } from '../utils/field-encryption';
@@ -224,14 +224,27 @@ async function reflectionTurnCounts(reflectionIds: string[]): Promise<Map<string
   return new Map(rows.map(r => [r.reflectionId, r._count.id]));
 }
 
-/** The furthest stage any participant of each session is in (v_current_stage; was max StageProgress.stage). */
+/**
+ * The furthest stage any participant of each session is in (was max StageProgress.stage), through the
+ * stage shim — so a crafting inviter counts as stage 0 here as in /state (work-qmgc), not the view's
+ * raw active_stage.
+ */
 async function maxStages(sessionIds: string[]): Promise<Map<string, number>> {
   if (sessionIds.length === 0) return new Map();
-  const rows = await db().$queryRaw<
-    Array<{ session_id: string; stage: number }>
-  >`SELECT session_id, max(least(active_stage, 4))::int AS stage
-    FROM v_current_stage WHERE session_id = ANY(${sessionIds}::uuid[]) GROUP BY session_id`;
-  return new Map(rows.map(r => [r.session_id, Number(r.stage)]));
+  const participants = await db().participant.findMany({
+    where: { sessionId: { in: sessionIds } },
+    select: { id: true, sessionId: true },
+  });
+  const currents = await loadCurrentStages(
+    participants.map(p => p.id),
+    db(),
+  );
+  const out = new Map<string, number>();
+  for (const p of participants) {
+    const current = currents.get(p.id);
+    if (current) out.set(p.sessionId, Math.max(out.get(p.sessionId) ?? 0, current.stage));
+  }
+  return out;
 }
 
 /** Cost / token / count totals of each key's activities (by session id, or by reflection id). */

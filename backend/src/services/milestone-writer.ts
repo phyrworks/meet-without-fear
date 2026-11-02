@@ -18,6 +18,7 @@
  */
 
 import { getJobPrisma, prisma } from '../lib/prisma';
+import { logger } from '../lib/logger';
 import type { Prisma } from '../generated/prisma/client';
 
 /** Spec §1.1: the keys a participant may insert themselves. */
@@ -52,4 +53,31 @@ export async function reachMilestone(
     VALUES (${participantId}::uuid, ${key}, ${at})
     ON CONFLICT (participant_id, milestone_key) DO NOTHING`;
   return count > 0;
+}
+
+/**
+ * The inviter's `invitation_sent`, reached when their invitation is accepted
+ * (work-qmgc). POST /invitation/confirm is the usual writer, but it fires only
+ * from the share modal, which mobile stops showing once the partner accepted —
+ * so a partner who accepts before that call would otherwise leave the inviter
+ * in stage 0 for good (the stage shim holds an inviter with an unsent
+ * invitation there). Job connection, like every system milestone; idempotent
+ * (a confirmed inviter already has it, and the first instant stands). A later
+ * confirm then takes its short-circuit (message confirmed + invitation_sent)
+ * and is a no-op — without the stage-transition AI message, which this path
+ * does not write.
+ *
+ * Runs after the accept transaction committed (a different connection). A
+ * failure is logged, not thrown: the partner has joined either way, and the
+ * inviter's own confirm still writes the milestone.
+ */
+export async function reachInvitationSentOnAccept(inviterParticipantId: string, acceptedAt: Date): Promise<void> {
+  try {
+    await reachMilestone(inviterParticipantId, 'invitation_sent', acceptedAt);
+  } catch (error) {
+    logger.error('[reachInvitationSentOnAccept] could not record invitation_sent for the inviter', {
+      inviterParticipantId,
+      error,
+    });
+  }
 }

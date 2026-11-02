@@ -204,6 +204,44 @@ describeTarget('brain_activity (job) and the dashboard (mwf_ops) on the target',
     ).rejects.toThrow(/permission denied/);
   });
 
+  it('the dashboard’s stage reads run the stage shim as mwf_ops: cost by stage, cache heatmap, cost flow, session context (work-qmgc)', async () => {
+    const request = (await import('supertest')).default;
+    const appModule = await import('../../app');
+    const app = ((appModule as { default?: unknown }).default ?? appModule) as never;
+    process.env.DASHBOARD_API_SECRET = '';
+
+    // A session-scoped activity inside the period, so the cost routes resolve this session's stages
+    // (resolveStageIntervalsForSessions → loadStageStates → the shim's invitation probe).
+    const { brainService } = await import('../brain-service');
+    const activity = await brainService.startActivity({
+      sessionId: ids.session,
+      activityType: 'LLM_CALL',
+      model: 'claude-sonnet',
+      input: {},
+    });
+    expect(activity.id).not.toBe('');
+    await brainService.completeActivity(activity.id, { output: {}, cost: 0.002 });
+
+    // The shim reads invitation.invited_by_participant_id; mwf_ops holds that column only
+    // (metadata, never the invitation's content).
+    const [{ col, msg }] = await run.sql<{ col: boolean; msg: boolean }>(
+      `SELECT has_column_privilege('mwf_ops', 'invitation', 'invited_by_participant_id', 'SELECT') AS col,
+              has_column_privilege('mwf_ops', 'invitation', 'name', 'SELECT') AS msg`,
+    );
+    expect({ col, msg }).toEqual({ col: true, msg: false });
+
+    const byStage = await request(app).get('/api/v1/brain/costs/by-stage?period=7d');
+    expect(byStage.status).toBe(200);
+    expect(byStage.body.data.stages.length).toBeGreaterThan(0);
+
+    expect((await request(app).get('/api/v1/brain/costs/cache-heatmap?period=7d')).status).toBe(200);
+    expect((await request(app).get('/api/v1/brain/costs/flow?period=7d')).status).toBe(200);
+
+    const context = await request(app).get(`/api/v1/brain/sessions/${ids.session}/context`);
+    expect(context.status).toBe(200);
+    expect(context.body.data).toMatchObject({ sessionId: ids.session, sessionType: 'partner' });
+  });
+
   it('dashboard auth: a configured secret is required (header compared timing-safely)', async () => {
     const request = (await import('supertest')).default;
     const appModule = await import('../../app');

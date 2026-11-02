@@ -39,7 +39,7 @@ import { conceptGoldenName, recordOrVerify, recordOrVerifyConcept } from '../run
 import type { SnapshotRow } from '../snapshot';
 import { isTargetShape } from '../shape';
 import { withClient } from '../db';
-import { targetMessageStageChecks } from '../scenario-checks';
+import { targetMessageStageChecks, targetTopicFrameChecks } from '../scenario-checks';
 
 /** TS-10: the target's names for the facts these checks read. */
 const T = isTargetShape();
@@ -333,6 +333,7 @@ describe(`golden: ${SCENARIO}`, () => {
   // TS-10 target pairs of the allow-list's rules.
   const targetOnly = T ? it : it.skip;
   targetMessageStageChecks({ harness: () => harness, steps: () => steps });
+  targetTopicFrameChecks({ harness: () => harness, steps: () => steps, invitationReads: false });
 
   targetOnly("mayDiffer pair: the partner-empathy statusVersion is the row's status_version (2)", () => {
     for (const step of steps.filter(s => s.label.startsWith('partner empathy as'))) {

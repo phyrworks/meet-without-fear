@@ -26,7 +26,7 @@ import {
   type StoredMessage,
   type TargetMessageKind,
 } from './message-store';
-import { loadMilestones } from './stage-shim';
+import { loadInvitationPending, loadMilestones } from './stage-shim';
 
 /** The DTO of a stored message in `ownerParticipantId`'s conversation. */
 export async function messageDTO(
@@ -34,8 +34,15 @@ export async function messageDTO(
   sessionId: string,
   ownerParticipantId: string,
 ): Promise<MessageDTO & { stage: number }> {
-  const milestones = (await loadMilestones([ownerParticipantId])).get(ownerParticipantId) ?? [];
-  return toMessageDTO(stored, { sessionId, ownerMilestones: milestones }) as unknown as MessageDTO & { stage: number };
+  const [milestones, pending] = await Promise.all([
+    loadMilestones([ownerParticipantId]),
+    loadInvitationPending([ownerParticipantId]),
+  ]);
+  return toMessageDTO(stored, {
+    sessionId,
+    ownerMilestones: milestones.get(ownerParticipantId) ?? [],
+    ownerInvitationPending: pending.has(ownerParticipantId),
+  }) as unknown as MessageDTO & { stage: number };
 }
 
 /** An AI row in one participant's conversation (job connection). */

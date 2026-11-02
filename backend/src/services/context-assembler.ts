@@ -20,7 +20,7 @@ import { decryptRawRows } from '../lib/prisma-encryption-middleware';
 import { type MemoryIntentResult, type RetrievalDepth, getTurnBufferSize } from './memory-intent';
 import { getSessionSummary } from './conversation-summarizer';
 import { getCoParticipants, getParticipant, resolveParticipant } from './participant-resolver';
-import { loadStageStates, messageStage, type MilestoneReached, type ShimStageRow } from './stage-shim';
+import { loadStageStates, messageStage, type MilestoneReached, type ShimStageRow, type StageOpts } from './stage-shim';
 import { legacyRole, type StoredMessage } from './message-store';
 import type { CategorizedFact as GlobalFact } from './global-memory';
 
@@ -526,6 +526,7 @@ export async function buildContextForParticipant(
   const stageState = stageStates.get(me.id);
   const stage = opts.stage ?? stageState?.current.stage ?? 0;
   const milestones = stageState?.milestones ?? [];
+  const stageOpts: StageOpts = { invitationPending: stageState?.invitationPending ?? false };
   const stageRow = stageState?.rows.find(r => r.stage === stage);
 
   // Names. The partner MUST be named by the nickname this participant gave
@@ -587,9 +588,16 @@ export async function buildContextForParticipant(
       session.topicFrame && session.topicFrameConfirmedAt
         ? { text: session.topicFrame, confirmedAt: session.topicFrameConfirmedAt.toISOString() }
         : undefined,
-    priorStageSummaries: buildPriorStageSummaries(ownMessages, milestones, stageState?.rows ?? [], stage, depth),
+    priorStageSummaries: buildPriorStageSummaries(
+      ownMessages,
+      milestones,
+      stageOpts,
+      stageState?.rows ?? [],
+      stage,
+      depth,
+    ),
     consentedShareState: depth === 'none' ? undefined : consentedShareStateFrom(sharedVessel),
-    currentStageHistory: buildCurrentStageHistory(ownMessages, milestones, stage, depth),
+    currentStageHistory: buildCurrentStageHistory(ownMessages, milestones, stageOpts, stage, depth),
     userName,
     partnerName,
     intent,
@@ -678,11 +686,11 @@ function mapStageHistoryRole(role: string): StageHistoryMessage['role'] {
 
 const HISTORY_KINDS = new Set(['CHAT', 'EMPATHY_STATEMENT', 'SHARED_CONTEXT']);
 
-function toHistory(m: OwnMessage, milestones: MilestoneReached[]): StageHistoryMessage {
+function toHistory(m: OwnMessage, milestones: MilestoneReached[], stageOpts: StageOpts): StageHistoryMessage {
   return {
     role: mapStageHistoryRole(legacyRole(m.role, m.kind)),
     content: m.content,
-    stage: messageStage(milestones, m.createdAt),
+    stage: messageStage(milestones, m.createdAt, stageOpts),
     timestamp: m.createdAt.toISOString(),
   };
 }
@@ -690,18 +698,22 @@ function toHistory(m: OwnMessage, milestones: MilestoneReached[]): StageHistoryM
 function buildCurrentStageHistory(
   messages: OwnMessage[],
   milestones: MilestoneReached[],
+  stageOpts: StageOpts,
   stage: number,
   depth: RetrievalDepth,
 ): ContextBundle['currentStageHistory'] | undefined {
   if (depth === 'none') return undefined;
-  const inStage = messages.filter(m => HISTORY_KINDS.has(m.kind) && messageStage(milestones, m.createdAt) === stage);
+  const inStage = messages.filter(
+    m => HISTORY_KINDS.has(m.kind) && messageStage(milestones, m.createdAt, stageOpts) === stage,
+  );
   if (inStage.length === 0) return undefined;
-  return { stage, messages: inStage.map(m => toHistory(m, milestones)) };
+  return { stage, messages: inStage.map(m => toHistory(m, milestones, stageOpts)) };
 }
 
 function buildPriorStageSummaries(
   messages: OwnMessage[],
   milestones: MilestoneReached[],
+  stageOpts: StageOpts,
   rows: ShimStageRow[],
   currentStage: number,
   depth: RetrievalDepth,
@@ -723,12 +735,12 @@ function buildPriorStageSummaries(
   }
   for (const m of messages) {
     if (!HISTORY_KINDS.has(m.kind)) continue;
-    const stage = messageStage(milestones, m.createdAt);
+    const stage = messageStage(milestones, m.createdAt, stageOpts);
     if (stage >= currentStage) continue;
     const summary = ensure(stage);
     if (m.kind === 'CHAT' && m.role === 'USER') summary.userTurnCount += 1;
     else if (m.kind === 'CHAT' && m.role === 'AI') summary.assistantTurnCount += 1;
-    summary.highlights.push(toHistory(m, milestones));
+    summary.highlights.push(toHistory(m, milestones, stageOpts));
   }
   const stages = [...byStage.values()]
     .sort((a, b) => a.stage - b.stage)

@@ -42,6 +42,8 @@ import {
   TARGET_MESSAGE_STAGE_RULE,
   TARGET_ROUND_KEYS_RULE,
   TARGET_USER_NAME_RULE,
+  TARGET_TOPIC_FRAME_INITIAL_RULES,
+  TARGET_TOPIC_FRAME_RULES,
 } from './common';
 import { isTargetShape } from '../shape';
 import type { AllowList, AllowRule } from './types';
@@ -434,6 +436,8 @@ const targetReadRules = (concept: boolean): AllowRule[] => [
 export const TOMBSTONE_ALLOW: AllowList = {
   scenario: 'tombstone',
   rules: [
+    ...TARGET_TOPIC_FRAME_RULES,
+    ...TARGET_TOPIC_FRAME_INITIAL_RULES,
     ...READ_DTO_RULES,
     // Both attempts were revealed in the fixture: the migration inserts their
     // delivered copies into the restored state (plan step 9).
@@ -489,6 +493,7 @@ export const TOMBSTONE_ALLOW: AllowList = {
 export const TOMBSTONE_BYTE_TARGET_ALLOW: AllowList = {
   scenario: 'tombstone',
   rules: [
+    ...TARGET_TOPIC_FRAME_RULES,
     ...READ_DTO_RULES,
     ...DEVIATION_FIX_RULES,
     ...targetReadRules(false),

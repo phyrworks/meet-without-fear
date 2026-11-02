@@ -6,7 +6,9 @@
 
 import {
   gatesFor,
+  activeStage,
   latestStageRow,
+  messageStage,
   progressDTO,
   stageAt,
   stageRowsFor,
@@ -16,13 +18,15 @@ import {
 
 const t = (s: number) => new Date(Date.UTC(2026, 9, 26, 12, 0, s));
 const m = (key: string, s: number): MilestoneReached => ({ key, reachedAt: t(s) });
+/** Not an inviter with an unsent invitation (the option is required: work-qmgc). */
+const NP = { invitationPending: false };
 
 // Ada in FEEL_HEARD_B: signed, felt heard, submitted her attempt.
 const ADA = [m('invitation_sent', 0), m('compact_signed', 30), m('feel_heard', 60), m('empathy_submitted', 90)];
 
 describe('stage shim — stageRowsFor', () => {
   it('rebuilds the old StageProgress rows: every stage before the current one COMPLETED at its terminal milestone', () => {
-    const rows = stageRowsFor(2, ADA, t(-10));
+    const rows = stageRowsFor(2, ADA, t(-10), NP);
     expect(rows.map(r => [r.stage, r.status, r.startedAt, r.completedAt])).toEqual([
       [0, 'COMPLETED', t(-10), t(30)],
       [1, 'COMPLETED', t(30), t(60)],
@@ -32,8 +36,8 @@ describe('stage shim — stageRowsFor', () => {
 
   it('completes stage 4 only at `closed`', () => {
     const all = [...ADA, m('empathy_validated', 100), m('needs_shared', 110), m('choices_shared', 120)];
-    expect(stageRowsFor(4, all, t(0))[4].status).toBe('IN_PROGRESS');
-    const closed = stageRowsFor(4, [...all, m('closed', 130)], t(0))[4];
+    expect(stageRowsFor(4, all, t(0), NP)[4].status).toBe('IN_PROGRESS');
+    const closed = stageRowsFor(4, [...all, m('closed', 130)], t(0), NP)[4];
     expect([closed.status, closed.completedAt]).toEqual(['COMPLETED', t(130)]);
   });
 });
@@ -70,20 +74,20 @@ describe('stage shim — gatesFor (derived gatesSatisfied)', () => {
 
 describe("stage shim — stageAt (a message's stage)", () => {
   it('is the number of terminal milestones reached by the instant, in order', () => {
-    expect(stageAt(ADA, t(10))).toBe(0);
-    expect(stageAt(ADA, t(30))).toBe(1); // at the signing instant
-    expect(stageAt(ADA, t(59))).toBe(1);
-    expect(stageAt(ADA, t(200))).toBe(2);
+    expect(stageAt(ADA, t(10), NP)).toBe(0);
+    expect(stageAt(ADA, t(30), NP)).toBe(1); // at the signing instant
+    expect(stageAt(ADA, t(59), NP)).toBe(1);
+    expect(stageAt(ADA, t(200), NP)).toBe(2);
   });
 
   it('stops at the first terminal not reached (a later one does not count)', () => {
-    expect(stageAt([m('feel_heard', 5)], t(10))).toBe(0);
+    expect(stageAt([m('feel_heard', 5)], t(10), NP)).toBe(0);
   });
 });
 
 describe('stage shim — latestStageRow (the old partner-activity pick)', () => {
   it('prefers an unfinished row (completedAt DESC NULLS FIRST), then the latest start', () => {
-    const rows = stageRowsFor(2, ADA, t(0));
+    const rows = stageRowsFor(2, ADA, t(0), NP);
     expect(latestStageRow(rows)?.stage).toBe(2);
     expect(latestStageRow(rows.slice(0, 2))?.stage).toBe(1);
   });
@@ -92,9 +96,18 @@ describe('stage shim — latestStageRow (the old partner-activity pick)', () => 
 describe('stage shim — progressDTO', () => {
   const state = (milestones: MilestoneReached[], stage: number): ParticipantStageState => ({
     participantId: 'p',
-    current: { participantId: 'p', milestoneKey: null, ordinal: null, stageLabel: null, nextMilestoneKey: null, stage },
+    current: {
+      participantId: 'p',
+      milestoneKey: null,
+      ordinal: null,
+      stageLabel: null,
+      nextMilestoneKey: null,
+      stage,
+      invitationPending: false,
+    },
+    invitationPending: false,
     milestones,
-    rows: stageRowsFor(stage, milestones, t(0)),
+    rows: stageRowsFor(stage, milestones, t(0), NP),
   });
 
   it('is NOT_STARTED with null gates only when there is no participant', () => {
@@ -126,5 +139,54 @@ describe('stage shim — progressDTO', () => {
       gatesSatisfied: {},
     });
     expect(progressDTO(state(ADA, 2), { gates: false })).not.toHaveProperty('gatesSatisfied');
+  });
+});
+
+// work-qmgc: the inviter signs the compact before crafting the invitation. The
+// old StageProgress contract kept them IN_PROGRESS in stage 0 until
+// POST /invitation/confirm (old sessions.ts: stage 0 COMPLETED with
+// { compactSigned, invitationSent }); the client's invitation follow-up is
+// gated on stage 0 (UnifiedSessionScreen shouldRunInvitationFollowUp).
+describe('stage shim — Getting Started for an inviter (work-qmgc)', () => {
+  // Ada signed at 10 while crafting, sent the invitation at 40.
+  const SIGNED = [m('compact_signed', 10)];
+  const SENT = [m('compact_signed', 10), m('invitation_sent', 40)];
+
+  it('keeps an inviter with an unsent invitation in stage 0 after signing', () => {
+    expect(activeStage(1, { invitationPending: true })).toBe(0);
+    expect(activeStage(1, { invitationPending: false })).toBe(1);
+    expect(stageAt(SIGNED, t(20), { invitationPending: true })).toBe(0);
+    expect(messageStage(SIGNED, t(20), { invitationPending: true })).toBe(0);
+    const rows = stageRowsFor(0, SIGNED, t(0), { invitationPending: true });
+    expect(rows.map(r => [r.stage, r.status, r.completedAt])).toEqual([[0, 'IN_PROGRESS', null]]);
+    expect(rows[0].gatesSatisfied).toEqual({ compactSigned: true, signedAt: t(10).toISOString() });
+  });
+
+  it('ends stage 0 at the later of compact_signed and invitation_sent once both exist', () => {
+    expect(stageAt(SENT, t(20), NP)).toBe(0); // crafting, after signing: still stage 0
+    expect(stageAt(SENT, t(40), NP)).toBe(1);
+    expect(stageRowsFor(1, SENT, t(0), NP).map(r => [r.stage, r.status, r.startedAt, r.completedAt])).toEqual([
+      [0, 'COMPLETED', t(0), t(40)],
+      [1, 'IN_PROGRESS', t(40), null],
+    ]);
+  });
+
+  it('leaves an invitee (no invitation of their own) at compact_signed', () => {
+    expect(stageAt(SIGNED, t(20), NP)).toBe(1);
+    expect(activeStage(1, { invitationPending: false })).toBe(1);
+  });
+  it('ends stage 0 at compact_signed when the invitation was sent first (the fixture order)', () => {
+    const SENT_FIRST = [m('invitation_sent', 5), m('compact_signed', 10)];
+    expect(stageAt(SENT_FIRST, t(7), NP)).toBe(0);
+    expect(stageAt(SENT_FIRST, t(10), NP)).toBe(1);
+    expect(stageRowsFor(1, SENT_FIRST, t(0), NP).map(r => [r.stage, r.status, r.completedAt])).toEqual([
+      [0, 'COMPLETED', t(10)],
+      [1, 'IN_PROGRESS', null],
+    ]);
+  });
+
+  it('keeps a pending inviter who has not signed yet in stage 0', () => {
+    expect(stageAt([], t(20), { invitationPending: true })).toBe(0);
+    expect(activeStage(0, { invitationPending: true })).toBe(0);
   });
 });

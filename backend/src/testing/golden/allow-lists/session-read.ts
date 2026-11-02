@@ -15,11 +15,14 @@
  * appears in this scenario's bodies.
  */
 
+import { TARGET_TOPIC_FRAME_INITIAL_RULES, TARGET_TOPIC_FRAME_RULES } from './common';
 import type { AllowList } from './types';
 
 export const SESSION_READ_ALLOW: AllowList = {
   scenario: 'session-read',
   rules: [
+    ...TARGET_TOPIC_FRAME_RULES,
+    ...TARGET_TOPIC_FRAME_INITIAL_RULES,
     {
       kind: 'absentKeys',
       at: 'steps.*.body.**.gatesSatisfied',
@@ -120,7 +123,8 @@ function SESSION_READ_FIXTURE_DELTAS(): AllowList['rules'] {
 export const SESSION_READ_BYTE_TARGET_ALLOW: AllowList = {
   scenario: 'session-read',
   rules: [
-    ...SESSION_READ_ALLOW.rules,
+    // The topic-frame body rules ride along; the restored-state ones are concept-only.
+    ...SESSION_READ_ALLOW.rules.filter(r => !TARGET_TOPIC_FRAME_INITIAL_RULES.includes(r)),
     {
       kind: 'traceMapped',
       at: 'steps.*.trace',
@@ -144,6 +148,8 @@ export const SESSION_READ_BYTE_TARGET_ALLOW: AllowList = {
         conversation: "the audience of a read is the caller's MAIN conversation",
         participant_milestone:
           "a message's DTO stage is derived from its owner's milestones (message.stage is dropped), so the message reads read them",
+        invitation:
+          "a participant's stage 0 stays open while the invitation they authored is unsent (stage shim invitationPending, work-qmgc)",
       },
       // The message reads are the same concept read the same way (the
       // caller's messages, paged): same rows read. /state also reads message
