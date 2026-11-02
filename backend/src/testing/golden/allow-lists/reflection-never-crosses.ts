@@ -31,6 +31,8 @@ import {
   TARGET_COMPACT_SIGNED_MASK,
   TARGET_MESSAGE_STAGE_RULE,
   TARGET_USER_NAME_RULE,
+  TARGET_TOPIC_FRAME_INITIAL_RULES,
+  TARGET_TOPIC_FRAME_RULES,
 } from './common';
 import type { AllowList, AllowRule } from './types';
 
@@ -66,6 +68,8 @@ const bodyRules = (concept: boolean): AllowRule[] => [
 export const REFLECTION_NEVER_CROSSES_ALLOW: AllowList = {
   scenario: 'reflection-never-crosses',
   rules: [
+    ...TARGET_TOPIC_FRAME_RULES,
+    ...TARGET_TOPIC_FRAME_INITIAL_RULES,
     ...bodyRules(true),
     TARGET_USER_NAME_RULE,
     empathySubmittedMilestone('ada', 'initial', '<ts:18>'),
@@ -82,6 +86,7 @@ export const REFLECTION_NEVER_CROSSES_ALLOW: AllowList = {
 export const REFLECTION_NEVER_CROSSES_BYTE_TARGET_ALLOW: AllowList = {
   scenario: 'reflection-never-crosses',
   rules: [
+    ...TARGET_TOPIC_FRAME_RULES,
     ...bodyRules(false),
     ...targetByteRules({
       addedTables: [

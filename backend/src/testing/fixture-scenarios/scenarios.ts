@@ -42,6 +42,19 @@ const B = 'b';
 const INVITED = at(0, 'invitation');
 const EXPIRES = at(7 * DAY, 'invitation');
 
+/**
+ * The session's topic frame (work-9klf). In the app it is confirmed BEFORE the
+ * invitation is sent: `confirmTopicFrame` (controllers/topic-frame.ts) stamps
+ * session.topic_frame_confirmed_at and invitation.message_confirmed_at with
+ * one instant and moves the session to INVITED; `confirmInvitationMessage`
+ * refuses without it and only then reaches `invitation_sent`; and
+ * `acceptInvitation` refuses a session without it. So every scenario whose
+ * inviter reached `invitation_sent` carries it, confirmed at the instant the
+ * invitation's message was confirmed (`invitationFields`: the invitation_sent
+ * stamp). A session that was never sent (CREATED) has none.
+ */
+export const TOPIC_FRAME = 'How we repair after a tense dinner conversation';
+
 type Line = [ScenarioMessageRole, string, JourneyPhase];
 
 const lines = (rows: Line[], when: (i: number) => Stamp): ScenarioMessage[] =>
@@ -187,7 +200,6 @@ const BUILDERS: Record<TargetStage, Build> = {
   }),
 
   [TargetStage.INVITATION_READY]: () => ({
-    topic: { frame: 'How we repair after a tense dinner conversation', confirmedAt: at(0, 'session') },
     participants: [
       { key: A, journey: {}, milestones: { invitation_sent: INVITED } },
       { key: B, milestones: {} },
@@ -940,19 +952,26 @@ export function scenarioFor(stage: TargetStage, names: ScenarioNames): Scenario 
   if (!build) throw new Error(`Unknown target stage: ${stage}`);
 
   if (names.b === undefined && PARTNER_REQUIRED.has(stage)) {
-    return {
+    return withTopicFrame({
       name: stage,
       invitation: ACCEPTED,
       participants: [{ key: A, milestones: { invitation_sent: INVITED } }],
-    };
+    });
   }
 
   const built = build({ a: names.a, b: names.b ?? '' });
   const participants = names.b === undefined ? built.participants.filter(p => p.key !== B) : built.participants;
-  return {
+  return withTopicFrame({
     ...built,
     name: stage,
     invitation: built.invitation ?? { expiresAt: EXPIRES },
     participants,
-  };
+  });
+}
+
+/** The confirmed topic frame of a sent session (see `TOPIC_FRAME`). */
+function withTopicFrame(s: Scenario): Scenario {
+  const sent = s.participants[0]?.milestones.invitation_sent;
+  if (!sent || s.topic) return s;
+  return { ...s, topic: { frame: TOPIC_FRAME, confirmedAt: sent } };
 }

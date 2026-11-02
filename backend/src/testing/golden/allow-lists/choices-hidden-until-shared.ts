@@ -22,6 +22,8 @@ import {
   TARGET_USER_NAME_RULE,
   empathySubmittedMilestone,
   targetByteRules,
+  TARGET_TOPIC_FRAME_INITIAL_RULES,
+  TARGET_TOPIC_FRAME_RULES,
 } from './common';
 import type { AllowList, AllowRule } from './types';
 
@@ -323,6 +325,8 @@ function initialRepairFixtureDeltas(): AllowRule[] {
 export const CHOICES_HIDDEN_UNTIL_SHARED_ALLOW: AllowList = {
   scenario: 'choices-hidden-until-shared',
   rules: [
+    ...TARGET_TOPIC_FRAME_RULES,
+    ...TARGET_TOPIC_FRAME_INITIAL_RULES,
     ...SHARED_RULES(true),
     ...initialRepairFixtureDeltas(),
     {
@@ -387,6 +391,7 @@ export const CHOICES_BOB_WRITES_KNOWN_LEAKS: KnownLeak[] = [];
 export const CHOICES_HIDDEN_UNTIL_SHARED_BYTE_TARGET_ALLOW: AllowList = {
   scenario: 'choices-hidden-until-shared',
   rules: [
+    ...TARGET_TOPIC_FRAME_RULES,
     ...SHARED_RULES(false),
     ...targetByteRules({
       addedTables: [

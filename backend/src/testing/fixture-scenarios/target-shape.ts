@@ -261,6 +261,18 @@ export async function writeTargetShape(
   // --- Session -------------------------------------------------------------------
   readClock('session');
   const sessionAt = autoPair();
+  // work-9klf: the invitation clock is read here, before the session row, so
+  // the topic frame can be confirmed at the invitation's message instant
+  // (`TOPIC_FRAME`, scenarios.ts) in the INSERT itself — an UPDATE would fire
+  // touch_updated_at and move session.updated_at. No clock read or auto stamp
+  // happens between here and the invitation row (participants and their
+  // conversations take the member instants), so every instant is unchanged.
+  readClock('invitation');
+  if (scenario.participants[0]?.milestones.invitation_sent && !scenario.topic) {
+    // The app cannot send an invitation without a confirmed topic frame
+    // (confirmInvitationMessage), nor accept one (acceptInvitation).
+    throw new Error(`Scenario ${scenario.name}: the invitation was sent but the session has no confirmed topic frame`);
+  }
   const session = await db.query<{ id: string; status: string }>(
     `INSERT INTO session (relationship_id, status, topic_frame, topic_frame_confirmed_at, created_at, updated_at)
      VALUES ($1, $2, $3, $4, $5, $6) RETURNING id, status::text AS status`,
@@ -302,8 +314,7 @@ export async function writeTargetShape(
     return others.length === 1 ? pid(others[0].key) : null;
   };
 
-  // --- Invitation --------------------------------------------------------------------
-  readClock('invitation');
+  // --- Invitation (its clock was read before the session row) -----------------------
   const inv = invitationFields(scenario);
   const invitee = scenario.participants.length > 1 ? userRows[1].id : null;
   const invitation = await db.query<{ id: string; status: string }>(

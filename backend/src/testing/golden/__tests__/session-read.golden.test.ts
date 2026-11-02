@@ -32,6 +32,7 @@ import { SESSION_READ_ALLOW, SESSION_READ_BYTE_TARGET_ALLOW } from '../allow-lis
 import { conceptGoldenName, recordOrVerify, recordOrVerifyConcept } from '../runner';
 import { isTargetShape } from '../shape';
 import { withClient } from '../db';
+import { targetTopicFrameChecks } from '../scenario-checks';
 
 const BASE_URL =
   process.env.GOLDEN_DATABASE_URL || 'postgresql://mwf_user:mwf_password@localhost:5432/meet_without_fear';
@@ -213,6 +214,7 @@ describe(`golden: ${SCENARIO}`, () => {
   // comparison demanding the baseline's value; these assert the target's.
   // ---------------------------------------------------------------------------
   const targetOnly = isTargetShape() ? it : it.skip;
+  targetTopicFrameChecks({ harness: () => harness, steps: () => steps });
 
   /** Every milestone instant, by user email, read straight from the run database. */
   const milestonesByEmail = async (): Promise<Map<string, Array<{ key: string; at: Date }>>> => {

@@ -7,6 +7,7 @@
  * a `describe` whose `beforeAll` sets up the harness and runs the steps.
  */
 
+import { TOPIC_FRAME } from '../fixture-scenarios/scenarios';
 import type { AllowList } from './allow-lists/types';
 import type { Harness, StepResult } from './driver';
 import { withClient } from './db';
@@ -139,6 +140,46 @@ export function targetMessageStageChecks(opts: { harness: () => Harness; steps: 
 }
 
 /**
+ * work-9klf, target shape only: the pairs of `TARGET_TOPIC_FRAME_RULES` and
+ * `TARGET_TOPIC_FRAME_INITIAL_RULES` (raw values, before the masks):
+ *   - the restored session row holds `TOPIC_FRAME`, confirmed;
+ *   - every invitation a read returns carries `TOPIC_FRAME`, confirmed at the
+ *     invitation's own messageConfirmedAt (confirmTopicFrame stamps both with
+ *     one instant), and that is the restored row's instant.
+ */
+export function targetTopicFrameChecks(opts: {
+  harness: () => Harness;
+  steps: () => StepResult[];
+  /** The scenario reads the invitation (default true): at least one read is checked. */
+  invitationReads?: boolean;
+}): void {
+  const run = isTargetShape() ? it : it.skip;
+  run("fixtureMask pair: a sent session's topic frame is confirmed at the invitation's message instant", () => {
+    const initial = opts.harness().conceptInitial;
+    const rows = initial?.tables.old_concept_session ?? [];
+    expect(rows.map(r => ({ frame: r.topic_frame, confirmed: typeof r.topic_frame_confirmed_at }))).toEqual([
+      { frame: TOPIC_FRAME, confirmed: 'string' },
+    ]);
+    // Snapshot text is UTC without a zone (snapshot.ts).
+    const restoredAt = new Date(`${String(rows[0].topic_frame_confirmed_at).replace(' ', 'T')}Z`).toISOString();
+    let checked = 0;
+    for (const step of opts.steps()) {
+      const inv = (step.body as { data?: { invitation?: Record<string, unknown> } } | undefined)?.data?.invitation;
+      if (!inv || !('topicFrame' in inv)) continue;
+      expect({ step: step.label, frame: inv.topicFrame, at: inv.topicFrameConfirmedAt }).toEqual({
+        step: step.label,
+        frame: TOPIC_FRAME,
+        at: inv.messageConfirmedAt,
+      });
+      expect({ step: step.label, at: inv.topicFrameConfirmedAt }).toEqual({ step: step.label, at: restoredAt });
+      checked++;
+    }
+    if (opts.invitationReads === false) expect(checked).toBe(0);
+    else expect(checked).toBeGreaterThan(0);
+  });
+}
+
+/**
  * TS-10, target shape only: the pairs of `TARGET_COMPACT_SIGNED_MASK` and
  * `TARGET_CONSENT_TARGET_ID_RULE`.
  *   - every `state` read's compact `mySignedAt` / `partnerSignedAt` is the
@@ -159,6 +200,8 @@ export function targetFixtureDeltaChecks(opts: {
     const h = opts.harness();
     return withClient(h.fixture.target, async c => (await c.query<T>(sql, params)).rows, h.fixture.database);
   };
+
+  targetTopicFrameChecks(opts);
 
   run("fixtureMask pair: compact signedAt is each signer's compact_signed instant", async () => {
     const signed = await q<{ email: string; at: Date }>(

@@ -21,6 +21,7 @@ import {
   targetByteRules,
   TARGET_MESSAGE_STAGE_RULE,
   TARGET_USER_NAME_RULE,
+  TARGET_TOPIC_FRAME_INITIAL_RULES,
 } from './common';
 import type { AllowList, AllowRule } from './types';
 
@@ -76,6 +77,9 @@ export const EMPATHY_REVEAL_ALLOW: AllowList = {
     empathySubmittedMilestone('bob', 1, '<ts:fresh>'),
     statusVersionTwo(1, 'ada', 'bob', 'changed'),
     statusVersionTwo(1, 'bob', 'ada', 'added'),
+    // work-9klf: no step reads the invitation; only the restored session row carries the topic frame.
+    // Last, so the byte list's `EMPATHY_REVEAL_ALLOW.rules[0]` stays the round / attemptId rule.
+    ...TARGET_TOPIC_FRAME_INITIAL_RULES,
   ],
 };
 

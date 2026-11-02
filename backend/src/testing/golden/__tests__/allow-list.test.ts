@@ -100,11 +100,13 @@ describe('compareWithAllowList — empathy-reveal (old ⊆ new, named additions)
     expect(r.violations).toEqual([]);
     // TS-10's target rules are pinned to steps of the recorded scenario
     // (status_version at steps 1/3/6) that this synthetic baseline does not
-    // have; every other rule must match.
+    // have, nor its restored session row (work-9klf topic frame); every other
+    // rule must match.
     expect(r.unmatchedRules).toEqual([
       'mayDiffer @ steps.3.body.data.attempt.statusVersion, steps.6.body.data.attempt.statusVersion',
       'replacedEntry @ steps.1.changes',
       'replacedEntry @ steps.1.changes',
+      'mayDiffer @ initial.session.*.topic_frame',
     ]);
   });
 

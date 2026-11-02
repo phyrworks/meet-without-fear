@@ -31,6 +31,8 @@ import {
   authorAnalysisClosed,
   declineConsent,
   subjectDeclineRecord,
+  TARGET_TOPIC_FRAME_INITIAL_RULES,
+  TARGET_TOPIC_FRAME_RULES,
 } from './common';
 import type { AllowList, AllowRule } from './types';
 
@@ -131,6 +133,8 @@ const ROUND_RULE: AllowRule = {
 export const REVEAL_ADA_FIRST_ALLOW: AllowList = {
   scenario: 'reveal-all-ready-ada-first',
   rules: [
+    ...TARGET_TOPIC_FRAME_RULES,
+    ...TARGET_TOPIC_FRAME_INITIAL_RULES,
     ...rules(REVEAL_ADA_FIRST_STEP),
     ...bodyRules(ADA_FIRST_READS, false).filter(r => !READ_DTO_RULES.includes(r) && r !== ROUND_RULE),
     ADA_FIRST_STATUS_VERSION,
@@ -143,6 +147,8 @@ export const REVEAL_ADA_FIRST_ALLOW: AllowList = {
 export const REVEAL_BOB_FIRST_ALLOW: AllowList = {
   scenario: 'reveal-all-ready-bob-first',
   rules: [
+    ...TARGET_TOPIC_FRAME_RULES,
+    ...TARGET_TOPIC_FRAME_INITIAL_RULES,
     ...rules(REVEAL_BOB_FIRST_STEP),
     ...bodyRules(BOB_FIRST_READS, false).filter(r => !READ_DTO_RULES.includes(r) && r !== ROUND_RULE),
     TARGET_USER_NAME_RULE,
@@ -158,6 +164,7 @@ export const REVEAL_BOB_FIRST_ALLOW: AllowList = {
 export const REVEAL_ADA_FIRST_BYTE_TARGET_ALLOW: AllowList = {
   scenario: 'reveal-all-ready-ada-first',
   rules: [
+    ...TARGET_TOPIC_FRAME_RULES,
     ...bodyRules(ADA_FIRST_READS, true),
     ADA_FIRST_STATUS_VERSION,
     byteLabelShift(
@@ -196,6 +203,7 @@ export const REVEAL_ADA_FIRST_BYTE_TARGET_ALLOW: AllowList = {
 export const REVEAL_BOB_FIRST_BYTE_TARGET_ALLOW: AllowList = {
   scenario: 'reveal-all-ready-bob-first',
   rules: [
+    ...TARGET_TOPIC_FRAME_RULES,
     ...bodyRules(BOB_FIRST_READS, true),
     ...BOB_FIRST_CLOSURES(false),
     subjectDeclineRecord(59, true),

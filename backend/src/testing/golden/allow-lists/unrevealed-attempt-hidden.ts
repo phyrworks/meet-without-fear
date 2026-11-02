@@ -45,6 +45,8 @@ import {
   TARGET_CONSENT_TARGET_ID_RULE,
   TARGET_MESSAGE_STAGE_RULE,
   TARGET_USER_NAME_RULE,
+  TARGET_TOPIC_FRAME_INITIAL_RULES,
+  TARGET_TOPIC_FRAME_RULES,
 } from './common';
 import type { AllowList, AllowRule } from './types';
 
@@ -72,6 +74,8 @@ const R2 = '<empathyAttempt:ada→bob@main#2>';
 export const UNREVEALED_ATTEMPT_HIDDEN_ALLOW: AllowList = {
   scenario: 'unrevealed-attempt-hidden',
   rules: [
+    ...TARGET_TOPIC_FRAME_RULES,
+    ...TARGET_TOPIC_FRAME_INITIAL_RULES,
     ...READ_DTO_RULES,
     {
       kind: 'addedKeys',
@@ -247,6 +251,7 @@ UNREVEALED_ATTEMPT_HIDDEN_ALLOW.rules.push(
 export const UNREVEALED_ATTEMPT_HIDDEN_BYTE_TARGET_ALLOW: AllowList = {
   scenario: 'unrevealed-attempt-hidden',
   rules: [
+    ...TARGET_TOPIC_FRAME_RULES,
     ...READ_DTO_RULES,
     UNREVEALED_ATTEMPT_HIDDEN_ALLOW.rules.find(r => r.kind === 'addedKeys')!,
     ...TARGET_BODY_RULES(false),
@@ -276,6 +281,13 @@ UNREVEALED_ATTEMPT_HIDDEN_BYTE_TARGET_ALLOW.rules.push(
     [12, 27, 43, 59, 75, 90].map(s => `steps.${s}.body.data.records.0.id`),
     'consent',
   ),
+  // work-9klf: Bob's alignment note (index 11, "Ada Lovelace has felt heard…",
+  // written by the reconciler run at step 62) can also rank after the two
+  // delivered copies the same run writes: measured 3 of 7 runs on the
+  // topic-frame fixture, 0 of 7 without it — the order of two writes of one
+  // step on the global created_at rank, not a change of content or audience
+  // (the concept golden compares the note structurally and passes in every run).
+  byteLabelShift(['steps.64.body.data.messages.messages.11.id', 'steps.65.body.data.messages.11.id'], 'message'),
   byteLabelShift(
     [
       'steps.64.body.data.messages.messages.12.id',
