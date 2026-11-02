@@ -9,7 +9,8 @@ import * as fs from 'fs';
  *
  * Target shape (phoenix/target-shape): the database is the branch's test
  * database (docs/development/local-setup.md, "Working on phoenix/target-shape":
- * mwf_target_test) built by the single baseline migration. Setup empties every
+ * mwf_target_e2e, dedicated to this harness so backend jest suites sharing
+ * mwf_target_test are never truncated) built by the single baseline migration. Setup empties every
  * application table — all of schema public except _prisma_migrations and the
  * baseline's seeded `milestone` reference table — then runs `prisma migrate
  * deploy` (a no-op once the baseline is applied). Never `db push`.
@@ -23,9 +24,40 @@ async function globalSetup(_config: FullConfig) {
   const backendDir = path.resolve(__dirname, '../backend');
   const databaseUrl =
     process.env.DATABASE_URL ||
-    'postgresql://mwf_user:mwf_password@localhost:5432/mwf_target_test';
+    'postgresql://mwf_user:mwf_password@localhost:5432/mwf_target_e2e';
 
   console.log('Using database:', databaseUrl.replace(/:[^:@]+@/, ':***@'));
+
+  // Hard guard: this script TRUNCATEs every application table, so it only ever
+  // runs against a database whose name ends in _e2e. The dev API server gets this
+  // same process.env (playwright webServer.env), and backend/src/lib/database-urls.ts
+  // prefers the per-role URLs over DATABASE_URL, so every role URL that is set
+  // must name an _e2e database too; otherwise the API would run against a
+  // different database than the one truncated here. Empty/unset role URLs fall back
+  // to DATABASE_URL (OPS stays unset, fail closed), which is what .env.test relies on.
+  const dbName = (url: string): string => {
+    try {
+      return decodeURIComponent(new URL(url).pathname.replace(/^\//, ''));
+    } catch {
+      throw new Error('E2E global setup: a database URL is not parseable; refusing to run');
+    }
+  };
+  const targetDb = dbName(databaseUrl);
+  if (!targetDb.endsWith('_e2e')) {
+    throw new Error(
+      `E2E global setup refuses to truncate database "${targetDb}": the name must end in _e2e ` +
+        '(use mwf_target_e2e; see docs/development/local-setup.md). Check DATABASE_URL in your shell and e2e/.env.test.',
+    );
+  }
+  for (const v of ['APP_DATABASE_URL', 'JOB_DATABASE_URL', 'AUTH_DATABASE_URL', 'OPS_DATABASE_URL']) {
+    const val = process.env[v];
+    if (val && dbName(val) !== targetDb) {
+      throw new Error(
+        `E2E global setup: ${v} points at "${dbName(val)}" but the e2e database is "${targetDb}"; ` +
+          'the API would use a different database than the one reset. Unset it or point it at the e2e database.',
+      );
+    }
+  }
 
   // Tables the baseline migration owns and seeds; they are never truncated.
   const KEEP = ['_prisma_migrations', 'milestone'];
@@ -66,7 +98,10 @@ const KEEP = ${JSON.stringify(KEEP)};
       stdio: 'inherit',
     });
   } catch (error) {
-    console.error("Table truncation had issues (may be OK if the database is empty)");
+    // An empty database is handled in the script itself, so a failure here is real
+    // (connection refused, missing database, permissions): never run specs against it.
+    console.error('Table truncation failed:', error);
+    throw error;
   } finally {
     try {
       fs.unlinkSync(truncateScriptPath);

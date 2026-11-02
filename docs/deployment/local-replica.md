@@ -14,6 +14,15 @@ PostgreSQL 18 + pgvector initialised by `infra/aws/init-db.sh`, and Caddy. AI is
 so the E2E suite can run against a production build while the AWS host is out of reach, and so the
 cutover smoke (schema-migration plan §6 step 7) can be rehearsed locally.
 
+## Requirements and limits
+
+- Compose: `podman compose` must delegate to the docker-compose provider (Compose spec 2.24 or
+  newer; `compose.yaml` uses `env_file` with `format: raw`). python `podman-compose` is
+  **unverified** and may fail at `up.sh` step 4.
+- Node 20 must be on `PATH`. As a convenience `common.sh` also looks for an fnm-installed Node 20
+  under `~/.local/share/fnm/node-versions/v20.*`; any other layout needs Node 20 on `PATH` already.
+- Developed and verified on one Mac only; other machines are untested.
+
 ## Commands
 
 ```bash

@@ -42,9 +42,12 @@ wait_healthy() {  # $1 = service, $2 = attempts (3 s apart)
 psql_db() { compose exec -T db psql -X -v ON_ERROR_STOP=1 -U postgres -d mwf "$@"; }
 
 need_node20() {
-  local fnm="$HOME/.local/share/fnm/node-versions/v20.20.2/installation/bin"
   if ! node -v 2>/dev/null | grep -q '^v20\.'; then
-    [ -x "$fnm/node" ] && export PATH="$fnm:$PATH"
+    # Best effort: any fnm-installed Node 20 (newest first); otherwise fall through to die.
+    local fnm
+    for fnm in $(ls -d "$HOME"/.local/share/fnm/node-versions/v20.*/installation/bin 2>/dev/null | sort -rV); do
+      if [ -x "$fnm/node" ]; then export PATH="$fnm:$PATH"; break; fi
+    done
   fi
   node -v 2>/dev/null | grep -q '^v20\.' || die "Node 20 is required (repo engines: 20.x)"
 }

@@ -7,8 +7,11 @@ need_node20
 out="$(mktemp)"
 trap 'rm -f "$out"' EXIT
 step "smoke.cjs against $ORIGIN"
-NODE_PATH="$REPO/node_modules" MWF_LOCAL_ORIGIN="$ORIGIN" node "$HERE/smoke.cjs" | tee "$out" | sed 's/^/   /'
-[ "${PIPESTATUS[0]}" = 0 ] || die "smoke.cjs failed"
+# `set -e -o pipefail` (common.sh) would exit on a failing pipeline before a later
+# PIPESTATUS check, so test the pipeline itself.
+if ! NODE_PATH="$REPO/node_modules" MWF_LOCAL_ORIGIN="$ORIGIN" node "$HERE/smoke.cjs" | tee "$out" | sed 's/^/   /'; then
+  die "smoke.cjs failed"
+fi
 marker="$(tail -1 "$out" | sed -n 's/.*"marker":"\([^"]*\)".*/\1/p')"
 [ -n "$marker" ] || die "no marker from smoke.cjs"
 

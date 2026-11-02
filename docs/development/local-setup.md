@@ -209,7 +209,8 @@ npm run prisma -- generate
 cd backend && npx prisma migrate deploy    # 76 migrations
 ```
 
-Also migrate the test database, which the E2E harness uses:
+Also migrate the test database used by the backend jest suites (the E2E harness uses its own
+database on the target-shape branch, see below):
 
 ```bash
 DATABASE_URL="postgresql://mwf_user:mwf_password@127.0.0.1:5432/meet_without_fear_test" \
@@ -227,10 +228,11 @@ branch uses its own databases instead of `meet_without_fear*`:
 | Database | Use |
 |---|---|
 | `mwf_target_dev` | the branch's `DATABASE_URL` |
-| `mwf_target_test` | the branch's test database (tests, E2E) |
+| `mwf_target_test` | the branch's test database (backend jest suites only; never truncated by E2E) |
+| `mwf_target_e2e` | the E2E harness's database (`e2e/.env.test`); **truncated by every E2E run** |
 | `mwf_target_shadow` | Prisma's shadow database (`SHADOW_DATABASE_URL`), left empty |
 
-Create them (if missing), deploy the baseline into dev and test, and run the schema gate on both:
+Create them (if missing), deploy the baseline into dev, test and e2e, and run the schema gate on each:
 
 ```bash
 backend/scripts/target-shape/run-baseline.sh --dev
@@ -245,9 +247,15 @@ DIRECT_URL=postgresql://mwf_user:mwf_password@127.0.0.1:5432/mwf_target_dev
 SHADOW_DATABASE_URL=postgresql://mwf_user:mwf_password@127.0.0.1:5432/mwf_target_shadow
 APP_DATABASE_URL=postgresql://mwf_app:mwf_app_dev@127.0.0.1:5432/mwf_target_dev
 JOB_DATABASE_URL=postgresql://mwf_job:mwf_job_dev@127.0.0.1:5432/mwf_target_dev
-# the test database (e.g. for backend tests / e2e/.env.test):
+# the test database (for backend tests only; NOT e2e):
 #   postgresql://mwf_user:mwf_password@127.0.0.1:5432/mwf_target_test
 ```
+
+E2E (`npm run e2e`) reads `e2e/.env.test`, which points `DATABASE_URL` at `mwf_target_e2e` and
+blanks `APP_/JOB_/AUTH_/OPS_DATABASE_URL` so the dev API cannot pick up the `mwf_target_dev` role
+URLs from `backend/.env`. `e2e/global-setup.ts` truncates every application table and refuses to run
+unless the database name ends in `_e2e`, or if any role URL in the environment names a different
+database. A `DATABASE_URL` exported in your shell overrides `.env.test`; the guard catches that.
 
 To prove the baseline itself on a throwaway `ts7_*` database (generator check, deploy, gate, a
 second deploy is a no-op, the target fixture, the view smoke as `mwf_app`, the 17 per-caller tests):

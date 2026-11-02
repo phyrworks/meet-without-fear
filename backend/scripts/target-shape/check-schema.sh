@@ -25,7 +25,7 @@
 #   Runs (a), (b), and (c'') = (c') with schema.prisma itself as the reference
 #   (there is no pre-index pull of a migrated database), plus the same sql_
 #   completeness check. <name> must match ^ts[67]_[a-z0-9_]+$, or be one of
-#   the target branch's dev databases mwf_target_dev / mwf_target_test.
+#   the target branch's dev databases mwf_target_dev / mwf_target_test / mwf_target_e2e.
 #
 # Why the pull is staged: Prisma 7.10 `db pull` renders partial indexes (as
 # `where: raw(…)`, auto-adding the `partialIndexes` preview feature) and infers
@@ -41,7 +41,7 @@
 #
 # Exits non-zero on any failure. Only ever addresses a database whose name
 # matches ^ts[67]_ (build mode: exactly ts6_target), or, read-only, one of
-# mwf_target_dev / mwf_target_test.
+# mwf_target_dev / mwf_target_test / mwf_target_e2e.
 #
 # Usage: backend/scripts/target-shape/check-schema.sh [--db <name>] [out-dir]
 #   out-dir (default: fresh mktemp dir) receives the evidence.
@@ -60,7 +60,7 @@ OUT_ARG="${1:-}"
 
 # Hard guard: refuse every database outside the scratch prefix, and the named
 # real ones even if someone loosens the pattern.
-if ! [[ "$DB" =~ ^ts[67]_[a-z0-9_]+$ ]] && ! { [ "$MODE" = existing ] && [[ "$DB" =~ ^mwf_target_(dev|test)$ ]]; }; then
+if ! [[ "$DB" =~ ^ts[67]_[a-z0-9_]+$ ]] && ! { [ "$MODE" = existing ] && [[ "$DB" =~ ^mwf_target_(dev|test|e2e)$ ]]; }; then
   echo "refusing: database '$DB' does not match ^ts[67]_[a-z0-9_]+\$" >&2; exit 2
 fi
 case "$DB" in

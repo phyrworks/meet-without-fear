@@ -233,7 +233,10 @@ fi
 TRANSCRIPT_FILE="$RESULTS_DIR/dashboard-transcript.txt"
 > "$TRANSCRIPT_FILE"
 
-# Source e2e/.env.test for the test DATABASE_URL.
+# Source e2e/.env.test for the test DATABASE_URL. NOTE: on the target-shape branch this is
+# mwf_target_e2e, which must exist on the bot host (run-baseline.sh --dev creates it), and the
+# query below still uses the pre-target-shape "Message"/"User" names, so the transcript is empty
+# there until it is ported to message/user. On failure it only warns.
 TEST_ENV_FILE="$E2E_DIR/.env.test"
 TEST_DATABASE_URL="${TEST_DATABASE_URL:-postgresql://mwf_user:mwf_password@localhost:5432/meet_without_fear_test}"
 if [ -f "$TEST_ENV_FILE" ]; then
