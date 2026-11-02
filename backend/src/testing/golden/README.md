@@ -47,6 +47,13 @@ milliseconds and byte-identical. It also sidesteps a real constraint:
 `pg_dump --data-only` cannot be restored here, because `InnerWorkSession` and
 `InnerWorkMessage` reference each other and no row-insert order satisfies both.
 
+**Fixtures are states the app can reach** (work-2km7). Before the invitation
+is accepted only the inviter is a participant (the app writes the invitee's
+participant, MAIN conversation and read state at accept); a scenario that breaks
+that, or any other rule in `fixture-scenarios/reachability.ts`, makes the writer
+throw. No golden starts from a pre-accept stage (CREATED, INVITATION_READY);
+EMPATHY_SHARED_A is post-accept.
+
 **Fixtures are rebased on restore.** `state-factory` writes
 `Invitation.expiresAt = now + 7d` and `auth.ts` gates on `expiresAt > now()`, so
 a week-old fixture silently changes meaning. Every restore shifts all timestamps
