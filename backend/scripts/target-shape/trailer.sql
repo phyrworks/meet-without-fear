@@ -877,6 +877,8 @@ FROM participant p
 JOIN participant o ON o.session_id = p.session_id AND o.id <> p.id;
 
 -- Session-scoped milestones: reached by every present human participant?
+-- The array_agg(… uuid7 column …)::uuid[] casts in the views below keep the
+-- array columns uuid[]: uncast they are uuid7[] (see the uuid7 domain, tables.sql).
 CREATE VIEW v_session_readiness WITH (security_invoker = true) AS
 SELECT s.id AS session_id, m.key AS milestone_key,
        coalesce(w.waiting_on, '{}') = '{}' AS all_reached,
@@ -884,7 +886,7 @@ SELECT s.id AS session_id, m.key AS milestone_key,
 FROM session s
 CROSS JOIN milestone m
 LEFT JOIN LATERAL (
-  SELECT array_agg(p.id ORDER BY p.joined_at, p.id) AS waiting_on
+  SELECT array_agg(p.id ORDER BY p.joined_at, p.id)::uuid[] AS waiting_on
   FROM participant p
   WHERE p.session_id = s.id AND p.kind = 'human' AND p.left_at IS NULL
     AND NOT EXISTS (SELECT 1 FROM participant_milestone pm WHERE pm.participant_id = p.id AND pm.milestone_key = m.key)
@@ -961,12 +963,12 @@ SELECT ns.session_id, ns.need_id, ns.participant_id AS need_owner_participant_id
             ELSE 'PARTIAL' END AS status
 FROM need_share ns
 LEFT JOIN LATERAL (
-  SELECT array_agg(pr.id ORDER BY pr.created_at, pr.id) AS proposal_ids
+  SELECT array_agg(pr.id ORDER BY pr.created_at, pr.id)::uuid[] AS proposal_ids
   FROM proposal_need pn JOIN proposal pr ON pr.id = pn.proposal_id
   WHERE pn.need_id = ns.need_id AND pr.status IN ('ACTIVE', 'REVISED', 'CONVERTED_TO_AGREEMENT')
 ) cov ON true
 LEFT JOIN LATERAL (
-  SELECT array_agg(DISTINCT c.participant_id) AS willing
+  SELECT array_agg(DISTINCT c.participant_id)::uuid[] AS willing
   FROM proposal_need pn
   JOIN proposal pr ON pr.id = pn.proposal_id AND pr.status IN ('ACTIVE', 'REVISED', 'CONVERTED_TO_AGREEMENT')
   JOIN proposal_choice c ON c.proposal_id = pr.id AND c.decision = 'WILLING'
@@ -983,14 +985,14 @@ WHERE ns.revoked_at IS NULL;
 -- (ACTIVE, REVISED or CONVERTED_TO_AGREEMENT; ruling R20, above).
 CREATE VIEW v_session_closure_items WITH (security_invoker = true) AS
 SELECT s.id AS session_id,
-       coalesce((SELECT array_agg(ag.id ORDER BY ag.created_at, ag.id) FROM agreement ag WHERE ag.session_id = s.id), '{}') AS agreement_ids,
-       coalesce((SELECT array_agg(pr.id ORDER BY pr.created_at, pr.id)
+       coalesce((SELECT array_agg(ag.id ORDER BY ag.created_at, ag.id)::uuid[] FROM agreement ag WHERE ag.session_id = s.id), '{}') AS agreement_ids,
+       coalesce((SELECT array_agg(pr.id ORDER BY pr.created_at, pr.id)::uuid[]
                  FROM proposal pr
                  WHERE pr.session_id = s.id AND pr.kind = 'INDIVIDUAL_COMMITMENT' AND pr.status <> 'REMOVED'
                    AND EXISTS (SELECT 1 FROM proposal_choice c
                                WHERE c.proposal_id = pr.id AND c.participant_id = pr.created_by_participant_id AND c.decision = 'WILLING')),
                 '{}') AS individual_commitment_ids,
-       coalesce((SELECT array_agg(ns.need_id ORDER BY ns.shared_at, ns.need_id)
+       coalesce((SELECT array_agg(ns.need_id ORDER BY ns.shared_at, ns.need_id)::uuid[]
                  FROM need_share ns
                  WHERE ns.session_id = s.id AND ns.revoked_at IS NULL
                    AND (EXISTS (SELECT 1 FROM need_disposition d WHERE d.need_id = ns.need_id AND d.status = 'OPEN')
@@ -1010,9 +1012,9 @@ SELECT f.id AS follow_up_id, f.session_id, x.expected AS participant_ids, x.subm
             ELSE 'WAITING_FOR_PARTNER' END AS status
 FROM follow_up f
 CROSS JOIN LATERAL (
-  SELECT coalesce(array_agg(p.id ORDER BY p.joined_at, p.id), '{}') AS expected,
-         coalesce(array_agg(p.id ORDER BY p.joined_at, p.id) FILTER (WHERE ck.id IS NOT NULL), '{}') AS submitted,
-         coalesce(array_agg(p.id ORDER BY p.joined_at, p.id) FILTER (WHERE ck.id IS NULL), '{}') AS waiting
+  SELECT coalesce(array_agg(p.id ORDER BY p.joined_at, p.id)::uuid[], '{}') AS expected,
+         coalesce(array_agg(p.id ORDER BY p.joined_at, p.id) FILTER (WHERE ck.id IS NOT NULL)::uuid[], '{}') AS submitted,
+         coalesce(array_agg(p.id ORDER BY p.joined_at, p.id) FILTER (WHERE ck.id IS NULL)::uuid[], '{}') AS waiting
   FROM participant p
   LEFT JOIN follow_up_checkin ck ON ck.follow_up_id = f.id AND ck.participant_id = p.id
   WHERE p.session_id = f.session_id AND p.kind = 'human' AND p.left_at IS NULL
@@ -1334,6 +1336,25 @@ BEGIN
   WHERE s.nspname = 'public' AND c.relkind = 'r' AND a.attnum > 0 AND NOT a.attisdropped
     AND a.atttypid = 'public.uuid7'::regtype;
   IF n <> @@UUID7_COLUMNS@@ THEN RAISE EXCEPTION 'step 20: % uuid7 columns, expected @@UUID7_COLUMNS@@', n; END IF;
+
+  -- No column (table, view, composite) and no function argument or result has
+  -- an array-of-domain type: array_agg over a uuid7 column is uuid7[], which
+  -- node-postgres cannot parse (the app would read the string '{…}'). Cast it
+  -- back with ::uuid[] (the uuid7 domain in tables.sql explains).
+  SELECT string_agg(s.nspname || '.' || c.relname || '.' || a.attname || ' ' || format_type(a.atttypid, NULL), ', '
+                    ORDER BY s.nspname, c.relname, a.attname) INTO bad
+  FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid JOIN pg_namespace s ON s.oid = c.relnamespace
+  JOIN pg_type t ON t.oid = a.atttypid JOIN pg_type e ON e.oid = t.typelem
+  WHERE s.nspname NOT IN ('pg_catalog', 'information_schema') AND s.nspname !~ '^pg_'
+    AND a.attnum > 0 AND NOT a.attisdropped AND t.typcategory = 'A' AND e.typtype = 'd';
+  IF bad IS NOT NULL THEN RAISE EXCEPTION 'step 20: column(s) of an array-of-domain type (cast to the base array, e.g. ::uuid[]): %', bad; END IF;
+  SELECT string_agg(p.oid::regprocedure::text, ', ' ORDER BY p.oid::regprocedure::text) INTO bad
+  FROM pg_proc p JOIN pg_namespace s ON s.oid = p.pronamespace
+  WHERE s.nspname NOT IN ('pg_catalog', 'information_schema') AND s.nspname !~ '^pg_'
+    AND EXISTS (SELECT 1 FROM unnest(p.prorettype || coalesce(p.proallargtypes, p.proargtypes::oid[])) AS x(typ)
+                JOIN pg_type t ON t.oid = x.typ JOIN pg_type e ON e.oid = t.typelem
+                WHERE t.typcategory = 'A' AND e.typtype = 'd');
+  IF bad IS NOT NULL THEN RAISE EXCEPTION 'step 20: function(s) with an array-of-domain argument or result (use the base array, e.g. uuid[]): %', bad; END IF;
 
   -- touch_updated_at on exactly the tables that have updated_at (35).
   SELECT string_agg(table_name, ', ' ORDER BY table_name) INTO bad

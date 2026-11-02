@@ -28,7 +28,10 @@
  *   A4  Prisma's `CREATE SCHEMA IF NOT EXISTS "public"` is gone (a no-op);
  *   A5  the step-20 assertion block (T8) gained exactly the two uuid7 assertions
  *       (no uuid typed plain uuid; 128 uuid7 columns) and a reworded jsonb
- *       comment, and nothing else.
+ *       comment, and nothing else;
+ *   A6  in the views, exactly A6_CASTS array_agg results over uuid7 columns are
+ *       cast back to uuid[] (`)::uuid[]` added; nothing else in those views);
+ *   A7  the step-20 block also gained exactly the array-of-domain assertion.
  */
 
 import { execFileSync } from 'child_process';
@@ -317,6 +320,8 @@ export function compare(oldM: Model, newM: Model): Result {
     ['A3 new domain uuid7', []],
     ['A4 CREATE SCHEMA IF NOT EXISTS public dropped', []],
     ['A5 step-20 assertion block gained the uuid7 check', []],
+    ['A6 view array_agg cast back to uuid[]', []],
+    ['A7 step-20 block gained the array-of-domain assertion', []],
   ]);
   const allow = (k: string, v: string) => allowed.get(k)!.push(v);
 
@@ -402,10 +407,19 @@ export function compare(oldM: Model, newM: Model): Result {
     allow('A4 CREATE SCHEMA IF NOT EXISTS public dropped', 'CREATE SCHEMA IF NOT EXISTS "public"');
   const no = newM.other;
   if (oo.length !== no.length) failures.push(`other statements: ${oo.length} → ${no.length}`);
+  let casts = 0;
   for (let i = 0; i < Math.min(oo.length, no.length); i++) {
     if (oo[i] === no[i]) continue;
-    if (isStep20(oo[i]) && isStep20(no[i]) && step20Delta(oo[i], no[i]) === null)
+    const a6 = viewCastDelta(oo[i], no[i]);
+    if (a6) {
+      casts += a6.casts;
+      allow('A6 view array_agg cast back to uuid[]', `${a6.view} ×${a6.casts}`);
+      continue;
+    }
+    if (isStep20(oo[i]) && isStep20(no[i]) && step20Delta(oo[i], no[i]) === null) {
       allow('A5 step-20 assertion block gained the uuid7 check', `statement #${i + 1}`);
+      allow('A7 step-20 block gained the array-of-domain assertion', `statement #${i + 1}`);
+    }
     else if (isStep20(oo[i]) && isStep20(no[i]))
       failures.push(`step-20 block differs beyond the uuid7 check (statement #${i + 1}): ${step20Delta(oo[i], no[i])}`);
     else
@@ -413,6 +427,8 @@ export function compare(oldM: Model, newM: Model): Result {
         `other statement #${i + 1} differs:\n    old ${oo[i].slice(0, 160)}\n    new ${no[i].slice(0, 160)}`,
       );
   }
+
+  if (casts !== A6_CASTS) failures.push(`views: ${casts} array_agg ::uuid[] cast(s), expected ${A6_CASTS}`);
 
   const count = (m: Model, k: Constraint['kind']) =>
     [...m.tables.values()].reduce((a, t) => a + [...t.constraints.values()].filter(c => c.kind === k).length, 0);
@@ -467,10 +483,50 @@ const A5_ADDED = norm(`
   IF n <> 128 THEN RAISE EXCEPTION 'step 20: % uuid7 columns, expected 128', n; END IF;
 `);
 
+const A7_ADDED = norm(`
+  -- No column (table, view, composite) and no function argument or result has
+  -- an array-of-domain type: array_agg over a uuid7 column is uuid7[], which
+  -- node-postgres cannot parse (the app would read the string '{…}'). Cast it
+  -- back with ::uuid[] (the uuid7 domain in tables.sql explains).
+  SELECT string_agg(s.nspname || '.' || c.relname || '.' || a.attname || ' ' || format_type(a.atttypid, NULL), ', '
+                    ORDER BY s.nspname, c.relname, a.attname) INTO bad
+  FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid JOIN pg_namespace s ON s.oid = c.relnamespace
+  JOIN pg_type t ON t.oid = a.atttypid JOIN pg_type e ON e.oid = t.typelem
+  WHERE s.nspname NOT IN ('pg_catalog', 'information_schema') AND s.nspname !~ '^pg_'
+    AND a.attnum > 0 AND NOT a.attisdropped AND t.typcategory = 'A' AND e.typtype = 'd';
+  IF bad IS NOT NULL THEN RAISE EXCEPTION 'step 20: column(s) of an array-of-domain type (cast to the base array, e.g. ::uuid[]): %', bad; END IF;
+  SELECT string_agg(p.oid::regprocedure::text, ', ' ORDER BY p.oid::regprocedure::text) INTO bad
+  FROM pg_proc p JOIN pg_namespace s ON s.oid = p.pronamespace
+  WHERE s.nspname NOT IN ('pg_catalog', 'information_schema') AND s.nspname !~ '^pg_'
+    AND EXISTS (SELECT 1 FROM unnest(p.prorettype || coalesce(p.proallargtypes, p.proargtypes::oid[])) AS x(typ)
+                JOIN pg_type t ON t.oid = x.typ JOIN pg_type e ON e.oid = t.typelem
+                WHERE t.typcategory = 'A' AND e.typtype = 'd');
+  IF bad IS NOT NULL THEN RAISE EXCEPTION 'step 20: function(s) with an array-of-domain argument or result (use the base array, e.g. uuid[]): %', bad; END IF;
+`);
+
+/**
+ * A6, exactly: a CREATE VIEW whose only change is `)::uuid[]` after aggregate
+ * calls (array_agg over a uuid7 column is uuid7[] otherwise; tables.sql, the
+ * uuid7 domain). Returns the view and the number of casts, else null.
+ */
+export const A6_CASTS = 9;
+export function viewCastDelta(oldStmt: string, newStmt: string): { view: string; casts: number } | null {
+  const m = /^create view (\S+) /.exec(newStmt);
+  if (!m || !oldStmt.startsWith(`create view ${m[1]} `)) return null;
+  if (!newStmt.includes('array_agg(')) return null;
+  const casts = (newStmt.match(/\)::uuid\[\]/g) ?? []).length;
+  if (!casts || newStmt.replace(/\)::uuid\[\]/g, ')') !== oldStmt) return null;
+  return { view: m[1], casts };
+}
+
 export function step20Delta(oldStmt: string, newStmt: string): string | null {
   if (oldStmt === newStmt) return null;
   if (!newStmt.includes(A5_NEW_COMMENT)) return 'the jsonb comment change is missing or altered';
   newStmt = newStmt.replace(A5_NEW_COMMENT, A5_OLD_COMMENT);
+  const at7 = newStmt.indexOf(A7_ADDED);
+  if (at7 < 0) return 'the array-of-domain assertion is missing or altered';
+  if (newStmt.indexOf(A7_ADDED, at7 + 1) >= 0) return 'the array-of-domain assertion appears twice';
+  newStmt = `${newStmt.slice(0, at7).trimEnd()} ${newStmt.slice(at7 + A7_ADDED.length).trimStart()}`;
   const at = newStmt.indexOf(A5_ADDED);
   if (at < 0) return 'the uuid7 assertions are missing or altered';
   if (newStmt.indexOf(A5_ADDED, at + 1) >= 0) return 'the uuid7 assertions appear twice';
@@ -546,6 +602,22 @@ function selfTest(oldSql: string, newSql: string): void {
         ),
     ],
     ['step-20 block: uuid7 count changed', s => s.replace('IF n <> 128 THEN', 'IF n <> 127 THEN')],
+    [
+      'view cast: another type',
+      s => s.replace('p.joined_at, p.id)::uuid[] AS waiting_on', 'p.joined_at, p.id)::text[] AS waiting_on'),
+    ],
+    [
+      'view cast: one dropped',
+      s => s.replace('p.joined_at, p.id)::uuid[] AS waiting_on', 'p.joined_at, p.id) AS waiting_on'),
+    ],
+    [
+      'view cast: other change in the same view',
+      s => s.replace('array_agg(DISTINCT c.participant_id)::uuid[] AS willing', 'array_agg(c.participant_id)::uuid[] AS willing'),
+    ],
+    [
+      'step-20 block: array-of-domain assertion altered',
+      s => s.replace("AND t.typcategory = 'A' AND e.typtype = 'd';", "AND t.typcategory = 'A' AND e.typtype = 'b';"),
+    ],
     [
       'uuid7 domain allowed but intensity changed',
       s => s.replace('CHECK (VALUE BETWEEN 1 AND 10)', 'CHECK (VALUE BETWEEN 0 AND 10)'),

@@ -49,7 +49,9 @@ END $$;
 SELECT participant_id, co_participant_id, co_kind, co_display_name FROM v_co_participant
 WHERE participant_id = '00000000-0000-7e00-8000-0000000007a1';
 DO $$ BEGIN
-  IF (SELECT array_agg(co_participant_id) FROM v_co_participant WHERE participant_id = '00000000-0000-7e00-8000-0000000007a1')
+  -- co_participant_id is a uuid7 (view columns keep the domain), so array_agg
+  -- is uuid7[], which has no <> with uuid[]: cast (tables.sql, uuid7).
+  IF (SELECT array_agg(co_participant_id)::uuid[] FROM v_co_participant WHERE participant_id = '00000000-0000-7e00-8000-0000000007a1')
      <> ARRAY['00000000-0000-7e00-8000-0000000007b1'::uuid] THEN
     RAISE EXCEPTION 'smoke v_co_participant: A''s co-participant is not B';
   END IF;

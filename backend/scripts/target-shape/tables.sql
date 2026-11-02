@@ -57,6 +57,14 @@
 -- fails "Returned type uuid7 does not match expected type uuid"; cast it
 -- (x::uuid). SQL-language functions and RETURNING … INTO coerce. Drivers
 -- see plain uuid (RowDescription sends the base type, oid 2950).
+-- Arrays are NOT coerced: array_agg / ARRAY(SELECT …) over a uuid7 column
+-- yields uuid7[], a distinct array type with its own (per-cluster) oid. A
+-- view column of that type is reported with that oid, node-postgres has no
+-- parser for it, and the app reads the string '{…}' instead of a JS array;
+-- `uuid7[] <> uuid[]` has no operator, and a uuid[] function argument does
+-- not accept it. Cast every such aggregate back: array_agg(x.id …)::uuid[]
+-- (trailer.sql views). Step 20 refuses any column, function argument or
+-- result of an array-of-domain type.
 CREATE DOMAIN uuid7 AS uuid
   CONSTRAINT uuid7_version CHECK (VALUE IS NULL OR coalesce(uuid_extract_version(VALUE), 0) = 7);
 
