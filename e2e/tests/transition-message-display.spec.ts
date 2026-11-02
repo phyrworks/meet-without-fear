@@ -90,7 +90,7 @@ test.describe('Transition Message Display', () => {
 
     expect(createResponse.ok()).toBeTruthy();
     const createData = await createResponse.json();
-    sessionId = createData.session.id;
+    sessionId = createData.data.session.id; // ApiResponse envelope: { success, data: { session } }
     console.log(`${elapsed()} Session created: ${sessionId}`);
 
     // Step 2: Navigate to session and sign compact
@@ -218,7 +218,7 @@ test.describe('Transition Message Display', () => {
 
     expect(createResponse.ok()).toBeTruthy();
     const createData = await createResponse.json();
-    sessionId = createData.session.id;
+    sessionId = createData.data.session.id; // ApiResponse envelope: { success, data: { session } }
 
     // Navigate and sign compact
     const params = new URLSearchParams({

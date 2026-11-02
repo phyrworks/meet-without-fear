@@ -8,6 +8,7 @@
     "e2e:headed": "playwright test --headed",
     "e2e:ui": "playwright test --ui",
     "e2e:report": "playwright show-report",
+    "e2e:local": "playwright test --config=playwright.local-deploy.config.ts",
     "check": "tsc --noEmit"
   },
   "devDependencies": {

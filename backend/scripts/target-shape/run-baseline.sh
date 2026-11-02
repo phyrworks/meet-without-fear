@@ -38,11 +38,11 @@
 #   With --as-migrator the database is OWNED BY mwf_migrator (non-superuser,
 #   mwf_job WITH INHERIT FALSE, SET TRUE) and a, c, d, e, f, g run as it.
 #
-# --dev: creates (if missing) mwf_target_dev, mwf_target_test and
+# --dev: creates (if missing) mwf_target_dev, mwf_target_test, mwf_target_e2e and
 #   mwf_target_shadow — the target branch's development databases
 #   (docs/development/local-setup.md, "Working on phoenix/target-shape") —
-#   deploys the baseline into mwf_target_dev and mwf_target_test (a no-op when
-#   already applied), runs the gate on both, and leaves all three in place.
+#   deploys the baseline into mwf_target_dev, mwf_target_test and mwf_target_e2e (a no-op when
+#   already applied), runs the gate on each, and leaves all four in place.
 #   A pre-existing database with tables but no _prisma_migrations fails with
 #   Prisma P3005; it is never dropped here (another worktree may be using it).
 #   The shadow database stays empty (prisma migrate dev uses it).
@@ -278,16 +278,16 @@ SQL
   ;;
 
 dev)
-  for d in mwf_target_dev mwf_target_test mwf_target_shadow; do
+  for d in mwf_target_dev mwf_target_test mwf_target_e2e mwf_target_shadow; do
     if db_exists "$d"; then echo "   $d exists"; else psql_admin -c "CREATE DATABASE $d" >/dev/null; echo "   created $d"; fi
   done
-  for d in mwf_target_dev mwf_target_test; do
+  for d in mwf_target_dev mwf_target_test mwf_target_e2e; do
     step "3. prisma migrate deploy → $d"
     deploy "$(su_url "$d")" >"$OUT/deploy-$d.log" 2>&1 || { cat "$OUT/deploy-$d.log"; exit 1; }
     grep -E 'applied|Applying|No pending' "$OUT/deploy-$d.log" | sed 's/^/   /'
     verify_target "$d" "$(su_url "$d")"
   done
-  echo; echo "== dev databases left in place: mwf_target_dev, mwf_target_test, mwf_target_shadow (empty)"
+  echo; echo "== dev databases left in place: mwf_target_dev, mwf_target_test, mwf_target_e2e, mwf_target_shadow (empty)"
   ;;
 esac
 

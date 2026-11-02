@@ -24,8 +24,8 @@
 -- ============================================================================
 \set ON_ERROR_STOP on
 DO $$ BEGIN
-  IF current_database() NOT IN ('mwf_target_dev', 'mwf_target_test') THEN
-    RAISE EXCEPTION 'only for mwf_target_dev / mwf_target_test, not %', current_database();
+  IF current_database() NOT IN ('mwf_target_dev', 'mwf_target_test', 'mwf_target_e2e') THEN
+    RAISE EXCEPTION 'only for mwf_target_dev / mwf_target_test / mwf_target_e2e, not %', current_database();
   END IF;
 END $$;
 BEGIN;

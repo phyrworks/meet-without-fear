@@ -48,7 +48,8 @@
     "e2e:headed": "npm --workspace e2e run e2e:headed",
     "e2e:select": "node e2e/scripts/run-test.mjs",
     "e2e:ui": "npm --workspace e2e run e2e:ui",
-    "e2e:report": "npm --workspace e2e run e2e:report"
+    "e2e:report": "npm --workspace e2e run e2e:report",
+    "e2e:local": "npm --workspace e2e run e2e:local"
   },
   "engines": {
     "node": "20.x"
