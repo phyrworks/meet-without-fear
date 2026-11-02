@@ -24,6 +24,17 @@
  *     instant — the message table has no stage (spec §1.1 message, "derivable
  *     from participant_milestone").
  *
+ * GETTING STARTED FOR AN INVITER (work-qmgc). Stage 0 has two milestones and
+ * the inviter usually signs the compact BEFORE crafting the invitation. The old
+ * contract kept them IN_PROGRESS in stage 0 until POST /invitation/confirm
+ * completed it with `{ compactSigned, invitationSent }`; the mobile invitation
+ * follow-up is gated on that stage 0. So stage 0 ends at compact_signed for an
+ * invitee, and for a participant who authored an invitation only once
+ * invitation_sent exists too (at the later of the two). "Authored an unsent
+ * invitation" is not a milestone fact, so the loaders read it
+ * (`invitationPending`) and the pure functions take it as an option; with
+ * both milestones present the later-of rule needs no option.
+ *
  * WRITER CONTRACT (what keeps this per-participant reading correct). The
  * shim — like `v_current_stage` — moves a participant on the moment THEIR
  * terminal milestone exists; it does not consult `milestone.scope`. So the
@@ -66,6 +77,8 @@ export interface CurrentStage {
   nextMilestoneKey: string | null;
   /** The DTO stage number: the stage the participant is working in. */
   stage: number;
+  /** See `ParticipantStageState.invitationPending`. */
+  invitationPending: boolean;
 }
 
 export type ShimStageStatus = 'IN_PROGRESS' | 'COMPLETED';
@@ -81,8 +94,15 @@ export interface ShimStageRow {
 export interface ParticipantStageState {
   participantId: string;
   current: CurrentStage;
+  /** The participant authored an invitation not yet sent (no invitation_sent): stage 0 is not over. */
+  invitationPending: boolean;
   milestones: MilestoneReached[];
   rows: ShimStageRow[];
+}
+
+export interface StageOpts {
+  /** See `ParticipantStageState.invitationPending`. Default false. */
+  invitationPending?: boolean;
 }
 
 // ----------------------------------------------------------------------------
@@ -91,6 +111,24 @@ export interface ParticipantStageState {
 
 function reachedAt(milestones: MilestoneReached[], key: string): Date | null {
   return milestones.find(m => m.key === key)?.reachedAt ?? null;
+}
+
+/**
+ * The instant a stage was completed, or null. Stage 0 (Getting Started) ends
+ * at compact_signed, but not while the participant's own invitation is unsent,
+ * and at the later of compact_signed and invitation_sent once both exist.
+ */
+export function stageCompletedAt(stage: number, milestones: MilestoneReached[], opts: StageOpts = {}): Date | null {
+  const terminal = reachedAt(milestones, TERMINAL_MILESTONE[stage]);
+  if (stage !== 0 || !terminal) return terminal;
+  if (opts.invitationPending) return null;
+  const sent = reachedAt(milestones, 'invitation_sent');
+  return sent && sent > terminal ? sent : terminal;
+}
+
+/** The DTO stage from `v_current_stage.active_stage`, held at 0 while the participant's invitation is unsent. */
+export function activeStage(viewActiveStage: number, opts: StageOpts = {}): number {
+  return opts.invitationPending ? 0 : Math.min(viewActiveStage, LAST_STAGE);
 }
 
 /**
@@ -135,15 +173,20 @@ export function gatesFor(stage: number, milestones: MilestoneReached[]): Record<
  * current one IN_PROGRESS — or COMPLETED when it is the last stage and
  * `closed` is reached.
  */
-export function stageRowsFor(current: number, milestones: MilestoneReached[], joinedAt: Date | null): ShimStageRow[] {
+export function stageRowsFor(
+  current: number,
+  milestones: MilestoneReached[],
+  joinedAt: Date | null,
+  opts: StageOpts = {},
+): ShimStageRow[] {
   const rows: ShimStageRow[] = [];
   for (let stage = 0; stage <= current; stage++) {
-    const terminal = reachedAt(milestones, TERMINAL_MILESTONE[stage]);
+    const terminal = stageCompletedAt(stage, milestones, opts);
     const completed = stage < current || (stage === LAST_STAGE && terminal !== null);
     rows.push({
       stage,
       status: completed ? 'COMPLETED' : 'IN_PROGRESS',
-      startedAt: stage === 0 ? joinedAt : reachedAt(milestones, TERMINAL_MILESTONE[stage - 1]),
+      startedAt: stage === 0 ? joinedAt : stageCompletedAt(stage - 1, milestones, opts),
       completedAt: completed ? terminal : null,
       gatesSatisfied: gatesFor(stage, milestones),
     });
@@ -152,10 +195,10 @@ export function stageRowsFor(current: number, milestones: MilestoneReached[], jo
 }
 
 /** The participant's stage at an instant: terminal milestones reached by then. */
-export function stageAt(milestones: MilestoneReached[], at: Date): number {
+export function stageAt(milestones: MilestoneReached[], at: Date, opts: StageOpts = {}): number {
   let stage = 0;
   while (stage < LAST_STAGE) {
-    const done = reachedAt(milestones, TERMINAL_MILESTONE[stage]);
+    const done = stageCompletedAt(stage, milestones, opts);
     if (!done || done > at) break;
     stage++;
   }
@@ -195,9 +238,14 @@ export async function loadCurrentStages(
       stage_label: string | null;
       next_milestone_key: string | null;
       active_stage: number;
+      invitation_pending: boolean;
     }>
-  >`SELECT participant_id, milestone_key, ordinal, stage_label, next_milestone_key, active_stage
-    FROM v_current_stage WHERE participant_id = ANY(${participantIds}::uuid[])`;
+  >`SELECT v.participant_id, v.milestone_key, v.ordinal, v.stage_label, v.next_milestone_key, v.active_stage,
+      (EXISTS (SELECT 1 FROM invitation i WHERE i.invited_by_participant_id = v.participant_id)
+        AND NOT EXISTS (SELECT 1 FROM participant_milestone pm
+                        WHERE pm.participant_id = v.participant_id AND pm.milestone_key = 'invitation_sent'))
+        AS invitation_pending
+    FROM v_current_stage v WHERE v.participant_id = ANY(${participantIds}::uuid[])`;
   return new Map(
     rows.map(r => [
       r.participant_id,
@@ -207,10 +255,25 @@ export async function loadCurrentStages(
         ordinal: r.ordinal === null ? null : Number(r.ordinal),
         stageLabel: r.stage_label,
         nextMilestoneKey: r.next_milestone_key,
-        stage: Math.min(Number(r.active_stage), LAST_STAGE),
+        stage: activeStage(Number(r.active_stage), { invitationPending: r.invitation_pending }),
+        invitationPending: r.invitation_pending,
       },
     ]),
   );
+}
+
+/**
+ * The participants (of these) who authored an invitation not yet sent — the
+ * `invitationPending` option, for callers that read `loadMilestones` alone.
+ */
+export async function loadInvitationPending(participantIds: string[], client: DbClient = prisma): Promise<Set<string>> {
+  if (participantIds.length === 0) return new Set();
+  const rows = await client.$queryRaw<Array<{ id: string }>>`
+    SELECT DISTINCT i.invited_by_participant_id AS id FROM invitation i
+    WHERE i.invited_by_participant_id = ANY(${participantIds}::uuid[])
+      AND NOT EXISTS (SELECT 1 FROM participant_milestone pm
+                      WHERE pm.participant_id = i.invited_by_participant_id AND pm.milestone_key = 'invitation_sent')`;
+  return new Set(rows.map(r => r.id));
 }
 
 /** Milestones reached, per participant, oldest first. */
@@ -246,13 +309,16 @@ export async function loadStageStates(
       stageLabel: null,
       nextMilestoneKey: null,
       stage: 0,
+      invitationPending: false,
     };
     const reached = milestones.get(p.id) ?? [];
+    const opts = { invitationPending: current.invitationPending };
     out.set(p.id, {
       participantId: p.id,
       current,
+      invitationPending: current.invitationPending,
       milestones: reached,
-      rows: stageRowsFor(current.stage, reached, p.joinedAt),
+      rows: stageRowsFor(current.stage, reached, p.joinedAt, opts),
     });
   }
   return out;
@@ -303,6 +369,6 @@ export function rowForStage(state: ParticipantStageState | undefined, stage: num
  * Stage of the conversation owner at each message's instant — the DTO
  * `stage` of a message.
  */
-export function messageStage(ownerMilestones: MilestoneReached[], createdAt: Date): number {
-  return stageAt(ownerMilestones, createdAt);
+export function messageStage(ownerMilestones: MilestoneReached[], createdAt: Date, opts: StageOpts = {}): number {
+  return stageAt(ownerMilestones, createdAt, opts);
 }

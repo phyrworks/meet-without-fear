@@ -6,7 +6,9 @@
 
 import {
   gatesFor,
+  activeStage,
   latestStageRow,
+  messageStage,
   progressDTO,
   stageAt,
   stageRowsFor,
@@ -92,7 +94,16 @@ describe('stage shim — latestStageRow (the old partner-activity pick)', () => 
 describe('stage shim — progressDTO', () => {
   const state = (milestones: MilestoneReached[], stage: number): ParticipantStageState => ({
     participantId: 'p',
-    current: { participantId: 'p', milestoneKey: null, ordinal: null, stageLabel: null, nextMilestoneKey: null, stage },
+    current: {
+      participantId: 'p',
+      milestoneKey: null,
+      ordinal: null,
+      stageLabel: null,
+      nextMilestoneKey: null,
+      stage,
+      invitationPending: false,
+    },
+    invitationPending: false,
     milestones,
     rows: stageRowsFor(stage, milestones, t(0)),
   });
@@ -126,5 +137,40 @@ describe('stage shim — progressDTO', () => {
       gatesSatisfied: {},
     });
     expect(progressDTO(state(ADA, 2), { gates: false })).not.toHaveProperty('gatesSatisfied');
+  });
+});
+
+// work-qmgc: the inviter signs the compact before crafting the invitation. The
+// old StageProgress contract kept them IN_PROGRESS in stage 0 until
+// POST /invitation/confirm (old sessions.ts: stage 0 COMPLETED with
+// { compactSigned, invitationSent }); the client's invitation follow-up is
+// gated on stage 0 (UnifiedSessionScreen shouldRunInvitationFollowUp).
+describe('stage shim — Getting Started for an inviter (work-qmgc)', () => {
+  // Ada signed at 10 while crafting, sent the invitation at 40.
+  const SIGNED = [m('compact_signed', 10)];
+  const SENT = [m('compact_signed', 10), m('invitation_sent', 40)];
+
+  it('keeps an inviter with an unsent invitation in stage 0 after signing', () => {
+    expect(activeStage(1, { invitationPending: true })).toBe(0);
+    expect(activeStage(1, { invitationPending: false })).toBe(1);
+    expect(stageAt(SIGNED, t(20), { invitationPending: true })).toBe(0);
+    expect(messageStage(SIGNED, t(20), { invitationPending: true })).toBe(0);
+    const rows = stageRowsFor(0, SIGNED, t(0), { invitationPending: true });
+    expect(rows.map(r => [r.stage, r.status, r.completedAt])).toEqual([[0, 'IN_PROGRESS', null]]);
+    expect(rows[0].gatesSatisfied).toEqual({ compactSigned: true, signedAt: t(10).toISOString() });
+  });
+
+  it('ends stage 0 at the later of compact_signed and invitation_sent once both exist', () => {
+    expect(stageAt(SENT, t(20))).toBe(0); // crafting, after signing: still stage 0
+    expect(stageAt(SENT, t(40))).toBe(1);
+    expect(stageRowsFor(1, SENT, t(0)).map(r => [r.stage, r.status, r.startedAt, r.completedAt])).toEqual([
+      [0, 'COMPLETED', t(0), t(40)],
+      [1, 'IN_PROGRESS', t(40), null],
+    ]);
+  });
+
+  it('leaves an invitee (no invitation of their own) at compact_signed', () => {
+    expect(stageAt(SIGNED, t(20))).toBe(1);
+    expect(activeStage(1, { invitationPending: false })).toBe(1);
   });
 });
