@@ -38,6 +38,17 @@ export default [
       'no-console': 'warn',
       'prefer-const': 'error',
       'prettier/prettier': 'error',
+      'no-restricted-properties': ['error', { property: 'randomUUID', message: "UUIDv7 only: use uuidv7() from '@meet-without-fear/shared' (shared/src/utils/uuid-v7.ts), never v4." }],
+      'no-restricted-imports': [
+        'error',
+        {
+          paths: [
+            { name: 'uuid', message: "UUIDv7 only: use uuidv7() from '@meet-without-fear/shared' (shared/src/utils/uuid-v7.ts), never v4." },
+            { name: 'crypto', importNames: ['randomUUID'], message: "UUIDv7 only: use uuidv7() from '@meet-without-fear/shared' (shared/src/utils/uuid-v7.ts), never v4." },
+            { name: 'node:crypto', importNames: ['randomUUID'], message: "UUIDv7 only: use uuidv7() from '@meet-without-fear/shared' (shared/src/utils/uuid-v7.ts), never v4." },
+          ],
+        },
+      ],
     },
   },
   // Test files configuration

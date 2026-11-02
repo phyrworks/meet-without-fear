@@ -12,9 +12,9 @@
  * but is tailored for partner session context.
  */
 
-import { randomUUID } from 'crypto';
 import { getHaikuJson, BrainActivityCallType } from '../lib/bedrock';
 import { logger } from '../lib/logger';
+import { uuidv7 } from '@meet-without-fear/shared';
 import { withHaikuCircuitBreaker } from '../utils/circuit-breaker';
 import { getJobPrisma } from '../lib/prisma';
 import { encryptColumnValue } from '../lib/prisma-encryption-middleware';
@@ -69,7 +69,7 @@ export function ensureFactIds(
     }
     return {
       ...fact,
-      id: randomUUID(),
+      id: uuidv7(),
     };
   });
 }
@@ -118,7 +118,7 @@ export function applyFactUpdates(
     }
 
     const normalizedItem: CategorizedFactWithId = {
-      id: upsertItem.id || randomUUID(),
+      id: upsertItem.id || uuidv7(),
       category: upsertItem.category.trim(),
       fact: upsertItem.fact.trim(),
     };

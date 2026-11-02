@@ -23,6 +23,34 @@
         "caughtErrorsIgnorePattern": "^_"
       }
     ],
+    "no-restricted-properties": [
+      "error",
+      {
+        "property": "randomUUID",
+        "message": "UUIDv7 only: use uuidv7() from '@meet-without-fear/shared' (shared/src/utils/uuid-v7.ts), never v4."
+      }
+    ],
+    "no-restricted-imports": [
+      "error",
+      {
+        "paths": [
+          {
+            "name": "uuid",
+            "message": "UUIDv7 only: use uuidv7() from '@meet-without-fear/shared' (shared/src/utils/uuid-v7.ts), never v4."
+          },
+          {
+            "name": "crypto",
+            "importNames": ["randomUUID"],
+            "message": "UUIDv7 only: use uuidv7() from '@meet-without-fear/shared' (shared/src/utils/uuid-v7.ts), never v4."
+          },
+          {
+            "name": "node:crypto",
+            "importNames": ["randomUUID"],
+            "message": "UUIDv7 only: use uuidv7() from '@meet-without-fear/shared' (shared/src/utils/uuid-v7.ts), never v4."
+          }
+        ]
+      }
+    ],
     "no-prisma-any": "error",
     "@typescript-eslint/no-namespace": [
       "error",
@@ -35,9 +63,12 @@
     {
       "files": [
         "src/**/__tests__/**/*.ts",
-        "src/**/__mocks__/**/*.ts"
+        "src/**/__mocks__/**/*.ts",
+        "src/**/*.test.ts"
       ],
       "rules": {
+        "no-restricted-properties": "off",
+        "no-restricted-imports": "off",
         "@typescript-eslint/no-explicit-any": "off",
         "@typescript-eslint/no-require-imports": "off"
       }
