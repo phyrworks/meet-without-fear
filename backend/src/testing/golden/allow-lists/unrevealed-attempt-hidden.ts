@@ -281,12 +281,16 @@ UNREVEALED_ATTEMPT_HIDDEN_BYTE_TARGET_ALLOW.rules.push(
     [12, 27, 43, 59, 75, 90].map(s => `steps.${s}.body.data.records.0.id`),
     'consent',
   ),
-  // work-9klf: Bob's alignment note (index 11, "Ada Lovelace has felt heard…",
-  // written by the reconciler run at step 62) can also rank after the two
-  // delivered copies the same run writes: measured 3 of 7 runs on the
-  // topic-frame fixture, 0 of 7 without it — the order of two writes of one
-  // step on the global created_at rank, not a change of content or audience
-  // (the concept golden compares the note structurally and passes in every run).
+  // INTERIM, masks a real product bug (work-a39h.11.42) — remove by hand once it
+  // is fixed (mayDiffer rules do not self-expire). Bob's alignment note (index 11,
+  // "Ada Lovelace has felt heard…", step 62) is written by Prisma with the NODE
+  // clock (reconciler/state.ts -> message-store.ts, no createdAt) strictly before
+  // the reveal transaction; the two delivered copies come from
+  // app.empathy_set_status with the column default, the POSTGRES clock. When the
+  // database clock lags Node, the copies rank first, and listConversationMessages
+  // orders by created_at with no id tiebreaker — so Bob can see Ada's statement
+  // above the note that introduces it (3 of 7 runs). The concept golden matches
+  // the copy without pinning its position, hence only this label shift.
   byteLabelShift(['steps.64.body.data.messages.messages.11.id', 'steps.65.body.data.messages.11.id'], 'message'),
   byteLabelShift(
     [

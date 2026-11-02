@@ -695,10 +695,12 @@ export function subjectDeclineRecord(
  * accept an invitation without one (confirmInvitationMessage,
  * acceptInvitation), so the target fixture writes it for every sent session:
  * `TOPIC_FRAME` (fixture-scenarios/scenarios.ts), confirmed at the
- * invitation's message_confirmed_at, as confirmTopicFrame stamps both. The
- * instant is masked (a body's `topicFrameConfirmedAt`: a new instant
- * renumbers the step's later ranks), the text may differ; both paired with
- * `targetTopicFrameChecks` (scenario-checks.ts), which asserts the raw values.
+ * invitation's message_confirmed_at, as confirmTopicFrame stamps both. A body's
+ * `topicFrameConfirmedAt` is masked against the baseline's null (the instant
+ * equals the body's messageConfirmedAt, so it renumbers no ranks; a mayDiffer
+ * would also do — the mask is the stricter choice), the text may differ; both
+ * paired with `targetTopicFrameChecks` (scenario-checks.ts), which asserts the
+ * raw values (frame text; topicFrameConfirmedAt == messageConfirmedAt).
  */
 export const TARGET_TOPIC_FRAME_RULES: AllowRule[] = [
   {
@@ -708,7 +710,7 @@ export const TARGET_TOPIC_FRAME_RULES: AllowRule[] = [
     baseline: null,
     why:
       'work-9klf: the target fixture confirms the topic frame of a sent session (the old one wrote none); ' +
-      'masked: a new instant renumbers the step’s later ranks.',
+      'masked against the baseline’s null; raw value pinned by targetTopicFrameChecks.',
   },
   {
     kind: 'mayDiffer',
