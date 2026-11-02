@@ -6,9 +6,15 @@
  * { compactSigned, invitationSent } and opened stage 1); the client's
  * invitation follow-up is gated on that (UnifiedSessionScreen
  * shouldRunInvitationFollowUp: currentStage === Stage.ONBOARDING).
+ *
+ * The partner can accept before the inviter's app ever confirms (topic-frame
+ * confirm makes the link acceptable; the share modal that calls confirm is
+ * not re-shown once the partner accepted): accepting reaches the inviter's
+ * invitation_sent, so they still leave stage 0, and a later confirm is a no-op.
  * Requires: npx tsx src/testing/golden/cli.ts build CREATED
  */
 
+import { randomUUID } from 'crypto';
 import { isTargetShape } from '../../testing/golden/shape';
 import { adaAndBob, httpAs, openTargetRun, type TargetRun } from './target-roles';
 
@@ -70,5 +76,91 @@ describeTarget('Inviter stage while crafting the invitation (work-qmgc)', () => 
     const history = await http(ada, 'get', `/sessions/${ids.session}/messages`);
     expect(history.status).toBe(200);
     expect(probeStage(history.body.data.messages)).toBe(0);
+  });
+
+  /**
+   * A fresh session Ada creates for `invitee`, taken to "invitation ready, never confirmed": compact
+   * signed, topic frame confirmed (INVITED, message_confirmed_at set), a crafting turn in her chat.
+   */
+  const craftedButUnconfirmed = async (invitee: string) => {
+    const created = await http(ada, 'post', '/sessions', { inviteName: invitee });
+    expect(created.status).toBe(201);
+    const sessionId: string = created.body.data.session.id;
+    const invitationId: string = created.body.data.invitationId;
+    expect((await http(ada, 'post', `/sessions/${sessionId}/compact/sign`, { agreed: true })).status).toBe(200);
+    await run.sql(`UPDATE session SET topic_frame = 'PROBE_QMGC the dishes' WHERE id = $1`, [sessionId]);
+    expect((await http(ada, 'post', `/sessions/${sessionId}/topic-frame/confirm`)).status).toBe(200);
+    const [{ inviter }] = await run.sql<{ inviter: string }>(
+      `SELECT invited_by_participant_id AS inviter FROM invitation WHERE id = $1`,
+      [invitationId],
+    );
+    await run.sql(
+      `INSERT INTO message (conversation_id, role, content, created_at)
+       SELECT c.id, 'AI', 'PROBE_QMGC crafting turn', now() FROM conversation c
+       WHERE c.participant_id = $1 AND c.kind = 'MAIN'`,
+      [inviter],
+    );
+    const before = await http(ada, 'get', `/sessions/${sessionId}/state`);
+    expect(before.body.data.session.currentStage).toBe(0);
+    return { sessionId, invitationId, inviter };
+  };
+
+  /** After the partner accepted, Ada never having confirmed: past stage 0, and confirm is a no-op. */
+  const expectInviterPastStage0 = async (sessionId: string, invitationId: string, inviter: string) => {
+    const milestones = () =>
+      run.sql<{ key: string; reached_at: Date }>(
+        `SELECT milestone_key AS key, reached_at FROM participant_milestone WHERE participant_id = $1 ORDER BY milestone_key`,
+        [inviter],
+      );
+    const [{ accepted_at }] = await run.sql<{ accepted_at: Date }>(`SELECT accepted_at FROM invitation WHERE id = $1`, [
+      invitationId,
+    ]);
+    const reached = await milestones();
+    expect(reached.map(m => m.key)).toEqual(['compact_signed', 'invitation_sent']);
+    // invitation_sent at the accept instant: the crafting turn before it stays in stage 0
+    expect(reached.find(m => m.key === 'invitation_sent')!.reached_at).toEqual(accepted_at);
+
+    const after = await http(ada, 'get', `/sessions/${sessionId}/state`);
+    expect(after.status).toBe(200);
+    expect(after.body.data.session.currentStage).toBe(1);
+    expect(after.body.data.progress.myProgress).toMatchObject({ stage: 1, status: 'IN_PROGRESS' });
+    expect(
+      after.body.data.messages.messages.find((m: { content: string }) => m.content === 'PROBE_QMGC crafting turn')
+        ?.stage,
+    ).toBe(0);
+
+    // The share modal's confirm, late: short-circuits — same milestones, no new message.
+    const count = async () =>
+      (
+        await run.sql<{ n: number }>(
+          `SELECT count(*)::int AS n FROM message m JOIN conversation c ON c.id = m.conversation_id
+           WHERE c.participant_id = $1`,
+          [inviter],
+        )
+      )[0].n;
+    const messagesBefore = await count();
+    const confirm = await http(ada, 'post', `/sessions/${sessionId}/invitation/confirm`);
+    expect(confirm.status).toBe(200);
+    expect(confirm.body.data.confirmed).toBe(true);
+    expect(await milestones()).toEqual(reached);
+    expect(await count()).toBe(messagesBefore);
+    expect((await http(ada, 'get', `/sessions/${sessionId}/state`)).body.data.session.currentStage).toBe(1);
+  };
+
+  it('a partner who accepts before the inviter ever confirms still moves the inviter out of stage 0', async () => {
+    const { sessionId, invitationId, inviter } = await craftedButUnconfirmed('Carol');
+    const carol = { id: randomUUID(), email: `carol-qmgc-${process.pid}@e2e.test` };
+    expect((await http(carol, 'post', `/invitations/${invitationId}/accept`)).status).toBe(200);
+    await expectInviterPastStage0(sessionId, invitationId, inviter);
+  });
+
+  it('the E2E auto-accept on the partner’s first /state read does the same', async () => {
+    const { sessionId, invitationId, inviter } = await craftedButUnconfirmed('Dan');
+    const dan = { id: randomUUID(), email: `dan-qmgc-${process.pid}@e2e.test` };
+    expect((await http(dan, 'get', `/sessions/${sessionId}/state`)).status).toBe(200);
+    expect(await run.sql(`SELECT status::text AS status FROM invitation WHERE id = $1`, [invitationId])).toEqual([
+      { status: 'ACCEPTED' },
+    ]);
+    await expectInviterPastStage0(sessionId, invitationId, inviter);
   });
 });
