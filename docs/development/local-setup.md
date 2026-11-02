@@ -251,9 +251,11 @@ JOB_DATABASE_URL=postgresql://mwf_job:mwf_job_dev@127.0.0.1:5432/mwf_target_dev
 #   postgresql://mwf_user:mwf_password@127.0.0.1:5432/mwf_target_test
 ```
 
-E2E (`npm run e2e`) reads `e2e/.env.test`, which points `DATABASE_URL` at `mwf_target_e2e` and
-blanks `APP_/JOB_/AUTH_/OPS_DATABASE_URL` so the dev API cannot pick up the `mwf_target_dev` role
-URLs from `backend/.env`. `e2e/global-setup.ts` truncates every application table and refuses to run
+E2E (`npm run e2e`) reads `e2e/.env.test`, which points `DATABASE_URL` and `JOB_DATABASE_URL`
+(as `mwf_job`) at `mwf_target_e2e`, turns identity binding on (as the golden driver and the replica
+do, so the job-only definer functions and identity-bound reads behave as in production), and
+blanks `APP_/AUTH_/OPS_DATABASE_URL` so the dev API cannot pick up the `mwf_target_dev` role URLs
+from `backend/.env`. `e2e/global-setup.ts` truncates every application table and refuses to run
 unless the database name ends in `_e2e`, or if any role URL in the environment names a different
 database. A `DATABASE_URL` exported in your shell overrides `.env.test`; the guard catches that.
 
