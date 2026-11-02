@@ -65,6 +65,15 @@ describeTarget('Inviter stage while crafting the invitation (work-qmgc)', () => 
     expect(crafting.progress.myProgress).toMatchObject({ stage: 0, status: 'IN_PROGRESS', completedAt: null });
     expect(crafting.compact.mySigned).toBe(true);
     expect(probeStage(crafting.messages.messages)).toBe(0);
+    // The shim's CurrentStage agrees with the stage it reports (not the view's feel_heard / "Your Story").
+    const { loadCurrentStages } = await import('../stage-shim');
+    expect((await loadCurrentStages([ids.ada])).get(ids.ada)).toMatchObject({
+      stage: 0,
+      invitationPending: true,
+      milestoneKey: 'compact_signed',
+      nextMilestoneKey: 'invitation_sent',
+      stageLabel: 'Getting Started',
+    });
 
     expect((await http(ada, 'post', `/sessions/${ids.session}/invitation/confirm`)).status).toBe(200);
 

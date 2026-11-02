@@ -129,7 +129,8 @@ export function targetMessageStageChecks(opts: { harness: () => Harness; steps: 
         expect({ step: step.label, at: m.timestamp, stage: m.stage }).toEqual({
           step: step.label,
           at: m.timestamp,
-          stage: stageAt(byEmail.get(email) ?? [], new Date(m.timestamp)),
+          // Every fixture inviter reaches invitation_sent at journey start (scenarios.ts), so none is pending.
+          stage: stageAt(byEmail.get(email) ?? [], new Date(m.timestamp), { invitationPending: false }),
         });
         checked++;
       }

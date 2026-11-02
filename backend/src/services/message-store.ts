@@ -69,8 +69,8 @@ export interface MessageDTOContext {
   sessionId: string;
   /** The conversation owner's milestones, for the stage shim. */
   ownerMilestones: MilestoneReached[];
-  /** The owner's invitation is unsent (stage shim `invitationPending`); default false. */
-  ownerInvitationPending?: boolean;
+  /** The owner's invitation is unsent (stage shim `invitationPending`). Required: see `StageOpts`. */
+  ownerInvitationPending: boolean;
 }
 
 export interface LegacyMessageDTO {

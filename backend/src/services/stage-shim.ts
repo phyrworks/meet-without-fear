@@ -32,8 +32,17 @@
  * invitee, and for a participant who authored an invitation only once
  * invitation_sent exists too (at the later of the two). "Authored an unsent
  * invitation" is not a milestone fact, so the loaders read it
- * (`invitationPending`) and the pure functions take it as an option; with
- * both milestones present the later-of rule needs no option.
+ * (`invitationPending`) and the pure functions take it as a REQUIRED option
+ * (`StageOpts`); with both milestones present the later-of rule needs no
+ * option. Writers of invitation_sent: POST /invitation/confirm, and accepting
+ * the invitation (`reachInvitationSentOnAccept`: an accepted invitation was
+ * sent, and the share modal that calls confirm is not shown again once the
+ * partner accepted — without it the inviter would stay in stage 0). Pending
+ * is keyed on the milestone, not on invitation.status. A participant that
+ * authored an invitation but has no invitation_sent is held at stage 0 even
+ * with later milestones — no such data exists (no deployed compatibility).
+ * For a pending inviter `CurrentStage.stageLabel`/`nextMilestoneKey` are
+ * stage 0's (invitation_sent), not the view's.
  *
  * WRITER CONTRACT (what keeps this per-participant reading correct). The
  * shim — like `v_current_stage` — moves a participant on the moment THEIR
@@ -100,9 +109,15 @@ export interface ParticipantStageState {
   rows: ShimStageRow[];
 }
 
+/**
+ * Required, never defaulted: `{}` silently meaning "not pending" let a reader
+ * that forgot the option tag a crafting inviter's turns stage 1 (work-qmgc
+ * review). A caller that knows the participant cannot be a pending inviter
+ * passes `{ invitationPending: false }` and says why.
+ */
 export interface StageOpts {
-  /** See `ParticipantStageState.invitationPending`. Default false. */
-  invitationPending?: boolean;
+  /** See `ParticipantStageState.invitationPending`. */
+  invitationPending: boolean;
 }
 
 // ----------------------------------------------------------------------------
@@ -118,7 +133,7 @@ function reachedAt(milestones: MilestoneReached[], key: string): Date | null {
  * at compact_signed, but not while the participant's own invitation is unsent,
  * and at the later of compact_signed and invitation_sent once both exist.
  */
-export function stageCompletedAt(stage: number, milestones: MilestoneReached[], opts: StageOpts = {}): Date | null {
+export function stageCompletedAt(stage: number, milestones: MilestoneReached[], opts: StageOpts): Date | null {
   const terminal = reachedAt(milestones, TERMINAL_MILESTONE[stage]);
   if (stage !== 0 || !terminal) return terminal;
   if (opts.invitationPending) return null;
@@ -127,7 +142,7 @@ export function stageCompletedAt(stage: number, milestones: MilestoneReached[], 
 }
 
 /** The DTO stage from `v_current_stage.active_stage`, held at 0 while the participant's invitation is unsent. */
-export function activeStage(viewActiveStage: number, opts: StageOpts = {}): number {
+export function activeStage(viewActiveStage: number, opts: StageOpts): number {
   return opts.invitationPending ? 0 : Math.min(viewActiveStage, LAST_STAGE);
 }
 
@@ -177,7 +192,7 @@ export function stageRowsFor(
   current: number,
   milestones: MilestoneReached[],
   joinedAt: Date | null,
-  opts: StageOpts = {},
+  opts: StageOpts,
 ): ShimStageRow[] {
   const rows: ShimStageRow[] = [];
   for (let stage = 0; stage <= current; stage++) {
@@ -195,7 +210,7 @@ export function stageRowsFor(
 }
 
 /** The participant's stage at an instant: terminal milestones reached by then. */
-export function stageAt(milestones: MilestoneReached[], at: Date, opts: StageOpts = {}): number {
+export function stageAt(milestones: MilestoneReached[], at: Date, opts: StageOpts): number {
   let stage = 0;
   while (stage < LAST_STAGE) {
     const done = stageCompletedAt(stage, milestones, opts);
@@ -240,12 +255,19 @@ export async function loadCurrentStages(
       active_stage: number;
       invitation_pending: boolean;
     }>
-  >`SELECT v.participant_id, v.milestone_key, v.ordinal, v.stage_label, v.next_milestone_key, v.active_stage,
+  >`SELECT v.participant_id, v.milestone_key, v.ordinal, v.active_stage, x.invitation_pending,
+      -- A pending inviter's next milestone is invitation_sent, in stage 0's label — not the view's
+      -- (feel_heard, "Your Story"), so the fields agree with the stage activeStage reports.
+      CASE WHEN x.invitation_pending THEN s.stage_label ELSE v.stage_label END AS stage_label,
+      CASE WHEN x.invitation_pending THEN s.key ELSE v.next_milestone_key END AS next_milestone_key
+    FROM v_current_stage v
+    CROSS JOIN LATERAL (SELECT
       (EXISTS (SELECT 1 FROM invitation i WHERE i.invited_by_participant_id = v.participant_id)
         AND NOT EXISTS (SELECT 1 FROM participant_milestone pm
                         WHERE pm.participant_id = v.participant_id AND pm.milestone_key = 'invitation_sent'))
-        AS invitation_pending
-    FROM v_current_stage v WHERE v.participant_id = ANY(${participantIds}::uuid[])`;
+        AS invitation_pending) x
+    LEFT JOIN milestone s ON s.key = 'invitation_sent'
+    WHERE v.participant_id = ANY(${participantIds}::uuid[])`;
   return new Map(
     rows.map(r => [
       r.participant_id,
@@ -326,7 +348,7 @@ export async function loadStageStates(
 
 /** The current row (the DTO's `myProgress`), never undefined: stage 0 at worst. */
 export function currentRow(state: ParticipantStageState): ShimStageRow {
-  return state.rows[state.rows.length - 1] ?? stageRowsFor(0, [], null)[0];
+  return state.rows[state.rows.length - 1] ?? stageRowsFor(0, [], null, { invitationPending: false })[0];
 }
 
 export interface ProgressDTOShape {
@@ -369,6 +391,6 @@ export function rowForStage(state: ParticipantStageState | undefined, stage: num
  * Stage of the conversation owner at each message's instant — the DTO
  * `stage` of a message.
  */
-export function messageStage(ownerMilestones: MilestoneReached[], createdAt: Date, opts: StageOpts = {}): number {
+export function messageStage(ownerMilestones: MilestoneReached[], createdAt: Date, opts: StageOpts): number {
   return stageAt(ownerMilestones, createdAt, opts);
 }
