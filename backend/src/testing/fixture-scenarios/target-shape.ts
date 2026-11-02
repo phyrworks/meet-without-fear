@@ -70,6 +70,13 @@
  *     shared need) — the consent stamped at the share instant so no new
  *     timestamp rank appears;
  *   - closure → session_closure + the session RESOLVED.
+ *
+ * Reachability (work-2km7): the writer refuses a scenario the app cannot reach
+ * (`reachabilityViolations`, reachability.ts) and writes a participant (+ MAIN
+ * conversation, read state) only for those who have joined — the inviter, and
+ * the others once the invitation was accepted. A not-yet-joined invitee is a
+ * user and a relationship member only, as createSession leaves it; otherwise
+ * the real accept would collide on participant (session_id, user_id).
  */
 
 import type { ClientBase } from 'pg';
@@ -84,6 +91,7 @@ import {
   type WrittenScenario,
   type WrittenUser,
 } from './scenario-helpers';
+import { joinedParticipants, reachabilityViolations } from './reachability';
 import {
   CLOCKS,
   Clock,
@@ -183,6 +191,11 @@ export async function writeTargetShape(
   if (unsupported.length) {
     throw new Error(`Scenario ${scenario.name}: the target writer does not cover ${unsupported.join(', ')} yet`);
   }
+  // work-2km7: only states the app can reach (reachability.ts).
+  const unreachable = reachabilityViolations(scenario);
+  if (unreachable.length) {
+    throw new Error(`Scenario ${scenario.name} is not a state the app can reach: ${unreachable.join('; ')}`);
+  }
   if (users.length !== scenario.participants.length) {
     throw new Error(
       `Scenario ${scenario.name} has ${scenario.participants.length} participants but ${users.length} users`,
@@ -268,11 +281,7 @@ export async function writeTargetShape(
   // happens between here and the invitation row (participants and their
   // conversations take the member instants), so every instant is unchanged.
   readClock('invitation');
-  if (scenario.participants[0]?.milestones.invitation_sent && !scenario.topic) {
-    // The app cannot send an invitation without a confirmed topic frame
-    // (confirmInvitationMessage), nor accept one (acceptInvitation).
-    throw new Error(`Scenario ${scenario.name}: the invitation was sent but the session has no confirmed topic frame`);
-  }
+  // (A sent invitation without a confirmed topic frame is refused above, by reachabilityViolations.)
   const session = await db.query<{ id: string; status: string }>(
     `INSERT INTO session (relationship_id, status, topic_frame, topic_frame_confirmed_at, created_at, updated_at)
      VALUES ($1, $2, $3, $4, $5, $6) RETURNING id, status::text AS status`,
@@ -287,9 +296,14 @@ export async function writeTargetShape(
   const sessionId = session.rows[0].id;
 
   // --- Participants and their MAIN conversations ----------------------------------
+  // work-2km7: only the joined participants (reachability.ts). createSession
+  // writes the inviter's; acceptInvitation the invitee's, so an invitee of a
+  // PENDING invitation is a user and a relationship member, never a participant
+  // — accept would otherwise collide on participant (session_id, user_id).
+  const joined = joinedParticipants(scenario);
   const participantOf = new Map<ParticipantKey, string>();
   const conversationOf = new Map<ParticipantKey, string>();
-  for (const [i, p] of scenario.participants.entries()) {
+  for (const [i, p] of joined.entries()) {
     const at = memberJoined[i];
     const r = await db.query<{ id: string }>(
       `INSERT INTO participant (session_id, user_id, kind, display_name, joined_at, created_at, updated_at)
@@ -310,7 +324,7 @@ export async function writeTargetShape(
     return id;
   };
   const otherOf = (key: ParticipantKey): string | null => {
-    const others = scenario.participants.filter(p => p.key !== key);
+    const others = joined.filter(p => p.key !== key);
     return others.length === 1 ? pid(others[0].key) : null;
   };
 
@@ -339,7 +353,7 @@ export async function writeTargetShape(
   // read-state columns are the target's conversation_read_state (one per
   // participant; the old view's updated_at is the vessel's).
   autoPair();
-  for (const p of scenario.participants) {
+  for (const p of joined) {
     await db.query(`INSERT INTO conversation_read_state (participant_id, created_at, updated_at) VALUES ($1, $2, $3)`, [
       pid(p.key),
       ...autoPair(),
@@ -373,7 +387,7 @@ export async function writeTargetShape(
   const lateMilestones: Array<{ p: Scenario['participants'][number]; me: string; journeyStart: Date | undefined }> = [];
   /** The shared needs written (need_share ids = need ids), with their owners' labels, for proposal_need label matching. */
   const sharedNeeds: Array<{ id: string; label: string }> = [];
-  for (const [i, p] of scenario.participants.entries()) {
+  for (const [i, p] of joined.entries()) {
     const me = pid(p.key);
 
     // Stage-0 startedAt: the journey start, or (journey with no instant) a
@@ -683,7 +697,7 @@ export async function writeTargetShape(
       );
     }
     for (const pr of proposals) {
-      for (const p of scenario.participants) {
+      for (const p of joined) {
         for (const c of (p.choices ?? []).filter(c => c.proposal === pr.key)) {
           const sharedAt = p.milestones.choices_shared;
           if (!sharedAt) throw new Error(`Participant "${p.key}" has choices but no choices_shared milestone`);
@@ -735,7 +749,7 @@ export async function writeTargetShape(
   }
 
   // --- Inner Work and prompt captures -------------------------------------------------
-  for (const [i, p] of scenario.participants.entries()) {
+  for (const [i, p] of joined.entries()) {
     const reflectionIds: string[] = [];
     for (const r of p.reflections ?? []) {
       // FIDELITY: the old view's linked_at is the linking row's updatedAt.

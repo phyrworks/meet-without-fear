@@ -199,15 +199,23 @@ const BUILDERS: Record<TargetStage, Build> = {
     ],
   }),
 
+  // Ada confirmed the invitation (confirmInvitationMessage: compact_signed and
+  // invitation_sent at one instant). Bob has not accepted: a relationship
+  // member, not a participant (reachability.ts). Accept is tested from here.
   [TargetStage.INVITATION_READY]: () => ({
     participants: [
-      { key: A, journey: {}, milestones: { invitation_sent: INVITED } },
+      { key: A, journey: {}, milestones: { compact_signed: INVITED, invitation_sent: INVITED } },
       { key: B, milestones: {} },
     ],
   }),
 
-  // Bob has not accepted yet: attached to the relationship, no progress.
+  // work-2km7: post-accept. Bob accepted (the invitation ACCEPTED, the session
+  // ACTIVE, Bob a participant with a MAIN conversation and read state — what
+  // acceptInvitation writes) and has not begun: no milestone, no message. Ada's
+  // HELD attempt is about him; the app refuses an empathy draft before the
+  // partner joined, so a pre-accept EMPATHY_SHARED_A is unreachable.
   [TargetStage.EMPATHY_SHARED_A]: () => ({
+    invitation: ACCEPTED,
     participants: [
       {
         key: A,
@@ -929,9 +937,13 @@ function repairRedesign(choices: Record<string, ParticipantScenario['choices']>)
 /**
  * Two-participant scenarios when no partner account was supplied. The old
  * factory still marked the session ACTIVE and the invitation ACCEPTED, but wrote
- * no journey for anyone.
+ * no journey for anyone — a state the app cannot reach (nobody accepted). Since
+ * work-2km7 the fallback is the furthest reachable state without a partner:
+ * Ada confirmed the invitation (compact_signed + invitation_sent, as
+ * confirmInvitationMessage writes them) and it is still PENDING.
  */
 const PARTNER_REQUIRED = new Set<TargetStage>([
+  TargetStage.EMPATHY_SHARED_A,
   TargetStage.FEEL_HEARD_B,
   TargetStage.RECONCILER_SHOWN_B,
   TargetStage.CONTEXT_SHARED_B,
@@ -954,8 +966,8 @@ export function scenarioFor(stage: TargetStage, names: ScenarioNames): Scenario 
   if (names.b === undefined && PARTNER_REQUIRED.has(stage)) {
     return withTopicFrame({
       name: stage,
-      invitation: ACCEPTED,
-      participants: [{ key: A, milestones: { invitation_sent: INVITED } }],
+      invitation: { expiresAt: EXPIRES },
+      participants: [{ key: A, journey: {}, milestones: { compact_signed: INVITED, invitation_sent: INVITED } }],
     });
   }
 

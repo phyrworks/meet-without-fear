@@ -59,7 +59,6 @@ test.describe('Reconciler: No Gaps Detected → Proceed Directly', () => {
   let sessionId: string;
   let userAId: string;
   let userBId: string;
-  let invitationId: string;
   let userAContext: BrowserContext;
   let userAPage: Page;
   let userBContext: BrowserContext;
@@ -77,7 +76,6 @@ test.describe('Reconciler: No Gaps Detected → Proceed Directly', () => {
     sessionId = setup.session.id;
     userAId = setup.userA.id;
     userBId = setup.userB!.id;
-    invitationId = setup.invitation.id;
 
     console.log(`[Setup] Session: ${sessionId}, Fixture: ${FIXTURE_ID} (no gaps)`);
 
@@ -110,11 +108,8 @@ test.describe('Reconciler: No Gaps Detected → Proceed Directly', () => {
     await userAPage.waitForTimeout(2000);
   }
 
-  async function completeUserBStage1(request: import('@playwright/test').APIRequestContext) {
-    await request.post(`${API_BASE_URL}/api/invitations/${invitationId}/accept`, {
-      headers: { ...getE2EHeaders(userB.email, userBId, FIXTURE_ID), 'Content-Type': 'application/json' },
-    });
-
+  async function completeUserBStage1() {
+    // EMPATHY_SHARED_A is seeded post-accept (work-2km7): User B has already joined.
     const userBParams = new URLSearchParams({
       'e2e-user-id': userBId,
       'e2e-user-email': userB.email,
@@ -168,7 +163,7 @@ test.describe('Reconciler: No Gaps Detected → Proceed Directly', () => {
       const elapsed = () => `[${((Date.now() - testStart) / 1000).toFixed(1)}s]`;
 
       await setupUserA();
-      await completeUserBStage1(request);
+      await completeUserBStage1();
       console.log(`${elapsed()} User B completed Stage 1, reconciler ran with no-gaps fixture`);
 
       // === VERIFY: User B does NOT see share suggestion modal ===
@@ -416,7 +411,7 @@ test.describe('Reconciler: No Gaps Detected → Proceed Directly', () => {
       const elapsed = () => `[${((Date.now() - testStart) / 1000).toFixed(1)}s]`;
 
       await setupUserA();
-      await completeUserBStage1(request);
+      await completeUserBStage1();
 
       // Wait for reconciler and check User A's view
       await userAPage.waitForTimeout(5000);
@@ -437,7 +432,7 @@ test.describe('Reconciler: No Gaps Detected → Proceed Directly', () => {
       const elapsed = () => `[${((Date.now() - testStart) / 1000).toFixed(1)}s]`;
 
       await setupUserA();
-      await completeUserBStage1(request);
+      await completeUserBStage1();
 
       // Wait for reconciler and Ably events
       await userBPage.waitForTimeout(5000);

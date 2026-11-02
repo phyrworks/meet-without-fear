@@ -244,14 +244,20 @@ await new SessionBuilder(request)
 
 | Stage | Description |
 |-------|-------------|
-| `CREATED` | Session created, compact not signed |
-| `EMPATHY_SHARED_A` | User A completed Stage 1 |
+| `CREATED` | Session created, compact not signed; User B not a participant |
+| `INVITATION_READY` | User A signed the compact and sent the invitation (PENDING); User B not a participant — seed this to test accept |
+| `EMPATHY_SHARED_A` | User A completed Stage 1 and shared empathy; User B has accepted (session ACTIVE) and not begun — do not accept again |
 | `FEEL_HEARD_B` | User B felt heard, reconciler ready |
 | `RECONCILER_SHOWN_B` | User B felt heard, reconciler returned `OFFER_SHARING` (significant gaps), share-offer row transitioned to `OFFERED` once the subject fetched it |
 | `CONTEXT_SHARED_B` | Both users active, context shared |
 | `EMPATHY_REVEALED` | Both users shared empathy and validated each other (empathy reveal complete) |
 | `NEED_MAPPING_COMPLETE` | Stage 3: Both users identified needs and confirmed common ground |
 | `STRATEGIC_REPAIR_COMPLETE` | Stage 4: Strategies collected, ranked, and agreement created |
+
+Every stage is a state the app can reach (work-2km7): before the invitation is accepted only the
+inviter is a participant — the app creates the invitee's participant, MAIN conversation and read
+state at accept — and from `EMPATHY_SHARED_A` on both have joined. The fixture writer refuses a
+scenario that breaks this (`backend/src/testing/fixture-scenarios/reachability.ts`).
 
 ### Implementation
 
