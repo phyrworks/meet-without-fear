@@ -16,12 +16,13 @@ export interface E2EAuthHeaders {
  *
  * The backend upserts `User` by this id and `User.id` is a uuid column, so the
  * old default (the email's local part) is rejected. Same email, same id, on
- * every run. Version nibble 8 (RFC 9562 custom), variant 10.
+ * every run. Version nibble 7, variant 10: user.id is the uuid7 domain, which
+ * refuses any other version (the hash stands in for the timestamp bits).
  */
 export function e2eUserIdForEmail(email: string): string {
   const h = createHash('sha256').update(email).digest('hex');
   const variant = ((parseInt(h[16], 16) & 0x3) | 0x8).toString(16);
-  return `${h.slice(0, 8)}-${h.slice(8, 12)}-8${h.slice(13, 16)}-${variant}${h.slice(17, 20)}-${h.slice(20, 32)}`;
+  return `${h.slice(0, 8)}-${h.slice(8, 12)}-7${h.slice(13, 16)}-${variant}${h.slice(17, 20)}-${h.slice(20, 32)}`;
 }
 
 /**

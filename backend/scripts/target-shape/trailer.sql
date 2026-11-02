@@ -2,7 +2,7 @@
 -- trailer.sql — section 3 of the target_shape_baseline migration (TS-7c;
 -- built by TS-7, re-based on an empty database by OD7, 2026-10-26).
 -- Hand-maintained; backend/scripts/gen-target-migration.ts appends it after
--- the preamble, the Prisma DDL and the milestone seed, and splices
+-- the preamble, tables.sql and the milestone seed, and splices
 -- backend/scripts/target-shape/sql-only.sql in, verbatim, at the
 -- `-- @@include sql-only.sql` line. It never runs alone: it runs in the same
 -- transaction, so a failure here rolls the whole baseline back.
@@ -11,10 +11,9 @@
 -- (views, functions, the anonymisation walk), §7 (invariants);
 -- phase3-design-summary.md §4–§6 where the spec re-bases them.
 --
--- Contents, in order:
---   T1  the intensity domain, and the three columns the spec types with it
---   T2  sql-only.sql (generated columns, sql_ partial / expression indexes)
---   T3  CHECK constraints (every §1 Keys CHECK; jsonb_typeof on every jsonb column)
+-- Contents, in order (T1 and T3 are gone: since work-a39h.11.40 the domains,
+-- the generated columns and every CHECK live inline in tables.sql):
+--   T2  sql-only.sql (sql_ partial / expression indexes)
 --   T4  app.* functions — invoker helpers, then the SECURITY DEFINER helpers and
 --       writers handed to mwf_job in the TS-1 order (GRANT CREATE → ALTER OWNER
 --       → REVOKE CREATE → SET ROLE mwf_job for REVOKE/GRANT EXECUTE → RESET ROLE)
@@ -27,114 +26,14 @@
 --
 -- Not here: RLS ENABLE/FORCE and policies (TS-16); the milestone seed (its
 -- own section, before this one); schema app and app.current_user_id()
--- (preamble.sql).
+-- (preamble.sql); the tables, their constraints, the uuid7 and intensity
+-- domains (tables.sql).
 -- ============================================================================
 
 -- ---------------------------------------------------------------------------
--- T1. intensity domain (spec §3): int 1..10. The tables are empty, so the
--- retype cannot fail on data.
--- ---------------------------------------------------------------------------
-CREATE DOMAIN intensity AS integer CHECK (VALUE BETWEEN 1 AND 10);
-ALTER TABLE mood_reading ALTER COLUMN intensity TYPE intensity;
-ALTER TABLE regulation_event
-  ALTER COLUMN intensity_before TYPE intensity,
-  ALTER COLUMN intensity_after TYPE intensity;
-
--- ---------------------------------------------------------------------------
--- T2. sql-only.sql, verbatim (TS-6): generated columns, then sql_ indexes.
+-- T2. sql-only.sql, verbatim (TS-6): the sql_ indexes.
 -- ---------------------------------------------------------------------------
 -- @@include sql-only.sql
-
--- ---------------------------------------------------------------------------
--- T3. CHECK constraints. Names: chk_<table>_<rule>. (The [Pnn] tags name the
--- TS-7 data-move prechecks that guarded each rule; kept as cross-references.)
--- ---------------------------------------------------------------------------
-
--- §1.1 session [P12]
-ALTER TABLE session ADD CONSTRAINT chk_session_resolved_at CHECK (status <> 'RESOLVED' OR resolved_at IS NOT NULL);
--- §1.1 participant
-ALTER TABLE participant ADD CONSTRAINT chk_participant_kind_user CHECK ((kind = 'modeled') = (user_id IS NULL));
--- §1.1 conversation (anchor columns are SUBCHAT-only)
-ALTER TABLE conversation
-  ADD CONSTRAINT chk_conversation_anchor_kind CHECK ((kind = 'MAIN') = (anchor_kind IS NULL)),
-  ADD CONSTRAINT chk_conversation_anchor_proposal CHECK (kind = 'SUBCHAT' OR anchor_proposal_id IS NULL);
--- §1.1 message [P02] — P3 §6, "humans can't author as the facilitator"
-ALTER TABLE message
-  ADD CONSTRAINT chk_message_user_has_sender CHECK (role <> 'USER' OR sender_participant_id IS NOT NULL),
-  ADD CONSTRAINT chk_message_ai_has_no_sender CHECK (role NOT IN ('AI', 'SYSTEM') OR sender_participant_id IS NULL);
--- §1.1 draft — exclusive arc, and the arm matches the kind
-ALTER TABLE draft
-  ADD CONSTRAINT chk_draft_one_arc CHECK (num_nonnulls(about_participant_id, attempt_id, share_offer_id) = 1),
-  ADD CONSTRAINT chk_draft_arc_matches_kind CHECK (
-        (kind = 'EMPATHY') = (about_participant_id IS NOT NULL)
-    AND (kind = 'VALIDATION_FEEDBACK') = (attempt_id IS NOT NULL)
-    AND (kind = 'SHARE_CONTEXT') = (share_offer_id IS NOT NULL));
--- §1.1 ai_memory [P28a, P28b]
-ALTER TABLE ai_memory
-  ADD CONSTRAINT chk_ai_memory_one_owner CHECK (num_nonnulls(participant_id, user_id) = 1),
-  ADD CONSTRAINT chk_ai_memory_global_is_user CHECK ((kind = 'GLOBAL_FACTS') = (user_id IS NOT NULL)),
-  ADD CONSTRAINT chk_ai_memory_doc_object CHECK (jsonb_typeof(doc) = 'object'),
-  ADD CONSTRAINT chk_ai_memory_doc_keys CHECK (
-    CASE kind WHEN 'SUMMARY' THEN doc ?& ARRAY['text', 'messageCount', 'generatedAt']
-              ELSE jsonb_typeof(doc -> 'facts') = 'array' END);
--- §1.1 invitation [P14a, P14b] — P3 §6
-ALTER TABLE invitation ADD CONSTRAINT chk_invitation_accepted CHECK (
-  status <> 'ACCEPTED' OR (accepted_at IS NOT NULL AND accepted_by_user_id IS NOT NULL));
--- §1.2 empathy_attempt [P15b, P15d]
-ALTER TABLE empathy_attempt
-  ADD CONSTRAINT chk_empathy_attempt_not_self CHECK (author_participant_id <> subject_participant_id),
-  ADD CONSTRAINT chk_empathy_attempt_revealed_at CHECK (status NOT IN ('REVEALED', 'VALIDATED') OR revealed_at IS NOT NULL);
--- §1.2 empathy_review
-ALTER TABLE empathy_review ADD CONSTRAINT chk_empathy_review_feedback_sent CHECK (feedback IS NULL OR feedback_sent_at IS NOT NULL);
--- §1.2 reconciler_result [P17f]
-ALTER TABLE reconciler_result ADD CONSTRAINT chk_reconciler_result_score CHECK (alignment_score BETWEEN 0 AND 100);
--- §1.2 context_share_offer [P18a]
-ALTER TABLE context_share_offer
-  ADD CONSTRAINT chk_context_share_offer_accepted CHECK ((status = 'ACCEPTED') = (shared_at IS NOT NULL)),
-  ADD CONSTRAINT chk_context_share_offer_declined CHECK ((status = 'DECLINED') = (declined_at IS NOT NULL));
--- §1.3 consent [P07, P19] — exclusive arc; dated decisions (P3 §6); terminal
--- revocation; a share-offer or feedback consent has no requester (P1-4)
-ALTER TABLE consent
-  ADD CONSTRAINT chk_consent_one_target CHECK (num_nonnulls(need_id, empathy_attempt_id, proposal_id, share_offer_id, review_id) = 1),
-  ADD CONSTRAINT chk_consent_decision_dated CHECK ((decision IS NULL) = (decided_at IS NULL)),
-  ADD CONSTRAINT chk_consent_revoked CHECK (revoked_at IS NULL OR decision = 'REVOKED'),
-  ADD CONSTRAINT chk_consent_requester CHECK (requested_by_participant_id IS NULL OR target_kind IN ('NEED', 'PROPOSAL', 'EMPATHY_ATTEMPT'));
--- §1.4 need [P30]
-ALTER TABLE need ADD CONSTRAINT chk_need_confidence CHECK (ai_confidence BETWEEN 0 AND 1);
--- §1.4 need_share [P20c]
-ALTER TABLE need_share ADD CONSTRAINT chk_need_share_revoked_after_shared CHECK (revoked_at IS NULL OR revoked_at >= shared_at);
--- §1.4 proposal [P21]
-ALTER TABLE proposal
-  ADD CONSTRAINT chk_proposal_removed CHECK ((status = 'REMOVED') = (removed_at IS NOT NULL)),
-  ADD CONSTRAINT chk_proposal_shared_individual CHECK (kind = 'INDIVIDUAL_COMMITMENT' OR shared_at IS NULL);
--- §1.4 proposal_revision [P23c]
-ALTER TABLE proposal_revision
-  ADD CONSTRAINT chk_proposal_revision_before_object CHECK (before IS NULL OR jsonb_typeof(before) = 'object'),
-  ADD CONSTRAINT chk_proposal_revision_after_object CHECK (after IS NULL OR jsonb_typeof(after) = 'object');
--- §1.5 follow_up [P24a]
-ALTER TABLE follow_up
-  ADD CONSTRAINT chk_follow_up_individual_owner CHECK ((scope = 'INDIVIDUAL') = (owner_participant_id IS NOT NULL)),
-  ADD CONSTRAINT chk_follow_up_one_subject CHECK (num_nonnulls(agreement_id, proposal_id) <= 1);
--- §1.5 follow_up_checkin
-ALTER TABLE follow_up_checkin ADD CONSTRAINT chk_follow_up_checkin_payload_object CHECK (jsonb_typeof(payload) = 'object');
--- §1.6 reflection, takeaway_link [P31]
-ALTER TABLE reflection ADD CONSTRAINT chk_reflection_summary_doc_object CHECK (summary_doc IS NULL OR jsonb_typeof(summary_doc) = 'object');
-ALTER TABLE takeaway_link ADD CONSTRAINT chk_takeaway_link_not_self CHECK (source_id <> target_id);
--- §1.7 user — a tombstone is scrubbed (P3 D9)
-ALTER TABLE "user" ADD CONSTRAINT chk_user_tombstone_scrubbed CHECK (deleted_at IS NULL OR (clerk_id IS NULL AND email LIKE 'deleted+%'));
--- §1.7 user_preferences
-ALTER TABLE user_preferences ADD CONSTRAINT chk_user_preferences_doc CHECK (
-  jsonb_typeof(doc) = 'object' AND doc ?& ARRAY['memory', 'notifications', 'privacy']);
--- §1.7 feature_state
-ALTER TABLE feature_state
-  ADD CONSTRAINT chk_feature_state_feature CHECK (feature IN ('meditation', 'gratitude', 'needs_assessment', 'people')),
-  ADD CONSTRAINT chk_feature_state_doc_object CHECK (jsonb_typeof(doc) = 'object');
--- §1.8 brain_activity [P28c]
-ALTER TABLE brain_activity
-  ADD CONSTRAINT chk_brain_activity_input_json CHECK (input IS NULL OR jsonb_typeof(input) IN ('object', 'array')),
-  ADD CONSTRAINT chk_brain_activity_output_json CHECK (output IS NULL OR jsonb_typeof(output) IN ('object', 'array')),
-  ADD CONSTRAINT chk_brain_activity_metadata_json CHECK (metadata IS NULL OR jsonb_typeof(metadata) IN ('object', 'array')),
-  ADD CONSTRAINT chk_brain_activity_structured_output_json CHECK (structured_output IS NULL OR jsonb_typeof(structured_output) IN ('object', 'array'));
 
 -- ---------------------------------------------------------------------------
 -- T4. app.* functions (spec §4; P3 §5).
@@ -978,6 +877,8 @@ FROM participant p
 JOIN participant o ON o.session_id = p.session_id AND o.id <> p.id;
 
 -- Session-scoped milestones: reached by every present human participant?
+-- The array_agg(… uuid7 column …)::uuid[] casts in the views below keep the
+-- array columns uuid[]: uncast they are uuid7[] (see the uuid7 domain, tables.sql).
 CREATE VIEW v_session_readiness WITH (security_invoker = true) AS
 SELECT s.id AS session_id, m.key AS milestone_key,
        coalesce(w.waiting_on, '{}') = '{}' AS all_reached,
@@ -985,7 +886,7 @@ SELECT s.id AS session_id, m.key AS milestone_key,
 FROM session s
 CROSS JOIN milestone m
 LEFT JOIN LATERAL (
-  SELECT array_agg(p.id ORDER BY p.joined_at, p.id) AS waiting_on
+  SELECT array_agg(p.id ORDER BY p.joined_at, p.id)::uuid[] AS waiting_on
   FROM participant p
   WHERE p.session_id = s.id AND p.kind = 'human' AND p.left_at IS NULL
     AND NOT EXISTS (SELECT 1 FROM participant_milestone pm WHERE pm.participant_id = p.id AND pm.milestone_key = m.key)
@@ -1062,12 +963,12 @@ SELECT ns.session_id, ns.need_id, ns.participant_id AS need_owner_participant_id
             ELSE 'PARTIAL' END AS status
 FROM need_share ns
 LEFT JOIN LATERAL (
-  SELECT array_agg(pr.id ORDER BY pr.created_at, pr.id) AS proposal_ids
+  SELECT array_agg(pr.id ORDER BY pr.created_at, pr.id)::uuid[] AS proposal_ids
   FROM proposal_need pn JOIN proposal pr ON pr.id = pn.proposal_id
   WHERE pn.need_id = ns.need_id AND pr.status IN ('ACTIVE', 'REVISED', 'CONVERTED_TO_AGREEMENT')
 ) cov ON true
 LEFT JOIN LATERAL (
-  SELECT array_agg(DISTINCT c.participant_id) AS willing
+  SELECT array_agg(DISTINCT c.participant_id)::uuid[] AS willing
   FROM proposal_need pn
   JOIN proposal pr ON pr.id = pn.proposal_id AND pr.status IN ('ACTIVE', 'REVISED', 'CONVERTED_TO_AGREEMENT')
   JOIN proposal_choice c ON c.proposal_id = pr.id AND c.decision = 'WILLING'
@@ -1084,14 +985,14 @@ WHERE ns.revoked_at IS NULL;
 -- (ACTIVE, REVISED or CONVERTED_TO_AGREEMENT; ruling R20, above).
 CREATE VIEW v_session_closure_items WITH (security_invoker = true) AS
 SELECT s.id AS session_id,
-       coalesce((SELECT array_agg(ag.id ORDER BY ag.created_at, ag.id) FROM agreement ag WHERE ag.session_id = s.id), '{}') AS agreement_ids,
-       coalesce((SELECT array_agg(pr.id ORDER BY pr.created_at, pr.id)
+       coalesce((SELECT array_agg(ag.id ORDER BY ag.created_at, ag.id)::uuid[] FROM agreement ag WHERE ag.session_id = s.id), '{}') AS agreement_ids,
+       coalesce((SELECT array_agg(pr.id ORDER BY pr.created_at, pr.id)::uuid[]
                  FROM proposal pr
                  WHERE pr.session_id = s.id AND pr.kind = 'INDIVIDUAL_COMMITMENT' AND pr.status <> 'REMOVED'
                    AND EXISTS (SELECT 1 FROM proposal_choice c
                                WHERE c.proposal_id = pr.id AND c.participant_id = pr.created_by_participant_id AND c.decision = 'WILLING')),
                 '{}') AS individual_commitment_ids,
-       coalesce((SELECT array_agg(ns.need_id ORDER BY ns.shared_at, ns.need_id)
+       coalesce((SELECT array_agg(ns.need_id ORDER BY ns.shared_at, ns.need_id)::uuid[]
                  FROM need_share ns
                  WHERE ns.session_id = s.id AND ns.revoked_at IS NULL
                    AND (EXISTS (SELECT 1 FROM need_disposition d WHERE d.need_id = ns.need_id AND d.status = 'OPEN')
@@ -1111,9 +1012,9 @@ SELECT f.id AS follow_up_id, f.session_id, x.expected AS participant_ids, x.subm
             ELSE 'WAITING_FOR_PARTNER' END AS status
 FROM follow_up f
 CROSS JOIN LATERAL (
-  SELECT coalesce(array_agg(p.id ORDER BY p.joined_at, p.id), '{}') AS expected,
-         coalesce(array_agg(p.id ORDER BY p.joined_at, p.id) FILTER (WHERE ck.id IS NOT NULL), '{}') AS submitted,
-         coalesce(array_agg(p.id ORDER BY p.joined_at, p.id) FILTER (WHERE ck.id IS NULL), '{}') AS waiting
+  SELECT coalesce(array_agg(p.id ORDER BY p.joined_at, p.id)::uuid[], '{}') AS expected,
+         coalesce(array_agg(p.id ORDER BY p.joined_at, p.id) FILTER (WHERE ck.id IS NOT NULL)::uuid[], '{}') AS submitted,
+         coalesce(array_agg(p.id ORDER BY p.joined_at, p.id) FILTER (WHERE ck.id IS NULL)::uuid[], '{}') AS waiting
   FROM participant p
   LEFT JOIN follow_up_checkin ck ON ck.follow_up_id = f.id AND ck.participant_id = p.id
   WHERE p.session_id = f.session_id AND p.kind = 'human' AND p.left_at IS NULL
@@ -1413,7 +1314,8 @@ BEGIN
     AND NOT (conrelid = 'public.brain_activity'::regclass AND confrelid = 'public.reflection'::regclass);
   IF bad IS NOT NULL THEN RAISE EXCEPTION 'step 20: FK(s) into reflection*: %', bad; END IF;
 
-  -- Every jsonb column has a jsonb_typeof CHECK.
+  -- Every jsonb column has a jsonb_typeof CHECK (inline in its CREATE TABLE in
+  -- tables.sql; the catalog, not the source, is what this reads).
   SELECT string_agg(c.table_name || '.' || c.column_name, ', ' ORDER BY c.table_name, c.column_name) INTO bad
   FROM information_schema.columns c
   WHERE c.table_schema = 'public' AND c.data_type = 'jsonb'
@@ -1421,6 +1323,38 @@ BEGIN
                     WHERE k.contype = 'c' AND k.conrelid = format('public.%I', c.table_name)::regclass
                       AND pg_get_constraintdef(k.oid) ~ ('jsonb_typeof\(' || c.column_name || '\) (= |= ANY )'));
   IF bad IS NOT NULL THEN RAISE EXCEPTION 'step 20: jsonb column(s) without a jsonb_typeof CHECK: %', bad; END IF;
+
+  -- Every uuid column of a table is a uuid7 (tables.sql): 33 primary keys
+  -- defaulting to uuidv7() and the 95 columns that reference them.
+  SELECT string_agg(c.relname || '.' || a.attname, ', ' ORDER BY c.relname, a.attname) INTO bad
+  FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid JOIN pg_namespace s ON s.oid = c.relnamespace
+  WHERE s.nspname = 'public' AND c.relkind = 'r' AND a.attnum > 0 AND NOT a.attisdropped
+    AND a.atttypid = 'pg_catalog.uuid'::regtype;
+  IF bad IS NOT NULL THEN RAISE EXCEPTION 'step 20: uuid column(s) not typed uuid7: %', bad; END IF;
+  SELECT count(*) INTO n
+  FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid JOIN pg_namespace s ON s.oid = c.relnamespace
+  WHERE s.nspname = 'public' AND c.relkind = 'r' AND a.attnum > 0 AND NOT a.attisdropped
+    AND a.atttypid = 'public.uuid7'::regtype;
+  IF n <> @@UUID7_COLUMNS@@ THEN RAISE EXCEPTION 'step 20: % uuid7 columns, expected @@UUID7_COLUMNS@@', n; END IF;
+
+  -- No column (table, view, composite) and no function argument or result has
+  -- an array-of-domain type: array_agg over a uuid7 column is uuid7[], which
+  -- node-postgres cannot parse (the app would read the string '{…}'). Cast it
+  -- back with ::uuid[] (the uuid7 domain in tables.sql explains).
+  SELECT string_agg(s.nspname || '.' || c.relname || '.' || a.attname || ' ' || format_type(a.atttypid, NULL), ', '
+                    ORDER BY s.nspname, c.relname, a.attname) INTO bad
+  FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid JOIN pg_namespace s ON s.oid = c.relnamespace
+  JOIN pg_type t ON t.oid = a.atttypid JOIN pg_type e ON e.oid = t.typelem
+  WHERE s.nspname NOT IN ('pg_catalog', 'information_schema') AND s.nspname !~ '^pg_'
+    AND a.attnum > 0 AND NOT a.attisdropped AND t.typcategory = 'A' AND e.typtype = 'd';
+  IF bad IS NOT NULL THEN RAISE EXCEPTION 'step 20: column(s) of an array-of-domain type (cast to the base array, e.g. ::uuid[]): %', bad; END IF;
+  SELECT string_agg(p.oid::regprocedure::text, ', ' ORDER BY p.oid::regprocedure::text) INTO bad
+  FROM pg_proc p JOIN pg_namespace s ON s.oid = p.pronamespace
+  WHERE s.nspname NOT IN ('pg_catalog', 'information_schema') AND s.nspname !~ '^pg_'
+    AND EXISTS (SELECT 1 FROM unnest(p.prorettype || coalesce(p.proallargtypes, p.proargtypes::oid[])) AS x(typ)
+                JOIN pg_type t ON t.oid = x.typ JOIN pg_type e ON e.oid = t.typelem
+                WHERE t.typcategory = 'A' AND e.typtype = 'd');
+  IF bad IS NOT NULL THEN RAISE EXCEPTION 'step 20: function(s) with an array-of-domain argument or result (use the base array, e.g. uuid[]): %', bad; END IF;
 
   -- touch_updated_at on exactly the tables that have updated_at (35).
   SELECT string_agg(table_name, ', ' ORDER BY table_name) INTO bad

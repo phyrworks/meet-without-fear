@@ -32,7 +32,7 @@ content-hash verification, no mapping table: there is nothing to verify identity
 
 What carries over from the data-move design unchanged: the generator
 (`backend/scripts/gen-target-migration.ts`, deterministic, its output committed), the hand-maintained
-trailer (CHECKs, the `intensity` domain, `app.*` functions with the TS-1 ownership/grant order,
+trailer (`app.*` functions with the TS-1 ownership/grant order,
 T-* triggers, `touch_updated_at` on 35 tables, views, milestone seed, grants, the step-20 catalog
 assertions), `sql-only.sql`, the schema gate `check-schema.sh`, and the per-caller privacy tests —
 re-validated on an empty target database (TS-7c).
@@ -78,9 +78,9 @@ equal to the committed file, and the only migration). It runs in one transaction
 | # | Section | Source |
 |---|---|---|
 | 0 | **Preamble**: refuse unless the database is empty (no table `"Session"` — the old shape, with the cutover instruction in the hint —, no schema `app`, no relation in `public` but `_prisma_migrations`); the roles assertion (`mwf_app/job/ops/auth` exist) and `pg_has_role(current_user, 'mwf_job', 'SET')`, both from TS-1's migration; `CREATE SCHEMA app` + `USAGE` grants; `app.current_user_id()` | `backend/scripts/target-shape/preamble.sql` |
-| 1 | Enums and the 47 tables: `prisma migrate diff --from-empty --to-schema <copy of schema.prisma without the consent.target_kind @default> --script` (the default references other columns; §T2 re-adds the column GENERATED) | `schema.prisma` |
+| 1 | Domains `uuid7` (every uuid column: 33 `uuidv7()` PKs + 95 FK columns) and `intensity`, the enums, and the 47 tables, **hand-written** (owner decision 2026-11-02, work-a39h.11.40, replacing `prisma migrate diff --from-empty`): each `CREATE TABLE` carries its columns, generated columns, PK, UNIQUE, FKs and CHECKs, its plain indexes straight after; tables in dependency order. `check-schema.sh` proves `schema.prisma` matches it; `compare-baseline-ddl.ts` proved it identical to the Prisma-built tables of 99abd51f except uuid→uuid7 and the 12 unique indexes now UNIQUE constraints | `backend/scripts/target-shape/tables.sql` |
 | 2 | `milestone` seed (13 rows; reference data) | `backend/scripts/target-shape/gen/maps.ts` |
-| 3 | **Trailer**: T1 `intensity` domain · T2 `sql-only.sql` verbatim (generated columns, `sql_` indexes) · T3 CHECKs · T4 `app.*` functions — `is_member`/`partner_user_id` (TS-1's signatures, re-based on `participant`) created like every other definer helper and handed to `mwf_job` in the TS-1 order (GRANT CREATE → ALTER OWNER → REVOKE CREATE → SET ROLE `mwf_job` for REVOKE/GRANT EXECUTE) · T5 triggers (T-* and `touch_updated_at` ×35) · T6 views · T7 grants (column-level for `mwf_job`) · T8 catalog assertions (plan step 20: FK-to-user RESTRICT, `need_share → need` RESTRICT, no FK into `reflection*`, `jsonb_typeof` CHECK on every jsonb column, 35 `touch_updated_at`, views `security_invoker`, pinned `search_path`, no PUBLIC EXECUTE, definer functions owned by `mwf_job`, 13 milestones) | `backend/scripts/target-shape/trailer.sql` |
+| 3 | **Trailer**: T2 `sql-only.sql` verbatim (`sql_` indexes; T1 and T3 — the domain, the CHECKs — moved into section 1) · T4 `app.*` functions — `is_member`/`partner_user_id` (TS-1's signatures, re-based on `participant`) created like every other definer helper and handed to `mwf_job` in the TS-1 order (GRANT CREATE → ALTER OWNER → REVOKE CREATE → SET ROLE `mwf_job` for REVOKE/GRANT EXECUTE) · T5 triggers (T-* and `touch_updated_at` ×35) · T6 views · T7 grants (column-level for `mwf_job`) · T8 catalog assertions (plan step 20: FK-to-user RESTRICT, `need_share → need` RESTRICT, no FK into `reflection*`, `jsonb_typeof` CHECK on every jsonb column, every uuid column `uuid7` (128), 35 `touch_updated_at`, views `security_invoker`, pinned `search_path`, no PUBLIC EXECUTE, definer functions owned by `mwf_job`, 13 milestones) | `backend/scripts/target-shape/trailer.sql` |
 
 There are no invariant re-checks over existing rows: the database is empty, and every invariant is
 a trigger or CHECK that sees every row from the first write.

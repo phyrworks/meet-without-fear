@@ -2,14 +2,15 @@
 # ============================================================================
 # check-schema.sh — the drift gate for the target shape (TS-6, Ruling R10).
 #
-# BUILD MODE (default): proves schema.prisma + sql-only.sql are self-consistent.
+# BUILD MODE (default): proves schema.prisma matches the hand-written tables
+# (tables.sql) + sql-only.sql.
 #   1. creates the scratch database ts6_target on the dev container;
-#   2. applies the Prisma DDL (`prisma migrate diff --from-empty --to-schema`)
-#      and sql-only.sql §1 (the generated columns);
+#   2. applies tables.sql (domains, enums, the 47 tables with their keys,
+#      FKs, CHECKs and generated columns — section 1 of the baseline);
 #   3. (a) `prisma validate`
 #      (c) `prisma db pull --print`, normalised (normalize-schema.cjs) and
 #          diffed against schema.prisma — must be identical;
-#   4. applies sql-only.sql §2 (the sql_ indexes), then
+#   4. applies sql-only.sql (the sql_ indexes), then
 #      (b) `prisma migrate diff --from-config-datasource --to-schema --script`
 #          — must print an empty script;
 #      (c') `prisma db pull --print` again — every line that differs from the
@@ -33,11 +34,13 @@
 # schema.prisma, so a pull of a database with them can never equal it. Never
 # refresh schema.prisma from `db pull`. (Verified TS-6, 2026-10-19, PG 18.6.)
 #
-# The Prisma DDL for consent.target_kind carries a DEFAULT that references
-# other columns (the generated expression, as `db pull` renders it), which
-# Postgres rejects. Build mode therefore generates the DDL from a copy of
-# schema.prisma with that one @default removed; sql-only.sql §1 then drops the
-# plain column and re-adds it GENERATED. The baseline generator does the same.
+# Since work-a39h.11.40 nothing here runs `migrate diff --from-empty`: the
+# baseline's tables are hand-written (tables.sql), and this gate is what ties
+# them to schema.prisma. The uuid7 and intensity domains and the CHECKs are
+# invisible to both `migrate diff` and `db pull` (probes TS-6, 2026-10-19 and
+# work-a39h.11.40, 2026-11-02), so they cannot make the gate fail — and the
+# gate cannot check them either: the static comparison
+# (compare-baseline-ddl.ts) and the baseline's step-20 assertions do.
 #
 # Exits non-zero on any failure. Only ever addresses a database whose name
 # matches ^ts[67]_ (build mode: exactly ts6_target), or, read-only, one of
@@ -79,6 +82,7 @@ PORT="${PGPORT_SU:-5432}"
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BACKEND="$(cd "$HERE/../.." && pwd)"
+TABLES="$HERE/tables.sql"
 SQL_ONLY="$HERE/sql-only.sql"
 NORMALIZE="$HERE/normalize-schema.cjs"
 DELTA="$HERE/check-pull-delta.cjs"
@@ -155,22 +159,13 @@ if [ "$MODE" = existing ]; then
   check_sql_names "$OUT/pulled-full.prisma" || fail=1
 else
   trap drop_scratch EXIT
-  grep -q '^-- @@section: indexes' "$SQL_ONLY" || { echo "sql-only.sql lost its section marker" >&2; exit 2; }
-  awk '/^-- @@section: indexes/{exit} {print}' "$SQL_ONLY" >"$OUT/sql-only-1-columns.sql"
-  awk 'f{print} /^-- @@section: indexes/{f=1}' "$SQL_ONLY" >"$OUT/sql-only-2-indexes.sql"
 
   echo "== scratch database ${DB} (container ${CONTAINER})"
   drop_scratch
   psql_admin -c "CREATE DATABASE ts6_target"
 
-  echo "== apply: Prisma DDL (--from-empty), then sql-only.sql §1 (generated columns)"
-  perl -0pe 's/(\n\s*targetKind\s+ConsentTarget\s+)\@default\(dbgenerated\("\\nCASE.*?END"\)\)\s*/$1/s' \
-    prisma/schema.prisma >"$OUT/schema-ddl.prisma"
-  [ "$(diff prisma/schema.prisma "$OUT/schema-ddl.prisma" | grep -c '^>')" = 1 ] \
-    || { echo "could not strip the target_kind default for the DDL (expected exactly one changed line)" >&2; exit 1; }
-  npx prisma migrate diff --from-empty --to-schema "$OUT/schema-ddl.prisma" --script >"$OUT/from-empty.sql"
-  psql_db -1 -f - <"$OUT/from-empty.sql"
-  psql_db -1 -f - <"$OUT/sql-only-1-columns.sql"
+  echo "== apply: tables.sql (the baseline's section 1)"
+  psql_db -1 -f - <"$TABLES"
   echo "   tables: $(psql_db -Atc "SELECT count(*) FROM pg_tables WHERE schemaname = 'public'")"
 
   echo "== (a) prisma validate"; check_validate || fail=1
@@ -185,8 +180,8 @@ else
     echo "   FAIL: db pull differs from schema.prisma:"; cat "$OUT/pull-base.diff"; fail=1
   fi
 
-  echo "== apply: sql-only.sql §2 (sql_ indexes)"
-  psql_db -1 -f - <"$OUT/sql-only-2-indexes.sql"
+  echo "== apply: sql-only.sql (sql_ indexes)"
+  psql_db -1 -f - <"$SQL_ONLY"
 
   echo "== (b) migrate diff --from-config-datasource --to-schema (must be empty)"; check_drift || fail=1
 

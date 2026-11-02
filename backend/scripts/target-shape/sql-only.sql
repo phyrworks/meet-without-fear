@@ -3,68 +3,21 @@
 --
 -- Spec: docs/backend/data-model/schema-target-2026-10.md (§1 Keys lines, §5).
 --
--- The objects `prisma migrate diff` cannot create but `prisma db pull` CAN
--- see, so they must be created exactly this way for backend/prisma/schema.prisma
--- to stay equal to a `db pull` of the migrated database:
---   1. the two generated columns (user.name, consent.target_kind);
---   2. the `sql_`-prefixed partial / expression indexes (spec §5 "Lives only in
---      migration SQL"; never give a Prisma index one of these names).
+-- The `sql_`-prefixed partial / expression indexes (spec §5 "Lives only in
+-- migration SQL"; never give a Prisma index one of these names): objects
+-- `prisma migrate diff` ignores but `prisma db pull` CAN see, which
+-- schema.prisma deliberately does not declare.
 --
--- INPUT TO TS-7: the migration generator appends this file, verbatim, to the
--- trailer of the one-shot migration, after the tables exist. It runs AFTER the
--- Prisma-generated DDL (`migrate diff --from-empty --to-schema`), which creates
--- user.name and consent.target_kind as plain columns; section 1 replaces them.
--- The data migration must not write either column (they are GENERATED).
+-- The migration generator splices this file, verbatim, into the trailer of
+-- the baseline (T2), after tables.sql has created the tables. Since
+-- work-a39h.11.40 everything else that used to be here or in the trailer —
+-- the generated columns user.name and consent.target_kind, the CHECKs, the
+-- domains — is inline in tables.sql; these indexes stay apart because the
+-- drift gate needs them in a second stage (below).
 --
--- TS-7, one trap: schema.prisma declares consent.target_kind with
--- @default(dbgenerated("\nCASE … END")) because that is how `db pull` renders
--- the generated column; `migrate diff --from-empty` turns it into a column
--- DEFAULT that references other columns, which Postgres rejects. Generate the
--- CREATE TABLE DDL from a copy of schema.prisma with that one @default removed
--- (check-schema.sh shows the exact perl one-liner); section 1 below then
--- replaces the plain column.
---
--- Verified on PG 18.6 / Prisma 7.10 (TS-6 probe, 2026-10-19): the `intensity` domain
--- and CHECK constraints are invisible to both `migrate diff` and `db pull`
--- (a domain column introspects as plain Int), so they stay in TS-7's trailer.
---
--- NOT here (also SQL-only, but invisible to `db pull` and owned by TS-7's
--- trailer): RLS + policies, triggers, CHECK constraints (incl. jsonb_typeof,
--- exclusive arcs), the `intensity` domain, views, `app.*` functions, roles,
--- grants, the `milestone` seed.
---
--- Gate: backend/scripts/target-shape/check-schema.sh applies the Prisma DDL
--- then this file to a scratch database and proves the drift diff is empty.
--- ============================================================================
-
--- ----------------------------------------------------------------------------
--- 1. Generated columns (DROP the plain column Prisma created, ADD it GENERATED;
---    PG cannot convert a plain column in place). Both end up as the table's
---    last column, which is where schema.prisma declares them.
--- ----------------------------------------------------------------------------
-
--- §1.7 user.name
-ALTER TABLE "user" DROP COLUMN "name";
-ALTER TABLE "user" ADD COLUMN "name" text
-  GENERATED ALWAYS AS (nullif(trim(coalesce(first_name, '') || ' ' || coalesce(last_name, '')), '')) STORED;
-
--- §1.3 consent.target_kind — one arm per arc column, in arc order. NOT NULL per
--- the §1.3 column table (the exclusive-arc CHECK guarantees exactly one arm).
-ALTER TABLE "consent" DROP COLUMN "target_kind";
-ALTER TABLE "consent" ADD COLUMN "target_kind" consent_target NOT NULL
-  GENERATED ALWAYS AS (
-    CASE
-      WHEN need_id IS NOT NULL THEN 'NEED'::consent_target
-      WHEN empathy_attempt_id IS NOT NULL THEN 'EMPATHY_ATTEMPT'::consent_target
-      WHEN proposal_id IS NOT NULL THEN 'PROPOSAL'::consent_target
-      WHEN share_offer_id IS NOT NULL THEN 'SHARE_OFFER'::consent_target
-      WHEN review_id IS NOT NULL THEN 'REVIEW'::consent_target
-    END
-  ) STORED;
-
--- @@section: indexes  (check-schema.sh splits the file here; keep this line)
--- ----------------------------------------------------------------------------
--- 2. sql_-prefixed partial unique / partial / expression indexes
+-- Gate: backend/scripts/target-shape/check-schema.sh applies tables.sql, pulls
+-- (must equal schema.prisma), then applies this file and pulls again (only
+-- these sql_ objects may differ) and proves the drift diff is empty.
 --
 -- `migrate diff` ignores these (gate step b), but Prisma 7.10 `db pull` DOES
 -- render them — as `@unique(map: "sql_…", where: raw(…))` / `@@index(…, where:)`
@@ -72,7 +25,7 @@ ALTER TABLE "consent" ADD COLUMN "target_kind" consent_target NOT NULL
 -- of every single-column one into a 1:1 (`Conversation?` instead of
 -- `Conversation[]`). schema.prisma deliberately does not declare them
 -- (spec §5); NEVER run `prisma db pull` to refresh schema.prisma.
--- ----------------------------------------------------------------------------
+-- ============================================================================
 
 -- §1.1 session — A-Q3: one live session per relationship
 CREATE UNIQUE INDEX "sql_session_one_live" ON "session" ("relationship_id")
