@@ -24,6 +24,7 @@ import { departedParticipantUsers } from '../utils/session';
 import { Request, Response } from 'express';
 import { logger } from '../lib/logger';
 import { prisma } from '../lib/prisma';
+import { reachInvitationSentOnAccept } from '../services/milestone-writer';
 import { ErrorCode } from '@meet-without-fear/shared';
 import { successResponse, errorResponse } from '../utils/response';
 import {
@@ -81,6 +82,7 @@ async function acceptPendingInvitationForE2ESession(sessionId: string, userId: s
     return false;
   }
 
+  const acceptedAt = new Date();
   await prisma.$transaction(async tx => {
     await tx.relationshipMember.upsert({
       where: {
@@ -112,7 +114,7 @@ async function acceptPendingInvitationForE2ESession(sessionId: string, userId: s
 
     await tx.invitation.update({
       where: { id: invitation.id },
-      data: { status: 'ACCEPTED', acceptedAt: new Date(), acceptedByUserId: userId },
+      data: { status: 'ACCEPTED', acceptedAt, acceptedByUserId: userId },
     });
 
     await tx.session.update({
@@ -120,6 +122,9 @@ async function acceptPendingInvitationForE2ESession(sessionId: string, userId: s
       data: { status: 'ACTIVE' },
     });
   });
+
+  // As acceptInvitation: an accepted invitation was sent, so the inviter leaves stage 0 (work-qmgc).
+  await reachInvitationSentOnAccept(invitation.invitedByParticipantId, acceptedAt);
 
   logger.info('[getSessionState] E2E auto-accepted pending session invitation', {
     sessionId,

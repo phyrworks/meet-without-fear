@@ -166,7 +166,13 @@ export async function admitStreamTurn(params: StreamTurnAdmissionParams): Promis
   logger.info(`[sendMessageStream:${requestId}] User message created: ${userMessage.id}`);
 
   // Broadcast to Status Site
-  brainService.broadcastMessage(toMessageDTO(userMessage, { sessionId, ownerMilestones: state?.milestones ?? [] }));
+  brainService.broadcastMessage(
+    toMessageDTO(userMessage, {
+      sessionId,
+      ownerMilestones: state?.milestones ?? [],
+      ownerInvitationPending: state?.invitationPending ?? false,
+    }),
+  );
 
   return {
     admitted: true,

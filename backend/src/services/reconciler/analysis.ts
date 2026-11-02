@@ -189,7 +189,10 @@ async function stagedChat(
   return rows.map(r => ({
     role: r.role as 'USER' | 'AI',
     content: r.content,
-    stage: stageAt(reached, r.createdAt),
+    // Not pending, by construction: the reconciler runs for participants in stage 2+, and the shim holds
+    // an inviter with an unsent invitation at stage 0; once invitation_sent exists the later-of rule needs
+    // no option. (Reading it would need a job grant on invitation this reader has no other use for.)
+    stage: stageAt(reached, r.createdAt, { invitationPending: false }),
     senderParticipantId: r.senderParticipantId,
   }));
 }

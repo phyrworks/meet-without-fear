@@ -73,7 +73,7 @@ stateDiagram-v2
 
 | Stage | Gate Keys | Satisfied When |
 |-------|-----------|----------------|
-| 0 (Onboarding) | `compactSigned` | User signs the compact. Partner signing is reported in compact status, but the generic advancement gate checks the caller's own key. |
+| 0 (Onboarding) | `compactSigned`, `invitationSent` (inviter only) | Invitee: their own `compact_signed`. Inviter (authored the session's invitation): stage 0 stays IN_PROGRESS until `invitation_sent` exists too, and ends at the later of the two instants. `invitation_sent` is written by `POST /sessions/:id/invitation/confirm`, or by the partner accepting the invitation if the inviter never confirmed. Partner signing is reported in compact status, but does not gate the caller's stage. Computed in `backend/src/services/stage-shim.ts` (`stageCompletedAt`, `activeStage`; `invitationPending`). |
 | 1 (Witness) | `feelHeardConfirmed` | User posts feel-heard true |
 | 2 (Perspective) | `empathyValidated` | Caller validates the partner's empathy attempt, or explicitly accepts the remaining differences via the skip-refinement path |
 | 3 (What Matters) | `needsConfirmed`, `needsShared`, `needsValidated` | User confirms needs, consents to share them, and validates the mutual needs reveal |

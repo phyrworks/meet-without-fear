@@ -41,6 +41,7 @@ describe('message DTO mapping', () => {
       {
         sessionId: 's1',
         ownerMilestones: [{ key: 'compact_signed', reachedAt: new Date('2026-10-26T11:00:00.000Z') }],
+        ownerInvitationPending: false,
       },
     );
     expect(dto).toEqual({
