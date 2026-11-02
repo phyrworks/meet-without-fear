@@ -46,6 +46,15 @@ const OUT = path.join(BACKEND, 'prisma', 'migrations', MIGRATION_NAME, 'migratio
 const INCLUDE = '-- @@include sql-only.sql';
 
 /**
+ * The number of uuid7 columns tables.sql must declare. Defined once: checkTables()
+ * throws unless the count equals it, and trailer() substitutes it for the
+ * `@@UUID7_COLUMNS@@` placeholders in the trailer's step-20 assertion, so the
+ * two cannot drift.
+ */
+export const UUID7_COLUMNS = 128;
+const UUID7_PLACEHOLDER = '@@UUID7_COLUMNS@@';
+
+/**
  * tables.sql creates exactly the 47 target tables, every name lower-case, and
  * types every uuid column uuid7. Returns the counts for the section title.
  */
@@ -61,6 +70,7 @@ export function checkTables(sql: string): { names: number; uuid7: number } {
   const plainUuid = [...sql.matchAll(/^ {4}"([a-z0-9_]+)" uuid\b/gim)].map(m => m[1]);
   if (plainUuid.length) throw new Error(`tables.sql has uuid columns not typed uuid7: ${plainUuid.join(', ')}`);
   const uuid7 = (sql.match(/^ {4}"[a-z0-9_]+" uuid7\b/gm) ?? []).length;
+  if (uuid7 !== UUID7_COLUMNS) throw new Error(`tables.sql has ${uuid7} uuid7 columns, expected ${UUID7_COLUMNS}`);
   return { names: names.size, uuid7 };
 }
 
@@ -71,7 +81,9 @@ function trailer(): string {
   if (at < 0 || lines.lastIndexOf(INCLUDE) !== at)
     throw new Error(`trailer.sql must contain exactly one "${INCLUDE}" line`);
   const sqlOnly = fs.readFileSync(SQL_ONLY, 'utf8').replace(/\n$/, '');
-  return [...lines.slice(0, at), sqlOnly, ...lines.slice(at + 1)].join('\n');
+  const joined = [...lines.slice(0, at), sqlOnly, ...lines.slice(at + 1)].join('\n');
+  if (!joined.includes(UUID7_PLACEHOLDER)) throw new Error(`trailer.sql has no ${UUID7_PLACEHOLDER} placeholder`);
+  return joined.split(UUID7_PLACEHOLDER).join(String(UUID7_COLUMNS));
 }
 
 const HEADER = `-- ============================================================================

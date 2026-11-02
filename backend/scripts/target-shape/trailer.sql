@@ -1322,6 +1322,8 @@ BEGIN
                       AND pg_get_constraintdef(k.oid) ~ ('jsonb_typeof\(' || c.column_name || '\) (= |= ANY )'));
   IF bad IS NOT NULL THEN RAISE EXCEPTION 'step 20: jsonb column(s) without a jsonb_typeof CHECK: %', bad; END IF;
 
+  -- (@@UUID7_COLUMNS@@ is substituted by gen-target-migration.ts, which also
+  -- checks tables.sql declares exactly that many uuid7 columns.)
   -- Every uuid column of a table is a uuid7 (tables.sql): 33 primary keys
   -- defaulting to uuidv7() and the 95 columns that reference them.
   SELECT string_agg(c.relname || '.' || a.attname, ', ' ORDER BY c.relname, a.attname) INTO bad
@@ -1333,7 +1335,7 @@ BEGIN
   FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid JOIN pg_namespace s ON s.oid = c.relnamespace
   WHERE s.nspname = 'public' AND c.relkind = 'r' AND a.attnum > 0 AND NOT a.attisdropped
     AND a.atttypid = 'public.uuid7'::regtype;
-  IF n <> 128 THEN RAISE EXCEPTION 'step 20: % uuid7 columns, expected 128', n; END IF;
+  IF n <> @@UUID7_COLUMNS@@ THEN RAISE EXCEPTION 'step 20: % uuid7 columns, expected @@UUID7_COLUMNS@@', n; END IF;
 
   -- touch_updated_at on exactly the tables that have updated_at (35).
   SELECT string_agg(table_name, ', ' ORDER BY table_name) INTO bad
