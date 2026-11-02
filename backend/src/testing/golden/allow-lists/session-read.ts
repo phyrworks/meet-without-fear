@@ -144,6 +144,8 @@ export const SESSION_READ_BYTE_TARGET_ALLOW: AllowList = {
         conversation: "the audience of a read is the caller's MAIN conversation",
         participant_milestone:
           "a message's DTO stage is derived from its owner's milestones (message.stage is dropped), so the message reads read them",
+        invitation:
+          "a participant's stage 0 stays open while the invitation they authored is unsent (stage shim invitationPending, work-qmgc)",
       },
       // The message reads are the same concept read the same way (the
       // caller's messages, paged): same rows read. /state also reads message

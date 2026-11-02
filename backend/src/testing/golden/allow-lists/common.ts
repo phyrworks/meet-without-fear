@@ -290,6 +290,8 @@ export const TARGET_ADDED_RELATIONS: Record<string, string> = {
     'membership and the caller are the participant row (requireSessionAccess; v_co_participant; sessionParties)',
   conversation: "the audience of a read or a delivered row is a participant's MAIN conversation",
   participant_milestone: "a message's DTO stage and the Stage 2 stage checks are derived from milestones (stage shim)",
+  invitation:
+    "a participant's stage 0 stays open while the invitation they authored is unsent (stage shim invitationPending, work-qmgc)",
 };
 
 /**
