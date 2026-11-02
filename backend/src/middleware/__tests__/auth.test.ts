@@ -224,12 +224,26 @@ describe('Auth Middleware', () => {
       expect(next).not.toHaveBeenCalled();
     });
 
+    it('rejects a v4 x-e2e-user-id with 401 (UUIDv7 only), before any database call', async () => {
+      for (const id of ['00000000-0000-4000-8000-0000000e2e01', '550e8400-e29b-41d4-a716-446655440000', 'not-a-uuid']) {
+        const req = createMockRequest({ headers: { 'x-e2e-user-id': id, 'x-e2e-user-email': 'test@e2e.test' } });
+        const { res } = createMockResponse();
+        const next = jest.fn();
+
+        await requireAuth(req as Request, res as Response, next);
+
+        // UnauthorizedError goes to next(); the error handler renders it as 401.
+        expect(next).toHaveBeenCalledTimes(1);
+        expect(next.mock.calls[0][0]).toMatchObject({ statusCode: 401, code: 'UNAUTHORIZED' });
+      }
+    });
+
     it('bypasses e2e auth when E2E_AUTH_BYPASS is not true', async () => {
       process.env.E2E_AUTH_BYPASS = 'false';
 
       const req = createMockRequest({
         headers: {
-          'x-e2e-user-id': '00000000-0000-4000-8000-0000000e2e01',
+          'x-e2e-user-id': '00000000-0000-7000-8000-0000000e2e01',
           'x-e2e-user-email': 'test@e2e.test',
         },
       });
