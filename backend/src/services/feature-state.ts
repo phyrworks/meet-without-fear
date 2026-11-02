@@ -21,10 +21,15 @@
  * `encryptColumnValue`, and the lock reads no column.
  */
 
-import { parseFeatureDoc, FEATURE_DOC_SCHEMAS, type Feature, type FeatureDocs } from '@meet-without-fear/shared';
+import {
+  uuidv7,
+  parseFeatureDoc,
+  FEATURE_DOC_SCHEMAS,
+  type Feature,
+  type FeatureDocs,
+} from '@meet-without-fear/shared';
 import { prisma } from '../lib/prisma';
 import { encryptColumnValue } from '../lib/prisma-encryption-middleware';
-import { randomUUID } from 'crypto';
 import type { Prisma } from '../generated/prisma/client';
 
 /** The caller's document for a feature, in full shape (defaults when there is no row). */
@@ -69,5 +74,5 @@ export async function updateFeature<F extends Feature, R>(
 
 /** A new document-entry id (the old rows' ids were uuidv7; ordering is by the entry's own instants). */
 export function newEntryId(): string {
-  return randomUUID();
+  return uuidv7();
 }

@@ -9,11 +9,11 @@
  */
 
 import { Request, Response } from 'express';
-import crypto from 'crypto';
 import { asyncHandler, NotFoundError } from '../middleware/errors';
 import { getUser } from '../middleware/auth';
 import { prisma } from '../lib/prisma';
 import { distillSession } from '../services/distillation';
+import { uuidv7 } from '@meet-without-fear/shared';
 import type { ApiResponse, DistillSessionResponse } from '@meet-without-fear/shared';
 
 /**
@@ -27,7 +27,7 @@ import type { ApiResponse, DistillSessionResponse } from '@meet-without-fear/sha
 export const distillInnerWorkSession = asyncHandler(async (req: Request, res: Response): Promise<void> => {
   const user = getUser(req);
   const sessionId = req.params.id;
-  const turnId = crypto.randomUUID();
+  const turnId = uuidv7();
 
   // Verify session exists and belongs to the authenticated user
   const session = await prisma.reflection.findFirst({

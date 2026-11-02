@@ -14,10 +14,10 @@
  */
 
 import { Request, Response } from 'express';
-import crypto from 'crypto';
 import { logger } from '../lib/logger';
 import { prisma } from '../lib/prisma';
 import { distillSession } from '../services/distillation';
+import { uuidv7 } from '@meet-without-fear/shared';
 import { getUser } from '../middleware/auth';
 import { asyncHandler, ValidationError } from '../middleware/errors';
 import {
@@ -932,7 +932,7 @@ export const updateInnerWorkSession = asyncHandler(async (req: Request, res: Res
   // Fire-and-forget distillation on session close (DIST-01)
   // CRITICAL: Never await — must not slow down PATCH response
   if (status === 'COMPLETED') {
-    const distillTurnId = crypto.randomUUID();
+    const distillTurnId = uuidv7();
     distillSession({ sessionId, userId: user.id, turnId: distillTurnId }).catch((err: unknown) =>
       logger.warn('[InnerWork] Auto-distillation failed:', err),
     );
