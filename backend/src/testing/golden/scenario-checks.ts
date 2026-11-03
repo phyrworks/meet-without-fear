@@ -187,13 +187,28 @@ export function targetTopicFrameChecks(opts: {
  *   - `myProgress.milestones` is EXACTLY the reader's participant_milestone
  *     rows reached by the end of the step (key → reachedAt ISO);
  *   - `partnerProgress.milestones`, when present, is EXACTLY the partner's
- *     rows reached by then ∩ PARTNER_VISIBLE_MILESTONES of the stage the DTO
+ *     rows reached by then ∩ PARTNER_VISIBLE_BY_STAGE (a LITERAL copy, so
+ *     widening the production table fails here) of the stage the DTO
  *     reports — never wider than the old partner gates (privacy);
  *   - `witnessStartedAt` is the reader's stage-0 completion (stage shim),
  *     null before stage 1.
  * The reader is the step's `… as <email>`. From `partnerLeftFromStep` on the
  * partner has left (R5): their map must be empty.
  */
+/**
+ * The partner milestones the old per-stage gate JSON exposed (current stage
+ * only), written out LITERALLY — never imported from stage-shim, so a wider
+ * production PARTNER_VISIBLE_MILESTONES fails targetMilestoneChecks (and
+ * stage-shim.test pins the production constant to this table).
+ */
+export const PARTNER_VISIBLE_BY_STAGE: Record<number, readonly string[]> = {
+  0: ['compact_signed', 'invitation_sent'],
+  1: ['feel_heard'],
+  2: ['empathy_validated'],
+  3: ['needs_confirmed', 'needs_validated', 'needs_shared'],
+  4: ['choices_shared'],
+};
+
 export function targetMilestoneChecks(opts: {
   harness: () => Harness;
   steps: () => StepResult[];
@@ -205,7 +220,7 @@ export function targetMilestoneChecks(opts: {
     async () => {
       const h = opts.harness();
       // Imported here, never at module load (see targetMessageStageChecks).
-      const { PARTNER_VISIBLE_MILESTONES, stageCompletedAt } = await import('../../services/stage-shim');
+      const { stageCompletedAt } = await import('../../services/stage-shim');
       const rows = await withClient(
         h.fixture.target,
         async c =>
@@ -243,11 +258,10 @@ export function targetMilestoneChecks(opts: {
       for (const [index, step] of opts.steps().entries()) {
         const email = /as (\S+)$/.exec(step.label)?.[1];
         const data = (step.body as { data?: Record<string, unknown> } | undefined)?.data;
-        // GET /needs `sharedAt`: the reader's earliest share live at the step's end (NEEDS_SHARED_AT_RULE);
-        // null with the empty answer GET /needs gives outside an ACTIVE stage 3+ session.
+        // GET /needs `sharedAt`: the reader's earliest share live at the step's end (NEEDS_SHARED_AT_RULE),
+        // whatever the session's status (the needs list may be withheld; the own share is not).
         if (email && /: needs as \S+$/.test(step.label) && data && 'sharedAt' in data) {
           const until = new Date(step.window.to).toISOString();
-          const empty = Array.isArray(data.needs) && data.needs.length === 0;
           const live = shares
             .filter(r => r.email === email && new Date(r.at).toISOString() <= until)
             .filter(r => r.revoked === null || new Date(r.revoked).toISOString() > until)
@@ -255,7 +269,7 @@ export function targetMilestoneChecks(opts: {
             .sort();
           expect({ step: step.label, sharedAt: data.sharedAt }).toEqual({
             step: step.label,
-            sharedAt: empty ? null : (live[0] ?? null),
+            sharedAt: live[0] ?? null,
           });
           checked++;
           continue;
@@ -283,9 +297,12 @@ export function targetMilestoneChecks(opts: {
         });
         const p = progress.partnerProgress;
         if (p && p.milestones !== undefined) {
-          const visible: readonly string[] = PARTNER_VISIBLE_MILESTONES[p.stage] ?? [];
+          const visible: readonly string[] = PARTNER_VISIBLE_BY_STAGE[p.stage] ?? [];
           const want = partnerLeft ? [] : reachedBy(partner, until).filter(m => visible.includes(m.key));
-          expect({ step: step.label, partner: p.milestones }).toEqual({ step: step.label, partner: asMap(want) });
+          // invitation_sent is `true`, never its instant (old partner gate: invitationSent without an instant).
+          const wantMap: Record<string, string | true> = asMap(want);
+          if (wantMap.invitation_sent !== undefined) wantMap.invitation_sent = true;
+          expect({ step: step.label, partner: p.milestones }).toEqual({ step: step.label, partner: wantMap });
         }
         checked++;
       }

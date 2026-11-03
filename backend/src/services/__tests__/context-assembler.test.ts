@@ -65,7 +65,10 @@ describe('Context Assembler', () => {
 
       it('shows partner needs in Stage 3 once needs_shared exists (session-scoped: everyone has shared)', () => {
         const formatted = formatContextForPrompt(
-          createMinimalBundle({ sessionSummary: summary, stageContext: { stage: 3, milestones: { needs_shared: at } } }),
+          createMinimalBundle({
+            sessionSummary: summary,
+            stageContext: { stage: 3, milestones: { needs_shared: at } },
+          }),
         );
         expect(formatted).toContain('Partner → PARTNER-NEED-PROBE');
       });
@@ -84,7 +87,8 @@ describe('Context Assembler', () => {
       it('needsRevealed reads only the given stage context (the prompt owner’s milestones)', () => {
         expect(needsRevealed({ stage: 3, milestones: { needs_shared: at } })).toBe(true);
         expect(needsRevealed({ stage: 3, milestones: { needs_confirmed: at, needs_validated: at } })).toBe(false);
-        for (const stage of [0, 1, 2, 4]) expect(needsRevealed({ stage, milestones: { needs_shared: at } })).toBe(false);
+        for (const stage of [0, 1, 2, 4])
+          expect(needsRevealed({ stage, milestones: { needs_shared: at } })).toBe(false);
         expect(needsRevealed(undefined)).toBe(false);
       });
     });

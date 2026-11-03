@@ -26,8 +26,13 @@ import { successResponse, errorResponse } from '../utils/response';
 import { getPartnerUserId, isSessionCreator, departedParticipantUsers } from '../utils/session';
 import { getCoParticipants, getPartnerParticipant } from '../services/participant-resolver';
 import { pingStage2Refresh } from '../services/empathy-realtime';
-import type { MilestoneKey } from '@meet-without-fear/shared';
-import { loadMilestones, loadStageStates, progressDTO, witnessStartedAt } from '../services/stage-shim';
+import {
+  loadMilestones,
+  loadStageStates,
+  progressDTO,
+  unreachedStageMilestones,
+  witnessStartedAt,
+} from '../services/stage-shim';
 import { reachMilestone } from '../services/milestone-writer';
 import { displayStatus, isSessionPaused } from '../services/session-status';
 import { createFacilitatorMessage, listConversationMessages } from '../services/message-store';
@@ -390,20 +395,6 @@ export async function resolveSession(req: Request, res: Response): Promise<void>
 // Stage Advancement
 // ============================================================================
 
-/** The milestones each stage requires (the stage is complete once all are reached). */
-const STAGE_REQUIRED_MILESTONES: Record<number, readonly MilestoneKey[]> = {
-  0: ['compact_signed'],
-  1: ['feel_heard'],
-  2: ['empathy_validated'],
-  3: ['needs_confirmed', 'needs_validated', 'needs_shared'],
-  4: ['choices_shared', 'closed'],
-};
-
-/** The stage's required milestones not in `reached`. */
-function unreachedMilestones(stage: number, reached: Partial<Record<MilestoneKey, string>>): MilestoneKey[] {
-  return (STAGE_REQUIRED_MILESTONES[stage] ?? []).filter(key => reached[key] === undefined);
-}
-
 /**
  * Advance to the next stage
  * POST /sessions/:id/stages/advance
@@ -461,7 +452,9 @@ export async function advanceStage(req: Request, res: Response): Promise<void> {
       newStatus: current.status,
       advancedAt: null,
       blockedReason: 'GATES_NOT_SATISFIED',
-      unreachedMilestones: unreachedMilestones(currentStage, current.milestones ?? {}),
+      unreachedMilestones: unreachedStageMilestones(currentStage, state?.milestones ?? [], {
+        invitationPending: state?.invitationPending ?? false,
+      }),
     });
   } catch (error) {
     logger.error('[advanceStage] Error:', error);

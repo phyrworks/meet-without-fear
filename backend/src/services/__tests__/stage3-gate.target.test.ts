@@ -172,6 +172,16 @@ describeTarget('the Stage 3 reveal gate on the target (mwf_app, the gate reply b
     expect(progress.body.data.myProgress).toMatchObject({ stage: 3 });
     expect(progress.body.data.myProgress.milestones).not.toHaveProperty('needs_shared');
     await gateTurn("We'll wait until your partner has shared theirs");
+
+    // "I shared" does not depend on the session's status: outside ACTIVE the
+    // needs list is withheld, the caller's own sharedAt is not (review round 1).
+    const [{ status }] = await run.sql<{ status: string }>(`SELECT status::text AS status FROM session WHERE id = $1`, [
+      ids.session,
+    ]);
+    await run.sql(`UPDATE session SET status = 'ABANDONED' WHERE id = $1`, [ids.session]);
+    const inactive = await as(request(app).get(`/api/v1/sessions/${ids.session}/needs`));
+    expect(inactive.body.data).toMatchObject({ needs: [], sharedAt: new Date(share.at).toISOString() });
+    await run.sql(`UPDATE session SET status = $2::session_status WHERE id = $1`, [ids.session, status]);
   });
 
   it('PINNED (stage shim, work-yk0q): own needs_shared is Stage 3’s terminal milestone, so the caller is in Stage 4 and the gate no longer answers', async () => {

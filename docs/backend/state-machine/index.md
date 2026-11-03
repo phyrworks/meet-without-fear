@@ -74,7 +74,8 @@ Progress is the set of `participant_milestone` rows (keys: the `milestone` table
 `gatesSatisfied`): the progress DTOs (`GET /sessions/:id/progress`, `GET /sessions/:id/state`) carry
 `myProgress.milestones` — every milestone the caller reached, key → reachedAt ISO — and
 `partnerProgress.milestones` (GET /progress only), limited to the partner's current stage's keys below
-(`PARTNER_VISIBLE_MILESTONES` in `backend/src/services/stage-shim.ts`; the partner's other milestones are
+(`PARTNER_VISIBLE_MILESTONES` in `backend/src/services/stage-shim.ts`; the partner's `invitation_sent` is
+`true`, never its instant — `PartnerMilestoneMap`; the partner's other milestones are
 not exposed). The stage number itself is computed by the stage shim.
 
 | Stage | Required milestones | Reached when |

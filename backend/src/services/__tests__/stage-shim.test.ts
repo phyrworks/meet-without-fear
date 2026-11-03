@@ -7,16 +7,19 @@
 import {
   activeStage,
   milestoneMap,
+  PARTNER_VISIBLE_MILESTONES,
   partnerMilestoneMap,
   latestStageRow,
   messageStage,
   progressDTO,
   stageAt,
   stageRowsFor,
+  unreachedStageMilestones,
   witnessStartedAt,
   type MilestoneReached,
   type ParticipantStageState,
 } from '../stage-shim';
+import { PARTNER_VISIBLE_BY_STAGE } from '../../testing/golden/scenario-checks';
 
 const t = (s: number) => new Date(Date.UTC(2026, 9, 26, 12, 0, s));
 const m = (key: string, s: number): MilestoneReached => ({ key, reachedAt: t(s) });
@@ -74,6 +77,10 @@ describe('stage shim — milestoneMap (the DTO milestones)', () => {
 });
 
 describe('stage shim — partnerMilestoneMap (never wider than the old partner gates)', () => {
+  it('PARTNER_VISIBLE_MILESTONES equals the literal old-gate table the golden pair check uses', () => {
+    expect(PARTNER_VISIBLE_MILESTONES).toEqual(PARTNER_VISIBLE_BY_STAGE);
+  });
+
   it("exposes only the partner's current stage's old gate milestones", () => {
     const keysAt = (stage: number) => Object.keys(partnerMilestoneMap(stage, EVERYTHING)).sort();
     expect(keysAt(0)).toEqual(['compact_signed', 'invitation_sent']);
@@ -85,9 +92,33 @@ describe('stage shim — partnerMilestoneMap (never wider than the old partner g
     expect(keysAt(4)).toEqual(['choices_shared']);
   });
 
+  it("shows the partner's invitation_sent as true, never its instant (the old gate had no instant)", () => {
+    expect(partnerMilestoneMap(0, EVERYTHING)).toEqual({
+      compact_signed: EVERYTHING[1].reachedAt.toISOString(),
+      invitation_sent: true,
+    });
+    expect(JSON.stringify(partnerMilestoneMap(0, EVERYTHING))).not.toContain(EVERYTHING[0].reachedAt.toISOString());
+  });
+
   it('carries only reached milestones, with their instants', () => {
     expect(partnerMilestoneMap(1, ADA)).toEqual({ feel_heard: t(60).toISOString() });
     expect(partnerMilestoneMap(2, ADA)).toEqual({});
+  });
+});
+
+describe('stage shim — unreachedStageMilestones (POST /stages/advance)', () => {
+  it("lists the stage's required milestones not reached", () => {
+    expect(unreachedStageMilestones(1, [m('compact_signed', 1)], NP)).toEqual(['feel_heard']);
+    expect(unreachedStageMilestones(3, [m('needs_confirmed', 1)], NP)).toEqual(['needs_validated', 'needs_shared']);
+    expect(unreachedStageMilestones(4, [m('choices_shared', 1)], NP)).toEqual(['closed']);
+  });
+
+  it('holds a pending inviter who signed on invitation_sent (the shim keeps them in stage 0)', () => {
+    expect(unreachedStageMilestones(0, [m('compact_signed', 1)], { invitationPending: true })).toEqual([
+      'invitation_sent',
+    ]);
+    expect(unreachedStageMilestones(0, [], { invitationPending: true })).toEqual(['compact_signed', 'invitation_sent']);
+    expect(unreachedStageMilestones(0, [m('compact_signed', 1)], NP)).toEqual([]);
   });
 });
 

@@ -5,7 +5,7 @@
  */
 
 import { Stage, StageStatus } from '../enums';
-import type { MilestoneKey, MilestoneMap } from './milestones';
+import type { MilestoneKey, MilestoneMap, PartnerMilestoneMap } from './milestones';
 
 // ============================================================================
 // Stage Progress
@@ -26,12 +26,13 @@ export interface StageProgressDetailDTO {
 /**
  * The partner's progress. `milestones` is NOT every milestone the partner
  * reached: only those of the partner's current stage that the old per-stage
- * gate JSON exposed (`PARTNER_VISIBLE_MILESTONES` in the backend stage shim).
+ * gate JSON exposed (`PARTNER_VISIBLE_MILESTONES` in the backend stage shim),
+ * with `invitation_sent` as `true`, never its instant (PartnerMilestoneMap).
  */
 export interface PartnerStageStatusDTO {
   stage: Stage;
   status: StageStatus;
-  milestones: MilestoneMap;
+  milestones: PartnerMilestoneMap;
 }
 
 // ============================================================================

@@ -1,15 +1,16 @@
 /**
  * The repair stage on the target tables (TS-11; spec §1.4, §4).
  *
- * Old model → target:
+ * Old model → target ("old gate": a key of the old StageProgress.gatesSatisfied
+ * JSON column, which the target does not have):
  *
  *   StrategyProposal (+ needsAddressed[])   → proposal + proposal_need (need_share ids only;
  *                                            labels nothing matches → unresolved_need_labels)
  *   Stage4ProposalRevision                  → proposal_revision (append-only, no message id)
  *   Stage4ProposalSelection                 → proposal_choice (withdraw = DELETE)
- *   gatesSatisfied.stage4Walkthrough,
+ *   old gate stage4Walkthrough,
  *   Stage4NeedDeclination                   → need_disposition (over need_share ids; one is_current)
- *   gatesSatisfied.selectionSubmitted       → participant_milestone choices_shared
+ *   old gate selectionSubmitted             → participant_milestone choices_shared
  *   walkthrough started                     → participant_milestone repair_walkthrough_started (job)
  *   Stage4NeedCoverage                      → v_need_coverage (computed; no table, no note)
  *   Agreement (agreedByA/B)                 → agreement + agreement_party, JOB path only

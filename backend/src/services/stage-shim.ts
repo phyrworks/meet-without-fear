@@ -57,7 +57,7 @@
  * empathy/needs/repair writers (TS-10, TS-11) must honour this.
  */
 
-import type { MilestoneKey, MilestoneMap } from '@meet-without-fear/shared';
+import type { MilestoneKey, MilestoneMap, PartnerMilestoneMap } from '@meet-without-fear/shared';
 import { prisma, type DbClient } from '../lib/prisma';
 
 /** Terminal milestone of each stage (stage index → key). */
@@ -153,10 +153,9 @@ export function milestoneMap(milestones: MilestoneReached[]): MilestoneMap {
 
 /**
  * The partner milestones the caller may see, by the PARTNER's current stage —
- * exactly the keys the old per-stage gate JSON exposed on
- * `partnerProgress.gatesSatisfied` (the inverse of the plan's step-7 key
- * table, current stage only). work-keq6 replaced that JSON with a milestone
- * map without widening it: a partner's empathy_submitted / empathy_ready /
+ * exactly the keys the old per-stage gate JSON (removed in work-keq6) exposed
+ * for the partner (the inverse of the plan's step-7 key table, current stage
+ * only). The milestone map replacing it is no wider: a partner's empathy_submitted / empathy_ready /
  * repair_walkthrough_started / paused / closed and earlier stages' milestones
  * are not exposed here.
  */
@@ -168,10 +167,21 @@ export const PARTNER_VISIBLE_MILESTONES: Record<number, readonly MilestoneKey[]>
   4: ['choices_shared'],
 };
 
-/** The partner's milestone map: `PARTNER_VISIBLE_MILESTONES` of their current stage. */
-export function partnerMilestoneMap(stage: number, milestones: MilestoneReached[]): MilestoneMap {
+/**
+ * The partner's milestone map: `PARTNER_VISIBLE_MILESTONES` of their current
+ * stage, `invitation_sent` as `true` (the old gate JSON's `invitationSent`
+ * had no instant; strict parity — the partner's invitation instant is not
+ * exposed).
+ */
+export function partnerMilestoneMap(stage: number, milestones: MilestoneReached[]): PartnerMilestoneMap {
   const visible: readonly string[] = PARTNER_VISIBLE_MILESTONES[stage] ?? [];
-  return milestoneMap(milestones.filter(m => visible.includes(m.key)));
+  const out: PartnerMilestoneMap = {};
+  for (const m of milestones) {
+    if (!visible.includes(m.key)) continue;
+    if (m.key === 'invitation_sent') out.invitation_sent = true;
+    else out[m.key as Exclude<MilestoneKey, 'invitation_sent'>] = m.reachedAt.toISOString();
+  }
+  return out;
 }
 
 /**
@@ -347,7 +357,7 @@ export interface ProgressDTOShape {
   status: 'NOT_STARTED' | ShimStageStatus;
   startedAt: string | null;
   completedAt: string | null;
-  milestones?: MilestoneMap;
+  milestones?: MilestoneMap | PartnerMilestoneMap;
 }
 
 /**
@@ -386,6 +396,31 @@ export function progressDTO(
     milestones:
       opts.milestones === 'own' ? milestoneMap(state.milestones) : partnerMilestoneMap(row.stage, state.milestones),
   };
+}
+
+/** The milestones each stage requires (the stage is complete once all are reached). */
+const STAGE_REQUIRED_MILESTONES: Record<number, readonly MilestoneKey[]> = {
+  0: ['compact_signed'],
+  1: ['feel_heard'],
+  2: ['empathy_validated'],
+  3: ['needs_confirmed', 'needs_validated', 'needs_shared'],
+  4: ['choices_shared', 'closed'],
+};
+
+/**
+ * The stage's required milestones not yet reached (`POST /stages/advance`
+ * `unreachedMilestones`). Stage 0 of a participant who authored an unsent
+ * invitation also requires `invitation_sent` — the rule `stageCompletedAt`
+ * holds them at stage 0 by.
+ */
+export function unreachedStageMilestones(
+  stage: number,
+  milestones: MilestoneReached[],
+  opts: StageOpts,
+): MilestoneKey[] {
+  const required: MilestoneKey[] = [...(STAGE_REQUIRED_MILESTONES[stage] ?? [])];
+  if (stage === 0 && opts.invitationPending) required.push('invitation_sent');
+  return required.filter(key => !milestones.some(m => m.key === key));
 }
 
 /** `GetProgressResponse.witnessStartedAt`: when Stage 1 began (stage 0's completion), or null. */

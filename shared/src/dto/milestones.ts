@@ -33,6 +33,17 @@ export type MilestoneKey = (typeof MILESTONE_KEYS)[number];
 /** Reached milestones of one participant: key → reachedAt (ISO 8601). Absent = not reached. */
 export type MilestoneMap = Partial<Record<MilestoneKey, string>>;
 
+/**
+ * The PARTNER's visible milestones (`partnerProgress.milestones`): instants,
+ * except `invitation_sent`, which is `true` when reached — the old partner
+ * gate JSON carried `invitationSent: true` with no instant, and the partner's
+ * invitation instant stays unexposed (strict parity, work-keq6). Which keys
+ * appear at all is the backend's PARTNER_VISIBLE_MILESTONES.
+ */
+export type PartnerMilestoneMap = Partial<Record<Exclude<MilestoneKey, 'invitation_sent'>, string>> & {
+  invitation_sent?: true;
+};
+
 export function isMilestoneKey(value: string): value is MilestoneKey {
   return (MILESTONE_KEYS as readonly string[]).includes(value);
 }

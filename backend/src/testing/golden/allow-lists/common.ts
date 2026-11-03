@@ -27,7 +27,7 @@ const PROGRESS_TOP_AT = ['steps.*.body.data', 'steps.*.body.data.progress'];
  * key → reachedAt). The comparator can only admit the new key; its VALUE is
  * asserted by `targetMilestoneChecks` (scenario-checks.ts) against the run
  * database: the reader's own map is exactly their milestones reached by the
- * step, the partner's exactly theirs ∩ PARTNER_VISIBLE_MILESTONES of the
+ * step, the partner's exactly theirs ∩ PARTNER_VISIBLE_BY_STAGE (a literal copy) of the
  * partner's stage (never wider than the old partner gates).
  */
 export const MILESTONE_DTO_RULES: AllowRule[] = [
@@ -103,7 +103,10 @@ export function milestoneMapMask(
     : PROGRESS_AT;
   return {
     kind: 'fixtureMask',
-    at: at.flatMap(p => masked.map(k => `${p}.milestones.${k}`)),
+    // The partner's invitation_sent is `true`, not an instant (PartnerMilestoneMap): never masked.
+    at: at.flatMap(p =>
+      masked.filter(k => !(p.endsWith('partnerProgress') && k === 'invitation_sent')).map(k => `${p}.milestones.${k}`),
+    ),
     expect: 'isoTimestamp',
     baseline: null,
     why:
