@@ -223,7 +223,10 @@ describe('compareWithAllowList — empathy-reveal (old ⊆ new, named additions)
   });
 });
 
-/** Shaped like a session-state body of the session-read concept baseline. */
+/**
+ * Shaped like a session-state body of the session-read concept baseline (the
+ * old shape: gatesSatisfied + the hand-built milestones object) …
+ */
 function readBaseline(gates: Record<string, unknown> = { compactSigned: true, feelHeardConfirmed: true }): Json {
   return {
     scenario: 'session-read',
@@ -232,7 +235,14 @@ function readBaseline(gates: Record<string, unknown> = { compactSigned: true, fe
       {
         label: 'session state as ada',
         status: 200,
-        body: { data: { progress: { myProgress: { stage: 2, gatesSatisfied: gates } } } },
+        body: {
+          data: {
+            progress: {
+              myProgress: { stage: 2, gatesSatisfied: gates },
+              milestones: { witnessStartedAt: '<ts:1>', feelHeardConfirmedAt: '<ts:2>' },
+            },
+          },
+        },
         changes: [],
       },
       {
@@ -250,46 +260,78 @@ function readBaseline(gates: Record<string, unknown> = { compactSigned: true, fe
   };
 }
 
+/**
+ * A recorded (old-shape) golden with its progress DTOs as the target answers
+ * them (work-keq6): gatesSatisfied → a milestones map, the hand-built
+ * milestones object → witnessStartedAt one level up.
+ */
+function withTargetProgress(t: Json): Json {
+  for (const step of t.steps as Json[]) {
+    const data = step.body?.data;
+    for (const holder of [data, data?.progress]) {
+      if (!holder || typeof holder !== 'object') continue;
+      for (const k of ['myProgress', 'partnerProgress']) {
+        const p = holder[k];
+        if (p && typeof p === 'object' && 'gatesSatisfied' in p) {
+          delete p.gatesSatisfied;
+          p.milestones = {};
+        }
+      }
+      if (holder.milestones && typeof holder.milestones === 'object' && 'witnessStartedAt' in holder.milestones) {
+        holder.witnessStartedAt = holder.milestones.witnessStartedAt;
+        delete holder.milestones;
+      }
+    }
+  }
+  return t;
+}
+
+/** … and as the target answers it (work-keq6): a milestones map, witnessStartedAt one level up. */
+function readTarget(): Json {
+  const t = readBaseline();
+  t.steps[0].body.data.progress = {
+    myProgress: { stage: 2, milestones: { compact_signed: null, feel_heard: null } },
+    witnessStartedAt: '<ts:1>',
+  };
+  return t;
+}
+
 describe('compareWithAllowList — session-read (identical except named)', () => {
-  it('passes trivially on the current shape', () => {
-    const r = compareWithAllowList(readBaseline(), readBaseline(), SESSION_READ_ALLOW);
+  it('accepts the milestones map in place of gatesSatisfied and the milestones object', () => {
+    const r = compareWithAllowList(readBaseline(), readTarget(), SESSION_READ_ALLOW);
     expect(r.violations).toEqual([]);
   });
 
-  it('accepts the dropped gate keys being absent, and a narrowed targetType', () => {
-    const base = readBaseline({
-      compactSigned: true,
-      feelHeardConfirmed: true,
-      readyToRank: true,
-      feelHeardCheckOffered: true,
-    });
-    const target = readBaseline({ compactSigned: true, feelHeardConfirmed: true });
+  it('accepts a narrowed targetType', () => {
+    const target = readTarget();
     (target.steps[1].body.data as Array<Record<string, unknown>>)[1].targetType = 'IDENTIFIED_NEED';
-    const r = compareWithAllowList(base, target, SESSION_READ_ALLOW);
+    const r = compareWithAllowList(readBaseline(), target, SESSION_READ_ALLOW);
     expect(r.violations).toEqual([]);
   });
 
-  it('rejects a dropped gate key that is still present', () => {
-    const base = readBaseline({ compactSigned: true, readyToRank: true });
-    const r = compareWithAllowList(base, clone(base), SESSION_READ_ALLOW);
-    expect(r.violations).toEqual([expect.stringContaining('gatesSatisfied.readyToRank')]);
+  it('rejects gatesSatisfied still present', () => {
+    const target = readTarget();
+    (target.steps[0].body.data.progress.myProgress as Record<string, unknown>).gatesSatisfied = {};
+    const r = compareWithAllowList(readBaseline(), target, SESSION_READ_ALLOW);
+    expect(r.violations).toEqual([expect.stringContaining('myProgress.gatesSatisfied')]);
   });
 
-  it('rejects any other gate key changing', () => {
-    const target = readBaseline({ compactSigned: true });
+  it('rejects the old milestones object still present', () => {
+    const target = readTarget();
+    (target.steps[0].body.data.progress as Record<string, unknown>).milestones = { witnessStartedAt: '<ts:1>' };
     const r = compareWithAllowList(readBaseline(), target, SESSION_READ_ALLOW);
-    expect(r.violations).toEqual([expect.stringContaining('gatesSatisfied.feelHeardConfirmed')]);
+    expect(r.violations).toEqual([expect.stringContaining('progress.milestones')]);
   });
 
   it('rejects a targetType value the baseline never showed', () => {
-    const target = readBaseline();
+    const target = readTarget();
     (target.steps[1].body.data as Array<Record<string, unknown>>)[0].targetType = 'SHARE_OFFER';
     const r = compareWithAllowList(readBaseline(), target, SESSION_READ_ALLOW);
     expect(r.violations).toEqual([expect.stringContaining('SHARE_OFFER')]);
   });
 
-  it('rejects an added key anywhere (nothing may be added in session-read)', () => {
-    const target = readBaseline();
+  it('rejects any other added key (only milestones / witnessStartedAt may be added)', () => {
+    const target = readTarget();
     (target.steps[0].body.data.progress.myProgress as Record<string, unknown>).participantId = '<participant:ada@main>';
     const r = compareWithAllowList(readBaseline(), target, SESSION_READ_ALLOW);
     expect(r.violations).toEqual([expect.stringContaining('myProgress.participantId')]);
@@ -331,7 +373,7 @@ describe('compareWithAllowList — unrevealed-attempt-hidden (R2 rounds, TS-5 fi
    * 2 inserted; reveal = round 2 revealed. `mutate` corrupts it for negatives.
    */
   function targetLike(copySource = R2, mutate: (t: Json) => void = () => undefined): Json {
-    const t = clone(baseline);
+    const t = withTargetProgress(clone(baseline));
     const rs = t.steps[R2_RESUBMIT_STEP].changes;
     const r1 = rs.find((c: Json) => c.view === 'empathy_attempt' && c.key === R1);
     r1.changedFields = ['status', 'status_version'];
@@ -372,8 +414,8 @@ describe('compareWithAllowList — unrevealed-attempt-hidden (R2 rounds, TS-5 fi
     expect(compareWithAllowList(baseline, targetLike(), UNREVEALED_ATTEMPT_HIDDEN_ALLOW).violations).toEqual([]);
   });
 
-  it('passes trivially on the current shape', () => {
-    expect(compareWithAllowList(baseline, baseline, UNREVEALED_ATTEMPT_HIDDEN_ALLOW)).toEqual({
+  it('passes on the baseline with only its progress DTOs in the target shape', () => {
+    expect(compareWithAllowList(baseline, withTargetProgress(clone(baseline)), UNREVEALED_ATTEMPT_HIDDEN_ALLOW)).toEqual({
       violations: [],
       unmatchedRules: [],
     });

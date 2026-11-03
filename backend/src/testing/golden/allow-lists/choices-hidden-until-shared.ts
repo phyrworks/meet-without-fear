@@ -16,9 +16,10 @@
 
 import type { KnownLeak } from '../privacy';
 import {
+  DEFAULT_MILESTONE_MASK,
+  milestoneMapMask,
   READ_DTO_RULES,
   TARGET_COMPACT_SIGNED_MASK,
-  TARGET_FEEL_HEARD_MASK,
   TARGET_USER_NAME_RULE,
   empathySubmittedMilestone,
   targetByteRules,
@@ -114,6 +115,8 @@ function stage4ComputedRules(): AllowRule[] {
 
 /** Ada's session-list reads (the 8th read of each block of nine). */
 export const ADA_SESSION_LIST_STEPS = [7, 18, 29];
+/** Ada's GET /state reads (one per phase; her GET /progress read follows each). */
+export const ADA_STATE_STEPS = [1, 12, 23];
 
 const NEED_LABEL_RULE: AllowRule = {
   // Only the keys that name a need in the Stage 4 state — never a
@@ -226,10 +229,14 @@ function stage4NewlyVisible(concept: boolean): AllowRule[] {
 }
 
 const SHARED_RULES = (concept: boolean): AllowRule[] => [
-  ...READ_DTO_RULES,
+  ...READ_DTO_RULES.filter(r => r !== DEFAULT_MILESTONE_MASK),
+  // work-keq6: choices_shared stays ranked — the old stage-4 gate JSON carried its
+  // instant (selectionSubmittedAt) — and on GET /progress needs_confirmed too (the
+  // old milestones.needsIdentifiedAt); every other milestone instant is masked.
+  milestoneMapMask([], { steps: ADA_STATE_STEPS, only: ['needs_confirmed'] }),
+  milestoneMapMask(['choices_shared', 'needs_confirmed']),
   TARGET_USER_NAME_RULE,
   TARGET_COMPACT_SIGNED_MASK,
-  TARGET_FEEL_HEARD_MASK,
   NEED_LABEL_RULE,
   {
     kind: 'mayDiffer',

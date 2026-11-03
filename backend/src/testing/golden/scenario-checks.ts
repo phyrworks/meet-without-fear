@@ -181,6 +181,117 @@ export function targetTopicFrameChecks(opts: {
 }
 
 /**
+ * work-keq6, target shape only: the pair of `MILESTONE_DTO_RULES` /
+ * `milestoneMapMask` — the raw values the comparator only admits. For every
+ * progress DTO a read returns (GET /progress, GET /state):
+ *   - `myProgress.milestones` is EXACTLY the reader's participant_milestone
+ *     rows reached by the end of the step (key → reachedAt ISO);
+ *   - `partnerProgress.milestones`, when present, is EXACTLY the partner's
+ *     rows reached by then ∩ PARTNER_VISIBLE_MILESTONES of the stage the DTO
+ *     reports — never wider than the old partner gates (privacy);
+ *   - `witnessStartedAt` is the reader's stage-0 completion (stage shim),
+ *     null before stage 1.
+ * The reader is the step's `… as <email>`. From `partnerLeftFromStep` on the
+ * partner has left (R5): their map must be empty.
+ */
+export function targetMilestoneChecks(opts: {
+  harness: () => Harness;
+  steps: () => StepResult[];
+  partnerLeftFromStep?: number;
+}): void {
+  const run = isTargetShape() ? it : it.skip;
+  run('milestones pair: progress DTO maps are the participant_milestone rows (partner: old-gate keys only)', async () => {
+    const h = opts.harness();
+    // Imported here, never at module load (see targetMessageStageChecks).
+    const { PARTNER_VISIBLE_MILESTONES, stageCompletedAt } = await import('../../services/stage-shim');
+    const rows = await withClient(
+      h.fixture.target,
+      async c =>
+        (
+          await c.query<{ email: string; key: string; at: Date }>(
+            `SELECT u.email, pm.milestone_key AS key, pm.reached_at AS at
+             FROM participant_milestone pm JOIN participant p ON p.id = pm.participant_id JOIN "user" u ON u.id = p.user_id
+             WHERE p.session_id = $1`,
+            [h.sessionId],
+          )
+        ).rows,
+      h.fixture.database,
+    );
+    const emails = [...new Set(rows.map(r => r.email))];
+    const reachedBy = (email: string | undefined, until: string): Array<{ key: string; reachedAt: Date }> =>
+      rows
+        .filter(r => r.email === email && new Date(r.at).toISOString() <= until)
+        .map(r => ({ key: r.key, reachedAt: new Date(r.at) }));
+    const asMap = (ms: Array<{ key: string; reachedAt: Date }>) =>
+      Object.fromEntries(ms.map(m => [m.key, m.reachedAt.toISOString()]));
+    const shares = await withClient(
+      h.fixture.target,
+      async c =>
+        (
+          await c.query<{ email: string; at: Date; revoked: Date | null }>(
+            `SELECT u.email, ns.shared_at AS at, ns.revoked_at AS revoked
+             FROM need_share ns JOIN participant p ON p.id = ns.participant_id JOIN "user" u ON u.id = p.user_id
+             WHERE p.session_id = $1`,
+            [h.sessionId],
+          )
+        ).rows,
+      h.fixture.database,
+    );
+    let checked = 0;
+    for (const [index, step] of opts.steps().entries()) {
+      const email = /as (\S+)$/.exec(step.label)?.[1];
+      const data = (step.body as { data?: Record<string, unknown> } | undefined)?.data;
+      // GET /needs `sharedAt`: the reader's earliest share live at the step's end (NEEDS_SHARED_AT_RULE);
+      // null with the empty answer GET /needs gives outside an ACTIVE stage 3+ session.
+      if (email && /: needs as \S+$/.test(step.label) && data && 'sharedAt' in data) {
+        const until = new Date(step.window.to).toISOString();
+        const empty = Array.isArray(data.needs) && data.needs.length === 0;
+        const live = shares
+          .filter(r => r.email === email && new Date(r.at).toISOString() <= until)
+          .filter(r => r.revoked === null || new Date(r.revoked).toISOString() > until)
+          .map(r => new Date(r.at).toISOString())
+          .sort();
+        expect({ step: step.label, sharedAt: data.sharedAt }).toEqual({
+          step: step.label,
+          sharedAt: empty ? null : (live[0] ?? null),
+        });
+        checked++;
+        continue;
+      }
+      const progress = (data?.progress ?? data) as
+        | {
+            myProgress?: { stage: number; milestones?: Record<string, string> };
+            partnerProgress?: { stage: number; milestones?: Record<string, string> };
+            witnessStartedAt?: string | null;
+          }
+        | undefined;
+      if (!email || !progress?.myProgress || !('witnessStartedAt' in progress)) continue;
+      const until = new Date(step.window.to).toISOString();
+      const mine = reachedBy(email, until);
+      const partner = emails.find(e => e !== email);
+      const partnerLeft = opts.partnerLeftFromStep !== undefined && index >= opts.partnerLeftFromStep;
+      expect({ step: step.label, mine: progress.myProgress.milestones }).toEqual({
+        step: step.label,
+        mine: asMap(mine),
+      });
+      const stage1 = progress.myProgress.stage >= 1 ? stageCompletedAt(0, mine, { invitationPending: false }) : null;
+      expect({ step: step.label, witnessStartedAt: progress.witnessStartedAt }).toEqual({
+        step: step.label,
+        witnessStartedAt: stage1?.toISOString() ?? null,
+      });
+      const p = progress.partnerProgress;
+      if (p && p.milestones !== undefined) {
+        const visible: readonly string[] = PARTNER_VISIBLE_MILESTONES[p.stage] ?? [];
+        const want = partnerLeft ? [] : reachedBy(partner, until).filter(m => visible.includes(m.key));
+        expect({ step: step.label, partner: p.milestones }).toEqual({ step: step.label, partner: asMap(want) });
+      }
+      checked++;
+    }
+    expect(checked).toBeGreaterThan(0);
+  });
+}
+
+/**
  * TS-10, target shape only: the pairs of `TARGET_COMPACT_SIGNED_MASK` and
  * `TARGET_CONSENT_TARGET_ID_RULE`.
  *   - every `state` read's compact `mySignedAt` / `partnerSignedAt` is the
@@ -203,6 +314,7 @@ export function targetFixtureDeltaChecks(opts: {
   };
 
   targetTopicFrameChecks(opts);
+  targetMilestoneChecks(opts);
 
   run("fixtureMask pair: compact signedAt is each signer's compact_signed instant", async () => {
     const signed = await q<{ email: string; at: Date }>(

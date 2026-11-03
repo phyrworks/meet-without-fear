@@ -280,7 +280,8 @@ describe(`golden: ${SCENARIO}`, () => {
       const body = (n: number) => (steps[n].body as { data: Record<string, any> }).data;
       const iso = (d: Date | null | undefined) => (d ? new Date(d).toISOString() : null);
 
-      it("feelHeardConfirmedAt is Ada's feel_heard instant on her state and progress reads", async () => {
+      // work-keq6: the old milestones.feelHeardConfirmedAt (a fixture delta) is myProgress.milestones.feel_heard.
+      it("Ada's state and progress reads carry her feel_heard instant in myProgress.milestones", async () => {
         const [fh] = await sql<{ at: Date }>(
           `SELECT pm.reached_at AS at FROM participant_milestone pm JOIN participant p ON p.id = pm.participant_id
            JOIN "user" u ON u.id = p.user_id WHERE u.email = 'ada@e2e.test' AND pm.milestone_key = 'feel_heard'`,
@@ -289,7 +290,7 @@ describe(`golden: ${SCENARIO}`, () => {
         expect(reads).toHaveLength(6);
         for (const st of reads) {
           const d = (st.body as { data: Record<string, any> }).data;
-          expect((d.progress ?? d).milestones.feelHeardConfirmedAt).toBe(iso(fh.at));
+          expect((d.progress ?? d).myProgress.milestones.feel_heard).toBe(iso(fh.at));
         }
       });
 

@@ -253,7 +253,7 @@ export const UNREVEALED_ATTEMPT_HIDDEN_BYTE_TARGET_ALLOW: AllowList = {
   rules: [
     ...TARGET_TOPIC_FRAME_RULES,
     ...READ_DTO_RULES,
-    UNREVEALED_ATTEMPT_HIDDEN_ALLOW.rules.find(r => r.kind === 'addedKeys')!,
+    UNREVEALED_ATTEMPT_HIDDEN_ALLOW.rules.find(r => r.kind === 'addedKeys' && r.keys.includes('round'))!,
     ...TARGET_BODY_RULES(false),
     ...targetByteRules({
       addedTables: [
