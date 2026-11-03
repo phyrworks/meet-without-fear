@@ -1,16 +1,24 @@
 import type { ContextBundle } from './context-assembler';
 
 /**
- * Issue #312 consent gate: the partner's needs count as revealed only once the
- * prompt owner's `needs_shared` milestone exists. `needs_shared` is
- * session-scoped (ruling R33): the job writes it for every participant only
- * when ALL present humans have shared, so the owner's own row means "both
- * lists are visible" — the gate's intent. (The old per-participant gate JSON
- * set `needsShared` on the owner's own share, so the old check fired as soon
- * as the OWNER shared, before the partner had; work-keq6.)
+ * Issue #312 consent gate: the partner's needs count as revealed only in
+ * Stage 3, once the prompt owner's `needs_shared` milestone exists.
+ *
+ * `needs_shared` is session-scoped (ruling R33): the job writes it for every
+ * participant only when ALL present humans have shared, so the owner's own
+ * row means "both lists are visible". The gate is open in Stage 3 ONLY — the
+ * old per-stage gate JSON carried `needsShared` on the Stage 3 row alone, so
+ * in Stage 4 the "Partner → …" summary line and the POST-REVEAL block were
+ * hidden (owner decision 2026-11-03: keep that). In Stage 4 the summary's
+ * `partnerNeeds` is the summarizer's extraction from the owner's OWN
+ * conversation (possibly guesses — the #312 misattribution), so it must not
+ * be presented as the partner's. work-gaz4 will inject the partner's real
+ * shared needs (v_need_shared) in Stage 4 instead.
  */
-export function needsRevealed(stageContext: Pick<ContextBundle['stageContext'], 'milestones'> | undefined): boolean {
-  return stageContext?.milestones.needs_shared !== undefined;
+export function needsRevealed(
+  stageContext: Pick<ContextBundle['stageContext'], 'stage' | 'milestones'> | undefined,
+): boolean {
+  return stageContext?.stage === 3 && stageContext.milestones.needs_shared !== undefined;
 }
 
 export interface ContextFormattingOptions {

@@ -988,6 +988,8 @@ Focus on this need only this turn. If the user's update is clear, call update_se
   // POST-REVEAL: only inject when both partners have shared needs through
   // the consent flow. Without this gate the AI acts as if the reveal already
   // happened, leading to unauthorized sharing of partner content (issue #312).
+  // Open in Stage 3 only (needsRevealed; work-gaz4 will bring real shared
+  // needs to Stage 4).
   if (needsRevealed(context.contextBundle.stageContext)) {
     dynamicParts.push(`POST-REVEAL PHASES (both partners' needs are now visible):
 When ${context.userName} can see both their own needs and their partner's needs:

@@ -63,18 +63,28 @@ describe('Context Assembler', () => {
         }
       });
 
-      it('shows partner needs once needs_shared exists (session-scoped: everyone has shared)', () => {
-        for (const stage of [3, 4]) {
-          const formatted = formatContextForPrompt(
-            createMinimalBundle({ sessionSummary: summary, stageContext: { stage, milestones: { needs_shared: at } } }),
-          );
-          expect(formatted).toContain('Partner → PARTNER-NEED-PROBE');
-        }
+      it('shows partner needs in Stage 3 once needs_shared exists (session-scoped: everyone has shared)', () => {
+        const formatted = formatContextForPrompt(
+          createMinimalBundle({ sessionSummary: summary, stageContext: { stage: 3, milestones: { needs_shared: at } } }),
+        );
+        expect(formatted).toContain('Partner → PARTNER-NEED-PROBE');
+      });
+
+      it('hides partner needs in Stage 4 even with needs_shared (the old gate lived on the Stage 3 row only)', () => {
+        const formatted = formatContextForPrompt(
+          createMinimalBundle({
+            sessionSummary: summary,
+            stageContext: { stage: 4, milestones: { needs_confirmed: at, needs_shared: at, choices_shared: at } },
+          }),
+        );
+        expect(formatted).toContain('Needs: User → to be heard.');
+        expect(formatted).not.toContain('PARTNER-NEED-PROBE');
       });
 
       it('needsRevealed reads only the given stage context (the prompt owner’s milestones)', () => {
-        expect(needsRevealed({ milestones: { needs_shared: at } })).toBe(true);
-        expect(needsRevealed({ milestones: { needs_confirmed: at, needs_validated: at } })).toBe(false);
+        expect(needsRevealed({ stage: 3, milestones: { needs_shared: at } })).toBe(true);
+        expect(needsRevealed({ stage: 3, milestones: { needs_confirmed: at, needs_validated: at } })).toBe(false);
+        for (const stage of [0, 1, 2, 4]) expect(needsRevealed({ stage, milestones: { needs_shared: at } })).toBe(false);
         expect(needsRevealed(undefined)).toBe(false);
       });
     });

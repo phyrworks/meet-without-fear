@@ -181,6 +181,16 @@ describe('Stage Prompts Service', () => {
       expect(promptWith).toContain('FOLLOWING UP');
       expect(promptWith).toContain('EMOTIONAL PROCESSING');
       expect(promptWith).toContain('VALIDITY');
+
+      // Stage 4 (both lists shared, everyone moved on): the block stays closed,
+      // as the old Stage 3-row gate did (owner decision 2026-11-03; work-gaz4).
+      const stage4 = createContext({
+        contextBundle: {
+          ...mockContextBundle,
+          stageContext: { stage: 4, milestones: { needs_shared: '2026-10-26T12:02:00.000Z' } },
+        },
+      });
+      expect(fullPrompt(buildStagePrompt(3, stage4))).not.toContain('POST-REVEAL PHASES');
     });
 
     it('Stage 3 FORBIDDEN list prevents identifying overlap between needs lists', () => {
