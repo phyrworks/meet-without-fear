@@ -3,63 +3,11 @@ import { sessionKeys, stageKeys } from '../../../hooks/queryKeys';
 import {
   metadataInvalidationKeys,
   streamMetadataCacheWrites,
-  withFeelHeardCheckOffered,
   withProposedEmpathyDraft,
 } from '../streamMetadataCache';
 
 const SESSION = 'session-1';
 const serialize = (keys: readonly unknown[]) => keys.map((k) => JSON.stringify(k));
-
-describe('withFeelHeardCheckOffered', () => {
-  it('sets the flag at the nested gate path', () => {
-    const result = withFeelHeardCheckOffered({
-      progress: { myProgress: { gatesSatisfied: {} } },
-    });
-
-    expect(result).toMatchObject({
-      progress: { myProgress: { gatesSatisfied: { feelHeardCheckOffered: true } } },
-    });
-  });
-
-  it('preserves sibling state at every level of the nesting', () => {
-    // Dropping a sibling here is silent — the UI just loses a field.
-    const result = withFeelHeardCheckOffered({
-      stage: 2,
-      progress: {
-        partnerProgress: { done: true },
-        myProgress: {
-          messageCount: 7,
-          gatesSatisfied: { otherGate: true },
-        },
-      },
-    }) as Record<string, any>;
-
-    expect(result.stage).toBe(2);
-    expect(result.progress.partnerProgress).toEqual({ done: true });
-    expect(result.progress.myProgress.messageCount).toBe(7);
-    expect(result.progress.myProgress.gatesSatisfied.otherGate).toBe(true);
-    expect(result.progress.myProgress.gatesSatisfied.feelHeardCheckOffered).toBe(true);
-  });
-
-  it('builds the missing levels when they are absent', () => {
-    const result = withFeelHeardCheckOffered({ stage: 2 }) as Record<string, any>;
-    expect(result.progress.myProgress.gatesSatisfied.feelHeardCheckOffered).toBe(true);
-  });
-
-  it('leaves an empty cache alone rather than fabricating session state', () => {
-    // Writing a skeleton would give readers a shape they would then trust.
-    expect(withFeelHeardCheckOffered(undefined)).toBeUndefined();
-  });
-
-  it('does not mutate the cached object in place', () => {
-    const original = { progress: { myProgress: { gatesSatisfied: {} } } };
-    const snapshot = JSON.stringify(original);
-
-    withFeelHeardCheckOffered(original);
-
-    expect(JSON.stringify(original)).toBe(snapshot);
-  });
-});
 
 describe('withProposedEmpathyDraft', () => {
   it('writes the proposed content and enables consent', () => {
@@ -100,13 +48,8 @@ describe('streamMetadataCacheWrites', () => {
     expect(streamMetadataCacheWrites(SESSION, {} as StreamMetadata)).toEqual([]);
   });
 
-  it('targets session state for the feel-heard check', () => {
-    const writes = streamMetadataCacheWrites(SESSION, {
-      offerFeelHeardCheck: true,
-    } as StreamMetadata);
-
-    expect(writes).toHaveLength(1);
-    expect(writes[0].queryKey).toEqual(sessionKeys.state(SESSION));
+  it('writes nothing for the feel-heard check (no persisted fact; the stream trigger is the signal)', () => {
+    expect(streamMetadataCacheWrites(SESSION, { offerFeelHeardCheck: true } as StreamMetadata)).toEqual([]);
   });
 
   it('targets the empathy draft key that useEmpathyDraft reads', () => {
@@ -121,15 +64,13 @@ describe('streamMetadataCacheWrites', () => {
     });
   });
 
-  it('emits both writes when the metadata carries both', () => {
+  it('emits only the empathy draft write when the metadata also offers the feel-heard check', () => {
     const writes = streamMetadataCacheWrites(SESSION, {
       offerFeelHeardCheck: true,
       proposedEmpathyStatement: 'text',
     } as StreamMetadata);
 
-    expect(serialize(writes.map((w) => w.queryKey))).toEqual(
-      serialize([sessionKeys.state(SESSION), stageKeys.empathyDraft(SESSION)])
-    );
+    expect(serialize(writes.map((w) => w.queryKey))).toEqual(serialize([stageKeys.empathyDraft(SESSION)]));
   });
 
   it('ignores an empty proposed statement', () => {

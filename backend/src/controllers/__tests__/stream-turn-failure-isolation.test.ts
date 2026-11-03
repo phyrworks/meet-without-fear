@@ -167,7 +167,7 @@ describe('sendMessageStream — failed turns cannot advance state', () => {
       sessionId: 'session-1',
       content: userMessage.content,
       session: { status: 'ACTIVE', topicFrame: null, topicFrameConfirmedAt: null },
-      progress: { id: 'progress-1', gatesSatisfied: {} },
+      progress: { stage: 3, status: 'IN_PROGRESS', startedAt: null, completedAt: null },
       currentStage: 3,
       refiningNeedContext: null,
       userMessage,

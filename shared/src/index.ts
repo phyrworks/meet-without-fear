@@ -14,6 +14,7 @@ export * from './api';
 export * from './dto/session';
 export * from './dto/session-state';
 export * from './dto/stage';
+export * from './dto/milestones';
 export * from './dto/message';
 export * from './dto/consent';
 export * from './dto/needs';

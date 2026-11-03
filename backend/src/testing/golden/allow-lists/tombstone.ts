@@ -35,6 +35,8 @@ import {
   byteLabelShift,
   deliveredStatementCopy,
   empathySubmittedMilestone,
+  DEFAULT_MILESTONE_MASK,
+  milestoneMapMask,
   READ_DTO_RULES,
   targetByteRules,
   TARGET_COMPACT_SIGNED_MASK,
@@ -63,6 +65,7 @@ const READ_NAMES = [...SESSION_READS, ...USER_READS].map(([n]) => n).filter(n =>
  * `steps.*`.
  */
 export const TOMBSTONE_DELETION_STEP = READ_NAMES.length;
+
 const AFTER_STEPS = READ_NAMES.map((_, i) => TOMBSTONE_DELETION_STEP + 1 + i);
 const readIndex = (read: string): number => {
   const i = READ_NAMES.indexOf(read);
@@ -76,16 +79,29 @@ const at = (read: string, suffix: string): string => `steps.${afterRead(read)}.$
 const atBefore = (read: string, suffix: string): string => `steps.${beforeRead(read)}.${suffix}`;
 const atBoth = (read: string, suffixes: string[]): string[] => suffixes.flatMap(x => [atBefore(read, x), at(read, x)]);
 
+/**
+ * work-keq6: the progress-map instants the old bodies carried stay ranked —
+ * choices_shared (the migrated selection gate's selectionSubmittedAt),
+ * feel_heard (milestones.feelHeardConfirmedAt) and, on GET /progress only,
+ * needs_confirmed (milestones.needsIdentifiedAt); every other milestone
+ * instant is masked (targetMilestoneChecks asserts them all).
+ */
+const TOMBSTONE_MILESTONE_MASKS: AllowRule[] = [
+  milestoneMapMask([], { steps: [beforeRead('state'), afterRead('state')], only: ['needs_confirmed'] }),
+  milestoneMapMask(['choices_shared', 'feel_heard', 'needs_confirmed']),
+];
+
 /** Every step but the deletion (whose changes are the walk: pinned and asserted against the database). */
 const NON_DELETION_STEPS = [...READ_NAMES.map((_, i) => i), ...AFTER_STEPS];
 
 /**
  * TS-12, target only: TOMBSTONE_READY's Stage 4 is a LEGACY completion (see the
  * header). Exactly the progress fields the stage shim computes differently —
- * status IN_PROGRESS, no completedAt, no advance — and the gate keys: the
- * legacy agreement/ranking gates are absent, the migrated selection gate is
- * added. Pair: "stage 4 completion pair" (no `closed` milestone; both reached
- * `choices_shared`; every listed status is IN_PROGRESS with selectionSubmitted).
+ * status IN_PROGRESS, no completedAt, no advance. (The legacy gate keys went
+ * with gatesSatisfied, work-keq6: the migrated selection is the
+ * `choices_shared` milestone in the progress maps — MILESTONE_DTO_RULES.)
+ * Pair: "stage 4 completion pair" (no `closed` milestone; both reached
+ * `choices_shared`; every listed status is IN_PROGRESS with choices_shared).
  */
 function legacyStage4Completion(): AllowRule[] {
   const progress = (p: string) => [`${p}.status`, `${p}.completedAt`];
@@ -116,28 +132,6 @@ function legacyStage4Completion(): AllowRule[] {
         'target (stage shim) completes Stage 4 at the `closed` milestone, which the legacy journey never reached, so ' +
         'Stage 4 is IN_PROGRESS (no completedAt, no advance; the list asks both to complete it, and its copy ' +
         "follows). The partner-activity instant is the shim's newest own turn, not the legacy stage row.",
-    },
-    {
-      kind: 'absentKeys',
-      at: [
-        ...atBoth('state', ['body.data.progress.myProgress.gatesSatisfied']),
-        ...atBoth('progress', ['body.data.myProgress.gatesSatisfied']),
-        atBefore('progress', 'body.data.partnerProgress.gatesSatisfied'),
-      ],
-      keys: ['agreementConfirmed', 'agreementCreated', 'strategiesRanked'],
-      mustMatch: true,
-      why: 'spec §1.4: legacy agreement/ranking gates have no target milestone (ranking is gone, R25); the shim reports the target gates.',
-    },
-    {
-      kind: 'addedKeys',
-      at: [
-        ...atBoth('state', ['body.data.progress.myProgress.gatesSatisfied']),
-        ...atBoth('progress', ['body.data.myProgress.gatesSatisfied']),
-        atBefore('progress', 'body.data.partnerProgress.gatesSatisfied'),
-      ],
-      keys: ['selectionSubmitted', 'selectionSubmittedAt'],
-      mustMatch: true,
-      why: 'the migrated rankings are `proposal_choice` rows with `choices_shared` (plan §3): the Stage 4 selection gate holds.',
     },
   ];
 }
@@ -438,7 +432,18 @@ export const TOMBSTONE_ALLOW: AllowList = {
   rules: [
     ...TARGET_TOPIC_FRAME_RULES,
     ...TARGET_TOPIC_FRAME_INITIAL_RULES,
-    ...READ_DTO_RULES,
+    ...READ_DTO_RULES.filter(r => r !== DEFAULT_MILESTONE_MASK),
+    ...TOMBSTONE_MILESTONE_MASKS,
+    {
+      kind: 'fixtureMask',
+      at: `steps.${beforeRead('needs')}.body.data.sharedAt`,
+      expect: 'isoTimestamp',
+      baseline: null,
+      why:
+        'work-keq6: Bob’s GET /needs sharedAt is his migrated share instant (carried), a new instant of the step that ' +
+        'renumbers the concept step’s later ranks; targetMilestoneChecks asserts the raw value. (Null after the deletion: ' +
+        'the session is ABANDONED and GET /needs answers empty.)',
+    },
     // Both attempts were revealed in the fixture: the migration inserts their
     // delivered copies into the restored state (plan step 9).
     deliveredStatementCopy('ada', 'bob', 'initial'),
@@ -494,7 +499,8 @@ export const TOMBSTONE_BYTE_TARGET_ALLOW: AllowList = {
   scenario: 'tombstone',
   rules: [
     ...TARGET_TOPIC_FRAME_RULES,
-    ...READ_DTO_RULES,
+    ...READ_DTO_RULES.filter(r => r !== DEFAULT_MILESTONE_MASK),
+    ...TOMBSTONE_MILESTONE_MASKS,
     ...DEVIATION_FIX_RULES,
     ...targetReadRules(false),
     byteLabelShift(

@@ -421,7 +421,7 @@ describe(`golden: ${SCENARIO}`, () => {
       ).toEqual([adaId, bobId].sort());
       for (const i of [beforeRead('progress'), afterRead('progress')]) {
         expect(data(i).myProgress).toMatchObject({ stage: 4, status: 'IN_PROGRESS', completedAt: null });
-        expect(data(i).myProgress.gatesSatisfied.selectionSubmitted).toBe(true);
+        expect(data(i).myProgress.milestones.choices_shared).toEqual(expect.any(String));
       }
       for (const i of [beforeRead('session'), afterRead('session')]) {
         expect(data(i).session).toMatchObject({

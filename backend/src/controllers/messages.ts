@@ -672,7 +672,7 @@ export async function getInitialMessage(req: Request, res: Response): Promise<vo
             },
             stageContext: {
               stage: 0,
-              gatesSatisfied: {},
+              milestones: {},
             },
             userName,
             partnerName,

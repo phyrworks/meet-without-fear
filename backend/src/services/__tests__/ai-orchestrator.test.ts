@@ -79,7 +79,7 @@ const mockContextBundle = {
     trend: 'unknown',
     notableShifts: [],
   },
-  stageContext: { stage: 1, gatesSatisfied: {} },
+  stageContext: { stage: 1, milestones: {} },
   userName: 'Alice',
   partnerName: 'Bob',
   intent: {

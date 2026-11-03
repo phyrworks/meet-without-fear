@@ -587,7 +587,7 @@ export function UnifiedSessionScreen({
     partnerName,
     partnerProgress,
     myProgress,
-    milestones,
+    witnessStartedAt,
 
     // Messages
     messages,
@@ -686,6 +686,8 @@ export function UnifiedSessionScreen({
     markSessionViewed,
 
   } = useUnifiedSession(sessionId);
+  // The feel_heard milestone (participant_milestone), written optimistically by useConfirmFeelHeard.
+  const feelHeardConfirmedAt = myProgress?.milestones?.feel_heard ?? null;
   const sessionQueriesEnabled = !accessDenied && !loadError;
   const shouldEnableSessionRealtime =
     sessionQueriesEnabled &&
@@ -1195,19 +1197,6 @@ export function UnifiedSessionScreen({
           ? { ...old, partnerReadyToRank: true }
           : old
         );
-        queryClient.setQueryData(stageKeys.progress(sessionId), (old: any) => {
-          if (!old?.partnerProgress) return old;
-          return {
-            ...old,
-            partnerProgress: {
-              ...old.partnerProgress,
-              gatesSatisfied: {
-                ...(old.partnerProgress.gatesSatisfied ?? {}),
-                readyToRank: true,
-              },
-            },
-          };
-        });
         refreshStage4RealtimeState();
       }
 
@@ -1531,8 +1520,8 @@ export function UnifiedSessionScreen({
   // -------------------------------------------------------------------------
   const [showNeedsRevealModal, setShowNeedsRevealModal] = useState(false);
   const [showStage4Drawer, setShowStage4Drawer] = useState(false);
-  const myNeedsSharedForComparison =
-    (myProgress?.gatesSatisfied as Record<string, unknown> | undefined)?.needsShared === true;
+  // The caller's own share (GET /needs sharedAt); needs_shared is session-scoped.
+  const myNeedsSharedForComparison = !!needsData?.sharedAt;
   const { data: needsComparisonData } = useNeedsComparison(
     sessionId,
     (allNeedsConfirmed || myNeedsSharedForComparison) && (
@@ -2318,7 +2307,7 @@ export function UnifiedSessionScreen({
   // useConfirmFeelHeard). The indicators are derived purely from cache data:
   // - invitation.messageConfirmedAt (set by useConfirmInvitationMessage.onMutate)
   // - compact.mySignedAt (set by useSignCompact.onMutate)
-  // - milestones.feelHeardConfirmedAt (set by useConfirmFeelHeard.onMutate)
+  // - myProgress.milestones.feel_heard (set by useConfirmFeelHeard.onMutate)
 
   // Track if compact was just signed in this session (for typewriter animation)
   // This is set when user signs compact and reset after first message animates
@@ -2380,7 +2369,7 @@ export function UnifiedSessionScreen({
     isConfirmingTopicFrame,
     inviteeTopicAckPending,
     showFeelHeardConfirmation,
-    feelHeardConfirmedAt: milestones?.feelHeardConfirmedAt,
+    feelHeardConfirmedAt,
     isConfirmingFeelHeard,
     empathyStatusData: empathyStatusData ? {
       analyzing: empathyStatusData.analyzing,
@@ -2411,13 +2400,13 @@ export function UnifiedSessionScreen({
     hasRespondedToShareOfferLocal: completedActions.has('responded-to-share-offer'),
     allNeedsConfirmed,
     needsAvailable: (needs?.length ?? 0) > 0,
-    needsShared: (myProgress?.gatesSatisfied as Record<string, unknown> | undefined)?.needsShared === true,
+    needsShared: !!needsData?.sharedAt,
     needsRevealReady: (needsComparisonData?.myNeeds?.length ?? 0) > 0 && (needsComparisonData?.partnerNeeds?.length ?? 0) > 0,
     hasConfirmedNeedsLocal: completedActions.has('confirmed-needs'),
     needsRevealValidationCount: needsRevealValidationItems?.length ?? 0,
     needsRevealAvailable: (needsComparisonData?.myNeeds?.length ?? 0) > 0 && (needsComparisonData?.partnerNeeds?.length ?? 0) > 0,
     needsRevealNoOverlap: false,
-    needsRevealValidatedByMe: (myProgress?.gatesSatisfied as Record<string, unknown> | undefined)?.needsValidated === true,
+    needsRevealValidatedByMe: !!myProgress?.milestones?.needs_validated,
     needsRevealValidatedByBoth: needsRevealValidatedByBoth,
     hasValidatedNeedsRevealLocal: completedActions.has('validated-needs'),
     // Legacy Stage 4 inputs: the strategy-pool-preview / overlap-preview cards
@@ -2444,11 +2433,11 @@ export function UnifiedSessionScreen({
   // -------------------------------------------------------------------------
   // Once feel-heard is confirmed, keep showing the indicator even during re-renders
   // This prevents the indicator from flashing away when new messages arrive
-  // Cache-First: milestones.feelHeardConfirmedAt is set optimistically by useConfirmFeelHeard.onMutate
+  // Cache-First: myProgress.milestones.feel_heard is set optimistically by useConfirmFeelHeard.onMutate
   const hasEverConfirmedFeelHeard = useRef(false);
 
   // Latch if we have cache data (optimistic or server-confirmed)
-  if (milestones?.feelHeardConfirmedAt && !hasEverConfirmedFeelHeard.current) {
+  if (feelHeardConfirmedAt && !hasEverConfirmedFeelHeard.current) {
     hasEverConfirmedFeelHeard.current = true;
   }
 
@@ -2631,7 +2620,7 @@ export function UnifiedSessionScreen({
   // Cache-First: All optimistic states are now handled by mutation hooks' onMutate:
   // - useConfirmInvitationMessage.onMutate updates invitation.messageConfirmedAt
   // - useSignCompact.onMutate updates compact.mySignedAt
-  // - useConfirmFeelHeard.onMutate updates milestones.feelHeardConfirmedAt
+  // - useConfirmFeelHeard.onMutate writes myProgress.milestones.feel_heard
   // No local state cleanup needed - the cache is the single source of truth.
 
   // Build indicators array using centralized deriveIndicators function
@@ -2651,9 +2640,9 @@ export function UnifiedSessionScreen({
         acceptedAt: invitationAcceptedAt,
       } : undefined,
       milestones: {
-        witnessStartedAt: milestones?.witnessStartedAt ?? null,
+        witnessStartedAt: witnessStartedAt ?? null,
         // Use ref as backup to prevent flickering during mutation
-        feelHeardConfirmedAt: milestones?.feelHeardConfirmedAt ??
+        feelHeardConfirmedAt: feelHeardConfirmedAt ??
           (hasEverConfirmedFeelHeard.current || isConfirmingFeelHeard ? new Date().toISOString() : null),
       },
       mySharedAt: empathyStatusData?.mySharedAt,
@@ -2726,13 +2715,13 @@ export function UnifiedSessionScreen({
     // Witness is the exception: invitees first see the topic intro card, so
     // its chapter marker is anchored to the canonical Witness stage start.
     const chapterIndicators = deriveChapterMarkers(messages, {
-      [Stage.WITNESS]: milestones?.witnessStartedAt,
-      [Stage.PERSPECTIVE_STRETCH]: milestones?.feelHeardConfirmedAt,
+      [Stage.WITNESS]: witnessStartedAt,
+      [Stage.PERSPECTIVE_STRETCH]: feelHeardConfirmedAt,
     });
     allIndicators.push(...chapterIndicators);
 
     return allIndicators;
-  }, [isInviter, session?.status, invitationMessageConfirmedAt, invitationAcceptedAt, milestones?.witnessStartedAt, milestones?.feelHeardConfirmedAt, isConfirmingFeelHeard, messages, user?.id, partnerName, empathyStatusData?.mySharedAt, empathyStatusData?.myAttempt?.status, empathyStatusData?.myAttempt?.validatedAt, shareOfferData?.hasSuggestion, shareOfferData?.suggestion, myProgress?.stage, currentStage, needs, needsData?.synthesizedAt]);
+  }, [isInviter, session?.status, invitationMessageConfirmedAt, invitationAcceptedAt, witnessStartedAt, feelHeardConfirmedAt, isConfirmingFeelHeard, messages, user?.id, partnerName, empathyStatusData?.mySharedAt, empathyStatusData?.myAttempt?.status, empathyStatusData?.myAttempt?.validatedAt, shareOfferData?.hasSuggestion, shareOfferData?.suggestion, myProgress?.stage, currentStage, needs, needsData?.synthesizedAt]);
 
 
 
@@ -3510,7 +3499,7 @@ export function UnifiedSessionScreen({
               onConfirm={() => {
                 // Track felt heard response
                 trackFeltHeardResponse(sessionId, 'yes');
-                // Cache-First: useConfirmFeelHeard.onMutate sets milestones.feelHeardConfirmedAt optimistically
+                // Cache-First: useConfirmFeelHeard.onMutate sets myProgress.milestones.feel_heard optimistically
                 handleConfirmFeelHeard(() => onStageComplete?.(Stage.WITNESS));
               }}
               isPending={isConfirmingFeelHeard}

@@ -103,10 +103,9 @@ export function NeedMappingScreen() {
 
   // Needs data
   const { data: needsData, isLoading: loadingNeeds } = useNeeds(sessionId);
-  const myGates = progressData?.myProgress as
-    | { gates?: Record<string, unknown>; gatesSatisfied?: Record<string, unknown> }
-    | undefined;
-  const needsShared = myGates?.gatesSatisfied?.needsShared === true || myGates?.gates?.needsShared === true;
+  // The caller's own share (need_share). needs_shared is session-scoped: it is
+  // reached by everyone only once ALL have shared, so it cannot mean "I shared".
+  const needsShared = !!needsData?.sharedAt;
   const allNeedsConfirmed =
     (needsData?.needs?.length ?? 0) > 0 && (needsData?.needs ?? []).every((n) => n.confirmed);
   const { data: needsComparisonData, isLoading: loadingNeedsComparison } = useNeedsComparison(

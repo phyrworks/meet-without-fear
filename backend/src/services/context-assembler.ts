@@ -20,7 +20,15 @@ import { decryptRawRows } from '../lib/prisma-encryption-middleware';
 import { type MemoryIntentResult, type RetrievalDepth, getTurnBufferSize } from './memory-intent';
 import { getSessionSummary } from './conversation-summarizer';
 import { getCoParticipants, getParticipant, resolveParticipant } from './participant-resolver';
-import { loadStageStates, messageStage, type MilestoneReached, type ShimStageRow, type StageOpts } from './stage-shim';
+import type { MilestoneMap } from '@meet-without-fear/shared';
+import {
+  loadStageStates,
+  messageStage,
+  milestoneMap,
+  type MilestoneReached,
+  type ShimStageRow,
+  type StageOpts,
+} from './stage-shim';
 import { legacyRole, type StoredMessage } from './message-store';
 import type { CategorizedFact as GlobalFact } from './global-memory';
 
@@ -183,7 +191,12 @@ export interface ContextBundle {
   // Stage-specific data
   stageContext: {
     stage: number;
-    gatesSatisfied: Record<string, unknown>;
+    /**
+     * Every milestone THIS participant (the prompt's owner) has reached:
+     * key → reachedAt ISO. Read at the point of use (e.g. the #312 consent
+     * gate: `needsRevealed` in context-formatters.ts).
+     */
+    milestones: MilestoneMap;
   };
 
   // Confirmed conversation topic. This is orientation context only; the
@@ -527,7 +540,6 @@ export async function buildContextForParticipant(
   const stage = opts.stage ?? stageState?.current.stage ?? 0;
   const milestones = stageState?.milestones ?? [];
   const stageOpts: StageOpts = { invitationPending: stageState?.invitationPending ?? false };
-  const stageRow = stageState?.rows.find(r => r.stage === stage);
 
   // Names. The partner MUST be named by the nickname this participant gave
   // them (relationship_member.nickname), then the co-participant's display name.
@@ -583,7 +595,7 @@ export async function buildContextForParticipant(
     innerThoughtsContext: finalInnerThoughts,
     userMemories,
     notableFacts: aiMemory.notableFacts,
-    stageContext: { stage, gatesSatisfied: stageRow?.gatesSatisfied ?? {} },
+    stageContext: { stage, milestones: milestoneMap(milestones) },
     topicFrame:
       session.topicFrame && session.topicFrameConfirmedAt
         ? { text: session.topicFrame, confirmedAt: session.topicFrameConfirmedAt.toISOString() }

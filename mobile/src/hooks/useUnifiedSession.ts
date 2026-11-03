@@ -301,8 +301,9 @@ export function useUnifiedSession(
   const liveNeedsForGating = needsForGating.filter((n) => !n.deletedAt && !n.supersededByNeedId);
   const allNeedsConfirmedForGating =
     liveNeedsForGating.length > 0 && liveNeedsForGating.every((n) => Boolean(n.confirmed));
-  const myNeedsSharedForGating =
-    (progressData?.myProgress?.gatesSatisfied as Record<string, unknown> | undefined)?.needsShared === true;
+  // The caller's own share (need_share), not needs_shared: that milestone is
+  // session-scoped and reached only once everyone has shared.
+  const myNeedsSharedForGating = !!needsData?.sharedAt;
 
   const { data: needsComparisonData } = useNeedsComparison(
     sessionId,
@@ -552,17 +553,16 @@ export function useUnifiedSession(
   // Count user messages for barometer trigger
   const userMessageCount = messages.filter((m) => m.role === MessageRole.USER).length;
 
-  // Derive showFeelHeardConfirmation from gates + stream trigger + dismissal state
-  // This ensures proper restoration from backend AND handles stream-triggered state
+  // Derive showFeelHeardConfirmation from the feel_heard milestone + stream trigger + dismissal state.
+  // The AI's offer is stream metadata only: the target persists no "check offered" fact
+  // (plan §3 step 7), so it is the stream trigger alone.
   // NOTE: Using simple derived expression (not useMemo) to match invitation pattern for reliable updates
-  const gates = myProgress?.gatesSatisfied as Record<string, unknown> | undefined;
-  const gateOffered = !!gates?.feelHeardCheckOffered;
-  const gateConfirmed = !!gates?.feelHeardConfirmed;
+  const feelHeardReached = !!myProgress?.milestones?.feel_heard;
   const isWitnessStage = myProgress?.stage === Stage.WITNESS;
   const showFeelHeardConfirmation = (
     isWitnessStage &&
-    (gateOffered || streamTriggeredFeelHeard) &&
-    !gateConfirmed &&
+    streamTriggeredFeelHeard &&
+    !feelHeardReached &&
     !hasDismissedFeelHeard &&
     !state.hasConfirmedHeard
   );
@@ -583,9 +583,7 @@ export function useUnifiedSession(
   // Strategy phase
   const strategyPhase = strategyData?.phase ?? StrategyPhase.COLLECTING;
   const strategies = useMemo(() => strategyData?.strategies ?? [], [strategyData?.strategies]);
-  const myReadyToRank =
-    strategyData?.myReadyToRank === true ||
-    (myProgress?.gatesSatisfied as Record<string, unknown> | undefined)?.readyToRank === true;
+  const myReadyToRank = strategyData?.myReadyToRank === true;
   const canMarkReadyToRank = strategyData?.canMarkReadyToRank === true;
   const canRankStrategies = strategyData?.canRank === true;
   const agreements = useMemo(() => agreementsData?.agreements ?? [], [agreementsData?.agreements]);
@@ -1189,8 +1187,7 @@ export function useUnifiedSession(
     partnerProgress,
     myProgress,
     canAdvance,
-    gates: myProgress?.gatesSatisfied,
-    milestones: progressData?.milestones,
+    witnessStartedAt: progressData?.witnessStartedAt ?? null,
 
     // Messages and cards
     messages,

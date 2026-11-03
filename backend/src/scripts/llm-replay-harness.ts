@@ -50,7 +50,7 @@ function buildBundle(fixture: Fixture, useSummary: boolean): ContextBundle {
     },
     stageContext: {
       stage: fixture.stage,
-      gatesSatisfied: {},
+      milestones: {},
     },
     userName: fixture.userName,
     partnerName: fixture.partnerName,

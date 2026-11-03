@@ -302,6 +302,44 @@ describe('useStages', () => {
         const mutationResult = await mutationPromise;
         expect(mutationResult.confirmed).toBe(false);
       });
+
+      it('writes the feel_heard milestone into myProgress.milestones (server instant wins)', async () => {
+        mockPost.mockResolvedValueOnce({
+          confirmed: true,
+          confirmedAt: '2024-01-01T00:00:00.000Z',
+          canAdvance: true,
+          partnerCompleted: false,
+        });
+        const queryClient = createTestQueryClient();
+        queryClient.setQueryData(sessionKeys.state(sessionId), {
+          progress: {
+            sessionId,
+            myProgress: {
+              stage: Stage.WITNESS,
+              status: StageStatus.IN_PROGRESS,
+              startedAt: null,
+              completedAt: null,
+              milestones: { compact_signed: '2023-12-31T00:00:00.000Z' },
+            },
+            partnerProgress: { stage: Stage.WITNESS, status: StageStatus.IN_PROGRESS, startedAt: null, completedAt: null },
+            canAdvance: false,
+            witnessStartedAt: '2023-12-31T00:00:00.000Z',
+          },
+        });
+
+        const { result } = renderHook(() => useConfirmFeelHeard(), { wrapper: createWrapper(queryClient) });
+        await act(async () => {
+          await result.current.mutateAsync({ sessionId, confirmed: true });
+        });
+
+        const progress = queryClient.getQueryData<any>(sessionKeys.state(sessionId))?.progress;
+        expect(progress.myProgress.milestones).toEqual({
+          compact_signed: '2023-12-31T00:00:00.000Z',
+          feel_heard: '2024-01-01T00:00:00.000Z',
+        });
+        expect(progress.myProgress.stage).toBe(Stage.PERSPECTIVE_STRETCH);
+        expect(progress).not.toHaveProperty('milestones');
+      });
     });
   });
 
@@ -633,7 +671,7 @@ describe('useStages', () => {
         });
       });
 
-      it('immediately marks needs confirmed in progress and session state caches', async () => {
+      it('immediately writes the needs_confirmed milestone into progress and session state caches', async () => {
         mockPost.mockResolvedValueOnce({
           confirmed: true,
           confirmedAt: '2024-01-01T00:00:00.000Z',
@@ -649,7 +687,7 @@ describe('useStages', () => {
             status: StageStatus.IN_PROGRESS,
             startedAt: '2024-01-01T00:00:00.000Z',
             completedAt: null,
-            gatesSatisfied: {},
+            milestones: {},
           },
           partnerProgress: {
             stage: Stage.NEED_MAPPING,
@@ -665,14 +703,14 @@ describe('useStages', () => {
               status: StageStatus.IN_PROGRESS,
               startedAt: '2024-01-01T00:00:00.000Z',
               completedAt: null,
-              gatesSatisfied: {},
+              milestones: {},
             },
             partnerProgress: {
               stage: Stage.NEED_MAPPING,
               status: StageStatus.IN_PROGRESS,
             },
             canAdvance: false,
-            milestones: { feelHeardConfirmedAt: null },
+            witnessStartedAt: null,
           },
         });
 
@@ -688,11 +726,11 @@ describe('useStages', () => {
         });
 
         expect(
-          queryClient.getQueryData<any>(stageKeys.progress(sessionId))?.myProgress.gatesSatisfied.needsConfirmed
-        ).toBe(true);
+          queryClient.getQueryData<any>(stageKeys.progress(sessionId))?.myProgress.milestones.needs_confirmed
+        ).toEqual(expect.any(String));
         expect(
-          queryClient.getQueryData<any>(sessionKeys.state(sessionId))?.progress.myProgress.gatesSatisfied.needsConfirmed
-        ).toBe(true);
+          queryClient.getQueryData<any>(sessionKeys.state(sessionId))?.progress.myProgress.milestones.needs_confirmed
+        ).toEqual(expect.any(String));
       });
     });
 
@@ -756,12 +794,15 @@ describe('useStages', () => {
         });
       });
 
-      it('immediately marks needs shared in progress and session state caches', async () => {
+      it.each([
+        { label: 'first sharer (partner not yet shared)', needsRevealReady: false },
+        { label: 'second sharer (reveal ready)', needsRevealReady: true },
+      ])('records the own share in the needs cache; needs_shared only once all shared — $label', async ({ needsRevealReady }) => {
         mockPost.mockResolvedValueOnce({
           consented: true,
           sharedAt: '2024-01-01T00:00:00.000Z',
-          waitingForPartner: false,
-          needsRevealReady: true,
+          waitingForPartner: !needsRevealReady,
+          needsRevealReady,
         });
 
         const queryClient = createTestQueryClient();
@@ -772,7 +813,7 @@ describe('useStages', () => {
             status: StageStatus.GATE_PENDING,
             startedAt: '2024-01-01T00:00:00.000Z',
             completedAt: null,
-            gatesSatisfied: { needsConfirmed: true },
+            milestones: { needs_confirmed: '2024-01-01T00:00:00.000Z' },
           },
           partnerProgress: {
             stage: Stage.NEED_MAPPING,
@@ -788,16 +829,18 @@ describe('useStages', () => {
               status: StageStatus.GATE_PENDING,
               startedAt: '2024-01-01T00:00:00.000Z',
               completedAt: null,
-              gatesSatisfied: { needsConfirmed: true },
+              milestones: { needs_confirmed: '2024-01-01T00:00:00.000Z' },
             },
             partnerProgress: {
               stage: Stage.NEED_MAPPING,
               status: StageStatus.GATE_PENDING,
             },
             canAdvance: false,
-            milestones: { feelHeardConfirmedAt: null },
+            witnessStartedAt: null,
           },
         });
+
+        queryClient.setQueryData(stageKeys.needs(sessionId), { needs: [], synthesizedAt: null, sharedAt: null });
 
         const { result } = renderHook(() => useConsentShareNeeds(), {
           wrapper: createWrapper(queryClient),
@@ -810,12 +853,14 @@ describe('useStages', () => {
           });
         });
 
+        expect(queryClient.getQueryData<any>(stageKeys.needs(sessionId))?.sharedAt).toBe('2024-01-01T00:00:00.000Z');
+        const expected = needsRevealReady ? '2024-01-01T00:00:00.000Z' : undefined;
         expect(
-          queryClient.getQueryData<any>(stageKeys.progress(sessionId))?.myProgress.gatesSatisfied.needsShared
-        ).toBe(true);
+          queryClient.getQueryData<any>(stageKeys.progress(sessionId))?.myProgress.milestones.needs_shared
+        ).toBe(expected);
         expect(
-          queryClient.getQueryData<any>(sessionKeys.state(sessionId))?.progress.myProgress.gatesSatisfied.needsShared
-        ).toBe(true);
+          queryClient.getQueryData<any>(sessionKeys.state(sessionId))?.progress.myProgress.milestones.needs_shared
+        ).toBe(expected);
       });
     });
 
@@ -907,12 +952,12 @@ describe('useStages', () => {
             status: StageStatus.IN_PROGRESS,
             startedAt: '2026-05-05T00:00:00.000Z',
             completedAt: null,
-            gatesSatisfied: null,
+            milestones: {},
           },
           partnerProgress: {
             stage: Stage.STRATEGIC_REPAIR,
             status: StageStatus.IN_PROGRESS,
-            gatesSatisfied: null,
+            milestones: {},
           },
           canAdvance: false,
         });
@@ -928,9 +973,8 @@ describe('useStages', () => {
 
         expect(mockPost).toHaveBeenCalledWith(`/sessions/${sessionId}/strategies/ready`);
         expect(queryClient.getQueryData<any>(stageKeys.strategies(sessionId))?.myReadyToRank).toBe(true);
-        expect(
-          queryClient.getQueryData<any>(stageKeys.progress(sessionId))?.myProgress.gatesSatisfied.readyToRank
-        ).toBe(true);
+        // Readiness is not a milestone: the progress cache is left alone.
+        expect(queryClient.getQueryData<any>(stageKeys.progress(sessionId))?.myProgress.milestones).toEqual({});
       });
 
       it('submits strategy rankings', async () => {
@@ -978,12 +1022,12 @@ describe('useStages', () => {
             status: StageStatus.IN_PROGRESS,
             startedAt: '2026-05-05T00:00:00.000Z',
             completedAt: null,
-            gatesSatisfied: { readyToRank: true },
+            milestones: {},
           },
           partnerProgress: {
             stage: Stage.STRATEGIC_REPAIR,
             status: StageStatus.IN_PROGRESS,
-            gatesSatisfied: { readyToRank: true },
+            milestones: {},
           },
           canAdvance: false,
         });
@@ -1001,9 +1045,8 @@ describe('useStages', () => {
 
         expect(queryClient.getQueryData<any>(stageKeys.strategies(sessionId))?.phase)
           .toBe(StrategyPhase.REVEALING);
-        expect(
-          queryClient.getQueryData<any>(stageKeys.progress(sessionId))?.myProgress.gatesSatisfied.rankingSubmitted
-        ).toBe(true);
+        // Ranking has no milestone on the target: the progress cache is left alone.
+        expect(queryClient.getQueryData<any>(stageKeys.progress(sessionId))?.myProgress.milestones).toEqual({});
       });
     });
 

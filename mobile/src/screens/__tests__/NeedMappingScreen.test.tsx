@@ -116,16 +116,17 @@ type NeedsComparisonType = {
 };
 
 // Mock hooks - these will be overridden per test
-let mockNeedsData: { needs: NeedsType; synthesizedAt: string; isDirty: boolean } = {
+let mockNeedsData: { needs: NeedsType; synthesizedAt: string; isDirty: boolean; sharedAt: string | null } = {
   needs: [],
   synthesizedAt: '',
   isDirty: false,
+  sharedAt: null,
 };
 let mockNeedsComparisonData: NeedsComparisonType | undefined;
 let mockMessagesData = { messages: mockMessages };
 let mockProgressData: {
-  myProgress: { stage: Stage; status: StageStatus; gatesSatisfied?: Record<string, unknown> };
-  partnerProgress: { stage: Stage; status: StageStatus; gatesSatisfied?: Record<string, unknown> };
+  myProgress: { stage: Stage; status: StageStatus; milestones?: Record<string, string> };
+  partnerProgress: { stage: Stage; status: StageStatus; milestones?: Record<string, string> };
 } = {
   myProgress: { stage: Stage.NEED_MAPPING, status: StageStatus.IN_PROGRESS },
   partnerProgress: { stage: Stage.NEED_MAPPING, status: StageStatus.IN_PROGRESS },
@@ -196,7 +197,7 @@ describe('NeedMappingScreen', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     // Reset to defaults - exploration phase (no needs yet)
-    mockNeedsData = { needs: [], synthesizedAt: '', isDirty: false };
+    mockNeedsData = { needs: [], synthesizedAt: '', isDirty: false, sharedAt: null };
     mockNeedsComparisonData = undefined;
     mockMessagesData = { messages: mockMessages };
     mockProgressData = {
@@ -233,6 +234,7 @@ describe('NeedMappingScreen', () => {
         needs: mockNeedsUnconfirmed,
         synthesizedAt: new Date().toISOString(),
         isDirty: false,
+        sharedAt: null,
       };
     });
 
@@ -315,12 +317,13 @@ describe('NeedMappingScreen', () => {
         needs: mockNeedsUnconfirmed.map((need) => ({ ...need, confirmed: true })),
         synthesizedAt: new Date().toISOString(),
         isDirty: false,
+        // The caller's own share (need_share) — not the session-scoped needs_shared milestone.
+        sharedAt: new Date().toISOString(),
       };
       mockProgressData = {
         myProgress: {
           stage: Stage.NEED_MAPPING,
           status: StageStatus.IN_PROGRESS,
-          gatesSatisfied: { needsShared: true },
         },
         partnerProgress: { stage: Stage.NEED_MAPPING, status: StageStatus.IN_PROGRESS },
       };

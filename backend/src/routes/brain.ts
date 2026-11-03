@@ -1137,7 +1137,7 @@ router.get('/sessions/:sessionId/context', async (req, res) => {
               },
               stageContext: {
                 stage: 0,
-                gatesSatisfied: {},
+                milestones: {},
               },
               userName: innerWorkSession.user.name || 'Unknown',
               intent: {

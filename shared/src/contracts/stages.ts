@@ -75,7 +75,6 @@ export const feelHeardResponseSchema = z.object({
   confirmedAt: z.string().datetime().nullable(),
   canAdvance: z.boolean(),
   partnerCompleted: z.boolean(),
-  finalEmotionalReading: z.number().int().min(1).max(10).nullable().optional(),
 });
 
 export type FeelHeardResponseInput = z.infer<typeof feelHeardResponseSchema>;

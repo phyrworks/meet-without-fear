@@ -16,9 +16,10 @@
 
 import type { KnownLeak } from '../privacy';
 import {
+  DEFAULT_MILESTONE_MASK,
   READ_DTO_RULES,
+  milestoneMapMask,
   TARGET_COMPACT_SIGNED_MASK,
-  TARGET_FEEL_HEARD_MASK,
   TARGET_USER_NAME_RULE,
   empathySubmittedMilestone,
   targetByteRules,
@@ -155,52 +156,10 @@ export const NEEDS_STEPS = {
 function stage3FixtureDeltas(): AllowRule[] {
   const S = NEEDS_STEPS;
   return [
-    TARGET_FEEL_HEARD_MASK,
-    {
-      kind: 'mayBeAbsent',
-      keys: ['needsIdentified', 'needsIdentifiedAt'],
-      at: [
-        `steps.${S.state.none}.body.data.progress.myProgress.gatesSatisfied`,
-        `steps.${S.state.bobShared}.body.data.progress.myProgress.gatesSatisfied`,
-        ...[S.progress.none, S.progress.bobShared].flatMap(n => [
-          `steps.${n}.body.data.myProgress.gatesSatisfied`,
-          `steps.${n}.body.data.partnerProgress.gatesSatisfied`,
-        ]),
-      ],
-      mustMatch: true,
-      why:
-        'current-shape.ts GATE_ENCODING: the fixtures spelled the needs_confirmed gate `needsIdentified` (production ' +
-        'and the stage shim: `needsConfirmed`). The target stores the milestone; the shim names it needsConfirmed.',
-    },
-    {
-      kind: 'addedKeys',
-      keys: ['needsConfirmed', 'needsConfirmedAt'],
-      at: [
-        `steps.${S.state.none}.body.data.progress.myProgress.gatesSatisfied`,
-        `steps.${S.state.bobShared}.body.data.progress.myProgress.gatesSatisfied`,
-        ...[S.progress.none, S.progress.bobShared].flatMap(n => [
-          `steps.${n}.body.data.myProgress.gatesSatisfied`,
-          `steps.${n}.body.data.partnerProgress.gatesSatisfied`,
-        ]),
-      ],
-      mustMatch: true,
-      why: 'the same gate under its production key (stage shim gatesFor(3)); the test asserts the instant is needs_confirmed.reached_at.',
-    },
-    {
-      kind: 'mayDiffer',
-      at: [
-        `steps.${S.state.bothAda}.body.data.progress.myProgress.gatesSatisfied`,
-        `steps.${S.state.bothBob}.body.data.progress.myProgress.gatesSatisfied`,
-        ...[S.progress.bothAda, S.progress.bothBob].flatMap(n => [
-          `steps.${n}.body.data.myProgress.gatesSatisfied`,
-          `steps.${n}.body.data.partnerProgress.gatesSatisfied`,
-        ]),
-      ],
-      mustMatch: true,
-      why:
-        'after both shares the participants are in stage 4. The old share created the stage-4 StageProgress rows with ' +
-        'no gates (null); the target derives a stage’s gates from its milestones (stage shim) — {} until choices_shared.',
-    },
+    // work-keq6: the fixture's stage-3 gate spelling (`needsIdentified`), the
+    // stage-1 gate without its instant and the stage-4 null gates were rules on
+    // gatesSatisfied / milestones.feelHeardConfirmedAt — both are gone from
+    // the DTO (MILESTONE_DTO_RULES); targetMilestoneChecks asserts the maps.
     {
       kind: 'mayDiffer',
       at: [
@@ -225,13 +184,8 @@ function stage3FixtureDeltas(): AllowRule[] {
 function r33NeedsSharedForAll(): AllowRule[] {
   const S = NEEDS_STEPS;
   return [
-    {
-      kind: 'mayBeAbsent',
-      keys: ['needsShared', 'sharedAt'],
-      at: `steps.${S.progress.bobShared}.body.data.partnerProgress.gatesSatisfied`,
-      mustMatch: true,
-      why: 'R33: Bob has shared, but needs_shared is reached by both only once Ada has shared too.',
-    },
+    // R33 on Ada's progress read: Bob's needs_shared is absent from his map
+    // until Ada shares (targetMilestoneChecks asserts the exact map).
     {
       kind: 'mayDiffer',
       at: [
@@ -297,7 +251,19 @@ function initialFixtureDeltas(): AllowRule[] {
 }
 
 const SHARED_RULES = (concept: boolean): AllowRule[] => [
-  ...READ_DTO_RULES,
+  ...READ_DTO_RULES.filter(r => r !== DEFAULT_MILESTONE_MASK),
+  // work-keq6: in stage 3 needs_confirmed stays ranked — the old stage-3 gate
+  // JSON carried its instant; in stage 4 (after both shares) the old gates
+  // were empty, so every milestone instant is masked there.
+  milestoneMapMask([], {
+    steps: [
+      NEEDS_STEPS.state.bothAda,
+      NEEDS_STEPS.state.bothBob,
+      NEEDS_STEPS.progress.bothAda,
+      NEEDS_STEPS.progress.bothBob,
+    ],
+  }),
+  milestoneMapMask(['needs_confirmed']),
   TARGET_USER_NAME_RULE,
   TARGET_COMPACT_SIGNED_MASK,
   ...stage3FixtureDeltas(),

@@ -1,5 +1,26 @@
 import type { ContextBundle } from './context-assembler';
 
+/**
+ * Issue #312 consent gate: the partner's needs count as revealed only in
+ * Stage 3, once the prompt owner's `needs_shared` milestone exists.
+ *
+ * `needs_shared` is session-scoped (ruling R33): the job writes it for every
+ * participant only when ALL present humans have shared, so the owner's own
+ * row means "both lists are visible". The gate is open in Stage 3 ONLY — the
+ * old per-stage gate JSON carried `needsShared` on the Stage 3 row alone, so
+ * in Stage 4 the "Partner → …" summary line and the POST-REVEAL block were
+ * hidden (owner decision 2026-11-03: keep that). In Stage 4 the summary's
+ * `partnerNeeds` is the summarizer's extraction from the owner's OWN
+ * conversation (possibly guesses — the #312 misattribution), so it must not
+ * be presented as the partner's. work-gaz4 will inject the partner's real
+ * shared needs (v_need_shared) in Stage 4 instead.
+ */
+export function needsRevealed(
+  stageContext: Pick<ContextBundle['stageContext'], 'stage' | 'milestones'> | undefined,
+): boolean {
+  return stageContext?.stage === 3 && stageContext.milestones.needs_shared !== undefined;
+}
+
 export interface ContextFormattingOptions {
   sharedContentHistory?: string | null;
   milestoneContext?: string | null;
@@ -180,8 +201,7 @@ export function formatContextForPrompt(bundle: ContextBundle, options?: ContextF
       // Without this guard the AI sees the summarizer's "partnerNeeds" (which
       // may just be the user's empathy *guesses*) and presents them as if the
       // partner actually said them — a critical consent violation (issue #312).
-      const partnerNeedsShared = bundle.stageContext?.gatesSatisfied?.needsShared === true;
-      if (partnerNeedsShared) {
+      if (needsRevealed(bundle.stageContext)) {
         const partnerNeeds = bundle.sessionSummary.partnerNeeds?.length
           ? bundle.sessionSummary.partnerNeeds.join('; ')
           : 'Not yet named';

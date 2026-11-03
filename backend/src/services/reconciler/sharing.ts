@@ -142,7 +142,7 @@ export async function generatePostShareContinuation(
       sessionDurationMinutes: 0,
     },
     emotionalThread: { initialIntensity: 5, currentIntensity: 5, trend: 'stable' as const, notableShifts: [] },
-    stageContext: { stage: currentStage, gatesSatisfied: {} },
+    stageContext: { stage: currentStage, milestones: {} },
     userName: subjectName,
     partnerName,
     intent: {

@@ -45,6 +45,7 @@ import {
 import {
   completeNeedsSharingIfReady,
   listSharedNeeds,
+  ownSharedAt,
   participantsWhoShared,
   shareNeeds,
 } from '../services/needs-share';
@@ -188,8 +189,12 @@ export async function getNeeds(req: Request, res: Response): Promise<void> {
       errorResponse(res, 'NOT_FOUND', 'Session not found', 404);
       return;
     }
+    // `sharedAt` is the caller's own fact (need_share) and does not depend on
+    // the session's status: "I shared" must not flip false when the session
+    // stops being ACTIVE (work-keq6 review). Only the needs list is withheld.
+    const sharedAt = (await ownSharedAt(req.params.id, ctx.participant.id))?.toISOString() ?? null;
     if (ctx.sessionStatus !== 'ACTIVE' || ctx.stage < 3) {
-      successResponse(res, { needs: [], synthesizedAt: null, isDirty: false });
+      successResponse(res, { needs: [], synthesizedAt: null, isDirty: false, sharedAt });
       return;
     }
     const needs = await listOwnNeeds(ctx.participant.id);
@@ -197,6 +202,7 @@ export async function getNeeds(req: Request, res: Response): Promise<void> {
       needs: needs.map(need => toIdentifiedNeedDTO(need)),
       extracting: false,
       synthesizedAt: needs[0]?.createdAt.toISOString() ?? null,
+      sharedAt,
     });
   } catch (error) {
     logger.error('[getNeeds] Error:', error);

@@ -3,7 +3,9 @@
  * Stage 3, needs confirmed, neither shared): the Stage 3 reveal gate. A "ready to
  * see the lists" turn is answered with canned gate text written by the job,
  * never the model, never partner prose; it advances with the caller's own needs
- * and milestones and the partner's S-class needs_shared milestone only.
+ * and milestones, and who has shared (need_share — work-keq6: not the
+ * needs_shared milestone, which is session-scoped and written for everyone
+ * only once all have shared, R33).
  *
  * Replaces resolveStage3GateTurn / saveAiTurnMessage / cleanupFailedStreamTurn
  * in the Prisma-mock suite services/__tests__/stream-turn-persistence.test.ts
@@ -125,7 +127,7 @@ describeTarget('the Stage 3 reveal gate on the target (mwf_app, the gate reply b
     }
   });
 
-  it('the gate advances through own needs, own confirmation, own share, then the partner\u2019s share', async () => {
+  it('the gate advances through own needs, own confirmation, then own share (wait for the partner)', async () => {
     const ms = (pid: string, key: string) =>
       run.sql(
         `INSERT INTO participant_milestone (participant_id, milestone_key) VALUES ($1, $2) ON CONFLICT DO NOTHING`,
@@ -144,14 +146,49 @@ describeTarget('the Stage 3 reveal gate on the target (mwf_app, the gate reply b
     await run.sql(`UPDATE need SET confirmed_at = now() WHERE participant_id = $1`, [ids.ada]);
     await ms(ids.ada, 'needs_confirmed');
     await gateTurn('you can choose to share them');
+
+    // work-keq6: Ada shares, Bob has not. need_share exists, needs_shared does
+    // not (R33), so Ada is still in Stage 3 and the gate tells her to wait —
+    // the branch the old needs_shared-keyed check could never reach.
+    const live = await run.sql<{ id: string }>(
+      `SELECT id FROM need WHERE participant_id = $1 AND deleted_at IS NULL AND superseded_by_need_id IS NULL`,
+      [ids.ada],
+    );
+    const as = (r: import('supertest').Test) =>
+      r.set('x-e2e-user-id', ids.adaUser).set('x-e2e-user-email', 'ada@e2e.test');
+    const consent = await as(request(app).post(`/api/v1/sessions/${ids.session}/needs/consent`)).send({
+      needIds: live.map(n => n.id),
+    });
+    expect(consent.status).toBe(200);
+    expect(consent.body.data).toMatchObject({ consented: true, waitingForPartner: true, needsRevealReady: false });
+    expect(await run.sql(`SELECT 1 FROM participant_milestone WHERE milestone_key = 'needs_shared'`)).toEqual([]);
+    const [share] = await run.sql<{ at: Date }>(
+      `SELECT min(shared_at) AS at FROM need_share WHERE participant_id = $1`,
+      [ids.ada],
+    );
+    const needs = await as(request(app).get(`/api/v1/sessions/${ids.session}/needs`));
+    expect(needs.body.data.sharedAt).toBe(new Date(share.at).toISOString());
+    const progress = await as(request(app).get(`/api/v1/sessions/${ids.session}/progress`));
+    expect(progress.body.data.myProgress).toMatchObject({ stage: 3 });
+    expect(progress.body.data.myProgress.milestones).not.toHaveProperty('needs_shared');
+    await gateTurn("We'll wait until your partner has shared theirs");
+
+    // "I shared" does not depend on the session's status: outside ACTIVE the
+    // needs list is withheld, the caller's own sharedAt is not (review round 1).
+    const [{ status }] = await run.sql<{ status: string }>(`SELECT status::text AS status FROM session WHERE id = $1`, [
+      ids.session,
+    ]);
+    await run.sql(`UPDATE session SET status = 'ABANDONED' WHERE id = $1`, [ids.session]);
+    const inactive = await as(request(app).get(`/api/v1/sessions/${ids.session}/needs`));
+    expect(inactive.body.data).toMatchObject({ needs: [], sharedAt: new Date(share.at).toISOString() });
+    await run.sql(`UPDATE session SET status = $2::session_status WHERE id = $1`, [ids.session, status]);
   });
 
   it('PINNED (stage shim, work-yk0q): own needs_shared is Stage 3’s terminal milestone, so the caller is in Stage 4 and the gate no longer answers', async () => {
-    // The "wait for your partner" / "both lists ready" branches of
-    // getStage3GateResponse are unreachable on the target: the stage shim
-    // (TERMINAL_MILESTONE) ends the caller's Stage 3 at their own needs_shared.
-    // Filed as work-yk0q (stage shim): when the shim ends Stage 3 at both-shared, this pin must
-    // flip to asserting the gate's "wait for your partner" answer.
+    // needs_shared ends Stage 3 (TERMINAL_MILESTONE); the job writes it for
+    // everyone at the last share, so the "both lists ready" branch of
+    // getStage3GateResponse stays unreachable. ("Wait for your partner" is
+    // reachable since work-keq6 keyed "shared" on need_share: asserted above.)
     await run.sql(
       `INSERT INTO participant_milestone (participant_id, milestone_key) VALUES ($1, 'needs_shared') ON CONFLICT DO NOTHING`,
       [ids.ada],

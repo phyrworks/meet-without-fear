@@ -32,6 +32,13 @@ export interface GetNeedsResponse {
   synthesizedAt: string | null;
   extracting?: boolean; // True if AI extraction is currently in progress
   isDirty?: boolean; // True if content changed since synthesis
+  /**
+   * When the caller shared their needs (earliest live need_share of theirs),
+   * null before they share. This is the per-participant "I shared" fact: the
+   * `needs_shared` milestone is session-scoped and is reached by everyone only
+   * once ALL have shared (ruling R33), so it cannot say "I shared, waiting".
+   */
+  sharedAt: string | null;
 }
 
 // ============================================================================

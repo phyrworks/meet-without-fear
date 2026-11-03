@@ -2,23 +2,130 @@
  * Allow-list rules every TS-5 privacy scenario carries, because each one
  * reads DTOs the target changes for reasons unrelated to the scenario.
  *
- * They restate `session-read`'s two DTO rules (plan §4 "Golden harness" row)
- * without `mustMatch`: a scenario's reads may or may not include a body with
- * `gatesSatisfied` or a consent DTO, and the rule must not go vacuous-fails
- * where it simply has nothing to match.
+ * They restate `session-read`'s DTO rules (plan §4 "Golden harness" row)
+ * without `mustMatch`: a scenario's reads may or may not include a progress
+ * body or a consent DTO, and the rule must not go vacuous-fails where it simply
+ * has nothing to match.
  */
 
+import { MILESTONE_KEYS, type MilestoneKey } from '@meet-without-fear/shared';
 import type { AddedEntriesRule, AllowRule, ChangesMappedRule, ReplacedEntryRule } from './types';
 
-export const READ_DTO_RULES: AllowRule[] = [
+/** Where a progress DTO sits: GET /progress (`data.*Progress`) and GET /state (`data.progress.*Progress`). */
+const PROGRESS_AT = [
+  'steps.*.body.data.myProgress',
+  'steps.*.body.data.partnerProgress',
+  'steps.*.body.data.progress.myProgress',
+  'steps.*.body.data.progress.partnerProgress',
+];
+/** Where the old hand-built `milestones` object sat (GET /progress `data`, GET /state `data.progress`). */
+const PROGRESS_TOP_AT = ['steps.*.body.data', 'steps.*.body.data.progress'];
+
+/**
+ * work-keq6 (owner decision 2026-11-03, single source of truth): the progress
+ * DTOs drop `gatesSatisfied` and carry `milestones` (participant_milestone,
+ * key → reachedAt). The comparator can only admit the new key; its VALUE is
+ * asserted by `targetMilestoneChecks` (scenario-checks.ts) against the run
+ * database: the reader's own map is exactly their milestones reached by the
+ * step, the partner's exactly theirs ∩ PARTNER_VISIBLE_BY_STAGE (a literal copy) of the
+ * partner's stage (never wider than the old partner gates).
+ */
+export const MILESTONE_DTO_RULES: AllowRule[] = [
   {
     kind: 'absentKeys',
-    at: 'steps.*.body.**.gatesSatisfied',
-    keys: ['feelHeardCheckOffered', 'readyToRank', 'rankingSubmitted', 'finalEmotionalReading'],
+    at: PROGRESS_AT,
+    keys: ['gatesSatisfied'],
     why:
-      'plan §3 step 7: feelHeardCheckOffered (AI hint) and finalEmotionalReading (always null) are dropped; ' +
-      'readyToRank/rankingSubmitted are dropped with ranking. gatesSatisfied becomes derived from participant_milestone.',
+      'work-keq6: gatesSatisfied (a JSON of flags the target never stored; the shim derived it) is removed — every ' +
+      'consumer reads the milestones map. Its four step-7 dropped keys go with it.',
   },
+  {
+    kind: 'addedKeys',
+    at: PROGRESS_AT,
+    keys: ['milestones'],
+    why:
+      'work-keq6: the participant_milestone map replaces gatesSatisfied; the values are asserted by ' +
+      'targetMilestoneChecks (own = reached by the step; partner = reached ∩ the old partner-gate keys).',
+  },
+  {
+    kind: 'absentKeys',
+    at: PROGRESS_TOP_AT,
+    keys: ['milestones'],
+    why:
+      'work-keq6: the hand-built milestones object goes — feelHeardConfirmedAt is myProgress.milestones.feel_heard, ' +
+      'needsIdentifiedAt is needs_confirmed, commonGroundFoundAt was always null; witnessStartedAt moves up a level.',
+  },
+  {
+    kind: 'addedKeys',
+    at: PROGRESS_TOP_AT,
+    keys: ['witnessStartedAt'],
+    why:
+      'work-keq6: the stage-1 start (not one milestone: the later of compact_signed and invitation_sent), the old ' +
+      'milestones.witnessStartedAt; asserted by targetMilestoneChecks.',
+  },
+];
+
+/**
+ * work-keq6: GET /needs gains `sharedAt`, the caller's own share instant
+ * (need_share) — the per-participant "I shared" fact the session-scoped
+ * needs_shared milestone cannot carry (R33). Asserted by targetMilestoneChecks
+ * (each `needs as <reader>` step: the reader's earliest live share by the
+ * step's end, or null). Only GET /needs adds the key at `data`.
+ */
+export const NEEDS_SHARED_AT_RULE: AllowRule = {
+  kind: 'addedKeys',
+  at: 'steps.*.body.data',
+  keys: ['sharedAt'],
+  why:
+    'work-keq6: GET /needs sharedAt is the caller’s own share (need_share); needs_shared is session-scoped (R33). ' +
+    'Asserted by targetMilestoneChecks.',
+};
+
+/**
+ * work-keq6: the milestones maps' instants, masked to null before
+ * normalisation. A map holds instants the step's body never held (other
+ * stages' milestones), and a new instant renumbers every later `<ts:N>` of the
+ * step. `rank` names keys left ranked: the instants the old gate JSON carried
+ * in the scenario (their removal would renumber the step the other way).
+ * `steps` restricts the rule to those step indexes and `only` masks just those
+ * keys there. A mask can only mask, never protect, so a key ranked at some
+ * steps is left out of the general rule and masked by a step-pinned `only`
+ * rule at the others. Paired with `targetMilestoneChecks`, which asserts every
+ * raw value.
+ */
+export function milestoneMapMask(
+  rank: readonly MilestoneKey[] = [],
+  opts: { steps?: number[]; only?: readonly MilestoneKey[] } = {},
+): AllowRule {
+  const masked = opts.only ? [...opts.only] : MILESTONE_KEYS.filter(k => !rank.includes(k));
+  const at = opts.steps
+    ? opts.steps.flatMap(n => PROGRESS_AT.map(p => p.replace('steps.*.', `steps.${n}.`)))
+    : PROGRESS_AT;
+  return {
+    kind: 'fixtureMask',
+    // The partner's invitation_sent is `true`, not an instant (PartnerMilestoneMap): never masked.
+    at: at.flatMap(p =>
+      masked.filter(k => !(p.endsWith('partnerProgress') && k === 'invitation_sent')).map(k => `${p}.milestones.${k}`),
+    ),
+    expect: 'isoTimestamp',
+    baseline: null,
+    why:
+      'work-keq6: milestone instants the baseline body never held would renumber the step’s ranks; the raw values ' +
+      'are asserted by targetMilestoneChecks.',
+  };
+}
+
+/**
+ * Every milestone instant masked: the default, for scenarios whose old gate
+ * JSON carried no instant on the progress reads. A scenario that must keep a
+ * key ranked drops it from READ_DTO_RULES and lists its own masks.
+ */
+export const DEFAULT_MILESTONE_MASK: AllowRule = milestoneMapMask();
+
+export const READ_DTO_RULES: AllowRule[] = [
+  ...MILESTONE_DTO_RULES,
+  NEEDS_SHARED_AT_RULE,
+  DEFAULT_MILESTONE_MASK,
   // --- tiedOrder (fix round 3): endpoints that sort on ONE timestamp ---------
   // Audit of every TS-5 response array whose rows one request can write:
   {
@@ -363,27 +470,6 @@ export const TARGET_COMPACT_SIGNED_MASK: AllowRule = {
   why:
     "TS-9 session-read rule 1: the fixture's compact gate key (`compactSignedAt`) is not the app's (`signedAt`); " +
     'the target holds participant_milestone compact_signed.reached_at and the shim returns it.',
-};
-
-/**
- * TS-11 post-merge, the Stage 3/4 fixtures' stage-1 gate: the current-shape
- * fixture wrote `feelHeardConfirmed` without its instant (gatesToJson writes
- * the gate value only), so today's DTO says null; the target holds
- * feel_heard.reached_at and the shim returns it. A new instant renumbers every
- * later <ts:N> of the step, so it is masked; paired with a scenario assertion
- * that the raw value is the reader's feel_heard instant.
- */
-export const TARGET_FEEL_HEARD_MASK: AllowRule = {
-  kind: 'fixtureMask',
-  at: [
-    'steps.*.body.data.milestones.feelHeardConfirmedAt',
-    'steps.*.body.data.progress.milestones.feelHeardConfirmedAt',
-  ],
-  expect: 'isoTimestamp',
-  baseline: null,
-  why:
-    'the current-shape fixture wrote the stage-1 gate `feelHeardConfirmed` without its instant; the target holds ' +
-    'feel_heard.reached_at and the shim returns it (masked: a new instant renumbers the step’s later ranks).',
 };
 
 /**

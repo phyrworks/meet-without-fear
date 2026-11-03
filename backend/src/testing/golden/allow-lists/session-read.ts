@@ -3,19 +3,20 @@
  * (`__golden__/session-read.concept.json`).
  *
  * Plan §4, "Golden harness" row: identical, except
- *  - `StageProgressDetailDTO.gatesSatisfied` is derived from
- *    `participant_milestone` in the target, and the four keys the step-7 key
- *    table drops are asserted ABSENT; every other key is asserted equal.
+ *  - work-keq6: the progress DTOs drop `gatesSatisfied` and the hand-built
+ *    `milestones` object and carry a participant_milestone map per
+ *    participant plus `witnessStartedAt` (MILESTONE_DTO_RULES; the only
+ *    `addedKeys`, values asserted by targetMilestoneChecks);
  *  - `ConsentRecordDTO.targetType` narrows to the target's five consent
  *    targets, so its values are asserted ⊆ the baseline's.
- * Nothing may be added anywhere: there is no `addedKeys` rule.
- *
- * On the current shape both rules are satisfied trivially: FEEL_HEARD_B's
- * `gatesSatisfied` bodies are `{}` (none of the four keys), and no consent DTO
- * appears in this scenario's bodies.
  */
 
-import { TARGET_TOPIC_FRAME_INITIAL_RULES, TARGET_TOPIC_FRAME_RULES } from './common';
+import {
+  MILESTONE_DTO_RULES,
+  milestoneMapMask,
+  TARGET_TOPIC_FRAME_INITIAL_RULES,
+  TARGET_TOPIC_FRAME_RULES,
+} from './common';
 import type { AllowList } from './types';
 
 export const SESSION_READ_ALLOW: AllowList = {
@@ -23,17 +24,9 @@ export const SESSION_READ_ALLOW: AllowList = {
   rules: [
     ...TARGET_TOPIC_FRAME_RULES,
     ...TARGET_TOPIC_FRAME_INITIAL_RULES,
-    {
-      kind: 'absentKeys',
-      at: 'steps.*.body.**.gatesSatisfied',
-      keys: ['feelHeardCheckOffered', 'readyToRank', 'rankingSubmitted', 'finalEmotionalReading'],
-      // `session state` returns `progress.myProgress.gatesSatisfied` for both
-      // actors today. If the DTO moves, this rule must move with it.
-      mustMatch: true,
-      why:
-        'plan §3 step 7: feelHeardCheckOffered (AI hint) and finalEmotionalReading (always null) are dropped; ' +
-        'readyToRank/rankingSubmitted are dropped with ranking. gatesSatisfied becomes derived from participant_milestone.',
-    },
+    // `session state` returns progress for both actors: the rules must match.
+    ...MILESTONE_DTO_RULES.map(r => ({ ...r, mustMatch: true })),
+    milestoneMapMask(),
     {
       kind: 'valuesSubset',
       // The brief names `ConsentRecordDTO.targetType`; the shared DTO field is

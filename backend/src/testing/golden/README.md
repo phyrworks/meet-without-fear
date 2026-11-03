@@ -318,6 +318,22 @@ developer's database while the job writes the run database. Import such modules 
 Hazard found: the trace classifies a statement by its first line; a `$queryRaw` template that
 opens with a newline is traced as `other`. Start raw SQL on the template's first line.
 
+### work-keq6: progress is the milestones map
+
+The progress DTOs dropped `gatesSatisfied` and the hand-built `milestones`
+object (owner decision 2026-11-03, single source of truth). The baselines stay
+as recorded; the allow-lists carry the change:
+
+| Piece | What it does |
+|---|---|
+| `MILESTONE_DTO_RULES` (common.ts, in `READ_DTO_RULES`; session-read `mustMatch`) | `gatesSatisfied` absent and `milestones` added at every `myProgress`/`partnerProgress`; the old `data[.progress].milestones` absent and `witnessStartedAt` added there. |
+| `NEEDS_SHARED_AT_RULE` | GET /needs gains `sharedAt` (the caller's own share; `needs_shared` is session-scoped, R33). |
+| `milestoneMapMask` / `DEFAULT_MILESTONE_MASK` | The maps' instants masked to null before normalisation: a map holds instants the old body never held, and a new instant renumbers every later `<ts:N>` of the step. A scenario whose old body DID hold some of them (its gate JSON's instant, `milestones.needsIdentifiedAt` on GET /progress) keeps those keys ranked — needs-hidden (`needs_confirmed` in stage 3), choices-hidden and tombstone (`choices_shared`, …). A mask can only mask, never protect: a key ranked at some steps is left out of the general rule and masked at the others by a step-pinned `only` rule. |
+| `targetMilestoneChecks` (scenario-checks.ts, inside `targetFixtureDeltaChecks`) | The pair: every raw `myProgress.milestones` is exactly the reader's participant_milestone rows reached by the step's end; every `partnerProgress.milestones` exactly the partner's ∩ `PARTNER_VISIBLE_BY_STAGE` — a LITERAL copy of the old partner-gate table, never imported from production (stage-shim.test pins the production constant to it) — of the partner's stage, with `invitation_sent` as `true` (never wider than the old partner gates); `witnessStartedAt` the reader's stage-0 completion; GET /needs `sharedAt` the reader's earliest live share (null on the empty answer). |
+
+`concept-views/current-shape.sql` keeps its `gatesSatisfied` mapping: it projects the OLD tables, where
+`StageProgress.gatesSatisfied` is the stored column.
+
 ## Four hazards found by running it, not by reading
 
 **`node-postgres` and naive timestamps.** All 144 timestamp columns are

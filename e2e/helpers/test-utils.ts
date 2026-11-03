@@ -6,6 +6,7 @@
 
 import { Page, Browser, BrowserContext, devices, expect } from '@playwright/test';
 import { getE2EHeaders } from './auth';
+import type { MilestoneKey } from '@meet-without-fear/shared';
 
 interface ApiResponseLike {
   ok(): boolean;
@@ -29,7 +30,8 @@ interface ProgressResponseDTO {
     myProgress?: {
       stage?: number;
       status?: string;
-      gatesSatisfied?: Record<string, unknown> | null;
+      /** participant_milestone: milestone key → reachedAt ISO (shared MilestoneMap). */
+      milestones?: Partial<Record<MilestoneKey, string>>;
     };
   };
 }
@@ -37,6 +39,8 @@ interface ProgressResponseDTO {
 interface NeedsResponseDTO {
   data?: {
     needs?: NeedDTO[];
+    /** When the caller shared their needs (need_share), null before. */
+    sharedAt?: string | null;
   };
 }
 
@@ -546,7 +550,33 @@ export async function confirmNeedsSummaryAndConsent(
   });
   await page.getByTestId('needs-drawer-send').click();
 
-  await waitForProgressGate(api, apiBaseUrl, sessionId, 'needsShared', label, timeout);
+  // Wait for THIS participant's share to land (GET /needs sharedAt). Not the
+  // needs_shared milestone: it is session-scoped and the job writes it for
+  // everyone only once ALL have shared (R33), so the first sharer never sees
+  // it here (work-keq6 root cause).
+  await waitForOwnNeedsShared(api, apiBaseUrl, sessionId, label, timeout);
+}
+
+async function waitForOwnNeedsShared(
+  api: E2EApiClient,
+  apiBaseUrl: string,
+  sessionId: string,
+  label: string,
+  timeout: number
+): Promise<void> {
+  const deadline = Date.now() + timeout;
+
+  while (Date.now() < deadline) {
+    const response = await api.get(`${apiBaseUrl}/api/sessions/${sessionId}/needs`);
+    const data = await readJson<NeedsResponseDTO>(response, `${label} needs`);
+    if (data.data?.sharedAt) {
+      return;
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+  }
+
+  throw new Error(`${label} needs share was not recorded within ${timeout}ms`);
 }
 
 /**
@@ -570,6 +600,9 @@ export async function waitForNeedsReveal(
     lastPartnerCount = data.data?.partnerNeeds?.length ?? 0;
 
     if (lastMyCount > 0 && lastPartnerCount > 0) {
+      // Both lists are visible, so everyone has shared: the session-scoped
+      // needs_shared milestone must be in this participant's progress.
+      await waitForMilestone(api, apiBaseUrl, sessionId, 'needs_shared', label, Math.max(deadline - Date.now(), 5000));
       return;
     }
 
@@ -649,28 +682,29 @@ export async function waitForStage(
   throw new Error(`${label} did not reach stage ${expectedStage} within ${timeout}ms (last: stage ${lastStage}, status ${lastStatus})`);
 }
 
-async function waitForProgressGate(
+/**
+ * Wait until the current user's progress carries a reached milestone
+ * (GET /progress myProgress.milestones, straight from participant_milestone).
+ */
+export async function waitForMilestone(
   api: E2EApiClient,
   apiBaseUrl: string,
   sessionId: string,
-  gate: string,
+  milestone: MilestoneKey,
   label: string,
-  timeout: number
+  timeout = 30000
 ): Promise<void> {
   const deadline = Date.now() + timeout;
 
   while (Date.now() < deadline) {
     const response = await api.get(`${apiBaseUrl}/api/sessions/${sessionId}/progress`);
     const data = await readJson<ProgressResponseDTO>(response, `${label} progress`);
-    const stage = data.data?.myProgress?.stage;
-    const gates = data.data?.myProgress?.gatesSatisfied ?? {};
-
-    if (gates[gate] === true || (gate === 'needsShared' && stage !== undefined && stage > 3)) {
+    if (data.data?.myProgress?.milestones?.[milestone]) {
       return;
     }
 
     await new Promise((resolve) => setTimeout(resolve, 1000));
   }
 
-  throw new Error(`${label} progress gate '${gate}' was not satisfied within ${timeout}ms`);
+  throw new Error(`${label} milestone '${milestone}' was not reached within ${timeout}ms`);
 }

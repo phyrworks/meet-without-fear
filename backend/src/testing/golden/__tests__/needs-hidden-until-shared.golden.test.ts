@@ -256,41 +256,33 @@ describe(`golden: ${SCENARIO}`, () => {
         for (const n of Object.values(NEEDS_STAGE4_READ_STEPS)) expect(steps[n].label).toMatch(/: stage4 as /);
       });
 
-      it("feelHeardConfirmedAt is the reader's feel_heard instant; the needs gate is needsConfirmed at needs_confirmed", async () => {
+      // work-keq6: the progress maps themselves (every step) are asserted by
+      // targetMilestoneChecks; these pin the facts the old gate rules named.
+      it('progress carries feel_heard and needs_confirmed as milestones; Bob’s needs_shared only after Ada shared', async () => {
         const ms = await milestones();
         const at = (email: string, key: string) => iso(ms.find(m => m.email === email && m.key === key)?.at);
         for (const n of [NEEDS_STEPS.state.none, NEEDS_STEPS.state.bobShared]) {
-          const d = body(n);
-          expect(d.progress.milestones.feelHeardConfirmedAt).toBe(at('ada@e2e.test', 'feel_heard'));
-          expect(d.progress.myProgress.gatesSatisfied).toEqual({
-            needsConfirmed: true,
-            needsConfirmedAt: at('ada@e2e.test', 'needs_confirmed'),
-          });
+          const mine = body(n).progress.myProgress.milestones;
+          expect(mine.feel_heard).toBe(at('ada@e2e.test', 'feel_heard'));
+          expect(mine.needs_confirmed).toBe(at('ada@e2e.test', 'needs_confirmed'));
+          expect(mine.needs_shared).toBeUndefined();
+          expect(body(n).progress).not.toHaveProperty('milestones');
+          expect(body(n).progress.myProgress).not.toHaveProperty('gatesSatisfied');
         }
         for (const n of [NEEDS_STEPS.progress.none, NEEDS_STEPS.progress.bobShared]) {
           const d = body(n);
-          expect(d.milestones.feelHeardConfirmedAt).toBe(at('ada@e2e.test', 'feel_heard'));
-          expect(d.myProgress.gatesSatisfied).toEqual({
-            needsConfirmed: true,
-            needsConfirmedAt: at('ada@e2e.test', 'needs_confirmed'),
-          });
-          expect(d.partnerProgress.gatesSatisfied).toEqual({
-            needsConfirmed: true,
-            needsConfirmedAt: at('bob@e2e.test', 'needs_confirmed'),
-          });
+          expect(d.myProgress.milestones.needs_confirmed).toBe(at('ada@e2e.test', 'needs_confirmed'));
+          // The partner map: only the old stage-3 gate keys (Bob has shared, but R33).
+          expect(d.partnerProgress.milestones).toEqual({ needs_confirmed: at('bob@e2e.test', 'needs_confirmed') });
         }
         for (const n of [NEEDS_STEPS.state.bothBob, NEEDS_STEPS.progress.bothBob]) {
-          const d = body(n);
-          expect((d.progress ?? d).milestones.feelHeardConfirmedAt).toBe(at('bob@e2e.test', 'feel_heard'));
+          const mine = (body(n).progress ?? body(n)).myProgress.milestones;
+          expect(mine.feel_heard).toBe(at('bob@e2e.test', 'feel_heard'));
+          expect(mine.needs_shared).toBe(at('bob@e2e.test', 'needs_shared'));
         }
-      });
-
-      it('after both shares the stage-4 gates are derived and empty', () => {
-        expect(body(NEEDS_STEPS.state.bothAda).progress.myProgress.gatesSatisfied).toEqual({});
-        expect(body(NEEDS_STEPS.state.bothBob).progress.myProgress.gatesSatisfied).toEqual({});
+        // Stage 4: the partner map shows only choices_shared (not reached) — never Ada's stage-3 milestones.
         for (const n of [NEEDS_STEPS.progress.bothAda, NEEDS_STEPS.progress.bothBob]) {
-          expect(body(n).myProgress.gatesSatisfied).toEqual({});
-          expect(body(n).partnerProgress.gatesSatisfied).toEqual({});
+          expect(body(n).partnerProgress).toMatchObject({ stage: 4, milestones: {} });
         }
       });
 

@@ -1,78 +1,38 @@
 /**
  * Stage DTOs
  *
- * Data Transfer Objects for stage progression and gate validation.
+ * Data Transfer Objects for stage progression (progress is participant milestones).
  */
 
 import { Stage, StageStatus } from '../enums';
+import type { MilestoneKey, MilestoneMap, PartnerMilestoneMap } from './milestones';
 
 // ============================================================================
 // Stage Progress
 // ============================================================================
 
+/**
+ * The caller's progress. `milestones` is every milestone the caller has
+ * reached (participant_milestone), keyed by milestone key.
+ */
 export interface StageProgressDetailDTO {
   stage: Stage;
   status: StageStatus;
   startedAt: string;
   completedAt: string | null;
-
-  // Gate satisfaction details
-  gates: GateSatisfactionDTO;
+  milestones: MilestoneMap;
 }
 
+/**
+ * The partner's progress. `milestones` is NOT every milestone the partner
+ * reached: only those of the partner's current stage that the old per-stage
+ * gate JSON exposed (`PARTNER_VISIBLE_MILESTONES` in the backend stage shim),
+ * with `invitation_sent` as `true`, never its instant (PartnerMilestoneMap).
+ */
 export interface PartnerStageStatusDTO {
   stage: Stage;
   status: StageStatus;
-  // Note: we don't expose partner's gate details - just overall status
-}
-
-// ============================================================================
-// Gate Satisfaction
-// ============================================================================
-
-/**
- * Gate satisfaction varies by stage. Each stage has specific requirements.
- */
-export type GateSatisfactionDTO = Stage0Gates | Stage1Gates | Stage2Gates | Stage3Gates | Stage4Gates;
-
-export interface Stage0Gates {
-  stage: Stage.ONBOARDING;
-  compactSigned: boolean;
-  compactSignedAt: string | null;
-  partnerCompactSigned: boolean;
-}
-
-export interface Stage1Gates {
-  stage: Stage.WITNESS;
-  feelHeardConfirmed: boolean;
-  feelHeardConfirmedAt: string | null;
-  finalEmotionalReading: number | null; // 1-10
-  /** AI has recommended showing the feel-heard check prompt */
-  feelHeardCheckOffered?: boolean;
-}
-
-export interface Stage2Gates {
-  stage: Stage.PERSPECTIVE_STRETCH;
-  empathyDraftReady: boolean;
-  empathyConsented: boolean;
-  partnerConsented: boolean;
-  partnerValidated: boolean;
-}
-
-export interface Stage3Gates {
-  stage: Stage.NEED_MAPPING;
-  needsConfirmed: boolean;
-  partnerNeedsConfirmed: boolean;
-  needsShared: boolean;
-  needsValidated: boolean;
-}
-
-export interface Stage4Gates {
-  stage: Stage.STRATEGIC_REPAIR;
-  strategiesSubmitted: boolean;
-  rankingsSubmitted: boolean;
-  overlapIdentified: boolean;
-  agreementCreated: boolean;
+  milestones: PartnerMilestoneMap;
 }
 
 // ============================================================================
@@ -91,7 +51,8 @@ export interface AdvanceStageResponse {
 
   // If advancement failed, explain why
   blockedReason?: StageBlockedReason;
-  unsatisfiedGates?: string[];
+  /** The current stage's required milestones the caller has not reached. */
+  unreachedMilestones?: MilestoneKey[];
 }
 
 export enum StageBlockedReason {
@@ -105,19 +66,18 @@ export enum StageBlockedReason {
 // Stage Progress (API Responses)
 // ============================================================================
 
-/** Milestone timestamps that persist across stage transitions */
-export interface SessionMilestonesDTO {
-  witnessStartedAt: string | null;
-  feelHeardConfirmedAt: string | null;
-}
-
 export interface GetProgressResponse {
   sessionId: string;
   myProgress: StageProgressDetailDTO;
   partnerProgress: PartnerStageStatusDTO;
   canAdvance: boolean;
   advanceBlockedReason?: StageBlockedReason;
-  milestones?: SessionMilestonesDTO;
+  /**
+   * When the caller's Stage 1 (witness) began: the end of Stage 0, which is the
+   * later of compact_signed and invitation_sent for an inviter — not a single
+   * milestone, so it is computed by the stage shim. Null before Stage 1.
+   */
+  witnessStartedAt: string | null;
 }
 
 // ============================================================================
@@ -159,9 +119,6 @@ export interface ConfirmFeelHeardResponse {
   confirmedAt: string | null;
   canAdvance: boolean;
   partnerCompleted: boolean;
-
-  // Optional final emotional reading (stored when user completes stage)
-  finalEmotionalReading?: number | null;
 
   // Transition message from AI when user confirms they feel heard
   transitionMessage?: {
