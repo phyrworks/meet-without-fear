@@ -40,7 +40,6 @@ type SessionWithIncludes = {
     status: string;
     startedAt: Date;
     completedAt: Date | null;
-    gatesSatisfied?: unknown;
   }>;
   // Optional: empathy attempts for Stage 2 status display
   empathyAttempts?: Array<{

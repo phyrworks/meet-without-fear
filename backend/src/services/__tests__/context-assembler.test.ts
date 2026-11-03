@@ -6,6 +6,7 @@
 
 import { formatContextForPrompt, type ContextBundle } from '../context-assembler';
 import type { MemoryIntentResult } from '../memory-intent';
+import { needsRevealed } from '../context-formatters';
 
 describe('Context Assembler', () => {
   describe('formatContextForPrompt', () => {
@@ -25,7 +26,7 @@ describe('Context Assembler', () => {
       },
       stageContext: {
         stage: 1,
-        gatesSatisfied: {},
+        milestones: {},
       },
       userName: 'User',
       intent: {
@@ -39,6 +40,43 @@ describe('Context Assembler', () => {
       } as MemoryIntentResult,
       assembledAt: new Date().toISOString(),
       ...overrides,
+    });
+
+    describe("Issue #312 partner-needs consent gate (owner's needs_shared milestone)", () => {
+      const summary = {
+        keyThemes: [],
+        emotionalJourney: '',
+        currentFocus: 'Naming needs',
+        userStatedGoals: [],
+        userNeeds: ['to be heard'],
+        partnerNeeds: ['PARTNER-NEED-PROBE'],
+      };
+      const at = '2026-10-26T12:00:00.000Z';
+
+      it('omits partner needs before needs_shared, even after the owner confirmed and validated', () => {
+        for (const milestones of [{}, { needs_confirmed: at }, { needs_confirmed: at, needs_validated: at }]) {
+          const formatted = formatContextForPrompt(
+            createMinimalBundle({ sessionSummary: summary, stageContext: { stage: 3, milestones } }),
+          );
+          expect(formatted).toContain('Needs: User → to be heard.');
+          expect(formatted).not.toContain('PARTNER-NEED-PROBE');
+        }
+      });
+
+      it('shows partner needs once needs_shared exists (session-scoped: everyone has shared)', () => {
+        for (const stage of [3, 4]) {
+          const formatted = formatContextForPrompt(
+            createMinimalBundle({ sessionSummary: summary, stageContext: { stage, milestones: { needs_shared: at } } }),
+          );
+          expect(formatted).toContain('Partner → PARTNER-NEED-PROBE');
+        }
+      });
+
+      it('needsRevealed reads only the given stage context (the prompt owner’s milestones)', () => {
+        expect(needsRevealed({ milestones: { needs_shared: at } })).toBe(true);
+        expect(needsRevealed({ milestones: { needs_confirmed: at, needs_validated: at } })).toBe(false);
+        expect(needsRevealed(undefined)).toBe(false);
+      });
     });
 
     describe('Notable Facts Formatting', () => {
@@ -295,7 +333,7 @@ describe('Context Assembler', () => {
         const bundle = createMinimalBundle({
           stageContext: {
             stage: 2,
-            gatesSatisfied: {},
+            milestones: {},
           },
           priorStageSummaries: {
             stages: [
@@ -385,7 +423,7 @@ describe('Context Assembler', () => {
         const bundle = createMinimalBundle({
           stageContext: {
             stage: 2,
-            gatesSatisfied: {},
+            milestones: {},
           },
           currentStageHistory: {
             stage: 2,
@@ -500,7 +538,7 @@ describe('Context Assembler', () => {
           },
           stageContext: {
             stage: 1,
-            gatesSatisfied: {},
+            milestones: {},
           },
         });
 
@@ -578,7 +616,7 @@ describe('Context Assembler', () => {
           },
           stageContext: {
             stage: 2,
-            gatesSatisfied: {},
+            milestones: {},
           },
           sessionSummary: {
             keyThemes: [],
@@ -604,7 +642,7 @@ describe('Context Assembler', () => {
           },
           stageContext: {
             stage: 1,
-            gatesSatisfied: {},
+            milestones: {},
           },
           // no sessionSummary
         });

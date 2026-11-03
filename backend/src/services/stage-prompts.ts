@@ -13,6 +13,7 @@
 
 import { logger } from '../lib/logger';
 import { type ContextBundle } from './context-assembler';
+import { needsRevealed } from './context-formatters';
 import { type SurfaceStyle } from './memory-intent';
 import { type CategorizedFact } from './partner-session-classifier';
 import {
@@ -987,8 +988,7 @@ Focus on this need only this turn. If the user's update is clear, call update_se
   // POST-REVEAL: only inject when both partners have shared needs through
   // the consent flow. Without this gate the AI acts as if the reveal already
   // happened, leading to unauthorized sharing of partner content (issue #312).
-  const gates = context.contextBundle.stageContext.gatesSatisfied;
-  if (gates?.needsShared === true) {
+  if (needsRevealed(context.contextBundle.stageContext)) {
     dynamicParts.push(`POST-REVEAL PHASES (both partners' needs are now visible):
 When ${context.userName} can see both their own needs and their partner's needs:
 

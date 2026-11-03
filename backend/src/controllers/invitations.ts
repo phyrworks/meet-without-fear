@@ -149,9 +149,9 @@ export async function listSessions(req: Request, res: Response): Promise<void> {
       const myMember = session.relationship.members.find(m => m.userId === user.id);
       const partnerMember = session.relationship.members.find(m => m.userId !== user.id);
 
-      const myProgress = progressDTO(stageStates.get(me.id), { gates: false });
+      const myProgress = progressDTO(stageStates.get(me.id), { milestones: 'none' });
       const partnerProgress = progressDTO(partner ? stageStates.get(partner.participantId) : undefined, {
-        gates: false,
+        milestones: 'none',
       });
       const dto = (p: typeof myProgress) => ({
         stage: p.stage,

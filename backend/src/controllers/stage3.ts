@@ -45,6 +45,7 @@ import {
 import {
   completeNeedsSharingIfReady,
   listSharedNeeds,
+  ownSharedAt,
   participantsWhoShared,
   shareNeeds,
 } from '../services/needs-share';
@@ -189,14 +190,18 @@ export async function getNeeds(req: Request, res: Response): Promise<void> {
       return;
     }
     if (ctx.sessionStatus !== 'ACTIVE' || ctx.stage < 3) {
-      successResponse(res, { needs: [], synthesizedAt: null, isDirty: false });
+      successResponse(res, { needs: [], synthesizedAt: null, isDirty: false, sharedAt: null });
       return;
     }
-    const needs = await listOwnNeeds(ctx.participant.id);
+    const [needs, sharedAt] = await Promise.all([
+      listOwnNeeds(ctx.participant.id),
+      ownSharedAt(req.params.id, ctx.participant.id),
+    ]);
     successResponse(res, {
       needs: needs.map(need => toIdentifiedNeedDTO(need)),
       extracting: false,
       synthesizedAt: needs[0]?.createdAt.toISOString() ?? null,
+      sharedAt: sharedAt?.toISOString() ?? null,
     });
   } catch (error) {
     logger.error('[getNeeds] Error:', error);

@@ -24,28 +24,14 @@
  * goldens depend on it). A target-shape writer ignores it.
  */
 
+import type { MilestoneKey } from '@meet-without-fear/shared';
+
 // ============================================================================
 // Milestones
 // ============================================================================
 
-/** Journey milestones, in journey order (target `milestone` table keys). */
-export const MILESTONE_KEYS = [
-  'compact_signed',
-  'invitation_sent',
-  'feel_heard',
-  'empathy_submitted',
-  'empathy_ready',
-  'empathy_validated',
-  'needs_confirmed',
-  'needs_validated',
-  'needs_shared',
-  'choices_shared',
-  'repair_walkthrough_started',
-  'closed',
-  'paused',
-] as const;
-
-export type MilestoneKey = (typeof MILESTONE_KEYS)[number];
+/** Target `milestone` table keys: the one definition is shared (work-keq6). */
+export type { MilestoneKey };
 
 // ============================================================================
 // Time

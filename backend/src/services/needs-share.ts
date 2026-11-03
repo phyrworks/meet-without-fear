@@ -57,6 +57,18 @@ export async function listSharedNeeds(sessionId: string): Promise<SharedNeedRow[
   );
 }
 
+/**
+ * When this participant shared their needs: the earliest of their live shares
+ * (`v_need_shared`), or null. The per-participant "I shared" fact —
+ * `needs_shared` is session-scoped and reached only once all have shared.
+ */
+export async function ownSharedAt(sessionId: string, participantId: string): Promise<Date | null> {
+  const rows = await prisma.$queryRaw<Array<{ sharedAt: Date | null }>>`SELECT min(shared_at) AS "sharedAt"
+    FROM v_need_shared
+    WHERE session_id = ${sessionId}::uuid AND participant_id = ${participantId}::uuid`;
+  return rows[0]?.sharedAt ?? null;
+}
+
 /** The present human participants of the session who have at least one live share. */
 export async function participantsWhoShared(sessionId: string): Promise<Set<string>> {
   return new Set((await listSharedNeeds(sessionId)).map(n => n.participantId));

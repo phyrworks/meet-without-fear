@@ -26,7 +26,8 @@ import { successResponse, errorResponse } from '../utils/response';
 import { getPartnerUserId, isSessionCreator, departedParticipantUsers } from '../utils/session';
 import { getCoParticipants, getPartnerParticipant } from '../services/participant-resolver';
 import { pingStage2Refresh } from '../services/empathy-realtime';
-import { loadMilestones, loadStageStates, progressDTO, rowForStage } from '../services/stage-shim';
+import type { MilestoneKey } from '@meet-without-fear/shared';
+import { loadMilestones, loadStageStates, progressDTO, witnessStartedAt } from '../services/stage-shim';
 import { reachMilestone } from '../services/milestone-writer';
 import { displayStatus, isSessionPaused } from '../services/session-status';
 import { createFacilitatorMessage, listConversationMessages } from '../services/message-store';
@@ -94,7 +95,7 @@ export async function getSession(req: Request, res: Response): Promise<void> {
 
     // Current progress (stage shim)
     const state = (await loadStageStates([{ id: participant.id, joinedAt: participant.joinedAt }])).get(participant.id);
-    const currentProgress = progressDTO(state, { gates: false });
+    const currentProgress = progressDTO(state, { milestones: 'none' });
 
     // A partner who left (account deletion, leaving) shows no name (TS-12, R5).
     const partnerLeft =
@@ -269,10 +270,10 @@ export async function getProgress(req: Request, res: Response): Promise<void> {
       return;
     }
 
-    // Both participants' progress (stage shim). `gatesSatisfied` is DERIVED
-    // from milestones (StageProgressDetailDTO unchanged; the keys the target
-    // dropped — feelHeardCheckOffered, readyToRank, rankingSubmitted,
-    // finalEmotionalReading — are never produced).
+    // Both participants' progress (stage shim). Each carries a milestones
+    // map (participant_milestone, key → reachedAt): every milestone for the
+    // caller; for the partner only what the old gate JSON exposed
+    // (PARTNER_VISIBLE_MILESTONES).
     const partner = await getPartnerParticipant(participant.id);
     const states = await loadStageStates([
       { id: participant.id, joinedAt: participant.joinedAt },
@@ -281,27 +282,14 @@ export async function getProgress(req: Request, res: Response): Promise<void> {
     const myState = states.get(participant.id);
     const partnerState = partner ? states.get(partner.participantId) : undefined;
 
-    const myProgress = progressDTO(myState, { gates: true });
-    const partnerProgress = progressDTO(partnerState, { gates: true });
-
-    // Milestones (old: the stage-1 and stage-3 rows and their gates). The two
-    // stage-3 instants the old gates carried (needsIdentifiedAt,
-    // commonGroundFoundAt) have no milestone: needs_confirmed is the
-    // identification instant; common ground is not a milestone (null).
-    const myStage1 = rowForStage(myState, 1);
-    const needsConfirmed = myState?.milestones.find(m => m.key === 'needs_confirmed');
-    const milestones = {
-      witnessStartedAt: myStage1?.startedAt?.toISOString() ?? null,
-      feelHeardConfirmedAt: (myStage1?.gatesSatisfied.feelHeardConfirmedAt as string | undefined) ?? null,
-      needsIdentifiedAt: needsConfirmed?.reachedAt.toISOString() ?? null,
-      commonGroundFoundAt: null,
-    };
+    const myProgress = progressDTO(myState, { milestones: 'own' });
+    const partnerProgress = progressDTO(partnerState, { milestones: 'partner' });
 
     successResponse(res, {
       myProgress,
       partnerProgress,
       sessionStatus: session.status,
-      milestones,
+      witnessStartedAt: witnessStartedAt(myState),
     });
   } catch (error) {
     logger.error('[getProgress] Error:', error);
@@ -402,37 +390,18 @@ export async function resolveSession(req: Request, res: Response): Promise<void>
 // Stage Advancement
 // ============================================================================
 
-/**
- * Gate requirements for each stage
- */
-const STAGE_GATES: Record<number, string[]> = {
-  0: ['compactSigned'],
-  1: ['feelHeardConfirmed'],
-  2: ['empathyValidated'],
-  3: ['needsConfirmed', 'needsShared', 'needsValidated'],
-  4: ['rankingSubmitted', 'agreementCreated'],
+/** The milestones each stage requires (the stage is complete once all are reached). */
+const STAGE_REQUIRED_MILESTONES: Record<number, readonly MilestoneKey[]> = {
+  0: ['compact_signed'],
+  1: ['feel_heard'],
+  2: ['empathy_validated'],
+  3: ['needs_confirmed', 'needs_validated', 'needs_shared'],
+  4: ['choices_shared', 'closed'],
 };
 
-/**
- * Check if all gates for a stage are satisfied
- */
-function checkGates(
-  stage: number,
-  gatesSatisfied: Record<string, unknown> | null,
-): { satisfied: boolean; unsatisfiedGates: string[] } {
-  const requiredGates = STAGE_GATES[stage] || [];
-  const unsatisfiedGates: string[] = [];
-
-  for (const gate of requiredGates) {
-    if (!gatesSatisfied || !gatesSatisfied[gate]) {
-      unsatisfiedGates.push(gate);
-    }
-  }
-
-  return {
-    satisfied: unsatisfiedGates.length === 0,
-    unsatisfiedGates,
-  };
+/** The stage's required milestones not in `reached`. */
+function unreachedMilestones(stage: number, reached: Partial<Record<MilestoneKey, string>>): MilestoneKey[] {
+  return (STAGE_REQUIRED_MILESTONES[stage] ?? []).filter(key => reached[key] === undefined);
 }
 
 /**
@@ -444,7 +413,7 @@ function checkGates(
  * next stage is current from that instant — so this endpoint writes nothing
  * and never reports `advanced: true` (fix round 1: it reported it for any
  * stage > 0, and fired partner.advanced on every call). It answers with the
- * participant's current stage and that stage's unsatisfied (derived) gates.
+ * participant's current stage and that stage's unreached required milestones.
  * No mobile screen calls it (useAdvanceStage is exported, unused).
  */
 export async function advanceStage(req: Request, res: Response): Promise<void> {
@@ -464,7 +433,7 @@ export async function advanceStage(req: Request, res: Response): Promise<void> {
     }
 
     const state = (await loadStageStates([{ id: participant.id, joinedAt: participant.joinedAt }])).get(participant.id);
-    const current = progressDTO(state, { gates: true });
+    const current = progressDTO(state, { milestones: 'own' });
     const currentStage = current.stage;
 
     // Check session status allows advancement (ACTIVE; the creator from
@@ -485,15 +454,14 @@ export async function advanceStage(req: Request, res: Response): Promise<void> {
 
     // Nothing changes here, so nothing is reported as advanced and no
     // partner.advanced event is sent (the milestone writers are where a stage
-    // changes). The current stage's unsatisfied gates say what is missing.
-    const gateCheck = checkGates(currentStage, (current.gatesSatisfied as Record<string, unknown> | null) ?? null);
+    // changes). The current stage's unreached milestones say what is missing.
     successResponse(res, {
       advanced: false,
       newStage: currentStage,
       newStatus: current.status,
       advancedAt: null,
       blockedReason: 'GATES_NOT_SATISFIED',
-      unsatisfiedGates: gateCheck.unsatisfiedGates,
+      unreachedMilestones: unreachedMilestones(currentStage, current.milestones ?? {}),
     });
   } catch (error) {
     logger.error('[advanceStage] Error:', error);

@@ -4,9 +4,9 @@
  * The target schema has no stage column anywhere (spec D3): progress is the
  * set of `participant_milestone` rows, and the stage vocabulary is data in
  * `milestone` (`ordinal`, `stage_label`). The DTOs in `shared/` still carry
- * the old numbers (`stage`, `StageProgressDTO`, `gatesSatisfied`) until mobile
- * moves to milestone keys, so this module computes them — and nothing else in
- * the backend may.
+ * the old stage numbers (`stage`, `StageProgressDTO`), so this module computes
+ * them — and nothing else in the backend may. Gates are not computed: every
+ * consumer reads the milestones themselves (`milestoneMap`; work-keq6).
  *
  * What it reproduces, and from what:
  *   - the CURRENT stage: `v_current_stage.active_stage` (the stage of the next
@@ -16,10 +16,8 @@
  *     needs_shared; stage 4 at `closed`), stage n+1 starts then, stage 0 starts
  *     when the participant joined — the inverse of the fixture writer's
  *     `stageProgressPlan`;
- *   - `gatesSatisfied`, DERIVED from the milestones of the row's stage by the
- *     inverse of the plan's step-7 key table. The keys the target dropped
- *     (`feelHeardCheckOffered`, `readyToRank`, `rankingSubmitted`,
- *     `finalEmotionalReading`) are never produced;
+ *   - the DTO `milestones` map (`milestoneMap`), and the partner's narrower
+ *     one (`PARTNER_VISIBLE_MILESTONES`);
  *   - a message's stage (`stageAt`): the owner's stage at the message's
  *     instant — the message table has no stage (spec §1.1 message, "derivable
  *     from participant_milestone").
@@ -59,6 +57,7 @@
  * empathy/needs/repair writers (TS-10, TS-11) must honour this.
  */
 
+import type { MilestoneKey, MilestoneMap } from '@meet-without-fear/shared';
 import { prisma, type DbClient } from '../lib/prisma';
 
 /** Terminal milestone of each stage (stage index → key). */
@@ -97,7 +96,6 @@ export interface ShimStageRow {
   status: ShimStageStatus;
   startedAt: Date | null;
   completedAt: Date | null;
-  gatesSatisfied: Record<string, unknown>;
 }
 
 export interface ParticipantStageState {
@@ -146,40 +144,34 @@ export function activeStage(viewActiveStage: number, opts: StageOpts): number {
   return opts.invitationPending ? 0 : Math.min(viewActiveStage, LAST_STAGE);
 }
 
+/** Reached milestones as the DTO map: key → reachedAt ISO. */
+export function milestoneMap(milestones: MilestoneReached[]): MilestoneMap {
+  const out: MilestoneMap = {};
+  for (const m of milestones) out[m.key as MilestoneKey] = m.reachedAt.toISOString();
+  return out;
+}
+
 /**
- * The gate keys a stage's row carried, derived from the milestones of that
- * stage (inverse of the step-7 key table; plan §3). Timestamps are ISO strings,
- * as the old JSON held them.
+ * The partner milestones the caller may see, by the PARTNER's current stage —
+ * exactly the keys the old per-stage gate JSON exposed on
+ * `partnerProgress.gatesSatisfied` (the inverse of the plan's step-7 key
+ * table, current stage only). work-keq6 replaced that JSON with a milestone
+ * map without widening it: a partner's empathy_submitted / empathy_ready /
+ * repair_walkthrough_started / paused / closed and earlier stages' milestones
+ * are not exposed here.
  */
-export function gatesFor(stage: number, milestones: MilestoneReached[]): Record<string, unknown> {
-  const gates: Record<string, unknown> = {};
-  const put = (key: string, gate: string, withAt: string | null): void => {
-    const at = reachedAt(milestones, key);
-    if (!at) return;
-    gates[gate] = true;
-    if (withAt) gates[withAt] = at.toISOString();
-  };
-  switch (stage) {
-    case 0:
-      put('compact_signed', 'compactSigned', 'signedAt');
-      put('invitation_sent', 'invitationSent', null);
-      break;
-    case 1:
-      put('feel_heard', 'feelHeardConfirmed', 'feelHeardConfirmedAt');
-      break;
-    case 2:
-      put('empathy_validated', 'empathyValidated', 'empathyValidatedAt');
-      break;
-    case 3:
-      put('needs_confirmed', 'needsConfirmed', 'needsConfirmedAt');
-      put('needs_validated', 'needsValidated', 'needsValidatedAt');
-      put('needs_shared', 'needsShared', 'needsSharedAt');
-      break;
-    case 4:
-      put('choices_shared', 'selectionSubmitted', 'selectionSubmittedAt');
-      break;
-  }
-  return gates;
+export const PARTNER_VISIBLE_MILESTONES: Record<number, readonly MilestoneKey[]> = {
+  0: ['compact_signed', 'invitation_sent'],
+  1: ['feel_heard'],
+  2: ['empathy_validated'],
+  3: ['needs_confirmed', 'needs_validated', 'needs_shared'],
+  4: ['choices_shared'],
+};
+
+/** The partner's milestone map: `PARTNER_VISIBLE_MILESTONES` of their current stage. */
+export function partnerMilestoneMap(stage: number, milestones: MilestoneReached[]): MilestoneMap {
+  const visible: readonly string[] = PARTNER_VISIBLE_MILESTONES[stage] ?? [];
+  return milestoneMap(milestones.filter(m => visible.includes(m.key)));
 }
 
 /**
@@ -203,7 +195,6 @@ export function stageRowsFor(
       status: completed ? 'COMPLETED' : 'IN_PROGRESS',
       startedAt: stage === 0 ? joinedAt : stageCompletedAt(stage - 1, milestones, opts),
       completedAt: completed ? terminal : null,
-      gatesSatisfied: gatesFor(stage, milestones),
     });
   }
   return rows;
@@ -356,8 +347,15 @@ export interface ProgressDTOShape {
   status: 'NOT_STARTED' | ShimStageStatus;
   startedAt: string | null;
   completedAt: string | null;
-  gatesSatisfied?: Record<string, unknown> | null;
+  milestones?: MilestoneMap;
 }
+
+/**
+ * Which milestones a progress DTO carries: `own` — every milestone reached
+ * (the caller's own progress); `partner` — `partnerMilestoneMap` (the
+ * partner's, never wider than the old gate JSON); `none` — no map.
+ */
+export type ProgressMilestones = 'own' | 'partner' | 'none';
 
 /**
  * The DTO progress of a participant (`StageProgressDTO` / the session view's
@@ -367,19 +365,32 @@ export interface ProgressDTOShape {
  * it). Only a participant that does not exist (no partner yet) is
  * NOT_STARTED.
  */
-export function progressDTO(state: ParticipantStageState | undefined, opts: { gates: boolean }): ProgressDTOShape {
+export function progressDTO(
+  state: ParticipantStageState | undefined,
+  opts: { milestones: ProgressMilestones },
+): ProgressDTOShape {
   if (!state) {
-    // The old default object carried `gatesSatisfied: null` whichever side used it.
-    return { stage: 0, status: 'NOT_STARTED', startedAt: null, completedAt: null, gatesSatisfied: null };
+    const base = { stage: 0, status: 'NOT_STARTED' as const, startedAt: null, completedAt: null };
+    return opts.milestones === 'none' ? base : { ...base, milestones: {} };
   }
   const row = currentRow(state);
-  return {
+  const base = {
     stage: row.stage,
     status: row.status,
     startedAt: row.startedAt?.toISOString() ?? null,
     completedAt: row.completedAt?.toISOString() ?? null,
-    ...(opts.gates ? { gatesSatisfied: row.gatesSatisfied } : {}),
   };
+  if (opts.milestones === 'none') return base;
+  return {
+    ...base,
+    milestones:
+      opts.milestones === 'own' ? milestoneMap(state.milestones) : partnerMilestoneMap(row.stage, state.milestones),
+  };
+}
+
+/** `GetProgressResponse.witnessStartedAt`: when Stage 1 began (stage 0's completion), or null. */
+export function witnessStartedAt(state: ParticipantStageState | undefined): string | null {
+  return rowForStage(state, 1)?.startedAt?.toISOString() ?? null;
 }
 
 /** One stage's row, if the participant has reached that stage. */

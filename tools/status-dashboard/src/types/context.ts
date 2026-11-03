@@ -151,7 +151,8 @@ export interface ContextBundle {
   // Stage-specific data
   stageContext: {
     stage: number;
-    gatesSatisfied: Record<string, unknown>;
+    /** The prompt owner's reached milestones: key → reachedAt ISO. */
+    milestones: Record<string, string>;
   };
 
   // User info

@@ -164,7 +164,7 @@ function makeContextBundle(stage: number, turnCount: number): ContextBundle {
     },
     stageContext: {
       stage,
-      gatesSatisfied: {},
+      milestones: {},
     },
     userName: 'Alex',
     partnerName: 'Sarah',

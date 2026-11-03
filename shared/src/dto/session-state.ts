@@ -11,6 +11,7 @@
 import { SessionStatus, StageStatus } from '../enums';
 import { CompactStatusResponse } from './stage';
 import { MessageDTO } from './message';
+import type { MilestoneMap } from './milestones';
 
 // ============================================================================
 // Consolidated Session State
@@ -66,7 +67,8 @@ export interface SessionStateResponse {
       status: string;
       startedAt: string | null;
       completedAt: string | null;
-      gatesSatisfied: unknown;
+      /** Every milestone the caller has reached (key → reachedAt ISO). */
+      milestones: MilestoneMap;
     };
     partnerProgress: {
       stage: number;
@@ -75,10 +77,8 @@ export interface SessionStateResponse {
       completedAt: string | null;
     };
     canAdvance: boolean;
-    milestones: {
-      witnessStartedAt: string | null;
-      feelHeardConfirmedAt: string | null;
-    };
+    /** See GetProgressResponse.witnessStartedAt. */
+    witnessStartedAt: string | null;
   };
 
   // Messages (initial page)

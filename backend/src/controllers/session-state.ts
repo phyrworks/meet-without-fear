@@ -33,7 +33,7 @@ import {
   resolveParticipant,
   type ResolvedParticipant,
 } from '../services/participant-resolver';
-import { latestStageRow, loadStageStates, progressDTO, rowForStage } from '../services/stage-shim';
+import { latestStageRow, loadStageStates, progressDTO, witnessStartedAt } from '../services/stage-shim';
 import { listConversationMessages, toMessageDTO } from '../services/message-store';
 import { displayStatus, isSessionPaused } from '../services/session-status';
 
@@ -224,15 +224,10 @@ export async function getSessionState(req: Request, res: Response): Promise<void
     const myMember = session.relationship.members.find(m => m.userId === user.id);
     const partnerMember = session.relationship.members.find(m => m.userId !== user.id);
 
-    const myProgress = progressDTO(myState, { gates: true });
-    const partnerProgress = progressDTO(partnerState, { gates: false });
-
-    // Stage 1 milestones (old: the stage-1 StageProgress row and its gates)
-    const myStage1 = rowForStage(myState, 1);
-    const milestones = {
-      witnessStartedAt: myStage1?.startedAt?.toISOString() ?? null,
-      feelHeardConfirmedAt: (myStage1?.gatesSatisfied.feelHeardConfirmedAt as string | undefined) ?? null,
-    };
+    // The caller's progress carries every milestone they reached; the
+    // partner's carries none here (the old session view gave no partner gates).
+    const myProgress = progressDTO(myState, { milestones: 'own' });
+    const partnerProgress = progressDTO(partnerState, { milestones: 'none' });
 
     // Partner display name
     // A partner who left (account deletion, leaving) shows no name (TS-12, R5).
@@ -286,11 +281,13 @@ export async function getSessionState(req: Request, res: Response): Promise<void
         }
       : null;
 
-    // Compact status: the stage-0 gates, derived from compact_signed.
-    const myGates = rowForStage(myState, 0)?.gatesSatisfied;
-    const partnerGates = rowForStage(partnerState, 0)?.gatesSatisfied;
-    const mySigned = myGates?.compactSigned === true;
-    const partnerSigned = partnerGates?.compactSigned === true;
+    // Compact status: each participant's compact_signed milestone.
+    const reachedAt = (state: typeof myState, key: string): string | null =>
+      state?.milestones.find(m => m.key === key)?.reachedAt.toISOString() ?? null;
+    const mySignedAt = reachedAt(myState, 'compact_signed');
+    const partnerSignedAt = reachedAt(partnerState, 'compact_signed');
+    const mySigned = mySignedAt !== null;
+    const partnerSigned = partnerSignedAt !== null;
 
     // Check if this is the first session for this relationship
     const priorResolvedCount = await prisma.session.count({
@@ -303,9 +300,9 @@ export async function getSessionState(req: Request, res: Response): Promise<void
 
     const compactResponse = {
       mySigned,
-      mySignedAt: (myGates?.signedAt as string | undefined) ?? null,
+      mySignedAt,
       partnerSigned,
-      partnerSignedAt: (partnerGates?.signedAt as string | undefined) ?? null,
+      partnerSignedAt,
       canAdvance: mySigned && (partnerSigned || !partner),
       isFirstSession: priorResolvedCount === 0,
     };
@@ -353,7 +350,7 @@ export async function getSessionState(req: Request, res: Response): Promise<void
         myProgress,
         partnerProgress,
         canAdvance: myProgress.status === 'COMPLETED' || myProgress.stage === 0,
-        milestones,
+        witnessStartedAt: witnessStartedAt(myState),
       },
 
       // Messages (initial page)

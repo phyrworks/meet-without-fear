@@ -33,7 +33,7 @@ describe('Stage Prompts Service', () => {
     },
     stageContext: {
       stage: 1,
-      gatesSatisfied: {},
+      milestones: {},
     },
     userName: 'Test User',
     partnerName: 'Partner',
@@ -152,17 +152,27 @@ describe('Stage Prompts Service', () => {
       expect(prompt).toContain('MODE BEATS');
     });
 
-    it('Stage 3 prompt includes post-reveal phase guidance only when needsShared gate is satisfied', () => {
-      // Without needsShared gate — POST-REVEAL should NOT appear
-      const context = createContext();
-      const promptWithout = fullPrompt(buildStagePrompt(3, context));
-      expect(promptWithout).not.toContain('POST-REVEAL PHASES');
+    it("Stage 3 prompt includes post-reveal phase guidance only once the owner's needs_shared milestone exists (#312)", () => {
+      // Before needs_shared — POST-REVEAL must NOT appear. needs_confirmed and
+      // needs_validated (the owner's own steps) do not open it.
+      const before = createContext({
+        contextBundle: {
+          ...mockContextBundle,
+          stageContext: {
+            stage: 3,
+            milestones: { needs_confirmed: '2026-10-26T12:00:00.000Z', needs_validated: '2026-10-26T12:01:00.000Z' },
+          },
+        },
+      });
+      expect(fullPrompt(buildStagePrompt(3, before))).not.toContain('POST-REVEAL PHASES');
+      expect(fullPrompt(buildStagePrompt(3, createContext()))).not.toContain('POST-REVEAL PHASES');
 
-      // With needsShared gate — POST-REVEAL should appear
+      // needs_shared is session-scoped: the job writes it for everyone once
+      // all have shared — POST-REVEAL appears.
       const contextWithGate = createContext({
         contextBundle: {
           ...mockContextBundle,
-          stageContext: { stage: 3, gatesSatisfied: { needsShared: true } },
+          stageContext: { stage: 3, milestones: { needs_shared: '2026-10-26T12:02:00.000Z' } },
         },
       });
       const promptWith = fullPrompt(buildStagePrompt(3, contextWithGate));
@@ -277,14 +287,7 @@ describe('Stage Prompts Service', () => {
         turnCount: 3,
         contextBundle: {
           ...mockContextBundle,
-          stageContext: {
-            stage: 4,
-            gatesSatisfied: {
-              selectionSubmitted: true,
-              partnerSelectionSubmitted: true,
-              noSharedAgreement: true,
-            },
-          },
+          stageContext: { stage: 4, milestones: { choices_shared: '2026-10-26T12:00:00.000Z' } },
         },
       });
       const prompt = fullPrompt(buildStagePrompt(4, context)).toLowerCase();
@@ -300,12 +303,7 @@ describe('Stage Prompts Service', () => {
       const context = createContext({
         contextBundle: {
           ...mockContextBundle,
-          stageContext: {
-            stage: 4,
-            gatesSatisfied: {
-              individualCommitmentOnly: true,
-            },
-          },
+          stageContext: { stage: 4, milestones: {} },
         },
       });
       const prompt = fullPrompt(buildStagePrompt(4, context));

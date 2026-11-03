@@ -5,13 +5,15 @@
  */
 
 import {
-  gatesFor,
   activeStage,
+  milestoneMap,
+  partnerMilestoneMap,
   latestStageRow,
   messageStage,
   progressDTO,
   stageAt,
   stageRowsFor,
+  witnessStartedAt,
   type MilestoneReached,
   type ParticipantStageState,
 } from '../stage-shim';
@@ -42,33 +44,50 @@ describe('stage shim — stageRowsFor', () => {
   });
 });
 
-describe('stage shim — gatesFor (derived gatesSatisfied)', () => {
-  it("derives each stage's gate keys from its milestones, with ISO instants", () => {
-    expect(gatesFor(0, ADA)).toEqual({ compactSigned: true, signedAt: t(30).toISOString(), invitationSent: true });
-    expect(gatesFor(1, ADA)).toEqual({ feelHeardConfirmed: true, feelHeardConfirmedAt: t(60).toISOString() });
-    // empathy_submitted is not a gate: Ada's stage-2 gates are empty, as the old row's were.
-    expect(gatesFor(2, ADA)).toEqual({});
+const EVERYTHING = [
+  'invitation_sent',
+  'compact_signed',
+  'feel_heard',
+  'empathy_submitted',
+  'empathy_ready',
+  'empathy_validated',
+  'needs_confirmed',
+  'needs_validated',
+  'needs_shared',
+  'repair_walkthrough_started',
+  'choices_shared',
+  'closed',
+  'paused',
+].map((k, i) => m(k, i));
+
+describe('stage shim — milestoneMap (the DTO milestones)', () => {
+  it('maps every reached milestone to its ISO instant, no key list, no renaming', () => {
+    expect(milestoneMap(ADA)).toEqual({
+      invitation_sent: t(0).toISOString(),
+      compact_signed: t(30).toISOString(),
+      feel_heard: t(60).toISOString(),
+      empathy_submitted: t(90).toISOString(),
+    });
+    expect(Object.keys(milestoneMap(EVERYTHING))).toHaveLength(EVERYTHING.length);
+    expect(milestoneMap([])).toEqual({});
+  });
+});
+
+describe('stage shim — partnerMilestoneMap (never wider than the old partner gates)', () => {
+  it("exposes only the partner's current stage's old gate milestones", () => {
+    const keysAt = (stage: number) => Object.keys(partnerMilestoneMap(stage, EVERYTHING)).sort();
+    expect(keysAt(0)).toEqual(['compact_signed', 'invitation_sent']);
+    expect(keysAt(1)).toEqual(['feel_heard']);
+    // empathy_submitted / empathy_ready were never partner-visible gates.
+    expect(keysAt(2)).toEqual(['empathy_validated']);
+    expect(keysAt(3)).toEqual(['needs_confirmed', 'needs_shared', 'needs_validated']);
+    // repair_walkthrough_started, closed and paused were never gates.
+    expect(keysAt(4)).toEqual(['choices_shared']);
   });
 
-  it('never produces the four keys the target dropped', () => {
-    const everything = [
-      'compact_signed',
-      'invitation_sent',
-      'feel_heard',
-      'empathy_submitted',
-      'empathy_ready',
-      'empathy_validated',
-      'needs_confirmed',
-      'needs_validated',
-      'needs_shared',
-      'repair_walkthrough_started',
-      'choices_shared',
-      'closed',
-    ].map((k, i) => m(k, i));
-    const keys = [0, 1, 2, 3, 4].flatMap(stage => Object.keys(gatesFor(stage, everything)));
-    for (const dropped of ['feelHeardCheckOffered', 'readyToRank', 'rankingSubmitted', 'finalEmotionalReading']) {
-      expect(keys).not.toContain(dropped);
-    }
+  it('carries only reached milestones, with their instants', () => {
+    expect(partnerMilestoneMap(1, ADA)).toEqual({ feel_heard: t(60).toISOString() });
+    expect(partnerMilestoneMap(2, ADA)).toEqual({});
   });
 });
 
@@ -110,35 +129,48 @@ describe('stage shim — progressDTO', () => {
     rows: stageRowsFor(stage, milestones, t(0), NP),
   });
 
-  it('is NOT_STARTED with null gates only when there is no participant', () => {
-    expect(progressDTO(undefined, { gates: false })).toEqual({
+  it('is NOT_STARTED only when there is no participant', () => {
+    expect(progressDTO(undefined, { milestones: 'none' })).toEqual({
       stage: 0,
       status: 'NOT_STARTED',
       startedAt: null,
       completedAt: null,
-      gatesSatisfied: null,
+    });
+    expect(progressDTO(undefined, { milestones: 'partner' })).toEqual({
+      stage: 0,
+      status: 'NOT_STARTED',
+      startedAt: null,
+      completedAt: null,
+      milestones: {},
     });
   });
 
   it('is IN_PROGRESS in stage 0 from the join instant for a present participant who reached nothing', () => {
-    expect(progressDTO(state([], 0), { gates: true })).toEqual({
+    expect(progressDTO(state([], 0), { milestones: 'own' })).toEqual({
       stage: 0,
       status: 'IN_PROGRESS',
       startedAt: t(0).toISOString(),
       completedAt: null,
-      gatesSatisfied: {},
+      milestones: {},
     });
   });
 
-  it('is the current row, with or without its derived gates', () => {
-    expect(progressDTO(state(ADA, 2), { gates: true })).toEqual({
+  it('is the current row, with every own milestone, the partner subset, or none', () => {
+    expect(progressDTO(state(ADA, 2), { milestones: 'own' })).toEqual({
       stage: 2,
       status: 'IN_PROGRESS',
       startedAt: t(60).toISOString(),
       completedAt: null,
-      gatesSatisfied: {},
+      milestones: milestoneMap(ADA),
     });
-    expect(progressDTO(state(ADA, 2), { gates: false })).not.toHaveProperty('gatesSatisfied');
+    expect(progressDTO(state(ADA, 2), { milestones: 'partner' }).milestones).toEqual({});
+    expect(progressDTO(state(ADA, 2), { milestones: 'none' })).not.toHaveProperty('milestones');
+  });
+
+  it('witnessStartedAt is the start of stage 1 (the end of stage 0), null before it', () => {
+    expect(witnessStartedAt(state(ADA, 2))).toBe(t(30).toISOString());
+    expect(witnessStartedAt(state([], 0))).toBeNull();
+    expect(witnessStartedAt(undefined)).toBeNull();
   });
 });
 
@@ -159,7 +191,6 @@ describe('stage shim — Getting Started for an inviter (work-qmgc)', () => {
     expect(messageStage(SIGNED, t(20), { invitationPending: true })).toBe(0);
     const rows = stageRowsFor(0, SIGNED, t(0), { invitationPending: true });
     expect(rows.map(r => [r.stage, r.status, r.completedAt])).toEqual([[0, 'IN_PROGRESS', null]]);
-    expect(rows[0].gatesSatisfied).toEqual({ compactSigned: true, signedAt: t(10).toISOString() });
   });
 
   it('ends stage 0 at the later of compact_signed and invitation_sent once both exist', () => {

@@ -25,6 +25,7 @@ import { publishMessageError } from './realtime';
 import type { RefiningNeedContext } from './stream-turn-actions';
 import { getPartnerParticipant, type ResolvedParticipant } from './participant-resolver';
 import { createFacilitatorMessage, deleteMessage, type StoredMessage } from './message-store';
+import { participantsWhoShared } from './needs-share';
 import { loadStageStates, rowForStage } from './stage-shim';
 
 export function isReadyForStage3RevealText(content: string): boolean {
@@ -39,24 +40,27 @@ export function isReadyForStage3RevealText(content: string): boolean {
 }
 
 async function getStage3GateResponse(participant: ResolvedParticipant): Promise<string | null> {
-  const partner = await getPartnerParticipant(participant.id);
-  const states = await loadStageStates([
-    { id: participant.id, joinedAt: participant.joinedAt },
-    ...(partner ? [{ id: partner.participantId, joinedAt: partner.joinedAt }] : []),
-  ]);
+  const states = await loadStageStates([{ id: participant.id, joinedAt: participant.joinedAt }]);
+  const state = states.get(participant.id);
   // The old gate read the stage-3 StageProgress row: none before stage 3.
-  const stage3 = rowForStage(states.get(participant.id), 3);
-  if (!stage3) return null;
+  if (!rowForStage(state, 3)) return null;
 
-  const needs = await prisma.need.findMany({
-    where: { participantId: participant.id, deletedAt: null },
-    orderBy: { createdAt: 'asc' },
-    select: { confirmedAt: true },
-  });
-  const gates = stage3.gatesSatisfied;
-  const ownShared = gates.needsShared === true;
+  const [partner, needs, sharers] = await Promise.all([
+    getPartnerParticipant(participant.id),
+    prisma.need.findMany({
+      where: { participantId: participant.id, deletedAt: null },
+      orderBy: { createdAt: 'asc' },
+      select: { confirmedAt: true },
+    }),
+    participantsWhoShared(participant.sessionId),
+  ]);
+  // "Shared" is a fact of need_share (a live share of theirs exists), not the
+  // needs_shared milestone: that one is session-scoped and reached by everyone
+  // only once all have shared (R33), so it cannot say who is still waiting.
+  const ownShared = sharers.has(participant.id);
   const ownConfirmed =
-    gates.needsConfirmed === true || (needs.length > 0 && needs.every(need => need.confirmedAt !== null));
+    state?.milestones.some(m => m.key === 'needs_confirmed') === true ||
+    (needs.length > 0 && needs.every(need => need.confirmedAt !== null));
 
   if (needs.length === 0) {
     return "Let's first put words to what matters most for you here. What do you need in order to feel clear, grounded, or able to move forward from this?";
@@ -74,9 +78,7 @@ async function getStage3GateResponse(participant: ResolvedParticipant): Promise<
     return "Your needs are shared. We'll wait until your partner has shared theirs before showing anything side by side.";
   }
 
-  // The partner's milestones are S-class (participant_milestone is visible to co-participants).
-  const partnerShared = states.get(partner.participantId)?.milestones.some(m => m.key === 'needs_shared') ?? false;
-  if (!partnerShared) {
+  if (!sharers.has(partner.participantId)) {
     return "Your needs are shared. We'll wait until your partner has shared theirs before showing anything side by side.";
   }
 

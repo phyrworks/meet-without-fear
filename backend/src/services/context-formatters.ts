@@ -1,5 +1,18 @@
 import type { ContextBundle } from './context-assembler';
 
+/**
+ * Issue #312 consent gate: the partner's needs count as revealed only once the
+ * prompt owner's `needs_shared` milestone exists. `needs_shared` is
+ * session-scoped (ruling R33): the job writes it for every participant only
+ * when ALL present humans have shared, so the owner's own row means "both
+ * lists are visible" — the gate's intent. (The old per-participant gate JSON
+ * set `needsShared` on the owner's own share, so the old check fired as soon
+ * as the OWNER shared, before the partner had; work-keq6.)
+ */
+export function needsRevealed(stageContext: Pick<ContextBundle['stageContext'], 'milestones'> | undefined): boolean {
+  return stageContext?.milestones.needs_shared !== undefined;
+}
+
 export interface ContextFormattingOptions {
   sharedContentHistory?: string | null;
   milestoneContext?: string | null;
@@ -180,8 +193,7 @@ export function formatContextForPrompt(bundle: ContextBundle, options?: ContextF
       // Without this guard the AI sees the summarizer's "partnerNeeds" (which
       // may just be the user's empathy *guesses*) and presents them as if the
       // partner actually said them — a critical consent violation (issue #312).
-      const partnerNeedsShared = bundle.stageContext?.gatesSatisfied?.needsShared === true;
-      if (partnerNeedsShared) {
+      if (needsRevealed(bundle.stageContext)) {
         const partnerNeeds = bundle.sessionSummary.partnerNeeds?.length
           ? bundle.sessionSummary.partnerNeeds.join('; ')
           : 'Not yet named';
