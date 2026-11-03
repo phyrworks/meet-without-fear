@@ -1087,6 +1087,14 @@ async function normalizeNeedOutcomes(
       })
     : [];
   const byId = new Map(shared.map(s => [s.needId, s]));
+  // A needId names one of this session's shared needs (the coverage rows the
+  // client got from GET /stage4). Anything else — no such need, a need of
+  // another session, an unshared need — is refused alike, so the answer never
+  // says whether the id exists elsewhere (work-yvt0). It used to be dropped
+  // silently and the outcome stored as an unlinked label.
+  if (ids.some(id => !byId.has(id))) {
+    throw new TendingInvalidStateError('Need outcome references a need not shared in this session');
+  }
   return outcomes.map(o => {
     const s = o.needId ? byId.get(o.needId) : undefined;
     return {
