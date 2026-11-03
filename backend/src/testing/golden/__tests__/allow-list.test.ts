@@ -415,7 +415,9 @@ describe('compareWithAllowList — unrevealed-attempt-hidden (R2 rounds, TS-5 fi
   });
 
   it('passes on the baseline with only its progress DTOs in the target shape', () => {
-    expect(compareWithAllowList(baseline, withTargetProgress(clone(baseline)), UNREVEALED_ATTEMPT_HIDDEN_ALLOW)).toEqual({
+    expect(
+      compareWithAllowList(baseline, withTargetProgress(clone(baseline)), UNREVEALED_ATTEMPT_HIDDEN_ALLOW),
+    ).toEqual({
       violations: [],
       unmatchedRules: [],
     });

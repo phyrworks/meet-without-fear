@@ -256,7 +256,12 @@ const SHARED_RULES = (concept: boolean): AllowRule[] => [
   // JSON carried its instant; in stage 4 (after both shares) the old gates
   // were empty, so every milestone instant is masked there.
   milestoneMapMask([], {
-    steps: [NEEDS_STEPS.state.bothAda, NEEDS_STEPS.state.bothBob, NEEDS_STEPS.progress.bothAda, NEEDS_STEPS.progress.bothBob],
+    steps: [
+      NEEDS_STEPS.state.bothAda,
+      NEEDS_STEPS.state.bothBob,
+      NEEDS_STEPS.progress.bothAda,
+      NEEDS_STEPS.progress.bothBob,
+    ],
   }),
   milestoneMapMask(['needs_confirmed']),
   TARGET_USER_NAME_RULE,
