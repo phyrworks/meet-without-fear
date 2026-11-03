@@ -44,6 +44,39 @@ describe('errorHandler: malformed ids', () => {
     expect(run(other).status).toHaveBeenCalledWith(500);
   });
 
+  // work-yvt0: a raw query ($queryRaw ... ${id}::uuid) reports the same 22P02
+  // as P2010 — observed shape, Prisma 7.10 + adapter-pg, PG 18.
+  it('answers 404 for the raw-query form (P2010 carrying SQLSTATE 22P02 for type uuid)', () => {
+    const raw = new Prisma.PrismaClientKnownRequestError(
+      'Raw query failed. Code: `22P02`. Message: `invalid input syntax for type uuid: "need-partnership"`',
+      {
+        code: 'P2010',
+        clientVersion: 'test',
+        meta: {
+          driverAdapterError: {
+            name: 'DriverAdapterError',
+            cause: {
+              originalCode: '22P02',
+              originalMessage: 'invalid input syntax for type uuid: "need-partnership"',
+              kind: 'InvalidInputValue',
+            },
+          },
+        },
+      },
+    );
+    expect(isMalformedIdError(raw)).toBe(true);
+    expect(run(raw).status).toHaveBeenCalledWith(404);
+  });
+
+  it('does not claim a P2010 with another SQLSTATE', () => {
+    const other = new Prisma.PrismaClientKnownRequestError('Raw query failed. Code: `42P01`.', {
+      code: 'P2010',
+      clientVersion: 'test',
+      meta: { driverAdapterError: { cause: { originalCode: '42P01', originalMessage: 'relation "x" does not exist' } } },
+    });
+    expect(isMalformedIdError(other)).toBe(false);
+  });
+
   it('does not claim non-Prisma errors', () => {
     expect(isMalformedIdError(new Error('invalid input syntax for type uuid'))).toBe(false);
   });
