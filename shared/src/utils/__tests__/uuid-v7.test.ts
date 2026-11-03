@@ -1,4 +1,4 @@
-import { uuidv7 } from '../uuid-v7';
+import { isUuidV7, uuidv7 } from '../uuid-v7';
 
 const V7_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
@@ -34,5 +34,25 @@ describe('uuidv7', () => {
     expect([...ids].sort()).toEqual(ids);
     expect(new Set(ids).size).toBe(ids.length);
     ids.forEach((id) => expect(id).toMatch(V7_RE));
+  });
+});
+
+describe('isUuidV7', () => {
+  it('accepts minted ids, in either case', () => {
+    const id = uuidv7();
+    expect(isUuidV7(id)).toBe(true);
+    expect(isUuidV7(id.toUpperCase())).toBe(true);
+  });
+
+  it('refuses non-uuids, other versions, the wrong variant and non-strings', () => {
+    expect(isUuidV7('need-partnership')).toBe(false);
+    expect(isUuidV7('')).toBe(false);
+    // A valid v4: the uuid7 domain CHECK refuses it in Postgres (23514).
+    expect(isUuidV7('3f1c2b9e-8a4d-4c1e-9b2a-6d5e4f3a2b1c')).toBe(false);
+    // Version 7 but not the RFC variant.
+    expect(isUuidV7('0190a3b4-5c6d-7e8f-0a1b-2c3d4e5f6a7b')).toBe(false);
+    expect(isUuidV7(` ${uuidv7()}`)).toBe(false);
+    expect(isUuidV7(undefined)).toBe(false);
+    expect(isUuidV7(42)).toBe(false);
   });
 });

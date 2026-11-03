@@ -9,6 +9,20 @@
  * the same millisecond still sort in creation order.
  */
 
+/**
+ * A UUIDv7 in canonical form: version nibble 7, RFC 9562 variant (10xx).
+ * Every id column of the target schema is the `uuid7` domain
+ * (CHECK uuid_extract_version(VALUE) = 7), so a client id that fails this
+ * would fail in Postgres (22P02 for bad syntax, 23514 for another version).
+ * Validate client-supplied ids with it at the request boundary.
+ */
+export const UUID_V7_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+/** True when `value` is a string holding a UUIDv7 (see UUID_V7_RE). */
+export function isUuidV7(value: unknown): value is string {
+  return typeof value === 'string' && UUID_V7_RE.test(value);
+}
+
 let lastMs = 0;
 let seq = 0;
 

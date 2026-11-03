@@ -8,7 +8,7 @@
 import { Request, Response, NextFunction } from 'express';
 import { UnauthorizedError, ForbiddenError, NotFoundError } from './errors';
 import { prisma } from '../lib/prisma';
-import { ApiResponse, ErrorCode } from '@meet-without-fear/shared';
+import { ApiResponse, ErrorCode, isUuidV7 } from '@meet-without-fear/shared';
 import { Prisma } from '../generated/prisma/client';
 import { logger } from '../lib/logger';
 import { identityBindingEnabled } from '../lib/prisma-identity';
@@ -80,8 +80,6 @@ async function verifyClerkToken(req: Request): Promise<string | null> {
   }
 }
 
-// UUIDv7 only (owner rule): version 7, RFC variant. A v4 id gets the clean 401, not a DB error.
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 /**
  * E2E auth bypass handler
@@ -104,7 +102,8 @@ async function handleE2EAuthBypass(req: Request): Promise<boolean> {
 
   // User.id is a Postgres uuid: say so here rather than let the upsert fail in
   // the database with an error that reads like a missing resource.
-  if (!UUID_RE.test(e2eUserId)) {
+  // UUIDv7 only (owner rule): a v4 id gets the clean 401, not a DB error.
+  if (!isUuidV7(e2eUserId)) {
     throw new UnauthorizedError('x-e2e-user-id must be a UUIDv7');
   }
 
