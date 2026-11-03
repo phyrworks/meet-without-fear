@@ -22,38 +22,6 @@ import { sessionKeys, stageKeys } from '../../hooks/queryKeys';
 type UnknownRecord = Record<string, unknown>;
 
 /**
- * Mark the feel-heard check as offered.
- *
- * The flag lives at `progress.myProgress.gatesSatisfied.feelHeardCheckOffered`;
- * every level has to be spread or the sibling state at that level is dropped.
- * Returns `old` untouched when there is nothing cached — writing a skeleton
- * would fabricate a session-state shape the readers would then trust.
- */
-export function withFeelHeardCheckOffered(
-  old: UnknownRecord | undefined
-): UnknownRecord | undefined {
-  if (!old) return old;
-
-  const progress = old.progress as UnknownRecord | undefined;
-  const myProgress = progress?.myProgress as UnknownRecord | undefined;
-  const gates = (myProgress?.gatesSatisfied as UnknownRecord) ?? {};
-
-  return {
-    ...old,
-    progress: {
-      ...progress,
-      myProgress: {
-        ...myProgress,
-        gatesSatisfied: {
-          ...gates,
-          feelHeardCheckOffered: true,
-        },
-      },
-    },
-  };
-}
-
-/**
  * Seed the empathy draft the model just proposed.
  *
  * `readyToShare` is forced false: a freshly proposed draft has not been
@@ -129,12 +97,10 @@ export function streamMetadataCacheWrites(
 ): StreamMetadataCacheWrite[] {
   const writes: StreamMetadataCacheWrite[] = [];
 
-  if (metadata.offerFeelHeardCheck) {
-    writes.push({
-      queryKey: sessionKeys.state(sessionId),
-      update: withFeelHeardCheckOffered,
-    });
-  }
+  // `offerFeelHeardCheck` is not written to the cache: the target persists no
+  // "check offered" fact (plan §3 step 7; it was a key in the deleted
+  // gatesSatisfied JSON), so the stream trigger is the only signal —
+  // useUnifiedSession's `streamTriggeredFeelHeard` (work-keq6).
 
   if (metadata.proposedEmpathyStatement) {
     const statement = metadata.proposedEmpathyStatement;

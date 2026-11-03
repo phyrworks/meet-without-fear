@@ -37,10 +37,6 @@ export const stageKeys = {
   // Stage 0: Compact
   compact: (sessionId: string) => [...stageKeys.all, 'compact', sessionId] as const,
 
-  // Gate status
-  gates: (sessionId: string, stage: number) =>
-    [...stageKeys.all, 'gates', sessionId, stage] as const,
-
   // Stage 2: Empathy
   empathyDraft: (sessionId: string) =>
     [...stageKeys.all, 'empathy', 'draft', sessionId] as const,

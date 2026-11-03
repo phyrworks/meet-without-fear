@@ -433,7 +433,7 @@ describe('useSessions', () => {
             status: StageStatus.IN_PROGRESS,
             startedAt: null,
             completedAt: null,
-            gatesSatisfied: {},
+            milestones: {},
           },
           partnerProgress: {
             stage: 0,
@@ -442,10 +442,7 @@ describe('useSessions', () => {
             completedAt: null,
           },
           canAdvance: false,
-          milestones: {
-            witnessStartedAt: null,
-            feelHeardConfirmedAt: null,
-          },
+          witnessStartedAt: null,
         },
         messages: [],
         invitation: {

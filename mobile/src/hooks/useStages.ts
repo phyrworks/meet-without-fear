@@ -24,7 +24,8 @@ import {
   SaveEmpathyDraftResponse,
   ConsentToShareEmpathyResponse,
   GetProgressResponse,
-  GateSatisfactionDTO,
+  MilestoneKey,
+  MilestoneMap,
   StageBlockedReason,
   SessionStateResponse,
   // DTOs
@@ -106,53 +107,30 @@ import {
 // Re-export for backwards compatibility
 export { stageKeys };
 
-type ProgressCacheWithGates = GetProgressResponse & {
-  myProgress: GetProgressResponse['myProgress'] & {
-    gatesSatisfied?: Record<string, unknown> | null;
-  };
-};
-
-function patchStage3Gates(
+/**
+ * Write reached milestones into the caller's progress, in both caches that
+ * carry it (GET /progress and GET /state): `myProgress.milestones` is the
+ * participant_milestone map (key → reachedAt ISO). Optimistic writers only
+ * add keys the server will write; a refetch replaces the map wholesale.
+ */
+export function patchMyMilestones(
   queryClient: ReturnType<typeof useQueryClient>,
   sessionId: string,
-  gates: Record<string, unknown>,
+  reached: MilestoneMap,
 ) {
-  const mergeProgress = <T extends { myProgress?: { gatesSatisfied?: unknown; gates?: unknown } }>(
-    old: T | undefined,
-  ): T | undefined => {
+  const merge = <T extends { myProgress?: { milestones?: MilestoneMap } }>(old: T | undefined): T | undefined => {
     if (!old?.myProgress) return old;
-    const existingGates =
-      (old.myProgress.gatesSatisfied as Record<string, unknown> | null | undefined) ??
-      (old.myProgress.gates as Record<string, unknown> | null | undefined) ??
-      {};
-
     return {
       ...old,
-      myProgress: {
-        ...old.myProgress,
-        gatesSatisfied: {
-          ...existingGates,
-          ...gates,
-        },
-      },
+      myProgress: { ...old.myProgress, milestones: { ...(old.myProgress.milestones ?? {}), ...reached } },
     };
   };
 
-  queryClient.setQueryData<ProgressCacheWithGates>(
-    stageKeys.progress(sessionId),
-    mergeProgress,
-  );
-
-  queryClient.setQueryData<SessionStateResponse>(
-    sessionKeys.state(sessionId),
-    (old) => {
-      if (!old) return old;
-      return {
-        ...old,
-        progress: mergeProgress(old.progress) ?? old.progress,
-      };
-    },
-  );
+  queryClient.setQueryData<GetProgressResponse>(stageKeys.progress(sessionId), merge);
+  queryClient.setQueryData<SessionStateResponse>(sessionKeys.state(sessionId), (old) => {
+    if (!old) return old;
+    return { ...old, progress: merge(old.progress) ?? old.progress };
+  });
 }
 
 export function patchNeedsCacheWithNeed(
@@ -165,6 +143,7 @@ export function patchNeedsCacheWithNeed(
       return {
         needs: [need],
         synthesizedAt: need.createdAt ?? new Date().toISOString(),
+        sharedAt: null,
       };
     }
 
@@ -571,7 +550,7 @@ interface ConfirmFeelHeardContext {
  * Confirm that user feels heard (gate for stage 1 completion).
  *
  * Cache-First Architecture:
- * - onMutate: Immediately updates milestones.feelHeardConfirmedAt in cache
+ * - onMutate: Immediately writes the feel_heard milestone into myProgress.milestones
  * - onSuccess: Invalidates queries to sync with server
  * - onError: Rolls back to previous cache state
  */
@@ -632,11 +611,8 @@ export function useConfirmFeelHeard(
               myProgress: old.progress.myProgress ? {
                 ...old.progress.myProgress,
                 stage: Stage.PERSPECTIVE_STRETCH,
+                milestones: { ...old.progress.myProgress.milestones, feel_heard: optimisticTimestamp },
               } : old.progress.myProgress,
-              milestones: {
-                ...old.progress.milestones,
-                feelHeardConfirmedAt: optimisticTimestamp,
-              },
             } : old.progress,
           };
         }
@@ -673,12 +649,12 @@ export function useConfirmFeelHeard(
               myProgress: baseState.progress.myProgress ? {
                 ...baseState.progress.myProgress,
                 stage: Stage.PERSPECTIVE_STRETCH,
+                milestones: {
+                  ...baseState.progress.myProgress.milestones,
+                  // Use server's confirmedAt timestamp (authoritative)
+                  feel_heard: data.confirmedAt || context?.optimisticTimestamp,
+                },
               } : baseState.progress.myProgress,
-              milestones: {
-                ...baseState.progress.milestones,
-                // Use server's confirmedAt timestamp (authoritative)
-                feelHeardConfirmedAt: data.confirmedAt || context?.optimisticTimestamp,
-              },
             } : baseState.progress,
           };
         }
@@ -1624,10 +1600,7 @@ export function useConfirmNeeds(
     },
     onSuccess: (_, { sessionId }) => {
       const confirmedAt = new Date().toISOString();
-      patchStage3Gates(queryClient, sessionId, {
-        needsConfirmed: true,
-        needsConfirmedAt: confirmedAt,
-      });
+      patchMyMilestones(queryClient, sessionId, { needs_confirmed: confirmedAt });
       queryClient.setQueryData<GetNeedsResponse>(stageKeys.needs(sessionId), (old) => {
         if (!old) return old;
         return {
@@ -1790,10 +1763,16 @@ export function useConsentShareNeeds(
       });
     },
     onSuccess: (data, { sessionId }) => {
-      patchStage3Gates(queryClient, sessionId, {
-        needsShared: true,
-        sharedAt: data.sharedAt,
-      });
+      // "I shared" is GetNeedsResponse.sharedAt (need_share). needs_shared is
+      // session-scoped — the server writes it for everyone once ALL have
+      // shared (data.needsRevealReady) — so it is written here only then.
+      queryClient.setQueryData<GetNeedsResponse>(stageKeys.needs(sessionId), (old) =>
+        old ? { ...old, sharedAt: old.sharedAt ?? data.sharedAt } : old
+      );
+      if (data.needsRevealReady) {
+        patchMyMilestones(queryClient, sessionId, { needs_shared: data.sharedAt });
+      }
+      queryClient.invalidateQueries({ queryKey: stageKeys.needs(sessionId) });
       queryClient.invalidateQueries({ queryKey: stageKeys.needsComparison(sessionId) });
       queryClient.invalidateQueries({ queryKey: stageKeys.progress(sessionId) });
       queryClient.invalidateQueries({ queryKey: sessionKeys.state(sessionId) });
@@ -1960,7 +1939,6 @@ export function useMarkReadyToRank(
       { sessionId: string },
       {
         previousStrategies: GetStrategiesResponse | undefined;
-        previousProgress: ProgressCacheWithGates | undefined;
       }
     >,
     'mutationFn'
@@ -1974,15 +1952,10 @@ export function useMarkReadyToRank(
     },
     onMutate: async ({ sessionId }) => {
       await queryClient.cancelQueries({ queryKey: stageKeys.strategies(sessionId) });
-      await queryClient.cancelQueries({ queryKey: stageKeys.progress(sessionId) });
 
       const previousStrategies = queryClient.getQueryData<GetStrategiesResponse>(
         stageKeys.strategies(sessionId)
       );
-      const previousProgress = queryClient.getQueryData<ProgressCacheWithGates>(
-        stageKeys.progress(sessionId)
-      );
-      const readyAt = new Date().toISOString();
 
       queryClient.setQueryData<GetStrategiesResponse>(
         stageKeys.strategies(sessionId),
@@ -1990,24 +1963,7 @@ export function useMarkReadyToRank(
           ? { ...old, myReadyToRank: true }
           : old
       );
-      queryClient.setQueryData<ProgressCacheWithGates>(
-        stageKeys.progress(sessionId),
-        (old) => old
-          ? {
-              ...old,
-              myProgress: {
-                ...old.myProgress,
-                gatesSatisfied: {
-                  ...(old.myProgress.gatesSatisfied ?? {}),
-                  readyToRank: true,
-                  readyAt,
-                },
-              },
-            }
-          : old
-      );
-
-      return { previousStrategies, previousProgress };
+      return { previousStrategies };
     },
     onSuccess: (data, { sessionId }) => {
       queryClient.setQueryData<GetStrategiesResponse>(
@@ -2023,22 +1979,6 @@ export function useMarkReadyToRank(
             }
           : old
       );
-      queryClient.setQueryData<ProgressCacheWithGates>(
-        stageKeys.progress(sessionId),
-        (old) => old
-          ? {
-              ...old,
-              myProgress: {
-                ...old.myProgress,
-                gatesSatisfied: {
-                  ...(old.myProgress.gatesSatisfied ?? {}),
-                  readyToRank: true,
-                  readyAt: data.readyAt ?? new Date().toISOString(),
-                },
-              },
-            }
-          : old
-      );
       queryClient.invalidateQueries({ queryKey: stageKeys.strategies(sessionId) });
       queryClient.invalidateQueries({ queryKey: stageKeys.progress(sessionId) });
       queryClient.invalidateQueries({ queryKey: sessionKeys.state(sessionId) });
@@ -2046,9 +1986,6 @@ export function useMarkReadyToRank(
     onError: (_error, { sessionId }, context) => {
       if (context?.previousStrategies) {
         queryClient.setQueryData(stageKeys.strategies(sessionId), context.previousStrategies);
-      }
-      if (context?.previousProgress) {
-        queryClient.setQueryData(stageKeys.progress(sessionId), context.previousProgress);
       }
     },
     ...options,
@@ -2066,7 +2003,6 @@ export function useSubmitRankings(
       { sessionId: string; rankedIds: string[] },
       {
         previousStrategies: GetStrategiesResponse | undefined;
-        previousProgress: ProgressCacheWithGates | undefined;
       }
     >,
     'mutationFn'
@@ -2082,15 +2018,10 @@ export function useSubmitRankings(
     },
     onMutate: async ({ sessionId }) => {
       await queryClient.cancelQueries({ queryKey: stageKeys.strategies(sessionId) });
-      await queryClient.cancelQueries({ queryKey: stageKeys.progress(sessionId) });
 
       const previousStrategies = queryClient.getQueryData<GetStrategiesResponse>(
         stageKeys.strategies(sessionId)
       );
-      const previousProgress = queryClient.getQueryData<ProgressCacheWithGates>(
-        stageKeys.progress(sessionId)
-      );
-      const submittedAt = new Date().toISOString();
 
       queryClient.setQueryData<GetStrategiesResponse>(
         stageKeys.strategies(sessionId),
@@ -2098,24 +2029,7 @@ export function useSubmitRankings(
           ? { ...old, phase: StrategyPhase.REVEALING }
           : old
       );
-      queryClient.setQueryData<ProgressCacheWithGates>(
-        stageKeys.progress(sessionId),
-        (old) => old
-          ? {
-              ...old,
-              myProgress: {
-                ...old.myProgress,
-                gatesSatisfied: {
-                  ...(old.myProgress.gatesSatisfied ?? {}),
-                  rankingSubmitted: true,
-                  rankingSubmittedAt: submittedAt,
-                },
-              },
-            }
-          : old
-      );
-
-      return { previousStrategies, previousProgress };
+      return { previousStrategies };
     },
     onSuccess: (data, { sessionId }) => {
       const canReveal =
@@ -2135,9 +2049,6 @@ export function useSubmitRankings(
     onError: (_error, { sessionId }, context) => {
       if (context?.previousStrategies) {
         queryClient.setQueryData(stageKeys.strategies(sessionId), context.previousStrategies);
-      }
-      if (context?.previousProgress) {
-        queryClient.setQueryData(stageKeys.progress(sessionId), context.previousProgress);
       }
     },
     ...options,
@@ -2913,7 +2824,7 @@ interface AdvanceStageApiResponse {
   newStatus: StageStatus | 'NOT_STARTED';
   advancedAt: string | null;
   blockedReason?: StageBlockedReason;
-  unsatisfiedGates?: string[];
+  unreachedMilestones?: MilestoneKey[];
 }
 
 /**
@@ -2936,43 +2847,6 @@ export function useAdvanceStage(
       queryClient.invalidateQueries({ queryKey: stageKeys.progress(sessionId) });
       queryClient.invalidateQueries({ queryKey: sessionKeys.detail(sessionId) });
     },
-    ...options,
-  });
-}
-
-// ============================================================================
-// Gate Status
-// ============================================================================
-
-/**
- * Response type for gate status API.
- */
-interface GateStatusResponse {
-  stage: Stage;
-  gates: GateSatisfactionDTO;
-}
-
-/**
- * Get gate satisfaction status for a specific stage.
- * GET /sessions/:id/stages/:stage/gates
- */
-export function useGateStatus(
-  sessionId: string | undefined,
-  stage: number | undefined,
-  options?: Omit<
-    UseQueryOptions<GateStatusResponse, ApiClientError>,
-    'queryKey' | 'queryFn'
-  >
-) {
-  return useQuery({
-    queryKey: stageKeys.gates(sessionId || '', stage ?? 0),
-    queryFn: async () => {
-      if (!sessionId) throw new Error('Session ID is required');
-      if (stage === undefined) throw new Error('Stage is required');
-      return get<GateStatusResponse>(`/sessions/${sessionId}/stages/${stage}/gates`);
-    },
-    enabled: !!sessionId && stage !== undefined,
-    staleTime: 15_000, // Gates can change frequently during a stage
     ...options,
   });
 }
