@@ -366,7 +366,7 @@ interface ConsentShareNeedsResponse {
 2. Sets the caller's `needsShared` gate
 3. Notifies clients when both users have consented and the side-by-side reveal is ready
 
-Validation: needIds must reference confirmed needs; at least 1. Consenting sets the caller's `needsShared` gate and moves the caller's Stage-3 status to `GATE_PENDING`. The partner-side check `partnerProgress.gatesSatisfied.needsShared === true` (surfaced via the `hasPartnerSharedNeeds` helper) is what unblocks the needs-validation step.
+Validation: needIds must reference confirmed needs; at least 1. Consenting records the caller's share (`need_share`; `GET /sessions/:id/needs` then reports `sharedAt`). Once every present human has shared, the job writes the session-scoped `needs_validated` and `needs_shared` milestones for all of them (ruling R33) and both move to Stage 4; until then the caller stays IN_PROGRESS in Stage 3 and `needs_shared` is absent from every progress `milestones` map.
 When both partners have sent needs, the backend completes Stage 3 for both sides and opens Stage 4. The legacy `needsValidated` gate is populated automatically for compatibility; there is no second user-facing accuracy confirmation.
 
 ---
@@ -449,7 +449,7 @@ To advance from Stage 3 to Stage 4:
 | `needsShared` | Caller consented to share confirmed needs |
 | `needsValidated` | Compatibility gate set automatically once both partners have sent needs |
 
-The partner-side check reads `partnerProgress.gatesSatisfied.needsShared`; there is no standalone `partnerNeedsConfirmed` gate. Stage-3 status transitions: `IN_PROGRESS → GATE_PENDING` (after one side shares needs and waits) → `COMPLETED` (as soon as both partners have shared).
+Who has shared is a fact of `need_share` (the caller's own: `GET /needs` `sharedAt`); `needs_shared` is reached by both at the second share. Stage-3 status transitions: `IN_PROGRESS` → `COMPLETED` (as soon as both partners have shared).
 
 ---
 
