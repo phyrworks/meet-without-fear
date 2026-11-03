@@ -2,16 +2,16 @@
   "stage": "STAGE4_REDESIGN_PARTNER_INACTIVE",
   "database": "mwf_tfx_stage4_redesign_partner_inactive",
   "seeded": {
-    "sessionId": "01a19e7b-8e9e-7ae6-ba70-d4c8c104d92c",
-    "relationshipId": "01a19e7b-8e9b-7796-a144-7072698b2621",
-    "invitationId": "01a19e7b-8ea7-7790-8432-f2d504ac14b9",
+    "sessionId": "01a1a264-7a1b-7fa9-b0f6-006e47c6c754",
+    "relationshipId": "01a1a264-7a19-7c85-a0b9-5e1b3384c3a0",
+    "invitationId": "01a1a264-7a1f-75cb-bb3e-101cd178a2c0",
     "userA": {
-      "id": "01a19e7b-8e98-75d9-977a-00c65a9ebae3",
+      "id": "01a1a264-7a17-7cac-b18c-625ad6ed42ab",
       "email": "ada@e2e.test",
       "name": "Ada Lovelace"
     },
     "userB": {
-      "id": "01a19e7b-8e9a-75f9-b3e1-d1f43cf92540",
+      "id": "01a1a264-7a19-72c7-80d1-91f7489d26e6",
       "email": "bob@e2e.test",
       "name": "Bob Ross"
     }
@@ -86,5 +86,5 @@
     "user_memory",
     "user_preferences"
   ],
-  "builtAt": "2026-11-02T22:57:40.181Z"
+  "builtAt": "2026-11-03T17:10:56.365Z"
 }
