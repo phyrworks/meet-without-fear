@@ -16,6 +16,7 @@ export {
   handleMoodCheck,
   navigateToSession,
   openShareTopicDrawer,
+  waitForShareTopicPanel,
   shareFromShareTopicDrawer,
   declineShareTopic,
   signCompact,

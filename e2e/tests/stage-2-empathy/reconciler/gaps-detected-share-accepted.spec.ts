@@ -11,7 +11,7 @@
  */
 
 import { test, expect, devices, BrowserContext, Page } from '@playwright/test';
-import { cleanupE2EData, getE2EHeaders, SessionBuilder, shareFromShareTopicDrawer } from '../../../helpers';
+import { cleanupE2EData, getE2EHeaders, SessionBuilder, shareFromShareTopicDrawer, signCompact, waitForShareTopicPanel } from '../../../helpers';
 
 const API_BASE_URL = process.env.API_BASE_URL || 'http://localhost:3000';
 const APP_BASE_URL = process.env.APP_BASE_URL || 'http://localhost:8082';
@@ -122,10 +122,8 @@ test.describe('Reconciler: Gaps Detected → Share Accepted', () => {
     await userBPage.waitForLoadState('networkidle');
 
     // Sign compact
-    const agreeCheckbox = userBPage.getByTestId('compact-agree-checkbox');
-    await expect(agreeCheckbox).toBeVisible({ timeout: 10000 });
-    await agreeCheckbox.click();
-    await userBPage.getByTestId('compact-sign-button').click();
+    // Two-step Stage 0 (mobile #310): the agree checkbox is gone; the bar is a single Ready CTA.
+    await signCompact(userBPage);
 
     // Handle mood check
     const moodContinue = userBPage.getByTestId('mood-check-continue-button');
@@ -160,7 +158,9 @@ test.describe('Reconciler: Gaps Detected → Share Accepted', () => {
     await feelHeardYes.click();
     await expect(feelHeardYes).not.toBeVisible({ timeout: 5000 });
 
-    await userBPage.waitForTimeout(3000); // Wait for reconciler
+    // Reconciler runs async after feel-heard; without Ably the subject's
+    // offer only appears on a fresh read (see waitForShareTopicPanel).
+    await waitForShareTopicPanel(userBPage);
   }
 
   test.describe('Complete Journey', () => {

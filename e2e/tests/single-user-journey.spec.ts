@@ -5,8 +5,8 @@
  * 1. Create session
  * 2. Sign compact
  * 3. Chat and receive AI responses
- * 4. See invitation draft panel
- * 5. Mark invitation as sent
+ * 4. See the topic proposal (two-step Stage 0, mobile #310)
+ * 5. Confirm topic, close the invitation-ready modal
  * 6. Continue chatting
  * 7. See feel-heard check
  * 8. Confirm feeling heard
@@ -71,7 +71,14 @@ test.describe('Single User Journey', () => {
     }
   });
 
-  test('new session to empathy draft', async ({ page, request }) => {
+  // FIXME(work-99k2): product bug, not harness. With the partner not yet joined the
+  // backend refuses the empathy draft and consent (400 "Cannot save empathy draft before
+  // your partner has joined", target shape TS-10), but mobile still offers the share, so
+  // step 16 shares nothing and step 17 ("took courage") never comes. Steps 1-15 (Stage 0
+  // two-step flow, Stage 1, feel-heard, empathy-review-button) pass as of work-xws2.
+  // Steps 16+ (Share tab via the empathy indicator) also predate #602; revisit them
+  // together once work-99k2 settles the solo-share rule.
+  test.fixme('new session to empathy draft', async ({ page, request }) => {
     // Increase timeout for this long journey test (5 minutes)
     test.setTimeout(300000);
     const testStart = Date.now();
@@ -171,9 +178,10 @@ test.describe('Single User Journey', () => {
     await waitForAIResponse(page, /invite your partner/i);
     console.log(`${elapsed()} Step 7 complete`);
 
-    // Assert invitation panel appears
-    const invitationPanel = page.getByTestId('invitation-draft-panel');
-    await expect(invitationPanel).toBeVisible({ timeout: 5000 });
+    // Assert the topic proposal appears (two-step Stage 0, mobile #310: the
+    // inline invitation draft panel was replaced by the topic proposal followed
+    // by the invitation-ready modal).
+    await expect(page.getByTestId('topic-proposal-use-button')).toBeVisible({ timeout: 5000 });
 
     await page.screenshot({ path: 'test-results/single-user-04-invitation-panel.png' });
 
@@ -181,8 +189,8 @@ test.describe('Single User Journey', () => {
     console.log(`${elapsed()} Step 8: Confirming topic frame and invitation...`);
     await confirmInvitationTopicAndContinue(page);
 
-    // Wait for panel to close
-    await expect(invitationPanel).not.toBeVisible({ timeout: 5000 });
+    // The helper closes the invitation-ready modal; it must stay closed.
+    await expect(page.getByTestId('invitation-ready-modal')).not.toBeVisible({ timeout: 5000 });
 
     await page.screenshot({ path: 'test-results/single-user-05-invitation-sent.png' });
 

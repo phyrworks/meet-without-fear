@@ -9,7 +9,7 @@
  */
 
 import { test, expect, devices, BrowserContext, Page } from '@playwright/test';
-import { cleanupE2EData, getE2EHeaders, SessionBuilder, shareFromShareTopicDrawer } from '../helpers';
+import { cleanupE2EData, getE2EHeaders, SessionBuilder, shareFromShareTopicDrawer, signCompact, waitForShareTopicPanel } from '../helpers';
 
 const API_BASE_URL = process.env.API_BASE_URL || 'http://localhost:3000';
 const APP_BASE_URL = process.env.APP_BASE_URL || 'http://localhost:8082';
@@ -216,12 +216,8 @@ test.describe('Partner Journey (Two Browser Contexts)', () => {
     await userBPage.screenshot({ path: 'test-results/partner-02-user-b-session.png' });
 
     // Sign compact
-    const agreeCheckbox = userBPage.getByTestId('compact-agree-checkbox');
-    await expect(agreeCheckbox).toBeVisible({ timeout: 10000 });
-    await agreeCheckbox.click();
-
-    const signButton = userBPage.getByTestId('compact-sign-button');
-    await signButton.click();
+    // Two-step Stage 0 (mobile #310): the agree checkbox is gone; the bar is a single Ready CTA.
+    await signCompact(userBPage);
 
     await userBPage.screenshot({ path: 'test-results/partner-03-user-b-compact-signed.png' });
 
@@ -338,6 +334,9 @@ test.describe('Partner Journey (Two Browser Contexts)', () => {
       console.log(`${elapsed()} === PHASE 7: User B shares context ===`);
       await userBPage.screenshot({ path: 'test-results/partner-07-user-b-share-suggestion-card.png' });
 
+      // The offer exists server-side (API above); without Ably the subject's chat
+      // only shows it after a fresh read (see waitForShareTopicPanel).
+      await waitForShareTopicPanel(userBPage);
       const shareResponse = await shareFromShareTopicDrawer(userBPage);
       console.log(`${elapsed()} Share API response status: ${shareResponse.status()}`);
       expect(shareResponse.ok()).toBe(true);
