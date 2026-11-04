@@ -17,7 +17,6 @@ import {
   cleanupE2EData,
   getE2EHeaders,
   SessionBuilder,
-  navigateToShareFromSession,
   expectNeedsComparisonFromApi,
   expectNeedsSummaryFromApi,
   waitForNeedsReveal,
@@ -170,55 +169,20 @@ test.describe('Stage 3-4 Complete Flow', () => {
     }
 
     // ========================================
-    // Navigate to Share screen
-    // ========================================
-    console.log(`${elapsed()} Navigating to Share screen...`);
-
-    // Navigate via in-app Share arrow from chat
-    await Promise.all([
-      navigateToShareFromSession(pageA),
-      navigateToShareFromSession(pageB),
-    ]);
-
-    // Screenshot Share screen
-    await pageA.screenshot({ path: 'test-results/stage-3-4-02-share-screen-user-a.png' });
-    await pageB.screenshot({ path: 'test-results/stage-3-4-02-share-screen-user-b.png' });
-    console.log(`${elapsed()} Share screen screenshots captured`);
-
-    // ========================================
     // STAGE 3: Need Mapping
     // ========================================
+    // Needs, strategies and the agreement are surfaced in the session chat
+    // itself (the Share screen and its tabs went in 90842bc3; the Activity drawer
+    // that replaced them went in mobile #602, 506c3f9a). Both partners start in
+    // the Stage 3 chat.
     console.log(`${elapsed()} === STAGE 3: Need Mapping ===`);
+    await Promise.all([
+      expect(pageA.getByTestId('chat-input')).toBeVisible({ timeout: 15000 }),
+      expect(pageB.getByTestId('chat-input')).toBeVisible({ timeout: 15000 }),
+    ]);
 
-    // Check for tabs - they should be visible since we're in Stage 3
-    const tabSelectorA = pageA.getByTestId('share-tab-selector');
-    const hasTabsA = await tabSelectorA.isVisible({ timeout: 5000 }).catch(() => false);
-    console.log(`${elapsed()} User A has tab selector: ${hasTabsA}`);
-
-    // Click on Needs tab if available
-    if (hasTabsA) {
-      const needsTabA = pageA.getByTestId('share-tab-selector-tab-needs');
-      if (await needsTabA.isVisible({ timeout: 2000 }).catch(() => false)) {
-        await needsTabA.click();
-        await pageA.waitForTimeout(500);
-        console.log(`${elapsed()} User A clicked Needs tab`);
-      }
-    }
-
-    const tabSelectorB = pageB.getByTestId('share-tab-selector');
-    const hasTabsB = await tabSelectorB.isVisible({ timeout: 2000 }).catch(() => false);
-    if (hasTabsB) {
-      const needsTabB = pageB.getByTestId('share-tab-selector-tab-needs');
-      if (await needsTabB.isVisible({ timeout: 2000 }).catch(() => false)) {
-        await needsTabB.click();
-        await pageB.waitForTimeout(500);
-        console.log(`${elapsed()} User B clicked Needs tab`);
-      }
-    }
-
-    // Screenshot after clicking needs tab
-    await pageA.screenshot({ path: 'test-results/stage-3-4-03-needs-tab-user-a.png' });
-    await pageB.screenshot({ path: 'test-results/stage-3-4-03-needs-tab-user-b.png' });
+    await pageA.screenshot({ path: 'test-results/stage-3-4-02-stage3-chat-user-a.png' });
+    await pageB.screenshot({ path: 'test-results/stage-3-4-02-stage3-chat-user-b.png' });
 
     // Create needs via API (since AI extraction returns empty in mock mode)
     console.log(`${elapsed()} Creating needs via API...`);
@@ -404,10 +368,6 @@ test.describe('Stage 3-4 Complete Flow', () => {
     const overlapData = await overlapResponse.json();
     console.log(`${elapsed()} Overlap: ${overlapData.data?.overlap?.length || 0} strategies, candidates: ${overlapData.data?.agreementCandidates?.length || 0}`);
 
-    // Navigate to Strategies tab via tab selector (no deep-link)
-    await pageA.getByTestId('share-tab-selector-tab-strategies').click();
-    await pageB.getByTestId('share-tab-selector-tab-strategies').click();
-    await Promise.all([pageA.waitForTimeout(500), pageB.waitForTimeout(500)]);
 
     // Screenshot strategies view
     await pageA.screenshot({ path: 'test-results/stage-3-4-05-strategies-user-a.png' });
@@ -446,10 +406,6 @@ test.describe('Stage 3-4 Complete Flow', () => {
       console.log(`${elapsed()} User B confirmed: ${confirmAgreementData.data?.confirmed}, both confirmed: ${confirmAgreementData.data?.partnerConfirmed}`);
     }
 
-    // Navigate to Agreement tab via tab selector (no deep-link)
-    await pageA.getByTestId('share-tab-selector-tab-agreement').click();
-    await pageB.getByTestId('share-tab-selector-tab-agreement').click();
-    await Promise.all([pageA.waitForTimeout(500), pageB.waitForTimeout(500)]);
 
     // Final screenshots
     await pageA.screenshot({ path: 'test-results/stage-3-4-06-agreement-user-a.png' });

@@ -5,12 +5,12 @@
  * 1. User A has shared an empathy guess
  * 2. User B completes Stage 1 (feels heard)
  * 3. Reconciler detects gaps in User A's understanding
- * 4. User B sees share suggestion, edits it, then shares
+ * 4. User B opens the share suggestion, refines it in the refinement chat, then shares
  * 5. User A receives the refined shared context
  */
 
 import { test, expect, devices, BrowserContext, Page } from '@playwright/test';
-import { cleanupE2EData, getE2EHeaders, SessionBuilder, navigateToShareFromSession } from '../../../helpers';
+import { cleanupE2EData, getE2EHeaders, SessionBuilder, handleMoodCheck, openShareTopicDrawer, shareFromShareTopicDrawer } from '../../../helpers';
 
 const API_BASE_URL = process.env.API_BASE_URL || 'http://localhost:3000';
 const APP_BASE_URL = process.env.APP_BASE_URL || 'http://localhost:8082';
@@ -150,176 +150,116 @@ test.describe('Reconciler: Gaps Detected → Share Refined', () => {
     await userBPage.waitForTimeout(3000);
   }
 
-  async function navigateToShareScreen() {
-    await navigateToShareFromSession(userBPage);
+  // The share suggestion lives in the share-topic panel/drawer; refining it happens
+  // in the refinement modal ("Yes, help me share"). The inline edit mode of the old
+  // share-suggestion card and the Activity drawer (mobile #602, 506c3f9a) are gone.
+  async function openRefinementModal() {
+    await openShareTopicDrawer(userBPage);
+    await userBPage.getByTestId('share-topic-accept').click();
+    const modal = userBPage.getByTestId('refinement-modal');
+    await expect(modal).toBeVisible({ timeout: 15000 });
+    return modal;
   }
 
-  test.describe('Edit Mode UI', () => {
-    test('User B can enter edit mode, see refinement input, and cancel', async ({ request }) => {
+  async function expectUserASeesSharedContext() {
+    const sharedContextLabel = userAPage.getByText('Context from Darryl', { exact: true });
+    if (!(await sharedContextLabel.isVisible({ timeout: 8000 }).catch(() => false))) {
+      await userAPage.reload();
+      await userAPage.waitForLoadState('networkidle');
+      await handleMoodCheck(userAPage, 3000);
+    }
+    await expect(sharedContextLabel).toBeVisible({ timeout: 10000 });
+  }
+
+  test.describe('Refinement UI', () => {
+    test('User B can open the refinement chat for the suggestion and close it without sharing', async () => {
       test.setTimeout(300000);
       const testStart = Date.now();
       const elapsed = () => `[${((Date.now() - testStart) / 1000).toFixed(1)}s]`;
 
       await setupUserA();
       await completeUserBStage1();
-      await navigateToShareScreen();
+      const modal = await openRefinementModal();
+      console.log(`${elapsed()} Refinement modal open`);
 
-      console.log(`${elapsed()} User B on Share screen`);
+      // The refinement chat has its own input and a share action
+      await expect(modal.getByTestId('chat-input')).toBeVisible({ timeout: 5000 });
+      await expect(userBPage.getByTestId('refinement-modal-share-button')).toBeVisible({ timeout: 15000 });
 
-      // Enter edit mode
-      const editButton = userBPage.getByTestId('share-suggestion-card-edit');
-      await expect(editButton).toBeVisible({ timeout: 10000 });
-      await editButton.click();
-
-      // Verify refinement input appears
-      const refineInput = userBPage.getByTestId('share-suggestion-card-refine-input');
-      await expect(refineInput).toBeVisible({ timeout: 5000 });
-      console.log(`${elapsed()} Edit mode activated`);
-
-      // Verify placeholder text
-      const placeholder = await refineInput.getAttribute('placeholder');
-      expect(placeholder?.toLowerCase()).toContain('change');
-      console.log(`${elapsed()} Refinement input has placeholder: "${placeholder}"`);
-
-      // Cancel edit mode
-      const cancelButton = userBPage.getByTestId('share-suggestion-card-cancel-edit');
-      await expect(cancelButton).toBeVisible({ timeout: 5000 });
-      await cancelButton.click();
-
-      // Verify back to default view
-      await expect(refineInput).not.toBeVisible({ timeout: 5000 });
-      await expect(editButton).toBeVisible({ timeout: 5000 });
-      console.log(`${elapsed()} Successfully canceled edit mode`);
+      // Closing without chatting leaves the suggestion unshared and still offered
+      await userBPage.getByTestId('refinement-modal-close').click();
+      await expect(modal).not.toBeVisible({ timeout: 5000 });
+      await expect(userBPage.getByTestId('share-topic-panel')).toBeVisible({ timeout: 10000 });
+      console.log(`${elapsed()} Closed refinement without sharing`);
     });
   });
 
   test.describe('Complete Journey', () => {
-    test('User B refines suggestion then shares → User A receives refined context', async ({ request }) => {
+    test('User B refines suggestion then shares → User A receives refined context', async () => {
       test.setTimeout(300000);
       const testStart = Date.now();
       const elapsed = () => `[${((Date.now() - testStart) / 1000).toFixed(1)}s]`;
 
       await setupUserA();
       await completeUserBStage1();
-      await navigateToShareScreen();
+      const modal = await openRefinementModal();
 
-      // Enter edit mode
-      const editButton = userBPage.getByTestId('share-suggestion-card-edit');
-      await expect(editButton).toBeVisible({ timeout: 10000 });
-      await editButton.click();
+      // Ask for a refinement in the refinement chat
+      const refinementText = 'Please make it shorter and focus on how tired I feel';
+      const [refineResponse] = await Promise.all([
+        userBPage.waitForResponse(
+          (response) =>
+            response.url().includes('/reconciler/refinement/message') && response.request().method() === 'POST',
+          { timeout: 30000 }
+        ),
+        (async () => {
+          await modal.getByTestId('chat-input').fill(refinementText);
+          await modal.getByTestId('send-button').click();
+        })(),
+      ]);
+      expect(refineResponse.status()).toBeLessThan(300);
+      console.log(`${elapsed()} Refinement sent: "${refinementText}"`);
 
-      const refineInput = userBPage.getByTestId('share-suggestion-card-refine-input');
-      await expect(refineInput).toBeVisible({ timeout: 5000 });
-
-      // Type refinement request
-      const refinementText = "Please make it shorter and focus on how tired I feel";
-      await refineInput.fill(refinementText);
-      console.log(`${elapsed()} Entered refinement: "${refinementText}"`);
-
-      // Send refinement
-      const sendRefineButton = userBPage.getByTestId('share-suggestion-card-send-refine');
-      await expect(sendRefineButton).toBeVisible({ timeout: 5000 });
-
-      const refineResponsePromise = userBPage.waitForResponse(
-        (response) => response.url().includes('/reconciler/share-offer/respond') && response.request().method() === 'POST',
-        { timeout: 15000 }
-      ).catch(() => null);
-
-      await sendRefineButton.click();
-      const refineResponse = await refineResponsePromise;
-      if (refineResponse) {
-        expect(refineResponse.status()).toBeLessThan(300);
-      }
-      console.log(`${elapsed()} Refinement sent${refineResponse ? '' : ' (no explicit network capture)'}`);
-
-      // Wait for AI to regenerate suggestion
-      await userBPage.waitForTimeout(3000);
-
-      // Now share the refined content
-      const shareButton = userBPage.locator('[data-testid*="share-suggestion"][data-testid$="-share"]');
-      let didShare = false;
-      if (await shareButton.isVisible({ timeout: 5000 }).catch(() => false)) {
-        const shareResponsePromise = userBPage.waitForResponse(
-          (response) => response.url().includes('/reconciler/share-offer/respond') && response.request().method() === 'POST',
+      // Share the (refined) version
+      const shareButton = userBPage.getByTestId('refinement-modal-share-button');
+      await expect(shareButton).toBeVisible({ timeout: 15000 });
+      const [shareResponse] = await Promise.all([
+        userBPage.waitForResponse(
+          (response) =>
+            response.url().includes('/reconciler/refinement/finalize') && response.request().method() === 'POST',
           { timeout: 15000 }
-        );
-        await shareButton.click();
-        const shareResponse = await shareResponsePromise;
-        expect(shareResponse.status()).toBeLessThan(300);
-        didShare = true;
-        console.log(`${elapsed()} User B shared refined content`);
-      }
+        ),
+        shareButton.click(),
+      ]);
+      expect(shareResponse.status()).toBeLessThan(300);
+      console.log(`${elapsed()} User B shared refined content`);
 
       // === VERIFY: User A receives shared context ===
-      await userAPage.waitForTimeout(5000);
-
-      const sharedContextIndicator = userAPage.getByText('Context from Darryl', { exact: true });
-      let hasIndicator = await sharedContextIndicator.isVisible({ timeout: 5000 }).catch(() => false);
-
-      if (!hasIndicator) {
-        await userAPage.reload();
-        await userAPage.waitForLoadState('networkidle');
-
-        const moodCheck = userAPage.getByTestId('mood-check-continue-button');
-        if (await moodCheck.isVisible({ timeout: 3000 }).catch(() => false)) {
-          await moodCheck.click();
-        }
-
-        hasIndicator = await sharedContextIndicator.isVisible({ timeout: 10000 }).catch(() => false);
-      }
-
-      if (didShare) {
-        expect(hasIndicator).toBe(true);
-        console.log(`${elapsed()} User A sees "Context from Darryl" indicator`);
-      } else {
-        const suggestionStillVisible = await userBPage.getByTestId('share-suggestion-card').isVisible({ timeout: 3000 }).catch(() => false);
-        let canContinueChat = false;
-        if (!suggestionStillVisible) {
-          const backToChat = userBPage.getByTestId('session-chat-header-back-to-chat');
-          if (await backToChat.isVisible({ timeout: 3000 }).catch(() => false)) {
-            await backToChat.click();
-            canContinueChat = await userBPage.getByTestId('chat-input').isVisible({ timeout: 5000 }).catch(() => false);
-          }
-        }
-
-        expect(suggestionStillVisible || canContinueChat).toBe(true);
-        console.log(
-          `${elapsed()} Share CTA not available after refine; suggestion visible=${suggestionStillVisible}, canContinueChat=${canContinueChat}`
-        );
-      }
+      await expectUserASeesSharedContext();
+      console.log(`${elapsed()} User A sees "Context from Darryl"`);
     });
   });
 
-  test.describe('Share Tab Visibility', () => {
-    test('Shared context appears in User A Share tab after User B refines and shares', async ({ request }) => {
+  test.describe('Shared Context Visibility', () => {
+    test('Shared context appears in User A chat after User B shares', async () => {
       test.setTimeout(300000);
       const testStart = Date.now();
       const elapsed = () => `[${((Date.now() - testStart) / 1000).toFixed(1)}s]`;
 
       await setupUserA();
       await completeUserBStage1();
-      await navigateToShareScreen();
 
       // Share directly (no refinement needed for this test)
-      const shareButton = userBPage.locator('[data-testid*="share-suggestion"][data-testid$="-share"]');
-      await expect(shareButton).toBeVisible({ timeout: 10000 });
-      await shareButton.click();
-
+      const shareResponse = await shareFromShareTopicDrawer(userBPage);
+      expect(shareResponse.status()).toBeLessThan(300);
       console.log(`${elapsed()} User B shared`);
-      await userBPage.waitForTimeout(3000);
 
-      // User A navigates to Share tab via in-app arrow
-      await navigateToShareFromSession(userAPage);
-
-      // Check for sharing timeline or shared context
-      const sharingTimeline = userAPage.getByTestId('sharing-timeline');
-      const hasTimeline = await sharingTimeline.isVisible({ timeout: 10000 }).catch(() => false);
-
-      const sharedContextText = userAPage.getByText(/running on empty|exhausted/i);
-      const hasSharedText = await sharedContextText.isVisible({ timeout: 5000 }).catch(() => false);
-
-      console.log(`${elapsed()} Share tab - timeline: ${hasTimeline}, shared text: ${hasSharedText}`);
-      expect(hasTimeline || hasSharedText).toBe(true);
+      // Shared context renders inline in User A's chat as a "Context from Darryl" frame
+      await expectUserASeesSharedContext();
+      const frame = userAPage.locator('[data-testid^="chat-bubble-"]').filter({
+        has: userAPage.getByText('Context from Darryl', { exact: true }),
+      });
+      await expect(frame).toContainText(/running on empty|exhausted/i);
     });
   });
 });

@@ -4,7 +4,7 @@
  * Shared helper functions extracted from test files to eliminate duplication.
  */
 
-import { Page, Browser, BrowserContext, devices, expect } from '@playwright/test';
+import { Page, Browser, BrowserContext, Response, devices, expect } from '@playwright/test';
 import { getE2EHeaders } from './auth';
 import type { MilestoneKey } from '@meet-without-fear/shared';
 
@@ -162,63 +162,59 @@ export async function navigateToSession(
 }
 
 /**
- * Open the in-session Activity drawer where sharing/validation state now lives.
- * This avoids deep-linking to deprecated sharing routes, which now redirect back
- * to the session screen.
+ * Open the reconciler's share suggestion (the "share topic" drawer) from the
+ * session chat. Since mobile #602 (506c3f9a) removed the Activity drawer, the
+ * subject's share offer lives in the share-topic panel above the chat input;
+ * tapping it opens the share-topic drawer.
  */
-export async function navigateToShareFromSession(
-  page: Page,
-  timeout = 10000
-): Promise<void> {
-  if (await page.getByTestId('activity-drawer').isVisible({ timeout: 1000 }).catch(() => false)) {
-    return;
-  }
+export async function openShareTopicDrawer(page: Page, timeout = 15000): Promise<void> {
+  await handleMoodCheck(page, 3000);
+  const panel = page.getByTestId('share-topic-panel');
+  await expect(panel).toBeVisible({ timeout });
+  await panel.click();
+  await expect(page.getByTestId('share-topic-drawer')).toBeVisible({ timeout: 10000 });
+}
 
-  for (let attempt = 0; attempt < 2; attempt++) {
-    // If session-entry mood check is present, clear it before looking for nav controls.
-    await handleMoodCheck(page, 3000);
+/**
+ * Accept the share suggestion and share the seeded draft as-is:
+ * share-topic drawer -> "Yes, help me share" -> refinement modal -> "Share This Version".
+ * Returns the finalize response.
+ */
+export async function shareFromShareTopicDrawer(page: Page, timeout = 15000): Promise<Response> {
+  await openShareTopicDrawer(page, timeout);
+  await page.getByTestId('share-topic-accept').click();
+  const shareButton = page.getByTestId('refinement-modal-share-button');
+  await expect(shareButton).toBeVisible({ timeout });
+  const [response] = await Promise.all([
+    page.waitForResponse(
+      (candidate) =>
+        candidate.url().includes('/reconciler/refinement/finalize') && candidate.request().method() === 'POST',
+      { timeout }
+    ),
+    shareButton.click(),
+  ]);
+  return response;
+}
 
-    const modalViewButton = page.getByTestId('partner-event-modal-view');
-    if (await modalViewButton.isVisible({ timeout: 2000 }).catch(() => false)) {
-      await modalViewButton.click();
-      break;
-    }
-
-    const headerShareButton = page.getByTestId('session-chat-header-go-to-share');
-    if (await headerShareButton.isVisible({ timeout: 5000 }).catch(() => false)) {
-      await headerShareButton.click();
-      break;
-    }
-
-    const accessibleShareButton = page.getByRole('button', { name: /share/i });
-    if (await accessibleShareButton.isVisible({ timeout: 5000 }).catch(() => false)) {
-      await accessibleShareButton.click();
-      break;
-    }
-
-    // Fallback: open Share by tapping a chat indicator that routes to Share
-    const contextIndicator = page.getByTestId('chat-indicator-context-shared');
-    const empathyIndicator = page.getByTestId('chat-indicator-empathy-shared');
-    if (await contextIndicator.isVisible({ timeout: 3000 }).catch(() => false)) {
-      await contextIndicator.click();
-      break;
-    }
-    if (await empathyIndicator.isVisible({ timeout: 3000 }).catch(() => false)) {
-      await empathyIndicator.click();
-      break;
-    }
-
-    if (attempt === 1) {
-      throw new Error(`Could not find in-app Share navigation button on session screen (url=${page.url()})`);
-    }
-
-    await page.waitForTimeout(1500);
-  }
-
-  // Mood check can occasionally re-appear after route/state updates.
-  await handleMoodCheck(page, 2000);
-
-  await page.getByTestId('activity-drawer').waitFor({ state: 'visible', timeout });
+/**
+ * Decline the share suggestion ("No thanks", confirmed in the web confirm dialog).
+ * Returns the share-offer respond response.
+ */
+export async function declineShareTopic(page: Page, timeout = 15000): Promise<Response> {
+  await openShareTopicDrawer(page, timeout);
+  page.once('dialog', (dialog) => {
+    void dialog.accept();
+  });
+  const [response] = await Promise.all([
+    page.waitForResponse(
+      (candidate) =>
+        candidate.url().includes('/reconciler/share-offer/respond') && candidate.request().method() === 'POST',
+      { timeout }
+    ),
+    page.getByTestId('share-topic-decline').click(),
+  ]);
+  await expect(page.getByTestId('share-topic-drawer')).not.toBeVisible({ timeout: 10000 });
+  return response;
 }
 
 /**
@@ -482,20 +478,13 @@ export async function waitForReconcilerComplete(page: Page, timeout = 30000): Pr
 }
 
 /**
- * Navigate back to the chat screen from any other in-session surface.
- * If already on chat with no activity drawer open, returns immediately.
+ * Navigate back to the chat screen from a legacy share route.
+ * If already on chat, returns immediately.
  *
  * @param page - Playwright Page instance
  * @param timeout - Maximum time to wait for navigation (default: 10000)
  */
 export async function navigateBackToChat(page: Page, timeout = 10000): Promise<void> {
-  const activityDrawer = page.getByTestId('activity-drawer');
-  if (await activityDrawer.isVisible({ timeout: 1000 }).catch(() => false)) {
-    await page.mouse.click(20, 20);
-    await activityDrawer.waitFor({ state: 'hidden', timeout }).catch(() => {});
-    return;
-  }
-
   // If already on chat (not on a legacy share route), return immediately
   if (!page.url().includes('/share')) {
     return;

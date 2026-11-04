@@ -1,12 +1,21 @@
 /**
- * Needs Tab Visual Test
+ * Needs Review Visual Test
  *
- * Focused test for iterating on the Needs tab UI.
- * Starts at EMPATHY_REVEALED stage and navigates directly to the Needs tab.
+ * Focused test for iterating on the Stage 3 needs UI. Starts at EMPATHY_REVEALED,
+ * adds needs for both partners via the API, and opens User A's needs review.
+ *
+ * History: this spec opened the Share screen's Needs tab (removed in 90842bc3),
+ * later via the Activity drawer (removed in mobile #602, 506c3f9a). A user's own
+ * needs are now reviewed in the session's needs drawer, opened from the
+ * "Review needs" panel above the chat input. The toHaveScreenshot baselines this
+ * spec named were never committed, so it captures plain screenshots and asserts
+ * the content instead.
+ *
+ * Privacy: User B has not shared their needs, so User A must not see them.
  */
 
 import { test, expect, devices, BrowserContext, Page, APIRequestContext } from '@playwright/test';
-import { cleanupE2EData, getE2EHeaders, SessionBuilder, navigateToShareFromSession } from '../helpers';
+import { cleanupE2EData, getE2EHeaders, SessionBuilder, handleMoodCheck } from '../helpers';
 
 const API_BASE_URL = process.env.API_BASE_URL || 'http://localhost:3000';
 const APP_BASE_URL = process.env.APP_BASE_URL || 'http://localhost:8082';
@@ -75,7 +84,7 @@ test.describe('Needs Tab Visual', () => {
     await userAContext?.close();
   });
 
-  test('Needs tab displays needs with proper styling', async ({ request }) => {
+  test('Needs drawer shows my needs and not my partner\'s unshared needs', async ({ request }) => {
     test.setTimeout(60000);
 
     const apiA = makeApiRequest(request, userA.email, userAId);
@@ -112,66 +121,51 @@ test.describe('Needs Tab Visual', () => {
       category: 'SAFETY',
     });
 
-    // Navigate to session first, then open Share via the in-app arrow
+    const userANeeds = [
+      'I need to feel appreciated for the work I do around the house',
+      'I need us to share responsibilities more equally',
+      'I need us to talk about our schedules before making plans',
+    ];
+    const userBNeeds = [
+      'I need you to understand how exhausted I am after work',
+      'I need emotional support when I come home tired',
+    ];
+
     const userAParams = new URLSearchParams({
       'e2e-user-id': userAId,
       'e2e-user-email': userA.email,
     });
     await pageA.goto(`${APP_BASE_URL}/session/${sessionId}?${userAParams.toString()}`);
     await pageA.waitForLoadState('networkidle');
+    await handleMoodCheck(pageA, 3000);
 
-    console.log('Navigating to Share via in-app arrow...');
-    await navigateToShareFromSession(pageA);
+    // The compact "Review needs" panel above the chat input counts my needs
+    // (a compact pressable GuidedActionPanel carries its primary action's testID)
+    const needsPanel = pageA.getByTestId('needs-drawer-open-button');
+    await expect(needsPanel).toBeVisible({ timeout: 15000 });
+    await expect(needsPanel).toContainText('3 needs captured');
+    await pageA.screenshot({ path: 'test-results/needs-tab-01-initial.png', fullPage: true });
 
-    // Wait a moment for React Query to fetch needs
-    await pageA.waitForTimeout(2000);
+    // Open the needs drawer
+    await needsPanel.click();
+    const needsDrawer = pageA.getByTestId('needs-drawer');
+    await expect(needsDrawer).toBeVisible({ timeout: 10000 });
+    await pageA.screenshot({ path: 'test-results/needs-tab-02-clicked.png', fullPage: true });
 
-    // Take screenshot
-    await expect(pageA).toHaveScreenshot('needs-tab-01-initial.png', {
-      maxDiffPixels: 100,
-      fullPage: true,
-    });
-    console.log('Screenshot saved: needs-tab-01-initial.png');
+    // Each of my needs is listed with its category header
+    for (const need of userANeeds) {
+      await expect(needsDrawer.getByText(need, { exact: true })).toBeVisible();
+    }
+    for (const category of ['RECOGNITION', 'FAIRNESS', 'CONNECTION']) {
+      await expect(needsDrawer.getByText(category, { exact: true })).toBeVisible();
+    }
+    await expect(needsDrawer.locator('[data-testid^="needs-drawer-row-"]')).toHaveCount(userANeeds.length);
 
-    // Click on the Needs tab explicitly if tabs are visible
-    const needsTab = pageA.getByTestId('share-tab-selector-tab-needs');
-    const tabVisible = await needsTab.isVisible({ timeout: 3000 }).catch(() => false);
-
-    if (tabVisible) {
-      await needsTab.click();
-      await pageA.waitForTimeout(1000);
-
-      // Take screenshot after clicking needs tab
-      await expect(pageA).toHaveScreenshot('needs-tab-02-clicked.png', {
-        maxDiffPixels: 100,
-        fullPage: true,
-      });
-      console.log('Screenshot saved: needs-tab-02-clicked.png');
-    } else {
-      console.log('Needs tab not visible - tabs may not be available at this stage');
+    // Privacy: User B has not shared their needs, so User A cannot see them anywhere
+    for (const need of userBNeeds) {
+      await expect(pageA.getByText(need)).toHaveCount(0);
     }
 
-    // Verify needs are displayed
-    const needsSection = pageA.getByTestId('share-needs-section');
-    const sectionVisible = await needsSection.isVisible({ timeout: 5000 }).catch(() => false);
-
-    if (sectionVisible) {
-      console.log('Needs section is visible');
-    } else {
-      console.log('Needs section not visible - may need to check stage requirements');
-
-      // Take a diagnostic screenshot
-      await expect(pageA).toHaveScreenshot('needs-tab-03-diagnostic.png', {
-        maxDiffPixels: 100,
-        fullPage: true,
-      });
-    }
-
-    // Final screenshot
-    await expect(pageA).toHaveScreenshot('needs-tab-final.png', {
-      maxDiffPixels: 100,
-      fullPage: true,
-    });
-    console.log('Final screenshot saved: needs-tab-final.png');
+    await pageA.screenshot({ path: 'test-results/needs-tab-final.png', fullPage: true });
   });
 });

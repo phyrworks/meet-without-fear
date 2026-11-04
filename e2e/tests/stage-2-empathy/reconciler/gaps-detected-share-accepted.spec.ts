@@ -11,7 +11,7 @@
  */
 
 import { test, expect, devices, BrowserContext, Page } from '@playwright/test';
-import { cleanupE2EData, getE2EHeaders, SessionBuilder, navigateToShareFromSession } from '../../../helpers';
+import { cleanupE2EData, getE2EHeaders, SessionBuilder, shareFromShareTopicDrawer } from '../../../helpers';
 
 const API_BASE_URL = process.env.API_BASE_URL || 'http://localhost:3000';
 const APP_BASE_URL = process.env.APP_BASE_URL || 'http://localhost:8082';
@@ -189,20 +189,8 @@ test.describe('Reconciler: Gaps Detected → Share Accepted', () => {
         }
       }
 
-      // === USER B: Navigate to share suggestion and accept ===
-      await navigateToShareFromSession(userBPage);
-
-      // Click share button
-      const shareButton = userBPage.locator('[data-testid*="share-suggestion"][data-testid$="-share"]');
-      await expect(shareButton).toBeVisible({ timeout: 10000 });
-
-      const shareResponsePromise = userBPage.waitForResponse(
-        (response) => response.url().includes('/reconciler/share-offer/respond') && response.request().method() === 'POST',
-        { timeout: 15000 }
-      );
-      await shareButton.click();
-
-      const shareResponse = await shareResponsePromise;
+      // === USER B: Open the share suggestion (share-topic panel) and share ===
+      const shareResponse = await shareFromShareTopicDrawer(userBPage);
       expect(shareResponse.status()).toBeLessThan(300);
       console.log(`${elapsed()} User B shared context`);
 
@@ -244,8 +232,7 @@ test.describe('Reconciler: Gaps Detected → Share Accepted', () => {
       await userAPage.screenshot({ path: 'test-results/share-accepted-05-userA-chat-unlocked.png' });
 
       // === VERIFY: User B's share suggestion is gone ===
-      const shareSuggestionText = userBPage.getByText(/Would you like to share something to help/i);
-      await expect(shareSuggestionText).not.toBeVisible({ timeout: 10000 });
+      await expect(userBPage.getByTestId('share-topic-panel')).not.toBeVisible({ timeout: 10000 });
       console.log(`${elapsed()} Journey complete: context shared and both users can proceed`);
     });
   });
@@ -269,11 +256,7 @@ test.describe('Reconciler: Gaps Detected → Share Accepted', () => {
       await completeUserBStage1();
 
       // User B shares
-      await navigateToShareFromSession(userBPage);
-
-      const shareButton = userBPage.locator('[data-testid*="share-suggestion"][data-testid$="-share"]');
-      await expect(shareButton).toBeVisible({ timeout: 10000 });
-      await shareButton.click();
+      await shareFromShareTopicDrawer(userBPage);
 
       console.log(`${elapsed()} User B shared - checking User A's real-time update`);
 
