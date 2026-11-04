@@ -114,7 +114,7 @@ test.describe('Live AI Full Flow', () => {
     const invitationTurns = await sendAndWaitForPanel(
       page,
       STAGE_0_MESSAGES,
-      'invitation-draft-panel',
+      'topic-proposal-use-button', // two-step Stage 0 (mobile #310) replaced the invitation draft panel
       STAGE_0_MESSAGES.length,
       AI_RESPONSE_TIMEOUT
     );
@@ -125,7 +125,7 @@ test.describe('Live AI Full Flow', () => {
     await confirmInvitationTopicAndContinue(page, AI_RESPONSE_TIMEOUT);
 
     // Wait for invitation panel to close
-    await expect(page.getByTestId('invitation-draft-panel')).not.toBeVisible({ timeout: 5000 });
+    await expect(page.getByTestId('invitation-ready-modal')).not.toBeVisible({ timeout: 5000 });
     console.log(`${elapsed()} Invitation confirmed, moving to Stage 1`);
 
     // === STAGE 1: WITNESSING (FEEL HEARD) ===

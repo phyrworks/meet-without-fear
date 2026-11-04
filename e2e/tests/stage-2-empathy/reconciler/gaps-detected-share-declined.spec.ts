@@ -11,7 +11,7 @@
  */
 
 import { test, expect, devices, BrowserContext, Page } from '@playwright/test';
-import { cleanupE2EData, getE2EHeaders, SessionBuilder, declineShareTopic } from '../../../helpers';
+import { cleanupE2EData, getE2EHeaders, SessionBuilder, declineShareTopic, signCompact } from '../../../helpers';
 
 const API_BASE_URL = process.env.API_BASE_URL || 'http://localhost:3000';
 const APP_BASE_URL = process.env.APP_BASE_URL || 'http://localhost:8082';
@@ -113,10 +113,8 @@ test.describe('Reconciler: Gaps Detected → Share Declined', () => {
     await userBPage.goto(`${APP_BASE_URL}/session/${sessionId}?${userBParams.toString()}`);
     await userBPage.waitForLoadState('networkidle');
 
-    const agreeCheckbox = userBPage.getByTestId('compact-agree-checkbox');
-    await expect(agreeCheckbox).toBeVisible({ timeout: 10000 });
-    await agreeCheckbox.click();
-    await userBPage.getByTestId('compact-sign-button').click();
+    // Two-step Stage 0 (mobile #310): the agree checkbox is gone; the bar is a single Ready CTA.
+    await signCompact(userBPage);
 
     const moodContinue = userBPage.getByTestId('mood-check-continue-button');
     if (await moodContinue.isVisible({ timeout: 5000 }).catch(() => false)) {

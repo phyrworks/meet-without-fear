@@ -195,14 +195,14 @@ test.describe('Live AI Full Partner Journey: Stages 0-4', () => {
     const invitationTurns = await sendAndWaitForPanel(
       harness.userAPage,
       USER_A_STAGE_0_MESSAGES,
-      'invitation-draft-panel',
+      'topic-proposal-use-button', // two-step Stage 0 (mobile #310) replaced the invitation draft panel
       USER_A_STAGE_0_MESSAGES.length,
       AI_RESPONSE_TIMEOUT
     );
     console.log(`${elapsed()} Invitation panel appeared after ${invitationTurns} message(s)`);
 
     await confirmInvitationTopicAndContinue(harness.userAPage, AI_RESPONSE_TIMEOUT);
-    await expect(harness.userAPage.getByTestId('invitation-draft-panel')).not.toBeVisible({ timeout: 10000 });
+    await expect(harness.userAPage.getByTestId('invitation-ready-modal')).not.toBeVisible({ timeout: 10000 });
     console.log(`${elapsed()} Invitation confirmed — User B can now join`);
 
     // ==========================================

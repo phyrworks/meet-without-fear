@@ -19,6 +19,7 @@ import {
   cleanupE2EData,
   confirmInvitationTopicAndContinue,
   getE2EHeaders,
+  signCompact,
   waitForAIResponse,
 } from '../helpers';
 
@@ -102,10 +103,8 @@ test.describe('Transition Message Display', () => {
     await page.waitForLoadState('networkidle');
 
     // Sign compact
-    const agreeCheckbox = page.getByTestId('compact-agree-checkbox');
-    await expect(agreeCheckbox).toBeVisible({ timeout: 10000 });
-    await agreeCheckbox.click();
-    await page.getByTestId('compact-sign-button').click();
+    // Two-step Stage 0 (mobile #310): the agree checkbox is gone; the bar is a single Ready CTA.
+    await signCompact(page);
     await page.waitForLoadState('networkidle');
     console.log(`${elapsed()} Compact signed`);
 
@@ -124,10 +123,11 @@ test.describe('Transition Message Display', () => {
     console.log(`${elapsed()} Invitation draft received`);
 
     // Step 4: Confirm invitation sent
-    const invitationPanel = page.getByTestId('invitation-draft-panel');
-    await expect(invitationPanel).toBeVisible({ timeout: 5000 });
+    // Two-step Stage 0 (mobile #310): topic proposal, then the invitation-ready modal
+    // (replacing the inline invitation draft panel).
+    await expect(page.getByTestId('topic-proposal-use-button')).toBeVisible({ timeout: 5000 });
     await confirmInvitationTopicAndContinue(page);
-    await expect(invitationPanel).not.toBeVisible({ timeout: 5000 });
+    await expect(page.getByTestId('invitation-ready-modal')).not.toBeVisible({ timeout: 5000 });
     console.log(`${elapsed()} Invitation confirmed`);
 
     // Step 5: Continue chatting to reach feel-heard check
@@ -228,10 +228,8 @@ test.describe('Transition Message Display', () => {
     await page.goto(`${APP_BASE_URL}/session/${sessionId}?${params.toString()}`);
     await page.waitForLoadState('networkidle');
 
-    const agreeCheckbox = page.getByTestId('compact-agree-checkbox');
-    await expect(agreeCheckbox).toBeVisible({ timeout: 10000 });
-    await agreeCheckbox.click();
-    await page.getByTestId('compact-sign-button').click();
+    // Two-step Stage 0 (mobile #310): the agree checkbox is gone; the bar is a single Ready CTA.
+    await signCompact(page);
     await page.waitForLoadState('networkidle');
     console.log(`${elapsed()} Compact signed`);
 
@@ -248,9 +246,9 @@ test.describe('Transition Message Display', () => {
     await waitForAIResponse(page, /invite your partner/i);
     console.log(`${elapsed()} Invitation draft received`);
 
-    // Verify invitation panel appears
-    const invitationPanel = page.getByTestId('invitation-draft-panel');
-    await expect(invitationPanel).toBeVisible({ timeout: 5000 });
+    // Verify the topic proposal appears (two-step Stage 0, mobile #310: replaces the
+    // inline invitation draft panel; the invitation-ready modal follows the topic confirm).
+    await expect(page.getByTestId('topic-proposal-use-button')).toBeVisible({ timeout: 5000 });
 
     // Take screenshot and note message count BEFORE confirmation
     await page.screenshot({ path: 'test-results/transition-03-before-invitation-confirm.png' });
@@ -261,9 +259,9 @@ test.describe('Transition Message Display', () => {
     console.log(`${elapsed()} Confirming invitation sent...`);
     await confirmInvitationTopicAndContinue(page);
 
-    // Wait for panel to close
-    await expect(invitationPanel).not.toBeVisible({ timeout: 5000 });
-    console.log(`${elapsed()} Invitation panel closed`);
+    // The helper closes the invitation-ready modal; it must stay closed.
+    await expect(page.getByTestId('invitation-ready-modal')).not.toBeVisible({ timeout: 5000 });
+    console.log(`${elapsed()} Invitation modal closed`);
 
     // CRITICAL TEST: Wait for transition message to appear WITHOUT sending another message
     // The transition message should mention continuing to explore, perspective, etc.
