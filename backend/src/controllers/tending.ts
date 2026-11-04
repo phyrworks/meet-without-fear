@@ -25,6 +25,8 @@ import {
   TendingNeedResolutionStatus,
   TendingNextAction,
   TendingReminderScope,
+  isUuidV7,
+  UUID_V7_RE,
 } from '@meet-without-fear/shared';
 
 const tendingResponseStatuses = ['CHECKIN', 'WORKED', 'PARTLY', 'DID_NOT_WORK', 'DID_NOT_TRY', 'OTHER'] as const;
@@ -40,6 +42,12 @@ const orientationSchema = z.object({
   perEntryNotes: z.record(z.string(), z.string().max(2000)).optional(),
 });
 
+// Every id below reaches Prisma (or is matched against rows that came from it):
+// it must be a UUIDv7, the target's `uuid7` domain, or Postgres refuses it
+// (P2007 / 23514) and the request used to answer 500 (work-yvt0). Built on the
+// backend's own zod (shared's `uuidV7` is a zod 4 schema; this file is zod 3).
+const uuidV7 = z.string().regex(UUID_V7_RE, 'Invalid ID format');
+
 const submitTendingCheckinSchema = z.object({
   orientations: z.object({
     whatWorked: orientationSchema,
@@ -51,7 +59,7 @@ const submitTendingCheckinSchema = z.object({
       reminders: z
         .array(
           z.object({
-            tendingEntryId: z.string().optional(),
+            tendingEntryId: uuidV7.optional(),
             scope: z.nativeEnum(TendingReminderScope),
             remindAt: z.string().datetime(),
             cadence: z.string().max(80).optional(),
@@ -64,7 +72,7 @@ const submitTendingCheckinSchema = z.object({
   entryOutcomes: z
     .array(
       z.object({
-        tendingEntryId: z.string(),
+        tendingEntryId: uuidV7,
         followThroughStatus: z.nativeEnum(TendingFollowThroughStatus),
         helpfulnessStatus: z.nativeEnum(TendingHelpfulnessStatus).optional(),
         blockerCategories: z.array(z.nativeEnum(TendingBlockerCategory)).optional(),
@@ -79,9 +87,9 @@ const submitTendingCheckinSchema = z.object({
   needOutcomes: z
     .array(
       z.object({
-        needId: z.string().optional(),
+        needId: uuidV7.optional(),
         needLabel: z.string().min(1).max(500),
-        sourceUserId: z.string().optional(),
+        sourceUserId: uuidV7.optional(),
         resolutionStatus: z.nativeEnum(TendingNeedResolutionStatus),
         note: z.string().max(2000).optional(),
         changedNeedLabel: z.string().max(500).optional(),
@@ -92,7 +100,7 @@ const submitTendingCheckinSchema = z.object({
   reminders: z
     .array(
       z.object({
-        tendingEntryId: z.string().optional(),
+        tendingEntryId: uuidV7.optional(),
         scope: z.nativeEnum(TendingReminderScope),
         remindAt: z.string().datetime(),
         cadence: z.string().max(80).optional(),
@@ -103,7 +111,7 @@ const submitTendingCheckinSchema = z.object({
   adjustments: z
     .array(
       z.object({
-        tendingEntryId: z.string(),
+        tendingEntryId: uuidV7,
         privacyScope: z.nativeEnum(TendingReminderScope).optional(),
         revisedCommitmentText: z.string().max(2000).optional(),
         revisedCadence: z.string().max(200).optional(),
@@ -114,8 +122,8 @@ const submitTendingCheckinSchema = z.object({
       }),
     )
     .optional(),
-  includedBetweenPeriodNoteIds: z.array(z.string()).optional(),
-  shareBetweenPeriodNoteIds: z.array(z.string()).optional(),
+  includedBetweenPeriodNoteIds: z.array(uuidV7).optional(),
+  shareBetweenPeriodNoteIds: z.array(uuidV7).optional(),
   nextAction: z.nativeEnum(TendingNextAction).optional(),
   resolvedEnoughOverride: z.boolean().optional(),
   resolvedEnoughOverrideNote: z.string().max(1000).optional(),
@@ -187,6 +195,11 @@ export async function postTendingResponse(req: Request, res: Response): Promise<
       return;
     }
 
+    if (!isUuidV7(req.params.entryId)) {
+      errorResponse(res, 'NOT_FOUND', 'Tending entry not found', 404);
+      return;
+    }
+
     const entry = await submitTendingResponse({
       entryId: req.params.entryId,
       userId: user.id,
@@ -212,6 +225,11 @@ async function handleShareToggle(req: Request, res: Response, optedInShared: boo
     const user = req.user;
     if (!user) {
       errorResponse(res, 'UNAUTHORIZED', 'Authentication required', 401);
+      return;
+    }
+
+    if (!isUuidV7(req.params.entryId)) {
+      errorResponse(res, 'NOT_FOUND', 'Tending entry not found', 404);
       return;
     }
 

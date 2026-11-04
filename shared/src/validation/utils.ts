@@ -6,6 +6,7 @@
 
 import { z } from 'zod';
 import { ErrorCode } from '../api';
+import { UUID_V7_RE } from '../utils/uuid-v7';
 
 // ============================================================================
 // Common Validation Patterns
@@ -14,6 +15,11 @@ import { ErrorCode } from '../api';
 /** UUID validation */
 export const uuid = z.string().uuid('Invalid ID format');
 
+/**
+ * A client-supplied id of a target-schema row. Every id column is the `uuid7`
+ * domain, so this — not `uuid` — is what keeps a bad id from reaching Postgres.
+ */
+export const uuidV7 = z.string().regex(UUID_V7_RE, 'Invalid ID format');
 
 /** Non-empty string with configurable field name */
 export const nonEmptyString = (field: string) =>

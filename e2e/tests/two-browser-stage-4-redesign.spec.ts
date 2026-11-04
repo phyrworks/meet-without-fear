@@ -171,6 +171,13 @@ test.describe('Stage 4 redesign: deterministic two-user coverage', () => {
       proposal.description.includes('Sunday evening planning check-in')
     );
     expect(sharedProposal).toBeTruthy();
+    // A need outcome names a real shared need: the coverage row the mobile
+    // check-in screen reads its need ids from (work-yvt0).
+    const coverage = beforeClose.data.coverageAudit;
+    const partnershipNeed = [...coverage.covered, ...coverage.partial, ...coverage.open].find((row: any) =>
+      row.label === 'Partnership'
+    );
+    expect(partnershipNeed?.id).toBeTruthy();
 
     const dueDate = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
     await readJson<any>(
@@ -224,7 +231,7 @@ test.describe('Stage 4 redesign: deterministic two-user coverage', () => {
         ],
         needOutcomes: [
           {
-            needId: 'need-partnership',
+            needId: partnershipNeed.id,
             needLabel: 'Partnership',
             sourceUserId: seeded.userAId,
             resolutionStatus: 'STILL_OPEN',
@@ -244,8 +251,13 @@ test.describe('Stage 4 redesign: deterministic two-user coverage', () => {
       status: 'WAITING_FOR_PARTNER',
       submittedUserIds: [seeded.userAId],
     }));
+    // The outcome is linked to the shared need and carries its need_share
+    // text, not the owner's private label: a SHARED follow-up's check-in is
+    // readable by the partner (R4). The synthetic id this spec used to send
+    // matched nothing, so the client label was stored unlinked.
     expect(checkinData.data.checkin.needOutcomes[0]).toEqual(expect.objectContaining({
-      needLabel: 'Partnership',
+      needId: partnershipNeed.id,
+      needLabel: 'Carrying the load as a team',
       resolutionStatus: 'STILL_OPEN',
       nextAction: 'REOPEN_STRATEGY_WORK',
     }));
@@ -295,7 +307,7 @@ test.describe('Stage 4 redesign: deterministic two-user coverage', () => {
         ],
         needOutcomes: [
           {
-            needId: 'need-partnership',
+            needId: partnershipNeed.id,
             needLabel: 'Partnership',
             sourceUserId: seeded.userBId,
             resolutionStatus: 'STILL_OPEN',

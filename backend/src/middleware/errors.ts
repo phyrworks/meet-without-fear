@@ -160,7 +160,8 @@ export function errorHandler(
   }
 
   // A malformed id. Every primary key is a Postgres uuid, so a lookup by an id
-  // that is not one fails in the database (P2007) where it used to find nothing.
+  // that is not one fails in the database (P2007, or P2010 from a raw query)
+  // where it used to find nothing.
   // Answer as the lookup used to: the resource does not exist.
   if (isMalformedIdError(err)) {
     const response: ApiResponse<never> = {
@@ -337,9 +338,21 @@ function safeStack(err: Error, safeMessage: string): string | undefined {
   return [`${err.name}: ${safeMessage}`, ...frames].join('\n');
 }
 
-/** Prisma's error for a value Postgres rejects as a uuid ("invalid input syntax for type uuid"). */
+/**
+ * Prisma's error for a value Postgres rejects as a uuid ("invalid input syntax
+ * for type uuid", SQLSTATE 22P02): P2007 from a model query, P2010 from a raw
+ * one (`${id}::uuid`). A valid uuid of another version is not this: a model
+ * query binds it as plain uuid and finds nothing; a `::uuid7` cast or a write
+ * fails the domain CHECK (23514), which the constraint branch answers 400.
+ */
 export function isMalformedIdError(err: unknown): boolean {
-  return err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2007' && /type uuid/.test(err.message);
+  if (!(err instanceof Prisma.PrismaClientKnownRequestError)) return false;
+  if (err.code === 'P2007') return /type uuid/.test(err.message);
+  if (err.code === 'P2010') {
+    const cause = asRecord(asRecord(asRecord(err.meta)?.driverAdapterError)?.cause);
+    return cause?.originalCode === '22P02' && /type uuid/.test(str(cause?.originalMessage) ?? '');
+  }
+  return false;
 }
 
 /**

@@ -19,6 +19,7 @@
  * Requires: npx tsx src/testing/golden/cli.ts build STAGE4_REDESIGN_PARTNER_INACTIVE
  */
 
+import { uuidv7 } from '@meet-without-fear/shared';
 import { isTargetShape } from '../../testing/golden/shape';
 import { adaAndBob, openTargetRun, type TargetRun } from './target-roles';
 
@@ -297,6 +298,31 @@ describeTarget('repair and follow-up on the target, as mwf_app and mwf_job with 
     ).rejects.toThrow(/valid instant/);
     expect(await run.sql(`SELECT * FROM follow_up_checkin`)).toEqual([]);
     expect(await run.sql(`SELECT * FROM reminder`)).toEqual([]);
+
+    // work-yvt0: a needId that is not one of this session's shared needs —
+    // never minted, or a need of the session that was never shared — is
+    // refused alike, before any write.
+    const [unshared] = await run.sql<{ id: string }>(
+      `INSERT INTO need (participant_id, label, category, ai_confidence) VALUES ($1, 'PROBE_UNSHARED_NEED', 'SAFETY', 0.9) RETURNING id`,
+      [ids.ada],
+    );
+    for (const needId of [uuidv7(), unshared.id]) {
+      await expect(
+        asUser(ids.adaUser, () =>
+          tending.submitTendingCheckin({
+            sessionId: ids.session,
+            userId: ids.adaUser,
+            orientations: {
+              whatWorked: { reflection: '' },
+              whereMoreSupport: { reflection: '' },
+              whatComesNext: { continueChoice: 'EXTEND' as never },
+            },
+            needOutcomes: [{ needId, needLabel: 'Partnership', resolutionStatus: 'STILL_OPEN' as never }],
+          }),
+        ),
+      ).rejects.toThrow(tending.TendingInvalidStateError);
+    }
+    expect(await run.sql(`SELECT * FROM follow_up_checkin`)).toEqual([]);
 
     const result = await asUser(ids.adaUser, () =>
       tending.submitTendingCheckin({

@@ -4,6 +4,7 @@
 
 import {
   uuid,
+  uuidV7,
   nonEmptyString,
   email,
   timestamp,
@@ -23,6 +24,17 @@ describe('uuid', () => {
   it('rejects invalid UUID', () => {
     const result = uuid.safeParse('not-a-uuid');
     expect(result.success).toBe(false);
+  });
+});
+
+describe('uuidV7', () => {
+  it('accepts a UUIDv7', () => {
+    expect(uuidV7.safeParse('0190a3b4-5c6d-7e8f-9a1b-2c3d4e5f6a7b').success).toBe(true);
+  });
+
+  it('rejects a non-uuid and a v4 uuid (the uuid7 domain refuses both)', () => {
+    expect(uuidV7.safeParse('need-partnership').success).toBe(false);
+    expect(uuidV7.safeParse('550e8400-e29b-41d4-a716-446655440000').success).toBe(false);
   });
 });
 
