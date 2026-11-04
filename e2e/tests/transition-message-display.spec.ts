@@ -150,7 +150,7 @@ test.describe('Transition Message Display', () => {
     await page.screenshot({ path: 'test-results/transition-01-before-feel-heard.png' });
 
     // Get the current message count by checking for AI message content
-    const messagesBefore = await page.locator('[data-testid="chat-message"]').count();
+    const messagesBefore = await page.locator('[data-testid^="chat-bubble-"]').count();
     console.log(`${elapsed()} Messages before confirmation: ${messagesBefore}`);
 
     // Step 7: Click feel-heard YES button
@@ -165,12 +165,10 @@ test.describe('Transition Message Display', () => {
     // The bug was that this message wouldn't appear until navigating away and back
     console.log(`${elapsed()} Waiting for transition message to appear...`);
 
-    // Wait for the transition message content
-    // In E2E mode with MOCK_LLM, the fallback message is:
-    // "You've done important work sharing and being heard. When you're ready,
-    //  I'm curious - have you ever wondered what [partner] might be experiencing?"
-    // Or if AI responds, it should mention partner's perspective
-    const transitionMessagePattern = /have you ever wondered|partner's perspective|understanding of your partner|explore.*perspective/i;
+    // Wait for the transition message content: the deterministic Stage 2 opener
+    // (backend/src/controllers/messages.ts, "That gives us enough to move to the next
+    // step ... What do you think might be going on for <partner> in all of this?").
+    const transitionMessagePattern = /might be going on for .+ in all of this/i;
 
     // This is the key assertion - the message should appear without user input
     await expect(page.getByText(transitionMessagePattern)).toBeVisible({ timeout: 15000 });
@@ -180,7 +178,7 @@ test.describe('Transition Message Display', () => {
     await page.screenshot({ path: 'test-results/transition-02-after-feel-heard.png' });
 
     // Verify message count increased
-    const messagesAfter = await page.locator('[data-testid="chat-message"]').count();
+    const messagesAfter = await page.locator('[data-testid^="chat-bubble-"]').count();
     console.log(`${elapsed()} Messages after confirmation: ${messagesAfter}`);
 
     // The count should have increased by at least 1 (the transition message)
@@ -252,7 +250,7 @@ test.describe('Transition Message Display', () => {
 
     // Take screenshot and note message count BEFORE confirmation
     await page.screenshot({ path: 'test-results/transition-03-before-invitation-confirm.png' });
-    const messagesBefore = await page.locator('[data-testid="chat-message"]').count();
+    const messagesBefore = await page.locator('[data-testid^="chat-bubble-"]').count();
     console.log(`${elapsed()} Messages before invitation confirmation: ${messagesBefore}`);
 
     // CRITICAL: Confirm invitation was sent
@@ -263,21 +261,25 @@ test.describe('Transition Message Display', () => {
     await expect(page.getByTestId('invitation-ready-modal')).not.toBeVisible({ timeout: 5000 });
     console.log(`${elapsed()} Invitation modal closed`);
 
-    // CRITICAL TEST: Wait for transition message to appear WITHOUT sending another message
-    // The transition message should mention continuing to explore, perspective, etc.
+    // CRITICAL TEST: Wait for transition message to appear WITHOUT sending another message.
+    // The post-invitation transition is AI-generated (sessions.ts confirmInvitationMessage);
+    // under MOCK_LLM its text is whichever user-a-full-journey turn the orchestrator serves,
+    // which changed with the two-step Stage 0 (#310). So assert the behaviour, not the copy:
+    // a new chat bubble arrives with no user input.
     console.log(`${elapsed()} Waiting for transition message after invitation...`);
 
-    const transitionMessagePattern = /exploring your perspective|continue|let's|while we wait|great step/i;
-
     // This is the key assertion - message should appear without user input
-    await expect(page.getByText(transitionMessagePattern)).toBeVisible({ timeout: 15000 });
+    await expect
+      .poll(() => page.locator('[data-testid^="chat-bubble-"]').count(), { timeout: 15000 })
+      .toBeGreaterThan(messagesBefore);
+    await expect(page.locator('[data-testid^="chat-bubble-"]').last()).toBeVisible();
     console.log(`${elapsed()} Transition message appeared!`);
 
     // Take screenshot after
     await page.screenshot({ path: 'test-results/transition-04-after-invitation-confirm.png' });
 
     // Verify message count increased
-    const messagesAfter = await page.locator('[data-testid="chat-message"]').count();
+    const messagesAfter = await page.locator('[data-testid^="chat-bubble-"]').count();
     console.log(`${elapsed()} Messages after invitation confirmation: ${messagesAfter}`);
     expect(messagesAfter).toBeGreaterThan(messagesBefore);
 
