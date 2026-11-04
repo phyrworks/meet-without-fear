@@ -21,7 +21,6 @@ export const uuid = z.string().uuid('Invalid ID format');
  */
 export const uuidV7 = z.string().regex(UUID_V7_RE, 'Invalid ID format');
 
-
 /** Non-empty string with configurable field name */
 export const nonEmptyString = (field: string) =>
   z.string().min(1, `${field} is required`).max(10000, `${field} is too long`);

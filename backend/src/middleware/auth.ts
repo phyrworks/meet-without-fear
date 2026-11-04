@@ -80,7 +80,6 @@ async function verifyClerkToken(req: Request): Promise<string | null> {
   }
 }
 
-
 /**
  * E2E auth bypass handler
  * When E2E_AUTH_BYPASS=true AND NODE_ENV is not production, accepts x-e2e-user-id and x-e2e-user-email headers

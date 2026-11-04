@@ -72,7 +72,9 @@ describe('errorHandler: malformed ids', () => {
     const other = new Prisma.PrismaClientKnownRequestError('Raw query failed. Code: `42P01`.', {
       code: 'P2010',
       clientVersion: 'test',
-      meta: { driverAdapterError: { cause: { originalCode: '42P01', originalMessage: 'relation "x" does not exist' } } },
+      meta: {
+        driverAdapterError: { cause: { originalCode: '42P01', originalMessage: 'relation "x" does not exist' } },
+      },
     });
     expect(isMalformedIdError(other)).toBe(false);
   });
