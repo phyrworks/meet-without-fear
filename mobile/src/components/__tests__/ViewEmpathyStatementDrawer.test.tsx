@@ -25,6 +25,18 @@ describe('ViewEmpathyStatementDrawer', () => {
     expect(screen.queryByText('I cannot accept this')).toBeNull();
   });
 
+  it('before the partner joins: explains the wait, offers no Share, and "Keep for later" only closes (work-99k2)', () => {
+    render(<ViewEmpathyStatementDrawer {...defaultProps} awaitingPartner />);
+
+    expect(screen.getByTestId('empathy-share-after-join-note')).toHaveTextContent(
+      "Alex hasn't joined yet. Your draft is saved, and you can share it once Alex joins. You'll get to look it over again first.",
+    );
+    expect(screen.queryByTestId('share-empathy-button')).toBeNull();
+    fireEvent.press(screen.getByTestId('empathy-keep-for-later-button'));
+    expect(defaultProps.onClose).toHaveBeenCalledTimes(1);
+    expect(defaultProps.onShare).not.toHaveBeenCalled();
+  });
+
   it('preserves resubmit action while revising', () => {
     render(<ViewEmpathyStatementDrawer {...defaultProps} isRevising />);
 

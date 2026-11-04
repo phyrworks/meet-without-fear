@@ -117,6 +117,7 @@ export {
   // Stage 2: Empathy
   useEmpathyDraft,
   useSaveEmpathyDraft,
+  useDeleteEmpathyDraft,
   useConsentToShareEmpathy,
   usePartnerEmpathy,
   useValidateEmpathy,

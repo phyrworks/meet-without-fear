@@ -55,6 +55,7 @@ import { TendingPanel } from '../components/TendingPanel';
 import { CompactChatItem } from '../components/CompactChatItem';
 import { CompactAgreementBar } from '../components/CompactAgreementBar';
 import { ViewEmpathyStatementDrawer } from '../components/ViewEmpathyStatementDrawer';
+import { PreJoinDraftReviewModal } from '../components/PreJoinDraftReviewModal';
 import { MemorySuggestionCard } from '../components/MemorySuggestionCard';
 // SegmentedControl removed - tabs are now integrated in SessionChatHeader
 import { PartnerInfoDrawer } from '../components/PartnerInfoDrawer';
@@ -664,6 +665,8 @@ export function UnifiedSessionScreen({
     handleConfirmInvitationMessage,
     handleSaveEmpathyDraft,
     handleShareEmpathy,
+    handleSetAsideEmpathyDraft,
+    isSettingAsideEmpathyDraft,
     handleResubmitEmpathy,
     handleValidatePartnerEmpathy,
     handleConfirmAllNeeds,
@@ -4458,6 +4461,7 @@ export function UnifiedSessionScreen({
           statement={empathyDrawerStatement}
           partnerName={partnerName}
           isRevising={isRefiningEmpathy}
+          awaitingPartner={!!empathyDraftData?.awaitingPartner}
           onShare={() => {
             const statementToShare = empathyDrawerStatement;
             console.log('[ViewEmpathyStatementDrawer] Share clicked', {
@@ -4493,6 +4497,33 @@ export function UnifiedSessionScreen({
             }
           }}
           onClose={() => setShowEmpathyDrawer(false)}
+        />
+      )}
+
+      {/* work-99k2: the draft written before the partner joined is reviewed,
+          never auto-sent. Shown while the server reports preJoinReview. */}
+      {!!empathyDraftData?.preJoinReview && !!empathyDraftData.draft && !isRefiningEmpathy && (
+        <PreJoinDraftReviewModal
+          visible
+          partnerName={partnerName}
+          writtenAt={empathyDraftData.preJoinReview.writtenAt}
+          statement={empathyDraftData.draft.content}
+          busy={isSettingAsideEmpathyDraft || isSavingEmpathyDraft || isSharingEmpathy}
+          onSendAsIs={() => {
+            const statementToShare = empathyDraftData.draft?.content;
+            if (!statementToShare) return;
+            markCompleted('shared-empathy');
+            // handleShareEmpathy saves the draft ready (ending the review) and then consents.
+            handleShareEmpathy(statementToShare);
+          }}
+          onEditFirst={() => {
+            const content = empathyDraftData.draft?.content;
+            if (!content) return;
+            // A write since the join ends the review; the draft stays in the
+            // conversation, where the AI helps rework it.
+            handleSaveEmpathyDraft(content, false);
+          }}
+          onSetAside={handleSetAsideEmpathyDraft}
         />
       )}
 

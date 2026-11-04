@@ -22,6 +22,7 @@ import {
   CompactStatusResponse,
   ConfirmFeelHeardResponse,
   SaveEmpathyDraftResponse,
+  DeleteEmpathyDraftResponse,
   ConsentToShareEmpathyResponse,
   GetProgressResponse,
   MilestoneKey,
@@ -782,8 +783,65 @@ export function useSaveEmpathyDraft(
         { content, readyToShare }
       );
     },
+    onMutate: async ({ sessionId }) => {
+      // work-99k2: any write after the partner joined ends the pre-join review
+      // (the server derives it from the draft's written-at), so hide it now.
+      const key = stageKeys.empathyDraft(sessionId);
+      const current = queryClient.getQueryData<GetEmpathyDraftResponse>(key);
+      if (current?.preJoinReview) {
+        await queryClient.cancelQueries({ queryKey: key });
+        queryClient.setQueryData<GetEmpathyDraftResponse>(key, { ...current, preJoinReview: null });
+      }
+    },
     onSuccess: (_, { sessionId }) => {
       queryClient.invalidateQueries({ queryKey: stageKeys.empathyDraft(sessionId) });
+    },
+    ...options,
+  });
+}
+
+/**
+ * Set the empathy draft aside (discard it) — work-99k2's review after the
+ * partner joins. Optimistic: the draft and the review leave the cache at once.
+ */
+export function useDeleteEmpathyDraft(
+  options?: Omit<
+    UseMutationOptions<
+      DeleteEmpathyDraftResponse,
+      ApiClientError,
+      { sessionId: string },
+      { previous: GetEmpathyDraftResponse | undefined }
+    >,
+    'mutationFn' | 'onMutate' | 'onError'
+  >
+) {
+  const queryClient = useQueryClient();
+
+  return useMutation<
+    DeleteEmpathyDraftResponse,
+    ApiClientError,
+    { sessionId: string },
+    { previous: GetEmpathyDraftResponse | undefined }
+  >({
+    mutationFn: async ({ sessionId }) => del<DeleteEmpathyDraftResponse>(`/sessions/${sessionId}/empathy/draft`),
+    onMutate: async ({ sessionId }) => {
+      const key = stageKeys.empathyDraft(sessionId);
+      await queryClient.cancelQueries({ queryKey: key });
+      const previous = queryClient.getQueryData<GetEmpathyDraftResponse>(key);
+      if (previous) {
+        queryClient.setQueryData<GetEmpathyDraftResponse>(key, {
+          ...previous,
+          draft: null,
+          canConsent: false,
+          preJoinReview: null,
+        });
+      }
+      return { previous };
+    },
+    onError: (_error, { sessionId }, context) => {
+      if (context?.previous) {
+        queryClient.setQueryData(stageKeys.empathyDraft(sessionId), context.previous);
+      }
     },
     ...options,
   });

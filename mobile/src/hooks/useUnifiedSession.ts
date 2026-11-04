@@ -30,6 +30,7 @@ import {
   useEmpathyDraft,
   usePartnerEmpathy,
   useSaveEmpathyDraft,
+  useDeleteEmpathyDraft,
   useConsentToShareEmpathy,
   useValidateEmpathy,
   useNeeds,
@@ -954,6 +955,16 @@ export function useUnifiedSession(
     [sessionId, saveDraft]
   );
 
+  // work-99k2: "Set aside" in the review after the partner joins — discard the
+  // draft and start over from here. The AI's sticky ready-to-share offer goes too.
+  const { mutate: deleteEmpathyDraft, isPending: isSettingAsideEmpathyDraft } = useDeleteEmpathyDraft();
+  const handleSetAsideEmpathyDraft = useCallback(() => {
+    if (!sessionId) return;
+    setLiveProposedEmpathyStatement(null);
+    setAiRecommendsReadyToShare(false);
+    deleteEmpathyDraft({ sessionId });
+  }, [sessionId, deleteEmpathyDraft]);
+
   const handleShareEmpathy = useCallback((content?: string) => {
     if (!sessionId) {
       console.warn('[handleShareEmpathy] No sessionId, aborting');
@@ -961,6 +972,11 @@ export function useUnifiedSession(
     }
     if (!consentToShare) {
       console.error('[handleShareEmpathy] consentToShare mutation is not available');
+      return;
+    }
+    // work-99k2: consent is only given after the partner has joined (the
+    // server refuses it before); the draft is already saved.
+    if (empathyDraftData?.awaitingPartner) {
       return;
     }
     // Pass draft content for optimistic UI update
@@ -998,7 +1014,7 @@ export function useUnifiedSession(
         console.error('[handleShareEmpathy] Failed during ready-to-share + consent flow', error);
       }
     })();
-  }, [sessionId, consentToShare, empathyDraftData?.draft?.content, liveProposedEmpathyStatement, saveDraftAsync]);
+  }, [sessionId, consentToShare, empathyDraftData?.awaitingPartner, empathyDraftData?.draft?.content, liveProposedEmpathyStatement, saveDraftAsync]);
 
   /**
    * Resubmit empathy statement after refining (received shared context from partner).
@@ -1284,6 +1300,8 @@ export function useUnifiedSession(
     handleConfirmInvitationMessage,
     handleSaveEmpathyDraft,
     handleShareEmpathy,
+    handleSetAsideEmpathyDraft,
+    isSettingAsideEmpathyDraft,
     handleResubmitEmpathy,
     handleValidatePartnerEmpathy,
     handleSkipRefinement,
