@@ -12,6 +12,7 @@ import { loadStageStates, progressDTO } from '../services/stage-shim';
 import { displayStatus, parseStatusFilter, pausedSessionIds } from '../services/session-status';
 import { createInvitationUrl } from '../utils/urls';
 import { reachInvitationSentOnAccept } from '../services/milestone-writer';
+import { repointInvitationDrafts } from '../services/empathy-store';
 
 // ============================================================================
 // Types
@@ -660,6 +661,10 @@ export async function acceptInvitation(req: Request, res: Response): Promise<voi
       });
       await tx.conversation.create({ data: { participantId: me.id, kind: 'MAIN' } });
       await tx.conversationReadState.create({ data: { participantId: me.id } });
+      // work-99k2: the inviter's empathy draft written before this join is
+      // about the invitation; it becomes about the new participant here, in
+      // the same transaction. Nothing is sent: the inviter reviews it first.
+      await repointInvitationDrafts(tx, id, me.id);
 
       await tx.$executeRaw`SELECT app.session_set_status(${invitation.sessionId}::uuid, 'ACTIVE'::session_status)`;
     });

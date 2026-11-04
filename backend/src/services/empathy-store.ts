@@ -487,20 +487,23 @@ export async function upsertDraft(opts: {
   participantId: string;
   kind: 'EMPATHY' | 'VALIDATION_FEEDBACK';
   aboutParticipantId?: string;
+  /** EMPATHY before the partner has joined (work-99k2); ignored when aboutParticipantId is given. */
+  invitationId?: string;
   attemptId?: string;
   content: string;
   readyToShare?: boolean;
 }): Promise<DraftRow> {
   const about = opts.kind === 'EMPATHY' ? (opts.aboutParticipantId ?? null) : null;
+  const invitation = opts.kind === 'EMPATHY' && !about ? (opts.invitationId ?? null) : null;
   const attempt = opts.kind === 'VALIDATION_FEEDBACK' ? (opts.attemptId ?? null) : null;
   const ready = typeof opts.readyToShare === 'boolean' ? opts.readyToShare : null;
   const rows = decryptRawRows(
     await prisma.$queryRaw<
       Array<{ id: string; content: string; ready_to_share: boolean; version: number; updated_at: Date }>
-    >`INSERT INTO draft (participant_id, kind, about_participant_id, attempt_id, content, ready_to_share, version)
-    VALUES (${opts.participantId}::uuid, ${opts.kind}::draft_kind, ${about}::uuid, ${attempt}::uuid, ${encryptColumnValue('draft', 'content', opts.content)},
+    >`INSERT INTO draft (participant_id, kind, about_participant_id, invitation_id, attempt_id, content, ready_to_share, version)
+    VALUES (${opts.participantId}::uuid, ${opts.kind}::draft_kind, ${about}::uuid, ${invitation}::uuid, ${attempt}::uuid, ${encryptColumnValue('draft', 'content', opts.content)},
             coalesce(${ready}::boolean, false), 1)
-    ON CONFLICT (participant_id, kind, (coalesce(about_participant_id, attempt_id, share_offer_id)))
+    ON CONFLICT (participant_id, kind, (coalesce(about_participant_id, invitation_id, attempt_id, share_offer_id)))
     DO UPDATE SET content = EXCLUDED.content,
                   ready_to_share = coalesce(${ready}::boolean, draft.ready_to_share),
                   version = draft.version + 1
@@ -521,16 +524,86 @@ export async function findDraft(opts: {
   participantId: string;
   kind: 'EMPATHY' | 'VALIDATION_FEEDBACK';
   aboutParticipantId?: string;
+  invitationId?: string;
   attemptId?: string;
 }): Promise<DraftRow | null> {
+  const point =
+    opts.kind === 'VALIDATION_FEEDBACK'
+      ? { attemptId: opts.attemptId }
+      : opts.aboutParticipantId
+        ? { aboutParticipantId: opts.aboutParticipantId }
+        : { invitationId: opts.invitationId };
+  // An undefined arc would match any draft of the kind; there is no such point.
+  if (!Object.values(point)[0]) return null;
   return prisma.draft.findFirst({
-    where: {
-      participantId: opts.participantId,
-      kind: opts.kind,
-      ...(opts.kind === 'EMPATHY' ? { aboutParticipantId: opts.aboutParticipantId } : { attemptId: opts.attemptId }),
-    },
+    where: { participantId: opts.participantId, kind: opts.kind, ...point },
     select: { id: true, content: true, readyToShare: true, version: true, updatedAt: true },
   });
+}
+
+/**
+ * What an EMPATHY draft is about (spec §1.1 draft, work-99k2): the partner's
+ * participant, or — written before the partner has joined — the pending
+ * invitation that will become them. Exactly one (CHECK chk_draft_one_arc).
+ */
+export type EmpathySubject = { aboutParticipantId: string } | { invitationId: string };
+
+/** Delete the caller's EMPATHY draft about this subject ("set aside", work-99k2). Returns whether one existed. */
+export async function deleteEmpathyDraft(participantId: string, subject: EmpathySubject): Promise<boolean> {
+  const { count } = await prisma.draft.deleteMany({ where: { participantId, kind: 'EMPATHY', ...subject } });
+  return count > 0;
+}
+
+/**
+ * The caller's PENDING invitation — the subject of an EMPATHY draft written
+ * before the partner has joined (work-99k2). One invitation per session today
+ * (createSession); the newest wins should that change.
+ */
+export async function pendingInvitationOf(participantId: string): Promise<{ id: string; name: string | null } | null> {
+  return prisma.invitation.findFirst({
+    where: { invitedByParticipantId: participantId, status: 'PENDING' },
+    orderBy: { createdAt: 'desc' },
+    select: { id: true, name: true },
+  });
+}
+
+/**
+ * At accept, inside the transaction that creates the invitee's participant:
+ * re-point every draft about the invitation to that participant
+ * (about_participant_id = participant, invitation_id = NULL). Returns the count.
+ *
+ * A move (delete, then insert the same row with the new arc), not an UPDATE:
+ * the row's touch_updated_at trigger would stamp updated_at with the join
+ * instant, and updated_at IS the draft's written-at — the review prompt after
+ * the join shows it, and it tells a pre-join draft from one written since
+ * (`preJoinReview`, getDraft). id, created_at, updated_at and version carry
+ * over. Through the Prisma client, so the content goes out decrypted and back
+ * in sealed by the encryption extension (a raw INSERT … SELECT would copy the
+ * ciphertext, which raw-sql-encryption-guard refuses on principle).
+ */
+export async function repointInvitationDrafts(
+  tx: Pick<PrismaClient, 'draft'>,
+  invitationId: string,
+  participantId: string,
+): Promise<number> {
+  const drafts = await tx.draft.findMany({ where: { invitationId } });
+  for (const d of drafts) {
+    await tx.draft.delete({ where: { id: d.id } });
+    await tx.draft.create({
+      data: {
+        id: d.id,
+        participantId: d.participantId,
+        kind: d.kind,
+        aboutParticipantId: participantId,
+        content: d.content,
+        readyToShare: d.readyToShare,
+        version: d.version,
+        createdAt: d.createdAt,
+        updatedAt: d.updatedAt,
+      },
+    });
+  }
+  return drafts.length;
 }
 
 /** Has the author GRANTED a submission consent on any round of this direction (m12: any round, not only the newest)? */

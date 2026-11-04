@@ -736,7 +736,7 @@ export async function shareAccepted(opts: {
     // spec §1.2: the refined text is the subject's SHARE_CONTEXT draft.
     await prisma.$executeRaw`INSERT INTO draft (participant_id, kind, share_offer_id, content, ready_to_share, version)
       VALUES (${opts.subject.participantId}::uuid, 'SHARE_CONTEXT'::draft_kind, ${opts.offerId}::uuid, ${encryptColumnValue('draft', 'content', opts.refinement)}, true, 1)
-      ON CONFLICT (participant_id, kind, (coalesce(about_participant_id, attempt_id, share_offer_id)))
+      ON CONFLICT (participant_id, kind, (coalesce(about_participant_id, invitation_id, attempt_id, share_offer_id)))
       DO UPDATE SET content = EXCLUDED.content, version = draft.version + 1`;
   }
 

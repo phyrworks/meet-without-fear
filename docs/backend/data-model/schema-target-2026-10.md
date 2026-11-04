@@ -176,12 +176,14 @@ A participant's working text for a sharing point, before any consent. · core ·
 | about_participant_id | uuid | yes | | FK participant CASCADE — EMPATHY: the subject being imagined |
 | attempt_id | uuid | yes | | FK empathy_attempt CASCADE — VALIDATION_FEEDBACK: the attempt reviewed |
 | share_offer_id | uuid | yes | | FK context_share_offer CASCADE — SHARE_CONTEXT: the offer being edited |
+| invitation_id | uuid | yes | | FK invitation CASCADE — EMPATHY before the subject has joined: the pending invitation that will become them (work-99k2) |
 | content | text | no | | encrypted (participant key) |
 | ready_to_share | boolean | no | false | |
 | version | int | no | 1 | |
 | created_at, updated_at | timestamptz | no | now() | |
 
-Keys: PK. CHECK `num_nonnulls(about_participant_id, attempt_id, share_offer_id) = 1` and the arm matches `kind`. **Unique** `(participant_id, kind, coalesce(about_participant_id, attempt_id, share_offer_id))` — one draft per sharing point, so N subjects / N attempts do not collide (adversarial P1-5). Indexes: the three arc columns.
+Keys: PK. CHECK `num_nonnulls(about_participant_id, invitation_id, attempt_id, share_offer_id) = 1` and the arm matches `kind` (EMPATHY: `about_participant_id` or `invitation_id`). **Unique** `(participant_id, kind, coalesce(about_participant_id, invitation_id, attempt_id, share_offer_id))` — one draft per sharing point, so N subjects / N attempts do not collide (adversarial P1-5); an invitation is per invitee, so this holds before the join too. Indexes: the four arc columns.
+Pre-join drafts (work-99k2, owner rule 2026-11-04): an inviter in Stage 2 whose partner has not accepted keeps their EMPATHY draft against the PENDING invitation. Accepting the invitation re-points it (`about_participant_id` = the new participant, `invitation_id` = NULL) in the transaction that creates the participant — as a move that keeps `id`, `created_at`, `version` and `updated_at`, because `updated_at` is the draft's written-at (an UPDATE would fire `touch_updated_at`). Nothing is sent on the join and consent still needs the partner present: the author reviews the draft first (send as is / edit first / set aside). "Needs review" is derived, not stored: the draft's `updated_at` < the subject's `joined_at`, and no round submitted. `invitation_id` is CASCADE like the other arcs: a draft about an invitation that no longer exists has no subject.
 RLS: S/I/U `mine(participant_id)` · D `mine(participant_id)`.
 Absorbs: `EmpathyDraft` (about = the other participant), `ValidationFeedbackDraft` (attempt = the reviewed attempt), `ReconcilerShareOffer.refinedContent` (the subject's edit of a share suggestion).
 

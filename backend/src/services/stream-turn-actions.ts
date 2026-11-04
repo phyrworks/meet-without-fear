@@ -30,6 +30,7 @@ import { advanceWalkthrough } from './stage4-walkthrough';
 import type { SessionStateToolInput } from './stage-tools';
 import type { ParsedStage4WalkthroughAction } from '../utils/micro-tag-parser';
 import { getPartnerParticipant, type ResolvedParticipant } from './participant-resolver';
+import { pendingInvitationOf, upsertDraft } from './empathy-store';
 
 export interface RefiningNeedContext {
   id: string;
@@ -270,20 +271,28 @@ export async function persistTurnState(params: PersistTurnStateParams): Promise<
     metadata.proposedEmpathyStatement
   ) {
     const partner = await getPartnerParticipant(participant.id);
-    if (!partner) {
-      // An EMPATHY draft names its subject (CHECK chk_draft_one_arc /
-      // chk_draft_arc_matches_kind: about_participant_id required): with no
-      // partner participant there is no row the target can hold. Stage 2 is
-      // reached only with a partner, so this is the invariant failing.
+    // An EMPATHY draft names its subject (CHECK chk_draft_one_arc /
+    // chk_draft_arc_matches_kind): the partner, or — the inviter in Stage 2
+    // before the partner has joined — the pending invitation (work-99k2; the
+    // accept re-points it to the new participant).
+    const invitation = partner ? null : await pendingInvitationOf(participant.id);
+    if (!partner && invitation) {
+      await upsertDraft({
+        participantId: participant.id,
+        kind: 'EMPATHY',
+        invitationId: invitation.id,
+        content: metadata.proposedEmpathyStatement,
+      });
+    } else if (!partner) {
       logger.error(
-        `[sendMessageStream:${requestId}] Empathy draft not saved: Stage 2 turn with no partner participant`,
+        `[sendMessageStream:${requestId}] Empathy draft not saved: Stage 2 turn with no partner and no pending invitation`,
       );
     } else {
       await prisma.$executeRaw`
         INSERT INTO draft (participant_id, kind, about_participant_id, content, ready_to_share, version)
         VALUES (${participant.id}::uuid, 'EMPATHY'::draft_kind, ${partner.participantId}::uuid,
                 ${encryptColumnValue('draft', 'content', metadata.proposedEmpathyStatement)}, false, 1)
-        ON CONFLICT (participant_id, kind, (coalesce(about_participant_id, attempt_id, share_offer_id)))
+        ON CONFLICT (participant_id, kind, (coalesce(about_participant_id, invitation_id, attempt_id, share_offer_id)))
         DO UPDATE SET content = EXCLUDED.content, version = draft.version + 1`;
     }
   }

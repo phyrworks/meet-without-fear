@@ -25,6 +25,7 @@ import { Request, Response } from 'express';
 import { logger } from '../lib/logger';
 import { prisma } from '../lib/prisma';
 import { reachInvitationSentOnAccept } from '../services/milestone-writer';
+import { repointInvitationDrafts } from '../services/empathy-store';
 import { ErrorCode } from '@meet-without-fear/shared';
 import { successResponse, errorResponse } from '../utils/response';
 import {
@@ -111,6 +112,8 @@ async function acceptPendingInvitationForE2ESession(sessionId: string, userId: s
       create: { participantId: participant.id },
       update: {},
     });
+    // As acceptInvitation (work-99k2): pre-join empathy drafts follow the invitee.
+    await repointInvitationDrafts(tx, invitation.id, participant.id);
 
     await tx.invitation.update({
       where: { id: invitation.id },

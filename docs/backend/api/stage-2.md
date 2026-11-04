@@ -107,10 +107,38 @@ GET /api/v1/sessions/:id/empathy/draft
 ```typescript
 interface GetEmpathyDraftResponse {
   draft: EmpathyDraftDTO | null;
-  canConsent: boolean;
+  canConsent: boolean;       // false while the partner has not joined
   alreadyConsented: boolean;
+  awaitingPartner?: boolean; // invited, not yet joined: the draft is kept, sharing waits
+  preJoinReview?: { writtenAt: string; partnerJoinedAt: string } | null;
 }
 ```
+
+**Before the partner joins (work-99k2).** The inviter can reach Stage 2 while the
+invitation is still pending. Saving works: the draft is kept against the pending
+invitation (`draft.invitation_id`), from the moment it is written (also the AI's
+`ReadyShare` draft from a chat turn). Consent is refused with 400 ("Cannot share an
+empathy statement before your partner has joined") until the partner joins.
+Accepting the invitation re-points the draft to the new participant in the same
+transaction, keeping its written-at; it is **never** sent on the join.
+
+**The review after the join.** `preJoinReview` is set while the draft was last
+written before the partner joined and no round has been submitted. Mobile shows
+"<Partner> has joined. Here's what you wrote <day>." with three choices: send as
+is (consent), edit first (any save ends the review), set aside (`DELETE`, below).
+
+---
+
+### Set Empathy Draft Aside
+
+Discard the caller's empathy draft (the review's "set aside"). Never touches a
+submitted round.
+
+```
+DELETE /api/v1/sessions/:id/empathy/draft
+```
+
+Response: `{ deleted: boolean }`.
 
 ---
 

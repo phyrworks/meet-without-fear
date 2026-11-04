@@ -52,10 +52,35 @@ export interface SaveEmpathyDraftResponse {
   readyToShare: boolean;
 }
 
+/**
+ * work-99k2: a draft written before the partner joined, never sent. The author
+ * reviews it (send as is / edit first / set aside) before anything is shared.
+ * Derived on the server: the draft was last written before the partner's join
+ * and no round has been submitted. Any write since the join ends it.
+ */
+export interface PreJoinDraftReviewDTO {
+  /** When the author last wrote the draft (ISO). */
+  writtenAt: string;
+  /** When the partner joined (ISO). */
+  partnerJoinedAt: string;
+}
+
 export interface GetEmpathyDraftResponse {
   draft: EmpathyDraftDTO | null;
+  /** False while the partner has not joined: consent is only given after the join. */
   canConsent: boolean;
   alreadyConsented: boolean;
+  /**
+   * work-99k2: the partner has been invited but has not joined. The draft (if
+   * any) is kept; sharing waits until they join. Optional for older servers.
+   */
+  awaitingPartner?: boolean;
+  /** work-99k2: set when a pre-join draft awaits the author's review. */
+  preJoinReview?: PreJoinDraftReviewDTO | null;
+}
+
+export interface DeleteEmpathyDraftResponse {
+  deleted: boolean;
 }
 
 // ============================================================================

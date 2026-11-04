@@ -36,9 +36,11 @@ CREATE UNIQUE INDEX "sql_conversation_one_main" ON "conversation" ("participant_
   WHERE kind = 'MAIN';
 
 -- §1.1 draft — one draft per sharing point (adversarial P1-5). An expression
--- index, so it cannot be a Prisma @@unique; not in §5's list by name.
+-- index, so it cannot be a Prisma @@unique; not in §5's list by name. The
+-- invitation arm (work-99k2) is per invitee, so one EMPATHY draft per subject
+-- still holds before the subject has joined.
 CREATE UNIQUE INDEX "sql_draft_one_per_point" ON "draft"
-  ("participant_id", "kind", (coalesce(about_participant_id, attempt_id, share_offer_id)));
+  ("participant_id", "kind", (coalesce(about_participant_id, invitation_id, attempt_id, share_offer_id)));
 
 -- §1.1 session_key / participant_key, §1.7 user_key — one live key per owner
 CREATE UNIQUE INDEX "sql_session_key_live" ON "session_key" ("session_id")

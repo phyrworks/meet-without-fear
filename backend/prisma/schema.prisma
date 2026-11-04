@@ -215,8 +215,9 @@ model Message {
 }
 
 /// sql_draft_one_per_point: UNIQUE (participant_id, kind,
-/// coalesce(about_participant_id, attempt_id, share_offer_id)) is an
-/// expression index — sql-only.sql.
+/// coalesce(about_participant_id, invitation_id, attempt_id, share_offer_id))
+/// is an expression index — sql-only.sql. EMPATHY: exactly one of
+/// about_participant_id / invitation_id (work-99k2: before the partner joins).
 model Draft {
   id                 String    @id @default(dbgenerated("uuidv7()")) @db.Uuid
   participantId      String    @map("participant_id") @db.Uuid
@@ -224,6 +225,7 @@ model Draft {
   aboutParticipantId String?   @map("about_participant_id") @db.Uuid
   attemptId          String?   @map("attempt_id") @db.Uuid
   shareOfferId       String?   @map("share_offer_id") @db.Uuid
+  invitationId       String?   @map("invitation_id") @db.Uuid
   content            String
   readyToShare       Boolean   @default(false) @map("ready_to_share")
   version            Int       @default(1)
@@ -234,10 +236,12 @@ model Draft {
   aboutParticipant Participant?       @relation("DraftAbout", fields: [aboutParticipantId], references: [id], onDelete: Cascade, onUpdate: NoAction)
   attempt          EmpathyAttempt?    @relation(fields: [attemptId], references: [id], onDelete: Cascade, onUpdate: NoAction)
   shareOffer       ContextShareOffer? @relation(fields: [shareOfferId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  invitation       Invitation?        @relation(fields: [invitationId], references: [id], onDelete: Cascade, onUpdate: NoAction)
 
   @@index([aboutParticipantId])
   @@index([attemptId])
   @@index([shareOfferId])
+  @@index([invitationId])
   @@map("draft")
 }
 
@@ -334,6 +338,7 @@ model Invitation {
   session              Session     @relation(fields: [sessionId], references: [id], onDelete: Cascade, onUpdate: NoAction)
   invitedByParticipant Participant @relation(fields: [invitedByParticipantId], references: [id], onDelete: Cascade, onUpdate: NoAction)
   acceptedByUser       User?       @relation(fields: [acceptedByUserId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  drafts               Draft[]
 
   @@index([sessionId])
   @@index([invitedByParticipantId])
