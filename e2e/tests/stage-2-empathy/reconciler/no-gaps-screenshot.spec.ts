@@ -217,64 +217,25 @@ test.describe('Reconciler: No Gaps → Capture Screenshot of Validation Buttons'
 
     await userBPage.waitForTimeout(3000);
 
-    // Navigate to Share screen via modal or header button
-    const userBModal = userBPage.getByTestId('partner-event-modal');
-    const userBHasModal = await userBModal.isVisible({ timeout: 8000 }).catch(() => false);
-    console.log(`${elapsed()} User B sees empathy reveal modal: ${userBHasModal}`);
-
-    if (userBHasModal) {
-      const giveFeedbackButton = userBPage.getByTestId('partner-event-modal-view');
-      await expect(giveFeedbackButton).toBeVisible({ timeout: 3000 });
-      await giveFeedbackButton.click();
-      console.log(`${elapsed()} User B clicked "Give Feedback" button`);
-    } else {
-      const shareButton = userBPage.locator('[data-testid*="go-to-share"]');
-      const hasShareButton = await shareButton.first().isVisible({ timeout: 3000 }).catch(() => false);
-      if (hasShareButton) {
-        await shareButton.first().click();
-        console.log(`${elapsed()} User B clicked header Share button`);
-      }
+    // ========================================
+    // CAPTURE SCREENSHOT OF THE VALIDATION PANEL
+    // ========================================
+    // The partner's revealed empathy renders inline as an "Empathy from Shantam"
+    // frame, with the accuracy review in the panel above the chat input (the Share
+    // screen and the Activity drawer, mobile #602 / 506c3f9a, are gone).
+    const validationPanel = userBPage.getByTestId('partner-empathy-validation-panel');
+    if (!(await validationPanel.isVisible({ timeout: 10000 }).catch(() => false))) {
+      await userBPage.reload();
+      await userBPage.waitForLoadState('networkidle');
     }
+    await expect(validationPanel).toBeVisible({ timeout: 15000 });
+    await expect(userBPage.getByText(`Empathy from ${userA.name}`, { exact: true })).toBeVisible();
+    await expect(userBPage.getByTestId('partner-empathy-yes-button')).toBeVisible();
+    console.log(`${elapsed()} Capturing screenshot of the validation panel...`);
 
-    await userBPage.waitForTimeout(2000);
-
-    // Verify we're on the Share screen
-    const partnerEmpathyCard = userBPage.getByTestId('partner-empathy-card');
-    const hasPartnerEmpathyCard = await partnerEmpathyCard.isVisible({ timeout: 5000 }).catch(() => false);
-    const partnerTabItems = userBPage.locator('[data-testid*="partner-tab-item"]');
-    const partnerTabItemCount = await partnerTabItems.count();
-    console.log(`${elapsed()} User B - Partner empathy card: ${hasPartnerEmpathyCard}, tab items: ${partnerTabItemCount}`);
-
-    expect(hasPartnerEmpathyCard || partnerTabItemCount > 0).toBe(true);
-
-    // ========================================
-    // CAPTURE SCREENSHOT OF VALIDATION BUTTONS
-    // ========================================
-    console.log(`${elapsed()} Capturing screenshot of validation buttons...`);
-
-    // Wait a moment for UI to fully render
-    await userBPage.waitForTimeout(2000);
-
-    // Look for validation buttons
-    const accurateButton = userBPage.getByText(/This feels accurate|Accurate/i).first();
-    const partialButton = userBPage.getByText(/Partially accurate|Partially/i).first();
-    const inaccurateButton = userBPage.getByText(/This misses the mark|Misses mark|Off/i).first();
-
-    const hasAccurate = await accurateButton.isVisible({ timeout: 5000 }).catch(() => false);
-    const hasPartial = await partialButton.isVisible({ timeout: 5000 }).catch(() => false);
-    const hasInaccurate = await inaccurateButton.isVisible({ timeout: 5000 }).catch(() => false);
-
-    console.log(`${elapsed()} Validation buttons visible - Accurate: ${hasAccurate}, Partial: ${hasPartial}, Inaccurate: ${hasInaccurate}`);
-
-    // Take screenshot - use a fixed filename for easy retrieval
-    await expect(userBPage).toHaveScreenshot('empathy-validation-buttons.png', {
-      maxDiffPixels: 100,
-      fullPage: false,
-    });
-    console.log(`${elapsed()} Screenshot saved as empathy-validation-buttons.png`);
-
-    // Verify at least one validation button is visible
-    expect(hasAccurate || hasPartial || hasInaccurate).toBe(true);
+    // No committed baseline exists for this image; capture it as an artifact.
+    await userBPage.screenshot({ path: 'test-results/empathy-validation-buttons.png' });
+    console.log(`${elapsed()} Screenshot saved as test-results/empathy-validation-buttons.png`);
 
     console.log(`${elapsed()} ✅ Screenshot captured successfully!`);
   });

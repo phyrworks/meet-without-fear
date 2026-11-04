@@ -11,7 +11,7 @@
  */
 
 import { test, expect, devices, BrowserContext, Page } from '@playwright/test';
-import { cleanupE2EData, getE2EHeaders, SessionBuilder, navigateToShareFromSession } from '../../../helpers';
+import { cleanupE2EData, getE2EHeaders, SessionBuilder, declineShareTopic } from '../../../helpers';
 
 const API_BASE_URL = process.env.API_BASE_URL || 'http://localhost:3000';
 const APP_BASE_URL = process.env.APP_BASE_URL || 'http://localhost:8082';
@@ -152,19 +152,9 @@ test.describe('Reconciler: Gaps Detected → Share Declined', () => {
   }
 
   async function navigateToShareAndDecline() {
-    await navigateToShareFromSession(userBPage);
-
-    const declineButton = userBPage.locator('[data-testid*="share-suggestion"][data-testid$="-decline"]');
-    await expect(declineButton).toBeVisible({ timeout: 10000 });
-
-    const declineResponsePromise = userBPage.waitForResponse(
-      (response) => response.url().includes('/reconciler/share-offer/respond') && response.request().method() === 'POST',
-      { timeout: 15000 }
-    );
-
-    await declineButton.click();
-
-    const declineResponse = await declineResponsePromise;
+    // The share suggestion lives in the share-topic panel/drawer (mobile #602
+    // removed the Activity drawer this spec used to open).
+    const declineResponse = await declineShareTopic(userBPage);
     expect(declineResponse.status()).toBeLessThan(300);
 
     await userBPage.waitForTimeout(2000);
