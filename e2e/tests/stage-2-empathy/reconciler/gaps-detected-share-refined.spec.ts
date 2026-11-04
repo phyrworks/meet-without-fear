@@ -10,7 +10,7 @@
  */
 
 import { test, expect, devices, BrowserContext, Page } from '@playwright/test';
-import { cleanupE2EData, getE2EHeaders, SessionBuilder, handleMoodCheck, openShareTopicDrawer, shareFromShareTopicDrawer, signCompact } from '../../../helpers';
+import { cleanupE2EData, getE2EHeaders, SessionBuilder, handleMoodCheck, openShareTopicDrawer, shareFromShareTopicDrawer, signCompact, waitForShareTopicPanel } from '../../../helpers';
 
 const API_BASE_URL = process.env.API_BASE_URL || 'http://localhost:3000';
 const APP_BASE_URL = process.env.APP_BASE_URL || 'http://localhost:8082';
@@ -145,7 +145,9 @@ test.describe('Reconciler: Gaps Detected → Share Refined', () => {
     await feelHeardYes.click();
     await expect(feelHeardYes).not.toBeVisible({ timeout: 5000 });
 
-    await userBPage.waitForTimeout(3000);
+    // Reconciler runs async after feel-heard; without Ably the subject's
+    // offer only appears on a fresh read (see waitForShareTopicPanel).
+    await waitForShareTopicPanel(userBPage);
   }
 
   // The share suggestion lives in the share-topic panel/drawer; refining it happens

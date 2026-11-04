@@ -176,6 +176,31 @@ export async function openShareTopicDrawer(page: Page, timeout = 15000): Promise
 }
 
 /**
+ * Wait until the subject's share-topic panel is on screen, reloading the page
+ * when it does not arrive by itself.
+ *
+ * The subject learns of a fresh share offer from the `empathy.share_suggestion`
+ * Ably ping. The hermetic E2E servers run without ABLY_API_KEY (the backend
+ * skips every publish, docs/development/local-setup.md §6), and a subject who
+ * has not shared their own empathy has no polling fallback: the share-offer
+ * query fetched at feel-heard time (before the async reconciler finishes) stays
+ * `hasSuggestion: false`. Before #602 these specs navigated to the Share screen,
+ * which refetched; this reload is that same fresh read, done in the chat.
+ * Use it only where the subject has not shared (no poll); the panel itself, and
+ * what it reveals, is still asserted by the caller.
+ */
+export async function waitForShareTopicPanel(page: Page, timeout = 60000): Promise<void> {
+  const panel = page.getByTestId('share-topic-panel');
+  if (await panel.isVisible({ timeout: 5000 }).catch(() => false)) return;
+  await expect(async () => {
+    await page.reload();
+    await page.waitForLoadState('domcontentloaded');
+    await handleMoodCheck(page, 3000);
+    await expect(panel).toBeVisible({ timeout: 5000 });
+  }).toPass({ timeout, intervals: [1000, 2000, 3000] });
+}
+
+/**
  * Accept the share suggestion and share the seeded draft as-is:
  * share-topic drawer -> "Yes, help me share" -> refinement modal -> "Share This Version".
  * Returns the finalize response.
