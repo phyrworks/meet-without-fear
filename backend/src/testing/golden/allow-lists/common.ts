@@ -505,6 +505,28 @@ export function hasRunForAuthor(steps: number[]): AllowRule {
   };
 }
 
+/**
+ * work-99k2 (owner rule 2026-11-04): GET /empathy/draft gains `awaitingPartner`
+ * (the partner is invited, not yet joined: the draft is kept, consent waits)
+ * and `preJoinReview` (a draft written before the partner joined awaits its
+ * author's review). Additive and derived — no stored flag, no table change in
+ * these scenarios. Pinned to the scenario's GET-draft steps, with `mustMatch`
+ * so the rule cannot go vacuous. Every golden scenario starts after the
+ * accept, so the run values are `false` / `null`; the solo and post-join
+ * values are asserted by services/__tests__/empathy-prejoin-draft.target.test.ts.
+ */
+export function preJoinDraftKeys(steps: number[]): AllowRule {
+  return {
+    kind: 'addedKeys',
+    at: steps.map(s => `steps.${s}.body.data`),
+    keys: ['awaitingPartner', 'preJoinReview'],
+    mustMatch: true,
+    why:
+      'work-99k2: GET /empathy/draft reports awaitingPartner and preJoinReview (derived: the draft predates the ' +
+      "partner's join and no round is submitted); additive, false/null in every post-accept scenario.",
+  };
+}
+
 /** The reveal payloads' additive keys (plan §4: exactly `round`, `attemptId`). */
 export const TARGET_ROUND_KEYS_RULE: AllowRule = {
   kind: 'addedKeys',

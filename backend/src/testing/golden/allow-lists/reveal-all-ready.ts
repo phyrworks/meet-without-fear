@@ -20,6 +20,7 @@ import {
   deliveredCopyInRead,
   deliveredStatementCopy,
   empathySubmittedMilestone,
+  preJoinDraftKeys,
   READ_DTO_RULES,
   statusVersionTwo,
   targetByteRules,
@@ -87,6 +88,10 @@ const ADA_FIRST_READS = [
   { state: 34, messages: 35, author: 'bob', subject: 'ada', statement: BOB_DRAFTED },
   { state: 49, messages: 50, author: 'ada', subject: 'bob', statement: ADA_EMPATHY_STATEMENT },
 ];
+/** work-99k2: the GET /empathy/draft read steps of each scenario (preJoinDraftKeys). */
+const ADA_FIRST_DRAFT_READS = [7, 22, 39, 54];
+const BOB_FIRST_DRAFT_READS = [7, 22, 38, 53];
+
 /** bob-first: Ada's revealed reads start at 32, Bob's at 47. */
 const BOB_FIRST_READS = [
   { state: 33, messages: 34, author: 'bob', subject: 'ada', statement: BOB_HELD_EMPATHY_STATEMENT },
@@ -137,6 +142,7 @@ export const REVEAL_ADA_FIRST_ALLOW: AllowList = {
     ...TARGET_TOPIC_FRAME_INITIAL_RULES,
     ...rules(REVEAL_ADA_FIRST_STEP),
     ...bodyRules(ADA_FIRST_READS, false).filter(r => !READ_DTO_RULES.includes(r) && r !== ROUND_RULE),
+    preJoinDraftKeys(ADA_FIRST_DRAFT_READS),
     ADA_FIRST_STATUS_VERSION,
     TARGET_USER_NAME_RULE,
     empathySubmittedMilestone('ada', 'initial', '<ts:14>'),
@@ -151,6 +157,7 @@ export const REVEAL_BOB_FIRST_ALLOW: AllowList = {
     ...TARGET_TOPIC_FRAME_INITIAL_RULES,
     ...rules(REVEAL_BOB_FIRST_STEP),
     ...bodyRules(BOB_FIRST_READS, false).filter(r => !READ_DTO_RULES.includes(r) && r !== ROUND_RULE),
+    preJoinDraftKeys(BOB_FIRST_DRAFT_READS),
     TARGET_USER_NAME_RULE,
     empathySubmittedMilestone('ada', 'initial', '<ts:14>'),
     empathySubmittedMilestone('bob', 'initial', '<ts:24>'),
@@ -166,6 +173,7 @@ export const REVEAL_ADA_FIRST_BYTE_TARGET_ALLOW: AllowList = {
   rules: [
     ...TARGET_TOPIC_FRAME_RULES,
     ...bodyRules(ADA_FIRST_READS, true),
+    preJoinDraftKeys(ADA_FIRST_DRAFT_READS),
     ADA_FIRST_STATUS_VERSION,
     byteLabelShift(
       ['steps.13.body.data.records.0.id', 'steps.45.body.data.records.0.id', 'steps.60.body.data.records.0.id'],
@@ -205,6 +213,7 @@ export const REVEAL_BOB_FIRST_BYTE_TARGET_ALLOW: AllowList = {
   rules: [
     ...TARGET_TOPIC_FRAME_RULES,
     ...bodyRules(BOB_FIRST_READS, true),
+    preJoinDraftKeys(BOB_FIRST_DRAFT_READS),
     ...BOB_FIRST_CLOSURES(false),
     subjectDeclineRecord(59, true),
     byteLabelShift(

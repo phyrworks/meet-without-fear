@@ -26,6 +26,7 @@ import {
   TARGET_CONSENT_TARGET_ID_RULE,
   TARGET_MESSAGE_STAGE_RULE,
   TARGET_ROUND_KEYS_RULE,
+  preJoinDraftKeys,
   TARGET_USER_NAME_RULE,
   TARGET_TOPIC_FRAME_INITIAL_RULES,
   TARGET_TOPIC_FRAME_RULES,
@@ -41,6 +42,7 @@ const bodyRules = (concept: boolean): AllowRule[] => [
   TARGET_COMPACT_SIGNED_MASK,
   TARGET_CONSENT_TARGET_ID_RULE,
   TARGET_ROUND_KEYS_RULE,
+  preJoinDraftKeys([9, 41]),
   ...authorAnalysisClosed({ empathyStatus: [7, 39], reconcilerStatus: [11, 43], summary: [13, 45], concept }),
 ];
 
