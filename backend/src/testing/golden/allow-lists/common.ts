@@ -9,7 +9,7 @@
  */
 
 import { MILESTONE_KEYS, type MilestoneKey } from '@meet-without-fear/shared';
-import type { AddedEntriesRule, AllowRule, ChangesMappedRule, ReplacedEntryRule } from './types';
+import type { AddedEntriesRule, AllowRule, ChangesMappedRule, ReplacedEntryRule, TraceMappedRule } from './types';
 
 /** Where a progress DTO sits: GET /progress (`data.*Progress`) and GET /state (`data.progress.*Progress`). */
 const PROGRESS_AT = [
@@ -411,6 +411,8 @@ export function targetByteRules(opts: {
   /** TS-11: baseline writes with no image at their exact step (see ChangesMappedRule). */
   droppedTables?: ChangesMappedRule['droppedTables'];
   trace?: boolean;
+  /** work-99k2: relations the trace may add at the steps whose label starts with `steps` only. */
+  traceAddedAt?: TraceMappedRule['addedRelationsAt'];
   /**
    * TS-12: only these steps' changes go through the table map (default: every
    * step). R5's deletion step is the walk itself, asserted against the
@@ -440,6 +442,7 @@ export function targetByteRules(opts: {
       relationMap: TARGET_RELATION_MAP,
       addedRelations: TARGET_ADDED_RELATIONS,
       sameRowsRead: [],
+      ...(opts.traceAddedAt ? { addedRelationsAt: opts.traceAddedAt } : {}),
       why:
         'relation names and plans are shape-bound (README "Reading a trace diff during the migration"); kept: ' +
         'completeness, bind-parameter protocol for data statements, isolation, relations ⊆ the mapped set.',
@@ -515,16 +518,28 @@ export function hasRunForAuthor(steps: number[]): AllowRule {
  * accept, so the run values are `false` / `null`; the solo and post-join
  * values are asserted by services/__tests__/empathy-prejoin-draft.target.test.ts.
  */
-export function preJoinDraftKeys(steps: number[]): AllowRule {
-  return {
-    kind: 'addedKeys',
-    at: steps.map(s => `steps.${s}.body.data`),
-    keys: ['awaitingPartner', 'preJoinReview'],
-    mustMatch: true,
-    why:
-      'work-99k2: GET /empathy/draft reports awaitingPartner and preJoinReview (derived: the draft predates the ' +
-      "partner's join and no round is submitted); additive, false/null in every post-accept scenario.",
-  };
+export function preJoinDraftKeys(steps: number[]): AllowRule[] {
+  const at = steps.map(s => `steps.${s}.body.data`);
+  return [
+    {
+      kind: 'addedKeys',
+      at,
+      keys: ['awaitingPartner'],
+      equals: false,
+      mustMatch: true,
+      why: 'work-99k2: GET /empathy/draft reports awaitingPartner; every golden scenario is post-accept, so false.',
+    },
+    {
+      kind: 'addedKeys',
+      at,
+      keys: ['preJoinReview'],
+      equals: null,
+      mustMatch: true,
+      why:
+        "work-99k2: GET /empathy/draft reports preJoinReview (derived: the draft predates the partner's join and no " +
+        'round is submitted); no golden fixture has a pre-join draft, so null.',
+    },
+  ];
 }
 
 /** The reveal payloads' additive keys (plan §4: exactly `round`, `attemptId`). */

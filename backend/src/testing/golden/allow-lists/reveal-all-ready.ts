@@ -142,7 +142,7 @@ export const REVEAL_ADA_FIRST_ALLOW: AllowList = {
     ...TARGET_TOPIC_FRAME_INITIAL_RULES,
     ...rules(REVEAL_ADA_FIRST_STEP),
     ...bodyRules(ADA_FIRST_READS, false).filter(r => !READ_DTO_RULES.includes(r) && r !== ROUND_RULE),
-    preJoinDraftKeys(ADA_FIRST_DRAFT_READS),
+    ...preJoinDraftKeys(ADA_FIRST_DRAFT_READS),
     ADA_FIRST_STATUS_VERSION,
     TARGET_USER_NAME_RULE,
     empathySubmittedMilestone('ada', 'initial', '<ts:14>'),
@@ -157,7 +157,7 @@ export const REVEAL_BOB_FIRST_ALLOW: AllowList = {
     ...TARGET_TOPIC_FRAME_INITIAL_RULES,
     ...rules(REVEAL_BOB_FIRST_STEP),
     ...bodyRules(BOB_FIRST_READS, false).filter(r => !READ_DTO_RULES.includes(r) && r !== ROUND_RULE),
-    preJoinDraftKeys(BOB_FIRST_DRAFT_READS),
+    ...preJoinDraftKeys(BOB_FIRST_DRAFT_READS),
     TARGET_USER_NAME_RULE,
     empathySubmittedMilestone('ada', 'initial', '<ts:14>'),
     empathySubmittedMilestone('bob', 'initial', '<ts:24>'),
@@ -173,7 +173,7 @@ export const REVEAL_ADA_FIRST_BYTE_TARGET_ALLOW: AllowList = {
   rules: [
     ...TARGET_TOPIC_FRAME_RULES,
     ...bodyRules(ADA_FIRST_READS, true),
-    preJoinDraftKeys(ADA_FIRST_DRAFT_READS),
+    ...preJoinDraftKeys(ADA_FIRST_DRAFT_READS),
     ADA_FIRST_STATUS_VERSION,
     byteLabelShift(
       ['steps.13.body.data.records.0.id', 'steps.45.body.data.records.0.id', 'steps.60.body.data.records.0.id'],
@@ -213,7 +213,7 @@ export const REVEAL_BOB_FIRST_BYTE_TARGET_ALLOW: AllowList = {
   rules: [
     ...TARGET_TOPIC_FRAME_RULES,
     ...bodyRules(BOB_FIRST_READS, true),
-    preJoinDraftKeys(BOB_FIRST_DRAFT_READS),
+    ...preJoinDraftKeys(BOB_FIRST_DRAFT_READS),
     ...BOB_FIRST_CLOSURES(false),
     subjectDeclineRecord(59, true),
     byteLabelShift(

@@ -42,7 +42,7 @@ const bodyRules = (concept: boolean): AllowRule[] => [
   TARGET_COMPACT_SIGNED_MASK,
   TARGET_CONSENT_TARGET_ID_RULE,
   TARGET_ROUND_KEYS_RULE,
-  preJoinDraftKeys([9, 41]),
+  ...preJoinDraftKeys([9, 41]),
   ...authorAnalysisClosed({ empathyStatus: [7, 39], reconcilerStatus: [11, 43], summary: [13, 45], concept }),
 ];
 

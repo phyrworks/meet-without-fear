@@ -67,7 +67,7 @@ const bodyRules = (concept: boolean): AllowRule[] => [
   TARGET_CONSENT_TARGET_ID_RULE,
   R6_REFUSED_UNREVEALED_DRAFT,
   TARGET_ROUND_KEYS_RULE,
-  preJoinDraftKeys([10]),
+  ...preJoinDraftKeys([10]),
   ...authorAnalysisClosed({ empathyStatus: [8], reconcilerStatus: [12], reconcilerRun: [32], summary: [14], concept }),
   ...mockTurnIndex(33, concept, 'ada'),
 ];

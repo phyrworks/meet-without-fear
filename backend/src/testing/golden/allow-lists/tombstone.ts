@@ -414,7 +414,7 @@ const targetReadRules = (concept: boolean): AllowRule[] => [
   COMPACT_MASK,
   TARGET_MESSAGE_STAGE_RULE,
   TARGET_ROUND_KEYS_RULE,
-  preJoinDraftKeys([beforeRead('empathy draft'), afterRead('empathy draft')]),
+  ...preJoinDraftKeys([beforeRead('empathy draft'), afterRead('empathy draft')]),
   TARGET_CONSENT_TARGET_ID_RULE,
   TARGET_USER_NAME_RULE,
   ...authorAnalysisClosed({

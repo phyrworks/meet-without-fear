@@ -122,6 +122,16 @@ export const EMPATHY_REVEAL_BYTE_TARGET_ALLOW: AllowList = {
     },
     ...targetByteRules({
       trace: true,
+      traceAddedAt: [
+        {
+          steps: 'draft as',
+          relations: {
+            empathy_attempt:
+              'work-99k2: the one draft writer checks, under the draft row lock, that no pre-join review is pending ' +
+              '(a pending review is ended only by the author; a submitted round ends it)',
+          },
+        },
+      ],
       addedTables: [
         {
           step: 1,

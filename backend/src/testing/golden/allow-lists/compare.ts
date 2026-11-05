@@ -266,6 +266,9 @@ export function compareMappedTrace(e0: unknown, a0: unknown, rule: TraceMappedRu
     [...new Set((t.shapes ?? []).map(sh => sh.isolation).filter((x): x is string => !!x))].sort().join(',');
   if (isolations(a) !== isolations(e)) out.push(`trace: isolation levels [${isolations(e)}] → [${isolations(a)}]`);
   const allowed = new Set<string>(Object.keys(rule.addedRelations));
+  for (const at of rule.addedRelationsAt ?? []) {
+    if (label.startsWith(at.steps)) for (const r of Object.keys(at.relations)) allowed.add(r);
+  }
   const baseRelations = new Set(statements(e).flatMap(st => st.relations));
   for (const r of baseRelations) {
     const mapped = rule.relationMap[r];
@@ -544,6 +547,10 @@ export function compareWithAllowList(expected: unknown, actual: unknown, allow: 
             // the baseline could record none).
             for (const r of rulesAt('addedKeys', p)) {
               const rule = r.rule as AddedKeysRule;
+              // `equals` (work-99k2): a scalar added value pinned exactly.
+              if ('equals' in rule && rule.keys.includes(k) && JSON.stringify(a[k]) !== JSON.stringify(rule.equals)) {
+                fail(kp, 'added value differs from the rule’s `equals`', rule.equals, a[k]);
+              }
               if (!rule.each || !rule.keys.includes(k)) continue;
               const v = a[k];
               const bad = Array.isArray(v) ? v.filter(x => !satisfies(x, rule.each!)) : [v];

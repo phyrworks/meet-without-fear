@@ -195,7 +195,7 @@ export const UNREVEALED_ATTEMPT_HIDDEN_KNOWN_LEAKS: KnownLeak[] = [];
 const TARGET_BODY_RULES = (concept: boolean): AllowRule[] => [
   TARGET_MESSAGE_STAGE_RULE,
   // work-99k2: the scenario's GET /empathy/draft read steps (preJoinDraftKeys).
-  preJoinDraftKeys([6, 21, 37, 53, 69, 84]),
+  ...preJoinDraftKeys([6, 21, 37, 53, 69, 84]),
   TARGET_COMPACT_SIGNED_MASK,
   TARGET_CONSENT_TARGET_ID_RULE,
   // Ada, the author, reads at "awaiting sharing" (15–29): the R6/R7 closures.

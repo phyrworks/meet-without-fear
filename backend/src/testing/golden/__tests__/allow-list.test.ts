@@ -547,6 +547,27 @@ describe('compareWithAllowList — mechanics', () => {
     expect(compareWithAllowList(base, elsewhere, list).violations).not.toEqual([]);
   });
 
+  it('addedKeys with `equals` admits the key only with exactly that value, null included (work-99k2)', () => {
+    const list: AllowList = {
+      scenario: 'x',
+      rules: [
+        { kind: 'addedKeys', at: 'steps.0', keys: ['flag'], equals: false, why: 'test' },
+        { kind: 'addedKeys', at: 'steps.0', keys: ['review'], equals: null, why: 'test' },
+      ],
+    };
+    const base = { steps: [{ label: 'read' }] };
+    expect(
+      compareWithAllowList(base, { steps: [{ label: 'read', flag: false, review: null }] }, list).violations,
+    ).toEqual([]);
+    expect(
+      compareWithAllowList(base, { steps: [{ label: 'read', flag: true, review: null }] }, list).violations,
+    ).toEqual([expect.stringContaining('steps.0.flag')]);
+    expect(
+      compareWithAllowList(base, { steps: [{ label: 'read', flag: false, review: { writtenAt: 'x' } }] }, list)
+        .violations,
+    ).toEqual([expect.stringContaining('steps.0.review')]);
+  });
+
   it('replacedEntry swaps exactly one baseline entry for one pinned run entry (TS-5)', () => {
     const list: AllowList = {
       scenario: 'x',

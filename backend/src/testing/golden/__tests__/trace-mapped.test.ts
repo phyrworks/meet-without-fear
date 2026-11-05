@@ -41,6 +41,20 @@ const run = (over: Record<string, unknown> = {}) => ({
 });
 
 describe('traceMapped', () => {
+  it('addedRelationsAt admits a relation only at the steps it names (work-99k2)', () => {
+    const pinned: TraceMappedRule = {
+      ...rule,
+      addedRelationsAt: [{ steps: 'draft as', relations: { empathy_attempt: 'the pending-review check' } }],
+    };
+    const touching = run({
+      shapes: [{ isolation: null, statements: [stmt('SELECT', 'extended', ['message', 'empathy_attempt'])] }],
+    });
+    expect(compareMappedTrace(base, touching, pinned, 'draft as bob')).toEqual([]);
+    expect(compareMappedTrace(base, touching, pinned, 'consent as bob')).toEqual([
+      expect.stringContaining('empathy_attempt'),
+    ]);
+  });
+
   it('accepts mapped relations, added ones, simple transaction control and the same paged row count', () => {
     expect(compareMappedTrace(base, run(), rule, 'messages page')).toEqual([]);
   });
