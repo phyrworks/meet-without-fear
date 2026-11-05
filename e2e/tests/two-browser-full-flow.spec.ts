@@ -10,8 +10,8 @@
  * - Both users complete Stage 1 (witnessing + feel-heard)
  * - Both users complete Stage 2 (empathy drafting + sharing + reconciler)
  * - Both users complete Stage 3 (needs extraction + mutual needs sharing)
- * - Both users complete Stage 4 (strategies + ranking + agreement)
- * - Session marked complete after agreement confirmation
+ * - Both users complete Stage 4 (proposals + willingness selections + shared-agreement closure)
+ * - Closure schedules Tending entries
  * - Test passes 3 consecutive runs without flakiness
  *
  * This test composes the proven patterns from two-browser-stage-2.spec.ts,
@@ -33,6 +33,8 @@ import {
   expectNeedsSummaryFromApi,
   waitForNeedsReveal,
   waitForStage,
+  submitAndShareStage4Selections,
+  closeStage4WithSharedAgreement,
 } from '../helpers/test-utils';
 
 // Use iPhone 12 viewport
@@ -437,149 +439,64 @@ test.describe('Full Partner Journey: Stages 0-4', () => {
     });
     expect(strategyB1Response.ok(), 'User B strategy was not created').toBe(true);
 
-    // Before mutual readiness, the privacy gate exposes only the current user's
-    // proposals. User A created two of the three database records.
-    const strategiesResponse = await apiA.get(`${API_BASE_URL}/api/sessions/${harness.sessionId}/strategies`);
-    const strategiesData = await strategiesResponse.json();
-    expect(strategiesData.data?.strategies).toHaveLength(2);
+    // Redesigned Stage 4: proposals are Proposal rows; each partner takes a
+    // WILLING / NOT_WILLING stance per proposal (private until shared,
+    // milestone choices_shared); mutual WILLING closes as a shared agreement
+    // and schedules Tending. Ranking and the pre-redesign agreement
+    // confirmation were dropped, so those routes are not exercised here.
+    const stage4Url = `${API_BASE_URL}/api/sessions/${harness.sessionId}/stage4`;
+    const stateA0 = await (await apiA.get(stage4Url)).json();
+    const stateB0 = await (await apiB.get(stage4Url)).json();
+    for (const [label, state] of [['User A', stateA0], ['User B', stateB0]] as const) {
+      const descriptions = state.data?.inventory?.sharedProposals?.map((p: { description: string }) => p.description);
+      expect(descriptions, `${label} should see all three proposals in the Stage 4 inventory`).toEqual(
+        expect.arrayContaining([
+          'Have a 10-minute phone-free conversation at dinner each day',
+          'Use a pause signal when conversations get heated',
+          'Say one specific thing I appreciate each morning',
+        ])
+      );
+      expect(state.data?.mySelectionStatus).toBe('NOT_STARTED');
+      expect(state.data?.outcome).toBeNull();
+    }
 
-    // Reload pages to show strategy pool
-    await Promise.all([
-      harness.userAPage.reload(),
-      harness.userBPage.reload(),
-    ]);
+    // Both stand WILLING on every proposal and share. Selections stay private
+    // until the partner has shared too: after A shares alone, A sees no
+    // partner decision on any proposal.
+    await submitAndShareStage4Selections(apiA, API_BASE_URL, harness.sessionId, 'User A');
+    const heldState = await (await apiA.get(stage4Url)).json();
+    expect(heldState.data?.partnerSelectionStatus).toBe('NOT_STARTED');
+    for (const proposal of heldState.data.inventory.sharedProposals) {
+      expect(proposal.partnerDecisionVisible, 'partner stance must stay hidden until both share').toBeUndefined();
+    }
+    await submitAndShareStage4Selections(apiB, API_BASE_URL, harness.sessionId, 'User B');
 
-    await Promise.all([
-      harness.userAPage.waitForLoadState('networkidle'),
-      harness.userBPage.waitForLoadState('networkidle'),
-    ]);
-
-    // Handle mood check after reload
-    await handleMoodCheck(harness.userAPage);
-    await handleMoodCheck(harness.userBPage);
-
-    // Screenshot strategy pool
-    await expect(harness.userAPage).toHaveScreenshot('full-flow-07-strategy-pool-user-a.png', {
-      maxDiffPixels: 500,
-    });
-    await expect(harness.userBPage).toHaveScreenshot('full-flow-08-strategy-pool-user-b.png', {
-      maxDiffPixels: 500,
-    });
-
-    // Mark both users ready via POST /strategies/ready
-    const [readyAResponse, readyBResponse] = await Promise.all([
-      apiA.post(`${API_BASE_URL}/api/sessions/${harness.sessionId}/strategies/ready`),
-      apiB.post(`${API_BASE_URL}/api/sessions/${harness.sessionId}/strategies/ready`),
-    ]);
-    expect(readyAResponse.ok(), 'User A was not marked ready to rank').toBe(true);
-    expect(readyBResponse.ok(), 'User B was not marked ready to rank').toBe(true);
-
-    // Mutual readiness opens the anonymous shared pool.
-    const sharedStrategiesResponse = await apiA.get(
-      `${API_BASE_URL}/api/sessions/${harness.sessionId}/strategies`
-    );
-    const sharedStrategiesData = await sharedStrategiesResponse.json();
-    const strategies = sharedStrategiesData.data?.strategies || [];
-    expect(strategies).toHaveLength(3);
-    expect(sharedStrategiesData.data?.canRank).toBe(true);
-
-    // Get strategy IDs from GET endpoint
-    const strategy1 = strategies[0];
-    const strategy2 = strategies[1];
-    const strategy3 = strategies[2];
-
-    // Submit rankings for both users - both rank strategy1 first for guaranteed overlap
-    await apiA.post(`${API_BASE_URL}/api/sessions/${harness.sessionId}/strategies/rank`, {
-      rankedIds: [strategy1.id, strategy2.id, strategy3.id],
-    });
-
-    const rankBResponse = await apiB.post(`${API_BASE_URL}/api/sessions/${harness.sessionId}/strategies/rank`, {
-      rankedIds: [strategy1.id, strategy3.id, strategy2.id],
-    });
-    const rankBData = await rankBResponse.json();
-
-    // Verify canReveal: true from User B's ranking response
-    expect(rankBData.data?.canReveal).toBe(true);
-
-    // Get overlap via GET /strategies/overlap
-    const overlapResponse = await apiA.get(`${API_BASE_URL}/api/sessions/${harness.sessionId}/strategies/overlap`);
-    const overlapData = await overlapResponse.json();
-    const overlapStrategies = overlapData.data?.overlap || [];
-
-    // Verify at least 1 overlap strategy
-    expect(overlapStrategies.length).toBeGreaterThanOrEqual(1);
-
-    // Reload pages to show overlap
-    await Promise.all([
-      harness.userAPage.reload(),
-      harness.userBPage.reload(),
-    ]);
-
+    // No Ably in hermetic E2E: reload to pick up the revealed Stage 4 state.
+    await Promise.all([harness.userAPage.reload(), harness.userBPage.reload()]);
     await Promise.all([
       harness.userAPage.waitForLoadState('networkidle'),
       harness.userBPage.waitForLoadState('networkidle'),
     ]);
-
-    // Handle mood check after reload
     await handleMoodCheck(harness.userAPage);
     await handleMoodCheck(harness.userBPage);
 
-    // Screenshot overlap reveal
-    await expect(harness.userAPage).toHaveScreenshot('full-flow-09-overlap-user-a.png', {
-      maxDiffPixels: 500,
-    });
-    await expect(harness.userBPage).toHaveScreenshot('full-flow-10-overlap-user-b.png', {
-      maxDiffPixels: 500,
-    });
+    const closeData = await closeStage4WithSharedAgreement(apiA, API_BASE_URL, harness.sessionId, 'User A');
+    expect(closeData.data.closed).toBe(true);
+    expect(closeData.data.outcome.kind).toBe('SHARED_AGREEMENT');
+    expect(closeData.data.outcome.agreements.length).toBeGreaterThanOrEqual(1);
 
-    // Create agreement via POST /agreements using first overlap strategy
-    const followUpDate = new Date();
-    followUpDate.setDate(followUpDate.getDate() + 7); // 7 days from now
+    const finalB = await (await apiB.get(stage4Url)).json();
+    expect(finalB.data?.outcome?.kind, 'User B sees the closed shared agreement').toBe('SHARED_AGREEMENT');
+    const tendingResponse = await apiB.get(`${API_BASE_URL}/api/sessions/${harness.sessionId}/tending`);
+    expect(tendingResponse.ok(), 'Tending list should be routed after closure').toBe(true);
+    const tending = await tendingResponse.json();
+    expect(tending.data?.entries?.length ?? 0, 'Closure schedules Tending entries').toBeGreaterThanOrEqual(1);
 
-    const agreementResponse = await apiA.post(`${API_BASE_URL}/api/sessions/${harness.sessionId}/agreements`, {
-      strategyId: overlapStrategies[0].id,
-      description: overlapStrategies[0].description,
-      type: 'MICRO_EXPERIMENT',
-      followUpDate: followUpDate.toISOString(),
-    });
-    expect(agreementResponse.ok(), 'Agreement was not created').toBe(true);
-    const agreementData = await agreementResponse.json();
-    const agreementId = agreementData.data?.agreement?.id;
-    expect(agreementId, 'Agreement response did not include an id').toBeTruthy();
-
-    // Confirm agreement via POST /agreements/{agreementId}/confirm as User B
-    const confirmResponse = await apiB.post(
-      `${API_BASE_URL}/api/sessions/${harness.sessionId}/agreements/${agreementId}/confirm`,
-      { confirmed: true }
-    );
-    const confirmData = await confirmResponse.json();
-
-    expect(confirmResponse.ok(), 'Partner agreement confirmation failed').toBe(true);
-    expect(confirmData.data?.agreement?.status).toBe('AGREED');
-    expect(confirmData.data?.sessionCanResolve).toBe(true);
-
-    // Reload pages to show final agreement state
-    await Promise.all([
-      harness.userAPage.reload(),
-      harness.userBPage.reload(),
-    ]);
-
+    await Promise.all([harness.userAPage.reload(), harness.userBPage.reload()]);
     await Promise.all([
       harness.userAPage.waitForLoadState('networkidle'),
       harness.userBPage.waitForLoadState('networkidle'),
     ]);
-
-    // Handle mood check after reload
-    await handleMoodCheck(harness.userAPage);
-    await handleMoodCheck(harness.userBPage);
-
-    // Screenshot final agreement state
-    await expect(harness.userAPage).toHaveScreenshot('full-flow-11-agreement-user-a.png', {
-      maxDiffPixels: 500,
-    });
-    await expect(harness.userBPage).toHaveScreenshot('full-flow-12-agreement-user-b.png', {
-      maxDiffPixels: 500,
-    });
 
     // ==========================================
     // SUCCESS: Full partner journey complete
@@ -588,7 +505,7 @@ test.describe('Full Partner Journey: Stages 0-4', () => {
     // - Both users completed Stage 1 (witnessing + feel-heard)
     // - Both users completed Stage 2 (empathy drafting + sharing + reconciler)
     // - Both users completed Stage 3 (needs extraction + side-by-side validation)
-    // - Both users completed Stage 4 (strategies + ranking + agreement)
-    // - Session marked resolved (sessionCanResolve: true)
+    // - Both users completed Stage 4 (proposals + willingness selections shared
+    //   + shared-agreement closure + scheduled Tending)
   });
 });
