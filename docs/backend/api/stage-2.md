@@ -45,6 +45,7 @@ POST /api/v1/sessions/:id/empathy/draft
 interface SaveEmpathyDraftRequest {
   content: string;  // The empathy attempt text
   readyToShare?: boolean; // Optional toggle to mark draft as ready (sets gate empathyDraftReady)
+  resolvePreJoinReview?: boolean; // work-99k2: the author's review choice; only it ends a pending pre-join review
 }
 ```
 
@@ -107,10 +108,46 @@ GET /api/v1/sessions/:id/empathy/draft
 ```typescript
 interface GetEmpathyDraftResponse {
   draft: EmpathyDraftDTO | null;
-  canConsent: boolean;
+  canConsent: boolean;       // false while the partner has not joined
   alreadyConsented: boolean;
+  awaitingPartner?: boolean; // invited, not yet joined: the draft is kept, sharing waits
+  preJoinReview?: { writtenAt: string; partnerJoinedAt: string } | null;
 }
 ```
+
+**Before the partner joins (work-99k2).** The inviter can reach Stage 2 while the
+invitation is still pending. Saving works: the draft is kept against the pending
+invitation (`draft.invitation_id`), from the moment it is written (also the AI's
+`ReadyShare` draft from a chat turn). Consent is refused with 400 ("Cannot share an
+empathy statement before your partner has joined") until the partner joins.
+Accepting the invitation re-points the draft to the new participant in the same
+transaction, keeping its written-at; it is **never** sent on the join.
+
+**The review after the join.** `preJoinReview` is set while the draft was last
+written before the partner joined and no round has been submitted. Mobile shows
+"<Partner> has joined. Here's what you wrote <day>." with three choices: send as
+is (save with `resolvePreJoinReview: true`, then consent), edit first (save with
+`resolvePreJoinReview: true`), set aside (`DELETE`, below). Only those resolve
+it: while it is pending, a save without `resolvePreJoinReview` (the client's or
+the chat turn's autosave of the AI's newest proposal) is skipped — the response
+carries `preJoinReviewPending: true` and the draft is left as written.
+
+Before the join the draft is kept against the inviter's newest invitation that
+has not been accepted, so it survives the invitation lapsing (EXPIRED).
+
+---
+
+### Set Empathy Draft Aside
+
+Discard the caller's empathy draft (the review's "set aside"). Gated like save:
+the session must allow Stage 2 and the caller must be in stage 2 (400 otherwise);
+409 once the statement has been shared (a submitted round exists).
+
+```
+DELETE /api/v1/sessions/:id/empathy/draft
+```
+
+Response: `{ deleted: boolean }`.
 
 ---
 

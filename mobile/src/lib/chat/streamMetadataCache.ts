@@ -32,6 +32,9 @@ export function withProposedEmpathyDraft(
   old: UnknownRecord | undefined,
   proposedEmpathyStatement: string
 ): UnknownRecord {
+  // work-99k2: a pre-join draft awaiting its author's review is replaced only
+  // by their explicit choice — the server skips this autosave too.
+  if (old?.preJoinReview) return old;
   return {
     ...old,
     draft: {
@@ -39,7 +42,8 @@ export function withProposedEmpathyDraft(
       content: proposedEmpathyStatement,
       readyToShare: false,
     },
-    canConsent: true,
+    // work-99k2: no consent before the partner has joined.
+    canConsent: !old?.awaitingPartner,
     alreadyConsented: false,
   };
 }

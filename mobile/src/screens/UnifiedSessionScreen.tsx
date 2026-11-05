@@ -55,6 +55,7 @@ import { TendingPanel } from '../components/TendingPanel';
 import { CompactChatItem } from '../components/CompactChatItem';
 import { CompactAgreementBar } from '../components/CompactAgreementBar';
 import { ViewEmpathyStatementDrawer } from '../components/ViewEmpathyStatementDrawer';
+import { PreJoinDraftReviewModal } from '../components/PreJoinDraftReviewModal';
 import { MemorySuggestionCard } from '../components/MemorySuggestionCard';
 // SegmentedControl removed - tabs are now integrated in SessionChatHeader
 import { PartnerInfoDrawer } from '../components/PartnerInfoDrawer';
@@ -664,6 +665,9 @@ export function UnifiedSessionScreen({
     handleConfirmInvitationMessage,
     handleSaveEmpathyDraft,
     handleShareEmpathy,
+    handleSetAsideEmpathyDraft,
+    isSettingAsideEmpathyDraft,
+    isPreJoinReviewPending,
     handleResubmitEmpathy,
     handleValidatePartnerEmpathy,
     handleConfirmAllNeeds,
@@ -818,6 +822,13 @@ export function UnifiedSessionScreen({
       if (triggeredBySelf && data.forUserId !== user?.id) {
         console.log('[UnifiedSessionScreen] Skipping event triggered by self:', event);
         return;
+      }
+
+      // work-99k2: the partner joined — a draft written before the join now
+      // awaits its author's review (GET /empathy/draft preJoinReview). The
+      // event carries no draft state, so refetch it (also refetched on focus).
+      if (event === 'session.joined') {
+        queryClient.invalidateQueries({ queryKey: stageKeys.empathyDraft(sessionId) });
       }
 
       // Handle reconciler events - use setQueryData with data included in events (no extra HTTP round-trips)
@@ -1261,7 +1272,12 @@ export function UnifiedSessionScreen({
       }
       // Capture AI-proposed empathy statement (Stage 2)
       // Save to database immediately so it persists across reloads
-      if (payload.proposedEmpathyStatement !== undefined && payload.proposedEmpathyStatement !== null) {
+      // work-99k2: not while a pre-join draft awaits its author's review.
+      if (
+        payload.proposedEmpathyStatement !== undefined &&
+        payload.proposedEmpathyStatement !== null &&
+        !isPreJoinReviewPending()
+      ) {
         setLiveProposedEmpathyStatement(payload.proposedEmpathyStatement);
         // Save to database with readyToShare: false (user hasn't confirmed yet)
         handleSaveEmpathyDraft(payload.proposedEmpathyStatement, false);
@@ -4458,6 +4474,7 @@ export function UnifiedSessionScreen({
           statement={empathyDrawerStatement}
           partnerName={partnerName}
           isRevising={isRefiningEmpathy}
+          awaitingPartner={!!empathyDraftData?.awaitingPartner}
           onShare={() => {
             const statementToShare = empathyDrawerStatement;
             console.log('[ViewEmpathyStatementDrawer] Share clicked', {
@@ -4493,6 +4510,34 @@ export function UnifiedSessionScreen({
             }
           }}
           onClose={() => setShowEmpathyDrawer(false)}
+        />
+      )}
+
+      {/* work-99k2: the draft written before the partner joined is reviewed,
+          never auto-sent. Shown while the server reports preJoinReview. */}
+      {!!empathyDraftData?.preJoinReview && !!empathyDraftData.draft && !isRefiningEmpathy && (
+        <PreJoinDraftReviewModal
+          visible
+          partnerName={partnerName}
+          writtenAt={empathyDraftData.preJoinReview.writtenAt}
+          statement={empathyDraftData.draft.content}
+          busy={isSettingAsideEmpathyDraft || isSavingEmpathyDraft || isSharingEmpathy}
+          onSendAsIs={() => {
+            const statementToShare = empathyDraftData.draft?.content;
+            if (!statementToShare) return;
+            markCompleted('shared-empathy');
+            // The author's explicit choice: saves the draft ready (ending the
+            // review) and then consents.
+            handleShareEmpathy(statementToShare, { resolvePreJoinReview: true });
+          }}
+          onEditFirst={() => {
+            const content = empathyDraftData.draft?.content;
+            if (!content) return;
+            // The author's explicit choice ends the review; the draft stays in
+            // the conversation, where the AI helps rework it.
+            handleSaveEmpathyDraft(content, false, { resolvePreJoinReview: true });
+          }}
+          onSetAside={handleSetAsideEmpathyDraft}
         />
       )}
 

@@ -31,6 +31,12 @@ export interface ViewEmpathyStatementDrawerProps {
   partnerName?: string;
   /** Whether user is revising after receiving shared context from partner */
   isRevising?: boolean;
+  /**
+   * work-99k2: the partner has been invited but has not joined. The draft is
+   * saved; sharing (consent) waits for the join, so Share is replaced by an
+   * explanation and "Keep for later" (which only closes the drawer).
+   */
+  awaitingPartner?: boolean;
   /** Callback when "Share" is tapped */
   onShare: () => void;
   /** Callback when drawer is closed */
@@ -39,11 +45,17 @@ export interface ViewEmpathyStatementDrawerProps {
   onSendRefinement?: (message: string) => void;
 }
 
+/** The Share step's explanation while the partner has not joined (work-99k2). */
+export function awaitingPartnerNote(partnerName: string): string {
+  return `${partnerName} hasn't joined yet. Your draft is saved, and you can share it once ${partnerName} joins. You'll get to look it over again first.`;
+}
+
 export function ViewEmpathyStatementDrawer({
   visible,
   statement,
   partnerName = 'your partner',
   isRevising = false,
+  awaitingPartner = false,
   onShare,
   onClose,
   onSendRefinement,
@@ -125,7 +137,9 @@ export function ViewEmpathyStatementDrawer({
             <Text style={styles.subtitle}>
               {isRevising
                 ? `${partnerName} shared some additional context to help you understand their experience better. Take a moment to consider if you'd like to update what you'll share with them.`
-                : `This is what you'll share with ${partnerName} to show you understand their perspective.`}
+                : awaitingPartner
+                  ? `This is what you'd share with ${partnerName} to show you understand their perspective.`
+                  : `This is what you'll share with ${partnerName} to show you understand their perspective.`}
             </Text>
 
             {/* Empathy statement - styled subtly */}
@@ -183,6 +197,11 @@ export function ViewEmpathyStatementDrawer({
               </View>
             ) : (
               <View style={styles.footer}>
+                {awaitingPartner && !isRevising && (
+                  <Text style={styles.awaitingPartnerNote} testID="empathy-share-after-join-note">
+                    {awaitingPartnerNote(partnerName)}
+                  </Text>
+                )}
                 <View style={styles.actionButtons}>
                   {onSendRefinement && (
                     <TouchableOpacity
@@ -195,15 +214,26 @@ export function ViewEmpathyStatementDrawer({
                       <Text style={styles.refineButtonText}>Refine further</Text>
                     </TouchableOpacity>
                   )}
-                  <TouchableOpacity
-                    style={styles.shareButton}
-                    onPress={onShare}
-                    testID="share-empathy-button"
-                    activeOpacity={0.8}
-                  >
-                    <Send color={palette.bg} size={20} />
-                    <Text style={styles.shareButtonText}>{isRevising ? 'Resubmit' : 'Share'}</Text>
-                  </TouchableOpacity>
+                  {awaitingPartner && !isRevising ? (
+                    <TouchableOpacity
+                      style={styles.shareButton}
+                      onPress={onClose}
+                      testID="empathy-keep-for-later-button"
+                      activeOpacity={0.8}
+                    >
+                      <Text style={styles.shareButtonText}>Keep for later</Text>
+                    </TouchableOpacity>
+                  ) : (
+                    <TouchableOpacity
+                      style={styles.shareButton}
+                      onPress={onShare}
+                      testID="share-empathy-button"
+                      activeOpacity={0.8}
+                    >
+                      <Send color={palette.bg} size={20} />
+                      <Text style={styles.shareButtonText}>{isRevising ? 'Resubmit' : 'Share'}</Text>
+                    </TouchableOpacity>
+                  )}
                 </View>
               </View>
             )}
@@ -242,6 +272,13 @@ const makeStyles = (palette: ReturnType<typeof useAppAppearance>['palette']) => 
   },
   scrollView: {
     flex: 1,
+  },
+  awaitingPartnerNote: {
+    fontSize: 15,
+    lineHeight: 22,
+    color: palette.textMuted,
+    textAlign: 'center',
+    marginBottom: 16,
   },
   scrollContent: {
     paddingHorizontal: 24,

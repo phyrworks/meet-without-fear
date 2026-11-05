@@ -55,6 +55,11 @@ export interface AddedKeysRule extends RuleBase {
    * an added key's value is unasserted.
    */
   each?: Record<string, unknown>;
+  /**
+   * Optional: the added value must deep-equal this (null included) — for a
+   * scalar key `each` cannot pin (work-99k2). Present means checked.
+   */
+  equals?: unknown;
 }
 
 /**
@@ -209,6 +214,11 @@ export interface TraceMappedRule extends RuleBase {
   relationMap: Record<string, string[]>;
   addedRelations: Record<string, string>;
   sameRowsRead: Array<{ steps: string; relation: string; as: string }>;
+  /**
+   * Relations added only at the steps whose label starts with `steps`, each
+   * with its reason (work-99k2: pinned, not added for every step).
+   */
+  addedRelationsAt?: Array<{ steps: string; relations: Record<string, string> }>;
 }
 
 /**

@@ -39,6 +39,7 @@ import {
   deliveredCopyInRead,
   deliveredStatementCopy,
   empathySubmittedMilestone,
+  preJoinDraftKeys,
   READ_DTO_RULES,
   targetByteRules,
   TARGET_COMPACT_SIGNED_MASK,
@@ -193,6 +194,8 @@ export const UNREVEALED_ATTEMPT_HIDDEN_KNOWN_LEAKS: KnownLeak[] = [];
 /** TS-10 rules over bodies, for the concept and the byte-level comparison alike. */
 const TARGET_BODY_RULES = (concept: boolean): AllowRule[] => [
   TARGET_MESSAGE_STAGE_RULE,
+  // work-99k2: the scenario's GET /empathy/draft read steps (preJoinDraftKeys).
+  ...preJoinDraftKeys([6, 21, 37, 53, 69, 84]),
   TARGET_COMPACT_SIGNED_MASK,
   TARGET_CONSENT_TARGET_ID_RULE,
   // Ada, the author, reads at "awaiting sharing" (15–29): the R6/R7 closures.

@@ -73,11 +73,15 @@ import {
   setAttemptStatus,
   submitAttempt,
   upsertDraft,
+  deleteEmpathyDraft,
+  openInvitationOf,
+  type EmpathySubject,
   type AttemptRow,
   type SessionParty,
   type TargetEmpathyStatus,
 } from '../services/empathy-store';
 import { attemptDTO } from '../services/empathy-status';
+import { saveEmpathyDraft } from '../services/empathy-draft-save';
 
 // ============================================================================
 // Helpers
@@ -131,6 +135,18 @@ async function sessionAllowsStage2(sessionId: string, userId: string, res: Respo
   if (session.status === 'INVITED' && (await isSessionCreator(sessionId, userId))) return true;
   errorResponse(res, 'SESSION_NOT_ACTIVE', 'Session is not active', 400);
   return false;
+}
+
+/**
+ * The subject of the caller's EMPATHY draft for reads and deletes: the present
+ * partner, else the caller's open (not accepted) invitation (work-99k2), else
+ * none. Writes go through saveEmpathyDraft, which resolves it under a lock.
+ */
+async function empathySubjectOf(caller: Stage2Caller): Promise<EmpathySubject | null> {
+  if (caller.partner) return { aboutParticipantId: caller.partner.participantId };
+  if (caller.parties.length !== 1) return null;
+  const invitation = await openInvitationOf(caller.me.participantId);
+  return invitation ? { invitationId: invitation.id } : null;
 }
 
 async function stageOf(participantId: string): Promise<number> {
@@ -244,7 +260,7 @@ export async function saveDraft(req: Request, res: Response): Promise<void> {
       errorResponse(res, 'VALIDATION_ERROR', 'Invalid request body', 400, parseResult.error.issues);
       return;
     }
-    const { content, readyToShare } = parseResult.data;
+    const { content, readyToShare, resolvePreJoinReview } = parseResult.data;
 
     const caller = await stage2Caller(req, res);
     if (!caller) return;
@@ -260,25 +276,32 @@ export async function saveDraft(req: Request, res: Response): Promise<void> {
       );
       return;
     }
-    // spec §1.1 draft: an EMPATHY draft is about a participant (CHECK) — there
-    // must be a partner to imagine.
-    if (!caller.partner) {
-      errorResponse(res, 'VALIDATION_ERROR', 'Cannot save empathy draft before your partner has joined', 400);
+    // spec §1.1 draft: an EMPATHY draft is about the partner, or — before they
+    // have joined — about the open invitation (work-99k2: A's draft is kept
+    // from the moment they write it; consent waits for the join). A pending
+    // pre-join review is ended only by the author's explicit choice.
+    const result = await saveEmpathyDraft({
+      participantId: caller.me.participantId,
+      content,
+      readyToShare,
+      resolvePreJoinReview,
+    });
+    if (result.status === 'no_subject') {
+      errorResponse(
+        res,
+        'VALIDATION_ERROR',
+        'Cannot save empathy draft: there is no partner or pending invitation',
+        400,
+      );
       return;
     }
 
-    const draft = await upsertDraft({
-      participantId: caller.me.participantId,
-      kind: 'EMPATHY',
-      aboutParticipantId: caller.partner.participantId,
-      content,
-      readyToShare,
-    });
-
     successResponse(res, {
-      draftId: draft.id,
-      savedAt: draft.updatedAt.toISOString(),
-      readyToShare: draft.readyToShare,
+      draftId: result.draft.id,
+      savedAt: result.draft.updatedAt.toISOString(),
+      readyToShare: result.draft.readyToShare,
+      // work-99k2: the write was skipped — the pre-join draft awaits its author's review.
+      ...(result.status === 'review_pending' ? { preJoinReviewPending: true } : {}),
     });
   } catch (error) {
     logger.error('[saveDraft] Error:', error);
@@ -296,14 +319,30 @@ export async function getDraft(req: Request, res: Response): Promise<void> {
     if (!caller) return;
     const { me, counterpart: partner } = caller;
 
+    // work-99k2: with no partner yet, the draft is held against the pending
+    // invitation; it cannot be consented to until the partner joins.
+    const pendingInvitation = !partner && caller.parties.length === 1 ? await openInvitationOf(me.participantId) : null;
     const draft = partner
       ? await findDraft({ participantId: me.participantId, kind: 'EMPATHY', aboutParticipantId: partner.participantId })
-      : null;
+      : pendingInvitation
+        ? await findDraft({ participantId: me.participantId, kind: 'EMPATHY', invitationId: pendingInvitation.id })
+        : null;
     const alreadyConsented = partner ? await grantedSubmissionConsent(me.participantId, partner.participantId) : false;
     const myAttempt = partner ? await currentAttempt(me.participantId, partner.participantId) : null;
     const isRefining = myAttempt?.status === 'REFINING';
 
-    const canConsent = !!(draft && draft.readyToShare && (!alreadyConsented || isRefining));
+    const canConsent = !!(caller.partner && draft && draft.readyToShare && (!alreadyConsented || isRefining));
+
+    // A draft last written before the partner joined, never sent: the author
+    // reviews it before anything is shared (send as is / edit first / set
+    // aside). Derived, not flagged: the re-point at accept keeps updated_at
+    // (repointInvitationDrafts); while it is pending, saveEmpathyDraft skips
+    // every write but the author's explicit choice, so only that (or a
+    // submitted round, or setting it aside) ends it.
+    const preJoinReview =
+      caller.partner && draft && !myAttempt && draft.updatedAt < caller.partner.joinedAt
+        ? { writtenAt: draft.updatedAt.toISOString(), partnerJoinedAt: caller.partner.joinedAt.toISOString() }
+        : null;
 
     successResponse(res, {
       draft: draft
@@ -317,10 +356,46 @@ export async function getDraft(req: Request, res: Response): Promise<void> {
         : null,
       canConsent,
       alreadyConsented,
+      awaitingPartner: !!pendingInvitation,
+      preJoinReview,
     });
   } catch (error) {
     logger.error('[getDraft] Error:', error);
     errorResponse(res, 'INTERNAL_ERROR', 'Failed to get draft', 500);
+  }
+}
+
+/**
+ * Set the empathy draft aside (discard it) — work-99k2's review after the
+ * join, "start over from where you are now". Never touches a submitted round.
+ * DELETE /sessions/:id/empathy/draft
+ */
+export async function deleteDraft(req: Request, res: Response): Promise<void> {
+  try {
+    const caller = await stage2Caller(req, res);
+    if (!caller) return;
+    if (!(await sessionAllowsStage2(caller.sessionId, caller.userId, res))) return;
+    const currentStage = await stageOf(caller.me.participantId);
+    if (currentStage !== 2) {
+      errorResponse(
+        res,
+        'VALIDATION_ERROR',
+        `Cannot set the empathy draft aside: you are in stage ${currentStage}, but stage 2 is required`,
+        400,
+      );
+      return;
+    }
+    // A draft already consented to (a submitted round) is not set aside here.
+    if (caller.partner && (await currentAttempt(caller.me.participantId, caller.partner.participantId))) {
+      errorResponse(res, 'CONFLICT', 'Cannot set aside an empathy statement that has already been shared', 409);
+      return;
+    }
+    const subject = await empathySubjectOf(caller);
+    const deleted = subject ? await deleteEmpathyDraft(caller.me.participantId, subject) : false;
+    successResponse(res, { deleted });
+  } catch (error) {
+    logger.error('[deleteDraft] Error:', error);
+    errorResponse(res, 'INTERNAL_ERROR', 'Failed to set the draft aside', 500);
   }
 }
 

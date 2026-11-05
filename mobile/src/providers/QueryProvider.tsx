@@ -50,16 +50,23 @@ function trackNetworkError(error: unknown): void {
   }
 }
 
-function shouldRetryApiError(failureCount: number, error: unknown, maxRetries: number): boolean {
+/**
+ * Retry only what can succeed on a retry: network failures, timeouts and 5xx.
+ * A 4xx is the server's answer to this request (validation, auth, not found,
+ * conflict) and repeats verbatim, so it is never retried — except 408 (request
+ * timeout) and 429 (rate limited). work-99k2: draft autosave hammered a 400.
+ */
+export function shouldRetryApiError(failureCount: number, error: unknown, maxRetries: number): boolean {
   if (error instanceof ApiClientError) {
-    if (error.status === 401 || error.status === 403 || error.status === 404) {
+    const status = error.status;
+    if (typeof status === 'number' && status >= 400 && status < 500 && status !== 408 && status !== 429) {
       return false;
     }
   }
   return failureCount < maxRetries;
 }
 
-function createQueryClient(): QueryClient {
+export function createQueryClient(): QueryClient {
   return new QueryClient({
     queryCache: new QueryCache({
       onError: (error) => trackNetworkError(error),

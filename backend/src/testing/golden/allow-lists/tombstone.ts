@@ -43,6 +43,7 @@ import {
   TARGET_CONSENT_TARGET_ID_RULE,
   TARGET_MESSAGE_STAGE_RULE,
   TARGET_ROUND_KEYS_RULE,
+  preJoinDraftKeys,
   TARGET_USER_NAME_RULE,
   TARGET_TOPIC_FRAME_INITIAL_RULES,
   TARGET_TOPIC_FRAME_RULES,
@@ -413,6 +414,7 @@ const targetReadRules = (concept: boolean): AllowRule[] => [
   COMPACT_MASK,
   TARGET_MESSAGE_STAGE_RULE,
   TARGET_ROUND_KEYS_RULE,
+  ...preJoinDraftKeys([beforeRead('empathy draft'), afterRead('empathy draft')]),
   TARGET_CONSENT_TARGET_ID_RULE,
   TARGET_USER_NAME_RULE,
   ...authorAnalysisClosed({

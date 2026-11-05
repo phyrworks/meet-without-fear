@@ -12,11 +12,12 @@
  * 8. Confirm feeling heard
  * 9. Continue chatting
  * 10. See empathy draft panel
- * 11. Send empathy statement
+ * 11. Before the partner joins: the draft is kept, the share waits (work-99k2)
+ * 12. The partner joins; on reopening, A reviews the pre-join draft and sends it as is
  */
 
 import { test, expect, devices } from '@playwright/test';
-import { cleanupE2EData, confirmInvitationTopicAndContinue, getE2EHeaders } from '../helpers';
+import { cleanupE2EData, confirmInvitationTopicAndContinue, getE2EHeaders, handleMoodCheck } from '../helpers';
 
 const API_BASE_URL = process.env.API_BASE_URL || 'http://localhost:3000';
 const APP_BASE_URL = process.env.APP_BASE_URL || 'http://localhost:8082';
@@ -71,18 +72,30 @@ test.describe('Single User Journey', () => {
     }
   });
 
-  // FIXME(work-99k2): product bug, not harness. With the partner not yet joined the
-  // backend refuses the empathy draft and consent (400 "Cannot save empathy draft before
-  // your partner has joined", target shape TS-10), but mobile still offers the share, so
-  // step 16 shares nothing and step 17 ("took courage") never comes. Steps 1-15 (Stage 0
-  // two-step flow, Stage 1, feel-heard, empathy-review-button) pass as of work-xws2.
-  // Steps 16+ (Share tab via the empathy indicator) also predate #602; revisit them
-  // together once work-99k2 settles the solo-share rule.
-  test.fixme('new session to empathy draft', async ({ page, request }) => {
+  // work-99k2 (owner rule 2026-11-04): the partner has not joined when A writes the
+  // empathy draft. The draft is kept, the share waits for the join (no consent before
+  // it), nothing is sent on the join, and A reviews the draft the next time they open
+  // the session (send as is / edit first / set aside).
+  test('new session to empathy draft, kept until the partner joins, then reviewed and sent', async ({
+    page,
+    request,
+  }) => {
     // Increase timeout for this long journey test (5 minutes)
     test.setTimeout(300000);
     const testStart = Date.now();
     const elapsed = () => `[${((Date.now() - testStart) / 1000).toFixed(1)}s]`;
+    const darryl = { email: 'darryl@e2e.test', name: 'Darryl' };
+
+    // Every empathy draft write's status, and the consent POSTs: before the join a draft
+    // write must never be refused (the old 400 loop) and no consent may be attempted.
+    const draftWrites: number[] = [];
+    let consentPosts = 0;
+    page.on('response', response => {
+      const req = response.request();
+      if (req.method() !== 'POST') return;
+      if (/\/empathy\/draft$/.test(req.url())) draftWrites.push(response.status());
+      if (/\/empathy\/consent$/.test(req.url())) consentPosts += 1;
+    });
 
     // Set E2E fixture ID header for this test
     const FIXTURE_ID = 'user-a-full-journey';
@@ -258,87 +271,89 @@ test.describe('Single User Journey', () => {
     const empathyReviewButton = page.getByTestId('empathy-review-button');
     await expect(empathyReviewButton).toBeVisible({ timeout: 10000 });
 
-    // Click to open the drawer
-    console.log(`${elapsed()} Step 15c: Clicking empathy review...`);
+    // Step 16 (work-99k2): Darryl has not joined. The draft is saved, the Share
+    // step explains that it can be shared once Darryl joins, and no consent is
+    // attempted.
+    console.log(`${elapsed()} Step 16: Opening the draft before the partner joins...`);
     await empathyReviewButton.click();
-    const shareEmpathyButton = page.getByTestId('share-empathy-button');
-    await expect(shareEmpathyButton).toBeVisible({ timeout: 5000 });
+    const afterJoinNote = page.getByTestId('empathy-share-after-join-note');
+    await expect(afterJoinNote).toBeVisible({ timeout: 5000 });
+    await expect(afterJoinNote).toContainText("Darryl hasn't joined yet");
+    await expect(afterJoinNote).toContainText('once Darryl joins');
+    await expect(page.getByTestId('share-empathy-button')).toHaveCount(0);
+    await page.screenshot({ path: 'test-results/single-user-08-share-after-join.png' });
 
-    // Step 16: Click share-empathy-button
-    console.log(`${elapsed()} Step 16: Clicking share empathy...`);
-    await shareEmpathyButton.click();
+    console.log(`${elapsed()} Step 17: Keeping the draft for later...`);
+    await page.getByTestId('empathy-keep-for-later-button').click();
+    await expect(afterJoinNote).not.toBeVisible({ timeout: 5000 });
 
-    // Step 17: Wait for AI confirmation response after empathy is sent
-    // Backend generates this response (not from fixture)
-    console.log(`${elapsed()} Step 17: Waiting for "took courage" AI response...`);
-    await page.waitForSelector('text=/took courage/i', { timeout: 60000 });
-    console.log(`${elapsed()} Step 17 complete: Found "took courage" response`);
-
-    // Step 18: Verify chat input is hidden after empathy is shared
-    // User can't send more messages while waiting for partner
-    console.log(`${elapsed()} Step 18: Verifying chat input is hidden...`);
-    const chatInputAfterEmpathy = page.getByTestId('chat-input');
-    await expect(chatInputAfterEmpathy).not.toBeVisible({ timeout: 5000 });
-    console.log(`${elapsed()} Chat input is hidden (as expected)`);
-
-    // Step 19: Look for "Empathy shared" indicator in the chat
-    console.log(`${elapsed()} Step 19: Looking for Empathy shared indicator...`);
-    // Use testID which is more reliable than text matching
-    const empathyIndicator = page.getByTestId('chat-indicator-empathy-shared');
-    await expect(empathyIndicator).toBeVisible({ timeout: 10000 });
-    console.log(`${elapsed()} Empathy shared indicator is visible`);
-
-    // Step 19b: Assert waiting status panel is visible
-    // After sharing empathy, user should see "<Partner> is working on their perspective"
-    // (copy was previously "Waiting for <Partner> to feel heard"; updated to lower stakes)
-    console.log(`${elapsed()} Step 19b: Verifying waiting status panel...`);
-    const waitingStatus = page.getByText(/Darryl is working on their perspective/i);
-    await expect(waitingStatus).toBeVisible({ timeout: 5000 });
-    console.log(`${elapsed()} Waiting status panel is visible`);
-
-    // Step 20: Tap the "Empathy shared" indicator to navigate to Share tab
-    console.log(`${elapsed()} Step 20: Clicking empathy indicator to navigate to share tab...`);
-    await empathyIndicator.click();
-
-    // Wait for navigation by checking URL changes to /share
-    await page.waitForURL(/\/session\/.*\/share/, { timeout: 5000 });
-    console.log(`${elapsed()} Navigated to share URL`);
-
-    // Step 21: Verify we're on the share tab by looking for share-related content
-    console.log(`${elapsed()} Step 21: Verifying share screen content...`);
-
-    // Wait for the share screen header to appear
-    const shareHeader = page.getByTestId('share-screen-header');
-    await expect(shareHeader).toBeVisible({ timeout: 5000 });
-    console.log(`${elapsed()} Share screen header visible`);
-
-    // Wait for the partner tab content to load
-    const partnerTab = page.getByTestId('share-screen-partner-tab');
-    await expect(partnerTab).toBeVisible({ timeout: 5000 });
-    console.log(`${elapsed()} Partner tab content visible`);
-
-    // Step 21b: Verify the incorrect "partner shared empathy" indicator is NOT shown
-    // In single-user journey, the current user shared empathy, not the partner
-    const partnerEmpathyHeldIndicator = page.getByTestId('share-screen-partner-tab-indicator-partner-empathy-held');
-    await expect(partnerEmpathyHeldIndicator).not.toBeVisible({ timeout: 1000 }).catch(() => {
-      // If it doesn't exist at all, that's fine
+    // Step 18: the draft is kept on the server; nothing was refused or sent.
+    console.log(`${elapsed()} Step 18: Verifying the kept draft via API...`);
+    const draftResponse = await request.get(`${API_BASE_URL}/api/sessions/${sessionId}/empathy/draft`, {
+      headers: getE2EHeaders(userA.email, userId),
     });
-    console.log(`${elapsed()} Verified partner-empathy-held indicator is not visible`);
+    expect(draftResponse.ok()).toBe(true);
+    const draftData = (await draftResponse.json()).data;
+    expect(draftData.awaitingPartner).toBe(true);
+    expect(draftData.canConsent).toBe(false);
+    expect(draftData.preJoinReview).toBeNull();
+    expect(draftData.draft?.content).toBeTruthy();
+    expect(draftWrites.filter(status => status >= 400)).toEqual([]);
+    expect(draftWrites.length).toBeGreaterThan(0);
+    expect(consentPosts).toBe(0);
 
-    // Step 22: Verify via API that empathy was sent
-    console.log(`${elapsed()} Step 22: Verifying empathy via API...`);
+    // Chat stays open while the partner has not joined.
+    await expect(page.getByTestId('chat-input')).toBeVisible({ timeout: 5000 });
+
+    // Step 19: Darryl joins (API: the hermetic E2E auto-accept on Darryl's first
+    // session read). Nothing is sent on the join.
+    console.log(`${elapsed()} Step 19: Darryl joins...`);
+    const darrylSeed = await request.post(`${API_BASE_URL}/api/e2e/seed`, {
+      headers: { 'Content-Type': 'application/json' },
+      data: { email: darryl.email, name: darryl.name },
+    });
+    expect(darrylSeed.ok()).toBe(true);
+    const darrylId: string = (await darrylSeed.json()).id;
+    const darrylState = await request.get(`${API_BASE_URL}/api/sessions/${sessionId}/state`, {
+      headers: getE2EHeaders(darryl.email, darrylId),
+    });
+    expect(darrylState.ok()).toBe(true);
+    const afterJoin = (await (
+      await request.get(`${API_BASE_URL}/api/sessions/${sessionId}/empathy/draft`, {
+        headers: getE2EHeaders(userA.email, userId),
+      })
+    ).json()).data;
+    expect(afterJoin.awaitingPartner).toBe(false);
+    expect(afterJoin.alreadyConsented).toBe(false);
+    expect(afterJoin.preJoinReview?.writtenAt).toBe(draftData.draft.updatedAt);
+
+    // Step 20: the next time A opens the session, the review prompt shows what
+    // they wrote and when. (Hermetic E2E has no Ably: reload is the next open.)
+    console.log(`${elapsed()} Step 20: Reopening the session for the review...`);
+    await page.reload();
+    await page.waitForLoadState('domcontentloaded');
+    await handleMoodCheck(page, 3000);
+    const reviewHeading = page.getByTestId('pre-join-review-heading');
+    await expect(reviewHeading).toBeVisible({ timeout: 30000 });
+    // "earlier today" (or "yesterday" for a run that straddles local midnight)
+    await expect(reviewHeading).toHaveText(/^Darryl has joined. Here's what you wrote (earlier today|yesterday).$/);
+    await expect(page.getByTestId('pre-join-review-statement')).toHaveText(draftData.draft.content);
+    await page.screenshot({ path: 'test-results/single-user-09-pre-join-review.png' });
+
+    // Step 21: Send as is — the consent happens now, after the join.
+    console.log(`${elapsed()} Step 21: Sending as is...`);
+    await page.getByTestId('pre-join-review-send-button').click();
+    await expect(page.getByTestId('pre-join-review-modal')).not.toBeVisible({ timeout: 10000 });
+    // The submission's reply (the copy predating #602 said "took courage") and the waiting status.
+    await expect(page.getByText(/Your empathy attempt has been submitted/i)).toBeVisible({ timeout: 60000 });
+    await expect(page.getByText(/Darryl is working on their perspective/i)).toBeVisible({ timeout: 10000 });
+    expect(consentPosts).toBe(1);
+
     const stateResponse = await request.get(`${API_BASE_URL}/api/sessions/${sessionId}/state`, {
       headers: getE2EHeaders(userA.email, userId),
     });
-
     expect(stateResponse.ok()).toBe(true);
     const stateData = await stateResponse.json();
-
-    // Verify session state reflects empathy was shared
-    expect(stateData.success).toBe(true);
-    expect(stateData.data.session.id).toBe(sessionId);
-
-    // Verify the empathy statement message exists
     const empathyMessages = stateData.data.messages.messages.filter(
       (m: { role: string }) => m.role === 'EMPATHY_STATEMENT'
     );

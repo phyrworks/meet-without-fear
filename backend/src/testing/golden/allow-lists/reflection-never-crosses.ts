@@ -26,6 +26,7 @@ import type { KnownLeak } from '../privacy';
 import {
   empathySubmittedMilestone,
   mockTurnIndex,
+  preJoinDraftKeys,
   READ_DTO_RULES,
   targetByteRules,
   TARGET_COMPACT_SIGNED_MASK,
@@ -47,6 +48,7 @@ const bodyRules = (concept: boolean): AllowRule[] => [
   ...READ_DTO_RULES,
   TARGET_MESSAGE_STAGE_RULE,
   TARGET_COMPACT_SIGNED_MASK,
+  ...preJoinDraftKeys([9, R1_AFTER_DRAFT_STEP]),
   ...mockTurnIndex(R1_TURN_STEP, concept, 'bob', 'added'),
   {
     kind: 'mayDiffer',

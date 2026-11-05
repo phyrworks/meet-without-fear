@@ -122,7 +122,7 @@ REVOKE EXECUTE ON FUNCTION app.current_user_id() FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION app.current_user_id() TO mwf_app, mwf_job, mwf_ops, mwf_auth;
 
 -- ============================================================================
--- 1. Domains, enums and the 47 target tables (backend/scripts/target-shape/tables.sql; 374 named objects, all lower-case; 128 uuid7 columns)
+-- 1. Domains, enums and the 47 target tables (backend/scripts/target-shape/tables.sql; 376 named objects, all lower-case; 129 uuid7 columns)
 -- ============================================================================
 
 -- ============================================================================
@@ -566,37 +566,6 @@ CREATE TABLE "context_share_offer" (
 CREATE INDEX "context_share_offer_subject_participant_id_status_idx" ON "context_share_offer"("subject_participant_id", "status");
 CREATE INDEX "context_share_offer_result_id_idx" ON "context_share_offer"("result_id");
 
-CREATE TABLE "draft" (
-    "id" uuid7 NOT NULL DEFAULT uuidv7(),
-    "participant_id" uuid7 NOT NULL,
-    "kind" "draft_kind" NOT NULL,
-    "about_participant_id" uuid7,
-    "attempt_id" uuid7,
-    "share_offer_id" uuid7,
-    "content" TEXT NOT NULL,
-    "ready_to_share" BOOLEAN NOT NULL DEFAULT false,
-    "version" INTEGER NOT NULL DEFAULT 1,
-    "created_at" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "updated_at" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-
-    CONSTRAINT "draft_pkey" PRIMARY KEY ("id"),
-    CONSTRAINT "draft_participant_id_fkey" FOREIGN KEY ("participant_id") REFERENCES "participant"("id") ON DELETE CASCADE ON UPDATE NO ACTION,
-    CONSTRAINT "draft_about_participant_id_fkey" FOREIGN KEY ("about_participant_id") REFERENCES "participant"("id") ON DELETE CASCADE ON UPDATE NO ACTION,
-    CONSTRAINT "draft_attempt_id_fkey" FOREIGN KEY ("attempt_id") REFERENCES "empathy_attempt"("id") ON DELETE CASCADE ON UPDATE NO ACTION,
-    CONSTRAINT "draft_share_offer_id_fkey" FOREIGN KEY ("share_offer_id") REFERENCES "context_share_offer"("id") ON DELETE CASCADE ON UPDATE NO ACTION,
-
-    -- §1.1 draft — exclusive arc, and the arm matches the kind
-    CONSTRAINT chk_draft_one_arc CHECK (num_nonnulls(about_participant_id, attempt_id, share_offer_id) = 1),
-    CONSTRAINT chk_draft_arc_matches_kind CHECK (
-            (kind = 'EMPATHY') = (about_participant_id IS NOT NULL)
-        AND (kind = 'VALIDATION_FEEDBACK') = (attempt_id IS NOT NULL)
-        AND (kind = 'SHARE_CONTEXT') = (share_offer_id IS NOT NULL))
-);
-CREATE INDEX "draft_about_participant_id_idx" ON "draft"("about_participant_id");
-CREATE INDEX "draft_attempt_id_idx" ON "draft"("attempt_id");
-CREATE INDEX "draft_share_offer_id_idx" ON "draft"("share_offer_id");
--- + sql_draft_one_per_point (sql-only.sql)
-
 CREATE TABLE "milestone" (
     "key" TEXT NOT NULL,
     "ordinal" INTEGER NOT NULL,
@@ -701,6 +670,43 @@ CREATE INDEX "invitation_session_id_idx" ON "invitation"("session_id");
 CREATE INDEX "invitation_invited_by_participant_id_idx" ON "invitation"("invited_by_participant_id");
 CREATE INDEX "invitation_status_expires_at_idx" ON "invitation"("status", "expires_at");
 CREATE INDEX "invitation_accepted_by_user_id_idx" ON "invitation"("accepted_by_user_id");
+
+CREATE TABLE "draft" (
+    "id" uuid7 NOT NULL DEFAULT uuidv7(),
+    "participant_id" uuid7 NOT NULL,
+    "kind" "draft_kind" NOT NULL,
+    "about_participant_id" uuid7,
+    "attempt_id" uuid7,
+    "share_offer_id" uuid7,
+    "invitation_id" uuid7,
+    "content" TEXT NOT NULL,
+    "ready_to_share" BOOLEAN NOT NULL DEFAULT false,
+    "version" INTEGER NOT NULL DEFAULT 1,
+    "created_at" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updated_at" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "draft_pkey" PRIMARY KEY ("id"),
+    CONSTRAINT "draft_participant_id_fkey" FOREIGN KEY ("participant_id") REFERENCES "participant"("id") ON DELETE CASCADE ON UPDATE NO ACTION,
+    CONSTRAINT "draft_about_participant_id_fkey" FOREIGN KEY ("about_participant_id") REFERENCES "participant"("id") ON DELETE CASCADE ON UPDATE NO ACTION,
+    CONSTRAINT "draft_attempt_id_fkey" FOREIGN KEY ("attempt_id") REFERENCES "empathy_attempt"("id") ON DELETE CASCADE ON UPDATE NO ACTION,
+    CONSTRAINT "draft_share_offer_id_fkey" FOREIGN KEY ("share_offer_id") REFERENCES "context_share_offer"("id") ON DELETE CASCADE ON UPDATE NO ACTION,
+    CONSTRAINT "draft_invitation_id_fkey" FOREIGN KEY ("invitation_id") REFERENCES "invitation"("id") ON DELETE CASCADE ON UPDATE NO ACTION,
+
+    -- §1.1 draft — exclusive arc, and the arm matches the kind. An EMPATHY
+    -- draft is about the partner's participant, or — written before the
+    -- partner has joined — about the pending invitation; accepting the
+    -- invitation re-points it to the new participant (work-99k2).
+    CONSTRAINT chk_draft_one_arc CHECK (num_nonnulls(about_participant_id, invitation_id, attempt_id, share_offer_id) = 1),
+    CONSTRAINT chk_draft_arc_matches_kind CHECK (
+            (kind = 'EMPATHY') = (about_participant_id IS NOT NULL OR invitation_id IS NOT NULL)
+        AND (kind = 'VALIDATION_FEEDBACK') = (attempt_id IS NOT NULL)
+        AND (kind = 'SHARE_CONTEXT') = (share_offer_id IS NOT NULL))
+);
+CREATE INDEX "draft_about_participant_id_idx" ON "draft"("about_participant_id");
+CREATE INDEX "draft_attempt_id_idx" ON "draft"("attempt_id");
+CREATE INDEX "draft_share_offer_id_idx" ON "draft"("share_offer_id");
+CREATE INDEX "draft_invitation_id_idx" ON "draft"("invitation_id");
+-- + sql_draft_one_per_point (sql-only.sql)
 
 CREATE TABLE "session_key" (
     "id" uuid7 NOT NULL DEFAULT uuidv7(),
@@ -1327,9 +1333,11 @@ CREATE UNIQUE INDEX "sql_conversation_one_main" ON "conversation" ("participant_
   WHERE kind = 'MAIN';
 
 -- §1.1 draft — one draft per sharing point (adversarial P1-5). An expression
--- index, so it cannot be a Prisma @@unique; not in §5's list by name.
+-- index, so it cannot be a Prisma @@unique; not in §5's list by name. The
+-- invitation arm (work-99k2) is per invitee, so one EMPATHY draft per subject
+-- still holds before the subject has joined.
 CREATE UNIQUE INDEX "sql_draft_one_per_point" ON "draft"
-  ("participant_id", "kind", (coalesce(about_participant_id, attempt_id, share_offer_id)));
+  ("participant_id", "kind", (coalesce(about_participant_id, invitation_id, attempt_id, share_offer_id)));
 
 -- §1.1 session_key / participant_key, §1.7 user_key — one live key per owner
 CREATE UNIQUE INDEX "sql_session_key_live" ON "session_key" ("session_id")
@@ -2668,7 +2676,7 @@ BEGIN
   FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid JOIN pg_namespace s ON s.oid = c.relnamespace
   WHERE s.nspname = 'public' AND c.relkind = 'r' AND a.attnum > 0 AND NOT a.attisdropped
     AND a.atttypid = 'public.uuid7'::regtype;
-  IF n <> 128 THEN RAISE EXCEPTION 'step 20: % uuid7 columns, expected 128', n; END IF;
+  IF n <> 129 THEN RAISE EXCEPTION 'step 20: % uuid7 columns, expected 129', n; END IF;
 
   -- No column (table, view, composite) and no function argument or result has
   -- an array-of-domain type: array_agg over a uuid7 column is uuid7[], which

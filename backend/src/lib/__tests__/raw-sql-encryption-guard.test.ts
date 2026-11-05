@@ -334,7 +334,8 @@ describe('raw SQL writers route every encrypted column through encryptColumnValu
       'services/reconciler/analysis.ts',
       'services/stage4-store.ts',
       'services/tending.service.ts',
-      'services/stream-turn-actions.ts',
+      // work-99k2: the chat turn's EMPATHY draft write moved from stream-turn-actions into the one draft writer
+      'services/empathy-draft-save.ts',
       'services/empathy-store.ts',
       'services/needs-share.ts',
       'controllers/consent.ts',

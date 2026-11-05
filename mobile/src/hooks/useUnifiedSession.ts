@@ -7,7 +7,7 @@
 
 import { useMemo, useCallback, useReducer, useEffect, useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import { Stage, MessageRole, StrategyPhase, AgreementType, MemorySuggestion, SessionStatus, ConfirmAgreementResponse, MAX_AGREEMENTS } from '@meet-without-fear/shared';
+import { Stage, MessageRole, StrategyPhase, AgreementType, MemorySuggestion, SessionStatus, ConfirmAgreementResponse, MAX_AGREEMENTS, type GetEmpathyDraftResponse } from '@meet-without-fear/shared';
 import { useToast } from '../contexts/ToastContext';
 import { ApiClientError } from '../lib/api';
 
@@ -30,6 +30,7 @@ import {
   useEmpathyDraft,
   usePartnerEmpathy,
   useSaveEmpathyDraft,
+  useDeleteEmpathyDraft,
   useConsentToShareEmpathy,
   useValidateEmpathy,
   useNeeds,
@@ -363,6 +364,19 @@ export function useUnifiedSession(
   const { mutate: createAgreement } = useCreateAgreement();
   const { mutate: resolveSession } = useResolveSession();
 
+  /**
+   * work-99k2: a pre-join draft awaits its author's review (from the cache).
+   * While it does, the AI's newest proposal neither replaces it on screen nor
+   * is autosaved — only Send as is / Edit first / Set aside resolve it (the
+   * server skips such a save too).
+   */
+  const isPreJoinReviewPending = useCallback(
+    () =>
+      !!sessionId &&
+      !!queryClient.getQueryData<GetEmpathyDraftResponse>(stageKeys.empathyDraft(sessionId))?.preJoinReview,
+    [sessionId, queryClient]
+  );
+
   // Streaming message hook with callbacks for metadata handling
   const handleStreamMetadata = useCallback(
     (_sessionId: string, metadata: StreamMetadata) => {
@@ -376,7 +390,12 @@ export function useUnifiedSession(
       }
       // Capture AI-proposed empathy statement (Stage 2)
       // Save to database immediately so it persists across reloads
-      if (sessionId && metadata.proposedEmpathyStatement !== undefined && metadata.proposedEmpathyStatement !== null) {
+      if (
+        sessionId &&
+        metadata.proposedEmpathyStatement !== undefined &&
+        metadata.proposedEmpathyStatement !== null &&
+        !isPreJoinReviewPending()
+      ) {
         setLiveProposedEmpathyStatement(metadata.proposedEmpathyStatement);
         // Save to database with readyToShare: false (user hasn't confirmed yet)
         saveDraft({ sessionId, content: metadata.proposedEmpathyStatement, readyToShare: false });
@@ -408,7 +427,7 @@ export function useUnifiedSession(
       }
     },
     [sessionId, saveDraft, setStreamTriggeredFeelHeard, setAiRecommendsReadyToShare,
-     setLiveProposedEmpathyStatement, queryClient]
+     setLiveProposedEmpathyStatement, queryClient, isPreJoinReviewPending]
   );
 
   const handleStreamError = useCallback(
@@ -947,20 +966,38 @@ export function useUnifiedSession(
   );
 
   const handleSaveEmpathyDraft = useCallback(
-    (content: string, readyToShare?: boolean) => {
+    (content: string, readyToShare?: boolean, opts?: { resolvePreJoinReview?: boolean }) => {
       if (!sessionId) return;
-      saveDraft({ sessionId, content, readyToShare });
+      // work-99k2: while a pre-join draft awaits review, only the author's
+      // explicit choice writes (resolvePreJoinReview); an autosave is skipped.
+      if (!opts?.resolvePreJoinReview && isPreJoinReviewPending()) return;
+      saveDraft({ sessionId, content, readyToShare, resolvePreJoinReview: opts?.resolvePreJoinReview });
     },
-    [sessionId, saveDraft]
+    [sessionId, saveDraft, isPreJoinReviewPending]
   );
 
-  const handleShareEmpathy = useCallback((content?: string) => {
+  // work-99k2: "Set aside" in the review after the partner joins — discard the
+  // draft and start over from here. The AI's sticky ready-to-share offer goes too.
+  const { mutate: deleteEmpathyDraft, isPending: isSettingAsideEmpathyDraft } = useDeleteEmpathyDraft();
+  const handleSetAsideEmpathyDraft = useCallback(() => {
+    if (!sessionId) return;
+    setLiveProposedEmpathyStatement(null);
+    setAiRecommendsReadyToShare(false);
+    deleteEmpathyDraft({ sessionId });
+  }, [sessionId, deleteEmpathyDraft]);
+
+  const handleShareEmpathy = useCallback((content?: string, opts?: { resolvePreJoinReview?: boolean }) => {
     if (!sessionId) {
       console.warn('[handleShareEmpathy] No sessionId, aborting');
       return;
     }
     if (!consentToShare) {
       console.error('[handleShareEmpathy] consentToShare mutation is not available');
+      return;
+    }
+    // work-99k2: consent is only given after the partner has joined (the
+    // server refuses it before); the draft is already saved.
+    if (empathyDraftData?.awaitingPartner) {
       return;
     }
     // Pass draft content for optimistic UI update
@@ -978,7 +1015,13 @@ export function useUnifiedSession(
       try {
         // Ensure the draft is marked ready BEFORE consenting (prevents backend 400 + retry race)
         if (draftContent) {
-          await saveDraftAsync({ sessionId, content: draftContent, readyToShare: true });
+          await saveDraftAsync({
+            sessionId,
+            content: draftContent,
+            readyToShare: true,
+            // work-99k2: "Send as is" from the review of a pre-join draft.
+            resolvePreJoinReview: opts?.resolvePreJoinReview,
+          });
         }
 
         console.log('[handleShareEmpathy] About to call consentToShare mutation');
@@ -998,7 +1041,7 @@ export function useUnifiedSession(
         console.error('[handleShareEmpathy] Failed during ready-to-share + consent flow', error);
       }
     })();
-  }, [sessionId, consentToShare, empathyDraftData?.draft?.content, liveProposedEmpathyStatement, saveDraftAsync]);
+  }, [sessionId, consentToShare, empathyDraftData?.awaitingPartner, empathyDraftData?.draft?.content, liveProposedEmpathyStatement, saveDraftAsync]);
 
   /**
    * Resubmit empathy statement after refining (received shared context from partner).
@@ -1284,6 +1327,9 @@ export function useUnifiedSession(
     handleConfirmInvitationMessage,
     handleSaveEmpathyDraft,
     handleShareEmpathy,
+    handleSetAsideEmpathyDraft,
+    isSettingAsideEmpathyDraft,
+    isPreJoinReviewPending,
     handleResubmitEmpathy,
     handleValidatePartnerEmpathy,
     handleSkipRefinement,
