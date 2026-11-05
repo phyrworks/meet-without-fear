@@ -25,7 +25,7 @@ import { Request, Response } from 'express';
 import { logger } from '../lib/logger';
 import { prisma } from '../lib/prisma';
 import { reachInvitationSentOnAccept } from '../services/milestone-writer';
-import { repointInvitationDrafts } from '../services/empathy-store';
+import { lockInvitationForAccept, repointInvitationDrafts } from '../services/empathy-store';
 import { ErrorCode } from '@meet-without-fear/shared';
 import { successResponse, errorResponse } from '../utils/response';
 import {
@@ -85,6 +85,7 @@ async function acceptPendingInvitationForE2ESession(sessionId: string, userId: s
 
   const acceptedAt = new Date();
   await prisma.$transaction(async tx => {
+    await lockInvitationForAccept(tx, invitation.id); // as acceptInvitation (work-99k2)
     await tx.relationshipMember.upsert({
       where: {
         relationshipId_userId: {

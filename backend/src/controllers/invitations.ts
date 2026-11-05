@@ -12,7 +12,7 @@ import { loadStageStates, progressDTO } from '../services/stage-shim';
 import { displayStatus, parseStatusFilter, pausedSessionIds } from '../services/session-status';
 import { createInvitationUrl } from '../utils/urls';
 import { reachInvitationSentOnAccept } from '../services/milestone-writer';
-import { repointInvitationDrafts } from '../services/empathy-store';
+import { lockInvitationForAccept, repointInvitationDrafts } from '../services/empathy-store';
 
 // ============================================================================
 // Types
@@ -622,6 +622,10 @@ export async function acceptInvitation(req: Request, res: Response): Promise<voi
     // participant row makes the caller a member in this transaction), and the
     // deferred T-cardinality-1 checks two participants at COMMIT.
     await prisma.$transaction(async tx => {
+      // work-99k2: first, the invitation FOR UPDATE — a concurrent pre-join
+      // empathy draft save (FOR SHARE) commits before the move below reads the
+      // drafts, or runs after this commits and writes against the participant.
+      await lockInvitationForAccept(tx, id);
       // Join the relationship
       const existingMembership = await tx.relationshipMember.findUnique({
         where: {

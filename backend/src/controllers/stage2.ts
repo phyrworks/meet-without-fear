@@ -74,13 +74,14 @@ import {
   submitAttempt,
   upsertDraft,
   deleteEmpathyDraft,
-  pendingInvitationOf,
+  openInvitationOf,
   type EmpathySubject,
   type AttemptRow,
   type SessionParty,
   type TargetEmpathyStatus,
 } from '../services/empathy-store';
 import { attemptDTO } from '../services/empathy-status';
+import { saveEmpathyDraft } from '../services/empathy-draft-save';
 
 // ============================================================================
 // Helpers
@@ -137,13 +138,14 @@ async function sessionAllowsStage2(sessionId: string, userId: string, res: Respo
 }
 
 /**
- * The subject of the caller's EMPATHY draft: the present partner, else the
- * caller's pending invitation (work-99k2), else none.
+ * The subject of the caller's EMPATHY draft for reads and deletes: the present
+ * partner, else the caller's open (not accepted) invitation (work-99k2), else
+ * none. Writes go through saveEmpathyDraft, which resolves it under a lock.
  */
 async function empathySubjectOf(caller: Stage2Caller): Promise<EmpathySubject | null> {
   if (caller.partner) return { aboutParticipantId: caller.partner.participantId };
   if (caller.parties.length !== 1) return null;
-  const invitation = await pendingInvitationOf(caller.me.participantId);
+  const invitation = await openInvitationOf(caller.me.participantId);
   return invitation ? { invitationId: invitation.id } : null;
 }
 
@@ -258,7 +260,7 @@ export async function saveDraft(req: Request, res: Response): Promise<void> {
       errorResponse(res, 'VALIDATION_ERROR', 'Invalid request body', 400, parseResult.error.issues);
       return;
     }
-    const { content, readyToShare } = parseResult.data;
+    const { content, readyToShare, resolvePreJoinReview } = parseResult.data;
 
     const caller = await stage2Caller(req, res);
     if (!caller) return;
@@ -275,10 +277,16 @@ export async function saveDraft(req: Request, res: Response): Promise<void> {
       return;
     }
     // spec §1.1 draft: an EMPATHY draft is about the partner, or — before they
-    // have joined — about the pending invitation (work-99k2: A's draft is kept
-    // from the moment they write it; consent waits for the join).
-    const subject = await empathySubjectOf(caller);
-    if (!subject) {
+    // have joined — about the open invitation (work-99k2: A's draft is kept
+    // from the moment they write it; consent waits for the join). A pending
+    // pre-join review is ended only by the author's explicit choice.
+    const result = await saveEmpathyDraft({
+      participantId: caller.me.participantId,
+      content,
+      readyToShare,
+      resolvePreJoinReview,
+    });
+    if (result.status === 'no_subject') {
       errorResponse(
         res,
         'VALIDATION_ERROR',
@@ -288,18 +296,12 @@ export async function saveDraft(req: Request, res: Response): Promise<void> {
       return;
     }
 
-    const draft = await upsertDraft({
-      participantId: caller.me.participantId,
-      kind: 'EMPATHY',
-      ...subject,
-      content,
-      readyToShare,
-    });
-
     successResponse(res, {
-      draftId: draft.id,
-      savedAt: draft.updatedAt.toISOString(),
-      readyToShare: draft.readyToShare,
+      draftId: result.draft.id,
+      savedAt: result.draft.updatedAt.toISOString(),
+      readyToShare: result.draft.readyToShare,
+      // work-99k2: the write was skipped — the pre-join draft awaits its author's review.
+      ...(result.status === 'review_pending' ? { preJoinReviewPending: true } : {}),
     });
   } catch (error) {
     logger.error('[saveDraft] Error:', error);
@@ -319,8 +321,7 @@ export async function getDraft(req: Request, res: Response): Promise<void> {
 
     // work-99k2: with no partner yet, the draft is held against the pending
     // invitation; it cannot be consented to until the partner joins.
-    const pendingInvitation =
-      !partner && caller.parties.length === 1 ? await pendingInvitationOf(me.participantId) : null;
+    const pendingInvitation = !partner && caller.parties.length === 1 ? await openInvitationOf(me.participantId) : null;
     const draft = partner
       ? await findDraft({ participantId: me.participantId, kind: 'EMPATHY', aboutParticipantId: partner.participantId })
       : pendingInvitation
@@ -335,8 +336,9 @@ export async function getDraft(req: Request, res: Response): Promise<void> {
     // A draft last written before the partner joined, never sent: the author
     // reviews it before anything is shared (send as is / edit first / set
     // aside). Derived, not flagged: the re-point at accept keeps updated_at
-    // (repointInvitationDrafts), and any write since the join moves it past
-    // joinedAt; a submitted round ends it.
+    // (repointInvitationDrafts); while it is pending, saveEmpathyDraft skips
+    // every write but the author's explicit choice, so only that (or a
+    // submitted round, or setting it aside) ends it.
     const preJoinReview =
       caller.partner && draft && !myAttempt && draft.updatedAt < caller.partner.joinedAt
         ? { writtenAt: draft.updatedAt.toISOString(), partnerJoinedAt: caller.partner.joinedAt.toISOString() }
@@ -372,6 +374,22 @@ export async function deleteDraft(req: Request, res: Response): Promise<void> {
   try {
     const caller = await stage2Caller(req, res);
     if (!caller) return;
+    if (!(await sessionAllowsStage2(caller.sessionId, caller.userId, res))) return;
+    const currentStage = await stageOf(caller.me.participantId);
+    if (currentStage !== 2) {
+      errorResponse(
+        res,
+        'VALIDATION_ERROR',
+        `Cannot set the empathy draft aside: you are in stage ${currentStage}, but stage 2 is required`,
+        400,
+      );
+      return;
+    }
+    // A draft already consented to (a submitted round) is not set aside here.
+    if (caller.partner && (await currentAttempt(caller.me.participantId, caller.partner.participantId))) {
+      errorResponse(res, 'CONFLICT', 'Cannot set aside an empathy statement that has already been shared', 409);
+      return;
+    }
     const subject = await empathySubjectOf(caller);
     const deleted = subject ? await deleteEmpathyDraft(caller.me.participantId, subject) : false;
     successResponse(res, { deleted });

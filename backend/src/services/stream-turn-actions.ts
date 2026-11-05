@@ -18,7 +18,6 @@
 
 import { logger } from '../lib/logger';
 import { prisma } from '../lib/prisma';
-import { encryptColumnValue } from '../lib/prisma-encryption-middleware';
 import { publishSessionEvent, publishTopicFrameUpdated } from './realtime';
 import { captureProposedNeedsForUser, captureSingleNeedForUser } from './needs';
 import { applyNeedAction, applyNeedEdits } from './needs-edit-applier.service';
@@ -29,8 +28,8 @@ import { getStage4State as buildStage4State } from './stage4-state';
 import { advanceWalkthrough } from './stage4-walkthrough';
 import type { SessionStateToolInput } from './stage-tools';
 import type { ParsedStage4WalkthroughAction } from '../utils/micro-tag-parser';
-import { getPartnerParticipant, type ResolvedParticipant } from './participant-resolver';
-import { pendingInvitationOf, upsertDraft } from './empathy-store';
+import type { ResolvedParticipant } from './participant-resolver';
+import { saveEmpathyDraft } from './empathy-draft-save';
 
 export interface RefiningNeedContext {
   id: string;
@@ -261,39 +260,23 @@ export async function persistTurnState(params: PersistTurnStateParams): Promise<
   }
 
   // Save empathy draft (Stage 2 or Stage 2B): the participant's own
-  // `draft(EMPATHY)` about their partner. One atomic statement on the
-  // sql_draft_one_per_point expression index (as the old Prisma upsert was
-  // one statement): create at version 1, or replace the text and bump the
-  // version — concurrent turns cannot both create.
+  // `draft(EMPATHY)` about their partner, or — the inviter before the partner
+  // has joined — about the open invitation (work-99k2). saveEmpathyDraft is
+  // the one writer: an atomic upsert on sql_draft_one_per_point, serialised
+  // against the accept's move, and it never overwrites a pre-join draft that
+  // awaits its author's review (this is an autosave, not their choice).
   if (
     (effectiveStage === 2 || effectiveStage === 21) &&
     metadata.offerReadyToShare &&
     metadata.proposedEmpathyStatement
   ) {
-    const partner = await getPartnerParticipant(participant.id);
-    // An EMPATHY draft names its subject (CHECK chk_draft_one_arc /
-    // chk_draft_arc_matches_kind): the partner, or — the inviter in Stage 2
-    // before the partner has joined — the pending invitation (work-99k2; the
-    // accept re-points it to the new participant).
-    const invitation = partner ? null : await pendingInvitationOf(participant.id);
-    if (!partner && invitation) {
-      await upsertDraft({
-        participantId: participant.id,
-        kind: 'EMPATHY',
-        invitationId: invitation.id,
-        content: metadata.proposedEmpathyStatement,
-      });
-    } else if (!partner) {
+    const saved = await saveEmpathyDraft({ participantId: participant.id, content: metadata.proposedEmpathyStatement });
+    if (saved.status === 'no_subject') {
       logger.error(
-        `[sendMessageStream:${requestId}] Empathy draft not saved: Stage 2 turn with no partner and no pending invitation`,
+        `[sendMessageStream:${requestId}] Empathy draft not saved: Stage 2 turn with no partner and no invitation`,
       );
-    } else {
-      await prisma.$executeRaw`
-        INSERT INTO draft (participant_id, kind, about_participant_id, content, ready_to_share, version)
-        VALUES (${participant.id}::uuid, 'EMPATHY'::draft_kind, ${partner.participantId}::uuid,
-                ${encryptColumnValue('draft', 'content', metadata.proposedEmpathyStatement)}, false, 1)
-        ON CONFLICT (participant_id, kind, (coalesce(about_participant_id, invitation_id, attempt_id, share_offer_id)))
-        DO UPDATE SET content = EXCLUDED.content, version = draft.version + 1`;
+    } else if (saved.status === 'review_pending') {
+      logger.info(`[sendMessageStream:${requestId}] Empathy draft kept: the pre-join draft awaits the author's review`);
     }
   }
 

@@ -483,22 +483,25 @@ export interface DraftRow {
  * stream-turn-actions.ts): `INSERT … ON CONFLICT (participant, kind, point)
  * DO UPDATE`. `readyToShare` undefined keeps the stored value.
  */
-export async function upsertDraft(opts: {
-  participantId: string;
-  kind: 'EMPATHY' | 'VALIDATION_FEEDBACK';
-  aboutParticipantId?: string;
-  /** EMPATHY before the partner has joined (work-99k2); ignored when aboutParticipantId is given. */
-  invitationId?: string;
-  attemptId?: string;
-  content: string;
-  readyToShare?: boolean;
-}): Promise<DraftRow> {
+export async function upsertDraft(
+  opts: {
+    participantId: string;
+    kind: 'EMPATHY' | 'VALIDATION_FEEDBACK';
+    aboutParticipantId?: string;
+    /** EMPATHY before the partner has joined (work-99k2); ignored when aboutParticipantId is given. */
+    invitationId?: string;
+    attemptId?: string;
+    content: string;
+    readyToShare?: boolean;
+  },
+  client: DbClient = prisma,
+): Promise<DraftRow> {
   const about = opts.kind === 'EMPATHY' ? (opts.aboutParticipantId ?? null) : null;
   const invitation = opts.kind === 'EMPATHY' && !about ? (opts.invitationId ?? null) : null;
   const attempt = opts.kind === 'VALIDATION_FEEDBACK' ? (opts.attemptId ?? null) : null;
   const ready = typeof opts.readyToShare === 'boolean' ? opts.readyToShare : null;
   const rows = decryptRawRows(
-    await prisma.$queryRaw<
+    await client.$queryRaw<
       Array<{ id: string; content: string; ready_to_share: boolean; version: number; updated_at: Date }>
     >`INSERT INTO draft (participant_id, kind, about_participant_id, invitation_id, attempt_id, content, ready_to_share, version)
     VALUES (${opts.participantId}::uuid, ${opts.kind}::draft_kind, ${about}::uuid, ${invitation}::uuid, ${attempt}::uuid, ${encryptColumnValue('draft', 'content', opts.content)},
@@ -555,16 +558,41 @@ export async function deleteEmpathyDraft(participantId: string, subject: Empathy
 }
 
 /**
- * The caller's PENDING invitation — the subject of an EMPATHY draft written
- * before the partner has joined (work-99k2). One invitation per session today
- * (createSession); the newest wins should that change.
+ * The invitation an inviter's EMPATHY draft is about before the partner has
+ * joined (work-99k2): the caller's newest invitation that has not been
+ * ACCEPTED. PENDING normally; an EXPIRED (or DECLINED) one is still returned,
+ * so a draft written against it stays readable and writable — there is no
+ * re-issue path today (one invitation per session, createSession), so the
+ * text must not vanish when the invitation lapses. With `lock`, the row is
+ * read FOR SHARE: an accept (FOR UPDATE, lockInvitationForAccept) either
+ * committed before — and the caller sees ACCEPTED and the new participant —
+ * or waits until the caller's transaction ends.
  */
-export async function pendingInvitationOf(participantId: string): Promise<{ id: string; name: string | null } | null> {
-  return prisma.invitation.findFirst({
-    where: { invitedByParticipantId: participantId, status: 'PENDING' },
-    orderBy: { createdAt: 'desc' },
-    select: { id: true, name: true },
-  });
+export async function openInvitationOf(
+  participantId: string,
+  client: DbClient = prisma,
+  lock = false,
+): Promise<{ id: string; status: string } | null> {
+  const rows = lock
+    ? await client.$queryRaw<Array<{ id: string; status: string }>>`
+        SELECT id, status::text AS status FROM invitation
+        WHERE invited_by_participant_id = ${participantId}::uuid
+        ORDER BY created_at DESC LIMIT 1 FOR SHARE`
+    : await client.$queryRaw<Array<{ id: string; status: string }>>`
+        SELECT id, status::text AS status FROM invitation
+        WHERE invited_by_participant_id = ${participantId}::uuid
+        ORDER BY created_at DESC LIMIT 1`;
+  const inv = rows[0];
+  return inv && inv.status !== 'ACCEPTED' ? inv : null;
+}
+
+/**
+ * The accept's first statement (work-99k2): the invitation row FOR UPDATE, so
+ * a concurrent pre-join draft save (FOR SHARE, openInvitationOf) is either
+ * committed before the move reads the drafts or runs after the accept commits.
+ */
+export async function lockInvitationForAccept(tx: DbClient, invitationId: string): Promise<void> {
+  await tx.$queryRaw`SELECT id FROM invitation WHERE id = ${invitationId}::uuid FOR UPDATE`;
 }
 
 /**
@@ -582,10 +610,13 @@ export async function pendingInvitationOf(participantId: string): Promise<{ id: 
  * ciphertext, which raw-sql-encryption-guard refuses on principle).
  */
 export async function repointInvitationDrafts(
-  tx: Pick<PrismaClient, 'draft'>,
+  tx: DbClient,
   invitationId: string,
   participantId: string,
 ): Promise<number> {
+  // The rows themselves FOR UPDATE too (the invitation lock is the protocol;
+  // this keeps the move safe from any writer that skips it).
+  await tx.$queryRaw`SELECT id FROM draft WHERE invitation_id = ${invitationId}::uuid FOR UPDATE`;
   const drafts = await tx.draft.findMany({ where: { invitationId } });
   for (const d of drafts) {
     await tx.draft.delete({ where: { id: d.id } });

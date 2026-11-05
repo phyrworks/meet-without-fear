@@ -45,6 +45,7 @@ POST /api/v1/sessions/:id/empathy/draft
 interface SaveEmpathyDraftRequest {
   content: string;  // The empathy attempt text
   readyToShare?: boolean; // Optional toggle to mark draft as ready (sets gate empathyDraftReady)
+  resolvePreJoinReview?: boolean; // work-99k2: the author's review choice; only it ends a pending pre-join review
 }
 ```
 
@@ -125,14 +126,22 @@ transaction, keeping its written-at; it is **never** sent on the join.
 **The review after the join.** `preJoinReview` is set while the draft was last
 written before the partner joined and no round has been submitted. Mobile shows
 "<Partner> has joined. Here's what you wrote <day>." with three choices: send as
-is (consent), edit first (any save ends the review), set aside (`DELETE`, below).
+is (save with `resolvePreJoinReview: true`, then consent), edit first (save with
+`resolvePreJoinReview: true`), set aside (`DELETE`, below). Only those resolve
+it: while it is pending, a save without `resolvePreJoinReview` (the client's or
+the chat turn's autosave of the AI's newest proposal) is skipped — the response
+carries `preJoinReviewPending: true` and the draft is left as written.
+
+Before the join the draft is kept against the inviter's newest invitation that
+has not been accepted, so it survives the invitation lapsing (EXPIRED).
 
 ---
 
 ### Set Empathy Draft Aside
 
-Discard the caller's empathy draft (the review's "set aside"). Never touches a
-submitted round.
+Discard the caller's empathy draft (the review's "set aside"). Gated like save:
+the session must allow Stage 2 and the caller must be in stage 2 (400 otherwise);
+409 once the statement has been shared (a submitted round exists).
 
 ```
 DELETE /api/v1/sessions/:id/empathy/draft

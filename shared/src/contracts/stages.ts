@@ -124,6 +124,10 @@ export const saveEmpathyDraftRequestSchema = z.object({
   // Optional so that "save draft content" doesn't accidentally reset readiness.
   // When omitted, backend should preserve the existing readyToShare value.
   readyToShare: z.boolean().optional(),
+  // work-99k2: the author's explicit choice in the review of a pre-join draft
+  // (Send as is / Edit first). Without it, a write while that review is
+  // pending is skipped and the pre-join draft is kept as written.
+  resolvePreJoinReview: z.boolean().optional(),
 });
 
 export type SaveEmpathyDraftRequestInput = z.infer<typeof saveEmpathyDraftRequestSchema>;

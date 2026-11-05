@@ -45,6 +45,8 @@ export interface SaveEmpathyDraftRequest {
   sessionId: string;
   content: string;
   readyToShare?: boolean;
+  /** work-99k2: the author's explicit review choice; only it ends a pending pre-join review. */
+  resolvePreJoinReview?: boolean;
 }
 
 export interface SaveEmpathyDraftResponse {
