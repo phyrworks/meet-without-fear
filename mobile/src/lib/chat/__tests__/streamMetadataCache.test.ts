@@ -32,6 +32,28 @@ describe('withProposedEmpathyDraft', () => {
     expect(result.alreadyConsented).toBe(false);
   });
 
+  it('never enables consent while the partner has not joined (work-99k2)', () => {
+    const result = withProposedEmpathyDraft({ awaitingPartner: true, canConsent: false, draft: null }, 'new') as Record<
+      string,
+      any
+    >;
+
+    expect(result.draft.content).toBe('new');
+    expect(result.canConsent).toBe(false);
+    expect(result.awaitingPartner).toBe(true);
+  });
+
+  it('leaves a pre-join draft awaiting its review untouched (work-99k2)', () => {
+    const old = {
+      draft: { content: 'written before the join', readyToShare: true },
+      canConsent: true,
+      alreadyConsented: false,
+      preJoinReview: { writtenAt: '2026-11-03T09:00:00.000Z', partnerJoinedAt: '2026-11-04T09:00:00.000Z' },
+    };
+
+    expect(withProposedEmpathyDraft(old, 'a newer AI proposal')).toBe(old);
+  });
+
   it('preserves unrelated fields on the existing draft', () => {
     const result = withProposedEmpathyDraft(
       { draft: { content: 'old', draftId: 'd1' }, otherField: 42 },

@@ -66,7 +66,7 @@ export function shouldRetryApiError(failureCount: number, error: unknown, maxRet
   return failureCount < maxRetries;
 }
 
-function createQueryClient(): QueryClient {
+export function createQueryClient(): QueryClient {
   return new QueryClient({
     queryCache: new QueryCache({
       onError: (error) => trackNetworkError(error),

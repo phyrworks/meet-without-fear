@@ -764,33 +764,51 @@ export function useEmpathyDraft(
 /**
  * Save empathy draft.
  */
+export interface SaveEmpathyDraftVariables {
+  sessionId: string;
+  content: string;
+  readyToShare?: boolean;
+  /**
+   * work-99k2: the author's explicit choice in the review of a pre-join draft
+   * (Send as is / Edit first). Only such a save ends the review; any other
+   * save while it is pending is skipped by the server.
+   */
+  resolvePreJoinReview?: boolean;
+}
+
+interface SaveEmpathyDraftContext {
+  previous: GetEmpathyDraftResponse | undefined;
+}
+
 export function useSaveEmpathyDraft(
   options?: Omit<
-    UseMutationOptions<
-      SaveEmpathyDraftResponse,
-      ApiClientError,
-      { sessionId: string; content: string; readyToShare?: boolean }
-    >,
-    'mutationFn'
+    UseMutationOptions<SaveEmpathyDraftResponse, ApiClientError, SaveEmpathyDraftVariables, SaveEmpathyDraftContext>,
+    'mutationFn' | 'onMutate' | 'onError'
   >
 ) {
   const queryClient = useQueryClient();
 
-  return useMutation({
-    mutationFn: async ({ sessionId, content, readyToShare }) => {
+  return useMutation<SaveEmpathyDraftResponse, ApiClientError, SaveEmpathyDraftVariables, SaveEmpathyDraftContext>({
+    mutationFn: async ({ sessionId, content, readyToShare, resolvePreJoinReview }) => {
       return post<SaveEmpathyDraftResponse>(
         `/sessions/${sessionId}/empathy/draft`,
-        { content, readyToShare }
+        resolvePreJoinReview ? { content, readyToShare, resolvePreJoinReview } : { content, readyToShare }
       );
     },
-    onMutate: async ({ sessionId }) => {
-      // work-99k2: any write after the partner joined ends the pre-join review
-      // (the server derives it from the draft's written-at), so hide it now.
+    onMutate: async ({ sessionId, resolvePreJoinReview }) => {
+      // work-99k2: the author's explicit review choice ends the pre-join
+      // review, so hide it now (rolled back on error). Other saves leave it.
       const key = stageKeys.empathyDraft(sessionId);
-      const current = queryClient.getQueryData<GetEmpathyDraftResponse>(key);
-      if (current?.preJoinReview) {
+      const previous = queryClient.getQueryData<GetEmpathyDraftResponse>(key);
+      if (resolvePreJoinReview && previous?.preJoinReview) {
         await queryClient.cancelQueries({ queryKey: key });
-        queryClient.setQueryData<GetEmpathyDraftResponse>(key, { ...current, preJoinReview: null });
+        queryClient.setQueryData<GetEmpathyDraftResponse>(key, { ...previous, preJoinReview: null });
+      }
+      return { previous };
+    },
+    onError: (_error, { sessionId, resolvePreJoinReview }, context) => {
+      if (resolvePreJoinReview && context?.previous) {
+        queryClient.setQueryData(stageKeys.empathyDraft(sessionId), context.previous);
       }
     },
     onSuccess: (_, { sessionId }) => {
