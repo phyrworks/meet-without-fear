@@ -29,6 +29,9 @@ export {
   confirmSideBySideRevealAndValidation,
   expectNeedsComparisonFromApi,
   waitForStage,
+  waitForMilestone,
+  submitAndShareStage4Selections,
+  closeStage4WithSharedAgreement,
 } from './test-utils';
 export { TwoBrowserHarness, waitForPartnerUpdate } from './two-browser-harness';
 export type { TwoBrowserConfig } from './two-browser-harness';

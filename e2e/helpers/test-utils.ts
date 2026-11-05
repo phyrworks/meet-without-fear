@@ -722,3 +722,82 @@ export async function waitForMilestone(
 
   throw new Error(`${label} milestone '${milestone}' was not reached within ${timeout}ms`);
 }
+
+interface Stage4StateDTO {
+  data: {
+    inventory: {
+      sharedProposals: Array<{ id: string; description: string; partnerDecisionVisible?: string }>;
+    };
+    coverageAudit: { open: Array<{ id: string; label: string }> };
+    mySelectionStatus: string;
+    partnerSelectionStatus: string;
+    outcome: { kind: string } | null;
+  };
+}
+
+/**
+ * Drive the redesigned Stage 4 selection flow for one user over the API:
+ * WILLING on every shared proposal, set aside every still-open need ("leave
+ * for now"), then share the selections (milestone choices_shared). Every
+ * request is asserted OK, so a missing route fails loudly instead of a 404
+ * being swallowed.
+ *
+ * @returns the proposal ids this user marked WILLING
+ */
+export async function submitAndShareStage4Selections(
+  api: E2EApiClient,
+  apiBaseUrl: string,
+  sessionId: string,
+  label: string
+): Promise<string[]> {
+  const base = `${apiBaseUrl}/api/sessions/${sessionId}`;
+  const state = await readJson<Stage4StateDTO>(await api.get(`${base}/stage4`), `${label} get Stage 4 state`);
+  const proposals = state.data.inventory.sharedProposals;
+  expect(proposals.length, `${label} should see shared proposals in the Stage 4 inventory`).toBeGreaterThan(0);
+
+  // `submitted` means shared (choices_shared), so it is still false here.
+  const recorded = await readJson<{ data: { state: { mySelections: unknown[] } } }>(
+    await api.post(`${base}/stage4/selections`, {
+      selections: proposals.map((proposal) => ({ proposalId: proposal.id, decision: 'WILLING' })),
+    }),
+    `${label} submit Stage 4 selections`
+  );
+  expect(recorded.data.state.mySelections, `${label} selections should be recorded`).toHaveLength(proposals.length);
+
+  // Needs no WILLING proposal covers must be addressed or set aside before sharing.
+  const afterSelect = await readJson<Stage4StateDTO>(await api.get(`${base}/stage4`), `${label} re-read Stage 4 state`);
+  for (const need of afterSelect.data.coverageAudit.open) {
+    await readJson(await api.post(`${base}/stage4/needs/${need.id}/decline`), `${label} set aside need "${need.label}"`);
+  }
+
+  await readJson(await api.post(`${base}/stage4/share-selections`), `${label} share Stage 4 selections`);
+  await waitForMilestone(api, apiBaseUrl, sessionId, 'choices_shared', label);
+  return proposals.map((proposal) => proposal.id);
+}
+
+/**
+ * Once both users have shared (choices_shared), close Stage 4 as a shared
+ * agreement on the first proposal both are visibly WILLING on, with a
+ * follow-up one week out. Returns the close response data.
+ */
+export async function closeStage4WithSharedAgreement(
+  api: E2EApiClient,
+  apiBaseUrl: string,
+  sessionId: string,
+  label: string
+): Promise<{ data: { closed: boolean; outcome: { kind: string; agreements: Array<{ id: string }> } } }> {
+  const base = `${apiBaseUrl}/api/sessions/${sessionId}`;
+  const state = await readJson<Stage4StateDTO>(await api.get(`${base}/stage4`), `${label} get revealed Stage 4 state`);
+  expect(state.data.partnerSelectionStatus, `${label} partner selections should be visible after both shared`).toBe('SUBMITTED');
+  const mutual = state.data.inventory.sharedProposals.find((proposal) => proposal.partnerDecisionVisible === 'WILLING');
+  expect(mutual, `${label} should see a proposal the partner is WILLING on`).toBeTruthy();
+
+  const followUp = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
+  return readJson(
+    await api.post(`${base}/stage4/close`, {
+      kind: 'SHARED_AGREEMENT',
+      followUpDatesByProposalId: { [mutual!.id]: followUp },
+    }),
+    `${label} close Stage 4 as a shared agreement`
+  );
+}

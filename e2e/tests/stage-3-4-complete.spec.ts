@@ -21,6 +21,8 @@ import {
   expectNeedsSummaryFromApi,
   waitForNeedsReveal,
   waitForStage,
+  submitAndShareStage4Selections,
+  closeStage4WithSharedAgreement,
 } from '../helpers';
 
 const API_BASE_URL = process.env.API_BASE_URL || 'http://localhost:3000';
@@ -334,102 +336,46 @@ test.describe('Stage 3-4 Complete Flow', () => {
     const strategy3 = await strategy3Response.json();
     console.log(`${elapsed()} User A proposed second strategy: ${strategy3.data?.strategy?.id}`);
 
-    // Get strategy pool
-    const strategiesResponseA = await apiA.get(`${API_BASE_URL}/api/sessions/${sessionId}/strategies`);
-    const strategiesDataA = await strategiesResponseA.json();
-    const strategies = strategiesDataA.data?.strategies || [];
-    console.log(`${elapsed()} Strategy pool has ${strategies.length} strategies`);
+    for (const [name, response] of [
+      ['User A first proposal', strategy1Response],
+      ['User B proposal', strategy2Response],
+      ['User A second proposal', strategy3Response],
+    ] as const) {
+      expect(response.ok(), `${name} was not created`).toBe(true);
+    }
 
-    // Mark both users ready to rank
-    console.log(`${elapsed()} Marking users ready to rank...`);
-    await apiA.post(`${API_BASE_URL}/api/sessions/${sessionId}/strategies/ready`);
-    await apiB.post(`${API_BASE_URL}/api/sessions/${sessionId}/strategies/ready`);
-    console.log(`${elapsed()} Both users marked ready to rank`);
+    // Redesigned Stage 4 (ranking and overlap routes were dropped): everyone
+    // takes a WILLING / NOT_WILLING stance per proposal, shares it, and mutual
+    // WILLING closes as a shared agreement. Each call asserts its response.
+    console.log(`${elapsed()} Submitting and sharing Stage 4 selections...`);
+    await submitAndShareStage4Selections(apiA, API_BASE_URL, sessionId, 'User A');
+    await submitAndShareStage4Selections(apiB, API_BASE_URL, sessionId, 'User B');
 
-    // Submit rankings (order by preference)
-    const strategyIds = strategies.map((s: { id: string }) => s.id);
-
-    console.log(`${elapsed()} Submitting rankings...`);
-    const rankA = await apiA.post(`${API_BASE_URL}/api/sessions/${sessionId}/strategies/rank`, {
-      rankedIds: strategyIds,
-    });
-    const rankDataA = await rankA.json();
-    console.log(`${elapsed()} User A submitted ranking: ${rankDataA.data?.ranked}`);
-
-    const rankB = await apiB.post(`${API_BASE_URL}/api/sessions/${sessionId}/strategies/rank`, {
-      rankedIds: [...strategyIds].reverse(), // Different order
-    });
-    const rankDataB = await rankB.json();
-    console.log(`${elapsed()} User B submitted ranking: ${rankDataB.data?.ranked}`);
-
-    // Get overlap
-    console.log(`${elapsed()} Fetching ranking overlap...`);
-    const overlapResponse = await apiA.get(`${API_BASE_URL}/api/sessions/${sessionId}/strategies/overlap`);
-    const overlapData = await overlapResponse.json();
-    console.log(`${elapsed()} Overlap: ${overlapData.data?.overlap?.length || 0} strategies, candidates: ${overlapData.data?.agreementCandidates?.length || 0}`);
-
-
-    // Screenshot strategies view
     await pageA.screenshot({ path: 'test-results/stage-3-4-05-strategies-user-a.png' });
     await pageB.screenshot({ path: 'test-results/stage-3-4-05-strategies-user-b.png' });
 
-    // ========================================
-    // Create Agreement
-    // ========================================
-    console.log(`${elapsed()} Creating agreement...`);
+    console.log(`${elapsed()} Closing Stage 4 as a shared agreement...`);
+    const closeData = await closeStage4WithSharedAgreement(apiA, API_BASE_URL, sessionId, 'User A');
+    expect(closeData.data.closed).toBe(true);
+    expect(closeData.data.outcome.kind).toBe('SHARED_AGREEMENT');
+    expect(closeData.data.outcome.agreements.length).toBeGreaterThan(0);
 
-    // Use the first overlap strategy or first candidate
-    const agreementCandidate = overlapData.data?.agreementCandidates?.[0] || strategies[0];
-
-    const agreementResponse = await apiA.post(`${API_BASE_URL}/api/sessions/${sessionId}/agreements`, {
-      strategyId: agreementCandidate?.id,
-      description: agreementCandidate?.description || 'Weekly check-in on Sundays',
-      type: 'MICRO_EXPERIMENT', // Valid enum: MICRO_EXPERIMENT, COMMITMENT, CHECK_IN, HYBRID
-      duration: 'We will try this for 2 weeks',
-      followUpDate: new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString(),
-    });
-    const agreementData = await agreementResponse.json();
-    if (!agreementData.success) {
-      console.log(`${elapsed()} Agreement creation failed: ${JSON.stringify(agreementData)}`);
-    }
-    const agreementId = agreementData.data?.agreement?.id;
-    console.log(`${elapsed()} User A created agreement: ${agreementId}`);
-
-    // User B confirms the agreement
-    if (agreementId) {
-      console.log(`${elapsed()} User B confirming agreement...`);
-      const confirmAgreementResponse = await apiB.post(
-        `${API_BASE_URL}/api/sessions/${sessionId}/agreements/${agreementId}/confirm`,
-        { confirmed: true }
-      );
-      const confirmAgreementData = await confirmAgreementResponse.json();
-      console.log(`${elapsed()} User B confirmed: ${confirmAgreementData.data?.confirmed}, both confirmed: ${confirmAgreementData.data?.partnerConfirmed}`);
-    }
-
-
-    // Final screenshots
     await pageA.screenshot({ path: 'test-results/stage-3-4-06-agreement-user-a.png' });
     await pageB.screenshot({ path: 'test-results/stage-3-4-06-agreement-user-b.png' });
 
-    // ========================================
-    // Verify final state
-    // ========================================
+    // Verify final state from both sides
     console.log(`${elapsed()} Verifying final state...`);
+    for (const [label, api] of [['User A', apiA], ['User B', apiB]] as const) {
+      const stateResponse = await api.get(`${API_BASE_URL}/api/sessions/${sessionId}/stage4`);
+      expect(stateResponse.ok(), `${label} Stage 4 state`).toBe(true);
+      const state = await stateResponse.json();
+      expect(state.data?.outcome?.kind, `${label} sees the closed shared agreement`).toBe('SHARED_AGREEMENT');
+      expect(state.data?.outcome?.agreements?.length).toBeGreaterThan(0);
 
-    // Get agreements to verify completion
-    const finalAgreementsResponse = await apiA.get(`${API_BASE_URL}/api/sessions/${sessionId}/agreements`);
-    const finalAgreementsData = await finalAgreementsResponse.json();
-    const agreements = finalAgreementsData.data?.agreements || [];
-
-    console.log(`${elapsed()} Final agreements: ${agreements.length}`);
-    expect(agreements.length).toBeGreaterThan(0);
-
-    for (const agreement of agreements) {
-      console.log(`${elapsed()} Agreement ${agreement.id}: status=${agreement.status}, agreedByMe=${agreement.agreedByMe}, agreedByPartner=${agreement.agreedByPartner}`);
-
-      // Verify both parties agreed on each agreement
-      expect(agreement.agreedByMe).toBe(true);
-      expect(agreement.agreedByPartner).toBe(true);
+      const tendingResponse = await api.get(`${API_BASE_URL}/api/sessions/${sessionId}/tending`);
+      expect(tendingResponse.ok(), `${label} Tending list`).toBe(true);
+      const tending = await tendingResponse.json();
+      expect(tending.data?.entries?.length ?? 0, `${label} has scheduled Tending`).toBeGreaterThan(0);
     }
 
     // Take final screenshots
