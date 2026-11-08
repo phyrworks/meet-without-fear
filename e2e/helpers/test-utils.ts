@@ -222,6 +222,18 @@ export async function shareFromShareTopicDrawer(page: Page, timeout = 15000): Pr
 }
 
 /**
+ * Resolve with the next POST /sessions/:id/shared-context-viewed the page sends
+ * (work-2doq: the recipient's chat showed a received "Context from X" frame).
+ * Register it BEFORE navigating: the report fires as soon as the frame is on screen.
+ */
+export function waitForSharedContextViewed(page: Page, timeout = 15000): Promise<Response> {
+  return page.waitForResponse(
+    (candidate) => candidate.url().includes('/shared-context-viewed') && candidate.request().method() === 'POST',
+    { timeout }
+  );
+}
+
+/**
  * Decline the share suggestion ("No thanks", confirmed in the web confirm dialog).
  * Returns the share-offer respond response.
  */

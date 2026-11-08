@@ -15,7 +15,15 @@
 import { Request, Response } from 'express';
 import { logger } from '../lib/logger';
 import { getJobPrisma, prisma } from '../lib/prisma';
-import { DEFAULT_PRIVACY_PREFERENCES, ErrorCode, MessageRole, Stage } from '@meet-without-fear/shared';
+import {
+  DEFAULT_PRIVACY_PREFERENCES,
+  ErrorCode,
+  MessageRole,
+  Stage,
+  isUuidV7,
+  type MarkSharedContextViewedResponse,
+} from '@meet-without-fear/shared';
+import { markSharedContextViewed } from '../services/shared-context-view';
 import {
   notifyPartner,
   publishSessionEvent,
@@ -810,14 +818,20 @@ async function pingCoParticipants(sessionId: string, participantId: string): Pro
 }
 
 /**
- * Mark the Share/Partner tab as viewed
- * POST /sessions/:id/viewed-share-tab
+ * Mark a received shared frame as viewed (work-2doq)
+ * POST /sessions/:id/shared-context-viewed  { messageId }
  *
- * Updates last_viewed_share_tab_at on the participant's conversation_read_state.
- * This is used to determine "seen" status for shared content (empathy, context).
- * Content is only marked as "seen" when the user actually views the Share tab.
+ * Mobile posts this when the recipient's chat actually shows the inline
+ * "Context from X" / "Feedback from X" frame on screen. It advances the
+ * caller's own conversation_read_state.last_viewed_share_tab_at (the column
+ * name predates the removal of the Share tab), which drives the sender's
+ * "Seen" line, the caller's hasUnviewedSharedContext and their unviewed
+ * context_received actions. Only a frame delivered INTO the caller's own
+ * conversation by someone else is accepted; anything else is 404. Idempotent
+ * and monotonic (services/shared-context-view.ts): a frame already covered
+ * writes and publishes nothing.
  */
-export async function markShareTabViewed(req: Request, res: Response): Promise<void> {
+export async function markSharedContextViewedHandler(req: Request, res: Response): Promise<void> {
   try {
     const user = req.user;
     if (!user) {
@@ -831,43 +845,54 @@ export async function markShareTabViewed(req: Request, res: Response): Promise<v
       errorResponse(res, ErrorCode.NOT_FOUND, 'Session not found', 404);
       return;
     }
+    const messageId = (req.body as { messageId?: unknown } | undefined)?.messageId;
+    if (typeof messageId !== 'string' || !isUuidV7(messageId)) {
+      errorResponse(res, ErrorCode.VALIDATION_ERROR, 'messageId must be a message id', 400);
+      return;
+    }
+
     const now = new Date();
+    const result = await markSharedContextViewed(participant.id, messageId, now);
+    if (result.status === 'not_found') {
+      errorResponse(res, ErrorCode.NOT_FOUND, 'Shared context not found', 404);
+      return;
+    }
 
-    const readState = await prisma.conversationReadState.upsert({
-      where: { participantId: participant.id },
-      update: { lastViewedShareTabAt: now, lastActiveAt: now },
-      create: { participantId: participant.id, lastViewedShareTabAt: now, lastActiveAt: now },
-    });
+    // Only a view that moved the instant can change the sender's status.
+    // Fire-and-forget: presence only on the session channel (the event keeps
+    // its Share-tab-era name), and an addressed content-free status ping to
+    // the co-participants, whose client refetches its own empathy status and
+    // so sees "Seen" (R36 / work-t4zp).
+    if (result.advanced) {
+      (async () => {
+        try {
+          const showActivityStatus = await getShowActivityStatus(user.id);
+          await publishSessionEvent(
+            sessionId,
+            'partner.share_tab_viewed',
+            {
+              viewedAt: showActivityStatus ? now.toISOString() : null,
+              activeAt: showActivityStatus ? now.toISOString() : null,
+              presenceVisible: showActivityStatus,
+            },
+            user.id,
+          );
+          await pingCoParticipants(sessionId, participant.id);
+        } catch (err) {
+          logger.error('[markSharedContextViewed] Failed to publish share_tab_viewed event:', err);
+        }
+      })();
+    }
 
-    // Notify partner that this user viewed the Share tab (for delivery status updates)
-    // Fire-and-forget - don't block the response. Presence only on the session
-    // channel; addressed content-free status pings to the co-participants (R36 / work-t4zp).
-    (async () => {
-      try {
-        const showActivityStatus = await getShowActivityStatus(user.id);
-        await publishSessionEvent(
-          sessionId,
-          'partner.share_tab_viewed',
-          {
-            viewedAt: showActivityStatus ? now.toISOString() : null,
-            activeAt: showActivityStatus ? now.toISOString() : null,
-            presenceVisible: showActivityStatus,
-          },
-          user.id,
-        );
-        await pingCoParticipants(sessionId, participant.id);
-      } catch (err) {
-        logger.error('[markShareTabViewed] Failed to publish share_tab_viewed event:', err);
-      }
-    })();
-
-    successResponse(res, {
+    const body: MarkSharedContextViewedResponse = {
       success: true,
-      lastViewedShareTabAt: readState.lastViewedShareTabAt?.toISOString() ?? now.toISOString(),
-    });
+      advanced: result.advanced,
+      lastViewedSharedContextAt: result.lastViewedShareTabAt.toISOString(),
+    };
+    successResponse(res, body);
   } catch (error) {
-    logger.error('[markShareTabViewed] Error:', error);
-    errorResponse(res, ErrorCode.INTERNAL_ERROR, 'Failed to mark share tab as viewed', 500);
+    logger.error('[markSharedContextViewed] Error:', error);
+    errorResponse(res, ErrorCode.INTERNAL_ERROR, 'Failed to mark shared context as viewed', 500);
   }
 }
 

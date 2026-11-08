@@ -137,7 +137,7 @@ Hot per-participant view state. · core · P · none (timestamps and an id only)
 | participant_id | uuid | no | | PK, FK participant CASCADE |
 | last_viewed_at | timestamptz | yes | | chat tab |
 | last_seen_message_id | uuid | yes | | FK message SET NULL — "new messages" line |
-| last_viewed_share_tab_at | timestamptz | yes | | |
+| last_viewed_share_tab_at | timestamptz | yes | | viewed instant for received shared frames ("Seen"); written by `POST /sessions/:id/shared-context-viewed` (work-2doq). Name predates the Share tab removal |
 | last_active_at | timestamptz | yes | | presence (subject to privacy prefs) |
 | archived_at | timestamptz | yes | | hidden from this participant's list |
 | updated_at | timestamptz | no | now() | |

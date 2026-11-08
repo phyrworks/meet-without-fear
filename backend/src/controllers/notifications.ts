@@ -48,7 +48,7 @@ async function unreviewedRevealed(me: SessionParty) {
   return rounds.filter(r => r.reviews.length === 0);
 }
 
-/** Delivered context in `me`'s own conversation since they last viewed the Share tab. */
+/** Delivered context in `me`'s own conversation not yet shown to them (services/shared-context-view.ts). */
 async function unreadContext(me: SessionParty) {
   if (!me.mainConversationId) return [];
   const readState = await prisma.conversationReadState.findUnique({

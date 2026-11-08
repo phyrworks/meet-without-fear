@@ -11,6 +11,8 @@ import {
   NativeSyntheticEvent,
   NativeScrollEvent,
   LayoutChangeEvent,
+  ViewToken,
+  ViewabilityConfigCallbackPair,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { MessageRole } from '@meet-without-fear/shared';
@@ -21,6 +23,7 @@ import { EmotionSlider } from './EmotionSlider';
 import { ChatIndicator, ChatIndicatorType } from './ChatIndicator';
 import { EmpathyValidationCard } from './EmpathyValidationCard';
 import { assembleChatItems } from '../lib/chat/render/chatItems';
+import { SHOWN_ON_SCREEN_CONFIGS, createViewableUnion } from '../lib/chat/render/viewability';
 import {
   isCustomCard,
   isCustomEmptyState,
@@ -200,6 +203,14 @@ interface ChatInterfaceProps {
     isFromMe?: boolean,
     indicatorType?: ChatIndicatorType,
   ) => void;
+  /**
+   * Called with every item currently shown on screen (half of it, or half the
+   * viewport, for SHOWN_MIN_MS; lib/chat/render/viewability.ts) whenever
+   * viewability changes. The session screen
+   * uses it to mark received shared frames as seen (work-2doq;
+   * lib/chat/sharedFrameViews.ts de-duplicates).
+   */
+  onItemsViewed?: (items: ChatListItem[]) => void;
   emotionSlider?: ChatEmotionSliderProps;
   pagination?: ChatPaginationProps;
   readBoundary?: ChatReadBoundaryProps;
@@ -235,6 +246,7 @@ export function ChatInterface({
   skipInitialHistory = false,
   partnerName,
   onContextSharedPress,
+  onItemsViewed,
   emotionSlider,
   pagination,
   readBoundary,
@@ -782,6 +794,29 @@ export function ChatInterface({
 
   const keyExtractor = useCallback((item: ChatListItem) => getAnimationIdentity(item.id), []);
 
+  // "Shown on screen" = half the item OR half the viewport (tall frames), one
+  // FlatList config per test, merged (lib/chat/render/viewability.ts).
+  // FlatList does not support changing the pairs after mount, so they are
+  // built once and read the latest prop through a ref.
+  const onItemsViewedRef = useRef(onItemsViewed);
+  onItemsViewedRef.current = onItemsViewed;
+  const viewabilityPairsRef = useRef<ViewabilityConfigCallbackPair[] | null>(null);
+  if (viewabilityPairsRef.current === null) {
+    const union = createViewableUnion<ChatListItem>(
+      SHOWN_ON_SCREEN_CONFIGS.length,
+      (item) => getAnimationIdentity(item.id),
+      (items) => onItemsViewedRef.current?.(items),
+    );
+    viewabilityPairsRef.current = SHOWN_ON_SCREEN_CONFIGS.map((viewabilityConfig, index) => ({
+      viewabilityConfig,
+      onViewableItemsChanged: ({ viewableItems }: { viewableItems: ViewToken<ChatListItem>[] }) =>
+        union.update(
+          index,
+          viewableItems.filter((token) => token.isViewable && token.item).map((token) => token.item),
+        ),
+    }));
+  }
+
   // Footer is visually at the bottom (Typing Indicator)
   // We always render a container with minHeight to prevent layout shift
   // when the indicator disappears and the AI message appears
@@ -1045,6 +1080,7 @@ export function ChatInterface({
       onScrollBeginDrag={handleScrollBeginDrag}
       scrollEventThrottle={16}
       onContentSizeChange={handleContentSizeChange}
+      viewabilityConfigCallbackPairs={viewabilityPairsRef.current ?? undefined}
     />
   );
 

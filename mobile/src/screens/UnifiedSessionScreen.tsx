@@ -71,7 +71,11 @@ import { GuidedActionPanel } from '../components/GuidedActionPanel';
 import { TypingIndicator } from '../components/TypingIndicator';
 
 import { useUnifiedSession, InlineChatCard } from '../hooks/useUnifiedSession';
-import { useConfirmTopicFrame } from '../hooks/useSessions';
+import { useConfirmTopicFrame, useMarkSharedContextViewed } from '../hooks/useSessions';
+import { useIsFocused } from '@react-navigation/native';
+import { useSharedFrameViewReporting } from '../hooks/useSharedFrameViewReporting';
+import { useAppForeground } from '../hooks/useAppForeground';
+import type { ChatListItem } from '../lib/chat/render/types';
 import { useValidationFeedbackCoachChat } from '../hooks/useRefinementChat';
 import { useChatUIState } from '../hooks/useChatUIState';
 import { createInvitationLink } from '../hooks/useInvitation';
@@ -570,6 +574,19 @@ export function UnifiedSessionScreen({
   const queryClient = useQueryClient();
   const router = useRouter();
   const { showError, showWarning } = useToast();
+
+  // "Seen" for shared context (work-2doq): report received shared frames on
+  // screen while this screen is focused AND the app is in the foreground with
+  // its page visible (hooks/useSharedFrameViewReporting.ts).
+  const isScreenFocused = useIsFocused();
+  const isAppForeground = useAppForeground();
+  const { mutate: markSharedContextViewed } = useMarkSharedContextViewed(sessionId);
+  const reportViewableChatItems = useSharedFrameViewReporting<ChatListItem>({
+    sessionId,
+    currentUserId: user?.id,
+    isShown: isScreenFocused && isAppForeground,
+    report: markSharedContextViewed,
+  });
 
   // Real-time presence tracking
 
@@ -4343,6 +4360,7 @@ export function UnifiedSessionScreen({
             isLoadingMore: isFetchingMoreMessages,
           }}
           onTypewriterStateChange={setIsTypewriterAnimating}
+          onItemsViewed={reportViewableChatItems}
           onTypewriterComplete={() => {
             // Reset justSignedCompact after first message animates
             if (justSignedCompact) {

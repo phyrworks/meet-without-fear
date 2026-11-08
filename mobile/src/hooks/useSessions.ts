@@ -16,6 +16,7 @@ import {
 } from '@tanstack/react-query';
 import { get, post, del, ApiClientError } from '../lib/api';
 import { trackInvitationAccepted, trackInvitationDeclined } from '../services/analytics';
+import { isRetryableReportError, sharedFrameViewTracker } from '../lib/chat/sharedFrameViews';
 import {
   SessionSummaryDTO,
   SessionDetailDTO,
@@ -30,6 +31,9 @@ import {
   Stage,
   SessionStateResponse,
   GetMessagesResponse,
+  EmpathyExchangeStatusResponse,
+  MarkSharedContextViewedRequest,
+  MarkSharedContextViewedResponse,
 } from '@meet-without-fear/shared';
 
 // Import query keys from centralized file to avoid circular dependencies
@@ -919,35 +923,99 @@ export function useMarkSessionViewed(sessionId: string | undefined) {
   });
 }
 
-interface MarkShareTabViewedResponse {
-  success: boolean;
-  lastViewedShareTabAt: string;
+export interface MarkSharedContextViewedVariables {
+  /** Server id of the received SHARED_CONTEXT / VALIDATION_FEEDBACK message shown on screen */
+  messageId: string;
+  /** Its timestamp (ISO): everything delivered up to it now counts as viewed */
+  timestamp: string;
+}
+
+interface PendingActionsCache {
+  actions: { type: string; id: string; data: Record<string, unknown> }[];
+  sentTabUpdates?: number;
 }
 
 /**
- * Mark the Share tab as viewed by the current user.
- *
- * This updates the lastViewedShareTabAt timestamp for the user's session vessel.
- * Used to determine "seen" delivery status for shared content (empathy, context).
- * Content is only marked as "seen" when the user actually views the Share tab,
- * not just when they're on the AI chat tab.
- *
- * @param sessionId - The session ID
+ * Cache-first projection of a shared-frame view onto the recipient's empathy
+ * status: the newest delivered context is viewed once a frame at or after it
+ * was shown. Exported for tests.
  */
-export function useMarkShareTabViewed(sessionId: string | undefined) {
+export function applySharedContextViewedToEmpathyStatus(
+  old: EmpathyExchangeStatusResponse | undefined,
+  timestamp: string,
+): EmpathyExchangeStatusResponse | undefined {
+  if (!old || !old.hasUnviewedSharedContext || !old.sharedContext) return old;
+  if (new Date(timestamp).getTime() < new Date(old.sharedContext.sharedAt).getTime()) return old;
+  return { ...old, hasUnviewedSharedContext: false };
+}
+
+/** The same view projected onto pending actions: received context up to it is no longer unviewed. */
+export function applySharedContextViewedToPendingActions<T extends PendingActionsCache>(
+  old: T | undefined,
+  timestamp: string,
+): T | undefined {
+  if (!old) return old;
+  const at = new Date(timestamp).getTime();
+  const actions = old.actions.filter((a) => {
+    if (a.type !== 'context_received') return true;
+    const ts = typeof a.data?.timestamp === 'string' ? new Date(a.data.timestamp).getTime() : NaN;
+    return !(ts <= at);
+  });
+  return actions.length === old.actions.length ? old : { ...old, actions };
+}
+
+/**
+ * Mark a received shared frame ("Context from X" / "Feedback from X") as shown
+ * on the current user's screen (work-2doq). The server advances the user's
+ * viewed instant, which turns the sender's line into "✓ Seen" (the sender is
+ * pinged over Ably and refetches its own empathy status) and clears this
+ * user's unviewed shared context and context_received actions — written
+ * here optimistically, rolled back on error.
+ */
+export function useMarkSharedContextViewed(sessionId: string | undefined) {
   const queryClient = useQueryClient();
 
-  return useMutation({
-    mutationFn: async () => {
+  return useMutation<
+    MarkSharedContextViewedResponse,
+    ApiClientError,
+    MarkSharedContextViewedVariables,
+    { previousStatus: unknown; previousActions: unknown }
+  >({
+    mutationFn: async ({ messageId }) => {
       if (!sessionId) throw new Error('Session ID is required');
-      return post<MarkShareTabViewedResponse>(`/sessions/${sessionId}/share-tab-viewed`, {});
+      const body: MarkSharedContextViewedRequest = { messageId };
+      return post<MarkSharedContextViewedResponse>(`/sessions/${sessionId}/shared-context-viewed`, body);
     },
-    onSuccess: () => {
-      // Invalidate empathy status to update delivery statuses
-      queryClient.invalidateQueries({ queryKey: stageKeys.empathyStatus(sessionId || '') });
-      // Invalidate pending actions (unread context count changed)
-      queryClient.invalidateQueries({ queryKey: stageKeys.pendingActions(sessionId || '') });
-      // Invalidate aggregate badge count
+    onMutate: async ({ timestamp }) => {
+      const statusKey = stageKeys.empathyStatus(sessionId || '');
+      const actionsKey = stageKeys.pendingActions(sessionId || '');
+      await Promise.all([
+        queryClient.cancelQueries({ queryKey: statusKey }),
+        queryClient.cancelQueries({ queryKey: actionsKey }),
+      ]);
+      const previousStatus = queryClient.getQueryData(statusKey);
+      const previousActions = queryClient.getQueryData(actionsKey);
+      queryClient.setQueryData<EmpathyExchangeStatusResponse>(statusKey, (old) =>
+        applySharedContextViewedToEmpathyStatus(old, timestamp),
+      );
+      queryClient.setQueryData<PendingActionsCache>(actionsKey, (old) =>
+        applySharedContextViewedToPendingActions(old, timestamp),
+      );
+      return { previousStatus, previousActions };
+    },
+    onError: (error, variables, context) => {
+      // Outcome handling lives here (not in a per-call mutate callback, which
+      // does not fire after unmount): a 4xx is final, a 5xx / network failure
+      // is retried on the next focus / foreground (bounded).
+      if (sessionId) {
+        sharedFrameViewTracker.fail(sessionId, variables.messageId, isRetryableReportError(error));
+      }
+      if (!context) return;
+      queryClient.setQueryData(stageKeys.empathyStatus(sessionId || ''), context.previousStatus);
+      queryClient.setQueryData(stageKeys.pendingActions(sessionId || ''), context.previousActions);
+    },
+    onSettled: () => {
+      // The aggregate badge has no optimistic copy; refetch it.
       queryClient.invalidateQueries({ queryKey: notificationKeys.badgeCount() });
     },
   });

@@ -25,7 +25,7 @@ import {
   getInvitation,
   confirmInvitationMessage,
   markSessionViewed,
-  markShareTabViewed,
+  markSharedContextViewedHandler,
   getUnreadSessionCount,
 } from '../controllers/sessions';
 import { confirmTopicFrame } from '../controllers/topic-frame';
@@ -134,10 +134,17 @@ router.get('/sessions/:id/inner-thoughts', requireAuth, getLinkedInnerThoughts);
 router.post('/sessions/:id/viewed', requireAuth, requireSessionAccess, asyncHandler(markSessionViewed));
 
 /**
- * @route POST /api/v1/sessions/:id/share-tab-viewed
- * @description Mark Share tab as viewed (for "seen" delivery status of shared content)
- * @access Private - requires authentication and session access
+ * @route POST /api/v1/sessions/:id/shared-context-viewed
+ * @description Mark a received shared frame (body: { messageId }) as shown on the
+ *   recipient's screen: the "Seen" delivery status of shared content (work-2doq)
+ * @access Private - requires authentication and session access; only the
+ *   recipient of the message (it must be in their own conversation)
  */
-router.post('/sessions/:id/share-tab-viewed', requireAuth, requireSessionAccess, asyncHandler(markShareTabViewed));
+router.post(
+  '/sessions/:id/shared-context-viewed',
+  requireAuth,
+  requireSessionAccess,
+  asyncHandler(markSharedContextViewedHandler),
+);
 
 export default router;

@@ -189,7 +189,7 @@ The frontend doesn't reconstruct session state from `GET /sessions/:id` alone. U
 | `POST` | `/api/v1/sessions/:id/stages/advance` | Advance the caller's stage when all gates for the current stage are satisfied |
 | `POST` | `/api/v1/sessions/:id/resolve` | Resolve session. Requires at least one `AGREED` agreement exists in the shared vessel; returns `VALIDATION_ERROR` otherwise |
 | `POST` | `/api/v1/sessions/:id/viewed` | Mark the session as viewed (clears unread flags) |
-| `POST` | `/api/v1/sessions/:id/share-tab-viewed` | Mark the Sharing tab as viewed |
+| `POST` | `/api/v1/sessions/:id/shared-context-viewed` | Body `{ messageId }`: the caller's chat showed this received shared frame ("Context from X" / "Feedback from X"). Only a `SHARED_CONTEXT` / `VALIDATION_FEEDBACK` message in the caller's own conversation sent by someone else is accepted (else `404`; a non-id `messageId` is `400`). Advances the caller's viewed instant (never backwards; a frame already covered writes nothing, `advanced: false`), which makes the sender's line "✓ Seen" and clears the caller's `hasUnviewedSharedContext` and unviewed `context_received` actions. Returns `{ success, advanced, lastViewedSharedContextAt }`. Replaces `/share-tab-viewed` (work-2doq). See [reconciler-flow](../reconciler-flow.md) "Delivered → Seen". |
 | `GET`  | `/api/v1/sessions/:id/invitation` | Get the current draft invitation message (inviter only) |
 | `PUT`  | `/api/v1/sessions/:id/invitation/message` | Replace the draft invitation message |
 | `POST` | `/api/v1/sessions/:id/invitation/confirm` | Confirm the invitation message; requires a finalized topic frame and transitions session `CREATED → INVITED` |
