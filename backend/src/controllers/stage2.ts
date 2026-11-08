@@ -22,6 +22,7 @@ import { prisma } from '../lib/prisma';
 import {
   EmpathyStatus,
   saveEmpathyDraftRequestSchema,
+  editPreJoinDraftFirstRequestSchema,
   consentToShareRequestSchema,
   validateEmpathyRequestSchema,
   skipRefinementRequestSchema,
@@ -82,6 +83,8 @@ import {
 } from '../services/empathy-store';
 import { attemptDTO } from '../services/empathy-status';
 import { saveEmpathyDraft } from '../services/empathy-draft-save';
+import { openPreJoinDraftRevision } from '../services/prejoin-edit-opener';
+import { getPartnerParticipant } from '../services/participant-resolver';
 
 // ============================================================================
 // Helpers
@@ -396,6 +399,74 @@ export async function deleteDraft(req: Request, res: Response): Promise<void> {
   } catch (error) {
     logger.error('[deleteDraft] Error:', error);
     errorResponse(res, 'INTERNAL_ERROR', 'Failed to set the draft aside', 500);
+  }
+}
+
+/**
+ * "Edit first" in the review of a pre-join draft (work-9309): ends the review
+ * (the draft kept as written) and the AI opens the revision conversation in
+ * the caller's own chat. Idempotent: only the call that ends a pending review
+ * writes the opener; any other call answers `resolved: false` and writes
+ * nothing.
+ * POST /sessions/:id/empathy/draft/edit-first
+ */
+export async function editPreJoinDraftFirst(req: Request, res: Response): Promise<void> {
+  try {
+    const parseResult = editPreJoinDraftFirstRequestSchema.safeParse(req.body ?? {});
+    if (!parseResult.success) {
+      errorResponse(res, 'VALIDATION_ERROR', 'Invalid request body', 400, parseResult.error.issues);
+      return;
+    }
+    const caller = await stage2Caller(req, res);
+    if (!caller) return;
+    if (!(await sessionAllowsStage2(caller.sessionId, caller.userId, res))) return;
+    const currentStage = await stageOf(caller.me.participantId);
+    if (currentStage !== 2) {
+      errorResponse(
+        res,
+        'VALIDATION_ERROR',
+        `Cannot edit the empathy draft: you are in stage ${currentStage}, but stage 2 is required`,
+        400,
+      );
+      return;
+    }
+    if (!caller.partner || !caller.me.mainConversationId) {
+      successResponse(res, { resolved: false, opener: null });
+      return;
+    }
+
+    const [partner, session, invitation] = await Promise.all([
+      getPartnerParticipant(caller.me.participantId),
+      prisma.session.findUnique({
+        where: { id: caller.sessionId },
+        select: { topicFrame: true, topicFrameConfirmedAt: true },
+      }),
+      // The name the author invited them by: the fallback when the partner's profile has none.
+      prisma.invitation.findFirst({
+        where: { sessionId: caller.sessionId, invitedByParticipantId: caller.me.participantId },
+        select: { name: true },
+      }),
+    ]);
+    updateContext({
+      turnId: `${caller.sessionId}-${caller.userId}-prejoin-edit-first`,
+      sessionId: caller.sessionId,
+      userId: caller.userId,
+      participantId: caller.me.participantId,
+    });
+    const result = await openPreJoinDraftRevision({
+      sessionId: caller.sessionId,
+      userId: caller.userId,
+      userName: req.user?.name || caller.me.name || 'there',
+      participantId: caller.me.participantId,
+      mainConversationId: caller.me.mainConversationId,
+      partnerName: partner?.displayName || caller.partner.name || invitation?.name || undefined,
+      topicFrame: session?.topicFrameConfirmedAt ? session.topicFrame : undefined,
+      timeZone: parseResult.data.timeZone,
+    });
+    successResponse(res, result);
+  } catch (error) {
+    logger.error('[editPreJoinDraftFirst] Error:', error);
+    errorResponse(res, 'INTERNAL_ERROR', 'Failed to open the draft for editing', 500);
   }
 }
 

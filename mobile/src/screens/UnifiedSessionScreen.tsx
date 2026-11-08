@@ -684,6 +684,8 @@ export function UnifiedSessionScreen({
     handleShareEmpathy,
     handleSetAsideEmpathyDraft,
     isSettingAsideEmpathyDraft,
+    handleEditPreJoinDraftFirst,
+    isEditingPreJoinDraftFirst,
     isPreJoinReviewPending,
     handleResubmitEmpathy,
     handleValidatePartnerEmpathy,
@@ -4539,7 +4541,7 @@ export function UnifiedSessionScreen({
           partnerName={partnerName}
           writtenAt={empathyDraftData.preJoinReview.writtenAt}
           statement={empathyDraftData.draft.content}
-          busy={isSettingAsideEmpathyDraft || isSavingEmpathyDraft || isSharingEmpathy}
+          busy={isSettingAsideEmpathyDraft || isEditingPreJoinDraftFirst || isSavingEmpathyDraft || isSharingEmpathy}
           onSendAsIs={() => {
             const statementToShare = empathyDraftData.draft?.content;
             if (!statementToShare) return;
@@ -4549,11 +4551,9 @@ export function UnifiedSessionScreen({
             handleShareEmpathy(statementToShare, { resolvePreJoinReview: true });
           }}
           onEditFirst={() => {
-            const content = empathyDraftData.draft?.content;
-            if (!content) return;
-            // The author's explicit choice ends the review; the draft stays in
-            // the conversation, where the AI helps rework it.
-            handleSaveEmpathyDraft(content, false, { resolvePreJoinReview: true });
+            // The author's explicit choice ends the review; the AI then opens
+            // the revision conversation in their own chat (work-9309).
+            handleEditPreJoinDraftFirst();
           }}
           onSetAside={handleSetAsideEmpathyDraft}
         />

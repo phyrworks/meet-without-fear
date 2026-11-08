@@ -4,6 +4,8 @@
  * Drafting, sharing, and validating empathy attempts.
  */
 
+import type { MessageDTO } from './message';
+
 // ============================================================================
 // Empathy Status (Reconciler Flow)
 // ============================================================================
@@ -83,6 +85,32 @@ export interface GetEmpathyDraftResponse {
 
 export interface DeleteEmpathyDraftResponse {
   deleted: boolean;
+}
+
+/**
+ * work-9309: "Edit first" in the review of a pre-join draft. Ends the review
+ * (the draft is kept as written) and the AI opens the revision conversation in
+ * the author's own chat: it speaks first, with the draft and when it was
+ * written in view. POST /sessions/:id/empathy/draft/edit-first.
+ */
+export interface EditPreJoinDraftFirstRequest {
+  /**
+   * The author's IANA time zone (e.g. "America/Los_Angeles"), so the opener
+   * names the day the way the review did ("earlier today", "on Tuesday").
+   * Optional; an unknown zone reads as UTC.
+   */
+  timeZone?: string;
+}
+
+export interface EditPreJoinDraftFirstResponse {
+  /**
+   * True when this request ended the pending review. False when no review was
+   * pending (already resolved: a retry, a second tap, another device) —
+   * nothing changes and no opener is written.
+   */
+  resolved: boolean;
+  /** The AI's opener, in the author's own conversation only; null unless `resolved`. */
+  opener: MessageDTO | null;
 }
 
 // ============================================================================

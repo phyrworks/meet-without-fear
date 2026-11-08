@@ -23,6 +23,8 @@ import {
   ConfirmFeelHeardResponse,
   SaveEmpathyDraftResponse,
   DeleteEmpathyDraftResponse,
+  EditPreJoinDraftFirstResponse,
+  MessageDTO,
   ConsentToShareEmpathyResponse,
   GetProgressResponse,
   MilestoneKey,
@@ -860,6 +862,97 @@ export function useDeleteEmpathyDraft(
       if (context?.previous) {
         queryClient.setQueryData(stageKeys.empathyDraft(sessionId), context.previous);
       }
+    },
+    ...options,
+  });
+}
+
+/** Append one message to every message cache of the session (deduped by id). */
+function appendMessageToCaches(queryClient: QueryClient, sessionId: string, message: MessageDTO): void {
+  const updateCache = (old: GetMessagesResponse | undefined): GetMessagesResponse => {
+    if (!old) return { messages: [message], hasMore: false };
+    if ((old.messages || []).some((m) => m.id === message.id)) return old;
+    return { ...old, messages: [...(old.messages || []), message] };
+  };
+  const updateInfiniteCache = (
+    old: InfiniteData<GetMessagesResponse> | undefined
+  ): InfiniteData<GetMessagesResponse> => {
+    if (!old || old.pages.length === 0) {
+      return { pages: [{ messages: [message], hasMore: false }], pageParams: [undefined] };
+    }
+    const pages = [...old.pages];
+    const first = pages[0];
+    if ((first.messages || []).some((m) => m.id === message.id)) return old;
+    pages[0] = { ...first, messages: [...(first.messages || []), message] };
+    return { ...old, pages };
+  };
+  const stages = message.stage !== undefined ? [undefined, message.stage] : [undefined];
+  for (const stage of stages) {
+    queryClient.setQueryData<GetMessagesResponse>(messageKeys.list(sessionId, stage), updateCache);
+    queryClient.setQueryData<InfiniteData<GetMessagesResponse>>(messageKeys.infinite(sessionId, stage), updateInfiniteCache);
+  }
+}
+
+/** The device's IANA time zone, when the runtime can tell. */
+function deviceTimeZone(): string | undefined {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * "Edit first" in the review of a pre-join draft (work-9309). Ends the review
+ * (optimistic: the review leaves the cache at once, rolled back on error) and
+ * the AI opens the revision conversation: its opener comes back in the
+ * response and goes straight into the message caches, then the conversation
+ * is refetched — so it shows without Ably and without a reload.
+ */
+export function useEditPreJoinDraftFirst(
+  options?: Omit<
+    UseMutationOptions<
+      EditPreJoinDraftFirstResponse,
+      ApiClientError,
+      { sessionId: string },
+      { previous: GetEmpathyDraftResponse | undefined }
+    >,
+    'mutationFn' | 'onMutate' | 'onError' | 'onSuccess'
+  >
+) {
+  const queryClient = useQueryClient();
+
+  return useMutation<
+    EditPreJoinDraftFirstResponse,
+    ApiClientError,
+    { sessionId: string },
+    { previous: GetEmpathyDraftResponse | undefined }
+  >({
+    mutationFn: async ({ sessionId }) => {
+      const timeZone = deviceTimeZone();
+      return post<EditPreJoinDraftFirstResponse>(
+        `/sessions/${sessionId}/empathy/draft/edit-first`,
+        timeZone ? { timeZone } : {}
+      );
+    },
+    onMutate: async ({ sessionId }) => {
+      const key = stageKeys.empathyDraft(sessionId);
+      await queryClient.cancelQueries({ queryKey: key });
+      const previous = queryClient.getQueryData<GetEmpathyDraftResponse>(key);
+      if (previous?.preJoinReview) {
+        queryClient.setQueryData<GetEmpathyDraftResponse>(key, { ...previous, preJoinReview: null });
+      }
+      return { previous };
+    },
+    onError: (_error, { sessionId }, context) => {
+      if (context?.previous) {
+        queryClient.setQueryData(stageKeys.empathyDraft(sessionId), context.previous);
+      }
+    },
+    onSuccess: (data, { sessionId }) => {
+      if (data.opener) appendMessageToCaches(queryClient, sessionId, data.opener);
+      queryClient.invalidateQueries({ queryKey: stageKeys.empathyDraft(sessionId) });
+      queryClient.refetchQueries({ queryKey: messageKeys.infinite(sessionId) });
     },
     ...options,
   });

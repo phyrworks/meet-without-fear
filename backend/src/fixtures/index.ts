@@ -16,6 +16,7 @@ import { reconcilerRefinement } from './reconciler-refinement';
 import { stage3Needs } from './stage-3-needs';
 import { stage4Strategies } from './stage-4-strategies';
 import { testFixture } from './test-fixture';
+import { userAEditFirstJourney } from './user-a-edit-first-journey';
 import { userAFullJourney } from './user-a-full-journey';
 import { userBPartnerJourney } from './user-b-partner-journey';
 
@@ -34,6 +35,7 @@ export {
   stage3Needs,
   stage4Strategies,
   testFixture,
+  userAEditFirstJourney,
   userAFullJourney,
   userBPartnerJourney,
 };
@@ -53,6 +55,7 @@ export const fixtureRegistry: Record<string, E2EFixture> = {
   'stage-3-needs': stage3Needs,
   'stage-4-strategies': stage4Strategies,
   'test-fixture': testFixture,
+  'user-a-edit-first-journey': userAEditFirstJourney,
   'user-a-full-journey': userAFullJourney,
   'user-b-partner-journey': userBPartnerJourney,
 };

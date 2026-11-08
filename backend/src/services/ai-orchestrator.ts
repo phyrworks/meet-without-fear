@@ -19,7 +19,7 @@ import { determineMemoryIntent, type MemoryIntentContext, type MemoryIntentResul
 // Memory detection and validation moved to fire-and-forget (partner-session-classifier.ts)
 import { assembleContextBundle, formatContextForPrompt, type ContextBundle } from './context-assembler';
 import { planRetrieval, getMockRetrievalPlan, type RetrievalPlan } from './retrieval-planner';
-import { buildStagePrompt } from './stage-prompts';
+import { buildReopenedPreJoinDraftFallback, buildStagePrompt, type ReopenedPreJoinDraft } from './stage-prompts';
 import { retrieveContext, formatRetrievedContext, type RetrievedContext } from './context-retriever';
 import { brainService } from '../services/brain-service';
 import { parseMicroTagResponse } from '../utils/micro-tag-parser';
@@ -33,7 +33,7 @@ import { getSharedContentContext, getMilestoneContext } from './shared-context';
 import { publishContextUpdated } from './realtime';
 import { routeModel, scoreAmbiguity } from './model-router';
 import { estimateContextSizes, finalizeTurnMetrics, recordContextSizes } from './llm-telemetry';
-import { getFixtureResponseByIndex } from '../lib/e2e-fixtures';
+import { getFixtureOperationResponse, getFixtureResponseByIndex } from '../lib/e2e-fixtures';
 import { getE2EFixtureId } from '../lib/request-context';
 import type { TraceStep, TurnTrace } from '../types/turn-trace';
 import { detectCrisis } from './crisis-detector';
@@ -76,6 +76,11 @@ export interface OrchestratorContext {
   isOnboarding?: boolean;
   /** Confirmed topic of the conversation (only set when topicFrameConfirmedAt is non-null) */
   topicFrame?: string | null;
+  /**
+   * work-9309: the AI's opener after "Edit first" on a pre-join draft (Stage
+   * 2). The turn invites reflection; it never proposes a statement.
+   */
+  reopenedPreJoinDraft?: ReopenedPreJoinDraft | null;
 }
 
 export interface OrchestratorResult {
@@ -365,6 +370,7 @@ export async function orchestrateResponse(context: OrchestratorContext): Promise
       isFirstMessage: context.isFirstTurnInSession,
       empathyDraft: context.currentEmpathyDraft,
       isRefiningEmpathy: context.isRefiningEmpathy,
+      reopenedPreJoinDraft: context.reopenedPreJoinDraft,
       sharedContextFromPartner: context.sharedContextFromPartner,
       surfacingStyle: surfacingDecision.style,
       cautionAdvised,
@@ -769,6 +775,13 @@ Write only the user-facing conversational response. Do not include tool JSON, XM
     logger.warn(`[AI Orchestrator] Slow response: ${totalDuration}ms total (Decision: ${decisionTime}ms)`);
   }
 
+  // work-9309: the opener after "Edit first" invites reflection; it never
+  // carries a proposed statement, whatever the model returned.
+  if (context.reopenedPreJoinDraft) {
+    offerReadyToShare = false;
+    proposedEmpathyStatement = null;
+  }
+
   return {
     response,
     memoryIntent,
@@ -844,6 +857,12 @@ function storeTurnTrace(sessionId: string, turnId: string, turnTrace: TurnTrace)
 function getMockResponse(context: OrchestratorContext): string {
   const fixtureId = getE2EFixtureId();
 
+  // work-9309: the opener after "Edit first" is its own turn, not one of the
+  // fixture's indexed chat responses (it is not a reply to a user message).
+  if (context.reopenedPreJoinDraft) {
+    return reopenedPreJoinDraftMockOpener(fixtureId, context.reopenedPreJoinDraft);
+  }
+
   // Use fixture response if fixture ID is available
   if (fixtureId) {
     try {
@@ -890,4 +909,33 @@ function getMockResponse(context: OrchestratorContext): string {
   }
 
   return `Hello ${userName}. I'm here to help you through this conversation. What's on your mind?`;
+}
+
+/** The fixture operation that pins the opener's text in hermetic E2E (work-9309). */
+export const PREJOIN_EDIT_FIRST_OPENER_OPERATION = 'prejoin-edit-first-opener';
+
+/**
+ * work-9309: the opener under MOCK_LLM (and when the model returns nothing):
+ * the fixture's `prejoin-edit-first-opener` operation when it defines one
+ * (`{{writtenAt}}` is replaced by the day phrase), else the template.
+ */
+function reopenedPreJoinDraftMockOpener(fixtureId: string | null | undefined, draft: ReopenedPreJoinDraft): string {
+  if (fixtureId) {
+    const raw = getFixtureOperationResponse(fixtureId, PREJOIN_EDIT_FIRST_OPENER_OPERATION);
+    if (raw) {
+      try {
+        const parsed: unknown = JSON.parse(raw);
+        const text =
+          typeof parsed === 'string'
+            ? parsed
+            : parsed && typeof (parsed as { response?: unknown }).response === 'string'
+              ? (parsed as { response: string }).response
+              : null;
+        if (text) return text.split('{{writtenAt}}').join(draft.writtenAtPhrase);
+      } catch {
+        // fall through to the template
+      }
+    }
+  }
+  return buildReopenedPreJoinDraftFallback(draft);
 }

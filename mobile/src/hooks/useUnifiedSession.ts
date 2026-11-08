@@ -31,6 +31,7 @@ import {
   usePartnerEmpathy,
   useSaveEmpathyDraft,
   useDeleteEmpathyDraft,
+  useEditPreJoinDraftFirst,
   useConsentToShareEmpathy,
   useValidateEmpathy,
   useNeeds,
@@ -986,6 +987,18 @@ export function useUnifiedSession(
     deleteEmpathyDraft({ sessionId });
   }, [sessionId, deleteEmpathyDraft]);
 
+  // work-9309: "Edit first" in the review after the partner joins — the review
+  // ends and the AI opens the revision conversation (its opener lands in the
+  // chat). The old ready-to-share offer goes: the author is reworking the
+  // draft, and the next proposal comes from the conversation.
+  const { mutate: editPreJoinDraftFirst, isPending: isEditingPreJoinDraftFirst } = useEditPreJoinDraftFirst();
+  const handleEditPreJoinDraftFirst = useCallback(() => {
+    if (!sessionId) return;
+    setLiveProposedEmpathyStatement(null);
+    setAiRecommendsReadyToShare(false);
+    editPreJoinDraftFirst({ sessionId });
+  }, [sessionId, editPreJoinDraftFirst]);
+
   const handleShareEmpathy = useCallback((content?: string, opts?: { resolvePreJoinReview?: boolean }) => {
     if (!sessionId) {
       console.warn('[handleShareEmpathy] No sessionId, aborting');
@@ -1329,6 +1342,8 @@ export function useUnifiedSession(
     handleShareEmpathy,
     handleSetAsideEmpathyDraft,
     isSettingAsideEmpathyDraft,
+    handleEditPreJoinDraftFirst,
+    isEditingPreJoinDraftFirst,
     isPreJoinReviewPending,
     handleResubmitEmpathy,
     handleValidatePartnerEmpathy,

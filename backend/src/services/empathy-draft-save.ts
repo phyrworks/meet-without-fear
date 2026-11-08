@@ -17,7 +17,7 @@
  *     The draft row is held FOR UPDATE while that is decided.
  */
 
-import { prisma } from '../lib/prisma';
+import { prisma, type DbClient } from '../lib/prisma';
 import { openInvitationOf, upsertDraft, type DraftRow, type EmpathySubject } from './empathy-store';
 
 export type SaveEmpathyDraftResult =
@@ -35,10 +35,7 @@ export async function saveEmpathyDraft(opts: {
   return prisma.$transaction(async tx => {
     const invitation = await openInvitationOf(opts.participantId, tx, true);
     // After the lock: an accept that committed meanwhile is visible here.
-    const partners = await tx.$queryRaw<Array<{ id: string }>>`
-      SELECT p.id FROM participant p
-      WHERE p.session_id = (SELECT session_id FROM participant WHERE id = ${opts.participantId}::uuid)
-        AND p.id <> ${opts.participantId}::uuid AND p.kind = 'human' AND p.left_at IS NULL`;
+    const partners = await livePartnersOf(tx, opts.participantId);
     const partner = partners.length === 1 ? partners[0] : null;
 
     if (!partner) {
@@ -57,15 +54,7 @@ export async function saveEmpathyDraft(opts: {
       return { status: 'saved', draft, subject };
     }
 
-    const pending = await tx.$queryRaw<Array<{ id: string }>>`
-      SELECT d.id FROM draft d
-      WHERE d.participant_id = ${opts.participantId}::uuid AND d.kind = 'EMPATHY'
-        AND d.about_participant_id = ${partner.id}::uuid
-        AND d.updated_at < (SELECT p.joined_at FROM participant p WHERE p.id = ${partner.id}::uuid)
-        AND NOT EXISTS (SELECT 1 FROM empathy_attempt a
-                        WHERE a.author_participant_id = ${opts.participantId}::uuid
-                          AND a.subject_participant_id = ${partner.id}::uuid)
-      FOR UPDATE OF d`;
+    const pending = await lockPendingPreJoinDraft(tx, opts.participantId, partner.id);
     if (pending.length && !opts.resolvePreJoinReview) {
       const kept = await tx.draft.findUniqueOrThrow({
         where: { id: pending[0].id },
@@ -85,5 +74,75 @@ export async function saveEmpathyDraft(opts: {
       tx,
     );
     return { status: 'saved', draft, subject };
+  });
+}
+
+/** The other human participants of the session who have not left. */
+function livePartnersOf(tx: DbClient, participantId: string): Promise<Array<{ id: string }>> {
+  return tx.$queryRaw<Array<{ id: string }>>`
+      SELECT p.id FROM participant p
+      WHERE p.session_id = (SELECT session_id FROM participant WHERE id = ${participantId}::uuid)
+        AND p.id <> ${participantId}::uuid AND p.kind = 'human' AND p.left_at IS NULL`;
+}
+
+/**
+ * The participant's pre-join draft about `partnerId` that still awaits its
+ * author's review (written before the partner joined, nothing submitted),
+ * locked FOR UPDATE for the rest of the transaction. Empty when none.
+ */
+function lockPendingPreJoinDraft(
+  tx: DbClient,
+  participantId: string,
+  partnerId: string,
+): Promise<Array<{ id: string; updated_at: Date }>> {
+  return tx.$queryRaw<Array<{ id: string; updated_at: Date }>>`
+      SELECT d.id, d.updated_at FROM draft d
+      WHERE d.participant_id = ${participantId}::uuid AND d.kind = 'EMPATHY'
+        AND d.about_participant_id = ${partnerId}::uuid
+        AND d.updated_at < (SELECT p.joined_at FROM participant p WHERE p.id = ${partnerId}::uuid)
+        AND NOT EXISTS (SELECT 1 FROM empathy_attempt a
+                        WHERE a.author_participant_id = ${participantId}::uuid
+                          AND a.subject_participant_id = ${partnerId}::uuid)
+      FOR UPDATE OF d`;
+}
+
+export type ResolvePreJoinReviewForEditResult =
+  | {
+      status: 'resolved';
+      /** The draft after the resolving write (same text, not ready; written-at is now). */
+      draft: DraftRow;
+      /** When the author had written it: the review's written-at, read before this write. */
+      writtenAt: Date;
+      partnerParticipantId: string;
+    }
+  | { status: 'not_pending' };
+
+/**
+ * work-9309: the author's "Edit first". Ends a pending pre-join review by the
+ * author's explicit choice — the same resolving write work-99k2's Edit first
+ * made (the text as written, not ready to share) — and reports when the draft
+ * had been written, so the AI's opener can name the day.
+ *
+ * Exactly one call resolves a given review: the pending draft is held FOR
+ * UPDATE, so a concurrent second call waits, then finds the review ended (its
+ * updated_at is now after the join) and reports `not_pending`. The caller
+ * writes the opener only on `resolved`: that is the opener's idempotency (one
+ * per Edit first, none on a retry, a second tap or a reload).
+ */
+export async function resolvePreJoinReviewForEdit(participantId: string): Promise<ResolvePreJoinReviewForEditResult> {
+  return prisma.$transaction(async tx => {
+    const partners = await livePartnersOf(tx, participantId);
+    if (partners.length !== 1) return { status: 'not_pending' };
+    const partnerId = partners[0].id;
+
+    const pending = await lockPendingPreJoinDraft(tx, participantId, partnerId);
+    if (!pending.length) return { status: 'not_pending' };
+
+    const kept = await tx.draft.findUniqueOrThrow({ where: { id: pending[0].id }, select: { content: true } });
+    const draft = await upsertDraft(
+      { participantId, kind: 'EMPATHY', aboutParticipantId: partnerId, content: kept.content, readyToShare: false },
+      tx,
+    );
+    return { status: 'resolved', draft, writtenAt: pending[0].updated_at, partnerParticipantId: partnerId };
   });
 }

@@ -291,6 +291,35 @@ That feels like a genuine attempt to understand {{partner_name}}'s experience. Y
 Before we share this with them, I want to check: does this feel like your best guess at what they might be going through? You can always refine it.
 ```
 
+## Reopened Pre-Join Draft (the AI speaks first)
+
+work-9309 (owner decision 2026-11-07). A solo inviter can write their empathy
+draft before the partner joins; it is never sent on the join, and after it they
+review it (send as is / edit first / set aside). On **Edit first** the AI opens
+the revision conversation. The turn runs on `buildStage2Prompt` with one extra
+dynamic section, `REOPENED DRAFT — YOU SPEAK FIRST` (`buildReopenedPreJoinDraftSection`
+in `backend/src/services/stage-prompts.ts`), which carries the draft verbatim, the
+day it was written as the review named it ("earlier today", "on Tuesday") and the
+full date. It asks for 2-3 sentences: name when they wrote it ("Here's what you
+wrote on Tuesday."), quote or paraphrase its heart, and ask what feels different
+reading it now. It invites reflection only — no judgment, no suggested edits, no
+new version — and is `ReadyShare:N` with no `<draft>` and no
+`proposedEmpathyStatement` (the orchestrator also drops any it returns). The user
+turn is a bracketed trigger line that is never stored. Fallback (the model returns
+nothing):
+
+```
+Here's what you wrote {{written_at}}:
+
+"{{draft}}"
+
+Nothing has been sent. Reading it now, what feels different?
+```
+
+From the author's next reply on, the ordinary Stage 2 prompt runs with the draft in
+`CURRENT EMPATHY DRAFT`; a ReadyShare:Y proposal then autosaves (the review is over)
+and is shared through the normal Review/Share flow.
+
 ## Stage Transition Philosophy
 
 When they complete this stage successfully, acknowledge what they have accomplished:

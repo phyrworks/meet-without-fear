@@ -126,14 +126,56 @@ transaction, keeping its written-at; it is **never** sent on the join.
 **The review after the join.** `preJoinReview` is set while the draft was last
 written before the partner joined and no round has been submitted. Mobile shows
 "<Partner> has joined. Here's what you wrote <day>." with three choices: send as
-is (save with `resolvePreJoinReview: true`, then consent), edit first (save with
-`resolvePreJoinReview: true`), set aside (`DELETE`, below). Only those resolve
+is (save with `resolvePreJoinReview: true`, then consent), edit first
+(`POST …/empathy/draft/edit-first`, below: ends the review and the AI opens the
+revision), set aside (`DELETE`, below). Only those resolve
 it: while it is pending, a save without `resolvePreJoinReview` (the client's or
 the chat turn's autosave of the AI's newest proposal) is skipped — the response
 carries `preJoinReviewPending: true` and the draft is left as written.
 
 Before the join the draft is kept against the inviter's newest invitation that
 has not been accepted, so it survives the invitation lapsing (EXPIRED).
+
+---
+
+### Edit a Pre-Join Draft First
+
+The review's "edit first" (work-9309, owner decision 2026-11-07). Ends the
+pending pre-join review — the same resolving write as a save with
+`resolvePreJoinReview: true`: the text as written, `readyToShare: false` — and
+the AI **speaks first** in the caller's own conversation: "Here's what you wrote
+<day>. Reading it now, what feels different?" The author then revises with the
+AI and shares through the normal Review/Share flow.
+
+```
+POST /api/v1/sessions/:id/empathy/draft/edit-first
+```
+
+Request body: `{ timeZone?: string }` — the author's IANA zone, so the opener
+names the day as the review did ("earlier today", "yesterday", "on Tuesday",
+"on Nov 2"); unknown zones read as UTC.
+
+Response: `{ resolved: boolean; opener: MessageDTO | null }`.
+
+- **Once per Edit first.** The pending draft is locked `FOR UPDATE`; only the call
+  that ends the review writes the opener. Any other call (retry, second tap,
+  reload, another device, no partner yet, a draft written after the join, a
+  review already ended) answers `{ resolved: false, opener: null }` and writes
+  nothing.
+- **The opener** is a proactive Stage 2 turn on the invitation-confirm opener's
+  path (`getOrchestratedResponse` with a bracketed trigger line that is never
+  stored), with the `REOPENED DRAFT` prompt section carrying the draft and its
+  written-at day (`services/prejoin-edit-opener.ts`,
+  `buildReopenedPreJoinDraftSection`). If the model returns nothing it falls
+  back to a fixed template. Under MOCK_LLM: the fixture's
+  `prejoin-edit-first-opener` operation (`{{writtenAt}}` → the day phrase), else
+  the template.
+- **Never a statement.** The turn is `ReadyShare:N` by prompt and by code; it
+  never writes the draft beyond the resolving write.
+- **Private.** One AI row in the caller's MAIN conversation; the Ably
+  `message.ai_response` notice carries only its id.
+
+Gated like save: Stage 2 only (400 otherwise).
 
 ---
 

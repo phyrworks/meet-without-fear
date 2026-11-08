@@ -6,6 +6,7 @@ import {
   signCompactRequestSchema,
   feelHeardRequestSchema,
   saveEmpathyDraftRequestSchema,
+  editPreJoinDraftFirstRequestSchema,
   consentToShareRequestSchema,
   validateEmpathyRequestSchema,
   recordEmotionRequestSchema,
@@ -96,6 +97,22 @@ describe('saveEmpathyDraftRequestSchema', () => {
     });
     expect(result.success).toBe(false);
   });
+});
+
+describe('editPreJoinDraftFirstRequestSchema (work-9309)', () => {
+  it.each([{}, { timeZone: 'America/Los_Angeles' }, { timeZone: 'UTC' }, { timeZone: 'Etc/GMT+8' }])(
+    'accepts %j',
+    (body) => {
+      expect(editPreJoinDraftFirstRequestSchema.safeParse(body).success).toBe(true);
+    }
+  );
+
+  it.each([{ timeZone: 'UTC"; DROP' }, { timeZone: 'x'.repeat(65) }, { timeZone: '' }, { other: 1 }])(
+    'rejects %j',
+    (body) => {
+      expect(editPreJoinDraftFirstRequestSchema.safeParse(body).success).toBe(false);
+    }
+  );
 });
 
 describe('consentToShareRequestSchema', () => {
