@@ -17,12 +17,14 @@ import {
   useAcceptInvitation,
   useDeclineInvitation,
   useConfirmInvitationMessage,
+  useMarkSharedContextViewed,
   sessionKeys,
 } from '../useSessions';
 import { SessionStatus, StageStatus } from '@meet-without-fear/shared';
 
 // Import mocked functions
 import * as api from '../../lib/api';
+import { stageKeys } from '../queryKeys';
 
 // Mock the API module
 jest.mock('../../lib/api', () => ({
@@ -493,5 +495,66 @@ describe('useSessions', () => {
       expect(sessionKeys.invitations()).toEqual(['invitations']);
       expect(sessionKeys.invitation('inv-123')).toEqual(['invitations', 'inv-123']);
     });
+  });
+});
+
+describe('useMarkSharedContextViewed (work-2doq)', () => {
+  const SESSION = 'session-123';
+  const MESSAGE = '019a5f3e-1c2d-7a00-8b00-000000000001';
+  const SHARED_AT = '2026-11-07T12:00:00.000Z';
+  const status = { hasUnviewedSharedContext: true, sharedContext: { content: 'x', sharedAt: SHARED_AT } };
+  const actions = {
+    actions: [
+      { type: 'context_received', id: MESSAGE, data: { timestamp: SHARED_AT } },
+      { type: 'context_received', id: 'newer', data: { timestamp: '2026-11-07T12:05:00.000Z' } },
+      { type: 'share_offer', id: 'offer', data: {} },
+    ],
+  };
+
+  const setup = () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+    queryClient.setQueryData(stageKeys.empathyStatus(SESSION), status);
+    queryClient.setQueryData(stageKeys.pendingActions(SESSION), actions);
+    const { result } = renderHook(() => useMarkSharedContextViewed(SESSION), {
+      wrapper: createWrapperWithClient(queryClient),
+    });
+    return { queryClient, result };
+  };
+
+  beforeEach(() => jest.clearAllMocks());
+
+  it('posts the viewed frame and clears unviewed context optimistically', async () => {
+    mockPost.mockResolvedValueOnce({ success: true, advanced: true, lastViewedSharedContextAt: SHARED_AT });
+    const { queryClient, result } = setup();
+    await act(async () => {
+      result.current.mutate({ messageId: MESSAGE, timestamp: SHARED_AT });
+    });
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(mockPost).toHaveBeenCalledWith(`/sessions/${SESSION}/shared-context-viewed`, { messageId: MESSAGE });
+    expect(queryClient.getQueryData<typeof status>(stageKeys.empathyStatus(SESSION))?.hasUnviewedSharedContext).toBe(false);
+    expect(
+      queryClient.getQueryData<typeof actions>(stageKeys.pendingActions(SESSION))?.actions.map((a) => a.id),
+    ).toEqual(['newer', 'offer']);
+  });
+
+  it('keeps unviewed context when the viewed frame is older than the newest delivered one', async () => {
+    mockPost.mockResolvedValueOnce({ success: true, advanced: true, lastViewedSharedContextAt: SHARED_AT });
+    const { queryClient, result } = setup();
+    await act(async () => {
+      result.current.mutate({ messageId: MESSAGE, timestamp: '2026-11-07T11:00:00.000Z' });
+    });
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(queryClient.getQueryData<typeof status>(stageKeys.empathyStatus(SESSION))?.hasUnviewedSharedContext).toBe(true);
+  });
+
+  it('rolls the optimistic write back on error', async () => {
+    mockPost.mockRejectedValueOnce(new Error('network'));
+    const { queryClient, result } = setup();
+    await act(async () => {
+      result.current.mutate({ messageId: MESSAGE, timestamp: SHARED_AT });
+    });
+    await waitFor(() => expect(result.current.isError).toBe(true));
+    expect(queryClient.getQueryData(stageKeys.empathyStatus(SESSION))).toEqual(status);
+    expect(queryClient.getQueryData(stageKeys.pendingActions(SESSION))).toEqual(actions);
   });
 });

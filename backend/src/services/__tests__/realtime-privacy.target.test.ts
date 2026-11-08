@@ -240,21 +240,25 @@ describeTarget('Stage 2 realtime payloads (I1): what each participant receives',
   // TS-12: the TS-9 / TS-11 leftovers (work-t4zp, work-a39h.11.26), R36
   // ---------------------------------------------------------------------------
 
-  it('TS-12: partner.session_viewed / share_tab_viewed carry presence only; the partner gets an addressed content-free ping', async () => {
+  it('TS-12: partner.session_viewed / share_tab_viewed (shared-context-viewed) carry presence only; the partner gets an addressed content-free ping', async () => {
     // Mobile: UnifiedSessionScreen.tsx onSessionEvent handles both on the
     // SESSION channel (presence), and empathy.status_updated (addressed,
     // invalidates the empathy status) — no user-channel handler exists for them.
+    // shared-context-viewed (work-2doq) needs the frame Ada was shown: the
+    // SHARED_CONTEXT Bob's accepted offer delivered to her (previous test).
     const sid = harness.sessionId;
-    for (const [path, event] of [
-      ['viewed', 'partner.session_viewed'],
-      ['share-tab-viewed', 'partner.share_tab_viewed'],
+    const [frame] = await rows<{ id: string }>(`SELECT id FROM message WHERE kind = 'SHARED_CONTEXT'`);
+    expect(frame).toBeDefined();
+    for (const [path, event, body] of [
+      ['viewed', 'partner.session_viewed', {}],
+      ['shared-context-viewed', 'partner.share_tab_viewed', { messageId: frame.id }],
     ] as const) {
       const r = await harness.step({
         label: `${path} as ada`,
         actor: ada,
         tables: scope,
         asyncBoundary: true,
-        call: agent => agent.post(`/api/v1/sessions/${sid}/${path}`).send({}),
+        call: agent => agent.post(`/api/v1/sessions/${sid}/${path}`).send(body),
       });
       expect(r.status).toBe(200);
       await quiesce();

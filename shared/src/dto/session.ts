@@ -195,6 +195,26 @@ export interface MarkSessionViewedResponse {
 }
 
 /**
+ * Request to mark a received shared frame ("Context from X" / "Feedback from X")
+ * as shown on the recipient's screen. POST /sessions/:id/shared-context-viewed
+ */
+export interface MarkSharedContextViewedRequest {
+  /** The SHARED_CONTEXT / VALIDATION_FEEDBACK message delivered to the caller */
+  messageId: string;
+}
+
+/**
+ * Response after marking a shared frame viewed.
+ */
+export interface MarkSharedContextViewedResponse {
+  success: boolean;
+  /** False when the frame was already covered (nothing written, nothing published) */
+  advanced: boolean;
+  /** The caller's stored viewed instant (covers this frame and every older one) */
+  lastViewedSharedContextAt: string;
+}
+
+/**
  * Response for getting unread session count (for tab badge)
  */
 export interface UnreadSessionCountResponse {

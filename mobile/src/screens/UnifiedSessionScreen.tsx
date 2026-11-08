@@ -71,7 +71,10 @@ import { GuidedActionPanel } from '../components/GuidedActionPanel';
 import { TypingIndicator } from '../components/TypingIndicator';
 
 import { useUnifiedSession, InlineChatCard } from '../hooks/useUnifiedSession';
-import { useConfirmTopicFrame } from '../hooks/useSessions';
+import { useConfirmTopicFrame, useMarkSharedContextViewed } from '../hooks/useSessions';
+import { useIsFocused } from '@react-navigation/native';
+import { newlyViewedSharedFrames, sharedFrameViewTracker } from '../lib/chat/sharedFrameViews';
+import type { ChatListItem } from '../lib/chat/render/types';
 import { useValidationFeedbackCoachChat } from '../hooks/useRefinementChat';
 import { useChatUIState } from '../hooks/useChatUIState';
 import { createInvitationLink } from '../hooks/useInvitation';
@@ -570,6 +573,36 @@ export function UnifiedSessionScreen({
   const queryClient = useQueryClient();
   const router = useRouter();
   const { showError, showWarning } = useToast();
+
+  // "Seen" for shared context (work-2doq): when a received "Context from X" /
+  // "Feedback from X" frame is on screen while this screen is focused, report
+  // it once. The latest viewable items are kept so that a frame already on
+  // screen when the screen regains focus is reported then.
+  const isScreenFocused = useIsFocused();
+  const { mutate: markSharedContextViewed } = useMarkSharedContextViewed(sessionId);
+  const viewableChatItemsRef = useRef<ChatListItem[]>([]);
+  const reportViewableChatItems = useCallback(
+    (items: ChatListItem[]) => {
+      viewableChatItemsRef.current = items;
+      const ids = newlyViewedSharedFrames({
+        sessionId,
+        currentUserId: user?.id,
+        isFocused: isScreenFocused,
+        viewable: items.map((item) => ({ item, isViewable: true })),
+      });
+      for (const id of ids) {
+        const frame = items.find((item) => item.id === id) as { timestamp?: string } | undefined;
+        markSharedContextViewed(
+          { messageId: id, timestamp: frame?.timestamp ?? new Date().toISOString() },
+          { onError: () => sharedFrameViewTracker.release(sessionId, id) },
+        );
+      }
+    },
+    [sessionId, user?.id, isScreenFocused, markSharedContextViewed],
+  );
+  useEffect(() => {
+    if (isScreenFocused) reportViewableChatItems(viewableChatItemsRef.current);
+  }, [isScreenFocused, reportViewableChatItems]);
 
   // Real-time presence tracking
 
@@ -4343,6 +4376,7 @@ export function UnifiedSessionScreen({
             isLoadingMore: isFetchingMoreMessages,
           }}
           onTypewriterStateChange={setIsTypewriterAnimating}
+          onItemsViewed={reportViewableChatItems}
           onTypewriterComplete={() => {
             // Reset justSignedCompact after first message animates
             if (justSignedCompact) {

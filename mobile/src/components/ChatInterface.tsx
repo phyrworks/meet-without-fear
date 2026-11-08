@@ -11,6 +11,7 @@ import {
   NativeSyntheticEvent,
   NativeScrollEvent,
   LayoutChangeEvent,
+  ViewToken,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { MessageRole } from '@meet-without-fear/shared';
@@ -200,6 +201,13 @@ interface ChatInterfaceProps {
     isFromMe?: boolean,
     indicatorType?: ChatIndicatorType,
   ) => void;
+  /**
+   * Called with every currently viewable list item (at least half on screen
+   * for VIEWABILITY_MIN_MS) whenever viewability changes. The session screen
+   * uses it to mark received shared frames as seen (work-2doq;
+   * lib/chat/sharedFrameViews.ts de-duplicates).
+   */
+  onItemsViewed?: (items: ChatListItem[]) => void;
   emotionSlider?: ChatEmotionSliderProps;
   pagination?: ChatPaginationProps;
   readBoundary?: ChatReadBoundaryProps;
@@ -215,6 +223,10 @@ interface ChatInterfaceProps {
 const DEFAULT_EMPTY_TITLE = 'Start the Conversation';
 const DEFAULT_EMPTY_MESSAGE =
   "Share what's on your mind. I'm here to listen and help you work through it.";
+
+/** An item counts as viewed once at least half of it has been on screen this long. */
+const VIEWABILITY_MIN_MS = 300;
+const VIEWABILITY_CONFIG = { itemVisiblePercentThreshold: 50, minimumViewTime: VIEWABILITY_MIN_MS };
 
 export function ChatInterface({
   sessionId,
@@ -235,6 +247,7 @@ export function ChatInterface({
   skipInitialHistory = false,
   partnerName,
   onContextSharedPress,
+  onItemsViewed,
   emotionSlider,
   pagination,
   readBoundary,
@@ -782,6 +795,19 @@ export function ChatInterface({
 
   const keyExtractor = useCallback((item: ChatListItem) => getAnimationIdentity(item.id), []);
 
+  // FlatList does not support changing onViewableItemsChanged after mount, so
+  // the handler is stable and reads the latest prop through a ref.
+  const onItemsViewedRef = useRef(onItemsViewed);
+  onItemsViewedRef.current = onItemsViewed;
+  const handleViewableItemsChanged = useCallback(
+    ({ viewableItems }: { viewableItems: ViewToken<ChatListItem>[]; changed: ViewToken<ChatListItem>[] }) => {
+      onItemsViewedRef.current?.(
+        viewableItems.filter((token) => token.isViewable && token.item).map((token) => token.item),
+      );
+    },
+    [],
+  );
+
   // Footer is visually at the bottom (Typing Indicator)
   // We always render a container with minHeight to prevent layout shift
   // when the indicator disappears and the AI message appears
@@ -1045,6 +1071,8 @@ export function ChatInterface({
       onScrollBeginDrag={handleScrollBeginDrag}
       scrollEventThrottle={16}
       onContentSizeChange={handleContentSizeChange}
+      viewabilityConfig={VIEWABILITY_CONFIG}
+      onViewableItemsChanged={handleViewableItemsChanged}
     />
   );
 

@@ -43,6 +43,22 @@ The flow below is unchanged in product terms; the data layer under it is the tar
   subject with a `consent` row naming it (no requester); the shared text is delivered by the job
   as `SHARED_CONTEXT` in the author's conversation. The pending-actions read writes
   `delivery_notified_at` / `seen_notified_at`, so a delivery is counted once.
+- **Delivered → Seen** (work-2doq). The author's chat renders the delivered text inline as a
+  "Context from &lt;name&gt;" frame (a validation-feedback frame reads "Feedback from &lt;name&gt;").
+  When that frame is at least half on screen for 300 ms while the session screen is focused,
+  mobile posts `POST /sessions/:id/shared-context-viewed { messageId }` once per frame
+  (`mobile/src/lib/chat/sharedFrameViews.ts`, `ChatInterface` `onItemsViewed`). The server
+  (`services/shared-context-view.ts`) accepts only a `SHARED_CONTEXT` / `VALIDATION_FEEDBACK`
+  message in the caller's own conversation sent by someone else (else 404) and advances the
+  caller's `conversation_read_state.last_viewed_share_tab_at` (column name from the retired Share
+  tab) to "now", capped 1 ms before any newer delivered frame not yet shown; a frame already
+  covered writes nothing, and the instant never moves back. That one instant drives:
+  the subject's `mySharedContext.deliveryStatus` = `seen` once it reaches the offer's
+  `delivered_at` (`getSharedContentDeliveryStatus`; never before delivery), the author's
+  `hasUnviewedSharedContext` (`empathy-status.ts`) and their unviewed `context_received` pending
+  actions and badge (`notifications.ts`). A view that advanced the instant publishes
+  `partner.share_tab_viewed` (presence only) and an addressed `empathy.status_updated` ping to the
+  subject, whose client refetches its own status and shows "✓ Seen".
 
 Code: `backend/src/services/empathy-store.ts` (the rules), `services/reconciler/*`,
 `controllers/{stage2,reconciler,consent,notifications}.ts`.
@@ -420,6 +436,7 @@ Only one panel shows at a time, in this priority order:
 | `empathy.revealed` | Empathy revealed (mutual reveal — both directions READY) | `empathyStatus`, `partnerEmpathy` | Subject can validate; also triggers an AI quality commentary message for each subject based on `gapSeverity` of the corresponding reconciler result |
 | `partner.stage_completed` | Partner completes a stage; Stage 2 validation emits this only for `validated=true` | `empathyStatus`, `progress` | Update waiting status |
 | `partner.session_viewed` | Partner views session | `empathyStatus` (delivery status) | Update delivery indicator |
+| `partner.share_tab_viewed` + addressed `empathy.status_updated` | Partner's chat showed a received shared frame (`POST /sessions/:id/shared-context-viewed`, only when the viewed instant advanced) | presence; the ping refetches `empathyStatus` | Sender's shared frame reads "✓ Seen" |
 | `empathy.validated` | Partner validates empathy | `empathyStatus` | Show validation result |
 | `empathy.status_updated` (status=`REFINING`) | Subject sends Feedback Coach validation feedback | `empathyStatus`, `messages` | Guesser sees targeted feedback and revision UI |
 

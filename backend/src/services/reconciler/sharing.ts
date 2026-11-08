@@ -944,7 +944,7 @@ export async function getSharedContextForGuesser(
 
 /**
  * The delivery status of what the subject shared: 'delivered' once the job
- * delivered it, 'seen' once the recipient viewed their Share tab after it.
+ * delivered it, 'seen' once the recipient's chat showed the frame (work-2doq).
  */
 export async function getSharedContentDeliveryStatus(
   sessionId: string,
@@ -970,12 +970,17 @@ export async function getSharedContentDeliveryStatus(
   if (!offer || !offer.sharedContent || !offer.sharedAt) {
     return { hasSharedContent: false, deliveryStatus: null, sharedAt: null, sharedContent: null };
   }
-  // The recipient's Share-tab instant (an instant, never content — as TS-9's presence read).
+  // The recipient's shared-frame viewed instant (an instant, never content — as
+  // TS-9's presence read), written when their chat showed the frame
+  // (services/shared-context-view.ts). Seen only once the offer was delivered
+  // and the instant reaches the delivery: a view of an older frame in the
+  // window between consent and delivery must not mark the newer share seen.
   const readState = await prisma.conversationReadState.findUnique({
     where: { participantId: offer.attempt.authorParticipantId },
     select: { lastViewedShareTabAt: true },
   });
-  const seen = !!readState?.lastViewedShareTabAt && readState.lastViewedShareTabAt >= offer.sharedAt;
+  const deliveredAt = offer.deliveryStatus === 'PENDING' ? null : (offer.deliveredAt ?? offer.sharedAt);
+  const seen = !!deliveredAt && !!readState?.lastViewedShareTabAt && readState.lastViewedShareTabAt >= deliveredAt;
   return {
     hasSharedContent: true,
     deliveryStatus: seen ? 'seen' : 'delivered',

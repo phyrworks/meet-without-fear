@@ -192,7 +192,7 @@ model UserVessel {
   // === Session Read State ===
   lastViewedAt         DateTime?  // When user last opened this session's chat
   lastSeenChatItemId   String?    // ID of last chat item seen (for "new messages" line)
-  lastViewedShareTabAt DateTime?  // When user last viewed the Share/Partner tab
+  lastViewedShareTabAt DateTime?  // Viewed instant for received shared frames ("Context from X"), set by POST /sessions/:id/shared-context-viewed (name predates the Share tab removal; work-2doq)
   lastActiveAt         DateTime?  // When user last actively did something (presence indicator)
   archivedAt           DateTime?  // When user removed session from their conversation list
 

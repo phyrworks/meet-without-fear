@@ -103,7 +103,7 @@ export interface ChatUIStateInputs extends WaitingStatusInputs {
   hasRespondedToShareOfferLocal: boolean;
 
   // Shared context viewing (Guesser side)
-  hasUnviewedSharedContext: boolean; // Guesser must view Share tab before continuing
+  hasUnviewedSharedContext: boolean; // Newest delivered shared context not yet shown on screen (work-2doq)
 
   // Stage 3: Needs
   needsAvailable: boolean; // Needs have been extracted and are available for review

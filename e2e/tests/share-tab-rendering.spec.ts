@@ -12,7 +12,10 @@
  * "Context from X" / "Empathy shared with X", plus a delivery line on content the
  * viewer sent). The guarantees this spec checks are unchanged:
  * 1. No duplicate copies of the shared context (the bug this spec was written for)
- * 2. The sender sees a delivered status, never "Not delivered yet"
+ * 2. The sender sees "Delivered" (never "Not delivered yet") until the recipient's chat
+ *    shows the frame, then "✓ Seen" (work-2doq: the recipient's client posts
+ *    /shared-context-viewed when the frame is on screen; hermetic E2E has no Ably, so the
+ *    sender's update is checked after a reload)
  * 3. The share suggestion is not offered again once the content was shared
  * 4. The recipient sees the shared context and still sees their own empathy statement
  * 5. Privacy: the subject (User B) does not see User A's held empathy statement
@@ -20,7 +23,7 @@
 
 import { test, expect, BrowserContext, Page } from '@playwright/test';
 import { SessionBuilder, SessionSetupResult } from '../helpers/session-builder';
-import { getE2EHeaders, handleMoodCheck } from '../helpers';
+import { getE2EHeaders, handleMoodCheck, waitForSharedContextViewed } from '../helpers';
 
 const API_BASE_URL = process.env.API_BASE_URL || 'http://localhost:3000';
 const APP_BASE_URL = process.env.APP_BASE_URL || 'http://localhost:8082';
@@ -40,13 +43,15 @@ const USER_A_EMPATHY_TEXT = /I understand you might be feeling stressed from wor
 async function openSessionChat(
   context: BrowserContext,
   sessionSetup: SessionSetupResult,
-  user: 'A' | 'B'
+  user: 'A' | 'B',
+  beforeGoto?: (page: Page) => void
 ): Promise<Page> {
   const userInfo = user === 'A' ? sessionSetup.userA : sessionSetup.userB;
   if (!userInfo) {
     throw new Error(`User ${user} not found in session setup`);
   }
   const page = await context.newPage();
+  beforeGoto?.(page);
 
   const url = `${APP_BASE_URL}/session/${sessionSetup.session.id}?e2e-user-id=${userInfo.id}&e2e-user-email=${encodeURIComponent(userInfo.email)}`;
   await page.goto(url);
@@ -99,8 +104,9 @@ test.describe('Shared context rendering (from database)', () => {
     await expect(sentFrame).toContainText(SHARED_CONTEXT_TEXT);
     await expect(page.getByText(SHARED_CONTEXT_TEXT)).toHaveCount(1);
 
-    // Delivery status is shown on the sender's frame, and never "Not delivered yet"
-    await expect(sentFrame.getByText(/^(Delivered|✓ Seen)$/)).toBeVisible();
+    // Delivery status is shown on the sender's frame, and never "Not delivered yet".
+    // User A has not opened the session yet, so it is not seen.
+    await expect(sentFrame.getByText('Delivered', { exact: true })).toBeVisible();
     await expect(page.getByText('Not delivered yet', { exact: true })).toHaveCount(0);
 
     // The share suggestion is not offered again (content was already shared)
@@ -121,11 +127,20 @@ test.describe('Shared context rendering (from database)', () => {
     const context = await browser.newContext({
       extraHTTPHeaders: getE2EHeaders(setup.userA.email, setup.userA.id),
     });
-    const page = await openSessionChat(context, setup, 'A');
+    let viewed: ReturnType<typeof waitForSharedContextViewed> | undefined;
+    const page = await openSessionChat(context, setup, 'A', (p) => {
+      viewed = waitForSharedContextViewed(p, 20000);
+    });
 
     // User A sees the context Darryl shared, once, in a received frame
     const receivedFrame = sharedFrames(page, `Context from ${userB.name}`);
     await expect(receivedFrame).toHaveCount(1, { timeout: 15000 });
+
+    // The frame on screen is reported as viewed (work-2doq), exactly what makes it "Seen"
+    const viewedResponse = await viewed!;
+    expect(viewedResponse.status()).toBe(200);
+    const viewedBody = (await viewedResponse.json()) as { data: { advanced: boolean } };
+    expect(viewedBody.data.advanced).toBe(true);
     await page.screenshot({ path: 'test-results/share-tab-user-a-view.png' });
     await expect(receivedFrame).toContainText(SHARED_CONTEXT_TEXT);
     await expect(page.getByText(SHARED_CONTEXT_TEXT)).toHaveCount(1);
@@ -136,9 +151,11 @@ test.describe('Shared context rendering (from database)', () => {
     await context.close();
   });
 
-  test('Shared context still renders once after the partner has opened the session', async ({ browser }) => {
-    // Runs after User A has loaded the session (previous test), so the delivery line
-    // may read "Delivered" or "✓ Seen". Reloading must not duplicate the frame.
+  test('Shared context reads Seen, once, after the partner has viewed it', async ({ browser }) => {
+    // Runs after User A's chat showed the frame (previous test), so the delivery line
+    // reads "✓ Seen". Hermetic E2E has no Ably: the sender sees it on load / reload
+    // (production: an addressed empathy.status_updated ping refetches it). Reloading
+    // must not duplicate the frame.
     const context = await browser.newContext({
       extraHTTPHeaders: getE2EHeaders(setup.userB!.email, setup.userB!.id),
     });
@@ -154,7 +171,8 @@ test.describe('Shared context rendering (from database)', () => {
 
     await expect(sentFrame).toHaveCount(1, { timeout: 15000 });
     await expect(page.getByText(SHARED_CONTEXT_TEXT)).toHaveCount(1);
-    await expect(sentFrame.getByText(/^(Delivered|✓ Seen)$/)).toBeVisible();
+    await expect(sentFrame.getByText('✓ Seen', { exact: true })).toBeVisible();
+    await expect(sentFrame.getByText('Delivered', { exact: true })).toHaveCount(0);
 
     await context.close();
   });

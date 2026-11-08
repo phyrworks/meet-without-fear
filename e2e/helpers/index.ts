@@ -19,6 +19,7 @@ export {
   waitForShareTopicPanel,
   shareFromShareTopicDrawer,
   declineShareTopic,
+  waitForSharedContextViewed,
   signCompact,
   completeInviterInvitationFlow,
   confirmInvitationTopicAndContinue,
