@@ -15,7 +15,7 @@
  * - Test passes 3 consecutive runs without flakiness
  *
  * This test composes the proven patterns from two-browser-stage-2.spec.ts,
- * two-browser-stage-3.spec.ts, and two-browser-stage-4.spec.ts into a
+ * two-browser-stage-3.spec.ts, and two-browser-stage-4-redesign.spec.ts into a
  * dedicated full-flow test focused on the "proof" use case for milestone validation.
  */
 

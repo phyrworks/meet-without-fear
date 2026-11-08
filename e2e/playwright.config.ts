@@ -147,14 +147,7 @@ export default defineConfig({
         baseURL: 'http://localhost:8082',
       },
     },
-    // Stage 4: Two-browser strategic repair test
-    {
-      name: 'two-browser-stage-4',
-      testMatch: /two-browser-stage-4\.spec\.ts/,
-      use: {
-        baseURL: 'http://localhost:8082',
-      },
-    },
+    // Stage 4: Two-browser strategic repair test (redesign flow)
     {
       name: 'two-browser-stage-4-redesign',
       testMatch: /two-browser-stage-4-redesign\.spec\.ts/,
