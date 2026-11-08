@@ -73,7 +73,8 @@ import { TypingIndicator } from '../components/TypingIndicator';
 import { useUnifiedSession, InlineChatCard } from '../hooks/useUnifiedSession';
 import { useConfirmTopicFrame, useMarkSharedContextViewed } from '../hooks/useSessions';
 import { useIsFocused } from '@react-navigation/native';
-import { newlyViewedSharedFrames, sharedFrameViewTracker } from '../lib/chat/sharedFrameViews';
+import { useSharedFrameViewReporting } from '../hooks/useSharedFrameViewReporting';
+import { useAppForeground } from '../hooks/useAppForeground';
 import type { ChatListItem } from '../lib/chat/render/types';
 import { useValidationFeedbackCoachChat } from '../hooks/useRefinementChat';
 import { useChatUIState } from '../hooks/useChatUIState';
@@ -574,35 +575,18 @@ export function UnifiedSessionScreen({
   const router = useRouter();
   const { showError, showWarning } = useToast();
 
-  // "Seen" for shared context (work-2doq): when a received "Context from X" /
-  // "Feedback from X" frame is on screen while this screen is focused, report
-  // it once. The latest viewable items are kept so that a frame already on
-  // screen when the screen regains focus is reported then.
+  // "Seen" for shared context (work-2doq): report received shared frames on
+  // screen while this screen is focused AND the app is in the foreground with
+  // its page visible (hooks/useSharedFrameViewReporting.ts).
   const isScreenFocused = useIsFocused();
+  const isAppForeground = useAppForeground();
   const { mutate: markSharedContextViewed } = useMarkSharedContextViewed(sessionId);
-  const viewableChatItemsRef = useRef<ChatListItem[]>([]);
-  const reportViewableChatItems = useCallback(
-    (items: ChatListItem[]) => {
-      viewableChatItemsRef.current = items;
-      const ids = newlyViewedSharedFrames({
-        sessionId,
-        currentUserId: user?.id,
-        isFocused: isScreenFocused,
-        viewable: items.map((item) => ({ item, isViewable: true })),
-      });
-      for (const id of ids) {
-        const frame = items.find((item) => item.id === id) as { timestamp?: string } | undefined;
-        markSharedContextViewed(
-          { messageId: id, timestamp: frame?.timestamp ?? new Date().toISOString() },
-          { onError: () => sharedFrameViewTracker.release(sessionId, id) },
-        );
-      }
-    },
-    [sessionId, user?.id, isScreenFocused, markSharedContextViewed],
-  );
-  useEffect(() => {
-    if (isScreenFocused) reportViewableChatItems(viewableChatItemsRef.current);
-  }, [isScreenFocused, reportViewableChatItems]);
+  const reportViewableChatItems = useSharedFrameViewReporting<ChatListItem>({
+    sessionId,
+    currentUserId: user?.id,
+    isShown: isScreenFocused && isAppForeground,
+    report: markSharedContextViewed,
+  });
 
   // Real-time presence tracking
 

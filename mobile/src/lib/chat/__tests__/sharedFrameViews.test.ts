@@ -1,6 +1,8 @@
 import { MessageRole } from '@meet-without-fear/shared';
 import {
+  MAX_REPORT_ATTEMPTS,
   createSharedFrameViewTracker,
+  isRetryableReportError,
   newlyViewedSharedFrames,
   receivedSharedFrameId,
 } from '../sharedFrameViews';
@@ -52,7 +54,8 @@ describe('newlyViewedSharedFrames', () => {
     tracker: ReturnType<typeof createSharedFrameViewTracker>,
     viewable: { item: Record<string, unknown>; isViewable: boolean }[],
     isFocused = true,
-  ) => newlyViewedSharedFrames({ sessionId: SESSION, currentUserId: ME, isFocused, viewable, tracker });
+    retry = false,
+  ) => newlyViewedSharedFrames({ sessionId: SESSION, currentUserId: ME, isFocused, viewable, tracker, retry });
 
   it('fires once for a new shared context, not again on scroll or re-render', () => {
     const tracker = createSharedFrameViewTracker();
@@ -90,11 +93,37 @@ describe('newlyViewedSharedFrames', () => {
     expect(run(tracker, [{ item: received(), isViewable: true }], true)).toEqual([CONTEXT_ID]);
   });
 
-  it('retries after release (the request failed)', () => {
+  it('a retryable failure (5xx / network) is retried on the next focus / foreground only, bounded', () => {
     const tracker = createSharedFrameViewTracker();
-    expect(run(tracker, [{ item: received(), isViewable: true }])).toEqual([CONTEXT_ID]);
-    tracker.release(SESSION, CONTEXT_ID);
-    expect(run(tracker, [{ item: received(), isViewable: true }])).toEqual([CONTEXT_ID]);
+    const shown = [{ item: received(), isViewable: true }];
+    expect(run(tracker, shown)).toEqual([CONTEXT_ID]);
+    tracker.fail(SESSION, CONTEXT_ID, true);
+    // Scrolling / re-rendering does not re-post a failed frame...
+    expect(run(tracker, shown)).toEqual([]);
+    expect(run(tracker, shown)).toEqual([]);
+    // ...regaining focus / returning to the foreground does, up to MAX_REPORT_ATTEMPTS in all.
+    for (let attempt = 2; attempt <= MAX_REPORT_ATTEMPTS; attempt++) {
+      expect(run(tracker, shown, true, true)).toEqual([CONTEXT_ID]);
+      expect(run(tracker, shown, true, true)).toEqual([]); // in flight: not doubled
+      tracker.fail(SESSION, CONTEXT_ID, true);
+    }
+    expect(run(tracker, shown, true, true)).toEqual([]);
+  });
+
+  it('a 4xx failure is done for good, even on focus', () => {
+    const tracker = createSharedFrameViewTracker();
+    const shown = [{ item: received(), isViewable: true }];
+    expect(run(tracker, shown)).toEqual([CONTEXT_ID]);
+    tracker.fail(SESSION, CONTEXT_ID, false);
+    expect(run(tracker, shown, true, true)).toEqual([]);
+    expect(run(tracker, shown)).toEqual([]);
+  });
+
+  it('retry does not re-post a frame that was reported successfully', () => {
+    const tracker = createSharedFrameViewTracker();
+    const shown = [{ item: received(), isViewable: true }];
+    expect(run(tracker, shown)).toEqual([CONTEXT_ID]);
+    expect(run(tracker, shown, true, true)).toEqual([]);
   });
 
   it('keys by session', () => {
@@ -109,5 +138,16 @@ describe('newlyViewedSharedFrames', () => {
         tracker,
       }),
     ).toEqual([CONTEXT_ID]);
+  });
+});
+
+describe('isRetryableReportError', () => {
+  it('retries network errors and 5xx, never 4xx', () => {
+    expect(isRetryableReportError(new Error('Network request failed'))).toBe(true);
+    expect(isRetryableReportError({ status: 0 })).toBe(true);
+    expect(isRetryableReportError({ status: 500 })).toBe(true);
+    expect(isRetryableReportError({ status: 503 })).toBe(true);
+    expect(isRetryableReportError({ status: 400 })).toBe(false);
+    expect(isRetryableReportError({ status: 404 })).toBe(false);
   });
 });

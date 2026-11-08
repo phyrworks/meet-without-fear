@@ -45,9 +45,14 @@ The flow below is unchanged in product terms; the data layer under it is the tar
   `delivery_notified_at` / `seen_notified_at`, so a delivery is counted once.
 - **Delivered → Seen** (work-2doq). The author's chat renders the delivered text inline as a
   "Context from &lt;name&gt;" frame (a validation-feedback frame reads "Feedback from &lt;name&gt;").
-  When that frame is at least half on screen for 300 ms while the session screen is focused,
-  mobile posts `POST /sessions/:id/shared-context-viewed { messageId }` once per frame
-  (`mobile/src/lib/chat/sharedFrameViews.ts`, `ChatInterface` `onItemsViewed`). The server
+  When that frame is shown for 300 ms (half of it on screen, or — for a frame taller than the
+  screen — covering half the viewport; `mobile/src/lib/chat/render/viewability.ts`) while the
+  session screen is focused and the app is in the foreground with its page visible
+  (`hooks/useAppForeground.ts`), mobile posts `POST /sessions/:id/shared-context-viewed
+  { messageId }` once per frame (`hooks/useSharedFrameViewReporting.ts`,
+  `lib/chat/sharedFrameViews.ts`). A frame already on screen is reported when focus / the
+  foreground returns. A 4xx is final; a 5xx / network failure is retried only on the next return
+  to focus / foreground, at most 3 attempts. The server
   (`services/shared-context-view.ts`) accepts only a `SHARED_CONTEXT` / `VALIDATION_FEEDBACK`
   message in the caller's own conversation sent by someone else (else 404) and advances the
   caller's `conversation_read_state.last_viewed_share_tab_at` (column name from the retired Share

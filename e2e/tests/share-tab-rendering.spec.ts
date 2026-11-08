@@ -136,7 +136,10 @@ test.describe('Shared context rendering (from database)', () => {
     const receivedFrame = sharedFrames(page, `Context from ${userB.name}`);
     await expect(receivedFrame).toHaveCount(1, { timeout: 15000 });
 
-    // The frame on screen is reported as viewed (work-2doq), exactly what makes it "Seen"
+    // Bring the frame on screen deterministically (it may start above the fold);
+    // once shown it is reported as viewed (work-2doq), exactly what makes it "Seen"
+    await receivedFrame.scrollIntoViewIfNeeded();
+    await expect(receivedFrame).toBeInViewport({ ratio: 0.5 });
     const viewedResponse = await viewed!;
     expect(viewedResponse.status()).toBe(200);
     const viewedBody = (await viewedResponse.json()) as { data: { advanced: boolean } };

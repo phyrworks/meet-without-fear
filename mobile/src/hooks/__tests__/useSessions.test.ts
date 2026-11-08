@@ -557,4 +557,28 @@ describe('useMarkSharedContextViewed (work-2doq)', () => {
     expect(queryClient.getQueryData(stageKeys.empathyStatus(SESSION))).toEqual(status);
     expect(queryClient.getQueryData(stageKeys.pendingActions(SESSION))).toEqual(actions);
   });
+
+  it('records the outcome in the hook: a 4xx is final, a 5xx is retried on the next focus', async () => {
+    const { sharedFrameViewTracker } = jest.requireActual('../../lib/chat/sharedFrameViews');
+    const { ApiClientError } = jest.requireMock('../../lib/api');
+    const rejected = '019a5f3e-1c2d-7a00-8b00-0000000000aa';
+    const flaky = '019a5f3e-1c2d-7a00-8b00-0000000000bb';
+    expect(sharedFrameViewTracker.take(SESSION, [rejected, flaky])).toEqual([rejected, flaky]);
+
+    mockPost.mockRejectedValueOnce(new ApiClientError({ code: 'NOT_FOUND', message: 'no' }, 404));
+    mockPost.mockRejectedValueOnce(new ApiClientError({ code: 'INTERNAL_ERROR', message: 'boom' }, 500));
+    const { result } = setup();
+    await act(async () => {
+      result.current.mutate({ messageId: rejected, timestamp: SHARED_AT });
+    });
+    await waitFor(() => expect(result.current.isError).toBe(true));
+    await act(async () => {
+      result.current.mutate({ messageId: flaky, timestamp: SHARED_AT });
+    });
+    await waitFor(() => expect(mockPost).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(result.current.isError).toBe(true));
+
+    expect(sharedFrameViewTracker.take(SESSION, [rejected, flaky])).toEqual([]);
+    expect(sharedFrameViewTracker.take(SESSION, [rejected, flaky], { retry: true })).toEqual([flaky]);
+  });
 });

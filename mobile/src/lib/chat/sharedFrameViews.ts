@@ -10,6 +10,8 @@
  * "✓ Seen" and clears the recipient's unviewed state. The server is
  * idempotent, so the de-duplication here only keeps the endpoint quiet on
  * scroll and re-render; it is not the source of truth for anything on screen.
+ * "Focused" here means the session screen is focused AND the app is in the
+ * foreground with its page visible (hooks/useAppForeground.ts).
  */
 
 import { MessageRole, isUuidV7 } from '@meet-without-fear/shared';
@@ -44,31 +46,62 @@ export function receivedSharedFrameId(
   return item.id;
 }
 
+/** At most this many requests per frame (first report + retries). */
+export const MAX_REPORT_ATTEMPTS = 3;
+
 export interface SharedFrameViewTracker {
-  /** Of `ids`, those not yet reported for `sessionId`; marks them reported. */
-  take(sessionId: string, ids: string[]): string[];
-  /** Forget a report (the request failed), so the next view retries it. */
-  release(sessionId: string, id: string): void;
+  /**
+   * Of `ids`, those to report now; marks them in flight. A frame whose last
+   * report failed retryably is only returned when `retry` is set (the screen
+   * just regained focus / the app returned to the foreground), so a failing
+   * frame never re-posts on every scroll.
+   */
+  take(sessionId: string, ids: string[], opts?: { retry?: boolean }): string[];
+  /**
+   * A report failed. Retryable (5xx / network) and under MAX_REPORT_ATTEMPTS:
+   * retried on the next focus / foreground. Otherwise (4xx: the server will
+   * keep refusing it) done for good.
+   */
+  fail(sessionId: string, id: string, retryable: boolean): void;
 }
 
+type FrameReport = { state: 'reported' | 'retry' | 'done'; attempts: number };
+
 export function createSharedFrameViewTracker(): SharedFrameViewTracker {
-  const reported = new Set<string>();
+  const reports = new Map<string, FrameReport>();
   const key = (sessionId: string, id: string) => `${sessionId}:${id}`;
   return {
-    take(sessionId, ids) {
+    take(sessionId, ids, opts) {
       const fresh: string[] = [];
       for (const id of ids) {
         const k = key(sessionId, id);
-        if (reported.has(k)) continue;
-        reported.add(k);
-        fresh.push(id);
+        const report = reports.get(k);
+        if (!report) {
+          reports.set(k, { state: 'reported', attempts: 1 });
+          fresh.push(id);
+        } else if (report.state === 'retry' && opts?.retry) {
+          reports.set(k, { state: 'reported', attempts: report.attempts + 1 });
+          fresh.push(id);
+        }
       }
       return fresh;
     },
-    release(sessionId, id) {
-      reported.delete(key(sessionId, id));
+    fail(sessionId, id, retryable) {
+      const k = key(sessionId, id);
+      const attempts = reports.get(k)?.attempts ?? 1;
+      reports.set(k, { state: retryable && attempts < MAX_REPORT_ATTEMPTS ? 'retry' : 'done', attempts });
     },
   };
+}
+
+/**
+ * Whether a failed report is worth retrying: network errors and 5xx are;
+ * a 4xx (bad id, not the caller's frame) never will succeed.
+ */
+export function isRetryableReportError(error: unknown): boolean {
+  const status = (error as { status?: unknown } | null)?.status;
+  if (typeof status !== 'number' || status <= 0) return true;
+  return status >= 500;
 }
 
 /** App-lifetime tracker: survives the chat list remounting within one app run. */
@@ -76,20 +109,23 @@ export const sharedFrameViewTracker = createSharedFrameViewTracker();
 
 /**
  * The received shared frames among `viewable` to report now: none while the
- * screen is not focused (and none are recorded then, so they report once it is).
+ * screen is not focused or the app is not in the foreground (and none are
+ * recorded then, so they report once it is). `retry` re-reports frames whose
+ * last report failed retryably.
  */
 export function newlyViewedSharedFrames(opts: {
   sessionId: string | undefined;
   currentUserId: string | null | undefined;
   isFocused: boolean;
   viewable: readonly { item: ViewableChatItem | null | undefined; isViewable: boolean }[];
+  retry?: boolean;
   tracker?: SharedFrameViewTracker;
 }): string[] {
-  const { sessionId, currentUserId, isFocused, viewable, tracker = sharedFrameViewTracker } = opts;
+  const { sessionId, currentUserId, isFocused, viewable, retry, tracker = sharedFrameViewTracker } = opts;
   if (!sessionId || !isFocused) return [];
   const ids = viewable
     .filter(v => v.isViewable)
     .map(v => receivedSharedFrameId(v.item, currentUserId))
     .filter((id): id is string => id !== null);
-  return tracker.take(sessionId, ids);
+  return tracker.take(sessionId, ids, { retry });
 }

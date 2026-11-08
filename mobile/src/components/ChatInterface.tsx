@@ -12,6 +12,7 @@ import {
   NativeScrollEvent,
   LayoutChangeEvent,
   ViewToken,
+  ViewabilityConfigCallbackPair,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { MessageRole } from '@meet-without-fear/shared';
@@ -22,6 +23,7 @@ import { EmotionSlider } from './EmotionSlider';
 import { ChatIndicator, ChatIndicatorType } from './ChatIndicator';
 import { EmpathyValidationCard } from './EmpathyValidationCard';
 import { assembleChatItems } from '../lib/chat/render/chatItems';
+import { SHOWN_ON_SCREEN_CONFIGS, createViewableUnion } from '../lib/chat/render/viewability';
 import {
   isCustomCard,
   isCustomEmptyState,
@@ -202,8 +204,9 @@ interface ChatInterfaceProps {
     indicatorType?: ChatIndicatorType,
   ) => void;
   /**
-   * Called with every currently viewable list item (at least half on screen
-   * for VIEWABILITY_MIN_MS) whenever viewability changes. The session screen
+   * Called with every item currently shown on screen (half of it, or half the
+   * viewport, for SHOWN_MIN_MS; lib/chat/render/viewability.ts) whenever
+   * viewability changes. The session screen
    * uses it to mark received shared frames as seen (work-2doq;
    * lib/chat/sharedFrameViews.ts de-duplicates).
    */
@@ -223,10 +226,6 @@ interface ChatInterfaceProps {
 const DEFAULT_EMPTY_TITLE = 'Start the Conversation';
 const DEFAULT_EMPTY_MESSAGE =
   "Share what's on your mind. I'm here to listen and help you work through it.";
-
-/** An item counts as viewed once at least half of it has been on screen this long. */
-const VIEWABILITY_MIN_MS = 300;
-const VIEWABILITY_CONFIG = { itemVisiblePercentThreshold: 50, minimumViewTime: VIEWABILITY_MIN_MS };
 
 export function ChatInterface({
   sessionId,
@@ -795,18 +794,28 @@ export function ChatInterface({
 
   const keyExtractor = useCallback((item: ChatListItem) => getAnimationIdentity(item.id), []);
 
-  // FlatList does not support changing onViewableItemsChanged after mount, so
-  // the handler is stable and reads the latest prop through a ref.
+  // "Shown on screen" = half the item OR half the viewport (tall frames), one
+  // FlatList config per test, merged (lib/chat/render/viewability.ts).
+  // FlatList does not support changing the pairs after mount, so they are
+  // built once and read the latest prop through a ref.
   const onItemsViewedRef = useRef(onItemsViewed);
   onItemsViewedRef.current = onItemsViewed;
-  const handleViewableItemsChanged = useCallback(
-    ({ viewableItems }: { viewableItems: ViewToken<ChatListItem>[]; changed: ViewToken<ChatListItem>[] }) => {
-      onItemsViewedRef.current?.(
-        viewableItems.filter((token) => token.isViewable && token.item).map((token) => token.item),
-      );
-    },
-    [],
-  );
+  const viewabilityPairsRef = useRef<ViewabilityConfigCallbackPair[] | null>(null);
+  if (viewabilityPairsRef.current === null) {
+    const union = createViewableUnion<ChatListItem>(
+      SHOWN_ON_SCREEN_CONFIGS.length,
+      (item) => getAnimationIdentity(item.id),
+      (items) => onItemsViewedRef.current?.(items),
+    );
+    viewabilityPairsRef.current = SHOWN_ON_SCREEN_CONFIGS.map((viewabilityConfig, index) => ({
+      viewabilityConfig,
+      onViewableItemsChanged: ({ viewableItems }: { viewableItems: ViewToken<ChatListItem>[] }) =>
+        union.update(
+          index,
+          viewableItems.filter((token) => token.isViewable && token.item).map((token) => token.item),
+        ),
+    }));
+  }
 
   // Footer is visually at the bottom (Typing Indicator)
   // We always render a container with minHeight to prevent layout shift
@@ -1071,8 +1080,7 @@ export function ChatInterface({
       onScrollBeginDrag={handleScrollBeginDrag}
       scrollEventThrottle={16}
       onContentSizeChange={handleContentSizeChange}
-      viewabilityConfig={VIEWABILITY_CONFIG}
-      onViewableItemsChanged={handleViewableItemsChanged}
+      viewabilityConfigCallbackPairs={viewabilityPairsRef.current ?? undefined}
     />
   );
 

@@ -16,6 +16,7 @@ import {
 } from '@tanstack/react-query';
 import { get, post, del, ApiClientError } from '../lib/api';
 import { trackInvitationAccepted, trackInvitationDeclined } from '../services/analytics';
+import { isRetryableReportError, sharedFrameViewTracker } from '../lib/chat/sharedFrameViews';
 import {
   SessionSummaryDTO,
   SessionDetailDTO,
@@ -1002,7 +1003,13 @@ export function useMarkSharedContextViewed(sessionId: string | undefined) {
       );
       return { previousStatus, previousActions };
     },
-    onError: (_error, _variables, context) => {
+    onError: (error, variables, context) => {
+      // Outcome handling lives here (not in a per-call mutate callback, which
+      // does not fire after unmount): a 4xx is final, a 5xx / network failure
+      // is retried on the next focus / foreground (bounded).
+      if (sessionId) {
+        sharedFrameViewTracker.fail(sessionId, variables.messageId, isRetryableReportError(error));
+      }
       if (!context) return;
       queryClient.setQueryData(stageKeys.empathyStatus(sessionId || ''), context.previousStatus);
       queryClient.setQueryData(stageKeys.pendingActions(sessionId || ''), context.previousActions);
