@@ -140,6 +140,21 @@ export const saveEmpathyDraftResponseSchema = z.object({
 
 export type SaveEmpathyDraftResponseInput = z.infer<typeof saveEmpathyDraftResponseSchema>;
 
+// work-9309: "Edit first" in the review of a pre-join draft. The zone only
+// names the written-at day in the opener; it is never echoed into a prompt
+// (the server formats the day itself and ignores a zone Intl does not know).
+export const editPreJoinDraftFirstRequestSchema = z
+  .object({
+    timeZone: z
+      .string()
+      .max(64)
+      .regex(/^[A-Za-z][A-Za-z0-9_+\-/]*$/, 'Invalid time zone')
+      .optional(),
+  })
+  .strict();
+
+export type EditPreJoinDraftFirstRequestInput = z.infer<typeof editPreJoinDraftFirstRequestSchema>;
+
 export const consentToShareRequestSchema = z.object({
   consent: z.boolean(),
 });

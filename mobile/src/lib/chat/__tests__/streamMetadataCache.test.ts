@@ -54,6 +54,18 @@ describe('withProposedEmpathyDraft', () => {
     expect(withProposedEmpathyDraft(old, 'a newer AI proposal')).toBe(old);
   });
 
+  it('ends a reopen’s wait: the AI has proposed (work-9309)', () => {
+    const old = {
+      draft: { content: 'written before the join', readyToShare: false },
+      preJoinReview: null,
+      awaitingRevision: true,
+    };
+    expect(withProposedEmpathyDraft(old, 'the revision')).toMatchObject({
+      draft: { content: 'the revision' },
+      awaitingRevision: false,
+    });
+  });
+
   it('preserves unrelated fields on the existing draft', () => {
     const result = withProposedEmpathyDraft(
       { draft: { content: 'old', draftId: 'd1' }, otherField: 42 },

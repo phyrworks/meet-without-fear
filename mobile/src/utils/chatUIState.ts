@@ -92,6 +92,12 @@ export interface ChatUIStateInputs extends WaitingStatusInputs {
   hasDistinctRefinedEmpathyContent: boolean;
   empathyAlreadyConsented: boolean;
   hasSharedEmpathyLocal: boolean; // Local latch to prevent flash
+  /**
+   * work-9309 (owner decision 2026-11-09): the draft was reopened by Edit first
+   * and the AI has not proposed yet (GET /empathy/draft `awaitingRevision`).
+   * The old draft's Review/Share panel stays hidden until it does.
+   */
+  empathyAwaitingRevision: boolean;
 
   // Empathy refining mode (received shared context)
   isRefiningEmpathy: boolean;
@@ -278,6 +284,7 @@ function computeShowEmpathyPanel(inputs: ChatUIStateInputs): boolean {
     myAttemptContent,
     hasDistinctRefinedEmpathyContent,
     sessionStatus,
+    empathyAwaitingRevision,
   } = inputs;
 
   if (sessionStatus === SessionStatus.RESOLVED) return false;
@@ -304,6 +311,13 @@ function computeShowEmpathyPanel(inputs: ChatUIStateInputs): boolean {
   // If already consented and NOT refining, don't show.
   // During REFINING, the user needs the panel to resubmit their revised empathy.
   if (empathyAlreadyConsented && !isRefiningEmpathy) {
+    return false;
+  }
+
+  // work-9309: reopened by Edit first — hidden until the AI proposes (a
+  // revision, or the original as is), which ends the wait server-side and in
+  // the stream's cache write (withProposedEmpathyDraft).
+  if (empathyAwaitingRevision) {
     return false;
   }
 
@@ -770,6 +784,7 @@ export function createDefaultChatUIStateInputs(): ChatUIStateInputs {
     hasDistinctRefinedEmpathyContent: false,
     empathyAlreadyConsented: false,
     hasSharedEmpathyLocal: false,
+    empathyAwaitingRevision: false,
     isRefiningEmpathy: false,
     messageCountSinceSharedContext: 0,
     myAttemptContent: false,

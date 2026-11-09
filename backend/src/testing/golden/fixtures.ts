@@ -44,12 +44,49 @@ export const RUN_PREFIX = 'mwf_run_';
 export const TARGET_FIXTURE_PREFIX = 'mwf_tfx_';
 export const TARGET_RUN_PREFIX = 'mwf_trun_';
 
-const fixturePrefix = (): string => (isTargetShape() ? TARGET_FIXTURE_PREFIX : FIXTURE_PREFIX);
-const runPrefix = (): string => (isTargetShape() ? TARGET_RUN_PREFIX : RUN_PREFIX);
+/**
+ * A session's own target templates (work-9309): with
+ * `MWF_TARGET_FIXTURE_PREFIX=mwf_tfx_<tag>_` the harness builds and clones
+ * `mwf_tfx_<tag>_<stage>` templates and `mwf_trun_<tag>_<id>` runs, and keeps
+ * their manifests in `__fixtures__/target/override-<tag>/` (gitignored) —
+ * never touching the shared `mwf_tfx_*` templates, their committed manifests,
+ * or another session's runs. Unset (or empty): exactly the default names.
+ */
+export const TARGET_FIXTURE_PREFIX_ENV = 'MWF_TARGET_FIXTURE_PREFIX';
+const TARGET_PREFIX_OVERRIDE = /^mwf_tfx_[a-z0-9]+_$/;
+
+export interface TargetPrefixes {
+  fixture: string;
+  run: string;
+  /** The manifest subdirectory under `__fixtures__/target`, or null for the committed manifests. */
+  manifestSubdir: string | null;
+}
+
+/** The target template/run prefixes in effect; throws on an override outside `^mwf_tfx_[a-z0-9]+_$`. */
+export function targetPrefixes(env: NodeJS.ProcessEnv = process.env): TargetPrefixes {
+  const override = env[TARGET_FIXTURE_PREFIX_ENV];
+  if (override === undefined || override === '') {
+    return { fixture: TARGET_FIXTURE_PREFIX, run: TARGET_RUN_PREFIX, manifestSubdir: null };
+  }
+  if (!TARGET_PREFIX_OVERRIDE.test(override)) {
+    throw new Error(
+      `${TARGET_FIXTURE_PREFIX_ENV}="${override}" refused: it must match ${TARGET_PREFIX_OVERRIDE} (e.g. mwf_tfx_f9309_)`,
+    );
+  }
+  const tag = override.slice(TARGET_FIXTURE_PREFIX.length, -1);
+  return { fixture: override, run: `${TARGET_RUN_PREFIX}${tag}_`, manifestSubdir: `override-${tag}` };
+}
+
+const fixturePrefix = (): string => (isTargetShape() ? targetPrefixes().fixture : FIXTURE_PREFIX);
+const runPrefix = (): string => (isTargetShape() ? targetPrefixes().run : RUN_PREFIX);
 
 const MANIFEST_DIR = path.join(__dirname, '__fixtures__');
-/** Target-shape manifests live beside, never over, the current-shape ones. */
-const manifestDir = (): string => (isTargetShape() ? path.join(MANIFEST_DIR, 'target') : MANIFEST_DIR);
+/** Target-shape manifests live beside, never over, the current-shape ones (an override's in its own subdirectory). */
+const manifestDir = (): string => {
+  if (!isTargetShape()) return MANIFEST_DIR;
+  const sub = targetPrefixes().manifestSubdir;
+  return sub ? path.join(MANIFEST_DIR, 'target', sub) : path.join(MANIFEST_DIR, 'target');
+};
 
 export interface FixtureManifest {
   stage: string;

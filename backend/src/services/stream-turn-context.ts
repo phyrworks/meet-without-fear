@@ -27,6 +27,7 @@ import { loadFollowUpsForParticipant } from './tending.service';
 import { followUpCheckinPayloadSchema } from '@meet-without-fear/shared';
 import { countOwnTurns, legacyRole, listConversationMessages } from './message-store';
 import { loadStageStates } from './stage-shim';
+import { deriveAwaitingRevision } from './prejoin-edit-opener';
 import { buildStagePrompt } from './stage-prompts';
 import {
   buildTendingConversationPrompt,
@@ -437,6 +438,7 @@ export async function assembleStreamTurnContext(params: StreamTurnContextParams)
   let stage2BSharedContext: string | null = null;
   let isRefiningEmpathy = false;
   let empathyDraftContent: string | null = null;
+  let revisingReopenedDraft = false;
 
   if (currentStage === 2) {
     const refiningAttempt = await prisma.empathyAttempt.findFirst({
@@ -447,7 +449,7 @@ export async function assembleStreamTurnContext(params: StreamTurnContextParams)
     const ownDraft = await prisma.draft.findFirst({
       where: { participantId: participant.id, kind: 'EMPATHY' },
       orderBy: { updatedAt: 'desc' },
-      select: { content: true },
+      select: { content: true, reopenedAt: true, aboutParticipantId: true },
     });
 
     if (refiningAttempt) {
@@ -469,6 +471,17 @@ export async function assembleStreamTurnContext(params: StreamTurnContextParams)
     } else if (ownDraft) {
       // Regular Stage 2 — the AI can see/edit the current draft
       empathyDraftContent = ownDraft.content;
+      // work-9309: reopened by Edit first and not yet re-proposed — the AI
+      // helps revise and proposes without the early-stage wait.
+      if (partner && ownDraft.aboutParticipantId === partner.participantId) {
+        const submitted = await prisma.empathyAttempt.count({
+          where: { authorParticipantId: participant.id, subjectParticipantId: partner.participantId },
+        });
+        revisingReopenedDraft = deriveAwaitingRevision({
+          reopenedAt: ownDraft.reopenedAt,
+          roundSubmitted: submitted > 0,
+        });
+      }
       logger.info(
         `[sendMessageStream:${requestId}] Stage 2: found existing empathy draft (${empathyDraftContent.length} chars)`,
       );
@@ -509,6 +522,7 @@ export async function assembleStreamTurnContext(params: StreamTurnContextParams)
       sharedContextFromPartner: stage2BSharedContext || undefined,
       empathyDraft: empathyDraftContent || undefined,
       isRefiningEmpathy: isRefiningEmpathy || undefined,
+      revisingReopenedDraft: revisingReopenedDraft || undefined,
       refiningNeed: refiningNeedContext,
       capturedNeeds,
       stage4InventoryContext,

@@ -22,6 +22,7 @@ import { prisma } from '../lib/prisma';
 import {
   EmpathyStatus,
   saveEmpathyDraftRequestSchema,
+  editPreJoinDraftFirstRequestSchema,
   consentToShareRequestSchema,
   validateEmpathyRequestSchema,
   skipRefinementRequestSchema,
@@ -82,6 +83,12 @@ import {
 } from '../services/empathy-store';
 import { attemptDTO } from '../services/empathy-status';
 import { saveEmpathyDraft } from '../services/empathy-draft-save';
+import {
+  deriveAwaitingRevision,
+  openPreJoinDraftRevision,
+  recoverStaleOpenerForRead,
+} from '../services/prejoin-edit-opener';
+import { getPartnerParticipant } from '../services/participant-resolver';
 
 // ============================================================================
 // Helpers
@@ -344,6 +351,22 @@ export async function getDraft(req: Request, res: Response): Promise<void> {
         ? { writtenAt: draft.updatedAt.toISOString(), partnerJoinedAt: caller.partner.joinedAt.toISOString() }
         : null;
 
+    // work-9309: reopened by Edit first, the AI's proposal not yet made — the
+    // old draft's Review/Share panel stays hidden (owner decision 2026-11-09).
+    const awaitingRevision = deriveAwaitingRevision({ reopenedAt: draft?.reopenedAt, roundSubmitted: !!myAttempt });
+    // A reopen whose opener was lost (the process died mid-generation) gets the
+    // template once it is older than the generation could take (at most once).
+    if (awaitingRevision && draft && caller.partner) {
+      await recoverStaleOpenerForRead({
+        sessionId: caller.sessionId,
+        userId: caller.userId,
+        participantId: me.participantId,
+        conversationId: me.mainConversationId,
+        partnerName: await reopenPartnerName(caller),
+        draft,
+      });
+    }
+
     successResponse(res, {
       draft: draft
         ? {
@@ -358,6 +381,7 @@ export async function getDraft(req: Request, res: Response): Promise<void> {
       alreadyConsented,
       awaitingPartner: !!pendingInvitation,
       preJoinReview,
+      awaitingRevision,
     });
   } catch (error) {
     logger.error('[getDraft] Error:', error);
@@ -397,6 +421,90 @@ export async function deleteDraft(req: Request, res: Response): Promise<void> {
     logger.error('[deleteDraft] Error:', error);
     errorResponse(res, 'INTERNAL_ERROR', 'Failed to set the draft aside', 500);
   }
+}
+
+/**
+ * "Edit first" in the review of a pre-join draft (work-9309): ends the review
+ * (the draft kept as written) and the AI opens the revision conversation in
+ * the caller's own chat, generated in the background (202). At most one
+ * opener: only the call that ends a pending review schedules it; a later call
+ * gets `resolved: true` and the existing opener while the reopen is in effect,
+ * else `resolved: false` — and never writes one.
+ * POST /sessions/:id/empathy/draft/edit-first
+ */
+export async function editPreJoinDraftFirst(req: Request, res: Response): Promise<void> {
+  try {
+    const parseResult = editPreJoinDraftFirstRequestSchema.safeParse(req.body ?? {});
+    if (!parseResult.success) {
+      errorResponse(res, 'VALIDATION_ERROR', 'Invalid request body', 400, parseResult.error.issues);
+      return;
+    }
+    const caller = await stage2Caller(req, res);
+    if (!caller) return;
+    if (!(await sessionAllowsStage2(caller.sessionId, caller.userId, res))) return;
+    const currentStage = await stageOf(caller.me.participantId);
+    if (currentStage !== 2) {
+      errorResponse(
+        res,
+        'VALIDATION_ERROR',
+        `Cannot edit the empathy draft: you are in stage ${currentStage}, but stage 2 is required`,
+        400,
+      );
+      return;
+    }
+    if (!caller.partner || !caller.me.mainConversationId) {
+      successResponse(res, { resolved: false, opener: null, reopenedAt: null });
+      return;
+    }
+
+    const [partnerName, session] = await Promise.all([
+      reopenPartnerName(caller),
+      prisma.session.findUnique({
+        where: { id: caller.sessionId },
+        select: { topicFrame: true, topicFrameConfirmedAt: true },
+      }),
+    ]);
+    updateContext({
+      turnId: `${caller.sessionId}-${caller.userId}-prejoin-edit-first`,
+      sessionId: caller.sessionId,
+      userId: caller.userId,
+      participantId: caller.me.participantId,
+    });
+    const result = await openPreJoinDraftRevision({
+      sessionId: caller.sessionId,
+      userId: caller.userId,
+      userName: req.user?.name || caller.me.name || 'there',
+      participantId: caller.me.participantId,
+      mainConversationId: caller.me.mainConversationId,
+      partnerName,
+      topicFrame: session?.topicFrameConfirmedAt ? session.topicFrame : undefined,
+      timeZone: parseResult.data.timeZone,
+    });
+    // 202 while the opener is generated in the background (it arrives via
+    // Ably / the client's refetch: the first AI message at or after
+    // `reopenedAt`); 200 otherwise.
+    const { resolved, opener, reopenedAt } = result;
+    const accepted = 'generation' in result && !!result.generation;
+    successResponse(res, { resolved, opener, reopenedAt }, accepted ? 202 : 200);
+  } catch (error) {
+    logger.error('[editPreJoinDraftFirst] Error:', error);
+    errorResponse(res, 'INTERNAL_ERROR', 'Failed to open the draft for editing', 500);
+  }
+}
+
+/**
+ * The partner's name as the opener says it (work-9309): their participant
+ * display name, else their name, else the name the author invited them by.
+ */
+async function reopenPartnerName(caller: Stage2Caller): Promise<string | undefined> {
+  const [partner, invitation] = await Promise.all([
+    getPartnerParticipant(caller.me.participantId),
+    prisma.invitation.findFirst({
+      where: { sessionId: caller.sessionId, invitedByParticipantId: caller.me.participantId },
+      select: { name: true },
+    }),
+  ]);
+  return partner?.displayName || caller.partner?.name || invitation?.name || undefined;
 }
 
 /** The caller's own newest EMPATHY_STATEMENT copy, as the consent response's empathyMessage. */

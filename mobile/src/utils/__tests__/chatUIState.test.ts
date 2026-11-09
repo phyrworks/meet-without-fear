@@ -710,6 +710,22 @@ describe('Empathy Panel Visibility', () => {
     expect(result.panels.showEmpathyPanel).toBe(true);
   });
 
+  it('stays hidden after Edit first until the AI proposes (work-9309, owner decision 2026-11-09)', () => {
+    const reopened = createInputs({
+      myStage: Stage.PERSPECTIVE_STRETCH,
+      compactMySigned: true,
+      myProgress: { stage: Stage.PERSPECTIVE_STRETCH },
+      hasEmpathyContent: true, // the old draft is still there
+      empathyAlreadyConsented: false,
+      empathyAwaitingRevision: true,
+    });
+    expect(computeChatUIState(reopened).panels.showEmpathyPanel).toBe(false);
+
+    // The AI's proposal ends the wait (server-derived; the stream's cache write too).
+    const proposed = { ...reopened, empathyAwaitingRevision: false, hasLiveProposedEmpathyStatement: true };
+    expect(computeChatUIState(proposed).panels.showEmpathyPanel).toBe(true);
+  });
+
   it('does not show after user has already consented', () => {
     const inputs = createInputs({
       myStage: Stage.PERSPECTIVE_STRETCH,

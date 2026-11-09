@@ -45,6 +45,9 @@ export function withProposedEmpathyDraft(
     // work-99k2: no consent before the partner has joined.
     canConsent: !old?.awaitingPartner,
     alreadyConsented: false,
+    // work-9309: the AI's proposal ends a reopen's wait (the server's autosave
+    // moves the draft's last write past the opener).
+    awaitingRevision: false,
   };
 }
 

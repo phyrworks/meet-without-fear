@@ -31,6 +31,7 @@ import {
   usePartnerEmpathy,
   useSaveEmpathyDraft,
   useDeleteEmpathyDraft,
+  useEditPreJoinDraftFirst,
   useConsentToShareEmpathy,
   useValidateEmpathy,
   useNeeds,
@@ -637,14 +638,22 @@ export function useUnifiedSession(
     if (
       empathyDraftData?.draft?.content &&
       !empathyDraftData.draft.readyToShare &&
-      !empathyDraftData.alreadyConsented
+      !empathyDraftData.alreadyConsented &&
+      // work-9309: reopened by Edit first — the old draft is not offered
+      // again until the AI proposes (owner decision 2026-11-09).
+      !empathyDraftData.awaitingRevision
     ) {
       // Restore the proposed statement from database
       setLiveProposedEmpathyStatement(empathyDraftData.draft.content);
       // Show the ready-to-share card
       setAiRecommendsReadyToShare(true);
     }
-  }, [empathyDraftData?.draft?.content, empathyDraftData?.draft?.readyToShare, empathyDraftData?.alreadyConsented]);
+  }, [
+    empathyDraftData?.draft?.content,
+    empathyDraftData?.draft?.readyToShare,
+    empathyDraftData?.alreadyConsented,
+    empathyDraftData?.awaitingRevision,
+  ]);
 
   // NOTE: Feel-Heard Check State is now derived via useMemo (showFeelHeardConfirmation)
   // instead of syncing from backend. This eliminates race conditions and restoration bugs.
@@ -985,6 +994,18 @@ export function useUnifiedSession(
     setAiRecommendsReadyToShare(false);
     deleteEmpathyDraft({ sessionId });
   }, [sessionId, deleteEmpathyDraft]);
+
+  // work-9309: "Edit first" in the review after the partner joins — the review
+  // ends and the AI opens the revision conversation (its opener lands in the
+  // chat). The old ready-to-share offer goes: the author is reworking the
+  // draft, and the next proposal comes from the conversation.
+  const { mutate: editPreJoinDraftFirst, isPending: isEditingPreJoinDraftFirst } = useEditPreJoinDraftFirst();
+  const handleEditPreJoinDraftFirst = useCallback(() => {
+    if (!sessionId) return;
+    setLiveProposedEmpathyStatement(null);
+    setAiRecommendsReadyToShare(false);
+    editPreJoinDraftFirst({ sessionId });
+  }, [sessionId, editPreJoinDraftFirst]);
 
   const handleShareEmpathy = useCallback((content?: string, opts?: { resolvePreJoinReview?: boolean }) => {
     if (!sessionId) {
@@ -1329,6 +1350,8 @@ export function useUnifiedSession(
     handleShareEmpathy,
     handleSetAsideEmpathyDraft,
     isSettingAsideEmpathyDraft,
+    handleEditPreJoinDraftFirst,
+    isEditingPreJoinDraftFirst,
     isPreJoinReviewPending,
     handleResubmitEmpathy,
     handleValidatePartnerEmpathy,

@@ -76,12 +76,16 @@ test.describe('Single User Journey', () => {
   // empathy draft. The draft is kept, the share waits for the join (no consent before
   // it), nothing is sent on the join, and A reviews the draft the next time they open
   // the session (send as is / edit first / set aside).
-  test('new session to empathy draft, kept until the partner joins, then reviewed and sent', async ({
-    page,
-    request,
-  }) => {
-    // Increase timeout for this long journey test (5 minutes)
-    test.setTimeout(300000);
+  /**
+   * Steps 1-20, shared by the review paths: A creates the session, works
+   * through Stage 0-1, drafts the empathy statement before Darryl joins (kept,
+   * not shared: work-99k2), Darryl joins, and on reopening A sees the review.
+   */
+  async function reachPreJoinReview(
+    page: import('@playwright/test').Page,
+    request: import('@playwright/test').APIRequestContext,
+    FIXTURE_ID: string,
+  ) {
     const testStart = Date.now();
     const elapsed = () => `[${((Date.now() - testStart) / 1000).toFixed(1)}s]`;
     const darryl = { email: 'darryl@e2e.test', name: 'Darryl' };
@@ -97,8 +101,6 @@ test.describe('Single User Journey', () => {
       if (/\/empathy\/consent$/.test(req.url())) consentPosts += 1;
     });
 
-    // Set E2E fixture ID header for this test
-    const FIXTURE_ID = 'user-a-full-journey';
     await page.setExtraHTTPHeaders({
       ...getE2EHeaders(userA.email, userId, FIXTURE_ID),
     });
@@ -119,7 +121,7 @@ test.describe('Single User Journey', () => {
       const errorText = await createResponse.text();
       console.log('Session creation failed:', createResponse.status(), errorText);
       test.skip(true, 'Backend API not ready for session creation');
-      return;
+      throw new Error('unreachable');
     }
 
     const sessionData = await createResponse.json();
@@ -340,6 +342,17 @@ test.describe('Single User Journey', () => {
     await expect(page.getByTestId('pre-join-review-statement')).toHaveText(draftData.draft.content);
     await page.screenshot({ path: 'test-results/single-user-09-pre-join-review.png' });
 
+    return { elapsed, draftData, draftWrites, consentPostCount: () => consentPosts };
+  }
+
+  test('new session to empathy draft, kept until the partner joins, then reviewed and sent', async ({
+    page,
+    request,
+  }) => {
+    // Increase timeout for this long journey test (5 minutes)
+    test.setTimeout(300000);
+    const { elapsed, consentPostCount } = await reachPreJoinReview(page, request, 'user-a-full-journey');
+
     // Step 21: Send as is — the consent happens now, after the join.
     console.log(`${elapsed()} Step 21: Sending as is...`);
     await page.getByTestId('pre-join-review-send-button').click();
@@ -347,7 +360,7 @@ test.describe('Single User Journey', () => {
     // The submission's reply (the copy predating #602 said "took courage") and the waiting status.
     await expect(page.getByText(/Your empathy attempt has been submitted/i)).toBeVisible({ timeout: 60000 });
     await expect(page.getByText(/Darryl is working on their perspective/i)).toBeVisible({ timeout: 10000 });
-    expect(consentPosts).toBe(1);
+    expect(consentPostCount()).toBe(1);
 
     const stateResponse = await request.get(`${API_BASE_URL}/api/sessions/${sessionId}/state`, {
       headers: getE2EHeaders(userA.email, userId),
@@ -359,5 +372,113 @@ test.describe('Single User Journey', () => {
     );
     expect(empathyMessages.length).toBeGreaterThan(0);
     console.log(`${elapsed()} Test complete! Found ${empathyMessages.length} empathy statement(s)`);
+  });
+
+  // work-9309 (owner decision 2026-11-07): "Edit first" ends the review and the AI
+  // speaks first ("Here's what you wrote <day>. Reading it now, what feels
+  // different?"); A revises with the AI and shares through the normal
+  // Review/Share flow. Fixture user-a-edit-first-journey: the same storyline up to
+  // the draft, its prejoin-edit-first-opener operation, and the revision reply.
+  test('pre-join draft reviewed after the join: Edit first, the AI opens, A revises and shares', async ({
+    page,
+    request,
+  }) => {
+    test.setTimeout(300000);
+    const { elapsed, draftData, consentPostCount } = await reachPreJoinReview(
+      page,
+      request,
+      'user-a-edit-first-journey'
+    );
+    const editFirstPosts: number[] = [];
+    page.on('response', response => {
+      const req = response.request();
+      if (req.method() === 'POST' && /\/empathy\/draft\/edit-first$/.test(req.url())) {
+        editFirstPosts.push(response.status());
+      }
+    });
+    const opener =
+      /^Here's what you wrote (earlier today|yesterday), before your partner joined\. Nothing has been sent\. Reading it now, what feels different\?$/;
+
+    // Step 21: Edit first — the review closes and the AI speaks first, without a reload.
+    console.log(`${elapsed()} Step 21: Edit first...`);
+    await page.getByTestId('pre-join-review-edit-button').click();
+    await expect(page.getByTestId('pre-join-review-modal')).not.toBeVisible({ timeout: 10000 });
+    await expect(page.getByText(opener)).toBeVisible({ timeout: 30000 });
+    // 202: the opener is generated in the background; without Ably the client
+    // refetches the conversation until it is there.
+    expect(editFirstPosts).toEqual([202]);
+    expect(consentPostCount()).toBe(0);
+    // Owner decision 2026-11-09: the old draft's Review/Share panel is ABSENT
+    // until the AI proposes.
+    await expect(page.getByTestId('empathy-review-button')).toHaveCount(0);
+    await page.screenshot({ path: 'test-results/single-user-10-edit-first-opener.png' });
+
+    // The review is over; the draft is kept as written, not ready (A is editing); nothing sent.
+    const afterEdit = (
+      await (
+        await request.get(`${API_BASE_URL}/api/sessions/${sessionId}/empathy/draft`, {
+          headers: getE2EHeaders(userA.email, userId),
+        })
+      ).json()
+    ).data;
+    expect(afterEdit.preJoinReview).toBeNull();
+    expect(afterEdit.alreadyConsented).toBe(false);
+    expect(afterEdit.draft).toMatchObject({ content: draftData.draft.content, readyToShare: false });
+    expect(afterEdit.awaitingRevision).toBe(true);
+
+    // One opener, in A's conversation; still one after a reload (and the review does not return).
+    await page.reload();
+    await page.waitForLoadState('domcontentloaded');
+    await handleMoodCheck(page, 3000);
+    await expect(page.getByText(opener)).toBeVisible({ timeout: 30000 });
+    await expect(page.getByText(opener)).toHaveCount(1);
+    await expect(page.getByTestId('pre-join-review-modal')).toHaveCount(0);
+    expect(editFirstPosts).toEqual([202]);
+    // Still absent after a reload: the state is the server's, not the client's.
+    await expect(page.getByTestId('empathy-review-button')).toHaveCount(0);
+
+    // Step 22: A replies; the AI proposes the revised statement.
+    console.log(`${elapsed()} Step 22: Replying to the opener...`);
+    const chatInput = page.getByTestId('chat-input');
+    await expect(chatInput).toBeVisible({ timeout: 10000 });
+    await chatInput.fill(
+      "Reading it now, I made it about the chores. I think they're just worn out and scared of letting me down."
+    );
+    await page.getByTestId('send-button').click();
+    await waitForAIResponse(page, /That's a real shift/i, 30000);
+
+    // Step 23: the normal Review/Share flow, with the revised text.
+    console.log(`${elapsed()} Step 23: Reviewing and sharing the revision...`);
+    // The AI's proposal brings the panel back (PRESENT), on the revised text.
+    const empathyReviewButton = page.getByTestId('empathy-review-button');
+    await expect(empathyReviewButton).toBeVisible({ timeout: 10000 });
+    const afterProposal = (
+      await (
+        await request.get(`${API_BASE_URL}/api/sessions/${sessionId}/empathy/draft`, {
+          headers: getE2EHeaders(userA.email, userId),
+        })
+      ).json()
+    ).data;
+    expect(afterProposal.awaitingRevision).toBe(false);
+    expect(afterProposal.draft.content).toContain('worn out, and maybe scared');
+    await empathyReviewButton.click();
+    const shareButton = page.getByTestId('share-empathy-button');
+    await expect(shareButton).toBeVisible({ timeout: 10000 });
+    await expect(page.getByText(/worn out, and maybe scared that you're letting me down/).first()).toBeVisible();
+    await page.screenshot({ path: 'test-results/single-user-11-revised-draft.png' });
+    await shareButton.click();
+    await expect(page.getByText(/Your empathy attempt has been submitted/i)).toBeVisible({ timeout: 60000 });
+    expect(consentPostCount()).toBe(1);
+
+    const stateData = await (
+      await request.get(`${API_BASE_URL}/api/sessions/${sessionId}/state`, {
+        headers: getE2EHeaders(userA.email, userId),
+      })
+    ).json();
+    const statements: Array<{ content: string }> = stateData.data.messages.messages.filter(
+      (m: { role: string }) => m.role === 'EMPATHY_STATEMENT'
+    );
+    expect(statements.map(m => m.content)).toEqual([expect.stringContaining('worn out, and maybe scared')]);
+    console.log(`${elapsed()} Edit first path complete`);
   });
 });

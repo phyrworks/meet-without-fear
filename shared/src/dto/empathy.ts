@@ -4,6 +4,8 @@
  * Drafting, sharing, and validating empathy attempts.
  */
 
+import type { MessageDTO } from './message';
+
 // ============================================================================
 // Empathy Status (Reconciler Flow)
 // ============================================================================
@@ -79,10 +81,56 @@ export interface GetEmpathyDraftResponse {
   awaitingPartner?: boolean;
   /** work-99k2: set when a pre-join draft awaits the author's review. */
   preJoinReview?: PreJoinDraftReviewDTO | null;
+  /**
+   * work-9309 (owner decision 2026-11-09): the draft was reopened by "Edit
+   * first" and the AI has not yet proposed (a revision, or the original as
+   * is). The old draft's Review/Share panel stays hidden while true. Derived
+   * on the server: `draft.reopened_at` is set by Edit first and cleared by the
+   * next draft write.
+   */
+  awaitingRevision?: boolean;
 }
 
 export interface DeleteEmpathyDraftResponse {
   deleted: boolean;
+}
+
+/**
+ * work-9309: "Edit first" in the review of a pre-join draft. Ends the review
+ * (the draft is kept as written) and the AI opens the revision conversation in
+ * the author's own chat: it speaks first, with the draft and when it was
+ * written in view. POST /sessions/:id/empathy/draft/edit-first.
+ */
+export interface EditPreJoinDraftFirstRequest {
+  /**
+   * The author's IANA time zone (e.g. "America/Los_Angeles"), so the opener
+   * names the day the way the review did ("earlier today", "on Tuesday").
+   * Optional; an unknown zone reads as UTC.
+   */
+  timeZone?: string;
+}
+
+export interface EditPreJoinDraftFirstResponse {
+  /**
+   * True when the reopen is in effect: this request ended the pending review
+   * (HTTP 202 — the opener is generated in the background), or a later call
+   * (retry, second tap, another device) finds the draft still reopened (the
+   * AI not yet proposing). False otherwise; no call ever writes a second
+   * opener.
+   */
+  resolved: boolean;
+  /**
+   * The AI's opener, in the author's own conversation only, when already
+   * written. Null while it is generated (on the call that ended the review,
+   * and on a later call before it lands): it arrives through Ably or the
+   * client's refetch.
+   */
+  opener: MessageDTO | null;
+  /**
+   * The reopen marker (`draft.reopened_at`, ISO): the opener is the first AI
+   * message at or after it — what the client waits for. Null unless `resolved`.
+   */
+  reopenedAt: string | null;
 }
 
 // ============================================================================

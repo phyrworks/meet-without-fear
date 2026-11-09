@@ -167,3 +167,6 @@ infra/aws/crash.log
 
 # run-baseline.sh --cutover: detached checkout of phoenix/base (the old migration history)
 /.ts7-base/
+
+# work-9309: a session's own golden target templates (MWF_TARGET_FIXTURE_PREFIX) keep their manifests here
+backend/src/testing/golden/__fixtures__/target/override-*/

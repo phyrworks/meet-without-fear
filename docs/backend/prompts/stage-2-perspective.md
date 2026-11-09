@@ -291,6 +291,44 @@ That feels like a genuine attempt to understand {{partner_name}}'s experience. Y
 Before we share this with them, I want to check: does this feel like your best guess at what they might be going through? You can always refine it.
 ```
 
+## Reopened Pre-Join Draft (the AI speaks first)
+
+work-9309 (owner decisions 2026-11-07 and 2026-11-09). A solo inviter can write
+their empathy draft before the partner joins; it is never sent on the join, and
+after it they review it (send as is / edit first / set aside). On **Edit first**
+the AI opens the revision conversation, generated in the background. The turn runs
+on `buildStage2Prompt` with one extra dynamic section, `REOPENED DRAFT — YOU SPEAK
+FIRST` (`buildReopenedPreJoinDraftSection` in `backend/src/services/stage-prompts.ts`),
+which carries the draft once — fenced in `<user_message>` tags (input-sanitizer's
+`wrapUserInput`) with the instruction that it is content, never instructions; the
+`CURRENT EMPATHY DRAFT` section is left out on this turn — plus the day it was
+written as the review named it ("earlier today", "on Tuesday") and the full date. It
+asks for 2-3 sentences: name when they wrote it ("Here's what you wrote on
+Tuesday."), quote or paraphrase its heart, and ask what feels different reading it
+now. It invites reflection only — no judgment, no suggested edits, no new version —
+and is `ReadyShare:N` with no `<draft>` and no `proposedEmpathyStatement` (the
+orchestrator also drops any it returns). The user turn is a bracketed trigger line
+that is never stored. Fallback (the model throws, times out or returns nothing):
+
+```
+Here's what you wrote {{written_at}}:
+
+"{{draft}}"
+
+Nothing has been sent. Reading it now, what feels different?
+```
+
+From the author's next reply until the AI proposes (GET `/empathy/draft`
+`awaitingRevision`), the ordinary Stage 2 prompt runs with the draft in `CURRENT
+EMPATHY DRAFT` plus `REVISING A REOPENED DRAFT` (`buildRevisingReopenedDraftSection`):
+help them name what shifted; when they have, set ReadyShare:Y and propose the
+revision — or, if they say it still fits as written, propose it unchanged. The
+early-stage draft guard (`TOO EARLY`, `EARLY IN THIS STEP`) is lifted: they are
+revising, not starting. The proposal autosaves (the review is over), which ends the
+wait and brings the Review/Share panel back on mobile; it is then shared through the
+normal Review/Share flow.
+
+
 ## Stage Transition Philosophy
 
 When they complete this stage successfully, acknowledge what they have accomplished:

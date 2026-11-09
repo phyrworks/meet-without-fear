@@ -5,6 +5,7 @@
  * Covers all 5 stages: Onboarding, Witness, Perspective Stretch, Need Mapping, Strategic Repair.
  */
 
+import { useEffect, useRef } from 'react';
 import {
   useQuery,
   useMutation,
@@ -23,6 +24,8 @@ import {
   ConfirmFeelHeardResponse,
   SaveEmpathyDraftResponse,
   DeleteEmpathyDraftResponse,
+  EditPreJoinDraftFirstResponse,
+  MessageDTO,
   ConsentToShareEmpathyResponse,
   GetProgressResponse,
   MilestoneKey,
@@ -860,6 +863,189 @@ export function useDeleteEmpathyDraft(
       if (context?.previous) {
         queryClient.setQueryData(stageKeys.empathyDraft(sessionId), context.previous);
       }
+    },
+    ...options,
+  });
+}
+
+/** Append one message to every message cache of the session (deduped by id). */
+function appendMessageToCaches(queryClient: QueryClient, sessionId: string, message: MessageDTO): void {
+  const updateCache = (old: GetMessagesResponse | undefined): GetMessagesResponse => {
+    if (!old) return { messages: [message], hasMore: false };
+    if ((old.messages || []).some((m) => m.id === message.id)) return old;
+    return { ...old, messages: [...(old.messages || []), message] };
+  };
+  const updateInfiniteCache = (
+    old: InfiniteData<GetMessagesResponse> | undefined
+  ): InfiniteData<GetMessagesResponse> => {
+    if (!old || old.pages.length === 0) {
+      return { pages: [{ messages: [message], hasMore: false }], pageParams: [undefined] };
+    }
+    const pages = [...old.pages];
+    const first = pages[0];
+    if ((first.messages || []).some((m) => m.id === message.id)) return old;
+    pages[0] = { ...first, messages: [...(first.messages || []), message] };
+    return { ...old, pages };
+  };
+  const stages = message.stage !== undefined ? [undefined, message.stage] : [undefined];
+  for (const stage of stages) {
+    queryClient.setQueryData<GetMessagesResponse>(messageKeys.list(sessionId, stage), updateCache);
+    queryClient.setQueryData<InfiniteData<GetMessagesResponse>>(messageKeys.infinite(sessionId, stage), updateInfiniteCache);
+  }
+}
+
+/** How the client waits for the background opener after Edit first (work-9309). Mutable for tests. */
+export const EDIT_FIRST_OPENER_POLL = { attempts: 40, intervalMs: 1500 };
+
+/** The newest wait per session: a newer wait, an unmount or a session switch bumps it and the older loop stops. */
+const openerWaits = new Map<string, number>();
+
+/** Stop any wait for this session's opener (unmount, session switch). */
+export function cancelEditFirstOpenerWait(sessionId: string): void {
+  openerWaits.set(sessionId, (openerWaits.get(sessionId) ?? 0) + 1);
+}
+
+/** Is there an AI message at or after `reopenedAt` in the session's cached conversation? */
+function hasOpenerSince(queryClient: QueryClient, sessionId: string, reopenedAt: string): boolean {
+  const since = new Date(reopenedAt).getTime();
+  const infinite = queryClient.getQueryData<InfiniteData<GetMessagesResponse>>(messageKeys.infinite(sessionId));
+  const list = queryClient.getQueryData<GetMessagesResponse>(messageKeys.list(sessionId));
+  const all = [...(infinite?.pages.flatMap((p) => p.messages || []) ?? []), ...(list?.messages ?? [])];
+  return all.some((m) => m.role === MessageRole.AI && new Date(m.timestamp).getTime() >= since);
+}
+
+/**
+ * Refetch the (active) conversation queries until the opener — the first AI
+ * message at or after `reopenedAt` — is in the cache, bounded. Cancellable: a
+ * newer wait for the session, or cancelEditFirstOpenerWait (unmount, session
+ * switch), stops it. Resolves 'found', 'gave-up' or 'cancelled'. The draft
+ * state is not touched: the reopen marker is the server's, so the panel stays
+ * hidden whatever a refetch returns.
+ */
+export async function awaitEditFirstOpener(
+  queryClient: QueryClient,
+  sessionId: string,
+  reopenedAt: string
+): Promise<'found' | 'gave-up' | 'cancelled'> {
+  cancelEditFirstOpenerWait(sessionId);
+  const token = openerWaits.get(sessionId);
+  const current = () => openerWaits.get(sessionId) === token;
+  for (let i = 0; i < EDIT_FIRST_OPENER_POLL.attempts; i++) {
+    if (!current()) return 'cancelled';
+    if (hasOpenerSince(queryClient, sessionId, reopenedAt)) return 'found';
+    await queryClient.refetchQueries({ queryKey: messageKeys.infinite(sessionId), type: 'active' });
+    await queryClient.refetchQueries({ queryKey: messageKeys.list(sessionId), type: 'active' });
+    if (!current()) return 'cancelled';
+    if (hasOpenerSince(queryClient, sessionId, reopenedAt)) return 'found';
+    await new Promise((r) => setTimeout(r, EDIT_FIRST_OPENER_POLL.intervalMs));
+  }
+  return 'gave-up';
+}
+
+/**
+ * Merge the server's empathy draft into the cache (setQueryData, never an
+ * invalidation): for a realtime AI response while a reopen is in effect — the
+ * AI's proposal on another device ends it.
+ */
+export async function mergeEmpathyDraftFromServer(queryClient: QueryClient, sessionId: string): Promise<void> {
+  const fresh = await get<GetEmpathyDraftResponse>(`/sessions/${sessionId}/empathy/draft`);
+  queryClient.setQueryData<GetEmpathyDraftResponse>(stageKeys.empathyDraft(sessionId), (old) =>
+    old ? { ...old, ...fresh } : fresh
+  );
+}
+
+
+/** The device's IANA time zone, when the runtime can tell. */
+function deviceTimeZone(): string | undefined {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * "Edit first" in the review of a pre-join draft (work-9309). Ends the review
+ * (optimistic: the review leaves the cache at once, rolled back on error) and
+ * the AI opens the revision conversation: its opener comes back in the
+ * response and goes straight into the message caches, then the conversation
+ * is refetched — so it shows without Ably and without a reload.
+ */
+export function useEditPreJoinDraftFirst(
+  options?: Omit<
+    UseMutationOptions<
+      EditPreJoinDraftFirstResponse,
+      ApiClientError,
+      { sessionId: string },
+      { previous: GetEmpathyDraftResponse | undefined }
+    >,
+    'mutationFn' | 'onMutate' | 'onError' | 'onSuccess'
+  >
+) {
+  const queryClient = useQueryClient();
+  // The wait for the opener stops when the screen unmounts or the session changes.
+  const sessionRef = useRef<string | null>(null);
+  useEffect(
+    () => () => {
+      if (sessionRef.current) cancelEditFirstOpenerWait(sessionRef.current);
+    },
+    []
+  );
+
+  return useMutation<
+    EditPreJoinDraftFirstResponse,
+    ApiClientError,
+    { sessionId: string },
+    { previous: GetEmpathyDraftResponse | undefined }
+  >({
+    mutationFn: async ({ sessionId }) => {
+      if (sessionRef.current && sessionRef.current !== sessionId) cancelEditFirstOpenerWait(sessionRef.current);
+      sessionRef.current = sessionId;
+      const timeZone = deviceTimeZone();
+      return post<EditPreJoinDraftFirstResponse>(
+        `/sessions/${sessionId}/empathy/draft/edit-first`,
+        timeZone ? { timeZone } : {}
+      );
+    },
+    onMutate: async ({ sessionId }) => {
+      // The review ends and the reopen begins at once: the old draft's
+      // Review/Share panel stays hidden until the AI proposes (work-9309,
+      // owner decision 2026-11-09). Rolled back on error.
+      const key = stageKeys.empathyDraft(sessionId);
+      await queryClient.cancelQueries({ queryKey: key });
+      const previous = queryClient.getQueryData<GetEmpathyDraftResponse>(key);
+      if (previous) {
+        queryClient.setQueryData<GetEmpathyDraftResponse>(key, {
+          ...previous,
+          preJoinReview: null,
+          awaitingRevision: true,
+        });
+      }
+      return { previous };
+    },
+    onError: (_error, { sessionId }, context) => {
+      if (context?.previous) {
+        queryClient.setQueryData(stageKeys.empathyDraft(sessionId), context.previous);
+      }
+    },
+    onSuccess: (data, { sessionId }) => {
+      if (!data.resolved || !data.reopenedAt) {
+        // No reopen in effect after all: the server's state is the truth.
+        queryClient.invalidateQueries({ queryKey: stageKeys.empathyDraft(sessionId) });
+        return;
+      }
+      // The reopen is in effect (the server's marker): the draft stays hidden,
+      // nothing here un-hides it.
+      if (data.opener) {
+        // The opener is already written (a later call): it comes back in the response.
+        appendMessageToCaches(queryClient, sessionId, data.opener);
+        return;
+      }
+      // Being generated (the 202, or a later call before it lands): it reaches
+      // the chat by Ably (message.ai_response -> refetch) or, without Ably, by
+      // this bounded, cancellable refetch until the first AI message at or
+      // after reopenedAt is there.
+      void awaitEditFirstOpener(queryClient, sessionId, data.reopenedAt);
     },
     ...options,
   });

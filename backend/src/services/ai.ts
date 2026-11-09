@@ -11,6 +11,7 @@
  */
 
 import { getCompletion, resetBedrockClient, getBedrockClient } from '../lib/bedrock';
+import type { ReopenedPreJoinDraft } from './stage-prompts';
 import { orchestrateResponse, type OrchestratorContext, type OrchestratorResult } from './ai-orchestrator';
 
 // ============================================================================
@@ -74,6 +75,8 @@ export interface FullAIContext extends WitnessContext {
    * and include a "Review and share" action button.
    */
   isGeneratingShareDraft?: boolean;
+  /** work-9309: the AI's opener after "Edit first" on a pre-join draft. */
+  reopenedPreJoinDraft?: ReopenedPreJoinDraft | null;
 }
 
 // Re-export orchestrator types for convenience
@@ -136,6 +139,7 @@ export async function getOrchestratedResponse(
     sharedContextFromPartner: context.sharedContextFromPartner,
     isOnboarding: context.isOnboarding,
     topicFrame: context.topicFrame,
+    reopenedPreJoinDraft: context.reopenedPreJoinDraft,
   };
 
   return orchestrateResponse(orchestratorContext);

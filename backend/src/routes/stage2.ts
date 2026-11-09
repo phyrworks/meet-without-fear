@@ -5,6 +5,7 @@
  * - POST /sessions/:id/empathy/draft - Save empathy draft
  * - GET /sessions/:id/empathy/draft - Get current draft
  * - DELETE /sessions/:id/empathy/draft - Set the draft aside (work-99k2)
+ * - POST /sessions/:id/empathy/draft/edit-first - Edit first: end the review, AI opens the revision (work-9309)
  * - POST /sessions/:id/empathy/consent - Consent to share
  * - GET /sessions/:id/empathy/partner - Get partner's empathy
  * - POST /sessions/:id/empathy/validate - Validate partner's empathy
@@ -27,6 +28,7 @@ import {
   saveDraft,
   getDraft,
   deleteDraft,
+  editPreJoinDraftFirst,
   consentToShare,
   getPartnerEmpathy,
   validateEmpathy,
@@ -50,6 +52,14 @@ router.get('/sessions/:id/empathy/draft', requireAuth, requireSessionAccess, asy
 
 // Set the empathy draft aside (work-99k2: the review after the partner joins)
 router.delete('/sessions/:id/empathy/draft', requireAuth, requireSessionAccess, asyncHandler(deleteDraft));
+
+// Edit first on a pre-join draft: end the review; the AI opens the revision (work-9309)
+router.post(
+  '/sessions/:id/empathy/draft/edit-first',
+  requireAuth,
+  requireSessionAccess,
+  asyncHandler(editPreJoinDraftFirst),
+);
 
 // Consent to share empathy with partner
 router.post('/sessions/:id/empathy/consent', requireAuth, requireSessionAccess, asyncHandler(consentToShare));
