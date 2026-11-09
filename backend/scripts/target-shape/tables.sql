@@ -557,6 +557,7 @@ CREATE TABLE "draft" (
     "version" INTEGER NOT NULL DEFAULT 1,
     "created_at" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updated_at" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "reopened_at" TIMESTAMPTZ(3),
 
     CONSTRAINT "draft_pkey" PRIMARY KEY ("id"),
     CONSTRAINT "draft_participant_id_fkey" FOREIGN KEY ("participant_id") REFERENCES "participant"("id") ON DELETE CASCADE ON UPDATE NO ACTION,
@@ -573,7 +574,11 @@ CREATE TABLE "draft" (
     CONSTRAINT chk_draft_arc_matches_kind CHECK (
             (kind = 'EMPATHY') = (about_participant_id IS NOT NULL OR invitation_id IS NOT NULL)
         AND (kind = 'VALIDATION_FEEDBACK') = (attempt_id IS NOT NULL)
-        AND (kind = 'SHARE_CONTEXT') = (share_offer_id IS NOT NULL))
+        AND (kind = 'SHARE_CONTEXT') = (share_offer_id IS NOT NULL)),
+    -- work-9309: reopened_at marks an EMPATHY draft the author chose to "Edit
+    -- first" after the partner joined, until the next draft write (the AI's
+    -- proposal or the author's save) clears it.
+    CONSTRAINT chk_draft_reopened_empathy CHECK (reopened_at IS NULL OR kind = 'EMPATHY')
 );
 CREATE INDEX "draft_about_participant_id_idx" ON "draft"("about_participant_id");
 CREATE INDEX "draft_attempt_id_idx" ON "draft"("attempt_id");

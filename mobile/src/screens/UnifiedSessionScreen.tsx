@@ -29,6 +29,7 @@ import {
   NeedEditConversationTurn,
   NeedEditPlan,
   ContinueChoice,
+  type GetEmpathyDraftResponse,
 } from '@meet-without-fear/shared';
 
 import { ChatInterface, ChatMessage, ChatIndicatorItem, ChatValidationCardItem, ChatCustomCardItem } from '../components/ChatInterface';
@@ -109,6 +110,7 @@ import {
   useRemoveNeed,
   useRequestStrategySuggestions,
   useUpdateStage4WalkthroughNeed,
+  mergeEmpathyDraftFromServer,
 } from '../hooks/useStages';
 import { deriveEmpathyValidatedIndicator, derivePartnerEmpathyConfirmedIndicator, deriveIndicators, SessionIndicatorData } from '../utils/chatListSelector';
 import { canInsertRealtimeMessageForCurrentUser, isRealtimePayloadAddressedToCurrentUser } from '../utils/realtimePrivacy';
@@ -1267,6 +1269,14 @@ export function UnifiedSessionScreen({
         addAIMessage(sessionId, payload.message);
       } else {
         refetchPersistedMessages();
+      }
+      // work-9309: while the draft is reopened by Edit first, an AI response may
+      // be the proposal that ends it (e.g. from another device): merge the
+      // server's draft state (setQueryData, not an invalidation).
+      if (queryClient.getQueryData<GetEmpathyDraftResponse>(stageKeys.empathyDraft(sessionId))?.awaitingRevision) {
+        mergeEmpathyDraftFromServer(queryClient, sessionId).catch((err) =>
+          console.warn('[UnifiedSessionScreen] Failed to merge the empathy draft:', err)
+        );
       }
       // During Stage 0 invitation phase, the AI may emit a <draft> inline that
       // the backend extracts and persists to Session.topicFrame. Refresh

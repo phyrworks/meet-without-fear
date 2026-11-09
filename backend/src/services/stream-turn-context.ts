@@ -27,7 +27,7 @@ import { loadFollowUpsForParticipant } from './tending.service';
 import { followUpCheckinPayloadSchema } from '@meet-without-fear/shared';
 import { countOwnTurns, legacyRole, listConversationMessages } from './message-store';
 import { loadStageStates } from './stage-shim';
-import { isAwaitingRevision } from './prejoin-edit-opener';
+import { deriveAwaitingRevision } from './prejoin-edit-opener';
 import { buildStagePrompt } from './stage-prompts';
 import {
   buildTendingConversationPrompt,
@@ -449,7 +449,7 @@ export async function assembleStreamTurnContext(params: StreamTurnContextParams)
     const ownDraft = await prisma.draft.findFirst({
       where: { participantId: participant.id, kind: 'EMPATHY' },
       orderBy: { updatedAt: 'desc' },
-      select: { content: true, updatedAt: true, aboutParticipantId: true },
+      select: { content: true, reopenedAt: true, aboutParticipantId: true },
     });
 
     if (refiningAttempt) {
@@ -477,10 +477,8 @@ export async function assembleStreamTurnContext(params: StreamTurnContextParams)
         const submitted = await prisma.empathyAttempt.count({
           where: { authorParticipantId: participant.id, subjectParticipantId: partner.participantId },
         });
-        revisingReopenedDraft = await isAwaitingRevision({
-          conversationId,
-          partnerJoinedAt: partner.joinedAt,
-          draftUpdatedAt: ownDraft.updatedAt,
+        revisingReopenedDraft = deriveAwaitingRevision({
+          reopenedAt: ownDraft.reopenedAt,
           roundSubmitted: submitted > 0,
         });
       }

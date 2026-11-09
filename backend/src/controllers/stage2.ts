@@ -83,7 +83,11 @@ import {
 } from '../services/empathy-store';
 import { attemptDTO } from '../services/empathy-status';
 import { saveEmpathyDraft } from '../services/empathy-draft-save';
-import { isAwaitingRevision, openPreJoinDraftRevision } from '../services/prejoin-edit-opener';
+import {
+  deriveAwaitingRevision,
+  openPreJoinDraftRevision,
+  recoverStaleOpenerForRead,
+} from '../services/prejoin-edit-opener';
 import { getPartnerParticipant } from '../services/participant-resolver';
 
 // ============================================================================
@@ -349,12 +353,19 @@ export async function getDraft(req: Request, res: Response): Promise<void> {
 
     // work-9309: reopened by Edit first, the AI's proposal not yet made — the
     // old draft's Review/Share panel stays hidden (owner decision 2026-11-09).
-    const awaitingRevision = await isAwaitingRevision({
-      conversationId: me.mainConversationId,
-      partnerJoinedAt: caller.partner?.joinedAt ?? null,
-      draftUpdatedAt: draft?.updatedAt ?? null,
-      roundSubmitted: !!myAttempt,
-    });
+    const awaitingRevision = deriveAwaitingRevision({ reopenedAt: draft?.reopenedAt, roundSubmitted: !!myAttempt });
+    // A reopen whose opener was lost (the process died mid-generation) gets the
+    // template once it is older than the generation could take (at most once).
+    if (awaitingRevision && draft && caller.partner) {
+      await recoverStaleOpenerForRead({
+        sessionId: caller.sessionId,
+        userId: caller.userId,
+        participantId: me.participantId,
+        conversationId: me.mainConversationId,
+        partnerName: await reopenPartnerName(caller),
+        draft,
+      });
+    }
 
     successResponse(res, {
       draft: draft
@@ -442,20 +453,15 @@ export async function editPreJoinDraftFirst(req: Request, res: Response): Promis
       return;
     }
     if (!caller.partner || !caller.me.mainConversationId) {
-      successResponse(res, { resolved: false, opener: null, openerAt: null });
+      successResponse(res, { resolved: false, opener: null, reopenedAt: null });
       return;
     }
 
-    const [partner, session, invitation] = await Promise.all([
-      getPartnerParticipant(caller.me.participantId),
+    const [partnerName, session] = await Promise.all([
+      reopenPartnerName(caller),
       prisma.session.findUnique({
         where: { id: caller.sessionId },
         select: { topicFrame: true, topicFrameConfirmedAt: true },
-      }),
-      // The name the author invited them by: the fallback when the partner's profile has none.
-      prisma.invitation.findFirst({
-        where: { sessionId: caller.sessionId, invitedByParticipantId: caller.me.participantId },
-        select: { name: true },
       }),
     ]);
     updateContext({
@@ -470,19 +476,35 @@ export async function editPreJoinDraftFirst(req: Request, res: Response): Promis
       userName: req.user?.name || caller.me.name || 'there',
       participantId: caller.me.participantId,
       mainConversationId: caller.me.mainConversationId,
-      partnerName: partner?.displayName || caller.partner.name || invitation?.name || undefined,
+      partnerName,
       topicFrame: session?.topicFrameConfirmedAt ? session.topicFrame : undefined,
       timeZone: parseResult.data.timeZone,
     });
     // 202 while the opener is generated in the background (it arrives via
-    // Ably / the client's refetch, at `openerAt`); 200 otherwise.
-    const { resolved, opener, openerAt } = result;
+    // Ably / the client's refetch: the first AI message at or after
+    // `reopenedAt`); 200 otherwise.
+    const { resolved, opener, reopenedAt } = result;
     const accepted = 'generation' in result && !!result.generation;
-    successResponse(res, { resolved, opener, openerAt }, accepted ? 202 : 200);
+    successResponse(res, { resolved, opener, reopenedAt }, accepted ? 202 : 200);
   } catch (error) {
     logger.error('[editPreJoinDraftFirst] Error:', error);
     errorResponse(res, 'INTERNAL_ERROR', 'Failed to open the draft for editing', 500);
   }
+}
+
+/**
+ * The partner's name as the opener says it (work-9309): their participant
+ * display name, else their name, else the name the author invited them by.
+ */
+async function reopenPartnerName(caller: Stage2Caller): Promise<string | undefined> {
+  const [partner, invitation] = await Promise.all([
+    getPartnerParticipant(caller.me.participantId),
+    prisma.invitation.findFirst({
+      where: { sessionId: caller.sessionId, invitedByParticipantId: caller.me.participantId },
+      select: { name: true },
+    }),
+  ]);
+  return partner?.displayName || caller.partner?.name || invitation?.name || undefined;
 }
 
 /** The caller's own newest EMPATHY_STATEMENT copy, as the consent response's empathyMessage. */

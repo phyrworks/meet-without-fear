@@ -107,29 +107,16 @@ describe('the Stage 2 REOPENED DRAFT section', () => {
 });
 
 describe('deriveAwaitingRevision (owner decision 2026-11-09: the old draft panel hides until the AI proposes)', () => {
-  const joined = new Date('2026-11-07T10:00:00Z');
-  const base = {
-    partnerJoinedAt: joined,
-    draftUpdatedAt: new Date('2026-11-07T11:00:00Z'), // the Edit-first write, after the join
-    roundSubmitted: false,
-    openerAtLastWrite: true,
-  };
-
-  it('is true while the opener sits at the draft’s last write', () => {
-    expect(deriveAwaitingRevision(base)).toBe(true);
+  it('is true exactly while draft.reopened_at is set (Edit first) and no round is submitted', () => {
+    expect(deriveAwaitingRevision({ reopenedAt: new Date('2026-11-07T11:00:00Z'), roundSubmitted: false })).toBe(true);
   });
 
-  it('ends with the next draft write (the AI’s proposal or the author’s save): no opener at the last write', () => {
-    expect(deriveAwaitingRevision({ ...base, openerAtLastWrite: false })).toBe(false);
+  it('is false with no marker: never reopened, or the next draft write cleared it', () => {
+    expect(deriveAwaitingRevision({ reopenedAt: null, roundSubmitted: false })).toBe(false);
+    expect(deriveAwaitingRevision({ reopenedAt: undefined, roundSubmitted: false })).toBe(false);
   });
 
-  it('is false while the pre-join review is still pending (the draft predates the join)', () => {
-    expect(deriveAwaitingRevision({ ...base, draftUpdatedAt: new Date('2026-11-06T09:00:00Z') })).toBe(false);
-  });
-
-  it('is false once a round is submitted, with no partner, or with no draft', () => {
-    expect(deriveAwaitingRevision({ ...base, roundSubmitted: true })).toBe(false);
-    expect(deriveAwaitingRevision({ ...base, partnerJoinedAt: null })).toBe(false);
-    expect(deriveAwaitingRevision({ ...base, draftUpdatedAt: null })).toBe(false);
+  it('is false once a round is submitted', () => {
+    expect(deriveAwaitingRevision({ reopenedAt: new Date('2026-11-07T11:00:00Z'), roundSubmitted: true })).toBe(false);
   });
 });

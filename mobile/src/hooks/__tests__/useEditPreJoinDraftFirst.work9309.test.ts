@@ -6,7 +6,7 @@
  *     draft's panel hides: awaitingRevision), rolled back if the call fails
  *     (cache-first: onMutate / onError);
  *   - the opener is generated in the background (202): the client refetches the
- *     conversation, bounded, until the message at `openerAt` is there (no Ably,
+ *     conversation, bounded, until the first AI message at or after `reopenedAt` is there (no Ably,
  *     no reload); a retry's opener goes into the chat once.
  */
 
@@ -16,7 +16,14 @@ import React from 'react';
 import { MessageRole, type GetMessagesResponse, type MessageDTO } from '@meet-without-fear/shared';
 import * as api from '../../lib/api';
 import { createQueryClient } from '../../providers/QueryProvider';
-import { useEditPreJoinDraftFirst, awaitEditFirstOpener, EDIT_FIRST_OPENER_POLL, stageKeys } from '../useStages';
+import {
+  useEditPreJoinDraftFirst,
+  awaitEditFirstOpener,
+  cancelEditFirstOpenerWait,
+  mergeEmpathyDraftFromServer,
+  EDIT_FIRST_OPENER_POLL,
+  stageKeys,
+} from '../useStages';
 import { messageKeys } from '../queryKeys';
 
 jest.mock('../../lib/api', () => ({
@@ -36,6 +43,7 @@ jest.mock('../../lib/api', () => ({
 jest.mock('../../services/analytics', () => ({ trackError: jest.fn() }));
 
 const mockPost = api.post as jest.MockedFunction<typeof api.post>;
+const mockGet = api.get as jest.MockedFunction<typeof api.get>;
 const ApiError = api.ApiClientError as unknown as new (e: { code: string; message: string }, s: number) => Error;
 const sessionId = 'session-9309';
 const wrapperFor = (client: QueryClient): React.FC<{ children: React.ReactNode }> =>
@@ -92,6 +100,8 @@ describe('useEditPreJoinDraftFirst (work-9309)', () => {
       pages: [{ messages, hasMore: false }],
       pageParams: [undefined],
     });
+  const reopenedAt = '2026-11-07T09:59:59.000Z'; // the marker: the opener lands at or after it
+  const activeInfinite = { queryKey: messageKeys.infinite(sessionId), type: 'active' };
 
   it('ends the review and hides the old draft at once; the 202 opener then arrives through the refetch', async () => {
     EDIT_FIRST_OPENER_POLL.intervalMs = 10;
@@ -101,6 +111,7 @@ describe('useEditPreJoinDraftFirst (work-9309)', () => {
     withChat(client, [earlier]);
     // The test caches have no queryFn: a real refetch would retry; the call itself is what is asserted.
     const refetch = jest.spyOn(client, 'refetchQueries').mockResolvedValue(undefined);
+    const invalidate = jest.spyOn(client, 'invalidateQueries');
     let respond!: (v: unknown) => void;
     mockPost.mockImplementationOnce(() => new Promise((r) => (respond = r)));
     const { result } = renderHook(() => useEditPreJoinDraftFirst(), { wrapper: wrapperFor(client) });
@@ -121,35 +132,68 @@ describe('useEditPreJoinDraftFirst (work-9309)', () => {
     expect(body).toEqual(expect.objectContaining({ timeZone: expect.any(String) }));
 
     await act(async () => {
-      respond({ resolved: true, opener: null, openerAt: opener.timestamp });
+      respond({ resolved: true, opener: null, reopenedAt });
       await pending;
     });
-    // The conversation is refetched until the opener is there (here it "arrives" meanwhile).
-    await waitFor(() => expect(refetch).toHaveBeenCalledWith({ queryKey: messageKeys.infinite(sessionId) }));
+    // Only the active conversation queries are refetched, until the opener is there.
+    await waitFor(() => expect(refetch).toHaveBeenCalledWith(activeInfinite));
     act(() => withChat(client, [earlier, opener]));
-    const invalidate = jest.spyOn(client, 'invalidateQueries');
-    await waitFor(() => expect(invalidate).toHaveBeenCalledWith({ queryKey: stageKeys.empathyDraft(sessionId) }));
+    const calls = () => refetch.mock.calls.length;
+    await new Promise((r) => setTimeout(r, 60));
+    const settled = calls();
+    await new Promise((r) => setTimeout(r, 60));
+    expect(calls()).toBe(settled); // stopped once found
     expect(chatOf(client)).toEqual([earlier, opener]);
-    const calls = refetch.mock.calls.length;
-    await new Promise((r) => setTimeout(r, 50));
-    expect(refetch.mock.calls.length).toBe(calls); // stopped once found
+    // The reopen is the server's: nothing un-hides the draft.
+    expect(invalidate).not.toHaveBeenCalledWith({ queryKey: stageKeys.empathyDraft(sessionId) });
+    expect(client.getQueryData<typeof review>(stageKeys.empathyDraft(sessionId))?.awaitingRevision).toBe(true);
   });
 
-  it('awaitEditFirstOpener is bounded: it gives up after the configured attempts', async () => {
+  it('a later call while the opener is still being generated (resolved, no opener) waits the same way and keeps the draft hidden', async () => {
     EDIT_FIRST_OPENER_POLL.intervalMs = 1;
     EDIT_FIRST_OPENER_POLL.attempts = 3;
     const client = createClient();
+    client.setQueryData(stageKeys.empathyDraft(sessionId), { ...review, preJoinReview: null, awaitingRevision: true });
     withChat(client, [earlier]);
-    // The test caches have no queryFn: a real refetch would retry; the call itself is what is asserted.
     const refetch = jest.spyOn(client, 'refetchQueries').mockResolvedValue(undefined);
-    await expect(awaitEditFirstOpener(client, sessionId, opener.timestamp)).resolves.toBe(false);
-    expect(refetch.mock.calls.filter(([f]) => JSON.stringify(f) === JSON.stringify({ queryKey: messageKeys.infinite(sessionId) }))).toHaveLength(3);
+    const invalidate = jest.spyOn(client, 'invalidateQueries');
+    mockPost.mockResolvedValueOnce({ resolved: true, opener: null, reopenedAt });
+    const { result } = renderHook(() => useEditPreJoinDraftFirst(), { wrapper: wrapperFor(client) });
+    await act(async () => {
+      await result.current.mutateAsync({ sessionId });
+    });
+    await waitFor(() => expect(refetch).toHaveBeenCalledWith(activeInfinite));
+    expect(invalidate).not.toHaveBeenCalledWith({ queryKey: stageKeys.empathyDraft(sessionId) });
+    expect(client.getQueryData<typeof review>(stageKeys.empathyDraft(sessionId))?.awaitingRevision).toBe(true);
   });
 
-  it('a retry gets the written opener back and it goes into the chat once', async () => {
+  it('awaitEditFirstOpener is bounded, and a newer wait or a cancel stops an older one', async () => {
+    EDIT_FIRST_OPENER_POLL.intervalMs = 5;
+    EDIT_FIRST_OPENER_POLL.attempts = 3;
+    const client = createClient();
+    withChat(client, [earlier]);
+    const refetch = jest.spyOn(client, 'refetchQueries').mockResolvedValue(undefined);
+    await expect(awaitEditFirstOpener(client, sessionId, reopenedAt)).resolves.toBe('gave-up');
+    expect(refetch.mock.calls.filter(([f]) => JSON.stringify(f) === JSON.stringify(activeInfinite))).toHaveLength(3);
+
+    EDIT_FIRST_OPENER_POLL.attempts = 50;
+    const older = awaitEditFirstOpener(client, sessionId, reopenedAt);
+    const newer = awaitEditFirstOpener(client, sessionId, reopenedAt);
+    await expect(older).resolves.toBe('cancelled');
+    cancelEditFirstOpenerWait(sessionId); // unmount / session switch
+    await expect(newer).resolves.toBe('cancelled');
+    // A message before the marker is not the opener; one at or after it is.
+    withChat(client, [earlier]);
+    EDIT_FIRST_OPENER_POLL.attempts = 2;
+    await expect(awaitEditFirstOpener(client, sessionId, reopenedAt)).resolves.toBe('gave-up');
+    withChat(client, [earlier, opener]);
+    await expect(awaitEditFirstOpener(client, sessionId, reopenedAt)).resolves.toBe('found');
+  });
+
+  it('a later call gets the written opener back and it goes into the chat once', async () => {
     const client = createClient();
     withChat(client, [earlier, opener]);
-    mockPost.mockResolvedValueOnce({ resolved: true, opener, openerAt: opener.timestamp });
+    mockPost.mockResolvedValueOnce({ resolved: true, opener, reopenedAt });
     const { result } = renderHook(() => useEditPreJoinDraftFirst(), { wrapper: wrapperFor(client) });
     await act(async () => {
       await result.current.mutateAsync({ sessionId });
@@ -158,7 +202,7 @@ describe('useEditPreJoinDraftFirst (work-9309)', () => {
 
     const fresh = createClient();
     withChat(fresh, [earlier]);
-    mockPost.mockResolvedValueOnce({ resolved: true, opener, openerAt: opener.timestamp });
+    mockPost.mockResolvedValueOnce({ resolved: true, opener, reopenedAt });
     const second = renderHook(() => useEditPreJoinDraftFirst(), { wrapper: wrapperFor(fresh) });
     await act(async () => {
       await second.result.current.mutateAsync({ sessionId });
@@ -169,7 +213,7 @@ describe('useEditPreJoinDraftFirst (work-9309)', () => {
   it('adds nothing and refreshes the draft state when no reopen is in effect (resolved: false)', async () => {
     const client = createClient();
     withChat(client, [earlier]);
-    mockPost.mockResolvedValueOnce({ resolved: false, opener: null, openerAt: null });
+    mockPost.mockResolvedValueOnce({ resolved: false, opener: null, reopenedAt: null });
     const invalidate = jest.spyOn(client, 'invalidateQueries');
     const { result } = renderHook(() => useEditPreJoinDraftFirst(), { wrapper: wrapperFor(client) });
     await act(async () => {
@@ -189,5 +233,18 @@ describe('useEditPreJoinDraftFirst (work-9309)', () => {
     });
     expect(client.getQueryData(stageKeys.empathyDraft(sessionId))).toEqual(review);
     expect(mockPost).toHaveBeenCalledTimes(1);
+  });
+
+  it('mergeEmpathyDraftFromServer merges the server draft with setQueryData (an AI proposal elsewhere ends the reopen)', async () => {
+    const client = createClient();
+    client.setQueryData(stageKeys.empathyDraft(sessionId), { ...review, preJoinReview: null, awaitingRevision: true });
+    mockGet.mockResolvedValueOnce({ ...review, preJoinReview: null, awaitingRevision: false, draft: { ...review.draft, content: 'the revision' } });
+    const invalidate = jest.spyOn(client, 'invalidateQueries');
+    await mergeEmpathyDraftFromServer(client, sessionId);
+    expect(client.getQueryData(stageKeys.empathyDraft(sessionId))).toMatchObject({
+      awaitingRevision: false,
+      draft: { content: 'the revision' },
+    });
+    expect(invalidate).not.toHaveBeenCalled();
   });
 });

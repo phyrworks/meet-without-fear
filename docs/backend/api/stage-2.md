@@ -156,24 +156,38 @@ Request body: `{ timeZone?: string }` — the author's IANA zone, so the opener
 names the day as the review did ("earlier today", "yesterday", "on Tuesday",
 "on Nov 2"); unknown zones read as UTC.
 
-Response: `{ resolved: boolean; opener: MessageDTO | null; openerAt: string | null }`.
+Response: `{ resolved: boolean; opener: MessageDTO | null; reopenedAt: string | null }`.
 
+- **The reopen marker.** The transaction that ends the review also sets
+  `draft.reopened_at` (spec §1.1 draft; `resolvePreJoinReviewForEdit`). It is
+  durable before any opener exists, and cleared by the next draft write
+  (`upsertDraft`'s `DO UPDATE`): the AI's proposal through the ReadyShare path (a
+  revision, or the original unchanged when the author says it still fits), or the
+  author's own save. The accept's move keeps it. The opener is "the first AI row at
+  or after `reopened_at`".
 - **Returns at once.** The call that ends the review answers **202**
-  `{ resolved: true, opener: null, openerAt }` and the opener is generated in the
+  `{ resolved: true, opener: null, reopenedAt }` and the opener is generated in the
   background (as the invitation-confirm opener: the client's request timeout is
   shorter than a slow model call). It reaches the client by Ably
-  (`message.ai_response`, id only) or by the client's bounded refetch of the
-  conversation until the message at `openerAt` is there.
+  (`message.ai_response`, id only) or by the client's bounded, cancellable refetch
+  of the active conversation queries until the first AI message at or after
+  `reopenedAt` is there.
 - **At most one opener per Edit first.** The pending draft is locked `FOR
-  UPDATE`; only the call that ends the review schedules the opener. A later call
-  (retry, second tap, reload, another device) answers 200 — `resolved: true` with
-  the written opener while the reopen is in effect, else `{ resolved: false,
-  opener: null, openerAt: null }` (also: no partner yet, a draft written after the
-  join, a review already ended) — and never writes one.
+  UPDATE`; only the call that ends the review schedules the opener, and the insert
+  claims the draft row `FOR UPDATE` and re-checks for an opener first. A later call
+  (retry, second tap, reload, another device) answers 200 while the marker is set —
+  `resolved: true` with the opener, or `opener: null` while it is still being
+  generated (the client waits as on the 202) — else `{ resolved: false, opener:
+  null, reopenedAt: null }` (no partner yet, a draft written after the join, a
+  review already ended). It never writes one, except to recover a lost generation:
 - **Never silent.** A model failure, an empty reply or a timeout (45 s,
   `PREJOIN_OPENER_TIMEOUT_MS`) writes the fixed template instead ("Here's what you
   wrote <day>: "<draft>" Nothing has been sent. Reading it now, what feels
-  different?").
+  different?"). A generation lost outright (the process died) — the marker set, no
+  opener, the marker older than the timeout plus 15 s — is recovered by the next
+  Edit first or GET `/empathy/draft`: the template, naming the join ("Here's what
+  you wrote before <partner> joined") since the day is no longer known, written at
+  most once under the same claim.
 - **The opener** is a proactive Stage 2 turn on the invitation-confirm opener's
   path (`getOrchestratedResponse` with a bracketed trigger line that is never
   stored), with the `REOPENED DRAFT` prompt section carrying the draft (fenced in
@@ -183,14 +197,11 @@ Response: `{ resolved: boolean; opener: MessageDTO | null; openerAt: string | nu
   `prejoin-edit-first-opener` operation (`{{writtenAt}}` → the day phrase), else
   the template.
 - **Awaiting the AI's proposal** (owner decision 2026-11-09). GET
-  `/empathy/draft` reports `awaitingRevision: true` from the opener until the next
-  draft write — the AI's proposal through the ReadyShare path (a revision, or the
-  original unchanged when the author says it still fits), or the author's own
-  save. Derived, not stored: the opener is written with `created_at` = the
-  resolving write's `updated_at`, so it is "an AI row at the draft's last write".
-  Mobile hides the old draft's Review/Share panel while it is true; the chat
-  turn's prompt carries `REVISING A REOPENED DRAFT` (the early-stage draft guard
-  lifted).
+  `/empathy/draft` reports `awaitingRevision` = `reopened_at IS NOT NULL` (and no
+  round submitted). Mobile hides the old draft's Review/Share panel while it is
+  true (a realtime AI response merges the server's draft state while it is); the
+  chat turn's prompt carries `REVISING A REOPENED DRAFT` (the early-stage draft
+  guard lifted).
 - **Never a statement.** The opener turn is `ReadyShare:N` by prompt and by code;
   it never writes the draft beyond the resolving write.
 - **Private.** One AI row in the caller's MAIN conversation; the Ably

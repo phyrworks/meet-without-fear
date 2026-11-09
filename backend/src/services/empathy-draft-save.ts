@@ -109,8 +109,8 @@ function lockPendingPreJoinDraft(
 export type ResolvePreJoinReviewForEditResult =
   | {
       status: 'resolved';
-      /** The draft after the resolving write (same text, not ready; written-at is now). */
-      draft: DraftRow;
+      /** The draft after the resolving write (same text, not ready; written-at is now), reopenedAt set. */
+      draft: DraftRow & { reopenedAt: Date };
       /** When the author had written it: the review's written-at, read before this write. */
       writtenAt: Date;
       partnerParticipantId: string;
@@ -125,9 +125,9 @@ export type ResolvePreJoinReviewForEditResult =
  *
  * Exactly one call resolves a given review: the pending draft is held FOR
  * UPDATE, so a concurrent second call waits, then finds the review ended (its
- * updated_at is now after the join) and reports `not_pending`. The caller
- * writes the opener only on `resolved`: that is the opener's idempotency (one
- * per Edit first, none on a retry, a second tap or a reload).
+ * updated_at is now after the join) and reports `not_pending`. The same
+ * transaction sets `reopened_at` (work-9309): the reopen is durable before any
+ * opener is generated. The caller schedules the opener only on `resolved`.
  */
 export async function resolvePreJoinReviewForEdit(participantId: string): Promise<ResolvePreJoinReviewForEditResult> {
   return prisma.$transaction(async tx => {
@@ -139,10 +139,15 @@ export async function resolvePreJoinReviewForEdit(participantId: string): Promis
     if (!pending.length) return { status: 'not_pending' };
 
     const kept = await tx.draft.findUniqueOrThrow({ where: { id: pending[0].id }, select: { content: true } });
-    const draft = await upsertDraft(
+    const written = await upsertDraft(
       { participantId, kind: 'EMPATHY', aboutParticipantId: partnerId, content: kept.content, readyToShare: false },
       tx,
     );
+    // work-9309: the durable reopen marker, in the resolving transaction. The
+    // next draft write (upsertDraft's DO UPDATE) clears it.
+    const [marked] = await tx.$queryRaw<Array<{ reopened_at: Date }>>`
+      UPDATE draft SET reopened_at = now() WHERE id = ${written.id}::uuid RETURNING reopened_at`;
+    const draft = { ...written, reopenedAt: marked.reopened_at };
     return { status: 'resolved', draft, writtenAt: pending[0].updated_at, partnerParticipantId: partnerId };
   });
 }

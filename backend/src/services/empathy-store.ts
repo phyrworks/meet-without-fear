@@ -476,6 +476,8 @@ export interface DraftRow {
   readyToShare: boolean;
   version: number;
   updatedAt: Date;
+  /** work-9309: set by "Edit first", cleared by the next write (findDraft reads it; writes leave it unset). */
+  reopenedAt?: Date | null;
 }
 
 /**
@@ -509,7 +511,10 @@ export async function upsertDraft(
     ON CONFLICT (participant_id, kind, (coalesce(about_participant_id, invitation_id, attempt_id, share_offer_id)))
     DO UPDATE SET content = EXCLUDED.content,
                   ready_to_share = coalesce(${ready}::boolean, draft.ready_to_share),
-                  version = draft.version + 1
+                  version = draft.version + 1,
+                  -- work-9309: any write after an "Edit first" (the AI's
+                  -- proposal, the author's save) ends the reopen.
+                  reopened_at = NULL
     RETURNING id, content, ready_to_share, version, updated_at`,
     { content: 'draft.content' },
   );
@@ -540,7 +545,7 @@ export async function findDraft(opts: {
   if (!Object.values(point)[0]) return null;
   return prisma.draft.findFirst({
     where: { participantId: opts.participantId, kind: opts.kind, ...point },
-    select: { id: true, content: true, readyToShare: true, version: true, updatedAt: true },
+    select: { id: true, content: true, readyToShare: true, version: true, updatedAt: true, reopenedAt: true },
   });
 }
 
@@ -631,6 +636,7 @@ export async function repointInvitationDrafts(
         version: d.version,
         createdAt: d.createdAt,
         updatedAt: d.updatedAt,
+        reopenedAt: d.reopenedAt, // work-9309: the move keeps every fact of the row
       },
     });
   }

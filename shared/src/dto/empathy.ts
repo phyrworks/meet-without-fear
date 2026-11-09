@@ -85,7 +85,8 @@ export interface GetEmpathyDraftResponse {
    * work-9309 (owner decision 2026-11-09): the draft was reopened by "Edit
    * first" and the AI has not yet proposed (a revision, or the original as
    * is). The old draft's Review/Share panel stays hidden while true. Derived
-   * on the server: true from the AI's opener until the next draft write.
+   * on the server: `draft.reopened_at` is set by Edit first and cleared by the
+   * next draft write.
    */
   awaitingRevision?: boolean;
 }
@@ -113,19 +114,23 @@ export interface EditPreJoinDraftFirstResponse {
   /**
    * True when the reopen is in effect: this request ended the pending review
    * (HTTP 202 — the opener is generated in the background), or a later call
-   * (retry, second tap, another device) finds the opener already written and
-   * the AI not yet proposing. False otherwise; no call ever writes a second
+   * (retry, second tap, another device) finds the draft still reopened (the
+   * AI not yet proposing). False otherwise; no call ever writes a second
    * opener.
    */
   resolved: boolean;
   /**
    * The AI's opener, in the author's own conversation only, when already
-   * written (a later call). Null on the call that ended the review: it arrives
-   * through Ably or the client's refetch.
+   * written. Null while it is generated (on the call that ended the review,
+   * and on a later call before it lands): it arrives through Ably or the
+   * client's refetch.
    */
   opener: MessageDTO | null;
-  /** The opener's timestamp (ISO) — the client waits for the message at it. Null unless `resolved`. */
-  openerAt: string | null;
+  /**
+   * The reopen marker (`draft.reopened_at`, ISO): the opener is the first AI
+   * message at or after it — what the client waits for. Null unless `resolved`.
+   */
+  reopenedAt: string | null;
 }
 
 // ============================================================================
