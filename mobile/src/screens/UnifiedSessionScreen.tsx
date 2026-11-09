@@ -2422,6 +2422,8 @@ export function UnifiedSessionScreen({
     } : undefined,
     empathyDraftData: empathyDraftData ? {
       alreadyConsented: empathyDraftData.alreadyConsented,
+      // work-9309: reopened by Edit first — the panel waits for the AI's proposal.
+      awaitingRevision: empathyDraftData.awaitingRevision,
       draft: empathyDraftData.draft ? {
         content: empathyDraftData.draft.content,
       } : undefined,

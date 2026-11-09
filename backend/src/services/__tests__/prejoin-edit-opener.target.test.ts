@@ -94,11 +94,30 @@ describeTarget('Edit first on a pre-join draft: the AI opens the revision (work-
     return { ...s, partner, partnerParticipant };
   };
 
-  it('writes one opener, in the author’s conversation only, from the Stage 2 path with the draft and its day', async () => {
+  /** Wait (bounded) for the background opener: the participant's AI count reaches `n`. */
+  const untilAiCount = async (participantId: string, n: number) => {
+    for (let i = 0; i < 200 && (await messageCounts(participantId)).ai < n; i++) {
+      await new Promise(r => setTimeout(r, 25));
+    }
+    expect((await messageCounts(participantId)).ai).toBe(n);
+  };
+
+  /** Ada's messages, and those at `openerAt`, through the app (decrypted). */
+  const messageAt = async (sessionId: string, openerAt: string) => {
+    const page = await http(ada, 'get', `/sessions/${sessionId}/messages`);
+    const messages: Array<{ id: string; role: string; content: string; timestamp: string }> = page.body.data.messages;
+    return { messages, at: messages.filter(m => m.timestamp === openerAt) };
+  };
+
+  const template = (draft: string) =>
+    `Here's what you wrote earlier today:\n\n"${draft}"\n\nNothing has been sent. Reading it now, what feels different?`;
+
+  it('returns at once (202) and writes one opener, in the author’s conversation only, from the Stage 2 path', async () => {
     const draft = 'Dan might feel unseen when the chores pile up.';
     const { sessionId, adaParticipant, partnerParticipant } = await draftThenJoin('Dan', draft);
     const review = await draftOf(sessionId);
     expect(review.preJoinReview).not.toBeNull();
+    expect(review.awaitingRevision).toBe(false);
     const adaBefore = await messageCounts(adaParticipant);
     const partnerBefore = await messageCounts(partnerParticipant);
 
@@ -108,25 +127,28 @@ describeTarget('Edit first on a pre-join draft: the AI opens the revision (work-
     const built = jest.spyOn(prompts, 'buildStagePrompt');
 
     const res = await http(ada, 'post', `/sessions/${sessionId}/empathy/draft/edit-first`, { timeZone: 'UTC' });
-    expect(res.status).toBe(200);
-    expect(res.body.data.resolved).toBe(true);
-    const opener = res.body.data.opener;
-    // MOCK_LLM without a fixture: the template — the day, the draft, the question.
-    expect(opener).toMatchObject({ role: 'AI', stage: 2 });
-    expect(opener.content).toBe(
-      `Here's what you wrote earlier today:\n\n"${draft}"\n\nNothing has been sent. Reading it now, what feels different?`,
-    );
+    expect(res.status).toBe(202);
+    expect(res.body.data).toMatchObject({ resolved: true, opener: null });
+    const openerAt: string = res.body.data.openerAt;
+    // openerAt is the resolving write's time: the draft's last write.
+    expect((await draftOf(sessionId)).draft.updatedAt).toBe(openerAt);
 
-    // The Stage 2 prompt path, with the draft and its written-at day in context.
+    await untilAiCount(adaParticipant, adaBefore.ai + 1);
+    const { messages, at } = await messageAt(sessionId, openerAt);
+    // MOCK_LLM without a fixture: the template — the day, the draft, the question.
+    expect(at).toEqual([expect.objectContaining({ role: 'AI', content: template(draft) })]);
+    expect(messages.some(m => /Edit first/.test(m.content))).toBe(false); // the trigger line is not stored
+
+    // The Stage 2 prompt path, with the draft and its written-at day in context — once.
     expect(orchestrated).toHaveBeenCalledTimes(1);
     const [history, ctx] = orchestrated.mock.calls[0];
     expect(ctx).toMatchObject({
       stage: 2,
       userId: ada.id,
       partnerName: 'Dan',
-      currentEmpathyDraft: draft,
       reopenedPreJoinDraft: { content: draft, writtenAtPhrase: 'earlier today' },
     });
+    expect(ctx.currentEmpathyDraft).toBeUndefined();
     expect(ctx.reopenedPreJoinDraft?.writtenAtDate).toMatch(/^[A-Z][a-z]+day, [A-Z][a-z]+ \d{1,2}, \d{4}$/);
     expect(history[history.length - 1].content).toMatch(/Edit first/);
     const stage2Prompt = built.mock.calls.find(([stage]) => stage === 2);
@@ -136,33 +158,37 @@ describeTarget('Edit first on a pre-join draft: the AI opens the revision (work-
     expect(result.offerReadyToShare).toBe(false);
     expect(result.proposedEmpathyStatement).toBeNull();
 
-    // Exactly one AI row more in Ada's conversation; the trigger line is not stored;
-    // nothing reaches the partner's conversation.
+    // Exactly one AI row more in Ada's conversation; nothing in the partner's.
     expect(await messageCounts(adaParticipant)).toEqual({ ai: adaBefore.ai + 1, total: adaBefore.total + 1 });
     expect(await messageCounts(partnerParticipant)).toEqual(partnerBefore);
-    const history2 = await http(ada, 'get', `/sessions/${sessionId}/messages`);
-    const messages: Array<{ id: string; content: string }> = history2.body.data.messages;
-    expect(messages.filter(m => m.id === opener.id)).toHaveLength(1);
-    expect(messages.some(m => /Edit first/.test(m.content))).toBe(false);
 
-    // The review is over, the draft kept as written (not ready: the author is editing).
+    // The review is over, the draft kept as written (not ready), the AI's proposal awaited.
     expect(await draftOf(sessionId)).toMatchObject({
       preJoinReview: null,
+      awaitingRevision: true,
       draft: { content: draft, readyToShare: false, version: 2 },
     });
-    // No round was submitted.
     expect(
       await run.sql(`SELECT count(*)::int AS n FROM empathy_attempt WHERE author_participant_id = $1`, [
         adaParticipant,
       ]),
     ).toEqual([{ n: 0 }]);
 
-    // Idempotent: a retry (or a second tap, or a reload's re-tap) writes nothing.
+    // A retry (second tap, reload's re-tap, another device): the reopen is in
+    // effect, the existing opener comes back, nothing is written or generated.
     const again = await http(ada, 'post', `/sessions/${sessionId}/empathy/draft/edit-first`, { timeZone: 'UTC' });
     expect(again.status).toBe(200);
-    expect(again.body.data).toEqual({ resolved: false, opener: null });
+    expect(again.body.data).toMatchObject({ resolved: true, openerAt, opener: { id: at[0].id } });
     expect(await messageCounts(adaParticipant)).toEqual({ ai: adaBefore.ai + 1, total: adaBefore.total + 1 });
     expect(orchestrated).toHaveBeenCalledTimes(1);
+
+    // The next draft write — the chat turn's autosave of the AI's proposal (the
+    // original as is, here) — ends the wait; a later Edit first finds nothing.
+    const { saveEmpathyDraft } = await import('../empathy-draft-save');
+    expect((await saveEmpathyDraft({ participantId: adaParticipant, content: draft })).status).toBe('saved');
+    expect((await draftOf(sessionId)).awaitingRevision).toBe(false);
+    const late = await http(ada, 'post', `/sessions/${sessionId}/empathy/draft/edit-first`, {});
+    expect(late.body.data).toEqual({ resolved: false, opener: null, openerAt: null });
   });
 
   it('two concurrent Edit first calls write one opener', async () => {
@@ -172,9 +198,56 @@ describeTarget('Edit first on a pre-join draft: the AI opens the revision (work-
       http(ada, 'post', `/sessions/${sessionId}/empathy/draft/edit-first`, {}),
       http(ada, 'post', `/sessions/${sessionId}/empathy/draft/edit-first`, {}),
     ]);
-    expect([a.status, b.status]).toEqual([200, 200]);
-    expect([a.body.data.resolved, b.body.data.resolved].sort()).toEqual([false, true]);
+    // Exactly one call ended the review (202); the other answered 200 without writing.
+    expect([a.status, b.status].sort()).toEqual([200, 202]);
+    await untilAiCount(adaParticipant, before.ai + 1);
+    await new Promise(r => setTimeout(r, 300));
     expect((await messageCounts(adaParticipant)).ai).toBe(before.ai + 1);
+  });
+
+  it('writes the template when the opener call throws', async () => {
+    const draft = 'Kim may feel she carries it alone.';
+    const { sessionId, adaParticipant } = await draftThenJoin('Kim', draft);
+    const before = await messageCounts(adaParticipant);
+    const ai = await import('../ai');
+    jest.spyOn(ai, 'getOrchestratedResponse').mockRejectedValueOnce(new Error('injected: Bedrock down'));
+    const res = await http(ada, 'post', `/sessions/${sessionId}/empathy/draft/edit-first`, { timeZone: 'UTC' });
+    expect(res.status).toBe(202);
+    await untilAiCount(adaParticipant, before.ai + 1);
+    const { at } = await messageAt(sessionId, res.body.data.openerAt);
+    expect(at.map(m => m.content)).toEqual([template(draft)]);
+    expect((await draftOf(sessionId)).awaitingRevision).toBe(true);
+  });
+
+  it('writes the template when the model call throws inside the orchestrator', async () => {
+    const draft = 'Lou may be scared of the argument.';
+    const { sessionId, adaParticipant } = await draftThenJoin('Lou', draft);
+    const before = await messageCounts(adaParticipant);
+    const bedrock = await import('../../lib/bedrock');
+    jest.spyOn(bedrock, 'getModelCompletionWithTools').mockRejectedValue(new Error('injected: the model throws'));
+    const res = await http(ada, 'post', `/sessions/${sessionId}/empathy/draft/edit-first`, { timeZone: 'UTC' });
+    expect(res.status).toBe(202);
+    await untilAiCount(adaParticipant, before.ai + 1);
+    const { at } = await messageAt(sessionId, res.body.data.openerAt);
+    expect(at.map(m => m.content)).toEqual([template(draft)]);
+  });
+
+  it('writes the template when the opener call times out', async () => {
+    const draft = 'Max might feel cornered.';
+    const { sessionId, adaParticipant } = await draftThenJoin('Max', draft);
+    const before = await messageCounts(adaParticipant);
+    const ai = await import('../ai');
+    jest.spyOn(ai, 'getOrchestratedResponse').mockImplementationOnce(() => new Promise(() => undefined));
+    process.env.PREJOIN_OPENER_TIMEOUT_MS = '200';
+    try {
+      const res = await http(ada, 'post', `/sessions/${sessionId}/empathy/draft/edit-first`, { timeZone: 'UTC' });
+      expect(res.status).toBe(202);
+      await untilAiCount(adaParticipant, before.ai + 1);
+      const { at } = await messageAt(sessionId, res.body.data.openerAt);
+      expect(at.map(m => m.content)).toEqual([template(draft)]);
+    } finally {
+      delete process.env.PREJOIN_OPENER_TIMEOUT_MS;
+    }
   });
 
   it('writes nothing without a pending pre-join review', async () => {
@@ -184,7 +257,7 @@ describeTarget('Edit first on a pre-join draft: the AI opens the revision (work-
     const soloBefore = await messageCounts(solo.adaParticipant);
     const early = await http(ada, 'post', `/sessions/${solo.sessionId}/empathy/draft/edit-first`, {});
     expect(early.status).toBe(200);
-    expect(early.body.data).toEqual({ resolved: false, opener: null });
+    expect(early.body.data).toEqual({ resolved: false, opener: null, openerAt: null });
     expect(await messageCounts(solo.adaParticipant)).toEqual(soloBefore);
     expect((await draftOf(solo.sessionId)).draft).toMatchObject({ content: 'Fin is busy.', version: 1 });
 
@@ -196,7 +269,7 @@ describeTarget('Edit first on a pre-join draft: the AI opens the revision (work-
     expect((await draftOf(s.sessionId)).preJoinReview).toBeNull();
     const before = await messageCounts(s.adaParticipant);
     const after = await http(ada, 'post', `/sessions/${s.sessionId}/empathy/draft/edit-first`, {});
-    expect(after.body.data).toEqual({ resolved: false, opener: null });
+    expect(after.body.data).toEqual({ resolved: false, opener: null, openerAt: null });
     expect(await messageCounts(s.adaParticipant)).toEqual(before);
 
     // A review already ended by Send as is.
@@ -206,7 +279,7 @@ describeTarget('Edit first on a pre-join draft: the AI opens the revision (work-
     ).toBeLessThan(300);
     const sentBefore = await messageCounts(sent.adaParticipant);
     const late = await http(ada, 'post', `/sessions/${sent.sessionId}/empathy/draft/edit-first`, {});
-    expect(late.body.data).toEqual({ resolved: false, opener: null });
+    expect(late.body.data).toEqual({ resolved: false, opener: null, openerAt: null });
     expect(await messageCounts(sent.adaParticipant)).toEqual(sentBefore);
   });
 

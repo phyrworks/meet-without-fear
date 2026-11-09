@@ -638,14 +638,22 @@ export function useUnifiedSession(
     if (
       empathyDraftData?.draft?.content &&
       !empathyDraftData.draft.readyToShare &&
-      !empathyDraftData.alreadyConsented
+      !empathyDraftData.alreadyConsented &&
+      // work-9309: reopened by Edit first — the old draft is not offered
+      // again until the AI proposes (owner decision 2026-11-09).
+      !empathyDraftData.awaitingRevision
     ) {
       // Restore the proposed statement from database
       setLiveProposedEmpathyStatement(empathyDraftData.draft.content);
       // Show the ready-to-share card
       setAiRecommendsReadyToShare(true);
     }
-  }, [empathyDraftData?.draft?.content, empathyDraftData?.draft?.readyToShare, empathyDraftData?.alreadyConsented]);
+  }, [
+    empathyDraftData?.draft?.content,
+    empathyDraftData?.draft?.readyToShare,
+    empathyDraftData?.alreadyConsented,
+    empathyDraftData?.awaitingRevision,
+  ]);
 
   // NOTE: Feel-Heard Check State is now derived via useMemo (showFeelHeardConfirmation)
   // instead of syncing from backend. This eliminates race conditions and restoration bugs.

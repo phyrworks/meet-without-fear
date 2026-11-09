@@ -539,6 +539,16 @@ export function preJoinDraftKeys(steps: number[]): AllowRule[] {
         "work-99k2: GET /empathy/draft reports preJoinReview (derived: the draft predates the partner's join and no " +
         'round is submitted); no golden fixture has a pre-join draft, so null.',
     },
+    {
+      kind: 'addedKeys',
+      at,
+      keys: ['awaitingRevision'],
+      equals: false,
+      mustMatch: true,
+      why:
+        'work-9309 (owner decision 2026-11-09): GET /empathy/draft reports awaitingRevision (derived: an Edit-first ' +
+        "opener sits at the draft's last write); no golden scenario has a pre-join draft or an Edit first, so false.",
+    },
   ];
 }
 

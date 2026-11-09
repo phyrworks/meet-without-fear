@@ -893,6 +893,36 @@ function appendMessageToCaches(queryClient: QueryClient, sessionId: string, mess
   }
 }
 
+/** How the client waits for the background opener after Edit first (work-9309). Mutable for tests. */
+export const EDIT_FIRST_OPENER_POLL = { attempts: 40, intervalMs: 1500 };
+
+function hasMessageAt(queryClient: QueryClient, sessionId: string, timestamp: string): boolean {
+  const infinite = queryClient.getQueryData<InfiniteData<GetMessagesResponse>>(messageKeys.infinite(sessionId));
+  const list = queryClient.getQueryData<GetMessagesResponse>(messageKeys.list(sessionId));
+  const all = [...(infinite?.pages.flatMap((p) => p.messages || []) ?? []), ...(list?.messages ?? [])];
+  return all.some((m) => m.timestamp === timestamp);
+}
+
+/**
+ * Refetch the conversation until the opener (the message at `openerAt`) is in
+ * the cache, bounded; then refresh the draft state from the server.
+ */
+export async function awaitEditFirstOpener(
+  queryClient: QueryClient,
+  sessionId: string,
+  openerAt: string
+): Promise<boolean> {
+  let found = false;
+  for (let i = 0; i < EDIT_FIRST_OPENER_POLL.attempts && !found; i++) {
+    await queryClient.refetchQueries({ queryKey: messageKeys.infinite(sessionId) });
+    await queryClient.refetchQueries({ queryKey: messageKeys.list(sessionId) });
+    found = hasMessageAt(queryClient, sessionId, openerAt);
+    if (!found) await new Promise((r) => setTimeout(r, EDIT_FIRST_OPENER_POLL.intervalMs));
+  }
+  queryClient.invalidateQueries({ queryKey: stageKeys.empathyDraft(sessionId) });
+  return found;
+}
+
 /** The device's IANA time zone, when the runtime can tell. */
 function deviceTimeZone(): string | undefined {
   try {
@@ -936,11 +966,18 @@ export function useEditPreJoinDraftFirst(
       );
     },
     onMutate: async ({ sessionId }) => {
+      // The review ends and the reopen begins at once: the old draft's
+      // Review/Share panel stays hidden until the AI proposes (work-9309,
+      // owner decision 2026-11-09). Rolled back on error.
       const key = stageKeys.empathyDraft(sessionId);
       await queryClient.cancelQueries({ queryKey: key });
       const previous = queryClient.getQueryData<GetEmpathyDraftResponse>(key);
-      if (previous?.preJoinReview) {
-        queryClient.setQueryData<GetEmpathyDraftResponse>(key, { ...previous, preJoinReview: null });
+      if (previous) {
+        queryClient.setQueryData<GetEmpathyDraftResponse>(key, {
+          ...previous,
+          preJoinReview: null,
+          awaitingRevision: true,
+        });
       }
       return { previous };
     },
@@ -950,9 +987,22 @@ export function useEditPreJoinDraftFirst(
       }
     },
     onSuccess: (data, { sessionId }) => {
-      if (data.opener) appendMessageToCaches(queryClient, sessionId, data.opener);
-      queryClient.invalidateQueries({ queryKey: stageKeys.empathyDraft(sessionId) });
-      queryClient.refetchQueries({ queryKey: messageKeys.infinite(sessionId) });
+      const draftKey = stageKeys.empathyDraft(sessionId);
+      if (!data.resolved || !data.openerAt) {
+        // No reopen in effect after all: the server's state is the truth.
+        queryClient.invalidateQueries({ queryKey: draftKey });
+        return;
+      }
+      if (data.opener) {
+        // A retry after the opener was written: it comes back in the response.
+        appendMessageToCaches(queryClient, sessionId, data.opener);
+        queryClient.invalidateQueries({ queryKey: draftKey });
+        return;
+      }
+      // 202: the opener is generated in the background. It reaches the chat by
+      // Ably (message.ai_response -> refetch) or, without Ably, by this bounded
+      // refetch of the conversation until the message at openerAt is there.
+      void awaitEditFirstOpener(queryClient, sessionId, data.openerAt);
     },
     ...options,
   });

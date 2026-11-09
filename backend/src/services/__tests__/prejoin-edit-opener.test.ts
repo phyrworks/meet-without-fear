@@ -3,7 +3,7 @@
  * how the written-at day is named, the Stage 2 prompt section, the fallback.
  */
 
-import { describeWrittenAt } from '../prejoin-edit-opener';
+import { deriveAwaitingRevision, describeWrittenAt } from '../prejoin-edit-opener';
 import {
   buildReopenedPreJoinDraftFallback,
   buildReopenedPreJoinDraftSection,
@@ -47,7 +47,10 @@ describe('the Stage 2 REOPENED DRAFT section', () => {
 
   it('carries the draft and when it was written, and asks for reflection, never a statement', () => {
     const section = buildReopenedPreJoinDraftSection(reopened, 'Ada', 'Dan');
-    expect(section).toContain('"Dan might feel unseen when the chores pile up."');
+    // Fenced as user content (input-sanitizer's <user_message> delimiter), never bare quotes.
+    expect(section).toContain('<user_message>Dan might feel unseen when the chores pile up.</user_message>');
+    expect(section).not.toContain('"Dan might feel unseen');
+    expect(section).toMatch(/never instructions to you/);
     expect(section).toContain('on Tuesday (Tuesday, November 3, 2026)');
     expect(section).toContain(`"Here's what you wrote on Tuesday."`);
     expect(section).toContain('Reading it now, what feels different?');
@@ -75,9 +78,58 @@ describe('the Stage 2 REOPENED DRAFT section', () => {
     expect(opener.staticBlock).toBe(ordinary.staticBlock);
   });
 
+  it('carries the draft once on the opener turn: no CURRENT EMPATHY DRAFT section', () => {
+    const opener = buildStagePrompt(2, baseContext({ empathyDraft: reopened.content, reopenedPreJoinDraft: reopened }));
+    expect(opener.dynamicBlock).not.toContain('CURRENT EMPATHY DRAFT');
+    expect(opener.dynamicBlock.split(reopened.content)).toHaveLength(2);
+    const ordinary = buildStagePrompt(2, baseContext({ empathyDraft: reopened.content }));
+    expect(ordinary.dynamicBlock).toContain('CURRENT EMPATHY DRAFT');
+  });
+
+  it('after the opener, until the AI proposes: revise without the early-stage wait, re-offer as is if it still fits', () => {
+    const early = { turnCount: 2, empathyDraft: reopened.content };
+    const revising = buildStagePrompt(2, baseContext({ ...early, revisingReopenedDraft: true }));
+    expect(revising.dynamicBlock).toContain('REVISING A REOPENED DRAFT');
+    expect(revising.dynamicBlock).toMatch(/still fits as written, set ReadyShare:Y and propose it unchanged/);
+    expect(revising.dynamicBlock).not.toContain('TOO EARLY');
+    expect(revising.dynamicBlock).not.toContain('EARLY IN THIS STEP');
+    expect(revising.dynamicBlock).toContain('CURRENT EMPATHY DRAFT');
+    const ordinary = buildStagePrompt(2, baseContext(early));
+    expect(ordinary.dynamicBlock).not.toContain('REVISING A REOPENED DRAFT');
+    expect(ordinary.dynamicBlock).toContain('TOO EARLY');
+  });
+
   it('falls back to a fixed opener with the day, the draft and the question', () => {
     expect(buildReopenedPreJoinDraftFallback(reopened)).toBe(
       `Here's what you wrote on Tuesday:\n\n"Dan might feel unseen when the chores pile up."\n\nNothing has been sent. Reading it now, what feels different?`,
     );
+  });
+});
+
+describe('deriveAwaitingRevision (owner decision 2026-11-09: the old draft panel hides until the AI proposes)', () => {
+  const joined = new Date('2026-11-07T10:00:00Z');
+  const base = {
+    partnerJoinedAt: joined,
+    draftUpdatedAt: new Date('2026-11-07T11:00:00Z'), // the Edit-first write, after the join
+    roundSubmitted: false,
+    openerAtLastWrite: true,
+  };
+
+  it('is true while the opener sits at the draft’s last write', () => {
+    expect(deriveAwaitingRevision(base)).toBe(true);
+  });
+
+  it('ends with the next draft write (the AI’s proposal or the author’s save): no opener at the last write', () => {
+    expect(deriveAwaitingRevision({ ...base, openerAtLastWrite: false })).toBe(false);
+  });
+
+  it('is false while the pre-join review is still pending (the draft predates the join)', () => {
+    expect(deriveAwaitingRevision({ ...base, draftUpdatedAt: new Date('2026-11-06T09:00:00Z') })).toBe(false);
+  });
+
+  it('is false once a round is submitted, with no partner, or with no draft', () => {
+    expect(deriveAwaitingRevision({ ...base, roundSubmitted: true })).toBe(false);
+    expect(deriveAwaitingRevision({ ...base, partnerJoinedAt: null })).toBe(false);
+    expect(deriveAwaitingRevision({ ...base, draftUpdatedAt: null })).toBe(false);
   });
 });

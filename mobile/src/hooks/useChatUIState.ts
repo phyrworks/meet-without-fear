@@ -93,6 +93,8 @@ export interface UseChatUIStateProps {
   } | undefined;
   empathyDraftData: {
     alreadyConsented?: boolean;
+    /** work-9309: reopened by Edit first, the AI not yet proposing. */
+    awaitingRevision?: boolean;
     draft?: { content?: string };
   } | undefined;
   hasPartnerEmpathy: boolean;
@@ -307,6 +309,7 @@ export function useChatUIState(props: UseChatUIStateProps): UseChatUIStateResult
     hasDistinctRefinedEmpathyContent,
     empathyAlreadyConsented: empathyDraftData?.alreadyConsented ?? false,
     hasSharedEmpathyLocal,
+    empathyAwaitingRevision: empathyDraftData?.awaitingRevision === true,
     isRefiningEmpathy:
       empathyStatusData?.hasNewSharedContext === true ||
       empathyStatusData?.myAttempt?.status === 'REFINING',

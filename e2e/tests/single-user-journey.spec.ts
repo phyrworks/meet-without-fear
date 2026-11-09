@@ -404,8 +404,13 @@ test.describe('Single User Journey', () => {
     await page.getByTestId('pre-join-review-edit-button').click();
     await expect(page.getByTestId('pre-join-review-modal')).not.toBeVisible({ timeout: 10000 });
     await expect(page.getByText(opener)).toBeVisible({ timeout: 30000 });
-    expect(editFirstPosts).toEqual([200]);
+    // 202: the opener is generated in the background; without Ably the client
+    // refetches the conversation until it is there.
+    expect(editFirstPosts).toEqual([202]);
     expect(consentPostCount()).toBe(0);
+    // Owner decision 2026-11-09: the old draft's Review/Share panel is ABSENT
+    // until the AI proposes.
+    await expect(page.getByTestId('empathy-review-button')).toHaveCount(0);
     await page.screenshot({ path: 'test-results/single-user-10-edit-first-opener.png' });
 
     // The review is over; the draft is kept as written, not ready (A is editing); nothing sent.
@@ -419,6 +424,7 @@ test.describe('Single User Journey', () => {
     expect(afterEdit.preJoinReview).toBeNull();
     expect(afterEdit.alreadyConsented).toBe(false);
     expect(afterEdit.draft).toMatchObject({ content: draftData.draft.content, readyToShare: false });
+    expect(afterEdit.awaitingRevision).toBe(true);
 
     // One opener, in A's conversation; still one after a reload (and the review does not return).
     await page.reload();
@@ -427,7 +433,9 @@ test.describe('Single User Journey', () => {
     await expect(page.getByText(opener)).toBeVisible({ timeout: 30000 });
     await expect(page.getByText(opener)).toHaveCount(1);
     await expect(page.getByTestId('pre-join-review-modal')).toHaveCount(0);
-    expect(editFirstPosts).toEqual([200]);
+    expect(editFirstPosts).toEqual([202]);
+    // Still absent after a reload: the state is the server's, not the client's.
+    await expect(page.getByTestId('empathy-review-button')).toHaveCount(0);
 
     // Step 22: A replies; the AI proposes the revised statement.
     console.log(`${elapsed()} Step 22: Replying to the opener...`);
@@ -441,8 +449,18 @@ test.describe('Single User Journey', () => {
 
     // Step 23: the normal Review/Share flow, with the revised text.
     console.log(`${elapsed()} Step 23: Reviewing and sharing the revision...`);
+    // The AI's proposal brings the panel back (PRESENT), on the revised text.
     const empathyReviewButton = page.getByTestId('empathy-review-button');
     await expect(empathyReviewButton).toBeVisible({ timeout: 10000 });
+    const afterProposal = (
+      await (
+        await request.get(`${API_BASE_URL}/api/sessions/${sessionId}/empathy/draft`, {
+          headers: getE2EHeaders(userA.email, userId),
+        })
+      ).json()
+    ).data;
+    expect(afterProposal.awaitingRevision).toBe(false);
+    expect(afterProposal.draft.content).toContain('worn out, and maybe scared');
     await empathyReviewButton.click();
     const shareButton = page.getByTestId('share-empathy-button');
     await expect(shareButton).toBeVisible({ timeout: 10000 });

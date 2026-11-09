@@ -83,7 +83,7 @@ import {
 } from '../services/empathy-store';
 import { attemptDTO } from '../services/empathy-status';
 import { saveEmpathyDraft } from '../services/empathy-draft-save';
-import { openPreJoinDraftRevision } from '../services/prejoin-edit-opener';
+import { isAwaitingRevision, openPreJoinDraftRevision } from '../services/prejoin-edit-opener';
 import { getPartnerParticipant } from '../services/participant-resolver';
 
 // ============================================================================
@@ -347,6 +347,15 @@ export async function getDraft(req: Request, res: Response): Promise<void> {
         ? { writtenAt: draft.updatedAt.toISOString(), partnerJoinedAt: caller.partner.joinedAt.toISOString() }
         : null;
 
+    // work-9309: reopened by Edit first, the AI's proposal not yet made — the
+    // old draft's Review/Share panel stays hidden (owner decision 2026-11-09).
+    const awaitingRevision = await isAwaitingRevision({
+      conversationId: me.mainConversationId,
+      partnerJoinedAt: caller.partner?.joinedAt ?? null,
+      draftUpdatedAt: draft?.updatedAt ?? null,
+      roundSubmitted: !!myAttempt,
+    });
+
     successResponse(res, {
       draft: draft
         ? {
@@ -361,6 +370,7 @@ export async function getDraft(req: Request, res: Response): Promise<void> {
       alreadyConsented,
       awaitingPartner: !!pendingInvitation,
       preJoinReview,
+      awaitingRevision,
     });
   } catch (error) {
     logger.error('[getDraft] Error:', error);
@@ -405,9 +415,10 @@ export async function deleteDraft(req: Request, res: Response): Promise<void> {
 /**
  * "Edit first" in the review of a pre-join draft (work-9309): ends the review
  * (the draft kept as written) and the AI opens the revision conversation in
- * the caller's own chat. Idempotent: only the call that ends a pending review
- * writes the opener; any other call answers `resolved: false` and writes
- * nothing.
+ * the caller's own chat, generated in the background (202). At most one
+ * opener: only the call that ends a pending review schedules it; a later call
+ * gets `resolved: true` and the existing opener while the reopen is in effect,
+ * else `resolved: false` — and never writes one.
  * POST /sessions/:id/empathy/draft/edit-first
  */
 export async function editPreJoinDraftFirst(req: Request, res: Response): Promise<void> {
@@ -431,7 +442,7 @@ export async function editPreJoinDraftFirst(req: Request, res: Response): Promis
       return;
     }
     if (!caller.partner || !caller.me.mainConversationId) {
-      successResponse(res, { resolved: false, opener: null });
+      successResponse(res, { resolved: false, opener: null, openerAt: null });
       return;
     }
 
@@ -463,7 +474,11 @@ export async function editPreJoinDraftFirst(req: Request, res: Response): Promis
       topicFrame: session?.topicFrameConfirmedAt ? session.topicFrame : undefined,
       timeZone: parseResult.data.timeZone,
     });
-    successResponse(res, result);
+    // 202 while the opener is generated in the background (it arrives via
+    // Ably / the client's refetch, at `openerAt`); 200 otherwise.
+    const { resolved, opener, openerAt } = result;
+    const accepted = 'generation' in result && !!result.generation;
+    successResponse(res, { resolved, opener, openerAt }, accepted ? 202 : 200);
   } catch (error) {
     logger.error('[editPreJoinDraftFirst] Error:', error);
     errorResponse(res, 'INTERNAL_ERROR', 'Failed to open the draft for editing', 500);
