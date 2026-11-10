@@ -16,7 +16,7 @@
  *   0  scripts/target-shape/preamble.sql — refuse a non-empty database; the
  *      roles assertion and the SET ROLE mwf_job check; schema app;
  *      app.current_user_id();
- *   1  scripts/target-shape/tables.sql — the domains (uuid7, ts_ms, intensity, sha256_hex), the
+ *   1  scripts/target-shape/tables.sql — the domains (uuid7, ciphertext, ts_ms, intensity, sha256_hex), the
  *      enums and the 47 tables, hand-written, each table complete in its
  *      CREATE TABLE (PK, UNIQUE, FK, CHECK, generated columns) in dependency
  *      order (owner decision 2026-11-02, work-a39h.11.40: it replaced the
@@ -55,6 +55,19 @@ export const UUID7_COLUMNS = 129;
 const UUID7_PLACEHOLDER = '@@UUID7_COLUMNS@@';
 
 /**
+ * The encrypted columns of SENSITIVE_FIELD_MAP (lib/prisma-encryption-middleware.ts)
+ * as tables.sql types them: CIPHERTEXT_COLUMNS text columns typed ciphertext,
+ * CIPHERTEXT_ARRAYS text[] columns with CHECK (app.all_ciphertext(col)). Like
+ * UUID7_COLUMNS, checkTables() counts them and the trailer's step-20 assertion
+ * gets the numbers; encryption-at-rest-schema.target.test.ts ties the catalog
+ * to the map itself, in both directions.
+ */
+export const CIPHERTEXT_COLUMNS = 44;
+export const CIPHERTEXT_ARRAYS = 5;
+const CIPHERTEXT_PLACEHOLDER = '@@CIPHERTEXT_COLUMNS@@';
+const CIPHERTEXT_ARRAYS_PLACEHOLDER = '@@CIPHERTEXT_ARRAYS@@';
+
+/**
  * tables.sql creates exactly the 47 target tables, every name lower-case, and
  * types every uuid column uuid7. Returns the counts for the section title.
  */
@@ -73,6 +86,10 @@ export function checkTables(sql: string): { names: number; uuid7: number } {
   if (plainUuid.length) throw new Error(`tables.sql has uuid columns not typed uuid7: ${plainUuid.join(', ')}`);
   const uuid7 = (sql.match(/^ {4}"?[a-z0-9_]+"? uuid7\b/gm) ?? []).length;
   if (uuid7 !== UUID7_COLUMNS) throw new Error(`tables.sql has ${uuid7} uuid7 columns, expected ${UUID7_COLUMNS}`);
+  const ct = (sql.match(/^ {4}[a-z0-9_]+ ciphertext\b/gm) ?? []).length;
+  if (ct !== CIPHERTEXT_COLUMNS) throw new Error(`tables.sql has ${ct} ciphertext columns, expected ${CIPHERTEXT_COLUMNS}`);
+  const ca = (sql.match(/^ {4}CHECK \(app\.all_ciphertext\([a-z0-9_]+\)\)/gm) ?? []).length;
+  if (ca !== CIPHERTEXT_ARRAYS) throw new Error(`tables.sql has ${ca} all_ciphertext CHECKs, expected ${CIPHERTEXT_ARRAYS}`);
   return { names: names.size, uuid7 };
 }
 
@@ -85,7 +102,15 @@ function trailer(): string {
   const sqlOnly = fs.readFileSync(SQL_ONLY, 'utf8').replace(/\n$/, '');
   const joined = [...lines.slice(0, at), sqlOnly, ...lines.slice(at + 1)].join('\n');
   if (!joined.includes(UUID7_PLACEHOLDER)) throw new Error(`trailer.sql has no ${UUID7_PLACEHOLDER} placeholder`);
-  return joined.split(UUID7_PLACEHOLDER).join(String(UUID7_COLUMNS));
+  for (const p of [CIPHERTEXT_PLACEHOLDER, CIPHERTEXT_ARRAYS_PLACEHOLDER])
+    if (!joined.includes(p)) throw new Error(`trailer.sql has no ${p} placeholder`);
+  return joined
+    .split(UUID7_PLACEHOLDER)
+    .join(String(UUID7_COLUMNS))
+    .split(CIPHERTEXT_PLACEHOLDER)
+    .join(String(CIPHERTEXT_COLUMNS))
+    .split(CIPHERTEXT_ARRAYS_PLACEHOLDER)
+    .join(String(CIPHERTEXT_ARRAYS));
 }
 
 const HEADER = `-- ============================================================================
@@ -132,7 +157,7 @@ const HEADER = `-- =============================================================
 -- SECTIONS
 --   0  preamble: empty-database guard, roles, schema app, app.current_user_id()
 --      (backend/scripts/target-shape/preamble.sql)
---   1  domains (uuid7, ts_ms, intensity, sha256_hex), enums and the 47 tables, hand-written,
+--   1  domains (uuid7, ciphertext, ts_ms, intensity, sha256_hex), enums and the 47 tables, hand-written,
 --      each table complete in its CREATE TABLE, in dependency order
 --      (backend/scripts/target-shape/tables.sql)
 --   2  milestone seed (reference data)

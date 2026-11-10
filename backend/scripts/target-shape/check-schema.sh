@@ -166,6 +166,9 @@ else
   psql_admin -c "CREATE DATABASE ts6_target"
 
   echo "== apply: tables.sql (the baseline's section 1)"
+  # tables.sql creates app.all_ciphertext (the CHECK on the encrypted text[]
+  # columns); in the baseline the preamble creates schema app first.
+  psql_db -c "CREATE SCHEMA app"
   psql_db -1 -f - <"$TABLES"
   echo "   tables: $(psql_db -Atc "SELECT count(*) FROM pg_tables WHERE schemaname = 'public'")"
 

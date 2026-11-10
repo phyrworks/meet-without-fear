@@ -81,6 +81,35 @@ CREATE DOMAIN uuid7 AS uuid
   CHECK (VALUE IS NULL OR coalesce(uuid_extract_version(VALUE), 0) = 7);
 COMMENT ON DOMAIN uuid7 IS 'A version-7 UUID (RFC 9562), so ids sort by creation time; every id column and every column referencing one. NULL passes (the column''s NOT NULL refuses it); a non-v7 value such as gen_random_uuid() is refused.';
 
+-- Every column the app encrypts (SENSITIVE_FIELD_MAP, kind text, in
+-- lib/prisma-encryption-middleware.ts) is a ciphertext, so a reader of the
+-- schema sees it is encrypted. The stored format is utils/field-encryption.ts
+-- encrypt(): enc:v1:<iv>:<tag>:<ct>, AES-256-GCM, every segment standard
+-- base64 — a 12-byte IV (16 chars, no padding), a 16-byte tag (24 chars,
+-- always ending ==), the ciphertext (any length, possibly empty). The CHECK is
+-- deliberately lenient: with no FIELD_ENCRYPTION_KEY (keyless dev/test) the
+-- app stores plaintext, so a value that does not start with enc: passes;
+-- anything that does must be a well-formed v1 envelope. There is no v2 arm:
+-- no code writes enc:v2 yet (W13 will, with a key id; add the arm with it).
+-- A strict variant (every value an envelope) is planned for when
+-- REQUIRE_FIELD_ENCRYPTION becomes mandatory. The text[] columns cannot be
+-- ciphertext[] (an array of a domain: step 20, node-postgres); each carries
+-- CHECK (app.all_ciphertext(col)) instead. The five jsonb columns in the map
+-- carry only a COMMENT starting 'encrypted'.
+CREATE DOMAIN ciphertext AS text
+  CHECK (VALUE IS NULL OR VALUE !~ '^enc:'
+         OR VALUE ~ '^enc:v1:[A-Za-z0-9+/]{16}:[A-Za-z0-9+/]{22}==:([A-Za-z0-9+/]{4})*([A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$');
+COMMENT ON DOMAIN ciphertext IS 'Encrypted by the app (utils/field-encryption.ts, through the SENSITIVE_FIELD_MAP extension in lib/prisma-encryption-middleware.ts): enc:v1:<iv>:<tag>:<ct>, AES-256-GCM, base64 segments. Never compare or search by value (random IV). Plaintext passes for keyless dev/test; a strict variant is planned for when REQUIRE_FIELD_ENCRYPTION becomes mandatory.';
+
+-- Every element of an encrypted text[] column is a ciphertext (NULL elements
+-- and a NULL array pass). The cast to ciphertext[] runs the domain CHECK on
+-- each element and raises on a malformed one; the array type appears only
+-- inside the body, never as a column, argument or result (step 20).
+CREATE FUNCTION app.all_ciphertext(v text[]) RETURNS boolean
+  LANGUAGE sql IMMUTABLE PARALLEL SAFE
+  RETURN v IS NULL OR (v::public.ciphertext[]) IS NOT NULL;
+COMMENT ON FUNCTION app.all_ciphertext(text[]) IS 'True when every element is a ciphertext; raises the ciphertext domain error otherwise. The CHECK on each encrypted text[] column.';
+
 -- Every timestamp column is a ts_ms: a timestamptz rounded to milliseconds.
 -- A JS Date holds milliseconds, so a microsecond value written by PostgreSQL
 -- (now(), a trigger, a default) would not survive the round trip through the
@@ -264,7 +293,7 @@ CREATE TABLE session (
     id uuid7 NOT NULL DEFAULT uuidv7() PRIMARY KEY,
     relationship_id uuid7 NOT NULL REFERENCES relationship ON DELETE CASCADE,
     status session_status NOT NULL DEFAULT 'CREATED',
-    topic_frame text,
+    topic_frame ciphertext,
     topic_frame_confirmed_at ts_ms,
     previous_session_id uuid7 REFERENCES session ON DELETE SET NULL,
     resolved_at ts_ms,
@@ -279,6 +308,7 @@ CREATE INDEX ON session (previous_session_id);
 -- + sql_session_one_live (sql-only.sql)
 COMMENT ON TABLE session IS 'One facilitated process on one topic between the participants of a relationship; at most one live session per relationship.';
 COMMENT ON COLUMN session.previous_session_id IS 'The session this one continues (a NEW_PROCESS follow-up).';
+COMMENT ON COLUMN session.topic_frame IS 'encrypted (session): the AI''s short neutral topic phrase for the session (max 20 words by prompt), confirmed by the participants.';
 
 CREATE TABLE participant (
     id uuid7 NOT NULL DEFAULT uuidv7() PRIMARY KEY,
@@ -307,20 +337,22 @@ CREATE TABLE proposal (
     source proposal_source NOT NULL DEFAULT 'USER_SUBMITTED',
     kind proposal_kind NOT NULL DEFAULT 'SHARED_PROPOSAL',
     status proposal_status NOT NULL DEFAULT 'ACTIVE',
-    description text NOT NULL,
-    duration text,
-    measure_of_success text,
+    description ciphertext NOT NULL,
+    duration ciphertext,
+    measure_of_success ciphertext,
     unresolved_need_labels text[] DEFAULT ARRAY[]::text[],
     removed_at ts_ms,
     removed_by_participant_id uuid7 REFERENCES participant ON DELETE CASCADE,
-    removal_reason text,
+    removal_reason ciphertext,
     shared_at ts_ms,
     created_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     -- §1.4 proposal [P21]
     CHECK ((status = 'REMOVED') = (removed_at IS NOT NULL)),
-    CHECK (kind = 'INDIVIDUAL_COMMITMENT' OR shared_at IS NULL)
+    CHECK (kind = 'INDIVIDUAL_COMMITMENT' OR shared_at IS NULL),
+    -- every element is ciphertext (the ciphertext domain; an array of it is refused by step 20)
+    CHECK (app.all_ciphertext(unresolved_need_labels))
 );
 CREATE INDEX ON proposal (session_id, status);
 CREATE INDEX ON proposal (created_by_participant_id);
@@ -328,6 +360,11 @@ CREATE INDEX ON proposal (removed_by_participant_id);
 COMMENT ON TABLE proposal IS 'A Stage-4 repair idea: a shared proposal for the needs both see, or one participant''s individual commitment.';
 COMMENT ON COLUMN proposal.created_by_participant_id IS 'Who wrote it; NULL for an AI or curated proposal.';
 COMMENT ON COLUMN proposal.shared_at IS 'INDIVIDUAL_COMMITMENT only: when it was made visible to co-participants.';
+COMMENT ON COLUMN proposal.description IS 'encrypted (session): what the proposal is, AI-proposed or typed (POST /strategies: 10 to 1000).';
+COMMENT ON COLUMN proposal.duration IS 'encrypted (session): free text for how long, e.g. 3 days or 10 minutes, once this week (AI or user; max 100 on POST /strategies). NOT a true interval: nothing parses it.';
+COMMENT ON COLUMN proposal.measure_of_success IS 'encrypted (session): free text: how the participants will know it worked (max 500 on POST /strategies).';
+COMMENT ON COLUMN proposal.removal_reason IS 'encrypted (session): why it was removed: the AI''s REMOVE reason or the participant''s chat text.';
+COMMENT ON COLUMN proposal.unresolved_need_labels IS 'encrypted (session): text[], each element encrypted: need labels the proposal addresses that matched no need_share, as given by the AI or the participant.';
 
 CREATE TABLE conversation (
     id uuid7 NOT NULL DEFAULT uuidv7() PRIMARY KEY,
@@ -357,7 +394,7 @@ CREATE TABLE empathy_attempt (
     subject_participant_id uuid7 NOT NULL REFERENCES participant ON DELETE CASCADE,
     round integer NOT NULL DEFAULT 1,
     supersedes_attempt_id uuid7 REFERENCES empathy_attempt ON DELETE SET NULL,
-    content text NOT NULL,
+    content ciphertext NOT NULL,
     status empathy_status NOT NULL DEFAULT 'HELD',
     status_version integer NOT NULL DEFAULT 0,
     submitted_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -380,11 +417,12 @@ COMMENT ON TABLE empathy_attempt IS 'Stage 2: one participant''s statement of ho
 COMMENT ON COLUMN empathy_attempt.round IS '1 for the first statement in this direction; +1 per resubmission.';
 COMMENT ON COLUMN empathy_attempt.status_version IS 'Incremented on every status change, to order status events.';
 COMMENT ON COLUMN empathy_attempt.revealed_at IS 'Set once at the reveal and never cleared: the subject''s right to read the attempt hangs on it, not on status.';
+COMMENT ON COLUMN empathy_attempt.content IS 'encrypted (per-row): the author''s empathy statement; participant (author) key until revealed, then re-encrypted under the session key. The plaintext never changes.';
 
 CREATE TABLE need (
     id uuid7 NOT NULL DEFAULT uuidv7() PRIMARY KEY,
     participant_id uuid7 NOT NULL REFERENCES participant ON DELETE CASCADE,
-    label text NOT NULL,
+    label ciphertext NOT NULL,
     category need_category NOT NULL,
     evidence text[] DEFAULT ARRAY[]::text[],
     ai_confidence real NOT NULL,
@@ -396,7 +434,9 @@ CREATE TABLE need (
     updated_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     -- §1.4 need [P30]
-    CHECK (ai_confidence BETWEEN 0 AND 1)
+    CHECK (ai_confidence BETWEEN 0 AND 1),
+    -- every element is ciphertext (the ciphertext domain; an array of it is refused by step 20)
+    CHECK (app.all_ciphertext(evidence))
 );
 CREATE INDEX ON need (participant_id);
 CREATE INDEX ON need (superseded_by_need_id);
@@ -405,6 +445,8 @@ COMMENT ON TABLE need IS 'A need the AI identified for a participant; owner-only
 COMMENT ON COLUMN need.ai_confidence IS 'The model''s confidence in the need, 0 to 1.';
 COMMENT ON COLUMN need.locked_at IS 'When the need was locked against further edits.';
 COMMENT ON COLUMN need.superseded_by_need_id IS 'The need that replaced this one after an edit.';
+COMMENT ON COLUMN need.label IS 'encrypted (participant): the need statement in the participant''s words (AI-identified or typed); free text, not a taxonomy (category is the classification).';
+COMMENT ON COLUMN need.evidence IS 'encrypted (participant): text[], each element encrypted: short quotes of what the participant said; never copied to need_share.';
 
 CREATE TABLE message (
     id uuid7 NOT NULL DEFAULT uuidv7() PRIMARY KEY,
@@ -412,7 +454,7 @@ CREATE TABLE message (
     sender_participant_id uuid7 REFERENCES participant ON DELETE CASCADE,
     role message_role NOT NULL,
     kind message_kind NOT NULL DEFAULT 'CHAT',
-    content text NOT NULL,
+    content ciphertext NOT NULL,
     content_hash sha256_hex,
     refining_need_id uuid7 REFERENCES need ON DELETE SET NULL,
     source_attempt_id uuid7 REFERENCES empathy_attempt ON DELETE SET NULL,
@@ -431,6 +473,7 @@ COMMENT ON TABLE message IS 'One line of a conversation: a human turn, an AI or 
 COMMENT ON COLUMN message.sender_participant_id IS 'The human who wrote a USER line; NULL for AI and SYSTEM lines.';
 COMMENT ON COLUMN message.source_attempt_id IS 'Lineage of a delivered item: the empathy attempt it came from.';
 COMMENT ON COLUMN message.content_hash IS 'sha256 of the plaintext content, for the dedupe probes (indexed with conversation_id, kind).';
+COMMENT ON COLUMN message.content IS 'encrypted (per-row): the line''s text: the owner''s turn and the AI''s replies under the participant key, every delivered kind under the session key.';
 
 CREATE TABLE conversation_read_state (
     participant_id uuid7 NOT NULL PRIMARY KEY REFERENCES participant ON DELETE CASCADE,
@@ -455,19 +498,19 @@ CREATE TABLE reconciler_result (
     subject_participant_id uuid7 NOT NULL REFERENCES participant ON DELETE CASCADE,
     iteration integer NOT NULL DEFAULT 1,
     alignment_score integer NOT NULL,
-    alignment_summary text NOT NULL,
-    gap_summary text NOT NULL,
+    alignment_summary ciphertext NOT NULL,
+    gap_summary ciphertext NOT NULL,
     gap_severity gap_severity NOT NULL,
     correctly_identified text[] DEFAULT ARRAY[]::text[],
     missed_feelings text[] DEFAULT ARRAY[]::text[],
     misattributions text[] DEFAULT ARRAY[]::text[],
-    most_important_gap text,
+    most_important_gap ciphertext,
     recommended_action recommender_action NOT NULL,
-    rationale text NOT NULL,
+    rationale ciphertext NOT NULL,
     sharing_would_help boolean NOT NULL,
-    suggested_share_focus text,
-    suggested_share_content text,
-    suggested_share_reason text,
+    suggested_share_focus ciphertext,
+    suggested_share_content ciphertext,
+    suggested_share_reason ciphertext,
     circuit_breaker_tripped boolean NOT NULL DEFAULT false,
     superseded_at ts_ms,
     created_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -475,7 +518,11 @@ CREATE TABLE reconciler_result (
 
     UNIQUE (attempt_id, iteration),
     -- §1.2 reconciler_result [P17f]
-    CHECK (alignment_score BETWEEN 0 AND 100)
+    CHECK (alignment_score BETWEEN 0 AND 100),
+    -- every element is ciphertext (the ciphertext domain; an array of it is refused by step 20)
+    CHECK (app.all_ciphertext(correctly_identified)),
+    CHECK (app.all_ciphertext(missed_feelings)),
+    CHECK (app.all_ciphertext(misattributions))
 );
 CREATE INDEX ON reconciler_result (subject_participant_id);
 -- + sql_result_one_current (sql-only.sql)
@@ -485,6 +532,16 @@ COMMENT ON COLUMN reconciler_result.iteration IS '1 for the first analysis of th
 COMMENT ON COLUMN reconciler_result.alignment_score IS 'How well the attempt matches the subject''s account, 0 to 100.';
 COMMENT ON COLUMN reconciler_result.circuit_breaker_tripped IS 'Meant to mark a result that ended the refinement loop by its circuit breaker; no writer sets it true today and nothing reads it (spec 1.2).';
 COMMENT ON COLUMN reconciler_result.superseded_at IS 'Set when a newer result replaces this one; NULL marks the current result.';
+COMMENT ON COLUMN reconciler_result.alignment_summary IS 'encrypted (participant): the reconciler''s 1-2 sentence summary of what the attempt got right.';
+COMMENT ON COLUMN reconciler_result.gap_summary IS 'encrypted (participant): the reconciler''s 1-2 sentence summary of what it missed.';
+COMMENT ON COLUMN reconciler_result.correctly_identified IS 'encrypted (participant): text[], each element encrypted: the feelings the attempt identified, LLM output.';
+COMMENT ON COLUMN reconciler_result.missed_feelings IS 'encrypted (participant): text[], each element encrypted: the feelings the attempt missed, LLM output.';
+COMMENT ON COLUMN reconciler_result.misattributions IS 'encrypted (participant): text[], each element encrypted: what the attempt attributed wrongly, LLM output.';
+COMMENT ON COLUMN reconciler_result.most_important_gap IS 'encrypted (participant): the single most important gap, LLM output, or NULL.';
+COMMENT ON COLUMN reconciler_result.rationale IS 'encrypted (participant): why the reconciler recommends its action, LLM output.';
+COMMENT ON COLUMN reconciler_result.suggested_share_focus IS 'encrypted (participant): what the subject might share, LLM output, or NULL.';
+COMMENT ON COLUMN reconciler_result.suggested_share_content IS 'encrypted (participant): a 1-3 sentence suggestion of what the subject could say, LLM output.';
+COMMENT ON COLUMN reconciler_result.suggested_share_reason IS 'encrypted (participant): one sentence on why sharing would help, LLM output.';
 
 CREATE TABLE context_share_offer (
     id uuid7 NOT NULL DEFAULT uuidv7() PRIMARY KEY,
@@ -493,10 +550,10 @@ CREATE TABLE context_share_offer (
     subject_participant_id uuid7 NOT NULL REFERENCES participant ON DELETE CASCADE,
     iteration integer NOT NULL DEFAULT 1,
     status share_offer_status NOT NULL DEFAULT 'PENDING',
-    offer_message text,
-    suggested_content text,
-    suggested_reason text,
-    shared_content text,
+    offer_message ciphertext,
+    suggested_content ciphertext,
+    suggested_reason ciphertext,
+    shared_content ciphertext,
     shared_at ts_ms,
     declined_at ts_ms,
     offered_at ts_ms,
@@ -519,6 +576,10 @@ COMMENT ON TABLE context_share_offer IS 'The suggestion to the subject of an att
 COMMENT ON COLUMN context_share_offer.subject_participant_id IS 'The subject who is offered the chance to share (the attempt''s subject).';
 COMMENT ON COLUMN context_share_offer.delivery_notified_at IS 'When the subject who shared was shown that the shared context was delivered (GET notifications, Sent-tab updates).';
 COMMENT ON COLUMN context_share_offer.seen_notified_at IS 'When the subject who shared was shown that the author has seen it.';
+COMMENT ON COLUMN context_share_offer.offer_message IS 'encrypted (participant): the AI''s 2-3 sentence message offering the subject the chance to share.';
+COMMENT ON COLUMN context_share_offer.suggested_content IS 'encrypted (participant): the suggested text to share, LLM output or the subject''s AI-assisted draft.';
+COMMENT ON COLUMN context_share_offer.suggested_reason IS 'encrypted (participant): why sharing it would help, LLM output.';
+COMMENT ON COLUMN context_share_offer.shared_content IS 'encrypted (session): the exact text the subject approved; copied into the author''s SHARED_CONTEXT message at delivery.';
 
 CREATE TABLE milestone (
     key text NOT NULL PRIMARY KEY,
@@ -567,17 +628,19 @@ CREATE TABLE ai_memory (
 );
 COMMENT ON TABLE ai_memory IS 'The AI''s working memory as documents: a participant''s rolling SUMMARY and NOTABLE_FACTS in one session, and a user''s GLOBAL_FACTS across sessions.';
 COMMENT ON COLUMN ai_memory.kind IS 'SUMMARY and NOTABLE_FACTS have participant_id; GLOBAL_FACTS has user_id.';
+COMMENT ON COLUMN ai_memory.doc IS 'encrypted (per-row): jsonb with every string leaf encrypted (participant key for SUMMARY / NOTABLE_FACTS, user key for GLOBAL_FACTS); the key-presence CHECKs see the plaintext structure.';
 
 CREATE TABLE mood_reading (
     id uuid7 NOT NULL DEFAULT uuidv7() PRIMARY KEY,
     participant_id uuid7 NOT NULL REFERENCES participant ON DELETE CASCADE,
     intensity intensity NOT NULL,
-    context text,
+    context ciphertext,
     recorded_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
     created_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX ON mood_reading (participant_id, recorded_at);
 COMMENT ON TABLE mood_reading IS 'A participant''s barometer reading (1-10) with optional context. Append-only time series.';
+COMMENT ON COLUMN mood_reading.context IS 'encrypted (participant): the participant''s optional note on the reading (max 500).';
 
 CREATE TABLE regulation_event (
     id uuid7 NOT NULL DEFAULT uuidv7() PRIMARY KEY,
@@ -596,13 +659,13 @@ CREATE TABLE invitation (
     session_id uuid7 NOT NULL REFERENCES session ON DELETE CASCADE,
     invited_by_participant_id uuid7 NOT NULL REFERENCES participant ON DELETE CASCADE,
     accepted_by_user_id uuid7 REFERENCES "user" ON DELETE RESTRICT,
-    invitee_name text,
+    invitee_name ciphertext,
     status invitation_status NOT NULL DEFAULT 'PENDING',
     message_confirmed_at ts_ms,
     expires_at ts_ms NOT NULL,
     accepted_at ts_ms,
     declined_at ts_ms,
-    decline_reason text,
+    decline_reason ciphertext,
     created_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
@@ -618,6 +681,7 @@ COMMENT ON TABLE invitation IS 'An invitation from a participant to someone not 
 COMMENT ON COLUMN invitation.accepted_by_user_id IS 'The user who accepted; set with accepted_at.';
 COMMENT ON COLUMN invitation.message_confirmed_at IS 'When the inviter confirmed the invitation message.';
 COMMENT ON COLUMN invitation.invitee_name IS 'encrypted (session): the name the inviter gave the person they invite, typed at session creation (or their nickname / last display name for a known person), because the invitee has no user row yet. Not a copy of user.name; the AI uses it for the partner until they join.';
+COMMENT ON COLUMN invitation.decline_reason IS 'encrypted (session): the invitee''s optional reason for declining, free text.';
 
 CREATE TABLE draft (
     id uuid7 NOT NULL DEFAULT uuidv7() PRIMARY KEY,
@@ -627,7 +691,7 @@ CREATE TABLE draft (
     attempt_id uuid7 REFERENCES empathy_attempt ON DELETE CASCADE,
     share_offer_id uuid7 REFERENCES context_share_offer ON DELETE CASCADE,
     invitation_id uuid7 REFERENCES invitation ON DELETE CASCADE,
-    content text NOT NULL,
+    content ciphertext NOT NULL,
     ready_to_share boolean NOT NULL DEFAULT false,
     version integer NOT NULL DEFAULT 1,
     created_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -659,6 +723,7 @@ COMMENT ON COLUMN draft.attempt_id IS 'VALIDATION_FEEDBACK: the attempt being re
 COMMENT ON COLUMN draft.share_offer_id IS 'SHARE_CONTEXT: the offer being edited.';
 COMMENT ON COLUMN draft.invitation_id IS 'EMPATHY before the subject has joined: the pending invitation that will become them; re-pointed to about_participant_id at accept.';
 COMMENT ON COLUMN draft.reopened_at IS 'Set when the author chose Edit first on a pre-join draft after the join; cleared by the next draft write (work-9309).';
+COMMENT ON COLUMN draft.content IS 'encrypted (participant): the draft text, AI-proposed or written by the participant.';
 
 CREATE TABLE session_key (
     id uuid7 NOT NULL DEFAULT uuidv7() PRIMARY KEY,
@@ -697,7 +762,7 @@ CREATE TABLE empathy_review (
     attempt_id uuid7 NOT NULL REFERENCES empathy_attempt ON DELETE CASCADE,
     reviewer_participant_id uuid7 NOT NULL REFERENCES participant ON DELETE CASCADE,
     validated boolean NOT NULL,
-    feedback text,
+    feedback ciphertext,
     feedback_sent_at ts_ms,
     created_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -710,20 +775,23 @@ CREATE INDEX ON empathy_review (reviewer_participant_id);
 COMMENT ON TABLE empathy_review IS 'The subject''s verdict on an attempt revealed to them (validated or not), with the feedback they chose to send.';
 COMMENT ON COLUMN empathy_review.reviewer_participant_id IS 'The attempt''s subject (trigger-checked).';
 COMMENT ON COLUMN empathy_review.feedback_sent_at IS 'When the reviewer explicitly sent the feedback; feedback is set only with it.';
+COMMENT ON COLUMN empathy_review.feedback IS 'encrypted (session): the subject''s feedback on the attempt, sent explicitly (max 500).';
 
 CREATE TABLE reconciler_guidance (
     result_id uuid7 NOT NULL PRIMARY KEY REFERENCES reconciler_result ON DELETE CASCADE,
     author_participant_id uuid7 NOT NULL REFERENCES participant ON DELETE CASCADE,
     subject_participant_id uuid7 NOT NULL REFERENCES participant ON DELETE CASCADE,
-    area_hint text,
+    area_hint ciphertext,
     guidance_type guidance_type,
-    prompt_seed text,
+    prompt_seed ciphertext,
     created_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX ON reconciler_guidance (author_participant_id);
 CREATE INDEX ON reconciler_guidance (subject_participant_id);
 COMMENT ON TABLE reconciler_guidance IS 'The abstract hints from a reconciler result that the author may see (P3 D8a split from reconciler_result, which only the subject sees).';
 COMMENT ON COLUMN reconciler_guidance.author_participant_id IS 'The attempt''s author, who may read this row.';
+COMMENT ON COLUMN reconciler_guidance.area_hint IS 'encrypted (participant): a coarse area for the author to explore (one of six code phrases in generateAbstractGuidance).';
+COMMENT ON COLUMN reconciler_guidance.prompt_seed IS 'encrypted (participant): the refinement prompt''s seed phrase (one of three code phrases, by guidance_type).';
 
 CREATE TABLE consent (
     id uuid7 NOT NULL DEFAULT uuidv7() PRIMARY KEY,
@@ -775,7 +843,7 @@ CREATE TABLE need_share (
     participant_id uuid7 NOT NULL REFERENCES participant ON DELETE CASCADE,
     session_id uuid7 NOT NULL REFERENCES session ON DELETE CASCADE,
     category need_category NOT NULL,
-    shared_text text NOT NULL,
+    shared_text ciphertext NOT NULL,
     shared_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
     revoked_at ts_ms,
     created_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -790,13 +858,14 @@ COMMENT ON TABLE need_share IS 'The consented, transformed version of a need tha
 COMMENT ON COLUMN need_share.participant_id IS 'The need''s owner, copied from need by app.need_share so the shared projection needs no join to need (pass 2 N-1); trigger-checked.';
 COMMENT ON COLUMN need_share.session_id IS 'The owner''s session, copied by app.need_share for the membership read arm; trigger-checked.';
 COMMENT ON COLUMN need_share.category IS 'The need''s category, copied at share time: the partner sees the category, never need.label.';
+COMMENT ON COLUMN need_share.shared_text IS 'encrypted (session): the heat-removed sentence the partner sees (one short first-person sentence written by the job, or a fixed per-category fallback).';
 
 CREATE TABLE need_disposition (
     participant_id uuid7 NOT NULL REFERENCES participant ON DELETE CASCADE,
     need_id uuid7 NOT NULL REFERENCES need_share ON DELETE CASCADE,
     status need_disposition_status NOT NULL DEFAULT 'OPEN',
     is_current boolean NOT NULL DEFAULT false,
-    note text,
+    note ciphertext,
     created_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
@@ -806,6 +875,7 @@ CREATE INDEX ON need_disposition (need_id);
 -- + sql_disposition_one_current (sql-only.sql)
 COMMENT ON TABLE need_disposition IS 'How a participant dispositions a shared need during the Stage-4 walkthrough (their own or the other''s); one current need per walkthrough.';
 COMMENT ON COLUMN need_disposition.is_current IS 'The need the walkthrough is on (at most one per participant).';
+COMMENT ON COLUMN need_disposition.note IS 'encrypted (participant): a note on the disposition; no writer sets it today.';
 
 CREATE TABLE proposal_need (
     proposal_id uuid7 NOT NULL REFERENCES proposal ON DELETE CASCADE,
@@ -821,7 +891,7 @@ CREATE TABLE proposal_choice (
     proposal_id uuid7 NOT NULL REFERENCES proposal ON DELETE CASCADE,
     participant_id uuid7 NOT NULL REFERENCES participant ON DELETE CASCADE,
     decision choice_decision NOT NULL,
-    note text,
+    note ciphertext,
     created_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
@@ -829,6 +899,7 @@ CREATE TABLE proposal_choice (
 );
 CREATE INDEX ON proposal_choice (participant_id);
 COMMENT ON TABLE proposal_choice IS 'A participant''s willingness on a proposal; private until the choices_shared milestone.';
+COMMENT ON COLUMN proposal_choice.note IS 'encrypted (session): the participant''s note on their choice (route max 1000), or their chat message when the choice was inferred.';
 
 CREATE TABLE proposal_revision (
     id uuid7 NOT NULL DEFAULT uuidv7() PRIMARY KEY,
@@ -849,6 +920,8 @@ CREATE INDEX ON proposal_revision (actor_participant_id);
 COMMENT ON TABLE proposal_revision IS 'Append-only audit of proposal changes, with before/after snapshots.';
 COMMENT ON COLUMN proposal_revision.actor_participant_id IS 'Who made the change; NULL for the AI or the app.';
 COMMENT ON COLUMN proposal_revision.reason IS 'An app marker or NULL; never user or model text (R47).';
+COMMENT ON COLUMN proposal_revision.before IS 'encrypted (session): jsonb envelope {"$enc": ...}: the proposal fields before the change.';
+COMMENT ON COLUMN proposal_revision.after IS 'encrypted (session): jsonb envelope {"$enc": ...}: the proposal fields after the change, and any text explaining it.';
 
 CREATE TABLE agreement (
     id uuid7 NOT NULL DEFAULT uuidv7() PRIMARY KEY,
@@ -856,9 +929,9 @@ CREATE TABLE agreement (
     proposal_id uuid7 NOT NULL UNIQUE REFERENCES proposal ON DELETE RESTRICT,
     type agreement_type NOT NULL,
     status agreement_status NOT NULL DEFAULT 'AGREED',
-    description text NOT NULL,
-    duration text,
-    measure_of_success text,
+    description ciphertext NOT NULL,
+    duration ciphertext,
+    measure_of_success ciphertext,
     follow_up_at ts_ms,
     completed_at ts_ms,
     created_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -867,6 +940,9 @@ CREATE TABLE agreement (
 CREATE INDEX ON agreement (session_id, status);
 COMMENT ON TABLE agreement IS 'A proposal every willing party accepted; at most one per proposal.';
 COMMENT ON COLUMN agreement.session_id IS 'The proposal''s session, kept for the agreement''s own read policy and session queries.';
+COMMENT ON COLUMN agreement.description IS 'encrypted (session): the proposal''s description, copied at conversion.';
+COMMENT ON COLUMN agreement.duration IS 'encrypted (session): the proposal''s free-text duration, copied at conversion. NOT a true interval.';
+COMMENT ON COLUMN agreement.measure_of_success IS 'encrypted (session): the proposal''s measure of success, copied at conversion.';
 
 CREATE TABLE agreement_party (
     agreement_id uuid7 NOT NULL REFERENCES agreement ON DELETE CASCADE,
@@ -883,7 +959,7 @@ CREATE TABLE session_closure (
     session_id uuid7 NOT NULL PRIMARY KEY REFERENCES session ON DELETE CASCADE,
     kind closure_kind NOT NULL,
     reason closure_reason NOT NULL,
-    summary text NOT NULL,
+    summary ciphertext NOT NULL,
     closed_by_participant_id uuid7 REFERENCES participant ON DELETE CASCADE,
     check_in_at ts_ms,
     closed_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -892,6 +968,7 @@ CREATE TABLE session_closure (
 CREATE INDEX ON session_closure (closed_by_participant_id);
 COMMENT ON TABLE session_closure IS 'How the repair stage of a session ended, one row per closed session.';
 COMMENT ON COLUMN session_closure.closed_by_participant_id IS 'Who closed it; NULL for an automatic closure.';
+COMMENT ON COLUMN session_closure.summary IS 'encrypted (session): how the repair stage ended, from the participant (max 2000) or a code template.';
 
 CREATE TABLE follow_up (
     id uuid7 NOT NULL DEFAULT uuidv7() PRIMARY KEY,
@@ -907,7 +984,7 @@ CREATE TABLE follow_up (
     response_deadline_at ts_ms,
     opened_at ts_ms,
     completed_at ts_ms,
-    summary text,
+    summary ciphertext,
     created_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
@@ -924,6 +1001,7 @@ COMMENT ON TABLE follow_up IS 'A scheduled or user-initiated check-in on an agre
 COMMENT ON COLUMN follow_up.proposal_id IS 'An individual commitment''s proposal, when there is no agreement.';
 COMMENT ON COLUMN follow_up.owner_participant_id IS 'INDIVIDUAL scope only: whose follow-up it is.';
 COMMENT ON COLUMN follow_up.response_deadline_at IS 'When an OPEN follow-up stops accepting check-ins.';
+COMMENT ON COLUMN follow_up.summary IS 'encrypted (session): a code-templated line naming what is checked on, with the agreement or commitment text.';
 
 CREATE TABLE follow_up_checkin (
     id uuid7 NOT NULL DEFAULT uuidv7() PRIMARY KEY,
@@ -931,7 +1009,7 @@ CREATE TABLE follow_up_checkin (
     participant_id uuid7 NOT NULL REFERENCES participant ON DELETE CASCADE,
     next_action next_action,
     continue_choice continue_choice,
-    reflection_summary text,
+    reflection_summary ciphertext,
     payload jsonb NOT NULL DEFAULT '{}',
     submitted_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
     created_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -942,11 +1020,13 @@ CREATE TABLE follow_up_checkin (
 );
 CREATE INDEX ON follow_up_checkin (participant_id, submitted_at);
 COMMENT ON TABLE follow_up_checkin IS 'One participant''s answers to a follow-up, one per participant; the structured answers are a document (payload).';
+COMMENT ON COLUMN follow_up_checkin.reflection_summary IS 'encrypted (session): the participant''s reflection at the check-in (max 4000).';
+COMMENT ON COLUMN follow_up_checkin.payload IS 'encrypted (session): jsonb envelope {"$enc": ...}: the structured answers (FollowUpCheckinPayload).';
 
 CREATE TABLE follow_up_note (
     id uuid7 NOT NULL DEFAULT uuidv7() PRIMARY KEY,
     participant_id uuid7 NOT NULL REFERENCES participant ON DELETE CASCADE,
-    content text NOT NULL,
+    content ciphertext NOT NULL,
     carry_forward boolean NOT NULL DEFAULT false,
     carried_into_checkin_id uuid7 REFERENCES follow_up_checkin ON DELETE SET NULL,
     created_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -956,6 +1036,7 @@ CREATE INDEX ON follow_up_note (participant_id, created_at);
 CREATE INDEX ON follow_up_note (carried_into_checkin_id);
 COMMENT ON TABLE follow_up_note IS 'A private between-period note; it can be carried into a later check-in.';
 COMMENT ON COLUMN follow_up_note.carried_into_checkin_id IS 'The check-in this note was copied into (payload.carriedNotes).';
+COMMENT ON COLUMN follow_up_note.content IS 'encrypted (participant): the note text (max 4000).';
 
 CREATE TABLE reminder (
     id uuid7 NOT NULL DEFAULT uuidv7() PRIMARY KEY,
@@ -964,7 +1045,7 @@ CREATE TABLE reminder (
     scope reminder_scope NOT NULL DEFAULT 'PRIVATE',
     remind_at ts_ms NOT NULL,
     cadence reminder_cadence,
-    note text,
+    note ciphertext,
     status reminder_status NOT NULL DEFAULT 'SCHEDULED',
     created_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -974,18 +1055,19 @@ CREATE INDEX ON reminder (follow_up_id);
 -- + sql_reminder_due (sql-only.sql)
 COMMENT ON TABLE reminder IS 'A scheduled nudge for one user, optionally tied to a follow-up; the job delivers due ones.';
 COMMENT ON COLUMN reminder.cadence IS 'How often the reminder repeats; NULL and ONCE are one-shot.';
+COMMENT ON COLUMN reminder.note IS 'encrypted (user): the reminder''s note (max 1000); the app sends a fixed label today.';
 
 CREATE TABLE reflection (
     id uuid7 NOT NULL DEFAULT uuidv7() PRIMARY KEY,
     user_id uuid7 NOT NULL REFERENCES "user" ON DELETE RESTRICT,
-    title text,
+    title ciphertext,
     theme text,
     status reflection_status NOT NULL DEFAULT 'ACTIVE',
-    summary text,
+    summary ciphertext,
     summary_doc jsonb,
     linked_session_id uuid7 REFERENCES session ON DELETE SET NULL,
     linked_at ts_ms,
-    context_snapshot text,
+    context_snapshot ciphertext,
     distilled_at ts_ms,
     created_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -1000,21 +1082,26 @@ COMMENT ON TABLE reflection IS 'A private Inner Work reflection thread, outside 
 COMMENT ON COLUMN reflection.linked_session_id IS 'A session the reflection is about, for context only; it grants no visibility either way.';
 COMMENT ON COLUMN reflection.distilled_at IS 'When takeaways were last distilled from the thread.';
 COMMENT ON COLUMN reflection.theme IS 'Free LLM text ("a single word or short phrase", e.g. anxiety), not a taxonomy; v_reflection_theme groups by the exact string.';
+COMMENT ON COLUMN reflection.title IS 'encrypted (user): the reflection''s title, typed (max 200) or AI-generated (3-6 words).';
+COMMENT ON COLUMN reflection.summary IS 'encrypted (user): a one-sentence AI summary of the reflection.';
+COMMENT ON COLUMN reflection.summary_doc IS 'encrypted (user): jsonb envelope {"$enc": ...}: the rolling conversation summary.';
+COMMENT ON COLUMN reflection.context_snapshot IS 'encrypted (user): the AI''s 2-3 sentence context summary captured when the reflection started a session.';
 
 CREATE TABLE reflection_message (
     id uuid7 NOT NULL DEFAULT uuidv7() PRIMARY KEY,
     reflection_id uuid7 NOT NULL REFERENCES reflection ON DELETE CASCADE,
     role message_role NOT NULL,
-    content text NOT NULL,
+    content ciphertext NOT NULL,
     created_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX ON reflection_message (reflection_id, created_at);
 COMMENT ON TABLE reflection_message IS 'One line of a reflection thread.';
+COMMENT ON COLUMN reflection_message.content IS 'encrypted (user): the line''s text (max 10000 for a user turn).';
 
 CREATE TABLE takeaway (
     id uuid7 NOT NULL DEFAULT uuidv7() PRIMARY KEY,
     reflection_id uuid7 NOT NULL REFERENCES reflection ON DELETE CASCADE,
-    content text NOT NULL,
+    content ciphertext NOT NULL,
     theme text,
     source takeaway_source NOT NULL DEFAULT 'AI',
     type takeaway_type NOT NULL DEFAULT 'INSIGHT',
@@ -1027,6 +1114,7 @@ CREATE INDEX ON takeaway (reflection_id, position);
 COMMENT ON TABLE takeaway IS 'A distilled insight, action item or intention from a reflection, in the user''s order.';
 COMMENT ON COLUMN takeaway.position IS 'The user''s order within the reflection.';
 COMMENT ON COLUMN takeaway.theme IS 'Free LLM text, optional; not a taxonomy.';
+COMMENT ON COLUMN takeaway.content IS 'encrypted (user): one sentence: the insight, action item or intention (AI-distilled or edited by the user).';
 
 CREATE TABLE takeaway_link (
     source_id uuid7 NOT NULL REFERENCES takeaway ON DELETE CASCADE,
@@ -1074,11 +1162,11 @@ CREATE TABLE user_memory (
     id uuid7 NOT NULL DEFAULT uuidv7() PRIMARY KEY,
     user_id uuid7 NOT NULL REFERENCES "user" ON DELETE RESTRICT,
     session_id uuid7 REFERENCES session ON DELETE CASCADE,
-    content text NOT NULL,
+    content ciphertext NOT NULL,
     category memory_category NOT NULL,
     status memory_status NOT NULL DEFAULT 'ACTIVE',
     source memory_source NOT NULL DEFAULT 'USER_APPROVED',
-    suggested_text text,
+    suggested_text ciphertext,
     created_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
@@ -1086,6 +1174,8 @@ CREATE INDEX ON user_memory (user_id, status);
 CREATE INDEX ON user_memory (session_id);
 COMMENT ON TABLE user_memory IS '"Things to always remember": standing instructions the user approved or wrote, optionally scoped to a session.';
 COMMENT ON COLUMN user_memory.session_id IS 'NULL for a memory that applies everywhere; set for one scoped to a session.';
+COMMENT ON COLUMN user_memory.content IS 'encrypted (user): the standing instruction (2 to 500 characters).';
+COMMENT ON COLUMN user_memory.suggested_text IS 'encrypted (user): the AI''s original text when the user edited it before approving, or the pre-edit text.';
 
 CREATE TABLE feature_state (
     user_id uuid7 NOT NULL REFERENCES "user" ON DELETE RESTRICT,
@@ -1100,6 +1190,7 @@ CREATE TABLE feature_state (
 );
 COMMENT ON TABLE feature_state IS 'One document per wellbeing feature per user (meditation, gratitude, needs assessment, people).';
 COMMENT ON COLUMN feature_state.feature IS 'Which wellbeing feature this document belongs to.';
+COMMENT ON COLUMN feature_state.doc IS 'encrypted (user): jsonb envelope {"$enc": ...}: the feature''s document (one zod contract per feature, shared/src/dto/feature-state.ts).';
 
 CREATE TABLE user_key (
     id uuid7 NOT NULL DEFAULT uuidv7() PRIMARY KEY,
