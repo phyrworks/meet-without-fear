@@ -194,7 +194,7 @@ model Message {
   role                MessageRole
   kind                MessageKind @default(CHAT)
   content             String
-  contentHash         String?     @map("content_hash") @db.VarChar(64)
+  contentHash         String?     @map("content_hash")
   refiningNeedId      String?     @map("refining_need_id") @db.Uuid
   sourceAttemptId     String?     @map("source_attempt_id") @db.Uuid
   createdAt           DateTime    @default(now()) @map("created_at") @db.Timestamptz(3)
@@ -373,7 +373,7 @@ model ParticipantKey {
   wrappedDek    Bytes     @map("wrapped_dek")
   createdAt     DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
   destroyedAt   DateTime? @map("destroyed_at") @db.Timestamptz(3)
-  updatedAt   DateTime  @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+  updatedAt     DateTime  @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
 
   participant Participant @relation(fields: [participantId], references: [id], onDelete: Cascade, onUpdate: NoAction)
 
@@ -479,13 +479,13 @@ model ReconcilerResult {
 }
 
 model ReconcilerGuidance {
-  resultId             String   @id @map("result_id") @db.Uuid
-  authorParticipantId  String   @map("author_participant_id") @db.Uuid
-  subjectParticipantId String   @map("subject_participant_id") @db.Uuid
-  areaHint             String?  @map("area_hint")
-  guidanceType         String?  @map("guidance_type")
-  promptSeed           String?  @map("prompt_seed")
-  createdAt            DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  resultId             String        @id @map("result_id") @db.Uuid
+  authorParticipantId  String        @map("author_participant_id") @db.Uuid
+  subjectParticipantId String        @map("subject_participant_id") @db.Uuid
+  areaHint             String?       @map("area_hint")
+  guidanceType         GuidanceType? @map("guidance_type")
+  promptSeed           String?       @map("prompt_seed")
+  createdAt            DateTime      @default(now()) @map("created_at") @db.Timestamptz(3)
 
   result             ReconcilerResult @relation(fields: [resultId], references: [id], onDelete: Cascade, onUpdate: NoAction)
   authorParticipant  Participant      @relation("GuidanceAuthor", fields: [authorParticipantId], references: [id], onDelete: Cascade, onUpdate: NoAction)
@@ -710,14 +710,14 @@ model ProposalChoice {
 }
 
 model ProposalRevision {
-  id                 String         @id @default(dbgenerated("uuidv7()")) @db.Uuid
-  proposalId         String         @map("proposal_id") @db.Uuid
-  actorParticipantId String?        @map("actor_participant_id") @db.Uuid
+  id                 String                  @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  proposalId         String                  @map("proposal_id") @db.Uuid
+  actorParticipantId String?                 @map("actor_participant_id") @db.Uuid
   action             RevisionAction
   before             Json?
   after              Json?
-  reason             String?
-  createdAt          DateTime       @default(now()) @map("created_at") @db.Timestamptz(3)
+  reason             ProposalRevisionReason?
+  createdAt          DateTime                @default(now()) @map("created_at") @db.Timestamptz(3)
 
   proposal         Proposal     @relation(fields: [proposalId], references: [id], onDelete: Cascade, onUpdate: NoAction)
   actorParticipant Participant? @relation(fields: [actorParticipantId], references: [id], onDelete: Cascade, onUpdate: NoAction)
@@ -860,16 +860,16 @@ model FollowUpNote {
 
 /// sql_reminder_due: (remind_at) WHERE status = 'SCHEDULED' — sql-only.sql.
 model Reminder {
-  id         String         @id @default(dbgenerated("uuidv7()")) @db.Uuid
-  userId     String         @map("user_id") @db.Uuid
-  followUpId String?        @map("follow_up_id") @db.Uuid
-  scope      ReminderScope  @default(PRIVATE)
-  remindAt   DateTime       @map("remind_at") @db.Timestamptz(3)
-  cadence    String?
+  id         String           @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  userId     String           @map("user_id") @db.Uuid
+  followUpId String?          @map("follow_up_id") @db.Uuid
+  scope      ReminderScope    @default(PRIVATE)
+  remindAt   DateTime         @map("remind_at") @db.Timestamptz(3)
+  cadence    ReminderCadence?
   note       String?
-  status     ReminderStatus @default(SCHEDULED)
-  createdAt  DateTime       @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt  DateTime       @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+  status     ReminderStatus   @default(SCHEDULED)
+  createdAt  DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt  DateTime         @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
 
   user     User      @relation(fields: [userId], references: [id], onDelete: Restrict, onUpdate: NoAction)
   followUp FollowUp? @relation(fields: [followUpId], references: [id], onDelete: Cascade, onUpdate: NoAction)
@@ -1043,11 +1043,11 @@ model UserMemory {
 }
 
 model FeatureState {
-  userId    String   @map("user_id") @db.Uuid
-  feature   String
-  doc       Json     @default("{}")
-  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+  userId    String           @map("user_id") @db.Uuid
+  feature   WellbeingFeature
+  doc       Json             @default("{}")
+  createdAt DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime         @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
 
   user User @relation(fields: [userId], references: [id], onDelete: Restrict, onUpdate: NoAction)
 
@@ -1268,6 +1268,14 @@ enum RecommenderAction {
   @@map("recommender_action")
 }
 
+enum GuidanceType {
+  challenge_assumptions
+  explore_breadth
+  explore_deeper_feelings
+
+  @@map("guidance_type")
+}
+
 enum ConsentTarget {
   NEED
   EMPATHY_ATTEMPT
@@ -1349,6 +1357,15 @@ enum RevisionAction {
   SUBCHAT_REFINED
 
   @@map("revision_action")
+}
+
+enum ProposalRevisionReason {
+  LEGACY_PROPOSED
+  LEGACY_CONFIRMED
+  MUTUAL_CLOSURE
+  EVERY_PARTY_CONFIRMED
+
+  @@map("proposal_revision_reason")
 }
 
 enum AgreementType {
@@ -1447,6 +1464,15 @@ enum ReminderStatus {
   @@map("reminder_status")
 }
 
+enum ReminderCadence {
+  ONCE
+  WEEKLY
+  MONTHLY
+  EVERY_COUPLE_MONTHS
+
+  @@map("reminder_cadence")
+}
+
 enum ReflectionStatus {
   ACTIVE
   COMPLETED
@@ -1510,6 +1536,15 @@ enum DevicePlatform {
   web
 
   @@map("device_platform")
+}
+
+enum WellbeingFeature {
+  meditation
+  gratitude
+  needs_assessment
+  people
+
+  @@map("wellbeing_feature")
 }
 
 enum ActivityType {

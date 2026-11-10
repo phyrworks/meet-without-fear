@@ -19,7 +19,7 @@
 
 import { z } from 'zod';
 
-/** The CHECK on feature_state.feature. */
+/** The members of the wellbeing_feature enum (feature_state.feature). */
 export const FEATURES = ['meditation', 'gratitude', 'needs_assessment', 'people'] as const;
 export type Feature = (typeof FEATURES)[number];
 

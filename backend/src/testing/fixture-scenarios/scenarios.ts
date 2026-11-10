@@ -816,7 +816,9 @@ function needMappingComplete(): ReturnType<Build> {
   };
 }
 
-const REPAIR_REVISION_REASON = 'E2E redesigned Stage 4 fixture';
+// proposal_revision.reason holds only app markers (the proposal_revision_reason
+// enum, R47); the fixture's revisions carry none.
+const REPAIR_REVISION_REASON = null;
 
 const REPAIR_CONTENT: RepairContent = {
   proposals: [

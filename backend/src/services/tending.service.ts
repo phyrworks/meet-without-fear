@@ -1361,7 +1361,7 @@ export async function submitTendingCheckin(args: {
             followUpId: r.tendingEntryId ?? openEntries[0].id,
             scope: r.scope,
             remindAt: new Date(r.remindAt),
-            cadence: r.cadence,
+            cadence: r.cadence == null ? null : reminderCadenceOrThrow(r.cadence),
             note: r.note,
           },
         }),
@@ -1578,14 +1578,39 @@ export async function openDueTendingEntries(now = new Date()): Promise<{ opened:
   return { opened: entryIds.length, entryIds };
 }
 
+/** The reminder_cadence enum (reminder.cadence): a recurrence choice. NULL and ONCE are one-shot. */
+export const REMINDER_CADENCES = ['ONCE', 'WEEKLY', 'MONTHLY', 'EVERY_COUPLE_MONTHS'] as const;
+export type ReminderCadenceValue = (typeof REMINDER_CADENCES)[number];
+
+const REMINDER_CADENCE_ALIASES: Record<string, ReminderCadenceValue> = {
+  EVERY_TWO_MONTHS: 'EVERY_COUPLE_MONTHS',
+  BIMONTHLY: 'EVERY_COUPLE_MONTHS',
+};
+
+/**
+ * The reminder_cadence member a client's cadence text names (case, spaces and
+ * hyphens ignored; EVERY_TWO_MONTHS and BIMONTHLY mean EVERY_COUPLE_MONTHS),
+ * or null when it names none.
+ */
+export function parseReminderCadence(input: string): ReminderCadenceValue | null {
+  const n = input
+    .trim()
+    .toUpperCase()
+    .replace(/[\s-]+/g, '_');
+  if ((REMINDER_CADENCES as readonly string[]).includes(n)) return n as ReminderCadenceValue;
+  return REMINDER_CADENCE_ALIASES[n] ?? null;
+}
+
+/** parseReminderCadence for a value the route already validated; throws on anything else. */
+function reminderCadenceOrThrow(input: string): ReminderCadenceValue {
+  const cadence = parseReminderCadence(input);
+  if (!cadence) throw new Error(`[reminder.cadence] not a reminder_cadence: ${input}`);
+  return cadence;
+}
+
 function nextReminderDate(remindAt: Date, cadence: string | null): Date | null {
-  const normalized =
-    cadence
-      ?.trim()
-      .toUpperCase()
-      .replace(/[\s-]+/g, '_') ?? 'ONCE';
   const next = new Date(remindAt.getTime());
-  switch (normalized) {
+  switch (cadence ?? 'ONCE') {
     case 'WEEKLY':
       next.setUTCDate(next.getUTCDate() + 7);
       return next;
@@ -1593,8 +1618,6 @@ function nextReminderDate(remindAt: Date, cadence: string | null): Date | null {
       next.setUTCMonth(next.getUTCMonth() + 1);
       return next;
     case 'EVERY_COUPLE_MONTHS':
-    case 'EVERY_TWO_MONTHS':
-    case 'BIMONTHLY':
       next.setUTCMonth(next.getUTCMonth() + 2);
       return next;
     default:
@@ -1618,7 +1641,7 @@ export async function processDueTendingReminders(
       note: string | null;
     }>
   >`
-    SELECT r.id, r.follow_up_id, r.remind_at, r.cadence, r.user_id, r.scope::text AS scope, NULL::text AS note
+    SELECT r.id, r.follow_up_id, r.remind_at, r.cadence::text AS cadence, r.user_id, r.scope::text AS scope, NULL::text AS note
     FROM reminder r WHERE r.status = 'SCHEDULED' AND r.remind_at <= ${now} ORDER BY r.remind_at, r.id`;
   const reminderIds: string[] = [];
   for (const r of due) {

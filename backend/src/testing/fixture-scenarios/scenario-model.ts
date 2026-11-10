@@ -285,7 +285,7 @@ export interface ProposalRevision {
   action: 'CREATED' | 'REMOVED';
   before?: Record<string, string>;
   after: Record<string, string>;
-  reason: string;
+  reason: string | null;
 }
 
 export interface NeedCoverage {

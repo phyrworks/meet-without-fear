@@ -42,7 +42,7 @@
 -- SECTIONS
 --   0  preamble: empty-database guard, roles, schema app, app.current_user_id()
 --      (backend/scripts/target-shape/preamble.sql)
---   1  domains (uuid7, ts_ms, intensity), enums and the 47 tables, hand-written,
+--   1  domains (uuid7, ts_ms, intensity, sha256_hex), enums and the 47 tables, hand-written,
 --      each table complete in its CREATE TABLE, in dependency order
 --      (backend/scripts/target-shape/tables.sql)
 --   2  milestone seed (reference data)
@@ -122,7 +122,7 @@ REVOKE EXECUTE ON FUNCTION app.current_user_id() FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION app.current_user_id() TO mwf_app, mwf_job, mwf_ops, mwf_auth;
 
 -- ============================================================================
--- 1. Domains, enums and the 47 target tables (backend/scripts/target-shape/tables.sql; 100 named objects, all lower-case; 129 uuid7 columns)
+-- 1. Domains, enums and the 47 target tables (backend/scripts/target-shape/tables.sql; 105 named objects, all lower-case; 129 uuid7 columns)
 -- ============================================================================
 
 -- ============================================================================
@@ -174,7 +174,7 @@ GRANT EXECUTE ON FUNCTION app.current_user_id() TO mwf_app, mwf_job, mwf_ops, mw
 -- ----------------------------------------------------------------------------
 -- Domains. All are invisible to Prisma: a uuid7 column introspects as
 -- String @db.Uuid, a ts_ms column as DateTime @db.Timestamptz(3), an
--- intensity column as Int, and `migrate diff` reports nothing (TS-6 probe for
+-- intensity column as Int, a sha256_hex column as String, and `migrate diff` reports nothing (TS-6 probe for
 -- intensity, 2026-10-19; work-a39h.11.40 probe for uuid7, 2026-11-02;
 -- work-gevt for ts_ms, 2026-11-10; PG 18.6 / Prisma 7.10).
 -- ----------------------------------------------------------------------------
@@ -225,6 +225,11 @@ COMMENT ON DOMAIN ts_ms IS 'A timestamptz rounded to milliseconds; every timesta
 CREATE DOMAIN intensity AS integer CHECK (VALUE BETWEEN 1 AND 10);
 COMMENT ON DOMAIN intensity IS 'A 1-10 self-rated intensity (mood_reading.intensity, regulation_event.intensity_before/after).';
 
+-- message.content_hash: utils/content-hash.ts writes sha256(plaintext) as
+-- 64 lower-case hex digits. NULL passes (a message may have no hash).
+CREATE DOMAIN sha256_hex AS text CHECK (VALUE ~ '^[0-9a-f]{64}$');
+COMMENT ON DOMAIN sha256_hex IS 'A SHA-256 digest as 64 lower-case hex digits (utils/content-hash.ts); NULL passes.';
+
 -- ----------------------------------------------------------------------------
 -- Enums, in schema.prisma order.
 -- ----------------------------------------------------------------------------
@@ -264,6 +269,8 @@ CREATE TYPE gap_severity AS ENUM ('NONE', 'MINOR', 'MODERATE', 'SIGNIFICANT');
 COMMENT ON TYPE gap_severity IS 'The reconciler''s rating of the gap between an empathy attempt and the subject''s own account.';
 CREATE TYPE recommender_action AS ENUM ('PROCEED', 'OFFER_OPTIONAL', 'OFFER_SHARING');
 COMMENT ON TYPE recommender_action IS 'The reconciler''s recommendation: proceed to the reveal, or offer the subject the option or a nudge to share context.';
+CREATE TYPE guidance_type AS ENUM ('challenge_assumptions', 'explore_breadth', 'explore_deeper_feelings');
+COMMENT ON TYPE guidance_type IS 'The refinement guidance the reconciler picked for the author, from the gap''s shape (generateAbstractGuidance in services/reconciler/analysis.ts).';
 CREATE TYPE consent_target AS ENUM ('NEED', 'EMPATHY_ATTEMPT', 'PROPOSAL', 'SHARE_OFFER', 'REVIEW');
 COMMENT ON TYPE consent_target IS 'The kind of thing a consent row decides on; consent.target_kind is generated from which arc column is set.';
 CREATE TYPE consent_decision AS ENUM ('GRANTED', 'DENIED', 'REVOKED');
@@ -282,6 +289,8 @@ CREATE TYPE choice_decision AS ENUM ('WILLING', 'NOT_WILLING');
 COMMENT ON TYPE choice_decision IS 'A participant''s willingness on a proposal.';
 CREATE TYPE revision_action AS ENUM ('CREATED', 'REVISED', 'REMOVED', 'RESTORED', 'CONVERTED', 'CAPTURE_SKIPPED', 'COVERED', 'SUBCHAT_REFINED');
 COMMENT ON TYPE revision_action IS 'What a proposal_revision row records.';
+CREATE TYPE proposal_revision_reason AS ENUM ('LEGACY_PROPOSED', 'LEGACY_CONFIRMED', 'MUTUAL_CLOSURE', 'EVERY_PARTY_CONFIRMED');
+COMMENT ON TYPE proposal_revision_reason IS 'The app markers a proposal_revision may carry (services/proposal-revision-reasons.ts, ruling R47); controllers/stage4.ts filters revisions by them. Free text explaining a revision goes in the encrypted after/before, never here.';
 CREATE TYPE agreement_type AS ENUM ('MICRO_EXPERIMENT', 'COMMITMENT', 'CHECK_IN', 'HYBRID');
 COMMENT ON TYPE agreement_type IS 'The shape of an agreement: a micro-experiment, a commitment, a check-in, or a mix.';
 CREATE TYPE agreement_status AS ENUM ('AGREED', 'IN_PROGRESS', 'COMPLETED', 'ABANDONED');
@@ -304,6 +313,8 @@ CREATE TYPE reminder_scope AS ENUM ('PRIVATE', 'SHARED');
 COMMENT ON TYPE reminder_scope IS 'PRIVATE: a reminder only its user sees; SHARED: one tied to a shared follow-up.';
 CREATE TYPE reminder_status AS ENUM ('SCHEDULED', 'DELIVERED', 'CANCELLED');
 COMMENT ON TYPE reminder_status IS 'Lifecycle of a reminder: SCHEDULED, DELIVERED, or CANCELLED.';
+CREATE TYPE reminder_cadence AS ENUM ('ONCE', 'WEEKLY', 'MONTHLY', 'EVERY_COUPLE_MONTHS');
+COMMENT ON TYPE reminder_cadence IS 'How often a reminder repeats, as chosen in the check-in (ONCE or a named period); a recurrence choice, not an interval. nextReminderDate (services/tending.service.ts) maps it to the next remind_at.';
 CREATE TYPE reflection_status AS ENUM ('ACTIVE', 'COMPLETED', 'ARCHIVED');
 COMMENT ON TYPE reflection_status IS 'Lifecycle of an Inner Work reflection thread.';
 CREATE TYPE takeaway_source AS ENUM ('AI', 'USER');
@@ -320,6 +331,8 @@ CREATE TYPE memory_source AS ENUM ('USER_APPROVED', 'USER_CREATED', 'USER_EDITED
 COMMENT ON TYPE memory_source IS 'How a user memory came to be: an AI suggestion the user approved, created by the user, or edited by the user.';
 CREATE TYPE device_platform AS ENUM ('ios', 'android', 'web');
 COMMENT ON TYPE device_platform IS 'The platform a user device registered from.';
+CREATE TYPE wellbeing_feature AS ENUM ('meditation', 'gratitude', 'needs_assessment', 'people');
+COMMENT ON TYPE wellbeing_feature IS 'The wellbeing features that keep a feature_state document (shared/src/dto/feature-state.ts FEATURES).';
 CREATE TYPE activity_type AS ENUM ('LLM_CALL', 'EMBEDDING', 'RETRIEVAL', 'TOOL_USE');
 COMMENT ON TYPE activity_type IS 'The kind of call a brain_activity row logs.';
 CREATE TYPE activity_status AS ENUM ('PENDING', 'COMPLETED', 'FAILED');
@@ -341,7 +354,7 @@ COMMENT ON TABLE relationship IS 'A durable pairing of users across sessions; it
 CREATE TABLE "user" (
     id uuid7 NOT NULL DEFAULT uuidv7() PRIMARY KEY,
     clerk_id text UNIQUE,
-    email text NOT NULL UNIQUE,
+    email text NOT NULL UNIQUE CHECK (char_length(email) <= 254),
     first_name text,
     last_name text,
     deleted_at ts_ms,
@@ -527,7 +540,7 @@ CREATE TABLE message (
     role message_role NOT NULL,
     kind message_kind NOT NULL DEFAULT 'CHAT',
     content text NOT NULL,
-    content_hash varchar(64),
+    content_hash sha256_hex,
     refining_need_id uuid7 REFERENCES need ON DELETE SET NULL,
     source_attempt_id uuid7 REFERENCES empathy_attempt ON DELETE SET NULL,
     created_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -544,6 +557,7 @@ CREATE INDEX ON message (source_attempt_id);
 COMMENT ON TABLE message IS 'One line of a conversation: a human turn, an AI or system line, or an item delivered from the other participant. Append-only.';
 COMMENT ON COLUMN message.sender_participant_id IS 'The human who wrote a USER line; NULL for AI and SYSTEM lines.';
 COMMENT ON COLUMN message.source_attempt_id IS 'Lineage of a delivered item: the empathy attempt it came from.';
+COMMENT ON COLUMN message.content_hash IS 'sha256 of the plaintext content, for the dedupe probes (indexed with conversation_id, kind).';
 
 CREATE TABLE conversation_read_state (
     participant_id uuid7 NOT NULL PRIMARY KEY REFERENCES participant ON DELETE CASCADE,
@@ -828,7 +842,7 @@ CREATE TABLE reconciler_guidance (
     author_participant_id uuid7 NOT NULL REFERENCES participant ON DELETE CASCADE,
     subject_participant_id uuid7 NOT NULL REFERENCES participant ON DELETE CASCADE,
     area_hint text,
-    guidance_type text,
+    guidance_type guidance_type,
     prompt_seed text,
     created_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
@@ -949,7 +963,7 @@ CREATE TABLE proposal_revision (
     action revision_action NOT NULL,
     before jsonb,
     after jsonb,
-    reason text,
+    reason proposal_revision_reason,
     created_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     -- §1.4 proposal_revision [P23c]
@@ -960,6 +974,7 @@ CREATE INDEX ON proposal_revision (proposal_id, created_at);
 CREATE INDEX ON proposal_revision (actor_participant_id);
 COMMENT ON TABLE proposal_revision IS 'Append-only audit of proposal changes, with before/after snapshots.';
 COMMENT ON COLUMN proposal_revision.actor_participant_id IS 'Who made the change; NULL for the AI or the app.';
+COMMENT ON COLUMN proposal_revision.reason IS 'An app marker or NULL; never user or model text (R47).';
 
 CREATE TABLE agreement (
     id uuid7 NOT NULL DEFAULT uuidv7() PRIMARY KEY,
@@ -1074,7 +1089,7 @@ CREATE TABLE reminder (
     follow_up_id uuid7 REFERENCES follow_up ON DELETE CASCADE,
     scope reminder_scope NOT NULL DEFAULT 'PRIVATE',
     remind_at ts_ms NOT NULL,
-    cadence text,
+    cadence reminder_cadence,
     note text,
     status reminder_status NOT NULL DEFAULT 'SCHEDULED',
     created_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -1084,6 +1099,7 @@ CREATE INDEX ON reminder (user_id, remind_at);
 CREATE INDEX ON reminder (follow_up_id);
 -- + sql_reminder_due (sql-only.sql)
 COMMENT ON TABLE reminder IS 'A scheduled nudge for one user, optionally tied to a follow-up; the job delivers due ones.';
+COMMENT ON COLUMN reminder.cadence IS 'How often the reminder repeats; NULL and ONCE are one-shot.';
 
 CREATE TABLE reflection (
     id uuid7 NOT NULL DEFAULT uuidv7() PRIMARY KEY,
@@ -1109,6 +1125,7 @@ CREATE INDEX ON reflection (user_id, theme);
 COMMENT ON TABLE reflection IS 'A private Inner Work reflection thread, outside any session (user-scoped); optionally linked to a session.';
 COMMENT ON COLUMN reflection.linked_session_id IS 'A session the reflection is about, for context only; it grants no visibility either way.';
 COMMENT ON COLUMN reflection.distilled_at IS 'When takeaways were last distilled from the thread.';
+COMMENT ON COLUMN reflection.theme IS 'Free LLM text ("a single word or short phrase", e.g. anxiety), not a taxonomy; v_reflection_theme groups by the exact string.';
 
 CREATE TABLE reflection_message (
     id uuid7 NOT NULL DEFAULT uuidv7() PRIMARY KEY,
@@ -1135,6 +1152,7 @@ CREATE TABLE takeaway (
 CREATE INDEX ON takeaway (reflection_id, position);
 COMMENT ON TABLE takeaway IS 'A distilled insight, action item or intention from a reflection, in the user''s order.';
 COMMENT ON COLUMN takeaway.position IS 'The user''s order within the reflection.';
+COMMENT ON COLUMN takeaway.theme IS 'Free LLM text, optional; not a taxonomy.';
 
 CREATE TABLE takeaway_link (
     source_id uuid7 NOT NULL REFERENCES takeaway ON DELETE CASCADE,
@@ -1197,17 +1215,17 @@ COMMENT ON COLUMN user_memory.session_id IS 'NULL for a memory that applies ever
 
 CREATE TABLE feature_state (
     user_id uuid7 NOT NULL REFERENCES "user" ON DELETE RESTRICT,
-    feature text NOT NULL,
+    feature wellbeing_feature NOT NULL,
     doc jsonb NOT NULL DEFAULT '{}',
     created_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     PRIMARY KEY (user_id, feature),
     -- §1.7 feature_state
-    CHECK (feature IN ('meditation', 'gratitude', 'needs_assessment', 'people')),
     CHECK (jsonb_typeof(doc) = 'object')
 );
 COMMENT ON TABLE feature_state IS 'One document per wellbeing feature per user (meditation, gratitude, needs assessment, people).';
+COMMENT ON COLUMN feature_state.feature IS 'Which wellbeing feature this document belongs to.';
 
 CREATE TABLE user_key (
     id uuid7 NOT NULL DEFAULT uuidv7() PRIMARY KEY,

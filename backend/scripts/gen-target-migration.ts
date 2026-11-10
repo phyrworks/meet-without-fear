@@ -16,7 +16,7 @@
  *   0  scripts/target-shape/preamble.sql — refuse a non-empty database; the
  *      roles assertion and the SET ROLE mwf_job check; schema app;
  *      app.current_user_id();
- *   1  scripts/target-shape/tables.sql — the domains (uuid7, ts_ms, intensity), the
+ *   1  scripts/target-shape/tables.sql — the domains (uuid7, ts_ms, intensity, sha256_hex), the
  *      enums and the 47 tables, hand-written, each table complete in its
  *      CREATE TABLE (PK, UNIQUE, FK, CHECK, generated columns) in dependency
  *      order (owner decision 2026-11-02, work-a39h.11.40: it replaced the
@@ -132,7 +132,7 @@ const HEADER = `-- =============================================================
 -- SECTIONS
 --   0  preamble: empty-database guard, roles, schema app, app.current_user_id()
 --      (backend/scripts/target-shape/preamble.sql)
---   1  domains (uuid7, ts_ms, intensity), enums and the 47 tables, hand-written,
+--   1  domains (uuid7, ts_ms, intensity, sha256_hex), enums and the 47 tables, hand-written,
 --      each table complete in its CREATE TABLE, in dependency order
 --      (backend/scripts/target-shape/tables.sql)
 --   2  milestone seed (reference data)

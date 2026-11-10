@@ -156,7 +156,7 @@ One line of a conversation: human, AI, system, or a delivered cross-participant 
 | role | message_role | no | | `USER \| AI \| SYSTEM` |
 | kind | message_kind | no | 'CHAT' | `CHAT, EMPATHY_STATEMENT, EMPATHY_REVEAL_INTRO, SHARED_CONTEXT, VALIDATION_FEEDBACK, SHARE_SUGGESTION, EMPATHY_VALIDATION_PROMPT` |
 | content | text | no | | encrypted |
-| content_hash | varchar(64) | yes | | SHA-256 of plaintext (dedupe probes) |
+| content_hash | sha256_hex | yes | | SHA-256 of plaintext (dedupe probes); domain `sha256_hex` (§3, work-gevt) |
 | refining_need_id | uuid | yes | | FK need SET NULL |
 | source_attempt_id | uuid | yes | | FK empathy_attempt SET NULL — which attempt row a delivered `EMPATHY_STATEMENT` / `VALIDATION_FEEDBACK` / `SHARED_CONTEXT` came from (lineage). **The reveal job writes the `EMPATHY_STATEMENT` row into the subject's conversation** (today it is written only into the author's own chat, `stage2.ts:737`, `:2114`); the author keeps their own copy too |
 | created_at | timestamptz | no | now() | |
@@ -376,7 +376,8 @@ The abstract hints the **author** may see (P3 D8a split). · empathy · P to aut
 |---|---|---|---|---|
 | result_id | uuid | no | | PK, FK reconciler_result CASCADE |
 | author_participant_id, subject_participant_id | uuid | no | | FK participant CASCADE (policy columns) |
-| area_hint, guidance_type, prompt_seed | text | yes | | no partner content by construction |
+| area_hint, prompt_seed | text | yes | | no partner content by construction (code constants, encrypted by R46) |
+| guidance_type | guidance_type | yes | | `challenge_assumptions \| explore_breadth \| explore_deeper_feelings` (enum, work-gevt; was text) |
 | created_at | timestamptz | no | now() | |
 
 RLS: S `mine(author_participant_id) OR mine(subject_participant_id)` (P3 §2) · I `job` · U/D none.
@@ -541,7 +542,7 @@ Append-only audit of proposal changes. · proposals · S · session
 | actor_participant_id | uuid | yes | | FK participant CASCADE; NULL = AI/system |
 | action | revision_action | no | | `CREATED, REVISED, REMOVED, RESTORED, CONVERTED, CAPTURE_SKIPPED, COVERED, SUBCHAT_REFINED` |
 | before, after | jsonb | yes | | `CHECK jsonb_typeof = 'object'` |
-| reason | text | yes | | |
+| reason | proposal_revision_reason | yes | | app markers only (R47): `LEGACY_PROPOSED \| LEGACY_CONFIRMED \| MUTUAL_CLOSURE \| EVERY_PARTY_CONFIRMED` (enum, work-gevt; was text) |
 | created_at | timestamptz | no | now() | |
 
 Keys: PK. Index (proposal_id, created_at). Append-only. No FK into `message` (S-class row must not name a private message id — adversarial P2); the triggering text, where needed, is in `before`/`after`.
@@ -663,7 +664,7 @@ A scheduled nudge for one user. · follow_up · U (delivery is personal) · none
 | follow_up_id | uuid | yes | | FK follow_up CASCADE |
 | scope | reminder_scope | no | 'PRIVATE' | `PRIVATE \| SHARED` |
 | remind_at | timestamptz | no | | |
-| cadence | text | yes | | |
+| cadence | reminder_cadence | yes | | `ONCE \| WEEKLY \| MONTHLY \| EVERY_COUPLE_MONTHS` — a recurrence choice, not an interval; NULL and ONCE are one-shot (enum, work-gevt; was text) |
 | note | text | yes | | |
 | status | reminder_status | no | 'SCHEDULED' | `SCHEDULED \| DELIVERED \| CANCELLED` |
 | created_at, updated_at | timestamptz | no | now() | |
@@ -683,7 +684,7 @@ A private self-reflection thread. · reflection · U · user
 | id | uuid | no | uuidv7() | |
 | user_id | uuid | no | | FK user RESTRICT |
 | title | text | yes | | encrypted |
-| theme | text | yes | | detected theme tag |
+| theme | text | yes | | detected theme: free LLM text, not a taxonomy (grouped by exact string in `v_reflection_theme`) |
 | status | reflection_status | no | 'ACTIVE' | `ACTIVE \| COMPLETED \| ARCHIVED` |
 | summary | text | yes | | encrypted |
 | summary_doc | jsonb | yes | | rolling summary (was JSON-in-text); encrypted; `CHECK jsonb_typeof = 'object'` |
@@ -748,7 +749,7 @@ Identity only. · user · U · none (identity is plaintext; `email`/`clerk_id` a
 |---|---|---|---|---|
 | id | uuid | no | uuidv7() | |
 | clerk_id | text | yes | | UNIQUE |
-| email | text | no | | UNIQUE |
+| email | text | no | | UNIQUE; CHECK `char_length(email) <= 254` (the RFC 5321 bound, work-gevt) |
 | first_name, last_name | text | yes | | |
 | name | text | yes | *generated* | `GENERATED ALWAYS AS (nullif(trim(coalesce(first_name,'') \|\| ' ' \|\| coalesce(last_name,'')), '')) STORED` |
 | deleted_at | timestamptz | yes | | the tombstone (P3 D9) |
@@ -806,7 +807,7 @@ One document per wellbeing feature per user (A-Q4). · user · U · user
 | column | type | null | default | meaning |
 |---|---|---|---|---|
 | user_id | uuid | no | | FK user RESTRICT |
-| feature | text | no | | CHECK `feature IN ('meditation','gratitude','needs_assessment','people')` |
+| feature | wellbeing_feature | no | | `meditation \| gratitude \| needs_assessment \| people` (enum, work-gevt; was a CHECK IN list) |
 | doc | jsonb | no | '{}' | encrypted; `CHECK jsonb_typeof = 'object'`; one zod contract per feature in `shared/src/dto/feature-state.ts` (meditation: `sessions[], scripts[], preferences, stats`; gratitude: `entries[], preferences`; needs_assessment: `scores[], state`; people: `persons[]` with `mentions[]`) |
 | updated_at | timestamptz | no | now() | |
 
@@ -997,6 +998,7 @@ erDiagram
 | `reflection_status` / `takeaway_source` / `takeaway_type` / `takeaway_link_type` | unchanged | `InnerWork*`, `Takeaway*` |
 | `memory_category` / `memory_status` / `memory_source` | unchanged | |
 | `device_platform` | ios, android, web | new |
+| `guidance_type` / `proposal_revision_reason` / `reminder_cadence` / `wellbeing_feature` | see `reconciler_guidance`, `proposal_revision`, `reminder`, `feature_state` | were text / a CHECK (work-gevt, 2026-11-10) |
 | `activity_type` / `activity_status` / `brain_call_type` | unchanged | |
 | **Domain** `intensity` | `int CHECK (VALUE BETWEEN 1 AND 10)` | new |
 | **Domain** `uuid7` | `uuid CHECK (VALUE IS NULL OR coalesce(uuid_extract_version(VALUE), 0) = 7)` — every uuid column (33 PKs, 95 FK columns); `gen_random_uuid()` and other non-v7 values are refused. Invisible to Prisma (`String @db.Uuid`). Source: `backend/scripts/target-shape/tables.sql` | new (2026-11-02) |
