@@ -552,7 +552,7 @@ export async function findDraft(opts: {
 /**
  * What an EMPATHY draft is about (spec §1.1 draft, work-99k2): the partner's
  * participant, or — written before the partner has joined — the pending
- * invitation that will become them. Exactly one (CHECK chk_draft_one_arc).
+ * invitation that will become them. Exactly one (the exclusive-arc CHECK on draft, tables.sql).
  */
 export type EmpathySubject = { aboutParticipantId: string } | { invitationId: string };
 

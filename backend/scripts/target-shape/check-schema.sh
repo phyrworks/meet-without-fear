@@ -108,7 +108,7 @@ fail=0
 # --- sql_ completeness: spec ⊆ file ⊆ pull ∪ expression-only, pull ⊆ file -----
 check_sql_names() {  # $1 = pulled schema
   local in_file in_pull missing
-  in_file="$(grep -oE '"sql_[a-z0-9_]+"' "$SQL_ONLY" | tr -d '"' | sort -u)"
+  in_file="$(grep -oE 'INDEX sql_[a-z0-9_]+' "$SQL_ONLY" | sed 's/^INDEX //' | sort -u)"
   in_pull="$(grep -oE '"sql_[a-z0-9_]+"' "$1" | tr -d '"' | sort -u)"
   missing="$(comm -23 <(echo "$SPEC_SQL_NAMES" | tr ' ' '\n' | grep . | sort -u) <(echo "$in_file"))"
   [ -z "$missing" ] || { echo "   FAIL: spec §5 sql_ names missing from sql-only.sql: $missing"; return 1; }

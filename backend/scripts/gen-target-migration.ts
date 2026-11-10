@@ -60,16 +60,18 @@ const UUID7_PLACEHOLDER = '@@UUID7_COLUMNS@@';
  */
 export function checkTables(sql: string): { names: number; uuid7: number } {
   const names = new Set<string>();
-  for (const m of sql.matchAll(/CREATE (?:DOMAIN|TYPE|TABLE|UNIQUE INDEX|INDEX) "?([A-Za-z0-9_]+)"?/g)) names.add(m[1]);
+  // Identifiers are unquoted except the reserved word "user" (tables.sql
+  // conventions); indexes and most constraints are unnamed (`CREATE INDEX ON t`).
+  for (const m of sql.matchAll(/CREATE (?:DOMAIN|TYPE|TABLE|UNIQUE INDEX|INDEX) (?!ON )"?([A-Za-z0-9_]+)"?/g)) names.add(m[1]);
   for (const m of sql.matchAll(/CONSTRAINT "?([A-Za-z0-9_]+)"?/g)) names.add(m[1]);
   const bad = [...names].filter(n => !/^[a-z_][a-z0-9_]*$/.test(n));
   if (bad.length) throw new Error(`tables.sql creates names that are not lower-case: ${bad.join(', ')}`);
   const tables = (sql.match(/^CREATE TABLE /gm) ?? []).length;
   if (tables !== 47) throw new Error(`tables.sql creates ${tables} tables, expected 47`);
-  // A column line is `    "name" <type>…` inside a CREATE TABLE.
-  const plainUuid = [...sql.matchAll(/^ {4}"([a-z0-9_]+)" uuid\b/gim)].map(m => m[1]);
+  // A column line is `    name <type>…` inside a CREATE TABLE.
+  const plainUuid = [...sql.matchAll(/^ {4}"?([a-z0-9_]+)"? uuid\b/gim)].map(m => m[1]);
   if (plainUuid.length) throw new Error(`tables.sql has uuid columns not typed uuid7: ${plainUuid.join(', ')}`);
-  const uuid7 = (sql.match(/^ {4}"[a-z0-9_]+" uuid7\b/gm) ?? []).length;
+  const uuid7 = (sql.match(/^ {4}"?[a-z0-9_]+"? uuid7\b/gm) ?? []).length;
   if (uuid7 !== UUID7_COLUMNS) throw new Error(`tables.sql has ${uuid7} uuid7 columns, expected ${UUID7_COLUMNS}`);
   return { names: names.size, uuid7 };
 }
