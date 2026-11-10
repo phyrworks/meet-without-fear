@@ -168,7 +168,19 @@ Dropped although something mentioned them; each mention was updated:
 | `uuid7_version` | `schema-target-2026-10.md` §3 | Prose only |
 | `chk_need_confidence`, `user_email_key`, … | `compare-baseline-ddl.ts` | Tool retired. It was a one-shot proof against 99abd51f, already failing at b64cd5be, and stays in git history; the `pg_dump --schema-only` catalog diff replaced it |
 
-## 7. Open questions for the owner
+## 7. What the retypes broke, and the raw-SQL audit
+
+| Found | Where | Fix |
+|---|---|---|
+| An enum sorts by label order, not alphabetically | `feature-state.target.test.ts` `ORDER BY feature` | `ORDER BY feature::text`. No app query orders by a retyped enum |
+| `array_agg` over a ciphertext column is `ciphertext[]`; node-postgres returns the string `'{…}'` (the uuid7[] trap) | `choices-hidden-until-shared.golden.test.ts` | `array_agg(n.label::text …)`. No app query or view aggregates an encrypted column; step 20 refuses one in a view or function |
+| One `$n` both inserted into a ciphertext column and compared as text: "inconsistent types deduced" | `tombstone.golden.test.ts` | `$2::text`. App raw SQL is Prisma tagged templates (one parameter per interpolation, never reused); the one `$executeRawUnsafe` (`tending.service.ts:480`) casts every `$n` |
+| A text parameter into a new enum column needs a cast | `analysis.ts` guidance INSERT, `stage4-store.ts` revision INSERT, `feature-state.ts` (INSERT and FOR UPDATE probe) | `::guidance_type`, `::proposal_revision_reason`, `::wellbeing_feature`. `reminder.cadence` is written through the model API; the job reads `cadence::text` |
+| Plan shift on never-ANALYZEd templates (`session-read` page-of-5 read 13 rows, not 6) | Default estimates follow the row width; `content_hash` varchar(64) → `sha256_hex` cut it by 114 bytes | Harness-only `enable_bitmapscan = off` on that scenario's run database, plus an assertion that the plan is `Limit` over an Index Scan with no Sort. Passes against the existing recording, so nothing was re-recorded. Production tables are analyzed; this is a fixture artefact |
+
+Audited and clean: `coalesce(<ts_ms col>, ${date})` (`empathy-store.ts:383,386`) resolves to the domain; comparisons between a ciphertext or sha256_hex column and a text parameter use the base type's operators; the SQL-language `RETURNS TABLE` functions coerce, and no PL/pgSQL `RETURN QUERY` returns a retyped column; the views expose ts_ms as oid 1184 (node-postgres parses a Date).
+
+## 8. Open questions for the owner
 
 | # | Question | Recommendation |
 |---|---|---|
