@@ -40,7 +40,8 @@
 # invisible to both `migrate diff` and `db pull` (probes TS-6, 2026-10-19 and
 # work-a39h.11.40, 2026-11-02), so they cannot make the gate fail — and the
 # gate cannot check them either: the static comparison
-# (compare-baseline-ddl.ts) and the baseline's step-20 assertions do.
+# (a pg_dump --schema-only catalog diff of two run-baseline.sh builds) and
+# the baseline's step-20 assertions do.
 #
 # Exits non-zero on any failure. Only ever addresses a database whose name
 # matches ^ts[67]_ (build mode: exactly ts6_target), or, read-only, one of
