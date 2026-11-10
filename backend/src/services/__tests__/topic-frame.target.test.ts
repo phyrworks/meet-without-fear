@@ -89,7 +89,7 @@ describeTarget('Stage 0 confirmations on the target (mwf_app; status by mwf_job)
   });
 
   it('invitation confirm: Stage 0 → 1 by milestones, no message text on the invitation; idempotent', async () => {
-    const before = await run.sql(`SELECT name, status::text AS status FROM invitation WHERE session_id = $1`, [
+    const before = await run.sql(`SELECT invitee_name, status::text AS status FROM invitation WHERE session_id = $1`, [
       ids.session,
     ]);
     const res = await http(ada, 'post', `/sessions/${ids.session}/invitation/confirm`);
@@ -101,7 +101,7 @@ describeTarget('Stage 0 confirmations on the target (mwf_app; status by mwf_job)
     });
     expect(await adaMilestones()).toEqual(['compact_signed', 'invitation_sent']);
     expect(
-      await run.sql(`SELECT name, status::text AS status FROM invitation WHERE session_id = $1`, [ids.session]),
+      await run.sql(`SELECT invitee_name, status::text AS status FROM invitation WHERE session_id = $1`, [ids.session]),
     ).toEqual(before);
 
     const again = await http(ada, 'post', `/sessions/${ids.session}/invitation/confirm`);

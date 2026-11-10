@@ -313,7 +313,7 @@ describe(`golden: ${SCENARIO}`, () => {
         for (const n of BOB_WRITE_STEPS) expect(JSON.stringify(steps[n].body)).not.toContain(commitment.id);
         const links = await sql<{ description: string; unresolved: string[]; labels: string[] }>(
           `SELECT p.description, p.unresolved_need_labels AS unresolved,
-                  array_agg(n.label ORDER BY n.label) AS labels
+                  array_agg(n.label::text ORDER BY n.label) AS labels
            FROM proposal p JOIN proposal_need pn ON pn.proposal_id = p.id JOIN need n ON n.id = pn.need_id
            GROUP BY p.id ORDER BY p.created_at`,
         );

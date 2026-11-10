@@ -21,7 +21,7 @@ its plaintext limits are listed for information only.
 |---|---|---|
 | Unquoted identifiers, inline single-column keys, unnamed constraints | all | (a) style |
 | `ts_ms` domain (`timestamptz(3)`) | all 143 timestamp columns | (b) |
-| `COMMENT ON` | 47 tables, 49+ enums, the domains, 79 plain + 55 encrypted columns, 13 sql_ indexes | (c), (d), (f) |
+| `COMMENT ON` | 47 tables, 49+ enums, the domains, 85 plain + 55 encrypted columns, 13 sql_ indexes | (c), (d), (f) |
 | New enums | `guidance_type`, `proposal_revision_reason`, `reminder_cadence`, `wellbeing_feature` | (d) |
 | `sha256_hex` domain | `message.content_hash` (was `varchar(64)`) | (d) |
 | Length CHECK | `user.email <= 254` | (d) |
@@ -53,6 +53,8 @@ its plaintext limits are listed for information only.
 | `user_device.push_token` | Expo push token | `mobile/src/services/notifications.ts:64` | text + comment | Format is validated at send time (`Expo.isExpoPushToken`); no length bound |
 | `brain_activity.turn_id` | Free-form correlation string, many formats | `backend/src/services/stream-turn-context.ts:354`; `backend/src/middleware/request-context.ts:31` | text + comment | Not a uuid; open format |
 | `brain_activity.model` | Bedrock / embedding model ids, env-overridable | `backend/src/lib/bedrock.ts:161-171` | text + comment | Open set |
+
+**Already typed, kept:** every `*_kind` / `*_type` column is an enum. That covers `participant.kind`, `conversation.kind`, `conversation.anchor_kind`, `message.kind`, `draft.kind`, `ai_memory.kind`, `consent.target_kind` (generated), `proposal.kind`, `session_closure.kind`, `regulation_event.type`, `agreement.type`, `follow_up.type`, `takeaway.type`, `takeaway_link.link_type`, `brain_activity.activity_type` and `call_type`. The only `*_label` columns are `milestone.stage_label` (above) and the encrypted `need.label` and `proposal.unresolved_need_labels` (§2).
 
 ## 2. Encrypted columns (55): ciphertext, not a closed type
 

@@ -190,7 +190,10 @@ export const SENSITIVE_FIELD_MAP: Record<string, SensitiveFieldConfig> = {
   MoodReading: { table: 'mood_reading', fields: { context: text('context', 'participant') } },
   Invitation: {
     table: 'invitation',
-    fields: { inviteeName: text('invitee_name', 'session'), declineReason: text('decline_reason', 'session', undefined, true) },
+    fields: {
+      inviteeName: text('invitee_name', 'session'),
+      declineReason: text('decline_reason', 'session', undefined, true),
+    },
   },
   EmpathyAttempt: {
     table: 'empathy_attempt',
