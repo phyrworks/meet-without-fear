@@ -1337,6 +1337,15 @@ BEGIN
     AND a.atttypid = 'public.uuid7'::regtype;
   IF n <> @@UUID7_COLUMNS@@ THEN RAISE EXCEPTION 'step 20: % uuid7 columns, expected @@UUID7_COLUMNS@@', n; END IF;
 
+  -- Every timestamp column of a table is a ts_ms (tables.sql): none is a plain
+  -- timestamptz or timestamp (Prisma's own _prisma_migrations aside).
+  SELECT string_agg(c.relname || '.' || a.attname, ', ' ORDER BY c.relname, a.attname) INTO bad
+  FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid JOIN pg_namespace s ON s.oid = c.relnamespace
+  WHERE s.nspname = 'public' AND c.relkind = 'r' AND a.attnum > 0 AND NOT a.attisdropped
+    AND c.relname <> '_prisma_migrations'
+    AND a.atttypid IN ('pg_catalog.timestamptz'::regtype, 'pg_catalog.timestamp'::regtype);
+  IF bad IS NOT NULL THEN RAISE EXCEPTION 'step 20: timestamp column(s) not typed ts_ms: %', bad; END IF;
+
   -- No column (table, view, composite) and no function argument or result has
   -- an array-of-domain type: array_agg over a uuid7 column is uuid7[], which
   -- node-postgres cannot parse (the app would read the string '{…}'). Cast it

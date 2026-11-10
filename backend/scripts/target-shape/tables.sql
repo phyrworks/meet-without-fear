@@ -41,10 +41,11 @@
 -- ============================================================================
 
 -- ----------------------------------------------------------------------------
--- Domains. Both are invisible to Prisma: a uuid7 column introspects as
--- String @db.Uuid, an intensity column as Int, and `migrate diff` reports
--- nothing (TS-6 probe for intensity, 2026-10-19; work-a39h.11.40 probe for
--- uuid7, 2026-11-02; PG 18.6 / Prisma 7.10).
+-- Domains. All are invisible to Prisma: a uuid7 column introspects as
+-- String @db.Uuid, a ts_ms column as DateTime @db.Timestamptz(3), an
+-- intensity column as Int, and `migrate diff` reports nothing (TS-6 probe for
+-- intensity, 2026-10-19; work-a39h.11.40 probe for uuid7, 2026-11-02;
+-- work-gevt for ts_ms, 2026-11-10; PG 18.6 / Prisma 7.10).
 -- ----------------------------------------------------------------------------
 
 -- Every uuid column (the 33 uuidv7() primary keys and the 95 columns that
@@ -74,6 +75,18 @@
 -- result of an array-of-domain type.
 CREATE DOMAIN uuid7 AS uuid
   CHECK (VALUE IS NULL OR coalesce(uuid_extract_version(VALUE), 0) = 7);
+
+-- Every timestamp column is a ts_ms: a timestamptz rounded to milliseconds.
+-- A JS Date holds milliseconds, so a microsecond value written by PostgreSQL
+-- (now(), a trigger, a default) would not survive the round trip through the
+-- app: the value the app reads back is not the stored one. That breaks keyset
+-- pagination (the cursor no longer equals the row), forward-only instants
+-- (a re-written value can move backwards by < 1 ms) and exact-equality checks.
+-- Prisma's own default for DateTime is timestamptz(3). The domain rounds on
+-- every write (a default, a trigger's now(), a literal), and drivers see plain
+-- timestamptz (RowDescription sends the base type, oid 1184, typmod 3); as with
+-- uuid7, an array over it is ts_ms[] and step 20 refuses one.
+CREATE DOMAIN ts_ms AS timestamptz(3);
 
 -- spec §3: a 1..10 rating (mood_reading.intensity, regulation_event.intensity_*).
 CREATE DOMAIN intensity AS integer CHECK (VALUE BETWEEN 1 AND 10);
@@ -137,8 +150,8 @@ CREATE TYPE brain_call_type AS ENUM ('ORCHESTRATED_RESPONSE', 'RETRIEVAL_PLANNIN
 
 CREATE TABLE relationship (
     id uuid7 NOT NULL DEFAULT uuidv7() PRIMARY KEY,
-    created_at timestamptz(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at timestamptz(3) NOT NULL DEFAULT CURRENT_TIMESTAMP
+    created_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE TABLE "user" (
@@ -147,9 +160,9 @@ CREATE TABLE "user" (
     email text NOT NULL UNIQUE,
     first_name text,
     last_name text,
-    deleted_at timestamptz(3),
-    created_at timestamptz(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at timestamptz(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    deleted_at ts_ms,
+    created_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
     name text
         GENERATED ALWAYS AS (nullif(trim(coalesce(first_name, '') || ' ' || coalesce(last_name, '')), '')) STORED,
 
@@ -162,9 +175,9 @@ CREATE TABLE relationship_member (
     user_id uuid7 NOT NULL REFERENCES "user" ON DELETE RESTRICT,
     role relationship_role NOT NULL DEFAULT 'member',
     nickname text,
-    joined_at timestamptz(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    created_at timestamptz(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at timestamptz(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    joined_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    created_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     PRIMARY KEY (relationship_id, user_id)
 );
@@ -175,11 +188,11 @@ CREATE TABLE session (
     relationship_id uuid7 NOT NULL REFERENCES relationship ON DELETE CASCADE,
     status session_status NOT NULL DEFAULT 'CREATED',
     topic_frame text,
-    topic_frame_confirmed_at timestamptz(3),
+    topic_frame_confirmed_at ts_ms,
     previous_session_id uuid7 REFERENCES session ON DELETE SET NULL,
-    resolved_at timestamptz(3),
-    created_at timestamptz(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at timestamptz(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    resolved_at ts_ms,
+    created_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     -- §1.1 session [P12]
     CHECK (status <> 'RESOLVED' OR resolved_at IS NOT NULL)
@@ -194,10 +207,10 @@ CREATE TABLE participant (
     user_id uuid7 REFERENCES "user" ON DELETE RESTRICT,
     kind participant_kind NOT NULL DEFAULT 'human',
     display_name text,
-    joined_at timestamptz(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    left_at timestamptz(3),
-    created_at timestamptz(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at timestamptz(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    joined_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    left_at ts_ms,
+    created_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     UNIQUE (session_id, user_id),
     -- §1.1 participant
@@ -216,12 +229,12 @@ CREATE TABLE proposal (
     duration text,
     measure_of_success text,
     unresolved_need_labels text[] DEFAULT ARRAY[]::text[],
-    removed_at timestamptz(3),
+    removed_at ts_ms,
     removed_by_participant_id uuid7 REFERENCES participant ON DELETE CASCADE,
     removal_reason text,
-    shared_at timestamptz(3),
-    created_at timestamptz(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at timestamptz(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    shared_at ts_ms,
+    created_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     -- §1.4 proposal [P21]
     CHECK ((status = 'REMOVED') = (removed_at IS NOT NULL)),
@@ -238,9 +251,9 @@ CREATE TABLE conversation (
     anchor_kind subchat_anchor,
     anchor_proposal_id uuid7 REFERENCES proposal ON DELETE SET NULL,
     status conversation_status NOT NULL DEFAULT 'ACTIVE',
-    resolved_at timestamptz(3),
-    created_at timestamptz(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at timestamptz(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    resolved_at ts_ms,
+    created_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     -- §1.1 conversation (anchor columns are SUBCHAT-only)
     CHECK ((kind = 'MAIN') = (anchor_kind IS NULL)),
@@ -259,13 +272,13 @@ CREATE TABLE empathy_attempt (
     content text NOT NULL,
     status empathy_status NOT NULL DEFAULT 'HELD',
     status_version integer NOT NULL DEFAULT 0,
-    submitted_at timestamptz(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    revealed_at timestamptz(3),
+    submitted_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    revealed_at ts_ms,
     delivery_status delivery_status NOT NULL DEFAULT 'PENDING',
-    delivered_at timestamptz(3),
-    seen_at timestamptz(3),
-    created_at timestamptz(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at timestamptz(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    delivered_at ts_ms,
+    seen_at ts_ms,
+    created_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     UNIQUE (author_participant_id, subject_participant_id, round),
     -- §1.2 empathy_attempt [P15b, P15d]
@@ -283,12 +296,12 @@ CREATE TABLE need (
     category need_category NOT NULL,
     evidence text[] DEFAULT ARRAY[]::text[],
     ai_confidence real NOT NULL,
-    confirmed_at timestamptz(3),
-    locked_at timestamptz(3),
+    confirmed_at ts_ms,
+    locked_at ts_ms,
     superseded_by_need_id uuid7 REFERENCES need ON DELETE SET NULL,
-    deleted_at timestamptz(3),
-    created_at timestamptz(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at timestamptz(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    deleted_at ts_ms,
+    created_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     -- §1.4 need [P30]
     CHECK (ai_confidence BETWEEN 0 AND 1)
@@ -307,7 +320,7 @@ CREATE TABLE message (
     content_hash varchar(64),
     refining_need_id uuid7 REFERENCES need ON DELETE SET NULL,
     source_attempt_id uuid7 REFERENCES empathy_attempt ON DELETE SET NULL,
-    created_at timestamptz(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    created_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     -- §1.1 message [P02] — P3 §6, "humans can't author as the facilitator"
     CHECK (role <> 'USER' OR sender_participant_id IS NOT NULL),
@@ -321,13 +334,13 @@ CREATE INDEX ON message (source_attempt_id);
 
 CREATE TABLE conversation_read_state (
     participant_id uuid7 NOT NULL PRIMARY KEY REFERENCES participant ON DELETE CASCADE,
-    last_viewed_at timestamptz(3),
+    last_viewed_at ts_ms,
     last_seen_message_id uuid7 REFERENCES message ON DELETE SET NULL,
-    last_viewed_share_tab_at timestamptz(3),
-    last_active_at timestamptz(3),
-    archived_at timestamptz(3),
-    created_at timestamptz(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at timestamptz(3) NOT NULL DEFAULT CURRENT_TIMESTAMP
+    last_viewed_share_tab_at ts_ms,
+    last_active_at ts_ms,
+    archived_at ts_ms,
+    created_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX ON conversation_read_state (last_seen_message_id);
 
@@ -351,9 +364,9 @@ CREATE TABLE reconciler_result (
     suggested_share_content text,
     suggested_share_reason text,
     circuit_breaker_tripped boolean NOT NULL DEFAULT false,
-    superseded_at timestamptz(3),
-    created_at timestamptz(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at timestamptz(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    superseded_at ts_ms,
+    created_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     UNIQUE (attempt_id, iteration),
     -- §1.2 reconciler_result [P17f]
@@ -373,16 +386,16 @@ CREATE TABLE context_share_offer (
     suggested_content text,
     suggested_reason text,
     shared_content text,
-    shared_at timestamptz(3),
-    declined_at timestamptz(3),
-    offered_at timestamptz(3),
+    shared_at ts_ms,
+    declined_at ts_ms,
+    offered_at ts_ms,
     delivery_status delivery_status NOT NULL DEFAULT 'PENDING',
-    delivered_at timestamptz(3),
-    seen_at timestamptz(3),
-    delivery_notified_at timestamptz(3),
-    seen_notified_at timestamptz(3),
-    created_at timestamptz(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at timestamptz(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    delivered_at ts_ms,
+    seen_at ts_ms,
+    delivery_notified_at ts_ms,
+    seen_notified_at ts_ms,
+    created_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     UNIQUE (attempt_id, iteration),
     -- §1.2 context_share_offer [P18a]
@@ -398,15 +411,15 @@ CREATE TABLE milestone (
     stage_label text NOT NULL,
     scope milestone_scope NOT NULL DEFAULT 'participant',
     self_assertable boolean NOT NULL DEFAULT false,
-    created_at timestamptz(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at timestamptz(3) NOT NULL DEFAULT CURRENT_TIMESTAMP
+    created_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE TABLE participant_milestone (
     participant_id uuid7 NOT NULL REFERENCES participant ON DELETE CASCADE,
     milestone_key text NOT NULL REFERENCES milestone ON DELETE RESTRICT,
-    reached_at timestamptz(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    created_at timestamptz(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    reached_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    created_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     PRIMARY KEY (participant_id, milestone_key)
 );
@@ -418,8 +431,8 @@ CREATE TABLE ai_memory (
     user_id uuid7 REFERENCES "user" ON DELETE RESTRICT,
     kind ai_memory_kind NOT NULL,
     doc jsonb NOT NULL,
-    created_at timestamptz(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at timestamptz(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    created_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     UNIQUE (participant_id, kind),
     UNIQUE (user_id, kind),
@@ -437,8 +450,8 @@ CREATE TABLE mood_reading (
     participant_id uuid7 NOT NULL REFERENCES participant ON DELETE CASCADE,
     intensity intensity NOT NULL,
     context text,
-    recorded_at timestamptz(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    created_at timestamptz(3) NOT NULL DEFAULT CURRENT_TIMESTAMP
+    recorded_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    created_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX ON mood_reading (participant_id, recorded_at);
 
@@ -448,8 +461,8 @@ CREATE TABLE regulation_event (
     type regulation_type NOT NULL,
     intensity_before intensity,
     intensity_after intensity,
-    completed_at timestamptz(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    created_at timestamptz(3) NOT NULL DEFAULT CURRENT_TIMESTAMP
+    completed_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    created_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX ON regulation_event (participant_id, completed_at);
 
@@ -460,13 +473,13 @@ CREATE TABLE invitation (
     accepted_by_user_id uuid7 REFERENCES "user" ON DELETE RESTRICT,
     name text,
     status invitation_status NOT NULL DEFAULT 'PENDING',
-    message_confirmed_at timestamptz(3),
-    expires_at timestamptz(3) NOT NULL,
-    accepted_at timestamptz(3),
-    declined_at timestamptz(3),
+    message_confirmed_at ts_ms,
+    expires_at ts_ms NOT NULL,
+    accepted_at ts_ms,
+    declined_at ts_ms,
     decline_reason text,
-    created_at timestamptz(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at timestamptz(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    created_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     -- §1.1 invitation [P14a, P14b] — P3 §6
     CHECK (
@@ -488,9 +501,9 @@ CREATE TABLE draft (
     content text NOT NULL,
     ready_to_share boolean NOT NULL DEFAULT false,
     version integer NOT NULL DEFAULT 1,
-    created_at timestamptz(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at timestamptz(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    reopened_at timestamptz(3),
+    created_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    reopened_at ts_ms,
 
     -- §1.1 draft — exclusive arc, and the arm matches the kind. An EMPATHY
     -- draft is about the partner's participant, or — written before the
@@ -517,9 +530,9 @@ CREATE TABLE session_key (
     session_id uuid7 NOT NULL REFERENCES session ON DELETE CASCADE,
     key_id text NOT NULL,
     wrapped_dek bytea NOT NULL,
-    created_at timestamptz(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    destroyed_at timestamptz(3),
-    updated_at timestamptz(3) NOT NULL DEFAULT CURRENT_TIMESTAMP
+    created_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    destroyed_at ts_ms,
+    updated_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX ON session_key (session_id);
 -- + sql_session_key_live (sql-only.sql)
@@ -529,9 +542,9 @@ CREATE TABLE participant_key (
     participant_id uuid7 NOT NULL REFERENCES participant ON DELETE CASCADE,
     key_id text NOT NULL,
     wrapped_dek bytea NOT NULL,
-    created_at timestamptz(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    destroyed_at timestamptz(3),
-    updated_at timestamptz(3) NOT NULL DEFAULT CURRENT_TIMESTAMP
+    created_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    destroyed_at ts_ms,
+    updated_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX ON participant_key (participant_id);
 -- + sql_participant_key_live (sql-only.sql)
@@ -542,9 +555,9 @@ CREATE TABLE empathy_review (
     reviewer_participant_id uuid7 NOT NULL REFERENCES participant ON DELETE CASCADE,
     validated boolean NOT NULL,
     feedback text,
-    feedback_sent_at timestamptz(3),
-    created_at timestamptz(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at timestamptz(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    feedback_sent_at ts_ms,
+    created_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     UNIQUE (attempt_id, reviewer_participant_id),
     -- §1.2 empathy_review
@@ -559,7 +572,7 @@ CREATE TABLE reconciler_guidance (
     area_hint text,
     guidance_type text,
     prompt_seed text,
-    created_at timestamptz(3) NOT NULL DEFAULT CURRENT_TIMESTAMP
+    created_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX ON reconciler_guidance (author_participant_id);
 CREATE INDEX ON reconciler_guidance (subject_participant_id);
@@ -574,10 +587,10 @@ CREATE TABLE consent (
     share_offer_id uuid7 REFERENCES context_share_offer ON DELETE CASCADE,
     review_id uuid7 REFERENCES empathy_review ON DELETE CASCADE,
     decision consent_decision,
-    decided_at timestamptz(3),
-    revoked_at timestamptz(3),
-    created_at timestamptz(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at timestamptz(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    decided_at ts_ms,
+    revoked_at ts_ms,
+    created_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
     target_kind consent_target NOT NULL
         GENERATED ALWAYS AS (
           CASE
@@ -611,10 +624,10 @@ CREATE TABLE need_share (
     session_id uuid7 NOT NULL REFERENCES session ON DELETE CASCADE,
     category need_category NOT NULL,
     shared_text text NOT NULL,
-    shared_at timestamptz(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    revoked_at timestamptz(3),
-    created_at timestamptz(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at timestamptz(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    shared_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    revoked_at ts_ms,
+    created_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     -- §1.4 need_share [P20c]
     CHECK (revoked_at IS NULL OR revoked_at >= shared_at)
@@ -628,8 +641,8 @@ CREATE TABLE need_disposition (
     status need_disposition_status NOT NULL DEFAULT 'OPEN',
     is_current boolean NOT NULL DEFAULT false,
     note text,
-    created_at timestamptz(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at timestamptz(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    created_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     PRIMARY KEY (participant_id, need_id)
 );
@@ -639,7 +652,7 @@ CREATE INDEX ON need_disposition (need_id);
 CREATE TABLE proposal_need (
     proposal_id uuid7 NOT NULL REFERENCES proposal ON DELETE CASCADE,
     need_id uuid7 NOT NULL REFERENCES need_share ON DELETE CASCADE,
-    created_at timestamptz(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    created_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     PRIMARY KEY (proposal_id, need_id)
 );
@@ -650,8 +663,8 @@ CREATE TABLE proposal_choice (
     participant_id uuid7 NOT NULL REFERENCES participant ON DELETE CASCADE,
     decision choice_decision NOT NULL,
     note text,
-    created_at timestamptz(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at timestamptz(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    created_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     PRIMARY KEY (proposal_id, participant_id)
 );
@@ -665,7 +678,7 @@ CREATE TABLE proposal_revision (
     before jsonb,
     after jsonb,
     reason text,
-    created_at timestamptz(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    created_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     -- §1.4 proposal_revision [P23c]
     CHECK (before IS NULL OR jsonb_typeof(before) = 'object'),
@@ -683,18 +696,18 @@ CREATE TABLE agreement (
     description text NOT NULL,
     duration text,
     measure_of_success text,
-    follow_up_at timestamptz(3),
-    completed_at timestamptz(3),
-    created_at timestamptz(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at timestamptz(3) NOT NULL DEFAULT CURRENT_TIMESTAMP
+    follow_up_at ts_ms,
+    completed_at ts_ms,
+    created_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX ON agreement (session_id, status);
 
 CREATE TABLE agreement_party (
     agreement_id uuid7 NOT NULL REFERENCES agreement ON DELETE CASCADE,
     participant_id uuid7 NOT NULL REFERENCES participant ON DELETE CASCADE,
-    agreed_at timestamptz(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    created_at timestamptz(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    agreed_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    created_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     PRIMARY KEY (agreement_id, participant_id)
 );
@@ -706,9 +719,9 @@ CREATE TABLE session_closure (
     reason closure_reason NOT NULL,
     summary text NOT NULL,
     closed_by_participant_id uuid7 REFERENCES participant ON DELETE CASCADE,
-    check_in_at timestamptz(3),
-    closed_at timestamptz(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    created_at timestamptz(3) NOT NULL DEFAULT CURRENT_TIMESTAMP
+    check_in_at ts_ms,
+    closed_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    created_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX ON session_closure (closed_by_participant_id);
 
@@ -722,13 +735,13 @@ CREATE TABLE follow_up (
     owner_participant_id uuid7 REFERENCES participant ON DELETE CASCADE,
     opted_in_shared boolean NOT NULL DEFAULT false,
     status follow_up_status NOT NULL DEFAULT 'SCHEDULED',
-    scheduled_for timestamptz(3),
-    response_deadline_at timestamptz(3),
-    opened_at timestamptz(3),
-    completed_at timestamptz(3),
+    scheduled_for ts_ms,
+    response_deadline_at ts_ms,
+    opened_at ts_ms,
+    completed_at ts_ms,
     summary text,
-    created_at timestamptz(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at timestamptz(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    created_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     -- §1.5 follow_up [P24a]
     CHECK ((scope = 'INDIVIDUAL') = (owner_participant_id IS NOT NULL)),
@@ -748,8 +761,8 @@ CREATE TABLE follow_up_checkin (
     continue_choice continue_choice,
     reflection_summary text,
     payload jsonb NOT NULL DEFAULT '{}',
-    submitted_at timestamptz(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    created_at timestamptz(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    submitted_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    created_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     UNIQUE (follow_up_id, participant_id),
     -- §1.5 follow_up_checkin
@@ -763,8 +776,8 @@ CREATE TABLE follow_up_note (
     content text NOT NULL,
     carry_forward boolean NOT NULL DEFAULT false,
     carried_into_checkin_id uuid7 REFERENCES follow_up_checkin ON DELETE SET NULL,
-    created_at timestamptz(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at timestamptz(3) NOT NULL DEFAULT CURRENT_TIMESTAMP
+    created_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX ON follow_up_note (participant_id, created_at);
 CREATE INDEX ON follow_up_note (carried_into_checkin_id);
@@ -774,12 +787,12 @@ CREATE TABLE reminder (
     user_id uuid7 NOT NULL REFERENCES "user" ON DELETE RESTRICT,
     follow_up_id uuid7 REFERENCES follow_up ON DELETE CASCADE,
     scope reminder_scope NOT NULL DEFAULT 'PRIVATE',
-    remind_at timestamptz(3) NOT NULL,
+    remind_at ts_ms NOT NULL,
     cadence text,
     note text,
     status reminder_status NOT NULL DEFAULT 'SCHEDULED',
-    created_at timestamptz(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at timestamptz(3) NOT NULL DEFAULT CURRENT_TIMESTAMP
+    created_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX ON reminder (user_id, remind_at);
 CREATE INDEX ON reminder (follow_up_id);
@@ -794,11 +807,11 @@ CREATE TABLE reflection (
     summary text,
     summary_doc jsonb,
     linked_session_id uuid7 REFERENCES session ON DELETE SET NULL,
-    linked_at timestamptz(3),
+    linked_at ts_ms,
     context_snapshot text,
-    distilled_at timestamptz(3),
-    created_at timestamptz(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at timestamptz(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    distilled_at ts_ms,
+    created_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     -- §1.6 reflection, takeaway_link [P31]
     CHECK (summary_doc IS NULL OR jsonb_typeof(summary_doc) = 'object')
@@ -812,7 +825,7 @@ CREATE TABLE reflection_message (
     reflection_id uuid7 NOT NULL REFERENCES reflection ON DELETE CASCADE,
     role message_role NOT NULL,
     content text NOT NULL,
-    created_at timestamptz(3) NOT NULL DEFAULT CURRENT_TIMESTAMP
+    created_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX ON reflection_message (reflection_id, created_at);
 
@@ -824,9 +837,9 @@ CREATE TABLE takeaway (
     source takeaway_source NOT NULL DEFAULT 'AI',
     type takeaway_type NOT NULL DEFAULT 'INSIGHT',
     position integer NOT NULL DEFAULT 0,
-    resolved_at timestamptz(3),
-    created_at timestamptz(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at timestamptz(3) NOT NULL DEFAULT CURRENT_TIMESTAMP
+    resolved_at ts_ms,
+    created_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX ON takeaway (reflection_id, position);
 
@@ -835,7 +848,7 @@ CREATE TABLE takeaway_link (
     target_id uuid7 NOT NULL REFERENCES takeaway ON DELETE CASCADE,
     link_type takeaway_link_type NOT NULL,
     similarity real,
-    created_at timestamptz(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    created_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     PRIMARY KEY (source_id, target_id),
     CHECK (source_id <> target_id)
@@ -848,10 +861,10 @@ CREATE TABLE user_device (
     push_token text,
     platform device_platform,
     biometric_enabled boolean NOT NULL DEFAULT false,
-    biometric_enrolled_at timestamptz(3),
-    last_seen_at timestamptz(3),
-    created_at timestamptz(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at timestamptz(3) NOT NULL DEFAULT CURRENT_TIMESTAMP
+    biometric_enrolled_at ts_ms,
+    last_seen_at ts_ms,
+    created_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX ON user_device (user_id);
 -- + sql_user_device_token (sql-only.sql)
@@ -859,8 +872,8 @@ CREATE INDEX ON user_device (user_id);
 CREATE TABLE user_preferences (
     user_id uuid7 NOT NULL PRIMARY KEY REFERENCES "user" ON DELETE RESTRICT,
     doc jsonb NOT NULL DEFAULT '{}',
-    created_at timestamptz(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at timestamptz(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    created_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     -- §1.7 user_preferences
     CHECK (
@@ -876,8 +889,8 @@ CREATE TABLE user_memory (
     status memory_status NOT NULL DEFAULT 'ACTIVE',
     source memory_source NOT NULL DEFAULT 'USER_APPROVED',
     suggested_text text,
-    created_at timestamptz(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at timestamptz(3) NOT NULL DEFAULT CURRENT_TIMESTAMP
+    created_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX ON user_memory (user_id, status);
 CREATE INDEX ON user_memory (session_id);
@@ -886,8 +899,8 @@ CREATE TABLE feature_state (
     user_id uuid7 NOT NULL REFERENCES "user" ON DELETE RESTRICT,
     feature text NOT NULL,
     doc jsonb NOT NULL DEFAULT '{}',
-    created_at timestamptz(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at timestamptz(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    created_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     PRIMARY KEY (user_id, feature),
     -- §1.7 feature_state
@@ -900,9 +913,9 @@ CREATE TABLE user_key (
     user_id uuid7 NOT NULL REFERENCES "user" ON DELETE RESTRICT,
     key_id text NOT NULL,
     wrapped_dek bytea NOT NULL,
-    created_at timestamptz(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    destroyed_at timestamptz(3),
-    updated_at timestamptz(3) NOT NULL DEFAULT CURRENT_TIMESTAMP
+    created_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    destroyed_at ts_ms,
+    updated_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX ON user_key (user_id);
 -- + sql_user_key_live (sql-only.sql)
@@ -925,9 +938,9 @@ CREATE TABLE brain_activity (
     duration_ms integer NOT NULL DEFAULT 0,
     cost numeric(10,6) NOT NULL DEFAULT 0,
     status activity_status NOT NULL DEFAULT 'PENDING',
-    created_at timestamptz(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    completed_at timestamptz(3),
-    updated_at timestamptz(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    created_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    completed_at ts_ms,
+    updated_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     -- §1.8 brain_activity [P28c]
     CHECK (input IS NULL OR jsonb_typeof(input) IN ('object', 'array')),

@@ -16,6 +16,13 @@ array (`rankedIds`, `entryIds`, ...) is `@db.Uuid` too. The models below abbrevi
 plain `String`. `Need.id` is the exception: an `Int` catalogue key. Ids were cuids until migration
 `cuid_to_uuidv7`, which rewrote every existing id and reference.
 
+**Target shape (phoenix/target-shape).** The 47-table target schema is hand-written SQL
+(`backend/scripts/target-shape/tables.sql`; spec `schema-target-2026-10.md`), and
+`schema.prisma` mirrors it by hand. SQL domains are invisible to Prisma, which sees the base
+type: `uuid7` columns are `String @db.Uuid`, `ts_ms` columns (every timestamp: `timestamptz(3)`,
+milliseconds, so a JS `Date` round-trips exactly) are `DateTime @db.Timestamptz(3)`, `intensity`
+columns are `Int`.
+
 ## Schema Overview
 
 ```mermaid
