@@ -179,7 +179,7 @@ GRANT EXECUTE ON FUNCTION app.current_user_id() TO mwf_app, mwf_job, mwf_ops, mw
 -- work-gevt for ts_ms, 2026-11-10; PG 18.6 / Prisma 7.10).
 -- ----------------------------------------------------------------------------
 
--- Every uuid column (the 33 uuidv7() primary keys and the 95 columns that
+-- Every uuid column (the 33 uuidv7() primary keys and the 96 columns that
 -- reference them) is a uuid7: a version-7 UUID, so ids sort by creation time.
 -- The CHECK has two NULL traps, both handled explicitly:
 --  1. uuid_extract_version() returns NULL for a UUID that is not RFC 9562
@@ -221,7 +221,7 @@ COMMENT ON DOMAIN uuid7 IS 'A version-7 UUID (RFC 9562), so ids sort by creation
 -- A strict variant (every value an envelope) is planned for when
 -- REQUIRE_FIELD_ENCRYPTION becomes mandatory. The text[] columns cannot be
 -- ciphertext[] (an array of a domain: step 20, node-postgres); each carries
--- CHECK (app.all_ciphertext(col)) instead. The five jsonb columns in the map
+-- CHECK (app.all_ciphertext(col)) instead. The six jsonb columns in the map
 -- carry only a COMMENT starting 'encrypted'.
 CREATE DOMAIN ciphertext AS text
   CHECK (VALUE IS NULL OR VALUE !~ '^enc:'
