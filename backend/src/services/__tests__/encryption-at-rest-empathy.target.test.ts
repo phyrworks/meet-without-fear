@@ -360,16 +360,16 @@ describeTarget(
       proven.add('empathy_review.feedback');
     });
 
-    it('invitation.name (POST /sessions as mwf_app) and session.topic_frame (model API, as the chat turn writes it): sealed, read back', async () => {
+    it('invitation.invitee_name (POST /sessions as mwf_app) and session.topic_frame (model API, as the chat turn writes it): sealed, read back', async () => {
       const created = await http(ada, 'post', '/sessions', { inviteName: 'PROBE_TS13_CAROL' });
       expect(created.status).toBe(201);
       const sessionId = created.body.data.session.id as string;
       const invitationId = created.body.data.invitationId as string;
-      await expectSealed(run, 'invitation', 'name', `id = $1`, [invitationId]);
+      await expectSealed(run, 'invitation', 'invitee_name', `id = $1`, [invitationId]);
       const inv = await asUser(ids.adaUser, () =>
-        prisma.invitation.findUnique({ where: { id: invitationId }, select: { name: true } }),
+        prisma.invitation.findUnique({ where: { id: invitationId }, select: { inviteeName: true } }),
       );
-      expect(inv?.name).toBe('PROBE_TS13_CAROL');
+      expect(inv?.inviteeName).toBe('PROBE_TS13_CAROL');
       // R46: the decliner's reason (POST /invitations/:id/decline as Bob)
       const declined = await http(bob, 'post', `/invitations/${invitationId}/decline`, {
         reason: 'PROBE_TS13_DECLINE',
@@ -389,7 +389,7 @@ describeTarget(
         prisma.session.findUnique({ where: { id: sessionId }, select: { topicFrame: true } }),
       );
       expect(s?.topicFrame).toBe('PROBE_TS13_TOPIC chores');
-      proven.add('invitation.name');
+      proven.add('invitation.invitee_name');
       proven.add('session.topic_frame');
     });
 

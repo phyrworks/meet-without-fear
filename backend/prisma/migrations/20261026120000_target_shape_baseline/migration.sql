@@ -723,7 +723,7 @@ CREATE TABLE invitation (
     session_id uuid7 NOT NULL REFERENCES session ON DELETE CASCADE,
     invited_by_participant_id uuid7 NOT NULL REFERENCES participant ON DELETE CASCADE,
     accepted_by_user_id uuid7 REFERENCES "user" ON DELETE RESTRICT,
-    name text,
+    invitee_name text,
     status invitation_status NOT NULL DEFAULT 'PENDING',
     message_confirmed_at ts_ms,
     expires_at ts_ms NOT NULL,
@@ -744,6 +744,7 @@ CREATE INDEX ON invitation (accepted_by_user_id);
 COMMENT ON TABLE invitation IS 'An invitation from a participant to someone not yet in the session; accepting it creates the invitee''s participant.';
 COMMENT ON COLUMN invitation.accepted_by_user_id IS 'The user who accepted; set with accepted_at.';
 COMMENT ON COLUMN invitation.message_confirmed_at IS 'When the inviter confirmed the invitation message.';
+COMMENT ON COLUMN invitation.invitee_name IS 'encrypted (session): the name the inviter gave the person they invite, typed at session creation (or their nickname / last display name for a known person), because the invitee has no user row yet. Not a copy of user.name; the AI uses it for the partner until they join.';
 
 CREATE TABLE draft (
     id uuid7 NOT NULL DEFAULT uuidv7() PRIMARY KEY,

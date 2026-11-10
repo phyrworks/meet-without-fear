@@ -507,7 +507,7 @@ export async function getInvitation(req: Request, res: Response): Promise<void> 
     successResponse(res, {
       invitation: {
         id: invitation.id,
-        name: invitation.name,
+        name: invitation.inviteeName,
         messageConfirmed: invitation.messageConfirmedAt !== null,
         messageConfirmedAt: invitation.messageConfirmedAt?.toISOString() ?? null,
         acceptedAt: invitation.acceptedAt?.toISOString() ?? null,
@@ -619,7 +619,7 @@ export async function confirmInvitationMessage(req: Request, res: Response): Pro
     const history = historyDesc.slice().reverse();
 
     // Get partner name for context
-    const partnerName = invitation.name || undefined;
+    const partnerName = invitation.inviteeName || undefined;
 
     // Generate turnId for this user action - used for cost attribution
     // Includes userId to differentiate between users in the same session

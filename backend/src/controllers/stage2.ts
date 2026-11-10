@@ -501,10 +501,10 @@ async function reopenPartnerName(caller: Stage2Caller): Promise<string | undefin
     getPartnerParticipant(caller.me.participantId),
     prisma.invitation.findFirst({
       where: { sessionId: caller.sessionId, invitedByParticipantId: caller.me.participantId },
-      select: { name: true },
+      select: { inviteeName: true },
     }),
   ]);
-  return partner?.displayName || caller.partner?.name || invitation?.name || undefined;
+  return partner?.displayName || caller.partner?.name || invitation?.inviteeName || undefined;
 }
 
 /** The caller's own newest EMPATHY_STATEMENT copy, as the consent response's empathyMessage. */

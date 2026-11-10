@@ -68,11 +68,11 @@ describeTarget('invitations on the target, as mwf_app (the decline as the job)',
       [sessionId],
     );
     expect(parts).toEqual([{ user_id: ada.id, display_name: 'Ada Lovelace', main: 1, read_state: 1 }]);
-    const [inv] = await run.sql<{ invited_by: string; name: string; status: string }>(
-      `SELECT p.user_id AS invited_by, i.name, i.status::text AS status FROM invitation i JOIN participant p ON p.id = i.invited_by_participant_id WHERE i.id = $1`,
+    const [inv] = await run.sql<{ invited_by: string; invitee_name: string; status: string }>(
+      `SELECT p.user_id AS invited_by, i.invitee_name, i.status::text AS status FROM invitation i JOIN participant p ON p.id = i.invited_by_participant_id WHERE i.id = $1`,
       [invitationId],
     );
-    expect(inv).toEqual({ invited_by: ada.id, name: 'Carol', status: 'PENDING' });
+    expect(inv).toEqual({ invited_by: ada.id, invitee_name: 'Carol', status: 'PENDING' });
 
     expect((await http(carol, 'get', `/invitations/${invitationId}`)).body.data.invitation).toMatchObject({
       invitedBy: { name: 'Ada Lovelace' },

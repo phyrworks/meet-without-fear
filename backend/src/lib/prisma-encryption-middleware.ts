@@ -36,7 +36,7 @@
  * | draft.content                                 | text           | participant |
  * | ai_memory.doc                                 | jsonb (leaves) | per-row: participant_id set → participant; user_id set (GLOBAL_FACTS) → user |
  * | mood_reading.context                          | text           | participant |
- * | invitation.name                               | text           | session     |
+ * | invitation.invitee_name                       | text           | session     |
  * | empathy_attempt.content                       | text           | per-row: participant (author) until revealed; re-encrypted under session by the reveal job |
  * | empathy_review.feedback                       | text           | session     |
  * | reconciler_result.alignment_summary, gap_summary | text        | participant (subject) |
@@ -190,7 +190,7 @@ export const SENSITIVE_FIELD_MAP: Record<string, SensitiveFieldConfig> = {
   MoodReading: { table: 'mood_reading', fields: { context: text('context', 'participant') } },
   Invitation: {
     table: 'invitation',
-    fields: { name: text('name', 'session'), declineReason: text('decline_reason', 'session', undefined, true) },
+    fields: { inviteeName: text('invitee_name', 'session'), declineReason: text('decline_reason', 'session', undefined, true) },
   },
   EmpathyAttempt: {
     table: 'empathy_attempt',

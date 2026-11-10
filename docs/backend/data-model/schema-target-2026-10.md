@@ -268,7 +268,7 @@ An invitation to join a session. · core · S · session (name)
 | session_id | uuid | no | | FK session CASCADE |
 | invited_by_participant_id | uuid | no | | FK participant CASCADE |
 | accepted_by_user_id | uuid | yes | | FK user RESTRICT (P3 §6 new column) |
-| name | text | yes | | invitee display name (encrypted) |
+| invitee_name | text | yes | | the name the inviter gave the invitee at session creation (encrypted, session key) — the invitee has no `user` row yet, so this is not a copy of `user.name`; renamed from `name` (work-gevt) |
 | status | invitation_status | no | 'PENDING' | `PENDING \| ACCEPTED \| DECLINED \| EXPIRED` |
 | message_confirmed_at | timestamptz | yes | | |
 | expires_at | timestamptz | no | | |

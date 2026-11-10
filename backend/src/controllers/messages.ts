@@ -286,9 +286,9 @@ export async function confirmFeelHeard(req: Request, res: Response): Promise<voi
           // Partner hasn't joined yet - get name from invitation
           const invitation = await prisma.invitation.findFirst({
             where: { sessionId, invitedByParticipantId: participant.id },
-            select: { name: true },
+            select: { inviteeName: true },
           });
-          partnerName = myMember?.nickname || invitation?.name || undefined;
+          partnerName = myMember?.nickname || invitation?.inviteeName || undefined;
         }
 
         const transitionContent = scrubStage2RepairFraming(buildStage2TransitionFallback(partnerName, partnerStatus));
@@ -558,7 +558,7 @@ export async function getInitialMessage(req: Request, res: Response): Promise<vo
     // Find the session's invitation to determine inviter/invitee status
     const invitation = await prisma.invitation.findFirst({
       where: { sessionId },
-      select: { name: true, invitedByParticipant: { select: { id: true, userId: true } } },
+      select: { inviteeName: true, invitedByParticipant: { select: { id: true, userId: true } } },
     });
 
     // Determine if the current user is the invitee (NOT the person who sent the invitation)
@@ -575,7 +575,7 @@ export async function getInitialMessage(req: Request, res: Response): Promise<vo
       partnerName = inviter?.firstName || inviter?.name || undefined;
     } else {
       // Inviter: partner name is from the invitation
-      partnerName = invitation?.name || undefined;
+      partnerName = invitation?.inviteeName || undefined;
 
       // Older sessions created from an existing person may have a blank
       // invitation name. Recover the display name from the relationship so the

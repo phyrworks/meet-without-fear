@@ -327,7 +327,7 @@ model Invitation {
   sessionId              String           @map("session_id") @db.Uuid
   invitedByParticipantId String           @map("invited_by_participant_id") @db.Uuid
   acceptedByUserId       String?          @map("accepted_by_user_id") @db.Uuid
-  name                   String?
+  inviteeName            String?          @map("invitee_name")
   status                 InvitationStatus @default(PENDING)
   messageConfirmedAt     DateTime?        @map("message_confirmed_at") @db.Timestamptz(3)
   expiresAt              DateTime         @map("expires_at") @db.Timestamptz(3)

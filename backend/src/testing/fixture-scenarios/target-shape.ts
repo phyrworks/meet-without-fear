@@ -332,7 +332,7 @@ export async function writeTargetShape(
   const inv = invitationFields(scenario);
   const invitee = scenario.participants.length > 1 ? userRows[1].id : null;
   const invitation = await db.query<{ id: string; status: string }>(
-    `INSERT INTO invitation (session_id, invited_by_participant_id, accepted_by_user_id, name, status,
+    `INSERT INTO invitation (session_id, invited_by_participant_id, accepted_by_user_id, invitee_name, status,
                              message_confirmed_at, expires_at, accepted_at, created_at, updated_at)
      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $9) RETURNING id, status::text AS status`,
     [
