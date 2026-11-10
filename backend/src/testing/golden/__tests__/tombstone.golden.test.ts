@@ -238,7 +238,7 @@ async function seedLeaverPrivateRows(h: Harness, adaUser: string): Promise<Recor
       // otherwise deduce two types for one untyped parameter (tables.sql, uuid7).
       await c.query(
         `INSERT INTO need_disposition (participant_id, need_id, status, note)
-         SELECT $1::uuid, n.id, 'OPEN', $2 FROM need n WHERE n.participant_id = $1::uuid AND n.label <> $2 ORDER BY n.created_at LIMIT 1`,
+         SELECT $1::uuid, n.id, 'OPEN', $2::text FROM need n WHERE n.participant_id = $1::uuid AND n.label <> $2::text ORDER BY n.created_at LIMIT 1`,
         [pid, SEEDED_PRIVATE],
       );
       await one('follow_up_note', `INSERT INTO follow_up_note (participant_id, content) VALUES ($1, $2) RETURNING id`, [
