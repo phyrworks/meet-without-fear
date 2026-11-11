@@ -368,7 +368,7 @@ interface ValidateEmpathyResponse {
 
 Validation: feedback max 1000 chars; one validation per recipient per attempt (idempotent overwrite allowed).
 
-**Side effect (validated=true, partner pending)**: When `validated: true` but the partner has not yet validated the caller's attempt, the API inserts a single AI chat message for the caller: *"You confirmed this feels right. We'll hold here while your partner reviews what you shared. Once they respond, we'll move you into the next step."* The message is deduplicated — only created if it does not already exist.
+**Side effect (validated=true, partner pending)**: When `validated: true` but the partner has not yet validated the caller's attempt, the API inserts a single AI chat message for the caller: *"You confirmed this feels right. We'll hold here while your partner reviews what you shared. Once they respond, we'll move you into the next step."* The message is written at most once per conversation: it carries `message.dedupe_key = STAGE2_VALIDATED_WAIT`, and the unique index `sql_message_once` makes a repeat or concurrent validate insert nothing (work-fdc1; no digest of the text is stored).
 
 For the "Not quite" path, mobile first collects rough notes with the `What feels off?`
 step, then the Feedback Coach refines those notes into a final message. The final send

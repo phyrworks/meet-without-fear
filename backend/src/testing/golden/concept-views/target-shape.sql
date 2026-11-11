@@ -109,7 +109,12 @@ SELECT
   m.role::text AS role,
   m.kind::text AS kind,
   m.content,
-  m.content_hash,
+  -- work-fdc1: the target stores no digest of a message (content_hash was a
+  -- plaintext oracle). The recorded baselines hold the old column, which was
+  -- sha256(content) on every row they contain, so the concept column is
+  -- recomputed here, harness-side, from the (keyless, plaintext) content: it
+  -- says nothing content does not, and nothing is stored.
+  encode(sha256(convert_to(m.content, 'UTF8')), 'hex') AS content_hash,
   m.refining_need_id,
   m.source_attempt_id,
   m.created_at AT TIME ZONE 'UTC' AS created_at

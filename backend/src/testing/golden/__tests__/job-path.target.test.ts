@@ -56,7 +56,7 @@ describeTarget('job path on the target, as mwf_job with identity binding on', ()
   // message stays unreadable to the job.
   it('the job login reads exactly the message columns its grants name (R35 adds role, content, sender)', async () => {
     const { getJobPrisma } = await import('../../../lib/prisma');
-    await expect(getJobPrisma().$queryRaw`SELECT content_hash FROM message LIMIT 1`).rejects.toThrow(
+    await expect(getJobPrisma().$queryRaw`SELECT dedupe_key FROM message LIMIT 1`).rejects.toThrow(
       /permission denied/,
     );
     await expect(getJobPrisma().$queryRaw`SELECT refining_need_id FROM message LIMIT 1`).rejects.toThrow(
@@ -137,9 +137,9 @@ describeTarget('job path on the target, as mwf_job with identity binding on', ()
       kind: string;
       sender: string | null;
       content: string;
-      hash: string | null;
+      key: string | null;
     }>(
-      `SELECT m.role::text AS role, m.kind::text AS kind, u.email AS sender, m.content, m.content_hash AS hash
+      `SELECT m.role::text AS role, m.kind::text AS kind, u.email AS sender, m.content, m.dedupe_key::text AS key
        FROM message m LEFT JOIN participant p ON p.id = m.sender_participant_id LEFT JOIN "user" u ON u.id = p.user_id
        ORDER BY m.created_at DESC, m.id DESC LIMIT 2`,
     );
@@ -147,7 +147,7 @@ describeTarget('job path on the target, as mwf_job with identity binding on', ()
       ['AI', 'CHAT', null],
       ['USER', 'CHAT', 'ada@e2e.test'],
     ]);
-    expect(written[0].hash).toMatch(/^[0-9a-f]{64}$/); // content_hash written by the job
+    expect(written.map(w => w.key)).toEqual([null, null]); // work-fdc1: an ordinary reply carries no once-only key
     expect(written[1].content).toBe('TS9_JOB_TURN');
     const bobAfter = await get(harness.actors.userB!, 'bob after', `/api/v1/sessions/${harness.sessionId}/messages`);
     expect(bobAfter.body).toEqual(bobBefore.body);

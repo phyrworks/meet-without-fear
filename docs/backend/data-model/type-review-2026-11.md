@@ -23,7 +23,7 @@ its plaintext limits are listed for information only.
 | `ts_ms` domain (`timestamptz(3)`) | all 143 timestamp columns | (b) |
 | `COMMENT ON` | 47 tables, 49+ enums, the domains, 85 plain + 55 encrypted columns, 13 sql_ indexes | (c), (d), (f) |
 | New enums | `guidance_type`, `proposal_revision_reason`, `reminder_cadence`, `wellbeing_feature` | (d) |
-| `sha256_hex` domain | `message.content_hash` (was `varchar(64)`) | (d) |
+| `sha256_hex` domain | `message.content_hash` (was `varchar(64)`) | (d); **both dropped by work-fdc1** (see §1) |
 | Length CHECK | `user.email <= 254` | (d) |
 | Rename | `invitation.name` → `invitee_name` | (e) |
 | `ciphertext` domain / `app.all_ciphertext` CHECK / comment marker | 44 text / 5 text[] / 6 jsonb encrypted columns | (f) |
@@ -39,7 +39,7 @@ its plaintext limits are listed for information only.
 | `user.name` | Generated first + last | `tables.sql` | text (generated) + comment | Derived in SQL already |
 | `relationship_member.nickname` | Inviter's name for the other person | `controllers/invitations.ts:349,355,370,992` | text + comment | PATCH caps at 100, but createSession's `inviteName` has no max (mobile sends 50+50). See Q6 |
 | `participant.display_name` | Snapshot of `user.name` at join | `invitations.ts:415,662` | text + comment | Deliberate copy (§3 below) |
-| `message.content_hash` | sha256 hex of the plaintext | `backend/src/utils/content-hash.ts:23-25` | **domain `sha256_hex`** | A fixed format, not a length. NULL passes, which work-fdc1 will need |
+| `message.content_hash` | sha256 hex of the plaintext | `backend/src/utils/content-hash.ts:23-25` | **domain `sha256_hex`** | A fixed format, not a length. NULL passes, which work-fdc1 will need. **Superseded (work-fdc1):** the column, its index and the domain are dropped: an unsalted digest of every message was a plaintext oracle. The two dedupes now use `message.dedupe_key` (enum `message_dedupe_key`, `sql_message_once`) |
 | `milestone.key` | 13 seeded keys | `backend/scripts/target-shape/gen/maps.ts:20-34`; `shared/src/dto/milestones.ts:13-27` | text PK (lookup table) | Already a lookup table; `participant_milestone.milestone_key` is an FK to it |
 | `milestone.stage_label` | UI label: "Your Story", … | `gen/maps.ts:20-34` | text + comment | Display data owned by the lookup row |
 | `participant_milestone.milestone_key` | FK → `milestone.key` | `tables.sql` | kept (FK) | Already the data-driven option |

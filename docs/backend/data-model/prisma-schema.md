@@ -21,9 +21,11 @@ plain `String`. `Need.id` is the exception: an `Int` catalogue key. Ids were cui
 `schema.prisma` mirrors it by hand. SQL domains are invisible to Prisma, which sees the base
 type: `uuid7` columns are `String @db.Uuid`, `ts_ms` columns (every timestamp: `timestamptz(3)`,
 milliseconds, so a JS `Date` round-trips exactly) are `DateTime @db.Timestamptz(3)`, `intensity`
-columns are `Int`, and `ciphertext` (every app-encrypted text column, `enc:v1:…`) and
-`sha256_hex` (`message.content_hash`) columns are plain `String`. Closed sets are enums on both
-sides (e.g. `GuidanceType`, `ProposalRevisionReason`, `ReminderCadence`, `WellbeingFeature`).
+columns are `Int`, and `ciphertext` (every app-encrypted text column, `enc:v1:…`) columns are
+plain `String`. Closed sets are enums on both sides (e.g. `GuidanceType`, `ProposalRevisionReason`,
+`ReminderCadence`, `WellbeingFeature`, `MessageDedupeKey`). No column stores a digest of message
+content: work-fdc1 dropped `message.content_hash` (and the `sha256_hex` domain); the once-only
+facilitator lines carry `message.dedupe_key` instead.
 The decisions are logged in `type-review-2026-11.md`.
 
 ## Schema Overview
