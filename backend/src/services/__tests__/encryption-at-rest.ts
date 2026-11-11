@@ -104,7 +104,7 @@ export const COVERAGE: Record<string, string[]> = {
     'message.content',
     'draft.content',
     'mood_reading.context',
-    'invitation.name',
+    'invitation.invitee_name',
     'empathy_attempt.content',
     'empathy_review.feedback',
     'reconciler_result.alignment_summary',

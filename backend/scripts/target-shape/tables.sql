@@ -15,12 +15,23 @@
 -- matching `db pull`. So every name, type, default and FK action here is the
 -- one Prisma would generate for schema.prisma; change both together.
 --
--- Conventions
---  * Names are Prisma's: <table>_pkey, <table>_<cols>_key (UNIQUE),
---    <table>_<col>_fkey, <table>_<cols>_idx; CHECKs are chk_<table>_<rule>.
---    Code and gates use these names — never rename one here alone.
---  * FK actions: ON UPDATE NO ACTION everywhere; ON DELETE as schema.prisma
---    says (CASCADE / SET NULL; RESTRICT for every FK to "user" (P3 D9),
+-- Conventions (owner review 2026-11-10, work-gevt)
+--  * Identifiers are unquoted. The one exception is "user", a reserved word
+--    (pg_get_keywords() catcode R); renaming the table was judged more costly
+--    than the quotes are worth.
+--  * A single-column PRIMARY KEY, UNIQUE or FOREIGN KEY is written on its
+--    column; a multi-column one is a table constraint.
+--  * Constraints and indexes are unnamed: PostgreSQL's default names
+--    (<table>_pkey, <table>_<cols>_key, <table>_<col>_fkey, <table>_<cols>_idx)
+--    are exactly the names Prisma expects, and the drift gate proves it. A
+--    CHECK's default name is <table>_<col>_check. An explicit name means
+--    something references it; each one says what.
+--  * Every table, enum and domain has a COMMENT ON straight after it, and so
+--    does every column whose meaning is not obvious from its name; the
+--    sql_ indexes are commented in sql-only.sql. They are the catalog's
+--    documentation (\d+ in psql); keep them one or two sentences.
+--  * FK actions: ON UPDATE is the default NO ACTION everywhere; ON DELETE as
+--    schema.prisma says (CASCADE / SET NULL; RESTRICT for every FK to "user" (P3 D9),
 --    need_share → need, agreement → proposal, participant_milestone →
 --    milestone).
 --  * Tables are in dependency order: each one only references tables above
@@ -34,13 +45,14 @@
 -- ============================================================================
 
 -- ----------------------------------------------------------------------------
--- Domains. Both are invisible to Prisma: a uuid7 column introspects as
--- String @db.Uuid, an intensity column as Int, and `migrate diff` reports
--- nothing (TS-6 probe for intensity, 2026-10-19; work-a39h.11.40 probe for
--- uuid7, 2026-11-02; PG 18.6 / Prisma 7.10).
+-- Domains. All are invisible to Prisma: a uuid7 column introspects as
+-- String @db.Uuid, a ts_ms column as DateTime @db.Timestamptz(3), an
+-- intensity column as Int, a sha256_hex column as String, and `migrate diff` reports nothing (TS-6 probe for
+-- intensity, 2026-10-19; work-a39h.11.40 probe for uuid7, 2026-11-02;
+-- work-gevt for ts_ms, 2026-11-10; PG 18.6 / Prisma 7.10).
 -- ----------------------------------------------------------------------------
 
--- Every uuid column (the 33 uuidv7() primary keys and the 95 columns that
+-- Every uuid column (the 33 uuidv7() primary keys and the 96 columns that
 -- reference them) is a uuid7: a version-7 UUID, so ids sort by creation time.
 -- The CHECK has two NULL traps, both handled explicitly:
 --  1. uuid_extract_version() returns NULL for a UUID that is not RFC 9562
@@ -66,608 +78,736 @@
 -- (trailer.sql views). Step 20 refuses any column, function argument or
 -- result of an array-of-domain type.
 CREATE DOMAIN uuid7 AS uuid
-  CONSTRAINT uuid7_version CHECK (VALUE IS NULL OR coalesce(uuid_extract_version(VALUE), 0) = 7);
+  CHECK (VALUE IS NULL OR coalesce(uuid_extract_version(VALUE), 0) = 7);
+COMMENT ON DOMAIN uuid7 IS 'A version-7 UUID (RFC 9562), so ids sort by creation time; every id column and every column referencing one. NULL passes (the column''s NOT NULL refuses it); a non-v7 value such as gen_random_uuid() is refused.';
+
+-- Every column the app encrypts (SENSITIVE_FIELD_MAP, kind text, in
+-- lib/prisma-encryption-middleware.ts) is a ciphertext, so a reader of the
+-- schema sees it is encrypted. The stored format is utils/field-encryption.ts
+-- encrypt(): enc:v1:<iv>:<tag>:<ct>, AES-256-GCM, every segment standard
+-- base64 — a 12-byte IV (16 chars, no padding), a 16-byte tag (24 chars,
+-- always ending ==), the ciphertext (any length, possibly empty). The CHECK is
+-- deliberately lenient: with no FIELD_ENCRYPTION_KEY (keyless dev/test) the
+-- app stores plaintext, so a value that does not start with enc: passes;
+-- anything that does must be a well-formed v1 envelope. There is no v2 arm:
+-- no code writes enc:v2 yet (W13 will, with a key id; add the arm with it).
+-- A strict variant (every value an envelope) is planned for when
+-- REQUIRE_FIELD_ENCRYPTION becomes mandatory. The text[] columns cannot be
+-- ciphertext[] (an array of a domain: step 20, node-postgres); each carries
+-- CHECK (app.all_ciphertext(col)) instead. The six jsonb columns in the map
+-- carry only a COMMENT starting 'encrypted'.
+CREATE DOMAIN ciphertext AS text
+  CHECK (VALUE IS NULL OR VALUE !~ '^enc:'
+         OR VALUE ~ '^enc:v1:[A-Za-z0-9+/]{16}:[A-Za-z0-9+/]{22}==:([A-Za-z0-9+/]{4})*([A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$');
+COMMENT ON DOMAIN ciphertext IS 'Encrypted by the app (utils/field-encryption.ts, through the SENSITIVE_FIELD_MAP extension in lib/prisma-encryption-middleware.ts): enc:v1:<iv>:<tag>:<ct>, AES-256-GCM, base64 segments. Never compare or search by value (random IV). Plaintext passes for keyless dev/test; a strict variant is planned for when REQUIRE_FIELD_ENCRYPTION becomes mandatory.';
+
+-- Every element of an encrypted text[] column is a ciphertext (NULL elements
+-- and a NULL array pass). The cast to ciphertext[] runs the domain CHECK on
+-- each element and raises on a malformed one; the array type appears only
+-- inside the body, never as a column, argument or result (step 20).
+CREATE FUNCTION app.all_ciphertext(v text[]) RETURNS boolean
+  LANGUAGE sql IMMUTABLE PARALLEL SAFE
+  RETURN v IS NULL OR (v::public.ciphertext[]) IS NOT NULL;
+COMMENT ON FUNCTION app.all_ciphertext(text[]) IS 'True when every element is a ciphertext; raises the ciphertext domain error otherwise. The CHECK on each encrypted text[] column.';
+
+-- Every timestamp column is a ts_ms: a timestamptz rounded to milliseconds.
+-- A JS Date holds milliseconds, so a microsecond value written by PostgreSQL
+-- (now(), a trigger, a default) would not survive the round trip through the
+-- app: the value the app reads back is not the stored one. That breaks keyset
+-- pagination (the cursor no longer equals the row), forward-only instants
+-- (a re-written value can move backwards by < 1 ms) and exact-equality checks.
+-- Prisma's own default for DateTime is timestamptz(3). The domain rounds on
+-- every write (a default, a trigger's now(), a literal), and drivers see plain
+-- timestamptz (RowDescription sends the base type, oid 1184, typmod 3); as with
+-- uuid7, an array over it is ts_ms[] and step 20 refuses one.
+CREATE DOMAIN ts_ms AS timestamptz(3);
+COMMENT ON DOMAIN ts_ms IS 'A timestamptz rounded to milliseconds; every timestamp column. A JS Date holds milliseconds, so a microsecond value would not round-trip, breaking keyset pagination, forward-only instants and exact-equality checks; Prisma''s DateTime default is timestamptz(3).';
 
 -- spec §3: a 1..10 rating (mood_reading.intensity, regulation_event.intensity_*).
--- The CHECK keeps PostgreSQL's default name, intensity_check.
 CREATE DOMAIN intensity AS integer CHECK (VALUE BETWEEN 1 AND 10);
+COMMENT ON DOMAIN intensity IS 'A 1-10 self-rated intensity (mood_reading.intensity, regulation_event.intensity_before/after).';
+
+-- message.content_hash: utils/content-hash.ts writes sha256(plaintext) as
+-- 64 lower-case hex digits. NULL passes (a message may have no hash).
+CREATE DOMAIN sha256_hex AS text CHECK (VALUE ~ '^[0-9a-f]{64}$');
+COMMENT ON DOMAIN sha256_hex IS 'A SHA-256 digest as 64 lower-case hex digits (utils/content-hash.ts); NULL passes.';
 
 -- ----------------------------------------------------------------------------
 -- Enums, in schema.prisma order.
 -- ----------------------------------------------------------------------------
-CREATE TYPE "session_status" AS ENUM ('CREATED', 'INVITED', 'ACTIVE', 'RESOLVED', 'ABANDONED', 'ARCHIVED');
-CREATE TYPE "participant_kind" AS ENUM ('human', 'modeled');
-CREATE TYPE "conversation_kind" AS ENUM ('MAIN', 'SUBCHAT');
-CREATE TYPE "conversation_status" AS ENUM ('ACTIVE', 'RESOLVED');
-CREATE TYPE "subchat_anchor" AS ENUM ('NEEDS_BRAINSTORM', 'PROPOSAL_REFINEMENT', 'NO_OVERLAP');
-CREATE TYPE "message_role" AS ENUM ('USER', 'AI', 'SYSTEM');
-CREATE TYPE "message_kind" AS ENUM ('CHAT', 'EMPATHY_STATEMENT', 'EMPATHY_REVEAL_INTRO', 'SHARED_CONTEXT', 'VALIDATION_FEEDBACK', 'SHARE_SUGGESTION', 'EMPATHY_VALIDATION_PROMPT');
-CREATE TYPE "draft_kind" AS ENUM ('EMPATHY', 'VALIDATION_FEEDBACK', 'SHARE_CONTEXT');
-CREATE TYPE "milestone_scope" AS ENUM ('participant', 'session');
-CREATE TYPE "ai_memory_kind" AS ENUM ('SUMMARY', 'NOTABLE_FACTS', 'GLOBAL_FACTS');
-CREATE TYPE "regulation_type" AS ENUM ('BREATHING_EXERCISE', 'BODY_SCAN', 'GROUNDING', 'PAUSE_SESSION');
-CREATE TYPE "invitation_status" AS ENUM ('PENDING', 'ACCEPTED', 'DECLINED', 'EXPIRED');
-CREATE TYPE "relationship_role" AS ENUM ('member', 'owner');
-CREATE TYPE "empathy_status" AS ENUM ('HELD', 'AWAITING_SHARING', 'REFINING', 'READY', 'REVEALED', 'VALIDATED', 'SUPERSEDED');
-CREATE TYPE "delivery_status" AS ENUM ('PENDING', 'DELIVERED', 'SEEN');
-CREATE TYPE "share_offer_status" AS ENUM ('PENDING', 'OFFERED', 'ACCEPTED', 'DECLINED', 'EXPIRED');
-CREATE TYPE "gap_severity" AS ENUM ('NONE', 'MINOR', 'MODERATE', 'SIGNIFICANT');
-CREATE TYPE "recommender_action" AS ENUM ('PROCEED', 'OFFER_OPTIONAL', 'OFFER_SHARING');
-CREATE TYPE "consent_target" AS ENUM ('NEED', 'EMPATHY_ATTEMPT', 'PROPOSAL', 'SHARE_OFFER', 'REVIEW');
-CREATE TYPE "consent_decision" AS ENUM ('GRANTED', 'DENIED', 'REVOKED');
-CREATE TYPE "need_category" AS ENUM ('SAFETY', 'CONNECTION', 'AUTONOMY', 'RECOGNITION', 'MEANING', 'FAIRNESS');
-CREATE TYPE "need_disposition_status" AS ENUM ('OPEN', 'COVERED', 'PARTIAL', 'SKIPPED', 'DECLINED');
-CREATE TYPE "proposal_source" AS ENUM ('USER_SUBMITTED', 'AI_SUGGESTED', 'CURATED');
-CREATE TYPE "proposal_kind" AS ENUM ('SHARED_PROPOSAL', 'INDIVIDUAL_COMMITMENT');
-CREATE TYPE "proposal_status" AS ENUM ('ACTIVE', 'REVISED', 'REMOVED', 'CONVERTED_TO_AGREEMENT');
-CREATE TYPE "choice_decision" AS ENUM ('WILLING', 'NOT_WILLING');
-CREATE TYPE "revision_action" AS ENUM ('CREATED', 'REVISED', 'REMOVED', 'RESTORED', 'CONVERTED', 'CAPTURE_SKIPPED', 'COVERED', 'SUBCHAT_REFINED');
-CREATE TYPE "agreement_type" AS ENUM ('MICRO_EXPERIMENT', 'COMMITMENT', 'CHECK_IN', 'HYBRID');
-CREATE TYPE "agreement_status" AS ENUM ('AGREED', 'IN_PROGRESS', 'COMPLETED', 'ABANDONED');
-CREATE TYPE "closure_kind" AS ENUM ('SHARED_AGREEMENT', 'NO_SHARED_AGREEMENT');
-CREATE TYPE "closure_reason" AS ENUM ('MUTUAL_SELECTION', 'NO_OVERLAP', 'BOUNDARY_HONORED', 'USER_STOPPED');
-CREATE TYPE "follow_up_type" AS ENUM ('SCHEDULED_SHARED_AGREEMENT', 'SCHEDULED_INDIVIDUAL_COMMITMENT', 'USER_INITIATED_REENTRY');
-CREATE TYPE "follow_up_scope" AS ENUM ('SHARED', 'INDIVIDUAL');
-CREATE TYPE "follow_up_status" AS ENUM ('SCHEDULED', 'OPEN', 'PARTIAL', 'COMPLETED', 'EXPIRED', 'CANCELLED');
-CREATE TYPE "next_action" AS ENUM ('FULL_CLOSURE', 'EXTEND', 'ADJUST_COMMITMENT', 'REOPEN_STRATEGY_WORK', 'NEW_PROCESS', 'PARTIAL_CLOSURE');
-CREATE TYPE "continue_choice" AS ENUM ('ANOTHER_ROUND', 'EXTEND', 'NEW_PROCESS', 'PARTIAL_CLOSURE', 'FULL_CLOSURE');
-CREATE TYPE "reminder_scope" AS ENUM ('PRIVATE', 'SHARED');
-CREATE TYPE "reminder_status" AS ENUM ('SCHEDULED', 'DELIVERED', 'CANCELLED');
-CREATE TYPE "reflection_status" AS ENUM ('ACTIVE', 'COMPLETED', 'ARCHIVED');
-CREATE TYPE "takeaway_source" AS ENUM ('AI', 'USER');
-CREATE TYPE "takeaway_type" AS ENUM ('INSIGHT', 'ACTION_ITEM', 'INTENTION');
-CREATE TYPE "takeaway_link_type" AS ENUM ('AI_SEMANTIC', 'USER_MANUAL');
-CREATE TYPE "memory_category" AS ENUM ('AI_NAME', 'LANGUAGE', 'COMMUNICATION', 'PERSONAL_INFO', 'RELATIONSHIP', 'PREFERENCE');
-CREATE TYPE "memory_status" AS ENUM ('ACTIVE', 'PENDING', 'REJECTED');
-CREATE TYPE "memory_source" AS ENUM ('USER_APPROVED', 'USER_CREATED', 'USER_EDITED');
-CREATE TYPE "device_platform" AS ENUM ('ios', 'android', 'web');
-CREATE TYPE "activity_type" AS ENUM ('LLM_CALL', 'EMBEDDING', 'RETRIEVAL', 'TOOL_USE');
-CREATE TYPE "activity_status" AS ENUM ('PENDING', 'COMPLETED', 'FAILED');
-CREATE TYPE "brain_call_type" AS ENUM ('ORCHESTRATED_RESPONSE', 'RETRIEVAL_PLANNING', 'INTENT_DETECTION', 'BACKGROUND_CLASSIFICATION', 'PARTNER_SESSION_CLASSIFICATION', 'CHAT_ROUTER_RESPONSE', 'REFERENCE_DETECTION', 'PEOPLE_EXTRACTION', 'MEMORY_DETECTION', 'MEMORY_VALIDATION', 'RECONCILER_ANALYSIS', 'SUMMARIZATION', 'NEEDS_EXTRACTION', 'WITNESSING_RESPONSE', 'MEMORY_FORMATTING', 'THEME_EXTRACTION', 'GLOBAL_MEMORY_CONSOLIDATION', 'DISTILLATION', 'CROSS_SESSION_THEME');
+CREATE TYPE session_status AS ENUM ('CREATED', 'INVITED', 'ACTIVE', 'RESOLVED', 'ABANDONED', 'ARCHIVED');
+COMMENT ON TYPE session_status IS 'Lifecycle of a session. Written only by app.session_set_status(): CREATED -> INVITED -> ACTIVE -> RESOLVED, any live state -> ABANDONED, RESOLVED/ABANDONED -> ARCHIVED.';
+CREATE TYPE participant_kind AS ENUM ('human', 'modeled');
+COMMENT ON TYPE participant_kind IS 'human: a participant backed by a user; modeled: an imagined participant with no user row (user_id IS NULL).';
+CREATE TYPE conversation_kind AS ENUM ('MAIN', 'SUBCHAT');
+COMMENT ON TYPE conversation_kind IS 'MAIN: the participant''s one private thread with the AI guide; SUBCHAT: a Stage-4 side conversation anchored on a topic.';
+CREATE TYPE conversation_status AS ENUM ('ACTIVE', 'RESOLVED');
+COMMENT ON TYPE conversation_status IS 'Whether a conversation (in practice a Stage-4 sub-chat) is still open.';
+CREATE TYPE subchat_anchor AS ENUM ('NEEDS_BRAINSTORM', 'PROPOSAL_REFINEMENT', 'NO_OVERLAP');
+COMMENT ON TYPE subchat_anchor IS 'What a Stage-4 sub-chat is about: brainstorming for a need, refining one proposal, or the no-overlap path.';
+CREATE TYPE message_role AS ENUM ('USER', 'AI', 'SYSTEM');
+COMMENT ON TYPE message_role IS 'Who wrote a line: the human (USER), the AI guide (AI) or the app (SYSTEM). Also used by reflection_message.';
+CREATE TYPE message_kind AS ENUM ('CHAT', 'EMPATHY_STATEMENT', 'EMPATHY_REVEAL_INTRO', 'SHARED_CONTEXT', 'VALIDATION_FEEDBACK', 'SHARE_SUGGESTION', 'EMPATHY_VALIDATION_PROMPT');
+COMMENT ON TYPE message_kind IS 'CHAT for an ordinary turn; every other member is an item delivered across participants (an empathy statement, shared context, validation feedback, a share suggestion and their prompts).';
+CREATE TYPE draft_kind AS ENUM ('EMPATHY', 'VALIDATION_FEEDBACK', 'SHARE_CONTEXT');
+COMMENT ON TYPE draft_kind IS 'The sharing point a draft is for; it decides which of draft''s arc columns is set.';
+CREATE TYPE milestone_scope AS ENUM ('participant', 'session');
+COMMENT ON TYPE milestone_scope IS 'participant: each participant reaches the milestone on their own; session: every present participant must reach it for the session to move on.';
+CREATE TYPE ai_memory_kind AS ENUM ('SUMMARY', 'NOTABLE_FACTS', 'GLOBAL_FACTS');
+COMMENT ON TYPE ai_memory_kind IS 'SUMMARY and NOTABLE_FACTS belong to a participant (one session); GLOBAL_FACTS belong to a user (across sessions).';
+CREATE TYPE regulation_type AS ENUM ('BREATHING_EXERCISE', 'BODY_SCAN', 'GROUNDING', 'PAUSE_SESSION');
+COMMENT ON TYPE regulation_type IS 'The emotional-regulation exercise a participant completed.';
+CREATE TYPE invitation_status AS ENUM ('PENDING', 'ACCEPTED', 'DECLINED', 'EXPIRED');
+COMMENT ON TYPE invitation_status IS 'Lifecycle of an invitation: PENDING until accepted, declined or past expires_at.';
+CREATE TYPE relationship_role AS ENUM ('member', 'owner');
+COMMENT ON TYPE relationship_role IS 'A member''s role in a relationship: the owner who created it, or a member.';
+CREATE TYPE empathy_status AS ENUM ('HELD', 'AWAITING_SHARING', 'REFINING', 'READY', 'REVEALED', 'VALIDATED', 'SUPERSEDED');
+COMMENT ON TYPE empathy_status IS 'Lifecycle of an empathy attempt, written only by the app''s transition function: HELD -> (AWAITING_SHARING | REFINING) -> READY -> REVEALED -> VALIDATED, or SUPERSEDED by a newer round.';
+CREATE TYPE delivery_status AS ENUM ('PENDING', 'DELIVERED', 'SEEN');
+COMMENT ON TYPE delivery_status IS 'Delivery of an item to its recipient: PENDING, DELIVERED (in their conversation), SEEN.';
+CREATE TYPE share_offer_status AS ENUM ('PENDING', 'OFFERED', 'ACCEPTED', 'DECLINED', 'EXPIRED');
+COMMENT ON TYPE share_offer_status IS 'Lifecycle of a suggestion to the subject to share context: PENDING, OFFERED, then ACCEPTED, DECLINED or EXPIRED.';
+CREATE TYPE gap_severity AS ENUM ('NONE', 'MINOR', 'MODERATE', 'SIGNIFICANT');
+COMMENT ON TYPE gap_severity IS 'The reconciler''s rating of the gap between an empathy attempt and the subject''s own account.';
+CREATE TYPE recommender_action AS ENUM ('PROCEED', 'OFFER_OPTIONAL', 'OFFER_SHARING');
+COMMENT ON TYPE recommender_action IS 'The reconciler''s recommendation: proceed to the reveal, or offer the subject the option or a nudge to share context.';
+CREATE TYPE guidance_type AS ENUM ('challenge_assumptions', 'explore_breadth', 'explore_deeper_feelings');
+COMMENT ON TYPE guidance_type IS 'The refinement guidance the reconciler picked for the author, from the gap''s shape (generateAbstractGuidance in services/reconciler/analysis.ts).';
+CREATE TYPE consent_target AS ENUM ('NEED', 'EMPATHY_ATTEMPT', 'PROPOSAL', 'SHARE_OFFER', 'REVIEW');
+COMMENT ON TYPE consent_target IS 'The kind of thing a consent row decides on; consent.target_kind is generated from which arc column is set.';
+CREATE TYPE consent_decision AS ENUM ('GRANTED', 'DENIED', 'REVOKED');
+COMMENT ON TYPE consent_decision IS 'A consent decision: GRANTED or DENIED once, then optionally REVOKED (terminal).';
+CREATE TYPE need_category AS ENUM ('SAFETY', 'CONNECTION', 'AUTONOMY', 'RECOGNITION', 'MEANING', 'FAIRNESS');
+COMMENT ON TYPE need_category IS 'The six need categories the needs mapping uses.';
+CREATE TYPE need_disposition_status AS ENUM ('OPEN', 'COVERED', 'PARTIAL', 'SKIPPED', 'DECLINED');
+COMMENT ON TYPE need_disposition_status IS 'How a participant dispositions a need during the Stage-4 walkthrough.';
+CREATE TYPE proposal_source AS ENUM ('USER_SUBMITTED', 'AI_SUGGESTED', 'CURATED');
+COMMENT ON TYPE proposal_source IS 'Where a proposal came from: typed by a participant, suggested by the AI, or from the curated library.';
+CREATE TYPE proposal_kind AS ENUM ('SHARED_PROPOSAL', 'INDIVIDUAL_COMMITMENT');
+COMMENT ON TYPE proposal_kind IS 'A shared proposal for both participants, or an individual commitment by one.';
+CREATE TYPE proposal_status AS ENUM ('ACTIVE', 'REVISED', 'REMOVED', 'CONVERTED_TO_AGREEMENT');
+COMMENT ON TYPE proposal_status IS 'Lifecycle of a proposal: ACTIVE, REVISED (superseded by an edit), REMOVED, or CONVERTED_TO_AGREEMENT.';
+CREATE TYPE choice_decision AS ENUM ('WILLING', 'NOT_WILLING');
+COMMENT ON TYPE choice_decision IS 'A participant''s willingness on a proposal.';
+CREATE TYPE revision_action AS ENUM ('CREATED', 'REVISED', 'REMOVED', 'RESTORED', 'CONVERTED', 'CAPTURE_SKIPPED', 'COVERED', 'SUBCHAT_REFINED');
+COMMENT ON TYPE revision_action IS 'What a proposal_revision row records.';
+CREATE TYPE proposal_revision_reason AS ENUM ('LEGACY_PROPOSED', 'LEGACY_CONFIRMED', 'MUTUAL_CLOSURE', 'EVERY_PARTY_CONFIRMED');
+COMMENT ON TYPE proposal_revision_reason IS 'The app markers a proposal_revision may carry (services/proposal-revision-reasons.ts, ruling R47); controllers/stage4.ts filters revisions by them. Free text explaining a revision goes in the encrypted after/before, never here.';
+CREATE TYPE agreement_type AS ENUM ('MICRO_EXPERIMENT', 'COMMITMENT', 'CHECK_IN', 'HYBRID');
+COMMENT ON TYPE agreement_type IS 'The shape of an agreement: a micro-experiment, a commitment, a check-in, or a mix.';
+CREATE TYPE agreement_status AS ENUM ('AGREED', 'IN_PROGRESS', 'COMPLETED', 'ABANDONED');
+COMMENT ON TYPE agreement_status IS 'Lifecycle of an agreement after it is made.';
+CREATE TYPE closure_kind AS ENUM ('SHARED_AGREEMENT', 'NO_SHARED_AGREEMENT');
+COMMENT ON TYPE closure_kind IS 'Whether the repair stage ended with a shared agreement or without one.';
+CREATE TYPE closure_reason AS ENUM ('MUTUAL_SELECTION', 'NO_OVERLAP', 'BOUNDARY_HONORED', 'USER_STOPPED');
+COMMENT ON TYPE closure_reason IS 'Why the repair stage ended.';
+CREATE TYPE follow_up_type AS ENUM ('SCHEDULED_SHARED_AGREEMENT', 'SCHEDULED_INDIVIDUAL_COMMITMENT', 'USER_INITIATED_REENTRY');
+COMMENT ON TYPE follow_up_type IS 'What a follow-up checks on: a shared agreement, an individual commitment, or a re-entry the user started.';
+CREATE TYPE follow_up_scope AS ENUM ('SHARED', 'INDIVIDUAL');
+COMMENT ON TYPE follow_up_scope IS 'SHARED: both participants check in; INDIVIDUAL: only owner_participant_id does.';
+CREATE TYPE follow_up_status AS ENUM ('SCHEDULED', 'OPEN', 'PARTIAL', 'COMPLETED', 'EXPIRED', 'CANCELLED');
+COMMENT ON TYPE follow_up_status IS 'Lifecycle of a follow-up: SCHEDULED until due, OPEN for check-ins, then PARTIAL, COMPLETED, EXPIRED or CANCELLED.';
+CREATE TYPE next_action AS ENUM ('FULL_CLOSURE', 'EXTEND', 'ADJUST_COMMITMENT', 'REOPEN_STRATEGY_WORK', 'NEW_PROCESS', 'PARTIAL_CLOSURE');
+COMMENT ON TYPE next_action IS 'What a participant chose to do next at a follow-up check-in.';
+CREATE TYPE continue_choice AS ENUM ('ANOTHER_ROUND', 'EXTEND', 'NEW_PROCESS', 'PARTIAL_CLOSURE', 'FULL_CLOSURE');
+COMMENT ON TYPE continue_choice IS 'How a participant wants to continue after a follow-up check-in.';
+CREATE TYPE reminder_scope AS ENUM ('PRIVATE', 'SHARED');
+COMMENT ON TYPE reminder_scope IS 'PRIVATE: a reminder only its user sees; SHARED: one tied to a shared follow-up.';
+CREATE TYPE reminder_status AS ENUM ('SCHEDULED', 'DELIVERED', 'CANCELLED');
+COMMENT ON TYPE reminder_status IS 'Lifecycle of a reminder: SCHEDULED, DELIVERED, or CANCELLED.';
+CREATE TYPE reminder_cadence AS ENUM ('ONCE', 'WEEKLY', 'MONTHLY', 'EVERY_COUPLE_MONTHS');
+COMMENT ON TYPE reminder_cadence IS 'How often a reminder repeats, as chosen in the check-in (ONCE or a named period); a recurrence choice, not an interval. nextReminderDate (services/tending.service.ts) maps it to the next remind_at.';
+CREATE TYPE reflection_status AS ENUM ('ACTIVE', 'COMPLETED', 'ARCHIVED');
+COMMENT ON TYPE reflection_status IS 'Lifecycle of an Inner Work reflection thread.';
+CREATE TYPE takeaway_source AS ENUM ('AI', 'USER');
+COMMENT ON TYPE takeaway_source IS 'Who wrote a takeaway: the AI (distilled) or the user.';
+CREATE TYPE takeaway_type AS ENUM ('INSIGHT', 'ACTION_ITEM', 'INTENTION');
+COMMENT ON TYPE takeaway_type IS 'What a takeaway is: an insight, an action item, or an intention.';
+CREATE TYPE takeaway_link_type AS ENUM ('AI_SEMANTIC', 'USER_MANUAL');
+COMMENT ON TYPE takeaway_link_type IS 'How two takeaways were linked: by the AI (semantic similarity) or by the user.';
+CREATE TYPE memory_category AS ENUM ('AI_NAME', 'LANGUAGE', 'COMMUNICATION', 'PERSONAL_INFO', 'RELATIONSHIP', 'PREFERENCE');
+COMMENT ON TYPE memory_category IS 'The category of a user memory ("things to always remember").';
+CREATE TYPE memory_status AS ENUM ('ACTIVE', 'PENDING', 'REJECTED');
+COMMENT ON TYPE memory_status IS 'Whether a user memory is in force (ACTIVE), awaiting the user''s approval (PENDING) or REJECTED.';
+CREATE TYPE memory_source AS ENUM ('USER_APPROVED', 'USER_CREATED', 'USER_EDITED');
+COMMENT ON TYPE memory_source IS 'How a user memory came to be: an AI suggestion the user approved, created by the user, or edited by the user.';
+CREATE TYPE device_platform AS ENUM ('ios', 'android', 'web');
+COMMENT ON TYPE device_platform IS 'The platform a user device registered from.';
+CREATE TYPE wellbeing_feature AS ENUM ('meditation', 'gratitude', 'needs_assessment', 'people');
+COMMENT ON TYPE wellbeing_feature IS 'The wellbeing features that keep a feature_state document (shared/src/dto/feature-state.ts FEATURES).';
+CREATE TYPE activity_type AS ENUM ('LLM_CALL', 'EMBEDDING', 'RETRIEVAL', 'TOOL_USE');
+COMMENT ON TYPE activity_type IS 'The kind of call a brain_activity row logs.';
+CREATE TYPE activity_status AS ENUM ('PENDING', 'COMPLETED', 'FAILED');
+COMMENT ON TYPE activity_status IS 'Whether a logged call is still running, completed or failed.';
+CREATE TYPE brain_call_type AS ENUM ('ORCHESTRATED_RESPONSE', 'RETRIEVAL_PLANNING', 'INTENT_DETECTION', 'BACKGROUND_CLASSIFICATION', 'PARTNER_SESSION_CLASSIFICATION', 'CHAT_ROUTER_RESPONSE', 'REFERENCE_DETECTION', 'PEOPLE_EXTRACTION', 'MEMORY_DETECTION', 'MEMORY_VALIDATION', 'RECONCILER_ANALYSIS', 'SUMMARIZATION', 'NEEDS_EXTRACTION', 'WITNESSING_RESPONSE', 'MEMORY_FORMATTING', 'THEME_EXTRACTION', 'GLOBAL_MEMORY_CONSOLIDATION', 'DISTILLATION', 'CROSS_SESSION_THEME');
+COMMENT ON TYPE brain_call_type IS 'Which part of the app made a logged LLM call (the call site), for cost and latency breakdowns.';
 
 -- ----------------------------------------------------------------------------
 -- The 47 tables, in dependency order.
 -- ----------------------------------------------------------------------------
 
-CREATE TABLE "relationship" (
-    "id" uuid7 NOT NULL DEFAULT uuidv7(),
-    "created_at" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "updated_at" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-
-    CONSTRAINT "relationship_pkey" PRIMARY KEY ("id")
+CREATE TABLE relationship (
+    id uuid7 NOT NULL DEFAULT uuidv7() PRIMARY KEY,
+    created_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+COMMENT ON TABLE relationship IS 'A durable pairing of users across sessions; its members are relationship_member, its sessions are session.';
 
 CREATE TABLE "user" (
-    "id" uuid7 NOT NULL DEFAULT uuidv7(),
-    "clerk_id" TEXT,
-    "email" TEXT NOT NULL,
-    "first_name" TEXT,
-    "last_name" TEXT,
-    "deleted_at" TIMESTAMPTZ(3),
-    "created_at" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "updated_at" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "name" text
+    id uuid7 NOT NULL DEFAULT uuidv7() PRIMARY KEY,
+    clerk_id text UNIQUE,
+    email text NOT NULL UNIQUE CHECK (char_length(email) <= 254),
+    first_name text,
+    last_name text,
+    deleted_at ts_ms,
+    created_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    name text
         GENERATED ALWAYS AS (nullif(trim(coalesce(first_name, '') || ' ' || coalesce(last_name, '')), '')) STORED,
 
-    CONSTRAINT "user_pkey" PRIMARY KEY ("id"),
-    CONSTRAINT "user_clerk_id_key" UNIQUE ("clerk_id"),
-    CONSTRAINT "user_email_key" UNIQUE ("email"),
-
     -- §1.7 user — a tombstone is scrubbed (P3 D9)
-    CONSTRAINT chk_user_tombstone_scrubbed CHECK (deleted_at IS NULL OR (clerk_id IS NULL AND email LIKE 'deleted+%'))
+    CHECK (deleted_at IS NULL OR (clerk_id IS NULL AND email LIKE 'deleted+%'))
 );
+COMMENT ON TABLE "user" IS 'Identity only: one row per account (Clerk-backed), soft-deleted to a scrubbed tombstone. Every FK to it is RESTRICT; session data hangs off participant, not off user.';
+COMMENT ON COLUMN "user".clerk_id IS 'The Clerk user id this account signs in with; NULL on a tombstone.';
+COMMENT ON COLUMN "user".email IS 'Sign-in email, unique. A tombstone holds a scrubbed deleted+<id> address.';
+COMMENT ON COLUMN "user".name IS 'Generated display name: first_name and last_name joined, NULL when both are empty.';
+COMMENT ON COLUMN "user".deleted_at IS 'Soft delete (P3 D9): the row becomes a scrubbed tombstone and is never removed.';
 
-CREATE TABLE "relationship_member" (
-    "relationship_id" uuid7 NOT NULL,
-    "user_id" uuid7 NOT NULL,
-    "role" "relationship_role" NOT NULL DEFAULT 'member',
-    "nickname" TEXT,
-    "joined_at" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "created_at" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "updated_at" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+CREATE TABLE relationship_member (
+    relationship_id uuid7 NOT NULL REFERENCES relationship ON DELETE CASCADE,
+    user_id uuid7 NOT NULL REFERENCES "user" ON DELETE RESTRICT,
+    role relationship_role NOT NULL DEFAULT 'member',
+    nickname text,
+    joined_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    created_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
-    CONSTRAINT "relationship_member_pkey" PRIMARY KEY ("relationship_id","user_id"),
-    CONSTRAINT "relationship_member_relationship_id_fkey" FOREIGN KEY ("relationship_id") REFERENCES "relationship"("id") ON DELETE CASCADE ON UPDATE NO ACTION,
-    CONSTRAINT "relationship_member_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "user"("id") ON DELETE RESTRICT ON UPDATE NO ACTION
+    PRIMARY KEY (relationship_id, user_id)
 );
-CREATE INDEX "relationship_member_user_id_idx" ON "relationship_member"("user_id");
+CREATE INDEX ON relationship_member (user_id);
+COMMENT ON TABLE relationship_member IS 'A user''s membership in a relationship (not in a session).';
+COMMENT ON COLUMN relationship_member.nickname IS 'What this member calls the other person in the relationship; plain text, set by the member.';
 
-CREATE TABLE "session" (
-    "id" uuid7 NOT NULL DEFAULT uuidv7(),
-    "relationship_id" uuid7 NOT NULL,
-    "status" "session_status" NOT NULL DEFAULT 'CREATED',
-    "topic_frame" TEXT,
-    "topic_frame_confirmed_at" TIMESTAMPTZ(3),
-    "previous_session_id" uuid7,
-    "resolved_at" TIMESTAMPTZ(3),
-    "created_at" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "updated_at" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-
-    CONSTRAINT "session_pkey" PRIMARY KEY ("id"),
-    CONSTRAINT "session_relationship_id_fkey" FOREIGN KEY ("relationship_id") REFERENCES "relationship"("id") ON DELETE CASCADE ON UPDATE NO ACTION,
-    CONSTRAINT "session_previous_session_id_fkey" FOREIGN KEY ("previous_session_id") REFERENCES "session"("id") ON DELETE SET NULL ON UPDATE NO ACTION,
+CREATE TABLE session (
+    id uuid7 NOT NULL DEFAULT uuidv7() PRIMARY KEY,
+    relationship_id uuid7 NOT NULL REFERENCES relationship ON DELETE CASCADE,
+    status session_status NOT NULL DEFAULT 'CREATED',
+    topic_frame ciphertext,
+    topic_frame_confirmed_at ts_ms,
+    previous_session_id uuid7 REFERENCES session ON DELETE SET NULL,
+    resolved_at ts_ms,
+    created_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     -- §1.1 session [P12]
-    CONSTRAINT chk_session_resolved_at CHECK (status <> 'RESOLVED' OR resolved_at IS NOT NULL)
+    CHECK (status <> 'RESOLVED' OR resolved_at IS NOT NULL)
 );
-CREATE INDEX "session_relationship_id_idx" ON "session"("relationship_id");
-CREATE INDEX "session_previous_session_id_idx" ON "session"("previous_session_id");
+CREATE INDEX ON session (relationship_id);
+CREATE INDEX ON session (previous_session_id);
 -- + sql_session_one_live (sql-only.sql)
+COMMENT ON TABLE session IS 'One facilitated process on one topic between the participants of a relationship; at most one live session per relationship.';
+COMMENT ON COLUMN session.previous_session_id IS 'The session this one continues (a NEW_PROCESS follow-up).';
+COMMENT ON COLUMN session.topic_frame IS 'encrypted (session): the AI''s short neutral topic phrase for the session (max 20 words by prompt), confirmed by the participants.';
 
-CREATE TABLE "participant" (
-    "id" uuid7 NOT NULL DEFAULT uuidv7(),
-    "session_id" uuid7 NOT NULL,
-    "user_id" uuid7,
-    "kind" "participant_kind" NOT NULL DEFAULT 'human',
-    "display_name" TEXT,
-    "joined_at" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "left_at" TIMESTAMPTZ(3),
-    "created_at" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "updated_at" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+CREATE TABLE participant (
+    id uuid7 NOT NULL DEFAULT uuidv7() PRIMARY KEY,
+    session_id uuid7 NOT NULL REFERENCES session ON DELETE CASCADE,
+    user_id uuid7 REFERENCES "user" ON DELETE RESTRICT,
+    kind participant_kind NOT NULL DEFAULT 'human',
+    display_name text,
+    joined_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    left_at ts_ms,
+    created_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
-    CONSTRAINT "participant_pkey" PRIMARY KEY ("id"),
-    CONSTRAINT "participant_session_id_user_id_key" UNIQUE ("session_id", "user_id"),
-    CONSTRAINT "participant_session_id_fkey" FOREIGN KEY ("session_id") REFERENCES "session"("id") ON DELETE CASCADE ON UPDATE NO ACTION,
-    CONSTRAINT "participant_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "user"("id") ON DELETE RESTRICT ON UPDATE NO ACTION,
-
+    UNIQUE (session_id, user_id),
     -- §1.1 participant
-    CONSTRAINT chk_participant_kind_user CHECK ((kind = 'modeled') = (user_id IS NULL))
+    CHECK ((kind = 'modeled') = (user_id IS NULL))
 );
-CREATE INDEX "participant_user_id_idx" ON "participant"("user_id");
+CREATE INDEX ON participant (user_id);
+COMMENT ON TABLE participant IS 'One membership of a session, the entity every session-scoped row keys on. A human participant has a user; a modeled one does not.';
+COMMENT ON COLUMN participant.display_name IS 'Snapshot of the name shown to co-participants, the only user fact they see; NULL falls back to user.name (v_participant).';
+COMMENT ON COLUMN participant.left_at IS 'When the participant left or deleted their account; the row stays.';
 
-CREATE TABLE "proposal" (
-    "id" uuid7 NOT NULL DEFAULT uuidv7(),
-    "session_id" uuid7 NOT NULL,
-    "created_by_participant_id" uuid7,
-    "source" "proposal_source" NOT NULL DEFAULT 'USER_SUBMITTED',
-    "kind" "proposal_kind" NOT NULL DEFAULT 'SHARED_PROPOSAL',
-    "status" "proposal_status" NOT NULL DEFAULT 'ACTIVE',
-    "description" TEXT NOT NULL,
-    "duration" TEXT,
-    "measure_of_success" TEXT,
-    "unresolved_need_labels" TEXT[] DEFAULT ARRAY[]::TEXT[],
-    "removed_at" TIMESTAMPTZ(3),
-    "removed_by_participant_id" uuid7,
-    "removal_reason" TEXT,
-    "shared_at" TIMESTAMPTZ(3),
-    "created_at" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "updated_at" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-
-    CONSTRAINT "proposal_pkey" PRIMARY KEY ("id"),
-    CONSTRAINT "proposal_session_id_fkey" FOREIGN KEY ("session_id") REFERENCES "session"("id") ON DELETE CASCADE ON UPDATE NO ACTION,
-    CONSTRAINT "proposal_created_by_participant_id_fkey" FOREIGN KEY ("created_by_participant_id") REFERENCES "participant"("id") ON DELETE CASCADE ON UPDATE NO ACTION,
-    CONSTRAINT "proposal_removed_by_participant_id_fkey" FOREIGN KEY ("removed_by_participant_id") REFERENCES "participant"("id") ON DELETE CASCADE ON UPDATE NO ACTION,
+CREATE TABLE proposal (
+    id uuid7 NOT NULL DEFAULT uuidv7() PRIMARY KEY,
+    session_id uuid7 NOT NULL REFERENCES session ON DELETE CASCADE,
+    created_by_participant_id uuid7 REFERENCES participant ON DELETE CASCADE,
+    source proposal_source NOT NULL DEFAULT 'USER_SUBMITTED',
+    kind proposal_kind NOT NULL DEFAULT 'SHARED_PROPOSAL',
+    status proposal_status NOT NULL DEFAULT 'ACTIVE',
+    description ciphertext NOT NULL,
+    duration ciphertext,
+    measure_of_success ciphertext,
+    unresolved_need_labels text[] DEFAULT ARRAY[]::text[],
+    removed_at ts_ms,
+    removed_by_participant_id uuid7 REFERENCES participant ON DELETE CASCADE,
+    removal_reason ciphertext,
+    shared_at ts_ms,
+    created_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     -- §1.4 proposal [P21]
-    CONSTRAINT chk_proposal_removed CHECK ((status = 'REMOVED') = (removed_at IS NOT NULL)),
-    CONSTRAINT chk_proposal_shared_individual CHECK (kind = 'INDIVIDUAL_COMMITMENT' OR shared_at IS NULL)
+    CHECK ((status = 'REMOVED') = (removed_at IS NOT NULL)),
+    CHECK (kind = 'INDIVIDUAL_COMMITMENT' OR shared_at IS NULL),
+    -- every element is ciphertext (the ciphertext domain; an array of it is refused by step 20)
+    CHECK (app.all_ciphertext(unresolved_need_labels))
 );
-CREATE INDEX "proposal_session_id_status_idx" ON "proposal"("session_id", "status");
-CREATE INDEX "proposal_created_by_participant_id_idx" ON "proposal"("created_by_participant_id");
-CREATE INDEX "proposal_removed_by_participant_id_idx" ON "proposal"("removed_by_participant_id");
+CREATE INDEX ON proposal (session_id, status);
+CREATE INDEX ON proposal (created_by_participant_id);
+CREATE INDEX ON proposal (removed_by_participant_id);
+COMMENT ON TABLE proposal IS 'A Stage-4 repair idea: a shared proposal for the needs both see, or one participant''s individual commitment.';
+COMMENT ON COLUMN proposal.created_by_participant_id IS 'Who wrote it; NULL for an AI or curated proposal.';
+COMMENT ON COLUMN proposal.shared_at IS 'INDIVIDUAL_COMMITMENT only: when it was made visible to co-participants.';
+COMMENT ON COLUMN proposal.description IS 'encrypted (session): what the proposal is, AI-proposed or typed (POST /strategies: 10 to 1000).';
+COMMENT ON COLUMN proposal.duration IS 'encrypted (session): free text for how long, e.g. 3 days or 10 minutes, once this week (AI or user; max 100 on POST /strategies). NOT a true interval: nothing parses it.';
+COMMENT ON COLUMN proposal.measure_of_success IS 'encrypted (session): free text: how the participants will know it worked (max 500 on POST /strategies).';
+COMMENT ON COLUMN proposal.removal_reason IS 'encrypted (session): why it was removed: the AI''s REMOVE reason or the participant''s chat text.';
+COMMENT ON COLUMN proposal.unresolved_need_labels IS 'encrypted (session): text[], each element encrypted: need labels the proposal addresses that matched no need_share, as given by the AI or the participant.';
 
-CREATE TABLE "conversation" (
-    "id" uuid7 NOT NULL DEFAULT uuidv7(),
-    "participant_id" uuid7 NOT NULL,
-    "kind" "conversation_kind" NOT NULL DEFAULT 'MAIN',
-    "anchor_kind" "subchat_anchor",
-    "anchor_proposal_id" uuid7,
-    "status" "conversation_status" NOT NULL DEFAULT 'ACTIVE',
-    "resolved_at" TIMESTAMPTZ(3),
-    "created_at" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "updated_at" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-
-    CONSTRAINT "conversation_pkey" PRIMARY KEY ("id"),
-    CONSTRAINT "conversation_participant_id_fkey" FOREIGN KEY ("participant_id") REFERENCES "participant"("id") ON DELETE CASCADE ON UPDATE NO ACTION,
-    CONSTRAINT "conversation_anchor_proposal_id_fkey" FOREIGN KEY ("anchor_proposal_id") REFERENCES "proposal"("id") ON DELETE SET NULL ON UPDATE NO ACTION,
+CREATE TABLE conversation (
+    id uuid7 NOT NULL DEFAULT uuidv7() PRIMARY KEY,
+    participant_id uuid7 NOT NULL REFERENCES participant ON DELETE CASCADE,
+    kind conversation_kind NOT NULL DEFAULT 'MAIN',
+    anchor_kind subchat_anchor,
+    anchor_proposal_id uuid7 REFERENCES proposal ON DELETE SET NULL,
+    status conversation_status NOT NULL DEFAULT 'ACTIVE',
+    resolved_at ts_ms,
+    created_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     -- §1.1 conversation (anchor columns are SUBCHAT-only)
-    CONSTRAINT chk_conversation_anchor_kind CHECK ((kind = 'MAIN') = (anchor_kind IS NULL)),
-    CONSTRAINT chk_conversation_anchor_proposal CHECK (kind = 'SUBCHAT' OR anchor_proposal_id IS NULL)
+    CHECK ((kind = 'MAIN') = (anchor_kind IS NULL)),
+    CHECK (kind = 'SUBCHAT' OR anchor_proposal_id IS NULL)
 );
-CREATE INDEX "conversation_participant_id_kind_status_idx" ON "conversation"("participant_id", "kind", "status");
-CREATE INDEX "conversation_anchor_proposal_id_idx" ON "conversation"("anchor_proposal_id");
+CREATE INDEX ON conversation (participant_id, kind, status);
+CREATE INDEX ON conversation (anchor_proposal_id);
 -- + sql_conversation_one_main (sql-only.sql)
+COMMENT ON TABLE conversation IS 'A participant''s private thread with the AI guide inside a session (exactly one MAIN), or a Stage-4 sub-chat.';
+COMMENT ON COLUMN conversation.anchor_kind IS 'SUBCHAT only: what the sub-chat is about.';
+COMMENT ON COLUMN conversation.anchor_proposal_id IS 'SUBCHAT only: the proposal a PROPOSAL_REFINEMENT sub-chat refines.';
 
-CREATE TABLE "empathy_attempt" (
-    "id" uuid7 NOT NULL DEFAULT uuidv7(),
-    "author_participant_id" uuid7 NOT NULL,
-    "subject_participant_id" uuid7 NOT NULL,
-    "round" INTEGER NOT NULL DEFAULT 1,
-    "supersedes_attempt_id" uuid7,
-    "content" TEXT NOT NULL,
-    "status" "empathy_status" NOT NULL DEFAULT 'HELD',
-    "status_version" INTEGER NOT NULL DEFAULT 0,
-    "submitted_at" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "revealed_at" TIMESTAMPTZ(3),
-    "delivery_status" "delivery_status" NOT NULL DEFAULT 'PENDING',
-    "delivered_at" TIMESTAMPTZ(3),
-    "seen_at" TIMESTAMPTZ(3),
-    "created_at" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "updated_at" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+CREATE TABLE empathy_attempt (
+    id uuid7 NOT NULL DEFAULT uuidv7() PRIMARY KEY,
+    author_participant_id uuid7 NOT NULL REFERENCES participant ON DELETE CASCADE,
+    subject_participant_id uuid7 NOT NULL REFERENCES participant ON DELETE CASCADE,
+    round integer NOT NULL DEFAULT 1,
+    supersedes_attempt_id uuid7 REFERENCES empathy_attempt ON DELETE SET NULL,
+    content ciphertext NOT NULL,
+    status empathy_status NOT NULL DEFAULT 'HELD',
+    status_version integer NOT NULL DEFAULT 0,
+    submitted_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    revealed_at ts_ms,
+    delivery_status delivery_status NOT NULL DEFAULT 'PENDING',
+    delivered_at ts_ms,
+    seen_at ts_ms,
+    created_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
-    CONSTRAINT "empathy_attempt_pkey" PRIMARY KEY ("id"),
-    CONSTRAINT "empathy_attempt_author_participant_id_subject_participant_i_key" UNIQUE ("author_participant_id", "subject_participant_id", "round"),
-    CONSTRAINT "empathy_attempt_author_participant_id_fkey" FOREIGN KEY ("author_participant_id") REFERENCES "participant"("id") ON DELETE CASCADE ON UPDATE NO ACTION,
-    CONSTRAINT "empathy_attempt_subject_participant_id_fkey" FOREIGN KEY ("subject_participant_id") REFERENCES "participant"("id") ON DELETE CASCADE ON UPDATE NO ACTION,
-    CONSTRAINT "empathy_attempt_supersedes_attempt_id_fkey" FOREIGN KEY ("supersedes_attempt_id") REFERENCES "empathy_attempt"("id") ON DELETE SET NULL ON UPDATE NO ACTION,
-
+    UNIQUE (author_participant_id, subject_participant_id, round),
     -- §1.2 empathy_attempt [P15b, P15d]
-    CONSTRAINT chk_empathy_attempt_not_self CHECK (author_participant_id <> subject_participant_id),
-    CONSTRAINT chk_empathy_attempt_revealed_at CHECK (status NOT IN ('REVEALED', 'VALIDATED') OR revealed_at IS NOT NULL)
+    CHECK (author_participant_id <> subject_participant_id),
+    CHECK (status NOT IN ('REVEALED', 'VALIDATED') OR revealed_at IS NOT NULL)
 );
-CREATE INDEX "empathy_attempt_subject_participant_id_revealed_at_idx" ON "empathy_attempt"("subject_participant_id", "revealed_at");
-CREATE INDEX "empathy_attempt_supersedes_attempt_id_idx" ON "empathy_attempt"("supersedes_attempt_id");
+CREATE INDEX ON empathy_attempt (subject_participant_id, revealed_at);
+CREATE INDEX ON empathy_attempt (supersedes_attempt_id);
 -- + sql_attempt_one_live_per_direction (sql-only.sql)
+COMMENT ON TABLE empathy_attempt IS 'Stage 2: one participant''s statement of how they imagine the other feels, per direction and round; revealed to the subject once both are READY.';
+COMMENT ON COLUMN empathy_attempt.round IS '1 for the first statement in this direction; +1 per resubmission.';
+COMMENT ON COLUMN empathy_attempt.status_version IS 'Incremented on every status change, to order status events.';
+COMMENT ON COLUMN empathy_attempt.revealed_at IS 'Set once at the reveal and never cleared: the subject''s right to read the attempt hangs on it, not on status.';
+COMMENT ON COLUMN empathy_attempt.content IS 'encrypted (per-row): the author''s empathy statement; participant (author) key until revealed, then re-encrypted under the session key. The plaintext never changes.';
 
-CREATE TABLE "need" (
-    "id" uuid7 NOT NULL DEFAULT uuidv7(),
-    "participant_id" uuid7 NOT NULL,
-    "label" TEXT NOT NULL,
-    "category" "need_category" NOT NULL,
-    "evidence" TEXT[] DEFAULT ARRAY[]::TEXT[],
-    "ai_confidence" REAL NOT NULL,
-    "confirmed_at" TIMESTAMPTZ(3),
-    "locked_at" TIMESTAMPTZ(3),
-    "superseded_by_need_id" uuid7,
-    "deleted_at" TIMESTAMPTZ(3),
-    "created_at" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "updated_at" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-
-    CONSTRAINT "need_pkey" PRIMARY KEY ("id"),
-    CONSTRAINT "need_participant_id_fkey" FOREIGN KEY ("participant_id") REFERENCES "participant"("id") ON DELETE CASCADE ON UPDATE NO ACTION,
-    CONSTRAINT "need_superseded_by_need_id_fkey" FOREIGN KEY ("superseded_by_need_id") REFERENCES "need"("id") ON DELETE SET NULL ON UPDATE NO ACTION,
+CREATE TABLE need (
+    id uuid7 NOT NULL DEFAULT uuidv7() PRIMARY KEY,
+    participant_id uuid7 NOT NULL REFERENCES participant ON DELETE CASCADE,
+    label ciphertext NOT NULL,
+    category need_category NOT NULL,
+    evidence text[] DEFAULT ARRAY[]::text[],
+    ai_confidence real NOT NULL,
+    confirmed_at ts_ms,
+    locked_at ts_ms,
+    superseded_by_need_id uuid7 REFERENCES need ON DELETE SET NULL,
+    deleted_at ts_ms,
+    created_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     -- §1.4 need [P30]
-    CONSTRAINT chk_need_confidence CHECK (ai_confidence BETWEEN 0 AND 1)
+    CHECK (ai_confidence BETWEEN 0 AND 1),
+    -- every element is ciphertext (the ciphertext domain; an array of it is refused by step 20)
+    CHECK (app.all_ciphertext(evidence))
 );
-CREATE INDEX "need_participant_id_idx" ON "need"("participant_id");
-CREATE INDEX "need_superseded_by_need_id_idx" ON "need"("superseded_by_need_id");
+CREATE INDEX ON need (participant_id);
+CREATE INDEX ON need (superseded_by_need_id);
 -- + sql_need_live (sql-only.sql)
+COMMENT ON TABLE need IS 'A need the AI identified for a participant; owner-only, always. A co-participant sees a need only through need_share.';
+COMMENT ON COLUMN need.ai_confidence IS 'The model''s confidence in the need, 0 to 1.';
+COMMENT ON COLUMN need.locked_at IS 'When the need was locked against further edits.';
+COMMENT ON COLUMN need.superseded_by_need_id IS 'The need that replaced this one after an edit.';
+COMMENT ON COLUMN need.label IS 'encrypted (participant): the need statement in the participant''s words (AI-identified or typed); free text, not a taxonomy (category is the classification).';
+COMMENT ON COLUMN need.evidence IS 'encrypted (participant): text[], each element encrypted: short quotes of what the participant said; never copied to need_share.';
 
-CREATE TABLE "message" (
-    "id" uuid7 NOT NULL DEFAULT uuidv7(),
-    "conversation_id" uuid7 NOT NULL,
-    "sender_participant_id" uuid7,
-    "role" "message_role" NOT NULL,
-    "kind" "message_kind" NOT NULL DEFAULT 'CHAT',
-    "content" TEXT NOT NULL,
-    "content_hash" VARCHAR(64),
-    "refining_need_id" uuid7,
-    "source_attempt_id" uuid7,
-    "created_at" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-
-    CONSTRAINT "message_pkey" PRIMARY KEY ("id"),
-    CONSTRAINT "message_conversation_id_fkey" FOREIGN KEY ("conversation_id") REFERENCES "conversation"("id") ON DELETE CASCADE ON UPDATE NO ACTION,
-    CONSTRAINT "message_sender_participant_id_fkey" FOREIGN KEY ("sender_participant_id") REFERENCES "participant"("id") ON DELETE CASCADE ON UPDATE NO ACTION,
-    CONSTRAINT "message_refining_need_id_fkey" FOREIGN KEY ("refining_need_id") REFERENCES "need"("id") ON DELETE SET NULL ON UPDATE NO ACTION,
-    CONSTRAINT "message_source_attempt_id_fkey" FOREIGN KEY ("source_attempt_id") REFERENCES "empathy_attempt"("id") ON DELETE SET NULL ON UPDATE NO ACTION,
+CREATE TABLE message (
+    id uuid7 NOT NULL DEFAULT uuidv7() PRIMARY KEY,
+    conversation_id uuid7 NOT NULL REFERENCES conversation ON DELETE CASCADE,
+    sender_participant_id uuid7 REFERENCES participant ON DELETE CASCADE,
+    role message_role NOT NULL,
+    kind message_kind NOT NULL DEFAULT 'CHAT',
+    content ciphertext NOT NULL,
+    content_hash sha256_hex,
+    refining_need_id uuid7 REFERENCES need ON DELETE SET NULL,
+    source_attempt_id uuid7 REFERENCES empathy_attempt ON DELETE SET NULL,
+    created_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     -- §1.1 message [P02] — P3 §6, "humans can't author as the facilitator"
-    CONSTRAINT chk_message_user_has_sender CHECK (role <> 'USER' OR sender_participant_id IS NOT NULL),
-    CONSTRAINT chk_message_ai_has_no_sender CHECK (role NOT IN ('AI', 'SYSTEM') OR sender_participant_id IS NULL)
+    CHECK (role <> 'USER' OR sender_participant_id IS NOT NULL),
+    CHECK (role NOT IN ('AI', 'SYSTEM') OR sender_participant_id IS NULL)
 );
-CREATE INDEX "message_conversation_id_created_at_idx" ON "message"("conversation_id", "created_at");
-CREATE INDEX "message_conversation_id_kind_content_hash_idx" ON "message"("conversation_id", "kind", "content_hash");
-CREATE INDEX "message_sender_participant_id_idx" ON "message"("sender_participant_id");
-CREATE INDEX "message_refining_need_id_idx" ON "message"("refining_need_id");
-CREATE INDEX "message_source_attempt_id_idx" ON "message"("source_attempt_id");
+CREATE INDEX ON message (conversation_id, created_at);
+CREATE INDEX ON message (conversation_id, kind, content_hash);
+CREATE INDEX ON message (sender_participant_id);
+CREATE INDEX ON message (refining_need_id);
+CREATE INDEX ON message (source_attempt_id);
+COMMENT ON TABLE message IS 'One line of a conversation: a human turn, an AI or system line, or an item delivered from the other participant. Append-only.';
+COMMENT ON COLUMN message.sender_participant_id IS 'The human who wrote a USER line; NULL for AI and SYSTEM lines.';
+COMMENT ON COLUMN message.source_attempt_id IS 'Lineage of a delivered item: the empathy attempt it came from.';
+COMMENT ON COLUMN message.content_hash IS 'sha256 of the plaintext content, for the dedupe probes (indexed with conversation_id, kind).';
+COMMENT ON COLUMN message.content IS 'encrypted (per-row): the line''s text: the owner''s turn and the AI''s replies under the participant key, every delivered kind under the session key.';
 
-CREATE TABLE "conversation_read_state" (
-    "participant_id" uuid7 NOT NULL,
-    "last_viewed_at" TIMESTAMPTZ(3),
-    "last_seen_message_id" uuid7,
-    "last_viewed_share_tab_at" TIMESTAMPTZ(3),
-    "last_active_at" TIMESTAMPTZ(3),
-    "archived_at" TIMESTAMPTZ(3),
-    "created_at" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "updated_at" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-
-    CONSTRAINT "conversation_read_state_pkey" PRIMARY KEY ("participant_id"),
-    CONSTRAINT "conversation_read_state_participant_id_fkey" FOREIGN KEY ("participant_id") REFERENCES "participant"("id") ON DELETE CASCADE ON UPDATE NO ACTION,
-    CONSTRAINT "conversation_read_state_last_seen_message_id_fkey" FOREIGN KEY ("last_seen_message_id") REFERENCES "message"("id") ON DELETE SET NULL ON UPDATE NO ACTION
+CREATE TABLE conversation_read_state (
+    participant_id uuid7 NOT NULL PRIMARY KEY REFERENCES participant ON DELETE CASCADE,
+    last_viewed_at ts_ms,
+    last_seen_message_id uuid7 REFERENCES message ON DELETE SET NULL,
+    last_viewed_share_tab_at ts_ms,
+    last_active_at ts_ms,
+    archived_at ts_ms,
+    created_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
-CREATE INDEX "conversation_read_state_last_seen_message_id_idx" ON "conversation_read_state"("last_seen_message_id");
+CREATE INDEX ON conversation_read_state (last_seen_message_id);
+COMMENT ON TABLE conversation_read_state IS 'Per-participant view state: what was last viewed or seen, presence, and whether the session is archived from their list.';
+COMMENT ON COLUMN conversation_read_state.last_seen_message_id IS 'The last message this participant has seen: the "new messages" line.';
+COMMENT ON COLUMN conversation_read_state.last_viewed_share_tab_at IS 'When the participant last viewed received shared items ("Seen"); the name predates the Share tab''s removal.';
+COMMENT ON COLUMN conversation_read_state.last_active_at IS 'Presence; shown to the co-participant only when their privacy preferences allow (v_participant).';
+COMMENT ON COLUMN conversation_read_state.archived_at IS 'Set when the participant hid the session from their list.';
 
-CREATE TABLE "reconciler_result" (
-    "id" uuid7 NOT NULL DEFAULT uuidv7(),
-    "attempt_id" uuid7 NOT NULL,
-    "subject_participant_id" uuid7 NOT NULL,
-    "iteration" INTEGER NOT NULL DEFAULT 1,
-    "alignment_score" INTEGER NOT NULL,
-    "alignment_summary" TEXT NOT NULL,
-    "gap_summary" TEXT NOT NULL,
-    "gap_severity" "gap_severity" NOT NULL,
-    "correctly_identified" TEXT[] DEFAULT ARRAY[]::TEXT[],
-    "missed_feelings" TEXT[] DEFAULT ARRAY[]::TEXT[],
-    "misattributions" TEXT[] DEFAULT ARRAY[]::TEXT[],
-    "most_important_gap" TEXT,
-    "recommended_action" "recommender_action" NOT NULL,
-    "rationale" TEXT NOT NULL,
-    "sharing_would_help" BOOLEAN NOT NULL,
-    "suggested_share_focus" TEXT,
-    "suggested_share_content" TEXT,
-    "suggested_share_reason" TEXT,
-    "circuit_breaker_tripped" BOOLEAN NOT NULL DEFAULT false,
-    "superseded_at" TIMESTAMPTZ(3),
-    "created_at" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "updated_at" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+CREATE TABLE reconciler_result (
+    id uuid7 NOT NULL DEFAULT uuidv7() PRIMARY KEY,
+    attempt_id uuid7 NOT NULL REFERENCES empathy_attempt ON DELETE CASCADE,
+    subject_participant_id uuid7 NOT NULL REFERENCES participant ON DELETE CASCADE,
+    iteration integer NOT NULL DEFAULT 1,
+    alignment_score integer NOT NULL,
+    alignment_summary ciphertext NOT NULL,
+    gap_summary ciphertext NOT NULL,
+    gap_severity gap_severity NOT NULL,
+    correctly_identified text[] DEFAULT ARRAY[]::text[],
+    missed_feelings text[] DEFAULT ARRAY[]::text[],
+    misattributions text[] DEFAULT ARRAY[]::text[],
+    most_important_gap ciphertext,
+    recommended_action recommender_action NOT NULL,
+    rationale ciphertext NOT NULL,
+    sharing_would_help boolean NOT NULL,
+    suggested_share_focus ciphertext,
+    suggested_share_content ciphertext,
+    suggested_share_reason ciphertext,
+    circuit_breaker_tripped boolean NOT NULL DEFAULT false,
+    superseded_at ts_ms,
+    created_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
-    CONSTRAINT "reconciler_result_pkey" PRIMARY KEY ("id"),
-    CONSTRAINT "reconciler_result_attempt_id_iteration_key" UNIQUE ("attempt_id", "iteration"),
-    CONSTRAINT "reconciler_result_attempt_id_fkey" FOREIGN KEY ("attempt_id") REFERENCES "empathy_attempt"("id") ON DELETE CASCADE ON UPDATE NO ACTION,
-    CONSTRAINT "reconciler_result_subject_participant_id_fkey" FOREIGN KEY ("subject_participant_id") REFERENCES "participant"("id") ON DELETE CASCADE ON UPDATE NO ACTION,
-
+    UNIQUE (attempt_id, iteration),
     -- §1.2 reconciler_result [P17f]
-    CONSTRAINT chk_reconciler_result_score CHECK (alignment_score BETWEEN 0 AND 100)
+    CHECK (alignment_score BETWEEN 0 AND 100),
+    -- every element is ciphertext (the ciphertext domain; an array of it is refused by step 20)
+    CHECK (app.all_ciphertext(correctly_identified)),
+    CHECK (app.all_ciphertext(missed_feelings)),
+    CHECK (app.all_ciphertext(misattributions))
 );
-CREATE INDEX "reconciler_result_subject_participant_id_idx" ON "reconciler_result"("subject_participant_id");
+CREATE INDEX ON reconciler_result (subject_participant_id);
 -- + sql_result_one_current (sql-only.sql)
+COMMENT ON TABLE reconciler_result IS 'The reconciler''s gap analysis of one empathy attempt against its subject''s account; immutable, one current per attempt (superseded_at). Visible to the subject only.';
+COMMENT ON COLUMN reconciler_result.subject_participant_id IS 'The attempt''s subject, copied for the read policy; a trigger keeps it equal to empathy_attempt.subject_participant_id.';
+COMMENT ON COLUMN reconciler_result.iteration IS '1 for the first analysis of the attempt; +1 per re-analysis.';
+COMMENT ON COLUMN reconciler_result.alignment_score IS 'How well the attempt matches the subject''s account, 0 to 100.';
+COMMENT ON COLUMN reconciler_result.circuit_breaker_tripped IS 'Meant to mark a result that ended the refinement loop by its circuit breaker; no writer sets it true today and nothing reads it (spec 1.2).';
+COMMENT ON COLUMN reconciler_result.superseded_at IS 'Set when a newer result replaces this one; NULL marks the current result.';
+COMMENT ON COLUMN reconciler_result.alignment_summary IS 'encrypted (participant): the reconciler''s 1-2 sentence summary of what the attempt got right.';
+COMMENT ON COLUMN reconciler_result.gap_summary IS 'encrypted (participant): the reconciler''s 1-2 sentence summary of what it missed.';
+COMMENT ON COLUMN reconciler_result.correctly_identified IS 'encrypted (participant): text[], each element encrypted: the feelings the attempt identified, LLM output.';
+COMMENT ON COLUMN reconciler_result.missed_feelings IS 'encrypted (participant): text[], each element encrypted: the feelings the attempt missed, LLM output.';
+COMMENT ON COLUMN reconciler_result.misattributions IS 'encrypted (participant): text[], each element encrypted: what the attempt attributed wrongly, LLM output.';
+COMMENT ON COLUMN reconciler_result.most_important_gap IS 'encrypted (participant): the single most important gap, LLM output, or NULL.';
+COMMENT ON COLUMN reconciler_result.rationale IS 'encrypted (participant): why the reconciler recommends its action, LLM output.';
+COMMENT ON COLUMN reconciler_result.suggested_share_focus IS 'encrypted (participant): what the subject might share, LLM output, or NULL.';
+COMMENT ON COLUMN reconciler_result.suggested_share_content IS 'encrypted (participant): a 1-3 sentence suggestion of what the subject could say, LLM output.';
+COMMENT ON COLUMN reconciler_result.suggested_share_reason IS 'encrypted (participant): one sentence on why sharing would help, LLM output.';
 
-CREATE TABLE "context_share_offer" (
-    "id" uuid7 NOT NULL DEFAULT uuidv7(),
-    "attempt_id" uuid7 NOT NULL,
-    "result_id" uuid7 NOT NULL,
-    "subject_participant_id" uuid7 NOT NULL,
-    "iteration" INTEGER NOT NULL DEFAULT 1,
-    "status" "share_offer_status" NOT NULL DEFAULT 'PENDING',
-    "offer_message" TEXT,
-    "suggested_content" TEXT,
-    "suggested_reason" TEXT,
-    "shared_content" TEXT,
-    "shared_at" TIMESTAMPTZ(3),
-    "declined_at" TIMESTAMPTZ(3),
-    "offered_at" TIMESTAMPTZ(3),
-    "delivery_status" "delivery_status" NOT NULL DEFAULT 'PENDING',
-    "delivered_at" TIMESTAMPTZ(3),
-    "seen_at" TIMESTAMPTZ(3),
-    "delivery_notified_at" TIMESTAMPTZ(3),
-    "seen_notified_at" TIMESTAMPTZ(3),
-    "created_at" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "updated_at" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+CREATE TABLE context_share_offer (
+    id uuid7 NOT NULL DEFAULT uuidv7() PRIMARY KEY,
+    attempt_id uuid7 NOT NULL REFERENCES empathy_attempt ON DELETE CASCADE,
+    result_id uuid7 NOT NULL REFERENCES reconciler_result ON DELETE CASCADE,
+    subject_participant_id uuid7 NOT NULL REFERENCES participant ON DELETE CASCADE,
+    iteration integer NOT NULL DEFAULT 1,
+    status share_offer_status NOT NULL DEFAULT 'PENDING',
+    offer_message ciphertext,
+    suggested_content ciphertext,
+    suggested_reason ciphertext,
+    shared_content ciphertext,
+    shared_at ts_ms,
+    declined_at ts_ms,
+    offered_at ts_ms,
+    delivery_status delivery_status NOT NULL DEFAULT 'PENDING',
+    delivered_at ts_ms,
+    seen_at ts_ms,
+    delivery_notified_at ts_ms,
+    seen_notified_at ts_ms,
+    created_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
-    CONSTRAINT "context_share_offer_pkey" PRIMARY KEY ("id"),
-    CONSTRAINT "context_share_offer_attempt_id_iteration_key" UNIQUE ("attempt_id", "iteration"),
-    CONSTRAINT "context_share_offer_attempt_id_fkey" FOREIGN KEY ("attempt_id") REFERENCES "empathy_attempt"("id") ON DELETE CASCADE ON UPDATE NO ACTION,
-    CONSTRAINT "context_share_offer_result_id_fkey" FOREIGN KEY ("result_id") REFERENCES "reconciler_result"("id") ON DELETE CASCADE ON UPDATE NO ACTION,
-    CONSTRAINT "context_share_offer_subject_participant_id_fkey" FOREIGN KEY ("subject_participant_id") REFERENCES "participant"("id") ON DELETE CASCADE ON UPDATE NO ACTION,
-
+    UNIQUE (attempt_id, iteration),
     -- §1.2 context_share_offer [P18a]
-    CONSTRAINT chk_context_share_offer_accepted CHECK ((status = 'ACCEPTED') = (shared_at IS NOT NULL)),
-    CONSTRAINT chk_context_share_offer_declined CHECK ((status = 'DECLINED') = (declined_at IS NOT NULL))
+    CHECK ((status = 'ACCEPTED') = (shared_at IS NOT NULL)),
+    CHECK ((status = 'DECLINED') = (declined_at IS NOT NULL))
 );
-CREATE INDEX "context_share_offer_subject_participant_id_status_idx" ON "context_share_offer"("subject_participant_id", "status");
-CREATE INDEX "context_share_offer_result_id_idx" ON "context_share_offer"("result_id");
+CREATE INDEX ON context_share_offer (subject_participant_id, status);
+CREATE INDEX ON context_share_offer (result_id);
+COMMENT ON TABLE context_share_offer IS 'The suggestion to the subject of an attempt to share context with its author, and what happened to it; the shared text is delivered to the author as a message.';
+COMMENT ON COLUMN context_share_offer.subject_participant_id IS 'The subject who is offered the chance to share (the attempt''s subject).';
+COMMENT ON COLUMN context_share_offer.delivery_notified_at IS 'When the subject who shared was shown that the shared context was delivered (GET notifications, Sent-tab updates).';
+COMMENT ON COLUMN context_share_offer.seen_notified_at IS 'When the subject who shared was shown that the author has seen it.';
+COMMENT ON COLUMN context_share_offer.offer_message IS 'encrypted (participant): the AI''s 2-3 sentence message offering the subject the chance to share.';
+COMMENT ON COLUMN context_share_offer.suggested_content IS 'encrypted (participant): the suggested text to share, LLM output or the subject''s AI-assisted draft.';
+COMMENT ON COLUMN context_share_offer.suggested_reason IS 'encrypted (participant): why sharing it would help, LLM output.';
+COMMENT ON COLUMN context_share_offer.shared_content IS 'encrypted (session): the exact text the subject approved; copied into the author''s SHARED_CONTEXT message at delivery.';
 
-CREATE TABLE "milestone" (
-    "key" TEXT NOT NULL,
-    "ordinal" INTEGER NOT NULL,
-    "stage_label" TEXT NOT NULL,
-    "scope" "milestone_scope" NOT NULL DEFAULT 'participant',
-    "self_assertable" BOOLEAN NOT NULL DEFAULT false,
-    "created_at" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "updated_at" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-
-    CONSTRAINT "milestone_pkey" PRIMARY KEY ("key"),
-    CONSTRAINT "milestone_ordinal_key" UNIQUE ("ordinal")
+CREATE TABLE milestone (
+    key text NOT NULL PRIMARY KEY,
+    ordinal integer NOT NULL UNIQUE,
+    stage_label text NOT NULL,
+    scope milestone_scope NOT NULL DEFAULT 'participant',
+    self_assertable boolean NOT NULL DEFAULT false,
+    created_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+COMMENT ON TABLE milestone IS 'Reference data: the journey milestones, in order. The only place a stage exists, as data; seeded by the baseline migration.';
+COMMENT ON COLUMN milestone.key IS 'Stable identifier of the milestone, e.g. feel_heard; code and participant_milestone refer to it.';
+COMMENT ON COLUMN milestone.ordinal IS 'Position along the journey.';
+COMMENT ON COLUMN milestone.stage_label IS 'UI label of the stage this milestone belongs to, e.g. Your Story; display text owned by this table.';
+COMMENT ON COLUMN milestone.self_assertable IS 'Whether a participant may record the milestone themselves (a CTA) or only the job (a system fact).';
 
-CREATE TABLE "participant_milestone" (
-    "participant_id" uuid7 NOT NULL,
-    "milestone_key" TEXT NOT NULL,
-    "reached_at" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "created_at" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+CREATE TABLE participant_milestone (
+    participant_id uuid7 NOT NULL REFERENCES participant ON DELETE CASCADE,
+    milestone_key text NOT NULL REFERENCES milestone ON DELETE RESTRICT,
+    reached_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    created_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
-    CONSTRAINT "participant_milestone_pkey" PRIMARY KEY ("participant_id","milestone_key"),
-    CONSTRAINT "participant_milestone_participant_id_fkey" FOREIGN KEY ("participant_id") REFERENCES "participant"("id") ON DELETE CASCADE ON UPDATE NO ACTION,
-    CONSTRAINT "participant_milestone_milestone_key_fkey" FOREIGN KEY ("milestone_key") REFERENCES "milestone"("key") ON DELETE RESTRICT ON UPDATE NO ACTION
+    PRIMARY KEY (participant_id, milestone_key)
 );
-CREATE INDEX "participant_milestone_milestone_key_reached_at_idx" ON "participant_milestone"("milestone_key", "reached_at");
+CREATE INDEX ON participant_milestone (milestone_key, reached_at);
+COMMENT ON TABLE participant_milestone IS 'Event: a participant reached a milestone at reached_at. Append-only; current stage and readiness are derived from these rows (v_current_stage, v_session_readiness).';
 
-CREATE TABLE "ai_memory" (
-    "id" uuid7 NOT NULL DEFAULT uuidv7(),
-    "participant_id" uuid7,
-    "user_id" uuid7,
-    "kind" "ai_memory_kind" NOT NULL,
-    "doc" JSONB NOT NULL,
-    "created_at" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "updated_at" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+CREATE TABLE ai_memory (
+    id uuid7 NOT NULL DEFAULT uuidv7() PRIMARY KEY,
+    participant_id uuid7 REFERENCES participant ON DELETE CASCADE,
+    user_id uuid7 REFERENCES "user" ON DELETE RESTRICT,
+    kind ai_memory_kind NOT NULL,
+    doc jsonb NOT NULL,
+    created_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
-    CONSTRAINT "ai_memory_pkey" PRIMARY KEY ("id"),
-    CONSTRAINT "ai_memory_participant_id_kind_key" UNIQUE ("participant_id", "kind"),
-    CONSTRAINT "ai_memory_user_id_kind_key" UNIQUE ("user_id", "kind"),
-    CONSTRAINT "ai_memory_participant_id_fkey" FOREIGN KEY ("participant_id") REFERENCES "participant"("id") ON DELETE CASCADE ON UPDATE NO ACTION,
-    CONSTRAINT "ai_memory_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "user"("id") ON DELETE RESTRICT ON UPDATE NO ACTION,
-
+    UNIQUE (participant_id, kind),
+    UNIQUE (user_id, kind),
     -- §1.1 ai_memory [P28a, P28b]
-    CONSTRAINT chk_ai_memory_one_owner CHECK (num_nonnulls(participant_id, user_id) = 1),
-    CONSTRAINT chk_ai_memory_global_is_user CHECK ((kind = 'GLOBAL_FACTS') = (user_id IS NOT NULL)),
-    CONSTRAINT chk_ai_memory_doc_object CHECK (jsonb_typeof(doc) = 'object'),
-    CONSTRAINT chk_ai_memory_doc_keys CHECK (
+    CHECK (num_nonnulls(participant_id, user_id) = 1),
+    CHECK ((kind = 'GLOBAL_FACTS') = (user_id IS NOT NULL)),
+    CHECK (jsonb_typeof(doc) = 'object'),
+    CHECK (
         CASE kind WHEN 'SUMMARY' THEN doc ?& ARRAY['text', 'messageCount', 'generatedAt']
                   ELSE jsonb_typeof(doc -> 'facts') = 'array' END)
 );
+COMMENT ON TABLE ai_memory IS 'The AI''s working memory as documents: a participant''s rolling SUMMARY and NOTABLE_FACTS in one session, and a user''s GLOBAL_FACTS across sessions.';
+COMMENT ON COLUMN ai_memory.kind IS 'SUMMARY and NOTABLE_FACTS have participant_id; GLOBAL_FACTS has user_id.';
+COMMENT ON COLUMN ai_memory.doc IS 'encrypted (per-row): jsonb with every string leaf encrypted (participant key for SUMMARY / NOTABLE_FACTS, user key for GLOBAL_FACTS); the key-presence CHECKs see the plaintext structure.';
 
-CREATE TABLE "mood_reading" (
-    "id" uuid7 NOT NULL DEFAULT uuidv7(),
-    "participant_id" uuid7 NOT NULL,
-    "intensity" intensity NOT NULL,
-    "context" TEXT,
-    "recorded_at" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "created_at" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-
-    CONSTRAINT "mood_reading_pkey" PRIMARY KEY ("id"),
-    CONSTRAINT "mood_reading_participant_id_fkey" FOREIGN KEY ("participant_id") REFERENCES "participant"("id") ON DELETE CASCADE ON UPDATE NO ACTION
+CREATE TABLE mood_reading (
+    id uuid7 NOT NULL DEFAULT uuidv7() PRIMARY KEY,
+    participant_id uuid7 NOT NULL REFERENCES participant ON DELETE CASCADE,
+    intensity intensity NOT NULL,
+    context ciphertext,
+    recorded_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    created_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
-CREATE INDEX "mood_reading_participant_id_recorded_at_idx" ON "mood_reading"("participant_id", "recorded_at");
+CREATE INDEX ON mood_reading (participant_id, recorded_at);
+COMMENT ON TABLE mood_reading IS 'A participant''s barometer reading (1-10) with optional context. Append-only time series.';
+COMMENT ON COLUMN mood_reading.context IS 'encrypted (participant): the participant''s optional note on the reading (max 500).';
 
-CREATE TABLE "regulation_event" (
-    "id" uuid7 NOT NULL DEFAULT uuidv7(),
-    "participant_id" uuid7 NOT NULL,
-    "type" "regulation_type" NOT NULL,
-    "intensity_before" intensity,
-    "intensity_after" intensity,
-    "completed_at" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "created_at" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-
-    CONSTRAINT "regulation_event_pkey" PRIMARY KEY ("id"),
-    CONSTRAINT "regulation_event_participant_id_fkey" FOREIGN KEY ("participant_id") REFERENCES "participant"("id") ON DELETE CASCADE ON UPDATE NO ACTION
+CREATE TABLE regulation_event (
+    id uuid7 NOT NULL DEFAULT uuidv7() PRIMARY KEY,
+    participant_id uuid7 NOT NULL REFERENCES participant ON DELETE CASCADE,
+    type regulation_type NOT NULL,
+    intensity_before intensity,
+    intensity_after intensity,
+    completed_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    created_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
-CREATE INDEX "regulation_event_participant_id_completed_at_idx" ON "regulation_event"("participant_id", "completed_at");
+CREATE INDEX ON regulation_event (participant_id, completed_at);
+COMMENT ON TABLE regulation_event IS 'A completed emotional-regulation exercise, with the intensity before and after. Append-only.';
 
-CREATE TABLE "invitation" (
-    "id" uuid7 NOT NULL DEFAULT uuidv7(),
-    "session_id" uuid7 NOT NULL,
-    "invited_by_participant_id" uuid7 NOT NULL,
-    "accepted_by_user_id" uuid7,
-    "name" TEXT,
-    "status" "invitation_status" NOT NULL DEFAULT 'PENDING',
-    "message_confirmed_at" TIMESTAMPTZ(3),
-    "expires_at" TIMESTAMPTZ(3) NOT NULL,
-    "accepted_at" TIMESTAMPTZ(3),
-    "declined_at" TIMESTAMPTZ(3),
-    "decline_reason" TEXT,
-    "created_at" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "updated_at" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-
-    CONSTRAINT "invitation_pkey" PRIMARY KEY ("id"),
-    CONSTRAINT "invitation_session_id_fkey" FOREIGN KEY ("session_id") REFERENCES "session"("id") ON DELETE CASCADE ON UPDATE NO ACTION,
-    CONSTRAINT "invitation_invited_by_participant_id_fkey" FOREIGN KEY ("invited_by_participant_id") REFERENCES "participant"("id") ON DELETE CASCADE ON UPDATE NO ACTION,
-    CONSTRAINT "invitation_accepted_by_user_id_fkey" FOREIGN KEY ("accepted_by_user_id") REFERENCES "user"("id") ON DELETE RESTRICT ON UPDATE NO ACTION,
+CREATE TABLE invitation (
+    id uuid7 NOT NULL DEFAULT uuidv7() PRIMARY KEY,
+    session_id uuid7 NOT NULL REFERENCES session ON DELETE CASCADE,
+    invited_by_participant_id uuid7 NOT NULL REFERENCES participant ON DELETE CASCADE,
+    accepted_by_user_id uuid7 REFERENCES "user" ON DELETE RESTRICT,
+    invitee_name ciphertext,
+    status invitation_status NOT NULL DEFAULT 'PENDING',
+    message_confirmed_at ts_ms,
+    expires_at ts_ms NOT NULL,
+    accepted_at ts_ms,
+    declined_at ts_ms,
+    decline_reason ciphertext,
+    created_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     -- §1.1 invitation [P14a, P14b] — P3 §6
-    CONSTRAINT chk_invitation_accepted CHECK (
+    CHECK (
       status <> 'ACCEPTED' OR (accepted_at IS NOT NULL AND accepted_by_user_id IS NOT NULL))
 );
-CREATE INDEX "invitation_session_id_idx" ON "invitation"("session_id");
-CREATE INDEX "invitation_invited_by_participant_id_idx" ON "invitation"("invited_by_participant_id");
-CREATE INDEX "invitation_status_expires_at_idx" ON "invitation"("status", "expires_at");
-CREATE INDEX "invitation_accepted_by_user_id_idx" ON "invitation"("accepted_by_user_id");
+CREATE INDEX ON invitation (session_id);
+CREATE INDEX ON invitation (invited_by_participant_id);
+CREATE INDEX ON invitation (status, expires_at);
+CREATE INDEX ON invitation (accepted_by_user_id);
+COMMENT ON TABLE invitation IS 'An invitation from a participant to someone not yet in the session; accepting it creates the invitee''s participant.';
+COMMENT ON COLUMN invitation.accepted_by_user_id IS 'The user who accepted; set with accepted_at.';
+COMMENT ON COLUMN invitation.message_confirmed_at IS 'When the inviter confirmed the invitation message.';
+COMMENT ON COLUMN invitation.invitee_name IS 'encrypted (session): the name the inviter gave the person they invite, typed at session creation (or their nickname / last display name for a known person), because the invitee has no user row yet. Not a copy of user.name; the AI uses it for the partner until they join.';
+COMMENT ON COLUMN invitation.decline_reason IS 'encrypted (session): the invitee''s optional reason for declining, free text.';
 
-CREATE TABLE "draft" (
-    "id" uuid7 NOT NULL DEFAULT uuidv7(),
-    "participant_id" uuid7 NOT NULL,
-    "kind" "draft_kind" NOT NULL,
-    "about_participant_id" uuid7,
-    "attempt_id" uuid7,
-    "share_offer_id" uuid7,
-    "invitation_id" uuid7,
-    "content" TEXT NOT NULL,
-    "ready_to_share" BOOLEAN NOT NULL DEFAULT false,
-    "version" INTEGER NOT NULL DEFAULT 1,
-    "created_at" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "updated_at" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "reopened_at" TIMESTAMPTZ(3),
-
-    CONSTRAINT "draft_pkey" PRIMARY KEY ("id"),
-    CONSTRAINT "draft_participant_id_fkey" FOREIGN KEY ("participant_id") REFERENCES "participant"("id") ON DELETE CASCADE ON UPDATE NO ACTION,
-    CONSTRAINT "draft_about_participant_id_fkey" FOREIGN KEY ("about_participant_id") REFERENCES "participant"("id") ON DELETE CASCADE ON UPDATE NO ACTION,
-    CONSTRAINT "draft_attempt_id_fkey" FOREIGN KEY ("attempt_id") REFERENCES "empathy_attempt"("id") ON DELETE CASCADE ON UPDATE NO ACTION,
-    CONSTRAINT "draft_share_offer_id_fkey" FOREIGN KEY ("share_offer_id") REFERENCES "context_share_offer"("id") ON DELETE CASCADE ON UPDATE NO ACTION,
-    CONSTRAINT "draft_invitation_id_fkey" FOREIGN KEY ("invitation_id") REFERENCES "invitation"("id") ON DELETE CASCADE ON UPDATE NO ACTION,
+CREATE TABLE draft (
+    id uuid7 NOT NULL DEFAULT uuidv7() PRIMARY KEY,
+    participant_id uuid7 NOT NULL REFERENCES participant ON DELETE CASCADE,
+    kind draft_kind NOT NULL,
+    about_participant_id uuid7 REFERENCES participant ON DELETE CASCADE,
+    attempt_id uuid7 REFERENCES empathy_attempt ON DELETE CASCADE,
+    share_offer_id uuid7 REFERENCES context_share_offer ON DELETE CASCADE,
+    invitation_id uuid7 REFERENCES invitation ON DELETE CASCADE,
+    content ciphertext NOT NULL,
+    ready_to_share boolean NOT NULL DEFAULT false,
+    version integer NOT NULL DEFAULT 1,
+    created_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    reopened_at ts_ms,
 
     -- §1.1 draft — exclusive arc, and the arm matches the kind. An EMPATHY
     -- draft is about the partner's participant, or — written before the
     -- partner has joined — about the pending invitation; accepting the
     -- invitation re-points it to the new participant (work-99k2).
-    CONSTRAINT chk_draft_one_arc CHECK (num_nonnulls(about_participant_id, invitation_id, attempt_id, share_offer_id) = 1),
-    CONSTRAINT chk_draft_arc_matches_kind CHECK (
+    CHECK (num_nonnulls(about_participant_id, invitation_id, attempt_id, share_offer_id) = 1),
+    CHECK (
             (kind = 'EMPATHY') = (about_participant_id IS NOT NULL OR invitation_id IS NOT NULL)
         AND (kind = 'VALIDATION_FEEDBACK') = (attempt_id IS NOT NULL)
         AND (kind = 'SHARE_CONTEXT') = (share_offer_id IS NOT NULL)),
     -- work-9309: reopened_at marks an EMPATHY draft the author chose to "Edit
     -- first" after the partner joined, until the next draft write (the AI's
     -- proposal or the author's save) clears it.
-    CONSTRAINT chk_draft_reopened_empathy CHECK (reopened_at IS NULL OR kind = 'EMPATHY')
+    CHECK (reopened_at IS NULL OR kind = 'EMPATHY')
 );
-CREATE INDEX "draft_about_participant_id_idx" ON "draft"("about_participant_id");
-CREATE INDEX "draft_attempt_id_idx" ON "draft"("attempt_id");
-CREATE INDEX "draft_share_offer_id_idx" ON "draft"("share_offer_id");
-CREATE INDEX "draft_invitation_id_idx" ON "draft"("invitation_id");
+CREATE INDEX ON draft (about_participant_id);
+CREATE INDEX ON draft (attempt_id);
+CREATE INDEX ON draft (share_offer_id);
+CREATE INDEX ON draft (invitation_id);
 -- + sql_draft_one_per_point (sql-only.sql)
+COMMENT ON TABLE draft IS 'A participant''s working text for one sharing point (empathy statement, validation feedback, shared context) before any consent.';
+COMMENT ON COLUMN draft.about_participant_id IS 'EMPATHY: the participant the draft imagines.';
+COMMENT ON COLUMN draft.attempt_id IS 'VALIDATION_FEEDBACK: the attempt being reviewed.';
+COMMENT ON COLUMN draft.share_offer_id IS 'SHARE_CONTEXT: the offer being edited.';
+COMMENT ON COLUMN draft.invitation_id IS 'EMPATHY before the subject has joined: the pending invitation that will become them; re-pointed to about_participant_id at accept.';
+COMMENT ON COLUMN draft.reopened_at IS 'Set when the author chose Edit first on a pre-join draft after the join; cleared by the next draft write (work-9309).';
+COMMENT ON COLUMN draft.content IS 'encrypted (participant): the draft text, AI-proposed or written by the participant.';
 
-CREATE TABLE "session_key" (
-    "id" uuid7 NOT NULL DEFAULT uuidv7(),
-    "session_id" uuid7 NOT NULL,
-    "key_id" TEXT NOT NULL,
-    "wrapped_dek" BYTEA NOT NULL,
-    "created_at" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "destroyed_at" TIMESTAMPTZ(3),
-    "updated_at" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-
-    CONSTRAINT "session_key_pkey" PRIMARY KEY ("id"),
-    CONSTRAINT "session_key_session_id_fkey" FOREIGN KEY ("session_id") REFERENCES "session"("id") ON DELETE CASCADE ON UPDATE NO ACTION
+CREATE TABLE session_key (
+    id uuid7 NOT NULL DEFAULT uuidv7() PRIMARY KEY,
+    session_id uuid7 NOT NULL REFERENCES session ON DELETE CASCADE,
+    key_id text NOT NULL,
+    wrapped_dek bytea NOT NULL,
+    created_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    destroyed_at ts_ms,
+    updated_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
-CREATE INDEX "session_key_session_id_idx" ON "session_key"("session_id");
+CREATE INDEX ON session_key (session_id);
 -- + sql_session_key_live (sql-only.sql)
+COMMENT ON TABLE session_key IS 'Envelope-encryption key per session (P3 D5, W13): the session''s data key wrapped by a KMS key; destroyed_at shreds it. Designed for W13: nothing writes a key row yet.';
+COMMENT ON COLUMN session_key.key_id IS 'The id of the KMS key (the KEK) that wrapped this row''s DEK: the same <keyId> the planned enc:v2:<keyId>:... envelope prefix will carry (P3 8.6). No format is fixed yet; nothing writes these tables before W13.';
+COMMENT ON COLUMN session_key.wrapped_dek IS 'The AES-256 data key (DEK) for this owner''s encrypted columns, encrypted (wrapped) by the KMS key named in key_id. Never stored unwrapped.';
+COMMENT ON COLUMN session_key.destroyed_at IS 'The crypto-shred: once set, the wrapped DEK is never unwrapped again, so every value under it is unreadable.';
 
-CREATE TABLE "participant_key" (
-    "id" uuid7 NOT NULL DEFAULT uuidv7(),
-    "participant_id" uuid7 NOT NULL,
-    "key_id" TEXT NOT NULL,
-    "wrapped_dek" BYTEA NOT NULL,
-    "created_at" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "destroyed_at" TIMESTAMPTZ(3),
-    "updated_at" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-
-    CONSTRAINT "participant_key_pkey" PRIMARY KEY ("id"),
-    CONSTRAINT "participant_key_participant_id_fkey" FOREIGN KEY ("participant_id") REFERENCES "participant"("id") ON DELETE CASCADE ON UPDATE NO ACTION
+CREATE TABLE participant_key (
+    id uuid7 NOT NULL DEFAULT uuidv7() PRIMARY KEY,
+    participant_id uuid7 NOT NULL REFERENCES participant ON DELETE CASCADE,
+    key_id text NOT NULL,
+    wrapped_dek bytea NOT NULL,
+    created_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    destroyed_at ts_ms,
+    updated_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
-CREATE INDEX "participant_key_participant_id_idx" ON "participant_key"("participant_id");
+CREATE INDEX ON participant_key (participant_id);
 -- + sql_participant_key_live (sql-only.sql)
+COMMENT ON TABLE participant_key IS 'Envelope-encryption key per participant (P3 D5, W13): the participant''s data key wrapped by a KMS key; destroyed_at shreds it. Designed for W13: nothing writes a key row yet; account deletion already sets destroyed_at.';
+COMMENT ON COLUMN participant_key.key_id IS 'The id of the KMS key (the KEK) that wrapped this row''s DEK: the same <keyId> the planned enc:v2:<keyId>:... envelope prefix will carry (P3 8.6). No format is fixed yet; nothing writes these tables before W13.';
+COMMENT ON COLUMN participant_key.wrapped_dek IS 'The AES-256 data key (DEK) for this owner''s encrypted columns, encrypted (wrapped) by the KMS key named in key_id. Never stored unwrapped.';
+COMMENT ON COLUMN participant_key.destroyed_at IS 'The crypto-shred: once set, the wrapped DEK is never unwrapped again, so every value under it is unreadable.';
 
-CREATE TABLE "empathy_review" (
-    "id" uuid7 NOT NULL DEFAULT uuidv7(),
-    "attempt_id" uuid7 NOT NULL,
-    "reviewer_participant_id" uuid7 NOT NULL,
-    "validated" BOOLEAN NOT NULL,
-    "feedback" TEXT,
-    "feedback_sent_at" TIMESTAMPTZ(3),
-    "created_at" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "updated_at" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+CREATE TABLE empathy_review (
+    id uuid7 NOT NULL DEFAULT uuidv7() PRIMARY KEY,
+    attempt_id uuid7 NOT NULL REFERENCES empathy_attempt ON DELETE CASCADE,
+    reviewer_participant_id uuid7 NOT NULL REFERENCES participant ON DELETE CASCADE,
+    validated boolean NOT NULL,
+    feedback ciphertext,
+    feedback_sent_at ts_ms,
+    created_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
-    CONSTRAINT "empathy_review_pkey" PRIMARY KEY ("id"),
-    CONSTRAINT "empathy_review_attempt_id_reviewer_participant_id_key" UNIQUE ("attempt_id", "reviewer_participant_id"),
-    CONSTRAINT "empathy_review_attempt_id_fkey" FOREIGN KEY ("attempt_id") REFERENCES "empathy_attempt"("id") ON DELETE CASCADE ON UPDATE NO ACTION,
-    CONSTRAINT "empathy_review_reviewer_participant_id_fkey" FOREIGN KEY ("reviewer_participant_id") REFERENCES "participant"("id") ON DELETE CASCADE ON UPDATE NO ACTION,
-
+    UNIQUE (attempt_id, reviewer_participant_id),
     -- §1.2 empathy_review
-    CONSTRAINT chk_empathy_review_feedback_sent CHECK (feedback IS NULL OR feedback_sent_at IS NOT NULL)
+    CHECK (feedback IS NULL OR feedback_sent_at IS NOT NULL)
 );
-CREATE INDEX "empathy_review_reviewer_participant_id_idx" ON "empathy_review"("reviewer_participant_id");
+CREATE INDEX ON empathy_review (reviewer_participant_id);
+COMMENT ON TABLE empathy_review IS 'The subject''s verdict on an attempt revealed to them (validated or not), with the feedback they chose to send.';
+COMMENT ON COLUMN empathy_review.reviewer_participant_id IS 'The attempt''s subject (trigger-checked).';
+COMMENT ON COLUMN empathy_review.feedback_sent_at IS 'When the reviewer explicitly sent the feedback; feedback is set only with it.';
+COMMENT ON COLUMN empathy_review.feedback IS 'encrypted (session): the subject''s feedback on the attempt, sent explicitly (max 500).';
 
-CREATE TABLE "reconciler_guidance" (
-    "result_id" uuid7 NOT NULL,
-    "author_participant_id" uuid7 NOT NULL,
-    "subject_participant_id" uuid7 NOT NULL,
-    "area_hint" TEXT,
-    "guidance_type" TEXT,
-    "prompt_seed" TEXT,
-    "created_at" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-
-    CONSTRAINT "reconciler_guidance_pkey" PRIMARY KEY ("result_id"),
-    CONSTRAINT "reconciler_guidance_result_id_fkey" FOREIGN KEY ("result_id") REFERENCES "reconciler_result"("id") ON DELETE CASCADE ON UPDATE NO ACTION,
-    CONSTRAINT "reconciler_guidance_author_participant_id_fkey" FOREIGN KEY ("author_participant_id") REFERENCES "participant"("id") ON DELETE CASCADE ON UPDATE NO ACTION,
-    CONSTRAINT "reconciler_guidance_subject_participant_id_fkey" FOREIGN KEY ("subject_participant_id") REFERENCES "participant"("id") ON DELETE CASCADE ON UPDATE NO ACTION
+CREATE TABLE reconciler_guidance (
+    result_id uuid7 NOT NULL PRIMARY KEY REFERENCES reconciler_result ON DELETE CASCADE,
+    author_participant_id uuid7 NOT NULL REFERENCES participant ON DELETE CASCADE,
+    subject_participant_id uuid7 NOT NULL REFERENCES participant ON DELETE CASCADE,
+    area_hint ciphertext,
+    guidance_type guidance_type,
+    prompt_seed ciphertext,
+    created_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
-CREATE INDEX "reconciler_guidance_author_participant_id_idx" ON "reconciler_guidance"("author_participant_id");
-CREATE INDEX "reconciler_guidance_subject_participant_id_idx" ON "reconciler_guidance"("subject_participant_id");
+CREATE INDEX ON reconciler_guidance (author_participant_id);
+CREATE INDEX ON reconciler_guidance (subject_participant_id);
+COMMENT ON TABLE reconciler_guidance IS 'The abstract hints from a reconciler result that the author may see (P3 D8a split from reconciler_result, which only the subject sees).';
+COMMENT ON COLUMN reconciler_guidance.author_participant_id IS 'The attempt''s author, who may read this row.';
+COMMENT ON COLUMN reconciler_guidance.area_hint IS 'encrypted (participant): a coarse area for the author to explore (one of six code phrases in generateAbstractGuidance).';
+COMMENT ON COLUMN reconciler_guidance.prompt_seed IS 'encrypted (participant): the refinement prompt''s seed phrase (one of three code phrases, by guidance_type).';
 
-CREATE TABLE "consent" (
-    "id" uuid7 NOT NULL DEFAULT uuidv7(),
-    "participant_id" uuid7 NOT NULL,
-    "requested_by_participant_id" uuid7,
-    "need_id" uuid7,
-    "empathy_attempt_id" uuid7,
-    "proposal_id" uuid7,
-    "share_offer_id" uuid7,
-    "review_id" uuid7,
-    "decision" "consent_decision",
-    "decided_at" TIMESTAMPTZ(3),
-    "revoked_at" TIMESTAMPTZ(3),
-    "created_at" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "updated_at" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "target_kind" consent_target NOT NULL
+CREATE TABLE consent (
+    id uuid7 NOT NULL DEFAULT uuidv7() PRIMARY KEY,
+    participant_id uuid7 NOT NULL REFERENCES participant ON DELETE CASCADE,
+    requested_by_participant_id uuid7 REFERENCES participant ON DELETE CASCADE,
+    need_id uuid7 REFERENCES need ON DELETE CASCADE,
+    empathy_attempt_id uuid7 REFERENCES empathy_attempt ON DELETE CASCADE,
+    proposal_id uuid7 REFERENCES proposal ON DELETE CASCADE,
+    share_offer_id uuid7 REFERENCES context_share_offer ON DELETE CASCADE,
+    review_id uuid7 REFERENCES empathy_review ON DELETE CASCADE,
+    decision consent_decision,
+    decided_at ts_ms,
+    revoked_at ts_ms,
+    created_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    target_kind consent_target NOT NULL
         GENERATED ALWAYS AS (
           CASE
             WHEN need_id IS NOT NULL THEN 'NEED'::consent_target
@@ -678,439 +818,430 @@ CREATE TABLE "consent" (
           END
         ) STORED,
 
-    CONSTRAINT "consent_pkey" PRIMARY KEY ("id"),
-    CONSTRAINT "consent_participant_id_fkey" FOREIGN KEY ("participant_id") REFERENCES "participant"("id") ON DELETE CASCADE ON UPDATE NO ACTION,
-    CONSTRAINT "consent_requested_by_participant_id_fkey" FOREIGN KEY ("requested_by_participant_id") REFERENCES "participant"("id") ON DELETE CASCADE ON UPDATE NO ACTION,
-    CONSTRAINT "consent_need_id_fkey" FOREIGN KEY ("need_id") REFERENCES "need"("id") ON DELETE CASCADE ON UPDATE NO ACTION,
-    CONSTRAINT "consent_empathy_attempt_id_fkey" FOREIGN KEY ("empathy_attempt_id") REFERENCES "empathy_attempt"("id") ON DELETE CASCADE ON UPDATE NO ACTION,
-    CONSTRAINT "consent_proposal_id_fkey" FOREIGN KEY ("proposal_id") REFERENCES "proposal"("id") ON DELETE CASCADE ON UPDATE NO ACTION,
-    CONSTRAINT "consent_share_offer_id_fkey" FOREIGN KEY ("share_offer_id") REFERENCES "context_share_offer"("id") ON DELETE CASCADE ON UPDATE NO ACTION,
-    CONSTRAINT "consent_review_id_fkey" FOREIGN KEY ("review_id") REFERENCES "empathy_review"("id") ON DELETE CASCADE ON UPDATE NO ACTION,
-
     -- §1.3 consent [P07, P19] — exclusive arc; dated decisions (P3 §6); terminal
     -- revocation; a share-offer or feedback consent has no requester (P1-4)
-    CONSTRAINT chk_consent_one_target CHECK (num_nonnulls(need_id, empathy_attempt_id, proposal_id, share_offer_id, review_id) = 1),
-    CONSTRAINT chk_consent_decision_dated CHECK ((decision IS NULL) = (decided_at IS NULL)),
-    CONSTRAINT chk_consent_revoked CHECK (revoked_at IS NULL OR decision = 'REVOKED'),
+    CHECK (num_nonnulls(need_id, empathy_attempt_id, proposal_id, share_offer_id, review_id) = 1),
+    CHECK ((decision IS NULL) = (decided_at IS NULL)),
+    CHECK (revoked_at IS NULL OR decision = 'REVOKED'),
+    -- Named: consent-arc.target.test.ts asserts this name in the error.
     CONSTRAINT chk_consent_requester CHECK (requested_by_participant_id IS NULL OR target_kind IN ('NEED', 'PROPOSAL', 'EMPATHY_ATTEMPT'))
 );
-CREATE INDEX "consent_requested_by_participant_id_idx" ON "consent"("requested_by_participant_id");
-CREATE INDEX "consent_need_id_idx" ON "consent"("need_id");
-CREATE INDEX "consent_empathy_attempt_id_idx" ON "consent"("empathy_attempt_id");
-CREATE INDEX "consent_proposal_id_idx" ON "consent"("proposal_id");
-CREATE INDEX "consent_share_offer_id_idx" ON "consent"("share_offer_id");
-CREATE INDEX "consent_review_id_idx" ON "consent"("review_id");
-CREATE INDEX "consent_participant_id_decided_at_idx" ON "consent"("participant_id", "decided_at");
+CREATE INDEX ON consent (requested_by_participant_id);
+CREATE INDEX ON consent (need_id);
+CREATE INDEX ON consent (empathy_attempt_id);
+CREATE INDEX ON consent (proposal_id);
+CREATE INDEX ON consent (share_offer_id);
+CREATE INDEX ON consent (review_id);
+CREATE INDEX ON consent (participant_id, decided_at);
+COMMENT ON TABLE consent IS 'One explicit decision by a participant to let something cross the boundary to the other participant; exactly one target arc.';
+COMMENT ON COLUMN consent.participant_id IS 'The participant who decides.';
+COMMENT ON COLUMN consent.requested_by_participant_id IS 'Who asked, for audit only; it grants no read right.';
+COMMENT ON COLUMN consent.target_kind IS 'Generated from which arc column is set.';
 
-CREATE TABLE "need_share" (
-    "need_id" uuid7 NOT NULL,
-    "participant_id" uuid7 NOT NULL,
-    "session_id" uuid7 NOT NULL,
-    "category" "need_category" NOT NULL,
-    "shared_text" TEXT NOT NULL,
-    "shared_at" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "revoked_at" TIMESTAMPTZ(3),
-    "created_at" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "updated_at" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-
-    CONSTRAINT "need_share_pkey" PRIMARY KEY ("need_id"),
-    CONSTRAINT "need_share_need_id_fkey" FOREIGN KEY ("need_id") REFERENCES "need"("id") ON DELETE RESTRICT ON UPDATE NO ACTION,
-    CONSTRAINT "need_share_participant_id_fkey" FOREIGN KEY ("participant_id") REFERENCES "participant"("id") ON DELETE CASCADE ON UPDATE NO ACTION,
-    CONSTRAINT "need_share_session_id_fkey" FOREIGN KEY ("session_id") REFERENCES "session"("id") ON DELETE CASCADE ON UPDATE NO ACTION,
+CREATE TABLE need_share (
+    need_id uuid7 NOT NULL PRIMARY KEY REFERENCES need ON DELETE RESTRICT,
+    participant_id uuid7 NOT NULL REFERENCES participant ON DELETE CASCADE,
+    session_id uuid7 NOT NULL REFERENCES session ON DELETE CASCADE,
+    category need_category NOT NULL,
+    shared_text ciphertext NOT NULL,
+    shared_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    revoked_at ts_ms,
+    created_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     -- §1.4 need_share [P20c]
-    CONSTRAINT chk_need_share_revoked_after_shared CHECK (revoked_at IS NULL OR revoked_at >= shared_at)
+    CHECK (revoked_at IS NULL OR revoked_at >= shared_at)
 );
-CREATE INDEX "need_share_session_id_revoked_at_idx" ON "need_share"("session_id", "revoked_at");
-CREATE INDEX "need_share_participant_id_idx" ON "need_share"("participant_id");
+CREATE INDEX ON need_share (session_id, revoked_at);
+CREATE INDEX ON need_share (participant_id);
+COMMENT ON TABLE need_share IS 'The consented, transformed version of a need that co-participants may see. Reads of a partner''s needs touch this table only, never need.';
+COMMENT ON COLUMN need_share.participant_id IS 'The need''s owner, copied from need by app.need_share so the shared projection needs no join to need (pass 2 N-1); trigger-checked.';
+COMMENT ON COLUMN need_share.session_id IS 'The owner''s session, copied by app.need_share for the membership read arm; trigger-checked.';
+COMMENT ON COLUMN need_share.category IS 'The need''s category, copied at share time: the partner sees the category, never need.label.';
+COMMENT ON COLUMN need_share.shared_text IS 'encrypted (session): the heat-removed sentence the partner sees (one short first-person sentence written by the job, or a fixed per-category fallback).';
 
-CREATE TABLE "need_disposition" (
-    "participant_id" uuid7 NOT NULL,
-    "need_id" uuid7 NOT NULL,
-    "status" "need_disposition_status" NOT NULL DEFAULT 'OPEN',
-    "is_current" BOOLEAN NOT NULL DEFAULT false,
-    "note" TEXT,
-    "created_at" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "updated_at" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+CREATE TABLE need_disposition (
+    participant_id uuid7 NOT NULL REFERENCES participant ON DELETE CASCADE,
+    need_id uuid7 NOT NULL REFERENCES need_share ON DELETE CASCADE,
+    status need_disposition_status NOT NULL DEFAULT 'OPEN',
+    is_current boolean NOT NULL DEFAULT false,
+    note ciphertext,
+    created_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
-    CONSTRAINT "need_disposition_pkey" PRIMARY KEY ("participant_id","need_id"),
-    CONSTRAINT "need_disposition_participant_id_fkey" FOREIGN KEY ("participant_id") REFERENCES "participant"("id") ON DELETE CASCADE ON UPDATE NO ACTION,
-    CONSTRAINT "need_disposition_need_id_fkey" FOREIGN KEY ("need_id") REFERENCES "need_share"("need_id") ON DELETE CASCADE ON UPDATE NO ACTION
+    PRIMARY KEY (participant_id, need_id)
 );
-CREATE INDEX "need_disposition_need_id_idx" ON "need_disposition"("need_id");
+CREATE INDEX ON need_disposition (need_id);
 -- + sql_disposition_one_current (sql-only.sql)
+COMMENT ON TABLE need_disposition IS 'How a participant dispositions a shared need during the Stage-4 walkthrough (their own or the other''s); one current need per walkthrough.';
+COMMENT ON COLUMN need_disposition.is_current IS 'The need the walkthrough is on (at most one per participant).';
+COMMENT ON COLUMN need_disposition.note IS 'encrypted (participant): a note on the disposition; no writer sets it today.';
 
-CREATE TABLE "proposal_need" (
-    "proposal_id" uuid7 NOT NULL,
-    "need_id" uuid7 NOT NULL,
-    "created_at" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+CREATE TABLE proposal_need (
+    proposal_id uuid7 NOT NULL REFERENCES proposal ON DELETE CASCADE,
+    need_id uuid7 NOT NULL REFERENCES need_share ON DELETE CASCADE,
+    created_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
-    CONSTRAINT "proposal_need_pkey" PRIMARY KEY ("proposal_id","need_id"),
-    CONSTRAINT "proposal_need_proposal_id_fkey" FOREIGN KEY ("proposal_id") REFERENCES "proposal"("id") ON DELETE CASCADE ON UPDATE NO ACTION,
-    CONSTRAINT "proposal_need_need_id_fkey" FOREIGN KEY ("need_id") REFERENCES "need_share"("need_id") ON DELETE CASCADE ON UPDATE NO ACTION
+    PRIMARY KEY (proposal_id, need_id)
 );
-CREATE INDEX "proposal_need_need_id_idx" ON "proposal_need"("need_id");
+CREATE INDEX ON proposal_need (need_id);
+COMMENT ON TABLE proposal_need IS 'Which shared needs a proposal addresses.';
 
-CREATE TABLE "proposal_choice" (
-    "proposal_id" uuid7 NOT NULL,
-    "participant_id" uuid7 NOT NULL,
-    "decision" "choice_decision" NOT NULL,
-    "note" TEXT,
-    "created_at" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "updated_at" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+CREATE TABLE proposal_choice (
+    proposal_id uuid7 NOT NULL REFERENCES proposal ON DELETE CASCADE,
+    participant_id uuid7 NOT NULL REFERENCES participant ON DELETE CASCADE,
+    decision choice_decision NOT NULL,
+    note ciphertext,
+    created_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
-    CONSTRAINT "proposal_choice_pkey" PRIMARY KEY ("proposal_id","participant_id"),
-    CONSTRAINT "proposal_choice_proposal_id_fkey" FOREIGN KEY ("proposal_id") REFERENCES "proposal"("id") ON DELETE CASCADE ON UPDATE NO ACTION,
-    CONSTRAINT "proposal_choice_participant_id_fkey" FOREIGN KEY ("participant_id") REFERENCES "participant"("id") ON DELETE CASCADE ON UPDATE NO ACTION
+    PRIMARY KEY (proposal_id, participant_id)
 );
-CREATE INDEX "proposal_choice_participant_id_idx" ON "proposal_choice"("participant_id");
+CREATE INDEX ON proposal_choice (participant_id);
+COMMENT ON TABLE proposal_choice IS 'A participant''s willingness on a proposal; private until the choices_shared milestone.';
+COMMENT ON COLUMN proposal_choice.note IS 'encrypted (session): the participant''s note on their choice (route max 1000), or their chat message when the choice was inferred.';
 
-CREATE TABLE "proposal_revision" (
-    "id" uuid7 NOT NULL DEFAULT uuidv7(),
-    "proposal_id" uuid7 NOT NULL,
-    "actor_participant_id" uuid7,
-    "action" "revision_action" NOT NULL,
-    "before" JSONB,
-    "after" JSONB,
-    "reason" TEXT,
-    "created_at" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-
-    CONSTRAINT "proposal_revision_pkey" PRIMARY KEY ("id"),
-    CONSTRAINT "proposal_revision_proposal_id_fkey" FOREIGN KEY ("proposal_id") REFERENCES "proposal"("id") ON DELETE CASCADE ON UPDATE NO ACTION,
-    CONSTRAINT "proposal_revision_actor_participant_id_fkey" FOREIGN KEY ("actor_participant_id") REFERENCES "participant"("id") ON DELETE CASCADE ON UPDATE NO ACTION,
+CREATE TABLE proposal_revision (
+    id uuid7 NOT NULL DEFAULT uuidv7() PRIMARY KEY,
+    proposal_id uuid7 NOT NULL REFERENCES proposal ON DELETE CASCADE,
+    actor_participant_id uuid7 REFERENCES participant ON DELETE CASCADE,
+    action revision_action NOT NULL,
+    before jsonb,
+    after jsonb,
+    reason proposal_revision_reason,
+    created_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     -- §1.4 proposal_revision [P23c]
-    CONSTRAINT chk_proposal_revision_before_object CHECK (before IS NULL OR jsonb_typeof(before) = 'object'),
-    CONSTRAINT chk_proposal_revision_after_object CHECK (after IS NULL OR jsonb_typeof(after) = 'object')
+    CHECK (before IS NULL OR jsonb_typeof(before) = 'object'),
+    CHECK (after IS NULL OR jsonb_typeof(after) = 'object')
 );
-CREATE INDEX "proposal_revision_proposal_id_created_at_idx" ON "proposal_revision"("proposal_id", "created_at");
-CREATE INDEX "proposal_revision_actor_participant_id_idx" ON "proposal_revision"("actor_participant_id");
+CREATE INDEX ON proposal_revision (proposal_id, created_at);
+CREATE INDEX ON proposal_revision (actor_participant_id);
+COMMENT ON TABLE proposal_revision IS 'Append-only audit of proposal changes, with before/after snapshots.';
+COMMENT ON COLUMN proposal_revision.actor_participant_id IS 'Who made the change; NULL for the AI or the app.';
+COMMENT ON COLUMN proposal_revision.reason IS 'An app marker or NULL; never user or model text (R47).';
+COMMENT ON COLUMN proposal_revision.before IS 'encrypted (session): jsonb envelope {"$enc": ...}: the proposal fields before the change.';
+COMMENT ON COLUMN proposal_revision.after IS 'encrypted (session): jsonb envelope {"$enc": ...}: the proposal fields after the change, and any text explaining it.';
 
-CREATE TABLE "agreement" (
-    "id" uuid7 NOT NULL DEFAULT uuidv7(),
-    "session_id" uuid7 NOT NULL,
-    "proposal_id" uuid7 NOT NULL,
-    "type" "agreement_type" NOT NULL,
-    "status" "agreement_status" NOT NULL DEFAULT 'AGREED',
-    "description" TEXT NOT NULL,
-    "duration" TEXT,
-    "measure_of_success" TEXT,
-    "follow_up_at" TIMESTAMPTZ(3),
-    "completed_at" TIMESTAMPTZ(3),
-    "created_at" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "updated_at" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-
-    CONSTRAINT "agreement_pkey" PRIMARY KEY ("id"),
-    CONSTRAINT "agreement_proposal_id_key" UNIQUE ("proposal_id"),
-    CONSTRAINT "agreement_session_id_fkey" FOREIGN KEY ("session_id") REFERENCES "session"("id") ON DELETE CASCADE ON UPDATE NO ACTION,
-    CONSTRAINT "agreement_proposal_id_fkey" FOREIGN KEY ("proposal_id") REFERENCES "proposal"("id") ON DELETE RESTRICT ON UPDATE NO ACTION
+CREATE TABLE agreement (
+    id uuid7 NOT NULL DEFAULT uuidv7() PRIMARY KEY,
+    session_id uuid7 NOT NULL REFERENCES session ON DELETE CASCADE,
+    proposal_id uuid7 NOT NULL UNIQUE REFERENCES proposal ON DELETE RESTRICT,
+    type agreement_type NOT NULL,
+    status agreement_status NOT NULL DEFAULT 'AGREED',
+    description ciphertext NOT NULL,
+    duration ciphertext,
+    measure_of_success ciphertext,
+    follow_up_at ts_ms,
+    completed_at ts_ms,
+    created_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
-CREATE INDEX "agreement_session_id_status_idx" ON "agreement"("session_id", "status");
+CREATE INDEX ON agreement (session_id, status);
+COMMENT ON TABLE agreement IS 'A proposal every willing party accepted; at most one per proposal.';
+COMMENT ON COLUMN agreement.session_id IS 'The proposal''s session, kept for the agreement''s own read policy and session queries.';
+COMMENT ON COLUMN agreement.description IS 'encrypted (session): the proposal''s description, copied at conversion.';
+COMMENT ON COLUMN agreement.duration IS 'encrypted (session): the proposal''s free-text duration, copied at conversion. NOT a true interval.';
+COMMENT ON COLUMN agreement.measure_of_success IS 'encrypted (session): the proposal''s measure of success, copied at conversion.';
 
-CREATE TABLE "agreement_party" (
-    "agreement_id" uuid7 NOT NULL,
-    "participant_id" uuid7 NOT NULL,
-    "agreed_at" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "created_at" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+CREATE TABLE agreement_party (
+    agreement_id uuid7 NOT NULL REFERENCES agreement ON DELETE CASCADE,
+    participant_id uuid7 NOT NULL REFERENCES participant ON DELETE CASCADE,
+    agreed_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    created_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
-    CONSTRAINT "agreement_party_pkey" PRIMARY KEY ("agreement_id","participant_id"),
-    CONSTRAINT "agreement_party_agreement_id_fkey" FOREIGN KEY ("agreement_id") REFERENCES "agreement"("id") ON DELETE CASCADE ON UPDATE NO ACTION,
-    CONSTRAINT "agreement_party_participant_id_fkey" FOREIGN KEY ("participant_id") REFERENCES "participant"("id") ON DELETE CASCADE ON UPDATE NO ACTION
+    PRIMARY KEY (agreement_id, participant_id)
 );
-CREATE INDEX "agreement_party_participant_id_idx" ON "agreement_party"("participant_id");
+CREATE INDEX ON agreement_party (participant_id);
+COMMENT ON TABLE agreement_party IS 'Who is party to an agreement.';
 
-CREATE TABLE "session_closure" (
-    "session_id" uuid7 NOT NULL,
-    "kind" "closure_kind" NOT NULL,
-    "reason" "closure_reason" NOT NULL,
-    "summary" TEXT NOT NULL,
-    "closed_by_participant_id" uuid7,
-    "check_in_at" TIMESTAMPTZ(3),
-    "closed_at" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "created_at" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-
-    CONSTRAINT "session_closure_pkey" PRIMARY KEY ("session_id"),
-    CONSTRAINT "session_closure_session_id_fkey" FOREIGN KEY ("session_id") REFERENCES "session"("id") ON DELETE CASCADE ON UPDATE NO ACTION,
-    CONSTRAINT "session_closure_closed_by_participant_id_fkey" FOREIGN KEY ("closed_by_participant_id") REFERENCES "participant"("id") ON DELETE CASCADE ON UPDATE NO ACTION
+CREATE TABLE session_closure (
+    session_id uuid7 NOT NULL PRIMARY KEY REFERENCES session ON DELETE CASCADE,
+    kind closure_kind NOT NULL,
+    reason closure_reason NOT NULL,
+    summary ciphertext NOT NULL,
+    closed_by_participant_id uuid7 REFERENCES participant ON DELETE CASCADE,
+    check_in_at ts_ms,
+    closed_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    created_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
-CREATE INDEX "session_closure_closed_by_participant_id_idx" ON "session_closure"("closed_by_participant_id");
+CREATE INDEX ON session_closure (closed_by_participant_id);
+COMMENT ON TABLE session_closure IS 'How the repair stage of a session ended, one row per closed session.';
+COMMENT ON COLUMN session_closure.closed_by_participant_id IS 'Who closed it; NULL for an automatic closure.';
+COMMENT ON COLUMN session_closure.summary IS 'encrypted (session): how the repair stage ended, from the participant (max 2000) or a code template.';
 
-CREATE TABLE "follow_up" (
-    "id" uuid7 NOT NULL DEFAULT uuidv7(),
-    "session_id" uuid7 NOT NULL,
-    "agreement_id" uuid7,
-    "proposal_id" uuid7,
-    "type" "follow_up_type" NOT NULL,
-    "scope" "follow_up_scope" NOT NULL DEFAULT 'SHARED',
-    "owner_participant_id" uuid7,
-    "opted_in_shared" BOOLEAN NOT NULL DEFAULT false,
-    "status" "follow_up_status" NOT NULL DEFAULT 'SCHEDULED',
-    "scheduled_for" TIMESTAMPTZ(3),
-    "response_deadline_at" TIMESTAMPTZ(3),
-    "opened_at" TIMESTAMPTZ(3),
-    "completed_at" TIMESTAMPTZ(3),
-    "summary" TEXT,
-    "created_at" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "updated_at" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-
-    CONSTRAINT "follow_up_pkey" PRIMARY KEY ("id"),
-    CONSTRAINT "follow_up_session_id_fkey" FOREIGN KEY ("session_id") REFERENCES "session"("id") ON DELETE CASCADE ON UPDATE NO ACTION,
-    CONSTRAINT "follow_up_agreement_id_fkey" FOREIGN KEY ("agreement_id") REFERENCES "agreement"("id") ON DELETE CASCADE ON UPDATE NO ACTION,
-    CONSTRAINT "follow_up_proposal_id_fkey" FOREIGN KEY ("proposal_id") REFERENCES "proposal"("id") ON DELETE CASCADE ON UPDATE NO ACTION,
-    CONSTRAINT "follow_up_owner_participant_id_fkey" FOREIGN KEY ("owner_participant_id") REFERENCES "participant"("id") ON DELETE CASCADE ON UPDATE NO ACTION,
+CREATE TABLE follow_up (
+    id uuid7 NOT NULL DEFAULT uuidv7() PRIMARY KEY,
+    session_id uuid7 NOT NULL REFERENCES session ON DELETE CASCADE,
+    agreement_id uuid7 REFERENCES agreement ON DELETE CASCADE,
+    proposal_id uuid7 REFERENCES proposal ON DELETE CASCADE,
+    type follow_up_type NOT NULL,
+    scope follow_up_scope NOT NULL DEFAULT 'SHARED',
+    owner_participant_id uuid7 REFERENCES participant ON DELETE CASCADE,
+    opted_in_shared boolean NOT NULL DEFAULT false,
+    status follow_up_status NOT NULL DEFAULT 'SCHEDULED',
+    scheduled_for ts_ms,
+    response_deadline_at ts_ms,
+    opened_at ts_ms,
+    completed_at ts_ms,
+    summary ciphertext,
+    created_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     -- §1.5 follow_up [P24a]
-    CONSTRAINT chk_follow_up_individual_owner CHECK ((scope = 'INDIVIDUAL') = (owner_participant_id IS NOT NULL)),
-    CONSTRAINT chk_follow_up_one_subject CHECK (num_nonnulls(agreement_id, proposal_id) <= 1)
+    CHECK ((scope = 'INDIVIDUAL') = (owner_participant_id IS NOT NULL)),
+    CHECK (num_nonnulls(agreement_id, proposal_id) <= 1)
 );
-CREATE INDEX "follow_up_session_id_status_idx" ON "follow_up"("session_id", "status");
-CREATE INDEX "follow_up_agreement_id_idx" ON "follow_up"("agreement_id");
-CREATE INDEX "follow_up_proposal_id_idx" ON "follow_up"("proposal_id");
-CREATE INDEX "follow_up_owner_participant_id_idx" ON "follow_up"("owner_participant_id");
+CREATE INDEX ON follow_up (session_id, status);
+CREATE INDEX ON follow_up (agreement_id);
+CREATE INDEX ON follow_up (proposal_id);
+CREATE INDEX ON follow_up (owner_participant_id);
 -- + sql_follow_up_due (sql-only.sql)
+COMMENT ON TABLE follow_up IS 'A scheduled or user-initiated check-in on an agreement or an individual commitment.';
+COMMENT ON COLUMN follow_up.proposal_id IS 'An individual commitment''s proposal, when there is no agreement.';
+COMMENT ON COLUMN follow_up.owner_participant_id IS 'INDIVIDUAL scope only: whose follow-up it is.';
+COMMENT ON COLUMN follow_up.response_deadline_at IS 'When an OPEN follow-up stops accepting check-ins.';
+COMMENT ON COLUMN follow_up.summary IS 'encrypted (session): a code-templated line naming what is checked on, with the agreement or commitment text.';
 
-CREATE TABLE "follow_up_checkin" (
-    "id" uuid7 NOT NULL DEFAULT uuidv7(),
-    "follow_up_id" uuid7 NOT NULL,
-    "participant_id" uuid7 NOT NULL,
-    "next_action" "next_action",
-    "continue_choice" "continue_choice",
-    "reflection_summary" TEXT,
-    "payload" JSONB NOT NULL DEFAULT '{}',
-    "submitted_at" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "created_at" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+CREATE TABLE follow_up_checkin (
+    id uuid7 NOT NULL DEFAULT uuidv7() PRIMARY KEY,
+    follow_up_id uuid7 NOT NULL REFERENCES follow_up ON DELETE CASCADE,
+    participant_id uuid7 NOT NULL REFERENCES participant ON DELETE CASCADE,
+    next_action next_action,
+    continue_choice continue_choice,
+    reflection_summary ciphertext,
+    payload jsonb NOT NULL DEFAULT '{}',
+    submitted_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    created_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
-    CONSTRAINT "follow_up_checkin_pkey" PRIMARY KEY ("id"),
-    CONSTRAINT "follow_up_checkin_follow_up_id_participant_id_key" UNIQUE ("follow_up_id", "participant_id"),
-    CONSTRAINT "follow_up_checkin_follow_up_id_fkey" FOREIGN KEY ("follow_up_id") REFERENCES "follow_up"("id") ON DELETE CASCADE ON UPDATE NO ACTION,
-    CONSTRAINT "follow_up_checkin_participant_id_fkey" FOREIGN KEY ("participant_id") REFERENCES "participant"("id") ON DELETE CASCADE ON UPDATE NO ACTION,
-
+    UNIQUE (follow_up_id, participant_id),
     -- §1.5 follow_up_checkin
-    CONSTRAINT chk_follow_up_checkin_payload_object CHECK (jsonb_typeof(payload) = 'object')
+    CHECK (jsonb_typeof(payload) = 'object')
 );
-CREATE INDEX "follow_up_checkin_participant_id_submitted_at_idx" ON "follow_up_checkin"("participant_id", "submitted_at");
+CREATE INDEX ON follow_up_checkin (participant_id, submitted_at);
+COMMENT ON TABLE follow_up_checkin IS 'One participant''s answers to a follow-up, one per participant; the structured answers are a document (payload).';
+COMMENT ON COLUMN follow_up_checkin.reflection_summary IS 'encrypted (session): the participant''s reflection at the check-in (max 4000).';
+COMMENT ON COLUMN follow_up_checkin.payload IS 'encrypted (session): jsonb envelope {"$enc": ...}: the structured answers (FollowUpCheckinPayload).';
 
-CREATE TABLE "follow_up_note" (
-    "id" uuid7 NOT NULL DEFAULT uuidv7(),
-    "participant_id" uuid7 NOT NULL,
-    "content" TEXT NOT NULL,
-    "carry_forward" BOOLEAN NOT NULL DEFAULT false,
-    "carried_into_checkin_id" uuid7,
-    "created_at" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "updated_at" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-
-    CONSTRAINT "follow_up_note_pkey" PRIMARY KEY ("id"),
-    CONSTRAINT "follow_up_note_participant_id_fkey" FOREIGN KEY ("participant_id") REFERENCES "participant"("id") ON DELETE CASCADE ON UPDATE NO ACTION,
-    CONSTRAINT "follow_up_note_carried_into_checkin_id_fkey" FOREIGN KEY ("carried_into_checkin_id") REFERENCES "follow_up_checkin"("id") ON DELETE SET NULL ON UPDATE NO ACTION
+CREATE TABLE follow_up_note (
+    id uuid7 NOT NULL DEFAULT uuidv7() PRIMARY KEY,
+    participant_id uuid7 NOT NULL REFERENCES participant ON DELETE CASCADE,
+    content ciphertext NOT NULL,
+    carry_forward boolean NOT NULL DEFAULT false,
+    carried_into_checkin_id uuid7 REFERENCES follow_up_checkin ON DELETE SET NULL,
+    created_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
-CREATE INDEX "follow_up_note_participant_id_created_at_idx" ON "follow_up_note"("participant_id", "created_at");
-CREATE INDEX "follow_up_note_carried_into_checkin_id_idx" ON "follow_up_note"("carried_into_checkin_id");
+CREATE INDEX ON follow_up_note (participant_id, created_at);
+CREATE INDEX ON follow_up_note (carried_into_checkin_id);
+COMMENT ON TABLE follow_up_note IS 'A private between-period note; it can be carried into a later check-in.';
+COMMENT ON COLUMN follow_up_note.carried_into_checkin_id IS 'The check-in this note was copied into (payload.carriedNotes).';
+COMMENT ON COLUMN follow_up_note.content IS 'encrypted (participant): the note text (max 4000).';
 
-CREATE TABLE "reminder" (
-    "id" uuid7 NOT NULL DEFAULT uuidv7(),
-    "user_id" uuid7 NOT NULL,
-    "follow_up_id" uuid7,
-    "scope" "reminder_scope" NOT NULL DEFAULT 'PRIVATE',
-    "remind_at" TIMESTAMPTZ(3) NOT NULL,
-    "cadence" TEXT,
-    "note" TEXT,
-    "status" "reminder_status" NOT NULL DEFAULT 'SCHEDULED',
-    "created_at" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "updated_at" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-
-    CONSTRAINT "reminder_pkey" PRIMARY KEY ("id"),
-    CONSTRAINT "reminder_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "user"("id") ON DELETE RESTRICT ON UPDATE NO ACTION,
-    CONSTRAINT "reminder_follow_up_id_fkey" FOREIGN KEY ("follow_up_id") REFERENCES "follow_up"("id") ON DELETE CASCADE ON UPDATE NO ACTION
+CREATE TABLE reminder (
+    id uuid7 NOT NULL DEFAULT uuidv7() PRIMARY KEY,
+    user_id uuid7 NOT NULL REFERENCES "user" ON DELETE RESTRICT,
+    follow_up_id uuid7 REFERENCES follow_up ON DELETE CASCADE,
+    scope reminder_scope NOT NULL DEFAULT 'PRIVATE',
+    remind_at ts_ms NOT NULL,
+    cadence reminder_cadence,
+    note ciphertext,
+    status reminder_status NOT NULL DEFAULT 'SCHEDULED',
+    created_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
-CREATE INDEX "reminder_user_id_remind_at_idx" ON "reminder"("user_id", "remind_at");
-CREATE INDEX "reminder_follow_up_id_idx" ON "reminder"("follow_up_id");
+CREATE INDEX ON reminder (user_id, remind_at);
+CREATE INDEX ON reminder (follow_up_id);
 -- + sql_reminder_due (sql-only.sql)
+COMMENT ON TABLE reminder IS 'A scheduled nudge for one user, optionally tied to a follow-up; the job delivers due ones.';
+COMMENT ON COLUMN reminder.cadence IS 'How often the reminder repeats; NULL and ONCE are one-shot.';
+COMMENT ON COLUMN reminder.note IS 'encrypted (user): the reminder''s note (max 1000); the app sends a fixed label today.';
 
-CREATE TABLE "reflection" (
-    "id" uuid7 NOT NULL DEFAULT uuidv7(),
-    "user_id" uuid7 NOT NULL,
-    "title" TEXT,
-    "theme" TEXT,
-    "status" "reflection_status" NOT NULL DEFAULT 'ACTIVE',
-    "summary" TEXT,
-    "summary_doc" JSONB,
-    "linked_session_id" uuid7,
-    "linked_at" TIMESTAMPTZ(3),
-    "context_snapshot" TEXT,
-    "distilled_at" TIMESTAMPTZ(3),
-    "created_at" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "updated_at" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-
-    CONSTRAINT "reflection_pkey" PRIMARY KEY ("id"),
-    CONSTRAINT "reflection_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "user"("id") ON DELETE RESTRICT ON UPDATE NO ACTION,
-    CONSTRAINT "reflection_linked_session_id_fkey" FOREIGN KEY ("linked_session_id") REFERENCES "session"("id") ON DELETE SET NULL ON UPDATE NO ACTION,
+CREATE TABLE reflection (
+    id uuid7 NOT NULL DEFAULT uuidv7() PRIMARY KEY,
+    user_id uuid7 NOT NULL REFERENCES "user" ON DELETE RESTRICT,
+    title ciphertext,
+    theme text,
+    status reflection_status NOT NULL DEFAULT 'ACTIVE',
+    summary ciphertext,
+    summary_doc jsonb,
+    linked_session_id uuid7 REFERENCES session ON DELETE SET NULL,
+    linked_at ts_ms,
+    context_snapshot ciphertext,
+    distilled_at ts_ms,
+    created_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     -- §1.6 reflection, takeaway_link [P31]
-    CONSTRAINT chk_reflection_summary_doc_object CHECK (summary_doc IS NULL OR jsonb_typeof(summary_doc) = 'object')
+    CHECK (summary_doc IS NULL OR jsonb_typeof(summary_doc) = 'object')
 );
-CREATE INDEX "reflection_user_id_updated_at_idx" ON "reflection"("user_id", "updated_at");
-CREATE INDEX "reflection_linked_session_id_idx" ON "reflection"("linked_session_id");
-CREATE INDEX "reflection_user_id_theme_idx" ON "reflection"("user_id", "theme");
+CREATE INDEX ON reflection (user_id, updated_at);
+CREATE INDEX ON reflection (linked_session_id);
+CREATE INDEX ON reflection (user_id, theme);
+COMMENT ON TABLE reflection IS 'A private Inner Work reflection thread, outside any session (user-scoped); optionally linked to a session.';
+COMMENT ON COLUMN reflection.linked_session_id IS 'A session the reflection is about, for context only; it grants no visibility either way.';
+COMMENT ON COLUMN reflection.distilled_at IS 'When takeaways were last distilled from the thread.';
+COMMENT ON COLUMN reflection.theme IS 'Free LLM text ("a single word or short phrase", e.g. anxiety), not a taxonomy; v_reflection_theme groups by the exact string.';
+COMMENT ON COLUMN reflection.title IS 'encrypted (user): the reflection''s title, typed (max 200) or AI-generated (3-6 words).';
+COMMENT ON COLUMN reflection.summary IS 'encrypted (user): a one-sentence AI summary of the reflection.';
+COMMENT ON COLUMN reflection.summary_doc IS 'encrypted (user): jsonb envelope {"$enc": ...}: the rolling conversation summary.';
+COMMENT ON COLUMN reflection.context_snapshot IS 'encrypted (user): the AI''s 2-3 sentence context summary captured when the reflection started a session.';
 
-CREATE TABLE "reflection_message" (
-    "id" uuid7 NOT NULL DEFAULT uuidv7(),
-    "reflection_id" uuid7 NOT NULL,
-    "role" "message_role" NOT NULL,
-    "content" TEXT NOT NULL,
-    "created_at" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-
-    CONSTRAINT "reflection_message_pkey" PRIMARY KEY ("id"),
-    CONSTRAINT "reflection_message_reflection_id_fkey" FOREIGN KEY ("reflection_id") REFERENCES "reflection"("id") ON DELETE CASCADE ON UPDATE NO ACTION
+CREATE TABLE reflection_message (
+    id uuid7 NOT NULL DEFAULT uuidv7() PRIMARY KEY,
+    reflection_id uuid7 NOT NULL REFERENCES reflection ON DELETE CASCADE,
+    role message_role NOT NULL,
+    content ciphertext NOT NULL,
+    created_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
-CREATE INDEX "reflection_message_reflection_id_created_at_idx" ON "reflection_message"("reflection_id", "created_at");
+CREATE INDEX ON reflection_message (reflection_id, created_at);
+COMMENT ON TABLE reflection_message IS 'One line of a reflection thread.';
+COMMENT ON COLUMN reflection_message.content IS 'encrypted (user): the line''s text (max 10000 for a user turn).';
 
-CREATE TABLE "takeaway" (
-    "id" uuid7 NOT NULL DEFAULT uuidv7(),
-    "reflection_id" uuid7 NOT NULL,
-    "content" TEXT NOT NULL,
-    "theme" TEXT,
-    "source" "takeaway_source" NOT NULL DEFAULT 'AI',
-    "type" "takeaway_type" NOT NULL DEFAULT 'INSIGHT',
-    "position" INTEGER NOT NULL DEFAULT 0,
-    "resolved_at" TIMESTAMPTZ(3),
-    "created_at" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "updated_at" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-
-    CONSTRAINT "takeaway_pkey" PRIMARY KEY ("id"),
-    CONSTRAINT "takeaway_reflection_id_fkey" FOREIGN KEY ("reflection_id") REFERENCES "reflection"("id") ON DELETE CASCADE ON UPDATE NO ACTION
+CREATE TABLE takeaway (
+    id uuid7 NOT NULL DEFAULT uuidv7() PRIMARY KEY,
+    reflection_id uuid7 NOT NULL REFERENCES reflection ON DELETE CASCADE,
+    content ciphertext NOT NULL,
+    theme text,
+    source takeaway_source NOT NULL DEFAULT 'AI',
+    type takeaway_type NOT NULL DEFAULT 'INSIGHT',
+    position integer NOT NULL DEFAULT 0,
+    resolved_at ts_ms,
+    created_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
-CREATE INDEX "takeaway_reflection_id_position_idx" ON "takeaway"("reflection_id", "position");
+CREATE INDEX ON takeaway (reflection_id, position);
+COMMENT ON TABLE takeaway IS 'A distilled insight, action item or intention from a reflection, in the user''s order.';
+COMMENT ON COLUMN takeaway.position IS 'The user''s order within the reflection.';
+COMMENT ON COLUMN takeaway.theme IS 'Free LLM text, optional; not a taxonomy.';
+COMMENT ON COLUMN takeaway.content IS 'encrypted (user): one sentence: the insight, action item or intention (AI-distilled or edited by the user).';
 
-CREATE TABLE "takeaway_link" (
-    "source_id" uuid7 NOT NULL,
-    "target_id" uuid7 NOT NULL,
-    "link_type" "takeaway_link_type" NOT NULL,
-    "similarity" REAL,
-    "created_at" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+CREATE TABLE takeaway_link (
+    source_id uuid7 NOT NULL REFERENCES takeaway ON DELETE CASCADE,
+    target_id uuid7 NOT NULL REFERENCES takeaway ON DELETE CASCADE,
+    link_type takeaway_link_type NOT NULL,
+    similarity real,
+    created_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
-    CONSTRAINT "takeaway_link_pkey" PRIMARY KEY ("source_id","target_id"),
-    CONSTRAINT "takeaway_link_source_id_fkey" FOREIGN KEY ("source_id") REFERENCES "takeaway"("id") ON DELETE CASCADE ON UPDATE NO ACTION,
-    CONSTRAINT "takeaway_link_target_id_fkey" FOREIGN KEY ("target_id") REFERENCES "takeaway"("id") ON DELETE CASCADE ON UPDATE NO ACTION,
-
-    CONSTRAINT chk_takeaway_link_not_self CHECK (source_id <> target_id)
+    PRIMARY KEY (source_id, target_id),
+    CHECK (source_id <> target_id)
 );
-CREATE INDEX "takeaway_link_target_id_idx" ON "takeaway_link"("target_id");
+CREATE INDEX ON takeaway_link (target_id);
+COMMENT ON TABLE takeaway_link IS 'A directed link between two takeaways, by AI similarity or by the user.';
+COMMENT ON COLUMN takeaway_link.similarity IS 'AI_SEMANTIC links: the similarity score that made the link.';
 
-CREATE TABLE "user_device" (
-    "id" uuid7 NOT NULL DEFAULT uuidv7(),
-    "user_id" uuid7 NOT NULL,
-    "push_token" TEXT,
-    "platform" "device_platform",
-    "biometric_enabled" BOOLEAN NOT NULL DEFAULT false,
-    "biometric_enrolled_at" TIMESTAMPTZ(3),
-    "last_seen_at" TIMESTAMPTZ(3),
-    "created_at" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "updated_at" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-
-    CONSTRAINT "user_device_pkey" PRIMARY KEY ("id"),
-    CONSTRAINT "user_device_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "user"("id") ON DELETE RESTRICT ON UPDATE NO ACTION
+CREATE TABLE user_device (
+    id uuid7 NOT NULL DEFAULT uuidv7() PRIMARY KEY,
+    user_id uuid7 NOT NULL REFERENCES "user" ON DELETE RESTRICT,
+    push_token text,
+    platform device_platform,
+    biometric_enabled boolean NOT NULL DEFAULT false,
+    biometric_enrolled_at ts_ms,
+    last_seen_at ts_ms,
+    created_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
-CREATE INDEX "user_device_user_id_idx" ON "user_device"("user_id");
+CREATE INDEX ON user_device (user_id);
 -- + sql_user_device_token (sql-only.sql)
+COMMENT ON TABLE user_device IS 'A device a user registered: its push token and biometric enrolment.';
+COMMENT ON COLUMN user_device.push_token IS 'The Expo push token of this install; NULL until registered.';
 
-CREATE TABLE "user_preferences" (
-    "user_id" uuid7 NOT NULL,
-    "doc" JSONB NOT NULL DEFAULT '{}',
-    "created_at" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "updated_at" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-
-    CONSTRAINT "user_preferences_pkey" PRIMARY KEY ("user_id"),
-    CONSTRAINT "user_preferences_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "user"("id") ON DELETE RESTRICT ON UPDATE NO ACTION,
+CREATE TABLE user_preferences (
+    user_id uuid7 NOT NULL PRIMARY KEY REFERENCES "user" ON DELETE RESTRICT,
+    doc jsonb NOT NULL DEFAULT '{}',
+    created_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     -- §1.7 user_preferences
-    CONSTRAINT chk_user_preferences_doc CHECK (
+    CHECK (
       jsonb_typeof(doc) = 'object' AND doc ?& ARRAY['memory', 'notifications', 'privacy'])
 );
+COMMENT ON TABLE user_preferences IS 'The user''s preference documents (memory, notifications, privacy), one row per user.';
 
-CREATE TABLE "user_memory" (
-    "id" uuid7 NOT NULL DEFAULT uuidv7(),
-    "user_id" uuid7 NOT NULL,
-    "session_id" uuid7,
-    "content" TEXT NOT NULL,
-    "category" "memory_category" NOT NULL,
-    "status" "memory_status" NOT NULL DEFAULT 'ACTIVE',
-    "source" "memory_source" NOT NULL DEFAULT 'USER_APPROVED',
-    "suggested_text" TEXT,
-    "created_at" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "updated_at" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-
-    CONSTRAINT "user_memory_pkey" PRIMARY KEY ("id"),
-    CONSTRAINT "user_memory_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "user"("id") ON DELETE RESTRICT ON UPDATE NO ACTION,
-    CONSTRAINT "user_memory_session_id_fkey" FOREIGN KEY ("session_id") REFERENCES "session"("id") ON DELETE CASCADE ON UPDATE NO ACTION
+CREATE TABLE user_memory (
+    id uuid7 NOT NULL DEFAULT uuidv7() PRIMARY KEY,
+    user_id uuid7 NOT NULL REFERENCES "user" ON DELETE RESTRICT,
+    session_id uuid7 REFERENCES session ON DELETE CASCADE,
+    content ciphertext NOT NULL,
+    category memory_category NOT NULL,
+    status memory_status NOT NULL DEFAULT 'ACTIVE',
+    source memory_source NOT NULL DEFAULT 'USER_APPROVED',
+    suggested_text ciphertext,
+    created_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
-CREATE INDEX "user_memory_user_id_status_idx" ON "user_memory"("user_id", "status");
-CREATE INDEX "user_memory_session_id_idx" ON "user_memory"("session_id");
+CREATE INDEX ON user_memory (user_id, status);
+CREATE INDEX ON user_memory (session_id);
+COMMENT ON TABLE user_memory IS '"Things to always remember": standing instructions the user approved or wrote, optionally scoped to a session.';
+COMMENT ON COLUMN user_memory.session_id IS 'NULL for a memory that applies everywhere; set for one scoped to a session.';
+COMMENT ON COLUMN user_memory.content IS 'encrypted (user): the standing instruction (2 to 500 characters).';
+COMMENT ON COLUMN user_memory.suggested_text IS 'encrypted (user): the AI''s original text when the user edited it before approving, or the pre-edit text.';
 
-CREATE TABLE "feature_state" (
-    "user_id" uuid7 NOT NULL,
-    "feature" TEXT NOT NULL,
-    "doc" JSONB NOT NULL DEFAULT '{}',
-    "created_at" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "updated_at" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+CREATE TABLE feature_state (
+    user_id uuid7 NOT NULL REFERENCES "user" ON DELETE RESTRICT,
+    feature wellbeing_feature NOT NULL,
+    doc jsonb NOT NULL DEFAULT '{}',
+    created_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
-    CONSTRAINT "feature_state_pkey" PRIMARY KEY ("user_id","feature"),
-    CONSTRAINT "feature_state_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "user"("id") ON DELETE RESTRICT ON UPDATE NO ACTION,
-
+    PRIMARY KEY (user_id, feature),
     -- §1.7 feature_state
-    CONSTRAINT chk_feature_state_feature CHECK (feature IN ('meditation', 'gratitude', 'needs_assessment', 'people')),
-    CONSTRAINT chk_feature_state_doc_object CHECK (jsonb_typeof(doc) = 'object')
+    CHECK (jsonb_typeof(doc) = 'object')
 );
+COMMENT ON TABLE feature_state IS 'One document per wellbeing feature per user (meditation, gratitude, needs assessment, people).';
+COMMENT ON COLUMN feature_state.feature IS 'Which wellbeing feature this document belongs to.';
+COMMENT ON COLUMN feature_state.doc IS 'encrypted (user): jsonb envelope {"$enc": ...}: the feature''s document (one zod contract per feature, shared/src/dto/feature-state.ts).';
 
-CREATE TABLE "user_key" (
-    "id" uuid7 NOT NULL DEFAULT uuidv7(),
-    "user_id" uuid7 NOT NULL,
-    "key_id" TEXT NOT NULL,
-    "wrapped_dek" BYTEA NOT NULL,
-    "created_at" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "destroyed_at" TIMESTAMPTZ(3),
-    "updated_at" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-
-    CONSTRAINT "user_key_pkey" PRIMARY KEY ("id"),
-    CONSTRAINT "user_key_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "user"("id") ON DELETE RESTRICT ON UPDATE NO ACTION
+CREATE TABLE user_key (
+    id uuid7 NOT NULL DEFAULT uuidv7() PRIMARY KEY,
+    user_id uuid7 NOT NULL REFERENCES "user" ON DELETE RESTRICT,
+    key_id text NOT NULL,
+    wrapped_dek bytea NOT NULL,
+    created_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    destroyed_at ts_ms,
+    updated_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
-CREATE INDEX "user_key_user_id_idx" ON "user_key"("user_id");
+CREATE INDEX ON user_key (user_id);
 -- + sql_user_key_live (sql-only.sql)
+COMMENT ON TABLE user_key IS 'Envelope-encryption key per user (P3 8.6, W13): the user''s data key wrapped by a KMS key; destroyed_at shreds it at account deletion. Designed for W13: nothing writes a key row yet.';
+COMMENT ON COLUMN user_key.key_id IS 'The id of the KMS key (the KEK) that wrapped this row''s DEK: the same <keyId> the planned enc:v2:<keyId>:... envelope prefix will carry (P3 8.6). No format is fixed yet; nothing writes these tables before W13.';
+COMMENT ON COLUMN user_key.wrapped_dek IS 'The AES-256 data key (DEK) for this owner''s encrypted columns, encrypted (wrapped) by the KMS key named in key_id. Never stored unwrapped.';
+COMMENT ON COLUMN user_key.destroyed_at IS 'The crypto-shred: once set, the wrapped DEK is never unwrapped again, so every value under it is unreadable.';
 
-CREATE TABLE "brain_activity" (
-    "id" uuid7 NOT NULL DEFAULT uuidv7(),
-    "session_id" uuid7,
-    "reflection_id" uuid7,
-    "participant_id" uuid7,
-    "turn_id" TEXT,
-    "activity_type" "activity_type" NOT NULL,
-    "call_type" "brain_call_type",
-    "model" TEXT NOT NULL,
-    "input" JSONB,
-    "output" JSONB,
-    "metadata" JSONB,
-    "structured_output" JSONB,
-    "token_count_input" INTEGER NOT NULL DEFAULT 0,
-    "token_count_output" INTEGER NOT NULL DEFAULT 0,
-    "duration_ms" INTEGER NOT NULL DEFAULT 0,
-    "cost" DECIMAL(10,6) NOT NULL DEFAULT 0,
-    "status" "activity_status" NOT NULL DEFAULT 'PENDING',
-    "created_at" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "completed_at" TIMESTAMPTZ(3),
-    "updated_at" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-
-    CONSTRAINT "brain_activity_pkey" PRIMARY KEY ("id"),
-    CONSTRAINT "brain_activity_session_id_fkey" FOREIGN KEY ("session_id") REFERENCES "session"("id") ON DELETE CASCADE ON UPDATE NO ACTION,
-    CONSTRAINT "brain_activity_reflection_id_fkey" FOREIGN KEY ("reflection_id") REFERENCES "reflection"("id") ON DELETE CASCADE ON UPDATE NO ACTION,
-    CONSTRAINT "brain_activity_participant_id_fkey" FOREIGN KEY ("participant_id") REFERENCES "participant"("id") ON DELETE CASCADE ON UPDATE NO ACTION,
+CREATE TABLE brain_activity (
+    id uuid7 NOT NULL DEFAULT uuidv7() PRIMARY KEY,
+    session_id uuid7 REFERENCES session ON DELETE CASCADE,
+    reflection_id uuid7 REFERENCES reflection ON DELETE CASCADE,
+    participant_id uuid7 REFERENCES participant ON DELETE CASCADE,
+    turn_id text,
+    activity_type activity_type NOT NULL,
+    call_type brain_call_type,
+    model text NOT NULL,
+    input jsonb,
+    output jsonb,
+    metadata jsonb,
+    structured_output jsonb,
+    token_count_input integer NOT NULL DEFAULT 0,
+    token_count_output integer NOT NULL DEFAULT 0,
+    duration_ms integer NOT NULL DEFAULT 0,
+    cost numeric(10,6) NOT NULL DEFAULT 0,
+    status activity_status NOT NULL DEFAULT 'PENDING',
+    created_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    completed_at ts_ms,
+    updated_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     -- §1.8 brain_activity [P28c]
-    CONSTRAINT chk_brain_activity_input_json CHECK (input IS NULL OR jsonb_typeof(input) IN ('object', 'array')),
-    CONSTRAINT chk_brain_activity_output_json CHECK (output IS NULL OR jsonb_typeof(output) IN ('object', 'array')),
-    CONSTRAINT chk_brain_activity_metadata_json CHECK (metadata IS NULL OR jsonb_typeof(metadata) IN ('object', 'array')),
-    CONSTRAINT chk_brain_activity_structured_output_json CHECK (structured_output IS NULL OR jsonb_typeof(structured_output) IN ('object', 'array'))
+    CHECK (input IS NULL OR jsonb_typeof(input) IN ('object', 'array')),
+    CHECK (output IS NULL OR jsonb_typeof(output) IN ('object', 'array')),
+    CHECK (metadata IS NULL OR jsonb_typeof(metadata) IN ('object', 'array')),
+    CHECK (structured_output IS NULL OR jsonb_typeof(structured_output) IN ('object', 'array'))
 );
-CREATE INDEX "brain_activity_session_id_idx" ON "brain_activity"("session_id");
-CREATE INDEX "brain_activity_reflection_id_idx" ON "brain_activity"("reflection_id");
-CREATE INDEX "brain_activity_participant_id_idx" ON "brain_activity"("participant_id");
-CREATE INDEX "brain_activity_turn_id_idx" ON "brain_activity"("turn_id");
-CREATE INDEX "brain_activity_created_at_idx" ON "brain_activity"("created_at");
+CREATE INDEX ON brain_activity (session_id);
+CREATE INDEX ON brain_activity (reflection_id);
+CREATE INDEX ON brain_activity (participant_id);
+CREATE INDEX ON brain_activity (turn_id);
+CREATE INDEX ON brain_activity (created_at);
+COMMENT ON TABLE brain_activity IS 'Telemetry: one row per LLM, embedding, retrieval or tool call, with its prompt, output, tokens, cost and timing.';
+COMMENT ON COLUMN brain_activity.turn_id IS 'Correlates the calls of one request or chat turn.';
+COMMENT ON COLUMN brain_activity.model IS 'The model id the call used (a Bedrock model id, or the embedding model).';
+COMMENT ON COLUMN brain_activity.cost IS 'Estimated cost of the call in US dollars, from the per-model token prices in lib/bedrock.ts.';

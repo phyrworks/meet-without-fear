@@ -15,6 +15,8 @@ import {
   TendingForbiddenError,
   TendingInvalidStateError,
   TendingNotFoundError,
+  REMINDER_CADENCES,
+  parseReminderCadence,
 } from '../services/tending.service';
 import {
   ContinueChoice,
@@ -48,6 +50,19 @@ const orientationSchema = z.object({
 // backend's own zod (shared's `uuidV7` is a zod 4 schema; this file is zod 3).
 const uuidV7 = z.string().regex(UUID_V7_RE, 'Invalid ID format');
 
+/** A reminder cadence: a reminder_cadence member (or an alias of one); anything else is a 400. */
+const reminderCadenceSchema = z
+  .string()
+  .max(80)
+  .transform((s, ctx) => {
+    const cadence = parseReminderCadence(s);
+    if (!cadence) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: `cadence must be one of ${REMINDER_CADENCES.join(', ')}` });
+      return z.NEVER;
+    }
+    return cadence;
+  });
+
 const submitTendingCheckinSchema = z.object({
   orientations: z.object({
     whatWorked: orientationSchema,
@@ -62,7 +77,7 @@ const submitTendingCheckinSchema = z.object({
             tendingEntryId: uuidV7.optional(),
             scope: z.nativeEnum(TendingReminderScope),
             remindAt: z.string().datetime(),
-            cadence: z.string().max(80).optional(),
+            cadence: reminderCadenceSchema.optional(),
             note: z.string().max(1000).optional(),
           }),
         )
@@ -103,7 +118,7 @@ const submitTendingCheckinSchema = z.object({
         tendingEntryId: uuidV7.optional(),
         scope: z.nativeEnum(TendingReminderScope),
         remindAt: z.string().datetime(),
-        cadence: z.string().max(80).optional(),
+        cadence: reminderCadenceSchema.optional(),
         note: z.string().max(1000).optional(),
       }),
     )

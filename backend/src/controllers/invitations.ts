@@ -424,7 +424,7 @@ export async function createSession(req: Request, res: Response): Promise<void> 
         data: {
           sessionId: sess.id,
           invitedByParticipantId: me.id,
-          name: inviteeDisplayName,
+          inviteeName: inviteeDisplayName,
           expiresAt,
         },
       });
@@ -531,7 +531,7 @@ export async function getInvitation(req: Request, res: Response): Promise<void> 
         invitedBy: {
           name: invitation.invitedByParticipant.displayName,
         },
-        name: invitation.name,
+        name: invitation.inviteeName,
         status,
         createdAt: invitation.createdAt,
         expiresAt: invitation.expiresAt,

@@ -226,7 +226,7 @@ describeTarget('brain_activity (job) and the dashboard (mwf_ops) on the target',
     // (metadata, never the invitation's content).
     const [{ col, msg }] = await run.sql<{ col: boolean; msg: boolean }>(
       `SELECT has_column_privilege('mwf_ops', 'invitation', 'invited_by_participant_id', 'SELECT') AS col,
-              has_column_privilege('mwf_ops', 'invitation', 'name', 'SELECT') AS msg`,
+              has_column_privilege('mwf_ops', 'invitation', 'invitee_name', 'SELECT') AS msg`,
     );
     expect({ col, msg }).toEqual({ col: true, msg: false });
 

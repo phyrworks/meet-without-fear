@@ -363,9 +363,9 @@ export async function assembleStreamTurnContext(params: StreamTurnContextParams)
   } else if (session.status === 'CREATED' || session.status === 'INVITED') {
     const invitation = await prisma.invitation.findFirst({
       where: { sessionId, invitedByParticipantId: participant.id },
-      select: { name: true },
+      select: { inviteeName: true },
     });
-    partnerName = invitation?.name || undefined;
+    partnerName = invitation?.inviteeName || undefined;
   }
 
   const userName = user.name || 'there';

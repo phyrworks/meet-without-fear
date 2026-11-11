@@ -40,7 +40,8 @@
 # invisible to both `migrate diff` and `db pull` (probes TS-6, 2026-10-19 and
 # work-a39h.11.40, 2026-11-02), so they cannot make the gate fail — and the
 # gate cannot check them either: the static comparison
-# (compare-baseline-ddl.ts) and the baseline's step-20 assertions do.
+# (a pg_dump --schema-only catalog diff of two run-baseline.sh builds) and
+# the baseline's step-20 assertions do.
 #
 # Exits non-zero on any failure. Only ever addresses a database whose name
 # matches ^ts[67]_ (build mode: exactly ts6_target), or, read-only, one of
@@ -108,7 +109,7 @@ fail=0
 # --- sql_ completeness: spec ⊆ file ⊆ pull ∪ expression-only, pull ⊆ file -----
 check_sql_names() {  # $1 = pulled schema
   local in_file in_pull missing
-  in_file="$(grep -oE '"sql_[a-z0-9_]+"' "$SQL_ONLY" | tr -d '"' | sort -u)"
+  in_file="$(grep -oE 'INDEX sql_[a-z0-9_]+' "$SQL_ONLY" | sed 's/^INDEX //' | sort -u)"
   in_pull="$(grep -oE '"sql_[a-z0-9_]+"' "$1" | tr -d '"' | sort -u)"
   missing="$(comm -23 <(echo "$SPEC_SQL_NAMES" | tr ' ' '\n' | grep . | sort -u) <(echo "$in_file"))"
   [ -z "$missing" ] || { echo "   FAIL: spec §5 sql_ names missing from sql-only.sql: $missing"; return 1; }
@@ -165,6 +166,9 @@ else
   psql_admin -c "CREATE DATABASE ts6_target"
 
   echo "== apply: tables.sql (the baseline's section 1)"
+  # tables.sql creates app.all_ciphertext (the CHECK on the encrypted text[]
+  # columns); in the baseline the preamble creates schema app first.
+  psql_db -c "CREATE SCHEMA app"
   psql_db -1 -f - <"$TABLES"
   echo "   tables: $(psql_db -Atc "SELECT count(*) FROM pg_tables WHERE schemaname = 'public'")"
 

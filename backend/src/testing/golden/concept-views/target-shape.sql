@@ -430,7 +430,7 @@ SELECT
   i.session_id,
   i.invited_by_participant_id,
   i.accepted_by_user_id,
-  i.name,
+  i.invitee_name AS name,
   i.status::text AS status,
   i.message_confirmed_at AT TIME ZONE 'UTC' AS message_confirmed_at,
   i.expires_at  AT TIME ZONE 'UTC' AS expires_at,

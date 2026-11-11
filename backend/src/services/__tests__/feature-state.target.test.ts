@@ -193,11 +193,9 @@ describeTarget('wellbeing feature documents on the target, as mwf_app with ident
     expect((await http(bob, 'get', `/meditation/saved/${saved.body.data.meditation.id}`)).status).toBe(404);
     const prefs = await http(ada, 'patch', '/meditation/preferences', { defaultDuration: 20 });
     expect(prefs.body.data.preferences).toMatchObject({ defaultDuration: 20, preferredVoice: 'default' });
-    expect(await run.sql(`SELECT feature FROM feature_state WHERE user_id = $1 ORDER BY feature`, [ada.id])).toEqual([
-      { feature: 'gratitude' },
-      { feature: 'meditation' },
-      { feature: 'needs_assessment' },
-    ]);
+    expect(
+      await run.sql(`SELECT feature FROM feature_state WHERE user_id = $1 ORDER BY feature::text`, [ada.id]),
+    ).toEqual([{ feature: 'gratitude' }, { feature: 'meditation' }, { feature: 'needs_assessment' }]);
   });
 
   it('people: extraction creates, matches by name and alias, counts by source; merge and delete are one document write', async () => {

@@ -156,7 +156,7 @@ One line of a conversation: human, AI, system, or a delivered cross-participant 
 | role | message_role | no | | `USER \| AI \| SYSTEM` |
 | kind | message_kind | no | 'CHAT' | `CHAT, EMPATHY_STATEMENT, EMPATHY_REVEAL_INTRO, SHARED_CONTEXT, VALIDATION_FEEDBACK, SHARE_SUGGESTION, EMPATHY_VALIDATION_PROMPT` |
 | content | text | no | | encrypted |
-| content_hash | varchar(64) | yes | | SHA-256 of plaintext (dedupe probes) |
+| content_hash | sha256_hex | yes | | SHA-256 of plaintext (dedupe probes); domain `sha256_hex` (§3, work-gevt) |
 | refining_need_id | uuid | yes | | FK need SET NULL |
 | source_attempt_id | uuid | yes | | FK empathy_attempt SET NULL — which attempt row a delivered `EMPATHY_STATEMENT` / `VALIDATION_FEEDBACK` / `SHARED_CONTEXT` came from (lineage). **The reveal job writes the `EMPATHY_STATEMENT` row into the subject's conversation** (today it is written only into the author's own chat, `stage2.ts:737`, `:2114`); the author keeps their own copy too |
 | created_at | timestamptz | no | now() | |
@@ -181,7 +181,7 @@ A participant's working text for a sharing point, before any consent. · core ·
 | ready_to_share | boolean | no | false | |
 | version | int | no | 1 | |
 | created_at, updated_at | timestamptz | no | now() | |
-| reopened_at | timestamptz | yes | | work-9309: set when the author chose "Edit first" on a pre-join draft after the join; cleared by the next draft write. EMPATHY only (CHECK `chk_draft_reopened_empathy`) |
+| reopened_at | timestamptz | yes | | work-9309: set when the author chose "Edit first" on a pre-join draft after the join; cleared by the next draft write. EMPATHY only (CHECK) |
 
 Keys: PK. CHECK `num_nonnulls(about_participant_id, invitation_id, attempt_id, share_offer_id) = 1` and the arm matches `kind` (EMPATHY: `about_participant_id` or `invitation_id`). **Unique** `(participant_id, kind, coalesce(about_participant_id, invitation_id, attempt_id, share_offer_id))` — one draft per sharing point, so N subjects / N attempts do not collide (adversarial P1-5); an invitation is per invitee, so this holds before the join too. Indexes: the four arc columns.
 Pre-join drafts (work-99k2, owner rule 2026-11-04): an inviter in Stage 2 whose partner has not accepted keeps their EMPATHY draft against the PENDING invitation. Accepting the invitation re-points it (`about_participant_id` = the new participant, `invitation_id` = NULL) in the transaction that creates the participant — as a move that keeps `id`, `created_at`, `version` and `updated_at`, because `updated_at` is the draft's written-at (an UPDATE would fire `touch_updated_at`). Nothing is sent on the join and consent still needs the partner present: the author reviews the draft first (send as is / edit first / set aside). "Needs review" is derived, not stored: the draft's `updated_at` < the subject's `joined_at`, and no round submitted. It stays true because, while it holds, the one writer (`empathy-draft-save.ts`) skips every write but the author's explicit choice (`resolvePreJoinReview`: send as is / edit first); set aside deletes the row. Concurrency: the accept takes the invitation FOR UPDATE first and the move takes the draft rows FOR UPDATE; a pre-join save reads the invitation FOR SHARE in its own transaction, so it either commits before the move (which then carries its text) or runs after the accept and writes against the new participant — never an invitation-keyed row against an ACCEPTED invitation. The subject before the join is the inviter's newest non-ACCEPTED invitation, so a draft survives the invitation lapsing (no re-issue path exists: work-kgnb). `invitation_id` is CASCADE like the other arcs: a draft about an invitation that no longer exists has no subject.
@@ -268,7 +268,7 @@ An invitation to join a session. · core · S · session (name)
 | session_id | uuid | no | | FK session CASCADE |
 | invited_by_participant_id | uuid | no | | FK participant CASCADE |
 | accepted_by_user_id | uuid | yes | | FK user RESTRICT (P3 §6 new column) |
-| name | text | yes | | invitee display name (encrypted) |
+| invitee_name | text | yes | | the name the inviter gave the invitee at session creation (encrypted, session key) — the invitee has no `user` row yet, so this is not a copy of `user.name`; renamed from `name` (work-gevt) |
 | status | invitation_status | no | 'PENDING' | `PENDING \| ACCEPTED \| DECLINED \| EXPIRED` |
 | message_confirmed_at | timestamptz | yes | | |
 | expires_at | timestamptz | no | | |
@@ -376,7 +376,8 @@ The abstract hints the **author** may see (P3 D8a split). · empathy · P to aut
 |---|---|---|---|---|
 | result_id | uuid | no | | PK, FK reconciler_result CASCADE |
 | author_participant_id, subject_participant_id | uuid | no | | FK participant CASCADE (policy columns) |
-| area_hint, guidance_type, prompt_seed | text | yes | | no partner content by construction |
+| area_hint, prompt_seed | text | yes | | no partner content by construction (code constants, encrypted by R46) |
+| guidance_type | guidance_type | yes | | `challenge_assumptions \| explore_breadth \| explore_deeper_feelings` (enum, work-gevt; was text) |
 | created_at | timestamptz | no | now() | |
 
 RLS: S `mine(author_participant_id) OR mine(subject_participant_id)` (P3 §2) · I `job` · U/D none.
@@ -541,7 +542,7 @@ Append-only audit of proposal changes. · proposals · S · session
 | actor_participant_id | uuid | yes | | FK participant CASCADE; NULL = AI/system |
 | action | revision_action | no | | `CREATED, REVISED, REMOVED, RESTORED, CONVERTED, CAPTURE_SKIPPED, COVERED, SUBCHAT_REFINED` |
 | before, after | jsonb | yes | | `CHECK jsonb_typeof = 'object'` |
-| reason | text | yes | | |
+| reason | proposal_revision_reason | yes | | app markers only (R47): `LEGACY_PROPOSED \| LEGACY_CONFIRMED \| MUTUAL_CLOSURE \| EVERY_PARTY_CONFIRMED` (enum, work-gevt; was text) |
 | created_at | timestamptz | no | now() | |
 
 Keys: PK. Index (proposal_id, created_at). Append-only. No FK into `message` (S-class row must not name a private message id — adversarial P2); the triggering text, where needed, is in `before`/`after`.
@@ -663,7 +664,7 @@ A scheduled nudge for one user. · follow_up · U (delivery is personal) · none
 | follow_up_id | uuid | yes | | FK follow_up CASCADE |
 | scope | reminder_scope | no | 'PRIVATE' | `PRIVATE \| SHARED` |
 | remind_at | timestamptz | no | | |
-| cadence | text | yes | | |
+| cadence | reminder_cadence | yes | | `ONCE \| WEEKLY \| MONTHLY \| EVERY_COUPLE_MONTHS` — a recurrence choice, not an interval; NULL and ONCE are one-shot (enum, work-gevt; was text) |
 | note | text | yes | | |
 | status | reminder_status | no | 'SCHEDULED' | `SCHEDULED \| DELIVERED \| CANCELLED` |
 | created_at, updated_at | timestamptz | no | now() | |
@@ -683,7 +684,7 @@ A private self-reflection thread. · reflection · U · user
 | id | uuid | no | uuidv7() | |
 | user_id | uuid | no | | FK user RESTRICT |
 | title | text | yes | | encrypted |
-| theme | text | yes | | detected theme tag |
+| theme | text | yes | | detected theme: free LLM text, not a taxonomy (grouped by exact string in `v_reflection_theme`) |
 | status | reflection_status | no | 'ACTIVE' | `ACTIVE \| COMPLETED \| ARCHIVED` |
 | summary | text | yes | | encrypted |
 | summary_doc | jsonb | yes | | rolling summary (was JSON-in-text); encrypted; `CHECK jsonb_typeof = 'object'` |
@@ -748,7 +749,7 @@ Identity only. · user · U · none (identity is plaintext; `email`/`clerk_id` a
 |---|---|---|---|---|
 | id | uuid | no | uuidv7() | |
 | clerk_id | text | yes | | UNIQUE |
-| email | text | no | | UNIQUE |
+| email | text | no | | UNIQUE; CHECK `char_length(email) <= 254` (the RFC 5321 bound, work-gevt) |
 | first_name, last_name | text | yes | | |
 | name | text | yes | *generated* | `GENERATED ALWAYS AS (nullif(trim(coalesce(first_name,'') \|\| ' ' \|\| coalesce(last_name,'')), '')) STORED` |
 | deleted_at | timestamptz | yes | | the tombstone (P3 D9) |
@@ -806,7 +807,7 @@ One document per wellbeing feature per user (A-Q4). · user · U · user
 | column | type | null | default | meaning |
 |---|---|---|---|---|
 | user_id | uuid | no | | FK user RESTRICT |
-| feature | text | no | | CHECK `feature IN ('meditation','gratitude','needs_assessment','people')` |
+| feature | wellbeing_feature | no | | `meditation \| gratitude \| needs_assessment \| people` (enum, work-gevt; was a CHECK IN list) |
 | doc | jsonb | no | '{}' | encrypted; `CHECK jsonb_typeof = 'object'`; one zod contract per feature in `shared/src/dto/feature-state.ts` (meditation: `sessions[], scripts[], preferences, stats`; gratitude: `entries[], preferences`; needs_assessment: `scores[], state`; people: `persons[]` with `mentions[]`) |
 | updated_at | timestamptz | no | now() | |
 
@@ -997,9 +998,13 @@ erDiagram
 | `reflection_status` / `takeaway_source` / `takeaway_type` / `takeaway_link_type` | unchanged | `InnerWork*`, `Takeaway*` |
 | `memory_category` / `memory_status` / `memory_source` | unchanged | |
 | `device_platform` | ios, android, web | new |
+| `guidance_type` / `proposal_revision_reason` / `reminder_cadence` / `wellbeing_feature` | see `reconciler_guidance`, `proposal_revision`, `reminder`, `feature_state` | were text / a CHECK (work-gevt, 2026-11-10) |
 | `activity_type` / `activity_status` / `brain_call_type` | unchanged | |
 | **Domain** `intensity` | `int CHECK (VALUE BETWEEN 1 AND 10)` | new |
-| **Domain** `uuid7` | `uuid CONSTRAINT uuid7_version CHECK (VALUE IS NULL OR coalesce(uuid_extract_version(VALUE), 0) = 7)` — every uuid column (33 PKs, 95 FK columns); `gen_random_uuid()` and other non-v7 values are refused. Invisible to Prisma (`String @db.Uuid`). Source: `backend/scripts/target-shape/tables.sql` | new (2026-11-02) |
+| **Domain** `uuid7` | `uuid CHECK (VALUE IS NULL OR coalesce(uuid_extract_version(VALUE), 0) = 7)` — every uuid column (33 PKs, 95 FK columns); `gen_random_uuid()` and other non-v7 values are refused. Invisible to Prisma (`String @db.Uuid`). Source: `backend/scripts/target-shape/tables.sql` | new (2026-11-02) |
+| **Domain** `ciphertext` | `text CHECK (VALUE IS NULL OR VALUE !~ '^enc:' OR VALUE ~ '^enc:v1:<iv 16>:<tag 22>==:<base64 ct>$')` — every encrypted text column of `SENSITIVE_FIELD_MAP` (44). Plaintext passes (keyless dev/test); anything claiming to be an envelope must be a well-formed v1 one. The 5 encrypted `text[]` columns carry `CHECK (app.all_ciphertext(col))` instead (an array of a domain is refused by step 20); the 6 encrypted `jsonb` columns carry a COMMENT starting `encrypted`. Every encrypted column's COMMENT starts `encrypted (<key class>):`. Invisible to Prisma (`String`). `encryption-at-rest-schema.target.test.ts` ties the catalog to the map both ways | new (2026-11-10, work-gevt) |
+| **Domain** `sha256_hex` | `text CHECK (VALUE ~ '^[0-9a-f]{64}$')` — `message.content_hash`; NULL passes | new (2026-11-10, work-gevt) |
+| **Domain** `ts_ms` | `timestamptz(3)` — every timestamp column (143). A JS `Date` holds milliseconds, so a microsecond value would not round-trip (keyset cursors, forward-only instants, exact equality); the domain rounds every write, defaults and triggers included. Invisible to Prisma (`DateTime @db.Timestamptz(3)`); step 20 refuses a plain timestamptz column. Source: `backend/scripts/target-shape/tables.sql` | new (2026-11-10, work-gevt) |
 
 **Become lookup tables:** `milestone` (the stage vocabulary, D3). **Become zod unions inside documents, not DB types:** `TendingFollowThroughStatus`, `TendingHelpfulnessStatus`, `TendingBlockerCategory`, `TendingNeedResolutionStatus`, `PartialClosureResolution` (inside `follow_up_checkin.payload`); `MeditationType`, `FavoriteType`, `NeedsCategory`, `MentionSourceType`, `InsightType`, `GlobalLibrarySource`, `TakeawayLinkType`-style enums of dropped tables (inside `feature_state.doc` or gone). **Dropped:** `SessionType`, `StageStatus`, `Attribution`, `MemoryCategory` is kept. Enum members are declared in the migration in the order listed; the five sort-order drifts (census §7) disappear with the rebuild.
 
@@ -1050,7 +1055,7 @@ Verified against Prisma **7.10.0** (the repo's version) by the adversarial pass 
 |---|---|
 | Names | every model `@@map("snake_name")`, every field `@map("snake_name")`; model names PascalCase singular (`Participant`, `FollowUpCheckin`), relation fields camelCase. A CI script diffs `@map`s against `information_schema` |
 | Ids | `String @id @default(dbgenerated("uuidv7()")) @db.Uuid` as today |
-| Timestamps | `DateTime @db.Timestamptz(3)`; `updated_at` is `@updatedAt` in Prisma **and** trigger-maintained in SQL |
+| Timestamps | `DateTime @db.Timestamptz(3)` over the SQL domain `ts_ms` (§3); `updated_at` is `@updatedAt` in Prisma **and** trigger-maintained in SQL |
 | Enums | Prisma enums with `@@map` to the snake type names; members declared in the order of §3 |
 | **Foreign keys** | declared in Prisma as relations with explicit `onDelete` **and `onUpdate: NoAction`** on every relation, so Prisma emits the FK and `migrate diff` agrees with it; **no FK is hand-written** (a hand-written FK without `ON UPDATE CASCADE` drifts against Prisma's default forever) |
 | **Partial unique indexes** | **not declared in Prisma** — created in SQL under `sql_`-prefixed names, which `migrate diff` ignores ([V] empty diff); **never give a Prisma index the name of an `sql_` index** (a same-named plain `@@index` over the same columns collides). The alternative — `previewFeatures = ["partialIndexes"]` with `@unique(map: "sql_…", where: raw(…))` — also diffs empty ([V]) but is a preview feature; not adopted. One rule, not two **`db pull` does see them** (verified TS-6, 2026-10-19, PG 18.6 / Prisma 7.10; supersedes the 2026-10-17 [V] reading that they are invisible to Prisma): it renders each as `@unique(map: "sql_…", where: raw(…))` / `@@index(…, where: …)`, adds `"partialIndexes"` to `previewFeatures` on its own, and turns the back-relation of every **single-column** partial unique into a 1:1 (`Participant.conversations Conversation?`, wrong — only MAIN is unique). Expression indexes (`sql_draft_one_per_point`) are not rendered at all. Therefore `db pull` is compared with `schema.prisma` only on a database **without** the `sql_` objects, and **`schema.prisma` is never refreshed from `db pull`** |

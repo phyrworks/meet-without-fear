@@ -227,6 +227,17 @@ export interface TraceOptions {
   reader?: LogReader;
   /** Container name for the default reader. */
   container?: string;
+  /**
+   * Planner switches for this scenario's run database only, e.g.
+   * `[['enable_bitmapscan', 'off']]`: `ALTER DATABASE <run db> SET …` before the
+   * app connects, so the app's pooled connections plan with them (a per-step
+   * SET LOCAL cannot reach those). The run database is disposable, so nothing
+   * leaks to another run, the app, the pool or a real database. Only
+   * `enable_*` = on|off is accepted. A scenario uses it when its trace asserts
+   * a plan property that the default estimates of a never-ANALYZEd template
+   * decide by a hair; say why next to the use.
+   */
+  plannerSettings?: Array<[string, 'on' | 'off']>;
 }
 
 export async function createHarness(opts: {
@@ -302,6 +313,26 @@ export async function createHarness(opts: {
       return { reason: (e as Error).message };
     }
   };
+
+  if (traceOpts?.plannerSettings?.length) {
+    try {
+      await withClient(
+        fixture.target,
+        async c => {
+          for (const [param, value] of traceOpts.plannerSettings ?? []) {
+            if (!/^enable_[a-z_]+$/.test(param) || (value !== 'on' && value !== 'off'))
+              throw new Error(`plannerSettings: refusing ${param} = ${value} (only enable_* on|off)`);
+            // Literals checked above; ALTER DATABASE … SET takes no bind parameters.
+            await c.query(`ALTER DATABASE "${fixture.database}" SET ${param} = ${value}`);
+          }
+        },
+        'postgres',
+      );
+    } catch (e) {
+      await dropDatabase(fixture.target, fixture.database);
+      throw e;
+    }
+  }
 
   const logReader =
     traceOpts &&

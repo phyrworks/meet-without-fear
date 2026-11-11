@@ -295,6 +295,9 @@ export interface AbstractGuidance {
   promptSeed: string | null;
 }
 
+/** The guidance_type enum (reconciler_guidance.guidance_type). */
+export type GuidanceType = 'challenge_assumptions' | 'explore_breadth' | 'explore_deeper_feelings';
+
 /**
  * Generate abstract guidance for refinement conversation. General themes,
  * never the partner's specific content.
@@ -322,7 +325,7 @@ export function generateAbstractGuidance(result: ReconcilerResult): AbstractGuid
     }
   }
 
-  let guidanceType: string;
+  let guidanceType: GuidanceType;
   if (result.gaps.misattributions.length > 0) guidanceType = 'challenge_assumptions';
   else if (result.gaps.missedFeelings.length > 2) guidanceType = 'explore_breadth';
   else guidanceType = 'explore_deeper_feelings';
@@ -530,7 +533,7 @@ export async function persistAnalysis(opts: {
       if (g.areaHint || g.guidanceType || g.promptSeed) {
         await tx.$executeRaw`INSERT INTO reconciler_guidance (result_id, author_participant_id, subject_participant_id, area_hint, guidance_type, prompt_seed)
           VALUES (${resultId}::uuid, ${opts.authorParticipantId}::uuid, ${opts.subjectParticipantId}::uuid,
-                  ${encryptColumnValue('reconciler_guidance', 'area_hint', g.areaHint)}, ${g.guidanceType},
+                  ${encryptColumnValue('reconciler_guidance', 'area_hint', g.areaHint)}, ${g.guidanceType}::guidance_type,
                   ${encryptColumnValue('reconciler_guidance', 'prompt_seed', g.promptSeed)})`;
       }
       return resultId;

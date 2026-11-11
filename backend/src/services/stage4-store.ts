@@ -566,7 +566,7 @@ export async function insertAgreementsTx(tx: JobTx, args: CreateAgreementsArgs):
         VALUES (${a.proposalId}::uuid, ${args.actorParticipantId}::uuid, 'CONVERTED',
                 ${JSON.stringify(encryptColumnValue('proposal_revision', 'before', { status: a.fromStatus }))}::jsonb,
                 ${JSON.stringify(encryptColumnValue('proposal_revision', 'after', { agreementId: row.id, status: 'CONVERTED_TO_AGREEMENT' }))}::jsonb,
-                ${proposalRevisionReason(args.reason ?? PROPOSAL_REVISION_REASONS.MUTUAL_CLOSURE)})`;
+                ${proposalRevisionReason(args.reason ?? PROPOSAL_REVISION_REASONS.MUTUAL_CLOSURE)}::proposal_revision_reason)`;
     }
     return ids;
   }

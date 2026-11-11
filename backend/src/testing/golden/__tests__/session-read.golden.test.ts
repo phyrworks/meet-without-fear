@@ -52,7 +52,18 @@ describe(`golden: ${SCENARIO}`, () => {
       runId: `${SCENARIO}_${process.pid}`,
       // The read scenario is where the dropped-`take` blind spot lives, so this
       // is the scenario the trace oracle was built for.
-      trace: true,
+      //
+      // enable_bitmapscan = off (this run database only): the page-of-5 guard
+      // below needs the planner to walk message (conversation_id, created_at)
+      // backwards and stop at LIMIT. Templates are never ANALYZEd, so the
+      // planner prices that against default estimates, which depend on the
+      // estimated row width; retyping message.content_hash from varchar(64) to
+      // the sha256_hex domain (work-gevt) shrank the width estimate (146 -> 32
+      // bytes), doubled the row estimate, and tipped the plan to a bitmap scan
+      // of the whole conversation plus a top-N sort: 13 rows read whatever the
+      // LIMIT, so a dropped `take` would no longer show. The test below asserts
+      // the index plan, so the guard cannot silently become a no-op.
+      trace: { plannerSettings: [['enable_bitmapscan', 'off']] },
       // Snapshot the `old_concept_*` views around every step for the normalised
       // baseline. Muted harness reads outside the trace window: the byte-level
       // golden is unaffected.
@@ -187,6 +198,18 @@ describe(`golden: ${SCENARIO}`, () => {
       expect(typeof rowsRead).toBe('object');
       const read = (rowsRead as Record<string, number>)[isTargetShape() ? 'message' : 'Message'];
       expect(read).toBeDefined();
+      // The bound means something only while the page is an ordered index scan
+      // that stops at LIMIT (enable_bitmapscan above): a scan plus a sort reads
+      // every row of the conversation with or without `take`.
+      const messageReads = (step.trace?.shapes ?? []).flatMap(sh =>
+        sh.statements.filter(st => st.relations.includes(isTargetShape() ? 'message' : 'Message')),
+      );
+      expect(messageReads.length).toBeGreaterThan(0);
+      for (const st of messageReads) {
+        expect(st.planNodes).toEqual(expect.arrayContaining(['Limit']));
+        expect(st.planNodes.some(n => /^Index (Only )?Scan/.test(n))).toBe(true);
+        expect(st.planNodes).not.toContain('Sort');
+      }
       // `limit + 1` is the whole trick: 6 rows fetched to answer `hasMore` on a
       // page of 5. The fixture holds 13 messages, so an unbounded read is 13
       // (or 10 for the partner) and this assertion moves.

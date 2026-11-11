@@ -71,7 +71,7 @@ const SPEC_ENCRYPTED: Record<string, string> = {
   'draft.content': 'participant',
   'ai_memory.doc': 'per-row',
   'mood_reading.context': 'participant',
-  'invitation.name': 'session',
+  'invitation.invitee_name': 'session',
   'empathy_attempt.content': 'per-row',
   'empathy_review.feedback': 'session',
   'reconciler_result.alignment_summary': 'participant',

@@ -55,8 +55,8 @@ export async function updateFeature<F extends Feature, R>(
   return prisma.$transaction(async tx => {
     // The empty row the lock is taken on: sealed like every write of `doc`
     // (raw SQL bypasses the encryption extension; TS-13).
-    await tx.$executeRaw`INSERT INTO feature_state (user_id, feature, doc) VALUES (${userId}::uuid, ${feature}, ${JSON.stringify(encryptColumnValue('feature_state', 'doc', {}))}::jsonb) ON CONFLICT (user_id, feature) DO NOTHING`;
-    await tx.$queryRaw`SELECT 1 FROM feature_state WHERE user_id = ${userId}::uuid AND feature = ${feature} FOR UPDATE`;
+    await tx.$executeRaw`INSERT INTO feature_state (user_id, feature, doc) VALUES (${userId}::uuid, ${feature}::wellbeing_feature, ${JSON.stringify(encryptColumnValue('feature_state', 'doc', {}))}::jsonb) ON CONFLICT (user_id, feature) DO NOTHING`;
+    await tx.$queryRaw`SELECT 1 FROM feature_state WHERE user_id = ${userId}::uuid AND feature = ${feature}::wellbeing_feature FOR UPDATE`;
     const row = await tx.featureState.findUniqueOrThrow({
       where: { userId_feature: { userId, feature } },
       select: { doc: true },
