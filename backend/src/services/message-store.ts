@@ -12,6 +12,9 @@
  *     kind CHAT, or a refining-need reply), on the APP connection;
  *   - `createFacilitatorMessage` — an AI or SYSTEM row in a participant's
  *     conversation, on the JOB connection (`getJobPrisma()`);
+ *   - `createFacilitatorMessageOnce` — a once-only AI line keyed by
+ *     `dedupe_key` (work-fdc1; one raw INSERT … ON CONFLICT DO NOTHING), on
+ *     the JOB connection;
  *   - `deliverMessage` — a delivered kind (EMPATHY_STATEMENT, SHARED_CONTEXT,
  *     …) written into ANOTHER participant's conversation, on the JOB
  *     connection.
@@ -24,6 +27,7 @@
 
 import type { DbClient } from '../lib/prisma';
 import { getJobPrisma, prisma } from '../lib/prisma';
+import { encryptColumnValue } from '../lib/prisma-encryption-middleware';
 import { messageStage, type MilestoneReached } from './stage-shim';
 
 export type TargetMessageRole = 'USER' | 'AI' | 'SYSTEM';
@@ -188,8 +192,6 @@ async function insert(
     content: string;
     refiningNeedId?: string | null;
     sourceAttemptId?: string | null;
-    /** Only on a once-only facilitator line (CHECK: AI/SYSTEM rows only). */
-    dedupeKey?: MessageDedupeKey | null;
     createdAt?: Date;
   },
 ): Promise<StoredMessage> {
@@ -200,7 +202,6 @@ async function insert(
       role: data.role,
       kind: data.kind,
       content: data.content,
-      ...(data.dedupeKey ? { dedupeKey: data.dedupeKey } : {}),
       refiningNeedId: data.refiningNeedId ?? null,
       sourceAttemptId: data.sourceAttemptId ?? null,
       ...(data.createdAt ? { createdAt: data.createdAt } : {}),
@@ -278,36 +279,54 @@ export function createFacilitatorMessage(opts: {
 /**
  * A once-only facilitator line (work-fdc1): an AI row in a participant's
  * conversation, written at most once per (conversation, key). Returns the
- * written row, or null when the line was already there: the insert conflicts
- * on sql_message_once and the conflict is the answer, so there is no
- * check-then-insert window and two concurrent calls write one row. JOB
- * connection, like every facilitator row (it may INSERT dedupe_key but never
- * SELECT it).
+ * written row, or null when the line was already there.
+ *
+ * One statement, `INSERT … ON CONFLICT DO NOTHING RETURNING id, created_at`;
+ * the conflict it absorbs is sql_message_once (see below for why it names no
+ * target). A conflict is not an error, so there is no check-then-insert
+ * window (two concurrent calls write one row) and it is safe inside an
+ * interactive transaction: nothing aborts it (a caught P2002 would leave the
+ * caller's transaction in 25P02). Raw SQL, so the content is sealed here with
+ * `encryptColumnValue('message', 'content', …)`, as the Prisma extension seals
+ * a model write (the same field of SENSITIVE_FIELD_MAP, key class per-row).
+ * JOB connection, like every facilitator row (it may INSERT dedupe_key but
+ * never SELECT it; RETURNING reads only id, created_at).
  */
 export async function createFacilitatorMessageOnce(opts: {
   conversationId: string;
   dedupeKey: MessageDedupeKey;
   content: string;
   createdAt?: Date;
-  /** For tests: the client the job connection resolves to. */
+  /** The job connection by default; a transaction client of it is fine. */
   client?: DbClient;
 }): Promise<StoredMessage | null> {
-  try {
-    return await insert(opts.client ?? getJobPrisma(), {
-      conversationId: opts.conversationId,
-      senderParticipantId: null,
-      role: 'AI',
-      kind: 'CHAT',
-      content: opts.content,
-      dedupeKey: opts.dedupeKey,
-      createdAt: opts.createdAt,
-    });
-  } catch (err) {
-    // The only unique key a facilitator insert can hit is sql_message_once
-    // (the id is a fresh uuidv7() default).
-    if ((err as { code?: string })?.code === 'P2002') return null;
-    throw err;
-  }
+  const client = opts.client ?? getJobPrisma();
+  // No conflict target: inferring one (ON CONFLICT (conversation_id, dedupe_key)
+  // WHERE …) needs SELECT on the arbiter columns, and mwf_job must not read
+  // dedupe_key (42501, verified). Without a target the arbiters are message's
+  // unique indexes: the primary key, a fresh uuidv7() default that cannot
+  // collide, and sql_message_once — so the only conflict is the dedupe key.
+  const rows = await client.$queryRaw<Array<{ id: string; created_at: Date }>>`
+    INSERT INTO message (conversation_id, role, kind, content, dedupe_key, created_at)
+    VALUES (${opts.conversationId}::uuid, 'AI'::message_role, 'CHAT'::message_kind,
+            ${encryptColumnValue('message', 'content', opts.content)},
+            ${opts.dedupeKey}::message_dedupe_key, coalesce(${opts.createdAt ?? null}::timestamptz, CURRENT_TIMESTAMP))
+    ON CONFLICT DO NOTHING
+    RETURNING id, created_at`;
+  const row = rows[0];
+  if (!row) return null;
+  return {
+    id: row.id,
+    conversationId: opts.conversationId,
+    senderParticipantId: null,
+    role: 'AI',
+    kind: 'CHAT',
+    content: opts.content,
+    refiningNeedId: null,
+    sourceAttemptId: null,
+    createdAt: row.created_at,
+    senderParticipant: null,
+  };
 }
 
 /**

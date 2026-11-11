@@ -18,8 +18,8 @@
  *
  * Encryption is the single `FIELD_ENCRYPTION_KEY` (AES-256-GCM, `enc:v1:`;
  * utils/field-encryption.ts). With no key set every value passes through
- * unchanged (graceful degradation for dev/test), except `content_hash`, which is
- * written either way.
+ * unchanged (graceful degradation for dev/test). Nothing derived from a
+ * plaintext (no digest) is written beside it in either mode (work-fdc1).
  *
  * ## Key class per column (writer-principal rule; the W13 prerequisite, ruling R41)
  *
@@ -32,7 +32,7 @@
  * | table.column                                  | kind           | key class   |
  * |-----------------------------------------------|----------------|-------------|
  * | session.topic_frame                           | text           | session     |
- * | message.content (+ content_hash)              | text           | per-row: own USER/CHAT turns and AI/SYSTEM replies to the owner → participant; every delivered kind (EMPATHY_STATEMENT in the subject's conversation, SHARED_CONTEXT, VALIDATION_FEEDBACK, SHARE_SUGGESTION, EMPATHY_REVEAL_INTRO, EMPATHY_VALIDATION_PROMPT) → session |
+ * | message.content                               | text           | per-row: own USER/CHAT turns and AI/SYSTEM replies to the owner → participant; every delivered kind (EMPATHY_STATEMENT in the subject's conversation, SHARED_CONTEXT, VALIDATION_FEEDBACK, SHARE_SUGGESTION, EMPATHY_REVEAL_INTRO, EMPATHY_VALIDATION_PROMPT) → session |
  * | draft.content                                 | text           | participant |
  * | ai_memory.doc                                 | jsonb (leaves) | per-row: participant_id set → participant; user_id set (GLOBAL_FACTS) → user |
  * | mood_reading.context                          | text           | participant |

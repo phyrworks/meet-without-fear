@@ -61,8 +61,10 @@ describe(`golden: ${SCENARIO}`, () => {
       // the sha256_hex domain (work-gevt) shrank the width estimate (146 -> 32
       // bytes), doubled the row estimate, and tipped the plan to a bitmap scan
       // of the whole conversation plus a top-N sort: 13 rows read whatever the
-      // LIMIT, so a dropped `take` would no longer show. The test below asserts
-      // the index plan, so the guard cannot silently become a no-op.
+      // LIMIT, so a dropped `take` would no longer show. work-fdc1 then dropped
+      // content_hash altogether (narrower still); re-run without this setting on
+      // 2026-11-11, the guard below fails (no Index Scan), so it stays. The test
+      // below asserts the index plan, so the guard cannot silently become a no-op.
       trace: { plannerSettings: [['enable_bitmapscan', 'off']] },
       // Snapshot the `old_concept_*` views around every step for the normalised
       // baseline. Muted harness reads outside the trace window: the byte-level

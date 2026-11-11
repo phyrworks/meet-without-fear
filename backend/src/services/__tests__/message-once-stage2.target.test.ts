@@ -84,7 +84,10 @@ describeTarget("Stage 2 hold-here note: once per conversation, keyed, not hashed
       post('userA', '/empathy/validate', { validated: true }),
       post('userA', '/empathy/validate', { validated: true }),
     ]);
-    // A concurrent verdict may lose its own review race, but never writes a second note.
+    // Only the note is under test here. The two verdicts race on the reviewer's own
+    // empathy_review row and the attempt's status move (not on the note), so the
+    // losing call may answer non-200 (e.g. a unique or serialization conflict on
+    // the review); what must hold is that at least one lands and the note stays one row.
     expect(both.some(r => r.status === 200)).toBe(true);
     expect(await notes('ada@e2e.test')).toEqual(once);
     expect(await notes('bob@e2e.test')).toEqual([]);

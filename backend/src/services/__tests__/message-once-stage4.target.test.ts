@@ -11,6 +11,8 @@
  *   - createFacilitatorMessageOnce writes one row per (conversation, key), on
  *     a repeat and on two concurrent calls, and the job connection that writes
  *     it cannot read the key back;
+ *   - T-message-immutable refuses an UPDATE of dedupe_key; inside an
+ *     interactive transaction a duplicate is null and the transaction goes on;
  *   - Stage 4's hand-off bridge (POST /stage4/share-selections, Ada first,
  *     Bob not shared): one bridge row however often, or concurrently, Ada shares.
  *
@@ -88,6 +90,14 @@ describeTarget('once-only facilitator lines: a closed dedupe key, no content dig
         WHERE i.indexrelid = 'public.sql_message_once'::regclass`,
     );
     expect(idx.uniq).toBe(true);
+    // createFacilitatorMessageOnce's ON CONFLICT DO NOTHING names no target (mwf_job cannot
+    // SELECT dedupe_key), so every unique index of message is an arbiter: it must stay
+    // exactly the primary key and sql_message_once, or another conflict would be swallowed.
+    const uniques = await run.sql<{ name: string }>(
+      `SELECT i.indexrelid::regclass::text AS name FROM pg_index i
+        WHERE i.indrelid = 'public.message'::regclass AND i.indisunique ORDER BY 1`,
+    );
+    expect(uniques.map(u => u.name)).toEqual(['message_pkey', 'sql_message_once']);
     expect(idx.def).toMatch(/ON public\.message USING btree \(conversation_id, dedupe_key\) WHERE \(dedupe_key IS NOT NULL\)/);
   });
 
@@ -140,6 +150,44 @@ describeTarget('once-only facilitator lines: a closed dedupe key, no content dig
     expect(await keyed(conv.bob, 'STAGE4_HANDOFF_BRIDGE')).toBe(0);
   });
 
+  it('T-message-immutable refuses an UPDATE of dedupe_key (clearing it would allow a second line)', async () => {
+    const [{ id }] = await run.sql<{ id: string }>(
+      `SELECT id FROM message WHERE conversation_id = $1 AND dedupe_key = 'STAGE2_VALIDATED_WAIT'`,
+      [conv.bob],
+    );
+    await expect(run.sql(`UPDATE message SET dedupe_key = NULL WHERE id = $1`, [id])).rejects.toThrow(
+      /message routing is immutable/,
+    );
+    await expect(
+      run.sql(`UPDATE message SET dedupe_key = 'STAGE4_HANDOFF_BRIDGE' WHERE id = $1`, [id]),
+    ).rejects.toThrow(/message routing is immutable/);
+    expect(await keyed(conv.bob, 'STAGE2_VALIDATED_WAIT')).toBe(1);
+  });
+
+  it('inside an interactive transaction a duplicate returns null and the transaction goes on', async () => {
+    const { getJobPrisma } = await import('../../lib/prisma');
+    const out = await getJobPrisma().$transaction(async tx => {
+      const dup = await store.createFacilitatorMessageOnce({
+        conversationId: conv.bob,
+        dedupeKey: 'STAGE2_VALIDATED_WAIT',
+        content: 'PROBE_FDC1_TX_DUP',
+        client: tx,
+      });
+      // A later statement in the same transaction still runs (no 25P02).
+      const fresh = await store.createFacilitatorMessageOnce({
+        conversationId: conv.bob,
+        dedupeKey: 'STAGE4_HANDOFF_BRIDGE',
+        content: 'PROBE_FDC1_TX_FRESH',
+        client: tx,
+      });
+      return { dup, fresh };
+    });
+    expect(out.dup).toBeNull();
+    expect(out.fresh).toMatchObject({ content: 'PROBE_FDC1_TX_FRESH' });
+    expect(await keyed(conv.bob, 'STAGE4_HANDOFF_BRIDGE')).toBe(1);
+    expect(await keyed(conv.bob, 'STAGE2_VALIDATED_WAIT')).toBe(1);
+  });
+
   it('the job connection may write a dedupe key but not read it', async () => {
     await expect(
       run.as('mwf_job', null, `SELECT dedupe_key FROM message WHERE conversation_id = $1`, [conv.ada]),
@@ -179,6 +227,7 @@ describeTarget('once-only facilitator lines: a closed dedupe key, no content dig
     const both = await Promise.all([share(), share()]);
     expect(both.map(r => r.status)).toEqual([200, 200]);
     expect(await keyed(conv.ada, 'STAGE4_HANDOFF_BRIDGE')).toBe(1);
-    expect(await keyed(conv.bob, 'STAGE4_HANDOFF_BRIDGE')).toBe(0);
+    // Bob's conversation keeps just the transaction test's row: Ada's shares write only into hers.
+    expect(await keyed(conv.bob, 'STAGE4_HANDOFF_BRIDGE')).toBe(1);
   });
 });
