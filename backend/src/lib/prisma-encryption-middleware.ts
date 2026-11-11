@@ -108,10 +108,15 @@
  *
  * A random-IV cipher cannot be matched by WHERE/ON CONFLICT/unique keys. No
  * unique key or ON CONFLICT target on the target schema includes an encrypted
- * column. Equality probes use `message.content_hash` (written here, SHA-256 of
- * the plaintext); `user_memory.content`'s duplicate probe compares plaintext in
- * the app (ruling R45, controllers/memories.ts); the ops dashboard's
- * `reflection.title` search arm is skipped when a key is set (routes/brain.ts).
+ * column, and no digest of a plaintext is stored beside its ciphertext
+ * (work-fdc1 removed `message.content_hash`, an unsalted SHA-256 of every
+ * message: it confirmed a guessed plaintext to anyone with SELECT or a backup,
+ * and outlived a crypto-shred of the ciphertext). The once-only facilitator lines dedupe on a closed
+ * enum key instead (`message.dedupe_key`, sql_message_once;
+ * message-store createFacilitatorMessageOnce); `user_memory.content`'s
+ * duplicate probe compares plaintext in the app (ruling R45,
+ * controllers/memories.ts); the ops dashboard's `reflection.title` search arm
+ * is skipped when a key is set (routes/brain.ts).
  *
  * A value that cannot be decrypted raises FieldDecryptionError, which
  * propagates to the caller. It is never converted into empty content.
@@ -119,7 +124,6 @@
 
 import type { PrismaClient } from '../generated/prisma/client';
 import { encrypt, decrypt, isEncrypted, FieldDecryptionError } from '../utils/field-encryption';
-import { contentHash } from '../utils/content-hash';
 
 /** The key a column's values are written under (spec Conventions "Encryption keys"). */
 export type KeyClass = 'participant' | 'session' | 'user' | 'per-row';
@@ -147,12 +151,6 @@ export interface SensitiveFieldConfig {
   table: string;
   /** Prisma field name → its encrypted column. */
   fields: Record<string, EncryptedField>;
-  /**
-   * Deterministic digests written alongside the ciphertext, so equality/dedupe
-   * probes have something to match on. `from` is a plaintext string field,
-   * `to` is the field that receives its SHA-256. See utils/content-hash.ts.
-   */
-  hashedFields?: Array<{ from: string; to: string }>;
 }
 
 const text = (column: string, key: KeyClass, rule?: string, amended?: boolean): EncryptedField => ({
@@ -180,7 +178,6 @@ export const SENSITIVE_FIELD_MAP: Record<string, SensitiveFieldConfig> = {
   Message: {
     table: 'message',
     fields: { content: text('content', 'per-row', MESSAGE_KEY_RULE) },
-    hashedFields: [{ from: 'content', to: 'contentHash' }],
   },
   Draft: { table: 'draft', fields: { content: text('content', 'participant') } },
   AiMemory: {
@@ -492,14 +489,6 @@ export function encryptDataFields(
   relations?: RelationIndex,
 ): void {
   if (config) {
-    // Hash BEFORE encrypting — the digest must cover the plaintext. Written on
-    // every write that supplies the source field, including when no encryption
-    // key is configured, so probes behave identically in both modes.
-    for (const { from, to } of config.hashedFields ?? []) {
-      const v = data[from];
-      const plain = typeof v === 'string' ? v : isPlainObject(v) && typeof v.set === 'string' ? v.set : undefined;
-      if (plain !== undefined) data[to] = contentHash(plain);
-    }
     for (const [name, field] of Object.entries(config.fields)) {
       if (name in data && data[name] != null) data[name] = sealUpdateValue(field, data[name]);
     }

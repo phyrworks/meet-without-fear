@@ -18,9 +18,9 @@
 import type { MessageDTO } from '@meet-without-fear/shared';
 import { prisma } from '../lib/prisma';
 import type { PrismaClient } from '../generated/prisma/client';
-import { contentHash } from '../utils/content-hash';
 import {
   createFacilitatorMessage,
+  createFacilitatorMessageOnce,
   deliverMessage,
   toMessageDTO,
   type StoredMessage,
@@ -80,7 +80,6 @@ export async function ownStatementCopy(opts: {
       role: 'USER',
       kind: 'EMPATHY_STATEMENT',
       content: opts.content,
-      contentHash: contentHash(opts.content),
       sourceAttemptId: opts.attemptId,
     },
     select: { id: true, createdAt: true },
@@ -100,15 +99,13 @@ export async function ownStatementCopy(opts: {
 }
 
 /**
- * Has this exact AI text already been written into this conversation (dedupe
- * on the content hash — content may be encrypted, the hash is stable)?
+ * The hold-here note after a participant validates the partner's statement
+ * while the partner has not yet validated theirs: written at most once per
+ * conversation (dedupe_key STAGE2_VALIDATED_WAIT, work-fdc1). Null when it was
+ * already there.
  */
-export async function aiNoteExists(conversationId: string, content: string): Promise<boolean> {
-  const found = await prisma.message.findFirst({
-    where: { conversationId, role: 'AI', contentHash: contentHash(content) },
-    select: { id: true },
-  });
-  return !!found;
+export function validatedWaitNote(conversationId: string, content: string, createdAt?: Date): Promise<StoredMessage | null> {
+  return createFacilitatorMessageOnce({ conversationId, dedupeKey: 'STAGE2_VALIDATED_WAIT', content, createdAt });
 }
 
 /** The newest AI row's text in a conversation (the alignment-message de-dup guard). */

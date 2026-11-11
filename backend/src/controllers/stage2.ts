@@ -55,7 +55,7 @@ import { cleanVisibleAIText } from '../utils/visible-text';
 import { reachMilestone } from '../services/milestone-writer';
 import { loadCurrentStages } from '../services/stage-shim';
 import { getJobPrisma } from '../lib/prisma';
-import { aiNote, aiNoteExists, deliver, messageDTO, ownStatementCopy } from '../services/empathy-messages';
+import { aiNote, deliver, messageDTO, ownStatementCopy, validatedWaitNote } from '../services/empathy-messages';
 import {
   currentAttempt,
   directionOf,
@@ -865,9 +865,8 @@ export async function validateEmpathy(req: Request, res: Response): Promise<void
     if (validated && !partnerHasValidatedMyAttempt && me.mainConversationId) {
       const waitMessage =
         "You confirmed this feels right. We'll hold here while your partner reviews what you shared. Once they respond, we'll move you into the next step.";
-      if (!(await aiNoteExists(me.mainConversationId, waitMessage))) {
-        await aiNote(me.mainConversationId, waitMessage, now);
-      }
+      // Once per conversation: a repeat (or concurrent) validate writes nothing (work-fdc1).
+      await validatedWaitNote(me.mainConversationId, waitMessage, now);
     }
 
     successResponse(res, {

@@ -24,7 +24,6 @@
 
 import type { DbClient } from '../lib/prisma';
 import { getJobPrisma, prisma } from '../lib/prisma';
-import { contentHash } from '../utils/content-hash';
 import { messageStage, type MilestoneReached } from './stage-shim';
 
 export type TargetMessageRole = 'USER' | 'AI' | 'SYSTEM';
@@ -36,6 +35,17 @@ export type TargetMessageKind =
   | 'VALIDATION_FEEDBACK'
   | 'SHARE_SUGGESTION'
   | 'EMPATHY_VALIDATION_PROMPT';
+
+/**
+ * The once-only facilitator lines (enum message_dedupe_key, work-fdc1): an
+ * app-generated AI line written at most once per conversation. The key is the
+ * line's identity, so nothing derived from its content is stored — the old
+ * sha256(content) probe was an unsalted plaintext oracle on every message.
+ * sql_message_once (unique on conversation_id, dedupe_key) is the guard, so
+ * two concurrent writers still produce one row.
+ */
+export const MESSAGE_DEDUPE_KEYS = ['STAGE2_VALIDATED_WAIT', 'STAGE4_HANDOFF_BRIDGE'] as const;
+export type MessageDedupeKey = (typeof MESSAGE_DEDUPE_KEYS)[number];
 
 /** The row shape every reader here works with. */
 export interface StoredMessage {
@@ -178,6 +188,8 @@ async function insert(
     content: string;
     refiningNeedId?: string | null;
     sourceAttemptId?: string | null;
+    /** Only on a once-only facilitator line (CHECK: AI/SYSTEM rows only). */
+    dedupeKey?: MessageDedupeKey | null;
     createdAt?: Date;
   },
 ): Promise<StoredMessage> {
@@ -188,9 +200,7 @@ async function insert(
       role: data.role,
       kind: data.kind,
       content: data.content,
-      // Written here as well as by the encryption middleware, which computes
-      // it only when encryption is on; dedupe probes need it either way.
-      contentHash: contentHash(data.content),
+      ...(data.dedupeKey ? { dedupeKey: data.dedupeKey } : {}),
       refiningNeedId: data.refiningNeedId ?? null,
       sourceAttemptId: data.sourceAttemptId ?? null,
       ...(data.createdAt ? { createdAt: data.createdAt } : {}),
@@ -263,6 +273,41 @@ export function createFacilitatorMessage(opts: {
     sourceAttemptId: opts.sourceAttemptId,
     createdAt: opts.createdAt,
   });
+}
+
+/**
+ * A once-only facilitator line (work-fdc1): an AI row in a participant's
+ * conversation, written at most once per (conversation, key). Returns the
+ * written row, or null when the line was already there: the insert conflicts
+ * on sql_message_once and the conflict is the answer, so there is no
+ * check-then-insert window and two concurrent calls write one row. JOB
+ * connection, like every facilitator row (it may INSERT dedupe_key but never
+ * SELECT it).
+ */
+export async function createFacilitatorMessageOnce(opts: {
+  conversationId: string;
+  dedupeKey: MessageDedupeKey;
+  content: string;
+  createdAt?: Date;
+  /** For tests: the client the job connection resolves to. */
+  client?: DbClient;
+}): Promise<StoredMessage | null> {
+  try {
+    return await insert(opts.client ?? getJobPrisma(), {
+      conversationId: opts.conversationId,
+      senderParticipantId: null,
+      role: 'AI',
+      kind: 'CHAT',
+      content: opts.content,
+      dedupeKey: opts.dedupeKey,
+      createdAt: opts.createdAt,
+    });
+  } catch (err) {
+    // The only unique key a facilitator insert can hit is sql_message_once
+    // (the id is a fresh uuidv7() default).
+    if ((err as { code?: string })?.code === 'P2002') return null;
+    throw err;
+  }
 }
 
 /**

@@ -61,6 +61,15 @@ CREATE UNIQUE INDEX sql_user_key_live ON user_key (user_id)
   WHERE destroyed_at IS NULL;
 COMMENT ON INDEX sql_user_key_live IS 'At most one live (not shredded) key per user.';
 
+-- §1.1 message — work-fdc1: an app-generated facilitator line at most once per
+-- conversation. The idempotency key of the two once-only writers (stage2
+-- validateEmpathy's hold-here note, stage4's hand-off bridge): they insert and
+-- treat a conflict here as "already written", so two concurrent calls write one
+-- row. Replaces the sha256(content) probe (no content-derived value is stored).
+CREATE UNIQUE INDEX sql_message_once ON message (conversation_id, dedupe_key)
+  WHERE dedupe_key IS NOT NULL;
+COMMENT ON INDEX sql_message_once IS 'At most one message per conversation and dedupe_key: the once-only facilitator lines (message_dedupe_key). Their writers insert and treat a conflict as already written.';
+
 -- §1.2 empathy_attempt — one live attempt per direction
 CREATE UNIQUE INDEX sql_attempt_one_live_per_direction ON empathy_attempt
   (author_participant_id, subject_participant_id)
