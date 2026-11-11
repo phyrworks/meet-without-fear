@@ -544,8 +544,9 @@ CREATE CONSTRAINT TRIGGER t_cardinality_2 AFTER DELETE OR UPDATE OF kind, user_i
   DEFERRABLE INITIALLY DEFERRED
   FOR EACH ROW EXECUTE FUNCTION app.t_participant_cardinality();
 
--- T-message-immutable: routing columns never change; content of AI/SYSTEM rows
--- and of every delivered kind never changes, except by the job (W13 re-encryption).
+-- T-message-immutable: routing columns and the once-only dedupe_key (work-fdc1)
+-- never change; content of AI/SYSTEM rows and of every delivered kind never
+-- changes, except by the job (W13 re-encryption).
 CREATE FUNCTION app.t_message_immutable() RETURNS trigger
   LANGUAGE plpgsql
   SET search_path = pg_catalog, public, pg_temp
@@ -554,7 +555,8 @@ CREATE FUNCTION app.t_message_immutable() RETURNS trigger
     IF NEW.conversation_id IS DISTINCT FROM OLD.conversation_id
        OR NEW.sender_participant_id IS DISTINCT FROM OLD.sender_participant_id
        OR NEW.role IS DISTINCT FROM OLD.role
-       OR NEW.kind IS DISTINCT FROM OLD.kind THEN
+       OR NEW.kind IS DISTINCT FROM OLD.kind
+       OR NEW.dedupe_key IS DISTINCT FROM OLD.dedupe_key THEN
       RAISE EXCEPTION 'message routing is immutable' USING ERRCODE = 'check_violation';
     END IF;
     IF NEW.content IS DISTINCT FROM OLD.content AND (OLD.role IN ('AI', 'SYSTEM') OR OLD.kind <> 'CHAT')
@@ -1117,9 +1119,10 @@ GRANT UPDATE (destroyed_at) ON user_key TO mwf_job;
 -- "Key per row" — AI/SYSTEM rows and every delivered kind are mwf_job's;
 -- participant_milestone — system keys are mwf_job's; ai_memory — "in practice
 -- written by mwf_job").
--- message-store createFacilitatorMessage / deliverMessage: the dedupe hash, the
--- refining need a facilitator reply answers, and an explicit instant (fixtures, replays)
-GRANT INSERT (content_hash, refining_need_id, created_at) ON message TO mwf_job;
+-- message-store createFacilitatorMessage / deliverMessage: a once-only line's
+-- dedupe_key (work-fdc1, sql_message_once), the refining need a facilitator
+-- reply answers, and an explicit instant (fixtures, replays)
+GRANT INSERT (dedupe_key, refining_need_id, created_at) ON message TO mwf_job;
 -- message-store insert() returns the written row's id and instant (INSERT … RETURNING id, created_at);
 -- getInitialMessage's Serializable idempotency probe reads the first message's id. Never content.
 GRANT SELECT (id, created_at) ON message TO mwf_job;

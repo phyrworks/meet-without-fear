@@ -26,7 +26,6 @@ import {
   type RelationIndex,
 } from '../prisma-encryption-middleware';
 import { encrypt, isEncrypted, FieldDecryptionError, _resetForTesting } from '../../utils/field-encryption';
-import { contentHash } from '../../utils/content-hash';
 import { COVERAGE } from '../../services/__tests__/encryption-at-rest';
 
 const TEST_KEY = crypto.randomBytes(32).toString('base64');
@@ -175,10 +174,13 @@ describe('SENSITIVE_FIELD_MAP — the target columns', () => {
     expect(SENSITIVE_FIELD_MAP.User).toBeUndefined();
   });
 
-  it('every per-row key class states its rule; message.content keeps its content_hash', () => {
+  it('every per-row key class states its rule; message has no content digest column (work-fdc1)', () => {
     for (const { f } of entries) if (f.key === 'per-row') expect(f.rule).toEqual(expect.any(String));
-    expect(SENSITIVE_FIELD_MAP.Message.hashedFields).toEqual([{ from: 'content', to: 'contentHash' }]);
-    expect(dataModel.models.Message.fields.find(x => x.name === 'contentHash')?.dbName).toBe('content_hash');
+    expect(dataModel.models.Message.fields.map(x => x.dbName ?? x.name)).not.toContain('content_hash');
+    expect(dataModel.models.Message.fields.find(x => x.name === 'dedupeKey')).toMatchObject({
+      dbName: 'dedupe_key',
+      kind: 'enum',
+    });
   });
 
   it('the at-rest suites (encryption-at-rest-*.target.test.ts) together prove every column of the map', () => {
@@ -434,53 +436,53 @@ describe('applyFieldEncryption — model operations', () => {
   });
 });
 
-describe('contentHash on write (message.content → content_hash)', () => {
+describe('no content-derived value on write (work-fdc1: message.content_hash removed)', () => {
   const captured: Array<Record<string, unknown>> = [];
   const query = async (args: Record<string, unknown>) => {
     captured.push(args);
     return null;
   };
+  const sha = (s: string) => crypto.createHash('sha256').update(s, 'utf8').digest('hex');
+  /** Every string in the written args other than the sealed content itself. */
+  const strings = (v: unknown, out: string[] = []): string[] => {
+    if (typeof v === 'string') out.push(v);
+    else if (v && typeof v === 'object') for (const x of Object.values(v)) strings(x, out);
+    return out;
+  };
   beforeEach(() => {
     captured.length = 0;
   });
 
-  it('is the digest of the plaintext, next to the ciphertext', async () => {
-    await applyFieldEncryption({ model: 'Message', operation: 'create', args: { data: { content: 'hi' } }, query });
-    const data = captured[0].data as { content: string; contentHash: string };
-    expect(data.contentHash).toBe(contentHash('hi'));
-    expect(isEncrypted(data.content)).toBe(true);
-  });
-
-  it('is written keyless too, on every row of a createMany, on both upsert branches, and on { set }', async () => {
-    noKey();
-    await applyFieldEncryption({ model: 'Message', operation: 'create', args: { data: { content: 'a' } }, query });
-    expect((captured[0].data as { contentHash: string }).contentHash).toBe(contentHash('a'));
-    expect((captured[0].data as { content: string }).content).toBe('a');
+  it('a USER turn is written as its ciphertext and nothing else derived from it (keyed and keyless)', async () => {
+    const plain = 'PROBE_FDC1 I am tired of being the only one who notices';
     await applyFieldEncryption({
       model: 'Message',
-      operation: 'createMany',
-      args: { data: [{ content: 'x' }, { content: 'y' }] },
+      operation: 'create',
+      args: { data: { role: 'USER', kind: 'CHAT', content: plain } },
       query,
     });
-    expect((captured[1].data as Array<{ contentHash: string }>).map(r => r.contentHash)).toEqual([
-      contentHash('x'),
-      contentHash('y'),
-    ]);
+    const keyed = captured[0].data as Record<string, unknown>;
+    expect(Object.keys(keyed).sort()).toEqual(['content', 'kind', 'role']);
+    expect(isEncrypted(keyed.content as string)).toBe(true);
+    noKey();
     await applyFieldEncryption({
       model: 'Message',
       operation: 'upsert',
-      args: { where: {}, create: { content: 'c' }, update: { content: { set: 'u' } } },
+      args: { where: {}, create: { content: plain }, update: { content: { set: plain } } },
       query,
     });
-    expect((captured[2].create as { contentHash: string }).contentHash).toBe(contentHash('c'));
-    expect((captured[2].update as { contentHash: string }).contentHash).toBe(contentHash('u'));
-  });
-
-  it('is left alone by an update that does not touch content, and never added to other models', async () => {
-    await applyFieldEncryption({ model: 'Message', operation: 'update', args: { where: {}, data: {} }, query });
-    expect(captured[0].data).not.toHaveProperty('contentHash');
-    await applyFieldEncryption({ model: 'Draft', operation: 'create', args: { data: { content: 'd' } }, query });
-    expect(captured[1].data).not.toHaveProperty('contentHash');
+    await applyFieldEncryption({
+      model: 'Message',
+      operation: 'createMany',
+      args: { data: [{ content: plain }] },
+      query,
+    });
+    for (const args of captured) {
+      expect(args).not.toHaveProperty('data.contentHash');
+      expect(args).not.toHaveProperty('create.contentHash');
+      expect(args).not.toHaveProperty('update.contentHash');
+      expect(strings(args)).not.toContain(sha(plain));
+    }
   });
 });
 
@@ -500,7 +502,6 @@ describe('encryptDataFields / decryptRecordFields (exported for manual paths)', 
       encryptDataFields(record, config);
       expect(JSON.stringify(record)).not.toContain(`${model}.`);
       decryptRecordFields(record, config);
-      for (const { to } of config.hashedFields ?? []) delete record[to];
       expect(record).toEqual(copy);
     }
   });

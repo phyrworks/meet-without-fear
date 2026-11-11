@@ -6,9 +6,10 @@
  * writer (mwf_app with identity binding on; mwf_job for the job's writers),
  * are ciphertext at rest and read back as plaintext.
  *
- *   - message.content with content_hash = SHA-256 of the plaintext (the
- *     participant's turn, a facilitator row, a delivered SHARED_CONTEXT, the
- *     reveal's EMPATHY_STATEMENT copy written by app.empathy_set_status);
+ *   - message.content (the participant's turn, a facilitator row, a delivered
+ *     SHARED_CONTEXT, the reveal's EMPATHY_STATEMENT copy written by
+ *     app.empathy_set_status), with nothing else in the row derived from the
+ *     plaintext (work-fdc1: no content_hash, dedupe_key NULL);
  *   - empathy_attempt.content: the resubmission through
  *     app.empathy_set_status(…, content) gets ciphertext;
  *   - the share moments call the W13 hook (reveal, share-offer delivery).
@@ -19,7 +20,7 @@
 import { COVERAGE, expectSealed } from './encryption-at-rest';
 import { isTargetShape } from '../../testing/golden/shape';
 import { adaAndBob, httpAs, openTargetRun, type TargetRun } from './target-roles';
-import { contentHash } from '../../utils/content-hash';
+import crypto from 'crypto';
 
 const describeTarget = isTargetShape() ? describe : describe.skip;
 jest.setTimeout(240_000);
@@ -53,6 +54,28 @@ describeTarget(
           return e;
         });
     const REVISED = 'PROBE_TS13_ROUND_TWO I see you are running on empty';
+    /**
+     * work-fdc1: the row's columns other than the sealed content carry nothing
+     * derived from the plaintext — not the text, not its SHA-256 or MD5 (hex or
+     * base64) — and no once-only key.
+     */
+    const expectNoContentDerivedValue = async (id: string, plaintext: string) => {
+      const [{ row }] = await run.sql<{ row: Record<string, unknown> }>(
+        `SELECT to_jsonb(m) - 'content' AS row FROM message m WHERE id = $1`,
+        [id],
+      );
+      expect(row).not.toHaveProperty('content_hash');
+      expect(row.dedupe_key).toBeNull();
+      const digests = ['sha256', 'md5'].flatMap(alg => {
+        const d = crypto.createHash(alg).update(plaintext, 'utf8').digest();
+        return [d.toString('hex'), d.toString('base64')];
+      });
+      const values = Object.values(row).map(v => (v == null ? '' : String(v)));
+      for (const v of values) {
+        expect(v).not.toContain(plaintext);
+        for (const d of digests) expect(v).not.toContain(d);
+      }
+    };
 
     beforeAll(async () => {
       run = await openTargetRun('RECONCILER_SHOWN_B', `ts13_empathy_${process.pid}`);
@@ -88,7 +111,7 @@ describeTarget(
       if (run) await run.drop();
     });
 
-    it('message.content (participant turn as mwf_app, facilitator row as mwf_job): sealed, content_hash of the plaintext, read back', async () => {
+    it('message.content (participant turn as mwf_app, facilitator row as mwf_job): sealed, nothing content-derived beside it, read back', async () => {
       const own = await asUser(ids.adaUser, () =>
         messages.createParticipantMessage({
           conversationId: conv.ada,
@@ -98,14 +121,8 @@ describeTarget(
       );
       const ai = await messages.createFacilitatorMessage({ conversationId: conv.ada, content: 'PROBE_TS13_AI_REPLY' });
       await expectSealed(run, 'message', 'content', `id = ANY($1::uuid[])`, [[own.id, ai.id]]);
-      const hashes = await run.sql<{ id: string; content_hash: string }>(
-        `SELECT id, content_hash FROM message WHERE id = ANY($1::uuid[])`,
-        [[own.id, ai.id]],
-      );
-      expect(Object.fromEntries(hashes.map(h => [h.id, h.content_hash]))).toEqual({
-        [own.id]: contentHash('PROBE_TS13_TURN'),
-        [ai.id]: contentHash('PROBE_TS13_AI_REPLY'),
-      });
+      await expectNoContentDerivedValue(own.id, 'PROBE_TS13_TURN');
+      await expectNoContentDerivedValue(ai.id, 'PROBE_TS13_AI_REPLY');
       const listed = await asUser(ids.adaUser, () =>
         messages.listConversationMessages({ conversationId: conv.ada, limit: 500, order: 'asc' }),
       );
@@ -286,11 +303,7 @@ describeTarget(
       const delivered = adaMessages.find(m => m.kind === 'SHARED_CONTEXT');
       expect(delivered?.content).toBe(shared?.sharedContent);
       expect(delivered?.content).not.toContain('enc:v1:');
-      const [{ content_hash }] = await run.sql<{ content_hash: string }>(
-        `SELECT content_hash FROM message WHERE kind = 'SHARED_CONTEXT' AND conversation_id = $1`,
-        [conv.ada],
-      );
-      expect(content_hash).toBe(contentHash(delivered!.content));
+      await expectNoContentDerivedValue(delivered!.id, delivered!.content);
       expect(momentsCalled('share-offer-delivery')).toEqual([
         expect.objectContaining({
           moment: 'share-offer-delivery',

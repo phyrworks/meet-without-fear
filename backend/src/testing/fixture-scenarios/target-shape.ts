@@ -80,7 +80,6 @@
  */
 
 import type { ClientBase } from 'pg';
-import { contentHash } from '../../utils/content-hash';
 import {
   invitationFields,
   messageSender,
@@ -368,15 +367,14 @@ export async function writeTargetShape(
     const conversationId = conversationOf.get(forKey);
     if (!conversationId) throw new Error(`No conversation for participant "${forKey}"`);
     await db.query(
-      `INSERT INTO message (conversation_id, sender_participant_id, role, kind, content, content_hash, source_attempt_id, created_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+      `INSERT INTO message (conversation_id, sender_participant_id, role, kind, content, source_attempt_id, created_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)`,
       [
         conversationId,
         from === null ? null : pid(from),
         role,
         kind,
         m.content,
-        contentHash(m.content),
         sourceAttemptId,
         t(m.at),
       ],

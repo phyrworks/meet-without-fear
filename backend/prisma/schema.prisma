@@ -188,16 +188,16 @@ model ConversationReadState {
 }
 
 model Message {
-  id                  String      @id @default(dbgenerated("uuidv7()")) @db.Uuid
-  conversationId      String      @map("conversation_id") @db.Uuid
-  senderParticipantId String?     @map("sender_participant_id") @db.Uuid
+  id                  String            @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  conversationId      String            @map("conversation_id") @db.Uuid
+  senderParticipantId String?           @map("sender_participant_id") @db.Uuid
   role                MessageRole
-  kind                MessageKind @default(CHAT)
+  kind                MessageKind       @default(CHAT)
   content             String
-  contentHash         String?     @map("content_hash")
-  refiningNeedId      String?     @map("refining_need_id") @db.Uuid
-  sourceAttemptId     String?     @map("source_attempt_id") @db.Uuid
-  createdAt           DateTime    @default(now()) @map("created_at") @db.Timestamptz(3)
+  dedupeKey           MessageDedupeKey? @map("dedupe_key")
+  refiningNeedId      String?           @map("refining_need_id") @db.Uuid
+  sourceAttemptId     String?           @map("source_attempt_id") @db.Uuid
+  createdAt           DateTime          @default(now()) @map("created_at") @db.Timestamptz(3)
 
   conversation      Conversation    @relation(fields: [conversationId], references: [id], onDelete: Cascade, onUpdate: NoAction)
   senderParticipant Participant?    @relation("MessageSender", fields: [senderParticipantId], references: [id], onDelete: Cascade, onUpdate: NoAction)
@@ -207,7 +207,6 @@ model Message {
   readStates ConversationReadState[]
 
   @@index([conversationId, createdAt])
-  @@index([conversationId, kind, contentHash])
   @@index([senderParticipantId])
   @@index([refiningNeedId])
   @@index([sourceAttemptId])
@@ -1171,6 +1170,13 @@ enum MessageKind {
   EMPATHY_VALIDATION_PROMPT
 
   @@map("message_kind")
+}
+
+enum MessageDedupeKey {
+  STAGE2_VALIDATED_WAIT
+  STAGE4_HANDOFF_BRIDGE
+
+  @@map("message_dedupe_key")
 }
 
 enum DraftKind {

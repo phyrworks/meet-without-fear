@@ -42,7 +42,7 @@
 -- SECTIONS
 --   0  preamble: empty-database guard, roles, schema app, app.current_user_id()
 --      (backend/scripts/target-shape/preamble.sql)
---   1  domains (uuid7, ciphertext, ts_ms, intensity, sha256_hex), enums and the 47 tables, hand-written,
+--   1  domains (uuid7, ciphertext, ts_ms, intensity), enums and the 47 tables, hand-written,
 --      each table complete in its CREATE TABLE, in dependency order
 --      (backend/scripts/target-shape/tables.sql)
 --   2  milestone seed (reference data)
@@ -174,7 +174,7 @@ GRANT EXECUTE ON FUNCTION app.current_user_id() TO mwf_app, mwf_job, mwf_ops, mw
 -- ----------------------------------------------------------------------------
 -- Domains. All are invisible to Prisma: a uuid7 column introspects as
 -- String @db.Uuid, a ts_ms column as DateTime @db.Timestamptz(3), an
--- intensity column as Int, a sha256_hex column as String, and `migrate diff` reports nothing (TS-6 probe for
+-- intensity column as Int, and `migrate diff` reports nothing (TS-6 probe for
 -- intensity, 2026-10-19; work-a39h.11.40 probe for uuid7, 2026-11-02;
 -- work-gevt for ts_ms, 2026-11-10; PG 18.6 / Prisma 7.10).
 -- ----------------------------------------------------------------------------
@@ -254,11 +254,6 @@ COMMENT ON DOMAIN ts_ms IS 'A timestamptz rounded to milliseconds; every timesta
 CREATE DOMAIN intensity AS integer CHECK (VALUE BETWEEN 1 AND 10);
 COMMENT ON DOMAIN intensity IS 'A 1-10 self-rated intensity (mood_reading.intensity, regulation_event.intensity_before/after).';
 
--- message.content_hash: utils/content-hash.ts writes sha256(plaintext) as
--- 64 lower-case hex digits. NULL passes (a message may have no hash).
-CREATE DOMAIN sha256_hex AS text CHECK (VALUE ~ '^[0-9a-f]{64}$');
-COMMENT ON DOMAIN sha256_hex IS 'A SHA-256 digest as 64 lower-case hex digits (utils/content-hash.ts); NULL passes.';
-
 -- ----------------------------------------------------------------------------
 -- Enums, in schema.prisma order.
 -- ----------------------------------------------------------------------------
@@ -276,6 +271,8 @@ CREATE TYPE message_role AS ENUM ('USER', 'AI', 'SYSTEM');
 COMMENT ON TYPE message_role IS 'Who wrote a line: the human (USER), the AI guide (AI) or the app (SYSTEM). Also used by reflection_message.';
 CREATE TYPE message_kind AS ENUM ('CHAT', 'EMPATHY_STATEMENT', 'EMPATHY_REVEAL_INTRO', 'SHARED_CONTEXT', 'VALIDATION_FEEDBACK', 'SHARE_SUGGESTION', 'EMPATHY_VALIDATION_PROMPT');
 COMMENT ON TYPE message_kind IS 'CHAT for an ordinary turn; every other member is an item delivered across participants (an empathy statement, shared context, validation feedback, a share suggestion and their prompts).';
+CREATE TYPE message_dedupe_key AS ENUM ('STAGE2_VALIDATED_WAIT', 'STAGE4_HANDOFF_BRIDGE');
+COMMENT ON TYPE message_dedupe_key IS 'The app-generated facilitator lines written at most once per conversation (work-fdc1): STAGE2_VALIDATED_WAIT, the hold-here note after a participant validates the partner''s empathy (controllers/stage2.ts); STAGE4_HANDOFF_BRIDGE, the hand-off line after the first Stage 4 share (controllers/stage4.ts). A closed set: no value is derived from message content.';
 CREATE TYPE draft_kind AS ENUM ('EMPATHY', 'VALIDATION_FEEDBACK', 'SHARE_CONTEXT');
 COMMENT ON TYPE draft_kind IS 'The sharing point a draft is for; it decides which of draft''s arc columns is set.';
 CREATE TYPE milestone_scope AS ENUM ('participant', 'session');
@@ -582,24 +579,26 @@ CREATE TABLE message (
     role message_role NOT NULL,
     kind message_kind NOT NULL DEFAULT 'CHAT',
     content ciphertext NOT NULL,
-    content_hash sha256_hex,
+    dedupe_key message_dedupe_key,
     refining_need_id uuid7 REFERENCES need ON DELETE SET NULL,
     source_attempt_id uuid7 REFERENCES empathy_attempt ON DELETE SET NULL,
     created_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     -- §1.1 message [P02] — P3 §6, "humans can't author as the facilitator"
     CHECK (role <> 'USER' OR sender_participant_id IS NOT NULL),
-    CHECK (role NOT IN ('AI', 'SYSTEM') OR sender_participant_id IS NULL)
+    CHECK (role NOT IN ('AI', 'SYSTEM') OR sender_participant_id IS NULL),
+    -- work-fdc1: a once-only key marks a facilitator line, never a human's
+    CHECK (dedupe_key IS NULL OR role IN ('AI', 'SYSTEM'))
 );
 CREATE INDEX ON message (conversation_id, created_at);
-CREATE INDEX ON message (conversation_id, kind, content_hash);
+-- + sql_message_once (sql-only.sql)
 CREATE INDEX ON message (sender_participant_id);
 CREATE INDEX ON message (refining_need_id);
 CREATE INDEX ON message (source_attempt_id);
 COMMENT ON TABLE message IS 'One line of a conversation: a human turn, an AI or system line, or an item delivered from the other participant. Append-only.';
 COMMENT ON COLUMN message.sender_participant_id IS 'The human who wrote a USER line; NULL for AI and SYSTEM lines.';
 COMMENT ON COLUMN message.source_attempt_id IS 'Lineage of a delivered item: the empathy attempt it came from.';
-COMMENT ON COLUMN message.content_hash IS 'sha256 of the plaintext content, for the dedupe probes (indexed with conversation_id, kind).';
+COMMENT ON COLUMN message.dedupe_key IS 'Set only on an app-generated AI or SYSTEM line that is written at most once per conversation; sql_message_once makes a second insert conflict. NULL on every other line. Nothing about the content is stored outside the ciphertext.';
 COMMENT ON COLUMN message.content IS 'encrypted (per-row): the line''s text: the owner''s turn and the AI''s replies under the participant key, every delivered kind under the session key.';
 
 CREATE TABLE conversation_read_state (
@@ -1494,6 +1493,15 @@ CREATE UNIQUE INDEX sql_user_key_live ON user_key (user_id)
   WHERE destroyed_at IS NULL;
 COMMENT ON INDEX sql_user_key_live IS 'At most one live (not shredded) key per user.';
 
+-- §1.1 message — work-fdc1: an app-generated facilitator line at most once per
+-- conversation. The idempotency key of the two once-only writers (stage2
+-- validateEmpathy's hold-here note, stage4's hand-off bridge): they insert and
+-- treat a conflict here as "already written", so two concurrent calls write one
+-- row. Replaces the sha256(content) probe (no content-derived value is stored).
+CREATE UNIQUE INDEX sql_message_once ON message (conversation_id, dedupe_key)
+  WHERE dedupe_key IS NOT NULL;
+COMMENT ON INDEX sql_message_once IS 'At most one message per conversation and dedupe_key: the once-only facilitator lines (message_dedupe_key). Their writers insert and treat a conflict as already written.';
+
 -- §1.2 empathy_attempt — one live attempt per direction
 CREATE UNIQUE INDEX sql_attempt_one_live_per_direction ON empathy_attempt
   (author_participant_id, subject_participant_id)
@@ -2039,8 +2047,9 @@ CREATE CONSTRAINT TRIGGER t_cardinality_2 AFTER DELETE OR UPDATE OF kind, user_i
   DEFERRABLE INITIALLY DEFERRED
   FOR EACH ROW EXECUTE FUNCTION app.t_participant_cardinality();
 
--- T-message-immutable: routing columns never change; content of AI/SYSTEM rows
--- and of every delivered kind never changes, except by the job (W13 re-encryption).
+-- T-message-immutable: routing columns and the once-only dedupe_key (work-fdc1)
+-- never change; content of AI/SYSTEM rows and of every delivered kind never
+-- changes, except by the job (W13 re-encryption).
 CREATE FUNCTION app.t_message_immutable() RETURNS trigger
   LANGUAGE plpgsql
   SET search_path = pg_catalog, public, pg_temp
@@ -2049,7 +2058,8 @@ CREATE FUNCTION app.t_message_immutable() RETURNS trigger
     IF NEW.conversation_id IS DISTINCT FROM OLD.conversation_id
        OR NEW.sender_participant_id IS DISTINCT FROM OLD.sender_participant_id
        OR NEW.role IS DISTINCT FROM OLD.role
-       OR NEW.kind IS DISTINCT FROM OLD.kind THEN
+       OR NEW.kind IS DISTINCT FROM OLD.kind
+       OR NEW.dedupe_key IS DISTINCT FROM OLD.dedupe_key THEN
       RAISE EXCEPTION 'message routing is immutable' USING ERRCODE = 'check_violation';
     END IF;
     IF NEW.content IS DISTINCT FROM OLD.content AND (OLD.role IN ('AI', 'SYSTEM') OR OLD.kind <> 'CHAT')
@@ -2612,9 +2622,10 @@ GRANT UPDATE (destroyed_at) ON user_key TO mwf_job;
 -- "Key per row" — AI/SYSTEM rows and every delivered kind are mwf_job's;
 -- participant_milestone — system keys are mwf_job's; ai_memory — "in practice
 -- written by mwf_job").
--- message-store createFacilitatorMessage / deliverMessage: the dedupe hash, the
--- refining need a facilitator reply answers, and an explicit instant (fixtures, replays)
-GRANT INSERT (content_hash, refining_need_id, created_at) ON message TO mwf_job;
+-- message-store createFacilitatorMessage / deliverMessage: a once-only line's
+-- dedupe_key (work-fdc1, sql_message_once), the refining need a facilitator
+-- reply answers, and an explicit instant (fixtures, replays)
+GRANT INSERT (dedupe_key, refining_need_id, created_at) ON message TO mwf_job;
 -- message-store insert() returns the written row's id and instant (INSERT … RETURNING id, created_at);
 -- getInitialMessage's Serializable idempotency probe reads the first message's id. Never content.
 GRANT SELECT (id, created_at) ON message TO mwf_job;

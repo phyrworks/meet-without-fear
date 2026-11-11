@@ -47,7 +47,6 @@ import { getStage4State as buildStage4State, Stage4StateNotFoundError, toAgreeme
 import { stage4HandoffBridgeMessage } from '../services/stage4-prompts';
 import { getModelCompletion } from '../lib/bedrock';
 import { extractJsonFromResponse } from '../utils/json-extractor';
-import { contentHash } from '../utils/content-hash';
 import { z } from 'zod';
 import {
   getCounterpartParticipant,
@@ -56,7 +55,7 @@ import {
   type ResolvedParticipant,
 } from '../services/participant-resolver';
 import { loadStageStates } from '../services/stage-shim';
-import { createFacilitatorMessage } from '../services/message-store';
+import { createFacilitatorMessageOnce } from '../services/message-store';
 import {
   closeSessionAsJob,
   createAgreementsAsJob,
@@ -530,12 +529,13 @@ export async function shareStage4Selections(req: Request, res: Response): Promis
           select: { nickname: true },
         });
         const bridge = stage4HandoffBridgeMessage(member?.nickname || partner?.displayName || undefined);
-        const already = await prisma.message.count({
-          where: { conversationId: ctx.participant.mainConversationId, role: 'AI', contentHash: contentHash(bridge) },
+        // Once per conversation, whatever the partner's name was at the time: a
+        // repeat (or concurrent) share writes nothing (work-fdc1).
+        await createFacilitatorMessageOnce({
+          conversationId: ctx.participant.mainConversationId,
+          dedupeKey: 'STAGE4_HANDOFF_BRIDGE',
+          content: bridge,
         });
-        if (already === 0) {
-          await createFacilitatorMessage({ conversationId: ctx.participant.mainConversationId, content: bridge });
-        }
       }
     } catch (bridgeError) {
       logger.warn('[shareStage4Selections] Failed to persist handoff bridge message', { bridgeError });
