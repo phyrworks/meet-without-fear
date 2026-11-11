@@ -2,16 +2,16 @@
   "stage": "INNER_WORK_LINKED_A",
   "database": "mwf_tfx_inner_work_linked_a",
   "seeded": {
-    "sessionId": "01a1c70e-4a66-7fb5-bfcd-6b5e59df76e1",
-    "relationshipId": "01a1c70e-4a64-7f9a-82f1-d71c9f561f4a",
-    "invitationId": "01a1c70e-4a6a-726f-9797-5e3ac40c32cf",
+    "sessionId": "01a1cce0-5ccb-7dd2-8488-b02ff46cb27b",
+    "relationshipId": "01a1cce0-5cc9-7f29-8dda-f84702b05377",
+    "invitationId": "01a1cce0-5ccf-72c4-9a45-2ac8183c97b8",
     "userA": {
-      "id": "01a1c70e-4a63-75f5-8b63-d8804ef4ef6a",
+      "id": "01a1cce0-5cc8-7542-9457-3f84ec87e94f",
       "email": "ada@e2e.test",
       "name": "Ada Lovelace"
     },
     "userB": {
-      "id": "01a1c70e-4a64-75e4-955e-c6de23b65608",
+      "id": "01a1cce0-5cc9-758d-8ee2-2889f5efb23e",
       "email": "bob@e2e.test",
       "name": "Bob Ross"
     }
@@ -84,5 +84,5 @@
     "user_memory",
     "user_preferences"
   ],
-  "builtAt": "2026-11-10T20:02:45.036Z"
+  "builtAt": "2026-11-11T23:10:18.394Z"
 }
