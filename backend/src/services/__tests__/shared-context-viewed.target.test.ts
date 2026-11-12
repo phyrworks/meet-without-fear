@@ -65,7 +65,6 @@ describeTarget('shared-context-viewed: the recipient marks the frame she was sho
       baseUrl: BASE_URL,
       stage: 'RECONCILER_SHOWN_B',
       runId: `fix2doq_${process.pid}`,
-      appLogin: 'mwf_app',
     });
     ada = harness.actors.userA;
     bob = harness.actors.userB!;

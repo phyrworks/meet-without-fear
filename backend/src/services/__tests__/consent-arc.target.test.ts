@@ -2,7 +2,7 @@
  * TS-10 real-role tests: the consent arc and the share-offer decline.
  *
  * RECONCILER_SHOWN_B clone; the app logs in as `mwf_app` with identity binding
- * on, the job as `mwf_job` (harness `appLogin: 'mwf_app'`).
+ * on, the job as `mwf_job` (the harness default since work-k5fk.10.1).
  *
  *   - T-consent-owner: a consent whose arc names someone else's target (or a
  *     missing one) is refused with ONE fixed message carrying no ids;
@@ -64,7 +64,6 @@ describeTarget('the consent arc and the share-offer decline (mwf_app + mwf_job, 
       baseUrl: BASE_URL,
       stage: 'RECONCILER_SHOWN_B',
       runId: `ts10_consent_${process.pid}`,
-      appLogin: 'mwf_app',
     });
     const parts = await rows<{ id: string; user_id: string; email: string }>(
       `SELECT p.id, p.user_id, u.email FROM participant p JOIN "user" u ON u.id = p.user_id`,

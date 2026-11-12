@@ -38,7 +38,6 @@ describeTarget('the reconciler reads through the job, not the triggering request
       baseUrl: BASE_URL,
       stage: 'FEEL_HEARD_B',
       runId: `ts10_reader_${process.pid}`,
-      appLogin: 'mwf_app',
     });
     await sql(`REVOKE SELECT ON ai_memory, reconciler_result, reconciler_guidance FROM mwf_app`);
   });

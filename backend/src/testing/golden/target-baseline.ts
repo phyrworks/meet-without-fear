@@ -47,9 +47,24 @@ export function targetBaselineSql(): { source: string; sql: string } {
 const BUILDABLE = /^(mwf_tfx_[a-z0-9_]+|mwf_trun_[a-z0-9_]+)$/;
 
 /**
- * (Re)create `database` and apply the target baseline in one transaction.
- * Refuses any name outside the target prefixes (never meet_without_fear*,
- * mwf_fx_*, mwf_run_*, ts6_*, ts7_*).
+ * The owner of every target database and of every object in it (work-k5fk.10.1,
+ * design note §6 layer 1): `mwf_migrator`, a NOSUPERUSER login, exactly as
+ * `run-baseline.sh --as-migrator` deploys. No runtime role owns anything, so
+ * the app (mwf_app) and the job (mwf_job) run on nothing but their grants.
+ */
+export const TARGET_OWNER = 'mwf_migrator';
+
+/** The migrator's login on `t`'s server (dev password; GOLDEN_MIGRATOR_PASSWORD / MIGRATOR_PASSWORD override). */
+export function migratorTarget(t: DbTarget): DbTarget {
+  const password = process.env.GOLDEN_MIGRATOR_PASSWORD ?? process.env.MIGRATOR_PASSWORD ?? 'mwf_migrator_dev';
+  return { ...t, user: TARGET_OWNER, password };
+}
+
+/**
+ * (Re)create `database` OWNED BY mwf_migrator and apply the target baseline in
+ * one transaction, logged in as mwf_migrator (the superuser only creates and
+ * drops the database). Refuses any name outside the target prefixes (never
+ * meet_without_fear*, mwf_fx_*, mwf_run_*, ts6_*, ts7_*).
  */
 export async function buildTargetDatabase(t: DbTarget, database: string): Promise<{ source: string }> {
   if (!BUILDABLE.test(database)) {
@@ -59,10 +74,10 @@ export async function buildTargetDatabase(t: DbTarget, database: string): Promis
   }
   const { source, sql } = targetBaselineSql();
   await dropDatabase(t, database);
-  await createDatabase(t, database);
+  await createDatabase(t, database, TARGET_OWNER);
   try {
     await withClient(
-      t,
+      migratorTarget(t),
       async c => {
         await c.query('BEGIN');
         try {

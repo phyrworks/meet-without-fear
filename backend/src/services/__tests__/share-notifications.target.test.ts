@@ -32,7 +32,6 @@ describeTarget('share acceptance and the notification path (mwf_app + mwf_job, i
       baseUrl: BASE_URL,
       stage: 'RECONCILER_SHOWN_B',
       runId: `ts10_share_${process.pid}`,
-      appLogin: 'mwf_app',
     });
   });
   afterAll(async () => {

@@ -43,7 +43,6 @@ describeTarget("Stage 2 hold-here note: once per conversation, keyed, not hashed
       baseUrl: BASE_URL,
       stage: 'FEEL_HEARD_B',
       runId: `fdc1_wait_${process.pid}`,
-      appLogin: 'mwf_app',
     });
     const scope = await listTables(harness.fixture.target, harness.fixture.database);
     const bob = harness.actors.userB!;

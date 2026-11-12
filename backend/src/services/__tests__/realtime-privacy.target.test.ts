@@ -144,7 +144,6 @@ describeTarget('Stage 2 realtime payloads (I1): what each participant receives',
       baseUrl: BASE_URL,
       stage: 'FEEL_HEARD_B',
       runId: `ts10_rt_${process.pid}`,
-      appLogin: 'mwf_app',
     });
     ada = harness.actors.userA;
     bob = harness.actors.userB!;

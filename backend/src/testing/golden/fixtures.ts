@@ -35,7 +35,7 @@ import {
   withClient,
 } from './db';
 
-import { buildTargetDatabase } from './target-baseline';
+import { buildTargetDatabase, TARGET_OWNER } from './target-baseline';
 import { isTargetShape } from './shape';
 
 export const FIXTURE_PREFIX = 'mwf_fx_';
@@ -271,7 +271,8 @@ export async function restoreFixture(opts: {
   const target = parseDbUrl(opts.baseUrl);
   const runDb = `${runPrefix()}${opts.runId}`.toLowerCase();
 
-  await cloneDatabase(target, manifest.database, runDb);
+  // A target run database is mwf_migrator's like its template (work-k5fk.10.1).
+  await cloneDatabase(target, manifest.database, runDb, isTargetShape() ? TARGET_OWNER : undefined);
 
   // Detect schema drift: a fixture built against an older migration head is a
   // silent false pass waiting to happen.

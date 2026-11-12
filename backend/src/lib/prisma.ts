@@ -78,6 +78,29 @@ export function getOpsPrisma(): PrismaClient {
   return globalForOps.opsPrisma;
 }
 
+/**
+ * The E2E tooling connection (work-k5fk.10.1): `DATABASE_URL` — the admin /
+ * migration URL — for the test-only paths behind `E2E_AUTH_BYPASS`
+ * (routes/e2e.ts seeding and cleanup, the auth bypass's user upsert). Those
+ * paths write what no production request writes (a user with a caller-chosen
+ * id, whole-account hard deletes), so they must not borrow the app's
+ * connection — mwf_app holds only what production requests do. Refused
+ * outright unless E2E_AUTH_BYPASS=true and NODE_ENV is not production.
+ */
+const globalForTooling = globalThis as unknown as { e2eToolingPrisma: PrismaClient | undefined };
+
+export function getE2EToolingPrisma(): PrismaClient {
+  if (process.env.E2E_AUTH_BYPASS !== 'true' || process.env.NODE_ENV === 'production') {
+    throw new Error('The E2E tooling connection exists only with E2E_AUTH_BYPASS=true outside production');
+  }
+  if (!globalForTooling.e2eToolingPrisma) {
+    const url = process.env.DATABASE_URL;
+    if (!url) throw new Error('The E2E tooling connection needs DATABASE_URL');
+    globalForTooling.e2eToolingPrisma = createPrismaClient({ url });
+  }
+  return globalForTooling.e2eToolingPrisma;
+}
+
 /** Disconnect the job client if one was opened (tests, shutdown). */
 export async function disconnectJobPrisma(): Promise<void> {
   const client = globalForJob.jobPrisma;
@@ -86,6 +109,9 @@ export async function disconnectJobPrisma(): Promise<void> {
   const ops = globalForOps.opsPrisma;
   globalForOps.opsPrisma = undefined;
   await ops?.$disconnect();
+  const tooling = globalForTooling.e2eToolingPrisma;
+  globalForTooling.e2eToolingPrisma = undefined;
+  await tooling?.$disconnect();
 }
 
 export default prisma;

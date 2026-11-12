@@ -40,7 +40,6 @@ describeTarget('skip-refinement while the subject decides on an offer (RECONCILE
       baseUrl: BASE_URL,
       stage: 'RECONCILER_SHOWN_B',
       runId: `ts10_skip_open_${process.pid}`,
-      appLogin: 'mwf_app',
     });
   });
   afterAll(async () => {

@@ -61,7 +61,6 @@ describeTarget('accepted share: a failed delivery is delivered by the retry, onc
       baseUrl: BASE_URL,
       stage: 'RECONCILER_SHOWN_B',
       runId: `ts10_retry_${process.pid}`,
-      appLogin: 'mwf_app',
     });
   });
   afterAll(async () => {

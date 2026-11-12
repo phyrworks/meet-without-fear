@@ -77,7 +77,6 @@ describeTarget('the review of an attempt: what the author sees, and a sent feedb
       baseUrl: BASE_URL,
       stage: 'FEEL_HEARD_B',
       runId: `ts10_review_${process.pid}`,
-      appLogin: 'mwf_app',
     });
     const scope = await listTables(harness.fixture.target, harness.fixture.database);
     const bob = harness.actors.userB!;
