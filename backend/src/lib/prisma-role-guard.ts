@@ -98,9 +98,7 @@ export function roleGuardViolations(facts: RoleFacts, role: DatabaseRole): strin
   if (facts.privilegedRoles.length) {
     out.push(`${facts.role} can SET ROLE to superuser/BYPASSRLS role(s): ${facts.privilegedRoles.join(', ')}`);
   }
-  const owned = facts.owned.filter(
-    o => !(JOB_OWNS_DEFINERS && role === 'job' && o.definerFunction && o.ownedBySelf),
-  );
+  const owned = facts.owned.filter(o => !(JOB_OWNS_DEFINERS && role === 'job' && o.definerFunction && o.ownedBySelf));
   if (owned.length) {
     const shown = owned.slice(0, 5).map(o => `${o.object} (owner ${o.owner})`);
     const more = owned.length > shown.length ? ` and ${owned.length - shown.length} more` : '';
@@ -136,7 +134,10 @@ export async function readRoleFactsAt(databaseUrl: string): Promise<RoleFacts> {
   const { pool } = pgSettingsFromUrl(databaseUrl);
   const url = new URL(pool.connectionString as string);
   url.searchParams.set('application_name', ROLE_GUARD_APPLICATION);
-  const client = new Client({ connectionString: url.toString(), connectionTimeoutMillis: pool.connectionTimeoutMillis });
+  const client = new Client({
+    connectionString: url.toString(),
+    connectionTimeoutMillis: pool.connectionTimeoutMillis,
+  });
   await client.connect();
   try {
     const { rows } = await client.query<{ facts: string }>(ROLE_GUARD_SQL);

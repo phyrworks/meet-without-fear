@@ -69,17 +69,21 @@ describeTarget('mwf_app grants (target)', () => {
   });
 
   it('INSERT into the key tables as mwf_app is refused (42501)', async () => {
-    expect(await asApp(`INSERT INTO session_key (session_id, key_id, wrapped_dek) VALUES ($1, 'k', '\\x00')`, [ids.session])).toBe(
-      '42501',
-    );
     expect(
-      await asApp(`INSERT INTO participant_key (participant_id, key_id, wrapped_dek) VALUES ($1, 'k', '\\x00')`, [ids.ada]),
+      await asApp(`INSERT INTO session_key (session_id, key_id, wrapped_dek) VALUES ($1, 'k', '\\x00')`, [ids.session]),
     ).toBe('42501');
-    expect(await asApp(`INSERT INTO user_key (user_id, key_id, wrapped_dek) VALUES ($1, 'k', '\\x00')`, [ids.adaUser])).toBe(
-      '42501',
-    );
     expect(
-      await asApp(`INSERT INTO brain_activity (session_id, activity_type, model) VALUES ($1, 'LLM_CALL', 'm')`, [ids.session]),
+      await asApp(`INSERT INTO participant_key (participant_id, key_id, wrapped_dek) VALUES ($1, 'k', '\\x00')`, [
+        ids.ada,
+      ]),
+    ).toBe('42501');
+    expect(
+      await asApp(`INSERT INTO user_key (user_id, key_id, wrapped_dek) VALUES ($1, 'k', '\\x00')`, [ids.adaUser]),
+    ).toBe('42501');
+    expect(
+      await asApp(`INSERT INTO brain_activity (session_id, activity_type, model) VALUES ($1, 'LLM_CALL', 'm')`, [
+        ids.session,
+      ]),
     ).toBe('42501');
   });
 
@@ -91,7 +95,9 @@ describeTarget('mwf_app grants (target)', () => {
     expect(own).toBeDefined();
     expect(await asApp(`UPDATE message SET content = content WHERE id = $1`, [own.id])).toBe('42501');
     expect(await asApp(`UPDATE message SET created_at = created_at WHERE false`)).toBe('42501');
-    const [r] = await run.sql<{ upd: boolean }>(`SELECT has_any_column_privilege('mwf_app', 'message', 'UPDATE') AS upd`);
+    const [r] = await run.sql<{ upd: boolean }>(
+      `SELECT has_any_column_privilege('mwf_app', 'message', 'UPDATE') AS upd`,
+    );
     expect(r.upd).toBe(false);
   });
 

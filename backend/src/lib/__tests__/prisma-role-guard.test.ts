@@ -55,9 +55,9 @@ describe('roleGuardViolations', () => {
     expect(roleGuardViolations({ ...clean('mwf_job'), owned: [definer] }, 'job')).toEqual([]);
     expect(roleGuardViolations({ ...clean('mwf_job'), owned: [definer] }, 'app')).toHaveLength(1);
     // Through membership (not the login itself) is never tolerated.
-    expect(roleGuardViolations({ ...clean('mwf_app'), owned: [{ ...definer, ownedBySelf: false }] }, 'job')).toHaveLength(
-      1,
-    );
+    expect(
+      roleGuardViolations({ ...clean('mwf_app'), owned: [{ ...definer, ownedBySelf: false }] }, 'job'),
+    ).toHaveLength(1);
     // A non-definer object is never tolerated.
     expect(
       roleGuardViolations({ ...clean('mwf_job'), owned: [{ ...definer, definerFunction: false }] }, 'job'),
@@ -110,7 +110,9 @@ describe('guardAdapterFactory', () => {
   it('skips the check for a client exempted with a reason, and requires the reason', async () => {
     const { adapter, factory } = fakeFactory();
     const readFacts = jest.fn().mockResolvedValue({ ...clean('mwf_user'), superuser: true });
-    await expect(guardAdapterFactory(factory, 'app', { readFacts, exemption: 'E2E tooling' }).connect()).resolves.toBe(adapter);
+    await expect(guardAdapterFactory(factory, 'app', { readFacts, exemption: 'E2E tooling' }).connect()).resolves.toBe(
+      adapter,
+    );
     expect(readFacts).not.toHaveBeenCalled();
     expect(() => guardAdapterFactory(factory, 'app', { readFacts, exemption: ' ' })).toThrow(/reason/);
   });
