@@ -129,14 +129,13 @@ describeTarget('the consent arc and the share-offer decline (mwf_app + mwf_job, 
     );
     await move(`decision = 'REVOKED', revoked_at = now()`);
     await expect(move(`decision = 'GRANTED', revoked_at = NULL`)).rejects.toThrow(/not permitted/);
-    await expect(
-      asApp(
-        ada.userId,
-        `INSERT INTO consent (participant_id, empathy_attempt_id, decision, decided_at, revoked_at) VALUES ($1::uuid, $2::uuid, 'REVOKED', now(), now())`,
-        ada.participantId,
-        adaAttempt,
-      ),
-    ).rejects.toThrow(/not created revoked/);
+    // A consent created revoked: mwf_app holds no INSERT of revoked_at (work-k5fk.10.2), so the
+    // grant refuses it first; the trigger refuses it too, for any writer (here the superuser).
+    const createdRevoked = `INSERT INTO consent (participant_id, empathy_attempt_id, decision, decided_at, revoked_at) VALUES ($1::uuid, $2::uuid, 'REVOKED', now(), now())`;
+    await expect(asApp(ada.userId, createdRevoked, ada.participantId, adaAttempt)).rejects.toThrow(
+      /permission denied for table consent/,
+    );
+    await expect(rows(createdRevoked, [ada.participantId, adaAttempt])).rejects.toThrow(/not created revoked/);
     // target_kind is generated: it cannot be written.
     await expect(move(`target_kind = 'NEED'`)).rejects.toThrow(/can only be updated to DEFAULT/);
   });

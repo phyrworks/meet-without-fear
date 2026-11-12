@@ -3,11 +3,11 @@
 -- of seed-target-fixture.sql, and returns what those rows imply (TS-7c;
 -- replaces TS-7's smoke-target-migration.sql, whose old-vs-new comparisons
 -- have nothing to compare under OD7). Read-only for the data: the only write
--- is the setup GRANT below. Scratch-only (ts7_*).
+-- writes nothing. Scratch-only (ts7_*).
 --
--- Setup (superuser): mwf_app gets the table privileges it holds in production
--- as the tables' owner (the views are security_invoker, so a reader needs
--- SELECT on the tables underneath). Then \connect - mwf_app; identity is
+-- mwf_app holds exactly the baseline's grants (tables.sql; the views are
+-- security_invoker, so a reader needs SELECT on the tables underneath).
+-- \connect - mwf_app; identity is
 -- set_config('app.current_user_id', <user>, true), as the request layer does.
 -- Every check RAISEs on a mismatch; the view rows are printed for the report.
 -- ============================================================================
@@ -20,7 +20,7 @@ BEGIN
   END IF;
 END
 $$;
-GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO mwf_app;
+-- No setup GRANT (work-k5fk.10.2): mwf_app runs on the baseline's own grants (tables.sql).
 
 \connect - mwf_app
 SELECT 'smoke-baseline: connected as ' || session_user AS who;

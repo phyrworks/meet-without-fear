@@ -1048,8 +1048,8 @@ GRANT SELECT ON v_participant, v_co_participant, v_session_readiness, v_current_
   TO mwf_app;
 
 -- ---------------------------------------------------------------------------
--- T7. Grants (mwf_app's table privileges are unchanged: it owns the tables in
--- production; RLS and per-tier grants are TS-16).
+-- T7. Grants of mwf_job, mwf_ops and mwf_auth (mwf_app's table grants are in tables.sql,
+-- next to each table, work-k5fk.10.2; these move there with work-k5fk.7). RLS is TS-16 / work-k5fk.10.
 -- ---------------------------------------------------------------------------
 
 -- mwf_job: exactly what the definer helpers and writers it owns read and
@@ -1282,8 +1282,7 @@ GRANT SELECT (invited_by_participant_id) ON invitation TO mwf_ops;
 
 -- mwf_auth: the bootstrap function only (granted in T4); nothing on tables.
 
--- milestone is reference data (P3 §1.1 pattern): readable by the request role.
-GRANT SELECT ON milestone TO mwf_app;
+-- mwf_app: its table grants are in tables.sql, next to each table (work-k5fk.10.2); its view grants follow the views (T6).
 
 -- ---------------------------------------------------------------------------
 -- T8. Catalog assertions (plan step 20). The tables are empty (OD7 baseline),

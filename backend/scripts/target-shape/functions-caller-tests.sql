@@ -8,9 +8,9 @@
 -- IN as mwf_app or mwf_job (\connect), never as the superuser; identity is
 -- set_config('app.current_user_id', <user>, true), as the request layer does.
 --
--- Setup (superuser, before any caller arm): ids via \gset, and mwf_app gets
--- the table privileges it holds in production as the tables' owner — so every
--- refusal below comes from the function or trigger, not from a missing grant.
+-- Setup (superuser, before any caller arm): ids via \gset. mwf_app holds only
+-- the baseline's own grants (tables.sql, work-k5fk.10.2), so a caller arm
+-- that writes as mwf_app proves the grant as well as the function or trigger.
 -- An expected refusal is caught by its SQLSTATE and logged PASS; anything else
 -- (or a refusal that does not happen: 'TEST FAILED') stops the run. Most
 -- refusals come from the function or trigger under test; 6a–6d (mwf_job's
@@ -29,7 +29,7 @@ END
 $$;
 
 -- ---- setup (superuser) --------------------------------------------------------
-GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO mwf_app;
+-- No setup GRANT (work-k5fk.10.2): mwf_app runs on the baseline's own grants (tables.sql).
 -- Rows from seed-target-fixture.sql: session S (A, B; A→B AWAITING_SHARING,
 -- B→A HELD), session X (C, D; shared needs e1 of C and e4 of D), an outsider.
 SELECT u.id AS a_user FROM "user" u WHERE u.email = 'a@ts7c.test' \gset
