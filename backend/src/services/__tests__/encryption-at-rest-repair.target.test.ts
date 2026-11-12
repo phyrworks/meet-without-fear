@@ -136,18 +136,24 @@ describeTarget('encryption at rest: needs, repair and follow-up columns (FIELD_E
     proven.add('need_share.shared_text');
   });
 
-  it('need_disposition.note (model API as mwf_app; no app writer sets it today): sealed, read back', async () => {
+  it('need_disposition.note (model API on the admin connection; no app writer sets it today): sealed, read back', async () => {
     const [need] = await run.sql<{ id: string }>(
       `SELECT need_id AS id FROM need_share WHERE participant_id = $1 LIMIT 1`,
       [ids.ada],
     );
-    await asUser(ids.adaUser, () =>
-      prisma.needDisposition.upsert({
+    // No request path writes note, so mwf_app holds no grant on it (work-k5fk.10.2): the probe
+    // row goes through the encryption extension on an exempted admin client instead.
+    const { createPrismaClient } = await import('../../lib/prisma');
+    const writer = createPrismaClient({ url: run.fx.url, roleGuardExemption: 'test: a column no app path writes' });
+    try {
+      await writer.needDisposition.upsert({
         where: { participantId_needId: { participantId: ids.ada, needId: need.id } },
         create: { participantId: ids.ada, needId: need.id, status: 'DECLINED', note: 'PROBE_TS13_DISPOSITION' },
         update: { note: 'PROBE_TS13_DISPOSITION' },
-      }),
-    );
+      });
+    } finally {
+      await writer.$disconnect();
+    }
     await expectSealed(run, 'need_disposition', 'note', `participant_id = $1 AND need_id = $2`, [ids.ada, need.id]);
     const rows = await asUser(ids.adaUser, () => store.loadDispositions(ids.ada));
     expect(rows.find(r => r.needId === need.id)?.note).toBe('PROBE_TS13_DISPOSITION');

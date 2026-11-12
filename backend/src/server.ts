@@ -59,7 +59,7 @@ Sentry.init({
 import { createServer } from 'http';
 import app from './app';
 import { logger } from './lib/logger';
-import { prisma } from './lib/prisma';
+import { prisma, verifyRuntimeConnections } from './lib/prisma';
 import { attachRealtimeWebSocket } from './services/realtime-transcription';
 
 // Fail fast: E2E_AUTH_BYPASS must never be enabled in production
@@ -101,9 +101,19 @@ const server = createServer(app);
 // Attach /realtime WebSocket endpoint for real-time transcription
 attachRealtimeWebSocket(server);
 
-server.listen(PORT, () => {
-  logger.info(`Server running on port ${PORT}`);
-});
+// work-k5fk.10.3: refuse to serve on a superuser, BYPASSRLS or object-owning
+// database login (lib/prisma-role-guard.ts) — checked before listening.
+verifyRuntimeConnections().then(
+  () => {
+    server.listen(PORT, () => {
+      logger.info(`Server running on port ${PORT}`);
+    });
+  },
+  (error: unknown) => {
+    logger.error('FATAL: database role check failed; not starting', error);
+    process.exit(1);
+  },
+);
 
 function shutdown(signal: string) {
   logger.info(`${signal} received — shutting down gracefully`);
