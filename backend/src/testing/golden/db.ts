@@ -119,7 +119,14 @@ export async function dropDatabase(t: DbTarget, database: string): Promise<void>
   await withAdmin(t, async c => {
     // Templates cannot be dropped until the flag is cleared.
     await c.query(`ALTER DATABASE "${database}" WITH is_template = false`).catch(() => undefined);
-    await c.query(`DROP DATABASE IF EXISTS "${database}"`);
+    // WITH (FORCE) terminates what disconnectAll could not: a client that reconnected in between
+    // (a fire-and-forget query after the app's $disconnect). One retry for the rare connection
+    // that lands during the drop itself.
+    const drop = () => c.query(`DROP DATABASE IF EXISTS "${database}" WITH (FORCE)`);
+    await drop().catch(async () => {
+      await new Promise(resolve => setTimeout(resolve, 250));
+      await drop();
+    });
   });
 }
 

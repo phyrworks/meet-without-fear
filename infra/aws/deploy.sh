@@ -19,21 +19,38 @@ previous=$(jq -r ' .image // empty' /var/lib/mwf/current-release.json 2>/dev/nul
 # service pins 172.29.0.3 on the edge network, which the running API already holds.
 preflight=dist/backend/src/scripts/role-guard-preflight.js
 guard=dist/backend/src/lib/prisma-role-guard.js
-in_image() { docker run --rm --network none --entrypoint test "$image" -f "/app/backend/$1"; }
-if in_image "$preflight"; then
+server=dist/backend/src/server.js
+# 0 = the file is in the image, 1 = it is not. Any other exit (125/126/127: docker could not run
+# the image) aborts: a runtime error must never read as "absent", or a guarded image would pass
+# as pre-guard. The docker CLI also exits 1 when its daemon is unreachable, so the image is first
+# inspected: no answer there aborts before any probe.
+docker image inspect "$image" >/dev/null || { echo "Cannot inspect $image (docker unreachable or no such image): aborting the deploy, nothing changed." >&2; exit 1; }
+image_has() {
+  local rc=0
+  docker run --rm --network none --entrypoint test "$image" -f "/app/backend/$1" || rc=$?
+  case "$rc" in
+    0 | 1) return "$rc" ;;
+    *) echo "Cannot inspect $image for /app/backend/$1 (docker exit $rc): aborting the deploy, nothing changed." >&2; exit 1 ;;
+  esac
+}
+if image_has "$preflight"; then
   if ! docker run --rm --network mwf_database --env-file /etc/mwf/application.env "$image" node "$preflight"; then
     echo 'Role-guard preflight REFUSED a runtime login: not migrating, previous release left running (see above).' >&2
     exit 1
   fi
-elif in_image "$guard"; then
+elif image_has "$guard"; then
   # A guarded API without its preflight is a broken build, not a rollback: refuse it.
   echo "Image $image has the role guard but no $preflight: refusing to deploy it." >&2
   exit 1
-else
-  # A rollback to an image that PREDATES the guard (work-k5fk.10.3): it has neither the preflight
-  # nor a startup check, so it cannot crash-loop on its role, and refusing it would block every
-  # rollback past this release. Deploy it, loudly.
+elif image_has "$server"; then
+  # A rollback to an image that PREDATES the guard (work-k5fk.10.3): the API is where it always was,
+  # with neither the preflight nor a startup check, so it cannot crash-loop on its role, and
+  # refusing it would block every rollback past this release. Deploy it, loudly.
   echo "WARNING: $image predates the role guard (no $guard): no preflight run; it starts without a role check." >&2
+else
+  # No guard and no server either: not a pre-guard image but an unknown layout. Refuse.
+  echo "Image $image has neither $guard nor $server: unknown layout, refusing to deploy it." >&2
+  exit 1
 fi
 # Back up before touching migrations, and stop writes while migrating.
 if compose exec -T db psql -U postgres -d mwf -tAc 'SELECT to_regclass('\''public."_prisma_migrations"'\'') IS NOT NULL' | grep -q t; then

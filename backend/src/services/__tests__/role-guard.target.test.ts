@@ -92,7 +92,15 @@ describeTarget('runtime role guard (target)', () => {
       await admin(`CREATE ROLE ${empty} NOLOGIN`);
     });
     afterAll(async () => {
-      await admin(`ALTER DATABASE "${fx.database}" OWNER TO mwf_migrator`, 'postgres').catch(() => undefined);
+      // Undo every cluster- or database-level change a failed test may have left, each tolerant
+      // of "already gone", before the roles go: a parameter ACL (cluster-wide) would otherwise
+      // block DROP ROLE and leak the role.
+      const tolerant = (sql: string, database?: string) => admin(sql, database).catch(() => undefined);
+      await tolerant(`REVOKE SET ON PARAMETER session_replication_role FROM ${login}`, 'postgres');
+      await tolerant(`ALTER DATABASE "${fx.database}" OWNER TO mwf_migrator`, 'postgres');
+      await tolerant(`ALTER SCHEMA public OWNER TO pg_database_owner`);
+      await tolerant(`REVOKE CREATE ON DATABASE "${fx.database}" FROM ${login}`);
+      await tolerant(`REVOKE ${empty}, mwf_job, mwf_user FROM ${login}`, 'postgres');
       await admin(`DROP OWNED BY ${login}`).catch(() => undefined);
       await admin(`DROP ROLE IF EXISTS ${login}`, 'postgres');
       await admin(`DROP ROLE IF EXISTS ${empty}`, 'postgres');

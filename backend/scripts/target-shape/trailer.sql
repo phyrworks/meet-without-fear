@@ -587,10 +587,10 @@ CREATE TRIGGER t_message_immutable BEFORE UPDATE ON public.message
 -- that the conversation's participant is that user. FINDING: with identity binding off — the
 -- default outside e2e/goldens until §7 row 9c turns DB_IDENTITY_BINDING on — "whose
 -- conversation" is not determinable in the database, so the row shape is all these enforce.
--- Both rely on mwf_migrator (not a runtime role) owning message and its parents: a cascaded
--- delete (session / conversation ON DELETE CASCADE) runs its referential-integrity statements as
--- the referenced table's OWNER, so current_user there is mwf_migrator and the early return lets
--- it through. Were mwf_app the owner again, every cascade (the job's session retention, account
+-- Both rely on mwf_migrator (not a runtime role) owning message: a cascaded delete (session /
+-- conversation ON DELETE CASCADE) runs its referential-integrity DELETE on message as the owner of
+-- the referencing table — message — so current_user there is mwf_migrator and the early return
+-- lets it through. Were mwf_app the owner again, every cascade (the job's session retention, account
 -- deletion) would run as mwf_app and be refused here: the triggers assume no runtime role owns them.
 -- app.current_user_id() is read only after the mwf_app early return, so other roles (§7 row 9a's
 -- capability roles) need no EXECUTE on it to write.

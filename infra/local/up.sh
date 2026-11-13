@@ -160,17 +160,30 @@ fi
 # an image predating the guard (MWF_LOCAL_APP_IMAGE) -> warn and continue.
 PREFLIGHT=dist/backend/src/scripts/role-guard-preflight.js
 GUARD=dist/backend/src/lib/prisma-role-guard.js
-in_image() { podman run --rm --network none --entrypoint test "$APP_IMAGE" -f "/app/backend/$1"; }
-if in_image "$PREFLIGHT"; then
+SERVER=dist/backend/src/server.js
+# 0 = in the image, 1 = not; any other exit (podman could not run it) aborts, never "absent".
+# The image is inspected first: the CLI may exit 1 when its runtime is unreachable.
+podman image inspect "$APP_IMAGE" >/dev/null || die "cannot inspect $APP_IMAGE (podman unreachable or no such image)"
+image_has() {
+  local rc=0
+  podman run --rm --network none --entrypoint test "$APP_IMAGE" -f "/app/backend/$1" || rc=$?
+  case "$rc" in
+    0 | 1) return "$rc" ;;
+    *) die "cannot inspect $APP_IMAGE for /app/backend/$1 (podman exit $rc)" ;;
+  esac
+}
+if image_has "$PREFLIGHT"; then
   if ! podman run --rm --network "${PROJECT}_database" --env-file "$LOCAL/application.env" "$APP_IMAGE" \
       node "$PREFLIGHT" >"$LOCAL/preflight.log" 2>&1; then
     sed 's/^/   /' "$LOCAL/preflight.log"; die "role-guard preflight REFUSED a runtime login: not migrating"
   fi
   sed 's/^/   /' "$LOCAL/preflight.log"
-elif in_image "$GUARD"; then
+elif image_has "$GUARD"; then
   die "$APP_IMAGE has the role guard but no $PREFLIGHT: refusing it"
-else
+elif image_has "$SERVER"; then
   echo "   WARNING: $APP_IMAGE predates the role guard: no preflight run; it starts without a role check"
+else
+  die "$APP_IMAGE has neither $GUARD nor $SERVER: unknown layout, refusing it"
 fi
 
 # --- 5. migrations, the way deploy.sh runs them -------------------------------------
