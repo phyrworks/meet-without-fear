@@ -152,7 +152,7 @@ status: living
   - Mobile: `@clerk/clerk-expo` with session-based auth
   - Website: `@clerk/nextjs` with Next.js middleware
   - Token flow: Mobile gets JWT from Clerk, passes in `Authorization: Bearer` header to API
-  - User sync: Clerk user created/updated → Prisma User record upserted with `clerkId`
+  - User sync: no Clerk webhooks; the auth middleware creates the Prisma User row (keyed by `clerkId`) on the first authenticated request, from the Clerk user's verified primary email only, and never re-binds an existing row by email (see `docs/backend/api/auth.md`)
 
 **Session Handling:**
 - Mobile: Clerk session stored in Expo Secure Store
@@ -228,7 +228,7 @@ status: living
 **Optional env vars (Backend):**
 - `ASSEMBLYAI_API_KEY` - AssemblyAI key for voice transcription (required for `/voice/token` endpoint)
 - `MOCK_LLM=true` - Toggle mock LLM responses for E2E testing
-- `E2E_AUTH_BYPASS=true` - Bypass auth for E2E tests
+- `E2E_AUTH_BYPASS=true` - Bypass auth for E2E tests; honoured only with `NODE_ENV` `development` or `test` (the API refuses to start otherwise)
 - `E2E_FIXTURE_ID` - Use pre-canned responses for E2E tests
 - `ENABLE_PROMPT_LOGGING` - Enable prompt debug logging (dev only, blocked in production)
 - `ENABLE_AUDIT_STREAM` - Enable AI audit stream channel for monitoring

@@ -397,7 +397,10 @@ subject or email address and take over the account at first login.
 Mitigations, all of which must hold together — **[R], none built:**
 
 1. **`INSERT`-only, never `UPDATE`.** It must not be able to re-point an existing `clerkId` or
-   `email` at anything. On conflict it returns the existing id and writes nothing.
+   `email` at anything. On conflict it returns the existing id and writes nothing — **but only for a
+   `clerkId` conflict.** A conflict on `email` alone (row bound to another or no `clerkId`) must be
+   refused, never answered with that row's id: returning it is the same takeover. The app-layer
+   path already behaves this way (work-jv9y: 409 `ACCOUNT_LINK_CONFLICT`, see `docs/backend/api/auth.md`).
 2. **`EXECUTE` granted to a dedicated `mwf_auth` role, not to `mwf_app`.** The auth middleware is
    the only legitimate caller, and it is the only code path that runs pre-identity. Granting this
    to `mwf_app` means all 19 `$queryRaw` sites can reach it.

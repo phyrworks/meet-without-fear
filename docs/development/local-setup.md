@@ -260,7 +260,9 @@ Verified working 2026-08-12. This is the fastest way to explore the product and 
 
 ```bash
 # Terminal 1 — API. E2E_FIXTURE_ID is REQUIRED, see the gotcha below.
-E2E_AUTH_BYPASS=true MOCK_LLM=true E2E_FIXTURE_ID=user-a-full-journey \
+# NODE_ENV must be development (or test): otherwise the bypass is off and the
+# API refuses to start (backend/src/lib/e2e-bypass.ts).
+NODE_ENV=development E2E_AUTH_BYPASS=true MOCK_LLM=true E2E_FIXTURE_ID=user-a-full-journey \
   npm run dev:api
 
 # Terminal 2 — web client. Clerk is swapped for a mock module at bundle time.

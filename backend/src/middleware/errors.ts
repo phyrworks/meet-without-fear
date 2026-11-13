@@ -38,6 +38,23 @@ export class ForbiddenError extends AppError {
   }
 }
 
+/** First login with no verified primary email: no account is created for it. */
+export class EmailNotVerifiedError extends AppError {
+  constructor(message = 'A verified primary email address is required to use this account') {
+    super(ErrorCode.EMAIL_NOT_VERIFIED, message, 403);
+  }
+}
+
+/**
+ * First login whose email already belongs to an account bound to a different
+ * (or no) sign-in identity. The account is never re-bound automatically.
+ */
+export class AccountLinkConflictError extends AppError {
+  constructor(message = 'This email address is already linked to another sign-in. Contact support.') {
+    super(ErrorCode.ACCOUNT_LINK_CONFLICT, message, 409);
+  }
+}
+
 export class NotFoundError extends AppError {
   constructor(resource = 'Resource', message?: string) {
     super(ErrorCode.NOT_FOUND, message || `${resource} not found`, 404);

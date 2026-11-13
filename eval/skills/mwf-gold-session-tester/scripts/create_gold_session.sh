@@ -80,7 +80,7 @@ case "$(lower "$CHARACTER")" in
 esac
 
 if ! curl -fsS "$API/health" >/dev/null; then
-  echo "Backend is not available at $API/health. Start backend with E2E_AUTH_BYPASS=true." >&2
+  echo "Backend is not available at $API/health. Start backend with E2E_AUTH_BYPASS=true and NODE_ENV=development (or test)." >&2
   exit 10
 fi
 
@@ -89,7 +89,7 @@ probe_code="$(curl -sS -o /tmp/mwf-e2e-probe.json -w '%{http_code}' \
   -H 'Content-Type: application/json' \
   -d '{"email":"probe@e2e.test","name":"Probe"}')"
 if [[ "$probe_code" != "201" ]]; then
-  echo "E2E seed probe returned HTTP $probe_code. Backend likely lacks E2E_AUTH_BYPASS=true." >&2
+  echo "E2E seed probe returned HTTP $probe_code. Backend likely lacks E2E_AUTH_BYPASS=true with NODE_ENV=development (or test)." >&2
   cat /tmp/mwf-e2e-probe.json >&2 || true
   exit 11
 fi

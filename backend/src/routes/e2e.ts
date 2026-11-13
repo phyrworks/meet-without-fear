@@ -1,7 +1,8 @@
 /**
  * E2E Testing Routes
  *
- * Helper endpoints for E2E testing. Only available when E2E_AUTH_BYPASS is enabled.
+ * Helper endpoints for E2E testing. Only available when isE2EBypassEnabled()
+ * (E2E_AUTH_BYPASS=true and NODE_ENV test or development; lib/e2e-bypass.ts).
  */
 
 import { Router, Request, Response, NextFunction } from 'express';
@@ -10,6 +11,7 @@ import { loadFixture } from '../lib/e2e-fixtures';
 import { StateFactory, TargetStage } from '../testing/state-factory';
 import { runReconcilerForDirection } from '../services/reconciler';
 import { logger } from '../lib/logger';
+import { isE2EBypassEnabled } from '../lib/e2e-bypass';
 
 const router = Router();
 
@@ -24,7 +26,7 @@ export async function cleanupE2EUsers(
   next: NextFunction
 ): Promise<void> {
   // Only allow when E2E mode is enabled
-  if (process.env.E2E_AUTH_BYPASS !== 'true') {
+  if (!isE2EBypassEnabled()) {
     res.status(403).json({
       success: false,
       error: 'E2E cleanup only available when E2E_AUTH_BYPASS is enabled',
@@ -144,7 +146,7 @@ export async function seedE2EUser(
   next: NextFunction
 ): Promise<void> {
   // Only allow when E2E mode is enabled
-  if (process.env.E2E_AUTH_BYPASS !== 'true') {
+  if (!isE2EBypassEnabled()) {
     res.status(403).json({
       success: false,
       error: 'E2E seed only available when E2E_AUTH_BYPASS is enabled',
@@ -235,7 +237,7 @@ export async function seedE2ESession(
   next: NextFunction
 ): Promise<void> {
   // Only allow when E2E mode is enabled
-  if (process.env.E2E_AUTH_BYPASS !== 'true') {
+  if (!isE2EBypassEnabled()) {
     res.status(403).json({
       success: false,
       error: 'E2E seed-session only available when E2E_AUTH_BYPASS is enabled',
@@ -318,7 +320,7 @@ export async function seedE2EInnerThoughts(
   res: Response,
   next: NextFunction
 ): Promise<void> {
-  if (process.env.E2E_AUTH_BYPASS !== 'true') {
+  if (!isE2EBypassEnabled()) {
     res.status(403).json({
       success: false,
       error: 'E2E seed-inner-thoughts only available when E2E_AUTH_BYPASS is enabled',
@@ -456,7 +458,7 @@ export async function triggerE2EReconciler(
   next: NextFunction
 ): Promise<void> {
   // Only allow when E2E mode is enabled
-  if (process.env.E2E_AUTH_BYPASS !== 'true') {
+  if (!isE2EBypassEnabled()) {
     res.status(403).json({
       success: false,
       error: 'E2E trigger-reconciler only available when E2E_AUTH_BYPASS is enabled',

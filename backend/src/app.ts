@@ -8,6 +8,7 @@ import { errorHandler, notFoundHandler } from './middleware/errors';
 import { scannerFilter } from './middleware/scanner-filter';
 import { globalRateLimit } from './middleware/rate-limit';
 import { logger } from './lib/logger';
+import { isE2EBypassEnabled } from './lib/e2e-bypass';
 
 const app = express();
 
@@ -37,7 +38,7 @@ if (process.env.DASHBOARD_URL) {
 const corsOptions: cors.CorsOptions = {
   origin: corsOrigins,
 };
-if (process.env.E2E_AUTH_BYPASS === 'true' && process.env.NODE_ENV !== 'production') {
+if (isE2EBypassEnabled()) {
   corsOptions.allowedHeaders = '*';
 } else {
   corsOptions.allowedHeaders = [

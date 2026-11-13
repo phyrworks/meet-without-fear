@@ -11,7 +11,7 @@ jest.mock('../../lib/prisma');
 
 // Import after mock setup
 import { prisma } from '../../lib/prisma';
-import { cleanupE2EUsers, seedE2EUser } from '../e2e';
+import { cleanupE2EUsers, seedE2EUser, seedE2ESession, seedE2EInnerThoughts, triggerE2EReconciler } from '../e2e';
 
 describe('E2E Routes', () => {
   const originalEnv = process.env.E2E_AUTH_BYPASS;
@@ -27,6 +27,41 @@ describe('E2E Routes', () => {
     } else {
       delete process.env.E2E_AUTH_BYPASS;
     }
+  });
+
+  describe('NODE_ENV allow-list (bypass on, environment not test/development)', () => {
+    const savedNodeEnv = process.env.NODE_ENV;
+    afterEach(() => {
+      process.env.NODE_ENV = savedNodeEnv;
+    });
+
+    const handlers = [
+      ['cleanup', cleanupE2EUsers],
+      ['seed', seedE2EUser],
+      ['seed-session', seedE2ESession],
+      ['seed-inner-thoughts', seedE2EInnerThoughts],
+      ['trigger-reconciler', triggerE2EReconciler],
+    ] as const;
+
+    it.each(
+      handlers.flatMap(([name, handler]) =>
+        [undefined, 'production', 'staging', 'prod', 'Test'].map((env) => [name, env, handler] as const)
+      )
+    )('%s refuses with 403 when NODE_ENV=%p', async (_name, env, handler) => {
+      if (env === undefined) delete process.env.NODE_ENV;
+      else process.env.NODE_ENV = env;
+      const req = { body: { email: 'test@e2e.test' }, params: {}, query: {}, headers: {} } as unknown as Request;
+      const jsonMock = jest.fn();
+      const statusMock = jest.fn().mockReturnValue({ json: jsonMock });
+      const res = { status: statusMock, json: jsonMock } as unknown as Response;
+      const next = jest.fn() as NextFunction;
+
+      await handler(req, res, next);
+
+      expect(statusMock).toHaveBeenCalledWith(403);
+      expect(prisma.user.upsert).not.toHaveBeenCalled();
+      expect(prisma.user.deleteMany).not.toHaveBeenCalled();
+    });
   });
 
   describe('POST /api/e2e/cleanup', () => {

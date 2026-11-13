@@ -5,9 +5,10 @@
  */
 
 import { Request, Response, NextFunction } from 'express';
-import { requireAuth, optionalAuth, getUser, requireSessionAccess } from '../auth';
+import { requireAuth, optionalAuth, getUser, requireSessionAccess, verifiedPrimaryEmail } from '../auth';
 import { ForbiddenError, NotFoundError } from '../errors';
 import { prisma } from '../../lib/prisma';
+import { logger } from '../../lib/logger';
 
 // Mock Prisma
 jest.mock('../../lib/prisma');
@@ -64,6 +65,60 @@ function createMockResponse(): {
     jsonMock,
   };
 }
+
+describe('verifiedPrimaryEmail', () => {
+  const withPrimary = (verification: { status: string } | null) => ({
+    primaryEmailAddressId: 'idn_p',
+    emailAddresses: [
+      { id: 'idn_other', emailAddress: 'other@example.com', verification: { status: 'verified' } },
+      { id: 'idn_p', emailAddress: 'primary@example.com', verification },
+    ],
+  });
+
+  it('returns the primary address when it is verified', () => {
+    expect(verifiedPrimaryEmail(withPrimary({ status: 'verified' }))).toBe('primary@example.com');
+  });
+
+  // Only the exact status 'verified' passes. Each of these is refused, so a
+  // check written as `!== 'unverified'` (or case-insensitive) fails here.
+  it.each([
+    ['null verification', null],
+    ['unverified', { status: 'unverified' }],
+    ['transferable', { status: 'transferable' }],
+    ['expired', { status: 'expired' }],
+    ['failed', { status: 'failed' }],
+    ['wrong case', { status: 'Verified' }],
+    ['empty status', { status: '' }],
+  ])('refuses a primary with %s', (_label, verification) => {
+    expect(verifiedPrimaryEmail(withPrimary(verification))).toBeNull();
+  });
+
+  it('refuses when there is no primary, even with a verified secondary', () => {
+    expect(verifiedPrimaryEmail({ ...withPrimary({ status: 'verified' }), primaryEmailAddressId: null })).toBeNull();
+  });
+
+  it('refuses when the primary id matches no address', () => {
+    expect(verifiedPrimaryEmail({ ...withPrimary({ status: 'verified' }), primaryEmailAddressId: 'idn_gone' })).toBeNull();
+  });
+
+  it('trims and lowercases the address', () => {
+    expect(
+      verifiedPrimaryEmail({
+        primaryEmailAddressId: 'idn_p',
+        emailAddresses: [{ id: 'idn_p', emailAddress: '  Mixed.Case@Example.COM \t', verification: { status: 'verified' } }],
+      })
+    ).toBe('mixed.case@example.com');
+  });
+
+  it('refuses an address that is only whitespace', () => {
+    expect(
+      verifiedPrimaryEmail({
+        primaryEmailAddressId: 'idn_p',
+        emailAddresses: [{ id: 'idn_p', emailAddress: '   ', verification: { status: 'verified' } }],
+      })
+    ).toBeNull();
+  });
+});
 
 describe('Auth Middleware', () => {
   const mockUser = {
@@ -173,7 +228,8 @@ describe('Auth Middleware', () => {
       mockGetUser.mockResolvedValue({
         firstName: 'New',
         lastName: 'User',
-        emailAddresses: [{ emailAddress: 'new@example.com' }],
+        primaryEmailAddressId: 'idn_1',
+        emailAddresses: [{ id: 'idn_1', emailAddress: 'new@example.com', verification: { status: 'verified' } }],
       });
       const newUser = { ...mockUser, id: 'user-new', clerkId: 'clerk-new-user', email: 'new@example.com', name: 'New User' };
       (prisma.user.findUnique as jest.Mock).mockResolvedValue(null);
@@ -204,7 +260,8 @@ describe('Auth Middleware', () => {
       mockGetUser.mockResolvedValue({
         firstName: 'Race',
         lastName: 'User',
-        emailAddresses: [{ emailAddress: 'race@example.com' }],
+        primaryEmailAddressId: 'idn_1',
+        emailAddresses: [{ id: 'idn_1', emailAddress: 'race@example.com', verification: { status: 'verified' } }],
       });
       const raceUser = { ...mockUser, id: 'user-race', clerkId: 'clerk-race-user', email: 'race@example.com' };
       // First findUnique: not found. Create fails with P2002. Second findUnique: found.
@@ -227,29 +284,22 @@ describe('Auth Middleware', () => {
       expect(req.user).toEqual(raceUser);
     });
 
-    it('links an existing user by email when create hits the email unique constraint', async () => {
+    it('refuses (409) instead of re-binding an existing user found by email', async () => {
       const { PrismaClientKnownRequestError } = jest.requireActual('../../generated/prisma/client').Prisma;
       mockVerifyToken.mockResolvedValue({ sub: 'clerk-new-local-user' });
       mockGetUser.mockResolvedValue({
         firstName: 'Local',
         lastName: 'User',
-        emailAddresses: [{ emailAddress: 'local@example.com' }],
+        primaryEmailAddressId: 'idn_1',
+        emailAddresses: [{ id: 'idn_1', emailAddress: 'local@example.com', verification: { status: 'verified' } }],
       });
-      const existingUser = {
-        ...mockUser,
-        id: 'user-local',
-        clerkId: null,
-        email: 'local@example.com',
-        name: 'Local User',
-      };
-      const linkedUser = { ...existingUser, clerkId: 'clerk-new-local-user' };
+      const existingUser = { ...mockUser, id: 'user-local', clerkId: null, email: 'local@example.com' };
       (prisma.user.findUnique as jest.Mock)
-        .mockResolvedValueOnce(null)
-        .mockResolvedValueOnce(null)
-        .mockResolvedValueOnce(existingUser);
+        .mockResolvedValueOnce(null) // fast path by clerkId
+        .mockResolvedValueOnce(null); // P2002 re-read by clerkId
+      (prisma.$queryRaw as jest.Mock).mockResolvedValue([{ id: existingUser.id, clerkId: null }]); // holder by normalised email
       const p2002Error = new PrismaClientKnownRequestError('Unique constraint failed', { code: 'P2002', clientVersion: '5.0.0' });
       (prisma.user.create as jest.Mock).mockRejectedValue(p2002Error);
-      (prisma.user.update as jest.Mock).mockResolvedValue(linkedUser);
 
       const req = createMockRequest({
         headers: { authorization: 'Bearer valid-clerk-token' },
@@ -259,24 +309,82 @@ describe('Auth Middleware', () => {
 
       await requireAuth(req as Request, res as Response, next);
 
-      expect(prisma.user.findUnique).toHaveBeenNthCalledWith(2, {
-        where: { clerkId: 'clerk-new-local-user' },
+      expect(prisma.user.update).not.toHaveBeenCalled();
+      expect(next).toHaveBeenCalledWith(expect.objectContaining({ statusCode: 409, code: 'ACCOUNT_LINK_CONFLICT' }));
+      expect(req.user).toBeUndefined();
+    });
+
+    describe('when the email holder vanishes between create and lookup', () => {
+      const { PrismaClientKnownRequestError } = jest.requireActual('../../generated/prisma/client').Prisma;
+      const p2002 = () => new PrismaClientKnownRequestError('Unique constraint failed', { code: 'P2002', clientVersion: '7' });
+
+      beforeEach(() => {
+        mockVerifyToken.mockResolvedValue({ sub: 'clerk-vanish' });
+        mockGetUser.mockResolvedValue({
+          firstName: null,
+          lastName: null,
+          primaryEmailAddressId: 'idn_1',
+          emailAddresses: [{ id: 'idn_1', emailAddress: 'v@example.com', verification: { status: 'verified' } }],
+        });
+        (prisma.user.findUnique as jest.Mock).mockResolvedValue(null);
+        (prisma.$queryRaw as jest.Mock).mockResolvedValue([]); // no holder by normalised email
       });
-      expect(prisma.user.findUnique).toHaveBeenNthCalledWith(3, {
-        where: { email: 'local@example.com' },
+
+      it('retries the create once and succeeds', async () => {
+        const created = { ...mockUser, id: 'user-vanish', clerkId: 'clerk-vanish', email: 'v@example.com' };
+        (prisma.user.create as jest.Mock).mockRejectedValueOnce(p2002()).mockResolvedValueOnce(created);
+        const req = createMockRequest({ headers: { authorization: 'Bearer valid-clerk-token' } });
+        const next = jest.fn();
+
+        await requireAuth(req as Request, createMockResponse().res as Response, next);
+
+        expect(prisma.user.create).toHaveBeenCalledTimes(2);
+        expect(next).toHaveBeenCalledWith();
+        expect(req.user).toEqual(created);
       });
-      expect(prisma.user.update).toHaveBeenCalledWith({
-        where: { id: 'user-local' },
-        data: {
-          clerkId: 'clerk-new-local-user',
-          email: 'local@example.com',
-          name: 'Local User',
-          firstName: 'Local',
-          lastName: 'User',
-        },
+
+      it('refuses with 409 and a holder-less identity_conflict log if the retry collides too', async () => {
+        (prisma.user.create as jest.Mock).mockRejectedValue(p2002());
+        const warn = jest.spyOn(logger, 'warn');
+        const req = createMockRequest({ headers: { authorization: 'Bearer valid-clerk-token' } });
+        const next = jest.fn();
+
+        await requireAuth(req as Request, createMockResponse().res as Response, next);
+
+        expect(prisma.user.create).toHaveBeenCalledTimes(2);
+        expect(next).toHaveBeenCalledWith(expect.objectContaining({ statusCode: 409, code: 'ACCOUNT_LINK_CONFLICT' }));
+        expect(req.user).toBeUndefined();
+        expect(warn).toHaveBeenCalledWith(
+          expect.stringContaining('auth.identity_conflict'),
+          expect.objectContaining({
+            event: 'auth.identity_conflict',
+            incomingClerkUserId: 'clerk-vanish',
+            existingUserId: null,
+            existingClerkUserId: null,
+          })
+        );
+        expect(JSON.stringify(warn.mock.calls)).not.toContain('v@example.com');
       });
-      expect(next).toHaveBeenCalled();
-      expect(req.user).toEqual(linkedUser);
+    });
+
+    it('refuses (403) a first login whose primary email is unverified, without creating a user', async () => {
+      mockVerifyToken.mockResolvedValue({ sub: 'clerk-unverified' });
+      mockGetUser.mockResolvedValue({
+        firstName: null,
+        lastName: null,
+        primaryEmailAddressId: 'idn_1',
+        emailAddresses: [{ id: 'idn_1', emailAddress: 'u@example.com', verification: { status: 'unverified' } }],
+      });
+      (prisma.user.findUnique as jest.Mock).mockResolvedValue(null);
+
+      const req = createMockRequest({ headers: { authorization: 'Bearer valid-clerk-token' } });
+      const { res } = createMockResponse();
+      const next = jest.fn();
+
+      await requireAuth(req as Request, res as Response, next);
+
+      expect(prisma.user.create).not.toHaveBeenCalled();
+      expect(next).toHaveBeenCalledWith(expect.objectContaining({ statusCode: 403, code: 'EMAIL_NOT_VERIFIED' }));
     });
 
     it('uses an existing local user when Clerk profile lookup fails', async () => {
@@ -340,7 +448,8 @@ describe('Auth Middleware', () => {
       mockGetUser.mockResolvedValue({
         firstName: 'Test',
         lastName: 'User',
-        emailAddresses: [{ emailAddress: 'test@example.com' }],
+        primaryEmailAddressId: 'idn_1',
+        emailAddresses: [{ id: 'idn_1', emailAddress: 'test@example.com', verification: { status: 'verified' } }],
       });
       (prisma.user.findUnique as jest.Mock).mockResolvedValue(mockUser);
       (prisma.user.update as jest.Mock).mockResolvedValue(mockUser);
@@ -470,6 +579,34 @@ describe('Auth Middleware', () => {
       );
       expect(next).not.toHaveBeenCalled();
     });
+
+    it.each([undefined, 'production', 'staging', 'develop'])(
+      'does not bypass when NODE_ENV=%p (allow-list: test, development)',
+      async (env) => {
+        const saved = process.env.NODE_ENV;
+        try {
+          if (env === undefined) delete process.env.NODE_ENV;
+          else process.env.NODE_ENV = env;
+          const req = createMockRequest({
+            headers: {
+              'x-e2e-user-id': '00000000-0000-4000-8000-0000000e2e01',
+              'x-e2e-user-email': 'test@e2e.test',
+            },
+          });
+          const { res, statusMock } = createMockResponse();
+          const next = jest.fn();
+
+          await requireAuth(req as Request, res as Response, next);
+
+          expect(prisma.user.upsert).not.toHaveBeenCalled();
+          expect(req.user).toBeUndefined();
+          expect(statusMock).toHaveBeenCalledWith(expect.any(Number));
+          expect(next).not.toHaveBeenCalled();
+        } finally {
+          process.env.NODE_ENV = saved;
+        }
+      }
+    );
 
     it('bypasses e2e auth when E2E_AUTH_BYPASS is not true', async () => {
       process.env.E2E_AUTH_BYPASS = 'false';

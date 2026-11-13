@@ -53,6 +53,9 @@ export default defineConfig({
       env: {
         ...process.env,
         E2E_AUTH_BYPASS: 'true',
+        // The API honours E2E_AUTH_BYPASS only with NODE_ENV test/development
+        // (backend/src/lib/e2e-bypass.ts) and refuses to start otherwise.
+        NODE_ENV: 'development',
         MOCK_LLM: 'false',
         // No E2E_FIXTURE_ID — two-browser specs supply per-user fixtures via
         // X-E2E-Fixture-ID header. The single-user live-ai-full-flow spec

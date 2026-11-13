@@ -23,6 +23,7 @@ import { prisma } from '../lib/prisma';
 import { DEFAULT_PRIVACY_PREFERENCES, ErrorCode, PrivacyPreferencesDTO } from '@meet-without-fear/shared';
 import { successResponse, errorResponse } from '../utils/response';
 import { getPartnerUserId } from '../utils/session';
+import { isE2EBypassEnabled } from '../lib/e2e-bypass';
 
 const INITIAL_SESSION_MESSAGE_LIMIT = 500;
 
@@ -47,7 +48,7 @@ function latestDate(...values: Array<Date | null | undefined>): Date | null {
 }
 
 async function acceptPendingInvitationForE2ESession(sessionId: string, userId: string): Promise<boolean> {
-  if (process.env.E2E_AUTH_BYPASS !== 'true' || process.env.NODE_ENV === 'production') {
+  if (!isE2EBypassEnabled()) {
     return false;
   }
 

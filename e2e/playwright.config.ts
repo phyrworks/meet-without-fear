@@ -16,6 +16,9 @@ const webServers = (fixtureId: string) => [
     env: {
       ...process.env,
       E2E_AUTH_BYPASS: 'true',
+      // The API honours E2E_AUTH_BYPASS only with NODE_ENV test/development
+      // (backend/src/lib/e2e-bypass.ts) and refuses to start otherwise.
+      NODE_ENV: 'development',
       MOCK_LLM: 'true',
       E2E_FIXTURE_ID: fixtureId,
     },

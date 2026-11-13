@@ -160,7 +160,7 @@ This allows different tests to use different fixtures without restarting the ser
 
 ### How It Works
 
-When `E2E_AUTH_BYPASS=true`:
+When `E2E_AUTH_BYPASS=true` and `NODE_ENV` is `development` or `test` (`isE2EBypassEnabled()`, `backend/src/lib/e2e-bypass.ts`; with any other `NODE_ENV`, unset included, the API refuses to start):
 
 1. **Test creates headers:**
    ```typescript
@@ -358,7 +358,7 @@ test('user journey', async ({ page, request }) => {
 
 ## E2E Helper Routes
 
-Enabled only when `E2E_AUTH_BYPASS=true`:
+Enabled only when `E2E_AUTH_BYPASS=true` and `NODE_ENV` is `development` or `test`:
 
 | Endpoint | Purpose |
 |----------|---------|
