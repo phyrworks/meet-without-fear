@@ -1256,12 +1256,12 @@ router.get('/sessions', async (req, res) => {
         ...(isId ? [{ id: search }] : []),
         { participants: { some: { displayName: { contains: search, mode: 'insensitive' } } } },
         { participants: { some: { user: { name: { contains: search, mode: 'insensitive' } } } } },
-        { participants: { some: { user: { email: { contains: search, mode: 'insensitive' } } } } },
+        { participants: { some: { user: { email: { contains: search } } } } }, // email_ci: LIKE ignores case; ILIKE is refused
       ];
       innerWhere.OR = [
         ...(isId ? [{ id: search }] : []),
         { user: { name: { contains: search, mode: 'insensitive' } } },
-        { user: { email: { contains: search, mode: 'insensitive' } } },
+        { user: { email: { contains: search } } }, // email_ci: LIKE ignores case; ILIKE is refused
         // reflection.title is encrypted with a random IV (TS-13): with a key set,
         // SQL cannot match it, so the arm is skipped explicitly and the response
         // says so (ruling R45) rather than silently matching nothing. Restoring it

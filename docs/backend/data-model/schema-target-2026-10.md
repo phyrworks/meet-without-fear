@@ -749,13 +749,13 @@ Identity only. · user · U · none (identity is plaintext; `email`/`clerk_id` a
 |---|---|---|---|---|
 | id | uuid | no | uuidv7() | |
 | clerk_id | text | yes | | UNIQUE |
-| email | text | no | | UNIQUE; CHECK `char_length(email) <= 254` (the RFC 5321 bound, work-gevt) |
+| email | email | no | | UNIQUE, ignoring case (domain `email`, collation `email_ci`, work-k5fk.5): a case variant collides, a plus-address does not; length ≤ 254 (the RFC 5321 bound, work-gevt) is the domain's CHECK |
 | first_name, last_name | text | yes | | |
 | name | text | yes | *generated* | `GENERATED ALWAYS AS (nullif(trim(coalesce(first_name,'') \|\| ' ' \|\| coalesce(last_name,'')), '')) STORED` |
 | deleted_at | timestamptz | yes | | the tombstone (P3 D9) |
 | created_at, updated_at | timestamptz | no | now() | |
 
-Keys: PK; UNIQUE (clerk_id), (email). CHECK `deleted_at IS NULL OR (clerk_id IS NULL AND email LIKE 'deleted+%')` — a tombstone is scrubbed.
+Keys: PK; UNIQUE (clerk_id), (email). CHECK `deleted_at IS NULL OR (clerk_id IS NULL AND email COLLATE "C" LIKE 'deleted+%')` — a tombstone is scrubbed (`COLLATE "C"`: under `email_ci` LIKE would ignore case).
 RLS: S `id = me`; co-participant display name comes from `participant.display_name`, never from this table (P3 §2 bespoke `User`) · I `mwf_auth` only (P3 §5) · U `id = me` (names) · D none.
 Absorbs: `User` identity columns. Drops `pushToken`, `biometric*` (→ `user_device`), the four jsonb (→ `user_preferences`, `ai_memory`), `lastMoodIntensity` (→ view).
 
@@ -1002,6 +1002,7 @@ erDiagram
 | `guidance_type` / `proposal_revision_reason` / `reminder_cadence` / `wellbeing_feature` | see `reconciler_guidance`, `proposal_revision`, `reminder`, `feature_state` | were text / a CHECK (work-gevt, 2026-11-10) |
 | `activity_type` / `activity_status` / `brain_call_type` | unchanged | |
 | **Domain** `intensity` | `int CHECK (VALUE BETWEEN 1 AND 10)` | new |
+| **Domain** `email` | `text COLLATE email_ci CHECK (char_length(VALUE) <= 254)` — `user.email`. `email_ci` is ICU `und-u-ks-level2`, nondeterministic: case-insensitive, otherwise exact (a plus-address or an accent is a different address). Under it PG 18 refuses regular expressions and ILIKE (so no Prisma `mode: 'insensitive'` on an email; plain `contains` is a LIKE and already ignores case); an exact comparison uses `COLLATE "C"`. Invisible to Prisma (`String`). `email-domain.target.test.ts` | new (2026-11-13, work-k5fk.5) |
 | **Domain** `uuid7` | `uuid CHECK (VALUE IS NULL OR coalesce(uuid_extract_version(VALUE), 0) = 7)` — every uuid column (33 PKs, 95 FK columns); `gen_random_uuid()` and other non-v7 values are refused. Invisible to Prisma (`String @db.Uuid`). Source: `backend/scripts/target-shape/tables.sql` | new (2026-11-02) |
 | **Domain** `ciphertext` | `text CHECK (VALUE IS NULL OR VALUE !~ '^enc:' OR VALUE ~ '^enc:v1:<iv 16>:<tag 22>==:<base64 ct>$')` — every encrypted text column of `SENSITIVE_FIELD_MAP` (44). Plaintext passes (keyless dev/test); anything claiming to be an envelope must be a well-formed v1 one. The 5 encrypted `text[]` columns carry `CHECK (app.all_ciphertext(col))` instead (an array of a domain is refused by step 20); the 6 encrypted `jsonb` columns carry a COMMENT starting `encrypted`. Every encrypted column's COMMENT starts `encrypted (<key class>):`. Invisible to Prisma (`String`). `encryption-at-rest-schema.target.test.ts` ties the catalog to the map both ways | new (2026-11-10, work-gevt) |
 | **Domain** `ts_ms` | `timestamptz(3)` — every timestamp column (143). A JS `Date` holds milliseconds, so a microsecond value would not round-trip (keyset cursors, forward-only instants, exact equality); the domain rounds every write, defaults and triggers included. Invisible to Prisma (`DateTime @db.Timestamptz(3)`); step 20 refuses a plain timestamptz column. Source: `backend/scripts/target-shape/tables.sql` | new (2026-11-10, work-gevt) |

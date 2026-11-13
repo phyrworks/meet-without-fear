@@ -61,9 +61,10 @@
 -- ----------------------------------------------------------------------------
 -- Domains. All are invisible to Prisma: a uuid7 column introspects as
 -- String @db.Uuid, a ts_ms column as DateTime @db.Timestamptz(3), an
--- intensity column as Int, and `migrate diff` reports nothing (TS-6 probe for
--- intensity, 2026-10-19; work-a39h.11.40 probe for uuid7, 2026-11-02;
--- work-gevt for ts_ms, 2026-11-10; PG 18.6 / Prisma 7.10).
+-- intensity column as Int, an email column (collation included) as String,
+-- and `migrate diff` reports nothing (TS-6 probe for intensity, 2026-10-19;
+-- work-a39h.11.40 probe for uuid7, 2026-11-02; work-gevt for ts_ms,
+-- 2026-11-10; work-k5fk.5 for email, 2026-11-13; PG 18.6 / Prisma 7.10).
 -- ----------------------------------------------------------------------------
 
 -- Every uuid column (the 33 uuidv7() primary keys and the 96 columns that
@@ -140,6 +141,27 @@ COMMENT ON DOMAIN ts_ms IS 'A timestamptz rounded to milliseconds; every timesta
 -- spec §3: a 1..10 rating (mood_reading.intensity, regulation_event.intensity_*).
 CREATE DOMAIN intensity AS integer CHECK (VALUE BETWEEN 1 AND 10);
 COMMENT ON DOMAIN intensity IS 'A 1-10 self-rated intensity (mood_reading.intensity, regulation_event.intensity_before/after).';
+
+-- work-k5fk.5: an email address compares case-insensitively and nothing else.
+-- email_ci is ICU's root locale at strength level 2 (ks-level2): case is
+-- ignored, accents and every other character are not, so 'A@x.test' equals
+-- 'a@x.test' while 'a+1@x.test' (a plus-address) stays a different address,
+-- and 'ä@x.test' differs from 'a@x.test'. It is nondeterministic, so the
+-- UNIQUE on "user".email refuses a case variant of an existing address and
+-- `WHERE email = $1` finds it whatever the case. What a nondeterministic
+-- collation refuses (measured, PG 18.6): regular expressions and ILIKE raise
+-- "nondeterministic collations are not supported for …" — so no Prisma
+-- `mode: 'insensitive'` filter on an email (routes/brain.ts search uses plain
+-- `contains`, a LIKE, which PG18 supports and which is case-insensitive here),
+-- and a CHECK that must be exact compares under COLLATE "C" (the tombstone
+-- CHECK on "user"). Prisma sees a String column (the domain and the collation
+-- are invisible to `db pull` / `migrate diff`). Functions keep text arguments:
+-- app.create_user_for_clerk(…, email text, …) is checked when it inserts.
+CREATE COLLATION email_ci (provider = icu, locale = 'und-u-ks-level2', deterministic = false);
+COMMENT ON COLLATION email_ci IS 'Case-insensitive, otherwise exact (ICU und-u-ks-level2, nondeterministic): the collation of the email domain. Regex and ILIKE are refused under it; LIKE works and ignores case.';
+CREATE DOMAIN email AS text COLLATE email_ci
+  CHECK (char_length(VALUE) <= 254);
+COMMENT ON DOMAIN email IS 'An email address (at most 254 characters, RFC 5321), compared case-insensitively (collation email_ci): a case variant is the same address, a plus-address is not. Never ~ or ILIKE (refused); an exact comparison uses COLLATE "C".';
 
 -- ----------------------------------------------------------------------------
 -- Enums, in schema.prisma order.
@@ -270,7 +292,7 @@ GRANT INSERT (created_at, updated_at) ON relationship TO mwf_app;
 CREATE TABLE "user" (
     id uuid7 NOT NULL DEFAULT uuidv7() PRIMARY KEY,
     clerk_id text UNIQUE,
-    email text NOT NULL UNIQUE CHECK (char_length(email) <= 254),
+    email email NOT NULL UNIQUE,
     first_name text,
     last_name text,
     deleted_at ts_ms,
@@ -279,12 +301,13 @@ CREATE TABLE "user" (
     name text
         GENERATED ALWAYS AS (nullif(trim(coalesce(first_name, '') || ' ' || coalesce(last_name, '')), '')) STORED,
 
-    -- §1.7 user — a tombstone is scrubbed (P3 D9)
-    CHECK (deleted_at IS NULL OR (clerk_id IS NULL AND email LIKE 'deleted+%'))
+    -- §1.7 user — a tombstone is scrubbed (P3 D9). COLLATE "C": under email_ci
+    -- LIKE would ignore case; the walk writes exactly 'deleted+' || id.
+    CHECK (deleted_at IS NULL OR (clerk_id IS NULL AND email COLLATE "C" LIKE 'deleted+%'))
 );
 COMMENT ON TABLE "user" IS 'Identity only: one row per account (Clerk-backed), soft-deleted to a scrubbed tombstone. Every FK to it is RESTRICT; session data hangs off participant, not off user.';
 COMMENT ON COLUMN "user".clerk_id IS 'The Clerk user id this account signs in with; NULL on a tombstone.';
-COMMENT ON COLUMN "user".email IS 'Sign-in email, unique. A tombstone holds a scrubbed deleted+<id> address.';
+COMMENT ON COLUMN "user".email IS 'Sign-in email, unique ignoring case (domain email): a case variant of an existing address is refused, a plus-address is a different one. A tombstone holds a scrubbed deleted+<id> address.';
 COMMENT ON COLUMN "user".name IS 'Generated display name: first_name and last_name joined, NULL when both are empty.';
 COMMENT ON COLUMN "user".deleted_at IS 'Soft delete (P3 D9): the row becomes a scrubbed tombstone and is never removed.';
 -- mwf_app: every request reads its user (auth middleware, by clerk_id/email) and its partner's names; first login creates the
@@ -297,6 +320,7 @@ GRANT UPDATE (clerk_id, email, first_name, last_name, updated_at) ON "user" TO m
 -- middleware/auth.ts's P2002 path re-bind an EXISTING user's row — found by the email a new Clerk
 -- identity presents (emailAddresses[0], not checked verified or primary) — to that new identity: an
 -- account takeover. The grant is the app's today; the fix (and this grant) is the owner's call.
+-- Since work-k5fk.5 that lookup (findUnique by email) also matches a case variant of the address.
 
 CREATE TABLE relationship_member (
     relationship_id uuid7 NOT NULL REFERENCES relationship ON DELETE CASCADE,
