@@ -84,7 +84,7 @@ describeDb('first login of a Clerk identity (database)', () => {
   });
 
   afterAll(async () => {
-    await prisma.user.deleteMany({ where: { email: { contains: run } } });
+    await prisma.user.deleteMany({ where: { email: { contains: run, mode: 'insensitive' } } });
     await prisma.user.deleteMany({ where: { clerkId: { contains: run } } });
     await prisma.$disconnect();
   });
@@ -169,6 +169,48 @@ describeDb('first login of a Clerk identity (database)', () => {
     expect(err).toBeUndefined();
     const row = await prisma.user.findUniqueOrThrow({ where: { clerkId: cid('race2') } });
     expect(req.user?.id).toBe(row.id);
+  });
+
+  it('stores the primary email trimmed and lowercased', async () => {
+    const raw = `  ${email('Padded').toUpperCase()}\t`;
+    mockGetUser.mockResolvedValue(
+      clerkUser({ primaryEmailAddressId: 'idn_p', emailAddresses: [verified('idn_p', raw)] })
+    );
+
+    const { err } = await authenticate(cid('padded'));
+
+    expect(err).toBeUndefined();
+    const row = await prisma.user.findUniqueOrThrow({ where: { clerkId: cid('padded') } });
+    expect(row.email).toBe(email('padded'));
+  });
+
+  describe.each([
+    ['bound to a different Clerk id', (tag: string) => cid(`case_victim_${tag}`)],
+    ['with no Clerk id', () => null],
+  ])('an existing row whose email differs only in case, %s', (_label, existingClerkId) => {
+    it('is refused with 409 and no second row is created', async () => {
+      const tag = existingClerkId('x') ? 'cother' : 'cnull';
+      // A pre-fix row stored with its original case.
+      const stored = email(`Case-${tag}`).replace('@example.test', '@Example.Test');
+      const victim = await prisma.user.create({ data: { email: stored, clerkId: existingClerkId(tag) } });
+      mockGetUser.mockResolvedValue(
+        clerkUser({
+          primaryEmailAddressId: 'idn_a',
+          emailAddresses: [verified('idn_a', stored.toLowerCase())],
+        })
+      );
+
+      const { err } = await authenticate(cid(`case_attacker_${tag}`));
+
+      expect((err as AppError).statusCode).toBe(409);
+      expect((err as AppError).code).toBe(ErrorCode.ACCOUNT_LINK_CONFLICT);
+      expect(await prisma.user.findUniqueOrThrow({ where: { id: victim.id } })).toEqual(victim);
+      expect(await prisma.user.findUnique({ where: { clerkId: cid(`case_attacker_${tag}`) } })).toBeNull();
+      const sameAddress = await prisma.user.findMany({
+        where: { email: { equals: stored, mode: 'insensitive' } },
+      });
+      expect(sameAddress.map((u) => u.id)).toEqual([victim.id]);
+    });
   });
 
   describe.each([

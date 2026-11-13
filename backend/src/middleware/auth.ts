@@ -156,7 +156,24 @@ export function verifiedPrimaryEmail(clerkUser: {
 }): string | null {
   const primary = clerkUser.emailAddresses.find((e) => e.id === clerkUser.primaryEmailAddressId);
   if (!primary || primary.verification?.status !== 'verified') return null;
-  return primary.emailAddress || null;
+  return normalizeEmail(primary.emailAddress) || null;
+}
+
+/**
+ * The stored form of an email address: trimmed and lowercased. User.email is
+ * unique case-insensitively (index "User_email_lower_key"), and rows written
+ * before work-jv9y may keep their original case, so lookups by email compare
+ * lower(email), never the bytes.
+ */
+export function normalizeEmail(email: string): string {
+  return email.trim().toLowerCase();
+}
+
+/** The row holding this address, compared case-insensitively. Ids only. */
+async function findEmailHolder(email: string): Promise<{ id: string; clerkId: string | null } | null> {
+  const rows = await prisma.$queryRaw<Array<{ id: string; clerkId: string | null }>>`
+    SELECT id::text AS id, "clerkId" FROM "User" WHERE lower(email) = lower(${email}) LIMIT 1`;
+  return rows[0] ?? null;
 }
 
 /**
@@ -281,10 +298,7 @@ async function handleClerkAuth(
         // The email belongs to a row bound to another Clerk identity (or to
         // none). Never re-bind it: a new Clerk identity presenting an existing
         // user's email would take over that user's account (work-jv9y).
-        const holder = await prisma.user.findUnique({
-          where: { email },
-          select: { id: true, clerkId: true },
-        });
+        const holder = await findEmailHolder(email);
         if (!holder) throw error; // neither key collides any more: not ours to explain
         logIdentityConflict(clerkUserId, holder);
         throw new AccountLinkConflictError();

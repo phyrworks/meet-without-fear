@@ -5,7 +5,7 @@
  */
 
 import { Request, Response, NextFunction } from 'express';
-import { requireAuth, optionalAuth, getUser, requireSessionAccess } from '../auth';
+import { requireAuth, optionalAuth, getUser, requireSessionAccess, verifiedPrimaryEmail } from '../auth';
 import { ForbiddenError, NotFoundError } from '../errors';
 import { prisma } from '../../lib/prisma';
 
@@ -64,6 +64,60 @@ function createMockResponse(): {
     jsonMock,
   };
 }
+
+describe('verifiedPrimaryEmail', () => {
+  const withPrimary = (verification: { status: string } | null) => ({
+    primaryEmailAddressId: 'idn_p',
+    emailAddresses: [
+      { id: 'idn_other', emailAddress: 'other@example.com', verification: { status: 'verified' } },
+      { id: 'idn_p', emailAddress: 'primary@example.com', verification },
+    ],
+  });
+
+  it('returns the primary address when it is verified', () => {
+    expect(verifiedPrimaryEmail(withPrimary({ status: 'verified' }))).toBe('primary@example.com');
+  });
+
+  // Only the exact status 'verified' passes. Each of these is refused, so a
+  // check written as `!== 'unverified'` (or case-insensitive) fails here.
+  it.each([
+    ['null verification', null],
+    ['unverified', { status: 'unverified' }],
+    ['transferable', { status: 'transferable' }],
+    ['expired', { status: 'expired' }],
+    ['failed', { status: 'failed' }],
+    ['wrong case', { status: 'Verified' }],
+    ['empty status', { status: '' }],
+  ])('refuses a primary with %s', (_label, verification) => {
+    expect(verifiedPrimaryEmail(withPrimary(verification))).toBeNull();
+  });
+
+  it('refuses when there is no primary, even with a verified secondary', () => {
+    expect(verifiedPrimaryEmail({ ...withPrimary({ status: 'verified' }), primaryEmailAddressId: null })).toBeNull();
+  });
+
+  it('refuses when the primary id matches no address', () => {
+    expect(verifiedPrimaryEmail({ ...withPrimary({ status: 'verified' }), primaryEmailAddressId: 'idn_gone' })).toBeNull();
+  });
+
+  it('trims and lowercases the address', () => {
+    expect(
+      verifiedPrimaryEmail({
+        primaryEmailAddressId: 'idn_p',
+        emailAddresses: [{ id: 'idn_p', emailAddress: '  Mixed.Case@Example.COM \t', verification: { status: 'verified' } }],
+      })
+    ).toBe('mixed.case@example.com');
+  });
+
+  it('refuses an address that is only whitespace', () => {
+    expect(
+      verifiedPrimaryEmail({
+        primaryEmailAddressId: 'idn_p',
+        emailAddresses: [{ id: 'idn_p', emailAddress: '   ', verification: { status: 'verified' } }],
+      })
+    ).toBeNull();
+  });
+});
 
 describe('Auth Middleware', () => {
   const mockUser = {
@@ -241,8 +295,8 @@ describe('Auth Middleware', () => {
       const existingUser = { ...mockUser, id: 'user-local', clerkId: null, email: 'local@example.com' };
       (prisma.user.findUnique as jest.Mock)
         .mockResolvedValueOnce(null) // fast path by clerkId
-        .mockResolvedValueOnce(null) // P2002 re-read by clerkId
-        .mockResolvedValueOnce(existingUser); // conflict lookup by email (for the log)
+        .mockResolvedValueOnce(null); // P2002 re-read by clerkId
+      (prisma.$queryRaw as jest.Mock).mockResolvedValue([{ id: existingUser.id, clerkId: null }]); // holder by lower(email)
       const p2002Error = new PrismaClientKnownRequestError('Unique constraint failed', { code: 'P2002', clientVersion: '5.0.0' });
       (prisma.user.create as jest.Mock).mockRejectedValue(p2002Error);
 
