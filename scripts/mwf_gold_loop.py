@@ -394,6 +394,9 @@ def start_background_command(
 def build_loop_service_env(args: argparse.Namespace, base_env: dict[str, str] | None = None) -> dict[str, str]:
     env = dict(base_env if base_env is not None else os.environ)
     env.setdefault("E2E_AUTH_BYPASS", "true")
+    # The API honours E2E_AUTH_BYPASS only with NODE_ENV test/development
+    # (backend/src/lib/e2e-bypass.ts) and refuses to start otherwise.
+    env.setdefault("NODE_ENV", "development")
     env.setdefault("MOCK_LLM", "false")
     env.setdefault("E2E_APP_BASE_URL", args.app_url)
     env.setdefault("EXPO_PUBLIC_E2E_MODE", "true")

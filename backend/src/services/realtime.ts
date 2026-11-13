@@ -1,5 +1,6 @@
 import Ably from 'ably';
 import { logger } from '../lib/logger';
+import { isE2EBypassEnabled } from '../lib/e2e-bypass';
 import { ablyCircuitBreaker } from '../utils/circuit-breaker';
 import { sendPushNotification } from './push';
 
@@ -85,7 +86,7 @@ function getAblyClient(): Ably.Rest {
 let ablyClient: Ably.Rest | undefined;
 
 function shouldSkipAblyInE2E(): boolean {
-  return process.env.E2E_AUTH_BYPASS === 'true' && !process.env.ABLY_API_KEY;
+  return isE2EBypassEnabled() && !process.env.ABLY_API_KEY;
 }
 
 export function getAbly(): Ably.Rest {

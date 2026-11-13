@@ -19,6 +19,7 @@ import { Prisma } from '../generated/prisma/client';
 import { logger } from '../lib/logger';
 import { identityBindingEnabled } from '../lib/prisma-identity';
 import { updateContext } from '../lib/request-context';
+import { isE2EBypassEnabled } from '../lib/e2e-bypass';
 
 // ============================================================================
 // Types
@@ -81,13 +82,11 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 
 /**
  * E2E auth bypass handler
- * When E2E_AUTH_BYPASS=true AND NODE_ENV is not production, accepts x-e2e-user-id and x-e2e-user-email headers
+ * Only when isE2EBypassEnabled() (E2E_AUTH_BYPASS=true and NODE_ENV test or
+ * development), accepts x-e2e-user-id and x-e2e-user-email headers
  */
 async function handleE2EAuthBypass(req: Request): Promise<boolean> {
-  if (process.env.E2E_AUTH_BYPASS !== 'true') {
-    return false;
-  }
-  if (process.env.NODE_ENV === 'production') {
+  if (!isE2EBypassEnabled()) {
     return false;
   }
 

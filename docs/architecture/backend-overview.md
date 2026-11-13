@@ -200,7 +200,7 @@ status: living
 - Mobile: Zod schemas in shared contracts; React Hook Form for UI validation
 
 **Authentication:**
-- Backend: Clerk JWT in `Authorization: Bearer` header; middleware extracts + verifies with `verifyToken()` (from @clerk/express). When `E2E_AUTH_BYPASS=true` **and** `NODE_ENV !== 'production'`, the middleware also accepts `x-e2e-user-id` and `x-e2e-user-email` headers and resolves them to a DB user instead of a Clerk session. A startup assertion in `server.ts` prevents the server from starting if `E2E_AUTH_BYPASS=true` is set in a production environment.
+- Backend: Clerk JWT in `Authorization: Bearer` header; middleware extracts + verifies with `verifyToken()` (from @clerk/express). When `E2E_AUTH_BYPASS=true` **and** `NODE_ENV` is exactly `test` or `development` (`isE2EBypassEnabled()`, `backend/src/lib/e2e-bypass.ts`; an allow-list), the middleware also accepts `x-e2e-user-id` and `x-e2e-user-email` headers and resolves them to a DB user instead of a Clerk session. A startup assertion in `server.ts` prevents the server from starting if `E2E_AUTH_BYPASS=true` is set with any other `NODE_ENV` (including unset), so the Playwright configs and `scripts/mwf_gold_loop.py` start the API with `NODE_ENV=development`.
 - Mobile: Clerk Expo SDK manages tokens; `useAuth()` hook provides `token` for API calls; E2E mode sends the `x-e2e-user-id` / `x-e2e-user-email` headers described above instead of a Clerk token.
 
 **Rate Limiting:**

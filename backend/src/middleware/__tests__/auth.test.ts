@@ -580,6 +580,34 @@ describe('Auth Middleware', () => {
       expect(next).not.toHaveBeenCalled();
     });
 
+    it.each([undefined, 'production', 'staging', 'develop'])(
+      'does not bypass when NODE_ENV=%p (allow-list: test, development)',
+      async (env) => {
+        const saved = process.env.NODE_ENV;
+        try {
+          if (env === undefined) delete process.env.NODE_ENV;
+          else process.env.NODE_ENV = env;
+          const req = createMockRequest({
+            headers: {
+              'x-e2e-user-id': '00000000-0000-4000-8000-0000000e2e01',
+              'x-e2e-user-email': 'test@e2e.test',
+            },
+          });
+          const { res, statusMock } = createMockResponse();
+          const next = jest.fn();
+
+          await requireAuth(req as Request, res as Response, next);
+
+          expect(prisma.user.upsert).not.toHaveBeenCalled();
+          expect(req.user).toBeUndefined();
+          expect(statusMock).toHaveBeenCalledWith(expect.any(Number));
+          expect(next).not.toHaveBeenCalled();
+        } finally {
+          process.env.NODE_ENV = saved;
+        }
+      }
+    );
+
     it('bypasses e2e auth when E2E_AUTH_BYPASS is not true', async () => {
       process.env.E2E_AUTH_BYPASS = 'false';
 

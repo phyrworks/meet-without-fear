@@ -554,6 +554,7 @@ class TestYamlParsing(unittest.TestCase):
 
         self.assertEqual(env["MOCK_LLM"], "false")
         self.assertEqual(env["E2E_AUTH_BYPASS"], "true")
+        self.assertEqual(env["NODE_ENV"], "development")
 
     def test_gold_loop_service_env_preserves_explicit_mock_llm_override(self) -> None:
         args = gold_loop.build_parser().parse_args(

@@ -51,13 +51,17 @@ import app from './app';
 import { logger } from './lib/logger';
 import { prisma } from './lib/prisma';
 import { attachRealtimeWebSocket } from './services/realtime-transcription';
+import { E2E_BYPASS_ENVIRONMENTS, isE2EBypassMisconfigured } from './lib/e2e-bypass';
 
-// Fail fast: E2E_AUTH_BYPASS must never be enabled in production
-if (process.env.E2E_AUTH_BYPASS === 'true' && process.env.NODE_ENV === 'production') {
+// Fail fast: E2E_AUTH_BYPASS is honoured only with NODE_ENV test or
+// development (lib/e2e-bypass.ts). Set anywhere else (production, staging,
+// unset, misspelt) it is a misconfiguration: refuse to start rather than run
+// with the flag silently ignored.
+if (isE2EBypassMisconfigured()) {
   throw new Error(
-    'FATAL: E2E_AUTH_BYPASS=true is set in a production environment. ' +
-    'This disables all authentication and security controls. ' +
-    'Remove E2E_AUTH_BYPASS from the production environment variables.'
+    `FATAL: E2E_AUTH_BYPASS=true is set with NODE_ENV=${JSON.stringify(process.env.NODE_ENV ?? null)}. ` +
+    `The bypass disables authentication and is only allowed with NODE_ENV in [${E2E_BYPASS_ENVIRONMENTS.join(', ')}]. ` +
+    'Remove E2E_AUTH_BYPASS, or set NODE_ENV accordingly for a local/E2E run.'
   );
 }
 
