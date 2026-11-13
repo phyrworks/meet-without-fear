@@ -194,14 +194,14 @@ Absorbs: `EmpathyDraft` (about = the other participant), `ValidationFeedbackDraf
 Lookup of journey milestones; the only place "stage" exists, as data. · core · G · none
 | column | type | null | default | meaning |
 |---|---|---|---|---|
-| key | text | no | | PK, e.g. `compact_signed`, `invitation_sent`, `feel_heard`, `empathy_submitted`, `empathy_ready`, `empathy_validated`, `needs_confirmed`, `needs_shared`, `choices_shared`, `closed` |
+| key | milestone_key | no | | PK (domain `milestone_key`, a lower-case identifier), e.g. `compact_signed`, `invitation_sent`, `feel_heard`, `empathy_submitted`, `empathy_ready`, `empathy_validated`, `needs_confirmed`, `needs_shared`, `choices_shared`, `closed` |
 | ordinal | int | no | | order along the journey |
-| stage_label | text | no | | UI label of the stage this milestone belongs to ("Your Story", …) |
+| stage_label | text | no | | UI label of the stage this milestone belongs to ("Your Story", …); plain text: its closed set is these rows, and a copy edit is an `UPDATE` |
 | scope | milestone_scope | no | 'participant' | `participant \| session` — whether all participants must reach it for the session to advance |
 | self_assertable | boolean | no | false | may the participant insert it themselves (a CTA), or only `mwf_job` (a system fact) |
 | created_at | timestamptz | no | now() | |
 
-Keys: PK (key). UNIQUE (ordinal). Seeded by the baseline migration (13 rows, keys from the fixture vocabulary; OD7, 2026-10-26 — no gate keys are decoded); renumbering is an `UPDATE`.
+Keys: PK (key). UNIQUE (ordinal). Seeded by the baseline migration — the `INSERT` sits in `tables.sql` right after the table, one commented row per milestone (work-k5fk.6) — (13 rows, keys from the fixture vocabulary; OD7, 2026-10-26 — no gate keys are decoded); renumbering is an `UPDATE`.
 RLS: no RLS (reference table); `GRANT SELECT` to `mwf_app` (P3 §1.1 pattern, like `Need`).
 Absorbs: the key set of `StageProgress.gatesSatisfied` and the `stage` integers (D3).
 
@@ -210,7 +210,7 @@ Event: a participant reached a milestone at a time. · core · S (progress is vi
 | column | type | null | default | meaning |
 |---|---|---|---|---|
 | participant_id | uuid | no | | FK participant CASCADE |
-| milestone_key | text | no | | FK milestone RESTRICT |
+| milestone_key | milestone_key | no | | FK milestone RESTRICT |
 | reached_at | timestamptz | no | now() | |
 
 Keys: PK (participant_id, milestone_key). Index (milestone_key, reached_at) — readiness scans. Append-only (no `updated_at`; un-reaching a milestone is a `DELETE` by `mwf_job` only — "withdraw selections" path). **No payload column**: an S-class `jsonb` would carry private material (the old `finalEmotionalReading` gate) to co-participants; a gate's payload lives on the P-class table it belongs to (`mood_reading`) (adversarial P1-2).
@@ -1002,6 +1002,7 @@ erDiagram
 | `guidance_type` / `proposal_revision_reason` / `reminder_cadence` / `wellbeing_feature` | see `reconciler_guidance`, `proposal_revision`, `reminder`, `feature_state` | were text / a CHECK (work-gevt, 2026-11-10) |
 | `activity_type` / `activity_status` / `brain_call_type` | unchanged | |
 | **Domain** `intensity` | `int CHECK (VALUE BETWEEN 1 AND 10)` | new |
+| **Domain** `milestone_key` | `text CHECK (VALUE ~ '^[a-z][a-z0-9_]*$')` — `milestone.key`, `participant_milestone.milestone_key`. A domain, not an enum: the set is the `milestone` rows (FK), and an enum would make each new milestone an `ALTER TYPE … ADD VALUE`, unusable in the transaction that seeds its row. A row comparison against it needs `::milestone_key`, not `::text`. Invisible to Prisma (`String`) | new (2026-11-13, work-k5fk.6) |
 | **Domain** `email` | `text COLLATE email_ci CHECK (char_length(VALUE) <= 254)` — `user.email`. `email_ci` is ICU `und-u-ks-level2`, nondeterministic: case-insensitive, otherwise exact (a plus-address or an accent is a different address). Under it PG 18 refuses regular expressions and ILIKE (so no Prisma `mode: 'insensitive'` on an email; plain `contains` is a LIKE and already ignores case); an exact comparison uses `COLLATE "C"`. Invisible to Prisma (`String`). `email-domain.target.test.ts` | new (2026-11-13, work-k5fk.5) |
 | **Domain** `uuid7` | `uuid CHECK (VALUE IS NULL OR coalesce(uuid_extract_version(VALUE), 0) = 7)` — every uuid column (33 PKs, 95 FK columns); `gen_random_uuid()` and other non-v7 values are refused. Invisible to Prisma (`String @db.Uuid`). Source: `backend/scripts/target-shape/tables.sql` | new (2026-11-02) |
 | **Domain** `ciphertext` | `text CHECK (VALUE IS NULL OR VALUE !~ '^enc:' OR VALUE ~ '^enc:v1:<iv 16>:<tag 22>==:<base64 ct>$')` — every encrypted text column of `SENSITIVE_FIELD_MAP` (44). Plaintext passes (keyless dev/test); anything claiming to be an envelope must be a well-formed v1 one. The 5 encrypted `text[]` columns carry `CHECK (app.all_ciphertext(col))` instead (an array of a domain is refused by step 20); the 6 encrypted `jsonb` columns carry a COMMENT starting `encrypted`. Every encrypted column's COMMENT starts `encrypted (<key class>):`. Invisible to Prisma (`String`). `encryption-at-rest-schema.target.test.ts` ties the catalog to the map both ways | new (2026-11-10, work-gevt) |

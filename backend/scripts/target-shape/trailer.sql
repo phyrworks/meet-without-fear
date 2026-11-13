@@ -2,7 +2,7 @@
 -- trailer.sql — section 3 of the target_shape_baseline migration (TS-7c;
 -- built by TS-7, re-based on an empty database by OD7, 2026-10-26).
 -- Hand-maintained; backend/scripts/gen-target-migration.ts appends it after
--- the preamble, tables.sql and the milestone seed, and splices
+-- the preamble and tables.sql (which ends each table with its seed and grants), and splices
 -- backend/scripts/target-shape/sql-only.sql in, verbatim, at the
 -- `-- @@include sql-only.sql` line. It never runs alone: it runs in the same
 -- transaction, so a failure here rolls the whole baseline back.
@@ -24,8 +24,8 @@
 --       no existing rows to re-check: every invariant is enforced by its
 --       trigger or CHECK from the first write on.
 --
--- Not here: RLS ENABLE/FORCE and policies (TS-16); the milestone seed (its
--- own section, before this one); schema app and app.current_user_id()
+-- Not here: RLS ENABLE/FORCE and policies (TS-16); the milestone seed (in
+-- tables.sql, after the milestone table); schema app and app.current_user_id()
 -- (preamble.sql); the tables, their constraints, the uuid7 and intensity
 -- domains (tables.sql).
 -- ============================================================================

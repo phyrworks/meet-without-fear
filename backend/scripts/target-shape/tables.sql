@@ -4,7 +4,8 @@
 -- after the preamble. It is the source of truth for the 47 tables: read a
 -- table here and you have all of it — columns, types, defaults, NOT NULL,
 -- generated columns, the primary key, UNIQUE constraints, foreign keys and
--- CHECKs inside its CREATE TABLE, its plain indexes straight after.
+-- CHECKs inside its CREATE TABLE, its plain indexes straight after, then its
+-- grants (every role's) and, for milestone, its seed rows.
 --
 -- Spec: docs/backend/data-model/schema-target-2026-10.md (§1 tables and Keys
 -- lines, §3 domains). Owner decision 2026-11-02: hand-written DDL replaces the
@@ -141,6 +142,17 @@ COMMENT ON DOMAIN ts_ms IS 'A timestamptz rounded to milliseconds; every timesta
 -- spec §3: a 1..10 rating (mood_reading.intensity, regulation_event.intensity_*).
 CREATE DOMAIN intensity AS integer CHECK (VALUE BETWEEN 1 AND 10);
 COMMENT ON DOMAIN intensity IS 'A 1-10 self-rated intensity (mood_reading.intensity, regulation_event.intensity_before/after).';
+
+-- work-k5fk.6: a milestone key (milestone.key, participant_milestone.milestone_key):
+-- a lower-case identifier such as feel_heard. A domain, not an enum: the keys
+-- are a closed set, but that set is the milestone table's rows (seeded below
+-- it), and an enum would make every new milestone an ALTER TYPE … ADD VALUE,
+-- which cannot be used in the transaction that also inserts its seed row
+-- (the baseline is one transaction). The FK to milestone closes the set;
+-- the domain fixes the spelling.
+CREATE DOMAIN milestone_key AS text
+  CHECK (VALUE ~ '^[a-z][a-z0-9_]*$');
+COMMENT ON DOMAIN milestone_key IS 'A milestone key: a lower-case identifier (e.g. feel_heard). The set of keys is the milestone table (FK); a domain rather than an enum so a new milestone is one seed row, not ALTER TYPE ADD VALUE.';
 
 -- work-k5fk.5: an email address compares case-insensitively and nothing else.
 -- email_ci is ICU's root locale at strength level 2 (ks-level2): case is
@@ -691,7 +703,7 @@ GRANT SELECT ON context_share_offer TO mwf_app;
 GRANT UPDATE (status, offered_at, suggested_content, declined_at, shared_content, shared_at, updated_at) ON context_share_offer TO mwf_app;
 
 CREATE TABLE milestone (
-    key text NOT NULL PRIMARY KEY,
+    key milestone_key NOT NULL PRIMARY KEY,
     ordinal integer NOT NULL UNIQUE,
     stage_label text NOT NULL,
     scope milestone_scope NOT NULL DEFAULT 'participant',
@@ -699,17 +711,39 @@ CREATE TABLE milestone (
     created_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
-COMMENT ON TABLE milestone IS 'Reference data: the journey milestones, in order. The only place a stage exists, as data; seeded by the baseline migration.';
-COMMENT ON COLUMN milestone.key IS 'Stable identifier of the milestone, e.g. feel_heard; code and participant_milestone refer to it.';
-COMMENT ON COLUMN milestone.ordinal IS 'Position along the journey.';
-COMMENT ON COLUMN milestone.stage_label IS 'UI label of the stage this milestone belongs to, e.g. Your Story; display text owned by this table.';
+COMMENT ON TABLE milestone IS 'Reference data: the journey milestones, in order. The only place a stage exists, as data; seeded right here by the baseline migration and read-only to every runtime role.';
+COMMENT ON COLUMN milestone.key IS 'Stable identifier of the milestone, e.g. feel_heard (domain milestone_key); code (shared MILESTONE_KEYS) and participant_milestone refer to it.';
+COMMENT ON COLUMN milestone.ordinal IS 'Position along the journey: stage * 100 + position, so floor(ordinal / 100) is the stage number; 0 (paused) is off the journey.';
+COMMENT ON COLUMN milestone.stage_label IS 'UI label of the stage this milestone belongs to, e.g. Your Story; display text owned by this table. Plain text, not an enum or a domain: its closed set is these rows (no runtime role can write here), and a copy edit is an UPDATE, not a type change.';
 COMMENT ON COLUMN milestone.self_assertable IS 'Whether a participant may record the milestone themselves (a CTA) or only the job (a system fact).';
 -- mwf_app: reference data (P3 §1.1 pattern), read only.
 GRANT SELECT ON milestone TO mwf_app;
 
+-- The seed (work-k5fk.6; was generated from gen/maps.ts MILESTONES). Keys are
+-- shared/src/dto/milestones.ts MILESTONE_KEYS in ordinal order, and the
+-- self_assertable rows are milestone-writer.ts SELF_ASSERTABLE_MILESTONES
+-- (milestone-keys.test.ts pins both). ordinal = stage * 100 + position, in
+-- today's stage order; stage_label = shared/src/enums.ts STAGE_FRIENDLY_NAMES.
+-- scope 'session': written for every participant only once it holds for the
+-- whole session (v_session_readiness). Step 20 asserts 13 rows.
+INSERT INTO milestone (key, ordinal, stage_label, scope, self_assertable) VALUES
+  ('paused', 0, 'Paused', 'participant', false),                                       -- the session is paused (sessions.ts): off the journey, v_current_stage ignores it, and resume deletes it (job)
+  ('invitation_sent', 10, 'Getting Started', 'participant', false),                    -- the inviter's invitation went out (job)
+  ('compact_signed', 20, 'Getting Started', 'session', true),                          -- the participant signed the compact (CTA), the session waits for everyone's
+  ('feel_heard', 110, 'Your Story', 'participant', true),                              -- Stage 1: the participant confirms they feel heard (CTA)
+  ('empathy_submitted', 210, 'Walking in Their Shoes', 'participant', false),          -- Stage 2: the participant submitted their empathy attempt (job)
+  ('empathy_ready', 220, 'Walking in Their Shoes', 'participant', false),              -- Stage 2: that attempt is ready to reveal (job, reconciler)
+  ('empathy_validated', 230, 'Walking in Their Shoes', 'session', false),              -- Stage 2: the empathy in both directions is validated (job)
+  ('needs_confirmed', 310, 'What Matters Most', 'participant', true),                  -- Stage 3: the participant confirmed their needs (CTA)
+  ('needs_validated', 320, 'What Matters Most', 'session', false),                     -- Stage 3: the shared needs are validated (job)
+  ('needs_shared', 330, 'What Matters Most', 'session', false),                        -- Stage 3: everyone has shared their needs (job), not "I shared"
+  ('repair_walkthrough_started', 410, 'What Comes Next', 'participant', false),        -- Stage 4: the participant began the need walkthrough (job)
+  ('choices_shared', 420, 'What Comes Next', 'session', true),                         -- Stage 4: the participant shared their proposal choices (CTA), partners see choices from here
+  ('closed', 430, 'What Comes Next', 'session', false);                                -- Stage 4: the session closed, with or without a shared agreement (job)
+
 CREATE TABLE participant_milestone (
     participant_id uuid7 NOT NULL REFERENCES participant ON DELETE CASCADE,
-    milestone_key text NOT NULL REFERENCES milestone ON DELETE RESTRICT,
+    milestone_key milestone_key NOT NULL REFERENCES milestone ON DELETE RESTRICT,
     reached_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
     created_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
 

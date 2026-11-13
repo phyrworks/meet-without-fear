@@ -73,13 +73,15 @@ END $$;
 
 \echo '-- v_current_stage (every participant)'
 SELECT participant_id, milestone_key, stage_label, reached_stage, next_milestone_key, active_stage FROM v_current_stage ORDER BY participant_id;
+-- The key columns are the milestone_key domain (work-k5fk.6): a row comparison needs the
+-- same types on both sides (against text: "cannot compare dissimilar column types").
 DO $$ BEGIN
   IF (SELECT (milestone_key, reached_stage, active_stage) FROM v_current_stage WHERE participant_id = '00000000-0000-7e00-8000-0000000007a1')
-       IS DISTINCT FROM ('empathy_submitted'::text, 2, 2)
+       IS DISTINCT FROM ('empathy_submitted'::milestone_key, 2, 2)
      OR (SELECT (milestone_key, reached_stage, active_stage) FROM v_current_stage WHERE participant_id = '00000000-0000-7e00-8000-0000000007b1')
-       IS DISTINCT FROM ('feel_heard'::text, 1, 2)
+       IS DISTINCT FROM ('feel_heard'::milestone_key, 1, 2)
      OR (SELECT (milestone_key, next_milestone_key, active_stage) FROM v_current_stage WHERE participant_id = '00000000-0000-7e00-8000-0000000007c1')
-       IS DISTINCT FROM ('closed'::text, NULL::text, 4) THEN
+       IS DISTINCT FROM ('closed'::milestone_key, NULL::milestone_key, 4) THEN
     RAISE EXCEPTION 'smoke v_current_stage: unexpected stage';
   END IF;
   RAISE NOTICE 'smoke ok: v_current_stage';
