@@ -14,14 +14,27 @@ previous=$(jq -r ' .image // empty' /var/lib/mwf/current-release.json 2>/dev/nul
 # member of no role, or the new API would refuse to start after the migration. On the current
 # production database it FAILS until the design note §7 row 9c cutover (mwf_app owns the database
 # and is a member of mwf_job): the old release keeps running. There is no switch to skip it.
-sed "s|^APP_IMAGE=.*|APP_IMAGE=$image|" /etc/mwf/release.env > /etc/mwf/release.env.preflight
-if ! docker compose --env-file /etc/mwf/release.env.preflight -f /opt/mwf/compose.yaml \
-     run --rm --no-deps api node dist/backend/src/scripts/role-guard-preflight.js; then
-  rm -f /etc/mwf/release.env.preflight
-  echo 'Role-guard preflight failed: not migrating, previous release left running (see above).' >&2
+# The image runs directly on the internal database network only (compose project "mwf" ->
+# network mwf_database; the db service answers as "db" there), NOT `compose run api`: the api
+# service pins 172.29.0.3 on the edge network, which the running API already holds.
+preflight=dist/backend/src/scripts/role-guard-preflight.js
+guard=dist/backend/src/lib/prisma-role-guard.js
+in_image() { docker run --rm --network none --entrypoint test "$image" -f "/app/backend/$1"; }
+if in_image "$preflight"; then
+  if ! docker run --rm --network mwf_database --env-file /etc/mwf/application.env "$image" node "$preflight"; then
+    echo 'Role-guard preflight REFUSED a runtime login: not migrating, previous release left running (see above).' >&2
+    exit 1
+  fi
+elif in_image "$guard"; then
+  # A guarded API without its preflight is a broken build, not a rollback: refuse it.
+  echo "Image $image has the role guard but no $preflight: refusing to deploy it." >&2
   exit 1
+else
+  # A rollback to an image that PREDATES the guard (work-k5fk.10.3): it has neither the preflight
+  # nor a startup check, so it cannot crash-loop on its role, and refusing it would block every
+  # rollback past this release. Deploy it, loudly.
+  echo "WARNING: $image predates the role guard (no $guard): no preflight run; it starts without a role check." >&2
 fi
-rm -f /etc/mwf/release.env.preflight
 # Back up before touching migrations, and stop writes while migrating.
 if compose exec -T db psql -U postgres -d mwf -tAc 'SELECT to_regclass('\''public."_prisma_migrations"'\'') IS NOT NULL' | grep -q t; then
   /opt/mwf/backup.sh preserved

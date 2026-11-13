@@ -87,7 +87,21 @@ For full server loss: provision a replacement (deliberately address `prevent_des
 
 ## Rollback and updates
 
-`/var/lib/mwf/previous-image` records the old app image. Before reusing it, check schema compatibility. Failed migrations/readiness leave the deployment failed; do not blindly restore an older database or automatically down-migrate. An app rollback does not undo schema changes. Before AWS receives writes, Render can be resumed with its original DNS record. First reset its frozen role setting using an operator connection: `SET default_transaction_read_only=off; ALTER ROLE be_heard_db_user RESET default_transaction_read_only;`. After AWS receives writes, freeze writes and move the latest data back before routing to Render, or repair AWS in place.
+`/var/lib/mwf/previous-image` records the old app image. Before reusing it, check schema compatibility.
+
+**Role-guard preflight (work-k5fk.10.3).** `deploy.sh` first runs the image's `role-guard-preflight.js`
+(`docker run` on network `mwf_database` with `/etc/mwf/application.env`, before any backup, stop or
+migration). It checks every runtime role URL and refuses a superuser, BYPASSRLS, CREATEROLE/CREATEDB/
+REPLICATION login, a member of any role, the database owner, CREATE on the database or on schema
+`public`/`app`, SET on `session_replication_role`, or ownership of any object — then the deploy stops
+and the previous release keeps running. Today's production database (owned by `mwf_app`, which is a
+member of `mwf_job`) is refused until the design note §7 row 9c cutover; that is intended. Rolling back:
+- to an image **with** the preflight: it runs as for any deploy;
+- to an image that **predates** the guard (no `dist/backend/src/lib/prisma-role-guard.js`): `deploy.sh`
+  warns and skips the preflight — that image has no startup role check, so it cannot crash-loop on
+  its role, and refusing it would block every rollback past this release;
+- to an image with the guard but no preflight script: refused (a broken build, not a rollback).
+There is no switch to skip the preflight for a guarded image. Failed migrations/readiness leave the deployment failed; do not blindly restore an older database or automatically down-migrate. An app rollback does not undo schema changes. Before AWS receives writes, Render can be resumed with its original DNS record. First reset its frozen role setting using an operator connection: `SET default_transaction_read_only=off; ALTER ROLE be_heard_db_user RESET default_transaction_read_only;`. After AWS receives writes, freeze writes and move the latest data back before routing to Render, or repair AWS in place.
 
 Pin and review image upgrades, back up first, rehearse restore, and schedule major PostgreSQL upgrades/reboots deliberately. Database and certificate volumes have stable names and are never removed by deployment. Never use `docker compose down -v`. Reboot verification must show healthy containers, unchanged data and active timers. Keep disk space under review; release artifacts expire after 30 days in S3, and current/previous images must remain available locally.
 

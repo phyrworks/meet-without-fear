@@ -153,10 +153,25 @@ step "4b. role-guard preflight (every runtime role URL; no switch to skip it)"
 if [ "$(psql_db -Atc "SELECT pg_get_userbyid(datdba) FROM pg_database WHERE datname = 'mwf'")" != mwf_migrator ]; then
   die "the replica's database is not owned by mwf_migrator (a volume initialised before work-k5fk.10.3): run infra/local/reset.sh, then up.sh"
 fi
-if ! compose run --rm --no-deps -T api node dist/backend/src/scripts/role-guard-preflight.js >"$LOCAL/preflight.log" 2>&1; then
-  sed 's/^/   /' "$LOCAL/preflight.log"; die "role-guard preflight failed: not migrating"
+# The image runs directly on the internal database network only (project mwf-local -> network
+# mwf-local_database; the db service answers as "db" there), not `compose run api`: the api service
+# pins 172.30.77.3 on the edge network, which a running API (a second up.sh) already holds.
+# Same three cases as deploy.sh: preflight present -> run it; guard without preflight -> refuse;
+# an image predating the guard (MWF_LOCAL_APP_IMAGE) -> warn and continue.
+PREFLIGHT=dist/backend/src/scripts/role-guard-preflight.js
+GUARD=dist/backend/src/lib/prisma-role-guard.js
+in_image() { podman run --rm --network none --entrypoint test "$APP_IMAGE" -f "/app/backend/$1"; }
+if in_image "$PREFLIGHT"; then
+  if ! podman run --rm --network "${PROJECT}_database" --env-file "$LOCAL/application.env" "$APP_IMAGE" \
+      node "$PREFLIGHT" >"$LOCAL/preflight.log" 2>&1; then
+    sed 's/^/   /' "$LOCAL/preflight.log"; die "role-guard preflight REFUSED a runtime login: not migrating"
+  fi
+  sed 's/^/   /' "$LOCAL/preflight.log"
+elif in_image "$GUARD"; then
+  die "$APP_IMAGE has the role guard but no $PREFLIGHT: refusing it"
+else
+  echo "   WARNING: $APP_IMAGE predates the role guard: no preflight run; it starts without a role check"
 fi
-sed 's/^/   /' "$LOCAL/preflight.log"
 
 # --- 5. migrations, the way deploy.sh runs them -------------------------------------
 step "5. migrations (deploy.sh: stop api, one-off api container runs prisma migrate deploy)"
