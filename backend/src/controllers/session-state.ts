@@ -23,7 +23,7 @@
 import { departedParticipantUsers } from '../utils/session';
 import { Request, Response } from 'express';
 import { logger } from '../lib/logger';
-import { prisma } from '../lib/prisma';
+import { prisma, getE2EToolingPrisma } from '../lib/prisma';
 import { reachInvitationSentOnAccept } from '../services/milestone-writer';
 import { lockInvitationForAccept, repointInvitationDrafts } from '../services/empathy-store';
 import { ErrorCode } from '@meet-without-fear/shared';
@@ -61,7 +61,11 @@ async function acceptPendingInvitationForE2ESession(sessionId: string, userId: s
     return false;
   }
 
-  const invitation = await prisma.invitation.findFirst({
+  // E2E tooling (work-k5fk.10.1): this path writes the accept on the tooling
+  // connection — a direct session status write and the inviter's rows, which
+  // the app role is not granted for an E2E shortcut.
+  const tooling = getE2EToolingPrisma();
+  const invitation = await tooling.invitation.findFirst({
     where: {
       sessionId,
       status: 'PENDING',
@@ -84,7 +88,7 @@ async function acceptPendingInvitationForE2ESession(sessionId: string, userId: s
   }
 
   const acceptedAt = new Date();
-  await prisma.$transaction(async tx => {
+  await tooling.$transaction(async tx => {
     await lockInvitationForAccept(tx, invitation.id); // as acceptInvitation (work-99k2)
     await tx.relationshipMember.upsert({
       where: {

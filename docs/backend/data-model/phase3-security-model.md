@@ -1745,8 +1745,10 @@ deliberately: accept the 404, or keep the probe via a `SECURITY DEFINER` existen
 `scripts/query-facts.ts:10` reads **every user's `UserVessel.notableFacts`**;
 `extract-session-transcripts.ts` writes both partners' transcripts to disk;
 `investigate_*.ts` instantiate a **bare `new PrismaClient()`**, bypassing even the encryption
-wrapper [C]. Plus four `temp-*.ts` files at `src/` root, one of which mutates
-(`fix-empty-messages.ts:29`).
+wrapper [C]. Plus four `temp-*.ts` files at `src/` root, one of which mutated
+(`fix-empty-messages.ts`). The last two root one-offs, `fix-empty-messages.ts` and
+`temp-get-sessions.ts`, were deleted by work-k5fk.10.3 (2026-11-12): dead, and not exempt from the
+runtime role guard.
 
 **Handling: this is a finding, not just a breakage.** They run as `mwf_job`/`mwf_ops` if kept; the
 `temp-*` files should be deleted. Under encryption (§8) the ones using bare `PrismaClient` would

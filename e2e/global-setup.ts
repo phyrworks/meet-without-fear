@@ -49,7 +49,7 @@ async function globalSetup(_config: FullConfig) {
         '(use mwf_target_e2e; see docs/development/local-setup.md). Check DATABASE_URL in your shell and e2e/.env.test.',
     );
   }
-  for (const v of ['APP_DATABASE_URL', 'JOB_DATABASE_URL', 'AUTH_DATABASE_URL', 'OPS_DATABASE_URL']) {
+  for (const v of ['APP_DATABASE_URL', 'JOB_DATABASE_URL', 'AUTH_DATABASE_URL', 'OPS_DATABASE_URL', 'MIGRATOR_DATABASE_URL']) {
     const val = process.env[v];
     if (val && dbName(val) !== targetDb) {
       throw new Error(
@@ -110,11 +110,13 @@ const KEEP = ${JSON.stringify(KEEP)};
     }
   }
 
+  // The deploy logs in as mwf_migrator (MIGRATOR_DATABASE_URL, .env.test): on a fresh database every
+  // object it creates is the migrator's, never a runtime role's or the admin's (work-k5fk.10.1).
   console.log('\nRunning database migrations...');
   try {
     execSync('npx prisma migrate deploy', {
       cwd: backendDir,
-      env: { ...process.env, DATABASE_URL: databaseUrl },
+      env: { ...process.env, DATABASE_URL: process.env.MIGRATOR_DATABASE_URL || databaseUrl },
       stdio: 'inherit',
     });
     console.log('Migrations complete');

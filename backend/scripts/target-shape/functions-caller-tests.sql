@@ -8,9 +8,9 @@
 -- IN as mwf_app or mwf_job (\connect), never as the superuser; identity is
 -- set_config('app.current_user_id', <user>, true), as the request layer does.
 --
--- Setup (superuser, before any caller arm): ids via \gset, and mwf_app gets
--- the table privileges it holds in production as the tables' owner — so every
--- refusal below comes from the function or trigger, not from a missing grant.
+-- Setup (superuser, before any caller arm): ids via \gset. mwf_app holds only
+-- the baseline's own grants (tables.sql, work-k5fk.10.2), so a caller arm
+-- that writes as mwf_app proves the grant as well as the function or trigger.
 -- An expected refusal is caught by its SQLSTATE and logged PASS; anything else
 -- (or a refusal that does not happen: 'TEST FAILED') stops the run. Most
 -- refusals come from the function or trigger under test; 6a–6d (mwf_job's
@@ -29,7 +29,7 @@ END
 $$;
 
 -- ---- setup (superuser) --------------------------------------------------------
-GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO mwf_app;
+-- No setup GRANT (work-k5fk.10.2): mwf_app runs on the baseline's own grants (tables.sql).
 -- Rows from seed-target-fixture.sql: session S (A, B; A→B AWAITING_SHARING,
 -- B→A HELD), session X (C, D; shared needs e1 of C and e4 of D), an outsider.
 SELECT u.id AS a_user FROM "user" u WHERE u.email = 'a@ts7c.test' \gset
@@ -225,6 +225,35 @@ DO $$ BEGIN
   RAISE NOTICE 'PASS 11c owner revokes the share (need_share.revoked_at set, consent REVOKED)';
 END $$;
 
+-- 12e. mwf_app holds no EXECUTE on anonymize_* (work-k5fk.10.2: the job is their only caller,
+--      account-deletion.ts / session-deletion.ts). 12a–d, 13a and 15 then test the functions'
+--      own identity checks against a non-job caller: EXECUTE is granted to mwf_app on this
+--      throwaway clone (superuser) and revoked after 15, as 13d does for need_share.
+DO $$ BEGIN
+  PERFORM set_config('app.current_user_id', '00000000-0000-7e00-8000-0000000000c1', true);
+  BEGIN
+    PERFORM app.anonymize_user_account('00000000-0000-7e00-8000-0000000000c1');
+    RAISE EXCEPTION 'TEST FAILED: mwf_app ran anonymize_user_account';
+  EXCEPTION WHEN insufficient_privilege THEN RAISE NOTICE 'PASS 12e anonymize_user_account is not mwf_app''s (no EXECUTE): %', SQLERRM;
+  END;
+  BEGIN
+    PERFORM app.anonymize_user_in_session('00000000-0000-7e00-8000-0000000005e1', NULL);
+    RAISE EXCEPTION 'TEST FAILED: mwf_app ran anonymize_user_in_session';
+  EXCEPTION WHEN insufficient_privilege THEN RAISE NOTICE 'PASS 12f anonymize_user_in_session is not mwf_app''s (no EXECUTE): %', SQLERRM;
+  END;
+  BEGIN
+    PERFORM app.resolve_user_by_clerk_id('x');
+    RAISE EXCEPTION 'TEST FAILED: mwf_app ran resolve_user_by_clerk_id';
+  EXCEPTION WHEN insufficient_privilege THEN RAISE NOTICE 'PASS 12g resolve_user_by_clerk_id is mwf_auth''s, not mwf_app''s: %', SQLERRM;
+  END;
+END $$;
+\connect - mwf_user
+SELECT 'connected as ' || session_user || ' (setup: temporary GRANT EXECUTE ON app.anonymize_* TO mwf_app)';
+GRANT EXECUTE ON FUNCTION app.anonymize_user_account(uuid), app.anonymize_user_in_session(uuid, uuid) TO mwf_app;
+\connect - mwf_app
+SELECT 'connected as ' || session_user || ' (current_user ' || current_user || ')';
+SELECT set_config('t.a_user', :'a_user', false), set_config('t.b_user', :'b_user', false), set_config('t.outsider', :'outsider', false), set_config('t.att_a', :'att_a', false), set_config('t.att_b', :'att_b', false), set_config('t.r_session', :'r_session', false), set_config('t.b_participant', :'b_participant', false), set_config('t.a_participant', :'a_participant', false) \g /dev/null
+
 -- 12. anonymize_*: no identity, another user → not found; a modeled-style NULL comparison never passes
 DO $$ BEGIN
   PERFORM set_config('app.current_user_id', '', true);
@@ -322,6 +351,10 @@ DO $$ BEGIN
   RAISE NOTICE 'PASS 15 anonymize_user_account of oneself tombstones the user';
 END $$;
 ROLLBACK;
+
+\connect - mwf_user
+SELECT 'connected as ' || session_user || ' (setup: REVOKE EXECUTE ON app.anonymize_* FROM mwf_app)';
+REVOKE EXECUTE ON FUNCTION app.anonymize_user_account(uuid), app.anonymize_user_in_session(uuid, uuid) FROM mwf_app;
 
 -- ============================ as mwf_job ======================================
 \connect - mwf_job

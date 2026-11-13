@@ -54,13 +54,8 @@ export async function openTargetRun(stage: string, runId: string): Promise<Targe
   process.env.MOCK_LLM = 'true';
   const sql = async <T extends Record<string, unknown>>(text: string, params: unknown[] = []): Promise<T[]> =>
     withClient(fx.target, async c => (await c.query<T>(text, params)).rows, fx.database);
-  // mwf_app OWNS the tables in production (trailer T7: "mwf_app's table
-  // privileges are unchanged … per-tier grants are TS-16"); on a run database
-  // the superuser owns them, so the stand-in is table DML for mwf_app — exactly
-  // what smoke-baseline.sql / functions-caller-tests.sql grant before testing
-  // as mwf_app. Function EXECUTE stays as the baseline grants it (mwf_app has
-  // none on app.need_share).
-  await sql(`GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO mwf_app`);
+  // No stand-in grant (work-k5fk.10.1): the run database is mwf_migrator's, so
+  // mwf_app and mwf_job hold exactly the baseline's grants.
   const as = async <T extends Record<string, unknown>>(
     role: 'mwf_app' | 'mwf_job',
     userId: string | null,

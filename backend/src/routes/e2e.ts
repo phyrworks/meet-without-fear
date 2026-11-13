@@ -5,7 +5,7 @@
  */
 
 import { Router, Request, Response, NextFunction } from 'express';
-import { prisma } from '../lib/prisma';
+import { getE2EToolingPrisma } from '../lib/prisma';
 import { loadFixture } from '../lib/e2e-fixtures';
 import { StateFactory, TargetStage } from '../testing/state-factory';
 import { runReconcilerForDirection } from '../services/reconciler';
@@ -30,7 +30,7 @@ export async function cleanupE2EUsers(req: Request, res: Response, next: NextFun
 
   try {
     // Step 1: Find all E2E test users
-    const e2eUsers = await prisma.user.findMany({
+    const e2eUsers = await getE2EToolingPrisma().user.findMany({
       where: { email: { endsWith: '@e2e.test' } },
       select: { id: true },
     });
@@ -47,7 +47,7 @@ export async function cleanupE2EUsers(req: Request, res: Response, next: NextFun
     }
 
     // Step 2: Find all relationships that have E2E test members
-    const e2eRelationships = await prisma.relationship.findMany({
+    const e2eRelationships = await getE2EToolingPrisma().relationship.findMany({
       where: {
         members: {
           some: { userId: { in: e2eUserIds } },
@@ -66,7 +66,7 @@ export async function cleanupE2EUsers(req: Request, res: Response, next: NextFun
     // RefinementAttemptCounter, BrainActivity, EmotionalExerciseCompletion
     let deletedSessions = 0;
     if (e2eRelationshipIds.length > 0) {
-      const sessionResult = await prisma.session.deleteMany({
+      const sessionResult = await getE2EToolingPrisma().session.deleteMany({
         where: { relationshipId: { in: e2eRelationshipIds } },
       });
       deletedSessions = sessionResult.count;
@@ -75,7 +75,7 @@ export async function cleanupE2EUsers(req: Request, res: Response, next: NextFun
     // Step 4: Delete the relationships themselves
     let deletedRelationships = 0;
     if (e2eRelationshipIds.length > 0) {
-      const relationshipResult = await prisma.relationship.deleteMany({
+      const relationshipResult = await getE2EToolingPrisma().relationship.deleteMany({
         where: { id: { in: e2eRelationshipIds } },
       });
       deletedRelationships = relationshipResult.count;
@@ -83,7 +83,7 @@ export async function cleanupE2EUsers(req: Request, res: Response, next: NextFun
 
     // Step 5: Also clean up any orphaned relationships (zero members)
     // This handles edge cases where prior partial cleanup removed members
-    const orphanedRelationships = await prisma.relationship.findMany({
+    const orphanedRelationships = await getE2EToolingPrisma().relationship.findMany({
       where: {
         members: { none: {} },
       },
@@ -92,11 +92,11 @@ export async function cleanupE2EUsers(req: Request, res: Response, next: NextFun
     if (orphanedRelationships.length > 0) {
       const orphanRelIds = orphanedRelationships.map(r => r.id);
       // Delete sessions under orphaned relationships first
-      const orphanSessionResult = await prisma.session.deleteMany({
+      const orphanSessionResult = await getE2EToolingPrisma().session.deleteMany({
         where: { relationshipId: { in: orphanRelIds } },
       });
       deletedSessions += orphanSessionResult.count;
-      const orphanRelResult = await prisma.relationship.deleteMany({
+      const orphanRelResult = await getE2EToolingPrisma().relationship.deleteMany({
         where: { id: { in: orphanRelIds } },
       });
       deletedRelationships += orphanRelResult.count;
@@ -109,23 +109,23 @@ export async function cleanupE2EUsers(req: Request, res: Response, next: NextFun
     // go first (their sessions, participants and invitations went with the
     // relationships above).
     const e2eUser = { userId: { in: e2eUserIds } };
-    await prisma.$transaction([
-      prisma.reflection.deleteMany({ where: e2eUser }),
-      prisma.featureState.deleteMany({ where: e2eUser }),
-      prisma.userMemory.deleteMany({ where: e2eUser }),
-      prisma.userDevice.deleteMany({ where: e2eUser }),
-      prisma.userPreferences.deleteMany({ where: e2eUser }),
-      prisma.userKey.deleteMany({ where: e2eUser }),
-      prisma.aiMemory.deleteMany({ where: e2eUser }),
-      prisma.reminder.deleteMany({ where: e2eUser }),
-      prisma.relationshipMember.deleteMany({ where: e2eUser }),
-      prisma.participant.deleteMany({ where: e2eUser }),
-      prisma.invitation.updateMany({
+    await getE2EToolingPrisma().$transaction([
+      getE2EToolingPrisma().reflection.deleteMany({ where: e2eUser }),
+      getE2EToolingPrisma().featureState.deleteMany({ where: e2eUser }),
+      getE2EToolingPrisma().userMemory.deleteMany({ where: e2eUser }),
+      getE2EToolingPrisma().userDevice.deleteMany({ where: e2eUser }),
+      getE2EToolingPrisma().userPreferences.deleteMany({ where: e2eUser }),
+      getE2EToolingPrisma().userKey.deleteMany({ where: e2eUser }),
+      getE2EToolingPrisma().aiMemory.deleteMany({ where: e2eUser }),
+      getE2EToolingPrisma().reminder.deleteMany({ where: e2eUser }),
+      getE2EToolingPrisma().relationshipMember.deleteMany({ where: e2eUser }),
+      getE2EToolingPrisma().participant.deleteMany({ where: e2eUser }),
+      getE2EToolingPrisma().invitation.updateMany({
         where: { acceptedByUserId: { in: e2eUserIds } },
         data: { acceptedByUserId: null },
       }),
     ]);
-    const userResult = await prisma.user.deleteMany({
+    const userResult = await getE2EToolingPrisma().user.deleteMany({
       where: { email: { endsWith: '@e2e.test' } },
     });
 
@@ -204,7 +204,7 @@ export async function seedE2EUser(req: Request, res: Response, next: NextFunctio
     }
 
     // Create user with e2e_ prefixed clerkId
-    const user = await prisma.user.upsert({
+    const user = await getE2EToolingPrisma().user.upsert({
       where: { email: userEmail },
       // name is generated from first/last (spec §1.7): the whole name goes in first_name
       update: { firstName: userName, lastName: null },
@@ -352,7 +352,7 @@ export async function seedE2EInnerThoughts(req: Request, res: Response, next: Ne
 
     const baseUrl = process.env.E2E_APP_BASE_URL || 'http://localhost:8081';
 
-    const result = await prisma.$transaction(async tx => {
+    const result = await getE2EToolingPrisma().$transaction(async tx => {
       // user.name is generated from first/last (spec §1.7): the whole name goes in first_name
       const userRecord = await tx.user.upsert({
         where: { email: user.email },
@@ -479,7 +479,7 @@ export async function triggerE2EReconciler(req: Request, res: Response, next: Ne
     }
 
     // Verify session exists
-    const session = await prisma.session.findUnique({
+    const session = await getE2EToolingPrisma().session.findUnique({
       where: { id: sessionId },
     });
 

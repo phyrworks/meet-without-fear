@@ -27,7 +27,6 @@ describeTarget('validation-feedback draft before the reveal (m1)', () => {
       baseUrl: BASE_URL,
       stage: 'RECONCILER_SHOWN_B',
       runId: `ts10_fbdraft_${process.pid}`,
-      appLogin: 'mwf_app',
     });
   });
   afterAll(async () => {

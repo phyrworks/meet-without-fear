@@ -3,7 +3,7 @@
  *
  * Against a clone of the RECONCILER_SHOWN_B target fixture, with the app
  * logged in as `mwf_app` (identity binding on) and the job as `mwf_job`
- * (harness `appLogin: 'mwf_app'`). Every status move goes through
+ * (the harness default since work-k5fk.10.1). Every status move goes through
  * `app.empathy_set_status`; the assertions read the rows back on the
  * fixture's owner connection.
  *
@@ -66,7 +66,6 @@ describeTarget('empathy rounds, the status writer and the review path (mwf_app +
       baseUrl: BASE_URL,
       stage: 'RECONCILER_SHOWN_B',
       runId: `ts10_rounds_${process.pid}`,
-      appLogin: 'mwf_app',
     });
     const parts = await rows<{ id: string; user_id: string; email: string }>(
       `SELECT p.id, p.user_id, u.email FROM participant p JOIN "user" u ON u.id = p.user_id`,

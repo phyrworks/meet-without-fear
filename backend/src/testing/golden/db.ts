@@ -119,25 +119,44 @@ export async function dropDatabase(t: DbTarget, database: string): Promise<void>
   await withAdmin(t, async c => {
     // Templates cannot be dropped until the flag is cleared.
     await c.query(`ALTER DATABASE "${database}" WITH is_template = false`).catch(() => undefined);
-    await c.query(`DROP DATABASE IF EXISTS "${database}"`);
+    // WITH (FORCE) terminates what disconnectAll could not: a client that reconnected in between
+    // (a fire-and-forget query after the app's $disconnect). One retry for the rare connection
+    // that lands during the drop itself.
+    const drop = () => c.query(`DROP DATABASE IF EXISTS "${database}" WITH (FORCE)`);
+    await drop().catch(async () => {
+      await new Promise(resolve => setTimeout(resolve, 250));
+      await drop();
+    });
   });
 }
 
-export async function createDatabase(t: DbTarget, database: string): Promise<void> {
+/** A role name the harness may hand a database to (`OWNER`); never interpolated unchecked. */
+const OWNER_NAME = /^[a-z_][a-z0-9_]*$/;
+
+function ownerClause(owner: string | undefined): string {
+  if (owner === undefined) return '';
+  if (!OWNER_NAME.test(owner)) throw new Error(`refusing database owner "${owner}"`);
+  return ` OWNER ${owner}`;
+}
+
+/** CREATE DATABASE, owned by `owner` when given (work-k5fk.10.1: target databases are mwf_migrator's). */
+export async function createDatabase(t: DbTarget, database: string, owner?: string): Promise<void> {
   await withAdmin(t, async c => {
-    await c.query(`CREATE DATABASE "${database}"`);
+    await c.query(`CREATE DATABASE "${database}"${ownerClause(owner)}`);
   });
 }
 
 /**
  * Clone a database from a template. Requires no open connections to the
- * template, which is why callers must not hold one.
+ * template, which is why callers must not hold one. The clone's objects keep
+ * the template's owners; `owner` sets the database's own (which also owns
+ * schema public, through pg_database_owner).
  */
-export async function cloneDatabase(t: DbTarget, template: string, target: string): Promise<void> {
+export async function cloneDatabase(t: DbTarget, template: string, target: string, owner?: string): Promise<void> {
   await dropDatabase(t, target);
   await disconnectAll(t, template);
   await withAdmin(t, async c => {
-    await c.query(`CREATE DATABASE "${target}" TEMPLATE "${template}"`);
+    await c.query(`CREATE DATABASE "${target}" TEMPLATE "${template}"${ownerClause(owner)}`);
   });
 }
 

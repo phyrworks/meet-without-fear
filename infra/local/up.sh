@@ -57,15 +57,18 @@ JOB_DB_PASSWORD=$JOB_DB_PASSWORD
 OPS_DB_PASSWORD=$OPS_DB_PASSWORD
 AUTH_DB_PASSWORD=$AUTH_DB_PASSWORD
 EOF
-# Production's application.env shape: DATABASE_URL is mwf_app, the database
-# owner, which also runs migrations (deploy.sh) until work-a39h.11.19 moves
-# them to mwf_migrator. Per-role URLs and identity binding as on target-shape.
+# Production's application.env shape, at target-shape ownership (work-k5fk.10.3; production
+# reaches it at the design note row 9c cutover): DATABASE_URL is mwf_migrator, the owner — it runs
+# the migrations (step 5) and backs only the E2E tooling connection (lib/prisma
+# getE2EToolingPrisma; E2E_AUTH_BYPASS is on in the replica). Every runtime client has its own
+# least-privilege URL, which the role guard checks (step 4b, and the API at startup).
+# Per-role URLs and identity binding as on target-shape.
 # GOLDEN_SHAPE=target: the E2E seeder's shape detection reads
 # prisma/schema.prisma relative to src/, which does not exist under dist/ in
 # the image (filed as a beads issue); the override is the documented one.
 {
   cat <<EOF
-DATABASE_URL=postgresql://mwf_app:$APP_DB_PASSWORD@db:5432/mwf?connection_limit=12
+DATABASE_URL=postgresql://mwf_migrator:$MIGRATOR_DB_PASSWORD@db:5432/mwf?connection_limit=4
 APP_DATABASE_URL=postgresql://mwf_app:$APP_DB_PASSWORD@db:5432/mwf?connection_limit=12
 JOB_DATABASE_URL=postgresql://mwf_job:$JOB_DB_PASSWORD@db:5432/mwf?connection_limit=5
 OPS_DATABASE_URL=postgresql://mwf_ops:$OPS_DB_PASSWORD@db:5432/mwf?connection_limit=2
@@ -144,6 +147,44 @@ step "4. db (Postgres 18 + pgvector; init-db.sh on a fresh volume)"
 compose up -d db
 wait_healthy db 40 || die "db did not become healthy"
 echo "   db healthy; roles: $(psql_db -Atc "SELECT string_agg(rolname, ',' ORDER BY rolname) FROM pg_roles WHERE rolname LIKE 'mwf\_%' OR rolname = 'slam_bot_readonly'")"
+
+# --- 4b. role-guard preflight, before migrating (work-k5fk.10.3; deploy.sh does the same) ---
+step "4b. role-guard preflight (every runtime role URL; no switch to skip it)"
+if [ "$(psql_db -Atc "SELECT pg_get_userbyid(datdba) FROM pg_database WHERE datname = 'mwf'")" != mwf_migrator ]; then
+  die "the replica's database is not owned by mwf_migrator (a volume initialised before work-k5fk.10.3): run infra/local/reset.sh, then up.sh"
+fi
+# The image runs directly on the internal database network only (project mwf-local -> network
+# mwf-local_database; the db service answers as "db" there), not `compose run api`: the api service
+# pins 172.30.77.3 on the edge network, which a running API (a second up.sh) already holds.
+# Same three cases as deploy.sh: preflight present -> run it; guard without preflight -> refuse;
+# an image predating the guard (MWF_LOCAL_APP_IMAGE) -> warn and continue.
+PREFLIGHT=dist/backend/src/scripts/role-guard-preflight.js
+GUARD=dist/backend/src/lib/prisma-role-guard.js
+SERVER=dist/backend/src/server.js
+# 0 = in the image, 1 = not; any other exit (podman could not run it) aborts, never "absent".
+# The image is inspected first: the CLI may exit 1 when its runtime is unreachable.
+podman image inspect "$APP_IMAGE" >/dev/null || die "cannot inspect $APP_IMAGE (podman unreachable or no such image)"
+image_has() {
+  local rc=0
+  podman run --rm --network none --entrypoint test "$APP_IMAGE" -f "/app/backend/$1" || rc=$?
+  case "$rc" in
+    0 | 1) return "$rc" ;;
+    *) die "cannot inspect $APP_IMAGE for /app/backend/$1 (podman exit $rc)" ;;
+  esac
+}
+if image_has "$PREFLIGHT"; then
+  if ! podman run --rm --network "${PROJECT}_database" --env-file "$LOCAL/application.env" "$APP_IMAGE" \
+      node "$PREFLIGHT" >"$LOCAL/preflight.log" 2>&1; then
+    sed 's/^/   /' "$LOCAL/preflight.log"; die "role-guard preflight REFUSED a runtime login: not migrating"
+  fi
+  sed 's/^/   /' "$LOCAL/preflight.log"
+elif image_has "$GUARD"; then
+  die "$APP_IMAGE has the role guard but no $PREFLIGHT: refusing it"
+elif image_has "$SERVER"; then
+  echo "   WARNING: $APP_IMAGE predates the role guard: no preflight run; it starts without a role check"
+else
+  die "$APP_IMAGE has neither $GUARD nor $SERVER: unknown layout, refusing it"
+fi
 
 # --- 5. migrations, the way deploy.sh runs them -------------------------------------
 step "5. migrations (deploy.sh: stop api, one-off api container runs prisma migrate deploy)"

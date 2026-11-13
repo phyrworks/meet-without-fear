@@ -38,7 +38,7 @@
 #   With --as-migrator the database is OWNED BY mwf_migrator (non-superuser,
 #   mwf_job WITH INHERIT FALSE, SET TRUE) and a, c, d, e, f, g run as it.
 #
-# --dev: creates (if missing) mwf_target_dev, mwf_target_test, mwf_target_e2e and
+# --dev: creates (if missing; OWNED BY mwf_migrator, deployed as it — work-k5fk.10.1) mwf_target_dev, mwf_target_test, mwf_target_e2e and
 #   mwf_target_shadow — the target branch's development databases
 #   (docs/development/local-setup.md, "Working on phoenix/target-shape") —
 #   deploys the baseline into mwf_target_dev, mwf_target_test and mwf_target_e2e (a no-op when
@@ -278,14 +278,23 @@ SQL
   ;;
 
 dev)
+  # work-k5fk.10.1: a database created here is OWNED BY mwf_migrator and deployed as it, so no
+  # runtime role (and not the admin) owns any object and the app runs on mwf_app's grants alone.
+  # An existing database is never dropped; one owned by anyone else is reported for a rebuild.
   for d in mwf_target_dev mwf_target_test mwf_target_e2e mwf_target_shadow; do
-    if db_exists "$d"; then echo "   $d exists"; else psql_admin -c "CREATE DATABASE $d" >/dev/null; echo "   created $d"; fi
+    if db_exists "$d"; then
+      owner="$(psql_admin -Atc "SELECT pg_get_userbyid(datdba) FROM pg_database WHERE datname = '$d'")"
+      echo "   $d exists (owner $owner)"
+      [ "$owner" = mwf_migrator ] || echo "   WARNING: $d is not owned by mwf_migrator — drop it and re-run --dev to get the work-k5fk.10.1 ownership"
+    else
+      psql_admin -c "CREATE DATABASE $d OWNER mwf_migrator" >/dev/null; echo "   created $d (owner mwf_migrator)"
+    fi
   done
   for d in mwf_target_dev mwf_target_test mwf_target_e2e; do
-    step "3. prisma migrate deploy → $d"
-    deploy "$(su_url "$d")" >"$OUT/deploy-$d.log" 2>&1 || { cat "$OUT/deploy-$d.log"; exit 1; }
+    step "3. prisma migrate deploy → $d (as mwf_migrator)"
+    deploy "$(mig_url "$d")" >"$OUT/deploy-$d.log" 2>&1 || { cat "$OUT/deploy-$d.log"; exit 1; }
     grep -E 'applied|Applying|No pending' "$OUT/deploy-$d.log" | sed 's/^/   /'
-    verify_target "$d" "$(su_url "$d")"
+    verify_target "$d" "$(mig_url "$d")"
   done
   echo; echo "== dev databases left in place: mwf_target_dev, mwf_target_test, mwf_target_e2e, mwf_target_shadow (empty)"
   ;;

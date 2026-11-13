@@ -59,7 +59,6 @@ describeTarget('confirmFeelHeard share suggestion on the session channel (R36)',
       baseUrl: BASE_URL,
       stage: 'FEEL_HEARD_B',
       runId: `ts12_rtfh_${process.pid}`,
-      appLogin: 'mwf_app',
     });
     const { resetAblyClient } = await import('../realtime');
     resetAblyClient();

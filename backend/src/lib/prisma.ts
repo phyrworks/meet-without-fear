@@ -1,6 +1,7 @@
 import { PrismaClient, type Prisma } from '../generated/prisma/client';
 import { withEncryption } from './prisma-encryption-middleware';
-import { createPrismaPgAdapter } from './prisma-pg';
+import { createPrismaPgAdapter, databaseUrlFromEnv } from './prisma-pg';
+import { guardAdapterFactory, readRoleFactsAt } from './prisma-role-guard';
 import type { DatabaseRole } from './database-urls';
 import { bindIdentity, identityBindingEnabled, keepRequestContextAcrossBatching } from './prisma-identity';
 
@@ -16,6 +17,12 @@ export interface PrismaClientOptions {
   url?: string;
   /** Which role's URL to read (APP_/JOB_/OPS_/AUTH_DATABASE_URL, else DATABASE_URL). Default `app`. */
   role?: DatabaseRole;
+  /**
+   * Skip the runtime role guard (prisma-role-guard.ts) for this client, with
+   * the reason. Only the E2E tooling client uses it; every runtime client is
+   * guarded.
+   */
+  roleGuardExemption?: string;
 }
 
 /**
@@ -23,11 +30,18 @@ export interface PrismaClientOptions {
  * `prisma` below is the `app` one; job/ops/auth clients for W4a/W10 are built
  * with this factory when their code paths move.
  */
-export function createPrismaClient({ url, role = 'app' }: PrismaClientOptions = {}): PrismaClient {
+export function createPrismaClient({ url, role = 'app', roleGuardExemption }: PrismaClientOptions = {}): PrismaClient {
   // DB_IDENTITY_BINDING=on binds the request's user id to every statement
   // (prisma-identity.ts). Off by default: nothing below is wrapped at all.
   const bindIdentityToStatements = identityBindingEnabled();
-  const pgAdapter = createPrismaPgAdapter(url, role);
+  // work-k5fk.10.3: the first connect refuses a privileged, member or object-owning login. The URL
+  // is resolved once (on first connect, as before) so the guard and the pool check the same one.
+  let resolved: string | undefined = url;
+  const urlOnce = (): string => (resolved ??= databaseUrlFromEnv(role));
+  const pgAdapter = guardAdapterFactory(createPrismaPgAdapter(urlOnce, role), role, {
+    exemption: roleGuardExemption,
+    readFacts: () => readRoleFactsAt(urlOnce()),
+  });
   const base = new PrismaClient({
     // Prisma 7: connections come from a pg.Pool; pool size and timeouts are
     // mapped from the URL's connection_limit etc. in prisma-pg.ts.
@@ -78,6 +92,32 @@ export function getOpsPrisma(): PrismaClient {
   return globalForOps.opsPrisma;
 }
 
+/**
+ * The E2E tooling connection (work-k5fk.10.1): `DATABASE_URL` — the admin /
+ * migration URL — for the test-only paths behind `E2E_AUTH_BYPASS`
+ * (routes/e2e.ts seeding and cleanup, the auth bypass's user upsert). Those
+ * paths write what no production request writes (a user with a caller-chosen
+ * id, whole-account hard deletes), so they must not borrow the app's
+ * connection — mwf_app holds only what production requests do. Refused
+ * outright unless E2E_AUTH_BYPASS=true and NODE_ENV is not production.
+ */
+const globalForTooling = globalThis as unknown as { e2eToolingPrisma: PrismaClient | undefined };
+
+export function getE2EToolingPrisma(): PrismaClient {
+  if (process.env.E2E_AUTH_BYPASS !== 'true' || process.env.NODE_ENV === 'production') {
+    throw new Error('The E2E tooling connection exists only with E2E_AUTH_BYPASS=true outside production');
+  }
+  if (!globalForTooling.e2eToolingPrisma) {
+    const url = process.env.DATABASE_URL;
+    if (!url) throw new Error('The E2E tooling connection needs DATABASE_URL');
+    globalForTooling.e2eToolingPrisma = createPrismaClient({
+      url,
+      roleGuardExemption: 'E2E tooling (E2E_AUTH_BYPASS, never production): seeds and deletes what no request may',
+    });
+  }
+  return globalForTooling.e2eToolingPrisma;
+}
+
 /** Disconnect the job client if one was opened (tests, shutdown). */
 export async function disconnectJobPrisma(): Promise<void> {
   const client = globalForJob.jobPrisma;
@@ -86,6 +126,23 @@ export async function disconnectJobPrisma(): Promise<void> {
   const ops = globalForOps.opsPrisma;
   globalForOps.opsPrisma = undefined;
   await ops?.$disconnect();
+  const tooling = globalForTooling.e2eToolingPrisma;
+  globalForTooling.e2eToolingPrisma = undefined;
+  await tooling?.$disconnect();
+}
+
+/**
+ * Startup check (work-k5fk.10.3): open the app and job connections, and the
+ * ops connection when it is configured, so the role guard
+ * (prisma-role-guard.ts) runs before the server listens. Rejects with
+ * RuntimeRoleRefusedError on a superuser, BYPASSRLS or object-owning login.
+ */
+export async function verifyRuntimeConnections(env: Record<string, string | undefined> = process.env): Promise<void> {
+  await prisma.$queryRaw`SELECT 1`;
+  // Always: an unset JOB_DATABASE_URL falls back to DATABASE_URL, which must be refused if privileged.
+  await getJobPrisma().$queryRaw`SELECT 1`;
+  // ops never falls back (it fails closed when unset), so it is checked only when configured.
+  if (env.OPS_DATABASE_URL) await getOpsPrisma().$queryRaw`SELECT 1`;
 }
 
 export default prisma;

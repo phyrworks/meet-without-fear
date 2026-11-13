@@ -264,13 +264,6 @@ export async function createHarness(opts: {
    * representable.
    */
   conceptUnrepresentable?: 'throw' | 'record';
-  /**
-   * TS-10: on the target, log the APP in as `mwf_app` on the run database
-   * (default: the fixture's owner login, as every golden runs). For the
-   * real-role unit tests: the request path then runs under mwf_app's
-   * privileges with identity binding on, the job under mwf_job's.
-   */
-  appLogin?: 'owner' | 'mwf_app';
 }): Promise<Harness> {
   const traceOpts: TraceOptions | null = opts.trace === true ? {} : opts.trace ? opts.trace : null;
   const conceptViews: readonly ConceptName[] =
@@ -346,24 +339,21 @@ export async function createHarness(opts: {
   // harness's own connections — which are the overwhelming majority of
   // statements against this database. Set unconditionally: it costs nothing and
   // it also makes `pg_stat_activity` legible while debugging a stuck run.
-  if (opts.appLogin === 'mwf_app' && isTargetShape()) {
-    // mwf_app owns the tables in production; on a local clone (owned by the
-    // fixture's superuser) it gets exactly the privileges that ownership gives
-    // the request path — as functions-caller-tests.sql and smoke-baseline.sql
-    // do — so every refusal a test sees comes from a function or trigger.
-    await withClient(
-      fixture.target,
-      c => c.query('GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO mwf_app'),
-      fixture.database,
-    );
+  //
+  // On the target the APP logs in as `mwf_app` on the run database, always
+  // (work-k5fk.10.1): the run database and every object in it are
+  // mwf_migrator's, so the request path holds exactly mwf_app's grants, as in
+  // production once no runtime role owns anything. DATABASE_URL stays the
+  // superuser's run URL: it is the tooling URL (the E2E routes' tooling client,
+  // lib/prisma getE2EToolingPrisma), never the app's.
+  process.env.DATABASE_URL = `${fixture.url}?application_name=${APP_UNDER_TEST}`;
+  if (isTargetShape()) {
+    process.env.APP_DATABASE_URL = appUrlFor(fixture.target, fixture.database);
+  } else {
+    // lib/prisma prefers APP_DATABASE_URL over DATABASE_URL (database-urls.ts);
+    // one left in a developer's environment would point the app elsewhere.
+    delete process.env.APP_DATABASE_URL;
   }
-  process.env.DATABASE_URL =
-    opts.appLogin === 'mwf_app' && isTargetShape()
-      ? appUrlFor(fixture.target, fixture.database)
-      : `${fixture.url}?application_name=${APP_UNDER_TEST}`;
-  // lib/prisma prefers APP_DATABASE_URL over DATABASE_URL (database-urls.ts);
-  // one left in a developer's environment would point the app elsewhere.
-  delete process.env.APP_DATABASE_URL;
   // The job connection (TS-9: AI/SYSTEM and delivered messages, system
   // milestones and AI memory are written through it). On the target it logs
   // in as mwf_job ON THE RUN DATABASE (roles are cluster-wide), so the run

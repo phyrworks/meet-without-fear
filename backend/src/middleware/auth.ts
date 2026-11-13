@@ -7,7 +7,7 @@
 
 import { Request, Response, NextFunction } from 'express';
 import { UnauthorizedError, ForbiddenError, NotFoundError } from './errors';
-import { prisma } from '../lib/prisma';
+import { prisma, getE2EToolingPrisma } from '../lib/prisma';
 import { ApiResponse, ErrorCode, isUuidV7 } from '@meet-without-fear/shared';
 import { Prisma } from '../generated/prisma/client';
 import { logger } from '../lib/logger';
@@ -107,11 +107,15 @@ async function handleE2EAuthBypass(req: Request): Promise<boolean> {
   }
 
   const e2eClerkId = `e2e_${e2eUserId}`;
+  // The bypass is E2E tooling: it creates a user with a caller-chosen id, which
+  // no production request does, so it writes on the tooling connection, never
+  // the app's (mwf_app has no INSERT of user.id; work-k5fk.10.1).
+  const tooling = getE2EToolingPrisma();
 
   let user;
   try {
     // Primary path: tie auth identity to E2E user ID
-    user = await prisma.user.upsert({
+    user = await tooling.user.upsert({
       where: { id: e2eUserId },
       create: { id: e2eUserId, email: e2eEmail, clerkId: e2eClerkId },
       update: { email: e2eEmail, clerkId: e2eClerkId },
@@ -122,7 +126,7 @@ async function handleE2EAuthBypass(req: Request): Promise<boolean> {
       throw error;
     }
 
-    user = await prisma.user.findFirst({
+    user = await tooling.user.findFirst({
       where: {
         OR: [{ id: e2eUserId }, { clerkId: e2eClerkId }, { email: e2eEmail }],
       },
@@ -131,7 +135,7 @@ async function handleE2EAuthBypass(req: Request): Promise<boolean> {
       throw error;
     }
 
-    user = await prisma.user.update({
+    user = await tooling.user.update({
       where: { id: user.id },
       data: { email: e2eEmail, clerkId: e2eClerkId },
     });

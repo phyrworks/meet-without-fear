@@ -49,7 +49,13 @@ async function caught(f: () => Promise<unknown>): Promise<Error> {
 describeDb('errorHandler against real Postgres constraint violations', () => {
   // Imported lazily so a skipped suite never constructs a client.
   // eslint-disable-next-line @typescript-eslint/no-require-imports
-  const { prisma } = require('../../lib/prisma') as typeof import('../../lib/prisma');
+  const { createPrismaClient } = require('../../lib/prisma') as typeof import('../../lib/prisma');
+  // The real client stack (adapter, encryption extension), on the test database's superuser URL:
+  // it creates scratch tables, which no runtime role may, so the role guard is exempted here.
+  const prisma = createPrismaClient({
+    url: url as string,
+    roleGuardExemption: 'test: scratch DDL on the test database (errors.pg)',
+  });
   const originalEnv = process.env.NODE_ENV;
 
   beforeAll(async () => {

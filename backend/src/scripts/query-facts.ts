@@ -1,4 +1,9 @@
 import { prisma } from '../lib/prisma';
+import { exemptProcessFromRoleGuard } from '../lib/prisma-role-guard';
+
+// Operator script: connects with whatever DATABASE_URL / APP_DATABASE_URL the operator gives it
+// (often the admin URL), so the runtime role guard does not apply (work-k5fk.10.3).
+exemptProcessFromRoleGuard('operator script query-facts.ts');
 
 async function main() {
   // Operator tooling (every participant's facts): the NOTABLE_FACTS documents

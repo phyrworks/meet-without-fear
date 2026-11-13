@@ -41,7 +41,6 @@ describeTarget('skip-refinement from REFINING (CONTEXT_SHARED_B)', () => {
       baseUrl: BASE_URL,
       stage: 'CONTEXT_SHARED_B',
       runId: `ts10_skip_${process.pid}`,
-      appLogin: 'mwf_app',
     });
   });
   afterAll(async () => {

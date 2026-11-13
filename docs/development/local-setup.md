@@ -239,7 +239,14 @@ backend/scripts/target-shape/run-baseline.sh --dev
 ```
 
 It is idempotent: an existing database gets `migrate deploy` (a no-op once applied) and is never
-dropped. In the branch's `backend/.env`:
+dropped. A database it creates is **owned by `mwf_migrator`** and deployed logged in as it
+(work-k5fk.10.1, design note §6 "four layers"): no runtime role and not the admin owns any object, so
+the app runs on `mwf_app`'s grants alone (`tables.sql`, next to each table). An existing database
+owned by anyone else is reported with a WARNING; drop it and re-run `--dev` to rebuild it. Because the
+baseline migration is edited in place on this branch, a database deployed before a grant change does
+**not** have it either — rebuild after pulling such a change. The API refuses to start on a connection
+that is a superuser, has BYPASSRLS or owns objects (work-k5fk.10.3), so `APP_DATABASE_URL` and
+`JOB_DATABASE_URL` must be set. In the branch's `backend/.env`:
 
 ```bash
 DATABASE_URL=postgresql://mwf_user:mwf_password@127.0.0.1:5432/mwf_target_dev
@@ -251,10 +258,13 @@ JOB_DATABASE_URL=postgresql://mwf_job:mwf_job_dev@127.0.0.1:5432/mwf_target_dev
 #   postgresql://mwf_user:mwf_password@127.0.0.1:5432/mwf_target_test
 ```
 
-E2E (`npm run e2e`) reads `e2e/.env.test`, which points `DATABASE_URL` and `JOB_DATABASE_URL`
-(as `mwf_job`) at `mwf_target_e2e`, turns identity binding on (as the golden driver and the replica
+E2E (`npm run e2e`) reads `e2e/.env.test`, which points every URL at `mwf_target_e2e`: the app
+logs in as `mwf_app` (`APP_DATABASE_URL`), the job as `mwf_job`, `migrate deploy` as `mwf_migrator`
+(`MIGRATOR_DATABASE_URL`), and `DATABASE_URL` (the admin) is used only to truncate and by the API's
+E2E tooling connection (`routes/e2e.ts` seeding/cleanup and the auth bypass's user upsert, which
+write what no production request may). Identity binding is on (as the golden driver and the replica
 do, so the job-only definer functions and identity-bound reads behave as in production), and
-blanks `APP_/AUTH_/OPS_DATABASE_URL` so the dev API cannot pick up the `mwf_target_dev` role URLs
+`AUTH_/OPS_DATABASE_URL` are blank so the dev API cannot pick up the `mwf_target_dev` role URLs
 from `backend/.env`. `e2e/global-setup.ts` truncates every application table and refuses to run
 unless the database name ends in `_e2e`, or if any role URL in the environment names a different
 database. A `DATABASE_URL` exported in your shell overrides `.env.test`; the guard catches that.
