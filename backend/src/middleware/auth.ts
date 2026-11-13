@@ -6,7 +6,13 @@
  */
 
 import { Request, Response, NextFunction } from 'express';
-import { UnauthorizedError, ForbiddenError, NotFoundError } from './errors';
+import {
+  UnauthorizedError,
+  ForbiddenError,
+  NotFoundError,
+  EmailNotVerifiedError,
+  AccountLinkConflictError,
+} from './errors';
 import { prisma } from '../lib/prisma';
 import { ApiResponse, ErrorCode } from '@meet-without-fear/shared';
 import { Prisma } from '../generated/prisma/client';
@@ -134,6 +140,43 @@ async function handleE2EAuthBypass(req: Request): Promise<boolean> {
 }
 
 /**
+ * The Clerk user's primary email address, only when Clerk reports it verified.
+ *
+ * Zero trust on Clerk's instance settings: whatever the dashboard allows
+ * (unverified sign-ups, extra addresses), a User row only ever gets an email
+ * its owner has proven. emailAddresses[0] is not necessarily the primary.
+ */
+export function verifiedPrimaryEmail(clerkUser: {
+  primaryEmailAddressId: string | null;
+  emailAddresses: ReadonlyArray<{
+    id: string;
+    emailAddress: string;
+    verification: { status: string } | null;
+  }>;
+}): string | null {
+  const primary = clerkUser.emailAddresses.find((e) => e.id === clerkUser.primaryEmailAddressId);
+  if (!primary || primary.verification?.status !== 'verified') return null;
+  return primary.emailAddress || null;
+}
+
+/**
+ * Security/support event for a refused first login. Carries ids only, never
+ * the email or a name: logs reach CloudWatch, and error level reaches Sentry.
+ * Warn level: the request is refused safely, but support needs to find it.
+ */
+function logIdentityConflict(
+  incomingClerkUserId: string,
+  holder: { id: string; clerkId: string | null }
+): void {
+  logger.warn('[Auth] auth.identity_conflict: first login refused, email belongs to another account', {
+    event: 'auth.identity_conflict',
+    existingUserId: holder.id,
+    incomingClerkUserId,
+    existingClerkUserId: holder.clerkId,
+  });
+}
+
+/**
  * Clerk authentication handler
  */
 async function handleClerkAuth(
@@ -213,7 +256,12 @@ async function handleClerkAuth(
       throw clerkError;
     }
 
-    const email = clerkUser.emailAddresses[0]?.emailAddress || `${clerkUserId}@pending.clerk`;
+    const email = verifiedPrimaryEmail(clerkUser);
+    if (!email) {
+      // No row is created for an identity whose email we cannot trust: a row's
+      // email is what invitations, display and support match a person by.
+      throw new EmailNotVerifiedError();
+    }
     const firstName = clerkUser.firstName || null;
     const lastName = clerkUser.lastName || null;
     const name = [firstName, lastName].filter(Boolean).join(' ') || null;
@@ -223,22 +271,23 @@ async function handleClerkAuth(
         data: { clerkId: clerkUserId, email, name, firstName, lastName },
       });
     } catch (error) {
-      // Concurrent create race, or a local account already exists for this
-      // Clerk email. Resolve by identity first, then by email.
-      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
-        user =
-          (await prisma.user.findUnique({ where: { clerkId: clerkUserId } })) ||
-          (await prisma.user.findUnique({ where: { email } }));
-        if (!user) throw error;
-
-        if (user.clerkId !== clerkUserId) {
-          user = await prisma.user.update({
-            where: { id: user.id },
-            data: { clerkId: clerkUserId, email, name, firstName, lastName },
-          });
-        }
-      } else {
+      if (!(error instanceof Prisma.PrismaClientKnownRequestError) || error.code !== 'P2002') {
         throw error;
+      }
+      // Concurrent create race: another request for this same Clerk identity
+      // created the row first. That is the only collision we resolve.
+      user = await prisma.user.findUnique({ where: { clerkId: clerkUserId } });
+      if (!user) {
+        // The email belongs to a row bound to another Clerk identity (or to
+        // none). Never re-bind it: a new Clerk identity presenting an existing
+        // user's email would take over that user's account (work-jv9y).
+        const holder = await prisma.user.findUnique({
+          where: { email },
+          select: { id: true, clerkId: true },
+        });
+        if (!holder) throw error; // neither key collides any more: not ours to explain
+        logIdentityConflict(clerkUserId, holder);
+        throw new AccountLinkConflictError();
       }
     }
 
