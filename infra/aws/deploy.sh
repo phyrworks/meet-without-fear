@@ -9,6 +9,19 @@ manifest=${2:?Manifest file required}
 exec 9>/var/lib/mwf/deploy.lock
 flock -n 9 || { echo 'Deployment already running' >&2; exit 1; }
 previous=$(jq -r ' .image // empty' /var/lib/mwf/current-release.json 2>/dev/null || true)
+# Role-guard preflight (work-k5fk.10.3), with the NEW image and before anything changes: every
+# runtime role URL in application.env must be a least-privilege login that owns nothing and is a
+# member of no role, or the new API would refuse to start after the migration. On the current
+# production database it FAILS until the design note §7 row 9c cutover (mwf_app owns the database
+# and is a member of mwf_job): the old release keeps running. There is no switch to skip it.
+sed "s|^APP_IMAGE=.*|APP_IMAGE=$image|" /etc/mwf/release.env > /etc/mwf/release.env.preflight
+if ! docker compose --env-file /etc/mwf/release.env.preflight -f /opt/mwf/compose.yaml \
+     run --rm --no-deps api node dist/backend/src/scripts/role-guard-preflight.js; then
+  rm -f /etc/mwf/release.env.preflight
+  echo 'Role-guard preflight failed: not migrating, previous release left running (see above).' >&2
+  exit 1
+fi
+rm -f /etc/mwf/release.env.preflight
 # Back up before touching migrations, and stop writes while migrating.
 if compose exec -T db psql -U postgres -d mwf -tAc 'SELECT to_regclass('\''public."_prisma_migrations"'\'') IS NOT NULL' | grep -q t; then
   /opt/mwf/backup.sh preserved

@@ -57,15 +57,18 @@ JOB_DB_PASSWORD=$JOB_DB_PASSWORD
 OPS_DB_PASSWORD=$OPS_DB_PASSWORD
 AUTH_DB_PASSWORD=$AUTH_DB_PASSWORD
 EOF
-# Production's application.env shape: DATABASE_URL is mwf_app, the database
-# owner, which also runs migrations (deploy.sh) until work-a39h.11.19 moves
-# them to mwf_migrator. Per-role URLs and identity binding as on target-shape.
+# Production's application.env shape, at target-shape ownership (work-k5fk.10.3; production
+# reaches it at the design note row 9c cutover): DATABASE_URL is mwf_migrator, the owner — it runs
+# the migrations (step 5) and backs only the E2E tooling connection (lib/prisma
+# getE2EToolingPrisma; E2E_AUTH_BYPASS is on in the replica). Every runtime client has its own
+# least-privilege URL, which the role guard checks (step 4b, and the API at startup).
+# Per-role URLs and identity binding as on target-shape.
 # GOLDEN_SHAPE=target: the E2E seeder's shape detection reads
 # prisma/schema.prisma relative to src/, which does not exist under dist/ in
 # the image (filed as a beads issue); the override is the documented one.
 {
   cat <<EOF
-DATABASE_URL=postgresql://mwf_app:$APP_DB_PASSWORD@db:5432/mwf?connection_limit=12
+DATABASE_URL=postgresql://mwf_migrator:$MIGRATOR_DB_PASSWORD@db:5432/mwf?connection_limit=4
 APP_DATABASE_URL=postgresql://mwf_app:$APP_DB_PASSWORD@db:5432/mwf?connection_limit=12
 JOB_DATABASE_URL=postgresql://mwf_job:$JOB_DB_PASSWORD@db:5432/mwf?connection_limit=5
 OPS_DATABASE_URL=postgresql://mwf_ops:$OPS_DB_PASSWORD@db:5432/mwf?connection_limit=2
@@ -144,6 +147,16 @@ step "4. db (Postgres 18 + pgvector; init-db.sh on a fresh volume)"
 compose up -d db
 wait_healthy db 40 || die "db did not become healthy"
 echo "   db healthy; roles: $(psql_db -Atc "SELECT string_agg(rolname, ',' ORDER BY rolname) FROM pg_roles WHERE rolname LIKE 'mwf\_%' OR rolname = 'slam_bot_readonly'")"
+
+# --- 4b. role-guard preflight, before migrating (work-k5fk.10.3; deploy.sh does the same) ---
+step "4b. role-guard preflight (every runtime role URL; no switch to skip it)"
+if [ "$(psql_db -Atc "SELECT pg_get_userbyid(datdba) FROM pg_database WHERE datname = 'mwf'")" != mwf_migrator ]; then
+  die "the replica's database is not owned by mwf_migrator (a volume initialised before work-k5fk.10.3): run infra/local/reset.sh, then up.sh"
+fi
+if ! compose run --rm --no-deps -T api node dist/backend/src/scripts/role-guard-preflight.js >"$LOCAL/preflight.log" 2>&1; then
+  sed 's/^/   /' "$LOCAL/preflight.log"; die "role-guard preflight failed: not migrating"
+fi
+sed 's/^/   /' "$LOCAL/preflight.log"
 
 # --- 5. migrations, the way deploy.sh runs them -------------------------------------
 step "5. migrations (deploy.sh: stop api, one-off api container runs prisma migrate deploy)"

@@ -44,7 +44,12 @@ infra/local/reset.sh --yes # down, drop volume mwf_local_postgres, up (fresh bas
    An unchanged tree reuses the image. `MWF_LOCAL_APP_IMAGE=<image>` runs an existing image instead.
 3. Exports the mobile app for web (`expo export --platform web`) with `EXPO_PUBLIC_E2E_MODE=true`
    and `EXPO_PUBLIC_API_URL=http://127.0.0.1:18180`; skipped when the inputs are unchanged.
-4. Starts `db`; `init-db.sh` creates the roles on a fresh volume.
+4. Starts `db`; `init-db.sh` creates the roles on a fresh volume, then `infra/local/init-db-owner.sh`
+   hands the database and schema `public` to `mwf_migrator` and revokes `mwf_job` from `mwf_app`
+   (work-k5fk.10.3). Then the role-guard preflight (`dist/backend/src/scripts/role-guard-preflight.js`
+   in a one-off `api` container) checks every runtime role URL and stops before migrating if one is
+   a superuser, BYPASSRLS, a member of any role or owns anything. A volume initialised before
+   work-k5fk.10.3 (owned by `mwf_app`) is refused: `infra/local/reset.sh --yes`.
 5. Migrates the way `deploy.sh` does — `stop api`, then a one-off `api` container runs
    `prisma migrate deploy` — but only when the image changed, the API is not healthy, or a
    migration is pending. Production has no local backup step.
@@ -73,17 +78,19 @@ development container `mwf-postgres` or its databases.
 | `E2E_AUTH_BYPASS` / `MOCK_LLM` | forced `false` in `compose.yaml` | `true` |
 | Caddy | TLS for `api.meetwithoutfear.com` on 80/443, plus loopback `:8080` | loopback `:8080` only, also serving the web export |
 | Image architecture | linux/amd64 (CI) | the Mac's native arm64 |
-| Database URLs | `DATABASE_URL` = `mwf_app` | the same; plus `APP_`/`JOB_`/`OPS_`/`AUTH_DATABASE_URL` for `mwf_app`/`mwf_job`/`mwf_ops`/`mwf_auth` and `DB_IDENTITY_BINDING=on` (the target-shape settings) |
-| Migrations | `mwf_app` (database owner) via `deploy.sh`, after a backup | `mwf_app`, no backup |
+| Database URLs | `DATABASE_URL` = `mwf_app` | `DATABASE_URL` = `mwf_migrator` (migrations and the E2E tooling connection only); plus `APP_`/`JOB_`/`OPS_`/`AUTH_DATABASE_URL` for `mwf_app`/`mwf_job`/`mwf_ops`/`mwf_auth` and `DB_IDENTITY_BINDING=on` (the target-shape settings) |
+| Migrations | `mwf_app` (database owner) via `deploy.sh`, after a backup | `mwf_migrator` (database owner), no backup |
+| Ownership | `mwf_app` owns the database and is a member of `mwf_job` | `mwf_migrator` owns everything; no runtime login is a member of any role |
 | Ably | real `ABLY_API_KEY` | none by default: `/api/auth/ably-token` returns a mock token request, so the browser's Ably client never connects and realtime partner updates do not arrive; set `MWF_LOCAL_ABLY_API_KEY` before `up.sh` to use a real key |
 | Field encryption | production key | a random development `FIELD_ENCRYPTION_KEY`, generated once into `infra/local/.local/secrets.env` (see below) |
 | Clerk, Bedrock, Resend, Sentry | configured | not configured; a request with neither bypass headers nor a token fails closed with 500 "Authentication not configured" (production: 401) |
 | Log driver | `local`, 10 MB × 3 | podman default |
 
-Migrations run as `mwf_app` because that is what production does today. Moving them to
-`mwf_migrator` is work-a39h.11.19: the baseline grants `mwf_app` only views and `EXECUTE`
-("mwf_app's table privileges are unchanged: it owns the tables"), so a database owned by
-`mwf_migrator` needs the W1a table grants first.
+The replica runs target-shape ownership (design note §6 layer 1): the baseline now carries
+`mwf_app`'s own table grants (work-k5fk.10.2), and the API refuses a login that owns objects
+(work-k5fk.10.3). Production keeps `mwf_app` as owner until the design note §7 row 9c cutover;
+until then `infra/aws/deploy.sh`'s role-guard preflight fails on it, before migrating, and the
+previous release keeps running.
 
 ### Field encryption
 
