@@ -104,7 +104,7 @@ describeDb('errorHandler against real Postgres constraint violations', () => {
           .$transaction(async tx => {
             await tx.$executeRawUnsafe(`SET LOCAL lock_timeout = '5s'`);
             await tx.$executeRawUnsafe(
-              `ALTER TABLE "User" ADD CONSTRAINT ${T}_user_chk CHECK (email NOT LIKE '%${SENTINEL}%') NOT VALID`,
+              `ALTER TABLE "user" ADD CONSTRAINT ${T}_user_chk CHECK (email NOT LIKE '%${SENTINEL}%') NOT VALID`,
             );
             err = await caught(() => tx.user.create({ data: { email: `ts2_${SENTINEL}@example.test` } }));
             throw new Error('rollback');
