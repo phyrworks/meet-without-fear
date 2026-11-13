@@ -152,7 +152,7 @@ status: living
   - Mobile: `@clerk/clerk-expo` with session-based auth
   - Website: `@clerk/nextjs` with Next.js middleware
   - Token flow: Mobile gets JWT from Clerk, passes in `Authorization: Bearer` header to API
-  - User sync: Clerk user created/updated → Prisma User record upserted with `clerkId`
+  - User sync: no Clerk webhooks; the auth middleware creates the Prisma User row (keyed by `clerkId`) on the first authenticated request, from the Clerk user's verified primary email only, and never re-binds an existing row by email (see `docs/backend/api/auth.md`)
 
 **Session Handling:**
 - Mobile: Clerk session stored in Expo Secure Store
