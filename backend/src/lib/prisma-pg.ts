@@ -140,10 +140,15 @@ function buildAdapter(databaseUrl: string): PrismaPg {
  * with no database configured (the image smoke test in aws-deploy.yml,
  * mocked unit tests) must keep working.
  */
-export function createPrismaPgAdapter(databaseUrl?: string, role: DatabaseRole = 'app'): PgAdapterFactory {
-  if (databaseUrl !== undefined) return buildAdapter(databaseUrl);
+export function createPrismaPgAdapter(
+  databaseUrl?: string | (() => string),
+  role: DatabaseRole = 'app',
+): PgAdapterFactory {
+  if (typeof databaseUrl === 'string') return buildAdapter(databaseUrl);
+  // A resolver (lib/prisma: the URL the role guard also checked) or the role's environment variable.
+  const urlOf = databaseUrl ?? (() => databaseUrlFromEnv(role));
   let adapter: PrismaPg | undefined;
-  const resolve = (): PrismaPg => (adapter ??= buildAdapter(databaseUrlFromEnv(role)));
+  const resolve = (): PrismaPg => (adapter ??= buildAdapter(urlOf()));
   return {
     provider: 'postgres',
     adapterName: ADAPTER_NAME,

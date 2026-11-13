@@ -34,10 +34,13 @@ export function createPrismaClient({ url, role = 'app', roleGuardExemption }: Pr
   // DB_IDENTITY_BINDING=on binds the request's user id to every statement
   // (prisma-identity.ts). Off by default: nothing below is wrapped at all.
   const bindIdentityToStatements = identityBindingEnabled();
-  // work-k5fk.10.3: the first connect refuses a superuser, BYPASSRLS or object-owning login.
-  const pgAdapter = guardAdapterFactory(createPrismaPgAdapter(url, role), role, {
+  // work-k5fk.10.3: the first connect refuses a privileged, member or object-owning login. The URL
+  // is resolved once (on first connect, as before) so the guard and the pool check the same one.
+  let resolved: string | undefined = url;
+  const urlOnce = (): string => (resolved ??= databaseUrlFromEnv(role));
+  const pgAdapter = guardAdapterFactory(createPrismaPgAdapter(urlOnce, role), role, {
     exemption: roleGuardExemption,
-    readFacts: () => readRoleFactsAt(url ?? databaseUrlFromEnv(role)),
+    readFacts: () => readRoleFactsAt(urlOnce()),
   });
   const base = new PrismaClient({
     // Prisma 7: connections come from a pg.Pool; pool size and timeouts are
@@ -129,14 +132,16 @@ export async function disconnectJobPrisma(): Promise<void> {
 }
 
 /**
- * Startup check (work-k5fk.10.3): open the app connection, and the job and ops
- * connections when they are configured, so the role guard
+ * Startup check (work-k5fk.10.3): open the app and job connections, and the
+ * ops connection when it is configured, so the role guard
  * (prisma-role-guard.ts) runs before the server listens. Rejects with
  * RuntimeRoleRefusedError on a superuser, BYPASSRLS or object-owning login.
  */
 export async function verifyRuntimeConnections(env: Record<string, string | undefined> = process.env): Promise<void> {
   await prisma.$queryRaw`SELECT 1`;
-  if (env.JOB_DATABASE_URL) await getJobPrisma().$queryRaw`SELECT 1`;
+  // Always: an unset JOB_DATABASE_URL falls back to DATABASE_URL, which must be refused if privileged.
+  await getJobPrisma().$queryRaw`SELECT 1`;
+  // ops never falls back (it fails closed when unset), so it is checked only when configured.
   if (env.OPS_DATABASE_URL) await getOpsPrisma().$queryRaw`SELECT 1`;
 }
 

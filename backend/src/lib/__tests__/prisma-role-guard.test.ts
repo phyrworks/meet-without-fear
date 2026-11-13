@@ -16,9 +16,15 @@ import type { PgAdapterFactory } from '../prisma-pg';
 
 const clean = (role = 'mwf_app'): RoleFacts => ({
   role,
+  currentUser: role,
   superuser: false,
   bypassrls: false,
+  createrole: false,
+  createdb: false,
+  replication: false,
+  memberships: [],
   privilegedRoles: [],
+  schemaCreate: [],
   owned: [],
 });
 
@@ -34,6 +40,35 @@ describe('roleGuardViolations', () => {
     ]);
     expect(roleGuardViolations({ ...clean(), privilegedRoles: ['mwf_user'] }, 'app')).toEqual([
       'mwf_app can SET ROLE to superuser/BYPASSRLS role(s): mwf_user',
+    ]);
+  });
+
+  it('refuses a login whose session runs as another role (session_user <> current_user)', () => {
+    expect(roleGuardViolations({ ...clean('mwf_user'), currentUser: 'mwf_app' }, 'app')[0]).toMatch(
+      /the login mwf_user runs as mwf_app \(session_user <> current_user/,
+    );
+  });
+
+  it('refuses CREATEROLE, CREATEDB and REPLICATION', () => {
+    expect(roleGuardViolations({ ...clean(), createrole: true, createdb: true, replication: true }, 'app')).toEqual([
+      'mwf_app has CREATEROLE',
+      'mwf_app has CREATEDB',
+      'mwf_app has REPLICATION',
+    ]);
+  });
+
+  it("refuses any role membership (the allowlist is empty until row 9a), e.g. production's mwf_job TO mwf_app", () => {
+    for (const role of ['app', 'job', 'ops', 'auth'] as const) {
+      expect(roleGuardViolations({ ...clean(), memberships: ['mwf_job'] }, role)).toEqual([
+        'mwf_app is a member of role(s) mwf_job (none is allowed)',
+      ]);
+    }
+    expect(roleGuardViolations({ ...clean(), memberships: ['pg_write_all_data'] }, 'app')).toHaveLength(1);
+  });
+
+  it('refuses CREATE on schema public or app', () => {
+    expect(roleGuardViolations({ ...clean(), schemaCreate: ['app', 'public'] }, 'app')).toEqual([
+      'mwf_app may CREATE in schema(s) app, public',
     ]);
   });
 
@@ -138,17 +173,35 @@ describe('who may exempt from the guard', () => {
     });
   }
 
-  it('only operator scripts exempt a process; only the E2E tooling client exempts a client', () => {
-    const files = [...tsFiles(SRC), ...tsFiles(path.join(BACKEND, 'scripts'))].filter(f => !f.includes('__tests__'));
-    const processCallers = files
-      .filter(f => /exemptProcessFromRoleGuard\(/.test(fs.readFileSync(f, 'utf8')))
+  /** Every file (tests included) that names either exemption, outside the guard module itself. */
+  function namers(identifier: string): string[] {
+    return [...tsFiles(SRC), ...tsFiles(path.join(BACKEND, 'scripts'))]
+      .filter(f => new RegExp(`\\b${identifier}\\b`).test(fs.readFileSync(f, 'utf8')))
       .map(f => path.relative(BACKEND, f))
-      .filter(f => f !== 'src/lib/prisma-role-guard.ts');
-    for (const f of processCallers) expect(f).toMatch(/^(scripts\/|src\/scripts\/)/);
-    const clientExemptions = files
-      .filter(f => /roleGuardExemption:/.test(fs.readFileSync(f, 'utf8')))
-      .map(f => path.relative(BACKEND, f))
-      .filter(f => f !== 'src/lib/prisma-role-guard.ts');
-    expect(clientExemptions).toEqual(['src/lib/prisma.ts']);
+      .filter(f => f !== 'src/lib/prisma-role-guard.ts' && f !== 'src/lib/__tests__/prisma-role-guard.test.ts')
+      .sort();
+  }
+
+  // An exact list, not a pattern: adding an exemption anywhere (a new script, a runtime
+  // module, a test) fails here until it is added deliberately.
+  it('the process exemption is named by exactly the operator scripts', () => {
+    expect(namers('exemptProcessFromRoleGuard')).toEqual([
+      'scripts/check-duplicate-messages.ts',
+      'scripts/check-session-messages.ts',
+      'scripts/extract-session-transcripts.ts',
+      'scripts/inspect-db.ts',
+      'src/scripts/analyze-session.ts',
+      'src/scripts/mwf-moment-real.ts',
+      'src/scripts/query-facts.ts',
+      'src/scripts/reset-db-data.ts',
+    ]);
+  });
+
+  it('a client exemption is named only by lib/prisma (the E2E tooling client) and two DB tests', () => {
+    expect(namers('roleGuardExemption')).toEqual([
+      'src/lib/prisma.ts',
+      'src/middleware/__tests__/errors.pg.test.ts',
+      'src/services/__tests__/encryption-at-rest-repair.target.test.ts',
+    ]);
   });
 });

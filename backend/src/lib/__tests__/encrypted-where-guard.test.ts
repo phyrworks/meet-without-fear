@@ -62,7 +62,6 @@ const ALLOWED: Record<string, string> = {
     'the ops dashboard title search arm, applied only while no key is set (titleSearch, ruling R45)',
   'scripts/mwf-moment-real.ts: Session.topicFrame': 'dev script, keyless databases only (documented, R45)',
   'scripts/analyze-session.ts: Message.content': 'dev script, keyless databases only (documented, R45)',
-  'fix-empty-messages.ts: Message.content': 'dev script, keyless databases only (documented, R45)',
 };
 
 interface Hit {

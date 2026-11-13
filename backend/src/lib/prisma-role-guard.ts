@@ -4,12 +4,22 @@
  *
  * Every runtime Prisma client (`createPrismaClient`: app, job, ops, auth)
  * refuses its connection — the first query fails, and `server.ts` exits before
- * it listens — when the login role
+ * it listens — unless the login is a plain least-privilege role. The facts are
+ * read for `session_user` (the login), not `current_user`: a login whose
+ * connection starts under another role (`ALTER ROLE … SET role`, `options=-c
+ * role=…`) can `SET ROLE NONE` back to itself, so `session_user <> current_user`
+ * is itself refused. The login is refused when it
  *
- *   - is a SUPERUSER, or has BYPASSRLS (either one makes every grant and every
- *     future RLS policy moot);
- *   - can SET ROLE to a role that is either (a member of mwf_user would be a
+ *   - is a SUPERUSER, has BYPASSRLS (either makes every grant and every future
+ *     RLS policy moot), CREATEROLE, CREATEDB or REPLICATION;
+ *   - can SET ROLE to a SUPERUSER / BYPASSRLS role (a member of mwf_user is a
  *     superuser one statement away);
+ *   - is a member of ANY role (a pg_auth_members row) outside
+ *     `ALLOWED_MEMBERSHIPS` — empty today. That refuses the predefined roles
+ *     (pg_write_all_data, pg_read_all_data, pg_execute_server_program, …) and
+ *     production's interim `GRANT mwf_job TO mwf_app WITH SET` (roles.sql,
+ *     init-db.sh before work-k5fk.10.3) without listing them;
+ *   - holds CREATE on schema `public` or `app`;
  *   - owns, or can SET ROLE to the owner of, any object in schemas `public`
  *     and `app` — tables, views, sequences, indexes, functions, types — or the
  *     schemas themselves (the database owner owns `public` through
@@ -44,20 +54,39 @@ import { pgSettingsFromUrl, type PgAdapterFactory } from './prisma-pg';
 /** Remove with design note §7 row 9a: mwf_job stops owning the definer helpers. */
 const JOB_OWNS_DEFINERS = true;
 
-/** What the guard reads about the connected role (one row, one json column). */
+/**
+ * Each login's allowed role memberships. Empty: no runtime login is a member of
+ * anything. Design note §7 row 9a adds exactly one capability role per login
+ * here (app → app_access, job → worker_access / ai_access, ops → ops_access,
+ * auth → auth_access).
+ */
+const ALLOWED_MEMBERSHIPS: Record<DatabaseRole, readonly string[]> = { app: [], job: [], ops: [], auth: [] };
+
+/** What the guard reads about the login (one row, one json column). */
 export interface RoleFacts {
+  /** session_user: the login. */
   role: string;
+  /** current_user: the role the session runs as. */
+  currentUser: string;
   superuser: boolean;
   bypassrls: boolean;
+  createrole: boolean;
+  createdb: boolean;
+  replication: boolean;
+  /** Roles this login is directly a member of (pg_auth_members rows). */
+  memberships: string[];
   /** Superuser / BYPASSRLS roles this login can SET ROLE to (itself excluded). */
   privilegedRoles: string[];
+  /** Schemas among public / app the login may CREATE in. */
+  schemaCreate: string[];
   /** Objects in public/app owned by this login or a role it can SET ROLE to. */
   owned: Array<{ object: string; owner: string; definerFunction: boolean; ownedBySelf: boolean }>;
 }
 
 export const ROLE_GUARD_SQL = `
 WITH me AS (
-  SELECT oid, rolname, rolsuper, rolbypassrls FROM pg_catalog.pg_roles WHERE rolname = current_user
+  SELECT oid, rolname, rolsuper, rolbypassrls, rolcreaterole, rolcreatedb, rolreplication
+  FROM pg_catalog.pg_roles WHERE rolname = session_user
 ), obj AS (
   SELECT 'schema ' || n.nspname AS object, n.nspowner AS owner, false AS definer
   FROM pg_catalog.pg_namespace n WHERE n.nspname IN ('public', 'app')
@@ -76,11 +105,22 @@ WITH me AS (
 )
 SELECT json_build_object(
   'role', me.rolname,
+  'currentUser', current_user,
   'superuser', me.rolsuper,
   'bypassrls', me.rolbypassrls,
+  'createrole', me.rolcreaterole,
+  'createdb', me.rolcreatedb,
+  'replication', me.rolreplication,
+  'memberships', ARRAY(
+    SELECT r.rolname::text FROM pg_catalog.pg_auth_members m JOIN pg_catalog.pg_roles r ON r.oid = m.roleid
+    WHERE m.member = me.oid ORDER BY 1),
   'privilegedRoles', ARRAY(
     SELECT r.rolname::text FROM pg_catalog.pg_roles r
     WHERE r.oid <> me.oid AND (r.rolsuper OR r.rolbypassrls) AND pg_catalog.pg_has_role(me.oid, r.oid, 'MEMBER')
+    ORDER BY 1),
+  'schemaCreate', ARRAY(
+    SELECT n.nspname::text FROM pg_catalog.pg_namespace n
+    WHERE n.nspname IN ('public', 'app') AND pg_catalog.has_schema_privilege(me.oid, n.oid, 'CREATE')
     ORDER BY 1),
   'owned', coalesce((
     SELECT json_agg(json_build_object('object', o.object, 'owner', pg_catalog.pg_get_userbyid(o.owner),
@@ -93,16 +133,28 @@ FROM me`;
 /** Pure: why `role`'s connection must be refused (empty = accepted). */
 export function roleGuardViolations(facts: RoleFacts, role: DatabaseRole): string[] {
   const out: string[] = [];
-  if (facts.superuser) out.push(`${facts.role} is a SUPERUSER`);
-  if (facts.bypassrls) out.push(`${facts.role} has BYPASSRLS`);
-  if (facts.privilegedRoles.length) {
-    out.push(`${facts.role} can SET ROLE to superuser/BYPASSRLS role(s): ${facts.privilegedRoles.join(', ')}`);
+  const who = facts.role;
+  if (facts.currentUser !== facts.role) {
+    out.push(
+      `the login ${who} runs as ${facts.currentUser} (session_user <> current_user; SET ROLE NONE returns to ${who})`,
+    );
   }
+  if (facts.superuser) out.push(`${who} is a SUPERUSER`);
+  if (facts.bypassrls) out.push(`${who} has BYPASSRLS`);
+  if (facts.createrole) out.push(`${who} has CREATEROLE`);
+  if (facts.createdb) out.push(`${who} has CREATEDB`);
+  if (facts.replication) out.push(`${who} has REPLICATION`);
+  if (facts.privilegedRoles.length) {
+    out.push(`${who} can SET ROLE to superuser/BYPASSRLS role(s): ${facts.privilegedRoles.join(', ')}`);
+  }
+  const memberships = facts.memberships.filter(m => !ALLOWED_MEMBERSHIPS[role].includes(m));
+  if (memberships.length) out.push(`${who} is a member of role(s) ${memberships.join(', ')} (none is allowed)`);
+  if (facts.schemaCreate.length) out.push(`${who} may CREATE in schema(s) ${facts.schemaCreate.join(', ')}`);
   const owned = facts.owned.filter(o => !(JOB_OWNS_DEFINERS && role === 'job' && o.definerFunction && o.ownedBySelf));
   if (owned.length) {
     const shown = owned.slice(0, 5).map(o => `${o.object} (owner ${o.owner})`);
     const more = owned.length > shown.length ? ` and ${owned.length - shown.length} more` : '';
-    out.push(`${facts.role} owns objects in public/app: ${shown.join(', ')}${more}`);
+    out.push(`${who} owns objects in public/app: ${shown.join(', ')}${more}`);
   }
   return out;
 }
