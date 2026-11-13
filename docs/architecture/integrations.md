@@ -228,7 +228,7 @@ status: living
 **Optional env vars (Backend):**
 - `ASSEMBLYAI_API_KEY` - AssemblyAI key for voice transcription (required for `/voice/token` endpoint)
 - `MOCK_LLM=true` - Toggle mock LLM responses for E2E testing
-- `E2E_AUTH_BYPASS=true` - Bypass auth for E2E tests
+- `E2E_AUTH_BYPASS=true` - Bypass auth for E2E tests; honoured only with `NODE_ENV` `development` or `test` (the API refuses to start otherwise)
 - `E2E_FIXTURE_ID` - Use pre-canned responses for E2E tests
 - `ENABLE_PROMPT_LOGGING` - Enable prompt debug logging (dev only, blocked in production)
 - `ENABLE_AUDIT_STREAM` - Enable AI audit stream channel for monitoring

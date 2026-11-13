@@ -565,7 +565,7 @@ def preflight(api_url: str, app_url: str, skip_services: bool = False) -> dict[s
         method="POST",
         body=b'{"email":"mwf-gold-loop-probe@e2e.test","name":"Gold Loop Probe"}',
     )
-    require(probe_ok, "E2E seed endpoint failed; start backend with E2E_AUTH_BYPASS=true")
+    require(probe_ok, "E2E seed endpoint failed; start backend with E2E_AUTH_BYPASS=true and NODE_ENV=development (or test)")
     require(http_ok(app_url), f"E2E web app is not reachable at {app_url}")
     require(":8082" in app_url or os.environ.get("MWF_ALLOW_NON_E2E_WEB"), "Refusing non-8082 app URL without MWF_ALLOW_NON_E2E_WEB=1")
     checks["services"] = "ok"
