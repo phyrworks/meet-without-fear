@@ -88,17 +88,43 @@ describeTarget('the email domain (target)', () => {
     expect(await insertUser(local(255))).toBe('23514');
   });
 
-  it('LIKE works under the nondeterministic collation (PG18) and is case-insensitive there; regex and ILIKE are refused', async () => {
+  it('LIKE works under the nondeterministic collation (PG18) and is case-insensitive there', async () => {
     const [r] = await run.sql<Record<string, boolean>>(
       `SELECT 'DELETED+x'::email LIKE 'deleted+%' AS like_ci, 'DELETED+x'::email COLLATE "C" LIKE 'deleted+%' AS like_c`,
     );
     expect(r).toEqual({ like_ci: true, like_c: false });
-    await expect(run.sql(`SELECT 1 FROM "user" WHERE email ~ 'a'`)).rejects.toThrow(
-      /nondeterministic collations are not supported for regular expressions/,
+  });
+
+  it.each([
+    ['~', `email ~ 'a'`, 'regular expressions'],
+    ['~*', `email ~* 'a'`, 'regular expressions'],
+    ['SIMILAR TO', `email SIMILAR TO 'a%'`, 'regular expressions'],
+    ['substring from a regex', `substring(email from 'a') IS NULL`, 'regular expressions'],
+    ['regexp_replace', `regexp_replace(email, 'a', 'b') = ''`, 'regular expressions'],
+    ['ILIKE', `email ILIKE 'a%'`, 'ILIKE'],
+    ['starts_with', `starts_with(email, 'a')`, 'substring searches'],
+    ['^@', `email ^@ 'a'`, 'substring searches'],
+  ])('%s on an email is refused under email_ci', async (_name, predicate, what) => {
+    await expect(run.sql(`SELECT 1 FROM "user" WHERE ${predicate}`)).rejects.toThrow(
+      new RegExp(`nondeterministic collations are not supported for ${what}`),
     );
-    await expect(run.sql(`SELECT 1 FROM "user" WHERE email ILIKE 'a%'`)).rejects.toThrow(
-      /nondeterministic collations are not supported for ILIKE/,
+  });
+
+  it('position / strpos / replace / split_part work on an email (PG18) and match case-insensitively; COLLATE "C" makes a regex legal', async () => {
+    const [r] = await run.sql<Record<string, unknown>>(
+      `SELECT position('x' in e) AS pos, strpos(e, 'x') AS strpos, replace(e, 'x', 'y') AS replaced,
+              split_part(e, '@', 2) AS domain, e COLLATE "C" ~ '^A@' AS regex_c
+       FROM (SELECT 'A@X.COM'::email AS e) t`,
     );
+    expect(r).toEqual({ pos: 3, strpos: 3, replaced: 'A@y.COM', domain: 'X.COM', regex_c: true });
+  });
+
+  it('the collation is ICU-versioned (REFRESH VERSION after an ICU change, infra/aws/README.md)', async () => {
+    const [r] = await run.sql<{ recorded: string | null; actual: string | null }>(
+      `SELECT collversion AS recorded, pg_collation_actual_version(oid) AS actual FROM pg_collation WHERE collname = 'email_ci'`,
+    );
+    expect(r.recorded).toMatch(/^\d+(\.\d+)*$/);
+    expect(r.actual).toBe(r.recorded);
   });
 
   it('the tombstone CHECK accepts exactly deleted+<id> (compared under "C"): not a case variant, not a live address', async () => {

@@ -328,8 +328,8 @@ COMMENT ON DOMAIN intensity IS 'A 1-10 self-rated intensity (mood_reading.intens
 -- (array_agg(milestone_key::text …)); a row comparison against it needs
 -- ::milestone_key on the other side, not ::text.
 CREATE DOMAIN milestone_key AS text
-  CHECK (VALUE ~ '^[a-z][a-z0-9_]*$');
-COMMENT ON DOMAIN milestone_key IS 'A milestone key: a lower-case identifier (e.g. feel_heard). The set of keys is the milestone table (FK); a domain rather than an enum so a new milestone is one seed row, not ALTER TYPE ADD VALUE.';
+  CHECK (char_length(VALUE) <= 64 AND VALUE ~ '^[a-z][a-z0-9_]*$');
+COMMENT ON DOMAIN milestone_key IS 'A milestone key: a lower-case identifier of at most 64 characters (e.g. feel_heard). The set of keys is the milestone table (FK); a domain rather than an enum so a new milestone is one seed row, not ALTER TYPE ADD VALUE.';
 
 -- work-k5fk.5: an email address compares case-insensitively and nothing else.
 -- email_ci is ICU's root locale at strength level 2 (ks-level2): case is
@@ -338,19 +338,36 @@ COMMENT ON DOMAIN milestone_key IS 'A milestone key: a lower-case identifier (e.
 -- and 'ä@x.test' differs from 'a@x.test'. It is nondeterministic, so the
 -- UNIQUE on "user".email refuses a case variant of an existing address and
 -- `WHERE email = $1` finds it whatever the case. What a nondeterministic
--- collation refuses (measured, PG 18.6): regular expressions and ILIKE raise
--- "nondeterministic collations are not supported for …" — so no Prisma
--- `mode: 'insensitive'` filter on an email (routes/brain.ts search uses plain
--- `contains`, a LIKE, which PG18 supports and which is case-insensitive here),
--- and a CHECK that must be exact compares under COLLATE "C" (the tombstone
--- CHECK on "user"). Prisma sees a String column (the domain and the collation
--- are invisible to `db pull` / `migrate diff`). Functions keep text arguments:
--- app.create_user_for_clerk(…, email text, …) is checked when it inserts.
+-- collation refuses (measured, PG 18.6; email-domain.target.test.ts), each
+-- raising "nondeterministic collations are not supported for …":
+--   regular expressions: ~, ~*, SIMILAR TO, substring(… from <regex>),
+--     regexp_replace (and the other regexp_* functions);
+--   ILIKE;
+--   prefix searches: starts_with() and ^@.
+-- What works, and matches case-insensitively here: = and the UNIQUE, LIKE,
+-- position() / strpos(), replace() and split_part() (replace('A@X.COM', 'x',
+-- 'y') gives 'A@y.COM'). Prisma's contains / startsWith / endsWith send
+-- LIKE and work; `mode: 'insensitive'` sends ILIKE and is refused, so no
+-- email filter uses it (routes/brain.ts search). A test that must be exact
+-- compares under COLLATE "C" (the tombstone CHECK on
+-- "user"; `email COLLATE "C" ~ …` for a regex). Prisma sees a String column
+-- (the domain and the collation are invisible to `db pull` / `migrate
+-- diff`). Functions keep text arguments: app.create_user_for_clerk(…, email
+-- text, …) is checked when it inserts.
+--
+-- ICU dependency: email_ci is the database's first ICU collation, and the
+-- UNIQUE index on "user".email is ordered by it. PostgreSQL records the ICU
+-- collation version (pg_collation.collversion; 153.120 on the PG 18.6 dev
+-- container). After an ICU change — a PostgreSQL image / engine upgrade, or a
+-- restore onto a host with another ICU — PostgreSQL warns "collation email_ci
+-- has version mismatch"; then REINDEX INDEX user_email_key and ALTER
+-- COLLATION email_ci REFRESH VERSION (infra/aws/README.md "Rollback and
+-- updates").
 CREATE COLLATION email_ci (provider = icu, locale = 'und-u-ks-level2', deterministic = false);
-COMMENT ON COLLATION email_ci IS 'Case-insensitive, otherwise exact (ICU und-u-ks-level2, nondeterministic): the collation of the email domain. Regex and ILIKE are refused under it; LIKE works and ignores case.';
+COMMENT ON COLLATION email_ci IS 'Case-insensitive, otherwise exact (ICU und-u-ks-level2, nondeterministic): the collation of the email domain. Refused under it: regex (~, ~*, SIMILAR TO, substring from a regex, regexp_*), ILIKE, starts_with() and ^@. Works and ignores case: =, LIKE, position()/strpos(), replace(), split_part(). ICU-versioned (collversion): after an ICU change (engine upgrade, restore) REINDEX INDEX user_email_key, then ALTER COLLATION email_ci REFRESH VERSION.';
 CREATE DOMAIN email AS text COLLATE email_ci
   CHECK (char_length(VALUE) <= 254);
-COMMENT ON DOMAIN email IS 'An email address (at most 254 characters, RFC 5321), compared case-insensitively (collation email_ci): a case variant is the same address, a plus-address is not. Never ~ or ILIKE (refused); an exact comparison uses COLLATE "C".';
+COMMENT ON DOMAIN email IS 'An email address (at most 254 characters, RFC 5321), compared case-insensitively (collation email_ci): a case variant is the same address, a plus-address is not. Refused on it: regex (~, ~*, SIMILAR TO, substring from a regex, regexp_*), ILIKE, starts_with() and ^@; = , LIKE, position()/strpos(), replace() and split_part() work and ignore case. An exact comparison or a regex uses COLLATE "C".';
 
 -- ----------------------------------------------------------------------------
 -- Enums, in schema.prisma order.

@@ -105,6 +105,17 @@ member of `mwf_job`) is refused until the design note §7 row 9c cutover; that i
 - if docker cannot run the image to look (any exit but 0/1 from `test -f`): the deploy aborts.
 There is no switch to skip the preflight for a guarded image. Failed migrations/readiness leave the deployment failed; do not blindly restore an older database or automatically down-migrate. An app rollback does not undo schema changes. Before AWS receives writes, Render can be resumed with its original DNS record. First reset its frozen role setting using an operator connection: `SET default_transaction_read_only=off; ALTER ROLE be_heard_db_user RESET default_transaction_read_only;`. After AWS receives writes, freeze writes and move the latest data back before routing to Render, or repair AWS in place.
 
+### ICU collation versions
+
+The target-shape schema has one ICU collation, `email_ci` (the `email` domain on `"user".email`, work-k5fk.5), and the unique index `user_email_key` is ordered by it. PostgreSQL records the ICU version the collation was created with (`SELECT collname, collversion, pg_collation_actual_version(oid) FROM pg_collation WHERE collname = 'email_ci';` — 153.120 on the PG 18.6 dev container). A PostgreSQL image or engine upgrade, or a restore onto a host whose ICU differs, can change the sort order under that index; PostgreSQL then logs `collation "email_ci" has version mismatch`. After any such change, as the table owner (`mwf_migrator`), with the API stopped:
+
+```sql
+REINDEX INDEX user_email_key;
+ALTER COLLATION email_ci REFRESH VERSION;
+```
+
+Check for duplicates first if the reindex fails (`SELECT lower(email), count(*) FROM "user" GROUP BY 1 HAVING count(*) > 1;`). Add this to every upgrade or restore checklist; it is a no-op when the versions match.
+
 Pin and review image upgrades, back up first, rehearse restore, and schedule major PostgreSQL upgrades/reboots deliberately. Database and certificate volumes have stable names and are never removed by deployment. Never use `docker compose down -v`. Reboot verification must show healthy containers, unchanged data and active timers. Keep disk space under review; release artifacts expire after 30 days in S3, and current/previous images must remain available locally.
 
 See `docs/deployment/aws-migration-status.md` for measured results, resource IDs, current release, DNS cutover and retirement status.

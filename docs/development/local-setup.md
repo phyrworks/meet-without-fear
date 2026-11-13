@@ -279,6 +279,12 @@ Prisma P3005; drop and re-run `--dev`, or, if its catalog equals a fresh baselin
 (`pg_dump --schema-only` diff), record it with
 `npx prisma migrate resolve --applied 20261026120000_target_shape_baseline`.
 
+**ICU collation.** The baseline creates the ICU collation `email_ci` (`"user".email`). After a
+new `mwf-postgres` image (a different ICU), PostgreSQL warns `collation "email_ci" has version
+mismatch` on a database built before it: rebuild the database, or run `REINDEX INDEX
+user_email_key; ALTER COLLATION email_ci REFRESH VERSION;` in it (`infra/aws/README.md`, "ICU
+collation versions").
+
 ### Gaps in the README's env list
 
 `README.md` documents `DATABASE_URL`, Clerk, Ably and Resend but **omits the AWS Bedrock
