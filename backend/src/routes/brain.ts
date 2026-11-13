@@ -20,7 +20,7 @@ type ActivityBlob = any;
 
 /*
  * Neural Monitor dashboard (TS-12, spec §6 "Brain dashboard"). Read-only,
- * through the `mwf_ops` role (OPS_DATABASE_URL; trailer T7 grants it SELECT on
+ * through the `mwf_ops` role (OPS_DATABASE_URL; tables.sql grants it SELECT on
  * exactly the tables read here). `brain_activity` rows are attributed at
  * capture by the job (`participant_id`, `reflection_id`); a reflection's
  * telemetry carries `reflection_id`, not `session_id`, so the dashboard keys an

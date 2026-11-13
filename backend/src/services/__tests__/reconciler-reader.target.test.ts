@@ -8,8 +8,8 @@
  * clone's app login loses SELECT on ai_memory, reconciler_result and
  * reconciler_guidance, which nothing else in this flow reads on the app
  * connection; the reconciler must still run end to end, because every one of
- * its reads goes through mwf_job's column grants (trailer T7, "reconciler
- * reader"). Message content cannot be revoked from the app (its own chat reads
+ * its reads goes through mwf_job's column grants (tables.sql, [TS-10 I4],
+ * "reconciler reader"). Message content cannot be revoked from the app (its own chat reads
  * need it), so that part is covered by review and the job-path grant test.
  *
  * FEEL_HEARD_B clone, app as `mwf_app` (identity binding on). Bob's consent

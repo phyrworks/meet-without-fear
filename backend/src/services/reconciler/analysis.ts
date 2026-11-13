@@ -35,8 +35,8 @@ import { stageAt, type MilestoneReached } from '../stage-shim';
 
 /**
  * Ruling R35: the reconciler runs as the JOB. Every read and write of the
- * analysis path goes through the job connection, whose column grants (trailer
- * T7, TS-10 block, "reconciler reader") are the whole of what it may see. The
+ * analysis path goes through the job connection, whose column grants (tables.sql,
+ * [TS-10] / [TS-10 I4], "reconciler reader") are the whole of what it may see. The
  * request that triggered an analysis never reads the other participant's rows
  * on its own (app) connection; it gets back only its caller-visible projection
  * (`runReconciler` with `forParticipantId`). The context builder stays the one
@@ -486,7 +486,7 @@ export function getDefaultReconcilerResult(): ReconcilerResult {
  * Write one analysis of an attempt: supersede the attempt's current result
  * (re-analysis), insert the new one with the next iteration, and its guidance
  * when there is any. JOB connection, one transaction, exactly the columns
- * trailer T7 grants (TS-10 block). T-result-live-attempt refuses a result on
+ * tables.sql grants mwf_job ([TS-10]). T-result-live-attempt refuses a result on
  * a SUPERSEDED round; that refusal is returned as null (a late result for a
  * retired round is dropped, spec §1.2).
  */

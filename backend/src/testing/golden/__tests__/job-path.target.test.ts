@@ -2,7 +2,7 @@
  * TS-9 fix round 1: the JOB path on the target, for real — the app's job
  * client logs in as `mwf_job` on the run database (driver: JOB_DATABASE_URL)
  * with identity binding on, so every job write runs under the job's actual
- * column grants (trailer T7) and every identity-bound read under the
+ * column grants (tables.sql, next to each table) and every identity-bound read under the
  * caller's identity. Not a golden (nothing recorded).
  *
  *   - a streaming chat turn: the user's turn (app) and the AI reply (job) land

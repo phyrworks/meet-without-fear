@@ -15,19 +15,20 @@
 -- the generated columns and every CHECK live inline in tables.sql):
 --   T2  sql-only.sql (sql_ partial / expression indexes)
 --   T4  app.* functions — invoker helpers, then the SECURITY DEFINER helpers and
---       writers handed to mwf_job in the TS-1 order (GRANT CREATE → ALTER OWNER
---       → REVOKE CREATE → SET ROLE mwf_job for REVOKE/GRANT EXECUTE → RESET ROLE)
---   T5  triggers (the T-* set and touch_updated_at ×35)
---   T6  views (security_invoker = true), SELECT to mwf_app
---   T7  grants (mwf_job, mwf_ops, mwf_auth; mwf_app: views and EXECUTE only)
+--       writers, each followed by its REVOKE / GRANT EXECUTE; then the definers
+--       are handed to mwf_job (GRANT CREATE → ALTER OWNER → REVOKE CREATE)
+--   T5  triggers (the T-* set and touch_updated_at ×35), each function followed
+--       by its REVOKE EXECUTE FROM PUBLIC
+--   T6  views (security_invoker = true), each followed by its SELECT grants
+--   T7  (empty since work-k5fk.7: every grant sits next to its object)
 --   T8  catalog assertions (plan step 20). The database is empty, so there are
 --       no existing rows to re-check: every invariant is enforced by its
 --       trigger or CHECK from the first write on.
 --
 -- Not here: RLS ENABLE/FORCE and policies (TS-16); the milestone seed (in
 -- tables.sql, after the milestone table); schema app and app.current_user_id()
--- (preamble.sql); the tables, their constraints, the uuid7 and intensity
--- domains (tables.sql).
+-- (preamble.sql); the tables, their constraints, the domains and every table
+-- grant (tables.sql).
 -- ============================================================================
 
 -- ---------------------------------------------------------------------------
@@ -74,6 +75,12 @@ CREATE FUNCTION app.is_member(session uuid) RETURNS boolean
       WHERE p.session_id = is_member.session AND p.user_id = app.current_user_id()
     )
   $$;
+-- No caller needs EXECUTE on a trigger function.
+REVOKE EXECUTE ON FUNCTION app.touch_updated_at() FROM PUBLIC;
+-- mwf_app: no app caller today; the RLS policies of design note §6 (rows 9d–9g) evaluate it as mwf_app. mwf_job: its own writer, from a job connection.
+REVOKE EXECUTE ON FUNCTION app.is_member(uuid) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION app.is_member(uuid) TO mwf_app;
+GRANT EXECUTE ON FUNCTION app.is_member(uuid) TO mwf_job;
 
 -- The caller's co-participant's user id: NULL unless the caller is a
 -- participant and the session has exactly two human participants (kept for
@@ -90,6 +97,10 @@ CREATE FUNCTION app.partner_user_id(session uuid) RETURNS uuid
       AND me.user_id = app.current_user_id()
       AND (SELECT count(*) FROM public.participant c WHERE c.session_id = me.session_id AND c.kind = 'human') = 2
   $$;
+-- mwf_app: no app caller today; the RLS policies of design note §6 (rows 9d–9g) evaluate it as mwf_app. mwf_job: its own writer, from a job connection.
+REVOKE EXECUTE ON FUNCTION app.partner_user_id(uuid) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION app.partner_user_id(uuid) TO mwf_app;
+GRANT EXECUTE ON FUNCTION app.partner_user_id(uuid) TO mwf_job;
 
 -- Does the caller share this participant's session?
 CREATE FUNCTION app.is_co_participant(participant uuid) RETURNS boolean
@@ -102,6 +113,10 @@ CREATE FUNCTION app.is_co_participant(participant uuid) RETURNS boolean
       WHERE them.id = is_co_participant.participant AND me.user_id = app.current_user_id()
     )
   $$;
+-- mwf_app: no app caller today; the RLS policies of design note §6 (rows 9d–9g) evaluate it as mwf_app. mwf_job: its own writer, from a job connection.
+REVOKE EXECUTE ON FUNCTION app.is_co_participant(uuid) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION app.is_co_participant(uuid) TO mwf_app;
+GRANT EXECUTE ON FUNCTION app.is_co_participant(uuid) TO mwf_job;
 
 -- The caller's participant id in this session (NULL if none).
 CREATE FUNCTION app.my_participant(session uuid) RETURNS uuid
@@ -111,6 +126,10 @@ CREATE FUNCTION app.my_participant(session uuid) RETURNS uuid
     SELECT p.id FROM public.participant p
     WHERE p.session_id = my_participant.session AND p.user_id = app.current_user_id()
   $$;
+-- mwf_app: no app caller today; the RLS policies of design note §6 (rows 9d–9g) evaluate it as mwf_app. mwf_job: its own writer, from a job connection.
+REVOKE EXECUTE ON FUNCTION app.my_participant(uuid) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION app.my_participant(uuid) TO mwf_app;
+GRANT EXECUTE ON FUNCTION app.my_participant(uuid) TO mwf_job;
 
 -- Content-free status of every empathy direction in the caller's sessions
 -- (the latest round per direction): what both parties may see while neither
@@ -129,6 +148,10 @@ CREATE FUNCTION app.empathy_direction_status()
                   WHERE me.session_id = au.session_id AND me.user_id = app.current_user_id())
     ORDER BY a.author_participant_id, a.subject_participant_id, a.round DESC
   $$;
+-- mwf_app: the identity-bound read behind v_empathy_direction_status. mwf_job: its own writer, from a job connection.
+REVOKE EXECUTE ON FUNCTION app.empathy_direction_status() FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION app.empathy_direction_status() TO mwf_app;
+GRANT EXECUTE ON FUNCTION app.empathy_direction_status() TO mwf_job;
 
 -- The only writer of session.status (spec §1.1 transition set). Members or
 -- the job; T-cardinality-1 (trigger) still refuses → ACTIVE without two
@@ -163,6 +186,10 @@ CREATE FUNCTION app.session_set_status(session uuid, status public.session_statu
     WHERE s.id = session_set_status.session;
   END
   $$;
+-- mwf_app: invitations.ts accept, on the app transaction. mwf_job: its own writer, from a job connection.
+REVOKE EXECUTE ON FUNCTION app.session_set_status(uuid, public.session_status) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION app.session_set_status(uuid, public.session_status) TO mwf_app;
+GRANT EXECUTE ON FUNCTION app.session_set_status(uuid, public.session_status) TO mwf_job;
 
 -- The only writer of empathy_attempt.status (spec §1.2 transition table; P3 §5).
 -- Actors (P3 §5: a non-author never moves a row into a disclosing state):
@@ -292,6 +319,10 @@ CREATE FUNCTION app.empathy_set_status(attempt uuid, status public.empathy_statu
     RETURN a.id;
   END
   $$;
+-- mwf_app: the request-path writer (work-k5fk.10.2). mwf_job: its own writer, from a job connection.
+REVOKE EXECUTE ON FUNCTION app.empathy_set_status(uuid, public.empathy_status, text) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION app.empathy_set_status(uuid, public.empathy_status, text) TO mwf_app;
+GRANT EXECUTE ON FUNCTION app.empathy_set_status(uuid, public.empathy_status, text) TO mwf_job;
 
 -- need_share is written only here, by the job (it holds the session key that
 -- encrypts shared_text; EXECUTE is the job's alone), after the owner's
@@ -321,6 +352,9 @@ CREATE FUNCTION app.need_share(need uuid, shared_text text) RETURNS void
     ON CONFLICT (need_id) DO NOTHING;
   END
   $$;
+-- Not mwf_app: the job's. mwf_job: its own writer, from a job connection.
+REVOKE EXECUTE ON FUNCTION app.need_share(uuid, text) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION app.need_share(uuid, text) TO mwf_job;
 
 -- Revoke a shared need: need_share.revoked_at and the consent's REVOKED in
 -- one transaction (spec §1.4). The need's owner (identity-bound) or the job.
@@ -342,6 +376,10 @@ CREATE FUNCTION app.need_revoke_share(need uuid) RETURNS void
     WHERE need_id = need_revoke_share.need AND decision = 'GRANTED';
   END
   $$;
+-- mwf_app: the request-path writer (work-k5fk.10.2). mwf_job: its own writer, from a job connection.
+REVOKE EXECUTE ON FUNCTION app.need_revoke_share(uuid) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION app.need_revoke_share(uuid) TO mwf_app;
+GRANT EXECUTE ON FUNCTION app.need_revoke_share(uuid) TO mwf_job;
 
 -- app.anonymize_user_in_session(session, participant): steps 1–4 and 7
 -- (participant key) of the account walk for one session (spec §4). The
@@ -394,6 +432,9 @@ CREATE FUNCTION app.anonymize_user_in_session(session uuid, participant uuid) RE
     UPDATE public.participant_key SET destroyed_at = now() WHERE participant_id = pid AND destroyed_at IS NULL;
   END
   $$;
+-- Not mwf_app: the job is its only caller (session-deletion.ts). mwf_job: its own writer, from a job connection.
+REVOKE EXECUTE ON FUNCTION app.anonymize_user_in_session(uuid, uuid) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION app.anonymize_user_in_session(uuid, uuid) TO mwf_job;
 
 -- app.anonymize_user_account(user): the complete walk (spec §4, P1-13).
 -- The user themself (identity-bound, never NULL) or the job.
@@ -433,6 +474,9 @@ CREATE FUNCTION app.anonymize_user_account("user" uuid) RETURNS void
     UPDATE public.user_key SET destroyed_at = now() WHERE user_id = v_uid AND destroyed_at IS NULL;
   END
   $$;
+-- Not mwf_app: the job is its only caller (account-deletion.ts). mwf_job: its own writer, from a job connection.
+REVOKE EXECUTE ON FUNCTION app.anonymize_user_account(uuid) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION app.anonymize_user_account(uuid) TO mwf_job;
 
 -- Pre-identity bootstrap (P3 §5): resolve a Clerk id; create the user for a
 -- first login (mwf_auth only, INSERT only).
@@ -442,6 +486,9 @@ CREATE FUNCTION app.resolve_user_by_clerk_id(clerk_id text) RETURNS uuid
   AS $$
     SELECT u.id FROM public."user" u WHERE u.clerk_id = resolve_user_by_clerk_id.clerk_id AND u.deleted_at IS NULL
   $$;
+-- mwf_auth: the lookup that precedes first-login creation (pre-identity bootstrap). No app caller.
+REVOKE EXECUTE ON FUNCTION app.resolve_user_by_clerk_id(text) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION app.resolve_user_by_clerk_id(text) TO mwf_auth;
 
 CREATE FUNCTION app.create_user_for_clerk(clerk_id text, email text, first_name text DEFAULT NULL, last_name text DEFAULT NULL)
   RETURNS uuid
@@ -452,10 +499,17 @@ CREATE FUNCTION app.create_user_for_clerk(clerk_id text, email text, first_name 
     VALUES (create_user_for_clerk.clerk_id, create_user_for_clerk.email, create_user_for_clerk.first_name, create_user_for_clerk.last_name)
     RETURNING id
   $$;
+-- mwf_auth only: first-login creation.
+REVOKE EXECUTE ON FUNCTION app.create_user_for_clerk(text, text, text, text) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION app.create_user_for_clerk(text, text, text, text) TO mwf_auth;
 
 -- Hand the definer functions to mwf_job (TS-1 order, measured there with a
--- non-superuser migrator): CREATE on the schema for the hand-over only; then
--- the EXECUTE grants issued AS mwf_job, the owner.
+-- non-superuser migrator): CREATE on the schema for the hand-over only. Their
+-- EXECUTE grants were issued above, next to each function, by the migrator as
+-- owner; ALTER OWNER rewrites each ACL to the new owner (grantee and grantor),
+-- which is exactly what issuing them AS mwf_job after the hand-over produced
+-- before work-k5fk.7 (app-grants.target.test.ts privilege matrix; pg_proc.proacl
+-- byte-identical).
 GRANT CREATE ON SCHEMA app TO mwf_job;
 ALTER FUNCTION app.is_member(uuid) OWNER TO mwf_job;
 ALTER FUNCTION app.partner_user_id(uuid) OWNER TO mwf_job;
@@ -471,38 +525,6 @@ ALTER FUNCTION app.anonymize_user_account(uuid) OWNER TO mwf_job;
 ALTER FUNCTION app.resolve_user_by_clerk_id(text) OWNER TO mwf_job;
 ALTER FUNCTION app.create_user_for_clerk(text, text, text, text) OWNER TO mwf_job;
 REVOKE CREATE ON SCHEMA app FROM mwf_job;
-
-SET ROLE mwf_job;
-REVOKE EXECUTE ON FUNCTION
-  app.is_member(uuid), app.partner_user_id(uuid),
-  app.is_co_participant(uuid), app.my_participant(uuid), app.empathy_direction_status(),
-  app.session_set_status(uuid, public.session_status), app.empathy_set_status(uuid, public.empathy_status, text),
-  app.need_share(uuid, text), app.need_revoke_share(uuid),
-  app.anonymize_user_in_session(uuid, uuid), app.anonymize_user_account(uuid),
-  app.resolve_user_by_clerk_id(text), app.create_user_for_clerk(text, text, text, text)
-  FROM PUBLIC;
--- mwf_app (work-k5fk.10.2): the request-path writers it calls (session_set_status — invitations.ts
--- accept, on the app transaction; empathy_set_status; need_revoke_share) and the identity-bound
--- read behind v_empathy_direction_status. is_member, partner_user_id, is_co_participant and
--- my_participant have no app caller today: they are kept because the RLS policies of design note
--- §6 (rows 9d–9g) evaluate them as mwf_app. Not granted: anonymize_user_in_session and
--- anonymize_user_account (the job is their only caller: session-deletion.ts, account-deletion.ts),
--- resolve_user_by_clerk_id (mwf_auth's; no app caller), need_share (the job's).
-GRANT EXECUTE ON FUNCTION
-  app.is_member(uuid), app.partner_user_id(uuid), app.is_co_participant(uuid), app.my_participant(uuid), app.empathy_direction_status(),
-  app.session_set_status(uuid, public.session_status), app.empathy_set_status(uuid, public.empathy_status, text),
-  app.need_revoke_share(uuid)
-  TO mwf_app;
--- mwf_job: its own writers when called from a job connection.
-GRANT EXECUTE ON FUNCTION
-  app.is_member(uuid), app.partner_user_id(uuid), app.is_co_participant(uuid), app.my_participant(uuid),
-  app.empathy_direction_status(), app.session_set_status(uuid, public.session_status),
-  app.empathy_set_status(uuid, public.empathy_status, text), app.need_share(uuid, text), app.need_revoke_share(uuid),
-  app.anonymize_user_in_session(uuid, uuid), app.anonymize_user_account(uuid)
-  TO mwf_job;
--- mwf_auth: first-login creation only (and the lookup that precedes it).
-GRANT EXECUTE ON FUNCTION app.create_user_for_clerk(text, text, text, text), app.resolve_user_by_clerk_id(text) TO mwf_auth;
-RESET ROLE;
 
 -- ---------------------------------------------------------------------------
 -- T5. Triggers (spec §5 "Lives only in migration SQL"; §7). Invoker rights
@@ -528,6 +550,8 @@ CREATE FUNCTION app.t_session_cardinality() RETURNS trigger
     RETURN NEW;
   END
   $$;
+-- No caller needs EXECUTE on a trigger function.
+REVOKE EXECUTE ON FUNCTION app.t_session_cardinality() FROM PUBLIC;
 CREATE TRIGGER t_cardinality_1 BEFORE UPDATE OF status ON public.session
   FOR EACH ROW EXECUTE FUNCTION app.t_session_cardinality();
 
@@ -544,6 +568,8 @@ CREATE FUNCTION app.t_participant_cardinality() RETURNS trigger
     RETURN NULL;
   END
   $$;
+-- No caller needs EXECUTE on a trigger function.
+REVOKE EXECUTE ON FUNCTION app.t_participant_cardinality() FROM PUBLIC;
 CREATE CONSTRAINT TRIGGER t_cardinality_2 AFTER DELETE OR UPDATE OF kind, user_id, left_at ON public.participant
   DEFERRABLE INITIALLY DEFERRED
   FOR EACH ROW EXECUTE FUNCTION app.t_participant_cardinality();
@@ -570,6 +596,8 @@ CREATE FUNCTION app.t_message_immutable() RETURNS trigger
     RETURN NEW;
   END
   $$;
+-- No caller needs EXECUTE on a trigger function.
+REVOKE EXECUTE ON FUNCTION app.t_message_immutable() FROM PUBLIC;
 CREATE TRIGGER t_message_immutable BEFORE UPDATE ON public.message
   FOR EACH ROW EXECUTE FUNCTION app.t_message_immutable();
 
@@ -622,6 +650,8 @@ CREATE FUNCTION app.t_message_app_insert() RETURNS trigger
     RETURN NEW;
   END
   $$;
+-- No caller needs EXECUTE on a trigger function.
+REVOKE EXECUTE ON FUNCTION app.t_message_app_insert() FROM PUBLIC;
 CREATE TRIGGER t_message_app_insert BEFORE INSERT ON public.message
   FOR EACH ROW EXECUTE FUNCTION app.t_message_app_insert();
 
@@ -650,6 +680,8 @@ CREATE FUNCTION app.t_message_app_delete() RETURNS trigger
     RETURN OLD;
   END
   $$;
+-- No caller needs EXECUTE on a trigger function.
+REVOKE EXECUTE ON FUNCTION app.t_message_app_delete() FROM PUBLIC;
 CREATE TRIGGER t_message_app_delete BEFORE DELETE ON public.message
   FOR EACH ROW EXECUTE FUNCTION app.t_message_app_delete();
 
@@ -666,6 +698,8 @@ CREATE FUNCTION app.t_attempt_same_session() RETURNS trigger
     RETURN NEW;
   END
   $$;
+-- No caller needs EXECUTE on a trigger function.
+REVOKE EXECUTE ON FUNCTION app.t_attempt_same_session() FROM PUBLIC;
 CREATE TRIGGER t_same_session BEFORE INSERT OR UPDATE OF author_participant_id, subject_participant_id ON public.empathy_attempt
   FOR EACH ROW EXECUTE FUNCTION app.t_attempt_same_session();
 
@@ -682,6 +716,8 @@ CREATE FUNCTION app.t_review_subject() RETURNS trigger
     RETURN NEW;
   END
   $$;
+-- No caller needs EXECUTE on a trigger function.
+REVOKE EXECUTE ON FUNCTION app.t_review_subject() FROM PUBLIC;
 CREATE TRIGGER t_review_subject BEFORE INSERT OR UPDATE OF attempt_id, reviewer_participant_id ON public.empathy_review
   FOR EACH ROW EXECUTE FUNCTION app.t_review_subject();
 
@@ -712,6 +748,8 @@ CREATE FUNCTION app.t_consent_owner() RETURNS trigger
     RETURN NEW;
   END
   $$;
+-- No caller needs EXECUTE on a trigger function.
+REVOKE EXECUTE ON FUNCTION app.t_consent_owner() FROM PUBLIC;
 CREATE TRIGGER t_consent_owner BEFORE INSERT OR UPDATE ON public.consent
   FOR EACH ROW EXECUTE FUNCTION app.t_consent_owner();
 
@@ -747,6 +785,8 @@ CREATE FUNCTION app.t_consent_transitions() RETURNS trigger
     RETURN NEW;
   END
   $$;
+-- No caller needs EXECUTE on a trigger function.
+REVOKE EXECUTE ON FUNCTION app.t_consent_transitions() FROM PUBLIC;
 CREATE TRIGGER t_consent_transitions BEFORE INSERT OR UPDATE ON public.consent
   FOR EACH ROW EXECUTE FUNCTION app.t_consent_transitions();
 
@@ -763,6 +803,8 @@ CREATE FUNCTION app.t_need_share_owner() RETURNS trigger
     RETURN NEW;
   END
   $$;
+-- No caller needs EXECUTE on a trigger function.
+REVOKE EXECUTE ON FUNCTION app.t_need_share_owner() FROM PUBLIC;
 CREATE TRIGGER t_need_share_owner BEFORE INSERT OR UPDATE ON public.need_share
   FOR EACH ROW EXECUTE FUNCTION app.t_need_share_owner();
 
@@ -782,6 +824,8 @@ CREATE FUNCTION app.t_need_share_terminal() RETURNS trigger
     RETURN NEW;
   END
   $$;
+-- No caller needs EXECUTE on a trigger function.
+REVOKE EXECUTE ON FUNCTION app.t_need_share_terminal() FROM PUBLIC;
 CREATE TRIGGER t_need_share_terminal BEFORE UPDATE ON public.need_share
   FOR EACH ROW EXECUTE FUNCTION app.t_need_share_terminal();
 
@@ -798,6 +842,8 @@ CREATE FUNCTION app.t_result_live_attempt() RETURNS trigger
     RETURN NEW;
   END
   $$;
+-- No caller needs EXECUTE on a trigger function.
+REVOKE EXECUTE ON FUNCTION app.t_result_live_attempt() FROM PUBLIC;
 CREATE TRIGGER t_result_live_attempt BEFORE INSERT ON public.reconciler_result
   FOR EACH ROW EXECUTE FUNCTION app.t_result_live_attempt();
 
@@ -829,6 +875,8 @@ CREATE FUNCTION app.agreement_parties_ok(agreement uuid) RETURNS boolean
                                                    AND c.decision = 'WILLING'))
             FROM public.agreement ag WHERE ag.id = agreement_parties_ok.agreement)
   $$;
+-- No caller needs EXECUTE on the predicate of T-agreement-parties.
+REVOKE EXECUTE ON FUNCTION app.agreement_parties_ok(uuid) FROM PUBLIC;
 CREATE FUNCTION app.t_agreement_parties() RETURNS trigger
   LANGUAGE plpgsql
   SET search_path = pg_catalog, public, pg_temp
@@ -868,21 +916,14 @@ CREATE FUNCTION app.t_agreement_parties() RETURNS trigger
     RETURN NULL;
   END
   $$;
+-- No caller needs EXECUTE on a trigger function.
+REVOKE EXECUTE ON FUNCTION app.t_agreement_parties() FROM PUBLIC;
 CREATE CONSTRAINT TRIGGER t_agreement_parties AFTER INSERT OR UPDATE OR DELETE ON public.agreement_party
   DEFERRABLE INITIALLY DEFERRED
   FOR EACH ROW EXECUTE FUNCTION app.t_agreement_parties();
 CREATE CONSTRAINT TRIGGER t_agreement_parties_on_agreement AFTER INSERT ON public.agreement
   DEFERRABLE INITIALLY DEFERRED
   FOR EACH ROW EXECUTE FUNCTION app.t_agreement_parties();
-
--- No caller needs EXECUTE on a trigger function or on the agreement_parties_ok predicate.
-REVOKE EXECUTE ON FUNCTION
-  app.touch_updated_at(), app.t_session_cardinality(), app.t_participant_cardinality(), app.t_message_immutable(),
-  app.t_message_app_insert(), app.t_message_app_delete(),
-  app.t_attempt_same_session(), app.t_review_subject(), app.t_consent_owner(), app.t_consent_transitions(),
-  app.t_need_share_owner(), app.t_need_share_terminal(), app.t_result_live_attempt(), app.t_agreement_parties(),
-  app.agreement_parties_ok(uuid)
-  FROM PUBLIC;
 
 -- touch_updated_at on the 35 tables that have updated_at (T8 asserts the set
 -- equals the catalog's). message and takeaway_link have none.
@@ -955,6 +996,7 @@ LEFT JOIN "user" u ON u.id = p.user_id
 LEFT JOIN conversation c ON c.participant_id = p.id AND c.kind = 'MAIN'
 LEFT JOIN conversation_read_state r ON r.participant_id = p.id
 LEFT JOIN user_preferences up ON up.user_id = p.user_id;
+GRANT SELECT ON v_participant TO mwf_app;
 
 -- Every other participant of the same session, one row per ordered pair (N-safe).
 CREATE VIEW v_co_participant WITH (security_invoker = true) AS
@@ -962,6 +1004,7 @@ SELECT p.id AS participant_id, p.session_id, o.id AS co_participant_id, o.kind A
        o.left_at AS co_left_at
 FROM participant p
 JOIN participant o ON o.session_id = p.session_id AND o.id <> p.id;
+GRANT SELECT ON v_co_participant TO mwf_app;
 
 -- Session-scoped milestones: reached by every present human participant?
 -- The array_agg(… uuid7 column …)::uuid[] casts in the views below keep the
@@ -979,6 +1022,7 @@ LEFT JOIN LATERAL (
     AND NOT EXISTS (SELECT 1 FROM participant_milestone pm WHERE pm.participant_id = p.id AND pm.milestone_key = m.key)
 ) w ON true
 WHERE m.scope = 'session';
+GRANT SELECT ON v_session_readiness TO mwf_app;
 
 -- Per participant: the furthest milestone reached (by ordinal; paused, ordinal
 -- 0, is off the journey) and its stage label; the next milestone; and two
@@ -1004,6 +1048,9 @@ LEFT JOIN LATERAL (
   WHERE n.ordinal > coalesce(cur.ordinal, 0)
   ORDER BY n.ordinal LIMIT 1
 ) nxt ON true;
+GRANT SELECT ON v_current_stage TO mwf_app;
+-- mwf_ops: the Neural Monitor dashboard's stage column (routes/brain.ts, stage-shim.ts).
+GRANT SELECT ON v_current_stage TO mwf_ops;
 
 -- Per direction: the current attempt (the live row, else the latest round)
 -- with its current reconciler result, open share offer and review.
@@ -1022,15 +1069,18 @@ LEFT JOIN LATERAL (
   SELECT * FROM context_share_offer x WHERE x.attempt_id = a.id AND x.status IN ('PENDING', 'OFFERED') ORDER BY x.iteration DESC LIMIT 1
 ) o ON true
 LEFT JOIN empathy_review v ON v.attempt_id = a.id AND v.reviewer_participant_id = a.subject_participant_id;
+GRANT SELECT ON v_empathy_direction TO mwf_app;
 
 -- need_share alone — never joins need (pass 2 N-1).
 CREATE VIEW v_need_shared WITH (security_invoker = true) AS
 SELECT need_id, participant_id, session_id, category, shared_text, shared_at
 FROM need_share
 WHERE revoked_at IS NULL;
+GRANT SELECT ON v_need_shared TO mwf_app;
 
 CREATE VIEW v_empathy_direction_status WITH (security_invoker = true) AS
 SELECT * FROM app.empathy_direction_status();
+GRANT SELECT ON v_empathy_direction_status TO mwf_app;
 
 -- Per shared need: covering proposals and who is WILLING on one; COVERED
 -- when every present human is, PARTIAL when some are, OPEN otherwise.
@@ -1066,6 +1116,7 @@ CROSS JOIN LATERAL (
   SELECT count(*) AS n FROM participant p WHERE p.session_id = ns.session_id AND p.kind = 'human' AND p.left_at IS NULL
 ) h
 WHERE ns.revoked_at IS NULL;
+GRANT SELECT ON v_need_coverage TO mwf_app;
 
 -- The three Stage4Closure arrays, computed (never an unshared need id). An
 -- open need is a live share with an OPEN disposition or no covering proposal
@@ -1087,6 +1138,7 @@ SELECT s.id AS session_id,
                                        WHERE pn.need_id = ns.need_id))),
                 '{}') AS open_need_ids
 FROM session s;
+GRANT SELECT ON v_session_closure_items TO mwf_app;
 
 -- The coordination state of a follow-up (replaces TendingCoordinationCycle).
 CREATE VIEW v_follow_up_cycle WITH (security_invoker = true) AS
@@ -1107,6 +1159,7 @@ CROSS JOIN LATERAL (
   WHERE p.session_id = f.session_id AND p.kind = 'human' AND p.left_at IS NULL
     AND (f.scope = 'SHARED' OR p.id = f.owner_participant_id)
 ) x;
+GRANT SELECT ON v_follow_up_cycle TO mwf_app;
 
 -- Per participant: messages in the MAIN conversation after last_viewed_at
 -- (not counting the participant's own), and the latest message time.
@@ -1119,6 +1172,7 @@ SELECT p.id AS participant_id, p.session_id, c.id AS conversation_id,
 FROM participant p
 JOIN conversation c ON c.participant_id = p.id AND c.kind = 'MAIN'
 LEFT JOIN conversation_read_state r ON r.participant_id = p.id;
+GRANT SELECT ON v_conversation_unread TO mwf_app;
 
 -- Per (user, theme): reflections and the latest activity (replaces RecurringTheme).
 CREATE VIEW v_reflection_theme WITH (security_invoker = true) AS
@@ -1126,248 +1180,15 @@ SELECT user_id, theme, count(*) AS reflection_count, max(updated_at) AS latest_u
 FROM reflection
 WHERE theme IS NOT NULL
 GROUP BY user_id, theme;
-
-GRANT SELECT ON v_participant, v_co_participant, v_session_readiness, v_current_stage, v_empathy_direction,
-                v_need_shared, v_empathy_direction_status, v_need_coverage, v_session_closure_items,
-                v_follow_up_cycle, v_conversation_unread, v_reflection_theme
-  TO mwf_app;
+GRANT SELECT ON v_reflection_theme TO mwf_app;
 
 -- ---------------------------------------------------------------------------
--- T7. Grants of mwf_job, mwf_ops and mwf_auth (mwf_app's table grants are in tables.sql,
--- next to each table, work-k5fk.10.2; these move there with work-k5fk.7). RLS is TS-16 / work-k5fk.10.
+-- T7. Grants: none here (work-k5fk.7). Every grant sits next to its object:
+-- table grants (every role) after each table in tables.sql, schema public's
+-- USAGE before the tables there, view grants after each view (T6), EXECUTE
+-- grants after each function (T4, T5), schema app's in preamble.sql.
+-- app-grants.target.test.ts snapshots the privilege matrix of every role.
 -- ---------------------------------------------------------------------------
-
--- mwf_job: exactly what the definer helpers and writers it owns read and
--- write — mwf_job is also the job's login role, so these are its direct
--- privileges too. Column lists everywhere a column list exists: SELECT only
--- the id / FK / filter columns a function reads (an UPDATE or DELETE with a
--- WHERE needs SELECT on what it reads), UPDATE only the columns a function
--- writes — never a routing column (participant.user_id/session_id,
--- empathy_attempt.author/subject; Phase 3 §4). DELETE cannot be narrowed.
-GRANT USAGE ON SCHEMA public TO mwf_job;
--- is_member, partner_user_id, is_co_participant, my_participant, every self/membership test, T-cardinality-*, T-same-session, reveal gate
-GRANT SELECT (id, session_id, user_id, kind, left_at) ON participant TO mwf_job;
--- anonymize_user_in_session step 2
-GRANT UPDATE (display_name, left_at) ON participant TO mwf_job;
--- empathy_set_status reads the row (%ROWTYPE) and RETURNING id; empathy_direction_status; T-consent-owner; anonymize (revealed_at filter)
-GRANT SELECT ON empathy_attempt TO mwf_job;
--- empathy_set_status: status moves, the reveal stamp (delivery columns for the job's delivery path)
-GRANT UPDATE (status, status_version, revealed_at, delivery_status, delivered_at, seen_at) ON empathy_attempt TO mwf_job;
--- empathy_set_status: round n+1 on resubmission
-GRANT INSERT (author_participant_id, subject_participant_id, round, supersedes_attempt_id, content, status) ON empathy_attempt TO mwf_job;
--- session_set_status, empathy_set_status (row lock), anonymize step 1
-GRANT SELECT (id, status, resolved_at) ON session TO mwf_job;
-GRANT UPDATE (status, resolved_at) ON session TO mwf_job;
--- empathy_set_status: the subject's MAIN conversation; anonymize step 3
-GRANT SELECT (id, participant_id, kind) ON conversation TO mwf_job;
--- empathy_set_status: the delivered copy, and its duplicate probe
-GRANT SELECT (conversation_id, source_attempt_id, kind) ON message TO mwf_job;
-GRANT INSERT (conversation_id, sender_participant_id, role, kind, content, source_attempt_id) ON message TO mwf_job;
--- need_share (owner, category, live), need_revoke_share (owner), T-consent-owner, T-need-share-owner, anonymize step 3
-GRANT SELECT (id, participant_id, category, deleted_at, superseded_by_need_id) ON need TO mwf_job;
--- need_share (the only writer), need_revoke_share, anonymize step 3 (shared needs survive)
-GRANT SELECT (need_id, revoked_at) ON need_share TO mwf_job;
-GRANT INSERT (need_id, participant_id, session_id, category, shared_text) ON need_share TO mwf_job;
-GRANT UPDATE (revoked_at) ON need_share TO mwf_job;
--- need_share (the owner's GRANTED consent), need_revoke_share (→ REVOKED)
-GRANT SELECT (need_id, participant_id, decision) ON consent TO mwf_job;
-GRANT UPDATE (decision, revoked_at) ON consent TO mwf_job;
--- T-consent-owner (owner of a proposal / share offer / review target), fired by need_revoke_share
-GRANT SELECT (id, created_by_participant_id) ON proposal TO mwf_job;
-GRANT SELECT (id, subject_participant_id) ON context_share_offer TO mwf_job;
-GRANT SELECT (id, reviewer_participant_id) ON empathy_review TO mwf_job;
--- resolve_user_by_clerk_id, create_user_for_clerk (RETURNING id), anonymize_user_account (existence, tombstone)
-GRANT SELECT (id, clerk_id, deleted_at) ON "user" TO mwf_job;
-GRANT INSERT (clerk_id, email, first_name, last_name) ON "user" TO mwf_job;
-GRANT UPDATE (clerk_id, email, first_name, last_name, deleted_at) ON "user" TO mwf_job;
--- anonymize_user_in_session step 3: unshared choices (choices_shared milestone), INDIVIDUAL check-ins
-GRANT SELECT (participant_id, milestone_key) ON participant_milestone TO mwf_job;
-GRANT SELECT (id, scope) ON follow_up TO mwf_job;
--- anonymize_*: the filter columns of every private-row delete (steps 3–5)
-GRANT SELECT (participant_id) ON conversation_read_state, draft, mood_reading, regulation_event, need_disposition, follow_up_note, proposal_choice TO mwf_job;
-GRANT SELECT (participant_id, user_id) ON ai_memory TO mwf_job;
-GRANT SELECT (follow_up_id, participant_id) ON follow_up_checkin TO mwf_job;
-GRANT SELECT (session_id, participant_id, reflection_id) ON brain_activity TO mwf_job;  -- session_id: R17 (step 4, NULL-participant history)
-GRANT SELECT (id, user_id) ON reflection TO mwf_job;
-GRANT SELECT (user_id) ON feature_state, user_memory, user_device, user_preferences, reminder TO mwf_job;
-GRANT DELETE ON conversation, conversation_read_state, draft, ai_memory, mood_reading, regulation_event, need_disposition,
-                follow_up_note, need, proposal_choice, follow_up_checkin, empathy_attempt, brain_activity, reflection,
-                feature_state, user_memory, user_device, user_preferences, reminder
-  TO mwf_job;
--- anonymize step 7: the crypto-shred
-GRANT SELECT (participant_id, destroyed_at) ON participant_key TO mwf_job;
-GRANT UPDATE (destroyed_at) ON participant_key TO mwf_job;
-GRANT SELECT (user_id, destroyed_at) ON user_key TO mwf_job;
-GRANT UPDATE (destroyed_at) ON user_key TO mwf_job;
-
--- TS-9: the job connection's own writers in the app (spec §1.1 message
--- "Key per row" — AI/SYSTEM rows and every delivered kind are mwf_job's;
--- participant_milestone — system keys are mwf_job's; ai_memory — "in practice
--- written by mwf_job").
--- message-store createFacilitatorMessage / deliverMessage: a once-only line's
--- dedupe_key (work-fdc1, sql_message_once), the refining need a facilitator
--- reply answers, and an explicit instant (fixtures, replays)
-GRANT INSERT (dedupe_key, refining_need_id, created_at) ON message TO mwf_job;
--- message-store insert() returns the written row's id and instant (INSERT … RETURNING id, created_at);
--- getInitialMessage's Serializable idempotency probe reads the first message's id. Never content.
-GRANT SELECT (id, created_at) ON message TO mwf_job;
--- milestone-writer reachMilestone: system keys (invitation_sent, empathy_*, needs_shared, closed, paused …)
-GRANT INSERT (participant_id, milestone_key, reached_at) ON participant_milestone TO mwf_job;
--- sessions.ts resumeSession: un-reaching `paused` is a DELETE by mwf_job (spec §1.1)
-GRANT DELETE ON participant_milestone TO mwf_job;
--- conversation-summarizer updateSessionSummary: the participant's SUMMARY document (INSERT … ON CONFLICT DO UPDATE)
-GRANT SELECT (kind) ON ai_memory TO mwf_job;
-GRANT INSERT (participant_id, kind, doc) ON ai_memory TO mwf_job;
-GRANT UPDATE (doc) ON ai_memory TO mwf_job;
-
--- TS-10: the reconciler's and the reveal's job writers (spec §1.2 — reconciler_result
--- "I/U job", reconciler_guidance "I job", context_share_offer "I job … mwf_job for
--- delivery/notification columns"; services/reconciler/*, controllers/notifications.ts).
--- reconciler/analysis.ts persistAnalysis: one current result per attempt — the next
--- iteration (max(iteration) of the attempt), RETURNING id, and the re-analysis
--- supersede (WHERE attempt_id … AND superseded_at IS NULL). Never the analysis text.
-GRANT SELECT (id, attempt_id, iteration, superseded_at) ON reconciler_result TO mwf_job;
--- persistAnalysis: the analysis row itself (id, created_at, updated_at are column defaults)
-GRANT INSERT (attempt_id, subject_participant_id, iteration, alignment_score, alignment_summary, gap_summary,
-              gap_severity, correctly_identified, missed_feelings, misattributions, most_important_gap,
-              recommended_action, rationale, sharing_would_help, suggested_share_focus, suggested_share_content,
-              suggested_share_reason, circuit_breaker_tripped) ON reconciler_result TO mwf_job;
--- persistAnalysis: re-analysis of the same attempt retires the current result
-GRANT UPDATE (superseded_at) ON reconciler_result TO mwf_job;
--- persistAnalysis: the author-visible abstract hints of a result (P3 D8a split)
-GRANT INSERT (result_id, author_participant_id, subject_participant_id, area_hint, guidance_type, prompt_seed)
-  ON reconciler_guidance TO mwf_job;
--- reconciler/sharing.ts insertOffer: the next iteration of an attempt's offers (max(iteration)),
--- RETURNING id; triggerStage3Transition: open offers (status) of the session's participants expire
-GRANT SELECT (attempt_id, iteration, status) ON context_share_offer TO mwf_job;
--- sharing.ts deliverAcceptedShare (fix1 I2): the delivery is idempotent — it locks the offer
--- (SELECT … FOR UPDATE) and delivers only while delivery_status is PENDING. Never the shared text.
-GRANT SELECT (delivery_status) ON context_share_offer TO mwf_job;
--- insertOffer: the subject's offer (PENDING from the reconciler; OFFERED with offered_at from the share-offer fallback)
-GRANT INSERT (attempt_id, result_id, subject_participant_id, iteration, status, offer_message, suggested_content,
-              suggested_reason, offered_at) ON context_share_offer TO mwf_job;
--- sharing.ts shareAccepted: the delivery stamp of the shared text; notifications.ts getPendingActionsHandler:
--- the notification path writes delivery_notified_at / seen_notified_at (review F4.2); stage2.ts
--- triggerStage3Transition: status → EXPIRED when the Stage 2 sharing window closes
-GRANT UPDATE (status, delivery_status, delivered_at, delivery_notified_at, seen_notified_at) ON context_share_offer TO mwf_job;
-
--- TS-10 fix1 I4 (Ruling R35): the reconciler READER. The reconciler runs as the job: every
--- read of the analysis path (services/reconciler/{analysis,state,sharing,circuit-breaker}.ts,
--- stage2.ts triggerReconcilerAndUpdateStatuses) goes through mwf_job, so the request that
--- triggered an analysis never reads the other participant's private rows on its own
--- connection. These are exactly the analysis inputs; nothing else of the tables below.
--- analysis.ts stagedChat (witnessing content, the subject's recent Stage 2 turns) and
--- state.ts markEmpathyReady's de-dup guard (lastAiNote): the text and speaker of the
--- MAIN-conversation CHAT rows of the two parties (conversation_id, kind, created_at granted above).
-GRANT SELECT (role, content, sender_participant_id) ON message TO mwf_job;
--- analysis.ts loadSubjectFacts: the subject's NOTABLE_FACTS document (participant_id, kind granted above;
--- id because a Prisma model read always selects the primary key — measured: denied without it)
-GRANT SELECT (id, doc) ON ai_memory TO mwf_job;
--- analysis.ts milestonesOf: when each milestone was reached — the stage each chat row was written in
-GRANT SELECT (reached_at) ON participant_milestone TO mwf_job;
--- empathy-store sessionParties (the reconciler's A/B order and the names in its prompts)
-GRANT SELECT (joined_at, display_name) ON participant TO mwf_job;
-GRANT SELECT (first_name, name) ON "user" TO mwf_job;
--- analysis.ts currentResultFor / analyzeEmpathyGap's cached result, sharing.ts generateShareOffer,
--- state.ts reveal quality note: the stored analysis an analysis reuses (RESULT_SELECT)
-GRANT SELECT (subject_participant_id, alignment_score, alignment_summary, correctly_identified, gap_severity,
-              gap_summary, missed_feelings, misattributions, most_important_gap, recommended_action, rationale,
-              sharing_would_help, suggested_share_focus, suggested_share_content, suggested_share_reason, created_at)
-  ON reconciler_result TO mwf_job;
--- analysis.ts guidanceFor: the guidance of a cached result
-GRANT SELECT (result_id, area_hint, guidance_type, prompt_seed) ON reconciler_guidance TO mwf_job;
--- sharing.ts generateShareSuggestion(ForDirection) / generateShareOffer: does this result already
--- have an offer (with a suggestion)? Never the shared text.
-GRANT SELECT (result_id, suggested_content) ON context_share_offer TO mwf_job;
-
--- TS-11: the job's writers in needs, repair and follow-up (spec §1.4 agreement
--- "I job (the mutual-willingness path)", agreement_party "I job",
--- session_closure "I job", proposal "U … mwf_job (status, shared_at)",
--- proposal_revision "I … job", follow_up "I … job (scheduler) · U … job
--- (status)", reminder "status → DELIVERED by mwf_job"). Every job write is a
--- raw INSERT/UPDATE naming exactly these columns (no client-side defaults).
--- repair-store createAgreementsAsJob: the agreement row (snapshot of the proposal) and its id (RETURNING id)
-GRANT INSERT (session_id, proposal_id, type, status, description, duration, measure_of_success, follow_up_at) ON agreement TO mwf_job;
--- repair-store: RETURNING id; T-agreement-parties (invoker = mwf_job) reads the agreement's session, proposal and instant;
--- tending: the agreement a follow-up is about (status moves)
-GRANT SELECT (id, session_id, proposal_id, status, created_at) ON agreement TO mwf_job;
--- tending resolve/closure paths: an agreement moves AGREED → IN_PROGRESS → COMPLETED | ABANDONED
-GRANT UPDATE (status, completed_at) ON agreement TO mwf_job;
--- repair-store createAgreementsAsJob: one party row per present human
-GRANT INSERT (agreement_id, participant_id, agreed_at) ON agreement_party TO mwf_job;
--- T-agreement-parties (deferred, invoker = mwf_job): the party set
-GRANT SELECT (agreement_id, participant_id) ON agreement_party TO mwf_job;
--- T-agreement-parties: every party WILLING on the proposal
-GRANT SELECT (proposal_id, participant_id, decision) ON proposal_choice TO mwf_job;
--- stage4-closure closureInputsAsJob (fix round 1): the closure decides across every participant on the
--- job connection — the proposals it converts / schedules (snapshot text for the agreement and follow-up)
-GRANT SELECT (session_id, kind, status, description, duration, measure_of_success, shared_at) ON proposal TO mwf_job;
--- repair-store convertProposalsAsJob: ACTIVE/REVISED → CONVERTED_TO_AGREEMENT (WHERE id = …: SELECT id is granted above)
-GRANT UPDATE (status) ON proposal TO mwf_job;
--- repair-store: the conversion's audit row (append-only; no message id, lineage in before/after)
-GRANT INSERT (proposal_id, actor_participant_id, action, before, after, reason) ON proposal_revision TO mwf_job;
--- repair-store closeSessionAsJob: how the repair stage ended (the three id arrays are v_session_closure_items)
-GRANT INSERT (session_id, kind, reason, summary, closed_by_participant_id, check_in_at, closed_at) ON session_closure TO mwf_job;
--- tending scheduleFollowUpsAsJob: SHARED agreements and INDIVIDUAL commitments scheduled at closure, and the
--- next round a check-in schedules (EXTEND / PARTIAL_CLOSURE continuing: a follow-up is one cycle) (RETURNING id: SELECT id granted above)
-GRANT INSERT (session_id, agreement_id, proposal_id, type, scope, owner_participant_id, opted_in_shared, status, scheduled_for,
-              response_deadline_at, summary) ON follow_up TO mwf_job;
--- open-due-tending-entries (runs as the job): find due SCHEDULED rows (sql_follow_up_due), whom to notify, the cycle columns it moves
-GRANT SELECT (session_id, agreement_id, type, owner_participant_id, status, scheduled_for, response_deadline_at) ON follow_up TO mwf_job;
--- open-due / cycle resolution: SCHEDULED → OPEN (opened_at, the response deadline), OPEN/PARTIAL → COMPLETED | EXPIRED
-GRANT UPDATE (status, opened_at, completed_at, response_deadline_at) ON follow_up TO mwf_job;
--- processDueTendingReminders (job): due SCHEDULED reminders (sql_reminder_due) → DELIVERED, or the next remind_at for a cadence
-GRANT SELECT (id, follow_up_id, scope, remind_at, cadence, status) ON reminder TO mwf_job;
-GRANT UPDATE (status, remind_at) ON reminder TO mwf_job;
-
--- TS-12: the job's writers and readers in telemetry, notifications, deletion and
--- retention (spec §1.8 brain_activity "mwf_job writes, mwf_ops reads"; R35 — the
--- job is the principal for work that crosses users, the anonymise walk and
--- retention). Every job statement is raw and names exactly these columns.
--- brain-service startActivity: the telemetry row, attributed at capture (participant_id,
--- reflection_id); id / created_at are column defaults returned by RETURNING
-GRANT INSERT (session_id, reflection_id, participant_id, turn_id, activity_type, call_type, model, input, metadata, status)
-  ON brain_activity TO mwf_job;
--- startActivity RETURNING id, created_at; completeActivity / failActivity WHERE id = …;
--- data-retention's purge and delete windows (WHERE created_at < …; session_id granted above). Never a blob.
-GRANT SELECT (id, created_at) ON brain_activity TO mwf_job;
--- completeActivity / failActivity: the outcome of the call (metadata replaced, never read back)
-GRANT UPDATE (output, token_count_input, token_count_output, cost, duration_ms, status, completed_at, structured_output, metadata)
-  ON brain_activity TO mwf_job;
--- data-retention: the short-retention purge sets the four blobs NULL (spec §1.8)
-GRANT UPDATE (input) ON brain_activity TO mwf_job;
--- brain-service mergeTurnTrace (ai-orchestrator storeTurnTrace): find the turn's latest
--- ORCHESTRATED_RESPONSE row and merge the pipeline trace into its metadata (metadata holds
--- cache/tool/trace telemetry, never a prompt — the prompt is input/output, still unreadable)
-GRANT SELECT (turn_id, call_type, metadata) ON brain_activity TO mwf_job;
--- push.ts sendPushNotification: the recipient's devices — another user than the caller, so the
--- job reads them (user_device RLS is user_id = me); newest device first (last_seen_at)
-GRANT SELECT (user_id, push_token, last_seen_at) ON user_device TO mwf_job;
--- push.ts: a token Expo reports as unregistered is cleared (WHERE user_id = … AND push_token = …)
-GRANT UPDATE (push_token) ON user_device TO mwf_job;
--- session-deletion: the leaver's session-scoped user_memory goes with the leave (DELETE granted above)
-GRANT SELECT (session_id) ON user_memory TO mwf_job;
--- session-retention: staleness of an ACTIVE session and the purge window of an ARCHIVED one
-GRANT SELECT (updated_at) ON session TO mwf_job;
--- session-retention: an ARCHIVED session past the purge window is hard-deleted (every child
--- FKs session ON DELETE CASCADE; spec Conventions "retention hard-deletes whole sessions")
-GRANT DELETE ON session TO mwf_job;
-
--- mwf_ops: SELECT on exactly the tables routes/brain.ts reads (directly or through the stage shim), re-based
--- (BrainActivity, Session/Relationship/RelationshipMember/User, StageProgress,
--- Message, UserVessel.notableFacts, EmotionalReading, InnerWorkSession/Message).
-GRANT USAGE ON SCHEMA public TO mwf_ops;
-GRANT SELECT ON brain_activity, session, relationship, relationship_member, "user", participant, participant_milestone,
-                milestone, conversation, message, ai_memory, mood_reading, reflection, reflection_message, v_current_stage
-  TO mwf_ops;
--- The stage shim's invitationPending probe (stage-shim.ts loadCurrentStages / loadInvitationPending:
--- "authored an invitation", work-qmgc), which the dashboard's stage reads run as mwf_ops. Column-level:
--- ops sees metadata only — never the invitation's name, message or token.
-GRANT SELECT (invited_by_participant_id) ON invitation TO mwf_ops;
-
--- mwf_auth: the bootstrap function only (granted in T4); nothing on tables.
-
--- mwf_app: its table grants are in tables.sql, next to each table (work-k5fk.10.2); its view grants follow the views (T6).
 
 -- ---------------------------------------------------------------------------
 -- T8. Catalog assertions (plan step 20). The tables are empty (OD7 baseline),
