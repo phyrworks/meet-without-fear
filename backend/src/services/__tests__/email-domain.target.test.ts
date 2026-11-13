@@ -3,8 +3,12 @@
  * domain, whose collation `email_ci` (ICU, und-u-ks-level2, nondeterministic)
  * compares case-insensitively — so a case variant of an existing address
  * collides on the UNIQUE — while a plus-address stays a different address.
- * The tombstone CHECK compares under "C", so only the exact deleted+<id> form
- * the anonymise walk writes passes.
+ * The tombstone CHECK compares under "C", so only the exact deleted+<id>@invalid
+ * form the anonymise walk writes passes.
+ *
+ * Review round 1 (owner decision): the domain refuses every character email_ci
+ * would fold away, so case is the only equivalence an inserted character can
+ * introduce — proved below for every code point.
  *
  * Requires the target shape and a built target fixture:
  *   npx tsx src/testing/golden/cli.ts build FEEL_HEARD_B
@@ -90,7 +94,7 @@ describeTarget('the email domain (target)', () => {
 
   it('LIKE works under the nondeterministic collation (PG18) and is case-insensitive there', async () => {
     const [r] = await run.sql<Record<string, boolean>>(
-      `SELECT 'DELETED+x'::email LIKE 'deleted+%' AS like_ci, 'DELETED+x'::email COLLATE "C" LIKE 'deleted+%' AS like_c`,
+      `SELECT 'DELETED+x@invalid'::email LIKE 'deleted+%' AS like_ci, 'DELETED+x@invalid'::email COLLATE "C" LIKE 'deleted+%' AS like_c`,
     );
     expect(r).toEqual({ like_ci: true, like_c: false });
   });
@@ -127,7 +131,7 @@ describeTarget('the email domain (target)', () => {
     expect(r.actual).toBe(r.recorded);
   });
 
-  it('the tombstone CHECK accepts exactly deleted+<id> (compared under "C"): not a case variant, not a live address', async () => {
+  it('the tombstone CHECK accepts exactly deleted+<id>@invalid (compared under "C"): not a case variant, not the old form, not a live address', async () => {
     const tombstone = async (email: string) => {
       const id = randomUuidV7();
       await run.sql(`INSERT INTO "user" (id, email, clerk_id) VALUES ($1, $2, $3)`, [id, `t-${id}@x.test`, `c-${id}`]);
@@ -141,8 +145,114 @@ describeTarget('the email domain (target)', () => {
         return (e as { code?: string }).code ?? String(e);
       }
     };
-    expect(await tombstone('deleted+<id>')).toBe('ok');
-    expect(await tombstone('Deleted+<id>')).toBe('23514');
+    expect(await tombstone('deleted+<id>@invalid')).toBe('ok');
+    expect(await tombstone('Deleted+<id>@invalid')).toBe('23514');
+    expect(await tombstone('deleted+<id>@INVALID')).toBe('23514');
+    expect(await tombstone('deleted+<id>')).toBe('23514');
     expect(await tombstone('<id>@x.test')).toBe('23514');
+  });
+
+  /** Is the text a valid email (every domain CHECK passes)? */
+  async function valid(text: string): Promise<boolean> {
+    const [r] = await run.sql<{ ok: boolean }>(`SELECT pg_input_is_valid($1, 'email') AS ok`, [text]);
+    return r.ok;
+  }
+
+  const cp = (n: number) => String.fromCodePoint(n);
+  // The reviewer's rows (review round 1): each one is equal under email_ci to the plain address
+  // beside it (except the trailing space, which is simply refused), so the domain refuses it.
+  it.each([
+    ['U+200B zero-width space', `a${cp(0x200b)}@x.com`, 'a@x.com'],
+    ['U+00AD soft hyphen', `a${cp(0xad)}@x.com`, 'a@x.com'],
+    ['U+200D zero-width joiner', `a${cp(0x200d)}@x.com`, 'a@x.com'],
+    ['U+0001 control', `a${cp(0x1)}@x.com`, 'a@x.com'],
+    ['leading U+202E right-to-left override', `${cp(0x202e)}a@x.com`, 'a@x.com'],
+    ['trailing U+FE0F variation selector (Mn)', `a@x.com${cp(0xfe0f)}`, 'a@x.com'],
+    ['fullwidth a', `${cp(0xff41)}@x.com`, 'a@x.com'],
+    ['fullwidth @', `a${cp(0xff20)}x.com`, 'a@x.com'],
+    ['fullwidth .', `a@x${cp(0xff0e)}com`, 'a@x.com'],
+    ['circled a', `${cp(0x24d0)}@x.com`, 'a@x.com'],
+    ['Kelvin sign', `a${cp(0x212a)}@x.com`, 'ak@x.com'],
+    ['superscript two', `a${cp(0xb2)}@x.com`, 'a2@x.com'],
+    ['ligature fi', `${cp(0xfb01)}@x.com`, 'fi@x.com'],
+    ['U+0640 Arabic tatweel (ignorable, not Cf)', `a${cp(0x640)}@x.com`, 'a@x.com'],
+    ['U+0591 Hebrew accent (ignorable combining mark)', `a${cp(0x591)}@x.com`, 'a@x.com'],
+    ['trailing space', 'a@x.com ', null],
+  ])('refused: %s', async (_name, text, foldsTo) => {
+    if (foldsTo) {
+      const [r] = await run.sql<{ folds: boolean }>(`SELECT $1 COLLATE email_ci = $2 AS folds`, [text, foldsTo]);
+      expect(r.folds).toBe(true);
+      expect(await valid(foldsTo)).toBe(true);
+    }
+    expect(await valid(text)).toBe(false);
+  });
+
+  it.each([
+    ['no @', 'ab'],
+    ['two @', 'a@b@x.com'],
+    ['empty local part', '@x.com'],
+    ['empty domain', 'a@'],
+  ])('refused by the shape CHECK: %s', async (_name, text) => {
+    expect(await valid(text)).toBe(false);
+  });
+
+  it('accepted and still distinct: plus-address, accents, ß / ss, İ / i, a non-ASCII address', async () => {
+    for (const t of ['a+1@x.com', 'ä@x.com', 'ß@x.com', 'ss@x.com', 'İ@x.com', 'i@x.com', 'josé@exämple.test'])
+      expect(await valid(t)).toBe(true);
+    const [r] = await run.sql<Record<string, boolean>>(
+      `SELECT 'a+1@x.com'::email = 'a@x.com' AS plus, 'ä@x.com'::email = 'a@x.com' AS accent,
+              'ß@x.com'::email = 'ss@x.com' AS sharp_s, 'İ@x.com'::email = 'i@x.com' AS dotted_i`,
+    );
+    expect(r).toEqual({ plus: false, accent: false, sharp_s: false, dotted_i: false });
+  });
+
+  it('the domain carries its named CHECKs', async () => {
+    const rows = await run.sql<{ conname: string }>(
+      `SELECT conname FROM pg_constraint WHERE contypid = 'email'::regtype ORDER BY conname`,
+    );
+    expect(rows.map(r => r.conname)).toEqual([
+      'email_assigned',
+      'email_length',
+      'email_nfkc',
+      'email_no_format',
+      'email_no_ignorable',
+      'email_no_space_control',
+      'email_shape',
+    ]);
+  });
+
+  // The property (review round 1): for EVERY code point c (1..0x10FFFF, no surrogates), placed
+  // before the local part, before the @, inside the domain or at its end, the address is either
+  // refused by the domain, case-equal to 'a@x.test', or different from it under email_ci. Measured
+  // ~3 s for the 4 × 1,112,063 strings on the dev container.
+  it('exhaustive: no accepted code point folds into a@x.test beyond case, in any of four positions', async () => {
+    const rows = await run.sql<{ pos: string; cp: string }>(
+      `SELECT t.pos, to_hex(c) AS cp
+       FROM generate_series(1, 1114111) AS c,
+            LATERAL (VALUES ('lead', chr(c) || 'a@x.test'), ('before_at', 'a' || chr(c) || '@x.test'),
+                            ('in_domain', 'a@x' || chr(c) || '.test'), ('end', 'a@x.test' || chr(c))) AS t(pos, s)
+       WHERE c NOT BETWEEN 55296 AND 57343
+         AND t.s COLLATE email_ci = 'a@x.test'
+         AND lower(t.s COLLATE "C") <> 'a@x.test'
+         AND pg_input_is_valid(t.s, 'email')`,
+    );
+    expect(rows).toEqual([]);
+  });
+
+  // FINDING (owner decision pending): two DIFFERENT accepted characters can still be equal at
+  // level 2 without being case variants — every script's digit one, hiragana and katakana, some
+  // combining marks. Pinned so a change (an ICU upgrade, a tighter CHECK) shows up here.
+  it('FINDING, pinned: accepted single characters that are equal under email_ci but not case variants', async () => {
+    const [r] = await run.sql<{ classes: number; one: boolean; kana: boolean }>(
+      `WITH acc AS (
+         SELECT chr(c) AS ch FROM generate_series(1, 1114111) AS c
+         WHERE c NOT BETWEEN 55296 AND 57343 AND pg_input_is_valid('a' || chr(c) || '@x.test', 'email'))
+       SELECT (SELECT count(*)::int FROM (
+                 SELECT 1 FROM acc GROUP BY ch COLLATE email_ci
+                 HAVING count(DISTINCT casefold(ch COLLATE pg_unicode_fast) COLLATE "C") > 1) x) AS classes,
+              'a1@x.test'::email = ('a' || chr(1633) || '@x.test')::email AS one,
+              (chr(12354) || '@x.test')::email = (chr(12450) || '@x.test')::email AS kana`,
+    );
+    expect(r).toEqual({ classes: 417, one: true, kana: true });
   });
 });

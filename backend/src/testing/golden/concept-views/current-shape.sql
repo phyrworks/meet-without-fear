@@ -52,7 +52,7 @@
 --
 -- Tombstone-safe: a user id that the old shape still names (a participant's
 -- evidence, see `old_concept_participant`) but whose `User` row was
--- hard-deleted is projected as a tombstone row (`email 'deleted+<id>'`, names
+-- hard-deleted is projected as a tombstone row (`email 'deleted+<id>@invalid'`, names
 -- and clerk id NULL), so every `participant.user_id` resolves here as it will
 -- under the target's RESTRICT foreign key. `deleted_at` is NULL for those rows
 -- too: the old shape records no deletion instant (the migration stamps
@@ -168,7 +168,7 @@ UNION ALL
 SELECT DISTINCT
   p.user_id AS id,
   NULL::text AS clerk_id,
-  'deleted+' || p.user_id::text AS email,
+  'deleted+' || p.user_id::text || '@invalid' AS email,
   NULL::text AS first_name,
   NULL::text AS last_name,
   NULL::text AS name,

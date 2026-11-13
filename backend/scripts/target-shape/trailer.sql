@@ -468,7 +468,7 @@ CREATE FUNCTION app.anonymize_user_account("user" uuid) RETURNS void
     DELETE FROM public.ai_memory WHERE user_id = v_uid;
     -- 6. the tombstone
     UPDATE public."user"
-    SET clerk_id = NULL, email = 'deleted+' || v_uid::text, first_name = NULL, last_name = NULL, deleted_at = coalesce(deleted_at, now())
+    SET clerk_id = NULL, email = 'deleted+' || v_uid::text || '@invalid', first_name = NULL, last_name = NULL, deleted_at = coalesce(deleted_at, now())
     WHERE id = v_uid;
     -- 7. the user-key shred
     UPDATE public.user_key SET destroyed_at = now() WHERE user_id = v_uid AND destroyed_at IS NULL;

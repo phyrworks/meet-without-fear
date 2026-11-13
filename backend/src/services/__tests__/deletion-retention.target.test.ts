@@ -196,7 +196,7 @@ describeTarget('deletion and retention on the target (the job as mwf_job, the ap
       `SELECT email, clerk_id, first_name, deleted_at IS NOT NULL AS deleted FROM "user" WHERE id = $1`,
       [bob.id],
     );
-    expect(u).toEqual({ email: `deleted+${bob.id}`, clerk_id: null, first_name: null, deleted: true });
+    expect(u).toEqual({ email: `deleted+${bob.id}@invalid`, clerk_id: null, first_name: null, deleted: true });
     expect(await count(`SELECT count(*)::int AS n FROM user_device WHERE user_id = $1`, [bob.id])).toBe(0);
     expect(await count(`SELECT count(*)::int AS n FROM feature_state WHERE user_id = $1`, [bob.id])).toBe(0);
     expect(await count(`SELECT count(*)::int AS n FROM conversation WHERE participant_id = $1`, [ids.bob])).toBe(0);

@@ -114,7 +114,7 @@ REINDEX INDEX user_email_key;
 ALTER COLLATION email_ci REFRESH VERSION;
 ```
 
-Check for duplicates first if the reindex fails (`SELECT lower(email), count(*) FROM "user" GROUP BY 1 HAVING count(*) > 1;`). Add this to every upgrade or restore checklist; it is a no-op when the versions match.
+Check for duplicates first if the reindex fails (`SELECT lower(email), count(*) FROM "user" GROUP BY 1 HAVING count(*) > 1;`). A new ICU can also make more characters ignorable: the domain's `email_no_ignorable` CHECK asks the collation, and existing rows are not re-checked, so also run `SELECT id FROM "user" WHERE NOT app.email_no_ignorable(email);` (must be empty) and `backend/src/services/__tests__/email-domain.target.test.ts` against the upgraded server. Add this to every upgrade or restore checklist; it is a no-op when the versions match.
 
 Pin and review image upgrades, back up first, rehearse restore, and schedule major PostgreSQL upgrades/reboots deliberately. Database and certificate volumes have stable names and are never removed by deployment. Never use `docker compose down -v`. Reboot verification must show healthy containers, unchanged data and active timers. Keep disk space under review; release artifacts expire after 30 days in S3, and current/previous images must remain available locally.
 
