@@ -183,14 +183,51 @@ async function findEmailHolder(email: string): Promise<{ id: string; clerkId: st
  */
 function logIdentityConflict(
   incomingClerkUserId: string,
-  holder: { id: string; clerkId: string | null }
+  holder: { id: string; clerkId: string | null } | null
 ): void {
   logger.warn('[Auth] auth.identity_conflict: first login refused, email belongs to another account', {
     event: 'auth.identity_conflict',
-    existingUserId: holder.id,
+    existingUserId: holder?.id ?? null,
     incomingClerkUserId,
-    existingClerkUserId: holder.clerkId,
+    existingClerkUserId: holder?.clerkId ?? null,
   });
+}
+
+function isUniqueViolation(error: unknown): boolean {
+  return error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002';
+}
+
+/**
+ * Create the User row for a first-seen Clerk identity.
+ *
+ * A unique violation is resolved in exactly one way: another request for the
+ * SAME Clerk identity created the row first (concurrent-create race), so use
+ * it. If instead the email belongs to a row bound to another Clerk identity,
+ * or to none, refuse: re-binding it would hand that account to whoever
+ * presents its email (work-jv9y). If neither key matches any more (the holder
+ * was deleted in between), try the create once more; a second collision is
+ * refused the same way, so no raw constraint error reaches the client.
+ */
+async function createFirstLoginUser(
+  clerkUserId: string,
+  profile: { email: string; name: string | null; firstName: string | null; lastName: string | null }
+) {
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    try {
+      return await prisma.user.create({ data: { clerkId: clerkUserId, ...profile } });
+    } catch (error) {
+      if (!isUniqueViolation(error)) throw error;
+      const own = await prisma.user.findUnique({ where: { clerkId: clerkUserId } });
+      if (own) return own;
+      const holder = await findEmailHolder(profile.email);
+      if (holder) {
+        logIdentityConflict(clerkUserId, holder);
+        throw new AccountLinkConflictError();
+      }
+    }
+  }
+  logIdentityConflict(clerkUserId, null);
+  throw new AccountLinkConflictError();
 }
 
 /**
@@ -248,7 +285,8 @@ async function handleClerkAuth(
 
     if (user) {
       // User exists — use DB record directly. Profile data (name/email) is
-      // synced via Clerk webhooks or on first auth; no need to fetch every time.
+      // copied from Clerk once, at first login; there are no Clerk webhooks,
+      // so later Clerk-side changes are not synced.
       req.user = user;
       req.clerkUserId = clerkUserId;
       next();
@@ -283,27 +321,7 @@ async function handleClerkAuth(
     const lastName = clerkUser.lastName || null;
     const name = [firstName, lastName].filter(Boolean).join(' ') || null;
 
-    try {
-      user = await prisma.user.create({
-        data: { clerkId: clerkUserId, email, name, firstName, lastName },
-      });
-    } catch (error) {
-      if (!(error instanceof Prisma.PrismaClientKnownRequestError) || error.code !== 'P2002') {
-        throw error;
-      }
-      // Concurrent create race: another request for this same Clerk identity
-      // created the row first. That is the only collision we resolve.
-      user = await prisma.user.findUnique({ where: { clerkId: clerkUserId } });
-      if (!user) {
-        // The email belongs to a row bound to another Clerk identity (or to
-        // none). Never re-bind it: a new Clerk identity presenting an existing
-        // user's email would take over that user's account (work-jv9y).
-        const holder = await findEmailHolder(email);
-        if (!holder) throw error; // neither key collides any more: not ours to explain
-        logIdentityConflict(clerkUserId, holder);
-        throw new AccountLinkConflictError();
-      }
-    }
+    user = await createFirstLoginUser(clerkUserId, { email, name, firstName, lastName });
 
     req.user = user;
     req.clerkUserId = clerkUserId;

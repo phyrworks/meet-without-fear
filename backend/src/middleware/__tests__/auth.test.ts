@@ -8,6 +8,7 @@ import { Request, Response, NextFunction } from 'express';
 import { requireAuth, optionalAuth, getUser, requireSessionAccess, verifiedPrimaryEmail } from '../auth';
 import { ForbiddenError, NotFoundError } from '../errors';
 import { prisma } from '../../lib/prisma';
+import { logger } from '../../lib/logger';
 
 // Mock Prisma
 jest.mock('../../lib/prisma');
@@ -311,6 +312,59 @@ describe('Auth Middleware', () => {
       expect(prisma.user.update).not.toHaveBeenCalled();
       expect(next).toHaveBeenCalledWith(expect.objectContaining({ statusCode: 409, code: 'ACCOUNT_LINK_CONFLICT' }));
       expect(req.user).toBeUndefined();
+    });
+
+    describe('when the email holder vanishes between create and lookup', () => {
+      const { PrismaClientKnownRequestError } = jest.requireActual('../../generated/prisma/client').Prisma;
+      const p2002 = () => new PrismaClientKnownRequestError('Unique constraint failed', { code: 'P2002', clientVersion: '7' });
+
+      beforeEach(() => {
+        mockVerifyToken.mockResolvedValue({ sub: 'clerk-vanish' });
+        mockGetUser.mockResolvedValue({
+          firstName: null,
+          lastName: null,
+          primaryEmailAddressId: 'idn_1',
+          emailAddresses: [{ id: 'idn_1', emailAddress: 'v@example.com', verification: { status: 'verified' } }],
+        });
+        (prisma.user.findUnique as jest.Mock).mockResolvedValue(null);
+        (prisma.$queryRaw as jest.Mock).mockResolvedValue([]); // no holder by lower(email)
+      });
+
+      it('retries the create once and succeeds', async () => {
+        const created = { ...mockUser, id: 'user-vanish', clerkId: 'clerk-vanish', email: 'v@example.com' };
+        (prisma.user.create as jest.Mock).mockRejectedValueOnce(p2002()).mockResolvedValueOnce(created);
+        const req = createMockRequest({ headers: { authorization: 'Bearer valid-clerk-token' } });
+        const next = jest.fn();
+
+        await requireAuth(req as Request, createMockResponse().res as Response, next);
+
+        expect(prisma.user.create).toHaveBeenCalledTimes(2);
+        expect(next).toHaveBeenCalledWith();
+        expect(req.user).toEqual(created);
+      });
+
+      it('refuses with 409 and a holder-less identity_conflict log if the retry collides too', async () => {
+        (prisma.user.create as jest.Mock).mockRejectedValue(p2002());
+        const warn = jest.spyOn(logger, 'warn');
+        const req = createMockRequest({ headers: { authorization: 'Bearer valid-clerk-token' } });
+        const next = jest.fn();
+
+        await requireAuth(req as Request, createMockResponse().res as Response, next);
+
+        expect(prisma.user.create).toHaveBeenCalledTimes(2);
+        expect(next).toHaveBeenCalledWith(expect.objectContaining({ statusCode: 409, code: 'ACCOUNT_LINK_CONFLICT' }));
+        expect(req.user).toBeUndefined();
+        expect(warn).toHaveBeenCalledWith(
+          expect.stringContaining('auth.identity_conflict'),
+          expect.objectContaining({
+            event: 'auth.identity_conflict',
+            incomingClerkUserId: 'clerk-vanish',
+            existingUserId: null,
+            existingClerkUserId: null,
+          })
+        );
+        expect(JSON.stringify(warn.mock.calls)).not.toContain('v@example.com');
+      });
     });
 
     it('refuses (403) a first login whose primary email is unverified, without creating a user', async () => {
