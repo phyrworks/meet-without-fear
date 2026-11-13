@@ -72,7 +72,7 @@ describeTarget('the email domain (target)', () => {
     expect(r).toEqual({ column_type: 'email', domain_base: 'text', default_collation: true, deterministic: true, own_collations: 0 });
   });
 
-  it('the domain carries its six named CHECKs', async () => {
+  it('the domain carries its seven named CHECKs', async () => {
     const rows = await run.sql<{ conname: string }>(
       `SELECT conname FROM pg_constraint WHERE contypid = 'email'::regtype ORDER BY conname`,
     );
@@ -80,6 +80,7 @@ describeTarget('the email domain (target)', () => {
       'email_assigned',
       'email_canonical',
       'email_length',
+      'email_nfc',
       'email_no_format',
       'email_no_space_control',
       'email_shape',

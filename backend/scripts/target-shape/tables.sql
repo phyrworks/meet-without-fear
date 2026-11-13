@@ -233,7 +233,8 @@ COMMENT ON DOMAIN milestone_key IS 'A milestone key: a lower-case identifier of 
 CREATE DOMAIN email AS text
   CONSTRAINT email_length CHECK (char_length(VALUE) <= 254)
   CONSTRAINT email_shape CHECK (VALUE COLLATE "C" ~ '^[^@]+@[^@]+$')
-  CONSTRAINT email_canonical CHECK (VALUE = lower(VALUE COLLATE pg_unicode_fast) AND VALUE IS NFC NORMALIZED)
+  CONSTRAINT email_canonical CHECK (VALUE = lower(VALUE COLLATE pg_unicode_fast))
+  CONSTRAINT email_nfc CHECK (VALUE IS NFC NORMALIZED)
   CONSTRAINT email_assigned CHECK (unicode_assigned(VALUE))
   CONSTRAINT email_no_space_control CHECK (VALUE COLLATE pg_c_utf8 !~ '[[:space:][:cntrl:]]')
   CONSTRAINT email_no_format CHECK (VALUE COLLATE "C" !~
@@ -241,7 +242,8 @@ CREATE DOMAIN email AS text
 COMMENT ON DOMAIN email IS 'An email address in its one canonical form (trimmed, NFC, lowercased: shared canonicalEmail()), compared exactly. Case is the only equivalence and it is removed before storage; a plus-address, an accent, ß, a fullwidth form, another script''s digit stay distinct. The database refuses a non-canonical value rather than rewriting it.';
 COMMENT ON CONSTRAINT email_length ON DOMAIN email IS 'At most 254 characters (the RFC 5321 path limit).';
 COMMENT ON CONSTRAINT email_shape ON DOMAIN email IS 'Exactly one @, with a non-empty local part and a non-empty domain. The tombstone deleted+<id>@invalid has this shape.';
-COMMENT ON CONSTRAINT email_canonical ON DOMAIN email IS 'Canonical: lowercase by full Unicode case mapping (lower() under pg_unicode_fast, equal to JavaScript toLowerCase) and NFC-normalized (RFC 6532 §3.1: NFC, not NFKC). Writers canonicalize with canonicalEmail(); a value that is not canonical is refused, never rewritten.';
+COMMENT ON CONSTRAINT email_canonical ON DOMAIN email IS 'Canonical case: lowercase by full Unicode case mapping (lower() under pg_unicode_fast, equal to JavaScript toLowerCase). Writers canonicalize with canonicalEmail(); a value that is not canonical is refused, never rewritten.';
+COMMENT ON CONSTRAINT email_nfc ON DOMAIN email IS 'NFC-normalized (RFC 6532 §3.1: NFC SHOULD be used, NFKC SHOULD NOT). Combining marks stay legal; a fullwidth form or a ligature is a different, valid address. Part of the canonical form canonicalEmail() produces.';
 COMMENT ON CONSTRAINT email_assigned ON DOMAIN email IS 'Every code point assigned in PostgreSQL''s Unicode version.';
 COMMENT ON CONSTRAINT email_no_space_control ON DOMAIN email IS 'No whitespace (Unicode White_Space) and no control character (Cc), by pg_c_utf8''s Unicode character classes.';
 COMMENT ON CONSTRAINT email_no_format ON DOMAIN email IS 'No format character (Cf: soft hyphen, zero-width space/joiners, bidi controls, …) and no other default-ignorable code point (variation selectors, Hangul fillers, tags): invisible characters that would make two addresses look identical. Code-point ranges under "C" (Unicode 16 Cf ∪ Default_Ignorable_Code_Point).';
