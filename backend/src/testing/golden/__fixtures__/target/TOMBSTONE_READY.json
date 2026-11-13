@@ -2,16 +2,16 @@
   "stage": "TOMBSTONE_READY",
   "database": "mwf_tfx_tombstone_ready",
   "seeded": {
-    "sessionId": "01a1d615-9c94-7155-b325-035b4698d7be",
-    "relationshipId": "01a1d615-9c92-7298-966e-84e42b343052",
-    "invitationId": "01a1d615-9c97-72e3-9113-6d6d1366f1b2",
+    "sessionId": "01a1d740-edc3-7313-b312-e3b9c8fe230d",
+    "relationshipId": "01a1d740-edc1-7847-a7f2-9203d79b0765",
+    "invitationId": "01a1d740-edc6-722a-a818-af2a189bebf2",
     "userA": {
-      "id": "01a1d615-9c90-7895-989e-e902ebee2ab9",
+      "id": "01a1d740-edc0-7033-8159-a768f6552fd3",
       "email": "ada@e2e.test",
       "name": "Ada Lovelace"
     },
     "userB": {
-      "id": "01a1d615-9c91-7988-b522-5ba305d3660f",
+      "id": "01a1d740-edc0-7ff7-9e07-6ee490c434aa",
       "email": "bob@e2e.test",
       "name": "Bob Ross"
     }
@@ -92,5 +92,5 @@
     "user_memory",
     "user_preferences"
   ],
-  "builtAt": "2026-11-13T18:05:03.078Z"
+  "builtAt": "2026-11-13T23:31:59.120Z"
 }
