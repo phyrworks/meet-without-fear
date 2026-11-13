@@ -19,7 +19,12 @@
  *     (pg_write_all_data, pg_read_all_data, pg_execute_server_program, …) and
  *     production's interim `GRANT mwf_job TO mwf_app WITH SET` (roles.sql,
  *     init-db.sh before work-k5fk.10.3) without listing them;
- *   - holds CREATE on schema `public` or `app`;
+ *   - holds CREATE on schema `public` or `app`, or CREATE on the database;
+ *   - owns, or can SET ROLE to the owner of, the database (pg_database.datdba)
+ *     — even once schema `public` is someone else's (init-db-owner.sh, row 9c),
+ *     the database owner can ALTER, re-own schemas and grant CONNECT;
+ *   - may SET session_replication_role (a `SET ON PARAMETER` grant), which
+ *     switches triggers — the T-* invariants among them — off;
  *   - owns, or can SET ROLE to the owner of, any object in schemas `public`
  *     and `app` — tables, views, sequences, indexes, functions, types — or the
  *     schemas themselves (the database owner owns `public` through
@@ -79,6 +84,12 @@ export interface RoleFacts {
   privilegedRoles: string[];
   /** Schemas among public / app the login may CREATE in. */
   schemaCreate: string[];
+  /** The database's owner when the login is it or can SET ROLE to it, else null. */
+  databaseOwner: string | null;
+  /** CREATE on the current database. */
+  databaseCreate: boolean;
+  /** SET on session_replication_role (superuser, or a SET ON PARAMETER grant). */
+  setReplicationRole: boolean;
   /** Objects in public/app owned by this login or a role it can SET ROLE to. */
   owned: Array<{ object: string; owner: string; definerFunction: boolean; ownedBySelf: boolean }>;
 }
@@ -118,6 +129,11 @@ SELECT json_build_object(
     SELECT r.rolname::text FROM pg_catalog.pg_roles r
     WHERE r.oid <> me.oid AND (r.rolsuper OR r.rolbypassrls) AND pg_catalog.pg_has_role(me.oid, r.oid, 'MEMBER')
     ORDER BY 1),
+  'databaseOwner', (
+    SELECT pg_catalog.pg_get_userbyid(d.datdba) FROM pg_catalog.pg_database d
+    WHERE d.datname = pg_catalog.current_database() AND pg_catalog.pg_has_role(me.oid, d.datdba, 'MEMBER')),
+  'databaseCreate', pg_catalog.has_database_privilege(me.oid, pg_catalog.current_database(), 'CREATE'),
+  'setReplicationRole', pg_catalog.has_parameter_privilege(me.oid, 'session_replication_role', 'SET'),
   'schemaCreate', ARRAY(
     SELECT n.nspname::text FROM pg_catalog.pg_namespace n
     WHERE n.nspname IN ('public', 'app') AND pg_catalog.has_schema_privilege(me.oid, n.oid, 'CREATE')
@@ -150,6 +166,9 @@ export function roleGuardViolations(facts: RoleFacts, role: DatabaseRole): strin
   const memberships = facts.memberships.filter(m => !ALLOWED_MEMBERSHIPS[role].includes(m));
   if (memberships.length) out.push(`${who} is a member of role(s) ${memberships.join(', ')} (none is allowed)`);
   if (facts.schemaCreate.length) out.push(`${who} may CREATE in schema(s) ${facts.schemaCreate.join(', ')}`);
+  if (facts.databaseOwner !== null) out.push(`${who} owns the database (owner ${facts.databaseOwner})`);
+  if (facts.databaseCreate) out.push(`${who} may CREATE in the database`);
+  if (facts.setReplicationRole) out.push(`${who} may SET session_replication_role (turns triggers off)`);
   const owned = facts.owned.filter(o => !(JOB_OWNS_DEFINERS && role === 'job' && o.definerFunction && o.ownedBySelf));
   if (owned.length) {
     const shown = owned.slice(0, 5).map(o => `${o.object} (owner ${o.owner})`);

@@ -59,6 +59,8 @@ column public.user_memory INSERT: user_id, session_id, content, category, status
 column public.user_memory UPDATE: session_id, content, category, status, source, suggested_text, updated_at (mwf_app)
 column public.user_preferences INSERT: user_id, doc (mwf_app)
 column public.user_preferences UPDATE: doc, updated_at (mwf_app)
+database: CONNECT, TEMPORARY (PUBLIC)
+default acl rows: 0
 routine app.all_ciphertext(text[]): EXECUTE (PUBLIC)
 routine app.current_user_id(): EXECUTE (mwf_app)
 routine app.empathy_direction_status(): EXECUTE (mwf_app)

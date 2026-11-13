@@ -103,10 +103,6 @@ DO $$ BEGIN
   END;
 END $$;
 
-\connect - mwf_user
-SELECT 'connected as ' || session_user || ' (setup: REVOKE EXECUTE ON app.anonymize_* FROM mwf_app)';
-REVOKE EXECUTE ON FUNCTION app.anonymize_user_account(uuid), app.anonymize_user_in_session(uuid, uuid) FROM mwf_app;
-
 -- ============================ as mwf_job ======================================
 \connect - mwf_job
 SELECT 'connected as ' || session_user || ' (current_user ' || current_user || ')';
@@ -155,10 +151,6 @@ DO $$ BEGIN
   PERFORM app.empathy_set_status(current_setting('t.att_a')::uuid, 'READY');
   RAISE NOTICE 'PASS 7 author moves own attempt AWAITING_SHARING→READY';
 END $$;
-
-\connect - mwf_user
-SELECT 'connected as ' || session_user || ' (setup: REVOKE EXECUTE ON app.anonymize_* FROM mwf_app)';
-REVOKE EXECUTE ON FUNCTION app.anonymize_user_account(uuid), app.anonymize_user_in_session(uuid, uuid) FROM mwf_app;
 
 -- ============================ as mwf_job ======================================
 \connect - mwf_job

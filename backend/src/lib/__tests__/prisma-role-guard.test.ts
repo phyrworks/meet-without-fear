@@ -25,6 +25,9 @@ const clean = (role = 'mwf_app'): RoleFacts => ({
   memberships: [],
   privilegedRoles: [],
   schemaCreate: [],
+  databaseOwner: null,
+  databaseCreate: false,
+  setReplicationRole: false,
   owned: [],
 });
 
@@ -64,6 +67,19 @@ describe('roleGuardViolations', () => {
       ]);
     }
     expect(roleGuardViolations({ ...clean(), memberships: ['pg_write_all_data'] }, 'app')).toHaveLength(1);
+  });
+
+  it('refuses the database owner, CREATE on the database, and SET on session_replication_role', () => {
+    expect(
+      roleGuardViolations(
+        { ...clean(), databaseOwner: 'mwf_app', databaseCreate: true, setReplicationRole: true },
+        'app',
+      ),
+    ).toEqual([
+      'mwf_app owns the database (owner mwf_app)',
+      'mwf_app may CREATE in the database',
+      'mwf_app may SET session_replication_role (turns triggers off)',
+    ]);
   });
 
   it('refuses CREATE on schema public or app', () => {

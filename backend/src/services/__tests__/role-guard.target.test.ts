@@ -158,5 +158,39 @@ describeTarget('runtime role guard (target)', () => {
         await admin(`REVOKE CREATE ON SCHEMA app FROM ${login}`);
       }
     });
+
+    it('the database owner is refused even when schema public belongs to mwf_migrator (init-db-owner.sh / row 9c)', async () => {
+      await admin(`ALTER SCHEMA public OWNER TO mwf_migrator`);
+      await admin(`ALTER DATABASE "${fx.database}" OWNER TO ${login}`, 'postgres');
+      try {
+        const m = await refusal();
+        expect(m).toContain(`${login} owns the database (owner ${login})`);
+        expect(m).toContain(`${login} may CREATE in the database`);
+        expect(m).not.toContain('schema public');
+      } finally {
+        await admin(`ALTER DATABASE "${fx.database}" OWNER TO mwf_migrator`, 'postgres');
+        await admin(`ALTER SCHEMA public OWNER TO pg_database_owner`);
+      }
+    });
+
+    it('CREATE on the database alone is refused', async () => {
+      await admin(`GRANT CREATE ON DATABASE "${fx.database}" TO ${login}`);
+      try {
+        const m = await refusal();
+        expect(m).toContain(`${login} may CREATE in the database`);
+        expect(m).not.toContain('owns the database');
+      } finally {
+        await admin(`REVOKE CREATE ON DATABASE "${fx.database}" FROM ${login}`);
+      }
+    });
+
+    it('SET on session_replication_role (a SET ON PARAMETER grant) is refused', async () => {
+      await admin(`GRANT SET ON PARAMETER session_replication_role TO ${login}`, 'postgres');
+      try {
+        expect(await refusal()).toContain(`${login} may SET session_replication_role (turns triggers off)`);
+      } finally {
+        await admin(`REVOKE SET ON PARAMETER session_replication_role FROM ${login}`, 'postgres');
+      }
+    });
   });
 });

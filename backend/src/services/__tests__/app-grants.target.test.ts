@@ -186,35 +186,55 @@ describeTarget('mwf_app grants (target)', () => {
     });
   });
 
-  // M5: the complete privilege matrix of mwf_app (and PUBLIC, which it inherits) over schemas
-  // public and app — schemas, tables, columns, routines. Any grant change shows up in the diff
-  // of __snapshots__/app-grants.target.test.ts.snap; update it deliberately (jest -u).
+  // M5: the complete privilege matrix of mwf_app (and PUBLIC, which it inherits): the run
+  // database, schemas public and app, their tables, columns and routines — each privilege with
+  // WITH GRANT OPTION when grantable — and every default ACL (pg_default_acl, any grantee). Any
+  // grant change shows up in the diff of __snapshots__/app-grants.target.test.ts.snap; update it
+  // deliberately (jest -u).
   it('the mwf_app privilege matrix is exactly the recorded one', async () => {
     const rows = await run.sql<{ line: string }>(
       `WITH g AS (SELECT oid, CASE WHEN oid = 0 THEN 'PUBLIC' ELSE rolname END AS name
                   FROM (SELECT oid, rolname FROM pg_roles WHERE rolname = 'mwf_app' UNION ALL SELECT 0, 'PUBLIC') r)
        SELECT line FROM (
-         SELECT 'schema ' || n.nspname || ': ' || a.privilege_type || ' (' || g.name || ')' AS line
+         SELECT 'database: ' || string_agg(a.privilege_type || CASE WHEN a.is_grantable THEN ' WITH GRANT OPTION' ELSE '' END,
+                                           ', ' ORDER BY a.privilege_type) || ' (' || g.name || ')' AS line
+         FROM pg_database d, aclexplode(coalesce(d.datacl, acldefault('d', d.datdba))) a JOIN g ON g.oid = a.grantee
+         WHERE d.datname = current_database()
+         GROUP BY g.name
+         UNION ALL
+         SELECT 'schema ' || n.nspname || ': ' || a.privilege_type
+                || CASE WHEN a.is_grantable THEN ' WITH GRANT OPTION' ELSE '' END || ' (' || g.name || ')'
          FROM pg_namespace n, aclexplode(n.nspacl) a JOIN g ON g.oid = a.grantee
          WHERE n.nspname IN ('public', 'app')
          UNION ALL
-         SELECT 'table ' || n.nspname || '.' || c.relname || ': ' || string_agg(a.privilege_type, ', ' ORDER BY a.privilege_type)
-                || ' (' || g.name || ')'
+         SELECT 'table ' || n.nspname || '.' || c.relname || ': '
+                || string_agg(a.privilege_type || CASE WHEN a.is_grantable THEN ' WITH GRANT OPTION' ELSE '' END,
+                              ', ' ORDER BY a.privilege_type) || ' (' || g.name || ')'
          FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace, aclexplode(c.relacl) a JOIN g ON g.oid = a.grantee
          WHERE n.nspname IN ('public', 'app')
          GROUP BY n.nspname, c.relname, g.name
          UNION ALL
-         SELECT 'column ' || n.nspname || '.' || c.relname || ' ' || a.privilege_type || ': '
+         SELECT 'column ' || n.nspname || '.' || c.relname || ' ' || a.privilege_type
+                || CASE WHEN a.is_grantable THEN ' WITH GRANT OPTION' ELSE '' END || ': '
                 || string_agg(att.attname, ', ' ORDER BY att.attnum) || ' (' || g.name || ')'
          FROM pg_attribute att JOIN pg_class c ON c.oid = att.attrelid JOIN pg_namespace n ON n.oid = c.relnamespace,
               aclexplode(att.attacl) a JOIN g ON g.oid = a.grantee
          WHERE n.nspname IN ('public', 'app') AND att.attnum > 0 AND NOT att.attisdropped
-         GROUP BY n.nspname, c.relname, a.privilege_type, g.name
+         GROUP BY n.nspname, c.relname, a.privilege_type, a.is_grantable, g.name
          UNION ALL
-         SELECT 'routine ' || p.oid::regprocedure::text || ': ' || a.privilege_type || ' (' || g.name || ')'
+         SELECT 'routine ' || p.oid::regprocedure::text || ': ' || a.privilege_type
+                || CASE WHEN a.is_grantable THEN ' WITH GRANT OPTION' ELSE '' END || ' (' || g.name || ')'
          FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace,
               aclexplode(coalesce(p.proacl, acldefault('f', p.proowner))) a JOIN g ON g.oid = a.grantee
          WHERE n.nspname IN ('public', 'app')
+         UNION ALL
+         SELECT 'default acl for ' || pg_get_userbyid(da.defaclrole)
+                || coalesce(' in schema ' || n.nspname, '') || ' on ' || da.defaclobjtype::text || ': '
+                || a.privilege_type || CASE WHEN a.is_grantable THEN ' WITH GRANT OPTION' ELSE '' END
+                || ' (' || CASE WHEN a.grantee = 0 THEN 'PUBLIC' ELSE pg_get_userbyid(a.grantee) END || ')'
+         FROM pg_default_acl da LEFT JOIN pg_namespace n ON n.oid = da.defaclnamespace, aclexplode(da.defaclacl) a
+         UNION ALL
+         SELECT 'default acl rows: ' || count(*) FROM pg_default_acl
        ) m ORDER BY line`,
     );
     expect(rows.map(r => r.line).join('\n')).toMatchSnapshot();

@@ -587,6 +587,13 @@ CREATE TRIGGER t_message_immutable BEFORE UPDATE ON public.message
 -- that the conversation's participant is that user. FINDING: with identity binding off — the
 -- default outside e2e/goldens until §7 row 9c turns DB_IDENTITY_BINDING on — "whose
 -- conversation" is not determinable in the database, so the row shape is all these enforce.
+-- Both rely on mwf_migrator (not a runtime role) owning message and its parents: a cascaded
+-- delete (session / conversation ON DELETE CASCADE) runs its referential-integrity statements as
+-- the referenced table's OWNER, so current_user there is mwf_migrator and the early return lets
+-- it through. Were mwf_app the owner again, every cascade (the job's session retention, account
+-- deletion) would run as mwf_app and be refused here: the triggers assume no runtime role owns them.
+-- app.current_user_id() is read only after the mwf_app early return, so other roles (§7 row 9a's
+-- capability roles) need no EXECUTE on it to write.
 CREATE FUNCTION app.t_message_app_insert() RETURNS trigger
   LANGUAGE plpgsql
   SET search_path = pg_catalog, public, pg_temp
@@ -594,11 +601,12 @@ CREATE FUNCTION app.t_message_app_insert() RETURNS trigger
   DECLARE
     v_owner      uuid;
     v_owner_user uuid;
-    v_me         uuid := app.current_user_id();
+    v_me         uuid;
   BEGIN
     IF current_user <> 'mwf_app' THEN
       RETURN NEW;
     END IF;
+    v_me := app.current_user_id();
     IF NEW.role <> 'USER' OR NEW.kind NOT IN ('CHAT', 'EMPATHY_STATEMENT') THEN
       RAISE EXCEPTION 'the app writes only its own USER turns and statement copies, not % %', NEW.role, NEW.kind
         USING ERRCODE = 'insufficient_privilege';
@@ -624,11 +632,12 @@ CREATE FUNCTION app.t_message_app_delete() RETURNS trigger
   DECLARE
     v_owner      uuid;
     v_owner_user uuid;
-    v_me         uuid := app.current_user_id();
+    v_me         uuid;
   BEGIN
     IF current_user <> 'mwf_app' THEN
       RETURN OLD;
     END IF;
+    v_me := app.current_user_id();
     SELECT c.participant_id, p.user_id INTO v_owner, v_owner_user
     FROM public.conversation c JOIN public.participant p ON p.id = c.participant_id
     WHERE c.id = OLD.conversation_id;
