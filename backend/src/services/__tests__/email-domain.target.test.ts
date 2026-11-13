@@ -9,21 +9,16 @@
  * Requires the target shape and a built target fixture:
  *   npx tsx src/testing/golden/cli.ts build FEEL_HEARD_B
  */
-import { canonicalEmail } from '@meet-without-fear/shared';
+import { canonicalEmail, foldEmail } from '@meet-without-fear/shared';
 import { isTargetShape } from '../../testing/golden/shape';
 import { openTargetRun, randomUuidV7, type TargetRun } from './target-roles';
 
 const describeTarget = isTargetShape() ? describe : describe.skip;
 jest.setTimeout(120_000);
 
-/** tables.sql email_no_format: Unicode 16 Cf ∪ Default_Ignorable_Code_Point, as code-point ranges. */
-const FORMAT_RANGES: Array<[number, number]> = [
-  [0xad, 0xad], [0x34f, 0x34f], [0x600, 0x605], [0x61c, 0x61c], [0x6dd, 0x6dd], [0x70f, 0x70f],
-  [0x890, 0x891], [0x8e2, 0x8e2], [0x115f, 0x1160], [0x17b4, 0x17b5], [0x180b, 0x180f],
-  [0x200b, 0x200f], [0x202a, 0x202e], [0x2060, 0x206f], [0x3164, 0x3164], [0xfe00, 0xfe0f],
-  [0xfeff, 0xfeff], [0xffa0, 0xffa0], [0xfff0, 0xfffb], [0x110bd, 0x110bd], [0x110cd, 0x110cd],
-  [0x13430, 0x1345f], [0x1bca0, 0x1bca3], [0x1d173, 0x1d17a], [0xe0000, 0xe0fff],
-];
+/** Independent of tables.sql: the Unicode properties email_no_format and email_no_space_control encode. */
+const FORMAT = /[\p{Cf}\p{Default_Ignorable_Code_Point}]/u;
+const SPACE_CONTROL = /[\p{White_Space}\p{Cc}]/u;
 
 const cp = (n: number) => String.fromCodePoint(n);
 
@@ -72,7 +67,7 @@ describeTarget('the email domain (target)', () => {
     expect(r).toEqual({ column_type: 'email', domain_base: 'text', default_collation: true, deterministic: true, own_collations: 0 });
   });
 
-  it('the domain carries its seven named CHECKs', async () => {
+  it('the domain carries its eight named CHECKs', async () => {
     const rows = await run.sql<{ conname: string }>(
       `SELECT conname FROM pg_constraint WHERE contypid = 'email'::regtype ORDER BY conname`,
     );
@@ -81,6 +76,7 @@ describeTarget('the email domain (target)', () => {
       'email_canonical',
       'email_length',
       'email_nfc',
+      'email_no_final_sigma',
       'email_no_format',
       'email_no_space_control',
       'email_shape',
@@ -156,7 +152,11 @@ describeTarget('the email domain (target)', () => {
     expect(r.db_default).toBe('69'); // en_US libc: why the CHECK names its collation
     expect(await valid('İ@x.test')).toBe(false);
     expect(await valid(canonicalEmail('İ@x.test'))).toBe(true);
-    expect(await valid(canonicalEmail('ΑΣ@x.test'))).toBe(true); // final sigma, as JS maps it
+    // final sigma: ς is refused, and the fold maps ΑΣ / ας / ασ to one address
+    expect(await valid('ας@x.test')).toBe(false);
+    expect(canonicalEmail('ΑΣ@x.test')).toBe('ασ@x.test');
+    expect(canonicalEmail('ας@x.test')).toBe('ασ@x.test');
+    expect(await valid(canonicalEmail('ΑΣ@x.test'))).toBe(true);
   });
 
   // canonicalEmail() (JS) and email_canonical (PG) must agree on every character the domain can
@@ -196,28 +196,96 @@ describeTarget('the email domain (target)', () => {
     ['trailing U+FE0F variation selector', `a@x.com${cp(0xfe0f)}`],
     ['trailing space', 'a@x.com '],
     ['Kelvin sign (not lowercase: lower() maps it to k)', `a${cp(0x212a)}@x.com`],
+    ['U+03C2 final sigma (folded to σ)', `a${cp(0x3c2)}@x.com`],
   ])('refused: %s', async (_name, text) => {
     expect(await valid(text)).toBe(false);
   });
 
-  it('exhaustive: email_no_format refuses exactly the Cf ∪ default-ignorable ranges, and every code point in them', async () => {
+  // Review round 2: independent of the constraint's own list. Over every code point PostgreSQL
+  // considers assigned (Node 20 knows Unicode 17, PG 18.6 Unicode 16; the others are refused by
+  // email_assigned anyway), the format CHECK refuses exactly JavaScript's \p{Cf} ∪
+  // \p{Default_Ignorable_Code_Point}, and the space/control CHECK exactly \p{White_Space} ∪ \p{Cc}.
+  it('exhaustive: email_no_format = \\p{Cf} ∪ \\p{Default_Ignorable_Code_Point}, email_no_space_control = \\p{White_Space} ∪ \\p{Cc}', async () => {
     const [def] = await run.sql<{ def: string }>(
       `SELECT pg_get_constraintdef(oid) AS def FROM pg_constraint WHERE contypid = 'email'::regtype AND conname = 'email_no_format'`,
     );
     const cls = /'(\[.*\])'/.exec(def.def)![1];
-    const [r] = await run.sql<{ ranges: string; in_range_accepted: number }>(
-      `WITH m AS (
-         SELECT c FROM generate_series(1, 1114111) AS c
-         WHERE c NOT BETWEEN 55296 AND 57343 AND chr(c) COLLATE "C" ~ $1),
-       g AS (SELECT c, c - row_number() OVER (ORDER BY c) AS grp FROM m)
-       SELECT (SELECT string_agg(to_hex(lo) || '-' || to_hex(hi), ',' ORDER BY lo)
-               FROM (SELECT min(c) AS lo, max(c) AS hi FROM g GROUP BY grp) x) AS ranges,
-              (SELECT count(*)::int FROM m WHERE pg_input_is_valid('a' || chr(c) || '@x.test', 'email')) AS in_range_accepted`,
+    const rows = await run.sql<{ c: number; fmt: boolean; sc: boolean }>(
+      `SELECT c, chr(c) COLLATE "C" ~ $1 AS fmt, chr(c) COLLATE pg_c_utf8 ~ '[[:space:][:cntrl:]]' AS sc
+       FROM generate_series(1, 1114111) AS c
+       WHERE c NOT BETWEEN 55296 AND 57343 AND unicode_assigned(chr(c))`,
       [cls],
     );
-    const expected = FORMAT_RANGES.map(([lo, hi]) => `${lo.toString(16)}-${hi.toString(16)}`).join(',');
-    expect(r.ranges).toBe(expected);
-    expect(r.in_range_accepted).toBe(0);
+    expect(rows.length).toBeGreaterThan(290_000);
+    const fmt: string[] = [];
+    const sc: string[] = [];
+    for (const r of rows) {
+      if (r.fmt !== FORMAT.test(cp(r.c))) fmt.push(r.c.toString(16));
+      if (r.sc !== SPACE_CONTROL.test(cp(r.c))) sc.push(r.c.toString(16));
+    }
+    expect({ fmt, sc }).toEqual({ fmt: [], sc: [] });
+  });
+
+  // Review round 2: lowercasing can un-normalize (J + U+030C → j + U+030C, NFC U+01F0), which
+  // the single-code-point tests could not see. Every letter (\p{L}) PostgreSQL considers assigned,
+  // followed by every combining mark (\p{Mn}) it considers assigned: canonicalEmail() is idempotent
+  // and its output passes every domain CHECK. Letters that are neither cased nor the first code
+  // point of some canonical decomposition are skipped: for them l + m is unchanged by the fold
+  // (nothing to lowercase, nothing to compose with) and is a starter followed by one mark, already
+  // NFC — so the pair cannot exercise the fold. That leaves every pair that can.
+  it('exhaustive: every letter × every combining mark canonicalizes to a valid, stable value', async () => {
+    const assigned = (await run.sql<{ c: number }>(
+      `SELECT c FROM generate_series(1, 1114111) AS c WHERE c NOT BETWEEN 55296 AND 57343 AND unicode_assigned(chr(c))`,
+    )).map(r => r.c);
+    // Marks and letters the domain refuses on their own (variation selectors, CGJ, Hangul fillers:
+    // default-ignorable) are left out: refusing them is email_no_format's job, tested above.
+    const marks = assigned.filter(c => /\p{Mn}/u.test(cp(c)) && !FORMAT.test(cp(c)));
+    const starters = new Set<number>();
+    for (const c of assigned) {
+      const d = cp(c).normalize('NFD');
+      if (d !== cp(c)) starters.add(d.codePointAt(0)!);
+    }
+    const letters = assigned.filter(c => {
+      if (!/\p{L}/u.test(cp(c)) || FORMAT.test(cp(c))) return false;
+      const ch = cp(c);
+      return starters.has(c) || ch.toLowerCase() !== ch || ch.toUpperCase() !== ch;
+    });
+    expect(marks.length).toBeGreaterThan(1700);
+    expect(letters.length).toBeGreaterThan(2500);
+    const unstable: string[] = [];
+    const outs = new Set<string>();
+    for (const l of letters)
+      for (const m of marks) {
+        const c1 = canonicalEmail(`${cp(l)}${cp(m)}@x.test`);
+        if (canonicalEmail(c1) !== c1) unstable.push(`${l.toString(16)}+${m.toString(16)}`);
+        outs.add(c1);
+      }
+    expect(unstable).toEqual([]);
+    const all = [...outs];
+    const refused: string[] = [];
+    for (let i = 0; i < all.length; i += 100_000) {
+      const bad = await run.sql<{ e: string }>(
+        `SELECT e FROM unnest($1::text[]) AS e WHERE NOT pg_input_is_valid(e, 'email')`,
+        [all.slice(i, i + 100_000)],
+      );
+      for (const r of bad) refused.push([...r.e].slice(0, 3).map(ch => ch.codePointAt(0)!.toString(16)).join('+'));
+    }
+    expect({ pairs: letters.length * marks.length > 4_000_000, refused: refused.slice(0, 20), n: refused.length }).toEqual({
+      pairs: true,
+      refused: [],
+      n: 0,
+    });
+  }, 600_000);
+
+  it('J + U+030C and İ + U+0316: the canonical form is NFC, accepted and stable', async () => {
+    for (const raw of ['J\u030C@x.test', 'İ\u0316@x.test']) {
+      const c = canonicalEmail(raw);
+      expect(c.normalize('NFC')).toBe(c);
+      expect(canonicalEmail(c)).toBe(c);
+      expect([raw, await valid(c)]).toEqual([raw, true]);
+    }
+    expect(canonicalEmail('J\u030C@x.test')).toBe('\u01F0@x.test');
+    expect(foldEmail('J\u030C')).toBe('\u01F0');
   });
 
   it('the tombstone CHECK accepts exactly deleted+<id>@invalid: not a case variant, not the old form, not a live address', async () => {

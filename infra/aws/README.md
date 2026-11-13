@@ -105,6 +105,14 @@ member of `mwf_job`) is refused until the design note §7 row 9c cutover; that i
 - if docker cannot run the image to look (any exit but 0/1 from `test -f`): the deploy aborts.
 There is no switch to skip the preflight for a guarded image. Failed migrations/readiness leave the deployment failed; do not blindly restore an older database or automatically down-migrate. An app rollback does not undo schema changes. Before AWS receives writes, Render can be resumed with its original DNS record. First reset its frozen role setting using an operator connection: `SET default_transaction_read_only=off; ALTER ROLE be_heard_db_user RESET default_transaction_read_only;`. After AWS receives writes, freeze writes and move the latest data back before routing to Render, or repair AWS in place.
 
+### PostgreSQL major upgrade: the email domain's Unicode tables
+
+The `email` domain (`"user".email`, work-k5fk.5) is built on PostgreSQL's own Unicode tables: `lower(… COLLATE pg_unicode_fast)`, `unicode_assigned()` and `IS NFC NORMALIZED` are immutable, and the builtin provider's Unicode version (`SELECT unicode_version();`, 16.0 on PostgreSQL 18) changes only with the major version — not with an OS or ICU update. A major upgrade (`pg_upgrade`, a new major image, a restore into a newer major) therefore requires:
+
+1. Re-derive the `email_no_format` code-point list in `backend/scripts/target-shape/tables.sql` for the new Unicode version (Cf ∪ Default_Ignorable_Code_Point); `email-domain.target.test.ts` compares it with JavaScript's `\p{Cf}` / `\p{Default_Ignorable_Code_Point}` over every code point the server considers assigned and fails until it matches.
+2. Nothing for existing rows: a code point not assigned in the old version was refused then (`email_assigned`), so every stored address was built only from characters both versions know, and their case mapping and normalization are stable (Unicode stability policy).
+3. Re-run the exhaustive tests in `email-domain.target.test.ts` (case mapping = JavaScript, the format ranges, base letter × combining mark) against the upgraded server, and `canonicalEmail` (`shared/src/utils/email.ts`) against the Node version in use.
+
 Pin and review image upgrades, back up first, rehearse restore, and schedule major PostgreSQL upgrades/reboots deliberately. Database and certificate volumes have stable names and are never removed by deployment. Never use `docker compose down -v`. Reboot verification must show healthy containers, unchanged data and active timers. Keep disk space under review; release artifacts expire after 30 days in S3, and current/previous images must remain available locally.
 
 See `docs/deployment/aws-migration-status.md` for measured results, resource IDs, current release, DNS cutover and retirement status.

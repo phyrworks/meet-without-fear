@@ -10,7 +10,7 @@ import { loadCurrentStages, loadStageStates } from '../services/stage-shim';
 import { verifyToken } from '@clerk/express';
 import { logger } from '../lib/logger';
 import { fieldEncryptionEnabled } from '../utils/field-encryption';
-import { canonicalEmail } from '@meet-without-fear/shared';
+import { foldEmail } from '@meet-without-fear/shared';
 
 /**
  * A brain_activity jsonb column (input / output / metadata) as the dashboard reads it: arbitrary
@@ -1257,13 +1257,13 @@ router.get('/sessions', async (req, res) => {
         ...(isId ? [{ id: search }] : []),
         { participants: { some: { displayName: { contains: search, mode: 'insensitive' } } } },
         { participants: { some: { user: { name: { contains: search, mode: 'insensitive' } } } } },
-        // user.email is stored canonical (lowercase, work-k5fk.5): match the canonical search term
-        { participants: { some: { user: { email: { contains: canonicalEmail(search) } } } } },
+        // user.email is stored canonical (work-k5fk.5): fold the search term the same way (not trimmed: a substring)
+        { participants: { some: { user: { email: { contains: foldEmail(search) } } } } },
       ];
       innerWhere.OR = [
         ...(isId ? [{ id: search }] : []),
         { user: { name: { contains: search, mode: 'insensitive' } } },
-        { user: { email: { contains: canonicalEmail(search) } } },
+        { user: { email: { contains: foldEmail(search) } } },
         // reflection.title is encrypted with a random IV (TS-13): with a key set,
         // SQL cannot match it, so the arm is skipped explicitly and the response
         // says so (ruling R45) rather than silently matching nothing. Restoring it

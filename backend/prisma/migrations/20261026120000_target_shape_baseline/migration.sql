@@ -122,7 +122,7 @@ REVOKE EXECUTE ON FUNCTION app.current_user_id() FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION app.current_user_id() TO mwf_app, mwf_job, mwf_ops, mwf_auth;
 
 -- ============================================================================
--- 1. Domains, enums and the 47 target tables (backend/scripts/target-shape/tables.sql; 115 named objects, all lower-case; 129 uuid7 columns)
+-- 1. Domains, enums and the 47 target tables (backend/scripts/target-shape/tables.sql; 116 named objects, all lower-case; 129 uuid7 columns)
 -- ============================================================================
 
 -- ============================================================================
@@ -333,9 +333,11 @@ COMMENT ON DOMAIN milestone_key IS 'A milestone key: a lower-case identifier of 
 
 -- work-k5fk.5: an email address is stored in ONE canonical form and compared
 -- exactly (owner decision, review round 2: drop the ICU collation). The
--- canonical form is the whole address trimmed, NFC-normalized and lowercased
--- — shared/src/utils/email.ts canonicalEmail(), s.trim().normalize('NFC')
--- .toLowerCase(), which every writer and lookup uses. The database never
+-- canonical form is the whole address trimmed, lowercased, final sigma
+-- folded and then NFC-normalized — shared/src/utils/email.ts canonicalEmail()
+-- (= foldEmail(s.trim()): toLowerCase, ς → σ, normalize('NFC')), which every
+-- writer and lookup uses. NFC comes last because lowercasing an NFC string
+-- can un-normalize it: 'J̌' lowercases to j + U+030C, whose NFC is U+01F0. The database never
 -- rewrites a value: email_canonical refuses one that is not canonical, so a
 -- writer that forgot to canonicalize fails closed instead of creating a
 -- second row for the same mailbox. The UNIQUE on "user".email then compares
@@ -354,7 +356,10 @@ COMMENT ON DOMAIN milestone_key IS 'A milestone key: a lower-case identifier of 
 --
 -- lower() is pinned to the builtin collation pg_unicode_fast (full Unicode
 -- case mapping, the same as JavaScript's toLowerCase: 'İ' → 'i̇', U+0069
--- U+0307; final sigma 'ΑΣ' → 'ας'). Under the database's default libc
+-- U+0307). Final sigma: Σ, σ and ς are case forms of one letter, and
+-- lower() writes ς at the end of a word ('ΑΣ' → 'ας' but 'ασ' stays), so
+-- the fold maps ς to σ and email_no_final_sigma refuses ς: one address,
+-- one row. Under the database's default libc
 -- collation lower('İ') is 'i' (locale-dependent), which would disagree with
 -- canonicalEmail(); email-domain.target.test.ts pins both.
 CREATE DOMAIN email AS text
@@ -362,18 +367,20 @@ CREATE DOMAIN email AS text
   CONSTRAINT email_shape CHECK (VALUE COLLATE "C" ~ '^[^@]+@[^@]+$')
   CONSTRAINT email_canonical CHECK (VALUE = lower(VALUE COLLATE pg_unicode_fast))
   CONSTRAINT email_nfc CHECK (VALUE IS NFC NORMALIZED)
+  CONSTRAINT email_no_final_sigma CHECK (strpos(VALUE, U&'\03C2') = 0)
   CONSTRAINT email_assigned CHECK (unicode_assigned(VALUE))
   CONSTRAINT email_no_space_control CHECK (VALUE COLLATE pg_c_utf8 !~ '[[:space:][:cntrl:]]')
   CONSTRAINT email_no_format CHECK (VALUE COLLATE "C" !~
-    '[\u00AD\u034F\u0600-\u0605\u061C\u06DD\u070F\u0890-\u0891\u08E2\u115F-\u1160\u17B4-\u17B5\u180B-\u180F\u200B-\u200F\u202A-\u202E\u2060-\u206F\u3164\uFE00-\uFE0F\uFEFF\uFFA0\uFFF0-\uFFFB\U000110BD\U000110CD\U00013430-\U0001345F\U0001BCA0-\U0001BCA3\U0001D173-\U0001D17A\U000E0000-\U000E0FFF]');
-COMMENT ON DOMAIN email IS 'An email address in its one canonical form (trimmed, NFC, lowercased: shared canonicalEmail()), compared exactly. Case is the only equivalence and it is removed before storage; a plus-address, an accent, ß, a fullwidth form, another script''s digit stay distinct. The database refuses a non-canonical value rather than rewriting it.';
+    '[\u00AD\u034F\u0600-\u0605\u061C\u06DD\u070F\u0890-\u0891\u08E2\u115F-\u1160\u17B4-\u17B5\u180B-\u180F\u200B-\u200F\u202A-\u202E\u2060-\u206F\u3164\uFE00-\uFE0F\uFEFF\uFFA0\uFFF0-\uFFFB\U000110BD\U000110CD\U00013430-\U0001343F\U0001BCA0-\U0001BCA3\U0001D173-\U0001D17A\U000E0000-\U000E0FFF]');
+COMMENT ON DOMAIN email IS 'An email address in its one canonical form (trimmed, lowercased, ς folded to σ, NFC: shared canonicalEmail()), compared exactly. Case is the only equivalence and it is removed before storage; a plus-address, an accent, ß, a fullwidth form, another script''s digit stay distinct. The database refuses a non-canonical value rather than rewriting it.';
 COMMENT ON CONSTRAINT email_length ON DOMAIN email IS 'At most 254 characters (the RFC 5321 path limit).';
 COMMENT ON CONSTRAINT email_shape ON DOMAIN email IS 'Exactly one @, with a non-empty local part and a non-empty domain. The tombstone deleted+<id>@invalid has this shape.';
 COMMENT ON CONSTRAINT email_canonical ON DOMAIN email IS 'Canonical case: lowercase by full Unicode case mapping (lower() under pg_unicode_fast, equal to JavaScript toLowerCase). Writers canonicalize with canonicalEmail(); a value that is not canonical is refused, never rewritten.';
-COMMENT ON CONSTRAINT email_nfc ON DOMAIN email IS 'NFC-normalized (RFC 6532 §3.1: NFC SHOULD be used, NFKC SHOULD NOT). Combining marks stay legal; a fullwidth form or a ligature is a different, valid address. Part of the canonical form canonicalEmail() produces.';
+COMMENT ON CONSTRAINT email_nfc ON DOMAIN email IS 'NFC-normalized (RFC 6532 §3.1: NFC SHOULD be used, NFKC SHOULD NOT). Combining marks stay legal; a fullwidth form or a ligature is a different, valid address. Part of the canonical form canonicalEmail() produces (NFC after lowercasing).';
+COMMENT ON CONSTRAINT email_no_final_sigma ON DOMAIN email IS 'No U+03C2 GREEK SMALL LETTER FINAL SIGMA: Σ, σ and ς are case forms of one letter, and lower() writes ς only at a word end, so canonicalEmail() folds ς to σ and this CHECK refuses an unfolded value (one address, one row).';
 COMMENT ON CONSTRAINT email_assigned ON DOMAIN email IS 'Every code point assigned in PostgreSQL''s Unicode version.';
 COMMENT ON CONSTRAINT email_no_space_control ON DOMAIN email IS 'No whitespace (Unicode White_Space) and no control character (Cc), by pg_c_utf8''s Unicode character classes.';
-COMMENT ON CONSTRAINT email_no_format ON DOMAIN email IS 'No format character (Cf: soft hyphen, zero-width space/joiners, bidi controls, …) and no other default-ignorable code point (variation selectors, Hangul fillers, tags): invisible characters that would make two addresses look identical. Code-point ranges under "C" (Unicode 16 Cf ∪ Default_Ignorable_Code_Point).';
+COMMENT ON CONSTRAINT email_no_format ON DOMAIN email IS 'No format character (Cf: soft hyphen, zero-width space/joiners, bidi controls, …) and no other default-ignorable code point (variation selectors, Hangul fillers, tags): invisible characters that would make two addresses look identical. Code-point ranges under "C": exactly Cf ∪ Default_Ignorable_Code_Point of PostgreSQL 18''s Unicode 16 (email-domain.target.test.ts compares it with JavaScript''s \p{Cf} and \p{Default_Ignorable_Code_Point}); re-derive on a PostgreSQL major upgrade (infra/aws/README.md).';
 
 -- ----------------------------------------------------------------------------
 -- Enums, in schema.prisma order.
