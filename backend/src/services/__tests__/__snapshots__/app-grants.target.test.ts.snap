@@ -63,6 +63,7 @@ database: CONNECT, TEMPORARY (PUBLIC)
 default acl rows: 0
 routine app.all_ciphertext(text[]): EXECUTE (PUBLIC)
 routine app.current_user_id(): EXECUTE (mwf_app)
+routine app.email_no_ignorable(text): EXECUTE (PUBLIC)
 routine app.empathy_direction_status(): EXECUTE (mwf_app)
 routine app.empathy_set_status(uuid,empathy_status,text): EXECUTE (mwf_app)
 routine app.is_co_participant(uuid): EXECUTE (mwf_app)
@@ -213,6 +214,8 @@ routine app.current_user_id(): EXECUTE (mwf_auth)
 routine app.current_user_id(): EXECUTE (mwf_job)
 routine app.current_user_id(): EXECUTE (mwf_migrator)
 routine app.current_user_id(): EXECUTE (mwf_ops)
+routine app.email_no_ignorable(text): EXECUTE (PUBLIC)
+routine app.email_no_ignorable(text): EXECUTE (mwf_migrator)
 routine app.empathy_direction_status(): EXECUTE (mwf_job)
 routine app.empathy_set_status(uuid,empathy_status,text): EXECUTE (mwf_job)
 routine app.is_co_participant(uuid): EXECUTE (mwf_job)
@@ -344,6 +347,7 @@ routine owner app.anonymize_user_account(uuid): mwf_job
 routine owner app.anonymize_user_in_session(uuid,uuid): mwf_job
 routine owner app.create_user_for_clerk(text,text,text,text): mwf_job
 routine owner app.current_user_id(): mwf_migrator
+routine owner app.email_no_ignorable(text): mwf_migrator
 routine owner app.empathy_direction_status(): mwf_job
 routine owner app.empathy_set_status(uuid,empathy_status,text): mwf_job
 routine owner app.is_co_participant(uuid): mwf_job
