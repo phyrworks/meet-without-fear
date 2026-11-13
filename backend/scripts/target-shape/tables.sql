@@ -50,6 +50,10 @@
 --    grant says so. FINDING lines mark writes that need more than they should
 --    (another user's row, a status outside its function); RLS and definer
 --    functions take them over (design note §6, §7 rows 9a–9g).
+--  * SELECT is table-wide on every table the app reads: a request may read
+--    any row, its partner's and strangers' alike. That is the expected gap
+--    until RLS (design note §6, rows 9d–9g) narrows it to rows; grants
+--    narrow commands and columns, never rows.
 --  * The [Pnn] tags on the CHECKs name the TS-7 data-move prechecks that
 --    guarded each rule; kept as cross-references.
 -- ============================================================================
@@ -289,6 +293,10 @@ COMMENT ON COLUMN "user".deleted_at IS 'Soft delete (P3 D9): the row becomes a s
 GRANT SELECT ON "user" TO mwf_app;
 GRANT INSERT (clerk_id, email, first_name, last_name, created_at, updated_at) ON "user" TO mwf_app;
 GRANT UPDATE (clerk_id, email, first_name, last_name, updated_at) ON "user" TO mwf_app;
+-- FINDING (work-jv9y, a live production bug, not fixed here): UPDATE (clerk_id, email) is what lets
+-- middleware/auth.ts's P2002 path re-bind an EXISTING user's row — found by the email a new Clerk
+-- identity presents (emailAddresses[0], not checked verified or primary) — to that new identity: an
+-- account takeover. The grant is the app's today; the fix (and this grant) is the owner's call.
 
 CREATE TABLE relationship_member (
     relationship_id uuid7 NOT NULL REFERENCES relationship ON DELETE CASCADE,
@@ -689,6 +697,8 @@ COMMENT ON TABLE participant_milestone IS 'Event: a participant reached a milest
 -- needs_confirmed, choices_shared; the key check is RLS's, step 9); every other key, and un-reaching, is the job's.
 GRANT SELECT ON participant_milestone TO mwf_app;
 GRANT INSERT (participant_id, milestone_key, reached_at) ON participant_milestone TO mwf_app;
+-- Holds only because reachMilestone is raw SQL (INSERT … ON CONFLICT DO NOTHING naming these three
+-- columns): a Prisma create would also send created_at.
 
 CREATE TABLE ai_memory (
     id uuid7 NOT NULL DEFAULT uuidv7() PRIMARY KEY,
@@ -831,6 +841,8 @@ GRANT SELECT ON draft TO mwf_app;
 GRANT INSERT (id, participant_id, kind, about_participant_id, invitation_id, attempt_id, share_offer_id, content, ready_to_share,
               version, reopened_at, created_at, updated_at) ON draft TO mwf_app;
 GRANT UPDATE (content, ready_to_share, version, reopened_at) ON draft TO mwf_app;
+-- UPDATE holds without updated_at only because every draft update is raw SQL (upsertDraft's
+-- ON CONFLICT DO UPDATE, the reopen stamp; touch_updated_at sets it): a Prisma update would send it.
 GRANT DELETE ON draft TO mwf_app;
 
 CREATE TABLE session_key (
@@ -1032,12 +1044,12 @@ CREATE TABLE proposal_choice (
 CREATE INDEX ON proposal_choice (participant_id);
 COMMENT ON TABLE proposal_choice IS 'A participant''s willingness on a proposal; private until the choices_shared milestone.';
 COMMENT ON COLUMN proposal_choice.note IS 'encrypted (session): the participant''s note on their choice (route max 1000), or their chat message when the choice was inferred.';
--- mwf_app: the caller's own choice (stage4-store upsertChoice / withdrawChoice). created_at in UPDATE: upsertChoice's
+-- mwf_app: the caller's own choice (stage4-store upsertChoice). created_at in UPDATE: upsertChoice's
 -- ON CONFLICT DO UPDATE re-stamps it.
 GRANT SELECT ON proposal_choice TO mwf_app;
 GRANT INSERT (proposal_id, participant_id, decision, note, created_at, updated_at) ON proposal_choice TO mwf_app;
 GRANT UPDATE (decision, note, created_at) ON proposal_choice TO mwf_app;
-GRANT DELETE ON proposal_choice TO mwf_app;
+-- No DELETE: withdrawChoice (stage4-store.ts) has no caller (review round 1, M4).
 
 CREATE TABLE proposal_revision (
     id uuid7 NOT NULL DEFAULT uuidv7() PRIMARY KEY,
@@ -1347,6 +1359,8 @@ COMMENT ON TABLE user_preferences IS 'The user''s preference documents (memory, 
 -- mwf_app: the caller's settings document (user-settings.ts; FOR UPDATE needs UPDATE).
 GRANT SELECT ON user_preferences TO mwf_app;
 GRANT INSERT (user_id, doc) ON user_preferences TO mwf_app;
+-- INSERT holds without the timestamps only because the row is created by raw SQL
+-- (user-settings.ts INSERT … ON CONFLICT DO NOTHING); a Prisma create would send them.
 GRANT UPDATE (doc, updated_at) ON user_preferences TO mwf_app;
 
 CREATE TABLE user_memory (
@@ -1390,6 +1404,8 @@ COMMENT ON COLUMN feature_state.doc IS 'encrypted (user): jsonb envelope {"$enc"
 -- mwf_app: the caller's per-feature state document (feature-state.ts; FOR UPDATE needs UPDATE).
 GRANT SELECT ON feature_state TO mwf_app;
 GRANT INSERT (user_id, feature, doc) ON feature_state TO mwf_app;
+-- INSERT holds without the timestamps only because the row is created by raw SQL
+-- (feature-state.ts INSERT … ON CONFLICT DO NOTHING); a Prisma create would send them.
 GRANT UPDATE (doc, updated_at) ON feature_state TO mwf_app;
 
 CREATE TABLE user_key (

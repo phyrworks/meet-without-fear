@@ -177,6 +177,10 @@ GRANT EXECUTE ON FUNCTION app.current_user_id() TO mwf_app, mwf_job, mwf_ops, mw
 --    grant says so. FINDING lines mark writes that need more than they should
 --    (another user's row, a status outside its function); RLS and definer
 --    functions take them over (design note §6, §7 rows 9a–9g).
+--  * SELECT is table-wide on every table the app reads: a request may read
+--    any row, its partner's and strangers' alike. That is the expected gap
+--    until RLS (design note §6, rows 9d–9g) narrows it to rows; grants
+--    narrow commands and columns, never rows.
 --  * The [Pnn] tags on the CHECKs name the TS-7 data-move prechecks that
 --    guarded each rule; kept as cross-references.
 -- ============================================================================
@@ -416,6 +420,10 @@ COMMENT ON COLUMN "user".deleted_at IS 'Soft delete (P3 D9): the row becomes a s
 GRANT SELECT ON "user" TO mwf_app;
 GRANT INSERT (clerk_id, email, first_name, last_name, created_at, updated_at) ON "user" TO mwf_app;
 GRANT UPDATE (clerk_id, email, first_name, last_name, updated_at) ON "user" TO mwf_app;
+-- FINDING (work-jv9y, a live production bug, not fixed here): UPDATE (clerk_id, email) is what lets
+-- middleware/auth.ts's P2002 path re-bind an EXISTING user's row — found by the email a new Clerk
+-- identity presents (emailAddresses[0], not checked verified or primary) — to that new identity: an
+-- account takeover. The grant is the app's today; the fix (and this grant) is the owner's call.
 
 CREATE TABLE relationship_member (
     relationship_id uuid7 NOT NULL REFERENCES relationship ON DELETE CASCADE,
@@ -816,6 +824,8 @@ COMMENT ON TABLE participant_milestone IS 'Event: a participant reached a milest
 -- needs_confirmed, choices_shared; the key check is RLS's, step 9); every other key, and un-reaching, is the job's.
 GRANT SELECT ON participant_milestone TO mwf_app;
 GRANT INSERT (participant_id, milestone_key, reached_at) ON participant_milestone TO mwf_app;
+-- Holds only because reachMilestone is raw SQL (INSERT … ON CONFLICT DO NOTHING naming these three
+-- columns): a Prisma create would also send created_at.
 
 CREATE TABLE ai_memory (
     id uuid7 NOT NULL DEFAULT uuidv7() PRIMARY KEY,
@@ -958,6 +968,8 @@ GRANT SELECT ON draft TO mwf_app;
 GRANT INSERT (id, participant_id, kind, about_participant_id, invitation_id, attempt_id, share_offer_id, content, ready_to_share,
               version, reopened_at, created_at, updated_at) ON draft TO mwf_app;
 GRANT UPDATE (content, ready_to_share, version, reopened_at) ON draft TO mwf_app;
+-- UPDATE holds without updated_at only because every draft update is raw SQL (upsertDraft's
+-- ON CONFLICT DO UPDATE, the reopen stamp; touch_updated_at sets it): a Prisma update would send it.
 GRANT DELETE ON draft TO mwf_app;
 
 CREATE TABLE session_key (
@@ -1159,12 +1171,12 @@ CREATE TABLE proposal_choice (
 CREATE INDEX ON proposal_choice (participant_id);
 COMMENT ON TABLE proposal_choice IS 'A participant''s willingness on a proposal; private until the choices_shared milestone.';
 COMMENT ON COLUMN proposal_choice.note IS 'encrypted (session): the participant''s note on their choice (route max 1000), or their chat message when the choice was inferred.';
--- mwf_app: the caller's own choice (stage4-store upsertChoice / withdrawChoice). created_at in UPDATE: upsertChoice's
+-- mwf_app: the caller's own choice (stage4-store upsertChoice). created_at in UPDATE: upsertChoice's
 -- ON CONFLICT DO UPDATE re-stamps it.
 GRANT SELECT ON proposal_choice TO mwf_app;
 GRANT INSERT (proposal_id, participant_id, decision, note, created_at, updated_at) ON proposal_choice TO mwf_app;
 GRANT UPDATE (decision, note, created_at) ON proposal_choice TO mwf_app;
-GRANT DELETE ON proposal_choice TO mwf_app;
+-- No DELETE: withdrawChoice (stage4-store.ts) has no caller (review round 1, M4).
 
 CREATE TABLE proposal_revision (
     id uuid7 NOT NULL DEFAULT uuidv7() PRIMARY KEY,
@@ -1474,6 +1486,8 @@ COMMENT ON TABLE user_preferences IS 'The user''s preference documents (memory, 
 -- mwf_app: the caller's settings document (user-settings.ts; FOR UPDATE needs UPDATE).
 GRANT SELECT ON user_preferences TO mwf_app;
 GRANT INSERT (user_id, doc) ON user_preferences TO mwf_app;
+-- INSERT holds without the timestamps only because the row is created by raw SQL
+-- (user-settings.ts INSERT … ON CONFLICT DO NOTHING); a Prisma create would send them.
 GRANT UPDATE (doc, updated_at) ON user_preferences TO mwf_app;
 
 CREATE TABLE user_memory (
@@ -1517,6 +1531,8 @@ COMMENT ON COLUMN feature_state.doc IS 'encrypted (user): jsonb envelope {"$enc"
 -- mwf_app: the caller's per-feature state document (feature-state.ts; FOR UPDATE needs UPDATE).
 GRANT SELECT ON feature_state TO mwf_app;
 GRANT INSERT (user_id, feature, doc) ON feature_state TO mwf_app;
+-- INSERT holds without the timestamps only because the row is created by raw SQL
+-- (feature-state.ts INSERT … ON CONFLICT DO NOTHING); a Prisma create would send them.
 GRANT UPDATE (doc, updated_at) ON feature_state TO mwf_app;
 
 CREATE TABLE user_key (
@@ -2187,13 +2203,17 @@ REVOKE EXECUTE ON FUNCTION
   app.anonymize_user_in_session(uuid, uuid), app.anonymize_user_account(uuid),
   app.resolve_user_by_clerk_id(text), app.create_user_for_clerk(text, text, text, text)
   FROM PUBLIC;
--- mwf_app: the identity-bound reads and the request-path writers (is_member
--- and partner_user_id: as TS-1 granted them).
+-- mwf_app (work-k5fk.10.2): the request-path writers it calls (session_set_status — invitations.ts
+-- accept, on the app transaction; empathy_set_status; need_revoke_share) and the identity-bound
+-- read behind v_empathy_direction_status. is_member, partner_user_id, is_co_participant and
+-- my_participant have no app caller today: they are kept because the RLS policies of design note
+-- §6 (rows 9d–9g) evaluate them as mwf_app. Not granted: anonymize_user_in_session and
+-- anonymize_user_account (the job is their only caller: session-deletion.ts, account-deletion.ts),
+-- resolve_user_by_clerk_id (mwf_auth's; no app caller), need_share (the job's).
 GRANT EXECUTE ON FUNCTION
   app.is_member(uuid), app.partner_user_id(uuid), app.is_co_participant(uuid), app.my_participant(uuid), app.empathy_direction_status(),
   app.session_set_status(uuid, public.session_status), app.empathy_set_status(uuid, public.empathy_status, text),
-  app.need_revoke_share(uuid), app.anonymize_user_in_session(uuid, uuid), app.anonymize_user_account(uuid),
-  app.resolve_user_by_clerk_id(text)
+  app.need_revoke_share(uuid)
   TO mwf_app;
 -- mwf_job: its own writers when called from a job connection.
 GRANT EXECUTE ON FUNCTION
@@ -2274,6 +2294,77 @@ CREATE FUNCTION app.t_message_immutable() RETURNS trigger
   $$;
 CREATE TRIGGER t_message_immutable BEFORE UPDATE ON public.message
   FOR EACH ROW EXECUTE FUNCTION app.t_message_immutable();
+
+-- T-message-app (work-k5fk.10.2, review round 1 M2): the rows mwf_app may insert into and
+-- delete from message. Its grants (tables.sql) cannot narrow rows; until RLS (design note §6,
+-- rows 9d–9g) these do. Keyed on current_user, not session_user: a SECURITY DEFINER function
+-- the app calls (app.empathy_set_status, owned by mwf_job) writes the subject's delivered copy
+-- with the owner's rights, and that write is the job's, not the app's.
+--   INSERT: only the participant's own USER turn (CHAT; message-store createParticipantMessage)
+--     and its own EMPATHY_STATEMENT copy (empathy-messages ownStatementCopy), sent by the
+--     participant that owns the conversation;
+--   DELETE: only that participant's own USER CHAT turn (a failed stream turn,
+--     stream-turn-persistence.ts) or a SHARE_SUGGESTION (reconciler/sharing.ts decline/accept).
+-- Both also require, when the request's identity is bound (app.current_user_id() not NULL),
+-- that the conversation's participant is that user. FINDING: with identity binding off — the
+-- default outside e2e/goldens until §7 row 9c turns DB_IDENTITY_BINDING on — "whose
+-- conversation" is not determinable in the database, so the row shape is all these enforce.
+CREATE FUNCTION app.t_message_app_insert() RETURNS trigger
+  LANGUAGE plpgsql
+  SET search_path = pg_catalog, public, pg_temp
+  AS $$
+  DECLARE
+    v_owner      uuid;
+    v_owner_user uuid;
+    v_me         uuid := app.current_user_id();
+  BEGIN
+    IF current_user <> 'mwf_app' THEN
+      RETURN NEW;
+    END IF;
+    IF NEW.role <> 'USER' OR NEW.kind NOT IN ('CHAT', 'EMPATHY_STATEMENT') THEN
+      RAISE EXCEPTION 'the app writes only its own USER turns and statement copies, not % %', NEW.role, NEW.kind
+        USING ERRCODE = 'insufficient_privilege';
+    END IF;
+    SELECT c.participant_id, p.user_id INTO v_owner, v_owner_user
+    FROM public.conversation c JOIN public.participant p ON p.id = c.participant_id
+    WHERE c.id = NEW.conversation_id;
+    IF NEW.sender_participant_id IS DISTINCT FROM v_owner
+       OR (v_me IS NOT NULL AND v_owner_user IS DISTINCT FROM v_me) THEN
+      RAISE EXCEPTION 'the app writes only as the participant that owns the conversation'
+        USING ERRCODE = 'insufficient_privilege';
+    END IF;
+    RETURN NEW;
+  END
+  $$;
+CREATE TRIGGER t_message_app_insert BEFORE INSERT ON public.message
+  FOR EACH ROW EXECUTE FUNCTION app.t_message_app_insert();
+
+CREATE FUNCTION app.t_message_app_delete() RETURNS trigger
+  LANGUAGE plpgsql
+  SET search_path = pg_catalog, public, pg_temp
+  AS $$
+  DECLARE
+    v_owner      uuid;
+    v_owner_user uuid;
+    v_me         uuid := app.current_user_id();
+  BEGIN
+    IF current_user <> 'mwf_app' THEN
+      RETURN OLD;
+    END IF;
+    SELECT c.participant_id, p.user_id INTO v_owner, v_owner_user
+    FROM public.conversation c JOIN public.participant p ON p.id = c.participant_id
+    WHERE c.id = OLD.conversation_id;
+    IF NOT ((OLD.role = 'USER' AND OLD.kind = 'CHAT' AND OLD.sender_participant_id = v_owner)
+            OR OLD.kind = 'SHARE_SUGGESTION')
+       OR (v_me IS NOT NULL AND v_owner_user IS DISTINCT FROM v_me) THEN
+      RAISE EXCEPTION 'the app deletes only its own failed turn or a share suggestion of its own conversation'
+        USING ERRCODE = 'insufficient_privilege';
+    END IF;
+    RETURN OLD;
+  END
+  $$;
+CREATE TRIGGER t_message_app_delete BEFORE DELETE ON public.message
+  FOR EACH ROW EXECUTE FUNCTION app.t_message_app_delete();
 
 -- T-same-session: author and subject belong to the same session.
 CREATE FUNCTION app.t_attempt_same_session() RETURNS trigger
@@ -2500,6 +2591,7 @@ CREATE CONSTRAINT TRIGGER t_agreement_parties_on_agreement AFTER INSERT ON publi
 -- No caller needs EXECUTE on a trigger function or on the agreement_parties_ok predicate.
 REVOKE EXECUTE ON FUNCTION
   app.touch_updated_at(), app.t_session_cardinality(), app.t_participant_cardinality(), app.t_message_immutable(),
+  app.t_message_app_insert(), app.t_message_app_delete(),
   app.t_attempt_same_session(), app.t_review_subject(), app.t_consent_owner(), app.t_consent_transitions(),
   app.t_need_share_owner(), app.t_need_share_terminal(), app.t_result_live_attempt(), app.t_agreement_parties(),
   app.agreement_parties_ok(uuid)
