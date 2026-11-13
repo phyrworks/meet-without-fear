@@ -1,23 +1,31 @@
 /**
  * work-k5fk.5, against a real target run database: "user".email is the `email`
- * domain, whose collation `email_ci` (ICU, und-u-ks-level2, nondeterministic)
- * compares case-insensitively — so a case variant of an existing address
- * collides on the UNIQUE — while a plus-address stays a different address.
- * The tombstone CHECK compares under "C", so only the exact deleted+<id>@invalid
- * form the anonymise walk writes passes.
- *
- * Review round 1 (owner decision): the domain refuses every character email_ci
- * would fold away, so case is the only equivalence an inserted character can
- * introduce — proved below for every code point.
+ * domain — one canonical form (trimmed, NFC, lowercased: shared canonicalEmail())
+ * compared exactly (owner decision, review round 2: no ICU collation). The
+ * database refuses a value that is not canonical rather than rewriting it, so
+ * case is the only equivalence and it never reaches the table. A plus-address,
+ * an accent, ß, a fullwidth form, another script's digit and kana stay distinct.
  *
  * Requires the target shape and a built target fixture:
  *   npx tsx src/testing/golden/cli.ts build FEEL_HEARD_B
  */
+import { canonicalEmail } from '@meet-without-fear/shared';
 import { isTargetShape } from '../../testing/golden/shape';
 import { openTargetRun, randomUuidV7, type TargetRun } from './target-roles';
 
 const describeTarget = isTargetShape() ? describe : describe.skip;
 jest.setTimeout(120_000);
+
+/** tables.sql email_no_format: Unicode 16 Cf ∪ Default_Ignorable_Code_Point, as code-point ranges. */
+const FORMAT_RANGES: Array<[number, number]> = [
+  [0xad, 0xad], [0x34f, 0x34f], [0x600, 0x605], [0x61c, 0x61c], [0x6dd, 0x6dd], [0x70f, 0x70f],
+  [0x890, 0x891], [0x8e2, 0x8e2], [0x115f, 0x1160], [0x17b4, 0x17b5], [0x180b, 0x180f],
+  [0x200b, 0x200f], [0x202a, 0x202e], [0x2060, 0x206f], [0x3164, 0x3164], [0xfe00, 0xfe0f],
+  [0xfeff, 0xfeff], [0xffa0, 0xffa0], [0xfff0, 0xfffb], [0x110bd, 0x110bd], [0x110cd, 0x110cd],
+  [0x13430, 0x1345f], [0x1bca0, 0x1bca3], [0x1d173, 0x1d17a], [0xe0000, 0xe0fff],
+];
+
+const cp = (n: number) => String.fromCodePoint(n);
 
 describeTarget('the email domain (target)', () => {
   let run: TargetRun;
@@ -39,51 +47,57 @@ describeTarget('the email domain (target)', () => {
     }
   }
 
-  it('user.email is typed email, and the domain carries the nondeterministic ICU collation email_ci', async () => {
-    const [r] = await run.sql<{
-      column_type: string;
-      column_collation: string;
-      domain_base: string;
-      provider: string;
-      locale: string;
-      deterministic: boolean;
-    }>(
-      `SELECT format_type(a.atttypid, a.atttypmod) AS column_type, a.attcollation::regcollation::text AS column_collation,
-              format_type(t.typbasetype, t.typtypmod) AS domain_base, c.collprovider::text AS provider,
-              c.colllocale AS locale, c.collisdeterministic AS deterministic
-       FROM pg_attribute a JOIN pg_type t ON t.oid = a.atttypid JOIN pg_collation c ON c.oid = t.typcollation
+  /** Is the text a valid email (every domain CHECK passes)? */
+  async function valid(text: string): Promise<boolean> {
+    const [r] = await run.sql<{ ok: boolean }>(`SELECT pg_input_is_valid($1, 'email') AS ok`, [text]);
+    return r.ok;
+  }
+
+  /** Are the two (valid) emails equal as stored? */
+  async function same(a: string, b: string): Promise<boolean> {
+    const [r] = await run.sql<{ eq: boolean }>(`SELECT $1::email = $2::email AS eq`, [a, b]);
+    return r.eq;
+  }
+
+  it('user.email is typed email over text, with the deterministic default collation (no ICU collation)', async () => {
+    const [r] = await run.sql<Record<string, unknown>>(
+      `SELECT format_type(a.atttypid, a.atttypmod) AS column_type, format_type(t.typbasetype, t.typtypmod) AS domain_base,
+              t.typcollation = 'pg_catalog.default'::regcollation AS default_collation,
+              (SELECT collisdeterministic FROM pg_collation WHERE oid = a.attcollation) AS deterministic,
+              (SELECT count(*)::int FROM pg_collation c JOIN pg_namespace n ON n.oid = c.collnamespace
+               WHERE n.nspname IN ('public', 'app')) AS own_collations
+       FROM pg_attribute a JOIN pg_type t ON t.oid = a.atttypid
        WHERE a.attrelid = '"user"'::regclass AND a.attname = 'email'`,
     );
-    expect(r).toEqual({
-      column_type: 'email',
-      column_collation: 'email_ci',
-      domain_base: 'text',
-      provider: 'i',
-      locale: 'und-u-ks-level2',
-      deterministic: false,
-    });
+    expect(r).toEqual({ column_type: 'email', domain_base: 'text', default_collation: true, deterministic: true, own_collations: 0 });
   });
 
-  it('a case variant of an existing address collides on the UNIQUE (23505)', async () => {
-    expect(await insertUser('case.test@x.test')).toBe('ok');
-    expect(await insertUser('Case.Test@X.test')).toBe('23505');
-    expect(await insertUser('CASE.TEST@X.TEST')).toBe('23505');
+  it('the domain carries its six named CHECKs', async () => {
+    const rows = await run.sql<{ conname: string }>(
+      `SELECT conname FROM pg_constraint WHERE contypid = 'email'::regtype ORDER BY conname`,
+    );
+    expect(rows.map(r => r.conname)).toEqual([
+      'email_assigned',
+      'email_canonical',
+      'email_length',
+      'email_no_format',
+      'email_no_space_control',
+      'email_shape',
+    ]);
   });
 
-  it('a plus-address is a different address: both rows are accepted', async () => {
+  it('only the canonical form is accepted: A@x.test is refused (23514), a@x.test accepted — the DB never rewrites', async () => {
+    expect(await insertUser('A@x.test')).toBe('23514');
+    expect(await insertUser('a@x.test')).toBe('ok');
+    expect(await insertUser(' a2@x.test')).toBe('23514');
+    // the writer canonicalizes, so a case variant is the same row
+    expect(await insertUser(canonicalEmail('Case.Test@X.test'))).toBe('ok');
+    expect(await insertUser(canonicalEmail('CASE.TEST@X.TEST'))).toBe('23505');
+  });
+
+  it('a plus-address is a different address', async () => {
     expect(await insertUser('plus@x.test')).toBe('ok');
     expect(await insertUser('plus+1@x.test')).toBe('ok');
-    expect(await insertUser('Plus+1@x.test')).toBe('23505');
-  });
-
-  it('equality and lookups under the domain ignore case only', async () => {
-    const [r] = await run.sql<Record<string, boolean>>(
-      `SELECT 'User@X.com'::email = 'user@x.com'::email AS case_equal,
-              'a+b@x.com'::email = 'ab@x.com'::email AS plus_equal,
-              'a@x.com'::email = 'ä@x.com'::email AS accent_equal,
-              (SELECT count(*) FROM "user" WHERE email = 'ADA@E2E.TEST') = 1 AS lookup_by_case_variant`,
-    );
-    expect(r).toEqual({ case_equal: true, plus_equal: false, accent_equal: false, lookup_by_case_variant: true });
   });
 
   it('the length CHECK stays: 254 characters pass, 255 are refused (23514)', async () => {
@@ -92,46 +106,120 @@ describeTarget('the email domain (target)', () => {
     expect(await insertUser(local(255))).toBe('23514');
   });
 
-  it('LIKE works under the nondeterministic collation (PG18) and is case-insensitive there', async () => {
-    const [r] = await run.sql<Record<string, boolean>>(
-      `SELECT 'DELETED+x@invalid'::email LIKE 'deleted+%' AS like_ci, 'DELETED+x@invalid'::email COLLATE "C" LIKE 'deleted+%' AS like_c`,
+  it.each([
+    ['no @', 'ab'],
+    ['two @', 'a@b@x.com'],
+    ['empty local part', '@x.com'],
+    ['empty domain', 'a@'],
+  ])('refused by the shape CHECK: %s', async (_name, text) => {
+    expect(await valid(text)).toBe(false);
+  });
+
+  it('nothing folds but case: other digits, kana, ß, fullwidth, ﬁ and ² are valid and distinct', async () => {
+    const pairs: Array<[string, string]> = [
+      ['a1@x.test', `a${cp(0x661)}@x.test`], // ARABIC-INDIC DIGIT ONE
+      ['a1@x.test', `a${cp(0x967)}@x.test`], // DEVANAGARI DIGIT ONE
+      [`${cp(0x3042)}@x.test`, `${cp(0x30a2)}@x.test`], // あ / ア
+      ['ß@x.test', 'ss@x.test'],
+      ['a@x.test', `${cp(0xff41)}@x.test`], // fullwidth a
+      ['fi@x.test', `${cp(0xfb01)}@x.test`], // ligature fi (NFC keeps it; NFKC would not)
+      ['a2@x.test', `a${cp(0xb2)}@x.test`], // superscript two
+      ['ä@x.test', 'a@x.test'],
+    ];
+    for (const [a, b] of pairs) {
+      expect([a, await valid(a)]).toEqual([a, true]);
+      expect([b, await valid(b)]).toEqual([b, true]);
+      expect([a, b, await same(a, b)]).toEqual([a, b, false]);
+    }
+  });
+
+  it('internationalized addresses are accepted: Devanagari (combining vowel signs and virama), an NFC combining mark', async () => {
+    const devanagari = 'नमस्ते@उदाहरण.भारत';
+    expect(devanagari.normalize('NFC')).toBe(devanagari);
+    expect(await valid(devanagari)).toBe(true);
+    const combining = `a${cp(0x331)}@x.test`; // a + COMBINING MACRON BELOW: no precomposed form, so NFC keeps it
+    expect(combining.normalize('NFC')).toBe(combining);
+    expect(await valid(combining)).toBe(true);
+    // a decomposed é is not NFC: refused; its canonical (composed) form is accepted
+    expect(await valid('jose\u0301@x.test')).toBe(false);
+    expect(await valid(canonicalEmail('jose\u0301@x.test'))).toBe(true);
+  });
+
+  it('İ: the CHECK lowers under pg_unicode_fast, which agrees with JavaScript (i + U+0307); the libc default would not', async () => {
+    const [r] = await run.sql<Record<string, string>>(
+      `SELECT encode(convert_to(lower('İ' COLLATE pg_unicode_fast), 'UTF8'), 'hex') AS unicode,
+              encode(convert_to(lower('İ'), 'UTF8'), 'hex') AS db_default`,
     );
-    expect(r).toEqual({ like_ci: true, like_c: false });
+    expect(r.unicode).toBe(Buffer.from('İ'.toLowerCase()).toString('hex'));
+    expect(r.unicode).toBe('69cc87');
+    expect(r.db_default).toBe('69'); // en_US libc: why the CHECK names its collation
+    expect(await valid('İ@x.test')).toBe(false);
+    expect(await valid(canonicalEmail('İ@x.test'))).toBe(true);
+    expect(await valid(canonicalEmail('ΑΣ@x.test'))).toBe(true); // final sigma, as JS maps it
+  });
+
+  // canonicalEmail() (JS) and email_canonical (PG) must agree on every character the domain can
+  // hold. PostgreSQL 18.6 carries Unicode 16 and Node 20 Unicode 17: the code points new in 17
+  // (e.g. U+A7CE, U+16EA0…) lowercase in JS but are unassigned to PG, and email_assigned refuses
+  // them — so the address fails closed instead of being stored in two forms. Compared over every
+  // code point PostgreSQL considers assigned.
+  it('exhaustive: lower() under pg_unicode_fast and JavaScript toLowerCase agree on every assigned code point', async () => {
+    const rows = await run.sql<{ c: number; l: string }>(
+      `SELECT c, lower(chr(c) COLLATE pg_unicode_fast) AS l FROM generate_series(1, 1114111) AS c
+       WHERE c NOT BETWEEN 55296 AND 57343 AND unicode_assigned(chr(c))`,
+    );
+    const mismatches: string[] = [];
+    for (const { c, l: pg } of rows) {
+      const js = cp(c).toLowerCase();
+      if (js !== pg) mismatches.push(c.toString(16));
+    }
+    expect(rows.length).toBeGreaterThan(290_000);
+    expect(mismatches).toEqual([]);
+  });
+
+  it('regex, ILIKE and prefix searches work again on the (deterministic) column', async () => {
+    const [r] = await run.sql<Record<string, unknown>>(
+      `SELECT e ~ '^ada@' AS regex, e ILIKE 'ADA@%' AS ilike, starts_with(e, 'ada') AS starts, e ^@ 'ada' AS prefix,
+              e SIMILAR TO 'ada%' AS similar, regexp_replace(e, '@.*', '') AS local
+       FROM (SELECT email AS e FROM "user" WHERE email = 'ada@e2e.test') t`,
+    );
+    expect(r).toEqual({ regex: true, ilike: true, starts: true, prefix: true, similar: true, local: 'ada' });
   });
 
   it.each([
-    ['~', `email ~ 'a'`, 'regular expressions'],
-    ['~*', `email ~* 'a'`, 'regular expressions'],
-    ['SIMILAR TO', `email SIMILAR TO 'a%'`, 'regular expressions'],
-    ['substring from a regex', `substring(email from 'a') IS NULL`, 'regular expressions'],
-    ['regexp_replace', `regexp_replace(email, 'a', 'b') = ''`, 'regular expressions'],
-    ['ILIKE', `email ILIKE 'a%'`, 'ILIKE'],
-    ['starts_with', `starts_with(email, 'a')`, 'substring searches'],
-    ['^@', `email ^@ 'a'`, 'substring searches'],
-  ])('%s on an email is refused under email_ci', async (_name, predicate, what) => {
-    await expect(run.sql(`SELECT 1 FROM "user" WHERE ${predicate}`)).rejects.toThrow(
-      new RegExp(`nondeterministic collations are not supported for ${what}`),
-    );
+    ['U+200B zero-width space', `a${cp(0x200b)}@x.com`],
+    ['U+00AD soft hyphen', `a${cp(0xad)}@x.com`],
+    ['U+200D zero-width joiner', `a${cp(0x200d)}@x.com`],
+    ['U+0001 control', `a${cp(0x1)}@x.com`],
+    ['leading U+202E right-to-left override', `${cp(0x202e)}a@x.com`],
+    ['trailing U+FE0F variation selector', `a@x.com${cp(0xfe0f)}`],
+    ['trailing space', 'a@x.com '],
+    ['Kelvin sign (not lowercase: lower() maps it to k)', `a${cp(0x212a)}@x.com`],
+  ])('refused: %s', async (_name, text) => {
+    expect(await valid(text)).toBe(false);
   });
 
-  it('position / strpos / replace / split_part work on an email (PG18) and match case-insensitively; COLLATE "C" makes a regex legal', async () => {
-    const [r] = await run.sql<Record<string, unknown>>(
-      `SELECT position('x' in e) AS pos, strpos(e, 'x') AS strpos, replace(e, 'x', 'y') AS replaced,
-              split_part(e, '@', 2) AS domain, e COLLATE "C" ~ '^A@' AS regex_c
-       FROM (SELECT 'A@X.COM'::email AS e) t`,
+  it('exhaustive: email_no_format refuses exactly the Cf ∪ default-ignorable ranges, and every code point in them', async () => {
+    const [def] = await run.sql<{ def: string }>(
+      `SELECT pg_get_constraintdef(oid) AS def FROM pg_constraint WHERE contypid = 'email'::regtype AND conname = 'email_no_format'`,
     );
-    expect(r).toEqual({ pos: 3, strpos: 3, replaced: 'A@y.COM', domain: 'X.COM', regex_c: true });
+    const cls = /'(\[.*\])'/.exec(def.def)![1];
+    const [r] = await run.sql<{ ranges: string; in_range_accepted: number }>(
+      `WITH m AS (
+         SELECT c FROM generate_series(1, 1114111) AS c
+         WHERE c NOT BETWEEN 55296 AND 57343 AND chr(c) COLLATE "C" ~ $1),
+       g AS (SELECT c, c - row_number() OVER (ORDER BY c) AS grp FROM m)
+       SELECT (SELECT string_agg(to_hex(lo) || '-' || to_hex(hi), ',' ORDER BY lo)
+               FROM (SELECT min(c) AS lo, max(c) AS hi FROM g GROUP BY grp) x) AS ranges,
+              (SELECT count(*)::int FROM m WHERE pg_input_is_valid('a' || chr(c) || '@x.test', 'email')) AS in_range_accepted`,
+      [cls],
+    );
+    const expected = FORMAT_RANGES.map(([lo, hi]) => `${lo.toString(16)}-${hi.toString(16)}`).join(',');
+    expect(r.ranges).toBe(expected);
+    expect(r.in_range_accepted).toBe(0);
   });
 
-  it('the collation is ICU-versioned (REFRESH VERSION after an ICU change, infra/aws/README.md)', async () => {
-    const [r] = await run.sql<{ recorded: string | null; actual: string | null }>(
-      `SELECT collversion AS recorded, pg_collation_actual_version(oid) AS actual FROM pg_collation WHERE collname = 'email_ci'`,
-    );
-    expect(r.recorded).toMatch(/^\d+(\.\d+)*$/);
-    expect(r.actual).toBe(r.recorded);
-  });
-
-  it('the tombstone CHECK accepts exactly deleted+<id>@invalid (compared under "C"): not a case variant, not the old form, not a live address', async () => {
+  it('the tombstone CHECK accepts exactly deleted+<id>@invalid: not a case variant, not the old form, not a live address', async () => {
     const tombstone = async (email: string) => {
       const id = randomUuidV7();
       await run.sql(`INSERT INTO "user" (id, email, clerk_id) VALUES ($1, $2, $3)`, [id, `t-${id}@x.test`, `c-${id}`]);
@@ -150,109 +238,5 @@ describeTarget('the email domain (target)', () => {
     expect(await tombstone('deleted+<id>@INVALID')).toBe('23514');
     expect(await tombstone('deleted+<id>')).toBe('23514');
     expect(await tombstone('<id>@x.test')).toBe('23514');
-  });
-
-  /** Is the text a valid email (every domain CHECK passes)? */
-  async function valid(text: string): Promise<boolean> {
-    const [r] = await run.sql<{ ok: boolean }>(`SELECT pg_input_is_valid($1, 'email') AS ok`, [text]);
-    return r.ok;
-  }
-
-  const cp = (n: number) => String.fromCodePoint(n);
-  // The reviewer's rows (review round 1): each one is equal under email_ci to the plain address
-  // beside it (except the trailing space, which is simply refused), so the domain refuses it.
-  it.each([
-    ['U+200B zero-width space', `a${cp(0x200b)}@x.com`, 'a@x.com'],
-    ['U+00AD soft hyphen', `a${cp(0xad)}@x.com`, 'a@x.com'],
-    ['U+200D zero-width joiner', `a${cp(0x200d)}@x.com`, 'a@x.com'],
-    ['U+0001 control', `a${cp(0x1)}@x.com`, 'a@x.com'],
-    ['leading U+202E right-to-left override', `${cp(0x202e)}a@x.com`, 'a@x.com'],
-    ['trailing U+FE0F variation selector (Mn)', `a@x.com${cp(0xfe0f)}`, 'a@x.com'],
-    ['fullwidth a', `${cp(0xff41)}@x.com`, 'a@x.com'],
-    ['fullwidth @', `a${cp(0xff20)}x.com`, 'a@x.com'],
-    ['fullwidth .', `a@x${cp(0xff0e)}com`, 'a@x.com'],
-    ['circled a', `${cp(0x24d0)}@x.com`, 'a@x.com'],
-    ['Kelvin sign', `a${cp(0x212a)}@x.com`, 'ak@x.com'],
-    ['superscript two', `a${cp(0xb2)}@x.com`, 'a2@x.com'],
-    ['ligature fi', `${cp(0xfb01)}@x.com`, 'fi@x.com'],
-    ['U+0640 Arabic tatweel (ignorable, not Cf)', `a${cp(0x640)}@x.com`, 'a@x.com'],
-    ['U+0591 Hebrew accent (ignorable combining mark)', `a${cp(0x591)}@x.com`, 'a@x.com'],
-    ['trailing space', 'a@x.com ', null],
-  ])('refused: %s', async (_name, text, foldsTo) => {
-    if (foldsTo) {
-      const [r] = await run.sql<{ folds: boolean }>(`SELECT $1 COLLATE email_ci = $2 AS folds`, [text, foldsTo]);
-      expect(r.folds).toBe(true);
-      expect(await valid(foldsTo)).toBe(true);
-    }
-    expect(await valid(text)).toBe(false);
-  });
-
-  it.each([
-    ['no @', 'ab'],
-    ['two @', 'a@b@x.com'],
-    ['empty local part', '@x.com'],
-    ['empty domain', 'a@'],
-  ])('refused by the shape CHECK: %s', async (_name, text) => {
-    expect(await valid(text)).toBe(false);
-  });
-
-  it('accepted and still distinct: plus-address, accents, ß / ss, İ / i, a non-ASCII address', async () => {
-    for (const t of ['a+1@x.com', 'ä@x.com', 'ß@x.com', 'ss@x.com', 'İ@x.com', 'i@x.com', 'josé@exämple.test'])
-      expect(await valid(t)).toBe(true);
-    const [r] = await run.sql<Record<string, boolean>>(
-      `SELECT 'a+1@x.com'::email = 'a@x.com' AS plus, 'ä@x.com'::email = 'a@x.com' AS accent,
-              'ß@x.com'::email = 'ss@x.com' AS sharp_s, 'İ@x.com'::email = 'i@x.com' AS dotted_i`,
-    );
-    expect(r).toEqual({ plus: false, accent: false, sharp_s: false, dotted_i: false });
-  });
-
-  it('the domain carries its named CHECKs', async () => {
-    const rows = await run.sql<{ conname: string }>(
-      `SELECT conname FROM pg_constraint WHERE contypid = 'email'::regtype ORDER BY conname`,
-    );
-    expect(rows.map(r => r.conname)).toEqual([
-      'email_assigned',
-      'email_length',
-      'email_nfkc',
-      'email_no_format',
-      'email_no_ignorable',
-      'email_no_space_control',
-      'email_shape',
-    ]);
-  });
-
-  // The property (review round 1): for EVERY code point c (1..0x10FFFF, no surrogates), placed
-  // before the local part, before the @, inside the domain or at its end, the address is either
-  // refused by the domain, case-equal to 'a@x.test', or different from it under email_ci. Measured
-  // ~3 s for the 4 × 1,112,063 strings on the dev container.
-  it('exhaustive: no accepted code point folds into a@x.test beyond case, in any of four positions', async () => {
-    const rows = await run.sql<{ pos: string; cp: string }>(
-      `SELECT t.pos, to_hex(c) AS cp
-       FROM generate_series(1, 1114111) AS c,
-            LATERAL (VALUES ('lead', chr(c) || 'a@x.test'), ('before_at', 'a' || chr(c) || '@x.test'),
-                            ('in_domain', 'a@x' || chr(c) || '.test'), ('end', 'a@x.test' || chr(c))) AS t(pos, s)
-       WHERE c NOT BETWEEN 55296 AND 57343
-         AND t.s COLLATE email_ci = 'a@x.test'
-         AND lower(t.s COLLATE "C") <> 'a@x.test'
-         AND pg_input_is_valid(t.s, 'email')`,
-    );
-    expect(rows).toEqual([]);
-  });
-
-  // FINDING (owner decision pending): two DIFFERENT accepted characters can still be equal at
-  // level 2 without being case variants — every script's digit one, hiragana and katakana, some
-  // combining marks. Pinned so a change (an ICU upgrade, a tighter CHECK) shows up here.
-  it('FINDING, pinned: accepted single characters that are equal under email_ci but not case variants', async () => {
-    const [r] = await run.sql<{ classes: number; one: boolean; kana: boolean }>(
-      `WITH acc AS (
-         SELECT chr(c) AS ch FROM generate_series(1, 1114111) AS c
-         WHERE c NOT BETWEEN 55296 AND 57343 AND pg_input_is_valid('a' || chr(c) || '@x.test', 'email'))
-       SELECT (SELECT count(*)::int FROM (
-                 SELECT 1 FROM acc GROUP BY ch COLLATE email_ci
-                 HAVING count(DISTINCT casefold(ch COLLATE pg_unicode_fast) COLLATE "C") > 1) x) AS classes,
-              'a1@x.test'::email = ('a' || chr(1633) || '@x.test')::email AS one,
-              (chr(12354) || '@x.test')::email = (chr(12450) || '@x.test')::email AS kana`,
-    );
-    expect(r).toEqual({ classes: 417, one: true, kana: true });
   });
 });

@@ -8,7 +8,7 @@
 import { Request, Response, NextFunction } from 'express';
 import { UnauthorizedError, ForbiddenError, NotFoundError } from './errors';
 import { prisma, getE2EToolingPrisma } from '../lib/prisma';
-import { ApiResponse, ErrorCode, isUuidV7 } from '@meet-without-fear/shared';
+import { ApiResponse, ErrorCode, canonicalEmail, isUuidV7 } from '@meet-without-fear/shared';
 import { Prisma } from '../generated/prisma/client';
 import { logger } from '../lib/logger';
 import { identityBindingEnabled } from '../lib/prisma-identity';
@@ -93,7 +93,9 @@ async function handleE2EAuthBypass(req: Request): Promise<boolean> {
   }
 
   const e2eUserId = req.headers['x-e2e-user-id'] as string | undefined;
-  const e2eEmail = req.headers['x-e2e-user-email'] as string | undefined;
+  const rawE2eEmail = req.headers['x-e2e-user-email'] as string | undefined;
+  // user.email is canonical (work-k5fk.5): the database refuses any other form.
+  const e2eEmail = rawE2eEmail === undefined ? undefined : canonicalEmail(rawE2eEmail);
 
   if (!e2eUserId || !e2eEmail) {
     return false;
@@ -228,7 +230,8 @@ async function handleClerkAuth(req: Request, res: Response, next: NextFunction, 
       throw clerkError;
     }
 
-    const email = clerkUser.emailAddresses[0]?.emailAddress || `${clerkUserId}@pending.clerk`;
+    // user.email is canonical (work-k5fk.5): writes and the P2002 lookup below use one form.
+    const email = canonicalEmail(clerkUser.emailAddresses[0]?.emailAddress || `${clerkUserId}@pending.clerk`);
     const firstName = clerkUser.firstName || null;
     const lastName = clerkUser.lastName || null;
 

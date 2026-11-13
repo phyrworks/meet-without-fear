@@ -109,7 +109,7 @@
 -- ----------------------------------------------------------------------------
 -- Domains. All are invisible to Prisma: a uuid7 column introspects as
 -- String @db.Uuid, a ts_ms column as DateTime @db.Timestamptz(3), an
--- intensity column as Int, an email column (collation included) as String,
+-- intensity column as Int, an email column as String,
 -- and `migrate diff` reports nothing (TS-6 probe for intensity, 2026-10-19;
 -- work-a39h.11.40 probe for uuid7, 2026-11-02; work-gevt for ts_ms,
 -- 2026-11-10; work-k5fk.5 for email, 2026-11-13; PG 18.6 / Prisma 7.10).
@@ -204,95 +204,47 @@ CREATE DOMAIN milestone_key AS text
   CHECK (char_length(VALUE) <= 64 AND VALUE ~ '^[a-z][a-z0-9_]*$');
 COMMENT ON DOMAIN milestone_key IS 'A milestone key: a lower-case identifier of at most 64 characters (e.g. feel_heard). The set of keys is the milestone table (FK); a domain rather than an enum so a new milestone is one seed row, not ALTER TYPE ADD VALUE.';
 
--- work-k5fk.5: an email address is unique ignoring case. email_ci is ICU's
--- root locale at strength level 2 (und-u-ks-level2), nondeterministic, so the
--- UNIQUE on "user".email refuses a case variant of an existing address and
--- `WHERE email = $1` finds it whatever the case; a plus-address
--- ('a+1@x.test'), an accent ('ä'), ß against ss and İ against i stay
--- different addresses.
+-- work-k5fk.5: an email address is stored in ONE canonical form and compared
+-- exactly (owner decision, review round 2: drop the ICU collation). The
+-- canonical form is the whole address trimmed, NFC-normalized and lowercased
+-- — shared/src/utils/email.ts canonicalEmail(), s.trim().normalize('NFC')
+-- .toLowerCase(), which every writer and lookup uses. The database never
+-- rewrites a value: email_canonical refuses one that is not canonical, so a
+-- writer that forgot to canonicalize fails closed instead of creating a
+-- second row for the same mailbox. The UNIQUE on "user".email then compares
+-- bytes (the default collation is deterministic), and = / LIKE / ~ / ILIKE
+-- all work on the column.
 --
--- What level 2 folds besides case (measured, PG 18.6 / ICU 153.120; owner
--- decision, review round 1: keep email_ci and refuse what it would fold):
---  * compatibility forms (fullwidth ａ ＠ ．, circled ⓐ, Kelvin K, ², ﬁ) —
---    refused by email_nfkc;
---  * whitespace, control characters (U+0001), format characters (U+200B,
---    U+00AD soft hyphen, U+200D ZWJ, U+202E) and the other default-ignorable
---    code points (variation selectors such as U+FE0F, tags, fillers) —
---    refused by email_no_space_control and email_no_format;
---  * 451 more code points that are completely ignorable under email_ci but
---    pass all of the above: combining marks of Hebrew, Arabic, Syriac, Vedic,
---    musical and SignWriting notation, U+0640 ARABIC TATWEEL, … — refused by
---    email_no_ignorable, which asks the collation itself: no character of
---    the address may compare equal to the empty string;
---  * unassigned code points, whose weights a later ICU may change — refused
---    by email_assigned.
--- email-domain.target.test.ts proves it for every code point 1..0x10FFFF:
--- inserted before or after the local part, in the domain or at its end, a
--- character either is refused or makes the address differ from 'a@x.test'.
--- NOT closed (FINDING, owner decision pending): two DIFFERENT accepted
--- characters can still be equal at level 2 without being case variants —
--- 417 classes, e.g. '1' = '١' (ARABIC-INDIC ONE) = '१', 'あ' = 'ア', and
--- combining marks with equal secondary weight (U+0313 = U+0486); pinned by
--- the same test.
+-- Case is the only equivalence, as Gmail and most providers treat it; the
+-- RFCs leave the local part case-sensitive in principle, which no mainstream
+-- provider uses. Nothing else folds: a plus-address ('a+1@x.test'), Gmail's
+-- dots, an accent, ß (never ss), a fullwidth form ('ａ@x.test' is a
+-- different, valid address), another script's digit ('a١@x.test' is not
+-- 'a1@x.test') and kana ('あ' is not 'ア') stay distinct. NFC, not NFKC:
+-- RFC 6532 §3.1 says NFC SHOULD be used and NFKC SHOULD NOT (it loses
+-- information needed to spell names); combining marks stay legal (Indic
+-- scripts need them in NFC).
 --
--- Under a nondeterministic collation PostgreSQL refuses (measured, each
--- raising "nondeterministic collations are not supported for …"):
---   regular expressions: ~, ~*, SIMILAR TO, substring(… from <regex>),
---     regexp_replace (and the other regexp_* functions);
---   ILIKE;
---   prefix searches: starts_with() and ^@.
--- What works, and matches case-insensitively here: = and the UNIQUE, LIKE,
--- position() / strpos(), replace() and split_part() (replace('A@X.COM', 'x',
--- 'y') gives 'A@y.COM'). Prisma's contains / startsWith / endsWith send
--- LIKE and work; `mode: 'insensitive'` sends ILIKE and is refused, so no
--- email filter uses it (routes/brain.ts search). The domain's own regex
--- CHECKs compare under COLLATE "C" (code points) or pg_c_utf8 (Unicode
--- character classes), never email_ci; so does the exact tombstone CHECK on
--- "user". Prisma sees a String column (the domain, its CHECKs and the
--- collation are invisible to `db pull` / `migrate diff`). Functions keep
--- text arguments: app.create_user_for_clerk(…, email text, …) is checked
--- when it inserts.
---
--- ICU dependency: email_ci is the database's first ICU collation, and the
--- UNIQUE index on "user".email is ordered by it, as is email_no_ignorable's
--- answer. PostgreSQL records the ICU collation version
--- (pg_collation.collversion; 153.120 on the PG 18.6 dev container). After an
--- ICU change — a PostgreSQL image / engine upgrade, or a restore onto a host
--- with another ICU — PostgreSQL warns "collation email_ci has version
--- mismatch"; then REINDEX INDEX user_email_key, ALTER COLLATION email_ci
--- REFRESH VERSION, and re-run email-domain.target.test.ts (a new ICU can
--- make more code points ignorable; existing rows are not re-checked)
--- (infra/aws/README.md "ICU collation versions").
-CREATE COLLATION email_ci (provider = icu, locale = 'und-u-ks-level2', deterministic = false);
-COMMENT ON COLLATION email_ci IS 'Case-insensitive (ICU und-u-ks-level2, nondeterministic): the collation of the email domain. Level 2 also folds compatibility forms, ignorable characters and some cross-script equivalents; the email domain refuses the first two. Refused under it: regex (~, ~*, SIMILAR TO, substring from a regex, regexp_*), ILIKE, starts_with() and ^@. Works and ignores case: =, LIKE, position()/strpos(), replace(), split_part(). ICU-versioned (collversion): after an ICU change (engine upgrade, restore) REINDEX INDEX user_email_key, then ALTER COLLATION email_ci REFRESH VERSION.';
-
--- The email_no_ignorable CHECK: true when no character of v is completely
--- ignorable under email_ci (compares equal to ''). string_to_table(…, NULL)
--- splits into characters; the split runs under "C", the test under email_ci.
--- IMMUTABLE in the sense every collation-dependent index is: an ICU change
--- can change the answer (see the ICU note above).
-CREATE FUNCTION app.email_no_ignorable(v text) RETURNS boolean
-  LANGUAGE sql IMMUTABLE PARALLEL SAFE
-  RETURN NOT EXISTS (SELECT 1 FROM string_to_table(v COLLATE "C", NULL) AS ch WHERE ch COLLATE email_ci = '');
-COMMENT ON FUNCTION app.email_no_ignorable(text) IS 'True when no character of the value compares equal to the empty string under email_ci (a completely ignorable character, which would make two different addresses equal). The email domain''s email_no_ignorable CHECK.';
-
-CREATE DOMAIN email AS text COLLATE email_ci
+-- lower() is pinned to the builtin collation pg_unicode_fast (full Unicode
+-- case mapping, the same as JavaScript's toLowerCase: 'İ' → 'i̇', U+0069
+-- U+0307; final sigma 'ΑΣ' → 'ας'). Under the database's default libc
+-- collation lower('İ') is 'i' (locale-dependent), which would disagree with
+-- canonicalEmail(); email-domain.target.test.ts pins both.
+CREATE DOMAIN email AS text
   CONSTRAINT email_length CHECK (char_length(VALUE) <= 254)
   CONSTRAINT email_shape CHECK (VALUE COLLATE "C" ~ '^[^@]+@[^@]+$')
-  CONSTRAINT email_nfkc CHECK (VALUE IS NFKC NORMALIZED)
+  CONSTRAINT email_canonical CHECK (VALUE = lower(VALUE COLLATE pg_unicode_fast) AND VALUE IS NFC NORMALIZED)
   CONSTRAINT email_assigned CHECK (unicode_assigned(VALUE))
   CONSTRAINT email_no_space_control CHECK (VALUE COLLATE pg_c_utf8 !~ '[[:space:][:cntrl:]]')
   CONSTRAINT email_no_format CHECK (VALUE COLLATE "C" !~
-    '[\u00AD\u034F\u0600-\u0605\u061C\u06DD\u070F\u0890-\u0891\u08E2\u115F-\u1160\u17B4-\u17B5\u180B-\u180F\u200B-\u200F\u202A-\u202E\u2060-\u206F\u3164\uFE00-\uFE0F\uFEFF\uFFA0\uFFF0-\uFFFB\U000110BD\U000110CD\U00013430-\U0001345F\U0001BCA0-\U0001BCA3\U0001D173-\U0001D17A\U000E0000-\U000E0FFF]')
-  CONSTRAINT email_no_ignorable CHECK (app.email_no_ignorable(VALUE));
-COMMENT ON DOMAIN email IS 'An email address, unique ignoring case (collation email_ci): a case variant is the same address; a plus-address, an accent, ß/ss and İ/i are not. Its CHECKs refuse every character email_ci would otherwise fold away (compatibility forms, whitespace, control, format and ignorable characters) so case is the only equivalence of an inserted character; see each constraint. Refused on it: regex (~, ~*, SIMILAR TO, substring from a regex, regexp_*), ILIKE, starts_with() and ^@; =, LIKE, position()/strpos(), replace() and split_part() work and ignore case. An exact comparison or a regex uses COLLATE "C".';
+    '[\u00AD\u034F\u0600-\u0605\u061C\u06DD\u070F\u0890-\u0891\u08E2\u115F-\u1160\u17B4-\u17B5\u180B-\u180F\u200B-\u200F\u202A-\u202E\u2060-\u206F\u3164\uFE00-\uFE0F\uFEFF\uFFA0\uFFF0-\uFFFB\U000110BD\U000110CD\U00013430-\U0001345F\U0001BCA0-\U0001BCA3\U0001D173-\U0001D17A\U000E0000-\U000E0FFF]');
+COMMENT ON DOMAIN email IS 'An email address in its one canonical form (trimmed, NFC, lowercased: shared canonicalEmail()), compared exactly. Case is the only equivalence and it is removed before storage; a plus-address, an accent, ß, a fullwidth form, another script''s digit stay distinct. The database refuses a non-canonical value rather than rewriting it.';
 COMMENT ON CONSTRAINT email_length ON DOMAIN email IS 'At most 254 characters (the RFC 5321 path limit).';
-COMMENT ON CONSTRAINT email_shape ON DOMAIN email IS 'Exactly one @, with a non-empty local part and a non-empty domain (compared under "C": regex is refused under email_ci). The tombstone deleted+<id>@invalid has this shape.';
-COMMENT ON CONSTRAINT email_nfkc ON DOMAIN email IS 'NFKC-normalized: refuses compatibility forms email_ci folds (fullwidth ａ ＠ ．, circled ⓐ, Kelvin K, ², ﬁ) and decomposed sequences.';
-COMMENT ON CONSTRAINT email_assigned ON DOMAIN email IS 'Every code point assigned in PostgreSQL''s Unicode version: an unassigned one has no stable collation weight.';
+COMMENT ON CONSTRAINT email_shape ON DOMAIN email IS 'Exactly one @, with a non-empty local part and a non-empty domain. The tombstone deleted+<id>@invalid has this shape.';
+COMMENT ON CONSTRAINT email_canonical ON DOMAIN email IS 'Canonical: lowercase by full Unicode case mapping (lower() under pg_unicode_fast, equal to JavaScript toLowerCase) and NFC-normalized (RFC 6532 §3.1: NFC, not NFKC). Writers canonicalize with canonicalEmail(); a value that is not canonical is refused, never rewritten.';
+COMMENT ON CONSTRAINT email_assigned ON DOMAIN email IS 'Every code point assigned in PostgreSQL''s Unicode version.';
 COMMENT ON CONSTRAINT email_no_space_control ON DOMAIN email IS 'No whitespace (Unicode White_Space) and no control character (Cc), by pg_c_utf8''s Unicode character classes.';
-COMMENT ON CONSTRAINT email_no_format ON DOMAIN email IS 'No format character (Cf: soft hyphen, zero-width space/joiners, bidi controls, …) and no other default-ignorable code point (variation selectors such as U+FE0F, Hangul fillers, tags), as code-point ranges under "C" (Unicode 16 Cf ∪ Default_Ignorable_Code_Point).';
-COMMENT ON CONSTRAINT email_no_ignorable ON DOMAIN email IS 'No character that is completely ignorable under email_ci (app.email_no_ignorable): catches the combining marks and other code points the class-based CHECKs miss (451 at ICU 153.120).';
+COMMENT ON CONSTRAINT email_no_format ON DOMAIN email IS 'No format character (Cf: soft hyphen, zero-width space/joiners, bidi controls, …) and no other default-ignorable code point (variation selectors, Hangul fillers, tags): invisible characters that would make two addresses look identical. Code-point ranges under "C" (Unicode 16 Cf ∪ Default_Ignorable_Code_Point).';
 
 -- ----------------------------------------------------------------------------
 -- Enums, in schema.prisma order.
@@ -443,14 +395,14 @@ CREATE TABLE "user" (
         GENERATED ALWAYS AS (nullif(trim(coalesce(first_name, '') || ' ' || coalesce(last_name, '')), '')) STORED,
 
     -- §1.7 user — a tombstone is scrubbed (P3 D9) to deleted+<id>@invalid
-    -- (.invalid is reserved, RFC 2606: never a real address). COLLATE "C":
-    -- under email_ci LIKE would ignore case; app.anonymize_user_account
+    -- (.invalid is reserved, RFC 2606: never a real address; the uuid text
+    -- is lowercase, so the value is canonical). app.anonymize_user_account
     -- writes exactly 'deleted+' || id || '@invalid'.
     CHECK (deleted_at IS NULL OR (clerk_id IS NULL AND email COLLATE "C" LIKE 'deleted+%@invalid'))
 );
 COMMENT ON TABLE "user" IS 'Identity only: one row per account (Clerk-backed), soft-deleted to a scrubbed tombstone. Every FK to it is RESTRICT; session data hangs off participant, not off user.';
 COMMENT ON COLUMN "user".clerk_id IS 'The Clerk user id this account signs in with; NULL on a tombstone.';
-COMMENT ON COLUMN "user".email IS 'Sign-in email, unique ignoring case (domain email): a case variant of an existing address is refused, a plus-address is a different one. A tombstone holds the scrubbed address deleted+<id>@invalid.';
+COMMENT ON COLUMN "user".email IS 'Sign-in email in canonical form (domain email: trimmed, NFC, lowercase), unique: a case variant is the same canonical value, a plus-address a different one. A tombstone holds the scrubbed address deleted+<id>@invalid.';
 COMMENT ON COLUMN "user".name IS 'Generated display name: first_name and last_name joined, NULL when both are empty.';
 COMMENT ON COLUMN "user".deleted_at IS 'Soft delete (P3 D9): the row becomes a scrubbed tombstone and is never removed.';
 -- mwf_app: every request reads its user (auth middleware, by clerk_id/email) and its partner's names; first login creates the
@@ -463,7 +415,8 @@ GRANT UPDATE (clerk_id, email, first_name, last_name, updated_at) ON "user" TO m
 -- middleware/auth.ts's P2002 path re-bind an EXISTING user's row — found by the email a new Clerk
 -- identity presents (emailAddresses[0], not checked verified or primary) — to that new identity: an
 -- account takeover. The grant is the app's today; the fix (and this grant) is the owner's call.
--- Since work-k5fk.5 that lookup (findUnique by email) also matches a case variant of the address.
+-- Since work-k5fk.5 that lookup (findUnique by canonicalEmail(...)) also matches a case variant of the address
+-- (work-bp5m fixes the re-bind).
 -- mwf_job: resolve_user_by_clerk_id, create_user_for_clerk (RETURNING id), anonymize_user_account (existence, tombstone)
 GRANT SELECT (id, clerk_id, deleted_at) ON "user" TO mwf_job;
 GRANT INSERT (clerk_id, email, first_name, last_name) ON "user" TO mwf_job;
