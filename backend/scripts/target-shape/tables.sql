@@ -4,7 +4,8 @@
 -- after the preamble. It is the source of truth for the 47 tables: read a
 -- table here and you have all of it — columns, types, defaults, NOT NULL,
 -- generated columns, the primary key, UNIQUE constraints, foreign keys and
--- CHECKs inside its CREATE TABLE, its plain indexes straight after.
+-- CHECKs inside its CREATE TABLE, its plain indexes straight after, then its
+-- grants (every role's) and, for milestone, its seed rows.
 --
 -- Spec: docs/backend/data-model/schema-target-2026-10.md (§1 tables and Keys
 -- lines, §3 domains). Owner decision 2026-11-02: hand-written DDL replaces the
@@ -39,8 +40,14 @@
 --  * NOT here: the sql_ partial / expression indexes (sql-only.sql — `db pull`
 --    renders them but schema.prisma deliberately omits them, so the drift
 --    gate applies them in a second stage; each table that has one says so in
---    a `-- + sql_…` line), triggers, functions, views, and the grants of the
---    other roles (trailer.sql).
+--    a `-- + sql_…` line), triggers, functions and views (trailer.sql; each
+--    view's and each function's grants follow it there).
+--  * Every role's table grants follow each table, in this order: mwf_app,
+--    mwf_job, mwf_ops (work-k5fk.7 moved mwf_job's and mwf_ops' here from
+--    trailer.sql T7 unchanged — app-grants.target.test.ts snapshots the whole
+--    privilege matrix, recorded before the move). mwf_auth has none (functions
+--    only); slam_bot_readonly's SELECT is a default ACL set by the
+--    infrastructure (infra/aws/init-db.sh), not by this migration.
 --  * mwf_app's grants (work-k5fk.10.2) follow each table: exactly the commands,
 --    and for INSERT / UPDATE the columns, the request path uses — a Prisma
 --    create sends every column schema.prisma gives a @default (timestamps and
@@ -54,6 +61,47 @@
 --    any row, its partner's and strangers' alike. That is the expected gap
 --    until RLS (design note §6, rows 9d–9g) narrows it to rows; grants
 --    narrow commands and columns, never rows.
+--  * mwf_job's grants: exactly what the definer helpers and writers it owns
+--    read and write — mwf_job is also the job's login role, so these are its
+--    direct privileges too. Column lists everywhere a column list exists:
+--    SELECT only the id / FK / filter columns a function reads (an UPDATE or
+--    DELETE with a WHERE needs SELECT on what it reads), UPDATE only the
+--    columns a function writes — never a routing column
+--    (participant.user_id/session_id, empathy_attempt.author/subject; Phase 3
+--    §4). DELETE cannot be narrowed. Each grant names its caller; a [TS-n]
+--    tag says which task added it:
+--      [TS-9]  the job connection's own writers in the app (spec §1.1 message
+--              "Key per row" — AI/SYSTEM rows and every delivered kind are
+--              mwf_job's; participant_milestone — system keys are mwf_job's;
+--              ai_memory — "in practice written by mwf_job").
+--      [TS-10] the reconciler's and the reveal's job writers (spec §1.2 —
+--              reconciler_result "I/U job", reconciler_guidance "I job",
+--              context_share_offer "I job … mwf_job for delivery/notification
+--              columns"; services/reconciler/*, controllers/notifications.ts).
+--      [TS-10 I4] (Ruling R35) the reconciler READER. The reconciler runs as
+--              the job: every read of the analysis path
+--              (services/reconciler/{analysis,state,sharing,circuit-breaker}.ts,
+--              stage2.ts triggerReconcilerAndUpdateStatuses) goes through
+--              mwf_job, so the request that triggered an analysis never reads
+--              the other participant's private rows on its own connection.
+--              These are exactly the analysis inputs; nothing else.
+--      [TS-11] the job's writers in needs, repair and follow-up (spec §1.4
+--              agreement "I job (the mutual-willingness path)", agreement_party
+--              "I job", session_closure "I job", proposal "U … mwf_job (status,
+--              shared_at)", proposal_revision "I … job", follow_up "I … job
+--              (scheduler) · U … job (status)", reminder "status → DELIVERED by
+--              mwf_job"). Every job write is a raw INSERT/UPDATE naming exactly
+--              these columns (no client-side defaults).
+--      [TS-12] the job's writers and readers in telemetry, notifications,
+--              deletion and retention (spec §1.8 brain_activity "mwf_job
+--              writes, mwf_ops reads"; R35 — the job is the principal for work
+--              that crosses users, the anonymise walk and retention). Every job
+--              statement is raw and names exactly these columns.
+--  * mwf_ops' grants: SELECT on exactly the tables the Neural Monitor
+--    dashboard (routes/brain.ts) reads, directly or through the stage shim,
+--    re-based from the old BrainActivity, Session/Relationship/
+--    RelationshipMember/User, StageProgress, Message, UserVessel.notableFacts,
+--    EmotionalReading and InnerWorkSession/Message reads.
 --  * The [Pnn] tags on the CHECKs name the TS-7 data-move prechecks that
 --    guarded each rule; kept as cross-references.
 -- ============================================================================
@@ -61,9 +109,10 @@
 -- ----------------------------------------------------------------------------
 -- Domains. All are invisible to Prisma: a uuid7 column introspects as
 -- String @db.Uuid, a ts_ms column as DateTime @db.Timestamptz(3), an
--- intensity column as Int, and `migrate diff` reports nothing (TS-6 probe for
--- intensity, 2026-10-19; work-a39h.11.40 probe for uuid7, 2026-11-02;
--- work-gevt for ts_ms, 2026-11-10; PG 18.6 / Prisma 7.10).
+-- intensity column as Int, an email column as String,
+-- and `migrate diff` reports nothing (TS-6 probe for intensity, 2026-10-19;
+-- work-a39h.11.40 probe for uuid7, 2026-11-02; work-gevt for ts_ms,
+-- 2026-11-10; work-k5fk.5 for email, 2026-11-13; PG 18.6 / Prisma 7.10).
 -- ----------------------------------------------------------------------------
 
 -- Every uuid column (the 33 uuidv7() primary keys and the 96 columns that
@@ -140,6 +189,71 @@ COMMENT ON DOMAIN ts_ms IS 'A timestamptz rounded to milliseconds; every timesta
 -- spec §3: a 1..10 rating (mood_reading.intensity, regulation_event.intensity_*).
 CREATE DOMAIN intensity AS integer CHECK (VALUE BETWEEN 1 AND 10);
 COMMENT ON DOMAIN intensity IS 'A 1-10 self-rated intensity (mood_reading.intensity, regulation_event.intensity_before/after).';
+
+-- work-k5fk.6: a milestone key (milestone.key, participant_milestone.milestone_key):
+-- a lower-case identifier such as feel_heard. A domain, not an enum: the keys
+-- are a closed set, but that set is the milestone table's rows (seeded below
+-- it), and an enum would make every new milestone an ALTER TYPE … ADD VALUE,
+-- which cannot be used in the transaction that also inserts its seed row
+-- (the baseline is one transaction). The FK to milestone closes the set;
+-- the domain fixes the spelling. As with uuid7: array_agg over it yields
+-- milestone_key[], which node-postgres returns as the string '{…}' — cast
+-- (array_agg(milestone_key::text …)); a row comparison against it needs
+-- ::milestone_key on the other side, not ::text.
+CREATE DOMAIN milestone_key AS text
+  CHECK (char_length(VALUE) <= 64 AND VALUE ~ '^[a-z][a-z0-9_]*$');
+COMMENT ON DOMAIN milestone_key IS 'A milestone key: a lower-case identifier of at most 64 characters (e.g. feel_heard). The set of keys is the milestone table (FK); a domain rather than an enum so a new milestone is one seed row, not ALTER TYPE ADD VALUE.';
+
+-- work-k5fk.5: an email address is stored in ONE canonical form and compared
+-- exactly (owner decision, review round 2: drop the ICU collation). The
+-- canonical form is the whole address trimmed, lowercased, final sigma
+-- folded and then NFC-normalized — shared/src/utils/email.ts canonicalEmail()
+-- (= foldEmail(s.trim()): toLowerCase, ς → σ, normalize('NFC')), which every
+-- writer and lookup uses. NFC comes last because lowercasing an NFC string
+-- can un-normalize it: 'J̌' lowercases to j + U+030C, whose NFC is U+01F0. The database never
+-- rewrites a value: email_canonical refuses one that is not canonical, so a
+-- writer that forgot to canonicalize fails closed instead of creating a
+-- second row for the same mailbox. The UNIQUE on "user".email then compares
+-- bytes (the default collation is deterministic), and = / LIKE / ~ / ILIKE
+-- all work on the column.
+--
+-- Case is the only equivalence, as Gmail and most providers treat it; the
+-- RFCs leave the local part case-sensitive in principle, which no mainstream
+-- provider uses. Nothing else folds: a plus-address ('a+1@x.test'), Gmail's
+-- dots, an accent, ß (never ss), a fullwidth form ('ａ@x.test' is a
+-- different, valid address), another script's digit ('a١@x.test' is not
+-- 'a1@x.test') and kana ('あ' is not 'ア') stay distinct. NFC, not NFKC:
+-- RFC 6532 §3.1 says NFC SHOULD be used and NFKC SHOULD NOT (it loses
+-- information needed to spell names); combining marks stay legal (Indic
+-- scripts need them in NFC).
+--
+-- lower() is pinned to the builtin collation pg_unicode_fast (full Unicode
+-- case mapping, the same as JavaScript's toLowerCase: 'İ' → 'i̇', U+0069
+-- U+0307). Final sigma: Σ, σ and ς are case forms of one letter, and
+-- lower() writes ς at the end of a word ('ΑΣ' → 'ας' but 'ασ' stays), so
+-- the fold maps ς to σ and email_no_final_sigma refuses ς: one address,
+-- one row. Under the database's default libc
+-- collation lower('İ') is 'i' (locale-dependent), which would disagree with
+-- canonicalEmail(); email-domain.target.test.ts pins both.
+CREATE DOMAIN email AS text
+  CONSTRAINT email_length CHECK (char_length(VALUE) <= 254)
+  CONSTRAINT email_shape CHECK (VALUE COLLATE "C" ~ '^[^@]+@[^@]+$')
+  CONSTRAINT email_canonical CHECK (VALUE = lower(VALUE COLLATE pg_unicode_fast))
+  CONSTRAINT email_nfc CHECK (VALUE IS NFC NORMALIZED)
+  CONSTRAINT email_no_final_sigma CHECK (strpos(VALUE, U&'\03C2') = 0)
+  CONSTRAINT email_assigned CHECK (unicode_assigned(VALUE))
+  CONSTRAINT email_no_space_control CHECK (VALUE COLLATE pg_c_utf8 !~ '[[:space:][:cntrl:]]')
+  CONSTRAINT email_no_format CHECK (VALUE COLLATE "C" !~
+    '[\u00AD\u034F\u0600-\u0605\u061C\u06DD\u070F\u0890-\u0891\u08E2\u115F-\u1160\u17B4-\u17B5\u180B-\u180F\u200B-\u200F\u202A-\u202E\u2060-\u206F\u3164\uFE00-\uFE0F\uFEFF\uFFA0\uFFF0-\uFFFB\U000110BD\U000110CD\U00013430-\U0001343F\U0001BCA0-\U0001BCA3\U0001D173-\U0001D17A\U000E0000-\U000E0FFF]');
+COMMENT ON DOMAIN email IS 'An email address in its one canonical form (trimmed, lowercased, ς folded to σ, NFC: shared canonicalEmail()), compared exactly. Case is the only equivalence and it is removed before storage; a plus-address, an accent, ß, a fullwidth form, another script''s digit stay distinct. The database refuses a non-canonical value rather than rewriting it.';
+COMMENT ON CONSTRAINT email_length ON DOMAIN email IS 'At most 254 characters (the RFC 5321 path limit).';
+COMMENT ON CONSTRAINT email_shape ON DOMAIN email IS 'Exactly one @, with a non-empty local part and a non-empty domain. The tombstone deleted+<id>@invalid has this shape.';
+COMMENT ON CONSTRAINT email_canonical ON DOMAIN email IS 'Canonical case: lowercase by full Unicode case mapping (lower() under pg_unicode_fast, equal to JavaScript toLowerCase). Writers canonicalize with canonicalEmail(); a value that is not canonical is refused, never rewritten.';
+COMMENT ON CONSTRAINT email_nfc ON DOMAIN email IS 'NFC-normalized (RFC 6532 §3.1: NFC SHOULD be used, NFKC SHOULD NOT). Combining marks stay legal; a fullwidth form or a ligature is a different, valid address. Part of the canonical form canonicalEmail() produces (NFC after lowercasing).';
+COMMENT ON CONSTRAINT email_no_final_sigma ON DOMAIN email IS 'No U+03C2 GREEK SMALL LETTER FINAL SIGMA: Σ, σ and ς are case forms of one letter, and lower() writes ς only at a word end, so canonicalEmail() folds ς to σ and this CHECK refuses an unfolded value (one address, one row).';
+COMMENT ON CONSTRAINT email_assigned ON DOMAIN email IS 'Every code point assigned in PostgreSQL''s Unicode version.';
+COMMENT ON CONSTRAINT email_no_space_control ON DOMAIN email IS 'No whitespace (Unicode White_Space) and no control character (Cc), by pg_c_utf8''s Unicode character classes.';
+COMMENT ON CONSTRAINT email_no_format ON DOMAIN email IS 'No format character (Cf: soft hyphen, zero-width space/joiners, bidi controls, …) and no other default-ignorable code point (variation selectors, Hangul fillers, tags): invisible characters that would make two addresses look identical. Code-point ranges under "C": exactly Cf ∪ Default_Ignorable_Code_Point of PostgreSQL 18''s Unicode 16 (email-domain.target.test.ts compares it with JavaScript''s \p{Cf} and \p{Default_Ignorable_Code_Point}); re-derive on a PostgreSQL major upgrade (infra/aws/README.md).';
 
 -- ----------------------------------------------------------------------------
 -- Enums, in schema.prisma order.
@@ -254,6 +368,14 @@ CREATE TYPE brain_call_type AS ENUM ('ORCHESTRATED_RESPONSE', 'RETRIEVAL_PLANNIN
 COMMENT ON TYPE brain_call_type IS 'Which part of the app made a logged LLM call (the call site), for cost and latency breakdowns.';
 
 -- ----------------------------------------------------------------------------
+-- Schema public: USAGE for the roles that read or write its tables directly
+-- (mwf_app relies on PUBLIC's USAGE, PostgreSQL 15+'s default). Schema app's
+-- grants are in preamble.sql, next to CREATE SCHEMA app.
+-- ----------------------------------------------------------------------------
+GRANT USAGE ON SCHEMA public TO mwf_job;
+GRANT USAGE ON SCHEMA public TO mwf_ops;
+
+-- ----------------------------------------------------------------------------
 -- The 47 tables, in dependency order.
 -- ----------------------------------------------------------------------------
 
@@ -266,11 +388,13 @@ COMMENT ON TABLE relationship IS 'A durable pairing of users across sessions; it
 -- mwf_app: invitations.ts createSession reads the relationship and creates one with its two members (nested create: Prisma sends the timestamps).
 GRANT SELECT ON relationship TO mwf_app;
 GRANT INSERT (created_at, updated_at) ON relationship TO mwf_app;
+-- mwf_ops: the Neural Monitor dashboard (routes/brain.ts, directly or through the stage shim) reads it.
+GRANT SELECT ON relationship TO mwf_ops;
 
 CREATE TABLE "user" (
     id uuid7 NOT NULL DEFAULT uuidv7() PRIMARY KEY,
     clerk_id text UNIQUE,
-    email text NOT NULL UNIQUE CHECK (char_length(email) <= 254),
+    email email NOT NULL UNIQUE,
     first_name text,
     last_name text,
     deleted_at ts_ms,
@@ -279,12 +403,15 @@ CREATE TABLE "user" (
     name text
         GENERATED ALWAYS AS (nullif(trim(coalesce(first_name, '') || ' ' || coalesce(last_name, '')), '')) STORED,
 
-    -- §1.7 user — a tombstone is scrubbed (P3 D9)
-    CHECK (deleted_at IS NULL OR (clerk_id IS NULL AND email LIKE 'deleted+%'))
+    -- §1.7 user — a tombstone is scrubbed (P3 D9) to deleted+<id>@invalid
+    -- (.invalid is reserved, RFC 2606: never a real address; the uuid text
+    -- is lowercase, so the value is canonical). app.anonymize_user_account
+    -- writes exactly 'deleted+' || id || '@invalid'.
+    CHECK (deleted_at IS NULL OR (clerk_id IS NULL AND email COLLATE "C" LIKE 'deleted+%@invalid'))
 );
 COMMENT ON TABLE "user" IS 'Identity only: one row per account (Clerk-backed), soft-deleted to a scrubbed tombstone. Every FK to it is RESTRICT; session data hangs off participant, not off user.';
 COMMENT ON COLUMN "user".clerk_id IS 'The Clerk user id this account signs in with; NULL on a tombstone.';
-COMMENT ON COLUMN "user".email IS 'Sign-in email, unique. A tombstone holds a scrubbed deleted+<id> address.';
+COMMENT ON COLUMN "user".email IS 'Sign-in email in canonical form (domain email: trimmed, NFC, lowercase), unique: a case variant is the same canonical value, a plus-address a different one. A tombstone holds the scrubbed address deleted+<id>@invalid.';
 COMMENT ON COLUMN "user".name IS 'Generated display name: first_name and last_name joined, NULL when both are empty.';
 COMMENT ON COLUMN "user".deleted_at IS 'Soft delete (P3 D9): the row becomes a scrubbed tombstone and is never removed.';
 -- mwf_app: every request reads its user (auth middleware, by clerk_id/email) and its partner's names; first login creates the
@@ -297,6 +424,16 @@ GRANT UPDATE (clerk_id, email, first_name, last_name, updated_at) ON "user" TO m
 -- middleware/auth.ts's P2002 path re-bind an EXISTING user's row — found by the email a new Clerk
 -- identity presents (emailAddresses[0], not checked verified or primary) — to that new identity: an
 -- account takeover. The grant is the app's today; the fix (and this grant) is the owner's call.
+-- Since work-k5fk.5 that lookup (findUnique by canonicalEmail(...)) also matches a case variant of the address
+-- (work-bp5m fixes the re-bind).
+-- mwf_job: resolve_user_by_clerk_id, create_user_for_clerk (RETURNING id), anonymize_user_account (existence, tombstone)
+GRANT SELECT (id, clerk_id, deleted_at) ON "user" TO mwf_job;
+GRANT INSERT (clerk_id, email, first_name, last_name) ON "user" TO mwf_job;
+GRANT UPDATE (clerk_id, email, first_name, last_name, deleted_at) ON "user" TO mwf_job;
+-- mwf_job [TS-10 I4]: empathy-store sessionParties (the reconciler's A/B order and the names in its prompts)
+GRANT SELECT (first_name, name) ON "user" TO mwf_job;
+-- mwf_ops: the Neural Monitor dashboard (routes/brain.ts, directly or through the stage shim) reads it.
+GRANT SELECT ON "user" TO mwf_ops;
 
 CREATE TABLE relationship_member (
     relationship_id uuid7 NOT NULL REFERENCES relationship ON DELETE CASCADE,
@@ -317,6 +454,8 @@ COMMENT ON COLUMN relationship_member.nickname IS 'What this member calls the ot
 GRANT SELECT ON relationship_member TO mwf_app;
 GRANT INSERT (relationship_id, user_id, role, nickname, joined_at, created_at, updated_at) ON relationship_member TO mwf_app;
 GRANT UPDATE (nickname, updated_at) ON relationship_member TO mwf_app;
+-- mwf_ops: the Neural Monitor dashboard (routes/brain.ts, directly or through the stage shim) reads it.
+GRANT SELECT ON relationship_member TO mwf_ops;
 
 CREATE TABLE session (
     id uuid7 NOT NULL DEFAULT uuidv7() PRIMARY KEY,
@@ -344,6 +483,16 @@ COMMENT ON COLUMN session.topic_frame IS 'encrypted (session): the AI''s short n
 GRANT SELECT ON session TO mwf_app;
 GRANT INSERT (relationship_id, status, previous_session_id, topic_frame, created_at, updated_at) ON session TO mwf_app;
 GRANT UPDATE (topic_frame, topic_frame_confirmed_at, status, updated_at) ON session TO mwf_app;
+-- mwf_job: session_set_status, empathy_set_status (row lock), anonymize step 1
+GRANT SELECT (id, status, resolved_at) ON session TO mwf_job;
+GRANT UPDATE (status, resolved_at) ON session TO mwf_job;
+-- mwf_job [TS-12]: session-retention: staleness of an ACTIVE session and the purge window of an ARCHIVED one
+GRANT SELECT (updated_at) ON session TO mwf_job;
+-- mwf_job [TS-12]: session-retention: an ARCHIVED session past the purge window is hard-deleted (every child
+-- FKs session ON DELETE CASCADE; spec Conventions "retention hard-deletes whole sessions")
+GRANT DELETE ON session TO mwf_job;
+-- mwf_ops: the Neural Monitor dashboard (routes/brain.ts, directly or through the stage shim) reads it.
+GRANT SELECT ON session TO mwf_ops;
 
 CREATE TABLE participant (
     id uuid7 NOT NULL DEFAULT uuidv7() PRIMARY KEY,
@@ -368,6 +517,14 @@ COMMENT ON COLUMN participant.left_at IS 'When the participant left or deleted t
 -- UPDATE: display_name / left_at move only through app.anonymize_user_in_session.
 GRANT SELECT ON participant TO mwf_app;
 GRANT INSERT (session_id, user_id, kind, display_name, joined_at, created_at, updated_at) ON participant TO mwf_app;
+-- mwf_job: is_member, partner_user_id, is_co_participant, my_participant, every self/membership test, T-cardinality-*, T-same-session, reveal gate
+GRANT SELECT (id, session_id, user_id, kind, left_at) ON participant TO mwf_job;
+-- mwf_job: anonymize_user_in_session step 2
+GRANT UPDATE (display_name, left_at) ON participant TO mwf_job;
+-- mwf_job [TS-10 I4]: empathy-store sessionParties (the reconciler's A/B order and the names in its prompts)
+GRANT SELECT (joined_at, display_name) ON participant TO mwf_job;
+-- mwf_ops: the Neural Monitor dashboard (routes/brain.ts, directly or through the stage shim) reads it.
+GRANT SELECT ON participant TO mwf_ops;
 
 CREATE TABLE proposal (
     id uuid7 NOT NULL DEFAULT uuidv7() PRIMARY KEY,
@@ -413,6 +570,13 @@ GRANT INSERT (session_id, created_by_participant_id, source, kind, status, descr
               unresolved_need_labels, created_at, updated_at) ON proposal TO mwf_app;
 GRANT UPDATE (description, duration, measure_of_success, kind, status, created_by_participant_id, unresolved_need_labels,
               removed_at, removed_by_participant_id, removal_reason, updated_at) ON proposal TO mwf_app;
+-- mwf_job: T-consent-owner (owner of a proposal / share offer / review target), fired by need_revoke_share
+GRANT SELECT (id, created_by_participant_id) ON proposal TO mwf_job;
+-- mwf_job [TS-11]: stage4-closure closureInputsAsJob (fix round 1): the closure decides across every participant on the
+-- job connection — the proposals it converts / schedules (snapshot text for the agreement and follow-up)
+GRANT SELECT (session_id, kind, status, description, duration, measure_of_success, shared_at) ON proposal TO mwf_job;
+-- mwf_job [TS-11]: repair-store convertProposalsAsJob: ACTIVE/REVISED → CONVERTED_TO_AGREEMENT (WHERE id = …: SELECT id is granted above)
+GRANT UPDATE (status) ON proposal TO mwf_job;
 
 CREATE TABLE conversation (
     id uuid7 NOT NULL DEFAULT uuidv7() PRIMARY KEY,
@@ -439,6 +603,12 @@ COMMENT ON COLUMN conversation.anchor_proposal_id IS 'SUBCHAT only: the proposal
 GRANT SELECT ON conversation TO mwf_app;
 GRANT INSERT (participant_id, kind, anchor_kind, anchor_proposal_id, status, created_at, updated_at) ON conversation TO mwf_app;
 GRANT UPDATE (status, resolved_at, updated_at) ON conversation TO mwf_app;
+-- mwf_job: empathy_set_status: the subject's MAIN conversation; anonymize step 3
+GRANT SELECT (id, participant_id, kind) ON conversation TO mwf_job;
+-- mwf_job: anonymize_*: a private-row delete (steps 3–5)
+GRANT DELETE ON conversation TO mwf_job;
+-- mwf_ops: the Neural Monitor dashboard (routes/brain.ts, directly or through the stage shim) reads it.
+GRANT SELECT ON conversation TO mwf_ops;
 
 CREATE TABLE empathy_attempt (
     id uuid7 NOT NULL DEFAULT uuidv7() PRIMARY KEY,
@@ -476,6 +646,14 @@ GRANT SELECT ON empathy_attempt TO mwf_app;
 GRANT INSERT (author_participant_id, subject_participant_id, round, content, status, status_version, delivery_status, submitted_at,
               created_at, updated_at)
   ON empathy_attempt TO mwf_app;
+-- mwf_job: empathy_set_status reads the row (%ROWTYPE) and RETURNING id; empathy_direction_status; T-consent-owner; anonymize (revealed_at filter)
+GRANT SELECT ON empathy_attempt TO mwf_job;
+-- mwf_job: empathy_set_status: status moves, the reveal stamp (delivery columns for the job's delivery path)
+GRANT UPDATE (status, status_version, revealed_at, delivery_status, delivered_at, seen_at) ON empathy_attempt TO mwf_job;
+-- mwf_job: empathy_set_status: round n+1 on resubmission
+GRANT INSERT (author_participant_id, subject_participant_id, round, supersedes_attempt_id, content, status) ON empathy_attempt TO mwf_job;
+-- mwf_job: anonymize_*: a private-row delete (steps 3–5)
+GRANT DELETE ON empathy_attempt TO mwf_job;
 
 CREATE TABLE need (
     id uuid7 NOT NULL DEFAULT uuidv7() PRIMARY KEY,
@@ -510,6 +688,10 @@ COMMENT ON COLUMN need.evidence IS 'encrypted (participant): text[], each elemen
 GRANT SELECT ON need TO mwf_app;
 GRANT INSERT (participant_id, label, category, evidence, ai_confidence, confirmed_at, created_at, updated_at) ON need TO mwf_app;
 GRANT UPDATE (label, category, confirmed_at, locked_at, superseded_by_need_id, deleted_at, updated_at) ON need TO mwf_app;
+-- mwf_job: need_share (owner, category, live), need_revoke_share (owner), T-consent-owner, T-need-share-owner, anonymize step 3
+GRANT SELECT (id, participant_id, category, deleted_at, superseded_by_need_id) ON need TO mwf_job;
+-- mwf_job: anonymize_*: a private-row delete (steps 3–5)
+GRANT DELETE ON need TO mwf_job;
 
 CREATE TABLE message (
     id uuid7 NOT NULL DEFAULT uuidv7() PRIMARY KEY,
@@ -547,6 +729,22 @@ GRANT SELECT ON message TO mwf_app;
 GRANT INSERT (conversation_id, sender_participant_id, role, kind, content, refining_need_id, source_attempt_id, created_at)
   ON message TO mwf_app;
 GRANT DELETE ON message TO mwf_app;
+-- mwf_job: empathy_set_status: the delivered copy, and its duplicate probe
+GRANT SELECT (conversation_id, source_attempt_id, kind) ON message TO mwf_job;
+GRANT INSERT (conversation_id, sender_participant_id, role, kind, content, source_attempt_id) ON message TO mwf_job;
+-- mwf_job [TS-9]: message-store createFacilitatorMessage / deliverMessage: a once-only line's
+-- dedupe_key (work-fdc1, sql_message_once), the refining need a facilitator
+-- reply answers, and an explicit instant (fixtures, replays)
+GRANT INSERT (dedupe_key, refining_need_id, created_at) ON message TO mwf_job;
+-- mwf_job [TS-9]: message-store insert() returns the written row's id and instant (INSERT … RETURNING id, created_at);
+-- getInitialMessage's Serializable idempotency probe reads the first message's id. Never content.
+GRANT SELECT (id, created_at) ON message TO mwf_job;
+-- mwf_job [TS-10 I4]: analysis.ts stagedChat (witnessing content, the subject's recent Stage 2 turns) and
+-- state.ts markEmpathyReady's de-dup guard (lastAiNote): the text and speaker of the
+-- MAIN-conversation CHAT rows of the two parties (conversation_id, kind, created_at granted above).
+GRANT SELECT (role, content, sender_participant_id) ON message TO mwf_job;
+-- mwf_ops: the Neural Monitor dashboard (routes/brain.ts, directly or through the stage shim) reads it.
+GRANT SELECT ON message TO mwf_ops;
 
 CREATE TABLE conversation_read_state (
     participant_id uuid7 NOT NULL PRIMARY KEY REFERENCES participant ON DELETE CASCADE,
@@ -570,6 +768,9 @@ GRANT INSERT (participant_id, last_viewed_at, last_active_at, last_seen_message_
   ON conversation_read_state TO mwf_app;
 GRANT UPDATE (last_viewed_at, last_active_at, last_seen_message_id, last_viewed_share_tab_at, updated_at)
   ON conversation_read_state TO mwf_app;
+-- mwf_job: anonymize_*: a private-row delete (steps 3–5) and the filter columns it reads
+GRANT SELECT (participant_id) ON conversation_read_state TO mwf_job;
+GRANT DELETE ON conversation_read_state TO mwf_job;
 
 CREATE TABLE reconciler_result (
     id uuid7 NOT NULL DEFAULT uuidv7() PRIMARY KEY,
@@ -623,6 +824,23 @@ COMMENT ON COLUMN reconciler_result.suggested_share_content IS 'encrypted (parti
 COMMENT ON COLUMN reconciler_result.suggested_share_reason IS 'encrypted (participant): one sentence on why sharing would help, LLM output.';
 -- mwf_app: read only (the share offer's result, the reconciler state the subject sees); every write is the job's.
 GRANT SELECT ON reconciler_result TO mwf_app;
+-- mwf_job [TS-10]: reconciler/analysis.ts persistAnalysis: one current result per attempt — the next
+-- iteration (max(iteration) of the attempt), RETURNING id, and the re-analysis
+-- supersede (WHERE attempt_id … AND superseded_at IS NULL). Never the analysis text.
+GRANT SELECT (id, attempt_id, iteration, superseded_at) ON reconciler_result TO mwf_job;
+-- mwf_job [TS-10]: persistAnalysis: the analysis row itself (id, created_at, updated_at are column defaults)
+GRANT INSERT (attempt_id, subject_participant_id, iteration, alignment_score, alignment_summary, gap_summary,
+              gap_severity, correctly_identified, missed_feelings, misattributions, most_important_gap,
+              recommended_action, rationale, sharing_would_help, suggested_share_focus, suggested_share_content,
+              suggested_share_reason, circuit_breaker_tripped) ON reconciler_result TO mwf_job;
+-- mwf_job [TS-10]: persistAnalysis: re-analysis of the same attempt retires the current result
+GRANT UPDATE (superseded_at) ON reconciler_result TO mwf_job;
+-- mwf_job [TS-10 I4]: analysis.ts currentResultFor / analyzeEmpathyGap's cached result, sharing.ts generateShareOffer,
+-- state.ts reveal quality note: the stored analysis an analysis reuses (RESULT_SELECT)
+GRANT SELECT (subject_participant_id, alignment_score, alignment_summary, correctly_identified, gap_severity,
+              gap_summary, missed_feelings, misattributions, most_important_gap, recommended_action, rationale,
+              sharing_would_help, suggested_share_focus, suggested_share_content, suggested_share_reason, created_at)
+  ON reconciler_result TO mwf_job;
 
 CREATE TABLE context_share_offer (
     id uuid7 NOT NULL DEFAULT uuidv7() PRIMARY KEY,
@@ -665,9 +883,27 @@ COMMENT ON COLUMN context_share_offer.shared_content IS 'encrypted (session): th
 -- suggestion, decline, accept with the shared text. Creation and delivery are the job's.
 GRANT SELECT ON context_share_offer TO mwf_app;
 GRANT UPDATE (status, offered_at, suggested_content, declined_at, shared_content, shared_at, updated_at) ON context_share_offer TO mwf_app;
+-- mwf_job: T-consent-owner (owner of a proposal / share offer / review target), fired by need_revoke_share
+GRANT SELECT (id, subject_participant_id) ON context_share_offer TO mwf_job;
+-- mwf_job [TS-10]: reconciler/sharing.ts insertOffer: the next iteration of an attempt's offers (max(iteration)),
+-- RETURNING id; triggerStage3Transition: open offers (status) of the session's participants expire
+GRANT SELECT (attempt_id, iteration, status) ON context_share_offer TO mwf_job;
+-- mwf_job [TS-10]: sharing.ts deliverAcceptedShare (fix1 I2): the delivery is idempotent — it locks the offer
+-- (SELECT … FOR UPDATE) and delivers only while delivery_status is PENDING. Never the shared text.
+GRANT SELECT (delivery_status) ON context_share_offer TO mwf_job;
+-- mwf_job [TS-10]: insertOffer: the subject's offer (PENDING from the reconciler; OFFERED with offered_at from the share-offer fallback)
+GRANT INSERT (attempt_id, result_id, subject_participant_id, iteration, status, offer_message, suggested_content,
+              suggested_reason, offered_at) ON context_share_offer TO mwf_job;
+-- mwf_job [TS-10]: sharing.ts shareAccepted: the delivery stamp of the shared text; notifications.ts getPendingActionsHandler:
+-- the notification path writes delivery_notified_at / seen_notified_at (review F4.2); stage2.ts
+-- triggerStage3Transition: status → EXPIRED when the Stage 2 sharing window closes
+GRANT UPDATE (status, delivery_status, delivered_at, delivery_notified_at, seen_notified_at) ON context_share_offer TO mwf_job;
+-- mwf_job [TS-10 I4]: sharing.ts generateShareSuggestion(ForDirection) / generateShareOffer: does this result already
+-- have an offer (with a suggestion)? Never the shared text.
+GRANT SELECT (result_id, suggested_content) ON context_share_offer TO mwf_job;
 
 CREATE TABLE milestone (
-    key text NOT NULL PRIMARY KEY,
+    key milestone_key NOT NULL PRIMARY KEY,
     ordinal integer NOT NULL UNIQUE,
     stage_label text NOT NULL,
     scope milestone_scope NOT NULL DEFAULT 'participant',
@@ -675,17 +911,41 @@ CREATE TABLE milestone (
     created_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
-COMMENT ON TABLE milestone IS 'Reference data: the journey milestones, in order. The only place a stage exists, as data; seeded by the baseline migration.';
-COMMENT ON COLUMN milestone.key IS 'Stable identifier of the milestone, e.g. feel_heard; code and participant_milestone refer to it.';
-COMMENT ON COLUMN milestone.ordinal IS 'Position along the journey.';
-COMMENT ON COLUMN milestone.stage_label IS 'UI label of the stage this milestone belongs to, e.g. Your Story; display text owned by this table.';
+COMMENT ON TABLE milestone IS 'Reference data: the journey milestones, in order. The only place a stage exists, as data; seeded right here by the baseline migration and read-only to every runtime role.';
+COMMENT ON COLUMN milestone.key IS 'Stable identifier of the milestone, e.g. feel_heard (domain milestone_key); code (shared MILESTONE_KEYS) and participant_milestone refer to it.';
+COMMENT ON COLUMN milestone.ordinal IS 'Position along the journey: stage * 100 + position, so floor(ordinal / 100) is the stage number; 0 (paused) is off the journey.';
+COMMENT ON COLUMN milestone.stage_label IS 'UI label of the stage this milestone belongs to, e.g. Your Story; display text owned by this table. Plain text, not an enum or a domain: its closed set is these rows (no runtime role can write here), and a copy edit is an UPDATE, not a type change.';
 COMMENT ON COLUMN milestone.self_assertable IS 'Whether a participant may record the milestone themselves (a CTA) or only the job (a system fact).';
 -- mwf_app: reference data (P3 §1.1 pattern), read only.
 GRANT SELECT ON milestone TO mwf_app;
+-- mwf_ops: the Neural Monitor dashboard (routes/brain.ts, directly or through the stage shim) reads it.
+GRANT SELECT ON milestone TO mwf_ops;
+
+-- The seed (work-k5fk.6; was generated from gen/maps.ts MILESTONES). Keys are
+-- shared/src/dto/milestones.ts MILESTONE_KEYS in ordinal order, and the
+-- self_assertable rows are milestone-writer.ts SELF_ASSERTABLE_MILESTONES
+-- (milestone-keys.test.ts pins both). ordinal = stage * 100 + position, in
+-- today's stage order; stage_label = shared/src/enums.ts STAGE_FRIENDLY_NAMES.
+-- scope 'session': written for every participant only once it holds for the
+-- whole session (v_session_readiness). Step 20 asserts 13 rows.
+INSERT INTO milestone (key, ordinal, stage_label, scope, self_assertable) VALUES
+  ('paused', 0, 'Paused', 'participant', false),                                       -- the session is paused (sessions.ts): off the journey, v_current_stage ignores it, and resume deletes it (job)
+  ('invitation_sent', 10, 'Getting Started', 'participant', false),                    -- the inviter's invitation went out (job)
+  ('compact_signed', 20, 'Getting Started', 'session', true),                          -- the participant signed the compact (CTA), the session waits for everyone's
+  ('feel_heard', 110, 'Your Story', 'participant', true),                              -- Stage 1: the participant confirms they feel heard (CTA)
+  ('empathy_submitted', 210, 'Walking in Their Shoes', 'participant', false),          -- Stage 2: the participant submitted their empathy attempt (job)
+  ('empathy_ready', 220, 'Walking in Their Shoes', 'participant', false),              -- Stage 2: that attempt is ready to reveal (job, reconciler)
+  ('empathy_validated', 230, 'Walking in Their Shoes', 'session', false),              -- Stage 2: the empathy in both directions is validated (job)
+  ('needs_confirmed', 310, 'What Matters Most', 'participant', true),                  -- Stage 3: the participant confirmed their needs (CTA)
+  ('needs_validated', 320, 'What Matters Most', 'session', false),                     -- Stage 3: the shared needs are validated (job)
+  ('needs_shared', 330, 'What Matters Most', 'session', false),                        -- Stage 3: everyone has shared their needs (job), not "I shared"
+  ('repair_walkthrough_started', 410, 'What Comes Next', 'participant', false),        -- Stage 4: the participant began the need walkthrough (job)
+  ('choices_shared', 420, 'What Comes Next', 'session', true),                         -- Stage 4: the participant shared their proposal choices (CTA), partners see choices from here
+  ('closed', 430, 'What Comes Next', 'session', false);                                -- Stage 4: the session closed, with or without a shared agreement (job)
 
 CREATE TABLE participant_milestone (
     participant_id uuid7 NOT NULL REFERENCES participant ON DELETE CASCADE,
-    milestone_key text NOT NULL REFERENCES milestone ON DELETE RESTRICT,
+    milestone_key milestone_key NOT NULL REFERENCES milestone ON DELETE RESTRICT,
     reached_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
     created_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
@@ -699,6 +959,16 @@ GRANT SELECT ON participant_milestone TO mwf_app;
 GRANT INSERT (participant_id, milestone_key, reached_at) ON participant_milestone TO mwf_app;
 -- Holds only because reachMilestone is raw SQL (INSERT … ON CONFLICT DO NOTHING naming these three
 -- columns): a Prisma create would also send created_at.
+-- mwf_job: anonymize_user_in_session step 3: unshared choices (choices_shared milestone), INDIVIDUAL check-ins
+GRANT SELECT (participant_id, milestone_key) ON participant_milestone TO mwf_job;
+-- mwf_job [TS-9]: milestone-writer reachMilestone: system keys (invitation_sent, empathy_*, needs_shared, closed, paused …)
+GRANT INSERT (participant_id, milestone_key, reached_at) ON participant_milestone TO mwf_job;
+-- mwf_job [TS-9]: sessions.ts resumeSession: un-reaching `paused` is a DELETE by mwf_job (spec §1.1)
+GRANT DELETE ON participant_milestone TO mwf_job;
+-- mwf_job [TS-10 I4]: analysis.ts milestonesOf: when each milestone was reached — the stage each chat row was written in
+GRANT SELECT (reached_at) ON participant_milestone TO mwf_job;
+-- mwf_ops: the Neural Monitor dashboard (routes/brain.ts, directly or through the stage shim) reads it.
+GRANT SELECT ON participant_milestone TO mwf_ops;
 
 CREATE TABLE ai_memory (
     id uuid7 NOT NULL DEFAULT uuidv7() PRIMARY KEY,
@@ -727,6 +997,18 @@ COMMENT ON COLUMN ai_memory.doc IS 'encrypted (per-row): jsonb with every string
 GRANT SELECT ON ai_memory TO mwf_app;
 GRANT INSERT (user_id, kind, doc, created_at, updated_at) ON ai_memory TO mwf_app;
 GRANT UPDATE (doc, updated_at) ON ai_memory TO mwf_app;
+-- mwf_job: anonymize_*: a private-row delete (steps 3–5) and the filter columns it reads
+GRANT SELECT (participant_id, user_id) ON ai_memory TO mwf_job;
+GRANT DELETE ON ai_memory TO mwf_job;
+-- mwf_job [TS-9]: conversation-summarizer updateSessionSummary: the participant's SUMMARY document (INSERT … ON CONFLICT DO UPDATE)
+GRANT SELECT (kind) ON ai_memory TO mwf_job;
+GRANT INSERT (participant_id, kind, doc) ON ai_memory TO mwf_job;
+GRANT UPDATE (doc) ON ai_memory TO mwf_job;
+-- mwf_job [TS-10 I4]: analysis.ts loadSubjectFacts: the subject's NOTABLE_FACTS document (participant_id, kind granted above;
+-- id because a Prisma model read always selects the primary key — measured: denied without it)
+GRANT SELECT (id, doc) ON ai_memory TO mwf_job;
+-- mwf_ops: the Neural Monitor dashboard (routes/brain.ts, directly or through the stage shim) reads it.
+GRANT SELECT ON ai_memory TO mwf_ops;
 
 CREATE TABLE mood_reading (
     id uuid7 NOT NULL DEFAULT uuidv7() PRIMARY KEY,
@@ -742,6 +1024,11 @@ COMMENT ON COLUMN mood_reading.context IS 'encrypted (participant): the particip
 -- mwf_app: the caller's own mood check-ins (controllers/emotions.ts, user-settings.ts).
 GRANT SELECT ON mood_reading TO mwf_app;
 GRANT INSERT (participant_id, intensity, context, recorded_at, created_at) ON mood_reading TO mwf_app;
+-- mwf_job: anonymize_*: a private-row delete (steps 3–5) and the filter columns it reads
+GRANT SELECT (participant_id) ON mood_reading TO mwf_job;
+GRANT DELETE ON mood_reading TO mwf_job;
+-- mwf_ops: the Neural Monitor dashboard (routes/brain.ts, directly or through the stage shim) reads it.
+GRANT SELECT ON mood_reading TO mwf_ops;
 
 CREATE TABLE regulation_event (
     id uuid7 NOT NULL DEFAULT uuidv7() PRIMARY KEY,
@@ -757,6 +1044,9 @@ COMMENT ON TABLE regulation_event IS 'A completed emotional-regulation exercise,
 -- mwf_app: the caller's own completed regulation exercise (controllers/emotions.ts).
 GRANT SELECT ON regulation_event TO mwf_app;
 GRANT INSERT (participant_id, type, intensity_before, intensity_after, completed_at, created_at) ON regulation_event TO mwf_app;
+-- mwf_job: anonymize_*: a private-row delete (steps 3–5) and the filter columns it reads
+GRANT SELECT (participant_id) ON regulation_event TO mwf_job;
+GRANT DELETE ON regulation_event TO mwf_job;
 
 CREATE TABLE invitation (
     id uuid7 NOT NULL DEFAULT uuidv7() PRIMARY KEY,
@@ -792,6 +1082,8 @@ GRANT SELECT ON invitation TO mwf_app;
 GRANT INSERT (session_id, invited_by_participant_id, invitee_name, status, expires_at, created_at, updated_at) ON invitation TO mwf_app;
 GRANT UPDATE (status, accepted_by_user_id, accepted_at, declined_at, decline_reason, message_confirmed_at, updated_at)
   ON invitation TO mwf_app;
+-- mwf_ops: the Neural Monitor dashboard (routes/brain.ts, directly or through the stage shim) reads it.
+GRANT SELECT (invited_by_participant_id) ON invitation TO mwf_ops;
 
 CREATE TABLE draft (
     id uuid7 NOT NULL DEFAULT uuidv7() PRIMARY KEY,
@@ -844,6 +1136,9 @@ GRANT UPDATE (content, ready_to_share, version, reopened_at) ON draft TO mwf_app
 -- UPDATE holds without updated_at only because every draft update is raw SQL (upsertDraft's
 -- ON CONFLICT DO UPDATE, the reopen stamp; touch_updated_at sets it): a Prisma update would send it.
 GRANT DELETE ON draft TO mwf_app;
+-- mwf_job: anonymize_*: a private-row delete (steps 3–5) and the filter columns it reads
+GRANT SELECT (participant_id) ON draft TO mwf_job;
+GRANT DELETE ON draft TO mwf_job;
 
 CREATE TABLE session_key (
     id uuid7 NOT NULL DEFAULT uuidv7() PRIMARY KEY,
@@ -878,6 +1173,9 @@ COMMENT ON COLUMN participant_key.key_id IS 'The id of the KMS key (the KEK) tha
 COMMENT ON COLUMN participant_key.wrapped_dek IS 'The AES-256 data key (DEK) for this owner''s encrypted columns, encrypted (wrapped) by the KMS key named in key_id. Never stored unwrapped.';
 COMMENT ON COLUMN participant_key.destroyed_at IS 'The crypto-shred: once set, the wrapped DEK is never unwrapped again, so every value under it is unreadable.';
 -- mwf_app: none. Key material is never the request path's (work-k5fk.10.2; target-roles negative test).
+-- mwf_job: anonymize step 7: the crypto-shred
+GRANT SELECT (participant_id, destroyed_at) ON participant_key TO mwf_job;
+GRANT UPDATE (destroyed_at) ON participant_key TO mwf_job;
 
 CREATE TABLE empathy_review (
     id uuid7 NOT NULL DEFAULT uuidv7() PRIMARY KEY,
@@ -902,6 +1200,8 @@ COMMENT ON COLUMN empathy_review.feedback IS 'encrypted (session): the subject''
 GRANT SELECT ON empathy_review TO mwf_app;
 GRANT INSERT (attempt_id, reviewer_participant_id, validated, feedback, feedback_sent_at, created_at, updated_at) ON empathy_review TO mwf_app;
 GRANT UPDATE (validated, feedback, feedback_sent_at, updated_at) ON empathy_review TO mwf_app;
+-- mwf_job: T-consent-owner (owner of a proposal / share offer / review target), fired by need_revoke_share
+GRANT SELECT (id, reviewer_participant_id) ON empathy_review TO mwf_job;
 
 CREATE TABLE reconciler_guidance (
     result_id uuid7 NOT NULL PRIMARY KEY REFERENCES reconciler_result ON DELETE CASCADE,
@@ -920,6 +1220,11 @@ COMMENT ON COLUMN reconciler_guidance.area_hint IS 'encrypted (participant): a c
 COMMENT ON COLUMN reconciler_guidance.prompt_seed IS 'encrypted (participant): the refinement prompt''s seed phrase (one of three code phrases, by guidance_type).';
 -- mwf_app: read only (the author's abstract hints); written by the job.
 GRANT SELECT ON reconciler_guidance TO mwf_app;
+-- mwf_job [TS-10]: persistAnalysis: the author-visible abstract hints of a result (P3 D8a split)
+GRANT INSERT (result_id, author_participant_id, subject_participant_id, area_hint, guidance_type, prompt_seed)
+  ON reconciler_guidance TO mwf_job;
+-- mwf_job [TS-10 I4]: analysis.ts guidanceFor: the guidance of a cached result
+GRANT SELECT (result_id, area_hint, guidance_type, prompt_seed) ON reconciler_guidance TO mwf_job;
 
 CREATE TABLE consent (
     id uuid7 NOT NULL DEFAULT uuidv7() PRIMARY KEY,
@@ -970,6 +1275,9 @@ GRANT SELECT ON consent TO mwf_app;
 GRANT INSERT (participant_id, requested_by_participant_id, empathy_attempt_id, need_id, share_offer_id, review_id, decision, decided_at,
               created_at, updated_at) ON consent TO mwf_app;
 GRANT UPDATE (decision, decided_at, revoked_at, updated_at) ON consent TO mwf_app;
+-- mwf_job: need_share (the owner's GRANTED consent), need_revoke_share (→ REVOKED)
+GRANT SELECT (need_id, participant_id, decision) ON consent TO mwf_job;
+GRANT UPDATE (decision, revoked_at) ON consent TO mwf_job;
 
 CREATE TABLE need_share (
     need_id uuid7 NOT NULL PRIMARY KEY REFERENCES need ON DELETE RESTRICT,
@@ -994,6 +1302,10 @@ COMMENT ON COLUMN need_share.category IS 'The need''s category, copied at share 
 COMMENT ON COLUMN need_share.shared_text IS 'encrypted (session): the heat-removed sentence the partner sees (one short first-person sentence written by the job, or a fixed per-category fallback).';
 -- mwf_app: read only (v_need_shared and the tending reads); app.need_share / app.need_revoke_share are the writers.
 GRANT SELECT ON need_share TO mwf_app;
+-- mwf_job: need_share (the only writer), need_revoke_share, anonymize step 3 (shared needs survive)
+GRANT SELECT (need_id, revoked_at) ON need_share TO mwf_job;
+GRANT INSERT (need_id, participant_id, session_id, category, shared_text) ON need_share TO mwf_job;
+GRANT UPDATE (revoked_at) ON need_share TO mwf_job;
 
 CREATE TABLE need_disposition (
     participant_id uuid7 NOT NULL REFERENCES participant ON DELETE CASCADE,
@@ -1016,6 +1328,9 @@ GRANT SELECT ON need_disposition TO mwf_app;
 GRANT INSERT (participant_id, need_id, status, is_current, created_at, updated_at) ON need_disposition TO mwf_app;
 GRANT UPDATE (status, is_current, updated_at) ON need_disposition TO mwf_app;
 GRANT DELETE ON need_disposition TO mwf_app;
+-- mwf_job: anonymize_*: a private-row delete (steps 3–5) and the filter columns it reads
+GRANT SELECT (participant_id) ON need_disposition TO mwf_job;
+GRANT DELETE ON need_disposition TO mwf_job;
 
 CREATE TABLE proposal_need (
     proposal_id uuid7 NOT NULL REFERENCES proposal ON DELETE CASCADE,
@@ -1050,6 +1365,11 @@ GRANT SELECT ON proposal_choice TO mwf_app;
 GRANT INSERT (proposal_id, participant_id, decision, note, created_at, updated_at) ON proposal_choice TO mwf_app;
 GRANT UPDATE (decision, note, created_at) ON proposal_choice TO mwf_app;
 -- No DELETE: withdrawChoice (stage4-store.ts) has no caller (review round 1, M4).
+-- mwf_job: anonymize_*: a private-row delete (steps 3–5) and the filter columns it reads
+GRANT SELECT (participant_id) ON proposal_choice TO mwf_job;
+GRANT DELETE ON proposal_choice TO mwf_job;
+-- mwf_job [TS-11]: T-agreement-parties: every party WILLING on the proposal
+GRANT SELECT (proposal_id, participant_id, decision) ON proposal_choice TO mwf_job;
 
 CREATE TABLE proposal_revision (
     id uuid7 NOT NULL DEFAULT uuidv7() PRIMARY KEY,
@@ -1075,6 +1395,8 @@ COMMENT ON COLUMN proposal_revision.after IS 'encrypted (session): jsonb envelop
 -- mwf_app: the audit row of a caller's edit (controllers/stage4.ts, stage4-capture, stage4-subchat). Append-only.
 GRANT SELECT ON proposal_revision TO mwf_app;
 GRANT INSERT (proposal_id, actor_participant_id, action, before, after, reason, created_at) ON proposal_revision TO mwf_app;
+-- mwf_job [TS-11]: repair-store: the conversion's audit row (append-only; no message id, lineage in before/after)
+GRANT INSERT (proposal_id, actor_participant_id, action, before, after, reason) ON proposal_revision TO mwf_job;
 
 CREATE TABLE agreement (
     id uuid7 NOT NULL DEFAULT uuidv7() PRIMARY KEY,
@@ -1098,6 +1420,13 @@ COMMENT ON COLUMN agreement.duration IS 'encrypted (session): the proposal''s fr
 COMMENT ON COLUMN agreement.measure_of_success IS 'encrypted (session): the proposal''s measure of success, copied at conversion.';
 -- mwf_app: read only; agreements are created and moved by the job.
 GRANT SELECT ON agreement TO mwf_app;
+-- mwf_job [TS-11]: repair-store createAgreementsAsJob: the agreement row (snapshot of the proposal) and its id (RETURNING id)
+GRANT INSERT (session_id, proposal_id, type, status, description, duration, measure_of_success, follow_up_at) ON agreement TO mwf_job;
+-- mwf_job [TS-11]: repair-store: RETURNING id; T-agreement-parties (invoker = mwf_job) reads the agreement's session, proposal and instant;
+-- tending: the agreement a follow-up is about (status moves)
+GRANT SELECT (id, session_id, proposal_id, status, created_at) ON agreement TO mwf_job;
+-- mwf_job [TS-11]: tending resolve/closure paths: an agreement moves AGREED → IN_PROGRESS → COMPLETED | ABANDONED
+GRANT UPDATE (status, completed_at) ON agreement TO mwf_job;
 
 CREATE TABLE agreement_party (
     agreement_id uuid7 NOT NULL REFERENCES agreement ON DELETE CASCADE,
@@ -1111,6 +1440,10 @@ CREATE INDEX ON agreement_party (participant_id);
 COMMENT ON TABLE agreement_party IS 'Who is party to an agreement.';
 -- mwf_app: read only (an agreement's parties).
 GRANT SELECT ON agreement_party TO mwf_app;
+-- mwf_job [TS-11]: repair-store createAgreementsAsJob: one party row per present human
+GRANT INSERT (agreement_id, participant_id, agreed_at) ON agreement_party TO mwf_job;
+-- mwf_job [TS-11]: T-agreement-parties (deferred, invoker = mwf_job): the party set
+GRANT SELECT (agreement_id, participant_id) ON agreement_party TO mwf_job;
 
 CREATE TABLE session_closure (
     session_id uuid7 NOT NULL PRIMARY KEY REFERENCES session ON DELETE CASCADE,
@@ -1128,6 +1461,8 @@ COMMENT ON COLUMN session_closure.closed_by_participant_id IS 'Who closed it; NU
 COMMENT ON COLUMN session_closure.summary IS 'encrypted (session): how the repair stage ended, from the participant (max 2000) or a code template.';
 -- mwf_app: read only; the closure is the job's.
 GRANT SELECT ON session_closure TO mwf_app;
+-- mwf_job [TS-11]: repair-store closeSessionAsJob: how the repair stage ended (the three id arrays are v_session_closure_items)
+GRANT INSERT (session_id, kind, reason, summary, closed_by_participant_id, check_in_at, closed_at) ON session_closure TO mwf_job;
 
 CREATE TABLE follow_up (
     id uuid7 NOT NULL DEFAULT uuidv7() PRIMARY KEY,
@@ -1166,6 +1501,16 @@ GRANT SELECT ON follow_up TO mwf_app;
 GRANT INSERT (session_id, type, scope, owner_participant_id, opted_in_shared, status, opened_at, summary, created_at, updated_at)
   ON follow_up TO mwf_app;
 GRANT UPDATE (opted_in_shared, updated_at) ON follow_up TO mwf_app;
+-- mwf_job: anonymize_user_in_session step 3: unshared choices (choices_shared milestone), INDIVIDUAL check-ins
+GRANT SELECT (id, scope) ON follow_up TO mwf_job;
+-- mwf_job [TS-11]: tending scheduleFollowUpsAsJob: SHARED agreements and INDIVIDUAL commitments scheduled at closure, and the
+-- next round a check-in schedules (EXTEND / PARTIAL_CLOSURE continuing: a follow-up is one cycle) (RETURNING id: SELECT id granted above)
+GRANT INSERT (session_id, agreement_id, proposal_id, type, scope, owner_participant_id, opted_in_shared, status, scheduled_for,
+              response_deadline_at, summary) ON follow_up TO mwf_job;
+-- mwf_job [TS-11]: open-due-tending-entries (runs as the job): find due SCHEDULED rows (sql_follow_up_due), whom to notify, the cycle columns it moves
+GRANT SELECT (session_id, agreement_id, type, owner_participant_id, status, scheduled_for, response_deadline_at) ON follow_up TO mwf_job;
+-- mwf_job [TS-11]: open-due / cycle resolution: SCHEDULED → OPEN (opened_at, the response deadline), OPEN/PARTIAL → COMPLETED | EXPIRED
+GRANT UPDATE (status, opened_at, completed_at, response_deadline_at) ON follow_up TO mwf_job;
 
 CREATE TABLE follow_up_checkin (
     id uuid7 NOT NULL DEFAULT uuidv7() PRIMARY KEY,
@@ -1190,6 +1535,9 @@ COMMENT ON COLUMN follow_up_checkin.payload IS 'encrypted (session): jsonb envel
 GRANT SELECT ON follow_up_checkin TO mwf_app;
 GRANT INSERT (follow_up_id, participant_id, next_action, continue_choice, reflection_summary, payload, submitted_at, created_at)
   ON follow_up_checkin TO mwf_app;
+-- mwf_job: anonymize_*: a private-row delete (steps 3–5) and the filter columns it reads
+GRANT SELECT (follow_up_id, participant_id) ON follow_up_checkin TO mwf_job;
+GRANT DELETE ON follow_up_checkin TO mwf_job;
 
 CREATE TABLE follow_up_note (
     id uuid7 NOT NULL DEFAULT uuidv7() PRIMARY KEY,
@@ -1209,6 +1557,9 @@ COMMENT ON COLUMN follow_up_note.content IS 'encrypted (participant): the note t
 GRANT SELECT ON follow_up_note TO mwf_app;
 GRANT INSERT (participant_id, content, carry_forward, created_at, updated_at) ON follow_up_note TO mwf_app;
 GRANT UPDATE (carry_forward, carried_into_checkin_id, updated_at) ON follow_up_note TO mwf_app;
+-- mwf_job: anonymize_*: a private-row delete (steps 3–5) and the filter columns it reads
+GRANT SELECT (participant_id) ON follow_up_note TO mwf_job;
+GRANT DELETE ON follow_up_note TO mwf_job;
 
 CREATE TABLE reminder (
     id uuid7 NOT NULL DEFAULT uuidv7() PRIMARY KEY,
@@ -1231,6 +1582,12 @@ COMMENT ON COLUMN reminder.note IS 'encrypted (user): the reminder''s note (max 
 -- mwf_app: the caller's own reminder at check-in; delivery and the next instant are the job's.
 GRANT SELECT ON reminder TO mwf_app;
 GRANT INSERT (user_id, follow_up_id, scope, remind_at, cadence, note, status, created_at, updated_at) ON reminder TO mwf_app;
+-- mwf_job: anonymize_*: a private-row delete (steps 3–5) and the filter columns it reads
+GRANT SELECT (user_id) ON reminder TO mwf_job;
+GRANT DELETE ON reminder TO mwf_job;
+-- mwf_job [TS-11]: processDueTendingReminders (job): due SCHEDULED reminders (sql_reminder_due) → DELIVERED, or the next remind_at for a cadence
+GRANT SELECT (id, follow_up_id, scope, remind_at, cadence, status) ON reminder TO mwf_job;
+GRANT UPDATE (status, remind_at) ON reminder TO mwf_job;
 
 CREATE TABLE reflection (
     id uuid7 NOT NULL DEFAULT uuidv7() PRIMARY KEY,
@@ -1267,6 +1624,11 @@ GRANT SELECT ON reflection TO mwf_app;
 GRANT INSERT (user_id, title, status, linked_session_id, linked_at, created_at, updated_at) ON reflection TO mwf_app;
 GRANT UPDATE (title, summary, theme, status, linked_session_id, linked_at, context_snapshot, summary_doc, distilled_at, updated_at)
   ON reflection TO mwf_app;
+-- mwf_job: anonymize_*: a private-row delete (steps 3–5) and the filter columns it reads
+GRANT SELECT (id, user_id) ON reflection TO mwf_job;
+GRANT DELETE ON reflection TO mwf_job;
+-- mwf_ops: the Neural Monitor dashboard (routes/brain.ts, directly or through the stage shim) reads it.
+GRANT SELECT ON reflection TO mwf_ops;
 
 CREATE TABLE reflection_message (
     id uuid7 NOT NULL DEFAULT uuidv7() PRIMARY KEY,
@@ -1281,6 +1643,8 @@ COMMENT ON COLUMN reflection_message.content IS 'encrypted (user): the line''s t
 -- mwf_app: the turns of the caller's reflection (both the user's and the AI reply, written on the request path). Append-only.
 GRANT SELECT ON reflection_message TO mwf_app;
 GRANT INSERT (reflection_id, role, content, created_at) ON reflection_message TO mwf_app;
+-- mwf_ops: the Neural Monitor dashboard (routes/brain.ts, directly or through the stage shim) reads it.
+GRANT SELECT ON reflection_message TO mwf_ops;
 
 CREATE TABLE takeaway (
     id uuid7 NOT NULL DEFAULT uuidv7() PRIMARY KEY,
@@ -1344,6 +1708,14 @@ GRANT SELECT ON user_device TO mwf_app;
 GRANT INSERT (user_id, push_token, platform, last_seen_at, biometric_enabled, biometric_enrolled_at, created_at, updated_at)
   ON user_device TO mwf_app;
 GRANT UPDATE (push_token, platform, last_seen_at, biometric_enabled, biometric_enrolled_at, updated_at) ON user_device TO mwf_app;
+-- mwf_job: anonymize_*: a private-row delete (steps 3–5) and the filter columns it reads
+GRANT SELECT (user_id) ON user_device TO mwf_job;
+GRANT DELETE ON user_device TO mwf_job;
+-- mwf_job [TS-12]: push.ts sendPushNotification: the recipient's devices — another user than the caller, so the
+-- job reads them (user_device RLS is user_id = me); newest device first (last_seen_at)
+GRANT SELECT (user_id, push_token, last_seen_at) ON user_device TO mwf_job;
+-- mwf_job [TS-12]: push.ts: a token Expo reports as unregistered is cleared (WHERE user_id = … AND push_token = …)
+GRANT UPDATE (push_token) ON user_device TO mwf_job;
 
 CREATE TABLE user_preferences (
     user_id uuid7 NOT NULL PRIMARY KEY REFERENCES "user" ON DELETE RESTRICT,
@@ -1362,6 +1734,9 @@ GRANT INSERT (user_id, doc) ON user_preferences TO mwf_app;
 -- INSERT holds without the timestamps only because the row is created by raw SQL
 -- (user-settings.ts INSERT … ON CONFLICT DO NOTHING); a Prisma create would send them.
 GRANT UPDATE (doc, updated_at) ON user_preferences TO mwf_app;
+-- mwf_job: anonymize_*: a private-row delete (steps 3–5) and the filter columns it reads
+GRANT SELECT (user_id) ON user_preferences TO mwf_job;
+GRANT DELETE ON user_preferences TO mwf_job;
 
 CREATE TABLE user_memory (
     id uuid7 NOT NULL DEFAULT uuidv7() PRIMARY KEY,
@@ -1386,6 +1761,11 @@ GRANT SELECT ON user_memory TO mwf_app;
 GRANT INSERT (user_id, session_id, content, category, status, source, suggested_text, created_at, updated_at) ON user_memory TO mwf_app;
 GRANT UPDATE (session_id, content, category, status, source, suggested_text, updated_at) ON user_memory TO mwf_app;
 GRANT DELETE ON user_memory TO mwf_app;
+-- mwf_job: anonymize_*: a private-row delete (steps 3–5) and the filter columns it reads
+GRANT SELECT (user_id) ON user_memory TO mwf_job;
+GRANT DELETE ON user_memory TO mwf_job;
+-- mwf_job [TS-12]: session-deletion: the leaver's session-scoped user_memory goes with the leave (DELETE granted above)
+GRANT SELECT (session_id) ON user_memory TO mwf_job;
 
 CREATE TABLE feature_state (
     user_id uuid7 NOT NULL REFERENCES "user" ON DELETE RESTRICT,
@@ -1407,6 +1787,9 @@ GRANT INSERT (user_id, feature, doc) ON feature_state TO mwf_app;
 -- INSERT holds without the timestamps only because the row is created by raw SQL
 -- (feature-state.ts INSERT … ON CONFLICT DO NOTHING); a Prisma create would send them.
 GRANT UPDATE (doc, updated_at) ON feature_state TO mwf_app;
+-- mwf_job: anonymize_*: a private-row delete (steps 3–5) and the filter columns it reads
+GRANT SELECT (user_id) ON feature_state TO mwf_job;
+GRANT DELETE ON feature_state TO mwf_job;
 
 CREATE TABLE user_key (
     id uuid7 NOT NULL DEFAULT uuidv7() PRIMARY KEY,
@@ -1424,6 +1807,9 @@ COMMENT ON COLUMN user_key.key_id IS 'The id of the KMS key (the KEK) that wrapp
 COMMENT ON COLUMN user_key.wrapped_dek IS 'The AES-256 data key (DEK) for this owner''s encrypted columns, encrypted (wrapped) by the KMS key named in key_id. Never stored unwrapped.';
 COMMENT ON COLUMN user_key.destroyed_at IS 'The crypto-shred: once set, the wrapped DEK is never unwrapped again, so every value under it is unreadable.';
 -- mwf_app: none. Key material is never the request path's (work-k5fk.10.2; target-roles negative test).
+-- mwf_job: anonymize step 7: the crypto-shred
+GRANT SELECT (user_id, destroyed_at) ON user_key TO mwf_job;
+GRANT UPDATE (destroyed_at) ON user_key TO mwf_job;
 
 CREATE TABLE brain_activity (
     id uuid7 NOT NULL DEFAULT uuidv7() PRIMARY KEY,
@@ -1463,3 +1849,24 @@ COMMENT ON COLUMN brain_activity.turn_id IS 'Correlates the calls of one request
 COMMENT ON COLUMN brain_activity.model IS 'The model id the call used (a Bedrock model id, or the embedding model).';
 COMMENT ON COLUMN brain_activity.cost IS 'Estimated cost of the call in US dollars, from the per-model token prices in lib/bedrock.ts.';
 -- mwf_app: none. LLM prompts and outputs are written by the job and read by mwf_ops only (TS-12).
+-- mwf_job: anonymize_*: a private-row delete (steps 3–5) and the filter columns it reads
+GRANT SELECT (session_id, participant_id, reflection_id) ON brain_activity TO mwf_job;  -- session_id: R17 (step 4, NULL-participant history)
+GRANT DELETE ON brain_activity TO mwf_job;
+-- mwf_job [TS-12]: brain-service startActivity: the telemetry row, attributed at capture (participant_id,
+-- reflection_id); id / created_at are column defaults returned by RETURNING
+GRANT INSERT (session_id, reflection_id, participant_id, turn_id, activity_type, call_type, model, input, metadata, status)
+  ON brain_activity TO mwf_job;
+-- mwf_job [TS-12]: startActivity RETURNING id, created_at; completeActivity / failActivity WHERE id = …;
+-- data-retention's purge and delete windows (WHERE created_at < …; session_id granted above). Never a blob.
+GRANT SELECT (id, created_at) ON brain_activity TO mwf_job;
+-- mwf_job [TS-12]: completeActivity / failActivity: the outcome of the call (metadata replaced, never read back)
+GRANT UPDATE (output, token_count_input, token_count_output, cost, duration_ms, status, completed_at, structured_output, metadata)
+  ON brain_activity TO mwf_job;
+-- mwf_job [TS-12]: data-retention: the short-retention purge sets the four blobs NULL (spec §1.8)
+GRANT UPDATE (input) ON brain_activity TO mwf_job;
+-- mwf_job [TS-12]: brain-service mergeTurnTrace (ai-orchestrator storeTurnTrace): find the turn's latest
+-- ORCHESTRATED_RESPONSE row and merge the pipeline trace into its metadata (metadata holds
+-- cache/tool/trace telemetry, never a prompt — the prompt is input/output, still unreadable)
+GRANT SELECT (turn_id, call_type, metadata) ON brain_activity TO mwf_job;
+-- mwf_ops: the Neural Monitor dashboard (routes/brain.ts, directly or through the stage shim) reads it.
+GRANT SELECT ON brain_activity TO mwf_ops;

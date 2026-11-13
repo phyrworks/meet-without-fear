@@ -279,6 +279,10 @@ Prisma P3005; drop and re-run `--dev`, or, if its catalog equals a fresh baselin
 (`pg_dump --schema-only` diff), record it with
 `npx prisma migrate resolve --applied 20261026120000_target_shape_baseline`.
 
+**PostgreSQL major version.** The `email` domain on `"user".email` depends on PostgreSQL's Unicode
+version (16.0 on PG 18): a new major `mwf-postgres` image needs the steps in `infra/aws/README.md`,
+"PostgreSQL major upgrade: the email domain's Unicode tables".
+
 ### Gaps in the README's env list
 
 `README.md` documents `DATABASE_URL`, Clerk, Ably and Resend but **omits the AWS Bedrock

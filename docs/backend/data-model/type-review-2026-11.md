@@ -34,7 +34,7 @@ its plaintext limits are listed for information only.
 | Column | What it holds | Evidence | Decision | Why |
 |---|---|---|---|---|
 | `user.clerk_id` | Clerk user id (`user_…`); `e2e_<id>` in E2E | `backend/src/middleware/auth.ts:234`, `:116-136` | text + comment | External id; Clerk documents no bound |
-| `user.email` | Clerk email, `<clerkId>@pending.clerk`, or tombstone `deleted+<id>` | `auth.ts:227,234`; `trailer.sql:430` | text + **CHECK ≤ 254** | Natural bound (RFC 5321 path limit) |
+| `user.email` | Clerk email, `<clerkId>@pending.clerk`, or tombstone `deleted+<id>@invalid` | `auth.ts:227,234`; `trailer.sql:430` | text + **CHECK ≤ 254** | Natural bound (RFC 5321 path limit) |
 | `user.first_name`, `last_name` | Clerk names, or PATCH /auth/me | `auth.ts:234`; `controllers/auth.ts:109-141`; `shared/src/contracts/auth.ts:39-43` | text | No single bound: zod caps firstName at 50, but a lone `name` (max 100) goes into first_name, and the Clerk path is unvalidated. See Q6 |
 | `user.name` | Generated first + last | `tables.sql` | text (generated) + comment | Derived in SQL already |
 | `relationship_member.nickname` | Inviter's name for the other person | `controllers/invitations.ts:349,355,370,992` | text + comment | PATCH caps at 100, but createSession's `inviteName` has no max (mobile sends 50+50). See Q6 |

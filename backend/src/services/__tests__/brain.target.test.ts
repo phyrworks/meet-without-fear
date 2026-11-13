@@ -177,6 +177,12 @@ describeTarget('brain_activity (job) and the dashboard (mwf_ops) on the target',
     expect(searched.body.data.titleSearch).toBe('applied');
     expect(searched.body.data.sessions.map((s: { id: string }) => s.id)).toContain(reflectionId);
 
+    // work-k5fk.5: user.email is stored canonical (lowercase); the email arm canonicalizes the
+    // search term, so the search stays case-insensitive. Only the email arm can match 'ADA@E2E'.
+    const byEmail = await request(app).get(`/api/v1/brain/sessions?search=${encodeURIComponent('ADA@E2E')}`);
+    expect(byEmail.status).toBe(200);
+    expect(byEmail.body.data.sessions.map((s: { id: string }) => s.id)).toContain(ids.session);
+
     const detail = await request(app).get(`/api/v1/brain/sessions/${ids.session}`);
     expect(detail.status).toBe(200);
     expect(typeof detail.body.data.stats.totalCost).toBe('number');

@@ -10,6 +10,7 @@ import { loadFixture } from '../lib/e2e-fixtures';
 import { StateFactory, TargetStage } from '../testing/state-factory';
 import { runReconcilerForDirection } from '../services/reconciler';
 import { logger } from '../lib/logger';
+import { canonicalEmail } from '@meet-without-fear/shared';
 
 const router = Router();
 
@@ -181,10 +182,10 @@ export async function seedE2EUser(req: Request, res: Response, next: NextFunctio
         return;
       }
       const fixtureUser = fixture.seed.users[0];
-      userEmail = fixtureUser.email;
+      userEmail = canonicalEmail(fixtureUser.email);
       userName = fixtureUser.name;
     } else if (email) {
-      userEmail = email;
+      userEmail = canonicalEmail(email);
       userName = name || 'E2E Test User';
     } else {
       res.status(400).json({
@@ -342,6 +343,8 @@ export async function seedE2EInnerThoughts(req: Request, res: Response, next: Ne
       return;
     }
 
+    // user.email is canonical (work-k5fk.5)
+    user.email = canonicalEmail(user.email);
     if (!user.email.endsWith('@e2e.test')) {
       res.status(400).json({
         success: false,

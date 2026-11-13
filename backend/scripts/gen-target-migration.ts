@@ -16,14 +16,15 @@
  *   0  scripts/target-shape/preamble.sql — refuse a non-empty database; the
  *      roles assertion and the SET ROLE mwf_job check; schema app;
  *      app.current_user_id();
- *   1  scripts/target-shape/tables.sql — the domains (uuid7, ciphertext, ts_ms, intensity), the
+ *   1  scripts/target-shape/tables.sql — the domains (uuid7, ciphertext, ts_ms, intensity, email,
+ *      milestone_key), the
  *      enums and the 47 tables, hand-written, each table complete in its
  *      CREATE TABLE (PK, UNIQUE, FK, CHECK, generated columns) in dependency
  *      order (owner decision 2026-11-02, work-a39h.11.40: it replaced the
  *      `prisma migrate diff --from-empty` DDL; check-schema.sh proves
- *      schema.prisma still matches it);
- *   2  the milestone seed (gen/maps.ts MILESTONES);
- *   3  scripts/target-shape/trailer.sql, with scripts/target-shape/sql-only.sql
+ *      schema.prisma still matches it), and the milestone seed straight after
+ *      the milestone table (work-k5fk.6);
+ *   2  scripts/target-shape/trailer.sql, with scripts/target-shape/sql-only.sql
  *      spliced in verbatim at its `-- @@include sql-only.sql` line.
  *
  * Deterministic: it reads only repository files (no Prisma, no database),
@@ -32,7 +33,7 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
-import { milestoneSeed, section } from './target-shape/gen/maps';
+import { section } from './target-shape/gen/maps';
 
 export const MIGRATION_NAME = '20261026120000_target_shape_baseline';
 
@@ -157,11 +158,11 @@ const HEADER = `-- =============================================================
 -- SECTIONS
 --   0  preamble: empty-database guard, roles, schema app, app.current_user_id()
 --      (backend/scripts/target-shape/preamble.sql)
---   1  domains (uuid7, ciphertext, ts_ms, intensity), enums and the 47 tables, hand-written,
---      each table complete in its CREATE TABLE, in dependency order
+--   1  domains (uuid7, ciphertext, ts_ms, intensity, email, milestone_key), enums and the 47
+--      tables, hand-written, each table complete in its CREATE TABLE (and its grants) in
+--      dependency order, the milestone seed after its table
 --      (backend/scripts/target-shape/tables.sql)
---   2  milestone seed (reference data)
---   3  trailer: sql-only.sql (sql_ indexes), app.* functions,
+--   2  trailer: sql-only.sql (sql_ indexes), app.* functions,
 --      triggers, views, grants, catalog assertions
 --      (backend/scripts/target-shape/trailer.sql)
 -- ============================================================================
@@ -177,8 +178,7 @@ export function generate(): string {
       `1. Domains, enums and the 47 target tables (backend/scripts/target-shape/tables.sql; ${n.names} named objects, all lower-case; ${n.uuid7} uuid7 columns)`,
       tables,
     ),
-    section('2. Milestone seed (backend/scripts/target-shape/gen/maps.ts)', milestoneSeed()),
-    section('3. Trailer (backend/scripts/target-shape/trailer.sql, sql-only.sql spliced in)', trailer()),
+    section('2. Trailer (backend/scripts/target-shape/trailer.sql, sql-only.sql spliced in)', trailer()),
   ].join('\n');
   return out.replace(/[ \t]+$/gm, '');
 }

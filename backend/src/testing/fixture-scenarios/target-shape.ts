@@ -101,6 +101,7 @@ import {
   ScenarioMessageRole,
   Stamp,
 } from './scenario-model';
+import { canonicalEmail } from '@meet-without-fear/shared';
 
 export type TargetShapeResult = WrittenScenario;
 
@@ -239,7 +240,7 @@ export async function writeTargetShape(
     const last = null;
     const clerk = `e2e_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
     const r = await db.query<{ id: string; email: string; name: string | null }>(q.user, [
-      u.email,
+      canonicalEmail(u.email), // user.email is canonical (work-k5fk.5)
       clerk,
       first,
       last,

@@ -78,7 +78,7 @@ describeTarget('target writer — FEEL_HEARD_B as written (target fixture templa
       ]);
       expect(
         await q(
-          `SELECT u.email, array_agg(pm.milestone_key ORDER BY pm.milestone_key) AS keys
+          `SELECT u.email, array_agg(pm.milestone_key::text ORDER BY pm.milestone_key) AS keys
            FROM participant_milestone pm JOIN participant p ON p.id = pm.participant_id JOIN "user" u ON u.id = p.user_id
            GROUP BY u.email ORDER BY u.email`,
         ),

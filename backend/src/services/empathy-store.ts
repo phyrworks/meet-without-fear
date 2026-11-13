@@ -24,7 +24,7 @@
  *     (spec §1.2 RLS, status-independent): `revealedAttemptAbout`.
  *
  * Reads run on the app connection (the request's identity); job writes use
- * exactly the columns trailer T7 grants mwf_job.
+ * exactly the columns tables.sql grants mwf_job.
  */
 
 import type { PrismaClient } from '../generated/prisma/client';

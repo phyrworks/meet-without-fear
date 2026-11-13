@@ -18,7 +18,9 @@ import { ErrorCode } from '@meet-without-fear/shared';
 import { errorHandler } from '../errors';
 import { logger } from '../../lib/logger';
 
-const SENTINEL = 'SECRET_ROW_CONTENT_7f3a';
+// Lower-case: the CHECK case writes it into user.email, whose domain accepts only the canonical
+// (lower-case) form (work-k5fk.5); an upper-case sentinel would trip email_canonical instead.
+const SENTINEL = 'secret_row_content_7f3a';
 const url = process.env.DATABASE_URL;
 const isTestDb = !!url && /test/i.test(new URL(url).pathname);
 const describeDb = isTestDb ? describe : describe.skip;
@@ -104,7 +106,7 @@ describeDb('errorHandler against real Postgres constraint violations', () => {
           .$transaction(async tx => {
             await tx.$executeRawUnsafe(`SET LOCAL lock_timeout = '5s'`);
             await tx.$executeRawUnsafe(
-              `ALTER TABLE "User" ADD CONSTRAINT ${T}_user_chk CHECK (email NOT LIKE '%${SENTINEL}%') NOT VALID`,
+              `ALTER TABLE "user" ADD CONSTRAINT ${T}_user_chk CHECK (email NOT LIKE '%${SENTINEL}%') NOT VALID`,
             );
             err = await caught(() => tx.user.create({ data: { email: `ts2_${SENTINEL}@example.test` } }));
             throw new Error('rollback');

@@ -713,7 +713,7 @@ describe(`golden: ${SCENARIO}`, () => {
     rule(
       'user row is tombstoned, not deleted',
       !!adaUser &&
-        adaUser.email === `deleted+${adaId}` &&
+        adaUser.email === `deleted+${adaId}@invalid` &&
         adaUser.name === null &&
         adaUser.first_name === null &&
         adaUser.last_name === null &&
