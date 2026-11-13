@@ -297,7 +297,7 @@ describe('Auth Middleware', () => {
       (prisma.user.findUnique as jest.Mock)
         .mockResolvedValueOnce(null) // fast path by clerkId
         .mockResolvedValueOnce(null); // P2002 re-read by clerkId
-      (prisma.$queryRaw as jest.Mock).mockResolvedValue([{ id: existingUser.id, clerkId: null }]); // holder by lower(email)
+      (prisma.$queryRaw as jest.Mock).mockResolvedValue([{ id: existingUser.id, clerkId: null }]); // holder by normalised email
       const p2002Error = new PrismaClientKnownRequestError('Unique constraint failed', { code: 'P2002', clientVersion: '5.0.0' });
       (prisma.user.create as jest.Mock).mockRejectedValue(p2002Error);
 
@@ -327,7 +327,7 @@ describe('Auth Middleware', () => {
           emailAddresses: [{ id: 'idn_1', emailAddress: 'v@example.com', verification: { status: 'verified' } }],
         });
         (prisma.user.findUnique as jest.Mock).mockResolvedValue(null);
-        (prisma.$queryRaw as jest.Mock).mockResolvedValue([]); // no holder by lower(email)
+        (prisma.$queryRaw as jest.Mock).mockResolvedValue([]); // no holder by normalised email
       });
 
       it('retries the create once and succeeds', async () => {

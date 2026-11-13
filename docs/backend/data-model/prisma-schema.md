@@ -42,7 +42,7 @@ erDiagram
 model User {
   id                      String    @id @default(dbgenerated("uuidv7()")) @db.Uuid
   clerkId                 String?   @unique // Clerk authentication user ID
-  email                   String    @unique // also unique on lower(email): index User_email_lower_key, raw SQL (migration user_email_case_insensitive_unique)
+  email                   String    @unique // also unique on lower(btrim(email)): index User_email_normalized_key, raw SQL (migration user_email_case_insensitive_unique)
   name                    String?   // Full name (computed from firstName + lastName)
   firstName               String?
   lastName                String?

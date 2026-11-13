@@ -1,5 +1,6 @@
 /**
- * work-jv9y: User.email is unique case-insensitively (index on lower(email)).
+ * work-jv9y: User.email is unique case-insensitively and ignoring surrounding
+ * whitespace (index on lower(btrim(email, E' \t\n\r\f'))).
  *
  * The migration that adds the index must refuse, loudly, to run over existing
  * rows that already collide case-insensitively, rather than fail on a bare
@@ -18,7 +19,7 @@ const describeDb = url ? describe : describe.skip;
 
 const MIGRATIONS = join(__dirname, '../../../prisma/migrations');
 const MIGRATION_SUFFIX = '_user_email_case_insensitive_unique';
-const INDEX = 'User_email_lower_key';
+const INDEX = 'User_email_normalized_key';
 
 function migrationSql(): string {
   const dir = readdirSync(MIGRATIONS).find((d) => d.endsWith(MIGRATION_SUFFIX));
@@ -50,12 +51,27 @@ describeDb('User.email case-insensitive uniqueness (database)', () => {
       [INDEX]
     );
     expect(rows).toHaveLength(1);
-    expect(rows[0].indexdef).toMatch(/UNIQUE INDEX .* \(lower\(email\)\)/);
+    expect(rows[0].indexdef).toMatch(/UNIQUE INDEX .* \(lower\(btrim\(email, /);
 
     await client.query(`INSERT INTO "User" (email, "updatedAt") VALUES ($1, now())`, [`${tag}@example.test`]);
-    await expect(
-      client.query(`INSERT INTO "User" (email, "updatedAt") VALUES ($1, now())`, [`${tag.toUpperCase()}@Example.Test`])
-    ).rejects.toThrow(new RegExp(INDEX));
+    for (const variant of [`${tag.toUpperCase()}@Example.Test`, ` ${tag}@example.test\t`, `\n${tag.toUpperCase()}@example.test `]) {
+      await client.query('SAVEPOINT variant');
+      await expect(
+        client.query(`INSERT INTO "User" (email, "updatedAt") VALUES ($1, now())`, [variant])
+      ).rejects.toThrow(new RegExp(INDEX));
+      await client.query('ROLLBACK TO SAVEPOINT variant');
+    }
+  });
+
+  it('migration counts padded duplicates as collisions', async () => {
+    await client.query('BEGIN');
+    await client.query(`DROP INDEX "${INDEX}"`);
+    await client.query(`INSERT INTO "User" (email, "updatedAt") VALUES ($1, now()), ($2, now())`, [
+      `${tag}-pad@example.test`,
+      `  ${tag}-pad@example.test `,
+    ]);
+
+    await expect(client.query(migrationSql())).rejects.toThrow(/1 email address\(es\) are shared/);
   });
 
   it('migration refuses to run over rows that collide case-insensitively, naming no address', async () => {

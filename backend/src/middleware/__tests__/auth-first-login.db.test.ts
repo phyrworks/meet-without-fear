@@ -185,18 +185,19 @@ describeDb('first login of a Clerk identity (database)', () => {
   });
 
   describe.each([
-    ['bound to a different Clerk id', (tag: string) => cid(`case_victim_${tag}`)],
-    ['with no Clerk id', () => null],
-  ])('an existing row whose email differs only in case, %s', (_label, existingClerkId) => {
+    ['case, bound to a different Clerk id', (tag: string) => cid(`case_victim_${tag}`), 'cother', (e: string) => e.replace('@example.test', '@Example.Test')],
+    ['case, with no Clerk id', () => null, 'cnull', (e: string) => e.replace('@example.test', '@Example.Test')],
+    ['surrounding whitespace, with no Clerk id', () => null, 'pnull', (e: string) => ` ${e}\t`],
+    ['whitespace and case, bound to a different Clerk id', (tag: string) => cid(`pad_victim_${tag}`), 'pother', (e: string) => `  ${e.toUpperCase()} `],
+  ])('an existing row whose email differs only in %s', (_label, existingClerkId, tag, legacyForm) => {
     it('is refused with 409 and no second row is created', async () => {
-      const tag = existingClerkId('x') ? 'cother' : 'cnull';
-      // A pre-fix row stored with its original case.
-      const stored = email(`Case-${tag}`).replace('@example.test', '@Example.Test');
+      // A pre-fix row stored verbatim (original case and padding).
+      const stored = legacyForm(email(`Case-${tag}`));
       const victim = await prisma.user.create({ data: { email: stored, clerkId: existingClerkId(tag) } });
       mockGetUser.mockResolvedValue(
         clerkUser({
           primaryEmailAddressId: 'idn_a',
-          emailAddresses: [verified('idn_a', stored.toLowerCase())],
+          emailAddresses: [verified('idn_a', stored.trim().toLowerCase())],
         })
       );
 
@@ -207,7 +208,7 @@ describeDb('first login of a Clerk identity (database)', () => {
       expect(await prisma.user.findUniqueOrThrow({ where: { id: victim.id } })).toEqual(victim);
       expect(await prisma.user.findUnique({ where: { clerkId: cid(`case_attacker_${tag}`) } })).toBeNull();
       const sameAddress = await prisma.user.findMany({
-        where: { email: { equals: stored, mode: 'insensitive' } },
+        where: { email: { contains: `case-${tag}-${run}`, mode: 'insensitive' } },
       });
       expect(sameAddress.map((u) => u.id)).toEqual([victim.id]);
     });
