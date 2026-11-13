@@ -192,9 +192,31 @@ describeTarget('mwf_app grants (target)', () => {
   // grant change shows up in the diff of __snapshots__/app-grants.target.test.ts.snap; update it
   // deliberately (jest -u).
   it('the mwf_app privilege matrix is exactly the recorded one', async () => {
-    const rows = await run.sql<{ line: string }>(
-      `WITH g AS (SELECT oid, CASE WHEN oid = 0 THEN 'PUBLIC' ELSE rolname END AS name
-                  FROM (SELECT oid, rolname FROM pg_roles WHERE rolname = 'mwf_app' UNION ALL SELECT 0, 'PUBLIC') r)
+    const rows = await run.sql<{ line: string }>(PRIVILEGE_MATRIX, [['mwf_app']]);
+    expect(rows.map(r => r.line).join('\n')).toMatchSnapshot();
+  });
+
+  // work-k5fk.7: the same matrix for every other role the baseline grants to, plus who owns each
+  // routine (the definer helpers are mwf_job's). Recorded BEFORE the grants of mwf_job, mwf_ops and
+  // mwf_auth moved from trailer.sql T7 into tables.sql next to each table, so the move is proven a
+  // pure move: this snapshot did not change with it.
+  it('the mwf_job / mwf_ops / mwf_auth / mwf_migrator privilege matrix is exactly the recorded one', async () => {
+    const rows = await run.sql<{ line: string }>(PRIVILEGE_MATRIX, [['mwf_job', 'mwf_ops', 'mwf_auth', 'mwf_migrator']]);
+    const owners = await run.sql<{ line: string }>(
+      `SELECT 'routine owner ' || p.oid::regprocedure::text || ': ' || pg_get_userbyid(p.proowner) AS line
+       FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+       WHERE n.nspname IN ('public', 'app') ORDER BY line`,
+    );
+    expect([...rows, ...owners].map(r => r.line).join('\n')).toMatchSnapshot();
+  });
+});
+
+/**
+ * The privilege matrix of the roles in $1 (text[]) and PUBLIC: database, schemas public and app,
+ * their tables, columns and routines, and every default ACL. One line per grantee and object.
+ */
+const PRIVILEGE_MATRIX = `WITH g AS (SELECT oid, CASE WHEN oid = 0 THEN 'PUBLIC' ELSE rolname END AS name
+                  FROM (SELECT oid, rolname FROM pg_roles WHERE rolname = ANY($1::text[]) UNION ALL SELECT 0, 'PUBLIC') r)
        SELECT line FROM (
          SELECT 'database: ' || string_agg(a.privilege_type || CASE WHEN a.is_grantable THEN ' WITH GRANT OPTION' ELSE '' END,
                                            ', ' ORDER BY a.privilege_type) || ' (' || g.name || ')' AS line
@@ -235,8 +257,4 @@ describeTarget('mwf_app grants (target)', () => {
          FROM pg_default_acl da LEFT JOIN pg_namespace n ON n.oid = da.defaclnamespace, aclexplode(da.defaclacl) a
          UNION ALL
          SELECT 'default acl rows: ' || count(*) FROM pg_default_acl
-       ) m ORDER BY line`,
-    );
-    expect(rows.map(r => r.line).join('\n')).toMatchSnapshot();
-  });
-});
+       ) m ORDER BY line`;
