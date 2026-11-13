@@ -171,7 +171,7 @@ describeTarget('fixture reachability on the target templates (work-2km7)', () =>
              WHERE p.user_id = u.id AND c.kind = 'MAIN' AND c.status = 'ACTIVE') AS main,
            (SELECT count(*)::int FROM conversation_read_state r JOIN participant p ON p.id = r.participant_id
              WHERE p.user_id = u.id) AS read_state,
-           (SELECT coalesce(array_agg(pm.milestone_key ORDER BY pm.milestone_key), '{}')
+           (SELECT coalesce(array_agg(pm.milestone_key::text ORDER BY pm.milestone_key), '{}')
               FROM participant_milestone pm JOIN participant p ON p.id = pm.participant_id WHERE p.user_id = u.id) AS milestones,
            (SELECT count(*)::int FROM message m JOIN conversation c ON c.id = m.conversation_id
               JOIN participant p ON p.id = c.participant_id WHERE p.user_id = u.id) AS messages

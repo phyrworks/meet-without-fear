@@ -323,7 +323,10 @@ COMMENT ON DOMAIN intensity IS 'A 1-10 self-rated intensity (mood_reading.intens
 -- it), and an enum would make every new milestone an ALTER TYPE … ADD VALUE,
 -- which cannot be used in the transaction that also inserts its seed row
 -- (the baseline is one transaction). The FK to milestone closes the set;
--- the domain fixes the spelling.
+-- the domain fixes the spelling. As with uuid7: array_agg over it yields
+-- milestone_key[], which node-postgres returns as the string '{…}' — cast
+-- (array_agg(milestone_key::text …)); a row comparison against it needs
+-- ::milestone_key on the other side, not ::text.
 CREATE DOMAIN milestone_key AS text
   CHECK (VALUE ~ '^[a-z][a-z0-9_]*$');
 COMMENT ON DOMAIN milestone_key IS 'A milestone key: a lower-case identifier (e.g. feel_heard). The set of keys is the milestone table (FK); a domain rather than an enum so a new milestone is one seed row, not ALTER TYPE ADD VALUE.';
