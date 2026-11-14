@@ -13,7 +13,7 @@
  */
 
 import { Request, Response } from 'express';
-import { requireAuth, optionalAuth, getUser } from '../auth';
+import { requireAuth, optionalAuth, getUser, verifiedPrimaryEmail } from '../auth';
 
 // Mock Prisma
 
@@ -255,7 +255,88 @@ describe('Auth Middleware', () => {
       // Without valid Clerk token, should fail
       expect(statusMock).toHaveBeenCalledWith(401);
     });
+
+    it.each([undefined, 'production', 'staging', 'Test'])(
+      'ignores the e2e headers when NODE_ENV=%p (allow-list: test, development only)',
+      async env => {
+        const saved = process.env.NODE_ENV;
+        try {
+          if (env === undefined) delete process.env.NODE_ENV;
+          else process.env.NODE_ENV = env;
+          const req = createMockRequest({
+            headers: { 'x-e2e-user-id': '00000000-0000-7000-8000-0000000e2e01', 'x-e2e-user-email': 'test@e2e.test' },
+          });
+          const { res, statusMock } = createMockResponse();
+          const next = jest.fn();
+
+          await requireAuth(req as Request, res as Response, next);
+
+          expect(statusMock).toHaveBeenCalledWith(401);
+          expect(req.user).toBeUndefined();
+        } finally {
+          process.env.NODE_ENV = saved;
+        }
+      },
+    );
   });
 
   describe('requireSessionAccess', () => {});
+});
+
+describe('verifiedPrimaryEmail (work-bp5m, ported from work-jv9y)', () => {
+  const withPrimary = (verification: { status: string } | null) => ({
+    primaryEmailAddressId: 'idn_p',
+    emailAddresses: [
+      { id: 'idn_other', emailAddress: 'other@example.com', verification: { status: 'verified' } },
+      { id: 'idn_p', emailAddress: 'primary@example.com', verification },
+    ],
+  });
+
+  it('returns the primary address when it is verified', () => {
+    expect(verifiedPrimaryEmail(withPrimary({ status: 'verified' }))).toBe('primary@example.com');
+  });
+
+  // Only the exact status 'verified' passes. Each of these is refused, so a
+  // check written as `!== 'unverified'` (or case-insensitive) fails here.
+  it.each([
+    ['null verification', null],
+    ['unverified', { status: 'unverified' }],
+    ['transferable', { status: 'transferable' }],
+    ['expired', { status: 'expired' }],
+    ['failed', { status: 'failed' }],
+    ['wrong case', { status: 'Verified' }],
+    ['empty status', { status: '' }],
+  ])('refuses a primary with %s', (_label, verification) => {
+    expect(verifiedPrimaryEmail(withPrimary(verification))).toBeNull();
+  });
+
+  it('refuses when there is no primary, even with a verified secondary', () => {
+    expect(verifiedPrimaryEmail({ ...withPrimary({ status: 'verified' }), primaryEmailAddressId: null })).toBeNull();
+  });
+
+  it('refuses when the primary id matches no address', () => {
+    expect(
+      verifiedPrimaryEmail({ ...withPrimary({ status: 'verified' }), primaryEmailAddressId: 'idn_gone' }),
+    ).toBeNull();
+  });
+
+  it('returns the canonical form (canonicalEmail: trimmed, lowercased)', () => {
+    expect(
+      verifiedPrimaryEmail({
+        primaryEmailAddressId: 'idn_p',
+        emailAddresses: [
+          { id: 'idn_p', emailAddress: '  Mixed.Case@Example.COM \t', verification: { status: 'verified' } },
+        ],
+      }),
+    ).toBe('mixed.case@example.com');
+  });
+
+  it('refuses an address that is only whitespace', () => {
+    expect(
+      verifiedPrimaryEmail({
+        primaryEmailAddressId: 'idn_p',
+        emailAddresses: [{ id: 'idn_p', emailAddress: '   ', verification: { status: 'verified' } }],
+      }),
+    ).toBeNull();
+  });
 });

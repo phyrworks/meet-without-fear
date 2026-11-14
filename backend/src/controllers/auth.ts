@@ -13,7 +13,7 @@
 import { Request, Response } from 'express';
 import { logger } from '../lib/logger';
 import { prisma } from '../lib/prisma';
-import { getUser, AuthUser } from '../middleware/auth';
+import { getUser, AuthUser, toAuthUser } from '../middleware/auth';
 import { asyncHandler, ForbiddenError, ValidationError } from '../middleware/errors';
 import {
   ApiResponse,
@@ -139,7 +139,7 @@ export const updateProfile = asyncHandler(async (req: Request, res: Response): P
   const response: ApiResponse<UpdateProfileResponse> = {
     success: true,
     data: {
-      user: (await toUserDTO(updatedUser)).dto,
+      user: (await toUserDTO(toAuthUser(updatedUser))).dto,
     },
   };
 
