@@ -63,6 +63,61 @@ describeTarget('the schema marks exactly the SENSITIVE_FIELD_MAP columns as encr
     expect(sorted(jsonb.map(r => key(r.t, r.c)))).toEqual(want(['jsonb-envelope', 'jsonb-leaves']));
   });
 
+  it('t_jsonb_envelope guards exactly the jsonb-envelope columns; the leaves column has the structural trigger (work-k5fk.8)', async () => {
+    const enveloped = await run.sql<{ t: string; c: string }>(
+      `SELECT c.relname AS t, a.attname AS c
+         FROM pg_trigger g JOIN pg_class c ON c.oid = g.tgrelid
+         JOIN pg_attribute a ON a.attrelid = c.oid AND a.attnum = ANY (g.tgattr::int2[])
+        WHERE g.tgname = 't_jsonb_envelope'`,
+    );
+    const want = (kind: string) =>
+      sorted(ENCRYPTED_COLUMNS.filter(e => e.kind === kind).map(e => key(e.table, e.column)));
+    expect(sorted(enveloped.map(r => key(r.t, r.c)))).toEqual(want('jsonb-envelope'));
+    expect(want('jsonb-envelope')).toHaveLength(5);
+    const triggered = await run.sql<{ t: string }>(
+      `SELECT c.relname AS t FROM pg_trigger g JOIN pg_class c ON c.oid = g.tgrelid WHERE g.tgname = 't_doc_schema'`,
+    );
+    expect(want('jsonb-leaves').map(k => k.split('.')[0])).toEqual(['ai_memory']);
+    expect(sorted(triggered.map(r => r.t))).toEqual(['ai_memory', 'user_preferences']);
+  });
+
+  it('an envelope holds a real encrypt() output; plaintext in the envelope is refused', async () => {
+    process.env.FIELD_ENCRYPTION_KEY ??= Buffer.alloc(32, 7).toString('base64');
+    const sealed = { $enc: encrypt(JSON.stringify({ entries: [] })) };
+    const why = async (doc: unknown) =>
+      (
+        await run.sql<{ v: string | null }>(`SELECT app.jsonb_envelope_violation($1::jsonb) AS v`, [
+          JSON.stringify(doc),
+        ])
+      )[0].v;
+    expect(await why(sealed)).toBeNull();
+    expect(await why({ entries: [] })).toBeNull(); // keyless: the plain document
+    expect(await why({ $enc: 'my journal' })).toMatch(/plaintext in an envelope/);
+    expect(await why({ ...sealed, entries: [] })).toMatch(/only key/);
+    expect(await why({ $enc: 'enc:v1:not-an-envelope' })).toMatch(/malformed ciphertext/);
+  });
+
+  it('a refused envelope never reaches the client error: no DETAIL, no value in the message (review L1)', async () => {
+    const [{ id }] = await run.sql<{ id: string }>(`SELECT id FROM "user" WHERE kind = 'human' ORDER BY id LIMIT 1`);
+    const secret = 'MY SECRET JOURNAL';
+    type PgError = { message?: string; detail?: string; hint?: string; code?: string };
+    const err = await run
+      .sql(`INSERT INTO feature_state (user_id, feature, doc) VALUES ($1, 'gratitude', $2::jsonb)`, [
+        id,
+        JSON.stringify({ $enc: secret }),
+      ])
+      .then(
+        () => null,
+        (e: unknown) => e as PgError,
+      );
+    expect(err?.code).toBe('23514');
+    expect(err?.message).toBe(
+      'feature_state.doc is not a well-formed envelope: "$enc" is not a ciphertext (plaintext in an envelope)',
+    );
+    expect(err?.detail).toBeUndefined();
+    expect(JSON.stringify(err)).not.toContain(secret);
+  });
+
   it("every encrypted column's comment names its key class", async () => {
     const comments = await run.sql<{ t: string; c: string; d: string | null }>(
       `SELECT c.relname AS t, a.attname AS c, col_description(c.oid, a.attnum) AS d

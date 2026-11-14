@@ -13,6 +13,9 @@ Database design implementing the [Vessel Architecture](../../privacy/vessel-mode
 ### [Product Journey and Data Flow](./database-redesign-user-flow.md)
 Two private AI conversations, consented sharing, and asynchronous reconciler results: the product journey and visibility boundaries for database and API redesign.
 
+### [jsonb documents — shapes and validation](./jsonb-shapes-2026-11.md)
+Every jsonb column of the target shape: its writer, its actual shape, and the envelope CHECK / JSON-schema trigger / typeof CHECK that validates it.
+
 ### [Prisma Schema](./prisma-schema.md)
 Complete database schema: stage/session tables, consent semantics, Inner Work subsystem, Fact-Ledger memory architecture, Reconciler models, and Needs / People catalogs.
 

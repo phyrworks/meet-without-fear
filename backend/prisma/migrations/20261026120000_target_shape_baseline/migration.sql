@@ -42,7 +42,8 @@
 -- SECTIONS
 --   0  preamble: empty-database guard, roles, schema app, app.current_user_id()
 --      (backend/scripts/target-shape/preamble.sql)
---   1  domains (uuid7, ciphertext, ts_ms, intensity, email, milestone_key), enums and the 49
+--   1  domains (uuid7, ciphertext, ts_ms, intensity, email, milestone_key, schema_version),
+--      the jsonb validators' reference table app.json_schema and its seed, enums and the 49
 --      tables, hand-written, each table complete in its CREATE TABLE (and its grants) in
 --      dependency order, the milestone seed after its table
 --      (backend/scripts/target-shape/tables.sql)
@@ -122,7 +123,7 @@ REVOKE EXECUTE ON FUNCTION app.current_user_id() FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION app.current_user_id() TO mwf_app, mwf_job, mwf_ops, mwf_auth;
 
 -- ============================================================================
--- 1. Domains, enums and the 49 target tables (backend/scripts/target-shape/tables.sql; 126 named objects, all lower-case; 133 uuid7 columns)
+-- 1. Domains, enums and the 49 target tables (backend/scripts/target-shape/tables.sql; 130 named objects, all lower-case; 133 uuid7 columns)
 -- ============================================================================
 
 -- ============================================================================
@@ -284,8 +285,10 @@ COMMENT ON DOMAIN uuid7 IS 'A version-7 UUID (RFC 9562), so ids sort by creation
 -- A strict variant (every value an envelope) is planned for when
 -- REQUIRE_FIELD_ENCRYPTION becomes mandatory. The text[] columns cannot be
 -- ciphertext[] (an array of a domain: step 20, node-postgres); each carries
--- CHECK (app.all_ciphertext(col)) instead. The six jsonb columns in the map
--- carry only a COMMENT starting 'encrypted'.
+-- CHECK (app.all_ciphertext(col)) instead. Of the six jsonb columns in the map,
+-- the five jsonb-envelope ones carry the t_jsonb_envelope trigger and
+-- ai_memory.doc (jsonb-leaves) the structural t_doc_schema trigger (work-k5fk.8,
+-- trailer.sql T5); all six have a COMMENT starting 'encrypted'.
 CREATE DOMAIN ciphertext AS text
   CHECK (VALUE IS NULL OR VALUE !~ '^enc:'
          OR VALUE ~ '^enc:v1:[A-Za-z0-9+/]{16}:[A-Za-z0-9+/]{22}==:([A-Za-z0-9+/]{4})*([A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$');
@@ -381,6 +384,249 @@ COMMENT ON CONSTRAINT email_no_final_sigma ON DOMAIN email IS 'No U+03C2 GREEK S
 COMMENT ON CONSTRAINT email_assigned ON DOMAIN email IS 'Every code point assigned in PostgreSQL''s Unicode version.';
 COMMENT ON CONSTRAINT email_no_space_control ON DOMAIN email IS 'No whitespace (Unicode White_Space) and no control character (Cc), by pg_c_utf8''s Unicode character classes.';
 COMMENT ON CONSTRAINT email_no_format ON DOMAIN email IS 'No format character (Cf: soft hyphen, zero-width space/joiners, bidi controls, …) and no other default-ignorable code point (variation selectors, Hangul fillers, tags): invisible characters that would make two addresses look identical. Code-point ranges under "C": exactly Cf ∪ Default_Ignorable_Code_Point of PostgreSQL 18''s Unicode 16 (email-domain.target.test.ts compares it with JavaScript''s \p{Cf} and \p{Default_Ignorable_Code_Point}); re-derive on a PostgreSQL major upgrade (infra/aws/README.md).';
+
+-- ----------------------------------------------------------------------------
+-- jsonb documents (work-k5fk.8). The shapes, their writers and why each column
+-- is validated the way it is: docs/backend/data-model/jsonb-shapes-2026-11.md.
+--  * Every jsonb column keeps its jsonb_typeof CHECK (step 20).
+--  * The five jsonb-envelope columns (SENSITIVE_FIELD_MAP) carry the
+--    t_jsonb_envelope BEFORE trigger (trailer.sql T5): a sealed document is
+--    exactly {"$enc": <a v1 ciphertext>}. A trigger, not a CHECK: a CHECK
+--    refusal's DETAIL ("Failing row contains …") would echo the row — the
+--    very plaintext the rule exists to catch — to the client and the log; the
+--    trigger reports a reason only. Their plaintext is opaque to the database;
+--    the app validates it (zod) before sealing.
+--  * The two plaintext app documents — user_preferences.doc and the structure
+--    of ai_memory.doc (its string leaves are encrypted; its keys, numbers and
+--    arrays are not) — are validated by a BEFORE trigger (trailer.sql T5)
+--    against app.json_schema, by the row's doc_schema_version.
+--  * brain_activity.* stays at jsonb_typeof: telemetry, written by the job
+--    only, read by the ops dashboard; its shape is each call site's.
+-- ----------------------------------------------------------------------------
+
+-- A JSON-schema version: 1, 2, … per schema name.
+CREATE DOMAIN schema_version AS smallint CHECK (VALUE >= 1);
+COMMENT ON DOMAIN schema_version IS 'The version of a JSON schema (app.json_schema.version) and of a document that conforms to it (doc_schema_version): 1, 2, …; a new shape is a new row, never an edit of a seeded one.';
+
+-- Is this a schema the validator implements? The subset (owner decision Q11,
+-- 2026-11-12: PL/pgSQL, not plv8; pg_jsonschema is not on the RDS list):
+-- type (a name or a list of: object, array, string, number, integer, boolean,
+-- null), required (a list of key names), properties (key → schema),
+-- additionalProperties (false, true or a schema), enum (a non-empty list of
+-- values), items (one schema for every element); description and $comment
+-- are annotations. Anything else — minimum, pattern, $ref, oneOf, tuple
+-- items — is refused here, so a seeded schema can never carry a keyword the
+-- validator would silently ignore.
+CREATE FUNCTION app.json_schema_wellformed(schema jsonb) RETURNS boolean
+  LANGUAGE plpgsql IMMUTABLE PARALLEL SAFE
+  SET search_path = pg_catalog, pg_temp
+  AS $$
+  DECLARE
+    types CONSTANT text[] := ARRAY['object', 'array', 'string', 'number', 'integer', 'boolean', 'null'];
+    k text;
+    v jsonb;
+  BEGIN
+    IF jsonb_typeof(schema) IS DISTINCT FROM 'object' THEN RETURN false; END IF;
+    FOR k, v IN SELECT * FROM jsonb_each(schema) LOOP
+      CASE k
+        WHEN 'type' THEN
+          IF NOT (CASE jsonb_typeof(v)
+                    WHEN 'string' THEN v #>> '{}' = ANY (types)
+                    WHEN 'array' THEN jsonb_array_length(v) > 0
+                      AND NOT EXISTS (SELECT 1 FROM jsonb_array_elements(v) t
+                                      WHERE jsonb_typeof(t) <> 'string' OR NOT t #>> '{}' = ANY (types))
+                    ELSE false END) THEN
+            RETURN false;
+          END IF;
+        WHEN 'required' THEN
+          IF jsonb_typeof(v) <> 'array' OR EXISTS (SELECT 1 FROM jsonb_array_elements(v) r WHERE jsonb_typeof(r) <> 'string') THEN
+            RETURN false;
+          END IF;
+        WHEN 'properties' THEN
+          IF jsonb_typeof(v) <> 'object'
+             OR EXISTS (SELECT 1 FROM jsonb_each(v) p WHERE NOT app.json_schema_wellformed(p.value)) THEN
+            RETURN false;
+          END IF;
+        WHEN 'additionalProperties' THEN
+          IF jsonb_typeof(v) <> 'boolean' AND NOT app.json_schema_wellformed(v) THEN RETURN false; END IF;
+        WHEN 'enum' THEN
+          IF jsonb_typeof(v) <> 'array' OR jsonb_array_length(v) = 0 THEN RETURN false; END IF;
+        WHEN 'items' THEN
+          IF NOT app.json_schema_wellformed(v) THEN RETURN false; END IF;
+        WHEN 'description', '$comment' THEN
+          IF jsonb_typeof(v) <> 'string' THEN RETURN false; END IF;
+        ELSE
+          RETURN false;
+      END CASE;
+    END LOOP;
+    RETURN true;
+  END
+  $$;
+COMMENT ON FUNCTION app.json_schema_wellformed(jsonb) IS 'True when a JSON schema uses only the subset app.jsonb_schema_violation implements (type, required, properties, additionalProperties, enum, items; description and $comment as annotations), with well-formed values, at every depth. The CHECK on app.json_schema.schema.';
+
+-- The schemas the validation triggers check documents against. Reference
+-- data, like milestone: seeded right here by the baseline, read-only to every
+-- runtime role; a new shape is a new (name, version) row added by a
+-- migration, and a writer moves to it by writing doc_schema_version.
+-- In schema app, not public: the app never reads it (it validates with zod in
+-- shared/), so it has no Prisma model and is not one of the 49 tables; it
+-- sits with the functions that read it.
+CREATE TABLE app.json_schema (
+    name text NOT NULL CHECK (name ~ '^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)?$'),
+    version schema_version NOT NULL,
+    schema jsonb NOT NULL CHECK (app.json_schema_wellformed(schema)),
+    created_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    PRIMARY KEY (name, version)
+);
+COMMENT ON TABLE app.json_schema IS 'Reference data: the JSON schemas (a subset, app.json_schema_wellformed) the BEFORE triggers on user_preferences.doc and ai_memory.doc validate documents against, by name and doc_schema_version. Seeded by the baseline migration; read-only to every runtime role.';
+COMMENT ON COLUMN app.json_schema.name IS 'The document the schema describes: a table (user_preferences) or table.kind (ai_memory.summary, ai_memory.notable_facts, ai_memory.global_facts).';
+COMMENT ON COLUMN app.json_schema.version IS 'The schema version a row''s doc_schema_version names. Rows are never edited: a new shape is a new version.';
+COMMENT ON COLUMN app.json_schema.schema IS 'The JSON schema, in the subset the validator implements; refused at INSERT if it uses anything else.';
+COMMENT ON COLUMN app.json_schema.created_at IS 'When the schema was seeded (by the migration that added it).';
+COMMENT ON CONSTRAINT json_schema_name_check ON app.json_schema IS 'A lower-case identifier, optionally .kind: a table, or table.kind for a table whose kind picks the schema.';
+COMMENT ON CONSTRAINT json_schema_schema_check ON app.json_schema IS 'Only the subset app.jsonb_schema_violation implements (app.json_schema_wellformed), so no keyword is ever silently ignored.';
+-- mwf_app, mwf_job: the validation triggers run with the writer's rights (trailer.sql T5: invoker rights
+-- throughout), so the roles whose writes fire them read the schemas. Read only: no runtime role writes a
+-- schema. A schema is not secret — it restates the contract shared/src/dto already publishes — so SELECT
+-- is harmless, and a SECURITY DEFINER lookup would add an owner hop for nothing. mwf_ops, mwf_auth: none
+-- (no reader, and no write of theirs fires a trigger).
+GRANT SELECT ON app.json_schema TO mwf_app;
+GRANT SELECT ON app.json_schema TO mwf_job;
+
+-- The seed: version 1 of each validated document, derived from what the app
+-- writes today (docs/backend/data-model/jsonb-shapes-2026-11.md §2).
+-- user_preferences v1: services/user-settings.ts PreferencesDoc — the three
+-- shared/src/dto/auth.ts DTOs. Every member is optional (an older document
+-- missing one reads its default: withDefaults); no other key is allowed, at
+-- either level (the controllers pass the zod-parsed DTO keys only).
+INSERT INTO app.json_schema (name, version, schema) VALUES ('user_preferences', 1, $json$
+{
+  "$comment": "services/user-settings.ts PreferencesDoc; shared/src/dto/auth.ts Memory/Notification/PrivacyPreferencesDTO",
+  "type": "object",
+  "required": ["memory", "notifications", "privacy"],
+  "additionalProperties": false,
+  "properties": {
+    "memory": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "sessionContinuity": {"type": "boolean"},
+        "crossSessionRecall": {"type": "boolean"},
+        "patternInsights": {"type": "boolean"},
+        "rememberAgreements": {"type": "boolean"}
+      }
+    },
+    "notifications": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "pushEnabled": {"type": "boolean"},
+        "emailEnabled": {"type": "boolean"},
+        "newInvitations": {"type": "boolean"},
+        "partnerActions": {"type": "boolean"},
+        "followUpReminders": {"type": "boolean"}
+      }
+    },
+    "privacy": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "showActivityStatus": {"type": "boolean"},
+        "allowSessionInvites": {"type": "boolean"},
+        "analyticsOptOut": {"type": "boolean"}
+      }
+    }
+  }
+}
+$json$);
+-- ai_memory.*: the STRUCTURE of a leaf-encrypted document. With a key every
+-- string leaf is a ciphertext, so a string stays a string but its value is
+-- opaque: never an enum or a format on a string leaf. Keys, numbers,
+-- booleans, nulls and array shapes are plaintext and are checked.
+-- ai_memory.summary v1: conversation-summarizer.ts updateSessionSummary —
+-- ConversationSummary (timestamps as ISO strings) plus the model's
+-- SummarizationResult fields. The model's output is stored without
+-- normalisation, so its fields admit null (getSessionSummary defaults them:
+-- `|| []`, `|| ''`); the keys are closed (the writer names each one).
+INSERT INTO app.json_schema (name, version, schema) VALUES ('ai_memory.summary', 1, $json$
+{
+  "$comment": "conversation-summarizer.ts updateSessionSummary / getSessionSummary",
+  "type": "object",
+  "required": ["text", "messageCount", "generatedAt"],
+  "additionalProperties": false,
+  "properties": {
+    "text": {"type": "string"},
+    "messageCount": {"type": "integer"},
+    "oldestMessageAt": {"type": "string"},
+    "newestMessageAt": {"type": "string"},
+    "tokenCount": {"type": "integer"},
+    "generatedAt": {"type": "string"},
+    "keyThemes": {"type": ["array", "null"], "items": {"type": "string"}},
+    "emotionalJourney": {"type": ["string", "null"]},
+    "unresolvedTopics": {"type": ["array", "null"], "items": {"type": "string"}},
+    "agreedFacts": {"type": ["array", "null"], "items": {"type": "string"}},
+    "userNeeds": {"type": ["array", "null"], "items": {"type": "string"}},
+    "partnerNeeds": {"type": ["array", "null"], "items": {"type": "string"}},
+    "openQuestions": {"type": ["array", "null"], "items": {"type": "string"}},
+    "agreements": {"type": ["array", "null"], "items": {"type": "string"}},
+    "lastUnresolvedThread": {"type": ["string", "null"]}
+  }
+}
+$json$);
+-- ai_memory.notable_facts v1: partner-session-classifier.ts — { facts:
+-- CategorizedFactWithId[] }. A fact needs category and fact; id is a uuidv7
+-- string (ensureFactIds). A fact object stays open (the legacy path spreads
+-- the model's fact object); the document does not.
+INSERT INTO app.json_schema (name, version, schema) VALUES ('ai_memory.notable_facts', 1, $json$
+{
+  "$comment": "partner-session-classifier.ts (INSERT ... ON CONFLICT DO UPDATE as mwf_job)",
+  "type": "object",
+  "required": ["facts"],
+  "additionalProperties": false,
+  "properties": {
+    "facts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["category", "fact"],
+        "properties": {
+          "id": {"type": "string"},
+          "category": {"type": "string"},
+          "fact": {"type": "string"}
+        }
+      }
+    }
+  }
+}
+$json$);
+-- ai_memory.global_facts v1: global-memory.ts consolidateGlobalFacts —
+-- GlobalFacts { facts: CategorizedFact[], consolidatedAt, sessionCount }.
+-- A fact object stays open (normalizeConsolidationResult filters the model's
+-- objects; it does not rebuild them).
+INSERT INTO app.json_schema (name, version, schema) VALUES ('ai_memory.global_facts', 1, $json$
+{
+  "$comment": "global-memory.ts consolidateGlobalFacts (a Prisma upsert as mwf_app)",
+  "type": "object",
+  "required": ["facts"],
+  "additionalProperties": false,
+  "properties": {
+    "facts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["category", "fact"],
+        "properties": {
+          "category": {"type": "string"},
+          "fact": {"type": "string"}
+        }
+      }
+    },
+    "consolidatedAt": {"type": "string"},
+    "sessionCount": {"type": "integer"}
+  }
+}
+$json$);
 
 -- ----------------------------------------------------------------------------
 -- Enums, in schema.prisma order.
@@ -1207,6 +1453,7 @@ CREATE TABLE ai_memory (
     user_id uuid7 REFERENCES "user" ON DELETE RESTRICT,
     kind ai_memory_kind NOT NULL,
     doc jsonb NOT NULL,
+    doc_schema_version schema_version NOT NULL DEFAULT 1,
     created_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
@@ -1222,11 +1469,13 @@ CREATE TABLE ai_memory (
 );
 COMMENT ON TABLE ai_memory IS 'The AI''s working memory as documents: a participant''s rolling SUMMARY and NOTABLE_FACTS in one session, and a user''s GLOBAL_FACTS across sessions.';
 COMMENT ON COLUMN ai_memory.kind IS 'SUMMARY and NOTABLE_FACTS have participant_id; GLOBAL_FACTS has user_id.';
-COMMENT ON COLUMN ai_memory.doc IS 'encrypted (per-row): jsonb with every string leaf encrypted (participant key for SUMMARY / NOTABLE_FACTS, user key for GLOBAL_FACTS); the key-presence CHECKs see the plaintext structure.';
+COMMENT ON COLUMN ai_memory.doc IS 'encrypted (per-row): jsonb with every string leaf encrypted (participant key for SUMMARY / NOTABLE_FACTS, user key for GLOBAL_FACTS); the key-presence CHECKs see the plaintext structure, and the t_doc_schema trigger validates it against app.json_schema ai_memory.<kind>.';
+COMMENT ON COLUMN ai_memory.doc_schema_version IS 'The version of the app.json_schema ai_memory.<kind> document doc conforms to (validated by the t_doc_schema trigger; an unknown version is refused).';
 -- mwf_app: read the session summary / facts for prompts; FINDING: global-memory.ts writes the user's GLOBAL_FACTS document
 -- on the request path (spec: ai_memory is the AI's).
 GRANT SELECT ON ai_memory TO mwf_app;
-GRANT INSERT (user_id, kind, doc, created_at, updated_at) ON ai_memory TO mwf_app;
+-- (doc_schema_version: the Prisma upsert's create sends its @default.)
+GRANT INSERT (user_id, kind, doc, doc_schema_version, created_at, updated_at) ON ai_memory TO mwf_app;
 GRANT UPDATE (doc, updated_at) ON ai_memory TO mwf_app;
 -- mwf_job: anonymize_*: a private-row delete (steps 3–5) and the filter columns it reads
 GRANT SELECT (participant_id, user_id) ON ai_memory TO mwf_job;
@@ -1615,6 +1864,7 @@ CREATE TABLE proposal_revision (
     -- §1.4 proposal_revision [P23c]
     CHECK (before IS NULL OR jsonb_typeof(before) = 'object'),
     CHECK (after IS NULL OR jsonb_typeof(after) = 'object')
+    -- + t_jsonb_envelope (trailer.sql T5): a sealed document is a well-formed envelope
 );
 CREATE INDEX ON proposal_revision (proposal_id, created_at);
 CREATE INDEX ON proposal_revision (actor_participant_id);
@@ -1757,6 +2007,7 @@ CREATE TABLE follow_up_checkin (
     UNIQUE (follow_up_id, participant_id),
     -- §1.5 follow_up_checkin
     CHECK (jsonb_typeof(payload) = 'object')
+    -- + t_jsonb_envelope (trailer.sql T5): a sealed document is a well-formed envelope
 );
 CREATE INDEX ON follow_up_checkin (participant_id, submitted_at);
 COMMENT ON TABLE follow_up_checkin IS 'One participant''s answers to a follow-up, one per participant; the structured answers are a document (payload).';
@@ -1837,6 +2088,7 @@ CREATE TABLE reflection (
 
     -- §1.6 reflection, takeaway_link [P31]
     CHECK (summary_doc IS NULL OR jsonb_typeof(summary_doc) = 'object')
+    -- + t_jsonb_envelope (trailer.sql T5): a sealed document is a well-formed envelope
 );
 CREATE INDEX ON reflection (user_id, updated_at);
 CREATE INDEX ON reflection (linked_session_id);
@@ -1951,6 +2203,7 @@ GRANT UPDATE (push_token) ON user_device TO mwf_job;
 CREATE TABLE user_preferences (
     user_id uuid7 NOT NULL PRIMARY KEY REFERENCES "user" ON DELETE RESTRICT,
     doc jsonb NOT NULL DEFAULT '{}',
+    doc_schema_version schema_version NOT NULL DEFAULT 1,
     created_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
@@ -1959,6 +2212,8 @@ CREATE TABLE user_preferences (
       jsonb_typeof(doc) = 'object' AND doc ?& ARRAY['memory', 'notifications', 'privacy'])
 );
 COMMENT ON TABLE user_preferences IS 'The user''s preference documents (memory, notifications, privacy), one row per user.';
+COMMENT ON COLUMN user_preferences.doc IS 'Plaintext settings (read by SQL jsonb operators); validated by the t_doc_schema trigger against app.json_schema user_preferences.';
+COMMENT ON COLUMN user_preferences.doc_schema_version IS 'The version of the app.json_schema user_preferences document doc conforms to (validated by the t_doc_schema trigger; an unknown version is refused).';
 -- mwf_app: the caller's settings document (user-settings.ts; FOR UPDATE needs UPDATE).
 GRANT SELECT ON user_preferences TO mwf_app;
 GRANT INSERT (user_id, doc) ON user_preferences TO mwf_app;
@@ -2008,6 +2263,7 @@ CREATE TABLE feature_state (
     PRIMARY KEY (user_id, feature),
     -- §1.7 feature_state
     CHECK (jsonb_typeof(doc) = 'object')
+    -- + t_jsonb_envelope (trailer.sql T5): a sealed document is a well-formed envelope
 );
 COMMENT ON TABLE feature_state IS 'One document per wellbeing feature per user (meditation, gratitude, needs assessment, people).';
 COMMENT ON COLUMN feature_state.feature IS 'Which wellbeing feature this document belongs to.';
@@ -2277,6 +2533,147 @@ CREATE OR REPLACE FUNCTION app.touch_updated_at() RETURNS trigger
   LANGUAGE plpgsql
   SET search_path = pg_catalog, public, pg_temp
   AS $$ BEGIN NEW.updated_at := now(); RETURN NEW; END $$;
+
+-- Invoker helpers: the JSON-schema subset validator (work-k5fk.8; owner
+-- decision Q11: PL/pgSQL, no extension). The subset and why it is enough:
+-- tables.sql app.json_schema_wellformed (the CHECK on every seeded schema)
+-- and docs/backend/data-model/jsonb-shapes-2026-11.md. Semantics are JSON
+-- Schema's: object keywords (required, properties, additionalProperties) say
+-- nothing about a non-object, items nothing about a non-array; integer is a
+-- number with no fraction (1.0 is one); a key present with a JSON null value
+-- is present. A violation is reported as a JSONPath-like location and a
+-- reason. A value is never quoted — a leaf of ai_memory.doc is ciphertext or
+-- private text — but a key name is (keys are the document's structure,
+-- plaintext even in ai_memory.doc). The first violation found wins.
+-- search_path: pg_catalog and pg_temp only; every app object is qualified.
+CREATE FUNCTION app.jsonb_schema_violation(doc jsonb, schema jsonb, path text DEFAULT '$') RETURNS text
+  LANGUAGE plpgsql IMMUTABLE PARALLEL SAFE
+  SET search_path = pg_catalog, pg_temp
+  AS $$
+  DECLARE
+    t CONSTANT text := coalesce(jsonb_typeof(doc), 'SQL NULL');
+    want jsonb;
+    k text;
+    v jsonb;
+    i bigint;
+    r text;
+  BEGIN
+    IF schema ? 'type' THEN
+      want := CASE jsonb_typeof(schema -> 'type') WHEN 'array' THEN schema -> 'type' ELSE jsonb_build_array(schema -> 'type') END;
+      IF NOT EXISTS (SELECT 1 FROM jsonb_array_elements_text(want) w
+                     WHERE w = t OR (w = 'integer' AND CASE WHEN t = 'number' THEN doc::numeric = trunc(doc::numeric) ELSE false END)) THEN
+        RETURN format('%s: expected %s, got %s', path,
+                      (SELECT string_agg(x.w, ' or ' ORDER BY x.o) FROM jsonb_array_elements_text(want) WITH ORDINALITY x(w, o)), t);
+      END IF;
+    END IF;
+    IF schema ? 'enum' AND NOT EXISTS (SELECT 1 FROM jsonb_array_elements(schema -> 'enum') e WHERE e = doc) THEN
+      RETURN format('%s: not one of the allowed values', path);
+    END IF;
+    IF t = 'object' THEN
+      SELECT x.req INTO k FROM jsonb_array_elements_text(coalesce(schema -> 'required', '[]')) WITH ORDINALITY x(req, o)
+      WHERE NOT doc ? x.req ORDER BY x.o LIMIT 1;
+      IF k IS NOT NULL THEN
+        RETURN format('%s: missing required key %s', path, k);
+      END IF;
+      FOR k, v IN SELECT d.key, d.value FROM jsonb_each(doc) d LOOP
+        IF coalesce(schema -> 'properties' ? k, false) THEN
+          r := app.jsonb_schema_violation(v, schema -> 'properties' -> k, path || '.' || k);
+        ELSIF jsonb_typeof(schema -> 'additionalProperties') = 'object' THEN
+          r := app.jsonb_schema_violation(v, schema -> 'additionalProperties', path || '.' || k);
+        ELSIF schema -> 'additionalProperties' = 'false'::jsonb THEN
+          r := format('%s: unexpected key %s', path, k);
+        ELSE
+          r := NULL;
+        END IF;
+        IF r IS NOT NULL THEN RETURN r; END IF;
+      END LOOP;
+    ELSIF t = 'array' AND schema ? 'items' THEN
+      FOR v, i IN SELECT a.value, a.ordinality - 1 FROM jsonb_array_elements(doc) WITH ORDINALITY a(value, ordinality) LOOP
+        r := app.jsonb_schema_violation(v, schema -> 'items', format('%s[%s]', path, i));
+        IF r IS NOT NULL THEN RETURN r; END IF;
+      END LOOP;
+    END IF;
+    RETURN NULL;
+  END
+  $$;
+COMMENT ON FUNCTION app.jsonb_schema_violation(jsonb, jsonb, text) IS 'The first way doc fails the JSON schema (the app.json_schema_wellformed subset), as "<path>: <reason>" (e.g. $.facts[1]: missing required key fact), or NULL when it matches. Never quotes a value; key names, which are structure, do appear. Pure; the core of app.jsonb_violation.';
+
+-- The violation of doc against the seeded schema (name, version). An unknown
+-- schema is refused with SQLSTATE MWJ01 (class MW is this app's: MWA0x the
+-- session archive, MWF0x sign-in, MWJ0x the jsonb validators; the codes are
+-- listed in docs/backend/data-model/jsonb-shapes-2026-11.md §2). Not 23503:
+-- Prisma would report that as P2003 "Foreign key constraint failed". Reads
+-- app.json_schema with the caller's rights (SELECT: mwf_app, mwf_job —
+-- tables.sql).
+CREATE FUNCTION app.jsonb_violation(doc jsonb, name text, version public.schema_version) RETURNS text
+  LANGUAGE plpgsql STABLE PARALLEL SAFE
+  SET search_path = pg_catalog, pg_temp
+  AS $$
+  DECLARE
+    s jsonb;
+  BEGIN
+    SELECT j.schema INTO s FROM app.json_schema j
+    WHERE j.name = jsonb_violation.name AND j.version = jsonb_violation.version;
+    IF NOT FOUND THEN
+      RAISE EXCEPTION 'json_schema % version % does not exist', jsonb_violation.name, jsonb_violation.version
+        USING ERRCODE = 'MWJ01';
+    END IF;
+    RETURN app.jsonb_schema_violation(doc, s);
+  END
+  $$;
+COMMENT ON FUNCTION app.jsonb_violation(jsonb, text, public.schema_version) IS 'app.jsonb_schema_violation against the app.json_schema row (name, version); raises MWJ01 for an unknown one. What the t_doc_schema trigger reports.';
+-- mwf_app, mwf_job: the t_doc_schema trigger calls it with the writer's rights.
+REVOKE EXECUTE ON FUNCTION app.jsonb_violation(jsonb, text, public.schema_version) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION app.jsonb_violation(jsonb, text, public.schema_version) TO mwf_app;
+GRANT EXECUTE ON FUNCTION app.jsonb_violation(jsonb, text, public.schema_version) TO mwf_job;
+
+-- Does doc match the seeded schema (name, version)? (MWJ01 for an unknown one.)
+CREATE FUNCTION app.jsonb_matches(doc jsonb, name text, version public.schema_version) RETURNS boolean
+  LANGUAGE sql STABLE PARALLEL SAFE
+  SET search_path = pg_catalog, pg_temp
+  RETURN app.jsonb_violation(doc, name, version) IS NULL;
+COMMENT ON FUNCTION app.jsonb_matches(jsonb, text, public.schema_version) IS 'True when doc matches the app.json_schema row (name, version); raises MWJ01 for an unknown one. For ad-hoc checks and tests; the trigger uses app.jsonb_violation for its message.';
+-- mwf_app, mwf_job: the roles that read the schemas (no app caller today; the caller tests use it).
+REVOKE EXECUTE ON FUNCTION app.jsonb_matches(jsonb, text, public.schema_version) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION app.jsonb_matches(jsonb, text, public.schema_version) TO mwf_app;
+GRANT EXECUTE ON FUNCTION app.jsonb_matches(jsonb, text, public.schema_version) TO mwf_job;
+
+-- The envelope rule for the five jsonb-envelope columns (t_jsonb_envelope, T5).
+-- Lenient exactly as the ciphertext domain is: with no FIELD_ENCRYPTION_KEY
+-- (keyless dev/test, and production until REQUIRE_FIELD_ENCRYPTION)
+-- sealFieldValue stores the plain document, and follow_up_checkin's DEFAULT
+-- writes '{}'; so an object WITHOUT a "$enc" key passes. One WITH it is an
+-- envelope and must be well formed: "$enc" its only key, a string, starting
+-- enc: (plaintext in the envelope is refused — the domain alone would let it
+-- through) and castable to ciphertext (a malformed ciphertext is refused).
+-- A non-object is refused here too, before the column's jsonb_typeof CHECK
+-- could echo it. The strict variant (every document an envelope) lands with
+-- the strict ciphertext domain (work-k5fk.11). Returns the reason, never the
+-- value; NULL when the document passes.
+CREATE FUNCTION app.jsonb_envelope_violation(doc jsonb) RETURNS text
+  LANGUAGE plpgsql IMMUTABLE PARALLEL SAFE
+  SET search_path = pg_catalog, pg_temp
+  AS $$
+  BEGIN
+    IF doc IS NULL THEN RETURN NULL; END IF;
+    IF jsonb_typeof(doc) <> 'object' THEN RETURN 'not an object, got ' || jsonb_typeof(doc); END IF;
+    IF NOT doc ? '$enc' THEN RETURN NULL; END IF;
+    IF doc - '$enc' <> '{}'::jsonb THEN RETURN 'a sealed document has "$enc" as its only key'; END IF;
+    IF jsonb_typeof(doc -> '$enc') <> 'string' THEN RETURN '"$enc" is not a string, got ' || jsonb_typeof(doc -> '$enc'); END IF;
+    IF doc ->> '$enc' NOT LIKE 'enc:%' THEN RETURN '"$enc" is not a ciphertext (plaintext in an envelope)'; END IF;
+    BEGIN
+      PERFORM (doc ->> '$enc')::public.ciphertext;
+    EXCEPTION WHEN check_violation THEN
+      RETURN '"$enc" is a malformed ciphertext';
+    END;
+    RETURN NULL;
+  END
+  $$;
+COMMENT ON FUNCTION app.jsonb_envelope_violation(jsonb) IS 'Why a jsonb-envelope document is refused, or NULL: a document with "$enc" must be exactly {"$enc": <a v1 ciphertext>}; a non-object is refused; an object without "$enc" passes (keyless plaintext, as the ciphertext domain lets plaintext through). Never quotes the value. What the t_jsonb_envelope trigger reports.';
+-- mwf_app, mwf_job: the t_jsonb_envelope trigger calls it with the writer's rights.
+REVOKE EXECUTE ON FUNCTION app.jsonb_envelope_violation(jsonb) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION app.jsonb_envelope_violation(jsonb) TO mwf_app;
+GRANT EXECUTE ON FUNCTION app.jsonb_envelope_violation(jsonb) TO mwf_job;
 
 -- The two TS-1 helpers, with TS-1's signatures, over participant. Created
 -- here like every other definer helper and handed to mwf_job below (there is
@@ -3273,6 +3670,90 @@ CREATE CONSTRAINT TRIGGER t_agreement_parties_on_agreement AFTER INSERT ON publi
   DEFERRABLE INITIALLY DEFERRED
   FOR EACH ROW EXECUTE FUNCTION app.t_agreement_parties();
 
+-- T-doc-schema (work-k5fk.8): the two plaintext app documents match their
+-- seeded JSON schema, by the row's doc_schema_version — user_preferences.doc
+-- against user_preferences, ai_memory.doc against ai_memory.<kind> (summary,
+-- notable_facts, global_facts: the kind picks the schema, so a change of kind
+-- re-checks). A BEFORE trigger, not a CHECK: it reads app.json_schema (a
+-- CHECK must not read a table), and its message carries a location and a
+-- reason but never the row (a CHECK's DETAIL would echo it). A BEFORE INSERT
+-- trigger sees the proposed row, before ON CONFLICT is considered; the
+-- DO UPDATE of an upsert fires it again as an UPDATE. The name is the table
+-- plus, when the row has a kind, '.' and the kind in lower case (read through
+-- to_jsonb(NEW), so one function serves both tables).
+-- A future v2: seed (name, 2), and the writer sends doc_schema_version 2 —
+-- on an upsert, SET doc_schema_version = EXCLUDED.doc_schema_version too.
+CREATE FUNCTION app.t_doc_schema() RETURNS trigger
+  LANGUAGE plpgsql
+  SET search_path = pg_catalog, public, pg_temp
+  AS $$
+  DECLARE
+    v_name text := TG_TABLE_NAME || coalesce('.' || lower(to_jsonb(NEW) ->> 'kind'), '');
+    v_err text;
+  BEGIN
+    v_err := app.jsonb_violation(NEW.doc, v_name, NEW.doc_schema_version);
+    IF v_err IS NOT NULL THEN
+      RAISE EXCEPTION '%.doc does not match json_schema % v%: %', TG_TABLE_NAME, v_name, NEW.doc_schema_version, v_err
+        USING ERRCODE = 'check_violation';
+    END IF;
+    RETURN NEW;
+  END
+  $$;
+COMMENT ON FUNCTION app.t_doc_schema() IS 'Trigger function of t_doc_schema: refuses (check_violation) a doc that does not match app.json_schema (<table>[.<kind>], doc_schema_version), with the location and reason only; MWJ01 for an unknown version.';
+-- No caller needs EXECUTE on a trigger function.
+REVOKE EXECUTE ON FUNCTION app.t_doc_schema() FROM PUBLIC;
+CREATE TRIGGER t_doc_schema BEFORE INSERT OR UPDATE OF doc, doc_schema_version ON public.user_preferences
+  FOR EACH ROW EXECUTE FUNCTION app.t_doc_schema();
+COMMENT ON TRIGGER t_doc_schema ON public.user_preferences IS 'doc matches app.json_schema user_preferences at doc_schema_version (work-k5fk.8).';
+CREATE TRIGGER t_doc_schema BEFORE INSERT OR UPDATE OF kind, doc, doc_schema_version ON public.ai_memory
+  FOR EACH ROW EXECUTE FUNCTION app.t_doc_schema();
+COMMENT ON TRIGGER t_doc_schema ON public.ai_memory IS 'doc''s structure matches app.json_schema ai_memory.<kind> at doc_schema_version (work-k5fk.8); its string leaves are ciphertext, so only keys, types and shape are checked.';
+
+-- T-jsonb-envelope (work-k5fk.8 review): each jsonb-envelope column named in
+-- TG_ARGV is a well-formed envelope or keyless plaintext
+-- (app.jsonb_envelope_violation). A trigger rather than a CHECK because a
+-- CHECK refusal's DETAIL ("Failing row contains …") echoes the whole row —
+-- the very plaintext this rule catches — to the client error and the server
+-- log; this refusal names the column and the reason, with no DETAIL. It runs
+-- before the columns' jsonb_typeof CHECKs, and refuses a non-object itself,
+-- so those never see (and echo) a refused document either.
+CREATE FUNCTION app.t_jsonb_envelope() RETURNS trigger
+  LANGUAGE plpgsql
+  SET search_path = pg_catalog, public, pg_temp
+  AS $$
+  DECLARE
+    v_row CONSTANT jsonb := to_jsonb(NEW);
+    v_col text;
+    v_err text;
+  BEGIN
+    FOREACH v_col IN ARRAY TG_ARGV LOOP
+      -- to_jsonb renders an SQL NULL column as JSON null; both are "no document" here (a stored
+      -- JSON null is left to the column's jsonb_typeof CHECK, whose echo of `null` carries nothing).
+      v_err := app.jsonb_envelope_violation(nullif(v_row -> v_col, 'null'::jsonb));
+      IF v_err IS NOT NULL THEN
+        RAISE EXCEPTION '%.% is not a well-formed envelope: %', TG_TABLE_NAME, v_col, v_err
+          USING ERRCODE = 'check_violation';
+      END IF;
+    END LOOP;
+    RETURN NEW;
+  END
+  $$;
+COMMENT ON FUNCTION app.t_jsonb_envelope() IS 'Trigger function of t_jsonb_envelope: refuses (check_violation) a jsonb-envelope column (named in the trigger arguments) that app.jsonb_envelope_violation refuses, with the column and the reason only, never the value.';
+-- No caller needs EXECUTE on a trigger function.
+REVOKE EXECUTE ON FUNCTION app.t_jsonb_envelope() FROM PUBLIC;
+CREATE TRIGGER t_jsonb_envelope BEFORE INSERT OR UPDATE OF before, after ON public.proposal_revision
+  FOR EACH ROW EXECUTE FUNCTION app.t_jsonb_envelope('before', 'after');
+COMMENT ON TRIGGER t_jsonb_envelope ON public.proposal_revision IS 'before and after are well-formed envelopes (or keyless plaintext); work-k5fk.8.';
+CREATE TRIGGER t_jsonb_envelope BEFORE INSERT OR UPDATE OF payload ON public.follow_up_checkin
+  FOR EACH ROW EXECUTE FUNCTION app.t_jsonb_envelope('payload');
+COMMENT ON TRIGGER t_jsonb_envelope ON public.follow_up_checkin IS 'payload is a well-formed envelope (or keyless plaintext); work-k5fk.8.';
+CREATE TRIGGER t_jsonb_envelope BEFORE INSERT OR UPDATE OF summary_doc ON public.reflection
+  FOR EACH ROW EXECUTE FUNCTION app.t_jsonb_envelope('summary_doc');
+COMMENT ON TRIGGER t_jsonb_envelope ON public.reflection IS 'summary_doc is a well-formed envelope (or keyless plaintext); work-k5fk.8.';
+CREATE TRIGGER t_jsonb_envelope BEFORE INSERT OR UPDATE OF doc ON public.feature_state
+  FOR EACH ROW EXECUTE FUNCTION app.t_jsonb_envelope('doc');
+COMMENT ON TRIGGER t_jsonb_envelope ON public.feature_state IS 'doc is a well-formed envelope (or keyless plaintext); work-k5fk.8.';
+
 -- touch_updated_at on the 35 tables that have updated_at (T8 asserts the set
 -- equals the catalog's). message and takeaway_link have none.
 CREATE TRIGGER touch_updated_at BEFORE UPDATE ON agreement FOR EACH ROW EXECUTE FUNCTION app.touch_updated_at();
@@ -3579,6 +4060,47 @@ BEGIN
                     WHERE k.contype = 'c' AND k.conrelid = format('public.%I', c.table_name)::regclass
                       AND pg_get_constraintdef(k.oid) ~ ('jsonb_typeof\(' || c.column_name || '\) (= |= ANY )'));
   IF bad IS NOT NULL THEN RAISE EXCEPTION 'step 20: jsonb column(s) without a jsonb_typeof CHECK: %', bad; END IF;
+
+  -- work-k5fk.8: every jsonb-envelope column (its COMMENT says 'jsonb envelope') is guarded
+  -- by a t_jsonb_envelope trigger that both fires on it (UPDATE OF) and checks it (an
+  -- argument); no other column is; there are 5 (gen-target-migration.ts
+  -- JSONB_ENVELOPES; the jest test encryption-at-rest-schema ties the set to SENSITIVE_FIELD_MAP).
+  SELECT string_agg(coalesce(e.col, g.col), ', ' ORDER BY coalesce(e.col, g.col)) INTO bad
+  FROM (SELECT c.relname || '.' || a.attname AS col
+        FROM pg_catalog.pg_attribute a JOIN pg_catalog.pg_class c ON c.oid = a.attrelid
+        JOIN pg_catalog.pg_namespace s ON s.oid = c.relnamespace
+        JOIN pg_catalog.pg_description d ON d.objoid = c.oid AND d.classoid = 'pg_catalog.pg_class'::regclass AND d.objsubid = a.attnum
+        WHERE s.nspname = 'public' AND c.relkind = 'r' AND a.attnum > 0 AND NOT a.attisdropped
+          AND a.atttypid = 'pg_catalog.jsonb'::regtype AND d.description ~ '^encrypted \([a-z-]+\): jsonb envelope') e
+  FULL JOIN (SELECT c.relname || '.' || a.attname AS col
+             FROM pg_catalog.pg_trigger t JOIN pg_catalog.pg_class c ON c.oid = t.tgrelid
+             JOIN pg_catalog.pg_attribute a ON a.attrelid = c.oid AND a.attnum = ANY (t.tgattr::int2[])
+             WHERE t.tgname = 't_jsonb_envelope' AND NOT t.tgisinternal
+               AND t.tgtype & (4 | 16) = (4 | 16)  -- INSERT and UPDATE
+               AND a.attname = ANY (regexp_split_to_array(encode(t.tgargs, 'escape'), '\\000'))) g ON g.col = e.col
+  WHERE e.col IS NULL OR g.col IS NULL;
+  IF bad IS NOT NULL THEN RAISE EXCEPTION 'step 20: jsonb envelope column(s) and t_jsonb_envelope triggers differ: %', bad; END IF;
+  SELECT sum(t.tgnargs) INTO n FROM pg_catalog.pg_trigger t WHERE t.tgname = 't_jsonb_envelope';
+  IF n IS DISTINCT FROM 5 THEN RAISE EXCEPTION 'step 20: t_jsonb_envelope guards % columns, expected 5', n; END IF;
+  -- and no CHECK echoes a refused envelope's row: the rule is the trigger's alone.
+  SELECT string_agg(conrelid::regclass::text || '.' || conname, ', ') INTO bad FROM pg_catalog.pg_constraint
+  WHERE contype = 'c' AND pg_get_constraintdef(oid) ~ 'jsonb_envelope';
+  IF bad IS NOT NULL THEN RAISE EXCEPTION 'step 20: envelope CHECK(s) (their DETAIL echoes the row): %', bad; END IF;
+
+  -- work-k5fk.8: t_doc_schema validates exactly user_preferences and ai_memory, each with a
+  -- doc_schema_version; every name the trigger can derive has a version-1 schema.
+  SELECT string_agg(c.relname, ', ' ORDER BY c.relname) INTO bad FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid
+  WHERE t.tgname = 't_doc_schema';
+  IF bad IS DISTINCT FROM 'ai_memory, user_preferences' THEN RAISE EXCEPTION 'step 20: t_doc_schema on %, expected ai_memory, user_preferences', bad; END IF;
+  SELECT string_agg(table_name, ', ' ORDER BY table_name) INTO bad FROM information_schema.columns
+  WHERE table_schema = 'public' AND column_name = 'doc_schema_version';
+  IF bad IS DISTINCT FROM 'ai_memory, user_preferences' THEN RAISE EXCEPTION 'step 20: doc_schema_version on %, expected ai_memory, user_preferences', bad; END IF;
+  SELECT string_agg(x.name, ', ' ORDER BY x.name) INTO bad
+  FROM (SELECT 'user_preferences' AS name UNION ALL SELECT 'ai_memory.' || lower(e::text) FROM unnest(enum_range(NULL::ai_memory_kind)) e) x
+  WHERE NOT EXISTS (SELECT 1 FROM app.json_schema j WHERE j.name = x.name AND j.version = 1);
+  IF bad IS NOT NULL THEN RAISE EXCEPTION 'step 20: no version-1 json_schema for: %', bad; END IF;
+  SELECT count(*) INTO n FROM app.json_schema;
+  IF n <> 4 THEN RAISE EXCEPTION 'step 20: % json_schema rows, expected 4', n; END IF;
 
   -- Every uuid column of a table is a uuid7 (tables.sql): 33 primary keys
   -- defaulting to uuidv7() and the 100 columns that reference them.

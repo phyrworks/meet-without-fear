@@ -1,7 +1,7 @@
 // Jest Snapshot v1, https://goo.gl/fbAQLP
 
 exports[`mwf_app grants (target) the mwf_app privilege matrix is exactly the recorded one 1`] = `
-"column public.ai_memory INSERT: user_id, kind, doc, created_at, updated_at (mwf_app)
+"column public.ai_memory INSERT: user_id, kind, doc, doc_schema_version, created_at, updated_at (mwf_app)
 column public.ai_memory UPDATE: doc, updated_at (mwf_app)
 column public.consent INSERT: participant_id, requested_by_participant_id, need_id, empathy_attempt_id, share_offer_id, review_id, decision, decided_at, created_at, updated_at (mwf_app)
 column public.consent UPDATE: decision, decided_at, revoked_at, updated_at (mwf_app)
@@ -67,6 +67,11 @@ routine app.empathy_direction_status(): EXECUTE (mwf_app)
 routine app.empathy_set_status(uuid,empathy_status,text): EXECUTE (mwf_app)
 routine app.is_co_participant(uuid): EXECUTE (mwf_app)
 routine app.is_member(uuid): EXECUTE (mwf_app)
+routine app.json_schema_wellformed(jsonb): EXECUTE (PUBLIC)
+routine app.jsonb_envelope_violation(jsonb): EXECUTE (mwf_app)
+routine app.jsonb_matches(jsonb,text,schema_version): EXECUTE (mwf_app)
+routine app.jsonb_schema_violation(jsonb,jsonb,text): EXECUTE (PUBLIC)
+routine app.jsonb_violation(jsonb,text,schema_version): EXECUTE (mwf_app)
 routine app.my_participant(uuid): EXECUTE (mwf_app)
 routine app.need_revoke_share(uuid): EXECUTE (mwf_app)
 routine app.partner_user_id(uuid): EXECUTE (mwf_app)
@@ -74,6 +79,7 @@ routine app.session_archive(uuid): EXECUTE (mwf_app)
 routine app.session_set_status(uuid,session_status): EXECUTE (mwf_app)
 schema app: USAGE (mwf_app)
 schema public: USAGE (PUBLIC)
+table app.json_schema: SELECT (mwf_app)
 table public.agreement: SELECT (mwf_app)
 table public.agreement_party: SELECT (mwf_app)
 table public.ai_memory: SELECT (mwf_app)
@@ -223,6 +229,16 @@ routine app.empathy_direction_status(): EXECUTE (mwf_job)
 routine app.empathy_set_status(uuid,empathy_status,text): EXECUTE (mwf_job)
 routine app.is_co_participant(uuid): EXECUTE (mwf_job)
 routine app.is_member(uuid): EXECUTE (mwf_job)
+routine app.json_schema_wellformed(jsonb): EXECUTE (PUBLIC)
+routine app.json_schema_wellformed(jsonb): EXECUTE (mwf_migrator)
+routine app.jsonb_envelope_violation(jsonb): EXECUTE (mwf_job)
+routine app.jsonb_envelope_violation(jsonb): EXECUTE (mwf_migrator)
+routine app.jsonb_matches(jsonb,text,schema_version): EXECUTE (mwf_job)
+routine app.jsonb_matches(jsonb,text,schema_version): EXECUTE (mwf_migrator)
+routine app.jsonb_schema_violation(jsonb,jsonb,text): EXECUTE (PUBLIC)
+routine app.jsonb_schema_violation(jsonb,jsonb,text): EXECUTE (mwf_migrator)
+routine app.jsonb_violation(jsonb,text,schema_version): EXECUTE (mwf_job)
+routine app.jsonb_violation(jsonb,text,schema_version): EXECUTE (mwf_migrator)
 routine app.my_participant(uuid): EXECUTE (mwf_job)
 routine app.need_revoke_share(uuid): EXECUTE (mwf_job)
 routine app.need_share(uuid,text): EXECUTE (mwf_job)
@@ -235,6 +251,8 @@ routine app.t_agreement_parties(): EXECUTE (mwf_migrator)
 routine app.t_attempt_same_session(): EXECUTE (mwf_migrator)
 routine app.t_consent_owner(): EXECUTE (mwf_migrator)
 routine app.t_consent_transitions(): EXECUTE (mwf_migrator)
+routine app.t_doc_schema(): EXECUTE (mwf_migrator)
+routine app.t_jsonb_envelope(): EXECUTE (mwf_migrator)
 routine app.t_message_app_delete(): EXECUTE (mwf_migrator)
 routine app.t_message_app_insert(): EXECUTE (mwf_migrator)
 routine app.t_message_immutable(): EXECUTE (mwf_migrator)
@@ -253,6 +271,8 @@ schema app: USAGE (mwf_ops)
 schema public: USAGE (PUBLIC)
 schema public: USAGE (mwf_job)
 schema public: USAGE (mwf_ops)
+table app.json_schema: DELETE, INSERT, MAINTAIN, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE (mwf_migrator)
+table app.json_schema: SELECT (mwf_job)
 table public.agreement: DELETE, INSERT, MAINTAIN, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE (mwf_migrator)
 table public.agreement_party: DELETE, INSERT, MAINTAIN, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE (mwf_migrator)
 table public.ai_memory: DELETE (mwf_job)
@@ -358,6 +378,11 @@ routine owner app.empathy_direction_status(): mwf_job
 routine owner app.empathy_set_status(uuid,empathy_status,text): mwf_job
 routine owner app.is_co_participant(uuid): mwf_job
 routine owner app.is_member(uuid): mwf_job
+routine owner app.json_schema_wellformed(jsonb): mwf_migrator
+routine owner app.jsonb_envelope_violation(jsonb): mwf_migrator
+routine owner app.jsonb_matches(jsonb,text,schema_version): mwf_migrator
+routine owner app.jsonb_schema_violation(jsonb,jsonb,text): mwf_migrator
+routine owner app.jsonb_violation(jsonb,text,schema_version): mwf_migrator
 routine owner app.my_participant(uuid): mwf_job
 routine owner app.need_revoke_share(uuid): mwf_job
 routine owner app.need_share(uuid,text): mwf_job
@@ -369,6 +394,8 @@ routine owner app.t_agreement_parties(): mwf_migrator
 routine owner app.t_attempt_same_session(): mwf_migrator
 routine owner app.t_consent_owner(): mwf_migrator
 routine owner app.t_consent_transitions(): mwf_migrator
+routine owner app.t_doc_schema(): mwf_migrator
+routine owner app.t_jsonb_envelope(): mwf_migrator
 routine owner app.t_message_app_delete(): mwf_migrator
 routine owner app.t_message_app_insert(): mwf_migrator
 routine owner app.t_message_immutable(): mwf_migrator

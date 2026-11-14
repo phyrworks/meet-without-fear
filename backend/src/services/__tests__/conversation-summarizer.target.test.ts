@@ -114,6 +114,50 @@ describeTarget('the session summary on the target (read by mwf_app, written by m
     expect(prompt()).toContain('do NOT anticipate a direct partner response');
   });
 
+  // work-k5fk.8 review M2 / work-k5fk.12: the model's output is normalised before the write, so an odd
+  // shape still yields a stored summary that the ai_memory.summary json_schema (t_doc_schema) accepts.
+  it.each<[string, Record<string, unknown>, Record<string, unknown>]>([
+    ['a single-string keyThemes becomes a one-item list', { keyThemes: 'trust' }, { keyThemes: ['trust'] }],
+    [
+      'non-string list items are dropped',
+      { keyThemes: ['a', 1, null, { x: 1 }, 'b'], userNeeds: [true, 'n'] },
+      { keyThemes: ['a', 'b'], userNeeds: ['n'] },
+    ],
+    [
+      'a list that is neither a list nor a string is empty',
+      { unresolvedTopics: 42, agreements: { a: 1 } },
+      { unresolvedTopics: [], agreements: [] },
+    ],
+    ['a non-string emotionalJourney is dropped', { emotionalJourney: ['up', 'down'] }, { emotionalJourney: '' }],
+    ['a null emotionalJourney is dropped', { emotionalJourney: null }, { emotionalJourney: '' }],
+    ['a non-string lastUnresolvedThread is null', { lastUnresolvedThread: 7 }, { lastUnresolvedThread: null }],
+  ])('model output: %s', async (_name, extra, want) => {
+    modelSays(extra);
+    const summary = await asAda(() => summarizer.updateSessionSummary(ids.session, ids.adaUser, 'turn-odd'));
+    expect(summary).not.toBeNull();
+    const doc = await stored();
+    expect(doc).toMatchObject({ text: 'PROBE_TS12_SUMMARY', ...want });
+    expect(Number.isInteger(doc?.tokenCount)).toBe(true);
+  });
+
+  it('model output: a non-string summary text is not stored (nothing to summarise), and no row is written', async () => {
+    haiku.mockResolvedValue({ summary: 12, keyThemes: [] } as never);
+    expect(await asAda(() => summarizer.updateSessionSummary(ids.session, ids.adaUser, 'turn-bad'))).toBeNull();
+    expect(await stored()).toBeNull();
+  });
+
+  it('normalizeSummarizationResult: coerces each field; no summary text means nothing to store', () => {
+    const n = summarizer.normalizeSummarizationResult({ summary: 'abcd efgh', keyThemes: 'x' });
+    expect(n).toMatchObject({
+      summary: 'abcd efgh',
+      keyThemes: ['x'],
+      emotionalJourney: '',
+      lastUnresolvedThread: null,
+    });
+    expect(summarizer.normalizeSummarizationResult({ summary: '   ' })).toBeNull();
+    expect(summarizer.normalizeSummarizationResult(null)).toBeNull();
+  });
+
   it('long-idle resumption: no activity, not idle, fresh summary, and a refresh when stale or missing', async () => {
     const now = new Date();
     const idle = new Date(now.getTime() - 25 * 60 * 60 * 1000);
