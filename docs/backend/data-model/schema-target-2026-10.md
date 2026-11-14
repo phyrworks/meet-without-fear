@@ -35,7 +35,7 @@ The review's Q3–Q7 are still open. The target is designed under these; each ca
 | Names | snake_case tables and columns; enums `snake_case` types; Prisma models PascalCase via `@@map`, fields camelCase via `@map` |
 | FK delete rules | → `user`: **RESTRICT, always** (soft delete, P3 D9). → `session`: CASCADE (retention hard-deletes whole sessions). → `participant`: CASCADE (a participant row is removed only with its session; a leaver's row survives, pointing at the tombstone). → `conversation`, `reflection`, `empathy_attempt`, `follow_up`: CASCADE. → `need` from `need_share`: **RESTRICT** (a shared need is delivered content and survives its owner; N-3). → `consent`: nothing references it (P0-3) — a consent row is never deleted by `mwf_app` (no DELETE policy) and goes only with its target/session. → `proposal`: RESTRICT from `agreement`, CASCADE from its own children. → `milestone`: RESTRICT |
 | Every FK | has a supporting index unless it is the leading column of the PK or of a listed unique |
-| `jsonb` | every column carries `CHECK (jsonb_typeof(col) = 'object')` (or `'array'`); documents with a known contract add key-presence checks listed per table |
+| `jsonb` | every column carries `CHECK (jsonb_typeof(col) = 'object')` (or `'array'`); documents with a known contract add key-presence checks listed per table; the five encrypted envelopes add `CHECK (app.jsonb_envelope_ok(col))` and the two plaintext app documents (`user_preferences.doc`, `ai_memory.doc`) a JSON-schema trigger with `doc_schema_version` — [jsonb-shapes-2026-11.md](./jsonb-shapes-2026-11.md) (work-k5fk.8) |
 | Visibility classes | **P** private-to-participant · **S** shared-vessel (all participants of the session) · **U** user-private (outside any session) · **G** global/reference · **T** telemetry |
 | Encryption keys (P3 D5, §8.6) | **user** key (`user_key`) for U-class content; **session** key (`session_key`) for S-class; **participant** key (`participant_key`, the review's refinement of "conversation_key") for P-class; **none** for G/T. **Writer-principal rule (per row, not per table):** anything written for the owner's own eyes is encrypted under that participant's key; anything *delivered to* or *readable by* a co-participant is written (or re-encrypted at the share moment) under the session key by the two-party job. The envelope `enc:v2:<keyId>` names the key per value, so no table needs a key column; the per-column key class below is the rule the writer must follow. Consequence: a conditional co-participant read arm is allowed only on a column that is session-keyed from the moment the arm can be true. **Encryption amendments (TS-13, R46; provisional pending the owner):** the §1 "encrypted" marks are a floor — every column holding free text derived from a participant's or user's content is encrypted. Added beyond the marks: `invitation.decline_reason` (session); `reconciler_result.most_important_gap, rationale, suggested_share_focus/content/reason` (participant, subject); `reconciler_guidance.area_hint, prompt_seed` (participant, author); `proposal.duration, measure_of_success, removal_reason, unresolved_need_labels` (session); `proposal_revision.before/after` (session, jsonb envelope); `agreement.duration, measure_of_success` (session); `user_memory.suggested_text`, `reminder.note` (user). Class readings that differ from the table text: `need_disposition.note` and `mood_reading.context` (table class "none … note/context encrypted") take the participant key. Left plain by ruling: `proposal_revision.reason` (R47: a closed set of app markers, `backend/src/services/proposal-revision-reasons.ts`, filtered by value; any user- or model-derived text of a revision — a chat turn, a removal reason, proposal text — is written into the encrypted `after`/`before`, never into `reason`), `guidance_type`/`cadence` (categories), `reflection.theme`/`takeaway.theme` (taxonomy grouped by SQL), names and identity (`display_name`, `nickname`, `user.*`), `push_token`, `user_preferences.doc`; `brain_activity` (T) holds prompt content and is open for the owner. The map is `backend/src/lib/prisma-encryption-middleware.ts` |
 | RLS shorthand | `me` = `app.current_user_id()` (NULL when unset ⇒ zero rows, fail-closed). `mine(p)` = inline `EXISTS (SELECT 1 FROM participant p WHERE p.id = <col> AND p.user_id = me)` — a *self* check, safe to inline (P3 §2 "inline EXISTS for self-checks"). `member(s)` = `app.is_member(<session>)` and `co(p)` = `app.is_co_participant(<participant>)` — **`SECURITY DEFINER` helpers owned by `mwf_job`, identity-bound to `me`, never inline**: an inline `EXISTS … FROM participant` inside `participant`'s own policy, or inside any policy evaluated while `participant`'s policy is active, raises `infinite recursion detected in policy for relation "participant"` (adversarial P1-1 [V]; P3 §2 "helper functions only where the check is about the partner"). `job` = `current_user IN ('mwf_job','mwf_migrator')`. Four policies per table, `TO mwf_app`, never `ALL` (P3 §2). Columns a read policy trusts are pinned by the write policy and are not in the column `UPDATE` grant (P3 §4). **Column-level narrowing is not available per arm**: grants are per role and the owner reads through the same `mwf_app` role, so a row readable by a co-participant is readable in full — a column the partner must not see lives in a different table (adversarial P0-1; the same failure class as Phase 3's rejected `User_covisible` policy, P3 §2 `User` row) |
@@ -227,7 +227,8 @@ AI working memory: rolling summary, notable facts, consolidated global facts. ·
 | participant_id | uuid | yes | | FK participant CASCADE |
 | user_id | uuid | yes | | FK user RESTRICT |
 | kind | ai_memory_kind | no | | `SUMMARY \| NOTABLE_FACTS \| GLOBAL_FACTS` |
-| doc | jsonb | no | | encrypted; `CHECK jsonb_typeof = 'object'`; `SUMMARY` requires keys `text, messageCount, generatedAt`; `*_FACTS` requires `facts` array |
+| doc | jsonb | no | | encrypted; `CHECK jsonb_typeof = 'object'`; `SUMMARY` requires keys `text, messageCount, generatedAt`; `*_FACTS` requires `facts` array; trigger `t_doc_schema` against `app.json_schema` `ai_memory.<kind>` |
+| doc_schema_version | schema_version (smallint) | no | 1 | the `app.json_schema` version `doc` conforms to (work-k5fk.8) |
 | created_at, updated_at | timestamptz | no | now() | |
 
 Keys: PK. CHECK `num_nonnulls(participant_id, user_id) = 1`; CHECK `(kind = 'GLOBAL_FACTS') = (user_id IS NOT NULL)`. UNIQUE (participant_id, kind) WHERE participant_id IS NOT NULL; UNIQUE (user_id, kind) WHERE user_id IS NOT NULL.
@@ -543,7 +544,7 @@ Append-only audit of proposal changes. · proposals · S · session
 | proposal_id | uuid | no | | FK proposal CASCADE |
 | actor_participant_id | uuid | yes | | FK participant CASCADE; NULL = AI/system |
 | action | revision_action | no | | `CREATED, REVISED, REMOVED, RESTORED, CONVERTED, CAPTURE_SKIPPED, COVERED, SUBCHAT_REFINED` |
-| before, after | jsonb | yes | | `CHECK jsonb_typeof = 'object'` |
+| before, after | jsonb | yes | | `CHECK jsonb_typeof = 'object'`; envelope `CHECK (app.jsonb_envelope_ok(col))` |
 | reason | proposal_revision_reason | yes | | app markers only (R47): `LEGACY_PROPOSED \| LEGACY_CONFIRMED \| MUTUAL_CLOSURE \| EVERY_PARTY_CONFIRMED` (enum, work-gevt; was text) |
 | created_at | timestamptz | no | now() | |
 
@@ -634,7 +635,7 @@ One participant's check-in submission, with its structured answers as a document
 | next_action | next_action | yes | | `FULL_CLOSURE, EXTEND, ADJUST_COMMITMENT, REOPEN_STRATEGY_WORK, NEW_PROCESS, PARTIAL_CLOSURE` |
 | continue_choice | continue_choice | yes | | `ANOTHER_ROUND, EXTEND, NEW_PROCESS, PARTIAL_CLOSURE, FULL_CLOSURE` |
 | reflection_summary | text | yes | | encrypted |
-| payload | jsonb | no | '{}' | encrypted; `CHECK jsonb_typeof = 'object'`; contract `FollowUpCheckinPayload` in `shared/` — keys `entryOutcomes[]`, `needOutcomes[]`, `adjustments[]`, `partialClosures[]`, `responses[]`, `carriedNotes[]` (the between-period notes the participant chose to share, copied in at submit); validated by zod on write |
+| payload | jsonb | no | '{}' | encrypted; `CHECK jsonb_typeof = 'object'`; contract `FollowUpCheckinPayload` in `shared/` — keys `entryOutcomes[]`, `needOutcomes[]`, `adjustments[]`, `partialClosures[]`, `responses[]`, `carriedNotes[]` (the between-period notes the participant chose to share, copied in at submit); validated by zod on write; envelope `CHECK (app.jsonb_envelope_ok(payload))` |
 | submitted_at | timestamptz | no | now() | |
 | created_at | timestamptz | no | now() | |
 
@@ -689,7 +690,7 @@ A private self-reflection thread. · reflection · U · user
 | theme | text | yes | | detected theme: free LLM text, not a taxonomy (grouped by exact string in `v_reflection_theme`) |
 | status | reflection_status | no | 'ACTIVE' | `ACTIVE \| COMPLETED \| ARCHIVED` |
 | summary | text | yes | | encrypted |
-| summary_doc | jsonb | yes | | rolling summary (was JSON-in-text); encrypted; `CHECK jsonb_typeof = 'object'` |
+| summary_doc | jsonb | yes | | rolling summary (was JSON-in-text); encrypted; `CHECK jsonb_typeof = 'object'`; envelope `CHECK (app.jsonb_envelope_ok(summary_doc))` |
 | linked_session_id | uuid | yes | | FK session SET NULL — **context only**; grants no visibility either way |
 | linked_at | timestamptz | yes | | when the link was made (replaces `linkedAtStage`) |
 | context_snapshot | text | yes | | point-in-time partner-session context (encrypted) |
@@ -783,7 +784,8 @@ The three preference documents, one row per user. · user · U · none (settings
 | column | type | null | default | meaning |
 |---|---|---|---|---|
 | user_id | uuid | no | | PK, FK user RESTRICT |
-| doc | jsonb | no | '{}' | `CHECK jsonb_typeof = 'object' AND doc ?& array['memory','notifications','privacy']`; shapes are `MemoryPreferencesDTO`, `NotificationPreferencesDTO`, `PrivacyPreferencesDTO` (`shared/src/dto/auth.ts`) |
+| doc | jsonb | no | '{}' | `CHECK jsonb_typeof = 'object' AND doc ?& array['memory','notifications','privacy']`; shapes are `MemoryPreferencesDTO`, `NotificationPreferencesDTO`, `PrivacyPreferencesDTO` (`shared/src/dto/auth.ts`); trigger `t_doc_schema` against `app.json_schema` `user_preferences` |
+| doc_schema_version | schema_version (smallint) | no | 1 | the `app.json_schema` version `doc` conforms to (work-k5fk.8) |
 | updated_at | timestamptz | no | now() | |
 
 RLS: `user_id = me`. Absorbs: `User.{memoryPreferences, notificationPreferences, privacyPreferences}`.
@@ -810,7 +812,7 @@ One document per wellbeing feature per user (A-Q4). · user · U · user
 |---|---|---|---|---|
 | user_id | uuid | no | | FK user RESTRICT |
 | feature | wellbeing_feature | no | | `meditation \| gratitude \| needs_assessment \| people` (enum, work-gevt; was a CHECK IN list) |
-| doc | jsonb | no | '{}' | encrypted; `CHECK jsonb_typeof = 'object'`; one zod contract per feature in `shared/src/dto/feature-state.ts` (meditation: `sessions[], scripts[], preferences, stats`; gratitude: `entries[], preferences`; needs_assessment: `scores[], state`; people: `persons[]` with `mentions[]`) |
+| doc | jsonb | no | '{}' | encrypted; `CHECK jsonb_typeof = 'object'`; one zod contract per feature in `shared/src/dto/feature-state.ts` (meditation: `sessions[], scripts[], preferences, stats`; gratitude: `entries[], preferences`; needs_assessment: `scores[], state`; people: `persons[]` with `mentions[]`); envelope `CHECK (app.jsonb_envelope_ok(doc))` |
 | updated_at | timestamptz | no | now() | |
 
 Keys: PK (user_id, feature). No other index (never filtered inside the document by SQL — that is the criterion). RLS: `user_id = me`.

@@ -63,6 +63,36 @@ describeTarget('the schema marks exactly the SENSITIVE_FIELD_MAP columns as encr
     expect(sorted(jsonb.map(r => key(r.t, r.c)))).toEqual(want(['jsonb-envelope', 'jsonb-leaves']));
   });
 
+  it('jsonb_envelope_ok CHECKs are exactly the jsonb-envelope columns; the leaves column has the structural trigger (work-k5fk.8)', async () => {
+    const enveloped = await run.sql<{ t: string; c: string }>(
+      `SELECT k.conrelid::regclass::text AS t,
+              substring(pg_get_constraintdef(k.oid) FROM 'app\\.jsonb_envelope_ok\\(([a-z_]+)\\)') AS c
+         FROM pg_constraint k
+        WHERE k.contype = 'c' AND pg_get_constraintdef(k.oid) ~ 'app\\.jsonb_envelope_ok\\('`,
+    );
+    const want = (kind: string) =>
+      sorted(ENCRYPTED_COLUMNS.filter(e => e.kind === kind).map(e => key(e.table, e.column)));
+    expect(sorted(enveloped.map(r => key(r.t, r.c)))).toEqual(want('jsonb-envelope'));
+    expect(want('jsonb-envelope')).toHaveLength(5);
+    const triggered = await run.sql<{ t: string }>(
+      `SELECT c.relname AS t FROM pg_trigger g JOIN pg_class c ON c.oid = g.tgrelid WHERE g.tgname = 't_doc_schema'`,
+    );
+    expect(want('jsonb-leaves').map(k => k.split('.')[0])).toEqual(['ai_memory']);
+    expect(sorted(triggered.map(r => r.t))).toEqual(['ai_memory', 'user_preferences']);
+  });
+
+  it('an envelope holds a real encrypt() output; plaintext in the envelope is refused', async () => {
+    process.env.FIELD_ENCRYPTION_KEY ??= Buffer.alloc(32, 7).toString('base64');
+    const sealed = { $enc: encrypt(JSON.stringify({ entries: [] })) };
+    const ok = async (doc: unknown) =>
+      (await run.sql<{ ok: boolean }>(`SELECT app.jsonb_envelope_ok($1::jsonb) AS ok`, [JSON.stringify(doc)]))[0].ok;
+    expect(await ok(sealed)).toBe(true);
+    expect(await ok({ entries: [] })).toBe(true); // keyless: the plain document
+    expect(await ok({ $enc: 'my journal' })).toBe(false);
+    expect(await ok({ ...sealed, entries: [] })).toBe(false);
+    expect(await ok({ $enc: 'enc:v1:not-an-envelope' })).toBe(false);
+  });
+
   it("every encrypted column's comment names its key class", async () => {
     const comments = await run.sql<{ t: string; c: string; d: string | null }>(
       `SELECT c.relname AS t, a.attname AS c, col_description(c.oid, a.attnum) AS d

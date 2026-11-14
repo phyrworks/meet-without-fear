@@ -69,7 +69,17 @@ const CIPHERTEXT_PLACEHOLDER = '@@CIPHERTEXT_COLUMNS@@';
 const CIPHERTEXT_ARRAYS_PLACEHOLDER = '@@CIPHERTEXT_ARRAYS@@';
 
 /**
- * tables.sql creates exactly the 47 target tables, every name lower-case, and
+ * The jsonb-envelope columns of SENSITIVE_FIELD_MAP, each with
+ * CHECK (app.jsonb_envelope_ok(col)) in tables.sql (work-k5fk.8). Counted like
+ * the ciphertext columns; step 20 ties the CHECKs to the columns whose COMMENT
+ * says 'jsonb envelope', and encryption-at-rest-schema.target.test.ts to the map.
+ */
+export const JSONB_ENVELOPES = 5;
+const JSONB_ENVELOPES_PLACEHOLDER = '@@JSONB_ENVELOPES@@';
+
+/**
+ * tables.sql creates exactly the 47 target tables in schema public (plus the
+ * app.json_schema reference table, which is not one of them), every name lower-case, and
  * types every uuid column uuid7. Returns the counts for the section title.
  */
 export function checkTables(sql: string): { names: number; uuid7: number } {
@@ -80,8 +90,10 @@ export function checkTables(sql: string): { names: number; uuid7: number } {
   for (const m of sql.matchAll(/CONSTRAINT "?([A-Za-z0-9_]+)"?/g)) names.add(m[1]);
   const bad = [...names].filter(n => !/^[a-z_][a-z0-9_]*$/.test(n));
   if (bad.length) throw new Error(`tables.sql creates names that are not lower-case: ${bad.join(', ')}`);
-  const tables = (sql.match(/^CREATE TABLE /gm) ?? []).length;
+  const tables = (sql.match(/^CREATE TABLE (?!app\.)/gm) ?? []).length;
   if (tables !== 47) throw new Error(`tables.sql creates ${tables} tables, expected 47`);
+  const appTables = (sql.match(/^CREATE TABLE app\.[a-z_]+ /gm) ?? []).length;
+  if (appTables !== 1) throw new Error(`tables.sql creates ${appTables} tables in schema app, expected 1 (app.json_schema)`);
   // A column line is `    name <type>…` inside a CREATE TABLE.
   const plainUuid = [...sql.matchAll(/^ {4}"?([a-z0-9_]+)"? uuid\b/gim)].map(m => m[1]);
   if (plainUuid.length) throw new Error(`tables.sql has uuid columns not typed uuid7: ${plainUuid.join(', ')}`);
@@ -91,6 +103,8 @@ export function checkTables(sql: string): { names: number; uuid7: number } {
   if (ct !== CIPHERTEXT_COLUMNS) throw new Error(`tables.sql has ${ct} ciphertext columns, expected ${CIPHERTEXT_COLUMNS}`);
   const ca = (sql.match(/^ {4}CHECK \(app\.all_ciphertext\([a-z0-9_]+\)\)/gm) ?? []).length;
   if (ca !== CIPHERTEXT_ARRAYS) throw new Error(`tables.sql has ${ca} all_ciphertext CHECKs, expected ${CIPHERTEXT_ARRAYS}`);
+  const env = (sql.match(/^ {4}CHECK \(app\.jsonb_envelope_ok\([a-z0-9_]+\)\)/gm) ?? []).length;
+  if (env !== JSONB_ENVELOPES) throw new Error(`tables.sql has ${env} jsonb_envelope_ok CHECKs, expected ${JSONB_ENVELOPES}`);
   return { names: names.size, uuid7 };
 }
 
@@ -103,7 +117,7 @@ function trailer(): string {
   const sqlOnly = fs.readFileSync(SQL_ONLY, 'utf8').replace(/\n$/, '');
   const joined = [...lines.slice(0, at), sqlOnly, ...lines.slice(at + 1)].join('\n');
   if (!joined.includes(UUID7_PLACEHOLDER)) throw new Error(`trailer.sql has no ${UUID7_PLACEHOLDER} placeholder`);
-  for (const p of [CIPHERTEXT_PLACEHOLDER, CIPHERTEXT_ARRAYS_PLACEHOLDER])
+  for (const p of [CIPHERTEXT_PLACEHOLDER, CIPHERTEXT_ARRAYS_PLACEHOLDER, JSONB_ENVELOPES_PLACEHOLDER])
     if (!joined.includes(p)) throw new Error(`trailer.sql has no ${p} placeholder`);
   return joined
     .split(UUID7_PLACEHOLDER)
@@ -111,7 +125,9 @@ function trailer(): string {
     .split(CIPHERTEXT_PLACEHOLDER)
     .join(String(CIPHERTEXT_COLUMNS))
     .split(CIPHERTEXT_ARRAYS_PLACEHOLDER)
-    .join(String(CIPHERTEXT_ARRAYS));
+    .join(String(CIPHERTEXT_ARRAYS))
+    .split(JSONB_ENVELOPES_PLACEHOLDER)
+    .join(String(JSONB_ENVELOPES));
 }
 
 const HEADER = `-- ============================================================================
@@ -158,7 +174,8 @@ const HEADER = `-- =============================================================
 -- SECTIONS
 --   0  preamble: empty-database guard, roles, schema app, app.current_user_id()
 --      (backend/scripts/target-shape/preamble.sql)
---   1  domains (uuid7, ciphertext, ts_ms, intensity, email, milestone_key), enums and the 47
+--   1  domains (uuid7, ciphertext, ts_ms, intensity, email, milestone_key, schema_version),
+--      the jsonb validators' reference table app.json_schema and its seed, enums and the 47
 --      tables, hand-written, each table complete in its CREATE TABLE (and its grants) in
 --      dependency order, the milestone seed after its table
 --      (backend/scripts/target-shape/tables.sql)

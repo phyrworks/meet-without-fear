@@ -183,7 +183,7 @@ async function seedLeaverPrivateRows(h: Harness, adaUser: string): Promise<Recor
       );
       await one(
         'ai_memory/GLOBAL_FACTS',
-        `INSERT INTO ai_memory (user_id, kind, doc) VALUES ($1, 'GLOBAL_FACTS', jsonb_build_object('facts', jsonb_build_array($2::text))) RETURNING id`,
+        `INSERT INTO ai_memory (user_id, kind, doc) VALUES ($1, 'GLOBAL_FACTS', jsonb_build_object('facts', jsonb_build_array(jsonb_build_object('category', 'People', 'fact', $2::text)))) RETURNING id`,
         [adaUser, SEEDED_PRIVATE],
       );
       await one(
