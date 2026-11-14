@@ -6,6 +6,7 @@ import { notifyPartner, notifyPartnerWithFallback, publishSessionCreated } from 
 import { z } from 'zod';
 import { SessionStatus, StageStatus, Stage } from '@meet-without-fear/shared';
 import { successResponse, errorResponse } from '../utils/response';
+import { getPgSqlState } from '../middleware/errors';
 import { generateSessionStatusSummary, departedParticipantUsers, FORMER_PARTICIPANT_NAME } from '../utils/session';
 import { getPartnerParticipant } from '../services/participant-resolver';
 import { loadStageStates, progressDTO } from '../services/stage-shim';
@@ -898,6 +899,12 @@ export async function listPeople(req: Request, res: Response): Promise<void> {
 /**
  * Archive a session
  * POST /sessions/:id/archive
+ *
+ * Through app.session_archive (work-k5fk.10.12), identity-bound on the app
+ * connection: the database checks that the caller is a CURRENT participant of
+ * the session (not a relationship member who never joined, not one who left),
+ * that the session is CREATED, INVITED, RESOLVED or ABANDONED, and records
+ * who archived it and when. mwf_app holds no UPDATE of session.status.
  */
 export async function archiveSession(req: Request, res: Response): Promise<void> {
   try {
@@ -909,43 +916,51 @@ export async function archiveSession(req: Request, res: Response): Promise<void>
 
     const { id } = req.params;
 
-    // Find the session and verify user has access
-    const session = await prisma.session.findFirst({
-      where: {
-        id,
-        relationship: {
-          members: {
-            some: { userId: user.id },
-          },
-        },
-      },
-    });
-
-    if (!session) {
-      errorResponse(res, 'NOT_FOUND', 'Session not found', 404);
-      return;
-    }
-
-    // Only allow archiving of sessions that are RESOLVED, ABANDONED, CREATED, or INVITED
-    const archivableStatuses = ['RESOLVED', 'ABANDONED', 'CREATED', 'INVITED'];
-    if (!archivableStatuses.includes(session.status)) {
-      errorResponse(res, 'VALIDATION_ERROR', 'Only resolved, abandoned, or pending sessions can be archived', 400);
-      return;
-    }
-
-    // Update session status to ARCHIVED
-    const updatedSession = await prisma.session.update({
-      where: { id },
-      data: { status: 'ARCHIVED' },
-    });
+    const [row] = await prisma.$queryRaw<Array<{ archived_at: Date }>>`
+      SELECT app.session_archive(${id}::uuid) AS archived_at`;
 
     successResponse(res, {
       archived: true,
-      archivedAt: updatedSession.updatedAt.toISOString(),
+      archivedAt: row.archived_at.toISOString(),
     });
   } catch (error) {
-    logger.error('[archiveSession] Error:', error);
-    errorResponse(res, 'INTERNAL_ERROR', 'Failed to archive session', 500);
+    const sqlState = getPgSqlState(error);
+    const refusal = archiveRefusal(sqlState);
+    if (refusal) {
+      errorResponse(res, refusal.code, refusal.message, refusal.status);
+      return;
+    }
+    if (sqlState === 'MWA00') {
+      logger.error('[archiveSession] app.session_archive saw no identity (MWA00): the identity binding is off');
+      errorResponse(res, 'INTERNAL_ERROR', 'Failed to archive session', 500);
+      return;
+    }
+    if (sqlState) logger.warn(`[archiveSession] unexpected SQLSTATE ${sqlState} from app.session_archive`);
+    throw error;
+  }
+}
+
+/**
+ * app.session_archive's own refusals (trailer.sql; class MW SQLSTATEs, so a
+ * grant drift or an unrelated CHECK is never one of them) as HTTP answers.
+ * Anything else, MWA00 (no identity) included, is not a refusal: null.
+ */
+export function archiveRefusal(
+  sqlState: string | undefined,
+): { status: 400 | 403 | 404; code: 'VALIDATION_ERROR' | 'FORBIDDEN' | 'NOT_FOUND'; message: string } | null {
+  switch (sqlState) {
+    case 'MWA01': // no such session, or the caller is not a participant of it
+      return { status: 404, code: 'NOT_FOUND', message: 'Session not found' };
+    case 'MWA02': // a participant who left
+      return { status: 403, code: 'FORBIDDEN', message: 'Access to this session denied' };
+    case 'MWA03': // not archivable from its state
+      return {
+        status: 400,
+        code: 'VALIDATION_ERROR',
+        message: 'Only resolved, abandoned, or pending sessions can be archived',
+      };
+    default:
+      return null;
   }
 }
 
