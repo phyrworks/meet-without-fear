@@ -513,10 +513,16 @@ DO $$ DECLARE v uuid; w uuid; BEGIN
   IF w IS DISTINCT FROM v THEN RAISE EXCEPTION 'TEST FAILED: a repeated create_user made a second user'; END IF;
   RAISE NOTICE 'PASS 23c create_user of an existing identity returns its user (concurrent first login), nothing new';
 
+  DECLARE d text;
   BEGIN
     PERFORM app.create_user('clerk', 'user_ts7cMallory', 'a@ts7c.test');
     RAISE EXCEPTION 'TEST FAILED: create_user attached a new identity to the holder of the email';
-  EXCEPTION WHEN unique_violation THEN RAISE NOTICE 'PASS 23d an email held by another account is refused (unique_violation), never re-bound: %', SQLERRM;
+  EXCEPTION WHEN SQLSTATE 'MWF01' THEN
+    GET STACKED DIAGNOSTICS d = PG_EXCEPTION_DETAIL;
+    IF d IS DISTINCT FROM '00000000-0000-7e00-8000-0000000000a1' THEN
+      RAISE EXCEPTION 'TEST FAILED: MWF01 DETAIL is %, expected the holder''s id', d;
+    END IF;
+    RAISE NOTICE 'PASS 23d an email held by another account is refused (MWF01, DETAIL the holder''s id), never re-bound: %', SQLERRM;
   END;
   IF app.resolve_user('clerk', 'user_ts7cMallory') IS NOT NULL THEN
     RAISE EXCEPTION 'TEST FAILED: the refused identity resolves';
@@ -534,9 +540,9 @@ DO $$ DECLARE v uuid; w uuid; BEGIN
   EXCEPTION WHEN check_violation THEN RAISE NOTICE 'PASS 23g a clerk subject must be user_<base62>: %', SQLERRM;
   END;
   BEGIN
-    PERFORM app.create_user('e2e', 'user_ts7cAda2', 'x2@ts7c.test');
-    RAISE EXCEPTION 'TEST FAILED: an e2e identity with a non-e2e subject';
-  EXCEPTION WHEN check_violation THEN RAISE NOTICE 'PASS 23h an e2e subject must be e2e_…: %', SQLERRM;
+    PERFORM app.create_user('e2e', 'e2e_ts7c_signup', 'x2@ts7c.test');
+    RAISE EXCEPTION 'TEST FAILED: create_user signed up an e2e identity';
+  EXCEPTION WHEN SQLSTATE 'MWF02' THEN RAISE NOTICE 'PASS 23h create_user takes the clerk provider only (MWF02): %', SQLERRM;
   END;
   BEGIN
     PERFORM app.create_user('clerk', 'user_ts7cNoMail', NULL);
@@ -562,6 +568,31 @@ DO $$ BEGIN
     RAISE EXCEPTION 'TEST FAILED: a deleted account still resolves';
   END IF;
   RAISE NOTICE 'PASS 23k a deleted account''s subject no longer resolves';
+END $$;
+ROLLBACK;
+
+-- 23l. (review M5, rolled back) the deleted_at filters themselves: Cy is tombstoned
+--      WITHOUT the walk, so his identity row is still there. resolve_user must
+--      not resolve it, and create_user's same-identity arm must not hand the
+--      tombstone back (it raises the identity's unique_violation instead).
+BEGIN;
+UPDATE "user" SET deleted_at = now(), email = 'deleted+' || id || '@invalid', first_name = NULL, last_name = NULL
+WHERE id = '00000000-0000-7e00-8000-0000000000c1';
+SET LOCAL ROLE mwf_auth;
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = current_user AND rolname = 'mwf_auth') THEN
+    RAISE EXCEPTION 'TEST FAILED: setup — not running as mwf_auth';
+  END IF;
+  IF app.resolve_user('clerk', 'user_ts7cCy') IS NOT NULL THEN
+    RAISE EXCEPTION 'TEST FAILED: resolve_user resolved a tombstone whose identity survived';
+  END IF;
+  RAISE NOTICE 'PASS 23l resolve_user ignores a tombstoned user even with its identity present';
+  BEGIN
+    PERFORM app.create_user('clerk', 'user_ts7cCy', 'cy.again@ts7c.test');
+    RAISE EXCEPTION 'TEST FAILED: create_user handed back (or re-created around) a tombstone''s identity';
+  EXCEPTION WHEN unique_violation THEN
+    RAISE NOTICE 'PASS 23m create_user does not return a tombstone for its surviving identity (unique_violation): %', SQLERRM;
+  END;
 END $$;
 ROLLBACK;
 
@@ -609,6 +640,31 @@ DO $$ BEGIN
     INSERT INTO user_identity (provider, subject, user_id) VALUES ('e2e', 'e2e_ts7c_third', '00000000-0000-7e00-8000-0000000000a1');
     RAISE EXCEPTION 'TEST FAILED: two identities of one provider on one user';
   EXCEPTION WHEN unique_violation THEN RAISE NOTICE 'PASS 22h one identity per provider per user: %', SQLERRM;
+  END;
+  BEGIN
+    INSERT INTO user_identity (provider, subject, user_id) VALUES ('e2e', 'user_ts7cAda2', '00000000-0000-7e00-8000-0000000000b1');
+    RAISE EXCEPTION 'TEST FAILED: an e2e identity with a non-e2e subject';
+  EXCEPTION WHEN check_violation THEN RAISE NOTICE 'PASS 22i an e2e subject must be e2e_…: %', SQLERRM;
+  END;
+  BEGIN
+    UPDATE "user" SET email = 'deleted+' || id || '@invalid' WHERE id = '00000000-0000-7e00-8000-0000000000a1';
+    RAISE EXCEPTION 'TEST FAILED: a live account holds a deleted+…@invalid address';
+  EXCEPTION WHEN check_violation THEN RAISE NOTICE 'PASS 22j a live account cannot hold a tombstone address (review L1): %', SQLERRM;
+  END;
+  BEGIN
+    UPDATE "user" SET deleted_at = now() WHERE id = '00000000-0000-7e00-8000-0000000000a1';
+    RAISE EXCEPTION 'TEST FAILED: a tombstone keeps a real address';
+  EXCEPTION WHEN check_violation THEN RAISE NOTICE 'PASS 22k a tombstone cannot keep a real address: %', SQLERRM;
+  END;
+  BEGIN
+    UPDATE "user" SET first_name = 'Hal' WHERE id = app.ai_user_id();
+    RAISE EXCEPTION 'TEST FAILED: the AI row named';
+  EXCEPTION WHEN check_violation THEN RAISE NOTICE 'PASS 22l the AI row has no name: %', SQLERRM;
+  END;
+  BEGIN
+    UPDATE "user" SET deleted_at = now() WHERE id = app.ai_user_id();
+    RAISE EXCEPTION 'TEST FAILED: the AI row deleted';
+  EXCEPTION WHEN check_violation THEN RAISE NOTICE 'PASS 22m the AI row is never deleted: %', SQLERRM;
   END;
 END $$;
 -- 19. app.session_archive (work-k5fk.10.12): only a CURRENT participant of the

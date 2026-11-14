@@ -576,13 +576,21 @@ COMMENT ON FUNCTION app.resolve_user(public.identity_provider, text) IS 'The liv
 REVOKE EXECUTE ON FUNCTION app.resolve_user(public.identity_provider, text) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION app.resolve_user(public.identity_provider, text) TO mwf_auth;
 
--- app.create_user: the human row and its identity, in one call. A
--- unique_violation is resolved in exactly one way: the SAME identity was
--- created by a concurrent first login — return its user. Otherwise the email
--- belongs to another account and the original error is re-raised (the caller
--- answers 409 ACCOUNT_LINK_CONFLICT; nothing is re-bound). If neither holds
--- any more (the holder was tombstoned in between), the insert is tried once
--- more; a second collision is re-raised the same way.
+-- app.create_user: the human row and its identity, in one call, for the
+-- clerk provider only (the E2E bypass's e2e identities are written by the
+-- tooling connection, never through this function: refused with MWF02). A
+-- unique_violation is resolved in exactly one way: the SAME identity of a live
+-- user was created by a concurrent first login — return its user. If the
+-- email belongs to another account, refuse with SQLSTATE MWF01 and the
+-- holder's id as DETAIL (for the caller's auth.identity_conflict log only —
+-- never a decision input, never the email); nothing is re-bound. If neither
+-- holds any more (the holder was tombstoned in between), the insert is tried
+-- once more; a second collision re-raises the original unique_violation.
+-- Class MW is the app's own (session_archive uses MWA00–MWA03).
+-- NOTE: mwf_job owns this function and holds INSERT/DELETE on user_identity
+-- and UPDATE (email) on "user", so the job login itself could re-bind an
+-- account directly; that goes with the definer re-owning (design note §7
+-- rows 9a–9c), not here.
 CREATE FUNCTION app.create_user(provider public.identity_provider, subject text, email text,
                                 first_name text DEFAULT NULL, last_name text DEFAULT NULL)
   RETURNS uuid
@@ -593,6 +601,9 @@ CREATE FUNCTION app.create_user(provider public.identity_provider, subject text,
     v_id     uuid;
     v_holder uuid;
   BEGIN
+    IF create_user.provider IS DISTINCT FROM 'clerk' THEN
+      RAISE EXCEPTION 'create_user: only the clerk provider signs up here' USING ERRCODE = 'MWF02';
+    END IF;
     FOR attempt IN 1..2 LOOP
       BEGIN
         INSERT INTO public."user" (email, first_name, last_name)
@@ -607,9 +618,8 @@ CREATE FUNCTION app.create_user(provider public.identity_provider, subject text,
         IF FOUND THEN RETURN v_id; END IF;
         SELECT u.id INTO v_holder FROM public."user" u WHERE u.email = create_user.email;
         IF FOUND THEN
-          -- ids only (no email: messages reach logs): the caller logs auth.identity_conflict with the holder's id
-          RAISE EXCEPTION 'first login refused: the email belongs to user % (unique constraint "user_email_key")', v_holder
-            USING ERRCODE = 'unique_violation', CONSTRAINT = 'user_email_key';
+          RAISE EXCEPTION 'first login refused: the email belongs to another account'
+            USING ERRCODE = 'MWF01', DETAIL = v_holder::text;
         END IF;
         IF attempt = 2 THEN RAISE; END IF;
       END;
@@ -617,7 +627,7 @@ CREATE FUNCTION app.create_user(provider public.identity_provider, subject text,
     RETURN NULL;  -- not reached: the second attempt returns or raises
   END
   $$;
-COMMENT ON FUNCTION app.create_user(public.identity_provider, text, text, text, text) IS 'First login: a human user (canonical email) and its (provider, subject) identity. The same identity created concurrently returns that user; an email held by another account raises unique_violation (constraint user_email_key, the holder''s id in the message, never the email) — never a re-bind.';
+COMMENT ON FUNCTION app.create_user(public.identity_provider, text, text, text, text) IS 'First login (clerk only; MWF02 otherwise): a human user (canonical email) and its identity. The same identity of a live user created concurrently returns that user; an email held by another account raises MWF01 with the holder''s id as DETAIL (for logging only) — never a re-bind.';
 -- mwf_auth only: first-login creation.
 REVOKE EXECUTE ON FUNCTION app.create_user(public.identity_provider, text, text, text, text) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION app.create_user(public.identity_provider, text, text, text, text) TO mwf_auth;

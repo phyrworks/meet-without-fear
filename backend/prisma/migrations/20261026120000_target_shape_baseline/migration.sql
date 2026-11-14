@@ -122,7 +122,7 @@ REVOKE EXECUTE ON FUNCTION app.current_user_id() FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION app.current_user_id() TO mwf_app, mwf_job, mwf_ops, mwf_auth;
 
 -- ============================================================================
--- 1. Domains, enums and the 49 target tables (backend/scripts/target-shape/tables.sql; 124 named objects, all lower-case; 133 uuid7 columns)
+-- 1. Domains, enums and the 49 target tables (backend/scripts/target-shape/tables.sql; 126 named objects, all lower-case; 133 uuid7 columns)
 -- ============================================================================
 
 -- ============================================================================
@@ -390,7 +390,7 @@ COMMENT ON TYPE session_status IS 'Lifecycle of a session. Written only by app.s
 CREATE TYPE user_kind AS ENUM ('human', 'ai', 'persona');
 COMMENT ON TYPE user_kind IS 'What a user row is (work-k5fk.1/.3): human, a person who signs in (an email, a user_identity); ai, the one AI principal (seeded, app.ai_user_id()); persona, a modeled person a human created (persona row: its owner). Only a human has an email or an identity.';
 CREATE TYPE identity_provider AS ENUM ('clerk', 'e2e');
-COMMENT ON TYPE identity_provider IS 'Who vouches for a user_identity: clerk, the production sign-in (a verified JWT sub); e2e, the E2E auth bypass (E2E_AUTH_BYPASS with NODE_ENV test or development only, lib/e2e-bypass.ts; never production).';
+COMMENT ON TYPE identity_provider IS 'Who vouches for a user_identity: clerk, the production sign-in (a verified JWT sub); e2e, the E2E auth bypass (E2E_AUTH_BYPASS with NODE_ENV test, development or e2e only, lib/e2e-bypass.ts; never production).';
 CREATE TYPE participant_kind AS ENUM ('human', 'modeled');
 COMMENT ON TYPE participant_kind IS 'human: a participant backed by a user; modeled: an imagined participant with no user row (user_id IS NULL).';
 CREATE TYPE conversation_kind AS ENUM ('MAIN', 'SUBCHAT');
@@ -545,13 +545,20 @@ CREATE TABLE "user" (
     -- (.invalid is reserved, RFC 2606: never a real address; the uuid text
     -- is lowercase, so the value is canonical). app.anonymize_user_account
     -- writes exactly 'deleted+' || id || '@invalid' and deletes the user's
-    -- user_identity rows. A scrubbed persona has no email to scrub.
-    CHECK (deleted_at IS NULL OR kind <> 'human' OR email COLLATE "C" LIKE 'deleted+%@invalid')
+    -- user_identity rows. An equivalence for a human (review L1): a live
+    -- account can never hold a deleted+…@invalid address either (one did, and
+    -- blocked the victim's own tombstone through the UNIQUE). A scrubbed
+    -- persona has no email to scrub.
+    CONSTRAINT user_tombstone CHECK (kind <> 'human' OR (deleted_at IS NOT NULL) = (email COLLATE "C" LIKE 'deleted+%@invalid')),
+    -- The AI principal is a constant: never deleted, never named.
+    CONSTRAINT user_ai_constant CHECK (kind <> 'ai' OR (deleted_at IS NULL AND first_name IS NULL AND last_name IS NULL))
 );
 COMMENT ON TABLE "user" IS 'Identity only: one row per principal — a human account (signs in through user_identity), the one AI row, or a persona (persona table) — soft-deleted to a scrubbed tombstone. Every FK to it is RESTRICT; session data hangs off participant, not off user.';
 COMMENT ON COLUMN "user".kind IS 'human, ai or persona (user_kind). A child that must point at one kind references (id, kind) (pattern K).';
 COMMENT ON COLUMN "user".email IS 'Sign-in email in canonical form (domain email: trimmed, NFC, lowercase), unique: a case variant is the same canonical value, a plus-address a different one. Set exactly for a human, NULL for ai and persona. A tombstone holds the scrubbed address deleted+<id>@invalid.';
 COMMENT ON COLUMN "user".name IS 'Generated display name: first_name and last_name joined, NULL when both are empty.';
+COMMENT ON CONSTRAINT user_tombstone ON "user" IS 'A human is deleted exactly when its email is the scrubbed deleted+<id>@invalid: a live account cannot hold such an address, a tombstone cannot keep a real one.';
+COMMENT ON CONSTRAINT user_ai_constant ON "user" IS 'The AI principal is never deleted and has no name: its row is a constant the baseline seeds (app.ai_user_id()).';
 COMMENT ON COLUMN "user".deleted_at IS 'Soft delete (P3 D9): the row becomes a scrubbed tombstone and is never removed.';
 -- mwf_app: every request reads its user (auth middleware, by id after mwf_auth's app.resolve_user) and its partner's
 -- names; the profile edit sets the names (controllers/auth.ts). No INSERT, and never id, kind, email or deleted_at
@@ -589,7 +596,6 @@ CREATE TABLE user_identity (
     user_id uuid7 NOT NULL,
     user_kind user_kind NOT NULL DEFAULT 'human' CHECK (user_kind = 'human'),
     created_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    last_seen_at ts_ms,
 
     PRIMARY KEY (provider, subject),
     -- One identity per provider per user: a second Clerk account can never be
@@ -608,7 +614,8 @@ CREATE TABLE user_identity (
 COMMENT ON TABLE user_identity IS 'How a human signs in (work-k5fk.1): one row per (provider, subject), the provider''s own user id, pointing at exactly one human user (pattern K) and at most one per provider. Written only by app.create_user (first login) and deleted by app.anonymize_user_account; mwf_app holds no privilege on it.';
 COMMENT ON COLUMN user_identity.subject IS 'The provider''s user id: for clerk the verified JWT sub (user_…), for e2e the bypass''s e2e_… id.';
 COMMENT ON COLUMN user_identity.user_kind IS 'Always human: pins the FK (user_id, user_kind) to a human user row (pattern K).';
-COMMENT ON COLUMN user_identity.last_seen_at IS 'Reserved for the last sign-in through this identity; nothing writes it yet.';
+COMMENT ON COLUMN user_identity.provider IS 'Who vouches for the subject (identity_provider): clerk in production; e2e only for the E2E bypass, written by the tooling connection (never app.create_user, which takes clerk only).';
+COMMENT ON COLUMN user_identity.user_id IS 'The human this identity signs in as; at most one identity per provider per user (UNIQUE (user_id, provider)).';
 COMMENT ON CONSTRAINT user_identity_clerk_subject ON user_identity IS 'A Clerk subject is user_ and 1-64 base62 characters. Clerk issues user_ + a 27-character KSUID, but its API reference does not promise that length, so it is bounded, not pinned.';
 COMMENT ON CONSTRAINT user_identity_e2e_subject ON user_identity IS 'An E2E-bypass subject is e2e_ and 1-64 of [a-z0-9_-] (e2e_<uuid>, e2e_<ms>_<random>). The e2e provider is never used in production (lib/e2e-bypass.ts).';
 -- mwf_app: nothing (work-bp5m). A request resolves its subject through mwf_auth's app.resolve_user and never reads,
@@ -637,6 +644,8 @@ CREATE TABLE persona (
 );
 CREATE INDEX ON persona (owner_user_id);
 COMMENT ON TABLE persona IS 'A modeled person (work-k5fk.3; owner decision Q2: a table, so "user" stays identity-only): the persona''s user row (kind persona) and the human who created it, both ends pinned by kind (pattern K). The owner''s account deletion scrubs it (app.anonymize_user_account).';
+COMMENT ON COLUMN persona.user_id IS 'The persona''s own user row (kind persona): the principal that is seated in a session.';
+COMMENT ON COLUMN persona.owner_user_id IS 'The human who created the persona; its account deletion scrubs the persona.';
 COMMENT ON COLUMN persona.kind IS 'Always persona: pins the FK (user_id, kind) to a persona user row (pattern K).';
 COMMENT ON COLUMN persona.owner_kind IS 'Always human: pins the FK (owner_user_id, owner_kind) to a human user row (pattern K).';
 -- mwf_app: nothing yet — no request creates or reads a persona until the modeled-participant paths move onto it (design note §3).
@@ -2785,13 +2794,21 @@ COMMENT ON FUNCTION app.resolve_user(public.identity_provider, text) IS 'The liv
 REVOKE EXECUTE ON FUNCTION app.resolve_user(public.identity_provider, text) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION app.resolve_user(public.identity_provider, text) TO mwf_auth;
 
--- app.create_user: the human row and its identity, in one call. A
--- unique_violation is resolved in exactly one way: the SAME identity was
--- created by a concurrent first login — return its user. Otherwise the email
--- belongs to another account and the original error is re-raised (the caller
--- answers 409 ACCOUNT_LINK_CONFLICT; nothing is re-bound). If neither holds
--- any more (the holder was tombstoned in between), the insert is tried once
--- more; a second collision is re-raised the same way.
+-- app.create_user: the human row and its identity, in one call, for the
+-- clerk provider only (the E2E bypass's e2e identities are written by the
+-- tooling connection, never through this function: refused with MWF02). A
+-- unique_violation is resolved in exactly one way: the SAME identity of a live
+-- user was created by a concurrent first login — return its user. If the
+-- email belongs to another account, refuse with SQLSTATE MWF01 and the
+-- holder's id as DETAIL (for the caller's auth.identity_conflict log only —
+-- never a decision input, never the email); nothing is re-bound. If neither
+-- holds any more (the holder was tombstoned in between), the insert is tried
+-- once more; a second collision re-raises the original unique_violation.
+-- Class MW is the app's own (session_archive uses MWA00–MWA03).
+-- NOTE: mwf_job owns this function and holds INSERT/DELETE on user_identity
+-- and UPDATE (email) on "user", so the job login itself could re-bind an
+-- account directly; that goes with the definer re-owning (design note §7
+-- rows 9a–9c), not here.
 CREATE FUNCTION app.create_user(provider public.identity_provider, subject text, email text,
                                 first_name text DEFAULT NULL, last_name text DEFAULT NULL)
   RETURNS uuid
@@ -2802,6 +2819,9 @@ CREATE FUNCTION app.create_user(provider public.identity_provider, subject text,
     v_id     uuid;
     v_holder uuid;
   BEGIN
+    IF create_user.provider IS DISTINCT FROM 'clerk' THEN
+      RAISE EXCEPTION 'create_user: only the clerk provider signs up here' USING ERRCODE = 'MWF02';
+    END IF;
     FOR attempt IN 1..2 LOOP
       BEGIN
         INSERT INTO public."user" (email, first_name, last_name)
@@ -2816,9 +2836,8 @@ CREATE FUNCTION app.create_user(provider public.identity_provider, subject text,
         IF FOUND THEN RETURN v_id; END IF;
         SELECT u.id INTO v_holder FROM public."user" u WHERE u.email = create_user.email;
         IF FOUND THEN
-          -- ids only (no email: messages reach logs): the caller logs auth.identity_conflict with the holder's id
-          RAISE EXCEPTION 'first login refused: the email belongs to user % (unique constraint "user_email_key")', v_holder
-            USING ERRCODE = 'unique_violation', CONSTRAINT = 'user_email_key';
+          RAISE EXCEPTION 'first login refused: the email belongs to another account'
+            USING ERRCODE = 'MWF01', DETAIL = v_holder::text;
         END IF;
         IF attempt = 2 THEN RAISE; END IF;
       END;
@@ -2826,7 +2845,7 @@ CREATE FUNCTION app.create_user(provider public.identity_provider, subject text,
     RETURN NULL;  -- not reached: the second attempt returns or raises
   END
   $$;
-COMMENT ON FUNCTION app.create_user(public.identity_provider, text, text, text, text) IS 'First login: a human user (canonical email) and its (provider, subject) identity. The same identity created concurrently returns that user; an email held by another account raises unique_violation (constraint user_email_key, the holder''s id in the message, never the email) — never a re-bind.';
+COMMENT ON FUNCTION app.create_user(public.identity_provider, text, text, text, text) IS 'First login (clerk only; MWF02 otherwise): a human user (canonical email) and its identity. The same identity of a live user created concurrently returns that user; an email held by another account raises MWF01 with the holder''s id as DETAIL (for logging only) — never a re-bind.';
 -- mwf_auth only: first-login creation.
 REVOKE EXECUTE ON FUNCTION app.create_user(public.identity_provider, text, text, text, text) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION app.create_user(public.identity_provider, text, text, text, text) TO mwf_auth;
