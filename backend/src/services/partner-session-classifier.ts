@@ -431,7 +431,7 @@ function normalizeCategory(category: string): string {
 /**
  * Validate a fact object has required fields
  */
-function isValidFact(f: unknown): f is { category: string; fact: string; id?: string } {
+function isValidFact(f: unknown): f is { category: string; fact: string; id?: unknown } {
   if (typeof f !== 'object' || f === null) return false;
   const obj = f as Record<string, unknown>;
   return (
@@ -443,10 +443,24 @@ function isValidFact(f: unknown): f is { category: string; fact: string; id?: st
 }
 
 /**
+ * A fact id the model returned, as a string: an all-digit short id comes back
+ * as a JSON number about 0.17% of the time, and the NOTABLE_FACTS document's
+ * json_schema (ai_memory.notable_facts, `id: string`) refuses the whole
+ * document otherwise. Anything else (an object, a boolean, NaN, a blank) is
+ * no id at all.
+ */
+function factId(id: unknown): string | undefined {
+  if (typeof id === 'number' && Number.isFinite(id)) return String(id);
+  if (typeof id === 'string' && id.trim().length > 0) return id.trim();
+  return undefined;
+}
+
+/**
  * Normalize the classifier response.
  * Handles both new diff-based format (upsert/delete) and legacy format (notableFacts array).
+ * @internal Exported for testing
  */
-function normalizeResult(raw: unknown): PartnerSessionClassifierResult {
+export function normalizeResult(raw: unknown): PartnerSessionClassifierResult {
   const result = raw as Record<string, unknown>;
   const topicContext = result.topicContext as string | undefined;
 
@@ -457,15 +471,14 @@ function normalizeResult(raw: unknown): PartnerSessionClassifierResult {
 
   if (usedDiffFormat) {
     // New diff-based format
-    const upsert = ((result.upsert as unknown[]) || []).filter(isValidFact).map(f => ({
-      ...(f.id ? { id: f.id } : {}),
-      category: normalizeCategory(f.category),
-      fact: f.fact.trim(),
-    }));
+    const upsert = ((result.upsert as unknown[]) || []).filter(isValidFact).map(f => {
+      const id = factId(f.id);
+      return { ...(id ? { id } : {}), category: normalizeCategory(f.category), fact: f.fact.trim() };
+    });
 
     const deleteIds = ((result.delete as unknown[]) || [])
-      .filter((id): id is string => typeof id === 'string' && id.trim().length > 0)
-      .map(id => id.trim());
+      .map(factId)
+      .filter((id): id is string => id !== undefined);
 
     return {
       topicContext,

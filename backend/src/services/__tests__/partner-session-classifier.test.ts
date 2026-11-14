@@ -14,6 +14,7 @@ import {
   generateRandomShortId,
   createIdMapping,
   resolveShortIds,
+  normalizeResult,
   CategorizedFactWithId,
   FactUpdatePayload,
   IdMapping,
@@ -367,5 +368,48 @@ describe('applyFactUpdates', () => {
 
     expect(result1).toEqual(existingFacts);
     expect(result2).toEqual(existingFacts);
+  });
+});
+
+// ============================================================================
+// normalizeResult: the model's ids (work-k5fk.8 review M1)
+// ============================================================================
+
+describe('normalizeResult fact ids', () => {
+  it('turns a numeric id into a string, so the NOTABLE_FACTS schema (id: string) accepts the document', () => {
+    const out = normalizeResult({
+      upsert: [
+        { id: 12345, category: 'people', fact: ' Alex is a sibling ' },
+        { id: 'ab3x9', category: 'Conflict', fact: 'f' },
+      ],
+      delete: [67890, ' k2p0q ', '', null],
+    });
+    expect(out.factUpdates?.upsert).toEqual([
+      { id: '12345', category: 'People', fact: 'Alex is a sibling' },
+      { id: 'ab3x9', category: 'Conflict', fact: 'f' },
+    ]);
+    expect(out.factUpdates?.delete).toEqual(['67890', 'k2p0q']);
+  });
+
+  it('drops an id that is neither a string nor a finite number (the fact becomes a new one)', () => {
+    const out = normalizeResult({
+      upsert: [
+        { id: { x: 1 }, category: 'People', fact: 'a' },
+        { id: true, category: 'People', fact: 'b' },
+        { id: Number.NaN, category: 'People', fact: 'c' },
+        { id: '  ', category: 'People', fact: 'd' },
+      ],
+    });
+    expect(out.factUpdates?.upsert).toHaveLength(4);
+    for (const f of out.factUpdates!.upsert) expect(f).not.toHaveProperty('id');
+  });
+
+  it('an all-digit short id the model returns as a number still resolves to its full id', () => {
+    const full = '01900000-0000-7000-8000-000000000001';
+    const mapping: IdMapping = { shortToFull: new Map([['12345', full]]), fullToShort: new Map([[full, '12345']]) };
+    const out = normalizeResult({ upsert: [{ id: 12345, category: 'People', fact: 'f' }], delete: [12345] });
+    const resolved = resolveShortIds(out.factUpdates!, mapping);
+    expect(resolved.upsert[0].id).toBe(full);
+    expect(resolved.delete).toEqual([full]);
   });
 });
