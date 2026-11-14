@@ -8,7 +8,7 @@
  *     left, nor an outsider);
  *   - only from an archivable state (CREATED, INVITED, RESOLVED, ABANDONED);
  *   - the archiver and the instant are recorded on the session
- *     (archived_by_participant_id, archived_at);
+ *     (archived_by_user_id, archived_at);
  *   - mwf_app cannot write session.status (or the archive columns) directly,
  *     and app.session_set_status no longer archives for it.
  *
@@ -72,11 +72,10 @@ describeTarget('session archive on the target, as mwf_app', () => {
         other,
       ]);
       await run.sql(`INSERT INTO session (id, relationship_id, status) VALUES ($1, $2, 'INVITED')`, [session, rel]);
-      await run.sql(`INSERT INTO participant (session_id, user_id, display_name) VALUES ($1, $2, 'Ada'), ($1, $3, 'Other')`, [
-        session,
-        ada.id,
-        other,
-      ]);
+      await run.sql(
+        `INSERT INTO participant (session_id, user_id, display_name) VALUES ($1, $2, 'Ada'), ($1, $3, 'Other')`,
+        [session, ada.id, other],
+      );
       await run.as('mwf_job', null, `SELECT app.session_set_status($1::uuid, 'ACTIVE')`, [session]);
     }
     await run.as('mwf_job', null, `SELECT app.session_set_status($1::uuid, 'ABANDONED')`, [left]);
@@ -131,9 +130,7 @@ describeTarget('session archive on the target, as mwf_app', () => {
   it('mwf_app cannot write session.status or the archive columns directly, nor archive through session_set_status', async () => {
     expect(await asApp(ada.id, `UPDATE session SET status = 'ARCHIVED' WHERE id = $1`, [left])).toBe('42501');
     expect(await asApp(ada.id, `UPDATE session SET archived_at = now() WHERE id = $1`, [left])).toBe('42501');
-    expect(
-      await asApp(ada.id, `UPDATE session SET archived_by_participant_id = NULL WHERE id = $1`, [left]),
-    ).toBe('42501');
+    expect(await asApp(ada.id, `UPDATE session SET archived_by_user_id = NULL WHERE id = $1`, [left])).toBe('42501');
     expect(await asApp(ada.id, `SELECT app.session_set_status($1::uuid, 'ARCHIVED')`, [left])).toBe('42501');
     expect(await status(left)).toBe('ABANDONED');
   });
@@ -143,19 +140,21 @@ describeTarget('session archive on the target, as mwf_app', () => {
     expect(r.status).toBe(200);
     expect(r.body.data.archived).toBe(true);
     const [row] = await run.sql<{ status: string; archived_by: string; archived_at: Date }>(
-      `SELECT status::text AS status, archived_by_participant_id AS archived_by, archived_at FROM session WHERE id = $1`,
+      `SELECT status::text AS status, archived_by_user_id AS archived_by, archived_at FROM session WHERE id = $1`,
       [ids.session],
     );
     expect(row.status).toBe('ARCHIVED');
-    expect(row.archived_by).toBe(ids.ada);
+    expect(row.archived_by).toBe(ada.id);
     expect(new Date(r.body.data.archivedAt).toISOString()).toBe(row.archived_at.toISOString());
 
     // the ABANDONED session by its remaining participant, through the function as mwf_app
-    const [{ at }] = await run.as<{ at: Date }>('mwf_app', ada.id, `SELECT app.session_archive($1::uuid) AS at`, [left]);
+    const [{ at }] = await run.as<{ at: Date }>('mwf_app', ada.id, `SELECT app.session_archive($1::uuid) AS at`, [
+      left,
+    ]);
     expect(
       await run.sql(
-        `SELECT s.status::text AS status, p.user_id AS by, s.archived_at = $2::timestamptz AS same
-         FROM session s JOIN participant p ON p.id = s.archived_by_participant_id WHERE s.id = $1`,
+        `SELECT s.status::text AS status, s.archived_by_user_id AS by, s.archived_at = $2::timestamptz AS same
+         FROM session s WHERE s.id = $1`,
         [left, at],
       ),
     ).toEqual([{ status: 'ARCHIVED', by: ada.id, same: true }]);

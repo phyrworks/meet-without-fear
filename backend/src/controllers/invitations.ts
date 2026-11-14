@@ -6,6 +6,7 @@ import { notifyPartner, notifyPartnerWithFallback, publishSessionCreated } from 
 import { z } from 'zod';
 import { SessionStatus, StageStatus, Stage } from '@meet-without-fear/shared';
 import { successResponse, errorResponse } from '../utils/response';
+import { getPgSqlState } from '../middleware/errors';
 import { generateSessionStatusSummary, departedParticipantUsers, FORMER_PARTICIPANT_NAME } from '../utils/session';
 import { getPartnerParticipant } from '../services/participant-resolver';
 import { loadStageStates, progressDTO } from '../services/stage-shim';
@@ -898,6 +899,12 @@ export async function listPeople(req: Request, res: Response): Promise<void> {
 /**
  * Archive a session
  * POST /sessions/:id/archive
+ *
+ * Through app.session_archive (work-k5fk.10.12), identity-bound on the app
+ * connection: the database checks that the caller is a CURRENT participant of
+ * the session (not a relationship member who never joined, not one who left),
+ * that the session is CREATED, INVITED, RESOLVED or ABANDONED, and records
+ * who archived it and when. mwf_app holds no UPDATE of session.status.
  */
 export async function archiveSession(req: Request, res: Response): Promise<void> {
   try {
@@ -909,41 +916,26 @@ export async function archiveSession(req: Request, res: Response): Promise<void>
 
     const { id } = req.params;
 
-    // Find the session and verify user has access
-    const session = await prisma.session.findFirst({
-      where: {
-        id,
-        relationship: {
-          members: {
-            some: { userId: user.id },
-          },
-        },
-      },
-    });
-
-    if (!session) {
-      errorResponse(res, 'NOT_FOUND', 'Session not found', 404);
-      return;
-    }
-
-    // Only allow archiving of sessions that are RESOLVED, ABANDONED, CREATED, or INVITED
-    const archivableStatuses = ['RESOLVED', 'ABANDONED', 'CREATED', 'INVITED'];
-    if (!archivableStatuses.includes(session.status)) {
-      errorResponse(res, 'VALIDATION_ERROR', 'Only resolved, abandoned, or pending sessions can be archived', 400);
-      return;
-    }
-
-    // Update session status to ARCHIVED
-    const updatedSession = await prisma.session.update({
-      where: { id },
-      data: { status: 'ARCHIVED' },
-    });
+    const [row] = await prisma.$queryRaw<Array<{ archived_at: Date }>>`
+      SELECT app.session_archive(${id}::uuid) AS archived_at`;
 
     successResponse(res, {
       archived: true,
-      archivedAt: updatedSession.updatedAt.toISOString(),
+      archivedAt: row.archived_at.toISOString(),
     });
   } catch (error) {
+    switch (getPgSqlState(error)) {
+      case 'P0002': // no such session, or the caller is not a participant of it
+      case '22P02': // not a uuid
+        errorResponse(res, 'NOT_FOUND', 'Session not found', 404);
+        return;
+      case '42501': // a participant who left
+        errorResponse(res, 'FORBIDDEN', 'Access to this session denied', 403);
+        return;
+      case '23514': // not archivable from its state
+        errorResponse(res, 'VALIDATION_ERROR', 'Only resolved, abandoned, or pending sessions can be archived', 400);
+        return;
+    }
     logger.error('[archiveSession] Error:', error);
     errorResponse(res, 'INTERNAL_ERROR', 'Failed to archive session', 500);
   }

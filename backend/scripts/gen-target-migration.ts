@@ -52,7 +52,7 @@ const INCLUDE = '-- @@include sql-only.sql';
  * `@@UUID7_COLUMNS@@` placeholders in the trailer's step-20 assertion, so the
  * two cannot drift.
  */
-export const UUID7_COLUMNS = 129;
+export const UUID7_COLUMNS = 130;
 const UUID7_PLACEHOLDER = '@@UUID7_COLUMNS@@';
 
 /**

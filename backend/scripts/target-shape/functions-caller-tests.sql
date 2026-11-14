@@ -472,12 +472,12 @@ DO $$ DECLARE v_at timestamptz; BEGIN
   PERFORM set_config('app.current_user_id', '00000000-0000-7e00-8000-0000000000c1', true);
   v_at := app.session_archive('00000000-0000-7e00-8000-0000000005e1');
   IF NOT EXISTS (SELECT 1 FROM session WHERE id = '00000000-0000-7e00-8000-0000000005e1' AND status = 'ARCHIVED'
-                 AND archived_by_participant_id = '00000000-0000-7e00-8000-0000000007c1' AND archived_at = v_at) THEN
+                 AND archived_by_user_id = '00000000-0000-7e00-8000-0000000000c1' AND archived_at = v_at) THEN
     RAISE EXCEPTION 'TEST FAILED: X not archived by C at %', v_at;
   END IF;
   PERFORM app.session_archive('00000000-0000-7e00-8000-0000000005e2');
   IF NOT EXISTS (SELECT 1 FROM session WHERE id = '00000000-0000-7e00-8000-0000000005e2' AND status = 'ARCHIVED'
-                 AND archived_by_participant_id = '00000000-0000-7e00-8000-0000000007c2' AND archived_at IS NOT NULL) THEN
+                 AND archived_by_user_id = '00000000-0000-7e00-8000-0000000000c1' AND archived_at IS NOT NULL) THEN
     RAISE EXCEPTION 'TEST FAILED: Y not archived by C';
   END IF;
   RAISE NOTICE 'PASS 19i a current participant archives RESOLVED X and CREATED Y; archived_by and archived_at recorded';
@@ -490,13 +490,13 @@ END $$;
 \connect - mwf_job
 SELECT 'connected as ' || session_user || ' (current_user ' || current_user || ')';
 -- 19k. the job (session-retention.ts) still archives through session_set_status: archived_at, no archiver;
---      and the retention purge of an archived session cascades past archived_by_participant_id (rolled back)
+--      and the retention purge of an archived session is not blocked by the archive columns (rolled back)
 BEGIN;
 DO $$ BEGIN
   PERFORM app.session_set_status('00000000-0000-7e00-8000-0000000005e6', 'ABANDONED');
   PERFORM app.session_set_status('00000000-0000-7e00-8000-0000000005e6', 'ARCHIVED');
   IF NOT EXISTS (SELECT 1 FROM session WHERE id = '00000000-0000-7e00-8000-0000000005e6' AND status = 'ARCHIVED'
-                 AND archived_at IS NOT NULL AND archived_by_participant_id IS NULL) THEN
+                 AND archived_at IS NOT NULL AND archived_by_user_id IS NULL) THEN
     RAISE EXCEPTION 'TEST FAILED: the job''s archive did not stamp archived_at alone';
   END IF;
   DELETE FROM session WHERE id = '00000000-0000-7e00-8000-0000000005e1';

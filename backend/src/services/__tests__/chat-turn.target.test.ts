@@ -267,7 +267,11 @@ describeTarget('the streaming chat turn on the target (mwf_app, the reply by mwf
     );
     try {
       for (const status of ['ABANDONED', 'ARCHIVED']) {
-        await run.sql(`UPDATE session SET status = $2::session_status WHERE id = $1`, [ids.session, status]);
+        // an ARCHIVED session carries archived_at (CHECK, work-k5fk.10.12)
+        await run.sql(
+          `UPDATE session SET status = $2::session_status, archived_at = CASE WHEN $2 = 'ARCHIVED' THEN now() END WHERE id = $1`,
+          [ids.session, status],
+        );
         const before = await ownMessages(ids.ada);
         stub([{ type: 'text', text: 'should never stream' }]);
         const t = await turn('ada', { content: 'too late' });
@@ -276,7 +280,10 @@ describeTarget('the streaming chat turn on the target (mwf_app, the reply by mwf
         expect(await ownMessages(ids.ada)).toEqual(before);
       }
     } finally {
-      await run.sql(`UPDATE session SET status = $2::session_status WHERE id = $1`, [ids.session, original]);
+      await run.sql(
+        `UPDATE session SET status = $2::session_status, archived_at = CASE WHEN $2 = 'ARCHIVED' THEN now() END WHERE id = $1`,
+        [ids.session, original],
+      );
     }
   });
 });

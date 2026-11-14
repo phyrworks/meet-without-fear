@@ -153,8 +153,11 @@ REVOKE EXECUTE ON FUNCTION app.empathy_direction_status() FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION app.empathy_direction_status() TO mwf_app;
 GRANT EXECUTE ON FUNCTION app.empathy_direction_status() TO mwf_job;
 
--- The only writer of session.status (spec §1.1 transition set). Members or
--- the job; T-cardinality-1 (trigger) still refuses → ACTIVE without two
+-- The writer of session.status (spec §1.1 transition set), but for a
+-- participant's archive (app.session_archive, below). Members or the job;
+-- → ARCHIVED is the job's only (retention: RESOLVED / ABANDONED → ARCHIVED,
+-- stamping archived_at with no archiver; work-k5fk.10.12 — a member's arm here
+-- let a participant who left archive). T-cardinality-1 (trigger) still refuses → ACTIVE without two
 -- participants. Locks the session row FOR NO KEY UPDATE (lock order: session,
 -- then attempt; NO KEY so child-row INSERTs, which take KEY SHARE on session
 -- through their FK, are not blocked — status/resolved_at are not key columns).
@@ -173,6 +176,10 @@ CREATE FUNCTION app.session_set_status(session uuid, status public.session_statu
     IF v_from = session_set_status.status THEN
       RETURN;
     END IF;
+    IF session_set_status.status = 'ARCHIVED' AND NOT v_job THEN
+      RAISE EXCEPTION 'only the job archives through session_set_status; a participant uses app.session_archive'
+        USING ERRCODE = 'insufficient_privilege';
+    END IF;
     IF NOT ((v_from, session_set_status.status) IN (
               ('CREATED'::public.session_status, 'INVITED'::public.session_status), ('INVITED', 'ACTIVE'),
               ('CREATED', 'ABANDONED'), ('INVITED', 'ABANDONED'), ('ACTIVE', 'ABANDONED'),
@@ -182,7 +189,8 @@ CREATE FUNCTION app.session_set_status(session uuid, status public.session_statu
     END IF;
     UPDATE public.session s
     SET status = session_set_status.status,
-        resolved_at = CASE WHEN session_set_status.status = 'RESOLVED' THEN coalesce(s.resolved_at, now()) ELSE s.resolved_at END
+        resolved_at = CASE WHEN session_set_status.status = 'RESOLVED' THEN coalesce(s.resolved_at, now()) ELSE s.resolved_at END,
+        archived_at = CASE WHEN session_set_status.status = 'ARCHIVED' THEN now() ELSE s.archived_at END
     WHERE s.id = session_set_status.session;
   END
   $$;
@@ -190,6 +198,51 @@ CREATE FUNCTION app.session_set_status(session uuid, status public.session_statu
 REVOKE EXECUTE ON FUNCTION app.session_set_status(uuid, public.session_status) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION app.session_set_status(uuid, public.session_status) TO mwf_app;
 GRANT EXECUTE ON FUNCTION app.session_set_status(uuid, public.session_status) TO mwf_job;
+
+-- A participant archives a session (work-k5fk.10.12, owner decision option A,
+-- 2026-11-13): the caller must be a CURRENT participant (a human participant
+-- whose user is the identity, left_at NULL) — not a relationship member who
+-- never joined, not one who left — and the session in an archivable state:
+-- CREATED, INVITED (a pending invitation withdrawn), RESOLVED or ABANDONED.
+-- Records the archiver and the instant; returns the instant.
+-- Refusals: no such session or not a participant → P0002 (as not found, so
+-- the session's existence is not revealed); a participant who left →
+-- insufficient_privilege; any other state (ACTIVE, ARCHIVED) → check_violation.
+-- Locks the session row FOR NO KEY UPDATE, as session_set_status does.
+CREATE FUNCTION app.session_archive(session uuid) RETURNS timestamptz
+  LANGUAGE plpgsql SECURITY DEFINER
+  SET search_path = pg_catalog, public, pg_temp
+  AS $$
+  DECLARE
+    v_me   uuid := app.current_user_id();
+    v_from public.session_status;
+    v_left timestamptz;
+    v_at   timestamptz;
+  BEGIN
+    SELECT s.status INTO v_from FROM public.session s WHERE s.id = session_archive.session FOR NO KEY UPDATE;
+    -- NULL-safe: no identity, no session, or no participant row of the caller's → not found
+    SELECT p.left_at INTO v_left FROM public.participant p
+    WHERE p.session_id = session_archive.session AND p.user_id = v_me;
+    IF v_me IS NULL OR v_from IS NULL OR NOT FOUND THEN
+      RAISE EXCEPTION 'session not found' USING ERRCODE = 'P0002';
+    END IF;
+    IF v_left IS NOT NULL THEN
+      RAISE EXCEPTION 'a participant who left cannot archive the session' USING ERRCODE = 'insufficient_privilege';
+    END IF;
+    IF v_from NOT IN ('CREATED', 'INVITED', 'RESOLVED', 'ABANDONED') THEN
+      RAISE EXCEPTION 'a session in status % cannot be archived', v_from USING ERRCODE = 'check_violation';
+    END IF;
+    UPDATE public.session s
+    SET status = 'ARCHIVED', archived_at = now(), archived_by_user_id = v_me
+    WHERE s.id = session_archive.session
+    RETURNING s.archived_at INTO v_at;
+    RETURN v_at;
+  END
+  $$;
+COMMENT ON FUNCTION app.session_archive(uuid) IS 'Archive a session as a current participant of it (identity-bound): CREATED, INVITED, RESOLVED or ABANDONED -> ARCHIVED, recording archived_at and archived_by_user_id; returns archived_at. The only way mwf_app archives (no UPDATE of session.status).';
+-- mwf_app: invitations.ts archiveSession, identity-bound. Not mwf_job: retention archives through session_set_status.
+REVOKE EXECUTE ON FUNCTION app.session_archive(uuid) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION app.session_archive(uuid) TO mwf_app;
 
 -- The only writer of empathy_attempt.status (spec §1.2 transition table; P3 §5).
 -- Actors (P3 §5: a non-author never moves a row into a disclosing state):
@@ -517,6 +570,7 @@ ALTER FUNCTION app.is_co_participant(uuid) OWNER TO mwf_job;
 ALTER FUNCTION app.my_participant(uuid) OWNER TO mwf_job;
 ALTER FUNCTION app.empathy_direction_status() OWNER TO mwf_job;
 ALTER FUNCTION app.session_set_status(uuid, public.session_status) OWNER TO mwf_job;
+ALTER FUNCTION app.session_archive(uuid) OWNER TO mwf_job;
 ALTER FUNCTION app.empathy_set_status(uuid, public.empathy_status, text) OWNER TO mwf_job;
 ALTER FUNCTION app.need_share(uuid, text) OWNER TO mwf_job;
 ALTER FUNCTION app.need_revoke_share(uuid) OWNER TO mwf_job;
