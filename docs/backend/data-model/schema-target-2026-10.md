@@ -19,7 +19,7 @@ The review's Q3–Q7 are still open. The target is designed under these; each ca
 
 | # | Assumption | Cheap to reverse? |
 |---|---|---|
-| A-Q3 | **One live (non-terminal) session per relationship**, enforced by `UNIQUE (relationship_id) WHERE status NOT IN ('RESOLVED','ABANDONED','ARCHIVED')` on `session` | **yes** — drop the partial index |
+| A-Q3 | **One live (non-terminal) session per pair of humans** (work-k5fk.2, owner decision Q3 2026-11-12: was "per relationship"), enforced by the PRIMARY KEY of `live_session_pair` at the second human's join, with an app pre-check at invite time | **yes** — drop the two pair triggers |
 | A-Q4 | **Wellbeing features demoted to documents**: meditation, gratitude, needs assessment and people tracking each become one `feature_state(user_id, feature, doc jsonb, updated_at)` row per feature per user (the owner's own suggestion). The 19-row need taxonomy moves to a shared constant in code. `mood_reading` and `regulation_event` stay as session tables because they are part of the journey, not a satellite | **yes** — a feature is promoted back to tables by a migration that unpacks its document; nothing else references the documents |
 | A-Q5 | **Empathy attempts are immutable per round**: one row per submission, `round` increments, reveal and review reference a specific row | **no** — reverting to in-place overwrite loses the history the product spec requires ("a later private edit must not silently change what the partner was shown") |
 | A-Q6 | **Pre-session chat is dropped** (`PreSessionMessage` is never populated today) | **yes** — a `conversation` with `session_id NULL` and a `participant` whose session is `CREATED` can be added later; D1's status-gated cardinality already allows a one-participant session |
@@ -53,38 +53,36 @@ The review's Q3–Q7 are still open. The target is designed under these; each ca
 
 ### 1.1 Core / session (16)
 
-#### `relationship`
-Durable pairing of users across sessions. · core · S · none
+#### `user_contact`
+What one user calls another (work-k5fk.2; replaces `relationship_member.nickname`): an attribute of the ordered pair, like a phone's contact list. · core · U · none
 | column | type | null | default | meaning |
 |---|---|---|---|---|
-| id | uuid | no | uuidv7() | |
+| user_id | uuid | no | | FK user RESTRICT — the owner, the only reader |
+| contact_user_id | uuid | no | | FK user RESTRICT — whom the entry names |
+| nickname | text | yes | | at most 100 characters, never blank; NULL clears it (a row with NULL is authoritative: no invite-name fallback) |
 | created_at, updated_at | timestamptz | no | now() | |
 
-Keys: PK. No cardinality rule (D1). FKs: none. Indexes: none.
-RLS: S `EXISTS (relationship_member m WHERE m.relationship_id = id AND m.user_id = me)` (P3 §2 bespoke) · I `job` (created by the invitation path) · U none · D none.
-Absorbs: `Relationship`.
+Keys: PK (user_id, contact_user_id). CHECK `user_id <> contact_user_id`. Index (contact_user_id). Written only by its owner: createSession (the invite name for a known person) and `PATCH /contacts/:userId/nickname` (someone the caller shares a session with). A link invitee's name is resolved at read time from the inviter's own `invitation.invitee_name` (accepted_by_user_id = the invitee), never written into a row (review round 1). The account walk deletes the user's own entries.
+RLS: S/I/U/D `user_id = me`.
+Absorbs: `RelationshipMember.nickname`.
 
-#### `relationship_member`
-A user's membership in a relationship (not in a session). · core · S · none
+#### `live_session_pair`
+The rule "one live session per pair of humans" as a key (work-k5fk.2, A-Q3). · core · S · none
 | column | type | null | default | meaning |
 |---|---|---|---|---|
-| relationship_id | uuid | no | | FK relationship CASCADE |
-| user_id | uuid | no | | FK user RESTRICT |
-| role | relationship_role | no | 'member' | `member \| owner` |
-| nickname | text | yes | | what this member calls the other(s) |
-| joined_at | timestamptz | no | now() | |
-| created_at, updated_at | timestamptz | no | now() | |
+| user_a | uuid | no | | the lesser human user id |
+| user_b | uuid | no | | the greater |
+| session_id | uuid | no | | FK session CASCADE; FKs (session_id, user_a) and (session_id, user_b) → participant (session_id, user_id) CASCADE |
 
-Keys: PK (relationship_id, user_id). Index (user_id) — "my relationships". CHECK via enum.
-RLS: S `user_id = me OR EXISTS (relationship_member m2 WHERE m2.relationship_id = relationship_id AND m2.user_id = me)` · I `job` · U `user_id = me` (nickname only, column grant) · D none.
-Absorbs: `RelationshipMember` (drops surrogate `id`; `role` text → enum).
+Keys: PK (user_a, user_b). CHECK `user_a < user_b`. Indexes (session_id, user_a), (session_id, user_b). Maintained by definer triggers only: **T-live-session-pair** (`AFTER INSERT ON participant` for a present human of a live session, holding the session row `FOR NO KEY UPDATE` so joins and status moves serialise: one row per other present human — the PK refuses a second live session with 23505 at the second human's join) and **T-live-session-pair-end** (`AFTER UPDATE OF status ON session` → RESOLVED/ABANDONED/ARCHIVED: the session's rows go). The AI and personas are `modeled` participants and never appear.
+RLS: S `user_a = me OR user_b = me` (the app's invite-time pre-check) · I/U/D none (the trigger functions).
+Absorbs: the old partial unique `sql_session_one_live (relationship_id)`.
 
 #### `session`
 One facilitated process on one topic between the participants. · core · S · session (topic_frame)
 | column | type | null | default | meaning |
 |---|---|---|---|---|
 | id | uuid | no | uuidv7() | |
-| relationship_id | uuid | no | | FK relationship CASCADE |
 | status | session_status | no | 'CREATED' | `CREATED, INVITED, ACTIVE, RESOLVED, ABANDONED, ARCHIVED` |
 | topic_frame | text | yes | | 3–5 word neutral topic (encrypted) |
 | topic_frame_confirmed_at | timestamptz | yes | | |
@@ -94,7 +92,7 @@ One facilitated process on one topic between the participants. · core · S · s
 | archived_by_user_id | uuid | yes | | FK user RESTRICT — who archived it (a current participant then); NULL when the retention job archived it |
 | created_at, updated_at | timestamptz | no | now() | |
 
-Keys: PK. **Partial unique (A-Q3)** `UNIQUE (relationship_id) WHERE status NOT IN ('RESOLVED','ABANDONED','ARCHIVED')`. CHECK `status <> 'RESOLVED' OR resolved_at IS NOT NULL` (one direction only: `RESOLVED → ARCHIVED` keeps `resolved_at`; the product archives resolved sessions, `invitations.ts:1019`). CHECK `(status = 'ARCHIVED') = (archived_at IS NOT NULL)`, CHECK `archived_by_user_id IS NULL OR archived_at IS NOT NULL`. Indexes: (relationship_id), (previous_session_id), (archived_by_user_id). Transitions (enforced by `app.session_set_status`): `CREATED→INVITED→ACTIVE`, `CREATED|INVITED|ACTIVE→ABANDONED`, `ACTIVE→RESOLVED`, `RESOLVED|ABANDONED→ARCHIVED` (the job only: retention); a participant archives through `app.session_archive(session)` (work-k5fk.10.12): a **current** participant (`left_at IS NULL`) only, from `CREATED|INVITED|RESOLVED|ABANDONED`, stamping `archived_at` and `archived_by_user_id`; nothing leaves `ARCHIVED`. Trigger **T-cardinality-1**: `BEFORE UPDATE OF status` refuses `→ ACTIVE` unless `≥2 participant` rows exist with `≥1 kind='human' AND left_at IS NULL` (D1).
+Keys: PK. One live session per pair of humans (A-Q3) is `live_session_pair`'s key (work-k5fk.2: no relationship). CHECK `status <> 'RESOLVED' OR resolved_at IS NOT NULL` (one direction only: `RESOLVED → ARCHIVED` keeps `resolved_at`; the product archives resolved sessions, `invitations.ts:1019`). CHECK `(status = 'ARCHIVED') = (archived_at IS NOT NULL)`, CHECK `archived_by_user_id IS NULL OR archived_at IS NOT NULL`. Indexes: (previous_session_id), (archived_by_user_id). Transitions (enforced by `app.session_set_status`): `CREATED→INVITED→ACTIVE`, `CREATED|INVITED|ACTIVE→ABANDONED`, `ACTIVE→RESOLVED`, `RESOLVED|ABANDONED→ARCHIVED` (the job only: retention); a participant archives through `app.session_archive(session)` (work-k5fk.10.12): a **current** participant (`left_at IS NULL`) only, from `CREATED|INVITED|RESOLVED|ABANDONED`, stamping `archived_at` and `archived_by_user_id`; nothing leaves `ARCHIVED`. Trigger **T-cardinality-1**: `BEFORE UPDATE OF status` refuses `→ ACTIVE` unless `≥2 participant` rows exist with `≥1 kind='human' AND left_at IS NULL` (D1).
 RLS: S `member(id)` (P3 §2 shape E) · I `job`/invitation path · U `member(id)` for `topic_frame*` only (no `status`: `mwf_app` holds no UPDATE of it, work-k5fk.10.12); status transitions through `app.session_set_status()`, the archive through `app.session_archive()` · D `job` (retention).
 Absorbs: `Session` minus `type` (dropped; `INNER_WORK` never written), minus `WAITING`/`PAUSED` (per-participant states → milestones), minus `SharedVessel` (1:1 container with no columns — its children now key on `session_id`).
 
@@ -104,15 +102,16 @@ One membership of a session: the first-class entity (D1). · core · S (existenc
 |---|---|---|---|---|
 | id | uuid | no | uuidv7() | |
 | session_id | uuid | no | | FK session CASCADE |
-| user_id | uuid | yes | | FK user RESTRICT; NULL for a modeled participant |
-| kind | participant_kind | no | 'human' | `human \| modeled` |
+| user_id | uuid | yes | | FK user RESTRICT; NULL for an imagined (modeled) participant |
+| kind | participant_kind | no | 'human' | `human \| modeled`: human exactly when the user is a human (T-participant-kind); the AI and a persona sit as modeled |
+| added_by_user_id | uuid | yes | | who brought them in (work-k5fk.2): FK (session_id, added_by_user_id) → participant (session_id, user_id), no action; NULL for the initiator (at most one) |
 | display_name | text | yes | | snapshot of the name shown to co-participants; the only `user` fact a co-participant may see (P3 §2 `partner_display_name`) |
 | joined_at | timestamptz | no | now() | |
 | left_at | timestamptz | yes | | set when the user leaves/deletes; row stays |
 | created_at, updated_at | timestamptz | no | now() | |
 
-Keys: PK. UNIQUE (session_id, user_id) — a user is one participant per session. CHECK `(kind = 'modeled') = (user_id IS NULL)`. Indexes: (user_id) — "my sessions". Trigger **T-cardinality-2**: `DEFERRABLE INITIALLY DEFERRED` constraint trigger on DELETE / UPDATE OF kind, user_id, **left_at** refusing to leave a non-terminal session with no human participant whose `left_at IS NULL` (D1). `left_at` semantics: it does **not** affect `app.is_member` — a leaver who has not deleted their account keeps reading the shared vessel (today's behaviour); the tombstone path sets `left_at` *and* moves the live session to `ABANDONED`, and the tombstoned `user_id` never equals any `me`, so access ends through identity, not through this column.
-RLS: S `user_id = me OR app.is_member(session_id)` (definer helper — an inline `EXISTS` here recurses, P1-1). Co-participants read the whole row: `id, kind, display_name, joined_at, left_at` **and `user_id`** — a column arm cannot hide it (Conventions), and `relationship_member` already exposes it; `display_name` is the only *user* fact exposed, and `v_participant` masks everything else · I `job` (invitation accept / session create) · U `user_id = me` (display_name only) · D none.
+Keys: PK. UNIQUE (session_id, user_id) — a user is one participant per session. CHECK `kind = 'modeled' OR user_id IS NOT NULL`, CHECK `kind = 'human' OR added_by_user_id IS NOT NULL`, CHECK `added_by_user_id IS DISTINCT FROM user_id`; `sql_participant_one_initiator` UNIQUE (session_id) WHERE added_by_user_id IS NULL. Indexes: (user_id) — "my sessions", (session_id, added_by_user_id). Triggers T-participant-kind (kind ⇔ user kind) and T-participant-added-by (the adder is a human participant; a persona's adder is its owner), definer. Trigger **T-cardinality-2**: `DEFERRABLE INITIALLY DEFERRED` constraint trigger on DELETE / UPDATE OF kind, user_id, **left_at** refusing to leave a non-terminal session with no human participant whose `left_at IS NULL` (D1). `left_at` semantics: it does **not** affect `app.is_member` — a leaver who has not deleted their account keeps reading the shared vessel (today's behaviour); the tombstone path sets `left_at` *and* moves the live session to `ABANDONED`, and the tombstoned `user_id` never equals any `me`, so access ends through identity, not through this column.
+RLS: S `user_id = me OR app.is_member(session_id)` (definer helper — an inline `EXISTS` here recurses, P1-1). Co-participants read the whole row: `id, kind, display_name, joined_at, left_at` **and `user_id`** — a column arm cannot hide it (Conventions); `display_name` is the only *user* fact exposed, and `v_participant` masks everything else · I `job` (invitation accept / session create) · U `user_id = me` (display_name only) · D none.
 Absorbs: new. Seeded from `StageProgress(sessionId,userId)` ∪ `UserVessel(sessionId,userId)` ∪ `RelationshipMember × Session`; `display_name` from `User.name`/`RelationshipMember.nickname`.
 
 #### `conversation`
@@ -856,9 +855,8 @@ Absorbs: `BrainActivity` (`innerWorkSessionId` → `reflection_id`).
 ### 2.1 Core / session
 ```mermaid
 erDiagram
-    user ||--o{ relationship_member : "RESTRICT"
-    relationship ||--o{ relationship_member : ""
-    relationship ||--o{ session : "partial unique: one live session"
+    user ||--o{ user_contact : "RESTRICT (owner, contact)"
+    session ||--o{ live_session_pair : "PK: one live session per human pair"
     session |o--o{ session : "previous_session_id"
     session ||--|{ participant : "human | modeled"
     user |o--o{ participant : "NULL for modeled"
@@ -991,7 +989,6 @@ erDiagram
 | `ai_memory_kind` | SUMMARY, NOTABLE_FACTS, GLOBAL_FACTS | new |
 | `regulation_type` | BREATHING_EXERCISE, BODY_SCAN, GROUNDING, PAUSE_SESSION | `ExerciseType` |
 | `invitation_status` | PENDING, ACCEPTED, DECLINED, EXPIRED | unchanged |
-| `relationship_role` | member, owner | was free text |
 | `empathy_status` | HELD, AWAITING_SHARING, REFINING, READY, REVEALED, VALIDATED, SUPERSEDED | minus ANALYZING, NEEDS_WORK (never set) |
 | `delivery_status` | PENDING, DELIVERED, SEEN | unchanged |
 | `share_offer_status` | PENDING, OFFERED, ACCEPTED, DECLINED, EXPIRED | minus NOT_OFFERED, SKIPPED |
@@ -1053,7 +1050,7 @@ Functions (P3 §5, unchanged in purpose; signatures re-based). **Definer helpers
 | 6 | delete the user's `user_identity` rows; scrub `user`: `email := 'deleted+' \|\| id \|\| '@invalid'`, names NULL, `deleted_at := now()`; scrub the user's personas (names NULL, `deleted_at := now()`) | the tombstone |
 | 7 | `user_key.destroyed_at := now()`; every `participant_key.destroyed_at := now()` | the crypto-shred — reaches drafts, memory and unrevealed attempts exactly, which is better than P3 §11's residual ("an unrevealed `EmpathyAttempt` is session-keyed, so shredding does not reach it"); it does not reach delivered content, by design |
 
-What survives, attributed to the tombstone: delivered messages in co-participants' conversations, revealed `empathy_attempt` rows and their reviews, `need_share`, shared `proposal_choice`, `proposal`, `agreement`/`agreement_party`, SHARED `follow_up_checkin`, `participant_milestone`, `relationship_member`. `app.anonymize_user_in_session(session, participant)` is steps 1–4 and 7 (participant key) for one session.
+What survives, attributed to the tombstone: delivered messages in co-participants' conversations, revealed `empathy_attempt` rows and their reviews, `need_share`, shared `proposal_choice`, `proposal`, `agreement`/`agreement_party`, SHARED `follow_up_checkin`, `participant_milestone`, a co-participant's own `user_contact` entry for the leaver (the leaver's own entries are deleted, work-k5fk.2). `app.anonymize_user_in_session(session, participant)` is steps 1–4 and 7 (participant key) for one session.
 
 ---
 
@@ -1071,8 +1068,8 @@ Verified against Prisma **7.10.0** (the repo's version) by the adversarial pass 
 | **Partial unique indexes** | **not declared in Prisma** — created in SQL under `sql_`-prefixed names, which `migrate diff` ignores ([V] empty diff); **never give a Prisma index the name of an `sql_` index** (a same-named plain `@@index` over the same columns collides). The alternative — `previewFeatures = ["partialIndexes"]` with `@unique(map: "sql_…", where: raw(…))` — also diffs empty ([V]) but is a preview feature; not adopted. One rule, not two **`db pull` does see them** (verified TS-6, 2026-10-19, PG 18.6 / Prisma 7.10; supersedes the 2026-10-17 [V] reading that they are invisible to Prisma): it renders each as `@unique(map: "sql_…", where: raw(…))` / `@@index(…, where: …)`, adds `"partialIndexes"` to `previewFeatures` on its own, and turns the back-relation of every **single-column** partial unique into a 1:1 (`Participant.conversations Conversation?`, wrong — only MAIN is unique). Expression indexes (`sql_draft_one_per_point`) are not rendered at all. Therefore `db pull` is compared with `schema.prisma` only on a database **without** the `sql_` objects, and **`schema.prisma` is never refreshed from `db pull`** |
 | **Generated columns** | **declare exactly what `prisma db pull` emits for the column after the first apply** (pass 2 N-2 [V]): `user.name` → a plain `String? @map("name")` with **no default** (7.10 introspects a generated *text* column that way; declaring the expression emits `ALTER COLUMN name SET DEFAULT …` drift that would also fail on a generated column); `consent.target_kind` → `consent_target @default(dbgenerated("\nCASE\n … END"))` with the `\n`-escaped text exactly as `db pull` renders it (a bare `dbgenerated()` drifts). The app never writes either column. CI runs `prisma db pull` into a scratch file and diffs it against `schema.prisma`, so the texts are never hand-copied. **Superseded in part** (verified TS-6, 2026-10-19, PG 18.6 / Prisma 7.10): the 2026-10-17 [V] text above wrote `consent_target?`; the column is NOT NULL per §1.3 and pulls as required `ConsentTarget`. And `migrate diff --from-empty` turns that `@default(dbgenerated("\nCASE…END"))` into a column `DEFAULT` referencing other columns, which Postgres rejects — so the CREATE DDL is generated from a **copy of `schema.prisma` without the `consent.target_kind` `@default`**, and both generated columns are then replaced in SQL (`DROP COLUMN`, `ADD COLUMN … GENERATED ALWAYS AS (…) STORED`; `user.name` likewise). Both end as their table's last column, where `schema.prisma` declares them. The SQL is `backend/scripts/target-shape/sql-only.sql` §1 |
 | `Unsupported` | none remain: the three `vector(1024)` columns go with D8; `wrapped_dek` is `Bytes` |
-| Composite PKs | `@@id([a, b])` on `relationship_member`, `participant_milestone`, `need_disposition`, `proposal_need`, `proposal_choice`, `agreement_party`, `takeaway_link`, `feature_state` |
-| Lives only in migration SQL — the single `*_target_shape_baseline` migration (OD7, 2026-10-26) (Prisma ignores it in `migrate diff`, [V]) | RLS `ENABLE/FORCE` + policies · triggers (T-cardinality-1/2, T-message-immutable, T-same-session, T-consent-owner, T-consent-transitions, T-need-share-terminal, T-result-live-attempt, T-agreement-parties, `touch_updated_at`) · every CHECK incl. `jsonb_typeof`, exclusive arcs, ranges, the `intensity` domain · the `sql_`-prefixed partial unique and partial plain indexes (`sql_session_one_live`, `sql_conversation_one_main`, `sql_attempt_one_live_per_direction`, `sql_result_one_current`, `sql_disposition_one_current`, `sql_user_device_token`, `sql_*_key_live`, `sql_follow_up_due`, `sql_reminder_due`, `sql_need_live`, `sql_message_once`) · views (`security_invoker`) · `app.*` functions · roles and grants · `milestone` seed rows |
+| Composite PKs | `@@id([a, b])` on `user_contact`, `live_session_pair`, `participant_milestone`, `need_disposition`, `proposal_need`, `proposal_choice`, `agreement_party`, `takeaway_link`, `feature_state` |
+| Lives only in migration SQL — the single `*_target_shape_baseline` migration (OD7, 2026-10-26) (Prisma ignores it in `migrate diff`, [V]) | RLS `ENABLE/FORCE` + policies · triggers (T-cardinality-1/2, T-message-immutable, T-same-session, T-consent-owner, T-consent-transitions, T-need-share-terminal, T-result-live-attempt, T-agreement-parties, `touch_updated_at`) · every CHECK incl. `jsonb_typeof`, exclusive arcs, ranges, the `intensity` domain · the `sql_`-prefixed partial unique and partial plain indexes (`sql_participant_one_initiator`, `sql_conversation_one_main`, `sql_attempt_one_live_per_direction`, `sql_result_one_current`, `sql_disposition_one_current`, `sql_user_device_token`, `sql_*_key_live`, `sql_follow_up_due`, `sql_reminder_due`, `sql_need_live`, `sql_message_once`) · views (`security_invoker`) · `app.*` functions · roles and grants · `milestone` seed rows |
 | The drift check | `prisma migrate diff --from-config-datasource --to-schema prisma/schema.prisma --script` (the `--from-url`/`--to-schema-datamodel` flags no longer exist in 7.10). Expected output: **empty**, because every SQL-only object above is invisible to the differ and every object it *can* see is declared in Prisma. CI fails on any non-empty script. **The CI gate is `backend/scripts/target-shape/check-schema.sh`** (verified TS-6, 2026-10-19, PG 18.6 / Prisma 7.10): (a) `prisma validate`; (b) the empty drift script above; (c) a two-stage pull compare — `db pull` on a scratch database built from the Prisma DDL plus the generated columns but **before** the `sql_` indexes must equal `schema.prisma` after normalisation, and a second pull after the `sql_` indexes may differ only by those indexes and the effects Prisma derives from them (with the `sql_` names checked complete). `db pull` omits an `onDelete` equal to Prisma's default (`Restrict` on required, `SetNull` on optional relations); the normaliser treats that as equal, and the empty drift script independently proves the FK actions. `--db <name>` runs (a), (b) and the post-index pull compare against an existing database the baseline built (`run-baseline.sh`; OD7, 2026-10-26) |
 | Views in Prisma | not declared (the `views` preview feature is not used); read through the Phase 4 `pg` layer or `$queryRaw` with a typed row mapper in `backend/src/db/views.ts` |
 
@@ -1112,7 +1109,7 @@ Enforced by the schema (mechanism named):
 | Humans cannot author as the facilitator; AI/SYSTEM content is immutable | CHECK on `message.role`/`sender_participant_id`; T-message-immutable |
 | A user is at most one participant per session; a modeled participant has no user | `participant` UNIQUE (session_id, user_id); CHECK kind ⇔ user_id |
 | A session becomes ACTIVE only with ≥2 participants, ≥1 human; never loses its last human while live | T-cardinality-1, T-cardinality-2 (deferred) |
-| One live session per relationship (A-Q3) | partial unique on `session` |
+| One live session per pair of humans (A-Q3) | `live_session_pair` PK, maintained by two definer triggers (work-k5fk.2) |
 | Exactly one main conversation per participant | partial unique on `conversation` |
 | A milestone is reached once; progress is an event, not a mutable flag | `participant_milestone` PK; append-only grants |
 | No stage number exists; the stage vocabulary is data | `milestone` lookup; `v_current_stage`; no `stage` column anywhere (D3) |

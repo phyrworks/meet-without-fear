@@ -75,7 +75,6 @@ curl -X POST /api/v1/sessions \
   "data": {
     "session": {
       "id": "sess_abc123",
-      "relationshipId": "rel_xyz789",
       "status": "CREATED",
       "createdAt": "2024-01-15T10:30:00Z",
       "partner": {
@@ -141,7 +140,6 @@ GET /api/v1/sessions/:id
 ```typescript
 interface SessionDetailDTO {
   id: string;
-  relationshipId: string;
   status: SessionStatus;
   createdAt: string;
   updatedAt: string;
@@ -153,12 +151,6 @@ interface SessionDetailDTO {
 
   myProgress: StageProgressDTO;
   partnerProgress: StageProgressDTO;
-
-  relationship: {
-    id: string;
-    createdAt: string;
-    sessionCount: number;
-  };
 
   currentGates: StageGateDTO[];
   resolvedAt: string | null;

@@ -103,6 +103,7 @@ const AFTER_TABLES = isTargetShape()
       'session',
       'user',
       'user_identity',
+      'user_contact',
       'participant',
       'conversation',
       'message',
@@ -295,6 +296,8 @@ const LEAVER_ROW_CENSUS: Record<string, string> = {
   draft: `SELECT count(*)::int AS n FROM draft d JOIN participant p ON p.id = d.participant_id WHERE p.user_id = $1`,
   conversation: `SELECT count(*)::int AS n FROM conversation c JOIN participant p ON p.id = c.participant_id WHERE p.user_id = $1`,
   reflection: `SELECT count(*)::int AS n FROM reflection WHERE user_id = $1`,
+  // work-k5fk.2: the leaver's own nicknames for others (the old relationship_member row went with the deletion)
+  user_contact: `SELECT count(*)::int AS n FROM user_contact WHERE user_id = $1`,
 };
 async function leaverCensus(h: Harness, adaUser: string): Promise<Record<string, number>> {
   const out: Record<string, number> = {};
@@ -597,6 +600,16 @@ describe(`golden: ${SCENARIO}`, () => {
         adaUser.lastName === null &&
         adaUser.clerkId === null,
     );
+    // work-k5fk.2: the leaver's own contact entries (her nicknames for others: U-class) are deleted with the
+    // account, as the current shape's cascade removed her relationship_member row; Bob's entry for her is his own.
+    rule(
+      "the leaver's own user_contact entries are gone",
+      Array.isArray(t.user_contact) && !t.user_contact.some(c => c.user_id === adaId),
+    );
+    rule(
+      "the partner's own user_contact entry for the leaver stays (his data)",
+      Array.isArray(t.user_contact) && t.user_contact.some(c => c.user_id === bobId && c.contact_user_id === adaId),
+    );
     rule(
       'the concept views represent the state after the deletion',
       !steps.some(s => s.concept?.unrepresentable !== undefined),
@@ -724,6 +737,16 @@ describe(`golden: ${SCENARIO}`, () => {
     rule(
       "the tombstone's user_identity rows are deleted",
       Array.isArray(t.user_identity) && !t.user_identity.some(i => i.user_id === adaId),
+    );
+    // work-k5fk.2: the leaver's own contact entries (her nicknames for others: U-class) are deleted with the
+    // account, as the current shape's cascade removed her relationship_member row; Bob's entry for her is his own.
+    rule(
+      "the leaver's own user_contact entries are gone",
+      Array.isArray(t.user_contact) && !t.user_contact.some(c => c.user_id === adaId),
+    );
+    rule(
+      "the partner's own user_contact entry for the leaver stays (his data)",
+      Array.isArray(t.user_contact) && t.user_contact.some(c => c.user_id === bobId && c.contact_user_id === adaId),
     );
     rule(
       'the concept views represent the state after the deletion',

@@ -510,7 +510,7 @@ COMMENT ON TYPE user_kind IS 'What a user row is (work-k5fk.1/.3): human, a pers
 CREATE TYPE identity_provider AS ENUM ('clerk', 'e2e');
 COMMENT ON TYPE identity_provider IS 'Who vouches for a user_identity: clerk, the production sign-in (a verified JWT sub); e2e, the E2E auth bypass (E2E_AUTH_BYPASS with NODE_ENV test, development or e2e only, lib/e2e-bypass.ts; never production).';
 CREATE TYPE participant_kind AS ENUM ('human', 'modeled');
-COMMENT ON TYPE participant_kind IS 'human: a participant backed by a user; modeled: an imagined participant with no user row (user_id IS NULL).';
+COMMENT ON TYPE participant_kind IS 'human: a participant who is a human user; modeled: any other seat, an imagined participant with no user row (user_id IS NULL), the AI or a persona (work-k5fk.2: app.t_participant_kind keeps it equal to the user''s kind). Every "present humans" rule filters on human, so a modeled seat never counts toward the pair rule or readiness.';
 CREATE TYPE conversation_kind AS ENUM ('MAIN', 'SUBCHAT');
 COMMENT ON TYPE conversation_kind IS 'MAIN: the participant''s one private thread with the AI guide; SUBCHAT: a Stage-4 side conversation anchored on a topic.';
 CREATE TYPE conversation_status AS ENUM ('ACTIVE', 'RESOLVED');
@@ -533,8 +533,6 @@ CREATE TYPE regulation_type AS ENUM ('BREATHING_EXERCISE', 'BODY_SCAN', 'GROUNDI
 COMMENT ON TYPE regulation_type IS 'The emotional-regulation exercise a participant completed.';
 CREATE TYPE invitation_status AS ENUM ('PENDING', 'ACCEPTED', 'DECLINED', 'EXPIRED');
 COMMENT ON TYPE invitation_status IS 'Lifecycle of an invitation: PENDING until accepted, declined or past expires_at.';
-CREATE TYPE relationship_role AS ENUM ('member', 'owner');
-COMMENT ON TYPE relationship_role IS 'A member''s role in a relationship: the owner who created it, or a member.';
 CREATE TYPE empathy_status AS ENUM ('HELD', 'AWAITING_SHARING', 'REFINING', 'READY', 'REVEALED', 'VALIDATED', 'SUPERSEDED');
 COMMENT ON TYPE empathy_status IS 'Lifecycle of an empathy attempt, written only by the app''s transition function: HELD -> (AWAITING_SHARING | REFINING) -> READY -> REVEALED -> VALIDATED, or SUPERSEDED by a newer round.';
 CREATE TYPE delivery_status AS ENUM ('PENDING', 'DELIVERED', 'SEEN');
@@ -627,18 +625,6 @@ GRANT USAGE ON SCHEMA public TO mwf_ops;
 -- ----------------------------------------------------------------------------
 -- The 49 tables, in dependency order.
 -- ----------------------------------------------------------------------------
-
-CREATE TABLE relationship (
-    id uuid7 NOT NULL DEFAULT uuidv7() PRIMARY KEY,
-    created_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
-COMMENT ON TABLE relationship IS 'A durable pairing of users across sessions; its members are relationship_member, its sessions are session.';
--- mwf_app: invitations.ts createSession reads the relationship and creates one with its two members (nested create: Prisma sends the timestamps).
-GRANT SELECT ON relationship TO mwf_app;
-GRANT INSERT (created_at, updated_at) ON relationship TO mwf_app;
--- mwf_ops: the Neural Monitor dashboard (routes/brain.ts, directly or through the stage shim) reads it.
-GRANT SELECT ON relationship TO mwf_ops;
 
 CREATE TABLE "user" (
     id uuid7 NOT NULL DEFAULT uuidv7() PRIMARY KEY,
@@ -770,31 +756,37 @@ COMMENT ON COLUMN persona.owner_kind IS 'Always human: pins the FK (owner_user_i
 -- mwf_job: anonymize_user_account finds the owner's personas to scrub.
 GRANT SELECT (user_id, owner_user_id) ON persona TO mwf_job;
 
-CREATE TABLE relationship_member (
-    relationship_id uuid7 NOT NULL REFERENCES relationship ON DELETE CASCADE,
+CREATE TABLE user_contact (
     user_id uuid7 NOT NULL REFERENCES "user" ON DELETE RESTRICT,
-    role relationship_role NOT NULL DEFAULT 'member',
-    nickname text,
-    joined_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    contact_user_id uuid7 NOT NULL REFERENCES "user" ON DELETE RESTRICT,
+    nickname text CHECK (char_length(nickname) <= 100 AND btrim(nickname) <> ''),
     created_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
-    PRIMARY KEY (relationship_id, user_id)
+    PRIMARY KEY (user_id, contact_user_id),
+    CHECK (user_id <> contact_user_id)
 );
-CREATE INDEX ON relationship_member (user_id);
-COMMENT ON TABLE relationship_member IS 'A user''s membership in a relationship (not in a session).';
-COMMENT ON COLUMN relationship_member.nickname IS 'What this member calls the other person in the relationship; plain text, set by the member.';
--- mwf_app: createSession adds both members (the invitee's row too — FINDING: a write of another user's row), accept adds the
--- invitee, the nickname edit sets the caller's nickname.
-GRANT SELECT ON relationship_member TO mwf_app;
-GRANT INSERT (relationship_id, user_id, role, nickname, joined_at, created_at, updated_at) ON relationship_member TO mwf_app;
-GRANT UPDATE (nickname, updated_at) ON relationship_member TO mwf_app;
--- mwf_ops: the Neural Monitor dashboard (routes/brain.ts, directly or through the stage shim) reads it.
-GRANT SELECT ON relationship_member TO mwf_ops;
+CREATE INDEX ON user_contact (contact_user_id);
+COMMENT ON TABLE user_contact IS 'What one user calls another, like a phone''s contact list (work-k5fk.2, replacing relationship_member.nickname): an attribute of the ordered pair, private to user_id and never shown to the contact. Not a membership: who shares a session is participant.';
+COMMENT ON COLUMN user_contact.user_id IS 'The owner of the entry: the user who chose the nickname, and the only one who reads it.';
+COMMENT ON COLUMN user_contact.contact_user_id IS 'The person the entry names.';
+COMMENT ON COLUMN user_contact.nickname IS 'What user_id calls contact_user_id (at most 100 characters, not blank; the invite name for a known person or PATCH /contacts/:userId/nickname); NULL clears it, and a cleared entry is authoritative (the app shows the display name, never an old invite name). Plain text, set by the owner.';
+COMMENT ON CONSTRAINT user_contact_nickname_check ON user_contact IS 'A nickname is at most 100 characters and never blank (whitespace only).';
+COMMENT ON CONSTRAINT user_contact_check ON user_contact IS 'Nobody is their own contact.';
+COMMENT ON INDEX user_contact_contact_user_id_idx IS 'The FK index of contact_user_id (the RESTRICT check on a user row).';
+-- mwf_app: the caller's own entries only — createSession records the invite name for a known person, PATCH
+-- /contacts/:userId/nickname edits it; every partner name reads the caller's own entry (a link invitee's name is
+-- resolved from the caller's own invitation.invitee_name at read time, never written into a row: review round 1, Q1).
+GRANT SELECT ON user_contact TO mwf_app;
+GRANT INSERT (user_id, contact_user_id, nickname, created_at, updated_at) ON user_contact TO mwf_app;
+GRANT UPDATE (nickname, updated_at) ON user_contact TO mwf_app;
+-- mwf_job: anonymize_user_account deletes the leaver's own entries (U-class: their words about others).
+GRANT SELECT (user_id) ON user_contact TO mwf_job;
+GRANT DELETE ON user_contact TO mwf_job;
+-- mwf_ops: nothing — a nickname is its owner's alone (no dashboard reads one).
 
 CREATE TABLE session (
     id uuid7 NOT NULL DEFAULT uuidv7() PRIMARY KEY,
-    relationship_id uuid7 NOT NULL REFERENCES relationship ON DELETE CASCADE,
     status session_status NOT NULL DEFAULT 'CREATED',
     topic_frame ciphertext,
     topic_frame_confirmed_at ts_ms,
@@ -811,11 +803,9 @@ CREATE TABLE session (
     CHECK ((status = 'ARCHIVED') = (archived_at IS NOT NULL)),
     CHECK (archived_by_user_id IS NULL OR archived_at IS NOT NULL)
 );
-CREATE INDEX ON session (relationship_id);
 CREATE INDEX ON session (previous_session_id);
 CREATE INDEX ON session (archived_by_user_id);
--- + sql_session_one_live (sql-only.sql)
-COMMENT ON TABLE session IS 'One facilitated process on one topic between the participants of a relationship; at most one live session per relationship.';
+COMMENT ON TABLE session IS 'One facilitated process on one topic between its participants (work-k5fk.2: no relationship row; who is in it is participant, the initiator the participant with no adder). At most one live session per pair of humans: live_session_pair.';
 COMMENT ON COLUMN session.previous_session_id IS 'The session this one continues (a NEW_PROCESS follow-up).';
 COMMENT ON COLUMN session.archived_at IS 'When the session was archived (status ARCHIVED); written with the status by app.session_archive or, for the retention job, app.session_set_status.';
 COMMENT ON COLUMN session.archived_by_user_id IS 'The user who archived the session, a current participant of it at the time (app.session_archive checks it); NULL when the retention job archived it. A user, not a participant id: session precedes participant and tables.sql has no FK cycles.';
@@ -827,7 +817,7 @@ COMMENT ON COLUMN session.topic_frame IS 'encrypted (session): the AI''s short n
 -- touch (updated_at). No UPDATE of status or the archive columns (work-k5fk.10.12): archiveSession goes through
 -- app.session_archive, every other status move through app.session_set_status.
 GRANT SELECT ON session TO mwf_app;
-GRANT INSERT (relationship_id, status, previous_session_id, topic_frame, created_at, updated_at) ON session TO mwf_app;
+GRANT INSERT (status, previous_session_id, topic_frame, created_at, updated_at) ON session TO mwf_app;
 GRANT UPDATE (topic_frame, topic_frame_confirmed_at, updated_at) ON session TO mwf_app;
 -- mwf_job: session_set_status, empathy_set_status (row lock), anonymize step 1
 GRANT SELECT (id, status, resolved_at) ON session TO mwf_job;
@@ -848,6 +838,7 @@ CREATE TABLE participant (
     session_id uuid7 NOT NULL REFERENCES session ON DELETE CASCADE,
     user_id uuid7 REFERENCES "user" ON DELETE RESTRICT,
     kind participant_kind NOT NULL DEFAULT 'human',
+    added_by_user_id uuid7,
     display_name text,
     joined_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
     left_at ts_ms,
@@ -855,25 +846,68 @@ CREATE TABLE participant (
     updated_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     UNIQUE (session_id, user_id),
-    -- §1.1 participant
-    CHECK ((kind = 'modeled') = (user_id IS NULL))
+    -- work-k5fk.2: whoever brought this participant in is a participant of the same session (a self-reference, so not a
+    -- cycle); the initiator is the row with no adder (sql_participant_one_initiator: at most one). No ON DELETE action:
+    -- deleting an initiator must not delete everyone they added (review round 1, F6).
+    FOREIGN KEY (session_id, added_by_user_id) REFERENCES participant (session_id, user_id),
+    -- §1.1 participant: a human is always a user; a modeled seat may be one (the AI, a persona) or none
+    CHECK (kind = 'modeled' OR user_id IS NOT NULL),
+    -- work-k5fk.2: only a human starts a session; the AI, a persona or an imagined participant is always brought in
+    CHECK (kind = 'human' OR added_by_user_id IS NOT NULL),
+    CHECK (added_by_user_id IS DISTINCT FROM user_id)
 );
 CREATE INDEX ON participant (user_id);
-COMMENT ON TABLE participant IS 'One membership of a session, the entity every session-scoped row keys on. A human participant has a user; a modeled one does not.';
+CREATE INDEX ON participant (session_id, added_by_user_id);
+-- + sql_participant_one_initiator (sql-only.sql)
+COMMENT ON TABLE participant IS 'One membership of a session, the entity every session-scoped row keys on. A human participant is a human user; a modeled one is the AI, a persona, or an imagined participant with no user (app.t_participant_kind). Inserting a second human maintains live_session_pair (app.t_live_session_pair).';
+COMMENT ON COLUMN participant.kind IS 'human exactly when the user is a human (app.t_participant_kind); every present-humans rule (readiness, the reveal gate, agreement parties, the pair rule) counts only human rows.';
+COMMENT ON COLUMN participant.added_by_user_id IS 'Who brought this participant into the session (work-k5fk.2): the inviter for an invitee, the human who seated the AI or their own persona; NULL for the session''s initiator (at most one such row, sql_participant_one_initiator). Replaces relationship_member.role = owner.';
+COMMENT ON CONSTRAINT participant_check ON participant IS 'A human participant is a user; only a modeled one may have none.';
+COMMENT ON CONSTRAINT participant_check1 ON participant IS 'Only a human can be the initiator: the AI, a persona or an imagined participant always has an adder.';
+COMMENT ON CONSTRAINT participant_check2 ON participant IS 'Nobody adds themself: the initiator has no adder, everyone else was added by another participant.';
+COMMENT ON INDEX participant_session_id_added_by_user_id_idx IS 'The FK index of (session_id, added_by_user_id): the NO ACTION check when an adder''s row is deleted (a participant who added others cannot be deleted on its own; the session''s CASCADE takes all of them).';
 COMMENT ON COLUMN participant.display_name IS 'Snapshot of the name shown to co-participants, the only user fact they see; NULL falls back to user.name (v_participant).';
 COMMENT ON COLUMN participant.left_at IS 'When the participant left or deleted their account; the row stays.';
--- mwf_app: the inviter's participant at createSession, the invitee's at accept, the caller's in a linked process. Never an
--- UPDATE: display_name / left_at move only through app.anonymize_user_in_session.
+-- mwf_app: the inviter's participant at createSession (no adder: the initiator), the invitee's at accept (added by the
+-- inviter), the caller's in a linked process. Never an UPDATE: display_name / left_at move only through
+-- app.anonymize_user_in_session.
 GRANT SELECT ON participant TO mwf_app;
-GRANT INSERT (session_id, user_id, kind, display_name, joined_at, created_at, updated_at) ON participant TO mwf_app;
+GRANT INSERT (session_id, user_id, kind, added_by_user_id, display_name, joined_at, created_at, updated_at) ON participant TO mwf_app;
 -- mwf_job: is_member, partner_user_id, is_co_participant, my_participant, every self/membership test, T-cardinality-*, T-same-session, reveal gate
 GRANT SELECT (id, session_id, user_id, kind, left_at) ON participant TO mwf_job;
+-- mwf_job: t_live_session_pair, t_participant_added_by (definer trigger functions it owns)
+GRANT SELECT (added_by_user_id) ON participant TO mwf_job;
 -- mwf_job: anonymize_user_in_session step 2
 GRANT UPDATE (display_name, left_at) ON participant TO mwf_job;
 -- mwf_job [TS-10 I4]: empathy-store sessionParties (the reconciler's A/B order and the names in its prompts)
 GRANT SELECT (joined_at, display_name) ON participant TO mwf_job;
 -- mwf_ops: the Neural Monitor dashboard (routes/brain.ts, directly or through the stage shim) reads it.
 GRANT SELECT ON participant TO mwf_ops;
+
+CREATE TABLE live_session_pair (
+    user_a uuid7 NOT NULL,
+    user_b uuid7 NOT NULL,
+    session_id uuid7 NOT NULL REFERENCES session ON DELETE CASCADE,
+
+    PRIMARY KEY (user_a, user_b),
+    CHECK (user_a < user_b),
+    FOREIGN KEY (session_id, user_a) REFERENCES participant (session_id, user_id) ON DELETE CASCADE,
+    FOREIGN KEY (session_id, user_b) REFERENCES participant (session_id, user_id) ON DELETE CASCADE
+);
+CREATE INDEX ON live_session_pair (session_id, user_a);
+CREATE INDEX ON live_session_pair (session_id, user_b);
+COMMENT ON TABLE live_session_pair IS 'The rule "at most one live session per pair of humans" (A-Q3, work-k5fk.2) as a key, not a trigger search: one row per unordered pair of human participants of a live session, maintained by triggers only (app.t_live_session_pair on participant INSERT, app.t_live_session_pair_end when the session goes RESOLVED, ABANDONED or ARCHIVED). A second live session for the same pair fails with unique_violation (23505, live_session_pair_pkey) at the moment its second human joins. The AI and personas are modeled participants and never appear.';
+COMMENT ON COLUMN live_session_pair.user_a IS 'The lesser of the two human user ids (CHECK user_a < user_b), so the pair is unordered.';
+COMMENT ON COLUMN live_session_pair.user_b IS 'The greater of the two human user ids.';
+COMMENT ON COLUMN live_session_pair.session_id IS 'The live session the pair shares; both users are its participants (two FKs to participant).';
+COMMENT ON CONSTRAINT live_session_pair_check ON live_session_pair IS 'The pair is stored in one order only, so (a, b) and (b, a) are one key.';
+COMMENT ON INDEX live_session_pair_session_id_user_a_idx IS 'The FK index of (session_id, user_a); the end-of-session DELETE uses its session_id prefix.';
+COMMENT ON INDEX live_session_pair_session_id_user_b_idx IS 'The FK index of (session_id, user_b).';
+-- mwf_app: createSession's pre-check (is the caller already in a live session with this person?), a read of the pair
+-- table only. Never a write: the trigger functions own it.
+GRANT SELECT ON live_session_pair TO mwf_app;
+-- mwf_job: owner of the two definer trigger functions that maintain it.
+GRANT SELECT, INSERT, DELETE ON live_session_pair TO mwf_job;
 
 CREATE TABLE proposal (
     id uuid7 NOT NULL DEFAULT uuidv7() PRIMARY KEY,

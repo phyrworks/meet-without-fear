@@ -121,7 +121,8 @@ export async function buildLabelMap(
     labels.set(clerkId, `<clerkId:${who.replace(/[<>]|user:/g, '')}>`);
   }
   labels.set(manifest.seeded.sessionId, '<session:main>');
-  labels.set(manifest.seeded.relationshipId, '<relationship:main>');
+  // work-k5fk.2: a target manifest has no relationship (the table is gone).
+  if (manifest.seeded.relationshipId) labels.set(manifest.seeded.relationshipId, '<relationship:main>');
   labels.set(manifest.seeded.invitationId, '<invitation:main>');
 
   if (isTargetShape()) {
@@ -630,10 +631,14 @@ export function timestampFacts(
 type ConceptRow = Record<string, unknown>;
 
 export interface ConceptLabelInput {
-  /** Shape-independent ids: the target keeps session/relationship/invitation/user ids. */
+  /**
+   * Shape-independent ids: the target keeps session/invitation/user ids. The
+   * relationship id is the current shape's only (work-k5fk.2): the target's
+   * concept session view has no relationship_id.
+   */
   manifest: {
     sessionId: string;
-    relationshipId: string;
+    relationshipId?: string;
     invitationId: string;
     users: Array<{ id: string; email: string }>;
   };
@@ -704,7 +709,8 @@ export function buildConceptLabelMap(input: ConceptLabelInput): LabelMap {
     if (who) labels.set(clerkId, `<clerkId:${bare(who)}>`);
   }
   labels.set(input.manifest.sessionId, '<session:main>');
-  labels.set(input.manifest.relationshipId, '<relationship:main>');
+  // work-k5fk.2: only a current-shape manifest has a relationship.
+  if (input.manifest.relationshipId) labels.set(input.manifest.relationshipId, '<relationship:main>');
   labels.set(input.manifest.invitationId, '<invitation:main>');
 
   // participant: (user, session).

@@ -97,7 +97,7 @@ export interface WrittenUser {
 }
 
 export interface WrittenScenario {
-  session: { id: string; status: string; relationshipId: string };
+  session: { id: string; status: string };
   users: WrittenUser[];
   invitation: { id: string; status: string };
 }

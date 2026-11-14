@@ -1,3 +1,4 @@
+import { getNickname } from './contacts';
 import { Expo, ExpoPushMessage } from 'expo-server-sdk';
 import { logger } from '../lib/logger';
 import { prisma } from '../lib/prisma';
@@ -55,7 +56,7 @@ interface PushMessageSelectionContext {
 /**
  * Push notification message templates for each session event type.
  * Use {actor} for the other person's display name. The send path resolves it
- * from the recipient's relationship nickname when available.
+ * from the recipient's own nickname for the actor (user_contact) when available.
  */
 export const PUSH_MESSAGES: Record<SessionEvent, PushMessageTemplate> = {
   'partner.signed_compact': {
@@ -399,20 +400,15 @@ async function getNotificationActorName(
   try {
     // The recipient's own name for the actor, then the actor's display name
     // (participant.display_name — never the actor's user row, spec §7).
-    const [session, actor] = await Promise.all([
-      prisma.session.findUnique({
-        where: { id: sessionId },
-        select: {
-          relationship: { select: { members: { where: { userId: recipientUserId }, select: { nickname: true } } } },
-        },
-      }),
+    const [nickname, actor] = await Promise.all([
+      getNickname(recipientUserId, actorUserId),
       prisma.participant.findUnique({
         where: { sessionId_userId: { sessionId, userId: actorUserId } },
         select: { displayName: true },
       }),
     ]);
 
-    return session?.relationship.members[0]?.nickname || actor?.displayName || 'They';
+    return nickname || actor?.displayName || 'They';
   } catch (error) {
     logger.warn(`[Push] Failed to resolve notification actor name for session ${sessionId}:`, error);
     return 'They';

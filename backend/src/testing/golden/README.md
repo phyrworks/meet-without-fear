@@ -332,6 +332,22 @@ opens with a newline is traced as `other`. Start raw SQL on the template's first
 | `User → [user, user_identity]` (`TARGET_RELATION_MAP`, `TARGET_TABLE_MAP`, session-read's own relation map) | The bypass reads the caller's identity on every request and binds it on the first: both are images of the old `User` read/update. With two images `User` is not 1:1, so `changesMapped` takes `primaryImage` (`TARGET_PRIMARY_IMAGE`: `User → user`) and still compares the per-step row count on `user`. |
 | tombstone walk rule | "user row is tombstoned" no longer checks `clerk_id`; a new rule asserts the tombstone's `user_identity` rows are gone (the snapshot gains `user_identity`). |
 
+### work-k5fk.2: no relationship
+
+`relationship` and `relationship_member` are dropped: nicknames are `user_contact` rows (the reader's own),
+"one live session" is `live_session_pair`'s key, and `participant.added_by_user_id` names the initiator. No
+baseline was re-recorded (the runner refuses on the target); `allow-lists/relationship-dropped.ts` carries the
+change with one paragraph per baseline:
+
+| Piece | What it does |
+|---|---|
+| `relationshipIdDropped(scenario)` (`absentKeys`, `mustMatch`) | Every session DTO (GET /sessions/:id, /state, the list) and person DTO (GET /people) loses `relationshipId`; each baseline's paragraph names the reads it moves. empathy-reveal reads no DTO and gets no rule (its paragraph says so). |
+| `old_concept_session.relationship_id` (concept-views/target-shape.sql) | Dropped from the view (review round 1, F5: a synthesised id compared equal whatever its value, so it asserted nothing). `RELATIONSHIP_ID_CONCEPT_RULE` compares the restored session row's `relationship_id` as absent in every concept allow-list; concept-views.test lists it in `DROPPED_COLUMNS`. |
+| Relation map | `RelationshipMember → user_contact` (the nickname read), `Relationship → (none)` — common.ts and session-read's own map. |
+| Fixtures (fixture-scenarios/target-shape.ts) | The old members' nicknames are written as each user's `user_contact` entry for the other at the member instant; the relationship row's clock reads stay, so no instant moves. The inviter's participant has no adder, the others are added by the inviter. Manifests lose `seeded.relationshipId` and the `relationship`/`relationship_member` counts and tables; they gain `user_contact` (2 with a partner) and the tables `user_contact`, `live_session_pair` (`live_session_pair` rows only where two humans share a live session). |
+| Nicknames | Resolved at read time from the reader's own rows (their user_contact entry — authoritative even when cleared — else their own accepted invitation's invitee_name); nothing is written into another user's row (review round 1, Q1). |
+| tombstone walk rules | "the leaver's own user_contact entries are gone" (the old cascade removed her member row) and "the partner's own entry for the leaver stays"; `user_contact` joins the after-snapshot and the leaver census. |
+
 ### work-keq6: progress is the milestones map
 
 The progress DTOs dropped `gatesSatisfied` and the hand-built `milestones`

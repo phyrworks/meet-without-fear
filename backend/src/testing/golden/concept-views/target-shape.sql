@@ -57,11 +57,15 @@ FROM "user" u
 WHERE u.kind = 'human';
 
 
--- session — spec §1.1.
+-- session — spec §1.1. work-k5fk.2 (review round 1, F5): the target has no
+-- relationship, so the view has no relationship_id. A synthesised id was
+-- tried and dropped: it compared equal for any value the labeller mapped to
+-- <relationship:main>, so it asserted nothing. The comparison names the
+-- dropped column instead (allow-lists/relationship-dropped.ts
+-- RELATIONSHIP_ID_CONCEPT_RULE; concept-views.test DROPPED_COLUMNS).
 CREATE VIEW old_concept_session AS
 SELECT
   s.id,
-  s.relationship_id,
   s.status::text AS status,
   s.topic_frame,
   s.topic_frame_confirmed_at AT TIME ZONE 'UTC' AS topic_frame_confirmed_at,

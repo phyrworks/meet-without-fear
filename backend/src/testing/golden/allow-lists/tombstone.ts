@@ -28,6 +28,7 @@
  *     partner's revealed round is readable again (deviation closed).
  */
 
+import { RELATIONSHIP_ID_CONCEPT_RULE, relationshipIdDropped } from './relationship-dropped';
 import { TOMBSTONE_TEXT } from '../../fixture-scenarios/scenarios';
 import { KnownLeak, SESSION_READS, USER_READS } from '../privacy';
 import {
@@ -432,6 +433,8 @@ const targetReadRules = (concept: boolean): AllowRule[] => [
 export const TOMBSTONE_ALLOW: AllowList = {
   scenario: 'tombstone',
   rules: [
+    relationshipIdDropped('tombstone'),
+    RELATIONSHIP_ID_CONCEPT_RULE,
     ...TARGET_TOPIC_FRAME_RULES,
     ...TARGET_TOPIC_FRAME_INITIAL_RULES,
     ...READ_DTO_RULES.filter(r => r !== DEFAULT_MILESTONE_MASK),
@@ -500,6 +503,7 @@ export const TOMBSTONE_ALLOW: AllowList = {
 export const TOMBSTONE_BYTE_TARGET_ALLOW: AllowList = {
   scenario: 'tombstone',
   rules: [
+    relationshipIdDropped('tombstone'),
     ...TARGET_TOPIC_FRAME_RULES,
     ...READ_DTO_RULES.filter(r => r !== DEFAULT_MILESTONE_MASK),
     ...TOMBSTONE_MILESTONE_MASKS,

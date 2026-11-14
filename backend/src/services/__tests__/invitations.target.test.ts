@@ -1,17 +1,19 @@
 /**
  * TS-12 (work-a39h.11.25, the TS-9 leftovers), real roles on a clone of the
  * CREATED target fixture: the invitation lifecycle on `invitation`,
- * `participant`, `relationship_member` and `app.session_set_status`, over HTTP
+ * `participant`, `user_contact` and `app.session_set_status`, over HTTP
  * as `mwf_app` with identity binding on.
  *
  *   - create: the session, the inviter's participant (display name, MAIN
  *     conversation, read state), the invitation by invited_by_participant_id;
- *   - accept: the invitee becomes a participant and the session ACTIVE through
- *     the status writer in one transaction (T-cardinality-1 at COMMIT);
- *     accepted_by_user_id stamped; a second accept refused;
+ *   - accept: the invitee becomes a participant (added by the inviter,
+ *     work-k5fk.2) and the session ACTIVE through the status writer in one
+ *     transaction (T-cardinality-1 at COMMIT); the pair is a live_session_pair
+ *     row; accepted_by_user_id stamped; a second accept refused;
  *   - decline: DECLINED, the session ABANDONED (by the job); a declined or an
  *     expired invitation never grants session access (W6 arm);
- *   - the inviter is named by display_name; nickname by the composite key.
+ *   - the inviter is named by display_name; the invite name is the inviter's
+ *     user_contact nickname for the invitee, edited by PATCH /contacts/:userId/nickname.
  *
  * Replaces the Prisma-mock suites routes/__tests__/invitations.test.ts and
  * controllers/__tests__/confirm-invitation.test.ts (with job-path.target's
@@ -107,12 +109,36 @@ describeTarget('invitations on the target, as mwf_app (the decline as the job)',
     expect((await http(carol, 'post', `/invitations/${invitationId}/accept`)).status).toBe(400); // already accepted
     expect((await http(carol, 'get', `/sessions/${sessionId}/state`)).status).toBe(200);
 
-    // Nickname by the composite key
-    const [rel] = await run.sql<{ relationship_id: string }>(`SELECT relationship_id FROM session WHERE id = $1`, [
-      sessionId,
+    // work-k5fk.2: the inviter added the invitee; the two are a live pair.
+    expect(
+      await run.sql(`SELECT user_id, added_by_user_id FROM participant WHERE session_id = $1 ORDER BY joined_at, id`, [
+        sessionId,
+      ]),
+    ).toEqual([
+      { user_id: ada.id, added_by_user_id: null },
+      { user_id: carol.id, added_by_user_id: ada.id },
     ]);
-    const nick = await http(ada, 'patch', `/relationships/${rel.relationship_id}/nickname`, { nickname: 'Caz' });
+    expect(
+      await run.sql(`SELECT count(*)::int AS n FROM live_session_pair WHERE session_id = $1`, [sessionId]),
+    ).toEqual([{ n: 1 }]);
+
+    // The invite name is what Ada calls Carol, resolved from Ada's own invitation (nothing written into Ada's
+    // rows by Carol's accept, review round 1 Q1); the nickname route writes Ada's own user_contact entry.
+    expect(await run.sql(`SELECT count(*)::int AS n FROM user_contact WHERE contact_user_id = $1`, [carol.id])).toEqual(
+      [{ n: 0 }],
+    );
+    expect((await http(ada, 'get', `/sessions/${sessionId}`)).body.data.session.partner).toMatchObject({
+      id: carol.id,
+      nickname: 'Carol',
+    });
+    const nick = await http(ada, 'patch', `/contacts/${carol.id}/nickname`, { nickname: 'Caz' });
     expect(nick.body.data).toEqual({ nickname: 'Caz' });
+    expect(
+      await run.sql(`SELECT nickname FROM user_contact WHERE user_id = $1 AND contact_user_id = $2`, [
+        ada.id,
+        carol.id,
+      ]),
+    ).toEqual([{ nickname: 'Caz' }]);
   });
 
   it('decline: DECLINED and ABANDONED (by the job); a declined or expired invitation never grants access', async () => {

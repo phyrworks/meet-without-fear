@@ -18,7 +18,7 @@ interface InlineCompactProps {
   onSign: () => void;
   /** Whether signing is in progress */
   isPending?: boolean;
-  /** Whether this is the first session for this relationship */
+  /** Whether this is the first session of these two people */
   isFirstSession?: boolean;
   /** Test ID for testing */
   testID?: string;

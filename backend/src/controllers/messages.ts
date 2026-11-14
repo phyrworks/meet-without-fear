@@ -7,6 +7,7 @@
  * - GET /sessions/:id/messages - Get conversation history
  */
 
+import { loadSessionPartner } from '../services/contacts';
 import { Request, Response } from 'express';
 import { Prisma } from '../generated/prisma/client';
 import { logger } from '../lib/logger';
@@ -163,24 +164,7 @@ export async function confirmFeelHeard(req: Request, res: Response): Promise<voi
 
     // The caller's participant (requireSessionAccess). No participant: no access.
     const participant = req.participant;
-    const session = participant
-      ? await prisma.session.findUnique({
-          where: { id: sessionId },
-          include: {
-            relationship: {
-              include: {
-                members: {
-                  select: {
-                    userId: true,
-                    nickname: true,
-                    user: { select: { id: true, name: true, firstName: true } },
-                  },
-                },
-              },
-            },
-          },
-        })
-      : null;
+    const session = participant ? await prisma.session.findUnique({ where: { id: sessionId } }) : null;
 
     if (!participant || !session) {
       errorResponse(res, 'NOT_FOUND', 'Session not found', 404);
@@ -267,16 +251,15 @@ export async function confirmFeelHeard(req: Request, res: Response): Promise<voi
 
     if (confirmed && participant.mainConversationId) {
       try {
-        // Get partner name (using nickname) and status for the transition message
-        const myMember = session.relationship.members.find(m => m.userId === user.id);
-        const partnerMember = session.relationship.members.find(m => m.userId !== user.id);
+        // Get partner name (using my nickname for them; work-k5fk.2) and status for the transition message
+        const partnerMember = await loadSessionPartner(sessionId, user.id);
 
         let partnerName: string | undefined;
         let partnerStatus: 'not_joined' | 'in_progress' | 'completed' = 'not_joined';
 
         if (partnerMember) {
           // Use nickname (what I call my partner) → firstName → name
-          partnerName = myMember?.nickname || partnerMember.user.firstName || partnerMember.user.name || undefined;
+          partnerName = partnerMember.nickname || partnerMember.firstName || partnerMember.name || undefined;
 
           // The partner has begun once they are a participant (old: had a StageProgress row).
           if (partnerState) {
@@ -288,7 +271,7 @@ export async function confirmFeelHeard(req: Request, res: Response): Promise<voi
             where: { sessionId, invitedByParticipantId: participant.id },
             select: { inviteeName: true },
           });
-          partnerName = myMember?.nickname || invitation?.inviteeName || undefined;
+          partnerName = invitation?.inviteeName || undefined;
         }
 
         const transitionContent = scrubStage2RepairFraming(buildStage2TransitionFallback(partnerName, partnerStatus));
@@ -578,35 +561,12 @@ export async function getInitialMessage(req: Request, res: Response): Promise<vo
       partnerName = invitation?.inviteeName || undefined;
 
       // Older sessions created from an existing person may have a blank
-      // invitation name. Recover the display name from the relationship so the
-      // opening prompt does not ask who the user already selected.
+      // invitation name. Once the partner has joined, recover it from what
+      // the inviter calls them (user_contact) or their names, so the opening
+      // prompt does not ask who the user already selected.
       if (!partnerName) {
-        const inviterMembership = await prisma.relationshipMember.findUnique({
-          where: {
-            relationshipId_userId: {
-              relationshipId: session.relationshipId,
-              userId: user.id,
-            },
-          },
-          select: { nickname: true },
-        });
-        const partnerMember = await prisma.relationshipMember.findFirst({
-          where: {
-            relationshipId: session.relationshipId,
-            userId: { not: user.id },
-          },
-          select: {
-            user: {
-              select: {
-                firstName: true,
-                name: true,
-              },
-            },
-          },
-        });
-
-        partnerName =
-          inviterMembership?.nickname || partnerMember?.user.firstName || partnerMember?.user.name || undefined;
+        const partnerMember = await loadSessionPartner(sessionId, user.id);
+        partnerName = partnerMember?.nickname || partnerMember?.firstName || partnerMember?.name || undefined;
       }
     }
 

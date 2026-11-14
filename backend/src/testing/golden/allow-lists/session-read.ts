@@ -11,6 +11,7 @@
  *    targets, so its values are asserted ⊆ the baseline's.
  */
 
+import { RELATIONSHIP_ID_CONCEPT_RULE, relationshipIdDropped } from './relationship-dropped';
 import {
   MILESTONE_DTO_RULES,
   milestoneMapMask,
@@ -22,6 +23,8 @@ import type { AllowList } from './types';
 export const SESSION_READ_ALLOW: AllowList = {
   scenario: 'session-read',
   rules: [
+    relationshipIdDropped('session-read'),
+    RELATIONSHIP_ID_CONCEPT_RULE,
     ...TARGET_TOPIC_FRAME_RULES,
     ...TARGET_TOPIC_FRAME_INITIAL_RULES,
     // `session state` returns progress for both actors: the rules must match.
@@ -117,7 +120,9 @@ export const SESSION_READ_BYTE_TARGET_ALLOW: AllowList = {
   scenario: 'session-read',
   rules: [
     // The topic-frame body rules ride along; the restored-state ones are concept-only.
-    ...SESSION_READ_ALLOW.rules.filter(r => !TARGET_TOPIC_FRAME_INITIAL_RULES.includes(r)),
+    ...SESSION_READ_ALLOW.rules.filter(
+      r => !TARGET_TOPIC_FRAME_INITIAL_RULES.includes(r) && r !== RELATIONSHIP_ID_CONCEPT_RULE,
+    ),
     {
       kind: 'traceMapped',
       at: 'steps.*.trace',
@@ -128,8 +133,10 @@ export const SESSION_READ_BYTE_TARGET_ALLOW: AllowList = {
       relationMap: {
         Message: ['message'],
         Session: ['session'],
-        Relationship: ['relationship'],
-        RelationshipMember: ['relationship_member'],
+        // work-k5fk.2: no relationship; the nickname each reader gave the other is their own user_contact row
+        // (relationship-dropped.ts)
+        Relationship: [],
+        RelationshipMember: ['user_contact'],
         // privacyPreferences → user_preferences.doc (spec §1.7); clerkId → user_identity.subject (work-k5fk.1,
         // the E2E bypass reads and binds the caller's e2e identity on every request)
         User: ['user', 'user_preferences', 'user_identity'],

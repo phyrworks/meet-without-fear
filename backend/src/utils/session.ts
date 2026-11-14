@@ -19,21 +19,19 @@ import {
 // Type for session with includes (from Prisma)
 type SessionWithIncludes = {
   id: string;
-  relationshipId: string;
   status: string;
   createdAt: Date;
   updatedAt: Date;
-  relationship: {
-    members: Array<{
-      userId: string;
-      nickname: string | null;
-      user: {
-        id: string;
-        name: string | null;
-        firstName: string | null;
-      };
-    }>;
-  };
+  /** The session's human participants; nickname is the CALLER's own user_contact entry for each (work-k5fk.2). */
+  members: Array<{
+    userId: string;
+    nickname: string | null;
+    user: {
+      id: string;
+      name: string | null;
+      firstName: string | null;
+    };
+  }>;
   stageProgress: Array<{
     userId: string;
     stage: number;
@@ -59,14 +57,14 @@ type SessionWithIncludes = {
  * TS-12 (R5, spec §7 v_participant): the users who have LEFT each session —
  * account deletion and leaving set participant.left_at (and NULL its
  * display_name) through app.anonymize_user_in_session. The partner DTOs show
- * such a partner without a name or nickname (the relationship member row keeps
- * the caller's old nickname for them), and the status copy calls them
+ * such a partner without a name or nickname (the caller's user_contact entry
+ * keeps their old nickname for them), and the status copy calls them
  * FORMER_PARTICIPANT_NAME. Keyed `${sessionId}:${userId}`.
  */
 export async function departedParticipantUsers(sessionIds: string[]): Promise<Set<string>> {
   if (sessionIds.length === 0) return new Set();
   const rows = await prisma.participant.findMany({
-    where: { sessionId: { in: sessionIds }, leftAt: { not: null }, userId: { not: null } },
+    where: { sessionId: { in: sessionIds }, kind: 'human', leftAt: { not: null }, userId: { not: null } },
     select: { sessionId: true, userId: true },
   });
   return new Set(rows.map(r => `${r.sessionId}:${r.userId}`));
@@ -365,8 +363,7 @@ function getWaitingForPartnerMessage(stage: Stage, partnerName: string): string 
  */
 export function mapSessionToSummary(session: SessionWithIncludes, currentUserId: string): SessionSummaryDTO {
   // Find partner member
-  const partnerMember = session.relationship.members.find(m => m.userId !== currentUserId);
-  const myMember = session.relationship.members.find(m => m.userId === currentUserId);
+  const partnerMember = session.members.find(m => m.userId !== currentUserId);
 
   // Find progress for each user
   const myProgressRecords = session.stageProgress.filter(p => p.userId === currentUserId);
@@ -459,7 +456,7 @@ export function mapSessionToSummary(session: SessionWithIncludes, currentUserId:
 
   // Get partner display name (prefer nickname, then firstName, then name)
   const partnerDisplayName =
-    myMember?.nickname ?? partnerMember?.user.firstName ?? partnerMember?.user.name ?? 'Partner';
+    partnerMember?.nickname ?? partnerMember?.user.firstName ?? partnerMember?.user.name ?? 'Partner';
 
   // Check for empathy attempts (if included in query)
   const userHasSentEmpathy = session.empathyAttempts?.some(a => a.sourceUserId === currentUserId) ?? false;
@@ -489,14 +486,13 @@ export function mapSessionToSummary(session: SessionWithIncludes, currentUserId:
 
   return {
     id: session.id,
-    relationshipId: session.relationshipId,
     status: session.status as SessionStatus,
     createdAt: session.createdAt.toISOString(),
     updatedAt: session.updatedAt.toISOString(),
     partner: {
       id: partnerMember?.userId ?? '',
       name: partnerMember?.user.firstName ?? partnerMember?.user.name ?? null,
-      nickname: myMember?.nickname ?? null, // What I call my partner
+      nickname: partnerMember?.nickname ?? null, // What I call my partner (my own contact entry)
     },
     myProgress,
     partnerProgress,

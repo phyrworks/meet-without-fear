@@ -676,13 +676,13 @@ END $$;
 --     mwf_app holds no UPDATE of session.status; app.session_set_status
 --     archives only for the job (retention); a job login cannot call
 --     session_archive. Setup (superuser): D leaves X (RESOLVED, so
---     T-cardinality-2 allows it); Y (…05e2), a CREATED session on X's
---     relationship R2 with C only, so D is a relationship member of Y but
---     never joined it.
+--     T-cardinality-2 allows it); Y (…05e2), a CREATED session started by C
+--     alone, so D shared a session with C (X) but never joined Y (work-k5fk.2:
+--     no relationship membership grants anything).
 \connect - mwf_user
 SELECT 'connected as ' || session_user || ' (setup: D leaves X; session Y with C only)';
 UPDATE participant SET left_at = now() WHERE id = '00000000-0000-7e00-8000-0000000007d1';
-INSERT INTO session (id, relationship_id, status) VALUES ('00000000-0000-7e00-8000-0000000005e2', '00000000-0000-7e00-8000-0000000001c1', 'CREATED');
+INSERT INTO session (id, status) VALUES ('00000000-0000-7e00-8000-0000000005e2', 'CREATED');
 INSERT INTO participant (id, session_id, user_id, kind, display_name) VALUES
   ('00000000-0000-7e00-8000-0000000007c2', '00000000-0000-7e00-8000-0000000005e2', '00000000-0000-7e00-8000-0000000000c1', 'human', 'Cy');
 \connect - mwf_app
@@ -704,11 +704,11 @@ DO $$ DECLARE v_con text; BEGIN
     IF SQLERRM <> 'session not found' THEN RAISE; END IF;
     RAISE NOTICE 'PASS 19b nor through session_set_status (a leaver is no member there): %', SQLERRM;
   END;
-  -- 19c. a relationship member who never joined Y; 19d an outsider; 19e no identity
+  -- 19c. C's partner from X, who never joined Y; 19d an outsider; 19e no identity
   BEGIN
     PERFORM app.session_archive('00000000-0000-7e00-8000-0000000005e2');
-    RAISE EXCEPTION 'TEST FAILED: a relationship member who never joined archived the session';
-  EXCEPTION WHEN SQLSTATE 'MWA01' THEN RAISE NOTICE 'PASS 19c a relationship member who never joined cannot archive (MWA01): %', SQLERRM;
+    RAISE EXCEPTION 'TEST FAILED: a past partner who never joined archived the session';
+  EXCEPTION WHEN SQLSTATE 'MWA01' THEN RAISE NOTICE 'PASS 19c a past partner who never joined cannot archive (MWA01): %', SQLERRM;
   END;
   PERFORM set_config('app.current_user_id', current_setting('t.outsider'), true);
   BEGIN
@@ -754,7 +754,7 @@ DO $$ DECLARE v_con text; BEGIN
   END;
   -- 19m. session_check1: mwf_app cannot INSERT an ARCHIVED session (no archived_at)
   BEGIN
-    INSERT INTO session (relationship_id, status) VALUES ('00000000-0000-7e00-8000-0000000001c1', 'ARCHIVED');
+    INSERT INTO session (status) VALUES ('ARCHIVED');
     RAISE EXCEPTION 'TEST FAILED: mwf_app inserted an ARCHIVED session';
   EXCEPTION WHEN check_violation THEN
     GET STACKED DIAGNOSTICS v_con = CONSTRAINT_NAME;

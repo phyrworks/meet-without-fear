@@ -107,6 +107,8 @@ describe('compareWithAllowList — empathy-reveal (old ⊆ new, named additions)
       'replacedEntry @ steps.1.changes',
       'replacedEntry @ steps.1.changes',
       'mayDiffer @ initial.session.*.topic_frame',
+      // work-k5fk.2 (RELATIONSHIP_ID_CONCEPT_RULE): no restored session row here either.
+      'absentKeys @ initial.session.*',
     ]);
   });
 
@@ -263,7 +265,8 @@ function readBaseline(gates: Record<string, unknown> = { compactSigned: true, fe
 /**
  * A recorded (old-shape) golden with its progress DTOs as the target answers
  * them (work-keq6): gatesSatisfied → a milestones map, the hand-built
- * milestones object → witnessStartedAt one level up.
+ * milestones object → witnessStartedAt one level up; and (work-k5fk.2) its
+ * session / person DTOs without relationshipId.
  */
 function withTargetProgress(t: Json): Json {
   for (const step of t.steps as Json[]) {
@@ -282,7 +285,13 @@ function withTargetProgress(t: Json): Json {
         delete holder.milestones;
       }
     }
+    // work-k5fk.2: the target's session and person DTOs carry no relationshipId (relationship-dropped.ts).
+    for (const dto of [data?.session, ...(data?.items ?? []), ...(data?.people ?? [])]) {
+      if (dto && typeof dto === 'object') delete dto.relationshipId;
+    }
   }
+  // … nor does the target's concept session view (RELATIONSHIP_ID_CONCEPT_RULE).
+  for (const row of Object.values((t.initial?.session ?? {}) as Record<string, Json>)) delete row.relationship_id;
   return t;
 }
 
@@ -414,7 +423,7 @@ describe('compareWithAllowList — unrevealed-attempt-hidden (R2 rounds, TS-5 fi
     expect(compareWithAllowList(baseline, targetLike(), UNREVEALED_ATTEMPT_HIDDEN_ALLOW).violations).toEqual([]);
   });
 
-  it('passes on the baseline with only its progress DTOs in the target shape', () => {
+  it('passes on the baseline with only its progress and session DTOs in the target shape', () => {
     expect(
       compareWithAllowList(baseline, withTargetProgress(clone(baseline)), UNREVEALED_ATTEMPT_HIDDEN_ALLOW),
     ).toEqual({

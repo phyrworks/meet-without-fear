@@ -2,8 +2,8 @@
  * work-k5fk.10.12, real roles on a clone of the CREATED target fixture:
  * archiving a session goes through app.session_archive(session) only.
  *
- *   - only a CURRENT participant of the session archives it (not a
- *     relationship member who never joined — the invitee with a live PENDING
+ *   - only a CURRENT participant of the session archives it (not an
+ *     invitee who never joined — the one with a live PENDING
  *     invitation, whom requireSessionAccess admits — nor a participant who
  *     left, nor an outsider);
  *   - only from an archivable state (CREATED, INVITED, RESOLVED, ABANDONED);
@@ -76,23 +76,20 @@ describeTarget('session archive on the target, as mwf_app', () => {
       `INSERT INTO "user" (id, email, first_name) VALUES ($1, $2, 'Carol'), ($3, $4, 'Dan'), ($5, $6, 'Out'), ($7, $8, 'Erin')`,
       [carol.id, carol.email, dan.id, dan.email, outsider.id, outsider.email, erin.id, erin.email],
     );
-    // Three more sessions of Ada's, each on its own relationship (one live session per relationship).
+    // Three more sessions of Ada's, each with another person (one live session per pair: live_session_pair).
     for (const [session, other] of [
       [left, carol.id],
       [active, dan.id],
       [both, erin.id],
     ]) {
-      const rel = randomUuidV7();
-      await run.sql(`INSERT INTO relationship (id) VALUES ($1)`, [rel]);
-      await run.sql(`INSERT INTO relationship_member (relationship_id, user_id) VALUES ($1, $2), ($1, $3)`, [
-        rel,
+      await run.sql(`INSERT INTO session (id, status) VALUES ($1, 'INVITED')`, [session]);
+      await run.sql(`INSERT INTO participant (session_id, user_id, display_name) VALUES ($1, $2, 'Ada')`, [
+        session,
         ada.id,
-        other,
       ]);
-      await run.sql(`INSERT INTO session (id, relationship_id, status) VALUES ($1, $2, 'INVITED')`, [session, rel]);
       await run.sql(
-        `INSERT INTO participant (session_id, user_id, display_name) VALUES ($1, $2, 'Ada'), ($1, $3, 'Other')`,
-        [session, ada.id, other],
+        `INSERT INTO participant (session_id, user_id, added_by_user_id, display_name) VALUES ($1, $2, $3, 'Other')`,
+        [session, other, ada.id],
       );
       await run.as('mwf_job', null, `SELECT app.session_set_status($1::uuid, 'ACTIVE')`, [session]);
     }
@@ -105,20 +102,18 @@ describeTarget('session archive on the target, as mwf_app', () => {
     if (run) await run.drop();
   });
 
-  it('setup: Bob is a relationship member of the CREATED session with a live invitation, not a participant', async () => {
+  it('setup: Bob is the invitee of the CREATED session with a live invitation, not a participant', async () => {
     expect(await status(ids.session)).toBe('CREATED');
     expect(
       await run.sql(
-        `SELECT (SELECT count(*)::int FROM relationship_member m JOIN session s ON s.relationship_id = m.relationship_id
-                 WHERE s.id = $1 AND m.user_id = $2) AS member,
-                (SELECT count(*)::int FROM participant WHERE session_id = $1 AND user_id = $2) AS participant,
+        `SELECT (SELECT count(*)::int FROM participant WHERE session_id = $1 AND user_id = $2) AS participant,
                 (SELECT count(*)::int FROM invitation WHERE session_id = $1 AND status = 'PENDING' AND expires_at > now()) AS live`,
         [ids.session, bob.id],
       ),
-    ).toEqual([{ member: 1, participant: 0, live: 1 }]);
+    ).toEqual([{ participant: 0, live: 1 }]);
   });
 
-  it('a relationship member who never joined cannot archive (404); the session stays CREATED', async () => {
+  it('an invitee who never joined cannot archive (404); the session stays CREATED', async () => {
     const r = await http(bob, 'post', `/sessions/${ids.session}/archive`);
     expect(r.status).toBe(404);
     expect(await status(ids.session)).toBe('CREATED');

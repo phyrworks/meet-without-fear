@@ -16,6 +16,7 @@
  *     (job).
  */
 
+import { getNickname, getNicknameForSessionPartner } from '../contacts';
 import { getJobPrisma, prisma, type DbClient } from '../../lib/prisma';
 import { encryptColumnValue } from '../../lib/prisma-encryption-middleware';
 import { reencryptForSession } from '../../lib/share-moments';
@@ -49,7 +50,7 @@ import { checkAndRevealBothIfReady } from './state';
 // Helpers
 // ============================================================================
 
-/** The name `viewer` uses for `other` (their relationship nickname, else the other's name). */
+/** The name `viewer` uses for `other` (their own user_contact nickname, else the other's name). */
 async function displayNameForViewer(
   sessionId: string,
   viewer: SessionParty,
@@ -58,11 +59,10 @@ async function displayNameForViewer(
 ): Promise<string> {
   try {
     if (viewer.userId) {
-      const member = await prisma.relationshipMember.findFirst({
-        where: { userId: viewer.userId, relationship: { sessions: { some: { id: sessionId } } } },
-        select: { nickname: true },
-      });
-      if (member?.nickname?.trim()) return member.nickname.trim();
+      const nickname = other.userId
+        ? await getNickname(viewer.userId, other.userId)
+        : await getNicknameForSessionPartner(sessionId, viewer.userId);
+      if (nickname?.trim()) return nickname.trim();
     }
     return other.name?.trim() || fallback;
   } catch (error) {

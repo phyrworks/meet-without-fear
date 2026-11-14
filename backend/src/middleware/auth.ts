@@ -419,39 +419,6 @@ export function getUser(req: Request): AuthUser {
 }
 
 /**
- * Checks if the current user has access to a relationship
- */
-export async function requireRelationshipAccess(req: Request, res: Response, next: NextFunction): Promise<void> {
-  const user = req.user;
-  if (!user) {
-    throw new UnauthorizedError();
-  }
-
-  const relationshipId = req.params.relationshipId;
-  if (!relationshipId) {
-    next();
-    return;
-  }
-
-  try {
-    const membership = await prisma.relationshipMember.findFirst({
-      where: {
-        relationshipId,
-        userId: user.id,
-      },
-    });
-
-    if (!membership) {
-      throw new ForbiddenError('Access to this relationship denied');
-    }
-
-    next();
-  } catch (error) {
-    next(error);
-  }
-}
-
-/**
  * Checks if the current user has access to a session, and resolves their
  * participant ONCE for the rest of the request (TS-9).
  * Supports both :id and :sessionId route params.

@@ -36,10 +36,10 @@
 CREATE UNIQUE INDEX sql_user_one_ai ON "user" (kind) WHERE kind = 'ai';
 COMMENT ON INDEX sql_user_one_ai IS 'At most one user of kind ai: the AI principal seeded with the baseline (app.ai_user_id()).';
 
--- §1.1 session — A-Q3: one live session per relationship
-CREATE UNIQUE INDEX sql_session_one_live ON session (relationship_id)
-  WHERE status NOT IN ('RESOLVED', 'ABANDONED', 'ARCHIVED');
-COMMENT ON INDEX sql_session_one_live IS 'At most one live session per relationship (A-Q3): a new one may start only once the last is RESOLVED, ABANDONED or ARCHIVED.';
+-- §1.1 participant — work-k5fk.2: at most one initiator, the participant nobody added
+CREATE UNIQUE INDEX sql_participant_one_initiator ON participant (session_id)
+  WHERE added_by_user_id IS NULL;
+COMMENT ON INDEX sql_participant_one_initiator IS 'At most one initiator per session (work-k5fk.2): at most one participant without an adder (replaces relationship_member.role = owner). The one-live-session rule is live_session_pair''s key, not an index here.';
 
 -- §1.1 conversation — exactly one MAIN thread per participant
 CREATE UNIQUE INDEX sql_conversation_one_main ON conversation (participant_id)

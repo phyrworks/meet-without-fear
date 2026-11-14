@@ -21,9 +21,10 @@ export function trackSessionCreated(sessionId: string, personId?: string): void 
   });
 }
 
-export function trackPersonSelected(personId: string, isNewPerson: boolean): void {
+export function trackPersonSelected(personId: string | undefined, isNewPerson: boolean): void {
+  // A new person invited by link has no user id until they accept: omit person_id rather than send ''.
   track('Person Selected', {
-    person_id: personId,
+    ...(personId ? { person_id: personId } : {}),
     is_new_person: isNewPerson,
   });
 }

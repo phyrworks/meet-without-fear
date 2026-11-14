@@ -35,37 +35,8 @@ datasource db {
 // 1.1 Core / session (16)
 // ----------------------------------------------------------------------------
 
-model Relationship {
-  id        String   @id @default(dbgenerated("uuidv7()")) @db.Uuid
-  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
-
-  members  RelationshipMember[]
-  sessions Session[]
-
-  @@map("relationship")
-}
-
-model RelationshipMember {
-  relationshipId String           @map("relationship_id") @db.Uuid
-  userId         String           @map("user_id") @db.Uuid
-  role           RelationshipRole @default(member)
-  nickname       String?
-  joinedAt       DateTime         @default(now()) @map("joined_at") @db.Timestamptz(3)
-  createdAt      DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt      DateTime         @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
-
-  relationship Relationship @relation(fields: [relationshipId], references: [id], onDelete: Cascade, onUpdate: NoAction)
-  user         User         @relation(fields: [userId], references: [id], onDelete: Restrict, onUpdate: NoAction)
-
-  @@id([relationshipId, userId])
-  @@index([userId])
-  @@map("relationship_member")
-}
-
 model Session {
   id                    String        @id @default(dbgenerated("uuidv7()")) @db.Uuid
-  relationshipId        String        @map("relationship_id") @db.Uuid
   status                SessionStatus @default(CREATED)
   topicFrame            String?       @map("topic_frame")
   topicFrameConfirmedAt DateTime?     @map("topic_frame_confirmed_at") @db.Timestamptz(3)
@@ -78,10 +49,9 @@ model Session {
   createdAt             DateTime      @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt             DateTime      @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
 
-  relationship    Relationship @relation(fields: [relationshipId], references: [id], onDelete: Cascade, onUpdate: NoAction)
-  archivedBy      User?        @relation(fields: [archivedByUserId], references: [id], onDelete: Restrict, onUpdate: NoAction)
-  previousSession Session?     @relation("SessionLineage", fields: [previousSessionId], references: [id], onDelete: SetNull, onUpdate: NoAction)
-  nextSessions    Session[]    @relation("SessionLineage")
+  archivedBy      User?     @relation(fields: [archivedByUserId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  previousSession Session?  @relation("SessionLineage", fields: [previousSessionId], references: [id], onDelete: SetNull, onUpdate: NoAction)
+  nextSessions    Session[] @relation("SessionLineage")
 
   participants    Participant[]
   invitations     Invitation[]
@@ -94,27 +64,33 @@ model Session {
   userMemories    UserMemory[]
   reflections     Reflection[]
   brainActivities BrainActivity[]
+  livePairs       LiveSessionPair[]
 
-  @@index([relationshipId])
   @@index([previousSessionId])
   @@index([archivedByUserId])
   @@map("session")
 }
 
 model Participant {
-  id          String          @id @default(dbgenerated("uuidv7()")) @db.Uuid
-  sessionId   String          @map("session_id") @db.Uuid
-  userId      String?         @map("user_id") @db.Uuid
-  kind        ParticipantKind @default(human)
-  displayName String?         @map("display_name")
-  joinedAt    DateTime        @default(now()) @map("joined_at") @db.Timestamptz(3)
-  leftAt      DateTime?       @map("left_at") @db.Timestamptz(3)
-  createdAt   DateTime        @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt   DateTime        @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+  id            String          @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  sessionId     String          @map("session_id") @db.Uuid
+  userId        String?         @map("user_id") @db.Uuid
+  kind          ParticipantKind @default(human)
+  /// Who brought this participant in (a participant of the same session); NULL for the one initiator (work-k5fk.2).
+  addedByUserId String?         @map("added_by_user_id") @db.Uuid
+  displayName   String?         @map("display_name")
+  joinedAt      DateTime        @default(now()) @map("joined_at") @db.Timestamptz(3)
+  leftAt        DateTime?       @map("left_at") @db.Timestamptz(3)
+  createdAt     DateTime        @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt     DateTime        @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
 
-  session Session @relation(fields: [sessionId], references: [id], onDelete: Cascade, onUpdate: NoAction)
-  user    User?   @relation(fields: [userId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  session Session      @relation(fields: [sessionId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  user    User?        @relation(fields: [userId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  addedBy Participant? @relation("ParticipantAddedBy", fields: [sessionId, addedByUserId], references: [sessionId, userId], onDelete: NoAction, onUpdate: NoAction)
 
+  added                   Participant[]          @relation("ParticipantAddedBy")
+  livePairsAsA            LiveSessionPair[]      @relation("LiveSessionPairA")
+  livePairsAsB            LiveSessionPair[]      @relation("LiveSessionPairB")
   conversations           Conversation[]
   readState               ConversationReadState?
   sentMessages            Message[]              @relation("MessageSender")
@@ -151,7 +127,25 @@ model Participant {
 
   @@unique([sessionId, userId])
   @@index([userId])
+  @@index([sessionId, addedByUserId])
   @@map("participant")
+}
+
+/// The one-live-session-per-pair-of-humans rule as a key (work-k5fk.2): maintained by triggers only (trailer.sql
+/// app.t_live_session_pair, app.t_live_session_pair_end); a second live session for the pair fails with 23505.
+model LiveSessionPair {
+  userA     String @map("user_a") @db.Uuid
+  userB     String @map("user_b") @db.Uuid
+  sessionId String @map("session_id") @db.Uuid
+
+  session      Session     @relation(fields: [sessionId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  participantA Participant @relation("LiveSessionPairA", fields: [sessionId, userA], references: [sessionId, userId], onDelete: Cascade, onUpdate: NoAction)
+  participantB Participant @relation("LiveSessionPairB", fields: [sessionId, userB], references: [sessionId, userId], onDelete: Cascade, onUpdate: NoAction)
+
+  @@id([userA, userB])
+  @@index([sessionId, userA])
+  @@index([sessionId, userB])
+  @@map("live_session_pair")
 }
 
 /// sql_conversation_one_main: UNIQUE (participant_id) WHERE kind = 'MAIN' — sql-only.sql.
@@ -988,9 +982,10 @@ model User {
   name      String?
 
   identities          UserIdentity[]
-  persona             Persona?             @relation("PersonaUser")
-  ownedPersonas       Persona[]            @relation("PersonaOwner")
-  relationshipMembers RelationshipMember[]
+  persona             Persona?         @relation("PersonaUser")
+  ownedPersonas       Persona[]        @relation("PersonaOwner")
+  contacts            UserContact[]    @relation("UserContactOwner")
+  contactOf           UserContact[]    @relation("UserContactContact")
   participants        Participant[]
   aiMemories          AiMemory[]
   invitationsAccepted Invitation[]
@@ -1011,11 +1006,11 @@ model User {
 /// app.anonymize_user_account. mwf_app holds no privilege on it — the app resolves a subject through
 /// mwf_auth's app.resolve_user. userKind is always human (CHECK; pattern K).
 model UserIdentity {
-  provider   IdentityProvider
-  subject    String
-  userId     String           @map("user_id") @db.Uuid
-  userKind   UserKind         @default(human) @map("user_kind")
-  createdAt  DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
+  provider  IdentityProvider
+  subject   String
+  userId    String           @map("user_id") @db.Uuid
+  userKind  UserKind         @default(human) @map("user_kind")
+  createdAt DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
 
   user User @relation(fields: [userId, userKind], references: [id, kind], onDelete: Restrict, onUpdate: NoAction)
 
@@ -1026,6 +1021,22 @@ model UserIdentity {
 
 /// A modeled person (work-k5fk.3): the persona's user row and its human owner, both pinned by kind
 /// (CHECKs; pattern K). kind is always persona, ownerKind always human.
+/// What one user calls another (work-k5fk.2): private to userId, never shown to the contact.
+model UserContact {
+  userId        String   @map("user_id") @db.Uuid
+  contactUserId String   @map("contact_user_id") @db.Uuid
+  nickname      String?
+  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt     DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  user    User @relation("UserContactOwner", fields: [userId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  contact User @relation("UserContactContact", fields: [contactUserId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+
+  @@id([userId, contactUserId])
+  @@index([contactUserId])
+  @@map("user_contact")
+}
+
 model Persona {
   userId      String   @map("user_id") @db.Uuid
   kind        UserKind @default(persona)
@@ -1283,13 +1294,6 @@ enum InvitationStatus {
   EXPIRED
 
   @@map("invitation_status")
-}
-
-enum RelationshipRole {
-  member
-  owner
-
-  @@map("relationship_role")
 }
 
 enum EmpathyStatus {

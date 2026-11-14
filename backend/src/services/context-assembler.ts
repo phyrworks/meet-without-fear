@@ -14,6 +14,7 @@
  * D2; P3 §7). See `buildSharedVessel`.
  */
 
+import { getNicknameForSessionPartner } from './contacts';
 import { logger } from '../lib/logger';
 import { prisma } from '../lib/prisma';
 import { decryptRawRows } from '../lib/prisma-encryption-middleware';
@@ -514,16 +515,14 @@ export async function buildContextForParticipant(
   const userId = me.userId;
   const conversationId = me.mainConversationId;
 
-  const [session, coParticipants, stageStates, invitation] = await Promise.all([
+  const [session, coParticipants, stageStates, invitation, myNickname] = await Promise.all([
     prisma.session.findUnique({
       where: { id: me.sessionId },
       select: {
         id: true,
-        relationshipId: true,
         createdAt: true,
         topicFrame: true,
         topicFrameConfirmedAt: true,
-        relationship: { select: { members: { where: { userId }, select: { nickname: true } } } },
       },
     }),
     getCoParticipants(me.id),
@@ -533,6 +532,7 @@ export async function buildContextForParticipant(
       orderBy: { createdAt: 'desc' },
       select: { invitedByParticipantId: true, messageConfirmedAt: true, acceptedAt: true, status: true },
     }),
+    getNicknameForSessionPartner(me.sessionId, userId),
   ]);
   if (!session) throw new Error(`Session ${me.sessionId} not found`);
 
@@ -542,13 +542,15 @@ export async function buildContextForParticipant(
   const stageOpts: StageOpts = { invitationPending: stageState?.invitationPending ?? false };
 
   // Names. The partner MUST be named by the nickname this participant gave
-  // them (relationship_member.nickname), then the co-participant's display name.
-  const partner = coParticipants.find(c => c.kind === 'human' && !c.leftAt) ?? coParticipants[0];
+  // them (their own user_contact entry; work-k5fk.2), then the co-participant's display name.
+  // The present human, else one who left; never a modeled seat (work-k5fk.2 review F7).
+  const partner =
+    coParticipants.find(c => c.kind === 'human' && !c.leftAt) ?? coParticipants.find(c => c.kind === 'human');
   const userName =
     me.displayName ||
     (await prisma.user.findUnique({ where: { id: userId }, select: { name: true } }))?.name ||
     'there';
-  const partnerName = session.relationship.members[0]?.nickname || partner?.displayName || 'your partner';
+  const partnerName = myNickname || partner?.displayName || 'your partner';
 
   const turnBufferSize = getTurnBufferSize(stage, intent.intent);
   const ownMessages = conversationId ? await loadOwnConversation(conversationId, me.id) : [];
@@ -556,7 +558,7 @@ export async function buildContextForParticipant(
   const [emotionalThread, priorThemes, sessionSummary, userMemories, aiMemory, sharedVessel] = await Promise.all([
     buildEmotionalThread(me.id, depth),
     depth === 'full' || depth === 'light'
-      ? buildPriorThemes(me.sessionId, session.relationshipId)
+      ? buildPriorThemes(me.sessionId, userId, partner?.userId ?? null)
       : Promise.resolve(undefined),
     depth !== 'none' ? buildSessionSummary(me.sessionId, userId) : Promise.resolve(undefined),
     buildUserMemoriesContext(userId, me.sessionId),
@@ -796,14 +798,24 @@ async function buildEmotionalThread(participantId: string, depth: RetrievalDepth
   return { initialIntensity, currentIntensity, trend, notableShifts };
 }
 
-/** Prior resolved sessions in this relationship (session rows only). */
-async function buildPriorThemes(sessionId: string, relationshipId: string): Promise<PriorThemes> {
-  const previous = await prisma.session.findMany({
-    where: { relationshipId, id: { not: sessionId }, status: 'RESOLVED' },
-    orderBy: { updatedAt: 'desc' },
-    take: 3,
-    select: { updatedAt: true },
-  });
+/**
+ * Prior resolved sessions of these two people (session rows only): the
+ * sessions both are participants of (work-k5fk.2: no relationship). None
+ * before the partner joins.
+ */
+async function buildPriorThemes(sessionId: string, userId: string, partnerUserId: string | null): Promise<PriorThemes> {
+  const previous = !partnerUserId
+    ? []
+    : await prisma.session.findMany({
+        where: {
+          id: { not: sessionId },
+          status: 'RESOLVED',
+          AND: [{ participants: { some: { userId } } }, { participants: { some: { userId: partnerUserId } } }],
+        },
+        orderBy: { updatedAt: 'desc' },
+        take: 3,
+        select: { updatedAt: true },
+      });
   return {
     themes: [],
     lastSessionDate: previous[0]?.updatedAt.toISOString() ?? null,

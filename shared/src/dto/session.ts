@@ -23,7 +23,6 @@ export interface SessionStatusSummary {
 
 export interface SessionSummaryDTO {
   id: string;
-  relationshipId: string;
   status: SessionStatus;
   createdAt: string; // ISO 8601
   updatedAt: string;
@@ -32,7 +31,7 @@ export interface SessionSummaryDTO {
   partner: {
     id: string;
     name: string | null;
-    nickname: string | null; // What I call my partner (set during invitation or later)
+    nickname: string | null; // What I call my partner: my own contact entry (invite name, or PATCH /contacts/:userId/nickname)
   };
 
   // Stage progress (both users)
@@ -66,13 +65,6 @@ export interface StageProgressDTO {
 // ============================================================================
 
 export interface SessionDetailDTO extends SessionSummaryDTO {
-  // Relationship context
-  relationship: {
-    id: string;
-    createdAt: string;
-    sessionCount: number;
-  };
-
   // Stage gate status (for current stage)
   currentGates: StageGateDTO[];
 
@@ -222,7 +214,10 @@ export interface UnreadSessionCountResponse {
 }
 
 // ============================================================================
-// Partner Nickname
+// Contact Nickname — PATCH /contacts/:userId/nickname (work-k5fk.2)
+//
+// What the caller calls another user they share a session with: the caller's
+// own contact entry, never shown to that user.
 // ============================================================================
 
 export interface UpdateNicknameRequest {
@@ -234,12 +229,11 @@ export interface UpdateNicknameResponse {
 }
 
 // ============================================================================
-// People (Relationship Partners)
+// People (the other humans the user shares sessions with)
 // ============================================================================
 
 export interface PersonSummaryDTO {
   id: string;
-  relationshipId: string;
   name: string;
   nickname: string | null;
   initials: string;

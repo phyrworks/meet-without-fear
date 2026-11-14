@@ -27,6 +27,7 @@
  * second copy, or round 2 revealed before its time is still a violation.
  */
 
+import { RELATIONSHIP_ID_CONCEPT_RULE, relationshipIdDropped } from './relationship-dropped';
 import type { KnownLeak } from '../privacy';
 import { BOB_HELD_EMPATHY_STATEMENT } from '../../fixture-scenarios/scenarios';
 import {
@@ -75,6 +76,8 @@ const R2 = '<empathyAttempt:ada→bob@main#2>';
 export const UNREVEALED_ATTEMPT_HIDDEN_ALLOW: AllowList = {
   scenario: 'unrevealed-attempt-hidden',
   rules: [
+    relationshipIdDropped('unrevealed-attempt-hidden'),
+    RELATIONSHIP_ID_CONCEPT_RULE,
     ...TARGET_TOPIC_FRAME_RULES,
     ...TARGET_TOPIC_FRAME_INITIAL_RULES,
     ...READ_DTO_RULES,
@@ -254,6 +257,7 @@ UNREVEALED_ATTEMPT_HIDDEN_ALLOW.rules.push(
 export const UNREVEALED_ATTEMPT_HIDDEN_BYTE_TARGET_ALLOW: AllowList = {
   scenario: 'unrevealed-attempt-hidden',
   rules: [
+    relationshipIdDropped('unrevealed-attempt-hidden'),
     ...TARGET_TOPIC_FRAME_RULES,
     ...READ_DTO_RULES,
     UNREVEALED_ATTEMPT_HIDDEN_ALLOW.rules.find(r => r.kind === 'addedKeys' && r.keys.includes('round'))!,

@@ -94,7 +94,8 @@ export interface FixtureManifest {
   /** Ids minted during seeding — the seed for structural id labelling. */
   seeded: {
     sessionId: string;
-    relationshipId: string;
+    /** Current shape only: the target has no relationship (work-k5fk.2). */
+    relationshipId?: string;
     invitationId: string;
     userA: { id: string; email: string; name: string };
     userB?: { id: string; email: string; name: string };
@@ -218,7 +219,7 @@ async function seedInto(
 
   return {
     sessionId: result.session.id,
-    relationshipId: result.session.relationshipId,
+    ...(result.session.relationshipId ? { relationshipId: result.session.relationshipId } : {}),
     invitationId: result.invitation.id,
     userA: result.userA,
     userB: result.userB,

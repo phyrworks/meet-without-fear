@@ -35,7 +35,6 @@ export interface SessionSetupResult {
   session: {
     id: string;
     status: string;
-    relationshipId: string;
   };
   userA: {
     id: string;

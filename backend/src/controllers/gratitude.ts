@@ -17,6 +17,7 @@
  * document, reduced in memory (no DISTINCT ON).
  */
 
+import { getNicknameForSessionPartner } from '../services/contacts';
 import { Request, Response } from 'express';
 import { prisma } from '../lib/prisma';
 import { readFeature, updateFeature, newEntryId } from '../services/feature-state';
@@ -590,10 +591,7 @@ export const getPrompt = asyncHandler(async (req: Request, res: Response): Promi
       status: 'ACTIVE',
       createdAt: { gte: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000) },
     },
-    select: {
-      id: true,
-      relationship: { select: { members: { where: { userId: user.id }, select: { nickname: true } } } },
-    },
+    select: { id: true },
   });
 
   if (recentConflict) {
@@ -601,7 +599,8 @@ export const getPrompt = asyncHandler(async (req: Request, res: Response): Promi
     // (never the partner's user row — spec §7: display_name is the only user fact a co-participant sees).
     const me = await resolveParticipant(recentConflict.id, user.id);
     const partner = me ? (await getCoParticipants(me.id)).find(c => c.kind === 'human' && !c.leftAt) : undefined;
-    const partnerName = recentConflict.relationship.members[0]?.nickname || partner?.displayName || 'your partner';
+    const nickname = await getNicknameForSessionPartner(recentConflict.id, user.id);
+    const partnerName = nickname || partner?.displayName || 'your partner';
     context = 'recent_conflict';
     prompt = `I know things have been hard with ${partnerName}. Is there anything about them - or about yourself in this situation - you can appreciate, even while working through the difficulty?`;
   }

@@ -207,7 +207,6 @@ interface Viewer {
   participantId: string;
   userId: string;
   sessionStatus: string;
-  relationshipId: string;
   /** participant id → user id, for every participant of the session (DTOs carry user ids). */
   userOf: Map<string, string | null>;
   /** user id → participant id. */
@@ -220,7 +219,7 @@ async function viewerFor(sessionId: string, userId: string): Promise<Viewer> {
   const me = await resolveParticipant(sessionId, userId);
   if (!me) throw new TendingNotFoundError();
   const [session, participants] = await Promise.all([
-    prisma.session.findUnique({ where: { id: sessionId }, select: { status: true, relationshipId: true } }),
+    prisma.session.findUnique({ where: { id: sessionId }, select: { status: true } }),
     prisma.participant.findMany({
       where: { sessionId },
       select: { id: true, userId: true, kind: true, leftAt: true },
@@ -233,7 +232,6 @@ async function viewerFor(sessionId: string, userId: string): Promise<Viewer> {
     participantId: me.id,
     userId,
     sessionStatus: session.status,
-    relationshipId: session.relationshipId,
     userOf: new Map(participants.map(p => [p.id, p.userId])),
     participantOfUser: new Map(participants.filter(p => p.userId).map(p => [p.userId as string, p.id])),
     humans: participants.filter(p => p.kind === 'human' && !p.leftAt).map(p => p.id),
@@ -1504,7 +1502,6 @@ async function startLinkedProcess(viewer: Viewer, handoff: string, now: Date): P
   const { sessionId, conversationId } = await prisma.$transaction(async tx => {
     const session = await tx.session.create({
       data: {
-        relationshipId: viewer.relationshipId,
         status: 'CREATED',
         previousSessionId: viewer.sessionId,
         topicFrame: 'Tending follow-up',
@@ -1512,7 +1509,9 @@ async function startLinkedProcess(viewer: Viewer, handoff: string, now: Date): P
       select: { id: true },
     });
     const participant = await tx.participant.create({
-      data: { sessionId: session.id, userId: viewer.userId, kind: 'human' },
+      // The caller starts the follow-up: its initiator (work-k5fk.2: no adder). The partner
+      // is linked by previous_session_id, not by a relationship row.
+      data: { sessionId: session.id, userId: viewer.userId, kind: 'human', addedByUserId: null },
       select: { id: true },
     });
     const conversation = await tx.conversation.create({

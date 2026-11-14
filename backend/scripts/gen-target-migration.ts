@@ -50,9 +50,11 @@ const INCLUDE = '-- @@include sql-only.sql';
  * The number of uuid7 columns tables.sql must declare. Defined once: checkTables()
  * throws unless the count equals it, and trailer() substitutes it for the
  * `@@UUID7_COLUMNS@@` placeholders in the trailer's step-20 assertion, so the
- * two cannot drift.
+ * two cannot drift. 135 since work-k5fk.2: relationship.id, relationship_member's
+ * two and session.relationship_id went (−4); user_contact's two,
+ * live_session_pair's three and participant.added_by_user_id came (+6).
  */
-export const UUID7_COLUMNS = 133;
+export const UUID7_COLUMNS = 135;
 const UUID7_PLACEHOLDER = '@@UUID7_COLUMNS@@';
 
 /**

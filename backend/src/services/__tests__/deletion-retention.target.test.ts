@@ -227,22 +227,17 @@ describeTarget('deletion and retention on the target (the job as mwf_job, the ap
   it('session retention as the job: stale ACTIVE → ABANDONED → ARCHIVED; a long-ARCHIVED session is hard-deleted with its tree, users kept', async () => {
     const { enforceSessionRetention, ACTIVE_SESSION_RETENTION_MS, ARCHIVED_SESSION_PURGE_MS } =
       await import('../session-retention');
-    // A fresh stale ACTIVE session of the same relationship (the fixture's is ABANDONED by now)
-    const [rel] = await run.sql<{ relationship_id: string }>(`SELECT relationship_id FROM session WHERE id = $1`, [
-      ids.session,
-    ]);
+    // A fresh stale ACTIVE session (the fixture's is ABANDONED by now)
     const old = new Date(Date.now() - ACTIVE_SESSION_RETENTION_MS - DAY);
-    const [s] = await run.sql<{ id: string }>(
-      `INSERT INTO session (relationship_id, status) VALUES ($1, 'CREATED') RETURNING id`,
-      [rel.relationship_id],
-    );
+    const [s] = await run.sql<{ id: string }>(`INSERT INTO session (status) VALUES ('CREATED') RETURNING id`);
     const users = await run.sql<{ id: string }>(
       `INSERT INTO "user" (email, first_name) VALUES ('ts12-r1@e2e.test', 'R1'), ('ts12-r2@e2e.test', 'R2') RETURNING id`,
     );
-    for (const u of users) {
+    for (const [i, u] of users.entries()) {
+      // The first is the initiator; the second was added by them (work-k5fk.2).
       const [p] = await run.sql<{ id: string }>(
-        `INSERT INTO participant (session_id, user_id) VALUES ($1, $2) RETURNING id`,
-        [s.id, u.id],
+        `INSERT INTO participant (session_id, user_id, added_by_user_id) VALUES ($1, $2, $3) RETURNING id`,
+        [s.id, u.id, i === 0 ? null : users[0].id],
       );
       const [c] = await run.sql<{ id: string }>(`INSERT INTO conversation (participant_id) VALUES ($1) RETURNING id`, [
         p.id,
@@ -277,19 +272,15 @@ describeTarget('deletion and retention on the target (the job as mwf_job, the ap
     const { enforceSessionRetention, ACTIVE_SESSION_RETENTION_MS } = await import('../session-retention');
     const old = new Date(Date.now() - ACTIVE_SESSION_RETENTION_MS - DAY);
     const staleActive = async (email: string, messageAt: Date | null) => {
-      const [r] = await run.sql<{ id: string }>(`INSERT INTO relationship DEFAULT VALUES RETURNING id`);
-      const [s] = await run.sql<{ id: string }>(
-        `INSERT INTO session (relationship_id, status) VALUES ($1, 'CREATED') RETURNING id`,
-        [r.id],
-      );
+      const [s] = await run.sql<{ id: string }>(`INSERT INTO session (status) VALUES ('CREATED') RETURNING id`);
       const [u, u2] = await run.sql<{ id: string }>(
         `INSERT INTO "user" (email, first_name) VALUES ($1, 'R'), ('x' || $1, 'R2') RETURNING id`,
         [email],
       );
       await run.sql(`INSERT INTO participant (session_id, user_id) VALUES ($1, $2)`, [s.id, u2.id]);
       const [p] = await run.sql<{ id: string }>(
-        `INSERT INTO participant (session_id, user_id) VALUES ($1, $2) RETURNING id`,
-        [s.id, u.id],
+        `INSERT INTO participant (session_id, user_id, added_by_user_id) VALUES ($1, $2, $3) RETURNING id`,
+        [s.id, u.id, u2.id],
       );
       const [c] = await run.sql<{ id: string }>(`INSERT INTO conversation (participant_id) VALUES ($1) RETURNING id`, [
         p.id,

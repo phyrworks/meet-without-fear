@@ -16,7 +16,7 @@ import { spacing, typography, useAppAppearance } from '../theme';
 
 interface CompactChatItemProps {
   testID?: string;
-  /** Whether this is the first session for this relationship */
+  /** Whether this is the first session of these two people */
   isFirstSession?: boolean;
 }
 

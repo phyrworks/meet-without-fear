@@ -22,6 +22,7 @@
  *     view projects "0.000000" where the old Float projected 0.
  */
 
+import { RELATIONSHIP_ID_CONCEPT_RULE, relationshipIdDropped } from './relationship-dropped';
 import type { KnownLeak } from '../privacy';
 import {
   empathySubmittedMilestone,
@@ -70,6 +71,8 @@ const bodyRules = (concept: boolean): AllowRule[] => [
 export const REFLECTION_NEVER_CROSSES_ALLOW: AllowList = {
   scenario: 'reflection-never-crosses',
   rules: [
+    relationshipIdDropped('reflection-never-crosses'),
+    RELATIONSHIP_ID_CONCEPT_RULE,
     ...TARGET_TOPIC_FRAME_RULES,
     ...TARGET_TOPIC_FRAME_INITIAL_RULES,
     ...bodyRules(true),
@@ -88,6 +91,7 @@ export const REFLECTION_NEVER_CROSSES_ALLOW: AllowList = {
 export const REFLECTION_NEVER_CROSSES_BYTE_TARGET_ALLOW: AllowList = {
   scenario: 'reflection-never-crosses',
   rules: [
+    relationshipIdDropped('reflection-never-crosses'),
     ...TARGET_TOPIC_FRAME_RULES,
     ...bodyRules(false),
     ...targetByteRules({

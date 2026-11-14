@@ -50,7 +50,8 @@ export interface StateFactoryResult {
   session: {
     id: string;
     status: string;
-    relationshipId: string;
+    /** Current shape only (work-k5fk.2: the target has no relationship). */
+    relationshipId?: string;
   };
   userA: {
     id: string;

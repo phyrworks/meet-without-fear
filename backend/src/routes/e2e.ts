@@ -44,73 +44,25 @@ export async function cleanupE2EUsers(req: Request, res: Response, next: NextFun
         success: true,
         deletedUsers: 0,
         deletedSessions: 0,
-        deletedRelationships: 0,
       });
       return;
     }
 
-    // Step 2: Find all relationships that have E2E test members
-    const e2eRelationships = await getE2EToolingPrisma().relationship.findMany({
-      where: {
-        members: {
-          some: { userId: { in: e2eUserIds } },
-        },
-      },
-      select: { id: true },
+    // Step 2 (work-k5fk.2: no relationship): delete every session an E2E user
+    // is a participant of. Session cascade (onDelete: Cascade) handles all
+    // children: participants, conversations and messages, drafts, attempts,
+    // results, consents, needs, proposals, invitations, live_session_pair …
+    const sessionResult = await getE2EToolingPrisma().session.deleteMany({
+      where: { participants: { some: { userId: { in: e2eUserIds } } } },
     });
-    const e2eRelationshipIds = e2eRelationships.map(r => r.id);
-
-    // Step 3: Delete sessions linked to those relationships
-    // Session cascade (onDelete: Cascade) handles all children:
-    // Messages, StageProgress, UserVessel, EmpathyDraft, EmpathyAttempt,
-    // EmpathyValidation, ReconcilerResult -> ReconcilerShareOffer,
-    // StrategyProposal, StrategyRanking, ConsentRecord, SharedVessel,
-    // Invitation, UserMemory, ValidationFeedbackDraft,
-    // RefinementAttemptCounter, BrainActivity, EmotionalExerciseCompletion
-    let deletedSessions = 0;
-    if (e2eRelationshipIds.length > 0) {
-      const sessionResult = await getE2EToolingPrisma().session.deleteMany({
-        where: { relationshipId: { in: e2eRelationshipIds } },
-      });
-      deletedSessions = sessionResult.count;
-    }
-
-    // Step 4: Delete the relationships themselves
-    let deletedRelationships = 0;
-    if (e2eRelationshipIds.length > 0) {
-      const relationshipResult = await getE2EToolingPrisma().relationship.deleteMany({
-        where: { id: { in: e2eRelationshipIds } },
-      });
-      deletedRelationships = relationshipResult.count;
-    }
-
-    // Step 5: Also clean up any orphaned relationships (zero members)
-    // This handles edge cases where prior partial cleanup removed members
-    const orphanedRelationships = await getE2EToolingPrisma().relationship.findMany({
-      where: {
-        members: { none: {} },
-      },
-      select: { id: true },
-    });
-    if (orphanedRelationships.length > 0) {
-      const orphanRelIds = orphanedRelationships.map(r => r.id);
-      // Delete sessions under orphaned relationships first
-      const orphanSessionResult = await getE2EToolingPrisma().session.deleteMany({
-        where: { relationshipId: { in: orphanRelIds } },
-      });
-      deletedSessions += orphanSessionResult.count;
-      const orphanRelResult = await getE2EToolingPrisma().relationship.deleteMany({
-        where: { id: { in: orphanRelIds } },
-      });
-      deletedRelationships += orphanRelResult.count;
-    }
+    const deletedSessions = sessionResult.count;
 
     // Step 6: Delete the E2E users themselves. E2E TOOLING ONLY (behind
     // E2E_AUTH_BYPASS): production never hard-deletes a user — account
     // deletion tombstones it (app.anonymize_user_account; spec §7). Every FK to
     // `user` is RESTRICT on the target, so the synthetic users' own U-class rows
     // go first (their sessions, participants and invitations went with the
-    // relationships above).
+    // sessions above).
     const e2eUser = { userId: { in: e2eUserIds } };
     await getE2EToolingPrisma().$transaction([
       getE2EToolingPrisma().reflection.deleteMany({ where: e2eUser }),
@@ -123,7 +75,9 @@ export async function cleanupE2EUsers(req: Request, res: Response, next: NextFun
       getE2EToolingPrisma().reminder.deleteMany({ where: e2eUser }),
       getE2EToolingPrisma().userIdentity.deleteMany({ where: e2eUser }),
       getE2EToolingPrisma().persona.deleteMany({ where: { ownerUserId: { in: e2eUserIds } } }),
-      getE2EToolingPrisma().relationshipMember.deleteMany({ where: e2eUser }),
+      getE2EToolingPrisma().userContact.deleteMany({
+        where: { OR: [{ userId: { in: e2eUserIds } }, { contactUserId: { in: e2eUserIds } }] },
+      }),
       getE2EToolingPrisma().participant.deleteMany({ where: e2eUser }),
       getE2EToolingPrisma().invitation.updateMany({
         where: { acceptedByUserId: { in: e2eUserIds } },
@@ -138,7 +92,6 @@ export async function cleanupE2EUsers(req: Request, res: Response, next: NextFun
       success: true,
       deletedUsers: userResult.count,
       deletedSessions,
-      deletedRelationships,
     });
   } catch (error) {
     next(error);

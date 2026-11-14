@@ -351,8 +351,10 @@ export function deliveredCopyInRead(
 export const TARGET_RELATION_MAP: Record<string, string[]> = {
   Message: ['message'],
   Session: ['session'],
-  Relationship: ['relationship'],
-  RelationshipMember: ['relationship_member'],
+  // work-k5fk.2: relationship is gone (no image); a member's nickname is the reader's own user_contact row
+  // (relationship-dropped.ts).
+  Relationship: [],
+  RelationshipMember: ['user_contact'],
   // work-k5fk.1: User.clerkId is user_identity.subject (the E2E bypass reads and binds it per request).
   User: ['user', 'user_preferences', 'user_identity'],
   StageProgress: ['participant_milestone', 'milestone'],

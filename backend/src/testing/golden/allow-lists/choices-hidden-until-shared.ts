@@ -14,6 +14,7 @@
  * choices may change.
  */
 
+import { RELATIONSHIP_ID_CONCEPT_RULE, relationshipIdDropped } from './relationship-dropped';
 import type { KnownLeak } from '../privacy';
 import {
   DEFAULT_MILESTONE_MASK,
@@ -332,6 +333,8 @@ function initialRepairFixtureDeltas(): AllowRule[] {
 export const CHOICES_HIDDEN_UNTIL_SHARED_ALLOW: AllowList = {
   scenario: 'choices-hidden-until-shared',
   rules: [
+    relationshipIdDropped('choices-hidden-until-shared'),
+    RELATIONSHIP_ID_CONCEPT_RULE,
     ...TARGET_TOPIC_FRAME_RULES,
     ...TARGET_TOPIC_FRAME_INITIAL_RULES,
     ...SHARED_RULES(true),
@@ -398,6 +401,7 @@ export const CHOICES_BOB_WRITES_KNOWN_LEAKS: KnownLeak[] = [];
 export const CHOICES_HIDDEN_UNTIL_SHARED_BYTE_TARGET_ALLOW: AllowList = {
   scenario: 'choices-hidden-until-shared',
   rules: [
+    relationshipIdDropped('choices-hidden-until-shared'),
     ...TARGET_TOPIC_FRAME_RULES,
     ...SHARED_RULES(false),
     ...targetByteRules({

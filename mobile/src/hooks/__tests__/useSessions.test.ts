@@ -417,7 +417,6 @@ describe('useSessions', () => {
           status: SessionStatus.CREATED,
           currentStage: 0,
           stageStatus: StageStatus.IN_PROGRESS,
-          relationshipId: 'relationship-123',
           partner: { id: 'user-456', name: 'Partner', nickname: null },
           myProgress: { stage: 0, status: StageStatus.IN_PROGRESS },
           createdAt: '2024-01-01T00:00:00.000Z',
