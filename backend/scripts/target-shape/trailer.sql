@@ -1086,8 +1086,7 @@ CREATE FUNCTION app.t_participant_kind() RETURNS trigger
       RETURN NEW;  -- the FK to "user" refuses it
     END IF;
     IF (v_kind = 'human') <> (NEW.kind = 'human') THEN
-      RAISE EXCEPTION 'participant kind % does not match user kind %: a human sits as human, the AI and a persona as modeled', NEW.kind, v_kind
-        USING ERRCODE = 'check_violation';
+      RAISE EXCEPTION 'participant refused' USING ERRCODE = 'check_violation';
     END IF;
     RETURN NEW;
   END
@@ -1100,6 +1099,9 @@ CREATE TRIGGER t_participant_kind BEFORE INSERT OR UPDATE OF user_id, kind ON pu
 
 -- T-participant-added-by: the adder (an FK-pinned participant of the same
 -- session) is a human, and a persona is seated only by its owner.
+-- Both participant triggers refuse with ONE message ('participant refused',
+-- check_violation), so a refusal is no oracle for another user's kind or a
+-- persona's owner (review round 1, F8).
 CREATE FUNCTION app.t_participant_added_by() RETURNS trigger
   LANGUAGE plpgsql SECURITY DEFINER
   SET search_path = pg_catalog, public, pg_temp
@@ -1110,10 +1112,10 @@ CREATE FUNCTION app.t_participant_added_by() RETURNS trigger
     END IF;
     IF NOT EXISTS (SELECT 1 FROM public.participant a
                    WHERE a.session_id = NEW.session_id AND a.user_id = NEW.added_by_user_id AND a.kind = 'human') THEN
-      RAISE EXCEPTION 'a participant is added by a human participant of the same session' USING ERRCODE = 'check_violation';
+      RAISE EXCEPTION 'participant refused' USING ERRCODE = 'check_violation';
     END IF;
     IF EXISTS (SELECT 1 FROM public.persona x WHERE x.user_id = NEW.user_id AND x.owner_user_id <> NEW.added_by_user_id) THEN
-      RAISE EXCEPTION 'a persona is seated only by its owner' USING ERRCODE = 'check_violation';
+      RAISE EXCEPTION 'participant refused' USING ERRCODE = 'check_violation';
     END IF;
     RETURN NEW;
   END
@@ -1126,21 +1128,33 @@ CREATE TRIGGER t_participant_added_by BEFORE INSERT OR UPDATE OF added_by_user_i
 
 -- T-live-session-pair (A-Q3, owner decision Q3: DB-enforced at the second
 -- human's join): a human joining a live session pairs with every other
--- present human of it. The PRIMARY KEY of live_session_pair is the
--- serialisation point, so no advisory lock is needed: of two sessions whose
--- second humans join at once, the later INSERT fails with unique_violation
--- (23505, live_session_pair_pkey) and its whole transaction (the accept)
--- rolls back. INSERT only: a participant's user and kind never change once
--- seated (participant_check, t_participant_kind; the pair's FKs hold a paired
--- user_id in place).
+-- present human of it. It first takes the session row FOR NO KEY UPDATE —
+-- the lock session_set_status and session_archive take before a status move
+-- (review round 1, F1) — so:
+--   * a join and a status move on the same session serialise: a join that
+--     waits behind an archive re-reads the status and pairs nothing; a status
+--     move that waits behind a join sees its pair rows and releases them
+--     (t_live_session_pair_end);
+--   * two humans joining one session at once serialise too, so the later sees
+--     the earlier's participant row and their mutual pair is written.
+-- Across sessions the PRIMARY KEY of live_session_pair is the serialisation
+-- point: of two sessions whose second humans join at once, the later INSERT
+-- fails with unique_violation (23505, live_session_pair_pkey) and its whole
+-- transaction (the accept) rolls back. Lock order is the accept's: invitation
+-- (lockInvitationForAccept), then session. INSERT only: a participant's user
+-- and kind never change once seated (participant_check, t_participant_kind;
+-- the pair's FKs hold a paired user_id in place); a later left_at does not
+-- release a pair (work-k5fk follow-up for N-party leave).
 CREATE FUNCTION app.t_live_session_pair() RETURNS trigger
   LANGUAGE plpgsql SECURITY DEFINER
   SET search_path = pg_catalog, public, pg_temp
   AS $$
   BEGIN
-    IF NOT EXISTS (SELECT 1 FROM public.session s
-                   WHERE s.id = NEW.session_id AND s.status NOT IN ('RESOLVED', 'ABANDONED', 'ARCHIVED')) THEN
-      RETURN NULL;  -- not a live session: nothing to pair
+    PERFORM 1 FROM public.session s
+    WHERE s.id = NEW.session_id AND s.status NOT IN ('RESOLVED', 'ABANDONED', 'ARCHIVED')
+    FOR NO KEY UPDATE;
+    IF NOT FOUND THEN
+      RETURN NULL;  -- not a live session (or it stopped being one while we waited): nothing to pair
     END IF;
     INSERT INTO public.live_session_pair (user_a, user_b, session_id)
     SELECT least(NEW.user_id, o.user_id), greatest(NEW.user_id, o.user_id), NEW.session_id

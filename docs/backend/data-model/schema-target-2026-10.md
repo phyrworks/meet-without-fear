@@ -59,10 +59,10 @@ What one user calls another (work-k5fk.2; replaces `relationship_member.nickname
 |---|---|---|---|---|
 | user_id | uuid | no | | FK user RESTRICT — the owner, the only reader |
 | contact_user_id | uuid | no | | FK user RESTRICT — whom the entry names |
-| nickname | text | yes | | 1–100 characters; NULL clears it |
+| nickname | text | yes | | at most 100 characters, never blank; NULL clears it |
 | created_at, updated_at | timestamptz | no | now() | |
 
-Keys: PK (user_id, contact_user_id). CHECK `user_id <> contact_user_id`. Index (contact_user_id). Written by createSession (the invite name for a known person), accept (a link invitee: the inviter's invite name, if the inviter has no entry — FINDING: the invitee's request writes the inviter's row) and `PATCH /contacts/:userId/nickname` (someone the caller shares a session with). The account walk deletes the user's own entries.
+Keys: PK (user_id, contact_user_id). CHECK `user_id <> contact_user_id`. Index (contact_user_id). Written only by its owner: createSession (the invite name for a known person) and `PATCH /contacts/:userId/nickname` (someone the caller shares a session with). A link invitee's name is resolved at read time from the inviter's own `invitation.invitee_name` (accepted_by_user_id = the invitee), never written into a row (review round 1). The account walk deletes the user's own entries.
 RLS: S/I/U/D `user_id = me`.
 Absorbs: `RelationshipMember.nickname`.
 
@@ -74,7 +74,7 @@ The rule "one live session per pair of humans" as a key (work-k5fk.2, A-Q3). · 
 | user_b | uuid | no | | the greater |
 | session_id | uuid | no | | FK session CASCADE; FKs (session_id, user_a) and (session_id, user_b) → participant (session_id, user_id) CASCADE |
 
-Keys: PK (user_a, user_b). CHECK `user_a < user_b`. Indexes (session_id, user_a), (session_id, user_b). Maintained by definer triggers only: **T-live-session-pair** (`AFTER INSERT ON participant` for a present human of a live session: one row per other present human — the PK refuses a second live session with 23505 at the second human's join) and **T-live-session-pair-end** (`AFTER UPDATE OF status ON session` → RESOLVED/ABANDONED/ARCHIVED: the session's rows go). The AI and personas are `modeled` participants and never appear.
+Keys: PK (user_a, user_b). CHECK `user_a < user_b`. Indexes (session_id, user_a), (session_id, user_b). Maintained by definer triggers only: **T-live-session-pair** (`AFTER INSERT ON participant` for a present human of a live session, holding the session row `FOR NO KEY UPDATE` so joins and status moves serialise: one row per other present human — the PK refuses a second live session with 23505 at the second human's join) and **T-live-session-pair-end** (`AFTER UPDATE OF status ON session` → RESOLVED/ABANDONED/ARCHIVED: the session's rows go). The AI and personas are `modeled` participants and never appear.
 RLS: S `user_a = me OR user_b = me` (the app's invite-time pre-check) · I/U/D none (the trigger functions).
 Absorbs: the old partial unique `sql_session_one_live (relationship_id)`.
 
@@ -104,7 +104,7 @@ One membership of a session: the first-class entity (D1). · core · S (existenc
 | session_id | uuid | no | | FK session CASCADE |
 | user_id | uuid | yes | | FK user RESTRICT; NULL for an imagined (modeled) participant |
 | kind | participant_kind | no | 'human' | `human \| modeled`: human exactly when the user is a human (T-participant-kind); the AI and a persona sit as modeled |
-| added_by_user_id | uuid | yes | | who brought them in (work-k5fk.2): FK (session_id, added_by_user_id) → participant (session_id, user_id) CASCADE; NULL for the one initiator |
+| added_by_user_id | uuid | yes | | who brought them in (work-k5fk.2): FK (session_id, added_by_user_id) → participant (session_id, user_id), no action; NULL for the initiator (at most one) |
 | display_name | text | yes | | snapshot of the name shown to co-participants; the only `user` fact a co-participant may see (P3 §2 `partner_display_name`) |
 | joined_at | timestamptz | no | now() | |
 | left_at | timestamptz | yes | | set when the user leaves/deletes; row stays |

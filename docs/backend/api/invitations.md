@@ -245,7 +245,7 @@ These invitation-adjacent endpoints live in the same route file:
 
 > **One live session per pair of humans** (work-k5fk.2, owner decision Q3): the database enforces it with `live_session_pair`'s key, at the moment the second human joins — `POST /invitations/:id/accept` answers **409 `CONFLICT`** ("You already have a session in progress with this person…") and changes nothing when the invitee already shares a live session with the inviter. The invite-time pre-check: `POST /api/v1/sessions` with a `personId` the caller already shares a live session with returns that session as `existingActiveSession` (200) instead of creating one, and with `forceCreate: true` answers the same 409. A link invitation (`inviteName` only) names nobody yet, so only the accept can refuse it.
 >
-> **Who added whom:** the inviter is the session's initiator (`participant.added_by_user_id` NULL, one per session); the invitee's participant is added by the inviter. A link invitee's invite name becomes the inviter's nickname for them at accept, unless the inviter already has one.
+> **Who added whom:** the inviter is the session's initiator (`participant.added_by_user_id` NULL, one per session); the invitee's participant is added by the inviter. What the inviter calls a link invitee is resolved when the inviter reads it — their own nickname for them, else the invite name of the invitation the invitee accepted; nothing is written into the inviter's rows by the invitee's accept.
 
 ---
 

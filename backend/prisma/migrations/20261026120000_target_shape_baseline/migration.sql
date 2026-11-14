@@ -122,7 +122,7 @@ REVOKE EXECUTE ON FUNCTION app.current_user_id() FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION app.current_user_id() TO mwf_app, mwf_job, mwf_ops, mwf_auth;
 
 -- ============================================================================
--- 1. Domains, enums and the 49 target tables (backend/scripts/target-shape/tables.sql; 130 named objects, all lower-case; 135 uuid7 columns)
+-- 1. Domains, enums and the 49 target tables (backend/scripts/target-shape/tables.sql; 131 named objects, all lower-case; 135 uuid7 columns)
 -- ============================================================================
 
 -- ============================================================================
@@ -641,7 +641,7 @@ GRANT SELECT (user_id, owner_user_id) ON persona TO mwf_job;
 CREATE TABLE user_contact (
     user_id uuid7 NOT NULL REFERENCES "user" ON DELETE RESTRICT,
     contact_user_id uuid7 NOT NULL REFERENCES "user" ON DELETE RESTRICT,
-    nickname text CHECK (char_length(nickname) BETWEEN 1 AND 100),
+    nickname text CHECK (char_length(nickname) <= 100 AND btrim(nickname) <> ''),
     created_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
@@ -652,12 +652,13 @@ CREATE INDEX ON user_contact (contact_user_id);
 COMMENT ON TABLE user_contact IS 'What one user calls another, like a phone''s contact list (work-k5fk.2, replacing relationship_member.nickname): an attribute of the ordered pair, private to user_id and never shown to the contact. Not a membership: who shares a session is participant.';
 COMMENT ON COLUMN user_contact.user_id IS 'The owner of the entry: the user who chose the nickname, and the only one who reads it.';
 COMMENT ON COLUMN user_contact.contact_user_id IS 'The person the entry names.';
-COMMENT ON COLUMN user_contact.nickname IS 'What user_id calls contact_user_id (1 to 100 characters; the invite name or PATCH /contacts/:userId/nickname); NULL clears it. Plain text, set by the owner.';
+COMMENT ON COLUMN user_contact.nickname IS 'What user_id calls contact_user_id (at most 100 characters, not blank; the invite name for a known person or PATCH /contacts/:userId/nickname); NULL clears it. Plain text, set by the owner.';
+COMMENT ON CONSTRAINT user_contact_nickname_check ON user_contact IS 'A nickname is at most 100 characters and never blank (whitespace only).';
 COMMENT ON CONSTRAINT user_contact_check ON user_contact IS 'Nobody is their own contact.';
 COMMENT ON INDEX user_contact_contact_user_id_idx IS 'The FK index of contact_user_id (the RESTRICT check on a user row).';
--- mwf_app: the caller's own entries only — createSession records the invite name, accept records the inviter's invite
--- name for a link invitee (FINDING: a write of the inviter's row, by the invitee's request), PATCH
--- /contacts/:userId/nickname edits it; every partner name reads the caller's entry.
+-- mwf_app: the caller's own entries only — createSession records the invite name for a known person, PATCH
+-- /contacts/:userId/nickname edits it; every partner name reads the caller's own entry (a link invitee's name is
+-- resolved from the caller's own invitation.invitee_name at read time, never written into a row: review round 1, Q1).
 GRANT SELECT ON user_contact TO mwf_app;
 GRANT INSERT (user_id, contact_user_id, nickname, created_at, updated_at) ON user_contact TO mwf_app;
 GRANT UPDATE (nickname, updated_at) ON user_contact TO mwf_app;
@@ -728,8 +729,9 @@ CREATE TABLE participant (
 
     UNIQUE (session_id, user_id),
     -- work-k5fk.2: whoever brought this participant in is a participant of the same session (a self-reference, so not a
-    -- cycle); the initiator is the one row with no adder (sql_participant_one_initiator).
-    FOREIGN KEY (session_id, added_by_user_id) REFERENCES participant (session_id, user_id) ON DELETE CASCADE,
+    -- cycle); the initiator is the row with no adder (sql_participant_one_initiator: at most one). No ON DELETE action:
+    -- deleting an initiator must not delete everyone they added (review round 1, F6).
+    FOREIGN KEY (session_id, added_by_user_id) REFERENCES participant (session_id, user_id),
     -- §1.1 participant: a human is always a user; a modeled seat may be one (the AI, a persona) or none
     CHECK (kind = 'modeled' OR user_id IS NOT NULL),
     -- work-k5fk.2: only a human starts a session; the AI, a persona or an imagined participant is always brought in
@@ -741,11 +743,11 @@ CREATE INDEX ON participant (session_id, added_by_user_id);
 -- + sql_participant_one_initiator (sql-only.sql)
 COMMENT ON TABLE participant IS 'One membership of a session, the entity every session-scoped row keys on. A human participant is a human user; a modeled one is the AI, a persona, or an imagined participant with no user (app.t_participant_kind). Inserting a second human maintains live_session_pair (app.t_live_session_pair).';
 COMMENT ON COLUMN participant.kind IS 'human exactly when the user is a human (app.t_participant_kind); every present-humans rule (readiness, the reveal gate, agreement parties, the pair rule) counts only human rows.';
-COMMENT ON COLUMN participant.added_by_user_id IS 'Who brought this participant into the session (work-k5fk.2): the inviter for an invitee, the human who seated the AI or their own persona; NULL for exactly one row, the session''s initiator. Replaces relationship_member.role = owner.';
+COMMENT ON COLUMN participant.added_by_user_id IS 'Who brought this participant into the session (work-k5fk.2): the inviter for an invitee, the human who seated the AI or their own persona; NULL for the session''s initiator (at most one such row, sql_participant_one_initiator). Replaces relationship_member.role = owner.';
 COMMENT ON CONSTRAINT participant_check ON participant IS 'A human participant is a user; only a modeled one may have none.';
 COMMENT ON CONSTRAINT participant_check1 ON participant IS 'Only a human can be the initiator: the AI, a persona or an imagined participant always has an adder.';
 COMMENT ON CONSTRAINT participant_check2 ON participant IS 'Nobody adds themself: the initiator has no adder, everyone else was added by another participant.';
-COMMENT ON INDEX participant_session_id_added_by_user_id_idx IS 'The FK index of (session_id, added_by_user_id): the ON DELETE CASCADE from the adder''s row.';
+COMMENT ON INDEX participant_session_id_added_by_user_id_idx IS 'The FK index of (session_id, added_by_user_id): the NO ACTION check when an adder''s row is deleted (a participant who added others cannot be deleted on its own; the session''s CASCADE takes all of them).';
 COMMENT ON COLUMN participant.display_name IS 'Snapshot of the name shown to co-participants, the only user fact they see; NULL falls back to user.name (v_participant).';
 COMMENT ON COLUMN participant.left_at IS 'When the participant left or deleted their account; the row stays.';
 -- mwf_app: the inviter's participant at createSession (no adder: the initiator), the invitee's at accept (added by the
@@ -2212,10 +2214,10 @@ GRANT SELECT ON brain_activity TO mwf_ops;
 CREATE UNIQUE INDEX sql_user_one_ai ON "user" (kind) WHERE kind = 'ai';
 COMMENT ON INDEX sql_user_one_ai IS 'At most one user of kind ai: the AI principal seeded with the baseline (app.ai_user_id()).';
 
--- §1.1 participant — work-k5fk.2: the initiator is the one participant nobody added
+-- §1.1 participant — work-k5fk.2: at most one initiator, the participant nobody added
 CREATE UNIQUE INDEX sql_participant_one_initiator ON participant (session_id)
   WHERE added_by_user_id IS NULL;
-COMMENT ON INDEX sql_participant_one_initiator IS 'Exactly one initiator per session (work-k5fk.2): at most one participant without an adder (replaces relationship_member.role = owner). The one-live-session rule is live_session_pair''s key, not an index here.';
+COMMENT ON INDEX sql_participant_one_initiator IS 'At most one initiator per session (work-k5fk.2): at most one participant without an adder (replaces relationship_member.role = owner). The one-live-session rule is live_session_pair''s key, not an index here.';
 
 -- §1.1 conversation — exactly one MAIN thread per participant
 CREATE UNIQUE INDEX sql_conversation_one_main ON conversation (participant_id)
@@ -3336,8 +3338,7 @@ CREATE FUNCTION app.t_participant_kind() RETURNS trigger
       RETURN NEW;  -- the FK to "user" refuses it
     END IF;
     IF (v_kind = 'human') <> (NEW.kind = 'human') THEN
-      RAISE EXCEPTION 'participant kind % does not match user kind %: a human sits as human, the AI and a persona as modeled', NEW.kind, v_kind
-        USING ERRCODE = 'check_violation';
+      RAISE EXCEPTION 'participant refused' USING ERRCODE = 'check_violation';
     END IF;
     RETURN NEW;
   END
@@ -3350,6 +3351,9 @@ CREATE TRIGGER t_participant_kind BEFORE INSERT OR UPDATE OF user_id, kind ON pu
 
 -- T-participant-added-by: the adder (an FK-pinned participant of the same
 -- session) is a human, and a persona is seated only by its owner.
+-- Both participant triggers refuse with ONE message ('participant refused',
+-- check_violation), so a refusal is no oracle for another user's kind or a
+-- persona's owner (review round 1, F8).
 CREATE FUNCTION app.t_participant_added_by() RETURNS trigger
   LANGUAGE plpgsql SECURITY DEFINER
   SET search_path = pg_catalog, public, pg_temp
@@ -3360,10 +3364,10 @@ CREATE FUNCTION app.t_participant_added_by() RETURNS trigger
     END IF;
     IF NOT EXISTS (SELECT 1 FROM public.participant a
                    WHERE a.session_id = NEW.session_id AND a.user_id = NEW.added_by_user_id AND a.kind = 'human') THEN
-      RAISE EXCEPTION 'a participant is added by a human participant of the same session' USING ERRCODE = 'check_violation';
+      RAISE EXCEPTION 'participant refused' USING ERRCODE = 'check_violation';
     END IF;
     IF EXISTS (SELECT 1 FROM public.persona x WHERE x.user_id = NEW.user_id AND x.owner_user_id <> NEW.added_by_user_id) THEN
-      RAISE EXCEPTION 'a persona is seated only by its owner' USING ERRCODE = 'check_violation';
+      RAISE EXCEPTION 'participant refused' USING ERRCODE = 'check_violation';
     END IF;
     RETURN NEW;
   END
@@ -3376,21 +3380,33 @@ CREATE TRIGGER t_participant_added_by BEFORE INSERT OR UPDATE OF added_by_user_i
 
 -- T-live-session-pair (A-Q3, owner decision Q3: DB-enforced at the second
 -- human's join): a human joining a live session pairs with every other
--- present human of it. The PRIMARY KEY of live_session_pair is the
--- serialisation point, so no advisory lock is needed: of two sessions whose
--- second humans join at once, the later INSERT fails with unique_violation
--- (23505, live_session_pair_pkey) and its whole transaction (the accept)
--- rolls back. INSERT only: a participant's user and kind never change once
--- seated (participant_check, t_participant_kind; the pair's FKs hold a paired
--- user_id in place).
+-- present human of it. It first takes the session row FOR NO KEY UPDATE —
+-- the lock session_set_status and session_archive take before a status move
+-- (review round 1, F1) — so:
+--   * a join and a status move on the same session serialise: a join that
+--     waits behind an archive re-reads the status and pairs nothing; a status
+--     move that waits behind a join sees its pair rows and releases them
+--     (t_live_session_pair_end);
+--   * two humans joining one session at once serialise too, so the later sees
+--     the earlier's participant row and their mutual pair is written.
+-- Across sessions the PRIMARY KEY of live_session_pair is the serialisation
+-- point: of two sessions whose second humans join at once, the later INSERT
+-- fails with unique_violation (23505, live_session_pair_pkey) and its whole
+-- transaction (the accept) rolls back. Lock order is the accept's: invitation
+-- (lockInvitationForAccept), then session. INSERT only: a participant's user
+-- and kind never change once seated (participant_check, t_participant_kind;
+-- the pair's FKs hold a paired user_id in place); a later left_at does not
+-- release a pair (work-k5fk follow-up for N-party leave).
 CREATE FUNCTION app.t_live_session_pair() RETURNS trigger
   LANGUAGE plpgsql SECURITY DEFINER
   SET search_path = pg_catalog, public, pg_temp
   AS $$
   BEGIN
-    IF NOT EXISTS (SELECT 1 FROM public.session s
-                   WHERE s.id = NEW.session_id AND s.status NOT IN ('RESOLVED', 'ABANDONED', 'ARCHIVED')) THEN
-      RETURN NULL;  -- not a live session: nothing to pair
+    PERFORM 1 FROM public.session s
+    WHERE s.id = NEW.session_id AND s.status NOT IN ('RESOLVED', 'ABANDONED', 'ARCHIVED')
+    FOR NO KEY UPDATE;
+    IF NOT FOUND THEN
+      RETURN NULL;  -- not a live session (or it stopped being one while we waited): nothing to pair
     END IF;
     INSERT INTO public.live_session_pair (user_a, user_b, session_id)
     SELECT least(NEW.user_id, o.user_id), greatest(NEW.user_id, o.user_id), NEW.session_id
