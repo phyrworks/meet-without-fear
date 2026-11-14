@@ -2,16 +2,15 @@
   "stage": "TOMBSTONE_READY",
   "database": "mwf_tfx_tombstone_ready",
   "seeded": {
-    "sessionId": "01a1dbc1-419b-7337-8436-199a8904dc2b",
-    "relationshipId": "01a1dbc1-4199-75e9-b7f4-494ada829568",
-    "invitationId": "01a1dbc1-419e-7723-8836-2fa54dc4b647",
+    "sessionId": "01a1dc5e-17df-71b4-a898-1473ce6799b2",
+    "invitationId": "01a1dc5e-17e4-7bc8-9d66-2ca37e66f127",
     "userA": {
-      "id": "01a1dbc1-4196-79c3-90ce-ffcf4a875013",
+      "id": "01a1dc5e-17d9-7318-a45b-942b6fa337eb",
       "email": "ada@e2e.test",
       "name": "Ada Lovelace"
     },
     "userB": {
-      "id": "01a1dbc1-4198-7850-8a8f-cb1d206cc90f",
+      "id": "01a1dc5e-17db-7f8a-b8d6-3f1e0acf0d0c",
       "email": "bob@e2e.test",
       "name": "Bob Ross"
     }
@@ -27,6 +26,7 @@
     "draft": 2,
     "empathy_attempt": 2,
     "invitation": 1,
+    "live_session_pair": 1,
     "message": 11,
     "milestone": 13,
     "need": 4,
@@ -38,10 +38,9 @@
     "reconciler_result": 1,
     "reflection": 1,
     "reflection_message": 2,
-    "relationship": 1,
-    "relationship_member": 2,
     "session": 1,
     "user": 3,
+    "user_contact": 2,
     "user_identity": 2
   },
   "tables": [
@@ -61,6 +60,7 @@
     "follow_up_checkin",
     "follow_up_note",
     "invitation",
+    "live_session_pair",
     "message",
     "milestone",
     "mood_reading",
@@ -80,8 +80,6 @@
     "reflection",
     "reflection_message",
     "regulation_event",
-    "relationship",
-    "relationship_member",
     "reminder",
     "session",
     "session_closure",
@@ -89,11 +87,12 @@
     "takeaway",
     "takeaway_link",
     "user",
+    "user_contact",
     "user_device",
     "user_identity",
     "user_key",
     "user_memory",
     "user_preferences"
   ],
-  "builtAt": "2026-11-14T20:30:38.059Z"
+  "builtAt": "2026-11-14T23:21:56.658Z"
 }
