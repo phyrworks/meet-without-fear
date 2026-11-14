@@ -1,11 +1,12 @@
 name: CI
 
-# PRs to main, and phoenix/target-shape with its feature branches (phoenix/**):
-# every push to one of them, and every PR into one of them.
+# Pushes to the long-lived branches; PRs into main or into phoenix/target-shape
+# and its feature branches (phoenix/**). A feature branch is CI'd through its PR.
 on:
   push:
     branches:
-      - 'phoenix/**'
+      - main
+      - phoenix/target-shape
   pull_request:
     branches:
       - main
@@ -14,7 +15,12 @@ on:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  # A new commit on a PR supersedes the old run; a push to a long-lived branch
+  # runs to completion, so every commit on it has a result.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
 
 jobs:
   changes:
@@ -32,6 +38,10 @@ jobs:
       - uses: dorny/paths-filter@v4
         id: filter
         with:
+          # On a push, compare with the branch's commit before the push (a
+          # docs-only push then skips the code jobs); ignored on pull_request,
+          # which compares with the PR base.
+          base: ${{ github.ref }}
           filters: |
             code:
               - 'backend/**'
@@ -73,7 +83,7 @@ jobs:
               - 'bot-workspaces/workspace-builder/shared/conventions.md'
               - '.github/workflows/ci.yml'
 
-  # No database: types, lint, and the shared + mobile suites. Runs beside
+  # No database: types and the shared + mobile suites. Runs beside
   # `backend` so the wall time is the slower of the two, not their sum.
   checks:
     name: Checks, shared & mobile tests
@@ -84,6 +94,7 @@ jobs:
 
     env:
       NODE_ENV: test
+      TZ: UTC
 
     steps:
       - name: Checkout code
@@ -92,7 +103,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v6
         with:
-          node-version: '20'
+          node-version-file: .node-version
           cache: 'npm'
 
       - name: Install dependencies
@@ -101,7 +112,9 @@ jobs:
       - name: Generate Prisma client
         run: npm run prisma:generate --workspace=backend
 
-      - name: Run checks (lint & type-check)
+      # Type-check only: the workspaces' eslint is not clean today (backend 28
+      # prettier errors, shared fails), so it is not gated here (work-k5fk.10.20).
+      - name: Type-check (npm run check)
         run: npm run check
 
       - name: Run tests (shared)
@@ -128,6 +141,7 @@ jobs:
 
     env:
       NODE_ENV: test
+      TZ: UTC
       # Admin (superuser) URL: tooling, the golden harness's template and run
       # databases, and test DDL. The app, the job and auth log in as their own
       # roles (lib/database-urls.ts), on the test database owned by mwf_migrator.
@@ -145,7 +159,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v6
         with:
-          node-version: '20'
+          node-version-file: .node-version
           cache: 'npm'
 
       # Not a `services:` container: the scripts and the golden trace address
@@ -195,6 +209,17 @@ jobs:
           docker exec -i mwf-postgres psql -X -v ON_ERROR_STOP=1 -U mwf_user -d meet_without_fear \
             <backend/scripts/d0-check.sql
 
+      # d0-check.sql reports violations as rows, so psql exits 0 either way: run
+      # its last query (the violations) alone and fail on any row.
+      - name: Assert D0 (no mwf_* role but mwf_user is SUPERUSER or BYPASSRLS)
+        run: |
+          violations="$(sed -n '/AS d0_violation/,$p' backend/scripts/d0-check.sql \
+            | docker exec -i mwf-postgres psql -X -At -v ON_ERROR_STOP=1 -U mwf_user -d meet_without_fear)"
+          if [ -n "$violations" ]; then
+            echo "::error::D0 violated: $violations"; exit 1
+          fi
+          echo "D0 ok"
+
       - name: Baseline gate (run-baseline.sh --as-migrator)
         run: backend/scripts/target-shape/run-baseline.sh ts7_ci_gate --as-migrator --out "$RUNNER_TEMP/ts7c"
 
@@ -208,15 +233,13 @@ jobs:
           DATABASE_URL=postgresql://mwf_migrator:mwf_migrator_dev@127.0.0.1:5432/mwf_target_test \
             npx prisma migrate deploy
 
-      - name: Build the 16 golden templates (mwf_tfx_*)
+      # One template per committed manifest (__fixtures__/target/<STAGE>.json,
+      # 16 today), so a new stage is built without editing this file.
+      - name: Build the golden templates (mwf_tfx_*)
         working-directory: backend
         run: |
-          for stage in CREATED INVITATION_READY EMPATHY_SHARED_A FEEL_HEARD_B \
-            RECONCILER_SHOWN_B CONTEXT_SHARED_B EMPATHY_REVEALED NEED_MAPPING_COMPLETE \
-            STRATEGIC_REPAIR_COMPLETE STAGE4_REDESIGN_INVENTORY STAGE4_REDESIGN_SHARED_SELECTIONS \
-            STAGE4_REDESIGN_NO_OVERLAP_SELECTIONS STAGE4_REDESIGN_PARTNER_INACTIVE \
-            INNER_WORK_LINKED_A NEEDS_CONFIRMED TOMBSTONE_READY; do
-            npx tsx src/testing/golden/cli.ts build "$stage"
+          for f in src/testing/golden/__fixtures__/target/*.json; do
+            npx tsx src/testing/golden/cli.ts build "$(basename "$f" .json)"
           done
           npx tsx src/testing/golden/cli.ts list
 
@@ -225,11 +248,20 @@ jobs:
         env:
           NODE_OPTIONS: --max-old-space-size=8192
 
-      - name: Upload baseline evidence on failure
+      # The server log holds bind values inlined into plan predicates (ids, not
+      # message text: docs/development/local-setup.md); it is uploaded only on
+      # failure, to a private artifact, and the container's data is synthetic.
+      - name: Save the PostgreSQL log on failure
+        if: failure()
+        run: |
+          mkdir -p "$RUNNER_TEMP/ts7c"
+          docker logs mwf-postgres >"$RUNNER_TEMP/ts7c/mwf-postgres.log" 2>&1 || true
+
+      - name: Upload evidence on failure
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: ts7c-evidence
+          name: backend-evidence
           path: ${{ runner.temp }}/ts7c
           if-no-files-found: ignore
 

@@ -13,9 +13,11 @@ import { Client } from 'pg';
 import { isTargetShape } from '../../testing/golden/shape';
 
 const url = process.env.DB_TEST_URL ?? (process.env.CI ? process.env.DATABASE_URL : undefined);
-// Old shape only ("User", "Relationship", "RelationshipMember", "Session"). On the
-// target shape the helpers are proven per caller by run-baseline.sh
-// (scripts/target-shape/functions-caller-tests.sql); porting this suite is work-k5fk.10.19.
+// Old shape only ("User", "Relationship", "RelationshipMember", "Session"), so it is
+// skipped on the target shape. That leaves a GAP, not equivalent coverage: no target
+// test asserts app.current_user_id()'s NULL cases, app.partner_user_id(), or that roles
+// without the grant cannot EXECUTE the helpers. Porting it is work-k5fk.10.19, which
+// blocks the cutover.
 const describeDb = url && !isTargetShape() ? describe : describe.skip;
 
 describeDb('app.* helpers (database)', () => {

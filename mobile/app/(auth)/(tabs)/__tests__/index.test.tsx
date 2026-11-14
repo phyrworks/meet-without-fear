@@ -185,7 +185,9 @@ function renderWithProviders(component: React.ReactElement) {
 describe('HomeScreen', () => {
   beforeAll(() => {
     jest.useFakeTimers();
-    jest.setSystemTime(new Date('2026-05-09T09:00:00-07:00'));
+    // Local time, not an offset: the greeting reads local getHours(), so a fixed
+    // offset made this pass only in UTC-7 (a UTC runner read "Good afternoon").
+    jest.setSystemTime(new Date(2026, 4, 9, 9, 0, 0));
   });
 
   afterAll(() => {
