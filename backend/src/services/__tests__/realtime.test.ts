@@ -27,6 +27,19 @@ jest.mock('../push', () => ({
   sendPushNotification: jest.fn().mockResolvedValue(true),
 }));
 
+// publishSessionEvent fires notifySessionMembers without awaiting it, and that
+// lazily imports the real Prisma client. With DATABASE_URL set, the client's
+// WASM runtime then loads after jest has torn the environment down and jest
+// exits 1 with every test green (work-b8jx). This suite is about Ably, not the
+// database: stub the client so nothing outlives the test.
+jest.mock('../../lib/prisma', () => ({
+  prisma: {
+    session: {
+      update: jest.fn().mockResolvedValue({ updatedAt: new Date(0), participants: [] }),
+    },
+  },
+}));
+
 // Mock Ably
 const mockPublish = jest.fn().mockResolvedValue(undefined);
 const mockPresenceGet = jest.fn().mockResolvedValue({ items: [] });

@@ -1,9 +1,15 @@
 name: CI
 
+# PRs to main, and phoenix/target-shape with its feature branches (phoenix/**):
+# every push to one of them, and every PR into one of them.
 on:
+  push:
+    branches:
+      - 'phoenix/**'
   pull_request:
     branches:
       - main
+      - 'phoenix/**'
     types: [opened, synchronize, reopened]
 
 concurrency:
@@ -67,34 +73,16 @@ jobs:
               - 'bot-workspaces/workspace-builder/shared/conventions.md'
               - '.github/workflows/ci.yml'
 
-  ci:
-    name: Checks & Tests
+  # No database: types, lint, and the shared + mobile suites. Runs beside
+  # `backend` so the wall time is the slower of the two, not their sum.
+  checks:
+    name: Checks, shared & mobile tests
     needs: changes
     if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
-
-    services:
-      postgres:
-        # pgvector because one of the Prisma migrations does CREATE EXTENSION
-        # "vector"; PostgreSQL 18 because every primary key defaults to the
-        # built-in uuidv7() (migration cuid_to_uuidv7). Production runs
-        # pgvector/pgvector:pg18 (infra/aws/images.env.example).
-        image: pgvector/pgvector:pg18
-        env:
-          POSTGRES_USER: meetwithoutfear_user
-          POSTGRES_PASSWORD: meetwithoutfear_password
-          POSTGRES_DB: meetwithoutfear_test
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
+    timeout-minutes: 30
 
     env:
-      DATABASE_URL: postgresql://meetwithoutfear_user:meetwithoutfear_password@localhost:5432/meetwithoutfear_test
-      SHADOW_DATABASE_URL: postgresql://meetwithoutfear_user:meetwithoutfear_password@localhost:5432/meetwithoutfear_test_shadow
       NODE_ENV: test
 
     steps:
@@ -110,46 +98,140 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Cache Prisma engines
-        uses: actions/cache@v5
-        with:
-          path: |
-            backend/node_modules/.prisma
-            ~/.cache/prisma
-          key: ${{ runner.os }}-prisma-${{ hashFiles('backend/prisma/schema.prisma') }}
-          restore-keys: |
-            ${{ runner.os }}-prisma-
-
       - name: Generate Prisma client
         run: npm run prisma:generate --workspace=backend
-        env:
-          PRISMA_ENGINES_CHECKSUM_IGNORE_MISSING: 1
 
       - name: Run checks (lint & type-check)
         run: npm run check
 
-      - name: Create database roles
-        # Roles are cluster-level and live outside Prisma (infra/aws/roles.sql);
-        # migration phase3_app_schema_helpers refuses to run without them.
-        run: >-
-          psql -v ON_ERROR_STOP=1 "$DATABASE_URL"
-          -v migrator_password=ci -v app_password=ci -v job_password=ci
-          -v ops_password=ci -v auth_password=ci
-          -f infra/aws/roles.sql
+      - name: Run tests (shared)
+        run: npm run test --workspace=shared
 
-      - name: Run database migrations
-        # Prisma 7 reads the URL from prisma.config.ts, which the CLI only
-        # finds in its cwd; from the repo root, point at it explicitly.
-        run: npx prisma migrate deploy --config=backend/prisma.config.ts
+      - name: Run tests (mobile)
+        run: npm run test --workspace=mobile
 
-      # Scope to backend + shared. Mobile's jest setup has a pre-existing
-      # `__fbBatchedBridgeConfig is not set` failure (all 42 suites red on
-      # main) — tracking separately. E2E has no `test` script; it runs
-      # manually via `npm run e2e`.
-      - name: Run tests (backend, shared)
+  # The target-shape gate, on a cluster built the way a developer's is
+  # (docs/development/local-setup.md §2 and "Working on phoenix/target-shape"):
+  # the mwf-postgres container with superuser mwf_user, the cluster roles from
+  # infra/aws/roles.sql with the development passwords, the baseline proven by
+  # run-baseline.sh --as-migrator, the 16 golden templates, then the full
+  # backend suite with every role's URL. The harness defaults (mwf_user,
+  # mwf_*_dev, container mwf-postgres) then hold unchanged, so nothing here
+  # needs a CI-only code path. The passwords are throwaway literals on a
+  # loopback-only container that dies with the job.
+  backend:
+    name: Target-shape gate & backend tests
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    env:
+      NODE_ENV: test
+      # Admin (superuser) URL: tooling, the golden harness's template and run
+      # databases, and test DDL. The app, the job and auth log in as their own
+      # roles (lib/database-urls.ts), on the test database owned by mwf_migrator.
+      DATABASE_URL: postgresql://mwf_user:mwf_password@127.0.0.1:5432/mwf_target_test
+      APP_DATABASE_URL: postgresql://mwf_app:mwf_app_dev@127.0.0.1:5432/mwf_target_test
+      JOB_DATABASE_URL: postgresql://mwf_job:mwf_job_dev@127.0.0.1:5432/mwf_target_test
+      AUTH_DATABASE_URL: postgresql://mwf_auth:mwf_auth_dev@127.0.0.1:5432/mwf_target_test
+      GOLDEN_DATABASE_URL: postgresql://mwf_user:mwf_password@127.0.0.1:5432/meet_without_fear
+      MWF_PG_CONTAINER: mwf-postgres
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      # Not a `services:` container: the scripts and the golden trace address
+      # it by name (`podman exec mwf-postgres …`, `podman logs mwf-postgres`),
+      # and a service container's name is generated. The image is production's
+      # pin (infra/aws/images.env.example). PostgreSQL 18 for uuidv7(),
+      # pgvector for the vector columns.
+      - name: Start PostgreSQL 18 (mwf-postgres)
         run: |
-          npm run test --workspace=backend
-          npm run test --workspace=shared
+          image="$(sed -n 's/^DB_IMAGE=//p' infra/aws/images.env.example)"
+          docker run -d --name mwf-postgres \
+            -e POSTGRES_USER=mwf_user -e POSTGRES_PASSWORD=mwf_password \
+            -e POSTGRES_DB=meet_without_fear \
+            -p 127.0.0.1:5432:5432 "$image"
+
+      # The scripts and the trace reader call `podman`; the docker CLI takes
+      # the same `exec -i` and `logs --since` arguments.
+      - name: Put a podman shim on PATH
+        run: |
+          mkdir -p "$RUNNER_TEMP/bin"
+          printf '#!/bin/sh\nexec docker "$@"\n' >"$RUNNER_TEMP/bin/podman"
+          chmod +x "$RUNNER_TEMP/bin/podman"
+          echo "$RUNNER_TEMP/bin" >>"$GITHUB_PATH"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Generate Prisma client
+        run: npm run prisma:generate --workspace=backend
+
+      # Over TCP: the image's init phase runs a socket-only server first, so a
+      # socket pg_isready can succeed before the real server is up.
+      - name: Wait for PostgreSQL
+        run: |
+          for _ in $(seq 1 60); do
+            docker exec mwf-postgres pg_isready -h 127.0.0.1 -U mwf_user -d meet_without_fear && exit 0
+            sleep 1
+          done
+          docker logs mwf-postgres; exit 1
+
+      - name: Create cluster roles (infra/aws/roles.sql, development passwords)
+        run: |
+          docker exec -i mwf-postgres psql -X -v ON_ERROR_STOP=1 -U mwf_user -d meet_without_fear \
+            -v migrator_password=mwf_migrator_dev -v app_password=mwf_app_dev \
+            -v job_password=mwf_job_dev -v ops_password=mwf_ops_dev -v auth_password=mwf_auth_dev \
+            <infra/aws/roles.sql
+          docker exec -i mwf-postgres psql -X -v ON_ERROR_STOP=1 -U mwf_user -d meet_without_fear \
+            <backend/scripts/d0-check.sql
+
+      - name: Baseline gate (run-baseline.sh --as-migrator)
+        run: backend/scripts/target-shape/run-baseline.sh ts7_ci_gate --as-migrator --out "$RUNNER_TEMP/ts7c"
+
+      # As run-baseline.sh --dev creates it: owned by mwf_migrator and deployed
+      # logged in as it, so no runtime role owns any object.
+      - name: Create the test database (mwf_target_test)
+        run: |
+          docker exec mwf-postgres psql -X -v ON_ERROR_STOP=1 -U mwf_user -d postgres \
+            -c "CREATE DATABASE mwf_target_test OWNER mwf_migrator"
+          cd backend
+          DATABASE_URL=postgresql://mwf_migrator:mwf_migrator_dev@127.0.0.1:5432/mwf_target_test \
+            npx prisma migrate deploy
+
+      - name: Build the 16 golden templates (mwf_tfx_*)
+        working-directory: backend
+        run: |
+          for stage in CREATED INVITATION_READY EMPATHY_SHARED_A FEEL_HEARD_B \
+            RECONCILER_SHOWN_B CONTEXT_SHARED_B EMPATHY_REVEALED NEED_MAPPING_COMPLETE \
+            STRATEGIC_REPAIR_COMPLETE STAGE4_REDESIGN_INVENTORY STAGE4_REDESIGN_SHARED_SELECTIONS \
+            STAGE4_REDESIGN_NO_OVERLAP_SELECTIONS STAGE4_REDESIGN_PARTNER_INACTIVE \
+            INNER_WORK_LINKED_A NEEDS_CONFIRMED TOMBSTONE_READY; do
+            npx tsx src/testing/golden/cli.ts build "$stage"
+          done
+          npx tsx src/testing/golden/cli.ts list
+
+      - name: Run tests (backend)
+        run: npm run test --workspace=backend
+        env:
+          NODE_OPTIONS: --max-old-space-size=8192
+
+      - name: Upload baseline evidence on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ts7c-evidence
+          path: ${{ runner.temp }}/ts7c
+          if-no-files-found: ignore
 
   python-eval:
     name: Python Eval Tests
@@ -220,13 +302,14 @@ jobs:
   ci-success:
     name: CI Result
     if: always()
-    needs: [changes, ci, python-eval, bot-harness]
+    needs: [changes, checks, backend, python-eval, bot-harness]
     runs-on: ubuntu-latest
     steps:
       - name: Verify all checks passed
         run: |
           echo "changes:     ${{ needs.changes.result }}"
-          echo "ci:          ${{ needs.ci.result }}"
+          echo "checks:      ${{ needs.checks.result }}"
+          echo "backend:     ${{ needs.backend.result }}"
           echo "python-eval: ${{ needs.python-eval.result }}"
           echo "bot-harness: ${{ needs.bot-harness.result }}"
 
@@ -234,7 +317,8 @@ jobs:
           # Catches 'failure', 'cancelled', and any unexpected state.
           for result in \
             "${{ needs.changes.result }}" \
-            "${{ needs.ci.result }}" \
+            "${{ needs.checks.result }}" \
+            "${{ needs.backend.result }}" \
             "${{ needs.python-eval.result }}" \
             "${{ needs.bot-harness.result }}"; do
             if [[ "$result" != "success" && "$result" != "skipped" ]]; then
