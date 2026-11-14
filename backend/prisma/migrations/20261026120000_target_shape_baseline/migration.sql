@@ -1,5 +1,5 @@
 -- ============================================================================
--- target_shape_baseline — the 47-table target shape, built on an EMPTY database
+-- target_shape_baseline — the 49-table target shape, built on an EMPTY database
 -- (TS-7c; owner decision OD7, 2026-10-26: existing data is demo/test and is
 -- not preserved, so there is no data move)
 --
@@ -42,7 +42,7 @@
 -- SECTIONS
 --   0  preamble: empty-database guard, roles, schema app, app.current_user_id()
 --      (backend/scripts/target-shape/preamble.sql)
---   1  domains (uuid7, ciphertext, ts_ms, intensity, email, milestone_key), enums and the 47
+--   1  domains (uuid7, ciphertext, ts_ms, intensity, email, milestone_key), enums and the 49
 --      tables, hand-written, each table complete in its CREATE TABLE (and its grants) in
 --      dependency order, the milestone seed after its table
 --      (backend/scripts/target-shape/tables.sql)
@@ -122,13 +122,13 @@ REVOKE EXECUTE ON FUNCTION app.current_user_id() FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION app.current_user_id() TO mwf_app, mwf_job, mwf_ops, mwf_auth;
 
 -- ============================================================================
--- 1. Domains, enums and the 47 target tables (backend/scripts/target-shape/tables.sql; 116 named objects, all lower-case; 129 uuid7 columns)
+-- 1. Domains, enums and the 49 target tables (backend/scripts/target-shape/tables.sql; 122 named objects, all lower-case; 132 uuid7 columns)
 -- ============================================================================
 
 -- ============================================================================
 -- tables.sql — section 1 of the target_shape_baseline migration (work-a39h.11.40).
 -- Hand-maintained; backend/scripts/gen-target-migration.ts copies it verbatim
--- after the preamble. It is the source of truth for the 47 tables: read a
+-- after the preamble. It is the source of truth for the 49 tables: read a
 -- table here and you have all of it — columns, types, defaults, NOT NULL,
 -- generated columns, the primary key, UNIQUE constraints, foreign keys and
 -- CHECKs inside its CREATE TABLE, its plain indexes straight after, then its
@@ -242,7 +242,7 @@ GRANT EXECUTE ON FUNCTION app.current_user_id() TO mwf_app, mwf_job, mwf_ops, mw
 -- 2026-11-10; work-k5fk.5 for email, 2026-11-13; PG 18.6 / Prisma 7.10).
 -- ----------------------------------------------------------------------------
 
--- Every uuid column (the 33 uuidv7() primary keys and the 96 columns that
+-- Every uuid column (the 33 uuidv7() primary keys and the 99 columns that
 -- reference them) is a uuid7: a version-7 UUID, so ids sort by creation time.
 -- The CHECK has two NULL traps, both handled explicitly:
 --  1. uuid_extract_version() returns NULL for a UUID that is not RFC 9562
@@ -387,6 +387,10 @@ COMMENT ON CONSTRAINT email_no_format ON DOMAIN email IS 'No format character (C
 -- ----------------------------------------------------------------------------
 CREATE TYPE session_status AS ENUM ('CREATED', 'INVITED', 'ACTIVE', 'RESOLVED', 'ABANDONED', 'ARCHIVED');
 COMMENT ON TYPE session_status IS 'Lifecycle of a session. Written only by app.session_set_status(): CREATED -> INVITED -> ACTIVE -> RESOLVED, any live state -> ABANDONED, RESOLVED/ABANDONED -> ARCHIVED.';
+CREATE TYPE user_kind AS ENUM ('human', 'ai', 'persona');
+COMMENT ON TYPE user_kind IS 'What a user row is (work-k5fk.1/.3): human, a person who signs in (an email, a user_identity); ai, the one AI principal (seeded, app.ai_user_id()); persona, a modeled person a human created (persona row: its owner). Only a human has an email or an identity.';
+CREATE TYPE identity_provider AS ENUM ('clerk', 'e2e');
+COMMENT ON TYPE identity_provider IS 'Who vouches for a user_identity: clerk, the production sign-in (a verified JWT sub); e2e, the E2E auth bypass (E2E_AUTH_BYPASS with NODE_ENV test or development only, lib/e2e-bypass.ts; never production).';
 CREATE TYPE participant_kind AS ENUM ('human', 'modeled');
 COMMENT ON TYPE participant_kind IS 'human: a participant backed by a user; modeled: an imagined participant with no user row (user_id IS NULL).';
 CREATE TYPE conversation_kind AS ENUM ('MAIN', 'SUBCHAT');
@@ -503,7 +507,7 @@ GRANT USAGE ON SCHEMA public TO mwf_job;
 GRANT USAGE ON SCHEMA public TO mwf_ops;
 
 -- ----------------------------------------------------------------------------
--- The 47 tables, in dependency order.
+-- The 49 tables, in dependency order.
 -- ----------------------------------------------------------------------------
 
 CREATE TABLE relationship (
@@ -520,8 +524,8 @@ GRANT SELECT ON relationship TO mwf_ops;
 
 CREATE TABLE "user" (
     id uuid7 NOT NULL DEFAULT uuidv7() PRIMARY KEY,
-    clerk_id text UNIQUE,
-    email email NOT NULL UNIQUE,
+    kind user_kind NOT NULL DEFAULT 'human',
+    email email UNIQUE,
     first_name text,
     last_name text,
     deleted_at ts_ms,
@@ -530,37 +534,114 @@ CREATE TABLE "user" (
     name text
         GENERATED ALWAYS AS (nullif(trim(coalesce(first_name, '') || ' ' || coalesce(last_name, '')), '')) STORED,
 
-    -- §1.7 user — a tombstone is scrubbed (P3 D9) to deleted+<id>@invalid
+    -- Pattern K (design note §1): the target of every kind-carrying FK. A
+    -- child copies the kind into a one-value CHECK column and references
+    -- (id, kind), so "this points at a human" (user_identity, persona's
+    -- owner) or "at a persona" (persona) is a key, not a trigger.
+    UNIQUE (id, kind),
+    -- Only a human has an email (the AI and personas never sign in).
+    CHECK ((kind = 'human') = (email IS NOT NULL)),
+    -- §1.7 user — a human tombstone is scrubbed (P3 D9) to deleted+<id>@invalid
     -- (.invalid is reserved, RFC 2606: never a real address; the uuid text
     -- is lowercase, so the value is canonical). app.anonymize_user_account
-    -- writes exactly 'deleted+' || id || '@invalid'.
-    CHECK (deleted_at IS NULL OR (clerk_id IS NULL AND email COLLATE "C" LIKE 'deleted+%@invalid'))
+    -- writes exactly 'deleted+' || id || '@invalid' and deletes the user's
+    -- user_identity rows. A scrubbed persona has no email to scrub.
+    CHECK (deleted_at IS NULL OR kind <> 'human' OR email COLLATE "C" LIKE 'deleted+%@invalid')
 );
-COMMENT ON TABLE "user" IS 'Identity only: one row per account (Clerk-backed), soft-deleted to a scrubbed tombstone. Every FK to it is RESTRICT; session data hangs off participant, not off user.';
-COMMENT ON COLUMN "user".clerk_id IS 'The Clerk user id this account signs in with; NULL on a tombstone.';
-COMMENT ON COLUMN "user".email IS 'Sign-in email in canonical form (domain email: trimmed, NFC, lowercase), unique: a case variant is the same canonical value, a plus-address a different one. A tombstone holds the scrubbed address deleted+<id>@invalid.';
+COMMENT ON TABLE "user" IS 'Identity only: one row per principal — a human account (signs in through user_identity), the one AI row, or a persona (persona table) — soft-deleted to a scrubbed tombstone. Every FK to it is RESTRICT; session data hangs off participant, not off user.';
+COMMENT ON COLUMN "user".kind IS 'human, ai or persona (user_kind). A child that must point at one kind references (id, kind) (pattern K).';
+COMMENT ON COLUMN "user".email IS 'Sign-in email in canonical form (domain email: trimmed, NFC, lowercase), unique: a case variant is the same canonical value, a plus-address a different one. Set exactly for a human, NULL for ai and persona. A tombstone holds the scrubbed address deleted+<id>@invalid.';
 COMMENT ON COLUMN "user".name IS 'Generated display name: first_name and last_name joined, NULL when both are empty.';
 COMMENT ON COLUMN "user".deleted_at IS 'Soft delete (P3 D9): the row becomes a scrubbed tombstone and is never removed.';
--- mwf_app: every request reads its user (auth middleware, by clerk_id/email) and its partner's names; first login creates the
--- row and a Clerk race reconciles it (middleware/auth.ts — FINDING: this is mwf_auth's app.create_user_for_clerk on paper);
--- the profile edit sets the names (controllers/auth.ts). Never id, deleted_at (tombstone is app.anonymize_user_account).
+-- mwf_app: every request reads its user (auth middleware, by id after mwf_auth's app.resolve_user) and its partner's
+-- names; the profile edit sets the names (controllers/auth.ts). No INSERT, and never id, kind, email or deleted_at
+-- (work-bp5m): a first login creates the row through mwf_auth's app.create_user, so no request can write an email or
+-- re-bind an account (the work-jv9y takeover needed mwf_app's UPDATE (clerk_id, email)); the tombstone is
+-- app.anonymize_user_account.
 GRANT SELECT ON "user" TO mwf_app;
-GRANT INSERT (clerk_id, email, first_name, last_name, created_at, updated_at) ON "user" TO mwf_app;
-GRANT UPDATE (clerk_id, email, first_name, last_name, updated_at) ON "user" TO mwf_app;
--- FINDING (work-jv9y, a live production bug, not fixed here): UPDATE (clerk_id, email) is what lets
--- middleware/auth.ts's P2002 path re-bind an EXISTING user's row — found by the email a new Clerk
--- identity presents (emailAddresses[0], not checked verified or primary) — to that new identity: an
--- account takeover. The grant is the app's today; the fix (and this grant) is the owner's call.
--- Since work-k5fk.5 that lookup (findUnique by canonicalEmail(...)) also matches a case variant of the address
--- (work-bp5m fixes the re-bind).
--- mwf_job: resolve_user_by_clerk_id, create_user_for_clerk (RETURNING id), anonymize_user_account (existence, tombstone)
-GRANT SELECT (id, clerk_id, deleted_at) ON "user" TO mwf_job;
-GRANT INSERT (clerk_id, email, first_name, last_name) ON "user" TO mwf_job;
-GRANT UPDATE (clerk_id, email, first_name, last_name, deleted_at) ON "user" TO mwf_job;
+GRANT UPDATE (first_name, last_name, updated_at) ON "user" TO mwf_app;
+-- mwf_job: create_user (INSERT … RETURNING id; the email-holder check), anonymize_user_account (existence, the tombstone,
+-- the persona scrub)
+GRANT SELECT (id, kind, email, deleted_at) ON "user" TO mwf_job;
+GRANT INSERT (email, first_name, last_name) ON "user" TO mwf_job;
+GRANT UPDATE (email, first_name, last_name, deleted_at) ON "user" TO mwf_job;
 -- mwf_job [TS-10 I4]: empathy-store sessionParties (the reconciler's A/B order and the names in its prompts)
 GRANT SELECT (first_name, name) ON "user" TO mwf_job;
 -- mwf_ops: the Neural Monitor dashboard (routes/brain.ts, directly or through the stage shim) reads it.
 GRANT SELECT ON "user" TO mwf_ops;
+
+-- The AI principal (work-k5fk.3): exactly one row of kind ai (sql_user_one_ai,
+-- sql-only.sql), at a fixed version-7 id so code and fixtures name it without
+-- a lookup (app.ai_user_id()). No email, no name, no identity; it becomes a
+-- participant only when a session's humans invite it (design note §3).
+INSERT INTO "user" (id, kind) VALUES ('00000000-0000-7000-8000-000000000001', 'ai');
+CREATE FUNCTION app.ai_user_id() RETURNS uuid
+  LANGUAGE sql IMMUTABLE PARALLEL SAFE
+  RETURN '00000000-0000-7000-8000-000000000001'::uuid;
+COMMENT ON FUNCTION app.ai_user_id() IS 'The id of the one AI user row, seeded by the baseline next to the "user" table. A constant: the seed and this function change together.';
+-- mwf_app, mwf_job: the session paths that will seat the AI (design note §3) name it through this; a constant, no data.
+REVOKE EXECUTE ON FUNCTION app.ai_user_id() FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION app.ai_user_id() TO mwf_app, mwf_job;
+
+CREATE TABLE user_identity (
+    provider identity_provider NOT NULL,
+    subject text NOT NULL,
+    user_id uuid7 NOT NULL,
+    user_kind user_kind NOT NULL DEFAULT 'human' CHECK (user_kind = 'human'),
+    created_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    last_seen_at ts_ms,
+
+    PRIMARY KEY (provider, subject),
+    -- One identity per provider per user: a second Clerk account can never be
+    -- attached to an existing user (work-jv9y: no re-bind).
+    UNIQUE (user_id, provider),
+    FOREIGN KEY (user_id, user_kind) REFERENCES "user" (id, kind) ON DELETE RESTRICT,
+    -- Clerk issues user_ + a KSUID (27 base62 characters; clerk.com blog
+    -- "Generating sortable Stripe-like IDs with Segment's KSUIDs", 2021), but
+    -- its API reference promises no format (its examples say user_123): pin
+    -- the prefix and the alphabet, bound the length, do not pin the 27.
+    CONSTRAINT user_identity_clerk_subject CHECK (provider <> 'clerk' OR subject COLLATE "C" ~ '^user_[A-Za-z0-9]{1,64}$'),
+    -- The E2E bypass's subjects: e2e_<user id> (middleware/auth.ts) and the
+    -- seed routes' e2e_<ms>_<random> / e2e_inner_<ms>_<random> (routes/e2e.ts).
+    CONSTRAINT user_identity_e2e_subject CHECK (provider <> 'e2e' OR subject COLLATE "C" ~ '^e2e_[a-z0-9_-]{1,64}$')
+);
+COMMENT ON TABLE user_identity IS 'How a human signs in (work-k5fk.1): one row per (provider, subject), the provider''s own user id, pointing at exactly one human user (pattern K) and at most one per provider. Written only by app.create_user (first login) and deleted by app.anonymize_user_account; mwf_app holds no privilege on it.';
+COMMENT ON COLUMN user_identity.subject IS 'The provider''s user id: for clerk the verified JWT sub (user_…), for e2e the bypass''s e2e_… id.';
+COMMENT ON COLUMN user_identity.user_kind IS 'Always human: pins the FK (user_id, user_kind) to a human user row (pattern K).';
+COMMENT ON COLUMN user_identity.last_seen_at IS 'Reserved for the last sign-in through this identity; nothing writes it yet.';
+COMMENT ON CONSTRAINT user_identity_clerk_subject ON user_identity IS 'A Clerk subject is user_ and 1-64 base62 characters. Clerk issues user_ + a 27-character KSUID, but its API reference does not promise that length, so it is bounded, not pinned.';
+COMMENT ON CONSTRAINT user_identity_e2e_subject ON user_identity IS 'An E2E-bypass subject is e2e_ and 1-64 of [a-z0-9_-] (e2e_<uuid>, e2e_<ms>_<random>). The e2e provider is never used in production (lib/e2e-bypass.ts).';
+-- mwf_app: nothing (work-bp5m). A request resolves its subject through mwf_auth's app.resolve_user and never reads,
+-- writes or re-binds an identity.
+-- mwf_job: create_user (INSERT), anonymize_user_account (the identities go with the tombstone), account-deletion.ts
+-- (the Clerk subject to delete at Clerk, read before the walk).
+GRANT SELECT (provider, subject, user_id) ON user_identity TO mwf_job;
+GRANT INSERT (provider, subject, user_id) ON user_identity TO mwf_job;
+GRANT DELETE ON user_identity TO mwf_job;
+
+CREATE TABLE persona (
+    user_id uuid7 NOT NULL,
+    kind user_kind NOT NULL DEFAULT 'persona' CHECK (kind = 'persona'),
+    owner_user_id uuid7 NOT NULL,
+    owner_kind user_kind NOT NULL DEFAULT 'human' CHECK (owner_kind = 'human'),
+    created_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    -- The key is the FK's own columns, not user_id alone (design note §1 had
+    -- PRIMARY KEY (user_id)): kind is CHECK-pinned to one value, so the two
+    -- are the same rule, and Prisma models a one-to-one relation only when
+    -- the defining side's FK columns are themselves unique (P1012 on a
+    -- user_id key). One index either way.
+    PRIMARY KEY (user_id, kind),
+    FOREIGN KEY (user_id, kind) REFERENCES "user" (id, kind) ON DELETE RESTRICT,
+    FOREIGN KEY (owner_user_id, owner_kind) REFERENCES "user" (id, kind) ON DELETE RESTRICT
+);
+CREATE INDEX ON persona (owner_user_id);
+COMMENT ON TABLE persona IS 'A modeled person (work-k5fk.3; owner decision Q2: a table, so "user" stays identity-only): the persona''s user row (kind persona) and the human who created it, both ends pinned by kind (pattern K). The owner''s account deletion scrubs it (app.anonymize_user_account).';
+COMMENT ON COLUMN persona.kind IS 'Always persona: pins the FK (user_id, kind) to a persona user row (pattern K).';
+COMMENT ON COLUMN persona.owner_kind IS 'Always human: pins the FK (owner_user_id, owner_kind) to a human user row (pattern K).';
+-- mwf_app: nothing yet — no request creates or reads a persona until the modeled-participant paths move onto it (design note §3).
+-- mwf_job: anonymize_user_account finds the owner's personas to scrub.
+GRANT SELECT (user_id, owner_user_id) ON persona TO mwf_job;
 
 CREATE TABLE relationship_member (
     relationship_id uuid7 NOT NULL REFERENCES relationship ON DELETE CASCADE,
@@ -2072,6 +2153,10 @@ GRANT SELECT ON brain_activity TO mwf_ops;
 -- in tending.service.ts).
 -- ============================================================================
 
+-- user — exactly one AI principal (work-k5fk.3; tables.sql seeds it)
+CREATE UNIQUE INDEX sql_user_one_ai ON "user" (kind) WHERE kind = 'ai';
+COMMENT ON INDEX sql_user_one_ai IS 'At most one user of kind ai: the AI principal seeded with the baseline (app.ai_user_id()).';
+
 -- §1.1 session — A-Q3: one live session per relationship
 CREATE UNIQUE INDEX sql_session_one_live ON session (relationship_id)
   WHERE status NOT IN ('RESOLVED', 'ABANDONED', 'ARCHIVED');
@@ -2559,7 +2644,8 @@ CREATE FUNCTION app.anonymize_user_account("user" uuid) RETURNS void
     r     record;
   BEGIN
     IF NOT (v_job OR coalesce(v_me IS NOT NULL AND v_uid = v_me, false))
-       OR NOT EXISTS (SELECT 1 FROM public."user" u WHERE u.id = v_uid) THEN
+       OR NOT EXISTS (SELECT 1 FROM public."user" u WHERE u.id = v_uid AND u.kind = 'human') THEN
+      -- only an account is deleted: the AI row and a persona are not (a persona goes with its owner, 6b)
       RAISE EXCEPTION 'user not found' USING ERRCODE = 'P0002';
     END IF;
     -- 1–4, 7 (participant keys) per session
@@ -2576,10 +2662,17 @@ CREATE FUNCTION app.anonymize_user_account("user" uuid) RETURNS void
     DELETE FROM public.user_preferences WHERE user_id = v_uid;
     DELETE FROM public.reminder WHERE user_id = v_uid;
     DELETE FROM public.ai_memory WHERE user_id = v_uid;
-    -- 6. the tombstone
+    -- 6. the tombstone: the sign-in identities go (the subject can never
+    -- resolve again; a later sign-in with it is a new first login), the row is scrubbed
+    DELETE FROM public.user_identity WHERE user_id = v_uid;
     UPDATE public."user"
-    SET clerk_id = NULL, email = 'deleted+' || v_uid::text || '@invalid', first_name = NULL, last_name = NULL, deleted_at = coalesce(deleted_at, now())
+    SET email = 'deleted+' || v_uid::text || '@invalid', first_name = NULL, last_name = NULL, deleted_at = coalesce(deleted_at, now())
     WHERE id = v_uid;
+    -- 6b. the user's personas: their names are the owner's words about someone; scrubbed and soft-deleted with the owner
+    UPDATE public."user" u
+    SET first_name = NULL, last_name = NULL, deleted_at = coalesce(u.deleted_at, now())
+    FROM public.persona p
+    WHERE p.owner_user_id = v_uid AND u.id = p.user_id;
     -- 7. the user-key shred
     UPDATE public.user_key SET destroyed_at = now() WHERE user_id = v_uid AND destroyed_at IS NULL;
   END
@@ -2588,30 +2681,67 @@ CREATE FUNCTION app.anonymize_user_account("user" uuid) RETURNS void
 REVOKE EXECUTE ON FUNCTION app.anonymize_user_account(uuid) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION app.anonymize_user_account(uuid) TO mwf_job;
 
--- Pre-identity bootstrap (P3 §5): resolve a Clerk id; create the user for a
--- first login (mwf_auth only, INSERT only).
-CREATE FUNCTION app.resolve_user_by_clerk_id(clerk_id text) RETURNS uuid
+-- Pre-identity bootstrap (P3 §5; work-k5fk.1): resolve a (provider, subject)
+-- to its live user; create the user and its identity for a first login
+-- (mwf_auth only). Neither ever re-binds: an identity is attached only to the
+-- user created with it (work-jv9y, work-bp5m).
+CREATE FUNCTION app.resolve_user(provider public.identity_provider, subject text) RETURNS uuid
   LANGUAGE sql STABLE SECURITY DEFINER
   SET search_path = pg_catalog, public, pg_temp
   AS $$
-    SELECT u.id FROM public."user" u WHERE u.clerk_id = resolve_user_by_clerk_id.clerk_id AND u.deleted_at IS NULL
+    SELECT u.id FROM public.user_identity i JOIN public."user" u ON u.id = i.user_id
+    WHERE i.provider = resolve_user.provider AND i.subject = resolve_user.subject AND u.deleted_at IS NULL
   $$;
--- mwf_auth: the lookup that precedes first-login creation (pre-identity bootstrap). No app caller.
-REVOKE EXECUTE ON FUNCTION app.resolve_user_by_clerk_id(text) FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION app.resolve_user_by_clerk_id(text) TO mwf_auth;
+COMMENT ON FUNCTION app.resolve_user(public.identity_provider, text) IS 'The live (not deleted) user a sign-in identity belongs to, or NULL. mwf_auth''s per-request lookup (middleware/auth.ts); mwf_app has no privilege on user_identity.';
+-- mwf_auth: every authenticated request's lookup, and the one that precedes first-login creation. No app caller.
+REVOKE EXECUTE ON FUNCTION app.resolve_user(public.identity_provider, text) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION app.resolve_user(public.identity_provider, text) TO mwf_auth;
 
-CREATE FUNCTION app.create_user_for_clerk(clerk_id text, email text, first_name text DEFAULT NULL, last_name text DEFAULT NULL)
+-- app.create_user: the human row and its identity, in one call. A
+-- unique_violation is resolved in exactly one way: the SAME identity was
+-- created by a concurrent first login — return its user. Otherwise the email
+-- belongs to another account and the original error is re-raised (the caller
+-- answers 409 ACCOUNT_LINK_CONFLICT; nothing is re-bound). If neither holds
+-- any more (the holder was tombstoned in between), the insert is tried once
+-- more; a second collision is re-raised the same way.
+CREATE FUNCTION app.create_user(provider public.identity_provider, subject text, email text,
+                                first_name text DEFAULT NULL, last_name text DEFAULT NULL)
   RETURNS uuid
-  LANGUAGE sql SECURITY DEFINER
+  LANGUAGE plpgsql SECURITY DEFINER
   SET search_path = pg_catalog, public, pg_temp
   AS $$
-    INSERT INTO public."user" (clerk_id, email, first_name, last_name)
-    VALUES (create_user_for_clerk.clerk_id, create_user_for_clerk.email, create_user_for_clerk.first_name, create_user_for_clerk.last_name)
-    RETURNING id
+  DECLARE
+    v_id     uuid;
+    v_holder uuid;
+  BEGIN
+    FOR attempt IN 1..2 LOOP
+      BEGIN
+        INSERT INTO public."user" (email, first_name, last_name)
+        VALUES (create_user.email, create_user.first_name, create_user.last_name)
+        RETURNING id INTO v_id;
+        INSERT INTO public.user_identity (provider, subject, user_id)
+        VALUES (create_user.provider, create_user.subject, v_id);
+        RETURN v_id;
+      EXCEPTION WHEN unique_violation THEN
+        SELECT u.id INTO v_id FROM public.user_identity i JOIN public."user" u ON u.id = i.user_id
+        WHERE i.provider = create_user.provider AND i.subject = create_user.subject AND u.deleted_at IS NULL;
+        IF FOUND THEN RETURN v_id; END IF;
+        SELECT u.id INTO v_holder FROM public."user" u WHERE u.email = create_user.email;
+        IF FOUND THEN
+          -- ids only (no email: messages reach logs): the caller logs auth.identity_conflict with the holder's id
+          RAISE EXCEPTION 'first login refused: the email belongs to user % (unique constraint "user_email_key")', v_holder
+            USING ERRCODE = 'unique_violation', CONSTRAINT = 'user_email_key';
+        END IF;
+        IF attempt = 2 THEN RAISE; END IF;
+      END;
+    END LOOP;
+    RETURN NULL;  -- not reached: the second attempt returns or raises
+  END
   $$;
+COMMENT ON FUNCTION app.create_user(public.identity_provider, text, text, text, text) IS 'First login: a human user (canonical email) and its (provider, subject) identity. The same identity created concurrently returns that user; an email held by another account raises unique_violation (constraint user_email_key, the holder''s id in the message, never the email) — never a re-bind.';
 -- mwf_auth only: first-login creation.
-REVOKE EXECUTE ON FUNCTION app.create_user_for_clerk(text, text, text, text) FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION app.create_user_for_clerk(text, text, text, text) TO mwf_auth;
+REVOKE EXECUTE ON FUNCTION app.create_user(public.identity_provider, text, text, text, text) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION app.create_user(public.identity_provider, text, text, text, text) TO mwf_auth;
 
 -- Hand the definer functions to mwf_job (TS-1 order, measured there with a
 -- non-superuser migrator): CREATE on the schema for the hand-over only. Their
@@ -2632,8 +2762,8 @@ ALTER FUNCTION app.need_share(uuid, text) OWNER TO mwf_job;
 ALTER FUNCTION app.need_revoke_share(uuid) OWNER TO mwf_job;
 ALTER FUNCTION app.anonymize_user_in_session(uuid, uuid) OWNER TO mwf_job;
 ALTER FUNCTION app.anonymize_user_account(uuid) OWNER TO mwf_job;
-ALTER FUNCTION app.resolve_user_by_clerk_id(text) OWNER TO mwf_job;
-ALTER FUNCTION app.create_user_for_clerk(text, text, text, text) OWNER TO mwf_job;
+ALTER FUNCTION app.resolve_user(public.identity_provider, text) OWNER TO mwf_job;
+ALTER FUNCTION app.create_user(public.identity_provider, text, text, text, text) OWNER TO mwf_job;
 REVOKE CREATE ON SCHEMA app FROM mwf_job;
 
 -- ---------------------------------------------------------------------------
@@ -3343,7 +3473,7 @@ BEGIN
   IF bad IS NOT NULL THEN RAISE EXCEPTION 'step 20: jsonb column(s) without a jsonb_typeof CHECK: %', bad; END IF;
 
   -- Every uuid column of a table is a uuid7 (tables.sql): 33 primary keys
-  -- defaulting to uuidv7() and the 95 columns that reference them.
+  -- defaulting to uuidv7() and the 99 columns that reference them.
   SELECT string_agg(c.relname || '.' || a.attname, ', ' ORDER BY c.relname, a.attname) INTO bad
   FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid JOIN pg_namespace s ON s.oid = c.relnamespace
   WHERE s.nspname = 'public' AND c.relkind = 'r' AND a.attnum > 0 AND NOT a.attisdropped
@@ -3353,7 +3483,7 @@ BEGIN
   FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid JOIN pg_namespace s ON s.oid = c.relnamespace
   WHERE s.nspname = 'public' AND c.relkind = 'r' AND a.attnum > 0 AND NOT a.attisdropped
     AND a.atttypid = 'public.uuid7'::regtype;
-  IF n <> 129 THEN RAISE EXCEPTION 'step 20: % uuid7 columns, expected 129', n; END IF;
+  IF n <> 132 THEN RAISE EXCEPTION 'step 20: % uuid7 columns, expected 132', n; END IF;
 
   -- The encrypted columns (SENSITIVE_FIELD_MAP; tables.sql): 44 text
   -- columns typed ciphertext and 5 text[] columns CHECKed by

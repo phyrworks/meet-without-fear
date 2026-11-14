@@ -32,6 +32,10 @@
 -- in tending.service.ts).
 -- ============================================================================
 
+-- user — exactly one AI principal (work-k5fk.3; tables.sql seeds it)
+CREATE UNIQUE INDEX sql_user_one_ai ON "user" (kind) WHERE kind = 'ai';
+COMMENT ON INDEX sql_user_one_ai IS 'At most one user of kind ai: the AI principal seeded with the baseline (app.ai_user_id()).';
+
 -- §1.1 session — A-Q3: one live session per relationship
 CREATE UNIQUE INDEX sql_session_one_live ON session (relationship_id)
   WHERE status NOT IN ('RESOLVED', 'ABANDONED', 'ARCHIVED');
