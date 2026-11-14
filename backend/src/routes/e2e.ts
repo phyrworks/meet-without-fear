@@ -2,7 +2,7 @@
  * E2E Testing Routes
  *
  * Helper endpoints for E2E testing. Only available when isE2EBypassEnabled()
- * (E2E_AUTH_BYPASS=true and NODE_ENV test or development; lib/e2e-bypass.ts).
+ * (E2E_AUTH_BYPASS=true and NODE_ENV test, development or e2e; lib/e2e-bypass.ts).
  */
 
 import { Router, Request, Response, NextFunction } from 'express';

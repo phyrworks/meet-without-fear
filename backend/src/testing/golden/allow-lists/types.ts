@@ -260,6 +260,13 @@ export interface ChangesMappedRule extends RuleBase {
     why: string;
   }>;
   droppedTables?: Array<{ step: number; table: string; kind: 'added' | 'changed' | 'removed'; why: string }>;
+  /**
+   * work-k5fk.1 (review L5): a baseline table whose image is several target
+   * tables but whose rows still live 1:1 in ONE of them (User → user, with
+   * user_identity beside it). The per-step row count is compared on that
+   * primary image as if the table were 1:1 (plus any named additions there).
+   */
+  primaryImage?: Record<string, string>;
 }
 
 /**

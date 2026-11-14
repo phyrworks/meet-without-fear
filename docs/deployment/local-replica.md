@@ -103,12 +103,15 @@ under another, so if you delete `infra/local/.local/secrets.env`, also `reset.sh
 
 ### Every place `NODE_ENV` changes behaviour (backend/src)
 
-With `NODE_ENV=e2e` (anything but `production`, and not `development` or `test`):
+With `NODE_ENV=e2e` (not `production`, and not `development` or `test`). `e2e` is on the bypass
+allow-list (`E2E_BYPASS_ENVIRONMENTS` in `backend/src/lib/e2e-bypass.ts`: exactly `test`,
+`development`, `e2e`); any other value with `E2E_AUTH_BYPASS=true` — `production` included — makes
+`server.ts` refuse to start:
 
 | Where | Production | Replica |
 |---|---|---|
 | `app.ts:40`, `middleware/auth.ts:93`, `middleware/rate-limit.ts` (×5), `controllers/session-state.ts:58` | bypass and rate-limit skips refused | bypass headers accepted, rate limits skipped, CORS allows any header (all also need `E2E_AUTH_BYPASS=true`) |
-| `server.ts:66` | refuses to start with the bypass on | — |
+| `server.ts` (`isE2EBypassMisconfigured`) | refuses to start with the bypass on | — (`e2e` is allowed) |
 | `routes/index.ts:39` | `/api/e2e/*` not mounted | mounted (`cleanup`, `seed`, `seed-session`, `seed-inner-thoughts`, `trigger-reconciler`) |
 | `server.ts:80` | warns when `FIELD_ENCRYPTION_KEY` is unset (fails with `REQUIRE_FIELD_ENCRYPTION=true`) | silent (moot: the replica sets a key) |
 | `utils/field-encryption.ts:58` | `REQUIRE_FIELD_ENCRYPTION` enforced | not enforced |

@@ -7,8 +7,10 @@
  * An allow-list, not "anything but production": an unset, misspelt or new
  * NODE_ENV (staging, prod, 'Test') leaves it off. Every bypass gate calls
  * this; server.ts refuses to start when the flag is set anywhere else.
+ * 'e2e' is the local production replica's (infra/local/compose.yaml,
+ * docs/deployment/local-replica.md): a production image with the bypass on.
  */
-export const E2E_BYPASS_ENVIRONMENTS: readonly string[] = ['test', 'development'];
+export const E2E_BYPASS_ENVIRONMENTS: readonly string[] = ['test', 'development', 'e2e'];
 
 type Env = { NODE_ENV?: string; E2E_AUTH_BYPASS?: string };
 

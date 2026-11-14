@@ -19,7 +19,6 @@ import {
   NotFoundError,
   EmailNotVerifiedError,
   AccountLinkConflictError,
-  getPgConstraintViolation,
 } from './errors';
 import { prisma, getAuthPrisma, getE2EToolingPrisma } from '../lib/prisma';
 import { ApiResponse, ErrorCode, canonicalEmail, isUuidV7 } from '@meet-without-fear/shared';
@@ -121,8 +120,8 @@ async function loadUser(id: string): Promise<AuthUser | null> {
 
 /**
  * E2E auth bypass handler
- * Only when isE2EBypassEnabled() (E2E_AUTH_BYPASS=true and NODE_ENV test or
- * development), accepts x-e2e-user-id and x-e2e-user-email headers
+ * Only when isE2EBypassEnabled() (E2E_AUTH_BYPASS=true and NODE_ENV test,
+ * development or e2e), accepts x-e2e-user-id and x-e2e-user-email headers
  */
 async function handleE2EAuthBypass(req: Request): Promise<boolean> {
   if (!isE2EBypassEnabled()) {
@@ -241,27 +240,28 @@ function logIdentityConflict(incomingClerkUserId: string, existingUserId: string
   });
 }
 
-/** app.create_user names the holder of a taken email by id in its message (never the email). */
-const HOLDER_RE = /email belongs to user ([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/;
-
-function holderFrom(error: unknown): string | null {
-  const texts: string[] = [];
-  if (error instanceof Error) texts.push(error.message);
-  const meta = (error as { meta?: Record<string, unknown> } | null)?.meta;
-  if (meta) texts.push(JSON.stringify(meta));
-  for (const t of texts) {
-    const m = t.match(HOLDER_RE);
-    if (m) return m[1];
-  }
-  return null;
+/**
+ * The SQLSTATE and DETAIL of a database error raised by a raw query
+ * (Prisma P2010: @prisma/adapter-pg passes them through as
+ * meta.driverAdapterError.cause.code / .detail for an app-defined SQLSTATE).
+ */
+function pgRaise(error: unknown): { code?: string; detail?: string } {
+  const cause = (error as { meta?: { driverAdapterError?: { cause?: Record<string, unknown> } } } | null)?.meta
+    ?.driverAdapterError?.cause;
+  const str = (v: unknown) => (typeof v === 'string' ? v : undefined);
+  return { code: str(cause?.originalCode) ?? str(cause?.code), detail: str(cause?.detail) };
 }
+
+/** app.create_user's refusal: the email belongs to another account (DETAIL: the holder's id). */
+const EMAIL_HELD_ELSEWHERE = 'MWF01';
 
 /**
  * Create the user and its Clerk identity for a first-seen subject, through
  * mwf_auth's app.create_user. The function resolves the concurrent-create
  * race for the same subject (returns that user) and retries once when the
- * email's holder vanished; a unique_violation that reaches here means the
- * email belongs to another account: refuse (409), never re-bind (work-jv9y).
+ * email's holder vanished. MWF01 means the email belongs to another account:
+ * refuse (409), never re-bind (work-jv9y). Anything else — a unique_violation
+ * on the identity key included — is not that case and is rethrown.
  */
 async function createFirstLoginUser(
   clerkUserId: string,
@@ -271,8 +271,10 @@ async function createFirstLoginUser(
     const rows = await getAuthPrisma().$queryRaw<Array<{ id: string }>>`SELECT app.create_user('clerk'::identity_provider, ${clerkUserId}, ${profile.email}, ${profile.firstName}, ${profile.lastName})::text AS id`;
     return rows[0].id;
   } catch (error) {
-    if (getPgConstraintViolation(error)?.kind !== 'unique') throw error;
-    logIdentityConflict(clerkUserId, holderFrom(error));
+    const { code, detail } = pgRaise(error);
+    if (code !== EMAIL_HELD_ELSEWHERE) throw error;
+    // The holder's id is for the support log only: it decides nothing.
+    logIdentityConflict(clerkUserId, detail ?? null);
     throw new AccountLinkConflictError();
   }
 }

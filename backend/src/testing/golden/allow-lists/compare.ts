@@ -345,12 +345,18 @@ export function compareMappedChanges(e0: unknown, a0: unknown, rule: ChangesMapp
     for (const to of tos) image.add(`${to}|${kind}`);
     if (!tos.some(to => run.has(`${to}|${kind}`)))
       out.push(`changes: the baseline's ${kind} ${table} row(s) have no ${kind} image in [${tos.join(', ')}]`);
-    const oneToOne = tos.length === 1 && (sources.get(tos[0])?.size ?? 0) === 1;
-    if (oneToOne) {
-      const want = base.get(key)! + addedCount(tos[0], kind);
-      const got = run.get(`${tos[0]}|${kind}`) ?? 0;
+    const primary = rule.primaryImage?.[table];
+    const counted =
+      primary !== undefined && tos.includes(primary) && (sources.get(primary)?.size ?? 0) === 1
+        ? primary
+        : tos.length === 1 && (sources.get(tos[0])?.size ?? 0) === 1
+          ? tos[0]
+          : undefined;
+    if (counted !== undefined) {
+      const want = base.get(key)! + addedCount(counted, kind);
+      const got = run.get(`${counted}|${kind}`) ?? 0;
       if (got !== want)
-        out.push(`changes: ${kind} ${table}=${base.get(key)} (+${addedCount(tos[0], kind)} named) → ${tos[0]}=${got}`);
+        out.push(`changes: ${kind} ${table}=${base.get(key)} (+${addedCount(counted, kind)} named) → ${counted}=${got}`);
     }
   }
   for (const key of run.keys()) {

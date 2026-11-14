@@ -13,7 +13,8 @@
  */
 
 import { Request, Response } from 'express';
-import { requireAuth, optionalAuth, getUser, verifiedPrimaryEmail } from '../auth';
+import { requireAuth, optionalAuth, getUser, verifiedPrimaryEmail, toAuthUser } from '../auth';
+import { UnauthorizedError } from '../errors';
 
 // Mock Prisma
 
@@ -257,7 +258,7 @@ describe('Auth Middleware', () => {
     });
 
     it.each([undefined, 'production', 'staging', 'Test'])(
-      'ignores the e2e headers when NODE_ENV=%p (allow-list: test, development only)',
+      'ignores the e2e headers when NODE_ENV=%p (allow-list: test, development, e2e only)',
       async env => {
         const saved = process.env.NODE_ENV;
         try {
@@ -338,5 +339,34 @@ describe('verifiedPrimaryEmail (work-bp5m, ported from work-jv9y)', () => {
         emailAddresses: [{ id: 'idn_p', emailAddress: '   ', verification: { status: 'verified' } }],
       }),
     ).toBeNull();
+  });
+});
+
+describe('toAuthUser (work-k5fk.1: only a human signs in)', () => {
+  const row = {
+    id: '00000000-0000-7000-8000-0000000000a9',
+    email: null as string | null,
+    name: 'Imagined Partner',
+    firstName: 'Imagined',
+    lastName: 'Partner',
+    deletedAt: null,
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  };
+
+  it('refuses a persona row (401), whatever its email', () => {
+    expect(() => toAuthUser({ ...row, kind: 'persona' })).toThrow(UnauthorizedError);
+    expect(() => toAuthUser({ ...row, kind: 'persona', email: 'p@example.com' })).toThrow(UnauthorizedError);
+  });
+
+  it('refuses the AI row and a human row without an email', () => {
+    expect(() => toAuthUser({ ...row, kind: 'ai' })).toThrow(UnauthorizedError);
+    expect(() => toAuthUser({ ...row, kind: 'human' })).toThrow(UnauthorizedError);
+  });
+
+  it('returns a human row without its kind', () => {
+    const user = toAuthUser({ ...row, kind: 'human', email: 'h@example.com' });
+    expect(user).toEqual({ ...row, email: 'h@example.com' });
+    expect(user).not.toHaveProperty('kind');
   });
 });

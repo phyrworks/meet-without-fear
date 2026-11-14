@@ -9,6 +9,8 @@ describe('isE2EBypassEnabled', () => {
   it.each([
     ['test', 'true'],
     ['development', 'true'],
+    // the local production replica (infra/local/compose.yaml)
+    ['e2e', 'true'],
   ])('is on for NODE_ENV=%s, E2E_AUTH_BYPASS=%s', (NODE_ENV, E2E_AUTH_BYPASS) => {
     expect(isE2EBypassEnabled({ NODE_ENV, E2E_AUTH_BYPASS })).toBe(true);
     expect(isE2EBypassMisconfigured({ NODE_ENV, E2E_AUTH_BYPASS })).toBe(false);
@@ -23,6 +25,9 @@ describe('isE2EBypassEnabled', () => {
     ['misspelt prod', 'prod'],
     ['wrong case', 'Test'],
     ['padded', ' test'],
+    ['e2e, wrong case', 'E2E'],
+    ['e2e, padded', 'e2e '],
+    ['e2e-like', 'e2e-prod'],
   ])('is off, and misconfigured, for NODE_ENV %s', (_label, NODE_ENV) => {
     expect(isE2EBypassEnabled({ NODE_ENV, E2E_AUTH_BYPASS: 'true' })).toBe(false);
     expect(isE2EBypassMisconfigured({ NODE_ENV, E2E_AUTH_BYPASS: 'true' })).toBe(true);
