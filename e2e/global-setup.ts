@@ -82,6 +82,10 @@ const KEEP = ${JSON.stringify(KEEP)};
     }
     const quoted = rows.map(function(r) { return 'public."' + r.tablename.replace(/"/g, '""') + '"'; });
     await db.query('TRUNCATE TABLE ' + quoted.join(', ') + ' CASCADE');
+    // The baseline seeds one "user" row too: the AI principal (work-k5fk.3). Put it back.
+    if (rows.some(function(r) { return r.tablename === 'user'; })) {
+      await db.query('INSERT INTO public."user" (id, kind) VALUES (app.ai_user_id(), \\'ai\\') ON CONFLICT DO NOTHING');
+    }
     console.log('  ok Truncated ' + rows.length + ' tables in one statement');
   } finally {
     await db.end();

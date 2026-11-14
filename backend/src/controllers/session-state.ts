@@ -24,6 +24,7 @@ import { departedParticipantUsers } from '../utils/session';
 import { Request, Response } from 'express';
 import { logger } from '../lib/logger';
 import { prisma, getE2EToolingPrisma } from '../lib/prisma';
+import { isE2EBypassEnabled } from '../lib/e2e-bypass';
 import { reachInvitationSentOnAccept } from '../services/milestone-writer';
 import { lockInvitationForAccept, repointInvitationDrafts } from '../services/empathy-store';
 import { ErrorCode } from '@meet-without-fear/shared';
@@ -57,7 +58,7 @@ function latestDate(...values: Array<Date | null | undefined>): Date | null {
  * MAIN conversation and a read state), the session ACTIVE.
  */
 async function acceptPendingInvitationForE2ESession(sessionId: string, userId: string): Promise<boolean> {
-  if (process.env.E2E_AUTH_BYPASS !== 'true' || process.env.NODE_ENV === 'production') {
+  if (!isE2EBypassEnabled()) {
     return false;
   }
 

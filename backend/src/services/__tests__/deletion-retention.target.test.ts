@@ -192,11 +192,13 @@ describeTarget('deletion and retention on the target (the job as mwf_job, the ap
     expect(await count(`SELECT count(*)::int AS n FROM brain_activity WHERE turn_id = 'ts12-r40-reconciler'`)).toBe(0);
     expect(await count(`SELECT count(*)::int AS n FROM brain_activity WHERE turn_id = 'ts12-r40-own-turn'`)).toBe(1);
 
-    const [u] = await run.sql<{ email: string; clerk_id: string | null; first_name: string | null; deleted: boolean }>(
-      `SELECT email, clerk_id, first_name, deleted_at IS NOT NULL AS deleted FROM "user" WHERE id = $1`,
+    const [u] = await run.sql<{ email: string; first_name: string | null; deleted: boolean }>(
+      `SELECT email, first_name, deleted_at IS NOT NULL AS deleted FROM "user" WHERE id = $1`,
       [bob.id],
     );
-    expect(u).toEqual({ email: `deleted+${bob.id}@invalid`, clerk_id: null, first_name: null, deleted: true });
+    expect(u).toEqual({ email: `deleted+${bob.id}@invalid`, first_name: null, deleted: true });
+    // work-k5fk.1: the tombstone's sign-in identities go with it (was clerk_id := NULL)
+    expect(await count(`SELECT count(*)::int AS n FROM user_identity WHERE user_id = $1`, [bob.id])).toBe(0);
     expect(await count(`SELECT count(*)::int AS n FROM user_device WHERE user_id = $1`, [bob.id])).toBe(0);
     expect(await count(`SELECT count(*)::int AS n FROM feature_state WHERE user_id = $1`, [bob.id])).toBe(0);
     expect(await count(`SELECT count(*)::int AS n FROM conversation WHERE participant_id = $1`, [ids.bob])).toBe(0);

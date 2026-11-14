@@ -1,7 +1,8 @@
 /**
  * E2E Testing Routes
  *
- * Helper endpoints for E2E testing. Only available when E2E_AUTH_BYPASS is enabled.
+ * Helper endpoints for E2E testing. Only available when isE2EBypassEnabled()
+ * (E2E_AUTH_BYPASS=true and NODE_ENV test, development or e2e; lib/e2e-bypass.ts).
  */
 
 import { Router, Request, Response, NextFunction } from 'express';
@@ -11,6 +12,7 @@ import { StateFactory, TargetStage } from '../testing/state-factory';
 import { runReconcilerForDirection } from '../services/reconciler';
 import { logger } from '../lib/logger';
 import { canonicalEmail } from '@meet-without-fear/shared';
+import { isE2EBypassEnabled } from '../lib/e2e-bypass';
 
 const router = Router();
 
@@ -21,7 +23,7 @@ const router = Router();
  */
 export async function cleanupE2EUsers(req: Request, res: Response, next: NextFunction): Promise<void> {
   // Only allow when E2E mode is enabled
-  if (process.env.E2E_AUTH_BYPASS !== 'true') {
+  if (!isE2EBypassEnabled()) {
     res.status(403).json({
       success: false,
       error: 'E2E cleanup only available when E2E_AUTH_BYPASS is enabled',
@@ -119,6 +121,8 @@ export async function cleanupE2EUsers(req: Request, res: Response, next: NextFun
       getE2EToolingPrisma().userKey.deleteMany({ where: e2eUser }),
       getE2EToolingPrisma().aiMemory.deleteMany({ where: e2eUser }),
       getE2EToolingPrisma().reminder.deleteMany({ where: e2eUser }),
+      getE2EToolingPrisma().userIdentity.deleteMany({ where: e2eUser }),
+      getE2EToolingPrisma().persona.deleteMany({ where: { ownerUserId: { in: e2eUserIds } } }),
       getE2EToolingPrisma().relationshipMember.deleteMany({ where: e2eUser }),
       getE2EToolingPrisma().participant.deleteMany({ where: e2eUser }),
       getE2EToolingPrisma().invitation.updateMany({
@@ -157,7 +161,7 @@ router.post('/cleanup', cleanupE2EUsers);
  */
 export async function seedE2EUser(req: Request, res: Response, next: NextFunction): Promise<void> {
   // Only allow when E2E mode is enabled
-  if (process.env.E2E_AUTH_BYPASS !== 'true') {
+  if (!isE2EBypassEnabled()) {
     res.status(403).json({
       success: false,
       error: 'E2E seed only available when E2E_AUTH_BYPASS is enabled',
@@ -204,7 +208,7 @@ export async function seedE2EUser(req: Request, res: Response, next: NextFunctio
       return;
     }
 
-    // Create user with e2e_ prefixed clerkId
+    // Create user with an e2e_ prefixed sign-in identity
     const user = await getE2EToolingPrisma().user.upsert({
       where: { email: userEmail },
       // name is generated from first/last (spec §1.7): the whole name goes in first_name
@@ -212,7 +216,10 @@ export async function seedE2EUser(req: Request, res: Response, next: NextFunctio
       create: {
         email: userEmail,
         firstName: userName,
-        clerkId: `e2e_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+        // the e2e provider's identity (work-k5fk.1): an E2E user signs in through the bypass, never Clerk
+        identities: {
+          create: { provider: 'e2e', subject: `e2e_${Date.now()}_${Math.random().toString(36).slice(2, 8)}` },
+        },
       },
     });
 
@@ -245,7 +252,7 @@ router.post('/seed', seedE2EUser);
  */
 export async function seedE2ESession(req: Request, res: Response, next: NextFunction): Promise<void> {
   // Only allow when E2E mode is enabled
-  if (process.env.E2E_AUTH_BYPASS !== 'true') {
+  if (!isE2EBypassEnabled()) {
     res.status(403).json({
       success: false,
       error: 'E2E seed-session only available when E2E_AUTH_BYPASS is enabled',
@@ -324,7 +331,7 @@ router.post('/seed-session', seedE2ESession);
  * }
  */
 export async function seedE2EInnerThoughts(req: Request, res: Response, next: NextFunction): Promise<void> {
-  if (process.env.E2E_AUTH_BYPASS !== 'true') {
+  if (!isE2EBypassEnabled()) {
     res.status(403).json({
       success: false,
       error: 'E2E seed-inner-thoughts only available when E2E_AUTH_BYPASS is enabled',
@@ -363,7 +370,9 @@ export async function seedE2EInnerThoughts(req: Request, res: Response, next: Ne
         create: {
           email: user.email,
           firstName: user.name,
-          clerkId: `e2e_inner_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+          identities: {
+            create: { provider: 'e2e', subject: `e2e_inner_${Date.now()}_${Math.random().toString(36).slice(2, 8)}` },
+          },
         },
       });
 
@@ -427,7 +436,7 @@ export async function seedE2EInnerThoughts(req: Request, res: Response, next: Ne
           email: userRecord.email,
           name: userRecord.name || user.name,
         },
-        pageUrl: `${baseUrl}/inner-thoughts/${session.id}?e2e-user-id=${userRecord.id}&e2e-user-email=${encodeURIComponent(userRecord.email)}`,
+        pageUrl: `${baseUrl}/inner-thoughts/${session.id}?e2e-user-id=${userRecord.id}&e2e-user-email=${encodeURIComponent(user.email)}`,
       };
     });
 
@@ -461,7 +470,7 @@ router.post('/seed-inner-thoughts', seedE2EInnerThoughts);
  */
 export async function triggerE2EReconciler(req: Request, res: Response, next: NextFunction): Promise<void> {
   // Only allow when E2E mode is enabled
-  if (process.env.E2E_AUTH_BYPASS !== 'true') {
+  if (!isE2EBypassEnabled()) {
     res.status(403).json({
       success: false,
       error: 'E2E trigger-reconciler only available when E2E_AUTH_BYPASS is enabled',

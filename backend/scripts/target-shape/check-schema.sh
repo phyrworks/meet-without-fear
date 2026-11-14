@@ -5,7 +5,7 @@
 # BUILD MODE (default): proves schema.prisma matches the hand-written tables
 # (tables.sql) + sql-only.sql.
 #   1. creates the scratch database ts6_target on the dev container;
-#   2. applies tables.sql (domains, enums, the 47 tables with their keys,
+#   2. applies tables.sql (domains, enums, the 49 tables with their keys,
 #      FKs, CHECKs and generated columns — section 1 of the baseline);
 #   3. (a) `prisma validate`
 #      (c) `prisma db pull --print`, normalised (normalize-schema.cjs) and
@@ -92,10 +92,12 @@ mkdir -p "$OUT"
 OUT="$(cd "$OUT" && pwd)"
 
 # Spec §5 "Lives only in migration SQL" list (sql_*_key_live expanded), plus
-# the expression index this task added (spec §1.1 draft Keys line).
+# the expression index this task added (spec §1.1 draft Keys line), plus
+# sql_user_one_ai (design note §1, work-k5fk.3).
 SPEC_SQL_NAMES="sql_session_one_live sql_conversation_one_main sql_attempt_one_live_per_direction
 sql_result_one_current sql_disposition_one_current sql_user_device_token sql_session_key_live
-sql_participant_key_live sql_user_key_live sql_follow_up_due sql_reminder_due sql_need_live sql_message_once"
+sql_participant_key_live sql_user_key_live sql_follow_up_due sql_reminder_due sql_need_live sql_message_once
+sql_user_one_ai"
 EXPRESSION_ONLY="sql_draft_one_per_point"   # db pull never renders expression indexes
 
 psql_admin()   { podman exec -i "$CONTAINER" psql -X -q -v ON_ERROR_STOP=1 -U "$SU" -d postgres "$@"; }

@@ -187,8 +187,8 @@ status: living
 
 **E2E Auth Bypass (Not Resolved):**
 - Issue: E2E auth bypass (`E2E_AUTH_BYPASS=true` environment variable) is built into production auth middleware
-- Status: `backend/src/middleware/e2e-auth.ts` was created but is **never imported** anywhere. The bypass logic (`handleE2EAuthBypass()`, lines 74-121) still lives inline in `backend/src/middleware/auth.ts`. The bypass was duplicated to a separate file but not actually extracted from `auth.ts` — production auth middleware still contains E2E bypass logic.
-- Remaining mitigation: Environment variable check still needed; CORS restrictions + route-level guards provide additional protection
+- Status: the bypass logic (`handleE2EAuthBypass()`) lives inline in `backend/src/middleware/auth.ts`; there is no separate `e2e-auth.ts` module. Production auth middleware therefore still contains E2E bypass code, guarded as below.
+- Remaining mitigation: every bypass gate (auth middleware, `/api/e2e/*` handlers, the E2E tooling connection, CORS, rate-limit skips, session-state, realtime) goes through `isE2EBypassEnabled()`, `backend/src/lib/e2e-bypass.ts`: on only when `E2E_AUTH_BYPASS=true` **and** `NODE_ENV` is exactly `test`, `development` or `e2e` (the local replica) (an allow-list; unset or misspelt is off). `server.ts` refuses to start when the flag is set with any other `NODE_ENV` (work-jv9y, ported to target-shape by work-bp5m). The bypass's sign-in identities use their own provider (`user_identity.provider = 'e2e'`), which a Clerk subject can never collide with.
 
 **No Input Validation on Controller Parameters:**
 - Issue: Controllers receive route parameters directly without schema validation; request bodies validated but route params may not be

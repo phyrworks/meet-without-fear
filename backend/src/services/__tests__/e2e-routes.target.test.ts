@@ -39,6 +39,12 @@ describeTarget('E2E tooling routes on the target', () => {
     expect(await run.sql(`SELECT first_name, last_name, name FROM "user" WHERE email = 'seeded@e2e.test'`)).toEqual([
       { first_name: 'Sea Ded', last_name: null, name: 'Sea Ded' },
     ]);
+    // work-k5fk.1: an E2E user's sign-in identity is of the e2e provider, never clerk
+    const ids = await run.sql<{ provider: string; subject: string }>(
+      `SELECT i.provider::text AS provider, i.subject FROM user_identity i JOIN "user" u ON u.id = i.user_id
+       WHERE u.email = 'seeded@e2e.test'`,
+    );
+    expect(ids).toEqual([{ provider: 'e2e', subject: expect.stringMatching(/^e2e_\d+_[a-z0-9]+$/) }]);
   });
 
   it('seed-inner-thoughts: a reflection with messages and takeaways', async () => {
@@ -67,7 +73,9 @@ describeTarget('E2E tooling routes on the target', () => {
     expect(res.status).toBe(200);
     expect(res.body.deletedUsers).toBe(4);
     expect(res.body.deletedSessions).toBe(1);
-    expect(await run.sql(`SELECT count(*)::int AS n FROM "user"`)).toEqual([{ n: 0 }]);
+    // the AI principal (work-k5fk.3) is seeded by the baseline, never an E2E user
+    expect(await run.sql(`SELECT count(*)::int AS n FROM "user" WHERE kind = 'human'`)).toEqual([{ n: 0 }]);
+    expect(await run.sql(`SELECT count(*)::int AS n FROM user_identity`)).toEqual([{ n: 0 }]);
     expect(await run.sql(`SELECT count(*)::int AS n FROM session`)).toEqual([{ n: 0 }]);
     expect(await run.sql(`SELECT count(*)::int AS n FROM reflection`)).toEqual([{ n: 0 }]);
   });

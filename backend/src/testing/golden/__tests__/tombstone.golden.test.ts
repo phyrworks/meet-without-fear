@@ -102,6 +102,7 @@ const AFTER_TABLES = isTargetShape()
   ? [
       'session',
       'user',
+      'user_identity',
       'participant',
       'conversation',
       'message',
@@ -717,8 +718,12 @@ describe(`golden: ${SCENARIO}`, () => {
         adaUser.name === null &&
         adaUser.first_name === null &&
         adaUser.last_name === null &&
-        adaUser.clerk_id === null &&
         adaUser.deleted_at !== null,
+    );
+    // work-k5fk.1: the walk deletes the sign-in identities (was user.clerk_id := NULL).
+    rule(
+      "the tombstone's user_identity rows are deleted",
+      Array.isArray(t.user_identity) && !t.user_identity.some(i => i.user_id === adaId),
     );
     rule(
       'the concept views represent the state after the deletion',

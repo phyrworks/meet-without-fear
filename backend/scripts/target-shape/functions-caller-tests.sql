@@ -5,7 +5,8 @@
 -- the baseline built and seed-target-fixture.sql seeded (it changes data);
 -- run-baseline.sh adds test 18 (a second migrate deploy is a no-op), which
 -- needs the Prisma CLI. Every caller arm runs in a session that LOGGED
--- IN as mwf_app or mwf_job (\connect), never as the superuser; identity is
+-- IN as mwf_app, mwf_job or mwf_auth (\connect), never as the superuser (20, the
+-- structural key checks, run as the superuser by design); identity is
 -- set_config('app.current_user_id', <user>, true), as the request layer does.
 --
 -- Setup (superuser, before any caller arm): ids via \gset. mwf_app holds only
@@ -242,11 +243,69 @@ DO $$ BEGIN
   EXCEPTION WHEN insufficient_privilege THEN RAISE NOTICE 'PASS 12f anonymize_user_in_session is not mwf_app''s (no EXECUTE): %', SQLERRM;
   END;
   BEGIN
-    PERFORM app.resolve_user_by_clerk_id('x');
-    RAISE EXCEPTION 'TEST FAILED: mwf_app ran resolve_user_by_clerk_id';
-  EXCEPTION WHEN insufficient_privilege THEN RAISE NOTICE 'PASS 12g resolve_user_by_clerk_id is mwf_auth''s, not mwf_app''s: %', SQLERRM;
+    PERFORM app.resolve_user('clerk', 'user_ts7cAda');
+    RAISE EXCEPTION 'TEST FAILED: mwf_app ran resolve_user';
+  EXCEPTION WHEN insufficient_privilege THEN RAISE NOTICE 'PASS 12g resolve_user is mwf_auth''s, not mwf_app''s: %', SQLERRM;
+  END;
+  BEGIN
+    PERFORM app.create_user('clerk', 'user_ts7cMallory', 'mallory@ts7c.test');
+    RAISE EXCEPTION 'TEST FAILED: mwf_app ran create_user';
+  EXCEPTION WHEN insufficient_privilege THEN RAISE NOTICE 'PASS 12h create_user is mwf_auth''s, not mwf_app''s: %', SQLERRM;
   END;
 END $$;
+
+-- 21. work-bp5m: mwf_app can neither see nor write a sign-in identity, nor write an
+--     email, a kind or a user row — the grants the work-jv9y re-bind needed are gone.
+--     The profile edit (names) still works.
+DO $$ BEGIN
+  BEGIN
+    PERFORM 1 FROM user_identity;
+    RAISE EXCEPTION 'TEST FAILED: mwf_app read user_identity';
+  EXCEPTION WHEN insufficient_privilege THEN RAISE NOTICE 'PASS 21a mwf_app cannot read user_identity: %', SQLERRM;
+  END;
+  BEGIN
+    INSERT INTO user_identity (provider, subject, user_id) VALUES ('clerk', 'user_ts7cMallory', '00000000-0000-7e00-8000-0000000000a1');
+    RAISE EXCEPTION 'TEST FAILED: mwf_app inserted a user_identity';
+  EXCEPTION WHEN insufficient_privilege THEN RAISE NOTICE 'PASS 21b mwf_app cannot attach an identity to a user: %', SQLERRM;
+  END;
+  BEGIN
+    UPDATE user_identity SET user_id = '00000000-0000-7e00-8000-0000000000b1' WHERE subject = 'user_ts7cAda';
+    RAISE EXCEPTION 'TEST FAILED: mwf_app re-bound a user_identity';
+  EXCEPTION WHEN insufficient_privilege THEN RAISE NOTICE 'PASS 21c mwf_app cannot re-bind an identity: %', SQLERRM;
+  END;
+  BEGIN
+    DELETE FROM user_identity WHERE subject = 'user_ts7cAda';
+    RAISE EXCEPTION 'TEST FAILED: mwf_app deleted a user_identity';
+  EXCEPTION WHEN insufficient_privilege THEN RAISE NOTICE 'PASS 21d mwf_app cannot delete an identity: %', SQLERRM;
+  END;
+  BEGIN
+    UPDATE "user" SET email = 'mallory@ts7c.test' WHERE id = '00000000-0000-7e00-8000-0000000000a1';
+    RAISE EXCEPTION 'TEST FAILED: mwf_app updated user.email';
+  EXCEPTION WHEN insufficient_privilege THEN RAISE NOTICE 'PASS 21e mwf_app cannot UPDATE user.email: %', SQLERRM;
+  END;
+  BEGIN
+    UPDATE "user" SET kind = 'persona' WHERE id = '00000000-0000-7e00-8000-0000000000a1';
+    RAISE EXCEPTION 'TEST FAILED: mwf_app updated user.kind';
+  EXCEPTION WHEN insufficient_privilege THEN RAISE NOTICE 'PASS 21f mwf_app cannot UPDATE user.kind: %', SQLERRM;
+  END;
+  BEGIN
+    INSERT INTO "user" (email) VALUES ('mallory@ts7c.test');
+    RAISE EXCEPTION 'TEST FAILED: mwf_app inserted a user';
+  EXCEPTION WHEN insufficient_privilege THEN RAISE NOTICE 'PASS 21g mwf_app cannot INSERT a user: %', SQLERRM;
+  END;
+  BEGIN
+    PERFORM 1 FROM persona;
+    RAISE EXCEPTION 'TEST FAILED: mwf_app read persona';
+  EXCEPTION WHEN insufficient_privilege THEN RAISE NOTICE 'PASS 21h mwf_app holds nothing on persona: %', SQLERRM;
+  END;
+END $$;
+BEGIN;
+DO $$ BEGIN
+  UPDATE "user" SET first_name = 'Ada B.' WHERE id = '00000000-0000-7e00-8000-0000000000a1';
+  IF NOT FOUND THEN RAISE EXCEPTION 'TEST FAILED: the profile edit updated no row'; END IF;
+  RAISE NOTICE 'PASS 21i mwf_app still edits the names (profile edit)';
+END $$;
+ROLLBACK;
 \connect - mwf_user
 SELECT 'connected as ' || session_user || ' (setup: temporary GRANT EXECUTE ON app.anonymize_* TO mwf_app)';
 GRANT EXECUTE ON FUNCTION app.anonymize_user_account(uuid), app.anonymize_user_in_session(uuid, uuid) TO mwf_app;
@@ -398,6 +457,216 @@ DO $$ DECLARE x_before int; s_before int; refl_before int; BEGIN
 END $$;
 ROLLBACK;
 
+-- 24. work-k5fk.1/.3 (rolled back): the walk deletes the account's identities and
+--     scrubs its personas; the AI row and a persona are never an account to delete.
+BEGIN;
+DO $$ BEGIN
+  PERFORM app.anonymize_user_account('00000000-0000-7e00-8000-0000000000d1');
+  IF EXISTS (SELECT 1 FROM user_identity WHERE user_id = '00000000-0000-7e00-8000-0000000000d1') THEN
+    RAISE EXCEPTION 'TEST FAILED: the walk left a user_identity of the tombstone';
+  END IF;
+  RAISE NOTICE 'PASS 24a the walk deletes the account''s user_identity rows';
+  -- mwf_job reads first_name and deleted_at (not last_name); the walk NULLs both names in one SET
+  IF (SELECT row(first_name, deleted_at IS NOT NULL)::text FROM "user" WHERE id = '00000000-0000-7e00-8000-0000000000a9')
+     IS DISTINCT FROM '(,t)' THEN
+    RAISE EXCEPTION 'TEST FAILED: the owner''s persona was not scrubbed';
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM persona WHERE user_id = '00000000-0000-7e00-8000-0000000000a9') THEN
+    RAISE EXCEPTION 'TEST FAILED: the persona row went (it stays, scrubbed)';
+  END IF;
+  RAISE NOTICE 'PASS 24b the owner''s persona is scrubbed (names NULL, soft-deleted) and kept';
+END $$;
+ROLLBACK;
+\connect - mwf_job
+DO $$ BEGIN
+  BEGIN
+    PERFORM app.anonymize_user_account(app.ai_user_id());
+    RAISE EXCEPTION 'TEST FAILED: anonymize_user_account ran on the AI row';
+  EXCEPTION WHEN no_data_found THEN RAISE NOTICE 'PASS 24c the AI row is not an account: %', SQLERRM;
+  END;
+  BEGIN
+    PERFORM app.anonymize_user_account('00000000-0000-7e00-8000-0000000000a9');
+    RAISE EXCEPTION 'TEST FAILED: anonymize_user_account ran on a persona';
+  EXCEPTION WHEN no_data_found THEN RAISE NOTICE 'PASS 24d a persona is not an account: %', SQLERRM;
+  END;
+END $$;
+
+-- ============================ as mwf_auth ==============================-- 21. work-k5fk.1 / work-bp5m: resolve_user and create_user, mwf_auth's only privileges.
+\connect - mwf_auth
+SELECT 'connected as ' || session_user || ' (current_user ' || current_user || ')';
+DO $$ DECLARE v uuid; w uuid; BEGIN
+  IF app.resolve_user('clerk', 'user_ts7cAda') IS DISTINCT FROM '00000000-0000-7e00-8000-0000000000a1' THEN
+    RAISE EXCEPTION 'TEST FAILED: resolve_user did not find Ada';
+  END IF;
+  IF app.resolve_user('clerk', 'user_ts7cNobody') IS NOT NULL OR app.resolve_user('e2e', 'user_ts7cAda') IS NOT NULL THEN
+    RAISE EXCEPTION 'TEST FAILED: resolve_user found an unknown identity (or ignored the provider)';
+  END IF;
+  RAISE NOTICE 'PASS 23a resolve_user finds the identity''s user, and only under its provider';
+
+  v := app.create_user('clerk', 'user_ts7cNew', 'new@ts7c.test', 'New', 'Person');
+  IF v IS NULL OR app.resolve_user('clerk', 'user_ts7cNew') IS DISTINCT FROM v THEN
+    RAISE EXCEPTION 'TEST FAILED: create_user did not create a resolvable user';
+  END IF;
+  RAISE NOTICE 'PASS 23b create_user creates the user and its identity';
+
+  w := app.create_user('clerk', 'user_ts7cNew', 'other@ts7c.test');
+  IF w IS DISTINCT FROM v THEN RAISE EXCEPTION 'TEST FAILED: a repeated create_user made a second user'; END IF;
+  RAISE NOTICE 'PASS 23c create_user of an existing identity returns its user (concurrent first login), nothing new';
+
+  DECLARE d text;
+  BEGIN
+    PERFORM app.create_user('clerk', 'user_ts7cMallory', 'a@ts7c.test');
+    RAISE EXCEPTION 'TEST FAILED: create_user attached a new identity to the holder of the email';
+  EXCEPTION WHEN SQLSTATE 'MWF01' THEN
+    GET STACKED DIAGNOSTICS d = PG_EXCEPTION_DETAIL;
+    IF d IS DISTINCT FROM '00000000-0000-7e00-8000-0000000000a1' THEN
+      RAISE EXCEPTION 'TEST FAILED: MWF01 DETAIL is %, expected the holder''s id', d;
+    END IF;
+    RAISE NOTICE 'PASS 23d an email held by another account is refused (MWF01, DETAIL the holder''s id), never re-bound: %', SQLERRM;
+  END;
+  IF app.resolve_user('clerk', 'user_ts7cMallory') IS NOT NULL THEN
+    RAISE EXCEPTION 'TEST FAILED: the refused identity resolves';
+  END IF;
+  RAISE NOTICE 'PASS 23e the refused identity resolves to nothing';
+
+  BEGIN
+    PERFORM app.create_user('clerk', 'user_ts7cCase', 'A@ts7c.test');
+    RAISE EXCEPTION 'TEST FAILED: create_user stored a non-canonical email';
+  EXCEPTION WHEN check_violation THEN RAISE NOTICE 'PASS 23f a non-canonical email is refused (the caller canonicalizes): %', SQLERRM;
+  END;
+  BEGIN
+    PERFORM app.create_user('clerk', 'e2e_not_a_clerk_id', 'x1@ts7c.test');
+    RAISE EXCEPTION 'TEST FAILED: a clerk identity with a non-Clerk subject';
+  EXCEPTION WHEN check_violation THEN RAISE NOTICE 'PASS 23g a clerk subject must be user_<base62>: %', SQLERRM;
+  END;
+  BEGIN
+    PERFORM app.create_user('e2e', 'e2e_ts7c_signup', 'x2@ts7c.test');
+    RAISE EXCEPTION 'TEST FAILED: create_user signed up an e2e identity';
+  EXCEPTION WHEN SQLSTATE 'MWF02' THEN RAISE NOTICE 'PASS 23h create_user takes the clerk provider only (MWF02): %', SQLERRM;
+  END;
+  BEGIN
+    PERFORM app.create_user('clerk', 'user_ts7cNoMail', NULL);
+    RAISE EXCEPTION 'TEST FAILED: a human without an email';
+  EXCEPTION WHEN check_violation THEN RAISE NOTICE 'PASS 23i a human needs an email: %', SQLERRM;
+  END;
+  BEGIN
+    PERFORM 1 FROM user_identity;
+    RAISE EXCEPTION 'TEST FAILED: mwf_auth read user_identity directly';
+  EXCEPTION WHEN insufficient_privilege THEN RAISE NOTICE 'PASS 23j mwf_auth has the functions only: %', SQLERRM;
+  END;
+END $$;
+-- 23k. a tombstone's identity is gone (24a), so its subject no longer resolves — checked
+--      on Bob deleting his own account (rolled back; the superuser stands in for the
+--      request, with Bob's identity bound, so mwf_auth can look in the same transaction).
+\connect - mwf_user
+BEGIN;
+SELECT set_config('app.current_user_id', '00000000-0000-7e00-8000-0000000000b1', true) \g /dev/null
+SELECT app.anonymize_user_account('00000000-0000-7e00-8000-0000000000b1') \g /dev/null
+SET LOCAL ROLE mwf_auth;
+DO $$ BEGIN
+  IF app.resolve_user('clerk', 'user_ts7cBob') IS NOT NULL THEN
+    RAISE EXCEPTION 'TEST FAILED: a deleted account still resolves';
+  END IF;
+  RAISE NOTICE 'PASS 23k a deleted account''s subject no longer resolves';
+END $$;
+ROLLBACK;
+
+-- 23l. (review M5, rolled back) the deleted_at filters themselves: Cy is tombstoned
+--      WITHOUT the walk, so his identity row is still there. resolve_user must
+--      not resolve it, and create_user's same-identity arm must not hand the
+--      tombstone back (it raises the identity's unique_violation instead).
+BEGIN;
+UPDATE "user" SET deleted_at = now(), email = 'deleted+' || id || '@invalid', first_name = NULL, last_name = NULL
+WHERE id = '00000000-0000-7e00-8000-0000000000c1';
+SET LOCAL ROLE mwf_auth;
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = current_user AND rolname = 'mwf_auth') THEN
+    RAISE EXCEPTION 'TEST FAILED: setup — not running as mwf_auth';
+  END IF;
+  IF app.resolve_user('clerk', 'user_ts7cCy') IS NOT NULL THEN
+    RAISE EXCEPTION 'TEST FAILED: resolve_user resolved a tombstone whose identity survived';
+  END IF;
+  RAISE NOTICE 'PASS 23l resolve_user ignores a tombstoned user even with its identity present';
+  BEGIN
+    PERFORM app.create_user('clerk', 'user_ts7cCy', 'cy.again@ts7c.test');
+    RAISE EXCEPTION 'TEST FAILED: create_user handed back (or re-created around) a tombstone''s identity';
+  EXCEPTION WHEN unique_violation THEN
+    RAISE NOTICE 'PASS 23m create_user does not return a tombstone for its surviving identity (unique_violation): %', SQLERRM;
+  END;
+END $$;
+ROLLBACK;
+
+-- ============================ structure (superuser) ===========================
+-- 22. pattern K and the AI principal: the keys, not the callers, refuse these.
+DO $$ BEGIN
+  BEGIN
+    INSERT INTO user_identity (provider, subject, user_id) VALUES ('clerk', 'user_ts7cAi', app.ai_user_id());
+    RAISE EXCEPTION 'TEST FAILED: an identity on the AI row';
+  EXCEPTION WHEN foreign_key_violation THEN RAISE NOTICE 'PASS 22a an identity can only point at a human (AI row refused): %', SQLERRM;
+  END;
+  BEGIN
+    INSERT INTO user_identity (provider, subject, user_id) VALUES ('clerk', 'user_ts7cPersona', '00000000-0000-7e00-8000-0000000000a9');
+    RAISE EXCEPTION 'TEST FAILED: an identity on a persona';
+  EXCEPTION WHEN foreign_key_violation THEN RAISE NOTICE 'PASS 22b an identity can only point at a human (persona refused): %', SQLERRM;
+  END;
+  BEGIN
+    INSERT INTO persona (user_id, owner_user_id) VALUES ('00000000-0000-7e00-8000-0000000000a1', '00000000-0000-7e00-8000-0000000000b1');
+    RAISE EXCEPTION 'TEST FAILED: a human row as a persona';
+  EXCEPTION WHEN foreign_key_violation THEN RAISE NOTICE 'PASS 22c a persona row must be a persona user: %', SQLERRM;
+  END;
+  BEGIN
+    INSERT INTO "user" (id, kind) VALUES ('00000000-0000-7e00-8000-0000000000aa', 'persona');
+    INSERT INTO persona (user_id, owner_user_id) VALUES ('00000000-0000-7e00-8000-0000000000aa', '00000000-0000-7e00-8000-0000000000a9');
+    RAISE EXCEPTION 'TEST FAILED: a persona owned by a persona';
+  EXCEPTION WHEN foreign_key_violation THEN RAISE NOTICE 'PASS 22d a persona''s owner must be a human: %', SQLERRM;
+  END;
+  BEGIN
+    INSERT INTO "user" (kind) VALUES ('ai');
+    RAISE EXCEPTION 'TEST FAILED: a second AI row';
+  EXCEPTION WHEN unique_violation THEN RAISE NOTICE 'PASS 22e exactly one AI row (sql_user_one_ai): %', SQLERRM;
+  END;
+  BEGIN
+    UPDATE "user" SET email = 'ai@ts7c.test' WHERE id = app.ai_user_id();
+    RAISE EXCEPTION 'TEST FAILED: the AI row with an email';
+  EXCEPTION WHEN check_violation THEN RAISE NOTICE 'PASS 22f a non-human has no email: %', SQLERRM;
+  END;
+  BEGIN
+    UPDATE "user" SET kind = 'persona' WHERE id = '00000000-0000-7e00-8000-0000000000a1';
+    RAISE EXCEPTION 'TEST FAILED: a human with an identity re-kinded';
+  EXCEPTION WHEN check_violation OR foreign_key_violation THEN RAISE NOTICE 'PASS 22g a human with an email/identity cannot change kind: %', SQLERRM;
+  END;
+  BEGIN
+    INSERT INTO user_identity (provider, subject, user_id) VALUES ('e2e', 'e2e_ts7c_second', '00000000-0000-7e00-8000-0000000000a1');
+    INSERT INTO user_identity (provider, subject, user_id) VALUES ('e2e', 'e2e_ts7c_third', '00000000-0000-7e00-8000-0000000000a1');
+    RAISE EXCEPTION 'TEST FAILED: two identities of one provider on one user';
+  EXCEPTION WHEN unique_violation THEN RAISE NOTICE 'PASS 22h one identity per provider per user: %', SQLERRM;
+  END;
+  BEGIN
+    INSERT INTO user_identity (provider, subject, user_id) VALUES ('e2e', 'user_ts7cAda2', '00000000-0000-7e00-8000-0000000000b1');
+    RAISE EXCEPTION 'TEST FAILED: an e2e identity with a non-e2e subject';
+  EXCEPTION WHEN check_violation THEN RAISE NOTICE 'PASS 22i an e2e subject must be e2e_…: %', SQLERRM;
+  END;
+  BEGIN
+    UPDATE "user" SET email = 'deleted+' || id || '@invalid' WHERE id = '00000000-0000-7e00-8000-0000000000a1';
+    RAISE EXCEPTION 'TEST FAILED: a live account holds a deleted+…@invalid address';
+  EXCEPTION WHEN check_violation THEN RAISE NOTICE 'PASS 22j a live account cannot hold a tombstone address (review L1): %', SQLERRM;
+  END;
+  BEGIN
+    UPDATE "user" SET deleted_at = now() WHERE id = '00000000-0000-7e00-8000-0000000000a1';
+    RAISE EXCEPTION 'TEST FAILED: a tombstone keeps a real address';
+  EXCEPTION WHEN check_violation THEN RAISE NOTICE 'PASS 22k a tombstone cannot keep a real address: %', SQLERRM;
+  END;
+  BEGIN
+    UPDATE "user" SET first_name = 'Hal' WHERE id = app.ai_user_id();
+    RAISE EXCEPTION 'TEST FAILED: the AI row named';
+  EXCEPTION WHEN check_violation THEN RAISE NOTICE 'PASS 22l the AI row has no name: %', SQLERRM;
+  END;
+  BEGIN
+    UPDATE "user" SET deleted_at = now() WHERE id = app.ai_user_id();
+    RAISE EXCEPTION 'TEST FAILED: the AI row deleted';
+  EXCEPTION WHEN check_violation THEN RAISE NOTICE 'PASS 22m the AI row is never deleted: %', SQLERRM;
+  END;
+END $$;
 -- 19. app.session_archive (work-k5fk.10.12): only a CURRENT participant of the
 --     session, only from CREATED / INVITED / RESOLVED / ABANDONED; records the
 --     archiver and the instant. Its refusals carry their own SQLSTATEs (MWA00

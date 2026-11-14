@@ -26,6 +26,10 @@ export enum ErrorCode {
   // Auth errors
   UNAUTHORIZED = 'UNAUTHORIZED',
   FORBIDDEN = 'FORBIDDEN',
+  /** First login refused: the Clerk user has no verified primary email address. */
+  EMAIL_NOT_VERIFIED = 'EMAIL_NOT_VERIFIED',
+  /** First login refused: the email already belongs to an account bound to another identity. */
+  ACCOUNT_LINK_CONFLICT = 'ACCOUNT_LINK_CONFLICT',
 
   // Resource errors
   NOT_FOUND = 'NOT_FOUND',
@@ -57,6 +61,8 @@ export enum ErrorCode {
 export enum ApiErrorCode {
   UNAUTHORIZED = 'UNAUTHORIZED',
   FORBIDDEN = 'FORBIDDEN',
+  EMAIL_NOT_VERIFIED = 'EMAIL_NOT_VERIFIED',
+  ACCOUNT_LINK_CONFLICT = 'ACCOUNT_LINK_CONFLICT',
   NOT_FOUND = 'NOT_FOUND',
   CONFLICT = 'CONFLICT',
   VALIDATION_ERROR = 'VALIDATION_ERROR',

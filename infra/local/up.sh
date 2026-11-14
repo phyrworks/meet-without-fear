@@ -72,7 +72,7 @@ DATABASE_URL=postgresql://mwf_migrator:$MIGRATOR_DB_PASSWORD@db:5432/mwf?connect
 APP_DATABASE_URL=postgresql://mwf_app:$APP_DB_PASSWORD@db:5432/mwf?connection_limit=12
 JOB_DATABASE_URL=postgresql://mwf_job:$JOB_DB_PASSWORD@db:5432/mwf?connection_limit=5
 OPS_DATABASE_URL=postgresql://mwf_ops:$OPS_DB_PASSWORD@db:5432/mwf?connection_limit=2
-AUTH_DATABASE_URL=postgresql://mwf_auth:$AUTH_DB_PASSWORD@db:5432/mwf?connection_limit=2
+AUTH_DATABASE_URL=postgresql://mwf_auth:$AUTH_DB_PASSWORD@db:5432/mwf?connection_limit=12
 DB_IDENTITY_BINDING=on
 FIELD_ENCRYPTION_KEY=$FIELD_ENCRYPTION_KEY
 E2E_FIXTURE_ID=user-a-full-journey

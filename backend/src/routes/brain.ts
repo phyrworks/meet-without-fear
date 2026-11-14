@@ -1302,7 +1302,7 @@ router.get('/sessions', async (req, res) => {
       title: string | null;
       createdAt: Date;
       updatedAt: Date;
-      user: { id: string; name: string | null; email: string };
+      user: { id: string; name: string | null; email: string | null };
     }> = [];
     if (fetchInnerWork) {
       innerWorkSessions = await db().reflection.findMany({
