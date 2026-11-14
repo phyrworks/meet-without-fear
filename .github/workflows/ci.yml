@@ -14,9 +14,10 @@ on:
     types: [opened, synchronize, reopened]
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  # A new commit on a PR supersedes the old run; a push to a long-lived branch
-  # runs to completion, so every commit on it has a result.
+  # PR runs share a group per ref (a new commit supersedes the old run); push runs
+  # get a group per commit, so every commit on a long-lived branch has a result
+  # (one group per ref would still drop all but one pending run).
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
@@ -213,7 +214,9 @@ jobs:
       # its last query (the violations) alone and fail on any row.
       - name: Assert D0 (no mwf_* role but mwf_user is SUPERUSER or BYPASSRLS)
         run: |
-          violations="$(sed -n '/AS d0_violation/,$p' backend/scripts/d0-check.sql \
+          sql="$(sed -n '/AS d0_violation/,$p' backend/scripts/d0-check.sql)"
+          [ -n "$sql" ] || { echo "::error::D0 query not found in d0-check.sql (anchor 'AS d0_violation')"; exit 1; }
+          violations="$(printf '%s\n' "$sql" \
             | docker exec -i mwf-postgres psql -X -At -v ON_ERROR_STOP=1 -U mwf_user -d meet_without_fear)"
           if [ -n "$violations" ]; then
             echo "::error::D0 violated: $violations"; exit 1
@@ -265,7 +268,7 @@ jobs:
 
       # The server log holds bind values inlined into plan predicates (ids, not
       # message text: docs/development/local-setup.md); it is uploaded only on
-      # failure, to a private artifact, and the container's data is synthetic.
+      # failure, to an artifact (public repo: anyone signed in can download it), and the container's data is synthetic.
       - name: Save the PostgreSQL log on failure
         if: failure()
         run: |
