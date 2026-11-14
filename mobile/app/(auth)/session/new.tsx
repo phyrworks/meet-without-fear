@@ -189,9 +189,9 @@ export default function NewSessionScreen() {
           ...(linkedAtMessageId && { linkedAtMessageId }),
         });
         // Track person selection (new person) and session creation
-        // Note: personId not available in response, using relationshipId
-        trackPersonSelected(response.session.relationshipId, true);
-        trackSessionCreated(response.session.id, response.session.relationshipId);
+        // A new person has no user id until they accept (work-k5fk.2: no relationship id either)
+        trackPersonSelected(response.session.partner?.id || '', true);
+        trackSessionCreated(response.session.id);
         router.replace(
           linkedInnerThoughtsId
             ? `/session/${response.session.id}?fromInnerThoughtsCreate=1`

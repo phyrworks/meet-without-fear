@@ -37,7 +37,6 @@ const stageGateSchema = z.object({
 
 export const sessionSummarySchema = z.object({
   id: z.string(),
-  relationshipId: z.string(),
   status: z.nativeEnum(SessionStatus),
   createdAt: z.string().datetime(),
   updatedAt: z.string().datetime(),
@@ -55,11 +54,6 @@ export type SessionSummaryInput = z.infer<typeof sessionSummarySchema>;
 // ============================================================================
 
 export const sessionDetailSchema = sessionSummarySchema.extend({
-  relationship: z.object({
-    id: z.string(),
-    createdAt: z.string().datetime(),
-    sessionCount: z.number().int().min(0),
-  }),
   currentGates: z.array(stageGateSchema),
   resolvedAt: z.string().datetime().nullable(),
 });
@@ -230,7 +224,7 @@ export const resendInvitationResponseSchema = z.object({
 export type ResendInvitationResponseInput = z.infer<typeof resendInvitationResponseSchema>;
 
 // ============================================================================
-// PATCH /relationships/:relationshipId/nickname - Update Nickname
+// PATCH /contacts/:userId/nickname - Set or clear what you call a contact (work-k5fk.2)
 // ============================================================================
 
 export const updateNicknameRequestSchema = z.object({

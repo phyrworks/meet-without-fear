@@ -317,16 +317,13 @@ describe('mapSessionToSummary - Stage 2 selfActionNeeded', () => {
   ) {
     return {
       id: 'session-1',
-      relationshipId: 'rel-1',
       status: 'ACTIVE',
       createdAt: new Date('2024-01-01'),
       updatedAt: new Date('2024-01-02'),
-      relationship: {
-        members: [
-          { userId: USER_ID, nickname: null, user: { id: USER_ID, name: 'User', firstName: 'User' } },
-          { userId: PARTNER_ID, nickname: null, user: { id: PARTNER_ID, name: 'Partner', firstName: 'Partner' } },
-        ],
-      },
+      members: [
+        { userId: USER_ID, nickname: null, user: { id: USER_ID, name: 'User', firstName: 'User' } },
+        { userId: PARTNER_ID, nickname: null, user: { id: PARTNER_ID, name: 'Partner', firstName: 'Partner' } },
+      ],
       stageProgress: [
         {
           userId: USER_ID,

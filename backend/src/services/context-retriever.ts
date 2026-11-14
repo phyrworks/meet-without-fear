@@ -90,9 +90,6 @@ export interface RetrievalOptions {
   /** Current session ID (if in a session) */
   currentSessionId?: string;
 
-  /** Relationship ID for filtering cross-session search to same partner */
-  relationshipId?: string;
-
   /** Turn ID for grouping logs and cost attribution (format: `${sessionId}-${turnCount}`) - REQUIRED */
   turnId: string;
 
@@ -211,7 +208,6 @@ If no references, return empty arrays and needsRetrieval: false.`;
 async function searchAcrossSessionsContent(
   userId: string,
   queryText: string,
-  _relationshipId: string,
   limit: number = 5,
   threshold: number = 0.5,
   turnId?: string,
@@ -343,7 +339,6 @@ export async function retrieveContext(options: RetrievalOptions): Promise<Retrie
     userId,
     currentMessage,
     currentSessionId,
-    relationshipId: providedRelationshipId,
     turnId,
     maxCrossSessionMessages = 10,
     similarityThreshold = 0.5,
@@ -359,19 +354,11 @@ export async function retrieveContext(options: RetrievalOptions): Promise<Retrie
 
   const startTime = Date.now();
 
-  // Get relationshipId - if not provided, look it up from the session
-  let relationshipId = providedRelationshipId;
-  if (!relationshipId && currentSessionId) {
-    try {
-      const session = await prisma.session.findUnique({
-        where: { id: currentSessionId },
-        select: { relationshipId: true },
-      });
-      relationshipId = session?.relationshipId;
-    } catch (error) {
-      logger.warn('[ContextRetriever] Failed to fetch session relationship:', error);
-    }
-  }
+  // Cross-session search is scoped by the session-level index itself
+  // (searchSessionContent: the user's own sessions); it ran whenever there was
+  // a current session (work-k5fk.2: the relationship it used to look up went
+  // with the table, and was never a filter).
+  const inSession = !!currentSessionId;
 
   // Use memory intent to override thresholds and limits if provided
   const effectiveThreshold = memoryIntent?.threshold ?? similarityThreshold;
@@ -445,16 +432,9 @@ export async function retrieveContext(options: RetrievalOptions): Promise<Retrie
       const searchOps: Promise<RelevantMessage[]>[] = [];
 
       // Search partner session content (cross-session) - uses session-level embeddings
-      if (shouldSearchCrossSession && relationshipId) {
+      if (shouldSearchCrossSession && inSession) {
         searchOps.push(
-          searchAcrossSessionsContent(
-            userId,
-            query,
-            relationshipId,
-            effectiveMaxCrossSession,
-            effectiveThreshold,
-            turnId,
-          ),
+          searchAcrossSessionsContent(userId, query, effectiveMaxCrossSession, effectiveThreshold, turnId),
         );
       } else {
         searchOps.push(Promise.resolve([]));

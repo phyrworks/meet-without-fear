@@ -14,6 +14,17 @@ import { displayStatus, parseStatusFilter, pausedSessionIds } from '../services/
 import { createInvitationUrl } from '../utils/urls';
 import { reachInvitationSentOnAccept } from '../services/milestone-writer';
 import { lockInvitationForAccept, repointInvitationDrafts } from '../services/empathy-store';
+import {
+  LIVE_SESSION_EXISTS_MESSAGE,
+  findLiveSessionWith,
+  getNickname,
+  isLiveSessionPairViolation,
+  loadSessionPartners,
+  pendingInviteeNames,
+  recordNicknameIfAbsent,
+  setNickname,
+  sharesASession,
+} from '../services/contacts';
 
 // ============================================================================
 // Types
@@ -44,6 +55,9 @@ const declineInvitationSchema = z.object({
 const updateNicknameSchema = z.object({
   nickname: z.string().min(1).max(100).nullable(),
 });
+
+/** A path user id must be a uuid before it reaches a uuid7 column. */
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 // ============================================================================
 // Controllers
@@ -88,17 +102,7 @@ export async function listSessions(req: Request, res: Response): Promise<void> {
         }),
       },
       include: {
-        session: {
-          include: {
-            relationship: {
-              include: {
-                members: {
-                  include: { user: { select: { id: true, name: true, firstName: true, email: true } } },
-                },
-              },
-            },
-          },
-        },
+        session: true,
         readState: { select: { lastViewedAt: true, lastSeenMessageId: true } },
       },
       orderBy: { session: { updatedAt: 'desc' } },
@@ -108,6 +112,13 @@ export async function listSessions(req: Request, res: Response): Promise<void> {
 
     const hasMore = mine.length > takeLimit;
     const items = hasMore ? mine.slice(0, -1) : mine;
+
+    // Each session's other human and the caller's own nickname for them
+    // (user_contact; work-k5fk.2, no relationship), for the whole page.
+    const sessionPartners = await loadSessionPartners(
+      items.map(p => p.sessionId),
+      user.id,
+    );
 
     // Partners (v_co_participant), progress (stage shim), unread
     // (v_conversation_unread) and Stage 2 directions, for the whole page.
@@ -143,13 +154,18 @@ export async function listSessions(req: Request, res: Response): Promise<void> {
 
     // Partners who left (account deletion, leaving) show no name (TS-12, R5).
     const departed = await departedParticipantUsers(items.map(p => p.sessionId));
+    // Before the invitee joins there is no partner: the inviter's name for them is on their invitation.
+    const inviteeNames = await pendingInviteeNames(
+      items.filter(p => !sessionPartners.get(p.sessionId)).map(p => p.sessionId),
+      user.id,
+    );
 
     const formattedSessions = items.map(me => {
       const session = me.session;
       const partner = partners.get(me.id) ?? null;
-      // Find my membership record (for nickname I use for partner)
-      const myMember = session.relationship.members.find(m => m.userId === user.id);
-      const partnerMember = session.relationship.members.find(m => m.userId !== user.id);
+      // The other human, and what I call them (my user_contact entry)
+      const partnerMember = sessionPartners.get(session.id) ?? null;
+      const myNickname = partnerMember?.nickname ?? null;
 
       const myProgress = progressDTO(stageStates.get(me.id), { milestones: 'none' });
       const partnerProgress = progressDTO(partner ? stageStates.get(partner.participantId) : undefined, {
@@ -194,12 +210,12 @@ export async function listSessions(req: Request, res: Response): Promise<void> {
       }
 
       // Nickname (what I call them), then their names — none for a partner who left.
-      const partnerLeft = !!partnerMember && departed.has(`${session.id}:${partnerMember.user.id}`);
+      const partnerLeft = !!partnerMember && departed.has(`${session.id}:${partnerMember.userId}`);
       const partnerDisplayName = partnerLeft
         ? null
         : partnerMember
-          ? myMember?.nickname || partnerMember.user.firstName || partnerMember.user.name
-          : myMember?.nickname || null;
+          ? myNickname || partnerMember.firstName || partnerMember.name
+          : inviteeNames.get(session.id) || null;
 
       const sessionStatus = displayStatus(session.status, paused.has(session.id));
       const statusSummary = generateSessionStatusSummary(
@@ -219,17 +235,16 @@ export async function listSessions(req: Request, res: Response): Promise<void> {
 
       return {
         id: session.id,
-        relationshipId: session.relationshipId,
         status: sessionStatus,
         createdAt: session.createdAt.toISOString(),
         updatedAt: session.updatedAt.toISOString(),
         partner: partnerMember
           ? {
-              id: partnerMember.user.id,
+              id: partnerMember.userId,
               name: partnerDisplayName,
-              nickname: partnerLeft ? null : myMember?.nickname || null,
+              nickname: partnerLeft ? null : myNickname,
             }
-          : { id: '', name: partnerDisplayName, nickname: myMember?.nickname || null },
+          : { id: '', name: partnerDisplayName, nickname: inviteeNames.get(session.id) || null },
         myProgress: dto(myProgress),
         partnerProgress: dto(partnerProgress),
         statusSummary,
@@ -279,119 +294,54 @@ export async function createSession(req: Request, res: Response): Promise<void> 
       return;
     }
 
-    // Create or find relationship
-    let relationship;
+    // work-k5fk.2: no relationship. A known person must exist; what the
+    // inviter calls them is the inviter's own user_contact entry, else the
+    // name they last went by in a session the two shared
+    // (participant.display_name — never the other user's own row, spec §7).
     if (personId) {
-      // Find existing relationship with this person
-      const existingMember = await prisma.relationshipMember.findFirst({
+      const existingUser = await prisma.user.findFirst({
+        where: { id: personId, deletedAt: null, kind: 'human' },
+        select: { id: true },
+      });
+      if (!existingUser) {
+        errorResponse(res, 'NOT_FOUND', 'Person not found', 404);
+        return;
+      }
+      const lastShared = await prisma.participant.findFirst({
         where: {
           userId: personId,
-          relationship: {
-            members: {
-              some: { userId: user.id },
-            },
-          },
+          displayName: { not: null },
+          session: { participants: { some: { userId: user.id } } },
         },
-        include: {
-          relationship: {
-            include: {
-              members: {
-                where: { userId: user.id },
-                select: { nickname: true },
-              },
-            },
-          },
-        },
+        orderBy: { joinedAt: 'desc' },
+        select: { displayName: true },
       });
+      inviteeDisplayName =
+        inviteeDisplayName || (await getNickname(user.id, personId)) || lastShared?.displayName || undefined;
 
-      if (existingMember) {
-        relationship = existingMember.relationship;
-        // The inviter's own name for them, else the name they last went by in
-        // a session the two shared (participant.display_name — never the other
-        // user's own row, spec §7).
-        const lastShared = await prisma.participant.findFirst({
-          where: {
-            userId: personId,
-            displayName: { not: null },
-            session: { relationshipId: existingMember.relationshipId },
-          },
-          orderBy: { joinedAt: 'desc' },
-          select: { displayName: true },
-        });
-        inviteeDisplayName =
-          inviteeDisplayName ||
-          existingMember.relationship.members[0]?.nickname ||
-          lastShared?.displayName ||
-          undefined;
-      } else {
-        // A person the inviter shares no relationship with: they must exist,
-        // and their name is not the inviter's to read (U-class).
-        const existingUser = await prisma.user.findFirst({
-          where: { id: personId, deletedAt: null },
-          select: { id: true },
-        });
-
-        if (!existingUser) {
-          errorResponse(res, 'NOT_FOUND', 'Person not found', 404);
+      // The invite-time pre-check (owner decision Q3): one live session per
+      // pair of humans is live_session_pair's key, which the database enforces
+      // when the second human joins. Asked here so the inviter hears it now.
+      const existingActiveSession = await findLiveSessionWith(user.id, personId);
+      if (existingActiveSession) {
+        if (forceCreate) {
+          errorResponse(res, 'CONFLICT', LIVE_SESSION_EXISTS_MESSAGE, 409, {
+            existingActiveSession: { id: existingActiveSession.id, status: existingActiveSession.status },
+          });
           return;
         }
-      }
-    }
-
-    // If no existing relationship, create a new one
-    if (!relationship) {
-      relationship = await prisma.relationship.create({
-        data: {
-          members: {
-            create: personId
-              ? [
-                  {
-                    userId: user.id,
-                    nickname: inviteName || null, // Store what inviter calls the invitee
-                  },
-                  { userId: personId },
-                ]
-              : {
-                  userId: user.id,
-                  nickname: inviteName || null, // Store what inviter calls the invitee
-                },
+        successResponse(res, {
+          existingActiveSession: {
+            id: existingActiveSession.id,
+            status: existingActiveSession.status,
+            updatedAt: existingActiveSession.updatedAt.toISOString(),
           },
-        },
-      });
-    } else {
-      // Update nickname on existing membership if inviteName provided
-      if (inviteName) {
-        await prisma.relationshipMember.update({
-          where: {
-            relationshipId_userId: {
-              relationshipId: relationship.id,
-              userId: user.id,
-            },
-          },
-          data: { nickname: inviteName },
         });
+        return;
       }
-    }
 
-    // Check for existing active session with this person
-    const existingActiveSession = await prisma.session.findFirst({
-      where: {
-        relationshipId: relationship.id,
-        status: { in: ['CREATED', 'INVITED', 'ACTIVE'] },
-      },
-      select: { id: true, status: true, updatedAt: true },
-      orderBy: { updatedAt: 'desc' },
-    });
-
-    if (existingActiveSession && !forceCreate) {
-      successResponse(res, {
-        existingActiveSession: {
-          id: existingActiveSession.id,
-          status: existingActiveSession.status,
-          updatedAt: existingActiveSession.updatedAt.toISOString(),
-        },
-      });
-      return;
+      // An invite name is the inviter's nickname for this person.
+      if (inviteName) await setNickname(user.id, personId, inviteName.slice(0, 100));
     }
 
     // Create the session, the inviter's participant (with its MAIN
@@ -401,10 +351,7 @@ export async function createSession(req: Request, res: Response): Promise<void> 
     // invitation message (sessions.ts confirmInvitationMessage).
     const { session, invitation } = await prisma.$transaction(async tx => {
       const sess = await tx.session.create({
-        data: {
-          relationshipId: relationship.id,
-          status: 'CREATED',
-        },
+        data: { status: 'CREATED' },
       });
 
       const me = await tx.participant.create({
@@ -412,6 +359,8 @@ export async function createSession(req: Request, res: Response): Promise<void> 
           sessionId: sess.id,
           userId: user.id,
           kind: 'human',
+          // The initiator: the one participant nobody added (work-k5fk.2)
+          addedByUserId: null,
           // The only user fact a co-participant sees (spec §7)
           displayName: user.name || user.firstName || null,
         },
@@ -627,23 +576,13 @@ export async function acceptInvitation(req: Request, res: Response): Promise<voi
       // empathy draft save (FOR SHARE) commits before the move below reads the
       // drafts, or runs after this commits and writes against the participant.
       await lockInvitationForAccept(tx, id);
-      // Join the relationship
-      const existingMembership = await tx.relationshipMember.findUnique({
-        where: {
-          relationshipId_userId: {
-            relationshipId: invitation.session.relationshipId,
-            userId: user.id,
-          },
-        },
-      });
-
-      if (!existingMembership) {
-        await tx.relationshipMember.create({
-          data: {
-            relationshipId: invitation.session.relationshipId,
-            userId: user.id,
-          },
-        });
+      // work-k5fk.2: a link invitee becomes known to the inviter here — the
+      // invite name is the inviter's nickname for them, unless the inviter
+      // already has an entry (FINDING: the invitee's request writes the
+      // inviter's user_contact row; an invitation-side definer takes it over
+      // with RLS, design note §6).
+      if (inviterUserId) {
+        await recordNicknameIfAbsent(tx, inviterUserId, user.id, invitation.inviteeName);
       }
 
       await tx.invitation.update({
@@ -655,11 +594,15 @@ export async function acceptInvitation(req: Request, res: Response): Promise<voi
         },
       });
 
+      // The inviter added the invitee (work-k5fk.2). The join is where the
+      // database applies the pair rule: a second live session of these two
+      // humans fails here with unique_violation (live_session_pair_pkey).
       const me = await tx.participant.create({
         data: {
           sessionId: invitation.sessionId,
           userId: user.id,
           kind: 'human',
+          addedByUserId: inviterUserId,
           displayName: user.name || user.firstName || null,
         },
         select: { id: true },
@@ -717,6 +660,11 @@ export async function acceptInvitation(req: Request, res: Response): Promise<voi
       },
     });
   } catch (error) {
+    if (isLiveSessionPairViolation(error)) {
+      // The pair rule (work-k5fk.2): these two already share a live session.
+      errorResponse(res, 'CONFLICT', LIVE_SESSION_EXISTS_MESSAGE, 409);
+      return;
+    }
     logger.error('[acceptInvitation] Error:', error);
     errorResponse(res, 'INTERNAL_ERROR', 'Failed to accept invitation', 500);
   }
@@ -797,7 +745,7 @@ export async function declineInvitation(req: Request, res: Response): Promise<vo
 }
 
 /**
- * List people the user has relationships with
+ * List the people the user shares a session with (work-k5fk.2: no relationship)
  * GET /people
  */
 export async function listPeople(req: Request, res: Response): Promise<void> {
@@ -808,75 +756,82 @@ export async function listPeople(req: Request, res: Response): Promise<void> {
       return;
     }
 
-    // Find all relationships where user is a member
-    const memberships = await prisma.relationshipMember.findMany({
+    // work-k5fk.2: the people are the other humans the caller shares a
+    // session with (participant), named by the caller's own nickname
+    // (user_contact). A tombstone (spec §4 walk step 6) is not a person.
+    const mine = await prisma.participant.findMany({
       where: { userId: user.id },
-      include: {
-        relationship: {
-          include: {
-            members: {
-              include: {
-                user: {
-                  select: {
-                    id: true,
-                    name: true,
-                    firstName: true,
-                    lastName: true,
-                    deletedAt: true,
-                  },
-                },
-              },
-            },
-            sessions: {
-              orderBy: { updatedAt: 'desc' },
+      orderBy: { joinedAt: 'asc' },
+      select: {
+        joinedAt: true,
+        session: {
+          select: {
+            id: true,
+            status: true,
+            updatedAt: true,
+            participants: {
+              where: { kind: 'human', userId: { not: user.id } },
               select: {
-                id: true,
-                status: true,
-                updatedAt: true,
+                userId: true,
+                user: { select: { id: true, name: true, firstName: true, deletedAt: true } },
               },
             },
           },
         },
       },
-      orderBy: { joinedAt: 'desc' },
     });
+    type Person = {
+      userId: string;
+      firstName: string | null;
+      name: string | null;
+      connectedSince: Date;
+      sessions: Array<{ id: string; status: string; updatedAt: Date }>;
+    };
+    const byPerson = new Map<string, Person>();
+    for (const p of mine) {
+      for (const o of p.session.participants) {
+        if (!o.userId || !o.user || o.user.deletedAt) continue;
+        const entry = byPerson.get(o.userId) ?? {
+          userId: o.userId,
+          firstName: o.user.firstName,
+          name: o.user.name,
+          connectedSince: p.joinedAt,
+          sessions: [],
+        };
+        entry.sessions.push({ id: p.session.id, status: p.session.status, updatedAt: p.session.updatedAt });
+        byPerson.set(o.userId, entry);
+      }
+    }
+    const nicknames = new Map<string, string>();
+    if (byPerson.size > 0) {
+      const rows = await prisma.userContact.findMany({
+        where: { userId: user.id, contactUserId: { in: [...byPerson.keys()] } },
+        select: { contactUserId: true, nickname: true },
+      });
+      for (const r of rows) if (r.nickname) nicknames.set(r.contactUserId, r.nickname);
+    }
 
-    // Transform to person DTOs
-    const people = memberships
-      .map(membership => {
-        // Find the partner (the other member in the relationship)
-        const partnerMember = membership.relationship.members.find(m => m.userId !== user.id);
-
-        // Skip if no partner yet (invitation not accepted), or the partner deleted
-        // their account: the tombstone (spec §4 walk step 6) is not a person
-        // (TS-12, R5 — today the cascade removed the member row).
-        if (!partnerMember || partnerMember.user.deletedAt) return null;
-
-        const sessions = membership.relationship.sessions;
+    const ACTIVE_STATUSES = ['CREATED', 'INVITED', 'ACTIVE', 'PAUSED', 'WAITING'];
+    const people = [...byPerson.values()]
+      .map(person => {
+        const sessions = [...person.sessions].sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime());
         const latestSession = sessions[0];
-
-        // Count active (non-terminal) sessions
-        const ACTIVE_STATUSES = ['CREATED', 'INVITED', 'ACTIVE', 'PAUSED', 'WAITING'];
         const activeSessionCount = sessions.filter(s => ACTIVE_STATUSES.includes(s.status)).length;
-
+        const nickname = nicknames.get(person.userId) ?? null;
         // Compute display name: nickname I gave them > their first name > their full name
-        const displayName = membership.nickname || partnerMember.user.firstName || partnerMember.user.name || 'Unknown';
-
-        // Generate initials
+        const displayName = nickname || person.firstName || person.name || 'Unknown';
         const initials = displayName
           .split(' ')
           .map(n => n[0])
           .join('')
           .toUpperCase()
           .slice(0, 2);
-
         return {
-          id: partnerMember.userId,
-          relationshipId: membership.relationshipId,
+          id: person.userId,
           name: displayName,
-          nickname: membership.nickname,
+          nickname,
           initials,
-          connectedSince: membership.joinedAt.toISOString(),
+          connectedSince: person.connectedSince.toISOString(),
           lastSession: latestSession
             ? {
                 id: latestSession.id,
@@ -887,7 +842,7 @@ export async function listPeople(req: Request, res: Response): Promise<void> {
           activeSessionCount,
         };
       })
-      .filter((p): p is NonNullable<typeof p> => p !== null);
+      .sort((a, b) => (b.lastSession?.updatedAt ?? '').localeCompare(a.lastSession?.updatedAt ?? ''));
 
     successResponse(res, { people });
   } catch (error) {
@@ -902,7 +857,7 @@ export async function listPeople(req: Request, res: Response): Promise<void> {
  *
  * Through app.session_archive (work-k5fk.10.12), identity-bound on the app
  * connection: the database checks that the caller is a CURRENT participant of
- * the session (not a relationship member who never joined, not one who left),
+ * the session (not an invitee who never joined, not one who left),
  * that the session is CREATED, INVITED, RESOLVED or ABANDONED, and records
  * who archived it and when. mwf_app holds no UPDATE of session.status.
  */
@@ -965,8 +920,12 @@ export function archiveRefusal(
 }
 
 /**
- * Update nickname for partner in a relationship
- * PATCH /relationships/:relationshipId/nickname
+ * Set (or clear) what the caller calls another user — the caller's own
+ * user_contact entry, never shown to that user (work-k5fk.2).
+ * PATCH /contacts/:userId/nickname
+ *
+ * Only for someone the caller shares a session with; anyone else is not found
+ * (the endpoint never confirms that an arbitrary user id exists).
  */
 export async function updateNickname(req: Request, res: Response): Promise<void> {
   try {
@@ -976,40 +935,24 @@ export async function updateNickname(req: Request, res: Response): Promise<void>
       return;
     }
 
-    const { relationshipId } = req.params;
+    const contactUserId = req.params.userId;
 
     const parseResult = updateNicknameSchema.safeParse(req.body);
     if (!parseResult.success) {
       errorResponse(res, 'VALIDATION_ERROR', 'Invalid request body', 400, parseResult.error.issues);
       return;
     }
-
-    const { nickname } = parseResult.data;
-
-    // Verify user is a member of this relationship
-    const member = await prisma.relationshipMember.findUnique({
-      where: {
-        relationshipId_userId: {
-          relationshipId,
-          userId: user.id,
-        },
-      },
-    });
-
-    if (!member) {
-      errorResponse(res, 'NOT_FOUND', 'Relationship not found', 404);
+    if (contactUserId === user.id) {
+      errorResponse(res, 'VALIDATION_ERROR', 'You cannot give yourself a nickname', 400);
+      return;
+    }
+    if (!UUID_RE.test(contactUserId) || !(await sharesASession(user.id, contactUserId))) {
+      errorResponse(res, 'NOT_FOUND', 'Contact not found', 404);
       return;
     }
 
-    // Update the nickname
-    const updatedMember = await prisma.relationshipMember.update({
-      where: { relationshipId_userId: { relationshipId, userId: user.id } },
-      data: { nickname },
-    });
-
-    successResponse(res, {
-      nickname: updatedMember.nickname,
-    });
+    const nickname = await setNickname(user.id, contactUserId, parseResult.data.nickname);
+    successResponse(res, { nickname });
   } catch (error) {
     logger.error('[updateNickname] Error:', error);
     errorResponse(res, 'INTERNAL_ERROR', 'Failed to update nickname', 500);

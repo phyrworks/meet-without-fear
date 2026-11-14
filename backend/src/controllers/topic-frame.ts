@@ -45,7 +45,7 @@ export async function confirmTopicFrame(req: Request, res: Response): Promise<vo
     const session = await prisma.session.findFirst({
       where: {
         id: sessionId,
-        relationship: { members: { some: { userId: user.id } } },
+        participants: { some: { userId: user.id } },
       },
     });
 

@@ -132,7 +132,6 @@ jest.mock('react-native-safe-area-context', () => ({
 function createMockSession(overrides: Partial<SessionSummaryDTO> = {}): SessionSummaryDTO {
   return {
     id: 'session-1',
-    relationshipId: 'rel-1',
     status: SessionStatus.ACTIVE,
     createdAt: '2024-01-01T00:00:00Z',
     updatedAt: '2024-01-02T00:00:00Z',

@@ -12,6 +12,7 @@
  * - POST /sessions/:id/invitation/confirm - Confirm invitation message
  */
 
+import { loadSessionPartner, pendingInviteeNames } from '../services/contacts';
 import { Request, Response } from 'express';
 import { logger } from '../lib/logger';
 import { getJobPrisma, prisma } from '../lib/prisma';
@@ -76,35 +77,20 @@ export async function getSession(req: Request, res: Response): Promise<void> {
 
     // The caller's participant (requireSessionAccess); no participant, no session.
     const participant = req.participant;
-    const session = participant
-      ? await prisma.session.findUnique({
-          where: { id: sessionId },
-          include: {
-            relationship: {
-              include: {
-                members: {
-                  select: {
-                    userId: true,
-                    nickname: true,
-                    user: { select: { id: true, name: true, firstName: true } },
-                  },
-                },
-              },
-            },
-          },
-        })
-      : null;
+    const session = participant ? await prisma.session.findUnique({ where: { id: sessionId } }) : null;
 
     if (!participant || !session) {
       errorResponse(res, ErrorCode.NOT_FOUND, 'Session not found', 404);
       return;
     }
 
-    // Get my membership (for nickname I use for partner)
-    const myMember = session.relationship.members.find(m => m.userId === user.id);
-
-    // Get partner info
-    const partnerMember = session.relationship.members.find(m => m.userId !== user.id);
+    // The other human, and what I call them (my own user_contact entry; work-k5fk.2)
+    const partnerMember = await loadSessionPartner(sessionId, user.id);
+    const myNickname = partnerMember?.nickname ?? null;
+    // Before the invitee joins: the inviter's name for them, from the invitation they sent.
+    const inviteeName = partnerMember
+      ? null
+      : ((await pendingInviteeNames([sessionId], user.id)).get(sessionId) ?? null);
 
     // Current progress (stage shim)
     const state = (await loadStageStates([{ id: participant.id, joinedAt: participant.joinedAt }])).get(participant.id);
@@ -116,7 +102,7 @@ export async function getSession(req: Request, res: Response): Promise<void> {
     // Use nickname (what I call my partner) with fallback to their actual name
     const partnerDisplayName = partnerLeft
       ? null
-      : myMember?.nickname || partnerMember?.user.firstName || partnerMember?.user.name || null;
+      : myNickname || partnerMember?.firstName || partnerMember?.name || null;
 
     successResponse(res, {
       session: {
@@ -124,14 +110,13 @@ export async function getSession(req: Request, res: Response): Promise<void> {
         status: displayStatus(session.status, await isSessionPaused(sessionId)),
         currentStage: currentProgress.stage,
         stageStatus: currentProgress.status,
-        relationshipId: session.relationshipId,
         partner: partnerMember
           ? {
               id: partnerMember.userId,
               name: partnerDisplayName,
-              nickname: partnerLeft ? null : myMember?.nickname || null,
+              nickname: partnerLeft ? null : myNickname,
             }
-          : { id: '', name: myMember?.nickname || null, nickname: myMember?.nickname || null },
+          : { id: '', name: inviteeName, nickname: inviteeName },
         myProgress: {
           stage: currentProgress.stage,
           status: currentProgress.status,

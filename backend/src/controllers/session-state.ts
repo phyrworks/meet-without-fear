@@ -16,8 +16,9 @@
  * Target shape (TS-9): the caller is `req.participant` (resolved once by
  * `requireSessionAccess`); messages are their MAIN conversation; progress and
  * the compact gate come from `participant_milestone` through the stage shim;
- * the partner is the co-participant from `v_co_participant`. Response shape
- * unchanged.
+ * the partner is the co-participant from `v_co_participant`. work-k5fk.2: the
+ * partner's name is the caller's own user_contact nickname, else their names;
+ * the response no longer carries relationshipId.
  */
 
 import { departedParticipantUsers } from '../utils/session';
@@ -38,6 +39,7 @@ import {
 import { latestStageRow, loadStageStates, progressDTO, witnessStartedAt } from '../services/stage-shim';
 import { listConversationMessages, toMessageDTO } from '../services/message-store';
 import { displayStatus, isSessionPaused } from '../services/session-status';
+import { loadSessionPartner, pendingInviteeNames, recordNicknameIfAbsent } from '../services/contacts';
 
 const INITIAL_SESSION_MESSAGE_LIMIT = 500;
 
@@ -80,7 +82,7 @@ async function acceptPendingInvitationForE2ESession(sessionId: string, userId: s
       expiresAt: { gt: new Date() },
     },
     include: {
-      session: { select: { relationshipId: true } },
+      invitedByParticipant: { select: { userId: true } },
     },
   });
 
@@ -91,23 +93,13 @@ async function acceptPendingInvitationForE2ESession(sessionId: string, userId: s
   const acceptedAt = new Date();
   await tooling.$transaction(async tx => {
     await lockInvitationForAccept(tx, invitation.id); // as acceptInvitation (work-99k2)
-    await tx.relationshipMember.upsert({
-      where: {
-        relationshipId_userId: {
-          relationshipId: invitation.session.relationshipId,
-          userId,
-        },
-      },
-      create: {
-        relationshipId: invitation.session.relationshipId,
-        userId,
-      },
-      update: {},
-    });
+    // As acceptInvitation (work-k5fk.2): the inviter's invite name becomes their nickname for a link invitee.
+    const inviterUserId = invitation.invitedByParticipant.userId;
+    if (inviterUserId) await recordNicknameIfAbsent(tx, inviterUserId, userId, invitation.inviteeName);
 
     const participant = await tx.participant.upsert({
       where: { sessionId_userId: { sessionId, userId } },
-      create: { sessionId, userId, kind: 'human' },
+      create: { sessionId, userId, kind: 'human', addedByUserId: inviterUserId },
       update: {},
       select: { id: true },
     });
@@ -179,22 +171,7 @@ export async function getSessionState(req: Request, res: Response): Promise<void
 
     // Fetch core session data in parallel
     const [session, latestInvitation, linkedReflection, messages, readState, partner] = await Promise.all([
-      prisma.session.findUnique({
-        where: { id: sessionId },
-        include: {
-          relationship: {
-            include: {
-              members: {
-                select: {
-                  userId: true,
-                  nickname: true,
-                  user: { select: { id: true, name: true, firstName: true } },
-                },
-              },
-            },
-          },
-        },
-      }),
+      prisma.session.findUnique({ where: { id: sessionId } }),
       prisma.invitation.findFirst({
         where: { sessionId },
         orderBy: { createdAt: 'desc' },
@@ -229,9 +206,9 @@ export async function getSessionState(req: Request, res: Response): Promise<void
     const myState = stages.get(me.id);
     const partnerState = partner ? stages.get(partner.participantId) : undefined;
 
-    // Get my membership (for nickname I use for partner)
-    const myMember = session.relationship.members.find(m => m.userId === user.id);
-    const partnerMember = session.relationship.members.find(m => m.userId !== user.id);
+    // The other human, and what I call them (my own user_contact entry; work-k5fk.2)
+    const partnerMember = await loadSessionPartner(sessionId, user.id);
+    const myNickname = partnerMember?.nickname ?? null;
 
     // The caller's progress carries every milestone they reached; the
     // partner's carries none here (the old session view gave no partner gates).
@@ -244,7 +221,12 @@ export async function getSessionState(req: Request, res: Response): Promise<void
       !!partnerMember && (await departedParticipantUsers([sessionId])).has(`${sessionId}:${partnerMember.userId}`);
     const partnerDisplayName = partnerLeft
       ? null
-      : myMember?.nickname || partnerMember?.user.firstName || partnerMember?.user.name || null;
+      : myNickname || partnerMember?.firstName || partnerMember?.name || null;
+
+    // Before the invitee joins: the inviter's name for them, from the invitation they sent.
+    const inviteeName = partnerMember
+      ? null
+      : ((await pendingInviteeNames([sessionId], user.id)).get(sessionId) ?? null);
 
     const presence = partner ? await getCoParticipantPresence(partner.participantId) : null;
     const partnerShowsActivity = presence?.showsActivity ?? true;
@@ -298,14 +280,21 @@ export async function getSessionState(req: Request, res: Response): Promise<void
     const mySigned = mySignedAt !== null;
     const partnerSigned = partnerSignedAt !== null;
 
-    // Check if this is the first session for this relationship
-    const priorResolvedCount = await prisma.session.count({
-      where: {
-        relationshipId: session.relationshipId,
-        id: { not: sessionId },
-        status: 'RESOLVED',
-      },
-    });
+    // Is this the first session of these two? Their other RESOLVED sessions
+    // (both participants; work-k5fk.2: no relationship). Before the partner
+    // joins there is no pair yet, so it is the first.
+    const priorResolvedCount = partnerMember
+      ? await prisma.session.count({
+          where: {
+            id: { not: sessionId },
+            status: 'RESOLVED',
+            AND: [
+              { participants: { some: { userId: user.id } } },
+              { participants: { some: { userId: partnerMember.userId } } },
+            ],
+          },
+        })
+      : 0;
 
     const compactResponse = {
       mySigned,
@@ -324,14 +313,13 @@ export async function getSessionState(req: Request, res: Response): Promise<void
         status: displayStatus(session.status, paused),
         currentStage: myProgress.stage,
         stageStatus: myProgress.status,
-        relationshipId: session.relationshipId,
         partner: partnerMember
           ? {
               id: partnerMember.userId,
               name: partnerDisplayName,
-              nickname: partnerLeft ? null : myMember?.nickname || null,
+              nickname: partnerLeft ? null : myNickname,
             }
-          : { id: '', name: myMember?.nickname || null, nickname: myMember?.nickname || null },
+          : { id: '', name: inviteeName, nickname: inviteeName },
         myProgress: {
           stage: myProgress.stage,
           status: myProgress.status,

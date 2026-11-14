@@ -29,7 +29,6 @@ export interface SessionStateResponse {
     status: SessionStatus;
     currentStage: number;
     stageStatus: StageStatus;
-    relationshipId: string;
     partner: {
       id: string;
       name: string | null;

@@ -3913,7 +3913,7 @@ export function UnifiedSessionScreen({
   }
 
   // -------------------------------------------------------------------------
-  // Access Denied — user is not a member of this session's relationship
+  // Access Denied — user is not a participant of this session
   // -------------------------------------------------------------------------
   if (accessDenied) {
     return (

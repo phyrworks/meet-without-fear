@@ -238,12 +238,14 @@ These invitation-adjacent endpoints live in the same route file:
 |--------|----------|---------|
 | `POST` | `/api/v1/sessions/:id/archive` | Archive a created, invited, resolved or abandoned session, as a current participant (`app.session_archive`: 404 for a non-participant, 403 for one who left, 400 from any other state) |
 | `DELETE` | `/api/v1/sessions/:id` | Remove the caller's private data from a session (marks it `ABANDONED`) |
-| `PATCH` | `/api/v1/relationships/:relationshipId/nickname` | Update the partner's nickname on the caller's side |
-| `GET` | `/api/v1/people` | List all people the user has established relationships with |
+| `PATCH` | `/api/v1/contacts/:userId/nickname` | Set or clear (`{ "nickname": null }`) what the caller calls another user: the caller's own `user_contact` entry, never shown to that user. 404 unless the two share a session; 400 for the caller's own id (work-k5fk.2; replaces `PATCH /relationships/:relationshipId/nickname`) |
+| `GET` | `/api/v1/people` | List the other humans the user shares a session with, named by the caller's nickname for them |
 
 > **Not implemented:** There is no `POST /invitations/:id/resend` endpoint. Invitations can't be resent — if an invitation expires, the inviter creates a new session.
 
-> **Duplicate-session guard:** `POST /api/v1/sessions` checks for an existing active session with the same person and returns that session instead of creating a new one.
+> **One live session per pair of humans** (work-k5fk.2, owner decision Q3): the database enforces it with `live_session_pair`'s key, at the moment the second human joins — `POST /invitations/:id/accept` answers **409 `CONFLICT`** ("You already have a session in progress with this person…") and changes nothing when the invitee already shares a live session with the inviter. The invite-time pre-check: `POST /api/v1/sessions` with a `personId` the caller already shares a live session with returns that session as `existingActiveSession` (200) instead of creating one, and with `forceCreate: true` answers the same 409. A link invitation (`inviteName` only) names nobody yet, so only the accept can refuse it.
+>
+> **Who added whom:** the inviter is the session's initiator (`participant.added_by_user_id` NULL, one per session); the invitee's participant is added by the inviter. A link invitee's invite name becomes the inviter's nickname for them at accept, unless the inviter already has one.
 
 ---
 

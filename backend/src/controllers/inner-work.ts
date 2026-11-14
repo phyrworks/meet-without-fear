@@ -13,6 +13,7 @@
  * When linked, the AI has access to partner session context.
  */
 
+import { getNicknameForSessionPartner } from '../services/contacts';
 import { Request, Response } from 'express';
 import { logger } from '../lib/logger';
 import { prisma } from '../lib/prisma';
@@ -200,15 +201,12 @@ async function fetchLinkedPartnerSessionContext(
     const me = await resolveParticipant(partnerSessionId, userId);
     if (!me) return null;
 
-    const [session, myMember, coParticipants, stages, vessel] = await Promise.all([
+    const [session, myNickname, coParticipants, stages, vessel] = await Promise.all([
       prisma.session.findUnique({
         where: { id: partnerSessionId },
-        select: { relationshipId: true, topicFrame: true },
+        select: { topicFrame: true },
       }),
-      prisma.relationshipMember.findFirst({
-        where: { userId, relationship: { sessions: { some: { id: partnerSessionId } } } },
-        select: { nickname: true },
-      }),
+      getNicknameForSessionPartner(partnerSessionId, userId),
       getCoParticipants(me.id),
       loadCurrentStages([me.id]),
       loadSharedVesselFor(me.id),
@@ -217,7 +215,7 @@ async function fetchLinkedPartnerSessionContext(
 
     // MY nickname for the partner (what I call them), then their display name.
     const partner = coParticipants.find(c => c.kind === 'human' && !c.leftAt) ?? coParticipants[0];
-    const partnerName = myMember?.nickname || partner?.displayName || 'Partner';
+    const partnerName = myNickname || partner?.displayName || 'Partner';
 
     const currentStage = stages.get(me.id)?.stage || 1;
 

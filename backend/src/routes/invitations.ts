@@ -60,11 +60,11 @@ router.post('/invitations/:id/decline', requireAuth, asyncHandler(declineInvitat
 router.post('/invitations/:id/acknowledge', requireAuth, asyncHandler(acknowledgeInvitation));
 
 /**
- * @route PATCH /api/v1/relationships/:relationshipId/nickname
- * @description Update the nickname for your partner in a relationship
- * @access Private - requires authentication
+ * @route PATCH /api/v1/contacts/:userId/nickname
+ * @description Set or clear what you call another user (your own contact entry; work-k5fk.2)
+ * @access Private - requires authentication; someone you share a session with
  */
-router.patch('/relationships/:relationshipId/nickname', requireAuth, asyncHandler(updateNickname));
+router.patch('/contacts/:userId/nickname', requireAuth, asyncHandler(updateNickname));
 
 /**
  * @route GET /api/v1/people

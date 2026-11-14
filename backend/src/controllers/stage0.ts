@@ -149,7 +149,7 @@ export async function getCompactStatus(req: Request, res: Response): Promise<voi
     const sessionId = req.params.id;
     const participant = participantOr404(req, res);
     if (!participant) return;
-    const session = await prisma.session.findUnique({ where: { id: sessionId }, select: { relationshipId: true } });
+    const session = await prisma.session.findUnique({ where: { id: sessionId }, select: { id: true } });
     if (!session) {
       errorResponse(res, ErrorCode.NOT_FOUND, 'Session not found', 404);
       return;
@@ -170,14 +170,22 @@ export async function getCompactStatus(req: Request, res: Response): Promise<voi
       partnerSignedAt = theirs?.toISOString() ?? null;
     }
 
-    // Check if this is the first session for this relationship
-    const priorResolvedCount = await prisma.session.count({
-      where: {
-        relationshipId: session.relationshipId,
-        id: { not: sessionId },
-        status: 'RESOLVED',
-      },
-    });
+    // Is this the first session of these two? Their other RESOLVED sessions
+    // (both participants; work-k5fk.2: no relationship). Before the partner
+    // joins there is no pair yet, so it is the first.
+    const partnerUserId = (await getPartnerParticipant(participant.id))?.userId ?? null;
+    const priorResolvedCount = partnerUserId
+      ? await prisma.session.count({
+          where: {
+            id: { not: sessionId },
+            status: 'RESOLVED',
+            AND: [
+              { participants: { some: { userId: user.id } } },
+              { participants: { some: { userId: partnerUserId } } },
+            ],
+          },
+        })
+      : 0;
 
     successResponse(res, {
       mySigned,

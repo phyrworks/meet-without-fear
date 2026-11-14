@@ -12,6 +12,7 @@
  * the stage comes from the stage shim (v_current_stage).
  */
 
+import { getNicknameForSessionPartner } from './contacts';
 import { prisma } from '../lib/prisma';
 import { readFeature } from './feature-state';
 import { latestNeedScores } from './needs-reduction';
@@ -234,10 +235,7 @@ async function fetchConflictContext(userId: string): Promise<ConflictContext> {
   // The user's present participants in live sessions
   const mine = await prisma.participant.findMany({
     where: { userId, leftAt: null, session: { status: { in: ['CREATED', 'INVITED', 'ACTIVE'] } } },
-    select: {
-      id: true,
-      session: { select: { relationship: { select: { members: { where: { userId }, select: { nickname: true } } } } } },
-    },
+    select: { id: true, sessionId: true },
     take: 5,
   });
 
@@ -250,7 +248,8 @@ async function fetchConflictContext(userId: string): Promise<ConflictContext> {
 
   for (const p of mine) {
     const partner = (await getCoParticipants(p.id)).find(c => c.kind === 'human' && !c.leftAt);
-    const partnerName = p.session.relationship.members[0]?.nickname || partner?.displayName || 'Partner';
+    const nickname = await getNicknameForSessionPartner(p.sessionId, userId);
+    const partnerName = nickname || partner?.displayName || 'Partner';
 
     activeConflicts.push({
       partnerName,

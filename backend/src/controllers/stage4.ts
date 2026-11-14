@@ -24,6 +24,7 @@
  * /strategies/ready are removed.
  */
 
+import { getNicknameForSessionPartner } from '../services/contacts';
 import { Request, Response } from 'express';
 import { logger } from '../lib/logger';
 import { getJobPrisma, prisma } from '../lib/prisma';
@@ -524,11 +525,8 @@ export async function shareStage4Selections(req: Request, res: Response): Promis
       const partner = await getPartnerParticipant(me);
       const partnerHasShared = partner ? await hasMilestone(partner.participantId, 'choices_shared') : false;
       if (!partnerHasShared && ctx.participant.mainConversationId) {
-        const member = await prisma.relationshipMember.findFirst({
-          where: { userId: user.id, relationship: { sessions: { some: { id: sessionId } } } },
-          select: { nickname: true },
-        });
-        const bridge = stage4HandoffBridgeMessage(member?.nickname || partner?.displayName || undefined);
+        const nickname = await getNicknameForSessionPartner(sessionId, user.id);
+        const bridge = stage4HandoffBridgeMessage(nickname || partner?.displayName || undefined);
         // Once per conversation, whatever the partner's name was at the time: a
         // repeat (or concurrent) share writes nothing (work-fdc1).
         await createFacilitatorMessageOnce({

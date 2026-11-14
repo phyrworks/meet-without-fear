@@ -163,7 +163,7 @@ export function usePastSessions(
 // ============================================================================
 
 /**
- * Fetch all people the user has relationships with.
+ * Fetch all people the user shares a session with.
  *
  * @param options - React Query options
  */
