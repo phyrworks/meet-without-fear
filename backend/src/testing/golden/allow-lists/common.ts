@@ -353,7 +353,8 @@ export const TARGET_RELATION_MAP: Record<string, string[]> = {
   Session: ['session'],
   Relationship: ['relationship'],
   RelationshipMember: ['relationship_member'],
-  User: ['user', 'user_preferences'],
+  // work-k5fk.1: User.clerkId is user_identity.subject (the E2E bypass reads and binds it per request).
+  User: ['user', 'user_preferences', 'user_identity'],
   StageProgress: ['participant_milestone', 'milestone'],
   UserVessel: ['conversation_read_state', 'ai_memory'],
   Invitation: ['invitation'],
@@ -374,14 +375,19 @@ export const TARGET_RELATION_MAP: Record<string, string[]> = {
 };
 
 /**
- * Physical tables (changesMapped): the same map, `user` only (preferences are
- * never written here), plus the repair-stage tables TS-11's write scenarios
+ * Physical tables (changesMapped): the same map, `user` and `user_identity`
+ * only (preferences are never written here; User.clerkId moved to
+ * user_identity.subject, work-k5fk.1 — keyed by (user_id, provider) in the
+ * diff, driver.ts, so the bypass's subject rewrite is a change like the
+ * baseline's clerkId update. Two images make User no longer 1:1, so its
+ * per-step row count is not compared; the concept comparison still pins
+ * every user row and its clerk_id), plus the repair-stage tables TS-11's write scenarios
  * touch (spec §1.4 Absorbs: Stage4ProposalSelection → proposal_choice,
  * Stage4NeedDeclination → need_disposition, IdentifiedNeed → need).
  */
 export const TARGET_TABLE_MAP: Record<string, string[]> = {
   ...TARGET_RELATION_MAP,
-  User: ['user'],
+  User: ['user', 'user_identity'],
   IdentifiedNeed: ['need'],
   Stage4ProposalSelection: ['proposal_choice'],
   Stage4NeedDeclination: ['need_disposition'],

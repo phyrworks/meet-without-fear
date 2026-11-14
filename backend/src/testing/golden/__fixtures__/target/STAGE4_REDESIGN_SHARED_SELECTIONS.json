@@ -2,16 +2,16 @@
   "stage": "STAGE4_REDESIGN_SHARED_SELECTIONS",
   "database": "mwf_tfx_stage4_redesign_shared_selections",
   "seeded": {
-    "sessionId": "01a1d740-e65c-7943-a9ec-874912f82e40",
-    "relationshipId": "01a1d740-e65a-78f9-9418-624d8c4e2c28",
-    "invitationId": "01a1d740-e65f-7b27-8ee1-3eba22694759",
+    "sessionId": "01a1db5c-db3e-770a-a71d-477ee98cfb8a",
+    "relationshipId": "01a1db5c-db3c-7ae4-a963-4843c91aeef5",
+    "invitationId": "01a1db5c-db42-715a-9106-c3549ae5388b",
     "userA": {
-      "id": "01a1d740-e659-70a0-bcee-d38f6b3fe5ac",
+      "id": "01a1db5c-db39-7c22-ba2a-5b314b331ad1",
       "email": "ada@e2e.test",
       "name": "Ada Lovelace"
     },
     "userB": {
-      "id": "01a1d740-e65a-704a-babd-7c1cf35ac8cb",
+      "id": "01a1db5c-db3b-7bf9-8120-6f4bda37cad3",
       "email": "bob@e2e.test",
       "name": "Bob Ross"
     }
@@ -35,7 +35,8 @@
     "relationship": 1,
     "relationship_member": 2,
     "session": 1,
-    "user": 2
+    "user": 3,
+    "user_identity": 2
   },
   "tables": [
     "agreement",
@@ -63,6 +64,7 @@
     "participant",
     "participant_key",
     "participant_milestone",
+    "persona",
     "proposal",
     "proposal_choice",
     "proposal_need",
@@ -82,9 +84,10 @@
     "takeaway_link",
     "user",
     "user_device",
+    "user_identity",
     "user_key",
     "user_memory",
     "user_preferences"
   ],
-  "builtAt": "2026-11-13T23:31:57.231Z"
+  "builtAt": "2026-11-14T18:40:58.261Z"
 }

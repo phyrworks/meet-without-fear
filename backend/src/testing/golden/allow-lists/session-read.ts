@@ -130,7 +130,9 @@ export const SESSION_READ_BYTE_TARGET_ALLOW: AllowList = {
         Session: ['session'],
         Relationship: ['relationship'],
         RelationshipMember: ['relationship_member'],
-        User: ['user', 'user_preferences'], // privacyPreferences → user_preferences.doc (spec §1.7)
+        // privacyPreferences → user_preferences.doc (spec §1.7); clerkId → user_identity.subject (work-k5fk.1,
+        // the E2E bypass reads and binds the caller's e2e identity on every request)
+        User: ['user', 'user_preferences', 'user_identity'],
         StageProgress: ['participant_milestone', 'milestone'], // milestones + v_current_stage's lookup
         UserVessel: ['conversation_read_state'],
         Invitation: ['invitation'],

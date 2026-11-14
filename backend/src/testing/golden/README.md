@@ -319,6 +319,19 @@ developer's database while the job writes the run database. Import such modules 
 Hazard found: the trace classifies a statement by its first line; a `$queryRaw` template that
 opens with a newline is traced as `other`. Start raw SQL on the template's first line.
 
+### work-k5fk.1: the sign-in subject is `user_identity`
+
+`user.clerk_id` moved to `user_identity (provider, subject)`, and the baseline seeds one AI
+`user` row (`kind = 'ai'`). No baseline was re-recorded; the harness carries the move:
+
+| Piece | What it does |
+|---|---|
+| `old_concept_user` (concept-views/target-shape.sql) | `clerk_id` is the user's identity subject; only `kind = 'human'` rows (the old shape had no AI or persona row). The concept baselines — the seeded `<clerkId:ada>`, the bypass's `e2e_<user:ada>`, NULL on the tombstone — compare unchanged. |
+| Fixtures (fixture-scenarios/target-shape.ts, fixtures.ts) | The writer seeds an `e2e` identity with the state factory's `e2e_<ms>_<random>` subject; `seededClerkIds` reads `user_identity`. Manifests gain `user` +1 (the AI row), `user_identity` 2, tables `persona`, `user_identity`. |
+| Diff key (driver.ts) | `user_identity` rows are keyed by `(user_id, provider)`, not the PK: the bypass rewrites the seeded subject in place, which is a *change*, like the baseline's `User.clerkId` update — by PK it would read as a removed plus an added row. |
+| `User → [user, user_identity]` (`TARGET_RELATION_MAP`, `TARGET_TABLE_MAP`, session-read's own relation map) | The bypass reads the caller's identity on every request and binds it on the first: both are images of the old `User` read/update. Cost: with two images `User` is no longer 1:1 in `changesMapped`, so its per-step row count is not compared; the concept comparison still pins every user row and its `clerk_id`. |
+| tombstone walk rule | "user row is tombstoned" no longer checks `clerk_id`; a new rule asserts the tombstone's `user_identity` rows are gone (the snapshot gains `user_identity`). |
+
 ### work-keq6: progress is the milestones map
 
 The progress DTOs dropped `gatesSatisfied` and the hand-built `milestones`

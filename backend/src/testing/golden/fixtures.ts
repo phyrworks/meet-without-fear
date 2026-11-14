@@ -296,7 +296,8 @@ export async function restoreFixture(opts: {
     async c => {
       const r = await c.query<{ id: string; clerkId: string }>(
         isTargetShape()
-          ? `SELECT id, clerk_id AS "clerkId" FROM "user" WHERE clerk_id IS NOT NULL`
+          ? // work-k5fk.1: the sign-in subject moved from user.clerk_id to user_identity
+            `SELECT user_id AS id, subject AS "clerkId" FROM user_identity`
           : `SELECT id, "clerkId" FROM "User" WHERE "clerkId" IS NOT NULL`,
       );
       return r.rows.map(x => ({ userId: x.id, clerkId: x.clerkId }));
