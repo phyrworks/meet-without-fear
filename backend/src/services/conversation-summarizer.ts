@@ -244,6 +244,44 @@ export function needsSummarization(messageCount: number, existingSummary?: strin
   return shouldResummarizeByCount || shouldResummarizeByTokens;
 }
 
+/** A list of strings from the model: a single string becomes [s]; non-string items are dropped; anything else is []. */
+function stringList(v: unknown): string[] {
+  if (typeof v === 'string') return v.trim() ? [v] : [];
+  return Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : [];
+}
+
+/** The fields of a summarization result after normalisation: every list present, every text a string. */
+export type NormalizedSummarizationResult = Required<Omit<SummarizationResult, 'lastUnresolvedThread'>> & {
+  lastUnresolvedThread: string | null;
+};
+
+/**
+ * The model's summarization JSON, normalised to the shape the ai_memory SUMMARY
+ * document stores (json_schema ai_memory.summary v1, checked by the t_doc_schema
+ * trigger; work-k5fk.12). getHaikuJson returns whatever JSON the model wrote,
+ * so each field is coerced or dropped here instead of refusing the whole
+ * document at the write: the lists by stringList, emotionalJourney to '' when it
+ * is not a string, lastUnresolvedThread to null. Null when there is no summary
+ * text (nothing to store).
+ */
+export function normalizeSummarizationResult(raw: unknown): NormalizedSummarizationResult | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const r = raw as Record<string, unknown>;
+  if (typeof r.summary !== 'string' || !r.summary.trim()) return null;
+  return {
+    summary: r.summary,
+    keyThemes: stringList(r.keyThemes),
+    emotionalJourney: typeof r.emotionalJourney === 'string' ? r.emotionalJourney : '',
+    unresolvedTopics: stringList(r.unresolvedTopics),
+    agreedFacts: stringList(r.agreedFacts),
+    userNeeds: stringList(r.userNeeds),
+    partnerNeeds: stringList(r.partnerNeeds),
+    openQuestions: stringList(r.openQuestions),
+    agreements: stringList(r.agreements),
+    lastUnresolvedThread: typeof r.lastUnresolvedThread === 'string' ? r.lastUnresolvedThread : null,
+  };
+}
+
 /**
  * Summarize older messages in a session and update the vessel.
  * Call this as fire-and-forget: updateSessionSummary(sessionId, userId, turnId).catch(e => logger.warn(...))
@@ -308,7 +346,7 @@ export async function updateSessionSummary(
     }
 
     // Generate summary
-    const summaryResult = await generateConversationSummary(
+    const rawResult = await generateConversationSummary(
       messagesToSummarize.map((m: SummaryMessageRecord) => ({
         role: m.role === 'USER' ? ('user' as const) : ('assistant' as const),
         content: m.content,
@@ -322,7 +360,12 @@ export async function updateSessionSummary(
       hints,
     );
 
+    // The model's JSON, normalised to the stored shape (json_schema ai_memory.summary,
+    // checked by the t_doc_schema trigger): an odd field is coerced or dropped, never
+    // left to refuse the whole document (work-k5fk.12).
+    const summaryResult = normalizeSummarizationResult(rawResult);
     if (!summaryResult) {
+      if (rawResult) logger.warn('[ConversationSummarizer] The model returned no summary text; nothing stored');
       return null;
     }
 
@@ -344,17 +387,21 @@ export async function updateSessionSummary(
     // Stored as the participant's ai_memory SUMMARY document (spec §1.1:
     // `text, messageCount, generatedAt` required), written by the job
     // connection — background classifiers write ai_memory as mwf_job.
+    // tokenCount is an integer by construction (estimateTokens of a string); a
+    // value that is not one is left out rather than written as null.
+    const { tokenCount, ...rest } = summary;
     const doc = JSON.parse(
       JSON.stringify({
-        ...summary,
+        ...rest,
+        ...(Number.isInteger(tokenCount) ? { tokenCount } : {}),
         keyThemes: summaryResult.keyThemes,
         emotionalJourney: summaryResult.emotionalJourney,
         unresolvedTopics: summaryResult.unresolvedTopics,
-        agreedFacts: summaryResult.agreedFacts ?? [],
-        userNeeds: summaryResult.userNeeds ?? [],
-        partnerNeeds: summaryResult.partnerNeeds ?? [],
-        openQuestions: summaryResult.openQuestions ?? [],
-        agreements: summaryResult.agreements ?? [],
+        agreedFacts: summaryResult.agreedFacts,
+        userNeeds: summaryResult.userNeeds,
+        partnerNeeds: summaryResult.partnerNeeds,
+        openQuestions: summaryResult.openQuestions,
+        agreements: summaryResult.agreements,
         lastUnresolvedThread,
       }),
     );

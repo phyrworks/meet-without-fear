@@ -1,7 +1,7 @@
 // Jest Snapshot v1, https://goo.gl/fbAQLP
 
 exports[`mwf_app grants (target) the mwf_app privilege matrix is exactly the recorded one 1`] = `
-"column public.ai_memory INSERT: user_id, kind, doc, created_at, updated_at (mwf_app)
+"column public.ai_memory INSERT: user_id, kind, doc, doc_schema_version, created_at, updated_at (mwf_app)
 column public.ai_memory UPDATE: doc, updated_at (mwf_app)
 column public.consent INSERT: participant_id, requested_by_participant_id, need_id, empathy_attempt_id, share_offer_id, review_id, decision, decided_at, created_at, updated_at (mwf_app)
 column public.consent UPDATE: decision, decided_at, revoked_at, updated_at (mwf_app)
@@ -30,7 +30,7 @@ column public.need INSERT: participant_id, label, category, evidence, ai_confide
 column public.need UPDATE: label, category, confirmed_at, locked_at, superseded_by_need_id, deleted_at, updated_at (mwf_app)
 column public.need_disposition INSERT: participant_id, need_id, status, is_current, created_at, updated_at (mwf_app)
 column public.need_disposition UPDATE: status, is_current, updated_at (mwf_app)
-column public.participant INSERT: session_id, user_id, kind, added_by_user_id, display_name, joined_at, created_at, updated_at (mwf_app)
+column public.participant INSERT: session_id, user_id, kind, display_name, joined_at, created_at, updated_at (mwf_app)
 column public.participant_milestone INSERT: participant_id, milestone_key, reached_at (mwf_app)
 column public.proposal INSERT: session_id, created_by_participant_id, source, kind, status, description, duration, measure_of_success, unresolved_need_labels, created_at, updated_at (mwf_app)
 column public.proposal UPDATE: created_by_participant_id, kind, status, description, duration, measure_of_success, unresolved_need_labels, removed_at, removed_by_participant_id, removal_reason, updated_at (mwf_app)
@@ -42,15 +42,16 @@ column public.reflection INSERT: user_id, title, status, linked_session_id, link
 column public.reflection UPDATE: title, theme, status, summary, summary_doc, linked_session_id, linked_at, context_snapshot, distilled_at, updated_at (mwf_app)
 column public.reflection_message INSERT: reflection_id, role, content, created_at (mwf_app)
 column public.regulation_event INSERT: participant_id, type, intensity_before, intensity_after, completed_at, created_at (mwf_app)
+column public.relationship INSERT: created_at, updated_at (mwf_app)
+column public.relationship_member INSERT: relationship_id, user_id, role, nickname, joined_at, created_at, updated_at (mwf_app)
+column public.relationship_member UPDATE: nickname, updated_at (mwf_app)
 column public.reminder INSERT: user_id, follow_up_id, scope, remind_at, cadence, note, status, created_at, updated_at (mwf_app)
-column public.session INSERT: status, topic_frame, previous_session_id, created_at, updated_at (mwf_app)
+column public.session INSERT: relationship_id, status, topic_frame, previous_session_id, created_at, updated_at (mwf_app)
 column public.session UPDATE: topic_frame, topic_frame_confirmed_at, updated_at (mwf_app)
 column public.takeaway INSERT: reflection_id, content, theme, source, type, position, created_at, updated_at (mwf_app)
 column public.takeaway UPDATE: content, source, resolved_at, updated_at (mwf_app)
 column public.takeaway_link INSERT: source_id, target_id, link_type, created_at (mwf_app)
 column public.user UPDATE: first_name, last_name, updated_at (mwf_app)
-column public.user_contact INSERT: user_id, contact_user_id, nickname, created_at, updated_at (mwf_app)
-column public.user_contact UPDATE: nickname, updated_at (mwf_app)
 column public.user_device INSERT: user_id, push_token, platform, biometric_enabled, biometric_enrolled_at, last_seen_at, created_at, updated_at (mwf_app)
 column public.user_device UPDATE: push_token, platform, biometric_enabled, biometric_enrolled_at, last_seen_at, updated_at (mwf_app)
 column public.user_memory INSERT: user_id, session_id, content, category, status, source, suggested_text, created_at, updated_at (mwf_app)
@@ -66,6 +67,11 @@ routine app.empathy_direction_status(): EXECUTE (mwf_app)
 routine app.empathy_set_status(uuid,empathy_status,text): EXECUTE (mwf_app)
 routine app.is_co_participant(uuid): EXECUTE (mwf_app)
 routine app.is_member(uuid): EXECUTE (mwf_app)
+routine app.json_schema_wellformed(jsonb): EXECUTE (PUBLIC)
+routine app.jsonb_envelope_violation(jsonb): EXECUTE (mwf_app)
+routine app.jsonb_matches(jsonb,text,schema_version): EXECUTE (mwf_app)
+routine app.jsonb_schema_violation(jsonb,jsonb,text): EXECUTE (PUBLIC)
+routine app.jsonb_violation(jsonb,text,schema_version): EXECUTE (mwf_app)
 routine app.my_participant(uuid): EXECUTE (mwf_app)
 routine app.need_revoke_share(uuid): EXECUTE (mwf_app)
 routine app.partner_user_id(uuid): EXECUTE (mwf_app)
@@ -73,6 +79,7 @@ routine app.session_archive(uuid): EXECUTE (mwf_app)
 routine app.session_set_status(uuid,session_status): EXECUTE (mwf_app)
 schema app: USAGE (mwf_app)
 schema public: USAGE (PUBLIC)
+table app.json_schema: SELECT (mwf_app)
 table public.agreement: SELECT (mwf_app)
 table public.agreement_party: SELECT (mwf_app)
 table public.ai_memory: SELECT (mwf_app)
@@ -88,7 +95,6 @@ table public.follow_up: SELECT (mwf_app)
 table public.follow_up_checkin: SELECT (mwf_app)
 table public.follow_up_note: SELECT (mwf_app)
 table public.invitation: SELECT (mwf_app)
-table public.live_session_pair: SELECT (mwf_app)
 table public.message: DELETE, SELECT (mwf_app)
 table public.milestone: SELECT (mwf_app)
 table public.mood_reading: SELECT (mwf_app)
@@ -106,13 +112,14 @@ table public.reconciler_result: SELECT (mwf_app)
 table public.reflection: SELECT (mwf_app)
 table public.reflection_message: SELECT (mwf_app)
 table public.regulation_event: SELECT (mwf_app)
+table public.relationship: SELECT (mwf_app)
+table public.relationship_member: SELECT (mwf_app)
 table public.reminder: SELECT (mwf_app)
 table public.session: SELECT (mwf_app)
 table public.session_closure: SELECT (mwf_app)
 table public.takeaway: DELETE, SELECT (mwf_app)
 table public.takeaway_link: DELETE, SELECT (mwf_app)
 table public.user: SELECT (mwf_app)
-table public.user_contact: SELECT (mwf_app)
 table public.user_device: SELECT (mwf_app)
 table public.user_memory: DELETE, SELECT (mwf_app)
 table public.user_preferences: SELECT (mwf_app)
@@ -168,7 +175,7 @@ column public.need_disposition SELECT: participant_id (mwf_job)
 column public.need_share INSERT: need_id, participant_id, session_id, category, shared_text (mwf_job)
 column public.need_share SELECT: need_id, revoked_at (mwf_job)
 column public.need_share UPDATE: revoked_at (mwf_job)
-column public.participant SELECT: id, session_id, user_id, kind, added_by_user_id, display_name, joined_at, left_at (mwf_job)
+column public.participant SELECT: id, session_id, user_id, kind, display_name, joined_at, left_at (mwf_job)
 column public.participant UPDATE: display_name, left_at (mwf_job)
 column public.participant_key SELECT: participant_id, destroyed_at (mwf_job)
 column public.participant_key UPDATE: destroyed_at (mwf_job)
@@ -194,7 +201,6 @@ column public.session_closure INSERT: session_id, kind, reason, summary, closed_
 column public.user INSERT: email, first_name, last_name (mwf_job)
 column public.user SELECT: id, kind, email, first_name, deleted_at, name (mwf_job)
 column public.user UPDATE: email, first_name, last_name, deleted_at (mwf_job)
-column public.user_contact SELECT: user_id (mwf_job)
 column public.user_device SELECT: user_id, push_token, last_seen_at (mwf_job)
 column public.user_device UPDATE: push_token (mwf_job)
 column public.user_identity INSERT: provider, subject, user_id (mwf_job)
@@ -223,6 +229,16 @@ routine app.empathy_direction_status(): EXECUTE (mwf_job)
 routine app.empathy_set_status(uuid,empathy_status,text): EXECUTE (mwf_job)
 routine app.is_co_participant(uuid): EXECUTE (mwf_job)
 routine app.is_member(uuid): EXECUTE (mwf_job)
+routine app.json_schema_wellformed(jsonb): EXECUTE (PUBLIC)
+routine app.json_schema_wellformed(jsonb): EXECUTE (mwf_migrator)
+routine app.jsonb_envelope_violation(jsonb): EXECUTE (mwf_job)
+routine app.jsonb_envelope_violation(jsonb): EXECUTE (mwf_migrator)
+routine app.jsonb_matches(jsonb,text,schema_version): EXECUTE (mwf_job)
+routine app.jsonb_matches(jsonb,text,schema_version): EXECUTE (mwf_migrator)
+routine app.jsonb_schema_violation(jsonb,jsonb,text): EXECUTE (PUBLIC)
+routine app.jsonb_schema_violation(jsonb,jsonb,text): EXECUTE (mwf_migrator)
+routine app.jsonb_violation(jsonb,text,schema_version): EXECUTE (mwf_job)
+routine app.jsonb_violation(jsonb,text,schema_version): EXECUTE (mwf_migrator)
 routine app.my_participant(uuid): EXECUTE (mwf_job)
 routine app.need_revoke_share(uuid): EXECUTE (mwf_job)
 routine app.need_share(uuid,text): EXECUTE (mwf_job)
@@ -235,16 +251,14 @@ routine app.t_agreement_parties(): EXECUTE (mwf_migrator)
 routine app.t_attempt_same_session(): EXECUTE (mwf_migrator)
 routine app.t_consent_owner(): EXECUTE (mwf_migrator)
 routine app.t_consent_transitions(): EXECUTE (mwf_migrator)
-routine app.t_live_session_pair(): EXECUTE (mwf_job)
-routine app.t_live_session_pair_end(): EXECUTE (mwf_job)
+routine app.t_doc_schema(): EXECUTE (mwf_migrator)
+routine app.t_jsonb_envelope(): EXECUTE (mwf_migrator)
 routine app.t_message_app_delete(): EXECUTE (mwf_migrator)
 routine app.t_message_app_insert(): EXECUTE (mwf_migrator)
 routine app.t_message_immutable(): EXECUTE (mwf_migrator)
 routine app.t_need_share_owner(): EXECUTE (mwf_migrator)
 routine app.t_need_share_terminal(): EXECUTE (mwf_migrator)
-routine app.t_participant_added_by(): EXECUTE (mwf_job)
 routine app.t_participant_cardinality(): EXECUTE (mwf_migrator)
-routine app.t_participant_kind(): EXECUTE (mwf_job)
 routine app.t_result_live_attempt(): EXECUTE (mwf_migrator)
 routine app.t_review_subject(): EXECUTE (mwf_migrator)
 routine app.t_session_cardinality(): EXECUTE (mwf_migrator)
@@ -257,6 +271,8 @@ schema app: USAGE (mwf_ops)
 schema public: USAGE (PUBLIC)
 schema public: USAGE (mwf_job)
 schema public: USAGE (mwf_ops)
+table app.json_schema: DELETE, INSERT, MAINTAIN, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE (mwf_migrator)
+table app.json_schema: SELECT (mwf_job)
 table public.agreement: DELETE, INSERT, MAINTAIN, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE (mwf_migrator)
 table public.agreement_party: DELETE, INSERT, MAINTAIN, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE (mwf_migrator)
 table public.ai_memory: DELETE (mwf_job)
@@ -285,8 +301,6 @@ table public.follow_up_checkin: DELETE, INSERT, MAINTAIN, REFERENCES, SELECT, TR
 table public.follow_up_note: DELETE (mwf_job)
 table public.follow_up_note: DELETE, INSERT, MAINTAIN, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE (mwf_migrator)
 table public.invitation: DELETE, INSERT, MAINTAIN, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE (mwf_migrator)
-table public.live_session_pair: DELETE, INSERT, MAINTAIN, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE (mwf_migrator)
-table public.live_session_pair: DELETE, INSERT, SELECT (mwf_job)
 table public.message: DELETE, INSERT, MAINTAIN, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE (mwf_migrator)
 table public.message: SELECT (mwf_ops)
 table public.milestone: DELETE, INSERT, MAINTAIN, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE (mwf_migrator)
@@ -318,6 +332,10 @@ table public.reflection_message: DELETE, INSERT, MAINTAIN, REFERENCES, SELECT, T
 table public.reflection_message: SELECT (mwf_ops)
 table public.regulation_event: DELETE (mwf_job)
 table public.regulation_event: DELETE, INSERT, MAINTAIN, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE (mwf_migrator)
+table public.relationship: DELETE, INSERT, MAINTAIN, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE (mwf_migrator)
+table public.relationship: SELECT (mwf_ops)
+table public.relationship_member: DELETE, INSERT, MAINTAIN, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE (mwf_migrator)
+table public.relationship_member: SELECT (mwf_ops)
 table public.reminder: DELETE (mwf_job)
 table public.reminder: DELETE, INSERT, MAINTAIN, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE (mwf_migrator)
 table public.session: DELETE (mwf_job)
@@ -328,8 +346,6 @@ table public.takeaway: DELETE, INSERT, MAINTAIN, REFERENCES, SELECT, TRIGGER, TR
 table public.takeaway_link: DELETE, INSERT, MAINTAIN, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE (mwf_migrator)
 table public.user: DELETE, INSERT, MAINTAIN, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE (mwf_migrator)
 table public.user: SELECT (mwf_ops)
-table public.user_contact: DELETE (mwf_job)
-table public.user_contact: DELETE, INSERT, MAINTAIN, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE (mwf_migrator)
 table public.user_device: DELETE (mwf_job)
 table public.user_device: DELETE, INSERT, MAINTAIN, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE (mwf_migrator)
 table public.user_identity: DELETE (mwf_job)
@@ -362,6 +378,11 @@ routine owner app.empathy_direction_status(): mwf_job
 routine owner app.empathy_set_status(uuid,empathy_status,text): mwf_job
 routine owner app.is_co_participant(uuid): mwf_job
 routine owner app.is_member(uuid): mwf_job
+routine owner app.json_schema_wellformed(jsonb): mwf_migrator
+routine owner app.jsonb_envelope_violation(jsonb): mwf_migrator
+routine owner app.jsonb_matches(jsonb,text,schema_version): mwf_migrator
+routine owner app.jsonb_schema_violation(jsonb,jsonb,text): mwf_migrator
+routine owner app.jsonb_violation(jsonb,text,schema_version): mwf_migrator
 routine owner app.my_participant(uuid): mwf_job
 routine owner app.need_revoke_share(uuid): mwf_job
 routine owner app.need_share(uuid,text): mwf_job
@@ -373,16 +394,14 @@ routine owner app.t_agreement_parties(): mwf_migrator
 routine owner app.t_attempt_same_session(): mwf_migrator
 routine owner app.t_consent_owner(): mwf_migrator
 routine owner app.t_consent_transitions(): mwf_migrator
-routine owner app.t_live_session_pair(): mwf_job
-routine owner app.t_live_session_pair_end(): mwf_job
+routine owner app.t_doc_schema(): mwf_migrator
+routine owner app.t_jsonb_envelope(): mwf_migrator
 routine owner app.t_message_app_delete(): mwf_migrator
 routine owner app.t_message_app_insert(): mwf_migrator
 routine owner app.t_message_immutable(): mwf_migrator
 routine owner app.t_need_share_owner(): mwf_migrator
 routine owner app.t_need_share_terminal(): mwf_migrator
-routine owner app.t_participant_added_by(): mwf_job
 routine owner app.t_participant_cardinality(): mwf_migrator
-routine owner app.t_participant_kind(): mwf_job
 routine owner app.t_result_live_attempt(): mwf_migrator
 routine owner app.t_review_subject(): mwf_migrator
 routine owner app.t_session_cardinality(): mwf_migrator

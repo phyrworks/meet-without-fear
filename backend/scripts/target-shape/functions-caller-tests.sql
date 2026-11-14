@@ -867,4 +867,393 @@ DO $$ BEGIN
 END $$;
 ROLLBACK;
 
+-- 25. the JSON-schema subset validator (work-k5fk.8): every keyword accepts and refuses,
+--     nested properties and arrays carry a path, and a schema with an unsupported keyword
+--     is not well-formed. Pure functions, run as mwf_app (still connected).
+DO $$
+DECLARE
+  -- [schema, accepted doc, refused doc, the refusal's expected text]
+  cases jsonb := $j$[
+    [{"type": "object"},                           {},                  [],                   "$: expected object, got array"],
+    [{"type": "array"},                            [],                  {},                   "$: expected array, got object"],
+    [{"type": "string"},                           "x",                 1,                    "$: expected string, got number"],
+    [{"type": "number"},                           1.5,                 "1",                  "$: expected number, got string"],
+    [{"type": "integer"},                          2,                   2.5,                  "$: expected integer, got number"],
+    [{"type": "integer"},                          1.0,                 1.01,                 "$: expected integer, got number"],
+    [{"type": "boolean"},                          false,               null,                 "$: expected boolean, got null"],
+    [{"type": "null"},                             null,                0,                    "$: expected null, got number"],
+    [{"type": ["string", "null"]},                 null,                true,                 "$: expected string or null, got boolean"],
+    [{"type": ["integer", "string", "null"]},      "s",                 [],                   "$: expected integer or string or null, got array"],
+    [{"required": ["a", "b"]},                     {"a": 1, "b": 2},    {"a": 1},             "$: missing required key b"],
+    [{"required": ["a", "b"]},                     {"a": null, "b": null}, {"b": 1},          "$: missing required key a"],
+    [{"enum": ["x", 2, {"k": [1]}]},               {"k": [1]},          {"k": [1, 2]},        "$: not one of the allowed values"],
+    [{"enum": [1.0, "1"]},                         1,                   "1.0",                "$: not one of the allowed values"],
+    [{"properties": {"a": {"type": "string"}}},    {"a": "s", "z": 1},  {"a": 1},             "$.a: expected string, got number"],
+    [{"properties": {"a": {"type": "string"}}, "additionalProperties": false}, {"a": "s"}, {"a": 2}, "$.a: expected string, got number"],
+    [{"properties": {"a": {}}, "additionalProperties": false}, {"a": 0}, {"a": 0, "b": 1},    "$: unexpected key b"],
+    [{"additionalProperties": {"type": "integer"}}, {"a": 1, "b": 2},   {"a": 1, "b": "2"},   "$.b: expected integer, got string"],
+    [{"items": {"type": "string"}},                ["a", "b"],          ["a", 2],             "$[1]: expected string, got number"],
+    [{"items": {"type": "string"}},                [],                  [1, "a"],             "$[0]: expected string, got number"],
+    [{"type": "object", "properties": {"o": {"type": "object", "required": ["p"], "properties": {"p": {"type": "array", "items": {"type": "object", "required": ["q"], "properties": {"q": {"type": "boolean"}}}}}}}},
+                                                   {"o": {"p": [{"q": true}, {"q": false}]}},
+                                                   {"o": {"p": [{"q": true}, {"q": "no"}]}},
+                                                                                          "$.o.p[1].q: expected boolean, got string"]
+  ]$j$;
+  c jsonb; v text; i int := 0;
+BEGIN
+  FOR c IN SELECT * FROM jsonb_array_elements(cases) LOOP
+    i := i + 1;
+    v := app.jsonb_schema_violation(c -> 1, c -> 0);
+    IF v IS NOT NULL THEN RAISE EXCEPTION 'TEST FAILED: case %: % refused %: %', i, c -> 0, c -> 1, v; END IF;
+    v := app.jsonb_schema_violation(c -> 2, c -> 0);
+    IF v IS DISTINCT FROM (c ->> 3) THEN RAISE EXCEPTION 'TEST FAILED: case %: % on % gave %, expected %', i, c -> 0, c -> 2, v, c ->> 3; END IF;
+  END LOOP;
+  -- keywords apply only to their own type, as in JSON Schema: properties/required say nothing about a string
+  IF app.jsonb_schema_violation('"s"', '{"required": ["a"], "items": {"type": "null"}}') IS NOT NULL THEN
+    RAISE EXCEPTION 'TEST FAILED: object/array keywords applied to a string';
+  END IF;
+  -- an SQL NULL document is named as such
+  IF app.jsonb_schema_violation(NULL, '{"type": "object"}') IS DISTINCT FROM '$: expected object, got SQL NULL' THEN
+    RAISE EXCEPTION 'TEST FAILED: SQL NULL: %', app.jsonb_schema_violation(NULL, '{"type": "object"}');
+  END IF;
+  RAISE NOTICE 'PASS 25a the validator: type (7 types, unions, integer 1.0), required (a JSON null is present), enum (jsonb equality: 1 = 1.0), properties, additionalProperties (false, a schema), items (every element), a nested path, SQL NULL — % cases each accepted and refused', i;
+  -- an unknown keyword, a bad type name, a non-array required: not well-formed (refused when seeded, never
+  -- silently ignored), at every depth: properties, items and additionalProperties sub-schemas too
+  IF app.json_schema_wellformed('{"type": "object", "minimum": 1}') OR app.json_schema_wellformed('{"type": "date"}')
+     OR app.json_schema_wellformed('{"type": ["string", "date"]}') OR app.json_schema_wellformed('{"type": []}')
+     OR app.json_schema_wellformed('{"required": "a"}') OR app.json_schema_wellformed('{"required": [1]}')
+     OR app.json_schema_wellformed('{"properties": {"a": {"maxLength": 3}}}')
+     OR app.json_schema_wellformed('{"items": {"minimum": 1}}') OR app.json_schema_wellformed('{"items": {"type": "date"}}')
+     OR app.json_schema_wellformed('{"additionalProperties": {"pattern": "x"}}') OR app.json_schema_wellformed('{"additionalProperties": "no"}')
+     OR app.json_schema_wellformed('{"enum": []}') OR app.json_schema_wellformed('{"description": 1}') OR app.json_schema_wellformed('[]')
+     OR NOT app.json_schema_wellformed('{"type": "object", "description": "x", "$comment": "y", "properties": {"a": {"enum": [1]}}, "additionalProperties": false}')
+     OR NOT app.json_schema_wellformed('{"items": {"type": "string"}, "additionalProperties": {"type": ["integer", "null"]}}') THEN
+    RAISE EXCEPTION 'TEST FAILED: json_schema_wellformed';
+  END IF;
+  RAISE NOTICE 'PASS 25b json_schema_wellformed refuses an unsupported keyword, type name or keyword value, in properties, items and additionalProperties too';
+  BEGIN
+    PERFORM app.jsonb_matches('{}', 'user_preferences', 99::schema_version);
+    RAISE EXCEPTION 'TEST FAILED: an unknown schema version matched';
+  EXCEPTION WHEN SQLSTATE 'MWJ01' THEN
+    IF SQLERRM <> 'json_schema user_preferences version 99 does not exist' THEN RAISE; END IF;
+    RAISE NOTICE 'PASS 25c jsonb_matches: an unknown version raises MWJ01: %', SQLERRM;
+  END;
+END $$;
+-- 25d. each seeded v1 schema accepts what its writer writes and refuses at each closed level
+DO $$
+DECLARE
+  -- [name, accepted doc, refused doc, the refusal's expected text]
+  cases jsonb := $j$[
+    ["user_preferences", {"memory": {}, "notifications": {}, "privacy": {}}, {"memory": {}, "notifications": {}}, "$: missing required key privacy"],
+    ["user_preferences", {"memory": {"patternInsights": true}, "notifications": {}, "privacy": {}}, {"memory": {"x": true}, "notifications": {}, "privacy": {}}, "$.memory: unexpected key x"],
+    ["user_preferences", {"memory": {}, "notifications": {"pushEnabled": false}, "privacy": {}}, {"memory": {}, "notifications": {"sms": true}, "privacy": {}}, "$.notifications: unexpected key sms"],
+    ["user_preferences", {"memory": {}, "notifications": {}, "privacy": {"analyticsOptOut": true}}, {"memory": {}, "notifications": {}, "privacy": {"analyticsOptOut": 1}}, "$.privacy.analyticsOptOut: expected boolean, got number"],
+    ["ai_memory.summary", {"text": "s", "messageCount": 1, "generatedAt": "g", "keyThemes": ["a"]}, {"text": "s", "messageCount": 1, "generatedAt": "g", "mood": "x"}, "$: unexpected key mood"],
+    ["ai_memory.summary", {"text": "s", "messageCount": 1, "generatedAt": "g", "keyThemes": null}, {"text": "s", "messageCount": 1, "generatedAt": "g", "keyThemes": ["a", 2]}, "$.keyThemes[1]: expected string, got number"],
+    ["ai_memory.summary", {"text": "s", "messageCount": 1, "generatedAt": "g", "tokenCount": 2}, {"text": "s", "messageCount": 1, "generatedAt": "g", "tokenCount": null}, "$.tokenCount: expected integer, got null"],
+    ["ai_memory.notable_facts", {"facts": [{"id": "x", "category": "c", "fact": "f", "extra": 1}]}, {"facts": [], "topic": "t"}, "$: unexpected key topic"],
+    ["ai_memory.notable_facts", {"facts": []}, {"facts": [{"id": 12345, "category": "c", "fact": "f"}]}, "$.facts[0].id: expected string, got number"],
+    ["ai_memory.global_facts", {"facts": [], "sessionCount": 3, "consolidatedAt": "c"}, {"facts": [], "sessionCount": "3"}, "$.sessionCount: expected integer, got string"],
+    ["ai_memory.global_facts", {"facts": [{"category": "c", "fact": "f"}]}, {"facts": [], "owner": "x"}, "$: unexpected key owner"]
+  ]$j$;
+  c jsonb; v text; i int := 0;
+BEGIN
+  FOR c IN SELECT * FROM jsonb_array_elements(cases) LOOP
+    i := i + 1;
+    IF NOT app.jsonb_matches(c -> 1, c ->> 0, 1::schema_version) THEN
+      RAISE EXCEPTION 'TEST FAILED: % refused %: %', c ->> 0, c -> 1, app.jsonb_violation(c -> 1, c ->> 0, 1::schema_version);
+    END IF;
+    IF app.jsonb_matches(c -> 2, c ->> 0, 1::schema_version) THEN RAISE EXCEPTION 'TEST FAILED: % accepted %', c ->> 0, c -> 2; END IF;
+    v := app.jsonb_violation(c -> 2, c ->> 0, 1::schema_version);
+    IF v IS DISTINCT FROM (c ->> 3) THEN RAISE EXCEPTION 'TEST FAILED: % on % gave %, expected %', c ->> 0, c -> 2, v, c ->> 3; END IF;
+  END LOOP;
+  RAISE NOTICE 'PASS 25d the four seeded schemas: % cases, each accepted and refused at its closed level (jsonb_matches, jsonb_violation)', i;
+END $$;
+
+-- 26. user_preferences.doc is validated by its BEFORE trigger (json_schema user_preferences v1), as mwf_app
+SELECT set_config('t.a_user', :'a_user', false) \g /dev/null
+DO $$ DECLARE v_msg text; v_detail text; BEGIN
+  PERFORM set_config('app.current_user_id', current_setting('t.a_user'), true);
+  -- the app's own default document (user-settings.ts DEFAULT_DOC) is accepted, version 1 by default
+  INSERT INTO user_preferences (user_id, doc) VALUES (current_setting('t.a_user')::uuid,
+    '{"memory": {"sessionContinuity": true, "crossSessionRecall": false, "patternInsights": false, "rememberAgreements": true},
+      "notifications": {"pushEnabled": true, "emailEnabled": false, "newInvitations": true, "partnerActions": true, "followUpReminders": true},
+      "privacy": {"showActivityStatus": true, "allowSessionInvites": true, "analyticsOptOut": false}}');
+  IF (SELECT doc_schema_version FROM user_preferences WHERE user_id = current_setting('t.a_user')::uuid) <> 1 THEN
+    RAISE EXCEPTION 'TEST FAILED: doc_schema_version is not 1';
+  END IF;
+  RAISE NOTICE 'PASS 26a the app''s default preferences document is accepted (doc_schema_version 1)';
+  BEGIN
+    UPDATE user_preferences SET doc = jsonb_set(doc, '{memory,sessionContinuity}', '"yes"') WHERE user_id = current_setting('t.a_user')::uuid;
+    RAISE EXCEPTION 'TEST FAILED: a string preference was stored';
+  EXCEPTION WHEN check_violation THEN
+    GET STACKED DIAGNOSTICS v_msg = MESSAGE_TEXT, v_detail = PG_EXCEPTION_DETAIL;
+    IF v_msg <> 'user_preferences.doc does not match json_schema user_preferences v1: $.memory.sessionContinuity: expected boolean, got string'
+       OR v_detail <> '' THEN RAISE; END IF;
+    RAISE NOTICE 'PASS 26b a wrongly typed preference is refused (no DETAIL): %', v_msg;
+  END;
+  BEGIN
+    UPDATE user_preferences SET doc = doc || '{"theme": "dark"}' WHERE user_id = current_setting('t.a_user')::uuid;
+    RAISE EXCEPTION 'TEST FAILED: an unknown preference document was stored';
+  EXCEPTION WHEN check_violation THEN
+    IF SQLERRM NOT LIKE '%: $: unexpected key theme' THEN RAISE; END IF;
+    RAISE NOTICE 'PASS 26c an unknown top-level key is refused: %', SQLERRM;
+  END;
+  BEGIN
+    UPDATE user_preferences SET doc = doc || '{"privacy": {"showActivityStatus": false, "shareLocation": true}}' WHERE user_id = current_setting('t.a_user')::uuid;
+    RAISE EXCEPTION 'TEST FAILED: an unknown privacy key was stored';
+  EXCEPTION WHEN check_violation THEN
+    IF SQLERRM NOT LIKE '%: $.privacy: unexpected key shareLocation' THEN RAISE; END IF;
+    RAISE NOTICE 'PASS 26d an unknown nested key is refused: %', SQLERRM;
+  END;
+  -- 26f. mwf_app writes doc (and updated_at), never the version: that is a migration's
+  BEGIN
+    UPDATE user_preferences SET doc_schema_version = 1 WHERE user_id = current_setting('t.a_user')::uuid;
+    RAISE EXCEPTION 'TEST FAILED: mwf_app wrote doc_schema_version';
+  EXCEPTION WHEN insufficient_privilege THEN RAISE NOTICE 'PASS 26f mwf_app cannot UPDATE user_preferences.doc_schema_version: %', SQLERRM;
+  END;
+END $$;
+-- 26e. an unknown schema version is refused (mwf_app cannot write doc_schema_version, 26f: the migrator's
+--      UPDATE, rolled back, shows the trigger fires on UPDATE OF doc_schema_version, and refuses it)
+\connect - mwf_user
+BEGIN;
+DO $$ BEGIN
+  UPDATE user_preferences SET doc_schema_version = 2 WHERE user_id = '00000000-0000-7e00-8000-0000000000b1';
+  RAISE EXCEPTION 'TEST FAILED: an unknown schema version was stored';
+EXCEPTION WHEN SQLSTATE 'MWJ01' THEN
+  IF SQLERRM <> 'json_schema user_preferences version 2 does not exist' THEN RAISE; END IF;
+  RAISE NOTICE 'PASS 26e an unknown doc_schema_version is refused (MWJ01): %', SQLERRM;
+END $$;
+ROLLBACK;
+
+-- 27. ai_memory.doc's structure is validated per kind (json_schema ai_memory.<kind> v1), as mwf_job
+--     (the summarizer and the partner-session classifier write it: INSERT … ON CONFLICT DO UPDATE)
+\connect - mwf_job
+SELECT 'connected as ' || session_user || ' (current_user ' || current_user || ')';
+SELECT set_config('t.a_participant', :'a_participant', false) \g /dev/null
+DO $$ DECLARE v_msg text; BEGIN
+  -- the summarizer's document (conversation-summarizer.ts updateSessionSummary), every key it writes
+  INSERT INTO ai_memory (participant_id, kind, doc) VALUES (current_setting('t.a_participant')::uuid, 'SUMMARY',
+    '{"text": "s", "messageCount": 12, "oldestMessageAt": "2026-11-01T10:00:00.000Z", "newestMessageAt": "2026-11-01T11:00:00.000Z",
+      "tokenCount": 3, "generatedAt": "2026-11-01T11:00:01.000Z", "keyThemes": ["t"], "emotionalJourney": "e", "unresolvedTopics": [],
+      "agreedFacts": [], "userNeeds": ["n"], "partnerNeeds": [], "openQuestions": [], "agreements": [], "lastUnresolvedThread": null}')
+    ON CONFLICT (participant_id, kind) DO UPDATE SET doc = EXCLUDED.doc;
+  -- the classifier's NOTABLE_FACTS (partner-session-classifier.ts; ids from ensureFactIds)
+  INSERT INTO ai_memory (participant_id, kind, doc) VALUES (current_setting('t.a_participant')::uuid, 'NOTABLE_FACTS',
+    '{"facts": [{"id": "01900000-0000-7000-8000-000000000001", "category": "People", "fact": "f"}, {"category": "Emotional", "fact": "g"}]}')
+    ON CONFLICT (participant_id, kind) DO UPDATE SET doc = EXCLUDED.doc;
+  RAISE NOTICE 'PASS 27a the summarizer''s SUMMARY and the classifier''s NOTABLE_FACTS documents are accepted';
+  -- 27b. the BEFORE INSERT trigger sees the proposed row before ON CONFLICT is considered: a bad
+  --      document is refused at the INSERT even though a SUMMARY row for the participant exists
+  BEGIN
+    INSERT INTO ai_memory (participant_id, kind, doc) VALUES (current_setting('t.a_participant')::uuid, 'SUMMARY',
+      '{"text": "s", "messageCount": "12", "generatedAt": "2026-11-01T11:00:01.000Z"}')
+      ON CONFLICT (participant_id, kind) DO UPDATE SET doc = EXCLUDED.doc;
+    RAISE EXCEPTION 'TEST FAILED: a string messageCount was stored';
+  EXCEPTION WHEN check_violation THEN
+    GET STACKED DIAGNOSTICS v_msg = MESSAGE_TEXT;
+    IF v_msg <> 'ai_memory.doc does not match json_schema ai_memory.summary v1: $.messageCount: expected integer, got string' THEN RAISE; END IF;
+    RAISE NOTICE 'PASS 27b a SUMMARY with a string messageCount is refused by the BEFORE INSERT on the proposed row (a row exists): %', v_msg;
+  END;
+  -- 27g. the DO UPDATE path: the proposed row is good, the SET writes a bad document — the BEFORE UPDATE refuses it
+  BEGIN
+    INSERT INTO ai_memory (participant_id, kind, doc) VALUES (current_setting('t.a_participant')::uuid, 'SUMMARY',
+      '{"text": "s", "messageCount": 1, "generatedAt": "g"}')
+      ON CONFLICT (participant_id, kind) DO UPDATE SET doc = '{"text": "s", "messageCount": 1}';
+    RAISE EXCEPTION 'TEST FAILED: the upsert''s update stored a SUMMARY without generatedAt';
+  EXCEPTION WHEN check_violation THEN
+    IF SQLERRM NOT LIKE '%ai_memory.summary v1: $: missing required key generatedAt' THEN RAISE; END IF;
+    RAISE NOTICE 'PASS 27g the upsert''s DO UPDATE is checked as an UPDATE: %', SQLERRM;
+  END;
+  BEGIN
+    INSERT INTO ai_memory (participant_id, kind, doc) VALUES (current_setting('t.a_participant')::uuid, 'NOTABLE_FACTS',
+      '{"facts": [{"category": "People", "fact": "f"}, {"category": "People"}]}')
+      ON CONFLICT (participant_id, kind) DO UPDATE SET doc = EXCLUDED.doc;
+    RAISE EXCEPTION 'TEST FAILED: a fact without its text was stored';
+  EXCEPTION WHEN check_violation THEN
+    IF SQLERRM NOT LIKE '%ai_memory.notable_facts v1: $.facts[1]: missing required key fact' THEN RAISE; END IF;
+    RAISE NOTICE 'PASS 27c a fact without its text is refused: %', SQLERRM;
+  END;
+  -- 27h. mwf_job writes doc only: never kind or the version
+  BEGIN
+    UPDATE ai_memory SET kind = 'NOTABLE_FACTS' WHERE participant_id = current_setting('t.a_participant')::uuid AND kind = 'SUMMARY';
+    RAISE EXCEPTION 'TEST FAILED: mwf_job changed a kind';
+  EXCEPTION WHEN insufficient_privilege THEN NULL;
+  END;
+  BEGIN
+    UPDATE ai_memory SET doc_schema_version = 1 WHERE participant_id = current_setting('t.a_participant')::uuid;
+    RAISE EXCEPTION 'TEST FAILED: mwf_job wrote doc_schema_version';
+  EXCEPTION WHEN insufficient_privilege THEN RAISE NOTICE 'PASS 27h mwf_job cannot UPDATE ai_memory.kind or doc_schema_version: %', SQLERRM;
+  END;
+END $$;
+-- 27d. GLOBAL_FACTS through mwf_app (global-memory.ts consolidateGlobalFacts: a Prisma upsert, which sends doc_schema_version)
+\connect - mwf_app
+SELECT 'connected as ' || session_user || ' (current_user ' || current_user || ')';
+SELECT set_config('t.a_user', :'a_user', false) \g /dev/null
+DO $$ BEGIN
+  PERFORM set_config('app.current_user_id', current_setting('t.a_user'), true);
+  INSERT INTO ai_memory (user_id, kind, doc, doc_schema_version) VALUES (current_setting('t.a_user')::uuid, 'GLOBAL_FACTS',
+    '{"facts": [{"category": "People", "fact": "f"}], "consolidatedAt": "2026-11-01T11:00:01.000Z", "sessionCount": 2}', 1);
+  RAISE NOTICE 'PASS 27d the consolidator''s GLOBAL_FACTS document is accepted';
+  BEGIN
+    UPDATE ai_memory SET doc = '{"facts": ["a bare string"]}' WHERE user_id = current_setting('t.a_user')::uuid AND kind = 'GLOBAL_FACTS';
+    RAISE EXCEPTION 'TEST FAILED: a bare-string fact was stored';
+  EXCEPTION WHEN check_violation THEN
+    IF SQLERRM NOT LIKE '%ai_memory.global_facts v1: $.facts[0]: expected object, got string' THEN RAISE; END IF;
+    RAISE NOTICE 'PASS 27e a bare-string global fact is refused: %', SQLERRM;
+  END;
+  BEGIN
+    -- (a BEFORE trigger runs before the UNIQUE and CHECK constraints, so A's existing row is no obstacle)
+    INSERT INTO ai_memory (user_id, kind, doc, doc_schema_version) VALUES (current_setting('t.a_user')::uuid, 'GLOBAL_FACTS', '{"facts": []}', 7);
+    RAISE EXCEPTION 'TEST FAILED: an unknown schema version was stored';
+  EXCEPTION WHEN SQLSTATE 'MWJ01' THEN
+    IF SQLERRM <> 'json_schema ai_memory.global_facts version 7 does not exist' THEN RAISE; END IF;
+    RAISE NOTICE 'PASS 27f an unknown doc_schema_version is refused (MWJ01): %', SQLERRM;
+  END;
+END $$;
+-- 27i. the trigger fires on UPDATE OF kind and of doc_schema_version (the migrator's UPDATEs, rolled
+--      back: no runtime role may write either, 27h)
+\connect - mwf_user
+BEGIN;
+SELECT set_config('t.a_participant', :'a_participant', false) \g /dev/null
+DO $$ BEGIN
+  BEGIN
+    UPDATE ai_memory SET kind = 'NOTABLE_FACTS' WHERE participant_id = current_setting('t.a_participant')::uuid AND kind = 'SUMMARY';
+    RAISE EXCEPTION 'TEST FAILED: a SUMMARY document was re-kinded NOTABLE_FACTS';
+  EXCEPTION WHEN check_violation OR unique_violation THEN
+    IF SQLERRM NOT LIKE 'ai_memory.doc does not match json_schema ai_memory.notable_facts v1: %' THEN RAISE; END IF;
+    RAISE NOTICE 'PASS 27i a change of kind re-checks the document against the new kind''s schema: %', SQLERRM;
+  END;
+  BEGIN
+    UPDATE ai_memory SET doc_schema_version = 3 WHERE participant_id = current_setting('t.a_participant')::uuid AND kind = 'SUMMARY';
+    RAISE EXCEPTION 'TEST FAILED: an unknown version was stored on ai_memory';
+  EXCEPTION WHEN SQLSTATE 'MWJ01' THEN
+    IF SQLERRM <> 'json_schema ai_memory.summary version 3 does not exist' THEN RAISE; END IF;
+    RAISE NOTICE 'PASS 27j a change of doc_schema_version re-checks (MWJ01): %', SQLERRM;
+  END;
+END $$;
+ROLLBACK;
+
+-- 28. the envelope rule on the five jsonb-envelope documents (the t_jsonb_envelope trigger; feature_state.doc
+--     as mwf_app here, step 20 asserts all five are guarded): a sealed document is exactly
+--     {"$enc": <a v1 ciphertext>}; a keyless plaintext document (no "$enc" key) still passes, as the
+--     ciphertext domain lets plaintext through. A refusal names the column and the reason, never the
+--     value: no DETAIL (a CHECK's "Failing row contains …" would echo the plaintext).
+\connect - mwf_app
+SELECT set_config('t.a_user', :'a_user', false) \g /dev/null
+DO $$
+DECLARE
+  -- [the refused document, the expected reason]
+  bad jsonb := $j$[
+    [{"$enc": "MY SECRET JOURNAL"},                                                     "\"$enc\" is not a ciphertext (plaintext in an envelope)"],
+    [{"$enc": "enc:v1:MYSECRETJOURNAL:AAAA"},                                           "\"$enc\" is a malformed ciphertext"],
+    [{"$enc": "enc:v1:AAAAAAAAAAAAAAAA:AAAAAAAAAAAAAAAAAAAAAA==:AAAA", "note": "MY SECRET JOURNAL"}, "a sealed document has \"$enc\" as its only key"],
+    [{"$enc": {"MY SECRET JOURNAL": 1}},                                                "\"$enc\" is not a string, got object"],
+    ["MY SECRET JOURNAL",                                                               "not an object, got string"]
+  ]$j$;
+  c jsonb; v_msg text; v_detail text; v_hint text; i int := 0;
+BEGIN
+  PERFORM set_config('app.current_user_id', current_setting('t.a_user'), true);
+  INSERT INTO feature_state (user_id, feature, doc) VALUES (current_setting('t.a_user')::uuid, 'gratitude',
+    '{"$enc": "enc:v1:AAAAAAAAAAAAAAAA:AAAAAAAAAAAAAAAAAAAAAA==:AAAA"}');
+  INSERT INTO feature_state (user_id, feature, doc) VALUES (current_setting('t.a_user')::uuid, 'people', '{"persons": []}');
+  RAISE NOTICE 'PASS 28a a sealed envelope and a keyless plaintext document are accepted';
+  FOR c IN SELECT * FROM jsonb_array_elements(bad) LOOP
+    i := i + 1;
+    BEGIN
+      UPDATE feature_state SET doc = c -> 0 WHERE user_id = current_setting('t.a_user')::uuid AND feature = 'gratitude';
+      RAISE EXCEPTION 'TEST FAILED: % was stored', c -> 0;
+    EXCEPTION WHEN check_violation THEN
+      GET STACKED DIAGNOSTICS v_msg = MESSAGE_TEXT, v_detail = PG_EXCEPTION_DETAIL, v_hint = PG_EXCEPTION_HINT;
+      IF v_msg IS DISTINCT FROM 'feature_state.doc is not a well-formed envelope: ' || (c ->> 1) THEN
+        RAISE EXCEPTION 'TEST FAILED: case % message %', i, v_msg;
+      END IF;
+      IF v_detail <> '' OR v_hint <> '' OR (v_msg || v_detail || v_hint) LIKE '%SECRET%' THEN
+        RAISE EXCEPTION 'TEST FAILED: case % leaks the value (detail %)', i, v_detail;
+      END IF;
+    END;
+  END LOOP;
+  -- a new row, through the INSERT arm
+  BEGIN
+    INSERT INTO feature_state (user_id, feature, doc) VALUES (current_setting('t.a_user')::uuid, 'meditation', '{"$enc": "MY SECRET JOURNAL"}');
+    RAISE EXCEPTION 'TEST FAILED: plaintext envelope inserted';
+  EXCEPTION WHEN check_violation THEN
+    GET STACKED DIAGNOSTICS v_detail = PG_EXCEPTION_DETAIL;
+    IF SQLERRM LIKE '%SECRET%' OR v_detail <> '' THEN RAISE EXCEPTION 'TEST FAILED: the INSERT refusal leaks the value'; END IF;
+  END;
+  RAISE NOTICE 'PASS 28b plaintext in, a malformed ciphertext in, a key beside, a non-string and a non-object envelope are refused (% cases and the INSERT arm), naming the reason and never the value (no DETAIL)', i;
+END $$;
+-- 28c. the four other envelope columns, with the job's and the superuser's writes (rolled back)
+\connect - mwf_user
+BEGIN;
+DO $$ DECLARE v_detail text; v_n int := 0; BEGIN
+  BEGIN
+    UPDATE proposal_revision SET after = '{"$enc": "MY SECRET PLAN"}' WHERE id = (SELECT id FROM proposal_revision LIMIT 1);
+    IF NOT FOUND THEN
+      -- no revision in the fixture: a direct call of the rule stands in for the row
+      IF app.jsonb_envelope_violation('{"$enc": "MY SECRET PLAN"}') IS NULL THEN RAISE EXCEPTION 'TEST FAILED: rule'; END IF;
+    ELSE
+      RAISE EXCEPTION 'TEST FAILED: plaintext envelope in proposal_revision.after';
+    END IF;
+  EXCEPTION WHEN check_violation THEN
+    GET STACKED DIAGNOSTICS v_detail = PG_EXCEPTION_DETAIL;
+    IF SQLERRM <> 'proposal_revision.after is not a well-formed envelope: "$enc" is not a ciphertext (plaintext in an envelope)' OR v_detail <> '' THEN RAISE; END IF;
+  END;
+  BEGIN
+    INSERT INTO reflection (user_id, summary_doc) VALUES ('00000000-0000-7e00-8000-0000000000b1', '{"$enc": "MY SECRET SUMMARY"}');
+    RAISE EXCEPTION 'TEST FAILED: plaintext envelope in reflection.summary_doc';
+  EXCEPTION WHEN check_violation THEN
+    IF SQLERRM NOT LIKE 'reflection.summary_doc is not a well-formed envelope: %' OR SQLERRM LIKE '%SECRET%' THEN RAISE; END IF;
+    v_n := v_n + 1;
+  END;
+  BEGIN
+    UPDATE follow_up_checkin SET payload = '"MY SECRET ANSWERS"' WHERE id = (SELECT id FROM follow_up_checkin LIMIT 1);
+    IF FOUND THEN RAISE EXCEPTION 'TEST FAILED: a non-object payload'; END IF;
+  EXCEPTION WHEN check_violation THEN
+    IF SQLERRM <> 'follow_up_checkin.payload is not a well-formed envelope: not an object, got string' THEN RAISE; END IF;
+    v_n := v_n + 1;
+  END;
+  IF v_n < 1 THEN RAISE EXCEPTION 'TEST FAILED: the reflection INSERT was not refused'; END IF;
+  RAISE NOTICE 'PASS 28c the envelope rule on reflection (an INSERT), proposal_revision and follow_up_checkin (fixture rows when present): % refused, no value in the message', v_n;
+END $$;
+ROLLBACK;
+
+-- 29. app.json_schema is reference data: mwf_app and mwf_job read it (the invoker-rights triggers
+--     do) and write nothing.
+\connect - mwf_app
+DO $$ BEGIN
+  IF (SELECT count(*) FROM app.json_schema) <> 4 THEN RAISE EXCEPTION 'TEST FAILED: mwf_app reads % schemas', (SELECT count(*) FROM app.json_schema); END IF;
+  BEGIN
+    INSERT INTO app.json_schema (name, version, schema) VALUES ('user_preferences', 2, '{}');
+    RAISE EXCEPTION 'TEST FAILED: mwf_app added a schema';
+  EXCEPTION WHEN insufficient_privilege THEN NULL;
+  END;
+  BEGIN
+    UPDATE app.json_schema SET schema = '{}' WHERE name = 'user_preferences';
+    RAISE EXCEPTION 'TEST FAILED: mwf_app rewrote a schema';
+  EXCEPTION WHEN insufficient_privilege THEN NULL;
+  END;
+  RAISE NOTICE 'PASS 29a mwf_app reads the 4 schemas and can neither add nor rewrite one';
+END $$;
+\connect - mwf_job
+DO $$ BEGIN
+  BEGIN
+    DELETE FROM app.json_schema WHERE name = 'user_preferences';
+    RAISE EXCEPTION 'TEST FAILED: mwf_job deleted a schema';
+  EXCEPTION WHEN insufficient_privilege THEN RAISE NOTICE 'PASS 29b mwf_job cannot delete a schema: %', SQLERRM;
+  END;
+END $$;
+-- 29c. a schema outside the subset cannot be seeded (the migrator's INSERT, rolled back)
+\connect - mwf_user
+BEGIN;
+DO $$ DECLARE v_con text; BEGIN
+  INSERT INTO app.json_schema (name, version, schema) VALUES ('user_preferences', 2, '{"type": "object", "minProperties": 1}');
+  RAISE EXCEPTION 'TEST FAILED: a schema with an unsupported keyword was seeded';
+EXCEPTION WHEN check_violation THEN
+  GET STACKED DIAGNOSTICS v_con = CONSTRAINT_NAME;
+  IF v_con <> 'json_schema_schema_check' THEN RAISE; END IF;
+  RAISE NOTICE 'PASS 29c a schema with an unsupported keyword is refused by %', v_con;
+END $$;
+ROLLBACK;
+
 \echo 'functions-caller-tests: ALL PASSED'
