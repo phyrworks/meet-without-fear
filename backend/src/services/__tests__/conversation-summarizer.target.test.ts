@@ -123,7 +123,11 @@ describeTarget('the session summary on the target (read by mwf_app, written by m
       { keyThemes: ['a', 1, null, { x: 1 }, 'b'], userNeeds: [true, 'n'] },
       { keyThemes: ['a', 'b'], userNeeds: ['n'] },
     ],
-    ['a list that is neither a list nor a string is empty', { unresolvedTopics: 42, agreements: { a: 1 } }, { unresolvedTopics: [], agreements: [] }],
+    [
+      'a list that is neither a list nor a string is empty',
+      { unresolvedTopics: 42, agreements: { a: 1 } },
+      { unresolvedTopics: [], agreements: [] },
+    ],
     ['a non-string emotionalJourney is dropped', { emotionalJourney: ['up', 'down'] }, { emotionalJourney: '' }],
     ['a null emotionalJourney is dropped', { emotionalJourney: null }, { emotionalJourney: '' }],
     ['a non-string lastUnresolvedThread is null', { lastUnresolvedThread: 7 }, { lastUnresolvedThread: null }],
@@ -144,7 +148,12 @@ describeTarget('the session summary on the target (read by mwf_app, written by m
 
   it('normalizeSummarizationResult: coerces each field; no summary text means nothing to store', () => {
     const n = summarizer.normalizeSummarizationResult({ summary: 'abcd efgh', keyThemes: 'x' });
-    expect(n).toMatchObject({ summary: 'abcd efgh', keyThemes: ['x'], emotionalJourney: '', lastUnresolvedThread: null });
+    expect(n).toMatchObject({
+      summary: 'abcd efgh',
+      keyThemes: ['x'],
+      emotionalJourney: '',
+      lastUnresolvedThread: null,
+    });
     expect(summarizer.normalizeSummarizationResult({ summary: '   ' })).toBeNull();
     expect(summarizer.normalizeSummarizationResult(null)).toBeNull();
   });

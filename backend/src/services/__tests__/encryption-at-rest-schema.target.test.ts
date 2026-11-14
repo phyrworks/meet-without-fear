@@ -85,8 +85,11 @@ describeTarget('the schema marks exactly the SENSITIVE_FIELD_MAP columns as encr
     process.env.FIELD_ENCRYPTION_KEY ??= Buffer.alloc(32, 7).toString('base64');
     const sealed = { $enc: encrypt(JSON.stringify({ entries: [] })) };
     const why = async (doc: unknown) =>
-      (await run.sql<{ v: string | null }>(`SELECT app.jsonb_envelope_violation($1::jsonb) AS v`, [JSON.stringify(doc)]))[0]
-        .v;
+      (
+        await run.sql<{ v: string | null }>(`SELECT app.jsonb_envelope_violation($1::jsonb) AS v`, [
+          JSON.stringify(doc),
+        ])
+      )[0].v;
     expect(await why(sealed)).toBeNull();
     expect(await why({ entries: [] })).toBeNull(); // keyless: the plain document
     expect(await why({ $enc: 'my journal' })).toMatch(/plaintext in an envelope/);
@@ -97,15 +100,16 @@ describeTarget('the schema marks exactly the SENSITIVE_FIELD_MAP columns as encr
   it('a refused envelope never reaches the client error: no DETAIL, no value in the message (review L1)', async () => {
     const [{ id }] = await run.sql<{ id: string }>(`SELECT id FROM "user" WHERE kind = 'human' ORDER BY id LIMIT 1`);
     const secret = 'MY SECRET JOURNAL';
-    let err: { message?: string; detail?: string; hint?: string; code?: string } | null = null;
-    try {
-      await run.sql(`INSERT INTO feature_state (user_id, feature, doc) VALUES ($1, 'gratitude', $2::jsonb)`, [
+    type PgError = { message?: string; detail?: string; hint?: string; code?: string };
+    const err = await run
+      .sql(`INSERT INTO feature_state (user_id, feature, doc) VALUES ($1, 'gratitude', $2::jsonb)`, [
         id,
         JSON.stringify({ $enc: secret }),
-      ]);
-    } catch (e) {
-      err = e as typeof err;
-    }
+      ])
+      .then(
+        () => null,
+        (e: unknown) => e as PgError,
+      );
     expect(err?.code).toBe('23514');
     expect(err?.message).toBe(
       'feature_state.doc is not a well-formed envelope: "$enc" is not a ciphertext (plaintext in an envelope)',

@@ -476,9 +476,7 @@ export function normalizeResult(raw: unknown): PartnerSessionClassifierResult {
       return { ...(id ? { id } : {}), category: normalizeCategory(f.category), fact: f.fact.trim() };
     });
 
-    const deleteIds = ((result.delete as unknown[]) || [])
-      .map(factId)
-      .filter((id): id is string => id !== undefined);
+    const deleteIds = ((result.delete as unknown[]) || []).map(factId).filter((id): id is string => id !== undefined);
 
     return {
       topicContext,
