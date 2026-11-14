@@ -126,6 +126,10 @@ describeTarget('empathy draft before the partner joins (work-99k2)', () => {
     expect(await run.sql(`SELECT count(*)::int AS n FROM participant WHERE session_id = $1`, [sessionId])).toEqual([
       { n: 1 },
     ]);
+    // work-k5fk.2: the pair written by the join's trigger rolled back with it, so the retry is no second session.
+    expect(
+      await run.sql(`SELECT count(*)::int AS n FROM live_session_pair WHERE session_id = $1`, [sessionId]),
+    ).toEqual([{ n: 0 }]);
 
     const accepted = await http(carol, 'post', `/invitations/${invitationId}/accept`);
     expect(accepted.status).toBe(200);
@@ -136,6 +140,13 @@ describeTarget('empathy draft before the partner joins (work-99k2)', () => {
     const [after] = await draftsOf(adaParticipant);
     // Same row, now about Carol; written-at and version untouched by the move.
     expect(after).toEqual({ ...before, about_participant_id: carolP.id, invitation_id: null });
+    // work-k5fk.2: Carol was added by the inviter, and the two are now a live pair.
+    expect(await run.sql(`SELECT added_by_user_id FROM participant WHERE id = $1`, [carolP.id])).toEqual([
+      { added_by_user_id: ada.id },
+    ]);
+    expect(
+      await run.sql(`SELECT count(*)::int AS n FROM live_session_pair WHERE session_id = $1`, [sessionId]),
+    ).toEqual([{ n: 1 }]);
     // Still sealed at rest after the move.
     const [atRest] = await expectSealed(run, 'draft', 'content', 'id = $1', [after.id]);
     expect(String(atRest)).not.toContain('unseen');
