@@ -621,7 +621,8 @@ CREATE FUNCTION app.anonymize_user_account("user" uuid) RETURNS void
     r     record;
   BEGIN
     IF NOT (v_job OR coalesce(v_me IS NOT NULL AND v_uid = v_me, false))
-       OR NOT EXISTS (SELECT 1 FROM public."user" u WHERE u.id = v_uid) THEN
+       OR NOT EXISTS (SELECT 1 FROM public."user" u WHERE u.id = v_uid AND u.kind = 'human') THEN
+      -- only an account is deleted: the AI row and a persona are not (a persona goes with its owner, 6b)
       RAISE EXCEPTION 'user not found' USING ERRCODE = 'P0002';
     END IF;
     -- 1–4, 7 (participant keys) per session
@@ -638,10 +639,17 @@ CREATE FUNCTION app.anonymize_user_account("user" uuid) RETURNS void
     DELETE FROM public.user_preferences WHERE user_id = v_uid;
     DELETE FROM public.reminder WHERE user_id = v_uid;
     DELETE FROM public.ai_memory WHERE user_id = v_uid;
-    -- 6. the tombstone
+    -- 6. the tombstone: the sign-in identities go (the subject can never
+    -- resolve again; a later sign-in with it is a new first login), the row is scrubbed
+    DELETE FROM public.user_identity WHERE user_id = v_uid;
     UPDATE public."user"
-    SET clerk_id = NULL, email = 'deleted+' || v_uid::text || '@invalid', first_name = NULL, last_name = NULL, deleted_at = coalesce(deleted_at, now())
+    SET email = 'deleted+' || v_uid::text || '@invalid', first_name = NULL, last_name = NULL, deleted_at = coalesce(deleted_at, now())
     WHERE id = v_uid;
+    -- 6b. the user's personas: their names are the owner's words about someone; scrubbed and soft-deleted with the owner
+    UPDATE public."user" u
+    SET first_name = NULL, last_name = NULL, deleted_at = coalesce(u.deleted_at, now())
+    FROM public.persona p
+    WHERE p.owner_user_id = v_uid AND u.id = p.user_id;
     -- 7. the user-key shred
     UPDATE public.user_key SET destroyed_at = now() WHERE user_id = v_uid AND destroyed_at IS NULL;
   END
@@ -650,30 +658,77 @@ CREATE FUNCTION app.anonymize_user_account("user" uuid) RETURNS void
 REVOKE EXECUTE ON FUNCTION app.anonymize_user_account(uuid) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION app.anonymize_user_account(uuid) TO mwf_job;
 
--- Pre-identity bootstrap (P3 §5): resolve a Clerk id; create the user for a
--- first login (mwf_auth only, INSERT only).
-CREATE FUNCTION app.resolve_user_by_clerk_id(clerk_id text) RETURNS uuid
+-- Pre-identity bootstrap (P3 §5; work-k5fk.1): resolve a (provider, subject)
+-- to its live user; create the user and its identity for a first login
+-- (mwf_auth only). Neither ever re-binds: an identity is attached only to the
+-- user created with it (work-jv9y, work-bp5m).
+CREATE FUNCTION app.resolve_user(provider public.identity_provider, subject text) RETURNS uuid
   LANGUAGE sql STABLE SECURITY DEFINER
   SET search_path = pg_catalog, public, pg_temp
   AS $$
-    SELECT u.id FROM public."user" u WHERE u.clerk_id = resolve_user_by_clerk_id.clerk_id AND u.deleted_at IS NULL
+    SELECT u.id FROM public.user_identity i JOIN public."user" u ON u.id = i.user_id
+    WHERE i.provider = resolve_user.provider AND i.subject = resolve_user.subject AND u.deleted_at IS NULL
   $$;
--- mwf_auth: the lookup that precedes first-login creation (pre-identity bootstrap). No app caller.
-REVOKE EXECUTE ON FUNCTION app.resolve_user_by_clerk_id(text) FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION app.resolve_user_by_clerk_id(text) TO mwf_auth;
+COMMENT ON FUNCTION app.resolve_user(public.identity_provider, text) IS 'The live (not deleted) user a sign-in identity belongs to, or NULL. mwf_auth''s per-request lookup (middleware/auth.ts); mwf_app has no privilege on user_identity.';
+-- mwf_auth: every authenticated request's lookup, and the one that precedes first-login creation. No app caller.
+REVOKE EXECUTE ON FUNCTION app.resolve_user(public.identity_provider, text) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION app.resolve_user(public.identity_provider, text) TO mwf_auth;
 
-CREATE FUNCTION app.create_user_for_clerk(clerk_id text, email text, first_name text DEFAULT NULL, last_name text DEFAULT NULL)
+-- app.create_user: the human row and its identity, in one call, for the
+-- clerk provider only (the E2E bypass's e2e identities are written by the
+-- tooling connection, never through this function: refused with MWF02). A
+-- unique_violation is resolved in exactly one way: the SAME identity of a live
+-- user was created by a concurrent first login — return its user. If the
+-- email belongs to another account, refuse with SQLSTATE MWF01 and the
+-- holder's id as DETAIL (for the caller's auth.identity_conflict log only —
+-- never a decision input, never the email); nothing is re-bound. If neither
+-- holds any more (the holder was tombstoned in between), the insert is tried
+-- once more; a second collision re-raises the original unique_violation.
+-- Class MW is the app's own (session_archive uses MWA00–MWA03).
+-- NOTE: mwf_job owns this function and holds INSERT/DELETE on user_identity
+-- and UPDATE (email) on "user", so the job login itself could re-bind an
+-- account directly; that goes with the definer re-owning (design note §7
+-- rows 9a–9c), not here.
+CREATE FUNCTION app.create_user(provider public.identity_provider, subject text, email text,
+                                first_name text DEFAULT NULL, last_name text DEFAULT NULL)
   RETURNS uuid
-  LANGUAGE sql SECURITY DEFINER
+  LANGUAGE plpgsql SECURITY DEFINER
   SET search_path = pg_catalog, public, pg_temp
   AS $$
-    INSERT INTO public."user" (clerk_id, email, first_name, last_name)
-    VALUES (create_user_for_clerk.clerk_id, create_user_for_clerk.email, create_user_for_clerk.first_name, create_user_for_clerk.last_name)
-    RETURNING id
+  DECLARE
+    v_id     uuid;
+    v_holder uuid;
+  BEGIN
+    IF create_user.provider IS DISTINCT FROM 'clerk' THEN
+      RAISE EXCEPTION 'create_user: only the clerk provider signs up here' USING ERRCODE = 'MWF02';
+    END IF;
+    FOR attempt IN 1..2 LOOP
+      BEGIN
+        INSERT INTO public."user" (email, first_name, last_name)
+        VALUES (create_user.email, create_user.first_name, create_user.last_name)
+        RETURNING id INTO v_id;
+        INSERT INTO public.user_identity (provider, subject, user_id)
+        VALUES (create_user.provider, create_user.subject, v_id);
+        RETURN v_id;
+      EXCEPTION WHEN unique_violation THEN
+        SELECT u.id INTO v_id FROM public.user_identity i JOIN public."user" u ON u.id = i.user_id
+        WHERE i.provider = create_user.provider AND i.subject = create_user.subject AND u.deleted_at IS NULL;
+        IF FOUND THEN RETURN v_id; END IF;
+        SELECT u.id INTO v_holder FROM public."user" u WHERE u.email = create_user.email;
+        IF FOUND THEN
+          RAISE EXCEPTION 'first login refused: the email belongs to another account'
+            USING ERRCODE = 'MWF01', DETAIL = v_holder::text;
+        END IF;
+        IF attempt = 2 THEN RAISE; END IF;
+      END;
+    END LOOP;
+    RETURN NULL;  -- not reached: the second attempt returns or raises
+  END
   $$;
+COMMENT ON FUNCTION app.create_user(public.identity_provider, text, text, text, text) IS 'First login (clerk only; MWF02 otherwise): a human user (canonical email) and its identity. The same identity of a live user created concurrently returns that user; an email held by another account raises MWF01 with the holder''s id as DETAIL (for logging only) — never a re-bind.';
 -- mwf_auth only: first-login creation.
-REVOKE EXECUTE ON FUNCTION app.create_user_for_clerk(text, text, text, text) FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION app.create_user_for_clerk(text, text, text, text) TO mwf_auth;
+REVOKE EXECUTE ON FUNCTION app.create_user(public.identity_provider, text, text, text, text) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION app.create_user(public.identity_provider, text, text, text, text) TO mwf_auth;
 
 -- Hand the definer functions to mwf_job (TS-1 order, measured there with a
 -- non-superuser migrator): CREATE on the schema for the hand-over only. Their
@@ -695,8 +750,8 @@ ALTER FUNCTION app.need_share(uuid, text) OWNER TO mwf_job;
 ALTER FUNCTION app.need_revoke_share(uuid) OWNER TO mwf_job;
 ALTER FUNCTION app.anonymize_user_in_session(uuid, uuid) OWNER TO mwf_job;
 ALTER FUNCTION app.anonymize_user_account(uuid) OWNER TO mwf_job;
-ALTER FUNCTION app.resolve_user_by_clerk_id(text) OWNER TO mwf_job;
-ALTER FUNCTION app.create_user_for_clerk(text, text, text, text) OWNER TO mwf_job;
+ALTER FUNCTION app.resolve_user(public.identity_provider, text) OWNER TO mwf_job;
+ALTER FUNCTION app.create_user(public.identity_provider, text, text, text, text) OWNER TO mwf_job;
 REVOKE CREATE ON SCHEMA app FROM mwf_job;
 
 -- ---------------------------------------------------------------------------
@@ -1474,7 +1529,7 @@ BEGIN
   IF n <> 4 THEN RAISE EXCEPTION 'step 20: % json_schema rows, expected 4', n; END IF;
 
   -- Every uuid column of a table is a uuid7 (tables.sql): 33 primary keys
-  -- defaulting to uuidv7() and the 95 columns that reference them.
+  -- defaulting to uuidv7() and the 100 columns that reference them.
   SELECT string_agg(c.relname || '.' || a.attname, ', ' ORDER BY c.relname, a.attname) INTO bad
   FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid JOIN pg_namespace s ON s.oid = c.relnamespace
   WHERE s.nspname = 'public' AND c.relkind = 'r' AND a.attnum > 0 AND NOT a.attisdropped

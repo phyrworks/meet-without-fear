@@ -87,7 +87,7 @@ describeTarget('target writer — FEEL_HEARD_B as written (target fixture templa
         { email: 'bob@e2e.test', keys: ['compact_signed', 'feel_heard'] },
       ]);
       expect(await q(`SELECT count(*)::int AS n FROM message`)).toEqual([{ n: 23 }]);
-      expect(await q(`SELECT name FROM "user" ORDER BY email`)).toEqual([
+      expect(await q(`SELECT name FROM "user" WHERE kind = 'human' ORDER BY email`)).toEqual([
         { name: 'Ada Lovelace' },
         { name: 'Bob Ross' },
       ]);

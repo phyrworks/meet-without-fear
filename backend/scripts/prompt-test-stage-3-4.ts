@@ -10,7 +10,9 @@
  *   cd backend && npx tsx scripts/prompt-test-stage-3-4.ts
  *
  * Requires:
- *   - Backend running on localhost:3000 with E2E_AUTH_BYPASS=true, MOCK_LLM=false
+ *   - Backend running on localhost:3000 with E2E_AUTH_BYPASS=true, NODE_ENV=development
+ *     (or test; the bypass is off and the server refuses to start otherwise,
+ *     see src/lib/e2e-bypass.ts), MOCK_LLM=false
  */
 
 const API_BASE = process.env.API_BASE_URL || 'http://localhost:3000';

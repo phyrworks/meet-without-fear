@@ -31,13 +31,19 @@ export function appUrlFor(t: { host: string; port: number }, database: string): 
   return `postgresql://mwf_app:${pw}@${t.host}:${t.port}/${database}`;
 }
 
+/** The pre-identity bootstrap role on a run database (dev password; GOLDEN_AUTH_PASSWORD overrides). work-k5fk.1. */
+export function authUrlFor(t: { host: string; port: number }, database: string): string {
+  const pw = encodeURIComponent(process.env.GOLDEN_AUTH_PASSWORD ?? 'mwf_auth_dev');
+  return `postgresql://mwf_auth:${pw}@${t.host}:${t.port}/${database}`;
+}
+
 export interface TargetRun {
   fx: RestoredFixture;
   /** Superuser SQL on the run database (setup and assertions only). */
   sql<T extends Record<string, unknown>>(text: string, params?: unknown[]): Promise<T[]>;
   /** One statement as `role`, with the identity bound the way prisma-identity binds it. */
   as<T extends Record<string, unknown>>(
-    role: 'mwf_app' | 'mwf_job',
+    role: 'mwf_app' | 'mwf_job' | 'mwf_auth',
     userId: string | null,
     text: string,
     params?: unknown[],
@@ -50,6 +56,7 @@ export async function openTargetRun(stage: string, runId: string): Promise<Targe
   process.env.DATABASE_URL = fx.url;
   process.env.APP_DATABASE_URL = appUrlFor(fx.target, fx.database);
   process.env.JOB_DATABASE_URL = jobUrlFor(fx.target, fx.database);
+  process.env.AUTH_DATABASE_URL = authUrlFor(fx.target, fx.database);
   process.env.DB_IDENTITY_BINDING = 'on';
   process.env.MOCK_LLM = 'true';
   const sql = async <T extends Record<string, unknown>>(text: string, params: unknown[] = []): Promise<T[]> =>
@@ -57,12 +64,17 @@ export async function openTargetRun(stage: string, runId: string): Promise<Targe
   // No stand-in grant (work-k5fk.10.1): the run database is mwf_migrator's, so
   // mwf_app and mwf_job hold exactly the baseline's grants.
   const as = async <T extends Record<string, unknown>>(
-    role: 'mwf_app' | 'mwf_job',
+    role: 'mwf_app' | 'mwf_job' | 'mwf_auth',
     userId: string | null,
     text: string,
     params: unknown[] = [],
   ): Promise<T[]> => {
-    const url = role === 'mwf_app' ? appUrlFor(fx.target, fx.database) : jobUrlFor(fx.target, fx.database);
+    const url =
+      role === 'mwf_app'
+        ? appUrlFor(fx.target, fx.database)
+        : role === 'mwf_auth'
+          ? authUrlFor(fx.target, fx.database)
+          : jobUrlFor(fx.target, fx.database);
     const c = new Client({ connectionString: url });
     await c.connect();
     try {

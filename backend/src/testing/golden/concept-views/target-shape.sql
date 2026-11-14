@@ -35,11 +35,17 @@
 -- ============================================================================
 
 
--- user — spec §1.7. `name` is the generated column.
+-- user — spec §1.7. `name` is the generated column. work-k5fk.1: the
+-- old clerk_id is the user's sign-in subject in user_identity (a fixture user
+-- and an E2E-bypass user have exactly one, of provider e2e). The scalar
+-- subquery has no LIMIT on purpose: a user with two identities has no single
+-- old clerk_id, and the snapshot fails ("more than one row returned by a
+-- subquery") rather than pick one. The old shape had only accounts, so the AI
+-- principal and personas (kind ai / persona) are not projected.
 CREATE VIEW old_concept_user AS
 SELECT
   u.id,
-  u.clerk_id,
+  (SELECT i.subject FROM user_identity i WHERE i.user_id = u.id) AS clerk_id,
   u.email,
   u.first_name,
   u.last_name,
@@ -47,7 +53,8 @@ SELECT
   u.deleted_at AT TIME ZONE 'UTC' AS deleted_at,
   u.created_at AT TIME ZONE 'UTC' AS created_at,
   u.updated_at AT TIME ZONE 'UTC' AS updated_at
-FROM "user" u;
+FROM "user" u
+WHERE u.kind = 'human';
 
 
 -- session — spec §1.1.

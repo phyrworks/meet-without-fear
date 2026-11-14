@@ -291,9 +291,9 @@ describeTarget('the email domain (target)', () => {
   it('the tombstone CHECK accepts exactly deleted+<id>@invalid: not a case variant, not the old form, not a live address', async () => {
     const tombstone = async (email: string) => {
       const id = randomUuidV7();
-      await run.sql(`INSERT INTO "user" (id, email, clerk_id) VALUES ($1, $2, $3)`, [id, `t-${id}@x.test`, `c-${id}`]);
+      await run.sql(`INSERT INTO "user" (id, email) VALUES ($1, $2)`, [id, `t-${id}@x.test`]);
       try {
-        await run.sql(`UPDATE "user" SET clerk_id = NULL, deleted_at = now(), email = replace($2, '<id>', $1::text) WHERE id = $1`, [
+        await run.sql(`UPDATE "user" SET deleted_at = now(), email = replace($2, '<id>', $1::text) WHERE id = $1`, [
           id,
           email,
         ]);

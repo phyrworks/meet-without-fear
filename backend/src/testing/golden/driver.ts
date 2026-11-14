@@ -389,8 +389,21 @@ export async function createHarness(opts: {
   // this run's own and every fixture value predates it.
   const startedAt = new Date().toISOString();
 
+  // work-k5fk.1: a user_identity row is keyed in the diff by (user_id, provider)
+  // — the user's one identity per provider, what user.clerk_id was — not by its
+  // PK (provider, subject): the E2E bypass rewrites the seeded e2e subject in
+  // place (middleware/auth.ts bindE2EIdentity), which by PK would read as a
+  // removed row plus an added one rather than the clerk_id change the
+  // baselines recorded on User.
   const snapshot = (tables: string[]): Promise<Snapshot> =>
-    takeSnapshot({ target: fixture.target, database: fixture.database, tables });
+    takeSnapshot({
+      target: fixture.target,
+      database: fixture.database,
+      tables,
+      keys: tables.includes('user_identity')
+        ? { user_identity: { identity: ['user_id', 'provider'], orderBy: ['user_id', 'provider'] } }
+        : {},
+    });
 
   // Sentinel tokens have to be unique against the whole container log, which
   // holds every run this machine has ever done. Restricted to the token

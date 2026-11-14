@@ -172,10 +172,15 @@ export function revealedAtFor(
 }
 
 const q = {
-  user: `INSERT INTO "user" (email, clerk_id, first_name, last_name, created_at, updated_at)
-         VALUES ($1, $2, $3, $4, $5, $6)
+  user: `INSERT INTO "user" (email, first_name, last_name, created_at, updated_at)
+         VALUES ($1, $2, $3, $4, $5)
          ON CONFLICT (email) DO UPDATE SET first_name = EXCLUDED.first_name, last_name = EXCLUDED.last_name
          RETURNING id, email, name`,
+  // The seeded sign-in identity (work-k5fk.1; was user.clerk_id): the e2e provider, the
+  // state factory's e2e_<ms>_<random> subject. A re-seeded user keeps its first one.
+  identity: `INSERT INTO user_identity (provider, subject, user_id, created_at)
+             VALUES ('e2e', $1, $2, $3)
+             ON CONFLICT DO NOTHING`,
 };
 
 /**
@@ -238,14 +243,15 @@ export async function writeTargetShape(
     // FIDELITY (header): the whole name as first_name, so name = display name = the old fixture's.
     const first = u.name.trim() || null;
     const last = null;
-    const clerk = `e2e_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    const subject = `e2e_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    const at = autoPair();
     const r = await db.query<{ id: string; email: string; name: string | null }>(q.user, [
       canonicalEmail(u.email), // user.email is canonical (work-k5fk.5)
-      clerk,
       first,
       last,
-      ...autoPair(),
+      ...at,
     ]);
+    await db.query(q.identity, [subject, r.rows[0].id, at[0]]);
     userRows.push(r.rows[0]);
   }
 

@@ -74,8 +74,13 @@ export async function deleteAccountWithNotifications(userId: string): Promise<Ac
     select: { sessionId: true },
   });
   const dataRecordsDeleted = await countPrivateRows(userId);
-  const user = await prisma.user.findUnique({ where: { id: userId }, select: { clerkId: true } });
-  const clerkId = user?.clerkId;
+  // The Clerk subject, read by the job before the walk deletes the identity
+  // (mwf_app holds nothing on user_identity; work-k5fk.1).
+  const identity = await getJobPrisma().userIdentity.findUnique({
+    where: { userId_provider: { userId, provider: 'clerk' } },
+    select: { subject: true },
+  });
+  const clerkId = identity?.subject;
 
   // The walk: one statement, one transaction, as the job
   await getJobPrisma().$executeRaw`SELECT app.anonymize_user_account(${userId}::uuid)`;

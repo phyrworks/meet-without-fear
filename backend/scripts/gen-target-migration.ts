@@ -6,7 +6,7 @@
  *   npx tsx backend/scripts/gen-target-migration.ts --check    # two runs equal, and equal to the committed file
  *
  * Owner decision OD7 (2026-10-26): existing data is demo/test and is not
- * preserved. The cutover to the 47-table target shape of
+ * preserved. The cutover to the 49-table target shape of
  * docs/backend/data-model/schema-target-2026-10.md is ONE fresh baseline
  * migration that builds the target on an empty database; there is no data
  * move. (TS-7/TS-7b's data-move generator — prechecks, copies, fix-data — is
@@ -18,7 +18,7 @@
  *      app.current_user_id();
  *   1  scripts/target-shape/tables.sql — the domains (uuid7, ciphertext, ts_ms, intensity, email,
  *      milestone_key), the
- *      enums and the 47 tables, hand-written, each table complete in its
+ *      enums and the 49 tables, hand-written, each table complete in its
  *      CREATE TABLE (PK, UNIQUE, FK, CHECK, generated columns) in dependency
  *      order (owner decision 2026-11-02, work-a39h.11.40: it replaced the
  *      `prisma migrate diff --from-empty` DDL; check-schema.sh proves
@@ -52,7 +52,7 @@ const INCLUDE = '-- @@include sql-only.sql';
  * `@@UUID7_COLUMNS@@` placeholders in the trailer's step-20 assertion, so the
  * two cannot drift.
  */
-export const UUID7_COLUMNS = 130;
+export const UUID7_COLUMNS = 133;
 const UUID7_PLACEHOLDER = '@@UUID7_COLUMNS@@';
 
 /**
@@ -78,7 +78,7 @@ export const JSONB_ENVELOPES = 5;
 const JSONB_ENVELOPES_PLACEHOLDER = '@@JSONB_ENVELOPES@@';
 
 /**
- * tables.sql creates exactly the 47 target tables in schema public (plus the
+ * tables.sql creates exactly the 49 target tables in schema public (plus the
  * app.json_schema reference table, which is not one of them), every name lower-case, and
  * types every uuid column uuid7. Returns the counts for the section title.
  */
@@ -91,7 +91,7 @@ export function checkTables(sql: string): { names: number; uuid7: number } {
   const bad = [...names].filter(n => !/^[a-z_][a-z0-9_]*$/.test(n));
   if (bad.length) throw new Error(`tables.sql creates names that are not lower-case: ${bad.join(', ')}`);
   const tables = (sql.match(/^CREATE TABLE (?!app\.)/gm) ?? []).length;
-  if (tables !== 47) throw new Error(`tables.sql creates ${tables} tables, expected 47`);
+  if (tables !== 49) throw new Error(`tables.sql creates ${tables} tables, expected 49`);
   const appTables = (sql.match(/^CREATE TABLE app\.[a-z_]+ /gm) ?? []).length;
   if (appTables !== 1) throw new Error(`tables.sql creates ${appTables} tables in schema app, expected 1 (app.json_schema)`);
   // A column line is `    name <type>…` inside a CREATE TABLE.
@@ -131,7 +131,7 @@ function trailer(): string {
 }
 
 const HEADER = `-- ============================================================================
--- target_shape_baseline — the 47-table target shape, built on an EMPTY database
+-- target_shape_baseline — the 49-table target shape, built on an EMPTY database
 -- (TS-7c; owner decision OD7, 2026-10-26: existing data is demo/test and is
 -- not preserved, so there is no data move)
 --
@@ -175,7 +175,7 @@ const HEADER = `-- =============================================================
 --   0  preamble: empty-database guard, roles, schema app, app.current_user_id()
 --      (backend/scripts/target-shape/preamble.sql)
 --   1  domains (uuid7, ciphertext, ts_ms, intensity, email, milestone_key, schema_version),
---      the jsonb validators' reference table app.json_schema and its seed, enums and the 47
+--      the jsonb validators' reference table app.json_schema and its seed, enums and the 49
 --      tables, hand-written, each table complete in its CREATE TABLE (and its grants) in
 --      dependency order, the milestone seed after its table
 --      (backend/scripts/target-shape/tables.sql)
@@ -192,7 +192,7 @@ export function generate(): string {
     HEADER,
     section('0. Preamble (backend/scripts/target-shape/preamble.sql)', fs.readFileSync(PREAMBLE, 'utf8')),
     section(
-      `1. Domains, enums and the 47 target tables (backend/scripts/target-shape/tables.sql; ${n.names} named objects, all lower-case; ${n.uuid7} uuid7 columns)`,
+      `1. Domains, enums and the 49 target tables (backend/scripts/target-shape/tables.sql; ${n.names} named objects, all lower-case; ${n.uuid7} uuid7 columns)`,
       tables,
     ),
     section('2. Trailer (backend/scripts/target-shape/trailer.sql, sql-only.sql spliced in)', trailer()),

@@ -3,16 +3,30 @@
  *
  * Clerk-based authentication for all environments.
  * Requires CLERK_SECRET_KEY to be configured.
+ *
+ * Identity (work-k5fk.1): a sign-in is a (provider, subject) row in
+ * user_identity, which the request role (mwf_app) can neither read nor write.
+ * The middleware resolves it through mwf_auth's app.resolve_user (every
+ * request) and creates it through app.create_user (first login), then reads
+ * the user row by id as the app. No path re-binds an identity to an existing
+ * account (work-bp5m, the work-jv9y fix).
  */
 
 import { Request, Response, NextFunction } from 'express';
-import { UnauthorizedError, ForbiddenError, NotFoundError } from './errors';
-import { prisma, getE2EToolingPrisma } from '../lib/prisma';
+import {
+  UnauthorizedError,
+  ForbiddenError,
+  NotFoundError,
+  EmailNotVerifiedError,
+  AccountLinkConflictError,
+} from './errors';
+import { prisma, getAuthPrisma, getE2EToolingPrisma } from '../lib/prisma';
 import { ApiResponse, ErrorCode, canonicalEmail, isUuidV7 } from '@meet-without-fear/shared';
 import { Prisma } from '../generated/prisma/client';
 import { logger } from '../lib/logger';
 import { identityBindingEnabled } from '../lib/prisma-identity';
 import { updateContext } from '../lib/request-context';
+import { isE2EBypassEnabled } from '../lib/e2e-bypass';
 import { resolveParticipant, type ResolvedParticipant } from '../services/participant-resolver';
 
 // ============================================================================
@@ -20,13 +34,14 @@ import { resolveParticipant, type ResolvedParticipant } from '../services/partic
 // ============================================================================
 
 /**
- * The authenticated account — the target `user` row (spec §1.7). Device and
- * biometric state moved to `user_device`, mood to `mood_reading`; `name` is
- * generated from the first/last names and never written.
+ * The authenticated account — a human `user` row (spec §1.7; work-k5fk.1).
+ * Device and biometric state moved to `user_device`, mood to `mood_reading`;
+ * `name` is generated from the first/last names and never written. The
+ * sign-in identity is not on it: it lives in user_identity, out of the app's
+ * reach. Only a human signs in, so `email` is always set.
  */
 export interface AuthUser {
   id: string;
-  clerkId: string | null;
   email: string;
   name: string | null;
   firstName: string | null;
@@ -50,6 +65,17 @@ declare global {
       participant?: ResolvedParticipant;
     }
   }
+}
+
+type UserRow = Omit<AuthUser, 'email'> & { email: string | null; kind: string };
+
+/** The row as the request sees it. A sign-in resolves only to a human, which always has an email (CHECK). */
+export function toAuthUser(row: UserRow): AuthUser {
+  if (row.kind !== 'human' || row.email === null) {
+    throw new UnauthorizedError('Only a human account signs in');
+  }
+  const { kind: _kind, ...user } = row;
+  return { ...user, email: row.email };
 }
 
 // ============================================================================
@@ -80,15 +106,25 @@ async function verifyClerkToken(req: Request): Promise<string | null> {
   }
 }
 
+/** The live user a (provider, subject) belongs to, through mwf_auth's definer function. */
+async function resolveUserId(provider: 'clerk' | 'e2e', subject: string): Promise<string | null> {
+  const rows = await getAuthPrisma().$queryRaw<Array<{ id: string | null }>>`SELECT app.resolve_user(${provider}::identity_provider, ${subject})::text AS id`;
+  return rows[0]?.id ?? null;
+}
+
+/** The user row by id, as the app (mwf_app SELECT). */
+async function loadUser(id: string): Promise<AuthUser | null> {
+  const row = await prisma.user.findUnique({ where: { id } });
+  return row ? toAuthUser(row) : null;
+}
+
 /**
  * E2E auth bypass handler
- * When E2E_AUTH_BYPASS=true AND NODE_ENV is not production, accepts x-e2e-user-id and x-e2e-user-email headers
+ * Only when isE2EBypassEnabled() (E2E_AUTH_BYPASS=true and NODE_ENV test,
+ * development or e2e), accepts x-e2e-user-id and x-e2e-user-email headers
  */
 async function handleE2EAuthBypass(req: Request): Promise<boolean> {
-  if (process.env.E2E_AUTH_BYPASS !== 'true') {
-    return false;
-  }
-  if (process.env.NODE_ENV === 'production') {
+  if (!isE2EBypassEnabled()) {
     return false;
   }
 
@@ -108,10 +144,9 @@ async function handleE2EAuthBypass(req: Request): Promise<boolean> {
     throw new UnauthorizedError('x-e2e-user-id must be a UUIDv7');
   }
 
-  const e2eClerkId = `e2e_${e2eUserId}`;
   // The bypass is E2E tooling: it creates a user with a caller-chosen id, which
   // no production request does, so it writes on the tooling connection, never
-  // the app's (mwf_app has no INSERT of user.id; work-k5fk.10.1).
+  // the app's (mwf_app has no INSERT on user; work-k5fk.10.1, work-bp5m).
   const tooling = getE2EToolingPrisma();
 
   let user;
@@ -119,8 +154,8 @@ async function handleE2EAuthBypass(req: Request): Promise<boolean> {
     // Primary path: tie auth identity to E2E user ID
     user = await tooling.user.upsert({
       where: { id: e2eUserId },
-      create: { id: e2eUserId, email: e2eEmail, clerkId: e2eClerkId },
-      update: { email: e2eEmail, clerkId: e2eClerkId },
+      create: { id: e2eUserId, email: e2eEmail },
+      update: { email: e2eEmail },
     });
   } catch (error) {
     // Guard against transient unique conflicts (parallel E2E requests)
@@ -129,9 +164,7 @@ async function handleE2EAuthBypass(req: Request): Promise<boolean> {
     }
 
     user = await tooling.user.findFirst({
-      where: {
-        OR: [{ id: e2eUserId }, { clerkId: e2eClerkId }, { email: e2eEmail }],
-      },
+      where: { OR: [{ id: e2eUserId }, { email: e2eEmail }] },
     });
     if (!user) {
       throw error;
@@ -139,12 +172,111 @@ async function handleE2EAuthBypass(req: Request): Promise<boolean> {
 
     user = await tooling.user.update({
       where: { id: user.id },
-      data: { email: e2eEmail, clerkId: e2eClerkId },
+      data: { email: e2eEmail },
     });
   }
 
-  req.user = user;
+  await bindE2EIdentity(user.id, `e2e_${e2eUserId}`);
+  req.user = toAuthUser(user);
   return true;
+}
+
+/**
+ * The bypass's sign-in identity: the user's one e2e identity carries
+ * `e2e_<x-e2e-user-id>`, as user.clerk_id did before work-k5fk.1 (a fixture's
+ * seeded e2e_<ms>_<random> subject is rewritten in place on first use, the
+ * same change the goldens recorded on clerk_id). Tooling only, never production.
+ */
+async function bindE2EIdentity(userId: string, subject: string): Promise<void> {
+  const tooling = getE2EToolingPrisma();
+  const key = { userId_provider: { userId, provider: 'e2e' as const } };
+  const existing = await tooling.userIdentity.findUnique({ where: key });
+  if (existing?.subject === subject) return;
+  try {
+    if (existing) await tooling.userIdentity.update({ where: key, data: { subject } });
+    else await tooling.userIdentity.create({ data: { provider: 'e2e', subject, userId } });
+  } catch (error) {
+    // A parallel request of the same user bound it first.
+    if (!(error instanceof Prisma.PrismaClientKnownRequestError) || error.code !== 'P2002') throw error;
+    const now = await tooling.userIdentity.findUnique({ where: key });
+    if (now?.subject !== subject) throw error;
+  }
+}
+
+/** The Clerk primary email shape this middleware reads (the SDK's User has more). */
+interface ClerkEmailProfile {
+  primaryEmailAddressId: string | null;
+  emailAddresses: ReadonlyArray<{
+    id: string;
+    emailAddress: string;
+    verification: { status: string } | null;
+  }>;
+}
+
+/**
+ * The Clerk user's primary email address, only when Clerk reports it verified,
+ * in canonical form (canonicalEmail: user.email is canonical, work-k5fk.5).
+ *
+ * Zero trust on Clerk's instance settings: whatever the dashboard allows
+ * (unverified sign-ups, extra addresses), a user row only ever gets an email
+ * its owner has proven. emailAddresses[0] is not necessarily the primary.
+ */
+export function verifiedPrimaryEmail(clerkUser: ClerkEmailProfile): string | null {
+  const primary = clerkUser.emailAddresses.find(e => e.id === clerkUser.primaryEmailAddressId);
+  if (!primary || primary.verification?.status !== 'verified') return null;
+  return canonicalEmail(primary.emailAddress) || null;
+}
+
+/**
+ * Security/support event for a refused first login. Carries ids only, never
+ * the email or a name: logs reach CloudWatch, and error level reaches Sentry.
+ * Warn level: the request is refused safely, but support needs to find it.
+ */
+function logIdentityConflict(incomingClerkUserId: string, existingUserId: string | null): void {
+  logger.warn('[Auth] auth.identity_conflict: first login refused, email belongs to another account', {
+    event: 'auth.identity_conflict',
+    existingUserId,
+    incomingClerkUserId,
+  });
+}
+
+/**
+ * The SQLSTATE and DETAIL of a database error raised by a raw query
+ * (Prisma P2010: @prisma/adapter-pg passes them through as
+ * meta.driverAdapterError.cause.code / .detail for an app-defined SQLSTATE).
+ */
+function pgRaise(error: unknown): { code?: string; detail?: string } {
+  const cause = (error as { meta?: { driverAdapterError?: { cause?: Record<string, unknown> } } } | null)?.meta
+    ?.driverAdapterError?.cause;
+  const str = (v: unknown) => (typeof v === 'string' ? v : undefined);
+  return { code: str(cause?.originalCode) ?? str(cause?.code), detail: str(cause?.detail) };
+}
+
+/** app.create_user's refusal: the email belongs to another account (DETAIL: the holder's id). */
+const EMAIL_HELD_ELSEWHERE = 'MWF01';
+
+/**
+ * Create the user and its Clerk identity for a first-seen subject, through
+ * mwf_auth's app.create_user. The function resolves the concurrent-create
+ * race for the same subject (returns that user) and retries once when the
+ * email's holder vanished. MWF01 means the email belongs to another account:
+ * refuse (409), never re-bind (work-jv9y). Anything else — a unique_violation
+ * on the identity key included — is not that case and is rethrown.
+ */
+async function createFirstLoginUser(
+  clerkUserId: string,
+  profile: { email: string; firstName: string | null; lastName: string | null },
+): Promise<string> {
+  try {
+    const rows = await getAuthPrisma().$queryRaw<Array<{ id: string }>>`SELECT app.create_user('clerk'::identity_provider, ${clerkUserId}, ${profile.email}, ${profile.firstName}, ${profile.lastName})::text AS id`;
+    return rows[0].id;
+  } catch (error) {
+    const { code, detail } = pgRaise(error);
+    if (code !== EMAIL_HELD_ELSEWHERE) throw error;
+    // The holder's id is for the support log only: it decides nothing.
+    logIdentityConflict(clerkUserId, detail ?? null);
+    throw new AccountLinkConflictError();
+  }
 }
 
 /**
@@ -198,68 +330,44 @@ async function handleClerkAuth(req: Request, res: Response, next: NextFunction, 
   }
 
   try {
-    // Fast path: look up existing user from our DB without calling Clerk API.
+    // Fast path: resolve the identity in our DB without calling Clerk API.
     // This eliminates an external HTTP call on every authenticated request,
     // preventing Clerk rate-limit (429) errors under high request volume.
-    let user = await prisma.user.findUnique({ where: { clerkId: clerkUserId } });
+    let userId = await resolveUserId('clerk', clerkUserId);
 
-    if (user) {
-      // User exists — use DB record directly. Profile data (name/email) is
-      // synced via Clerk webhooks or on first auth; no need to fetch every time.
-      req.user = user;
-      req.clerkUserId = clerkUserId;
-      next();
-      return;
-    }
-
-    // Slow path: new user — fetch details from Clerk to populate initial record.
-    let clerkUser;
-    try {
-      const { clerkClient } = await import('@clerk/express');
-      clerkUser = await clerkClient.users.getUser(clerkUserId);
-    } catch (clerkError) {
-      // Clerk API may fail due to rate-limiting (429) under burst traffic.
-      // Another concurrent request may have already created the user — retry DB lookup.
-      const retryUser = await prisma.user.findUnique({ where: { clerkId: clerkUserId } });
-      if (retryUser) {
-        req.user = retryUser;
-        req.clerkUserId = clerkUserId;
-        next();
-        return;
+    if (!userId) {
+      // Slow path: new identity — fetch details from Clerk to populate the initial record.
+      let clerkUser;
+      try {
+        const { clerkClient } = await import('@clerk/express');
+        clerkUser = await clerkClient.users.getUser(clerkUserId);
+      } catch (clerkError) {
+        // Clerk API may fail due to rate-limiting (429) under burst traffic.
+        // Another concurrent request may have already created the user — retry the lookup.
+        userId = await resolveUserId('clerk', clerkUserId);
+        if (!userId) throw clerkError;
       }
-      throw clerkError;
-    }
 
-    // user.email is canonical (work-k5fk.5): writes and the P2002 lookup below use one form.
-    const email = canonicalEmail(clerkUser.emailAddresses[0]?.emailAddress || `${clerkUserId}@pending.clerk`);
-    const firstName = clerkUser.firstName || null;
-    const lastName = clerkUser.lastName || null;
-
-    try {
-      // `name` is GENERATED from first/last (spec §1.7): never written.
-      user = await prisma.user.create({
-        data: { clerkId: clerkUserId, email, firstName, lastName },
-      });
-    } catch (error) {
-      // Concurrent create race, or a local account already exists for this
-      // Clerk email. Resolve by identity first, then by email.
-      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
-        user =
-          (await prisma.user.findUnique({ where: { clerkId: clerkUserId } })) ||
-          (await prisma.user.findUnique({ where: { email } }));
-        if (!user) throw error;
-
-        if (user.clerkId !== clerkUserId) {
-          user = await prisma.user.update({
-            where: { id: user.id },
-            data: { clerkId: clerkUserId, email, firstName, lastName },
-          });
+      if (!userId) {
+        const email = verifiedPrimaryEmail(clerkUser as unknown as ClerkEmailProfile);
+        if (!email) {
+          // No row is created for an identity whose email we cannot trust: a row's
+          // email is what invitations, display and support match a person by.
+          throw new EmailNotVerifiedError();
         }
-      } else {
-        throw error;
+        // `name` is GENERATED from first/last (spec §1.7): never written. Profile
+        // data is copied from Clerk once, at first login; there are no Clerk
+        // webhooks, so later Clerk-side changes are not synced.
+        userId = await createFirstLoginUser(clerkUserId, {
+          email,
+          firstName: clerkUser?.firstName || null,
+          lastName: clerkUser?.lastName || null,
+        });
       }
     }
 
+    const user = await loadUser(userId);
+    if (!user) throw new UnauthorizedError('Authentication required');
     req.user = user;
     req.clerkUserId = clerkUserId;
     next();

@@ -7,6 +7,7 @@
 
 import rateLimit, { type Options } from 'express-rate-limit';
 import { Request } from 'express';
+import { isE2EBypassEnabled } from '../lib/e2e-bypass';
 
 /**
  * Key generator: uses authenticated user ID when available, falls back to IP.
@@ -38,7 +39,7 @@ export const streamingRateLimit = rateLimit({
       message: 'Too many messages. Please wait a moment before sending another.',
     },
   },
-  skip: () => process.env.E2E_AUTH_BYPASS === 'true' && process.env.NODE_ENV !== 'production',
+  skip: () => isE2EBypassEnabled(),
   validate,
 });
 
@@ -59,7 +60,7 @@ export const empathyRateLimit = rateLimit({
       message: 'Too many requests. Please wait a moment.',
     },
   },
-  skip: () => process.env.E2E_AUTH_BYPASS === 'true' && process.env.NODE_ENV !== 'production',
+  skip: () => isE2EBypassEnabled(),
   validate,
 });
 
@@ -80,7 +81,7 @@ export const authRateLimit = rateLimit({
       message: 'Too many auth requests. Please wait a moment.',
     },
   },
-  skip: () => process.env.E2E_AUTH_BYPASS === 'true' && process.env.NODE_ENV !== 'production',
+  skip: () => isE2EBypassEnabled(),
   validate,
 });
 
@@ -101,7 +102,7 @@ export const invitationLookupRateLimit = rateLimit({
       message: 'Too many requests. Please wait a moment.',
     },
   },
-  skip: () => process.env.E2E_AUTH_BYPASS === 'true' && process.env.NODE_ENV !== 'production',
+  skip: () => isE2EBypassEnabled(),
   validate,
 });
 
@@ -122,6 +123,6 @@ export const globalRateLimit = rateLimit({
       message: 'Too many requests. Please slow down.',
     },
   },
-  skip: () => process.env.E2E_AUTH_BYPASS === 'true' && process.env.NODE_ENV !== 'production',
+  skip: () => isE2EBypassEnabled(),
   validate,
 });

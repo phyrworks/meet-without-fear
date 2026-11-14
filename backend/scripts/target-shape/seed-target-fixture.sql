@@ -28,18 +28,29 @@ BEGIN
   IF current_database() !~ '^ts7_[a-z0-9_]+$' THEN
     RAISE EXCEPTION 'seed-target-fixture.sql only runs on a ts7_* scratch database, not %', current_database();
   END IF;
-  IF EXISTS (SELECT 1 FROM "user") THEN
-    RAISE EXCEPTION 'seed-target-fixture.sql expects an empty database (table "user" has rows)';
+  IF EXISTS (SELECT 1 FROM "user" WHERE kind <> 'ai') THEN
+    RAISE EXCEPTION 'seed-target-fixture.sql expects an empty database (table "user" has rows besides the seeded AI principal)';
   END IF;
 END
 $$;
 
-INSERT INTO "user" (id, email, first_name, last_name, clerk_id) VALUES
-  ('00000000-0000-7e00-8000-0000000000a1', 'a@ts7c.test', 'Ada', 'Lovelace', 'clerk_ts7c_a'),
-  ('00000000-0000-7e00-8000-0000000000b1', 'b@ts7c.test', 'Bob', 'Ross', 'clerk_ts7c_b'),
-  ('00000000-0000-7e00-8000-0000000000c1', 'c@ts7c.test', 'Cy', 'Young', 'clerk_ts7c_c'),
-  ('00000000-0000-7e00-8000-0000000000d1', 'd@ts7c.test', 'Di', 'Prince', 'clerk_ts7c_d'),
-  ('00000000-0000-7e00-8000-0000000000f1', 'outsider@ts7c.test', 'Out', 'Sider', 'clerk_ts7c_o');
+INSERT INTO "user" (id, email, first_name, last_name) VALUES
+  ('00000000-0000-7e00-8000-0000000000a1', 'a@ts7c.test', 'Ada', 'Lovelace'),
+  ('00000000-0000-7e00-8000-0000000000b1', 'b@ts7c.test', 'Bob', 'Ross'),
+  ('00000000-0000-7e00-8000-0000000000c1', 'c@ts7c.test', 'Cy', 'Young'),
+  ('00000000-0000-7e00-8000-0000000000d1', 'd@ts7c.test', 'Di', 'Prince'),
+  ('00000000-0000-7e00-8000-0000000000f1', 'outsider@ts7c.test', 'Out', 'Sider');
+INSERT INTO user_identity (provider, subject, user_id) VALUES
+  ('clerk', 'user_ts7cAda', '00000000-0000-7e00-8000-0000000000a1'),
+  ('clerk', 'user_ts7cBob', '00000000-0000-7e00-8000-0000000000b1'),
+  ('clerk', 'user_ts7cCy', '00000000-0000-7e00-8000-0000000000c1'),
+  ('clerk', 'user_ts7cDi', '00000000-0000-7e00-8000-0000000000d1'),
+  ('e2e', 'e2e_ts7c_outsider', '00000000-0000-7e00-8000-0000000000f1');
+-- A persona owned by Di (work-k5fk.3): functions-caller-tests.sql deletes Di's account and checks the scrub.
+INSERT INTO "user" (id, kind, first_name, last_name) VALUES
+  ('00000000-0000-7e00-8000-0000000000a9', 'persona', 'Imagined', 'Partner');
+INSERT INTO persona (user_id, owner_user_id) VALUES
+  ('00000000-0000-7e00-8000-0000000000a9', '00000000-0000-7e00-8000-0000000000d1');
 
 INSERT INTO user_preferences (user_id, doc) VALUES
   ('00000000-0000-7e00-8000-0000000000b1', '{"memory": {}, "notifications": {}, "privacy": {"showActivityStatus": false}}');

@@ -1,8 +1,15 @@
 /**
  * TS-12, real roles on a clone of the INNER_WORK_LINKED_A target fixture: the
- * auth middleware against the target `user` table (identity only; `name` is
- * generated) and requireSessionAccess's participant rules. Clerk is mocked at
- * its SDK boundary; the database is real (mwf_app, identity binding on).
+ * auth middleware against the target `user` / `user_identity` tables
+ * (work-k5fk.1) and requireSessionAccess's participant rules. Clerk is mocked
+ * at its SDK boundary; the database is real (mwf_app for the request,
+ * mwf_auth for app.resolve_user / app.create_user, identity binding on).
+ *
+ * First login (work-bp5m, the work-jv9y fix ported onto user_identity): only a
+ * VERIFIED PRIMARY email creates a row (403 EMAIL_NOT_VERIFIED otherwise, no
+ * placeholder row); an email that belongs to another account is 409
+ * ACCOUNT_LINK_CONFLICT and nothing is re-bound (warn auth.identity_conflict,
+ * ids only); the concurrent-create race for the same subject still resolves.
  *
  * Replaces the Prisma-mock tests of middleware/__tests__/auth.test.ts.
  * Requires: npx tsx src/testing/golden/cli.ts build INNER_WORK_LINKED_A
@@ -21,11 +28,32 @@ jest.mock('@clerk/express', () => ({
 const describeTarget = isTargetShape() ? describe : describe.skip;
 jest.setTimeout(180_000);
 
-describeTarget('auth middleware on the target user table', () => {
+type ClerkEmail = { id: string; emailAddress: string; verification: { status: string } | null };
+const verified = (id: string, emailAddress: string): ClerkEmail => ({
+  id,
+  emailAddress,
+  verification: { status: 'verified' },
+});
+const unverified = (id: string, emailAddress: string): ClerkEmail => ({
+  id,
+  emailAddress,
+  verification: { status: 'unverified' },
+});
+function clerkUser(opts: {
+  primaryEmailAddressId: string | null;
+  emailAddresses: ClerkEmail[];
+  firstName?: string | null;
+  lastName?: string | null;
+}) {
+  return { firstName: null, lastName: null, ...opts };
+}
+
+describeTarget('auth middleware on the target user / user_identity tables', () => {
   let run: TargetRun;
   let ids: Awaited<ReturnType<typeof adaAndBob>>;
   let app: never;
   let request: (a: never) => import('supertest').SuperTest<import('supertest').Test>;
+  let logger: typeof import('../../lib/logger').logger;
 
   beforeAll(async () => {
     run = await openTargetRun('INNER_WORK_LINKED_A', `ts12_auth_${process.pid}`);
@@ -35,6 +63,7 @@ describeTarget('auth middleware on the target user table', () => {
     request = (await import('supertest')).default as never;
     const appModule = await import('../../app');
     app = ((appModule as { default?: unknown }).default ?? appModule) as never;
+    logger = (await import('../../lib/logger')).logger;
   });
   afterAll(async () => {
     delete process.env.CLERK_SECRET_KEY;
@@ -44,58 +73,186 @@ describeTarget('auth middleware on the target user table', () => {
     mockVerifyToken.mockReset();
     mockGetUser.mockReset();
     process.env.E2E_AUTH_BYPASS = 'false';
+    jest.restoreAllMocks();
   });
 
   const me = (token = 't') => request(app).get('/api/v1/auth/me').set('authorization', `Bearer ${token}`);
+  const identityOf = (subject: string) =>
+    run.sql<{ user_id: string }>(`SELECT user_id FROM user_identity WHERE provider = 'clerk' AND subject = $1`, [
+      subject,
+    ]);
+  const userByEmail = (email: string) =>
+    run.sql<{ id: string; email: string; first_name: string | null; last_name: string | null; updated_at: Date }>(
+      `SELECT id, email, first_name, last_name, updated_at FROM "user" WHERE email = $1`,
+      [email],
+    );
 
-  it('an existing user is resolved by clerk_id from the database alone (no Clerk profile call)', async () => {
-    const [ada] = await run.sql<{ clerk_id: string }>(`SELECT clerk_id FROM "user" WHERE id = $1`, [ids.adaUser]);
-    mockVerifyToken.mockResolvedValue({ sub: ada.clerk_id });
+  it('an existing user is resolved through app.resolve_user from the database alone (no Clerk profile call)', async () => {
+    await run.sql(`INSERT INTO user_identity (provider, subject, user_id) VALUES ('clerk', 'user_ts12Ada', $1)`, [
+      ids.adaUser,
+    ]);
+    mockVerifyToken.mockResolvedValue({ sub: 'user_ts12Ada' });
     const res = await me();
     expect(res.status).toBe(200);
     expect(res.body.data.user).toMatchObject({ id: ids.adaUser, email: 'ada@e2e.test' });
     expect(mockGetUser).not.toHaveBeenCalled();
   });
 
-  it('a new Clerk user gets a user row with first/last names (name generated from them)', async () => {
-    mockVerifyToken.mockResolvedValue({ sub: 'clerk_ts12_new' });
-    mockGetUser.mockResolvedValue({
-      emailAddresses: [{ emailAddress: 'newbie@example.test' }],
-      firstName: 'New',
-      lastName: 'Bie',
-    });
+  it('a new Clerk user gets a user row and an identity (verified primary, not emailAddresses[0])', async () => {
+    mockVerifyToken.mockResolvedValue({ sub: 'user_ts12New' });
+    mockGetUser.mockResolvedValue(
+      clerkUser({
+        primaryEmailAddressId: 'idn_p',
+        emailAddresses: [verified('idn_d', 'decoy@example.test'), verified('idn_p', '  NewBie@Example.TEST ')],
+        firstName: 'New',
+        lastName: 'Bie',
+      }),
+    );
     const res = await me();
     expect(res.status).toBe(200);
-    expect(await run.sql(`SELECT first_name, last_name, name FROM "user" WHERE clerk_id = 'clerk_ts12_new'`)).toEqual([
-      { first_name: 'New', last_name: 'Bie', name: 'New Bie' },
-    ]);
+    const [row] = await userByEmail('newbie@example.test');
+    expect(row).toMatchObject({ first_name: 'New', last_name: 'Bie' });
+    expect(await identityOf('user_ts12New')).toEqual([{ user_id: row.id }]);
+    expect(res.body.data.user).toMatchObject({ id: row.id, email: 'newbie@example.test' });
+    expect(await userByEmail('decoy@example.test')).toEqual([]);
     // …and the next request takes the fast path
     mockGetUser.mockReset();
     expect((await me()).status).toBe(200);
     expect(mockGetUser).not.toHaveBeenCalled();
   });
 
-  it('a local account with the Clerk email is linked to the Clerk identity (unique-email race)', async () => {
+  it.each([
+    [
+      'an unverified primary',
+      clerkUser({
+        primaryEmailAddressId: 'idn_u',
+        emailAddresses: [unverified('idn_u', 'unverified@example.test'), verified('idn_s', 'second@example.test')],
+      }),
+    ],
+    ['no primary (no placeholder <id>@pending.clerk row)', clerkUser({ primaryEmailAddressId: null, emailAddresses: [] })],
+  ])('%s is 403 EMAIL_NOT_VERIFIED and writes nothing', async (_label, profile) => {
+    const before = await run.sql<{ n: number }>(`SELECT count(*)::int AS n FROM "user"`);
+    mockVerifyToken.mockResolvedValue({ sub: 'user_ts12Unverified' });
+    mockGetUser.mockResolvedValue(profile);
+    const res = await me();
+    expect(res.status).toBe(403);
+    expect(res.body.error.code).toBe('EMAIL_NOT_VERIFIED');
+    expect(await identityOf('user_ts12Unverified')).toEqual([]);
+    expect(await run.sql(`SELECT count(*)::int AS n FROM "user"`)).toEqual(before);
+    expect(await run.sql(`SELECT 1 FROM "user" WHERE email LIKE '%pending.clerk'`)).toEqual([]);
+  });
+
+  it.each([
+    ['the same email', 'ada@e2e.test'],
+    ['a case and whitespace variant of it', '  ADA@E2E.Test\t'],
+  ])(
+    'a new Clerk identity presenting %s of an existing account is 409, never re-bound, logged with ids only',
+    async (_label, presented) => {
+      // Ada already signs in through her own identity; an attacker's Clerk account claims her address.
+      await run.sql(
+        `INSERT INTO user_identity (provider, subject, user_id) VALUES ('clerk', 'user_ts12Ada', $1) ON CONFLICT DO NOTHING`,
+        [ids.adaUser],
+      );
+      const [victim] = await userByEmail('ada@e2e.test');
+      const warn = jest.spyOn(logger, 'warn');
+      const error = jest.spyOn(logger, 'error');
+      const info = jest.spyOn(logger, 'info');
+      mockVerifyToken.mockResolvedValue({ sub: 'user_ts12Intruder' });
+      mockGetUser.mockResolvedValue(
+        clerkUser({
+          primaryEmailAddressId: 'idn_a',
+          emailAddresses: [verified('idn_a', presented)],
+          firstName: 'Attacker',
+          lastName: 'Person',
+        }),
+      );
+
+      const res = await me();
+
+      expect(res.status).toBe(409);
+      expect(res.body.error.code).toBe('ACCOUNT_LINK_CONFLICT');
+      expect(JSON.stringify(res.body)).not.toContain('ada@e2e.test');
+      expect(await userByEmail('ada@e2e.test')).toEqual([victim]);
+      expect(await identityOf('user_ts12Intruder')).toEqual([]);
+      expect(await identityOf('user_ts12Ada')).toEqual([{ user_id: ids.adaUser }]);
+
+      const calls = [...warn.mock.calls, ...error.mock.calls, ...info.mock.calls];
+      const conflict = calls.filter(c => JSON.stringify(c).includes('auth.identity_conflict'));
+      expect(conflict).toHaveLength(1);
+      expect(warn.mock.calls.some(c => JSON.stringify(c).includes('auth.identity_conflict'))).toBe(true);
+      expect(JSON.stringify(conflict[0])).toContain(ids.adaUser);
+      expect(JSON.stringify(conflict[0])).toContain('user_ts12Intruder');
+      for (const c of calls) {
+        const text = JSON.stringify(c);
+        expect(text.toLowerCase()).not.toContain('ada@e2e.test');
+        expect(text).not.toContain('Attacker');
+        expect(text).not.toContain('Lovelace');
+      }
+    },
+  );
+
+  it('an existing account with no identity at all is not claimed by its email either (409)', async () => {
     await run.sql(`INSERT INTO "user" (email, first_name) VALUES ('local@example.test', 'Local')`);
-    mockVerifyToken.mockResolvedValue({ sub: 'clerk_ts12_linked' });
-    mockGetUser.mockResolvedValue({
-      emailAddresses: [{ emailAddress: 'local@example.test' }],
-      firstName: 'Lo',
-      lastName: 'Cal',
-    });
-    expect((await me()).status).toBe(200);
-    expect(await run.sql(`SELECT clerk_id, first_name FROM "user" WHERE email = 'local@example.test'`)).toEqual([
-      { clerk_id: 'clerk_ts12_linked', first_name: 'Lo' },
+    mockVerifyToken.mockResolvedValue({ sub: 'user_ts12Linker' });
+    mockGetUser.mockResolvedValue(
+      clerkUser({ primaryEmailAddressId: 'idn_l', emailAddresses: [verified('idn_l', 'local@example.test')] }),
+    );
+    expect((await me()).status).toBe(409);
+    expect(await identityOf('user_ts12Linker')).toEqual([]);
+    expect(await run.sql(`SELECT first_name FROM "user" WHERE email = 'local@example.test'`)).toEqual([
+      { first_name: 'Local' },
     ]);
   });
 
+  it('the concurrent-create race for the same Clerk id resolves to one user', async () => {
+    mockVerifyToken.mockResolvedValue({ sub: 'user_ts12Race' });
+    mockGetUser.mockResolvedValue(
+      clerkUser({ primaryEmailAddressId: 'idn_r', emailAddresses: [verified('idn_r', 'race@example.test')] }),
+    );
+    const results = await Promise.all([me(), me(), me()]);
+    for (const r of results) expect(r.status).toBe(200);
+    const rows = await userByEmail('race@example.test');
+    expect(rows).toHaveLength(1);
+    expect(await identityOf('user_ts12Race')).toEqual([{ user_id: rows[0].id }]);
+    for (const r of results) expect(r.body.data.user.id).toBe(rows[0].id);
+  });
+
+  it('the race where the other request wins between the lookup and the create', async () => {
+    mockVerifyToken.mockResolvedValue({ sub: 'user_ts12Race2' });
+    mockGetUser.mockImplementation(async () => {
+      // the winner, through the same definer function the middleware calls
+      await run.as('mwf_auth', null, `SELECT app.create_user('clerk', 'user_ts12Race2', 'race2@example.test')`);
+      return clerkUser({ primaryEmailAddressId: 'idn_r2', emailAddresses: [verified('idn_r2', 'race2@example.test')] });
+    });
+    const res = await me();
+    expect(res.status).toBe(200);
+    const [row] = await userByEmail('race2@example.test');
+    expect(res.body.data.user.id).toBe(row.id);
+  });
+
+  it('a deleted account (tombstone: identity gone) no longer resolves; its subject is a new first login', async () => {
+    const [u] = await run.sql<{ id: string }>(
+      `INSERT INTO "user" (email, first_name) VALUES ('leaver@example.test', 'Leaver') RETURNING id`,
+    );
+    await run.sql(`INSERT INTO user_identity (provider, subject, user_id) VALUES ('clerk', 'user_ts12Leaver', $1)`, [
+      u.id,
+    ]);
+    await run.as('mwf_job', null, `SELECT app.anonymize_user_account($1::uuid)`, [u.id]);
+    expect(await identityOf('user_ts12Leaver')).toEqual([]);
+    mockVerifyToken.mockResolvedValue({ sub: 'user_ts12Leaver' });
+    mockGetUser.mockResolvedValue(
+      clerkUser({ primaryEmailAddressId: 'idn_v', emailAddresses: [verified('idn_v', 'leaver@example.test')] }),
+    );
+    const res = await me();
+    expect(res.status).toBe(200);
+    expect(res.body.data.user.id).not.toBe(u.id);
+  });
+
   it('an unknown user whose Clerk profile lookup fails is refused; no row is written', async () => {
-    mockVerifyToken.mockResolvedValue({ sub: 'clerk_ts12_unknown' });
+    mockVerifyToken.mockResolvedValue({ sub: 'user_ts12Unknown' });
     mockGetUser.mockRejectedValue(Object.assign(new Error('rate limited'), { status: 429 }));
     expect((await me()).status).toBeGreaterThanOrEqual(400);
-    expect(await run.sql(`SELECT count(*)::int AS n FROM "user" WHERE clerk_id = 'clerk_ts12_unknown'`)).toEqual([
-      { n: 0 },
-    ]);
+    expect(await identityOf('user_ts12Unknown')).toEqual([]);
   });
 
   it('a bad token is 401', async () => {
@@ -103,7 +260,27 @@ describeTarget('auth middleware on the target user table', () => {
     expect((await me()).status).toBe(401);
   });
 
-  it('the E2E bypass: a non-UUID id is refused before the database; a UUID id is upserted', async () => {
+  it('mwf_app cannot read or write user_identity, nor write user.email (work-bp5m)', async () => {
+    await expect(run.as('mwf_app', ids.adaUser, `SELECT 1 FROM user_identity`)).rejects.toThrow(/permission denied/);
+    await expect(
+      run.as('mwf_app', ids.adaUser, `INSERT INTO user_identity (provider, subject, user_id) VALUES ('clerk', 'user_x', $1)`, [
+        ids.adaUser,
+      ]),
+    ).rejects.toThrow(/permission denied/);
+    await expect(
+      run.as('mwf_app', ids.adaUser, `UPDATE "user" SET email = 'x@example.test' WHERE id = $1`, [ids.adaUser]),
+    ).rejects.toThrow(/permission denied/);
+    await expect(
+      run.as('mwf_app', ids.adaUser, `INSERT INTO "user" (email) VALUES ('x@example.test')`),
+    ).rejects.toThrow(/permission denied/);
+    const [g] = await run.sql<{ upd: boolean; ins: boolean }>(
+      `SELECT has_column_privilege('mwf_app', 'public."user"', 'email', 'UPDATE') AS upd,
+              has_table_privilege('mwf_app', 'public."user"', 'INSERT') AS ins`,
+    );
+    expect(g).toEqual({ upd: false, ins: false });
+  });
+
+  it('the E2E bypass: a non-UUID id is refused before the database; a UUID id gets an e2e identity', async () => {
     process.env.E2E_AUTH_BYPASS = 'true';
     const bad = await request(app)
       .get('/api/v1/auth/me')
@@ -116,7 +293,14 @@ describeTarget('auth middleware on the target user table', () => {
       .set('x-e2e-user-id', id)
       .set('x-e2e-user-email', 'bypass@e2e.test');
     expect(ok.status).toBe(200);
-    expect(await run.sql(`SELECT clerk_id FROM "user" WHERE id = $1`, [id])).toEqual([{ clerk_id: `e2e_${id}` }]);
+    expect(await run.sql(`SELECT provider::text, subject FROM user_identity WHERE user_id = $1`, [id])).toEqual([
+      { provider: 'e2e', subject: `e2e_${id}` },
+    ]);
+    // idempotent: a second request reuses the row and the identity
+    expect(
+      (await request(app).get('/api/v1/auth/me').set('x-e2e-user-id', id).set('x-e2e-user-email', 'bypass@e2e.test'))
+        .status,
+    ).toBe(200);
   });
 
   it('requireSessionAccess: a participant passes, a missing session is 404, a stranger 403', async () => {

@@ -91,7 +91,7 @@ Functions (schema `app`): `jsonb_schema_violation(doc, schema)` (pure; the first
 | `ai_memory.global_facts` | `facts` | yes (a fact object stays open) | `consolidatedAt` string, `sessionCount` integer |
 
 `app.json_schema` lives in schema `app`, not `public`: the app never reads it (it validates with
-zod), so it has no Prisma model and is not one of the 47 tables. It is reference data like
+zod), so it has no Prisma model and is not one of the 49 tables. It is reference data like
 `milestone`: seeded by the baseline, read-only to every runtime role. **SELECT: `mwf_app` and
 `mwf_job`** — the triggers run with the writer's rights (invoker, as every T5 trigger), so the roles
 whose writes fire them read the schemas; a schema restates the published `shared/` contract, so the
