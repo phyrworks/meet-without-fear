@@ -158,9 +158,9 @@ COMMENT ON DOMAIN uuid7 IS 'A version-7 UUID (RFC 9562), so ids sort by creation
 -- REQUIRE_FIELD_ENCRYPTION becomes mandatory. The text[] columns cannot be
 -- ciphertext[] (an array of a domain: step 20, node-postgres); each carries
 -- CHECK (app.all_ciphertext(col)) instead. Of the six jsonb columns in the map,
--- the five jsonb-envelope ones carry CHECK (app.jsonb_envelope_ok(col)) and
--- ai_memory.doc (jsonb-leaves) a structural trigger (work-k5fk.8, below); all
--- six have a COMMENT starting 'encrypted'.
+-- the five jsonb-envelope ones carry the t_jsonb_envelope trigger and
+-- ai_memory.doc (jsonb-leaves) the structural t_doc_schema trigger (work-k5fk.8,
+-- trailer.sql T5); all six have a COMMENT starting 'encrypted'.
 CREATE DOMAIN ciphertext AS text
   CHECK (VALUE IS NULL OR VALUE !~ '^enc:'
          OR VALUE ~ '^enc:v1:[A-Za-z0-9+/]{16}:[A-Za-z0-9+/]{22}==:([A-Za-z0-9+/]{4})*([A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$');
@@ -261,9 +261,12 @@ COMMENT ON CONSTRAINT email_no_format ON DOMAIN email IS 'No format character (C
 -- jsonb documents (work-k5fk.8). The shapes, their writers and why each column
 -- is validated the way it is: docs/backend/data-model/jsonb-shapes-2026-11.md.
 --  * Every jsonb column keeps its jsonb_typeof CHECK (step 20).
---  * The five jsonb-envelope columns (SENSITIVE_FIELD_MAP) add
---    CHECK (app.jsonb_envelope_ok(col)): a sealed document is exactly
---    {"$enc": <a v1 ciphertext>}. Their plaintext is opaque to the database;
+--  * The five jsonb-envelope columns (SENSITIVE_FIELD_MAP) carry the
+--    t_jsonb_envelope BEFORE trigger (trailer.sql T5): a sealed document is
+--    exactly {"$enc": <a v1 ciphertext>}. A trigger, not a CHECK: a CHECK
+--    refusal's DETAIL ("Failing row contains …") would echo the row — the
+--    very plaintext the rule exists to catch — to the client and the log; the
+--    trigger reports a reason only. Their plaintext is opaque to the database;
 --    the app validates it (zod) before sealing.
 --  * The two plaintext app documents — user_preferences.doc and the structure
 --    of ai_memory.doc (its string leaves are encrypted; its keys, numbers and
@@ -272,36 +275,6 @@ COMMENT ON CONSTRAINT email_no_format ON DOMAIN email IS 'No format character (C
 --  * brain_activity.* stays at jsonb_typeof: telemetry, written by the job
 --    only, read by the ops dashboard; its shape is each call site's.
 -- ----------------------------------------------------------------------------
-
--- The envelope rule. Lenient exactly as the ciphertext domain is: with no
--- FIELD_ENCRYPTION_KEY (keyless dev/test, and production until
--- REQUIRE_FIELD_ENCRYPTION) sealFieldValue stores the plain document, and
--- follow_up_checkin's DEFAULT writes '{}'; so a document WITHOUT a "$enc" key
--- passes. A document WITH one is an envelope and must be well formed: "$enc"
--- its only key, a string, starting enc: (plaintext in the envelope is refused
--- — the domain alone would let it through) and castable to ciphertext (a
--- malformed ciphertext is refused). The strict variant (every document an
--- envelope) lands with the strict ciphertext domain. PL/pgSQL so that a
--- malformed ciphertext is a false — the table's CHECK names the refusal —
--- rather than the domain's own error.
-CREATE FUNCTION app.jsonb_envelope_ok(doc jsonb) RETURNS boolean
-  LANGUAGE plpgsql IMMUTABLE PARALLEL SAFE
-  SET search_path = pg_catalog, pg_temp
-  AS $$
-  BEGIN
-    IF doc IS NULL OR jsonb_typeof(doc) <> 'object' OR NOT doc ? '$enc' THEN
-      RETURN true;
-    END IF;
-    IF doc - '$enc' <> '{}'::jsonb OR jsonb_typeof(doc -> '$enc') <> 'string' OR doc ->> '$enc' NOT LIKE 'enc:%' THEN
-      RETURN false;
-    END IF;
-    PERFORM (doc ->> '$enc')::public.ciphertext;
-    RETURN true;
-  EXCEPTION WHEN check_violation THEN
-    RETURN false;
-  END
-  $$;
-COMMENT ON FUNCTION app.jsonb_envelope_ok(jsonb) IS 'False for a malformed envelope: a document with a "$enc" key must be exactly {"$enc": <a v1 ciphertext>}. True for a document without "$enc" (keyless plaintext passes, as the ciphertext domain lets plaintext through). The CHECK on each jsonb-envelope column.';
 
 -- A JSON-schema version: 1, 2, … per schema name.
 CREATE DOMAIN schema_version AS smallint CHECK (VALUE >= 1);
@@ -382,6 +355,9 @@ COMMENT ON TABLE app.json_schema IS 'Reference data: the JSON schemas (a subset,
 COMMENT ON COLUMN app.json_schema.name IS 'The document the schema describes: a table (user_preferences) or table.kind (ai_memory.summary, ai_memory.notable_facts, ai_memory.global_facts).';
 COMMENT ON COLUMN app.json_schema.version IS 'The schema version a row''s doc_schema_version names. Rows are never edited: a new shape is a new version.';
 COMMENT ON COLUMN app.json_schema.schema IS 'The JSON schema, in the subset the validator implements; refused at INSERT if it uses anything else.';
+COMMENT ON COLUMN app.json_schema.created_at IS 'When the schema was seeded (by the migration that added it).';
+COMMENT ON CONSTRAINT json_schema_name_check ON app.json_schema IS 'A lower-case identifier, optionally .kind: a table, or table.kind for a table whose kind picks the schema.';
+COMMENT ON CONSTRAINT json_schema_schema_check ON app.json_schema IS 'Only the subset app.jsonb_schema_violation implements (app.json_schema_wellformed), so no keyword is ever silently ignored.';
 -- mwf_app, mwf_job: the validation triggers run with the writer's rights (trailer.sql T5: invoker rights
 -- throughout), so the roles whose writes fire them read the schemas. Read only: no runtime role writes a
 -- schema. A schema is not secret — it restates the contract shared/src/dto already publishes — so SELECT
@@ -1759,10 +1735,8 @@ CREATE TABLE proposal_revision (
 
     -- §1.4 proposal_revision [P23c]
     CHECK (before IS NULL OR jsonb_typeof(before) = 'object'),
-    CHECK (after IS NULL OR jsonb_typeof(after) = 'object'),
-    -- work-k5fk.8: a sealed document is a well-formed envelope
-    CHECK (app.jsonb_envelope_ok(before)),
-    CHECK (app.jsonb_envelope_ok(after))
+    CHECK (after IS NULL OR jsonb_typeof(after) = 'object')
+    -- + t_jsonb_envelope (trailer.sql T5): a sealed document is a well-formed envelope
 );
 CREATE INDEX ON proposal_revision (proposal_id, created_at);
 CREATE INDEX ON proposal_revision (actor_participant_id);
@@ -1904,9 +1878,8 @@ CREATE TABLE follow_up_checkin (
 
     UNIQUE (follow_up_id, participant_id),
     -- §1.5 follow_up_checkin
-    CHECK (jsonb_typeof(payload) = 'object'),
-    -- work-k5fk.8: a sealed document is a well-formed envelope
-    CHECK (app.jsonb_envelope_ok(payload))
+    CHECK (jsonb_typeof(payload) = 'object')
+    -- + t_jsonb_envelope (trailer.sql T5): a sealed document is a well-formed envelope
 );
 CREATE INDEX ON follow_up_checkin (participant_id, submitted_at);
 COMMENT ON TABLE follow_up_checkin IS 'One participant''s answers to a follow-up, one per participant; the structured answers are a document (payload).';
@@ -1986,9 +1959,8 @@ CREATE TABLE reflection (
     updated_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     -- §1.6 reflection, takeaway_link [P31]
-    CHECK (summary_doc IS NULL OR jsonb_typeof(summary_doc) = 'object'),
-    -- work-k5fk.8: a sealed document is a well-formed envelope
-    CHECK (app.jsonb_envelope_ok(summary_doc))
+    CHECK (summary_doc IS NULL OR jsonb_typeof(summary_doc) = 'object')
+    -- + t_jsonb_envelope (trailer.sql T5): a sealed document is a well-formed envelope
 );
 CREATE INDEX ON reflection (user_id, updated_at);
 CREATE INDEX ON reflection (linked_session_id);
@@ -2162,9 +2134,8 @@ CREATE TABLE feature_state (
 
     PRIMARY KEY (user_id, feature),
     -- §1.7 feature_state
-    CHECK (jsonb_typeof(doc) = 'object'),
-    -- work-k5fk.8: a sealed document is a well-formed envelope
-    CHECK (app.jsonb_envelope_ok(doc))
+    CHECK (jsonb_typeof(doc) = 'object')
+    -- + t_jsonb_envelope (trailer.sql T5): a sealed document is a well-formed envelope
 );
 COMMENT ON TABLE feature_state IS 'One document per wellbeing feature per user (meditation, gratitude, needs assessment, people).';
 COMMENT ON COLUMN feature_state.feature IS 'Which wellbeing feature this document belongs to.';

@@ -69,10 +69,11 @@ const CIPHERTEXT_PLACEHOLDER = '@@CIPHERTEXT_COLUMNS@@';
 const CIPHERTEXT_ARRAYS_PLACEHOLDER = '@@CIPHERTEXT_ARRAYS@@';
 
 /**
- * The jsonb-envelope columns of SENSITIVE_FIELD_MAP, each with
- * CHECK (app.jsonb_envelope_ok(col)) in tables.sql (work-k5fk.8). Counted like
- * the ciphertext columns; step 20 ties the CHECKs to the columns whose COMMENT
- * says 'jsonb envelope', and encryption-at-rest-schema.target.test.ts to the map.
+ * The jsonb-envelope columns of SENSITIVE_FIELD_MAP, each guarded by the
+ * t_jsonb_envelope trigger (trailer.sql T5; work-k5fk.8 — a trigger, not a
+ * CHECK, so a refusal never echoes the row). Step 20 ties the triggers to the
+ * columns whose COMMENT says 'jsonb envelope' and requires this many;
+ * encryption-at-rest-schema.target.test.ts ties them to the map.
  */
 export const JSONB_ENVELOPES = 5;
 const JSONB_ENVELOPES_PLACEHOLDER = '@@JSONB_ENVELOPES@@';
@@ -103,8 +104,6 @@ export function checkTables(sql: string): { names: number; uuid7: number } {
   if (ct !== CIPHERTEXT_COLUMNS) throw new Error(`tables.sql has ${ct} ciphertext columns, expected ${CIPHERTEXT_COLUMNS}`);
   const ca = (sql.match(/^ {4}CHECK \(app\.all_ciphertext\([a-z0-9_]+\)\)/gm) ?? []).length;
   if (ca !== CIPHERTEXT_ARRAYS) throw new Error(`tables.sql has ${ca} all_ciphertext CHECKs, expected ${CIPHERTEXT_ARRAYS}`);
-  const env = (sql.match(/^ {4}CHECK \(app\.jsonb_envelope_ok\([a-z0-9_]+\)\)/gm) ?? []).length;
-  if (env !== JSONB_ENVELOPES) throw new Error(`tables.sql has ${env} jsonb_envelope_ok CHECKs, expected ${JSONB_ENVELOPES}`);
   return { names: names.size, uuid7 };
 }
 
