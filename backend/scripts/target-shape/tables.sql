@@ -259,7 +259,7 @@ COMMENT ON CONSTRAINT email_no_format ON DOMAIN email IS 'No format character (C
 -- Enums, in schema.prisma order.
 -- ----------------------------------------------------------------------------
 CREATE TYPE session_status AS ENUM ('CREATED', 'INVITED', 'ACTIVE', 'RESOLVED', 'ABANDONED', 'ARCHIVED');
-COMMENT ON TYPE session_status IS 'Lifecycle of a session. Written only by app.session_set_status(): CREATED -> INVITED -> ACTIVE -> RESOLVED, any live state -> ABANDONED, RESOLVED/ABANDONED -> ARCHIVED.';
+COMMENT ON TYPE session_status IS 'Lifecycle of a session. Written only by app.session_set_status() and app.session_archive(): CREATED -> INVITED -> ACTIVE -> RESOLVED, any live state -> ABANDONED; -> ARCHIVED from CREATED, INVITED, RESOLVED or ABANDONED by a current participant (app.session_archive), from RESOLVED or ABANDONED by the job (app.session_set_status, retention).';
 CREATE TYPE participant_kind AS ENUM ('human', 'modeled');
 COMMENT ON TYPE participant_kind IS 'human: a participant backed by a user; modeled: an imagined participant with no user row (user_id IS NULL).';
 CREATE TYPE conversation_kind AS ENUM ('MAIN', 'SUBCHAT');
@@ -465,27 +465,41 @@ CREATE TABLE session (
     topic_frame_confirmed_at ts_ms,
     previous_session_id uuid7 REFERENCES session ON DELETE SET NULL,
     resolved_at ts_ms,
+    archived_at ts_ms,
+    archived_by_user_id uuid7 REFERENCES "user" ON DELETE RESTRICT,
     created_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     -- §1.1 session [P12]
-    CHECK (status <> 'RESOLVED' OR resolved_at IS NOT NULL)
+    CHECK (status <> 'RESOLVED' OR resolved_at IS NOT NULL),
+    -- work-k5fk.10.12: an archived session says when; only an archived one has an archiver
+    CHECK ((status = 'ARCHIVED') = (archived_at IS NOT NULL)),
+    CHECK (archived_by_user_id IS NULL OR archived_at IS NOT NULL)
 );
 CREATE INDEX ON session (relationship_id);
 CREATE INDEX ON session (previous_session_id);
+CREATE INDEX ON session (archived_by_user_id);
 -- + sql_session_one_live (sql-only.sql)
 COMMENT ON TABLE session IS 'One facilitated process on one topic between the participants of a relationship; at most one live session per relationship.';
 COMMENT ON COLUMN session.previous_session_id IS 'The session this one continues (a NEW_PROCESS follow-up).';
+COMMENT ON COLUMN session.archived_at IS 'When the session was archived (status ARCHIVED); written with the status by app.session_archive or, for the retention job, app.session_set_status.';
+COMMENT ON COLUMN session.archived_by_user_id IS 'The user who archived the session, a current participant of it at the time (app.session_archive checks it); NULL when the retention job archived it. A user, not a participant id: session precedes participant and tables.sql has no FK cycles.';
+COMMENT ON CONSTRAINT session_check1 ON session IS 'An ARCHIVED session has archived_at, and only an ARCHIVED one does (work-k5fk.10.12).';
+COMMENT ON CONSTRAINT session_check2 ON session IS 'An archiver only on an archived session (work-k5fk.10.12).';
+COMMENT ON INDEX session_archived_by_user_id_idx IS 'The FK index of archived_by_user_id (the RESTRICT check on a user row).';
 COMMENT ON COLUMN session.topic_frame IS 'encrypted (session): the AI''s short neutral topic phrase for the session (max 20 words by prompt), confirmed by the participants.';
 -- mwf_app: createSession and tending startLinkedProcess create a session; the topic frame and its confirmation; the realtime
--- touch (updated_at). status: ONLY archiveSession (controllers/invitations.ts) — FINDING: it writes status directly,
--- bypassing app.session_set_status, and from CREATED/INVITED, which the function refuses; every other status move is the function.
+-- touch (updated_at). No UPDATE of status or the archive columns (work-k5fk.10.12): archiveSession goes through
+-- app.session_archive, every other status move through app.session_set_status.
 GRANT SELECT ON session TO mwf_app;
 GRANT INSERT (relationship_id, status, previous_session_id, topic_frame, created_at, updated_at) ON session TO mwf_app;
-GRANT UPDATE (topic_frame, topic_frame_confirmed_at, status, updated_at) ON session TO mwf_app;
+GRANT UPDATE (topic_frame, topic_frame_confirmed_at, updated_at) ON session TO mwf_app;
 -- mwf_job: session_set_status, empathy_set_status (row lock), anonymize step 1
 GRANT SELECT (id, status, resolved_at) ON session TO mwf_job;
 GRANT UPDATE (status, resolved_at) ON session TO mwf_job;
+-- mwf_job: session_archive and session_set_status (→ ARCHIVED), as their owner (work-k5fk.10.12)
+GRANT SELECT (archived_at, archived_by_user_id) ON session TO mwf_job;
+GRANT UPDATE (archived_at, archived_by_user_id) ON session TO mwf_job;
 -- mwf_job [TS-12]: session-retention: staleness of an ACTIVE session and the purge window of an ARCHIVED one
 GRANT SELECT (updated_at) ON session TO mwf_job;
 -- mwf_job [TS-12]: session-retention: an ARCHIVED session past the purge window is hard-deleted (every child

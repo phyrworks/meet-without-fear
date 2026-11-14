@@ -71,10 +71,15 @@ model Session {
   topicFrameConfirmedAt DateTime?     @map("topic_frame_confirmed_at") @db.Timestamptz(3)
   previousSessionId     String?       @map("previous_session_id") @db.Uuid
   resolvedAt            DateTime?     @map("resolved_at") @db.Timestamptz(3)
+  /// Written only by app.session_archive / app.session_set_status (work-k5fk.10.12); mwf_app has no UPDATE on it.
+  archivedAt            DateTime?     @map("archived_at") @db.Timestamptz(3)
+  /// The user who archived it (a current participant then); NULL for the retention job.
+  archivedByUserId      String?       @map("archived_by_user_id") @db.Uuid
   createdAt             DateTime      @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt             DateTime      @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
 
   relationship    Relationship @relation(fields: [relationshipId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  archivedBy      User?        @relation(fields: [archivedByUserId], references: [id], onDelete: Restrict, onUpdate: NoAction)
   previousSession Session?     @relation("SessionLineage", fields: [previousSessionId], references: [id], onDelete: SetNull, onUpdate: NoAction)
   nextSessions    Session[]    @relation("SessionLineage")
 
@@ -92,6 +97,7 @@ model Session {
 
   @@index([relationshipId])
   @@index([previousSessionId])
+  @@index([archivedByUserId])
   @@map("session")
 }
 
@@ -988,6 +994,7 @@ model User {
   memories            UserMemory[]
   featureStates       FeatureState[]
   keys                UserKey[]
+  sessionsArchived    Session[]
 
   @@map("user")
 }

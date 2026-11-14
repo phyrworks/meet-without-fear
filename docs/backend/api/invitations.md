@@ -236,7 +236,7 @@ These invitation-adjacent endpoints live in the same route file:
 
 | Method | Endpoint | Purpose |
 |--------|----------|---------|
-| `POST` | `/api/v1/sessions/:id/archive` | Archive a resolved or abandoned session |
+| `POST` | `/api/v1/sessions/:id/archive` | Archive a created, invited, resolved or abandoned session, as a current participant (`app.session_archive`: 404 for a non-participant, 403 for one who left, 400 from any other state) |
 | `DELETE` | `/api/v1/sessions/:id` | Remove the caller's private data from a session (marks it `ABANDONED`) |
 | `PATCH` | `/api/v1/relationships/:relationshipId/nickname` | Update the partner's nickname on the caller's side |
 | `GET` | `/api/v1/people` | List all people the user has established relationships with |

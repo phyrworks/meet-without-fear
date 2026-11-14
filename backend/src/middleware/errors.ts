@@ -313,6 +313,23 @@ export function getPgConstraintViolation(err: unknown): PgConstraintViolation | 
   };
 }
 
+/**
+ * The SQLSTATE of a database error in any shape it surfaces in (the three
+ * above), or undefined. For a caller that maps a function's own refusals
+ * (e.g. app.session_archive: P0002 / 42501 / 23514) to HTTP answers.
+ */
+export function getPgSqlState(err: unknown): string | undefined {
+  const e = asRecord(err);
+  if (!e) return undefined;
+  if (err instanceof Prisma.PrismaClientKnownRequestError) {
+    const meta = asRecord(err.meta);
+    const cause = asRecord(asRecord(meta?.driverAdapterError)?.cause);
+    return str(cause?.originalCode) ?? str(meta?.code) ?? PRISMA_CODE_SQLSTATE[err.code];
+  }
+  if (typeof e.code === 'string' && typeof e.severity === 'string') return e.code;
+  return undefined;
+}
+
 function describeViolation(v: PgConstraintViolation): string {
   const label = KIND_LABEL[v.kind];
   return v.constraint ? `Request violates ${label} "${v.constraint}"` : `Request violates a ${label}`;

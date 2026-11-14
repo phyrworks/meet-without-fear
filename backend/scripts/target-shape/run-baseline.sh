@@ -20,7 +20,7 @@
 #   5. caller test 18: a second `prisma migrate deploy` is a no-op (no pending
 #      migration, one finished _prisma_migrations row, schema dump unchanged);
 #   6. seed-target-fixture.sql, then smoke-baseline.sql (every view as mwf_app);
-#   7. functions-caller-tests.sql (tests 1–17, as mwf_app / mwf_job logins) on
+#   7. functions-caller-tests.sql (tests 1–17, 19 and 20, as mwf_app / mwf_job logins) on
 #      a throwaway clone <ts7_name>_calls, dropped afterwards.
 #   The scratch database is dropped at the end unless --keep.
 #
@@ -157,8 +157,8 @@ verify_target() {  # $1 = database, $2 = deploy url
   grep -E 'PASS|connected as|ALL PASSED' "$OUT/caller-tests-$d.txt" | sed 's/^NOTICE:  /   /; s/^ /   /'
   local tests
   tests="$( (grep -oE 'PASS [0-9]+' "$OUT/caller-tests-$d.txt"; echo 'PASS 18') | sort -u | wc -l | tr -d ' ')"
-  echo "   caller tests: $tests/18 passed (1–17 SQL, 18 the second deploy)"
-  [ "$tests" = 18 ] || { echo "   expected 18"; exit 1; }
+  echo "   caller tests: $tests/20 passed (1–17, 19, 20 SQL, 18 the second deploy)"
+  [ "$tests" = 20 ] || { echo "   expected 20"; exit 1; }
 }
 
 drop_db() { psql_admin -c "DROP DATABASE IF EXISTS $1 WITH (FORCE)" >/dev/null; echo "   dropped $1"; }
