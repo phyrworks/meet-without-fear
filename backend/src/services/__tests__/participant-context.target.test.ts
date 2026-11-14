@@ -221,9 +221,11 @@ describeTarget('participant resolution and the single context entry point (targe
   });
 
   it('is N-party safe: a modeled participant is a co-participant but not "the partner"; a second human makes the partner ambiguous (null)', async () => {
-    await sql(`INSERT INTO participant (session_id, kind, display_name) VALUES ($1, 'modeled', 'Coach')`, [
-      ids.session,
-    ]);
+    // A modeled seat is always brought in by a human (work-k5fk.2: participant_check1).
+    await sql(
+      `INSERT INTO participant (session_id, kind, added_by_user_id, display_name) VALUES ($1, 'modeled', $2, 'Coach')`,
+      [ids.session, ids.adaUser],
+    );
     expect((await resolver.getCoParticipants(ids.ada)).length).toBe(2);
     expect((await resolver.getPartnerParticipant(ids.ada))?.participantId).toBe(ids.bob);
 
@@ -231,8 +233,8 @@ describeTarget('participant resolution and the single context entry point (targe
       `INSERT INTO "user" (email, first_name) VALUES ('carol@e2e.test', 'Carol') RETURNING id`,
     );
     const [carolP] = await sql<{ id: string }>(
-      `INSERT INTO participant (session_id, user_id, display_name) VALUES ($1, $2, 'Carol') RETURNING id`,
-      [ids.session, carol.id],
+      `INSERT INTO participant (session_id, user_id, added_by_user_id, display_name) VALUES ($1, $2, $3, 'Carol') RETURNING id`,
+      [ids.session, carol.id, ids.adaUser],
     );
     try {
       expect((await resolver.getCoParticipants(ids.ada)).length).toBe(3);

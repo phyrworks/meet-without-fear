@@ -14,6 +14,7 @@
  * entry deleted: the author's reconciler/status counts only her own offers.
  */
 
+import { relationshipIdDropped } from './relationship-dropped';
 import type { KnownLeak } from '../privacy';
 import {
   authorAnalysisClosed,
@@ -49,6 +50,7 @@ const bodyRules = (concept: boolean): AllowRule[] => [
 export const DECLINED_OFFER_NO_TRACE_ALLOW: AllowList = {
   scenario: 'declined-offer-no-trace',
   rules: [
+    relationshipIdDropped('declined-offer-no-trace'),
     ...TARGET_TOPIC_FRAME_RULES,
     ...TARGET_TOPIC_FRAME_INITIAL_RULES,
     ...bodyRules(true),
@@ -75,6 +77,7 @@ export const DECLINED_OFFER_NO_TRACE_ALLOW: AllowList = {
 export const DECLINED_OFFER_NO_TRACE_BYTE_TARGET_ALLOW: AllowList = {
   scenario: 'declined-offer-no-trace',
   rules: [
+    relationshipIdDropped('declined-offer-no-trace'),
     ...TARGET_TOPIC_FRAME_RULES,
     ...bodyRules(false),
     byteLabelShift(['steps.15.body.data.records.0.id', 'steps.47.body.data.records.0.id'], 'consent'),

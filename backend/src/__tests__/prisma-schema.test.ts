@@ -35,8 +35,8 @@ describe('Prisma schema (target)', () => {
       expect.arrayContaining([
         // identity & sessions
         'User',
-        'Relationship',
-        'RelationshipMember',
+        'UserContact',
+        'LiveSessionPair',
         'Session',
         'Participant',
         'Invitation',

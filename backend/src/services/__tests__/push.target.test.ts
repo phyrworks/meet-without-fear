@@ -65,7 +65,11 @@ describeTarget('push on the target: the job reads the recipient’s devices', ()
       `INSERT INTO user_device (user_id, push_token, last_seen_at) VALUES ($1, $2, now()), ($1, $3, now() - interval '1 day')`,
       [ids.bobUser, BOB_PHONE, BOB_TABLET],
     );
-    await run.sql(`UPDATE relationship_member SET nickname = 'Ads' WHERE user_id = $1`, [ids.bobUser]);
+    // Bob's own contact entry for Ada (user_contact, work-k5fk.2)
+    await run.sql(`UPDATE user_contact SET nickname = 'Ads' WHERE user_id = $1 AND contact_user_id = $2`, [
+      ids.bobUser,
+      ids.adaUser,
+    ]);
     mockSend.mockResolvedValue([{ status: 'ok' }, { status: 'ok' }]);
     const sent = await asAda(() =>
       push.sendPushNotification(
@@ -92,7 +96,7 @@ describeTarget('push on the target: the job reads the recipient’s devices', ()
   });
 
   it('without a nickname the actor is named by their display name, never their user row', async () => {
-    await run.sql(`UPDATE relationship_member SET nickname = NULL WHERE user_id = $1`, [ids.bobUser]);
+    await run.sql(`UPDATE user_contact SET nickname = NULL WHERE user_id = $1`, [ids.bobUser]);
     await run.sql(`UPDATE participant SET display_name = 'PROBE_TS12_DISPLAY' WHERE id = $1`, [ids.ada]);
     mockSend.mockResolvedValue([{ status: 'ok' }, { status: 'ok' }]);
     await asAda(() =>

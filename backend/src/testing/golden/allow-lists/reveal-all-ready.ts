@@ -15,6 +15,7 @@
  * beyond the DTO rules and the reveal payloads' `round`/`attemptId`.
  */
 
+import { relationshipIdDropped } from './relationship-dropped';
 import { ADA_EMPATHY_STATEMENT, BOB_HELD_EMPATHY_STATEMENT } from '../../fixture-scenarios/scenarios';
 import {
   deliveredCopyInRead,
@@ -138,6 +139,7 @@ const ROUND_RULE: AllowRule = {
 export const REVEAL_ADA_FIRST_ALLOW: AllowList = {
   scenario: 'reveal-all-ready-ada-first',
   rules: [
+    relationshipIdDropped('reveal-all-ready-ada-first'),
     ...TARGET_TOPIC_FRAME_RULES,
     ...TARGET_TOPIC_FRAME_INITIAL_RULES,
     ...rules(REVEAL_ADA_FIRST_STEP),
@@ -153,6 +155,7 @@ export const REVEAL_ADA_FIRST_ALLOW: AllowList = {
 export const REVEAL_BOB_FIRST_ALLOW: AllowList = {
   scenario: 'reveal-all-ready-bob-first',
   rules: [
+    relationshipIdDropped('reveal-all-ready-bob-first'),
     ...TARGET_TOPIC_FRAME_RULES,
     ...TARGET_TOPIC_FRAME_INITIAL_RULES,
     ...rules(REVEAL_BOB_FIRST_STEP),
@@ -171,6 +174,7 @@ export const REVEAL_BOB_FIRST_ALLOW: AllowList = {
 export const REVEAL_ADA_FIRST_BYTE_TARGET_ALLOW: AllowList = {
   scenario: 'reveal-all-ready-ada-first',
   rules: [
+    relationshipIdDropped('reveal-all-ready-ada-first'),
     ...TARGET_TOPIC_FRAME_RULES,
     ...bodyRules(ADA_FIRST_READS, true),
     ...preJoinDraftKeys(ADA_FIRST_DRAFT_READS),
@@ -211,6 +215,7 @@ export const REVEAL_ADA_FIRST_BYTE_TARGET_ALLOW: AllowList = {
 export const REVEAL_BOB_FIRST_BYTE_TARGET_ALLOW: AllowList = {
   scenario: 'reveal-all-ready-bob-first',
   rules: [
+    relationshipIdDropped('reveal-all-ready-bob-first'),
     ...TARGET_TOPIC_FRAME_RULES,
     ...bodyRules(BOB_FIRST_READS, true),
     ...preJoinDraftKeys(BOB_FIRST_DRAFT_READS),

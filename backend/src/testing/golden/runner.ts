@@ -580,7 +580,7 @@ export async function recordOrVerifyConcept(opts: {
   const map = buildConceptLabelMap({
     manifest: {
       sessionId: seeded.sessionId,
-      relationshipId: seeded.relationshipId,
+      ...(seeded.relationshipId ? { relationshipId: seeded.relationshipId } : {}),
       invitationId: seeded.invitationId,
       users: [seeded.userA, ...(seeded.userB ? [seeded.userB] : [])],
     },

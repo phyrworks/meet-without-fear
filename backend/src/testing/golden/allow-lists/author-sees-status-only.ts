@@ -16,6 +16,7 @@
  * probes, which must now find nothing.
  */
 
+import { relationshipIdDropped } from './relationship-dropped';
 import type { KnownLeak } from '../privacy';
 import {
   byteLabelShift,
@@ -75,6 +76,7 @@ const bodyRules = (concept: boolean): AllowRule[] => [
 export const AUTHOR_SEES_STATUS_ONLY_ALLOW: AllowList = {
   scenario: 'author-sees-status-only',
   rules: [
+    relationshipIdDropped('author-sees-status-only'),
     ...TARGET_TOPIC_FRAME_RULES,
     ...TARGET_TOPIC_FRAME_INITIAL_RULES,
     ...bodyRules(true),
@@ -88,6 +90,7 @@ export const AUTHOR_SEES_STATUS_ONLY_ALLOW: AllowList = {
 export const AUTHOR_SEES_STATUS_ONLY_BYTE_TARGET_ALLOW: AllowList = {
   scenario: 'author-sees-status-only',
   rules: [
+    relationshipIdDropped('author-sees-status-only'),
     ...TARGET_TOPIC_FRAME_RULES,
     ...bodyRules(false),
     byteLabelShift(['steps.16.body.data.records.0.id'], 'consent'),

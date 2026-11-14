@@ -57,11 +57,19 @@ FROM "user" u
 WHERE u.kind = 'human';
 
 
--- session — spec §1.1.
+-- session — spec §1.1. work-k5fk.2: the target has no relationship. The old
+-- vocabulary's relationship is the set of humans the session is between, so
+-- relationship_id is synthesised from it: md5 over the session's human
+-- participants' user ids in id order (the AI and personas are modeled seats
+-- and never part of it). It is the same for every session of the same pair —
+-- what the old relationship row was — and the normaliser labels the main
+-- session's as <relationship:main> (buildConceptLabelMap), exactly the label
+-- the recorded baselines carry.
 CREATE VIEW old_concept_session AS
 SELECT
   s.id,
-  s.relationship_id,
+  (SELECT md5('relationship:' || string_agg(p.user_id::text, ',' ORDER BY p.user_id))::uuid
+   FROM participant p WHERE p.session_id = s.id AND p.kind = 'human') AS relationship_id,
   s.status::text AS status,
   s.topic_frame,
   s.topic_frame_confirmed_at AT TIME ZONE 'UTC' AS topic_frame_confirmed_at,

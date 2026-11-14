@@ -161,11 +161,15 @@ describeTarget('fixture reachability on the target templates (work-2km7)', () =>
   const BASE_URL =
     process.env.GOLDEN_DATABASE_URL || 'postgresql://mwf_user:mwf_password@localhost:5432/meet_without_fear';
 
-  /** What accept decides, per user: membership, participant, its conversations and read state, milestones. */
+  /**
+   * What accept decides, per user: contact entries (work-k5fk.2: user_contact, the old member nicknames),
+   * participant and who added it, its conversations and read state, milestones.
+   */
   const SHAPE = `
     SELECT u.email,
-           (SELECT count(*)::int FROM relationship_member rm WHERE rm.user_id = u.id) AS member,
+           (SELECT count(*)::int FROM user_contact uc WHERE uc.user_id = u.id) AS contacts,
            (SELECT count(*)::int FROM participant p WHERE p.user_id = u.id) AS participant,
+           (SELECT a.email FROM participant p JOIN "user" a ON a.id = p.added_by_user_id WHERE p.user_id = u.id) AS added_by,
            (SELECT p.display_name FROM participant p WHERE p.user_id = u.id) AS display_name,
            (SELECT count(*)::int FROM conversation c JOIN participant p ON p.id = c.participant_id
              WHERE p.user_id = u.id AND c.kind = 'MAIN' AND c.status = 'ACTIVE') AS main,
@@ -202,7 +206,7 @@ describeTarget('fixture reachability on the target templates (work-2km7)', () =>
     }
   };
 
-  it('pre-accept templates (CREATED, INVITATION_READY): the invitee is a relationship member, not a participant', async () => {
+  it('pre-accept templates (CREATED, INVITATION_READY): the invitee is a user with a contact entry, not a participant', async () => {
     for (const stage of ['CREATED', 'INVITATION_READY']) {
       const fx = await restoreFixture({
         baseUrl: BASE_URL,
@@ -215,8 +219,9 @@ describeTarget('fixture reachability on the target templates (work-2km7)', () =>
           stage,
           bob: {
             email: 'bob@e2e.test',
-            member: 1,
+            contacts: 1,
             participant: 0,
+            added_by: null,
             display_name: null,
             main: 0,
             read_state: 0,

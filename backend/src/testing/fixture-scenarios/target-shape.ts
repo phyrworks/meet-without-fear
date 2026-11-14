@@ -30,7 +30,11 @@
  *     monotonic clock in the old write order (or, for `explicitStamps`
  *     scenarios, the same fixed offsets current-shape.ts uses);
  *   - participant.joined_at = the RelationshipMember instant (one for all
- *     members, as the old nested create wrote it).
+ *     members, as the old nested create wrote it);
+ *   - work-k5fk.2: the old members' nicknames (each called the other by
+ *     their name) are each user's user_contact entry for the other, stamped
+ *     at the member instant; the relationship row's clock reads stay, so no
+ *     instant moves, but nothing is written for them.
  *
  * And where the target can hold a fact the old views leave out, it is written:
  * `empathy_submitted` (TS-7 step 7 derives it from EmpathyAttempt.sharedAt; the
@@ -75,7 +79,7 @@
  * (`reachabilityViolations`, reachability.ts) and writes a participant (+ MAIN
  * conversation, read state) only for those who have joined — the inviter, and
  * the others once the invitation was accepted. A not-yet-joined invitee is a
- * user and a relationship member only, as createSession leaves it; otherwise
+ * user only (with their contact entry), as createSession leaves it; otherwise
  * the real accept would collide on participant (session_id, user_id).
  */
 
@@ -255,26 +259,25 @@ export async function writeTargetShape(
     userRows.push(r.rows[0]);
   }
 
-  // --- Relationship and members ---------------------------------------------------
-  // The old nested create stamped the members before the relationship row.
+  // --- Contacts (work-k5fk.2: relationship and its members are gone) -------------
+  // The old nested create stamped the members before the relationship row; the
+  // clock reads stay in that order (every later instant is unchanged), the
+  // relationship's own stamps are simply not written any more.
   const memberAutos = explicit ? users.map(() => auto()) : [];
-  const relAt = autoPair();
-  const rel = await db.query<{ id: string }>(
-    `INSERT INTO relationship (created_at, updated_at) VALUES ($1, $2) RETURNING id`,
-    relAt,
-  );
-  const relationshipId = rel.rows[0].id;
+  void autoPair(); // the old relationship row's created_at / updated_at
   const joinedAt = explicit ? null : auto(); // one instant for the nested create
   const memberJoined: Date[] = [];
-  for (const [i, u] of users.entries()) {
+  for (const [i] of users.entries()) {
     const at = joinedAt ?? memberAutos[i];
     memberJoined.push(at);
-    await db.query(
-      `INSERT INTO relationship_member (relationship_id, user_id, nickname, joined_at, created_at, updated_at)
-       VALUES ($1, $2, $3, $4, $4, $4)`,
-      [relationshipId, userRows[i].id, i === 0 ? users[1]?.name || null : users[0].name, at],
-    );
-    void u;
+    // Each member called the other by their name (relationship_member.nickname): now their user_contact entry.
+    const other = i === 0 ? 1 : 0;
+    if (users.length > 1 && users[other]?.name) {
+      await db.query(
+        `INSERT INTO user_contact (user_id, contact_user_id, nickname, created_at, updated_at) VALUES ($1, $2, $3, $4, $4)`,
+        [userRows[i].id, userRows[other].id, users[other].name, at],
+      );
+    }
   }
 
   // --- Session -------------------------------------------------------------------
@@ -289,10 +292,9 @@ export async function writeTargetShape(
   readClock('invitation');
   // (A sent invitation without a confirmed topic frame is refused above, by reachabilityViolations.)
   const session = await db.query<{ id: string; status: string }>(
-    `INSERT INTO session (relationship_id, status, topic_frame, topic_frame_confirmed_at, created_at, updated_at)
-     VALUES ($1, $2, $3, $4, $5, $6) RETURNING id, status::text AS status`,
+    `INSERT INTO session (status, topic_frame, topic_frame_confirmed_at, created_at, updated_at)
+     VALUES ($1, $2, $3, $4, $5) RETURNING id, status::text AS status`,
     [
-      relationshipId,
       sessionStatus(scenario),
       scenario.topic?.frame ?? null,
       scenario.topic ? t(scenario.topic.confirmedAt) : null,
@@ -304,17 +306,18 @@ export async function writeTargetShape(
   // --- Participants and their MAIN conversations ----------------------------------
   // work-2km7: only the joined participants (reachability.ts). createSession
   // writes the inviter's; acceptInvitation the invitee's, so an invitee of a
-  // PENDING invitation is a user and a relationship member, never a participant
-  // — accept would otherwise collide on participant (session_id, user_id).
+  // PENDING invitation is a user, never a participant — accept would otherwise
+  // collide on participant (session_id, user_id). work-k5fk.2: the inviter is
+  // the initiator (no adder); everyone after was added by them.
   const joined = joinedParticipants(scenario);
   const participantOf = new Map<ParticipantKey, string>();
   const conversationOf = new Map<ParticipantKey, string>();
   for (const [i, p] of joined.entries()) {
     const at = memberJoined[i];
     const r = await db.query<{ id: string }>(
-      `INSERT INTO participant (session_id, user_id, kind, display_name, joined_at, created_at, updated_at)
-       VALUES ($1, $2, 'human', $3, $4, $4, $4) RETURNING id`,
-      [sessionId, userRows[i].id, users[i].name, at],
+      `INSERT INTO participant (session_id, user_id, kind, added_by_user_id, display_name, joined_at, created_at, updated_at)
+       VALUES ($1, $2, 'human', $3, $4, $5, $5, $5) RETURNING id`,
+      [sessionId, userRows[i].id, i === 0 ? null : userRows[0].id, users[i].name, at],
     );
     participantOf.set(p.key, r.rows[0].id);
     const c = await db.query<{ id: string }>(
@@ -376,15 +379,7 @@ export async function writeTargetShape(
     await db.query(
       `INSERT INTO message (conversation_id, sender_participant_id, role, kind, content, source_attempt_id, created_at)
        VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-      [
-        conversationId,
-        from === null ? null : pid(from),
-        role,
-        kind,
-        m.content,
-        sourceAttemptId,
-        t(m.at),
-      ],
+      [conversationId, from === null ? null : pid(from), role, kind, m.content, sourceAttemptId, t(m.at)],
     );
   };
 
@@ -805,7 +800,7 @@ export async function writeTargetShape(
   }
 
   return {
-    session: { id: sessionId, status: session.rows[0].status, relationshipId },
+    session: { id: sessionId, status: session.rows[0].status },
     users: userRows,
     invitation: { id: invitation.rows[0].id, status: invitation.rows[0].status },
   };
