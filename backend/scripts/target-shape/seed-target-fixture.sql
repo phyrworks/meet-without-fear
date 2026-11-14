@@ -9,12 +9,12 @@
 -- through the real triggers and CHECKs; nothing is disabled. Fixed uuids
 -- (00000000-0000-7e00-8000-…) so the tests can name rows.
 --
---   S  (…05e6) relationship R1, ACTIVE: A (…a1, participant …07a1) and
---      B (…b1, participant …07b1). A→B attempt AWAITING_SHARING (…09a1),
+--   S  (…05e6) ACTIVE, started by A: A (…a1, participant …07a1) and
+--      B (…b1, participant …07b1, added by A); A calls B "Bobby" (user_contact). A→B attempt AWAITING_SHARING (…09a1),
 --      B→A attempt HELD (…09b1); MAIN conversations, chat, read state, mood;
 --      B hides activity status; one NULL-participant brain_activity (R17).
---   X  (…05e1) relationship R2, RESOLVED with a SHARED_AGREEMENT closure:
---      C (…c1, …07c1) and D (…d1, …07d1). C's need e1 and D's need e4 are
+--   X  (…05e1) RESOLVED with a SHARED_AGREEMENT closure, started by C:
+--      C (…c1, …07c1) and D (…d1, …07d1, added by C). C's need e1 and D's need e4 are
 --      shared (GRANTED consent + need_share); D's need e5 is not. A shared
 --      proposal (CONVERTED_TO_AGREEMENT) covers e1, both WILLING, agreement
 --      with both parties, a SHARED follow-up; D's individual commitment.
@@ -55,24 +55,20 @@ INSERT INTO persona (user_id, owner_user_id) VALUES
 INSERT INTO user_preferences (user_id, doc) VALUES
   ('00000000-0000-7e00-8000-0000000000b1', '{"memory": {}, "notifications": {}, "privacy": {"showActivityStatus": false}}');
 
-INSERT INTO relationship (id) VALUES
-  ('00000000-0000-7e00-8000-0000000001a1'),
-  ('00000000-0000-7e00-8000-0000000001c1');
-INSERT INTO relationship_member (relationship_id, user_id) VALUES
-  ('00000000-0000-7e00-8000-0000000001a1', '00000000-0000-7e00-8000-0000000000a1'),
-  ('00000000-0000-7e00-8000-0000000001a1', '00000000-0000-7e00-8000-0000000000b1'),
-  ('00000000-0000-7e00-8000-0000000001c1', '00000000-0000-7e00-8000-0000000000c1'),
-  ('00000000-0000-7e00-8000-0000000001c1', '00000000-0000-7e00-8000-0000000000d1');
+INSERT INTO user_contact (user_id, contact_user_id, nickname) VALUES
+  ('00000000-0000-7e00-8000-0000000000a1', '00000000-0000-7e00-8000-0000000000b1', 'Bobby');
 
 -- Sessions start INVITED; → ACTIVE below, after the participants (T-cardinality-1).
-INSERT INTO session (id, relationship_id, status, topic_frame) VALUES
-  ('00000000-0000-7e00-8000-0000000005e6', '00000000-0000-7e00-8000-0000000001a1', 'INVITED', 'Dishes'),
-  ('00000000-0000-7e00-8000-0000000005e1', '00000000-0000-7e00-8000-0000000001c1', 'INVITED', 'Weekends');
+INSERT INTO session (id, status, topic_frame) VALUES
+  ('00000000-0000-7e00-8000-0000000005e6', 'INVITED', 'Dishes'),
+  ('00000000-0000-7e00-8000-0000000005e1', 'INVITED', 'Weekends');
+-- The initiators first (no adder), then the invitees they added (the adder FK and t_participant_added_by).
 INSERT INTO participant (id, session_id, user_id, kind, display_name) VALUES
   ('00000000-0000-7e00-8000-0000000007a1', '00000000-0000-7e00-8000-0000000005e6', '00000000-0000-7e00-8000-0000000000a1', 'human', 'Ada'),
-  ('00000000-0000-7e00-8000-0000000007b1', '00000000-0000-7e00-8000-0000000005e6', '00000000-0000-7e00-8000-0000000000b1', 'human', 'Bob'),
-  ('00000000-0000-7e00-8000-0000000007c1', '00000000-0000-7e00-8000-0000000005e1', '00000000-0000-7e00-8000-0000000000c1', 'human', 'Cy'),
-  ('00000000-0000-7e00-8000-0000000007d1', '00000000-0000-7e00-8000-0000000005e1', '00000000-0000-7e00-8000-0000000000d1', 'human', 'Di');
+  ('00000000-0000-7e00-8000-0000000007c1', '00000000-0000-7e00-8000-0000000005e1', '00000000-0000-7e00-8000-0000000000c1', 'human', 'Cy');
+INSERT INTO participant (id, session_id, user_id, kind, added_by_user_id, display_name) VALUES
+  ('00000000-0000-7e00-8000-0000000007b1', '00000000-0000-7e00-8000-0000000005e6', '00000000-0000-7e00-8000-0000000000b1', 'human', '00000000-0000-7e00-8000-0000000000a1', 'Bob'),
+  ('00000000-0000-7e00-8000-0000000007d1', '00000000-0000-7e00-8000-0000000005e1', '00000000-0000-7e00-8000-0000000000d1', 'human', '00000000-0000-7e00-8000-0000000000c1', 'Di');
 UPDATE session SET status = 'ACTIVE'
 WHERE id IN ('00000000-0000-7e00-8000-0000000005e6', '00000000-0000-7e00-8000-0000000005e1');
 

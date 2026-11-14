@@ -205,8 +205,8 @@ GRANT EXECUTE ON FUNCTION app.session_set_status(uuid, public.session_status) TO
 
 -- A participant archives a session (work-k5fk.10.12, owner decision option A,
 -- 2026-11-13): the caller must be a CURRENT participant (a human participant
--- whose user is the identity, left_at NULL) — not a relationship member who
--- never joined, not one who left — and the session in an archivable state:
+-- whose user is the identity, left_at NULL) — not an invitee who never
+-- joined, not one who left — and the session in an archivable state:
 -- CREATED, INVITED (a pending invitation withdrawn), RESOLVED or ABANDONED.
 -- Records the archiver and the instant; returns the instant. Identity-bound
 -- only: a job or migrator login is refused (insufficient_privilege) — the
@@ -541,6 +541,9 @@ CREATE FUNCTION app.anonymize_user_account("user" uuid) RETURNS void
     DELETE FROM public.user_preferences WHERE user_id = v_uid;
     DELETE FROM public.reminder WHERE user_id = v_uid;
     DELETE FROM public.ai_memory WHERE user_id = v_uid;
+    -- work-k5fk.2: the user's own nicknames for others (user_contact; the old relationship_member row went with the
+    -- account). A contact's entry FOR this user is the contact's own data and stays.
+    DELETE FROM public.user_contact WHERE user_id = v_uid;
     -- 6. the tombstone: the sign-in identities go (the subject can never
     -- resolve again; a later sign-in with it is a new first login), the row is scrubbed
     DELETE FROM public.user_identity WHERE user_id = v_uid;
@@ -659,7 +662,8 @@ REVOKE CREATE ON SCHEMA app FROM mwf_job;
 -- ---------------------------------------------------------------------------
 -- T5. Triggers (spec §5 "Lives only in migration SQL"; §7). Invoker rights
 -- throughout — T-consent-owner must be (N-4), and the others need no more
--- than their caller can see — with search_path pinned and every relation
+-- than their caller can see — except work-k5fk.2's four participant / pair
+-- triggers (definer, said where they are), with search_path pinned and every relation
 -- qualified, so a caller's temp table cannot stand in for a real one. No
 -- caller needs EXECUTE on a trigger function (PostgreSQL checks it only at
 -- CREATE TRIGGER); EXECUTE is revoked from PUBLIC below.
@@ -1055,7 +1059,130 @@ CREATE CONSTRAINT TRIGGER t_agreement_parties_on_agreement AFTER INSERT ON publi
   DEFERRABLE INITIALLY DEFERRED
   FOR EACH ROW EXECUTE FUNCTION app.t_agreement_parties();
 
--- touch_updated_at on the 35 tables that have updated_at (T8 asserts the set
+-- ---------------------------------------------------------------------------
+-- work-k5fk.2: who is in a session, without relationship. Four trigger
+-- functions are SECURITY DEFINER (owned by mwf_job, handed over below), the
+-- exception to T5's invoker rule: they read rows the inserting caller has no
+-- grant on (persona) or will not see under RLS ("user" is own-row only,
+-- design note §6), and they write live_session_pair, which no caller may write.
+-- ---------------------------------------------------------------------------
+
+-- T-participant-kind: participant.kind is human exactly when the user is a
+-- human. The AI and a persona sit as modeled, so every present-humans rule
+-- (v_session_readiness, the reveal gate, agreement_parties_ok, the pair rule
+-- below) skips them without a join to "user".
+CREATE FUNCTION app.t_participant_kind() RETURNS trigger
+  LANGUAGE plpgsql SECURITY DEFINER
+  SET search_path = pg_catalog, public, pg_temp
+  AS $$
+  DECLARE
+    v_kind public.user_kind;
+  BEGIN
+    IF NEW.user_id IS NULL THEN
+      RETURN NEW;  -- an imagined participant (modeled, participant_check)
+    END IF;
+    SELECT u.kind INTO v_kind FROM public."user" u WHERE u.id = NEW.user_id;
+    IF NOT FOUND THEN
+      RETURN NEW;  -- the FK to "user" refuses it
+    END IF;
+    IF (v_kind = 'human') <> (NEW.kind = 'human') THEN
+      RAISE EXCEPTION 'participant kind % does not match user kind %: a human sits as human, the AI and a persona as modeled', NEW.kind, v_kind
+        USING ERRCODE = 'check_violation';
+    END IF;
+    RETURN NEW;
+  END
+  $$;
+COMMENT ON FUNCTION app.t_participant_kind() IS 'Trigger (work-k5fk.2): participant.kind = human exactly when the user is a human; the AI and a persona are modeled seats, so no present-humans rule counts them.';
+-- No caller needs EXECUTE on a trigger function.
+REVOKE EXECUTE ON FUNCTION app.t_participant_kind() FROM PUBLIC;
+CREATE TRIGGER t_participant_kind BEFORE INSERT OR UPDATE OF user_id, kind ON public.participant
+  FOR EACH ROW EXECUTE FUNCTION app.t_participant_kind();
+
+-- T-participant-added-by: the adder (an FK-pinned participant of the same
+-- session) is a human, and a persona is seated only by its owner.
+CREATE FUNCTION app.t_participant_added_by() RETURNS trigger
+  LANGUAGE plpgsql SECURITY DEFINER
+  SET search_path = pg_catalog, public, pg_temp
+  AS $$
+  BEGIN
+    IF NEW.added_by_user_id IS NULL THEN
+      RETURN NEW;  -- the initiator (sql_participant_one_initiator: one per session)
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM public.participant a
+                   WHERE a.session_id = NEW.session_id AND a.user_id = NEW.added_by_user_id AND a.kind = 'human') THEN
+      RAISE EXCEPTION 'a participant is added by a human participant of the same session' USING ERRCODE = 'check_violation';
+    END IF;
+    IF EXISTS (SELECT 1 FROM public.persona x WHERE x.user_id = NEW.user_id AND x.owner_user_id <> NEW.added_by_user_id) THEN
+      RAISE EXCEPTION 'a persona is seated only by its owner' USING ERRCODE = 'check_violation';
+    END IF;
+    RETURN NEW;
+  END
+  $$;
+COMMENT ON FUNCTION app.t_participant_added_by() IS 'Trigger (work-k5fk.2): a participant''s adder is a human participant of the same session, and a persona''s adder is its owner.';
+-- No caller needs EXECUTE on a trigger function.
+REVOKE EXECUTE ON FUNCTION app.t_participant_added_by() FROM PUBLIC;
+CREATE TRIGGER t_participant_added_by BEFORE INSERT OR UPDATE OF added_by_user_id, user_id ON public.participant
+  FOR EACH ROW EXECUTE FUNCTION app.t_participant_added_by();
+
+-- T-live-session-pair (A-Q3, owner decision Q3: DB-enforced at the second
+-- human's join): a human joining a live session pairs with every other
+-- present human of it. The PRIMARY KEY of live_session_pair is the
+-- serialisation point, so no advisory lock is needed: of two sessions whose
+-- second humans join at once, the later INSERT fails with unique_violation
+-- (23505, live_session_pair_pkey) and its whole transaction (the accept)
+-- rolls back. INSERT only: a participant's user and kind never change once
+-- seated (participant_check, t_participant_kind; the pair's FKs hold a paired
+-- user_id in place).
+CREATE FUNCTION app.t_live_session_pair() RETURNS trigger
+  LANGUAGE plpgsql SECURITY DEFINER
+  SET search_path = pg_catalog, public, pg_temp
+  AS $$
+  BEGIN
+    IF NOT EXISTS (SELECT 1 FROM public.session s
+                   WHERE s.id = NEW.session_id AND s.status NOT IN ('RESOLVED', 'ABANDONED', 'ARCHIVED')) THEN
+      RETURN NULL;  -- not a live session: nothing to pair
+    END IF;
+    INSERT INTO public.live_session_pair (user_a, user_b, session_id)
+    SELECT least(NEW.user_id, o.user_id), greatest(NEW.user_id, o.user_id), NEW.session_id
+    FROM public.participant o
+    WHERE o.session_id = NEW.session_id AND o.kind = 'human' AND o.left_at IS NULL AND o.user_id <> NEW.user_id;
+    RETURN NULL;
+  END
+  $$;
+COMMENT ON FUNCTION app.t_live_session_pair() IS 'Trigger (work-k5fk.2): a human joining a live session inserts one live_session_pair row per other present human of it; a second live session for the same pair fails there with unique_violation (live_session_pair_pkey).';
+-- No caller needs EXECUTE on a trigger function.
+REVOKE EXECUTE ON FUNCTION app.t_live_session_pair() FROM PUBLIC;
+CREATE TRIGGER t_live_session_pair AFTER INSERT ON public.participant
+  FOR EACH ROW WHEN (NEW.kind = 'human' AND NEW.left_at IS NULL) EXECUTE FUNCTION app.t_live_session_pair();
+
+-- T-live-session-pair-end: a session that stops being live releases its
+-- pairs. Nothing leaves RESOLVED, ABANDONED or ARCHIVED for a live state
+-- (session_set_status), so a released pair never comes back.
+CREATE FUNCTION app.t_live_session_pair_end() RETURNS trigger
+  LANGUAGE plpgsql SECURITY DEFINER
+  SET search_path = pg_catalog, public, pg_temp
+  AS $$
+  BEGIN
+    DELETE FROM public.live_session_pair p WHERE p.session_id = NEW.id;
+    RETURN NULL;
+  END
+  $$;
+COMMENT ON FUNCTION app.t_live_session_pair_end() IS 'Trigger (work-k5fk.2): when a session goes RESOLVED, ABANDONED or ARCHIVED its live_session_pair rows are deleted, so the pair may start a new session.';
+-- No caller needs EXECUTE on a trigger function.
+REVOKE EXECUTE ON FUNCTION app.t_live_session_pair_end() FROM PUBLIC;
+CREATE TRIGGER t_live_session_pair_end AFTER UPDATE OF status ON public.session
+  FOR EACH ROW WHEN (NEW.status IN ('RESOLVED', 'ABANDONED', 'ARCHIVED') AND OLD.status IS DISTINCT FROM NEW.status)
+  EXECUTE FUNCTION app.t_live_session_pair_end();
+
+-- The hand-over of the four definer trigger functions (as T4's, above).
+GRANT CREATE ON SCHEMA app TO mwf_job;
+ALTER FUNCTION app.t_participant_kind() OWNER TO mwf_job;
+ALTER FUNCTION app.t_participant_added_by() OWNER TO mwf_job;
+ALTER FUNCTION app.t_live_session_pair() OWNER TO mwf_job;
+ALTER FUNCTION app.t_live_session_pair_end() OWNER TO mwf_job;
+REVOKE CREATE ON SCHEMA app FROM mwf_job;
+
+-- touch_updated_at on the 34 tables that have updated_at (T8 asserts the set
 -- equals the catalog's). message and takeaway_link have none.
 CREATE TRIGGER touch_updated_at BEFORE UPDATE ON agreement FOR EACH ROW EXECUTE FUNCTION app.touch_updated_at();
 CREATE TRIGGER touch_updated_at BEFORE UPDATE ON ai_memory FOR EACH ROW EXECUTE FUNCTION app.touch_updated_at();
@@ -1081,13 +1208,12 @@ CREATE TRIGGER touch_updated_at BEFORE UPDATE ON proposal FOR EACH ROW EXECUTE F
 CREATE TRIGGER touch_updated_at BEFORE UPDATE ON proposal_choice FOR EACH ROW EXECUTE FUNCTION app.touch_updated_at();
 CREATE TRIGGER touch_updated_at BEFORE UPDATE ON reconciler_result FOR EACH ROW EXECUTE FUNCTION app.touch_updated_at();
 CREATE TRIGGER touch_updated_at BEFORE UPDATE ON reflection FOR EACH ROW EXECUTE FUNCTION app.touch_updated_at();
-CREATE TRIGGER touch_updated_at BEFORE UPDATE ON relationship FOR EACH ROW EXECUTE FUNCTION app.touch_updated_at();
-CREATE TRIGGER touch_updated_at BEFORE UPDATE ON relationship_member FOR EACH ROW EXECUTE FUNCTION app.touch_updated_at();
 CREATE TRIGGER touch_updated_at BEFORE UPDATE ON reminder FOR EACH ROW EXECUTE FUNCTION app.touch_updated_at();
 CREATE TRIGGER touch_updated_at BEFORE UPDATE ON session FOR EACH ROW EXECUTE FUNCTION app.touch_updated_at();
 CREATE TRIGGER touch_updated_at BEFORE UPDATE ON session_key FOR EACH ROW EXECUTE FUNCTION app.touch_updated_at();
 CREATE TRIGGER touch_updated_at BEFORE UPDATE ON takeaway FOR EACH ROW EXECUTE FUNCTION app.touch_updated_at();
 CREATE TRIGGER touch_updated_at BEFORE UPDATE ON "user" FOR EACH ROW EXECUTE FUNCTION app.touch_updated_at();
+CREATE TRIGGER touch_updated_at BEFORE UPDATE ON user_contact FOR EACH ROW EXECUTE FUNCTION app.touch_updated_at();
 CREATE TRIGGER touch_updated_at BEFORE UPDATE ON user_device FOR EACH ROW EXECUTE FUNCTION app.touch_updated_at();
 CREATE TRIGGER touch_updated_at BEFORE UPDATE ON user_key FOR EACH ROW EXECUTE FUNCTION app.touch_updated_at();
 CREATE TRIGGER touch_updated_at BEFORE UPDATE ON user_memory FOR EACH ROW EXECUTE FUNCTION app.touch_updated_at();
@@ -1362,8 +1488,8 @@ BEGIN
                       AND pg_get_constraintdef(k.oid) ~ ('jsonb_typeof\(' || c.column_name || '\) (= |= ANY )'));
   IF bad IS NOT NULL THEN RAISE EXCEPTION 'step 20: jsonb column(s) without a jsonb_typeof CHECK: %', bad; END IF;
 
-  -- Every uuid column of a table is a uuid7 (tables.sql): 33 primary keys
-  -- defaulting to uuidv7() and the 100 columns that reference them.
+  -- Every uuid column of a table is a uuid7 (tables.sql): 32 primary keys
+  -- defaulting to uuidv7() and the 103 columns that reference them.
   SELECT string_agg(c.relname || '.' || a.attname, ', ' ORDER BY c.relname, a.attname) INTO bad
   FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid JOIN pg_namespace s ON s.oid = c.relnamespace
   WHERE s.nspname = 'public' AND c.relkind = 'r' AND a.attnum > 0 AND NOT a.attisdropped
@@ -1416,7 +1542,7 @@ BEGIN
                 WHERE t.typcategory = 'A' AND e.typtype = 'd');
   IF bad IS NOT NULL THEN RAISE EXCEPTION 'step 20: function(s) with an array-of-domain argument or result (use the base array, e.g. uuid[]): %', bad; END IF;
 
-  -- touch_updated_at on exactly the tables that have updated_at (35).
+  -- touch_updated_at on exactly the tables that have updated_at (34).
   SELECT string_agg(table_name, ', ' ORDER BY table_name) INTO bad
   FROM (SELECT c.table_name FROM information_schema.columns c
         WHERE c.table_schema = 'public' AND c.column_name = 'updated_at'
@@ -1424,7 +1550,7 @@ BEGIN
         SELECT c.relname::text FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid WHERE t.tgname = 'touch_updated_at') d;
   IF bad IS NOT NULL THEN RAISE EXCEPTION 'step 20: tables with updated_at but no touch_updated_at: %', bad; END IF;
   SELECT count(*) INTO n FROM pg_trigger WHERE tgname = 'touch_updated_at';
-  IF n <> 35 THEN RAISE EXCEPTION 'step 20: % touch_updated_at triggers, expected 35', n; END IF;
+  IF n <> 34 THEN RAISE EXCEPTION 'step 20: % touch_updated_at triggers, expected 34', n; END IF;
 
   -- Views are security_invoker.
   SELECT string_agg(c.relname, ', ') INTO bad

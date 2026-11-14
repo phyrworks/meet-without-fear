@@ -93,8 +93,9 @@ OUT="$(cd "$OUT" && pwd)"
 
 # Spec §5 "Lives only in migration SQL" list (sql_*_key_live expanded), plus
 # the expression index this task added (spec §1.1 draft Keys line), plus
-# sql_user_one_ai (design note §1, work-k5fk.3).
-SPEC_SQL_NAMES="sql_session_one_live sql_conversation_one_main sql_attempt_one_live_per_direction
+# sql_user_one_ai (design note §1, work-k5fk.3); sql_session_one_live became
+# live_session_pair's key and sql_participant_one_initiator came in (work-k5fk.2).
+SPEC_SQL_NAMES="sql_participant_one_initiator sql_conversation_one_main sql_attempt_one_live_per_direction
 sql_result_one_current sql_disposition_one_current sql_user_device_token sql_session_key_live
 sql_participant_key_live sql_user_key_live sql_follow_up_due sql_reminder_due sql_need_live sql_message_once
 sql_user_one_ai"
