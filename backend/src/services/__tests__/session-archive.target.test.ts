@@ -10,13 +10,17 @@
  *   - the archiver and the instant are recorded on the session
  *     (archived_by_user_id, archived_at);
  *   - mwf_app cannot write session.status (or the archive columns) directly,
- *     and app.session_set_status no longer archives for it.
+ *     and app.session_set_status no longer archives for it; a job login
+ *     cannot call session_archive;
+ *   - each refusal has its own SQLSTATE (MWA00 no identity, MWA01 not found,
+ *     MWA02 left, MWA03 state); two concurrent archives serialize on the row.
  *
  * Requires: npx tsx src/testing/golden/cli.ts build CREATED
  */
 
+import { Client } from 'pg';
 import { isTargetShape } from '../../testing/golden/shape';
-import { adaAndInvitee, httpAs, openTargetRun, randomUuidV7, type TargetRun } from './target-roles';
+import { adaAndInvitee, appUrlFor, httpAs, openTargetRun, randomUuidV7, type TargetRun } from './target-roles';
 
 const describeTarget = isTargetShape() ? describe : describe.skip;
 jest.setTimeout(180_000);
@@ -32,10 +36,13 @@ describeTarget('session archive on the target, as mwf_app', () => {
   const carol = { id: randomUuidV7(), email: `carol-arch-${process.pid}@e2e.test` };
   const dan = { id: randomUuidV7(), email: `dan-arch-${process.pid}@e2e.test` };
   const outsider = { id: randomUuidV7(), email: `out-arch-${process.pid}@e2e.test` };
+  const erin = { id: randomUuidV7(), email: `erin-arch-${process.pid}@e2e.test` };
   /** Ada and Carol; ABANDONED; Carol left. */
   const left = randomUuidV7();
   /** Ada and Dan; ACTIVE. */
   const active = randomUuidV7();
+  /** Ada and Erin; ABANDONED; both current (the concurrent archive). */
+  const both = randomUuidV7();
 
   /** The SQLSTATE a statement as mwf_app fails with, or 'ok'. */
   async function asApp(userId: string, text: string, params: unknown[] = []): Promise<string> {
@@ -44,6 +51,16 @@ describeTarget('session archive on the target, as mwf_app', () => {
       return 'ok';
     } catch (e) {
       return (e as { code?: string }).code ?? String(e);
+    }
+  }
+  /** As asApp, but `<SQLSTATE> <message>`, for a refusal whose code alone is not specific (42501). */
+  async function asAppMessage(userId: string | null, text: string, params: unknown[] = []): Promise<string> {
+    try {
+      await run.as('mwf_app', userId, text, params);
+      return 'ok';
+    } catch (e) {
+      const { code, message } = e as { code?: string; message?: string };
+      return `${code} ${message}`;
     }
   }
   const status = async (session: string) =>
@@ -56,13 +73,14 @@ describeTarget('session archive on the target, as mwf_app', () => {
     ada = { id: ids.adaUser, email: 'ada@e2e.test' };
     bob = { id: ids.bobUser, email: 'bob@e2e.test' };
     await run.sql(
-      `INSERT INTO "user" (id, email, first_name) VALUES ($1, $2, 'Carol'), ($3, $4, 'Dan'), ($5, $6, 'Out')`,
-      [carol.id, carol.email, dan.id, dan.email, outsider.id, outsider.email],
+      `INSERT INTO "user" (id, email, first_name) VALUES ($1, $2, 'Carol'), ($3, $4, 'Dan'), ($5, $6, 'Out'), ($7, $8, 'Erin')`,
+      [carol.id, carol.email, dan.id, dan.email, outsider.id, outsider.email, erin.id, erin.email],
     );
-    // Two more sessions of Ada's, each on its own relationship (one live session per relationship).
+    // Three more sessions of Ada's, each on its own relationship (one live session per relationship).
     for (const [session, other] of [
       [left, carol.id],
       [active, dan.id],
+      [both, erin.id],
     ]) {
       const rel = randomUuidV7();
       await run.sql(`INSERT INTO relationship (id) VALUES ($1)`, [rel]);
@@ -79,6 +97,7 @@ describeTarget('session archive on the target, as mwf_app', () => {
       await run.as('mwf_job', null, `SELECT app.session_set_status($1::uuid, 'ACTIVE')`, [session]);
     }
     await run.as('mwf_job', null, `SELECT app.session_set_status($1::uuid, 'ABANDONED')`, [left]);
+    await run.as('mwf_job', null, `SELECT app.session_set_status($1::uuid, 'ABANDONED')`, [both]);
     await run.sql(`UPDATE participant SET left_at = now() WHERE session_id = $1 AND user_id = $2`, [left, carol.id]);
     http = await httpAs();
   });
@@ -103,27 +122,48 @@ describeTarget('session archive on the target, as mwf_app', () => {
     const r = await http(bob, 'post', `/sessions/${ids.session}/archive`);
     expect(r.status).toBe(404);
     expect(await status(ids.session)).toBe('CREATED');
-    expect(await asApp(bob.id, `SELECT app.session_archive($1::uuid)`, [ids.session])).toBe('P0002');
+    expect(await asApp(bob.id, `SELECT app.session_archive($1::uuid)`, [ids.session])).toBe('MWA01');
   });
 
-  it('an outsider cannot archive (refused by the function: not found)', async () => {
-    expect(await asApp(outsider.id, `SELECT app.session_archive($1::uuid)`, [ids.session])).toBe('P0002');
+  it('an outsider cannot archive (MWA01); no identity is its own code (MWA00)', async () => {
+    expect(await asApp(outsider.id, `SELECT app.session_archive($1::uuid)`, [ids.session])).toBe('MWA01');
+    expect(await asAppMessage(null, `SELECT app.session_archive($1::uuid)`, [ids.session])).toBe(
+      'MWA00 session_archive: no identity bound',
+    );
     expect(await status(ids.session)).toBe('CREATED');
   });
 
-  it('a participant who left cannot archive (403 over HTTP; insufficient_privilege from the function)', async () => {
+  it('a job login cannot archive for a user, even a current participant (the owner role is refused)', async () => {
+    let got = 'ok';
+    try {
+      await run.as('mwf_job', ada.id, `SELECT app.session_archive($1::uuid)`, [ids.session]);
+    } catch (e) {
+      const { code, message } = e as { code?: string; message?: string };
+      got = `${code} ${message}`;
+    }
+    expect(got).toBe('42501 session_archive is identity-bound: a job or migrator login cannot archive for a user');
+    expect(await status(ids.session)).toBe('CREATED');
+  });
+
+  it('a participant who left cannot archive (MWA02 from the function; 403 over HTTP)', async () => {
+    // HTTP: requireSessionAccess answers the leaver first (403), so the function-level
+    // assertion below is the one that tests session_archive's own leaver arm.
     expect((await http(carol, 'post', `/sessions/${left}/archive`)).status).toBe(403);
-    expect(await asApp(carol.id, `SELECT app.session_archive($1::uuid)`, [left])).toBe('42501');
-    // nor through the general status writer
-    expect(await asApp(carol.id, `SELECT app.session_set_status($1::uuid, 'ARCHIVED')`, [left])).not.toBe('ok');
+    expect(await asAppMessage(carol.id, `SELECT app.session_archive($1::uuid)`, [left])).toBe(
+      'MWA02 a participant who left cannot archive the session',
+    );
+    // nor through the general status writer: a leaver is no member there (not found)
+    expect(await asAppMessage(carol.id, `SELECT app.session_set_status($1::uuid, 'ARCHIVED')`, [left])).toBe(
+      'P0002 session not found',
+    );
     expect(await status(left)).toBe('ABANDONED');
   });
 
-  it('an ACTIVE session is not archivable (400; check_violation from the function)', async () => {
+  it('an ACTIVE session is not archivable (400; MWA03 from the function)', async () => {
     const r = await http(ada, 'post', `/sessions/${active}/archive`);
     expect(r.status).toBe(400);
     expect(r.body.error.code).toBe('VALIDATION_ERROR');
-    expect(await asApp(ada.id, `SELECT app.session_archive($1::uuid)`, [active])).toBe('23514');
+    expect(await asApp(ada.id, `SELECT app.session_archive($1::uuid)`, [active])).toBe('MWA03');
     expect(await status(active)).toBe('ACTIVE');
   });
 
@@ -131,7 +171,9 @@ describeTarget('session archive on the target, as mwf_app', () => {
     expect(await asApp(ada.id, `UPDATE session SET status = 'ARCHIVED' WHERE id = $1`, [left])).toBe('42501');
     expect(await asApp(ada.id, `UPDATE session SET archived_at = now() WHERE id = $1`, [left])).toBe('42501');
     expect(await asApp(ada.id, `UPDATE session SET archived_by_user_id = NULL WHERE id = $1`, [left])).toBe('42501');
-    expect(await asApp(ada.id, `SELECT app.session_set_status($1::uuid, 'ARCHIVED')`, [left])).toBe('42501');
+    expect(await asAppMessage(ada.id, `SELECT app.session_set_status($1::uuid, 'ARCHIVED')`, [left])).toBe(
+      '42501 only the job archives through session_set_status; a participant uses app.session_archive',
+    );
     expect(await status(left)).toBe('ABANDONED');
   });
 
@@ -163,6 +205,46 @@ describeTarget('session archive on the target, as mwf_app', () => {
   it('an archived session is not archived again (400)', async () => {
     const r = await http(ada, 'post', `/sessions/${ids.session}/archive`);
     expect(r.status).toBe(400);
-    expect(await asApp(ada.id, `SELECT app.session_archive($1::uuid)`, [ids.session])).toBe('23514');
+    expect(await asApp(ada.id, `SELECT app.session_archive($1::uuid)`, [ids.session])).toBe('MWA03');
+  });
+
+  it('two concurrent archives: the second waits on the row lock, then is refused (MWA03); the first archiver is kept', async () => {
+    const url = appUrlFor(run.fx.target, run.fx.database);
+    const first = new Client({ connectionString: url });
+    const second = new Client({ connectionString: url });
+    await first.connect();
+    await second.connect();
+    try {
+      await first.query('BEGIN');
+      await first.query("SELECT set_config('app.current_user_id', $1, true)", [erin.id]);
+      await first.query('SELECT app.session_archive($1::uuid)', [both]);
+      await second.query('BEGIN');
+      await second.query("SELECT set_config('app.current_user_id', $1, true)", [ada.id]);
+      const pid = (await second.query<{ pid: number }>('SELECT pg_backend_pid() AS pid')).rows[0].pid;
+      const blocked = second.query('SELECT app.session_archive($1::uuid)', [both]).then(
+        () => 'ok',
+        (e: { code?: string }) => e.code ?? String(e),
+      );
+      // the second archive is waiting on the first one's row lock
+      let waiting = false;
+      for (let i = 0; i < 100 && !waiting; i++) {
+        const [r] = await run.sql<{ w: string | null }>(
+          `SELECT wait_event_type AS w FROM pg_stat_activity WHERE pid = $1`,
+          [pid],
+        );
+        waiting = r?.w === 'Lock';
+        if (!waiting) await new Promise(resolve => setTimeout(resolve, 50));
+      }
+      expect(waiting).toBe(true);
+      await first.query('COMMIT');
+      expect(await blocked).toBe('MWA03');
+      await second.query('ROLLBACK');
+    } finally {
+      await first.end();
+      await second.end();
+    }
+    expect(
+      await run.sql(`SELECT status::text AS status, archived_by_user_id AS by FROM session WHERE id = $1`, [both]),
+    ).toEqual([{ status: 'ARCHIVED', by: erin.id }]);
   });
 });

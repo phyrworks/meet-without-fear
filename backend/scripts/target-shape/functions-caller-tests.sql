@@ -400,11 +400,16 @@ ROLLBACK;
 
 -- 19. app.session_archive (work-k5fk.10.12): only a CURRENT participant of the
 --     session, only from CREATED / INVITED / RESOLVED / ABANDONED; records the
---     archiver and the instant. mwf_app holds no UPDATE of session.status and
---     app.session_set_status archives only for the job (retention).
---     Setup (superuser): D leaves X (RESOLVED, so T-cardinality-2 allows it);
---     Y (…05e2), a CREATED session on X's relationship R2 with C only, so D
---     is a relationship member of Y but never joined it.
+--     archiver and the instant. Its refusals carry their own SQLSTATEs (MWA00
+--     no identity, MWA01 not found / not a participant, MWA02 participant left,
+--     MWA03 not archivable), so each arm below catches exactly its code — a
+--     grant drift (42501) or an unrelated CHECK (23514) would stop the run.
+--     mwf_app holds no UPDATE of session.status; app.session_set_status
+--     archives only for the job (retention); a job login cannot call
+--     session_archive. Setup (superuser): D leaves X (RESOLVED, so
+--     T-cardinality-2 allows it); Y (…05e2), a CREATED session on X's
+--     relationship R2 with C only, so D is a relationship member of Y but
+--     never joined it.
 \connect - mwf_user
 SELECT 'connected as ' || session_user || ' (setup: D leaves X; session Y with C only)';
 UPDATE participant SET left_at = now() WHERE id = '00000000-0000-7e00-8000-0000000007d1';
@@ -414,54 +419,78 @@ INSERT INTO participant (id, session_id, user_id, kind, display_name) VALUES
 \connect - mwf_app
 SELECT 'connected as ' || session_user || ' (current_user ' || current_user || ')';
 SELECT set_config('t.a_user', :'a_user', false), set_config('t.b_user', :'b_user', false), set_config('t.outsider', :'outsider', false), set_config('t.att_a', :'att_a', false), set_config('t.att_b', :'att_b', false), set_config('t.r_session', :'r_session', false), set_config('t.b_participant', :'b_participant', false), set_config('t.a_participant', :'a_participant', false) \g /dev/null
-DO $$ BEGIN
-  -- 19a. a participant who left
+DO $$ DECLARE v_con text; BEGIN
+  -- 19a. a participant who left: MWA02 from session_archive
   PERFORM set_config('app.current_user_id', '00000000-0000-7e00-8000-0000000000d1', true);
   BEGIN
     PERFORM app.session_archive('00000000-0000-7e00-8000-0000000005e1');
     RAISE EXCEPTION 'TEST FAILED: a participant who left archived the session';
-  EXCEPTION WHEN insufficient_privilege THEN RAISE NOTICE 'PASS 19a a participant who left cannot archive: %', SQLERRM;
+  EXCEPTION WHEN SQLSTATE 'MWA02' THEN RAISE NOTICE 'PASS 19a a participant who left cannot archive (MWA02): %', SQLERRM;
   END;
+  -- 19b. nor through session_set_status: its member arm is current participants only (not found)
   BEGIN
     PERFORM app.session_set_status('00000000-0000-7e00-8000-0000000005e1', 'ARCHIVED');
     RAISE EXCEPTION 'TEST FAILED: a participant who left archived the session through session_set_status';
-  EXCEPTION WHEN insufficient_privilege THEN RAISE NOTICE 'PASS 19b nor through session_set_status (→ ARCHIVED is the job''s there): %', SQLERRM;
+  EXCEPTION WHEN no_data_found THEN
+    IF SQLERRM <> 'session not found' THEN RAISE; END IF;
+    RAISE NOTICE 'PASS 19b nor through session_set_status (a leaver is no member there): %', SQLERRM;
   END;
-  -- 19c. a relationship member who never joined Y; an outsider; no identity
+  -- 19c. a relationship member who never joined Y; 19d an outsider; 19e no identity
   BEGIN
     PERFORM app.session_archive('00000000-0000-7e00-8000-0000000005e2');
     RAISE EXCEPTION 'TEST FAILED: a relationship member who never joined archived the session';
-  EXCEPTION WHEN no_data_found THEN RAISE NOTICE 'PASS 19c a relationship member who never joined cannot archive: %', SQLERRM;
+  EXCEPTION WHEN SQLSTATE 'MWA01' THEN RAISE NOTICE 'PASS 19c a relationship member who never joined cannot archive (MWA01): %', SQLERRM;
   END;
   PERFORM set_config('app.current_user_id', current_setting('t.outsider'), true);
   BEGIN
     PERFORM app.session_archive('00000000-0000-7e00-8000-0000000005e1');
     RAISE EXCEPTION 'TEST FAILED: an outsider archived the session';
-  EXCEPTION WHEN no_data_found THEN RAISE NOTICE 'PASS 19d an outsider cannot archive: %', SQLERRM;
+  EXCEPTION WHEN SQLSTATE 'MWA01' THEN RAISE NOTICE 'PASS 19d an outsider cannot archive (MWA01): %', SQLERRM;
   END;
   PERFORM set_config('app.current_user_id', '', true);
   BEGIN
     PERFORM app.session_archive('00000000-0000-7e00-8000-0000000005e1');
     RAISE EXCEPTION 'TEST FAILED: no identity archived the session';
-  EXCEPTION WHEN no_data_found THEN RAISE NOTICE 'PASS 19e no identity cannot archive: %', SQLERRM;
+  EXCEPTION WHEN SQLSTATE 'MWA00' THEN RAISE NOTICE 'PASS 19e no identity cannot archive (MWA00): %', SQLERRM;
   END;
   -- 19f. a live (ACTIVE) session is not archivable
   PERFORM set_config('app.current_user_id', current_setting('t.a_user'), true);
   BEGIN
     PERFORM app.session_archive(current_setting('t.r_session')::uuid);
     RAISE EXCEPTION 'TEST FAILED: an ACTIVE session was archived';
-  EXCEPTION WHEN check_violation THEN RAISE NOTICE 'PASS 19f an ACTIVE session is not archivable: %', SQLERRM;
+  EXCEPTION WHEN SQLSTATE 'MWA03' THEN RAISE NOTICE 'PASS 19f an ACTIVE session is not archivable (MWA03): %', SQLERRM;
   END;
-  -- 19g. no direct write of session.status or the archive columns by mwf_app
+  -- 19g, 19h. no direct write of session.status or the archive columns by mwf_app: the grant refuses
   BEGIN
     UPDATE session SET status = 'ARCHIVED' WHERE id = '00000000-0000-7e00-8000-0000000005e1';
     RAISE EXCEPTION 'TEST FAILED: mwf_app updated session.status';
-  EXCEPTION WHEN insufficient_privilege THEN RAISE NOTICE 'PASS 19g mwf_app cannot UPDATE session.status: %', SQLERRM;
+  EXCEPTION WHEN insufficient_privilege THEN
+    IF SQLERRM <> 'permission denied for table session' THEN RAISE; END IF;
+    RAISE NOTICE 'PASS 19g mwf_app cannot UPDATE session.status: %', SQLERRM;
   END;
   BEGIN
     UPDATE session SET archived_at = now() WHERE id = '00000000-0000-7e00-8000-0000000005e1';
     RAISE EXCEPTION 'TEST FAILED: mwf_app updated session.archived_at';
-  EXCEPTION WHEN insufficient_privilege THEN RAISE NOTICE 'PASS 19h mwf_app cannot UPDATE session.archived_at: %', SQLERRM;
+  EXCEPTION WHEN insufficient_privilege THEN
+    IF SQLERRM <> 'permission denied for table session' THEN RAISE; END IF;
+    RAISE NOTICE 'PASS 19h mwf_app cannot UPDATE session.archived_at: %', SQLERRM;
+  END;
+  -- 19l. a current participant cannot archive through session_set_status either (→ ARCHIVED is the job's)
+  BEGIN
+    PERFORM app.session_set_status(current_setting('t.r_session')::uuid, 'ARCHIVED');
+    RAISE EXCEPTION 'TEST FAILED: a participant archived through session_set_status';
+  EXCEPTION WHEN insufficient_privilege THEN
+    IF SQLERRM NOT LIKE 'only the job archives through session_set_status%' THEN RAISE; END IF;
+    RAISE NOTICE 'PASS 19l a current participant cannot archive through session_set_status: %', SQLERRM;
+  END;
+  -- 19m. session_check1: mwf_app cannot INSERT an ARCHIVED session (no archived_at)
+  BEGIN
+    INSERT INTO session (relationship_id, status) VALUES ('00000000-0000-7e00-8000-0000000001c1', 'ARCHIVED');
+    RAISE EXCEPTION 'TEST FAILED: mwf_app inserted an ARCHIVED session';
+  EXCEPTION WHEN check_violation THEN
+    GET STACKED DIAGNOSTICS v_con = CONSTRAINT_NAME;
+    IF v_con <> 'session_check1' THEN RAISE; END IF;
+    RAISE NOTICE 'PASS 19m mwf_app INSERT of an ARCHIVED session refused by %', v_con;
   END;
   IF (SELECT status FROM session WHERE id = '00000000-0000-7e00-8000-0000000005e1') <> 'RESOLVED' THEN
     RAISE EXCEPTION 'TEST FAILED: X moved off RESOLVED';
@@ -484,11 +513,40 @@ DO $$ DECLARE v_at timestamptz; BEGIN
   BEGIN
     PERFORM app.session_archive('00000000-0000-7e00-8000-0000000005e1');
     RAISE EXCEPTION 'TEST FAILED: an ARCHIVED session was archived again';
-  EXCEPTION WHEN check_violation THEN RAISE NOTICE 'PASS 19j an ARCHIVED session is not archived again: %', SQLERRM;
+  EXCEPTION WHEN SQLSTATE 'MWA03' THEN RAISE NOTICE 'PASS 19j an ARCHIVED session is not archived again (MWA03): %', SQLERRM;
   END;
 END $$;
 \connect - mwf_job
 SELECT 'connected as ' || session_user || ' (current_user ' || current_user || ')';
+DO $$ DECLARE v_con text; BEGIN
+  -- 19n. a job login cannot archive for a user (the owner role holds EXECUTE; the function refuses it)
+  PERFORM set_config('app.current_user_id', '00000000-0000-7e00-8000-0000000000a1', true);
+  BEGIN
+    PERFORM app.session_archive('00000000-0000-7e00-8000-0000000005e6');
+    RAISE EXCEPTION 'TEST FAILED: a job login archived through session_archive';
+  EXCEPTION WHEN insufficient_privilege THEN
+    IF SQLERRM NOT LIKE 'session_archive is identity-bound%' THEN RAISE; END IF;
+    RAISE NOTICE 'PASS 19n a job login cannot call session_archive: %', SQLERRM;
+  END;
+  -- 19o. session_check1 / session_check2 hold for the job's own grants: ARCHIVED without archived_at,
+  --      an archiver on a session that is not archived
+  BEGIN
+    UPDATE session SET status = 'ARCHIVED' WHERE id = '00000000-0000-7e00-8000-0000000005e6';
+    RAISE EXCEPTION 'TEST FAILED: the job set ARCHIVED without archived_at';
+  EXCEPTION WHEN check_violation THEN
+    GET STACKED DIAGNOSTICS v_con = CONSTRAINT_NAME;
+    IF v_con <> 'session_check1' THEN RAISE; END IF;
+    RAISE NOTICE 'PASS 19o the job''s UPDATE to ARCHIVED without archived_at refused by %', v_con;
+  END;
+  BEGIN
+    UPDATE session SET archived_by_user_id = '00000000-0000-7e00-8000-0000000000a1' WHERE id = '00000000-0000-7e00-8000-0000000005e6';
+    RAISE EXCEPTION 'TEST FAILED: an archiver on a session that is not archived';
+  EXCEPTION WHEN check_violation THEN
+    GET STACKED DIAGNOSTICS v_con = CONSTRAINT_NAME;
+    IF v_con <> 'session_check2' THEN RAISE; END IF;
+    RAISE NOTICE 'PASS 19p an archiver without archived_at refused by %', v_con;
+  END;
+END $$;
 -- 19k. the job (session-retention.ts) still archives through session_set_status: archived_at, no archiver;
 --      and the retention purge of an archived session is not blocked by the archive columns (rolled back)
 BEGIN;
@@ -504,6 +562,39 @@ DO $$ BEGIN
     RAISE EXCEPTION 'TEST FAILED: purge left participants';
   END IF;
   RAISE NOTICE 'PASS 19k the job archives (archived_at, no archiver); purging a participant-archived session cascades';
+END $$;
+ROLLBACK;
+
+-- 20. session_set_status's member arm is CURRENT participants only (work-k5fk.10.12 review):
+--     B leaves the live session S (A stays, so T-cardinality-2 allows it); B cannot move S
+--     (→ ABANDONED), A can (rolled back).
+\connect - mwf_user
+SELECT 'connected as ' || session_user || ' (setup: B leaves S)';
+UPDATE participant SET left_at = now() WHERE id = :'b_participant';
+\connect - mwf_app
+SELECT 'connected as ' || session_user || ' (current_user ' || current_user || ')';
+SELECT set_config('t.a_user', :'a_user', false), set_config('t.b_user', :'b_user', false), set_config('t.r_session', :'r_session', false) \g /dev/null
+DO $$ BEGIN
+  PERFORM set_config('app.current_user_id', current_setting('t.b_user'), true);
+  BEGIN
+    PERFORM app.session_set_status(current_setting('t.r_session')::uuid, 'ABANDONED');
+    RAISE EXCEPTION 'TEST FAILED: a participant who left abandoned the session';
+  EXCEPTION WHEN no_data_found THEN
+    IF SQLERRM <> 'session not found' THEN RAISE; END IF;
+    RAISE NOTICE 'PASS 20a a participant who left cannot move the session (ACTIVE→ABANDONED): %', SQLERRM;
+  END;
+  IF (SELECT status FROM session WHERE id = current_setting('t.r_session')::uuid) <> 'ACTIVE' THEN
+    RAISE EXCEPTION 'TEST FAILED: S moved off ACTIVE';
+  END IF;
+END $$;
+BEGIN;
+SELECT set_config('app.current_user_id', :'a_user', true) \g /dev/null
+SELECT app.session_set_status(:'r_session', 'ABANDONED') \g /dev/null
+DO $$ BEGIN
+  IF (SELECT status FROM session WHERE id = current_setting('t.r_session')::uuid) <> 'ABANDONED' THEN
+    RAISE EXCEPTION 'TEST FAILED: the current participant''s ACTIVE→ABANDONED did not land';
+  END IF;
+  RAISE NOTICE 'PASS 20b a current participant moves the session (ACTIVE→ABANDONED)';
 END $$;
 ROLLBACK;
 

@@ -924,20 +924,43 @@ export async function archiveSession(req: Request, res: Response): Promise<void>
       archivedAt: row.archived_at.toISOString(),
     });
   } catch (error) {
-    switch (getPgSqlState(error)) {
-      case 'P0002': // no such session, or the caller is not a participant of it
-      case '22P02': // not a uuid
-        errorResponse(res, 'NOT_FOUND', 'Session not found', 404);
-        return;
-      case '42501': // a participant who left
-        errorResponse(res, 'FORBIDDEN', 'Access to this session denied', 403);
-        return;
-      case '23514': // not archivable from its state
-        errorResponse(res, 'VALIDATION_ERROR', 'Only resolved, abandoned, or pending sessions can be archived', 400);
-        return;
+    const sqlState = getPgSqlState(error);
+    const refusal = archiveRefusal(sqlState);
+    if (refusal) {
+      errorResponse(res, refusal.code, refusal.message, refusal.status);
+      return;
     }
-    logger.error('[archiveSession] Error:', error);
-    errorResponse(res, 'INTERNAL_ERROR', 'Failed to archive session', 500);
+    if (sqlState === 'MWA00') {
+      logger.error('[archiveSession] app.session_archive saw no identity (MWA00): the identity binding is off');
+      errorResponse(res, 'INTERNAL_ERROR', 'Failed to archive session', 500);
+      return;
+    }
+    if (sqlState) logger.warn(`[archiveSession] unexpected SQLSTATE ${sqlState} from app.session_archive`);
+    throw error;
+  }
+}
+
+/**
+ * app.session_archive's own refusals (trailer.sql; class MW SQLSTATEs, so a
+ * grant drift or an unrelated CHECK is never one of them) as HTTP answers.
+ * Anything else, MWA00 (no identity) included, is not a refusal: null.
+ */
+export function archiveRefusal(
+  sqlState: string | undefined,
+): { status: 400 | 403 | 404; code: 'VALIDATION_ERROR' | 'FORBIDDEN' | 'NOT_FOUND'; message: string } | null {
+  switch (sqlState) {
+    case 'MWA01': // no such session, or the caller is not a participant of it
+      return { status: 404, code: 'NOT_FOUND', message: 'Session not found' };
+    case 'MWA02': // a participant who left
+      return { status: 403, code: 'FORBIDDEN', message: 'Access to this session denied' };
+    case 'MWA03': // not archivable from its state
+      return {
+        status: 400,
+        code: 'VALIDATION_ERROR',
+        message: 'Only resolved, abandoned, or pending sessions can be archived',
+      };
+    default:
+      return null;
   }
 }
 
