@@ -11,7 +11,7 @@
  *    targets, so its values are asserted ⊆ the baseline's.
  */
 
-import { relationshipIdDropped } from './relationship-dropped';
+import { RELATIONSHIP_ID_CONCEPT_RULE, relationshipIdDropped } from './relationship-dropped';
 import {
   MILESTONE_DTO_RULES,
   milestoneMapMask,
@@ -24,6 +24,7 @@ export const SESSION_READ_ALLOW: AllowList = {
   scenario: 'session-read',
   rules: [
     relationshipIdDropped('session-read'),
+    RELATIONSHIP_ID_CONCEPT_RULE,
     ...TARGET_TOPIC_FRAME_RULES,
     ...TARGET_TOPIC_FRAME_INITIAL_RULES,
     // `session state` returns progress for both actors: the rules must match.
@@ -119,7 +120,9 @@ export const SESSION_READ_BYTE_TARGET_ALLOW: AllowList = {
   scenario: 'session-read',
   rules: [
     // The topic-frame body rules ride along; the restored-state ones are concept-only.
-    ...SESSION_READ_ALLOW.rules.filter(r => !TARGET_TOPIC_FRAME_INITIAL_RULES.includes(r)),
+    ...SESSION_READ_ALLOW.rules.filter(
+      r => !TARGET_TOPIC_FRAME_INITIAL_RULES.includes(r) && r !== RELATIONSHIP_ID_CONCEPT_RULE,
+    ),
     {
       kind: 'traceMapped',
       at: 'steps.*.trace',

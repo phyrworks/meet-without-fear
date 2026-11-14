@@ -14,7 +14,7 @@
  * so the partner-need text values may differ on the target; nothing else.
  */
 
-import { relationshipIdDropped } from './relationship-dropped';
+import { RELATIONSHIP_ID_CONCEPT_RULE, relationshipIdDropped } from './relationship-dropped';
 import type { KnownLeak } from '../privacy';
 import {
   DEFAULT_MILESTONE_MASK,
@@ -284,6 +284,7 @@ export const NEEDS_HIDDEN_UNTIL_SHARED_ALLOW: AllowList = {
   scenario: 'needs-hidden-until-shared',
   rules: [
     relationshipIdDropped('needs-hidden-until-shared'),
+    RELATIONSHIP_ID_CONCEPT_RULE,
     ...TARGET_TOPIC_FRAME_RULES,
     ...TARGET_TOPIC_FRAME_INITIAL_RULES,
     ...SHARED_RULES(true),

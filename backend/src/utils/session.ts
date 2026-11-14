@@ -64,7 +64,7 @@ type SessionWithIncludes = {
 export async function departedParticipantUsers(sessionIds: string[]): Promise<Set<string>> {
   if (sessionIds.length === 0) return new Set();
   const rows = await prisma.participant.findMany({
-    where: { sessionId: { in: sessionIds }, leftAt: { not: null }, userId: { not: null } },
+    where: { sessionId: { in: sessionIds }, kind: 'human', leftAt: { not: null }, userId: { not: null } },
     select: { sessionId: true, userId: true },
   });
   return new Set(rows.map(r => `${r.sessionId}:${r.userId}`));

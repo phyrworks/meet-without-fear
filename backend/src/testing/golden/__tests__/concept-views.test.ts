@@ -54,6 +54,14 @@ describe('concept views — declaration', () => {
  * normalised baselines hold (every row of `initial` and every changed row is
  * a full view row); the target view must have exactly those columns.
  */
+/**
+ * work-k5fk.2 (review round 1, F5): columns of the recorded current-shape
+ * views the target views no longer have. Each is compared as absent by
+ * RELATIONSHIP_ID_CONCEPT_RULE (allow-lists/relationship-dropped.ts) in every
+ * concept allow-list.
+ */
+const DROPPED_COLUMNS: Record<string, string[]> = { session: ['relationship_id'] };
+
 (isTargetShape() ? describe : describe.skip)('concept views — target-shape.sql column sets (target)', () => {
   let fx: RestoredFixture;
 
@@ -98,6 +106,22 @@ describe('concept views — declaration', () => {
       fx.database,
     );
     const target = new Map(cols.map(r => [r.table_name.replace(/^old_concept_/, ''), r.cols]));
+    // Columns the target dropped on purpose, each compared as absent by an allow-list rule.
+    for (const [concept, dropped] of Object.entries(DROPPED_COLUMNS)) {
+      const sets = recorded.get(concept);
+      if (!sets) continue;
+      recorded.set(
+        concept,
+        new Set(
+          [...sets].map(s =>
+            s
+              .split(',')
+              .filter(c => !dropped.includes(c))
+              .join(','),
+          ),
+        ),
+      );
+    }
     expect([...target.keys()].sort()).toEqual(Object.keys(CONCEPT_VIEWS).sort());
     let compared = 0;
     for (const [concept, sets] of recorded) {

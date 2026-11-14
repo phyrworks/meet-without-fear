@@ -122,13 +122,15 @@ describeTarget('invitations on the target, as mwf_app (the decline as the job)',
       await run.sql(`SELECT count(*)::int AS n FROM live_session_pair WHERE session_id = $1`, [sessionId]),
     ).toEqual([{ n: 1 }]);
 
-    // The invite name is Ada's own contact entry for Carol; the nickname route edits it.
-    expect(
-      await run.sql(`SELECT nickname FROM user_contact WHERE user_id = $1 AND contact_user_id = $2`, [
-        ada.id,
-        carol.id,
-      ]),
-    ).toEqual([{ nickname: 'Carol' }]);
+    // The invite name is what Ada calls Carol, resolved from Ada's own invitation (nothing written into Ada's
+    // rows by Carol's accept, review round 1 Q1); the nickname route writes Ada's own user_contact entry.
+    expect(await run.sql(`SELECT count(*)::int AS n FROM user_contact WHERE contact_user_id = $1`, [carol.id])).toEqual(
+      [{ n: 0 }],
+    );
+    expect((await http(ada, 'get', `/sessions/${sessionId}`)).body.data.session.partner).toMatchObject({
+      id: carol.id,
+      nickname: 'Carol',
+    });
     const nick = await http(ada, 'patch', `/contacts/${carol.id}/nickname`, { nickname: 'Caz' });
     expect(nick.body.data).toEqual({ nickname: 'Caz' });
     expect(

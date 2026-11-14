@@ -16,7 +16,7 @@
  * probes, which must now find nothing.
  */
 
-import { relationshipIdDropped } from './relationship-dropped';
+import { RELATIONSHIP_ID_CONCEPT_RULE, relationshipIdDropped } from './relationship-dropped';
 import type { KnownLeak } from '../privacy';
 import {
   byteLabelShift,
@@ -77,6 +77,7 @@ export const AUTHOR_SEES_STATUS_ONLY_ALLOW: AllowList = {
   scenario: 'author-sees-status-only',
   rules: [
     relationshipIdDropped('author-sees-status-only'),
+    RELATIONSHIP_ID_CONCEPT_RULE,
     ...TARGET_TOPIC_FRAME_RULES,
     ...TARGET_TOPIC_FRAME_INITIAL_RULES,
     ...bodyRules(true),

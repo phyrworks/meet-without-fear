@@ -328,7 +328,8 @@ export async function notifySessionMembers(sessionId: string, excludeUserId?: st
       data: { updatedAt: now },
       select: {
         updatedAt: true,
-        participants: { where: { userId: { not: null }, leftAt: null }, select: { userId: true } },
+        // Humans only: a modeled seat (the AI, a persona) has a user id but no client (work-k5fk.2 review F7).
+        participants: { where: { kind: 'human', userId: { not: null }, leftAt: null }, select: { userId: true } },
       },
     });
 

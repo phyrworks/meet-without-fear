@@ -107,6 +107,8 @@ describe('compareWithAllowList — empathy-reveal (old ⊆ new, named additions)
       'replacedEntry @ steps.1.changes',
       'replacedEntry @ steps.1.changes',
       'mayDiffer @ initial.session.*.topic_frame',
+      // work-k5fk.2 (RELATIONSHIP_ID_CONCEPT_RULE): no restored session row here either.
+      'absentKeys @ initial.session.*',
     ]);
   });
 
@@ -288,6 +290,8 @@ function withTargetProgress(t: Json): Json {
       if (dto && typeof dto === 'object') delete dto.relationshipId;
     }
   }
+  // … nor does the target's concept session view (RELATIONSHIP_ID_CONCEPT_RULE).
+  for (const row of Object.values((t.initial?.session ?? {}) as Record<string, Json>)) delete row.relationship_id;
   return t;
 }
 

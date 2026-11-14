@@ -543,7 +543,9 @@ export async function buildContextForParticipant(
 
   // Names. The partner MUST be named by the nickname this participant gave
   // them (their own user_contact entry; work-k5fk.2), then the co-participant's display name.
-  const partner = coParticipants.find(c => c.kind === 'human' && !c.leftAt) ?? coParticipants[0];
+  // The present human, else one who left; never a modeled seat (work-k5fk.2 review F7).
+  const partner =
+    coParticipants.find(c => c.kind === 'human' && !c.leftAt) ?? coParticipants.find(c => c.kind === 'human');
   const userName =
     me.displayName ||
     (await prisma.user.findUnique({ where: { id: userId }, select: { name: true } }))?.name ||

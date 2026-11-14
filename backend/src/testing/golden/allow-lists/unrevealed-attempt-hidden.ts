@@ -27,7 +27,7 @@
  * second copy, or round 2 revealed before its time is still a violation.
  */
 
-import { relationshipIdDropped } from './relationship-dropped';
+import { RELATIONSHIP_ID_CONCEPT_RULE, relationshipIdDropped } from './relationship-dropped';
 import type { KnownLeak } from '../privacy';
 import { BOB_HELD_EMPATHY_STATEMENT } from '../../fixture-scenarios/scenarios';
 import {
@@ -77,6 +77,7 @@ export const UNREVEALED_ATTEMPT_HIDDEN_ALLOW: AllowList = {
   scenario: 'unrevealed-attempt-hidden',
   rules: [
     relationshipIdDropped('unrevealed-attempt-hidden'),
+    RELATIONSHIP_ID_CONCEPT_RULE,
     ...TARGET_TOPIC_FRAME_RULES,
     ...TARGET_TOPIC_FRAME_INITIAL_RULES,
     ...READ_DTO_RULES,

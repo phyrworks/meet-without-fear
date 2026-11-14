@@ -39,7 +39,7 @@ import {
 import { latestStageRow, loadStageStates, progressDTO, witnessStartedAt } from '../services/stage-shim';
 import { listConversationMessages, toMessageDTO } from '../services/message-store';
 import { displayStatus, isSessionPaused } from '../services/session-status';
-import { loadSessionPartner, pendingInviteeNames, recordNicknameIfAbsent } from '../services/contacts';
+import { loadSessionPartner, pendingInviteeNames } from '../services/contacts';
 
 const INITIAL_SESSION_MESSAGE_LIMIT = 500;
 
@@ -93,9 +93,8 @@ async function acceptPendingInvitationForE2ESession(sessionId: string, userId: s
   const acceptedAt = new Date();
   await tooling.$transaction(async tx => {
     await lockInvitationForAccept(tx, invitation.id); // as acceptInvitation (work-99k2)
-    // As acceptInvitation (work-k5fk.2): the inviter's invite name becomes their nickname for a link invitee.
+    // As acceptInvitation (work-k5fk.2): the invitee is added by the inviter; nothing is written for the inviter.
     const inviterUserId = invitation.invitedByParticipant.userId;
-    if (inviterUserId) await recordNicknameIfAbsent(tx, inviterUserId, userId, invitation.inviteeName);
 
     const participant = await tx.participant.upsert({
       where: { sessionId_userId: { sessionId, userId } },

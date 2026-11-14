@@ -633,8 +633,8 @@ type ConceptRow = Record<string, unknown>;
 export interface ConceptLabelInput {
   /**
    * Shape-independent ids: the target keeps session/invitation/user ids. The
-   * relationship id is the current shape's only (work-k5fk.2): on the target
-   * the concept session view synthesises it from the session's humans.
+   * relationship id is the current shape's only (work-k5fk.2): the target's
+   * concept session view has no relationship_id.
    */
   manifest: {
     sessionId: string;
@@ -709,13 +709,8 @@ export function buildConceptLabelMap(input: ConceptLabelInput): LabelMap {
     if (who) labels.set(clerkId, `<clerkId:${bare(who)}>`);
   }
   labels.set(input.manifest.sessionId, '<session:main>');
-  if (input.manifest.relationshipId) {
-    labels.set(input.manifest.relationshipId, '<relationship:main>');
-  } else {
-    // work-k5fk.2: the synthesised relationship of the main session (old_concept_session, target-shape.sql).
-    const main = rows('session').find(r => String(r.id) === input.manifest.sessionId);
-    if (main?.relationship_id) labels.set(String(main.relationship_id), '<relationship:main>');
-  }
+  // work-k5fk.2: only a current-shape manifest has a relationship.
+  if (input.manifest.relationshipId) labels.set(input.manifest.relationshipId, '<relationship:main>');
   labels.set(input.manifest.invitationId, '<invitation:main>');
 
   // participant: (user, session).

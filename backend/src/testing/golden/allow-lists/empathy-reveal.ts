@@ -13,6 +13,7 @@
  * On the current shape nothing is added, so the rules are satisfied trivially.
  */
 
+import { RELATIONSHIP_ID_CONCEPT_RULE } from './relationship-dropped';
 import { ADA_EMPATHY_STATEMENT } from '../../fixture-scenarios/scenarios';
 import {
   deliveredCopyInRead,
@@ -80,6 +81,8 @@ export const EMPATHY_REVEAL_ALLOW: AllowList = {
     // work-9klf: no step reads the invitation; only the restored session row carries the topic frame.
     // Last, so the byte list's `EMPATHY_REVEAL_ALLOW.rules[0]` stays the round / attemptId rule.
     ...TARGET_TOPIC_FRAME_INITIAL_RULES,
+    // work-k5fk.2: the restored session row has no relationship_id (relationship-dropped.ts). After rules[0].
+    RELATIONSHIP_ID_CONCEPT_RULE,
   ],
 };
 

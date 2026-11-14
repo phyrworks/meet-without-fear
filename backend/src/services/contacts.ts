@@ -4,9 +4,19 @@
  *
  *   - A session's partner is its other HUMAN participant (participant.kind =
  *     'human'; the AI and personas are modeled seats and never a partner).
- *     Before the invitee joins there is none.
- *   - A nickname is the caller's own `user_contact` row (user_id = caller):
- *     private to its owner, never read for anybody else.
+ *     A NEW_PROCESS follow-up (tending startLinkedProcess) starts with the
+ *     caller only: until someone else joins it, its partner is the other
+ *     human of the session it continues (previous_session_id), so the
+ *     follow-up shows the same person.
+ *   - What the caller calls the partner is resolved at READ time, from the
+ *     caller's own rows only (review round 1, Q1 — nothing is ever written
+ *     into another user's row):
+ *       1. the caller's own user_contact.nickname for them;
+ *       2. else the invite name on the caller's own invitation they accepted
+ *          (invitation.invitee_name, accepted_by_user_id = the partner);
+ *       3. before the invitee joins, the invite name on the caller's latest
+ *          invitation for the session (pendingInviteeNames);
+ *     and the callers fall back to the partner's display name.
  *   - "Sessions with this person" is the sessions both are participants of;
  *     "a live session with this person" is a `live_session_pair` row, the
  *     key the database enforces (one live session per pair of humans).
@@ -20,44 +30,79 @@ import { getPgConstraintViolation } from '../middleware/errors';
 
 type Tx = Prisma.TransactionClient;
 
+/** How far back a follow-up looks for the person it continues with (previous_session_id hops). */
+const LINEAGE_HOPS = 5;
+
 /** The other human of a session as the caller sees them. */
 export interface SessionPartner {
   userId: string;
   firstName: string | null;
   name: string | null;
-  /** The caller's own nickname for them (user_contact), or null. */
+  /** What the caller calls them: their own user_contact nickname, else the invite name they accepted; or null. */
   nickname: string | null;
 }
 
+interface OtherHuman {
+  userId: string;
+  firstName: string | null;
+  name: string | null;
+}
+
+/** The first other human participant of each session, by join order (present or left). */
+async function otherHumans(sessionIds: string[], userId: string): Promise<Map<string, OtherHuman>> {
+  const out = new Map<string, OtherHuman>();
+  if (sessionIds.length === 0) return out;
+  const rows = await prisma.participant.findMany({
+    where: { sessionId: { in: sessionIds }, kind: 'human', userId: { not: userId } },
+    orderBy: [{ joinedAt: 'asc' }, { id: 'asc' }],
+    select: { sessionId: true, userId: true, user: { select: { firstName: true, name: true } } },
+  });
+  for (const r of rows) {
+    if (!r.userId || out.has(r.sessionId)) continue;
+    out.set(r.sessionId, { userId: r.userId, firstName: r.user?.firstName ?? null, name: r.user?.name ?? null });
+  }
+  return out;
+}
+
 /**
- * Each session's partner for `userId` (the first other human participant by
- * join order, present or left), with the caller's nickname for them. A
- * session with no other human maps to null.
+ * Each session's partner for `userId` with what the caller calls them. A
+ * session with no other human takes the other human of the session it
+ * continues (previous_session_id, up to LINEAGE_HOPS back); none at all maps
+ * to null.
  */
 export async function loadSessionPartners(
   sessionIds: string[],
   userId: string,
 ): Promise<Map<string, SessionPartner | null>> {
-  const out = new Map<string, SessionPartner | null>(sessionIds.map(id => [id, null]));
-  if (sessionIds.length === 0) return out;
-  const others = await prisma.participant.findMany({
-    where: { sessionId: { in: sessionIds }, kind: 'human', userId: { not: userId } },
-    orderBy: [{ joinedAt: 'asc' }, { id: 'asc' }],
-    select: { sessionId: true, userId: true, user: { select: { firstName: true, name: true } } },
-  });
-  const nicknames = await nicknamesFor(
-    userId,
-    others.flatMap(o => (o.userId ? [o.userId] : [])),
-  );
-  for (const o of others) {
-    if (!o.userId || out.get(o.sessionId)) continue;
-    out.set(o.sessionId, {
-      userId: o.userId,
-      firstName: o.user?.firstName ?? null,
-      name: o.user?.name ?? null,
-      nickname: nicknames.get(o.userId) ?? null,
+  const found = await otherHumans(sessionIds, userId);
+
+  // F4: a follow-up with no other human yet continues its previous session's pair.
+  let pending = sessionIds.filter(id => !found.has(id));
+  const origin = new Map(pending.map(id => [id, id]));
+  for (let hop = 0; hop < LINEAGE_HOPS && pending.length > 0; hop++) {
+    const links = await prisma.session.findMany({
+      where: { id: { in: pending }, previousSessionId: { not: null } },
+      select: { id: true, previousSessionId: true },
     });
+    const next = new Map<string, string>();
+    for (const l of links) if (l.previousSessionId) next.set(l.previousSessionId, origin.get(l.id)!);
+    if (next.size === 0) break;
+    const ancestors = await otherHumans([...next.keys()], userId);
+    pending = [];
+    origin.clear();
+    for (const [ancestor, start] of next) {
+      const o = ancestors.get(ancestor);
+      if (o) found.set(start, o);
+      else {
+        pending.push(ancestor);
+        origin.set(ancestor, start);
+      }
+    }
   }
+
+  const names = await namesIGave(userId, [...new Set([...found.values()].map(o => o.userId))]);
+  const out = new Map<string, SessionPartner | null>(sessionIds.map(id => [id, null]));
+  for (const [sessionId, o] of found) out.set(sessionId, { ...o, nickname: names.get(o.userId) ?? null });
   return out;
 }
 
@@ -66,7 +111,7 @@ export async function loadSessionPartner(sessionId: string, userId: string): Pro
   return (await loadSessionPartners([sessionId], userId)).get(sessionId) ?? null;
 }
 
-/** The caller's nicknames for these users (user_contact rows owned by `userId`). */
+/** The caller's own user_contact nicknames for these users. */
 export async function nicknamesFor(userId: string, contactUserIds: string[]): Promise<Map<string, string>> {
   if (contactUserIds.length === 0) return new Map();
   const rows = await prisma.userContact.findMany({
@@ -76,25 +121,43 @@ export async function nicknamesFor(userId: string, contactUserIds: string[]): Pr
   return new Map(rows.flatMap(r => (r.nickname ? [[r.contactUserId, r.nickname] as const] : [])));
 }
 
-/** The caller's nickname for one user, or null. */
+/**
+ * What the caller calls each of these users, from the caller's own rows: the
+ * user_contact nickname, else the invite name on the caller's latest
+ * invitation that user accepted.
+ */
+export async function namesIGave(userId: string, otherUserIds: string[]): Promise<Map<string, string>> {
+  if (otherUserIds.length === 0) return new Map();
+  const out = await nicknamesFor(userId, otherUserIds);
+  const missing = otherUserIds.filter(id => !out.has(id));
+  if (missing.length > 0) {
+    const accepted = await prisma.invitation.findMany({
+      where: { invitedByParticipant: { userId }, acceptedByUserId: { in: missing }, inviteeName: { not: null } },
+      orderBy: { createdAt: 'desc' },
+      select: { acceptedByUserId: true, inviteeName: true },
+    });
+    for (const a of accepted) {
+      if (a.acceptedByUserId && a.inviteeName && !out.has(a.acceptedByUserId))
+        out.set(a.acceptedByUserId, a.inviteeName);
+    }
+  }
+  return out;
+}
+
+/** What the caller calls one user (namesIGave), or null. */
 export async function getNickname(userId: string, contactUserId: string): Promise<string | null> {
-  return (await nicknamesFor(userId, [contactUserId])).get(contactUserId) ?? null;
+  return (await namesIGave(userId, [contactUserId])).get(contactUserId) ?? null;
 }
 
 /**
- * The caller's nickname for the partner of a session (another human
- * participant of it), in one statement; none before the invitee joins.
+ * What the caller calls the partner of a session: the partner's name as
+ * namesIGave resolves it, or — before the invitee joins — the invite name on
+ * the caller's latest invitation for the session. Null when there is neither.
  */
 export async function getNicknameForSessionPartner(sessionId: string, userId: string): Promise<string | null> {
-  const row = await prisma.userContact.findFirst({
-    where: {
-      userId,
-      nickname: { not: null },
-      contact: { participants: { some: { sessionId, kind: 'human' } } },
-    },
-    select: { nickname: true },
-  });
-  return row?.nickname ?? null;
+  const partner = await loadSessionPartner(sessionId, userId);
+  if (partner) return partner.nickname;
+  return (await pendingInviteeNames([sessionId], userId)).get(sessionId) ?? null;
 }
 
 /** Set (or clear, with null) the caller's own nickname for a contact. */
@@ -113,47 +176,16 @@ export async function setNickname(
   return row.nickname;
 }
 
-/**
- * Record an invite name as the owner's nickname for the contact unless the
- * owner already has an entry for them (an existing nickname is theirs to
- * change, through PATCH /contacts/:userId/nickname or a new invite name).
- */
-export async function recordNicknameIfAbsent(
-  client: Tx,
-  userId: string,
-  contactUserId: string,
-  nickname: string | null | undefined,
-): Promise<void> {
-  const value = nickname?.trim();
-  if (!value) return;
-  await client.userContact.createMany({
-    data: [{ userId, contactUserId, nickname: value.slice(0, 100) }],
-    skipDuplicates: true,
-  });
-}
-
-/** Do these two users share any session (any status)? */
+/** Do these two humans share any session (any status)? Modeled seats never count. */
 export async function sharesASession(userId: string, otherUserId: string): Promise<boolean> {
   const n = await prisma.participant.count({
-    where: { userId, session: { participants: { some: { userId: otherUserId } } } },
+    where: {
+      userId,
+      kind: 'human',
+      session: { participants: { some: { userId: otherUserId, kind: 'human' } } },
+    },
   });
   return n > 0;
-}
-
-/** Ids of the sessions `userId` and `otherUserId` are both participants of (newest first). */
-export async function sharedSessionIds(
-  userId: string,
-  otherUserId: string,
-  where: Prisma.SessionWhereInput = {},
-): Promise<string[]> {
-  const rows = await prisma.session.findMany({
-    where: {
-      AND: [{ participants: { some: { userId } } }, { participants: { some: { userId: otherUserId } } }, where],
-    },
-    orderBy: { updatedAt: 'desc' },
-    select: { id: true },
-  });
-  return rows.map(r => r.id);
 }
 
 /**

@@ -190,7 +190,7 @@ export default function NewSessionScreen() {
         });
         // Track person selection (new person) and session creation
         // A new person has no user id until they accept (work-k5fk.2: no relationship id either)
-        trackPersonSelected(response.session.partner?.id || '', true);
+        trackPersonSelected(response.session.partner?.id || undefined, true);
         trackSessionCreated(response.session.id);
         router.replace(
           linkedInnerThoughtsId

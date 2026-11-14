@@ -20,11 +20,13 @@
  *     nicknames into user_contact one for one, so every partner.name /
  *     partner.nickname value is unchanged — no rule admits a change there, so
  *     a moved name fails the run.
- *   - the concept views' `old_concept_session.relationship_id` is synthesised
- *     from the session's humans (concept-views/target-shape.sql) and labelled
- *     `<relationship:main>` for the main session (normalize.ts
- *     buildConceptLabelMap), so the restored state compares unchanged — no
- *     rule for it, deliberately: a wrong synthesis fails the run.
+ *   - the concept view `old_concept_session` has no `relationship_id` any
+ *     more (review round 1, F5: a synthesised id compared equal whatever it
+ *     was, because the labeller mapped it to <relationship:main>, so it
+ *     asserted nothing). RELATIONSHIP_ID_CONCEPT_RULE compares the restored
+ *     session row's relationship_id as absent, in every concept allow-list
+ *     (empathy-reveal's included); concept-views.test names the column in
+ *     DROPPED_COLUMNS.
  *   - participant rows gain `added_by_user_id`; the concept participant view
  *     does not project it, and no scenario step writes a participant, so no
  *     baseline sees it.
@@ -35,6 +37,22 @@
  */
 
 import type { AbsentKeysRule } from './types';
+
+/**
+ * Concept allow-lists only: the restored session row (`initial.session.*`)
+ * has no relationship_id on the target (the view dropped it). Every recorded
+ * concept baseline holds exactly one such value, there; no recorded step
+ * changes a session row.
+ */
+export const RELATIONSHIP_ID_CONCEPT_RULE: AbsentKeysRule = {
+  kind: 'absentKeys',
+  at: 'initial.session.*',
+  keys: ['relationship_id'],
+  mustMatch: true,
+  why:
+    'work-k5fk.2: old_concept_session.relationship_id named the relationship row, which the target no longer has; ' +
+    'the view drops the column and the restored session row is compared without it (relationship-dropped.ts).',
+};
 
 /** Where a DTO carried relationshipId (the four reads listed above). */
 export const RELATIONSHIP_ID_AT = [
@@ -58,9 +76,8 @@ export const RELATIONSHIP_DROPPED_WHY = {
     'never held a relationship table.',
   'empathy-reveal':
     'empathy-reveal (FEEL_HEARD_B, whole-database scope): reads no session DTO, so no body moves; the restored ' +
-    'session row’s relationship_id is synthesised by old_concept_session and still labels <relationship:main>, ' +
-    'and no step wrote Relationship or RelationshipMember. It verifies with no rule from this module — listed so ' +
-    'every baseline has its paragraph.',
+    'session row’s relationship_id is gone from old_concept_session (RELATIONSHIP_ID_CONCEPT_RULE, its one rule ' +
+    'here), and no step wrote Relationship or RelationshipMember.',
   'reflection-never-crosses':
     'reflection-never-crosses (INNER_WORK_LINKED_A): its full reads before and after Ada’s turn — session, state, ' +
     'session list and people, for each reader — carried relationshipId (8 paths); all absent on the target. ' +

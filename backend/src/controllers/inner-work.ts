@@ -214,7 +214,9 @@ async function fetchLinkedPartnerSessionContext(
     if (!session) return null;
 
     // MY nickname for the partner (what I call them), then their display name.
-    const partner = coParticipants.find(c => c.kind === 'human' && !c.leftAt) ?? coParticipants[0];
+    // The present human, else one who left; never a modeled seat (work-k5fk.2 review F7).
+    const partner =
+      coParticipants.find(c => c.kind === 'human' && !c.leftAt) ?? coParticipants.find(c => c.kind === 'human');
     const partnerName = myNickname || partner?.displayName || 'Partner';
 
     const currentStage = stages.get(me.id)?.stage || 1;

@@ -20,8 +20,8 @@ import {
   getNickname,
   isLiveSessionPairViolation,
   loadSessionPartners,
+  namesIGave,
   pendingInviteeNames,
-  recordNicknameIfAbsent,
   setNickname,
   sharesASession,
 } from '../services/contacts';
@@ -53,7 +53,8 @@ const declineInvitationSchema = z.object({
 });
 
 const updateNicknameSchema = z.object({
-  nickname: z.string().min(1).max(100).nullable(),
+  // Trimmed: a blank nickname is refused here as the user_contact CHECK would (review round 1, F8).
+  nickname: z.string().trim().min(1).max(100).nullable(),
 });
 
 /** A path user id must be a uuid before it reaches a uuid7 column. */
@@ -339,9 +340,6 @@ export async function createSession(req: Request, res: Response): Promise<void> 
         });
         return;
       }
-
-      // An invite name is the inviter's nickname for this person.
-      if (inviteName) await setNickname(user.id, personId, inviteName.slice(0, 100));
     }
 
     // Create the session, the inviter's participant (with its MAIN
@@ -353,6 +351,10 @@ export async function createSession(req: Request, res: Response): Promise<void> 
       const sess = await tx.session.create({
         data: { status: 'CREATED' },
       });
+      // A known person's invite name is the inviter's own nickname for them (written with the session, so a failed
+      // create leaves no nickname behind).
+      const nickname = inviteName?.trim().slice(0, 100);
+      if (personId && nickname) await setNickname(user.id, personId, nickname, tx);
 
       const me = await tx.participant.create({
         data: {
@@ -576,14 +578,10 @@ export async function acceptInvitation(req: Request, res: Response): Promise<voi
       // empathy draft save (FOR SHARE) commits before the move below reads the
       // drafts, or runs after this commits and writes against the participant.
       await lockInvitationForAccept(tx, id);
-      // work-k5fk.2: a link invitee becomes known to the inviter here — the
-      // invite name is the inviter's nickname for them, unless the inviter
-      // already has an entry (FINDING: the invitee's request writes the
-      // inviter's user_contact row; an invitation-side definer takes it over
-      // with RLS, design note §6).
-      if (inviterUserId) {
-        await recordNicknameIfAbsent(tx, inviterUserId, user.id, invitation.inviteeName);
-      }
+      // work-k5fk.2 (review Q1): nothing is written for the inviter here. What
+      // they call the invitee is resolved when they read it: their own
+      // user_contact nickname, else this invitation's invitee_name once it is
+      // accepted_by the invitee (services/contacts.ts namesIGave).
 
       await tx.invitation.update({
         where: { id },
@@ -802,14 +800,8 @@ export async function listPeople(req: Request, res: Response): Promise<void> {
         byPerson.set(o.userId, entry);
       }
     }
-    const nicknames = new Map<string, string>();
-    if (byPerson.size > 0) {
-      const rows = await prisma.userContact.findMany({
-        where: { userId: user.id, contactUserId: { in: [...byPerson.keys()] } },
-        select: { contactUserId: true, nickname: true },
-      });
-      for (const r of rows) if (r.nickname) nicknames.set(r.contactUserId, r.nickname);
-    }
+    // What I call each of them (my user_contact nickname, else the invite name they accepted).
+    const nicknames = await namesIGave(user.id, [...byPerson.keys()]);
 
     const ACTIVE_STATUSES = ['CREATED', 'INVITED', 'ACTIVE', 'PAUSED', 'WAITING'];
     const people = [...byPerson.values()]
