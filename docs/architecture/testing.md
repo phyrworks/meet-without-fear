@@ -618,7 +618,10 @@ npm run e2e
 ```
 
 **CI Pipeline:**
-- GitHub Actions workflows in `.github/workflows/` run `npm run check` and `npm run test` on each PR
+- `.github/workflows/ci.yml` runs on every push to `phoenix/**` (`phoenix/target-shape` and its feature branches) and on PRs into `main` or `phoenix/**`, as two parallel jobs:
+  - `checks`: `npm run check`, then the shared and mobile jest suites (no database);
+  - `backend` (the target-shape gate): a `mwf-postgres` container from production's PG 18 image pin, built as a developer's is (`docs/development/local-setup.md`: superuser `mwf_user`, `infra/aws/roles.sql` with the `mwf_*_dev` passwords, a `podman` → `docker` shim so the scripts and the golden trace reader work unchanged), `run-baseline.sh ts7_ci_gate --as-migrator`, `mwf_target_test` owned by and deployed as `mwf_migrator`, the 16 golden templates (`golden/cli.ts build <stage>`), then the full backend suite with `DATABASE_URL` (superuser) and `APP_`/`JOB_`/`AUTH_DATABASE_URL` (role logins) on `mwf_target_test`, `GOLDEN_DATABASE_URL`, and `NODE_OPTIONS=--max-old-space-size=8192`.
+  - `CI Result` is the single gate job for branch protection.
 - A separate `python-eval` CI job runs when eval files change (`scripts/mwf_*.py`, `eval/gold-scenarios.json`, `eval/icm/**`, `eval/moments/**`, etc.): runs `py_compile` syntax checks across all gold-loop scripts and executes `scripts/test_mwf_moment_eval.py`
 - E2E tests run on merge to main (slower, separate job)
 - Live AI tests optional (manual trigger)

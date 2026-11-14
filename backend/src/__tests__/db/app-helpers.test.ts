@@ -10,9 +10,13 @@
  * rolled back: the database is left untouched.
  */
 import { Client } from 'pg';
+import { isTargetShape } from '../../testing/golden/shape';
 
 const url = process.env.DB_TEST_URL ?? (process.env.CI ? process.env.DATABASE_URL : undefined);
-const describeDb = url ? describe : describe.skip;
+// Old shape only ("User", "Relationship", "RelationshipMember", "Session"). On the
+// target shape the helpers are proven per caller by run-baseline.sh
+// (scripts/target-shape/functions-caller-tests.sql); porting this suite is work-k5fk.10.19.
+const describeDb = url && !isTargetShape() ? describe : describe.skip;
 
 describeDb('app.* helpers (database)', () => {
   let client: Client;
