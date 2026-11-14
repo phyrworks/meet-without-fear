@@ -598,4 +598,244 @@ DO $$ BEGIN
 END $$;
 ROLLBACK;
 
+-- 21. the JSON-schema subset validator (work-k5fk.8): every keyword accepts and refuses,
+--     nested properties and arrays carry a path, and a schema with an unsupported keyword
+--     is not well-formed. Pure functions, run as mwf_app (still connected).
+DO $$
+DECLARE
+  -- [schema, accepted doc, refused doc, the refusal's expected text]
+  cases jsonb := $j$[
+    [{"type": "object"},                           {},                  [],                   "$: expected object, got array"],
+    [{"type": "array"},                            [],                  {},                   "$: expected array, got object"],
+    [{"type": "string"},                           "x",                 1,                    "$: expected string, got number"],
+    [{"type": "number"},                           1.5,                 "1",                  "$: expected number, got string"],
+    [{"type": "integer"},                          2,                   2.5,                  "$: expected integer, got number"],
+    [{"type": "boolean"},                          false,               null,                 "$: expected boolean, got null"],
+    [{"type": "null"},                             null,                0,                    "$: expected null, got number"],
+    [{"type": ["string", "null"]},                 null,                true,                 "$: expected string or null, got boolean"],
+    [{"required": ["a", "b"]},                     {"a": 1, "b": 2},    {"a": 1},             "$: missing required key b"],
+    [{"enum": ["x", 2, {"k": [1]}]},               {"k": [1]},          {"k": [1, 2]},        "$: not one of the allowed values"],
+    [{"properties": {"a": {"type": "string"}}},    {"a": "s", "z": 1},  {"a": 1},             "$.a: expected string, got number"],
+    [{"properties": {"a": {}}, "additionalProperties": false}, {"a": 0}, {"a": 0, "b": 1},    "$: unexpected key b"],
+    [{"additionalProperties": {"type": "integer"}}, {"a": 1, "b": 2},   {"a": 1, "b": "2"},   "$.b: expected integer, got string"],
+    [{"items": {"type": "string"}},                ["a", "b"],          ["a", 2],             "$[1]: expected string, got number"],
+    [{"type": "object", "properties": {"o": {"type": "object", "required": ["p"], "properties": {"p": {"type": "array", "items": {"type": "object", "required": ["q"], "properties": {"q": {"type": "boolean"}}}}}}}},
+                                                   {"o": {"p": [{"q": true}, {"q": false}]}},
+                                                   {"o": {"p": [{"q": true}, {"q": "no"}]}},
+                                                                                          "$.o.p[1].q: expected boolean, got string"]
+  ]$j$;
+  c jsonb; v text; i int := 0;
+BEGIN
+  FOR c IN SELECT * FROM jsonb_array_elements(cases) LOOP
+    i := i + 1;
+    v := app.jsonb_schema_violation(c -> 1, c -> 0);
+    IF v IS NOT NULL THEN RAISE EXCEPTION 'TEST FAILED: case %: % refused %: %', i, c -> 0, c -> 1, v; END IF;
+    v := app.jsonb_schema_violation(c -> 2, c -> 0);
+    IF v IS DISTINCT FROM (c ->> 3) THEN RAISE EXCEPTION 'TEST FAILED: case %: % on % gave %, expected %', i, c -> 0, c -> 2, v, c ->> 3; END IF;
+  END LOOP;
+  -- keywords apply only to their own type, as in JSON Schema: properties/required say nothing about a string
+  IF app.jsonb_schema_violation('"s"', '{"required": ["a"], "items": {"type": "null"}}') IS NOT NULL THEN
+    RAISE EXCEPTION 'TEST FAILED: object/array keywords applied to a string';
+  END IF;
+  RAISE NOTICE 'PASS 21a the validator: type (7 types, a union), required, enum, properties, additionalProperties (false, a schema), items, a nested path — % cases each accepted and refused', i;
+  -- an unknown keyword, a bad type name, a non-array required: not well-formed (refused when seeded, never silently ignored)
+  IF app.json_schema_wellformed('{"type": "object", "minimum": 1}') OR app.json_schema_wellformed('{"type": "date"}')
+     OR app.json_schema_wellformed('{"required": "a"}') OR app.json_schema_wellformed('{"properties": {"a": {"maxLength": 3}}}')
+     OR NOT app.json_schema_wellformed('{"type": "object", "description": "x", "properties": {"a": {"enum": [1]}}, "additionalProperties": false}') THEN
+    RAISE EXCEPTION 'TEST FAILED: json_schema_wellformed';
+  END IF;
+  RAISE NOTICE 'PASS 21b json_schema_wellformed refuses an unsupported keyword, type name or keyword value, nested too';
+  -- the seeded schemas, by name and version
+  IF NOT app.jsonb_matches('{"memory": {}, "notifications": {}, "privacy": {}}', 'user_preferences', 1)
+     OR app.jsonb_matches('{"memory": {}, "notifications": {}}', 'user_preferences', 1) THEN
+    RAISE EXCEPTION 'TEST FAILED: jsonb_matches on user_preferences v1';
+  END IF;
+  BEGIN
+    PERFORM app.jsonb_matches('{}', 'user_preferences', 99);
+    RAISE EXCEPTION 'TEST FAILED: an unknown schema version matched';
+  EXCEPTION WHEN foreign_key_violation THEN RAISE NOTICE 'PASS 21c jsonb_matches by name and version; an unknown version raises: %', SQLERRM;
+  END;
+END $$;
+
+-- 22. user_preferences.doc is validated by its BEFORE trigger (json_schema user_preferences v1), as mwf_app
+SELECT set_config('t.a_user', :'a_user', false) \g /dev/null
+DO $$ DECLARE v_msg text; BEGIN
+  PERFORM set_config('app.current_user_id', current_setting('t.a_user'), true);
+  -- the app's own default document (user-settings.ts DEFAULT_DOC) is accepted, version 1 by default
+  INSERT INTO user_preferences (user_id, doc) VALUES (current_setting('t.a_user')::uuid,
+    '{"memory": {"sessionContinuity": true, "crossSessionRecall": false, "patternInsights": false, "rememberAgreements": true},
+      "notifications": {"pushEnabled": true, "emailEnabled": false, "newInvitations": true, "partnerActions": true, "followUpReminders": true},
+      "privacy": {"showActivityStatus": true, "allowSessionInvites": true, "analyticsOptOut": false}}');
+  IF (SELECT doc_schema_version FROM user_preferences WHERE user_id = current_setting('t.a_user')::uuid) <> 1 THEN
+    RAISE EXCEPTION 'TEST FAILED: doc_schema_version is not 1';
+  END IF;
+  RAISE NOTICE 'PASS 22a the app''s default preferences document is accepted (doc_schema_version 1)';
+  BEGIN
+    UPDATE user_preferences SET doc = jsonb_set(doc, '{memory,sessionContinuity}', '"yes"') WHERE user_id = current_setting('t.a_user')::uuid;
+    RAISE EXCEPTION 'TEST FAILED: a string preference was stored';
+  EXCEPTION WHEN check_violation THEN
+    GET STACKED DIAGNOSTICS v_msg = MESSAGE_TEXT;
+    IF v_msg <> 'user_preferences.doc does not match json_schema user_preferences v1: $.memory.sessionContinuity: expected boolean, got string' THEN RAISE; END IF;
+    RAISE NOTICE 'PASS 22b a wrongly typed preference is refused: %', v_msg;
+  END;
+  BEGIN
+    UPDATE user_preferences SET doc = doc || '{"theme": "dark"}' WHERE user_id = current_setting('t.a_user')::uuid;
+    RAISE EXCEPTION 'TEST FAILED: an unknown preference document was stored';
+  EXCEPTION WHEN check_violation THEN
+    IF SQLERRM NOT LIKE '%: $: unexpected key theme' THEN RAISE; END IF;
+    RAISE NOTICE 'PASS 22c an unknown top-level key is refused: %', SQLERRM;
+  END;
+  BEGIN
+    UPDATE user_preferences SET doc = doc || '{"privacy": {"showActivityStatus": false, "shareLocation": true}}' WHERE user_id = current_setting('t.a_user')::uuid;
+    RAISE EXCEPTION 'TEST FAILED: an unknown privacy key was stored';
+  EXCEPTION WHEN check_violation THEN
+    IF SQLERRM NOT LIKE '%: $.privacy: unexpected key shareLocation' THEN RAISE; END IF;
+    RAISE NOTICE 'PASS 22d an unknown nested key is refused: %', SQLERRM;
+  END;
+END $$;
+-- 22e. an unknown schema version is refused (mwf_app cannot write doc_schema_version: the migrator's
+--      UPDATE, rolled back, shows the trigger, not a grant, is what refuses it)
+\connect - mwf_user
+BEGIN;
+DO $$ BEGIN
+  UPDATE user_preferences SET doc_schema_version = 2 WHERE user_id = '00000000-0000-7e00-8000-0000000000b1';
+  RAISE EXCEPTION 'TEST FAILED: an unknown schema version was stored';
+EXCEPTION WHEN foreign_key_violation THEN
+  IF SQLERRM <> 'json_schema user_preferences version 2 does not exist' THEN RAISE; END IF;
+  RAISE NOTICE 'PASS 22e an unknown doc_schema_version is refused: %', SQLERRM;
+END $$;
+ROLLBACK;
+
+-- 23. ai_memory.doc's structure is validated per kind (json_schema ai_memory.<kind> v1), as mwf_job
+--     (the summarizer and the partner-session classifier write it: INSERT … ON CONFLICT DO UPDATE)
+\connect - mwf_job
+SELECT 'connected as ' || session_user || ' (current_user ' || current_user || ')';
+SELECT set_config('t.a_participant', :'a_participant', false) \g /dev/null
+DO $$ DECLARE v_msg text; BEGIN
+  -- the summarizer's document (conversation-summarizer.ts updateSessionSummary), every key it writes
+  INSERT INTO ai_memory (participant_id, kind, doc) VALUES (current_setting('t.a_participant')::uuid, 'SUMMARY',
+    '{"text": "s", "messageCount": 12, "oldestMessageAt": "2026-11-01T10:00:00.000Z", "newestMessageAt": "2026-11-01T11:00:00.000Z",
+      "tokenCount": 3, "generatedAt": "2026-11-01T11:00:01.000Z", "keyThemes": ["t"], "emotionalJourney": "e", "unresolvedTopics": [],
+      "agreedFacts": [], "userNeeds": ["n"], "partnerNeeds": [], "openQuestions": [], "agreements": [], "lastUnresolvedThread": null}')
+    ON CONFLICT (participant_id, kind) DO UPDATE SET doc = EXCLUDED.doc;
+  -- the classifier's NOTABLE_FACTS (partner-session-classifier.ts; ids from ensureFactIds)
+  INSERT INTO ai_memory (participant_id, kind, doc) VALUES (current_setting('t.a_participant')::uuid, 'NOTABLE_FACTS',
+    '{"facts": [{"id": "01900000-0000-7000-8000-000000000001", "category": "People", "fact": "f"}, {"category": "Emotional", "fact": "g"}]}')
+    ON CONFLICT (participant_id, kind) DO UPDATE SET doc = EXCLUDED.doc;
+  RAISE NOTICE 'PASS 23a the summarizer''s SUMMARY and the classifier''s NOTABLE_FACTS documents are accepted';
+  BEGIN
+    INSERT INTO ai_memory (participant_id, kind, doc) VALUES (current_setting('t.a_participant')::uuid, 'SUMMARY',
+      '{"text": "s", "messageCount": "12", "generatedAt": "2026-11-01T11:00:01.000Z"}')
+      ON CONFLICT (participant_id, kind) DO UPDATE SET doc = EXCLUDED.doc;
+    RAISE EXCEPTION 'TEST FAILED: a string messageCount was stored (the ON CONFLICT update path)';
+  EXCEPTION WHEN check_violation THEN
+    GET STACKED DIAGNOSTICS v_msg = MESSAGE_TEXT;
+    IF v_msg <> 'ai_memory.doc does not match json_schema ai_memory.summary v1: $.messageCount: expected integer, got string' THEN RAISE; END IF;
+    RAISE NOTICE 'PASS 23b a SUMMARY with a string messageCount is refused on the upsert''s update: %', v_msg;
+  END;
+  BEGIN
+    INSERT INTO ai_memory (participant_id, kind, doc) VALUES (current_setting('t.a_participant')::uuid, 'NOTABLE_FACTS',
+      '{"facts": [{"category": "People", "fact": "f"}, {"category": "People"}]}')
+      ON CONFLICT (participant_id, kind) DO UPDATE SET doc = EXCLUDED.doc;
+    RAISE EXCEPTION 'TEST FAILED: a fact without its text was stored';
+  EXCEPTION WHEN check_violation THEN
+    IF SQLERRM NOT LIKE '%ai_memory.notable_facts v1: $.facts[1]: missing required key fact' THEN RAISE; END IF;
+    RAISE NOTICE 'PASS 23c a fact without its text is refused: %', SQLERRM;
+  END;
+END $$;
+-- 23d. GLOBAL_FACTS through mwf_app (global-memory.ts consolidateGlobalFacts: a Prisma upsert, which sends doc_schema_version)
+\connect - mwf_app
+SELECT 'connected as ' || session_user || ' (current_user ' || current_user || ')';
+SELECT set_config('t.a_user', :'a_user', false) \g /dev/null
+DO $$ BEGIN
+  PERFORM set_config('app.current_user_id', current_setting('t.a_user'), true);
+  INSERT INTO ai_memory (user_id, kind, doc, doc_schema_version) VALUES (current_setting('t.a_user')::uuid, 'GLOBAL_FACTS',
+    '{"facts": [{"category": "People", "fact": "f"}], "consolidatedAt": "2026-11-01T11:00:01.000Z", "sessionCount": 2}', 1);
+  RAISE NOTICE 'PASS 23d the consolidator''s GLOBAL_FACTS document is accepted';
+  BEGIN
+    UPDATE ai_memory SET doc = '{"facts": ["a bare string"]}' WHERE user_id = current_setting('t.a_user')::uuid AND kind = 'GLOBAL_FACTS';
+    RAISE EXCEPTION 'TEST FAILED: a bare-string fact was stored';
+  EXCEPTION WHEN check_violation THEN
+    IF SQLERRM NOT LIKE '%ai_memory.global_facts v1: $.facts[0]: expected object, got string' THEN RAISE; END IF;
+    RAISE NOTICE 'PASS 23e a bare-string global fact is refused: %', SQLERRM;
+  END;
+  BEGIN
+    -- (a BEFORE trigger runs before the UNIQUE and CHECK constraints, so A's existing row is no obstacle)
+    INSERT INTO ai_memory (user_id, kind, doc, doc_schema_version) VALUES (current_setting('t.a_user')::uuid, 'GLOBAL_FACTS', '{"facts": []}', 7);
+    RAISE EXCEPTION 'TEST FAILED: an unknown schema version was stored';
+  EXCEPTION WHEN foreign_key_violation THEN
+    IF SQLERRM <> 'json_schema ai_memory.global_facts version 7 does not exist' THEN RAISE; END IF;
+    RAISE NOTICE 'PASS 23f an unknown doc_schema_version is refused: %', SQLERRM;
+  END;
+END $$;
+
+-- 24. the envelope CHECK on the five jsonb-envelope documents (feature_state.doc as mwf_app here; step 20
+--     asserts all five carry it): a sealed document is exactly {"$enc": <a v1 ciphertext>}; a keyless
+--     plaintext document (no "$enc" key) still passes, as the ciphertext domain lets plaintext through.
+DO $$ DECLARE v_con text; BEGIN
+  PERFORM set_config('app.current_user_id', current_setting('t.a_user'), true);
+  INSERT INTO feature_state (user_id, feature, doc) VALUES (current_setting('t.a_user')::uuid, 'gratitude',
+    '{"$enc": "enc:v1:AAAAAAAAAAAAAAAA:AAAAAAAAAAAAAAAAAAAAAA==:AAAA"}');
+  INSERT INTO feature_state (user_id, feature, doc) VALUES (current_setting('t.a_user')::uuid, 'people', '{"persons": []}');
+  RAISE NOTICE 'PASS 24a a sealed envelope and a keyless plaintext document are accepted';
+  BEGIN
+    UPDATE feature_state SET doc = '{"$enc": "my gratitude journal"}' WHERE user_id = current_setting('t.a_user')::uuid AND feature = 'gratitude';
+    RAISE EXCEPTION 'TEST FAILED: plaintext stored in an envelope';
+  EXCEPTION WHEN check_violation THEN
+    GET STACKED DIAGNOSTICS v_con = CONSTRAINT_NAME;
+    IF v_con <> 'feature_state_doc_check1' THEN RAISE; END IF;
+    RAISE NOTICE 'PASS 24b plaintext in the envelope is refused by %', v_con;
+  END;
+  BEGIN
+    UPDATE feature_state SET doc = '{"$enc": "enc:v1:short:AAAA"}' WHERE user_id = current_setting('t.a_user')::uuid AND feature = 'gratitude';
+    RAISE EXCEPTION 'TEST FAILED: a malformed ciphertext stored in an envelope';
+  EXCEPTION WHEN check_violation THEN
+    GET STACKED DIAGNOSTICS v_con = CONSTRAINT_NAME;
+    IF v_con <> 'feature_state_doc_check1' THEN RAISE; END IF;
+    RAISE NOTICE 'PASS 24c a malformed ciphertext in the envelope is refused by %', v_con;
+  END;
+  BEGIN
+    UPDATE feature_state SET doc = '{"$enc": "enc:v1:AAAAAAAAAAAAAAAA:AAAAAAAAAAAAAAAAAAAAAA==:AAAA", "entries": []}'
+      WHERE user_id = current_setting('t.a_user')::uuid AND feature = 'gratitude';
+    RAISE EXCEPTION 'TEST FAILED: plaintext keys beside an envelope';
+  EXCEPTION WHEN check_violation THEN
+    GET STACKED DIAGNOSTICS v_con = CONSTRAINT_NAME;
+    IF v_con <> 'feature_state_doc_check1' THEN RAISE; END IF;
+    RAISE NOTICE 'PASS 24d a plaintext key beside the envelope is refused by %', v_con;
+  END;
+  BEGIN
+    UPDATE feature_state SET doc = '{"$enc": 42}' WHERE user_id = current_setting('t.a_user')::uuid AND feature = 'gratitude';
+    RAISE EXCEPTION 'TEST FAILED: a non-string envelope';
+  EXCEPTION WHEN check_violation THEN
+    GET STACKED DIAGNOSTICS v_con = CONSTRAINT_NAME;
+    IF v_con <> 'feature_state_doc_check1' THEN RAISE; END IF;
+    RAISE NOTICE 'PASS 24e a non-string envelope is refused by %', v_con;
+  END;
+END $$;
+
+-- 25. app.json_schema is reference data: mwf_app and mwf_job read it (the invoker-rights triggers
+--     do) and write nothing.
+DO $$ BEGIN
+  IF (SELECT count(*) FROM app.json_schema) <> 4 THEN RAISE EXCEPTION 'TEST FAILED: mwf_app reads % schemas', (SELECT count(*) FROM app.json_schema); END IF;
+  BEGIN
+    INSERT INTO app.json_schema (name, version, schema) VALUES ('user_preferences', 2, '{}');
+    RAISE EXCEPTION 'TEST FAILED: mwf_app added a schema';
+  EXCEPTION WHEN insufficient_privilege THEN NULL;
+  END;
+  BEGIN
+    UPDATE app.json_schema SET schema = '{}' WHERE name = 'user_preferences';
+    RAISE EXCEPTION 'TEST FAILED: mwf_app rewrote a schema';
+  EXCEPTION WHEN insufficient_privilege THEN NULL;
+  END;
+  RAISE NOTICE 'PASS 25a mwf_app reads the 4 schemas and can neither add nor rewrite one';
+END $$;
+\connect - mwf_job
+DO $$ BEGIN
+  BEGIN
+    DELETE FROM app.json_schema WHERE name = 'user_preferences';
+    RAISE EXCEPTION 'TEST FAILED: mwf_job deleted a schema';
+  EXCEPTION WHEN insufficient_privilege THEN RAISE NOTICE 'PASS 25b mwf_job cannot delete a schema: %', SQLERRM;
+  END;
+END $$;
+
 \echo 'functions-caller-tests: ALL PASSED'
