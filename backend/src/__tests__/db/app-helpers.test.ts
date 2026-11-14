@@ -10,9 +10,15 @@
  * rolled back: the database is left untouched.
  */
 import { Client } from 'pg';
+import { isTargetShape } from '../../testing/golden/shape';
 
 const url = process.env.DB_TEST_URL ?? (process.env.CI ? process.env.DATABASE_URL : undefined);
-const describeDb = url ? describe : describe.skip;
+// Old shape only ("User", "Relationship", "RelationshipMember", "Session"), so it is
+// skipped on the target shape. That leaves a GAP, not equivalent coverage: no target
+// test asserts app.current_user_id()'s NULL cases, app.partner_user_id(), or that roles
+// without the grant cannot EXECUTE the helpers. Porting it is work-k5fk.10.19, which
+// blocks the cutover.
+const describeDb = url && !isTargetShape() ? describe : describe.skip;
 
 describeDb('app.* helpers (database)', () => {
   let client: Client;

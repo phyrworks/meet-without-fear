@@ -166,7 +166,7 @@ describeDb('identity binding over Prisma 7 + adapter-pg (database)', () => {
   it('$executeRaw', async () => {
     await runWithContext(
       ctx(alice),
-      async () => await prisma.$executeRaw`UPDATE "User" SET "firstName" = 'a' WHERE id = ${alice}::uuid`,
+      async () => await prisma.$executeRaw`UPDATE "user" SET first_name = 'a' WHERE id = ${alice}::uuid`,
     );
     expect(expectAllBoundTo(alice)).toEqual(['BEGIN SET_ID STMT COMMIT']);
   });
