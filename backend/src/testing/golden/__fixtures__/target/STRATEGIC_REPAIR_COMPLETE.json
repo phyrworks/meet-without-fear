@@ -2,16 +2,15 @@
   "stage": "STRATEGIC_REPAIR_COMPLETE",
   "database": "mwf_tfx_strategic_repair_complete",
   "seeded": {
-    "sessionId": "01a1dbc1-3cce-7662-84b0-b65c1b384035",
-    "relationshipId": "01a1dbc1-3ccc-7934-9b39-75252b78d145",
-    "invitationId": "01a1dbc1-3cd4-7cb0-b6a7-d3a0ea3cda5e",
+    "sessionId": "01a1dc5e-1347-7bf4-9a27-70e5cd3ada39",
+    "invitationId": "01a1dc5e-134d-7ecb-bb79-debb732c09cb",
     "userA": {
-      "id": "01a1dbc1-3cc9-7afe-aafb-7ac0ddf3e3e7",
+      "id": "01a1dc5e-1342-77fb-a8a1-953843fccb1e",
       "email": "ada@e2e.test",
       "name": "Ada Lovelace"
     },
     "userB": {
-      "id": "01a1dbc1-3ccb-7b89-9509-6a8175eeae0f",
+      "id": "01a1dc5e-1344-7ddb-9761-9cbaebfdd8ba",
       "email": "bob@e2e.test",
       "name": "Bob Ross"
     }
@@ -23,6 +22,7 @@
     "conversation": 2,
     "conversation_read_state": 2,
     "invitation": 1,
+    "live_session_pair": 1,
     "milestone": 13,
     "need": 4,
     "need_share": 4,
@@ -31,10 +31,9 @@
     "proposal": 3,
     "proposal_choice": 2,
     "proposal_need": 2,
-    "relationship": 1,
-    "relationship_member": 2,
     "session": 1,
     "user": 3,
+    "user_contact": 2,
     "user_identity": 2
   },
   "tables": [
@@ -54,6 +53,7 @@
     "follow_up_checkin",
     "follow_up_note",
     "invitation",
+    "live_session_pair",
     "message",
     "milestone",
     "mood_reading",
@@ -73,8 +73,6 @@
     "reflection",
     "reflection_message",
     "regulation_event",
-    "relationship",
-    "relationship_member",
     "reminder",
     "session",
     "session_closure",
@@ -82,11 +80,12 @@
     "takeaway",
     "takeaway_link",
     "user",
+    "user_contact",
     "user_device",
     "user_identity",
     "user_key",
     "user_memory",
     "user_preferences"
   ],
-  "builtAt": "2026-11-14T20:30:36.903Z"
+  "builtAt": "2026-11-14T23:21:55.390Z"
 }

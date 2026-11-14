@@ -2,16 +2,15 @@
   "stage": "EMPATHY_SHARED_A",
   "database": "mwf_tfx_empathy_shared_a",
   "seeded": {
-    "sessionId": "01a1dbc1-0b70-77dd-bdaa-c3487532424a",
-    "relationshipId": "01a1dbc1-0b6e-73c7-91c5-81d301b006d9",
-    "invitationId": "01a1dbc1-0b74-7cc2-9fdc-295248dea998",
+    "sessionId": "01a1dc5d-dd28-7e49-b712-cfc27a0437ca",
+    "invitationId": "01a1dc5d-dd2f-79ae-89fa-39eeed124f1e",
     "userA": {
-      "id": "01a1dbc1-0b6a-792c-aef3-78fd25b2b89f",
+      "id": "01a1dc5d-dd21-72ff-a5bd-39f970e7b8c7",
       "email": "ada@e2e.test",
       "name": "Ada Lovelace"
     },
     "userB": {
-      "id": "01a1dbc1-0b6d-718f-967d-7eae91a23fcb",
+      "id": "01a1dc5d-dd25-7596-8a3f-ba5a772f7e3e",
       "email": "bob@e2e.test",
       "name": "Bob Ross"
     }
@@ -23,14 +22,14 @@
     "draft": 1,
     "empathy_attempt": 1,
     "invitation": 1,
+    "live_session_pair": 1,
     "message": 13,
     "milestone": 13,
     "participant": 2,
     "participant_milestone": 4,
-    "relationship": 1,
-    "relationship_member": 2,
     "session": 1,
     "user": 3,
+    "user_contact": 2,
     "user_identity": 2
   },
   "tables": [
@@ -50,6 +49,7 @@
     "follow_up_checkin",
     "follow_up_note",
     "invitation",
+    "live_session_pair",
     "message",
     "milestone",
     "mood_reading",
@@ -69,8 +69,6 @@
     "reflection",
     "reflection_message",
     "regulation_event",
-    "relationship",
-    "relationship_member",
     "reminder",
     "session",
     "session_closure",
@@ -78,11 +76,12 @@
     "takeaway",
     "takeaway_link",
     "user",
+    "user_contact",
     "user_device",
     "user_identity",
     "user_key",
     "user_memory",
     "user_preferences"
   ],
-  "builtAt": "2026-11-14T20:30:24.217Z"
+  "builtAt": "2026-11-14T23:21:41.509Z"
 }
