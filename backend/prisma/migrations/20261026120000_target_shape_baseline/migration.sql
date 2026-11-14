@@ -898,7 +898,7 @@ CREATE INDEX ON user_contact (contact_user_id);
 COMMENT ON TABLE user_contact IS 'What one user calls another, like a phone''s contact list (work-k5fk.2, replacing relationship_member.nickname): an attribute of the ordered pair, private to user_id and never shown to the contact. Not a membership: who shares a session is participant.';
 COMMENT ON COLUMN user_contact.user_id IS 'The owner of the entry: the user who chose the nickname, and the only one who reads it.';
 COMMENT ON COLUMN user_contact.contact_user_id IS 'The person the entry names.';
-COMMENT ON COLUMN user_contact.nickname IS 'What user_id calls contact_user_id (at most 100 characters, not blank; the invite name for a known person or PATCH /contacts/:userId/nickname); NULL clears it. Plain text, set by the owner.';
+COMMENT ON COLUMN user_contact.nickname IS 'What user_id calls contact_user_id (at most 100 characters, not blank; the invite name for a known person or PATCH /contacts/:userId/nickname); NULL clears it, and a cleared entry is authoritative (the app shows the display name, never an old invite name). Plain text, set by the owner.';
 COMMENT ON CONSTRAINT user_contact_nickname_check ON user_contact IS 'A nickname is at most 100 characters and never blank (whitespace only).';
 COMMENT ON CONSTRAINT user_contact_check ON user_contact IS 'Nobody is their own contact.';
 COMMENT ON INDEX user_contact_contact_user_id_idx IS 'The FK index of contact_user_id (the RESTRICT check on a user row).';

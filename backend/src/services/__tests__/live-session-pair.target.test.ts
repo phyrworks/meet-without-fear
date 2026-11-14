@@ -269,8 +269,17 @@ describeTarget('live_session_pair, participant.added_by_user_id and user_contact
     expect((await http(ada, 'patch', `/contacts/${nell.id}/nickname`, { nickname: null })).body.data).toEqual({
       nickname: null,
     });
-    // … back to the invite name (Ada's own invitation), never anything of Nell's.
-    expect((await http(ada, 'get', `/sessions/${s.sessionId}`)).body.data.session.partner.nickname).toBe('Nell');
+    // … and cleared means cleared (review round 2, N3): Ada's entry with a NULL nickname is authoritative, so the
+    // invite name does not come back — the partner shows by their own names.
+    const [nellUser] = await run.sql<{ first_name: string | null; name: string | null }>(
+      `SELECT first_name, name FROM "user" WHERE id = $1`,
+      [nell.id],
+    );
+    expect((await http(ada, 'get', `/sessions/${s.sessionId}`)).body.data.session.partner).toMatchObject({
+      nickname: null,
+      name: nellUser.first_name || nellUser.name || null,
+    });
+    expect(await (await import('../contacts')).getNicknameForSessionPartner(s.sessionId, ada.id)).toBeNull();
     // A blank nickname is refused by the route (and by the CHECK).
     expect((await http(ada, 'patch', `/contacts/${nell.id}/nickname`, { nickname: '   ' })).status).toBe(400);
     expect(
@@ -334,6 +343,50 @@ describeTarget('live_session_pair, participant.added_by_user_id and user_contact
     expect(view.body.data.session.partner).toMatchObject({ id: quin.id, name: 'Quin', nickname: 'Quin' });
     const list = await http(ada, 'get', '/sessions');
     expect(list.body.data.items.find((i: { id: string }) => i.id === f.id)?.partner).toMatchObject({ id: quin.id });
+  });
+
+  it('review round 2 N1: two follow-ups of one session, loaded in one batch, both show the partner', async () => {
+    const s = await invite('Rhea');
+    const rhea = person('rhea');
+    expect((await http(rhea, 'post', `/invitations/${s.invitationId}/accept`)).status).toBe(200);
+    const followUps: string[] = [];
+    for (let i = 0; i < 2; i++) {
+      const [f] = await run.sql<{ id: string }>(
+        `INSERT INTO session (status, previous_session_id) VALUES ('CREATED', $1) RETURNING id::text`,
+        [s.sessionId],
+      );
+      await run.sql(`INSERT INTO participant (session_id, user_id, display_name) VALUES ($1, $2, 'Ada')`, [
+        f.id,
+        ada.id,
+      ]);
+      followUps.push(f.id);
+    }
+    const contacts = await import('../contacts');
+    const partners = await contacts.loadSessionPartners(followUps, ada.id);
+    expect(followUps.map(f => partners.get(f)?.userId)).toEqual([rhea.id, rhea.id]);
+  });
+
+  it('review round 2 N2: the lineage walk never enters a session the caller is not in', async () => {
+    // A stranger's live session (two other humans) …
+    const [x] = await run.sql<{ id: string }>(`INSERT INTO session (status) VALUES ('CREATED') RETURNING id::text`);
+    const sam = person('sam');
+    const tess = person('tess');
+    for (const u of [sam, tess]) expect((await http(u, 'get', '/sessions')).status).toBe(200);
+    await run.sql(`INSERT INTO participant (session_id, user_id) VALUES ($1, $2)`, [x.id, sam.id]);
+    await run.sql(`INSERT INTO participant (session_id, user_id, added_by_user_id) VALUES ($1, $2, $3)`, [
+      x.id,
+      tess.id,
+      sam.id,
+    ]);
+    // … named as the previous session of a session of Ada's.
+    const [f] = await run.sql<{ id: string }>(
+      `INSERT INTO session (status, previous_session_id) VALUES ('CREATED', $1) RETURNING id::text`,
+      [x.id],
+    );
+    await run.sql(`INSERT INTO participant (session_id, user_id, display_name) VALUES ($1, $2, 'Ada')`, [f.id, ada.id]);
+    const contacts = await import('../contacts');
+    expect(await contacts.loadSessionPartner(f.id, ada.id)).toBeNull();
+    expect(JSON.stringify((await http(ada, 'get', `/sessions/${f.id}`)).body)).not.toContain(sam.id);
   });
 
   it('review F7: an AI seat is never the partner, a contact or a departed partner', async () => {

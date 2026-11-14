@@ -59,7 +59,7 @@ What one user calls another (work-k5fk.2; replaces `relationship_member.nickname
 |---|---|---|---|---|
 | user_id | uuid | no | | FK user RESTRICT — the owner, the only reader |
 | contact_user_id | uuid | no | | FK user RESTRICT — whom the entry names |
-| nickname | text | yes | | at most 100 characters, never blank; NULL clears it |
+| nickname | text | yes | | at most 100 characters, never blank; NULL clears it (a row with NULL is authoritative: no invite-name fallback) |
 | created_at, updated_at | timestamptz | no | now() | |
 
 Keys: PK (user_id, contact_user_id). CHECK `user_id <> contact_user_id`. Index (contact_user_id). Written only by its owner: createSession (the invite name for a known person) and `PATCH /contacts/:userId/nickname` (someone the caller shares a session with). A link invitee's name is resolved at read time from the inviter's own `invitation.invitee_name` (accepted_by_user_id = the invitee), never written into a row (review round 1). The account walk deletes the user's own entries.

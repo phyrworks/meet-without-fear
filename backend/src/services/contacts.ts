@@ -7,12 +7,14 @@
  *     A NEW_PROCESS follow-up (tending startLinkedProcess) starts with the
  *     caller only: until someone else joins it, its partner is the other
  *     human of the session it continues (previous_session_id), so the
- *     follow-up shows the same person.
+ *     follow-up shows the same person — only through sessions the caller is
+ *     a participant of.
  *   - What the caller calls the partner is resolved at READ time, from the
  *     caller's own rows only (review round 1, Q1 — nothing is ever written
  *     into another user's row):
- *       1. the caller's own user_contact.nickname for them;
- *       2. else the invite name on the caller's own invitation they accepted
+ *       1. the caller's own user_contact entry for them — authoritative even
+ *          when its nickname is NULL (cleared: the display name shows);
+ *       2. else (no entry) the invite name on the caller's own invitation they accepted
  *          (invitation.invitee_name, accepted_by_user_id = the partner);
  *       3. before the invitee joins, the invite name on the caller's latest
  *          invitation for the session (pendingInviteeNames);
@@ -76,27 +78,37 @@ export async function loadSessionPartners(
 ): Promise<Map<string, SessionPartner | null>> {
   const found = await otherHumans(sessionIds, userId);
 
-  // F4: a follow-up with no other human yet continues its previous session's pair.
-  let pending = sessionIds.filter(id => !found.has(id));
-  const origin = new Map(pending.map(id => [id, id]));
-  for (let hop = 0; hop < LINEAGE_HOPS && pending.length > 0; hop++) {
+  // F4: a follow-up with no other human yet continues its previous session's pair. Each pending session maps to
+  // every requested session it stands for (two follow-ups of one session share an ancestor: review round 2, N1),
+  // and the walk only enters an ancestor the caller is a participant of (a crafted previous_session_id must not
+  // name a stranger's session's partner: N2).
+  let pending = new Map<string, string[]>(sessionIds.filter(id => !found.has(id)).map(id => [id, [id]]));
+  for (let hop = 0; hop < LINEAGE_HOPS && pending.size > 0; hop++) {
     const links = await prisma.session.findMany({
-      where: { id: { in: pending }, previousSessionId: { not: null } },
+      where: { id: { in: [...pending.keys()] }, previousSessionId: { not: null } },
       select: { id: true, previousSessionId: true },
     });
-    const next = new Map<string, string>();
-    for (const l of links) if (l.previousSessionId) next.set(l.previousSessionId, origin.get(l.id)!);
+    const next = new Map<string, string[]>();
+    for (const l of links) {
+      if (!l.previousSessionId) continue;
+      next.set(l.previousSessionId, [...(next.get(l.previousSessionId) ?? []), ...(pending.get(l.id) ?? [])]);
+    }
     if (next.size === 0) break;
+    const mine = new Set(
+      (
+        await prisma.participant.findMany({
+          where: { sessionId: { in: [...next.keys()] }, userId },
+          select: { sessionId: true },
+        })
+      ).map(r => r.sessionId),
+    );
+    for (const ancestor of [...next.keys()]) if (!mine.has(ancestor)) next.delete(ancestor);
     const ancestors = await otherHumans([...next.keys()], userId);
-    pending = [];
-    origin.clear();
-    for (const [ancestor, start] of next) {
+    pending = new Map();
+    for (const [ancestor, starts] of next) {
       const o = ancestors.get(ancestor);
-      if (o) found.set(start, o);
-      else {
-        pending.push(ancestor);
-        origin.set(ancestor, start);
-      }
+      if (o) for (const start of starts) found.set(start, o);
+      else pending.set(ancestor, starts);
     }
   }
 
@@ -111,25 +123,30 @@ export async function loadSessionPartner(sessionId: string, userId: string): Pro
   return (await loadSessionPartners([sessionId], userId)).get(sessionId) ?? null;
 }
 
-/** The caller's own user_contact nicknames for these users. */
-export async function nicknamesFor(userId: string, contactUserIds: string[]): Promise<Map<string, string>> {
+/**
+ * The caller's own user_contact entries for these users: contact id → nickname, NULL included (a row whose
+ * nickname was cleared is still the caller's answer, review round 2 N3).
+ */
+async function contactEntries(userId: string, contactUserIds: string[]): Promise<Map<string, string | null>> {
   if (contactUserIds.length === 0) return new Map();
   const rows = await prisma.userContact.findMany({
     where: { userId, contactUserId: { in: [...new Set(contactUserIds)] } },
     select: { contactUserId: true, nickname: true },
   });
-  return new Map(rows.flatMap(r => (r.nickname ? [[r.contactUserId, r.nickname] as const] : [])));
+  return new Map(rows.map(r => [r.contactUserId, r.nickname] as const));
 }
 
 /**
- * What the caller calls each of these users, from the caller's own rows: the
- * user_contact nickname, else the invite name on the caller's latest
- * invitation that user accepted.
+ * What the caller calls each of these users, from the caller's own rows: their user_contact entry if they have
+ * one — authoritative even when its nickname is NULL (cleared: the callers then show the display name) — else
+ * the invite name on the caller's latest invitation that user accepted. Users with no name are absent.
  */
 export async function namesIGave(userId: string, otherUserIds: string[]): Promise<Map<string, string>> {
   if (otherUserIds.length === 0) return new Map();
-  const out = await nicknamesFor(userId, otherUserIds);
-  const missing = otherUserIds.filter(id => !out.has(id));
+  const entries = await contactEntries(userId, otherUserIds);
+  const out = new Map<string, string>();
+  for (const [id, nickname] of entries) if (nickname) out.set(id, nickname);
+  const missing = otherUserIds.filter(id => !entries.has(id));
   if (missing.length > 0) {
     const accepted = await prisma.invitation.findMany({
       where: { invitedByParticipant: { userId }, acceptedByUserId: { in: missing }, inviteeName: { not: null } },

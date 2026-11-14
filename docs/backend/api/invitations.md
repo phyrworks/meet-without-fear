@@ -238,7 +238,7 @@ These invitation-adjacent endpoints live in the same route file:
 |--------|----------|---------|
 | `POST` | `/api/v1/sessions/:id/archive` | Archive a created, invited, resolved or abandoned session, as a current participant (`app.session_archive`: 404 for a non-participant, 403 for one who left, 400 from any other state) |
 | `DELETE` | `/api/v1/sessions/:id` | Remove the caller's private data from a session (marks it `ABANDONED`) |
-| `PATCH` | `/api/v1/contacts/:userId/nickname` | Set or clear (`{ "nickname": null }`) what the caller calls another user: the caller's own `user_contact` entry, never shown to that user. 404 unless the two share a session; 400 for the caller's own id (work-k5fk.2; replaces `PATCH /relationships/:relationshipId/nickname`) |
+| `PATCH` | `/api/v1/contacts/:userId/nickname` | Set or clear (`{ "nickname": null }`) what the caller calls another user: the caller's own `user_contact` entry, never shown to that user. A cleared entry is authoritative: the partner then shows by their own names, never by an old invite name. 404 unless the two share a session; 400 for the caller's own id (work-k5fk.2; replaces `PATCH /relationships/:relationshipId/nickname`) |
 | `GET` | `/api/v1/people` | List the other humans the user shares a session with, named by the caller's nickname for them |
 
 > **Not implemented:** There is no `POST /invitations/:id/resend` endpoint. Invitations can't be resent — if an invitation expires, the inviter creates a new session.
