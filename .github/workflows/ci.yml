@@ -243,6 +243,21 @@ jobs:
           done
           npx tsx src/testing/golden/cli.ts list
 
+      # The build rewrites the committed manifests. Seeded ids (uuidv7) and builtAt
+      # differ on every build; everything else (database, emails, tables, row
+      # counts) must not, or the committed manifests are stale for this schema.
+      - name: Rebuilt manifests match the committed ones (ids and builtAt masked)
+        run: |
+          mask() {
+            sed -E -e 's/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/<uuid>/g' \
+              -e 's/"builtAt": "[^"]*"/"builtAt": "<t>"/'
+          }
+          status=0
+          for f in backend/src/testing/golden/__fixtures__/target/*.json; do
+            diff -u <(git show "HEAD:$f" | mask) <(mask <"$f") || status=1
+          done
+          exit $status
+
       - name: Run tests (backend)
         run: npm run test --workspace=backend
         env:
