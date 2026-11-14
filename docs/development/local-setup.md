@@ -245,8 +245,9 @@ the app runs on `mwf_app`'s grants alone (`tables.sql`, next to each table). An 
 owned by anyone else is reported with a WARNING; drop it and re-run `--dev` to rebuild it. Because the
 baseline migration is edited in place on this branch, a database deployed before a grant change does
 **not** have it either — rebuild after pulling such a change. The API refuses to start on a connection
-that is a superuser, has BYPASSRLS or owns objects (work-k5fk.10.3), so `APP_DATABASE_URL` and
-`JOB_DATABASE_URL` must be set. In the branch's `backend/.env`:
+that is a superuser, has BYPASSRLS or owns objects (work-k5fk.10.3), so `APP_DATABASE_URL`,
+`JOB_DATABASE_URL` and (work-k5fk.1: every Clerk-signed request resolves its user on it) `AUTH_DATABASE_URL`
+must be set. In the branch's `backend/.env`:
 
 ```bash
 DATABASE_URL=postgresql://mwf_user:mwf_password@127.0.0.1:5432/mwf_target_dev
@@ -254,6 +255,7 @@ DIRECT_URL=postgresql://mwf_user:mwf_password@127.0.0.1:5432/mwf_target_dev
 SHADOW_DATABASE_URL=postgresql://mwf_user:mwf_password@127.0.0.1:5432/mwf_target_shadow
 APP_DATABASE_URL=postgresql://mwf_app:mwf_app_dev@127.0.0.1:5432/mwf_target_dev
 JOB_DATABASE_URL=postgresql://mwf_job:mwf_job_dev@127.0.0.1:5432/mwf_target_dev
+AUTH_DATABASE_URL=postgresql://mwf_auth:mwf_auth_dev@127.0.0.1:5432/mwf_target_dev
 # the test database (for backend tests only; NOT e2e):
 #   postgresql://mwf_user:mwf_password@127.0.0.1:5432/mwf_target_test
 ```
@@ -263,14 +265,16 @@ logs in as `mwf_app` (`APP_DATABASE_URL`), the job as `mwf_job`, `migrate deploy
 (`MIGRATOR_DATABASE_URL`), and `DATABASE_URL` (the admin) is used only to truncate and by the API's
 E2E tooling connection (`routes/e2e.ts` seeding/cleanup and the auth bypass's user upsert, which
 write what no production request may). Identity binding is on (as the golden driver and the replica
-do, so the job-only definer functions and identity-bound reads behave as in production), and
-`AUTH_/OPS_DATABASE_URL` are blank so the dev API cannot pick up the `mwf_target_dev` role URLs
+do, so the job-only definer functions and identity-bound reads behave as in production),
+`AUTH_DATABASE_URL` is `mwf_auth` on `mwf_target_e2e` (the startup check opens it), and
+`OPS_DATABASE_URL` is blank so the dev API cannot pick up the `mwf_target_dev` ops URL
 from `backend/.env`. `e2e/global-setup.ts` truncates every application table and refuses to run
 unless the database name ends in `_e2e`, or if any role URL in the environment names a different
 database. A `DATABASE_URL` exported in your shell overrides `.env.test`; the guard catches that.
 
 To prove the baseline itself on a throwaway `ts7_*` database (generator check, deploy, gate, a
-second deploy is a no-op, the target fixture, the view smoke as `mwf_app`, the 17 per-caller tests):
+second deploy is a no-op, the target fixture, the view smoke as `mwf_app`, the per-caller tests 1–17 and 19–22
+as `mwf_app` / `mwf_job` / `mwf_auth`):
 `backend/scripts/target-shape/run-baseline.sh ts7_<name>` (`--as-migrator` deploys as
 `mwf_migrator` into a database it owns; `--cutover` rehearses the production cutover — old shape
 from the `phoenix/base` history → `drop-old-objects.sql` → baseline). A database created on this
@@ -342,7 +346,9 @@ Verified working 2026-08-12. This is the fastest way to explore the product and 
 
 ```bash
 # Terminal 1 — API. E2E_FIXTURE_ID is REQUIRED, see the gotcha below.
-E2E_AUTH_BYPASS=true MOCK_LLM=true E2E_FIXTURE_ID=user-a-full-journey \
+# NODE_ENV must be development (or test): otherwise the bypass is off and the
+# API refuses to start (backend/src/lib/e2e-bypass.ts).
+NODE_ENV=development E2E_AUTH_BYPASS=true MOCK_LLM=true E2E_FIXTURE_ID=user-a-full-journey \
   npm run dev:api
 
 # Terminal 2 — web client. Clerk is swapped for a mock module at bundle time.

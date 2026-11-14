@@ -17,7 +17,7 @@ status: living
   - SDK: `@clerk/express` (backend), `@clerk/clerk-expo` (mobile), `@clerk/nextjs` (website)
   - Auth: `CLERK_SECRET_KEY` (backend), `CLERK_PUBLISHABLE_KEY` (mobile/website)
   - Implementation: JWT token verification in `backend/src/middleware/auth.ts`
-  - Tokens stored in Clerk; user records synced to Prisma DB with `clerkId` reference
+  - Tokens stored in Clerk; a user signs in through a `user_identity` row (provider `clerk`, subject = the Clerk user id; work-k5fk.1)
 
 **AI & Large Language Models:**
 - AWS Bedrock - Claude models for AI responses
@@ -152,7 +152,7 @@ status: living
   - Mobile: `@clerk/clerk-expo` with session-based auth
   - Website: `@clerk/nextjs` with Next.js middleware
   - Token flow: Mobile gets JWT from Clerk, passes in `Authorization: Bearer` header to API
-  - User sync: Clerk user created/updated → Prisma User record upserted with `clerkId`
+  - User sync: no Clerk webhooks; the auth middleware creates the `user` row and its `user_identity` (provider `clerk`, subject = the Clerk user id) on the first authenticated request, through `mwf_auth`'s `app.create_user`, from the Clerk user's verified primary email only, and never re-binds an existing account by email (see `docs/backend/api/auth.md`)
 
 **Session Handling:**
 - Mobile: Clerk session stored in Expo Secure Store
@@ -228,7 +228,7 @@ status: living
 **Optional env vars (Backend):**
 - `ASSEMBLYAI_API_KEY` - AssemblyAI key for voice transcription (required for `/voice/token` endpoint)
 - `MOCK_LLM=true` - Toggle mock LLM responses for E2E testing
-- `E2E_AUTH_BYPASS=true` - Bypass auth for E2E tests
+- `E2E_AUTH_BYPASS=true` - Bypass auth for E2E tests; honoured only with `NODE_ENV` `development` or `test` (the API refuses to start otherwise)
 - `E2E_FIXTURE_ID` - Use pre-canned responses for E2E tests
 - `ENABLE_PROMPT_LOGGING` - Enable prompt debug logging (dev only, blocked in production)
 - `ENABLE_AUDIT_STREAM` - Enable AI audit stream channel for monitoring

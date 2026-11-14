@@ -76,6 +76,9 @@ export default defineConfig({
       env: {
         ...process.env,
         E2E_AUTH_BYPASS: 'true',
+        // The API honours E2E_AUTH_BYPASS only with NODE_ENV test/development
+        // (backend/src/lib/e2e-bypass.ts) and refuses to start otherwise.
+        NODE_ENV: 'development',
         MOCK_LLM: 'true',
         // NO E2E_FIXTURE_ID - per-user fixtures via request headers
       },
