@@ -53,8 +53,11 @@ const INCLUDE = '-- @@include sql-only.sql';
  * two cannot drift. 135 since work-k5fk.2: relationship.id, relationship_member's
  * two and session.relationship_id went (−4); user_contact's two,
  * live_session_pair's three and participant.added_by_user_id came (+6).
+ * 189 since work-k5fk.3 (6a): every child of participant carries session_id and
+ * the user id of each participant it names (+54), next to the participant ids
+ * that 6b drops.
  */
-export const UUID7_COLUMNS = 135;
+export const UUID7_COLUMNS = 189;
 const UUID7_PLACEHOLDER = '@@UUID7_COLUMNS@@';
 
 /**

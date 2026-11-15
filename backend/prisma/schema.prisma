@@ -88,43 +88,76 @@ model Participant {
   user    User?        @relation(fields: [userId], references: [id], onDelete: Restrict, onUpdate: NoAction)
   addedBy Participant? @relation("ParticipantAddedBy", fields: [sessionId, addedByUserId], references: [sessionId, userId], onDelete: NoAction, onUpdate: NoAction)
 
-  added                   Participant[]          @relation("ParticipantAddedBy")
-  livePairsAsA            LiveSessionPair[]      @relation("LiveSessionPairA")
-  livePairsAsB            LiveSessionPair[]      @relation("LiveSessionPairB")
-  conversations           Conversation[]
-  readState               ConversationReadState?
-  sentMessages            Message[]              @relation("MessageSender")
-  drafts                  Draft[]                @relation("DraftOwner")
-  draftsAbout             Draft[]                @relation("DraftAbout")
-  milestones              ParticipantMilestone[]
-  aiMemories              AiMemory[]
-  moodReadings            MoodReading[]
-  regulationEvents        RegulationEvent[]
-  invitationsSent         Invitation[]
-  participantKeys         ParticipantKey[]
-  empathyAttemptsAuthored EmpathyAttempt[]       @relation("EmpathyAttemptAuthor")
-  empathyAttemptsAbout    EmpathyAttempt[]       @relation("EmpathyAttemptSubject")
-  empathyReviews          EmpathyReview[]
-  reconcilerResults       ReconcilerResult[]
-  guidanceAuthored        ReconcilerGuidance[]   @relation("GuidanceAuthor")
-  guidanceAbout           ReconcilerGuidance[]   @relation("GuidanceSubject")
-  shareOffers             ContextShareOffer[]
-  consents                Consent[]              @relation("ConsentDecider")
-  consentsRequested       Consent[]              @relation("ConsentRequester")
-  needs                   Need[]
-  needShares              NeedShare[]
-  needDispositions        NeedDisposition[]
-  proposalsCreated        Proposal[]             @relation("ProposalCreator")
-  proposalsRemoved        Proposal[]             @relation("ProposalRemover")
-  proposalChoices         ProposalChoice[]
-  proposalRevisions       ProposalRevision[]
-  agreementParties        AgreementParty[]
-  closuresClosed          SessionClosure[]
-  followUpsOwned          FollowUp[]
-  followUpCheckins        FollowUpCheckin[]
-  followUpNotes           FollowUpNote[]
-  brainActivities         BrainActivity[]
+  added                               Participant[]          @relation("ParticipantAddedBy")
+  livePairsAsA                        LiveSessionPair[]      @relation("LiveSessionPairA")
+  livePairsAsB                        LiveSessionPair[]      @relation("LiveSessionPairB")
+  conversations                       Conversation[]
+  readState                           ConversationReadState?
+  sentMessages                        Message[]              @relation("MessageSender")
+  drafts                              Draft[]                @relation("DraftOwner")
+  draftsAbout                         Draft[]                @relation("DraftAbout")
+  milestones                          ParticipantMilestone[]
+  aiMemories                          AiMemory[]
+  moodReadings                        MoodReading[]
+  regulationEvents                    RegulationEvent[]
+  invitationsSent                     Invitation[]
+  participantKeys                     ParticipantKey[]
+  empathyAttemptsAuthored             EmpathyAttempt[]       @relation("EmpathyAttemptAuthor")
+  empathyAttemptsAbout                EmpathyAttempt[]       @relation("EmpathyAttemptSubject")
+  empathyReviews                      EmpathyReview[]
+  reconcilerResults                   ReconcilerResult[]
+  guidanceAuthored                    ReconcilerGuidance[]   @relation("GuidanceAuthor")
+  guidanceAbout                       ReconcilerGuidance[]   @relation("GuidanceSubject")
+  shareOffers                         ContextShareOffer[]
+  consents                            Consent[]              @relation("ConsentDecider")
+  consentsRequested                   Consent[]              @relation("ConsentRequester")
+  needs                               Need[]
+  needShares                          NeedShare[]
+  needDispositions                    NeedDisposition[]
+  proposalsCreated                    Proposal[]             @relation("ProposalCreator")
+  proposalsRemoved                    Proposal[]             @relation("ProposalRemover")
+  proposalChoices                     ProposalChoice[]
+  proposalRevisions                   ProposalRevision[]
+  agreementParties                    AgreementParty[]
+  closuresClosed                      SessionClosure[]
+  followUpsOwned                      FollowUp[]
+  followUpCheckins                    FollowUpCheckin[]
+  followUpNotes                       FollowUpNote[]
+  brainActivities                     BrainActivity[]
+  agreementPartyParticipantPins       AgreementParty[]       @relation("AgreementPartyParticipantPin")
+  brainActivityParticipantPins        BrainActivity[]        @relation("BrainActivityParticipantPin")
+  consentParticipantPins              Consent[]              @relation("ConsentParticipantPin")
+  consentRequestedByPins              Consent[]              @relation("ConsentRequestedByPin")
+  contextShareOfferSubjectPins        ContextShareOffer[]    @relation("ContextShareOfferSubjectPin")
+  conversationParticipantPins         Conversation[]         @relation("ConversationParticipantPin")
+  conversationReadStateParticipantPin ConversationReadState? @relation("ConversationReadStateParticipantPin")
+  draftAboutPins                      Draft[]                @relation("DraftAboutPin")
+  draftParticipantPins                Draft[]                @relation("DraftParticipantPin")
+  empathyAttemptAuthorPins            EmpathyAttempt[]       @relation("EmpathyAttemptAuthorPin")
+  empathyAttemptSubjectPins           EmpathyAttempt[]       @relation("EmpathyAttemptSubjectPin")
+  empathyReviewReviewerPins           EmpathyReview[]        @relation("EmpathyReviewReviewerPin")
+  followUpOwnerPins                   FollowUp[]             @relation("FollowUpOwnerPin")
+  followUpCheckinParticipantPins      FollowUpCheckin[]      @relation("FollowUpCheckinParticipantPin")
+  followUpNoteParticipantPins         FollowUpNote[]         @relation("FollowUpNoteParticipantPin")
+  invitationInvitedByPins             Invitation[]           @relation("InvitationInvitedByPin")
+  messageSenderPins                   Message[]              @relation("MessageSenderPin")
+  moodReadingParticipantPins          MoodReading[]          @relation("MoodReadingParticipantPin")
+  needParticipantPins                 Need[]                 @relation("NeedParticipantPin")
+  needDispositionParticipantPins      NeedDisposition[]      @relation("NeedDispositionParticipantPin")
+  needShareParticipantPins            NeedShare[]            @relation("NeedShareParticipantPin")
+  participantKeyParticipantPins       ParticipantKey[]       @relation("ParticipantKeyParticipantPin")
+  participantMilestoneParticipantPins ParticipantMilestone[] @relation("ParticipantMilestoneParticipantPin")
+  proposalCreatedByPins               Proposal[]             @relation("ProposalCreatedByPin")
+  proposalRemovedByPins               Proposal[]             @relation("ProposalRemovedByPin")
+  proposalChoiceParticipantPins       ProposalChoice[]       @relation("ProposalChoiceParticipantPin")
+  proposalRevisionActorPins           ProposalRevision[]     @relation("ProposalRevisionActorPin")
+  reconcilerGuidanceAuthorPins        ReconcilerGuidance[]   @relation("ReconcilerGuidanceAuthorPin")
+  reconcilerGuidanceSubjectPins       ReconcilerGuidance[]   @relation("ReconcilerGuidanceSubjectPin")
+  reconcilerResultSubjectPins         ReconcilerResult[]     @relation("ReconcilerResultSubjectPin")
+  regulationEventParticipantPins      RegulationEvent[]      @relation("RegulationEventParticipantPin")
+  sessionClosureClosedByPin           SessionClosure?        @relation("SessionClosureClosedByPin")
 
+  @@unique([id, sessionId, userId])
   @@unique([sessionId, userId])
   @@index([userId])
   @@index([sessionId, addedByUserId])
@@ -152,6 +185,8 @@ model LiveSessionPair {
 model Conversation {
   id               String             @id @default(dbgenerated("uuidv7()")) @db.Uuid
   participantId    String             @map("participant_id") @db.Uuid
+  sessionId        String             @map("session_id") @db.Uuid
+  userId           String             @map("user_id") @db.Uuid
   kind             ConversationKind   @default(MAIN)
   anchorKind       SubchatAnchor?     @map("anchor_kind")
   anchorProposalId String?            @map("anchor_proposal_id") @db.Uuid
@@ -163,8 +198,11 @@ model Conversation {
   participant    Participant @relation(fields: [participantId], references: [id], onDelete: Cascade, onUpdate: NoAction)
   anchorProposal Proposal?   @relation(fields: [anchorProposalId], references: [id], onDelete: SetNull, onUpdate: NoAction)
 
-  messages Message[]
+  messages                Message[]
+  participantPin          Participant @relation("ConversationParticipantPin", fields: [participantId, sessionId, userId], references: [id, sessionId, userId], onDelete: Cascade, onUpdate: NoAction)
+  messageConversationPins Message[]   @relation("MessageConversationPin")
 
+  @@unique([id, sessionId])
   @@index([participantId, kind, status])
   @@index([anchorProposalId])
   @@map("conversation")
@@ -172,6 +210,8 @@ model Conversation {
 
 model ConversationReadState {
   participantId        String    @id @map("participant_id") @db.Uuid
+  sessionId            String    @map("session_id") @db.Uuid
+  userId               String    @map("user_id") @db.Uuid
   lastViewedAt         DateTime? @map("last_viewed_at") @db.Timestamptz(3)
   lastSeenMessageId    String?   @map("last_seen_message_id") @db.Uuid
   lastViewedShareTabAt DateTime? @map("last_viewed_share_tab_at") @db.Timestamptz(3)
@@ -182,7 +222,9 @@ model ConversationReadState {
 
   participant     Participant @relation(fields: [participantId], references: [id], onDelete: Cascade, onUpdate: NoAction)
   lastSeenMessage Message?    @relation(fields: [lastSeenMessageId], references: [id], onDelete: SetNull, onUpdate: NoAction)
+  participantPin  Participant @relation("ConversationReadStateParticipantPin", fields: [participantId, sessionId, userId], references: [id, sessionId, userId], onDelete: Cascade, onUpdate: NoAction)
 
+  @@unique([participantId, sessionId, userId])
   @@index([lastSeenMessageId])
   @@map("conversation_read_state")
 }
@@ -191,6 +233,8 @@ model Message {
   id                  String            @id @default(dbgenerated("uuidv7()")) @db.Uuid
   conversationId      String            @map("conversation_id") @db.Uuid
   senderParticipantId String?           @map("sender_participant_id") @db.Uuid
+  sessionId           String            @map("session_id") @db.Uuid
+  senderUserId        String?           @map("sender_user_id") @db.Uuid
   role                MessageRole
   kind                MessageKind       @default(CHAT)
   content             String
@@ -204,7 +248,10 @@ model Message {
   refiningNeed      Need?           @relation(fields: [refiningNeedId], references: [id], onDelete: SetNull, onUpdate: NoAction)
   sourceAttempt     EmpathyAttempt? @relation(fields: [sourceAttemptId], references: [id], onDelete: SetNull, onUpdate: NoAction)
 
-  readStates ConversationReadState[]
+  readStates       ConversationReadState[]
+  conversationPin  Conversation            @relation("MessageConversationPin", fields: [conversationId, sessionId], references: [id, sessionId], onDelete: Cascade, onUpdate: NoAction)
+  senderPin        Participant?            @relation("MessageSenderPin", fields: [senderParticipantId, sessionId, senderUserId], references: [id, sessionId, userId], onDelete: Cascade, onUpdate: NoAction)
+  sourceAttemptPin EmpathyAttempt?         @relation("MessageSourceAttemptPin", fields: [sourceAttemptId, sessionId], references: [id, sessionId], onDelete: NoAction, onUpdate: NoAction)
 
   @@index([conversationId, createdAt])
   @@index([senderParticipantId])
@@ -220,8 +267,11 @@ model Message {
 model Draft {
   id                 String    @id @default(dbgenerated("uuidv7()")) @db.Uuid
   participantId      String    @map("participant_id") @db.Uuid
+  sessionId          String    @map("session_id") @db.Uuid
+  userId             String    @map("user_id") @db.Uuid
   kind               DraftKind
   aboutParticipantId String?   @map("about_participant_id") @db.Uuid
+  aboutUserId        String?   @map("about_user_id") @db.Uuid
   attemptId          String?   @map("attempt_id") @db.Uuid
   shareOfferId       String?   @map("share_offer_id") @db.Uuid
   invitationId       String?   @map("invitation_id") @db.Uuid
@@ -238,6 +288,11 @@ model Draft {
   attempt          EmpathyAttempt?    @relation(fields: [attemptId], references: [id], onDelete: Cascade, onUpdate: NoAction)
   shareOffer       ContextShareOffer? @relation(fields: [shareOfferId], references: [id], onDelete: Cascade, onUpdate: NoAction)
   invitation       Invitation?        @relation(fields: [invitationId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  aboutPin         Participant?       @relation("DraftAboutPin", fields: [aboutParticipantId, sessionId, aboutUserId], references: [id, sessionId, userId], onDelete: Cascade, onUpdate: NoAction)
+  attemptPin       EmpathyAttempt?    @relation("DraftAttemptPin", fields: [attemptId, sessionId], references: [id, sessionId], onDelete: Cascade, onUpdate: NoAction)
+  invitationPin    Invitation?        @relation("DraftInvitationPin", fields: [invitationId, sessionId], references: [id, sessionId], onDelete: Cascade, onUpdate: NoAction)
+  participantPin   Participant        @relation("DraftParticipantPin", fields: [participantId, sessionId, userId], references: [id, sessionId, userId], onDelete: Cascade, onUpdate: NoAction)
+  shareOfferPin    ContextShareOffer? @relation("DraftShareOfferPin", fields: [shareOfferId, sessionId], references: [id, sessionId], onDelete: Cascade, onUpdate: NoAction)
 
   @@index([aboutParticipantId])
   @@index([attemptId])
@@ -262,12 +317,15 @@ model Milestone {
 
 model ParticipantMilestone {
   participantId String   @map("participant_id") @db.Uuid
+  sessionId     String   @map("session_id") @db.Uuid
+  userId        String   @map("user_id") @db.Uuid
   milestoneKey  String   @map("milestone_key")
   reachedAt     DateTime @default(now()) @map("reached_at") @db.Timestamptz(3)
   createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
 
-  participant Participant @relation(fields: [participantId], references: [id], onDelete: Cascade, onUpdate: NoAction)
-  milestone   Milestone   @relation(fields: [milestoneKey], references: [key], onDelete: Restrict, onUpdate: NoAction)
+  participant    Participant @relation(fields: [participantId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  milestone      Milestone   @relation(fields: [milestoneKey], references: [key], onDelete: Restrict, onUpdate: NoAction)
+  participantPin Participant @relation("ParticipantMilestoneParticipantPin", fields: [participantId, sessionId, userId], references: [id, sessionId, userId], onDelete: Cascade, onUpdate: NoAction)
 
   @@id([participantId, milestoneKey])
   @@index([milestoneKey, reachedAt])
@@ -296,12 +354,15 @@ model AiMemory {
 model MoodReading {
   id            String   @id @default(dbgenerated("uuidv7()")) @db.Uuid
   participantId String   @map("participant_id") @db.Uuid
+  sessionId     String   @map("session_id") @db.Uuid
+  userId        String   @map("user_id") @db.Uuid
   intensity     Int
   context       String?
   recordedAt    DateTime @default(now()) @map("recorded_at") @db.Timestamptz(3)
   createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
 
-  participant Participant @relation(fields: [participantId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  participant    Participant @relation(fields: [participantId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  participantPin Participant @relation("MoodReadingParticipantPin", fields: [participantId, sessionId, userId], references: [id, sessionId, userId], onDelete: Cascade, onUpdate: NoAction)
 
   @@index([participantId, recordedAt])
   @@map("mood_reading")
@@ -310,13 +371,16 @@ model MoodReading {
 model RegulationEvent {
   id              String         @id @default(dbgenerated("uuidv7()")) @db.Uuid
   participantId   String         @map("participant_id") @db.Uuid
+  sessionId       String         @map("session_id") @db.Uuid
+  userId          String         @map("user_id") @db.Uuid
   type            RegulationType
   intensityBefore Int?           @map("intensity_before")
   intensityAfter  Int?           @map("intensity_after")
   completedAt     DateTime       @default(now()) @map("completed_at") @db.Timestamptz(3)
   createdAt       DateTime       @default(now()) @map("created_at") @db.Timestamptz(3)
 
-  participant Participant @relation(fields: [participantId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  participant    Participant @relation(fields: [participantId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  participantPin Participant @relation("RegulationEventParticipantPin", fields: [participantId, sessionId, userId], references: [id, sessionId, userId], onDelete: Cascade, onUpdate: NoAction)
 
   @@index([participantId, completedAt])
   @@map("regulation_event")
@@ -326,6 +390,7 @@ model Invitation {
   id                     String           @id @default(dbgenerated("uuidv7()")) @db.Uuid
   sessionId              String           @map("session_id") @db.Uuid
   invitedByParticipantId String           @map("invited_by_participant_id") @db.Uuid
+  invitedByUserId        String           @map("invited_by_user_id") @db.Uuid
   acceptedByUserId       String?          @map("accepted_by_user_id") @db.Uuid
   inviteeName            String?          @map("invitee_name")
   status                 InvitationStatus @default(PENDING)
@@ -341,7 +406,10 @@ model Invitation {
   invitedByParticipant Participant @relation(fields: [invitedByParticipantId], references: [id], onDelete: Cascade, onUpdate: NoAction)
   acceptedByUser       User?       @relation(fields: [acceptedByUserId], references: [id], onDelete: Restrict, onUpdate: NoAction)
   drafts               Draft[]
+  draftInvitationPins  Draft[]     @relation("DraftInvitationPin")
+  invitedByPin         Participant @relation("InvitationInvitedByPin", fields: [invitedByParticipantId, sessionId, invitedByUserId], references: [id, sessionId, userId], onDelete: Cascade, onUpdate: NoAction)
 
+  @@unique([id, sessionId])
   @@index([sessionId])
   @@index([invitedByParticipantId])
   @@index([status, expiresAt])
@@ -369,13 +437,16 @@ model SessionKey {
 model ParticipantKey {
   id            String    @id @default(dbgenerated("uuidv7()")) @db.Uuid
   participantId String    @map("participant_id") @db.Uuid
+  sessionId     String    @map("session_id") @db.Uuid
+  userId        String    @map("user_id") @db.Uuid
   keyId         String    @map("key_id")
   wrappedDek    Bytes     @map("wrapped_dek")
   createdAt     DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
   destroyedAt   DateTime? @map("destroyed_at") @db.Timestamptz(3)
   updatedAt     DateTime  @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
 
-  participant Participant @relation(fields: [participantId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  participant    Participant @relation(fields: [participantId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  participantPin Participant @relation("ParticipantKeyParticipantPin", fields: [participantId, sessionId, userId], references: [id, sessionId, userId], onDelete: Cascade, onUpdate: NoAction)
 
   @@index([participantId])
   @@map("participant_key")
@@ -391,6 +462,9 @@ model EmpathyAttempt {
   id                   String         @id @default(dbgenerated("uuidv7()")) @db.Uuid
   authorParticipantId  String         @map("author_participant_id") @db.Uuid
   subjectParticipantId String         @map("subject_participant_id") @db.Uuid
+  sessionId            String         @map("session_id") @db.Uuid
+  authorUserId         String         @map("author_user_id") @db.Uuid
+  subjectUserId        String         @map("subject_user_id") @db.Uuid
   round                Int            @default(1)
   supersedesAttemptId  String?        @map("supersedes_attempt_id") @db.Uuid
   content              String
@@ -409,13 +483,23 @@ model EmpathyAttempt {
   supersedesAttempt  EmpathyAttempt?  @relation("EmpathyAttemptSupersession", fields: [supersedesAttemptId], references: [id], onDelete: SetNull, onUpdate: NoAction)
   supersededBy       EmpathyAttempt[] @relation("EmpathyAttemptSupersession")
 
-  deliveredMessages Message[]
-  drafts            Draft[]
-  reviews           EmpathyReview[]
-  reconcilerResults ReconcilerResult[]
-  shareOffers       ContextShareOffer[]
-  consents          Consent[]
+  deliveredMessages            Message[]
+  drafts                       Draft[]
+  reviews                      EmpathyReview[]
+  reconcilerResults            ReconcilerResult[]
+  shareOffers                  ContextShareOffer[]
+  consents                     Consent[]
+  consentEmpathyAttemptPins    Consent[]           @relation("ConsentEmpathyAttemptPin")
+  contextShareOfferAttemptPins ContextShareOffer[] @relation("ContextShareOfferAttemptPin")
+  draftAttemptPins             Draft[]             @relation("DraftAttemptPin")
+  authorPin                    Participant         @relation("EmpathyAttemptAuthorPin", fields: [authorParticipantId, sessionId, authorUserId], references: [id, sessionId, userId], onDelete: Cascade, onUpdate: NoAction)
+  subjectPin                   Participant         @relation("EmpathyAttemptSubjectPin", fields: [subjectParticipantId, sessionId, subjectUserId], references: [id, sessionId, userId], onDelete: Cascade, onUpdate: NoAction)
+  empathyReviewAttemptPins     EmpathyReview[]     @relation("EmpathyReviewAttemptPin")
+  messageSourceAttemptPins     Message[]           @relation("MessageSourceAttemptPin")
+  reconcilerResultAttemptPins  ReconcilerResult[]  @relation("ReconcilerResultAttemptPin")
 
+  @@unique([id, sessionId])
+  @@unique([id, sessionId, subjectUserId])
   @@unique([authorParticipantId, subjectParticipantId, round])
   @@index([subjectParticipantId, revealedAt])
   @@index([supersedesAttemptId])
@@ -426,6 +510,8 @@ model EmpathyReview {
   id                    String    @id @default(dbgenerated("uuidv7()")) @db.Uuid
   attemptId             String    @map("attempt_id") @db.Uuid
   reviewerParticipantId String    @map("reviewer_participant_id") @db.Uuid
+  sessionId             String    @map("session_id") @db.Uuid
+  reviewerUserId        String    @map("reviewer_user_id") @db.Uuid
   validated             Boolean
   feedback              String?
   feedbackSentAt        DateTime? @map("feedback_sent_at") @db.Timestamptz(3)
@@ -435,8 +521,12 @@ model EmpathyReview {
   attempt             EmpathyAttempt @relation(fields: [attemptId], references: [id], onDelete: Cascade, onUpdate: NoAction)
   reviewerParticipant Participant    @relation(fields: [reviewerParticipantId], references: [id], onDelete: Cascade, onUpdate: NoAction)
 
-  consents Consent[]
+  consents          Consent[]
+  consentReviewPins Consent[]      @relation("ConsentReviewPin")
+  attemptPin        EmpathyAttempt @relation("EmpathyReviewAttemptPin", fields: [attemptId, sessionId, reviewerUserId], references: [id, sessionId, subjectUserId], onDelete: Cascade, onUpdate: NoAction)
+  reviewerPin       Participant    @relation("EmpathyReviewReviewerPin", fields: [reviewerParticipantId, sessionId, reviewerUserId], references: [id, sessionId, userId], onDelete: Cascade, onUpdate: NoAction)
 
+  @@unique([id, sessionId])
   @@unique([attemptId, reviewerParticipantId])
   @@index([reviewerParticipantId])
   @@map("empathy_review")
@@ -447,6 +537,8 @@ model ReconcilerResult {
   id                    String            @id @default(dbgenerated("uuidv7()")) @db.Uuid
   attemptId             String            @map("attempt_id") @db.Uuid
   subjectParticipantId  String            @map("subject_participant_id") @db.Uuid
+  sessionId             String            @map("session_id") @db.Uuid
+  subjectUserId         String            @map("subject_user_id") @db.Uuid
   iteration             Int               @default(1)
   alignmentScore        Int               @map("alignment_score")
   alignmentSummary      String            @map("alignment_summary")
@@ -470,9 +562,15 @@ model ReconcilerResult {
   attempt            EmpathyAttempt @relation(fields: [attemptId], references: [id], onDelete: Cascade, onUpdate: NoAction)
   subjectParticipant Participant    @relation(fields: [subjectParticipantId], references: [id], onDelete: Cascade, onUpdate: NoAction)
 
-  guidance    ReconcilerGuidance?
-  shareOffers ContextShareOffer[]
+  guidance                    ReconcilerGuidance?
+  shareOffers                 ContextShareOffer[]
+  contextShareOfferResultPins ContextShareOffer[] @relation("ContextShareOfferResultPin")
+  reconcilerGuidanceResultPin ReconcilerGuidance? @relation("ReconcilerGuidanceResultPin")
+  attemptPin                  EmpathyAttempt      @relation("ReconcilerResultAttemptPin", fields: [attemptId, sessionId, subjectUserId], references: [id, sessionId, subjectUserId], onDelete: Cascade, onUpdate: NoAction)
+  subjectPin                  Participant         @relation("ReconcilerResultSubjectPin", fields: [subjectParticipantId, sessionId, subjectUserId], references: [id, sessionId, userId], onDelete: Cascade, onUpdate: NoAction)
 
+  @@unique([id, sessionId])
+  @@unique([id, sessionId, subjectUserId])
   @@unique([attemptId, iteration])
   @@index([subjectParticipantId])
   @@map("reconciler_result")
@@ -482,6 +580,9 @@ model ReconcilerGuidance {
   resultId             String        @id @map("result_id") @db.Uuid
   authorParticipantId  String        @map("author_participant_id") @db.Uuid
   subjectParticipantId String        @map("subject_participant_id") @db.Uuid
+  sessionId            String        @map("session_id") @db.Uuid
+  authorUserId         String        @map("author_user_id") @db.Uuid
+  subjectUserId        String        @map("subject_user_id") @db.Uuid
   areaHint             String?       @map("area_hint")
   guidanceType         GuidanceType? @map("guidance_type")
   promptSeed           String?       @map("prompt_seed")
@@ -490,7 +591,11 @@ model ReconcilerGuidance {
   result             ReconcilerResult @relation(fields: [resultId], references: [id], onDelete: Cascade, onUpdate: NoAction)
   authorParticipant  Participant      @relation("GuidanceAuthor", fields: [authorParticipantId], references: [id], onDelete: Cascade, onUpdate: NoAction)
   subjectParticipant Participant      @relation("GuidanceSubject", fields: [subjectParticipantId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  authorPin          Participant      @relation("ReconcilerGuidanceAuthorPin", fields: [authorParticipantId, sessionId, authorUserId], references: [id, sessionId, userId], onDelete: Cascade, onUpdate: NoAction)
+  resultPin          ReconcilerResult @relation("ReconcilerGuidanceResultPin", fields: [resultId, sessionId, subjectUserId], references: [id, sessionId, subjectUserId], onDelete: Cascade, onUpdate: NoAction)
+  subjectPin         Participant      @relation("ReconcilerGuidanceSubjectPin", fields: [subjectParticipantId, sessionId, subjectUserId], references: [id, sessionId, userId], onDelete: Cascade, onUpdate: NoAction)
 
+  @@unique([resultId, sessionId, subjectUserId])
   @@index([authorParticipantId])
   @@index([subjectParticipantId])
   @@map("reconciler_guidance")
@@ -501,6 +606,8 @@ model ContextShareOffer {
   attemptId            String           @map("attempt_id") @db.Uuid
   resultId             String           @map("result_id") @db.Uuid
   subjectParticipantId String           @map("subject_participant_id") @db.Uuid
+  sessionId            String           @map("session_id") @db.Uuid
+  subjectUserId        String           @map("subject_user_id") @db.Uuid
   iteration            Int              @default(1)
   status               ShareOfferStatus @default(PENDING)
   offerMessage         String?          @map("offer_message")
@@ -522,9 +629,15 @@ model ContextShareOffer {
   result             ReconcilerResult @relation(fields: [resultId], references: [id], onDelete: Cascade, onUpdate: NoAction)
   subjectParticipant Participant      @relation(fields: [subjectParticipantId], references: [id], onDelete: Cascade, onUpdate: NoAction)
 
-  drafts   Draft[]
-  consents Consent[]
+  drafts                Draft[]
+  consents              Consent[]
+  consentShareOfferPins Consent[]        @relation("ConsentShareOfferPin")
+  attemptPin            EmpathyAttempt   @relation("ContextShareOfferAttemptPin", fields: [attemptId, sessionId, subjectUserId], references: [id, sessionId, subjectUserId], onDelete: Cascade, onUpdate: NoAction)
+  resultPin             ReconcilerResult @relation("ContextShareOfferResultPin", fields: [resultId, sessionId], references: [id, sessionId], onDelete: Cascade, onUpdate: NoAction)
+  subjectPin            Participant      @relation("ContextShareOfferSubjectPin", fields: [subjectParticipantId, sessionId, subjectUserId], references: [id, sessionId, userId], onDelete: Cascade, onUpdate: NoAction)
+  draftShareOfferPins   Draft[]          @relation("DraftShareOfferPin")
 
+  @@unique([id, sessionId])
   @@unique([attemptId, iteration])
   @@index([subjectParticipantId, status])
   @@index([resultId])
@@ -541,6 +654,9 @@ model Consent {
   id                       String           @id @default(dbgenerated("uuidv7()")) @db.Uuid
   participantId            String           @map("participant_id") @db.Uuid
   requestedByParticipantId String?          @map("requested_by_participant_id") @db.Uuid
+  sessionId                String           @map("session_id") @db.Uuid
+  userId                   String           @map("user_id") @db.Uuid
+  requestedByUserId        String?          @map("requested_by_user_id") @db.Uuid
   needId                   String?          @map("need_id") @db.Uuid
   empathyAttemptId         String?          @map("empathy_attempt_id") @db.Uuid
   proposalId               String?          @map("proposal_id") @db.Uuid
@@ -560,6 +676,13 @@ model Consent {
   proposal               Proposal?          @relation(fields: [proposalId], references: [id], onDelete: Cascade, onUpdate: NoAction)
   shareOffer             ContextShareOffer? @relation(fields: [shareOfferId], references: [id], onDelete: Cascade, onUpdate: NoAction)
   review                 EmpathyReview?     @relation(fields: [reviewId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  empathyAttemptPin      EmpathyAttempt?    @relation("ConsentEmpathyAttemptPin", fields: [empathyAttemptId, sessionId], references: [id, sessionId], onDelete: Cascade, onUpdate: NoAction)
+  needPin                Need?              @relation("ConsentNeedPin", fields: [needId, sessionId], references: [id, sessionId], onDelete: Cascade, onUpdate: NoAction)
+  participantPin         Participant        @relation("ConsentParticipantPin", fields: [participantId, sessionId, userId], references: [id, sessionId, userId], onDelete: Cascade, onUpdate: NoAction)
+  proposalPin            Proposal?          @relation("ConsentProposalPin", fields: [proposalId, sessionId], references: [id, sessionId], onDelete: Cascade, onUpdate: NoAction)
+  requestedByPin         Participant?       @relation("ConsentRequestedByPin", fields: [requestedByParticipantId, sessionId, requestedByUserId], references: [id, sessionId, userId], onDelete: Cascade, onUpdate: NoAction)
+  reviewPin              EmpathyReview?     @relation("ConsentReviewPin", fields: [reviewId, sessionId], references: [id, sessionId], onDelete: Cascade, onUpdate: NoAction)
+  shareOfferPin          ContextShareOffer? @relation("ConsentShareOfferPin", fields: [shareOfferId, sessionId], references: [id, sessionId], onDelete: Cascade, onUpdate: NoAction)
 
   @@index([requestedByParticipantId])
   @@index([needId])
@@ -579,6 +702,8 @@ model Consent {
 model Need {
   id                 String       @id @default(dbgenerated("uuidv7()")) @db.Uuid
   participantId      String       @map("participant_id") @db.Uuid
+  sessionId          String       @map("session_id") @db.Uuid
+  userId             String       @map("user_id") @db.Uuid
   label              String
   category           NeedCategory
   evidence           String[]     @default([])
@@ -597,7 +722,12 @@ model Need {
   share            NeedShare?
   refiningMessages Message[]
   consents         Consent[]
+  consentNeedPins  Consent[]   @relation("ConsentNeedPin")
+  participantPin   Participant @relation("NeedParticipantPin", fields: [participantId, sessionId, userId], references: [id, sessionId, userId], onDelete: Cascade, onUpdate: NoAction)
+  needShareNeedPin NeedShare?  @relation("NeedShareNeedPin")
 
+  @@unique([id, sessionId])
+  @@unique([id, sessionId, userId])
   @@index([participantId])
   @@index([supersededByNeedId])
   @@map("need")
@@ -607,6 +737,7 @@ model NeedShare {
   needId        String       @id @map("need_id") @db.Uuid
   participantId String       @map("participant_id") @db.Uuid
   sessionId     String       @map("session_id") @db.Uuid
+  userId        String       @map("user_id") @db.Uuid
   category      NeedCategory
   sharedText    String       @map("shared_text")
   sharedAt      DateTime     @default(now()) @map("shared_at") @db.Timestamptz(3)
@@ -618,9 +749,15 @@ model NeedShare {
   participant Participant @relation(fields: [participantId], references: [id], onDelete: Cascade, onUpdate: NoAction)
   session     Session     @relation(fields: [sessionId], references: [id], onDelete: Cascade, onUpdate: NoAction)
 
-  dispositions  NeedDisposition[]
-  proposalNeeds ProposalNeed[]
+  dispositions            NeedDisposition[]
+  proposalNeeds           ProposalNeed[]
+  needDispositionNeedPins NeedDisposition[] @relation("NeedDispositionNeedPin")
+  needPin                 Need              @relation("NeedShareNeedPin", fields: [needId, sessionId, userId], references: [id, sessionId, userId], onUpdate: NoAction)
+  participantPin          Participant       @relation("NeedShareParticipantPin", fields: [participantId, sessionId, userId], references: [id, sessionId, userId], onDelete: Cascade, onUpdate: NoAction)
+  proposalNeedNeedPins    ProposalNeed[]    @relation("ProposalNeedNeedPin")
 
+  @@unique([needId, sessionId])
+  @@unique([needId, sessionId, userId])
   @@index([sessionId, revokedAt])
   @@index([participantId])
   @@map("need_share")
@@ -630,14 +767,18 @@ model NeedShare {
 model NeedDisposition {
   participantId String                @map("participant_id") @db.Uuid
   needId        String                @map("need_id") @db.Uuid
+  sessionId     String                @map("session_id") @db.Uuid
+  userId        String                @map("user_id") @db.Uuid
   status        NeedDispositionStatus @default(OPEN)
   isCurrent     Boolean               @default(false) @map("is_current")
   note          String?
   createdAt     DateTime              @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt     DateTime              @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
 
-  participant Participant @relation(fields: [participantId], references: [id], onDelete: Cascade, onUpdate: NoAction)
-  need        NeedShare   @relation(fields: [needId], references: [needId], onDelete: Cascade, onUpdate: NoAction)
+  participant    Participant @relation(fields: [participantId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  need           NeedShare   @relation(fields: [needId], references: [needId], onDelete: Cascade, onUpdate: NoAction)
+  needPin        NeedShare   @relation("NeedDispositionNeedPin", fields: [needId, sessionId], references: [needId, sessionId], onDelete: Cascade, onUpdate: NoAction)
+  participantPin Participant @relation("NeedDispositionParticipantPin", fields: [participantId, sessionId, userId], references: [id, sessionId, userId], onDelete: Cascade, onUpdate: NoAction)
 
   @@id([participantId, needId])
   @@index([needId])
@@ -648,6 +789,7 @@ model Proposal {
   id                     String         @id @default(dbgenerated("uuidv7()")) @db.Uuid
   sessionId              String         @map("session_id") @db.Uuid
   createdByParticipantId String?        @map("created_by_participant_id") @db.Uuid
+  createdByUserId        String?        @map("created_by_user_id") @db.Uuid
   source                 ProposalSource @default(USER_SUBMITTED)
   kind                   ProposalKind   @default(SHARED_PROPOSAL)
   status                 ProposalStatus @default(ACTIVE)
@@ -657,6 +799,7 @@ model Proposal {
   unresolvedNeedLabels   String[]       @default([]) @map("unresolved_need_labels")
   removedAt              DateTime?      @map("removed_at") @db.Timestamptz(3)
   removedByParticipantId String?        @map("removed_by_participant_id") @db.Uuid
+  removedByUserId        String?        @map("removed_by_user_id") @db.Uuid
   removalReason          String?        @map("removal_reason")
   sharedAt               DateTime?      @map("shared_at") @db.Timestamptz(3)
   createdAt              DateTime       @default(now()) @map("created_at") @db.Timestamptz(3)
@@ -666,14 +809,22 @@ model Proposal {
   createdByParticipant Participant? @relation("ProposalCreator", fields: [createdByParticipantId], references: [id], onDelete: Cascade, onUpdate: NoAction)
   removedByParticipant Participant? @relation("ProposalRemover", fields: [removedByParticipantId], references: [id], onDelete: Cascade, onUpdate: NoAction)
 
-  subchats  Conversation[]
-  consents  Consent[]
-  needs     ProposalNeed[]
-  choices   ProposalChoice[]
-  revisions ProposalRevision[]
-  agreement Agreement?
-  followUps FollowUp[]
+  subchats                     Conversation[]
+  consents                     Consent[]
+  needs                        ProposalNeed[]
+  choices                      ProposalChoice[]
+  revisions                    ProposalRevision[]
+  agreement                    Agreement?
+  followUps                    FollowUp[]
+  agreementProposalPin         Agreement?         @relation("AgreementProposalPin")
+  consentProposalPins          Consent[]          @relation("ConsentProposalPin")
+  createdByPin                 Participant?       @relation("ProposalCreatedByPin", fields: [createdByParticipantId, sessionId, createdByUserId], references: [id, sessionId, userId], onDelete: Cascade, onUpdate: NoAction)
+  removedByPin                 Participant?       @relation("ProposalRemovedByPin", fields: [removedByParticipantId, sessionId, removedByUserId], references: [id, sessionId, userId], onDelete: Cascade, onUpdate: NoAction)
+  proposalChoiceProposalPins   ProposalChoice[]   @relation("ProposalChoiceProposalPin")
+  proposalNeedProposalPins     ProposalNeed[]     @relation("ProposalNeedProposalPin")
+  proposalRevisionProposalPins ProposalRevision[] @relation("ProposalRevisionProposalPin")
 
+  @@unique([id, sessionId])
   @@index([sessionId, status])
   @@index([createdByParticipantId])
   @@index([removedByParticipantId])
@@ -683,10 +834,13 @@ model Proposal {
 model ProposalNeed {
   proposalId String   @map("proposal_id") @db.Uuid
   needId     String   @map("need_id") @db.Uuid
+  sessionId  String   @map("session_id") @db.Uuid
   createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
 
-  proposal Proposal  @relation(fields: [proposalId], references: [id], onDelete: Cascade, onUpdate: NoAction)
-  need     NeedShare @relation(fields: [needId], references: [needId], onDelete: Cascade, onUpdate: NoAction)
+  proposal    Proposal  @relation(fields: [proposalId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  need        NeedShare @relation(fields: [needId], references: [needId], onDelete: Cascade, onUpdate: NoAction)
+  needPin     NeedShare @relation("ProposalNeedNeedPin", fields: [needId, sessionId], references: [needId, sessionId], onDelete: Cascade, onUpdate: NoAction)
+  proposalPin Proposal  @relation("ProposalNeedProposalPin", fields: [proposalId, sessionId], references: [id, sessionId], onDelete: Cascade, onUpdate: NoAction)
 
   @@id([proposalId, needId])
   @@index([needId])
@@ -696,13 +850,17 @@ model ProposalNeed {
 model ProposalChoice {
   proposalId    String         @map("proposal_id") @db.Uuid
   participantId String         @map("participant_id") @db.Uuid
+  sessionId     String         @map("session_id") @db.Uuid
+  userId        String         @map("user_id") @db.Uuid
   decision      ChoiceDecision
   note          String?
   createdAt     DateTime       @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt     DateTime       @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
 
-  proposal    Proposal    @relation(fields: [proposalId], references: [id], onDelete: Cascade, onUpdate: NoAction)
-  participant Participant @relation(fields: [participantId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  proposal       Proposal    @relation(fields: [proposalId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  participant    Participant @relation(fields: [participantId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  participantPin Participant @relation("ProposalChoiceParticipantPin", fields: [participantId, sessionId, userId], references: [id, sessionId, userId], onDelete: Cascade, onUpdate: NoAction)
+  proposalPin    Proposal    @relation("ProposalChoiceProposalPin", fields: [proposalId, sessionId], references: [id, sessionId], onDelete: Cascade, onUpdate: NoAction)
 
   @@id([proposalId, participantId])
   @@index([participantId])
@@ -713,6 +871,8 @@ model ProposalRevision {
   id                 String                  @id @default(dbgenerated("uuidv7()")) @db.Uuid
   proposalId         String                  @map("proposal_id") @db.Uuid
   actorParticipantId String?                 @map("actor_participant_id") @db.Uuid
+  sessionId          String                  @map("session_id") @db.Uuid
+  actorUserId        String?                 @map("actor_user_id") @db.Uuid
   action             RevisionAction
   before             Json?
   after              Json?
@@ -721,6 +881,8 @@ model ProposalRevision {
 
   proposal         Proposal     @relation(fields: [proposalId], references: [id], onDelete: Cascade, onUpdate: NoAction)
   actorParticipant Participant? @relation(fields: [actorParticipantId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  actorPin         Participant? @relation("ProposalRevisionActorPin", fields: [actorParticipantId, sessionId, actorUserId], references: [id, sessionId, userId], onDelete: Cascade, onUpdate: NoAction)
+  proposalPin      Proposal     @relation("ProposalRevisionProposalPin", fields: [proposalId, sessionId], references: [id, sessionId], onDelete: Cascade, onUpdate: NoAction)
 
   @@index([proposalId, createdAt])
   @@index([actorParticipantId])
@@ -744,9 +906,13 @@ model Agreement {
   session  Session  @relation(fields: [sessionId], references: [id], onDelete: Cascade, onUpdate: NoAction)
   proposal Proposal @relation(fields: [proposalId], references: [id], onDelete: Restrict, onUpdate: NoAction)
 
-  parties   AgreementParty[]
-  followUps FollowUp[]
+  parties                     AgreementParty[]
+  followUps                   FollowUp[]
+  proposalPin                 Proposal         @relation("AgreementProposalPin", fields: [proposalId, sessionId], references: [id, sessionId], onUpdate: NoAction)
+  agreementPartyAgreementPins AgreementParty[] @relation("AgreementPartyAgreementPin")
 
+  @@unique([id, sessionId])
+  @@unique([proposalId, sessionId])
   @@index([sessionId, status])
   @@map("agreement")
 }
@@ -754,11 +920,15 @@ model Agreement {
 model AgreementParty {
   agreementId   String   @map("agreement_id") @db.Uuid
   participantId String   @map("participant_id") @db.Uuid
+  sessionId     String   @map("session_id") @db.Uuid
+  userId        String   @map("user_id") @db.Uuid
   agreedAt      DateTime @default(now()) @map("agreed_at") @db.Timestamptz(3)
   createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
 
-  agreement   Agreement   @relation(fields: [agreementId], references: [id], onDelete: Cascade, onUpdate: NoAction)
-  participant Participant @relation(fields: [participantId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  agreement      Agreement   @relation(fields: [agreementId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  participant    Participant @relation(fields: [participantId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  agreementPin   Agreement   @relation("AgreementPartyAgreementPin", fields: [agreementId, sessionId], references: [id, sessionId], onDelete: Cascade, onUpdate: NoAction)
+  participantPin Participant @relation("AgreementPartyParticipantPin", fields: [participantId, sessionId, userId], references: [id, sessionId, userId], onDelete: Cascade, onUpdate: NoAction)
 
   @@id([agreementId, participantId])
   @@index([participantId])
@@ -771,13 +941,16 @@ model SessionClosure {
   reason                ClosureReason
   summary               String
   closedByParticipantId String?       @map("closed_by_participant_id") @db.Uuid
+  closedByUserId        String?       @map("closed_by_user_id") @db.Uuid
   checkInAt             DateTime?     @map("check_in_at") @db.Timestamptz(3)
   closedAt              DateTime      @default(now()) @map("closed_at") @db.Timestamptz(3)
   createdAt             DateTime      @default(now()) @map("created_at") @db.Timestamptz(3)
 
   session             Session      @relation(fields: [sessionId], references: [id], onDelete: Cascade, onUpdate: NoAction)
   closedByParticipant Participant? @relation(fields: [closedByParticipantId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  closedByPin         Participant? @relation("SessionClosureClosedByPin", fields: [closedByParticipantId, sessionId, closedByUserId], references: [id, sessionId, userId], onDelete: Cascade, onUpdate: NoAction)
 
+  @@unique([closedByParticipantId, sessionId, closedByUserId])
   @@index([closedByParticipantId])
   @@map("session_closure")
 }
@@ -795,6 +968,7 @@ model FollowUp {
   type               FollowUpType
   scope              FollowUpScope  @default(SHARED)
   ownerParticipantId String?        @map("owner_participant_id") @db.Uuid
+  ownerUserId        String?        @map("owner_user_id") @db.Uuid
   optedInShared      Boolean        @default(false) @map("opted_in_shared")
   status             FollowUpStatus @default(SCHEDULED)
   scheduledFor       DateTime?      @map("scheduled_for") @db.Timestamptz(3)
@@ -810,9 +984,12 @@ model FollowUp {
   proposal         Proposal?    @relation(fields: [proposalId], references: [id], onDelete: Cascade, onUpdate: NoAction)
   ownerParticipant Participant? @relation(fields: [ownerParticipantId], references: [id], onDelete: Cascade, onUpdate: NoAction)
 
-  checkins  FollowUpCheckin[]
-  reminders Reminder[]
+  checkins                    FollowUpCheckin[]
+  reminders                   Reminder[]
+  ownerPin                    Participant?      @relation("FollowUpOwnerPin", fields: [ownerParticipantId, sessionId, ownerUserId], references: [id, sessionId, userId], onDelete: Cascade, onUpdate: NoAction)
+  followUpCheckinFollowUpPins FollowUpCheckin[] @relation("FollowUpCheckinFollowUpPin")
 
+  @@unique([id, sessionId])
   @@index([sessionId, status])
   @@index([agreementId])
   @@index([proposalId])
@@ -824,6 +1001,8 @@ model FollowUpCheckin {
   id                String          @id @default(dbgenerated("uuidv7()")) @db.Uuid
   followUpId        String          @map("follow_up_id") @db.Uuid
   participantId     String          @map("participant_id") @db.Uuid
+  sessionId         String          @map("session_id") @db.Uuid
+  userId            String          @map("user_id") @db.Uuid
   nextAction        NextAction?     @map("next_action")
   continueChoice    ContinueChoice? @map("continue_choice")
   reflectionSummary String?         @map("reflection_summary")
@@ -834,7 +1013,9 @@ model FollowUpCheckin {
   followUp    FollowUp    @relation(fields: [followUpId], references: [id], onDelete: Cascade, onUpdate: NoAction)
   participant Participant @relation(fields: [participantId], references: [id], onDelete: Cascade, onUpdate: NoAction)
 
-  carriedNotes FollowUpNote[]
+  carriedNotes   FollowUpNote[]
+  followUpPin    FollowUp       @relation("FollowUpCheckinFollowUpPin", fields: [followUpId, sessionId], references: [id, sessionId], onDelete: Cascade, onUpdate: NoAction)
+  participantPin Participant    @relation("FollowUpCheckinParticipantPin", fields: [participantId, sessionId, userId], references: [id, sessionId, userId], onDelete: Cascade, onUpdate: NoAction)
 
   @@unique([followUpId, participantId])
   @@index([participantId, submittedAt])
@@ -844,6 +1025,8 @@ model FollowUpCheckin {
 model FollowUpNote {
   id                   String   @id @default(dbgenerated("uuidv7()")) @db.Uuid
   participantId        String   @map("participant_id") @db.Uuid
+  sessionId            String   @map("session_id") @db.Uuid
+  userId               String   @map("user_id") @db.Uuid
   content              String
   carryForward         Boolean  @default(false) @map("carry_forward")
   carriedIntoCheckinId String?  @map("carried_into_checkin_id") @db.Uuid
@@ -852,6 +1035,7 @@ model FollowUpNote {
 
   participant        Participant      @relation(fields: [participantId], references: [id], onDelete: Cascade, onUpdate: NoAction)
   carriedIntoCheckin FollowUpCheckin? @relation(fields: [carriedIntoCheckinId], references: [id], onDelete: SetNull, onUpdate: NoAction)
+  participantPin     Participant      @relation("FollowUpNoteParticipantPin", fields: [participantId, sessionId, userId], references: [id, sessionId, userId], onDelete: Cascade, onUpdate: NoAction)
 
   @@index([participantId, createdAt])
   @@index([carriedIntoCheckinId])
@@ -1136,30 +1320,32 @@ model UserKey {
 // ----------------------------------------------------------------------------
 
 model BrainActivity {
-  id               String         @id @default(dbgenerated("uuidv7()")) @db.Uuid
-  sessionId        String?        @map("session_id") @db.Uuid
-  reflectionId     String?        @map("reflection_id") @db.Uuid
-  participantId    String?        @map("participant_id") @db.Uuid
-  turnId           String?        @map("turn_id")
-  activityType     ActivityType   @map("activity_type")
-  callType         BrainCallType? @map("call_type")
-  model            String
-  input            Json?
-  output           Json?
-  metadata         Json?
-  structuredOutput Json?          @map("structured_output")
-  tokenCountInput  Int            @default(0) @map("token_count_input")
-  tokenCountOutput Int            @default(0) @map("token_count_output")
-  durationMs       Int            @default(0) @map("duration_ms")
-  cost             Decimal        @default(0) @db.Decimal(10, 6)
-  status           ActivityStatus @default(PENDING)
-  createdAt        DateTime       @default(now()) @map("created_at") @db.Timestamptz(3)
-  completedAt      DateTime?      @map("completed_at") @db.Timestamptz(3)
-  updatedAt        DateTime       @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+  id                String         @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  sessionId         String?        @map("session_id") @db.Uuid
+  reflectionId      String?        @map("reflection_id") @db.Uuid
+  participantId     String?        @map("participant_id") @db.Uuid
+  participantUserId String?        @map("participant_user_id") @db.Uuid
+  turnId            String?        @map("turn_id")
+  activityType      ActivityType   @map("activity_type")
+  callType          BrainCallType? @map("call_type")
+  model             String
+  input             Json?
+  output            Json?
+  metadata          Json?
+  structuredOutput  Json?          @map("structured_output")
+  tokenCountInput   Int            @default(0) @map("token_count_input")
+  tokenCountOutput  Int            @default(0) @map("token_count_output")
+  durationMs        Int            @default(0) @map("duration_ms")
+  cost              Decimal        @default(0) @db.Decimal(10, 6)
+  status            ActivityStatus @default(PENDING)
+  createdAt         DateTime       @default(now()) @map("created_at") @db.Timestamptz(3)
+  completedAt       DateTime?      @map("completed_at") @db.Timestamptz(3)
+  updatedAt         DateTime       @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
 
-  session     Session?     @relation(fields: [sessionId], references: [id], onDelete: Cascade, onUpdate: NoAction)
-  reflection  Reflection?  @relation(fields: [reflectionId], references: [id], onDelete: Cascade, onUpdate: NoAction)
-  participant Participant? @relation(fields: [participantId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  session        Session?     @relation(fields: [sessionId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  reflection     Reflection?  @relation(fields: [reflectionId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  participant    Participant? @relation(fields: [participantId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  participantPin Participant? @relation("BrainActivityParticipantPin", fields: [participantId, sessionId, participantUserId], references: [id, sessionId, userId], onDelete: Cascade, onUpdate: NoAction)
 
   @@index([sessionId])
   @@index([reflectionId])
