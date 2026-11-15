@@ -208,12 +208,14 @@ describeTarget('the streaming chat turn on the target (mwf_app, the reply by mwf
     expect(stranger.status).toBe(403);
 
     const [bobNeed] = await run.sql<{ id: string }>(
-      `INSERT INTO need (participant_id, label, category, ai_confidence) VALUES ($1, 'PROBE_TS12_BOBS_NEED', 'SAFETY', 0.9) RETURNING id`,
+      `INSERT INTO need (participant_id, label, category, ai_confidence, user_id, session_id) VALUES ($1::uuid, 'PROBE_TS12_BOBS_NEED', 'SAFETY', 0.9, (SELECT p.user_id FROM participant p WHERE p.id = $1::uuid), (SELECT p.session_id FROM participant p WHERE p.id = $1::uuid)) RETURNING id`,
       [ids.bob],
     );
     // Ada into Stage 3 for the refining path, then point at Bob's need
     await run.sql(
-      `INSERT INTO participant_milestone (participant_id, milestone_key) SELECT $1, k FROM unnest(ARRAY['empathy_validated']) k ON CONFLICT DO NOTHING`,
+      `INSERT INTO participant_milestone (participant_id, session_id, user_id, milestone_key)
+       SELECT p.id, p.session_id, p.user_id, k FROM participant p, unnest(ARRAY['empathy_validated']) k WHERE p.id = $1::uuid
+       ON CONFLICT DO NOTHING`,
       [ids.ada],
     );
     const before = await ownMessages(ids.ada);

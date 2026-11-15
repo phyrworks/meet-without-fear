@@ -156,7 +156,7 @@ describeTarget('Stage 3 need edits on the target (mwf_app, identity-bound)', () 
   it('once the caller has shared, every edit is forbidden and nothing changes', async () => {
     const live = (await needsOf(ids.ada)).filter(n => !n.deleted);
     await run.sql(
-      `INSERT INTO need_share (participant_id, need_id, session_id, category, shared_text) SELECT $1, n.id, $3, n.category, n.label FROM need n WHERE n.id = $2`,
+      `INSERT INTO need_share (participant_id, need_id, session_id, user_id, category, shared_text) SELECT $1, n.id, $3, n.user_id, n.category, n.label FROM need n WHERE n.id = $2`,
       [ids.ada, live[0].id, ids.session],
     );
     const before = await needsOf(ids.ada);

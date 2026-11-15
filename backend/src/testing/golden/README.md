@@ -348,6 +348,15 @@ change with one paragraph per baseline:
 | Nicknames | Resolved at read time from the reader's own rows (their user_contact entry — authoritative even when cleared — else their own accepted invitation's invitee_name); nothing is written into another user's row (review round 1, Q1). |
 | tombstone walk rules | "the leaver's own user_contact entries are gone" (the old cascade removed her member row) and "the partner's own entry for the leaver stays"; `user_contact` joins the after-snapshot and the leaver census. |
 
+### work-k5fk.3, step 6a: every child carries its participant's seat
+
+Every child of `participant` gained `session_id` and the user id of each participant it names (`*_user_id`),
+pinned by composite foreign keys; `participant.id` and the old FKs stay (design note §7 row 6a). No baseline was
+re-recorded and no rule was added: the concept views project none of the new columns, changesMapped compares
+concept values, and the writers' new reads (`participant`, `conversation`, `empathy_attempt`) are already in the
+trace image. `allow-lists/participant-key.ts` holds the one-paragraph reason per baseline. The two scenarios that
+seed rows by raw SQL (tombstone, choices-hidden-until-shared) name the new NOT NULL columns in their seeds.
+
 ### work-keq6: progress is the milestones map
 
 The progress DTOs dropped `gatesSatisfied` and the hand-built `milestones`

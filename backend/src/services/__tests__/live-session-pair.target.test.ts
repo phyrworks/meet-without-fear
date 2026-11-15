@@ -185,8 +185,8 @@ describeTarget('live_session_pair, participant.added_by_user_id and user_contact
       );
     expect(await readiness()).toEqual([{ all_reached: false, waiting: 2 }]);
     await run.sql(
-      `INSERT INTO participant_milestone (participant_id, milestone_key)
-       SELECT p.id, 'compact_signed' FROM participant p WHERE p.session_id = $1 AND p.kind = 'human'`,
+      `INSERT INTO participant_milestone (participant_id, session_id, user_id, milestone_key)
+       SELECT p.id, p.session_id, p.user_id, 'compact_signed' FROM participant p WHERE p.session_id = $1 AND p.kind = 'human'`,
       [s.sessionId],
     );
     expect(await readiness()).toEqual([{ all_reached: true, waiting: 0 }]);
@@ -337,7 +337,10 @@ describeTarget('live_session_pair, participant.added_by_user_id and user_contact
       [s.sessionId],
     );
     await run.sql(`INSERT INTO participant (session_id, user_id, display_name) VALUES ($1, $2, 'Ada')`, [f.id, ada.id]);
-    await run.sql(`INSERT INTO conversation (participant_id) SELECT id FROM participant WHERE session_id = $1`, [f.id]);
+    await run.sql(
+      `INSERT INTO conversation (participant_id, session_id, user_id) SELECT id, session_id, user_id FROM participant WHERE session_id = $1`,
+      [f.id],
+    );
     const view = await http(ada, 'get', `/sessions/${f.id}`);
     expect(view.status).toBe(200);
     expect(view.body.data.session.partner).toMatchObject({ id: quin.id, name: 'Quin', nickname: 'Quin' });

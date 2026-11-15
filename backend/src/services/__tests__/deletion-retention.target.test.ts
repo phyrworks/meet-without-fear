@@ -130,9 +130,10 @@ describeTarget('deletion and retention on the target (the job as mwf_job, the ap
       bob.id,
     ]);
     await run.sql(`INSERT INTO user_key (user_id, key_id, wrapped_dek) VALUES ($1, 'k-bob', '\\x00')`, [bob.id]);
-    await run.sql(`INSERT INTO participant_key (participant_id, key_id, wrapped_dek) VALUES ($1, 'pk-bob', '\\x00')`, [
-      ids.bob,
-    ]);
+    await run.sql(
+      `INSERT INTO participant_key (participant_id, key_id, wrapped_dek, user_id, session_id) VALUES ($1::uuid, 'pk-bob', '\\x00', (SELECT p.user_id FROM participant p WHERE p.id = $1::uuid), (SELECT p.session_id FROM participant p WHERE p.id = $1::uuid))`,
+      [ids.bob],
+    );
 
     // R40 (fix round 1, I1): telemetry written inside ADA's request. The reconciler call reads Bob's
     // round (cross-participant: not attributed, its call site passes no ownContent); Ada's own chat
@@ -239,11 +240,12 @@ describeTarget('deletion and retention on the target (the job as mwf_job, the ap
         `INSERT INTO participant (session_id, user_id, added_by_user_id) VALUES ($1, $2, $3) RETURNING id`,
         [s.id, u.id, i === 0 ? null : users[0].id],
       );
-      const [c] = await run.sql<{ id: string }>(`INSERT INTO conversation (participant_id) VALUES ($1) RETURNING id`, [
-        p.id,
-      ]);
+      const [c] = await run.sql<{ id: string }>(
+        `INSERT INTO conversation (participant_id, user_id, session_id) VALUES ($1::uuid, (SELECT p.user_id FROM participant p WHERE p.id = $1::uuid), (SELECT p.session_id FROM participant p WHERE p.id = $1::uuid)) RETURNING id`,
+        [p.id],
+      );
       await run.sql(
-        `INSERT INTO message (conversation_id, sender_participant_id, role, content, created_at) VALUES ($1, $2, 'USER', 'old', $3)`,
+        `INSERT INTO message (conversation_id, sender_participant_id, role, content, created_at, sender_user_id, session_id) VALUES ($1::uuid, $2::uuid, 'USER', 'old', $3, (SELECT p.user_id FROM participant p WHERE p.id = $2::uuid), (SELECT x.session_id FROM conversation x WHERE x.id = $1::uuid))`,
         [c.id, p.id, old],
       );
     }
@@ -282,12 +284,13 @@ describeTarget('deletion and retention on the target (the job as mwf_job, the ap
         `INSERT INTO participant (session_id, user_id, added_by_user_id) VALUES ($1, $2, $3) RETURNING id`,
         [s.id, u.id, u2.id],
       );
-      const [c] = await run.sql<{ id: string }>(`INSERT INTO conversation (participant_id) VALUES ($1) RETURNING id`, [
-        p.id,
-      ]);
+      const [c] = await run.sql<{ id: string }>(
+        `INSERT INTO conversation (participant_id, user_id, session_id) VALUES ($1::uuid, (SELECT p.user_id FROM participant p WHERE p.id = $1::uuid), (SELECT p.session_id FROM participant p WHERE p.id = $1::uuid)) RETURNING id`,
+        [p.id],
+      );
       if (messageAt)
         await run.sql(
-          `INSERT INTO message (conversation_id, sender_participant_id, role, content, created_at) VALUES ($1, $2, 'USER', 'recent', $3)`,
+          `INSERT INTO message (conversation_id, sender_participant_id, role, content, created_at, sender_user_id, session_id) VALUES ($1::uuid, $2::uuid, 'USER', 'recent', $3, (SELECT p.user_id FROM participant p WHERE p.id = $2::uuid), (SELECT x.session_id FROM conversation x WHERE x.id = $1::uuid))`,
           [c.id, p.id, messageAt],
         );
       await run.sql(`UPDATE session SET status = 'INVITED' WHERE id = $1`, [s.id]);

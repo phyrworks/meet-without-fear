@@ -62,8 +62,8 @@ describeTarget('the session summary on the target (read by mwf_app, written by m
     for (let i = 0; i < 30; i++) {
       const user = i % 2 === 0;
       await run.sql(
-        `INSERT INTO message (conversation_id, sender_participant_id, role, content, created_at)
-         VALUES ($1, $2, $3::message_role, $4, now() - make_interval(mins => 60 + 30 - $5::int))`,
+        `INSERT INTO message (conversation_id, sender_participant_id, role, content, created_at, sender_user_id, session_id)
+         VALUES ($1::uuid, $2::uuid, $3::message_role, $4, now() - make_interval(mins => 60 + 30 - $5::int), (SELECT p.user_id FROM participant p WHERE p.id = $2::uuid), (SELECT x.session_id FROM conversation x WHERE x.id = $1::uuid))`,
         [
           c.id,
           user ? ids.ada : null,

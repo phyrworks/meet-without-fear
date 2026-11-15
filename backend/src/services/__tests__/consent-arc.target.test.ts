@@ -98,7 +98,7 @@ describeTarget('the consent arc and the share-offer decline (mwf_app + mwf_job, 
     for (const [col, id] of tries) {
       const err = await asApp(
         ada.userId,
-        `INSERT INTO consent (participant_id, ${col}) VALUES ($1::uuid, $2::uuid)`,
+        `INSERT INTO consent (participant_id, ${col}, user_id, session_id) VALUES ($1::uuid, $2::uuid, (SELECT p.user_id FROM participant p WHERE p.id = $1::uuid), (SELECT p.session_id FROM participant p WHERE p.id = $1::uuid))`,
         ada.participantId,
         id,
       ).then(
@@ -116,7 +116,7 @@ describeTarget('the consent arc and the share-offer decline (mwf_app + mwf_job, 
   it('decision moves only NULL → GRANTED | DENIED and GRANTED → REVOKED', async () => {
     const [c] = await asApp<{ id: string }>(
       ada.userId,
-      `INSERT INTO consent (participant_id, requested_by_participant_id, empathy_attempt_id) VALUES ($1::uuid, $1::uuid, $2::uuid) RETURNING id`,
+      `INSERT INTO consent (participant_id, requested_by_participant_id, empathy_attempt_id, user_id, requested_by_user_id, session_id) VALUES ($1::uuid, $1::uuid, $2::uuid, (SELECT p.user_id FROM participant p WHERE p.id = $1::uuid), (SELECT p.user_id FROM participant p WHERE p.id = $1::uuid), (SELECT p.session_id FROM participant p WHERE p.id = $1::uuid)) RETURNING id`,
       ada.participantId,
       adaAttempt,
     );
@@ -131,7 +131,7 @@ describeTarget('the consent arc and the share-offer decline (mwf_app + mwf_job, 
     await expect(move(`decision = 'GRANTED', revoked_at = NULL`)).rejects.toThrow(/not permitted/);
     // A consent created revoked: mwf_app holds no INSERT of revoked_at (work-k5fk.10.2), so the
     // grant refuses it first; the trigger refuses it too, for any writer (here the superuser).
-    const createdRevoked = `INSERT INTO consent (participant_id, empathy_attempt_id, decision, decided_at, revoked_at) VALUES ($1::uuid, $2::uuid, 'REVOKED', now(), now())`;
+    const createdRevoked = `INSERT INTO consent (participant_id, empathy_attempt_id, decision, decided_at, revoked_at, user_id, session_id) VALUES ($1::uuid, $2::uuid, 'REVOKED', now(), now(), (SELECT p.user_id FROM participant p WHERE p.id = $1::uuid), (SELECT p.session_id FROM participant p WHERE p.id = $1::uuid))`;
     await expect(asApp(ada.userId, createdRevoked, ada.participantId, adaAttempt)).rejects.toThrow(
       /permission denied for table consent/,
     );
@@ -144,7 +144,7 @@ describeTarget('the consent arc and the share-offer decline (mwf_app + mwf_job, 
     await expect(
       asApp(
         bob.userId,
-        `INSERT INTO consent (participant_id, requested_by_participant_id, share_offer_id) VALUES ($1::uuid, $2::uuid, $3::uuid)`,
+        `INSERT INTO consent (participant_id, requested_by_participant_id, share_offer_id, user_id, requested_by_user_id, session_id) VALUES ($1::uuid, $2::uuid, $3::uuid, (SELECT p.user_id FROM participant p WHERE p.id = $1::uuid), (SELECT p.user_id FROM participant p WHERE p.id = $2::uuid), (SELECT p.session_id FROM participant p WHERE p.id = $1::uuid))`,
         bob.participantId,
         ada.participantId,
         offerId,
@@ -157,7 +157,7 @@ describeTarget('the consent arc and the share-offer decline (mwf_app + mwf_job, 
   it("pending and history list the caller's own rows; deciding or revoking another's is not found", async () => {
     const [mine] = await asApp<{ id: string }>(
       bob.userId,
-      `INSERT INTO consent (participant_id, requested_by_participant_id, empathy_attempt_id) VALUES ($1::uuid, $1::uuid, $2::uuid) RETURNING id`,
+      `INSERT INTO consent (participant_id, requested_by_participant_id, empathy_attempt_id, user_id, requested_by_user_id, session_id) VALUES ($1::uuid, $1::uuid, $2::uuid, (SELECT p.user_id FROM participant p WHERE p.id = $1::uuid), (SELECT p.user_id FROM participant p WHERE p.id = $1::uuid), (SELECT p.session_id FROM participant p WHERE p.id = $1::uuid)) RETURNING id`,
       bob.participantId,
       bobAttempt,
     );

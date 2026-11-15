@@ -71,8 +71,8 @@ describeTarget('encryption at rest: user-scope columns (FIELD_ENCRYPTION_KEY set
     );
     for (let i = 0; i < 30; i++) {
       await run.sql(
-        `INSERT INTO message (conversation_id, sender_participant_id, role, content, created_at)
-         VALUES ($1, $2, $3::message_role, $4, now() - make_interval(mins => 90 - $5::int))`,
+        `INSERT INTO message (conversation_id, sender_participant_id, role, content, created_at, sender_user_id, session_id)
+         VALUES ($1::uuid, $2::uuid, $3::message_role, $4, now() - make_interval(mins => 90 - $5::int), (SELECT p.user_id FROM participant p WHERE p.id = $2::uuid), (SELECT x.session_id FROM conversation x WHERE x.id = $1::uuid))`,
         [c.id, i % 2 === 0 ? ids.ada : null, i % 2 === 0 ? 'USER' : 'AI', `turn ${i} with enough content to count`, i],
       );
     }
