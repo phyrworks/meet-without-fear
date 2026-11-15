@@ -98,7 +98,7 @@ OUT="$(cd "$OUT" && pwd)"
 SPEC_SQL_NAMES="sql_participant_one_initiator sql_conversation_one_main sql_attempt_one_live_per_direction
 sql_result_one_current sql_disposition_one_current sql_user_device_token sql_session_key_live
 sql_participant_key_live sql_user_key_live sql_follow_up_due sql_reminder_due sql_need_live sql_message_once
-sql_user_one_ai"
+sql_user_one_ai sql_ai_memory_one_per_participant sql_ai_memory_one_global"
 EXPRESSION_ONLY="sql_draft_one_per_point"   # db pull never renders expression indexes
 
 psql_admin()   { podman exec -i "$CONTAINER" psql -X -q -v ON_ERROR_STOP=1 -U "$SU" -d postgres "$@"; }

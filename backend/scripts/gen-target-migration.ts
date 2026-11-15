@@ -56,8 +56,10 @@ const INCLUDE = '-- @@include sql-only.sql';
  * 189 since work-k5fk.3 (6a): every child of participant carries session_id and
  * the user id of each participant it names (+54), next to the participant ids
  * that 6b drops.
+ * 156 since work-k5fk.3 (6b): participant.id and the 33 *_participant_id columns
+ * went (-34), ai_memory.session_id came (+1).
  */
-export const UUID7_COLUMNS = 189;
+export const UUID7_COLUMNS = 156;
 const UUID7_PLACEHOLDER = '@@UUID7_COLUMNS@@';
 
 /**

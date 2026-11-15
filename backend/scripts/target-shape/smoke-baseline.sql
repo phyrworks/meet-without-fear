@@ -29,30 +29,30 @@ BEGIN;
 -- ---- as A (…a1), a participant of S ------------------------------------------
 SELECT set_config('app.current_user_id', '00000000-0000-7e00-8000-0000000000a1', true) \g /dev/null
 \echo '-- v_participant (as A, session S)'
-SELECT participant_id, display_name, is_tombstone, main_conversation_id, last_active_at IS NOT NULL AS sees_last_active, last_mood
-FROM v_participant WHERE session_id = '00000000-0000-7e00-8000-0000000005e6' ORDER BY participant_id;
+SELECT user_id, display_name, is_tombstone, main_conversation_id, last_active_at IS NOT NULL AS sees_last_active, last_mood
+FROM v_participant WHERE session_id = '00000000-0000-7e00-8000-0000000005e6' ORDER BY user_id;
 DO $$ BEGIN
   IF (SELECT count(*) FROM v_participant WHERE session_id = '00000000-0000-7e00-8000-0000000005e6') <> 2 THEN
     RAISE EXCEPTION 'smoke v_participant: expected 2 rows in S';
   END IF;
-  IF (SELECT last_active_at FROM v_participant WHERE participant_id = '00000000-0000-7e00-8000-0000000007b1') IS NOT NULL THEN
+  IF (SELECT last_active_at FROM v_participant WHERE user_id = '00000000-0000-7e00-8000-0000000000b1') IS NOT NULL THEN
     RAISE EXCEPTION 'smoke v_participant: B hides activity status, but A sees last_active_at';
   END IF;
-  IF (SELECT last_active_at FROM v_participant WHERE participant_id = '00000000-0000-7e00-8000-0000000007a1') IS NULL
-     OR (SELECT last_mood FROM v_participant WHERE participant_id = '00000000-0000-7e00-8000-0000000007a1') <> 4 THEN
+  IF (SELECT last_active_at FROM v_participant WHERE user_id = '00000000-0000-7e00-8000-0000000000a1') IS NULL
+     OR (SELECT last_mood FROM v_participant WHERE user_id = '00000000-0000-7e00-8000-0000000000a1') <> 4 THEN
     RAISE EXCEPTION 'smoke v_participant: A''s own row lacks last_active_at or the latest mood (4)';
   END IF;
   RAISE NOTICE 'smoke ok: v_participant';
 END $$;
 
 \echo '-- v_co_participant (A in S)'
-SELECT participant_id, co_participant_id, co_kind, co_display_name FROM v_co_participant
-WHERE participant_id = '00000000-0000-7e00-8000-0000000007a1';
+SELECT user_id, co_user_id, co_kind, co_display_name FROM v_co_participant
+WHERE user_id = '00000000-0000-7e00-8000-0000000000a1';
 DO $$ BEGIN
-  -- co_participant_id is a uuid7 (view columns keep the domain), so array_agg
+  -- co_user_id is a uuid7 (view columns keep the domain), so array_agg
   -- is uuid7[], which has no <> with uuid[]: cast (tables.sql, uuid7).
-  IF (SELECT array_agg(co_participant_id)::uuid[] FROM v_co_participant WHERE participant_id = '00000000-0000-7e00-8000-0000000007a1')
-     <> ARRAY['00000000-0000-7e00-8000-0000000007b1'::uuid] THEN
+  IF (SELECT array_agg(co_user_id)::uuid[] FROM v_co_participant WHERE user_id = '00000000-0000-7e00-8000-0000000000a1')
+     <> ARRAY['00000000-0000-7e00-8000-0000000000b1'::uuid] THEN
     RAISE EXCEPTION 'smoke v_co_participant: A''s co-participant is not B';
   END IF;
   RAISE NOTICE 'smoke ok: v_co_participant';
@@ -72,15 +72,15 @@ DO $$ BEGIN
 END $$;
 
 \echo '-- v_current_stage (every participant)'
-SELECT participant_id, milestone_key, stage_label, reached_stage, next_milestone_key, active_stage FROM v_current_stage ORDER BY participant_id;
+SELECT user_id, milestone_key, stage_label, reached_stage, next_milestone_key, active_stage FROM v_current_stage ORDER BY user_id;
 -- The key columns are the milestone_key domain (work-k5fk.6): a row comparison needs the
 -- same types on both sides (against text: "cannot compare dissimilar column types").
 DO $$ BEGIN
-  IF (SELECT (milestone_key, reached_stage, active_stage) FROM v_current_stage WHERE participant_id = '00000000-0000-7e00-8000-0000000007a1')
+  IF (SELECT (milestone_key, reached_stage, active_stage) FROM v_current_stage WHERE user_id = '00000000-0000-7e00-8000-0000000000a1')
        IS DISTINCT FROM ('empathy_submitted'::milestone_key, 2, 2)
-     OR (SELECT (milestone_key, reached_stage, active_stage) FROM v_current_stage WHERE participant_id = '00000000-0000-7e00-8000-0000000007b1')
+     OR (SELECT (milestone_key, reached_stage, active_stage) FROM v_current_stage WHERE user_id = '00000000-0000-7e00-8000-0000000000b1')
        IS DISTINCT FROM ('feel_heard'::milestone_key, 1, 2)
-     OR (SELECT (milestone_key, next_milestone_key, active_stage) FROM v_current_stage WHERE participant_id = '00000000-0000-7e00-8000-0000000007c1')
+     OR (SELECT (milestone_key, next_milestone_key, active_stage) FROM v_current_stage WHERE user_id = '00000000-0000-7e00-8000-0000000000c1')
        IS DISTINCT FROM ('closed'::milestone_key, NULL::milestone_key, 4) THEN
     RAISE EXCEPTION 'smoke v_current_stage: unexpected stage';
   END IF;
@@ -88,17 +88,17 @@ DO $$ BEGIN
 END $$;
 
 \echo '-- v_empathy_direction (S)'
-SELECT author_participant_id, subject_participant_id, round, status, result_id, share_offer_id, review_id FROM v_empathy_direction
-ORDER BY author_participant_id;
+SELECT author_user_id, subject_user_id, round, status, result_id, share_offer_id, review_id FROM v_empathy_direction
+ORDER BY author_user_id;
 DO $$ BEGIN
-  IF (SELECT array_agg(status::text ORDER BY author_participant_id) FROM v_empathy_direction) <> ARRAY['AWAITING_SHARING', 'HELD'] THEN
+  IF (SELECT array_agg(status::text ORDER BY author_user_id) FROM v_empathy_direction) <> ARRAY['AWAITING_SHARING', 'HELD'] THEN
     RAISE EXCEPTION 'smoke v_empathy_direction: expected A→B AWAITING_SHARING, B→A HELD';
   END IF;
   RAISE NOTICE 'smoke ok: v_empathy_direction';
 END $$;
 
 \echo '-- v_empathy_direction_status (as A: only S)'
-SELECT author_participant_id, subject_participant_id, round, status FROM v_empathy_direction_status ORDER BY author_participant_id;
+SELECT author_user_id, subject_user_id, round, status FROM v_empathy_direction_status ORDER BY author_user_id;
 DO $$ BEGIN
   IF (SELECT count(*) FROM v_empathy_direction_status) <> 2 THEN
     RAISE EXCEPTION 'smoke v_empathy_direction_status: A should see the 2 directions of S';
@@ -116,10 +116,10 @@ DO $$ BEGIN
 END $$;
 
 \echo '-- v_conversation_unread (S)'
-SELECT participant_id, conversation_id, unread_count, latest_message_at IS NOT NULL AS has_latest FROM v_conversation_unread
-WHERE session_id = '00000000-0000-7e00-8000-0000000005e6' ORDER BY participant_id;
+SELECT user_id, conversation_id, unread_count, latest_message_at IS NOT NULL AS has_latest FROM v_conversation_unread
+WHERE session_id = '00000000-0000-7e00-8000-0000000005e6' ORDER BY user_id;
 DO $$ BEGIN
-  IF (SELECT unread_count FROM v_conversation_unread WHERE participant_id = '00000000-0000-7e00-8000-0000000007a1') <> 1 THEN
+  IF (SELECT unread_count FROM v_conversation_unread WHERE user_id = '00000000-0000-7e00-8000-0000000000a1') <> 1 THEN
     RAISE EXCEPTION 'smoke v_conversation_unread: A has one unread AI message';
   END IF;
   RAISE NOTICE 'smoke ok: v_conversation_unread';
@@ -128,14 +128,14 @@ END $$;
 -- ---- as C (…c1), a participant of X -------------------------------------------
 SELECT set_config('app.current_user_id', '00000000-0000-7e00-8000-0000000000c1', true) \g /dev/null
 \echo '-- v_need_shared (X)'
-SELECT need_id, participant_id, category, shared_text FROM v_need_shared ORDER BY need_id;
+SELECT need_id, user_id, category, shared_text FROM v_need_shared ORDER BY need_id;
 \echo '-- v_need_coverage (X)'
-SELECT need_id, covering_proposal_ids, cardinality(willing_participant_ids) AS willing, status FROM v_need_coverage ORDER BY need_id;
+SELECT need_id, covering_proposal_ids, cardinality(willing_user_ids) AS willing, status FROM v_need_coverage ORDER BY need_id;
 \echo '-- v_session_closure_items (X)'
 SELECT session_id, agreement_ids, individual_commitment_ids, open_need_ids FROM v_session_closure_items
 WHERE session_id = '00000000-0000-7e00-8000-0000000005e1';
 \echo '-- v_follow_up_cycle (X)'
-SELECT follow_up_id, cardinality(participant_ids) AS expected, cardinality(waiting_on) AS waiting, status FROM v_follow_up_cycle;
+SELECT follow_up_id, cardinality(user_ids) AS expected, cardinality(waiting_on) AS waiting, status FROM v_follow_up_cycle;
 DO $$ BEGIN
   IF (SELECT count(*) FROM v_need_shared) <> 2 THEN
     RAISE EXCEPTION 'smoke v_need_shared: expected the 2 shares of X';
