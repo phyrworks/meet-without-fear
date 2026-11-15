@@ -145,9 +145,11 @@ describe('stage shim — latestStageRow (the old partner-activity pick)', () => 
 
 describe('stage shim — progressDTO', () => {
   const state = (milestones: MilestoneReached[], stage: number): ParticipantStageState => ({
-    participantId: 'p',
+    sessionId: 's',
+    userId: 'u',
     current: {
-      participantId: 'p',
+      sessionId: 's',
+      userId: 'u',
       milestoneKey: null,
       ordinal: null,
       stageLabel: null,

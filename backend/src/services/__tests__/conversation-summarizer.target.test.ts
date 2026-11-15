@@ -42,8 +42,8 @@ describeTarget('the session summary on the target (read by mwf_app, written by m
   const stored = async () =>
     (
       await run.sql<{ doc: Record<string, unknown> }>(
-        `SELECT doc FROM ai_memory WHERE participant_id = $1 AND kind = 'SUMMARY'`,
-        [ids.ada],
+        `SELECT doc FROM ai_memory WHERE session_id = $1 AND user_id = $2 AND kind = 'SUMMARY'`,
+        [ids.session, ids.adaUser],
       )
     )[0]?.doc ?? null;
   const prompt = () => (haiku.mock.calls[0][0] as { systemPrompt: string }).systemPrompt;
@@ -56,17 +56,17 @@ describeTarget('the session summary on the target (read by mwf_app, written by m
     bedrock = await import('../../lib/bedrock');
     // 30 more turns in Ada's MAIN conversation, an hour ago and older
     const [c] = await run.sql<{ id: string }>(
-      `SELECT id FROM conversation WHERE participant_id = $1 AND kind = 'MAIN'`,
-      [ids.ada],
+      `SELECT id FROM conversation WHERE session_id = $1 AND user_id = $2 AND kind = 'MAIN'`,
+      [ids.session, ids.adaUser],
     );
     for (let i = 0; i < 30; i++) {
       const user = i % 2 === 0;
       await run.sql(
-        `INSERT INTO message (conversation_id, sender_participant_id, role, content, created_at, sender_user_id, session_id)
-         VALUES ($1::uuid, $2::uuid, $3::message_role, $4, now() - make_interval(mins => 60 + 30 - $5::int), (SELECT p.user_id FROM participant p WHERE p.id = $2::uuid), (SELECT x.session_id FROM conversation x WHERE x.id = $1::uuid))`,
+        `INSERT INTO message (conversation_id, role, content, created_at, sender_user_id, session_id)
+         VALUES ($1::uuid, $3::message_role, $4, now() - make_interval(mins => 60 + 30 - $5::int), $2::uuid, (SELECT x.session_id FROM conversation x WHERE x.id = $1::uuid))`,
         [
           c.id,
-          user ? ids.ada : null,
+          user ? ids.adaUser : null,
           user ? 'USER' : 'AI',
           `turn ${i} with enough content to make token estimation meaningful`,
           i,
@@ -80,7 +80,10 @@ describeTarget('the session summary on the target (read by mwf_app, written by m
   });
   beforeEach(async () => {
     haiku = jest.spyOn(bedrock, 'getHaikuJson');
-    await run.sql(`DELETE FROM ai_memory WHERE participant_id = $1 AND kind = 'SUMMARY'`, [ids.ada]);
+    await run.sql(`DELETE FROM ai_memory WHERE session_id = $1 AND user_id = $2 AND kind = 'SUMMARY'`, [
+      ids.session,
+      ids.adaUser,
+    ]);
   });
   afterEach(() => haiku.mockRestore());
 
@@ -183,8 +186,8 @@ describeTarget('the session summary on the target (read by mwf_app, written by m
     expect(haiku).toHaveBeenCalledTimes(1);
 
     await run.sql(
-      `UPDATE ai_memory SET doc = jsonb_set(doc, '{generatedAt}', to_jsonb($2::text)) WHERE participant_id = $1 AND kind = 'SUMMARY'`,
-      [ids.ada, new Date(idle.getTime() - 60_000).toISOString()],
+      `UPDATE ai_memory SET doc = jsonb_set(doc, '{generatedAt}', to_jsonb($3::text)) WHERE session_id = $1 AND user_id = $2 AND kind = 'SUMMARY'`,
+      [ids.session, ids.adaUser, new Date(idle.getTime() - 60_000).toISOString()],
     );
     expect(await call(idle)).toBe('refreshed');
   });

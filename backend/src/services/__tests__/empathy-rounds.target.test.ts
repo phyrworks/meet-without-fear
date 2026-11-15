@@ -26,8 +26,8 @@ const SENT = 'TS10_SENT_FEEDBACK: it is the evenings, not the work, that I neede
 
 describeTarget('empathy rounds, the status writer and the review path (mwf_app + mwf_job, identity binding on)', () => {
   let harness: Harness;
-  let ada: { participantId: string; userId: string };
-  let bob: { participantId: string; userId: string };
+  let ada: { sessionId: string; userId: string };
+  let bob: { sessionId: string; userId: string };
   let adaRound1: string;
   let bobRound1: string;
 
@@ -50,7 +50,7 @@ describeTarget('empathy rounds, the status writer and the review path (mwf_app +
     }>(
       `SELECT a.id, u.email AS author, a.round, a.status::text AS status, a.content, a.supersedes_attempt_id AS supersedes,
               a.revealed_at IS NOT NULL AS revealed
-       FROM empathy_attempt a JOIN participant p ON p.id = a.author_participant_id JOIN "user" u ON u.id = p.user_id
+       FROM empathy_attempt a JOIN "user" u ON u.id = a.author_user_id
        ORDER BY u.email, a.round`,
     );
   const get = (actor: Harness['actors']['userA'], path: string) =>
@@ -67,12 +67,12 @@ describeTarget('empathy rounds, the status writer and the review path (mwf_app +
       stage: 'RECONCILER_SHOWN_B',
       runId: `ts10_rounds_${process.pid}`,
     });
-    const parts = await rows<{ id: string; user_id: string; email: string }>(
-      `SELECT p.id, p.user_id, u.email FROM participant p JOIN "user" u ON u.id = p.user_id`,
+    const parts = await rows<{ session_id: string; user_id: string; email: string }>(
+      `SELECT p.session_id, p.user_id, u.email FROM participant p JOIN "user" u ON u.id = p.user_id`,
     );
     const pick = (email: string) => {
       const p = parts.find(x => x.email === email)!;
-      return { participantId: p.id, userId: p.user_id };
+      return { sessionId: p.session_id, userId: p.user_id };
     };
     ada = pick('ada@e2e.test');
     bob = pick('bob@e2e.test');
@@ -119,11 +119,11 @@ describeTarget('empathy rounds, the status writer and the review path (mwf_app +
 
   it('the circuit breaker counts resubmissions as rounds − 1 (RefinementAttemptCounter → rounds)', async () => {
     const { checkAttempts } = await import('../reconciler/circuit-breaker');
-    expect(await checkAttempts(ada.participantId, bob.participantId)).toEqual({
+    expect(await checkAttempts(ada.sessionId, ada.userId, bob.userId)).toEqual({
       shouldSkipReconciler: false,
       attempts: 1,
     });
-    expect(await checkAttempts(bob.participantId, ada.participantId)).toEqual({
+    expect(await checkAttempts(bob.sessionId, bob.userId, ada.userId)).toEqual({
       shouldSkipReconciler: false,
       attempts: 0,
     });
@@ -131,7 +131,7 @@ describeTarget('empathy rounds, the status writer and the review path (mwf_app +
 
   it('only the author resubmits', async () => {
     const { resubmitAttempt, currentAttempt } = await store();
-    const round2 = (await currentAttempt(ada.participantId, bob.participantId))!;
+    const round2 = (await currentAttempt(ada.sessionId, ada.userId, bob.userId))!;
     await expect(as(bob.userId, () => resubmitAttempt(round2.id, 'not mine to write'))).rejects.toThrow(
       /only the author resubmits/,
     );
@@ -171,7 +171,7 @@ describeTarget('empathy rounds, the status writer and the review path (mwf_app +
     await expect(setAttemptStatus(bobRound1, 'REVEALED', { actor: 'job' })).rejects.toThrow(/reveal gate not met/);
     expect((await attempts()).find(a => a.id === bobRound1)!.revealed).toBe(false);
 
-    const round2 = (await currentAttempt(ada.participantId, bob.participantId))!;
+    const round2 = (await currentAttempt(ada.sessionId, ada.userId, bob.userId))!;
     await setAttemptStatus(round2.id, 'READY', { actor: 'job' });
     await setAttemptStatus(bobRound1, 'REVEALED', { actor: 'job' });
     await setAttemptStatus(round2.id, 'REVEALED', { actor: 'job' });
@@ -179,9 +179,9 @@ describeTarget('empathy rounds, the status writer and the review path (mwf_app +
     const copies = await rows<{ owner: string; sender: string; source: string; kind: string; role: string }>(
       `SELECT ou.email AS owner, su.email AS sender, m.source_attempt_id AS source, m.kind::text AS kind, m.role::text AS role
        FROM message m JOIN conversation c ON c.id = m.conversation_id
-       JOIN participant op ON op.id = c.participant_id JOIN "user" ou ON ou.id = op.user_id
-       JOIN participant sp ON sp.id = m.sender_participant_id JOIN "user" su ON su.id = sp.user_id
-       WHERE m.kind = 'EMPATHY_STATEMENT' AND op.id <> sp.id ORDER BY ou.email`,
+       JOIN "user" ou ON ou.id = c.user_id
+       JOIN "user" su ON su.id = m.sender_user_id
+       WHERE m.kind = 'EMPATHY_STATEMENT' AND c.user_id <> m.sender_user_id ORDER BY ou.email`,
     );
     expect(copies).toEqual([
       { owner: 'ada@e2e.test', sender: 'bob@e2e.test', source: bobRound1, kind: 'EMPATHY_STATEMENT', role: 'USER' },
@@ -209,7 +209,6 @@ describeTarget('empathy rounds, the status writer and the review path (mwf_app +
     await as(ada.userId, () =>
       recordReview({
         attemptId: bobRound1,
-        reviewerParticipantId: ada.participantId,
         sessionId: harness.sessionId,
         reviewerUserId: ada.userId,
         validated: false,
@@ -218,7 +217,7 @@ describeTarget('empathy rounds, the status writer and the review path (mwf_app +
       }),
     );
 
-    expect(await reviewVisibleToAuthor(bobRound1, ada.participantId)).toBeNull();
+    expect(await reviewVisibleToAuthor(bobRound1, ada)).toBeNull();
     const bobReads = [
       await get(harness.actors.userB!, '/empathy/status'),
       await get(harness.actors.userB!, '/empathy/partner'),
@@ -248,7 +247,7 @@ describeTarget('empathy rounds, the status writer and the review path (mwf_app +
       [bobRound1],
     );
     expect(review).toEqual({ feedback: SENT, sent: true });
-    expect(await reviewVisibleToAuthor(bobRound1, ada.participantId)).toMatchObject({ feedback: SENT });
+    expect(await reviewVisibleToAuthor(bobRound1, ada)).toMatchObject({ feedback: SENT });
     const bobMessages = JSON.stringify((await get(harness.actors.userB!, '/messages')).body);
     expect(bobMessages).toContain(SENT);
     expect(bobMessages).not.toContain(UNSENT);

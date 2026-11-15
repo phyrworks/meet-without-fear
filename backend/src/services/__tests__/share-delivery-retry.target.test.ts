@@ -40,13 +40,13 @@ describeTarget('accepted share: a failed delivery is delivered by the retry, onc
       `SELECT status::text AS status, delivery_status::text AS delivery, shared_content AS shared FROM context_share_offer`,
     );
     const [ada] = await rows<{ status: string }>(
-      `SELECT a.status::text AS status FROM empathy_attempt a JOIN participant p ON p.id = a.author_participant_id
-       JOIN "user" u ON u.id = p.user_id WHERE u.email = 'ada@e2e.test'`,
+      `SELECT a.status::text AS status FROM empathy_attempt a
+       JOIN "user" u ON u.id = a.author_user_id WHERE u.email = 'ada@e2e.test'`,
     );
     const counts = await rows<{ owner: string; kind: string; role: string; n: number }>(
       `SELECT u.email AS owner, m.kind::text AS kind, m.role::text AS role, count(*)::int AS n
-       FROM message m JOIN conversation c ON c.id = m.conversation_id JOIN participant p ON p.id = c.participant_id
-       JOIN "user" u ON u.id = p.user_id GROUP BY 1, 2, 3 ORDER BY 1, 2, 3`,
+       FROM message m JOIN conversation c ON c.id = m.conversation_id
+       JOIN "user" u ON u.id = c.user_id GROUP BY 1, 2, 3 ORDER BY 1, 2, 3`,
     );
     const consents = await rows<{ decision: string }>(
       `SELECT decision::text AS decision FROM consent WHERE share_offer_id IS NOT NULL`,
@@ -122,19 +122,19 @@ describeTarget('accepted share: a failed delivery is delivered by the retry, onc
 
     const { deliverAcceptedShare } = await import('../reconciler/sharing');
     const [o] = await rows<{ id: string; attempt_id: string; subject: string }>(
-      `SELECT id, attempt_id, subject_participant_id AS subject FROM context_share_offer`,
+      `SELECT id, attempt_id, subject_user_id AS subject FROM context_share_offer`,
     );
-    const [author] = await rows<{ id: string; conv: string }>(
-      `SELECT p.id, c.id AS conv FROM participant p JOIN "user" u ON u.id = p.user_id
-       JOIN conversation c ON c.participant_id = p.id AND c.kind = 'MAIN' WHERE u.email = 'ada@e2e.test'`,
+    const [author] = await rows<{ user_id: string; conv: string }>(
+      `SELECT c.user_id, c.id AS conv FROM conversation c JOIN "user" u ON u.id = c.user_id
+       WHERE c.kind = 'MAIN' AND u.email = 'ada@e2e.test'`,
     );
     const again = await deliverAcceptedShare({
+      sessionId: harness.sessionId,
       offerId: o.id,
       attemptId: o.attempt_id,
-      subject: { participantId: o.subject, userId: null, name: 'Bob', joinedAt: new Date(), mainConversationId: null },
+      subject: { userId: o.subject, name: 'Bob', joinedAt: new Date(), mainConversationId: null },
       author: {
-        participantId: author.id,
-        userId: null,
+        userId: author.user_id,
         name: 'Ada',
         joinedAt: new Date(),
         mainConversationId: author.conv,

@@ -45,10 +45,9 @@ describeTarget('a PROPOSAL_REFINEMENT sub-chat on the target (mwf_app)', () => {
   });
 
   const choices = () =>
-    run.sql(
-      `SELECT participant_id, decision::text AS decision FROM proposal_choice WHERE proposal_id = $1 ORDER BY participant_id`,
-      [proposalId],
-    );
+    run.sql(`SELECT user_id, decision::text AS decision FROM proposal_choice WHERE proposal_id = $1 ORDER BY user_id`, [
+      proposalId,
+    ]);
 
   it('open is idempotent per anchor; the conversation is Ada’s SUBCHAT anchored to the proposal', async () => {
     const open = () =>
@@ -63,19 +62,19 @@ describeTarget('a PROPOSAL_REFINEMENT sub-chat on the target (mwf_app)', () => {
     expect((await open()).body.data.subChat.id).toBe(subId);
     expect(
       await run.sql(
-        `SELECT participant_id, kind::text AS kind, anchor_proposal_id FROM conversation WHERE kind = 'SUBCHAT'`,
+        `SELECT session_id, user_id, kind::text AS kind, anchor_proposal_id FROM conversation WHERE kind = 'SUBCHAT'`,
       ),
-    ).toEqual([{ participant_id: ids.ada, kind: 'SUBCHAT', anchor_proposal_id: proposalId }]);
+    ).toEqual([{ session_id: ids.session, user_id: ids.adaUser, kind: 'SUBCHAT', anchor_proposal_id: proposalId }]);
   });
 
   it('the prompt carries Ada’s main-chat history and the anchored proposal', async () => {
     const [main] = await run.sql<{ id: string }>(
-      `SELECT id FROM conversation WHERE participant_id = $1 AND kind = 'MAIN'`,
-      [ids.ada],
+      `SELECT id FROM conversation WHERE session_id = $1 AND user_id = $2 AND kind = 'MAIN'`,
+      [ids.session, ids.adaUser],
     );
     await run.sql(
-      `INSERT INTO message (conversation_id, sender_participant_id, role, content, sender_user_id, session_id) VALUES ($1::uuid, $2::uuid, 'USER', 'PROBE_TS12_MAIN_HISTORY', (SELECT p.user_id FROM participant p WHERE p.id = $2::uuid), (SELECT x.session_id FROM conversation x WHERE x.id = $1::uuid))`,
-      [main.id, ids.ada],
+      `INSERT INTO message (conversation_id, session_id, sender_user_id, role, content) VALUES ($1::uuid, $2::uuid, $3::uuid, 'USER', 'PROBE_TS12_MAIN_HISTORY')`,
+      [main.id, ids.session, ids.adaUser],
     );
     const { buildSystemPrompt, loadAnchorContext } = await import('../stage4-subchat.service');
     const { runWithContext } = await import('../../lib/request-context');
@@ -122,10 +121,10 @@ describeTarget('a PROPOSAL_REFINEMENT sub-chat on the target (mwf_app)', () => {
     expect(await choices()).toEqual(before);
     expect(
       await run.sql(
-        `SELECT actor_participant_id AS actor FROM proposal_revision WHERE proposal_id = $1 AND action = 'SUBCHAT_REFINED'`,
+        `SELECT actor_user_id AS actor FROM proposal_revision WHERE proposal_id = $1 AND action = 'SUBCHAT_REFINED'`,
         [proposalId],
       ),
-    ).toEqual([{ actor: ids.ada }]);
+    ).toEqual([{ actor: ids.adaUser }]);
     expect(await run.sql(`SELECT status::text AS status FROM conversation WHERE id = $1`, [subId])).toEqual([
       { status: 'RESOLVED' },
     ]);

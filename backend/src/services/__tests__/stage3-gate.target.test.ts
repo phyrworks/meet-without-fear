@@ -81,11 +81,11 @@ describeTarget('the Stage 3 reveal gate on the target (mwf_app, the gate reply b
     const raw = String(res.body ?? '');
     return { status: res.status, raw, events: raw.includes('event:') ? parseStreamEvents(raw) : ([] as StreamEvent[]) };
   };
-  const ownMessages = async (participantId: string) =>
+  const ownMessages = async (seat: { sessionId: string; userId: string }) =>
     run.sql<{ role: string; content: string }>(
       `SELECT m.role::text AS role, m.content FROM message m JOIN conversation c ON c.id = m.conversation_id
-       WHERE c.participant_id = $1 ORDER BY m.created_at, m.id`,
-      [participantId],
+       WHERE c.session_id = $1 AND c.user_id = $2 ORDER BY m.created_at, m.id`,
+      [seat.sessionId, seat.userId],
     );
 
   const READY = "I'm ready to see the needs lists";
@@ -108,9 +108,12 @@ describeTarget('the Stage 3 reveal gate on the target (mwf_app, the gate reply b
   };
 
   beforeAll(async () => {
-    bobLabels = (await run.sql<{ label: string }>(`SELECT label FROM need WHERE participant_id = $1`, [ids.bob])).map(
-      r => r.label,
-    );
+    bobLabels = (
+      await run.sql<{ label: string }>(`SELECT label FROM need WHERE session_id = $1 AND user_id = $2`, [
+        ids.session,
+        ids.bobUser,
+      ])
+    ).map(r => r.label);
     expect(bobLabels.length).toBeGreaterThan(0);
   });
 
@@ -128,22 +131,32 @@ describeTarget('the Stage 3 reveal gate on the target (mwf_app, the gate reply b
   });
 
   it('the gate advances through own needs, own confirmation, then own share (wait for the partner)', async () => {
-    const ms = (pid: string, key: string) =>
+    const ms = (seat: { sessionId: string; userId: string }, key: string) =>
       run.sql(
-        `INSERT INTO participant_milestone (participant_id, milestone_key, user_id, session_id) VALUES ($1::uuid, $2, (SELECT p.user_id FROM participant p WHERE p.id = $1::uuid), (SELECT p.session_id FROM participant p WHERE p.id = $1::uuid)) ON CONFLICT DO NOTHING`,
-        [pid, key],
+        `INSERT INTO participant_milestone (session_id, user_id, milestone_key) VALUES ($1::uuid, $2::uuid, $3) ON CONFLICT DO NOTHING`,
+        [seat.sessionId, seat.userId, key],
       );
 
-    await run.sql(`UPDATE need SET deleted_at = now() WHERE participant_id = $1`, [ids.ada]);
+    await run.sql(`UPDATE need SET deleted_at = now() WHERE session_id = $1 AND user_id = $2`, [
+      ids.session,
+      ids.adaUser,
+    ]);
     await gateTurn("Let's first put words to what matters most");
 
-    await run.sql(`UPDATE need SET deleted_at = NULL, confirmed_at = NULL WHERE participant_id = $1`, [ids.ada]);
-    await run.sql(`DELETE FROM participant_milestone WHERE participant_id = $1 AND milestone_key = 'needs_confirmed'`, [
-      ids.ada,
+    await run.sql(`UPDATE need SET deleted_at = NULL, confirmed_at = NULL WHERE session_id = $1 AND user_id = $2`, [
+      ids.session,
+      ids.adaUser,
     ]);
+    await run.sql(
+      `DELETE FROM participant_milestone WHERE session_id = $1 AND user_id = $2 AND milestone_key = 'needs_confirmed'`,
+      [ids.session, ids.adaUser],
+    );
     await gateTurn('Please review and confirm your needs');
 
-    await run.sql(`UPDATE need SET confirmed_at = now() WHERE participant_id = $1`, [ids.ada]);
+    await run.sql(`UPDATE need SET confirmed_at = now() WHERE session_id = $1 AND user_id = $2`, [
+      ids.session,
+      ids.adaUser,
+    ]);
     await ms(ids.ada, 'needs_confirmed');
     await gateTurn('you can choose to share them');
 
@@ -151,8 +164,8 @@ describeTarget('the Stage 3 reveal gate on the target (mwf_app, the gate reply b
     // not (R33), so Ada is still in Stage 3 and the gate tells her to wait —
     // the branch the old needs_shared-keyed check could never reach.
     const live = await run.sql<{ id: string }>(
-      `SELECT id FROM need WHERE participant_id = $1 AND deleted_at IS NULL AND superseded_by_need_id IS NULL`,
-      [ids.ada],
+      `SELECT id FROM need WHERE session_id = $1 AND user_id = $2 AND deleted_at IS NULL AND superseded_by_need_id IS NULL`,
+      [ids.session, ids.adaUser],
     );
     const as = (r: import('supertest').Test) =>
       r.set('x-e2e-user-id', ids.adaUser).set('x-e2e-user-email', 'ada@e2e.test');
@@ -163,8 +176,8 @@ describeTarget('the Stage 3 reveal gate on the target (mwf_app, the gate reply b
     expect(consent.body.data).toMatchObject({ consented: true, waitingForPartner: true, needsRevealReady: false });
     expect(await run.sql(`SELECT 1 FROM participant_milestone WHERE milestone_key = 'needs_shared'`)).toEqual([]);
     const [share] = await run.sql<{ at: Date }>(
-      `SELECT min(shared_at) AS at FROM need_share WHERE participant_id = $1`,
-      [ids.ada],
+      `SELECT min(shared_at) AS at FROM need_share WHERE session_id = $1 AND user_id = $2`,
+      [ids.session, ids.adaUser],
     );
     const needs = await as(request(app).get(`/api/v1/sessions/${ids.session}/needs`));
     expect(needs.body.data.sharedAt).toBe(new Date(share.at).toISOString());
@@ -190,8 +203,8 @@ describeTarget('the Stage 3 reveal gate on the target (mwf_app, the gate reply b
     // getStage3GateResponse stays unreachable. ("Wait for your partner" is
     // reachable since work-keq6 keyed "shared" on need_share: asserted above.)
     await run.sql(
-      `INSERT INTO participant_milestone (participant_id, milestone_key, user_id, session_id) VALUES ($1::uuid, 'needs_shared', (SELECT p.user_id FROM participant p WHERE p.id = $1::uuid), (SELECT p.session_id FROM participant p WHERE p.id = $1::uuid)) ON CONFLICT DO NOTHING`,
-      [ids.ada],
+      `INSERT INTO participant_milestone (session_id, user_id, milestone_key) VALUES ($1::uuid, $2::uuid, 'needs_shared') ON CONFLICT DO NOTHING`,
+      [ids.session, ids.adaUser],
     );
     stub([
       { type: 'text', text: '<thinking>t</thinking>\n' },

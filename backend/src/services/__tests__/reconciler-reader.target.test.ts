@@ -82,7 +82,7 @@ describeTarget('the reconciler reads through the job, not the triggering request
       SELECT u.email AS author, a.status::text AS status,
              (SELECT count(*)::int FROM reconciler_result r WHERE r.attempt_id = a.id AND r.superseded_at IS NULL) AS results,
              (SELECT count(*)::int FROM context_share_offer o WHERE o.attempt_id = a.id) AS offers
-      FROM empathy_attempt a JOIN participant p ON p.id = a.author_participant_id JOIN "user" u ON u.id = p.user_id
+      FROM empathy_attempt a JOIN "user" u ON u.id = a.author_user_id
       ORDER BY u.email`);
     expect(directions).toEqual([
       { author: 'ada@e2e.test', status: 'AWAITING_SHARING', results: 1, offers: 1 },
@@ -114,7 +114,7 @@ describeTarget('the reconciler reads through the job, not the triggering request
       SELECT u.email AS author,
              count(*) FILTER (WHERE r.superseded_at IS NULL)::int AS current, count(*)::int AS all
       FROM reconciler_result r JOIN empathy_attempt a ON a.id = r.attempt_id
-      JOIN participant p ON p.id = a.author_participant_id JOIN "user" u ON u.id = p.user_id
+      JOIN "user" u ON u.id = a.author_user_id
       GROUP BY u.email ORDER BY u.email`);
     expect(stored).toEqual([
       { author: 'ada@e2e.test', current: 1, all: 2 },

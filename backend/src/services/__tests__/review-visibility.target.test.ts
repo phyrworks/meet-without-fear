@@ -46,13 +46,13 @@ describeTarget('the review of an attempt: what the author sees, and a sent feedb
     withClient(harness.fixture.target, async c => (await c.query<T>(sql)).rows, harness.fixture.database);
   const roundOf = (email: string) =>
     rows<{ status: string }>(
-      `SELECT a.status::text AS status FROM empathy_attempt a JOIN participant p ON p.id = a.author_participant_id
-       JOIN "user" u ON u.id = p.user_id WHERE u.email = '${email}' ORDER BY a.round DESC LIMIT 1`,
+      `SELECT a.status::text AS status FROM empathy_attempt a
+       JOIN "user" u ON u.id = a.author_user_id WHERE u.email = '${email}' ORDER BY a.round DESC LIMIT 1`,
     ).then(r => r[0].status);
   const reviewBy = (email: string) =>
     rows<{ validated: boolean; feedback: string | null; sent: Date | null }>(
       `SELECT r.validated, r.feedback, r.feedback_sent_at AS sent FROM empathy_review r
-       JOIN participant p ON p.id = r.reviewer_participant_id JOIN "user" u ON u.id = p.user_id WHERE u.email = '${email}'`,
+       JOIN "user" u ON u.id = r.reviewer_user_id WHERE u.email = '${email}'`,
     );
   const post = (who: 'userA' | 'userB', path: string, body: object) =>
     harness.step({

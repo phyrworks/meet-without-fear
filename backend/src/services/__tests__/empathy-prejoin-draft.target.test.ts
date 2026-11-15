@@ -32,7 +32,7 @@ type Http = Awaited<ReturnType<typeof httpAs>>;
 
 interface DraftRowSql extends Record<string, unknown> {
   id: string;
-  about_participant_id: string | null;
+  about_user_id: string | null;
   invitation_id: string | null;
   version: number;
   updated_at: Date;
@@ -65,21 +65,23 @@ describeTarget('empathy draft before the partner joins (work-99k2)', () => {
     ]);
     await run.sql(`UPDATE invitation SET message_confirmed_at = now() WHERE session_id = $1`, [sessionId]);
     await run.as('mwf_job', null, `SELECT app.session_set_status($1::uuid, 'INVITED')`, [sessionId]);
-    const [me] = await run.sql<{ id: string }>(`SELECT id FROM participant WHERE session_id = $1`, [sessionId]);
+    const [me] = await run.sql<{ user_id: string }>(`SELECT user_id FROM participant WHERE session_id = $1`, [
+      sessionId,
+    ]);
     await run.sql(
-      `INSERT INTO participant_milestone (participant_id, session_id, user_id, milestone_key)
-       SELECT p.id, p.session_id, p.user_id, k FROM participant p, unnest(ARRAY['invitation_sent', 'compact_signed', 'feel_heard']) k
-       WHERE p.id = $1::uuid`,
-      [me.id],
+      `INSERT INTO participant_milestone (session_id, user_id, milestone_key)
+       SELECT p.session_id, p.user_id, k FROM participant p, unnest(ARRAY['invitation_sent', 'compact_signed', 'feel_heard']) k
+       WHERE p.session_id = $1::uuid AND p.user_id = $2::uuid`,
+      [sessionId, me.user_id],
     );
-    return { sessionId, invitationId, adaParticipant: me.id };
+    return { sessionId, invitationId, adaParticipant: { sessionId, userId: me.user_id } };
   };
 
-  const draftsOf = (participantId: string) =>
+  const draftsOf = (seat: { sessionId: string; userId: string }) =>
     run.sql<DraftRowSql>(
-      `SELECT id, about_participant_id, invitation_id, version, updated_at FROM draft
-       WHERE participant_id = $1 AND kind = 'EMPATHY'`,
-      [participantId],
+      `SELECT id, about_user_id, invitation_id, version, updated_at FROM draft
+       WHERE session_id = $1 AND user_id = $2 AND kind = 'EMPATHY'`,
+      [seat.sessionId, seat.userId],
     );
 
   it('saves before the join on the invitation; consent waits; accept re-points it atomically; A reviews it', async () => {
@@ -92,7 +94,7 @@ describeTarget('empathy draft before the partner joins (work-99k2)', () => {
     });
     expect(saved.status).toBe(200);
     const [before] = await draftsOf(adaParticipant);
-    expect(before).toMatchObject({ about_participant_id: null, invitation_id: invitationId, version: 1 });
+    expect(before).toMatchObject({ about_user_id: null, invitation_id: invitationId, version: 1 });
 
     const solo = await http(ada, 'get', `/sessions/${sessionId}/empathy/draft`);
     expect(solo.status).toBe(200);
@@ -109,8 +111,9 @@ describeTarget('empathy draft before the partner joins (work-99k2)', () => {
     expect(refused.status).toBe(400);
     expect(refused.body.error.message).toMatch(/before your partner has joined/);
     expect(
-      await run.sql(`SELECT count(*)::int AS n FROM empathy_attempt WHERE author_participant_id = $1`, [
-        adaParticipant,
+      await run.sql(`SELECT count(*)::int AS n FROM empathy_attempt WHERE session_id = $1 AND author_user_id = $2`, [
+        adaParticipant.sessionId,
+        adaParticipant.userId,
       ]),
     ).toEqual([{ n: 0 }]);
 
@@ -134,17 +137,20 @@ describeTarget('empathy draft before the partner joins (work-99k2)', () => {
 
     const accepted = await http(carol, 'post', `/invitations/${invitationId}/accept`);
     expect(accepted.status).toBe(200);
-    const [carolP] = await run.sql<{ id: string; joined_at: Date }>(
-      `SELECT p.id, p.joined_at FROM participant p WHERE p.session_id = $1 AND p.user_id = $2`,
+    const [carolP] = await run.sql<{ user_id: string; joined_at: Date }>(
+      `SELECT p.user_id, p.joined_at FROM participant p WHERE p.session_id = $1 AND p.user_id = $2`,
       [sessionId, carol.id],
     );
     const [after] = await draftsOf(adaParticipant);
     // Same row, now about Carol; written-at and version untouched by the move.
-    expect(after).toEqual({ ...before, about_participant_id: carolP.id, invitation_id: null });
+    expect(after).toEqual({ ...before, about_user_id: carolP.user_id, invitation_id: null });
     // work-k5fk.2: Carol was added by the inviter, and the two are now a live pair.
-    expect(await run.sql(`SELECT added_by_user_id FROM participant WHERE id = $1`, [carolP.id])).toEqual([
-      { added_by_user_id: ada.id },
-    ]);
+    expect(
+      await run.sql(`SELECT added_by_user_id FROM participant WHERE session_id = $1 AND user_id = $2`, [
+        sessionId,
+        carolP.user_id,
+      ]),
+    ).toEqual([{ added_by_user_id: ada.id }]);
     expect(
       await run.sql(`SELECT count(*)::int AS n FROM live_session_pair WHERE session_id = $1`, [sessionId]),
     ).toEqual([{ n: 1 }]);
@@ -153,8 +159,9 @@ describeTarget('empathy draft before the partner joins (work-99k2)', () => {
     expect(String(atRest)).not.toContain('unseen');
     // Never auto-sent on the join.
     expect(
-      await run.sql(`SELECT count(*)::int AS n FROM empathy_attempt WHERE author_participant_id = $1`, [
-        adaParticipant,
+      await run.sql(`SELECT count(*)::int AS n FROM empathy_attempt WHERE session_id = $1 AND author_user_id = $2`, [
+        adaParticipant.sessionId,
+        adaParticipant.userId,
       ]),
     ).toEqual([{ n: 0 }]);
 
@@ -198,7 +205,7 @@ describeTarget('empathy draft before the partner joins (work-99k2)', () => {
     expect(auto.status).toBe(200);
     expect(auto.body.data.preJoinReviewPending).toBe(true);
     const { saveEmpathyDraft } = await import('../empathy-draft-save');
-    expect((await saveEmpathyDraft({ participantId: adaParticipant, content: 'From the chat turn.' })).status).toBe(
+    expect((await saveEmpathyDraft({ seat: adaParticipant, content: 'From the chat turn.' })).status).toBe(
       'review_pending',
     );
     expect(await draftsOf(adaParticipant)).toEqual([kept]);
@@ -244,16 +251,16 @@ describeTarget('empathy draft before the partner joins (work-99k2)', () => {
     await http(ada, 'post', `/sessions/${sessionId}/empathy/draft`, { content: 'Fay is worried.', readyToShare: true });
 
     // Out of stage 2: refused, the draft kept.
-    const feelHeard = [adaParticipant];
+    const feelHeard = [adaParticipant.sessionId, adaParticipant.userId];
     await run.sql(
-      `DELETE FROM participant_milestone WHERE participant_id = $1 AND milestone_key = 'feel_heard'`,
+      `DELETE FROM participant_milestone WHERE session_id = $1 AND user_id = $2 AND milestone_key = 'feel_heard'`,
       feelHeard,
     );
     const early = await http(ada, 'delete', `/sessions/${sessionId}/empathy/draft`);
     expect(early.status).toBe(400);
     expect(early.body.error.message).toMatch(/stage 2 is required/);
     await run.sql(
-      `INSERT INTO participant_milestone (participant_id, milestone_key, user_id, session_id) VALUES ($1::uuid, 'feel_heard', (SELECT p.user_id FROM participant p WHERE p.id = $1::uuid), (SELECT p.session_id FROM participant p WHERE p.id = $1::uuid))`,
+      `INSERT INTO participant_milestone (milestone_key, user_id, session_id) VALUES ('feel_heard', $2::uuid, $1::uuid)`,
       feelHeard,
     );
     expect(await draftsOf(adaParticipant)).toHaveLength(1);
@@ -327,7 +334,7 @@ describeTarget('empathy draft before the partner joins (work-99k2)', () => {
 
       const [d] = await draftsOf(adaParticipant);
       expect(d.invitation_id).toBeNull();
-      expect(d.about_participant_id).not.toBeNull();
+      expect(d.about_user_id).not.toBeNull();
       expect((await draftOf(sessionId)).draft).toMatchObject({ content: 'v2', version: 2 });
     });
 
@@ -390,7 +397,7 @@ describeTarget('empathy draft before the partner joins (work-99k2)', () => {
       const rows = await draftsOf(adaParticipant);
       expect(rows).toHaveLength(1);
       expect(rows[0]).toMatchObject({ invitation_id: null });
-      expect(rows[0].about_participant_id).not.toBeNull();
+      expect(rows[0].about_user_id).not.toBeNull();
       expect((await draftOf(sessionId)).draft.content).toBe('first words');
     });
   });

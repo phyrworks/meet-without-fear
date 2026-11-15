@@ -5,7 +5,7 @@
  * as `mwf_app` with identity binding on.
  *
  *   - create: the session, the inviter's participant (display name, MAIN
- *     conversation, read state), the invitation by invited_by_participant_id;
+ *     conversation, read state), the invitation by invited_by_user_id;
  *   - accept: the invitee becomes a participant (added by the inviter,
  *     work-k5fk.2) and the session ACTIVE through the status writer in one
  *     transaction (T-cardinality-1 at COMMIT); the pair is a live_session_pair
@@ -64,14 +64,14 @@ describeTarget('invitations on the target, as mwf_app (the decline as the job)',
 
     const parts = await run.sql<{ user_id: string; display_name: string | null; main: number; read_state: number }>(
       `SELECT p.user_id, p.display_name,
-              (SELECT count(*)::int FROM conversation c WHERE c.participant_id = p.id AND c.kind = 'MAIN') AS main,
-              (SELECT count(*)::int FROM conversation_read_state r WHERE r.participant_id = p.id) AS read_state
+              (SELECT count(*)::int FROM conversation c WHERE c.session_id = p.session_id AND c.user_id = p.user_id AND c.kind = 'MAIN') AS main,
+              (SELECT count(*)::int FROM conversation_read_state r WHERE r.session_id = p.session_id AND r.user_id = p.user_id) AS read_state
        FROM participant p WHERE p.session_id = $1`,
       [sessionId],
     );
     expect(parts).toEqual([{ user_id: ada.id, display_name: 'Ada Lovelace', main: 1, read_state: 1 }]);
     const [inv] = await run.sql<{ invited_by: string; invitee_name: string; status: string }>(
-      `SELECT p.user_id AS invited_by, i.invitee_name, i.status::text AS status FROM invitation i JOIN participant p ON p.id = i.invited_by_participant_id WHERE i.id = $1`,
+      `SELECT p.user_id AS invited_by, i.invitee_name, i.status::text AS status FROM invitation i JOIN participant p ON p.session_id = i.session_id AND p.user_id = i.invited_by_user_id WHERE i.id = $1`,
       [invitationId],
     );
     expect(inv).toEqual({ invited_by: ada.id, invitee_name: 'Carol', status: 'PENDING' });
@@ -111,9 +111,10 @@ describeTarget('invitations on the target, as mwf_app (the decline as the job)',
 
     // work-k5fk.2: the inviter added the invitee; the two are a live pair.
     expect(
-      await run.sql(`SELECT user_id, added_by_user_id FROM participant WHERE session_id = $1 ORDER BY joined_at, id`, [
-        sessionId,
-      ]),
+      await run.sql(
+        `SELECT user_id, added_by_user_id FROM participant WHERE session_id = $1 ORDER BY joined_at, user_id`,
+        [sessionId],
+      ),
     ).toEqual([
       { user_id: ada.id, added_by_user_id: null },
       { user_id: carol.id, added_by_user_id: ada.id },

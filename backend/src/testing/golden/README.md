@@ -357,6 +357,19 @@ concept values, and the writers' new reads (`participant`, `conversation`, `empa
 trace image. `allow-lists/participant-key.ts` holds the one-paragraph reason per baseline. The two scenarios that
 seed rows by raw SQL (tombstone, choices-hidden-until-shared) name the new NOT NULL columns in their seeds.
 
+### work-k5fk.3, step 6b: participant is (session_id, user_id)
+
+`participant.id` and every `*_participant_id` column are gone; a row names its participants by `session_id` and a
+user column. The harness carries the change without re-recording:
+
+| Piece | What it does |
+|---|---|
+| Concept views (`concept-views/target-shape.sql`) | The concept vocabulary keeps its participant ids: each view derives one as `md5('participant:' \|\| session_id \|\| ':' \|\| user_id)::uuid`, current-shape.sql's own formula for its keyless participant rows, so the concept rows, their order and their labels (`<participant:ada@main>`) are what they were. |
+| Byte-level labels (`normalize.ts` `labelTargetRows`) | A participant has no id to label; conversations, drafts, attempts, needs, offers, reviews and consents take their owner from the row's user column (`<user:ada>`), the same owner label they took through the participant before. |
+| Scenario and reveal checks | Read the user columns directly (no join through `participant.id`). |
+
+`allow-lists/participant-key.ts` gives the per-baseline reason for both steps.
+
 ### work-keq6: progress is the milestones map
 
 The progress DTOs dropped `gatesSatisfied` and the hand-built `milestones`

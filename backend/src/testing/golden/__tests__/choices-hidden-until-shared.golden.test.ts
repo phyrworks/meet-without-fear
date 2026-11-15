@@ -157,10 +157,9 @@ describe(`golden: ${SCENARIO}`, () => {
     if (TARGET) {
       // proposal_choice has no id: the instants Bob's choices were written are their probes (ISO, as a DTO would carry them).
       const iso = (v: unknown) => new Date(`${String(v).replace(' ', 'T')}Z`).toISOString();
-      const rows = (await harness.snapshot(['proposal_choice', 'participant'])).tables;
-      const bobP = rows.participant.find(p => p.user_id === bob.id)!.id;
+      const rows = (await harness.snapshot(['proposal_choice'])).tables;
       bobSelectionProbes = rows.proposal_choice
-        .filter(c => c.participant_id === bobP)
+        .filter(c => c.session_id === harness.sessionId && c.user_id === bob.id)
         .flatMap(c => [iso(c.created_at), iso(c.updated_at)]);
     } else {
       bobSelectionProbes = (await harness.snapshot(['Stage4ProposalSelection'])).tables.Stage4ProposalSelection.filter(
@@ -283,8 +282,8 @@ describe(`golden: ${SCENARIO}`, () => {
       // work-keq6: the old milestones.feelHeardConfirmedAt (a fixture delta) is myProgress.milestones.feel_heard.
       it("Ada's state and progress reads carry her feel_heard instant in myProgress.milestones", async () => {
         const [fh] = await sql<{ at: Date }>(
-          `SELECT pm.reached_at AS at FROM participant_milestone pm JOIN participant p ON p.id = pm.participant_id
-           JOIN "user" u ON u.id = p.user_id WHERE u.email = 'ada@e2e.test' AND pm.milestone_key = 'feel_heard'`,
+          `SELECT pm.reached_at AS at FROM participant_milestone pm
+           JOIN "user" u ON u.id = pm.user_id WHERE u.email = 'ada@e2e.test' AND pm.milestone_key = 'feel_heard'`,
         );
         const reads = steps.filter(st => /: (state|progress) as ada@e2e.test$/.test(st.label));
         expect(reads).toHaveLength(6);
@@ -296,8 +295,8 @@ describe(`golden: ${SCENARIO}`, () => {
 
       it('the session list says unread only for a message after last_viewed_at not sent by the reader', async () => {
         const [u] = await sql<{ n: string }>(
-          `SELECT unread_count::text AS n FROM v_conversation_unread v JOIN participant p ON p.id = v.participant_id
-           JOIN "user" u ON u.id = p.user_id WHERE u.email = 'ada@e2e.test'`,
+          `SELECT unread_count::text AS n FROM v_conversation_unread v
+           JOIN "user" u ON u.id = v.user_id WHERE u.email = 'ada@e2e.test'`,
         );
         for (const n of ADA_SESSION_LIST_STEPS) {
           expect(steps[n].label).toMatch(/: session list as ada@e2e.test$/);
@@ -341,7 +340,7 @@ describe(`golden: ${SCENARIO}`, () => {
       it('at every Stage 4 root the current need is the phase’s first shared need by creation, and each group is exactly its cards', async () => {
         const needRows = await sql<{ id: string; email: string }>(
           `SELECT n.id, u.email FROM need n JOIN need_share s ON s.need_id = n.id
-           JOIN participant p ON p.id = n.participant_id JOIN "user" u ON u.id = p.user_id
+           JOIN "user" u ON u.id = n.user_id
            ORDER BY n.created_at, n.id`,
         );
         const proposalOrder = (await sql<{ id: string }>(`SELECT id FROM proposal ORDER BY created_at, id`)).map(
@@ -412,7 +411,7 @@ describe(`golden: ${SCENARIO}`, () => {
       it('the rank-shifted instants are their rows’ instants', async () => {
         const choices = await sql<{ email: string; proposal_id: string; created_at: Date; updated_at: Date }>(
           `SELECT u.email, c.proposal_id, c.created_at, c.updated_at FROM proposal_choice c
-           JOIN participant p ON p.id = c.participant_id JOIN "user" u ON u.id = p.user_id`,
+           JOIN "user" u ON u.id = c.user_id`,
         );
         const of = (email: string, pid: string) => choices.find(c => c.email === email && c.proposal_id === pid)!;
         for (const n of ADA_STAGE4_READ_STEPS) {
@@ -461,23 +460,23 @@ describe(`golden: ${SCENARIO}`, () => {
     // in v_session_closure_items, an UNSHARED one never. Runs after the golden
     // checks (outside the recorded steps), on the same run database.
     it('target: closing Stage 4 lists an open shared need in the closure items and never an unshared one', async () => {
-      const [bobP] = await sql<{ id: string }>(
-        `SELECT p.id FROM participant p JOIN "user" u ON u.id = p.user_id WHERE u.email = 'bob@e2e.test'`,
+      const [bobP] = await sql<{ session_id: string; user_id: string }>(
+        `SELECT p.session_id, p.user_id FROM participant p JOIN "user" u ON u.id = p.user_id WHERE u.email = 'bob@e2e.test'`,
       );
       const [unshared] = await sql<{ id: string }>(
-        `INSERT INTO need (participant_id, session_id, user_id, label, category, ai_confidence, confirmed_at)
-         SELECT p.id, p.session_id, p.user_id, 'PROBE_UNSHARED_AT_CLOSE', 'MEANING', 0.9, now() FROM participant p WHERE p.id = $1 RETURNING id`,
-        [bobP.id],
+        `INSERT INTO need (session_id, user_id, label, category, ai_confidence, confirmed_at)
+         VALUES ($1, $2, 'PROBE_UNSHARED_AT_CLOSE', 'MEANING', 0.9, now()) RETURNING id`,
+        [bobP.session_id, bobP.user_id],
       );
       const [open] = await sql<{ id: string }>(
-        `INSERT INTO need (participant_id, session_id, user_id, label, category, ai_confidence, confirmed_at)
-         SELECT p.id, p.session_id, p.user_id, 'PROBE_OPEN_AT_CLOSE', 'MEANING', 0.9, now() FROM participant p WHERE p.id = $1 RETURNING id`,
-        [bobP.id],
+        `INSERT INTO need (session_id, user_id, label, category, ai_confidence, confirmed_at)
+         VALUES ($1, $2, 'PROBE_OPEN_AT_CLOSE', 'MEANING', 0.9, now()) RETURNING id`,
+        [bobP.session_id, bobP.user_id],
       );
       await sql(
-        `INSERT INTO consent (participant_id, session_id, user_id, need_id, decision, decided_at)
-         SELECT p.id, p.session_id, p.user_id, $2::uuid, 'GRANTED', now() FROM participant p WHERE p.id = $1::uuid`,
-        [bobP.id, open.id],
+        `INSERT INTO consent (session_id, user_id, need_id, decision, decided_at)
+         VALUES ($1, $2, $3::uuid, 'GRANTED', now())`,
+        [bobP.session_id, bobP.user_id, open.id],
       );
       const job = new Client({ connectionString: jobUrlFor(harness.fixture.target, harness.fixture.database) });
       await job.connect();

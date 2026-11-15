@@ -167,8 +167,8 @@ describe(`golden: ${SCENARIO}`, () => {
         harness.fixture.target,
         c =>
           c.query(
-            `DELETE FROM reconciler_result r USING empathy_attempt a, participant p, "user" u
-           WHERE r.attempt_id = a.id AND a.author_participant_id = p.id AND p.user_id = u.id AND u.email = 'ada@e2e.test'`,
+            `DELETE FROM reconciler_result r USING empathy_attempt a, "user" u
+           WHERE r.attempt_id = a.id AND a.author_user_id = u.id AND u.email = 'ada@e2e.test'`,
           ),
         harness.fixture.database,
       );

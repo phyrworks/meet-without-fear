@@ -50,13 +50,13 @@ describeTarget('once-only facilitator lines: a closed dedupe key, no content dig
     http = await httpAs();
     store = await import('../message-store');
     ctx = await import('../../lib/request-context');
-    const cs = await run.sql<{ participant_id: string; id: string }>(
-      `SELECT participant_id, id FROM conversation WHERE kind = 'MAIN' AND participant_id = ANY($1::uuid[])`,
-      [[ids.ada, ids.bob]],
+    const cs = await run.sql<{ user_id: string; id: string }>(
+      `SELECT user_id, id FROM conversation WHERE kind = 'MAIN' AND session_id = $1 AND user_id = ANY($2::uuid[])`,
+      [ids.session, [ids.adaUser, ids.bobUser]],
     );
     conv = {
-      ada: cs.find(c => c.participant_id === ids.ada)!.id,
-      bob: cs.find(c => c.participant_id === ids.bob)!.id,
+      ada: cs.find(c => c.user_id === ids.adaUser)!.id,
+      bob: cs.find(c => c.user_id === ids.bobUser)!.id,
     };
   });
   afterAll(async () => {
@@ -105,16 +105,16 @@ describeTarget('once-only facilitator lines: a closed dedupe key, no content dig
   it('the CHECK refuses a dedupe key on a human line', async () => {
     await expect(
       run.sql(
-        `INSERT INTO message (conversation_id, sender_participant_id, role, content, dedupe_key, sender_user_id, session_id)
-         VALUES ($1::uuid, $2::uuid, 'USER', 'PROBE_FDC1_USER_KEY', 'STAGE4_HANDOFF_BRIDGE', (SELECT p.user_id FROM participant p WHERE p.id = $2::uuid), (SELECT x.session_id FROM conversation x WHERE x.id = $1::uuid))`,
-        [conv.ada, ids.ada],
+        `INSERT INTO message (conversation_id, role, content, dedupe_key, sender_user_id, session_id)
+         VALUES ($1::uuid, 'USER', 'PROBE_FDC1_USER_KEY', 'STAGE4_HANDOFF_BRIDGE', $2::uuid, $3::uuid)`,
+        [conv.ada, ids.adaUser, ids.session],
       ),
     ).rejects.toThrow(/violates check constraint/);
   });
 
   it('a USER turn carries no dedupe key', async () => {
     const own = await asUser(ids.adaUser, () =>
-      store.createParticipantMessage({ conversationId: conv.ada, participantId: ids.ada, content: 'PROBE_FDC1_TURN' }),
+      store.createParticipantMessage({ conversationId: conv.ada, seat: ids.ada, content: 'PROBE_FDC1_TURN' }),
     );
     const [row] = await run.sql<{ dedupe_key: string | null }>(`SELECT dedupe_key FROM message WHERE id = $1`, [
       own.id,
@@ -220,7 +220,7 @@ describeTarget('once-only facilitator lines: a closed dedupe key, no content dig
     expect((await share()).status).toBe(200);
     expect(await keyed(conv.ada, 'STAGE4_HANDOFF_BRIDGE')).toBe(1);
     const [bridge] = await run.sql<{ role: string; kind: string; sender: string | null }>(
-      `SELECT role::text AS role, kind::text AS kind, sender_participant_id AS sender FROM message
+      `SELECT role::text AS role, kind::text AS kind, sender_user_id AS sender FROM message
         WHERE conversation_id = $1 AND dedupe_key = 'STAGE4_HANDOFF_BRIDGE'`,
       [conv.ada],
     );

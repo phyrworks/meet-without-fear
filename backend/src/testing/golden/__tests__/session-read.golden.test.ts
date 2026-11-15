@@ -250,8 +250,8 @@ describe(`golden: ${SCENARIO}`, () => {
         (
           await c.query<{ email: string; key: string; at: Date }>(
             `SELECT u.email, pm.milestone_key AS key, pm.reached_at AS at
-             FROM participant_milestone pm JOIN participant p ON p.id = pm.participant_id JOIN "user" u ON u.id = p.user_id
-             WHERE p.session_id = $1 ORDER BY pm.reached_at`,
+             FROM participant_milestone pm JOIN "user" u ON u.id = pm.user_id
+             WHERE pm.session_id = $1 ORDER BY pm.reached_at`,
             [harness.sessionId],
           )
         ).rows,

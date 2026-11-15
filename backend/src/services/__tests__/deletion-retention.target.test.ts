@@ -68,18 +68,23 @@ describeTarget('deletion and retention on the target (the job as mwf_job, the ap
     );
     // Fix round 1 (M5): Ada's choices UNSHARED (no choices_shared): the walk deletes them (spec §4 step 3);
     // Bob's shared choice stays.
-    await run.sql(`DELETE FROM participant_milestone WHERE participant_id = $1 AND milestone_key = 'choices_shared'`, [
-      ids.ada,
-    ]);
+    await run.sql(
+      `DELETE FROM participant_milestone WHERE session_id = $1 AND user_id = $2 AND milestone_key = 'choices_shared'`,
+      [ids.session, ids.adaUser],
+    );
     expect(
-      await count(`SELECT count(*)::int AS n FROM proposal_choice WHERE participant_id = $1`, [ids.ada]),
+      await count(`SELECT count(*)::int AS n FROM proposal_choice WHERE session_id = $1 AND user_id = $2`, [
+        ids.session,
+        ids.adaUser,
+      ]),
     ).toBeGreaterThan(0);
-    const bobChoices = await count(`SELECT count(*)::int AS n FROM proposal_choice WHERE participant_id = $1`, [
-      ids.bob,
-    ]);
+    const bobChoices = await count(
+      `SELECT count(*)::int AS n FROM proposal_choice WHERE session_id = $1 AND user_id = $2`,
+      [ids.session, ids.bobUser],
+    );
     const bobMessagesBefore = await count(
-      `SELECT count(*)::int AS n FROM message m JOIN conversation c ON c.id = m.conversation_id WHERE c.participant_id = $1`,
-      [ids.bob],
+      `SELECT count(*)::int AS n FROM message m JOIN conversation c ON c.id = m.conversation_id WHERE c.session_id = $1 AND c.user_id = $2`,
+      [ids.session, ids.bobUser],
     );
 
     const res = await http(ada, 'delete', `/sessions/${ids.session}`);
@@ -87,19 +92,37 @@ describeTarget('deletion and retention on the target (the job as mwf_job, the ap
     expect(res.body.data.summary.sessionAbandoned).toBe(true);
 
     const [p] = await run.sql<{ display_name: string | null; left: boolean }>(
-      `SELECT display_name, left_at IS NOT NULL AS left FROM participant WHERE id = $1`,
-      [ids.ada],
+      `SELECT display_name, left_at IS NOT NULL AS left FROM participant WHERE session_id = $1 AND user_id = $2`,
+      [ids.session, ids.adaUser],
     );
     expect(p).toEqual({ display_name: null, left: true });
     expect(await run.sql(`SELECT status::text AS status FROM session WHERE id = $1`, [ids.session])).toEqual([
       { status: 'ABANDONED' },
     ]);
-    expect(await count(`SELECT count(*)::int AS n FROM conversation WHERE participant_id = $1`, [ids.ada])).toBe(0);
-    expect(await count(`SELECT count(*)::int AS n FROM draft WHERE participant_id = $1`, [ids.ada])).toBe(0);
-    expect(await count(`SELECT count(*)::int AS n FROM proposal_choice WHERE participant_id = $1`, [ids.ada])).toBe(0);
-    expect(await count(`SELECT count(*)::int AS n FROM proposal_choice WHERE participant_id = $1`, [ids.bob])).toBe(
-      bobChoices,
-    );
+    expect(
+      await count(`SELECT count(*)::int AS n FROM conversation WHERE session_id = $1 AND user_id = $2`, [
+        ids.session,
+        ids.adaUser,
+      ]),
+    ).toBe(0);
+    expect(
+      await count(`SELECT count(*)::int AS n FROM draft WHERE session_id = $1 AND user_id = $2`, [
+        ids.session,
+        ids.adaUser,
+      ]),
+    ).toBe(0);
+    expect(
+      await count(`SELECT count(*)::int AS n FROM proposal_choice WHERE session_id = $1 AND user_id = $2`, [
+        ids.session,
+        ids.adaUser,
+      ]),
+    ).toBe(0);
+    expect(
+      await count(`SELECT count(*)::int AS n FROM proposal_choice WHERE session_id = $1 AND user_id = $2`, [
+        ids.session,
+        ids.bobUser,
+      ]),
+    ).toBe(bobChoices);
     // The explicit deletes: Ada's session-scoped memory and her reminder go; her global memory and Bob's reminder stay
     expect(await run.sql(`SELECT content FROM user_memory WHERE user_id = $1 ORDER BY content`, [ada.id])).toEqual([
       { content: 'PROBE_TS12_GLOBAL_MEMORY' },
@@ -108,11 +131,16 @@ describeTarget('deletion and retention on the target (the job as mwf_job, the ap
     // Delivered content survives in Bob's conversation; shared needs and the agreement survive
     expect(
       await count(
-        `SELECT count(*)::int AS n FROM message m JOIN conversation c ON c.id = m.conversation_id WHERE c.participant_id = $1`,
-        [ids.bob],
+        `SELECT count(*)::int AS n FROM message m JOIN conversation c ON c.id = m.conversation_id WHERE c.session_id = $1 AND c.user_id = $2`,
+        [ids.session, ids.bobUser],
       ),
     ).toBe(bobMessagesBefore);
-    expect(await count(`SELECT count(*)::int AS n FROM need_share WHERE participant_id = $1`, [ids.ada])).toBe(2);
+    expect(
+      await count(`SELECT count(*)::int AS n FROM need_share WHERE session_id = $1 AND user_id = $2`, [
+        ids.session,
+        ids.adaUser,
+      ]),
+    ).toBe(2);
     expect(await count(`SELECT count(*)::int AS n FROM agreement`)).toBe(1);
     // R17: the session's unattributed telemetry is gone
     expect(await count(`SELECT count(*)::int AS n FROM brain_activity WHERE session_id = $1`, [ids.session])).toBe(0);
@@ -131,8 +159,8 @@ describeTarget('deletion and retention on the target (the job as mwf_job, the ap
     ]);
     await run.sql(`INSERT INTO user_key (user_id, key_id, wrapped_dek) VALUES ($1, 'k-bob', '\\x00')`, [bob.id]);
     await run.sql(
-      `INSERT INTO participant_key (participant_id, key_id, wrapped_dek, user_id, session_id) VALUES ($1::uuid, 'pk-bob', '\\x00', (SELECT p.user_id FROM participant p WHERE p.id = $1::uuid), (SELECT p.session_id FROM participant p WHERE p.id = $1::uuid))`,
-      [ids.bob],
+      `INSERT INTO participant_key (key_id, wrapped_dek, user_id, session_id) VALUES ('pk-bob', '\\x00', $2::uuid, $1::uuid)`,
+      [ids.session, ids.bobUser],
     );
 
     // R40 (fix round 1, I1): telemetry written inside ADA's request. The reconciler call reads Bob's
@@ -148,7 +176,7 @@ describeTarget('deletion and retention on the target (the job as mwf_job, the ap
           startTime: Date.now(),
           userId: ada.id,
           sessionId: ids.session,
-          participantId: ids.ada,
+          seated: true,
         },
         fn,
       );
@@ -178,11 +206,11 @@ describeTarget('deletion and retention on the target (the job as mwf_job, the ap
     }
     expect(
       await run.sql(
-        `SELECT turn_id, participant_id FROM brain_activity WHERE turn_id LIKE 'ts12-r40-%' ORDER BY turn_id`,
+        `SELECT turn_id, participant_user_id FROM brain_activity WHERE turn_id LIKE 'ts12-r40-%' ORDER BY turn_id`,
       ),
     ).toEqual([
-      { turn_id: 'ts12-r40-own-turn', participant_id: ids.ada },
-      { turn_id: 'ts12-r40-reconciler', participant_id: null },
+      { turn_id: 'ts12-r40-own-turn', participant_user_id: ids.adaUser },
+      { turn_id: 'ts12-r40-reconciler', participant_user_id: null },
     ]);
 
     const res = await http(bob, 'delete', '/auth/me');
@@ -202,27 +230,46 @@ describeTarget('deletion and retention on the target (the job as mwf_job, the ap
     expect(await count(`SELECT count(*)::int AS n FROM user_identity WHERE user_id = $1`, [bob.id])).toBe(0);
     expect(await count(`SELECT count(*)::int AS n FROM user_device WHERE user_id = $1`, [bob.id])).toBe(0);
     expect(await count(`SELECT count(*)::int AS n FROM feature_state WHERE user_id = $1`, [bob.id])).toBe(0);
-    expect(await count(`SELECT count(*)::int AS n FROM conversation WHERE participant_id = $1`, [ids.bob])).toBe(0);
+    expect(
+      await count(`SELECT count(*)::int AS n FROM conversation WHERE session_id = $1 AND user_id = $2`, [
+        ids.session,
+        ids.bobUser,
+      ]),
+    ).toBe(0);
     expect(
       await count(`SELECT count(*)::int AS n FROM user_key WHERE user_id = $1 AND destroyed_at IS NULL`, [bob.id]),
     ).toBe(0);
     expect(
-      await count(`SELECT count(*)::int AS n FROM participant_key WHERE participant_id = $1 AND destroyed_at IS NULL`, [
-        ids.bob,
-      ]),
+      await count(
+        `SELECT count(*)::int AS n FROM participant_key WHERE session_id = $1 AND user_id = $2 AND destroyed_at IS NULL`,
+        [ids.session, ids.bobUser],
+      ),
     ).toBe(0);
     // Survivors: the participant row (tombstoned), shared needs, the revealed attempt, the agreement parties
-    expect(await run.sql(`SELECT display_name FROM participant WHERE id = $1`, [ids.bob])).toEqual([
-      { display_name: null },
-    ]);
-    expect(await count(`SELECT count(*)::int AS n FROM need_share WHERE participant_id = $1`, [ids.bob])).toBe(2);
+    expect(
+      await run.sql(`SELECT display_name FROM participant WHERE session_id = $1 AND user_id = $2`, [
+        ids.session,
+        ids.bobUser,
+      ]),
+    ).toEqual([{ display_name: null }]);
+    expect(
+      await count(`SELECT count(*)::int AS n FROM need_share WHERE session_id = $1 AND user_id = $2`, [
+        ids.session,
+        ids.bobUser,
+      ]),
+    ).toBe(2);
     expect(
       await count(
-        `SELECT count(*)::int AS n FROM empathy_attempt WHERE author_participant_id = $1 AND revealed_at IS NOT NULL`,
-        [ids.bob],
+        `SELECT count(*)::int AS n FROM empathy_attempt WHERE session_id = $1 AND author_user_id = $2 AND revealed_at IS NOT NULL`,
+        [ids.session, ids.bobUser],
       ),
     ).toBeGreaterThan(0);
-    expect(await count(`SELECT count(*)::int AS n FROM agreement_party WHERE participant_id = $1`, [ids.bob])).toBe(1);
+    expect(
+      await count(`SELECT count(*)::int AS n FROM agreement_party WHERE session_id = $1 AND user_id = $2`, [
+        ids.session,
+        ids.bobUser,
+      ]),
+    ).toBe(1);
   });
 
   it('session retention as the job: stale ACTIVE → ABANDONED → ARCHIVED; a long-ARCHIVED session is hard-deleted with its tree, users kept', async () => {
@@ -236,17 +283,17 @@ describeTarget('deletion and retention on the target (the job as mwf_job, the ap
     );
     for (const [i, u] of users.entries()) {
       // The first is the initiator; the second was added by them (work-k5fk.2).
-      const [p] = await run.sql<{ id: string }>(
-        `INSERT INTO participant (session_id, user_id, added_by_user_id) VALUES ($1, $2, $3) RETURNING id`,
+      const [p] = await run.sql<{ session_id: string; user_id: string }>(
+        `INSERT INTO participant (session_id, user_id, added_by_user_id) VALUES ($1, $2, $3) RETURNING session_id, user_id`,
         [s.id, u.id, i === 0 ? null : users[0].id],
       );
       const [c] = await run.sql<{ id: string }>(
-        `INSERT INTO conversation (participant_id, user_id, session_id) VALUES ($1::uuid, (SELECT p.user_id FROM participant p WHERE p.id = $1::uuid), (SELECT p.session_id FROM participant p WHERE p.id = $1::uuid)) RETURNING id`,
-        [p.id],
+        `INSERT INTO conversation (user_id, session_id) VALUES ($1::uuid, $2::uuid) RETURNING id`,
+        [p.user_id, p.session_id],
       );
       await run.sql(
-        `INSERT INTO message (conversation_id, sender_participant_id, role, content, created_at, sender_user_id, session_id) VALUES ($1::uuid, $2::uuid, 'USER', 'old', $3, (SELECT p.user_id FROM participant p WHERE p.id = $2::uuid), (SELECT x.session_id FROM conversation x WHERE x.id = $1::uuid))`,
-        [c.id, p.id, old],
+        `INSERT INTO message (conversation_id, role, content, created_at, sender_user_id, session_id) VALUES ($1::uuid, 'USER', 'old', $3, $2::uuid, (SELECT x.session_id FROM conversation x WHERE x.id = $1::uuid))`,
+        [c.id, p.user_id, old],
       );
     }
     await run.sql(`UPDATE session SET status = 'INVITED' WHERE id = $1`, [s.id]);
@@ -280,18 +327,18 @@ describeTarget('deletion and retention on the target (the job as mwf_job, the ap
         [email],
       );
       await run.sql(`INSERT INTO participant (session_id, user_id) VALUES ($1, $2)`, [s.id, u2.id]);
-      const [p] = await run.sql<{ id: string }>(
-        `INSERT INTO participant (session_id, user_id, added_by_user_id) VALUES ($1, $2, $3) RETURNING id`,
+      const [p] = await run.sql<{ session_id: string; user_id: string }>(
+        `INSERT INTO participant (session_id, user_id, added_by_user_id) VALUES ($1, $2, $3) RETURNING session_id, user_id`,
         [s.id, u.id, u2.id],
       );
       const [c] = await run.sql<{ id: string }>(
-        `INSERT INTO conversation (participant_id, user_id, session_id) VALUES ($1::uuid, (SELECT p.user_id FROM participant p WHERE p.id = $1::uuid), (SELECT p.session_id FROM participant p WHERE p.id = $1::uuid)) RETURNING id`,
-        [p.id],
+        `INSERT INTO conversation (user_id, session_id) VALUES ($1::uuid, $2::uuid) RETURNING id`,
+        [p.user_id, p.session_id],
       );
       if (messageAt)
         await run.sql(
-          `INSERT INTO message (conversation_id, sender_participant_id, role, content, created_at, sender_user_id, session_id) VALUES ($1::uuid, $2::uuid, 'USER', 'recent', $3, (SELECT p.user_id FROM participant p WHERE p.id = $2::uuid), (SELECT x.session_id FROM conversation x WHERE x.id = $1::uuid))`,
-          [c.id, p.id, messageAt],
+          `INSERT INTO message (conversation_id, role, content, created_at, sender_user_id, session_id) VALUES ($1::uuid, 'USER', 'recent', $3, $2::uuid, (SELECT x.session_id FROM conversation x WHERE x.id = $1::uuid))`,
+          [c.id, p.user_id, messageAt],
         );
       await run.sql(`UPDATE session SET status = 'INVITED' WHERE id = $1`, [s.id]);
       await run.sql(`UPDATE session SET status = 'ACTIVE' WHERE id = $1`, [s.id]);

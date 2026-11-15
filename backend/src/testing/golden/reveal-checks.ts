@@ -25,21 +25,13 @@ function changesOf(steps: StepResult[], table: string): Array<RowChange & { step
   return steps.flatMap(s => s.changes.filter(c => c.table === table).map(c => ({ ...c, step: s.label })));
 }
 
-/** Target: participant id → user id, conversation id → owner's user id (run database). */
-async function owners(
-  h: Harness,
-): Promise<{ ofParticipant: Map<string, string>; ofConversation: Map<string, string> }> {
+/** Target: conversation id → owner's user id (run database). A row names its participants by user (work-k5fk.3). */
+async function owners(h: Harness): Promise<{ ofConversation: Map<string, string> }> {
   return withClient(
     h.fixture.target,
     async c => {
-      const p = await c.query<{ id: string; user_id: string }>(`SELECT id, user_id FROM participant`);
-      const conv = await c.query<{ id: string; user_id: string }>(
-        `SELECT c.id, p.user_id FROM conversation c JOIN participant p ON p.id = c.participant_id`,
-      );
-      return {
-        ofParticipant: new Map(p.rows.map(r => [r.id, r.user_id])),
-        ofConversation: new Map(conv.rows.map(r => [r.id, r.user_id])),
-      };
+      const conv = await c.query<{ id: string; user_id: string }>(`SELECT c.id, c.user_id FROM conversation c`);
+      return { ofConversation: new Map(conv.rows.map(r => [r.id, r.user_id])) };
     },
     h.fixture.database,
   );
@@ -68,7 +60,7 @@ export function revealChecks(opts: {
   const authorOf = async (r: Row | undefined): Promise<unknown> => {
     if (!r) return undefined;
     if (!T) return r.sourceUserId;
-    return (await owners(opts.harness())).ofParticipant.get(String(r.author_participant_id));
+    return r.author_user_id;
   };
 
   it('the first direction reaches READY while the other is not yet READY (this order)', async () => {
@@ -127,7 +119,7 @@ export function revealChecks(opts: {
         .map(({ step, m }) => ({
           step,
           owner: o.ofConversation.get(String(m.conversation_id)),
-          sender: o.ofParticipant.get(String(m.sender_participant_id)),
+          sender: m.sender_user_id as string | undefined,
           source: m.source_attempt_id,
         }))
         .filter(c => c.owner !== c.sender); // the author's own copy is their own row, not a delivery

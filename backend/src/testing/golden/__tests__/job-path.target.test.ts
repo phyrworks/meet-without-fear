@@ -35,7 +35,7 @@ describeTarget('job path on the target, as mwf_job with identity binding on', ()
   const counts = () =>
     rows<{ email: string; n: number }>(
       `SELECT u.email, count(m.id)::int AS n FROM conversation c
-       JOIN participant p ON p.id = c.participant_id JOIN "user" u ON u.id = p.user_id
+       JOIN "user" u ON u.id = c.user_id
        LEFT JOIN message m ON m.conversation_id = c.id GROUP BY u.email ORDER BY u.email`,
     );
   const get = (actor: Harness['actors']['userA'], label: string, url: string) =>
@@ -56,15 +56,13 @@ describeTarget('job path on the target, as mwf_job with identity binding on', ()
   // message stays unreadable to the job.
   it('the job login reads exactly the message columns its grants name (R35 adds role, content, sender)', async () => {
     const { getJobPrisma } = await import('../../../lib/prisma');
-    await expect(getJobPrisma().$queryRaw`SELECT dedupe_key FROM message LIMIT 1`).rejects.toThrow(
-      /permission denied/,
-    );
+    await expect(getJobPrisma().$queryRaw`SELECT dedupe_key FROM message LIMIT 1`).rejects.toThrow(/permission denied/);
     await expect(getJobPrisma().$queryRaw`SELECT refining_need_id FROM message LIMIT 1`).rejects.toThrow(
       /permission denied/,
     );
     await expect(getJobPrisma().$queryRaw`SELECT * FROM message LIMIT 1`).rejects.toThrow(/permission denied/);
     const ok = await getJobPrisma().$queryRaw<Array<{ n: number }>>`SELECT count(id)::int AS n FROM message
-      WHERE role IS NOT NULL AND content IS NOT NULL AND (sender_participant_id IS NULL OR sender_participant_id IS NOT NULL)`;
+      WHERE role IS NOT NULL AND content IS NOT NULL AND (sender_user_id IS NULL OR sender_user_id IS NOT NULL)`;
     expect(ok[0].n).toBeGreaterThan(0);
   });
 
@@ -89,8 +87,8 @@ describeTarget('job path on the target, as mwf_job with identity binding on', ()
       });
     const drafts = () =>
       rows<{ content: string; version: number }>(
-        `SELECT d.content, d.version FROM draft d JOIN participant p ON p.id = d.participant_id
-         JOIN "user" u ON u.id = p.user_id WHERE u.email = 'ada@e2e.test' AND d.kind = 'EMPATHY'`,
+        `SELECT d.content, d.version FROM draft d
+         JOIN "user" u ON u.id = d.user_id WHERE u.email = 'ada@e2e.test' AND d.kind = 'EMPATHY'`,
       );
     const before = await drafts();
     expect(before).toHaveLength(1); // the fixture's draft
@@ -140,7 +138,7 @@ describeTarget('job path on the target, as mwf_job with identity binding on', ()
       key: string | null;
     }>(
       `SELECT m.role::text AS role, m.kind::text AS kind, u.email AS sender, m.content, m.dedupe_key::text AS key
-       FROM message m LEFT JOIN participant p ON p.id = m.sender_participant_id LEFT JOIN "user" u ON u.id = p.user_id
+       FROM message m LEFT JOIN "user" u ON u.id = m.sender_user_id
        ORDER BY m.created_at DESC, m.id DESC LIMIT 2`,
     );
     expect(written.map(w => [w.role, w.kind, w.sender])).toEqual([
@@ -156,8 +154,8 @@ describeTarget('job path on the target, as mwf_job with identity binding on', ()
   it("feel-heard: Bob's milestone (app), the transition message (job), and Ada's HELD direction read identity-bound", async () => {
     // Put Bob back in stage 1 (before his feel_heard).
     await rows(
-      `DELETE FROM participant_milestone pm USING participant p, "user" u
-       WHERE pm.participant_id = p.id AND p.user_id = u.id AND u.email = 'bob@e2e.test' AND pm.milestone_key = 'feel_heard'`,
+      `DELETE FROM participant_milestone pm USING "user" u
+       WHERE pm.user_id = u.id AND u.email = 'bob@e2e.test' AND pm.milestone_key = 'feel_heard'`,
     );
     const before = await counts();
     const step = await post(
@@ -175,8 +173,8 @@ describeTarget('job path on the target, as mwf_job with identity binding on', ()
     expect(data.reconcilerTriggered).toBe(true);
     expect((data.transitionMessage as { id?: string } | null)?.id).toEqual(expect.any(String));
     const [m] = await rows<{ n: number }>(
-      `SELECT count(*)::int AS n FROM participant_milestone pm JOIN participant p ON p.id = pm.participant_id
-       JOIN "user" u ON u.id = p.user_id WHERE u.email = 'bob@e2e.test' AND pm.milestone_key = 'feel_heard'`,
+      `SELECT count(*)::int AS n FROM participant_milestone pm
+       JOIN "user" u ON u.id = pm.user_id WHERE u.email = 'bob@e2e.test' AND pm.milestone_key = 'feel_heard'`,
     );
     expect(m.n).toBe(1);
     const after = await counts();
@@ -186,12 +184,12 @@ describeTarget('job path on the target, as mwf_job with identity binding on', ()
   it("the session list's identity-bound read returns the direction under the caller's identity, nothing without one", async () => {
     const { prisma } = await import('../../../lib/prisma');
     const { runWithContext } = await import('../../../lib/request-context');
-    const [bob] = await rows<{ id: string }>(
-      `SELECT p.id FROM participant p JOIN "user" u ON u.id = p.user_id WHERE u.email = 'bob@e2e.test'`,
+    const [bob] = await rows<{ id: string; session_id: string }>(
+      `SELECT p.user_id AS id, p.session_id FROM participant p JOIN "user" u ON u.id = p.user_id WHERE u.email = 'bob@e2e.test'`,
     );
     const q = () =>
       prisma.$queryRaw<Array<{ status: string }>>`
-        SELECT status::text AS status FROM v_empathy_direction_status WHERE subject_participant_id = ANY(${[bob.id]}::uuid[])`;
+        SELECT status::text AS status FROM v_empathy_direction_status WHERE session_id = ${bob.session_id}::uuid AND subject_user_id = ANY(${[bob.id]}::uuid[])`;
     // A PrismaPromise is lazy: it must be awaited INSIDE the context.
     const asBob = await runWithContext(
       { turnId: 't', requestId: 'r', startTime: Date.now(), userId: harness.actors.userB!.id },
@@ -201,8 +199,8 @@ describeTarget('job path on the target, as mwf_job with identity binding on', ()
     // it now completes on the target), so the status is whatever the row
     // holds — HELD, or READY once the background analysis landed.
     const actual = await rows<{ status: string }>(
-      `SELECT status::text AS status FROM empathy_attempt WHERE subject_participant_id = $1`,
-      [bob.id],
+      `SELECT status::text AS status FROM empathy_attempt WHERE session_id = $1 AND subject_user_id = $2`,
+      [bob.session_id, bob.id],
     );
     expect(asBob.map(r => r.status)).toEqual(actual.map(r => r.status));
     expect(['HELD', 'READY']).toContain(asBob[0]?.status);

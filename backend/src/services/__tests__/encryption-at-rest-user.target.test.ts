@@ -66,14 +66,20 @@ describeTarget('encryption at rest: user-scope columns (FIELD_ENCRYPTION_KEY set
 
   it('ai_memory SUMMARY (summarizer, raw INSERT as mwf_job): leaves sealed, the CHECK holds, the app reads the text', async () => {
     const [c] = await run.sql<{ id: string }>(
-      `SELECT id FROM conversation WHERE participant_id = $1 AND kind = 'MAIN'`,
-      [ids.ada],
+      `SELECT id FROM conversation WHERE session_id = $1 AND user_id = $2 AND kind = 'MAIN'`,
+      [ids.session, ids.adaUser],
     );
     for (let i = 0; i < 30; i++) {
       await run.sql(
-        `INSERT INTO message (conversation_id, sender_participant_id, role, content, created_at, sender_user_id, session_id)
-         VALUES ($1::uuid, $2::uuid, $3::message_role, $4, now() - make_interval(mins => 90 - $5::int), (SELECT p.user_id FROM participant p WHERE p.id = $2::uuid), (SELECT x.session_id FROM conversation x WHERE x.id = $1::uuid))`,
-        [c.id, i % 2 === 0 ? ids.ada : null, i % 2 === 0 ? 'USER' : 'AI', `turn ${i} with enough content to count`, i],
+        `INSERT INTO message (conversation_id, role, content, created_at, sender_user_id, session_id)
+         VALUES ($1::uuid, $3::message_role, $4, now() - make_interval(mins => 90 - $5::int), $2::uuid, (SELECT x.session_id FROM conversation x WHERE x.id = $1::uuid))`,
+        [
+          c.id,
+          i % 2 === 0 ? ids.adaUser : null,
+          i % 2 === 0 ? 'USER' : 'AI',
+          `turn ${i} with enough content to count`,
+          i,
+        ],
       );
     }
     const spy = jest.spyOn(bedrock, 'getHaikuJson').mockResolvedValue({
@@ -85,9 +91,13 @@ describeTarget('encryption at rest: user-scope columns (FIELD_ENCRYPTION_KEY set
     const summarizer = await import('../conversation-summarizer');
     await asAda(() => summarizer.updateSessionSummary(ids.session, ids.adaUser, 'turn-ts13'));
     spy.mockRestore();
-    const [doc] = (await expectSealed(run, 'ai_memory', 'doc', `participant_id = $1 AND kind = 'SUMMARY'`, [
-      ids.ada,
-    ])) as Array<Record<string, unknown>>;
+    const [doc] = (await expectSealed(
+      run,
+      'ai_memory',
+      'doc',
+      `session_id = $1 AND user_id = $2 AND kind = 'SUMMARY'`,
+      [ids.session, ids.adaUser],
+    )) as Array<Record<string, unknown>>;
     expect(Object.keys(doc)).toEqual(expect.arrayContaining(['text', 'messageCount', 'generatedAt']));
     expect(JSON.stringify(doc)).not.toContain('PROBE_TS13');
     const read = await asAda(() => summarizer.getSessionSummary(ids.session, ids.adaUser));
@@ -110,9 +120,13 @@ describeTarget('encryption at rest: user-scope columns (FIELD_ENCRYPTION_KEY set
       turnId: 'turn-ts13',
     });
     spy.mockRestore();
-    const [doc] = (await expectSealed(run, 'ai_memory', 'doc', `participant_id = $1 AND kind = 'NOTABLE_FACTS'`, [
-      ids.ada,
-    ])) as Array<{ facts: unknown[] }>;
+    const [doc] = (await expectSealed(
+      run,
+      'ai_memory',
+      'doc',
+      `session_id = $1 AND user_id = $2 AND kind = 'NOTABLE_FACTS'`,
+      [ids.session, ids.adaUser],
+    )) as Array<{ facts: unknown[] }>;
     expect(Array.isArray(doc.facts)).toBe(true);
     expect(JSON.stringify(doc)).not.toContain('PROBE_TS13');
     const { loadOwnNotableFacts } = await import('../participant-memory');

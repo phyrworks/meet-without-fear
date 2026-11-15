@@ -28,10 +28,10 @@ describeTarget('the Stage 3 share path, as mwf_app and mwf_job with identity bin
   let ctx: typeof import('../../lib/request-context');
   const asUser = <T>(userId: string, fn: () => Promise<T>): Promise<T> =>
     ctx.runWithContext({ turnId: 't', requestId: 'r', startTime: Date.now(), userId }, async () => await fn());
-  const needsOf = (participant: string) =>
+  const needsOf = (seat: { sessionId: string; userId: string }) =>
     run.sql<{ id: string; label: string; category: string; evidence: string[] }>(
-      `SELECT id, label, category::text AS category, evidence FROM need WHERE participant_id = $1 AND deleted_at IS NULL ORDER BY created_at, id`,
-      [participant],
+      `SELECT id, label, category::text AS category, evidence FROM need WHERE session_id = $1 AND user_id = $2 AND deleted_at IS NULL ORDER BY created_at, id`,
+      [seat.sessionId, seat.userId],
     );
   const privateTextOf = (who: 'ada' | 'bob') => NEEDS_CONFIRMED_TEXT[who].flatMap(n => [n.need, ...(n.evidence ?? [])]);
 
@@ -53,8 +53,8 @@ describeTarget('the Stage 3 share path, as mwf_app and mwf_job with identity bin
     const userSpy = jest.spyOn(realtime, 'publishUserEvent');
     const http = await httpAs();
     const [extra] = await run.sql<{ id: string }>(
-      `INSERT INTO need (participant_id, label, category, ai_confidence, evidence, user_id, session_id) VALUES ($1::uuid, 'PROBE_DELETED_LABEL', 'SAFETY', 0.9, ARRAY['PROBE_DELETED_EVIDENCE'], (SELECT p.user_id FROM participant p WHERE p.id = $1::uuid), (SELECT p.session_id FROM participant p WHERE p.id = $1::uuid)) RETURNING id`,
-      [ids.ada],
+      `INSERT INTO need (label, category, ai_confidence, evidence, user_id, session_id) VALUES ('PROBE_DELETED_LABEL', 'SAFETY', 0.9, ARRAY['PROBE_DELETED_EVIDENCE'], $1::uuid, $2::uuid) RETURNING id`,
+      [ids.adaUser, ids.session],
     );
     const res = await http(
       { id: ids.adaUser, email: 'ada@e2e.test' },
@@ -90,7 +90,7 @@ describeTarget('the Stage 3 share path, as mwf_app and mwf_job with identity bin
     const result = await asUser(ids.bobUser, () =>
       share.shareNeeds({
         sessionId: ids.session,
-        participantId: ids.bob,
+        seat: ids.bob,
         needs: needs.map(n => ({ id: n.id, label: n.label, category: n.category as never, evidence: n.evidence })),
       }),
     );
@@ -98,8 +98,8 @@ describeTarget('the Stage 3 share path, as mwf_app and mwf_job with identity bin
 
     const consents = await run.sql<{ need_id: string; decision: string; decided: boolean; target_kind: string }>(
       `SELECT need_id, decision::text AS decision, decided_at IS NOT NULL AS decided, target_kind::text AS target_kind
-       FROM consent WHERE participant_id = $1 ORDER BY need_id`,
-      [ids.bob],
+       FROM consent WHERE session_id = $1 AND user_id = $2 ORDER BY need_id`,
+      [ids.session, ids.bobUser],
     );
     expect(consents).toEqual(
       needs
@@ -108,17 +108,15 @@ describeTarget('the Stage 3 share path, as mwf_app and mwf_job with identity bin
     );
     const shares = await run.sql<{
       need_id: string;
-      participant_id: string;
+      user_id: string;
       session_id: string;
       shared_text: string;
       category: string;
-    }>(
-      `SELECT need_id, participant_id, session_id, shared_text, category::text AS category FROM need_share ORDER BY need_id`,
-    );
+    }>(`SELECT need_id, user_id, session_id, shared_text, category::text AS category FROM need_share ORDER BY need_id`);
     expect(shares.map(s => s.need_id).sort()).toEqual(needs.map(n => n.id).sort());
     for (const s of shares) {
       const need = needs.find(n => n.id === s.need_id)!;
-      expect(s).toMatchObject({ participant_id: ids.bob, session_id: ids.session, category: need.category });
+      expect(s).toMatchObject({ user_id: ids.bobUser, session_id: ids.session, category: need.category });
       expect(s.shared_text.length).toBeGreaterThan(0);
       for (const probe of privateTextOf('bob')) expect(s.shared_text.toLowerCase()).not.toContain(probe.toLowerCase());
     }
@@ -130,12 +128,12 @@ describeTarget('the Stage 3 share path, as mwf_app and mwf_job with identity bin
     const rows = await run.as<Record<string, unknown>>(
       'mwf_app',
       ids.adaUser,
-      `SELECT * FROM v_need_shared WHERE participant_id = $1 ORDER BY need_id`,
-      [ids.bob],
+      `SELECT * FROM v_need_shared WHERE session_id = $1 AND user_id = $2 ORDER BY need_id`,
+      [ids.session, ids.bobUser],
     );
     expect(rows).toHaveLength(2);
     expect(Object.keys(rows[0]).sort()).toEqual(
-      ['category', 'need_id', 'participant_id', 'session_id', 'shared_at', 'shared_text'].sort(),
+      ['category', 'need_id', 'session_id', 'shared_at', 'shared_text', 'user_id'].sort(),
     );
     const text = JSON.stringify(rows);
     for (const probe of privateTextOf('bob')) expect(text).not.toContain(probe);
@@ -149,14 +147,14 @@ describeTarget('the Stage 3 share path, as mwf_app and mwf_job with identity bin
     const result = await asUser(ids.adaUser, () =>
       share.shareNeeds({
         sessionId: ids.session,
-        participantId: ids.ada,
+        seat: ids.ada,
         needs: needs.map(n => ({ id: n.id, label: n.label, category: n.category as never, evidence: n.evidence })),
       }),
     );
     expect(result).toMatchObject({ allShared: true, completedNow: true });
-    const reached = await run.sql<{ participant_id: string; milestone_key: string }>(
-      `SELECT participant_id, milestone_key FROM participant_milestone
-       WHERE milestone_key IN ('needs_shared', 'needs_validated') ORDER BY participant_id, milestone_key`,
+    const reached = await run.sql<{ user_id: string; milestone_key: string }>(
+      `SELECT user_id, milestone_key FROM participant_milestone
+       WHERE milestone_key IN ('needs_shared', 'needs_validated') ORDER BY user_id, milestone_key`,
     );
     expect(reached).toHaveLength(4);
     expect(await run.sql(`SELECT all_reached FROM v_session_readiness WHERE milestone_key = 'needs_shared'`)).toEqual([

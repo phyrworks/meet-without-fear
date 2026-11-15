@@ -88,19 +88,19 @@ describeTarget(
       store = await import('../empathy-store');
       messages = await import('../message-store');
       ({ prisma } = await import('../../lib/prisma'));
-      const cs = await run.sql<{ participant_id: string; id: string }>(
-        `SELECT participant_id, id FROM conversation WHERE kind = 'MAIN' AND participant_id = ANY($1::uuid[])`,
-        [[ids.ada, ids.bob]],
+      const cs = await run.sql<{ user_id: string; id: string }>(
+        `SELECT user_id, id FROM conversation WHERE kind = 'MAIN' AND session_id = $1 AND user_id = ANY($2::uuid[])`,
+        [ids.session, [ids.adaUser, ids.bobUser]],
       );
       conv = {
-        ada: cs.find(c => c.participant_id === ids.ada)!.id,
-        bob: cs.find(c => c.participant_id === ids.bob)!.id,
+        ada: cs.find(c => c.user_id === ids.adaUser)!.id,
+        bob: cs.find(c => c.user_id === ids.bobUser)!.id,
       };
       const attempts = await run.sql<{ id: string; author: string }>(
-        `SELECT id, author_participant_id AS author FROM empathy_attempt WHERE round = 1`,
+        `SELECT id, author_user_id AS author FROM empathy_attempt WHERE round = 1`,
       );
-      adaRound1 = attempts.find(a => a.author === ids.ada)!.id;
-      bobRound1 = attempts.find(a => a.author === ids.bob)!.id;
+      adaRound1 = attempts.find(a => a.author === ids.adaUser)!.id;
+      bobRound1 = attempts.find(a => a.author === ids.bobUser)!.id;
     });
     // jest.config restoreMocks: spies are restored before every test, so the hook spy is per test
     beforeEach(() => {
@@ -115,7 +115,7 @@ describeTarget(
       const own = await asUser(ids.adaUser, () =>
         messages.createParticipantMessage({
           conversationId: conv.ada,
-          participantId: ids.ada,
+          seat: ids.ada,
           content: 'PROBE_TS13_TURN',
         }),
       );
@@ -134,7 +134,8 @@ describeTarget(
       const typed = 'enc:v1:a:b:c';
       const delivered = await messages.deliverMessage({
         toConversationId: conv.bob,
-        fromParticipantId: ids.ada,
+        sessionId: ids.session,
+        fromUserId: ids.adaUser,
         kind: 'SHARED_CONTEXT',
         content: typed,
       });
@@ -152,10 +153,13 @@ describeTarget(
         context: 'PROBE_TS13_MOOD tired',
       });
       expect(res.status).toBeLessThan(300);
-      await expectSealed(run, 'mood_reading', 'context', `participant_id = $1 AND context IS NOT NULL`, [ids.bob]);
+      await expectSealed(run, 'mood_reading', 'context', `session_id = $1 AND user_id = $2 AND context IS NOT NULL`, [
+        ids.session,
+        ids.bobUser,
+      ]);
       const back = await asUser(ids.bobUser, () =>
         prisma.moodReading.findFirst({
-          where: { participantId: ids.bob, context: { not: null } },
+          where: { sessionId: ids.session, userId: ids.bobUser, context: { not: null } },
           select: { context: true },
         }),
       );
@@ -166,16 +170,16 @@ describeTarget(
     it('draft.content (upsertDraft, raw INSERT … RETURNING as mwf_app): sealed; the RETURNING row and findDraft read plaintext', async () => {
       const written = await asUser(ids.adaUser, () =>
         store.upsertDraft({
-          participantId: ids.ada,
+          seat: ids.ada,
           kind: 'EMPATHY',
-          aboutParticipantId: ids.bob,
+          aboutUserId: ids.bobUser,
           content: 'PROBE_TS13_DRAFT',
         }),
       );
       expect(written.content).toBe('PROBE_TS13_DRAFT');
       await expectSealed(run, 'draft', 'content', `id = $1`, [written.id]);
       const found = await asUser(ids.adaUser, () =>
-        store.findDraft({ participantId: ids.ada, kind: 'EMPATHY', aboutParticipantId: ids.bob }),
+        store.findDraft({ seat: ids.ada, kind: 'EMPATHY', aboutUserId: ids.bobUser }),
       );
       expect(found?.content).toBe('PROBE_TS13_DRAFT');
       proven.add('draft.content');
@@ -195,8 +199,9 @@ describeTarget(
       result.recommendation.suggestedShareFocus = 'PROBE_TS13_FOCUS';
       const id = await analysis.persistAnalysis({
         attemptId: bobRound1,
-        authorParticipantId: ids.bob,
-        subjectParticipantId: ids.ada,
+        sessionId: ids.session,
+        authorUserId: ids.bobUser,
+        subjectUserId: ids.adaUser,
         result,
         guidance: { areaHint: 'PROBE_TS13_AREA', guidanceType: 'challenge_assumptions', promptSeed: 'PROBE_TS13_SEED' },
         suggestion: { content: 'PROBE_TS13_SUGGESTION', reason: 'PROBE_TS13_SUGGESTION_REASON' },
@@ -257,12 +262,15 @@ describeTarget(
         suggestedContent: 'PROBE_TS13_SUGGESTED',
       });
       for (const column of ['offer_message', 'suggested_content', 'suggested_reason']) {
-        await expectSealed(run, 'context_share_offer', column, `subject_participant_id = $1`, [ids.ada]);
+        await expectSealed(run, 'context_share_offer', column, `session_id = $1 AND subject_user_id = $2`, [
+          ids.session,
+          ids.adaUser,
+        ]);
         proven.add(`context_share_offer.${column}`);
       }
       const back = await asUser(ids.adaUser, () =>
         prisma.contextShareOffer.findFirst({
-          where: { subjectParticipantId: ids.ada },
+          where: { sessionId: ids.session, subjectUserId: ids.adaUser },
           select: { offerMessage: true, suggestedContent: true, suggestedReason: true },
         }),
       );
@@ -283,16 +291,16 @@ describeTarget(
         run,
         'context_share_offer',
         'shared_content',
-        `subject_participant_id = $1 AND shared_content IS NOT NULL`,
-        [ids.bob],
+        `session_id = $1 AND subject_user_id = $2 AND shared_content IS NOT NULL`,
+        [ids.session, ids.bobUser],
       );
       const [copy] = await expectSealed(run, 'message', 'content', `kind = 'SHARED_CONTEXT' AND conversation_id = $1`, [
         conv.ada,
       ]);
       void copy;
       const [offerRow] = await run.sql<{ id: string }>(
-        `SELECT id FROM context_share_offer WHERE subject_participant_id = $1 AND shared_content IS NOT NULL`,
-        [ids.bob],
+        `SELECT id FROM context_share_offer WHERE session_id = $1 AND subject_user_id = $2 AND shared_content IS NOT NULL`,
+        [ids.session, ids.bobUser],
       );
       const shared = await asUser(ids.bobUser, () =>
         prisma.contextShareOffer.findUnique({ where: { id: offerRow.id }, select: { sharedContent: true } }),
@@ -324,7 +332,7 @@ describeTarget(
 
     it('the reveal (checkAndRevealBothIfReady as mwf_job): the EMPATHY_STATEMENT copies are ciphertext, the subject reads plaintext, the hook runs', async () => {
       await asUser(ids.bobUser, () => store.setAttemptStatus(bobRound1, 'READY', { actor: 'participant' }));
-      const round2 = (await store.currentAttempt(ids.ada, ids.bob))!;
+      const round2 = (await store.currentAttempt(ids.session, ids.adaUser, ids.bobUser))!;
       await store.setAttemptStatus(round2.id, 'READY', { actor: 'job' });
       hook.mockClear();
       const state = await import('../reconciler/state');
@@ -361,7 +369,6 @@ describeTarget(
       await asUser(ids.adaUser, () =>
         store.recordReview({
           attemptId: bobRound1,
-          reviewerParticipantId: ids.ada,
           sessionId: ids.session,
           reviewerUserId: ids.adaUser,
           validated: false,

@@ -24,14 +24,13 @@ import {
 const row = (over: Partial<StoredMessage> = {}): StoredMessage => ({
   id: 'm1',
   conversationId: 'c-ada',
-  senderParticipantId: null,
+  senderUserId: null,
   role: 'AI',
   kind: 'CHAT',
   content: 'hello',
   refiningNeedId: null,
   sourceAttemptId: null,
   createdAt: new Date('2026-10-26T12:00:00.000Z'),
-  senderParticipant: null,
   ...over,
 });
 
@@ -45,14 +44,11 @@ describe('message DTO mapping', () => {
   });
 
   it("maps a row to the shared MessageDTO: sender's user id, owner's stage at the instant", () => {
-    const dto = toMessageDTO(
-      row({ role: 'USER', senderParticipantId: 'p-ada', senderParticipant: { userId: 'u-ada' } }),
-      {
-        sessionId: 's1',
-        ownerMilestones: [{ key: 'compact_signed', reachedAt: new Date('2026-10-26T11:00:00.000Z') }],
-        ownerInvitationPending: false,
-      },
-    );
+    const dto = toMessageDTO(row({ role: 'USER', senderUserId: 'u-ada' }), {
+      sessionId: 's1',
+      ownerMilestones: [{ key: 'compact_signed', reachedAt: new Date('2026-10-26T11:00:00.000Z') }],
+      ownerInvitationPending: false,
+    });
     expect(dto).toEqual({
       id: 'm1',
       sessionId: 's1',
@@ -100,14 +96,13 @@ describe('createFacilitatorMessageOnce (DB-less)', () => {
     expect(row).toEqual({
       id: 'm-1',
       conversationId: 'c-ada',
-      senderParticipantId: null,
+      senderUserId: null,
       role: 'AI',
       kind: 'CHAT',
       content: 'bridge',
       refiningNeedId: null,
       sourceAttemptId: null,
       createdAt: at,
-      senderParticipant: null,
     });
     expect(calls).toHaveLength(1);
     expect(calls[0].sql.replace(/\s+/g, ' ')).toContain('ON CONFLICT DO NOTHING RETURNING id, created_at');

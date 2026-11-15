@@ -92,16 +92,16 @@ describeTarget('encryption at rest: needs, repair and follow-up columns (FIELD_E
 
   it('need_share.shared_text (shareNeeds → app.need_share as mwf_job): sealed; every raw reader of v_need_shared decrypts; the hook runs', async () => {
     const [need] = await run.sql<{ id: string }>(
-      `INSERT INTO need (participant_id, label, category, ai_confidence, confirmed_at, user_id, session_id)
-       VALUES ($1::uuid, 'PROBE_TS13_SHARE_LABEL', 'MEANING', 0.9, now(), (SELECT p.user_id FROM participant p WHERE p.id = $1::uuid), (SELECT p.session_id FROM participant p WHERE p.id = $1::uuid)) RETURNING id`,
-      [ids.bob],
+      `INSERT INTO need (label, category, ai_confidence, confirmed_at, user_id, session_id)
+       VALUES ('PROBE_TS13_SHARE_LABEL', 'MEANING', 0.9, now(), $1::uuid, $2::uuid) RETURNING id`,
+      [ids.bobUser, ids.session],
     );
     hook.mockClear();
     const share = await import('../needs-share');
     await asUser(ids.bobUser, () =>
       share.shareNeeds({
         sessionId: ids.session,
-        participantId: ids.bob,
+        seat: ids.bob,
         needs: [{ id: need.id, label: 'PROBE_TS13_SHARE_LABEL', category: 'MEANING' as never, evidence: [] }],
       }),
     );
@@ -138,8 +138,8 @@ describeTarget('encryption at rest: needs, repair and follow-up columns (FIELD_E
 
   it('need_disposition.note (model API on the admin connection; no app writer sets it today): sealed, read back', async () => {
     const [need] = await run.sql<{ id: string }>(
-      `SELECT need_id AS id FROM need_share WHERE participant_id = $1 LIMIT 1`,
-      [ids.ada],
+      `SELECT need_id AS id FROM need_share WHERE session_id = $1 AND user_id = $2 LIMIT 1`,
+      [ids.session, ids.adaUser],
     );
     // No request path writes note, so mwf_app holds no grant on it (work-k5fk.10.2): the probe
     // row goes through the encryption extension on an exempted admin client instead.
@@ -147,9 +147,8 @@ describeTarget('encryption at rest: needs, repair and follow-up columns (FIELD_E
     const writer = createPrismaClient({ url: run.fx.url, roleGuardExemption: 'test: a column no app path writes' });
     try {
       await writer.needDisposition.upsert({
-        where: { participantId_needId: { participantId: ids.ada, needId: need.id } },
+        where: { sessionId_userId_needId: { sessionId: ids.session, userId: ids.adaUser, needId: need.id } },
         create: {
-          participantId: ids.ada,
           needId: need.id,
           sessionId: ids.session,
           userId: ids.adaUser,
@@ -161,7 +160,11 @@ describeTarget('encryption at rest: needs, repair and follow-up columns (FIELD_E
     } finally {
       await writer.$disconnect();
     }
-    await expectSealed(run, 'need_disposition', 'note', `participant_id = $1 AND need_id = $2`, [ids.ada, need.id]);
+    await expectSealed(run, 'need_disposition', 'note', `session_id = $1 AND user_id = $2 AND need_id = $3`, [
+      ids.session,
+      ids.adaUser,
+      need.id,
+    ]);
     const rows = await asUser(ids.adaUser, () => store.loadDispositions(ids.ada));
     expect(rows.find(r => r.needId === need.id)?.note).toBe('PROBE_TS13_DISPOSITION');
     proven.add('need_disposition.note');
@@ -258,17 +261,18 @@ describeTarget('encryption at rest: needs, repair and follow-up columns (FIELD_E
     await asUser(ids.bobUser, () =>
       store.upsertChoice({
         proposalId: proposal.checkin,
-        participantId: ids.bob,
+        seat: ids.bob,
         decision: 'WILLING',
         note: 'PROBE_TS13_NOTE yes',
       }),
     );
     await asUser(ids.bobUser, () =>
-      store.upsertChoice({ proposalId: proposal.pause, participantId: ids.bob, decision: 'WILLING' }),
+      store.upsertChoice({ proposalId: proposal.pause, seat: ids.bob, decision: 'WILLING' }),
     );
-    await expectSealed(run, 'proposal_choice', 'note', `proposal_id = $1 AND participant_id = $2`, [
+    await expectSealed(run, 'proposal_choice', 'note', `proposal_id = $1 AND session_id = $2 AND user_id = $3`, [
       proposal.checkin,
-      ids.bob,
+      ids.session,
+      ids.bobUser,
     ]);
     const own = await asUser(ids.bobUser, () => store.loadVisibleChoices(ids.session, ids.bob));
     expect(own.find(c => c.proposalId === proposal.checkin)?.note).toBe('PROBE_TS13_NOTE yes');
@@ -278,7 +282,7 @@ describeTarget('encryption at rest: needs, repair and follow-up columns (FIELD_E
       expect.objectContaining({ moment: 'choices-shared', sessionId: ids.session }),
     ]);
     const seenByAda = await asUser(ids.adaUser, () => store.loadVisibleChoices(ids.session, ids.ada));
-    expect(seenByAda.find(c => c.participantId === ids.bob && c.proposalId === proposal.checkin)?.note).toBe(
+    expect(seenByAda.find(c => c.userId === ids.bobUser && c.proposalId === proposal.checkin)?.note).toBe(
       'PROBE_TS13_NOTE yes',
     );
     proven.add('proposal_choice.note');
@@ -286,14 +290,14 @@ describeTarget('encryption at rest: needs, repair and follow-up columns (FIELD_E
 
   it('agreement.description, session_closure.summary, follow_up.summary (closeStage4, raw INSERTs as mwf_job): sealed, plaintext on read', async () => {
     await asUser(ids.adaUser, () =>
-      store.upsertChoice({ proposalId: proposal.individual, participantId: ids.ada, decision: 'WILLING' }),
+      store.upsertChoice({ proposalId: proposal.individual, seat: ids.ada, decision: 'WILLING' }),
     );
     await asUser(ids.adaUser, () =>
-      store.upsertChoice({ proposalId: proposal.pause, participantId: ids.ada, decision: 'NOT_WILLING' }),
+      store.upsertChoice({ proposalId: proposal.pause, seat: ids.ada, decision: 'NOT_WILLING' }),
     );
     // the agreed proposal carries a duration and a measure (R46), set by its creator through the model API
     const [creator] = await run.sql<{ user_id: string }>(
-      `SELECT p.user_id FROM proposal pr JOIN participant p ON p.id = pr.created_by_participant_id WHERE pr.id = $1`,
+      `SELECT pr.created_by_user_id AS user_id FROM proposal pr WHERE pr.id = $1`,
       [proposal.checkin],
     );
     await asUser(creator.user_id, () =>
@@ -303,9 +307,7 @@ describeTarget('encryption at rest: needs, repair and follow-up columns (FIELD_E
       }),
     );
     const closure = await import('../stage4-closure');
-    const result = await asUser(ids.adaUser, () =>
-      closure.closeStage4({ sessionId: ids.session, participantId: ids.ada }),
-    );
+    const result = await asUser(ids.adaUser, () => closure.closeStage4({ sessionId: ids.session, seat: ids.ada }));
     expect(result.agreementIds).toHaveLength(1);
     await expectSealed(run, 'agreement', 'description', `id = $1`, [result.agreementIds[0]]);
     await expectSealed(run, 'session_closure', 'summary', `session_id = $1`, [ids.session]);

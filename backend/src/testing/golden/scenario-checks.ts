@@ -105,8 +105,8 @@ export function targetMessageStageChecks(opts: { harness: () => Harness; steps: 
         (
           await c.query<{ email: string; key: string; at: Date }>(
             `SELECT u.email, pm.milestone_key AS key, pm.reached_at AS at
-             FROM participant_milestone pm JOIN participant p ON p.id = pm.participant_id JOIN "user" u ON u.id = p.user_id
-             WHERE p.session_id = $1`,
+             FROM participant_milestone pm JOIN "user" u ON u.id = pm.user_id
+             WHERE pm.session_id = $1`,
             [h.sessionId],
           )
         ).rows,
@@ -227,8 +227,8 @@ export function targetMilestoneChecks(opts: {
           (
             await c.query<{ email: string; key: string; at: Date }>(
               `SELECT u.email, pm.milestone_key AS key, pm.reached_at AS at
-             FROM participant_milestone pm JOIN participant p ON p.id = pm.participant_id JOIN "user" u ON u.id = p.user_id
-             WHERE p.session_id = $1`,
+             FROM participant_milestone pm JOIN "user" u ON u.id = pm.user_id
+             WHERE pm.session_id = $1`,
               [h.sessionId],
             )
           ).rows,
@@ -247,8 +247,8 @@ export function targetMilestoneChecks(opts: {
           (
             await c.query<{ email: string; at: Date; revoked: Date | null }>(
               `SELECT u.email, ns.shared_at AS at, ns.revoked_at AS revoked
-             FROM need_share ns JOIN participant p ON p.id = ns.participant_id JOIN "user" u ON u.id = p.user_id
-             WHERE p.session_id = $1`,
+             FROM need_share ns JOIN "user" u ON u.id = ns.user_id
+             WHERE ns.session_id = $1`,
               [h.sessionId],
             )
           ).rows,
@@ -338,8 +338,8 @@ export function targetFixtureDeltaChecks(opts: {
 
   run("fixtureMask pair: compact signedAt is each signer's compact_signed instant", async () => {
     const signed = await q<{ email: string; at: Date }>(
-      `SELECT u.email, pm.reached_at AS at FROM participant_milestone pm JOIN participant p ON p.id = pm.participant_id
-       JOIN "user" u ON u.id = p.user_id WHERE pm.milestone_key = 'compact_signed'`,
+      `SELECT u.email, pm.reached_at AS at FROM participant_milestone pm
+       JOIN "user" u ON u.id = pm.user_id WHERE pm.milestone_key = 'compact_signed'`,
     );
     const at = (email: string) => signed.find(s => s.email === email)?.at;
     const iso = (d?: Date) => (d ? new Date(d).toISOString() : null);
@@ -497,8 +497,8 @@ export function mockIndexChecks(opts: {
       async c =>
         (
           await c.query<{ n: number }>(
-            `SELECT count(*)::int AS n FROM message m JOIN participant p ON p.id = m.sender_participant_id
-             JOIN "user" u ON u.id = p.user_id WHERE u.email = $1 AND m.role = 'USER' AND m.kind = 'CHAT'`,
+            `SELECT count(*)::int AS n FROM message m
+             JOIN "user" u ON u.id = m.sender_user_id WHERE u.email = $1 AND m.role = 'USER' AND m.kind = 'CHAT'`,
             [opts.email],
           )
         ).rows,

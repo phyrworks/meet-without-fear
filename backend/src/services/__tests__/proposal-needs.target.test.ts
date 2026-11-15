@@ -29,7 +29,7 @@ describeTarget('setProposalNeeds as mwf_app (proposal_need upsert with no UPDATE
     const [p] = await run.sql<{ proposal: string; need: string; user_id: string }>(
       `SELECT pr.id AS proposal, ns.need_id AS need, pa.user_id
        FROM proposal pr
-       JOIN participant pa ON pa.id = pr.created_by_participant_id
+       JOIN participant pa ON pa.session_id = pr.session_id AND pa.user_id = pr.created_by_user_id
        JOIN need_share ns ON ns.session_id = pr.session_id AND ns.revoked_at IS NULL
        ORDER BY pr.created_at, ns.need_id LIMIT 1`,
     );

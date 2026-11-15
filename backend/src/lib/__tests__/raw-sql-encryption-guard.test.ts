@@ -402,13 +402,13 @@ describe('raw SQL writers route every encrypted column through encryptColumnValu
     const st = (sql: string, exprs: string[]): RawStatement => ({ file: 'x.ts', line: 1, sql, exprs });
 
     it('flags a plaintext bind, a literal and a sub-select; passes the helper and EXCLUDED', () => {
-      expect(
-        violationsOf(st('INSERT INTO draft (participant_id, content) VALUES ($P0::uuid, $P1)', ['p', 'text'])),
-      ).toEqual([{ where: 'x.ts:1', column: 'draft.content', value: '${text}' }]);
+      expect(violationsOf(st('INSERT INTO draft (user_id, content) VALUES ($P0::uuid, $P1)', ['p', 'text']))).toEqual([
+        { where: 'x.ts:1', column: 'draft.content', value: '${text}' },
+      ]);
       expect(
         violationsOf(
           st(
-            'INSERT INTO draft (participant_id, content) VALUES ($P0::uuid, $P1) ON CONFLICT (x) DO UPDATE SET content = EXCLUDED.content',
+            'INSERT INTO draft (user_id, content) VALUES ($P0::uuid, $P1) ON CONFLICT (x) DO UPDATE SET content = EXCLUDED.content',
             ['p', "encryptColumnValue('draft', 'content', text)"],
           ),
         ),
@@ -437,10 +437,7 @@ describe('raw SQL writers route every encrypted column through encryptColumnValu
       // a helper call for the wrong column does not count
       expect(
         violationsOf(
-          st('INSERT INTO draft (participant_id, content) VALUES ($P0, $P1)', [
-            'p',
-            "encryptColumnValue('need', 'label', t)",
-          ]),
+          st('INSERT INTO draft (user_id, content) VALUES ($P0, $P1)', ['p', "encryptColumnValue('need', 'label', t)"]),
         ),
       ).toHaveLength(1);
     });
@@ -451,7 +448,7 @@ describe('raw SQL writers route every encrypted column through encryptColumnValu
       ]);
       expect(violationsOf(st('UPDATE need AS n SET label = $P0 WHERE n.id = $P1', ['l', 'id']))).toHaveLength(1);
       expect(
-        violationsOf(st('INSERT INTO draft AS d (participant_id, content) VALUES ($P0, $P1)', ['p', 'text'])),
+        violationsOf(st('INSERT INTO draft AS d (user_id, content) VALUES ($P0, $P1)', ['p', 'text'])),
       ).toHaveLength(1);
       const read = (sql: string, after = ''): RawStatement => ({ ...st(sql, []), before: 'await prisma.', after });
       expect(encryptedReadsOf(read('SELECT * FROM need WHERE id = $P0'))).toEqual(['need.*']);

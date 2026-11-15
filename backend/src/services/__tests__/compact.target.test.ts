@@ -45,16 +45,16 @@ describeTarget('the compact on the target, as mwf_app', () => {
 
   const signed = async () =>
     (
-      await run.sql<{ participant_id: string }>(
-        `SELECT participant_id FROM participant_milestone WHERE milestone_key = 'compact_signed' ORDER BY reached_at`,
+      await run.sql<{ user_id: string }>(
+        `SELECT user_id FROM participant_milestone WHERE milestone_key = 'compact_signed' ORDER BY reached_at`,
       )
-    ).map(r => r.participant_id);
+    ).map(r => r.user_id);
 
   it('sign, refuse a second signature, report status; ACTIVE once both signed (set at accept, kept)', async () => {
     const first = await http(ada, 'post', `/sessions/${ids.session}/compact/sign`, { agreed: true });
     expect(first.status).toBe(200);
     expect(first.body.data).toMatchObject({ signed: true, partnerSigned: false, canAdvance: false });
-    expect(await signed()).toEqual([ids.ada]);
+    expect(await signed()).toEqual([ids.adaUser]);
     expect((await http(ada, 'post', `/sessions/${ids.session}/compact/sign`, { agreed: true })).status).toBe(409);
 
     // Bob sees only that Ada signed once he has signed himself
@@ -64,7 +64,7 @@ describeTarget('the compact on the target, as mwf_app', () => {
 
     const second = await http(bob, 'post', `/sessions/${ids.session}/compact/sign`, { agreed: true });
     expect(second.body.data).toMatchObject({ signed: true, partnerSigned: true, canAdvance: true });
-    expect(await signed()).toEqual([ids.ada, ids.bob]);
+    expect(await signed()).toEqual([ids.adaUser, ids.bobUser]);
     const bobStatus = (await http(bob, 'get', `/sessions/${ids.session}/compact/status`)).body.data;
     expect(bobStatus).toMatchObject({ mySigned: true, partnerSigned: true });
 
@@ -87,7 +87,7 @@ describeTarget('the compact on the target, as mwf_app', () => {
   it('a non-participant signs nothing (accepted invitation, no pending arm: 403); a missing session 404', async () => {
     const stranger = { id: '00000000-0000-7000-8000-00000000abcd', email: 'stranger@e2e.test' };
     expect((await http(stranger, 'post', `/sessions/${ids.session}/compact/sign`, { agreed: true })).status).toBe(403);
-    expect(await signed()).toEqual([ids.ada, ids.bob]);
+    expect(await signed()).toEqual([ids.adaUser, ids.bobUser]);
     expect((await http(ada, 'get', `/sessions/00000000-0000-7000-8000-000000000000/compact/status`)).status).toBe(404);
   });
 });

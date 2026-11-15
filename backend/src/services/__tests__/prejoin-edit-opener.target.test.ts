@@ -28,6 +28,8 @@ const describeTarget = isTargetShape() ? describe : describe.skip;
 jest.setTimeout(180_000);
 
 type Http = Awaited<ReturnType<typeof httpAs>>;
+/** A participant: (session, user) since work-k5fk.3. */
+type Seat = { sessionId: string; userId: string };
 
 describeTarget('Edit first on a pre-join draft: the AI opens the revision (work-9309)', () => {
   let run: TargetRun;
@@ -56,34 +58,39 @@ describeTarget('Edit first on a pre-join draft: the AI opens the revision (work-
     ]);
     await run.sql(`UPDATE invitation SET message_confirmed_at = now() WHERE session_id = $1`, [sessionId]);
     await run.as('mwf_job', null, `SELECT app.session_set_status($1::uuid, 'INVITED')`, [sessionId]);
-    const [me] = await run.sql<{ id: string }>(`SELECT id FROM participant WHERE session_id = $1`, [sessionId]);
-    await run.sql(
-      `INSERT INTO participant_milestone (participant_id, session_id, user_id, milestone_key)
-       SELECT p.id, p.session_id, p.user_id, k FROM participant p, unnest(ARRAY['invitation_sent', 'compact_signed', 'feel_heard']) k
-       WHERE p.id = $1::uuid`,
-      [me.id],
+    const [me] = await run.sql<{ session_id: string; user_id: string }>(
+      `SELECT session_id, user_id FROM participant WHERE session_id = $1`,
+      [sessionId],
     );
-    return { sessionId, invitationId, adaParticipant: me.id };
+    await run.sql(
+      `INSERT INTO participant_milestone (session_id, user_id, milestone_key)
+       SELECT p.session_id, p.user_id, k FROM participant p, unnest(ARRAY['invitation_sent', 'compact_signed', 'feel_heard']) k
+       WHERE p.session_id = $1::uuid AND p.user_id = $2::uuid`,
+      [me.session_id, me.user_id],
+    );
+    const adaParticipant: Seat = { sessionId: me.session_id, userId: me.user_id };
+    return { sessionId, invitationId, adaParticipant };
   };
 
   /** Messages in a participant's MAIN conversation, by role. */
-  const messageCounts = async (participantId: string) =>
+  const messageCounts = async (seat: Seat) =>
     (
       await run.sql<{ ai: number; total: number }>(
         `SELECT count(*) FILTER (WHERE m.role = 'AI')::int AS ai, count(*)::int AS total
          FROM message m JOIN conversation c ON c.id = m.conversation_id
-         WHERE c.participant_id = $1 AND c.kind = 'MAIN'`,
-        [participantId],
+         WHERE c.session_id = $1 AND c.user_id = $2 AND c.kind = 'MAIN'`,
+        [seat.sessionId, seat.userId],
       )
     )[0];
 
-  const participantOf = async (sessionId: string, userId: string) =>
-    (
-      await run.sql<{ id: string }>(`SELECT id FROM participant WHERE session_id = $1 AND user_id = $2`, [
-        sessionId,
-        userId,
-      ])
-    )[0].id;
+  /** The seat of `userId` in the session (it must exist). */
+  const participantOf = async (sessionId: string, userId: string): Promise<Seat> => {
+    const [p] = await run.sql<{ session_id: string; user_id: string }>(
+      `SELECT session_id, user_id FROM participant WHERE session_id = $1 AND user_id = $2`,
+      [sessionId, userId],
+    );
+    return { sessionId: p.session_id, userId: p.user_id };
+  };
 
   const draftOf = async (sessionId: string) =>
     (await http(ada, 'get', `/sessions/${sessionId}/empathy/draft`)).body.data;
@@ -101,11 +108,11 @@ describeTarget('Edit first on a pre-join draft: the AI opens the revision (work-
   };
 
   /** Wait (bounded) for the background opener: the participant's AI count reaches `n`. */
-  const untilAiCount = async (participantId: string, n: number) => {
-    for (let i = 0; i < 200 && (await messageCounts(participantId)).ai < n; i++) {
+  const untilAiCount = async (seat: Seat, n: number) => {
+    for (let i = 0; i < 200 && (await messageCounts(seat)).ai < n; i++) {
       await new Promise(r => setTimeout(r, 25));
     }
-    expect((await messageCounts(participantId)).ai).toBe(n);
+    expect((await messageCounts(seat)).ai).toBe(n);
   };
 
   /** Ada's messages, and her AI messages at or after `reopenedAt`, through the app (decrypted). */
@@ -118,12 +125,12 @@ describeTarget('Edit first on a pre-join draft: the AI opens the revision (work-
     };
   };
 
-  const reopenedAtOf = async (sessionId: string, participantId: string) =>
+  const reopenedAtOf = async (sessionId: string, seat: Seat) =>
     (
       await run.sql<{ reopened_at: Date | null }>(
-        `SELECT d.reopened_at FROM draft d JOIN participant p ON p.id = d.participant_id
-         WHERE p.session_id = $1 AND d.participant_id = $2 AND d.kind = 'EMPATHY'`,
-        [sessionId, participantId],
+        `SELECT d.reopened_at FROM draft d JOIN participant p ON p.session_id = d.session_id AND p.user_id = d.user_id
+         WHERE p.session_id = $1 AND d.user_id = $2 AND d.kind = 'EMPATHY'`,
+        [sessionId, seat.userId],
       )
     )[0]?.reopened_at ?? null;
 
@@ -186,8 +193,9 @@ describeTarget('Edit first on a pre-join draft: the AI opens the revision (work-
       draft: { content: draft, readyToShare: false, version: 2 },
     });
     expect(
-      await run.sql(`SELECT count(*)::int AS n FROM empathy_attempt WHERE author_participant_id = $1`, [
-        adaParticipant,
+      await run.sql(`SELECT count(*)::int AS n FROM empathy_attempt WHERE session_id = $1 AND author_user_id = $2`, [
+        adaParticipant.sessionId,
+        adaParticipant.userId,
       ]),
     ).toEqual([{ n: 0 }]);
 
@@ -201,7 +209,7 @@ describeTarget('Edit first on a pre-join draft: the AI opens the revision (work-
     // The next draft write — the chat turn's autosave of the AI's proposal (the
     // original as is, here) — clears the marker; a later Edit first finds nothing.
     const { saveEmpathyDraft } = await import('../empathy-draft-save');
-    expect((await saveEmpathyDraft({ participantId: adaParticipant, content: draft })).status).toBe('saved');
+    expect((await saveEmpathyDraft({ seat: adaParticipant, content: draft })).status).toBe('saved');
     expect(await reopenedAtOf(sessionId, adaParticipant)).toBeNull();
     expect((await draftOf(sessionId)).awaitingRevision).toBe(false);
     const late = await http(ada, 'post', `/sessions/${sessionId}/empathy/draft/edit-first`, {});
@@ -214,13 +222,13 @@ describeTarget('Edit first on a pre-join draft: the AI opens the revision (work-
     expect((await http(ola, 'post', `/invitations/${s.invitationId}/accept`)).status).toBe(200);
     // After the join, no Edit first: the chat turn's autosave of the AI's proposal…
     const { saveEmpathyDraft } = await import('../empathy-draft-save');
-    const saved = await saveEmpathyDraft({ participantId: s.adaParticipant, content: 'Ola may be worn out.' });
+    const saved = await saveEmpathyDraft({ seat: s.adaParticipant, content: 'Ola may be worn out.' });
     expect(saved.status).toBe('saved');
     if (saved.status !== 'saved') return;
     // …and that turn's AI row in the same millisecond (as a local DB often does).
     const [conv] = await run.sql<{ id: string }>(
-      `SELECT id FROM conversation WHERE participant_id = $1 AND kind = 'MAIN'`,
-      [s.adaParticipant],
+      `SELECT id FROM conversation WHERE session_id = $1 AND user_id = $2 AND kind = 'MAIN'`,
+      [s.adaParticipant.sessionId, s.adaParticipant.userId],
     );
     const { createFacilitatorMessage } = await import('../message-store');
     await createFacilitatorMessage({
@@ -267,8 +275,9 @@ describeTarget('Edit first on a pre-join draft: the AI opens the revision (work-
     const before = await messageCounts(s.adaParticipant);
 
     // A fresh marker with no opener: the generation may still be running — nothing is written.
-    await run.sql(`UPDATE draft SET reopened_at = now() WHERE participant_id = $1 AND kind = 'EMPATHY'`, [
-      s.adaParticipant,
+    await run.sql(`UPDATE draft SET reopened_at = now() WHERE session_id = $1 AND user_id = $2 AND kind = 'EMPATHY'`, [
+      s.adaParticipant.sessionId,
+      s.adaParticipant.userId,
     ]);
     expect((await draftOf(s.sessionId)).awaitingRevision).toBe(true);
     const fresh = await http(ada, 'post', `/sessions/${s.sessionId}/empathy/draft/edit-first`, {});
@@ -278,8 +287,8 @@ describeTarget('Edit first on a pre-join draft: the AI opens the revision (work-
     // Older than the generation could take (the process died): the next read
     // writes the template, and only once — concurrent reads and Edit first included.
     await run.sql(
-      `UPDATE draft SET reopened_at = now() - interval '10 minutes' WHERE participant_id = $1 AND kind = 'EMPATHY'`,
-      [s.adaParticipant],
+      `UPDATE draft SET reopened_at = now() - interval '10 minutes' WHERE session_id = $1 AND user_id = $2 AND kind = 'EMPATHY'`,
+      [s.adaParticipant.sessionId, s.adaParticipant.userId],
     );
     const [r1, r2, e1] = await Promise.all([
       http(ada, 'get', `/sessions/${s.sessionId}/empathy/draft`),
@@ -301,8 +310,8 @@ describeTarget('Edit first on a pre-join draft: the AI opens the revision (work-
     const rae = { id: randomUuidV7(), email: `rae-9309-${process.pid}@e2e.test` };
     await http(ada, 'post', `/sessions/${s.sessionId}/empathy/draft`, { content: 'Rae is tired.' });
     await run.sql(
-      `UPDATE draft SET reopened_at = '2026-11-01T10:00:00Z' WHERE participant_id = $1 AND kind = 'EMPATHY'`,
-      [s.adaParticipant],
+      `UPDATE draft SET reopened_at = '2026-11-01T10:00:00Z' WHERE session_id = $1 AND user_id = $2 AND kind = 'EMPATHY'`,
+      [s.adaParticipant.sessionId, s.adaParticipant.userId],
     );
     expect((await http(rae, 'post', `/invitations/${s.invitationId}/accept`)).status).toBe(200);
     expect((await reopenedAtOf(s.sessionId, s.adaParticipant))?.toISOString()).toBe('2026-11-01T10:00:00.000Z');
@@ -406,16 +415,17 @@ describeTarget('Edit first on a pre-join draft: the AI opens the revision (work-
       timeZone: 'UTC"; DROP',
     });
     expect(bad.status).toBe(400);
-    await run.sql(`DELETE FROM participant_milestone WHERE participant_id = $1 AND milestone_key = 'feel_heard'`, [
-      adaParticipant,
-    ]);
+    await run.sql(
+      `DELETE FROM participant_milestone WHERE session_id = $1 AND user_id = $2 AND milestone_key = 'feel_heard'`,
+      [adaParticipant.sessionId, adaParticipant.userId],
+    );
     const early = await http(ada, 'post', `/sessions/${sessionId}/empathy/draft/edit-first`, {});
     expect(early.status).toBe(400);
     expect(early.body.error.message).toMatch(/stage 2 is required/);
     // The review is still pending: nothing changed.
     await run.sql(
-      `INSERT INTO participant_milestone (participant_id, milestone_key, user_id, session_id) VALUES ($1::uuid, 'feel_heard', (SELECT p.user_id FROM participant p WHERE p.id = $1::uuid), (SELECT p.session_id FROM participant p WHERE p.id = $1::uuid))`,
-      [adaParticipant],
+      `INSERT INTO participant_milestone (session_id, user_id, milestone_key) VALUES ($1::uuid, $2::uuid, 'feel_heard')`,
+      [adaParticipant.sessionId, adaParticipant.userId],
     );
     expect((await draftOf(sessionId)).preJoinReview).not.toBeNull();
   });

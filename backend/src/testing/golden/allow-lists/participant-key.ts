@@ -78,3 +78,72 @@ export const PARTICIPANT_KEY_6A_BASELINES: Record<string, string> = {
     "decline's consent (written with the subject's seat). The author's reads are unchanged but for the direction's " +
     'status, as recorded.',
 };
+
+/**
+ * work-k5fk.3, step 6b (design note §7 row 6b): participant's key is
+ * (session_id, user_id); participant.id, every *_participant_id column and
+ * the id foreign keys are gone, and participant.kind is the user's kind
+ * pinned by FOREIGN KEY (user_id, kind) REFERENCES "user" (id, kind). Again
+ * no baseline is re-recorded and NO rule is added.
+ *
+ * Why nothing moves, in every baseline alike:
+ *   - the `old_concept_*` views keep the old vocabulary's participant ids by
+ *     deriving each as md5('participant:' || session_id || ':' || user_id),
+ *     the formula current-shape.sql already uses for its participant rows, so
+ *     a concept row, its order and its `<participant:…>` label are what they
+ *     were; the concept comparison and changesMapped see the same values;
+ *   - byte-level labels (normalize.ts labelTargetRows) take a row's owner from
+ *     its user column rather than through participant.id: the same
+ *     `<user:…>` owner label as before;
+ *   - the writers name a seat by (session_id, user_id) in the INSERT instead
+ *     of a participant id: the relations they touch are the ones already in
+ *     the trace image (participant, conversation, empathy_attempt,
+ *     v_co_participant), so no new relation;
+ *   - no HTTP body changes: the API never returned a participant id (verified
+ *     again on this branch: 0 hits in mobile/; the one shared/ hit was a
+ *     stored payload key, now sourceUserId).
+ *
+ * Measured: the golden suite passed on the 6b schema with the 16 templates
+ * rebuilt (manifests equal to 6a's but for ids and builtAt); the test-side
+ * edits were the scenarios' own SQL (joins through p.id, seeds naming
+ * participant ids), which now name the user column.
+ */
+
+/** One paragraph per baseline: what 6b changes under its recorded steps, and why it holds. */
+export const PARTICIPANT_KEY_6B_BASELINES: Record<string, string> = {
+  'session-read':
+    'Reads only. Membership is the (session_id, user_id) participant row found by key instead of by id; the ' +
+    'participant and v_co_participant reads it traces are the same relations, and no DTO carried a participant id.',
+  'empathy-reveal':
+    "Bob's draft, consent, attempt, messages and the reveal are written with (session_id, user columns) only; the " +
+    "concept views mint the same participant ids from those columns, so every row's concept image is unchanged. " +
+    'empathy_set_status takes the direction by (session, author, subject).',
+  'reflection-never-crosses':
+    'Two chat messages and a read-state stamp, keyed by sender_user_id / user_id; the audience probes read the ' +
+    'user columns directly (test SQL), and the reflection never reaches Bob exactly as before.',
+  'unrevealed-attempt-hidden':
+    'Attempt moves are UPDATEs of status columns; the reconciler result and share offer name their subject by ' +
+    'subject_user_id under the session key. What the subject may read is decided by the same participant rows.',
+  'reveal-all-ready-ada-first':
+    'As empathy-reveal, in Ada-first order: one delivered copy per subject conversation (reveal-checks, now reading ' +
+    'the user columns).',
+  'reveal-all-ready-bob-first': 'As ada-first in Bob-first order: no column the concept views project changes value.',
+  'needs-hidden-until-shared':
+    'Consents, messages and milestones keyed by (session_id, user_id); app.need_share copies the need owner by key. ' +
+    "The scenario's needIdsOf and unread probe read the user column directly (test SQL); labels and evidence " +
+    'probes unchanged.',
+  'choices-hidden-until-shared':
+    "proposal_choice's key is (proposal_id, session_id, user_id); upsertChoice conflicts on it. The selection " +
+    "probes filter by the chooser's seat, and the closure probe's need/consent seeds name Bob's seat (test SQL).",
+  tombstone:
+    'The account walk calls app.anonymize_user_in_session(session, user) per seat and deletes the leaver rows by ' +
+    '(session_id, user_id): the same rows the old participant-id walk found; the GLOBAL_FACTS ai_memory row (no ' +
+    'session) is keyed by user alone. Seeds and walk rules name the user column (test SQL); the recorded user-row ' +
+    'change is unchanged.',
+  'author-sees-status-only':
+    "The author's draft, read-state stamp and messages, written by seat; v_empathy_direction_status exposes " +
+    'author_user_id / subject_user_id, which no recorded body returns.',
+  'declined-offer-no-trace':
+    "The decline's offer UPDATE, attempt move and consent, as in 6a; the scenario's cleanup joins the attempt's " +
+    'author_user_id directly (test SQL).',
+};

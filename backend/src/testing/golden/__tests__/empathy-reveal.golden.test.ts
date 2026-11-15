@@ -291,10 +291,9 @@ describe(`golden: ${SCENARIO}`, () => {
             await withClient(
               harness.fixture.target,
               c =>
-                c.query<{ user_id: string }>(
-                  `SELECT p.user_id FROM conversation c JOIN participant p ON p.id = c.participant_id WHERE c.id = $1`,
-                  [m.conversation_id],
-                ),
+                c.query<{ user_id: string }>(`SELECT c.user_id FROM conversation c WHERE c.id = $1`, [
+                  m.conversation_id,
+                ]),
               harness.fixture.database,
             )
           ).rows[0]?.user_id
@@ -351,8 +350,8 @@ describe(`golden: ${SCENARIO}`, () => {
         (
           await c.query<{ reached: Date; submitted: Date }>(
             `SELECT pm.reached_at AS reached, a.submitted_at AS submitted
-             FROM participant_milestone pm JOIN participant p ON p.id = pm.participant_id JOIN "user" u ON u.id = p.user_id
-             JOIN empathy_attempt a ON a.author_participant_id = p.id
+             FROM participant_milestone pm JOIN "user" u ON u.id = pm.user_id
+             JOIN empathy_attempt a ON a.session_id = pm.session_id AND a.author_user_id = pm.user_id
              WHERE u.email = 'bob@e2e.test' AND pm.milestone_key = 'empathy_submitted'`,
           )
         ).rows,

@@ -53,13 +53,13 @@ describeTarget('Stage 4 capture on the target (mwf_app, identity-bound)', () => 
   };
   const proposals = () =>
     run.sql<P>(
-      `SELECT id, description, kind::text AS kind, status::text AS status, created_by_participant_id AS owner, duration
+      `SELECT id, description, kind::text AS kind, status::text AS status, created_by_user_id AS owner, duration
        FROM proposal WHERE session_id = $1 ORDER BY created_at, id`,
       [ids.session],
     );
   const revisions = (proposalId: string) =>
     run.sql<{ action: string; actor: string }>(
-      `SELECT action::text AS action, actor_participant_id AS actor FROM proposal_revision WHERE proposal_id = $1 ORDER BY created_at, id`,
+      `SELECT action::text AS action, actor_user_id AS actor FROM proposal_revision WHERE proposal_id = $1 ORDER BY created_at, id`,
       [proposalId],
     );
 
@@ -83,9 +83,9 @@ describeTarget('Stage 4 capture on the target (mwf_app, identity-bound)', () => 
       description: 'send a Sunday planning text each week for a month',
       kind: 'INDIVIDUAL_COMMITMENT',
       status: 'ACTIVE',
-      owner: ids.ada,
+      owner: ids.adaUser,
     });
-    expect(await revisions(added[0].id)).toEqual([{ action: 'CREATED', actor: ids.ada }]);
+    expect(await revisions(added[0].id)).toEqual([{ action: 'CREATED', actor: ids.adaUser }]);
   });
 
   it('observations, caveats, topic-frame restatements and an empty typed block write nothing', async () => {
@@ -159,12 +159,12 @@ describeTarget('Stage 4 capture on the target (mwf_app, identity-bound)', () => 
     });
     expect(result.appliedOperationCount).toBe(1);
     const [row] = await run.sql<{ status: string; by: string; reason: string }>(
-      `SELECT status::text AS status, removed_by_participant_id AS by, removal_reason AS reason FROM proposal WHERE id = $1`,
+      `SELECT status::text AS status, removed_by_user_id AS by, removal_reason AS reason FROM proposal WHERE id = $1`,
       [target.id],
     );
     expect(row).toEqual({
       status: 'REMOVED',
-      by: ids.ada,
+      by: ids.adaUser,
       reason: 'Please remove the proposal "Use a pause phrase when either person starts to shut down".',
     });
     expect((await revisions(target.id)).map(r => r.action)).toContain('REMOVED');

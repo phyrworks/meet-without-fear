@@ -74,8 +74,8 @@ describeTarget('mwf_app grants (target)', () => {
     ).toBe('42501');
     expect(
       await asApp(
-        `INSERT INTO participant_key (participant_id, key_id, wrapped_dek, user_id, session_id) VALUES ($1::uuid, 'k', '\\x00', (SELECT p.user_id FROM participant p WHERE p.id = $1::uuid), (SELECT p.session_id FROM participant p WHERE p.id = $1::uuid))`,
-        [ids.ada],
+        `INSERT INTO participant_key (key_id, wrapped_dek, user_id, session_id) VALUES ('k', '\\x00', $1::uuid, $2::uuid)`,
+        [ids.adaUser, ids.session],
       ),
     ).toBe('42501');
     expect(
@@ -90,8 +90,8 @@ describeTarget('mwf_app grants (target)', () => {
 
   it('mwf_app cannot UPDATE a message — not even its own — and holds UPDATE on no message column', async () => {
     const [own] = await run.sql<{ id: string }>(
-      `SELECT m.id FROM message m WHERE m.sender_participant_id = $1 ORDER BY m.created_at LIMIT 1`,
-      [ids.ada],
+      `SELECT m.id FROM message m WHERE m.session_id = $1 AND m.sender_user_id = $2 ORDER BY m.created_at LIMIT 1`,
+      [ids.session, ids.adaUser],
     );
     expect(own).toBeDefined();
     expect(await asApp(`UPDATE message SET content = content WHERE id = $1`, [own.id])).toBe('42501');
@@ -113,27 +113,32 @@ describeTarget('mwf_app grants (target)', () => {
 
   it('a column outside the grant is refused: mwf_app cannot write user.deleted_at or participant.left_at', async () => {
     expect(await asApp(`UPDATE "user" SET deleted_at = now() WHERE id = $1`, [ids.adaUser])).toBe('42501');
-    expect(await asApp(`UPDATE participant SET left_at = now() WHERE id = $1`, [ids.ada])).toBe('42501');
+    expect(
+      await asApp(`UPDATE participant SET left_at = now() WHERE session_id = $1 AND user_id = $2`, [
+        ids.session,
+        ids.adaUser,
+      ]),
+    ).toBe('42501');
   });
 
   describe('message rows mwf_app may write (t_message_app_insert / t_message_app_delete, review M2)', () => {
     let adaConv: string;
     let bobConv: string;
     beforeAll(async () => {
-      const convs = await run.sql<{ participant_id: string; id: string }>(
-        `SELECT participant_id, id FROM conversation WHERE participant_id IN ($1, $2) AND kind = 'MAIN'`,
-        [ids.ada, ids.bob],
+      const convs = await run.sql<{ user_id: string; id: string }>(
+        `SELECT user_id, id FROM conversation WHERE session_id = $1 AND user_id IN ($2, $3) AND kind = 'MAIN'`,
+        [ids.session, ids.adaUser, ids.bobUser],
       );
-      adaConv = convs.find(c => c.participant_id === ids.ada)!.id;
-      bobConv = convs.find(c => c.participant_id === ids.bob)!.id;
+      adaConv = convs.find(c => c.user_id === ids.adaUser)!.id;
+      bobConv = convs.find(c => c.user_id === ids.bobUser)!.id;
     });
     const insert = (user: string | null, conv: string, sender: string, role: string, kind: string) =>
       run
         .as<{ id: string }>(
           'mwf_app',
           user,
-          `INSERT INTO message (conversation_id, sender_participant_id, role, kind, content, sender_user_id, session_id)
-           VALUES ($1::uuid, $2::uuid, $3::message_role, $4::message_kind, 'x', (SELECT p.user_id FROM participant p WHERE p.id = $2::uuid), (SELECT x.session_id FROM conversation x WHERE x.id = $1::uuid)) RETURNING id`,
+          `INSERT INTO message (conversation_id, role, kind, content, sender_user_id, session_id)
+           VALUES ($1::uuid, $3::message_role, $4::message_kind, 'x', $2::uuid, (SELECT x.session_id FROM conversation x WHERE x.id = $1::uuid)) RETURNING id`,
           [conv, sender, role, kind],
         )
         .then(
@@ -147,20 +152,20 @@ describeTarget('mwf_app grants (target)', () => {
       );
 
     it('INSERT: own USER CHAT / EMPATHY_STATEMENT only; never an AI/SYSTEM row or a delivered kind', async () => {
-      expect(await insert(ids.adaUser, adaConv, ids.ada, 'USER', 'CHAT')).toMatch(/^[0-9a-f-]{36}$/);
-      expect(await insert(ids.adaUser, adaConv, ids.ada, 'USER', 'EMPATHY_STATEMENT')).toMatch(/^[0-9a-f-]{36}$/);
-      expect(await insert(ids.adaUser, adaConv, ids.ada, 'AI', 'CHAT')).toBe('42501');
-      expect(await insert(ids.adaUser, adaConv, ids.ada, 'USER', 'SHARED_CONTEXT')).toBe('42501');
+      expect(await insert(ids.adaUser, adaConv, ids.adaUser, 'USER', 'CHAT')).toMatch(/^[0-9a-f-]{36}$/);
+      expect(await insert(ids.adaUser, adaConv, ids.adaUser, 'USER', 'EMPATHY_STATEMENT')).toMatch(/^[0-9a-f-]{36}$/);
+      expect(await insert(ids.adaUser, adaConv, ids.adaUser, 'AI', 'CHAT')).toBe('42501');
+      expect(await insert(ids.adaUser, adaConv, ids.adaUser, 'USER', 'SHARED_CONTEXT')).toBe('42501');
     });
 
     it("INSERT: never into the partner's conversation, nor as the partner", async () => {
-      expect(await insert(ids.adaUser, bobConv, ids.ada, 'USER', 'CHAT')).toBe('42501');
-      expect(await insert(ids.adaUser, bobConv, ids.bob, 'USER', 'CHAT')).toBe('42501');
-      expect(await insert(ids.adaUser, adaConv, ids.bob, 'USER', 'CHAT')).toBe('42501');
+      expect(await insert(ids.adaUser, bobConv, ids.adaUser, 'USER', 'CHAT')).toBe('42501');
+      expect(await insert(ids.adaUser, bobConv, ids.bobUser, 'USER', 'CHAT')).toBe('42501');
+      expect(await insert(ids.adaUser, adaConv, ids.bobUser, 'USER', 'CHAT')).toBe('42501');
     });
 
     it("DELETE: own USER CHAT and a SHARE_SUGGESTION of one's own conversation only", async () => {
-      const own = await insert(ids.adaUser, adaConv, ids.ada, 'USER', 'CHAT');
+      const own = await insert(ids.adaUser, adaConv, ids.adaUser, 'USER', 'CHAT');
       expect(await del(ids.adaUser, own)).toBe('ok');
       const [ai] = await run.sql<{ id: string }>(
         `INSERT INTO message (conversation_id, role, kind, content, session_id) VALUES ($1::uuid, 'AI', 'CHAT', 'x', (SELECT x.session_id FROM conversation x WHERE x.id = $1::uuid)) RETURNING id`,
@@ -177,13 +182,13 @@ describeTarget('mwf_app grants (target)', () => {
       );
       expect(await del(ids.adaUser, bobsSuggestion.id)).toBe('42501');
       expect(await del(ids.adaUser, suggestion.id)).toBe('ok');
-      const bobTurn = await insert(ids.bobUser, bobConv, ids.bob, 'USER', 'CHAT');
+      const bobTurn = await insert(ids.bobUser, bobConv, ids.bobUser, 'USER', 'CHAT');
       expect(await del(ids.adaUser, bobTurn)).toBe('42501');
     });
 
     it('FINDING: with no identity bound, whose conversation it is cannot be checked — only the row shape', async () => {
-      expect(await insert(null, bobConv, ids.bob, 'USER', 'CHAT')).toMatch(/^[0-9a-f-]{36}$/);
-      expect(await insert(null, bobConv, ids.bob, 'AI', 'CHAT')).toBe('42501');
+      expect(await insert(null, bobConv, ids.bobUser, 'USER', 'CHAT')).toMatch(/^[0-9a-f-]{36}$/);
+      expect(await insert(null, bobConv, ids.bobUser, 'AI', 'CHAT')).toBe('42501');
     });
   });
 

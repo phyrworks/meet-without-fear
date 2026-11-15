@@ -393,7 +393,7 @@ describe('applyFieldEncryption — model operations', () => {
           id: 'c',
           messages: [{ id: 'm', content: encrypt('hello'), senderParticipant: null }],
           participant: {
-            id: 'p',
+            userId: 'p',
             drafts: [{ content: encrypt('draft') }],
             needs: [{ label: encrypt('Safety'), evidence: [encrypt('q')] }],
           },
@@ -404,7 +404,7 @@ describe('applyFieldEncryption — model operations', () => {
       {
         id: 'c',
         messages: [{ id: 'm', content: 'hello', senderParticipant: null }],
-        participant: { id: 'p', drafts: [{ content: 'draft' }], needs: [{ label: 'Safety', evidence: ['q'] }] },
+        participant: { userId: 'p', drafts: [{ content: 'draft' }], needs: [{ label: 'Safety', evidence: ['q'] }] },
       },
     ]);
     const created = await applyFieldEncryption({
@@ -422,8 +422,8 @@ describe('applyFieldEncryption — model operations', () => {
     await expect(
       applyFieldEncryption({ model: 'Milestone', operation: 'findFirst', args: {}, query: async () => row, relations }),
     ).resolves.toEqual(row);
-    await run('ParticipantMilestone', 'create', { data: { participantId: 'p', milestoneKey: 'feel_heard' } });
-    expect(captured[0]).toEqual({ data: { participantId: 'p', milestoneKey: 'feel_heard' } });
+    await run('ParticipantMilestone', 'create', { data: { sessionId: 's', userId: 'u', milestoneKey: 'feel_heard' } });
+    expect(captured[0]).toEqual({ data: { sessionId: 's', userId: 'u', milestoneKey: 'feel_heard' } });
   });
 
   it('propagates a decryption failure inside a findMany batch', async () => {
