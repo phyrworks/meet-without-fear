@@ -33,7 +33,7 @@ import {
 } from '../services/realtime';
 import { successResponse, errorResponse } from '../utils/response';
 import { getPartnerUserId, isSessionCreator, departedParticipantUsers } from '../utils/session';
-import { getCoParticipants, getPartnerParticipant, seatOf } from '../services/participant-resolver';
+import { getCoParticipants, getPartnerParticipant, seatOf, type Seat } from '../services/participant-resolver';
 import { pingStage2Refresh } from '../services/empathy-realtime';
 import {
   loadMilestones,
@@ -93,7 +93,7 @@ export async function getSession(req: Request, res: Response): Promise<void> {
       : ((await pendingInviteeNames([sessionId], user.id)).get(sessionId) ?? null);
 
     // Current progress (stage shim)
-    const state = (await loadStageStates([{ id: participant.id, joinedAt: participant.joinedAt }])).get(participant.id);
+    const state = (await loadStageStates([participant])).get(participant);
     const currentProgress = progressDTO(state, { milestones: 'none' });
 
     // A partner who left (account deletion, leaving) shows no name (TS-12, R5).
@@ -171,12 +171,12 @@ export async function pauseSession(req: Request, res: Response): Promise<void> {
     const now = new Date();
     const present = await prisma.participant.findMany({
       where: { sessionId, leftAt: null },
-      select: { id: true },
+      select: { sessionId: true, userId: true },
     });
-    for (const p of present) await reachMilestone(p.id, 'paused', now);
+    for (const p of present) await reachMilestone(p, 'paused', now);
 
     // Notify partner
-    const partner = await getPartnerParticipant(participant.id);
+    const partner = await getPartnerParticipant(participant);
     if (partner?.userId) {
       await notifyPartner(sessionId, partner.userId, 'session.paused', {
         pausedBy: user.id,
@@ -223,12 +223,12 @@ export async function resumeSession(req: Request, res: Response): Promise<void> 
     }
 
     await getJobPrisma().participantMilestone.deleteMany({
-      where: { milestoneKey: 'paused', participant: { sessionId } },
+      where: { milestoneKey: 'paused', sessionId },
     });
     const now = new Date();
 
     // Notify partner
-    const partner = await getPartnerParticipant(participant.id);
+    const partner = await getPartnerParticipant(participant);
     if (partner?.userId) {
       await notifyPartner(sessionId, partner.userId, 'session.resumed', {
         resumedBy: user.id,
@@ -272,13 +272,14 @@ export async function getProgress(req: Request, res: Response): Promise<void> {
     // map (participant_milestone, key → reachedAt): every milestone for the
     // caller; for the partner only what the old gate JSON exposed
     // (PARTNER_VISIBLE_MILESTONES).
-    const partner = await getPartnerParticipant(participant.id);
+    const partner = await getPartnerParticipant(participant);
+    const partnerSeat = partner ? { sessionId, userId: partner.userId } : null;
     const states = await loadStageStates([
-      { id: participant.id, joinedAt: participant.joinedAt },
-      ...(partner ? [{ id: partner.participantId, joinedAt: partner.joinedAt }] : []),
+      participant,
+      ...(partner && partnerSeat ? [{ ...partnerSeat, joinedAt: partner.joinedAt }] : []),
     ]);
-    const myState = states.get(participant.id);
-    const partnerState = partner ? states.get(partner.participantId) : undefined;
+    const myState = states.get(participant);
+    const partnerState = partnerSeat ? states.get(partnerSeat) : undefined;
 
     const myProgress = progressDTO(myState, { milestones: 'own' });
     const partnerProgress = progressDTO(partnerState, { milestones: 'partner' });
@@ -348,9 +349,9 @@ export async function resolveSession(req: Request, res: Response): Promise<void>
     await getJobPrisma().$executeRaw`SELECT app.session_set_status(${sessionId}::uuid, 'RESOLVED'::session_status)`;
     const present = await prisma.participant.findMany({
       where: { sessionId, kind: 'human', leftAt: null },
-      select: { id: true },
+      select: { sessionId: true, userId: true },
     });
-    for (const p of present) await reachMilestone(p.id, 'closed', now);
+    for (const p of present) await reachMilestone(p, 'closed', now);
 
     // Notify partner
     const partnerId = await getPartnerUserId(sessionId, user.id);
@@ -416,7 +417,7 @@ export async function advanceStage(req: Request, res: Response): Promise<void> {
       return;
     }
 
-    const state = (await loadStageStates([{ id: participant.id, joinedAt: participant.joinedAt }])).get(participant.id);
+    const state = (await loadStageStates([participant])).get(participant);
     const current = progressDTO(state, { milestones: 'own' });
     const currentStage = current.stage;
 
@@ -498,7 +499,7 @@ export async function getInvitation(req: Request, res: Response): Promise<void> 
         acceptedAt: invitation.acceptedAt?.toISOString() ?? null,
         status: invitation.status,
         expiresAt: invitation.expiresAt.toISOString(),
-        isInviter: invitation.invitedByParticipantId === participant.id,
+        isInviter: invitation.invitedByUserId === participant.userId,
         topicFrame: session.topicFrame ?? null,
         topicFrameConfirmedAt: session.topicFrameConfirmedAt?.toISOString() ?? null,
       },
@@ -538,7 +539,7 @@ export async function confirmInvitationMessage(req: Request, res: Response): Pro
 
     // The invitation this participant sent
     const invitation = await prisma.invitation.findFirst({
-      where: { sessionId, invitedByParticipantId: participant.id },
+      where: { sessionId, invitedByUserId: participant.userId },
       orderBy: { createdAt: 'desc' },
     });
     if (!invitation) {
@@ -550,7 +551,7 @@ export async function confirmInvitationMessage(req: Request, res: Response): Pro
     // inviter already sent it (invitation_sent). message_confirmed_at alone is
     // not enough: confirmTopicFrame sets it eagerly so the partner can accept
     // the link before the inviter closes the share modal.
-    const milestones = (await loadMilestones([participant.id])).get(participant.id) ?? [];
+    const milestones = (await loadMilestones([participant])).get(participant) ?? [];
     if (invitation.messageConfirmedAt && milestones.some(m => m.key === 'invitation_sent')) {
       successResponse(res, {
         confirmed: true,
@@ -584,8 +585,8 @@ export async function confirmInvitationMessage(req: Request, res: Response): Pro
     }
 
     // Stage 0 complete: compact signed (if not yet) and invitation sent.
-    await reachMilestone(participant.id, 'compact_signed', now);
-    await reachMilestone(participant.id, 'invitation_sent', now);
+    await reachMilestone(participant, 'compact_signed', now);
+    await reachMilestone(participant, 'invitation_sent', now);
 
     // Proactive transition message from the AI, from this participant's own
     // conversation (summary-aware: only messages after the summary boundary).
@@ -610,7 +611,7 @@ export async function confirmInvitationMessage(req: Request, res: Response): Pro
     // Includes userId to differentiate between users in the same session
     const turnId = `${sessionId}-${user.id}-invitation-confirm`;
     // Update request context so all downstream code can access this turnId
-    updateContext({ turnId, sessionId, userId: user.id, participantId: participant.id });
+    updateContext({ turnId, sessionId, userId: user.id, seated: true });
 
     // Build AI context for transition
     const aiContext: FullAIContext = {
@@ -662,7 +663,7 @@ export async function confirmInvitationMessage(req: Request, res: Response): Pro
         ];
 
         const orchestratorResult = await getOrchestratedResponse(historyWithTrigger, aiContext);
-        if (!conversationId) throw new Error(`Participant ${participant.id} has no MAIN conversation`);
+        if (!conversationId) throw new Error(`Participant (${sessionId}, ${user.id}) has no MAIN conversation`);
 
         const aiMessage = await createFacilitatorMessage({
           conversationId,
@@ -745,10 +746,9 @@ export async function markSessionViewed(req: Request, res: Response): Promise<vo
         : null;
 
     const readState = await prisma.conversationReadState.upsert({
-      where: { participantId: participant.id },
+      where: { sessionId_userId: seatOf(participant) },
       update: { lastViewedAt: now, lastActiveAt: now, lastSeenMessageId: seenMessage?.id ?? null },
       create: {
-        participantId: participant.id,
         ...seatOf(participant),
         lastViewedAt: now,
         lastActiveAt: now,
@@ -775,7 +775,7 @@ export async function markSessionViewed(req: Request, res: Response): Promise<vo
           },
           user.id,
         );
-        await pingCoParticipants(sessionId, participant.id);
+        await pingCoParticipants(participant);
       } catch (err) {
         logger.error('[markSessionViewed] Failed to publish session_viewed event:', err);
       }
@@ -797,9 +797,9 @@ export async function markSessionViewed(req: Request, res: Response): Promise<vo
  * (R36): their client invalidates and refetches its own empathy status, whose
  * delivery stamps this participant's view may just have moved to SEEN.
  */
-async function pingCoParticipants(sessionId: string, participantId: string): Promise<void> {
-  for (const co of await getCoParticipants(participantId)) {
-    if (co.kind === 'human' && !co.leftAt && co.userId) await pingStage2Refresh(sessionId, co.userId);
+async function pingCoParticipants(seat: Seat): Promise<void> {
+  for (const co of await getCoParticipants(seat)) {
+    if (co.kind === 'human' && !co.leftAt) await pingStage2Refresh(seat.sessionId, co.userId);
   }
 }
 
@@ -838,7 +838,7 @@ export async function markSharedContextViewedHandler(req: Request, res: Response
     }
 
     const now = new Date();
-    const result = await markSharedContextViewed(participant.id, messageId, now);
+    const result = await markSharedContextViewed(participant, messageId, now);
     if (result.status === 'not_found') {
       errorResponse(res, ErrorCode.NOT_FOUND, 'Shared context not found', 404);
       return;
@@ -863,7 +863,7 @@ export async function markSharedContextViewedHandler(req: Request, res: Response
             },
             user.id,
           );
-          await pingCoParticipants(sessionId, participant.id);
+          await pingCoParticipants(participant);
         } catch (err) {
           logger.error('[markSharedContextViewed] Failed to publish share_tab_viewed event:', err);
         }
@@ -901,9 +901,9 @@ export async function getUnreadSessionCount(req: Request, res: Response): Promis
     const rows = await prisma.$queryRaw<Array<{ n: bigint }>>`
       SELECT count(*) AS n
       FROM v_conversation_unread u
-      JOIN participant p ON p.id = u.participant_id
+      JOIN participant p ON p.session_id = u.session_id AND p.user_id = u.user_id
       JOIN session s ON s.id = p.session_id
-      LEFT JOIN conversation_read_state r ON r.participant_id = p.id
+      LEFT JOIN conversation_read_state r ON r.session_id = p.session_id AND r.user_id = p.user_id
       WHERE p.user_id = ${user.id}::uuid AND p.left_at IS NULL
         AND s.status IN ('ACTIVE', 'INVITED', 'CREATED')
         AND r.archived_at IS NULL

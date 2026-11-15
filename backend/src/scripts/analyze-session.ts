@@ -49,9 +49,9 @@ async function analyzeSession() {
 
   const participants = await prisma.participant.findMany({
     where: { sessionId },
-    orderBy: [{ joinedAt: 'asc' }, { id: 'asc' }],
+    orderBy: [{ joinedAt: 'asc' }, { userId: 'asc' }],
     select: {
-      id: true,
+      sessionId: true,
       userId: true,
       kind: true,
       displayName: true,
@@ -60,15 +60,16 @@ async function analyzeSession() {
       user: { select: { name: true } },
     },
   });
+  // By user id: every participant here is of this one session.
   const names: Record<string, string> = {};
-  for (const p of participants) names[p.id] = p.displayName || p.user?.name || p.userId || p.id;
-  const nameOf = (participantId: string | null | undefined) => (participantId && names[participantId]) || 'Unknown';
+  for (const p of participants) names[p.userId] = p.displayName || p.user?.name || p.userId;
+  const nameOf = (userId: string | null | undefined) => (userId && names[userId]) || 'Unknown';
 
   console.log('\n## PARTICIPANTS');
   console.log('-'.repeat(40));
   for (const p of participants) {
     console.log(
-      `  ${names[p.id]}: participant ${p.id} (user ${p.userId ?? '—'}, ${p.kind}${p.leftAt ? `, left ${p.leftAt.toISOString()}` : ''})`,
+      `  ${names[p.userId]}: participant (user ${p.userId}, ${p.kind}${p.leftAt ? `, left ${p.leftAt.toISOString()}` : ''})`,
     );
   }
 
@@ -80,10 +81,10 @@ async function analyzeSession() {
   // Stage progress, reconstructed from milestones (stage shim)
   console.log('\n## STAGE PROGRESS (from milestones)');
   console.log('-'.repeat(40));
-  const states = await loadStageStates(participants.map(p => ({ id: p.id, joinedAt: p.joinedAt })));
+  const states = await loadStageStates(participants);
   for (const p of participants) {
-    const state = states.get(p.id);
-    console.log(`\n  ${names[p.id]}: current stage ${state?.current.stage ?? 0}`);
+    const state = states.get(p);
+    console.log(`\n  ${names[p.userId]}: current stage ${state?.current.stage ?? 0}`);
     for (const row of state?.rows ?? []) {
       console.log(`    Stage ${row.stage}: ${row.status} (started: ${row.startedAt?.toISOString() || 'N/A'})`);
     }
@@ -93,9 +94,9 @@ async function analyzeSession() {
   // Drafts
   console.log('\n## DRAFTS');
   console.log('-'.repeat(40));
-  const drafts = await prisma.draft.findMany({ where: { participant: { sessionId } }, orderBy: { updatedAt: 'asc' } });
+  const drafts = await prisma.draft.findMany({ where: { sessionId }, orderBy: { updatedAt: 'asc' } });
   for (const draft of drafts) {
-    console.log(`\n  ${nameOf(draft.participantId)}'s ${draft.kind} draft:`);
+    console.log(`\n  ${nameOf(draft.userId)}'s ${draft.kind} draft:`);
     console.log(`    Ready to Share: ${draft.readyToShare}`);
     console.log(`    Version: ${draft.version}`);
     console.log(`    Content: "${draft.content?.substring(0, 80)}..."`);
@@ -106,14 +107,12 @@ async function analyzeSession() {
   console.log('\n## EMPATHY ATTEMPTS (rounds)');
   console.log('-'.repeat(40));
   const attempts = await prisma.empathyAttempt.findMany({
-    where: { authorParticipant: { sessionId } },
+    where: { sessionId },
     include: { reviews: true },
     orderBy: [{ submittedAt: 'asc' }, { round: 'asc' }],
   });
   for (const attempt of attempts) {
-    console.log(
-      `\n  ${nameOf(attempt.authorParticipantId)} → ${nameOf(attempt.subjectParticipantId)}, round ${attempt.round}:`,
-    );
+    console.log(`\n  ${nameOf(attempt.authorUserId)} → ${nameOf(attempt.subjectUserId)}, round ${attempt.round}:`);
     console.log(`    ID: ${attempt.id}`);
     console.log(`    Status: ${attempt.status} (v${attempt.statusVersion})`);
     console.log(`    Delivery: ${attempt.deliveryStatus}`);
@@ -124,7 +123,7 @@ async function analyzeSession() {
     console.log(`    Seen At: ${attempt.seenAt?.toISOString() || 'N/A'}`);
     for (const v of attempt.reviews) {
       console.log(
-        `    Review by ${nameOf(v.reviewerParticipantId)}: validated=${v.validated} at ${v.createdAt.toISOString()}`,
+        `    Review by ${nameOf(v.reviewerUserId)}: validated=${v.validated} at ${v.createdAt.toISOString()}`,
       );
       if (v.feedback) console.log(`      Feedback: "${v.feedback.substring(0, 50)}..."`);
     }
@@ -135,11 +134,10 @@ async function analyzeSession() {
   console.log('-'.repeat(40));
   const results = await prisma.reconcilerResult.findMany({
     where: { attemptId: { in: attempts.map(a => a.id) } },
-    include: { shareOffers: { orderBy: { iteration: 'asc' } }, attempt: { select: { authorParticipantId: true } } },
+    include: { shareOffers: { orderBy: { iteration: 'asc' } }, attempt: { select: { authorUserId: true } } },
     orderBy: { createdAt: 'asc' },
   });
-  const direction = (r: (typeof results)[number]) =>
-    `${nameOf(r.attempt.authorParticipantId)} → ${nameOf(r.subjectParticipantId)}`;
+  const direction = (r: (typeof results)[number]) => `${nameOf(r.attempt.authorUserId)} → ${nameOf(r.subjectUserId)}`;
   for (const result of results) {
     console.log(
       `\n  [${direction(result)}] iteration ${result.iteration}${result.supersededAt ? ' (superseded)' : ''}`,
@@ -170,12 +168,12 @@ async function analyzeSession() {
   console.log('-'.repeat(40));
   const timeline: TimelineEvent[] = [{ timestamp: session.createdAt, type: 'SESSION', details: 'Session created' }];
   for (const p of participants) {
-    for (const m of states.get(p.id)?.milestones ?? []) {
-      timeline.push({ timestamp: m.reachedAt, type: 'MILESTONE', actor: names[p.id], details: `Reached ${m.key}` });
+    for (const m of states.get(p)?.milestones ?? []) {
+      timeline.push({ timestamp: m.reachedAt, type: 'MILESTONE', actor: names[p.userId], details: `Reached ${m.key}` });
     }
   }
   for (const attempt of attempts) {
-    const name = nameOf(attempt.authorParticipantId);
+    const name = nameOf(attempt.authorUserId);
     timeline.push({
       timestamp: attempt.submittedAt,
       type: 'EMPATHY',
@@ -194,7 +192,7 @@ async function analyzeSession() {
       timeline.push({
         timestamp: v.createdAt,
         type: 'VALIDATION',
-        actor: nameOf(v.reviewerParticipantId),
+        actor: nameOf(v.reviewerUserId),
         details: `Reviewed ${name}'s round ${attempt.round}: ${v.validated ? 'ACCURATE' : 'INACCURATE'}`,
       });
     }
@@ -206,7 +204,7 @@ async function analyzeSession() {
       details: `Analyzed ${direction(result)}: ${result.recommendedAction} (${result.alignmentScore}%)`,
     });
     for (const offer of result.shareOffers) {
-      const subject = nameOf(offer.subjectParticipantId);
+      const subject = nameOf(offer.subjectUserId);
       timeline.push({
         timestamp: offer.createdAt,
         type: 'SHARE_OFFER',
@@ -233,7 +231,7 @@ async function analyzeSession() {
   // Key messages: AI replies and markers across every participant's conversation
   const keyMessages = await prisma.message.findMany({
     where: {
-      conversation: { participant: { sessionId } },
+      sessionId,
       // message.content is encrypted (TS-13): the `contains` arm matches only on a
       // keyless dev database (dev script; ruling R45, documented only).
       OR: [{ role: 'AI' }, { kind: { not: 'CHAT' } }, { content: { contains: 'feel heard' } }],
@@ -243,16 +241,14 @@ async function analyzeSession() {
       role: true,
       kind: true,
       createdAt: true,
-      senderParticipantId: true,
-      conversation: { select: { participantId: true } },
+      senderUserId: true,
+      conversation: { select: { userId: true } },
     },
     orderBy: { createdAt: 'asc' },
     take: 50,
   });
   for (const msg of keyMessages) {
-    const actor = msg.senderParticipantId
-      ? nameOf(msg.senderParticipantId)
-      : `AI → ${nameOf(msg.conversation.participantId)}`;
+    const actor = msg.senderUserId ? nameOf(msg.senderUserId) : `AI → ${nameOf(msg.conversation.userId)}`;
     timeline.push({
       timestamp: msg.createdAt,
       type: msg.kind === 'CHAT' ? 'MESSAGE' : msg.kind,
@@ -286,7 +282,7 @@ async function analyzeSession() {
         const gapMs = offer.declinedAt.getTime() - offer.createdAt.getTime();
         if (gapMs > 60000) {
           console.log(
-            `  [?] ${nameOf(offer.subjectParticipantId)}'s share offer: created ${offer.createdAt.toISOString()}, declined ${offer.declinedAt.toISOString()} (${Math.round(gapMs / 1000)}s gap)`,
+            `  [?] ${nameOf(offer.subjectUserId)}'s share offer: created ${offer.createdAt.toISOString()}, declined ${offer.declinedAt.toISOString()} (${Math.round(gapMs / 1000)}s gap)`,
           );
           issues++;
         }
@@ -296,7 +292,7 @@ async function analyzeSession() {
   for (const attempt of attempts) {
     if ((attempt.status === 'REVEALED' || attempt.status === 'VALIDATED') && !attempt.revealedAt) {
       console.log(
-        `  [!] ${nameOf(attempt.authorParticipantId)}'s round ${attempt.round}: status ${attempt.status} but no revealedAt`,
+        `  [!] ${nameOf(attempt.authorUserId)}'s round ${attempt.round}: status ${attempt.status} but no revealedAt`,
       );
       issues++;
     }

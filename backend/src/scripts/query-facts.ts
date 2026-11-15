@@ -13,7 +13,8 @@ async function main() {
     select: {
       doc: true,
       updatedAt: true,
-      participant: { select: { userId: true, sessionId: true } },
+      sessionId: true,
+      userId: true,
     },
     orderBy: { updatedAt: 'desc' },
     take: 10,
@@ -22,8 +23,8 @@ async function main() {
   console.log(`Total NOTABLE_FACTS documents found: ${allVessels.length}\n`);
 
   for (const v of allVessels) {
-    console.log(`Session: ${v.participant?.sessionId}`);
-    console.log(`User: ${v.participant?.userId}`);
+    console.log(`Session: ${v.sessionId}`);
+    console.log(`User: ${v.userId}`);
     console.log(`Updated: ${v.updatedAt}`);
     const facts = (v.doc as { facts?: unknown } | null)?.facts;
     if (Array.isArray(facts)) {

@@ -270,7 +270,7 @@ export async function persistTurnState(params: PersistTurnStateParams): Promise<
     metadata.offerReadyToShare &&
     metadata.proposedEmpathyStatement
   ) {
-    const saved = await saveEmpathyDraft({ participantId: participant.id, content: metadata.proposedEmpathyStatement });
+    const saved = await saveEmpathyDraft({ seat: participant, content: metadata.proposedEmpathyStatement });
     if (saved.status === 'no_subject') {
       logger.error(
         `[sendMessageStream:${requestId}] Empathy draft not saved: Stage 2 turn with no partner and no invitation`,

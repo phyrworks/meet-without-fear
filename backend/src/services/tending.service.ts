@@ -3,7 +3,7 @@
  *
  * Old model → target:
  *
- *   TendingEntry                        → follow_up (type, scope, owner_participant_id,
+ *   TendingEntry                        → follow_up (type, scope, owner_user_id,
  *                                         response_deadline_at); ONE follow-up is ONE cycle:
  *                                         a further round (EXTEND, PARTIAL_CLOSURE continuing) is a
  *                                         new follow_up row and the old one COMPLETED
@@ -27,6 +27,8 @@
  *
  * The DTOs (`shared/src/dto/strategy.ts` Tending*) keep their shape: ids are
  * the follow-up / check-in ids, user ids are the participants' user ids.
+ * Within a session a participant IS its user id (the key is (session_id,
+ * user_id) since work-k5fk.3), so rows here name participants by user id.
  */
 
 import {
@@ -70,7 +72,7 @@ import { reencryptForSession } from '../lib/share-moments';
 import { logger } from '../lib/logger';
 import { publishSessionEvent, publishUserEvent } from './realtime';
 import { createFacilitatorMessage } from './message-store';
-import { resolveParticipant } from './participant-resolver';
+import { resolveParticipant, type Seat } from './participant-resolver';
 import { loadAgreements, loadClosure, loadClosureItems, loadProposals, loadStage4Needs } from './stage4-store';
 
 // ============================================================================
@@ -86,7 +88,7 @@ export interface FollowUpRow {
   proposalId: string | null;
   type: FollowUpType;
   scope: 'SHARED' | 'INDIVIDUAL';
-  ownerParticipantId: string | null;
+  ownerUserId: string | null;
   optedInShared: boolean;
   status: 'SCHEDULED' | 'OPEN' | 'PARTIAL' | 'COMPLETED' | 'EXPIRED' | 'CANCELLED';
   scheduledFor: Date | null;
@@ -101,7 +103,7 @@ export interface FollowUpRow {
 export interface CheckinRow {
   id: string;
   followUpId: string;
-  participantId: string;
+  userId: string;
   nextAction: TendingNextAction | null;
   continueChoice: ContinueChoice | null;
   reflectionSummary: string | null;
@@ -138,7 +140,7 @@ const FOLLOW_UP_SELECT = {
   proposalId: true,
   type: true,
   scope: true,
-  ownerParticipantId: true,
+  ownerUserId: true,
   optedInShared: true,
   status: true,
   scheduledFor: true,
@@ -202,16 +204,12 @@ function readPayload(raw: unknown): FollowUpCheckinPayload {
 // Context
 // ============================================================================
 
-interface Viewer {
-  sessionId: string;
-  participantId: string;
-  userId: string;
+/** The caller's participant (a Seat), with what the follow-up paths need of the session. */
+interface Viewer extends Seat {
   sessionStatus: string;
-  /** participant id → user id, for every participant of the session (DTOs carry user ids). */
-  userOf: Map<string, string | null>;
-  /** user id → participant id. */
-  participantOfUser: Map<string, string>;
-  /** Present human participants. */
+  /** Every participant's user id (present or not). */
+  members: string[];
+  /** Present human participants' user ids. */
   humans: string[];
 }
 
@@ -222,34 +220,29 @@ async function viewerFor(sessionId: string, userId: string): Promise<Viewer> {
     prisma.session.findUnique({ where: { id: sessionId }, select: { status: true } }),
     prisma.participant.findMany({
       where: { sessionId },
-      select: { id: true, userId: true, kind: true, leftAt: true },
-      orderBy: [{ joinedAt: 'asc' }, { id: 'asc' }],
+      select: { userId: true, kind: true, leftAt: true },
+      orderBy: [{ joinedAt: 'asc' }, { userId: 'asc' }],
     }),
   ]);
   if (!session) throw new TendingNotFoundError();
   return {
     sessionId,
-    participantId: me.id,
-    userId,
+    userId: me.userId,
     sessionStatus: session.status,
-    userOf: new Map(participants.map(p => [p.id, p.userId])),
-    participantOfUser: new Map(participants.filter(p => p.userId).map(p => [p.userId as string, p.id])),
-    humans: participants.filter(p => p.kind === 'human' && !p.leftAt).map(p => p.id),
+    members: participants.map(p => p.userId),
+    humans: participants.filter(p => p.kind === 'human' && !p.leftAt).map(p => p.userId),
   };
 }
-
-const userIdOf = (v: Viewer, participantId: string | null): string | null =>
-  participantId ? (v.userOf.get(participantId) ?? null) : null;
 
 /**
  * The follow-ups a participant may see (spec RLS: SHARED, their own
  * INDIVIDUAL ones, or an INDIVIDUAL one its owner opted in to share).
  */
-export async function loadFollowUpsForParticipant(sessionId: string, participantId: string): Promise<FollowUpRow[]> {
+export async function loadFollowUpsForParticipant(sessionId: string, seat: Seat): Promise<FollowUpRow[]> {
   return (await prisma.followUp.findMany({
     where: {
       sessionId,
-      OR: [{ scope: 'SHARED' }, { ownerParticipantId: participantId }, { optedInShared: true }],
+      OR: [{ scope: 'SHARED' }, { ownerUserId: seat.userId }, { optedInShared: true }],
     },
     orderBy: [{ scheduledFor: 'asc' }, { createdAt: 'asc' }, { id: 'asc' }],
     select: FOLLOW_UP_SELECT,
@@ -257,18 +250,18 @@ export async function loadFollowUpsForParticipant(sessionId: string, participant
 }
 
 /** Check-ins the viewer may read: their own, and every check-in on a SHARED follow-up. */
-async function loadCheckins(followUpIds: string[], viewerParticipantId: string): Promise<CheckinRow[]> {
+async function loadCheckins(followUpIds: string[], viewer: Seat): Promise<CheckinRow[]> {
   if (followUpIds.length === 0) return [];
   const rows = await prisma.followUpCheckin.findMany({
     where: {
       followUpId: { in: followUpIds },
-      OR: [{ participantId: viewerParticipantId }, { followUp: { scope: 'SHARED' } }],
+      OR: [{ sessionId: viewer.sessionId, userId: viewer.userId }, { followUp: { scope: 'SHARED' } }],
     },
     orderBy: [{ submittedAt: 'asc' }, { id: 'asc' }],
     select: {
       id: true,
       followUpId: true,
-      participantId: true,
+      userId: true,
       nextAction: true,
       continueChoice: true,
       reflectionSummary: true,
@@ -321,7 +314,7 @@ function toResponseDTO(viewer: Viewer, checkin: CheckinRow): TendingResponseDTO 
   return {
     id: checkin.id,
     tendingEntryId: checkin.followUpId,
-    userId: userIdOf(viewer, checkin.participantId) ?? '',
+    userId: checkin.userId,
     checkinId: checkin.id,
     status: (response?.status ?? 'CHECKIN') as TendingResponseStatus,
     reflection: response?.reflection ?? checkin.reflectionSummary,
@@ -336,7 +329,7 @@ function entryOutcomeDTOs(viewer: Viewer, checkin: CheckinRow): TendingEntryOutc
     checkinId: checkin.id,
     tendingEntryId: o.followUpId,
     responseId: checkin.id,
-    userId: userIdOf(viewer, checkin.participantId) ?? '',
+    userId: checkin.userId,
     followThroughStatus: o.followThroughStatus,
     helpfulnessStatus: o.helpfulnessStatus,
     blockerCategories: o.blockerCategories,
@@ -355,7 +348,7 @@ function needOutcomeDTOs(viewer: Viewer, checkin: CheckinRow): TendingNeedOutcom
     sessionId: viewer.sessionId,
     needId: o.needId,
     needLabel: o.needLabel,
-    sourceUserId: userIdOf(viewer, o.sourceParticipantId),
+    sourceUserId: o.sourceUserId,
     resolutionStatus: o.resolutionStatus,
     note: o.note,
     changedNeedLabel: o.changedNeedLabel,
@@ -370,7 +363,7 @@ function adjustmentDTOs(viewer: Viewer, checkin: CheckinRow): TendingAdjustmentD
     sessionId: viewer.sessionId,
     checkinId: checkin.id,
     tendingEntryId: a.followUpId,
-    userId: userIdOf(viewer, checkin.participantId) ?? '',
+    userId: checkin.userId,
     privacyScope: a.privacyScope,
     revisedCommitmentText: a.revisedCommitmentText,
     revisedCadence: a.revisedCadence,
@@ -389,7 +382,7 @@ function toEntryDTO(
   reminders: ReminderRow[],
 ): TendingEntryDTO {
   const onEntry = checkins.filter(c => c.followUpId === entry.id);
-  const mine = onEntry.find(c => c.participantId === viewer.participantId) ?? null;
+  const mine = onEntry.find(c => c.userId === viewer.userId) ?? null;
   const latestOutcome = mine ? (entryOutcomeDTOs(viewer, mine).find(o => o.tendingEntryId === entry.id) ?? null) : null;
   return {
     id: entry.id,
@@ -397,7 +390,7 @@ function toEntryDTO(
     agreementId: entry.agreementId,
     type: toTendingEntryType(entry.type),
     scope: entry.scope as TendingEntryScope,
-    ownerUserId: userIdOf(viewer, entry.ownerParticipantId),
+    ownerUserId: entry.ownerUserId,
     optedInShared: entry.optedInShared,
     status: entry.status as TendingEntryStatus,
     scheduledFor: iso(entry.scheduledFor),
@@ -415,10 +408,7 @@ function toEntryDTO(
 
 async function entryDTOs(viewer: Viewer, entries: FollowUpRow[]): Promise<TendingEntryDTO[]> {
   const ids = entries.map(e => e.id);
-  const [checkins, reminders] = await Promise.all([
-    loadCheckins(ids, viewer.participantId),
-    loadReminders(viewer, ids),
-  ]);
+  const [checkins, reminders] = await Promise.all([loadCheckins(ids, viewer), loadReminders(viewer, ids)]);
   return entries.map(e => toEntryDTO(viewer, e, checkins, reminders));
 }
 
@@ -433,7 +423,7 @@ async function insertFollowUpAsJob(
     proposalId?: string | null;
     type: FollowUpType;
     scope: 'SHARED' | 'INDIVIDUAL';
-    ownerParticipantId?: string | null;
+    ownerUserId?: string | null;
     optedInShared?: boolean;
     status: 'SCHEDULED' | 'OPEN';
     scheduledFor: Date | null;
@@ -443,11 +433,11 @@ async function insertFollowUpAsJob(
   db: JobDb = getJobPrisma(),
 ): Promise<string> {
   const [r] = await db.$queryRaw<Array<{ id: string }>>`
-    INSERT INTO follow_up (session_id, agreement_id, proposal_id, type, scope, owner_participant_id, owner_user_id,
+    INSERT INTO follow_up (session_id, agreement_id, proposal_id, type, scope, owner_user_id,
                            opted_in_shared, status, scheduled_for, response_deadline_at, summary)
     VALUES (${row.sessionId}::uuid, ${row.agreementId ?? null}::uuid, ${row.proposalId ?? null}::uuid,
-            ${row.type}::follow_up_type, ${row.scope}::follow_up_scope, ${row.ownerParticipantId ?? null}::uuid,
-            (SELECT p.user_id FROM participant p WHERE p.id = ${row.ownerParticipantId ?? null}::uuid),
+            ${row.type}::follow_up_type, ${row.scope}::follow_up_scope, ${row.ownerUserId ?? null}::uuid,
+
             ${row.optedInShared ?? false}, ${row.status}::follow_up_status, ${row.scheduledFor},
             ${row.responseDeadlineAt ?? null}, ${encryptColumnValue('follow_up', 'summary', row.summary)})
     RETURNING id`;
@@ -488,7 +478,7 @@ async function scheduleNextRoundAsJob(entry: FollowUpRow, scheduledFor: Date, no
     proposalId: entry.proposalId,
     type: entry.type,
     scope: entry.scope,
-    ownerParticipantId: entry.ownerParticipantId,
+    ownerUserId: entry.ownerUserId,
     optedInShared: entry.optedInShared,
     status: 'SCHEDULED',
     scheduledFor,
@@ -528,7 +518,7 @@ export async function scheduleSharedAgreementTendingEntries(
   return ids;
 }
 
-type IndividualCommitmentForScheduling = { proposalId: string; ownerParticipantId: string; description: string };
+type IndividualCommitmentForScheduling = { proposalId: string; ownerUserId: string; description: string };
 
 export async function scheduleIndividualCommitmentTendingEntries(
   sessionId: string,
@@ -546,7 +536,7 @@ export async function scheduleIndividualCommitmentTendingEntries(
         proposalId: c.proposalId,
         type: 'SCHEDULED_INDIVIDUAL_COMMITMENT',
         scope: 'INDIVIDUAL',
-        ownerParticipantId: c.ownerParticipantId,
+        ownerUserId: c.ownerUserId,
         status: due ? 'OPEN' : 'SCHEDULED',
         scheduledFor,
         summary: `Check in on your individual commitment: ${c.description}`,
@@ -565,13 +555,13 @@ export async function scheduleIndividualCommitmentTendingEntries(
 
 export async function listTendingEntries(sessionId: string, userId: string): Promise<TendingEntryDTO[]> {
   const viewer = await viewerFor(sessionId, userId);
-  return entryDTOs(viewer, await loadFollowUpsForParticipant(sessionId, viewer.participantId));
+  return entryDTOs(viewer, await loadFollowUpsForParticipant(sessionId, viewer));
 }
 
 interface CycleRow {
   followUpId: string;
-  participantIds: string[];
-  submittedParticipantIds: string[];
+  userIds: string[];
+  submittedUserIds: string[];
   waitingOn: string[];
   responseDeadlineAt: Date | null;
   status: TendingCoordinationStatus;
@@ -580,8 +570,8 @@ interface CycleRow {
 /** `v_follow_up_cycle` for the session's follow-ups. */
 async function loadCycles(sessionId: string): Promise<CycleRow[]> {
   return prisma.$queryRaw<CycleRow[]>`
-    SELECT follow_up_id AS "followUpId", participant_ids AS "participantIds",
-           submitted_participant_ids AS "submittedParticipantIds", waiting_on AS "waitingOn",
+    SELECT follow_up_id AS "followUpId", user_ids AS "userIds",
+           submitted_user_ids AS "submittedUserIds", waiting_on AS "waitingOn",
            response_deadline_at AS "responseDeadlineAt", status
     FROM v_follow_up_cycle WHERE session_id = ${sessionId}::uuid`;
 }
@@ -604,14 +594,12 @@ export async function listTendingCoordinationCycles(
   userId: string,
 ): Promise<TendingCoordinationCycleDTO[]> {
   const viewer = await viewerFor(sessionId, userId);
-  const entries = (await loadFollowUpsForParticipant(sessionId, viewer.participantId)).filter(
-    e => e.scope === 'SHARED',
-  );
+  const entries = (await loadFollowUpsForParticipant(sessionId, viewer)).filter(e => e.scope === 'SHARED');
   const byId = new Map(entries.map(e => [e.id, e]));
   const cycles = (await loadCycles(sessionId))
-    .filter(c => byId.has(c.followUpId) && c.participantIds.includes(viewer.participantId))
+    .filter(c => byId.has(c.followUpId) && c.userIds.includes(viewer.userId))
     // A cycle exists once someone has checked in on an opened follow-up.
-    .filter(c => c.submittedParticipantIds.length > 0);
+    .filter(c => c.submittedUserIds.length > 0);
   return cycles
     .map(c => {
       const e = byId.get(c.followUpId)!;
@@ -620,8 +608,9 @@ export async function listTendingCoordinationCycles(
         sessionId,
         status: c.status,
         entryIds: [e.id],
-        participantUserIds: c.participantIds.map(p => userIdOf(viewer, p) ?? '').sort(),
-        submittedUserIds: c.submittedParticipantIds.map(p => userIdOf(viewer, p) ?? '').sort(),
+        participantUserIds: [...c.userIds].sort(),
+        submittedUserIds: [...c.submittedUserIds].sort(),
+
         responseDeadlineAt: (
           c.responseDeadlineAt ?? addDays(e.openedAt ?? e.createdAt, DEFAULT_SHARED_RESPONSE_DEADLINE_DAYS)
         ).toISOString(),
@@ -667,7 +656,7 @@ export async function listTendingBetweenPeriodNotes(
 ): Promise<TendingBetweenPeriodNoteDTO[]> {
   const viewer = await viewerFor(sessionId, userId);
   const notes = await prisma.followUpNote.findMany({
-    where: { participantId: viewer.participantId },
+    where: { sessionId: viewer.sessionId, userId: viewer.userId },
     orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
     include: { carriedIntoCheckin: { select: { submittedAt: true } } },
   });
@@ -685,7 +674,6 @@ export async function createTendingBetweenPeriodNote(args: {
   }
   const note = await prisma.followUpNote.create({
     data: {
-      participantId: viewer.participantId,
       sessionId: viewer.sessionId,
       userId: viewer.userId,
       content: args.content,
@@ -696,12 +684,12 @@ export async function createTendingBetweenPeriodNote(args: {
 
 export async function listTendingHistory(sessionId: string, userId: string): Promise<TendingHistoryCycleDTO[]> {
   const viewer = await viewerFor(sessionId, userId);
-  const entries = await loadFollowUpsForParticipant(sessionId, viewer.participantId);
+  const entries = await loadFollowUpsForParticipant(sessionId, viewer);
   const byId = new Map(entries.map(e => [e.id, e]));
   const [checkins, cycles, reminders] = await Promise.all([
     loadCheckins(
       entries.map(e => e.id),
-      viewer.participantId,
+      viewer,
     ),
     loadCycles(sessionId),
     loadReminders(
@@ -711,7 +699,7 @@ export async function listTendingHistory(sessionId: string, userId: string): Pro
   ]);
   const cycleOf = new Map(cycles.map(c => [c.followUpId, c]));
   return checkins
-    .filter(c => c.participantId === viewer.participantId)
+    .filter(c => c.userId === viewer.userId)
     .sort((a, b) => b.submittedAt.getTime() - a.submittedAt.getTime())
     .slice(0, 20)
     .map(c => {
@@ -754,7 +742,7 @@ async function getEntryForViewer(entryId: string, userId: string): Promise<{ vie
   const viewer = await viewerFor(row.sessionId, userId).catch(() => {
     throw new TendingNotFoundError();
   });
-  const visible = row.scope === 'SHARED' || row.ownerParticipantId === viewer.participantId || row.optedInShared;
+  const visible = row.scope === 'SHARED' || row.ownerUserId === viewer.userId || row.optedInShared;
   if (!visible) throw new TendingNotFoundError();
   return { viewer, entry: row };
 }
@@ -775,7 +763,7 @@ export async function setIndividualEntryShare(args: {
 }): Promise<TendingEntryDTO> {
   const { viewer, entry } = await getEntryForViewer(args.entryId, args.userId);
   if (entry.scope !== 'INDIVIDUAL') throw new TendingInvalidStateError('Only INDIVIDUAL entries can be shared');
-  if (entry.ownerParticipantId !== viewer.participantId) throw new TendingForbiddenError();
+  if (entry.ownerUserId !== viewer.userId) throw new TendingForbiddenError();
 
   // spec §1.5 follow_up: U owner — the owner's opt-in is the owner's write.
   await prisma.followUp.update({ where: { id: entry.id }, data: { optedInShared: args.optedInShared } });
@@ -802,8 +790,7 @@ async function insertCheckin(
   db: Pick<Prisma.TransactionClient, 'followUpCheckin'>,
   args: {
     followUpId: string;
-    participantId: string;
-    /** work-k5fk.3 (6a): the participant's seat (the follow-up's session). */
+    /** The participant's seat (the follow-up's session). */
     sessionId: string;
     userId: string;
     nextAction: TendingNextAction | null;
@@ -817,14 +804,15 @@ async function insertCheckin(
 ): Promise<string> {
   const payload = validateCheckinPayload(args.payload);
   const existing = await db.followUpCheckin.findUnique({
-    where: { followUpId_participantId: { followUpId: args.followUpId, participantId: args.participantId } },
+    where: {
+      followUpId_sessionId_userId: { followUpId: args.followUpId, sessionId: args.sessionId, userId: args.userId },
+    },
     select: { id: true },
   });
   if (existing) throw new TendingInvalidStateError('You have already checked in on this Tending entry');
   const row = await db.followUpCheckin.create({
     data: {
       followUpId: args.followUpId,
-      participantId: args.participantId,
       sessionId: args.sessionId,
       userId: args.userId,
       nextAction: args.nextAction,
@@ -865,8 +853,7 @@ export async function submitTendingResponse(args: {
   continueChoice?: ContinueChoice;
 }): Promise<TendingEntryDTO> {
   const { viewer, entry } = await getEntryForViewer(args.entryId, args.userId);
-  if (entry.scope === 'INDIVIDUAL' && entry.ownerParticipantId !== viewer.participantId)
-    throw new TendingForbiddenError();
+  if (entry.scope === 'INDIVIDUAL' && entry.ownerUserId !== viewer.userId) throw new TendingForbiddenError();
   if (entry.status === 'SCHEDULED') throw new TendingInvalidStateError('Tending entry is not open yet');
   if (entry.status === 'CANCELLED' || entry.status === 'EXPIRED' || entry.status === 'COMPLETED') {
     throw new TendingInvalidStateError('Tending entry is no longer accepting responses');
@@ -875,7 +862,6 @@ export async function submitTendingResponse(args: {
   await prisma.$transaction(tx =>
     insertCheckin(tx, {
       followUpId: entry.id,
-      participantId: viewer.participantId,
       sessionId: viewer.sessionId,
       userId: viewer.userId,
       nextAction: null,
@@ -919,8 +905,8 @@ async function buildReentrySummary(viewer: Viewer, intent?: string): Promise<str
     loadClosure(viewer.sessionId),
     loadClosureItems(viewer.sessionId),
     loadAgreements(viewer.sessionId),
-    loadProposals(viewer.sessionId, viewer.participantId),
-    loadStage4Needs(viewer.sessionId, viewer.participantId),
+    loadProposals(viewer.sessionId, viewer),
+    loadStage4Needs(viewer.sessionId, viewer),
   ]);
   const commitments = proposals.filter(p => items.individualCommitmentIds.includes(p.id) && p.sharedAt !== null);
   const open = needs.filter(n => items.openNeedIds.includes(n.id));
@@ -960,8 +946,8 @@ export async function createPassiveReentry(args: {
       sessionId: args.sessionId,
       type: 'USER_INITIATED_REENTRY',
       scope: 'INDIVIDUAL',
-      ownerParticipantId: viewer.participantId,
       ownerUserId: viewer.userId,
+
       status: 'OPEN',
       openedAt: now,
       summary,
@@ -1095,7 +1081,7 @@ async function normalizeNeedOutcomes(
   const shared = ids.length
     ? await prisma.needShare.findMany({
         where: { needId: { in: ids }, sessionId: viewer.sessionId },
-        select: { needId: true, sharedText: true, participantId: true },
+        select: { needId: true, sharedText: true, userId: true },
       })
     : [];
   const byId = new Map(shared.map(s => [s.needId, s]));
@@ -1112,11 +1098,9 @@ async function normalizeNeedOutcomes(
     return {
       needId: s ? s.needId : null,
       needLabel: s ? s.sharedText : o.needLabel,
-      sourceParticipantId: s
-        ? s.participantId
-        : o.sourceUserId
-          ? (viewer.participantOfUser.get(o.sourceUserId) ?? null)
-          : null,
+      // The need's owner; for an unlinked outcome, the named user only if they are of this session.
+      sourceUserId: s ? s.userId : o.sourceUserId && viewer.members.includes(o.sourceUserId) ? o.sourceUserId : null,
+
       resolutionStatus: o.resolutionStatus,
       note: o.note ?? null,
       changedNeedLabel: o.changedNeedLabel ?? null,
@@ -1143,16 +1127,14 @@ export async function submitTendingCheckin(args: {
   const now = args.now ?? new Date();
   const viewer = await viewerFor(args.sessionId, args.userId);
 
-  const open = (await loadFollowUpsForParticipant(args.sessionId, viewer.participantId)).filter(
-    e =>
-      (e.status === 'OPEN' || e.status === 'PARTIAL') &&
-      (e.scope === 'SHARED' || e.ownerParticipantId === viewer.participantId),
+  const open = (await loadFollowUpsForParticipant(args.sessionId, viewer)).filter(
+    e => (e.status === 'OPEN' || e.status === 'PARTIAL') && (e.scope === 'SHARED' || e.ownerUserId === viewer.userId),
   );
   if (open.length === 0) throw new TendingInvalidStateError('No open Tending entries to check in on');
   const already = new Set(
     (
       await prisma.followUpCheckin.findMany({
-        where: { followUpId: { in: open.map(e => e.id) }, participantId: viewer.participantId },
+        where: { followUpId: { in: open.map(e => e.id) }, sessionId: viewer.sessionId, userId: viewer.userId },
         select: { followUpId: true },
       })
     ).map(c => c.followUpId),
@@ -1181,7 +1163,7 @@ export async function submitTendingCheckin(args: {
   const referenced = Array.from(new Set([...included, ...shareIds]));
   const notes = referenced.length
     ? await prisma.followUpNote.findMany({
-        where: { id: { in: referenced }, participantId: viewer.participantId },
+        where: { id: { in: referenced }, sessionId: viewer.sessionId, userId: viewer.userId },
         select: { id: true, content: true, createdAt: true },
       })
     : [];
@@ -1210,8 +1192,7 @@ export async function submitTendingCheckin(args: {
     if (!openIds.has(a.tendingEntryId))
       throw new TendingInvalidStateError('Adjustment references a non-open Tending entry');
     const linked = openEntries.find(e => e.id === a.tendingEntryId);
-    if (linked?.scope === 'INDIVIDUAL' && linked.ownerParticipantId !== viewer.participantId)
-      throw new TendingForbiddenError();
+    if (linked?.scope === 'INDIVIDUAL' && linked.ownerUserId !== viewer.userId) throw new TendingForbiddenError();
   }
   if (choice === ContinueChoice.FULL_CLOSURE && !args.resolvedEnoughOverride) {
     if ((args.needOutcomes ?? []).some(o => o.resolutionStatus !== TendingNeedResolutionStatus.RESOLVED)) {
@@ -1335,7 +1316,6 @@ export async function submitTendingCheckin(args: {
       ids.push(
         await insertCheckin(tx, {
           followUpId: entry.id,
-          participantId: viewer.participantId,
           sessionId: viewer.sessionId,
           userId: viewer.userId,
           nextAction,
@@ -1350,13 +1330,13 @@ export async function submitTendingCheckin(args: {
     // Notes: included → carry_forward; shared → copied into the check-in, carried_into_checkin_id set.
     if (included.length) {
       await tx.followUpNote.updateMany({
-        where: { id: { in: included }, participantId: viewer.participantId },
+        where: { id: { in: included }, sessionId: viewer.sessionId, userId: viewer.userId },
         data: { carryForward: true },
       });
     }
     if (shareIds.length) {
       await tx.followUpNote.updateMany({
-        where: { id: { in: shareIds }, participantId: viewer.participantId },
+        where: { id: { in: shareIds }, sessionId: viewer.sessionId, userId: viewer.userId },
         data: { carriedIntoCheckinId: ids[0] },
       });
     }
@@ -1364,7 +1344,7 @@ export async function submitTendingCheckin(args: {
     for (const { entry } of payloads) {
       for (const content of privateNotesFor(entry)) {
         await tx.followUpNote.create({
-          data: { participantId: viewer.participantId, sessionId: viewer.sessionId, userId: viewer.userId, content },
+          data: { sessionId: viewer.sessionId, userId: viewer.userId, content },
         });
       }
     }
@@ -1479,7 +1459,7 @@ export async function submitTendingCheckin(args: {
     select: FOLLOW_UP_SELECT,
   })) as FollowUpRow[];
   const entries = await entryDTOs(viewer, refreshed);
-  const [primaryCheckin] = await loadCheckins([openEntries[0].id], viewer.participantId).then(rows =>
+  const [primaryCheckin] = await loadCheckins([openEntries[0].id], viewer).then(rows =>
     rows.filter(c => c.id === primaryCheckinId),
   );
   const cycles = sharedEntries.length ? await listTendingCoordinationCycles(args.sessionId, args.userId) : [];
@@ -1526,14 +1506,14 @@ async function startLinkedProcess(viewer: Viewer, handoff: string, now: Date): P
       },
       select: { id: true },
     });
-    const participant = await tx.participant.create({
+    await tx.participant.create({
       // The caller starts the follow-up: its initiator (work-k5fk.2: no adder). The partner
       // is linked by previous_session_id, not by a relationship row.
       data: { sessionId: session.id, userId: viewer.userId, kind: 'human', addedByUserId: null },
-      select: { id: true },
+      select: { userId: true },
     });
     const conversation = await tx.conversation.create({
-      data: { participantId: participant.id, sessionId: session.id, userId: viewer.userId, kind: 'MAIN' },
+      data: { sessionId: session.id, userId: viewer.userId, kind: 'MAIN' },
       select: { id: true },
     });
     return { sessionId: session.id, conversationId: conversation.id };
@@ -1554,9 +1534,9 @@ async function startLinkedProcess(viewer: Viewer, handoff: string, now: Date): P
 export async function openDueTendingEntries(now = new Date()): Promise<{ opened: number; entryIds: string[] }> {
   const job = getJobPrisma();
   const due = await job.$queryRaw<
-    Array<{ id: string; session_id: string; scope: 'SHARED' | 'INDIVIDUAL'; owner_participant_id: string | null }>
+    Array<{ id: string; session_id: string; scope: 'SHARED' | 'INDIVIDUAL'; owner_user_id: string | null }>
   >`
-    SELECT id, session_id, scope::text AS scope, owner_participant_id FROM follow_up
+    SELECT id, session_id, scope::text AS scope, owner_user_id FROM follow_up
     WHERE status = 'SCHEDULED' AND scheduled_for <= ${now}
       AND type IN ('SCHEDULED_SHARED_AGREEMENT', 'SCHEDULED_INDIVIDUAL_COMMITMENT')
     ORDER BY scheduled_for, id`;
@@ -1570,17 +1550,13 @@ export async function openDueTendingEntries(now = new Date()): Promise<{ opened:
     if (n === 0) continue;
     entryIds.push(entry.id);
     try {
-      if (entry.scope === 'INDIVIDUAL' && entry.owner_participant_id) {
-        const [owner] = await job.$queryRaw<Array<{ user_id: string | null }>>`
-          SELECT user_id FROM participant WHERE id = ${entry.owner_participant_id}::uuid`;
-        if (owner?.user_id) {
-          await publishUserEvent(owner.user_id, 'session.updated', {
-            sessionId: entry.session_id,
-            kind: 'tending_checkin_opened',
-            tendingEntryId: entry.id,
-            scope: entry.scope,
-          });
-        }
+      if (entry.scope === 'INDIVIDUAL' && entry.owner_user_id) {
+        await publishUserEvent(entry.owner_user_id, 'session.updated', {
+          sessionId: entry.session_id,
+          kind: 'tending_checkin_opened',
+          tendingEntryId: entry.id,
+          scope: entry.scope,
+        });
       } else {
         await publishSessionEvent(entry.session_id, 'notification.pending_action', {
           kind: 'tending_checkin_opened',
@@ -1704,8 +1680,13 @@ export async function resolveTimedOutTendingCoordinationCycles(
     Array<{ follow_up_id: string; session_id: string; waiting_on: string[]; submitted: string[] }>
   >`
     SELECT c.follow_up_id, c.session_id,
-           ARRAY(SELECT p.user_id::text FROM participant p WHERE p.id = ANY(c.waiting_on) ORDER BY p.joined_at, p.id) AS waiting_on,
-           ARRAY(SELECT p.user_id::text FROM participant p WHERE p.id = ANY(c.submitted_participant_ids) ORDER BY p.joined_at, p.id) AS submitted
+           ARRAY(SELECT p.user_id::text FROM participant p
+                 WHERE p.session_id = c.session_id AND p.user_id = ANY(c.waiting_on)
+                 ORDER BY p.joined_at, p.user_id) AS waiting_on,
+           ARRAY(SELECT p.user_id::text FROM participant p
+                 WHERE p.session_id = c.session_id AND p.user_id = ANY(c.submitted_user_ids)
+                 ORDER BY p.joined_at, p.user_id) AS submitted
+
     FROM v_follow_up_cycle c JOIN follow_up f ON f.id = c.follow_up_id
     WHERE f.scope = 'SHARED' AND f.status IN ('OPEN', 'PARTIAL') AND f.response_deadline_at <= ${now}`;
   for (const r of rows) {

@@ -87,28 +87,30 @@ export async function buildEmpathyExchangeStatus(
   // TS-12 (R5): a departed partner (the tombstone) still answers the reads of
   // what they delivered — the status is a read.
   const partner =
-    parties.find(p => p.participantId !== me.participantId) ??
-    (parties.length === 1 ? await departedCounterpart(sessionId, me.participantId) : null);
+    parties.find(p => p.userId !== me.userId) ??
+    (parties.length === 1 ? await departedCounterpart({ sessionId, userId }) : null);
 
   const [myAttempt, partnerAttempt, statuses] = await Promise.all([
-    partner ? currentAttempt(me.participantId, partner.participantId) : Promise.resolve(null),
-    partner ? revealedAttemptAbout(me.participantId, partner.participantId) : Promise.resolve(null),
+    partner ? currentAttempt(sessionId, userId, partner.userId) : Promise.resolve(null),
+    partner ? revealedAttemptAbout(sessionId, userId, partner.userId) : Promise.resolve(null),
     directionStatuses(sessionId),
   ]);
-  const partnerDirection = partner ? directionOf(statuses, partner.participantId, me.participantId) : undefined;
+  const partnerDirection = partner ? directionOf(statuses, partner.userId, userId) : undefined;
 
   // The partner's review of MY attempt — visible to me only once sent;
   // my own review of the partner's revealed attempt.
   const [myAttemptReview, partnerAttemptReview] = await Promise.all([
-    myAttempt && partner ? reviewVisibleToAuthor(myAttempt.id, partner.participantId) : Promise.resolve(null),
-    partnerAttempt ? reviewOf(partnerAttempt.id, me.participantId) : Promise.resolve(null),
+    myAttempt && partner
+      ? reviewVisibleToAuthor(myAttempt.id, { sessionId, userId: partner.userId })
+      : Promise.resolve(null),
+    partnerAttempt ? reviewOf(partnerAttempt.id, { sessionId, userId }) : Promise.resolve(null),
   ]);
 
   // The abstract guidance for my attempt (reconciler_guidance: author-visible).
   let refinementHint: EmpathyExchangeStatusResponse['refinementHint'] = null;
   if (myAttempt && (myAttempt.status === 'AWAITING_SHARING' || myAttempt.status === 'REFINING')) {
     const guidance = await prisma.reconcilerGuidance.findFirst({
-      where: { authorParticipantId: me.participantId, result: { attemptId: myAttempt.id, supersededAt: null } },
+      where: { sessionId, authorUserId: userId, result: { attemptId: myAttempt.id, supersededAt: null } },
       select: { areaHint: true, guidanceType: true, promptSeed: true },
     });
     if (guidance) refinementHint = guidance;
@@ -118,7 +120,7 @@ export async function buildEmpathyExchangeStatus(
 
   const partnerStage1Completed = partner
     ? (await prisma.participantMilestone.count({
-        where: { participantId: partner.participantId, milestoneKey: 'feel_heard' },
+        where: { sessionId, userId: partner.userId, milestoneKey: 'feel_heard' },
       })) > 0
     : false;
 
@@ -134,7 +136,7 @@ export async function buildEmpathyExchangeStatus(
       messageCountSinceSharedContext = await prisma.message.count({
         where: {
           conversationId: me.mainConversationId,
-          senderParticipantId: me.participantId,
+          senderUserId: userId,
           role: 'USER',
           kind: 'CHAT',
           createdAt: { gt: new Date(contextResult.sharedAt) },
@@ -159,7 +161,7 @@ export async function buildEmpathyExchangeStatus(
   let hasUnviewedSharedContext = false;
   if (hasNewSharedContext && sharedContext !== null) {
     const readState = await prisma.conversationReadState.findUnique({
-      where: { participantId: me.participantId },
+      where: { sessionId_userId: { sessionId, userId } },
       select: { lastViewedShareTabAt: true },
     });
     const sharedAtDate = new Date(sharedContext.sharedAt);
@@ -198,7 +200,7 @@ export async function buildEmpathyExchangeStatusForBothUsers(
   const parties = await sessionParties(sessionId);
   const result: { [userId: string]: EmpathyExchangeStatusResponse } = {};
   for (const p of parties) {
-    if (p.userId) result[p.userId] = await buildEmpathyExchangeStatus(sessionId, p.userId);
+    result[p.userId] = await buildEmpathyExchangeStatus(sessionId, p.userId);
   }
   return result;
 }

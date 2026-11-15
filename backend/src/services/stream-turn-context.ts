@@ -52,7 +52,7 @@ import type { RefiningNeedContext } from './stream-turn-actions';
 async function getStage4InventoryPromptContext(sessionId: string, currentUserId: string): Promise<string | null> {
   const me = await resolveParticipant(sessionId, currentUserId);
   if (!me) return null;
-  const proposals = (await loadProposals(sessionId, me.id))
+  const proposals = (await loadProposals(sessionId, me))
     .sort((a, b) => a.updatedAt.getTime() - b.updatedAt.getTime())
     .slice(0, 12)
     .filter(proposal => proposal.status !== 'REMOVED');
@@ -61,9 +61,9 @@ async function getStage4InventoryPromptContext(sessionId: string, currentUserId:
   return proposals
     .map(proposal => {
       const owner =
-        proposal.createdByParticipantId === me.id
+        proposal.createdByUserId === me.userId
           ? 'current user'
-          : proposal.createdByParticipantId
+          : proposal.createdByUserId
             ? 'partner'
             : 'shared/no owner';
       const details = [
@@ -149,15 +149,15 @@ export async function getStage4OpenNeedsForPrompt(
     const me = await resolveParticipant(sessionId, userId);
     if (!me) return null;
     const [needs, coverage, mine, declined] = await Promise.all([
-      loadStage4Needs(sessionId, me.id),
+      loadStage4Needs(sessionId, me),
       // Visible coverage only (fix round 2): a partner's unshared WILLING must not drop a need from the prompt.
-      loadVisibleCoverage(sessionId, me.id),
+      loadVisibleCoverage(sessionId, me),
       prisma.proposalChoice.findMany({
-        where: { participantId: me.id, decision: 'WILLING', proposal: { sessionId } },
+        where: { sessionId, userId: me.userId, decision: 'WILLING' },
         select: { proposalId: true },
       }),
       prisma.needDisposition.findMany({
-        where: { participantId: me.id, status: 'DECLINED' },
+        where: { sessionId, userId: me.userId, status: 'DECLINED' },
         select: { needId: true },
       }),
     ]);
@@ -207,16 +207,16 @@ async function getTendingConversationContextForPrompt(
     // shared needs (their labels), their carried-forward notes, and their own
     // latest check-ins' payloads.
     const [entries, needs, selectedNotes, latestCheckins] = await Promise.all([
-      loadFollowUpsForParticipant(sessionId, me.id).then(rows => rows.slice(0, 8)),
-      loadStage4Needs(sessionId, me.id).then(rows => rows.filter(n => n.ownerParticipantId === me.id).slice(0, 8)),
+      loadFollowUpsForParticipant(sessionId, me).then(rows => rows.slice(0, 8)),
+      loadStage4Needs(sessionId, me).then(rows => rows.filter(n => n.ownerUserId === me.userId).slice(0, 8)),
       prisma.followUpNote.findMany({
-        where: { participantId: me.id, carryForward: true },
+        where: { sessionId, userId: me.userId, carryForward: true },
         orderBy: [{ createdAt: 'asc' }],
         take: 8,
         select: { id: true, content: true, carriedIntoCheckinId: true },
       }),
       prisma.followUpCheckin.findMany({
-        where: { participantId: me.id },
+        where: { sessionId, userId: me.userId },
         orderBy: [{ submittedAt: 'desc' }],
         take: 3,
         select: { id: true, continueChoice: true, nextAction: true, payload: true },
@@ -322,7 +322,8 @@ export interface StreamTurnContext {
 export async function assembleStreamTurnContext(params: StreamTurnContextParams): Promise<StreamTurnContext> {
   const { requestId, sessionId, user, participant, session, currentStage, refiningNeedContext } = params;
   const conversationId = participant.mainConversationId;
-  if (!conversationId) throw new Error(`Participant ${participant.id} has no MAIN conversation`);
+  if (!conversationId)
+    throw new Error(`Participant (session ${sessionId}, user ${participant.userId}) has no MAIN conversation`);
 
   // ===========================================================================
   // Conversation history (summary-aware): the participant's own conversation
@@ -345,24 +346,24 @@ export async function assembleStreamTurnContext(params: StreamTurnContextParams)
   // Count ALL own turns (not just the window), and the turns in the CURRENT
   // stage — stage-specific guards (feel-heard check, early-stage guidance)
   // need stage-scoped counts. The stage's start is the stage shim's.
-  const stageStates = await loadStageStates([{ id: participant.id, joinedAt: participant.joinedAt }]);
-  const stageStart = stageStates.get(participant.id)?.rows.find(r => r.stage === currentStage)?.startedAt ?? undefined;
+  const stageStates = await loadStageStates([participant]);
+  const stageStart = stageStates.get(participant)?.rows.find(r => r.stage === currentStage)?.startedAt ?? undefined;
   const [userTurnCount, stageTurnCount] = await Promise.all([
-    countOwnTurns(conversationId, participant.id),
-    countOwnTurns(conversationId, participant.id, stageStart),
+    countOwnTurns(conversationId, participant),
+    countOwnTurns(conversationId, participant, stageStart),
   ]);
   const turnId = `${sessionId}-${user.id}-${userTurnCount}`;
-  updateContext({ turnId, sessionId, userId: user.id, participantId: participant.id });
+  updateContext({ turnId, sessionId, userId: user.id, seated: true });
 
   // Partner (v_co_participant), or the invitee's name before they joined.
-  const partner = await getPartnerParticipant(participant.id);
+  const partner = await getPartnerParticipant(participant);
   const partnerId = partner?.userId ?? null;
   let partnerName: string | undefined;
   if (partner) {
     partnerName = partner.displayName || undefined;
   } else if (session.status === 'CREATED' || session.status === 'INVITED') {
     const invitation = await prisma.invitation.findFirst({
-      where: { sessionId, invitedByParticipantId: participant.id },
+      where: { sessionId, invitedByUserId: participant.userId },
       select: { inviteeName: true },
     });
     partnerName = invitation?.inviteeName || undefined;
@@ -385,10 +386,10 @@ export async function assembleStreamTurnContext(params: StreamTurnContextParams)
   // The single entry point: everything the prompt may know beyond this
   // participant's own rows comes from its shared vessel (TS-9).
   const [contextBundle, emotionalIntensity, capturedNeeds] = await Promise.all([
-    buildContextForParticipant(participant.id, { intent: streamingIntent, stage: currentStage }),
+    buildContextForParticipant(participant, { intent: streamingIntent, stage: currentStage }),
     (async () => {
       const latest = await prisma.moodReading.findFirst({
-        where: { participantId: participant.id },
+        where: { sessionId, userId: participant.userId },
         orderBy: { recordedAt: 'desc' },
         select: { intensity: true },
       });
@@ -398,7 +399,7 @@ export async function assembleStreamTurnContext(params: StreamTurnContextParams)
     currentStage === 3
       ? (async () => {
           const needs = await prisma.need.findMany({
-            where: { participantId: participant.id, deletedAt: null },
+            where: { sessionId, userId: participant.userId, deletedAt: null },
             orderBy: { createdAt: 'asc' },
             select: { id: true, label: true, confirmedAt: true },
           });
@@ -442,14 +443,14 @@ export async function assembleStreamTurnContext(params: StreamTurnContextParams)
 
   if (currentStage === 2) {
     const refiningAttempt = await prisma.empathyAttempt.findFirst({
-      where: { authorParticipantId: participant.id, status: 'REFINING' },
+      where: { sessionId, authorUserId: participant.userId, status: 'REFINING' },
       orderBy: { submittedAt: 'desc' },
       select: { content: true },
     });
     const ownDraft = await prisma.draft.findFirst({
-      where: { participantId: participant.id, kind: 'EMPATHY' },
+      where: { sessionId, userId: participant.userId, kind: 'EMPATHY' },
       orderBy: { updatedAt: 'desc' },
-      select: { content: true, reopenedAt: true, aboutParticipantId: true },
+      select: { content: true, reopenedAt: true, aboutUserId: true },
     });
 
     if (refiningAttempt) {
@@ -473,9 +474,9 @@ export async function assembleStreamTurnContext(params: StreamTurnContextParams)
       empathyDraftContent = ownDraft.content;
       // work-9309: reopened by Edit first and not yet re-proposed — the AI
       // helps revise and proposes without the early-stage wait.
-      if (partner && ownDraft.aboutParticipantId === partner.participantId) {
+      if (partner && ownDraft.aboutUserId === partner.userId) {
         const submitted = await prisma.empathyAttempt.count({
-          where: { authorParticipantId: participant.id, subjectParticipantId: partner.participantId },
+          where: { sessionId, authorUserId: participant.userId, subjectUserId: partner.userId },
         });
         revisingReopenedDraft = deriveAwaitingRevision({
           reopenedAt: ownDraft.reopenedAt,

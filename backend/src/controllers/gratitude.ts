@@ -598,7 +598,7 @@ export const getPrompt = asyncHandler(async (req: Request, res: Response): Promi
     // The caller's own name for the partner, then the co-participant's display name
     // (never the partner's user row — spec §7: display_name is the only user fact a co-participant sees).
     const me = await resolveParticipant(recentConflict.id, user.id);
-    const partner = me ? (await getCoParticipants(me.id)).find(c => c.kind === 'human' && !c.leftAt) : undefined;
+    const partner = me ? (await getCoParticipants(me)).find(c => c.kind === 'human' && !c.leftAt) : undefined;
     const nickname = await getNicknameForSessionPartner(recentConflict.id, user.id);
     const partnerName = nickname || partner?.displayName || 'your partner';
     context = 'recent_conflict';

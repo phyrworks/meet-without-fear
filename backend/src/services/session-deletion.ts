@@ -59,14 +59,14 @@ export async function deleteSessionForUser(
   const session = await prisma.session.findUnique({ where: { id: sessionId }, select: { status: true } });
   const live = !!session && ['CREATED', 'INVITED', 'ACTIVE'].includes(session.status);
   const [messages, drafts, moods] = await Promise.all([
-    prisma.message.count({ where: { conversation: { participantId: me.id } } }),
-    prisma.draft.count({ where: { participantId: me.id } }),
-    prisma.moodReading.count({ where: { participantId: me.id } }),
+    prisma.message.count({ where: { conversation: { sessionId, userId } } }),
+    prisma.draft.count({ where: { sessionId, userId } }),
+    prisma.moodReading.count({ where: { sessionId, userId } }),
   ]);
 
   // The walk and the explicit deletes: one job transaction
   const extra = await getJobPrisma().$transaction(async tx => {
-    await tx.$executeRaw`SELECT app.anonymize_user_in_session(${sessionId}::uuid, ${me.id}::uuid)`;
+    await tx.$executeRaw`SELECT app.anonymize_user_in_session(${sessionId}::uuid, ${userId}::uuid)`;
     const memories =
       await tx.$executeRaw`DELETE FROM user_memory WHERE user_id = ${userId}::uuid AND session_id = ${sessionId}::uuid`;
     const reminders = await tx.$executeRaw`DELETE FROM reminder r USING follow_up f

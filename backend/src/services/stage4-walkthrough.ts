@@ -15,7 +15,7 @@
 
 import { prisma } from '../lib/prisma';
 import { reachMilestone } from './milestone-writer';
-import { seatOfParticipant } from './participant-resolver';
+import type { Seat } from './participant-resolver';
 import { buildStage4StateFromView, loadStage4View, walkthroughOrder, walkthroughStoredFor } from './stage4-state';
 import type { GetStage4StateResponse } from '@meet-without-fear/shared';
 
@@ -55,7 +55,7 @@ export async function advanceWalkthrough(args: {
 
   const remainingOwn = before.own.find(n => !covered.has(n.id) && !skipped.has(n.id));
   const remainingPartner = before.partner.find(n => !covered.has(n.id) && !skipped.has(n.id));
-  const isOwn = target.ownerParticipantId === view.me;
+  const isOwn = target.ownerUserId === view.me;
   let phase: 'MY_NEEDS' | 'PARTNER_NEEDS' | 'QUALITY_REVIEW';
   let currentNeedId: string | null;
   if (args.action === 'reset') {
@@ -82,20 +82,19 @@ export async function advanceWalkthrough(args: {
   }
 
   const status = args.action === 'covered' ? 'COVERED' : args.action === 'skip' ? 'SKIPPED' : 'OPEN';
-  const me = view.me;
+  const me: Seat = { sessionId: args.sessionId, userId: view.me };
   await prisma.$transaction(async tx => {
     // The partial unique allows one current row: clear first.
-    await tx.needDisposition.updateMany({ where: { participantId: me, isCurrent: true }, data: { isCurrent: false } });
+    await tx.needDisposition.updateMany({ where: { ...me, isCurrent: true }, data: { isCurrent: false } });
     await tx.needDisposition.upsert({
-      where: { participantId_needId: { participantId: me, needId: args.needId } },
-      create: { participantId: me, needId: args.needId, sessionId: args.sessionId, userId: args.userId, status },
+      where: { sessionId_userId_needId: { ...me, needId: args.needId } },
+      create: { needId: args.needId, sessionId: args.sessionId, userId: args.userId, status },
       update: { status },
     });
     if (currentNeedId) {
       await tx.needDisposition.upsert({
-        where: { participantId_needId: { participantId: me, needId: currentNeedId } },
+        where: { sessionId_userId_needId: { ...me, needId: currentNeedId } },
         create: {
-          participantId: me,
           needId: currentNeedId,
           sessionId: args.sessionId,
           userId: args.userId,
@@ -112,24 +111,26 @@ export async function advanceWalkthrough(args: {
 }
 
 /** "Leave for now": the participant declines to address a shared need. */
-export async function declineNeed(participantId: string, needId: string): Promise<void> {
+export async function declineNeed(seat: Seat, needId: string): Promise<void> {
+  const key = { sessionId: seat.sessionId, userId: seat.userId, needId };
   await prisma.needDisposition.upsert({
-    where: { participantId_needId: { participantId, needId } },
-    create: { participantId, needId, ...(await seatOfParticipant(participantId)), status: 'DECLINED' },
+    where: { sessionId_userId_needId: key },
+    create: { ...key, status: 'DECLINED' },
     update: { status: 'DECLINED' },
   });
 }
 
 /** Remove a "leave for now": the row goes, unless it is the walkthrough's current need (then OPEN). */
-export async function undeclineNeed(participantId: string, needId: string): Promise<void> {
-  const row = await prisma.needDisposition.findUnique({ where: { participantId_needId: { participantId, needId } } });
+export async function undeclineNeed(seat: Seat, needId: string): Promise<void> {
+  const key = { sessionId: seat.sessionId, userId: seat.userId, needId };
+  const row = await prisma.needDisposition.findUnique({ where: { sessionId_userId_needId: key } });
   if (!row || row.status !== 'DECLINED') return;
   if (row.isCurrent) {
     await prisma.needDisposition.update({
-      where: { participantId_needId: { participantId, needId } },
+      where: { sessionId_userId_needId: key },
       data: { status: 'OPEN' },
     });
   } else {
-    await prisma.needDisposition.delete({ where: { participantId_needId: { participantId, needId } } });
+    await prisma.needDisposition.delete({ where: { sessionId_userId_needId: key } });
   }
 }

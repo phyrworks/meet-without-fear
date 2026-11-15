@@ -259,7 +259,7 @@ async function getSessionHistory(sessionId: string, userId: string): Promise<Con
   const messages = await prisma.message.findMany({
     where: {
       conversationId: participant.mainConversationId,
-      OR: [{ senderParticipantId: participant.id }, { role: 'AI' }],
+      OR: [{ senderUserId: participant.userId }, { role: 'AI' }],
     },
     orderBy: { createdAt: 'asc' },
     select: {

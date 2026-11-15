@@ -98,7 +98,6 @@ export async function recordEmotion(req: Request, res: Response): Promise<void> 
     // The reading (the user's last mood is now simply their latest reading)
     const reading = await prisma.moodReading.create({
       data: {
-        participantId: participant.id,
         ...seatOf(participant),
         intensity,
         context: context ?? null,
@@ -152,13 +151,13 @@ export async function getEmotions(req: Request, res: Response): Promise<void> {
     // Get readings (only the participant's own readings for privacy)
     const [readings, milestones, invitationPending] = await Promise.all([
       prisma.moodReading.findMany({
-        where: { participantId: participant.id },
+        where: { sessionId: participant.sessionId, userId: participant.userId },
         orderBy: [{ recordedAt: 'desc' }, { id: 'desc' }],
         take: 50,
         select: { id: true, intensity: true, context: true, recordedAt: true },
       }),
-      loadMilestones([participant.id]),
-      loadInvitationPending([participant.id]),
+      loadMilestones([participant]),
+      loadInvitationPending([participant]),
     ]);
 
     const response: ApiResponse<GetEmotionsData> = {
@@ -168,8 +167,8 @@ export async function getEmotions(req: Request, res: Response): Promise<void> {
           id: r.id,
           intensity: r.intensity,
           context: r.context,
-          stage: messageStage(milestones.get(participant.id) ?? [], r.recordedAt, {
-            invitationPending: invitationPending.has(participant.id),
+          stage: messageStage(milestones.get(participant) ?? [], r.recordedAt, {
+            invitationPending: invitationPending.has(participant),
           }),
           timestamp: r.recordedAt,
         })),
@@ -224,7 +223,6 @@ export async function completeExercise(req: Request, res: Response): Promise<voi
     // Log exercise completion (regulation_event)
     const completion = await prisma.regulationEvent.create({
       data: {
-        participantId: participant.id,
         ...seatOf(participant),
         type,
         intensityBefore: intensityBefore ?? null,

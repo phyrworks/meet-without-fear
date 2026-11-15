@@ -25,6 +25,7 @@ import {
   type IdentifiedNeedRecord,
   type NeedRecord,
 } from './needs';
+import type { Seat } from './participant-resolver';
 
 type NeedRow = IdentifiedNeedRecord;
 
@@ -49,9 +50,9 @@ export class NeedEditForbiddenError extends Error {
 type Db = typeof prisma | Prisma.TransactionClient;
 
 /** The caller's own needs (legacy record shape), oldest first. */
-async function ownNeeds(participantId: string, db: Db = prisma, where: Prisma.NeedWhereInput = {}): Promise<NeedRow[]> {
+async function ownNeeds(seat: Seat, db: Db = prisma, where: Prisma.NeedWhereInput = {}): Promise<NeedRow[]> {
   const rows = (await db.need.findMany({
-    where: { participantId, ...where },
+    where: { sessionId: seat.sessionId, userId: seat.userId, ...where },
     orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
     select: NEED_SELECT,
   })) as NeedRecord[];
@@ -66,15 +67,17 @@ async function updateNeed(db: Db, id: string, data: Prisma.NeedUpdateInput): Pro
  * Needs are editable until their owner has shared them: once a `need_share`
  * row of theirs exists (live or revoked), the list is delivered content.
  */
-export async function assertNeedsEditable(sessionId: string, userId: string): Promise<{ id: string }> {
+export async function assertNeedsEditable(sessionId: string, userId: string): Promise<Seat> {
   const participant = await requireNeedOwner(sessionId, userId).catch(() => {
     throw new NeedEditValidationError('Stage 3 progress was not found.');
   });
-  const shared = await prisma.needShare.count({ where: { participantId: participant.id } });
+  const shared = await prisma.needShare.count({
+    where: { sessionId: participant.sessionId, userId: participant.userId },
+  });
   if (shared > 0) {
     throw new NeedEditForbiddenError('Needs have already been shared and can no longer be edited.');
   }
-  return participant;
+  return { sessionId: participant.sessionId, userId: participant.userId };
 }
 
 function isNeedCategory(value: unknown): value is NeedCategory {
@@ -157,7 +160,7 @@ export async function applyNeedEdits(
   const participant = await assertNeedsEditable(sessionId, userId);
 
   const applied = await prisma.$transaction(async tx => {
-    const currentNeeds = await ownNeeds(participant.id, tx, { deletedAt: null });
+    const currentNeeds = await ownNeeds(participant, tx, { deletedAt: null });
     const preview = previewNeedEditOperations(operations, currentNeeds);
     const now = new Date();
 
@@ -173,7 +176,6 @@ export async function applyNeedEdits(
       } else if (operation.type === 'addNeed') {
         await tx.need.create({
           data: {
-            participantId: participant.id,
             sessionId,
             userId,
             label: cleanNeedText(operation.text),
@@ -185,7 +187,7 @@ export async function applyNeedEdits(
         });
       } else if (operation.type === 'removeNeed' && operation.needId) {
         await tx.need.updateMany({
-          where: { id: operation.needId, participantId: participant.id },
+          where: { id: operation.needId, sessionId: participant.sessionId, userId: participant.userId },
           data: { deletedAt: now },
         });
       }
@@ -194,7 +196,7 @@ export async function applyNeedEdits(
     return preview;
   });
 
-  const needs = await ownNeeds(participant.id);
+  const needs = await ownNeeds(participant);
   return {
     needs: needs.map(toDTO),
     applied,
@@ -204,7 +206,7 @@ export async function applyNeedEdits(
 
 export async function deleteNeed(sessionId: string, userId: string, needId: string): Promise<IdentifiedNeedDTO> {
   const participant = await assertNeedsEditable(sessionId, userId);
-  const [need] = await ownNeeds(participant.id, prisma, { id: needId });
+  const [need] = await ownNeeds(participant, prisma, { id: needId });
   if (!need) throw new NeedEditValidationError('Need not found.');
   return toDTO(await updateNeed(prisma, needId, { deletedAt: new Date() }));
 }
@@ -220,7 +222,7 @@ export async function applyNeedAction(
     if (action.type === 'refine') {
       const oldNeedId = action.supersedes;
       if (!oldNeedId) throw new NeedEditValidationError('Refine action requires supersedes.');
-      const [current] = await ownNeeds(participant.id, tx, { id: oldNeedId, deletedAt: null });
+      const [current] = await ownNeeds(participant, tx, { id: oldNeedId, deletedAt: null });
       if (!current) throw new NeedEditValidationError('Need not found.');
 
       const text = cleanNeedText(action.description || action.need);
@@ -228,7 +230,6 @@ export async function applyNeedAction(
       const newNeed = toNeedRecord(
         (await tx.need.create({
           data: {
-            participantId: participant.id,
             sessionId,
             userId,
             label: text,
@@ -247,7 +248,7 @@ export async function applyNeedAction(
 
     const targetId = action.needId;
     if (!targetId) throw new NeedEditValidationError(`${action.type} action requires needId.`);
-    const [current] = await ownNeeds(participant.id, tx, { id: targetId });
+    const [current] = await ownNeeds(participant, tx, { id: targetId });
     if (!current) throw new NeedEditValidationError('Need not found.');
 
     if (action.type === 'delete') {
@@ -263,7 +264,7 @@ export async function applyNeedAction(
     return { oldNeed: locked, newNeed: locked };
   });
 
-  const needs = await ownNeeds(participant.id);
+  const needs = await ownNeeds(participant);
   return {
     action: action.type,
     oldNeed: result.oldNeed ? toDTO(result.oldNeed) : undefined,

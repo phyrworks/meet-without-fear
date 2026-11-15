@@ -106,7 +106,7 @@ export async function admitStreamTurn(params: StreamTurnAdmissionParams): Promis
   if (session.status !== 'ACTIVE') {
     if (session.status === 'CREATED') {
       const isInviter = await prisma.invitation.count({
-        where: { sessionId, invitedByParticipantId: participant.id },
+        where: { sessionId, invitedByUserId: participant.userId },
       });
       if (!isInviter) {
         return { admitted: false, status: 400, body: { error: 'Session is not active' } };
@@ -117,8 +117,8 @@ export async function admitStreamTurn(params: StreamTurnAdmissionParams): Promis
   }
 
   // The participant's current stage (stage shim)
-  const stages = await loadStageStates([{ id: participant.id, joinedAt: participant.joinedAt }]);
-  const state = stages.get(participant.id);
+  const stages = await loadStageStates([participant]);
+  const state = stages.get(participant);
   const progress = state ? currentRow(state) : null;
   const currentStage = state?.current.stage ?? 0;
 
@@ -126,7 +126,7 @@ export async function admitStreamTurn(params: StreamTurnAdmissionParams): Promis
   if (currentStage === 3 && refiningNeedId) {
     // Only one of the participant's own live needs can be refined.
     const refiningNeed = await prisma.need.findFirst({
-      where: { id: refiningNeedId, participantId: participant.id, deletedAt: null },
+      where: { id: refiningNeedId, sessionId: participant.sessionId, userId: participant.userId, deletedAt: null },
       select: { id: true, label: true, category: true },
     });
     if (!refiningNeed) {
@@ -144,12 +144,11 @@ export async function admitStreamTurn(params: StreamTurnAdmissionParams): Promis
   // ===========================================================================
   const userMessage = await createParticipantMessage({
     conversationId: participant.mainConversationId,
-    participantId: participant.id,
-    userId: user.id,
+    seat: participant,
     content,
     refiningNeedId: refiningNeedContext?.id ?? null,
   });
-  await touchParticipantActivity(participant.id, userMessage.createdAt);
+  await touchParticipantActivity(participant, userMessage.createdAt);
   getShowActivityStatus(user.id)
     .then(showActivityStatus => {
       if (!showActivityStatus) return;

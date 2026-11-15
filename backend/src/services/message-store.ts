@@ -20,14 +20,15 @@
  *     connection.
  *
  * The DTO (`shared` MessageDTO) is unchanged: `role` is the old single role
- * (the target's role, or its kind for a delivered item), `senderId` the sender
- * participant's user id, `sessionId` the conversation's session, `stage` the
+ * (the target's role, or its kind for a delivered item), `senderId` the sender's
+ * user id (`sender_user_id`; the sender participant is (session_id, sender_user_id)), `sessionId` the conversation's session, `stage` the
  * owner's stage at the message's instant (stage shim), `timestamp` created_at.
  */
 
 import type { DbClient } from '../lib/prisma';
 import { getJobPrisma, prisma } from '../lib/prisma';
 import { encryptColumnValue } from '../lib/prisma-encryption-middleware';
+import type { Seat } from './participant-resolver';
 import { messageStage, type MilestoneReached } from './stage-shim';
 
 export type TargetMessageRole = 'USER' | 'AI' | 'SYSTEM';
@@ -55,14 +56,14 @@ export type MessageDedupeKey = (typeof MESSAGE_DEDUPE_KEYS)[number];
 export interface StoredMessage {
   id: string;
   conversationId: string;
-  senderParticipantId: string | null;
+  /** The sender's user id (the sender participant is the message's (session_id, sender_user_id)); null for AI/SYSTEM. */
+  senderUserId: string | null;
   role: TargetMessageRole;
   kind: TargetMessageKind;
   content: string;
   refiningNeedId: string | null;
   sourceAttemptId: string | null;
   createdAt: Date;
-  senderParticipant: { userId: string | null } | null;
 }
 
 /** The DTO's single role: CHAT rows keep theirs, every other kind is named by its kind. */
@@ -101,7 +102,7 @@ export function toMessageDTO(m: StoredMessage, ctx: MessageDTOContext): LegacyMe
   return {
     id: m.id,
     sessionId: ctx.sessionId,
-    senderId: m.senderParticipant?.userId ?? null,
+    senderId: m.senderUserId,
     role: legacyRole(m.role, m.kind),
     content: m.content,
     stage: messageStage(ctx.ownerMilestones, m.createdAt, { invitationPending: ctx.ownerInvitationPending }),
@@ -112,14 +113,13 @@ export function toMessageDTO(m: StoredMessage, ctx: MessageDTOContext): LegacyMe
 export const MESSAGE_SELECT = {
   id: true,
   conversationId: true,
-  senderParticipantId: true,
+  senderUserId: true,
   role: true,
   kind: true,
   content: true,
   refiningNeedId: true,
   sourceAttemptId: true,
   createdAt: true,
-  senderParticipant: { select: { userId: true } },
 } as const;
 
 /**
@@ -148,11 +148,12 @@ export async function listConversationMessages(opts: {
 }
 
 /** Count of the participant's own turns in their conversation (role USER, kind CHAT). */
-export async function countOwnTurns(conversationId: string, participantId: string, since?: Date): Promise<number> {
+export async function countOwnTurns(conversationId: string, seat: Seat, since?: Date): Promise<number> {
   return prisma.message.count({
     where: {
       conversationId,
-      senderParticipantId: participantId,
+      sessionId: seat.sessionId,
+      senderUserId: seat.userId,
       role: 'USER',
       kind: 'CHAT',
       ...(since ? { createdAt: { gte: since } } : {}),
@@ -161,9 +162,15 @@ export async function countOwnTurns(conversationId: string, participantId: strin
 }
 
 /** The newest own turn's instant, or null. */
-export async function lastOwnTurnAt(conversationId: string, participantId: string): Promise<Date | null> {
+export async function lastOwnTurnAt(conversationId: string, seat: Seat): Promise<Date | null> {
   const last = await prisma.message.findFirst({
-    where: { conversationId, senderParticipantId: participantId, role: 'USER', kind: 'CHAT' },
+    where: {
+      conversationId,
+      sessionId: seat.sessionId,
+      senderUserId: seat.userId,
+      role: 'USER',
+      kind: 'CHAT',
+    },
     orderBy: { createdAt: 'desc' },
     select: { createdAt: true },
   });
@@ -184,9 +191,10 @@ async function insert(
   client: DbClient,
   data: {
     conversationId: string;
-    senderParticipantId: string | null;
-    /** The sender's user id, when the caller knows it (for the DTO's senderId). */
-    senderUserId?: string | null;
+    /** The conversation's session, when the caller holds it (else read from the conversation). */
+    sessionId?: string | null;
+    /** The sender's user id (a participant of the conversation's session); null for AI/SYSTEM. */
+    senderUserId: string | null;
     role: TargetMessageRole;
     kind: TargetMessageKind;
     content: string;
@@ -195,16 +203,17 @@ async function insert(
     createdAt?: Date;
   },
 ): Promise<StoredMessage> {
-  // work-k5fk.3 (6a): the row carries its session and its sender's user, read in the INSERT from the
-  // conversation and the sender's participant — the keys pin both (message (conversation_id,
-  // session_id) → conversation; (sender_participant_id, session_id, sender_user_id) → participant).
+  // work-k5fk.3: the row carries its session and its sender's user — the keys pin both (message
+  // (conversation_id, session_id) → conversation; (session_id, sender_user_id) → participant). A
+  // caller without the session has it read from the conversation in the INSERT.
   // created_at is the client's instant, as the Prisma create sent it (@default(now())).
   const [row] = await client.$queryRaw<Array<{ id: string; created_at: Date }>>`
-    INSERT INTO message (conversation_id, sender_participant_id, session_id, sender_user_id, role, kind, content,
+    INSERT INTO message (conversation_id, session_id, sender_user_id, role, kind, content,
                          refining_need_id, source_attempt_id, created_at)
-    VALUES (${data.conversationId}::uuid, ${data.senderParticipantId}::uuid,
-            (SELECT c.session_id FROM conversation c WHERE c.id = ${data.conversationId}::uuid),
-            (SELECT p.user_id FROM participant p WHERE p.id = ${data.senderParticipantId}::uuid),
+    VALUES (${data.conversationId}::uuid,
+            coalesce(${data.sessionId ?? null}::uuid,
+                     (SELECT c.session_id FROM conversation c WHERE c.id = ${data.conversationId}::uuid)),
+            ${data.senderUserId}::uuid,
             ${data.role}::message_role, ${data.kind}::message_kind, ${encryptColumnValue('message', 'content', data.content)},
             ${data.refiningNeedId ?? null}::uuid, ${data.sourceAttemptId ?? null}::uuid, ${data.createdAt ?? new Date()})
     RETURNING id, created_at`;
@@ -212,14 +221,13 @@ async function insert(
   return {
     id: row.id,
     conversationId: data.conversationId,
-    senderParticipantId: data.senderParticipantId,
+    senderUserId: data.senderUserId,
     role: data.role,
     kind: data.kind,
     content: data.content,
     refiningNeedId: data.refiningNeedId ?? null,
     sourceAttemptId: data.sourceAttemptId ?? null,
     createdAt,
-    senderParticipant: data.senderParticipantId ? { userId: data.senderUserId ?? null } : null,
   };
 }
 
@@ -229,17 +237,16 @@ async function insert(
  */
 export function createParticipantMessage(opts: {
   conversationId: string;
-  participantId: string;
-  /** The participant's user id (the DTO's senderId). */
-  userId?: string | null;
+  /** The sender: the participant whose conversation this is. */
+  seat: Seat;
   content: string;
   refiningNeedId?: string | null;
   createdAt?: Date;
 }): Promise<StoredMessage> {
   return insert(prisma, {
     conversationId: opts.conversationId,
-    senderParticipantId: opts.participantId,
-    senderUserId: opts.userId ?? null,
+    sessionId: opts.seat.sessionId,
+    senderUserId: opts.seat.userId,
     role: 'USER',
     kind: 'CHAT',
     content: opts.content,
@@ -267,7 +274,7 @@ export function createFacilitatorMessage(opts: {
 }): Promise<StoredMessage> {
   return insert(opts.client ?? getJobPrisma(), {
     conversationId: opts.conversationId,
-    senderParticipantId: null,
+    senderUserId: null,
     role: opts.role ?? 'AI',
     kind: opts.kind ?? 'CHAT',
     content: opts.content,
@@ -320,14 +327,13 @@ export async function createFacilitatorMessageOnce(opts: {
   return {
     id: row.id,
     conversationId: opts.conversationId,
-    senderParticipantId: null,
+    senderUserId: null,
     role: 'AI',
     kind: 'CHAT',
     content: opts.content,
     refiningNeedId: null,
     sourceAttemptId: null,
     createdAt: row.created_at,
-    senderParticipant: null,
   };
 }
 
@@ -339,7 +345,10 @@ export async function createFacilitatorMessageOnce(opts: {
  */
 export function deliverMessage(opts: {
   toConversationId: string;
-  fromParticipantId: string;
+  /** The session of both conversations (every participant of the row is of it). */
+  sessionId: string;
+  /** The author: a participant of `sessionId`. */
+  fromUserId: string;
   kind: Exclude<TargetMessageKind, 'CHAT'>;
   content: string;
   sourceAttemptId?: string | null;
@@ -348,7 +357,8 @@ export function deliverMessage(opts: {
 }): Promise<StoredMessage> {
   return insert(opts.client ?? getJobPrisma(), {
     conversationId: opts.toConversationId,
-    senderParticipantId: opts.fromParticipantId,
+    sessionId: opts.sessionId,
+    senderUserId: opts.fromUserId,
     role: 'USER',
     kind: opts.kind,
     content: opts.content,

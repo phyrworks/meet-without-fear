@@ -54,6 +54,7 @@ import {
   countOwnTurns,
   type StoredMessage,
 } from './message-store';
+import type { Seat } from './participant-resolver';
 import { publishMessageAIResponse } from './realtime';
 import type { ReopenedPreJoinDraft } from './stage-prompts';
 import { buildReopenedPreJoinDraftFallback } from './stage-prompts';
@@ -204,19 +205,21 @@ interface ReopenFacts {
 }
 
 /** The caller's reopened EMPATHY draft about their present partner (no round submitted), if any. */
-async function reopenedDraftOf(sessionId: string, participantId: string): Promise<ReopenFacts | null> {
+async function reopenedDraftOf(seat: Seat): Promise<ReopenFacts | null> {
+  const { sessionId, userId } = seat;
   const partners = await prisma.participant.findMany({
-    where: { sessionId, id: { not: participantId }, kind: 'human', leftAt: null },
-    select: { id: true },
+    where: { sessionId, userId: { not: userId }, kind: 'human', leftAt: null },
+    select: { userId: true },
   });
   if (partners.length !== 1) return null;
+  const partnerUserId = partners[0].userId;
   const draft = await prisma.draft.findFirst({
-    where: { participantId, kind: 'EMPATHY', aboutParticipantId: partners[0].id },
+    where: { sessionId, userId, kind: 'EMPATHY', aboutUserId: partnerUserId },
     select: { id: true, content: true, reopenedAt: true },
   });
   if (!draft?.reopenedAt) return null;
   const submitted = await prisma.empathyAttempt.count({
-    where: { authorParticipantId: participantId, subjectParticipantId: partners[0].id },
+    where: { sessionId, authorUserId: userId, subjectUserId: partnerUserId },
   });
   if (submitted) return null;
   return { draftId: draft.id, content: draft.content, reopenedAt: draft.reopenedAt };
@@ -231,9 +234,9 @@ async function reopenedDraftOf(sessionId: string, participantId: string): Promis
  * when it is not stale (the generation may still be running) or not needed.
  */
 export async function recoverStaleOpener(opts: {
+  /** The author's seat is (sessionId, userId). */
   sessionId: string;
   userId: string;
-  participantId: string;
   conversationId: string;
   partnerName?: string;
   reopen: ReopenFacts;
@@ -257,7 +260,7 @@ export async function recoverStaleOpener(opts: {
   logger.warn(
     `[recoverStaleOpener] Reopen at ${opts.reopen.reopenedAt.toISOString()} had no opener; wrote the template`,
   );
-  const opener = await messageDTO(result.stored, opts.sessionId, opts.participantId);
+  const opener = await messageDTO(result.stored, { sessionId: opts.sessionId, userId: opts.userId });
   if (result.written) {
     await publishMessageAIResponse(opts.sessionId, opts.userId, opener).catch((err: unknown) =>
       logger.warn('[recoverStaleOpener] Ably notice failed:', err),
@@ -273,7 +276,6 @@ export async function recoverStaleOpener(opts: {
 export async function recoverStaleOpenerForRead(opts: {
   sessionId: string;
   userId: string;
-  participantId: string;
   conversationId: string | null;
   partnerName?: string;
   draft: { id: string; content: string; reopenedAt?: Date | null };
@@ -283,7 +285,6 @@ export async function recoverStaleOpenerForRead(opts: {
     await recoverStaleOpener({
       sessionId: opts.sessionId,
       userId: opts.userId,
-      participantId: opts.participantId,
       conversationId: opts.conversationId,
       partnerName: opts.partnerName,
       reopen: { draftId: opts.draft.id, content: opts.draft.content, reopenedAt: opts.draft.reopenedAt },
@@ -301,13 +302,17 @@ export interface OpenPreJoinDraftRevisionParams {
   sessionId: string;
   userId: string;
   userName: string;
-  participantId: string;
   mainConversationId: string;
   partnerName?: string;
   topicFrame?: string | null;
   timeZone?: string;
   /** For tests: the clock the day is named against. */
   now?: Date;
+}
+
+/** The author's seat: (sessionId, userId). */
+function seatOfParams(params: { sessionId: string; userId: string }): Seat {
+  return { sessionId: params.sessionId, userId: params.userId };
 }
 
 export type OpenPreJoinDraftRevisionResult =
@@ -338,7 +343,7 @@ export type OpenPreJoinDraftRevisionResult =
 export async function openPreJoinDraftRevision(
   params: OpenPreJoinDraftRevisionParams,
 ): Promise<OpenPreJoinDraftRevisionResult> {
-  const resolution = await resolvePreJoinReviewForEdit(params.participantId);
+  const resolution = await resolvePreJoinReviewForEdit(seatOfParams(params));
   if (resolution.status !== 'resolved') {
     return (await existingReopen(params)) ?? { resolved: false, opener: null, reopenedAt: null };
   }
@@ -360,15 +365,14 @@ export async function openPreJoinDraftRevision(
 
 /** A later call while the reopen is in effect: the opener, a recovered one, or none yet. */
 async function existingReopen(params: OpenPreJoinDraftRevisionParams): Promise<OpenPreJoinDraftRevisionResult | null> {
-  const reopen = await reopenedDraftOf(params.sessionId, params.participantId);
+  const reopen = await reopenedDraftOf(seatOfParams(params));
   if (!reopen) return null;
   const found = await findOpenerSince(params.mainConversationId, reopen.reopenedAt);
   const opener = found
-    ? await messageDTO(found, params.sessionId, params.participantId)
+    ? await messageDTO(found, seatOfParams(params))
     : await recoverStaleOpener({
         sessionId: params.sessionId,
         userId: params.userId,
-        participantId: params.participantId,
         conversationId: params.mainConversationId,
         partnerName: params.partnerName,
         reopen,
@@ -399,7 +403,7 @@ async function generateOpener(
       role: m.role === 'USER' && m.kind === 'CHAT' ? ('user' as const) : ('assistant' as const),
       content: m.content,
     }));
-  const turnCount = await countOwnTurns(params.mainConversationId, params.participantId);
+  const turnCount = await countOwnTurns(params.mainConversationId, seatOfParams(params));
   const aiContext: FullAIContext = {
     sessionId: params.sessionId,
     userId: params.userId,
@@ -457,7 +461,7 @@ async function writeOpener(
     content,
   });
   if (!result?.written) return;
-  const opener = await messageDTO(result.stored, params.sessionId, params.participantId);
+  const opener = await messageDTO(result.stored, seatOfParams(params));
   await publishMessageAIResponse(params.sessionId, params.userId, opener).catch((err: unknown) =>
     logger.warn('[openPreJoinDraftRevision] Ably notice failed:', err),
   );

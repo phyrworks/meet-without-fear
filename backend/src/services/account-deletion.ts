@@ -44,14 +44,14 @@ const LIVE = ['CREATED', 'INVITED', 'ACTIVE'] as const;
  * connection, before the walk; the user's own rows only).
  */
 async function countPrivateRows(userId: string): Promise<number> {
-  const mine = { participant: { userId } };
+  const mine = { userId };
   const counts = await Promise.all([
     prisma.message.count({ where: { conversation: mine } }),
     prisma.draft.count({ where: mine }),
-    prisma.aiMemory.count({ where: { OR: [mine, { userId }] } }),
+    prisma.aiMemory.count({ where: mine }),
     prisma.moodReading.count({ where: mine }),
     prisma.regulationEvent.count({ where: mine }),
-    prisma.empathyAttempt.count({ where: { authorParticipant: { userId }, revealedAt: null } }),
+    prisma.empathyAttempt.count({ where: { authorUserId: userId, revealedAt: null } }),
     prisma.reflection.count({ where: { userId } }),
     prisma.featureState.count({ where: { userId } }),
     prisma.userMemory.count({ where: { userId } }),

@@ -34,11 +34,12 @@ import { decryptRawRows, encryptColumnValue } from '../lib/prisma-encryption-mid
 import { reencryptForSession } from '../lib/share-moments';
 import { cleanVisibleAIText } from '../utils/visible-text';
 import { reachMilestone } from './milestone-writer';
-import { seatOfParticipant } from './participant-resolver';
+import type { Seat } from './participant-resolver';
 
 export interface SharedNeedRow {
   needId: string;
-  participantId: string;
+  /** The need's owner (within `sessionId`). */
+  userId: string;
   sessionId: string;
   category: NeedCategory;
   sharedText: string;
@@ -49,7 +50,7 @@ export interface SharedNeedRow {
 export async function listSharedNeeds(sessionId: string): Promise<SharedNeedRow[]> {
   return decryptRawRows(
     await prisma.$queryRaw<SharedNeedRow[]>`
-    SELECT need_id AS "needId", participant_id AS "participantId", session_id AS "sessionId",
+    SELECT need_id AS "needId", user_id AS "userId", session_id AS "sessionId",
            category::text AS category, shared_text AS "sharedText", shared_at AS "sharedAt"
     FROM v_need_shared
     WHERE session_id = ${sessionId}::uuid
@@ -63,16 +64,16 @@ export async function listSharedNeeds(sessionId: string): Promise<SharedNeedRow[
  * (`v_need_shared`), or null. The per-participant "I shared" fact —
  * `needs_shared` is session-scoped and reached only once all have shared.
  */
-export async function ownSharedAt(sessionId: string, participantId: string): Promise<Date | null> {
+export async function ownSharedAt(sessionId: string, seat: Seat): Promise<Date | null> {
   const rows = await prisma.$queryRaw<Array<{ sharedAt: Date | null }>>`SELECT min(shared_at) AS "sharedAt"
     FROM v_need_shared
-    WHERE session_id = ${sessionId}::uuid AND participant_id = ${participantId}::uuid`;
+    WHERE session_id = ${sessionId}::uuid AND user_id = ${seat.userId}::uuid`;
   return rows[0]?.sharedAt ?? null;
 }
 
-/** The present human participants of the session who have at least one live share. */
+/** The user ids of the session's participants who have at least one live share. */
 export async function participantsWhoShared(sessionId: string): Promise<Set<string>> {
-  return new Set((await listSharedNeeds(sessionId)).map(n => n.participantId));
+  return new Set((await listSharedNeeds(sessionId)).map(n => n.userId));
 }
 
 // ----------------------------------------------------------------------------
@@ -168,24 +169,22 @@ export interface ShareNeedsResult {
  */
 export async function shareNeeds(args: {
   sessionId: string;
-  participantId: string;
+  seat: Seat;
   needs: Array<{ id: string; label: string; category: NeedCategory; evidence: string[] }>;
 }): Promise<ShareNeedsResult> {
   const sharedAt = new Date();
 
   // 1. The owner's decision (app connection).
   await prisma.$transaction(async tx => {
-    const seat = await seatOfParticipant(args.participantId, tx);
+    const { seat } = args;
     for (const need of args.needs) {
       const existing = await tx.consent.findFirst({
-        where: { needId: need.id, participantId: args.participantId, decision: 'GRANTED' },
+        where: { needId: need.id, sessionId: seat.sessionId, userId: seat.userId, decision: 'GRANTED' },
         select: { id: true },
       });
       if (existing) continue;
       await tx.consent.create({
         data: {
-          participantId: args.participantId,
-          requestedByParticipantId: args.participantId,
           sessionId: seat.sessionId,
           userId: seat.userId,
           requestedByUserId: seat.userId,
@@ -235,16 +234,16 @@ export async function needsSharedForSession(sessionId: string): Promise<boolean>
 export async function completeNeedsSharingIfReady(sessionId: string, at: Date = new Date()): Promise<boolean> {
   const humans = await prisma.participant.findMany({
     where: { sessionId, kind: 'human', leftAt: null },
-    select: { id: true },
-    orderBy: [{ joinedAt: 'asc' }, { id: 'asc' }],
+    select: { sessionId: true, userId: true },
+    orderBy: [{ joinedAt: 'asc' }, { userId: 'asc' }],
   });
   if (humans.length < 2) return false;
   const shared = await participantsWhoShared(sessionId);
-  if (!humans.every(h => shared.has(h.id))) return false;
+  if (!humans.every(h => shared.has(h.userId))) return false;
   let wrote = false;
   for (const h of humans) {
-    await reachMilestone(h.id, 'needs_validated', at);
-    if (await reachMilestone(h.id, 'needs_shared', at)) wrote = true;
+    await reachMilestone(h, 'needs_validated', at);
+    if (await reachMilestone(h, 'needs_shared', at)) wrote = true;
   }
   return wrote;
 }

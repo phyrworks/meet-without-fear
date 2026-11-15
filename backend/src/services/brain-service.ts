@@ -31,7 +31,7 @@ const json = (v: unknown): string | null => (v === undefined || v === null ? nul
 /**
  * The telemetry writer (TS-12, spec §1.8 brain_activity): rows are written by
  * the JOB (`mwf_job`) — `brain_activity` has no `mwf_app` grant at all — and
- * attributed at capture. Ruling R40: `participant_id` is set ONLY for a call
+ * attributed at capture. Ruling R40: `participant_user_id` is set ONLY for a call
  * whose whole content is the calling participant's (`attributeToCaller`, from
  * the call site's `ownContent`); every call that reads or produces another
  * participant's content (reconciler, share suggestion/offer, empathy analysis
@@ -60,18 +60,19 @@ export class BrainService {
     return BrainService.instance;
   }
 
-  /** Whose turn: the request's participant in this session, else (job) the request user's participant there. */
-  private async participantFor(sessionId: string | null): Promise<{ id: string; userId: string | null } | null> {
+  /**
+   * Whose turn: the request's participant in this session (its user id — the row's
+   * participant is (session_id, participant_user_id), work-k5fk.3), else (job) the
+   * request user, if they are a participant there.
+   */
+  private async participantUserFor(sessionId: string | null): Promise<string | null> {
     if (!sessionId) return null;
     const ctx = getRequestContext();
-    // work-k5fk.3 (6a): the row carries the participant's user too (pinned to it by FK): the request's
-    // participant is the request user's.
-    if (ctx?.participantId && ctx.sessionId === sessionId && ctx.userId)
-      return { id: ctx.participantId, userId: ctx.userId };
+    if (ctx?.seated && ctx.sessionId === sessionId && ctx.userId) return ctx.userId;
     if (!ctx?.userId || !UUID.test(ctx.userId)) return null;
-    const rows = await getJobPrisma().$queryRaw<Array<{ id: string }>>`SELECT id FROM participant
+    const rows = await getJobPrisma().$queryRaw<Array<{ user_id: string }>>`SELECT user_id FROM participant
       WHERE session_id = ${sessionId}::uuid AND user_id = ${ctx.userId}::uuid`;
-    return rows[0] ? { id: rows[0].id, userId: ctx.userId } : null;
+    return rows[0]?.user_id ?? null;
   }
 
   /**
@@ -85,7 +86,6 @@ export class BrainService {
       id: '',
       sessionId,
       reflectionId,
-      participantId: null,
       participantUserId: null,
       turnId: params.turnId ?? null,
       activityType: params.activityType,
@@ -105,14 +105,11 @@ export class BrainService {
       updatedAt: now,
     };
     try {
-      const seat = params.attributeToCaller ? await this.participantFor(sessionId) : null;
-      record.participantId = seat?.id ?? null;
-      record.participantUserId = seat?.userId ?? null;
+      record.participantUserId = params.attributeToCaller ? await this.participantUserFor(sessionId) : null;
       const rows = await getJobPrisma().$queryRaw<Array<{ id: string; created_at: Date }>>`INSERT INTO brain_activity
-          (session_id, reflection_id, participant_id, participant_user_id, turn_id, activity_type, call_type, model, input, metadata,
+          (session_id, reflection_id, participant_user_id, turn_id, activity_type, call_type, model, input, metadata,
            status)
-        VALUES (${sessionId}::uuid, ${reflectionId}::uuid, ${record.participantId}::uuid,
-                ${record.participantUserId}::uuid, ${record.turnId},
+        VALUES (${sessionId}::uuid, ${reflectionId}::uuid, ${record.participantUserId}::uuid, ${record.turnId},
                 ${params.activityType}::activity_type, ${record.callType}::brain_call_type, ${params.model},
                 ${json(record.input)}::jsonb, ${json(record.metadata)}::jsonb, 'PENDING'::activity_status)
         RETURNING id, created_at`;

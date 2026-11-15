@@ -329,7 +329,7 @@ export async function notifySessionMembers(sessionId: string, excludeUserId?: st
       select: {
         updatedAt: true,
         // Humans only: a modeled seat (the AI, a persona) has a user id but no client (work-k5fk.2 review F7).
-        participants: { where: { kind: 'human', userId: { not: null }, leftAt: null }, select: { userId: true } },
+        participants: { where: { kind: 'human', leftAt: null }, select: { userId: true } },
       },
     });
 
@@ -341,9 +341,7 @@ export async function notifySessionMembers(sessionId: string, excludeUserId?: st
     }
 
     // Publish to each member's user channel (except the excluded user)
-    const memberIds = session.participants
-      .map((m: { userId: string | null }) => m.userId)
-      .filter((id): id is string => !!id && id !== excludeUserId);
+    const memberIds = session.participants.map(m => m.userId).filter(id => id !== excludeUserId);
 
     logger.info(`[notifySessionMembers] Publishing to ${memberIds.length} members: ${memberIds.join(', ')}`);
 

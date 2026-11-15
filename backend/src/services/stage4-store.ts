@@ -36,6 +36,7 @@ import {
   type ProposalRevisionReason,
 } from './proposal-revision-reasons';
 import { reachMilestone } from './milestone-writer';
+import type { Seat } from './participant-resolver';
 
 // ============================================================================
 // Rows
@@ -49,7 +50,7 @@ export type DispositionStatus = 'OPEN' | 'COVERED' | 'PARTIAL' | 'SKIPPED' | 'DE
 export interface ProposalRow {
   id: string;
   sessionId: string;
-  createdByParticipantId: string | null;
+  createdByUserId: string | null;
   source: 'USER_SUBMITTED' | 'AI_SUGGESTED' | 'CURATED';
   kind: ProposalKind;
   status: ProposalStatus;
@@ -58,7 +59,7 @@ export interface ProposalRow {
   measureOfSuccess: string | null;
   unresolvedNeedLabels: string[];
   removedAt: Date | null;
-  removedByParticipantId: string | null;
+  removedByUserId: string | null;
   removalReason: string | null;
   sharedAt: Date | null;
   createdAt: Date;
@@ -69,7 +70,7 @@ export interface ProposalRow {
 
 export interface ChoiceRow {
   proposalId: string;
-  participantId: string;
+  userId: string;
   decision: ChoiceDecision;
   note: string | null;
   createdAt: Date;
@@ -78,14 +79,14 @@ export interface ChoiceRow {
 
 export interface CoverageRow {
   needId: string;
-  needOwnerParticipantId: string;
+  needOwnerUserId: string;
   coveringProposalIds: string[];
-  willingParticipantIds: string[];
+  willingUserIds: string[];
   status: 'COVERED' | 'PARTIAL' | 'OPEN';
 }
 
 export interface DispositionRow {
-  participantId: string;
+  userId: string;
   needId: string;
   status: DispositionStatus;
   isCurrent: boolean;
@@ -96,7 +97,7 @@ export interface DispositionRow {
 /** A shared need as one participant may name it: their own label for their own need, else the shared text. */
 export interface Stage4Need {
   id: string;
-  ownerParticipantId: string;
+  ownerUserId: string;
   category: NeedCategory;
   sharedText: string;
   /** What THIS viewer sees: own label (owner may read need.label) or the partner's shared text. */
@@ -109,7 +110,7 @@ export interface ClosureRow {
   kind: 'SHARED_AGREEMENT' | 'NO_SHARED_AGREEMENT';
   reason: 'MUTUAL_SELECTION' | 'NO_OVERLAP' | 'BOUNDARY_HONORED' | 'USER_STOPPED';
   summary: string;
-  closedByParticipantId: string | null;
+  closedByUserId: string | null;
   checkInAt: Date | null;
   closedAt: Date;
 }
@@ -132,7 +133,7 @@ export interface AgreementRow {
   followUpAt: Date | null;
   completedAt: Date | null;
   createdAt: Date;
-  parties: Array<{ participantId: string; agreedAt: Date }>;
+  parties: Array<{ userId: string; agreedAt: Date }>;
 }
 
 // ============================================================================
@@ -142,7 +143,7 @@ export interface AgreementRow {
 const PROPOSAL_SELECT = {
   id: true,
   sessionId: true,
-  createdByParticipantId: true,
+  createdByUserId: true,
   source: true,
   kind: true,
   status: true,
@@ -151,7 +152,7 @@ const PROPOSAL_SELECT = {
   measureOfSuccess: true,
   unresolvedNeedLabels: true,
   removedAt: true,
-  removedByParticipantId: true,
+  removedByUserId: true,
   removalReason: true,
   sharedAt: true,
   createdAt: true,
@@ -168,16 +169,16 @@ const toProposal = ({ needs, ...p }: RawProposal): ProposalRow => ({ ...p, needI
  * SHARED_PROPOSAL, and an INDIVIDUAL_COMMITMENT only to its creator or once
  * shared (spec §1.4 proposal RLS).
  */
-export async function loadProposals(sessionId: string, viewerParticipantId?: string): Promise<ProposalRow[]> {
+export async function loadProposals(sessionId: string, viewer?: Seat): Promise<ProposalRow[]> {
   const rows = (await prisma.proposal.findMany({
     where: {
       sessionId,
-      ...(viewerParticipantId
+      ...(viewer
         ? {
             OR: [
               { kind: 'SHARED_PROPOSAL' },
-              { createdByParticipantId: viewerParticipantId },
-              { createdByParticipantId: null },
+              { createdByUserId: viewer.userId },
+              { createdByUserId: null },
               { sharedAt: { not: null } },
             ],
           }
@@ -201,16 +202,18 @@ export async function loadProposal(proposalId: string): Promise<ProposalRow | nu
  * The choices `viewer` may read: their own, and a co-participant's only once
  * that participant has reached `choices_shared` (the proposal_choice RLS arm).
  */
-export async function loadVisibleChoices(sessionId: string, viewerParticipantId: string): Promise<ChoiceRow[]> {
+export async function loadVisibleChoices(sessionId: string, viewer: Seat): Promise<ChoiceRow[]> {
   return decryptRawRows(
     await prisma.$queryRaw<ChoiceRow[]>`
-    SELECT c.proposal_id AS "proposalId", c.participant_id AS "participantId", c.decision::text AS decision,
+    SELECT c.proposal_id AS "proposalId", c.user_id AS "userId", c.decision::text AS decision,
            c.note, c.created_at AS "createdAt", c.updated_at AS "updatedAt"
     FROM proposal_choice c
     JOIN proposal pr ON pr.id = c.proposal_id AND pr.session_id = ${sessionId}::uuid
-    WHERE c.participant_id = ${viewerParticipantId}::uuid
-       OR EXISTS (SELECT 1 FROM participant_milestone pm
-                  WHERE pm.participant_id = c.participant_id AND pm.milestone_key = 'choices_shared')
+    WHERE c.session_id = ${sessionId}::uuid
+      AND (c.user_id = ${viewer.userId}::uuid
+           OR EXISTS (SELECT 1 FROM participant_milestone pm
+                      WHERE pm.session_id = c.session_id AND pm.user_id = c.user_id
+                        AND pm.milestone_key = 'choices_shared'))
     ORDER BY c.updated_at DESC, c.proposal_id`,
     { note: 'proposal_choice.note' },
   );
@@ -219,8 +222,8 @@ export async function loadVisibleChoices(sessionId: string, viewerParticipantId:
 /** `v_need_coverage` for the session (shared needs only). */
 export async function loadCoverage(sessionId: string): Promise<CoverageRow[]> {
   return prisma.$queryRaw<CoverageRow[]>`
-    SELECT need_id AS "needId", need_owner_participant_id AS "needOwnerParticipantId",
-           covering_proposal_ids AS "coveringProposalIds", willing_participant_ids AS "willingParticipantIds",
+    SELECT need_id AS "needId", need_owner_user_id AS "needOwnerUserId",
+           covering_proposal_ids AS "coveringProposalIds", willing_user_ids AS "willingUserIds",
            status
     FROM v_need_coverage WHERE session_id = ${sessionId}::uuid`;
 }
@@ -235,22 +238,20 @@ export async function loadCoverage(sessionId: string): Promise<CoverageRow[]> {
 export function visibleCoverageOf(
   coveringProposalIds: string[],
   visibleProposalIds: Set<string>,
-  visibleChoices: Array<{ proposalId: string; participantId: string; decision: string }>,
-  humanIds: string[],
-): { coveringProposalIds: string[]; willingParticipantIds: string[]; status: CoverageRow['status'] } {
+  visibleChoices: Array<{ proposalId: string; userId: string; decision: string }>,
+  humanUserIds: string[],
+): { coveringProposalIds: string[]; willingUserIds: string[]; status: CoverageRow['status'] } {
   const covering = coveringProposalIds.filter(id => visibleProposalIds.has(id));
   const willing = [
     ...new Set(
       visibleChoices
-        .filter(
-          ch => ch.decision === 'WILLING' && covering.includes(ch.proposalId) && humanIds.includes(ch.participantId),
-        )
-        .map(ch => ch.participantId),
+        .filter(ch => ch.decision === 'WILLING' && covering.includes(ch.proposalId) && humanUserIds.includes(ch.userId))
+        .map(ch => ch.userId),
     ),
   ];
   const status: CoverageRow['status'] =
-    willing.length === 0 ? 'OPEN' : willing.length >= humanIds.length ? 'COVERED' : 'PARTIAL';
-  return { coveringProposalIds: covering, willingParticipantIds: willing, status };
+    willing.length === 0 ? 'OPEN' : willing.length >= humanUserIds.length ? 'COVERED' : 'PARTIAL';
+  return { coveringProposalIds: covering, willingUserIds: willing, status };
 }
 
 /**
@@ -264,16 +265,16 @@ export function visibleCoverageOf(
  * would let a partner's unshared WILLING change what the viewer is told
  * (the share gate, the prompt's open needs) — the closure-oracle class (I3).
  */
-export async function loadVisibleCoverage(sessionId: string, viewerParticipantId: string): Promise<CoverageRow[]> {
+export async function loadVisibleCoverage(sessionId: string, viewer: Seat): Promise<CoverageRow[]> {
   const [coverage, proposals, choices, humans] = await Promise.all([
     loadCoverage(sessionId),
-    loadProposals(sessionId, viewerParticipantId),
-    loadVisibleChoices(sessionId, viewerParticipantId),
+    loadProposals(sessionId, viewer),
+    loadVisibleChoices(sessionId, viewer),
     presentHumans(sessionId),
   ]);
   const visible = new Set(proposals.map(p => p.id));
-  const humanIds = humans.map(h => h.id);
-  return coverage.map(c => ({ ...c, ...visibleCoverageOf(c.coveringProposalIds, visible, choices, humanIds) }));
+  const humanUserIds = humans.map(h => h.userId);
+  return coverage.map(c => ({ ...c, ...visibleCoverageOf(c.coveringProposalIds, visible, choices, humanUserIds) }));
 }
 
 /**
@@ -281,20 +282,20 @@ export async function loadVisibleCoverage(sessionId: string, viewerParticipantId
  * viewer's own need labels from their own `need` rows — need_share.need_id is
  * the need's id).
  */
-export async function loadStage4Needs(sessionId: string, viewerParticipantId: string): Promise<Stage4Need[]> {
+export async function loadStage4Needs(sessionId: string, viewer: Seat): Promise<Stage4Need[]> {
   const shared = decryptRawRows(
     await prisma.$queryRaw<
-      Array<{ needId: string; participantId: string; category: NeedCategory; sharedText: string; sharedAt: Date }>
+      Array<{ needId: string; userId: string; category: NeedCategory; sharedText: string; sharedAt: Date }>
     >`
-    SELECT need_id AS "needId", participant_id AS "participantId", category::text AS category,
+    SELECT need_id AS "needId", user_id AS "userId", category::text AS category,
            shared_text AS "sharedText", shared_at AS "sharedAt"
     FROM v_need_shared WHERE session_id = ${sessionId}::uuid`,
     { sharedText: 'need_share.shared_text' },
   );
-  const ownIds = shared.filter(n => n.participantId === viewerParticipantId).map(n => n.needId);
+  const ownIds = shared.filter(n => n.userId === viewer.userId).map(n => n.needId);
   const own = ownIds.length
     ? await prisma.need.findMany({
-        where: { id: { in: ownIds }, participantId: viewerParticipantId },
+        where: { id: { in: ownIds }, sessionId: viewer.sessionId, userId: viewer.userId },
         select: { id: true, label: true, createdAt: true },
       })
     : [];
@@ -302,7 +303,7 @@ export async function loadStage4Needs(sessionId: string, viewerParticipantId: st
   return shared
     .map(n => ({
       id: n.needId,
-      ownerParticipantId: n.participantId,
+      ownerUserId: n.userId,
       category: n.category,
       sharedText: n.sharedText,
       label: ownById.get(n.needId)?.label ?? n.sharedText,
@@ -313,10 +314,10 @@ export async function loadStage4Needs(sessionId: string, viewerParticipantId: st
     .map(({ order: _order, ...n }) => n);
 }
 
-export async function loadDispositions(participantId: string): Promise<DispositionRow[]> {
+export async function loadDispositions(seat: Seat): Promise<DispositionRow[]> {
   return (await prisma.needDisposition.findMany({
-    where: { participantId },
-    select: { participantId: true, needId: true, status: true, isCurrent: true, note: true, updatedAt: true },
+    where: { sessionId: seat.sessionId, userId: seat.userId },
+    select: { userId: true, needId: true, status: true, isCurrent: true, note: true, updatedAt: true },
   })) as DispositionRow[];
 }
 
@@ -328,7 +329,7 @@ export async function loadClosure(sessionId: string): Promise<ClosureRow | null>
       kind: true,
       reason: true,
       summary: true,
-      closedByParticipantId: true,
+      closedByUserId: true,
       checkInAt: true,
       closedAt: true,
     },
@@ -360,21 +361,25 @@ export async function loadAgreements(sessionId: string): Promise<AgreementRow[]>
       followUpAt: true,
       completedAt: true,
       createdAt: true,
-      parties: { select: { participantId: true, agreedAt: true } },
+      parties: { select: { userId: true, agreedAt: true } },
     },
   })) as AgreementRow[];
 }
 
-export async function hasMilestone(participantId: string, key: string): Promise<boolean> {
-  return (await prisma.participantMilestone.count({ where: { participantId, milestoneKey: key } })) > 0;
+export async function hasMilestone(seat: Seat, key: string): Promise<boolean> {
+  return (
+    (await prisma.participantMilestone.count({
+      where: { sessionId: seat.sessionId, userId: seat.userId, milestoneKey: key },
+    })) > 0
+  );
 }
 
 /** Present human participants of the session, in join order. */
-export async function presentHumans(sessionId: string): Promise<Array<{ id: string; userId: string | null }>> {
+export async function presentHumans(sessionId: string): Promise<Seat[]> {
   return prisma.participant.findMany({
     where: { sessionId, kind: 'human', leftAt: null },
-    orderBy: [{ joinedAt: 'asc' }, { id: 'asc' }],
-    select: { id: true, userId: true },
+    orderBy: [{ joinedAt: 'asc' }, { userId: 'asc' }],
+    select: { sessionId: true, userId: true },
   });
 }
 
@@ -385,40 +390,39 @@ export async function presentHumans(sessionId: string): Promise<Array<{ id: stri
 /** Record (or change) the participant's choice on a proposal. `selectedAt` semantics: a change re-stamps created_at. */
 export async function upsertChoice(args: {
   proposalId: string;
-  participantId: string;
+  seat: Seat;
   decision: ChoiceDecision;
   note?: string | null;
   at?: Date;
 }): Promise<void> {
   const at = args.at ?? new Date();
   await prisma.$executeRaw`
-    INSERT INTO proposal_choice (proposal_id, participant_id, session_id, user_id, decision, note, created_at, updated_at)
-    VALUES (${args.proposalId}::uuid, ${args.participantId}::uuid,
-            (SELECT p.session_id FROM participant p WHERE p.id = ${args.participantId}::uuid),
-            (SELECT p.user_id FROM participant p WHERE p.id = ${args.participantId}::uuid), ${args.decision}::choice_decision,
+    INSERT INTO proposal_choice (proposal_id, session_id, user_id, decision, note, created_at, updated_at)
+    VALUES (${args.proposalId}::uuid, ${args.seat.sessionId}::uuid, ${args.seat.userId}::uuid,
+            ${args.decision}::choice_decision,
             ${encryptColumnValue('proposal_choice', 'note', args.note ?? null)}, ${at}, ${at})
-    ON CONFLICT (proposal_id, participant_id)
+    ON CONFLICT (proposal_id, session_id, user_id)
     DO UPDATE SET decision = EXCLUDED.decision, note = EXCLUDED.note, created_at = EXCLUDED.created_at`;
 }
 
 /** Withdraw a choice before closure (spec: withdraw = DELETE). */
-export async function withdrawChoice(proposalId: string, participantId: string): Promise<void> {
-  await prisma.proposalChoice.deleteMany({ where: { proposalId, participantId } });
+export async function withdrawChoice(proposalId: string, seat: Seat): Promise<void> {
+  await prisma.proposalChoice.deleteMany({ where: { proposalId, sessionId: seat.sessionId, userId: seat.userId } });
 }
 
 /** The participant shares their choices: `choices_shared` (self-assertable, app connection). */
-export async function shareChoices(participantId: string): Promise<boolean> {
+export async function shareChoices(seat: Seat): Promise<boolean> {
   // Share moment (writer-principal rule): the participant's choices — their
   // notes — become the co-participant's to read with the milestone, so the
   // hook runs in the milestone's transaction. W13 re-encrypts here.
   return prisma.$transaction(async tx => {
-    const reached = await reachMilestone(participantId, 'choices_shared', new Date(), tx);
-    const me = await tx.participant.findUnique({ where: { id: participantId }, select: { sessionId: true } });
+    const reached = await reachMilestone(seat, 'choices_shared', new Date(), tx);
     await reencryptForSession(
       {
         moment: 'choices-shared',
-        sessionId: me?.sessionId ?? null,
-        rows: [{ table: 'proposal_choice', id: participantId, by: 'participant_id' }],
+        sessionId: seat.sessionId,
+        // Every choice of the participant: their user id, within the event's session.
+        rows: [{ table: 'proposal_choice', id: seat.userId, by: 'user_id' }],
       },
       tx,
     );
@@ -427,10 +431,11 @@ export async function shareChoices(participantId: string): Promise<boolean> {
 }
 
 /** Withdraw the share so the participant can revise: un-reaching a milestone is the job's DELETE. */
-export async function unshareChoices(participantId: string): Promise<void> {
+export async function unshareChoices(seat: Seat): Promise<void> {
   await getJobPrisma().$executeRaw`
     DELETE FROM participant_milestone
-    WHERE participant_id = ${participantId}::uuid AND milestone_key = 'choices_shared'`;
+    WHERE session_id = ${seat.sessionId}::uuid AND user_id = ${seat.userId}::uuid
+      AND milestone_key = 'choices_shared'`;
 }
 
 /**
@@ -490,11 +495,11 @@ export function needLabelMatches(label: string, need: string): boolean {
  */
 export async function resolveNeedLabels(
   sessionId: string,
-  actorParticipantId: string,
+  actor: Seat,
   labels: string[] | null | undefined,
 ): Promise<{ needIds: string[]; unresolved: string[] }> {
   if (!labels || labels.length === 0) return { needIds: [], unresolved: [] };
-  const needs = await loadStage4Needs(sessionId, actorParticipantId);
+  const needs = await loadStage4Needs(sessionId, actor);
   const needIds = new Set<string>();
   const unresolved: string[] = [];
   for (const label of labels) {
@@ -531,8 +536,8 @@ export interface AgreementToCreate {
  */
 export interface CreateAgreementsArgs {
   sessionId: string;
-  actorParticipantId: string | null;
-  partyParticipantIds: string[];
+  actorUserId: string | null;
+  partyUserIds: string[];
   agreements: AgreementToCreate[];
   at?: Date;
   /** A proposal_revision.reason marker (R47); never free text. */
@@ -557,18 +562,16 @@ export async function insertAgreementsTx(tx: JobTx, args: CreateAgreementsArgs):
                 ${encryptColumnValue('agreement', 'measure_of_success', a.measureOfSuccess)}, ${a.followUpAt})
         RETURNING id`;
       ids.push(row.id);
-      for (const pid of args.partyParticipantIds) {
+      for (const uid of args.partyUserIds) {
         await tx.$executeRaw`
-          INSERT INTO agreement_party (agreement_id, participant_id, session_id, user_id, agreed_at)
-          VALUES (${row.id}::uuid, ${pid}::uuid, ${args.sessionId}::uuid,
-                  (SELECT p.user_id FROM participant p WHERE p.id = ${pid}::uuid), ${at})`;
+          INSERT INTO agreement_party (agreement_id, session_id, user_id, agreed_at)
+          VALUES (${row.id}::uuid, ${args.sessionId}::uuid, ${uid}::uuid, ${at})`;
       }
       await tx.$executeRaw`
         UPDATE proposal SET status = 'CONVERTED_TO_AGREEMENT' WHERE id = ${a.proposalId}::uuid`;
       await tx.$executeRaw`
-        INSERT INTO proposal_revision (proposal_id, actor_participant_id, session_id, actor_user_id, action, before, after, reason)
-        VALUES (${a.proposalId}::uuid, ${args.actorParticipantId}::uuid, ${args.sessionId}::uuid,
-                (SELECT p.user_id FROM participant p WHERE p.id = ${args.actorParticipantId}::uuid), 'CONVERTED',
+        INSERT INTO proposal_revision (proposal_id, session_id, actor_user_id, action, before, after, reason)
+        VALUES (${a.proposalId}::uuid, ${args.sessionId}::uuid, ${args.actorUserId}::uuid, 'CONVERTED',
                 ${JSON.stringify(encryptColumnValue('proposal_revision', 'before', { status: a.fromStatus }))}::jsonb,
                 ${JSON.stringify(encryptColumnValue('proposal_revision', 'after', { agreementId: row.id, status: 'CONVERTED_TO_AGREEMENT' }))}::jsonb,
                 ${proposalRevisionReason(args.reason ?? PROPOSAL_REVISION_REASONS.MUTUAL_CLOSURE)}::proposal_revision_reason)`;
@@ -587,7 +590,7 @@ export interface CloseSessionArgs {
   kind: ClosureRow['kind'];
   reason: ClosureRow['reason'];
   summary: string;
-  closedByParticipantId: string | null;
+  closedByUserId: string | null;
   checkInAt: Date | null;
   at?: Date;
 }
@@ -601,16 +604,15 @@ export async function closeSessionAsJob(args: CloseSessionArgs): Promise<void> {
 export async function insertClosureTx(tx: JobTx, args: CloseSessionArgs): Promise<void> {
   const at = args.at ?? new Date();
   await tx.$executeRaw`
-    INSERT INTO session_closure (session_id, kind, reason, summary, closed_by_participant_id, closed_by_user_id, check_in_at, closed_at)
+    INSERT INTO session_closure (session_id, kind, reason, summary, closed_by_user_id, check_in_at, closed_at)
     VALUES (${args.sessionId}::uuid, ${args.kind}::closure_kind, ${args.reason}::closure_reason, ${encryptColumnValue('session_closure', 'summary', args.summary)},
-            ${args.closedByParticipantId}::uuid, (SELECT p.user_id FROM participant p WHERE p.id = ${args.closedByParticipantId}::uuid),
-            ${args.checkInAt}, ${at})`;
+            ${args.closedByUserId}::uuid, ${args.checkInAt}, ${at})`;
   await tx.$executeRaw`SELECT app.session_set_status(${args.sessionId}::uuid, 'RESOLVED'::session_status)`;
 }
 
 /** `closed` (session-scoped) for every present human, once the closure exists. */
 export async function reachClosedForAll(sessionId: string, at: Date): Promise<void> {
   for (const h of await presentHumans(sessionId)) {
-    await reachMilestone(h.id, 'closed', at);
+    await reachMilestone(h, 'closed', at);
   }
 }

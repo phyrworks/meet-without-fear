@@ -108,7 +108,9 @@ async function verifyClerkToken(req: Request): Promise<string | null> {
 
 /** The live user a (provider, subject) belongs to, through mwf_auth's definer function. */
 async function resolveUserId(provider: 'clerk' | 'e2e', subject: string): Promise<string | null> {
-  const rows = await getAuthPrisma().$queryRaw<Array<{ id: string | null }>>`SELECT app.resolve_user(${provider}::identity_provider, ${subject})::text AS id`;
+  const rows = await getAuthPrisma().$queryRaw<
+    Array<{ id: string | null }>
+  >`SELECT app.resolve_user(${provider}::identity_provider, ${subject})::text AS id`;
   return rows[0]?.id ?? null;
 }
 
@@ -268,7 +270,9 @@ async function createFirstLoginUser(
   profile: { email: string; firstName: string | null; lastName: string | null },
 ): Promise<string> {
   try {
-    const rows = await getAuthPrisma().$queryRaw<Array<{ id: string }>>`SELECT app.create_user('clerk'::identity_provider, ${clerkUserId}, ${profile.email}, ${profile.firstName}, ${profile.lastName})::text AS id`;
+    const rows = await getAuthPrisma().$queryRaw<
+      Array<{ id: string }>
+    >`SELECT app.create_user('clerk'::identity_provider, ${clerkUserId}, ${profile.email}, ${profile.firstName}, ${profile.lastName})::text AS id`;
     return rows[0].id;
   } catch (error) {
     const { code, detail } = pgRaise(error);
@@ -425,7 +429,8 @@ export function getUser(req: Request): AuthUser {
  *
  * Membership is the `participant` row (spec §1.1): a caller with a present
  * participant in the session is in, and `req.participant` / the request
- * context's `participantId` carry it to everything below the route. A session
+ * context's `seated` (the seat is (sessionId, userId); `getCurrentSeat()`)
+ * carry it to everything below the route. A session
  * that does not exist is a 404, one the caller does not belong to a 403.
  */
 export async function requireSessionAccess(req: Request, res: Response, next: NextFunction): Promise<void> {
@@ -450,7 +455,7 @@ export async function requireSessionAccess(req: Request, res: Response, next: Ne
         throw new ForbiddenError('Access to this session denied');
       }
       req.participant = participant;
-      updateContext({ sessionId, participantId: participant.id });
+      updateContext({ sessionId, seated: true });
       next();
       return;
     }

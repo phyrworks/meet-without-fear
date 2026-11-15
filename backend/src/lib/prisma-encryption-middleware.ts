@@ -34,7 +34,7 @@
  * | session.topic_frame                           | text           | session     |
  * | message.content                               | text           | per-row: own USER/CHAT turns and AI/SYSTEM replies to the owner → participant; every delivered kind (EMPATHY_STATEMENT in the subject's conversation, SHARED_CONTEXT, VALIDATION_FEEDBACK, SHARE_SUGGESTION, EMPATHY_REVEAL_INTRO, EMPATHY_VALIDATION_PROMPT) → session |
  * | draft.content                                 | text           | participant |
- * | ai_memory.doc                                 | jsonb (leaves) | per-row: participant_id set → participant; user_id set (GLOBAL_FACTS) → user |
+ * | ai_memory.doc                                 | jsonb (leaves) | per-row: session_id set → participant; session_id NULL (GLOBAL_FACTS) → user |
  * | mood_reading.context                          | text           | participant |
  * | invitation.invitee_name                       | text           | session     |
  * | empathy_attempt.content                       | text           | per-row: participant (author) until revealed; re-encrypted under session by the reveal job |
@@ -165,7 +165,7 @@ const textArray = (column: string, key: KeyClass): EncryptedField => ({ column, 
 const MESSAGE_KEY_RULE =
   "role = 'USER' AND kind = 'CHAT' (the owner's turn) or role IN ('AI','SYSTEM') replying to the owner → participant; " +
   'every delivered kind (written by mwf_job) → session';
-const AI_MEMORY_KEY_RULE = 'participant_id IS NOT NULL → participant; user_id IS NOT NULL (GLOBAL_FACTS) → user';
+const AI_MEMORY_KEY_RULE = 'session_id IS NOT NULL → participant; session_id IS NULL (GLOBAL_FACTS) → user';
 const EMPATHY_ATTEMPT_KEY_RULE =
   "revealed_at IS NULL → participant (author); re-encrypted under session at the reveal (lib/share-moments.ts 'empathy-reveal')";
 

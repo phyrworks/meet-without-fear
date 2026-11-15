@@ -66,7 +66,7 @@ import { loadFollowUpsForParticipant, toTendingEntryType, type FollowUpRow } fro
 type CoverageView = {
   id: string;
   label: string;
-  ownerParticipantId: string;
+  ownerUserId: string;
   coverageStatus: 'COVERED' | 'PARTIAL' | 'OPEN';
   coveringProposalIds: string[];
   note: string | null;
@@ -98,8 +98,8 @@ function sourceLabel(owner: string | null, me: string, partner: string | null): 
 }
 
 function proposalSourceLabel(proposal: ProposalRow, me: string, partner: string | null): Stage4ProposalSourceLabel {
-  if (proposal.createdByParticipantId === me) return 'YOU';
-  if (proposal.createdByParticipantId && proposal.createdByParticipantId === partner) return 'PARTNER';
+  if (proposal.createdByUserId === me) return 'YOU';
+  if (proposal.createdByUserId && proposal.createdByUserId === partner) return 'PARTNER';
   if (proposal.source === 'AI_SUGGESTED') return 'AI';
   return 'UNKNOWN';
 }
@@ -136,7 +136,7 @@ function buildCoverageViews(
     return {
       id: n.id,
       label: n.label,
-      ownerParticipantId: n.ownerParticipantId,
+      ownerUserId: n.ownerUserId,
       coverageStatus: status,
       coveringProposalIds: covering,
       note: null,
@@ -146,7 +146,7 @@ function buildCoverageViews(
 
 function walkthroughStored(dispositions: DispositionRow[], needs: Stage4Need[], me: string): WalkthroughStored {
   const current = dispositions.find(d => d.isCurrent);
-  const currentOwner = current ? needs.find(n => n.id === current.needId)?.ownerParticipantId : undefined;
+  const currentOwner = current ? needs.find(n => n.id === current.needId)?.ownerUserId : undefined;
   return {
     phase: current && currentOwner ? (currentOwner === me ? 'MY_NEEDS' : 'PARTNER_NEEDS') : undefined,
     currentNeedId: current?.needId,
@@ -165,7 +165,7 @@ function buildCoverageAudit(
   const dto = rows.map((row): CoverageRowDTO & { status: string } => ({
     id: row.id,
     label: row.label,
-    source: sourceLabel(row.ownerParticipantId, me, partner),
+    source: sourceLabel(row.ownerUserId, me, partner),
     coveringProposalIds: row.coveringProposalIds,
     note: row.note,
     userDeclinedToAddress: declined.has(row.id),
@@ -187,7 +187,7 @@ function buildUnaddressedNeeds(rows: CoverageView[], me: string, partner: string
     .map(row => ({
       id: row.id,
       label: row.label,
-      source: sourceLabel(row.ownerParticipantId, me, partner),
+      source: sourceLabel(row.ownerUserId, me, partner),
       note: row.note ?? 'Still open',
     }));
 }
@@ -200,8 +200,8 @@ function buildProposalCard(
   rows: CoverageView[],
   revealPartner: boolean,
 ): ProposalCardDTO {
-  const mine = choices.find(c => c.proposalId === proposal.id && c.participantId === me);
-  const theirs = partner ? choices.find(c => c.proposalId === proposal.id && c.participantId === partner) : undefined;
+  const mine = choices.find(c => c.proposalId === proposal.id && c.userId === me);
+  const theirs = partner ? choices.find(c => c.proposalId === proposal.id && c.userId === partner) : undefined;
   const byId = new Map(rows.map(r => [r.id, r]));
   const linked = proposal.needIds
     .map(id => byId.get(id))
@@ -218,7 +218,7 @@ function buildProposalCard(
     sourceLabel: proposalSourceLabel(proposal, me, partner),
     ownerLabel:
       proposal.kind === Stage4ProposalKind.INDIVIDUAL_COMMITMENT
-        ? proposal.createdByParticipantId === me
+        ? proposal.createdByUserId === me
           ? 'You'
           : 'Partner'
         : undefined,
@@ -294,8 +294,8 @@ export function walkthroughOrder(
 ): { own: CoverageView[]; partner: CoverageView[]; phase: Stage4WalkthroughPhase; currentNeedId: string | null } {
   const covered = new Set(stored.coveredNeedIds);
   const skipped = new Set(stored.skippedNeedIds);
-  const own = rows.filter(r => r.ownerParticipantId === me);
-  const partner = rows.filter(r => r.ownerParticipantId !== me);
+  const own = rows.filter(r => r.ownerUserId === me);
+  const partner = rows.filter(r => r.ownerUserId !== me);
   const ownRemaining = own.find(n => !covered.has(n.id) && !skipped.has(n.id));
   const partnerRemaining = partner.find(n => !covered.has(n.id) && !skipped.has(n.id));
   const phase = stored.phase ?? (ownRemaining ? 'MY_NEEDS' : partnerRemaining ? 'PARTNER_NEEDS' : 'QUALITY_REVIEW');
@@ -325,7 +325,7 @@ function buildWalkthrough(args: {
   const toDTO = (n: CoverageView) => ({
     id: n.id,
     label: n.label,
-    source: sourceLabel(n.ownerParticipantId, args.me, args.partner) as 'YOU' | 'PARTNER' | 'UNKNOWN',
+    source: sourceLabel(n.ownerUserId, args.me, args.partner) as 'YOU' | 'PARTNER' | 'UNKNOWN',
     status: needStatus({
       needId: n.id,
       currentNeedId,
@@ -408,7 +408,7 @@ function buildWalkthrough(args: {
 }
 
 export function toAgreementDTO(agreement: AgreementRow, me: string, partner: string | null): AgreementDTO {
-  const myParty = agreement.parties.find(p => p.participantId === me);
+  const myParty = agreement.parties.find(p => p.userId === me);
   return {
     id: agreement.id,
     strategyId: agreement.proposalId,
@@ -418,7 +418,7 @@ export function toAgreementDTO(agreement: AgreementRow, me: string, partner: str
     measureOfSuccess: agreement.measureOfSuccess,
     status: agreement.status as AgreementDTO['status'],
     agreedByMe: Boolean(myParty),
-    agreedByPartner: partner ? agreement.parties.some(p => p.participantId === partner) : false,
+    agreedByPartner: partner ? agreement.parties.some(p => p.userId === partner) : false,
     agreedAt: iso(myParty?.agreedAt ?? agreement.parties[0]?.agreedAt ?? null),
     followUpDate: iso(agreement.followUpAt),
   };
@@ -474,7 +474,8 @@ export async function loadStage4View(sessionId: string, userId: string) {
   const me = await resolveParticipant(sessionId, userId);
   if (!me) throw new Stage4StateNotFoundError();
   // A read: the partner, or the tombstone of one who left (TS-12, R5).
-  const partner = (await getCounterpartParticipant(me.id))?.participantId ?? null;
+  // `me` / `partner` below are user ids: the participant key within this one session.
+  const partner = (await getCounterpartParticipant(me))?.userId ?? null;
   const [
     proposals,
     choices,
@@ -489,21 +490,22 @@ export async function loadStage4View(sessionId: string, userId: string) {
     partnerSubmitted,
     humans,
   ] = await Promise.all([
-    loadProposals(sessionId, me.id),
-    loadVisibleChoices(sessionId, me.id),
-    loadStage4Needs(sessionId, me.id),
+    loadProposals(sessionId, me),
+    loadVisibleChoices(sessionId, me),
+    loadStage4Needs(sessionId, me),
     loadCoverage(sessionId),
-    loadDispositions(me.id),
+    loadDispositions(me),
     loadClosure(sessionId),
     loadClosureItems(sessionId),
     loadAgreements(sessionId),
-    loadFollowUpsForParticipant(sessionId, me.id),
-    hasMilestone(me.id, 'choices_shared'),
-    partner ? hasMilestone(partner, 'choices_shared') : Promise.resolve(false),
-    presentHumans(sessionId).then(list => list.map(h => h.id)),
+    loadFollowUpsForParticipant(sessionId, me),
+    hasMilestone(me, 'choices_shared'),
+    partner ? hasMilestone({ sessionId, userId: partner }, 'choices_shared') : Promise.resolve(false),
+    presentHumans(sessionId).then(list => list.map(h => h.userId)),
   ]);
   return {
-    me: me.id,
+    me: me.userId,
+
     partner,
     proposals,
     choices,
@@ -531,8 +533,8 @@ export async function getStage4State(sessionId: string, userId: string): Promise
 
 export function buildStage4StateFromView(view: Stage4View): GetStage4StateResponse {
   const { me, partner, proposals, choices, rows, closure, items, agreements, followUps } = view;
-  const mySelections = choices.filter(c => c.participantId === me);
-  const partnerSelections = choices.filter(c => c.participantId === partner);
+  const mySelections = choices.filter(c => c.userId === me);
+  const partnerSelections = choices.filter(c => c.userId === partner);
   const reveal = view.mySubmitted && view.partnerSubmitted;
   const active = proposals.filter(p => p.status === 'ACTIVE');
   const cards = active.map(p => buildProposalCard(p, me, partner, choices, rows, reveal));
@@ -596,7 +598,7 @@ export function buildStage4StateFromView(view: Stage4View): GetStage4StateRespon
             .map(r => ({
               id: r.id,
               label: r.label,
-              source: sourceLabel(r.ownerParticipantId, me, partner),
+              source: sourceLabel(r.ownerUserId, me, partner),
               note: r.note ?? 'Still open',
             })),
           closedAt: closure.closedAt.toISOString(),

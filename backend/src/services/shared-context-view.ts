@@ -27,7 +27,7 @@
  */
 
 import { prisma } from '../lib/prisma';
-import { seatOfParticipant } from './participant-resolver';
+import type { Seat } from './participant-resolver';
 
 /** Message kinds that render as a received shared frame and feed the derivations above. */
 export const VIEWABLE_SHARED_KINDS = ['SHARED_CONTEXT', 'VALIDATION_FEEDBACK'] as const;
@@ -47,28 +47,29 @@ export type MarkSharedContextViewedResult =
   | { status: 'ok'; advanced: boolean; lastViewedShareTabAt: Date };
 
 /**
- * Record that `participantId` saw the received shared frame `messageId`.
+ * Record that the participant `seat` saw the received shared frame `messageId`.
  * `advanced` is true only when the stored instant moved (the caller notifies
  * the sender only then).
  */
 export async function markSharedContextViewed(
-  participantId: string,
+  seat: Seat,
   messageId: string,
   now: Date = new Date(),
 ): Promise<MarkSharedContextViewedResult> {
+  const { sessionId, userId } = seat;
   const message = await prisma.message.findFirst({
     where: {
       id: messageId,
       kind: { in: [...VIEWABLE_SHARED_KINDS] },
-      conversation: { participantId },
-      senderParticipantId: { not: participantId },
+      conversation: { sessionId, userId },
+      senderUserId: { not: userId },
     },
     select: { createdAt: true, conversationId: true },
   });
   if (!message) return { status: 'not_found' };
 
   const existing = await prisma.conversationReadState.findUnique({
-    where: { participantId },
+    where: { sessionId_userId: { sessionId, userId } },
     select: { lastViewedShareTabAt: true },
   });
   if (existing?.lastViewedShareTabAt && existing.lastViewedShareTabAt >= message.createdAt) {
@@ -79,7 +80,7 @@ export async function markSharedContextViewed(
     where: {
       conversationId: message.conversationId,
       kind: { in: [...VIEWABLE_SHARED_KINDS] },
-      senderParticipantId: { not: participantId },
+      senderUserId: { not: userId },
       createdAt: { gt: message.createdAt },
     },
     orderBy: { createdAt: 'asc' },
@@ -91,15 +92,15 @@ export async function markSharedContextViewed(
   // frame, so a concurrent or older view can never move it back.
   const notCovered = { OR: [{ lastViewedShareTabAt: null }, { lastViewedShareTabAt: { lt: message.createdAt } }] };
   let { count } = await prisma.conversationReadState.updateMany({
-    where: { participantId, ...notCovered },
+    where: { sessionId, userId, ...notCovered },
     data: { lastViewedShareTabAt: instant, lastActiveAt: now },
   });
   if (count === 0 && !existing) {
     try {
       await prisma.conversationReadState.create({
         data: {
-          participantId,
-          ...(await seatOfParticipant(participantId)),
+          sessionId,
+          userId,
           lastViewedShareTabAt: instant,
           lastActiveAt: now,
         },
@@ -108,14 +109,14 @@ export async function markSharedContextViewed(
     } catch {
       // Created concurrently (by this or another view): retry the conditional write.
       ({ count } = await prisma.conversationReadState.updateMany({
-        where: { participantId, ...notCovered },
+        where: { sessionId, userId, ...notCovered },
         data: { lastViewedShareTabAt: instant, lastActiveAt: now },
       }));
     }
   }
 
   const stored = await prisma.conversationReadState.findUnique({
-    where: { participantId },
+    where: { sessionId_userId: { sessionId, userId } },
     select: { lastViewedShareTabAt: true },
   });
   return { status: 'ok', advanced: count > 0, lastViewedShareTabAt: stored?.lastViewedShareTabAt ?? instant };

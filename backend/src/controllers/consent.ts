@@ -14,7 +14,7 @@
  * anything else with one fixed message); `decision` moves only NULL →
  * GRANTED | DENIED and GRANTED → REVOKED (T-consent-transitions). Every read
  * here is of the CALLER's own rows: there are no requester reads (spec §1.3
- * RLS "S mine(participant_id) only").
+ * RLS "S mine(session_id, user_id) only").
  *
  * The DTO keeps the old `contentType` values (ruling R32): NEED →
  * IDENTIFIED_NEED, EMPATHY_ATTEMPT → EMPATHY_DRAFT, PROPOSAL →
@@ -92,7 +92,7 @@ async function consentCaller(
   }
   const sessionId = req.params.id;
   const parties = await sessionParties(sessionId);
-  const me = partyOf(parties, { participantId: req.participant?.id }) ?? partyOf(parties, { userId: user.id });
+  const me = partyOf(parties, { userId: user.id });
   if (!me) {
     errorResponse(res, ErrorCode.NOT_FOUND, 'Session not found', 404);
     return null;
@@ -113,7 +113,7 @@ export async function getPendingConsents(req: Request, res: Response): Promise<v
     const caller = await consentCaller(req, res);
     if (!caller) return;
     const pending = (await prisma.consent.findMany({
-      where: { participantId: caller.me.participantId, decision: null },
+      where: { sessionId: caller.sessionId, userId: caller.me.userId, decision: null },
       orderBy: { createdAt: 'desc' },
       select: CONSENT_SELECT,
     })) as ConsentRow[];
@@ -152,7 +152,7 @@ export async function decideConsent(req: Request, res: Response): Promise<void> 
     const { me, parties, sessionId } = caller;
 
     const record = (await prisma.consent.findFirst({
-      where: { id: consentRequestId, participantId: me.participantId, decision: null },
+      where: { id: consentRequestId, sessionId, userId: me.userId, decision: null },
       select: CONSENT_SELECT,
     })) as ConsentRow | null;
     if (!record) {
@@ -193,7 +193,7 @@ export async function decideConsent(req: Request, res: Response): Promise<void> 
       });
       sharedContent = {
         id: record.needId,
-        sourceUserId: me.userId ?? '',
+        sourceUserId: me.userId,
         transformedContent: editedContent,
         consentedAt: now.toISOString(),
         consentActive: true,
@@ -201,7 +201,7 @@ export async function decideConsent(req: Request, res: Response): Promise<void> 
     }
 
     if (decision === 'GRANTED' && NOTIFIES_PARTNER.has(record.targetKind)) {
-      const partner = parties.find(p => p.participantId !== me.participantId);
+      const partner = parties.find(p => p.userId !== me.userId);
       if (partner?.userId) {
         await notifyPartner(sessionId, partner.userId, 'partner.consent_granted', {
           contentType: CONTENT_TYPE_OF[record.targetKind],
@@ -243,7 +243,7 @@ export async function revokeConsent(req: Request, res: Response): Promise<void> 
     const { me, parties, sessionId } = caller;
 
     const record = (await prisma.consent.findFirst({
-      where: { id: consentRecordId, participantId: me.participantId, decision: 'GRANTED', revokedAt: null },
+      where: { id: consentRecordId, sessionId, userId: me.userId, decision: 'GRANTED', revokedAt: null },
       select: CONSENT_SELECT,
     })) as ConsentRow | null;
     if (!record) {
@@ -265,7 +265,7 @@ export async function revokeConsent(req: Request, res: Response): Promise<void> 
     }
 
     if (NOTIFIES_PARTNER.has(record.targetKind)) {
-      const partner = parties.find(p => p.participantId !== me.participantId);
+      const partner = parties.find(p => p.userId !== me.userId);
       if (partner?.userId) {
         await notifyPartner(sessionId, partner.userId, 'partner.consent_revoked', {
           contentType: CONTENT_TYPE_OF[record.targetKind],
@@ -290,7 +290,7 @@ export async function getConsentHistory(req: Request, res: Response): Promise<vo
     const caller = await consentCaller(req, res);
     if (!caller) return;
     const records = (await prisma.consent.findMany({
-      where: { participantId: caller.me.participantId },
+      where: { sessionId: caller.sessionId, userId: caller.me.userId },
       orderBy: { createdAt: 'desc' },
       select: CONSENT_SELECT,
     })) as ConsentRow[];

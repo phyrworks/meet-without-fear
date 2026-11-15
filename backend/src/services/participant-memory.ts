@@ -16,8 +16,8 @@ import { resolveParticipant } from './participant-resolver';
 export async function loadOwnNotableFacts(sessionId: string, userId: string): Promise<unknown> {
   const participant = await resolveParticipant(sessionId, userId);
   if (!participant) return undefined;
-  const memory = await prisma.aiMemory.findUnique({
-    where: { participantId_kind: { participantId: participant.id, kind: 'NOTABLE_FACTS' } },
+  const memory = await prisma.aiMemory.findFirst({
+    where: { sessionId: participant.sessionId, userId: participant.userId, kind: 'NOTABLE_FACTS' },
     select: { doc: true },
   });
   return (memory?.doc as { facts?: unknown } | null)?.facts;

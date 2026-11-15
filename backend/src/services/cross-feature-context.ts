@@ -235,7 +235,7 @@ async function fetchConflictContext(userId: string): Promise<ConflictContext> {
   // The user's present participants in live sessions
   const mine = await prisma.participant.findMany({
     where: { userId, leftAt: null, session: { status: { in: ['CREATED', 'INVITED', 'ACTIVE'] } } },
-    select: { id: true, sessionId: true },
+    select: { sessionId: true, userId: true },
     take: 5,
   });
 
@@ -243,17 +243,17 @@ async function fetchConflictContext(userId: string): Promise<ConflictContext> {
     return { activeConflicts: [], recentConflictThemes: [] };
   }
 
-  const stages = await loadCurrentStages(mine.map(p => p.id));
+  const stages = await loadCurrentStages(mine);
   const activeConflicts: { partnerName: string; stage: number; topic?: string }[] = [];
 
   for (const p of mine) {
-    const partner = (await getCoParticipants(p.id)).find(c => c.kind === 'human' && !c.leftAt);
+    const partner = (await getCoParticipants(p)).find(c => c.kind === 'human' && !c.leftAt);
     const nickname = await getNicknameForSessionPartner(p.sessionId, userId);
     const partnerName = nickname || partner?.displayName || 'Partner';
 
     activeConflicts.push({
       partnerName,
-      stage: stages.get(p.id)?.stage || 1,
+      stage: stages.get(p)?.stage || 1,
       topic: undefined, // Could extract from session data
     });
   }

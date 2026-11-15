@@ -19,7 +19,7 @@ import { resetBedrockClient } from '../lib/bedrock';
 import { prisma } from '../lib/prisma';
 import { NeedCategory, type CapturedNeedInput, type IdentifiedNeedDTO } from '@meet-without-fear/shared';
 import { cleanVisibleAIText } from '../utils/visible-text';
-import { resolveParticipant } from './participant-resolver';
+import { resolveParticipant, type ResolvedParticipant, type Seat } from './participant-resolver';
 
 // ============================================================================
 // Types
@@ -35,7 +35,8 @@ export interface ExtractedNeed {
 /** A `need` row as the app reads it (the owner's own row only). */
 export interface NeedRecord {
   id: string;
-  participantId: string;
+  sessionId: string;
+  userId: string;
   label: string;
   category: NeedCategory;
   evidence: string[];
@@ -87,7 +88,8 @@ export class NeedParticipantNotFoundError extends Error {
 
 export const NEED_SELECT = {
   id: true,
-  participantId: true,
+  sessionId: true,
+  userId: true,
   label: true,
   category: true,
   evidence: true,
@@ -173,7 +175,7 @@ export function toIdentifiedNeedDTO(need: IdentifiedNeedRecord | NeedRecord): Id
 }
 
 /** The caller's present participant in the session, or throw. */
-export async function requireNeedOwner(sessionId: string, userId: string): Promise<{ id: string; sessionId: string }> {
+export async function requireNeedOwner(sessionId: string, userId: string): Promise<ResolvedParticipant> {
   const participant = await resolveParticipant(sessionId, userId);
   if (!participant) throw new NeedParticipantNotFoundError();
   return participant;
@@ -184,12 +186,13 @@ export async function requireNeedOwner(sessionId: string, userId: string): Promi
  * superseded; `confirmed` = confirmed_at set.
  */
 export async function listOwnNeeds(
-  participantId: string,
+  seat: Seat,
   opts: { live?: boolean; confirmed?: boolean; notDeleted?: boolean } = {},
 ): Promise<NeedRecord[]> {
   return (await prisma.need.findMany({
     where: {
-      participantId,
+      sessionId: seat.sessionId,
+      userId: seat.userId,
       ...(opts.live ? { deletedAt: null, supersededByNeedId: null } : {}),
       ...(opts.notDeleted ? { deletedAt: null } : {}),
       ...(opts.confirmed ? { confirmedAt: { not: null } } : {}),
@@ -220,13 +223,12 @@ export async function captureProposedNeedsForUser(
 
   await prisma.$transaction(async tx => {
     await tx.need.updateMany({
-      where: { participantId: participant.id, confirmedAt: null, deletedAt: null },
+      where: { sessionId, userId, confirmedAt: null, deletedAt: null },
       data: { deletedAt: capturedAt },
     });
     for (const item of needs) {
       await tx.need.create({
         data: {
-          participantId: participant.id,
           sessionId,
           userId,
           label: cleanVisibleAIText(item.description || item.need),
@@ -238,7 +240,8 @@ export async function captureProposedNeedsForUser(
     }
   });
 
-  const captured = await listOwnNeeds(participant.id, { notDeleted: true });
+  const captured = await listOwnNeeds(participant, { notDeleted: true });
+
   return {
     needs: captured.map(need => withNeedReframingWarning(toNeedRecord(need))),
     capturedAt,
@@ -256,12 +259,11 @@ export async function captureSingleNeedForUser(
 
   const created = (await prisma.$transaction(async tx => {
     await tx.need.updateMany({
-      where: { participantId: participant.id, confirmedAt: null, deletedAt: null },
+      where: { sessionId, userId, confirmedAt: null, deletedAt: null },
       data: { deletedAt: capturedAt },
     });
     return tx.need.create({
       data: {
-        participantId: participant.id,
         sessionId,
         userId,
         label: cleanVisibleAIText(item.description || item.need),

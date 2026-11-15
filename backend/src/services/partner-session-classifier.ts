@@ -594,13 +594,18 @@ Output only valid JSON.`;
     if (factsToSave && factsToSave.length > 0) {
       try {
         const job = getJobPrisma();
-        const [participant] = await job.$queryRaw<Array<{ id: string }>>`SELECT id FROM participant
+        const [participant] = await job.$queryRaw<Array<{ user_id: string }>>`SELECT user_id FROM participant
           WHERE session_id = ${input.sessionId}::uuid AND user_id = ${input.userId}::uuid`;
         if (participant) {
-          await job.$executeRaw`INSERT INTO ai_memory (participant_id, kind, doc)
-            VALUES (${participant.id}::uuid, 'NOTABLE_FACTS'::ai_memory_kind, ${JSON.stringify(encryptColumnValue('ai_memory', 'doc', { facts: factsToSave }))}::jsonb)
-            ON CONFLICT (participant_id, kind) DO UPDATE SET doc = EXCLUDED.doc`;
-          logger.info(`${logPrefix} Saved ${factsToSave.length} notable facts for participant ${participant.id}`);
+          // ai_memory has no Prisma unique (work-k5fk.3): the conflict target is the partial index
+          // sql_ai_memory_one_per_participant.
+          await job.$executeRaw`INSERT INTO ai_memory (session_id, user_id, kind, doc)
+            VALUES (${input.sessionId}::uuid, ${input.userId}::uuid, 'NOTABLE_FACTS'::ai_memory_kind,
+                    ${JSON.stringify(encryptColumnValue('ai_memory', 'doc', { facts: factsToSave }))}::jsonb)
+            ON CONFLICT (user_id, session_id, kind) WHERE session_id IS NOT NULL DO UPDATE SET doc = EXCLUDED.doc`;
+          logger.info(
+            `${logPrefix} Saved ${factsToSave.length} notable facts for participant (session=${input.sessionId}, user=${input.userId})`,
+          );
 
           // Trigger session content embedding (fire-and-forget)
           // Per fact-ledger architecture, we embed at session level after facts update
