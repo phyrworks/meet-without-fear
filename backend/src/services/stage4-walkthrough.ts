@@ -15,6 +15,7 @@
 
 import { prisma } from '../lib/prisma';
 import { reachMilestone } from './milestone-writer';
+import { seatOfParticipant } from './participant-resolver';
 import { buildStage4StateFromView, loadStage4View, walkthroughOrder, walkthroughStoredFor } from './stage4-state';
 import type { GetStage4StateResponse } from '@meet-without-fear/shared';
 
@@ -87,13 +88,20 @@ export async function advanceWalkthrough(args: {
     await tx.needDisposition.updateMany({ where: { participantId: me, isCurrent: true }, data: { isCurrent: false } });
     await tx.needDisposition.upsert({
       where: { participantId_needId: { participantId: me, needId: args.needId } },
-      create: { participantId: me, needId: args.needId, status },
+      create: { participantId: me, needId: args.needId, sessionId: args.sessionId, userId: args.userId, status },
       update: { status },
     });
     if (currentNeedId) {
       await tx.needDisposition.upsert({
         where: { participantId_needId: { participantId: me, needId: currentNeedId } },
-        create: { participantId: me, needId: currentNeedId, status: 'OPEN', isCurrent: true },
+        create: {
+          participantId: me,
+          needId: currentNeedId,
+          sessionId: args.sessionId,
+          userId: args.userId,
+          status: 'OPEN',
+          isCurrent: true,
+        },
         update: { isCurrent: true },
       });
     }
@@ -107,7 +115,7 @@ export async function advanceWalkthrough(args: {
 export async function declineNeed(participantId: string, needId: string): Promise<void> {
   await prisma.needDisposition.upsert({
     where: { participantId_needId: { participantId, needId } },
-    create: { participantId, needId, status: 'DECLINED' },
+    create: { participantId, needId, ...(await seatOfParticipant(participantId)), status: 'DECLINED' },
     update: { status: 'DECLINED' },
   });
 }

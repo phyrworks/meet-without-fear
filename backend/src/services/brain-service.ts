@@ -61,14 +61,17 @@ export class BrainService {
   }
 
   /** Whose turn: the request's participant in this session, else (job) the request user's participant there. */
-  private async participantFor(sessionId: string | null): Promise<string | null> {
+  private async participantFor(sessionId: string | null): Promise<{ id: string; userId: string | null } | null> {
     if (!sessionId) return null;
     const ctx = getRequestContext();
-    if (ctx?.participantId && ctx.sessionId === sessionId) return ctx.participantId;
+    // work-k5fk.3 (6a): the row carries the participant's user too (pinned to it by FK): the request's
+    // participant is the request user's.
+    if (ctx?.participantId && ctx.sessionId === sessionId && ctx.userId)
+      return { id: ctx.participantId, userId: ctx.userId };
     if (!ctx?.userId || !UUID.test(ctx.userId)) return null;
     const rows = await getJobPrisma().$queryRaw<Array<{ id: string }>>`SELECT id FROM participant
       WHERE session_id = ${sessionId}::uuid AND user_id = ${ctx.userId}::uuid`;
-    return rows[0]?.id ?? null;
+    return rows[0] ? { id: rows[0].id, userId: ctx.userId } : null;
   }
 
   /**
@@ -83,6 +86,7 @@ export class BrainService {
       sessionId,
       reflectionId,
       participantId: null,
+      participantUserId: null,
       turnId: params.turnId ?? null,
       activityType: params.activityType,
       callType: params.callType ?? null,
@@ -101,10 +105,14 @@ export class BrainService {
       updatedAt: now,
     };
     try {
-      record.participantId = params.attributeToCaller ? await this.participantFor(sessionId) : null;
+      const seat = params.attributeToCaller ? await this.participantFor(sessionId) : null;
+      record.participantId = seat?.id ?? null;
+      record.participantUserId = seat?.userId ?? null;
       const rows = await getJobPrisma().$queryRaw<Array<{ id: string; created_at: Date }>>`INSERT INTO brain_activity
-          (session_id, reflection_id, participant_id, turn_id, activity_type, call_type, model, input, metadata, status)
-        VALUES (${sessionId}::uuid, ${reflectionId}::uuid, ${record.participantId}::uuid, ${record.turnId},
+          (session_id, reflection_id, participant_id, participant_user_id, turn_id, activity_type, call_type, model, input, metadata,
+           status)
+        VALUES (${sessionId}::uuid, ${reflectionId}::uuid, ${record.participantId}::uuid,
+                ${record.participantUserId}::uuid, ${record.turnId},
                 ${params.activityType}::activity_type, ${record.callType}::brain_call_type, ${params.model},
                 ${json(record.input)}::jsonb, ${json(record.metadata)}::jsonb, 'PENDING'::activity_status)
         RETURNING id, created_at`;

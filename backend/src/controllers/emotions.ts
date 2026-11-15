@@ -4,6 +4,7 @@ import { logger } from '../lib/logger';
 import { prisma } from '../lib/prisma';
 import { ApiResponse, ErrorCode } from '@meet-without-fear/shared';
 import { loadInvitationPending, loadMilestones, messageStage } from '../services/stage-shim';
+import { seatOf } from '../services/participant-resolver';
 
 /*
  * Target shape (TS-12): readings are `mood_reading` rows of the caller's
@@ -98,6 +99,7 @@ export async function recordEmotion(req: Request, res: Response): Promise<void> 
     const reading = await prisma.moodReading.create({
       data: {
         participantId: participant.id,
+        ...seatOf(participant),
         intensity,
         context: context ?? null,
       },
@@ -223,6 +225,7 @@ export async function completeExercise(req: Request, res: Response): Promise<voi
     const completion = await prisma.regulationEvent.create({
       data: {
         participantId: participant.id,
+        ...seatOf(participant),
         type,
         intensityBefore: intensityBefore ?? null,
         intensityAfter: intensityAfter ?? null,

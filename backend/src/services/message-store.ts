@@ -195,19 +195,20 @@ async function insert(
     createdAt?: Date;
   },
 ): Promise<StoredMessage> {
-  const row = await client.message.create({
-    data: {
-      conversationId: data.conversationId,
-      senderParticipantId: data.senderParticipantId,
-      role: data.role,
-      kind: data.kind,
-      content: data.content,
-      refiningNeedId: data.refiningNeedId ?? null,
-      sourceAttemptId: data.sourceAttemptId ?? null,
-      ...(data.createdAt ? { createdAt: data.createdAt } : {}),
-    },
-    select: { id: true, createdAt: true },
-  });
+  // work-k5fk.3 (6a): the row carries its session and its sender's user, read in the INSERT from the
+  // conversation and the sender's participant — the keys pin both (message (conversation_id,
+  // session_id) → conversation; (sender_participant_id, session_id, sender_user_id) → participant).
+  // created_at is the client's instant, as the Prisma create sent it (@default(now())).
+  const [row] = await client.$queryRaw<Array<{ id: string; created_at: Date }>>`
+    INSERT INTO message (conversation_id, sender_participant_id, session_id, sender_user_id, role, kind, content,
+                         refining_need_id, source_attempt_id, created_at)
+    VALUES (${data.conversationId}::uuid, ${data.senderParticipantId}::uuid,
+            (SELECT c.session_id FROM conversation c WHERE c.id = ${data.conversationId}::uuid),
+            (SELECT p.user_id FROM participant p WHERE p.id = ${data.senderParticipantId}::uuid),
+            ${data.role}::message_role, ${data.kind}::message_kind, ${encryptColumnValue('message', 'content', data.content)},
+            ${data.refiningNeedId ?? null}::uuid, ${data.sourceAttemptId ?? null}::uuid, ${data.createdAt ?? new Date()})
+    RETURNING id, created_at`;
+  const createdAt = row.created_at;
   return {
     id: row.id,
     conversationId: data.conversationId,
@@ -217,7 +218,7 @@ async function insert(
     content: data.content,
     refiningNeedId: data.refiningNeedId ?? null,
     sourceAttemptId: data.sourceAttemptId ?? null,
-    createdAt: row.createdAt,
+    createdAt,
     senderParticipant: data.senderParticipantId ? { userId: data.senderUserId ?? null } : null,
   };
 }
@@ -307,8 +308,9 @@ export async function createFacilitatorMessageOnce(opts: {
   // unique indexes: the primary key, a fresh uuidv7() default that cannot
   // collide, and sql_message_once — so the only conflict is the dedupe key.
   const rows = await client.$queryRaw<Array<{ id: string; created_at: Date }>>`
-    INSERT INTO message (conversation_id, role, kind, content, dedupe_key, created_at)
-    VALUES (${opts.conversationId}::uuid, 'AI'::message_role, 'CHAT'::message_kind,
+    INSERT INTO message (conversation_id, session_id, role, kind, content, dedupe_key, created_at)
+    VALUES (${opts.conversationId}::uuid, (SELECT c.session_id FROM conversation c WHERE c.id = ${opts.conversationId}::uuid),
+            'AI'::message_role, 'CHAT'::message_kind,
             ${encryptColumnValue('message', 'content', opts.content)},
             ${opts.dedupeKey}::message_dedupe_key, coalesce(${opts.createdAt ?? null}::timestamptz, CURRENT_TIMESTAMP))
     ON CONFLICT DO NOTHING

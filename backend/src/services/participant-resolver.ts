@@ -92,6 +92,41 @@ export async function resolveParticipant(
   return toResolved(row);
 }
 
+/**
+ * work-k5fk.3 (6a): the (session_id, user_id) every child of a participant
+ * carries next to the participant id. The database pins the three to one
+ * participant — FOREIGN KEY (x_participant_id, session_id, x_user_id)
+ * REFERENCES participant (id, session_id, user_id) — so a writer that names a
+ * participant names its seat too, from the same participant row.
+ */
+export interface Seat {
+  sessionId: string;
+  userId: string;
+}
+
+/** The seat of a resolved participant. Every seat the app writes for is a user's (a modeled seat has one too). */
+export function seatOf(p: { id?: string; sessionId: string; userId: string | null }): Seat {
+  if (!p.userId) throw new Error(`participant ${p.id ?? ''} has no user: it cannot own a row`);
+  return { sessionId: p.sessionId, userId: p.userId };
+}
+
+/** A participant's user id, for a writer that names it as a seat (see seatOf). */
+export function userIdOf(p: { userId: string | null; id?: string; participantId?: string }): string {
+  if (!p.userId) throw new Error(`participant ${p.id ?? p.participantId ?? ''} has no user: it cannot own a row`);
+  return p.userId;
+}
+
+type ParticipantReader = { participant: { findUniqueOrThrow: typeof prisma.participant.findUniqueOrThrow } };
+
+/** The seat of a participant id (one read), for writers handed only the id. */
+export async function seatOfParticipant(participantId: string, db: ParticipantReader = prisma): Promise<Seat> {
+  const row = await db.participant.findUniqueOrThrow({
+    where: { id: participantId },
+    select: { id: true, sessionId: true, userId: true },
+  });
+  return seatOf(row);
+}
+
 /** A participant by id (for code that was handed an id, e.g. a job). */
 export async function getParticipant(participantId: string): Promise<ResolvedParticipant | null> {
   const row = (await prisma.participant.findUnique({

@@ -174,6 +174,8 @@ export async function applyNeedEdits(
         await tx.need.create({
           data: {
             participantId: participant.id,
+            sessionId,
+            userId,
             label: cleanNeedText(operation.text),
             category: normalizeCategory(operation.category, NeedCategory.MEANING),
             evidence: [],
@@ -227,6 +229,8 @@ export async function applyNeedAction(
         (await tx.need.create({
           data: {
             participantId: participant.id,
+            sessionId,
+            userId,
             label: text,
             category: normalizeCategory(action.category, current.category),
             evidence: Array.isArray(action.evidence)

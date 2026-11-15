@@ -88,7 +88,7 @@ import {
   openPreJoinDraftRevision,
   recoverStaleOpenerForRead,
 } from '../services/prejoin-edit-opener';
-import { getPartnerParticipant } from '../services/participant-resolver';
+import { getPartnerParticipant, userIdOf } from '../services/participant-resolver';
 
 // ============================================================================
 // Helpers
@@ -599,6 +599,9 @@ export async function consentToShare(req: Request, res: Response): Promise<void>
     const attempt = await submitAttempt({
       authorParticipantId: me.participantId,
       subjectParticipantId: partner.participantId,
+      sessionId,
+      authorUserId: userIdOf(me),
+      subjectUserId: userIdOf(partner),
       content: draft.content,
       granted: consent,
       at: now,
@@ -621,6 +624,7 @@ export async function consentToShare(req: Request, res: Response): Promise<void>
       ? await ownStatementCopy({
           conversationId: me.mainConversationId,
           participantId: me.participantId,
+          sessionId,
           userId,
           content: draft.content,
           attemptId: attempt.id,
@@ -790,6 +794,8 @@ export async function validateEmpathy(req: Request, res: Response): Promise<void
     const review = await recordReview({
       attemptId: partnerAttempt.id,
       reviewerParticipantId: me.participantId,
+      sessionId,
+      reviewerUserId: userIdOf(me),
       validated,
       sentFeedback,
       at: now,
@@ -797,7 +803,14 @@ export async function validateEmpathy(req: Request, res: Response): Promise<void
     if (sentFeedback) {
       // The explicit send's consent (spec §1.3: arc review_id, no requester).
       await prisma.consent.create({
-        data: { participantId: me.participantId, reviewId: review.id, decision: 'GRANTED', decidedAt: now },
+        data: {
+          participantId: me.participantId,
+          sessionId,
+          userId: userIdOf(me),
+          reviewId: review.id,
+          decision: 'GRANTED',
+          decidedAt: now,
+        },
         select: { id: true },
       });
     }
@@ -1411,6 +1424,7 @@ export async function resubmitEmpathy(req: Request, res: Response): Promise<void
       ? await ownStatementCopy({
           conversationId: me.mainConversationId,
           participantId: me.participantId,
+          sessionId,
           userId,
           content,
           attemptId: newRoundId,

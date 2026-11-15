@@ -269,6 +269,10 @@ export function directionOf(
 export async function submitAttempt(opts: {
   authorParticipantId: string;
   subjectParticipantId: string;
+  /** work-k5fk.3 (6a): the seats of the two participants (one session, so same-session is the key). */
+  sessionId: string;
+  authorUserId: string;
+  subjectUserId: string;
   content: string;
   granted: boolean;
   at?: Date;
@@ -280,6 +284,9 @@ export async function submitAttempt(opts: {
         data: {
           authorParticipantId: opts.authorParticipantId,
           subjectParticipantId: opts.subjectParticipantId,
+          sessionId: opts.sessionId,
+          authorUserId: opts.authorUserId,
+          subjectUserId: opts.subjectUserId,
           round: 1,
           content: opts.content,
           status: 'HELD',
@@ -291,6 +298,9 @@ export async function submitAttempt(opts: {
         data: {
           participantId: opts.authorParticipantId,
           requestedByParticipantId: opts.authorParticipantId,
+          sessionId: opts.sessionId,
+          userId: opts.authorUserId,
+          requestedByUserId: opts.authorUserId,
           empathyAttemptId: attempt.id,
           decision: opts.granted ? 'GRANTED' : 'DENIED',
           decidedAt: at,
@@ -447,6 +457,9 @@ export async function reviewVisibleToAuthor(
 export async function recordReview(opts: {
   attemptId: string;
   reviewerParticipantId: string;
+  /** work-k5fk.3 (6a): the reviewer's seat; the key makes the reviewer the attempt's subject. */
+  sessionId: string;
+  reviewerUserId: string;
   validated: boolean;
   sentFeedback: string | null;
   at: Date;
@@ -460,7 +473,13 @@ export async function recordReview(opts: {
     where: {
       attemptId_reviewerParticipantId: { attemptId: opts.attemptId, reviewerParticipantId: opts.reviewerParticipantId },
     },
-    create: { attemptId: opts.attemptId, reviewerParticipantId: opts.reviewerParticipantId, ...data },
+    create: {
+      attemptId: opts.attemptId,
+      reviewerParticipantId: opts.reviewerParticipantId,
+      sessionId: opts.sessionId,
+      reviewerUserId: opts.reviewerUserId,
+      ...data,
+    },
     update: opts.sentFeedback ? data : { validated: opts.validated },
     select: REVIEW_SELECT,
   });
@@ -505,9 +524,12 @@ export async function upsertDraft(
   const rows = decryptRawRows(
     await client.$queryRaw<
       Array<{ id: string; content: string; ready_to_share: boolean; version: number; updated_at: Date }>
-    >`INSERT INTO draft (participant_id, kind, about_participant_id, invitation_id, attempt_id, content, ready_to_share, version)
-    VALUES (${opts.participantId}::uuid, ${opts.kind}::draft_kind, ${about}::uuid, ${invitation}::uuid, ${attempt}::uuid, ${encryptColumnValue('draft', 'content', opts.content)},
-            coalesce(${ready}::boolean, false), 1)
+    >`INSERT INTO draft (participant_id, session_id, user_id, kind, about_participant_id, about_user_id, invitation_id, attempt_id,
+                       content, ready_to_share, version)
+    VALUES (${opts.participantId}::uuid, (SELECT p.session_id FROM participant p WHERE p.id = ${opts.participantId}::uuid),
+            (SELECT p.user_id FROM participant p WHERE p.id = ${opts.participantId}::uuid), ${opts.kind}::draft_kind, ${about}::uuid,
+            (SELECT a.user_id FROM participant a WHERE a.id = ${about}::uuid), ${invitation}::uuid, ${attempt}::uuid,
+            ${encryptColumnValue('draft', 'content', opts.content)}, coalesce(${ready}::boolean, false), 1)
     ON CONFLICT (participant_id, kind, (coalesce(about_participant_id, invitation_id, attempt_id, share_offer_id)))
     DO UPDATE SET content = EXCLUDED.content,
                   ready_to_share = coalesce(${ready}::boolean, draft.ready_to_share),
@@ -617,7 +639,7 @@ export async function lockInvitationForAccept(tx: DbClient, invitationId: string
 export async function repointInvitationDrafts(
   tx: DbClient,
   invitationId: string,
-  participantId: string,
+  about: { id: string; userId: string },
 ): Promise<number> {
   // The rows themselves FOR UPDATE too (the invitation lock is the protocol;
   // this keeps the move safe from any writer that skips it).
@@ -629,8 +651,11 @@ export async function repointInvitationDrafts(
       data: {
         id: d.id,
         participantId: d.participantId,
+        sessionId: d.sessionId,
+        userId: d.userId,
         kind: d.kind,
-        aboutParticipantId: participantId,
+        aboutParticipantId: about.id,
+        aboutUserId: about.userId,
         content: d.content,
         readyToShare: d.readyToShare,
         version: d.version,

@@ -33,7 +33,7 @@ import {
 } from '../services/realtime';
 import { successResponse, errorResponse } from '../utils/response';
 import { getPartnerUserId, isSessionCreator, departedParticipantUsers } from '../utils/session';
-import { getCoParticipants, getPartnerParticipant } from '../services/participant-resolver';
+import { getCoParticipants, getPartnerParticipant, seatOf } from '../services/participant-resolver';
 import { pingStage2Refresh } from '../services/empathy-realtime';
 import {
   loadMilestones,
@@ -749,6 +749,7 @@ export async function markSessionViewed(req: Request, res: Response): Promise<vo
       update: { lastViewedAt: now, lastActiveAt: now, lastSeenMessageId: seenMessage?.id ?? null },
       create: {
         participantId: participant.id,
+        ...seatOf(participant),
         lastViewedAt: now,
         lastActiveAt: now,
         lastSeenMessageId: seenMessage?.id ?? null,

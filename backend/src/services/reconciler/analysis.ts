@@ -506,11 +506,13 @@ export async function persistAnalysis(opts: {
         WHERE attempt_id = ${opts.attemptId}::uuid AND superseded_at IS NULL`;
       const rows = await tx.$queryRaw<
         Array<{ id: string }>
-      >`INSERT INTO reconciler_result (attempt_id, subject_participant_id, iteration, alignment_score, alignment_summary,
-          gap_summary, gap_severity, correctly_identified, missed_feelings, misattributions, most_important_gap,
+      >`INSERT INTO reconciler_result (attempt_id, subject_participant_id, session_id, subject_user_id, iteration, alignment_score,
+          alignment_summary, gap_summary, gap_severity, correctly_identified, missed_feelings, misattributions, most_important_gap,
           recommended_action, rationale, sharing_would_help, suggested_share_focus, suggested_share_content,
           suggested_share_reason, circuit_breaker_tripped)
         VALUES (${opts.attemptId}::uuid, ${opts.subjectParticipantId}::uuid,
+          (SELECT a.session_id FROM empathy_attempt a WHERE a.id = ${opts.attemptId}::uuid),
+          (SELECT p.user_id FROM participant p WHERE p.id = ${opts.subjectParticipantId}::uuid),
           coalesce((SELECT max(x.iteration) FROM reconciler_result x WHERE x.attempt_id = ${opts.attemptId}::uuid), 0) + 1,
           ${Math.max(0, Math.min(100, Math.round(r.alignment.score)))},
           ${encryptColumnValue('reconciler_result', 'alignment_summary', r.alignment.summary)},
@@ -531,8 +533,12 @@ export async function persistAnalysis(opts: {
       const resultId = rows[0].id;
       const g = opts.guidance;
       if (g.areaHint || g.guidanceType || g.promptSeed) {
-        await tx.$executeRaw`INSERT INTO reconciler_guidance (result_id, author_participant_id, subject_participant_id, area_hint, guidance_type, prompt_seed)
+        await tx.$executeRaw`INSERT INTO reconciler_guidance (result_id, author_participant_id, subject_participant_id, session_id,
+                                                         author_user_id, subject_user_id, area_hint, guidance_type, prompt_seed)
           VALUES (${resultId}::uuid, ${opts.authorParticipantId}::uuid, ${opts.subjectParticipantId}::uuid,
+                  (SELECT a.session_id FROM empathy_attempt a WHERE a.id = ${opts.attemptId}::uuid),
+                  (SELECT p.user_id FROM participant p WHERE p.id = ${opts.authorParticipantId}::uuid),
+                  (SELECT p.user_id FROM participant p WHERE p.id = ${opts.subjectParticipantId}::uuid),
                   ${encryptColumnValue('reconciler_guidance', 'area_hint', g.areaHint)}, ${g.guidanceType}::guidance_type,
                   ${encryptColumnValue('reconciler_guidance', 'prompt_seed', g.promptSeed)})`;
       }

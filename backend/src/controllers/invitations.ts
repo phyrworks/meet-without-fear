@@ -368,14 +368,16 @@ export async function createSession(req: Request, res: Response): Promise<void> 
         },
         select: { id: true },
       });
-      await tx.conversation.create({ data: { participantId: me.id, kind: 'MAIN' } });
-      await tx.conversationReadState.create({ data: { participantId: me.id } });
+      const seat = { sessionId: sess.id, userId: user.id };
+      await tx.conversation.create({ data: { participantId: me.id, ...seat, kind: 'MAIN' } });
+      await tx.conversationReadState.create({ data: { participantId: me.id, ...seat } });
 
       const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
       const inv = await tx.invitation.create({
         data: {
           sessionId: sess.id,
           invitedByParticipantId: me.id,
+          invitedByUserId: user.id,
           inviteeName: inviteeDisplayName,
           expiresAt,
         },
@@ -605,12 +607,13 @@ export async function acceptInvitation(req: Request, res: Response): Promise<voi
         },
         select: { id: true },
       });
-      await tx.conversation.create({ data: { participantId: me.id, kind: 'MAIN' } });
-      await tx.conversationReadState.create({ data: { participantId: me.id } });
+      const seat = { sessionId: invitation.sessionId, userId: user.id };
+      await tx.conversation.create({ data: { participantId: me.id, ...seat, kind: 'MAIN' } });
+      await tx.conversationReadState.create({ data: { participantId: me.id, ...seat } });
       // work-99k2: the inviter's empathy draft written before this join is
       // about the invitation; it becomes about the new participant here, in
       // the same transaction. Nothing is sent: the inviter reviews it first.
-      await repointInvitationDrafts(tx, id, me.id);
+      await repointInvitationDrafts(tx, id, { id: me.id, userId: user.id });
 
       await tx.$executeRaw`SELECT app.session_set_status(${invitation.sessionId}::uuid, 'ACTIVE'::session_status)`;
     });
