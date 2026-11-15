@@ -41,8 +41,10 @@ const session: InnerWorkSessionSummaryDTO = {
   theme: 'Repair',
   summary: 'Thinking through what happened last night.',
   messageCount: 4,
-  createdAt: '2026-05-10T10:00:00.000Z',
-  updatedAt: '2026-05-10T10:10:00.000Z',
+  // Local wall-clock times: the hub renders the local date, so a fixed UTC instant
+  // read "May 11" east of UTC+13:50.
+  createdAt: new Date(2026, 4, 10, 10, 0).toISOString(),
+  updatedAt: new Date(2026, 4, 10, 10, 10).toISOString(),
   linkedPartnerSessionId: null,
 };
 
