@@ -185,9 +185,11 @@ export async function recordUserMood(userId: string, intensity: number): Promise
   const participant = await prisma.participant.findFirst({
     where: { userId, leftAt: null, session: { status: { in: ['CREATED', 'INVITED', 'ACTIVE'] } } },
     orderBy: [{ readState: { lastActiveAt: { sort: 'desc', nulls: 'last' } } }, { joinedAt: 'desc' }],
-    select: { id: true },
+    select: { id: true, sessionId: true },
   });
   if (!participant) return false;
-  await prisma.moodReading.create({ data: { participantId: participant.id, intensity } });
+  await prisma.moodReading.create({
+    data: { participantId: participant.id, sessionId: participant.sessionId, userId, intensity },
+  });
   return true;
 }

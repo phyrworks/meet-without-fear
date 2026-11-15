@@ -389,13 +389,15 @@ REVOKE EXECUTE ON FUNCTION app.need_share(uuid, text) FROM mwf_app;
 SELECT 'connected as ' || session_user || ' (current_user ' || current_user || ')';
 SELECT set_config('t.a_user', :'a_user', false), set_config('t.b_user', :'b_user', false), set_config('t.outsider', :'outsider', false), set_config('t.att_a', :'att_a', false), set_config('t.att_b', :'att_b', false), set_config('t.r_session', :'r_session', false), set_config('t.b_participant', :'b_participant', false), set_config('t.a_participant', :'a_participant', false) \g /dev/null
 
--- 14. T-review-subject: a review by a non-subject is refused (I5)
+-- 14. A review by a non-subject is refused (I5). Since work-k5fk.3 (6a) by key, not by the retired t_review_subject:
+-- empathy_review (attempt_id, session_id, reviewer_user_id) REFERENCES empathy_attempt (id, session_id, subject_user_id).
 DO $$ BEGIN
   BEGIN
-    INSERT INTO empathy_review (attempt_id, reviewer_participant_id, validated)
-    VALUES (current_setting('t.att_a')::uuid, current_setting('t.a_participant')::uuid, true);
+    INSERT INTO empathy_review (attempt_id, reviewer_participant_id, session_id, reviewer_user_id, validated)
+    VALUES (current_setting('t.att_a')::uuid, current_setting('t.a_participant')::uuid, current_setting('t.r_session')::uuid,
+            current_setting('t.a_user')::uuid, true);
     RAISE EXCEPTION 'TEST FAILED: a non-subject reviewed';
-  EXCEPTION WHEN check_violation THEN RAISE NOTICE 'PASS 14 review by a non-subject refused: %', SQLERRM;
+  EXCEPTION WHEN foreign_key_violation THEN RAISE NOTICE 'PASS 14 review by a non-subject refused: %', SQLERRM;
   END;
 END $$;
 

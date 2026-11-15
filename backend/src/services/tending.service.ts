@@ -443,10 +443,11 @@ async function insertFollowUpAsJob(
   db: JobDb = getJobPrisma(),
 ): Promise<string> {
   const [r] = await db.$queryRaw<Array<{ id: string }>>`
-    INSERT INTO follow_up (session_id, agreement_id, proposal_id, type, scope, owner_participant_id, opted_in_shared,
-                           status, scheduled_for, response_deadline_at, summary)
+    INSERT INTO follow_up (session_id, agreement_id, proposal_id, type, scope, owner_participant_id, owner_user_id,
+                           opted_in_shared, status, scheduled_for, response_deadline_at, summary)
     VALUES (${row.sessionId}::uuid, ${row.agreementId ?? null}::uuid, ${row.proposalId ?? null}::uuid,
             ${row.type}::follow_up_type, ${row.scope}::follow_up_scope, ${row.ownerParticipantId ?? null}::uuid,
+            (SELECT p.user_id FROM participant p WHERE p.id = ${row.ownerParticipantId ?? null}::uuid),
             ${row.optedInShared ?? false}, ${row.status}::follow_up_status, ${row.scheduledFor},
             ${row.responseDeadlineAt ?? null}, ${encryptColumnValue('follow_up', 'summary', row.summary)})
     RETURNING id`;
@@ -683,7 +684,12 @@ export async function createTendingBetweenPeriodNote(args: {
     throw new TendingInvalidStateError('Between-period Tending notes require a resolved session');
   }
   const note = await prisma.followUpNote.create({
-    data: { participantId: viewer.participantId, content: args.content },
+    data: {
+      participantId: viewer.participantId,
+      sessionId: viewer.sessionId,
+      userId: viewer.userId,
+      content: args.content,
+    },
   });
   return toNoteDTO(viewer, note, null);
 }
@@ -797,6 +803,9 @@ async function insertCheckin(
   args: {
     followUpId: string;
     participantId: string;
+    /** work-k5fk.3 (6a): the participant's seat (the follow-up's session). */
+    sessionId: string;
+    userId: string;
     nextAction: TendingNextAction | null;
     continueChoice: ContinueChoice | null;
     reflectionSummary: string | null;
@@ -816,6 +825,8 @@ async function insertCheckin(
     data: {
       followUpId: args.followUpId,
       participantId: args.participantId,
+      sessionId: args.sessionId,
+      userId: args.userId,
       nextAction: args.nextAction,
       continueChoice: args.continueChoice,
       reflectionSummary: args.reflectionSummary,
@@ -865,6 +876,8 @@ export async function submitTendingResponse(args: {
     insertCheckin(tx, {
       followUpId: entry.id,
       participantId: viewer.participantId,
+      sessionId: viewer.sessionId,
+      userId: viewer.userId,
       nextAction: null,
       continueChoice: args.continueChoice ?? null,
       reflectionSummary: args.reflection ?? null,
@@ -948,6 +961,7 @@ export async function createPassiveReentry(args: {
       type: 'USER_INITIATED_REENTRY',
       scope: 'INDIVIDUAL',
       ownerParticipantId: viewer.participantId,
+      ownerUserId: viewer.userId,
       status: 'OPEN',
       openedAt: now,
       summary,
@@ -1322,6 +1336,8 @@ export async function submitTendingCheckin(args: {
         await insertCheckin(tx, {
           followUpId: entry.id,
           participantId: viewer.participantId,
+          sessionId: viewer.sessionId,
+          userId: viewer.userId,
           nextAction,
           continueChoice: choice,
           reflectionSummary: reflection || null,
@@ -1347,7 +1363,9 @@ export async function submitTendingCheckin(args: {
     // R34: the PRIVATE-scope items of SHARED follow-ups, as the participant's own notes.
     for (const { entry } of payloads) {
       for (const content of privateNotesFor(entry)) {
-        await tx.followUpNote.create({ data: { participantId: viewer.participantId, content } });
+        await tx.followUpNote.create({
+          data: { participantId: viewer.participantId, sessionId: viewer.sessionId, userId: viewer.userId, content },
+        });
       }
     }
     const reminders: ReminderRow[] = [];
@@ -1515,7 +1533,7 @@ async function startLinkedProcess(viewer: Viewer, handoff: string, now: Date): P
       select: { id: true },
     });
     const conversation = await tx.conversation.create({
-      data: { participantId: participant.id, kind: 'MAIN' },
+      data: { participantId: participant.id, sessionId: session.id, userId: viewer.userId, kind: 'MAIN' },
       select: { id: true },
     });
     return { sessionId: session.id, conversationId: conversation.id };

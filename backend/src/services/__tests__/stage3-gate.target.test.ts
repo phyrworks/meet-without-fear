@@ -130,7 +130,7 @@ describeTarget('the Stage 3 reveal gate on the target (mwf_app, the gate reply b
   it('the gate advances through own needs, own confirmation, then own share (wait for the partner)', async () => {
     const ms = (pid: string, key: string) =>
       run.sql(
-        `INSERT INTO participant_milestone (participant_id, milestone_key) VALUES ($1, $2) ON CONFLICT DO NOTHING`,
+        `INSERT INTO participant_milestone (participant_id, milestone_key, user_id, session_id) VALUES ($1::uuid, $2, (SELECT p.user_id FROM participant p WHERE p.id = $1::uuid), (SELECT p.session_id FROM participant p WHERE p.id = $1::uuid)) ON CONFLICT DO NOTHING`,
         [pid, key],
       );
 
@@ -190,7 +190,7 @@ describeTarget('the Stage 3 reveal gate on the target (mwf_app, the gate reply b
     // getStage3GateResponse stays unreachable. ("Wait for your partner" is
     // reachable since work-keq6 keyed "shared" on need_share: asserted above.)
     await run.sql(
-      `INSERT INTO participant_milestone (participant_id, milestone_key) VALUES ($1, 'needs_shared') ON CONFLICT DO NOTHING`,
+      `INSERT INTO participant_milestone (participant_id, milestone_key, user_id, session_id) VALUES ($1::uuid, 'needs_shared', (SELECT p.user_id FROM participant p WHERE p.id = $1::uuid), (SELECT p.session_id FROM participant p WHERE p.id = $1::uuid)) ON CONFLICT DO NOTHING`,
       [ids.ada],
     );
     stub([

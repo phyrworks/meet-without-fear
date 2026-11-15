@@ -362,6 +362,8 @@ describeTarget(
         store.recordReview({
           attemptId: bobRound1,
           reviewerParticipantId: ids.ada,
+          sessionId: ids.session,
+          reviewerUserId: ids.adaUser,
           validated: false,
           sentFeedback: 'PROBE_TS13_FEEDBACK the evenings',
           at: new Date(),

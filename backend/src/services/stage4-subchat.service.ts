@@ -250,6 +250,8 @@ export async function openOrGetActiveSubChat(input: OpenSubChatInput): Promise<S
   const created = (await prisma.conversation.create({
     data: {
       participantId: participant.id,
+      sessionId: input.sessionId,
+      userId: input.userId,
       kind: 'SUBCHAT',
       anchorKind: input.anchorKind,
       anchorProposalId: input.anchorKind === Stage4SubChatAnchor.PROPOSAL_REFINEMENT ? anchorId : null,
@@ -525,6 +527,7 @@ export async function resolveSubChat(input: ResolveInput): Promise<ResolveResult
         data: {
           sessionId,
           createdByParticipantId: me,
+          createdByUserId: input.userId,
           description: draft.description,
           duration: draft.duration ?? null,
           measureOfSuccess: draft.measureOfSuccess ?? null,
@@ -561,6 +564,8 @@ export async function resolveSubChat(input: ResolveInput): Promise<ResolveResult
         data: {
           proposalId: row.id,
           actorParticipantId: me,
+          sessionId,
+          actorUserId: input.userId,
           action: 'SUBCHAT_REFINED',
           after: {
             description: draft.description,

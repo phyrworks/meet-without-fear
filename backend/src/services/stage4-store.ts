@@ -392,8 +392,10 @@ export async function upsertChoice(args: {
 }): Promise<void> {
   const at = args.at ?? new Date();
   await prisma.$executeRaw`
-    INSERT INTO proposal_choice (proposal_id, participant_id, decision, note, created_at, updated_at)
-    VALUES (${args.proposalId}::uuid, ${args.participantId}::uuid, ${args.decision}::choice_decision,
+    INSERT INTO proposal_choice (proposal_id, participant_id, session_id, user_id, decision, note, created_at, updated_at)
+    VALUES (${args.proposalId}::uuid, ${args.participantId}::uuid,
+            (SELECT p.session_id FROM participant p WHERE p.id = ${args.participantId}::uuid),
+            (SELECT p.user_id FROM participant p WHERE p.id = ${args.participantId}::uuid), ${args.decision}::choice_decision,
             ${encryptColumnValue('proposal_choice', 'note', args.note ?? null)}, ${at}, ${at})
     ON CONFLICT (proposal_id, participant_id)
     DO UPDATE SET decision = EXCLUDED.decision, note = EXCLUDED.note, created_at = EXCLUDED.created_at`;
@@ -443,11 +445,12 @@ export async function setProposalNeeds(
   unresolvedLabels: string[] = [],
 ): Promise<void> {
   const unique = [...new Set(needIds)];
+  const { sessionId } = await db.proposal.findUniqueOrThrow({ where: { id: proposalId }, select: { sessionId: true } });
   await db.proposalNeed.deleteMany({ where: { proposalId, needId: { notIn: unique } } });
   for (const needId of unique) {
     await db.proposalNeed.upsert({
       where: { proposalId_needId: { proposalId, needId } },
-      create: { proposalId, needId },
+      create: { proposalId, needId, sessionId },
       update: {},
     });
   }
@@ -556,14 +559,16 @@ export async function insertAgreementsTx(tx: JobTx, args: CreateAgreementsArgs):
       ids.push(row.id);
       for (const pid of args.partyParticipantIds) {
         await tx.$executeRaw`
-          INSERT INTO agreement_party (agreement_id, participant_id, agreed_at)
-          VALUES (${row.id}::uuid, ${pid}::uuid, ${at})`;
+          INSERT INTO agreement_party (agreement_id, participant_id, session_id, user_id, agreed_at)
+          VALUES (${row.id}::uuid, ${pid}::uuid, ${args.sessionId}::uuid,
+                  (SELECT p.user_id FROM participant p WHERE p.id = ${pid}::uuid), ${at})`;
       }
       await tx.$executeRaw`
         UPDATE proposal SET status = 'CONVERTED_TO_AGREEMENT' WHERE id = ${a.proposalId}::uuid`;
       await tx.$executeRaw`
-        INSERT INTO proposal_revision (proposal_id, actor_participant_id, action, before, after, reason)
-        VALUES (${a.proposalId}::uuid, ${args.actorParticipantId}::uuid, 'CONVERTED',
+        INSERT INTO proposal_revision (proposal_id, actor_participant_id, session_id, actor_user_id, action, before, after, reason)
+        VALUES (${a.proposalId}::uuid, ${args.actorParticipantId}::uuid, ${args.sessionId}::uuid,
+                (SELECT p.user_id FROM participant p WHERE p.id = ${args.actorParticipantId}::uuid), 'CONVERTED',
                 ${JSON.stringify(encryptColumnValue('proposal_revision', 'before', { status: a.fromStatus }))}::jsonb,
                 ${JSON.stringify(encryptColumnValue('proposal_revision', 'after', { agreementId: row.id, status: 'CONVERTED_TO_AGREEMENT' }))}::jsonb,
                 ${proposalRevisionReason(args.reason ?? PROPOSAL_REVISION_REASONS.MUTUAL_CLOSURE)}::proposal_revision_reason)`;
@@ -596,9 +601,10 @@ export async function closeSessionAsJob(args: CloseSessionArgs): Promise<void> {
 export async function insertClosureTx(tx: JobTx, args: CloseSessionArgs): Promise<void> {
   const at = args.at ?? new Date();
   await tx.$executeRaw`
-    INSERT INTO session_closure (session_id, kind, reason, summary, closed_by_participant_id, check_in_at, closed_at)
+    INSERT INTO session_closure (session_id, kind, reason, summary, closed_by_participant_id, closed_by_user_id, check_in_at, closed_at)
     VALUES (${args.sessionId}::uuid, ${args.kind}::closure_kind, ${args.reason}::closure_reason, ${encryptColumnValue('session_closure', 'summary', args.summary)},
-            ${args.closedByParticipantId}::uuid, ${args.checkInAt}, ${at})`;
+            ${args.closedByParticipantId}::uuid, (SELECT p.user_id FROM participant p WHERE p.id = ${args.closedByParticipantId}::uuid),
+            ${args.checkInAt}, ${at})`;
   await tx.$executeRaw`SELECT app.session_set_status(${args.sessionId}::uuid, 'RESOLVED'::session_status)`;
 }
 

@@ -470,8 +470,10 @@ CREATE FUNCTION app.empathy_set_status(attempt uuid, status public.empathy_statu
         RAISE EXCEPTION 'resubmission needs the new round''s content' USING ERRCODE = 'null_value_not_allowed';
       END IF;
       UPDATE public.empathy_attempt SET status = 'SUPERSEDED', status_version = status_version + 1 WHERE id = a.id;
-      INSERT INTO public.empathy_attempt (author_participant_id, subject_participant_id, round, supersedes_attempt_id, content, status)
-      VALUES (a.author_participant_id, a.subject_participant_id, a.round + 1, a.id, empathy_set_status.content, 'HELD')
+      INSERT INTO public.empathy_attempt (author_participant_id, subject_participant_id, session_id, author_user_id, subject_user_id,
+                                          round, supersedes_attempt_id, content, status)
+      VALUES (a.author_participant_id, a.subject_participant_id, a.session_id, a.author_user_id, a.subject_user_id,
+              a.round + 1, a.id, empathy_set_status.content, 'HELD')
       RETURNING id INTO v_new;
       RETURN v_new;
     END IF;
@@ -522,8 +524,8 @@ CREATE FUNCTION app.empathy_set_status(attempt uuid, status public.empathy_statu
       UPDATE public.empathy_attempt
       SET status = 'REVEALED', revealed_at = coalesce(revealed_at, now()), status_version = status_version + 1
       WHERE id = a.id;
-      INSERT INTO public.message (conversation_id, sender_participant_id, role, kind, content, source_attempt_id)
-      SELECT c.id, a.author_participant_id, 'USER', 'EMPATHY_STATEMENT', a.content, a.id
+      INSERT INTO public.message (conversation_id, sender_participant_id, session_id, sender_user_id, role, kind, content, source_attempt_id)
+      SELECT c.id, a.author_participant_id, a.session_id, a.author_user_id, 'USER', 'EMPATHY_STATEMENT', a.content, a.id
       FROM public.conversation c
       WHERE c.participant_id = a.subject_participant_id AND c.kind = 'MAIN'
         AND NOT EXISTS (SELECT 1 FROM public.message m
@@ -560,9 +562,9 @@ CREATE FUNCTION app.need_share(need uuid, shared_text text) RETURNS void
                    WHERE c.need_id = need_share.need AND c.participant_id = n.participant_id AND c.decision = 'GRANTED') THEN
       RAISE EXCEPTION 'need has no GRANTED consent by its owner' USING ERRCODE = 'check_violation';
     END IF;
-    INSERT INTO public.need_share (need_id, participant_id, session_id, category, shared_text)
-    SELECT n.id, n.participant_id, p.session_id, n.category, need_share.shared_text
-    FROM public.need n JOIN public.participant p ON p.id = n.participant_id
+    INSERT INTO public.need_share (need_id, participant_id, session_id, user_id, category, shared_text)
+    SELECT n.id, n.participant_id, n.session_id, n.user_id, n.category, need_share.shared_text
+    FROM public.need n
     WHERE n.id = need_share.need
     ON CONFLICT (need_id) DO NOTHING;
   END
@@ -960,41 +962,15 @@ REVOKE EXECUTE ON FUNCTION app.t_message_app_delete() FROM PUBLIC;
 CREATE TRIGGER t_message_app_delete BEFORE DELETE ON public.message
   FOR EACH ROW EXECUTE FUNCTION app.t_message_app_delete();
 
--- T-same-session: author and subject belong to the same session.
-CREATE FUNCTION app.t_attempt_same_session() RETURNS trigger
-  LANGUAGE plpgsql
-  SET search_path = pg_catalog, public, pg_temp
-  AS $$
-  BEGIN
-    IF (SELECT p.session_id FROM public.participant p WHERE p.id = NEW.author_participant_id)
-       IS DISTINCT FROM (SELECT p.session_id FROM public.participant p WHERE p.id = NEW.subject_participant_id) THEN
-      RAISE EXCEPTION 'author and subject must share a session' USING ERRCODE = 'check_violation';
-    END IF;
-    RETURN NEW;
-  END
-  $$;
--- No caller needs EXECUTE on a trigger function.
-REVOKE EXECUTE ON FUNCTION app.t_attempt_same_session() FROM PUBLIC;
-CREATE TRIGGER t_same_session BEFORE INSERT OR UPDATE OF author_participant_id, subject_participant_id ON public.empathy_attempt
-  FOR EACH ROW EXECUTE FUNCTION app.t_attempt_same_session();
-
--- T-review-subject: the reviewer of an attempt is its subject (spec §1.2 "trigger-checked").
-CREATE FUNCTION app.t_review_subject() RETURNS trigger
-  LANGUAGE plpgsql
-  SET search_path = pg_catalog, public, pg_temp
-  AS $$
-  BEGIN
-    IF NOT EXISTS (SELECT 1 FROM public.empathy_attempt a
-                   WHERE a.id = NEW.attempt_id AND a.subject_participant_id = NEW.reviewer_participant_id) THEN
-      RAISE EXCEPTION 'only the subject of an attempt reviews it' USING ERRCODE = 'check_violation';
-    END IF;
-    RETURN NEW;
-  END
-  $$;
--- No caller needs EXECUTE on a trigger function.
-REVOKE EXECUTE ON FUNCTION app.t_review_subject() FROM PUBLIC;
-CREATE TRIGGER t_review_subject BEFORE INSERT OR UPDATE OF attempt_id, reviewer_participant_id ON public.empathy_review
-  FOR EACH ROW EXECUTE FUNCTION app.t_review_subject();
+-- Retired by work-k5fk.3 (6a): t_attempt_same_session (author and subject share a
+-- session), t_review_subject (the reviewer is the attempt's subject) and
+-- t_need_share_owner (a share carries its need owner's participant and session)
+-- are keys now: every participant reference is FOREIGN KEY (x_participant_id,
+-- session_id, x_user_id) REFERENCES participant (id, session_id, user_id), so two
+-- references on one row share its one session_id, and empathy_review /
+-- need_share pin to empathy_attempt (id, session_id, subject_user_id) / need
+-- (id, session_id, user_id) (tables.sql). participant-key.target.test.ts keeps
+-- each retired trigger's refusal.
 
 -- T-consent-owner: the decider owns the arc target. Invoker rights, so under
 -- the caller's RLS a partner's row and a missing row look the same; one fixed
@@ -1065,24 +1041,6 @@ REVOKE EXECUTE ON FUNCTION app.t_consent_transitions() FROM PUBLIC;
 CREATE TRIGGER t_consent_transitions BEFORE INSERT OR UPDATE ON public.consent
   FOR EACH ROW EXECUTE FUNCTION app.t_consent_transitions();
 
--- T-need-share-owner: participant_id/session_id are the need owner's (N-1).
-CREATE FUNCTION app.t_need_share_owner() RETURNS trigger
-  LANGUAGE plpgsql
-  SET search_path = pg_catalog, public, pg_temp
-  AS $$
-  BEGIN
-    IF NOT EXISTS (SELECT 1 FROM public.need n JOIN public.participant p ON p.id = n.participant_id
-                   WHERE n.id = NEW.need_id AND n.participant_id = NEW.participant_id AND p.session_id = NEW.session_id) THEN
-      RAISE EXCEPTION 'need_share must carry its need owner''s participant and session' USING ERRCODE = 'check_violation';
-    END IF;
-    RETURN NEW;
-  END
-  $$;
--- No caller needs EXECUTE on a trigger function.
-REVOKE EXECUTE ON FUNCTION app.t_need_share_owner() FROM PUBLIC;
-CREATE TRIGGER t_need_share_owner BEFORE INSERT OR UPDATE ON public.need_share
-  FOR EACH ROW EXECUTE FUNCTION app.t_need_share_owner();
-
 -- T-need-share-terminal: the delivered text and its pins never change;
 -- revoked_at moves only NULL → value (P3 §4, re-homed).
 CREATE FUNCTION app.t_need_share_terminal() RETURNS trigger
@@ -1104,15 +1062,17 @@ REVOKE EXECUTE ON FUNCTION app.t_need_share_terminal() FROM PUBLIC;
 CREATE TRIGGER t_need_share_terminal BEFORE UPDATE ON public.need_share
   FOR EACH ROW EXECUTE FUNCTION app.t_need_share_terminal();
 
--- T-result-live-attempt: no result on a SUPERSEDED round; subject = the attempt's subject.
+-- T-result-live-attempt: no result on a SUPERSEDED round. (The subject = the attempt's
+-- subject half is a key since work-k5fk.3 (6a): reconciler_result (attempt_id,
+-- session_id, subject_user_id) REFERENCES empathy_attempt (id, session_id, subject_user_id).)
 CREATE FUNCTION app.t_result_live_attempt() RETURNS trigger
   LANGUAGE plpgsql
   SET search_path = pg_catalog, public, pg_temp
   AS $$
   BEGIN
     IF NOT EXISTS (SELECT 1 FROM public.empathy_attempt a
-                   WHERE a.id = NEW.attempt_id AND a.status <> 'SUPERSEDED' AND a.subject_participant_id = NEW.subject_participant_id) THEN
-      RAISE EXCEPTION 'a reconciler result needs a live attempt with the same subject' USING ERRCODE = 'check_violation';
+                   WHERE a.id = NEW.attempt_id AND a.status <> 'SUPERSEDED') THEN
+      RAISE EXCEPTION 'a reconciler result needs a live attempt' USING ERRCODE = 'check_violation';
     END IF;
     RETURN NEW;
   END

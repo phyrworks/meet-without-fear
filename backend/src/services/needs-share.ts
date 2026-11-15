@@ -34,6 +34,7 @@ import { decryptRawRows, encryptColumnValue } from '../lib/prisma-encryption-mid
 import { reencryptForSession } from '../lib/share-moments';
 import { cleanVisibleAIText } from '../utils/visible-text';
 import { reachMilestone } from './milestone-writer';
+import { seatOfParticipant } from './participant-resolver';
 
 export interface SharedNeedRow {
   needId: string;
@@ -174,6 +175,7 @@ export async function shareNeeds(args: {
 
   // 1. The owner's decision (app connection).
   await prisma.$transaction(async tx => {
+    const seat = await seatOfParticipant(args.participantId, tx);
     for (const need of args.needs) {
       const existing = await tx.consent.findFirst({
         where: { needId: need.id, participantId: args.participantId, decision: 'GRANTED' },
@@ -184,6 +186,9 @@ export async function shareNeeds(args: {
         data: {
           participantId: args.participantId,
           requestedByParticipantId: args.participantId,
+          sessionId: seat.sessionId,
+          userId: seat.userId,
+          requestedByUserId: seat.userId,
           needId: need.id,
           decision: 'GRANTED',
           decidedAt: sharedAt,

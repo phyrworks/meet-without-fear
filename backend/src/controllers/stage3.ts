@@ -49,7 +49,12 @@ import {
   participantsWhoShared,
   shareNeeds,
 } from '../services/needs-share';
-import { getPartnerParticipant, resolveParticipant, type ResolvedParticipant } from '../services/participant-resolver';
+import {
+  getPartnerParticipant,
+  resolveParticipant,
+  seatOf,
+  type ResolvedParticipant,
+} from '../services/participant-resolver';
 import { loadStageStates } from '../services/stage-shim';
 import { reachMilestone } from '../services/milestone-writer';
 import { createFacilitatorMessage } from '../services/message-store';
@@ -579,6 +584,7 @@ export async function addCustomNeed(req: Request, res: Response): Promise<void> 
     const custom = (await prisma.need.create({
       data: {
         participantId: ctx.participant.id,
+        ...seatOf(ctx.participant),
         label: need,
         category,
         evidence: [],

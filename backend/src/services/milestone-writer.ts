@@ -45,12 +45,13 @@ export async function reachMilestone(
   tx?: Pick<Prisma.TransactionClient, '$executeRaw'>,
 ): Promise<boolean> {
   const client = tx ?? (isSelfAssertable(key) ? prisma : getJobPrisma());
-  // Exactly the columns the job may INSERT (trailer T7: participant_id,
+  // Exactly the columns the job may INSERT (participant_id, its seat — session_id, user_id, work-k5fk.3 —
   // milestone_key, reached_at); created_at is the column default. Prisma's
   // createMany would also send its client-side `@default(now())` created_at.
   const count = await client.$executeRaw`
-    INSERT INTO participant_milestone (participant_id, milestone_key, reached_at)
-    VALUES (${participantId}::uuid, ${key}, ${at})
+    INSERT INTO participant_milestone (participant_id, session_id, user_id, milestone_key, reached_at)
+    VALUES (${participantId}::uuid, (SELECT p.session_id FROM participant p WHERE p.id = ${participantId}::uuid),
+            (SELECT p.user_id FROM participant p WHERE p.id = ${participantId}::uuid), ${key}, ${at})
     ON CONFLICT (participant_id, milestone_key) DO NOTHING`;
   return count > 0;
 }

@@ -103,14 +103,15 @@ async function acceptPendingInvitationForE2ESession(sessionId: string, userId: s
       select: { id: true },
     });
     const main = await tx.conversation.findFirst({ where: { participantId: participant.id, kind: 'MAIN' } });
-    if (!main) await tx.conversation.create({ data: { participantId: participant.id, kind: 'MAIN' } });
+    if (!main)
+      await tx.conversation.create({ data: { participantId: participant.id, sessionId, userId, kind: 'MAIN' } });
     await tx.conversationReadState.upsert({
       where: { participantId: participant.id },
-      create: { participantId: participant.id },
+      create: { participantId: participant.id, sessionId, userId },
       update: {},
     });
     // As acceptInvitation (work-99k2): pre-join empathy drafts follow the invitee.
-    await repointInvitationDrafts(tx, invitation.id, participant.id);
+    await repointInvitationDrafts(tx, invitation.id, { id: participant.id, userId });
 
     await tx.invitation.update({
       where: { id: invitation.id },

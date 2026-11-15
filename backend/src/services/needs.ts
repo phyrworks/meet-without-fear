@@ -227,6 +227,8 @@ export async function captureProposedNeedsForUser(
       await tx.need.create({
         data: {
           participantId: participant.id,
+          sessionId,
+          userId,
           label: cleanVisibleAIText(item.description || item.need),
           category: item.category,
           evidence: cleanEvidence(item.evidence),
@@ -260,6 +262,8 @@ export async function captureSingleNeedForUser(
     return tx.need.create({
       data: {
         participantId: participant.id,
+        sessionId,
+        userId,
         label: cleanVisibleAIText(item.description || item.need),
         category: item.category,
         evidence: cleanEvidence(item.evidence),

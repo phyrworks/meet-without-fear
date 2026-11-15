@@ -58,8 +58,9 @@ describeTarget('Edit first on a pre-join draft: the AI opens the revision (work-
     await run.as('mwf_job', null, `SELECT app.session_set_status($1::uuid, 'INVITED')`, [sessionId]);
     const [me] = await run.sql<{ id: string }>(`SELECT id FROM participant WHERE session_id = $1`, [sessionId]);
     await run.sql(
-      `INSERT INTO participant_milestone (participant_id, milestone_key)
-       SELECT $1, k FROM unnest(ARRAY['invitation_sent', 'compact_signed', 'feel_heard']) k`,
+      `INSERT INTO participant_milestone (participant_id, session_id, user_id, milestone_key)
+       SELECT p.id, p.session_id, p.user_id, k FROM participant p, unnest(ARRAY['invitation_sent', 'compact_signed', 'feel_heard']) k
+       WHERE p.id = $1::uuid`,
       [me.id],
     );
     return { sessionId, invitationId, adaParticipant: me.id };
@@ -412,9 +413,10 @@ describeTarget('Edit first on a pre-join draft: the AI opens the revision (work-
     expect(early.status).toBe(400);
     expect(early.body.error.message).toMatch(/stage 2 is required/);
     // The review is still pending: nothing changed.
-    await run.sql(`INSERT INTO participant_milestone (participant_id, milestone_key) VALUES ($1, 'feel_heard')`, [
-      adaParticipant,
-    ]);
+    await run.sql(
+      `INSERT INTO participant_milestone (participant_id, milestone_key, user_id, session_id) VALUES ($1::uuid, 'feel_heard', (SELECT p.user_id FROM participant p WHERE p.id = $1::uuid), (SELECT p.session_id FROM participant p WHERE p.id = $1::uuid))`,
+      [adaParticipant],
+    );
     expect((await draftOf(sessionId)).preJoinReview).not.toBeNull();
   });
 });

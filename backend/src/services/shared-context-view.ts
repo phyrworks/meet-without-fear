@@ -27,6 +27,7 @@
  */
 
 import { prisma } from '../lib/prisma';
+import { seatOfParticipant } from './participant-resolver';
 
 /** Message kinds that render as a received shared frame and feed the derivations above. */
 export const VIEWABLE_SHARED_KINDS = ['SHARED_CONTEXT', 'VALIDATION_FEEDBACK'] as const;
@@ -96,7 +97,12 @@ export async function markSharedContextViewed(
   if (count === 0 && !existing) {
     try {
       await prisma.conversationReadState.create({
-        data: { participantId, lastViewedShareTabAt: instant, lastActiveAt: now },
+        data: {
+          participantId,
+          ...(await seatOfParticipant(participantId)),
+          lastViewedShareTabAt: instant,
+          lastActiveAt: now,
+        },
       });
       count = 1;
     } catch {

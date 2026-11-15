@@ -465,15 +465,18 @@ describe(`golden: ${SCENARIO}`, () => {
         `SELECT p.id FROM participant p JOIN "user" u ON u.id = p.user_id WHERE u.email = 'bob@e2e.test'`,
       );
       const [unshared] = await sql<{ id: string }>(
-        `INSERT INTO need (participant_id, label, category, ai_confidence, confirmed_at) VALUES ($1, 'PROBE_UNSHARED_AT_CLOSE', 'MEANING', 0.9, now()) RETURNING id`,
+        `INSERT INTO need (participant_id, session_id, user_id, label, category, ai_confidence, confirmed_at)
+         SELECT p.id, p.session_id, p.user_id, 'PROBE_UNSHARED_AT_CLOSE', 'MEANING', 0.9, now() FROM participant p WHERE p.id = $1 RETURNING id`,
         [bobP.id],
       );
       const [open] = await sql<{ id: string }>(
-        `INSERT INTO need (participant_id, label, category, ai_confidence, confirmed_at) VALUES ($1, 'PROBE_OPEN_AT_CLOSE', 'MEANING', 0.9, now()) RETURNING id`,
+        `INSERT INTO need (participant_id, session_id, user_id, label, category, ai_confidence, confirmed_at)
+         SELECT p.id, p.session_id, p.user_id, 'PROBE_OPEN_AT_CLOSE', 'MEANING', 0.9, now() FROM participant p WHERE p.id = $1 RETURNING id`,
         [bobP.id],
       );
       await sql(
-        `INSERT INTO consent (participant_id, need_id, decision, decided_at) VALUES ($1, $2, 'GRANTED', now())`,
+        `INSERT INTO consent (participant_id, session_id, user_id, need_id, decision, decided_at)
+         SELECT p.id, p.session_id, p.user_id, $2::uuid, 'GRANTED', now() FROM participant p WHERE p.id = $1::uuid`,
         [bobP.id, open.id],
       );
       const job = new Client({ connectionString: jobUrlFor(harness.fixture.target, harness.fixture.database) });

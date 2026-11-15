@@ -69,7 +69,9 @@ export function deliver(opts: {
 export async function ownStatementCopy(opts: {
   conversationId: string;
   participantId: string;
-  userId: string | null;
+  /** work-k5fk.3 (6a): the author's seat (the conversation's session and the author's user). */
+  sessionId: string;
+  userId: string;
   content: string;
   attemptId: string;
 }): Promise<StoredMessage> {
@@ -77,6 +79,8 @@ export async function ownStatementCopy(opts: {
     data: {
       conversationId: opts.conversationId,
       senderParticipantId: opts.participantId,
+      sessionId: opts.sessionId,
+      senderUserId: opts.userId,
       role: 'USER',
       kind: 'EMPATHY_STATEMENT',
       content: opts.content,
@@ -104,7 +108,11 @@ export async function ownStatementCopy(opts: {
  * conversation (dedupe_key STAGE2_VALIDATED_WAIT, work-fdc1). Null when it was
  * already there.
  */
-export function validatedWaitNote(conversationId: string, content: string, createdAt?: Date): Promise<StoredMessage | null> {
+export function validatedWaitNote(
+  conversationId: string,
+  content: string,
+  createdAt?: Date,
+): Promise<StoredMessage | null> {
   return createFacilitatorMessageOnce({ conversationId, dedupeKey: 'STAGE2_VALIDATED_WAIT', content, createdAt });
 }
 

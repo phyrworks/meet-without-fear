@@ -31,6 +31,7 @@ import type { ReconcilerResult, ShareOfferMessage } from '@meet-without-fear/sha
 import { createFacilitatorMessage, deliverMessage } from '../message-store';
 import { loadCurrentStages } from '../stage-shim';
 import { currentAttempt, jobMoveIfUnchanged, partyOf, sessionParties, type SessionParty } from '../empathy-store';
+import { userIdOf } from '../participant-resolver';
 
 import {
   type UserInfo,
@@ -300,9 +301,11 @@ async function insertOffer(
 ): Promise<string> {
   const rows = await client.$queryRaw<
     Array<{ id: string }>
-  >`INSERT INTO context_share_offer (attempt_id, result_id, subject_participant_id, iteration, status, offer_message,
-                                     suggested_content, suggested_reason, offered_at)
+  >`INSERT INTO context_share_offer (attempt_id, result_id, subject_participant_id, session_id, subject_user_id, iteration, status,
+                                     offer_message, suggested_content, suggested_reason, offered_at)
     VALUES (${opts.attemptId}::uuid, ${opts.resultId}::uuid, ${opts.subjectParticipantId}::uuid,
+            (SELECT a.session_id FROM empathy_attempt a WHERE a.id = ${opts.attemptId}::uuid),
+            (SELECT p.user_id FROM participant p WHERE p.id = ${opts.subjectParticipantId}::uuid),
             coalesce((SELECT max(o.iteration) FROM context_share_offer o WHERE o.attempt_id = ${opts.attemptId}::uuid), 0) + 1,
             ${opts.status}::share_offer_status, ${encryptColumnValue('context_share_offer', 'offer_message', opts.offerMessage ?? null)},
             ${encryptColumnValue('context_share_offer', 'suggested_content', opts.suggestedContent)},
@@ -626,7 +629,14 @@ export async function respondToShareSuggestion(
       });
       if (updated.count === 0) throw new Error('Share offer already processed');
       await tx.consent.create({
-        data: { participantId: me.participantId, shareOfferId: offer.id, decision: 'DENIED', decidedAt: now },
+        data: {
+          participantId: me.participantId,
+          sessionId,
+          userId: userIdOf(me),
+          shareOfferId: offer.id,
+          decision: 'DENIED',
+          decidedAt: now,
+        },
         select: { id: true },
       });
       // The subject's own pending suggestion card, if any.
@@ -720,6 +730,8 @@ export async function shareAccepted(opts: {
     await tx.consent.create({
       data: {
         participantId: opts.subject.participantId,
+        sessionId: opts.sessionId,
+        userId: userIdOf(opts.subject),
         shareOfferId: opts.offerId,
         decision: 'GRANTED',
         decidedAt: now,
@@ -734,8 +746,9 @@ export async function shareAccepted(opts: {
   });
   if (opts.refinement) {
     // spec §1.2: the refined text is the subject's SHARE_CONTEXT draft.
-    await prisma.$executeRaw`INSERT INTO draft (participant_id, kind, share_offer_id, content, ready_to_share, version)
-      VALUES (${opts.subject.participantId}::uuid, 'SHARE_CONTEXT'::draft_kind, ${opts.offerId}::uuid, ${encryptColumnValue('draft', 'content', opts.refinement)}, true, 1)
+    await prisma.$executeRaw`INSERT INTO draft (participant_id, session_id, user_id, kind, share_offer_id, content, ready_to_share, version)
+      VALUES (${opts.subject.participantId}::uuid, ${opts.sessionId}::uuid, ${userIdOf(opts.subject)}::uuid,
+              'SHARE_CONTEXT'::draft_kind, ${opts.offerId}::uuid, ${encryptColumnValue('draft', 'content', opts.refinement)}, true, 1)
       ON CONFLICT (participant_id, kind, (coalesce(about_participant_id, invitation_id, attempt_id, share_offer_id)))
       DO UPDATE SET content = EXCLUDED.content, version = draft.version + 1`;
   }

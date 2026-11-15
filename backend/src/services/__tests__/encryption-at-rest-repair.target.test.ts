@@ -92,8 +92,8 @@ describeTarget('encryption at rest: needs, repair and follow-up columns (FIELD_E
 
   it('need_share.shared_text (shareNeeds → app.need_share as mwf_job): sealed; every raw reader of v_need_shared decrypts; the hook runs', async () => {
     const [need] = await run.sql<{ id: string }>(
-      `INSERT INTO need (participant_id, label, category, ai_confidence, confirmed_at)
-       VALUES ($1, 'PROBE_TS13_SHARE_LABEL', 'MEANING', 0.9, now()) RETURNING id`,
+      `INSERT INTO need (participant_id, label, category, ai_confidence, confirmed_at, user_id, session_id)
+       VALUES ($1::uuid, 'PROBE_TS13_SHARE_LABEL', 'MEANING', 0.9, now(), (SELECT p.user_id FROM participant p WHERE p.id = $1::uuid), (SELECT p.session_id FROM participant p WHERE p.id = $1::uuid)) RETURNING id`,
       [ids.bob],
     );
     hook.mockClear();
@@ -148,7 +148,14 @@ describeTarget('encryption at rest: needs, repair and follow-up columns (FIELD_E
     try {
       await writer.needDisposition.upsert({
         where: { participantId_needId: { participantId: ids.ada, needId: need.id } },
-        create: { participantId: ids.ada, needId: need.id, status: 'DECLINED', note: 'PROBE_TS13_DISPOSITION' },
+        create: {
+          participantId: ids.ada,
+          needId: need.id,
+          sessionId: ids.session,
+          userId: ids.adaUser,
+          status: 'DECLINED',
+          note: 'PROBE_TS13_DISPOSITION',
+        },
         update: { note: 'PROBE_TS13_DISPOSITION' },
       });
     } finally {

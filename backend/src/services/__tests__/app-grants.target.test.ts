@@ -73,9 +73,10 @@ describeTarget('mwf_app grants (target)', () => {
       await asApp(`INSERT INTO session_key (session_id, key_id, wrapped_dek) VALUES ($1, 'k', '\\x00')`, [ids.session]),
     ).toBe('42501');
     expect(
-      await asApp(`INSERT INTO participant_key (participant_id, key_id, wrapped_dek) VALUES ($1, 'k', '\\x00')`, [
-        ids.ada,
-      ]),
+      await asApp(
+        `INSERT INTO participant_key (participant_id, key_id, wrapped_dek, user_id, session_id) VALUES ($1::uuid, 'k', '\\x00', (SELECT p.user_id FROM participant p WHERE p.id = $1::uuid), (SELECT p.session_id FROM participant p WHERE p.id = $1::uuid))`,
+        [ids.ada],
+      ),
     ).toBe('42501');
     expect(
       await asApp(`INSERT INTO user_key (user_id, key_id, wrapped_dek) VALUES ($1, 'k', '\\x00')`, [ids.adaUser]),
@@ -131,8 +132,8 @@ describeTarget('mwf_app grants (target)', () => {
         .as<{ id: string }>(
           'mwf_app',
           user,
-          `INSERT INTO message (conversation_id, sender_participant_id, role, kind, content)
-           VALUES ($1, $2, $3::message_role, $4::message_kind, 'x') RETURNING id`,
+          `INSERT INTO message (conversation_id, sender_participant_id, role, kind, content, sender_user_id, session_id)
+           VALUES ($1::uuid, $2::uuid, $3::message_role, $4::message_kind, 'x', (SELECT p.user_id FROM participant p WHERE p.id = $2::uuid), (SELECT x.session_id FROM conversation x WHERE x.id = $1::uuid)) RETURNING id`,
           [conv, sender, role, kind],
         )
         .then(
@@ -162,16 +163,16 @@ describeTarget('mwf_app grants (target)', () => {
       const own = await insert(ids.adaUser, adaConv, ids.ada, 'USER', 'CHAT');
       expect(await del(ids.adaUser, own)).toBe('ok');
       const [ai] = await run.sql<{ id: string }>(
-        `INSERT INTO message (conversation_id, role, kind, content) VALUES ($1, 'AI', 'CHAT', 'x') RETURNING id`,
+        `INSERT INTO message (conversation_id, role, kind, content, session_id) VALUES ($1::uuid, 'AI', 'CHAT', 'x', (SELECT x.session_id FROM conversation x WHERE x.id = $1::uuid)) RETURNING id`,
         [adaConv],
       );
       expect(await del(ids.adaUser, ai.id)).toBe('42501');
       const [suggestion] = await run.sql<{ id: string }>(
-        `INSERT INTO message (conversation_id, role, kind, content) VALUES ($1, 'AI', 'SHARE_SUGGESTION', 'x') RETURNING id`,
+        `INSERT INTO message (conversation_id, role, kind, content, session_id) VALUES ($1::uuid, 'AI', 'SHARE_SUGGESTION', 'x', (SELECT x.session_id FROM conversation x WHERE x.id = $1::uuid)) RETURNING id`,
         [adaConv],
       );
       const [bobsSuggestion] = await run.sql<{ id: string }>(
-        `INSERT INTO message (conversation_id, role, kind, content) VALUES ($1, 'AI', 'SHARE_SUGGESTION', 'x') RETURNING id`,
+        `INSERT INTO message (conversation_id, role, kind, content, session_id) VALUES ($1::uuid, 'AI', 'SHARE_SUGGESTION', 'x', (SELECT x.session_id FROM conversation x WHERE x.id = $1::uuid)) RETURNING id`,
         [bobConv],
       );
       expect(await del(ids.adaUser, bobsSuggestion.id)).toBe('42501');
@@ -201,7 +202,9 @@ describeTarget('mwf_app grants (target)', () => {
   // mwf_auth moved from trailer.sql T7 into tables.sql next to each table, so the move is proven a
   // pure move: this snapshot did not change with it.
   it('the mwf_job / mwf_ops / mwf_auth / mwf_migrator privilege matrix is exactly the recorded one', async () => {
-    const rows = await run.sql<{ line: string }>(PRIVILEGE_MATRIX, [['mwf_job', 'mwf_ops', 'mwf_auth', 'mwf_migrator']]);
+    const rows = await run.sql<{ line: string }>(PRIVILEGE_MATRIX, [
+      ['mwf_job', 'mwf_ops', 'mwf_auth', 'mwf_migrator'],
+    ]);
     const owners = await run.sql<{ line: string }>(
       `SELECT 'routine owner ' || p.oid::regprocedure::text || ': ' || pg_get_userbyid(p.proowner) AS line
        FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace

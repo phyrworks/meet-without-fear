@@ -761,6 +761,7 @@ export async function proposeStrategy(req: Request, res: Response): Promise<void
       data: {
         sessionId,
         createdByParticipantId: ctx.participant.id,
+        createdByUserId: user.id,
         description,
         duration,
         measureOfSuccess,
@@ -930,6 +931,7 @@ export async function createAgreement(req: Request, res: Response): Promise<void
           data: {
             sessionId,
             createdByParticipantId: me,
+            createdByUserId: user.id,
             description,
             duration,
             measureOfSuccess,
@@ -944,6 +946,8 @@ export async function createAgreement(req: Request, res: Response): Promise<void
       data: {
         proposalId,
         actorParticipantId: me,
+        sessionId,
+        actorUserId: user.id,
         action: 'REVISED',
         after: { [LEGACY_AGREEMENT_MARK]: true, type, followUpDate: followUpDate ?? null },
         reason: PROPOSAL_REVISION_REASONS.LEGACY_PROPOSED,
@@ -1036,6 +1040,8 @@ export async function confirmAgreement(req: Request, res: Response): Promise<voi
         data: {
           proposalId,
           actorParticipantId: me,
+          sessionId,
+          actorUserId: user.id,
           action: 'REVISED',
           after: { [LEGACY_AGREEMENT_MARK]: true, confirmed: true },
           reason: PROPOSAL_REVISION_REASONS.LEGACY_CONFIRMED,

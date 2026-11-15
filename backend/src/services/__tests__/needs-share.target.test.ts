@@ -53,7 +53,7 @@ describeTarget('the Stage 3 share path, as mwf_app and mwf_job with identity bin
     const userSpy = jest.spyOn(realtime, 'publishUserEvent');
     const http = await httpAs();
     const [extra] = await run.sql<{ id: string }>(
-      `INSERT INTO need (participant_id, label, category, ai_confidence, evidence) VALUES ($1, 'PROBE_DELETED_LABEL', 'SAFETY', 0.9, ARRAY['PROBE_DELETED_EVIDENCE']) RETURNING id`,
+      `INSERT INTO need (participant_id, label, category, ai_confidence, evidence, user_id, session_id) VALUES ($1::uuid, 'PROBE_DELETED_LABEL', 'SAFETY', 0.9, ARRAY['PROBE_DELETED_EVIDENCE'], (SELECT p.user_id FROM participant p WHERE p.id = $1::uuid), (SELECT p.session_id FROM participant p WHERE p.id = $1::uuid)) RETURNING id`,
       [ids.ada],
     );
     const res = await http(

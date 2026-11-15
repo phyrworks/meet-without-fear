@@ -210,6 +210,8 @@ describeTarget('empathy rounds, the status writer and the review path (mwf_app +
       recordReview({
         attemptId: bobRound1,
         reviewerParticipantId: ada.participantId,
+        sessionId: harness.sessionId,
+        reviewerUserId: ada.userId,
         validated: false,
         sentFeedback: null,
         at: new Date(),

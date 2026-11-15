@@ -183,7 +183,7 @@ describeTarget('repair privacy fixes (fix round 1) — legacy agreements and sub
     ]);
     // An anchor that is not a shared need of the session is refused.
     const [unshared] = await run.sql<{ id: string }>(
-      `INSERT INTO need (participant_id, label, category, ai_confidence) VALUES ($1, 'PROBE_NOT_SHARED', 'SAFETY', 0.9) RETURNING id`,
+      `INSERT INTO need (participant_id, label, category, ai_confidence, user_id, session_id) VALUES ($1::uuid, 'PROBE_NOT_SHARED', 'SAFETY', 0.9, (SELECT p.user_id FROM participant p WHERE p.id = $1::uuid), (SELECT p.session_id FROM participant p WHERE p.id = $1::uuid)) RETURNING id`,
       [ids.bob],
     );
     expect(

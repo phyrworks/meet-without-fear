@@ -97,24 +97,24 @@ describeTarget('participant resolution and the single context entry point (targe
     };
 
     // --- Bob's private rows -------------------------------------------------------------
-    await sql(`INSERT INTO need (participant_id, label, category, ai_confidence) VALUES ($1, $2, 'RECOGNITION', 0.9)`, [
-      ids.bob,
-      BOB_PRIVATE.unsharedNeed,
-    ]);
+    await sql(
+      `INSERT INTO need (participant_id, label, category, ai_confidence, user_id, session_id) VALUES ($1::uuid, $2, 'RECOGNITION', 0.9, (SELECT p.user_id FROM participant p WHERE p.id = $1::uuid), (SELECT p.session_id FROM participant p WHERE p.id = $1::uuid))`,
+      [ids.bob, BOB_PRIVATE.unsharedNeed],
+    );
     const [shared] = await sql<{ id: string }>(
-      `INSERT INTO need (participant_id, label, category, ai_confidence, confirmed_at) VALUES ($1, $2, 'CONNECTION', 0.9, now()) RETURNING id`,
+      `INSERT INTO need (participant_id, label, category, ai_confidence, confirmed_at, user_id, session_id) VALUES ($1::uuid, $2, 'CONNECTION', 0.9, now(), (SELECT p.user_id FROM participant p WHERE p.id = $1::uuid), (SELECT p.session_id FROM participant p WHERE p.id = $1::uuid)) RETURNING id`,
       [ids.bob, BOB_PRIVATE.sharedNeedLabel],
     );
     await sql(
-      `INSERT INTO consent (participant_id, requested_by_participant_id, need_id, decision, decided_at) VALUES ($1, $1, $2, 'GRANTED', now())`,
+      `INSERT INTO consent (participant_id, requested_by_participant_id, need_id, decision, decided_at, user_id, requested_by_user_id, session_id) VALUES ($1::uuid, $1::uuid, $2, 'GRANTED', now(), (SELECT p.user_id FROM participant p WHERE p.id = $1::uuid), (SELECT p.user_id FROM participant p WHERE p.id = $1::uuid), (SELECT p.session_id FROM participant p WHERE p.id = $1::uuid))`,
       [ids.bob, shared.id],
     );
     await sql(
-      `INSERT INTO need_share (need_id, participant_id, session_id, category, shared_text) VALUES ($1, $2, $3, 'CONNECTION', $4)`,
+      `INSERT INTO need_share (need_id, participant_id, session_id, category, shared_text, user_id) VALUES ($1, $2::uuid, $3, 'CONNECTION', $4, (SELECT p.user_id FROM participant p WHERE p.id = $2::uuid))`,
       [shared.id, ids.bob, ids.session, SHARED.needText],
     );
     await sql(
-      `INSERT INTO draft (participant_id, kind, about_participant_id, content) VALUES ($1, 'EMPATHY', $2, $3)`,
+      `INSERT INTO draft (participant_id, kind, about_participant_id, content, user_id, about_user_id, session_id) VALUES ($1::uuid, 'EMPATHY', $2::uuid, $3, (SELECT p.user_id FROM participant p WHERE p.id = $1::uuid), (SELECT p.user_id FROM participant p WHERE p.id = $2::uuid), (SELECT p.session_id FROM participant p WHERE p.id = $1::uuid))`,
       [ids.bob, ids.ada, BOB_PRIVATE.draft],
     );
     const [refl] = await sql<{ id: string }>(
@@ -133,35 +133,36 @@ describeTarget('participant resolution and the single context entry point (targe
       ids.bob,
       JSON.stringify({ text: BOB_PRIVATE.summary, messageCount: 20, generatedAt: new Date().toISOString() }),
     ]);
-    await sql(`INSERT INTO mood_reading (participant_id, intensity, context) VALUES ($1, 9, $2)`, [
-      ids.bob,
-      BOB_PRIVATE.mood,
-    ]);
+    await sql(
+      `INSERT INTO mood_reading (participant_id, intensity, context, user_id, session_id) VALUES ($1::uuid, 9, $2, (SELECT p.user_id FROM participant p WHERE p.id = $1::uuid), (SELECT p.session_id FROM participant p WHERE p.id = $1::uuid))`,
+      [ids.bob, BOB_PRIVATE.mood],
+    );
     // Ada's own readings: distinct from Bob's, so whose thread a bundle carries is visible.
     await sql(
-      `INSERT INTO mood_reading (participant_id, intensity, context, recorded_at) VALUES ($1, 3, $2, now() - interval '2 minutes'), ($1, 6, $2, now() - interval '1 minute')`,
+      `INSERT INTO mood_reading (participant_id, session_id, user_id, intensity, context, recorded_at)
+       SELECT p.id, p.session_id, p.user_id, v.intensity, $2::text, now() - v.ago
+       FROM participant p, (VALUES (3, interval '2 minutes'), (6, interval '1 minute')) v(intensity, ago) WHERE p.id = $1::uuid`,
       [ids.ada, ADA_PRIVATE.mood],
     );
     await sql(
-      `INSERT INTO empathy_attempt (author_participant_id, subject_participant_id, content, status) VALUES ($1, $2, $3, 'HELD')`,
+      `INSERT INTO empathy_attempt (author_participant_id, subject_participant_id, content, status, author_user_id, subject_user_id, session_id) VALUES ($1::uuid, $2::uuid, $3, 'HELD', (SELECT p.user_id FROM participant p WHERE p.id = $1::uuid), (SELECT p.user_id FROM participant p WHERE p.id = $2::uuid), (SELECT p.session_id FROM participant p WHERE p.id = $1::uuid))`,
       [ids.bob, ids.ada, BOB_PRIVATE.unrevealedAttempt],
     );
 
     // --- The subject's (Bob's) view of Ada's attempt: result and an open offer ---------------
     const [result] = await sql<{ id: string }>(
-      `INSERT INTO reconciler_result (attempt_id, subject_participant_id, alignment_score, alignment_summary, gap_summary,
-         gap_severity, recommended_action, rationale, sharing_would_help)
-       VALUES ($1, $2, 40, 'summary', $3, 'SIGNIFICANT', 'OFFER_SHARING', 'rationale', true) RETURNING id`,
+      `INSERT INTO reconciler_result (attempt_id, subject_participant_id, alignment_score, alignment_summary, gap_summary, gap_severity, recommended_action, rationale, sharing_would_help, subject_user_id, session_id)
+       VALUES ($1, $2::uuid, 40, 'summary', $3, 'SIGNIFICANT', 'OFFER_SHARING', 'rationale', true, (SELECT p.user_id FROM participant p WHERE p.id = $2::uuid), (SELECT p.session_id FROM participant p WHERE p.id = $2::uuid)) RETURNING id`,
       [ids.adaAttempt, ids.bob, SUBJECT_ONLY.gap],
     );
     await sql(
-      `INSERT INTO context_share_offer (attempt_id, result_id, subject_participant_id, status, suggested_content)
-       VALUES ($1, $2, $3, 'OFFERED', $4)`,
+      `INSERT INTO context_share_offer (attempt_id, result_id, subject_participant_id, status, suggested_content, subject_user_id, session_id)
+       VALUES ($1, $2, $3::uuid, 'OFFERED', $4, (SELECT p.user_id FROM participant p WHERE p.id = $3::uuid), (SELECT p.session_id FROM participant p WHERE p.id = $3::uuid))`,
       [ids.adaAttempt, result.id, ids.bob, SUBJECT_ONLY.offer],
     );
     // ...and the abstract guidance its AUTHOR (Ada) may see.
     await sql(
-      `INSERT INTO reconciler_guidance (result_id, author_participant_id, subject_participant_id, area_hint) VALUES ($1, $2, $3, $4)`,
+      `INSERT INTO reconciler_guidance (result_id, author_participant_id, subject_participant_id, area_hint, author_user_id, subject_user_id, session_id) VALUES ($1, $2::uuid, $3::uuid, $4, (SELECT p.user_id FROM participant p WHERE p.id = $2::uuid), (SELECT p.user_id FROM participant p WHERE p.id = $3::uuid), (SELECT p.session_id FROM participant p WHERE p.id = $2::uuid))`,
       [result.id, ids.ada, ids.bob, SHARED.guidance],
     );
 

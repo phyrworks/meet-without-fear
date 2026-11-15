@@ -39,10 +39,9 @@ describeTarget('once-only facilitator lines: a closed dedupe key, no content dig
     ctx.runWithContext({ turnId: 't', requestId: 'r', startTime: Date.now(), userId }, async () => await fn());
   const keyed = (conversationId: string, key: string) =>
     run
-      .sql<{ n: number }>(`SELECT count(*)::int AS n FROM message WHERE conversation_id = $1 AND dedupe_key = $2`, [
-        conversationId,
-        key,
-      ])
+      .sql<{
+        n: number;
+      }>(`SELECT count(*)::int AS n FROM message WHERE conversation_id = $1 AND dedupe_key = $2`, [conversationId, key])
       .then(r => r[0].n);
 
   beforeAll(async () => {
@@ -98,14 +97,16 @@ describeTarget('once-only facilitator lines: a closed dedupe key, no content dig
         WHERE i.indrelid = 'public.message'::regclass AND i.indisunique ORDER BY 1`,
     );
     expect(uniques.map(u => u.name)).toEqual(['message_pkey', 'sql_message_once']);
-    expect(idx.def).toMatch(/ON public\.message USING btree \(conversation_id, dedupe_key\) WHERE \(dedupe_key IS NOT NULL\)/);
+    expect(idx.def).toMatch(
+      /ON public\.message USING btree \(conversation_id, dedupe_key\) WHERE \(dedupe_key IS NOT NULL\)/,
+    );
   });
 
   it('the CHECK refuses a dedupe key on a human line', async () => {
     await expect(
       run.sql(
-        `INSERT INTO message (conversation_id, sender_participant_id, role, content, dedupe_key)
-         VALUES ($1, $2, 'USER', 'PROBE_FDC1_USER_KEY', 'STAGE4_HANDOFF_BRIDGE')`,
+        `INSERT INTO message (conversation_id, sender_participant_id, role, content, dedupe_key, sender_user_id, session_id)
+         VALUES ($1::uuid, $2::uuid, 'USER', 'PROBE_FDC1_USER_KEY', 'STAGE4_HANDOFF_BRIDGE', (SELECT p.user_id FROM participant p WHERE p.id = $2::uuid), (SELECT x.session_id FROM conversation x WHERE x.id = $1::uuid))`,
         [conv.ada, ids.ada],
       ),
     ).rejects.toThrow(/violates check constraint/);
@@ -115,7 +116,9 @@ describeTarget('once-only facilitator lines: a closed dedupe key, no content dig
     const own = await asUser(ids.adaUser, () =>
       store.createParticipantMessage({ conversationId: conv.ada, participantId: ids.ada, content: 'PROBE_FDC1_TURN' }),
     );
-    const [row] = await run.sql<{ dedupe_key: string | null }>(`SELECT dedupe_key FROM message WHERE id = $1`, [own.id]);
+    const [row] = await run.sql<{ dedupe_key: string | null }>(`SELECT dedupe_key FROM message WHERE id = $1`, [
+      own.id,
+    ]);
     expect(row).toEqual({ dedupe_key: null });
   });
 

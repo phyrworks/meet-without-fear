@@ -111,23 +111,37 @@ describe('createFacilitatorMessageOnce (DB-less)', () => {
     });
     expect(calls).toHaveLength(1);
     expect(calls[0].sql.replace(/\s+/g, ' ')).toContain('ON CONFLICT DO NOTHING RETURNING id, created_at');
-    expect(calls[0].values).toEqual(['c-ada', 'bridge', 'STAGE4_HANDOFF_BRIDGE', null]);
+    // work-k5fk.3 (6a): the conversation id is bound twice (the row, and its session's read)
+    expect(calls[0].values).toEqual(['c-ada', 'c-ada', 'bridge', 'STAGE4_HANDOFF_BRIDGE', null]);
   });
 
   it('a conflict (no row returned) is null', async () => {
     const { client } = fake(async () => []);
     await expect(
-      createFacilitatorMessageOnce({ conversationId: 'c-ada', dedupeKey: 'STAGE2_VALIDATED_WAIT', content: 'x', client }),
+      createFacilitatorMessageOnce({
+        conversationId: 'c-ada',
+        dedupeKey: 'STAGE2_VALIDATED_WAIT',
+        content: 'x',
+        client,
+      }),
     ).resolves.toBeNull();
   });
 
   it('any other error is rethrown, P2002 included (the statement cannot raise one for the key)', async () => {
-    for (const err of [Object.assign(new Error('boom'), { code: 'P2010' }), Object.assign(new Error('dup'), { code: 'P2002' })]) {
+    for (const err of [
+      Object.assign(new Error('boom'), { code: 'P2010' }),
+      Object.assign(new Error('dup'), { code: 'P2002' }),
+    ]) {
       const { client } = fake(async () => {
         throw err;
       });
       await expect(
-        createFacilitatorMessageOnce({ conversationId: 'c-ada', dedupeKey: 'STAGE2_VALIDATED_WAIT', content: 'x', client }),
+        createFacilitatorMessageOnce({
+          conversationId: 'c-ada',
+          dedupeKey: 'STAGE2_VALIDATED_WAIT',
+          content: 'x',
+          client,
+        }),
       ).rejects.toBe(err);
     }
   });
@@ -142,7 +156,7 @@ describe('createFacilitatorMessageOnce (DB-less)', () => {
       content: 'PROBE_FDC1_SEALED',
       client,
     });
-    const bound = calls[0].values[1] as string;
+    const bound = calls[0].values[2] as string;
     expect(isEncrypted(bound)).toBe(true);
     expect(decrypt(bound)).toBe('PROBE_FDC1_SEALED');
     expect(row?.content).toBe('PROBE_FDC1_SEALED');

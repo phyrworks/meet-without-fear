@@ -74,7 +74,7 @@ describeTarget('a PROPOSAL_REFINEMENT sub-chat on the target (mwf_app)', () => {
       [ids.ada],
     );
     await run.sql(
-      `INSERT INTO message (conversation_id, sender_participant_id, role, content) VALUES ($1, $2, 'USER', 'PROBE_TS12_MAIN_HISTORY')`,
+      `INSERT INTO message (conversation_id, sender_participant_id, role, content, sender_user_id, session_id) VALUES ($1::uuid, $2::uuid, 'USER', 'PROBE_TS12_MAIN_HISTORY', (SELECT p.user_id FROM participant p WHERE p.id = $2::uuid), (SELECT x.session_id FROM conversation x WHERE x.id = $1::uuid))`,
       [main.id, ids.ada],
     );
     const { buildSystemPrompt, loadAnchorContext } = await import('../stage4-subchat.service');

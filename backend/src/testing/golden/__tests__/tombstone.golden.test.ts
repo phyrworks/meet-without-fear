@@ -165,9 +165,11 @@ async function seedLeaverPrivateRows(h: Harness, adaUser: string): Promise<Recor
         const rows = (await c.query<{ id: string }>(sql, params)).rows;
         if (rows[0]?.id) labels[rows[0].id] = `<seeded:${label}>`;
       };
-      const [{ pid, bob }] = (
-        await c.query<{ pid: string; bob: string }>(
-          `SELECT p.id AS pid, q.id AS bob FROM participant p JOIN participant q ON q.session_id = p.session_id AND q.id <> p.id
+      // work-k5fk.3 (6a): every row carries its participant's seat (session_id, *_user_id) too.
+      const [{ pid, bob, session, bobUser }] = (
+        await c.query<{ pid: string; bob: string; session: string; bobUser: string }>(
+          `SELECT p.id AS pid, q.id AS bob, p.session_id AS session, q.user_id AS "bobUser"
+           FROM participant p JOIN participant q ON q.session_id = p.session_id AND q.id <> p.id
            WHERE p.user_id = $1`,
           [adaUser],
         )
@@ -190,19 +192,20 @@ async function seedLeaverPrivateRows(h: Harness, adaUser: string): Promise<Recor
       );
       await one(
         'mood_reading',
-        `INSERT INTO mood_reading (participant_id, intensity, context) VALUES ($1, 7, $2) RETURNING id`,
-        [pid, SEEDED_PRIVATE],
+        `INSERT INTO mood_reading (participant_id, intensity, context, session_id, user_id) VALUES ($1, 7, $2, $3, $4) RETURNING id`,
+        [pid, SEEDED_PRIVATE, session, adaUser],
       );
       await one(
         'need/unshared',
-        `INSERT INTO need (participant_id, label, category, ai_confidence) VALUES ($1, $2, 'SAFETY', 0.9) RETURNING id`,
-        [pid, SEEDED_PRIVATE],
+        `INSERT INTO need (participant_id, label, category, ai_confidence, session_id, user_id) VALUES ($1, $2, 'SAFETY', 0.9, $3, $4) RETURNING id`,
+        [pid, SEEDED_PRIVATE, session, adaUser],
       );
       await one(
         'empathy_attempt/unrevealed',
-        `INSERT INTO empathy_attempt (author_participant_id, subject_participant_id, round, supersedes_attempt_id, content, status)
-         VALUES ($1, $2, 2, $3, $4, 'HELD') RETURNING id`,
-        [pid, bob, attempt, SEEDED_PRIVATE],
+        `INSERT INTO empathy_attempt (author_participant_id, subject_participant_id, round, supersedes_attempt_id, content, status,
+                                      session_id, author_user_id, subject_user_id)
+         VALUES ($1, $2, 2, $3, $4, 'HELD', $5, $6, $7) RETURNING id`,
+        [pid, bob, attempt, SEEDED_PRIVATE, session, adaUser, bobUser],
       );
       await c.query(`INSERT INTO feature_state (user_id, feature, doc) VALUES ($1, 'people', '{}')`, [adaUser]);
       await one(
@@ -226,39 +229,40 @@ async function seedLeaverPrivateRows(h: Harness, adaUser: string): Promise<Recor
       );
       await one(
         'participant_key',
-        `INSERT INTO participant_key (participant_id, key_id, wrapped_dek) VALUES ($1, 'ts12-participant-key', '\\x00') RETURNING id`,
-        [pid],
+        `INSERT INTO participant_key (participant_id, key_id, wrapped_dek, session_id, user_id) VALUES ($1, 'ts12-participant-key', '\\x00', $2, $3) RETURNING id`,
+        [pid, session, adaUser],
       );
       // Fix round 1 (M5): the rest of spec §4 steps 3/5 — a regulation event, a need disposition,
       // a follow-up note, a check-in on her INDIVIDUAL follow-up, and her reminder of it.
       await one(
         'regulation_event',
-        `INSERT INTO regulation_event (participant_id, type) VALUES ($1, 'BREATHING_EXERCISE') RETURNING id`,
-        [pid],
+        `INSERT INTO regulation_event (participant_id, type, session_id, user_id) VALUES ($1, 'BREATHING_EXERCISE', $2, $3) RETURNING id`,
+        [pid, session, adaUser],
       );
       // $1::uuid: the INSERT target (uuid7) and the comparison (uuid = uuid) would
       // otherwise deduce two types for one untyped parameter (tables.sql, uuid7).
       await c.query(
-        `INSERT INTO need_disposition (participant_id, need_id, status, note)
-         SELECT $1::uuid, n.id, 'OPEN', $2::text FROM need n WHERE n.participant_id = $1::uuid AND n.label <> $2::text ORDER BY n.created_at LIMIT 1`,
+        `INSERT INTO need_disposition (participant_id, need_id, status, note, session_id, user_id)
+         SELECT $1::uuid, n.id, 'OPEN', $2::text, n.session_id, n.user_id FROM need n WHERE n.participant_id = $1::uuid AND n.label <> $2::text ORDER BY n.created_at LIMIT 1`,
         [pid, SEEDED_PRIVATE],
       );
-      await one('follow_up_note', `INSERT INTO follow_up_note (participant_id, content) VALUES ($1, $2) RETURNING id`, [
-        pid,
-        SEEDED_PRIVATE,
-      ]);
+      await one(
+        'follow_up_note',
+        `INSERT INTO follow_up_note (participant_id, content, session_id, user_id) VALUES ($1, $2, $3, $4) RETURNING id`,
+        [pid, SEEDED_PRIVATE, session, adaUser],
+      );
       const [{ id: individual }] = (
         await c.query<{ id: string }>(
-          `INSERT INTO follow_up (session_id, type, scope, owner_participant_id, status, scheduled_for)
-           SELECT p.session_id, 'SCHEDULED_INDIVIDUAL_COMMITMENT', 'INDIVIDUAL', p.id, 'OPEN', now() FROM participant p WHERE p.id = $1 RETURNING id`,
+          `INSERT INTO follow_up (session_id, type, scope, owner_participant_id, owner_user_id, status, scheduled_for)
+           SELECT p.session_id, 'SCHEDULED_INDIVIDUAL_COMMITMENT', 'INDIVIDUAL', p.id, p.user_id, 'OPEN', now() FROM participant p WHERE p.id = $1 RETURNING id`,
           [pid],
         )
       ).rows;
       labels[individual] = '<seeded:follow_up/individual>';
       await one(
         'follow_up_checkin/individual',
-        `INSERT INTO follow_up_checkin (follow_up_id, participant_id, payload) VALUES ($1, $2, jsonb_build_object('note', $3::text)) RETURNING id`,
-        [individual, pid, SEEDED_PRIVATE],
+        `INSERT INTO follow_up_checkin (follow_up_id, participant_id, payload, session_id, user_id) VALUES ($1, $2, jsonb_build_object('note', $3::text), $4, $5) RETURNING id`,
+        [individual, pid, SEEDED_PRIVATE, session, adaUser],
       );
       await one(
         'reminder',

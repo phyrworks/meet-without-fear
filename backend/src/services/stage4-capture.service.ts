@@ -548,8 +548,12 @@ interface CaptureContext {
   sessionId: string;
   /** The actor's participant id. */
   actor: string;
+  /** The actor's user id (work-k5fk.3: every participant column is written with its user). */
+  actorUserId: string;
   /** user id → participant id, for the session (the AI names owners by user id). */
   participantOfUser: Map<string, string>;
+  /** participant id → user id, the inverse (the seat of an owner the AI named). */
+  userOfParticipant: Map<string, string>;
   /** The user's own text: the capture lineage recorded in a revision (no message id). */
   userMessage: string;
 }
@@ -586,6 +590,8 @@ async function writeRevision(
     data: {
       proposalId,
       actorParticipantId: ctx.actor,
+      sessionId: ctx.sessionId,
+      actorUserId: ctx.actorUserId,
       action,
       ...(before ? { before: before as object } : {}),
       after: { ...after, capturedFromUserMessage: ctx.userMessage, reasonText: reasonText ?? null } as object,
@@ -599,6 +605,16 @@ async function linkNeeds(ctx: CaptureContext, proposalId: string, labels: string
   if (!labels) return;
   const { needIds, unresolved } = await resolveNeedLabels(ctx.sessionId, ctx.actor, labels);
   await setProposalNeeds(prisma, proposalId, needIds, unresolved);
+}
+
+/** A participant id of the session and its user, as the proposal's creator columns. */
+function creatorColumns(
+  ctx: CaptureContext,
+  participantId: string,
+): { createdByParticipantId: string; createdByUserId: string } {
+  const userId = participantId === ctx.actor ? ctx.actorUserId : ctx.userOfParticipant.get(participantId);
+  if (!userId) throw new Error(`participant ${participantId} is not a present participant of the session`);
+  return { createdByParticipantId: participantId, createdByUserId: userId };
 }
 
 function ownerParticipant(ctx: CaptureContext, ownerUserId: string | undefined): string {
@@ -683,7 +699,7 @@ async function applyOperation(
     const created = await prisma.proposal.create({
       data: {
         sessionId: ctx.sessionId,
-        createdByParticipantId: ownerParticipant(ctx, operation.ownerUserId),
+        ...creatorColumns(ctx, ownerParticipant(ctx, operation.ownerUserId)),
         description: operation.description,
         duration: operation.duration,
         measureOfSuccess: operation.measureOfSuccess,
@@ -743,6 +759,7 @@ async function applyOperation(
         status: Stage4ProposalStatus.REMOVED,
         removedAt: now,
         removedByParticipantId: ctx.actor,
+        removedByUserId: ctx.actorUserId,
         removalReason: operation.reason,
       },
     });
@@ -765,7 +782,13 @@ async function applyOperation(
   if (operation.type === 'RESTORE_PROPOSAL') {
     await prisma.proposal.update({
       where: { id: operation.proposalId },
-      data: { status: Stage4ProposalStatus.ACTIVE, removedAt: null, removedByParticipantId: null, removalReason: null },
+      data: {
+        status: Stage4ProposalStatus.ACTIVE,
+        removedAt: null,
+        removedByParticipantId: null,
+        removedByUserId: null,
+        removalReason: null,
+      },
     });
     await writeRevision(
       ctx,
@@ -791,12 +814,13 @@ async function applyOperation(
       duration: operation.duration ?? proposal.duration,
       measureOfSuccess: operation.measureOfSuccess ?? proposal.measureOfSuccess,
       kind: operation.kind ?? proposal.kind,
-      createdByParticipantId:
-        operation.kind === Stage4ProposalKind.INDIVIDUAL_COMMITMENT
-          ? ctx.actor
-          : operation.ownerUserId
-            ? ownerParticipant(ctx, operation.ownerUserId)
-            : proposal.createdByParticipantId,
+      // The creator moves only when the operation names one (an individual commitment is the actor's); an
+      // unchanged creator is left as it is, with its user (work-k5fk.3).
+      ...(operation.kind === Stage4ProposalKind.INDIVIDUAL_COMMITMENT
+        ? creatorColumns(ctx, ctx.actor)
+        : operation.ownerUserId
+          ? creatorColumns(ctx, ownerParticipant(ctx, operation.ownerUserId))
+          : {}),
       status: Stage4ProposalStatus.ACTIVE,
     },
   });
@@ -838,7 +862,9 @@ export async function captureStage4Turn(input: Stage4CaptureInput): Promise<Stag
   const ctx: CaptureContext = {
     sessionId: input.sessionId,
     actor: actor.id,
+    actorUserId: input.userId,
     participantOfUser: new Map(participants.filter(p => p.userId).map(p => [p.userId as string, p.id])),
+    userOfParticipant: new Map(participants.filter(p => p.userId).map(p => [p.id, p.userId as string])),
     userMessage: input.userMessage,
   };
   const proposals = (await loadProposals(input.sessionId, actor.id)) as ProposalRow[];

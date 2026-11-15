@@ -5,7 +5,7 @@
  */
 
 import { prisma } from '../lib/prisma';
-import { getPartnerUserIdFor, resolveParticipant } from '../services/participant-resolver';
+import { getPartnerUserIdFor, resolveParticipant, seatOfParticipant } from '../services/participant-resolver';
 import {
   SessionSummaryDTO,
   SessionStatusSummary,
@@ -81,10 +81,17 @@ export const FORMER_PARTICIPANT_NAME = 'Former participant';
  * for unread indicators and chat animation boundaries.
  */
 export async function touchParticipantActivity(participantId: string, at: Date = new Date()): Promise<void> {
+  // The read state is written with the participant; the create arm (a missing row) reads the seat it
+  // carries (work-k5fk.3), so the common path stays one statement.
+  const { count } = await prisma.conversationReadState.updateMany({
+    where: { participantId },
+    data: { lastActiveAt: at },
+  });
+  if (count > 0) return;
   await prisma.conversationReadState.upsert({
     where: { participantId },
     update: { lastActiveAt: at },
-    create: { participantId, lastActiveAt: at },
+    create: { participantId, ...(await seatOfParticipant(participantId)), lastActiveAt: at },
   });
 }
 

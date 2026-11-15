@@ -49,8 +49,8 @@ describeTarget('Inviter stage while crafting the invitation (work-qmgc)', () => 
 
     // An AI turn while crafting the invitation (after signing, before sending).
     await run.sql(
-      `INSERT INTO message (conversation_id, role, content, created_at)
-       SELECT c.id, 'AI', 'PROBE_QMGC crafting turn', now() FROM conversation c
+      `INSERT INTO message (conversation_id, session_id, role, content, created_at)
+       SELECT c.id, c.session_id, 'AI', 'PROBE_QMGC crafting turn', now() FROM conversation c
        WHERE c.participant_id = $1 AND c.kind = 'MAIN'`,
       [ids.ada],
     );
@@ -103,8 +103,8 @@ describeTarget('Inviter stage while crafting the invitation (work-qmgc)', () => 
       [invitationId],
     );
     await run.sql(
-      `INSERT INTO message (conversation_id, role, content, created_at)
-       SELECT c.id, 'AI', 'PROBE_QMGC crafting turn', now() FROM conversation c
+      `INSERT INTO message (conversation_id, session_id, role, content, created_at)
+       SELECT c.id, c.session_id, 'AI', 'PROBE_QMGC crafting turn', now() FROM conversation c
        WHERE c.participant_id = $1 AND c.kind = 'MAIN'`,
       [inviter],
     );

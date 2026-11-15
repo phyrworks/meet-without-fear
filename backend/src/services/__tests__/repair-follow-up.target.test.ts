@@ -73,14 +73,16 @@ describeTarget('repair and follow-up on the target, as mwf_app and mwf_job with 
 
   it('proposal_need refuses a need that was never shared (FK to need_share), as mwf_app', async () => {
     const [unshared] = await run.sql<{ id: string }>(
-      `INSERT INTO need (participant_id, label, category, ai_confidence) VALUES ($1, 'PROBE_UNSHARED', 'SAFETY', 0.9) RETURNING id`,
+      `INSERT INTO need (participant_id, label, category, ai_confidence, user_id, session_id) VALUES ($1::uuid, 'PROBE_UNSHARED', 'SAFETY', 0.9, (SELECT p.user_id FROM participant p WHERE p.id = $1::uuid), (SELECT p.session_id FROM participant p WHERE p.id = $1::uuid)) RETURNING id`,
       [ids.ada],
     );
     await expect(
-      run.as('mwf_app', ids.adaUser, `INSERT INTO proposal_need (proposal_id, need_id) VALUES ($1, $2)`, [
-        proposal.checkin,
-        unshared.id,
-      ]),
+      run.as(
+        'mwf_app',
+        ids.adaUser,
+        `INSERT INTO proposal_need (proposal_id, need_id, session_id) VALUES ($1::uuid, $2, (SELECT x.session_id FROM proposal x WHERE x.id = $1::uuid))`,
+        [proposal.checkin, unshared.id],
+      ),
     ).rejects.toThrow(/proposal_need_need_id_fkey|foreign key/);
   });
 
@@ -148,13 +150,13 @@ describeTarget('repair and follow-up on the target, as mwf_app and mwf_job with 
   it('closure (job): the agreement with both parties, session_closure, RESOLVED, closed for both; arrays from v_session_closure_items', async () => {
     // A shared need nobody addresses, and an unshared one (never in any array).
     const [open] = await run.sql<{ id: string }>(
-      `INSERT INTO need (participant_id, label, category, ai_confidence, confirmed_at) VALUES ($1, 'PROBE_OPEN_LABEL', 'MEANING', 0.9, now()) RETURNING id`,
+      `INSERT INTO need (participant_id, label, category, ai_confidence, confirmed_at, user_id, session_id) VALUES ($1::uuid, 'PROBE_OPEN_LABEL', 'MEANING', 0.9, now(), (SELECT p.user_id FROM participant p WHERE p.id = $1::uuid), (SELECT p.session_id FROM participant p WHERE p.id = $1::uuid)) RETURNING id`,
       [ids.bob],
     );
     await run.as(
       'mwf_app',
       ids.bobUser,
-      `INSERT INTO consent (participant_id, need_id, decision, decided_at) VALUES ($1, $2, 'GRANTED', now())`,
+      `INSERT INTO consent (participant_id, need_id, decision, decided_at, user_id, session_id) VALUES ($1::uuid, $2, 'GRANTED', now(), (SELECT p.user_id FROM participant p WHERE p.id = $1::uuid), (SELECT p.session_id FROM participant p WHERE p.id = $1::uuid))`,
       [ids.bob, open.id],
     );
     await run.as('mwf_job', null, `SELECT app.need_share($1::uuid, 'An open shared need')`, [open.id]);
@@ -303,7 +305,7 @@ describeTarget('repair and follow-up on the target, as mwf_app and mwf_job with 
     // never minted, or a need of the session that was never shared — is
     // refused alike, before any write.
     const [unshared] = await run.sql<{ id: string }>(
-      `INSERT INTO need (participant_id, label, category, ai_confidence) VALUES ($1, 'PROBE_UNSHARED_NEED', 'SAFETY', 0.9) RETURNING id`,
+      `INSERT INTO need (participant_id, label, category, ai_confidence, user_id, session_id) VALUES ($1::uuid, 'PROBE_UNSHARED_NEED', 'SAFETY', 0.9, (SELECT p.user_id FROM participant p WHERE p.id = $1::uuid), (SELECT p.session_id FROM participant p WHERE p.id = $1::uuid)) RETURNING id`,
       [ids.ada],
     );
     for (const needId of [uuidv7(), unshared.id]) {
