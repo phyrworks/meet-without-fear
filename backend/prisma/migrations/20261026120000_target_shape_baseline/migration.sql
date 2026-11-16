@@ -3635,9 +3635,13 @@ CREATE TRIGGER t_message_immutable BEFORE UPDATE ON public.message
 -- delete from message. Its grants (tables.sql) cannot narrow rows; until RLS (design note §6,
 -- rows 9d–9g) these do. They bind every role that holds app_access's privileges (work-k5fk.10.22:
 -- pg_has_role USAGE — a member with INHERIT, or app_access itself after a SET ROLE), not the login
--- named mwf_app, so a second login mapped onto app_access is narrowed too; a superuser session
--- (fixtures, tooling; is_superuser, read without a catalog scan so the golden traces see no new
--- relation) is not. Keyed on current_user, not session_user: a SECURITY DEFINER function the app
+-- named mwf_app, so a second login mapped onto app_access is narrowed too. Exempt: any current_user
+-- that holds the database owner's privileges (pg_has_role … pg_database_owner — true for the owner
+-- and for every superuser, false for every runtime login, which step 20 forbids to own anything).
+-- That is a current_user fact, as the membership test is: a cascaded delete runs as the owner of
+-- message whatever the session login (on a superuser-owned database the owner is a superuser, who
+-- is also "a member" of app_access), and a superuser session writing directly (fixtures, tooling) is
+-- exempt too. Both are role-catalog functions, so the golden traces see no new relation. Keyed on current_user, not session_user: a SECURITY DEFINER function the app
 -- calls (app.empathy_set_status, owned by mwf_definer, a member of nothing) writes the subject's
 -- delivered copy with the owner's rights, and that write is the job's, not the app's.
 --   INSERT: only the participant's own USER turn (CHAT; message-store createParticipantMessage)
@@ -3666,7 +3670,7 @@ CREATE FUNCTION app.t_message_app_insert() RETURNS trigger
     v_me         uuid;
   BEGIN
     IF NOT pg_catalog.pg_has_role(current_user, 'app_access', 'USAGE')
-       OR pg_catalog.current_setting('is_superuser') = 'on' THEN
+       OR pg_catalog.pg_has_role(current_user, 'pg_database_owner', 'USAGE') THEN
       RETURN NEW;
     END IF;
     v_me := app.current_user_id();
@@ -3699,7 +3703,7 @@ CREATE FUNCTION app.t_message_app_delete() RETURNS trigger
     v_me         uuid;
   BEGIN
     IF NOT pg_catalog.pg_has_role(current_user, 'app_access', 'USAGE')
-       OR pg_catalog.current_setting('is_superuser') = 'on' THEN
+       OR pg_catalog.pg_has_role(current_user, 'pg_database_owner', 'USAGE') THEN
       RETURN OLD;
     END IF;
     v_me := app.current_user_id();

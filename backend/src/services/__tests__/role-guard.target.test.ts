@@ -15,7 +15,13 @@ import { migratorTarget } from '../../testing/golden/target-baseline';
 import { toDbUrl, withClient } from '../../testing/golden/db';
 import { BASE_URL } from './target-roles';
 import { createPrismaClient } from '../../lib/prisma';
-import { RuntimeRoleRefusedError } from '../../lib/prisma-role-guard';
+import { Client } from 'pg';
+import {
+  RuntimeRoleRefusedError,
+  ROLE_GUARD_SQL,
+  roleGuardViolations,
+  type RoleFacts,
+} from '../../lib/prisma-role-guard';
 
 const describeTarget = isTargetShape() ? describe : describe.skip;
 jest.setTimeout(120_000);
@@ -101,7 +107,7 @@ describeTarget('runtime role guard (target)', () => {
       await tolerant(`ALTER DATABASE "${fx.database}" OWNER TO mwf_migrator`, 'postgres');
       await tolerant(`ALTER SCHEMA public OWNER TO pg_database_owner`);
       await tolerant(`REVOKE CREATE ON DATABASE "${fx.database}" FROM ${login}`);
-      await tolerant(`REVOKE ${empty}, mwf_job, mwf_user, app_access FROM ${login}`, 'postgres');
+      await tolerant(`REVOKE ${empty}, mwf_job, mwf_user FROM ${login}`, 'postgres');
       await tolerant(`REVOKE mwf_job FROM ${empty}`, 'postgres');
       await admin(`DROP OWNED BY ${login}`).catch(() => undefined);
       await admin(`DROP ROLE IF EXISTS ${login}`, 'postgres');
@@ -132,16 +138,36 @@ describeTarget('runtime role guard (target)', () => {
       }
     });
 
-    it('work-k5fk.10.4: the app capability alone is accepted; a second role beside it is refused', async () => {
-      await admin(`GRANT app_access TO ${login} WITH INHERIT TRUE, SET FALSE`);
+    // Review 9a r2 R2-2: a membership in app_access is never committed here. step 20 asserts app_access has
+    // exactly one member (mwf_app), and role catalogs are cluster-wide, so a committed scratch member would
+    // break a baseline deploy in any other session on the cluster while this test runs. These cases grant
+    // inside one transaction, become the scratch login with SET LOCAL SESSION AUTHORIZATION (session_user is
+    // what ROLE_GUARD_SQL reads), read the facts and roll back: no other session ever sees the grant.
+    async function refusalInTx(grants: string[]): Promise<string> {
+      const c = new Client({ connectionString: fx.url });
+      await c.connect();
       try {
-        expect(await refusal()).toBe(`accepted: [{"who":"${login}"}]`);
-        await admin(`GRANT ${empty} TO ${login}`);
-        expect(await refusal()).toContain(`${login} reaches role(s) ${empty}`);
+        await c.query('BEGIN');
+        for (const g of grants) await c.query(g);
+        await c.query(`SET LOCAL SESSION AUTHORIZATION ${login}`);
+        const { rows } = await c.query<{ facts: string }>(ROLE_GUARD_SQL);
+        const v = roleGuardViolations(JSON.parse(rows[0].facts) as RoleFacts, 'app');
+        return v.length ? v.join('; ') : 'accepted';
       } finally {
-        await admin(`REVOKE ${empty} FROM ${login}`);
-        await admin(`REVOKE app_access FROM ${login}`);
+        await c.query('ROLLBACK').catch(() => undefined);
+        await c.end();
       }
+    }
+
+    it('work-k5fk.10.4: the app capability alone is accepted; a second role beside it is refused', async () => {
+      expect(await refusalInTx([`GRANT app_access TO ${login} WITH INHERIT TRUE, SET FALSE`])).toBe('accepted');
+      expect(
+        await refusalInTx([`GRANT app_access TO ${login} WITH INHERIT TRUE, SET FALSE`, `GRANT ${empty} TO ${login}`]),
+      ).toContain(`${login} reaches role(s) ${empty}`);
+      const [{ n }] = (
+        await withClient(fx.target, c => c.query(`SELECT count(*)::int AS n FROM pg_auth_members WHERE roleid = 'app_access'::regrole`), fx.database)
+      ).rows as Array<{ n: number }>;
+      expect(n).toBe(1); // only mwf_app: nothing was committed
     });
 
     it('work-k5fk.10.4: a role reached only through another role is refused (transitive), naming it', async () => {
@@ -157,21 +183,13 @@ describeTarget('runtime role guard (target)', () => {
     });
 
     it('review 9a F1: the capability held WITH SET (PG16+ default of a plain GRANT) is refused', async () => {
-      await admin(`GRANT app_access TO ${login}`);
-      try {
-        expect(await refusal()).toContain(`${login} can SET ROLE to app_access`);
-      } finally {
-        await admin(`REVOKE app_access FROM ${login}`);
-      }
+      expect(await refusalInTx([`GRANT app_access TO ${login}`])).toContain(`${login} can SET ROLE to app_access`);
     });
 
     it('work-k5fk.10.4: the capability held WITH ADMIN OPTION is refused', async () => {
-      await admin(`GRANT app_access TO ${login} WITH ADMIN TRUE, SET FALSE`);
-      try {
-        expect(await refusal()).toContain(`${login} holds role(s) app_access WITH ADMIN OPTION`);
-      } finally {
-        await admin(`REVOKE app_access FROM ${login}`);
-      }
+      expect(await refusalInTx([`GRANT app_access TO ${login} WITH ADMIN TRUE, SET FALSE`])).toContain(
+        `${login} holds role(s) app_access WITH ADMIN OPTION`,
+      );
     });
 
     it('the privilegedRoles arm: a login that can SET ROLE to the superuser is refused', async () => {

@@ -66,6 +66,13 @@
 \echo 'roles.sql: -v ' :missing '=... is required (each of migrator_password, app_password, job_password, ops_password, auth_password); nothing was changed'
 DO $$ BEGIN RAISE EXCEPTION 'roles.sql: a required -v password variable is missing (see the line above)'; END $$;
 \endif
+-- An empty -v (e.g. -v app_password=) is refused too: CREATE ROLE … PASSWORD '' sets no usable
+-- password, and nothing would say so.
+SELECT (:'migrator_password' = '' OR :'app_password' = '' OR :'job_password' = '' OR :'ops_password' = ''
+        OR :'auth_password' = '') AS empty_password \gset
+\if :empty_password
+DO $$ BEGIN RAISE EXCEPTION 'roles.sql: a -v password variable is empty; give every one of migrator_password, app_password, job_password, ops_password, auth_password a value (nothing was changed)'; END $$;
+\endif
 
 SELECT format('CREATE ROLE %I LOGIN PASSWORD %L', r.name, r.password)
 FROM (VALUES
