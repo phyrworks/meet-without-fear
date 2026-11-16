@@ -90,22 +90,31 @@ Day-to-day: `podman machine start && podman start mwf-postgres`.
 
 ### Database roles (required before `prisma migrate`)
 
-The Phase 3 roles `mwf_migrator`, `mwf_app`, `mwf_job`, `mwf_ops` and `mwf_auth` are cluster-level,
-so they are created outside Prisma by `infra/aws/roles.sql`. The migration
-`phase3_app_schema_helpers` (on `phoenix/target-shape`: `target_shape_baseline`) refuses to run
-without them (it makes `mwf_job` own the
-`SECURITY DEFINER` helpers in schema `app`). Apply the file once per container; it is idempotent,
-and the development passwords are these fixed literals:
+The roles are cluster-level, so they are created outside Prisma by `infra/aws/roles.sql`: the
+logins `mwf_migrator`, `mwf_app`, `mwf_job`, `mwf_ops`, `mwf_auth`, `mwf_ai`, `mwf_worker` and
+`mwf_clinician`, and (work-k5fk.10.4, design note §6) the NOLOGIN capability roles every grant
+targets — `app_access`, `ai_access`, `worker_access`, `ops_access`, `auth_access`,
+`clinician_access`, and `job_access` (mwf_job's, until §7 row 9b) — plus the NOLOGIN `mwf_definer`
+that owns the `SECURITY DEFINER` helpers in schema `app`. Each login is a member of exactly one
+capability (`roles.sql` lists them). The migration `target_shape_baseline` refuses to run without
+them, and its step 20 refuses a cluster where a login reaches any other role. Apply the file once
+per container; it is idempotent, and the development passwords are these fixed literals
+(`mwf_clinician` is reserved and has none):
 
 ```bash
 podman exec -i mwf-postgres psql -U mwf_user -d meet_without_fear \
   -v migrator_password=mwf_migrator_dev -v app_password=mwf_app_dev \
   -v job_password=mwf_job_dev -v ops_password=mwf_ops_dev -v auth_password=mwf_auth_dev \
+  -v ai_password=mwf_ai_dev -v worker_password=mwf_worker_dev \
   < infra/aws/roles.sql
 ```
 
-Check the result with the D0 script — every `mwf_*` role except the local superuser `mwf_user`
-must show `rolsuper = f` and `rolbypassrls = f`, and the second result set must be empty:
+Applying it to a shared container changes the cluster for every database in it: a branch before
+work-k5fk.10.4 runs a role guard that refuses a login with ANY membership, so its app connections
+are refused once `mwf_app` is a member of `app_access`. Give such a branch its own container.
+
+Check the result with the D0 script — every `mwf_*` and `*_access` role except the local superuser
+`mwf_user` must show `rolsuper = f` and `rolbypassrls = f`, and the second result set must be empty:
 
 ```bash
 podman exec -i mwf-postgres psql -U mwf_user -d meet_without_fear < backend/scripts/d0-check.sql

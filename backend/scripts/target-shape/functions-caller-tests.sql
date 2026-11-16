@@ -784,24 +784,43 @@ END $$;
 \connect - mwf_job
 SELECT 'connected as ' || session_user || ' (current_user ' || current_user || ')';
 DO $$ DECLARE v_con text; BEGIN
-  -- 19n. a job login cannot archive for a user (the owner role holds EXECUTE; the function refuses it)
+  -- 19n. a job login cannot archive for a user: since work-k5fk.10.4 the owner is the NOLOGIN mwf_definer, so the
+  --      job holds no EXECUTE at all (the function's own session_user refusal is the second wall)
   PERFORM set_config('app.current_user_id', '00000000-0000-7e00-8000-0000000000a1', true);
   BEGIN
     PERFORM app.session_archive('00000000-0000-7e00-8000-0000000005e6');
     RAISE EXCEPTION 'TEST FAILED: a job login archived through session_archive';
   EXCEPTION WHEN insufficient_privilege THEN
-    IF SQLERRM NOT LIKE 'session_archive is identity-bound%' THEN RAISE; END IF;
+    IF SQLERRM NOT LIKE 'permission denied for function session_archive%' THEN RAISE; END IF;
     RAISE NOTICE 'PASS 19n a job login cannot call session_archive: %', SQLERRM;
   END;
-  -- 19o. session_check1 / session_check2 hold for the job's own grants: ARCHIVED without archived_at,
-  --      an archiver on a session that is not archived
+  -- 19o. the job writes session.status and the archive columns only through session_set_status (work-k5fk.10.4:
+  --      those UPDATE grants are mwf_definer's): a direct UPDATE of either is refused
   BEGIN
     UPDATE session SET status = 'ARCHIVED' WHERE id = '00000000-0000-7e00-8000-0000000005e6';
-    RAISE EXCEPTION 'TEST FAILED: the job set ARCHIVED without archived_at';
+    RAISE EXCEPTION 'TEST FAILED: the job updated session.status directly';
+  EXCEPTION WHEN insufficient_privilege THEN
+    RAISE NOTICE 'PASS 19o the job cannot UPDATE session.status directly: %', SQLERRM;
+  END;
+  BEGIN
+    UPDATE session SET archived_by_user_id = '00000000-0000-7e00-8000-0000000000a1' WHERE id = '00000000-0000-7e00-8000-0000000005e6';
+    RAISE EXCEPTION 'TEST FAILED: the job updated session.archived_by_user_id directly';
+  EXCEPTION WHEN insufficient_privilege THEN
+    RAISE NOTICE 'PASS 19p the job cannot UPDATE the archive columns directly: %', SQLERRM;
+  END;
+END $$;
+-- 19q. session_check1 / session_check2 bind every writer, the superuser too: ARCHIVED without archived_at, an
+--      archiver on a session that is not archived (before work-k5fk.10.4 shown with the job's own UPDATE grants)
+\connect - mwf_user
+SELECT 'connected as ' || session_user || ' (session_check1 / session_check2)';
+DO $$ DECLARE v_con text; BEGIN
+  BEGIN
+    UPDATE session SET status = 'ARCHIVED' WHERE id = '00000000-0000-7e00-8000-0000000005e6';
+    RAISE EXCEPTION 'TEST FAILED: ARCHIVED without archived_at';
   EXCEPTION WHEN check_violation THEN
     GET STACKED DIAGNOSTICS v_con = CONSTRAINT_NAME;
     IF v_con <> 'session_check1' THEN RAISE; END IF;
-    RAISE NOTICE 'PASS 19o the job''s UPDATE to ARCHIVED without archived_at refused by %', v_con;
+    RAISE NOTICE 'PASS 19q an UPDATE to ARCHIVED without archived_at refused by %', v_con;
   END;
   BEGIN
     UPDATE session SET archived_by_user_id = '00000000-0000-7e00-8000-0000000000a1' WHERE id = '00000000-0000-7e00-8000-0000000005e6';
@@ -809,26 +828,38 @@ DO $$ DECLARE v_con text; BEGIN
   EXCEPTION WHEN check_violation THEN
     GET STACKED DIAGNOSTICS v_con = CONSTRAINT_NAME;
     IF v_con <> 'session_check2' THEN RAISE; END IF;
-    RAISE NOTICE 'PASS 19p an archiver without archived_at refused by %', v_con;
+    RAISE NOTICE 'PASS 19q an archiver without archived_at refused by %', v_con;
   END;
 END $$;
 -- 19k. the job (session-retention.ts) still archives through session_set_status: archived_at, no archiver;
---      and the retention purge of an archived session is not blocked by the archive columns (rolled back)
-BEGIN;
+--      and the retention purge of an archived session is not blocked by the archive columns. On W (…05e7), a
+--      CREATED session made for it, and X (…05e1, archived by D in 19i), neither used below, so it is committed:
+--      the job cannot read the archive columns (work-k5fk.10.4), so the superuser checks them after.
+\connect - mwf_user
+SELECT 'connected as ' || session_user || ' (setup: session W for 19k)';
+INSERT INTO session (id, status) VALUES ('00000000-0000-7e00-8000-0000000005e7', 'CREATED');
+\connect - mwf_job
+SELECT 'connected as ' || session_user || ' (current_user ' || current_user || ')';
 DO $$ BEGIN
-  PERFORM app.session_set_status('00000000-0000-7e00-8000-0000000005e6', 'ABANDONED');
-  PERFORM app.session_set_status('00000000-0000-7e00-8000-0000000005e6', 'ARCHIVED');
-  IF NOT EXISTS (SELECT 1 FROM session WHERE id = '00000000-0000-7e00-8000-0000000005e6' AND status = 'ARCHIVED'
-                 AND archived_at IS NOT NULL AND archived_by_user_id IS NULL) THEN
-    RAISE EXCEPTION 'TEST FAILED: the job''s archive did not stamp archived_at alone';
+  PERFORM app.session_set_status('00000000-0000-7e00-8000-0000000005e7', 'ABANDONED');
+  PERFORM app.session_set_status('00000000-0000-7e00-8000-0000000005e7', 'ARCHIVED');
+  IF NOT EXISTS (SELECT 1 FROM session WHERE id = '00000000-0000-7e00-8000-0000000005e7' AND status = 'ARCHIVED') THEN
+    RAISE EXCEPTION 'TEST FAILED: the job''s archive did not archive';
   END IF;
   DELETE FROM session WHERE id = '00000000-0000-7e00-8000-0000000005e1';
   IF EXISTS (SELECT 1 FROM participant WHERE session_id = '00000000-0000-7e00-8000-0000000005e1') THEN
     RAISE EXCEPTION 'TEST FAILED: purge left participants';
   END IF;
+END $$;
+\connect - mwf_user
+SELECT 'connected as ' || session_user || ' (19k: the archive columns the job wrote)';
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM session WHERE id = '00000000-0000-7e00-8000-0000000005e7' AND status = 'ARCHIVED'
+                 AND archived_at IS NOT NULL AND archived_by_user_id IS NULL) THEN
+    RAISE EXCEPTION 'TEST FAILED: the job''s archive did not stamp archived_at alone';
+  END IF;
   RAISE NOTICE 'PASS 19k the job archives (archived_at, no archiver); purging a participant-archived session cascades';
 END $$;
-ROLLBACK;
 
 -- 20. session_set_status's member arm is CURRENT participants only (work-k5fk.10.12 review):
 --     B leaves the live session S (A stays, so T-cardinality-2 allows it); B cannot move S

@@ -42,6 +42,19 @@
 --    gate applies them in a second stage; each table that has one says so in
 --    a `-- + sql_…` line), triggers, functions and views (trailer.sql; each
 --    view's and each function's grants follow it there).
+--  * Grantees are capability roles, never logins (work-k5fk.10.4; design note
+--    §6 "Roles — one per kind of actor", Q16): a `-- mwf_app:` label names the
+--    actor and its uses, the GRANT goes to that login's one capability —
+--    mwf_app → app_access, mwf_ops → ops_access, mwf_auth → auth_access, and
+--    mwf_job → job_access, the interim home of the job's grants until §7 row
+--    9b re-homes its call sites onto ai_access / worker_access and drops it.
+--    mwf_definer (NOLOGIN) owns every SECURITY DEFINER function (trailer T4)
+--    and holds what their bodies, and the invoker triggers their writes fire,
+--    touch. A `-- mwf_definer:` label is a grant the job held only as the
+--    definers' owner; it left job_access. A `-- mwf_job, mwf_definer:` label
+--    names the definer that needs it; job_access keeps it because a job call
+--    site may read it directly — 9b's audit of those call sites removes what
+--    no caller needs. The roles are cluster-level (infra/aws/roles.sql).
 --  * Every role's table grants follow each table, in this order: mwf_app,
 --    mwf_job, mwf_ops (work-k5fk.7 moved mwf_job's and mwf_ops' here from
 --    trailer.sql T7 unchanged — app-grants.target.test.ts snapshots the whole
@@ -362,9 +375,11 @@ COMMENT ON CONSTRAINT json_schema_schema_check ON app.json_schema IS 'Only the s
 -- throughout), so the roles whose writes fire them read the schemas. Read only: no runtime role writes a
 -- schema. A schema is not secret — it restates the contract shared/src/dto already publishes — so SELECT
 -- is harmless, and a SECURITY DEFINER lookup would add an owner hop for nothing. mwf_ops, mwf_auth: none
--- (no reader, and no write of theirs fires a trigger).
-GRANT SELECT ON app.json_schema TO mwf_app;
-GRANT SELECT ON app.json_schema TO mwf_job;
+-- (no reader, and no write of theirs fires a trigger). Whoever is granted a write that fires t_doc_schema or
+-- t_jsonb_envelope later (ai_access, worker_access in §7 row 9b) needs this and the validators' EXECUTE: trailer T8
+-- refuses the baseline when a role may write a validated column without them (work-k5fk.10.4.1).
+GRANT SELECT ON app.json_schema TO app_access;
+GRANT SELECT ON app.json_schema TO job_access;
 
 -- The seed: version 1 of each validated document, derived from what the app
 -- writes today (docs/backend/data-model/jsonb-shapes-2026-11.md §2).
@@ -617,8 +632,8 @@ COMMENT ON TYPE brain_call_type IS 'Which part of the app made a logged LLM call
 -- (mwf_app relies on PUBLIC's USAGE, PostgreSQL 15+'s default). Schema app's
 -- grants are in preamble.sql, next to CREATE SCHEMA app.
 -- ----------------------------------------------------------------------------
-GRANT USAGE ON SCHEMA public TO mwf_job;
-GRANT USAGE ON SCHEMA public TO mwf_ops;
+GRANT USAGE ON SCHEMA public TO job_access, mwf_definer;
+GRANT USAGE ON SCHEMA public TO ops_access;
 
 -- ----------------------------------------------------------------------------
 -- The 49 tables, in dependency order.
@@ -667,17 +682,17 @@ COMMENT ON COLUMN "user".deleted_at IS 'Soft delete (P3 D9): the row becomes a s
 -- (work-bp5m): a first login creates the row through mwf_auth's app.create_user, so no request can write an email or
 -- re-bind an account (the work-jv9y takeover needed mwf_app's UPDATE (clerk_id, email)); the tombstone is
 -- app.anonymize_user_account.
-GRANT SELECT ON "user" TO mwf_app;
-GRANT UPDATE (first_name, last_name, updated_at) ON "user" TO mwf_app;
--- mwf_job: create_user (INSERT … RETURNING id; the email-holder check), anonymize_user_account (existence, the tombstone,
+GRANT SELECT ON "user" TO app_access;
+GRANT UPDATE (first_name, last_name, updated_at) ON "user" TO app_access;
+-- mwf_job, mwf_definer: create_user (INSERT … RETURNING id; the email-holder check), anonymize_user_account (existence, the tombstone,
 -- the persona scrub)
-GRANT SELECT (id, kind, email, deleted_at) ON "user" TO mwf_job;
-GRANT INSERT (email, first_name, last_name) ON "user" TO mwf_job;
-GRANT UPDATE (email, first_name, last_name, deleted_at) ON "user" TO mwf_job;
+GRANT SELECT (id, kind, email, deleted_at) ON "user" TO job_access, mwf_definer;
+GRANT INSERT (email, first_name, last_name) ON "user" TO mwf_definer;
+GRANT UPDATE (email, first_name, last_name, deleted_at) ON "user" TO mwf_definer;
 -- mwf_job [TS-10 I4]: empathy-store sessionParties (the reconciler's A/B order and the names in its prompts)
-GRANT SELECT (first_name, name) ON "user" TO mwf_job;
+GRANT SELECT (first_name, name) ON "user" TO job_access;
 -- mwf_ops: the Neural Monitor dashboard (routes/brain.ts, directly or through the stage shim) reads it.
-GRANT SELECT ON "user" TO mwf_ops;
+GRANT SELECT ON "user" TO ops_access;
 
 -- The AI principal (work-k5fk.3): exactly one row of kind ai (sql_user_one_ai,
 -- sql-only.sql), at a fixed version-7 id so code and fixtures name it without
@@ -690,7 +705,7 @@ CREATE FUNCTION app.ai_user_id() RETURNS uuid
 COMMENT ON FUNCTION app.ai_user_id() IS 'The id of the one AI user row, seeded by the baseline next to the "user" table. A constant: the seed and this function change together.';
 -- mwf_app, mwf_job: the session paths that will seat the AI (design note §3) name it through this; a constant, no data.
 REVOKE EXECUTE ON FUNCTION app.ai_user_id() FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION app.ai_user_id() TO mwf_app, mwf_job;
+GRANT EXECUTE ON FUNCTION app.ai_user_id() TO app_access, job_access;
 
 CREATE TABLE user_identity (
     provider identity_provider NOT NULL,
@@ -722,11 +737,11 @@ COMMENT ON CONSTRAINT user_identity_clerk_subject ON user_identity IS 'A Clerk s
 COMMENT ON CONSTRAINT user_identity_e2e_subject ON user_identity IS 'An E2E-bypass subject is e2e_ and 1-64 of [a-z0-9_-] (e2e_<uuid>, e2e_<ms>_<random>). The e2e provider is never used in production (lib/e2e-bypass.ts).';
 -- mwf_app: nothing (work-bp5m). A request resolves its subject through mwf_auth's app.resolve_user and never reads,
 -- writes or re-binds an identity.
--- mwf_job: create_user (INSERT), anonymize_user_account (the identities go with the tombstone), account-deletion.ts
+-- mwf_job, mwf_definer: create_user (INSERT), anonymize_user_account (the identities go with the tombstone), account-deletion.ts
 -- (the Clerk subject to delete at Clerk, read before the walk).
-GRANT SELECT (provider, subject, user_id) ON user_identity TO mwf_job;
-GRANT INSERT (provider, subject, user_id) ON user_identity TO mwf_job;
-GRANT DELETE ON user_identity TO mwf_job;
+GRANT SELECT (provider, subject, user_id) ON user_identity TO job_access, mwf_definer;
+GRANT INSERT (provider, subject, user_id) ON user_identity TO mwf_definer;
+GRANT DELETE ON user_identity TO mwf_definer;
 
 CREATE TABLE persona (
     user_id uuid7 NOT NULL,
@@ -751,8 +766,8 @@ COMMENT ON COLUMN persona.owner_user_id IS 'The human who created the persona; i
 COMMENT ON COLUMN persona.kind IS 'Always persona: pins the FK (user_id, kind) to a persona user row (pattern K).';
 COMMENT ON COLUMN persona.owner_kind IS 'Always human: pins the FK (owner_user_id, owner_kind) to a human user row (pattern K).';
 -- mwf_app: nothing yet — no request creates or reads a persona until the modeled-participant paths move onto it (design note §3).
--- mwf_job: anonymize_user_account finds the owner's personas to scrub.
-GRANT SELECT (user_id, owner_user_id) ON persona TO mwf_job;
+-- mwf_job, mwf_definer: anonymize_user_account finds the owner's personas to scrub.
+GRANT SELECT (user_id, owner_user_id) ON persona TO job_access, mwf_definer;
 
 CREATE TABLE user_contact (
     user_id uuid7 NOT NULL REFERENCES "user" ON DELETE RESTRICT,
@@ -775,12 +790,12 @@ COMMENT ON INDEX user_contact_contact_user_id_idx IS 'The FK index of contact_us
 -- mwf_app: the caller's own entries only — createSession records the invite name for a known person, PATCH
 -- /contacts/:userId/nickname edits it; every partner name reads the caller's own entry (a link invitee's name is
 -- resolved from the caller's own invitation.invitee_name at read time, never written into a row: review round 1, Q1).
-GRANT SELECT ON user_contact TO mwf_app;
-GRANT INSERT (user_id, contact_user_id, nickname, created_at, updated_at) ON user_contact TO mwf_app;
-GRANT UPDATE (nickname, updated_at) ON user_contact TO mwf_app;
--- mwf_job: anonymize_user_account deletes the leaver's own entries (U-class: their words about others).
-GRANT SELECT (user_id) ON user_contact TO mwf_job;
-GRANT DELETE ON user_contact TO mwf_job;
+GRANT SELECT ON user_contact TO app_access;
+GRANT INSERT (user_id, contact_user_id, nickname, created_at, updated_at) ON user_contact TO app_access;
+GRANT UPDATE (nickname, updated_at) ON user_contact TO app_access;
+-- mwf_definer: anonymize_user_account deletes the leaver's own entries (U-class: their words about others).
+GRANT SELECT (user_id) ON user_contact TO mwf_definer;
+GRANT DELETE ON user_contact TO mwf_definer;
 -- mwf_ops: nothing — a nickname is its owner's alone (no dashboard reads one).
 
 CREATE TABLE session (
@@ -814,22 +829,22 @@ COMMENT ON COLUMN session.topic_frame IS 'encrypted (session): the AI''s short n
 -- mwf_app: createSession and tending startLinkedProcess create a session; the topic frame and its confirmation; the realtime
 -- touch (updated_at). No UPDATE of status or the archive columns (work-k5fk.10.12): archiveSession goes through
 -- app.session_archive, every other status move through app.session_set_status.
-GRANT SELECT ON session TO mwf_app;
-GRANT INSERT (status, previous_session_id, topic_frame, created_at, updated_at) ON session TO mwf_app;
-GRANT UPDATE (topic_frame, topic_frame_confirmed_at, updated_at) ON session TO mwf_app;
--- mwf_job: session_set_status, empathy_set_status (row lock), anonymize step 1
-GRANT SELECT (id, status, resolved_at) ON session TO mwf_job;
-GRANT UPDATE (status, resolved_at) ON session TO mwf_job;
--- mwf_job: session_archive and session_set_status (→ ARCHIVED), as their owner (work-k5fk.10.12)
-GRANT SELECT (archived_at, archived_by_user_id) ON session TO mwf_job;
-GRANT UPDATE (archived_at, archived_by_user_id) ON session TO mwf_job;
+GRANT SELECT ON session TO app_access;
+GRANT INSERT (status, previous_session_id, topic_frame, created_at, updated_at) ON session TO app_access;
+GRANT UPDATE (topic_frame, topic_frame_confirmed_at, updated_at) ON session TO app_access;
+-- mwf_job, mwf_definer: session_set_status, empathy_set_status (row lock), anonymize step 1
+GRANT SELECT (id, status, resolved_at) ON session TO job_access, mwf_definer;
+GRANT UPDATE (status, resolved_at) ON session TO mwf_definer;
+-- mwf_definer: session_archive and session_set_status (→ ARCHIVED), as their owner (work-k5fk.10.12)
+GRANT SELECT (archived_at, archived_by_user_id) ON session TO mwf_definer;
+GRANT UPDATE (archived_at, archived_by_user_id) ON session TO mwf_definer;
 -- mwf_job [TS-12]: session-retention: staleness of an ACTIVE session and the purge window of an ARCHIVED one
-GRANT SELECT (updated_at) ON session TO mwf_job;
+GRANT SELECT (updated_at) ON session TO job_access;
 -- mwf_job [TS-12]: session-retention: an ARCHIVED session past the purge window is hard-deleted (every child
 -- FKs session ON DELETE CASCADE; spec Conventions "retention hard-deletes whole sessions")
-GRANT DELETE ON session TO mwf_job;
+GRANT DELETE ON session TO job_access;
 -- mwf_ops: the Neural Monitor dashboard (routes/brain.ts, directly or through the stage shim) reads it.
-GRANT SELECT ON session TO mwf_ops;
+GRANT SELECT ON session TO ops_access;
 
 CREATE TABLE participant (
     session_id uuid7 NOT NULL REFERENCES session ON DELETE CASCADE,
@@ -871,18 +886,18 @@ COMMENT ON COLUMN participant.left_at IS 'When the participant left or deleted t
 -- mwf_app: the inviter's participant at createSession (no adder: the initiator), the invitee's at accept (added by the
 -- inviter), the caller's in a linked process. Never an UPDATE: display_name / left_at move only through
 -- app.anonymize_user_in_session.
-GRANT SELECT ON participant TO mwf_app;
-GRANT INSERT (session_id, user_id, kind, added_by_user_id, display_name, joined_at, created_at, updated_at) ON participant TO mwf_app;
--- mwf_job: is_member, partner_user_id, every self/membership test, T-cardinality-*, reveal gate
-GRANT SELECT (session_id, user_id, kind, left_at) ON participant TO mwf_job;
--- mwf_job: t_live_session_pair, t_participant_added_by (definer trigger functions it owns)
-GRANT SELECT (added_by_user_id) ON participant TO mwf_job;
--- mwf_job: anonymize_user_in_session step 2
-GRANT UPDATE (display_name, left_at) ON participant TO mwf_job;
+GRANT SELECT ON participant TO app_access;
+GRANT INSERT (session_id, user_id, kind, added_by_user_id, display_name, joined_at, created_at, updated_at) ON participant TO app_access;
+-- mwf_job, mwf_definer: is_member, partner_user_id, every self/membership test, T-cardinality-*, reveal gate
+GRANT SELECT (session_id, user_id, kind, left_at) ON participant TO job_access, mwf_definer;
+-- mwf_definer: t_live_session_pair, t_participant_added_by (definer trigger functions it owns)
+GRANT SELECT (added_by_user_id) ON participant TO mwf_definer;
+-- mwf_definer: anonymize_user_in_session step 2
+GRANT UPDATE (display_name, left_at) ON participant TO mwf_definer;
 -- mwf_job [TS-10 I4]: empathy-store sessionParties (the reconciler's A/B order and the names in its prompts)
-GRANT SELECT (joined_at, display_name) ON participant TO mwf_job;
+GRANT SELECT (joined_at, display_name) ON participant TO job_access;
 -- mwf_ops: the Neural Monitor dashboard (routes/brain.ts, directly or through the stage shim) reads it.
-GRANT SELECT ON participant TO mwf_ops;
+GRANT SELECT ON participant TO ops_access;
 
 CREATE TABLE live_session_pair (
     user_a uuid7 NOT NULL,
@@ -905,9 +920,9 @@ COMMENT ON INDEX live_session_pair_session_id_user_a_idx IS 'The FK index of (se
 COMMENT ON INDEX live_session_pair_session_id_user_b_idx IS 'The FK index of (session_id, user_b).';
 -- mwf_app: createSession's pre-check (is the caller already in a live session with this person?), a read of the pair
 -- table only. Never a write: the trigger functions own it.
-GRANT SELECT ON live_session_pair TO mwf_app;
--- mwf_job: owner of the two definer trigger functions that maintain it.
-GRANT SELECT, INSERT, DELETE ON live_session_pair TO mwf_job;
+GRANT SELECT ON live_session_pair TO app_access;
+-- mwf_definer: owner of the two definer trigger functions that maintain it.
+GRANT SELECT, INSERT, DELETE ON live_session_pair TO mwf_definer;
 
 CREATE TABLE proposal (
     id uuid7 NOT NULL DEFAULT uuidv7() PRIMARY KEY,
@@ -953,19 +968,19 @@ COMMENT ON COLUMN proposal.unresolved_need_labels IS 'encrypted (session): text[
 -- (stage4-capture.service.ts, stage4-subchat.service.ts, controllers/stage4.ts). FINDING: capture can set and re-assign
 -- created_by_user_id to the PARTNER (from model output) and edit a partner's proposal. shared_at and the
 -- CONVERTED_TO_AGREEMENT move stay the job's.
-GRANT SELECT ON proposal TO mwf_app;
+GRANT SELECT ON proposal TO app_access;
 GRANT INSERT (session_id, created_by_user_id, source, kind, status, description, duration, measure_of_success,
-              unresolved_need_labels, created_at, updated_at) ON proposal TO mwf_app;
+              unresolved_need_labels, created_at, updated_at) ON proposal TO app_access;
 GRANT UPDATE (description, duration, measure_of_success, kind, status, created_by_user_id,
               unresolved_need_labels, removed_at, removed_by_user_id, removal_reason, updated_at)
-  ON proposal TO mwf_app;
--- mwf_job: T-consent-owner (owner of a proposal / share offer / review target), fired by need_revoke_share
-GRANT SELECT (id, session_id, created_by_user_id) ON proposal TO mwf_job;
+  ON proposal TO app_access;
+-- mwf_job, mwf_definer: T-consent-owner (owner of a proposal / share offer / review target), fired by need_revoke_share
+GRANT SELECT (id, session_id, created_by_user_id) ON proposal TO job_access, mwf_definer;
 -- mwf_job [TS-11]: stage4-closure closureInputsAsJob (fix round 1): the closure decides across every participant on the
 -- job connection — the proposals it converts / schedules (snapshot text for the agreement and follow-up)
-GRANT SELECT (session_id, kind, status, description, duration, measure_of_success, shared_at) ON proposal TO mwf_job;
+GRANT SELECT (session_id, kind, status, description, duration, measure_of_success, shared_at) ON proposal TO job_access;
 -- mwf_job [TS-11]: repair-store convertProposalsAsJob: ACTIVE/REVISED → CONVERTED_TO_AGREEMENT (WHERE id = …: SELECT id is granted above)
-GRANT UPDATE (status) ON proposal TO mwf_job;
+GRANT UPDATE (status) ON proposal TO job_access;
 
 CREATE TABLE conversation (
     id uuid7 NOT NULL DEFAULT uuidv7() PRIMARY KEY,
@@ -997,23 +1012,23 @@ COMMENT ON COLUMN conversation.anchor_kind IS 'SUBCHAT only: what the sub-chat i
 COMMENT ON COLUMN conversation.anchor_proposal_id IS 'SUBCHAT only: the proposal a PROPOSAL_REFINEMENT sub-chat refines.';
 COMMENT ON COLUMN conversation.next_seq IS 'The seq the next message of this conversation takes (work-k5fk.4). Advanced only by app.next_message_seq (through t_message_seq) under this row''s lock; 1 on a new conversation (t_conversation_seq_start).';
 -- mwf_app: the caller's MAIN conversation at createSession / accept / linked process, a Stage 4 sub-chat and its resolution.
-GRANT SELECT ON conversation TO mwf_app;
+GRANT SELECT ON conversation TO app_access;
 -- next_seq: a Prisma create sends its @default(1); t_conversation_seq_start pins it to 1 whatever is sent (work-k5fk.4).
 GRANT INSERT (session_id, user_id, kind, anchor_kind, anchor_proposal_id, status, next_seq, created_at, updated_at)
-  ON conversation TO mwf_app;
-GRANT UPDATE (status, resolved_at, updated_at) ON conversation TO mwf_app;
--- mwf_job: empathy_set_status: the subject's MAIN conversation; anonymize step 3
-GRANT SELECT (id, session_id, user_id, kind) ON conversation TO mwf_job;
+  ON conversation TO app_access;
+GRANT UPDATE (status, resolved_at, updated_at) ON conversation TO app_access;
+-- mwf_job, mwf_definer: empathy_set_status: the subject's MAIN conversation; anonymize step 3
+GRANT SELECT (id, session_id, user_id, kind) ON conversation TO job_access, mwf_definer;
 -- mwf_job: a message writer reads its conversation's session into message.session_id (work-k5fk.3, 6a)
-GRANT SELECT (session_id) ON conversation TO mwf_job;
--- mwf_job: app.next_message_seq (SECURITY DEFINER, owned by mwf_job; work-k5fk.4) takes the next number. The job
--- login holds this as the definer's owner until §7 row 9a hands the definers to the NOLOGIN mwf_definer; mwf_app never.
-GRANT SELECT (next_seq) ON conversation TO mwf_job;
-GRANT UPDATE (next_seq) ON conversation TO mwf_job;
--- mwf_job: anonymize_*: a private-row delete (steps 3–5)
-GRANT DELETE ON conversation TO mwf_job;
+GRANT SELECT (session_id) ON conversation TO job_access;
+-- mwf_definer: app.next_message_seq (SECURITY DEFINER, owned by mwf_definer; work-k5fk.4) takes the next number. Only
+-- the NOLOGIN owner holds it (work-k5fk.10.4 moved it off mwf_job): no runtime login can move the counter directly.
+GRANT SELECT (next_seq) ON conversation TO mwf_definer;
+GRANT UPDATE (next_seq) ON conversation TO mwf_definer;
+-- mwf_definer: anonymize_*: a private-row delete (steps 3–5)
+GRANT DELETE ON conversation TO mwf_definer;
 -- mwf_ops: the Neural Monitor dashboard (routes/brain.ts, directly or through the stage shim) reads it.
-GRANT SELECT ON conversation TO mwf_ops;
+GRANT SELECT ON conversation TO ops_access;
 
 CREATE TABLE empathy_attempt (
     id uuid7 NOT NULL DEFAULT uuidv7() PRIMARY KEY,
@@ -1057,18 +1072,19 @@ COMMENT ON COLUMN empathy_attempt.revealed_at IS 'Set once at the reveal and nev
 COMMENT ON COLUMN empathy_attempt.content IS 'encrypted (per-row): the author''s empathy statement; participant (author) key until revealed, then re-encrypted under the session key. The plaintext never changes.';
 -- mwf_app: the author submits round 1 (empathy-store submitAttempt); every later move is app.empathy_set_status, and the
 -- delivery stamps are the job's.
-GRANT SELECT ON empathy_attempt TO mwf_app;
+GRANT SELECT ON empathy_attempt TO app_access;
 GRANT INSERT (session_id, author_user_id, subject_user_id, round, content, status, status_version, delivery_status,
               submitted_at, created_at, updated_at)
-  ON empathy_attempt TO mwf_app;
--- mwf_job: empathy_set_status reads the row (%ROWTYPE) and RETURNING id; empathy_direction_status; T-consent-owner; anonymize (revealed_at filter)
-GRANT SELECT ON empathy_attempt TO mwf_job;
--- mwf_job: empathy_set_status: status moves, the reveal stamp (delivery columns for the job's delivery path)
-GRANT UPDATE (status, status_version, revealed_at, delivery_status, delivered_at, seen_at) ON empathy_attempt TO mwf_job;
--- mwf_job: empathy_set_status: round n+1 on resubmission
-GRANT INSERT (session_id, author_user_id, subject_user_id, round, supersedes_attempt_id, content, status) ON empathy_attempt TO mwf_job;
--- mwf_job: anonymize_*: a private-row delete (steps 3–5)
-GRANT DELETE ON empathy_attempt TO mwf_job;
+  ON empathy_attempt TO app_access;
+-- mwf_job, mwf_definer: empathy_set_status reads the row (%ROWTYPE) and RETURNING id; empathy_direction_status; T-consent-owner; anonymize (revealed_at filter)
+GRANT SELECT ON empathy_attempt TO job_access, mwf_definer;
+-- mwf_job: the job's delivery path (status moves, the delivery columns); mwf_definer: empathy_set_status's status moves and reveal stamp
+GRANT UPDATE (status, status_version, revealed_at, delivery_status, delivered_at, seen_at) ON empathy_attempt TO job_access;
+GRANT UPDATE (status, status_version, revealed_at) ON empathy_attempt TO mwf_definer;
+-- mwf_definer: empathy_set_status: round n+1 on resubmission
+GRANT INSERT (session_id, author_user_id, subject_user_id, round, supersedes_attempt_id, content, status) ON empathy_attempt TO mwf_definer;
+-- mwf_definer: anonymize_*: a private-row delete (steps 3–5)
+GRANT DELETE ON empathy_attempt TO mwf_definer;
 
 CREATE TABLE need (
     id uuid7 NOT NULL DEFAULT uuidv7() PRIMARY KEY,
@@ -1107,16 +1123,16 @@ COMMENT ON COLUMN need.label IS 'encrypted (participant): the need statement in 
 COMMENT ON COLUMN need.evidence IS 'encrypted (participant): text[], each element encrypted: short quotes of what the participant said; never copied to need_share.';
 -- mwf_app: the caller's needs — extraction, edits, confirm / lock, supersede and soft delete (needs.ts,
 -- needs-edit-applier.service.ts, controllers/stage3.ts). Never a DELETE.
-GRANT SELECT ON need TO mwf_app;
+GRANT SELECT ON need TO app_access;
 GRANT INSERT (session_id, user_id, label, category, evidence, ai_confidence, confirmed_at, created_at, updated_at)
-  ON need TO mwf_app;
-GRANT UPDATE (label, category, confirmed_at, locked_at, superseded_by_need_id, deleted_at, updated_at) ON need TO mwf_app;
--- mwf_job: need_share (owner, category, live), need_revoke_share (owner), T-consent-owner, anonymize step 3
-GRANT SELECT (id, session_id, user_id, category, deleted_at, superseded_by_need_id) ON need TO mwf_job;
--- mwf_job: need_share copies the need's session and user into the share (work-k5fk.3, 6a)
-GRANT SELECT (session_id, user_id) ON need TO mwf_job;
--- mwf_job: anonymize_*: a private-row delete (steps 3–5)
-GRANT DELETE ON need TO mwf_job;
+  ON need TO app_access;
+GRANT UPDATE (label, category, confirmed_at, locked_at, superseded_by_need_id, deleted_at, updated_at) ON need TO app_access;
+-- mwf_job, mwf_definer: need_share (owner, category, live), need_revoke_share (owner), T-consent-owner, anonymize step 3
+GRANT SELECT (id, session_id, user_id, category, deleted_at, superseded_by_need_id) ON need TO job_access, mwf_definer;
+-- mwf_definer: need_share copies the need's session and user into the share (work-k5fk.3, 6a)
+GRANT SELECT (session_id, user_id) ON need TO mwf_definer;
+-- mwf_definer: anonymize_*: a private-row delete (steps 3–5)
+GRANT DELETE ON need TO mwf_definer;
 
 CREATE TABLE message (
     conversation_id uuid7 NOT NULL,
@@ -1167,27 +1183,27 @@ COMMENT ON COLUMN message.content IS 'encrypted (per-row): the line''s text: the
 -- Never seq: t_message_seq numbers every row.
 -- DELETE: a failed stream turn's USER row (stream-turn-persistence.ts) and — FINDING — the job-written SHARE_SUGGESTION
 -- rows of the caller's MAIN conversation when the share offer is declined or accepted (reconciler/sharing.ts).
-GRANT SELECT ON message TO mwf_app;
+GRANT SELECT ON message TO app_access;
 GRANT INSERT (conversation_id, session_id, sender_user_id, role, kind, content, refining_need_id, source_attempt_id,
               created_at)
-  ON message TO mwf_app;
-GRANT DELETE ON message TO mwf_app;
--- mwf_job: empathy_set_status: the delivered copy, and its duplicate probe
-GRANT SELECT (conversation_id, source_attempt_id, kind) ON message TO mwf_job;
-GRANT INSERT (conversation_id, session_id, sender_user_id, role, kind, content, source_attempt_id) ON message TO mwf_job;
+  ON message TO app_access;
+GRANT DELETE ON message TO app_access;
+-- mwf_job, mwf_definer: empathy_set_status: the delivered copy, and its duplicate probe
+GRANT SELECT (conversation_id, source_attempt_id, kind) ON message TO job_access, mwf_definer;
+GRANT INSERT (conversation_id, session_id, sender_user_id, role, kind, content, source_attempt_id) ON message TO job_access, mwf_definer;
 -- mwf_job [TS-9]: message-store createFacilitatorMessage / deliverMessage: a once-only line's
 -- dedupe_key (work-fdc1, sql_message_once), the refining need a facilitator
 -- reply answers, and an explicit instant (fixtures, replays)
-GRANT INSERT (dedupe_key, refining_need_id, created_at) ON message TO mwf_job;
+GRANT INSERT (dedupe_key, refining_need_id, created_at) ON message TO job_access;
 -- mwf_job [TS-9]: message-store insert() returns the written row's key and instant (INSERT … RETURNING seq, created_at);
 -- getInitialMessage's Serializable idempotency probe asks whether seq 1 exists (work-k5fk.4). Never content.
-GRANT SELECT (seq, created_at) ON message TO mwf_job;
+GRANT SELECT (seq, created_at) ON message TO job_access;
 -- mwf_job [TS-10 I4]: analysis.ts stagedChat (witnessing content, the subject's recent Stage 2 turns) and
 -- state.ts markEmpathyReady's de-dup guard (lastAiNote): the text and speaker of the
 -- MAIN-conversation CHAT rows of the two parties (conversation_id, kind, created_at granted above).
-GRANT SELECT (role, content, session_id, sender_user_id) ON message TO mwf_job;
+GRANT SELECT (role, content, session_id, sender_user_id) ON message TO job_access;
 -- mwf_ops: the Neural Monitor dashboard (routes/brain.ts, directly or through the stage shim) reads it.
-GRANT SELECT ON message TO mwf_ops;
+GRANT SELECT ON message TO ops_access;
 
 CREATE TABLE conversation_read_state (
     session_id uuid7 NOT NULL,
@@ -1220,16 +1236,16 @@ COMMENT ON COLUMN conversation_read_state.last_viewed_share_tab_at IS 'When the 
 COMMENT ON COLUMN conversation_read_state.last_active_at IS 'Presence; shown to the co-participant only when their privacy preferences allow (v_participant).';
 COMMENT ON COLUMN conversation_read_state.archived_at IS 'Set when the participant hid the session from their list.';
 -- mwf_app: the caller's read state — created with the participant, then viewed / active / seen / share-tab stamps.
-GRANT SELECT ON conversation_read_state TO mwf_app;
+GRANT SELECT ON conversation_read_state TO app_access;
 GRANT INSERT (session_id, user_id, last_viewed_at, last_active_at, last_seen_conversation_id, last_seen_seq,
               last_viewed_share_tab_at, created_at, updated_at)
-  ON conversation_read_state TO mwf_app;
+  ON conversation_read_state TO app_access;
 GRANT UPDATE (last_viewed_at, last_active_at, last_seen_conversation_id, last_seen_seq, last_viewed_share_tab_at,
               updated_at)
-  ON conversation_read_state TO mwf_app;
--- mwf_job: anonymize_*: a private-row delete (steps 3–5) and the filter columns it reads
-GRANT SELECT (session_id, user_id) ON conversation_read_state TO mwf_job;
-GRANT DELETE ON conversation_read_state TO mwf_job;
+  ON conversation_read_state TO app_access;
+-- mwf_definer: anonymize_*: a private-row delete (steps 3–5) and the filter columns it reads
+GRANT SELECT (session_id, user_id) ON conversation_read_state TO mwf_definer;
+GRANT DELETE ON conversation_read_state TO mwf_definer;
 
 CREATE TABLE reconciler_result (
     id uuid7 NOT NULL DEFAULT uuidv7() PRIMARY KEY,
@@ -1289,24 +1305,24 @@ COMMENT ON COLUMN reconciler_result.suggested_share_focus IS 'encrypted (partici
 COMMENT ON COLUMN reconciler_result.suggested_share_content IS 'encrypted (participant): a 1-3 sentence suggestion of what the subject could say, LLM output.';
 COMMENT ON COLUMN reconciler_result.suggested_share_reason IS 'encrypted (participant): one sentence on why sharing would help, LLM output.';
 -- mwf_app: read only (the share offer's result, the reconciler state the subject sees); every write is the job's.
-GRANT SELECT ON reconciler_result TO mwf_app;
+GRANT SELECT ON reconciler_result TO app_access;
 -- mwf_job [TS-10]: reconciler/analysis.ts persistAnalysis: one current result per attempt — the next
 -- iteration (max(iteration) of the attempt), RETURNING id, and the re-analysis
 -- supersede (WHERE attempt_id … AND superseded_at IS NULL). Never the analysis text.
-GRANT SELECT (id, attempt_id, iteration, superseded_at) ON reconciler_result TO mwf_job;
+GRANT SELECT (id, attempt_id, iteration, superseded_at) ON reconciler_result TO job_access;
 -- mwf_job [TS-10]: persistAnalysis: the analysis row itself (id, created_at, updated_at are column defaults)
 GRANT INSERT (attempt_id, session_id, subject_user_id, iteration, alignment_score, alignment_summary, gap_summary,
               gap_severity, correctly_identified, missed_feelings, misattributions, most_important_gap,
               recommended_action, rationale, sharing_would_help, suggested_share_focus, suggested_share_content,
-              suggested_share_reason, circuit_breaker_tripped) ON reconciler_result TO mwf_job;
+              suggested_share_reason, circuit_breaker_tripped) ON reconciler_result TO job_access;
 -- mwf_job [TS-10]: persistAnalysis: re-analysis of the same attempt retires the current result
-GRANT UPDATE (superseded_at) ON reconciler_result TO mwf_job;
+GRANT UPDATE (superseded_at) ON reconciler_result TO job_access;
 -- mwf_job [TS-10 I4]: analysis.ts currentResultFor / analyzeEmpathyGap's cached result, sharing.ts generateShareOffer,
 -- state.ts reveal quality note: the stored analysis an analysis reuses (RESULT_SELECT)
 GRANT SELECT (session_id, subject_user_id, alignment_score, alignment_summary, correctly_identified, gap_severity,
               gap_summary, missed_feelings, misattributions, most_important_gap, recommended_action, rationale,
               sharing_would_help, suggested_share_focus, suggested_share_content, suggested_share_reason, created_at)
-  ON reconciler_result TO mwf_job;
+  ON reconciler_result TO job_access;
 
 CREATE TABLE context_share_offer (
     id uuid7 NOT NULL DEFAULT uuidv7() PRIMARY KEY,
@@ -1354,26 +1370,26 @@ COMMENT ON COLUMN context_share_offer.suggested_reason IS 'encrypted (participan
 COMMENT ON COLUMN context_share_offer.shared_content IS 'encrypted (session): the exact text the subject approved; copied into the author''s SHARED_CONTEXT message at delivery.';
 -- mwf_app: the SUBJECT acts on their own offer (reconciler/sharing.ts, controllers/reconciler.ts): view (OFFERED), edit the
 -- suggestion, decline, accept with the shared text. Creation and delivery are the job's.
-GRANT SELECT ON context_share_offer TO mwf_app;
-GRANT UPDATE (status, offered_at, suggested_content, declined_at, shared_content, shared_at, updated_at) ON context_share_offer TO mwf_app;
--- mwf_job: T-consent-owner (owner of a proposal / share offer / review target), fired by need_revoke_share
-GRANT SELECT (id, session_id, subject_user_id) ON context_share_offer TO mwf_job;
+GRANT SELECT ON context_share_offer TO app_access;
+GRANT UPDATE (status, offered_at, suggested_content, declined_at, shared_content, shared_at, updated_at) ON context_share_offer TO app_access;
+-- mwf_job, mwf_definer: T-consent-owner (owner of a proposal / share offer / review target), fired by need_revoke_share
+GRANT SELECT (id, session_id, subject_user_id) ON context_share_offer TO job_access, mwf_definer;
 -- mwf_job [TS-10]: reconciler/sharing.ts insertOffer: the next iteration of an attempt's offers (max(iteration)),
 -- RETURNING id; triggerStage3Transition: open offers (status) of the session's participants expire
-GRANT SELECT (attempt_id, iteration, status) ON context_share_offer TO mwf_job;
+GRANT SELECT (attempt_id, iteration, status) ON context_share_offer TO job_access;
 -- mwf_job [TS-10]: sharing.ts deliverAcceptedShare (fix1 I2): the delivery is idempotent — it locks the offer
 -- (SELECT … FOR UPDATE) and delivers only while delivery_status is PENDING. Never the shared text.
-GRANT SELECT (delivery_status) ON context_share_offer TO mwf_job;
+GRANT SELECT (delivery_status) ON context_share_offer TO job_access;
 -- mwf_job [TS-10]: insertOffer: the subject's offer (PENDING from the reconciler; OFFERED with offered_at from the share-offer fallback)
 GRANT INSERT (attempt_id, result_id, session_id, subject_user_id, iteration, status, offer_message, suggested_content,
-              suggested_reason, offered_at) ON context_share_offer TO mwf_job;
+              suggested_reason, offered_at) ON context_share_offer TO job_access;
 -- mwf_job [TS-10]: sharing.ts shareAccepted: the delivery stamp of the shared text; notifications.ts getPendingActionsHandler:
 -- the notification path writes delivery_notified_at / seen_notified_at (review F4.2); stage2.ts
 -- triggerStage3Transition: status → EXPIRED when the Stage 2 sharing window closes
-GRANT UPDATE (status, delivery_status, delivered_at, delivery_notified_at, seen_notified_at) ON context_share_offer TO mwf_job;
+GRANT UPDATE (status, delivery_status, delivered_at, delivery_notified_at, seen_notified_at) ON context_share_offer TO job_access;
 -- mwf_job [TS-10 I4]: sharing.ts generateShareSuggestion(ForDirection) / generateShareOffer: does this result already
 -- have an offer (with a suggestion)? Never the shared text.
-GRANT SELECT (result_id, suggested_content) ON context_share_offer TO mwf_job;
+GRANT SELECT (result_id, suggested_content) ON context_share_offer TO job_access;
 
 CREATE TABLE milestone (
     key milestone_key NOT NULL PRIMARY KEY,
@@ -1390,9 +1406,9 @@ COMMENT ON COLUMN milestone.ordinal IS 'Position along the journey: stage * 100 
 COMMENT ON COLUMN milestone.stage_label IS 'UI label of the stage this milestone belongs to, e.g. Your Story; display text owned by this table. Plain text, not an enum or a domain: its closed set is these rows (no runtime role can write here), and a copy edit is an UPDATE, not a type change.';
 COMMENT ON COLUMN milestone.self_assertable IS 'Whether a participant may record the milestone themselves (a CTA) or only the job (a system fact).';
 -- mwf_app: reference data (P3 §1.1 pattern), read only.
-GRANT SELECT ON milestone TO mwf_app;
+GRANT SELECT ON milestone TO app_access;
 -- mwf_ops: the Neural Monitor dashboard (routes/brain.ts, directly or through the stage shim) reads it.
-GRANT SELECT ON milestone TO mwf_ops;
+GRANT SELECT ON milestone TO ops_access;
 
 -- The seed (work-k5fk.6; was generated from gen/maps.ts MILESTONES). Keys are
 -- shared/src/dto/milestones.ts MILESTONE_KEYS in ordinal order, and the
@@ -1432,20 +1448,20 @@ COMMENT ON COLUMN participant_milestone.session_id IS 'The session of every part
 COMMENT ON COLUMN participant_milestone.user_id IS 'A participant of the row''s session, by user (work-k5fk.3): (session_id, user_id) references participant (session_id, user_id).';
 -- mwf_app: the caller reaches the self-assertable keys (milestone-writer reachMilestone: compact_signed, feel_heard,
 -- needs_confirmed, choices_shared; the key check is RLS's, step 9); every other key, and un-reaching, is the job's.
-GRANT SELECT ON participant_milestone TO mwf_app;
-GRANT INSERT (session_id, user_id, milestone_key, reached_at) ON participant_milestone TO mwf_app;
+GRANT SELECT ON participant_milestone TO app_access;
+GRANT INSERT (session_id, user_id, milestone_key, reached_at) ON participant_milestone TO app_access;
 -- Holds only because reachMilestone is raw SQL (INSERT … ON CONFLICT DO NOTHING naming these three
 -- columns): a Prisma create would also send created_at.
--- mwf_job: anonymize_user_in_session step 3: unshared choices (choices_shared milestone), INDIVIDUAL check-ins
-GRANT SELECT (session_id, user_id, milestone_key) ON participant_milestone TO mwf_job;
+-- mwf_job, mwf_definer: anonymize_user_in_session step 3: unshared choices (choices_shared milestone), INDIVIDUAL check-ins
+GRANT SELECT (session_id, user_id, milestone_key) ON participant_milestone TO job_access, mwf_definer;
 -- mwf_job [TS-9]: milestone-writer reachMilestone: system keys (invitation_sent, empathy_*, needs_shared, closed, paused …)
-GRANT INSERT (session_id, user_id, milestone_key, reached_at) ON participant_milestone TO mwf_job;
+GRANT INSERT (session_id, user_id, milestone_key, reached_at) ON participant_milestone TO job_access;
 -- mwf_job [TS-9]: sessions.ts resumeSession: un-reaching `paused` is a DELETE by mwf_job (spec §1.1)
-GRANT DELETE ON participant_milestone TO mwf_job;
+GRANT DELETE ON participant_milestone TO job_access;
 -- mwf_job [TS-10 I4]: analysis.ts milestonesOf: when each milestone was reached — the stage each chat row was written in
-GRANT SELECT (reached_at) ON participant_milestone TO mwf_job;
+GRANT SELECT (reached_at) ON participant_milestone TO job_access;
 -- mwf_ops: the Neural Monitor dashboard (routes/brain.ts, directly or through the stage shim) reads it.
-GRANT SELECT ON participant_milestone TO mwf_ops;
+GRANT SELECT ON participant_milestone TO ops_access;
 
 CREATE TABLE ai_memory (
     id uuid7 NOT NULL DEFAULT uuidv7() PRIMARY KEY,
@@ -1474,22 +1490,22 @@ COMMENT ON COLUMN ai_memory.doc IS 'encrypted (per-row): jsonb with every string
 COMMENT ON COLUMN ai_memory.doc_schema_version IS 'The version of the app.json_schema ai_memory.<kind> document doc conforms to (validated by the t_doc_schema trigger; an unknown version is refused).';
 -- mwf_app: read the session summary / facts for prompts; FINDING: global-memory.ts writes the user's GLOBAL_FACTS document
 -- on the request path (spec: ai_memory is the AI's).
-GRANT SELECT ON ai_memory TO mwf_app;
+GRANT SELECT ON ai_memory TO app_access;
 -- (doc_schema_version: the Prisma upsert's create sends its @default.)
-GRANT INSERT (user_id, kind, doc, doc_schema_version, created_at, updated_at) ON ai_memory TO mwf_app;
-GRANT UPDATE (doc, updated_at) ON ai_memory TO mwf_app;
--- mwf_job: anonymize_*: a private-row delete (steps 3–5) and the filter columns it reads
-GRANT SELECT (session_id, user_id) ON ai_memory TO mwf_job;
-GRANT DELETE ON ai_memory TO mwf_job;
+GRANT INSERT (user_id, kind, doc, doc_schema_version, created_at, updated_at) ON ai_memory TO app_access;
+GRANT UPDATE (doc, updated_at) ON ai_memory TO app_access;
+-- mwf_job, mwf_definer: anonymize_*: a private-row delete (steps 3–5) and the filter columns it reads
+GRANT SELECT (session_id, user_id) ON ai_memory TO job_access, mwf_definer;
+GRANT DELETE ON ai_memory TO mwf_definer;
 -- mwf_job [TS-9]: conversation-summarizer updateSessionSummary: the participant's SUMMARY document (INSERT … ON CONFLICT DO UPDATE)
-GRANT SELECT (kind) ON ai_memory TO mwf_job;
-GRANT INSERT (session_id, user_id, kind, doc) ON ai_memory TO mwf_job;
-GRANT UPDATE (doc) ON ai_memory TO mwf_job;
+GRANT SELECT (kind) ON ai_memory TO job_access;
+GRANT INSERT (session_id, user_id, kind, doc) ON ai_memory TO job_access;
+GRANT UPDATE (doc) ON ai_memory TO job_access;
 -- mwf_job [TS-10 I4]: analysis.ts loadSubjectFacts: the subject's NOTABLE_FACTS document (session_id, user_id, kind granted above;
 -- id because a Prisma model read always selects the primary key — measured: denied without it)
-GRANT SELECT (id, doc) ON ai_memory TO mwf_job;
+GRANT SELECT (id, doc) ON ai_memory TO job_access;
 -- mwf_ops: the Neural Monitor dashboard (routes/brain.ts, directly or through the stage shim) reads it.
-GRANT SELECT ON ai_memory TO mwf_ops;
+GRANT SELECT ON ai_memory TO ops_access;
 
 CREATE TABLE mood_reading (
     id uuid7 NOT NULL DEFAULT uuidv7() PRIMARY KEY,
@@ -1508,13 +1524,13 @@ COMMENT ON COLUMN mood_reading.session_id IS 'The session of every participant t
 COMMENT ON COLUMN mood_reading.user_id IS 'A participant of the row''s session, by user (work-k5fk.3): (session_id, user_id) references participant (session_id, user_id).';
 COMMENT ON COLUMN mood_reading.context IS 'encrypted (participant): the participant''s optional note on the reading (max 500).';
 -- mwf_app: the caller's own mood check-ins (controllers/emotions.ts, user-settings.ts).
-GRANT SELECT ON mood_reading TO mwf_app;
-GRANT INSERT (session_id, user_id, intensity, context, recorded_at, created_at) ON mood_reading TO mwf_app;
--- mwf_job: anonymize_*: a private-row delete (steps 3–5) and the filter columns it reads
-GRANT SELECT (session_id, user_id) ON mood_reading TO mwf_job;
-GRANT DELETE ON mood_reading TO mwf_job;
+GRANT SELECT ON mood_reading TO app_access;
+GRANT INSERT (session_id, user_id, intensity, context, recorded_at, created_at) ON mood_reading TO app_access;
+-- mwf_definer: anonymize_*: a private-row delete (steps 3–5) and the filter columns it reads
+GRANT SELECT (session_id, user_id) ON mood_reading TO mwf_definer;
+GRANT DELETE ON mood_reading TO mwf_definer;
 -- mwf_ops: the Neural Monitor dashboard (routes/brain.ts, directly or through the stage shim) reads it.
-GRANT SELECT ON mood_reading TO mwf_ops;
+GRANT SELECT ON mood_reading TO ops_access;
 
 CREATE TABLE regulation_event (
     id uuid7 NOT NULL DEFAULT uuidv7() PRIMARY KEY,
@@ -1533,12 +1549,12 @@ COMMENT ON TABLE regulation_event IS 'A completed emotional-regulation exercise,
 COMMENT ON COLUMN regulation_event.session_id IS 'The session of every participant the row names (work-k5fk.3): each participant reference and each parent it hangs off is keyed with it, so they are all of this one session.';
 COMMENT ON COLUMN regulation_event.user_id IS 'A participant of the row''s session, by user (work-k5fk.3): (session_id, user_id) references participant (session_id, user_id).';
 -- mwf_app: the caller's own completed regulation exercise (controllers/emotions.ts).
-GRANT SELECT ON regulation_event TO mwf_app;
+GRANT SELECT ON regulation_event TO app_access;
 GRANT INSERT (session_id, user_id, type, intensity_before, intensity_after, completed_at, created_at)
-  ON regulation_event TO mwf_app;
--- mwf_job: anonymize_*: a private-row delete (steps 3–5) and the filter columns it reads
-GRANT SELECT (session_id, user_id) ON regulation_event TO mwf_job;
-GRANT DELETE ON regulation_event TO mwf_job;
+  ON regulation_event TO app_access;
+-- mwf_definer: anonymize_*: a private-row delete (steps 3–5) and the filter columns it reads
+GRANT SELECT (session_id, user_id) ON regulation_event TO mwf_definer;
+GRANT DELETE ON regulation_event TO mwf_definer;
 
 CREATE TABLE invitation (
     id uuid7 NOT NULL DEFAULT uuidv7() PRIMARY KEY,
@@ -1574,13 +1590,13 @@ COMMENT ON COLUMN invitation.invitee_name IS 'encrypted (session): the name the 
 COMMENT ON COLUMN invitation.decline_reason IS 'encrypted (session): the invitee''s optional reason for declining, free text.';
 -- mwf_app: the inviter creates it and confirms its message; the INVITEE accepts / declines / expires it and locks it
 -- (FOR UPDATE / FOR SHARE need UPDATE) — FINDING: a write of the inviter's row, a definer function's job later.
-GRANT SELECT ON invitation TO mwf_app;
+GRANT SELECT ON invitation TO app_access;
 GRANT INSERT (session_id, invited_by_user_id, invitee_name, status, expires_at, created_at, updated_at)
-  ON invitation TO mwf_app;
+  ON invitation TO app_access;
 GRANT UPDATE (status, accepted_by_user_id, accepted_at, declined_at, decline_reason, message_confirmed_at, updated_at)
-  ON invitation TO mwf_app;
+  ON invitation TO app_access;
 -- mwf_ops: the Neural Monitor dashboard (routes/brain.ts, directly or through the stage shim) reads it.
-GRANT SELECT (session_id, invited_by_user_id) ON invitation TO mwf_ops;
+GRANT SELECT (session_id, invited_by_user_id) ON invitation TO ops_access;
 
 CREATE TABLE draft (
     id uuid7 NOT NULL DEFAULT uuidv7() PRIMARY KEY,
@@ -1635,16 +1651,16 @@ COMMENT ON COLUMN draft.content IS 'encrypted (participant): the draft text, AI-
 -- mwf_app: the caller's drafts (empathy-store upsertDraft, reconciler/sharing.ts, empathy-draft-save reopen, delete).
 -- id and created_at: ONLY repointInvitationDrafts — FINDING: at accept the INVITEE's request deletes and re-inserts the
 -- INVITER's pre-join drafts (same id, timestamps) to re-point them at the new participant.
-GRANT SELECT ON draft TO mwf_app;
+GRANT SELECT ON draft TO app_access;
 GRANT INSERT (id, session_id, user_id, kind, about_user_id, invitation_id, attempt_id, share_offer_id, content,
-              ready_to_share, version, reopened_at, created_at, updated_at) ON draft TO mwf_app;
-GRANT UPDATE (content, ready_to_share, version, reopened_at) ON draft TO mwf_app;
+              ready_to_share, version, reopened_at, created_at, updated_at) ON draft TO app_access;
+GRANT UPDATE (content, ready_to_share, version, reopened_at) ON draft TO app_access;
 -- UPDATE holds without updated_at only because every draft update is raw SQL (upsertDraft's
 -- ON CONFLICT DO UPDATE, the reopen stamp; touch_updated_at sets it): a Prisma update would send it.
-GRANT DELETE ON draft TO mwf_app;
--- mwf_job: anonymize_*: a private-row delete (steps 3–5) and the filter columns it reads
-GRANT SELECT (session_id, user_id) ON draft TO mwf_job;
-GRANT DELETE ON draft TO mwf_job;
+GRANT DELETE ON draft TO app_access;
+-- mwf_definer: anonymize_*: a private-row delete (steps 3–5) and the filter columns it reads
+GRANT SELECT (session_id, user_id) ON draft TO mwf_definer;
+GRANT DELETE ON draft TO mwf_definer;
 
 CREATE TABLE session_key (
     id uuid7 NOT NULL DEFAULT uuidv7() PRIMARY KEY,
@@ -1684,9 +1700,9 @@ COMMENT ON COLUMN participant_key.key_id IS 'The id of the KMS key (the KEK) tha
 COMMENT ON COLUMN participant_key.wrapped_dek IS 'The AES-256 data key (DEK) for this owner''s encrypted columns, encrypted (wrapped) by the KMS key named in key_id. Never stored unwrapped.';
 COMMENT ON COLUMN participant_key.destroyed_at IS 'The crypto-shred: once set, the wrapped DEK is never unwrapped again, so every value under it is unreadable.';
 -- mwf_app: none. Key material is never the request path's (work-k5fk.10.2; target-roles negative test).
--- mwf_job: anonymize step 7: the crypto-shred
-GRANT SELECT (session_id, user_id, destroyed_at) ON participant_key TO mwf_job;
-GRANT UPDATE (destroyed_at) ON participant_key TO mwf_job;
+-- mwf_definer: anonymize step 7: the crypto-shred
+GRANT SELECT (session_id, user_id, destroyed_at) ON participant_key TO mwf_definer;
+GRANT UPDATE (destroyed_at) ON participant_key TO mwf_definer;
 
 CREATE TABLE empathy_review (
     id uuid7 NOT NULL DEFAULT uuidv7() PRIMARY KEY,
@@ -1716,11 +1732,11 @@ COMMENT ON COLUMN empathy_review.reviewer_user_id IS 'A participant of the row''
 COMMENT ON COLUMN empathy_review.feedback_sent_at IS 'When the reviewer explicitly sent the feedback; feedback is set only with it.';
 COMMENT ON COLUMN empathy_review.feedback IS 'encrypted (session): the subject''s feedback on the attempt, sent explicitly (max 500).';
 -- mwf_app: the reviewer's own review of the partner's attempt (empathy-store recordReview).
-GRANT SELECT ON empathy_review TO mwf_app;
-GRANT INSERT (attempt_id, session_id, reviewer_user_id, validated, feedback, feedback_sent_at, created_at, updated_at) ON empathy_review TO mwf_app;
-GRANT UPDATE (validated, feedback, feedback_sent_at, updated_at) ON empathy_review TO mwf_app;
--- mwf_job: T-consent-owner (owner of a proposal / share offer / review target), fired by need_revoke_share
-GRANT SELECT (id, session_id, reviewer_user_id) ON empathy_review TO mwf_job;
+GRANT SELECT ON empathy_review TO app_access;
+GRANT INSERT (attempt_id, session_id, reviewer_user_id, validated, feedback, feedback_sent_at, created_at, updated_at) ON empathy_review TO app_access;
+GRANT UPDATE (validated, feedback, feedback_sent_at, updated_at) ON empathy_review TO app_access;
+-- mwf_definer: T-consent-owner (owner of a proposal / share offer / review target), fired by need_revoke_share
+GRANT SELECT (id, session_id, reviewer_user_id) ON empathy_review TO mwf_definer;
 
 CREATE TABLE reconciler_guidance (
     result_id uuid7 NOT NULL PRIMARY KEY REFERENCES reconciler_result ON DELETE CASCADE,
@@ -1748,12 +1764,12 @@ COMMENT ON COLUMN reconciler_guidance.subject_user_id IS 'A participant of the r
 COMMENT ON COLUMN reconciler_guidance.area_hint IS 'encrypted (participant): a coarse area for the author to explore (one of six code phrases in generateAbstractGuidance).';
 COMMENT ON COLUMN reconciler_guidance.prompt_seed IS 'encrypted (participant): the refinement prompt''s seed phrase (one of three code phrases, by guidance_type).';
 -- mwf_app: read only (the author's abstract hints); written by the job.
-GRANT SELECT ON reconciler_guidance TO mwf_app;
+GRANT SELECT ON reconciler_guidance TO app_access;
 -- mwf_job [TS-10]: persistAnalysis: the author-visible abstract hints of a result (P3 D8a split)
 GRANT INSERT (result_id, session_id, author_user_id, subject_user_id, area_hint, guidance_type, prompt_seed)
-  ON reconciler_guidance TO mwf_job;
+  ON reconciler_guidance TO job_access;
 -- mwf_job [TS-10 I4]: analysis.ts guidanceFor: the guidance of a cached result
-GRANT SELECT (result_id, area_hint, guidance_type, prompt_seed) ON reconciler_guidance TO mwf_job;
+GRANT SELECT (result_id, area_hint, guidance_type, prompt_seed) ON reconciler_guidance TO job_access;
 
 CREATE TABLE consent (
     id uuid7 NOT NULL DEFAULT uuidv7() PRIMARY KEY,
@@ -1810,13 +1826,13 @@ COMMENT ON COLUMN consent.user_id IS 'A participant of the row''s session, by us
 COMMENT ON COLUMN consent.requested_by_user_id IS 'A participant of the row''s session, by user (work-k5fk.3): (session_id, requested_by_user_id) references participant (session_id, user_id).';
 COMMENT ON COLUMN consent.target_kind IS 'Generated from which arc column is set.';
 -- mwf_app: the caller's own decisions — on their attempt, a review, a share offer, a need — and their revocation.
-GRANT SELECT ON consent TO mwf_app;
+GRANT SELECT ON consent TO app_access;
 GRANT INSERT (session_id, user_id, requested_by_user_id, empathy_attempt_id, need_id, share_offer_id, review_id,
-              decision, decided_at, created_at, updated_at) ON consent TO mwf_app;
-GRANT UPDATE (decision, decided_at, revoked_at, updated_at) ON consent TO mwf_app;
--- mwf_job: need_share (the owner's GRANTED consent), need_revoke_share (→ REVOKED)
-GRANT SELECT (need_id, session_id, user_id, decision) ON consent TO mwf_job;
-GRANT UPDATE (decision, revoked_at) ON consent TO mwf_job;
+              decision, decided_at, created_at, updated_at) ON consent TO app_access;
+GRANT UPDATE (decision, decided_at, revoked_at, updated_at) ON consent TO app_access;
+-- mwf_job, mwf_definer: need_share (the owner's GRANTED consent), need_revoke_share (→ REVOKED)
+GRANT SELECT (need_id, session_id, user_id, decision) ON consent TO job_access, mwf_definer;
+GRANT UPDATE (decision, revoked_at) ON consent TO mwf_definer;
 
 CREATE TABLE need_share (
     need_id uuid7 NOT NULL PRIMARY KEY REFERENCES need ON DELETE RESTRICT,
@@ -1847,11 +1863,11 @@ COMMENT ON COLUMN need_share.session_id IS 'The owner''s session, copied by app.
 COMMENT ON COLUMN need_share.category IS 'The need''s category, copied at share time: the partner sees the category, never need.label.';
 COMMENT ON COLUMN need_share.shared_text IS 'encrypted (session): the heat-removed sentence the partner sees (one short first-person sentence written by the job, or a fixed per-category fallback).';
 -- mwf_app: read only (v_need_shared and the tending reads); app.need_share / app.need_revoke_share are the writers.
-GRANT SELECT ON need_share TO mwf_app;
--- mwf_job: need_share (the only writer), need_revoke_share, anonymize step 3 (shared needs survive)
-GRANT SELECT (need_id, revoked_at) ON need_share TO mwf_job;
-GRANT INSERT (need_id, session_id, user_id, category, shared_text) ON need_share TO mwf_job;
-GRANT UPDATE (revoked_at) ON need_share TO mwf_job;
+GRANT SELECT ON need_share TO app_access;
+-- mwf_job, mwf_definer: need_share (the only writer), need_revoke_share, anonymize step 3 (shared needs survive)
+GRANT SELECT (need_id, revoked_at) ON need_share TO job_access, mwf_definer;
+GRANT INSERT (need_id, session_id, user_id, category, shared_text) ON need_share TO mwf_definer;
+GRANT UPDATE (revoked_at) ON need_share TO mwf_definer;
 
 CREATE TABLE need_disposition (
     need_id uuid7 NOT NULL REFERENCES need_share ON DELETE CASCADE,
@@ -1876,13 +1892,13 @@ COMMENT ON COLUMN need_disposition.user_id IS 'A participant of the row''s sessi
 COMMENT ON COLUMN need_disposition.is_current IS 'The need the walkthrough is on (at most one per participant).';
 COMMENT ON COLUMN need_disposition.note IS 'encrypted (participant): a note on the disposition; no writer sets it today.';
 -- mwf_app: the caller's Stage 4 walkthrough dispositions (stage4-walkthrough.ts), including un-declining (DELETE).
-GRANT SELECT ON need_disposition TO mwf_app;
-GRANT INSERT (session_id, user_id, need_id, status, is_current, created_at, updated_at) ON need_disposition TO mwf_app;
-GRANT UPDATE (status, is_current, updated_at) ON need_disposition TO mwf_app;
-GRANT DELETE ON need_disposition TO mwf_app;
--- mwf_job: anonymize_*: a private-row delete (steps 3–5) and the filter columns it reads
-GRANT SELECT (session_id, user_id) ON need_disposition TO mwf_job;
-GRANT DELETE ON need_disposition TO mwf_job;
+GRANT SELECT ON need_disposition TO app_access;
+GRANT INSERT (session_id, user_id, need_id, status, is_current, created_at, updated_at) ON need_disposition TO app_access;
+GRANT UPDATE (status, is_current, updated_at) ON need_disposition TO app_access;
+GRANT DELETE ON need_disposition TO app_access;
+-- mwf_definer: anonymize_*: a private-row delete (steps 3–5) and the filter columns it reads
+GRANT SELECT (session_id, user_id) ON need_disposition TO mwf_definer;
+GRANT DELETE ON need_disposition TO mwf_definer;
 
 CREATE TABLE proposal_need (
     proposal_id uuid7 NOT NULL REFERENCES proposal ON DELETE CASCADE,
@@ -1899,9 +1915,9 @@ CREATE INDEX ON proposal_need (need_id);
 COMMENT ON TABLE proposal_need IS 'Which shared needs a proposal addresses.';
 COMMENT ON COLUMN proposal_need.session_id IS 'The session of every participant the row names (work-k5fk.3): each participant reference and each parent it hangs off is keyed with it, so they are all of this one session.';
 -- mwf_app: setProposalNeeds re-points a proposal's needs (stage4-store.ts).
-GRANT SELECT ON proposal_need TO mwf_app;
-GRANT INSERT (proposal_id, need_id, session_id, created_at) ON proposal_need TO mwf_app;
-GRANT DELETE ON proposal_need TO mwf_app;
+GRANT SELECT ON proposal_need TO app_access;
+GRANT INSERT (proposal_id, need_id, session_id, created_at) ON proposal_need TO app_access;
+GRANT DELETE ON proposal_need TO app_access;
 
 CREATE TABLE proposal_choice (
     proposal_id uuid7 NOT NULL REFERENCES proposal ON DELETE CASCADE,
@@ -1924,15 +1940,15 @@ COMMENT ON COLUMN proposal_choice.user_id IS 'A participant of the row''s sessio
 COMMENT ON COLUMN proposal_choice.note IS 'encrypted (session): the participant''s note on their choice (route max 1000), or their chat message when the choice was inferred.';
 -- mwf_app: the caller's own choice (stage4-store upsertChoice). created_at in UPDATE: upsertChoice's
 -- ON CONFLICT DO UPDATE re-stamps it.
-GRANT SELECT ON proposal_choice TO mwf_app;
-GRANT INSERT (proposal_id, session_id, user_id, decision, note, created_at, updated_at) ON proposal_choice TO mwf_app;
-GRANT UPDATE (decision, note, created_at) ON proposal_choice TO mwf_app;
+GRANT SELECT ON proposal_choice TO app_access;
+GRANT INSERT (proposal_id, session_id, user_id, decision, note, created_at, updated_at) ON proposal_choice TO app_access;
+GRANT UPDATE (decision, note, created_at) ON proposal_choice TO app_access;
 -- No DELETE: withdrawChoice (stage4-store.ts) has no caller (review round 1, M4).
--- mwf_job: anonymize_*: a private-row delete (steps 3–5) and the filter columns it reads
-GRANT SELECT (session_id, user_id) ON proposal_choice TO mwf_job;
-GRANT DELETE ON proposal_choice TO mwf_job;
+-- mwf_definer: anonymize_*: a private-row delete (steps 3–5) and the filter columns it reads
+GRANT SELECT (session_id, user_id) ON proposal_choice TO mwf_definer;
+GRANT DELETE ON proposal_choice TO mwf_definer;
 -- mwf_job [TS-11]: T-agreement-parties: every party WILLING on the proposal
-GRANT SELECT (proposal_id, session_id, user_id, decision) ON proposal_choice TO mwf_job;
+GRANT SELECT (proposal_id, session_id, user_id, decision) ON proposal_choice TO job_access;
 
 CREATE TABLE proposal_revision (
     id uuid7 NOT NULL DEFAULT uuidv7() PRIMARY KEY,
@@ -1962,11 +1978,11 @@ COMMENT ON COLUMN proposal_revision.reason IS 'An app marker or NULL; never user
 COMMENT ON COLUMN proposal_revision.before IS 'encrypted (session): jsonb envelope {"$enc": ...}: the proposal fields before the change.';
 COMMENT ON COLUMN proposal_revision.after IS 'encrypted (session): jsonb envelope {"$enc": ...}: the proposal fields after the change, and any text explaining it.';
 -- mwf_app: the audit row of a caller's edit (controllers/stage4.ts, stage4-capture, stage4-subchat). Append-only.
-GRANT SELECT ON proposal_revision TO mwf_app;
+GRANT SELECT ON proposal_revision TO app_access;
 GRANT INSERT (proposal_id, session_id, actor_user_id, action, before, after, reason, created_at)
-  ON proposal_revision TO mwf_app;
+  ON proposal_revision TO app_access;
 -- mwf_job [TS-11]: repair-store: the conversion's audit row (append-only; no message id, lineage in before/after)
-GRANT INSERT (proposal_id, session_id, actor_user_id, action, before, after, reason) ON proposal_revision TO mwf_job;
+GRANT INSERT (proposal_id, session_id, actor_user_id, action, before, after, reason) ON proposal_revision TO job_access;
 
 CREATE TABLE agreement (
     id uuid7 NOT NULL DEFAULT uuidv7() PRIMARY KEY,
@@ -1995,14 +2011,14 @@ COMMENT ON COLUMN agreement.description IS 'encrypted (session): the proposal''s
 COMMENT ON COLUMN agreement.duration IS 'encrypted (session): the proposal''s free-text duration, copied at conversion. NOT a true interval.';
 COMMENT ON COLUMN agreement.measure_of_success IS 'encrypted (session): the proposal''s measure of success, copied at conversion.';
 -- mwf_app: read only; agreements are created and moved by the job.
-GRANT SELECT ON agreement TO mwf_app;
+GRANT SELECT ON agreement TO app_access;
 -- mwf_job [TS-11]: repair-store createAgreementsAsJob: the agreement row (snapshot of the proposal) and its id (RETURNING id)
-GRANT INSERT (session_id, proposal_id, type, status, description, duration, measure_of_success, follow_up_at) ON agreement TO mwf_job;
+GRANT INSERT (session_id, proposal_id, type, status, description, duration, measure_of_success, follow_up_at) ON agreement TO job_access;
 -- mwf_job [TS-11]: repair-store: RETURNING id; T-agreement-parties (invoker = mwf_job) reads the agreement's session, proposal and instant;
 -- tending: the agreement a follow-up is about (status moves)
-GRANT SELECT (id, session_id, proposal_id, status, created_at) ON agreement TO mwf_job;
+GRANT SELECT (id, session_id, proposal_id, status, created_at) ON agreement TO job_access;
 -- mwf_job [TS-11]: tending resolve/closure paths: an agreement moves AGREED → IN_PROGRESS → COMPLETED | ABANDONED
-GRANT UPDATE (status, completed_at) ON agreement TO mwf_job;
+GRANT UPDATE (status, completed_at) ON agreement TO job_access;
 
 CREATE TABLE agreement_party (
     agreement_id uuid7 NOT NULL REFERENCES agreement ON DELETE CASCADE,
@@ -2021,11 +2037,11 @@ COMMENT ON TABLE agreement_party IS 'Who is party to an agreement.';
 COMMENT ON COLUMN agreement_party.session_id IS 'The session of every participant the row names (work-k5fk.3): each participant reference and each parent it hangs off is keyed with it, so they are all of this one session.';
 COMMENT ON COLUMN agreement_party.user_id IS 'A participant of the row''s session, by user (work-k5fk.3): (session_id, user_id) references participant (session_id, user_id).';
 -- mwf_app: read only (an agreement's parties).
-GRANT SELECT ON agreement_party TO mwf_app;
+GRANT SELECT ON agreement_party TO app_access;
 -- mwf_job [TS-11]: repair-store createAgreementsAsJob: one party row per present human
-GRANT INSERT (agreement_id, session_id, user_id, agreed_at) ON agreement_party TO mwf_job;
+GRANT INSERT (agreement_id, session_id, user_id, agreed_at) ON agreement_party TO job_access;
 -- mwf_job [TS-11]: T-agreement-parties (deferred, invoker = mwf_job): the party set
-GRANT SELECT (agreement_id, session_id, user_id) ON agreement_party TO mwf_job;
+GRANT SELECT (agreement_id, session_id, user_id) ON agreement_party TO job_access;
 
 CREATE TABLE session_closure (
     session_id uuid7 NOT NULL PRIMARY KEY REFERENCES session ON DELETE CASCADE,
@@ -2047,10 +2063,10 @@ COMMENT ON TABLE session_closure IS 'How the repair stage of a session ended, on
 COMMENT ON COLUMN session_closure.closed_by_user_id IS 'A participant of the row''s session, by user (work-k5fk.3): (session_id, closed_by_user_id) references participant (session_id, user_id).';
 COMMENT ON COLUMN session_closure.summary IS 'encrypted (session): how the repair stage ended, from the participant (max 2000) or a code template.';
 -- mwf_app: read only; the closure is the job's.
-GRANT SELECT ON session_closure TO mwf_app;
+GRANT SELECT ON session_closure TO app_access;
 -- mwf_job [TS-11]: repair-store closeSessionAsJob: how the repair stage ended (the three id arrays are v_session_closure_items)
 GRANT INSERT (session_id, kind, reason, summary, closed_by_user_id, check_in_at, closed_at)
-  ON session_closure TO mwf_job;
+  ON session_closure TO job_access;
 
 CREATE TABLE follow_up (
     id uuid7 NOT NULL DEFAULT uuidv7() PRIMARY KEY,
@@ -2088,20 +2104,20 @@ COMMENT ON COLUMN follow_up.proposal_id IS 'An individual commitment''s proposal
 COMMENT ON COLUMN follow_up.response_deadline_at IS 'When an OPEN follow-up stops accepting check-ins.';
 COMMENT ON COLUMN follow_up.summary IS 'encrypted (session): a code-templated line naming what is checked on, with the agreement or commitment text.';
 -- mwf_app: the owner's share opt-in and a user-initiated re-entry (tending.service.ts); scheduling and cycle moves are the job's.
-GRANT SELECT ON follow_up TO mwf_app;
+GRANT SELECT ON follow_up TO app_access;
 GRANT INSERT (session_id, type, scope, owner_user_id, opted_in_shared, status, opened_at, summary, created_at, updated_at)
-  ON follow_up TO mwf_app;
-GRANT UPDATE (opted_in_shared, updated_at) ON follow_up TO mwf_app;
--- mwf_job: anonymize_user_in_session step 3: unshared choices (choices_shared milestone), INDIVIDUAL check-ins
-GRANT SELECT (id, scope) ON follow_up TO mwf_job;
+  ON follow_up TO app_access;
+GRANT UPDATE (opted_in_shared, updated_at) ON follow_up TO app_access;
+-- mwf_job, mwf_definer: anonymize_user_in_session step 3: unshared choices (choices_shared milestone), INDIVIDUAL check-ins
+GRANT SELECT (id, scope) ON follow_up TO job_access, mwf_definer;
 -- mwf_job [TS-11]: tending scheduleFollowUpsAsJob: SHARED agreements and INDIVIDUAL commitments scheduled at closure, and the
 -- next round a check-in schedules (EXTEND / PARTIAL_CLOSURE continuing: a follow-up is one cycle) (RETURNING id: SELECT id granted above)
 GRANT INSERT (session_id, agreement_id, proposal_id, type, scope, owner_user_id, opted_in_shared, status, scheduled_for,
-              response_deadline_at, summary) ON follow_up TO mwf_job;
+              response_deadline_at, summary) ON follow_up TO job_access;
 -- mwf_job [TS-11]: open-due-tending-entries (runs as the job): find due SCHEDULED rows (sql_follow_up_due), whom to notify, the cycle columns it moves
-GRANT SELECT (session_id, agreement_id, type, owner_user_id, status, scheduled_for, response_deadline_at) ON follow_up TO mwf_job;
+GRANT SELECT (session_id, agreement_id, type, owner_user_id, status, scheduled_for, response_deadline_at) ON follow_up TO job_access;
 -- mwf_job [TS-11]: open-due / cycle resolution: SCHEDULED → OPEN (opened_at, the response deadline), OPEN/PARTIAL → COMPLETED | EXPIRED
-GRANT UPDATE (status, opened_at, completed_at, response_deadline_at) ON follow_up TO mwf_job;
+GRANT UPDATE (status, opened_at, completed_at, response_deadline_at) ON follow_up TO job_access;
 
 CREATE TABLE follow_up_checkin (
     id uuid7 NOT NULL DEFAULT uuidv7() PRIMARY KEY,
@@ -2130,13 +2146,13 @@ COMMENT ON COLUMN follow_up_checkin.user_id IS 'A participant of the row''s sess
 COMMENT ON COLUMN follow_up_checkin.reflection_summary IS 'encrypted (session): the participant''s reflection at the check-in (max 4000).';
 COMMENT ON COLUMN follow_up_checkin.payload IS 'encrypted (session): jsonb envelope {"$enc": ...}: the structured answers (FollowUpCheckinPayload).';
 -- mwf_app: the caller's own check-in (tending insertCheckin). Append-only.
-GRANT SELECT ON follow_up_checkin TO mwf_app;
+GRANT SELECT ON follow_up_checkin TO app_access;
 GRANT INSERT (follow_up_id, session_id, user_id, next_action, continue_choice, reflection_summary, payload,
               submitted_at, created_at)
-  ON follow_up_checkin TO mwf_app;
--- mwf_job: anonymize_*: a private-row delete (steps 3–5) and the filter columns it reads
-GRANT SELECT (follow_up_id, session_id, user_id) ON follow_up_checkin TO mwf_job;
-GRANT DELETE ON follow_up_checkin TO mwf_job;
+  ON follow_up_checkin TO app_access;
+-- mwf_job, mwf_definer: anonymize_*: a private-row delete (steps 3–5) and the filter columns it reads
+GRANT SELECT (follow_up_id, session_id, user_id) ON follow_up_checkin TO job_access, mwf_definer;
+GRANT DELETE ON follow_up_checkin TO mwf_definer;
 
 CREATE TABLE follow_up_note (
     id uuid7 NOT NULL DEFAULT uuidv7() PRIMARY KEY,
@@ -2158,12 +2174,12 @@ COMMENT ON COLUMN follow_up_note.user_id IS 'A participant of the row''s session
 COMMENT ON COLUMN follow_up_note.carried_into_checkin_id IS 'The check-in this note was copied into (payload.carriedNotes).';
 COMMENT ON COLUMN follow_up_note.content IS 'encrypted (participant): the note text (max 4000).';
 -- mwf_app: the caller's between-period notes and their carry-forward into a check-in.
-GRANT SELECT ON follow_up_note TO mwf_app;
-GRANT INSERT (session_id, user_id, content, carry_forward, created_at, updated_at) ON follow_up_note TO mwf_app;
-GRANT UPDATE (carry_forward, carried_into_checkin_id, updated_at) ON follow_up_note TO mwf_app;
--- mwf_job: anonymize_*: a private-row delete (steps 3–5) and the filter columns it reads
-GRANT SELECT (session_id, user_id) ON follow_up_note TO mwf_job;
-GRANT DELETE ON follow_up_note TO mwf_job;
+GRANT SELECT ON follow_up_note TO app_access;
+GRANT INSERT (session_id, user_id, content, carry_forward, created_at, updated_at) ON follow_up_note TO app_access;
+GRANT UPDATE (carry_forward, carried_into_checkin_id, updated_at) ON follow_up_note TO app_access;
+-- mwf_definer: anonymize_*: a private-row delete (steps 3–5) and the filter columns it reads
+GRANT SELECT (session_id, user_id) ON follow_up_note TO mwf_definer;
+GRANT DELETE ON follow_up_note TO mwf_definer;
 
 CREATE TABLE reminder (
     id uuid7 NOT NULL DEFAULT uuidv7() PRIMARY KEY,
@@ -2184,14 +2200,14 @@ COMMENT ON TABLE reminder IS 'A scheduled nudge for one user, optionally tied to
 COMMENT ON COLUMN reminder.cadence IS 'How often the reminder repeats; NULL and ONCE are one-shot.';
 COMMENT ON COLUMN reminder.note IS 'encrypted (user): the reminder''s note (max 1000); the app sends a fixed label today.';
 -- mwf_app: the caller's own reminder at check-in; delivery and the next instant are the job's.
-GRANT SELECT ON reminder TO mwf_app;
-GRANT INSERT (user_id, follow_up_id, scope, remind_at, cadence, note, status, created_at, updated_at) ON reminder TO mwf_app;
--- mwf_job: anonymize_*: a private-row delete (steps 3–5) and the filter columns it reads
-GRANT SELECT (user_id) ON reminder TO mwf_job;
-GRANT DELETE ON reminder TO mwf_job;
+GRANT SELECT ON reminder TO app_access;
+GRANT INSERT (user_id, follow_up_id, scope, remind_at, cadence, note, status, created_at, updated_at) ON reminder TO app_access;
+-- mwf_job, mwf_definer: anonymize_*: a private-row delete (steps 3–5) and the filter columns it reads
+GRANT SELECT (user_id) ON reminder TO job_access, mwf_definer;
+GRANT DELETE ON reminder TO job_access, mwf_definer;
 -- mwf_job [TS-11]: processDueTendingReminders (job): due SCHEDULED reminders (sql_reminder_due) → DELIVERED, or the next remind_at for a cadence
-GRANT SELECT (id, follow_up_id, scope, remind_at, cadence, status) ON reminder TO mwf_job;
-GRANT UPDATE (status, remind_at) ON reminder TO mwf_job;
+GRANT SELECT (id, follow_up_id, scope, remind_at, cadence, status) ON reminder TO job_access;
+GRANT UPDATE (status, remind_at) ON reminder TO job_access;
 
 CREATE TABLE reflection (
     id uuid7 NOT NULL DEFAULT uuidv7() PRIMARY KEY,
@@ -2225,15 +2241,15 @@ COMMENT ON COLUMN reflection.summary_doc IS 'encrypted (user): jsonb envelope {"
 COMMENT ON COLUMN reflection.context_snapshot IS 'encrypted (user): the AI''s 2-3 sentence context summary captured when the reflection started a session.';
 -- mwf_app: the caller's Inner Thoughts reflections (controllers/inner-work.ts, distillation, summarizer, classifier, and the
 -- link to a session at createSession).
-GRANT SELECT ON reflection TO mwf_app;
-GRANT INSERT (user_id, title, status, linked_session_id, linked_at, created_at, updated_at) ON reflection TO mwf_app;
+GRANT SELECT ON reflection TO app_access;
+GRANT INSERT (user_id, title, status, linked_session_id, linked_at, created_at, updated_at) ON reflection TO app_access;
 GRANT UPDATE (title, summary, theme, status, linked_session_id, linked_at, context_snapshot, summary_doc, distilled_at, updated_at)
-  ON reflection TO mwf_app;
--- mwf_job: anonymize_*: a private-row delete (steps 3–5) and the filter columns it reads
-GRANT SELECT (id, user_id) ON reflection TO mwf_job;
-GRANT DELETE ON reflection TO mwf_job;
+  ON reflection TO app_access;
+-- mwf_job, mwf_definer: anonymize_*: a private-row delete (steps 3–5) and the filter columns it reads
+GRANT SELECT (id, user_id) ON reflection TO job_access, mwf_definer;
+GRANT DELETE ON reflection TO mwf_definer;
 -- mwf_ops: the Neural Monitor dashboard (routes/brain.ts, directly or through the stage shim) reads it.
-GRANT SELECT ON reflection TO mwf_ops;
+GRANT SELECT ON reflection TO ops_access;
 
 CREATE TABLE reflection_message (
     id uuid7 NOT NULL DEFAULT uuidv7() PRIMARY KEY,
@@ -2246,10 +2262,10 @@ CREATE INDEX ON reflection_message (reflection_id, created_at);
 COMMENT ON TABLE reflection_message IS 'One line of a reflection thread.';
 COMMENT ON COLUMN reflection_message.content IS 'encrypted (user): the line''s text (max 10000 for a user turn).';
 -- mwf_app: the turns of the caller's reflection (both the user's and the AI reply, written on the request path). Append-only.
-GRANT SELECT ON reflection_message TO mwf_app;
-GRANT INSERT (reflection_id, role, content, created_at) ON reflection_message TO mwf_app;
+GRANT SELECT ON reflection_message TO app_access;
+GRANT INSERT (reflection_id, role, content, created_at) ON reflection_message TO app_access;
 -- mwf_ops: the Neural Monitor dashboard (routes/brain.ts, directly or through the stage shim) reads it.
-GRANT SELECT ON reflection_message TO mwf_ops;
+GRANT SELECT ON reflection_message TO ops_access;
 
 CREATE TABLE takeaway (
     id uuid7 NOT NULL DEFAULT uuidv7() PRIMARY KEY,
@@ -2269,10 +2285,10 @@ COMMENT ON COLUMN takeaway.position IS 'The user''s order within the reflection.
 COMMENT ON COLUMN takeaway.theme IS 'Free LLM text, optional; not a taxonomy.';
 COMMENT ON COLUMN takeaway.content IS 'encrypted (user): one sentence: the insight, action item or intention (AI-distilled or edited by the user).';
 -- mwf_app: distillation replaces the AI takeaways; the caller edits, resolves and deletes their own.
-GRANT SELECT ON takeaway TO mwf_app;
-GRANT INSERT (reflection_id, content, theme, source, type, position, created_at, updated_at) ON takeaway TO mwf_app;
-GRANT UPDATE (content, source, resolved_at, updated_at) ON takeaway TO mwf_app;
-GRANT DELETE ON takeaway TO mwf_app;
+GRANT SELECT ON takeaway TO app_access;
+GRANT INSERT (reflection_id, content, theme, source, type, position, created_at, updated_at) ON takeaway TO app_access;
+GRANT UPDATE (content, source, resolved_at, updated_at) ON takeaway TO app_access;
+GRANT DELETE ON takeaway TO app_access;
 
 CREATE TABLE takeaway_link (
     source_id uuid7 NOT NULL REFERENCES takeaway ON DELETE CASCADE,
@@ -2288,9 +2304,9 @@ CREATE INDEX ON takeaway_link (target_id);
 COMMENT ON TABLE takeaway_link IS 'A directed link between two takeaways, by AI similarity or by the user.';
 COMMENT ON COLUMN takeaway_link.similarity IS 'AI_SEMANTIC links: the similarity score that made the link.';
 -- mwf_app: the caller's manual links between their takeaways.
-GRANT SELECT ON takeaway_link TO mwf_app;
-GRANT INSERT (source_id, target_id, link_type, created_at) ON takeaway_link TO mwf_app;
-GRANT DELETE ON takeaway_link TO mwf_app;
+GRANT SELECT ON takeaway_link TO app_access;
+GRANT INSERT (source_id, target_id, link_type, created_at) ON takeaway_link TO app_access;
+GRANT DELETE ON takeaway_link TO app_access;
 
 CREATE TABLE user_device (
     id uuid7 NOT NULL DEFAULT uuidv7() PRIMARY KEY,
@@ -2309,18 +2325,18 @@ COMMENT ON TABLE user_device IS 'A device a user registered: its push token and 
 COMMENT ON COLUMN user_device.push_token IS 'The Expo push token of this install; NULL until registered.';
 -- mwf_app: the caller's push token registration / clearing and biometric setting (user-settings.ts); other users' tokens are
 -- read by the job (push.ts).
-GRANT SELECT ON user_device TO mwf_app;
+GRANT SELECT ON user_device TO app_access;
 GRANT INSERT (user_id, push_token, platform, last_seen_at, biometric_enabled, biometric_enrolled_at, created_at, updated_at)
-  ON user_device TO mwf_app;
-GRANT UPDATE (push_token, platform, last_seen_at, biometric_enabled, biometric_enrolled_at, updated_at) ON user_device TO mwf_app;
--- mwf_job: anonymize_*: a private-row delete (steps 3–5) and the filter columns it reads
-GRANT SELECT (user_id) ON user_device TO mwf_job;
-GRANT DELETE ON user_device TO mwf_job;
+  ON user_device TO app_access;
+GRANT UPDATE (push_token, platform, last_seen_at, biometric_enabled, biometric_enrolled_at, updated_at) ON user_device TO app_access;
+-- mwf_definer: anonymize_*: a private-row delete (steps 3–5) and the filter columns it reads
+GRANT SELECT (user_id) ON user_device TO mwf_definer;
+GRANT DELETE ON user_device TO mwf_definer;
 -- mwf_job [TS-12]: push.ts sendPushNotification: the recipient's devices — another user than the caller, so the
 -- job reads them (user_device RLS is user_id = me); newest device first (last_seen_at)
-GRANT SELECT (user_id, push_token, last_seen_at) ON user_device TO mwf_job;
+GRANT SELECT (user_id, push_token, last_seen_at) ON user_device TO job_access;
 -- mwf_job [TS-12]: push.ts: a token Expo reports as unregistered is cleared (WHERE user_id = … AND push_token = …)
-GRANT UPDATE (push_token) ON user_device TO mwf_job;
+GRANT UPDATE (push_token) ON user_device TO job_access;
 
 CREATE TABLE user_preferences (
     user_id uuid7 NOT NULL PRIMARY KEY REFERENCES "user" ON DELETE RESTRICT,
@@ -2337,14 +2353,14 @@ COMMENT ON TABLE user_preferences IS 'The user''s preference documents (memory, 
 COMMENT ON COLUMN user_preferences.doc IS 'Plaintext settings (read by SQL jsonb operators); validated by the t_doc_schema trigger against app.json_schema user_preferences.';
 COMMENT ON COLUMN user_preferences.doc_schema_version IS 'The version of the app.json_schema user_preferences document doc conforms to (validated by the t_doc_schema trigger; an unknown version is refused).';
 -- mwf_app: the caller's settings document (user-settings.ts; FOR UPDATE needs UPDATE).
-GRANT SELECT ON user_preferences TO mwf_app;
-GRANT INSERT (user_id, doc) ON user_preferences TO mwf_app;
+GRANT SELECT ON user_preferences TO app_access;
+GRANT INSERT (user_id, doc) ON user_preferences TO app_access;
 -- INSERT holds without the timestamps only because the row is created by raw SQL
 -- (user-settings.ts INSERT … ON CONFLICT DO NOTHING); a Prisma create would send them.
-GRANT UPDATE (doc, updated_at) ON user_preferences TO mwf_app;
--- mwf_job: anonymize_*: a private-row delete (steps 3–5) and the filter columns it reads
-GRANT SELECT (user_id) ON user_preferences TO mwf_job;
-GRANT DELETE ON user_preferences TO mwf_job;
+GRANT UPDATE (doc, updated_at) ON user_preferences TO app_access;
+-- mwf_definer: anonymize_*: a private-row delete (steps 3–5) and the filter columns it reads
+GRANT SELECT (user_id) ON user_preferences TO mwf_definer;
+GRANT DELETE ON user_preferences TO mwf_definer;
 
 CREATE TABLE user_memory (
     id uuid7 NOT NULL DEFAULT uuidv7() PRIMARY KEY,
@@ -2365,15 +2381,15 @@ COMMENT ON COLUMN user_memory.session_id IS 'NULL for a memory that applies ever
 COMMENT ON COLUMN user_memory.content IS 'encrypted (user): the standing instruction (2 to 500 characters).';
 COMMENT ON COLUMN user_memory.suggested_text IS 'encrypted (user): the AI''s original text when the user edited it before approving, or the pre-edit text.';
 -- mwf_app: the caller's memories (controllers/memories.ts, memory-service.ts), including deleting one.
-GRANT SELECT ON user_memory TO mwf_app;
-GRANT INSERT (user_id, session_id, content, category, status, source, suggested_text, created_at, updated_at) ON user_memory TO mwf_app;
-GRANT UPDATE (session_id, content, category, status, source, suggested_text, updated_at) ON user_memory TO mwf_app;
-GRANT DELETE ON user_memory TO mwf_app;
--- mwf_job: anonymize_*: a private-row delete (steps 3–5) and the filter columns it reads
-GRANT SELECT (user_id) ON user_memory TO mwf_job;
-GRANT DELETE ON user_memory TO mwf_job;
+GRANT SELECT ON user_memory TO app_access;
+GRANT INSERT (user_id, session_id, content, category, status, source, suggested_text, created_at, updated_at) ON user_memory TO app_access;
+GRANT UPDATE (session_id, content, category, status, source, suggested_text, updated_at) ON user_memory TO app_access;
+GRANT DELETE ON user_memory TO app_access;
+-- mwf_job, mwf_definer: anonymize_*: a private-row delete (steps 3–5) and the filter columns it reads
+GRANT SELECT (user_id) ON user_memory TO job_access, mwf_definer;
+GRANT DELETE ON user_memory TO job_access, mwf_definer;
 -- mwf_job [TS-12]: session-deletion: the leaver's session-scoped user_memory goes with the leave (DELETE granted above)
-GRANT SELECT (session_id) ON user_memory TO mwf_job;
+GRANT SELECT (session_id) ON user_memory TO job_access;
 
 CREATE TABLE feature_state (
     user_id uuid7 NOT NULL REFERENCES "user" ON DELETE RESTRICT,
@@ -2391,14 +2407,14 @@ COMMENT ON TABLE feature_state IS 'One document per wellbeing feature per user (
 COMMENT ON COLUMN feature_state.feature IS 'Which wellbeing feature this document belongs to.';
 COMMENT ON COLUMN feature_state.doc IS 'encrypted (user): jsonb envelope {"$enc": ...}: the feature''s document (one zod contract per feature, shared/src/dto/feature-state.ts).';
 -- mwf_app: the caller's per-feature state document (feature-state.ts; FOR UPDATE needs UPDATE).
-GRANT SELECT ON feature_state TO mwf_app;
-GRANT INSERT (user_id, feature, doc) ON feature_state TO mwf_app;
+GRANT SELECT ON feature_state TO app_access;
+GRANT INSERT (user_id, feature, doc) ON feature_state TO app_access;
 -- INSERT holds without the timestamps only because the row is created by raw SQL
 -- (feature-state.ts INSERT … ON CONFLICT DO NOTHING); a Prisma create would send them.
-GRANT UPDATE (doc, updated_at) ON feature_state TO mwf_app;
--- mwf_job: anonymize_*: a private-row delete (steps 3–5) and the filter columns it reads
-GRANT SELECT (user_id) ON feature_state TO mwf_job;
-GRANT DELETE ON feature_state TO mwf_job;
+GRANT UPDATE (doc, updated_at) ON feature_state TO app_access;
+-- mwf_definer: anonymize_*: a private-row delete (steps 3–5) and the filter columns it reads
+GRANT SELECT (user_id) ON feature_state TO mwf_definer;
+GRANT DELETE ON feature_state TO mwf_definer;
 
 CREATE TABLE user_key (
     id uuid7 NOT NULL DEFAULT uuidv7() PRIMARY KEY,
@@ -2416,9 +2432,9 @@ COMMENT ON COLUMN user_key.key_id IS 'The id of the KMS key (the KEK) that wrapp
 COMMENT ON COLUMN user_key.wrapped_dek IS 'The AES-256 data key (DEK) for this owner''s encrypted columns, encrypted (wrapped) by the KMS key named in key_id. Never stored unwrapped.';
 COMMENT ON COLUMN user_key.destroyed_at IS 'The crypto-shred: once set, the wrapped DEK is never unwrapped again, so every value under it is unreadable.';
 -- mwf_app: none. Key material is never the request path's (work-k5fk.10.2; target-roles negative test).
--- mwf_job: anonymize step 7: the crypto-shred
-GRANT SELECT (user_id, destroyed_at) ON user_key TO mwf_job;
-GRANT UPDATE (destroyed_at) ON user_key TO mwf_job;
+-- mwf_definer: anonymize step 7: the crypto-shred
+GRANT SELECT (user_id, destroyed_at) ON user_key TO mwf_definer;
+GRANT UPDATE (destroyed_at) ON user_key TO mwf_definer;
 
 CREATE TABLE brain_activity (
     id uuid7 NOT NULL DEFAULT uuidv7() PRIMARY KEY,
@@ -2463,25 +2479,25 @@ COMMENT ON COLUMN brain_activity.turn_id IS 'Correlates the calls of one request
 COMMENT ON COLUMN brain_activity.model IS 'The model id the call used (a Bedrock model id, or the embedding model).';
 COMMENT ON COLUMN brain_activity.cost IS 'Estimated cost of the call in US dollars, from the per-model token prices in lib/bedrock.ts.';
 -- mwf_app: none. LLM prompts and outputs are written by the job and read by mwf_ops only (TS-12).
--- mwf_job: anonymize_*: a private-row delete (steps 3–5) and the filter columns it reads
-GRANT SELECT (session_id, participant_user_id, reflection_id) ON brain_activity TO mwf_job;  -- session_id: R17 (step 4, NULL-participant history)
-GRANT DELETE ON brain_activity TO mwf_job;
+-- mwf_job, mwf_definer: anonymize_*: a private-row delete (steps 3–5) and the filter columns it reads
+GRANT SELECT (session_id, participant_user_id, reflection_id) ON brain_activity TO job_access, mwf_definer;  -- session_id: R17 (step 4, NULL-participant history)
+GRANT DELETE ON brain_activity TO job_access, mwf_definer;
 -- mwf_job [TS-12]: brain-service startActivity: the telemetry row, attributed at capture (participant_user_id,
 -- reflection_id); id / created_at are column defaults returned by RETURNING
 GRANT INSERT (session_id, reflection_id, participant_user_id, turn_id, activity_type, call_type, model, input, metadata,
               status)
-  ON brain_activity TO mwf_job;
+  ON brain_activity TO job_access;
 -- mwf_job [TS-12]: startActivity RETURNING id, created_at; completeActivity / failActivity WHERE id = …;
 -- data-retention's purge and delete windows (WHERE created_at < …; session_id granted above). Never a blob.
-GRANT SELECT (id, created_at) ON brain_activity TO mwf_job;
+GRANT SELECT (id, created_at) ON brain_activity TO job_access;
 -- mwf_job [TS-12]: completeActivity / failActivity: the outcome of the call (metadata replaced, never read back)
 GRANT UPDATE (output, token_count_input, token_count_output, cost, duration_ms, status, completed_at, structured_output, metadata)
-  ON brain_activity TO mwf_job;
+  ON brain_activity TO job_access;
 -- mwf_job [TS-12]: data-retention: the short-retention purge sets the four blobs NULL (spec §1.8)
-GRANT UPDATE (input) ON brain_activity TO mwf_job;
+GRANT UPDATE (input) ON brain_activity TO job_access;
 -- mwf_job [TS-12]: brain-service mergeTurnTrace (ai-orchestrator storeTurnTrace): find the turn's latest
 -- ORCHESTRATED_RESPONSE row and merge the pipeline trace into its metadata (metadata holds
 -- cache/tool/trace telemetry, never a prompt — the prompt is input/output, still unreadable)
-GRANT SELECT (turn_id, call_type, metadata) ON brain_activity TO mwf_job;
+GRANT SELECT (turn_id, call_type, metadata) ON brain_activity TO job_access;
 -- mwf_ops: the Neural Monitor dashboard (routes/brain.ts, directly or through the stage shim) reads it.
-GRANT SELECT ON brain_activity TO mwf_ops;
+GRANT SELECT ON brain_activity TO ops_access;

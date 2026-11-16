@@ -31,6 +31,14 @@ if [ ! -f "$LOCAL/secrets.env" ]; then
   } >"$LOCAL/secrets.env"
   echo "   generated $LOCAL/secrets.env"
 fi
+# work-k5fk.10.4: the mwf_ai / mwf_worker logins (init-db.sh creates them on a fresh volume).
+# Added once, so a secrets.env generated before them gains them.
+for v in AI_DB_PASSWORD WORKER_DB_PASSWORD; do
+  if ! grep -q "^$v=" "$LOCAL/secrets.env"; then
+    printf '%s=%s\n' "$v" "$(openssl rand -hex 18)" >>"$LOCAL/secrets.env"
+    echo "   added $v to $LOCAL/secrets.env"
+  fi
+done
 # A development field-encryption key, so the replica encrypts the target
 # columns as production will (keyless is a pass-through). Added once; a
 # volume built under one key cannot be read with another (reset.sh keeps it).
@@ -56,6 +64,8 @@ MIGRATOR_DB_PASSWORD=$MIGRATOR_DB_PASSWORD
 JOB_DB_PASSWORD=$JOB_DB_PASSWORD
 OPS_DB_PASSWORD=$OPS_DB_PASSWORD
 AUTH_DB_PASSWORD=$AUTH_DB_PASSWORD
+AI_DB_PASSWORD=$AI_DB_PASSWORD
+WORKER_DB_PASSWORD=$WORKER_DB_PASSWORD
 EOF
 # Production's application.env shape, at target-shape ownership (work-k5fk.10.3; production
 # reaches it at the design note row 9c cutover): DATABASE_URL is mwf_migrator, the owner — it runs
@@ -146,7 +156,10 @@ fi
 step "4. db (Postgres 18 + pgvector; init-db.sh on a fresh volume)"
 compose up -d db
 wait_healthy db 40 || die "db did not become healthy"
-echo "   db healthy; roles: $(psql_db -Atc "SELECT string_agg(rolname, ',' ORDER BY rolname) FROM pg_roles WHERE rolname LIKE 'mwf\_%' OR rolname = 'slam_bot_readonly'")"
+echo "   db healthy; roles: $(psql_db -Atc "SELECT string_agg(rolname, ',' ORDER BY rolname) FROM pg_roles WHERE rolname LIKE 'mwf\_%' OR rolname LIKE '%\_access' OR rolname = 'slam_bot_readonly'")"
+if [ "$(psql_db -Atc "SELECT count(*) FROM pg_roles WHERE rolname IN ('app_access', 'job_access', 'mwf_definer', 'mwf_ai')")" != 4 ]; then
+  die "the replica's cluster has no capability roles (a volume initialised before work-k5fk.10.4): run infra/local/reset.sh, then up.sh"
+fi
 
 # --- 4b. role-guard preflight, before migrating (work-k5fk.10.3; deploy.sh does the same) ---
 step "4b. role-guard preflight (every runtime role URL; no switch to skip it)"
