@@ -23,6 +23,10 @@
  *     interim `GRANT mwf_job TO mwf_app WITH SET` (roles.sql, init-db.sh) is
  *     refused the same way;
  *   - holds its capability WITH ADMIN OPTION (it could grant it onwards);
+ *   - can SET ROLE to any role, its capability included (review 9a F1): after
+ *     `SET ROLE app_access` current_user is the capability, not the login, so
+ *     a check keyed on the login would no longer see it — a capability is held
+ *     WITH INHERIT TRUE, SET FALSE (roles.sql);
  *   - holds CREATE on schema `public` or `app`, or CREATE on the database;
  *   - owns, or can SET ROLE to the owner of, the database (pg_database.datdba)
  *     — even once schema `public` is someone else's (init-db-owner.sh, row 9c),
@@ -86,6 +90,8 @@ export interface RoleFacts {
   memberships: string[];
   /** Roles this login holds directly WITH ADMIN OPTION. */
   adminMemberships: string[];
+  /** Roles this login can SET ROLE to (pg_has_role SET, transitively; itself excluded). */
+  setRoles: string[];
   /** Superuser / BYPASSRLS roles this login can SET ROLE to (itself excluded). */
   privilegedRoles: string[];
   /** Schemas among public / app the login may CREATE in. */
@@ -131,6 +137,10 @@ SELECT json_build_object(
   'memberships', ARRAY(
     SELECT r.rolname::text FROM pg_catalog.pg_roles r
     WHERE r.oid <> me.oid AND pg_catalog.pg_has_role(me.oid, r.oid, 'MEMBER')
+    ORDER BY 1),
+  'setRoles', ARRAY(
+    SELECT r.rolname::text FROM pg_catalog.pg_roles r
+    WHERE r.oid <> me.oid AND pg_catalog.pg_has_role(me.oid, r.oid, 'SET')
     ORDER BY 1),
   'adminMemberships', ARRAY(
     SELECT r.rolname::text FROM pg_catalog.pg_auth_members m JOIN pg_catalog.pg_roles r ON r.oid = m.roleid
@@ -178,6 +188,11 @@ export function roleGuardViolations(facts: RoleFacts, role: DatabaseRole): strin
     out.push(
       `${who} reaches role(s) ${memberships.join(', ')} (directly or through another role; ` +
         `the ${role} login may reach ${allowed.join(', ')} only)`,
+    );
+  }
+  if (facts.setRoles.length) {
+    out.push(
+      `${who} can SET ROLE to ${facts.setRoles.join(', ')} (a runtime login holds its capability WITH SET FALSE)`,
     );
   }
   if (facts.adminMemberships.length) {

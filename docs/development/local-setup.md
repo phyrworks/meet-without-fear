@@ -96,16 +96,16 @@ logins `mwf_migrator`, `mwf_app`, `mwf_job`, `mwf_ops`, `mwf_auth`, `mwf_ai`, `m
 targets — `app_access`, `ai_access`, `worker_access`, `ops_access`, `auth_access`,
 `clinician_access`, and `job_access` (mwf_job's, until §7 row 9b) — plus the NOLOGIN `mwf_definer`
 that owns the `SECURITY DEFINER` helpers in schema `app`. Each login is a member of exactly one
-capability (`roles.sql` lists them). The migration `target_shape_baseline` refuses to run without
+capability, WITH INHERIT and without SET or ADMIN (`roles.sql` lists them). The migration `target_shape_baseline` refuses to run without
 them, and its step 20 refuses a cluster where a login reaches any other role. Apply the file once
-per container; it is idempotent, and the development passwords are these fixed literals
-(`mwf_clinician` is reserved and has none):
+per container; it is idempotent (a missing `-v` stops it before any change), and the development
+passwords are these fixed literals. `mwf_ai`, `mwf_worker` and `mwf_clinician` are reserved: NOLOGIN
+and no password until §7 row 9b (or the clinician portal) gives them a caller:
 
 ```bash
 podman exec -i mwf-postgres psql -U mwf_user -d meet_without_fear \
   -v migrator_password=mwf_migrator_dev -v app_password=mwf_app_dev \
   -v job_password=mwf_job_dev -v ops_password=mwf_ops_dev -v auth_password=mwf_auth_dev \
-  -v ai_password=mwf_ai_dev -v worker_password=mwf_worker_dev \
   < infra/aws/roles.sql
 ```
 

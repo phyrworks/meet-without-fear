@@ -31,14 +31,6 @@ if [ ! -f "$LOCAL/secrets.env" ]; then
   } >"$LOCAL/secrets.env"
   echo "   generated $LOCAL/secrets.env"
 fi
-# work-k5fk.10.4: the mwf_ai / mwf_worker logins (init-db.sh creates them on a fresh volume).
-# Added once, so a secrets.env generated before them gains them.
-for v in AI_DB_PASSWORD WORKER_DB_PASSWORD; do
-  if ! grep -q "^$v=" "$LOCAL/secrets.env"; then
-    printf '%s=%s\n' "$v" "$(openssl rand -hex 18)" >>"$LOCAL/secrets.env"
-    echo "   added $v to $LOCAL/secrets.env"
-  fi
-done
 # A development field-encryption key, so the replica encrypts the target
 # columns as production will (keyless is a pass-through). Added once; a
 # volume built under one key cannot be read with another (reset.sh keeps it).
@@ -64,8 +56,6 @@ MIGRATOR_DB_PASSWORD=$MIGRATOR_DB_PASSWORD
 JOB_DB_PASSWORD=$JOB_DB_PASSWORD
 OPS_DB_PASSWORD=$OPS_DB_PASSWORD
 AUTH_DB_PASSWORD=$AUTH_DB_PASSWORD
-AI_DB_PASSWORD=$AI_DB_PASSWORD
-WORKER_DB_PASSWORD=$WORKER_DB_PASSWORD
 EOF
 # Production's application.env shape, at target-shape ownership (work-k5fk.10.3; production
 # reaches it at the design note row 9c cutover): DATABASE_URL is mwf_migrator, the owner — it runs

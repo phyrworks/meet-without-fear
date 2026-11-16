@@ -9,17 +9,17 @@ set -euo pipefail
 psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" \
   --set=app_password="$APP_DB_PASSWORD" --set=readonly_password="$READONLY_DB_PASSWORD" \
   --set=migrator_password="$MIGRATOR_DB_PASSWORD" --set=job_password="$JOB_DB_PASSWORD" \
-  --set=ops_password="$OPS_DB_PASSWORD" --set=auth_password="$AUTH_DB_PASSWORD" \
-  --set=ai_password="$AI_DB_PASSWORD" --set=worker_password="$WORKER_DB_PASSWORD" <<'SQL'
+  --set=ops_password="$OPS_DB_PASSWORD" --set=auth_password="$AUTH_DB_PASSWORD" <<'SQL'
 CREATE ROLE mwf_app LOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE PASSWORD :'app_password';
 CREATE ROLE mwf_migrator LOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE PASSWORD :'migrator_password';
 CREATE ROLE mwf_job LOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE PASSWORD :'job_password';
 CREATE ROLE mwf_ops LOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE PASSWORD :'ops_password';
 CREATE ROLE mwf_auth LOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE PASSWORD :'auth_password';
-CREATE ROLE mwf_ai LOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE PASSWORD :'ai_password';
-CREATE ROLE mwf_worker LOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE PASSWORD :'worker_password';
--- Reserved, no password until the clinician portal exists (design note Q18).
-CREATE ROLE mwf_clinician LOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE;
+-- Reserved logins (roles.sql): NOLOGIN, no password, until design note §7 row 9b (mwf_ai,
+-- mwf_worker) or the clinician portal (Q18, mwf_clinician) uses them.
+CREATE ROLE mwf_ai NOLOGIN;
+CREATE ROLE mwf_worker NOLOGIN;
+CREATE ROLE mwf_clinician NOLOGIN;
 CREATE ROLE app_access NOLOGIN;
 CREATE ROLE ai_access NOLOGIN;
 CREATE ROLE worker_access NOLOGIN;
