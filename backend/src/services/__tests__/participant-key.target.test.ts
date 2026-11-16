@@ -667,4 +667,44 @@ describeTarget('participant composite keys (work-k5fk.3, 6a/6b)', () => {
       });
     });
   });
+
+  // 6b review F2: ai_memory has two partial unique indexes, one per arm of its nullable session_id. Each is the
+  // only thing refusing its duplicate, so each gets a direct case (dropping either survived the suite before).
+  describe('ai_memory: one document per arm', () => {
+    const insert = (c: Client, session: string | null, kind: string) =>
+      c.query(`INSERT INTO ai_memory (session_id, user_id, kind, doc) VALUES ($1, $2, $3, '{"facts": []}')`, [
+        session,
+        ids.adaUser,
+        kind,
+      ]);
+
+    it('a second GLOBAL_FACTS (session NULL) for a user is refused by sql_ai_memory_one_global', async () => {
+      await inRolledBackTx(async c => {
+        await c.query(`DELETE FROM ai_memory WHERE user_id = $1 AND session_id IS NULL AND kind = 'GLOBAL_FACTS'`, [
+          ids.adaUser,
+        ]);
+        await insert(c, null, 'GLOBAL_FACTS');
+        const f = await failure(insert(c, null, 'GLOBAL_FACTS'));
+        expect({ code: f.code, constraint: f.constraint }).toEqual({
+          code: '23505',
+          constraint: 'sql_ai_memory_one_global',
+        });
+      });
+    });
+
+    it('a second per-participant document of a kind (with a session) is refused by sql_ai_memory_one_per_participant', async () => {
+      await inRolledBackTx(async c => {
+        await c.query(`DELETE FROM ai_memory WHERE user_id = $1 AND session_id = $2 AND kind = 'NOTABLE_FACTS'`, [
+          ids.adaUser,
+          ids.session,
+        ]);
+        await insert(c, ids.session, 'NOTABLE_FACTS');
+        const f = await failure(insert(c, ids.session, 'NOTABLE_FACTS'));
+        expect({ code: f.code, constraint: f.constraint }).toEqual({
+          code: '23505',
+          constraint: 'sql_ai_memory_one_per_participant',
+        });
+      });
+    });
+  });
 });
