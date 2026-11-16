@@ -519,7 +519,10 @@ describeTarget('participant composite keys (work-k5fk.3, 6a/6b)', () => {
       expect(f.code).toBe('23503');
     });
 
-    it('a share of someone else’s need, or into another session, as mwf_job (t_need_share_owner)', async () => {
+    // work-k5fk.10.4: need_share's only writer is app.need_share (owned by mwf_definer), so no runtime login holds
+    // INSERT on it any more; the key is shown with the superuser's write (keys bind every writer), and the job's
+    // direct INSERT is refused outright.
+    it('a share of someone else’s need, or into another session, is a key violation (t_need_share_owner); mwf_job cannot insert one', async () => {
       const [need] = await run.sql<{ id: string }>(
         `INSERT INTO need (session_id, user_id, label, category, ai_confidence) VALUES ($1, $2, 'rest', 'CONNECTION', 0.5) RETURNING id`,
         [ids.session, ids.adaUser],
@@ -530,15 +533,22 @@ describeTarget('participant composite keys (work-k5fk.3, 6a/6b)', () => {
         [other.session, ids.adaUser],
       ]) {
         const f = await failure(
-          run.as(
-            'mwf_job',
-            null,
+          run.sql(
             `INSERT INTO need_share (need_id, session_id, user_id, category, shared_text) VALUES ($1, $2, $3, 'CONNECTION', 'x')`,
             [need.id, s, u],
           ),
         );
         expect(f.code).toBe('23503');
       }
+      const asJob = await failure(
+        run.as(
+          'mwf_job',
+          null,
+          `INSERT INTO need_share (need_id, session_id, user_id, category, shared_text) VALUES ($1, $2, $3, 'CONNECTION', 'x')`,
+          [need.id, ids.session, ids.adaUser],
+        ),
+      );
+      expect(asJob.code).toBe('42501');
     });
 
     it('a reconciler result about another subject is a key violation; a SUPERSEDED round is still the trigger’s', async () => {

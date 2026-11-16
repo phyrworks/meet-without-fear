@@ -794,14 +794,18 @@ DO $$ DECLARE v_con text; BEGIN
     IF SQLERRM NOT LIKE 'permission denied for function session_archive%' THEN RAISE; END IF;
     RAISE NOTICE 'PASS 19n a job login cannot call session_archive: %', SQLERRM;
   END;
-  -- 19o. the job writes session.status and the archive columns only through session_set_status (work-k5fk.10.4:
-  --      those UPDATE grants are mwf_definer's): a direct UPDATE of either is refused
+  -- 19o. session_check1 holds for the job's own grants (it keeps UPDATE (status) for its row locks): ARCHIVED
+  --      without archived_at
   BEGIN
     UPDATE session SET status = 'ARCHIVED' WHERE id = '00000000-0000-7e00-8000-0000000005e6';
-    RAISE EXCEPTION 'TEST FAILED: the job updated session.status directly';
-  EXCEPTION WHEN insufficient_privilege THEN
-    RAISE NOTICE 'PASS 19o the job cannot UPDATE session.status directly: %', SQLERRM;
+    RAISE EXCEPTION 'TEST FAILED: the job set ARCHIVED without archived_at';
+  EXCEPTION WHEN check_violation THEN
+    GET STACKED DIAGNOSTICS v_con = CONSTRAINT_NAME;
+    IF v_con <> 'session_check1' THEN RAISE; END IF;
+    RAISE NOTICE 'PASS 19o the job''s UPDATE to ARCHIVED without archived_at refused by %', v_con;
   END;
+  -- 19p. the archive columns are written only through session_set_status / session_archive (work-k5fk.10.4:
+  --      their UPDATE grant is mwf_definer's): a direct UPDATE by the job is refused
   BEGIN
     UPDATE session SET archived_by_user_id = '00000000-0000-7e00-8000-0000000000a1' WHERE id = '00000000-0000-7e00-8000-0000000005e6';
     RAISE EXCEPTION 'TEST FAILED: the job updated session.archived_by_user_id directly';

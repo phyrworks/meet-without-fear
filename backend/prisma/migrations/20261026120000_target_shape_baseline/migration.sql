@@ -966,9 +966,10 @@ COMMENT ON COLUMN session.topic_frame IS 'encrypted (session): the AI''s short n
 GRANT SELECT ON session TO app_access;
 GRANT INSERT (status, previous_session_id, topic_frame, created_at, updated_at) ON session TO app_access;
 GRANT UPDATE (topic_frame, topic_frame_confirmed_at, updated_at) ON session TO app_access;
--- mwf_job, mwf_definer: session_set_status, empathy_set_status (row lock), anonymize step 1
+-- mwf_job, mwf_definer: session_set_status, empathy_set_status (row lock), anonymize step 1. mwf_job keeps the UPDATE: its own
+-- SELECT … FOR NO KEY UPDATE of the session row (empathy-store jobMoveIfUnchanged, the reveal lock order) needs UPDATE on a column.
 GRANT SELECT (id, status, resolved_at) ON session TO job_access, mwf_definer;
-GRANT UPDATE (status, resolved_at) ON session TO mwf_definer;
+GRANT UPDATE (status, resolved_at) ON session TO job_access, mwf_definer;
 -- mwf_definer: session_archive and session_set_status (→ ARCHIVED), as their owner (work-k5fk.10.12)
 GRANT SELECT (archived_at, archived_by_user_id) ON session TO mwf_definer;
 GRANT UPDATE (archived_at, archived_by_user_id) ON session TO mwf_definer;
