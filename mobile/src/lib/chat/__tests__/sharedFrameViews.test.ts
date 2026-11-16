@@ -10,9 +10,11 @@ import {
 const ME = 'user-me';
 const PARTNER = 'user-partner';
 const SESSION = 'session-1';
-const CONTEXT_ID = '019a5f3e-1c2d-7a00-8b00-000000000001';
-const FEEDBACK_ID = '019a5f3e-1c2d-7a00-8b00-000000000002';
-const NEWER_CONTEXT_ID = '019a5f3e-1c2d-7a00-8b00-000000000003';
+// work-k5fk.4: a server message id is "<conversationId>:<seq>".
+const CONV = '019a5f3e-1c2d-7a00-8b00-000000000009';
+const CONTEXT_ID = `${CONV}:1`;
+const FEEDBACK_ID = `${CONV}:2`;
+const NEWER_CONTEXT_ID = `${CONV}:3`;
 
 const received = (id = CONTEXT_ID, role: string = MessageRole.SHARED_CONTEXT) => ({
   id,
@@ -43,6 +45,8 @@ describe('receivedSharedFrameId', () => {
     expect(receivedSharedFrameId({ ...received(), role: MessageRole.EMPATHY_STATEMENT }, ME)).toBeNull();
     expect(receivedSharedFrameId({ ...received(), role: MessageRole.AI }, ME)).toBeNull();
     expect(receivedSharedFrameId({ ...received(), id: 'context-shared-x' }, ME)).toBeNull();
+    // a bare uuid is not a message id since work-k5fk.4
+    expect(receivedSharedFrameId({ ...received(), id: CONV }, ME)).toBeNull();
     expect(receivedSharedFrameId({ type: 'indicator', id: `context-shared-${CONTEXT_ID}` } as never, ME)).toBeNull();
     expect(receivedSharedFrameId(received(), null)).toBeNull();
     expect(receivedSharedFrameId(null, ME)).toBeNull();
