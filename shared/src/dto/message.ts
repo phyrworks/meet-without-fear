@@ -12,7 +12,10 @@ import type { MemorySuggestion } from './memory';
 // ============================================================================
 
 export interface MessageDTO {
+  /** "<conversationId>:<seq>" (work-k5fk.4): an opaque, stable key; formatMessageId / parseMessageId. */
   id: string;
+  /** The message's place in its conversation (1, 2, 3 …; insertion order). */
+  seq: number;
   sessionId: string;
   senderId: string | null; // null for AI messages
   role: MessageRole;

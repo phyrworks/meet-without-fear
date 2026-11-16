@@ -20,6 +20,7 @@ import {
   Stage4SubChatDTO,
   Stage4SubChatMessageDTO,
   Stage4SubChatStatus,
+  formatMessageId,
 } from '@meet-without-fear/shared';
 import type { Prisma } from '../generated/prisma/client';
 import { prisma } from '../lib/prisma';
@@ -162,7 +163,7 @@ type SubchatConversation = {
   resolvedAt: Date | null;
   createdAt: Date;
   participant: { sessionId: string; userId: string | null };
-  messages: Array<{ id: string; role: string; content: string; createdAt: Date; refiningNeedId: string | null }>;
+  messages: Array<{ conversationId: string; seq: number; role: string; content: string; createdAt: Date; refiningNeedId: string | null }>;
 };
 
 const SUBCHAT_SELECT = {
@@ -176,8 +177,8 @@ const SUBCHAT_SELECT = {
   createdAt: true,
   participant: { select: { sessionId: true, userId: true } },
   messages: {
-    orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
-    select: { id: true, role: true, content: true, createdAt: true, refiningNeedId: true },
+    orderBy: [{ createdAt: 'asc' }, { seq: 'asc' }],
+    select: { conversationId: true, seq: true, role: true, content: true, createdAt: true, refiningNeedId: true },
   },
 } satisfies Prisma.ConversationSelect;
 
@@ -199,7 +200,7 @@ function toRecord(c: SubchatConversation): Stage4SubChatRecord {
     createdAt: c.createdAt,
     resolvedAt: c.resolvedAt,
     messages: c.messages.map(m => ({
-      id: m.id,
+      id: formatMessageId(m.conversationId, m.seq),
       role: (m.role === 'AI' ? SharedMessageRole.AI : SharedMessageRole.USER) as SharedMessageRole,
       content: m.content,
       createdAt: m.createdAt,
@@ -375,7 +376,7 @@ export async function buildSystemPrompt(input: PromptBuildInput): Promise<BuiltP
         participant.mainConversationId
           ? prisma.message.findMany({
               where: { conversationId: participant.mainConversationId },
-              orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+              orderBy: [{ createdAt: 'asc' }, { seq: 'asc' }],
               take: MAIN_CHAT_HISTORY_LIMIT,
               select: { role: true, content: true },
             })

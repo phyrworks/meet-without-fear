@@ -42,6 +42,7 @@ import {
   createFacilitatorMessage,
   listConversationMessages,
   MESSAGE_SELECT,
+  withMessageId,
   toMessageDTO,
   type StoredMessage,
 } from '../services/message-store';
@@ -519,7 +520,7 @@ export async function getInitialMessage(req: Request, res: Response): Promise<vo
     // Already a message in the participant's own conversation?
     const existingMessages = await prisma.message.findFirst({
       where: { conversationId },
-      select: { id: true },
+      select: { seq: true },
     });
 
     if (existingMessages) {
@@ -697,19 +698,21 @@ export async function getInitialMessage(req: Request, res: Response): Promise<vo
     // make the final write idempotent so concurrent calls do not create twins:
     // one Serializable transaction on the JOB connection (the facilitator's
     // rows are the job's) checks the participant's conversation, then writes.
-    let aiMessage: StoredMessage;
-    try {
-      // The probe reads only (id, created_at) — all the job may SELECT from
-      // message (trailer T7) — and an existing message is re-read on the app
-      // connection after the transaction.
-      const written = await getJobPrisma().$transaction(
+    // The probe is "does seq 1 exist" (work-k5fk.4): the conversation's first
+    // line. It reads only the key — the job may SELECT (seq, created_at) and
+    // conversation_id from message (tables.sql) — and the line is re-read on the
+    // app connection after the transaction. Two concurrent calls queue on the
+    // conversation row (t_message_seq takes the number under its lock); under
+    // Serializable the later one fails with a serialization failure (P2034, or
+    // SQLSTATE 40001 surfaced through the raw INSERT), and its retry sees seq 1.
+    const writeOnce = () =>
+      getJobPrisma().$transaction(
         async tx => {
-          const existing = await tx.message.findFirst({
-            where: { conversationId },
-            orderBy: { createdAt: 'asc' },
-            select: { id: true },
+          const existing = await tx.message.findUnique({
+            where: { conversationId_seq: { conversationId, seq: 1 } },
+            select: { seq: true },
           });
-          if (existing) return { existingId: existing.id };
+          if (existing) return { existingSeq: existing.seq };
           return {
             created: await createFacilitatorMessage({
               conversationId,
@@ -720,28 +723,22 @@ export async function getInitialMessage(req: Request, res: Response): Promise<vo
         },
         { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
       );
-      aiMessage =
-        written.created ??
-        ((await prisma.message.findUniqueOrThrow({
-          where: { id: written.existingId! },
-          select: MESSAGE_SELECT,
-        })) as StoredMessage);
-    } catch (error) {
-      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2034') {
-        const existing = await prisma.message.findFirst({
-          where: { conversationId },
-          orderBy: { createdAt: 'asc' },
-          select: MESSAGE_SELECT,
-        });
-        if (existing) {
-          aiMessage = existing as StoredMessage;
-        } else {
-          throw error;
-        }
-      } else {
-        throw error;
+    let written: Awaited<ReturnType<typeof writeOnce>> | undefined;
+    for (let round = 1; !written; round++) {
+      try {
+        written = await writeOnce();
+      } catch (error) {
+        if (round >= 3 || !isSerializationFailure(error)) throw error;
       }
     }
+    const aiMessage: StoredMessage =
+      written.created ??
+      (withMessageId(
+        await prisma.message.findUniqueOrThrow({
+          where: { conversationId_seq: { conversationId, seq: written.existingSeq! } },
+          select: MESSAGE_SELECT,
+        }),
+      ) as StoredMessage);
 
     // Embed session content for cross-session retrieval (non-blocking)
     // Per fact-ledger architecture, we embed at session level
@@ -1020,4 +1017,12 @@ export async function sendMessageStream(req: Request, res: Response): Promise<vo
       res.status(500).json({ error: 'Failed to process message' });
     }
   }
+}
+
+/** A Serializable transaction lost (P2034, or 40001 from a raw statement inside it): safe to retry. */
+function isSerializationFailure(error: unknown): boolean {
+  if (!(error instanceof Prisma.PrismaClientKnownRequestError)) return false;
+  if (error.code === 'P2034') return true;
+  const meta = error.meta as { code?: unknown } | undefined;
+  return meta?.code === '40001' || /40001|could not serialize/.test(error.message);
 }

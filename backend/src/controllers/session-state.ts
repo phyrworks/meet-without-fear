@@ -37,7 +37,7 @@ import {
   type ResolvedParticipant,
 } from '../services/participant-resolver';
 import { latestStageRow, loadStageStates, progressDTO, witnessStartedAt } from '../services/stage-shim';
-import { listConversationMessages, toMessageDTO } from '../services/message-store';
+import { lastSeenMessageIdOf, listConversationMessages, toMessageDTO } from '../services/message-store';
 import { displayStatus, isSessionPaused } from '../services/session-status';
 import { loadSessionPartner, pendingInviteeNames } from '../services/contacts';
 
@@ -184,7 +184,7 @@ export async function getSessionState(req: Request, res: Response): Promise<void
       listConversationMessages({ conversationId, limit: INITIAL_SESSION_MESSAGE_LIMIT, order: 'desc' }),
       prisma.conversationReadState.findUnique({
         where: { sessionId_userId: { sessionId: me.sessionId, userId: me.userId } },
-        select: { lastViewedAt: true, lastActiveAt: true, lastSeenMessageId: true },
+        select: { lastViewedAt: true, lastActiveAt: true, lastSeenConversationId: true, lastSeenSeq: true },
       }),
       getPartnerParticipant(me),
     ]);
@@ -326,7 +326,7 @@ export async function getSessionState(req: Request, res: Response): Promise<void
         lastViewedAt: readState?.lastViewedAt?.toISOString() ?? null,
         partnerLastViewedAt: partnerShowsActivity ? (presence?.lastViewedAt?.toISOString() ?? null) : null,
         partnerLastActiveAt: partnerLastActiveAt?.toISOString() ?? null,
-        lastSeenChatItemId: readState?.lastSeenMessageId ?? null,
+        lastSeenChatItemId: lastSeenMessageIdOf(readState),
         sourceInnerThoughts: linkedReflection
           ? {
               id: linkedReflection.id,

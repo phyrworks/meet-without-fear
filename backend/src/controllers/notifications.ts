@@ -22,6 +22,7 @@ import { successResponse, errorResponse } from '../utils/response';
 import { loadCurrentStages } from '../services/stage-shim';
 import { partyOf, sessionParties } from '../services/empathy-store';
 import type { Seat } from '../services/participant-resolver';
+import { withMessageId } from '../services/message-store';
 
 // ============================================================================
 // Types
@@ -66,9 +67,9 @@ async function unreadContext(me: Me) {
       senderUserId: { not: me.userId },
       ...(readState?.lastViewedShareTabAt ? { createdAt: { gt: readState.lastViewedShareTabAt } } : {}),
     },
-    orderBy: { createdAt: 'desc' },
-    select: { id: true, content: true, createdAt: true, senderUserId: true },
-  });
+    orderBy: [{ createdAt: 'desc' }, { seq: 'desc' }],
+    select: { conversationId: true, seq: true, content: true, createdAt: true, senderUserId: true },
+  }).then(rows => rows.map(withMessageId));
 }
 
 async function openOffers(me: Me) {

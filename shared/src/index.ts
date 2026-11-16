@@ -49,4 +49,5 @@ export * from './contracts';
 // Utilities
 export * from './utils/meditation';
 export * from './utils/uuid-v7';
+export * from './utils/message-id';
 export * from './utils/email';

@@ -26,6 +26,7 @@
  *    publishes nothing); the conditional update never moves the instant back.
  */
 
+import { parseMessageId } from '@meet-without-fear/shared';
 import { prisma } from '../lib/prisma';
 import type { Seat } from './participant-resolver';
 
@@ -57,9 +58,12 @@ export async function markSharedContextViewed(
   now: Date = new Date(),
 ): Promise<MarkSharedContextViewedResult> {
   const { sessionId, userId } = seat;
+  const key = parseMessageId(messageId);
+  if (!key) return { status: 'not_found' };
   const message = await prisma.message.findFirst({
     where: {
-      id: messageId,
+      conversationId: key.conversationId,
+      seq: key.seq,
       kind: { in: [...VIEWABLE_SHARED_KINDS] },
       conversation: { sessionId, userId },
       senderUserId: { not: userId },
