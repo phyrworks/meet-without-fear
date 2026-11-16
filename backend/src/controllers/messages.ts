@@ -12,6 +12,7 @@ import { Request, Response } from 'express';
 import { Prisma } from '../generated/prisma/client';
 import { logger } from '../lib/logger';
 import { getJobPrisma, prisma } from '../lib/prisma';
+import { withSerializableRetry } from '../lib/serializable-retry';
 import { getSonnetResponse, BrainActivityCallType } from '../lib/bedrock';
 import { buildInitialMessagePrompt, buildStagePromptString } from '../services/stage-prompts';
 import { parseMicroTagResponse } from '../utils/micro-tag-parser';
@@ -436,7 +437,7 @@ export async function getConversationHistory(req: Request, res: Response): Promi
       return;
     }
 
-    const { limit, before, after, order } = parseResult.data;
+    const { limit, beforeSeq, afterSeq, order } = parseResult.data;
 
     // The caller's participant, resolved once by requireSessionAccess (TS-9).
     // No participant (the invitee fallback) has no conversation to read.
@@ -449,15 +450,15 @@ export async function getConversationHistory(req: Request, res: Response): Promi
     // The caller's MAIN conversation IS the audience: no sender/recipient
     // filter exists any more (target shape: no recipient column).
     logger.info(
-      `[getConversationHistory:${requestId}] Fetching messages with limit=${limit}, before=${before || 'none'}, after=${after || 'none'}, order=${order}`,
+      `[getConversationHistory:${requestId}] Fetching messages with limit=${limit}, beforeSeq=${beforeSeq ?? 'none'}, afterSeq=${afterSeq ?? 'none'}, order=${order}`,
     );
     const [messages, milestones, invitationPending] = await Promise.all([
       listConversationMessages({
         conversationId: participant.mainConversationId,
         limit,
         order,
-        before: before ? new Date(before) : undefined,
-        after: after ? new Date(after) : undefined,
+        beforeSeq,
+        afterSeq,
       }),
       loadMilestones([participant]),
       loadInvitationPending([participant]),
@@ -698,18 +699,21 @@ export async function getInitialMessage(req: Request, res: Response): Promise<vo
     // make the final write idempotent so concurrent calls do not create twins:
     // one Serializable transaction on the JOB connection (the facilitator's
     // rows are the job's) checks the participant's conversation, then writes.
-    // The probe is "does seq 1 exist" (work-k5fk.4): the conversation's first
-    // line. It reads only the key — the job may SELECT (seq, created_at) and
-    // conversation_id from message (tables.sql) — and the line is re-read on the
-    // app connection after the transaction. Two concurrent calls queue on the
-    // conversation row (t_message_seq takes the number under its lock); under
-    // Serializable the later one fails with a serialization failure (P2034, or
-    // SQLSTATE 40001 surfaced through the raw INSERT), and its retry sees seq 1.
-    const writeOnce = () =>
+    // The probe is "the conversation holds a line" — its first, by seq (work-k5fk.4).
+    // Not "seq 1 exists": a failed first stream turn writes and deletes seq 1, so
+    // an empty conversation can start at 2 (step 7 review F1). It reads only the
+    // key — the job may SELECT (conversation_id, seq, created_at) from message
+    // (tables.sql) — and the line is re-read on the app connection after the
+    // transaction. Two concurrent calls queue on the conversation row
+    // (t_message_seq takes the number under its lock); under Serializable the
+    // later one loses (P2034, or SQLSTATE 40001 through the raw INSERT) and its
+    // retry (withSerializableRetry) finds the line.
+    const written = await withSerializableRetry(() =>
       getJobPrisma().$transaction(
         async tx => {
-          const existing = await tx.message.findUnique({
-            where: { conversationId_seq: { conversationId, seq: 1 } },
+          const existing = await tx.message.findFirst({
+            where: { conversationId },
+            orderBy: { seq: 'asc' },
             select: { seq: true },
           });
           if (existing) return { existingSeq: existing.seq };
@@ -722,15 +726,8 @@ export async function getInitialMessage(req: Request, res: Response): Promise<vo
           };
         },
         { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
-      );
-    let written: Awaited<ReturnType<typeof writeOnce>> | undefined;
-    for (let round = 1; !written; round++) {
-      try {
-        written = await writeOnce();
-      } catch (error) {
-        if (round >= 3 || !isSerializationFailure(error)) throw error;
-      }
-    }
+      ),
+    );
     const aiMessage: StoredMessage =
       written.created ??
       (withMessageId(
@@ -1017,12 +1014,4 @@ export async function sendMessageStream(req: Request, res: Response): Promise<vo
       res.status(500).json({ error: 'Failed to process message' });
     }
   }
-}
-
-/** A Serializable transaction lost (P2034, or 40001 from a raw statement inside it): safe to retry. */
-function isSerializationFailure(error: unknown): boolean {
-  if (!(error instanceof Prisma.PrismaClientKnownRequestError)) return false;
-  if (error.code === 'P2034') return true;
-  const meta = error.meta as { code?: unknown } | undefined;
-  return meta?.code === '40001' || /40001|could not serialize/.test(error.message);
 }

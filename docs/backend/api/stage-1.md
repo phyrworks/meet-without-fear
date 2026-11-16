@@ -168,10 +168,15 @@ GET /api/v1/sessions/:id/messages
 
 | Param | Type | Default | Description |
 |-------|------|---------|-------------|
-| `before` | ISO string | - | Return messages strictly before this timestamp |
-| `after`  | ISO string | - | Return messages strictly after this timestamp |
-| `order`  | `asc` \| `desc` | `desc` | Sort order |
-| `limit`  | number | 50 | Max results |
+| `beforeSeq` | integer ≥ 1 | - | Return messages whose `seq` is strictly less (the older page) |
+| `afterSeq`  | integer ≥ 1 | - | Return messages whose `seq` is strictly greater |
+| `order`  | `asc` \| `desc` | `desc` | Sort order, by `seq` |
+| `limit`  | number | 25 | Max results (1–500) |
+
+Since work-k5fk.4 a message is keyed by its conversation and `seq` (its place in the conversation), the page is in
+`seq` order and the cursors are seqs: a cursor on the instant could skip or repeat a line whose `created_at` disagrees
+with its `seq` (step 7 review F3). Each `MessageDTO` carries `id` = `"<conversationId>:<seq>"` and `seq`. The
+caller's MAIN conversation is the audience (target shape): the SQL below describes the old shape.
 
 The query filters by both sender and visibility. Each message has an optional `forUserId` — only messages with `forUserId == null` (public) or `forUserId == <caller>` (addressed to the caller) are returned, enforcing cross-user data isolation at the read boundary:
 
@@ -180,7 +185,7 @@ WHERE (senderId = :userId AND forUserId IS NULL)
    OR forUserId = :userId
 ```
 
-There is no `stage` filter or `cursor` token; pagination uses timestamp-based `before`/`after` windows.
+There is no `stage` filter or `cursor` token; pagination uses `beforeSeq`/`afterSeq` windows.
 
 ### Response
 

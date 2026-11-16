@@ -106,7 +106,7 @@ export interface UseInfiniteMessagesResult {
 /**
  * Fetch messages with infinite scroll pagination.
  * Initial load gets newest messages (order: desc, reversed on server).
- * Loading more fetches older messages using 'before' cursor.
+ * Loading more fetches older messages using the 'beforeSeq' cursor (the oldest loaded message's seq).
  */
 export function useInfiniteMessages(
   params: Omit<GetMessagesParams, 'cursor'>,
@@ -122,21 +122,22 @@ export function useInfiniteMessages(
       queryParams.set('limit', limit.toString());
 
       // First page: get newest messages (default order is 'desc').
-      // Subsequent pages also use descending order with the `before` cursor so
-      // the backend returns the immediately previous chunk, then reverses that
+      // Subsequent pages also use descending order with the `beforeSeq` cursor
+      // (work-k5fk.4: the page is in seq order, so the cursor is a seq) so the
+      // backend returns the immediately previous chunk, then reverses that
       // chunk into chronological display order.
-      if (pageParam) {
-        queryParams.set('before', pageParam as string);
+      if (pageParam !== undefined) {
+        queryParams.set('beforeSeq', String(pageParam));
       }
 
       const url = `/sessions/${sessionId}/messages?${queryParams.toString()}`;
       return get<GetMessagesResponse>(url);
     },
-    initialPageParam: undefined as string | undefined,
+    initialPageParam: undefined as number | undefined,
     getNextPageParam: (lastPage) => {
       if (!lastPage.hasMore || lastPage.messages.length === 0) return undefined;
-      // Return the oldest message's timestamp as the cursor for the next page
-      return lastPage.messages[0]?.timestamp;
+      // The oldest message's seq is the cursor for the next page
+      return lastPage.messages[0]?.seq;
     },
     enabled: options?.enabled ?? !!sessionId,
     staleTime: 60_000, // 1 minute - keep data fresh longer

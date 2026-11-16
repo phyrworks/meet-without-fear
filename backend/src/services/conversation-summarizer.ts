@@ -307,7 +307,7 @@ export async function updateSessionSummary(
           conversationId: participant.mainConversationId,
           OR: [{ senderUserId: participant.userId }, { role: 'AI' }],
         },
-        orderBy: { createdAt: 'asc' },
+        orderBy: { seq: 'asc' },
         select: { role: true, kind: true, content: true, createdAt: true },
       })
     ).map(

@@ -226,13 +226,13 @@ async function fetchLinkedPartnerSessionContext(
       ? await Promise.all([
           prisma.message.findMany({
             where: { conversationId: me.mainConversationId, senderUserId: me.userId, role: 'USER', kind: 'CHAT' },
-            orderBy: { createdAt: 'desc' },
+            orderBy: { seq: 'desc' },
             take: 10,
             select: { role: true, content: true, createdAt: true },
           }),
           prisma.message.findMany({
             where: { conversationId: me.mainConversationId, role: 'AI', kind: 'CHAT' },
-            orderBy: { createdAt: 'desc' },
+            orderBy: { seq: 'desc' },
             take: 10,
             select: { role: true, content: true, createdAt: true },
           }),

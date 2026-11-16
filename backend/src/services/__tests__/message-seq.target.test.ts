@@ -457,7 +457,7 @@ describeTarget('message key (conversation_id, seq) (work-k5fk.4)', () => {
     it('paging back with beforeSeq visits every line once, even when seq and created_at disagree', async () => {
       await run.sql(
         `INSERT INTO message (conversation_id, session_id, role, kind, content, created_at)
-         VALUES ($1, $2, 'AI', 'CHAT', 'PROBE_F3_EARLY', (SELECT min(created_at) FROM message WHERE conversation_id = $1) - interval '1 hour')`,
+         VALUES ($1::uuid, $2::uuid, 'AI', 'CHAT', 'PROBE_F3_EARLY', (SELECT min(created_at) FROM message WHERE conversation_id = $1::uuid) - interval '1 hour')`,
         [ids.adaConv, ids.session],
       );
       const all = (await seqsOf(ids.adaConv)).reverse();

@@ -31,6 +31,7 @@ describeTarget('the reveal survives a concurrent line in a MAIN conversation (re
 
   it('one serialization failure is retried: both directions revealed, one copy per subject', async () => {
     run = await openTargetRun('RECONCILER_SHOWN_B', `k5fk4_reveal_${process.pid}`);
+    process.env.E2E_AUTH_BYPASS = 'true'; // realtime: no Ably key in tests, the E2E path skips the publishes
     const [ids] = await run.sql<{ session: string; adaConv: string }>(
       `SELECT c.session_id AS session, c.id AS "adaConv" FROM conversation c JOIN "user" u ON u.id = c.user_id
        WHERE u.email = 'ada@e2e.test' AND c.kind = 'MAIN'`,
@@ -75,8 +76,10 @@ describeTarget('the reveal survives a concurrent line in a MAIN conversation (re
     );
     expect(attempts.map(a => a.status)).toEqual(['REVEALED', 'REVEALED']);
     const copies = await run.sql<{ n: number }>(
-      `SELECT count(*)::int AS n FROM message WHERE session_id = $1 AND kind = 'EMPATHY_STATEMENT' AND source_attempt_id IS NOT NULL
-       GROUP BY conversation_id ORDER BY conversation_id`,
+      // the delivered copies: a statement in the SUBJECT's conversation (an author's own copy is in theirs)
+      `SELECT count(*)::int AS n FROM message m JOIN conversation c ON c.id = m.conversation_id
+       WHERE m.session_id = $1 AND m.kind = 'EMPATHY_STATEMENT' AND m.sender_user_id <> c.user_id
+       GROUP BY m.conversation_id ORDER BY m.conversation_id`,
       [ids.session],
     );
     expect(copies.map(c => c.n)).toEqual([1, 1]);

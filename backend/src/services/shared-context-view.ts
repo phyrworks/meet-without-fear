@@ -68,7 +68,7 @@ export async function markSharedContextViewed(
       conversation: { sessionId, userId },
       senderUserId: { not: userId },
     },
-    select: { createdAt: true, conversationId: true },
+    select: { createdAt: true, conversationId: true, seq: true },
   });
   if (!message) return { status: 'not_found' };
 
@@ -85,9 +85,10 @@ export async function markSharedContextViewed(
       conversationId: message.conversationId,
       kind: { in: [...VIEWABLE_SHARED_KINDS] },
       senderUserId: { not: userId },
-      createdAt: { gt: message.createdAt },
+      // the next received frame in the conversation's order (work-k5fk.4: seq)
+      seq: { gt: message.seq },
     },
-    orderBy: { createdAt: 'asc' },
+    orderBy: { seq: 'asc' },
     select: { createdAt: true },
   });
   const instant = sharedContextViewedInstant({ now, viewedAt: message.createdAt, nextAt: next?.createdAt ?? null });

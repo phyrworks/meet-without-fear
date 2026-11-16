@@ -158,18 +158,22 @@ export async function listConversationMessages(opts: {
   conversationId: string;
   limit: number;
   order: 'asc' | 'desc';
-  before?: Date;
-  after?: Date;
+  /** Page cursors: lines before / after this seq (review F3 — the order is seq, so the cursor is too). */
+  beforeSeq?: number;
+  afterSeq?: number;
   /** Only messages newer than this (summary boundary). */
   newerThan?: Date;
 }): Promise<StoredMessage[]> {
-  const createdAt: Record<string, Date> = {};
-  if (opts.before) createdAt.lt = opts.before;
-  if (opts.after) createdAt.gt = opts.after;
-  if (opts.newerThan) createdAt.gt = opts.newerThan;
-  // seq is the chat order (work-k5fk.4: the key); the cursors stay instants.
+  const seq: Record<string, number> = {};
+  if (opts.beforeSeq !== undefined) seq.lt = opts.beforeSeq;
+  if (opts.afterSeq !== undefined) seq.gt = opts.afterSeq;
+  // seq is the chat order (work-k5fk.4: the key).
   const rows = await prisma.message.findMany({
-    where: { conversationId: opts.conversationId, ...(Object.keys(createdAt).length ? { createdAt } : {}) },
+    where: {
+      conversationId: opts.conversationId,
+      ...(Object.keys(seq).length ? { seq } : {}),
+      ...(opts.newerThan ? { createdAt: { gt: opts.newerThan } } : {}),
+    },
     orderBy: { seq: opts.order },
     take: opts.limit + 1,
     select: MESSAGE_SELECT,
@@ -201,7 +205,7 @@ export async function lastOwnTurnAt(conversationId: string, seat: Seat): Promise
       role: 'USER',
       kind: 'CHAT',
     },
-    orderBy: { createdAt: 'desc' },
+    orderBy: { seq: 'desc' },
     select: { createdAt: true },
   });
   return last?.createdAt ?? null;

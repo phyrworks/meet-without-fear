@@ -751,10 +751,12 @@ GRANT EXECUTE ON FUNCTION app.create_user(public.identity_provider, text, text, 
 -- conversation, taken under its row's lock by one UPDATE … RETURNING, so two
 -- inserts into one conversation queue and a rolled-back insert returns its
 -- number with the rest of its transaction. Definer, so the counter column is
--- written by its owner only: no runtime role holds UPDATE (next_seq) but the
--- owner, and none is granted EXECUTE — the one caller is t_message_seq (T5),
--- itself owned by mwf_job. A missing conversation returns NULL, and the NOT
--- NULL on message.seq refuses the row (the FK would refuse it anyway).
+-- written by its owner: mwf_app never holds UPDATE (next_seq) nor EXECUTE on
+-- this. The owner is mwf_job, which is also the job's login, so until §7 row
+-- 9a hands the definers to the NOLOGIN mwf_definer the job connection CAN call
+-- this directly and UPDATE next_seq (taking a number with no row — a hole);
+-- no other role can. Its intended caller is t_message_seq (T5), also mwf_job's.
+-- A missing conversation returns NULL; t_message_seq refuses that row.
 CREATE FUNCTION app.next_message_seq(conversation uuid) RETURNS integer
   LANGUAGE sql SECURITY DEFINER
   SET search_path = pg_catalog, public, pg_temp
@@ -762,8 +764,8 @@ CREATE FUNCTION app.next_message_seq(conversation uuid) RETURNS integer
     UPDATE public.conversation SET next_seq = next_seq + 1 WHERE id = next_message_seq.conversation
     RETURNING next_seq - 1
   $$;
-COMMENT ON FUNCTION app.next_message_seq(uuid) IS 'The next message seq of a conversation (work-k5fk.4): advances conversation.next_seq under the row''s lock and returns the number taken. Called only by t_message_seq; no runtime role may EXECUTE it.';
--- No grant: t_message_seq (owned by mwf_job, as this is) is its only caller.
+COMMENT ON FUNCTION app.next_message_seq(uuid) IS 'The next message seq of a conversation (work-k5fk.4): advances conversation.next_seq under the row''s lock and returns the number taken, or NULL for no such conversation. Called by t_message_seq; executable by its owner mwf_job alone (until §7 row 9a moves it to mwf_definer).';
+-- No grant: t_message_seq (owned by mwf_job, as this is) is its caller; mwf_job, as owner, can call it too.
 REVOKE EXECUTE ON FUNCTION app.next_message_seq(uuid) FROM PUBLIC;
 
 -- Hand the definer functions to mwf_job (TS-1 order, measured there with a
@@ -1347,9 +1349,13 @@ REVOKE CREATE ON SCHEMA app FROM mwf_job;
 -- INSERT that leaves seq NULL — every runtime writer: no role is granted
 -- INSERT (seq) — from app.next_message_seq. SECURITY DEFINER (owned by mwf_job)
 -- like the k5fk.2 triggers above, the exception to T5's invoker rule: the
--- helper is executable by its owner alone, so neither the app nor the job
--- login can take numbers outside an INSERT (a taken number with no row is a
--- hole). It runs after t_message_app_insert (name order), which reads
+-- helper is executable by its owner alone, so the app cannot take numbers
+-- outside an INSERT (a taken number with no row is a hole). The job login,
+-- being that owner, still can until §7 row 9a (mwf_definer). A conversation
+-- that does not exist (or was deleted while the insert waited) is refused as
+-- foreign_key_violation, with no DETAIL — never the NOT NULL error on seq, whose
+-- DETAIL would print the failing row (house rule; functions-caller-tests 28b).
+-- It runs after t_message_app_insert (name order), which reads
 -- nothing seq-dependent. An ON CONFLICT DO NOTHING insert (createFacilitatorMessageOnce)
 -- takes its number before the conflict is found, so a duplicate once-only
 -- line leaves a hole too: seq orders, it does not count.
@@ -1360,6 +1366,9 @@ CREATE FUNCTION app.t_message_seq() RETURNS trigger
   AS $$
   BEGIN
     NEW.seq := app.next_message_seq(NEW.conversation_id);
+    IF NEW.seq IS NULL THEN
+      RAISE EXCEPTION 'message refused: no such conversation' USING ERRCODE = 'foreign_key_violation';
+    END IF;
     RETURN NEW;
   END
   $$;

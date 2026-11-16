@@ -67,7 +67,7 @@ async function unreadContext(me: Me) {
       senderUserId: { not: me.userId },
       ...(readState?.lastViewedShareTabAt ? { createdAt: { gt: readState.lastViewedShareTabAt } } : {}),
     },
-    orderBy: [{ createdAt: 'desc' }, { seq: 'desc' }],
+    orderBy: { seq: 'desc' },
     select: { conversationId: true, seq: true, content: true, createdAt: true, senderUserId: true },
   }).then(rows => rows.map(withMessageId));
 }

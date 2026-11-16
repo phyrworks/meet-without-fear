@@ -93,7 +93,7 @@ export function validatedWaitNote(
 export async function lastAiNote(conversationId: string, client: PrismaClient = prisma): Promise<string | null> {
   const last = await client.message.findFirst({
     where: { conversationId, role: 'AI' },
-    orderBy: { createdAt: 'desc' },
+    orderBy: { seq: 'desc' },
     select: { content: true },
   });
   return last?.content ?? null;

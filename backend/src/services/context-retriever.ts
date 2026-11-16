@@ -261,7 +261,7 @@ async function getSessionHistory(sessionId: string, userId: string): Promise<Con
       conversationId: participant.mainConversationId,
       OR: [{ senderUserId: participant.userId }, { role: 'AI' }],
     },
-    orderBy: { createdAt: 'asc' },
+    orderBy: { seq: 'asc' },
     select: {
       content: true,
       role: true,

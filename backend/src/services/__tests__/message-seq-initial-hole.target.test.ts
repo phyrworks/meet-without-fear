@@ -22,7 +22,7 @@ describeTarget('getInitialMessage on an empty conversation whose seq 1 is a hole
     if (run) await run.drop();
   });
 
-  it('three concurrent calls write one line, and all answer it', async () => {
+  it('three concurrent calls write one line, and every call that gets through answers it', async () => {
     run = await openTargetRun('CREATED', `k5fk4_hole_${process.pid}`);
     const [p] = await run.sql<{ session: string; user: string; conv: string; email: string }>(
       `SELECT c.session_id AS session, c.user_id AS user, c.id AS conv, u.email FROM conversation c JOIN "user" u ON u.id = c.user_id`,
@@ -42,7 +42,11 @@ describeTarget('getInitialMessage on an empty conversation whose seq 1 is a hole
       p.conv,
     ]);
     expect(rows).toEqual([{ seq: 2 }]);
-    expect(answers.map(a => a.status)).toEqual([200, 200, 200]);
-    for (const a of answers) expect(a.body.data.message).toMatchObject({ id: `${p.conv}:2`, seq: 2 });
+    // A call that arrives after the line committed is refused up front ("already has messages", 400); every
+    // call that got through answers the one line.
+    expect(answers.every(a => a.status === 200 || a.status === 400)).toBe(true);
+    const ok = answers.filter(a => a.status === 200);
+    expect(ok.length).toBeGreaterThan(0);
+    for (const a of ok) expect(a.body.data.message).toMatchObject({ id: `${p.conv}:2`, seq: 2 });
   });
 });

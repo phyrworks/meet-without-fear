@@ -514,7 +514,7 @@ async function ownStatementMessage(me: SessionParty) {
   if (!me.mainConversationId) return null;
   return prisma.message.findFirst({
     where: { conversationId: me.mainConversationId, kind: 'EMPATHY_STATEMENT', senderUserId: me.userId },
-    orderBy: [{ createdAt: 'desc' }, { seq: 'desc' }],
+    orderBy: { seq: 'desc' },
     select: { conversationId: true, seq: true, content: true, createdAt: true },
   }).then(m => (m ? withMessageId(m) : null));
 }
