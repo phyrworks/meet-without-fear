@@ -882,7 +882,7 @@ interface MarkSessionViewedResponse {
 /**
  * Mark a session as viewed by the current user.
  *
- * This updates the lastViewedAt timestamp and optionally the lastSeenChatItemId.
+ * This updates the lastViewedAt timestamp and optionally the last seen message (by seq).
  * Used to clear unread indicators (blue dot, badge count) when user opens a session.
  *
  * @param sessionId - The session ID (required for automatic call on mount)
@@ -891,10 +891,12 @@ export function useMarkSessionViewed(sessionId: string | undefined) {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: async ({ lastSeenChatItemId }: { lastSeenChatItemId?: string }) => {
+    mutationFn: async ({ lastSeenSeq }: { lastSeenSeq?: number }) => {
       if (!sessionId) throw new Error('Session ID is required');
+      // work-k5fk.4: the newest seen message by its seq; the response's
+      // lastSeenChatItemId is that message's id (or null).
       return post<MarkSessionViewedResponse>(`/sessions/${sessionId}/viewed`, {
-        lastSeenChatItemId,
+        lastSeenSeq,
       });
     },
     onSuccess: (data) => {
