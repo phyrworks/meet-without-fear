@@ -32,7 +32,7 @@ const SECTIONS_ONLY: MemoryIntentResult = {
 async function sections(sessionId: string, userId: string) {
   const participant = await resolveParticipant(sessionId, userId);
   if (!participant) return null;
-  return buildContextForParticipant(participant.id, { intent: SECTIONS_ONLY });
+  return buildContextForParticipant(participant, { intent: SECTIONS_ONLY });
 }
 
 /**

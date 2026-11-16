@@ -79,7 +79,7 @@ describeTarget('target writer — FEEL_HEARD_B as written (target fixture templa
       expect(
         await q(
           `SELECT u.email, array_agg(pm.milestone_key::text ORDER BY pm.milestone_key) AS keys
-           FROM participant_milestone pm JOIN participant p ON p.id = pm.participant_id JOIN "user" u ON u.id = p.user_id
+           FROM participant_milestone pm JOIN "user" u ON u.id = pm.user_id
            GROUP BY u.email ORDER BY u.email`,
         ),
       ).toEqual([
@@ -95,7 +95,7 @@ describeTarget('target writer — FEEL_HEARD_B as written (target fixture templa
       expect(
         await q(
           `SELECT count(*)::int AS n FROM message m JOIN conversation c ON c.id = m.conversation_id
-           WHERE m.sender_participant_id IS NOT NULL AND m.sender_participant_id <> c.participant_id`,
+           WHERE m.sender_user_id IS NOT NULL AND m.sender_user_id <> c.user_id`,
         ),
       ).toEqual([{ n: 0 }]);
       await applyConceptViews(fx.target, fx.database);

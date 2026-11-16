@@ -27,21 +27,15 @@ import {
   type TargetMessageKind,
 } from './message-store';
 import { loadInvitationPending, loadMilestones } from './stage-shim';
+import type { Seat } from './participant-resolver';
 
-/** The DTO of a stored message in `ownerParticipantId`'s conversation. */
-export async function messageDTO(
-  stored: StoredMessage,
-  sessionId: string,
-  ownerParticipantId: string,
-): Promise<MessageDTO & { stage: number }> {
-  const [milestones, pending] = await Promise.all([
-    loadMilestones([ownerParticipantId]),
-    loadInvitationPending([ownerParticipantId]),
-  ]);
+/** The DTO of a stored message in the conversation of `owner` (whose session is the message's). */
+export async function messageDTO(stored: StoredMessage, owner: Seat): Promise<MessageDTO & { stage: number }> {
+  const [milestones, pending] = await Promise.all([loadMilestones([owner]), loadInvitationPending([owner])]);
   return toMessageDTO(stored, {
-    sessionId,
-    ownerMilestones: milestones.get(ownerParticipantId) ?? [],
-    ownerInvitationPending: pending.has(ownerParticipantId),
+    sessionId: owner.sessionId,
+    ownerMilestones: milestones.get(owner) ?? [],
+    ownerInvitationPending: pending.has(owner),
   }) as unknown as MessageDTO & { stage: number };
 }
 
@@ -53,7 +47,10 @@ export function aiNote(conversationId: string, content: string, createdAt?: Date
 /** A delivered item into the recipient's conversation (job connection). */
 export function deliver(opts: {
   toConversationId: string;
-  fromParticipantId: string;
+  /** The session of both conversations. */
+  sessionId: string;
+  /** The author: a participant of `sessionId`. */
+  fromUserId: string;
   kind: Exclude<TargetMessageKind, 'CHAT'>;
   content: string;
   sourceAttemptId?: string | null;
@@ -68,8 +65,7 @@ export function deliver(opts: {
  */
 export async function ownStatementCopy(opts: {
   conversationId: string;
-  participantId: string;
-  /** work-k5fk.3 (6a): the author's seat (the conversation's session and the author's user). */
+  /** The author's seat (the conversation's session and the author's user). */
   sessionId: string;
   userId: string;
   content: string;
@@ -78,7 +74,6 @@ export async function ownStatementCopy(opts: {
   const row = await prisma.message.create({
     data: {
       conversationId: opts.conversationId,
-      senderParticipantId: opts.participantId,
       sessionId: opts.sessionId,
       senderUserId: opts.userId,
       role: 'USER',
@@ -91,14 +86,13 @@ export async function ownStatementCopy(opts: {
   return {
     id: row.id,
     conversationId: opts.conversationId,
-    senderParticipantId: opts.participantId,
+    senderUserId: opts.userId,
     role: 'USER',
     kind: 'EMPATHY_STATEMENT',
     content: opts.content,
     refiningNeedId: null,
     sourceAttemptId: opts.attemptId,
     createdAt: row.createdAt,
-    senderParticipant: { userId: opts.userId },
   };
 }
 

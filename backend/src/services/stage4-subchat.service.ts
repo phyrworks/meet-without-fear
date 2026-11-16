@@ -27,7 +27,7 @@ import { logger } from '../lib/logger';
 import { getCompletion } from '../lib/bedrock';
 import { needsBrainstormPersona, noOverlapPersona, proposalRefinementPersona } from './stage4-prompts';
 import { createFacilitatorMessage, createParticipantMessage } from './message-store';
-import { resolveParticipant } from './participant-resolver';
+import { resolveParticipant, type Seat } from './participant-resolver';
 import {
   loadProposals,
   loadStage4Needs,
@@ -153,7 +153,9 @@ function toMessageDTO(
 
 type SubchatConversation = {
   id: string;
-  participantId: string;
+  /** The owner's seat (the conversation's own columns). */
+  sessionId: string;
+  userId: string;
   anchorKind: Stage4SubChatAnchor | null;
   anchorProposalId: string | null;
   status: 'ACTIVE' | 'RESOLVED';
@@ -165,7 +167,8 @@ type SubchatConversation = {
 
 const SUBCHAT_SELECT = {
   id: true,
-  participantId: true,
+  sessionId: true,
+  userId: true,
   anchorKind: true,
   anchorProposalId: true,
   status: true,
@@ -220,7 +223,13 @@ export async function openOrGetActiveSubChat(input: OpenSubChatInput): Promise<S
   if (!participant) throw new SubChatNotFoundError();
   const anchorId = input.anchorId ?? null;
   const active = (await prisma.conversation.findMany({
-    where: { participantId: participant.id, kind: 'SUBCHAT', status: 'ACTIVE', anchorKind: input.anchorKind },
+    where: {
+      sessionId: participant.sessionId,
+      userId: participant.userId,
+      kind: 'SUBCHAT',
+      status: 'ACTIVE',
+      anchorKind: input.anchorKind,
+    },
     orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
     select: SUBCHAT_SELECT,
   })) as unknown as SubchatConversation[];
@@ -238,18 +247,17 @@ export async function openOrGetActiveSubChat(input: OpenSubChatInput): Promise<S
   // the session (NEEDS_BRAINSTORM) or a visible proposal (PROPOSAL_REFINEMENT).
   const anchorNeed =
     input.anchorKind === Stage4SubChatAnchor.NEEDS_BRAINSTORM && anchorId
-      ? (await loadStage4Needs(input.sessionId, participant.id)).find(n => n.id === anchorId)
+      ? (await loadStage4Needs(input.sessionId, participant)).find(n => n.id === anchorId)
       : undefined;
   if (input.anchorKind === Stage4SubChatAnchor.NEEDS_BRAINSTORM && anchorId && !anchorNeed)
     throw new SubChatNotFoundError();
   if (input.anchorKind === Stage4SubChatAnchor.PROPOSAL_REFINEMENT && anchorId) {
-    const visible = (await loadProposals(input.sessionId, participant.id)).some(p => p.id === anchorId);
+    const visible = (await loadProposals(input.sessionId, participant)).some(p => p.id === anchorId);
     if (!visible) throw new SubChatNotFoundError();
   }
 
   const created = (await prisma.conversation.create({
     data: {
-      participantId: participant.id,
       sessionId: input.sessionId,
       userId: input.userId,
       kind: 'SUBCHAT',
@@ -318,17 +326,15 @@ export async function loadAnchorContext(
   sessionId: string,
   anchorKind: Stage4SubChatAnchor,
   anchorId: string | null,
-  viewerParticipantId?: string,
+  viewer?: Seat,
 ): Promise<AnchorContext> {
   if (anchorKind === Stage4SubChatAnchor.NEEDS_BRAINSTORM && anchorId) {
-    const needs = viewerParticipantId ? await loadStage4Needs(sessionId, viewerParticipantId) : [];
+    const needs = viewer ? await loadStage4Needs(sessionId, viewer) : [];
     return { anchorKind, needLabel: needs.find(n => n.id === anchorId)?.label ?? null };
   }
   if (anchorKind === Stage4SubChatAnchor.PROPOSAL_REFINEMENT && anchorId) {
     // Only a proposal the participant may see (spec §1.4 proposal RLS arm).
-    const proposal = viewerParticipantId
-      ? (await loadProposals(sessionId, viewerParticipantId)).find(p => p.id === anchorId)
-      : undefined;
+    const proposal = viewer ? (await loadProposals(sessionId, viewer)).find(p => p.id === anchorId) : undefined;
     return { anchorKind, proposalDescription: proposal?.description ?? null };
   }
   return { anchorKind };
@@ -374,8 +380,8 @@ export async function buildSystemPrompt(input: PromptBuildInput): Promise<BuiltP
               select: { role: true, content: true },
             })
           : Promise.resolve([] as Array<{ role: string; content: string }>),
-        loadProposals(sessionId, participant.id),
-        loadVisibleChoices(sessionId, participant.id),
+        loadProposals(sessionId, participant),
+        loadVisibleChoices(sessionId, participant),
       ])
     : [[], [], []];
 
@@ -389,7 +395,7 @@ export async function buildSystemPrompt(input: PromptBuildInput): Promise<BuiltP
         .map(p => {
           const stances = choices
             .filter(s => s.proposalId === p.id)
-            .map(s => `${s.participantId === participant?.id ? 'self' : 'partner'}=${s.decision}`)
+            .map(s => `${s.userId === participant?.userId ? 'self' : 'partner'}=${s.decision}`)
             .join(', ');
           return `- [${p.kind}] ${p.description}${stances ? ` (stances: ${stances})` : ''}`;
         })
@@ -436,13 +442,15 @@ export async function appendUserMessageAndRespond(input: SendMessageInput): Prom
 
   await createParticipantMessage({
     conversationId: subChat.id,
-    participantId: subChat.participantId,
-    userId: input.userId,
+    seat: { sessionId: subChat.sessionId, userId: subChat.userId },
     content: input.content,
     refiningNeedId: record.anchorKind === Stage4SubChatAnchor.NEEDS_BRAINSTORM ? anchorId : null,
   });
 
-  const anchor = await loadAnchorContext(record.sessionId, record.anchorKind, anchorId, subChat.participantId);
+  const anchor = await loadAnchorContext(record.sessionId, record.anchorKind, anchorId, {
+    sessionId: subChat.sessionId,
+    userId: subChat.userId,
+  });
   const { systemPrompt } = await buildSystemPrompt({
     sessionId: record.sessionId,
     userId: input.userId,
@@ -515,7 +523,7 @@ export async function resolveSubChat(input: ResolveInput): Promise<ResolveResult
   const createdIds: string[] = [];
   const updatedIds: string[] = [];
   const sessionId = record.sessionId;
-  const me = subChat.participantId;
+  const me: Seat = { sessionId: subChat.sessionId, userId: subChat.userId };
   // NEEDS_BRAINSTORM: the anchored shared need is linked to every accepted proposal.
   const anchorNeedId = record.anchorKind === Stage4SubChatAnchor.NEEDS_BRAINSTORM ? record.anchorId : null;
 
@@ -526,7 +534,6 @@ export async function resolveSubChat(input: ResolveInput): Promise<ResolveResult
       const created = await tx.proposal.create({
         data: {
           sessionId,
-          createdByParticipantId: me,
           createdByUserId: input.userId,
           description: draft.description,
           duration: draft.duration ?? null,
@@ -563,8 +570,8 @@ export async function resolveSubChat(input: ResolveInput): Promise<ResolveResult
       await tx.proposalRevision.create({
         data: {
           proposalId: row.id,
-          actorParticipantId: me,
           sessionId,
+
           actorUserId: input.userId,
           action: 'SUBCHAT_REFINED',
           after: {

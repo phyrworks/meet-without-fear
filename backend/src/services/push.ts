@@ -244,12 +244,12 @@ async function getSessionProgressContext(
     // Both participants' current stage rows from their milestones (stage shim; TS-12)
     const participants = await prisma.participant.findMany({
       where: { sessionId, userId: { in: [userId, actorUserId] } },
-      select: { id: true, userId: true, joinedAt: true },
+      select: { sessionId: true, userId: true, joinedAt: true },
     });
-    const states = await loadStageStates(participants.map(p => ({ id: p.id, joinedAt: p.joinedAt })));
+    const states = await loadStageStates(participants);
     const snapshotOf = (uid: string): StageProgressSnapshot | null => {
       const p = participants.find(x => x.userId === uid);
-      const state = p ? states.get(p.id) : undefined;
+      const state = p ? states.get(p) : undefined;
       if (!state) return null;
       const row = currentRow(state);
       return { stage: row.stage, status: row.status };

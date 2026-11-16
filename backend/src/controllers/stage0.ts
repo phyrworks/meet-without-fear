@@ -17,7 +17,7 @@ import { getJobPrisma, prisma } from '../lib/prisma';
 import { notifyPartner } from '../services/realtime';
 import { ErrorCode, signCompactRequestSchema } from '@meet-without-fear/shared';
 import { successResponse, errorResponse } from '../utils/response';
-import { getPartnerParticipant, type ResolvedParticipant } from '../services/participant-resolver';
+import { getPartnerParticipant, type ResolvedParticipant, type Seat } from '../services/participant-resolver';
 import { loadMilestones } from '../services/stage-shim';
 import { reachMilestone } from '../services/milestone-writer';
 
@@ -25,9 +25,9 @@ import { reachMilestone } from '../services/milestone-writer';
 // Helper Functions
 // ============================================================================
 
-/** When `participantId` signed the compact, or null. */
-async function signedAt(participantId: string): Promise<Date | null> {
-  const milestones = (await loadMilestones([participantId])).get(participantId) ?? [];
+/** When the participant at `seat` signed the compact, or null. */
+async function signedAt(seat: Seat): Promise<Date | null> {
+  const milestones = (await loadMilestones([seat])).get(seat) ?? [];
   return milestones.find(m => m.key === 'compact_signed')?.reachedAt ?? null;
 }
 
@@ -75,7 +75,7 @@ export async function signCompact(req: Request, res: Response): Promise<void> {
     if (!participant) return;
 
     const now = new Date();
-    const recorded = await reachMilestone(participant.id, 'compact_signed', now);
+    const recorded = await reachMilestone(participant, 'compact_signed', now);
     if (!recorded) {
       errorResponse(res, ErrorCode.CONFLICT, 'Compact already signed', 409);
       return;
@@ -83,8 +83,8 @@ export async function signCompact(req: Request, res: Response): Promise<void> {
     const signedAtIso = now.toISOString();
 
     // Check if partner has signed
-    const partner = await getPartnerParticipant(participant.id);
-    const partnerSigned = partner ? (await signedAt(partner.participantId)) !== null : false;
+    const partner = await getPartnerParticipant(participant);
+    const partnerSigned = partner ? (await signedAt({ sessionId, userId: partner.userId })) !== null : false;
     const canAdvance = partnerSigned;
 
     // If both have signed, ensure the session is ACTIVE — through
@@ -104,11 +104,11 @@ export async function signCompact(req: Request, res: Response): Promise<void> {
     // inviter; otherwise the partner.
     const invitation = await prisma.invitation.findFirst({
       where: { sessionId },
-      select: { invitedByParticipant: { select: { id: true, userId: true } } },
+      select: { invitedByUserId: true },
     });
     let notificationTargetId: string | null = null;
-    if (invitation && invitation.invitedByParticipant.id !== participant.id) {
-      notificationTargetId = invitation.invitedByParticipant.userId;
+    if (invitation && invitation.invitedByUserId !== participant.userId) {
+      notificationTargetId = invitation.invitedByUserId;
     } else if (partner?.userId) {
       notificationTargetId = partner.userId;
     }
@@ -155,7 +155,7 @@ export async function getCompactStatus(req: Request, res: Response): Promise<voi
       return;
     }
 
-    const mine = await signedAt(participant.id);
+    const mine = await signedAt(participant);
     const mySigned = mine !== null;
     const mySignedAt = mine?.toISOString() ?? null;
 
@@ -164,8 +164,8 @@ export async function getCompactStatus(req: Request, res: Response): Promise<voi
     let partnerSignedAt: string | null = null;
 
     if (mySigned) {
-      const partner = await getPartnerParticipant(participant.id);
-      const theirs = partner ? await signedAt(partner.participantId) : null;
+      const partner = await getPartnerParticipant(participant);
+      const theirs = partner ? await signedAt({ sessionId, userId: partner.userId }) : null;
       partnerSigned = theirs !== null;
       partnerSignedAt = theirs?.toISOString() ?? null;
     }
@@ -173,7 +173,7 @@ export async function getCompactStatus(req: Request, res: Response): Promise<voi
     // Is this the first session of these two? Their other RESOLVED sessions
     // (both participants; work-k5fk.2: no relationship). Before the partner
     // joins there is no pair yet, so it is the first.
-    const partnerUserId = (await getPartnerParticipant(participant.id))?.userId ?? null;
+    const partnerUserId = (await getPartnerParticipant(participant))?.userId ?? null;
     const priorResolvedCount = partnerUserId
       ? await prisma.session.count({
           where: {

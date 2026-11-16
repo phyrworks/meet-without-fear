@@ -187,7 +187,7 @@ describeTarget('Stage 2 realtime payloads (I1): what each participant receives',
     const directions = await rows<{ author: string; status: string; offers: number }>(`
       SELECT u.email AS author, a.status::text AS status,
              (SELECT count(*)::int FROM context_share_offer o WHERE o.attempt_id = a.id) AS offers
-      FROM empathy_attempt a JOIN participant p ON p.id = a.author_participant_id JOIN "user" u ON u.id = p.user_id
+      FROM empathy_attempt a JOIN "user" u ON u.id = a.author_user_id
       ORDER BY u.email`);
     // The scenario reached what the test is about: both rounds await sharing, each with an offer.
     expect(directions).toEqual([

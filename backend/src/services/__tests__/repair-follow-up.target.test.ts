@@ -73,8 +73,8 @@ describeTarget('repair and follow-up on the target, as mwf_app and mwf_job with 
 
   it('proposal_need refuses a need that was never shared (FK to need_share), as mwf_app', async () => {
     const [unshared] = await run.sql<{ id: string }>(
-      `INSERT INTO need (participant_id, label, category, ai_confidence, user_id, session_id) VALUES ($1::uuid, 'PROBE_UNSHARED', 'SAFETY', 0.9, (SELECT p.user_id FROM participant p WHERE p.id = $1::uuid), (SELECT p.session_id FROM participant p WHERE p.id = $1::uuid)) RETURNING id`,
-      [ids.ada],
+      `INSERT INTO need (session_id, user_id, label, category, ai_confidence) VALUES ($1::uuid, $2::uuid, 'PROBE_UNSHARED', 'SAFETY', 0.9) RETURNING id`,
+      [ids.session, ids.adaUser],
     );
     await expect(
       run.as(
@@ -88,14 +88,14 @@ describeTarget('repair and follow-up on the target, as mwf_app and mwf_job with 
 
   it("Bob's choice is hidden from Ada before his choices_shared and visible after", async () => {
     await asUser(ids.bobUser, () =>
-      store.upsertChoice({ proposalId: proposal.checkin, participantId: ids.bob, decision: 'WILLING' }),
+      store.upsertChoice({ proposalId: proposal.checkin, seat: ids.bob, decision: 'WILLING' }),
     );
     await asUser(ids.bobUser, () =>
-      store.upsertChoice({ proposalId: proposal.pause, participantId: ids.bob, decision: 'WILLING' }),
+      store.upsertChoice({ proposalId: proposal.pause, seat: ids.bob, decision: 'WILLING' }),
     );
     const before = await asUser(ids.adaUser, () => store.loadVisibleChoices(ids.session, ids.ada));
-    expect(before.filter(c => c.participantId === ids.bob)).toEqual([]);
-    expect(before.filter(c => c.participantId === ids.ada).map(c => c.proposalId)).toEqual([proposal.checkin]);
+    expect(before.filter(c => c.userId === ids.bobUser)).toEqual([]);
+    expect(before.filter(c => c.userId === ids.adaUser).map(c => c.proposalId)).toEqual([proposal.checkin]);
     const dtoBefore = await asUser(ids.adaUser, () => state.getStage4State(ids.session, ids.adaUser));
     expect(dtoBefore.partnerSelections).toEqual([]);
     expect(JSON.stringify(dtoBefore)).not.toContain('"partnerDecisionVisible"');
@@ -109,7 +109,7 @@ describeTarget('repair and follow-up on the target, as mwf_app and mwf_job with 
     const after = await asUser(ids.adaUser, () => store.loadVisibleChoices(ids.session, ids.ada));
     expect(
       after
-        .filter(c => c.participantId === ids.bob)
+        .filter(c => c.userId === ids.bobUser)
         .map(c => c.proposalId)
         .sort(),
     ).toEqual([proposal.checkin, proposal.pause].sort());
@@ -123,8 +123,8 @@ describeTarget('repair and follow-up on the target, as mwf_app and mwf_job with 
     const make = (proposalId: string, parties: string[]) =>
       store.createAgreementsAsJob({
         sessionId: ids.session,
-        actorParticipantId: ids.ada,
-        partyParticipantIds: parties,
+        actorUserId: ids.adaUser,
+        partyUserIds: parties,
         agreements: [
           {
             proposalId,
@@ -138,9 +138,11 @@ describeTarget('repair and follow-up on the target, as mwf_app and mwf_job with 
         ],
       });
     // Ada is not WILLING on "pause" (Bob is).
-    await expect(make(proposal.pause, [ids.ada, ids.bob])).rejects.toThrow(/every present participant, each WILLING/);
+    await expect(make(proposal.pause, [ids.adaUser, ids.bobUser])).rejects.toThrow(
+      /every present participant, each WILLING/,
+    );
     // Both WILLING on "checkin", but Bob left out of the party set.
-    await expect(make(proposal.checkin, [ids.ada])).rejects.toThrow(/every present participant, each WILLING/);
+    await expect(make(proposal.checkin, [ids.adaUser])).rejects.toThrow(/every present participant, each WILLING/);
     expect(await run.sql(`SELECT * FROM agreement`)).toEqual([]);
     expect(await run.sql(`SELECT status::text AS status FROM proposal WHERE id = $1`, [proposal.pause])).toEqual([
       { status: 'ACTIVE' },
@@ -150,28 +152,26 @@ describeTarget('repair and follow-up on the target, as mwf_app and mwf_job with 
   it('closure (job): the agreement with both parties, session_closure, RESOLVED, closed for both; arrays from v_session_closure_items', async () => {
     // A shared need nobody addresses, and an unshared one (never in any array).
     const [open] = await run.sql<{ id: string }>(
-      `INSERT INTO need (participant_id, label, category, ai_confidence, confirmed_at, user_id, session_id) VALUES ($1::uuid, 'PROBE_OPEN_LABEL', 'MEANING', 0.9, now(), (SELECT p.user_id FROM participant p WHERE p.id = $1::uuid), (SELECT p.session_id FROM participant p WHERE p.id = $1::uuid)) RETURNING id`,
-      [ids.bob],
+      `INSERT INTO need (session_id, user_id, label, category, ai_confidence, confirmed_at) VALUES ($1::uuid, $2::uuid, 'PROBE_OPEN_LABEL', 'MEANING', 0.9, now()) RETURNING id`,
+      [ids.session, ids.bobUser],
     );
     await run.as(
       'mwf_app',
       ids.bobUser,
-      `INSERT INTO consent (participant_id, need_id, decision, decided_at, user_id, session_id) VALUES ($1::uuid, $2, 'GRANTED', now(), (SELECT p.user_id FROM participant p WHERE p.id = $1::uuid), (SELECT p.session_id FROM participant p WHERE p.id = $1::uuid))`,
-      [ids.bob, open.id],
+      `INSERT INTO consent (session_id, user_id, need_id, decision, decided_at) VALUES ($1::uuid, $2::uuid, $3, 'GRANTED', now())`,
+      [ids.session, ids.bobUser, open.id],
     );
     await run.as('mwf_job', null, `SELECT app.need_share($1::uuid, 'An open shared need')`, [open.id]);
     // Ada keeps her individual commitment (she is WILLING on it).
     await asUser(ids.adaUser, () =>
-      store.upsertChoice({ proposalId: proposal.individual, participantId: ids.ada, decision: 'WILLING' }),
+      store.upsertChoice({ proposalId: proposal.individual, seat: ids.ada, decision: 'WILLING' }),
     );
     // Ada set aside nothing; both have shared their choices (Ada in the fixture, Bob above).
     await asUser(ids.adaUser, () =>
-      store.upsertChoice({ proposalId: proposal.pause, participantId: ids.ada, decision: 'NOT_WILLING' }),
+      store.upsertChoice({ proposalId: proposal.pause, seat: ids.ada, decision: 'NOT_WILLING' }),
     );
 
-    const result = await asUser(ids.adaUser, () =>
-      closure.closeStage4({ sessionId: ids.session, participantId: ids.ada }),
-    );
+    const result = await asUser(ids.adaUser, () => closure.closeStage4({ sessionId: ids.session, seat: ids.ada }));
     expect(result.kind).toBe('SHARED_AGREEMENT');
     expect(result.agreementIds).toHaveLength(1);
 
@@ -180,10 +180,8 @@ describeTarget('repair and follow-up on the target, as mwf_app and mwf_job with 
     );
     expect(agreements).toEqual([{ id: result.agreementIds[0], proposal_id: proposal.checkin, status: 'AGREED' }]);
     expect(
-      (
-        await run.sql<{ participant_id: string }>(`SELECT participant_id FROM agreement_party ORDER BY participant_id`)
-      ).map(r => r.participant_id),
-    ).toEqual([ids.ada, ids.bob].sort());
+      (await run.sql<{ user_id: string }>(`SELECT user_id FROM agreement_party ORDER BY user_id`)).map(r => r.user_id),
+    ).toEqual([ids.adaUser, ids.bobUser].sort());
     expect(await run.sql(`SELECT status::text AS status FROM proposal WHERE id = $1`, [proposal.checkin])).toEqual([
       { status: 'CONVERTED_TO_AGREEMENT' },
     ]);
@@ -305,8 +303,8 @@ describeTarget('repair and follow-up on the target, as mwf_app and mwf_job with 
     // never minted, or a need of the session that was never shared — is
     // refused alike, before any write.
     const [unshared] = await run.sql<{ id: string }>(
-      `INSERT INTO need (participant_id, label, category, ai_confidence, user_id, session_id) VALUES ($1::uuid, 'PROBE_UNSHARED_NEED', 'SAFETY', 0.9, (SELECT p.user_id FROM participant p WHERE p.id = $1::uuid), (SELECT p.session_id FROM participant p WHERE p.id = $1::uuid)) RETURNING id`,
-      [ids.ada],
+      `INSERT INTO need (session_id, user_id, label, category, ai_confidence) VALUES ($1::uuid, $2::uuid, 'PROBE_UNSHARED_NEED', 'SAFETY', 0.9) RETURNING id`,
+      [ids.session, ids.adaUser],
     );
     for (const needId of [uuidv7(), unshared.id]) {
       await expect(
@@ -342,12 +340,12 @@ describeTarget('repair and follow-up on the target, as mwf_app and mwf_job with 
       }),
     );
     expect(result.checkin?.id).toEqual(expect.any(String));
-    const rows = await run.sql<{ follow_up_id: string; participant_id: string; payload: Record<string, unknown[]> }>(
-      `SELECT follow_up_id, participant_id, payload FROM follow_up_checkin WHERE follow_up_id = $1`,
+    const rows = await run.sql<{ follow_up_id: string; user_id: string; payload: Record<string, unknown[]> }>(
+      `SELECT follow_up_id, user_id, payload FROM follow_up_checkin WHERE follow_up_id = $1`,
       [shared.id],
     );
     expect(rows).toHaveLength(1);
-    expect(rows[0].participant_id).toBe(ids.ada);
+    expect(rows[0].user_id).toBe(ids.adaUser);
     expect(Object.keys(rows[0].payload).sort()).toEqual([
       'adjustments',
       'carriedNotes',
@@ -365,10 +363,8 @@ describeTarget('repair and follow-up on the target, as mwf_app and mwf_job with 
     expect(JSON.stringify(row)).not.toContain('PROBE_PRIVATE');
     expect(rows[0].payload.adjustments).toEqual([]);
     // …they are Ada's own follow_up_note rows (P-class).
-    const notes = await run.sql<{ content: string; participant_id: string }>(
-      `SELECT content, participant_id FROM follow_up_note`,
-    );
-    expect(notes.every(n => n.participant_id === ids.ada)).toBe(true);
+    const notes = await run.sql<{ content: string; user_id: string }>(`SELECT content, user_id FROM follow_up_note`);
+    expect(notes.every(n => n.user_id === ids.adaUser)).toBe(true);
     expect(notes.map(n => n.content).join('\n')).toContain('PROBE_PRIVATE_ADJUSTMENT');
     expect(notes.map(n => n.content).join('\n')).toContain('PROBE_PRIVATE_ENTRY_NOTE');
     // The reminder of the same transaction exists.

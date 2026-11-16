@@ -258,7 +258,7 @@ export interface CompletionOptions {
    * call's input and output is the calling participant's alone (their own
    * chat turn, their own message or memory, their own conversation's summary).
    * Then the telemetry row is attributed to them; otherwise it is written with
-   * participant_id NULL and its session_id, so the anonymise walk's R17 arm
+   * participant_user_id NULL and its session_id, so the anonymise walk's R17 arm
    * removes it when EITHER participant leaves. Default: not attributed.
    */
   ownContent?: boolean;
@@ -287,7 +287,7 @@ export interface HaikuCompletionOptions {
    * call's input and output is the calling participant's alone (their own
    * chat turn, their own message or memory, their own conversation's summary).
    * Then the telemetry row is attributed to them; otherwise it is written with
-   * participant_id NULL and its session_id, so the anonymise walk's R17 arm
+   * participant_user_id NULL and its session_id, so the anonymise walk's R17 arm
    * removes it when EITHER participant leaves. Default: not attributed.
    */
   ownContent?: boolean;
@@ -774,7 +774,7 @@ export interface SonnetStreamingOptions {
    * call's input and output is the calling participant's alone (their own
    * chat turn, their own message or memory, their own conversation's summary).
    * Then the telemetry row is attributed to them; otherwise it is written with
-   * participant_id NULL and its session_id, so the anonymise walk's R17 arm
+   * participant_user_id NULL and its session_id, so the anonymise walk's R17 arm
    * removes it when EITHER participant leaves. Default: not attributed.
    */
   ownContent?: boolean;

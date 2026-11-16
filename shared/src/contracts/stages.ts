@@ -93,10 +93,15 @@ export type ConfirmTopicFrameRequestInput = z.infer<typeof confirmTopicFrameRequ
 
 export const refineTopicFrameRequestSchema = z.object({
   message: z.string().min(1, 'Message required').max(500, 'Message too long'),
-  history: z.array(z.object({
-    role: z.enum(['user', 'assistant']),
-    content: z.string().min(1).max(1000),
-  })).max(10).optional(),
+  history: z
+    .array(
+      z.object({
+        role: z.enum(['user', 'assistant']),
+        content: z.string().min(1).max(1000),
+      }),
+    )
+    .max(10)
+    .optional(),
 });
 
 export type RefineTopicFrameRequestInput = z.infer<typeof refineTopicFrameRequestSchema>;
@@ -170,18 +175,20 @@ export const consentToShareResponseSchema = z.object({
 
 export type ConsentToShareResponseInput = z.infer<typeof consentToShareResponseSchema>;
 
-export const validateEmpathyRequestSchema = z.object({
-  validated: z.boolean(),
-  feedback: z.string().max(500, 'Feedback too long').optional(),
-}).superRefine((value, ctx) => {
-  if (!value.validated && !value.feedback?.trim()) {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      path: ['feedback'],
-      message: 'Feedback is required when empathy is not validated',
-    });
-  }
-});
+export const validateEmpathyRequestSchema = z
+  .object({
+    validated: z.boolean(),
+    feedback: z.string().max(500, 'Feedback too long').optional(),
+  })
+  .superRefine((value, ctx) => {
+    if (!value.validated && !value.feedback?.trim()) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['feedback'],
+        message: 'Feedback is required when empathy is not validated',
+      });
+    }
+  });
 
 export type ValidateEmpathyRequestInput = z.infer<typeof validateEmpathyRequestSchema>;
 
@@ -227,10 +234,14 @@ export type SaveValidationFeedbackDraftResponseInput = z.infer<typeof saveValida
 
 export const refineValidationFeedbackRequestSchema = z.object({
   message: z.string().min(1, 'Message is required'),
-  history: z.array(z.object({
-    role: z.enum(['coach', 'user']),
-    content: z.string(),
-  })).optional(),
+  history: z
+    .array(
+      z.object({
+        role: z.enum(['coach', 'user']),
+        content: z.string(),
+      }),
+    )
+    .optional(),
 });
 
 export type RefineValidationFeedbackRequestInput = z.infer<typeof refineValidationFeedbackRequestSchema>;
@@ -460,7 +471,8 @@ export const followUpNeedOutcomeSchema = z
     needId: z.string().uuid().nullable(),
     /** The shared text of `needId` when it is set (never the owner's private label). */
     needLabel: z.string().min(1).max(500),
-    sourceParticipantId: z.string().uuid().nullable(),
+    /** The need's owner (a user of the check-in's session), or null. */
+    sourceUserId: z.string().uuid().nullable(),
     resolutionStatus: z.nativeEnum(TendingNeedResolutionStatus),
     note: nullableText,
     changedNeedLabel: z.string().max(500).nullable(),

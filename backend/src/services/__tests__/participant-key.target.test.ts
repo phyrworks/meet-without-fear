@@ -1,15 +1,18 @@
 /**
- * work-k5fk.3 (design note §3, §7 row 6a): every child of `participant` carries
- * `session_id` and the user id of each participant it names, and the database
- * pins them with composite foreign keys, so "same session" is a key, not a
- * trigger. On a clone of the TOMBSTONE_READY target fixture (the fixture with
- * the most tables populated), as the superuser for the catalog and the
- * mutations and as the real roles for the writers' refusals.
+ * work-k5fk.3 (design note §3, §7 rows 6a and 6b): a participant is keyed
+ * (session_id, user_id), and every child of it names it by that pair —
+ * FOREIGN KEY (session_id, x_user_id) REFERENCES participant (session_id,
+ * user_id) — so "same session" is a key, not a trigger. On a clone of the
+ * TOMBSTONE_READY target fixture (the fixture with the most tables populated),
+ * as the superuser for the catalog and the mutations and as the real roles for
+ * the writers' refusals.
  *
- *   - the catalog: every table with a foreign key to participant pins it with
- *     a key that includes session_id (6a: next to each participant id FK, the
- *     seat pin (x_participant_id, session_id, x_user_id) → participant (id,
- *     session_id, user_id)); the three triggers the keys replace are gone;
+ *   - the catalog: participant's primary key is (session_id, user_id) and it
+ *     has no id; no table has a *participant_id column; every key to
+ *     participant is (session_id, x_user_id); a child of a child is pinned on
+ *     (id, session_id); participant.kind is the user's kind, pinned by
+ *     FOREIGN KEY (user_id, kind) REFERENCES "user" (id, kind); the four
+ *     triggers the keys replace and the participant_kind enum are gone;
  *   - a generated loop over every composite foreign key that carries
  *     session_id: moving one real row of the referencing table to another
  *     session, or naming a user who is not a participant of the row's session,
@@ -20,7 +23,9 @@
  *     (t_review_subject), a share of someone else's need (t_need_share_owner),
  *     a reconciler result about another subject (the subject half of
  *     t_result_live_attempt), while a result on a SUPERSEDED round is still the
- *     trigger's 23514;
+ *     trigger's 23514; a seat whose kind is not its user's (t_participant_kind):
+ *     the AI and a persona sit as themselves, never as human, and a human never
+ *     as either;
  *   - the delete actions are as they were: deleting a session cascades every
  *     child row; deleting a participant cascades its rows; a shared need, a
  *     user with a participant and an agreed proposal are RESTRICT; deleting an
@@ -31,7 +36,7 @@
 
 import { Client } from 'pg';
 import { isTargetShape } from '../../testing/golden/shape';
-import { adaAndBob, openTargetRun, randomUuidV7, type TargetRun } from './target-roles';
+import { openTargetRun, randomUuidV7, type TargetRun } from './target-roles';
 
 const describeTarget = isTargetShape() ? describe : describe.skip;
 jest.setTimeout(180_000);
@@ -55,9 +60,10 @@ interface ForeignKey {
   refColumns: string[];
 }
 
-/** The tables that name a participant and must pin it to their session (6a: all but ai_memory, which 6b reshapes). */
+/** The tables that name a participant, each by (session_id, a user column). */
 const CHILD_TABLES = [
   'agreement_party',
+  'ai_memory',
   'brain_activity',
   'consent',
   'context_share_offer',
@@ -86,11 +92,11 @@ const CHILD_TABLES = [
   'session_closure',
 ];
 
-describeTarget('participant composite keys (work-k5fk.3, 6a)', () => {
+describeTarget('participant composite keys (work-k5fk.3, 6a/6b)', () => {
   let run: TargetRun;
-  let ids: Awaited<ReturnType<typeof adaAndBob>>;
+  let ids: { session: string; adaUser: string; bobUser: string };
   /** A second session with one participant, Cy, who is in no session of Ada and Bob. */
-  let other: { session: string; cy: string; cyUser: string };
+  let other: { session: string; cyUser: string };
   let fks: ForeignKey[];
   const pid = process.pid;
 
@@ -109,15 +115,19 @@ describeTarget('participant composite keys (work-k5fk.3, 6a)', () => {
 
   beforeAll(async () => {
     run = await openTargetRun('TOMBSTONE_READY', `k5fk3_key_${pid}`);
-    ids = await adaAndBob(run);
+    [ids] = await run.sql<{ session: string; adaUser: string; bobUser: string }>(
+      `SELECT pa.session_id AS session, pa.user_id AS "adaUser", pb.user_id AS "bobUser"
+       FROM participant pa JOIN "user" ua ON ua.id = pa.user_id AND ua.email = 'ada@e2e.test'
+       JOIN participant pb ON pb.session_id = pa.session_id AND pb.user_id <> pa.user_id`,
+    );
     const cyUser = randomUuidV7();
     await run.sql(`INSERT INTO "user" (id, email, first_name) VALUES ($1, $2, 'Cy')`, [cyUser, `cy-${pid}@e2e.test`]);
     const [s] = await run.sql<{ id: string }>(`INSERT INTO session (status) VALUES ('CREATED') RETURNING id`);
-    const [p] = await run.sql<{ id: string }>(
-      `INSERT INTO participant (session_id, user_id, kind, display_name) VALUES ($1, $2, 'human', 'Cy') RETURNING id`,
-      [s.id, cyUser],
-    );
-    other = { session: s.id, cy: p.id, cyUser };
+    await run.sql(`INSERT INTO participant (session_id, user_id, kind, display_name) VALUES ($1, $2, 'human', 'Cy')`, [
+      s.id,
+      cyUser,
+    ]);
+    other = { session: s.id, cyUser };
     fks = await run.sql<ForeignKey & Record<string, unknown>>(`
       SELECT c.conname AS name, c.conrelid::regclass::text AS table, c.confrelid::regclass::text AS "refTable",
              (SELECT array_agg(a.attname::text ORDER BY k.n) FROM unnest(c.conkey) WITH ORDINALITY k(attnum, n)
@@ -133,26 +143,28 @@ describeTarget('participant composite keys (work-k5fk.3, 6a)', () => {
   });
 
   describe('the catalog', () => {
-    it('every participant reference of a child table is pinned by a key that carries session_id', async () => {
+    it('participant is keyed (session_id, user_id); it has no id and no table has a participant id', async () => {
+      const [pk] = await run.sql<{ cols: string[] }>(`
+        SELECT array_agg(a.attname::text ORDER BY k.n) AS cols
+        FROM pg_constraint c, unnest(c.conkey) WITH ORDINALITY k(attnum, n)
+        JOIN pg_attribute a ON a.attrelid = 'participant'::regclass AND a.attnum = k.attnum
+        WHERE c.conrelid = 'participant'::regclass AND c.contype = 'p'`);
+      expect(pk.cols).toEqual(['session_id', 'user_id']);
+      const cols = await run.sql<{ col: string }>(`
+        SELECT c.relname || '.' || a.attname AS col FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid
+        JOIN pg_namespace n ON n.oid = c.relnamespace
+        WHERE n.nspname = 'public' AND c.relkind IN ('r', 'v') AND a.attnum > 0 AND NOT a.attisdropped
+          AND (a.attname LIKE '%participant_id' OR (c.relname = 'participant' AND a.attname = 'id'))
+        ORDER BY 1`);
+      expect(cols.map(c => c.col)).toEqual([]);
+    });
+
+    it('every participant reference of a child table is (session_id, x_user_id) → participant (session_id, user_id)', async () => {
       const toParticipant = fks.filter(f => f.refTable === 'participant' && f.table !== 'participant');
-      const pinned = toParticipant.filter(f => f.columns.includes('session_id'));
-      const legacy = toParticipant.filter(f => !f.columns.includes('session_id'));
-      // 6a keeps the participant id FKs; each one has a pin over the same column.
-      const unpinned = legacy.filter(
-        f => !pinned.some(p => p.table === f.table && p.columns[0] === f.columns[0] && p.columns.length === 3),
-      );
-      expect(unpinned.map(f => `${f.table}.${f.columns.join(',')}`)).toEqual(
-        // ai_memory.participant_id is reshaped in 6b (session_id nullable, user_id NOT NULL)
-        ['ai_memory.participant_id'],
-      );
-      const pinnedTables = [...new Set(pinned.map(f => f.table))].filter(t => t !== 'live_session_pair').sort();
-      expect(pinnedTables).toEqual(CHILD_TABLES);
-      for (const p of pinned) {
-        expect({ fk: p.name, ref: p.refColumns }).toEqual({
-          fk: p.name,
-          ref: p.columns.length === 3 ? ['id', 'session_id', 'user_id'] : ['session_id', 'user_id'],
-        });
-      }
+      expect(toParticipant.filter(f => f.columns.length !== 2 || f.columns[0] !== 'session_id')).toEqual([]);
+      expect(toParticipant.filter(f => f.refColumns.join(',') !== 'session_id,user_id')).toEqual([]);
+      const tables = [...new Set(toParticipant.map(f => f.table))].filter(t => t !== 'live_session_pair').sort();
+      expect(tables).toEqual(CHILD_TABLES);
     });
 
     it('a child of a child pins it on (id, session_id): the two paths name one session', async () => {
@@ -185,15 +197,45 @@ describeTarget('participant composite keys (work-k5fk.3, 6a)', () => {
         ['follow_up_checkin', 'follow_up'],
       ];
       expect(expected.filter(([t, r]) => !keyed(t, r))).toEqual([]);
+      // 6a review F2: these pin the parent's PERSON too, not only its session — a key weakened to (id, session_id)
+      // would still pass `keyed` above and be masked by the participant key in the loops below.
+      const pinsUser: Array<[string, string, string[], string[]]> = [
+        ['empathy_review', 'empathy_attempt', ['attempt_id', 'session_id', 'reviewer_user_id'], ['id', 'session_id', 'subject_user_id']],
+        ['reconciler_result', 'empathy_attempt', ['attempt_id', 'session_id', 'subject_user_id'], ['id', 'session_id', 'subject_user_id']],
+        ['context_share_offer', 'empathy_attempt', ['attempt_id', 'session_id', 'subject_user_id'], ['id', 'session_id', 'subject_user_id']],
+        ['reconciler_guidance', 'reconciler_result', ['result_id', 'session_id', 'subject_user_id'], ['id', 'session_id', 'subject_user_id']],
+        ['need_share', 'need', ['need_id', 'session_id', 'user_id'], ['id', 'session_id', 'user_id']],
+      ];
+      const missing = pinsUser.filter(
+        ([t, r, cols, refCols]) =>
+          !fks.some(
+            f => f.table === t && f.refTable === r && f.columns.join() === cols.join() && f.refColumns.join() === refCols.join(),
+          ),
+      );
+      expect(missing.map(([t, r]) => `${t} → ${r}`)).toEqual([]);
     });
 
-    it('the three same-session triggers are retired; t_result_live_attempt keeps its live-round half', async () => {
+    it('participant.kind is the user’s kind, pinned by FOREIGN KEY (user_id, kind) REFERENCES "user" (id, kind)', async () => {
+      expect(
+        fks.filter(f => f.table === 'participant' && f.refTable === '"user"').map(f => [f.columns, f.refColumns]),
+      ).toEqual([[['user_id', 'kind'], ['id', 'kind']]]);
+      const [t] = await run.sql<{ t: string }>(
+        `SELECT format_type(atttypid, NULL) AS t FROM pg_attribute WHERE attrelid = 'participant'::regclass AND attname = 'kind'`,
+      );
+      expect(t.t).toBe('user_kind');
+      const [n] = await run.sql<{ n: number }>(`SELECT count(*)::int AS n FROM pg_type WHERE typname = 'participant_kind'`);
+      expect(n.n).toBe(0);
+    });
+
+    it('the four triggers the keys replace are retired; t_result_live_attempt keeps its live-round half', async () => {
       const rows = await run.sql<{ name: string }>(`
         SELECT tgname AS name FROM pg_trigger WHERE NOT tgisinternal
-          AND tgname IN ('t_same_session', 't_review_subject', 't_need_share_owner', 't_result_live_attempt')
+          AND tgname IN ('t_same_session', 't_review_subject', 't_need_share_owner', 't_participant_kind', 't_result_live_attempt')
         UNION ALL
         SELECT p.proname FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
-        WHERE n.nspname = 'app' AND p.proname IN ('t_attempt_same_session', 't_review_subject', 't_need_share_owner')
+        WHERE n.nspname = 'app'
+          AND p.proname IN ('t_attempt_same_session', 't_review_subject', 't_need_share_owner', 't_participant_kind',
+                            'is_co_participant', 'my_participant')
         ORDER BY 1`);
       expect(rows.map(r => r.name)).toEqual(['t_result_live_attempt']);
     });
@@ -202,127 +244,100 @@ describeTarget('participant composite keys (work-k5fk.3, 6a)', () => {
   describe('a generated loop over every composite key that carries session_id', () => {
     beforeAll(async () => {
       // A row for every key to try (TOMBSTONE_READY has most; the rest are written here, valid, as the superuser).
-      const a = { pid: ids.ada, user: ids.adaUser };
-      const b = { pid: ids.bob, user: ids.bobUser };
       const s = ids.session;
+      const a = ids.adaUser;
+      const b = ids.bobUser;
       const one = async (q: string, p: unknown[] = []) => (await run.sql<{ id: string }>(q, p))[0]?.id;
       const attB = await one(
-        `SELECT id FROM empathy_attempt WHERE author_participant_id = $1 AND status <> 'SUPERSEDED' ORDER BY round DESC LIMIT 1`,
-        [b.pid],
+        `SELECT id FROM empathy_attempt WHERE session_id = $1 AND author_user_id = $2 AND status <> 'SUPERSEDED'
+         ORDER BY round DESC LIMIT 1`,
+        [s, b],
       );
-      const proposalA = await one(`SELECT id FROM proposal WHERE created_by_participant_id = $1 LIMIT 1`, [a.pid]);
+      const proposalA = await one(`SELECT id FROM proposal WHERE session_id = $1 AND created_by_user_id = $2 LIMIT 1`, [s, a]);
       const shared = await one(
         `SELECT ns.need_id AS id FROM need_share ns WHERE ns.session_id = $1
          AND NOT EXISTS (SELECT 1 FROM proposal_need pn WHERE pn.need_id = ns.need_id AND pn.proposal_id = $2) LIMIT 1`,
         [s, proposalA],
       );
       const invitation = await one(`SELECT id FROM invitation WHERE session_id = $1`, [s]);
-      const result = await run.sql<{
-        id: string;
-        author: string;
-        author_user: string;
-        subject: string;
-        subject_user: string;
-      }>(
-        `SELECT r.id, a.author_participant_id AS author, a.author_user_id AS author_user,
-                r.subject_participant_id AS subject, r.subject_user_id AS subject_user
+      const [result] = await run.sql<{ id: string; author_user: string; subject_user: string }>(
+        `SELECT r.id, a.author_user_id AS author_user, r.subject_user_id AS subject_user
          FROM reconciler_result r JOIN empathy_attempt a ON a.id = r.attempt_id WHERE r.session_id = $1 LIMIT 1`,
         [s],
       );
-      const offer = await run.sql<{ id: string; subject: string; subject_user: string }>(
-        `SELECT id, subject_participant_id AS subject, subject_user_id AS subject_user FROM context_share_offer WHERE session_id = $1 LIMIT 1`,
+      const [offer] = await run.sql<{ id: string; subject_user: string }>(
+        `SELECT id, subject_user_id AS subject_user FROM context_share_offer WHERE session_id = $1 LIMIT 1`,
         [s],
       );
-      const seat = [a.pid, s, a.user];
+      const seat = [s, a];
+      await run.sql(`INSERT INTO mood_reading (session_id, user_id, intensity) VALUES ($1, $2, 5)`, seat);
+      await run.sql(`INSERT INTO regulation_event (session_id, user_id, type) VALUES ($1, $2, 'GROUNDING')`, seat);
+      await run.sql(`INSERT INTO participant_key (session_id, user_id, key_id, wrapped_dek) VALUES ($1, $2, 'k', '\\x00')`, seat);
+      await run.sql(`INSERT INTO follow_up_note (session_id, user_id, content) VALUES ($1, $2, 'a note')`, seat);
       await run.sql(
-        `INSERT INTO mood_reading (participant_id, session_id, user_id, intensity) VALUES ($1, $2, $3, 5)`,
-        seat,
-      );
-      await run.sql(
-        `INSERT INTO regulation_event (participant_id, session_id, user_id, type) VALUES ($1, $2, $3, 'GROUNDING')`,
-        seat,
-      );
-      await run.sql(
-        `INSERT INTO participant_key (participant_id, session_id, user_id, key_id, wrapped_dek) VALUES ($1, $2, $3, 'k', '\\x00')`,
-        seat,
-      );
-      await run.sql(
-        `INSERT INTO follow_up_note (participant_id, session_id, user_id, content) VALUES ($1, $2, $3, 'a note')`,
+        `INSERT INTO ai_memory (session_id, user_id, kind, doc)
+         VALUES ($1, $2, 'NOTABLE_FACTS', '{"facts": []}') ON CONFLICT DO NOTHING`,
         seat,
       );
       const followUp = await one(
-        `INSERT INTO follow_up (session_id, type, scope, owner_participant_id, owner_user_id, status)
-         VALUES ($2, 'USER_INITIATED_REENTRY', 'INDIVIDUAL', $1, $3, 'OPEN') RETURNING id`,
+        `INSERT INTO follow_up (session_id, type, scope, owner_user_id, status)
+         VALUES ($1, 'USER_INITIATED_REENTRY', 'INDIVIDUAL', $2, 'OPEN') RETURNING id`,
         seat,
       );
+      await run.sql(`INSERT INTO follow_up_checkin (follow_up_id, session_id, user_id) VALUES ($3, $1, $2)`, [...seat, followUp]);
+      await run.sql(`INSERT INTO proposal_need (proposal_id, need_id, session_id) VALUES ($1, $2, $3)`, [proposalA, shared, s]);
+      await run.sql(`INSERT INTO need_disposition (session_id, user_id, need_id) VALUES ($1, $2, $3)`, [...seat, shared]);
       await run.sql(
-        `INSERT INTO follow_up_checkin (follow_up_id, participant_id, session_id, user_id) VALUES ($4, $1, $2, $3)`,
-        [...seat, followUp],
-      );
-      await run.sql(`INSERT INTO proposal_need (proposal_id, need_id, session_id) VALUES ($1, $2, $3)`, [
-        proposalA,
-        shared,
-        s,
-      ]);
-      await run.sql(
-        `INSERT INTO need_disposition (participant_id, session_id, user_id, need_id) VALUES ($1, $2, $3, $4)`,
-        [...seat, shared],
-      );
-      await run.sql(
-        `INSERT INTO proposal_revision (proposal_id, actor_participant_id, session_id, actor_user_id, action)
-         VALUES ($4, $1, $2, $3, 'REVISED')`,
+        `INSERT INTO proposal_revision (proposal_id, session_id, actor_user_id, action) VALUES ($3, $1, $2, 'REVISED')`,
         [...seat, proposalA],
       );
       await run.sql(
-        `INSERT INTO proposal (session_id, created_by_participant_id, created_by_user_id, description, status, removed_at,
-                               removed_by_participant_id, removed_by_user_id)
-         VALUES ($2, $1, $3, 'removed', 'REMOVED', now(), $4, $5)`,
-        [...seat, b.pid, b.user],
+        `INSERT INTO proposal (session_id, created_by_user_id, description, status, removed_at, removed_by_user_id)
+         VALUES ($1, $2, 'removed', 'REMOVED', now(), $3)`,
+        [...seat, b],
       );
       const review = await one(
-        `INSERT INTO empathy_review (attempt_id, reviewer_participant_id, session_id, reviewer_user_id, validated)
-         VALUES ($4, $1, $2, $3, true)
-         ON CONFLICT (attempt_id, reviewer_participant_id) DO UPDATE SET validated = EXCLUDED.validated RETURNING id`,
+        `INSERT INTO empathy_review (attempt_id, session_id, reviewer_user_id, validated) VALUES ($3, $1, $2, true)
+         ON CONFLICT (attempt_id, session_id, reviewer_user_id) DO UPDATE SET validated = EXCLUDED.validated RETURNING id`,
         [...seat, attB],
       );
       await run.sql(
-        `INSERT INTO consent (participant_id, session_id, user_id, review_id, decision, decided_at) VALUES ($1, $2, $3, $4, 'GRANTED', now())`,
+        `INSERT INTO consent (session_id, user_id, review_id, decision, decided_at) VALUES ($1, $2, $3, 'GRANTED', now())`,
         [...seat, review],
       );
       await run.sql(
-        `INSERT INTO consent (participant_id, requested_by_participant_id, session_id, user_id, requested_by_user_id, proposal_id)
-         VALUES ($1, $1, $2, $3, $3, $4)`,
+        `INSERT INTO consent (session_id, user_id, requested_by_user_id, proposal_id) VALUES ($1, $2, $2, $3)`,
         [...seat, proposalA],
       );
+      await run.sql(`INSERT INTO consent (session_id, user_id, share_offer_id) VALUES ($1, $2, $3)`, [
+        s,
+        offer.subject_user,
+        offer.id,
+      ]);
       await run.sql(
-        `INSERT INTO consent (participant_id, session_id, user_id, share_offer_id) VALUES ($1, $2, $3, $4)`,
-        [offer[0].subject, s, offer[0].subject_user, offer[0].id],
-      );
-      await run.sql(
-        `INSERT INTO draft (participant_id, session_id, user_id, kind, attempt_id, content) VALUES ($1, $2, $3, 'VALIDATION_FEEDBACK', $4, 'f')`,
+        `INSERT INTO draft (session_id, user_id, kind, attempt_id, content) VALUES ($1, $2, 'VALIDATION_FEEDBACK', $3, 'f')`,
         [...seat, attB],
       );
       await run.sql(
-        `INSERT INTO draft (participant_id, session_id, user_id, kind, share_offer_id, content) VALUES ($1, $2, $3, 'SHARE_CONTEXT', $4, 's')`,
-        [offer[0].subject, s, offer[0].subject_user, offer[0].id],
+        `INSERT INTO draft (session_id, user_id, kind, share_offer_id, content) VALUES ($1, $2, 'SHARE_CONTEXT', $3, 's')`,
+        [s, offer.subject_user, offer.id],
       );
       await run.sql(
-        `INSERT INTO draft (participant_id, session_id, user_id, kind, invitation_id, content) VALUES ($1, $2, $3, 'EMPATHY', $4, 'i')`,
+        `INSERT INTO draft (session_id, user_id, kind, invitation_id, content) VALUES ($1, $2, 'EMPATHY', $3, 'i')`,
         [...seat, invitation],
       );
       await run.sql(
-        `INSERT INTO reconciler_guidance (result_id, author_participant_id, subject_participant_id, session_id, author_user_id, subject_user_id)
-         VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT DO NOTHING`,
-        [result[0].id, result[0].author, result[0].subject, s, result[0].author_user, result[0].subject_user],
+        `INSERT INTO reconciler_guidance (result_id, session_id, author_user_id, subject_user_id)
+         VALUES ($1, $2, $3, $4) ON CONFLICT DO NOTHING`,
+        [result.id, s, result.author_user, result.subject_user],
       );
       await run.sql(
-        `INSERT INTO session_closure (session_id, kind, reason, summary, closed_by_participant_id, closed_by_user_id)
-         VALUES ($2, 'NO_SHARED_AGREEMENT', 'USER_STOPPED', 'closed', $1, $3)`,
+        `INSERT INTO session_closure (session_id, kind, reason, summary, closed_by_user_id)
+         VALUES ($1, 'NO_SHARED_AGREEMENT', 'USER_STOPPED', 'closed', $2)`,
         seat,
       );
       await run.sql(
-        `INSERT INTO brain_activity (session_id, participant_id, participant_user_id, activity_type, model)
-         VALUES ($2, $1, $3, 'LLM_CALL', 'test-model')`,
+        `INSERT INTO brain_activity (session_id, participant_user_id, activity_type, model) VALUES ($1, $2, 'LLM_CALL', 'test-model')`,
         seat,
       );
     });
@@ -383,23 +398,94 @@ describeTarget('participant composite keys (work-k5fk.3, 6a)', () => {
       expect(Object.keys(outcomes).length).toBeGreaterThanOrEqual(30);
       expect(Object.entries(outcomes).filter(([, code]) => code !== '23503')).toEqual([]);
     });
+
+    // 6a review F2: a participant key and a child-of-child key on the same user column both refuse a stranger, so
+    // the loop above cannot tell which one held. Naming ANOTHER participant of the same session passes every key to
+    // participant: only the child-of-child key can refuse it, and the refusal must name that key.
+    it('naming another participant of the session where a child-of-child key pins the user is refused by that key, by name', async () => {
+      const outcomes: Record<string, string | undefined> = {};
+      const childKeys = fks.filter(
+        f =>
+          f.refTable !== 'participant' &&
+          f.table !== 'participant' &&
+          f.columns.includes('session_id') &&
+          f.columns.some(c => c.endsWith('user_id')),
+      );
+      for (const k of childKeys) {
+        const col = k.columns.find(c => c.endsWith('user_id'))!;
+        const notNull = k.columns.map(c => `${c} IS NOT NULL`).join(' AND ');
+        outcomes[k.name] = await inRolledBackTx(async c => {
+          await c.query(`ALTER TABLE ${k.table} DISABLE TRIGGER USER`);
+          const [row] = (
+            await c.query<{ ctid: string }>(
+              `SELECT ctid::text AS ctid FROM ${k.table} WHERE ${notNull} AND session_id = $1 LIMIT 1`,
+              [ids.session],
+            )
+          ).rows;
+          // Rows that reference THIS row through the same column (guidance → result's subject) would refuse the
+          // update first, by their key; take them out so only k can answer.
+          for (const inbound of fks.filter(f => f.refTable === k.table && f.refColumns.includes(col))) {
+            const match = inbound.columns.map((ic, n) => `r.${ic} = t.${inbound.refColumns[n]}`).join(' AND ');
+            await c.query(`ALTER TABLE ${inbound.table} DISABLE TRIGGER USER`);
+            await c.query(`DELETE FROM ${inbound.table} r USING ${k.table} t WHERE t.ctid = $1::tid AND ${match}`, [
+              row.ctid,
+            ]);
+          }
+          const f = await failure(
+            c.query(
+              `UPDATE ${k.table} SET ${col} = CASE WHEN ${col} = $2::uuid THEN $3::uuid ELSE $2::uuid END
+               WHERE ctid = $1::tid`,
+              [row.ctid, ids.adaUser, ids.bobUser],
+            ),
+          );
+          return f.code === '23503' ? f.constraint : `${f.code} ${f.constraint ?? ''}`;
+        });
+      }
+      // review → attempt (subject), result → attempt (subject), offer → attempt (subject), guidance → result (subject),
+      // need_share → need (owner): each refused by its own key
+      expect(childKeys.length).toBeGreaterThanOrEqual(5);
+      expect(Object.entries(outcomes).filter(([name, got]) => got !== name)).toEqual([]);
+    });
+
+    // 6a review F1: a pair key (session_id, x_user_id) is skipped by MATCH SIMPLE when session_id is NULL, so where
+    // session_id may be NULL a CHECK must refuse a user without a session. Generated from the catalog.
+    it('where a participant key’s session_id may be NULL, a CHECK refuses a user with no session (23514)', async () => {
+      const nullable = await run.sql<{ t: string }>(`
+        SELECT c.relname AS t FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid
+        JOIN pg_namespace n ON n.oid = c.relnamespace
+        WHERE n.nspname = 'public' AND c.relkind = 'r' AND a.attname = 'session_id' AND NOT a.attnotnull`);
+      const keys = fks.filter(
+        f =>
+          f.refTable === 'participant' &&
+          f.table !== 'participant' &&
+          nullable.some(n => n.t === f.table),
+      );
+      expect([...new Set(keys.map(k => k.table))].sort()).toEqual(['ai_memory', 'brain_activity']);
+      const outcomes: Record<string, string | undefined> = {};
+      for (const k of keys) {
+        const notNull = k.columns.map(c => `${c} IS NOT NULL`).join(' AND ');
+        outcomes[k.name] = await inRolledBackTx(async c => {
+          await c.query(`ALTER TABLE ${k.table} DISABLE TRIGGER USER`);
+          const f = await failure(
+            c.query(`UPDATE ${k.table} SET session_id = NULL WHERE ctid = (SELECT ctid FROM ${k.table} WHERE ${notNull} LIMIT 1)`),
+          );
+          return f.code;
+        });
+      }
+      expect(Object.entries(outcomes).filter(([, code]) => code !== '23514')).toEqual([]);
+    });
   });
 
   describe("the retired triggers' cases, refused by key", () => {
     it('an empathy attempt between participants of two sessions (t_attempt_same_session)', async () => {
-      for (const subject of [
-        // the subject's real seat in the other session
-        { pid: other.cy, user: other.cyUser, session: ids.session },
-        { pid: other.cy, user: other.cyUser, session: other.session },
-        // a participant id of the other session under a user of this one
-        { pid: other.cy, user: ids.bobUser, session: ids.session },
+      for (const [session, subjectUser] of [
+        [ids.session, other.cyUser], // the subject is a participant of the other session only
+        [other.session, other.cyUser], // the author is not a participant of the other session
       ]) {
         const f = await failure(
           run.sql(
-            `INSERT INTO empathy_attempt (author_participant_id, subject_participant_id, session_id, author_user_id, subject_user_id,
-                                          round, content)
-             VALUES ($1, $2, $3, $4, $5, 9, 'x')`,
-            [ids.ada, subject.pid, subject.session, ids.adaUser, subject.user],
+            `INSERT INTO empathy_attempt (session_id, author_user_id, subject_user_id, round, content) VALUES ($1, $2, $3, 9, 'x')`,
+            [session, ids.adaUser, subjectUser],
           ),
         );
         expect(f.code).toBe('23503');
@@ -408,16 +494,15 @@ describeTarget('participant composite keys (work-k5fk.3, 6a)', () => {
 
     it('a review by anyone but the attempt’s subject, as mwf_app (t_review_subject)', async () => {
       const [att] = await run.sql<{ id: string }>(
-        `SELECT id FROM empathy_attempt WHERE author_participant_id = $1 AND status <> 'SUPERSEDED' LIMIT 1`,
-        [ids.ada],
+        `SELECT id FROM empathy_attempt WHERE session_id = $1 AND author_user_id = $2 AND status <> 'SUPERSEDED' LIMIT 1`,
+        [ids.session, ids.adaUser],
       );
       const f = await failure(
         run.as(
           'mwf_app',
           ids.adaUser,
-          `INSERT INTO empathy_review (attempt_id, reviewer_participant_id, session_id, reviewer_user_id, validated)
-           VALUES ($1, $2, $3, $4, true)`,
-          [att.id, ids.ada, ids.session, ids.adaUser],
+          `INSERT INTO empathy_review (attempt_id, session_id, reviewer_user_id, validated) VALUES ($1, $2, $3, true)`,
+          [att.id, ids.session, ids.adaUser],
         ),
       );
       expect(f.code).toBe('23503');
@@ -425,21 +510,20 @@ describeTarget('participant composite keys (work-k5fk.3, 6a)', () => {
 
     it('a share of someone else’s need, or into another session, as mwf_job (t_need_share_owner)', async () => {
       const [need] = await run.sql<{ id: string }>(
-        `INSERT INTO need (participant_id, session_id, user_id, label, category, ai_confidence)
-         VALUES ($1, $2, $3, 'rest', 'CONNECTION', 0.5) RETURNING id`,
-        [ids.ada, ids.session, ids.adaUser],
+        `INSERT INTO need (session_id, user_id, label, category, ai_confidence) VALUES ($1, $2, 'rest', 'CONNECTION', 0.5) RETURNING id`,
+        [ids.session, ids.adaUser],
       );
-      for (const [p, s, u] of [
-        [ids.bob, ids.session, ids.bobUser],
-        [other.cy, other.session, other.cyUser],
-        [ids.ada, other.session, ids.adaUser],
+      for (const [s, u] of [
+        [ids.session, ids.bobUser],
+        [other.session, other.cyUser],
+        [other.session, ids.adaUser],
       ]) {
         const f = await failure(
           run.as(
             'mwf_job',
             null,
-            `INSERT INTO need_share (need_id, participant_id, session_id, user_id, category, shared_text) VALUES ($1, $2, $3, $4, 'CONNECTION', 'x')`,
-            [need.id, p, s, u],
+            `INSERT INTO need_share (need_id, session_id, user_id, category, shared_text) VALUES ($1, $2, $3, 'CONNECTION', 'x')`,
+            [need.id, s, u],
           ),
         );
         expect(f.code).toBe('23503');
@@ -448,24 +532,69 @@ describeTarget('participant composite keys (work-k5fk.3, 6a)', () => {
 
     it('a reconciler result about another subject is a key violation; a SUPERSEDED round is still the trigger’s', async () => {
       const [att] = await run.sql<{ id: string; status: string }>(
-        `SELECT id, status::text FROM empathy_attempt WHERE author_participant_id = $1 ORDER BY round DESC LIMIT 1`,
-        [ids.ada],
+        `SELECT id, status::text FROM empathy_attempt WHERE session_id = $1 AND author_user_id = $2 ORDER BY round DESC LIMIT 1`,
+        [ids.session, ids.adaUser],
       );
-      const insertResult = (subject: string, subjectUser: string) =>
+      const insertResult = (subjectUser: string) =>
         run.as(
           'mwf_job',
           null,
-          `INSERT INTO reconciler_result (attempt_id, subject_participant_id, session_id, subject_user_id, iteration, alignment_score,
-                                          alignment_summary, gap_summary, gap_severity, recommended_action, rationale, sharing_would_help)
-           VALUES ($1, $2, $3, $4, 99, 50, 's', 'g', 'MINOR', 'PROCEED', 'r', false)`,
-          [att.id, subject, ids.session, subjectUser],
+          `INSERT INTO reconciler_result (attempt_id, session_id, subject_user_id, iteration, alignment_score, alignment_summary,
+                                          gap_summary, gap_severity, recommended_action, rationale, sharing_would_help)
+           VALUES ($1, $2, $3, 99, 50, 's', 'g', 'MINOR', 'PROCEED', 'r', false)`,
+          [att.id, ids.session, subjectUser],
         );
       // The author as the subject: the attempt's subject is Bob.
-      expect((await failure(insertResult(ids.ada, ids.adaUser))).code).toBe('23503');
+      expect((await failure(insertResult(ids.adaUser))).code).toBe('23503');
       await run.sql(`UPDATE empathy_attempt SET status = 'SUPERSEDED' WHERE id = $1`, [att.id]);
-      const f = await failure(insertResult(ids.bob, ids.bobUser));
+      const f = await failure(insertResult(ids.bobUser));
       expect({ code: f.code, live: /live attempt/.test(f.message ?? '') }).toEqual({ code: '23514', live: true });
       await run.sql(`UPDATE empathy_attempt SET status = $2::empathy_status WHERE id = $1`, [att.id, att.status]);
+    });
+
+    it('a seat’s kind is its user’s (t_participant_kind): the AI and a persona never sit as human, a human never as either', async () => {
+      const [{ ai }] = await run.sql<{ ai: string }>(`SELECT app.ai_user_id()::text AS ai`);
+      const persona = randomUuidV7();
+      await run.sql(`INSERT INTO "user" (id, kind, first_name) VALUES ($1, 'persona', 'Pat')`, [persona]);
+      await run.sql(`INSERT INTO persona (user_id, owner_user_id) VALUES ($1, $2)`, [persona, ids.adaUser]);
+      const seatAs = (userId: string, kind: string) =>
+        run.as(
+          'mwf_app',
+          ids.adaUser,
+          `INSERT INTO participant (session_id, user_id, kind, added_by_user_id) VALUES ($1, $2, $3::user_kind, $4)`,
+          [ids.session, userId, kind, ids.adaUser],
+        );
+      const refused: Record<string, string | undefined> = {};
+      for (const [who, userId, kind] of [
+        ['ai as human', ai, 'human'],
+        ['ai as persona', ai, 'persona'],
+        ['persona as human', persona, 'human'],
+        ['persona as ai', persona, 'ai'],
+        ['human as ai', other.cyUser, 'ai'],
+        ['human as persona', other.cyUser, 'persona'],
+      ]) {
+        refused[who] = (await failure(seatAs(userId, kind))).code;
+      }
+      expect(refused).toEqual({
+        'ai as human': '23503',
+        'ai as persona': '23503',
+        'persona as human': '23503',
+        'persona as ai': '23503',
+        'human as ai': '23503',
+        'human as persona': '23503',
+      });
+      // As themselves they sit (rolled back: the fixture's session is not this test's to change).
+      await inRolledBackTx(async c => {
+        await c.query(
+          `INSERT INTO participant (session_id, user_id, kind, added_by_user_id) VALUES ($1, $2, 'ai', $4), ($1, $3, 'persona', $4)`,
+          [ids.session, ai, persona, ids.adaUser],
+        );
+        const r = await c.query(
+          `SELECT kind::text FROM participant WHERE session_id = $1 AND user_id IN ($2, $3) ORDER BY kind`,
+          [ids.session, ai, persona],
+        );
+        expect(r.rows.map(x => x.kind)).toEqual(['ai', 'persona']);
+      });
     });
   });
 
@@ -503,11 +632,13 @@ describeTarget('participant composite keys (work-k5fk.3, 6a)', () => {
         await c.query(`UPDATE session SET status = 'RESOLVED', resolved_at = now() WHERE id = $1`, [ids.session]);
         await c.query(`DELETE FROM agreement WHERE session_id = $1`, [ids.session]);
         await c.query(`ALTER TABLE agreement_party DISABLE TRIGGER USER`);
-        await c.query(`DELETE FROM participant WHERE id = $1`, [ids.bob]);
+        await c.query(`DELETE FROM participant WHERE session_id = $1 AND user_id = $2`, [ids.session, ids.bobUser]);
         const left: string[] = [];
-        for (const k of fks.filter(
+        const keys = fks.filter(
           f => f.refTable === 'participant' && f.columns.includes('session_id') && f.table !== 'participant',
-        )) {
+        );
+        expect(keys.length).toBeGreaterThanOrEqual(CHILD_TABLES.length);
+        for (const k of keys) {
           const userCol = k.columns[k.columns.length - 1];
           const r = await c.query(
             `SELECT count(*)::int AS n FROM ${k.table} WHERE session_id = $1 AND ${userCol} = $2`,

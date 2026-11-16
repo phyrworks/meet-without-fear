@@ -51,10 +51,7 @@ export async function enforceSessionRetention(now: Date = new Date()): Promise<S
   // cannot be stale. Then confirm with the latest message of any of its
   // conversations — message writes do not touch session.updated_at.
   const staleCandidates = await job.$queryRaw<Array<{ id: string; last_activity: Date }>>`SELECT s.id,
-           coalesce((SELECT max(m.created_at) FROM message m
-                     JOIN conversation c ON c.id = m.conversation_id
-                     JOIN participant p ON p.id = c.participant_id
-                     WHERE p.session_id = s.id), s.updated_at) AS last_activity
+           coalesce((SELECT max(m.created_at) FROM message m WHERE m.session_id = s.id), s.updated_at) AS last_activity
     FROM session s
     WHERE s.status = 'ACTIVE' AND s.updated_at < ${archiveCutoff}`;
 

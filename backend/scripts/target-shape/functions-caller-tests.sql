@@ -37,10 +37,8 @@ SELECT u.id AS a_user FROM "user" u WHERE u.email = 'a@ts7c.test' \gset
 SELECT u.id AS b_user FROM "user" u WHERE u.email = 'b@ts7c.test' \gset
 SELECT u.id AS outsider FROM "user" u WHERE u.email = 'outsider@ts7c.test' \gset
 SELECT p.session_id AS r_session FROM participant p WHERE p.user_id = :'a_user' LIMIT 1 \gset
-SELECT a.id AS att_a FROM empathy_attempt a JOIN participant p ON p.id = a.author_participant_id WHERE p.user_id = :'a_user' AND p.session_id = :'r_session' \gset
-SELECT a.id AS att_b FROM empathy_attempt a JOIN participant p ON p.id = a.author_participant_id WHERE p.user_id = :'b_user' AND p.session_id = :'r_session' \gset
-SELECT p.id AS b_participant FROM participant p WHERE p.user_id = :'b_user' AND p.session_id = :'r_session' \gset
-SELECT p.id AS a_participant FROM participant p WHERE p.user_id = :'a_user' AND p.session_id = :'r_session' \gset
+SELECT a.id AS att_a FROM empathy_attempt a WHERE a.author_user_id = :'a_user' AND a.session_id = :'r_session' \gset
+SELECT a.id AS att_b FROM empathy_attempt a WHERE a.author_user_id = :'b_user' AND a.session_id = :'r_session' \gset
 \set c_user '00000000-0000-7e00-8000-0000000000c1'
 \set d_user '00000000-0000-7e00-8000-0000000000d1'
 \set x_session '00000000-0000-7e00-8000-0000000005e1'
@@ -55,7 +53,7 @@ SELECT format('setup: session %s; A attempt %s (%s), B attempt %s (%s)', :'r_ses
 -- ============================ as mwf_app ======================================
 \connect - mwf_app
 SELECT 'connected as ' || session_user || ' (current_user ' || current_user || ')';
-SELECT set_config('t.a_user', :'a_user', false), set_config('t.b_user', :'b_user', false), set_config('t.outsider', :'outsider', false), set_config('t.att_a', :'att_a', false), set_config('t.att_b', :'att_b', false), set_config('t.r_session', :'r_session', false), set_config('t.b_participant', :'b_participant', false), set_config('t.a_participant', :'a_participant', false) \g /dev/null
+SELECT set_config('t.a_user', :'a_user', false), set_config('t.b_user', :'b_user', false), set_config('t.outsider', :'outsider', false), set_config('t.att_a', :'att_a', false), set_config('t.att_b', :'att_b', false), set_config('t.r_session', :'r_session', false) \g /dev/null
 
 -- 1. the SUBJECT cannot move the author's attempt (A is B's subject; B's attempt is HELD)
 DO $$ BEGIN
@@ -85,13 +83,11 @@ DO $$ DECLARE n int; BEGIN
     RAISE EXCEPTION 'TEST FAILED: a non-member moved an attempt';
   EXCEPTION WHEN no_data_found THEN RAISE NOTICE 'PASS 3a non-member cannot move an attempt: %', SQLERRM;
   END;
-  SELECT count(*) INTO n FROM v_empathy_direction_status v JOIN participant p ON p.id = v.author_participant_id
-  WHERE p.session_id = current_setting('t.r_session')::uuid;
-  IF n <> 0 OR app.is_member(current_setting('t.r_session')::uuid) OR app.my_participant(current_setting('t.r_session')::uuid) IS NOT NULL
-     OR app.is_co_participant(current_setting('t.b_participant')::uuid) THEN
+  SELECT count(*) INTO n FROM v_empathy_direction_status v WHERE v.session_id = current_setting('t.r_session')::uuid;
+  IF n <> 0 OR app.is_member(current_setting('t.r_session')::uuid) THEN
     RAISE EXCEPTION 'TEST FAILED: a non-member sees the session (% direction rows)', n;
   END IF;
-  RAISE NOTICE 'PASS 3b non-member sees no direction status, is not a member, has no participant, is no co-participant';
+  RAISE NOTICE 'PASS 3b non-member sees no direction status and is not a member';
 END $$;
 
 -- 4. only the job reveals: the author of a READY attempt cannot
@@ -107,7 +103,7 @@ END $$;
 -- ============================ as mwf_job ======================================
 \connect - mwf_job
 SELECT 'connected as ' || session_user || ' (current_user ' || current_user || ')';
-SELECT set_config('t.a_user', :'a_user', false), set_config('t.b_user', :'b_user', false), set_config('t.outsider', :'outsider', false), set_config('t.att_a', :'att_a', false), set_config('t.att_b', :'att_b', false), set_config('t.r_session', :'r_session', false), set_config('t.b_participant', :'b_participant', false), set_config('t.a_participant', :'a_participant', false) \g /dev/null
+SELECT set_config('t.a_user', :'a_user', false), set_config('t.b_user', :'b_user', false), set_config('t.outsider', :'outsider', false), set_config('t.att_a', :'att_a', false), set_config('t.att_b', :'att_b', false), set_config('t.r_session', :'r_session', false) \g /dev/null
 
 -- 5. the reveal gate: B→A is READY but A→B is AWAITING_SHARING → refused
 DO $$ BEGIN
@@ -121,14 +117,15 @@ END $$;
 -- 6. the job's narrowed privileges (C3): no routing-column UPDATE, no U-class reads
 DO $$ BEGIN
   BEGIN
-    UPDATE participant SET user_id = user_id WHERE id = current_setting('t.b_participant')::uuid;
+    UPDATE participant SET user_id = user_id
+    WHERE session_id = current_setting('t.r_session')::uuid AND user_id = current_setting('t.b_user')::uuid;
     RAISE EXCEPTION 'TEST FAILED: mwf_job updated participant.user_id';
   EXCEPTION WHEN insufficient_privilege THEN RAISE NOTICE 'PASS 6a mwf_job cannot UPDATE participant.user_id: %', SQLERRM;
   END;
   BEGIN
-    UPDATE empathy_attempt SET author_participant_id = author_participant_id WHERE id = current_setting('t.att_a')::uuid;
-    RAISE EXCEPTION 'TEST FAILED: mwf_job updated empathy_attempt.author_participant_id';
-  EXCEPTION WHEN insufficient_privilege THEN RAISE NOTICE 'PASS 6b mwf_job cannot UPDATE empathy_attempt.author_participant_id: %', SQLERRM;
+    UPDATE empathy_attempt SET author_user_id = author_user_id WHERE id = current_setting('t.att_a')::uuid;
+    RAISE EXCEPTION 'TEST FAILED: mwf_job updated empathy_attempt.author_user_id';
+  EXCEPTION WHEN insufficient_privilege THEN RAISE NOTICE 'PASS 6b mwf_job cannot UPDATE empathy_attempt.author_user_id: %', SQLERRM;
   END;
   BEGIN
     PERFORM title FROM reflection LIMIT 1;
@@ -145,7 +142,7 @@ END $$;
 -- ============================ as mwf_app ======================================
 \connect - mwf_app
 SELECT 'connected as ' || session_user || ' (current_user ' || current_user || ')';
-SELECT set_config('t.a_user', :'a_user', false), set_config('t.b_user', :'b_user', false), set_config('t.outsider', :'outsider', false), set_config('t.att_a', :'att_a', false), set_config('t.att_b', :'att_b', false), set_config('t.r_session', :'r_session', false), set_config('t.b_participant', :'b_participant', false), set_config('t.a_participant', :'a_participant', false) \g /dev/null
+SELECT set_config('t.a_user', :'a_user', false), set_config('t.b_user', :'b_user', false), set_config('t.outsider', :'outsider', false), set_config('t.att_a', :'att_a', false), set_config('t.att_b', :'att_b', false), set_config('t.r_session', :'r_session', false) \g /dev/null
 -- 7. the AUTHOR moves own AWAITING_SHARING → READY
 DO $$ BEGIN
   PERFORM set_config('app.current_user_id', current_setting('t.a_user'), true);
@@ -156,14 +153,14 @@ END $$;
 -- ============================ as mwf_job ======================================
 \connect - mwf_job
 SELECT 'connected as ' || session_user || ' (current_user ' || current_user || ')';
-SELECT set_config('t.a_user', :'a_user', false), set_config('t.b_user', :'b_user', false), set_config('t.outsider', :'outsider', false), set_config('t.att_a', :'att_a', false), set_config('t.att_b', :'att_b', false), set_config('t.r_session', :'r_session', false), set_config('t.b_participant', :'b_participant', false), set_config('t.a_participant', :'a_participant', false) \g /dev/null
+SELECT set_config('t.a_user', :'a_user', false), set_config('t.b_user', :'b_user', false), set_config('t.outsider', :'outsider', false), set_config('t.att_a', :'att_a', false), set_config('t.att_b', :'att_b', false), set_config('t.r_session', :'r_session', false) \g /dev/null
 -- 8. the job reveals both; the subject's conversation gains exactly one copy, even when the reveal is repeated
 DO $$ DECLARE n int; BEGIN
   PERFORM app.empathy_set_status(current_setting('t.att_a')::uuid, 'REVEALED');
   PERFORM app.empathy_set_status(current_setting('t.att_b')::uuid, 'REVEALED');
   PERFORM app.empathy_set_status(current_setting('t.att_a')::uuid, 'REVEALED');
   SELECT count(*) INTO n FROM message m JOIN conversation c ON c.id = m.conversation_id
-  WHERE c.participant_id = current_setting('t.b_participant')::uuid AND m.kind = 'EMPATHY_STATEMENT'
+  WHERE c.session_id = current_setting('t.r_session')::uuid AND c.user_id = current_setting('t.b_user')::uuid AND m.kind = 'EMPATHY_STATEMENT'
     AND m.source_attempt_id = current_setting('t.att_a')::uuid;
   IF n <> 1 THEN RAISE EXCEPTION 'TEST FAILED: % delivered copies in the subject''s conversation', n; END IF;
   RAISE NOTICE 'PASS 8 job reveals once all directions are READY; subject''s conversation holds exactly 1 copy (after a repeated reveal)';
@@ -172,7 +169,7 @@ END $$;
 -- ============================ as mwf_app ======================================
 \connect - mwf_app
 SELECT 'connected as ' || session_user || ' (current_user ' || current_user || ')';
-SELECT set_config('t.a_user', :'a_user', false), set_config('t.b_user', :'b_user', false), set_config('t.outsider', :'outsider', false), set_config('t.att_a', :'att_a', false), set_config('t.att_b', :'att_b', false), set_config('t.r_session', :'r_session', false), set_config('t.b_participant', :'b_participant', false), set_config('t.a_participant', :'a_participant', false) \g /dev/null
+SELECT set_config('t.a_user', :'a_user', false), set_config('t.b_user', :'b_user', false), set_config('t.outsider', :'outsider', false), set_config('t.att_a', :'att_a', false), set_config('t.att_b', :'att_b', false), set_config('t.r_session', :'r_session', false) \g /dev/null
 -- 9. the AUTHOR cannot validate their own revealed attempt; the SUBJECT can
 DO $$ BEGIN
   PERFORM set_config('app.current_user_id', current_setting('t.a_user'), true);
@@ -311,7 +308,7 @@ SELECT 'connected as ' || session_user || ' (setup: temporary GRANT EXECUTE ON a
 GRANT EXECUTE ON FUNCTION app.anonymize_user_account(uuid), app.anonymize_user_in_session(uuid, uuid) TO mwf_app;
 \connect - mwf_app
 SELECT 'connected as ' || session_user || ' (current_user ' || current_user || ')';
-SELECT set_config('t.a_user', :'a_user', false), set_config('t.b_user', :'b_user', false), set_config('t.outsider', :'outsider', false), set_config('t.att_a', :'att_a', false), set_config('t.att_b', :'att_b', false), set_config('t.r_session', :'r_session', false), set_config('t.b_participant', :'b_participant', false), set_config('t.a_participant', :'a_participant', false) \g /dev/null
+SELECT set_config('t.a_user', :'a_user', false), set_config('t.b_user', :'b_user', false), set_config('t.outsider', :'outsider', false), set_config('t.att_a', :'att_a', false), set_config('t.att_b', :'att_b', false), set_config('t.r_session', :'r_session', false) \g /dev/null
 
 -- 12. anonymize_*: no identity, another user → not found; a modeled-style NULL comparison never passes
 DO $$ BEGIN
@@ -322,8 +319,7 @@ DO $$ BEGIN
   EXCEPTION WHEN no_data_found THEN RAISE NOTICE 'PASS 12a anonymize_user_account with no identity: %', SQLERRM;
   END;
   BEGIN
-    PERFORM app.anonymize_user_in_session('00000000-0000-7e00-8000-0000000005e1',
-              (SELECT id FROM participant WHERE session_id = '00000000-0000-7e00-8000-0000000005e1' AND user_id = '00000000-0000-7e00-8000-0000000000d1'));
+    PERFORM app.anonymize_user_in_session('00000000-0000-7e00-8000-0000000005e1', '00000000-0000-7e00-8000-0000000000d1');
     RAISE EXCEPTION 'TEST FAILED: anonymize_user_in_session with no identity';
   EXCEPTION WHEN no_data_found THEN RAISE NOTICE 'PASS 12b anonymize_user_in_session with no identity: %', SQLERRM;
   END;
@@ -334,8 +330,7 @@ DO $$ BEGIN
   EXCEPTION WHEN no_data_found THEN RAISE NOTICE 'PASS 12c anonymize_user_account of another user: %', SQLERRM;
   END;
   BEGIN
-    PERFORM app.anonymize_user_in_session('00000000-0000-7e00-8000-0000000005e1',
-              (SELECT id FROM participant WHERE session_id = '00000000-0000-7e00-8000-0000000005e1' AND user_id = '00000000-0000-7e00-8000-0000000000d1'));
+    PERFORM app.anonymize_user_in_session('00000000-0000-7e00-8000-0000000005e1', '00000000-0000-7e00-8000-0000000000d1');
     RAISE EXCEPTION 'TEST FAILED: anonymize_user_in_session of another user';
   EXCEPTION WHEN no_data_found THEN RAISE NOTICE 'PASS 12d anonymize_user_in_session of another user: %', SQLERRM;
   END;
@@ -343,8 +338,8 @@ END $$;
 
 -- 13. the C1 attack: temp objects shadowing pg_roles and participant change nothing
 CREATE TEMP VIEW pg_roles AS SELECT session_user::name AS rolname, true AS rolsuper;
-CREATE TEMP TABLE participant (id uuid, session_id uuid, user_id uuid, kind text, left_at timestamptz);
-INSERT INTO pg_temp.participant VALUES (gen_random_uuid(), '00000000-0000-7e00-8000-0000000005e1', current_setting('t.outsider')::uuid, 'human', NULL);
+CREATE TEMP TABLE participant (session_id uuid, user_id uuid, kind text, left_at timestamptz);
+INSERT INTO pg_temp.participant VALUES ('00000000-0000-7e00-8000-0000000005e1', current_setting('t.outsider')::uuid, 'human', NULL);
 DO $$ BEGIN
   PERFORM set_config('app.current_user_id', '00000000-0000-7e00-8000-0000000000c1', true);
   BEGIN
@@ -373,7 +368,7 @@ SELECT 'connected as ' || session_user || ' (setup: temporary GRANT EXECUTE ON a
 GRANT EXECUTE ON FUNCTION app.need_share(uuid, text) TO mwf_app;
 \connect - mwf_app
 SELECT 'connected as ' || session_user || ' (current_user ' || current_user || ')';
-SELECT set_config('t.a_user', :'a_user', false), set_config('t.b_user', :'b_user', false), set_config('t.outsider', :'outsider', false), set_config('t.att_a', :'att_a', false), set_config('t.att_b', :'att_b', false), set_config('t.r_session', :'r_session', false), set_config('t.b_participant', :'b_participant', false), set_config('t.a_participant', :'a_participant', false) \g /dev/null
+SELECT set_config('t.a_user', :'a_user', false), set_config('t.b_user', :'b_user', false), set_config('t.outsider', :'outsider', false), set_config('t.att_a', :'att_a', false), set_config('t.att_b', :'att_b', false), set_config('t.r_session', :'r_session', false) \g /dev/null
 DO $$ BEGIN
   PERFORM set_config('app.current_user_id', '00000000-0000-7e00-8000-0000000000c1', true);
   BEGIN
@@ -387,14 +382,14 @@ SELECT 'connected as ' || session_user || ' (setup: REVOKE EXECUTE ON app.need_s
 REVOKE EXECUTE ON FUNCTION app.need_share(uuid, text) FROM mwf_app;
 \connect - mwf_app
 SELECT 'connected as ' || session_user || ' (current_user ' || current_user || ')';
-SELECT set_config('t.a_user', :'a_user', false), set_config('t.b_user', :'b_user', false), set_config('t.outsider', :'outsider', false), set_config('t.att_a', :'att_a', false), set_config('t.att_b', :'att_b', false), set_config('t.r_session', :'r_session', false), set_config('t.b_participant', :'b_participant', false), set_config('t.a_participant', :'a_participant', false) \g /dev/null
+SELECT set_config('t.a_user', :'a_user', false), set_config('t.b_user', :'b_user', false), set_config('t.outsider', :'outsider', false), set_config('t.att_a', :'att_a', false), set_config('t.att_b', :'att_b', false), set_config('t.r_session', :'r_session', false) \g /dev/null
 
 -- 14. A review by a non-subject is refused (I5). Since work-k5fk.3 (6a) by key, not by the retired t_review_subject:
 -- empathy_review (attempt_id, session_id, reviewer_user_id) REFERENCES empathy_attempt (id, session_id, subject_user_id).
 DO $$ BEGIN
   BEGIN
-    INSERT INTO empathy_review (attempt_id, reviewer_participant_id, session_id, reviewer_user_id, validated)
-    VALUES (current_setting('t.att_a')::uuid, current_setting('t.a_participant')::uuid, current_setting('t.r_session')::uuid,
+    INSERT INTO empathy_review (attempt_id, session_id, reviewer_user_id, validated)
+    VALUES (current_setting('t.att_a')::uuid, current_setting('t.r_session')::uuid,
             current_setting('t.a_user')::uuid, true);
     RAISE EXCEPTION 'TEST FAILED: a non-subject reviewed';
   EXCEPTION WHEN foreign_key_violation THEN RAISE NOTICE 'PASS 14 review by a non-subject refused: %', SQLERRM;
@@ -439,18 +434,17 @@ END $$;
 --     reflection telemetry (…ba3, no session) stay.
 BEGIN;
 DO $$ DECLARE x_before int; s_before int; refl_before int; BEGIN
-  SELECT count(*) INTO x_before FROM brain_activity WHERE session_id = '00000000-0000-7e00-8000-0000000005e1' AND participant_id IS NULL;
-  SELECT count(*) INTO s_before FROM brain_activity WHERE session_id = '00000000-0000-7e00-8000-0000000005e6' AND participant_id IS NULL;
+  SELECT count(*) INTO x_before FROM brain_activity WHERE session_id = '00000000-0000-7e00-8000-0000000005e1' AND participant_user_id IS NULL;
+  SELECT count(*) INTO s_before FROM brain_activity WHERE session_id = '00000000-0000-7e00-8000-0000000005e6' AND participant_user_id IS NULL;
   SELECT count(*) INTO refl_before FROM brain_activity WHERE session_id IS NULL AND reflection_id IS NOT NULL;
   IF x_before = 0 OR s_before = 0 OR refl_before = 0 THEN
     RAISE EXCEPTION 'TEST FAILED: setup — expected NULL-participant history in X (%), in S (%) and reflection telemetry (%)', x_before, s_before, refl_before;
   END IF;
-  PERFORM app.anonymize_user_in_session('00000000-0000-7e00-8000-0000000005e1',
-            (SELECT p.id FROM participant p WHERE p.session_id = '00000000-0000-7e00-8000-0000000005e1' AND p.user_id = '00000000-0000-7e00-8000-0000000000d1'));
-  IF EXISTS (SELECT 1 FROM brain_activity WHERE session_id = '00000000-0000-7e00-8000-0000000005e1' AND participant_id IS NULL) THEN
+  PERFORM app.anonymize_user_in_session('00000000-0000-7e00-8000-0000000005e1', '00000000-0000-7e00-8000-0000000000d1');
+  IF EXISTS (SELECT 1 FROM brain_activity WHERE session_id = '00000000-0000-7e00-8000-0000000005e1' AND participant_user_id IS NULL) THEN
     RAISE EXCEPTION 'TEST FAILED: NULL-participant brain_activity of the session survived anonymize_user_in_session';
   END IF;
-  IF (SELECT count(*) FROM brain_activity WHERE session_id = '00000000-0000-7e00-8000-0000000005e6' AND participant_id IS NULL) <> s_before
+  IF (SELECT count(*) FROM brain_activity WHERE session_id = '00000000-0000-7e00-8000-0000000005e6' AND participant_user_id IS NULL) <> s_before
      OR (SELECT count(*) FROM brain_activity WHERE session_id IS NULL AND reflection_id IS NOT NULL) <> refl_before THEN
     RAISE EXCEPTION 'TEST FAILED: anonymize_user_in_session deleted brain_activity outside the session';
   END IF;
@@ -683,13 +677,13 @@ END $$;
 --     no relationship membership grants anything).
 \connect - mwf_user
 SELECT 'connected as ' || session_user || ' (setup: D leaves X; session Y with C only)';
-UPDATE participant SET left_at = now() WHERE id = '00000000-0000-7e00-8000-0000000007d1';
+UPDATE participant SET left_at = now() WHERE session_id = '00000000-0000-7e00-8000-0000000005e1' AND user_id = '00000000-0000-7e00-8000-0000000000d1';
 INSERT INTO session (id, status) VALUES ('00000000-0000-7e00-8000-0000000005e2', 'CREATED');
-INSERT INTO participant (id, session_id, user_id, kind, display_name) VALUES
-  ('00000000-0000-7e00-8000-0000000007c2', '00000000-0000-7e00-8000-0000000005e2', '00000000-0000-7e00-8000-0000000000c1', 'human', 'Cy');
+INSERT INTO participant (session_id, user_id, kind, display_name) VALUES
+  ('00000000-0000-7e00-8000-0000000005e2', '00000000-0000-7e00-8000-0000000000c1', 'human', 'Cy');
 \connect - mwf_app
 SELECT 'connected as ' || session_user || ' (current_user ' || current_user || ')';
-SELECT set_config('t.a_user', :'a_user', false), set_config('t.b_user', :'b_user', false), set_config('t.outsider', :'outsider', false), set_config('t.att_a', :'att_a', false), set_config('t.att_b', :'att_b', false), set_config('t.r_session', :'r_session', false), set_config('t.b_participant', :'b_participant', false), set_config('t.a_participant', :'a_participant', false) \g /dev/null
+SELECT set_config('t.a_user', :'a_user', false), set_config('t.b_user', :'b_user', false), set_config('t.outsider', :'outsider', false), set_config('t.att_a', :'att_a', false), set_config('t.att_b', :'att_b', false), set_config('t.r_session', :'r_session', false) \g /dev/null
 DO $$ DECLARE v_con text; BEGIN
   -- 19a. a participant who left: MWA02 from session_archive
   PERFORM set_config('app.current_user_id', '00000000-0000-7e00-8000-0000000000d1', true);
@@ -841,7 +835,7 @@ ROLLBACK;
 --     (→ ABANDONED), A can (rolled back).
 \connect - mwf_user
 SELECT 'connected as ' || session_user || ' (setup: B leaves S)';
-UPDATE participant SET left_at = now() WHERE id = :'b_participant';
+UPDATE participant SET left_at = now() WHERE session_id = :'r_session' AND user_id = :'b_user';
 \connect - mwf_app
 SELECT 'connected as ' || session_user || ' (current_user ' || current_user || ')';
 SELECT set_config('t.a_user', :'a_user', false), set_config('t.b_user', :'b_user', false), set_config('t.r_session', :'r_session', false) \g /dev/null
@@ -1032,25 +1026,25 @@ ROLLBACK;
 --     (the summarizer and the partner-session classifier write it: INSERT … ON CONFLICT DO UPDATE)
 \connect - mwf_job
 SELECT 'connected as ' || session_user || ' (current_user ' || current_user || ')';
-SELECT set_config('t.a_participant', :'a_participant', false) \g /dev/null
+SELECT set_config('t.a_user', :'a_user', false), set_config('t.r_session', :'r_session', false) \g /dev/null
 DO $$ DECLARE v_msg text; BEGIN
   -- the summarizer's document (conversation-summarizer.ts updateSessionSummary), every key it writes
-  INSERT INTO ai_memory (participant_id, kind, doc) VALUES (current_setting('t.a_participant')::uuid, 'SUMMARY',
+  INSERT INTO ai_memory (session_id, user_id, kind, doc) VALUES (current_setting('t.r_session')::uuid, current_setting('t.a_user')::uuid, 'SUMMARY',
     '{"text": "s", "messageCount": 12, "oldestMessageAt": "2026-11-01T10:00:00.000Z", "newestMessageAt": "2026-11-01T11:00:00.000Z",
       "tokenCount": 3, "generatedAt": "2026-11-01T11:00:01.000Z", "keyThemes": ["t"], "emotionalJourney": "e", "unresolvedTopics": [],
       "agreedFacts": [], "userNeeds": ["n"], "partnerNeeds": [], "openQuestions": [], "agreements": [], "lastUnresolvedThread": null}')
-    ON CONFLICT (participant_id, kind) DO UPDATE SET doc = EXCLUDED.doc;
+    ON CONFLICT (user_id, session_id, kind) WHERE session_id IS NOT NULL DO UPDATE SET doc = EXCLUDED.doc;
   -- the classifier's NOTABLE_FACTS (partner-session-classifier.ts; ids from ensureFactIds)
-  INSERT INTO ai_memory (participant_id, kind, doc) VALUES (current_setting('t.a_participant')::uuid, 'NOTABLE_FACTS',
+  INSERT INTO ai_memory (session_id, user_id, kind, doc) VALUES (current_setting('t.r_session')::uuid, current_setting('t.a_user')::uuid, 'NOTABLE_FACTS',
     '{"facts": [{"id": "01900000-0000-7000-8000-000000000001", "category": "People", "fact": "f"}, {"category": "Emotional", "fact": "g"}]}')
-    ON CONFLICT (participant_id, kind) DO UPDATE SET doc = EXCLUDED.doc;
+    ON CONFLICT (user_id, session_id, kind) WHERE session_id IS NOT NULL DO UPDATE SET doc = EXCLUDED.doc;
   RAISE NOTICE 'PASS 27a the summarizer''s SUMMARY and the classifier''s NOTABLE_FACTS documents are accepted';
   -- 27b. the BEFORE INSERT trigger sees the proposed row before ON CONFLICT is considered: a bad
   --      document is refused at the INSERT even though a SUMMARY row for the participant exists
   BEGIN
-    INSERT INTO ai_memory (participant_id, kind, doc) VALUES (current_setting('t.a_participant')::uuid, 'SUMMARY',
+    INSERT INTO ai_memory (session_id, user_id, kind, doc) VALUES (current_setting('t.r_session')::uuid, current_setting('t.a_user')::uuid, 'SUMMARY',
       '{"text": "s", "messageCount": "12", "generatedAt": "2026-11-01T11:00:01.000Z"}')
-      ON CONFLICT (participant_id, kind) DO UPDATE SET doc = EXCLUDED.doc;
+      ON CONFLICT (user_id, session_id, kind) WHERE session_id IS NOT NULL DO UPDATE SET doc = EXCLUDED.doc;
     RAISE EXCEPTION 'TEST FAILED: a string messageCount was stored';
   EXCEPTION WHEN check_violation THEN
     GET STACKED DIAGNOSTICS v_msg = MESSAGE_TEXT;
@@ -1059,18 +1053,18 @@ DO $$ DECLARE v_msg text; BEGIN
   END;
   -- 27g. the DO UPDATE path: the proposed row is good, the SET writes a bad document — the BEFORE UPDATE refuses it
   BEGIN
-    INSERT INTO ai_memory (participant_id, kind, doc) VALUES (current_setting('t.a_participant')::uuid, 'SUMMARY',
+    INSERT INTO ai_memory (session_id, user_id, kind, doc) VALUES (current_setting('t.r_session')::uuid, current_setting('t.a_user')::uuid, 'SUMMARY',
       '{"text": "s", "messageCount": 1, "generatedAt": "g"}')
-      ON CONFLICT (participant_id, kind) DO UPDATE SET doc = '{"text": "s", "messageCount": 1}';
+      ON CONFLICT (user_id, session_id, kind) WHERE session_id IS NOT NULL DO UPDATE SET doc = '{"text": "s", "messageCount": 1}';
     RAISE EXCEPTION 'TEST FAILED: the upsert''s update stored a SUMMARY without generatedAt';
   EXCEPTION WHEN check_violation THEN
     IF SQLERRM NOT LIKE '%ai_memory.summary v1: $: missing required key generatedAt' THEN RAISE; END IF;
     RAISE NOTICE 'PASS 27g the upsert''s DO UPDATE is checked as an UPDATE: %', SQLERRM;
   END;
   BEGIN
-    INSERT INTO ai_memory (participant_id, kind, doc) VALUES (current_setting('t.a_participant')::uuid, 'NOTABLE_FACTS',
+    INSERT INTO ai_memory (session_id, user_id, kind, doc) VALUES (current_setting('t.r_session')::uuid, current_setting('t.a_user')::uuid, 'NOTABLE_FACTS',
       '{"facts": [{"category": "People", "fact": "f"}, {"category": "People"}]}')
-      ON CONFLICT (participant_id, kind) DO UPDATE SET doc = EXCLUDED.doc;
+      ON CONFLICT (user_id, session_id, kind) WHERE session_id IS NOT NULL DO UPDATE SET doc = EXCLUDED.doc;
     RAISE EXCEPTION 'TEST FAILED: a fact without its text was stored';
   EXCEPTION WHEN check_violation THEN
     IF SQLERRM NOT LIKE '%ai_memory.notable_facts v1: $.facts[1]: missing required key fact' THEN RAISE; END IF;
@@ -1078,12 +1072,12 @@ DO $$ DECLARE v_msg text; BEGIN
   END;
   -- 27h. mwf_job writes doc only: never kind or the version
   BEGIN
-    UPDATE ai_memory SET kind = 'NOTABLE_FACTS' WHERE participant_id = current_setting('t.a_participant')::uuid AND kind = 'SUMMARY';
+    UPDATE ai_memory SET kind = 'NOTABLE_FACTS' WHERE session_id = current_setting('t.r_session')::uuid AND user_id = current_setting('t.a_user')::uuid AND kind = 'SUMMARY';
     RAISE EXCEPTION 'TEST FAILED: mwf_job changed a kind';
   EXCEPTION WHEN insufficient_privilege THEN NULL;
   END;
   BEGIN
-    UPDATE ai_memory SET doc_schema_version = 1 WHERE participant_id = current_setting('t.a_participant')::uuid;
+    UPDATE ai_memory SET doc_schema_version = 1 WHERE session_id = current_setting('t.r_session')::uuid AND user_id = current_setting('t.a_user')::uuid;
     RAISE EXCEPTION 'TEST FAILED: mwf_job wrote doc_schema_version';
   EXCEPTION WHEN insufficient_privilege THEN RAISE NOTICE 'PASS 27h mwf_job cannot UPDATE ai_memory.kind or doc_schema_version: %', SQLERRM;
   END;
@@ -1117,17 +1111,17 @@ END $$;
 --      back: no runtime role may write either, 27h)
 \connect - mwf_user
 BEGIN;
-SELECT set_config('t.a_participant', :'a_participant', false) \g /dev/null
+SELECT set_config('t.a_user', :'a_user', false), set_config('t.r_session', :'r_session', false) \g /dev/null
 DO $$ BEGIN
   BEGIN
-    UPDATE ai_memory SET kind = 'NOTABLE_FACTS' WHERE participant_id = current_setting('t.a_participant')::uuid AND kind = 'SUMMARY';
+    UPDATE ai_memory SET kind = 'NOTABLE_FACTS' WHERE session_id = current_setting('t.r_session')::uuid AND user_id = current_setting('t.a_user')::uuid AND kind = 'SUMMARY';
     RAISE EXCEPTION 'TEST FAILED: a SUMMARY document was re-kinded NOTABLE_FACTS';
   EXCEPTION WHEN check_violation OR unique_violation THEN
     IF SQLERRM NOT LIKE 'ai_memory.doc does not match json_schema ai_memory.notable_facts v1: %' THEN RAISE; END IF;
     RAISE NOTICE 'PASS 27i a change of kind re-checks the document against the new kind''s schema: %', SQLERRM;
   END;
   BEGIN
-    UPDATE ai_memory SET doc_schema_version = 3 WHERE participant_id = current_setting('t.a_participant')::uuid AND kind = 'SUMMARY';
+    UPDATE ai_memory SET doc_schema_version = 3 WHERE session_id = current_setting('t.r_session')::uuid AND user_id = current_setting('t.a_user')::uuid AND kind = 'SUMMARY';
     RAISE EXCEPTION 'TEST FAILED: an unknown version was stored on ai_memory';
   EXCEPTION WHEN SQLSTATE 'MWJ01' THEN
     IF SQLERRM <> 'json_schema ai_memory.summary version 3 does not exist' THEN RAISE; END IF;

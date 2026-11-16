@@ -51,8 +51,8 @@ describeTarget('Inviter stage while crafting the invitation (work-qmgc)', () => 
     await run.sql(
       `INSERT INTO message (conversation_id, session_id, role, content, created_at)
        SELECT c.id, c.session_id, 'AI', 'PROBE_QMGC crafting turn', now() FROM conversation c
-       WHERE c.participant_id = $1 AND c.kind = 'MAIN'`,
-      [ids.ada],
+       WHERE c.session_id = $1 AND c.user_id = $2 AND c.kind = 'MAIN'`,
+      [ids.session, ids.adaUser],
     );
     const probeStage = (msgs: Array<{ content: string; stage: number }>) =>
       msgs.find(m => m.content === 'PROBE_QMGC crafting turn')?.stage;
@@ -66,7 +66,8 @@ describeTarget('Inviter stage while crafting the invitation (work-qmgc)', () => 
     expect(probeStage(crafting.messages.messages)).toBe(0);
     // The shim's CurrentStage agrees with the stage it reports (not the view's feel_heard / "Your Story").
     const { loadCurrentStages } = await import('../stage-shim');
-    expect((await loadCurrentStages([ids.ada])).get(ids.ada)).toMatchObject({
+    const adaSeat = { sessionId: ids.session, userId: ids.adaUser };
+    expect((await loadCurrentStages([adaSeat])).get(adaSeat)).toMatchObject({
       stage: 0,
       invitationPending: true,
       milestoneKey: 'compact_signed',
@@ -99,14 +100,14 @@ describeTarget('Inviter stage while crafting the invitation (work-qmgc)', () => 
     await run.sql(`UPDATE session SET topic_frame = 'PROBE_QMGC the dishes' WHERE id = $1`, [sessionId]);
     expect((await http(ada, 'post', `/sessions/${sessionId}/topic-frame/confirm`)).status).toBe(200);
     const [{ inviter }] = await run.sql<{ inviter: string }>(
-      `SELECT invited_by_participant_id AS inviter FROM invitation WHERE id = $1`,
+      `SELECT invited_by_user_id AS inviter FROM invitation WHERE id = $1`,
       [invitationId],
     );
     await run.sql(
       `INSERT INTO message (conversation_id, session_id, role, content, created_at)
        SELECT c.id, c.session_id, 'AI', 'PROBE_QMGC crafting turn', now() FROM conversation c
-       WHERE c.participant_id = $1 AND c.kind = 'MAIN'`,
-      [inviter],
+       WHERE c.session_id = $1 AND c.user_id = $2 AND c.kind = 'MAIN'`,
+      [sessionId, inviter],
     );
     const before = await http(ada, 'get', `/sessions/${sessionId}/state`);
     expect(before.body.data.session.currentStage).toBe(0);
@@ -117,8 +118,8 @@ describeTarget('Inviter stage while crafting the invitation (work-qmgc)', () => 
   const expectInviterPastStage0 = async (sessionId: string, invitationId: string, inviter: string) => {
     const milestones = () =>
       run.sql<{ key: string; reached_at: Date }>(
-        `SELECT milestone_key AS key, reached_at FROM participant_milestone WHERE participant_id = $1 ORDER BY milestone_key`,
-        [inviter],
+        `SELECT milestone_key AS key, reached_at FROM participant_milestone WHERE session_id = $1 AND user_id = $2 ORDER BY milestone_key`,
+        [sessionId, inviter],
       );
     const [{ accepted_at }] = await run.sql<{ accepted_at: Date }>(`SELECT accepted_at FROM invitation WHERE id = $1`, [
       invitationId,
@@ -142,8 +143,8 @@ describeTarget('Inviter stage while crafting the invitation (work-qmgc)', () => 
       (
         await run.sql<{ n: number }>(
           `SELECT count(*)::int AS n FROM message m JOIN conversation c ON c.id = m.conversation_id
-           WHERE c.participant_id = $1`,
-          [inviter],
+           WHERE c.session_id = $1 AND c.user_id = $2`,
+          [sessionId, inviter],
         )
       )[0].n;
     const messagesBefore = await count();

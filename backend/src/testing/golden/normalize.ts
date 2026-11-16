@@ -294,8 +294,9 @@ export async function buildLabelMap(
  * byte-level golden recorded on the current shape reads the same labels from a
  * target run. `<message:N>` is the global (time, id) rank, as before — the
  * target writer inserts messages in the old order, so ties break the same way.
- * Participants and conversations, which have no old row, take their concept
- * labels (`<participant:ada@main>`).
+ * Conversations, which have no old row, take their concept labels
+ * (`<conversation:ada@main/MAIN>`); a participant has no id of its own since
+ * work-k5fk.3 — it is (session_id, user_id), both already labels.
  */
 async function labelTargetRows(target: DbTarget, database: string, labels: Map<string, string>): Promise<void> {
   const bare = (id: string | null): string =>
@@ -306,32 +307,27 @@ async function labelTargetRows(target: DbTarget, database: string, labels: Map<s
       const rows = async (sql: string): Promise<Array<Record<string, string | null>>> =>
         (await c.query<Record<string, string | null>>(sql)).rows;
 
-      for (const p of await rows(`SELECT id, user_id, session_id FROM participant ORDER BY id`)) {
-        labels.set(String(p.id), CONCEPT_LABEL.participant(bare(p.user_id), bare(p.session_id)));
-      }
       for (const cv of await rows(
-        `SELECT c.id, c.participant_id, c.kind::text AS kind,
-                row_number() OVER (PARTITION BY c.participant_id, c.kind ORDER BY c.created_at, c.id)::text AS n
+        `SELECT c.id, c.session_id, c.user_id, c.kind::text AS kind,
+                row_number() OVER (PARTITION BY c.session_id, c.user_id, c.kind ORDER BY c.created_at, c.id)::text AS n
          FROM conversation c`,
       )) {
-        const who = (labels.get(String(cv.participant_id)) ?? '').replace(/^<participant:|>$/g, '');
+        const who = `${bare(cv.user_id)}@${bare(cv.session_id)}`;
         labels.set(String(cv.id), CONCEPT_LABEL.conversation(who, cv.kind === 'MAIN' ? 'MAIN' : `${cv.kind}#${cv.n}`));
       }
-      const userOf = new Map<string, string>();
-      for (const p of await rows(`SELECT id, user_id FROM participant`)) userOf.set(String(p.id), String(p.user_id));
-      const who = (participantId: string | null): string =>
-        bare(participantId ? (userOf.get(participantId) ?? null) : null);
+      // A participant is its user within the session (work-k5fk.3): the user's label is the participant's owner label.
+      const who = (userId: string | null): string => bare(userId);
 
       for (const m of await rows(`SELECT id, row_number() OVER (ORDER BY created_at, id)::text AS rank FROM message`)) {
         labels.set(String(m.id), `<message:${m.rank}>`);
       }
-      for (const a of await rows(`SELECT id, author_participant_id FROM empathy_attempt ORDER BY id`)) {
-        labels.set(String(a.id), `<empathyAttempt:${who(a.author_participant_id)}>`);
+      for (const a of await rows(`SELECT id, author_user_id FROM empathy_attempt ORDER BY id`)) {
+        labels.set(String(a.id), `<empathyAttempt:${who(a.author_user_id)}>`);
       }
-      for (const d of await rows(`SELECT id, participant_id, kind::text AS kind FROM draft ORDER BY id`)) {
+      for (const d of await rows(`SELECT id, user_id, kind::text AS kind FROM draft ORDER BY id`)) {
         const name =
           d.kind === 'EMPATHY' ? 'empathyDraft' : d.kind === 'VALIDATION_FEEDBACK' ? 'feedbackDraft' : 'shareDraft';
-        labels.set(String(d.id), `<${name}:${who(d.participant_id)}>`);
+        labels.set(String(d.id), `<${name}:${who(d.user_id)}>`);
       }
       const rankWithin = async (sql: string, name: string, owner: (r: Record<string, string | null>) => string) => {
         const n = new Map<string, number>();
@@ -353,18 +349,18 @@ async function labelTargetRows(target: DbTarget, database: string, labels: Map<s
         r => bare(r.owner),
       );
       await rankWithin(
-        `SELECT r.id, a.author_participant_id AS author, r.subject_participant_id AS subject
+        `SELECT r.id, a.author_user_id AS author, r.subject_user_id AS subject
          FROM reconciler_result r JOIN empathy_attempt a ON a.id = r.attempt_id ORDER BY r.created_at, r.id`,
         'reconcilerResult',
         r => `${who(r.author)}→${who(r.subject)}`,
       );
       await rankWithin(
-        `SELECT id, subject_participant_id FROM context_share_offer ORDER BY created_at, id`,
+        `SELECT id, subject_user_id FROM context_share_offer ORDER BY created_at, id`,
         'shareOffer',
-        r => who(r.subject_participant_id),
+        r => who(r.subject_user_id),
       );
-      await rankWithin(`SELECT id, participant_id FROM need ORDER BY created_at, id`, 'need', r =>
-        who(r.participant_id),
+      await rankWithin(`SELECT id, user_id FROM need ORDER BY created_at, id`, 'need', r =>
+        who(r.user_id),
       );
       await rankWithin(`SELECT id, session_id FROM proposal ORDER BY created_at, id`, 'proposal', r =>
         bare(r.session_id),
@@ -379,18 +375,18 @@ async function labelTargetRows(target: DbTarget, database: string, labels: Map<s
         bare(r.session_id),
       );
       await rankWithin(
-        `SELECT id, reviewer_participant_id FROM empathy_review ORDER BY created_at, id`,
+        `SELECT id, reviewer_user_id FROM empathy_review ORDER BY created_at, id`,
         'validation',
-        r => who(r.reviewer_participant_id),
+        r => who(r.reviewer_user_id),
       );
       // A consent: who decided, over what kind, about which target (as above).
       const consentRank = new Map<string, number>();
       for (const r of await rows(
-        `SELECT id, participant_id, target_kind::text AS kind,
+        `SELECT id, user_id, target_kind::text AS kind,
                 coalesce(need_id, empathy_attempt_id, proposal_id, share_offer_id, review_id) AS target
-         FROM consent ORDER BY participant_id, target_kind, decided_at NULLS LAST, created_at, id`,
+         FROM consent ORDER BY session_id, user_id, target_kind, decided_at NULLS LAST, created_at, id`,
       )) {
-        const group = `${who(r.participant_id)}/${r.kind}`;
+        const group = `${who(r.user_id)}/${r.kind}`;
         const n = (consentRank.get(group) ?? 0) + 1;
         consentRank.set(group, n);
         const targetLabel = r.target ? labels.get(String(r.target)) : null;

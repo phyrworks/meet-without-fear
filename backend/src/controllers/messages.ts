@@ -172,9 +172,7 @@ export async function confirmFeelHeard(req: Request, res: Response): Promise<voi
     }
 
     // The participant's progress (stage shim)
-    const stageState = (await loadStageStates([{ id: participant.id, joinedAt: participant.joinedAt }])).get(
-      participant.id,
-    );
+    const stageState = (await loadStageStates([participant])).get(participant);
     // A participant row IS having joined (the old check was "has a StageProgress row").
     const hasJoined = true;
 
@@ -221,7 +219,7 @@ export async function confirmFeelHeard(req: Request, res: Response): Promise<voi
     // Generate turnId for this user action
     const turnId = `${sessionId}-${user.id}-feel-heard`;
     // Update request context so all downstream code can access this turnId
-    updateContext({ turnId, sessionId, userId: user.id, participantId: participant.id });
+    updateContext({ turnId, sessionId, userId: user.id, seated: true });
 
     const now = new Date();
     const confirmedAt = now.toISOString();
@@ -232,13 +230,16 @@ export async function confirmFeelHeard(req: Request, res: Response): Promise<voi
     // Not confirmed: nothing to record (milestones are append-only facts).
     let advancedToStage2 = false;
     if (confirmed) {
-      advancedToStage2 = await reachMilestone(participant.id, 'feel_heard', now);
+      advancedToStage2 = await reachMilestone(participant, 'feel_heard', now);
       if (advancedToStage2) logger.info(`[confirmFeelHeard] Advanced user ${user.id} to Stage 2`);
     }
 
-    const partner = await getPartnerParticipant(participant.id);
+    const partner = await getPartnerParticipant(participant);
     const partnerState = partner
-      ? (await loadStageStates([{ id: partner.participantId, joinedAt: partner.joinedAt }])).get(partner.participantId)
+      ? (await loadStageStates([{ sessionId, userId: partner.userId, joinedAt: partner.joinedAt }])).get({
+          sessionId,
+          userId: partner.userId,
+        })
       : undefined;
 
     // Generate AI transition message when user confirms they feel heard
@@ -268,7 +269,7 @@ export async function confirmFeelHeard(req: Request, res: Response): Promise<voi
         } else {
           // Partner hasn't joined yet - get name from invitation
           const invitation = await prisma.invitation.findFirst({
-            where: { sessionId, invitedByParticipantId: participant.id },
+            where: { sessionId, invitedByUserId: participant.userId },
             select: { inviteeName: true },
           });
           partnerName = invitation?.inviteeName || undefined;
@@ -342,8 +343,9 @@ export async function confirmFeelHeard(req: Request, res: Response): Promise<voi
       const partnerId = partner.userId;
       const held = await prisma.$queryRaw<Array<{ status: string }>>`
         SELECT status::text AS status FROM v_empathy_direction_status
-        WHERE author_participant_id = ${partner.participantId}::uuid
-          AND subject_participant_id = ${participant.id}::uuid
+        WHERE session_id = ${sessionId}::uuid
+          AND author_user_id = ${partner.userId}::uuid
+          AND subject_user_id = ${participant.userId}::uuid
           AND status = 'HELD'`;
 
       if (held.length > 0) {
@@ -456,8 +458,8 @@ export async function getConversationHistory(req: Request, res: Response): Promi
         before: before ? new Date(before) : undefined,
         after: after ? new Date(after) : undefined,
       }),
-      loadMilestones([participant.id]),
-      loadInvitationPending([participant.id]),
+      loadMilestones([participant]),
+      loadInvitationPending([participant]),
     ]);
 
     logger.info(`[getConversationHistory:${requestId}] Fetched ${messages.length} messages from database`);
@@ -476,8 +478,8 @@ export async function getConversationHistory(req: Request, res: Response): Promi
       resultMessages = resultMessages.reverse();
     }
 
-    const ownerMilestones = milestones.get(participant.id) ?? [];
-    const ownerInvitationPending = invitationPending.has(participant.id);
+    const ownerMilestones = milestones.get(participant) ?? [];
+    const ownerInvitationPending = invitationPending.has(participant);
     successResponse(res, {
       messages: resultMessages.map(m => ({
         ...toMessageDTO(m, { sessionId, ownerMilestones, ownerInvitationPending }),
@@ -527,9 +529,7 @@ export async function getInitialMessage(req: Request, res: Response): Promise<vo
     }
 
     // The participant's current stage (stage shim)
-    const stageState = (await loadStageStates([{ id: participant.id, joinedAt: participant.joinedAt }])).get(
-      participant.id,
-    );
+    const stageState = (await loadStageStates([participant])).get(participant);
     const currentStage = stageState?.current.stage ?? 0;
 
     // Determine if this is the invitation phase
@@ -541,17 +541,17 @@ export async function getInitialMessage(req: Request, res: Response): Promise<vo
     // Find the session's invitation to determine inviter/invitee status
     const invitation = await prisma.invitation.findFirst({
       where: { sessionId },
-      select: { inviteeName: true, invitedByParticipant: { select: { id: true, userId: true } } },
+      select: { inviteeName: true, invitedByUserId: true },
     });
 
     // Determine if the current user is the invitee (NOT the person who sent the invitation)
-    const isInvitee = invitation ? invitation.invitedByParticipant.id !== participant.id : false;
+    const isInvitee = invitation ? invitation.invitedByUserId !== participant.userId : false;
 
     // Get partner name - for inviter it's from the invitation, for invitee it's from the inviter
     let partnerName: string | undefined;
     if (isInvitee) {
       // Invitee: partner is the inviter
-      const inviterUserId = invitation?.invitedByParticipant.userId;
+      const inviterUserId = invitation?.invitedByUserId;
       const inviter = inviterUserId
         ? await prisma.user.findUnique({ where: { id: inviterUserId }, select: { firstName: true, name: true } })
         : null;
@@ -662,7 +662,7 @@ export async function getInitialMessage(req: Request, res: Response): Promise<vo
     // Generate turnId for this user action - the invitee accessing their session
     const turnId = `${sessionId}-${user.id}-welcome`;
     // Update request context so all downstream code can access this turnId
-    updateContext({ turnId, sessionId, userId: user.id, participantId: participant.id });
+    updateContext({ turnId, sessionId, userId: user.id, seated: true });
 
     // Get AI response
     let responseContent: string;

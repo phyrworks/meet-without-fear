@@ -23,7 +23,7 @@ type ActivityBlob = any;
  * Neural Monitor dashboard (TS-12, spec §6 "Brain dashboard"). Read-only,
  * through the `mwf_ops` role (OPS_DATABASE_URL; tables.sql grants it SELECT on
  * exactly the tables read here). `brain_activity` rows are attributed at
- * capture by the job (`participant_id`, `reflection_id`); a reflection's
+ * capture by the job (`participant_user_id` with `session_id`, `reflection_id`); a reflection's
  * telemetry carries `reflection_id`, not `session_id`, so the dashboard keys an
  * activity by its session, else its reflection.
  */
@@ -190,7 +190,7 @@ async function participantLabels(sessionIds: string[]): Promise<Map<string, stri
   if (sessionIds.length === 0) return out;
   const rows = await db().participant.findMany({
     where: { sessionId: { in: sessionIds } },
-    orderBy: [{ joinedAt: 'asc' }, { id: 'asc' }],
+    orderBy: [{ joinedAt: 'asc' }, { userId: 'asc' }],
     select: { sessionId: true, displayName: true, user: { select: { name: true, deletedAt: true } } },
   });
   const names = new Map<string, string[]>();
@@ -208,8 +208,9 @@ async function userTurnCounts(sessionIds: string[]): Promise<Map<string, number>
   const rows = await db().$queryRaw<Array<{ session_id: string; n: number }>>`SELECT p.session_id, count(*)::int AS n
     FROM message m
     JOIN conversation c ON c.id = m.conversation_id AND c.kind = 'MAIN'
-    JOIN participant p ON p.id = c.participant_id
-    WHERE p.session_id = ANY(${sessionIds}::uuid[]) AND m.role = 'USER' AND m.kind = 'CHAT' AND m.sender_participant_id = p.id
+    JOIN participant p ON p.session_id = c.session_id AND p.user_id = c.user_id
+    WHERE p.session_id = ANY(${sessionIds}::uuid[]) AND m.role = 'USER' AND m.kind = 'CHAT'
+      AND m.session_id = p.session_id AND m.sender_user_id = p.user_id
     GROUP BY p.session_id`;
   return new Map(rows.map(r => [r.session_id, Number(r.n)]));
 }
@@ -234,15 +235,12 @@ async function maxStages(sessionIds: string[]): Promise<Map<string, number>> {
   if (sessionIds.length === 0) return new Map();
   const participants = await db().participant.findMany({
     where: { sessionId: { in: sessionIds } },
-    select: { id: true, sessionId: true },
+    select: { sessionId: true, userId: true },
   });
-  const currents = await loadCurrentStages(
-    participants.map(p => p.id),
-    db(),
-  );
+  const currents = await loadCurrentStages(participants, db());
   const out = new Map<string, number>();
   for (const p of participants) {
-    const current = currents.get(p.id);
+    const current = currents.get(p);
     if (current) out.set(p.sessionId, Math.max(out.get(p.sessionId) ?? 0, current.stage));
   }
   return out;
@@ -976,15 +974,15 @@ router.get('/activity/:sessionId', async (req, res) => {
     // Partner session: every participant's own chat turns (their MAIN conversation)
     let messages: Array<{ id: string; content: string; timestamp: Date; senderId: string | null }> = (
       await db().message.findMany({
-        where: { role: 'USER', kind: 'CHAT', conversation: { kind: 'MAIN', participant: { sessionId } } },
+        where: { role: 'USER', kind: 'CHAT', conversation: { kind: 'MAIN', sessionId } },
         orderBy: { createdAt: 'asc' },
-        select: { id: true, content: true, createdAt: true, senderParticipant: { select: { userId: true } } },
+        select: { id: true, content: true, createdAt: true, senderUserId: true },
       })
     ).map(m => ({
       id: m.id,
       content: m.content,
       timestamp: m.createdAt,
-      senderId: m.senderParticipant?.userId ?? null,
+      senderId: m.senderUserId ?? null,
     }));
 
     // If no messages found, it might be a reflection
@@ -1000,7 +998,7 @@ router.get('/activity/:sessionId', async (req, res) => {
 
     // Notable facts: every participant's NOTABLE_FACTS document of this session (ai_memory)
     const facts = await db().aiMemory.findMany({
-      where: { kind: 'NOTABLE_FACTS', participant: { sessionId } },
+      where: { kind: 'NOTABLE_FACTS', sessionId },
       select: { doc: true },
     });
     const notableFacts = facts.flatMap(f => {
@@ -1037,30 +1035,27 @@ router.get('/sessions/:sessionId/context', async (req, res) => {
 
     // First try as partner session: its human participants
     const participants = await db().participant.findMany({
-      where: { sessionId, kind: 'human', userId: { not: null } },
-      orderBy: [{ joinedAt: 'asc' }, { id: 'asc' }],
-      select: { id: true, userId: true, displayName: true, joinedAt: true, user: { select: { name: true } } },
+      where: { sessionId, kind: 'human' },
+      orderBy: [{ joinedAt: 'asc' }, { userId: 'asc' }],
+      select: { sessionId: true, userId: true, displayName: true, joinedAt: true, user: { select: { name: true } } },
     });
 
     if (participants.length > 0) {
       // Partner session - assemble context for every participant
       const now = new Date().toISOString();
-      const states = await loadStageStates(
-        participants.map(p => ({ id: p.id, joinedAt: p.joinedAt })),
-        db(),
-      );
+      const states = await loadStageStates(participants, db());
 
       const contextResults = await Promise.all(
         participants.map(
           async (member): Promise<{ userId: string; userName: string; context: ContextBundle | null }> => {
-            const userId = member.userId!;
+            const userId = member.userId;
             const userName = member.displayName || member.user?.name || 'Unknown';
-            const stage = states.get(member.id)?.current.stage || 1;
+            const stage = states.get(member)?.current.stage || 1;
 
             try {
               // Emotional intensity: the participant's latest mood reading
               const latestReading = await db().moodReading.findFirst({
-                where: { participantId: member.id },
+                where: { sessionId, userId },
                 orderBy: [{ recordedAt: 'desc' }, { id: 'desc' }],
                 select: { intensity: true },
               });
@@ -1068,7 +1063,7 @@ router.get('/sessions/:sessionId/context', async (req, res) => {
 
               // Turn count: the participant's own chat turns
               const turnCount = await db().message.count({
-                where: { senderParticipantId: member.id, role: 'USER', kind: 'CHAT' },
+                where: { sessionId, senderUserId: userId, role: 'USER', kind: 'CHAT' },
               });
 
               // Determine memory intent (required for context assembly)

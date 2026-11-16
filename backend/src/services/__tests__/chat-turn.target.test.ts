@@ -104,11 +104,11 @@ describeTarget('the streaming chat turn on the target (mwf_app, the reply by mwf
       .filter((e): e is Extract<StreamEvent, { event: 'chunk' }> => e.event === 'chunk')
       .map(c => c.data.text)
       .join('');
-  const ownMessages = async (participantId: string) =>
+  const ownMessages = async (seat: { sessionId: string; userId: string }) =>
     run.sql<{ role: string; content: string }>(
       `SELECT m.role::text AS role, m.content FROM message m JOIN conversation c ON c.id = m.conversation_id
-       WHERE c.participant_id = $1 ORDER BY m.created_at, m.id`,
-      [participantId],
+       WHERE c.session_id = $1 AND c.user_id = $2 ORDER BY m.created_at, m.id`,
+      [seat.sessionId, seat.userId],
     );
   const milestones = async () =>
     (await run.sql<{ n: number }>(`SELECT count(*)::int AS n FROM participant_milestone`))[0].n;
@@ -208,15 +208,16 @@ describeTarget('the streaming chat turn on the target (mwf_app, the reply by mwf
     expect(stranger.status).toBe(403);
 
     const [bobNeed] = await run.sql<{ id: string }>(
-      `INSERT INTO need (participant_id, label, category, ai_confidence, user_id, session_id) VALUES ($1::uuid, 'PROBE_TS12_BOBS_NEED', 'SAFETY', 0.9, (SELECT p.user_id FROM participant p WHERE p.id = $1::uuid), (SELECT p.session_id FROM participant p WHERE p.id = $1::uuid)) RETURNING id`,
-      [ids.bob],
+      `INSERT INTO need (label, category, ai_confidence, user_id, session_id) VALUES ('PROBE_TS12_BOBS_NEED', 'SAFETY', 0.9, $1::uuid, $2::uuid) RETURNING id`,
+      [ids.bobUser, ids.session],
     );
     // Ada into Stage 3 for the refining path, then point at Bob's need
     await run.sql(
-      `INSERT INTO participant_milestone (participant_id, session_id, user_id, milestone_key)
-       SELECT p.id, p.session_id, p.user_id, k FROM participant p, unnest(ARRAY['empathy_validated']) k WHERE p.id = $1::uuid
+      `INSERT INTO participant_milestone (session_id, user_id, milestone_key)
+       SELECT p.session_id, p.user_id, k FROM participant p, unnest(ARRAY['empathy_validated']) k
+       WHERE p.session_id = $1::uuid AND p.user_id = $2::uuid
        ON CONFLICT DO NOTHING`,
-      [ids.ada],
+      [ids.session, ids.adaUser],
     );
     const before = await ownMessages(ids.ada);
     stub([{ type: 'text', text: 'should never stream' }]);

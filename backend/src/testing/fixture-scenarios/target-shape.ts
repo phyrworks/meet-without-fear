@@ -310,23 +310,21 @@ export async function writeTargetShape(
   // collide on participant (session_id, user_id). work-k5fk.2: the inviter is
   // the initiator (no adder); everyone after was added by them.
   const joined = joinedParticipants(scenario);
+  /** participant key → its user: a participant is (session_id, user_id) (work-k5fk.3), every child row names it so. */
   const participantOf = new Map<ParticipantKey, string>();
-  /** participant id → user id: every child row carries its participant's seat (work-k5fk.3, 6a). */
-  const userOfPid = new Map<string, string>();
   const conversationOf = new Map<ParticipantKey, string>();
   for (const [i, p] of joined.entries()) {
     const at = memberJoined[i];
-    const r = await db.query<{ id: string }>(
+    await db.query(
       `INSERT INTO participant (session_id, user_id, kind, added_by_user_id, display_name, joined_at, created_at, updated_at)
-       VALUES ($1, $2, 'human', $3, $4, $5, $5, $5) RETURNING id`,
+       VALUES ($1, $2, 'human', $3, $4, $5, $5, $5)`,
       [sessionId, userRows[i].id, i === 0 ? null : userRows[0].id, users[i].name, at],
     );
-    participantOf.set(p.key, r.rows[0].id);
-    userOfPid.set(r.rows[0].id, userRows[i].id);
+    participantOf.set(p.key, userRows[i].id);
     const c = await db.query<{ id: string }>(
-      `INSERT INTO conversation (participant_id, kind, status, created_at, updated_at, session_id, user_id)
-       VALUES ($1, 'MAIN', 'ACTIVE', $2, $2, $3, $4) RETURNING id`,
-      [r.rows[0].id, at, sessionId, userRows[i].id],
+      `INSERT INTO conversation (user_id, kind, status, created_at, updated_at, session_id)
+       VALUES ($1, 'MAIN', 'ACTIVE', $2, $2, $3) RETURNING id`,
+      [userRows[i].id, at, sessionId],
     );
     conversationOf.set(p.key, c.rows[0].id);
   }
@@ -334,13 +332,6 @@ export async function writeTargetShape(
     const id = participantOf.get(key);
     if (!id) throw new Error(`Scenario ${scenario.name}: unknown participant "${key}"`);
     return id;
-  };
-  /** The user of a participant id this writer seated (null for null). */
-  const uid = (participantId: string | null): string | null => {
-    if (participantId === null) return null;
-    const u = userOfPid.get(participantId);
-    if (!u) throw new Error(`Scenario ${scenario.name}: participant ${participantId} has no user`);
-    return u;
   };
   const otherOf = (key: ParticipantKey): string | null => {
     const others = joined.filter(p => p.key !== key);
@@ -351,9 +342,8 @@ export async function writeTargetShape(
   const inv = invitationFields(scenario);
   const invitee = scenario.participants.length > 1 ? userRows[1].id : null;
   const invitation = await db.query<{ id: string; status: string }>(
-    `INSERT INTO invitation (session_id, invited_by_participant_id, accepted_by_user_id, invitee_name, status,
-                             message_confirmed_at, expires_at, accepted_at, created_at, updated_at, invited_by_user_id)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $9, $10) RETURNING id, status::text AS status`,
+    `INSERT INTO invitation (session_id, invited_by_user_id, accepted_by_user_id, invitee_name, status, message_confirmed_at, expires_at, accepted_at, created_at, updated_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $9) RETURNING id, status::text AS status`,
     [
       sessionId,
       pid(scenario.participants[0].key),
@@ -364,7 +354,6 @@ export async function writeTargetShape(
       t(inv.expiresAt),
       tOpt(inv.acceptedAt),
       t(inv.createdAt),
-      uid(pid(scenario.participants[0].key)),
     ],
   );
 
@@ -375,8 +364,8 @@ export async function writeTargetShape(
   autoPair();
   for (const p of joined) {
     await db.query(
-      `INSERT INTO conversation_read_state (participant_id, created_at, updated_at, session_id, user_id) VALUES ($1, $2, $3, $4, $5)`,
-      [pid(p.key), ...autoPair(), sessionId, uid(pid(p.key))],
+      `INSERT INTO conversation_read_state (user_id, created_at, updated_at, session_id) VALUES ($1, $2, $3, $4)`,
+      [pid(p.key), ...autoPair(), sessionId],
     );
   }
 
@@ -388,20 +377,9 @@ export async function writeTargetShape(
     const conversationId = conversationOf.get(forKey);
     if (!conversationId) throw new Error(`No conversation for participant "${forKey}"`);
     await db.query(
-      `INSERT INTO message (conversation_id, sender_participant_id, role, kind, content, source_attempt_id, created_at, session_id,
-                            sender_user_id)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
-      [
-        conversationId,
-        from === null ? null : pid(from),
-        role,
-        kind,
-        m.content,
-        sourceAttemptId,
-        t(m.at),
-        sessionId,
-        from === null ? null : uid(pid(from)),
-      ],
+      `INSERT INTO message (conversation_id, sender_user_id, role, kind, content, source_attempt_id, created_at, session_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+      [conversationId, from === null ? null : pid(from), role, kind, m.content, sourceAttemptId, t(m.at), sessionId],
     );
   };
 
@@ -425,9 +403,9 @@ export async function writeTargetShape(
     lateMilestones.push({ p, me, journeyStart });
     for (const m of milestoneRows(early, t, journeyStart)) {
       await db.query(
-        `INSERT INTO participant_milestone (participant_id, milestone_key, reached_at, created_at, session_id, user_id)
-         VALUES ($1, $2, $3, $3, $4, $5)`,
-        [me, m.key, m.reachedAt, sessionId, uid(me)],
+        `INSERT INTO participant_milestone (user_id, milestone_key, reached_at, created_at, session_id)
+         VALUES ($1, $2, $3, $3, $4)`,
+        [me, m.key, m.reachedAt, sessionId],
       );
     }
 
@@ -441,10 +419,9 @@ export async function writeTargetShape(
       const subject = otherOf(p.key);
       if (!subject) throw new Error(`Participant "${p.key}": an empathy attempt needs exactly one other participant`);
       await db.query(
-        `INSERT INTO draft (participant_id, kind, about_participant_id, content, ready_to_share, version, created_at, updated_at,
-                            session_id, user_id, about_user_id)
-         VALUES ($1, 'EMPATHY', $2, $3, true, 1, $4, $5, $6, $7, $8)`,
-        [me, subject, e.statement, ...autoPair(), sessionId, uid(me), uid(subject)],
+        `INSERT INTO draft (user_id, kind, about_user_id, content, ready_to_share, version, created_at, updated_at, session_id)
+         VALUES ($1, 'EMPATHY', $2, $3, true, 1, $4, $5, $6)`,
+        [me, subject, e.statement, ...autoPair(), sessionId],
       );
       // FIDELITY (TS-11 post-merge): the old factory left the attempt's stamps
       // to the database default even in explicitStamps mode (no autoCols), so
@@ -453,10 +430,8 @@ export async function writeTargetShape(
       // instant). Its created_at/updated_at are in no concept view.
       const attemptAt = explicit ? base : auto();
       const a = await db.query<{ id: string }>(
-        `INSERT INTO empathy_attempt (author_participant_id, subject_participant_id, round, content, status, status_version,
-                                      submitted_at, revealed_at, delivery_status, delivered_at, created_at, updated_at,
-                                      session_id, author_user_id, subject_user_id)
-         VALUES ($1, $2, 1, $3, $4, 0, $5, $6, $7, $8, $9, $9, $10, $11, $12) RETURNING id`,
+        `INSERT INTO empathy_attempt (author_user_id, subject_user_id, round, content, status, status_version, submitted_at, revealed_at, delivery_status, delivered_at, created_at, updated_at, session_id)
+         VALUES ($1, $2, 1, $3, $4, 0, $5, $6, $7, $8, $9, $9, $10) RETURNING id`,
         [
           me,
           subject,
@@ -468,17 +443,14 @@ export async function writeTargetShape(
           tOpt(e.deliveredAt),
           attemptAt,
           sessionId,
-          uid(me),
-          uid(subject),
         ],
       );
       attemptOf.set(p.key, a.rows[0].id);
       if (e.consentRecorded) {
         await db.query(
-          `INSERT INTO consent (participant_id, requested_by_participant_id, empathy_attempt_id, decision, decided_at, created_at, updated_at,
-                                session_id, user_id, requested_by_user_id)
-           VALUES ($1, $1, $2, 'GRANTED', $3, $4, $4, $5, $6, $6)`,
-          [me, a.rows[0].id, t(submittedAt), auto(), sessionId, uid(me)],
+          `INSERT INTO consent (user_id, requested_by_user_id, empathy_attempt_id, decision, decided_at, created_at, updated_at, session_id)
+           VALUES ($1, $1, $2, 'GRANTED', $3, $4, $4, $5)`,
+          [me, a.rows[0].id, t(submittedAt), auto(), sessionId],
         );
       }
       if (e.statementInChat) {
@@ -506,20 +478,9 @@ export async function writeTargetShape(
       for (const [k, n] of p.needs.entries()) {
         const created = explicit ? new Date(t(confirmedAt).getTime() + k) : t(confirmedAt);
         const row = await db.query<{ id: string }>(
-          `INSERT INTO need (participant_id, label, category, evidence, ai_confidence, confirmed_at, created_at, updated_at, session_id,
-                             user_id)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $7, $8, $9) RETURNING id`,
-          [
-            me,
-            n.need,
-            n.category,
-            n.evidence ?? [],
-            n.aiConfidence,
-            n.confirmed ? created : null,
-            created,
-            sessionId,
-            uid(me),
-          ],
+          `INSERT INTO need (user_id, label, category, evidence, ai_confidence, confirmed_at, created_at, updated_at, session_id)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $7, $8) RETURNING id`,
+          [me, n.need, n.category, n.evidence ?? [], n.aiConfidence, n.confirmed ? created : null, created, sessionId],
         );
         if (n.shared) {
           if (!sharedAt) throw new Error(`Participant "${p.key}" shares needs but has no needs_shared milestone`);
@@ -529,22 +490,20 @@ export async function writeTargetShape(
           // instant renumbering every later timestamp rank of their concept
           // image; the consent is stamped at the share instant instead.
           await db.query(
-            `INSERT INTO consent (participant_id, requested_by_participant_id, need_id, decision, decided_at, created_at, updated_at,
-                                  session_id, user_id, requested_by_user_id)
-             VALUES ($1, $1, $2, 'GRANTED', $3, $4, $4, $5, $6, $6)`,
+            `INSERT INTO consent (user_id, requested_by_user_id, need_id, decision, decided_at, created_at, updated_at, session_id)
+             VALUES ($1, $1, $2, 'GRANTED', $3, $4, $4, $5)`,
             [
               me,
               row.rows[0].id,
               t(sharedAt),
               scenario.currentShape?.unconsentedNeedShares ? t(sharedAt) : auto(),
               sessionId,
-              uid(me),
             ],
           );
           await db.query(
-            `INSERT INTO need_share (need_id, participant_id, session_id, category, shared_text, shared_at, created_at, updated_at, user_id)
-             VALUES ($1, $2, $3, $4, $5, $6, $6, $6, $7)`,
-            [row.rows[0].id, me, sessionId, n.category, n.shared.text, t(sharedAt), uid(me)],
+            `INSERT INTO need_share (need_id, user_id, session_id, category, shared_text, shared_at, created_at, updated_at)
+             VALUES ($1, $2, $3, $4, $5, $6, $6, $6)`,
+            [row.rows[0].id, me, sessionId, n.category, n.shared.text, t(sharedAt)],
           );
         }
       }
@@ -558,12 +517,8 @@ export async function writeTargetShape(
     const attemptId = attemptOf.get(r.guesser);
     if (!attemptId) throw new Error(`Scenario ${scenario.name}: the reconciler result's guesser has no attempt`);
     const result = await db.query<{ id: string }>(
-      `INSERT INTO reconciler_result (attempt_id, subject_participant_id, iteration, alignment_score, alignment_summary,
-         gap_summary, gap_severity, correctly_identified, missed_feelings, misattributions, most_important_gap,
-         recommended_action, rationale, sharing_would_help, suggested_share_focus, suggested_share_content,
-         suggested_share_reason, created_at, updated_at, session_id, subject_user_id)
-       VALUES ($1, $2, 1, $3, $4, $5, upper($6)::gap_severity, $7, $8, $9, $10, upper($11)::recommender_action, $12, $13, $14, $15, $16, $17, $17,
-               $18, $19)
+      `INSERT INTO reconciler_result (attempt_id, subject_user_id, iteration, alignment_score, alignment_summary, gap_summary, gap_severity, correctly_identified, missed_feelings, misattributions, most_important_gap, recommended_action, rationale, sharing_would_help, suggested_share_focus, suggested_share_content, suggested_share_reason, created_at, updated_at, session_id)
+       VALUES ($1, $2, 1, $3, $4, $5, upper($6)::gap_severity, $7, $8, $9, $10, upper($11)::recommender_action, $12, $13, $14, $15, $16, $17, $17, $18)
        RETURNING id`,
       [
         attemptId,
@@ -584,14 +539,12 @@ export async function writeTargetShape(
         r.suggestedShareReason,
         t(r.at),
         sessionId,
-        uid(pid(r.subject)),
       ],
     );
     const offerAt = auto();
     await db.query(
-      `INSERT INTO context_share_offer (attempt_id, result_id, subject_participant_id, iteration, status, suggested_content,
-         suggested_reason, shared_content, shared_at, delivery_status, delivered_at, created_at, updated_at, session_id, subject_user_id)
-       VALUES ($1, $2, $3, 1, $4, $5, $6, $7, $8, $9, $10, $11, $11, $12, $13)`,
+      `INSERT INTO context_share_offer (attempt_id, result_id, subject_user_id, iteration, status, suggested_content, suggested_reason, shared_content, shared_at, delivery_status, delivered_at, created_at, updated_at, session_id)
+       VALUES ($1, $2, $3, 1, $4, $5, $6, $7, $8, $9, $10, $11, $11, $12)`,
       [
         attemptId,
         result.rows[0].id,
@@ -605,7 +558,6 @@ export async function writeTargetShape(
         tOpt(offer.deliveredAt),
         offerAt,
         sessionId,
-        uid(pid(r.subject)),
       ],
     );
     for (const m of messages ?? []) await writeMessage(m.to, m);
@@ -651,10 +603,9 @@ export async function writeTargetShape(
       const updatedAt = auto();
       const linked = matchNeeds(st.needsAddressed);
       const row = await db.query<{ id: string }>(
-        `INSERT INTO proposal (session_id, created_by_participant_id, description, duration, unresolved_need_labels, created_at, updated_at,
-                               created_by_user_id)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id`,
-        [sessionId, pid(st.by), st.description, st.duration, linked.unresolved, createdAt, updatedAt, uid(pid(st.by))],
+        `INSERT INTO proposal (session_id, created_by_user_id, description, duration, unresolved_need_labels, created_at, updated_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id`,
+        [sessionId, pid(st.by), st.description, st.duration, linked.unresolved, createdAt, updatedAt],
       );
       proposalIdOf.set(st.key, row.rows[0].id);
       await linkNeeds(row.rows[0].id, linked.ids, createdAt);
@@ -665,9 +616,9 @@ export async function writeTargetShape(
       const agreedAt = t(agreement.agreedAt);
       for (const key of agreement.agreedBy) {
         await db.query(
-          `INSERT INTO proposal_choice (proposal_id, participant_id, decision, created_at, updated_at, session_id, user_id)
-           VALUES ($1, $2, 'WILLING', $3, $3, $4, $5)`,
-          [proposalId, pid(key), agreedAt, sessionId, uid(pid(key))],
+          `INSERT INTO proposal_choice (proposal_id, user_id, decision, created_at, updated_at, session_id)
+           VALUES ($1, $2, 'WILLING', $3, $3, $4)`,
+          [proposalId, pid(key), agreedAt, sessionId],
         );
       }
       const a = await db.query<{ id: string }>(
@@ -685,9 +636,9 @@ export async function writeTargetShape(
       );
       for (const key of agreement.agreedBy) {
         await db.query(
-          `INSERT INTO agreement_party (agreement_id, participant_id, agreed_at, created_at, session_id, user_id)
-           VALUES ($1, $2, $3, $3, $4, $5)`,
-          [a.rows[0].id, pid(key), agreedAt, sessionId, uid(pid(key))],
+          `INSERT INTO agreement_party (agreement_id, user_id, agreed_at, created_at, session_id)
+           VALUES ($1, $2, $3, $3, $4)`,
+          [a.rows[0].id, pid(key), agreedAt, sessionId],
         );
       }
     }
@@ -709,10 +660,8 @@ export async function writeTargetShape(
       const at = auto();
       const linked = matchNeeds(pr.needsAddressed);
       const row = await db.query<{ id: string }>(
-        `INSERT INTO proposal (session_id, created_by_participant_id, kind, status, description, duration, measure_of_success,
-                               removed_at, removed_by_participant_id, removal_reason, unresolved_need_labels, created_at, updated_at,
-                               created_by_user_id, removed_by_user_id)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $12, $13, $14) RETURNING id`,
+        `INSERT INTO proposal (session_id, created_by_user_id, kind, status, description, duration, measure_of_success, removed_at, removed_by_user_id, removal_reason, unresolved_need_labels, created_at, updated_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $12) RETURNING id`,
         [
           sessionId,
           pid(pr.by),
@@ -726,8 +675,6 @@ export async function writeTargetShape(
           pr.removed?.reason ?? null,
           linked.unresolved,
           at,
-          uid(pid(pr.by)),
-          pr.removed ? uid(pid(pr.removed.by)) : null,
         ],
       );
       proposalIdOf.set(pr.key, row.rows[0].id);
@@ -740,9 +687,8 @@ export async function writeTargetShape(
     };
     for (const r of revisions) {
       await db.query(
-        `INSERT INTO proposal_revision (proposal_id, actor_participant_id, action, before, after, reason, created_at, session_id,
-                                        actor_user_id)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+        `INSERT INTO proposal_revision (proposal_id, actor_user_id, action, before, after, reason, created_at, session_id)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
         [
           proposalId(r.proposal),
           pid(r.actor),
@@ -752,7 +698,6 @@ export async function writeTargetShape(
           r.reason,
           auto(),
           sessionId,
-          uid(pid(r.actor)),
         ],
       );
     }
@@ -762,9 +707,9 @@ export async function writeTargetShape(
           const sharedAt = p.milestones.choices_shared;
           if (!sharedAt) throw new Error(`Participant "${p.key}" has choices but no choices_shared milestone`);
           await db.query(
-            `INSERT INTO proposal_choice (proposal_id, participant_id, decision, created_at, updated_at, session_id, user_id)
-             VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-            [proposalId(pr.key), pid(p.key), c.decision, t(sharedAt), auto(), sessionId, uid(pid(p.key))],
+            `INSERT INTO proposal_choice (proposal_id, user_id, decision, created_at, updated_at, session_id)
+             VALUES ($1, $2, $3, $4, $5, $6)`,
+            [proposalId(pr.key), pid(p.key), c.decision, t(sharedAt), auto(), sessionId],
           );
         }
       }
@@ -778,9 +723,9 @@ export async function writeTargetShape(
     };
     for (const m of milestoneRows(late, t, journeyStart)) {
       await db.query(
-        `INSERT INTO participant_milestone (participant_id, milestone_key, reached_at, created_at, session_id, user_id)
-         VALUES ($1, $2, $3, $3, $4, $5)`,
-        [me, m.key, m.reachedAt, sessionId, uid(me)],
+        `INSERT INTO participant_milestone (user_id, milestone_key, reached_at, created_at, session_id)
+         VALUES ($1, $2, $3, $3, $4)`,
+        [me, m.key, m.reachedAt, sessionId],
       );
     }
   }
@@ -790,9 +735,8 @@ export async function writeTargetShape(
   if (scenario.closure) {
     const c = scenario.closure;
     await db.query(
-      `INSERT INTO session_closure (session_id, kind, reason, summary, closed_by_participant_id, check_in_at, closed_at, created_at,
-                                    closed_by_user_id)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+      `INSERT INTO session_closure (session_id, kind, reason, summary, closed_by_user_id, check_in_at, closed_at, created_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
       [
         sessionId,
         c.kind,
@@ -802,7 +746,6 @@ export async function writeTargetShape(
         tOpt(c.checkInAt),
         t(c.at),
         auto(),
-        c.closedBy === null ? null : uid(pid(c.closedBy)),
       ],
     );
     await db.query(`UPDATE session SET status = 'RESOLVED', resolved_at = $2, updated_at = $3 WHERE id = $1`, [
@@ -846,8 +789,7 @@ export async function writeTargetShape(
         throw new Error(`Participant "${p.key}": prompt capture ${k} names a missing reflection`);
       }
       await db.query(
-        `INSERT INTO brain_activity (session_id, reflection_id, participant_id, turn_id, activity_type, call_type, model,
-                                     input, output, status, created_at, completed_at, updated_at)
+        `INSERT INTO brain_activity (session_id, reflection_id, participant_user_id, turn_id, activity_type, call_type, model, input, output, status, created_at, completed_at, updated_at)
          VALUES ($1, $2, $3, $4, 'LLM_CALL', $5, 'claude-sonnet', $6, $7, 'COMPLETED', $8, $8, $8)`,
         [
           reflectionId ? null : sessionId,

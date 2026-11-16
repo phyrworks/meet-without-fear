@@ -2,7 +2,7 @@
  * TS-12, real roles on a clone of the INNER_WORK_LINKED_A target fixture:
  * telemetry and the Neural Monitor dashboard.
  *
- *   - brain_activity is written by the JOB (mwf_job) with participant_id /
+ *   - brain_activity is written by the JOB (mwf_job) with participant_user_id /
  *     reflection_id attribution at capture; `mwf_app` holds no grant on it
  *     here (revoked from the run's stand-in table grants, as spec §1.8 says);
  *   - a failed telemetry write never breaks the call (an unsaved record);
@@ -53,7 +53,7 @@ describeTarget('brain_activity (job) and the dashboard (mwf_ops) on the target',
         startTime: Date.now(),
         userId: ids.bobUser,
         sessionId: ids.session,
-        participantId: ids.bob,
+        seated: true,
       },
       () =>
         brainService.startActivity({
@@ -75,11 +75,17 @@ describeTarget('brain_activity (job) and the dashboard (mwf_ops) on the target',
     });
     expect(
       await run.sql(
-        `SELECT participant_id, reflection_id, status::text AS status, token_count_input, cost::text AS cost FROM brain_activity WHERE id = $1`,
+        `SELECT participant_user_id, reflection_id, status::text AS status, token_count_input, cost::text AS cost FROM brain_activity WHERE id = $1`,
         [activity.id],
       ),
     ).toEqual([
-      { participant_id: ids.bob, reflection_id: null, status: 'COMPLETED', token_count_input: 10, cost: '0.001200' },
+      {
+        participant_user_id: ids.bobUser,
+        reflection_id: null,
+        status: 'COMPLETED',
+        token_count_input: 10,
+        cost: '0.001200',
+      },
     ]);
 
     // No participant on the request context: the job resolves the user's participant
@@ -94,9 +100,9 @@ describeTarget('brain_activity (job) and the dashboard (mwf_ops) on the target',
           attributeToCaller: true,
         }),
     );
-    expect(await run.sql(`SELECT participant_id FROM brain_activity WHERE id = $1`, [viaLookup.id])).toEqual([
-      { participant_id: ids.ada },
-    ]);
+    expect(
+      await run.sql(`SELECT session_id, participant_user_id FROM brain_activity WHERE id = $1`, [viaLookup.id]),
+    ).toEqual([{ session_id: ids.session, participant_user_id: ids.adaUser }]);
 
     // R40 (fix round 1, I1): without the opt-in — every call that reads or produces another
     // participant's content — the row is unattributed (session only), so R17 removes it on either leave.
@@ -107,7 +113,7 @@ describeTarget('brain_activity (job) and the dashboard (mwf_ops) on the target',
         startTime: Date.now(),
         userId: ids.bobUser,
         sessionId: ids.session,
-        participantId: ids.bob,
+        seated: true,
       },
       () =>
         brainService.startActivity({
@@ -118,9 +124,9 @@ describeTarget('brain_activity (job) and the dashboard (mwf_ops) on the target',
           callType: 'RECONCILER_ANALYSIS' as never,
         }),
     );
-    expect(await run.sql(`SELECT session_id, participant_id FROM brain_activity WHERE id = $1`, [cross.id])).toEqual([
-      { session_id: ids.session, participant_id: null },
-    ]);
+    expect(
+      await run.sql(`SELECT session_id, participant_user_id FROM brain_activity WHERE id = $1`, [cross.id]),
+    ).toEqual([{ session_id: ids.session, participant_user_id: null }]);
 
     // A reflection turn: reflection_id, no session
     const inner = await brainService.startActivity({
@@ -228,10 +234,10 @@ describeTarget('brain_activity (job) and the dashboard (mwf_ops) on the target',
     expect(activity.id).not.toBe('');
     await brainService.completeActivity(activity.id, { output: {}, cost: 0.002 });
 
-    // The shim reads invitation.invited_by_participant_id; mwf_ops holds that column only
+    // The shim reads invitation.invited_by_user_id; mwf_ops holds that column only
     // (metadata, never the invitation's content).
     const [{ col, msg }] = await run.sql<{ col: boolean; msg: boolean }>(
-      `SELECT has_column_privilege('mwf_ops', 'invitation', 'invited_by_participant_id', 'SELECT') AS col,
+      `SELECT has_column_privilege('mwf_ops', 'invitation', 'invited_by_user_id', 'SELECT') AS col,
               has_column_privilege('mwf_ops', 'invitation', 'invitee_name', 'SELECT') AS msg`,
     );
     expect({ col, msg }).toEqual({ col: true, msg: false });

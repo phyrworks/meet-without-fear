@@ -31,6 +31,7 @@ import {
   type TargetEmpathyStatus,
 } from '../empathy-store';
 import type { ReconcilerResult, ReconcilerSummary } from '@meet-without-fear/shared';
+import type { Seat } from '../participant-resolver';
 
 import {
   type UserInfo,
@@ -85,7 +86,7 @@ async function markEmpathyReady(
   attempt: { attemptId: string; statusVersion: number; status: string },
   circuitBreakerTripped = false,
 ): Promise<boolean> {
-  logger.info('Marking empathy as READY', { guesserParticipantId: guesser.participantId });
+  logger.info('Marking empathy as READY', { sessionId, guesserUserId: guesser.userId });
 
   const alignmentMessage = circuitBreakerTripped
     ? `You've shared your perspective on what ${subjectName} might be experiencing. ${subjectName} is also reflecting on your perspective — once they're done, you'll both see what each other shared.`
@@ -112,7 +113,7 @@ async function markEmpathyReady(
   }
 
   const note = saved as Awaited<ReturnType<typeof createFacilitatorMessage>> | null;
-  if (note && guesser.userId) {
+  if (note) {
     // Content-free (I1/R36): the note is the guesser's private AI message.
     await pingStage2Refresh(sessionId, guesser.userId);
   }
@@ -128,7 +129,7 @@ async function markEmpathyReady(
 /**
  * Run the reconciler for a SINGLE direction when the subject completes Stage 1
  * (or after the guesser resubmits). User ids in, as before (realtime and the
- * e2e hook are user-keyed); participants inside.
+ * e2e hook are user-keyed); with the session, they are the participants' keys.
  */
 export async function runReconcilerForDirection(
   sessionId: string,
@@ -148,21 +149,21 @@ export async function runReconcilerForDirection(
   }
   const { guesser, subject, guesserParty } = parties;
 
-  const empathyData = await getEmpathyData(guesser.participantId, subject.participantId);
+  const empathyData = await getEmpathyData(sessionId, guesser.id, subject.id);
   if (!empathyData) {
     logger.error('Guesser has not submitted empathy statement', { guesserId, sessionId });
     throw new Error('Guesser has not submitted empathy statement');
   }
 
   // CIRCUIT BREAKER: rounds − 1 resubmissions (spec §1.2 RefinementAttemptCounter → rounds).
-  const { shouldSkipReconciler, attempts } = await checkAttempts(guesser.participantId, subject.participantId);
+  const { shouldSkipReconciler, attempts } = await checkAttempts(sessionId, guesser.id, subject.id);
   if (shouldSkipReconciler) {
     logger.info('Circuit breaker tripped, forcing READY', { attempts, guesserId, subjectId });
     await markEmpathyReady(sessionId, guesserParty, subject.name, empathyData, true);
     return { result: null, empathyStatus: 'READY', shareOffer: null };
   }
 
-  const witnessingContent = await getWitnessingContent(sessionId, subject.participantId, subject.id);
+  const witnessingContent = await getWitnessingContent(sessionId, subject.id);
   if (!witnessingContent.userMessages) {
     logger.error('Subject has no Stage 1 content', { subjectId, sessionId });
     throw new Error('Subject has no Stage 1 content');
@@ -183,14 +184,15 @@ export async function runReconcilerForDirection(
   logger.info('Reconciler outcome', { severity: result.gaps.severity, action, hasSuggestedFocus, shouldOfferSharing });
 
   const contextAlreadyShared =
-    shouldOfferSharing && (await hasContextAlreadyBeenShared(guesser.participantId, subject.participantId));
+    shouldOfferSharing && (await hasContextAlreadyBeenShared(sessionId, guesser.id, subject.id));
 
   if (!shouldOfferSharing || contextAlreadyShared) {
     if (result.fresh) {
       const stored = await persistAnalysis({
         attemptId: empathyData.attemptId,
-        authorParticipantId: guesser.participantId,
-        subjectParticipantId: subject.participantId,
+        sessionId,
+        authorUserId: guesser.id,
+        subjectUserId: subject.id,
         result,
         guidance: result.abstractGuidance ?? generateAbstractGuidance(result),
       });
@@ -243,7 +245,7 @@ export async function runReconcilerForDirection(
 /** Has this user (a participant of the session) reached `feel_heard`? */
 export async function hasPartnerCompletedStage1(sessionId: string, partnerId: string): Promise<boolean> {
   const n = await prisma.participantMilestone.count({
-    where: { milestoneKey: 'feel_heard', participant: { sessionId, userId: partnerId } },
+    where: { milestoneKey: 'feel_heard', sessionId, userId: partnerId },
   });
   return n > 0;
 }
@@ -254,8 +256,8 @@ export async function hasPartnerCompletedStage1(sessionId: string, partnerId: st
 
 interface CurrentRound {
   id: string;
-  author_participant_id: string;
-  subject_participant_id: string;
+  author_user_id: string;
+  subject_user_id: string;
   status: TargetEmpathyStatus;
 }
 
@@ -273,17 +275,15 @@ export async function checkAndRevealBothIfReady(sessionId: string): Promise<bool
   logger.debug('checkAndRevealBothIfReady called', { sessionId });
   const parties = await sessionParties(sessionId, getJobPrisma());
   if (parties.length !== 2) return false;
-  const pids = parties.map(p => p.participantId);
+  const uids = parties.map(p => p.userId);
 
   const revealed = await getJobPrisma().$transaction(
     async tx => {
-      const rounds = await tx.$queryRaw<
-        CurrentRound[]
-      >`SELECT DISTINCT ON (a.author_participant_id, a.subject_participant_id)
-               a.id, a.author_participant_id, a.subject_participant_id, a.status::text AS status
+      const rounds = await tx.$queryRaw<CurrentRound[]>`SELECT DISTINCT ON (a.author_user_id, a.subject_user_id)
+               a.id, a.author_user_id, a.subject_user_id, a.status::text AS status
         FROM empathy_attempt a
-        WHERE a.author_participant_id = ANY(${pids}::uuid[])
-        ORDER BY a.author_participant_id, a.subject_participant_id,
+        WHERE a.session_id = ${sessionId}::uuid AND a.author_user_id = ANY(${uids}::uuid[])
+        ORDER BY a.author_user_id, a.subject_user_id,
                  (a.status NOT IN ('SUPERSEDED', 'VALIDATED')) DESC, a.round DESC`;
       if (rounds.length !== 2) {
         logger.debug('Not enough empathy attempts for mutual reveal', { sessionId, count: rounds.length });
@@ -329,14 +329,14 @@ export async function checkAndRevealBothIfReady(sessionId: string): Promise<bool
 
   if (!revealed) return false;
 
-  const byPid = new Map(parties.map(p => [p.participantId, p]));
+  const byUser = new Map(parties.map(p => [p.userId, p]));
   const { notifyPartner } = await import('../realtime');
 
   // Content-free (I1/R36): both devices are on the session channel; mobile
   // refetches the addressed user's status on this event.
   for (const r of revealed) {
-    const author = byPid.get(r.author_participant_id);
-    if (!author?.userId) continue;
+    const author = byUser.get(r.author_user_id);
+    if (!author) continue;
     await notifyPartner(sessionId, author.userId, 'empathy.revealed', {
       direction: 'outgoing',
       guesserUserId: author.userId,
@@ -348,8 +348,8 @@ export async function checkAndRevealBothIfReady(sessionId: string): Promise<bool
   // into the SUBJECT's conversation, from the subject's own result.
   try {
     for (const r of revealed) {
-      const author = byPid.get(r.author_participant_id);
-      const subject = byPid.get(r.subject_participant_id);
+      const author = byUser.get(r.author_user_id);
+      const subject = byUser.get(r.subject_user_id);
       if (!author || !subject?.mainConversationId) continue;
       const result = await currentResultFor(r.id);
       const hasGaps = result && (result.gapSeverity === 'MODERATE' || result.gapSeverity === 'SIGNIFICANT');
@@ -358,11 +358,9 @@ export async function checkAndRevealBothIfReady(sessionId: string): Promise<bool
         ? `${guesserName}'s attempt to understand your experience is ready for you to review. It may not fully capture everything you shared — if something feels off or missing, you can share feedback to help them understand better.`
         : `${guesserName}'s attempt to understand your experience is ready for you to review. Take a moment to read it and let us know how it feels.`;
       await aiNote(subject.mainConversationId, qualityMessage);
-      if (subject.userId) {
-        // Content-free (I1/R36): the text follows the subject-only result's
-        // gap severity, so it must not reach the author's device.
-        await pingStage2Refresh(sessionId, subject.userId);
-      }
+      // Content-free (I1/R36): the text follows the subject-only result's
+      // gap severity, so it must not reach the author's device.
+      await pingStage2Refresh(sessionId, subject.userId);
     }
   } catch (err) {
     logger.warn('Failed to create reveal quality messages', { error: (err as Error).message });
@@ -386,16 +384,14 @@ export async function checkAndRevealBothIfReady(sessionId: string): Promise<bool
  *
  * A/B are the session's participants in join order (A→B = A's attempt about B).
  */
-export async function getReconcilerStatus(
-  sessionId: string,
-  callerParticipantId: string,
-): Promise<{
+export async function getReconcilerStatus(caller: Seat): Promise<{
   hasRun: boolean;
   aUnderstandingB: ReconcilerResult | null;
   bUnderstandingA: ReconcilerResult | null;
   pendingShareOffers: number;
   readyForStage3: boolean;
 }> {
+  const { sessionId, userId: callerUserId } = caller;
   const parties = await sessionParties(sessionId);
   const statuses = await directionStatuses(sessionId);
   if (parties.length !== 2) {
@@ -410,12 +406,13 @@ export async function getReconcilerStatus(
   const [a, b] = parties;
 
   const visibleResult = async (author: SessionParty, subject: SessionParty): Promise<ReconcilerResult | null> => {
-    if (subject.participantId !== callerParticipantId) return null;
+    if (subject.userId !== callerUserId) return null;
     const stored = (await prisma.reconcilerResult.findFirst({
       where: {
-        subjectParticipantId: subject.participantId,
+        sessionId,
+        subjectUserId: subject.userId,
         supersededAt: null,
-        attempt: { authorParticipantId: author.participantId },
+        attempt: { authorUserId: author.userId },
       },
       orderBy: { createdAt: 'desc' },
       select: RESULT_SELECT,
@@ -427,26 +424,23 @@ export async function getReconcilerStatus(
     visibleResult(a, b),
     visibleResult(b, a),
     prisma.contextShareOffer.count({
-      where: {
-        subjectParticipantId: callerParticipantId,
-        status: 'OFFERED',
-        attempt: { authorParticipant: { sessionId } },
-      },
+      where: { sessionId, subjectUserId: callerUserId, status: 'OFFERED' },
     }),
     // What the caller may see of the analyses: their own as subject, and the
     // guidance (author + subject) — never the existence of a result on an
     // attempt they authored (spec §1.2 reconciler_result RLS: subject only).
-    prisma.reconcilerResult.count({ where: { subjectParticipantId: callerParticipantId, supersededAt: null } }),
+    prisma.reconcilerResult.count({ where: { sessionId, subjectUserId: callerUserId, supersededAt: null } }),
     prisma.reconcilerGuidance.count({
       where: {
-        OR: [{ authorParticipantId: callerParticipantId }, { subjectParticipantId: callerParticipantId }],
+        sessionId,
+        OR: [{ authorUserId: callerUserId }, { subjectUserId: callerUserId }],
         result: { supersededAt: null },
       },
     }),
   ]);
 
-  const ab = directionOf(statuses, a.participantId, b.participantId);
-  const ba = directionOf(statuses, b.participantId, a.participantId);
+  const ab = directionOf(statuses, a.userId, b.userId);
+  const ba = directionOf(statuses, b.userId, a.userId);
   const hasRun = ownResults > 0 || ownGuidance > 0;
   // Complete once an analysis the caller can see exists, both directions are
   // READY or later, and the caller has no open offer.
@@ -474,32 +468,33 @@ const SEVERITY = (s: string) => s.toLowerCase() as 'none' | 'minor' | 'moderate'
  * result (how X understood them — subject-private to the partner) nor the
  * co-participant's unrevealed attempt.
  */
-export async function generateReconcilerSummary(
-  sessionId: string,
-  callerParticipantId: string,
-): Promise<ReconcilerSummary | null> {
+export async function generateReconcilerSummary(caller: Seat): Promise<ReconcilerSummary | null> {
+  const { sessionId } = caller;
   const parties = await sessionParties(sessionId);
-  const me = parties.find(p => p.participantId === callerParticipantId);
-  const partner = parties.find(p => p.participantId !== callerParticipantId);
+  const me = parties.find(p => p.userId === caller.userId);
+  const partner = parties.find(p => p.userId !== caller.userId);
   if (!me || !partner) return null;
 
   const [aboutMe, statuses, sharedAboutMe, sharedByMe] = await Promise.all([
     prisma.reconcilerResult.findFirst({
       where: {
-        subjectParticipantId: me.participantId,
+        sessionId,
+        subjectUserId: me.userId,
         supersededAt: null,
-        attempt: { authorParticipantId: partner.participantId },
+        attempt: { authorUserId: partner.userId },
       },
       orderBy: { createdAt: 'desc' },
       select: { alignmentScore: true, alignmentSummary: true, gapSeverity: true },
     }),
     directionStatuses(sessionId),
     // Sharing that reached me (delivered to my conversation) / that I did (my offers).
-    prisma.message.count({ where: { conversation: { participantId: me.participantId }, kind: 'SHARED_CONTEXT' } }),
-    prisma.contextShareOffer.count({ where: { subjectParticipantId: me.participantId, status: 'ACCEPTED' } }),
+    prisma.message.count({
+      where: { conversation: { sessionId, userId: me.userId }, kind: 'SHARED_CONTEXT' },
+    }),
+    prisma.contextShareOffer.count({ where: { sessionId, subjectUserId: me.userId, status: 'ACCEPTED' } }),
   ]);
   if (!aboutMe) return null;
-  const mine = directionOf(statuses, me.participantId, partner.participantId);
+  const mine = directionOf(statuses, me.userId, partner.userId);
   const meName = me.name || 'You';
   const partnerName = partner.name || 'your partner';
 

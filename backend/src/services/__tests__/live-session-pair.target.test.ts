@@ -8,10 +8,12 @@
  *     (23505, live_session_pair_pkey) at the moment its second human joins —
  *     the session itself was created fine — and the accept answers 409; once
  *     the first session is RESOLVED the pair may start again;
- *   - the AI and a persona sit as `modeled` participants: they create no pair,
- *     block no pair, and never count toward session readiness
- *     (v_session_readiness); a human cannot be seated as modeled, nor the AI
- *     as human; a persona is seated only by its owner;
+ *   - the AI and a persona sit as `ai` / `persona` participants: they create
+ *     no pair, block no pair, and never count toward session readiness
+ *     (v_session_readiness); a seat's kind is its user's kind (FK
+ *     participant_user_id_kind_fkey, work-k5fk.3), so a human cannot be seated
+ *     as the AI, nor the AI or a persona as human; a persona is seated only by
+ *     its owner;
  *   - `participant.added_by_user_id`: the initiator has none, the invitee is
  *     added by the inviter; a second initiator is refused
  *     (sql_participant_one_initiator);
@@ -131,7 +133,7 @@ describeTarget('live_session_pair, participant.added_by_user_id and user_contact
     expect(await pairsOf(second.sessionId)).toEqual([sorted(ada.id, ken.id)]);
   });
 
-  it('the AI and a persona are modeled seats: they make and block no pair, and never count toward readiness', async () => {
+  it('the AI and a persona are non-human seats: they make and block no pair, and never count toward readiness', async () => {
     const s = await invite('Lea');
     expect((await http(lea, 'post', `/invitations/${s.invitationId}/accept`)).status).toBe(200);
     const [persona] = await run.sql<{ id: string }>(
@@ -143,37 +145,40 @@ describeTarget('live_session_pair, participant.added_by_user_id and user_contact
       run.as(
         'mwf_app',
         addedBy,
-        `INSERT INTO participant (session_id, user_id, kind, added_by_user_id) VALUES ($1, $2, $3, $4) RETURNING id::text AS id`,
+        `INSERT INTO participant (session_id, user_id, kind, added_by_user_id) VALUES ($1, $2, $3, $4) RETURNING user_id::text AS user_id`,
         [sessionId, userId, kind, addedBy],
       );
 
-    // Neither kind of non-human seat can pose as a human, and a human cannot sit as modeled.
-    expect(await failure(seat(aiUser, 'human', ada.id))).toEqual({ code: '23514', constraint: undefined });
-    expect(await failure(seat(persona.id, 'human', ada.id))).toEqual({ code: '23514', constraint: undefined });
-    expect(await failure(seat(max.id, 'modeled', ada.id))).toEqual({ code: '23514', constraint: undefined });
-    // A persona is seated by its owner only; the AI and a persona always have an adder.
-    expect(await failure(seat(persona.id, 'modeled', lea.id))).toEqual({ code: '23514', constraint: undefined });
+    // Neither kind of non-human seat can pose as a human, and a human cannot sit as the AI or a persona:
+    // a seat's kind is its user's kind, pinned by the FK (user_id, kind) -> "user" (work-k5fk.3).
+    const kindRefused = { code: '23503', constraint: 'participant_user_id_kind_fkey' };
+    expect(await failure(seat(aiUser, 'human', ada.id))).toEqual(kindRefused);
+    expect(await failure(seat(persona.id, 'human', ada.id))).toEqual(kindRefused);
+    expect(await failure(seat(max.id, 'ai', ada.id))).toEqual(kindRefused);
+    expect(await failure(seat(max.id, 'persona', ada.id))).toEqual(kindRefused);
+    // A persona is seated by its owner only (t_participant_added_by); the AI and a persona always have an adder.
+    expect(await failure(seat(persona.id, 'persona', lea.id))).toEqual({ code: '23514', constraint: undefined });
     expect(
       await failure(
-        run.as('mwf_app', ada.id, `INSERT INTO participant (session_id, user_id, kind) VALUES ($1, $2, 'modeled')`, [
+        run.as('mwf_app', ada.id, `INSERT INTO participant (session_id, user_id, kind) VALUES ($1, $2, 'ai')`, [
           s.sessionId,
           aiUser,
         ]),
       ),
-    ).toEqual({ code: '23514', constraint: 'participant_check1' });
+    ).toEqual({ code: '23514', constraint: 'participant_check' });
 
-    const [aiSeat] = await seat(aiUser, 'modeled', ada.id);
-    const [personaSeat] = await seat(persona.id, 'modeled', ada.id);
-    expect(aiSeat.id).toBeTruthy();
-    expect(personaSeat.id).toBeTruthy();
+    const [aiSeat] = await seat(aiUser, 'ai', ada.id);
+    const [personaSeat] = await seat(persona.id, 'persona', ada.id);
+    expect(aiSeat.user_id).toBe(aiUser);
+    expect(personaSeat.user_id).toBe(persona.id);
     // Only the human pair is a pair.
     expect(await pairsOf(s.sessionId)).toEqual([sorted(ada.id, lea.id)]);
 
     // A second live session of Ada with the AI and the persona is no pair conflict either.
     const solo = await http(ada, 'post', '/sessions', { inviteName: 'nobody yet' });
     expect(solo.status).toBe(201);
-    await seat(aiUser, 'modeled', ada.id, solo.body.data.session.id);
-    await seat(persona.id, 'modeled', ada.id, solo.body.data.session.id);
+    await seat(aiUser, 'ai', ada.id, solo.body.data.session.id);
+    await seat(persona.id, 'persona', ada.id, solo.body.data.session.id);
     expect(await pairsOf(solo.body.data.session.id)).toEqual([]);
 
     // Readiness: compact_signed (session scope) waits on the two humans only.
@@ -185,8 +190,8 @@ describeTarget('live_session_pair, participant.added_by_user_id and user_contact
       );
     expect(await readiness()).toEqual([{ all_reached: false, waiting: 2 }]);
     await run.sql(
-      `INSERT INTO participant_milestone (participant_id, session_id, user_id, milestone_key)
-       SELECT p.id, p.session_id, p.user_id, 'compact_signed' FROM participant p WHERE p.session_id = $1 AND p.kind = 'human'`,
+      `INSERT INTO participant_milestone (session_id, user_id, milestone_key)
+       SELECT p.session_id, p.user_id, 'compact_signed' FROM participant p WHERE p.session_id = $1 AND p.kind = 'human'`,
       [s.sessionId],
     );
     expect(await readiness()).toEqual([{ all_reached: true, waiting: 0 }]);
@@ -197,7 +202,7 @@ describeTarget('live_session_pair, participant.added_by_user_id and user_contact
     expect((await http(max, 'post', `/invitations/${s.invitationId}/accept`)).status).toBe(200);
     expect(
       await run.sql(
-        `SELECT user_id::text, added_by_user_id::text FROM participant WHERE session_id = $1 ORDER BY joined_at, id`,
+        `SELECT user_id::text, added_by_user_id::text FROM participant WHERE session_id = $1 ORDER BY joined_at, user_id`,
         [s.sessionId],
       ),
     ).toEqual([
@@ -338,7 +343,7 @@ describeTarget('live_session_pair, participant.added_by_user_id and user_contact
     );
     await run.sql(`INSERT INTO participant (session_id, user_id, display_name) VALUES ($1, $2, 'Ada')`, [f.id, ada.id]);
     await run.sql(
-      `INSERT INTO conversation (participant_id, session_id, user_id) SELECT id, session_id, user_id FROM participant WHERE session_id = $1`,
+      `INSERT INTO conversation (session_id, user_id) SELECT session_id, user_id FROM participant WHERE session_id = $1`,
       [f.id],
     );
     const view = await http(ada, 'get', `/sessions/${f.id}`);
@@ -398,7 +403,7 @@ describeTarget('live_session_pair, participant.added_by_user_id and user_contact
     await run.as(
       'mwf_app',
       ada.id,
-      `INSERT INTO participant (session_id, user_id, kind, added_by_user_id) VALUES ($1, $2, 'modeled', $3)`,
+      `INSERT INTO participant (session_id, user_id, kind, added_by_user_id) VALUES ($1, $2, 'ai', $3)`,
       [sid, aiUser, ada.id],
     );
     const contacts = await import('../contacts');

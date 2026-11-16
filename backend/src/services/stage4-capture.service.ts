@@ -4,7 +4,7 @@
  * compatibility heuristics, the destructive-intent and selection detectors)
  * is unchanged; what it writes moved:
  *
- *   StrategyProposal            → proposal (created_by_participant_id; AI-sourced)
+ *   StrategyProposal            → proposal (created_by_user_id; AI-sourced)
  *   needsAddressed[] labels     → proposal_need over need_share ids (matched against the
  *                                 session's shared needs as the actor names them);
  *                                 unmatched labels → unresolved_need_labels
@@ -26,7 +26,7 @@ import {
 import { prisma } from '../lib/prisma';
 import { logger } from '../lib/logger';
 import { isSupersededStrategy } from '../utils/strategy-dedupe';
-import { resolveParticipant } from './participant-resolver';
+import { resolveParticipant, type Seat } from './participant-resolver';
 import {
   loadProposals,
   resolveNeedLabels,
@@ -546,14 +546,10 @@ function inferClosureSignalFromUserMessage(message: string): Stage4ClosureSignal
 
 interface CaptureContext {
   sessionId: string;
-  /** The actor's participant id. */
-  actor: string;
-  /** The actor's user id (work-k5fk.3: every participant column is written with its user). */
-  actorUserId: string;
-  /** user id → participant id, for the session (the AI names owners by user id). */
-  participantOfUser: Map<string, string>;
-  /** participant id → user id, the inverse (the seat of an owner the AI named). */
-  userOfParticipant: Map<string, string>;
+  /** The actor's participant. */
+  actor: Seat;
+  /** The present participants' user ids (the AI names owners by user id). */
+  members: Set<string>;
   /** The user's own text: the capture lineage recorded in a revision (no message id). */
   userMessage: string;
 }
@@ -569,7 +565,7 @@ function proposalSnapshot(proposal: ProposalRow): Record<string, unknown> {
     kind: proposal.kind,
     status: proposal.status,
     removedAt: proposal.removedAt?.toISOString() ?? null,
-    removedByParticipantId: proposal.removedByParticipantId,
+    removedByUserId: proposal.removedByUserId,
     removalReason: proposal.removalReason,
   };
 }
@@ -589,9 +585,8 @@ async function writeRevision(
   await prisma.proposalRevision.create({
     data: {
       proposalId,
-      actorParticipantId: ctx.actor,
       sessionId: ctx.sessionId,
-      actorUserId: ctx.actorUserId,
+      actorUserId: ctx.actor.userId,
       action,
       ...(before ? { before: before as object } : {}),
       after: { ...after, capturedFromUserMessage: ctx.userMessage, reasonText: reasonText ?? null } as object,
@@ -607,22 +602,20 @@ async function linkNeeds(ctx: CaptureContext, proposalId: string, labels: string
   await setProposalNeeds(prisma, proposalId, needIds, unresolved);
 }
 
-/** A participant id of the session and its user, as the proposal's creator columns. */
-function creatorColumns(
-  ctx: CaptureContext,
-  participantId: string,
-): { createdByParticipantId: string; createdByUserId: string } {
-  const userId = participantId === ctx.actor ? ctx.actorUserId : ctx.userOfParticipant.get(participantId);
-  if (!userId) throw new Error(`participant ${participantId} is not a present participant of the session`);
-  return { createdByParticipantId: participantId, createdByUserId: userId };
+/** A present participant of the session (by user id), as the proposal's creator column. */
+function creatorColumns(ctx: CaptureContext, userId: string): { createdByUserId: string } {
+  if (userId !== ctx.actor.userId && !ctx.members.has(userId)) {
+    throw new Error(`user ${userId} is not a present participant of the session`);
+  }
+  return { createdByUserId: userId };
 }
 
-function ownerParticipant(ctx: CaptureContext, ownerUserId: string | undefined): string {
-  if (!ownerUserId) return ctx.actor;
-  const pid = ctx.participantOfUser.get(ownerUserId);
-  if (pid) return pid;
+/** The owner the AI named, if a present participant; else the actor. */
+function ownerUser(ctx: CaptureContext, ownerUserId: string | undefined): string {
+  if (!ownerUserId) return ctx.actor.userId;
+  if (ctx.members.has(ownerUserId)) return ownerUserId;
   logger.warn('[stage4-capture] Ignoring non-member ownerUserId from AI output', { ownerUserId });
-  return ctx.actor;
+  return ctx.actor.userId;
 }
 
 async function auditSkippedDestructiveCapture(
@@ -699,7 +692,7 @@ async function applyOperation(
     const created = await prisma.proposal.create({
       data: {
         sessionId: ctx.sessionId,
-        ...creatorColumns(ctx, ownerParticipant(ctx, operation.ownerUserId)),
+        ...creatorColumns(ctx, ownerUser(ctx, operation.ownerUserId)),
         description: operation.description,
         duration: operation.duration,
         measureOfSuccess: operation.measureOfSuccess,
@@ -707,13 +700,13 @@ async function applyOperation(
         kind: operation.kind,
         status: Stage4ProposalStatus.ACTIVE,
       },
-      select: { id: true, createdAt: true, updatedAt: true, createdByParticipantId: true },
+      select: { id: true, createdAt: true, updatedAt: true, createdByUserId: true },
     });
     await linkNeeds(ctx, created.id, operation.needsAddressed);
     proposals.push({
       id: created.id,
       sessionId: ctx.sessionId,
-      createdByParticipantId: created.createdByParticipantId,
+      createdByUserId: created.createdByUserId,
       source: 'AI_SUGGESTED',
       kind: operation.kind,
       status: Stage4ProposalStatus.ACTIVE,
@@ -722,7 +715,7 @@ async function applyOperation(
       measureOfSuccess: operation.measureOfSuccess ?? null,
       unresolvedNeedLabels: [],
       removedAt: null,
-      removedByParticipantId: null,
+      removedByUserId: null,
       removalReason: null,
       sharedAt: null,
       createdAt: created.createdAt,
@@ -758,8 +751,7 @@ async function applyOperation(
       data: {
         status: Stage4ProposalStatus.REMOVED,
         removedAt: now,
-        removedByParticipantId: ctx.actor,
-        removedByUserId: ctx.actorUserId,
+        removedByUserId: ctx.actor.userId,
         removalReason: operation.reason,
       },
     });
@@ -771,7 +763,7 @@ async function applyOperation(
       {
         ...proposalSnapshot(proposal),
         status: Stage4ProposalStatus.REMOVED,
-        removedByParticipantId: ctx.actor,
+        removedByUserId: ctx.actor.userId,
         removalReason: operation.reason ?? null,
       },
       operation.reason,
@@ -785,7 +777,6 @@ async function applyOperation(
       data: {
         status: Stage4ProposalStatus.ACTIVE,
         removedAt: null,
-        removedByParticipantId: null,
         removedByUserId: null,
         removalReason: null,
       },
@@ -799,7 +790,7 @@ async function applyOperation(
         ...proposalSnapshot(proposal),
         status: Stage4ProposalStatus.ACTIVE,
         removedAt: null,
-        removedByParticipantId: null,
+        removedByUserId: null,
         removalReason: null,
       },
       operation.reason,
@@ -817,9 +808,9 @@ async function applyOperation(
       // The creator moves only when the operation names one (an individual commitment is the actor's); an
       // unchanged creator is left as it is, with its user (work-k5fk.3).
       ...(operation.kind === Stage4ProposalKind.INDIVIDUAL_COMMITMENT
-        ? creatorColumns(ctx, ctx.actor)
+        ? creatorColumns(ctx, ctx.actor.userId)
         : operation.ownerUserId
-          ? creatorColumns(ctx, ownerParticipant(ctx, operation.ownerUserId))
+          ? creatorColumns(ctx, ownerUser(ctx, operation.ownerUserId))
           : {}),
       status: Stage4ProposalStatus.ACTIVE,
     },
@@ -857,17 +848,15 @@ export async function captureStage4Turn(input: Stage4CaptureInput): Promise<Stag
   }
   const participants = await prisma.participant.findMany({
     where: { sessionId: input.sessionId, leftAt: null },
-    select: { id: true, userId: true },
+    select: { userId: true },
   });
   const ctx: CaptureContext = {
     sessionId: input.sessionId,
-    actor: actor.id,
-    actorUserId: input.userId,
-    participantOfUser: new Map(participants.filter(p => p.userId).map(p => [p.userId as string, p.id])),
-    userOfParticipant: new Map(participants.filter(p => p.userId).map(p => [p.id, p.userId as string])),
+    actor: { sessionId: actor.sessionId, userId: actor.userId },
+    members: new Set(participants.map(p => p.userId)),
     userMessage: input.userMessage,
   };
-  const proposals = (await loadProposals(input.sessionId, actor.id)) as ProposalRow[];
+  const proposals = (await loadProposals(input.sessionId, actor)) as ProposalRow[];
 
   const operations = extractAddOperations(input);
   const destructiveOrRevision = extractDestructiveOrRevisionOperation(input.userMessage, proposals);
@@ -917,7 +906,8 @@ export async function captureStage4Turn(input: Stage4CaptureInput): Promise<Stag
     for (const decision of selection.decisions) {
       await upsertChoice({
         proposalId: decision.proposalId,
-        participantId: actor.id,
+        seat: actor,
+
         decision: decision.decision as 'WILLING' | 'NOT_WILLING',
         note: decision.note,
       });

@@ -2,7 +2,7 @@
  * Ruling R40 (TS-12 fix round 1): a brain_activity row is attributed to a
  * participant ONLY when every piece of content in the call's input and output
  * is that participant's alone. A call site opts in with `ownContent: true`;
- * everything else is written with participant_id NULL and its session_id, so
+ * everything else is written with participant_user_id NULL and its session_id, so
  * the anonymise walk's R17 arm removes it when either participant leaves.
  *
  * This pins the exact set of opted-in call sites: adding `ownContent: true`

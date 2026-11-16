@@ -21,9 +21,11 @@
 --   * `need.confirmed` is `confirmed_at IS NOT NULL` (the old shape has only
 --     the boolean; current-shape.sql's comment names this projection).
 --
--- No minted ids here: the target stores participant, conversation and draft
--- ids, so every id is the row's own. The normaliser labels them from their
--- natural keys exactly as it labels the md5 ids of current-shape.sql.
+-- One minted id: a participant has no id of its own since work-k5fk.3 (its key
+-- is (session_id, user_id)), so the views derive the concept's participant id
+-- as md5('participant:' || session_id || ':' || user_id)::uuid wherever a row
+-- names one — current-shape.sql's own formula for its keyless participant rows. Every other id is the
+-- row's own. The normaliser labels them from their natural keys either way.
 --
 -- `concept_check_*`: the current-shape checks guard states the migration
 -- mapping could not represent. On the target most are enforced by
@@ -79,7 +81,7 @@ FROM session s;
 -- participant — spec §1.1.
 CREATE VIEW old_concept_participant AS
 SELECT
-  p.id,
+  md5('participant:' || p.session_id::text || ':' || p.user_id::text)::uuid AS id,
   p.session_id,
   p.user_id,
   p.kind::text AS kind,
@@ -93,7 +95,7 @@ FROM participant p;
 CREATE VIEW old_concept_conversation AS
 SELECT
   c.id,
-  c.participant_id,
+  md5('participant:' || c.session_id::text || ':' || c.user_id::text)::uuid AS participant_id,
   c.kind::text AS kind,
   c.anchor_kind::text AS anchor_kind,
   c.anchor_proposal_id,
@@ -105,7 +107,7 @@ FROM conversation c;
 -- participant_milestone — spec §1.1. The table itself; no decoding.
 CREATE VIEW old_concept_participant_milestone AS
 SELECT
-  pm.participant_id,
+  md5('participant:' || pm.session_id::text || ':' || pm.user_id::text)::uuid AS participant_id,
   pm.milestone_key,
   pm.reached_at AT TIME ZONE 'UTC' AS reached_at
 FROM participant_milestone pm;
@@ -116,7 +118,7 @@ CREATE VIEW old_concept_message AS
 SELECT
   m.id,
   m.conversation_id,
-  m.sender_participant_id,
+  md5('participant:' || m.session_id::text || ':' || m.sender_user_id::text)::uuid AS sender_participant_id,
   m.role::text AS role,
   m.kind::text AS kind,
   m.content,
@@ -136,8 +138,8 @@ FROM message m;
 CREATE VIEW old_concept_empathy_attempt AS
 SELECT
   a.id,
-  a.author_participant_id,
-  a.subject_participant_id,
+  md5('participant:' || a.session_id::text || ':' || a.author_user_id::text)::uuid AS author_participant_id,
+  md5('participant:' || a.session_id::text || ':' || a.subject_user_id::text)::uuid AS subject_participant_id,
   a.round,
   a.supersedes_attempt_id,
   a.content,
@@ -164,7 +166,7 @@ CREATE VIEW old_concept_empathy_review AS
 SELECT
   v.id,
   v.attempt_id,
-  v.reviewer_participant_id,
+  md5('participant:' || v.session_id::text || ':' || v.reviewer_user_id::text)::uuid AS reviewer_participant_id,
   v.validated,
   v.feedback,
   v.feedback_sent_at AT TIME ZONE 'UTC' AS feedback_sent_at
@@ -176,7 +178,7 @@ CREATE VIEW old_concept_reconciler_result AS
 SELECT
   r.id,
   r.attempt_id,
-  r.subject_participant_id,
+  md5('participant:' || r.session_id::text || ':' || r.subject_user_id::text)::uuid AS subject_participant_id,
   r.iteration,
   r.alignment_score,
   r.alignment_summary,
@@ -202,8 +204,8 @@ FROM reconciler_result r;
 CREATE VIEW old_concept_reconciler_guidance AS
 SELECT
   g.result_id,
-  g.author_participant_id,
-  g.subject_participant_id,
+  md5('participant:' || g.session_id::text || ':' || g.author_user_id::text)::uuid AS author_participant_id,
+  md5('participant:' || g.session_id::text || ':' || g.subject_user_id::text)::uuid AS subject_participant_id,
   g.area_hint,
   g.guidance_type,
   g.prompt_seed,
@@ -217,7 +219,7 @@ SELECT
   o.id,
   o.attempt_id,
   o.result_id,
-  o.subject_participant_id,
+  md5('participant:' || o.session_id::text || ':' || o.subject_user_id::text)::uuid AS subject_participant_id,
   o.iteration,
   o.status::text AS status,
   o.offer_message,
@@ -240,9 +242,9 @@ FROM context_share_offer o;
 CREATE VIEW old_concept_draft AS
 SELECT
   d.id,
-  d.participant_id,
+  md5('participant:' || d.session_id::text || ':' || d.user_id::text)::uuid AS participant_id,
   d.kind::text AS kind,
-  d.about_participant_id,
+  md5('participant:' || d.session_id::text || ':' || d.about_user_id::text)::uuid AS about_participant_id,
   d.attempt_id,
   d.share_offer_id,
   d.content,
@@ -257,7 +259,7 @@ FROM draft d;
 CREATE VIEW old_concept_need AS
 SELECT
   n.id,
-  n.participant_id,
+  md5('participant:' || n.session_id::text || ':' || n.user_id::text)::uuid AS participant_id,
   n.label,
   n.category::text AS category,
   n.evidence,
@@ -276,7 +278,7 @@ FROM need n;
 CREATE VIEW old_concept_need_share AS
 SELECT
   s.need_id,
-  s.participant_id,
+  md5('participant:' || s.session_id::text || ':' || s.user_id::text)::uuid AS participant_id,
   s.session_id,
   s.category::text AS category,
   s.shared_text,
@@ -289,7 +291,7 @@ FROM need_share s;
 -- need_disposition — spec §1.4.
 CREATE VIEW old_concept_need_disposition AS
 SELECT
-  d.participant_id,
+  md5('participant:' || d.session_id::text || ':' || d.user_id::text)::uuid AS participant_id,
   d.need_id,
   d.status::text AS status,
   d.is_current,
@@ -302,7 +304,7 @@ CREATE VIEW old_concept_proposal AS
 SELECT
   p.id,
   p.session_id,
-  p.created_by_participant_id,
+  md5('participant:' || p.session_id::text || ':' || p.created_by_user_id::text)::uuid AS created_by_participant_id,
   p.source::text AS source,
   p.kind::text AS kind,
   p.status::text AS status,
@@ -311,7 +313,7 @@ SELECT
   p.measure_of_success,
   p.unresolved_need_labels,
   p.removed_at AT TIME ZONE 'UTC' AS removed_at,
-  p.removed_by_participant_id,
+  md5('participant:' || p.session_id::text || ':' || p.removed_by_user_id::text)::uuid AS removed_by_participant_id,
   p.removal_reason,
   p.shared_at  AT TIME ZONE 'UTC' AS shared_at,
   p.created_at AT TIME ZONE 'UTC' AS created_at,
@@ -329,7 +331,7 @@ FROM proposal_need pn;
 CREATE VIEW old_concept_proposal_choice AS
 SELECT
   c.proposal_id,
-  c.participant_id,
+  md5('participant:' || c.session_id::text || ':' || c.user_id::text)::uuid AS participant_id,
   c.decision::text AS decision,
   c.note,
   c.created_at AT TIME ZONE 'UTC' AS created_at,
@@ -355,7 +357,7 @@ FROM agreement a;
 
 -- agreement_party — spec §1.4.
 CREATE VIEW old_concept_agreement_party AS
-SELECT ap.agreement_id, ap.participant_id, ap.agreed_at AT TIME ZONE 'UTC' AS agreed_at
+SELECT ap.agreement_id, md5('participant:' || ap.session_id::text || ':' || ap.user_id::text)::uuid AS participant_id, ap.agreed_at AT TIME ZONE 'UTC' AS agreed_at
 FROM agreement_party ap;
 
 
@@ -363,8 +365,8 @@ FROM agreement_party ap;
 CREATE VIEW old_concept_consent AS
 SELECT
   c.id,
-  c.participant_id,
-  c.requested_by_participant_id,
+  md5('participant:' || c.session_id::text || ':' || c.user_id::text)::uuid AS participant_id,
+  md5('participant:' || c.session_id::text || ':' || c.requested_by_user_id::text)::uuid AS requested_by_participant_id,
   c.need_id,
   c.empathy_attempt_id,
   c.proposal_id,
@@ -444,7 +446,7 @@ CREATE VIEW old_concept_invitation AS
 SELECT
   i.id,
   i.session_id,
-  i.invited_by_participant_id,
+  md5('participant:' || i.session_id::text || ':' || i.invited_by_user_id::text)::uuid AS invited_by_participant_id,
   i.accepted_by_user_id,
   i.invitee_name AS name,
   i.status::text AS status,
@@ -460,7 +462,7 @@ FROM invitation i;
 -- conversation_read_state — spec §1.1.
 CREATE VIEW old_concept_conversation_read_state AS
 SELECT
-  r.participant_id,
+  md5('participant:' || r.session_id::text || ':' || r.user_id::text)::uuid AS participant_id,
   r.last_viewed_at AT TIME ZONE 'UTC' AS last_viewed_at,
   r.last_seen_message_id,
   r.last_viewed_share_tab_at AT TIME ZONE 'UTC' AS last_viewed_share_tab_at,
@@ -484,7 +486,7 @@ SELECT
   c.kind::text AS kind,
   c.reason::text AS reason,
   c.summary,
-  c.closed_by_participant_id,
+  md5('participant:' || c.session_id::text || ':' || c.closed_by_user_id::text)::uuid AS closed_by_participant_id,
   c.check_in_at AT TIME ZONE 'UTC' AS check_in_at,
   c.closed_at   AT TIME ZONE 'UTC' AS closed_at,
   c.created_at  AT TIME ZONE 'UTC' AS created_at
@@ -497,7 +499,7 @@ SELECT
   b.id,
   b.session_id,
   b.reflection_id,
-  b.participant_id,
+  md5('participant:' || b.session_id::text || ':' || b.participant_user_id::text)::uuid AS participant_id,
   b.turn_id,
   b.activity_type::text AS activity_type,
   b.call_type::text AS call_type,

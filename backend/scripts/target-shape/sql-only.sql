@@ -42,7 +42,7 @@ CREATE UNIQUE INDEX sql_participant_one_initiator ON participant (session_id)
 COMMENT ON INDEX sql_participant_one_initiator IS 'At most one initiator per session (work-k5fk.2): at most one participant without an adder (replaces relationship_member.role = owner). The one-live-session rule is live_session_pair''s key, not an index here.';
 
 -- §1.1 conversation — exactly one MAIN thread per participant
-CREATE UNIQUE INDEX sql_conversation_one_main ON conversation (participant_id)
+CREATE UNIQUE INDEX sql_conversation_one_main ON conversation (session_id, user_id)
   WHERE kind = 'MAIN';
 COMMENT ON INDEX sql_conversation_one_main IS 'Exactly one MAIN conversation per participant; sub-chats are unlimited.';
 
@@ -51,14 +51,14 @@ COMMENT ON INDEX sql_conversation_one_main IS 'Exactly one MAIN conversation per
 -- invitation arm (work-99k2) is per invitee, so one EMPATHY draft per subject
 -- still holds before the subject has joined.
 CREATE UNIQUE INDEX sql_draft_one_per_point ON draft
-  (participant_id, kind, (coalesce(about_participant_id, invitation_id, attempt_id, share_offer_id)));
+  (session_id, user_id, kind, (coalesce(about_user_id, invitation_id, attempt_id, share_offer_id)));
 COMMENT ON INDEX sql_draft_one_per_point IS 'One draft per participant, kind and sharing point (whichever arc column is set), so N subjects or N attempts do not collide. The draft upsert (empathy-store.ts upsertDraft) conflicts on it.';
 
 -- §1.1 session_key / participant_key, §1.7 user_key — one live key per owner
 CREATE UNIQUE INDEX sql_session_key_live ON session_key (session_id)
   WHERE destroyed_at IS NULL;
 COMMENT ON INDEX sql_session_key_live IS 'At most one live (not shredded) key per session.';
-CREATE UNIQUE INDEX sql_participant_key_live ON participant_key (participant_id)
+CREATE UNIQUE INDEX sql_participant_key_live ON participant_key (session_id, user_id)
   WHERE destroyed_at IS NULL;
 COMMENT ON INDEX sql_participant_key_live IS 'At most one live (not shredded) key per participant.';
 CREATE UNIQUE INDEX sql_user_key_live ON user_key (user_id)
@@ -76,7 +76,7 @@ COMMENT ON INDEX sql_message_once IS 'At most one message per conversation and d
 
 -- §1.2 empathy_attempt — one live attempt per direction
 CREATE UNIQUE INDEX sql_attempt_one_live_per_direction ON empathy_attempt
-  (author_participant_id, subject_participant_id)
+  (session_id, author_user_id, subject_user_id)
   WHERE status NOT IN ('SUPERSEDED', 'VALIDATED');
 COMMENT ON INDEX sql_attempt_one_live_per_direction IS 'At most one live empathy attempt per author and subject; SUPERSEDED and VALIDATED rounds are history.';
 
@@ -86,14 +86,26 @@ CREATE UNIQUE INDEX sql_result_one_current ON reconciler_result (attempt_id)
 COMMENT ON INDEX sql_result_one_current IS 'At most one current (not superseded) reconciler result per attempt.';
 
 -- §1.4 need — live needs per participant
-CREATE INDEX sql_need_live ON need (participant_id)
+CREATE INDEX sql_need_live ON need (session_id, user_id)
   WHERE deleted_at IS NULL;
 COMMENT ON INDEX sql_need_live IS 'A participant''s live (not deleted) needs.';
 
 -- §1.4 need_disposition — one current need per walkthrough
-CREATE UNIQUE INDEX sql_disposition_one_current ON need_disposition (participant_id)
+CREATE UNIQUE INDEX sql_disposition_one_current ON need_disposition (session_id, user_id)
   WHERE is_current;
 COMMENT ON INDEX sql_disposition_one_current IS 'At most one need marked current per participant: the need the Stage-4 walkthrough is on.';
+
+-- §1.1 ai_memory — one document per (user, session, kind), GLOBAL_FACTS (no
+-- session) once per user. Two partial indexes, not the UNIQUE NULLS NOT DISTINCT
+-- of design note Q12: a plain unique index is one Prisma sees, so a sql-only one
+-- would make the drift gate's migrate diff drop it (measured, work-k5fk.3); a
+-- partial one it ignores. The writers' ON CONFLICT names the arm's predicate.
+CREATE UNIQUE INDEX sql_ai_memory_one_per_participant ON ai_memory (user_id, session_id, kind)
+  WHERE session_id IS NOT NULL;
+COMMENT ON INDEX sql_ai_memory_one_per_participant IS 'One SUMMARY and one NOTABLE_FACTS document per participant (session, user); the summarizer and classifier upsert on it (ON CONFLICT (user_id, session_id, kind) WHERE session_id IS NOT NULL).';
+CREATE UNIQUE INDEX sql_ai_memory_one_global ON ai_memory (user_id, kind)
+  WHERE session_id IS NULL;
+COMMENT ON INDEX sql_ai_memory_one_global IS 'One GLOBAL_FACTS document per user; global-memory upserts on it (ON CONFLICT (user_id, kind) WHERE session_id IS NULL).';
 
 -- §1.5 follow_up — the open-due job
 CREATE INDEX sql_follow_up_due ON follow_up (scheduled_for)

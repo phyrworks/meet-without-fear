@@ -3,7 +3,7 @@
  *
  * Progress is append-only events: a participant reached a milestone at an
  * instant. Who may write one is decided by the milestone lookup's
- * `self_assertable` flag (spec RLS: I `mine(participant_id)` only for
+ * `self_assertable` flag (spec RLS: I `mine(session_id, user_id)` only for
  * self-assertable keys):
  *
  *   - self-assertable (`compact_signed`, `feel_heard`, `needs_confirmed`,
@@ -17,6 +17,7 @@
  * first instant stands.
  */
 
+import type { Seat } from './participant-resolver';
 import { getJobPrisma, prisma } from '../lib/prisma';
 import { logger } from '../lib/logger';
 import type { Prisma } from '../generated/prisma/client';
@@ -34,25 +35,24 @@ export function isSelfAssertable(key: string): boolean {
 }
 
 /**
- * Record that `participantId` reached `key` (at `at`, default now). Returns
- * true when this call recorded it, false when it was already reached.
+ * Record that the participant at `seat` reached `key` (at `at`, default now).
+ * Returns true when this call recorded it, false when it was already reached.
  */
 export async function reachMilestone(
-  participantId: string,
+  seat: Seat,
   key: string,
   at: Date = new Date(),
   /** A transaction of the role that may write `key` (the caller's own for a self-assertable key). */
   tx?: Pick<Prisma.TransactionClient, '$executeRaw'>,
 ): Promise<boolean> {
   const client = tx ?? (isSelfAssertable(key) ? prisma : getJobPrisma());
-  // Exactly the columns the job may INSERT (participant_id, its seat — session_id, user_id, work-k5fk.3 —
-  // milestone_key, reached_at); created_at is the column default. Prisma's
+  // Exactly the columns the job may INSERT (the participant's key — session_id, user_id,
+  // work-k5fk.3 — milestone_key, reached_at); created_at is the column default. Prisma's
   // createMany would also send its client-side `@default(now())` created_at.
   const count = await client.$executeRaw`
-    INSERT INTO participant_milestone (participant_id, session_id, user_id, milestone_key, reached_at)
-    VALUES (${participantId}::uuid, (SELECT p.session_id FROM participant p WHERE p.id = ${participantId}::uuid),
-            (SELECT p.user_id FROM participant p WHERE p.id = ${participantId}::uuid), ${key}, ${at})
-    ON CONFLICT (participant_id, milestone_key) DO NOTHING`;
+    INSERT INTO participant_milestone (session_id, user_id, milestone_key, reached_at)
+    VALUES (${seat.sessionId}::uuid, ${seat.userId}::uuid, ${key}, ${at})
+    ON CONFLICT (session_id, user_id, milestone_key) DO NOTHING`;
   return count > 0;
 }
 
@@ -72,12 +72,13 @@ export async function reachMilestone(
  * failure is logged, not thrown: the partner has joined either way, and the
  * inviter's own confirm still writes the milestone.
  */
-export async function reachInvitationSentOnAccept(inviterParticipantId: string, acceptedAt: Date): Promise<void> {
+export async function reachInvitationSentOnAccept(inviter: Seat, acceptedAt: Date): Promise<void> {
   try {
-    await reachMilestone(inviterParticipantId, 'invitation_sent', acceptedAt);
+    await reachMilestone(inviter, 'invitation_sent', acceptedAt);
   } catch (error) {
     logger.error('[reachInvitationSentOnAccept] could not record invitation_sent for the inviter', {
-      inviterParticipantId,
+      sessionId: inviter.sessionId,
+      inviterUserId: inviter.userId,
       error,
     });
   }

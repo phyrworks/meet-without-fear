@@ -51,7 +51,7 @@ describeTarget('shared-context-viewed: the recipient marks the frame she was sho
     rows<{ email: string; viewed: Date | null }>(
       `SELECT u.email, r.last_viewed_share_tab_at AS viewed
        FROM participant p JOIN "user" u ON u.id = p.user_id
-       LEFT JOIN conversation_read_state r ON r.participant_id = p.id ORDER BY u.email`,
+       LEFT JOIN conversation_read_state r ON r.session_id = p.session_id AND r.user_id = p.user_id ORDER BY u.email`,
     );
   const empathy = (actor: Actor) => get<EmpathyStatus>(actor, `/sessions/${harness.sessionId}/empathy/status`);
   const contextActions = async (actor: Actor) =>
@@ -101,7 +101,7 @@ describeTarget('shared-context-viewed: the recipient marks the frame she was sho
     // A message of Ada's own conversation that is not a received shared frame.
     const [own] = await rows<{ id: string }>(
       `SELECT m.id FROM message m JOIN conversation c ON c.id = m.conversation_id
-       JOIN participant p ON p.id = c.participant_id JOIN "user" u ON u.id = p.user_id
+       JOIN "user" u ON u.id = c.user_id
        WHERE u.email = 'ada@e2e.test' AND m.kind <> 'SHARED_CONTEXT' LIMIT 1`,
     );
     expect(own).toBeDefined();
@@ -134,7 +134,7 @@ describeTarget('shared-context-viewed: the recipient marks the frame she was sho
   it('idempotent: viewing the same frame again writes nothing', async () => {
     const [before] = await rows<{ viewed: Date }>(
       `SELECT r.last_viewed_share_tab_at AS viewed FROM conversation_read_state r
-       JOIN participant p ON p.id = r.participant_id JOIN "user" u ON u.id = p.user_id WHERE u.email = 'ada@e2e.test'`,
+       JOIN "user" u ON u.id = r.user_id WHERE u.email = 'ada@e2e.test'`,
     );
     const r = await view(ada, { messageId });
     expect(r.status).toBe(200);
@@ -146,7 +146,7 @@ describeTarget('shared-context-viewed: the recipient marks the frame she was sho
     const future = new Date(Date.now() + 3_600_000);
     await rows(
       `UPDATE conversation_read_state SET last_viewed_share_tab_at = $1
-       WHERE participant_id = (SELECT p.id FROM participant p JOIN "user" u ON u.id = p.user_id WHERE u.email = 'ada@e2e.test')`,
+       WHERE user_id = (SELECT u.id FROM "user" u WHERE u.email = 'ada@e2e.test')`,
       [future],
     );
     const r = await view(ada, { messageId });

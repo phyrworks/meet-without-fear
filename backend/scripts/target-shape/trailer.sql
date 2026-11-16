@@ -51,7 +51,7 @@
 -- mwf_job (JOB_DATABASE_URL, docs/development/local-setup.md).
 --
 -- Every self-arm is NULL-safe: an unset identity (app.current_user_id() IS
--- NULL) or a modeled participant (user_id IS NULL) is never "self".
+-- NULL) is never "self" (participant.user_id is NOT NULL since work-k5fk.3).
 -- ---------------------------------------------------------------------------
 
 -- Invoker helper: updated_at on every UPDATE (owner decision 2026-10-21; not moddatetime).
@@ -201,7 +201,10 @@ REVOKE EXECUTE ON FUNCTION app.jsonb_envelope_violation(jsonb) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION app.jsonb_envelope_violation(jsonb) TO mwf_app;
 GRANT EXECUTE ON FUNCTION app.jsonb_envelope_violation(jsonb) TO mwf_job;
 
--- The two TS-1 helpers, with TS-1's signatures, over participant. Created
+-- The TS-1 helpers over participant. (work-k5fk.3: app.is_co_participant and
+-- app.my_participant went with participant.id: every session-scoped row carries
+-- session_id, so app.is_member(session_id) is the co-participant test, and the
+-- caller's participant is (session, app.current_user_id()).) Created
 -- here like every other definer helper and handed to mwf_job below (there is
 -- no earlier definition to replace: OD7 baseline).
 
@@ -233,7 +236,7 @@ CREATE FUNCTION app.partner_user_id(session uuid) RETURNS uuid
     SELECT other.user_id
     FROM public.participant me
     JOIN public.participant other
-      ON other.session_id = me.session_id AND other.id <> me.id AND other.kind = 'human'
+      ON other.session_id = me.session_id AND other.user_id <> me.user_id AND other.kind = 'human'
     WHERE me.session_id = partner_user_id.session
       AND me.user_id = app.current_user_id()
       AND (SELECT count(*) FROM public.participant c WHERE c.session_id = me.session_id AND c.kind = 'human') = 2
@@ -243,51 +246,21 @@ REVOKE EXECUTE ON FUNCTION app.partner_user_id(uuid) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION app.partner_user_id(uuid) TO mwf_app;
 GRANT EXECUTE ON FUNCTION app.partner_user_id(uuid) TO mwf_job;
 
--- Does the caller share this participant's session?
-CREATE FUNCTION app.is_co_participant(participant uuid) RETURNS boolean
-  LANGUAGE sql STABLE SECURITY DEFINER
-  SET search_path = pg_catalog, public, pg_temp
-  AS $$
-    SELECT EXISTS (
-      SELECT 1 FROM public.participant them
-      JOIN public.participant me ON me.session_id = them.session_id
-      WHERE them.id = is_co_participant.participant AND me.user_id = app.current_user_id()
-    )
-  $$;
--- mwf_app: no app caller today; the RLS policies of design note §6 (rows 9d–9g) evaluate it as mwf_app. mwf_job: its own writer, from a job connection.
-REVOKE EXECUTE ON FUNCTION app.is_co_participant(uuid) FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION app.is_co_participant(uuid) TO mwf_app;
-GRANT EXECUTE ON FUNCTION app.is_co_participant(uuid) TO mwf_job;
-
--- The caller's participant id in this session (NULL if none).
-CREATE FUNCTION app.my_participant(session uuid) RETURNS uuid
-  LANGUAGE sql STABLE SECURITY DEFINER
-  SET search_path = pg_catalog, public, pg_temp
-  AS $$
-    SELECT p.id FROM public.participant p
-    WHERE p.session_id = my_participant.session AND p.user_id = app.current_user_id()
-  $$;
--- mwf_app: no app caller today; the RLS policies of design note §6 (rows 9d–9g) evaluate it as mwf_app. mwf_job: its own writer, from a job connection.
-REVOKE EXECUTE ON FUNCTION app.my_participant(uuid) FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION app.my_participant(uuid) TO mwf_app;
-GRANT EXECUTE ON FUNCTION app.my_participant(uuid) TO mwf_job;
-
 -- Content-free status of every empathy direction in the caller's sessions
 -- (the latest round per direction): what both parties may see while neither
 -- may read an unrevealed row (P0-2). Behind v_empathy_direction_status.
 CREATE FUNCTION app.empathy_direction_status()
-  RETURNS TABLE (author_participant_id uuid, subject_participant_id uuid, round integer, status public.empathy_status,
+  RETURNS TABLE (session_id uuid, author_user_id uuid, subject_user_id uuid, round integer, status public.empathy_status,
                  submitted_at timestamptz, revealed_at timestamptz)
   LANGUAGE sql STABLE SECURITY DEFINER
   SET search_path = pg_catalog, public, pg_temp
   AS $$
-    SELECT DISTINCT ON (a.author_participant_id, a.subject_participant_id)
-           a.author_participant_id, a.subject_participant_id, a.round, a.status, a.submitted_at, a.revealed_at
+    SELECT DISTINCT ON (a.session_id, a.author_user_id, a.subject_user_id)
+           a.session_id, a.author_user_id, a.subject_user_id, a.round, a.status, a.submitted_at, a.revealed_at
     FROM public.empathy_attempt a
-    JOIN public.participant au ON au.id = a.author_participant_id
     WHERE EXISTS (SELECT 1 FROM public.participant me
-                  WHERE me.session_id = au.session_id AND me.user_id = app.current_user_id())
-    ORDER BY a.author_participant_id, a.subject_participant_id, a.round DESC
+                  WHERE me.session_id = a.session_id AND me.user_id = app.current_user_id())
+    ORDER BY a.session_id, a.author_user_id, a.subject_user_id, a.round DESC
   $$;
 -- mwf_app: the identity-bound read behind v_empathy_direction_status. mwf_job: its own writer, from a job connection.
 REVOKE EXECUTE ON FUNCTION app.empathy_direction_status() FROM PUBLIC;
@@ -438,16 +411,16 @@ CREATE FUNCTION app.empathy_set_status(attempt uuid, status public.empathy_statu
     v_gate         boolean;
     v_new          uuid;
   BEGIN
-    SELECT p.session_id INTO v_session
-    FROM public.empathy_attempt e JOIN public.participant p ON p.id = e.author_participant_id
-    WHERE e.id = empathy_set_status.attempt;
+    SELECT e.session_id INTO v_session FROM public.empathy_attempt e WHERE e.id = empathy_set_status.attempt;
     IF NOT FOUND THEN
       RAISE EXCEPTION 'attempt not found' USING ERRCODE = 'P0002';
     END IF;
     PERFORM 1 FROM public.session s WHERE s.id = v_session FOR NO KEY UPDATE;
     SELECT * INTO a FROM public.empathy_attempt e WHERE e.id = empathy_set_status.attempt FOR NO KEY UPDATE;
-    SELECT p.user_id, p.left_at INTO v_author_user, v_author_left FROM public.participant p WHERE p.id = a.author_participant_id;
-    SELECT p.user_id, p.left_at INTO v_subject_user, v_subject_left FROM public.participant p WHERE p.id = a.subject_participant_id;
+    SELECT p.user_id, p.left_at INTO v_author_user, v_author_left FROM public.participant p
+    WHERE p.session_id = a.session_id AND p.user_id = a.author_user_id;
+    SELECT p.user_id, p.left_at INTO v_subject_user, v_subject_left FROM public.participant p
+    WHERE p.session_id = a.session_id AND p.user_id = a.subject_user_id;
     v_is_author  := v_me IS NOT NULL AND v_author_user IS NOT NULL AND v_me = v_author_user;
     v_is_subject := v_me IS NOT NULL AND v_subject_user IS NOT NULL AND v_me = v_subject_user;
     IF NOT (v_job OR v_is_author OR v_is_subject) THEN
@@ -470,10 +443,8 @@ CREATE FUNCTION app.empathy_set_status(attempt uuid, status public.empathy_statu
         RAISE EXCEPTION 'resubmission needs the new round''s content' USING ERRCODE = 'null_value_not_allowed';
       END IF;
       UPDATE public.empathy_attempt SET status = 'SUPERSEDED', status_version = status_version + 1 WHERE id = a.id;
-      INSERT INTO public.empathy_attempt (author_participant_id, subject_participant_id, session_id, author_user_id, subject_user_id,
-                                          round, supersedes_attempt_id, content, status)
-      VALUES (a.author_participant_id, a.subject_participant_id, a.session_id, a.author_user_id, a.subject_user_id,
-              a.round + 1, a.id, empathy_set_status.content, 'HELD')
+      INSERT INTO public.empathy_attempt (session_id, author_user_id, subject_user_id, round, supersedes_attempt_id, content, status)
+      VALUES (a.session_id, a.author_user_id, a.subject_user_id, a.round + 1, a.id, empathy_set_status.content, 'HELD')
       RETURNING id INTO v_new;
       RETURN v_new;
     END IF;
@@ -511,11 +482,11 @@ CREATE FUNCTION app.empathy_set_status(attempt uuid, status public.empathy_statu
          AND NOT EXISTS (
                SELECT 1
                FROM public.participant x
-               JOIN public.participant y ON y.session_id = x.session_id AND y.id <> x.id
+               JOIN public.participant y ON y.session_id = x.session_id AND y.user_id <> x.user_id
                WHERE x.session_id = v_session
                  AND x.kind = 'human' AND x.left_at IS NULL AND y.kind = 'human' AND y.left_at IS NULL
                  AND NOT EXISTS (SELECT 1 FROM public.empathy_attempt e
-                                 WHERE e.author_participant_id = x.id AND e.subject_participant_id = y.id
+                                 WHERE e.session_id = x.session_id AND e.author_user_id = x.user_id AND e.subject_user_id = y.user_id
                                    AND e.status IN ('READY', 'REVEALED', 'VALIDATED')))
         INTO v_gate;
       IF NOT v_gate THEN
@@ -524,10 +495,10 @@ CREATE FUNCTION app.empathy_set_status(attempt uuid, status public.empathy_statu
       UPDATE public.empathy_attempt
       SET status = 'REVEALED', revealed_at = coalesce(revealed_at, now()), status_version = status_version + 1
       WHERE id = a.id;
-      INSERT INTO public.message (conversation_id, sender_participant_id, session_id, sender_user_id, role, kind, content, source_attempt_id)
-      SELECT c.id, a.author_participant_id, a.session_id, a.author_user_id, 'USER', 'EMPATHY_STATEMENT', a.content, a.id
+      INSERT INTO public.message (conversation_id, session_id, sender_user_id, role, kind, content, source_attempt_id)
+      SELECT c.id, a.session_id, a.author_user_id, 'USER', 'EMPATHY_STATEMENT', a.content, a.id
       FROM public.conversation c
-      WHERE c.participant_id = a.subject_participant_id AND c.kind = 'MAIN'
+      WHERE c.session_id = a.session_id AND c.user_id = a.subject_user_id AND c.kind = 'MAIN'
         AND NOT EXISTS (SELECT 1 FROM public.message m
                         WHERE m.conversation_id = c.id AND m.source_attempt_id = a.id AND m.kind = 'EMPATHY_STATEMENT');
     ELSE
@@ -544,7 +515,7 @@ GRANT EXECUTE ON FUNCTION app.empathy_set_status(uuid, public.empathy_status, te
 -- need_share is written only here, by the job (it holds the session key that
 -- encrypts shared_text; EXECUTE is the job's alone), after the owner's
 -- GRANTED consent, for a need that is neither deleted nor superseded;
--- participant_id and session_id come from the need, never from the caller
+-- session_id and user_id come from the need, never from the caller
 -- (spec §1.4, N-1, N-7). Idempotent: a need already shared is left as it is.
 CREATE FUNCTION app.need_share(need uuid, shared_text text) RETURNS void
   LANGUAGE plpgsql SECURITY DEFINER
@@ -559,11 +530,11 @@ CREATE FUNCTION app.need_share(need uuid, shared_text text) RETURNS void
       RAISE EXCEPTION 'need not found, deleted or superseded' USING ERRCODE = 'P0002';
     END IF;
     IF NOT EXISTS (SELECT 1 FROM public.consent c JOIN public.need n ON n.id = c.need_id
-                   WHERE c.need_id = need_share.need AND c.participant_id = n.participant_id AND c.decision = 'GRANTED') THEN
+                   WHERE c.need_id = need_share.need AND c.user_id = n.user_id AND c.decision = 'GRANTED') THEN
       RAISE EXCEPTION 'need has no GRANTED consent by its owner' USING ERRCODE = 'check_violation';
     END IF;
-    INSERT INTO public.need_share (need_id, participant_id, session_id, user_id, category, shared_text)
-    SELECT n.id, n.participant_id, n.session_id, n.user_id, n.category, need_share.shared_text
+    INSERT INTO public.need_share (need_id, session_id, user_id, category, shared_text)
+    SELECT n.id, n.session_id, n.user_id, n.category, need_share.shared_text
     FROM public.need n
     WHERE n.id = need_share.need
     ON CONFLICT (need_id) DO NOTHING;
@@ -584,8 +555,7 @@ CREATE FUNCTION app.need_revoke_share(need uuid) RETURNS void
     v_me  uuid := app.current_user_id();
   BEGIN
     IF NOT (v_job OR (v_me IS NOT NULL AND EXISTS (
-              SELECT 1 FROM public.need n JOIN public.participant p ON p.id = n.participant_id
-              WHERE n.id = need_revoke_share.need AND p.user_id = v_me))) THEN
+              SELECT 1 FROM public.need n WHERE n.id = need_revoke_share.need AND n.user_id = v_me))) THEN
       RAISE EXCEPTION 'need not found' USING ERRCODE = 'P0002';
     END IF;
     UPDATE public.need_share SET revoked_at = now() WHERE need_id = need_revoke_share.need AND revoked_at IS NULL;
@@ -598,22 +568,21 @@ REVOKE EXECUTE ON FUNCTION app.need_revoke_share(uuid) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION app.need_revoke_share(uuid) TO mwf_app;
 GRANT EXECUTE ON FUNCTION app.need_revoke_share(uuid) TO mwf_job;
 
--- app.anonymize_user_in_session(session, participant): steps 1–4 and 7
--- (participant key) of the account walk for one session (spec §4). The
--- participant's own user (identity-bound, never NULL) or the job.
-CREATE FUNCTION app.anonymize_user_in_session(session uuid, participant uuid) RETURNS void
+-- app.anonymize_user_in_session(session, user): steps 1–4 and 7 (participant
+-- key) of the account walk for one session (spec §4), for the participant
+-- (session, user) (work-k5fk.3). That user (identity-bound, never NULL) or the job.
+CREATE FUNCTION app.anonymize_user_in_session(session uuid, "user" uuid) RETURNS void
   LANGUAGE plpgsql SECURITY DEFINER
   SET search_path = pg_catalog, public, pg_temp
   AS $$
   DECLARE
     v_job  boolean := session_user IN ('mwf_job', 'mwf_migrator');
     v_me   uuid := app.current_user_id();
-    v_user uuid;
-    pid    uuid := anonymize_user_in_session.participant;
+    sid    uuid := anonymize_user_in_session.session;
+    uid    uuid := anonymize_user_in_session."user";
   BEGIN
-    SELECT p.user_id INTO v_user FROM public.participant p
-    WHERE p.id = pid AND p.session_id = anonymize_user_in_session.session;
-    IF NOT FOUND OR NOT (v_job OR coalesce(v_me IS NOT NULL AND v_user = v_me, false)) THEN
+    PERFORM 1 FROM public.participant p WHERE p.session_id = sid AND p.user_id = uid;
+    IF NOT FOUND OR NOT (v_job OR coalesce(v_me IS NOT NULL AND uid = v_me, false)) THEN
       RAISE EXCEPTION 'participant not found' USING ERRCODE = 'P0002';
     END IF;
     -- 1. a live session → ABANDONED (closes the invite-accept path; lets T-cardinality-2 accept the leave)
@@ -621,32 +590,32 @@ CREATE FUNCTION app.anonymize_user_in_session(session uuid, participant uuid) RE
       PERFORM app.session_set_status(anonymize_user_in_session.session, 'ABANDONED');
     END IF;
     -- 2. the only PII a co-participant sees
-    UPDATE public.participant SET display_name = NULL, left_at = coalesce(left_at, now()) WHERE id = pid;
+    UPDATE public.participant SET display_name = NULL, left_at = coalesce(left_at, now()) WHERE session_id = sid AND user_id = uid;
     -- 3. the leaver's private-only rows (D9)
-    DELETE FROM public.conversation WHERE participant_id = pid;           -- cascades its messages
-    DELETE FROM public.conversation_read_state WHERE participant_id = pid;
-    DELETE FROM public.draft WHERE participant_id = pid;
-    DELETE FROM public.ai_memory WHERE participant_id = pid;
-    DELETE FROM public.mood_reading WHERE participant_id = pid;
-    DELETE FROM public.regulation_event WHERE participant_id = pid;
-    DELETE FROM public.need_disposition WHERE participant_id = pid;
-    DELETE FROM public.follow_up_note WHERE participant_id = pid;
-    DELETE FROM public.need n WHERE n.participant_id = pid
+    DELETE FROM public.conversation WHERE session_id = sid AND user_id = uid;           -- cascades its messages
+    DELETE FROM public.conversation_read_state WHERE session_id = sid AND user_id = uid;
+    DELETE FROM public.draft WHERE session_id = sid AND user_id = uid;
+    DELETE FROM public.ai_memory WHERE session_id = sid AND user_id = uid;
+    DELETE FROM public.mood_reading WHERE session_id = sid AND user_id = uid;
+    DELETE FROM public.regulation_event WHERE session_id = sid AND user_id = uid;
+    DELETE FROM public.need_disposition WHERE session_id = sid AND user_id = uid;
+    DELETE FROM public.follow_up_note WHERE session_id = sid AND user_id = uid;
+    DELETE FROM public.need n WHERE n.session_id = sid AND n.user_id = uid
       AND NOT EXISTS (SELECT 1 FROM public.need_share s WHERE s.need_id = n.id);
-    DELETE FROM public.proposal_choice c WHERE c.participant_id = pid
-      AND NOT EXISTS (SELECT 1 FROM public.participant_milestone m WHERE m.participant_id = pid AND m.milestone_key = 'choices_shared');
+    DELETE FROM public.proposal_choice c WHERE c.session_id = sid AND c.user_id = uid
+      AND NOT EXISTS (SELECT 1 FROM public.participant_milestone m
+                      WHERE m.session_id = sid AND m.user_id = uid AND m.milestone_key = 'choices_shared');
     DELETE FROM public.follow_up_checkin c USING public.follow_up f
-      WHERE c.follow_up_id = f.id AND f.scope = 'INDIVIDUAL' AND c.participant_id = pid;
-    DELETE FROM public.empathy_attempt WHERE author_participant_id = pid AND revealed_at IS NULL;  -- cascades results, offers, reviews
+      WHERE c.follow_up_id = f.id AND f.scope = 'INDIVIDUAL' AND c.session_id = sid AND c.user_id = uid;
+    DELETE FROM public.empathy_attempt WHERE session_id = sid AND author_user_id = uid AND revealed_at IS NULL;  -- cascades results, offers, reviews
     -- 4. full prompts in plaintext: the participant's own rows, and (ruling
     -- R17) every row of the session with no participant — migrated history
     -- (BrainActivity had no user column) cannot be attributed; deleting the
     -- partner's telemetry too is acceptable, leaking the leaver's prompts is not
     DELETE FROM public.brain_activity
-    WHERE participant_id = pid
-       OR (session_id = anonymize_user_in_session.session AND participant_id IS NULL);
+    WHERE session_id = sid AND (participant_user_id = uid OR participant_user_id IS NULL);
     -- 7. the participant-key shred
-    UPDATE public.participant_key SET destroyed_at = now() WHERE participant_id = pid AND destroyed_at IS NULL;
+    UPDATE public.participant_key SET destroyed_at = now() WHERE session_id = sid AND user_id = uid AND destroyed_at IS NULL;
   END
   $$;
 -- Not mwf_app: the job is its only caller (session-deletion.ts). mwf_job: its own writer, from a job connection.
@@ -671,8 +640,8 @@ CREATE FUNCTION app.anonymize_user_account("user" uuid) RETURNS void
       RAISE EXCEPTION 'user not found' USING ERRCODE = 'P0002';
     END IF;
     -- 1–4, 7 (participant keys) per session
-    FOR r IN SELECT p.id, p.session_id FROM public.participant p WHERE p.user_id = v_uid ORDER BY p.session_id LOOP
-      PERFORM app.anonymize_user_in_session(r.session_id, r.id);
+    FOR r IN SELECT p.session_id FROM public.participant p WHERE p.user_id = v_uid ORDER BY p.session_id LOOP
+      PERFORM app.anonymize_user_in_session(r.session_id, v_uid);
     END LOOP;
     -- 4. reflection telemetry (participant telemetry went per session)
     DELETE FROM public.brain_activity b USING public.reflection x WHERE b.reflection_id = x.id AND x.user_id = v_uid;
@@ -788,8 +757,6 @@ GRANT EXECUTE ON FUNCTION app.create_user(public.identity_provider, text, text, 
 GRANT CREATE ON SCHEMA app TO mwf_job;
 ALTER FUNCTION app.is_member(uuid) OWNER TO mwf_job;
 ALTER FUNCTION app.partner_user_id(uuid) OWNER TO mwf_job;
-ALTER FUNCTION app.is_co_participant(uuid) OWNER TO mwf_job;
-ALTER FUNCTION app.my_participant(uuid) OWNER TO mwf_job;
 ALTER FUNCTION app.empathy_direction_status() OWNER TO mwf_job;
 ALTER FUNCTION app.session_set_status(uuid, public.session_status) OWNER TO mwf_job;
 ALTER FUNCTION app.session_archive(uuid) OWNER TO mwf_job;
@@ -805,7 +772,7 @@ REVOKE CREATE ON SCHEMA app FROM mwf_job;
 -- ---------------------------------------------------------------------------
 -- T5. Triggers (spec §5 "Lives only in migration SQL"; §7). Invoker rights
 -- throughout — T-consent-owner must be (N-4), and the others need no more
--- than their caller can see — except work-k5fk.2's four participant / pair
+-- than their caller can see — except work-k5fk.2's three participant / pair
 -- triggers (definer, said where they are), with search_path pinned and every relation
 -- qualified, so a caller's temp table cannot stand in for a real one. No
 -- caller needs EXECUTE on a trigger function (PostgreSQL checks it only at
@@ -860,7 +827,8 @@ CREATE FUNCTION app.t_message_immutable() RETURNS trigger
   AS $$
   BEGIN
     IF NEW.conversation_id IS DISTINCT FROM OLD.conversation_id
-       OR NEW.sender_participant_id IS DISTINCT FROM OLD.sender_participant_id
+       OR NEW.session_id IS DISTINCT FROM OLD.session_id
+       OR NEW.sender_user_id IS DISTINCT FROM OLD.sender_user_id
        OR NEW.role IS DISTINCT FROM OLD.role
        OR NEW.kind IS DISTINCT FROM OLD.kind
        OR NEW.dedupe_key IS DISTINCT FROM OLD.dedupe_key THEN
@@ -916,10 +884,9 @@ CREATE FUNCTION app.t_message_app_insert() RETURNS trigger
       RAISE EXCEPTION 'the app writes only its own USER turns and statement copies, not % %', NEW.role, NEW.kind
         USING ERRCODE = 'insufficient_privilege';
     END IF;
-    SELECT c.participant_id, p.user_id INTO v_owner, v_owner_user
-    FROM public.conversation c JOIN public.participant p ON p.id = c.participant_id
-    WHERE c.id = NEW.conversation_id;
-    IF NEW.sender_participant_id IS DISTINCT FROM v_owner
+    SELECT c.user_id INTO v_owner FROM public.conversation c WHERE c.id = NEW.conversation_id;
+    v_owner_user := v_owner;
+    IF NEW.sender_user_id IS DISTINCT FROM v_owner
        OR (v_me IS NOT NULL AND v_owner_user IS DISTINCT FROM v_me) THEN
       RAISE EXCEPTION 'the app writes only as the participant that owns the conversation'
         USING ERRCODE = 'insufficient_privilege';
@@ -945,10 +912,9 @@ CREATE FUNCTION app.t_message_app_delete() RETURNS trigger
       RETURN OLD;
     END IF;
     v_me := app.current_user_id();
-    SELECT c.participant_id, p.user_id INTO v_owner, v_owner_user
-    FROM public.conversation c JOIN public.participant p ON p.id = c.participant_id
-    WHERE c.id = OLD.conversation_id;
-    IF NOT ((OLD.role = 'USER' AND OLD.kind = 'CHAT' AND OLD.sender_participant_id = v_owner)
+    SELECT c.user_id INTO v_owner FROM public.conversation c WHERE c.id = OLD.conversation_id;
+    v_owner_user := v_owner;
+    IF NOT ((OLD.role = 'USER' AND OLD.kind = 'CHAT' AND OLD.sender_user_id = v_owner)
             OR OLD.kind = 'SHARE_SUGGESTION')
        OR (v_me IS NOT NULL AND v_owner_user IS DISTINCT FROM v_me) THEN
       RAISE EXCEPTION 'the app deletes only its own failed turn or a share suggestion of its own conversation'
@@ -962,14 +928,15 @@ REVOKE EXECUTE ON FUNCTION app.t_message_app_delete() FROM PUBLIC;
 CREATE TRIGGER t_message_app_delete BEFORE DELETE ON public.message
   FOR EACH ROW EXECUTE FUNCTION app.t_message_app_delete();
 
--- Retired by work-k5fk.3 (6a): t_attempt_same_session (author and subject share a
--- session), t_review_subject (the reviewer is the attempt's subject) and
--- t_need_share_owner (a share carries its need owner's participant and session)
--- are keys now: every participant reference is FOREIGN KEY (x_participant_id,
--- session_id, x_user_id) REFERENCES participant (id, session_id, user_id), so two
--- references on one row share its one session_id, and empathy_review /
--- need_share pin to empathy_attempt (id, session_id, subject_user_id) / need
--- (id, session_id, user_id) (tables.sql). participant-key.target.test.ts keeps
+-- Retired by work-k5fk.3: t_attempt_same_session (author and subject share a
+-- session), t_review_subject (the reviewer is the attempt's subject),
+-- t_need_share_owner (a share carries its need owner's session and user) and
+-- t_participant_kind (participant.kind is the user's) are keys now: every
+-- participant reference is FOREIGN KEY (session_id, x_user_id) REFERENCES
+-- participant (session_id, user_id), so two references on one row share its one
+-- session_id; empathy_review / need_share pin to empathy_attempt (id, session_id,
+-- subject_user_id) / need (id, session_id, user_id); participant (user_id, kind)
+-- references "user" (id, kind) (tables.sql). participant-key.target.test.ts keeps
 -- each retired trigger's refusal.
 
 -- T-consent-owner: the decider owns the arc target. Invoker rights, so under
@@ -983,17 +950,18 @@ CREATE FUNCTION app.t_consent_owner() RETURNS trigger
     v_owner uuid;
   BEGIN
     IF NEW.need_id IS NOT NULL THEN
-      SELECT n.participant_id INTO v_owner FROM public.need n WHERE n.id = NEW.need_id;
+      SELECT n.user_id INTO v_owner FROM public.need n WHERE n.id = NEW.need_id;
     ELSIF NEW.empathy_attempt_id IS NOT NULL THEN
-      SELECT a.author_participant_id INTO v_owner FROM public.empathy_attempt a WHERE a.id = NEW.empathy_attempt_id;
+      SELECT a.author_user_id INTO v_owner FROM public.empathy_attempt a WHERE a.id = NEW.empathy_attempt_id;
     ELSIF NEW.proposal_id IS NOT NULL THEN
-      SELECT p.created_by_participant_id INTO v_owner FROM public.proposal p WHERE p.id = NEW.proposal_id;
+      SELECT p.created_by_user_id INTO v_owner FROM public.proposal p WHERE p.id = NEW.proposal_id;
     ELSIF NEW.share_offer_id IS NOT NULL THEN
-      SELECT o.subject_participant_id INTO v_owner FROM public.context_share_offer o WHERE o.id = NEW.share_offer_id;
+      SELECT o.subject_user_id INTO v_owner FROM public.context_share_offer o WHERE o.id = NEW.share_offer_id;
     ELSIF NEW.review_id IS NOT NULL THEN
-      SELECT r.reviewer_participant_id INTO v_owner FROM public.empathy_review r WHERE r.id = NEW.review_id;
+      SELECT r.reviewer_user_id INTO v_owner FROM public.empathy_review r WHERE r.id = NEW.review_id;
     END IF;
-    IF v_owner IS NULL OR v_owner <> NEW.participant_id THEN
+    -- the target is of the consent's session by key (the arc FKs carry session_id), so the owner's user decides
+    IF v_owner IS NULL OR v_owner <> NEW.user_id THEN
       RAISE EXCEPTION 'consent target is not yours' USING ERRCODE = 'check_violation';
     END IF;
     RETURN NEW;
@@ -1049,7 +1017,7 @@ CREATE FUNCTION app.t_need_share_terminal() RETURNS trigger
   AS $$
   BEGIN
     IF NEW.need_id IS DISTINCT FROM OLD.need_id OR NEW.shared_text IS DISTINCT FROM OLD.shared_text
-       OR NEW.participant_id IS DISTINCT FROM OLD.participant_id OR NEW.session_id IS DISTINCT FROM OLD.session_id
+       OR NEW.user_id IS DISTINCT FROM OLD.user_id OR NEW.session_id IS DISTINCT FROM OLD.session_id
        OR NEW.category IS DISTINCT FROM OLD.category OR NEW.shared_at IS DISTINCT FROM OLD.shared_at
        OR (OLD.revoked_at IS NOT NULL AND NEW.revoked_at IS DISTINCT FROM OLD.revoked_at) THEN
       RAISE EXCEPTION 'a shared need is immutable; revocation is terminal' USING ERRCODE = 'check_violation';
@@ -1095,18 +1063,18 @@ CREATE FUNCTION app.agreement_parties_ok(agreement uuid) RETURNS boolean
   SET search_path = pg_catalog, public, pg_temp
   AS $$
     SELECT NOT EXISTS (SELECT 1 FROM public.agreement ag WHERE ag.id = agreement_parties_ok.agreement)
-        OR (SELECT NOT EXISTS (SELECT ap.participant_id FROM public.agreement_party ap WHERE ap.agreement_id = ag.id
-                               EXCEPT SELECT p.id FROM public.participant p
+        OR (SELECT NOT EXISTS (SELECT ap.user_id FROM public.agreement_party ap WHERE ap.agreement_id = ag.id
+                               EXCEPT SELECT p.user_id FROM public.participant p
                                       WHERE p.session_id = ag.session_id AND p.kind = 'human'
                                         AND (p.left_at IS NULL OR p.left_at > ag.created_at))
-               AND NOT EXISTS (SELECT p.id FROM public.participant p
+               AND NOT EXISTS (SELECT p.user_id FROM public.participant p
                                WHERE p.session_id = ag.session_id AND p.kind = 'human'
                                  AND (p.left_at IS NULL OR p.left_at > ag.created_at)
-                               EXCEPT SELECT ap.participant_id FROM public.agreement_party ap WHERE ap.agreement_id = ag.id)
+                               EXCEPT SELECT ap.user_id FROM public.agreement_party ap WHERE ap.agreement_id = ag.id)
                AND NOT EXISTS (SELECT 1 FROM public.agreement_party ap
                                WHERE ap.agreement_id = ag.id
                                  AND NOT EXISTS (SELECT 1 FROM public.proposal_choice c
-                                                 WHERE c.proposal_id = ag.proposal_id AND c.participant_id = ap.participant_id
+                                                 WHERE c.proposal_id = ag.proposal_id AND c.user_id = ap.user_id
                                                    AND c.decision = 'WILLING'))
             FROM public.agreement ag WHERE ag.id = agreement_parties_ok.agreement)
   $$;
@@ -1130,18 +1098,18 @@ CREATE FUNCTION app.t_agreement_parties() RETURNS trigger
       v_agreement := NEW.agreement_id;
     END IF;
     SELECT NOT EXISTS (SELECT 1 FROM public.agreement ag WHERE ag.id = v_agreement)
-        OR (SELECT NOT EXISTS (SELECT ap.participant_id FROM public.agreement_party ap WHERE ap.agreement_id = ag.id
-                               EXCEPT SELECT p.id FROM public.participant p
+        OR (SELECT NOT EXISTS (SELECT ap.user_id FROM public.agreement_party ap WHERE ap.agreement_id = ag.id
+                               EXCEPT SELECT p.user_id FROM public.participant p
                                       WHERE p.session_id = ag.session_id AND p.kind = 'human'
                                         AND (p.left_at IS NULL OR p.left_at > ag.created_at))
-               AND NOT EXISTS (SELECT p.id FROM public.participant p
+               AND NOT EXISTS (SELECT p.user_id FROM public.participant p
                                WHERE p.session_id = ag.session_id AND p.kind = 'human'
                                  AND (p.left_at IS NULL OR p.left_at > ag.created_at)
-                               EXCEPT SELECT ap.participant_id FROM public.agreement_party ap WHERE ap.agreement_id = ag.id)
+                               EXCEPT SELECT ap.user_id FROM public.agreement_party ap WHERE ap.agreement_id = ag.id)
                AND NOT EXISTS (SELECT 1 FROM public.agreement_party ap
                                WHERE ap.agreement_id = ag.id
                                  AND NOT EXISTS (SELECT 1 FROM public.proposal_choice c
-                                                 WHERE c.proposal_id = ag.proposal_id AND c.participant_id = ap.participant_id
+                                                 WHERE c.proposal_id = ag.proposal_id AND c.user_id = ap.user_id
                                                    AND c.decision = 'WILLING'))
             FROM public.agreement ag WHERE ag.id = v_agreement)
       INTO v_ok;
@@ -1252,41 +1220,14 @@ COMMENT ON TRIGGER t_jsonb_envelope ON public.feature_state IS 'doc is a well-fo
 -- design note §6), and they write live_session_pair, which no caller may write.
 -- ---------------------------------------------------------------------------
 
--- T-participant-kind: participant.kind is human exactly when the user is a
--- human. The AI and a persona sit as modeled, so every present-humans rule
--- (v_session_readiness, the reveal gate, agreement_parties_ok, the pair rule
--- below) skips them without a join to "user".
-CREATE FUNCTION app.t_participant_kind() RETURNS trigger
-  LANGUAGE plpgsql SECURITY DEFINER
-  SET search_path = pg_catalog, public, pg_temp
-  AS $$
-  DECLARE
-    v_kind public.user_kind;
-  BEGIN
-    IF NEW.user_id IS NULL THEN
-      RETURN NEW;  -- an imagined participant (modeled, participant_check)
-    END IF;
-    SELECT u.kind INTO v_kind FROM public."user" u WHERE u.id = NEW.user_id;
-    IF NOT FOUND THEN
-      RETURN NEW;  -- the FK to "user" refuses it
-    END IF;
-    IF (v_kind = 'human') <> (NEW.kind = 'human') THEN
-      RAISE EXCEPTION 'participant refused' USING ERRCODE = 'check_violation';
-    END IF;
-    RETURN NEW;
-  END
-  $$;
-COMMENT ON FUNCTION app.t_participant_kind() IS 'Trigger (work-k5fk.2): participant.kind = human exactly when the user is a human; the AI and a persona are modeled seats, so no present-humans rule counts them.';
--- No caller needs EXECUTE on a trigger function.
-REVOKE EXECUTE ON FUNCTION app.t_participant_kind() FROM PUBLIC;
-CREATE TRIGGER t_participant_kind BEFORE INSERT OR UPDATE OF user_id, kind ON public.participant
-  FOR EACH ROW EXECUTE FUNCTION app.t_participant_kind();
-
 -- T-participant-added-by: the adder (an FK-pinned participant of the same
 -- session) is a human, and a persona is seated only by its owner.
--- Both participant triggers refuse with ONE message ('participant refused',
--- check_violation), so a refusal is no oracle for another user's kind or a
--- persona's owner (review round 1, F8).
+-- It refuses with ONE message ('participant refused', check_violation), so a
+-- refusal is no oracle for a persona's owner (review round 1, F8). The kind is
+-- pinned by the FK (user_id, kind) -> "user" (work-k5fk.3), whose refusal is a
+-- 23503 naming the pair: only a caller that already names a user and a kind
+-- learns that they do not match, and seating is the app's own write (one per
+-- path: createSession, accept, the linked process).
 CREATE FUNCTION app.t_participant_added_by() RETURNS trigger
   LANGUAGE plpgsql SECURITY DEFINER
   SET search_path = pg_catalog, public, pg_temp
@@ -1327,7 +1268,7 @@ CREATE TRIGGER t_participant_added_by BEFORE INSERT OR UPDATE OF added_by_user_i
 -- fails with unique_violation (23505, live_session_pair_pkey) and its whole
 -- transaction (the accept) rolls back. Lock order is the accept's: invitation
 -- (lockInvitationForAccept), then session. INSERT only: a participant's user
--- and kind never change once seated (participant_check, t_participant_kind;
+-- and kind never change once seated (they are the primary key and its kind pin;
 -- the pair's FKs hold a paired user_id in place); a later left_at does not
 -- release a pair (work-k5fk follow-up for N-party leave).
 CREATE FUNCTION app.t_live_session_pair() RETURNS trigger
@@ -1373,9 +1314,8 @@ CREATE TRIGGER t_live_session_pair_end AFTER UPDATE OF status ON public.session
   FOR EACH ROW WHEN (NEW.status IN ('RESOLVED', 'ABANDONED', 'ARCHIVED') AND OLD.status IS DISTINCT FROM NEW.status)
   EXECUTE FUNCTION app.t_live_session_pair_end();
 
--- The hand-over of the four definer trigger functions (as T4's, above).
+-- The hand-over of the three definer trigger functions (as T4's, above).
 GRANT CREATE ON SCHEMA app TO mwf_job;
-ALTER FUNCTION app.t_participant_kind() OWNER TO mwf_job;
 ALTER FUNCTION app.t_participant_added_by() OWNER TO mwf_job;
 ALTER FUNCTION app.t_live_session_pair() OWNER TO mwf_job;
 ALTER FUNCTION app.t_live_session_pair_end() OWNER TO mwf_job;
@@ -1432,11 +1372,11 @@ CREATE TRIGGER touch_updated_at BEFORE UPDATE ON user_preferences FOR EACH ROW E
 -- last_active_at, last_mood and the read state, and is_tombstone = false — and
 -- coalesce(showActivityStatus, true) would default to true over a row it cannot
 -- see. The partner-facing columns need a SECURITY DEFINER table function
--- (owned by mwf_job, identity-bound) that returns participant_id + the masked
+-- (owned by mwf_job, identity-bound) that returns (session_id, user_id) + the masked
 -- last_active_at (+ last_mood if the product wants it), with no default-true
 -- over an invisible row; this view then serves only the caller's own rows.
 CREATE VIEW v_participant WITH (security_invoker = true) AS
-SELECT p.id AS participant_id, p.session_id, p.user_id, p.kind,
+SELECT p.session_id, p.user_id, p.kind,
        coalesce(p.display_name, CASE WHEN u.deleted_at IS NULL THEN u.name END) AS display_name,
        (u.deleted_at IS NOT NULL) AS is_tombstone,
        p.joined_at, p.left_at,
@@ -1445,20 +1385,21 @@ SELECT p.id AS participant_id, p.session_id, p.user_id, p.kind,
        CASE WHEN p.user_id = app.current_user_id()
               OR coalesce((up.doc -> 'privacy' ->> 'showActivityStatus')::boolean, true)
             THEN r.last_active_at END AS last_active_at,
-       (SELECT m.intensity::integer FROM mood_reading m WHERE m.participant_id = p.id ORDER BY m.recorded_at DESC, m.id DESC LIMIT 1) AS last_mood
+       (SELECT m.intensity::integer FROM mood_reading m WHERE m.session_id = p.session_id AND m.user_id = p.user_id
+        ORDER BY m.recorded_at DESC, m.id DESC LIMIT 1) AS last_mood
 FROM participant p
 LEFT JOIN "user" u ON u.id = p.user_id
-LEFT JOIN conversation c ON c.participant_id = p.id AND c.kind = 'MAIN'
-LEFT JOIN conversation_read_state r ON r.participant_id = p.id
+LEFT JOIN conversation c ON c.session_id = p.session_id AND c.user_id = p.user_id AND c.kind = 'MAIN'
+LEFT JOIN conversation_read_state r ON r.session_id = p.session_id AND r.user_id = p.user_id
 LEFT JOIN user_preferences up ON up.user_id = p.user_id;
 GRANT SELECT ON v_participant TO mwf_app;
 
 -- Every other participant of the same session, one row per ordered pair (N-safe).
 CREATE VIEW v_co_participant WITH (security_invoker = true) AS
-SELECT p.id AS participant_id, p.session_id, o.id AS co_participant_id, o.kind AS co_kind, o.display_name AS co_display_name,
-       o.left_at AS co_left_at
+SELECT p.session_id, p.user_id, o.user_id AS co_user_id, o.kind AS co_kind, o.display_name AS co_display_name,
+       o.left_at AS co_left_at, o.joined_at AS co_joined_at
 FROM participant p
-JOIN participant o ON o.session_id = p.session_id AND o.id <> p.id;
+JOIN participant o ON o.session_id = p.session_id AND o.user_id <> p.user_id;
 GRANT SELECT ON v_co_participant TO mwf_app;
 
 -- Session-scoped milestones: reached by every present human participant?
@@ -1471,10 +1412,11 @@ SELECT s.id AS session_id, m.key AS milestone_key,
 FROM session s
 CROSS JOIN milestone m
 LEFT JOIN LATERAL (
-  SELECT array_agg(p.id ORDER BY p.joined_at, p.id)::uuid[] AS waiting_on
+  SELECT array_agg(p.user_id ORDER BY p.joined_at, p.user_id)::uuid[] AS waiting_on
   FROM participant p
   WHERE p.session_id = s.id AND p.kind = 'human' AND p.left_at IS NULL
-    AND NOT EXISTS (SELECT 1 FROM participant_milestone pm WHERE pm.participant_id = p.id AND pm.milestone_key = m.key)
+    AND NOT EXISTS (SELECT 1 FROM participant_milestone pm
+                    WHERE pm.session_id = p.session_id AND pm.user_id = p.user_id AND pm.milestone_key = m.key)
 ) w ON true
 WHERE m.scope = 'session';
 GRANT SELECT ON v_session_readiness TO mwf_app;
@@ -1486,7 +1428,7 @@ GRANT SELECT ON v_session_readiness TO mwf_app;
 -- participant is working in, i.e. the old IN_PROGRESS StageProgress.stage (4
 -- once the journey's last milestone is reached). The DTO shim reads active_stage.
 CREATE VIEW v_current_stage WITH (security_invoker = true) AS
-SELECT p.id AS participant_id, p.session_id,
+SELECT p.session_id, p.user_id,
        cur.key AS milestone_key, cur.ordinal, coalesce(cur.stage_label, nxt.stage_label) AS stage_label,
        coalesce(cur.ordinal / 100, 0) AS reached_stage,
        nxt.key AS next_milestone_key,
@@ -1495,7 +1437,7 @@ FROM participant p
 LEFT JOIN LATERAL (
   SELECT m.key, m.ordinal, m.stage_label
   FROM participant_milestone pm JOIN milestone m ON m.key = pm.milestone_key
-  WHERE pm.participant_id = p.id AND m.ordinal > 0
+  WHERE pm.session_id = p.session_id AND pm.user_id = p.user_id AND m.ordinal > 0
   ORDER BY m.ordinal DESC LIMIT 1
 ) cur ON true
 LEFT JOIN LATERAL (
@@ -1510,25 +1452,25 @@ GRANT SELECT ON v_current_stage TO mwf_ops;
 -- Per direction: the current attempt (the live row, else the latest round)
 -- with its current reconciler result, open share offer and review.
 CREATE VIEW v_empathy_direction WITH (security_invoker = true) AS
-SELECT a.author_participant_id, a.subject_participant_id, a.id AS attempt_id, a.round, a.status, a.revealed_at,
+SELECT a.session_id, a.author_user_id, a.subject_user_id, a.id AS attempt_id, a.round, a.status, a.revealed_at,
        r.id AS result_id, r.recommended_action, r.alignment_score,
        o.id AS share_offer_id, o.status AS share_offer_status,
        v.id AS review_id, v.validated
 FROM (
-  SELECT DISTINCT ON (author_participant_id, subject_participant_id) *
+  SELECT DISTINCT ON (session_id, author_user_id, subject_user_id) *
   FROM empathy_attempt
-  ORDER BY author_participant_id, subject_participant_id, (status NOT IN ('SUPERSEDED', 'VALIDATED')) DESC, round DESC
+  ORDER BY session_id, author_user_id, subject_user_id, (status NOT IN ('SUPERSEDED', 'VALIDATED')) DESC, round DESC
 ) a
 LEFT JOIN reconciler_result r ON r.attempt_id = a.id AND r.superseded_at IS NULL
 LEFT JOIN LATERAL (
   SELECT * FROM context_share_offer x WHERE x.attempt_id = a.id AND x.status IN ('PENDING', 'OFFERED') ORDER BY x.iteration DESC LIMIT 1
 ) o ON true
-LEFT JOIN empathy_review v ON v.attempt_id = a.id AND v.reviewer_participant_id = a.subject_participant_id;
+LEFT JOIN empathy_review v ON v.attempt_id = a.id AND v.reviewer_user_id = a.subject_user_id;
 GRANT SELECT ON v_empathy_direction TO mwf_app;
 
 -- need_share alone — never joins need (pass 2 N-1).
 CREATE VIEW v_need_shared WITH (security_invoker = true) AS
-SELECT need_id, participant_id, session_id, category, shared_text, shared_at
+SELECT need_id, session_id, user_id, category, shared_text, shared_at
 FROM need_share
 WHERE revoked_at IS NULL;
 GRANT SELECT ON v_need_shared TO mwf_app;
@@ -1547,9 +1489,9 @@ GRANT SELECT ON v_empathy_direction_status TO mwf_app;
 -- move with it (:707, :877), and its readers treat REVISED as ACTIVE (:291,
 -- :494).
 CREATE VIEW v_need_coverage WITH (security_invoker = true) AS
-SELECT ns.session_id, ns.need_id, ns.participant_id AS need_owner_participant_id,
+SELECT ns.session_id, ns.need_id, ns.user_id AS need_owner_user_id,
        coalesce(cov.proposal_ids, '{}') AS covering_proposal_ids,
-       coalesce(w.willing, '{}') AS willing_participant_ids,
+       coalesce(w.willing, '{}') AS willing_user_ids,
        CASE WHEN cardinality(coalesce(w.willing, '{}')) = 0 THEN 'OPEN'
             WHEN cardinality(w.willing) >= h.n THEN 'COVERED'
             ELSE 'PARTIAL' END AS status
@@ -1560,11 +1502,11 @@ LEFT JOIN LATERAL (
   WHERE pn.need_id = ns.need_id AND pr.status IN ('ACTIVE', 'REVISED', 'CONVERTED_TO_AGREEMENT')
 ) cov ON true
 LEFT JOIN LATERAL (
-  SELECT array_agg(DISTINCT c.participant_id)::uuid[] AS willing
+  SELECT array_agg(DISTINCT c.user_id)::uuid[] AS willing
   FROM proposal_need pn
   JOIN proposal pr ON pr.id = pn.proposal_id AND pr.status IN ('ACTIVE', 'REVISED', 'CONVERTED_TO_AGREEMENT')
   JOIN proposal_choice c ON c.proposal_id = pr.id AND c.decision = 'WILLING'
-  JOIN participant p ON p.id = c.participant_id AND p.kind = 'human' AND p.left_at IS NULL
+  JOIN participant p ON p.session_id = c.session_id AND p.user_id = c.user_id AND p.kind = 'human' AND p.left_at IS NULL
   WHERE pn.need_id = ns.need_id
 ) w ON true
 CROSS JOIN LATERAL (
@@ -1583,7 +1525,7 @@ SELECT s.id AS session_id,
                  FROM proposal pr
                  WHERE pr.session_id = s.id AND pr.kind = 'INDIVIDUAL_COMMITMENT' AND pr.status <> 'REMOVED'
                    AND EXISTS (SELECT 1 FROM proposal_choice c
-                               WHERE c.proposal_id = pr.id AND c.participant_id = pr.created_by_participant_id AND c.decision = 'WILLING')),
+                               WHERE c.proposal_id = pr.id AND c.user_id = pr.created_by_user_id AND c.decision = 'WILLING')),
                 '{}') AS individual_commitment_ids,
        coalesce((SELECT array_agg(ns.need_id ORDER BY ns.shared_at, ns.need_id)::uuid[]
                  FROM need_share ns
@@ -1597,7 +1539,7 @@ GRANT SELECT ON v_session_closure_items TO mwf_app;
 
 -- The coordination state of a follow-up (replaces TendingCoordinationCycle).
 CREATE VIEW v_follow_up_cycle WITH (security_invoker = true) AS
-SELECT f.id AS follow_up_id, f.session_id, x.expected AS participant_ids, x.submitted AS submitted_participant_ids,
+SELECT f.id AS follow_up_id, f.session_id, x.expected AS user_ids, x.submitted AS submitted_user_ids,
        x.waiting AS waiting_on, f.response_deadline_at,
        CASE WHEN f.status IN ('COMPLETED', 'CANCELLED') THEN 'RESOLVED'
             WHEN f.status = 'EXPIRED' THEN 'TIMED_OUT'
@@ -1606,27 +1548,27 @@ SELECT f.id AS follow_up_id, f.session_id, x.expected AS participant_ids, x.subm
             ELSE 'WAITING_FOR_PARTNER' END AS status
 FROM follow_up f
 CROSS JOIN LATERAL (
-  SELECT coalesce(array_agg(p.id ORDER BY p.joined_at, p.id)::uuid[], '{}') AS expected,
-         coalesce(array_agg(p.id ORDER BY p.joined_at, p.id) FILTER (WHERE ck.id IS NOT NULL)::uuid[], '{}') AS submitted,
-         coalesce(array_agg(p.id ORDER BY p.joined_at, p.id) FILTER (WHERE ck.id IS NULL)::uuid[], '{}') AS waiting
+  SELECT coalesce(array_agg(p.user_id ORDER BY p.joined_at, p.user_id)::uuid[], '{}') AS expected,
+         coalesce(array_agg(p.user_id ORDER BY p.joined_at, p.user_id) FILTER (WHERE ck.id IS NOT NULL)::uuid[], '{}') AS submitted,
+         coalesce(array_agg(p.user_id ORDER BY p.joined_at, p.user_id) FILTER (WHERE ck.id IS NULL)::uuid[], '{}') AS waiting
   FROM participant p
-  LEFT JOIN follow_up_checkin ck ON ck.follow_up_id = f.id AND ck.participant_id = p.id
+  LEFT JOIN follow_up_checkin ck ON ck.follow_up_id = f.id AND ck.session_id = p.session_id AND ck.user_id = p.user_id
   WHERE p.session_id = f.session_id AND p.kind = 'human' AND p.left_at IS NULL
-    AND (f.scope = 'SHARED' OR p.id = f.owner_participant_id)
+    AND (f.scope = 'SHARED' OR p.user_id = f.owner_user_id)
 ) x;
 GRANT SELECT ON v_follow_up_cycle TO mwf_app;
 
 -- Per participant: messages in the MAIN conversation after last_viewed_at
 -- (not counting the participant's own), and the latest message time.
 CREATE VIEW v_conversation_unread WITH (security_invoker = true) AS
-SELECT p.id AS participant_id, p.session_id, c.id AS conversation_id,
+SELECT p.session_id, p.user_id, c.id AS conversation_id,
        (SELECT count(*) FROM message m
         WHERE m.conversation_id = c.id AND m.created_at > coalesce(r.last_viewed_at, '-infinity')
-          AND m.sender_participant_id IS DISTINCT FROM p.id) AS unread_count,
+          AND m.sender_user_id IS DISTINCT FROM p.user_id) AS unread_count,
        (SELECT max(m.created_at) FROM message m WHERE m.conversation_id = c.id) AS latest_message_at
 FROM participant p
-JOIN conversation c ON c.participant_id = p.id AND c.kind = 'MAIN'
-LEFT JOIN conversation_read_state r ON r.participant_id = p.id;
+JOIN conversation c ON c.session_id = p.session_id AND c.user_id = p.user_id AND c.kind = 'MAIN'
+LEFT JOIN conversation_read_state r ON r.session_id = p.session_id AND r.user_id = p.user_id;
 GRANT SELECT ON v_conversation_unread TO mwf_app;
 
 -- Per (user, theme): reflections and the latest activity (replaces RecurringTheme).

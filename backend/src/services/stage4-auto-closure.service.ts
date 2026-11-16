@@ -39,15 +39,15 @@ export async function applyStage4AutoClosureFromSignal(args: {
   if (!session) return { closed: false, reason: 'session_not_found' };
   if (session.status !== 'ACTIVE') return { closed: false, reason: 'session_not_active' };
 
-  const states = await loadStageStates([{ id: participant.id, joinedAt: participant.joinedAt }]);
-  if ((states.get(participant.id)?.current.stage ?? 0) !== 4) return { closed: false, reason: 'not_in_stage_4' };
+  const states = await loadStageStates([participant]);
+  if ((states.get(participant)?.current.stage ?? 0) !== 4) return { closed: false, reason: 'not_in_stage_4' };
 
   const reason = args.signal.reason ?? Stage4ClosureReason.USER_STOPPED;
   let counts: { individualCount: number; openNeedCount: number };
   try {
     counts = await closeStage4WithoutAgreement({
       sessionId: args.sessionId,
-      participantId: participant.id,
+      seat: participant,
       reason,
       summary: args.signal.summary,
     });

@@ -30,6 +30,7 @@
 import type { PrismaClient } from '../generated/prisma/client';
 import { getJobPrisma, prisma, type DbClient } from '../lib/prisma';
 import { decryptRawRows, encryptColumnValue } from '../lib/prisma-encryption-middleware';
+import type { Seat } from './participant-resolver';
 
 export type TargetEmpathyStatus =
   | 'HELD'
@@ -45,8 +46,9 @@ export const READY_OR_LATER: ReadonlySet<TargetEmpathyStatus> = new Set(['READY'
 
 export interface AttemptRow {
   id: string;
-  authorParticipantId: string;
-  subjectParticipantId: string;
+  sessionId: string;
+  authorUserId: string;
+  subjectUserId: string;
   round: number;
   supersedesAttemptId: string | null;
   content: string;
@@ -61,8 +63,9 @@ export interface AttemptRow {
 
 const ATTEMPT_SELECT = {
   id: true,
-  authorParticipantId: true,
-  subjectParticipantId: true,
+  sessionId: true,
+  authorUserId: true,
+  subjectUserId: true,
   round: true,
   supersedesAttemptId: true,
   content: true,
@@ -80,8 +83,8 @@ const ATTEMPT_SELECT = {
 // ----------------------------------------------------------------------------
 
 export interface SessionParty {
-  participantId: string;
-  userId: string | null;
+  /** The party's user — with the session, its participant key (work-k5fk.3). */
+  userId: string;
   /** first name, else the full name (the old `firstName || name`). */
   name: string | null;
   joinedAt: Date;
@@ -96,9 +99,8 @@ export interface SessionParty {
 export async function sessionParties(sessionId: string, client: PrismaClient = prisma): Promise<SessionParty[]> {
   const rows = await client.participant.findMany({
     where: { sessionId, kind: 'human', leftAt: null },
-    orderBy: [{ joinedAt: 'asc' }, { id: 'asc' }],
+    orderBy: [{ joinedAt: 'asc' }, { userId: 'asc' }],
     select: {
-      id: true,
       userId: true,
       joinedAt: true,
       displayName: true,
@@ -107,7 +109,6 @@ export async function sessionParties(sessionId: string, client: PrismaClient = p
     },
   });
   return rows.map(r => ({
-    participantId: r.id,
     userId: r.userId,
     name: r.user?.firstName || r.user?.name || r.displayName || null,
     joinedAt: r.joinedAt,
@@ -124,16 +125,11 @@ export async function sessionParties(sessionId: string, client: PrismaClient = p
  * in the subject's SELECT arm forever). Writes never do: they keep requiring a
  * present partner. `name` is always null (the tombstone has none).
  */
-export async function departedCounterpart(
-  sessionId: string,
-  meParticipantId: string,
-  client: PrismaClient = prisma,
-): Promise<SessionParty | null> {
+export async function departedCounterpart(me: Seat, client: PrismaClient = prisma): Promise<SessionParty | null> {
   const rows = await client.participant.findMany({
-    where: { sessionId, kind: 'human', leftAt: { not: null }, id: { not: meParticipantId } },
-    orderBy: [{ joinedAt: 'asc' }, { id: 'asc' }],
+    where: { sessionId: me.sessionId, kind: 'human', leftAt: { not: null }, userId: { not: me.userId } },
+    orderBy: [{ joinedAt: 'asc' }, { userId: 'asc' }],
     select: {
-      id: true,
       userId: true,
       joinedAt: true,
       conversations: { where: { kind: 'MAIN' }, select: { id: true } },
@@ -142,7 +138,6 @@ export async function departedCounterpart(
   if (rows.length !== 1) return null;
   const r = rows[0];
   return {
-    participantId: r.id,
     userId: r.userId,
     name: null,
     joinedAt: r.joinedAt,
@@ -150,12 +145,9 @@ export async function departedCounterpart(
   };
 }
 
-/** The party with this user id, or this participant id. */
-export function partyOf(
-  parties: SessionParty[],
-  who: { userId?: string; participantId?: string },
-): SessionParty | undefined {
-  return parties.find(p => (who.participantId ? p.participantId === who.participantId : p.userId === who.userId));
+/** The party with this user id. */
+export function partyOf(parties: SessionParty[], who: { userId: string }): SessionParty | undefined {
+  return parties.find(p => p.userId === who.userId);
 }
 
 // ----------------------------------------------------------------------------
@@ -168,13 +160,14 @@ export function partyOf(
  * `revealedAttemptAbout` instead.
  */
 export async function currentAttempt(
-  authorParticipantId: string,
-  subjectParticipantId: string,
+  sessionId: string,
+  authorUserId: string,
+  subjectUserId: string,
   /** The reconciler passes the job connection (Ruling R35). */
   client: PrismaClient = prisma,
 ): Promise<AttemptRow | null> {
   const rounds = (await client.empathyAttempt.findMany({
-    where: { authorParticipantId, subjectParticipantId },
+    where: { sessionId, authorUserId, subjectUserId },
     orderBy: { round: 'desc' },
     select: ATTEMPT_SELECT,
   })) as AttemptRow[];
@@ -182,9 +175,9 @@ export async function currentAttempt(
 }
 
 /** Every round of a direction, oldest first (the old revisionCount = rounds − 1). */
-export async function roundsOf(authorParticipantId: string, subjectParticipantId: string): Promise<AttemptRow[]> {
+export async function roundsOf(sessionId: string, authorUserId: string, subjectUserId: string): Promise<AttemptRow[]> {
   return (await prisma.empathyAttempt.findMany({
-    where: { authorParticipantId, subjectParticipantId },
+    where: { sessionId, authorUserId, subjectUserId },
     orderBy: { round: 'asc' },
     select: ATTEMPT_SELECT,
   })) as AttemptRow[];
@@ -196,11 +189,12 @@ export async function roundsOf(authorParticipantId: string, subjectParticipantId
  * superseded round they already read stays readable — spec §7).
  */
 export async function revealedAttemptAbout(
-  subjectParticipantId: string,
-  authorParticipantId: string,
+  sessionId: string,
+  subjectUserId: string,
+  authorUserId: string,
 ): Promise<AttemptRow | null> {
   return (await prisma.empathyAttempt.findFirst({
-    where: { authorParticipantId, subjectParticipantId, revealedAt: { not: null } },
+    where: { sessionId, authorUserId, subjectUserId, revealedAt: { not: null } },
     orderBy: { round: 'desc' },
     select: ATTEMPT_SELECT,
   })) as AttemptRow | null;
@@ -211,8 +205,8 @@ export async function attemptById(id: string): Promise<AttemptRow | null> {
 }
 
 export interface DirectionStatus {
-  authorParticipantId: string;
-  subjectParticipantId: string;
+  authorUserId: string;
+  subjectUserId: string;
   round: number;
   status: TargetEmpathyStatus;
   submittedAt: Date;
@@ -234,14 +228,13 @@ export async function directionStatuses(sessionId: string): Promise<DirectionSta
       submitted_at: Date;
       revealed_at: Date | null;
     }>
-  >`SELECT v.author_participant_id AS a, v.subject_participant_id AS s, v.round, v.status::text AS status,
+  >`SELECT v.author_user_id AS a, v.subject_user_id AS s, v.round, v.status::text AS status,
            v.submitted_at, v.revealed_at
     FROM v_empathy_direction_status v
-    JOIN participant p ON p.id = v.author_participant_id
-    WHERE p.session_id = ${sessionId}::uuid`;
+    WHERE v.session_id = ${sessionId}::uuid`;
   return rows.map(r => ({
-    authorParticipantId: r.a,
-    subjectParticipantId: r.s,
+    authorUserId: r.a,
+    subjectUserId: r.s,
     round: Number(r.round),
     status: r.status,
     submittedAt: r.submitted_at,
@@ -249,14 +242,13 @@ export async function directionStatuses(sessionId: string): Promise<DirectionSta
   }));
 }
 
+/** The direction author → subject among one session's statuses (user ids; the session is the statuses'). */
 export function directionOf(
   statuses: DirectionStatus[],
-  authorParticipantId: string,
-  subjectParticipantId: string,
+  authorUserId: string,
+  subjectUserId: string,
 ): DirectionStatus | undefined {
-  return statuses.find(
-    d => d.authorParticipantId === authorParticipantId && d.subjectParticipantId === subjectParticipantId,
-  );
+  return statuses.find(d => d.authorUserId === authorUserId && d.subjectUserId === subjectUserId);
 }
 
 /**
@@ -267,9 +259,7 @@ export function directionOf(
  * (author, subject, round) refused it) — the caller answers idempotently.
  */
 export async function submitAttempt(opts: {
-  authorParticipantId: string;
-  subjectParticipantId: string;
-  /** work-k5fk.3 (6a): the seats of the two participants (one session, so same-session is the key). */
+  /** The two participants are (sessionId, authorUserId) and (sessionId, subjectUserId). */
   sessionId: string;
   authorUserId: string;
   subjectUserId: string;
@@ -282,8 +272,6 @@ export async function submitAttempt(opts: {
     return await prisma.$transaction(async tx => {
       const attempt = (await tx.empathyAttempt.create({
         data: {
-          authorParticipantId: opts.authorParticipantId,
-          subjectParticipantId: opts.subjectParticipantId,
           sessionId: opts.sessionId,
           authorUserId: opts.authorUserId,
           subjectUserId: opts.subjectUserId,
@@ -296,8 +284,6 @@ export async function submitAttempt(opts: {
       })) as AttemptRow;
       await tx.consent.create({
         data: {
-          participantId: opts.authorParticipantId,
-          requestedByParticipantId: opts.authorParticipantId,
           sessionId: opts.sessionId,
           userId: opts.authorUserId,
           requestedByUserId: opts.authorUserId,
@@ -363,8 +349,7 @@ export async function jobMoveIfUnchanged(
   return getJobPrisma().$transaction(async tx => {
     // Lock order as in app.empathy_set_status: the session row, then the attempt.
     await tx.$queryRaw`SELECT s.id FROM session s
-      WHERE s.id = (SELECT p.session_id FROM empathy_attempt a JOIN participant p ON p.id = a.author_participant_id
-                    WHERE a.id = ${attemptId}::uuid)
+      WHERE s.id = (SELECT a.session_id FROM empathy_attempt a WHERE a.id = ${attemptId}::uuid)
       FOR NO KEY UPDATE`;
     const rows = await tx.$queryRaw<
       Array<{ status_version: number; status: TargetEmpathyStatus }>
@@ -405,7 +390,8 @@ export async function markAttemptDelivery(
 export interface ReviewRow {
   id: string;
   attemptId: string;
-  reviewerParticipantId: string;
+  sessionId: string;
+  reviewerUserId: string;
   validated: boolean;
   feedback: string | null;
   feedbackSentAt: Date | null;
@@ -416,7 +402,8 @@ export interface ReviewRow {
 const REVIEW_SELECT = {
   id: true,
   attemptId: true,
-  reviewerParticipantId: true,
+  sessionId: true,
+  reviewerUserId: true,
   validated: true,
   feedback: true,
   feedbackSentAt: true,
@@ -425,9 +412,11 @@ const REVIEW_SELECT = {
 } as const;
 
 /** The subject's review of an attempt (the reviewer reads their own). */
-export async function reviewOf(attemptId: string, reviewerParticipantId: string): Promise<ReviewRow | null> {
+export async function reviewOf(attemptId: string, reviewer: Seat): Promise<ReviewRow | null> {
   return prisma.empathyReview.findUnique({
-    where: { attemptId_reviewerParticipantId: { attemptId, reviewerParticipantId } },
+    where: {
+      attemptId_sessionId_reviewerUserId: { attemptId, sessionId: reviewer.sessionId, reviewerUserId: reviewer.userId },
+    },
     select: REVIEW_SELECT,
   });
 }
@@ -438,11 +427,8 @@ export async function reviewOf(attemptId: string, reviewerParticipantId: string)
  * `validated` flag included"; fix1 m2). A positive verdict reaches the author
  * through their own round's status (VALIDATED), never through this row.
  */
-export async function reviewVisibleToAuthor(
-  attemptId: string,
-  subjectParticipantId: string,
-): Promise<ReviewRow | null> {
-  const review = await reviewOf(attemptId, subjectParticipantId);
+export async function reviewVisibleToAuthor(attemptId: string, subject: Seat): Promise<ReviewRow | null> {
+  const review = await reviewOf(attemptId, subject);
   if (!review) return null;
   return review.feedbackSentAt ? review : null;
 }
@@ -456,8 +442,7 @@ export async function reviewVisibleToAuthor(
  */
 export async function recordReview(opts: {
   attemptId: string;
-  reviewerParticipantId: string;
-  /** work-k5fk.3 (6a): the reviewer's seat; the key makes the reviewer the attempt's subject. */
+  /** The reviewer's seat is (sessionId, reviewerUserId); the key makes the reviewer the attempt's subject. */
   sessionId: string;
   reviewerUserId: string;
   validated: boolean;
@@ -471,11 +456,14 @@ export async function recordReview(opts: {
   };
   return prisma.empathyReview.upsert({
     where: {
-      attemptId_reviewerParticipantId: { attemptId: opts.attemptId, reviewerParticipantId: opts.reviewerParticipantId },
+      attemptId_sessionId_reviewerUserId: {
+        attemptId: opts.attemptId,
+        sessionId: opts.sessionId,
+        reviewerUserId: opts.reviewerUserId,
+      },
     },
     create: {
       attemptId: opts.attemptId,
-      reviewerParticipantId: opts.reviewerParticipantId,
       sessionId: opts.sessionId,
       reviewerUserId: opts.reviewerUserId,
       ...data,
@@ -501,15 +489,17 @@ export interface DraftRow {
 
 /**
  * Upsert one draft point in ONE statement (TS-9's pattern,
- * stream-turn-actions.ts): `INSERT … ON CONFLICT (participant, kind, point)
+ * stream-turn-actions.ts): `INSERT … ON CONFLICT (session, user, kind, point)
  * DO UPDATE`. `readyToShare` undefined keeps the stored value.
  */
 export async function upsertDraft(
   opts: {
-    participantId: string;
+    /** The draft's owner. */
+    seat: Seat;
     kind: 'EMPATHY' | 'VALIDATION_FEEDBACK';
-    aboutParticipantId?: string;
-    /** EMPATHY before the partner has joined (work-99k2); ignored when aboutParticipantId is given. */
+    /** EMPATHY: the subject's user id (a participant of the owner's session). */
+    aboutUserId?: string;
+    /** EMPATHY before the partner has joined (work-99k2); ignored when aboutUserId is given. */
     invitationId?: string;
     attemptId?: string;
     content: string;
@@ -517,20 +507,19 @@ export async function upsertDraft(
   },
   client: DbClient = prisma,
 ): Promise<DraftRow> {
-  const about = opts.kind === 'EMPATHY' ? (opts.aboutParticipantId ?? null) : null;
+  const about = opts.kind === 'EMPATHY' ? (opts.aboutUserId ?? null) : null;
   const invitation = opts.kind === 'EMPATHY' && !about ? (opts.invitationId ?? null) : null;
   const attempt = opts.kind === 'VALIDATION_FEEDBACK' ? (opts.attemptId ?? null) : null;
   const ready = typeof opts.readyToShare === 'boolean' ? opts.readyToShare : null;
   const rows = decryptRawRows(
     await client.$queryRaw<
       Array<{ id: string; content: string; ready_to_share: boolean; version: number; updated_at: Date }>
-    >`INSERT INTO draft (participant_id, session_id, user_id, kind, about_participant_id, about_user_id, invitation_id, attempt_id,
+    >`INSERT INTO draft (session_id, user_id, kind, about_user_id, invitation_id, attempt_id,
                        content, ready_to_share, version)
-    VALUES (${opts.participantId}::uuid, (SELECT p.session_id FROM participant p WHERE p.id = ${opts.participantId}::uuid),
-            (SELECT p.user_id FROM participant p WHERE p.id = ${opts.participantId}::uuid), ${opts.kind}::draft_kind, ${about}::uuid,
-            (SELECT a.user_id FROM participant a WHERE a.id = ${about}::uuid), ${invitation}::uuid, ${attempt}::uuid,
+    VALUES (${opts.seat.sessionId}::uuid, ${opts.seat.userId}::uuid, ${opts.kind}::draft_kind, ${about}::uuid,
+            ${invitation}::uuid, ${attempt}::uuid,
             ${encryptColumnValue('draft', 'content', opts.content)}, coalesce(${ready}::boolean, false), 1)
-    ON CONFLICT (participant_id, kind, (coalesce(about_participant_id, invitation_id, attempt_id, share_offer_id)))
+    ON CONFLICT (session_id, user_id, kind, (coalesce(about_user_id, invitation_id, attempt_id, share_offer_id)))
     DO UPDATE SET content = EXCLUDED.content,
                   ready_to_share = coalesce(${ready}::boolean, draft.ready_to_share),
                   version = draft.version + 1,
@@ -551,36 +540,38 @@ export async function upsertDraft(
 }
 
 export async function findDraft(opts: {
-  participantId: string;
+  seat: Seat;
   kind: 'EMPATHY' | 'VALIDATION_FEEDBACK';
-  aboutParticipantId?: string;
+  aboutUserId?: string;
   invitationId?: string;
   attemptId?: string;
 }): Promise<DraftRow | null> {
   const point =
     opts.kind === 'VALIDATION_FEEDBACK'
       ? { attemptId: opts.attemptId }
-      : opts.aboutParticipantId
-        ? { aboutParticipantId: opts.aboutParticipantId }
+      : opts.aboutUserId
+        ? { aboutUserId: opts.aboutUserId }
         : { invitationId: opts.invitationId };
   // An undefined arc would match any draft of the kind; there is no such point.
   if (!Object.values(point)[0]) return null;
   return prisma.draft.findFirst({
-    where: { participantId: opts.participantId, kind: opts.kind, ...point },
+    where: { sessionId: opts.seat.sessionId, userId: opts.seat.userId, kind: opts.kind, ...point },
     select: { id: true, content: true, readyToShare: true, version: true, updatedAt: true, reopenedAt: true },
   });
 }
 
 /**
- * What an EMPATHY draft is about (spec §1.1 draft, work-99k2): the partner's
- * participant, or — written before the partner has joined — the pending
+ * What an EMPATHY draft is about (spec §1.1 draft, work-99k2): the partner
+ * (their user id; the session is the draft's), or — written before the partner has joined — the pending
  * invitation that will become them. Exactly one (the exclusive-arc CHECK on draft, tables.sql).
  */
-export type EmpathySubject = { aboutParticipantId: string } | { invitationId: string };
+export type EmpathySubject = { aboutUserId: string } | { invitationId: string };
 
 /** Delete the caller's EMPATHY draft about this subject ("set aside", work-99k2). Returns whether one existed. */
-export async function deleteEmpathyDraft(participantId: string, subject: EmpathySubject): Promise<boolean> {
-  const { count } = await prisma.draft.deleteMany({ where: { participantId, kind: 'EMPATHY', ...subject } });
+export async function deleteEmpathyDraft(seat: Seat, subject: EmpathySubject): Promise<boolean> {
+  const { count } = await prisma.draft.deleteMany({
+    where: { sessionId: seat.sessionId, userId: seat.userId, kind: 'EMPATHY', ...subject },
+  });
   return count > 0;
 }
 
@@ -596,18 +587,18 @@ export async function deleteEmpathyDraft(participantId: string, subject: Empathy
  * or waits until the caller's transaction ends.
  */
 export async function openInvitationOf(
-  participantId: string,
+  seat: Seat,
   client: DbClient = prisma,
   lock = false,
 ): Promise<{ id: string; status: string } | null> {
   const rows = lock
     ? await client.$queryRaw<Array<{ id: string; status: string }>>`
         SELECT id, status::text AS status FROM invitation
-        WHERE invited_by_participant_id = ${participantId}::uuid
+        WHERE session_id = ${seat.sessionId}::uuid AND invited_by_user_id = ${seat.userId}::uuid
         ORDER BY created_at DESC LIMIT 1 FOR SHARE`
     : await client.$queryRaw<Array<{ id: string; status: string }>>`
         SELECT id, status::text AS status FROM invitation
-        WHERE invited_by_participant_id = ${participantId}::uuid
+        WHERE session_id = ${seat.sessionId}::uuid AND invited_by_user_id = ${seat.userId}::uuid
         ORDER BY created_at DESC LIMIT 1`;
   const inv = rows[0];
   return inv && inv.status !== 'ACCEPTED' ? inv : null;
@@ -625,7 +616,7 @@ export async function lockInvitationForAccept(tx: DbClient, invitationId: string
 /**
  * At accept, inside the transaction that creates the invitee's participant:
  * re-point every draft about the invitation to that participant
- * (about_participant_id = participant, invitation_id = NULL). Returns the count.
+ * (about_user_id = the invitee, invitation_id = NULL). Returns the count.
  *
  * A move (delete, then insert the same row with the new arc), not an UPDATE:
  * the row's touch_updated_at trigger would stamp updated_at with the join
@@ -639,7 +630,8 @@ export async function lockInvitationForAccept(tx: DbClient, invitationId: string
 export async function repointInvitationDrafts(
   tx: DbClient,
   invitationId: string,
-  about: { id: string; userId: string },
+  /** The invitee's new participant (of the invitation's session). */
+  about: Seat,
 ): Promise<number> {
   // The rows themselves FOR UPDATE too (the invitation lock is the protocol;
   // this keeps the move safe from any writer that skips it).
@@ -650,11 +642,9 @@ export async function repointInvitationDrafts(
     await tx.draft.create({
       data: {
         id: d.id,
-        participantId: d.participantId,
         sessionId: d.sessionId,
         userId: d.userId,
         kind: d.kind,
-        aboutParticipantId: about.id,
         aboutUserId: about.userId,
         content: d.content,
         readyToShare: d.readyToShare,
@@ -670,14 +660,16 @@ export async function repointInvitationDrafts(
 
 /** Has the author GRANTED a submission consent on any round of this direction (m12: any round, not only the newest)? */
 export async function grantedSubmissionConsent(
-  authorParticipantId: string,
-  subjectParticipantId: string,
+  sessionId: string,
+  authorUserId: string,
+  subjectUserId: string,
 ): Promise<boolean> {
   const n = await prisma.consent.count({
     where: {
-      participantId: authorParticipantId,
+      sessionId,
+      userId: authorUserId,
       decision: 'GRANTED',
-      empathyAttempt: { authorParticipantId, subjectParticipantId },
+      empathyAttempt: { sessionId, authorUserId, subjectUserId },
     },
   });
   return n > 0;

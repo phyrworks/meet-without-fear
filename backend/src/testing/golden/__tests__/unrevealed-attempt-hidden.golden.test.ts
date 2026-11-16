@@ -193,7 +193,7 @@ describe(`golden: ${SCENARIO}`, () => {
         (
           await c.query<{ round: number; status: string; revealed: boolean }>(
             `SELECT a.round, a.status::text AS status, a.revealed_at IS NOT NULL AS revealed FROM empathy_attempt a
-             JOIN participant p ON p.id = a.author_participant_id JOIN "user" u ON u.id = p.user_id
+             JOIN "user" u ON u.id = a.author_user_id
              WHERE u.email = 'ada@e2e.test' ORDER BY a.round`,
           )
         ).rows,

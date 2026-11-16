@@ -62,20 +62,20 @@ describeTarget('share acceptance and the notification path (mwf_app + mwf_job, i
     const delivered = await rows<{ owner: string; sender: string; kind: string; content: string }>(
       `SELECT ou.email AS owner, su.email AS sender, m.kind::text AS kind, m.content
        FROM message m JOIN conversation c ON c.id = m.conversation_id
-       JOIN participant op ON op.id = c.participant_id JOIN "user" ou ON ou.id = op.user_id
-       JOIN participant sp ON sp.id = m.sender_participant_id JOIN "user" su ON su.id = sp.user_id
+       JOIN "user" ou ON ou.id = c.user_id
+       JOIN "user" su ON su.id = m.sender_user_id
        WHERE m.kind = 'SHARED_CONTEXT'`,
     );
     expect(delivered).toEqual([
       { owner: 'ada@e2e.test', sender: 'bob@e2e.test', kind: 'SHARED_CONTEXT', content: offer.shared },
     ]);
     const [attempt] = await rows<{ status: string }>(
-      `SELECT a.status::text AS status FROM empathy_attempt a JOIN participant p ON p.id = a.author_participant_id
-       JOIN "user" u ON u.id = p.user_id WHERE u.email = 'ada@e2e.test'`,
+      `SELECT a.status::text AS status FROM empathy_attempt a
+       JOIN "user" u ON u.id = a.author_user_id WHERE u.email = 'ada@e2e.test'`,
     );
     expect(attempt.status).toBe('REFINING');
     const [consent] = await rows<{ decision: string; requester: string | null }>(
-      `SELECT decision::text AS decision, requested_by_participant_id AS requester FROM consent WHERE share_offer_id IS NOT NULL`,
+      `SELECT decision::text AS decision, requested_by_user_id AS requester FROM consent WHERE share_offer_id IS NOT NULL`,
     );
     expect(consent).toEqual({ decision: 'GRANTED', requester: null });
   });

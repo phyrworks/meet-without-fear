@@ -56,11 +56,11 @@ async function otherHumans(sessionIds: string[], userId: string): Promise<Map<st
   if (sessionIds.length === 0) return out;
   const rows = await prisma.participant.findMany({
     where: { sessionId: { in: sessionIds }, kind: 'human', userId: { not: userId } },
-    orderBy: [{ joinedAt: 'asc' }, { id: 'asc' }],
+    orderBy: [{ joinedAt: 'asc' }, { userId: 'asc' }],
     select: { sessionId: true, userId: true, user: { select: { firstName: true, name: true } } },
   });
   for (const r of rows) {
-    if (!r.userId || out.has(r.sessionId)) continue;
+    if (out.has(r.sessionId)) continue;
     out.set(r.sessionId, { userId: r.userId, firstName: r.user?.firstName ?? null, name: r.user?.name ?? null });
   }
   return out;

@@ -48,8 +48,8 @@ describeTarget('Stage 0 confirmations on the target (mwf_app; status by mwf_job)
   const adaMilestones = async () =>
     (
       await run.sql<{ k: string }>(
-        `SELECT milestone_key AS k FROM participant_milestone WHERE participant_id = $1 ORDER BY k`,
-        [ids.ada],
+        `SELECT milestone_key AS k FROM participant_milestone WHERE session_id = $1 AND user_id = $2 ORDER BY k`,
+        [ids.session, ids.adaUser],
       )
     ).map(r => r.k);
 

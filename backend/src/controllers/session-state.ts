@@ -77,12 +77,9 @@ async function acceptPendingInvitationForE2ESession(sessionId: string, userId: s
         topicFrame: { not: null },
         topicFrameConfirmedAt: { not: null },
       },
-      invitedByParticipant: { userId: { not: userId } },
+      invitedByUserId: { not: userId },
       messageConfirmedAt: { not: null },
       expiresAt: { gt: new Date() },
-    },
-    include: {
-      invitedByParticipant: { select: { userId: true } },
     },
   });
 
@@ -94,24 +91,24 @@ async function acceptPendingInvitationForE2ESession(sessionId: string, userId: s
   await tooling.$transaction(async tx => {
     await lockInvitationForAccept(tx, invitation.id); // as acceptInvitation (work-99k2)
     // As acceptInvitation (work-k5fk.2): the invitee is added by the inviter; nothing is written for the inviter.
-    const inviterUserId = invitation.invitedByParticipant.userId;
+    const inviterUserId = invitation.invitedByUserId;
 
-    const participant = await tx.participant.upsert({
+    await tx.participant.upsert({
       where: { sessionId_userId: { sessionId, userId } },
       create: { sessionId, userId, kind: 'human', addedByUserId: inviterUserId },
       update: {},
-      select: { id: true },
+      select: { sessionId: true },
     });
-    const main = await tx.conversation.findFirst({ where: { participantId: participant.id, kind: 'MAIN' } });
-    if (!main)
-      await tx.conversation.create({ data: { participantId: participant.id, sessionId, userId, kind: 'MAIN' } });
+    const seat = { sessionId, userId };
+    const main = await tx.conversation.findFirst({ where: { ...seat, kind: 'MAIN' } });
+    if (!main) await tx.conversation.create({ data: { ...seat, kind: 'MAIN' } });
     await tx.conversationReadState.upsert({
-      where: { participantId: participant.id },
-      create: { participantId: participant.id, sessionId, userId },
+      where: { sessionId_userId: seat },
+      create: { ...seat },
       update: {},
     });
     // As acceptInvitation (work-99k2): pre-join empathy drafts follow the invitee.
-    await repointInvitationDrafts(tx, invitation.id, { id: participant.id, userId });
+    await repointInvitationDrafts(tx, invitation.id, seat);
 
     await tx.invitation.update({
       where: { id: invitation.id },
@@ -125,7 +122,7 @@ async function acceptPendingInvitationForE2ESession(sessionId: string, userId: s
   });
 
   // As acceptInvitation: an accepted invitation was sent, so the inviter leaves stage 0 (work-qmgc).
-  await reachInvitationSentOnAccept(invitation.invitedByParticipantId, acceptedAt);
+  await reachInvitationSentOnAccept({ sessionId, userId: invitation.invitedByUserId }, acceptedAt);
 
   logger.info('[getSessionState] E2E auto-accepted pending session invitation', {
     sessionId,
@@ -175,7 +172,6 @@ export async function getSessionState(req: Request, res: Response): Promise<void
       prisma.invitation.findFirst({
         where: { sessionId },
         orderBy: { createdAt: 'desc' },
-        include: { invitedByParticipant: { select: { userId: true } } },
       }),
       // The caller's own reflection linked to this session (Inner Work is
       // private to its author: filtered by the caller's user id).
@@ -187,10 +183,10 @@ export async function getSessionState(req: Request, res: Response): Promise<void
       // Messages (initial page): the caller's own conversation is the audience.
       listConversationMessages({ conversationId, limit: INITIAL_SESSION_MESSAGE_LIMIT, order: 'desc' }),
       prisma.conversationReadState.findUnique({
-        where: { participantId: me.id },
+        where: { sessionId_userId: { sessionId: me.sessionId, userId: me.userId } },
         select: { lastViewedAt: true, lastActiveAt: true, lastSeenMessageId: true },
       }),
-      getPartnerParticipant(me.id),
+      getPartnerParticipant(me),
     ]);
 
     if (!session) {
@@ -199,12 +195,13 @@ export async function getSessionState(req: Request, res: Response): Promise<void
     }
 
     const paused = await isSessionPaused(sessionId);
+    const partnerSeat = partner ? { sessionId, userId: partner.userId } : null;
     const stages = await loadStageStates([
-      { id: me.id, joinedAt: me.joinedAt },
-      ...(partner ? [{ id: partner.participantId, joinedAt: partner.joinedAt }] : []),
+      me,
+      ...(partner && partnerSeat ? [{ ...partnerSeat, joinedAt: partner.joinedAt }] : []),
     ]);
-    const myState = stages.get(me.id);
-    const partnerState = partner ? stages.get(partner.participantId) : undefined;
+    const myState = stages.get(me);
+    const partnerState = partnerSeat ? stages.get(partnerSeat) : undefined;
 
     // The other human, and what I call them (my own user_contact entry; work-k5fk.2)
     const partnerMember = await loadSessionPartner(sessionId, user.id);
@@ -228,7 +225,7 @@ export async function getSessionState(req: Request, res: Response): Promise<void
       ? null
       : ((await pendingInviteeNames([sessionId], user.id)).get(sessionId) ?? null);
 
-    const presence = partner ? await getCoParticipantPresence(partner.participantId) : null;
+    const presence = partner ? await getCoParticipantPresence({ sessionId, userId: partner.userId }) : null;
     const partnerShowsActivity = presence?.showsActivity ?? true;
     const partnerLastRow = partnerState ? latestStageRow(partnerState.rows) : null;
     const partnerLastActiveAt = partnerShowsActivity
@@ -250,7 +247,7 @@ export async function getSessionState(req: Request, res: Response): Promise<void
 
     // Build invitation response
     const invitation = latestInvitation;
-    const invitedByUserId = invitation?.invitedByParticipant.userId ?? null;
+    const invitedByUserId = invitation?.invitedByUserId ?? null;
     const isInviter = invitedByUserId === user.id;
     const invitationResponse = invitation
       ? {

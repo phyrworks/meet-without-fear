@@ -15,8 +15,9 @@
  *     - a human joining a RESOLVED session makes no pair;
  *     - a human joining after the AI or a persona is seated pairs with the
  *       humans only;
- *     - a modeled adder is refused; the kind and added_by triggers' UPDATE arms
- *       refuse too, with the one generic message;
+ *     - an AI adder is refused, and the added_by trigger's UPDATE arm refuses
+ *       too, with the one generic message; an UPDATE of a seat's kind away from
+ *       its user's kind is refused by the FK (user_id, kind) -> "user" (work-k5fk.3);
  *     - a participant who has left is never paired with, and a row inserted
  *       already left pairs nothing.
  *
@@ -233,11 +234,11 @@ describeTarget('live_session_pair under concurrency and on every release path (w
     it('a human joining a RESOLVED session makes no pair', async () => {
       const ken = await human('Ken');
       const s = await session(ada);
-      // A modeled conversation (Ada + the AI) can go ACTIVE and RESOLVED with one human.
+      // A conversation of Ada and the AI can go ACTIVE and RESOLVED with one human.
       await run.as(
         'mwf_app',
         ada,
-        `INSERT INTO participant (session_id, user_id, kind, added_by_user_id) VALUES ($1, $2, 'modeled', $3)`,
+        `INSERT INTO participant (session_id, user_id, kind, added_by_user_id) VALUES ($1, $2, 'ai', $3)`,
         [s, aiUser, ada],
       );
       await run.as('mwf_job', null, `SELECT app.session_set_status($1::uuid, 'ACTIVE')`, [s]);
@@ -254,12 +255,15 @@ describeTarget('live_session_pair under concurrency and on every release path (w
         [ada],
       );
       const s = await session(ada);
-      for (const u of [aiUser, persona.id])
+      for (const [u, kind] of [
+        [aiUser, 'ai'],
+        [persona.id, 'persona'],
+      ])
         await run.as(
           'mwf_app',
           ada,
-          `INSERT INTO participant (session_id, user_id, kind, added_by_user_id) VALUES ($1, $2, 'modeled', $3)`,
-          [s, u, ada],
+          `INSERT INTO participant (session_id, user_id, kind, added_by_user_id) VALUES ($1, $2, $3::user_kind, $4)`,
+          [s, u, kind, ada],
         );
       await join(s, ken, ada);
       expect(await pairs(s)).toEqual([pair(ada, ken)]);
@@ -284,25 +288,25 @@ describeTarget('live_session_pair under concurrency and on every release path (w
   });
 
   describe('F3: who may add whom, on INSERT and on UPDATE (one generic refusal)', () => {
-    it('a modeled adder is refused', async () => {
+    it('an AI adder is refused', async () => {
       const ken = await human('Ken');
       const s = await session(ada);
       await run.as(
         'mwf_app',
         ada,
-        `INSERT INTO participant (session_id, user_id, kind, added_by_user_id) VALUES ($1, $2, 'modeled', $3)`,
+        `INSERT INTO participant (session_id, user_id, kind, added_by_user_id) VALUES ($1, $2, 'ai', $3)`,
         [s, aiUser, ada],
       );
       expect(await failure(run.sql(JOIN, [s, ken, aiUser]))).toEqual({ code: '23514', message: 'participant refused' });
     });
 
-    it('the kind trigger refuses an UPDATE that would make the AI a human, or a human modeled', async () => {
+    it('the kind FK refuses an UPDATE that would make the AI a human, or a human the AI', async () => {
       const ken = await human('Ken');
       const s = await session(ada);
       await run.as(
         'mwf_app',
         ada,
-        `INSERT INTO participant (session_id, user_id, kind, added_by_user_id) VALUES ($1, $2, 'modeled', $3)`,
+        `INSERT INTO participant (session_id, user_id, kind, added_by_user_id) VALUES ($1, $2, 'ai', $3)`,
         [s, aiUser, ada],
       );
       await join(s, ken, ada);
@@ -310,15 +314,13 @@ describeTarget('live_session_pair under concurrency and on every release path (w
         await failure(
           run.sql(`UPDATE participant SET kind = 'human' WHERE session_id = $1 AND user_id = $2`, [s, aiUser]),
         ),
-      ).toEqual({ code: '23514', message: 'participant refused' });
+      ).toEqual({ code: '23503', message: expect.stringContaining('"participant_user_id_kind_fkey"') });
       expect(
-        await failure(
-          run.sql(`UPDATE participant SET kind = 'modeled' WHERE session_id = $1 AND user_id = $2`, [s, ken]),
-        ),
-      ).toEqual({ code: '23514', message: 'participant refused' });
+        await failure(run.sql(`UPDATE participant SET kind = 'ai' WHERE session_id = $1 AND user_id = $2`, [s, ken])),
+      ).toEqual({ code: '23503', message: expect.stringContaining('"participant_user_id_kind_fkey"') });
     });
 
-    it('the added_by trigger refuses an UPDATE to a modeled adder or a persona’s non-owner', async () => {
+    it('the added_by trigger refuses an UPDATE to an AI adder or a persona’s non-owner', async () => {
       const ken = await human('Ken');
       const [persona] = await run.sql<{ id: string }>(
         `WITH u AS (INSERT INTO "user" (kind, first_name) VALUES ('persona', 'P') RETURNING id)
@@ -327,12 +329,15 @@ describeTarget('live_session_pair under concurrency and on every release path (w
       );
       const s = await session(ada);
       await join(s, ken, ada);
-      for (const u of [aiUser, persona.id])
+      for (const [u, kind] of [
+        [aiUser, 'ai'],
+        [persona.id, 'persona'],
+      ])
         await run.as(
           'mwf_app',
           ada,
-          `INSERT INTO participant (session_id, user_id, kind, added_by_user_id) VALUES ($1, $2, 'modeled', $3)`,
-          [s, u, ada],
+          `INSERT INTO participant (session_id, user_id, kind, added_by_user_id) VALUES ($1, $2, $3::user_kind, $4)`,
+          [s, u, kind, ada],
         );
       expect(
         await failure(

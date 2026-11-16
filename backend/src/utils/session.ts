@@ -5,7 +5,7 @@
  */
 
 import { prisma } from '../lib/prisma';
-import { getPartnerUserIdFor, resolveParticipant, seatOfParticipant } from '../services/participant-resolver';
+import { getPartnerUserIdFor, resolveParticipant, type Seat } from '../services/participant-resolver';
 import {
   SessionSummaryDTO,
   SessionStatusSummary,
@@ -64,7 +64,7 @@ type SessionWithIncludes = {
 export async function departedParticipantUsers(sessionIds: string[]): Promise<Set<string>> {
   if (sessionIds.length === 0) return new Set();
   const rows = await prisma.participant.findMany({
-    where: { sessionId: { in: sessionIds }, kind: 'human', leftAt: { not: null }, userId: { not: null } },
+    where: { sessionId: { in: sessionIds }, kind: 'human', leftAt: { not: null } },
     select: { sessionId: true, userId: true },
   });
   return new Set(rows.map(r => `${r.sessionId}:${r.userId}`));
@@ -80,18 +80,12 @@ export const FORMER_PARTICIPANT_NAME = 'Former participant';
  * This is intentionally separate from lastViewedAt, which is read-state used
  * for unread indicators and chat animation boundaries.
  */
-export async function touchParticipantActivity(participantId: string, at: Date = new Date()): Promise<void> {
-  // The read state is written with the participant; the create arm (a missing row) reads the seat it
-  // carries (work-k5fk.3), so the common path stays one statement.
-  const { count } = await prisma.conversationReadState.updateMany({
-    where: { participantId },
-    data: { lastActiveAt: at },
-  });
-  if (count > 0) return;
+export async function touchParticipantActivity(seat: Seat, at: Date = new Date()): Promise<void> {
+  // The read state is keyed by the participant's seat (its PK since work-k5fk.3).
   await prisma.conversationReadState.upsert({
-    where: { participantId },
+    where: { sessionId_userId: { sessionId: seat.sessionId, userId: seat.userId } },
     update: { lastActiveAt: at },
-    create: { participantId, ...(await seatOfParticipant(participantId)), lastActiveAt: at },
+    create: { sessionId: seat.sessionId, userId: seat.userId, lastActiveAt: at },
   });
 }
 
@@ -105,7 +99,7 @@ export async function touchUserSessionActivity(
   at: Date = new Date(),
 ): Promise<void> {
   const participant = await resolveParticipant(sessionId, userId);
-  if (participant) await touchParticipantActivity(participant.id, at);
+  if (participant) await touchParticipantActivity(participant, at);
 }
 
 /**
@@ -123,7 +117,7 @@ export async function getPartnerUserId(sessionId: string, currentUserId: string)
  */
 export async function isSessionCreator(sessionId: string, userId: string): Promise<boolean> {
   const invitation = await prisma.invitation.findFirst({
-    where: { sessionId, invitedByParticipant: { userId } },
+    where: { sessionId, invitedByUserId: userId },
     select: { id: true },
   });
 

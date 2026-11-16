@@ -207,25 +207,25 @@ async function fetchLinkedPartnerSessionContext(
         select: { topicFrame: true },
       }),
       getNicknameForSessionPartner(partnerSessionId, userId),
-      getCoParticipants(me.id),
-      loadCurrentStages([me.id]),
-      loadSharedVesselFor(me.id),
+      getCoParticipants(me),
+      loadCurrentStages([me]),
+      loadSharedVesselFor(me),
     ]);
     if (!session) return null;
 
     // MY nickname for the partner (what I call them), then their display name.
-    // The present human, else one who left; never a modeled seat (work-k5fk.2 review F7).
+    // The present human, else one who left; never an AI or persona seat (work-k5fk.2 review F7).
     const partner =
       coParticipants.find(c => c.kind === 'human' && !c.leftAt) ?? coParticipants.find(c => c.kind === 'human');
     const partnerName = myNickname || partner?.displayName || 'Partner';
 
-    const currentStage = stages.get(me.id)?.stage || 1;
+    const currentStage = stages.get(me)?.stage || 1;
 
     // The user's conversation view: their own turns and the AI's replies to them.
     const [userMessages, aiMessages] = me.mainConversationId
       ? await Promise.all([
           prisma.message.findMany({
-            where: { conversationId: me.mainConversationId, senderParticipantId: me.id, role: 'USER', kind: 'CHAT' },
+            where: { conversationId: me.mainConversationId, senderUserId: me.userId, role: 'USER', kind: 'CHAT' },
             orderBy: { createdAt: 'desc' },
             take: 10,
             select: { role: true, content: true, createdAt: true },
@@ -246,7 +246,7 @@ async function fetchLinkedPartnerSessionContext(
       }));
 
     const userDraft = await prisma.draft.findFirst({
-      where: { participantId: me.id, kind: 'EMPATHY' },
+      where: { sessionId: me.sessionId, userId: me.userId, kind: 'EMPATHY' },
       orderBy: { updatedAt: 'desc' },
       select: { content: true, readyToShare: true },
     });

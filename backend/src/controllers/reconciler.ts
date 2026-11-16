@@ -73,7 +73,7 @@ async function reconcilerCaller(req: Request, res: Response): Promise<Reconciler
     prisma.session.findUnique({ where: { id: sessionId }, select: { status: true } }),
     sessionParties(sessionId),
   ]);
-  const me = partyOf(parties, { participantId: req.participant?.id }) ?? partyOf(parties, { userId: user.id });
+  const me = partyOf(parties, { userId: user.id });
   if (!session || !me) {
     errorResponse(res, 'NOT_FOUND', 'Session not found or access denied', 404);
     return null;
@@ -99,14 +99,14 @@ async function myOpenOffer(sessionId: string, me: SessionParty, where: { id?: st
   return prisma.contextShareOffer.findFirst({
     where: {
       ...(where.id ? { id: where.id } : {}),
-      subjectParticipantId: me.participantId,
+      sessionId,
+      subjectUserId: me.userId,
       status: { in: ['OFFERED', 'PENDING'] },
-      attempt: { authorParticipant: { sessionId } },
     },
     orderBy: { createdAt: 'desc' },
     include: {
       result: true,
-      attempt: { select: { id: true, authorParticipantId: true, status: true, statusVersion: true } },
+      attempt: { select: { id: true, authorUserId: true, status: true, statusVersion: true } },
     },
   });
 }
@@ -137,7 +137,7 @@ export async function runReconcilerHandler(req: Request, res: Response): Promise
     }
 
     const result = await runReconciler(caller.sessionId, parseResult.data.forUserId, {
-      forParticipantId: caller.me.participantId,
+      viewerUserId: caller.me.userId,
       persist: true,
     });
 
@@ -164,7 +164,7 @@ export async function getReconcilerStatusHandler(req: Request, res: Response): P
   try {
     const caller = await reconcilerCaller(req, res);
     if (!caller) return;
-    const status = await getReconcilerStatus(caller.sessionId, caller.me.participantId);
+    const status = await getReconcilerStatus({ sessionId: caller.sessionId, userId: caller.me.userId });
     const response: ReconcilerStatusResponse = {
       sessionId: caller.sessionId,
       hasRun: status.hasRun,
@@ -209,7 +209,7 @@ export async function getShareOfferHandler(req: Request, res: Response): Promise
       return;
     }
 
-    const guesser = partyOf(parties, { participantId: shareOffer.attempt.authorParticipantId });
+    const guesser = partyOf(parties, { userId: shareOffer.attempt.authorUserId });
     if (shareOffer.status === 'PENDING') {
       // The subject's own row (app connection).
       await prisma.contextShareOffer.update({
@@ -284,7 +284,7 @@ export async function respondToShareOfferHandler(req: Request, res: Response): P
     });
 
     if (result.status === 'shared' && result.guesserUpdated) {
-      const guesser = caller.parties.find(p => p.participantId !== caller.me.participantId);
+      const guesser = caller.parties.find(p => p.userId !== caller.me.userId);
       await notifyContextShared(caller.sessionId, caller.userId, guesser);
     }
 
@@ -315,7 +315,7 @@ export async function getReconcilerSummaryHandler(req: Request, res: Response): 
   try {
     const caller = await reconcilerCaller(req, res);
     if (!caller) return;
-    const status = await getReconcilerStatus(caller.sessionId, caller.me.participantId);
+    const status = await getReconcilerStatus({ sessionId: caller.sessionId, userId: caller.me.userId });
     if (!status.hasRun) {
       errorResponse(res, 'VALIDATION_ERROR', 'Reconciler has not run yet', 400);
       return;
@@ -324,7 +324,7 @@ export async function getReconcilerSummaryHandler(req: Request, res: Response): 
       errorResponse(res, 'VALIDATION_ERROR', 'Reconciliation not yet complete - pending share offers', 400);
       return;
     }
-    const summary = await generateReconcilerSummary(caller.sessionId, caller.me.participantId);
+    const summary = await generateReconcilerSummary({ sessionId: caller.sessionId, userId: caller.me.userId });
     if (!summary) {
       errorResponse(res, 'INTERNAL_ERROR', 'Failed to generate reconciler summary', 500);
       return;
@@ -349,11 +349,7 @@ export async function skipShareOfferHandler(req: Request, res: Response): Promis
     const caller = await reconcilerCaller(req, res);
     if (!caller) return;
     const open = await prisma.contextShareOffer.findFirst({
-      where: {
-        subjectParticipantId: caller.me.participantId,
-        status: 'OFFERED',
-        attempt: { authorParticipant: { sessionId: caller.sessionId } },
-      },
+      where: { sessionId: caller.sessionId, subjectUserId: caller.me.userId, status: 'OFFERED' },
       select: { id: true },
     });
     if (!open) {
@@ -384,7 +380,7 @@ export async function generateShareDraftHandler(req: Request, res: Response): Pr
       return;
     }
     const suggestedShareFocus = shareOffer.result.suggestedShareFocus;
-    const guesser = partyOf(parties, { participantId: shareOffer.attempt.authorParticipantId });
+    const guesser = partyOf(parties, { userId: shareOffer.attempt.authorUserId });
     const guesserName = guesser?.name || 'your partner';
     if (!suggestedShareFocus) {
       errorResponse(res, 'VALIDATION_ERROR', 'No share focus available', 400);
@@ -509,15 +505,14 @@ export async function refinementChatMessageHandler(req: Request, res: Response):
     const { sessionId, me, parties, userName } = caller;
 
     const shareOffer = await prisma.contextShareOffer.findFirst({
-      where: { id: offerId, subjectParticipantId: me.participantId, attempt: { authorParticipant: { sessionId } } },
-      include: { result: true, attempt: { select: { authorParticipantId: true } } },
+      where: { id: offerId, sessionId, subjectUserId: me.userId },
+      include: { result: true, attempt: { select: { authorUserId: true } } },
     });
     if (!shareOffer) {
       errorResponse(res, 'NOT_FOUND', 'Share offer not found', 404);
       return;
     }
-    const partnerName =
-      partyOf(parties, { participantId: shareOffer.attempt.authorParticipantId })?.name || 'your partner';
+    const partnerName = partyOf(parties, { userId: shareOffer.attempt.authorUserId })?.name || 'your partner';
 
     const systemPrompt = `You are Meet Without Fear, a brief coaching companion helping ${userName} refine what to share with ${partnerName}.
 
@@ -601,7 +596,7 @@ export async function refinementFinalizeHandler(req: Request, res: Response): Pr
       // deliver it now (idempotent) rather than answer 404 with nothing sent.
       const resumed = await resumeUndeliveredShare(sessionId, me, parties, { offerId });
       if (resumed) {
-        const guesser = parties.find(p => p.participantId !== me.participantId);
+        const guesser = parties.find(p => p.userId !== me.userId);
         await notifyContextShared(sessionId, userId, guesser);
         successResponse(res, {
           status: 'shared',
@@ -613,7 +608,7 @@ export async function refinementFinalizeHandler(req: Request, res: Response): Pr
       errorResponse(res, 'NOT_FOUND', 'Share offer not found or already finalized', 404);
       return;
     }
-    const guesser = partyOf(parties, { participantId: shareOffer.attempt.authorParticipantId });
+    const guesser = partyOf(parties, { userId: shareOffer.attempt.authorUserId });
     if (!guesser) {
       errorResponse(res, 'NOT_FOUND', 'Share offer not found or already finalized', 404);
       return;
@@ -622,11 +617,7 @@ export async function refinementFinalizeHandler(req: Request, res: Response): Pr
     const guesserName = guesser.name || 'your partner';
 
     const priorShareCount = await prisma.contextShareOffer.count({
-      where: {
-        subjectParticipantId: me.participantId,
-        status: 'ACCEPTED',
-        attempt: { authorParticipant: { sessionId } },
-      },
+      where: { sessionId, subjectUserId: me.userId, status: 'ACCEPTED' },
     });
     let subjectAckMessage: string;
     if (priorShareCount > 0) {
@@ -643,7 +634,8 @@ export async function refinementFinalizeHandler(req: Request, res: Response): Pr
         );
       } catch (error) {
         logger.error('[refinementFinalizeHandler] generatePostShareContinuation failed:', error);
-        const stage = (await loadCurrentStages([me.participantId])).get(me.participantId)?.stage ?? 2;
+        const mySeat = { sessionId, userId: me.userId };
+        const stage = (await loadCurrentStages([mySeat])).get(mySeat)?.stage ?? 2;
         subjectAckMessage = getFallbackContinuation(stage, guesserName);
       }
     }

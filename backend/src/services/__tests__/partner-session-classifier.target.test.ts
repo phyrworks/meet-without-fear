@@ -47,13 +47,12 @@ jest.setTimeout(180_000);
 let SESSION = '';
 let USER = '';
 let run: TargetRun;
-let adaParticipant = '';
 let runPartnerSessionClassifier: typeof import('../partner-session-classifier').runPartnerSessionClassifier;
 
 const savedNotableFacts = async (): Promise<CategorizedFactWithId[]> => {
   const [row] = await run.sql<{ doc: { facts: CategorizedFactWithId[] } }>(
-    `SELECT doc FROM ai_memory WHERE participant_id = $1 AND kind = 'NOTABLE_FACTS'`,
-    [adaParticipant],
+    `SELECT doc FROM ai_memory WHERE session_id = $1 AND user_id = $2 AND kind = 'NOTABLE_FACTS'`,
+    [SESSION, USER],
   );
   if (!row) throw new Error('no NOTABLE_FACTS document was written');
   return row.doc.facts;
@@ -65,14 +64,16 @@ describeTarget('partner-session classifier on the target (NOTABLE_FACTS by mwf_j
     const ids = await adaAndBob(run);
     SESSION = ids.session;
     USER = ids.adaUser;
-    adaParticipant = ids.ada;
     ({ runPartnerSessionClassifier } = await import('../partner-session-classifier'));
   });
   afterAll(async () => {
     if (run) await run.drop();
   });
   beforeEach(async () => {
-    await run.sql(`DELETE FROM ai_memory WHERE participant_id = $1 AND kind = 'NOTABLE_FACTS'`, [adaParticipant]);
+    await run.sql(`DELETE FROM ai_memory WHERE session_id = $1 AND user_id = $2 AND kind = 'NOTABLE_FACTS'`, [
+      SESSION,
+      USER,
+    ]);
   });
 
   it('writes nothing for another session’s participant (the job resolves the caller’s own participant)', async () => {

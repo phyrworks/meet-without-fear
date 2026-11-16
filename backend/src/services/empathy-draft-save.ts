@@ -19,6 +19,7 @@
 
 import { prisma, type DbClient } from '../lib/prisma';
 import { openInvitationOf, upsertDraft, type DraftRow, type EmpathySubject } from './empathy-store';
+import type { Seat } from './participant-resolver';
 
 export type SaveEmpathyDraftResult =
   | { status: 'saved'; draft: DraftRow; subject: EmpathySubject }
@@ -26,16 +27,17 @@ export type SaveEmpathyDraftResult =
   | { status: 'no_subject' };
 
 export async function saveEmpathyDraft(opts: {
-  participantId: string;
+  /** The draft's author. */
+  seat: Seat;
   content: string;
   readyToShare?: boolean;
   /** The author's explicit review choice (Send as is / Edit first) — the only write that ends a pending review. */
   resolvePreJoinReview?: boolean;
 }): Promise<SaveEmpathyDraftResult> {
   return prisma.$transaction(async tx => {
-    const invitation = await openInvitationOf(opts.participantId, tx, true);
+    const invitation = await openInvitationOf(opts.seat, tx, true);
     // After the lock: an accept that committed meanwhile is visible here.
-    const partners = await livePartnersOf(tx, opts.participantId);
+    const partners = await livePartnersOf(tx, opts.seat);
     const partner = partners.length === 1 ? partners[0] : null;
 
     if (!partner) {
@@ -43,7 +45,7 @@ export async function saveEmpathyDraft(opts: {
       const subject = { invitationId: invitation.id };
       const draft = await upsertDraft(
         {
-          participantId: opts.participantId,
+          seat: opts.seat,
           kind: 'EMPATHY',
           invitationId: invitation.id,
           content: opts.content,
@@ -54,7 +56,7 @@ export async function saveEmpathyDraft(opts: {
       return { status: 'saved', draft, subject };
     }
 
-    const pending = await lockPendingPreJoinDraft(tx, opts.participantId, partner.id);
+    const pending = await lockPendingPreJoinDraft(tx, opts.seat, partner.user_id);
     if (pending.length && !opts.resolvePreJoinReview) {
       const kept = await tx.draft.findUniqueOrThrow({
         where: { id: pending[0].id },
@@ -62,12 +64,12 @@ export async function saveEmpathyDraft(opts: {
       });
       return { status: 'review_pending', draft: kept };
     }
-    const subject = { aboutParticipantId: partner.id };
+    const subject = { aboutUserId: partner.user_id };
     const draft = await upsertDraft(
       {
-        participantId: opts.participantId,
+        seat: opts.seat,
         kind: 'EMPATHY',
-        aboutParticipantId: partner.id,
+        aboutUserId: partner.user_id,
         content: opts.content,
         readyToShare: opts.readyToShare,
       },
@@ -77,32 +79,35 @@ export async function saveEmpathyDraft(opts: {
   });
 }
 
-/** The other human participants of the session who have not left. */
-function livePartnersOf(tx: DbClient, participantId: string): Promise<Array<{ id: string }>> {
-  return tx.$queryRaw<Array<{ id: string }>>`
-      SELECT p.id FROM participant p
-      WHERE p.session_id = (SELECT session_id FROM participant WHERE id = ${participantId}::uuid)
-        AND p.id <> ${participantId}::uuid AND p.kind = 'human' AND p.left_at IS NULL`;
+/** The other human participants of the seat's session who have not left (their user ids). */
+function livePartnersOf(tx: DbClient, seat: Seat): Promise<Array<{ user_id: string }>> {
+  return tx.$queryRaw<Array<{ user_id: string }>>`
+      SELECT p.user_id FROM participant p
+      WHERE p.session_id = ${seat.sessionId}::uuid
+        AND p.user_id <> ${seat.userId}::uuid AND p.kind = 'human' AND p.left_at IS NULL`;
 }
 
 /**
- * The participant's pre-join draft about `partnerId` that still awaits its
- * author's review (written before the partner joined, nothing submitted),
- * locked FOR UPDATE for the rest of the transaction. Empty when none.
+ * The participant's pre-join draft about the partner `partnerUserId` (of the
+ * same session) that still awaits its author's review (written before the
+ * partner joined, nothing submitted), locked FOR UPDATE for the rest of the
+ * transaction. Empty when none.
  */
 function lockPendingPreJoinDraft(
   tx: DbClient,
-  participantId: string,
-  partnerId: string,
+  seat: Seat,
+  partnerUserId: string,
 ): Promise<Array<{ id: string; updated_at: Date }>> {
   return tx.$queryRaw<Array<{ id: string; updated_at: Date }>>`
       SELECT d.id, d.updated_at FROM draft d
-      WHERE d.participant_id = ${participantId}::uuid AND d.kind = 'EMPATHY'
-        AND d.about_participant_id = ${partnerId}::uuid
-        AND d.updated_at < (SELECT p.joined_at FROM participant p WHERE p.id = ${partnerId}::uuid)
+      WHERE d.session_id = ${seat.sessionId}::uuid AND d.user_id = ${seat.userId}::uuid AND d.kind = 'EMPATHY'
+        AND d.about_user_id = ${partnerUserId}::uuid
+        AND d.updated_at < (SELECT p.joined_at FROM participant p
+                            WHERE p.session_id = ${seat.sessionId}::uuid AND p.user_id = ${partnerUserId}::uuid)
         AND NOT EXISTS (SELECT 1 FROM empathy_attempt a
-                        WHERE a.author_participant_id = ${participantId}::uuid
-                          AND a.subject_participant_id = ${partnerId}::uuid)
+                        WHERE a.session_id = ${seat.sessionId}::uuid
+                          AND a.author_user_id = ${seat.userId}::uuid
+                          AND a.subject_user_id = ${partnerUserId}::uuid)
       FOR UPDATE OF d`;
 }
 
@@ -113,7 +118,8 @@ export type ResolvePreJoinReviewForEditResult =
       draft: DraftRow & { reopenedAt: Date };
       /** When the author had written it: the review's written-at, read before this write. */
       writtenAt: Date;
-      partnerParticipantId: string;
+      /** The partner the draft is about (a participant of the author's session). */
+      partnerUserId: string;
     }
   | { status: 'not_pending' };
 
@@ -129,18 +135,18 @@ export type ResolvePreJoinReviewForEditResult =
  * transaction sets `reopened_at` (work-9309): the reopen is durable before any
  * opener is generated. The caller schedules the opener only on `resolved`.
  */
-export async function resolvePreJoinReviewForEdit(participantId: string): Promise<ResolvePreJoinReviewForEditResult> {
+export async function resolvePreJoinReviewForEdit(seat: Seat): Promise<ResolvePreJoinReviewForEditResult> {
   return prisma.$transaction(async tx => {
-    const partners = await livePartnersOf(tx, participantId);
+    const partners = await livePartnersOf(tx, seat);
     if (partners.length !== 1) return { status: 'not_pending' };
-    const partnerId = partners[0].id;
+    const partnerUserId = partners[0].user_id;
 
-    const pending = await lockPendingPreJoinDraft(tx, participantId, partnerId);
+    const pending = await lockPendingPreJoinDraft(tx, seat, partnerUserId);
     if (!pending.length) return { status: 'not_pending' };
 
     const kept = await tx.draft.findUniqueOrThrow({ where: { id: pending[0].id }, select: { content: true } });
     const written = await upsertDraft(
-      { participantId, kind: 'EMPATHY', aboutParticipantId: partnerId, content: kept.content, readyToShare: false },
+      { seat, kind: 'EMPATHY', aboutUserId: partnerUserId, content: kept.content, readyToShare: false },
       tx,
     );
     // work-9309: the durable reopen marker, in the resolving transaction. The
@@ -148,6 +154,6 @@ export async function resolvePreJoinReviewForEdit(participantId: string): Promis
     const [marked] = await tx.$queryRaw<Array<{ reopened_at: Date }>>`
       UPDATE draft SET reopened_at = now() WHERE id = ${written.id}::uuid RETURNING reopened_at`;
     const draft = { ...written, reopenedAt: marked.reopened_at };
-    return { status: 'resolved', draft, writtenAt: pending[0].updated_at, partnerParticipantId: partnerId };
+    return { status: 'resolved', draft, writtenAt: pending[0].updated_at, partnerUserId };
   });
 }

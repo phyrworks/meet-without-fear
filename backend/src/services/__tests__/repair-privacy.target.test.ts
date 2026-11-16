@@ -113,10 +113,8 @@ describeTarget('repair privacy fixes (fix round 1) — legacy agreements and sub
       agreedByPartner: true,
       proposalId: proposal.checkin,
     });
-    const parties = await run.sql<{ participant_id: string }>(
-      `SELECT participant_id FROM agreement_party ORDER BY participant_id`,
-    );
-    expect(parties.map(p => p.participant_id)).toEqual([ids.ada, ids.bob].sort());
+    const parties = await run.sql<{ user_id: string }>(`SELECT user_id FROM agreement_party ORDER BY user_id`);
+    expect(parties.map(p => p.user_id)).toEqual([ids.adaUser, ids.bobUser].sort());
     expect(await run.sql(`SELECT status::text AS status FROM proposal WHERE id = $1`, [proposal.checkin])).toEqual([
       { status: 'CONVERTED_TO_AGREEMENT' },
     ]);
@@ -183,8 +181,8 @@ describeTarget('repair privacy fixes (fix round 1) — legacy agreements and sub
     ]);
     // An anchor that is not a shared need of the session is refused.
     const [unshared] = await run.sql<{ id: string }>(
-      `INSERT INTO need (participant_id, label, category, ai_confidence, user_id, session_id) VALUES ($1::uuid, 'PROBE_NOT_SHARED', 'SAFETY', 0.9, (SELECT p.user_id FROM participant p WHERE p.id = $1::uuid), (SELECT p.session_id FROM participant p WHERE p.id = $1::uuid)) RETURNING id`,
-      [ids.bob],
+      `INSERT INTO need (session_id, user_id, label, category, ai_confidence) VALUES ($1::uuid, $2::uuid, 'PROBE_NOT_SHARED', 'SAFETY', 0.9) RETURNING id`,
+      [ids.session, ids.bobUser],
     );
     expect(
       (

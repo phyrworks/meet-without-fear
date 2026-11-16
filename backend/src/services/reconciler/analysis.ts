@@ -32,6 +32,7 @@ import { extractJsonFromResponse } from '../../utils/json-extractor';
 import type { ReconcilerResult } from '@meet-without-fear/shared';
 import { currentAttempt, sessionParties, type SessionParty } from '../empathy-store';
 import { stageAt, type MilestoneReached } from '../stage-shim';
+import type { Seat } from '../participant-resolver';
 
 /**
  * Ruling R35: the reconciler runs as the JOB. Every read and write of the
@@ -39,15 +40,15 @@ import { stageAt, type MilestoneReached } from '../stage-shim';
  * [TS-10] / [TS-10 I4], "reconciler reader") are the whole of what it may see. The
  * request that triggered an analysis never reads the other participant's rows
  * on its own (app) connection; it gets back only its caller-visible projection
- * (`runReconciler` with `forParticipantId`). The context builder stays the one
+ * (`runReconciler` with `viewerUserId`). The context builder stays the one
  * cross-participant reader on the app connection.
  */
 const reader = () => getJobPrisma();
 
 /** A participant's milestones (key, reached_at) through the job — the stage shim's input. */
-async function milestonesOf(participantId: string): Promise<MilestoneReached[]> {
+async function milestonesOf(seat: Seat): Promise<MilestoneReached[]> {
   const rows = await reader().participantMilestone.findMany({
-    where: { participantId },
+    where: { sessionId: seat.sessionId, userId: seat.userId },
     orderBy: [{ reachedAt: 'asc' }, { milestoneKey: 'asc' }],
     select: { milestoneKey: true, reachedAt: true },
   });
@@ -59,11 +60,9 @@ async function milestonesOf(participantId: string): Promise<MilestoneReached[]> 
 // ============================================================================
 
 export interface UserInfo {
-  /** The participant's user id (the realtime envelope and the old signatures are user-keyed). */
+  /** The participant's user id — with the session, its participant key (work-k5fk.3). */
   id: string;
   name: string;
-  /** The participant row (target shape, TS-10). */
-  participantId: string;
 }
 
 export interface SessionParticipants {
@@ -100,7 +99,7 @@ export interface ReconcilerAnalysisInput {
 }
 
 export function toUserInfo(p: SessionParty, fallback: string): UserInfo {
-  return { id: p.userId ?? '', name: p.name || fallback, participantId: p.participantId };
+  return { id: p.userId, name: p.name || fallback };
 }
 
 // ============================================================================
@@ -166,9 +165,10 @@ function normalizeCategorizedFacts(rawFacts: unknown): CategorizedFact[] | undef
 }
 
 /** The subject's own NOTABLE_FACTS (ai_memory) — for the subject-side analysis only. */
-async function loadSubjectFacts(subjectParticipantId: string): Promise<CategorizedFact[] | undefined> {
-  const row = await reader().aiMemory.findUnique({
-    where: { participantId_kind: { participantId: subjectParticipantId, kind: 'NOTABLE_FACTS' } },
+async function loadSubjectFacts(subject: Seat): Promise<CategorizedFact[] | undefined> {
+  // One per (session, user, kind): the sql_ partial unique index (no Prisma unique on ai_memory).
+  const row = await reader().aiMemory.findFirst({
+    where: { sessionId: subject.sessionId, userId: subject.userId, kind: 'NOTABLE_FACTS' },
     select: { doc: true },
   });
   return normalizeCategorizedFacts((row?.doc as { facts?: unknown } | null)?.facts);
@@ -176,15 +176,19 @@ async function loadSubjectFacts(subjectParticipantId: string): Promise<Categoriz
 
 /** A participant's MAIN-conversation chat rows, each with the stage it was written in (stage shim). */
 async function stagedChat(
-  participantId: string,
-): Promise<Array<{ role: 'USER' | 'AI'; content: string; stage: number; senderParticipantId: string | null }>> {
+  seat: Seat,
+): Promise<Array<{ role: 'USER' | 'AI'; content: string; stage: number; senderUserId: string | null }>> {
   const [rows, reached] = await Promise.all([
     reader().message.findMany({
-      where: { conversation: { participantId, kind: 'MAIN' }, kind: 'CHAT', role: { in: ['USER', 'AI'] } },
+      where: {
+        conversation: { sessionId: seat.sessionId, userId: seat.userId, kind: 'MAIN' },
+        kind: 'CHAT',
+        role: { in: ['USER', 'AI'] },
+      },
       orderBy: { createdAt: 'asc' },
-      select: { role: true, content: true, createdAt: true, senderParticipantId: true },
+      select: { role: true, content: true, createdAt: true, senderUserId: true },
     }),
-    milestonesOf(participantId),
+    milestonesOf(seat),
   ]);
   return rows.map(r => ({
     role: r.role as 'USER' | 'AI',
@@ -193,15 +197,15 @@ async function stagedChat(
     // an inviter with an unsent invitation at stage 0; once invitation_sent exists the later-of rule needs
     // no option. (Reading it would need a job grant on invitation this reader has no other use for.)
     stage: stageAt(reached, r.createdAt, { invitationPending: false }),
-    senderParticipantId: r.senderParticipantId,
+    senderUserId: r.senderUserId,
   }));
 }
 
 export async function loadRecentSubjectStage2Turns(
-  subjectParticipantId: string,
+  subject: Seat,
   maxSubjectUserTurns = 5,
 ): Promise<Array<{ role: 'user' | 'assistant'; content: string; stage: number }>> {
-  const messages = (await stagedChat(subjectParticipantId)).filter(m => m.stage === 2);
+  const messages = (await stagedChat(subject)).filter(m => m.stage === 2);
 
   const subjectUserIndexes = messages
     .map((message, index) => (message.role === 'USER' ? index : -1))
@@ -235,10 +239,11 @@ export async function loadRecentSubjectStage2Turns(
  * the reconciler only; never returned to the subject.
  */
 export async function getEmpathyData(
-  authorParticipantId: string,
-  subjectParticipantId: string,
+  sessionId: string,
+  authorUserId: string,
+  subjectUserId: string,
 ): Promise<EmpathyData | null> {
-  const attempt = await currentAttempt(authorParticipantId, subjectParticipantId, reader());
+  const attempt = await currentAttempt(sessionId, authorUserId, subjectUserId, reader());
   if (!attempt) return null;
   return {
     statement: attempt.content,
@@ -254,13 +259,9 @@ export async function getEmpathyData(
 // ============================================================================
 
 /** The subject's Stage 1 turns: their own chat turns written while they were in stage 1. */
-export async function getWitnessingContent(
-  sessionId: string,
-  subjectParticipantId: string,
-  subjectUserId?: string,
-): Promise<WitnessingContent> {
-  const messages = (await stagedChat(subjectParticipantId)).filter(
-    m => m.stage === 1 && m.role === 'USER' && m.senderParticipantId === subjectParticipantId,
+export async function getWitnessingContent(sessionId: string, subjectUserId: string): Promise<WitnessingContent> {
+  const messages = (await stagedChat({ sessionId, userId: subjectUserId })).filter(
+    m => m.stage === 1 && m.role === 'USER' && m.senderUserId === subjectUserId,
   );
   const userMessages = messages.map(m => m.content).join('\n\n');
   // The target has no per-message extracted emotions (review F4.2): themes come
@@ -350,7 +351,7 @@ const SEVERITY_TO_DB = { none: 'NONE', minor: 'MINOR', moderate: 'MODERATE', sig
 export interface StoredReconcilerResult {
   id: string;
   attemptId: string;
-  subjectParticipantId: string;
+  subjectUserId: string;
   iteration: number;
   alignmentScore: number;
   alignmentSummary: string;
@@ -372,7 +373,7 @@ export interface StoredReconcilerResult {
 export const RESULT_SELECT = {
   id: true,
   attemptId: true,
-  subjectParticipantId: true,
+  subjectUserId: true,
   iteration: true,
   alignmentScore: true,
   alignmentSummary: true,
@@ -492,8 +493,10 @@ export function getDefaultReconcilerResult(): ReconcilerResult {
  */
 export async function persistAnalysis(opts: {
   attemptId: string;
-  authorParticipantId: string;
-  subjectParticipantId: string;
+  /** The attempt's session; author and subject are participants of it. */
+  sessionId: string;
+  authorUserId: string;
+  subjectUserId: string;
   result: ReconcilerResult;
   guidance: AbstractGuidance;
   suggestion?: { content: string; reason: string } | null;
@@ -506,13 +509,11 @@ export async function persistAnalysis(opts: {
         WHERE attempt_id = ${opts.attemptId}::uuid AND superseded_at IS NULL`;
       const rows = await tx.$queryRaw<
         Array<{ id: string }>
-      >`INSERT INTO reconciler_result (attempt_id, subject_participant_id, session_id, subject_user_id, iteration, alignment_score,
+      >`INSERT INTO reconciler_result (attempt_id, session_id, subject_user_id, iteration, alignment_score,
           alignment_summary, gap_summary, gap_severity, correctly_identified, missed_feelings, misattributions, most_important_gap,
           recommended_action, rationale, sharing_would_help, suggested_share_focus, suggested_share_content,
           suggested_share_reason, circuit_breaker_tripped)
-        VALUES (${opts.attemptId}::uuid, ${opts.subjectParticipantId}::uuid,
-          (SELECT a.session_id FROM empathy_attempt a WHERE a.id = ${opts.attemptId}::uuid),
-          (SELECT p.user_id FROM participant p WHERE p.id = ${opts.subjectParticipantId}::uuid),
+        VALUES (${opts.attemptId}::uuid, ${opts.sessionId}::uuid, ${opts.subjectUserId}::uuid,
           coalesce((SELECT max(x.iteration) FROM reconciler_result x WHERE x.attempt_id = ${opts.attemptId}::uuid), 0) + 1,
           ${Math.max(0, Math.min(100, Math.round(r.alignment.score)))},
           ${encryptColumnValue('reconciler_result', 'alignment_summary', r.alignment.summary)},
@@ -533,12 +534,9 @@ export async function persistAnalysis(opts: {
       const resultId = rows[0].id;
       const g = opts.guidance;
       if (g.areaHint || g.guidanceType || g.promptSeed) {
-        await tx.$executeRaw`INSERT INTO reconciler_guidance (result_id, author_participant_id, subject_participant_id, session_id,
-                                                         author_user_id, subject_user_id, area_hint, guidance_type, prompt_seed)
-          VALUES (${resultId}::uuid, ${opts.authorParticipantId}::uuid, ${opts.subjectParticipantId}::uuid,
-                  (SELECT a.session_id FROM empathy_attempt a WHERE a.id = ${opts.attemptId}::uuid),
-                  (SELECT p.user_id FROM participant p WHERE p.id = ${opts.authorParticipantId}::uuid),
-                  (SELECT p.user_id FROM participant p WHERE p.id = ${opts.subjectParticipantId}::uuid),
+        await tx.$executeRaw`INSERT INTO reconciler_guidance (result_id, session_id, author_user_id, subject_user_id,
+                                                         area_hint, guidance_type, prompt_seed)
+          VALUES (${resultId}::uuid, ${opts.sessionId}::uuid, ${opts.authorUserId}::uuid, ${opts.subjectUserId}::uuid,
                   ${encryptColumnValue('reconciler_guidance', 'area_hint', g.areaHint)}, ${g.guidanceType}::guidance_type,
                   ${encryptColumnValue('reconciler_guidance', 'prompt_seed', g.promptSeed)})`;
       }
@@ -591,8 +589,8 @@ export async function analyzeEmpathyGap(
 
   const turnId = `${input.sessionId}-${Date.now()}`;
   const [subjectFacts, recentSubjectTurns] = await Promise.all([
-    loadSubjectFacts(input.subject.participantId),
-    loadRecentSubjectStage2Turns(input.subject.participantId),
+    loadSubjectFacts({ sessionId: input.sessionId, userId: input.subject.id }),
+    loadRecentSubjectStage2Turns({ sessionId: input.sessionId, userId: input.subject.id }),
   ]);
 
   const context: ReconcilerContext = {
@@ -639,7 +637,7 @@ export async function analyzeEmpathyGap(
 /**
  * Run the reconciler for both directions of a two-party session.
  *
- * With `forParticipantId`, the returned analyses are filtered to what that
+ * With `viewerUserId`, the returned analyses are filtered to what that
  * participant may read (spec §1.2: `reconciler_result` is subject-only): a
  * direction's analysis is returned only where the caller is its SUBJECT. The
  * readiness verdict over a hidden direction is computed from its status
@@ -650,7 +648,8 @@ export async function runReconciler(
   sessionId: string,
   forUserId?: string,
   opts: {
-    forParticipantId?: string;
+    /** The participant (of `sessionId`) the result is filtered for — what they may read. */
+    viewerUserId?: string;
     /**
      * Store fresh analyses here (m6: `POST /reconciler/run` paid for an LLM
      * analysis and threw it away). The Stage 2 trigger leaves it off: it
@@ -682,8 +681,8 @@ export async function runReconciler(
   const userB = toUserInfo(parties[1], 'User B');
 
   const [aEmpathy, bEmpathy] = await Promise.all([
-    getEmpathyData(userA.participantId, userB.participantId),
-    getEmpathyData(userB.participantId, userA.participantId),
+    getEmpathyData(sessionId, userA.id, userB.id),
+    getEmpathyData(sessionId, userB.id, userA.id),
   ]);
 
   if (!aEmpathy || !bEmpathy) {
@@ -700,8 +699,8 @@ export async function runReconciler(
   }
 
   const [aWitnessing, bWitnessing] = await Promise.all([
-    getWitnessingContent(sessionId, userA.participantId, userA.id),
-    getWitnessingContent(sessionId, userB.participantId, userB.id),
+    getWitnessingContent(sessionId, userA.id),
+    getWitnessingContent(sessionId, userB.id),
   ]);
 
   let aUnderstandingB: (ReconcilerResult & { fresh?: boolean; storedResultId?: string }) | null = null;
@@ -738,8 +737,9 @@ export async function runReconciler(
       if (!r?.fresh) return;
       const id = await persistAnalysis({
         attemptId,
-        authorParticipantId: author.participantId,
-        subjectParticipantId: subject.participantId,
+        sessionId,
+        authorUserId: author.id,
+        subjectUserId: subject.id,
         result: r,
         guidance: r.abstractGuidance ?? generateAbstractGuidance(r),
       });
@@ -761,10 +761,10 @@ export async function runReconciler(
   };
   const statusReady = (status: string): boolean => status !== 'AWAITING_SHARING' && status !== 'REFINING';
 
-  const caller = opts.forParticipantId;
+  const caller = opts.viewerUserId;
   // What the caller may see: a direction's analysis only as its subject.
-  const visibleA = !caller || caller === userB.participantId ? aUnderstandingB : null;
-  const visibleB = !caller || caller === userA.participantId ? bUnderstandingA : null;
+  const visibleA = !caller || caller === userB.id ? aUnderstandingB : null;
+  const visibleB = !caller || caller === userA.id ? bUnderstandingA : null;
   // Readiness: from the analysis where the caller may see it, else from the
   // direction's status alone.
   const aReady = !caller || visibleA ? isDirectionReady(aUnderstandingB) : statusReady(aEmpathy.status);

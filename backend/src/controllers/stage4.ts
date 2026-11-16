@@ -53,6 +53,7 @@ import {
   getCounterpartParticipant,
   getPartnerParticipant,
   resolveParticipant,
+  seatOf,
   type ResolvedParticipant,
 } from '../services/participant-resolver';
 import { loadStageStates } from '../services/stage-shim';
@@ -235,14 +236,14 @@ async function stage4Context(req: Request, sessionId: string, userId: string): P
   if (!participant) return null;
   const [session, states, closure] = await Promise.all([
     prisma.session.findUnique({ where: { id: sessionId }, select: { status: true } }),
-    loadStageStates([{ id: participant.id, joinedAt: participant.joinedAt }]),
+    loadStageStates([participant]),
     loadClosure(sessionId),
   ]);
   if (!session) return null;
   return {
     participant,
     sessionStatus: session.status,
-    stage: states.get(participant.id)?.current.stage ?? 0,
+    stage: states.get(participant)?.current.stage ?? 0,
     closed: Boolean(closure),
   };
 }
@@ -297,13 +298,13 @@ const LEGACY_AGREEMENT_MARK = 'agreementProposed';
 const LEGACY_PROPOSED = PROPOSAL_REVISION_REASONS.LEGACY_PROPOSED;
 const LEGACY_CONFIRMED = PROPOSAL_REVISION_REASONS.LEGACY_CONFIRMED;
 
-/** Participants who proposed or confirmed this proposal as an agreement (their own acts). */
+/** The user ids of the participants who proposed or confirmed this proposal as an agreement (their own acts). */
 async function legacyParties(proposalId: string): Promise<Set<string>> {
   const rows = await prisma.proposalRevision.findMany({
     where: { proposalId, reason: { in: [LEGACY_PROPOSED, LEGACY_CONFIRMED] } },
-    select: { actorParticipantId: true },
+    select: { actorUserId: true },
   });
-  return new Set(rows.map(r => r.actorParticipantId).filter((id): id is string => Boolean(id)));
+  return new Set(rows.map(r => r.actorUserId).filter((id): id is string => Boolean(id)));
 }
 
 // ============================================================================
@@ -440,7 +441,7 @@ async function submitStage4SelectionsInternal(
   for (const s of selections) {
     await upsertChoice({
       proposalId: s.proposalId,
-      participantId: ctx.participant.id,
+      seat: ctx.participant,
       decision: s.decision,
       note: s.note ?? null,
       at: submittedAt,
@@ -449,8 +450,8 @@ async function submitStage4SelectionsInternal(
 
   // Choices stay private until the participant explicitly shares; a revision
   // after sharing withdraws the share so the partner never sees a half-revised stance.
-  if (await hasMilestone(ctx.participant.id, 'choices_shared')) {
-    await unshareChoices(ctx.participant.id);
+  if (await hasMilestone(ctx.participant, 'choices_shared')) {
+    await unshareChoices(ctx.participant);
     await notifyStrategiesUpdated(sessionId, userId, 'stage4_selection_revised');
   }
 
@@ -479,16 +480,16 @@ export async function shareStage4Selections(req: Request, res: Response): Promis
     const { id: sessionId } = req.params;
     const ctx = await stage4Context(req, sessionId, user.id);
     if (refuse(res, ctx, 'share Stage 4 selections', { stage: false, open: true })) return;
-    const me = ctx.participant.id;
+    const me = seatOf(ctx.participant);
 
     const [proposals, myChoices, needs, dispositions] = await Promise.all([
       loadProposals(sessionId, me),
       prisma.proposalChoice.findMany({
-        where: { participantId: me, proposal: { sessionId } },
+        where: { ...me, proposal: { sessionId } },
         select: { proposalId: true, decision: true },
       }),
       loadStage4Needs(sessionId, me),
-      prisma.needDisposition.findMany({ where: { participantId: me, status: 'DECLINED' }, select: { needId: true } }),
+      prisma.needDisposition.findMany({ where: { ...me, status: 'DECLINED' }, select: { needId: true } }),
     ]);
     const activeShared = proposals.filter(p => p.status === 'ACTIVE' && p.kind === 'SHARED_PROPOSAL');
     if (activeShared.length === 0) {
@@ -523,7 +524,9 @@ export async function shareStage4Selections(req: Request, res: Response): Promis
     // Quiet hand-off bridge: the first share while the partner has not shared.
     try {
       const partner = await getPartnerParticipant(me);
-      const partnerHasShared = partner ? await hasMilestone(partner.participantId, 'choices_shared') : false;
+      const partnerHasShared = partner
+        ? await hasMilestone({ sessionId, userId: partner.userId }, 'choices_shared')
+        : false;
       if (!partnerHasShared && ctx.participant.mainConversationId) {
         const nickname = await getNicknameForSessionPartner(sessionId, user.id);
         const bridge = stage4HandoffBridgeMessage(nickname || partner?.displayName || undefined);
@@ -568,7 +571,7 @@ export async function declineStage4Need(req: Request, res: Response): Promise<vo
       errorResponse(res, 'NOT_FOUND', 'Need not found', 404);
       return;
     }
-    await declineNeed(ctx.participant.id, needId);
+    await declineNeed(ctx.participant, needId);
     successResponse(res, { state: await buildStage4State(sessionId, user.id) });
   } catch (error) {
     logger.error('[declineStage4Need] Error:', error);
@@ -593,7 +596,7 @@ export async function undeclineStage4Need(req: Request, res: Response): Promise<
       errorResponse(res, 'NOT_FOUND', 'Need not found', 404);
       return;
     }
-    await undeclineNeed(ctx.participant.id, needId);
+    await undeclineNeed(ctx.participant, needId);
     successResponse(res, { state: await buildStage4State(sessionId, user.id) });
   } catch (error) {
     logger.error('[undeclineStage4Need] Error:', error);
@@ -614,7 +617,7 @@ export async function unshareStage4Selections(req: Request, res: Response): Prom
     const { id: sessionId } = req.params;
     const ctx = await stage4Context(req, sessionId, user.id);
     if (refuse(res, ctx, 'revise Stage 4 selections', { stage: false, open: true })) return;
-    await unshareChoices(ctx.participant.id);
+    await unshareChoices(ctx.participant);
     await notifyStrategiesUpdated(sessionId, user.id, 'stage4_selection_revised');
     successResponse(res, { state: await buildStage4State(sessionId, user.id) });
   } catch (error) {
@@ -642,7 +645,7 @@ export async function closeStage4(req: Request, res: Response): Promise<void> {
     const ctx = await stage4Context(req, sessionId, user.id);
     if (refuse(res, ctx, 'close Stage 4')) return;
 
-    const result = await closeStage4Service({ sessionId, participantId: ctx.participant.id, ...parseResult.data });
+    const result = await closeStage4Service({ sessionId, seat: seatOf(ctx.participant), ...parseResult.data });
 
     const partnerId = await getPartnerUserId(sessionId, user.id);
     if (partnerId) {
@@ -698,7 +701,7 @@ export async function getStrategies(req: Request, res: Response): Promise<void> 
     }
     const [own, needs] = await Promise.all([
       prisma.proposal.findMany({
-        where: { sessionId, createdByParticipantId: participant.id },
+        where: { sessionId, createdByUserId: participant.userId },
         orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
         select: {
           id: true,
@@ -709,7 +712,7 @@ export async function getStrategies(req: Request, res: Response): Promise<void> 
           needs: { select: { needId: true } },
         },
       }),
-      loadStage4Needs(sessionId, participant.id),
+      loadStage4Needs(sessionId, participant),
     ]);
     const labelOf = new Map(needs.map(n => [n.id, n.label]));
     successResponse(res, {
@@ -760,7 +763,6 @@ export async function proposeStrategy(req: Request, res: Response): Promise<void
     const strategy = await prisma.proposal.create({
       data: {
         sessionId,
-        createdByParticipantId: ctx.participant.id,
         createdByUserId: user.id,
         description,
         duration,
@@ -769,7 +771,7 @@ export async function proposeStrategy(req: Request, res: Response): Promise<void
       },
       select: { id: true, description: true, duration: true, measureOfSuccess: true, createdAt: true },
     });
-    const { needIds, unresolved } = await resolveNeedLabels(sessionId, ctx.participant.id, needsAddressed);
+    const { needIds, unresolved } = await resolveNeedLabels(sessionId, ctx.participant, needsAddressed);
     await setProposalNeeds(prisma, strategy.id, needIds, unresolved);
     successResponse(
       res,
@@ -798,6 +800,7 @@ export async function proposeStrategy(req: Request, res: Response): Promise<void
  */
 async function pendingAgreementDTO(
   proposalId: string,
+  /** User ids (participants of the one session). */
   me: string,
   partner: string | null,
   followUpDate: string | null,
@@ -831,7 +834,7 @@ async function pendingAgreementDTO(
 async function agreeIfEveryoneWilling(args: {
   sessionId: string;
   proposalId: string;
-  actor: string;
+  actorUserId: string;
   type: AgreementType;
   followUpAt: Date | null;
 }): Promise<string | null> {
@@ -854,20 +857,22 @@ async function agreeIfEveryoneWilling(args: {
         measureOfSuccess: 'proposal.measure_of_success',
       }),
     ),
-    job.$queryRaw<Array<{ id: string }>>`
-      SELECT id FROM participant WHERE session_id = ${args.sessionId}::uuid AND kind = 'human' AND left_at IS NULL ORDER BY id`,
-    job.$queryRaw<Array<{ participant_id: string }>>`
-      SELECT participant_id FROM proposal_choice WHERE proposal_id = ${args.proposalId}::uuid AND decision = 'WILLING'`,
+    job.$queryRaw<Array<{ user_id: string }>>`
+      SELECT user_id FROM participant
+      WHERE session_id = ${args.sessionId}::uuid AND kind = 'human' AND left_at IS NULL ORDER BY user_id`,
+    job.$queryRaw<Array<{ user_id: string }>>`
+      SELECT user_id FROM proposal_choice
+      WHERE proposal_id = ${args.proposalId}::uuid AND session_id = ${args.sessionId}::uuid AND decision = 'WILLING'`,
     legacyParties(args.proposalId),
   ]);
   if (!proposal || proposal.status === 'CONVERTED_TO_AGREEMENT' || proposal.status === 'REMOVED') return null;
-  const willingIds = new Set(willing.map(w => w.participant_id));
-  const ids = humans.map(h => h.id);
+  const willingIds = new Set(willing.map(w => w.user_id));
+  const ids = humans.map(h => h.user_id);
   if (ids.length === 0 || !ids.every(h => willingIds.has(h) && parties.has(h))) return null;
   const [id] = await createAgreementsAsJob({
     sessionId: args.sessionId,
-    actorParticipantId: args.actor,
-    partyParticipantIds: ids,
+    actorUserId: args.actorUserId,
+    partyUserIds: ids,
     reason: PROPOSAL_REVISION_REASONS.EVERY_PARTY_CONFIRMED,
     agreements: [
       {
@@ -908,7 +913,7 @@ export async function createAgreement(req: Request, res: Response): Promise<void
     const { strategyId, description, type, duration, measureOfSuccess, followUpDate } = parseResult.data;
     const ctx = await stage4Context(req, sessionId, user.id);
     if (refuse(res, ctx, 'create agreement', { stage: true, open: false })) return;
-    const me = ctx.participant.id;
+    const me = seatOf(ctx.participant);
 
     if ((await prisma.agreement.count({ where: { sessionId } })) >= MAX_AGREEMENTS) {
       errorResponse(res, 'VALIDATION_ERROR', 'Maximum of 2 agreements per session', 400);
@@ -930,7 +935,6 @@ export async function createAgreement(req: Request, res: Response): Promise<void
         await prisma.proposal.create({
           data: {
             sessionId,
-            createdByParticipantId: me,
             createdByUserId: user.id,
             description,
             duration,
@@ -941,11 +945,10 @@ export async function createAgreement(req: Request, res: Response): Promise<void
         })
       ).id;
     }
-    await upsertChoice({ proposalId, participantId: me, decision: 'WILLING' });
+    await upsertChoice({ proposalId, seat: me, decision: 'WILLING' });
     await prisma.proposalRevision.create({
       data: {
         proposalId,
-        actorParticipantId: me,
         sessionId,
         actorUserId: user.id,
         action: 'REVISED',
@@ -955,8 +958,14 @@ export async function createAgreement(req: Request, res: Response): Promise<void
     });
 
     const followUpAt = followUpDate ? new Date(followUpDate) : null;
-    const agreementId = await agreeIfEveryoneWilling({ sessionId, proposalId, actor: me, type, followUpAt });
-    const partner = (await getPartnerParticipant(me))?.participantId ?? null;
+    const agreementId = await agreeIfEveryoneWilling({
+      sessionId,
+      proposalId,
+      actorUserId: me.userId,
+      type,
+      followUpAt,
+    });
+    const partner = (await getPartnerParticipant(me))?.userId ?? null;
     const partnerId = await getPartnerUserId(sessionId, user.id);
     if (partnerId) {
       await notifyPartner(sessionId, partnerId, 'agreement.proposed', {
@@ -969,8 +978,8 @@ export async function createAgreement(req: Request, res: Response): Promise<void
       res,
       {
         agreement: agreement
-          ? { ...toAgreementDTO(agreement, me, partner), proposalId }
-          : await pendingAgreementDTO(proposalId, me, partner, followUpAt?.toISOString() ?? null),
+          ? { ...toAgreementDTO(agreement, me.userId, partner), proposalId }
+          : await pendingAgreementDTO(proposalId, me.userId, partner, followUpAt?.toISOString() ?? null),
         awaitingPartnerConfirmation: !agreement,
       },
       201,
@@ -1005,8 +1014,8 @@ export async function confirmAgreement(req: Request, res: Response): Promise<voi
     const { confirmed } = parseResult.data;
     const ctx = await stage4Context(req, sessionId, user.id);
     if (refuse(res, ctx, 'confirm agreement', { stage: true, open: false })) return;
-    const me = ctx.participant.id;
-    const partner = (await getPartnerParticipant(me))?.participantId ?? null;
+    const me = seatOf(ctx.participant);
+    const partner = (await getPartnerParticipant(me))?.userId ?? null;
 
     const existing = await prisma.agreement.findFirst({
       where: { id: agreementId, sessionId },
@@ -1035,11 +1044,10 @@ export async function confirmAgreement(req: Request, res: Response): Promise<voi
 
     let createdId: string | null = existing?.id ?? null;
     if (confirmed && !existing) {
-      await upsertChoice({ proposalId, participantId: me, decision: 'WILLING' });
+      await upsertChoice({ proposalId, seat: me, decision: 'WILLING' });
       await prisma.proposalRevision.create({
         data: {
           proposalId,
-          actorParticipantId: me,
           sessionId,
           actorUserId: user.id,
           action: 'REVISED',
@@ -1050,7 +1058,7 @@ export async function confirmAgreement(req: Request, res: Response): Promise<voi
       createdId = await agreeIfEveryoneWilling({
         sessionId,
         proposalId,
-        actor: me,
+        actorUserId: me.userId,
         type: markAfter.type ?? AgreementType.MICRO_EXPERIMENT,
         followUpAt: markAfter.followUpDate ? new Date(markAfter.followUpDate) : null,
       });
@@ -1068,15 +1076,15 @@ export async function confirmAgreement(req: Request, res: Response): Promise<voi
         kind: Stage4ClosureKind.SHARED_AGREEMENT,
         reason: Stage4ClosureReason.MUTUAL_SELECTION,
         summary: `Closed with ${agreements.length} shared agreement${agreements.length === 1 ? '' : 's'}.`,
-        closedByParticipantId: me,
+        closedByUserId: me.userId,
         checkInAt: null,
       });
     }
 
     const agreement = createdId ? agreements.find(a => a.id === createdId) : undefined;
     const dto = agreement
-      ? { ...toAgreementDTO(agreement, me, partner), proposalId }
-      : await pendingAgreementDTO(proposalId, me, partner, markAfter.followUpDate ?? null);
+      ? { ...toAgreementDTO(agreement, me.userId, partner), proposalId }
+      : await pendingAgreementDTO(proposalId, me.userId, partner, markAfter.followUpDate ?? null);
 
     const partnerId = await getPartnerUserId(sessionId, user.id);
     if (partnerId) {
@@ -1118,7 +1126,7 @@ export async function requestSuggestions(req: Request, res: Response): Promise<v
     if (refuse(res, ctx, 'request suggestions', { stage: true, open: false })) return;
 
     // A shared need, named as this participant names it (own label / the partner's shared text).
-    const needs = await loadStage4Needs(sessionId, ctx.participant.id);
+    const needs = await loadStage4Needs(sessionId, ctx.participant);
     const target = needId ? needs.find(n => n.id === needId) : undefined;
     if (needId && !target) {
       errorResponse(res, 'NOT_FOUND', 'Need not found', 404);
@@ -1136,7 +1144,7 @@ export async function requestSuggestions(req: Request, res: Response): Promise<v
       const p = await prisma.proposal.create({
         data: {
           sessionId,
-          createdByParticipantId: null,
+          createdByUserId: null,
           description: draft.description,
           duration: draft.duration,
           measureOfSuccess: draft.measureOfSuccess,
@@ -1175,7 +1183,7 @@ export async function getAgreements(req: Request, res: Response): Promise<void> 
       return;
     }
     // A read: the partner, or the tombstone of one who left (TS-12, R5).
-    const partner = (await getCounterpartParticipant(participant.id))?.participantId ?? null;
+    const partner = (await getCounterpartParticipant(participant))?.userId ?? null;
     const [agreements, pendingProposals] = await Promise.all([
       loadAgreements(sessionId),
       prisma.proposal.findMany({
@@ -1186,12 +1194,13 @@ export async function getAgreements(req: Request, res: Response): Promise<void> 
     ]);
     const pending = [];
     for (const p of pendingProposals) {
-      const dto = await pendingAgreementDTO(p.id, participant.id, partner, null);
+      const dto = await pendingAgreementDTO(p.id, participant.userId, partner, null);
       if (dto) pending.push(dto);
     }
     successResponse(res, {
       agreements: [
-        ...agreements.map(a => ({ ...toAgreementDTO(a, participant.id, partner), proposalId: a.proposalId })),
+        ...agreements.map(a => ({ ...toAgreementDTO(a, participant.userId, partner), proposalId: a.proposalId })),
+
         ...pending,
       ],
     });

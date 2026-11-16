@@ -1,11 +1,11 @@
 /**
  * Participant resolution (TS-9, spec §6 "Identity & participant resolution").
  *
- * The target schema pivots on `participant`: one row per (session, user), and
- * every private row of the session hangs off it. A request resolves the
- * caller's participant ONCE (`requireSessionAccess` → `req.participant`, and
- * `participantId` on the request context); code below the route works from
- * that, never from a (sessionId, userId) pair again.
+ * The target schema pivots on `participant`: one row per (session, user) —
+ * its key since work-k5fk.3 — and every private row of the session names it
+ * by that pair. A request resolves the caller's participant ONCE
+ * (`requireSessionAccess` → `req.participant`); code below the route passes
+ * its `Seat` ({ sessionId, userId }) on.
  *
  * Co-participants come from `v_co_participant` only — N-party-safe by
  * construction (one row per ordered pair). There are no A/B slots in this
@@ -16,11 +16,21 @@
 
 import { prisma } from '../lib/prisma';
 
-export interface ResolvedParticipant {
-  id: string;
+/** A user's kind, which participant.kind pins (work-k5fk.3: human, the AI, or a persona). */
+export type ParticipantKind = 'human' | 'ai' | 'persona';
+
+/**
+ * A participant: its key (session_id, user_id) since work-k5fk.3. Every child
+ * row of a participant carries the pair (FOREIGN KEY (session_id, x_user_id)
+ * REFERENCES participant), so this is what a writer passes and a reader filters by.
+ */
+export interface Seat {
   sessionId: string;
-  userId: string | null;
-  kind: 'human' | 'modeled';
+  userId: string;
+}
+
+export interface ResolvedParticipant extends Seat {
+  kind: ParticipantKind;
   displayName: string | null;
   joinedAt: Date;
   leftAt: Date | null;
@@ -29,16 +39,24 @@ export interface ResolvedParticipant {
 }
 
 export interface CoParticipant {
-  participantId: string;
-  userId: string | null;
-  kind: 'human' | 'modeled';
+  userId: string;
+  kind: ParticipantKind;
   displayName: string | null;
   joinedAt: Date;
   leftAt: Date | null;
 }
 
+/** The seat of a resolved participant (or of any row that carries one). */
+export function seatOf(p: { sessionId: string; userId: string }): Seat {
+  return { sessionId: p.sessionId, userId: p.userId };
+}
+
+/** Same seat? */
+export function sameSeat(a: Seat, b: Seat): boolean {
+  return a.sessionId === b.sessionId && a.userId === b.userId;
+}
+
 const PARTICIPANT_SELECT = {
-  id: true,
   sessionId: true,
   userId: true,
   kind: true,
@@ -49,10 +67,9 @@ const PARTICIPANT_SELECT = {
 } as const;
 
 type ParticipantRow = {
-  id: string;
   sessionId: string;
-  userId: string | null;
-  kind: 'human' | 'modeled';
+  userId: string;
+  kind: ParticipantKind;
   displayName: string | null;
   joinedAt: Date;
   leftAt: Date | null;
@@ -61,7 +78,6 @@ type ParticipantRow = {
 
 function toResolved(row: ParticipantRow): ResolvedParticipant {
   return {
-    id: row.id,
     sessionId: row.sessionId,
     userId: row.userId,
     kind: row.kind,
@@ -92,80 +108,27 @@ export async function resolveParticipant(
   return toResolved(row);
 }
 
-/**
- * work-k5fk.3 (6a): the (session_id, user_id) every child of a participant
- * carries next to the participant id. The database pins the three to one
- * participant — FOREIGN KEY (x_participant_id, session_id, x_user_id)
- * REFERENCES participant (id, session_id, user_id) — so a writer that names a
- * participant names its seat too, from the same participant row.
- */
-export interface Seat {
-  sessionId: string;
-  userId: string;
+/** A participant by its seat, present or not (for code that was handed a seat, e.g. a job). */
+export async function getParticipant(seat: Seat): Promise<ResolvedParticipant | null> {
+  return resolveParticipant(seat.sessionId, seat.userId, { includeLeft: true });
 }
 
-/** The seat of a resolved participant. Every seat the app writes for is a user's (a modeled seat has one too). */
-export function seatOf(p: { id?: string; sessionId: string; userId: string | null }): Seat {
-  if (!p.userId) throw new Error(`participant ${p.id ?? ''} has no user: it cannot own a row`);
-  return { sessionId: p.sessionId, userId: p.userId };
-}
-
-/** A participant's user id, for a writer that names it as a seat (see seatOf). */
-export function userIdOf(p: { userId: string | null; id?: string; participantId?: string }): string {
-  if (!p.userId) throw new Error(`participant ${p.id ?? p.participantId ?? ''} has no user: it cannot own a row`);
-  return p.userId;
-}
-
-type ParticipantReader = { participant: { findUniqueOrThrow: typeof prisma.participant.findUniqueOrThrow } };
-
-/** The seat of a participant id (one read), for writers handed only the id. */
-export async function seatOfParticipant(participantId: string, db: ParticipantReader = prisma): Promise<Seat> {
-  const row = await db.participant.findUniqueOrThrow({
-    where: { id: participantId },
-    select: { id: true, sessionId: true, userId: true },
-  });
-  return seatOf(row);
-}
-
-/** A participant by id (for code that was handed an id, e.g. a job). */
-export async function getParticipant(participantId: string): Promise<ResolvedParticipant | null> {
-  const row = (await prisma.participant.findUnique({
-    where: { id: participantId },
-    select: PARTICIPANT_SELECT,
-  })) as ParticipantRow | null;
-  return row ? toResolved(row) : null;
-}
-
-/**
- * Every other participant of the participant's session, through
- * `v_co_participant` (joined to `participant` for the user id and join order).
- */
-export async function getCoParticipants(participantId: string): Promise<CoParticipant[]> {
-  const rows = await prisma.$queryRaw<
-    Array<{
-      participantId: string;
-      userId: string | null;
-      kind: 'human' | 'modeled';
-      displayName: string | null;
-      joinedAt: Date;
-      leftAt: Date | null;
-    }>
-  >`
-    SELECT v.co_participant_id AS "participantId", o.user_id AS "userId", v.co_kind::text AS kind,
-           v.co_display_name AS "displayName", o.joined_at AS "joinedAt", v.co_left_at AS "leftAt"
+/** Every other participant of the participant's session, through `v_co_participant`, in join order. */
+export async function getCoParticipants(seat: Seat): Promise<CoParticipant[]> {
+  return prisma.$queryRaw<CoParticipant[]>`
+    SELECT v.co_user_id AS "userId", v.co_kind::text AS kind, v.co_display_name AS "displayName",
+           v.co_joined_at AS "joinedAt", v.co_left_at AS "leftAt"
     FROM v_co_participant v
-    JOIN participant o ON o.id = v.co_participant_id
-    WHERE v.participant_id = ${participantId}::uuid
-    ORDER BY o.joined_at, o.id`;
-  return rows;
+    WHERE v.session_id = ${seat.sessionId}::uuid AND v.user_id = ${seat.userId}::uuid
+    ORDER BY v.co_joined_at, v.co_user_id`;
 }
 
 /**
  * The one other present human participant — for the two-party paths that
  * still need "the partner". Null when there is none, or more than one.
  */
-export async function getPartnerParticipant(participantId: string): Promise<CoParticipant | null> {
-  const present = (await getCoParticipants(participantId)).filter(p => p.kind === 'human' && !p.leftAt);
+export async function getPartnerParticipant(seat: Seat): Promise<CoParticipant | null> {
+  const present = (await getCoParticipants(seat)).filter(p => p.kind === 'human' && !p.leftAt);
   return present.length === 1 ? present[0] : null;
 }
 
@@ -175,8 +138,8 @@ export async function getPartnerParticipant(participantId: string): Promise<CoPa
  * leaver shared stays readable to the partner (spec §7), and attributed to
  * them; writes keep requiring a present partner (getPartnerParticipant).
  */
-export async function getCounterpartParticipant(participantId: string): Promise<CoParticipant | null> {
-  const humans = (await getCoParticipants(participantId)).filter(p => p.kind === 'human');
+export async function getCounterpartParticipant(seat: Seat): Promise<CoParticipant | null> {
+  const humans = (await getCoParticipants(seat)).filter(p => p.kind === 'human');
   const present = humans.filter(p => !p.leftAt);
   if (present.length === 1) return present[0];
   if (present.length === 0 && humans.length === 1) return humans[0];
@@ -201,7 +164,7 @@ export interface CoParticipantPresence {
  * (owned by mwf_job, identity-bound), as the v_participant note in the
  * trailer says; its result shape is already that function's.
  */
-export async function getCoParticipantPresence(coParticipantId: string): Promise<CoParticipantPresence> {
+export async function getCoParticipantPresence(co: Seat): Promise<CoParticipantPresence> {
   const rows = await prisma.$queryRaw<
     Array<{
       shows: boolean | null;
@@ -213,11 +176,12 @@ export async function getCoParticipantPresence(coParticipantId: string): Promise
     SELECT (up.doc -> 'privacy' ->> 'showActivityStatus')::boolean AS shows,
            r.last_viewed_at, r.last_active_at,
            (SELECT max(m.created_at) FROM message m
-             WHERE m.sender_participant_id = p.id AND m.role = 'USER' AND m.kind = 'CHAT') AS last_turn_at
+             WHERE m.session_id = p.session_id AND m.sender_user_id = p.user_id
+               AND m.role = 'USER' AND m.kind = 'CHAT') AS last_turn_at
     FROM participant p
-    LEFT JOIN conversation_read_state r ON r.participant_id = p.id
+    LEFT JOIN conversation_read_state r ON r.session_id = p.session_id AND r.user_id = p.user_id
     LEFT JOIN user_preferences up ON up.user_id = p.user_id
-    WHERE p.id = ${coParticipantId}::uuid`;
+    WHERE p.session_id = ${co.sessionId}::uuid AND p.user_id = ${co.userId}::uuid`;
   const r = rows[0];
   return {
     showsActivity: r?.shows ?? true,
@@ -229,12 +193,11 @@ export async function getCoParticipantPresence(coParticipantId: string): Promise
 
 /**
  * The partner's user id in a session, for callers that only hold a
- * (session, user) pair. Resolves the caller's participant, then the partner
- * through `v_co_participant`. Null when the caller is not a participant or the
+ * (session, user) pair. Null when the caller is not a participant or the
  * session has no single present partner.
  */
 export async function getPartnerUserIdFor(sessionId: string, userId: string): Promise<string | null> {
   const me = await resolveParticipant(sessionId, userId);
   if (!me) return null;
-  return (await getPartnerParticipant(me.id))?.userId ?? null;
+  return (await getPartnerParticipant(me))?.userId ?? null;
 }

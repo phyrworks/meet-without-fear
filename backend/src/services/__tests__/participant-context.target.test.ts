@@ -52,7 +52,8 @@ const ADA_PRIVATE = {
 
 describeTarget('participant resolution and the single context entry point (target)', () => {
   let fx: RestoredFixture;
-  let ids: { session: string; ada: string; bob: string; adaUser: string; bobUser: string; adaAttempt: string };
+  type Seat = { sessionId: string; userId: string };
+  let ids: { session: string; ada: Seat; bob: Seat; adaUser: string; bobUser: string; adaAttempt: string };
   // Loaded after DATABASE_URL points at the run database.
   let resolver: typeof import('../participant-resolver');
   let assembler: typeof import('../context-assembler');
@@ -76,21 +77,19 @@ describeTarget('participant resolution and the single context entry point (targe
 
     const [p] = await sql<{
       session: string;
-      ada: string;
-      bob: string;
       ada_user: string;
       bob_user: string;
       attempt: string;
     }>(
-      `SELECT pa.session_id AS session, pa.id AS ada, pb.id AS bob, pa.user_id AS ada_user, pb.user_id AS bob_user,
-              (SELECT id FROM empathy_attempt WHERE author_participant_id = pa.id) AS attempt
+      `SELECT pa.session_id AS session, pa.user_id AS ada_user, pb.user_id AS bob_user,
+              (SELECT id FROM empathy_attempt WHERE session_id = pa.session_id AND author_user_id = pa.user_id) AS attempt
        FROM participant pa JOIN "user" ua ON ua.id = pa.user_id AND ua.email = 'ada@e2e.test'
-       JOIN participant pb ON pb.session_id = pa.session_id AND pb.id <> pa.id`,
+       JOIN participant pb ON pb.session_id = pa.session_id AND pb.user_id <> pa.user_id`,
     );
     ids = {
       session: p.session,
-      ada: p.ada,
-      bob: p.bob,
+      ada: { sessionId: p.session, userId: p.ada_user },
+      bob: { sessionId: p.session, userId: p.bob_user },
       adaUser: p.ada_user,
       bobUser: p.bob_user,
       adaAttempt: p.attempt,
@@ -98,24 +97,24 @@ describeTarget('participant resolution and the single context entry point (targe
 
     // --- Bob's private rows -------------------------------------------------------------
     await sql(
-      `INSERT INTO need (participant_id, label, category, ai_confidence, user_id, session_id) VALUES ($1::uuid, $2, 'RECOGNITION', 0.9, (SELECT p.user_id FROM participant p WHERE p.id = $1::uuid), (SELECT p.session_id FROM participant p WHERE p.id = $1::uuid))`,
-      [ids.bob, BOB_PRIVATE.unsharedNeed],
+      `INSERT INTO need (user_id, label, category, ai_confidence, session_id) VALUES ($1::uuid, $2, 'RECOGNITION', 0.9, $3::uuid)`,
+      [ids.bobUser, BOB_PRIVATE.unsharedNeed, ids.session],
     );
     const [shared] = await sql<{ id: string }>(
-      `INSERT INTO need (participant_id, label, category, ai_confidence, confirmed_at, user_id, session_id) VALUES ($1::uuid, $2, 'CONNECTION', 0.9, now(), (SELECT p.user_id FROM participant p WHERE p.id = $1::uuid), (SELECT p.session_id FROM participant p WHERE p.id = $1::uuid)) RETURNING id`,
-      [ids.bob, BOB_PRIVATE.sharedNeedLabel],
+      `INSERT INTO need (user_id, label, category, ai_confidence, confirmed_at, session_id) VALUES ($1::uuid, $2, 'CONNECTION', 0.9, now(), $3::uuid) RETURNING id`,
+      [ids.bobUser, BOB_PRIVATE.sharedNeedLabel, ids.session],
     );
     await sql(
-      `INSERT INTO consent (participant_id, requested_by_participant_id, need_id, decision, decided_at, user_id, requested_by_user_id, session_id) VALUES ($1::uuid, $1::uuid, $2, 'GRANTED', now(), (SELECT p.user_id FROM participant p WHERE p.id = $1::uuid), (SELECT p.user_id FROM participant p WHERE p.id = $1::uuid), (SELECT p.session_id FROM participant p WHERE p.id = $1::uuid))`,
-      [ids.bob, shared.id],
+      `INSERT INTO consent (need_id, decision, decided_at, user_id, requested_by_user_id, session_id) VALUES ($2, 'GRANTED', now(), $1::uuid, $1::uuid, $3::uuid)`,
+      [ids.bobUser, shared.id, ids.session],
     );
     await sql(
-      `INSERT INTO need_share (need_id, participant_id, session_id, category, shared_text, user_id) VALUES ($1, $2::uuid, $3, 'CONNECTION', $4, (SELECT p.user_id FROM participant p WHERE p.id = $2::uuid))`,
-      [shared.id, ids.bob, ids.session, SHARED.needText],
+      `INSERT INTO need_share (need_id, user_id, session_id, category, shared_text) VALUES ($1, $2::uuid, $3, 'CONNECTION', $4)`,
+      [shared.id, ids.bobUser, ids.session, SHARED.needText],
     );
     await sql(
-      `INSERT INTO draft (participant_id, kind, about_participant_id, content, user_id, about_user_id, session_id) VALUES ($1::uuid, 'EMPATHY', $2::uuid, $3, (SELECT p.user_id FROM participant p WHERE p.id = $1::uuid), (SELECT p.user_id FROM participant p WHERE p.id = $2::uuid), (SELECT p.session_id FROM participant p WHERE p.id = $1::uuid))`,
-      [ids.bob, ids.ada, BOB_PRIVATE.draft],
+      `INSERT INTO draft (user_id, kind, about_user_id, content, session_id) VALUES ($1::uuid, 'EMPATHY', $2::uuid, $3, $4::uuid)`,
+      [ids.bobUser, ids.adaUser, BOB_PRIVATE.draft, ids.session],
     );
     const [refl] = await sql<{ id: string }>(
       `INSERT INTO reflection (user_id, title, summary, linked_session_id) VALUES ($1, $2, $2, $3) RETURNING id`,
@@ -125,45 +124,49 @@ describeTarget('participant resolution and the single context entry point (targe
       refl.id,
       BOB_PRIVATE.reflectionMessage,
     ]);
-    await sql(`INSERT INTO ai_memory (participant_id, kind, doc) VALUES ($1, 'NOTABLE_FACTS', $2)`, [
-      ids.bob,
+    await sql(`INSERT INTO ai_memory (session_id, user_id, kind, doc) VALUES ($1, $2, 'NOTABLE_FACTS', $3)`, [
+      ids.session,
+      ids.bobUser,
       JSON.stringify({ facts: [{ category: 'Emotional', fact: BOB_PRIVATE.fact }] }),
     ]);
-    await sql(`INSERT INTO ai_memory (participant_id, kind, doc) VALUES ($1, 'SUMMARY', $2)`, [
-      ids.bob,
+    await sql(`INSERT INTO ai_memory (session_id, user_id, kind, doc) VALUES ($1, $2, 'SUMMARY', $3)`, [
+      ids.session,
+      ids.bobUser,
       JSON.stringify({ text: BOB_PRIVATE.summary, messageCount: 20, generatedAt: new Date().toISOString() }),
     ]);
-    await sql(
-      `INSERT INTO mood_reading (participant_id, intensity, context, user_id, session_id) VALUES ($1::uuid, 9, $2, (SELECT p.user_id FROM participant p WHERE p.id = $1::uuid), (SELECT p.session_id FROM participant p WHERE p.id = $1::uuid))`,
-      [ids.bob, BOB_PRIVATE.mood],
-    );
+    await sql(`INSERT INTO mood_reading (user_id, intensity, context, session_id) VALUES ($1::uuid, 9, $2, $3::uuid)`, [
+      ids.bobUser,
+      BOB_PRIVATE.mood,
+      ids.session,
+    ]);
     // Ada's own readings: distinct from Bob's, so whose thread a bundle carries is visible.
     await sql(
-      `INSERT INTO mood_reading (participant_id, session_id, user_id, intensity, context, recorded_at)
-       SELECT p.id, p.session_id, p.user_id, v.intensity, $2::text, now() - v.ago
-       FROM participant p, (VALUES (3, interval '2 minutes'), (6, interval '1 minute')) v(intensity, ago) WHERE p.id = $1::uuid`,
-      [ids.ada, ADA_PRIVATE.mood],
+      `INSERT INTO mood_reading (session_id, user_id, intensity, context, recorded_at)
+       SELECT p.session_id, p.user_id, v.intensity, $3::text, now() - v.ago
+       FROM participant p, (VALUES (3, interval '2 minutes'), (6, interval '1 minute')) v(intensity, ago)
+       WHERE p.session_id = $1::uuid AND p.user_id = $2::uuid`,
+      [ids.session, ids.adaUser, ADA_PRIVATE.mood],
     );
     await sql(
-      `INSERT INTO empathy_attempt (author_participant_id, subject_participant_id, content, status, author_user_id, subject_user_id, session_id) VALUES ($1::uuid, $2::uuid, $3, 'HELD', (SELECT p.user_id FROM participant p WHERE p.id = $1::uuid), (SELECT p.user_id FROM participant p WHERE p.id = $2::uuid), (SELECT p.session_id FROM participant p WHERE p.id = $1::uuid))`,
-      [ids.bob, ids.ada, BOB_PRIVATE.unrevealedAttempt],
+      `INSERT INTO empathy_attempt (author_user_id, subject_user_id, content, status, session_id) VALUES ($1::uuid, $2::uuid, $3, 'HELD', $4::uuid)`,
+      [ids.bobUser, ids.adaUser, BOB_PRIVATE.unrevealedAttempt, ids.session],
     );
 
     // --- The subject's (Bob's) view of Ada's attempt: result and an open offer ---------------
     const [result] = await sql<{ id: string }>(
-      `INSERT INTO reconciler_result (attempt_id, subject_participant_id, alignment_score, alignment_summary, gap_summary, gap_severity, recommended_action, rationale, sharing_would_help, subject_user_id, session_id)
-       VALUES ($1, $2::uuid, 40, 'summary', $3, 'SIGNIFICANT', 'OFFER_SHARING', 'rationale', true, (SELECT p.user_id FROM participant p WHERE p.id = $2::uuid), (SELECT p.session_id FROM participant p WHERE p.id = $2::uuid)) RETURNING id`,
-      [ids.adaAttempt, ids.bob, SUBJECT_ONLY.gap],
+      `INSERT INTO reconciler_result (attempt_id, subject_user_id, alignment_score, alignment_summary, gap_summary, gap_severity, recommended_action, rationale, sharing_would_help, session_id)
+       VALUES ($1, $2::uuid, 40, 'summary', $3, 'SIGNIFICANT', 'OFFER_SHARING', 'rationale', true, $4::uuid) RETURNING id`,
+      [ids.adaAttempt, ids.bobUser, SUBJECT_ONLY.gap, ids.session],
     );
     await sql(
-      `INSERT INTO context_share_offer (attempt_id, result_id, subject_participant_id, status, suggested_content, subject_user_id, session_id)
-       VALUES ($1, $2, $3::uuid, 'OFFERED', $4, (SELECT p.user_id FROM participant p WHERE p.id = $3::uuid), (SELECT p.session_id FROM participant p WHERE p.id = $3::uuid))`,
-      [ids.adaAttempt, result.id, ids.bob, SUBJECT_ONLY.offer],
+      `INSERT INTO context_share_offer (attempt_id, result_id, subject_user_id, status, suggested_content, session_id)
+       VALUES ($1, $2, $3::uuid, 'OFFERED', $4, $5::uuid)`,
+      [ids.adaAttempt, result.id, ids.bobUser, SUBJECT_ONLY.offer, ids.session],
     );
     // ...and the abstract guidance its AUTHOR (Ada) may see.
     await sql(
-      `INSERT INTO reconciler_guidance (result_id, author_participant_id, subject_participant_id, area_hint, author_user_id, subject_user_id, session_id) VALUES ($1, $2::uuid, $3::uuid, $4, (SELECT p.user_id FROM participant p WHERE p.id = $2::uuid), (SELECT p.user_id FROM participant p WHERE p.id = $3::uuid), (SELECT p.session_id FROM participant p WHERE p.id = $2::uuid))`,
-      [result.id, ids.ada, ids.bob, SHARED.guidance],
+      `INSERT INTO reconciler_guidance (result_id, author_user_id, subject_user_id, area_hint, session_id) VALUES ($1, $2::uuid, $3::uuid, $4, $5::uuid)`,
+      [result.id, ids.adaUser, ids.bobUser, SHARED.guidance, ids.session],
     );
 
     // --- Ada's own reflection (R1: never in Bob's prompt) — NOT linked to the session ----------
@@ -205,10 +208,10 @@ describeTarget('participant resolution and the single context entry point (targe
 
   it("resolves the caller's participant with its MAIN conversation", async () => {
     const p = await resolver.resolveParticipant(ids.session, ids.adaUser);
-    expect(p).toMatchObject({ id: ids.ada, sessionId: ids.session, userId: ids.adaUser, kind: 'human', leftAt: null });
+    expect(p).toMatchObject({ sessionId: ids.session, userId: ids.adaUser, kind: 'human', leftAt: null });
     const [conv] = await sql<{ id: string }>(
-      `SELECT id FROM conversation WHERE participant_id = $1 AND kind = 'MAIN'`,
-      [ids.ada],
+      `SELECT id FROM conversation WHERE session_id = $1 AND user_id = $2 AND kind = 'MAIN'`,
+      [ids.session, ids.adaUser],
     );
     expect(p?.mainConversationId).toBe(conv.id);
     expect(await resolver.resolveParticipant(ids.session, '00000000-0000-7000-8000-000000000000')).toBeNull();
@@ -216,51 +219,55 @@ describeTarget('participant resolution and the single context entry point (targe
 
   it('finds co-participants through v_co_participant and the two-party partner', async () => {
     const co = await resolver.getCoParticipants(ids.ada);
-    expect(co.map(c => c.participantId)).toEqual([ids.bob]);
+    expect(co.map(c => c.userId)).toEqual([ids.bobUser]);
     expect((await resolver.getPartnerParticipant(ids.ada))?.userId).toBe(ids.bobUser);
     expect(await resolver.getPartnerUserIdFor(ids.session, ids.bobUser)).toBe(ids.adaUser);
   });
 
-  it('is N-party safe: a modeled participant is a co-participant but not "the partner"; a second human makes the partner ambiguous (null)', async () => {
-    // A modeled seat is always brought in by a human (work-k5fk.2: participant_check1).
+  it('is N-party safe: an AI participant is a co-participant but not "the partner"; a second human makes the partner ambiguous (null)', async () => {
+    // An AI seat is always brought in by a human (work-k5fk.2: participant_check).
     await sql(
-      `INSERT INTO participant (session_id, kind, added_by_user_id, display_name) VALUES ($1, 'modeled', $2, 'Coach')`,
+      `INSERT INTO participant (session_id, user_id, kind, added_by_user_id, display_name) VALUES ($1, app.ai_user_id(), 'ai', $2, 'Coach')`,
       [ids.session, ids.adaUser],
     );
     expect((await resolver.getCoParticipants(ids.ada)).length).toBe(2);
-    expect((await resolver.getPartnerParticipant(ids.ada))?.participantId).toBe(ids.bob);
+    expect((await resolver.getPartnerParticipant(ids.ada))?.userId).toBe(ids.bobUser);
 
     const [carol] = await sql<{ id: string }>(
       `INSERT INTO "user" (email, first_name) VALUES ('carol@e2e.test', 'Carol') RETURNING id`,
     );
-    const [carolP] = await sql<{ id: string }>(
-      `INSERT INTO participant (session_id, user_id, added_by_user_id, display_name) VALUES ($1, $2, $3, 'Carol') RETURNING id`,
+    await sql(
+      `INSERT INTO participant (session_id, user_id, added_by_user_id, display_name) VALUES ($1, $2, $3, 'Carol')`,
       [ids.session, carol.id, ids.adaUser],
     );
     try {
       expect((await resolver.getCoParticipants(ids.ada)).length).toBe(3);
       expect(await resolver.getPartnerParticipant(ids.ada)).toBeNull();
     } finally {
-      await sql(`DELETE FROM participant WHERE id = $1`, [carolP.id]);
-      await sql(`DELETE FROM participant WHERE session_id = $1 AND kind = 'modeled'`, [ids.session]);
+      await sql(`DELETE FROM participant WHERE session_id = $1 AND user_id = $2`, [ids.session, carol.id]);
+      await sql(`DELETE FROM participant WHERE session_id = $1 AND kind = 'ai'`, [ids.session]);
     }
   });
 
   it('requireSessionAccess resolves the participant once and puts it on the request and its context', async () => {
     const { requireSessionAccess } = await import('../../middleware/auth');
-    const { runWithContext, getCurrentParticipantId } = await import('../../lib/request-context');
+    const { runWithContext, getCurrentSeat } = await import('../../lib/request-context');
     const req = { user: { id: ids.adaUser }, params: { id: ids.session } } as unknown as import('express').Request;
-    let seen: string | undefined;
+    let before: unknown = 'unset';
+    let seen: Seat | undefined;
     let err: unknown;
-    await runWithContext({ turnId: 't', requestId: 'r', startTime: Date.now() }, async () => {
+    // The user is on the context already (requireAuth's updateContext); the seat is requireSessionAccess's.
+    await runWithContext({ turnId: 't', requestId: 'r', startTime: Date.now(), userId: ids.adaUser }, async () => {
+      before = getCurrentSeat();
       await requireSessionAccess(req, {} as import('express').Response, (e?: unknown) => {
         err = e;
-        seen = getCurrentParticipantId();
+        seen = getCurrentSeat();
       });
     });
     expect(err).toBeUndefined();
-    expect(req.participant?.id).toBe(ids.ada);
-    expect(seen).toBe(ids.ada);
+    expect(before).toBeUndefined();
+    expect(req.participant).toMatchObject(ids.ada);
+    expect(seen).toEqual(ids.ada);
 
     // A non-member is refused, and a missing session is a 404.
     const [stranger] = await sql<{ id: string }>(
@@ -275,10 +282,13 @@ describeTarget('participant resolution and the single context entry point (targe
 
   it('a participant who left is refused, even as the accepted invitee, and is not resolved', async () => {
     const { requireSessionAccess } = await import('../../middleware/auth');
-    await sql(`UPDATE participant SET left_at = now() WHERE id = $1`, [ids.bob]);
+    await sql(`UPDATE participant SET left_at = now() WHERE session_id = $1 AND user_id = $2`, [
+      ids.session,
+      ids.bobUser,
+    ]);
     try {
       expect(await resolver.resolveParticipant(ids.session, ids.bobUser)).toBeNull();
-      expect((await resolver.resolveParticipant(ids.session, ids.bobUser, { includeLeft: true }))?.id).toBe(ids.bob);
+      expect(await resolver.resolveParticipant(ids.session, ids.bobUser, { includeLeft: true })).toMatchObject(ids.bob);
       // Bob is the invitation's acceptor: the fallback would admit him; it must not be reached.
       const [inv] = await sql<{ accepted_by_user_id: string }>(`SELECT accepted_by_user_id FROM invitation`);
       expect(inv.accepted_by_user_id).toBe(ids.bobUser);
@@ -288,7 +298,10 @@ describeTarget('participant resolution and the single context entry point (targe
       expect((err as { statusCode?: number })?.statusCode).toBe(403);
       expect(req.participant).toBeUndefined();
     } finally {
-      await sql(`UPDATE participant SET left_at = NULL WHERE id = $1`, [ids.bob]);
+      await sql(`UPDATE participant SET left_at = NULL WHERE session_id = $1 AND user_id = $2`, [
+        ids.session,
+        ids.bobUser,
+      ]);
     }
   });
 
@@ -297,8 +310,9 @@ describeTarget('participant resolution and the single context entry point (targe
   // -------------------------------------------------------------------------------------------
 
   /** Everything a model would see for this participant: the bundle, its rendering, the stage prompt. */
-  const promptTextFor = async (participantId: string, userId: string) => {
-    const bundle = await asUser(userId, () => assembler.buildContextForParticipant(participantId, { intent: INTENT }));
+  const promptTextFor = async (seat: Seat) => {
+    const userId = seat.userId;
+    const bundle = await asUser(userId, () => assembler.buildContextForParticipant(seat, { intent: INTENT }));
     const formatted = assembler.formatContextForPrompt(bundle, {
       sharedContentHistory: bundle.sharedContentHistory,
       milestoneContext: bundle.milestoneContext,
@@ -321,7 +335,7 @@ describeTarget('participant resolution and the single context entry point (targe
   };
 
   it("Ada's bundle, its rendering and her stage prompt carry none of Bob's private rows, nor what only the subject may read", async () => {
-    const { text, formatted } = await promptTextFor(ids.ada, ids.adaUser);
+    const { text, formatted } = await promptTextFor(ids.ada);
     expect(formatted.length).toBeGreaterThan(0);
     for (const probe of [...Object.values(BOB_PRIVATE), ...Object.values(SUBJECT_ONLY)]) {
       expect({ probe, leaked: text.includes(probe) }).toEqual({ probe, leaked: false });
@@ -329,13 +343,13 @@ describeTarget('participant resolution and the single context entry point (targe
   });
 
   it("Ada's emotional thread is HERS (3 → 6), never Bob's 9", async () => {
-    const { bundle } = await promptTextFor(ids.ada, ids.adaUser);
+    const { bundle } = await promptTextFor(ids.ada);
     expect(bundle.emotionalThread).toMatchObject({ initialIntensity: 3, currentIntensity: 6 });
   });
 
   it("Ada's bundle carries the shared vessel: Bob's shared need text, her guidance, her own conversation", async () => {
-    const { bundle, formatted } = await promptTextFor(ids.ada, ids.adaUser);
-    expect(bundle.participantId).toBe(ids.ada);
+    const { bundle, formatted } = await promptTextFor(ids.ada);
+    expect({ sessionId: bundle.sessionId, userId: bundle.userId }).toEqual(ids.ada);
     expect(bundle.stageContext.stage).toBe(2);
     expect(bundle.sharedVessel.sharedNeeds).toEqual([
       expect.objectContaining({ direction: 'partner_to_user', sharedText: SHARED.needText }),
@@ -350,9 +364,9 @@ describeTarget('participant resolution and the single context entry point (targe
   });
 
   it("R1: Ada has no linked reflection (false) and Bob's linked one is only acknowledged; neither crosses", async () => {
-    const ada = await promptTextFor(ids.ada, ids.adaUser);
+    const ada = await promptTextFor(ids.ada);
     expect(ada.bundle.innerThoughtsContext?.hasLinkedSession).toBe(false);
-    const bob = await promptTextFor(ids.bob, ids.bobUser);
+    const bob = await promptTextFor(ids.bob);
     expect(bob.bundle.innerThoughtsContext?.hasLinkedSession).toBe(true);
     for (const probe of Object.values(ADA_PRIVATE)) {
       expect({ probe, leaked: bob.text.includes(probe) }).toEqual({ probe, leaked: false });
@@ -369,7 +383,7 @@ describeTarget('participant resolution and the single context entry point (targe
     const viaWrapper = await asUser(ids.adaUser, () =>
       assembler.assembleContextBundle(ids.session, ids.adaUser, 2, INTENT),
     );
-    expect(viaWrapper.participantId).toBe(ids.ada);
+    expect({ sessionId: viaWrapper.sessionId, userId: viaWrapper.userId }).toEqual(ids.ada);
     expect(JSON.stringify(viaWrapper)).not.toContain(BOB_PRIVATE.unrevealedAttempt);
   });
 });

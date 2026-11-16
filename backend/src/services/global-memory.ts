@@ -12,7 +12,7 @@
 import { getHaikuJson, BrainActivityCallType } from '../lib/bedrock';
 import { logger } from '../lib/logger';
 import { prisma } from '../lib/prisma';
-import type { Prisma } from '../generated/prisma/client';
+import { encryptColumnValue } from '../lib/prisma-encryption-middleware';
 import { withHaikuCircuitBreaker } from '../utils/circuit-breaker';
 
 // ============================================================================
@@ -172,7 +172,7 @@ export async function consolidateGlobalFacts(
 
     // Count sessions with facts for this user (their participants' NOTABLE_FACTS documents)
     const sessionsWithFacts = await prisma.aiMemory.count({
-      where: { kind: 'NOTABLE_FACTS', participant: { userId } },
+      where: { kind: 'NOTABLE_FACTS', userId, sessionId: { not: null } },
     });
 
     // Save as the user's GLOBAL_FACTS document (the CHECK requires `facts`)
@@ -182,11 +182,13 @@ export async function consolidateGlobalFacts(
       sessionCount: sessionsWithFacts,
     };
 
-    await prisma.aiMemory.upsert({
-      where: { userId_kind: { userId, kind: 'GLOBAL_FACTS' } },
-      create: { userId, kind: 'GLOBAL_FACTS', doc: globalFacts as unknown as Prisma.InputJsonObject },
-      update: { doc: globalFacts as unknown as Prisma.InputJsonObject },
-    });
+    // ai_memory has no Prisma unique (work-k5fk.3): one GLOBAL_FACTS per user is the partial index
+    // sql_ai_memory_one_global, so the upsert is raw — the doc sealed here as the Prisma extension
+    // would (user key), and updated_at left to the touch_updated_at trigger.
+    await prisma.$executeRaw`
+      INSERT INTO ai_memory (user_id, kind, doc)
+      VALUES (${userId}::uuid, 'GLOBAL_FACTS'::ai_memory_kind, ${JSON.stringify(encryptColumnValue('ai_memory', 'doc', globalFacts))}::jsonb)
+      ON CONFLICT (user_id, kind) WHERE session_id IS NULL DO UPDATE SET doc = EXCLUDED.doc`;
 
     logger.info(`${logPrefix} Saved ${consolidatedFacts.length} global facts for user ${userId}`);
     return globalFacts;
@@ -220,8 +222,8 @@ export async function loadGlobalFacts(userId: string): Promise<CategorizedFact[]
 
 /** The user's GLOBAL_FACTS document, or null. */
 async function loadGlobalFactsDoc(userId: string): Promise<Partial<GlobalFacts> | null> {
-  const row = await prisma.aiMemory.findUnique({
-    where: { userId_kind: { userId, kind: 'GLOBAL_FACTS' } },
+  const row = await prisma.aiMemory.findFirst({
+    where: { userId, sessionId: null, kind: 'GLOBAL_FACTS' },
     select: { doc: true },
   });
   return (row?.doc as Partial<GlobalFacts> | null) ?? null;

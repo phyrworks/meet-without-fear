@@ -40,15 +40,15 @@ export function isReadyForStage3RevealText(content: string): boolean {
 }
 
 async function getStage3GateResponse(participant: ResolvedParticipant): Promise<string | null> {
-  const states = await loadStageStates([{ id: participant.id, joinedAt: participant.joinedAt }]);
-  const state = states.get(participant.id);
+  const states = await loadStageStates([participant]);
+  const state = states.get(participant);
   // The old gate read the stage-3 StageProgress row: none before stage 3.
   if (!rowForStage(state, 3)) return null;
 
   const [partner, needs, sharers] = await Promise.all([
-    getPartnerParticipant(participant.id),
+    getPartnerParticipant(participant),
     prisma.need.findMany({
-      where: { participantId: participant.id, deletedAt: null },
+      where: { sessionId: participant.sessionId, userId: participant.userId, deletedAt: null },
       orderBy: { createdAt: 'asc' },
       select: { confirmedAt: true },
     }),
@@ -57,7 +57,7 @@ async function getStage3GateResponse(participant: ResolvedParticipant): Promise<
   // "Shared" is a fact of need_share (a live share of theirs exists), not the
   // needs_shared milestone: that one is session-scoped and reached by everyone
   // only once all have shared (R33), so it cannot say who is still waiting.
-  const ownShared = sharers.has(participant.id);
+  const ownShared = sharers.has(participant.userId);
   const ownConfirmed =
     state?.milestones.some(m => m.key === 'needs_confirmed') === true ||
     (needs.length > 0 && needs.every(need => need.confirmedAt !== null));
@@ -78,7 +78,7 @@ async function getStage3GateResponse(participant: ResolvedParticipant): Promise<
     return "Your needs are shared. We'll wait until your partner has shared theirs before showing anything side by side.";
   }
 
-  if (!sharers.has(partner.participantId)) {
+  if (!sharers.has(partner.userId)) {
     return "Your needs are shared. We'll wait until your partner has shared theirs before showing anything side by side.";
   }
 
@@ -123,7 +123,10 @@ export async function saveAiTurnMessage(params: {
   refiningNeedContext: RefiningNeedContext | null;
 }): Promise<StoredMessage> {
   const { requestId, sessionId, participant, accumulatedText, effectiveStage, refiningNeedContext } = params;
-  if (!participant.mainConversationId) throw new Error(`Participant ${participant.id} has no MAIN conversation`);
+  if (!participant.mainConversationId)
+    throw new Error(
+      `Participant (session ${participant.sessionId}, user ${participant.userId}) has no MAIN conversation`,
+    );
 
   // Trim whitespace that Claude sometimes adds. The AI row is written through
   // the JOB connection (spec §1.1 message, writer-principal rule).

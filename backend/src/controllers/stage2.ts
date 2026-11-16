@@ -88,7 +88,7 @@ import {
   openPreJoinDraftRevision,
   recoverStaleOpenerForRead,
 } from '../services/prejoin-edit-opener';
-import { getPartnerParticipant, userIdOf } from '../services/participant-resolver';
+import { getPartnerParticipant, type Seat } from '../services/participant-resolver';
 
 // ============================================================================
 // Helpers
@@ -97,6 +97,8 @@ import { getPartnerParticipant, userIdOf } from '../services/participant-resolve
 interface Stage2Caller {
   userId: string;
   sessionId: string;
+  /** The caller's participant key: (sessionId, userId). */
+  seat: Seat;
   me: SessionParty;
   partner: SessionParty | null;
   /**
@@ -120,15 +122,16 @@ async function stage2Caller(req: Request, res: Response): Promise<Stage2Caller |
   }
   const sessionId = req.params.id;
   const parties = await sessionParties(sessionId);
-  const me = partyOf(parties, { participantId: req.participant?.id }) ?? partyOf(parties, { userId: user.id });
+  const me = partyOf(parties, { userId: user.id });
   if (!me) {
     errorResponse(res, 'NOT_FOUND', 'Session not found', 404);
     return null;
   }
-  const others = parties.filter(p => p.participantId !== me.participantId);
+  const seat: Seat = { sessionId, userId: me.userId };
+  const others = parties.filter(p => p.userId !== me.userId);
   const partner = others.length === 1 ? others[0] : null;
-  const counterpart = partner ?? (others.length === 0 ? await departedCounterpart(sessionId, me.participantId) : null);
-  return { userId: user.id, sessionId, me, partner, counterpart, parties };
+  const counterpart = partner ?? (others.length === 0 ? await departedCounterpart(seat) : null);
+  return { userId: user.id, sessionId, seat, me, partner, counterpart, parties };
 }
 
 /** ACTIVE for everyone; INVITED for the session's creator only (as before). */
@@ -150,14 +153,14 @@ async function sessionAllowsStage2(sessionId: string, userId: string, res: Respo
  * none. Writes go through saveEmpathyDraft, which resolves it under a lock.
  */
 async function empathySubjectOf(caller: Stage2Caller): Promise<EmpathySubject | null> {
-  if (caller.partner) return { aboutParticipantId: caller.partner.participantId };
+  if (caller.partner) return { aboutUserId: caller.partner.userId };
   if (caller.parties.length !== 1) return null;
-  const invitation = await openInvitationOf(caller.me.participantId);
+  const invitation = await openInvitationOf(caller.seat);
   return invitation ? { invitationId: invitation.id } : null;
 }
 
-async function stageOf(participantId: string): Promise<number> {
-  return (await loadCurrentStages([participantId])).get(participantId)?.stage ?? 0;
+async function stageOf(seat: Seat): Promise<number> {
+  return (await loadCurrentStages([seat])).get(seat)?.stage ?? 0;
 }
 
 // ============================================================================
@@ -192,11 +195,11 @@ async function triggerReconcilerAndUpdateStatuses(sessionId: string): Promise<vo
       const hasSignificantGaps =
         rec.action === 'OFFER_SHARING' || (rec.action === 'OFFER_OPTIONAL' && !!rec.suggestedShareFocus);
       const alreadyShared =
-        hasSignificantGaps && (await hasContextAlreadyBeenShared(d.guesser.participantId, d.subject.participantId));
+        hasSignificantGaps && (await hasContextAlreadyBeenShared(sessionId, d.guesser.id, d.subject.id));
       const next: TargetEmpathyStatus = hasSignificantGaps && !alreadyShared ? 'AWAITING_SHARING' : 'READY';
 
       if (next === 'AWAITING_SHARING') {
-        const witnessing = await getWitnessingContent(sessionId, d.subject.participantId, d.subject.id);
+        const witnessing = await getWitnessingContent(sessionId, d.subject.id);
         await generateShareSuggestion(sessionId, d.guesser, d.subject, d.result, witnessing, {
           attemptId: d.data.attemptId,
           storedResultId: d.result.storedResultId,
@@ -205,8 +208,9 @@ async function triggerReconcilerAndUpdateStatuses(sessionId: string): Promise<vo
       } else if (d.result.fresh) {
         await persistAnalysis({
           attemptId: d.data.attemptId,
-          authorParticipantId: d.guesser.participantId,
-          subjectParticipantId: d.subject.participantId,
+          sessionId,
+          authorUserId: d.guesser.id,
+          subjectUserId: d.subject.id,
           result: d.result,
           guidance: d.result.abstractGuidance ?? generateAbstractGuidance(d.result),
         });
@@ -236,7 +240,6 @@ async function triggerReconcilerAndUpdateStatuses(sessionId: string): Promise<vo
     // broadcast carried both users' full status DTOs, each holding that user's
     // unrevealed round. `statuses` is direction status, which both may read.
     for (const p of await sessionParties(sessionId)) {
-      if (!p.userId) continue;
       await publishSessionEvent(sessionId, 'empathy.status_updated', {
         stage: 2,
         statuses: statuses as Record<string, EmpathyStatus | null>,
@@ -273,7 +276,7 @@ export async function saveDraft(req: Request, res: Response): Promise<void> {
     if (!caller) return;
     if (!(await sessionAllowsStage2(caller.sessionId, caller.userId, res))) return;
 
-    const currentStage = await stageOf(caller.me.participantId);
+    const currentStage = await stageOf(caller.seat);
     if (currentStage !== 2) {
       errorResponse(
         res,
@@ -288,7 +291,7 @@ export async function saveDraft(req: Request, res: Response): Promise<void> {
     // from the moment they write it; consent waits for the join). A pending
     // pre-join review is ended only by the author's explicit choice.
     const result = await saveEmpathyDraft({
-      participantId: caller.me.participantId,
+      seat: caller.seat,
       content,
       readyToShare,
       resolvePreJoinReview,
@@ -324,18 +327,18 @@ export async function getDraft(req: Request, res: Response): Promise<void> {
   try {
     const caller = await stage2Caller(req, res);
     if (!caller) return;
-    const { me, counterpart: partner } = caller;
+    const { me, seat, sessionId, counterpart: partner } = caller;
 
     // work-99k2: with no partner yet, the draft is held against the pending
     // invitation; it cannot be consented to until the partner joins.
-    const pendingInvitation = !partner && caller.parties.length === 1 ? await openInvitationOf(me.participantId) : null;
+    const pendingInvitation = !partner && caller.parties.length === 1 ? await openInvitationOf(seat) : null;
     const draft = partner
-      ? await findDraft({ participantId: me.participantId, kind: 'EMPATHY', aboutParticipantId: partner.participantId })
+      ? await findDraft({ seat, kind: 'EMPATHY', aboutUserId: partner.userId })
       : pendingInvitation
-        ? await findDraft({ participantId: me.participantId, kind: 'EMPATHY', invitationId: pendingInvitation.id })
+        ? await findDraft({ seat, kind: 'EMPATHY', invitationId: pendingInvitation.id })
         : null;
-    const alreadyConsented = partner ? await grantedSubmissionConsent(me.participantId, partner.participantId) : false;
-    const myAttempt = partner ? await currentAttempt(me.participantId, partner.participantId) : null;
+    const alreadyConsented = partner ? await grantedSubmissionConsent(sessionId, me.userId, partner.userId) : false;
+    const myAttempt = partner ? await currentAttempt(sessionId, me.userId, partner.userId) : null;
     const isRefining = myAttempt?.status === 'REFINING';
 
     const canConsent = !!(caller.partner && draft && draft.readyToShare && (!alreadyConsented || isRefining));
@@ -360,7 +363,6 @@ export async function getDraft(req: Request, res: Response): Promise<void> {
       await recoverStaleOpenerForRead({
         sessionId: caller.sessionId,
         userId: caller.userId,
-        participantId: me.participantId,
         conversationId: me.mainConversationId,
         partnerName: await reopenPartnerName(caller),
         draft,
@@ -399,7 +401,7 @@ export async function deleteDraft(req: Request, res: Response): Promise<void> {
     const caller = await stage2Caller(req, res);
     if (!caller) return;
     if (!(await sessionAllowsStage2(caller.sessionId, caller.userId, res))) return;
-    const currentStage = await stageOf(caller.me.participantId);
+    const currentStage = await stageOf(caller.seat);
     if (currentStage !== 2) {
       errorResponse(
         res,
@@ -410,12 +412,12 @@ export async function deleteDraft(req: Request, res: Response): Promise<void> {
       return;
     }
     // A draft already consented to (a submitted round) is not set aside here.
-    if (caller.partner && (await currentAttempt(caller.me.participantId, caller.partner.participantId))) {
+    if (caller.partner && (await currentAttempt(caller.sessionId, caller.userId, caller.partner.userId))) {
       errorResponse(res, 'CONFLICT', 'Cannot set aside an empathy statement that has already been shared', 409);
       return;
     }
     const subject = await empathySubjectOf(caller);
-    const deleted = subject ? await deleteEmpathyDraft(caller.me.participantId, subject) : false;
+    const deleted = subject ? await deleteEmpathyDraft(caller.seat, subject) : false;
     successResponse(res, { deleted });
   } catch (error) {
     logger.error('[deleteDraft] Error:', error);
@@ -442,7 +444,7 @@ export async function editPreJoinDraftFirst(req: Request, res: Response): Promis
     const caller = await stage2Caller(req, res);
     if (!caller) return;
     if (!(await sessionAllowsStage2(caller.sessionId, caller.userId, res))) return;
-    const currentStage = await stageOf(caller.me.participantId);
+    const currentStage = await stageOf(caller.seat);
     if (currentStage !== 2) {
       errorResponse(
         res,
@@ -468,13 +470,12 @@ export async function editPreJoinDraftFirst(req: Request, res: Response): Promis
       turnId: `${caller.sessionId}-${caller.userId}-prejoin-edit-first`,
       sessionId: caller.sessionId,
       userId: caller.userId,
-      participantId: caller.me.participantId,
+      seated: true,
     });
     const result = await openPreJoinDraftRevision({
       sessionId: caller.sessionId,
       userId: caller.userId,
       userName: req.user?.name || caller.me.name || 'there',
-      participantId: caller.me.participantId,
       mainConversationId: caller.me.mainConversationId,
       partnerName,
       topicFrame: session?.topicFrameConfirmedAt ? session.topicFrame : undefined,
@@ -498,9 +499,9 @@ export async function editPreJoinDraftFirst(req: Request, res: Response): Promis
  */
 async function reopenPartnerName(caller: Stage2Caller): Promise<string | undefined> {
   const [partner, invitation] = await Promise.all([
-    getPartnerParticipant(caller.me.participantId),
+    getPartnerParticipant(caller.seat),
     prisma.invitation.findFirst({
-      where: { sessionId: caller.sessionId, invitedByParticipantId: caller.me.participantId },
+      where: { sessionId: caller.sessionId, invitedByUserId: caller.userId },
       select: { inviteeName: true },
     }),
   ]);
@@ -511,7 +512,7 @@ async function reopenPartnerName(caller: Stage2Caller): Promise<string | undefin
 async function ownStatementMessage(me: SessionParty) {
   if (!me.mainConversationId) return null;
   return prisma.message.findFirst({
-    where: { conversationId: me.mainConversationId, kind: 'EMPATHY_STATEMENT', senderParticipantId: me.participantId },
+    where: { conversationId: me.mainConversationId, kind: 'EMPATHY_STATEMENT', senderUserId: me.userId },
     orderBy: { createdAt: 'desc' },
     select: { id: true, content: true, createdAt: true },
   });
@@ -539,10 +540,10 @@ export async function consentToShare(req: Request, res: Response): Promise<void>
 
     const caller = await stage2Caller(req, res);
     if (!caller) return;
-    const { sessionId, me, partner, userId } = caller;
+    const { sessionId, me, seat, partner, userId } = caller;
     if (!(await sessionAllowsStage2(sessionId, userId, res))) return;
 
-    const currentStage = await stageOf(me.participantId);
+    const currentStage = await stageOf(seat);
     if (currentStage !== 2) {
       errorResponse(
         res,
@@ -557,18 +558,13 @@ export async function consentToShare(req: Request, res: Response): Promise<void>
       return;
     }
 
-    const draft = await findDraft({
-      participantId: me.participantId,
-      kind: 'EMPATHY',
-      aboutParticipantId: partner.participantId,
-    });
+    const draft = await findDraft({ seat, kind: 'EMPATHY', aboutUserId: partner.userId });
     if (!draft || !draft.readyToShare) {
       errorResponse(res, 'VALIDATION_ERROR', 'Draft must be marked as ready to share before consenting', 400);
       return;
     }
 
-    const partnerSubmitted = async () =>
-      !!directionOf(await directionStatuses(sessionId), partner.participantId, me.participantId);
+    const partnerSubmitted = async () => !!directionOf(await directionStatuses(sessionId), partner.userId, me.userId);
 
     const respondWithExistingAttempt = async (existing: AttemptRow) => {
       const [partnerHas, message] = await Promise.all([partnerSubmitted(), ownStatementMessage(me)]);
@@ -589,7 +585,7 @@ export async function consentToShare(req: Request, res: Response): Promise<void>
     };
 
     // Idempotency: a retry/double-click answers with the existing round.
-    const existing = await currentAttempt(me.participantId, partner.participantId);
+    const existing = await currentAttempt(sessionId, me.userId, partner.userId);
     if (existing) {
       await respondWithExistingAttempt(existing);
       return;
@@ -597,17 +593,15 @@ export async function consentToShare(req: Request, res: Response): Promise<void>
 
     const now = new Date();
     const attempt = await submitAttempt({
-      authorParticipantId: me.participantId,
-      subjectParticipantId: partner.participantId,
       sessionId,
-      authorUserId: userIdOf(me),
-      subjectUserId: userIdOf(partner),
+      authorUserId: me.userId,
+      subjectUserId: partner.userId,
       content: draft.content,
       granted: consent,
       at: now,
     });
     if (!attempt) {
-      const concurrent = await currentAttempt(me.participantId, partner.participantId);
+      const concurrent = await currentAttempt(sessionId, me.userId, partner.userId);
       if (concurrent) {
         await respondWithExistingAttempt(concurrent);
         return;
@@ -617,13 +611,12 @@ export async function consentToShare(req: Request, res: Response): Promise<void>
     }
 
     // The submission milestone (a system fact: the job).
-    await reachMilestone(me.participantId, 'empathy_submitted', now);
+    await reachMilestone(seat, 'empathy_submitted', now);
 
     // "Empathy statement sent" line in the author's own chat, naming the round.
     const empathyMessage = me.mainConversationId
       ? await ownStatementCopy({
           conversationId: me.mainConversationId,
-          participantId: me.participantId,
           sessionId,
           userId,
           content: draft.content,
@@ -675,14 +668,14 @@ export async function consentToShare(req: Request, res: Response): Promise<void>
           .catch((err: unknown) =>
             logger.warn('[consentToShare] Failed to update summary/embedding after transition:', err),
           );
-        const dto = await messageDTO(aiMessage, sessionId, me.participantId);
+        const dto = await messageDTO(aiMessage, { sessionId, userId: me.userId });
         transitionMessage = { id: dto.id, content: dto.content, timestamp: dto.timestamp, stage: dto.stage };
       }
     } catch (error) {
       logger.error('[consentToShare] Failed to generate transition message:', error);
     }
 
-    const statementDto = empathyMessage ? await messageDTO(empathyMessage, sessionId, me.participantId) : null;
+    const statementDto = empathyMessage ? await messageDTO(empathyMessage, { sessionId, userId: me.userId }) : null;
     successResponse(res, {
       consented: consent,
       consentedAt: attempt.submittedAt.toISOString(),
@@ -718,11 +711,9 @@ export async function getPartnerEmpathy(req: Request, res: Response): Promise<vo
     if (!caller) return;
     const { me, counterpart: partner, sessionId } = caller;
 
-    const revealed = partner ? await revealedAttemptAbout(me.participantId, partner.participantId) : null;
-    const direction = partner
-      ? directionOf(await directionStatuses(sessionId), partner.participantId, me.participantId)
-      : undefined;
-    const review = revealed ? await reviewOf(revealed.id, me.participantId) : null;
+    const revealed = partner ? await revealedAttemptAbout(sessionId, me.userId, partner.userId) : null;
+    const direction = partner ? directionOf(await directionStatuses(sessionId), partner.userId, me.userId) : undefined;
+    const review = revealed ? await reviewOf(revealed.id, caller.seat) : null;
 
     successResponse(res, {
       attempt: revealed && partner ? attemptDTO(revealed, partner, review, { statusVersion: true }) : null,
@@ -765,10 +756,10 @@ export async function validateEmpathy(req: Request, res: Response): Promise<void
 
     const caller = await stage2Caller(req, res);
     if (!caller) return;
-    const { sessionId, me, partner, userId } = caller;
+    const { sessionId, me, seat, partner, userId } = caller;
     if (!(await sessionAllowsStage2(sessionId, userId, res))) return;
 
-    const currentStage = await stageOf(me.participantId);
+    const currentStage = await stageOf(seat);
     if (currentStage !== 2) {
       errorResponse(
         res,
@@ -779,7 +770,7 @@ export async function validateEmpathy(req: Request, res: Response): Promise<void
       return;
     }
 
-    const partnerAttempt = partner ? await revealedAttemptAbout(me.participantId, partner.participantId) : null;
+    const partnerAttempt = partner ? await revealedAttemptAbout(sessionId, me.userId, partner.userId) : null;
     if (!partner || !partnerAttempt) {
       errorResponse(res, 'NOT_FOUND', 'Partner empathy attempt not found', 404);
       return;
@@ -793,9 +784,8 @@ export async function validateEmpathy(req: Request, res: Response): Promise<void
     const sentFeedback = validated ? null : (trimmedFeedback ?? null);
     const review = await recordReview({
       attemptId: partnerAttempt.id,
-      reviewerParticipantId: me.participantId,
       sessionId,
-      reviewerUserId: userIdOf(me),
+      reviewerUserId: me.userId,
       validated,
       sentFeedback,
       at: now,
@@ -804,9 +794,8 @@ export async function validateEmpathy(req: Request, res: Response): Promise<void
       // The explicit send's consent (spec §1.3: arc review_id, no requester).
       await prisma.consent.create({
         data: {
-          participantId: me.participantId,
           sessionId,
-          userId: userIdOf(me),
+          userId: me.userId,
           reviewId: review.id,
           decision: 'GRANTED',
           decidedAt: now,
@@ -836,7 +825,8 @@ export async function validateEmpathy(req: Request, res: Response): Promise<void
         await aiNote(partner.mainConversationId, framingMessage, new Date(now.getTime()));
         await deliver({
           toConversationId: partner.mainConversationId,
-          fromParticipantId: me.participantId,
+          sessionId,
+          fromUserId: me.userId,
           kind: 'VALIDATION_FEEDBACK',
           content: sentFeedback,
           sourceAttemptId: partnerAttempt.id,
@@ -845,35 +835,33 @@ export async function validateEmpathy(req: Request, res: Response): Promise<void
       }
     }
 
-    if (partner.userId) {
-      // Content-free (I1/R36): no status DTO, no feedback text. The addressed
-      // status_updated makes the partner's device refetch its own status.
-      if (validated) {
-        await notifyPartner(
-          sessionId,
-          partner.userId,
-          'partner.stage_completed',
-          { stage: 2, validated, completedBy: userId, triggeredByUserId: userId },
-          { excludeUserId: userId },
-        );
-      }
+    // Content-free (I1/R36): no status DTO, no feedback text. The addressed
+    // status_updated makes the partner's device refetch its own status.
+    if (validated) {
       await notifyPartner(
         sessionId,
         partner.userId,
-        'empathy.status_updated',
-        {
-          status: validated ? 'VALIDATED' : 'REFINING',
-          forUserId: partner.userId,
-          validatedBy: userId,
-          feedbackShared: !validated,
-          triggeredByUserId: userId,
-        },
+        'partner.stage_completed',
+        { stage: 2, validated, completedBy: userId, triggeredByUserId: userId },
         { excludeUserId: userId },
       );
     }
+    await notifyPartner(
+      sessionId,
+      partner.userId,
+      'empathy.status_updated',
+      {
+        status: validated ? 'VALIDATED' : 'REFINING',
+        forUserId: partner.userId,
+        validatedBy: userId,
+        feedbackShared: !validated,
+        triggeredByUserId: userId,
+      },
+      { excludeUserId: userId },
+    );
 
     // Has the partner validated MY attempt? My own round's status says so.
-    const myAttempt = await currentAttempt(me.participantId, partner.participantId);
+    const myAttempt = await currentAttempt(sessionId, me.userId, partner.userId);
     const partnerHasValidatedMyAttempt = myAttempt?.status === 'VALIDATED';
     if (validated && !partnerHasValidatedMyAttempt && me.mainConversationId) {
       const waitMessage =
@@ -931,7 +919,7 @@ export async function skipRefinement(req: Request, res: Response): Promise<void>
     if (!caller) return;
     const { sessionId, me, partner } = caller;
 
-    const attempt = partner ? await currentAttempt(me.participantId, partner.participantId) : null;
+    const attempt = partner ? await currentAttempt(sessionId, me.userId, partner.userId) : null;
     if (!partner || !attempt) {
       errorResponse(res, 'NOT_FOUND', 'Empathy attempt not found', 404);
       return;
@@ -963,12 +951,10 @@ export async function skipRefinement(req: Request, res: Response): Promise<void>
       // re-run, not skipped (fix round 2).
       const { checkAndRevealBothIfReady } = await import('../services/reconciler');
       await checkAndRevealBothIfReady(sessionId);
-      status = (await currentAttempt(me.participantId, partner.participantId))?.status ?? status;
+      status = (await currentAttempt(sessionId, me.userId, partner.userId))?.status ?? status;
     }
 
-    if (partner.userId) {
-      await notifyPartner(sessionId, partner.userId, 'partner.skipped_refinement', { willingToAccept });
-    }
+    await notifyPartner(sessionId, partner.userId, 'partner.skipped_refinement', { willingToAccept });
 
     successResponse(res, { success: true, status });
   } catch (error) {
@@ -996,18 +982,18 @@ export async function saveValidationFeedbackDraft(req: Request, res: Response): 
 
     const caller = await stage2Caller(req, res);
     if (!caller) return;
-    const { me, partner } = caller;
+    const { me, seat, sessionId, partner } = caller;
     // The attempt the feedback answers: the revealed round about me. Nothing
     // before the reveal (m1): the subject never reads an unrevealed row, not
     // even for its id, and a draft never points at an unrevealed round.
-    const target = partner ? await revealedAttemptAbout(me.participantId, partner.participantId) : null;
+    const target = partner ? await revealedAttemptAbout(sessionId, me.userId, partner.userId) : null;
     if (!target) {
       errorResponse(res, 'NOT_FOUND', 'Partner empathy attempt not found', 404);
       return;
     }
 
     const draft = await upsertDraft({
-      participantId: me.participantId,
+      seat,
       kind: 'VALIDATION_FEEDBACK',
       attemptId: target.id,
       content,
@@ -1141,7 +1127,7 @@ async function triggerStage3Transition(sessionId: string, userId: string, partie
     const messages: Array<{ id: string; content: string; timestamp: string; forUserId: string }> = [];
 
     for (const p of parties) {
-      const other = parties.find(o => o.participantId !== p.participantId);
+      const other = parties.find(o => o.userId !== p.userId);
       const uName = nameOf(p);
       const pName = other ? nameOf(other) : 'Partner';
 
@@ -1184,8 +1170,8 @@ Respond in JSON format:
       }
 
       // The milestone first: the transition message is the participant's first stage-3 row.
-      await reachMilestone(p.participantId, 'empathy_validated');
-      if (p.mainConversationId && p.userId) {
+      await reachMilestone({ sessionId, userId: p.userId }, 'empathy_validated');
+      if (p.mainConversationId) {
         const msg = await aiNote(p.mainConversationId, content);
         messages.push({
           id: msg.id,
@@ -1197,9 +1183,10 @@ Respond in JSON format:
     }
 
     // Stage 2 sharing window closed: open offers expire (job).
-    const pids = parties.map(p => p.participantId);
+    const uids = parties.map(p => p.userId);
     await getJobPrisma().$executeRaw`UPDATE context_share_offer SET status = 'EXPIRED'
-      WHERE subject_participant_id = ANY(${pids}::uuid[]) AND status IN ('PENDING', 'OFFERED')`;
+      WHERE session_id = ${sessionId}::uuid AND subject_user_id = ANY(${uids}::uuid[])
+        AND status IN ('PENDING', 'OFFERED')`;
 
     if (parties.length > 1) {
       for (const m of messages) {
@@ -1275,7 +1262,7 @@ export async function refineEmpathy(req: Request, res: Response): Promise<void> 
     if (!caller) return;
     const { sessionId, me, partner, userId } = caller;
 
-    const attempt = partner ? await currentAttempt(me.participantId, partner.participantId) : null;
+    const attempt = partner ? await currentAttempt(sessionId, me.userId, partner.userId) : null;
     if (!attempt) {
       errorResponse(res, 'NOT_FOUND', 'Empathy attempt not found', 404);
       return;
@@ -1291,7 +1278,7 @@ export async function refineEmpathy(req: Request, res: Response): Promise<void> 
     }
 
     const guidance = await prisma.reconcilerGuidance.findFirst({
-      where: { authorParticipantId: me.participantId, result: { attemptId: attempt.id, supersededAt: null } },
+      where: { sessionId, authorUserId: me.userId, result: { attemptId: attempt.id, supersededAt: null } },
       select: { areaHint: true, promptSeed: true },
     });
     const partnerName = partner?.name ?? 'your partner';
@@ -1395,7 +1382,7 @@ export async function resubmitEmpathy(req: Request, res: Response): Promise<void
     if (!caller) return;
     const { sessionId, me, partner, userId } = caller;
 
-    const attempt = partner ? await currentAttempt(me.participantId, partner.participantId) : null;
+    const attempt = partner ? await currentAttempt(sessionId, me.userId, partner.userId) : null;
     if (!partner || !attempt) {
       errorResponse(res, 'NOT_FOUND', 'Empathy attempt not found', 404);
       return;
@@ -1423,7 +1410,6 @@ export async function resubmitEmpathy(req: Request, res: Response): Promise<void
     const newMessage = me.mainConversationId
       ? await ownStatementCopy({
           conversationId: me.mainConversationId,
-          participantId: me.participantId,
           sessionId,
           userId,
           content,
@@ -1455,14 +1441,14 @@ export async function resubmitEmpathy(req: Request, res: Response): Promise<void
         updateSessionSummary(sessionId, userId, turnId).catch(err =>
           logger.warn('[resubmitEmpathy] Failed to update session summary after transition:', err),
         );
-        const dto = await messageDTO(aiMessage, sessionId, me.participantId);
+        const dto = await messageDTO(aiMessage, { sessionId, userId: me.userId });
         transitionMessage = { id: dto.id, content: dto.content, timestamp: dto.timestamp, stage: dto.stage };
       }
     } catch (error) {
       logger.error('[resubmitEmpathy] Failed to generate transition message:', error);
     }
 
-    const statementDto = newMessage ? await messageDTO(newMessage, sessionId, me.participantId) : null;
+    const statementDto = newMessage ? await messageDTO(newMessage, { sessionId, userId: me.userId }) : null;
     successResponse(res, {
       // Display status (the target round is HELD while the review runs).
       status: 'ANALYZING',
@@ -1515,7 +1501,7 @@ export async function getShareSuggestion(req: Request, res: Response): Promise<v
   try {
     const caller = await stage2Caller(req, res);
     if (!caller) return;
-    if ((await stageOf(caller.me.participantId)) !== 2) {
+    if ((await stageOf(caller.seat)) !== 2) {
       successResponse(res, { hasSuggestion: false, suggestion: null });
       return;
     }

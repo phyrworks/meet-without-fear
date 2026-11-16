@@ -14,7 +14,7 @@
 import { logger } from '../lib/logger';
 import { getJobPrisma, prisma } from '../lib/prisma';
 import { encryptColumnValue } from '../lib/prisma-encryption-middleware';
-import { getPartnerParticipant, resolveParticipant } from './participant-resolver';
+import { getPartnerParticipant, resolveParticipant, type Seat } from './participant-resolver';
 import { loadCurrentStages } from './stage-shim';
 import { getHaikuJson, BrainActivityCallType } from '../lib/bedrock';
 import { estimateTokens } from '../utils/token-budget';
@@ -305,7 +305,7 @@ export async function updateSessionSummary(
       await prisma.message.findMany({
         where: {
           conversationId: participant.mainConversationId,
-          OR: [{ senderParticipantId: participant.id }, { role: 'AI' }],
+          OR: [{ senderUserId: participant.userId }, { role: 'AI' }],
         },
         orderBy: { createdAt: 'asc' },
         select: { role: true, kind: true, content: true, createdAt: true },
@@ -320,7 +320,7 @@ export async function updateSessionSummary(
     const messageCount = messages.length;
 
     // Check if we actually need to summarize
-    const existing = await readSummaryDoc(participant.id);
+    const existing = await readSummaryDoc(participant);
     const totalTokens = messages.reduce(
       (sum: number, msg: SummaryMessageRecord) => sum + estimateTokens(msg.content),
       0,
@@ -330,12 +330,12 @@ export async function updateSessionSummary(
     }
 
     // Names: the participant's own, and the co-participant's.
-    const partner = await getPartnerParticipant(participant.id);
+    const partner = await getPartnerParticipant(participant);
     const userName = participant.displayName || 'User';
     const partnerName = partner?.displayName || 'Partner';
 
     // Get current stage (stage shim)
-    const stage = (await loadCurrentStages([participant.id])).get(participant.id)?.stage ?? 1;
+    const stage = (await loadCurrentStages([participant])).get(participant)?.stage ?? 1;
 
     // Determine which messages to summarize (older ones, keeping recent in full)
     const messagesToSummarize = messages.slice(0, -SUMMARIZATION_CONFIG.recentMessagesToKeep);
@@ -406,11 +406,13 @@ export async function updateSessionSummary(
       }),
     );
     // One statement, no RETURNING: the job's grants cover exactly this
-    // (trailer T7, TS-9: INSERT (participant_id, kind, doc), UPDATE (doc)).
+    // (trailer T7, work-k5fk.3: INSERT (session_id, user_id, kind, doc), UPDATE (doc)); the conflict
+    // target is the partial index sql_ai_memory_one_per_participant (ai_memory has no Prisma unique).
     await getJobPrisma().$executeRaw`
-      INSERT INTO ai_memory (participant_id, kind, doc)
-      VALUES (${participant.id}::uuid, 'SUMMARY'::ai_memory_kind, ${JSON.stringify(encryptColumnValue('ai_memory', 'doc', doc))}::jsonb)
-      ON CONFLICT (participant_id, kind) DO UPDATE SET doc = EXCLUDED.doc`;
+      INSERT INTO ai_memory (session_id, user_id, kind, doc)
+      VALUES (${participant.sessionId}::uuid, ${participant.userId}::uuid, 'SUMMARY'::ai_memory_kind,
+              ${JSON.stringify(encryptColumnValue('ai_memory', 'doc', doc))}::jsonb)
+      ON CONFLICT (user_id, session_id, kind) WHERE session_id IS NOT NULL DO UPDATE SET doc = EXCLUDED.doc`;
 
     logger.info(`[ConversationSummarizer] Summarized ${messagesToSummarize.length} messages for session ${sessionId}`);
 
@@ -422,9 +424,9 @@ export async function updateSessionSummary(
 }
 
 /** The participant's stored SUMMARY document (ai_memory), or null. */
-async function readSummaryDoc(participantId: string): Promise<Record<string, unknown> | null> {
-  const row = await prisma.aiMemory.findUnique({
-    where: { participantId_kind: { participantId, kind: 'SUMMARY' } },
+async function readSummaryDoc(seat: Seat): Promise<Record<string, unknown> | null> {
+  const row = await prisma.aiMemory.findFirst({
+    where: { sessionId: seat.sessionId, userId: seat.userId, kind: 'SUMMARY' },
     select: { doc: true },
   });
   const doc = row?.doc;
@@ -475,7 +477,7 @@ export async function maybeRefreshSummaryForResumption(params: {
   // Cheap guard: look up existing summary timestamp. Skip the Haiku call if
   // it's already newer than the user's last message — nothing has changed.
   const participant = await resolveParticipant(sessionId, userId);
-  const existing = participant ? await readSummaryDoc(participant.id) : null;
+  const existing = participant ? await readSummaryDoc(participant) : null;
   if (existing) {
     const generatedAt = typeof existing.generatedAt === 'string' ? new Date(existing.generatedAt) : null;
     if (generatedAt && !Number.isNaN(generatedAt.getTime()) && generatedAt.getTime() >= lastUserTurnAt.getTime()) {
@@ -510,7 +512,7 @@ export async function getSessionSummary(
   lastUnresolvedThread: string | null;
 } | null> {
   const participant = await resolveParticipant(sessionId, userId);
-  const doc = participant ? await readSummaryDoc(participant.id) : null;
+  const doc = participant ? await readSummaryDoc(participant) : null;
   if (!doc) {
     return null;
   }

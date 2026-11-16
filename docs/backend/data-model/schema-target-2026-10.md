@@ -34,7 +34,7 @@ The review's Q3–Q7 are still open. The target is designed under these; each ca
 | Timestamps | all `timestamptz`; `created_at timestamptz NOT NULL DEFAULT now()` on every table; `updated_at timestamptz NOT NULL DEFAULT now()` on tables updated in place, maintained by one `BEFORE UPDATE` trigger `app.touch_updated_at()`; append-only tables have no `updated_at` and `mwf_app` holds no `UPDATE` grant on them |
 | Names | snake_case tables and columns; enums `snake_case` types; Prisma models PascalCase via `@@map`, fields camelCase via `@map` |
 | FK delete rules | → `user`: **RESTRICT, always** (soft delete, P3 D9). → `session`: CASCADE (retention hard-deletes whole sessions). → `participant`: CASCADE (a participant row is removed only with its session; a leaver's row survives, pointing at the tombstone). → `conversation`, `reflection`, `empathy_attempt`, `follow_up`: CASCADE. → `need` from `need_share`: **RESTRICT** (a shared need is delivered content and survives its owner; N-3). → `consent`: nothing references it (P0-3) — a consent row is never deleted by `mwf_app` (no DELETE policy) and goes only with its target/session. → `proposal`: RESTRICT from `agreement`, CASCADE from its own children. → `milestone`: RESTRICT |
-| Participant references (work-k5fk.3, step 6a) | every child of `participant` also carries `session_id` and, next to each `x_participant_id`, the participant's user as `x_user_id`; the seat pin `FOREIGN KEY (x_participant_id, session_id, x_user_id) REFERENCES participant (id, session_id, user_id) ON DELETE CASCADE` keeps the three one participant, and a child of a child pins its parent on `(parent_id, session_id)`, so every reference on a row is of the row's one session — a key, not a trigger. The per-table column lists below still show the participant ids only; step 6b drops them (PK `(session_id, user_id)`), design note §3. `ai_memory` is reshaped in 6b |
+| Participant references (work-k5fk.3) | `participant` is keyed `(session_id, user_id)` (no surrogate id; `kind` is the user's kind, pinned by `FOREIGN KEY (user_id, kind) REFERENCES "user" (id, kind)`). Every child names a participant by `session_id` + a user column (`user_id`, `author_user_id`, `subject_user_id`, `sender_user_id`, `reviewer_user_id`, `requested_by_user_id`, `about_user_id`, `actor_user_id`, `invited_by_user_id`, `created_by_user_id`, `removed_by_user_id`, `closed_by_user_id`, `owner_user_id`, `participant_user_id`) with `FOREIGN KEY (session_id, x_user_id) REFERENCES participant (session_id, user_id) ON DELETE CASCADE`; a child of a child pins its parent on `(parent_id, session_id)`, so every reference on a row is of the row's one session — a key, not a trigger. **Read every `*_participant_id` in the per-table lists below as the matching `*_user_id` with the row's `session_id`**; design note §3 has the per-table keys |
 | Every FK | has a supporting index unless it is the leading column of the PK or of a listed unique |
 | `jsonb` | every column carries `CHECK (jsonb_typeof(col) = 'object')` (or `'array'`); documents with a known contract add key-presence checks listed per table; the five encrypted envelopes add the `t_jsonb_envelope` trigger (not a CHECK: a CHECK refusal echoes the row) and the two plaintext app documents (`user_preferences.doc`, `ai_memory.doc`) a JSON-schema trigger with `doc_schema_version` — [jsonb-shapes-2026-11.md](./jsonb-shapes-2026-11.md) (work-k5fk.8) |
 | Visibility classes | **P** private-to-participant · **S** shared-vessel (all participants of the session) · **U** user-private (outside any session) · **G** global/reference · **T** telemetry |
@@ -75,7 +75,7 @@ The rule "one live session per pair of humans" as a key (work-k5fk.2, A-Q3). · 
 | user_b | uuid | no | | the greater |
 | session_id | uuid | no | | FK session CASCADE; FKs (session_id, user_a) and (session_id, user_b) → participant (session_id, user_id) CASCADE |
 
-Keys: PK (user_a, user_b). CHECK `user_a < user_b`. Indexes (session_id, user_a), (session_id, user_b). Maintained by definer triggers only: **T-live-session-pair** (`AFTER INSERT ON participant` for a present human of a live session, holding the session row `FOR NO KEY UPDATE` so joins and status moves serialise: one row per other present human — the PK refuses a second live session with 23505 at the second human's join) and **T-live-session-pair-end** (`AFTER UPDATE OF status ON session` → RESOLVED/ABANDONED/ARCHIVED: the session's rows go). The AI and personas are `modeled` participants and never appear.
+Keys: PK (user_a, user_b). CHECK `user_a < user_b`. Indexes (session_id, user_a), (session_id, user_b). Maintained by definer triggers only: **T-live-session-pair** (`AFTER INSERT ON participant` for a present human of a live session, holding the session row `FOR NO KEY UPDATE` so joins and status moves serialise: one row per other present human — the PK refuses a second live session with 23505 at the second human's join) and **T-live-session-pair-end** (`AFTER UPDATE OF status ON session` → RESOLVED/ABANDONED/ARCHIVED: the session's rows go). The AI and personas are not `human` participants and never appear.
 RLS: S `user_a = me OR user_b = me` (the app's invite-time pre-check) · I/U/D none (the trigger functions).
 Absorbs: the old partial unique `sql_session_one_live (relationship_id)`.
 
@@ -101,17 +101,16 @@ Absorbs: `Session` minus `type` (dropped; `INNER_WORK` never written), minus `WA
 One membership of a session: the first-class entity (D1). · core · S (existence) / P (its content) · none
 | column | type | null | default | meaning |
 |---|---|---|---|---|
-| id | uuid | no | uuidv7() | |
-| session_id | uuid | no | | FK session CASCADE |
-| user_id | uuid | yes | | FK user RESTRICT; NULL for an imagined (modeled) participant |
-| kind | participant_kind | no | 'human' | `human \| modeled`: human exactly when the user is a human (T-participant-kind); the AI and a persona sit as modeled |
+| session_id | uuid | no | | FK session CASCADE; with user_id the primary key (work-k5fk.3) |
+| user_id | uuid | no | | with kind, FK user (id, kind) RESTRICT |
+| kind | user_kind | no | 'human' | `human \| ai \| persona`: the user's kind, pinned by FOREIGN KEY (user_id, kind) REFERENCES user (id, kind) (work-k5fk.3, replacing T-participant-kind and `participant_kind`) |
 | added_by_user_id | uuid | yes | | who brought them in (work-k5fk.2): FK (session_id, added_by_user_id) → participant (session_id, user_id), no action; NULL for the initiator (at most one) |
 | display_name | text | yes | | snapshot of the name shown to co-participants; the only `user` fact a co-participant may see (P3 §2 `partner_display_name`) |
 | joined_at | timestamptz | no | now() | |
 | left_at | timestamptz | yes | | set when the user leaves/deletes; row stays |
 | created_at, updated_at | timestamptz | no | now() | |
 
-Keys: PK. UNIQUE (session_id, user_id) — a user is one participant per session. CHECK `kind = 'modeled' OR user_id IS NOT NULL`, CHECK `kind = 'human' OR added_by_user_id IS NOT NULL`, CHECK `added_by_user_id IS DISTINCT FROM user_id`; `sql_participant_one_initiator` UNIQUE (session_id) WHERE added_by_user_id IS NULL. Indexes: (user_id) — "my sessions", (session_id, added_by_user_id). Triggers T-participant-kind (kind ⇔ user kind) and T-participant-added-by (the adder is a human participant; a persona's adder is its owner), definer. Trigger **T-cardinality-2**: `DEFERRABLE INITIALLY DEFERRED` constraint trigger on DELETE / UPDATE OF kind, user_id, **left_at** refusing to leave a non-terminal session with no human participant whose `left_at IS NULL` (D1). `left_at` semantics: it does **not** affect `app.is_member` — a leaver who has not deleted their account keeps reading the shared vessel (today's behaviour); the tombstone path sets `left_at` *and* moves the live session to `ABANDONED`, and the tombstoned `user_id` never equals any `me`, so access ends through identity, not through this column.
+Keys: PK (session_id, user_id) — a user is one participant per session; FOREIGN KEY (user_id, kind) REFERENCES user (id, kind). CHECK `kind = 'human' OR added_by_user_id IS NOT NULL`, CHECK `added_by_user_id IS DISTINCT FROM user_id`; `sql_participant_one_initiator` UNIQUE (session_id) WHERE added_by_user_id IS NULL. Indexes: (user_id, kind) — "my sessions" and the kind FK, (session_id, added_by_user_id). Trigger T-participant-added-by (the adder is a human participant; a persona's adder is its owner), definer. Trigger **T-cardinality-2**: `DEFERRABLE INITIALLY DEFERRED` constraint trigger on DELETE / UPDATE OF kind, user_id, **left_at** refusing to leave a non-terminal session with no human participant whose `left_at IS NULL` (D1). `left_at` semantics: it does **not** affect `app.is_member` — a leaver who has not deleted their account keeps reading the shared vessel (today's behaviour); the tombstone path sets `left_at` *and* moves the live session to `ABANDONED`, and the tombstoned `user_id` never equals any `me`, so access ends through identity, not through this column.
 RLS: S `user_id = me OR app.is_member(session_id)` (definer helper — an inline `EXISTS` here recurses, P1-1). Co-participants read the whole row: `id, kind, display_name, joined_at, left_at` **and `user_id`** — a column arm cannot hide it (Conventions); `display_name` is the only *user* fact exposed, and `v_participant` masks everything else · I `job` (invitation accept / session create) · U `user_id = me` (display_name only) · D none.
 Absorbs: new. Seeded from `StageProgress(sessionId,userId)` ∪ `UserVessel(sessionId,userId)` ∪ `RelationshipMember × Session`; `display_name` from `User.name`/`RelationshipMember.nickname`.
 
@@ -980,7 +979,7 @@ erDiagram
 | Enum (Postgres type) | Members | From |
 |---|---|---|
 | `session_status` | CREATED, INVITED, ACTIVE, RESOLVED, ABANDONED, ARCHIVED | `SessionStatus` minus WAITING, PAUSED |
-| `participant_kind` | human, modeled | new |
+| `participant_kind` | — | gone (work-k5fk.3): `participant.kind` is `user_kind`, pinned to the user's |
 | `conversation_kind` / `conversation_status` / `subchat_anchor` | MAIN, SUBCHAT / ACTIVE, RESOLVED / NEEDS_BRAINSTORM, PROPOSAL_REFINEMENT, NO_OVERLAP | `Stage4SubChat*` |
 | `message_role` | USER, AI, SYSTEM | `MessageRole` split |
 | `message_kind` | CHAT, EMPATHY_STATEMENT, EMPATHY_REVEAL_INTRO, SHARED_CONTEXT, VALIDATION_FEEDBACK, SHARE_SUGGESTION, EMPATHY_VALIDATION_PROMPT | `MessageRole` split |
@@ -1108,7 +1107,7 @@ Enforced by the schema (mechanism named):
 |---|---|
 | A message has exactly one audience, and it is a participant's private conversation | `message.conversation_id NOT NULL` FK; RLS owner arm; T-message-immutable |
 | Humans cannot author as the facilitator; AI/SYSTEM content is immutable | CHECK on `message.role`/`sender_participant_id`; T-message-immutable |
-| A user is at most one participant per session; a modeled participant has no user | `participant` UNIQUE (session_id, user_id); CHECK kind ⇔ user_id |
+| A user is at most one participant per session; a seat's kind is its user's | `participant` PK (session_id, user_id); FK (user_id, kind) → user (id, kind) |
 | A session becomes ACTIVE only with ≥2 participants, ≥1 human; never loses its last human while live | T-cardinality-1, T-cardinality-2 (deferred) |
 | One live session per pair of humans (A-Q3) | `live_session_pair` PK, maintained by two definer triggers (work-k5fk.2) |
 | Exactly one main conversation per participant | partial unique on `conversation` |

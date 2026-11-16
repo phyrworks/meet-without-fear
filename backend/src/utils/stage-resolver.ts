@@ -25,16 +25,13 @@ export async function resolveStageIntervalsForSessions(
 
   const participants = await client.participant.findMany({
     where: { sessionId: { in: sessionIds } },
-    select: { id: true, sessionId: true, joinedAt: true },
+    select: { sessionId: true, userId: true, joinedAt: true },
   });
-  const states = await loadStageStates(
-    participants.map(p => ({ id: p.id, joinedAt: p.joinedAt })),
-    client,
-  );
+  const states = await loadStageStates(participants, client);
 
   const sessionIntervals = new Map<string, StageInterval[]>();
   for (const p of participants) {
-    const state = states.get(p.id);
+    const state = states.get(p);
     if (!state) continue;
     const list = sessionIntervals.get(p.sessionId) ?? [];
     for (const row of state.rows) {

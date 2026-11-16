@@ -59,6 +59,7 @@
 
 import type { MilestoneKey, MilestoneMap, PartnerMilestoneMap } from '@meet-without-fear/shared';
 import { prisma, type DbClient } from '../lib/prisma';
+import type { Seat } from './participant-resolver';
 
 /** Terminal milestone of each stage (stage index → key). */
 export const TERMINAL_MILESTONE = [
@@ -71,13 +72,92 @@ export const TERMINAL_MILESTONE = [
 
 export const LAST_STAGE = 4;
 
+/**
+ * A map keyed by participant — by its seat (session, user) since work-k5fk.3,
+ * which has no single-string identity. `get(seat)` takes any object carrying
+ * the pair (a ResolvedParticipant, a row with sessionId/userId), so a caller
+ * cannot look a participant up by a bare user id across sessions by mistake.
+ */
+export class SeatMap<T> {
+  private readonly inner = new Map<string, { seat: Seat; value: T }>();
+
+  private static key(seat: Seat): string {
+    return `${seat.sessionId}/${seat.userId}`;
+  }
+
+  get(seat: Seat): T | undefined {
+    return this.inner.get(SeatMap.key(seat))?.value;
+  }
+
+  has(seat: Seat): boolean {
+    return this.inner.has(SeatMap.key(seat));
+  }
+
+  set(seat: Seat, value: T): this {
+    this.inner.set(SeatMap.key(seat), { seat: { sessionId: seat.sessionId, userId: seat.userId }, value });
+    return this;
+  }
+
+  get size(): number {
+    return this.inner.size;
+  }
+
+  *values(): IterableIterator<T> {
+    for (const e of this.inner.values()) yield e.value;
+  }
+
+  *seats(): IterableIterator<Seat> {
+    for (const e of this.inner.values()) yield e.seat;
+  }
+
+  *entries(): IterableIterator<[Seat, T]> {
+    for (const e of this.inner.values()) yield [e.seat, e.value];
+  }
+
+  [Symbol.iterator](): IterableIterator<[Seat, T]> {
+    return this.entries();
+  }
+}
+
+/** A set of participants, by seat (see `SeatMap`). */
+export class SeatSet {
+  private readonly inner = new SeatMap<true>();
+
+  constructor(seats: Iterable<Seat> = []) {
+    for (const s of seats) this.inner.set(s, true);
+  }
+
+  has(seat: Seat): boolean {
+    return this.inner.has(seat);
+  }
+
+  add(seat: Seat): this {
+    this.inner.set(seat, true);
+    return this;
+  }
+
+  get size(): number {
+    return this.inner.size;
+  }
+
+  [Symbol.iterator](): IterableIterator<Seat> {
+    return this.inner.seats();
+  }
+}
+
+/** The seats as two parallel uuid arrays, for `unnest(${sessionIds}::uuid[], ${userIds}::uuid[])`. */
+function seatArrays(seats: Seat[]): { sessionIds: string[]; userIds: string[] } {
+  return { sessionIds: seats.map(s => s.sessionId), userIds: seats.map(s => s.userId) };
+}
+
 export interface MilestoneReached {
   key: string;
   reachedAt: Date;
 }
 
 export interface CurrentStage {
-  participantId: string;
+  sessionId: string;
+  userId: string;
   /** The furthest milestone reached (by ordinal), if any. */
   milestoneKey: string | null;
   ordinal: number | null;
@@ -99,7 +179,8 @@ export interface ShimStageRow {
 }
 
 export interface ParticipantStageState {
-  participantId: string;
+  sessionId: string;
+  userId: string;
   current: CurrentStage;
   /** The participant authored an invitation not yet sent (no invitation_sent): stage 0 is not over. */
   invitationPending: boolean;
@@ -240,15 +321,15 @@ export function latestStageRow(rows: ShimStageRow[]): ShimStageRow | null {
 // Database part
 // ----------------------------------------------------------------------------
 
-/** `v_current_stage` for these participants. */
-export async function loadCurrentStages(
-  participantIds: string[],
-  client: DbClient = prisma,
-): Promise<Map<string, CurrentStage>> {
-  if (participantIds.length === 0) return new Map();
+/** `v_current_stage` for these participants (of any sessions). */
+export async function loadCurrentStages(seats: Seat[], client: DbClient = prisma): Promise<SeatMap<CurrentStage>> {
+  const out = new SeatMap<CurrentStage>();
+  if (seats.length === 0) return out;
+  const { sessionIds, userIds } = seatArrays(seats);
   const rows = await client.$queryRaw<
     Array<{
-      participant_id: string;
+      session_id: string;
+      user_id: string;
       milestone_key: string | null;
       ordinal: number | null;
       stage_label: string | null;
@@ -256,24 +337,27 @@ export async function loadCurrentStages(
       active_stage: number;
       invitation_pending: boolean;
     }>
-  >`SELECT v.participant_id, v.milestone_key, v.ordinal, v.active_stage, x.invitation_pending,
+  >`SELECT v.session_id, v.user_id, v.milestone_key, v.ordinal, v.active_stage, x.invitation_pending,
       -- A pending inviter's next milestone is invitation_sent, in stage 0's label — not the view's
       -- (feel_heard, "Your Story"), so the fields agree with the stage activeStage reports.
       CASE WHEN x.invitation_pending THEN s.stage_label ELSE v.stage_label END AS stage_label,
       CASE WHEN x.invitation_pending THEN s.key ELSE v.next_milestone_key END AS next_milestone_key
     FROM v_current_stage v
     CROSS JOIN LATERAL (SELECT
-      (EXISTS (SELECT 1 FROM invitation i WHERE i.invited_by_participant_id = v.participant_id)
+      (EXISTS (SELECT 1 FROM invitation i
+               WHERE i.session_id = v.session_id AND i.invited_by_user_id = v.user_id)
         AND NOT EXISTS (SELECT 1 FROM participant_milestone pm
-                        WHERE pm.participant_id = v.participant_id AND pm.milestone_key = 'invitation_sent'))
+                        WHERE pm.session_id = v.session_id AND pm.user_id = v.user_id
+                          AND pm.milestone_key = 'invitation_sent'))
         AS invitation_pending) x
     LEFT JOIN milestone s ON s.key = 'invitation_sent'
-    WHERE v.participant_id = ANY(${participantIds}::uuid[])`;
-  return new Map(
-    rows.map(r => [
-      r.participant_id,
+    WHERE (v.session_id, v.user_id) IN (SELECT * FROM unnest(${sessionIds}::uuid[], ${userIds}::uuid[]))`;
+  for (const r of rows) {
+    out.set(
+      { sessionId: r.session_id, userId: r.user_id },
       {
-        participantId: r.participant_id,
+        sessionId: r.session_id,
+        userId: r.user_id,
         milestoneKey: r.milestone_key,
         ordinal: r.ordinal === null ? null : Number(r.ordinal),
         stageLabel: r.stage_label,
@@ -281,52 +365,54 @@ export async function loadCurrentStages(
         stage: activeStage(Number(r.active_stage), { invitationPending: r.invitation_pending }),
         invitationPending: r.invitation_pending,
       },
-    ]),
-  );
+    );
+  }
+  return out;
 }
 
 /**
  * The participants (of these) who authored an invitation not yet sent — the
  * `invitationPending` option, for callers that read `loadMilestones` alone.
  */
-export async function loadInvitationPending(participantIds: string[], client: DbClient = prisma): Promise<Set<string>> {
-  if (participantIds.length === 0) return new Set();
-  const rows = await client.$queryRaw<Array<{ id: string }>>`
-    SELECT DISTINCT i.invited_by_participant_id AS id FROM invitation i
-    WHERE i.invited_by_participant_id = ANY(${participantIds}::uuid[])
+export async function loadInvitationPending(seats: Seat[], client: DbClient = prisma): Promise<SeatSet> {
+  if (seats.length === 0) return new SeatSet();
+  const { sessionIds, userIds } = seatArrays(seats);
+  const rows = await client.$queryRaw<Array<{ session_id: string; user_id: string }>>`
+    SELECT DISTINCT i.session_id, i.invited_by_user_id AS user_id FROM invitation i
+    WHERE (i.session_id, i.invited_by_user_id) IN (SELECT * FROM unnest(${sessionIds}::uuid[], ${userIds}::uuid[]))
       AND NOT EXISTS (SELECT 1 FROM participant_milestone pm
-                      WHERE pm.participant_id = i.invited_by_participant_id AND pm.milestone_key = 'invitation_sent')`;
-  return new Set(rows.map(r => r.id));
+                      WHERE pm.session_id = i.session_id AND pm.user_id = i.invited_by_user_id
+                        AND pm.milestone_key = 'invitation_sent')`;
+  return new SeatSet(rows.map(r => ({ sessionId: r.session_id, userId: r.user_id })));
 }
 
-/** Milestones reached, per participant, oldest first. */
-export async function loadMilestones(
-  participantIds: string[],
-  client: DbClient = prisma,
-): Promise<Map<string, MilestoneReached[]>> {
-  const out = new Map<string, MilestoneReached[]>(participantIds.map(id => [id, []]));
-  if (participantIds.length === 0) return out;
+/** Milestones reached, per participant, oldest first (every given seat has an entry). */
+export async function loadMilestones(seats: Seat[], client: DbClient = prisma): Promise<SeatMap<MilestoneReached[]>> {
+  const out = new SeatMap<MilestoneReached[]>();
+  for (const seat of seats) out.set(seat, []);
+  if (seats.length === 0) return out;
   const rows = await client.participantMilestone.findMany({
-    where: { participantId: { in: participantIds } },
+    where: { OR: seats.map(seat => ({ sessionId: seat.sessionId, userId: seat.userId })) },
     orderBy: [{ reachedAt: 'asc' }, { milestoneKey: 'asc' }],
-    select: { participantId: true, milestoneKey: true, reachedAt: true },
+    select: { sessionId: true, userId: true, milestoneKey: true, reachedAt: true },
   });
-  for (const r of rows) out.get(r.participantId)?.push({ key: r.milestoneKey, reachedAt: r.reachedAt });
+  for (const r of rows) out.get(r)?.push({ key: r.milestoneKey, reachedAt: r.reachedAt });
   return out;
 }
 
 /** Everything the DTO shim needs about each participant's progress. */
 export async function loadStageStates(
-  participants: Array<{ id: string; joinedAt: Date | null }>,
+  participants: Array<Seat & { joinedAt: Date | null }>,
   /** The connection to read with (the ops dashboard passes mwf_ops; default the app's). */
   client: DbClient = prisma,
-): Promise<Map<string, ParticipantStageState>> {
-  const ids = participants.map(p => p.id);
-  const [currents, milestones] = await Promise.all([loadCurrentStages(ids, client), loadMilestones(ids, client)]);
-  const out = new Map<string, ParticipantStageState>();
+): Promise<SeatMap<ParticipantStageState>> {
+  const seats = participants.map(p => ({ sessionId: p.sessionId, userId: p.userId }));
+  const [currents, milestones] = await Promise.all([loadCurrentStages(seats, client), loadMilestones(seats, client)]);
+  const out = new SeatMap<ParticipantStageState>();
   for (const p of participants) {
-    const current = currents.get(p.id) ?? {
-      participantId: p.id,
+    const current = currents.get(p) ?? {
+      sessionId: p.sessionId,
+      userId: p.userId,
       milestoneKey: null,
       ordinal: null,
       stageLabel: null,
@@ -334,10 +420,11 @@ export async function loadStageStates(
       stage: 0,
       invitationPending: false,
     };
-    const reached = milestones.get(p.id) ?? [];
+    const reached = milestones.get(p) ?? [];
     const opts = { invitationPending: current.invitationPending };
-    out.set(p.id, {
-      participantId: p.id,
+    out.set(p, {
+      sessionId: p.sessionId,
+      userId: p.userId,
       current,
       invitationPending: current.invitationPending,
       milestones: reached,

@@ -53,12 +53,12 @@ describeTarget('Stage 3 need edits on the target (mwf_app, identity-bound)', () 
     locked: boolean;
     superseded_by: string | null;
   };
-  const needsOf = (participantId: string) =>
+  const needsOf = (seat: { sessionId: string; userId: string }) =>
     run.sql<Row>(
       `SELECT id, label, category::text AS category, confirmed_at IS NOT NULL AS confirmed, deleted_at IS NOT NULL AS deleted,
               locked_at IS NOT NULL AS locked, superseded_by_need_id AS superseded_by
-       FROM need WHERE participant_id = $1 ORDER BY created_at, id`,
-      [participantId],
+       FROM need WHERE session_id = $1 AND user_id = $2 ORDER BY created_at, id`,
+      [seat.sessionId, seat.userId],
     );
 
   it('the interpreter previews the model plan and writes nothing', async () => {
@@ -156,8 +156,8 @@ describeTarget('Stage 3 need edits on the target (mwf_app, identity-bound)', () 
   it('once the caller has shared, every edit is forbidden and nothing changes', async () => {
     const live = (await needsOf(ids.ada)).filter(n => !n.deleted);
     await run.sql(
-      `INSERT INTO need_share (participant_id, need_id, session_id, user_id, category, shared_text) SELECT $1, n.id, $3, n.user_id, n.category, n.label FROM need n WHERE n.id = $2`,
-      [ids.ada, live[0].id, ids.session],
+      `INSERT INTO need_share (need_id, session_id, user_id, category, shared_text) SELECT n.id, n.session_id, n.user_id, n.category, n.label FROM need n WHERE n.id = $1`,
+      [live[0].id],
     );
     const before = await needsOf(ids.ada);
     await expect(

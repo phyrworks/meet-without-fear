@@ -15,10 +15,11 @@ export interface RequestContext {
   /** User ID if authenticated */
   userId?: string;
   /**
-   * The caller's `participant` row in `sessionId`, resolved once per request
-   * by `requireSessionAccess` (TS-9). Absent outside a session route.
+   * True when `requireSessionAccess` resolved the caller's `participant` row
+   * in `sessionId` (TS-9): the caller's seat is (sessionId, userId), the
+   * participant's key since work-k5fk.3. Absent outside a session route.
    */
-  participantId?: string;
+  seated?: boolean;
   /** Request ID for tracing */
   requestId: string;
   /** Timestamp when the request started */
@@ -61,10 +62,12 @@ export function getCurrentUserId(): string | undefined {
 }
 
 /**
- * Get the caller's participant id (set by `requireSessionAccess`).
+ * The caller's participant — its seat (sessionId, userId) — when
+ * `requireSessionAccess` resolved one for this request.
  */
-export function getCurrentParticipantId(): string | undefined {
-  return getRequestContext()?.participantId;
+export function getCurrentSeat(): { sessionId: string; userId: string } | undefined {
+  const ctx = getRequestContext();
+  return ctx?.seated && ctx.sessionId && ctx.userId ? { sessionId: ctx.sessionId, userId: ctx.userId } : undefined;
 }
 
 /**

@@ -15,14 +15,15 @@ import { logger } from '../../lib/logger';
  * `shouldSkipReconciler` when it exceeds 3, as before.
  */
 export async function checkAttempts(
-  authorParticipantId: string,
-  subjectParticipantId: string,
+  sessionId: string,
+  authorUserId: string,
+  subjectUserId: string,
 ): Promise<{ shouldSkipReconciler: boolean; attempts: number }> {
   // Analysis path: the job reads (Ruling R35).
-  const rounds = await getJobPrisma().empathyAttempt.count({ where: { authorParticipantId, subjectParticipantId } });
+  const rounds = await getJobPrisma().empathyAttempt.count({ where: { sessionId, authorUserId, subjectUserId } });
   const attempts = Math.max(0, rounds - 1);
   const shouldSkipReconciler = attempts > 3;
-  logger.debug('Circuit breaker check', { authorParticipantId, subjectParticipantId, attempts, shouldSkipReconciler });
+  logger.debug('Circuit breaker check', { sessionId, authorUserId, subjectUserId, attempts, shouldSkipReconciler });
   return { shouldSkipReconciler, attempts };
 }
 
@@ -32,19 +33,21 @@ export async function checkAttempts(
  * re-offer sharing after every resubmission.
  */
 export async function hasContextAlreadyBeenShared(
-  authorParticipantId: string,
-  subjectParticipantId: string,
+  sessionId: string,
+  authorUserId: string,
+  subjectUserId: string,
 ): Promise<boolean> {
   const shared = await getJobPrisma().contextShareOffer.findFirst({
     where: {
-      subjectParticipantId,
+      sessionId,
+      subjectUserId,
       status: 'ACCEPTED',
-      attempt: { authorParticipantId, subjectParticipantId },
+      attempt: { sessionId, authorUserId, subjectUserId },
     },
     select: { id: true },
   });
   if (shared) {
-    logger.info('Context already shared', { subjectParticipantId, authorParticipantId });
+    logger.info('Context already shared', { sessionId, subjectUserId, authorUserId });
     return true;
   }
   return false;

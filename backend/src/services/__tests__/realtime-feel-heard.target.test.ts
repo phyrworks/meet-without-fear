@@ -87,15 +87,11 @@ describeTarget('confirmFeelHeard share suggestion on the session channel (R36)',
     const bob = harness.actors.userB!;
     const sid = harness.sessionId;
     // Bob has not yet confirmed (the fixture's feel_heard is removed), Ada's round about him is HELD.
-    await rows(
-      `DELETE FROM participant_milestone pm USING participant p WHERE p.id = pm.participant_id AND p.user_id = $1 AND pm.milestone_key = 'feel_heard'`,
-      [bob.id],
-    );
+    await rows(`DELETE FROM participant_milestone pm WHERE pm.user_id = $1 AND pm.milestone_key = 'feel_heard'`, [
+      bob.id,
+    ]);
     expect(
-      await rows(
-        `SELECT a.status::text AS status FROM empathy_attempt a JOIN participant p ON p.id = a.subject_participant_id WHERE p.user_id = $1`,
-        [bob.id],
-      ),
+      await rows(`SELECT a.status::text AS status FROM empathy_attempt a WHERE a.subject_user_id = $1`, [bob.id]),
     ).toEqual([{ status: 'HELD' }]);
     mockWire.length = 0;
 
@@ -116,7 +112,7 @@ describeTarget('confirmFeelHeard share suggestion on the session channel (R36)',
 
     // The scenario reached what the test is about: an offer for Bob exists.
     const offers = await rows<{ suggested: string | null }>(
-      `SELECT o.suggested_content AS suggested FROM context_share_offer o JOIN participant p ON p.id = o.subject_participant_id WHERE p.user_id = $1`,
+      `SELECT o.suggested_content AS suggested FROM context_share_offer o WHERE o.subject_user_id = $1`,
       [bob.id],
     );
     expect(offers.length).toBe(1);

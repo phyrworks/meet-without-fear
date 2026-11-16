@@ -54,6 +54,7 @@ import {
   resolveParticipant,
   seatOf,
   type ResolvedParticipant,
+  type Seat,
 } from '../services/participant-resolver';
 import { loadStageStates } from '../services/stage-shim';
 import { reachMilestone } from '../services/milestone-writer';
@@ -73,8 +74,8 @@ function buildStage4TransitionContent(firstNeed?: string | null): string {
 }
 
 /** The participant's first live confirmed need (their own label, in their own conversation). */
-async function firstNeedText(participantId: string): Promise<string | null> {
-  const [first] = await listOwnNeeds(participantId, { live: true, confirmed: true });
+async function firstNeedText(seat: Seat): Promise<string | null> {
+  const [first] = await listOwnNeeds(seat, { live: true, confirmed: true });
   return first?.label ?? null;
 }
 
@@ -89,19 +90,23 @@ async function needsContext(req: Request, sessionId: string, userId: string): Pr
   if (!participant) return null;
   const [session, states] = await Promise.all([
     prisma.session.findUnique({ where: { id: sessionId }, select: { status: true } }),
-    loadStageStates([{ id: participant.id, joinedAt: participant.joinedAt }]),
+    loadStageStates([{ sessionId: participant.sessionId, userId: participant.userId, joinedAt: participant.joinedAt }]),
   ]);
   if (!session) return null;
-  return { participant, sessionStatus: session.status, stage: states.get(participant.id)?.current.stage ?? 0 };
+  return { participant, sessionStatus: session.status, stage: states.get(participant)?.current.stage ?? 0 };
 }
 
-async function hasMilestone(participantId: string, key: string): Promise<boolean> {
-  return (await prisma.participantMilestone.count({ where: { participantId, milestoneKey: key } })) > 0;
+async function hasMilestone(seat: Seat, key: string): Promise<boolean> {
+  return (
+    (await prisma.participantMilestone.count({
+      where: { sessionId: seat.sessionId, userId: seat.userId, milestoneKey: key },
+    })) > 0
+  );
 }
 
 /** A participant has shared once a live `need_share` of theirs exists. */
-async function hasShared(sessionId: string, participantId: string): Promise<boolean> {
-  return (await participantsWhoShared(sessionId)).has(participantId);
+async function hasShared(seat: Seat): Promise<boolean> {
+  return (await participantsWhoShared(seat.sessionId)).has(seat.userId);
 }
 
 function isNeedCategory(value: unknown): value is NeedCategory {
@@ -127,15 +132,15 @@ function needEditErrorResponse(res: Response, error: unknown): boolean {
 async function announceStage4(sessionId: string, triggeredBy: { userId: string }): Promise<void> {
   const humans = await prisma.participant.findMany({
     where: { sessionId, kind: 'human', leftAt: null },
-    orderBy: [{ joinedAt: 'asc' }, { id: 'asc' }],
-    select: { id: true, userId: true, conversations: { where: { kind: 'MAIN' }, select: { id: true } } },
+    orderBy: [{ joinedAt: 'asc' }, { userId: 'asc' }],
+    select: { sessionId: true, userId: true, conversations: { where: { kind: 'MAIN' }, select: { id: true } } },
   });
   for (const h of humans) {
     const conversationId = h.conversations[0]?.id;
-    if (!conversationId || !h.userId) continue;
+    if (!conversationId) continue;
     const message = await createFacilitatorMessage({
       conversationId,
-      content: buildStage4TransitionContent(await firstNeedText(h.id)),
+      content: buildStage4TransitionContent(await firstNeedText(seatOf(h))),
     });
     const eventData = {
       forUserId: h.userId,
@@ -197,12 +202,12 @@ export async function getNeeds(req: Request, res: Response): Promise<void> {
     // `sharedAt` is the caller's own fact (need_share) and does not depend on
     // the session's status: "I shared" must not flip false when the session
     // stops being ACTIVE (work-keq6 review). Only the needs list is withheld.
-    const sharedAt = (await ownSharedAt(req.params.id, ctx.participant.id))?.toISOString() ?? null;
+    const sharedAt = (await ownSharedAt(req.params.id, ctx.participant))?.toISOString() ?? null;
     if (ctx.sessionStatus !== 'ACTIVE' || ctx.stage < 3) {
       successResponse(res, { needs: [], synthesizedAt: null, isDirty: false, sharedAt });
       return;
     }
-    const needs = await listOwnNeeds(ctx.participant.id);
+    const needs = await listOwnNeeds(ctx.participant);
     successResponse(res, {
       needs: needs.map(need => toIdentifiedNeedDTO(need)),
       extracting: false,
@@ -330,12 +335,12 @@ export async function confirmNeeds(req: Request, res: Response): Promise<void> {
       );
       return;
     }
-    const me = ctx.participant.id;
-    if (await hasShared(sessionId, me)) {
+    const me = seatOf(ctx.participant);
+    if (await hasShared(me)) {
       errorResponse(res, 'FORBIDDEN', 'Needs have already been shared and can no longer be edited', 403);
       return;
     }
-    const own = await prisma.need.findMany({ where: { id: { in: needIds }, participantId: me }, select: { id: true } });
+    const own = await prisma.need.findMany({ where: { id: { in: needIds }, ...me }, select: { id: true } });
     if (own.length !== needIds.length) {
       errorResponse(res, 'VALIDATION_ERROR', 'Some need IDs are invalid or do not belong to you', 400);
       return;
@@ -350,7 +355,7 @@ export async function confirmNeeds(req: Request, res: Response): Promise<void> {
       for (const adj of adjustments) {
         if (adj.correction) {
           await prisma.need.updateMany({
-            where: { id: adj.needId, participantId: me },
+            where: { id: adj.needId, ...me },
             data: { label: adj.correction, confirmedAt: adj.confirmed ? now : null },
           });
         }
@@ -358,10 +363,10 @@ export async function confirmNeeds(req: Request, res: Response): Promise<void> {
     }
     // Confirm all specified needs: confirmed_at (kept when already set) and locked_at.
     await prisma.need.updateMany({
-      where: { id: { in: needIds }, participantId: me, confirmedAt: null },
+      where: { id: { in: needIds }, ...me, confirmedAt: null },
       data: { confirmedAt: now },
     });
-    await prisma.need.updateMany({ where: { id: { in: needIds }, participantId: me }, data: { lockedAt: now } });
+    await prisma.need.updateMany({ where: { id: { in: needIds }, ...me }, data: { lockedAt: now } });
     await reachMilestone(me, 'needs_confirmed', now);
 
     const partnerId = await getPartnerUserId(sessionId, user.id);
@@ -372,7 +377,7 @@ export async function confirmNeeds(req: Request, res: Response): Promise<void> {
     successResponse(res, {
       confirmed: true,
       confirmedAt: now.toISOString(),
-      partnerConfirmed: partner ? await hasShared(sessionId, partner.participantId) : false,
+      partnerConfirmed: partner ? await hasShared({ sessionId, userId: partner.userId }) : false,
       canAdvance: false, // Need to share needs first
     });
   } catch (error) {
@@ -416,7 +421,7 @@ export async function consentToShareNeeds(req: Request, res: Response): Promise<
       );
       return;
     }
-    const me = ctx.participant.id;
+    const me = seatOf(ctx.participant);
     // Every shared need is a live confirmed need of the caller's, and every live need is shared together.
     const live = (await listOwnNeeds(me, { live: true })) as NeedRecord[];
     const requested = new Set(needIds);
@@ -432,7 +437,7 @@ export async function consentToShareNeeds(req: Request, res: Response): Promise<
 
     const result = await shareNeeds({
       sessionId,
-      participantId: me,
+      seat: me,
       needs: chosen.map(n => ({ id: n.id, label: n.label, category: n.category, evidence: n.evidence })),
     });
 
@@ -504,16 +509,16 @@ export async function validateNeeds(req: Request, res: Response): Promise<void> 
       );
       return;
     }
-    const me = ctx.participant.id;
+    const me = seatOf(ctx.participant);
     const partner = await getPartnerParticipant(me);
     const shared = await participantsWhoShared(sessionId);
-    if (!shared.has(me) || !partner || !shared.has(partner.participantId)) {
+    if (!shared.has(me.userId) || !partner || !shared.has(partner.userId)) {
       errorResponse(res, 'VALIDATION_ERROR', 'Both partners must consent to reveal needs before validation', 400);
       return;
     }
     const now = new Date();
     if (validated) await reachMilestone(me, 'needs_validated', now);
-    const partnerValidated = await hasMilestone(partner.participantId, 'needs_validated');
+    const partnerValidated = await hasMilestone({ sessionId, userId: partner.userId }, 'needs_validated');
     const partnerId = partner.userId;
     if (partnerId) {
       await notifyPartner(sessionId, partnerId, 'partner.needs_validated', {
@@ -583,7 +588,6 @@ export async function addCustomNeed(req: Request, res: Response): Promise<void> 
     }
     const custom = (await prisma.need.create({
       data: {
-        participantId: ctx.participant.id,
         ...seatOf(ctx.participant),
         label: need,
         category,
@@ -728,15 +732,15 @@ export async function getNeedsComparison(req: Request, res: Response): Promise<v
       successResponse(res, EMPTY_COMPARISON);
       return;
     }
-    const me = ctx.participant.id;
+    const me = seatOf(ctx.participant);
     const partner = await getPartnerParticipant(me);
     if (!partner) {
       errorResponse(res, 'INTERNAL_ERROR', 'Could not find partner', 500);
       return;
     }
     const shared = await listSharedNeeds(sessionId);
-    const mineShared = shared.some(n => n.participantId === me);
-    const partnerShared = shared.filter(n => n.participantId === partner.participantId);
+    const mineShared = shared.some(n => n.userId === me.userId);
+    const partnerShared = shared.filter(n => n.userId === partner.userId);
     if (!mineShared || partnerShared.length === 0) {
       successResponse(res, EMPTY_COMPARISON);
       return;
@@ -748,7 +752,7 @@ export async function getNeedsComparison(req: Request, res: Response): Promise<v
     }
     const [myValidated, partnerValidated] = await Promise.all([
       hasMilestone(me, 'needs_validated'),
-      hasMilestone(partner.participantId, 'needs_validated'),
+      hasMilestone({ sessionId, userId: partner.userId }, 'needs_validated'),
     ]);
     successResponse(res, {
       myNeeds: myNeeds.map(n => ({ id: n.id, category: n.category, need: n.label, confirmed: true })),

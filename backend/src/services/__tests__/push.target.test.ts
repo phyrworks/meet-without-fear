@@ -97,7 +97,10 @@ describeTarget('push on the target: the job reads the recipient’s devices', ()
 
   it('without a nickname the actor is named by their display name, never their user row', async () => {
     await run.sql(`UPDATE user_contact SET nickname = NULL WHERE user_id = $1`, [ids.bobUser]);
-    await run.sql(`UPDATE participant SET display_name = 'PROBE_TS12_DISPLAY' WHERE id = $1`, [ids.ada]);
+    await run.sql(`UPDATE participant SET display_name = 'PROBE_TS12_DISPLAY' WHERE session_id = $1 AND user_id = $2`, [
+      ids.session,
+      ids.adaUser,
+    ]);
     mockSend.mockResolvedValue([{ status: 'ok' }, { status: 'ok' }]);
     await asAda(() =>
       push.sendPushNotification(

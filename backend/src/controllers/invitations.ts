@@ -123,34 +123,37 @@ export async function listSessions(req: Request, res: Response): Promise<void> {
 
     // Partners (v_co_participant), progress (stage shim), unread
     // (v_conversation_unread) and Stage 2 directions, for the whole page.
+    // Every item is the caller's one participant of its session, so these are keyed by session.
     const partners = new Map(
-      await Promise.all(items.map(async p => [p.id, await getPartnerParticipant(p.id)] as const)),
+      await Promise.all(items.map(async p => [p.sessionId, await getPartnerParticipant(p)] as const)),
     );
     const stageStates = await loadStageStates([
-      ...items.map(p => ({ id: p.id, joinedAt: p.joinedAt })),
-      ...[...partners.values()].flatMap(c => (c ? [{ id: c.participantId, joinedAt: c.joinedAt }] : [])),
+      ...items.map(p => ({ sessionId: p.sessionId, userId: p.userId, joinedAt: p.joinedAt })),
+      ...[...partners.entries()].flatMap(([sessionId, c]) =>
+        c ? [{ sessionId, userId: c.userId, joinedAt: c.joinedAt }] : [],
+      ),
     ]);
-    const ids = items.map(p => p.id);
-    const paused = await pausedSessionIds(items.map(p => p.sessionId));
-    const unread = ids.length
-      ? await prisma.$queryRaw<Array<{ participant_id: string; unread_count: bigint }>>`
-          SELECT participant_id, unread_count FROM v_conversation_unread WHERE participant_id = ANY(${ids}::uuid[])`
+    const sessionIds = items.map(p => p.sessionId);
+    const paused = await pausedSessionIds(sessionIds);
+    const unread = sessionIds.length
+      ? await prisma.$queryRaw<Array<{ session_id: string; unread_count: bigint }>>`
+          SELECT session_id, unread_count FROM v_conversation_unread
+          WHERE user_id = ${user.id}::uuid AND session_id = ANY(${sessionIds}::uuid[])`
       : [];
-    const unreadOf = new Map(unread.map(u => [u.participant_id, Number(u.unread_count)]));
+    const unreadOf = new Map(unread.map(u => [u.session_id, Number(u.unread_count)]));
     // Own attempts directly; the partner's direction only as a content-free
     // status (v_empathy_direction_status, identity-bound).
-    const ownAttempts = ids.length
+    const ownAttempts = sessionIds.length
       ? await prisma.empathyAttempt.findMany({
-          where: { authorParticipantId: { in: ids }, status: { not: 'SUPERSEDED' } },
-          select: { authorParticipantId: true, status: true },
+          where: { sessionId: { in: sessionIds }, authorUserId: user.id, status: { not: 'SUPERSEDED' } },
+          select: { sessionId: true, status: true },
         })
       : [];
-    const directions = ids.length
-      ? await prisma.$queryRaw<
-          Array<{ author_participant_id: string; subject_participant_id: string; status: string }>
-        >`
-          SELECT author_participant_id, subject_participant_id, status::text AS status
-          FROM v_empathy_direction_status WHERE subject_participant_id = ANY(${ids}::uuid[])`
+    const directions = sessionIds.length
+      ? await prisma.$queryRaw<Array<{ session_id: string; status: string }>>`
+          SELECT session_id, status::text AS status
+          FROM v_empathy_direction_status
+          WHERE subject_user_id = ${user.id}::uuid AND session_id = ANY(${sessionIds}::uuid[])`
       : [];
 
     // Partners who left (account deletion, leaving) show no name (TS-12, R5).
@@ -163,15 +166,18 @@ export async function listSessions(req: Request, res: Response): Promise<void> {
 
     const formattedSessions = items.map(me => {
       const session = me.session;
-      const partner = partners.get(me.id) ?? null;
+      const partner = partners.get(me.sessionId) ?? null;
       // The other human, and what I call them (my user_contact entry)
       const partnerMember = sessionPartners.get(session.id) ?? null;
       const myNickname = partnerMember?.nickname ?? null;
 
-      const myProgress = progressDTO(stageStates.get(me.id), { milestones: 'none' });
-      const partnerProgress = progressDTO(partner ? stageStates.get(partner.participantId) : undefined, {
-        milestones: 'none',
-      });
+      const myProgress = progressDTO(stageStates.get(me), { milestones: 'none' });
+      const partnerProgress = progressDTO(
+        partner ? stageStates.get({ sessionId: me.sessionId, userId: partner.userId }) : undefined,
+        {
+          milestones: 'none',
+        },
+      );
       const dto = (p: typeof myProgress) => ({
         stage: p.stage,
         status: p.status,
@@ -189,8 +195,8 @@ export async function listSessions(req: Request, res: Response): Promise<void> {
 
       // If user is in progress, check Stage 2 sub-state to avoid showing
       // "Ready for you" when user is actually waiting on partner/system
-      const userEmpathy = ownAttempts.find(a => a.authorParticipantId === me.id);
-      const partnerEmpathy = directions.find(d => d.subject_participant_id === me.id);
+      const userEmpathy = ownAttempts.find(a => a.sessionId === me.sessionId);
+      const partnerEmpathy = directions.find(d => d.session_id === me.sessionId);
       if (myProgress.status === 'IN_PROGRESS') {
         if (myProgress.stage === Stage.PERSPECTIVE_STRETCH && (userEmpathy || partnerEmpathy)) {
           const userNeedsToRefine = userEmpathy?.status === 'REFINING';
@@ -252,7 +258,7 @@ export async function listSessions(req: Request, res: Response): Promise<void> {
         selfActionNeeded,
         partnerActionNeeded,
         // Unread: messages in my conversation after my last view, not mine.
-        hasUnread: (unreadOf.get(me.id) ?? 0) > 0,
+        hasUnread: (unreadOf.get(me.sessionId) ?? 0) > 0,
         lastViewedAt: lastViewedAt?.toISOString() ?? null,
         lastSeenChatItemId,
       };
@@ -356,7 +362,7 @@ export async function createSession(req: Request, res: Response): Promise<void> 
       const nickname = inviteName?.trim().slice(0, 100);
       if (personId && nickname) await setNickname(user.id, personId, nickname, tx);
 
-      const me = await tx.participant.create({
+      await tx.participant.create({
         data: {
           sessionId: sess.id,
           userId: user.id,
@@ -366,17 +372,16 @@ export async function createSession(req: Request, res: Response): Promise<void> 
           // The only user fact a co-participant sees (spec §7)
           displayName: user.name || user.firstName || null,
         },
-        select: { id: true },
+        select: { sessionId: true },
       });
       const seat = { sessionId: sess.id, userId: user.id };
-      await tx.conversation.create({ data: { participantId: me.id, ...seat, kind: 'MAIN' } });
-      await tx.conversationReadState.create({ data: { participantId: me.id, ...seat } });
+      await tx.conversation.create({ data: { ...seat, kind: 'MAIN' } });
+      await tx.conversationReadState.create({ data: { ...seat } });
 
       const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
       const inv = await tx.invitation.create({
         data: {
           sessionId: sess.id,
-          invitedByParticipantId: me.id,
           invitedByUserId: user.id,
           inviteeName: inviteeDisplayName,
           expiresAt,
@@ -519,7 +524,6 @@ export async function acceptInvitation(req: Request, res: Response): Promise<voi
       where: { id },
       include: {
         session: true,
-        invitedByParticipant: { select: { userId: true } },
       },
     });
 
@@ -527,7 +531,7 @@ export async function acceptInvitation(req: Request, res: Response): Promise<voi
       errorResponse(res, 'NOT_FOUND', 'Invitation not found', 404);
       return;
     }
-    const inviterUserId = invitation.invitedByParticipant.userId;
+    const inviterUserId = invitation.invitedByUserId;
 
     // Prevent self-acceptance
     if (inviterUserId === user.id) {
@@ -597,7 +601,7 @@ export async function acceptInvitation(req: Request, res: Response): Promise<voi
       // The inviter added the invitee (work-k5fk.2). The join is where the
       // database applies the pair rule: a second live session of these two
       // humans fails here with unique_violation (live_session_pair_pkey).
-      const me = await tx.participant.create({
+      await tx.participant.create({
         data: {
           sessionId: invitation.sessionId,
           userId: user.id,
@@ -605,22 +609,23 @@ export async function acceptInvitation(req: Request, res: Response): Promise<voi
           addedByUserId: inviterUserId,
           displayName: user.name || user.firstName || null,
         },
-        select: { id: true },
+        select: { sessionId: true },
       });
       const seat = { sessionId: invitation.sessionId, userId: user.id };
-      await tx.conversation.create({ data: { participantId: me.id, ...seat, kind: 'MAIN' } });
-      await tx.conversationReadState.create({ data: { participantId: me.id, ...seat } });
+      await tx.conversation.create({ data: { ...seat, kind: 'MAIN' } });
+      await tx.conversationReadState.create({ data: { ...seat } });
       // work-99k2: the inviter's empathy draft written before this join is
-      // about the invitation; it becomes about the new participant here, in
-      // the same transaction. Nothing is sent: the inviter reviews it first.
-      await repointInvitationDrafts(tx, id, { id: me.id, userId: user.id });
+      // about the invitation; it becomes about the new participant (the
+      // invitee's seat) here, in the same transaction. Nothing is sent: the
+      // inviter reviews it first.
+      await repointInvitationDrafts(tx, id, seat);
 
       await tx.$executeRaw`SELECT app.session_set_status(${invitation.sessionId}::uuid, 'ACTIVE'::session_status)`;
     });
 
     // An accepted invitation was necessarily sent: the inviter's stage 0 ends here even if their app
     // never called POST /invitation/confirm (work-qmgc).
-    await reachInvitationSentOnAccept(invitation.invitedByParticipantId, acceptedAt);
+    await reachInvitationSentOnAccept({ sessionId: invitation.sessionId, userId: inviterUserId }, acceptedAt);
 
     // Get session summary for response
     const session = await prisma.session.findUnique({
@@ -702,7 +707,7 @@ export async function declineInvitation(req: Request, res: Response): Promise<vo
       errorResponse(res, 'NOT_FOUND', 'Invitation not found', 404);
       return;
     }
-    const inviterUserId = invitation.invitedByParticipant.userId;
+    const inviterUserId = invitation.invitedByUserId;
 
     // The inviter cannot decline their own invitation
     if (inviterUserId === user.id) {

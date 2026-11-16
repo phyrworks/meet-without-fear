@@ -7,7 +7,7 @@
  * From architecture docs:
  * "The large model receives a pre-assembled context bundle. It does not decide what to retrieve."
  *
- * Target shape (TS-9): `buildContextForParticipant(participantId)` is the ONE
+ * Target shape (TS-9): `buildContextForParticipant(seat)` is the ONE
  * entry point that assembles a prompt context for a participant, and the only
  * code in the backend that reads another participant's rows — the session's
  * shared vessel (S-class) and nothing else (spec §6 "Chat turn pipeline", §7
@@ -20,7 +20,7 @@ import { prisma } from '../lib/prisma';
 import { decryptRawRows } from '../lib/prisma-encryption-middleware';
 import { type MemoryIntentResult, type RetrievalDepth, getTurnBufferSize } from './memory-intent';
 import { getSessionSummary } from './conversation-summarizer';
-import { getCoParticipants, getParticipant, resolveParticipant } from './participant-resolver';
+import { getCoParticipants, getParticipant, resolveParticipant, seatOf, type Seat } from './participant-resolver';
 import type { MilestoneMap } from '@meet-without-fear/shared';
 import {
   loadStageStates,
@@ -30,7 +30,7 @@ import {
   type ShimStageRow,
   type StageOpts,
 } from './stage-shim';
-import { legacyRole, type StoredMessage } from './message-store';
+import { legacyRole, MESSAGE_SELECT, type StoredMessage } from './message-store';
 import type { CategorizedFact as GlobalFact } from './global-memory';
 
 // ============================================================================
@@ -285,7 +285,8 @@ export interface SharedVessel {
 
 /** The bundle for one participant, plus the shared vessel and its two prompt renderings. */
 export interface ParticipantContext extends ContextBundle {
-  participantId: string;
+  /** The participant is (sessionId, userId). */
+  userId: string;
   sessionId: string;
   sharedVessel: SharedVessel;
   /** "What has been shared in this conversation" (null when nothing was). */
@@ -294,15 +295,16 @@ export interface ParticipantContext extends ContextBundle {
   milestoneContext: string | null;
 }
 
-async function buildSharedVessel(me: { id: string; sessionId: string }): Promise<SharedVessel> {
+async function buildSharedVessel(me: Seat): Promise<SharedVessel> {
   const [attempts, offers, needs, guidance] = await Promise.all([
     prisma.empathyAttempt.findMany({
       where: {
-        OR: [{ authorParticipantId: me.id }, { subjectParticipantId: me.id, revealedAt: { not: null } }],
+        sessionId: me.sessionId,
+        OR: [{ authorUserId: me.userId }, { subjectUserId: me.userId, revealedAt: { not: null } }],
       },
       orderBy: [{ submittedAt: 'asc' }, { id: 'asc' }],
       select: {
-        authorParticipantId: true,
+        authorUserId: true,
         status: true,
         content: true,
         submittedAt: true,
@@ -313,15 +315,16 @@ async function buildSharedVessel(me: { id: string; sessionId: string }): Promise
     }),
     prisma.contextShareOffer.findMany({
       where: {
+        sessionId: me.sessionId,
         sharedContent: { not: null },
         OR: [
-          { subjectParticipantId: me.id },
-          { attempt: { authorParticipantId: me.id }, deliveryStatus: { in: ['DELIVERED', 'SEEN'] } },
+          { subjectUserId: me.userId },
+          { attempt: { authorUserId: me.userId }, deliveryStatus: { in: ['DELIVERED', 'SEEN'] } },
         ],
       },
       orderBy: [{ sharedAt: 'asc' }, { id: 'asc' }],
       select: {
-        subjectParticipantId: true,
+        subjectUserId: true,
         status: true,
         deliveryStatus: true,
         sharedContent: true,
@@ -329,13 +332,13 @@ async function buildSharedVessel(me: { id: string; sessionId: string }): Promise
         deliveredAt: true,
       },
     }),
-    prisma.$queryRaw<Array<{ participant_id: string; category: string; shared_text: string; shared_at: Date }>>`
-      SELECT participant_id, category::text AS category, shared_text, shared_at
+    prisma.$queryRaw<Array<{ user_id: string; category: string; shared_text: string; shared_at: Date }>>`
+      SELECT user_id, category::text AS category, shared_text, shared_at
       FROM v_need_shared WHERE session_id = ${me.sessionId}::uuid ORDER BY shared_at, need_id`.then(rows =>
       decryptRawRows(rows, { shared_text: 'need_share.shared_text' }),
     ),
     prisma.reconcilerGuidance.findMany({
-      where: { authorParticipantId: me.id },
+      where: { sessionId: me.sessionId, authorUserId: me.userId },
       orderBy: { createdAt: 'asc' },
       select: {
         areaHint: true,
@@ -348,7 +351,7 @@ async function buildSharedVessel(me: { id: string; sessionId: string }): Promise
 
   return {
     empathyAttempts: attempts.map(a => {
-      const own = a.authorParticipantId === me.id;
+      const own = a.authorUserId === me.userId;
       return {
         direction: own ? ('user_to_partner' as const) : ('partner_to_user' as const),
         status: a.status,
@@ -361,7 +364,7 @@ async function buildSharedVessel(me: { id: string; sessionId: string }): Promise
       };
     }),
     sharedContexts: offers.map(o => ({
-      direction: o.subjectParticipantId === me.id ? ('user_to_partner' as const) : ('partner_to_user' as const),
+      direction: o.subjectUserId === me.userId ? ('user_to_partner' as const) : ('partner_to_user' as const),
       status: o.status,
       deliveryStatus: o.deliveryStatus,
       content: o.sharedContent ?? undefined,
@@ -369,7 +372,7 @@ async function buildSharedVessel(me: { id: string; sessionId: string }): Promise
       deliveredAt: o.deliveredAt,
     })),
     sharedNeeds: needs.map(n => ({
-      direction: n.participant_id === me.id ? ('user_to_partner' as const) : ('partner_to_user' as const),
+      direction: n.user_id === me.userId ? ('user_to_partner' as const) : ('partner_to_user' as const),
       category: n.category,
       sharedText: n.shared_text,
       sharedAt: new Date(n.shared_at),
@@ -392,10 +395,10 @@ async function buildSharedVessel(me: { id: string; sessionId: string }): Promise
  * builder stays the only code on the app connection that reads another
  * participant's rows (R35); it reads exactly what `buildSharedVessel` reads.
  */
-export async function loadSharedVesselFor(participantId: string): Promise<SharedVessel | null> {
-  const me = await getParticipant(participantId);
+export async function loadSharedVesselFor(seat: Seat): Promise<SharedVessel | null> {
+  const me = await getParticipant(seat);
   if (!me) return null;
-  return buildSharedVessel({ id: me.id, sessionId: me.sessionId });
+  return buildSharedVessel(seatOf(me));
 }
 
 /** The consented/shared lifecycle items, as the old `consentedShareState` presented them. */
@@ -503,15 +506,15 @@ export function formatMilestoneContext(input: {
  * `stage` defaults to the participant's current stage (stage shim).
  */
 export async function buildContextForParticipant(
-  participantId: string,
+  seat: Seat,
   opts: { intent: MemoryIntentResult; stage?: number },
 ): Promise<ParticipantContext> {
   const now = new Date();
   const { intent } = opts;
   const depth = intent.depth;
 
-  const me = await getParticipant(participantId);
-  if (!me || !me.userId) throw new Error(`Participant ${participantId} not found`);
+  const me = await getParticipant(seat);
+  if (!me) throw new Error(`Participant (session ${seat.sessionId}, user ${seat.userId}) not found`);
   const userId = me.userId;
   const conversationId = me.mainConversationId;
 
@@ -525,18 +528,18 @@ export async function buildContextForParticipant(
         topicFrameConfirmedAt: true,
       },
     }),
-    getCoParticipants(me.id),
-    loadStageStates([{ id: me.id, joinedAt: me.joinedAt }]),
+    getCoParticipants(me),
+    loadStageStates([me]),
     prisma.invitation.findFirst({
       where: { sessionId: me.sessionId },
       orderBy: { createdAt: 'desc' },
-      select: { invitedByParticipantId: true, messageConfirmedAt: true, acceptedAt: true, status: true },
+      select: { invitedByUserId: true, messageConfirmedAt: true, acceptedAt: true, status: true },
     }),
     getNicknameForSessionPartner(me.sessionId, userId),
   ]);
   if (!session) throw new Error(`Session ${me.sessionId} not found`);
 
-  const stageState = stageStates.get(me.id);
+  const stageState = stageStates.get(me);
   const stage = opts.stage ?? stageState?.current.stage ?? 0;
   const milestones = stageState?.milestones ?? [];
   const stageOpts: StageOpts = { invitationPending: stageState?.invitationPending ?? false };
@@ -553,17 +556,17 @@ export async function buildContextForParticipant(
   const partnerName = myNickname || partner?.displayName || 'your partner';
 
   const turnBufferSize = getTurnBufferSize(stage, intent.intent);
-  const ownMessages = conversationId ? await loadOwnConversation(conversationId, me.id) : [];
+  const ownMessages = conversationId ? await loadOwnConversation(conversationId) : [];
 
   const [emotionalThread, priorThemes, sessionSummary, userMemories, aiMemory, sharedVessel] = await Promise.all([
-    buildEmotionalThread(me.id, depth),
+    buildEmotionalThread(me, depth),
     depth === 'full' || depth === 'light'
       ? buildPriorThemes(me.sessionId, userId, partner?.userId ?? null)
       : Promise.resolve(undefined),
     depth !== 'none' ? buildSessionSummary(me.sessionId, userId) : Promise.resolve(undefined),
     buildUserMemoriesContext(userId, me.sessionId),
-    loadAiMemory(me.id),
-    buildSharedVessel({ id: me.id, sessionId: me.sessionId }),
+    loadAiMemory(me),
+    buildSharedVessel(seatOf(me)),
   ]);
 
   const conversationContext = buildConversationContext(ownMessages, turnBufferSize, depth);
@@ -574,14 +577,14 @@ export async function buildContextForParticipant(
 
   const lastUserTurnAt = [...ownMessages]
     .reverse()
-    .find(m => m.senderParticipantId === me.id && m.role === 'USER' && m.kind === 'CHAT')?.createdAt;
+    .find(m => m.senderUserId === userId && m.role === 'USER' && m.kind === 'CHAT')?.createdAt;
 
   logger.info(
-    `[Context Assembler] buildContextForParticipant: participant=${me.id}, notableFacts=${aiMemory.notableFacts ? `${aiMemory.notableFacts.length} facts` : 'undefined'}`,
+    `[Context Assembler] buildContextForParticipant: session=${me.sessionId}, user=${userId}, notableFacts=${aiMemory.notableFacts ? `${aiMemory.notableFacts.length} facts` : 'undefined'}`,
   );
 
   return {
-    participantId: me.id,
+    userId,
     sessionId: me.sessionId,
     conversationContext: {
       recentTurns: conversationContext,
@@ -619,7 +622,7 @@ export async function buildContextForParticipant(
     sharedVessel,
     sharedContentHistory: stage >= 2 ? formatSharedContentHistory(sharedVessel) : null,
     milestoneContext: formatMilestoneContext({
-      isInviter: invitation?.invitedByParticipantId === me.id,
+      isInviter: invitation?.invitedByUserId === userId,
       invitationConfirmedAt: invitation?.messageConfirmedAt ?? null,
       invitationAcceptedAt: invitation?.status === 'ACCEPTED' ? (invitation.acceptedAt ?? null) : null,
       milestones,
@@ -639,7 +642,7 @@ export async function assembleContextBundle(
 ): Promise<ParticipantContext> {
   const participant = await resolveParticipant(sessionId, userId);
   if (!participant) throw new Error(`Session ${sessionId} not found`);
-  return buildContextForParticipant(participant.id, { intent, stage });
+  return buildContextForParticipant(participant, { intent, stage });
 }
 
 // ============================================================================
@@ -653,22 +656,11 @@ type OwnMessage = StoredMessage;
  * AI's replies, and items delivered to them. The conversation IS the
  * audience, so no other participant's rows can appear here.
  */
-async function loadOwnConversation(conversationId: string, _participantId: string): Promise<OwnMessage[]> {
+async function loadOwnConversation(conversationId: string): Promise<OwnMessage[]> {
   return (await prisma.message.findMany({
     where: { conversationId },
     orderBy: { createdAt: 'asc' },
-    select: {
-      id: true,
-      conversationId: true,
-      senderParticipantId: true,
-      role: true,
-      kind: true,
-      content: true,
-      refiningNeedId: true,
-      sourceAttemptId: true,
-      createdAt: true,
-      senderParticipant: { select: { userId: true } },
-    },
+    select: MESSAGE_SELECT,
   })) as OwnMessage[];
 }
 
@@ -763,7 +755,7 @@ function buildPriorStageSummaries(
 }
 
 /** Emotional thread from the participant's own mood readings. */
-async function buildEmotionalThread(participantId: string, depth: RetrievalDepth): Promise<EmotionalThread> {
+async function buildEmotionalThread(seat: Seat, depth: RetrievalDepth): Promise<EmotionalThread> {
   const empty: EmotionalThread = {
     initialIntensity: null,
     currentIntensity: null,
@@ -772,7 +764,7 @@ async function buildEmotionalThread(participantId: string, depth: RetrievalDepth
   };
   if (depth === 'none') return empty;
   const readings = await prisma.moodReading.findMany({
-    where: { participantId },
+    where: { sessionId: seat.sessionId, userId: seat.userId },
     orderBy: { recordedAt: 'asc' },
     select: { intensity: true },
   });
@@ -878,9 +870,9 @@ interface CategorizedFact {
 }
 
 /** The participant's AI memory (ai_memory, kind NOTABLE_FACTS: `{ facts: [...] }`). */
-async function loadAiMemory(participantId: string): Promise<{ notableFacts?: CategorizedFact[] }> {
-  const row = await prisma.aiMemory.findUnique({
-    where: { participantId_kind: { participantId, kind: 'NOTABLE_FACTS' } },
+async function loadAiMemory(seat: Seat): Promise<{ notableFacts?: CategorizedFact[] }> {
+  const row = await prisma.aiMemory.findFirst({
+    where: { sessionId: seat.sessionId, userId: seat.userId, kind: 'NOTABLE_FACTS' },
     select: { doc: true },
   });
   const facts = (row?.doc as { facts?: unknown } | null)?.facts;

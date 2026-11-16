@@ -202,8 +202,8 @@ describe(`golden: ${SCENARIO}`, () => {
           (
             await c.query<{ same: boolean }>(
               `SELECT pm.reached_at = a.submitted_at AS same
-             FROM participant_milestone pm JOIN empathy_attempt a ON a.author_participant_id = pm.participant_id
-             JOIN participant p ON p.id = pm.participant_id JOIN "user" u ON u.id = p.user_id
+             FROM participant_milestone pm JOIN empathy_attempt a ON a.session_id = pm.session_id AND a.author_user_id = pm.user_id
+             JOIN "user" u ON u.id = pm.user_id
              WHERE u.email = 'ada@e2e.test' AND pm.milestone_key = 'empathy_submitted'`,
             )
           ).rows,

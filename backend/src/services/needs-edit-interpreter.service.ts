@@ -95,7 +95,7 @@ export async function interpretNeedEditRequest(
 ): Promise<InterpretNeedEditResponse> {
   // The owner's own needs only (spec §1.4: need is owner-only, always).
   const participant = await requireNeedOwner(sessionId, userId);
-  const needs: NeedRow[] = (await listOwnNeeds(participant.id)).map(toNeedRecord);
+  const needs: NeedRow[] = (await listOwnNeeds(participant)).map(toNeedRecord);
 
   if (needs.length === 0 && !/\b(add|missing|also)\b/i.test(request.request)) {
     return {

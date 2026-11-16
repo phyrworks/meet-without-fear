@@ -100,11 +100,9 @@ describe(`golden: ${SCENARIO}`, () => {
 
     let needIdsOf: (actor: ActorRef) => string[];
     if (TARGET) {
-      const snap = await harness.snapshot(['need', 'participant']);
-      needIdsOf = actor => {
-        const p = snap.tables.participant.find(r => r.user_id === actor.id)!.id;
-        return snap.tables.need.filter(n => n.participant_id === p).map(n => String(n.id));
-      };
+      const snap = await harness.snapshot(['need']);
+      needIdsOf = actor =>
+        snap.tables.need.filter(n => n.session_id === sid && n.user_id === actor.id).map(n => String(n.id));
     } else {
       const snap = await harness.snapshot(['IdentifiedNeed', 'UserVessel']);
       needIdsOf = actor => {
@@ -206,7 +204,7 @@ describe(`golden: ${SCENARIO}`, () => {
     it('target: each partner reads the other’s needs as need_share.shared_text with its category', async () => {
       const shares = await sql<{ need_id: string; email: string; shared_text: string; category: string }>(
         `SELECT s.need_id, u.email, s.shared_text, s.category::text AS category
-         FROM need_share s JOIN participant p ON p.id = s.participant_id JOIN "user" u ON u.id = p.user_id`,
+         FROM need_share s JOIN "user" u ON u.id = s.user_id`,
       );
       const comparison = (who: string) =>
         (
@@ -238,7 +236,7 @@ describe(`golden: ${SCENARIO}`, () => {
       const milestones = async () =>
         sql<{ email: string; key: string; at: Date }>(
           `SELECT u.email, pm.milestone_key AS key, pm.reached_at AS at FROM participant_milestone pm
-           JOIN participant p ON p.id = pm.participant_id JOIN "user" u ON u.id = p.user_id`,
+           JOIN "user" u ON u.id = pm.user_id`,
         );
       const iso = (d: Date | undefined) => (d ? new Date(d).toISOString() : undefined);
 
@@ -299,8 +297,8 @@ describe(`golden: ${SCENARIO}`, () => {
         expect(shared.map(m => m.email).sort()).toEqual(['ada@e2e.test', 'bob@e2e.test']);
         expect(new Set(shared.map(m => iso(m.at))).size).toBe(1);
         const [adaShare] = await sql<{ at: Date }>(
-          `SELECT min(c.decided_at) AS at FROM consent c JOIN participant p ON p.id = c.participant_id
-           JOIN "user" u ON u.id = p.user_id WHERE u.email = 'ada@e2e.test' AND c.need_id IS NOT NULL`,
+          `SELECT min(c.decided_at) AS at FROM consent c
+           JOIN "user" u ON u.id = c.user_id WHERE u.email = 'ada@e2e.test' AND c.need_id IS NOT NULL`,
         );
         expect(new Date(shared[0].at).getTime()).toBeGreaterThanOrEqual(new Date(adaShare.at).getTime());
       });
@@ -309,9 +307,10 @@ describe(`golden: ${SCENARIO}`, () => {
         for (const n of Object.values(NEEDS_STEPS.sessionList)) expect(body(n).items[0].hasUnread).toBe(false);
         const [row] = await sql<{ n: string }>(
           `SELECT count(*)::text AS n FROM message m JOIN conversation c ON c.id = m.conversation_id
-           JOIN participant p ON p.id = c.participant_id JOIN "user" u ON u.id = p.user_id
-           WHERE u.email = 'ada@e2e.test' AND m.sender_participant_id IS DISTINCT FROM p.id
-             AND m.created_at < (SELECT min(c2.created_at) FROM consent c2 WHERE c2.participant_id = p.id AND c2.need_id IS NOT NULL)`,
+           JOIN "user" u ON u.id = c.user_id
+           WHERE u.email = 'ada@e2e.test' AND m.sender_user_id IS DISTINCT FROM c.user_id
+             AND m.created_at < (SELECT min(c2.created_at) FROM consent c2
+                                 WHERE c2.session_id = c.session_id AND c2.user_id = c.user_id AND c2.need_id IS NOT NULL)`,
         );
         expect(row.n).toBe('0');
       });
@@ -327,8 +326,8 @@ describe(`golden: ${SCENARIO}`, () => {
       it("R29 step 20: Bob has shared, Ada has not — her walkthrough opens on Bob's shared needs", async () => {
         const d = body(NEEDS_STAGE4_READ_STEPS.bobShared);
         const shares = await sql<{ need_id: string; shared_text: string }>(
-          `SELECT s.need_id, s.shared_text FROM need_share s JOIN participant p ON p.id = s.participant_id
-           JOIN "user" u ON u.id = p.user_id WHERE u.email = 'bob@e2e.test' ORDER BY s.need_id`,
+          `SELECT s.need_id, s.shared_text FROM need_share s
+           JOIN "user" u ON u.id = s.user_id WHERE u.email = 'bob@e2e.test' ORDER BY s.need_id`,
         );
         expect(d.walkthrough.phase).toBe('PARTNER_NEEDS');
         expect(d.walkthrough.ownNeeds).toEqual([]);
@@ -355,7 +354,7 @@ describe(`golden: ${SCENARIO}`, () => {
       };
       const shares = await sql<{ need_id: string; email: string; shared_text: string; label: string }>(
         `SELECT s.need_id, u.email, s.shared_text, n.label
-         FROM need_share s JOIN need n ON n.id = s.need_id JOIN participant p ON p.id = s.participant_id JOIN "user" u ON u.id = p.user_id`,
+         FROM need_share s JOIN need n ON n.id = s.need_id JOIN "user" u ON u.id = s.user_id`,
       );
       const sortById = <T extends { id: string }>(xs: T[]) => [...xs].sort((a, b) => (a.id < b.id ? -1 : 1));
       expect(sortById(stage4.data.walkthrough.ownNeeds.map(n => ({ id: n.id, label: n.label })))).toEqual(

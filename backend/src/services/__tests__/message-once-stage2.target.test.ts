@@ -18,7 +18,7 @@ const BASE_URL =
 const describeTarget = isTargetShape() ? describe : describe.skip;
 jest.setTimeout(180_000);
 
-describeTarget("Stage 2 hold-here note: once per conversation, keyed, not hashed (work-fdc1)", () => {
+describeTarget('Stage 2 hold-here note: once per conversation, keyed, not hashed (work-fdc1)', () => {
   let harness: Harness;
   const rows = async <T extends Record<string, unknown>>(sql: string, params: unknown[] = []): Promise<T[]> =>
     withClient(harness.fixture.target, async c => (await c.query<T>(sql, params)).rows, harness.fixture.database);
@@ -33,7 +33,7 @@ describeTarget("Stage 2 hold-here note: once per conversation, keyed, not hashed
     rows<{ role: string; content: string }>(
       `SELECT m.role::text AS role, m.content FROM message m
          JOIN conversation c ON c.id = m.conversation_id AND c.kind = 'MAIN'
-         JOIN participant p ON p.id = c.participant_id JOIN "user" u ON u.id = p.user_id
+         JOIN "user" u ON u.id = c.user_id
         WHERE u.email = $1 AND m.dedupe_key = 'STAGE2_VALIDATED_WAIT'`,
       [email],
     );

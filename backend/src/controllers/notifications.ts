@@ -20,7 +20,8 @@ import { logger } from '../lib/logger';
 import { getJobPrisma, prisma } from '../lib/prisma';
 import { successResponse, errorResponse } from '../utils/response';
 import { loadCurrentStages } from '../services/stage-shim';
-import { partyOf, sessionParties, type SessionParty } from '../services/empathy-store';
+import { partyOf, sessionParties } from '../services/empathy-store';
+import type { Seat } from '../services/participant-resolver';
 
 // ============================================================================
 // Types
@@ -34,43 +35,46 @@ interface PendingAction {
 
 const TERMINAL = new Set(['RESOLVED', 'ABANDONED', 'ARCHIVED']);
 
+/** The caller's participant in one session, with its MAIN conversation. */
+type Me = Seat & { mainConversationId: string | null };
+
 /** Partner rounds revealed to `me` (latest revealed round per direction) that `me` has not reviewed. */
-async function unreviewedRevealed(me: SessionParty) {
+async function unreviewedRevealed(me: Me) {
   const rounds = await prisma.empathyAttempt.findMany({
-    where: { subjectParticipantId: me.participantId, status: 'REVEALED', revealedAt: { not: null } },
+    where: { sessionId: me.sessionId, subjectUserId: me.userId, status: 'REVEALED', revealedAt: { not: null } },
     select: {
       id: true,
       content: true,
-      authorParticipant: { select: { userId: true } },
-      reviews: { where: { reviewerParticipantId: me.participantId }, select: { id: true } },
+      authorUserId: true,
+      reviews: { where: { sessionId: me.sessionId, reviewerUserId: me.userId }, select: { id: true } },
     },
   });
   return rounds.filter(r => r.reviews.length === 0);
 }
 
 /** Delivered context in `me`'s own conversation not yet shown to them (services/shared-context-view.ts). */
-async function unreadContext(me: SessionParty) {
+async function unreadContext(me: Me) {
   if (!me.mainConversationId) return [];
   const readState = await prisma.conversationReadState.findUnique({
-    where: { participantId: me.participantId },
+    where: { sessionId_userId: { sessionId: me.sessionId, userId: me.userId } },
     select: { lastViewedShareTabAt: true },
   });
   return prisma.message.findMany({
     where: {
       conversationId: me.mainConversationId,
       kind: 'SHARED_CONTEXT',
-      senderParticipantId: { not: me.participantId },
+      senderUserId: { not: me.userId },
       ...(readState?.lastViewedShareTabAt ? { createdAt: { gt: readState.lastViewedShareTabAt } } : {}),
     },
     orderBy: { createdAt: 'desc' },
-    select: { id: true, content: true, createdAt: true, senderParticipant: { select: { userId: true } } },
+    select: { id: true, content: true, createdAt: true, senderUserId: true },
   });
 }
 
-async function openOffers(me: SessionParty) {
+async function openOffers(me: Me) {
   return prisma.contextShareOffer.findMany({
-    where: { subjectParticipantId: me.participantId, status: { in: ['PENDING', 'OFFERED'] } },
-    include: { result: true, attempt: { select: { authorParticipantId: true } } },
+    where: { sessionId: me.sessionId, subjectUserId: me.userId, status: { in: ['PENDING', 'OFFERED'] } },
+    include: { result: true, attempt: { select: { authorUserId: true } } },
   });
 }
 
@@ -95,8 +99,8 @@ export async function getPendingActionsHandler(req: Request, res: Response): Pro
       prisma.session.findUnique({ where: { id: sessionId }, select: { status: true } }),
       sessionParties(sessionId),
     ]);
-    const me = partyOf(parties, { participantId: req.participant?.id }) ?? partyOf(parties, { userId: user.id });
-    if (!session || !me) {
+    const party = partyOf(parties, { userId: user.id });
+    if (!session || !party) {
       errorResponse(res, 'NOT_FOUND', 'Session not found', 404);
       return;
     }
@@ -104,9 +108,10 @@ export async function getPendingActionsHandler(req: Request, res: Response): Pro
       successResponse(res, { actions: [], sentTabUpdates: 0 });
       return;
     }
+    const me: Me = { sessionId, userId: party.userId, mainConversationId: party.mainConversationId };
 
     const actions: PendingAction[] = [];
-    const userMaxStage = (await loadCurrentStages([me.participantId])).get(me.participantId)?.stage ?? 0;
+    const userMaxStage = (await loadCurrentStages([me])).get(me)?.stage ?? 0;
 
     // 1. My open share offers (as subject) — actionable only in Stage 2.
     if (userMaxStage === 2) {
@@ -115,7 +120,7 @@ export async function getPendingActionsHandler(req: Request, res: Response): Pro
           type: 'share_offer',
           id: offer.id,
           data: {
-            guesserName: partyOf(parties, { participantId: offer.attempt.authorParticipantId })?.name ?? null,
+            guesserName: partyOf(parties, { userId: offer.attempt.authorUserId })?.name ?? null,
             suggestedContent: offer.suggestedContent,
             suggestedShareFocus: offer.result.suggestedShareFocus,
             action: offer.result.recommendedAction,
@@ -129,7 +134,7 @@ export async function getPendingActionsHandler(req: Request, res: Response): Pro
       actions.push({
         type: 'validate_empathy',
         id: attempt.id,
-        data: { content: attempt.content, sourceUserId: attempt.authorParticipant.userId },
+        data: { content: attempt.content, sourceUserId: attempt.authorUserId },
       });
     }
 
@@ -141,7 +146,7 @@ export async function getPendingActionsHandler(req: Request, res: Response): Pro
           id: msg.id,
           data: {
             content: msg.content,
-            senderId: msg.senderParticipant?.userId ?? null,
+            senderId: msg.senderUserId ?? null,
             timestamp: msg.createdAt.toISOString(),
           },
         });
@@ -153,7 +158,8 @@ export async function getPendingActionsHandler(req: Request, res: Response): Pro
     // the notification.
     const unnotified = await prisma.contextShareOffer.findMany({
       where: {
-        subjectParticipantId: me.participantId,
+        sessionId,
+        subjectUserId: me.userId,
         status: 'ACCEPTED',
         OR: [
           { deliveryStatus: 'DELIVERED', deliveryNotifiedAt: null },
@@ -200,30 +206,26 @@ export async function getBadgeCountHandler(req: Request, res: Response): Promise
     const rows = await prisma.participant.findMany({
       where: { userId: user.id, leftAt: null, session: { status: { in: ['ACTIVE', 'INVITED'] } } },
       select: {
-        id: true,
         sessionId: true,
         userId: true,
-        joinedAt: true,
         conversations: { where: { kind: 'MAIN' }, select: { id: true } },
       },
     });
-    const stages = await loadCurrentStages(rows.map(r => r.id));
+    const stages = await loadCurrentStages(rows.map(r => ({ sessionId: r.sessionId, userId: r.userId })));
 
     const bySession: Record<string, number> = {};
     let total = 0;
     for (const r of rows) {
-      const me: SessionParty = {
-        participantId: r.id,
+      const me: Me = {
+        sessionId: r.sessionId,
         userId: r.userId,
-        name: null,
-        joinedAt: r.joinedAt,
         mainConversationId: r.conversations[0]?.id ?? null,
       };
-      const stage = stages.get(r.id)?.stage ?? 0;
+      const stage = stages.get(me)?.stage ?? 0;
       let count = 0;
       if (stage === 2) {
         count += await prisma.contextShareOffer.count({
-          where: { subjectParticipantId: me.participantId, status: { in: ['PENDING', 'OFFERED'] } },
+          where: { sessionId: me.sessionId, subjectUserId: me.userId, status: { in: ['PENDING', 'OFFERED'] } },
         });
       }
       count += (await unreviewedRevealed(me)).length;
