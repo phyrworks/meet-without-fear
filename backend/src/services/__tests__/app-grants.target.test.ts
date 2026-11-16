@@ -8,6 +8,7 @@
  * Requires the target shape and a built target fixture:
  *   npx tsx src/testing/golden/cli.ts build FEEL_HEARD_B
  */
+import { Client } from 'pg';
 import { isTargetShape } from '../../testing/golden/shape';
 import { openTargetRun, adaAndBob, type TargetRun } from './target-roles';
 
@@ -184,6 +185,39 @@ describeTarget('mwf_app grants (target)', () => {
       expect(await del(ids.adaUser, suggestion.id)).toBe('ok');
       const bobTurn = await insert(ids.bobUser, bobConv, ids.bobUser, 'USER', 'CHAT');
       expect(await del(ids.adaUser, bobTurn)).toBe('42501');
+    });
+
+    it('work-k5fk.10.22: the row checks bind every member of app_access, not only the login named mwf_app', async () => {
+      // A second login mapped onto app_access (an IAM user, a split API service) holds mwf_app's grants; before
+      // 10.22 the triggers keyed on current_user = 'mwf_app' and let it write an AI line into anyone's thread.
+      const login = `rr_app2_${process.pid}`;
+      const admin = (q: string) => run.sql(q);
+      await admin(`CREATE ROLE ${login} LOGIN PASSWORD 'rr_app2_pw'`);
+      await admin(`GRANT app_access TO ${login} WITH INHERIT TRUE, SET FALSE`);
+      try {
+        const c = new Client({
+          connectionString: `postgresql://${login}:rr_app2_pw@${run.fx.target.host}:${run.fx.target.port}/${run.fx.database}`,
+        });
+        await c.connect();
+        try {
+          const forged = await c
+            .query(
+              `INSERT INTO message (conversation_id, role, kind, content, session_id)
+               VALUES ($1::uuid, 'AI', 'CHAT', 'forged', (SELECT x.session_id FROM conversation x WHERE x.id = $1::uuid))`,
+              [bobConv],
+            )
+            .then(
+              () => 'ok',
+              (e: { code?: string }) => e.code ?? String(e),
+            );
+          expect(forged).toBe('42501');
+        } finally {
+          await c.end();
+        }
+      } finally {
+        await admin(`REVOKE app_access FROM ${login}`).catch(() => undefined);
+        await admin(`DROP ROLE IF EXISTS ${login}`);
+      }
     });
 
     it('FINDING: with no identity bound, whose conversation it is cannot be checked — only the row shape', async () => {

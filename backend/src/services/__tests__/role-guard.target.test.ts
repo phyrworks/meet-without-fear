@@ -156,8 +156,17 @@ describeTarget('runtime role guard (target)', () => {
       }
     });
 
+    it('review 9a F1: the capability held WITH SET (PG16+ default of a plain GRANT) is refused', async () => {
+      await admin(`GRANT app_access TO ${login}`);
+      try {
+        expect(await refusal()).toContain(`${login} can SET ROLE to app_access`);
+      } finally {
+        await admin(`REVOKE app_access FROM ${login}`);
+      }
+    });
+
     it('work-k5fk.10.4: the capability held WITH ADMIN OPTION is refused', async () => {
-      await admin(`GRANT app_access TO ${login} WITH ADMIN TRUE`);
+      await admin(`GRANT app_access TO ${login} WITH ADMIN TRUE, SET FALSE`);
       try {
         expect(await refusal()).toContain(`${login} holds role(s) app_access WITH ADMIN OPTION`);
       } finally {

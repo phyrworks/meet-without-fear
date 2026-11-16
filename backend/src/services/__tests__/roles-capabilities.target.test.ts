@@ -36,7 +36,28 @@ export const LOGIN_CAPABILITY = {
 } as const;
 
 const LOGINS = Object.keys(LOGIN_CAPABILITY);
+/** Logins a client connects as today. */
+const ACTIVE = ['mwf_app', 'mwf_ops', 'mwf_auth', 'mwf_job'];
+/** Reserved logins (review 9a F4): NOLOGIN, no password, until a call site (9b) or the portal (Q18) uses them. */
+const RESERVED = ['mwf_ai', 'mwf_worker', 'mwf_clinician'];
 const CAPABILITIES = Object.values(LOGIN_CAPABILITY) as string[];
+/**
+ * What the SECURITY DEFINER functions write (trailer T4/T5 bodies; review 9a F3): the definers' write grants,
+ * table:command. Reads are not pinned here (the privilege matrix snapshot is); a write beyond these widens
+ * what a definer bug or an injection into one can change.
+ */
+const DEFINER_WRITES = [
+  'user:INSERT', 'user:UPDATE', 'user_identity:INSERT', 'user_identity:DELETE', 'user_contact:DELETE',
+  'session:UPDATE', 'participant:UPDATE', 'live_session_pair:INSERT', 'live_session_pair:DELETE',
+  'conversation:UPDATE', 'conversation:DELETE', 'message:INSERT',
+  'empathy_attempt:INSERT', 'empathy_attempt:UPDATE', 'empathy_attempt:DELETE',
+  'need:DELETE', 'need_share:INSERT', 'need_share:UPDATE', 'consent:UPDATE',
+  'participant_key:UPDATE', 'user_key:UPDATE',
+  'conversation_read_state:DELETE', 'draft:DELETE', 'ai_memory:DELETE', 'mood_reading:DELETE',
+  'regulation_event:DELETE', 'need_disposition:DELETE', 'follow_up_note:DELETE', 'proposal_choice:DELETE',
+  'follow_up_checkin:DELETE', 'brain_activity:DELETE', 'reflection:DELETE', 'feature_state:DELETE',
+  'user_memory:DELETE', 'user_device:DELETE', 'user_preferences:DELETE', 'reminder:DELETE',
+];
 /** Capabilities that hold no privilege in 9a. */
 const EMPTY = ['ai_access', 'worker_access', 'clinician_access'];
 
@@ -102,7 +123,7 @@ describeTarget('capability roles and mwf_definer (target)', () => {
     expect(rows).toEqual([...CAPABILITIES, 'mwf_definer'].sort().map(rolname => ({ rolname, attrs: '' })));
   });
 
-  it('every runtime login exists: LOGIN and nothing else', async () => {
+  it('every runtime login exists: the active ones LOGIN and nothing else; the reserved ones NOLOGIN, no password', async () => {
     const rows = await run.sql<{ rolname: string; attrs: string }>(
       `SELECT r.rolname::text,
               concat_ws(',', CASE WHEN r.rolcanlogin THEN 'LOGIN' END, CASE WHEN r.rolsuper THEN 'SUPERUSER' END,
@@ -111,14 +132,20 @@ describeTarget('capability roles and mwf_definer (target)', () => {
        FROM pg_roles r WHERE r.rolname = ANY($1::text[]) ORDER BY 1`,
       [LOGINS],
     );
-    expect(rows).toEqual([...LOGINS].sort().map(rolname => ({ rolname, attrs: 'LOGIN' })));
+    expect(rows).toEqual([...LOGINS].sort().map(rolname => ({ rolname, attrs: ACTIVE.includes(rolname) ? 'LOGIN' : '' })));
+    const pw = await run.sql<{ rolname: string; has: boolean }>(
+      `SELECT rolname::text, rolpassword IS NOT NULL AS has FROM pg_authid WHERE rolname = ANY($1::text[]) ORDER BY 1`,
+      [RESERVED],
+    );
+    expect(pw).toEqual([...RESERVED].sort().map(rolname => ({ rolname, has: false })));
   });
 
-  it('each runtime login reaches exactly one role, transitively — its capability — with INHERIT and without ADMIN', async () => {
+  it('each runtime login reaches exactly one role, transitively — its capability — with INHERIT, without SET or ADMIN', async () => {
     const rows = await run.sql<{ login: string; reaches: string[]; direct: string[] }>(
       `SELECT l.rolname::text AS login,
               ARRAY(SELECT r.rolname::text FROM pg_roles r WHERE r.oid <> l.oid AND pg_has_role(l.oid, r.oid, 'MEMBER') ORDER BY 1) AS reaches,
               ARRAY(SELECT r.rolname || CASE WHEN m.inherit_option THEN ' inherit' ELSE '' END
+                                     || CASE WHEN m.set_option THEN ' set' ELSE '' END
                                      || CASE WHEN m.admin_option THEN ' admin' ELSE '' END
                     FROM pg_auth_members m JOIN pg_roles r ON r.oid = m.roleid WHERE m.member = l.oid ORDER BY 1) AS direct
        FROM pg_roles l WHERE l.rolname = ANY($1::text[]) ORDER BY 1`,
@@ -130,6 +157,61 @@ describeTarget('capability roles and mwf_definer (target)', () => {
         return { login, reaches: [cap], direct: [`${cap} inherit`] };
       }),
     );
+  });
+
+  it('review 9a F2: each capability has exactly one member, its login (INHERIT, no SET/ADMIN); mwf_definer only mwf_migrator (SET, no INHERIT/ADMIN)', async () => {
+    const rows = await run.sql<{ role: string; members: string[] }>(
+      `SELECT r.rolname::text AS role,
+              ARRAY(SELECT mr.rolname || CASE WHEN m.inherit_option THEN ' inherit' ELSE '' END
+                                      || CASE WHEN m.set_option THEN ' set' ELSE '' END
+                                      || CASE WHEN m.admin_option THEN ' admin' ELSE '' END
+                    FROM pg_auth_members m JOIN pg_roles mr ON mr.oid = m.member WHERE m.roleid = r.oid ORDER BY 1) AS members
+       FROM pg_roles r WHERE r.rolname = ANY($1::text[]) ORDER BY 1`,
+      [[...CAPABILITIES, 'mwf_definer']],
+    );
+    const want: Array<{ role: string; members: string[] }> = Object.entries(LOGIN_CAPABILITY).map(([login, role]) => ({
+      role,
+      members: [`${login} inherit`],
+    }));
+    want.push({ role: 'mwf_definer', members: ['mwf_migrator set'] });
+    expect(rows).toEqual(want.sort((a, b) => a.role.localeCompare(b.role)));
+  });
+
+  it('review 9a F3: no runtime login, capability or mwf_definer may CREATE in the database or in schema public/app', async () => {
+    const rows = await run.sql<{ rolname: string; db: boolean; pub: boolean; app: boolean }>(
+      `SELECT r.rolname::text, has_database_privilege(r.oid, current_database(), 'CREATE') AS db,
+              has_schema_privilege(r.oid, 'public', 'CREATE') AS pub, has_schema_privilege(r.oid, 'app', 'CREATE') AS app
+       FROM pg_roles r WHERE r.rolname = ANY($1::text[]) AND (has_database_privilege(r.oid, current_database(), 'CREATE')
+         OR has_schema_privilege(r.oid, 'public', 'CREATE') OR has_schema_privilege(r.oid, 'app', 'CREATE'))`,
+      [[...LOGINS, ...CAPABILITIES, 'mwf_definer']],
+    );
+    expect(rows).toEqual([]);
+  });
+
+  it('review 9a F3: no runtime login or capability may EXECUTE app.next_message_seq or any trigger function', async () => {
+    const rows = await run.sql<{ rolname: string; fn: string }>(
+      `SELECT r.rolname::text, p.oid::regprocedure::text AS fn
+       FROM pg_roles r, pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+       WHERE r.rolname = ANY($1::text[]) AND n.nspname = 'app'
+         AND (p.proname = 'next_message_seq' OR p.prorettype = 'pg_catalog.trigger'::regtype)
+         AND has_function_privilege(r.oid, p.oid, 'EXECUTE') ORDER BY 1, 2`,
+      [[...LOGINS, ...CAPABILITIES]],
+    );
+    expect(rows).toEqual([]);
+  });
+
+  it('review 9a F3: mwf_definer writes exactly the tables its definers write (INSERT / UPDATE / DELETE), and holds no TRUNCATE / REFERENCES / TRIGGER', async () => {
+    const rows = await run.sql<{ w: string }>(
+      `SELECT DISTINCT c.relname || ':' || a.privilege_type AS w
+       FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace,
+            LATERAL (SELECT x.grantee, x.privilege_type FROM aclexplode(c.relacl) x
+                     UNION ALL SELECT x.grantee, x.privilege_type FROM pg_attribute att, aclexplode(att.attacl) x
+                     WHERE att.attrelid = c.oid) a
+       WHERE n.nspname IN ('public', 'app') AND a.grantee = 'mwf_definer'::regrole
+         AND a.privilege_type IN ('INSERT', 'UPDATE', 'DELETE', 'TRUNCATE', 'REFERENCES', 'TRIGGER')
+       ORDER BY 1`,
+    );
+    expect(rows.map(r => r.w)).toEqual([...DEFINER_WRITES].sort());
   });
 
   it('a capability role is a member of no role, and no capability is a member of another', async () => {
