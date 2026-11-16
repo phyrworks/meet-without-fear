@@ -80,7 +80,7 @@ development container `mwf-postgres` or its databases.
 | Image architecture | linux/amd64 (CI) | the Mac's native arm64 |
 | Database URLs | `DATABASE_URL` = `mwf_app` | `DATABASE_URL` = `mwf_migrator` (migrations and the E2E tooling connection only); plus `APP_`/`JOB_`/`OPS_`/`AUTH_DATABASE_URL` for `mwf_app`/`mwf_job`/`mwf_ops`/`mwf_auth` and `DB_IDENTITY_BINDING=on` (the target-shape settings) |
 | Migrations | `mwf_app` (database owner) via `deploy.sh`, after a backup | `mwf_migrator` (database owner), no backup |
-| Ownership | `mwf_app` owns the database and is a member of `mwf_job` | `mwf_migrator` owns everything; no runtime login is a member of any role |
+| Ownership | `mwf_app` owns the database and is a member of `mwf_job` | `mwf_migrator` owns everything, `mwf_definer` (NOLOGIN) the SECURITY DEFINER functions; each runtime login is a member of its one capability role only (work-k5fk.10.4) |
 | Ably | real `ABLY_API_KEY` | none by default: `/api/auth/ably-token` returns a mock token request, so the browser's Ably client never connects and realtime partner updates do not arrive; set `MWF_LOCAL_ABLY_API_KEY` before `up.sh` to use a real key |
 | Field encryption | production key | a random development `FIELD_ENCRYPTION_KEY`, generated once into `infra/local/.local/secrets.env` (see below) |
 | Clerk, Bedrock, Resend, Sentry | configured | not configured; a request with neither bypass headers nor a token fails closed with 500 "Authentication not configured" (production: 401) |
