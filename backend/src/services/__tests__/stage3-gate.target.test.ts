@@ -84,7 +84,7 @@ describeTarget('the Stage 3 reveal gate on the target (mwf_app, the gate reply b
   const ownMessages = async (seat: { sessionId: string; userId: string }) =>
     run.sql<{ role: string; content: string }>(
       `SELECT m.role::text AS role, m.content FROM message m JOIN conversation c ON c.id = m.conversation_id
-       WHERE c.session_id = $1 AND c.user_id = $2 ORDER BY m.created_at, m.id`,
+       WHERE c.session_id = $1 AND c.user_id = $2 ORDER BY m.created_at, m.seq`,
       [seat.sessionId, seat.userId],
     );
 

@@ -77,7 +77,7 @@ describeTarget('shared-context-viewed: the recipient marks the frame she was sho
         agent.post(`/api/v1/sessions/${harness.sessionId}/reconciler/share-offer/respond`).send({ action: 'accept' }),
     });
     expect(accept.status).toBe(200);
-    const [msg] = await rows<{ id: string }>(`SELECT id FROM message WHERE kind = 'SHARED_CONTEXT'`);
+    const [msg] = await rows<{ id: string }>(`SELECT conversation_id || ':' || seq AS id FROM message WHERE kind = 'SHARED_CONTEXT'`);
     messageId = msg.id;
   });
   afterAll(async () => {
@@ -95,12 +95,14 @@ describeTarget('shared-context-viewed: the recipient marks the frame she was sho
 
   it('authz: the sender cannot mark it, nor anyone a frame not delivered to them; bad ids are 400', async () => {
     expect((await view(bob, { messageId })).status).toBe(404);
-    expect((await view(ada, { messageId: '01900000-0000-7000-8000-000000000000' })).status).toBe(404);
+    expect((await view(ada, { messageId: '01900000-0000-7000-8000-000000000000:1' })).status).toBe(404);
+    // work-k5fk.4: a bare uuid is not a message id ("<conversationId>:<seq>").
+    expect((await view(ada, { messageId: '01900000-0000-7000-8000-000000000000' })).status).toBe(400);
     expect((await view(ada, {})).status).toBe(400);
     expect((await view(ada, { messageId: 'context-shared-x' })).status).toBe(400);
     // A message of Ada's own conversation that is not a received shared frame.
     const [own] = await rows<{ id: string }>(
-      `SELECT m.id FROM message m JOIN conversation c ON c.id = m.conversation_id
+      `SELECT m.conversation_id || ':' || m.seq AS id FROM message m JOIN conversation c ON c.id = m.conversation_id
        JOIN "user" u ON u.id = c.user_id
        WHERE u.email = 'ada@e2e.test' AND m.kind <> 'SHARED_CONTEXT' LIMIT 1`,
     );
@@ -114,7 +116,7 @@ describeTarget('shared-context-viewed: the recipient marks the frame she was sho
     expect(r.status).toBe(200);
     const body = (r.body as Body<{ advanced: boolean; lastViewedSharedContextAt: string }>).data;
     expect(body.advanced).toBe(true);
-    const [{ created }] = await rows<{ created: Date }>(`SELECT created_at AS created FROM message WHERE id = $1`, [
+    const [{ created }] = await rows<{ created: Date }>(`SELECT created_at AS created FROM message WHERE conversation_id || ':' || seq = $1`, [
       messageId,
     ]);
     expect(new Date(body.lastViewedSharedContextAt).getTime()).toBeGreaterThanOrEqual(created.getTime());

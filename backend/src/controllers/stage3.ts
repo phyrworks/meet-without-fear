@@ -169,6 +169,7 @@ async function guidance(
   const message = await createFacilitatorMessage({ conversationId: participant.mainConversationId, content });
   await publishMessageAIResponse(sessionId, userId, {
     id: message.id,
+    seq: message.seq,
     sessionId,
     senderId: null,
     content: message.content,

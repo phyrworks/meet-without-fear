@@ -10,7 +10,7 @@ import { loadCurrentStages, loadStageStates } from '../services/stage-shim';
 import { verifyToken } from '@clerk/express';
 import { logger } from '../lib/logger';
 import { fieldEncryptionEnabled } from '../utils/field-encryption';
-import { foldEmail } from '@meet-without-fear/shared';
+import { foldEmail, formatMessageId } from '@meet-without-fear/shared';
 
 /**
  * A brain_activity jsonb column (input / output / metadata) as the dashboard reads it: arbitrary
@@ -975,11 +975,11 @@ router.get('/activity/:sessionId', async (req, res) => {
     let messages: Array<{ id: string; content: string; timestamp: Date; senderId: string | null }> = (
       await db().message.findMany({
         where: { role: 'USER', kind: 'CHAT', conversation: { kind: 'MAIN', sessionId } },
-        orderBy: { createdAt: 'asc' },
-        select: { id: true, content: true, createdAt: true, senderUserId: true },
+        orderBy: [{ createdAt: 'asc' }, { conversationId: 'asc' }, { seq: 'asc' }],
+        select: { conversationId: true, seq: true, content: true, createdAt: true, senderUserId: true },
       })
     ).map(m => ({
-      id: m.id,
+      id: formatMessageId(m.conversationId, m.seq),
       content: m.content,
       timestamp: m.createdAt,
       senderId: m.senderUserId ?? null,

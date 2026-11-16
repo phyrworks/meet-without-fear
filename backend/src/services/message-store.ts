@@ -19,12 +19,18 @@
  *     …) written into ANOTHER participant's conversation, on the JOB
  *     connection.
  *
- * The DTO (`shared` MessageDTO) is unchanged: `role` is the old single role
+ * Keys (work-k5fk.4): a message is (conversation_id, seq); the trigger
+ * t_message_seq numbers every INSERT, so no writer here sends seq, and each
+ * reads it back with RETURNING. `StoredMessage.id` — and the DTO's — is the
+ * derived "<conversationId>:<seq>" (shared formatMessageId); `seq` rides along.
+ *
+ * The DTO (`shared` MessageDTO) adds `seq`; otherwise: `role` is the old single role
  * (the target's role, or its kind for a delivered item), `senderId` the sender's
  * user id (`sender_user_id`; the sender participant is (session_id, sender_user_id)), `sessionId` the conversation's session, `stage` the
  * owner's stage at the message's instant (stage shim), `timestamp` created_at.
  */
 
+import { formatMessageId, parseMessageId, type MessageKey } from '@meet-without-fear/shared';
 import type { DbClient } from '../lib/prisma';
 import { getJobPrisma, prisma } from '../lib/prisma';
 import { encryptColumnValue } from '../lib/prisma-encryption-middleware';
@@ -54,8 +60,11 @@ export type MessageDedupeKey = (typeof MESSAGE_DEDUPE_KEYS)[number];
 
 /** The row shape every reader here works with. */
 export interface StoredMessage {
+  /** "<conversationId>:<seq>" — derived, never stored. */
   id: string;
   conversationId: string;
+  /** The line's place in its conversation (the key with conversationId). */
+  seq: number;
   /** The sender's user id (the sender participant is the message's (session_id, sender_user_id)); null for AI/SYSTEM. */
   senderUserId: string | null;
   role: TargetMessageRole;
@@ -90,6 +99,7 @@ export interface MessageDTOContext {
 
 export interface LegacyMessageDTO {
   id: string;
+  seq: number;
   sessionId: string;
   senderId: string | null;
   role: string;
@@ -101,6 +111,7 @@ export interface LegacyMessageDTO {
 export function toMessageDTO(m: StoredMessage, ctx: MessageDTOContext): LegacyMessageDTO {
   return {
     id: m.id,
+    seq: m.seq,
     sessionId: ctx.sessionId,
     senderId: m.senderUserId,
     role: legacyRole(m.role, m.kind),
@@ -111,8 +122,8 @@ export function toMessageDTO(m: StoredMessage, ctx: MessageDTOContext): LegacyMe
 }
 
 export const MESSAGE_SELECT = {
-  id: true,
   conversationId: true,
+  seq: true,
   senderUserId: true,
   role: true,
   kind: true,
@@ -122,6 +133,23 @@ export const MESSAGE_SELECT = {
   createdAt: true,
 } as const;
 
+/** A row read with MESSAGE_SELECT (or any select holding the key), with its derived id. */
+export function withMessageId<T extends { conversationId: string; seq: number }>(row: T): T & { id: string } {
+  return { ...row, id: formatMessageId(row.conversationId, row.seq) };
+}
+
+/** The key of an API message id ("<conversationId>:<seq>"), or null. */
+export function messageKeyOf(id: unknown): MessageKey | null {
+  return parseMessageId(id);
+}
+
+/** Prisma's where for one message by its API id (`conversationId_seq`); throws on a malformed id. */
+export function whereMessageId(id: string): { conversationId_seq: MessageKey } {
+  const key = parseMessageId(id);
+  if (!key) throw new Error(`not a message id: ${id}`);
+  return { conversationId_seq: key };
+}
+
 /**
  * A page of one conversation. `take` is `limit + 1`, so the caller can answer
  * `hasMore` without a second query — and so the read stays bounded.
@@ -130,21 +158,27 @@ export async function listConversationMessages(opts: {
   conversationId: string;
   limit: number;
   order: 'asc' | 'desc';
-  before?: Date;
-  after?: Date;
+  /** Page cursors: lines before / after this seq (review F3 — the order is seq, so the cursor is too). */
+  beforeSeq?: number;
+  afterSeq?: number;
   /** Only messages newer than this (summary boundary). */
   newerThan?: Date;
 }): Promise<StoredMessage[]> {
-  const createdAt: Record<string, Date> = {};
-  if (opts.before) createdAt.lt = opts.before;
-  if (opts.after) createdAt.gt = opts.after;
-  if (opts.newerThan) createdAt.gt = opts.newerThan;
-  return (await prisma.message.findMany({
-    where: { conversationId: opts.conversationId, ...(Object.keys(createdAt).length ? { createdAt } : {}) },
-    orderBy: { createdAt: opts.order },
+  const seq: Record<string, number> = {};
+  if (opts.beforeSeq !== undefined) seq.lt = opts.beforeSeq;
+  if (opts.afterSeq !== undefined) seq.gt = opts.afterSeq;
+  // seq is the chat order (work-k5fk.4: the key).
+  const rows = await prisma.message.findMany({
+    where: {
+      conversationId: opts.conversationId,
+      ...(Object.keys(seq).length ? { seq } : {}),
+      ...(opts.newerThan ? { createdAt: { gt: opts.newerThan } } : {}),
+    },
+    orderBy: { seq: opts.order },
     take: opts.limit + 1,
     select: MESSAGE_SELECT,
-  })) as StoredMessage[];
+  });
+  return rows.map(withMessageId) as StoredMessage[];
 }
 
 /** Count of the participant's own turns in their conversation (role USER, kind CHAT). */
@@ -171,7 +205,7 @@ export async function lastOwnTurnAt(conversationId: string, seat: Seat): Promise
       role: 'USER',
       kind: 'CHAT',
     },
-    orderBy: { createdAt: 'desc' },
+    orderBy: { seq: 'desc' },
     select: { createdAt: true },
   });
   return last?.createdAt ?? null;
@@ -182,10 +216,11 @@ export async function lastOwnTurnAt(conversationId: string, seat: Seat): Promise
 // ----------------------------------------------------------------------------
 
 /**
- * One INSERT … RETURNING id, created_at — nothing else: the job's SELECT
- * grant on message is exactly (id, created_at) (trailer T7, TS-9 fix round
- * 2), so a job writer can never read back a row's content, and the written
- * row is built from the inputs the writer already holds.
+ * One INSERT … RETURNING seq, created_at — nothing else: the job's SELECT
+ * grant on message is exactly the key and the instant (tables.sql; TS-9 fix
+ * round 2, work-k5fk.4), so a job writer can never read back a row's content,
+ * and the written row is built from the inputs the writer already holds.
+ * seq is not sent: t_message_seq numbers the row.
  */
 async function insert(
   client: DbClient,
@@ -207,7 +242,7 @@ async function insert(
   // (conversation_id, session_id) → conversation; (session_id, sender_user_id) → participant). A
   // caller without the session has it read from the conversation in the INSERT.
   // created_at is the client's instant, as the Prisma create sent it (@default(now())).
-  const [row] = await client.$queryRaw<Array<{ id: string; created_at: Date }>>`
+  const [row] = await client.$queryRaw<Array<{ seq: number; created_at: Date }>>`
     INSERT INTO message (conversation_id, session_id, sender_user_id, role, kind, content,
                          refining_need_id, source_attempt_id, created_at)
     VALUES (${data.conversationId}::uuid,
@@ -216,11 +251,12 @@ async function insert(
             ${data.senderUserId}::uuid,
             ${data.role}::message_role, ${data.kind}::message_kind, ${encryptColumnValue('message', 'content', data.content)},
             ${data.refiningNeedId ?? null}::uuid, ${data.sourceAttemptId ?? null}::uuid, ${data.createdAt ?? new Date()})
-    RETURNING id, created_at`;
+    RETURNING seq, created_at`;
   const createdAt = row.created_at;
   return {
-    id: row.id,
+    id: formatMessageId(data.conversationId, row.seq),
     conversationId: data.conversationId,
+    seq: row.seq,
     senderUserId: data.senderUserId,
     role: data.role,
     kind: data.kind,
@@ -252,6 +288,30 @@ export function createParticipantMessage(opts: {
     content: opts.content,
     refiningNeedId: opts.refiningNeedId,
     createdAt: opts.createdAt,
+  });
+}
+
+/**
+ * The author's own copy of their empathy statement (kind EMPATHY_STATEMENT, in
+ * their own conversation, app connection; t_message_app_insert admits it),
+ * naming the attempt it states. Raw like every writer here: seq is the
+ * trigger's, so a Prisma create (which would demand it) cannot write a message.
+ */
+export function createOwnStatementMessage(opts: {
+  conversationId: string;
+  sessionId: string;
+  userId: string;
+  content: string;
+  attemptId: string;
+}): Promise<StoredMessage> {
+  return insert(prisma, {
+    conversationId: opts.conversationId,
+    sessionId: opts.sessionId,
+    senderUserId: opts.userId,
+    role: 'USER',
+    kind: 'EMPATHY_STATEMENT',
+    content: opts.content,
+    sourceAttemptId: opts.attemptId,
   });
 }
 
@@ -298,7 +358,7 @@ export function createFacilitatorMessage(opts: {
  * `encryptColumnValue('message', 'content', …)`, as the Prisma extension seals
  * a model write (the same field of SENSITIVE_FIELD_MAP, key class per-row).
  * JOB connection, like every facilitator row (it may INSERT dedupe_key but
- * never SELECT it; RETURNING reads only id, created_at).
+ * never SELECT it; RETURNING reads only seq, created_at).
  */
 export async function createFacilitatorMessageOnce(opts: {
   conversationId: string;
@@ -312,21 +372,23 @@ export async function createFacilitatorMessageOnce(opts: {
   // No conflict target: inferring one (ON CONFLICT (conversation_id, dedupe_key)
   // WHERE …) needs SELECT on the arbiter columns, and mwf_job must not read
   // dedupe_key (42501, verified). Without a target the arbiters are message's
-  // unique indexes: the primary key, a fresh uuidv7() default that cannot
-  // collide, and sql_message_once — so the only conflict is the dedupe key.
-  const rows = await client.$queryRaw<Array<{ id: string; created_at: Date }>>`
+  // unique indexes: the key and (key, session_id), whose seq t_message_seq has
+  // just taken (cannot collide), and sql_message_once — so the only conflict is
+  // the dedupe key. The number taken for a conflicting line is a hole (work-k5fk.4).
+  const rows = await client.$queryRaw<Array<{ seq: number; created_at: Date }>>`
     INSERT INTO message (conversation_id, session_id, role, kind, content, dedupe_key, created_at)
     VALUES (${opts.conversationId}::uuid, (SELECT c.session_id FROM conversation c WHERE c.id = ${opts.conversationId}::uuid),
             'AI'::message_role, 'CHAT'::message_kind,
             ${encryptColumnValue('message', 'content', opts.content)},
             ${opts.dedupeKey}::message_dedupe_key, coalesce(${opts.createdAt ?? null}::timestamptz, CURRENT_TIMESTAMP))
     ON CONFLICT DO NOTHING
-    RETURNING id, created_at`;
+    RETURNING seq, created_at`;
   const row = rows[0];
   if (!row) return null;
   return {
-    id: row.id,
+    id: formatMessageId(opts.conversationId, row.seq),
     conversationId: opts.conversationId,
+    seq: row.seq,
     senderUserId: null,
     role: 'AI',
     kind: 'CHAT',
@@ -367,7 +429,16 @@ export function deliverMessage(opts: {
   });
 }
 
-/** Delete one message (failed-turn cleanup); the owner's own connection. */
+/** Delete one message by its API id (failed-turn cleanup); the owner's own connection. */
 export async function deleteMessage(id: string): Promise<void> {
-  await prisma.message.delete({ where: { id } });
+  await prisma.message.delete({ where: whereMessageId(id) });
+}
+
+/** The API id of a read state's seen message ("<conversationId>:<seq>"), or null (work-k5fk.4). */
+export function lastSeenMessageIdOf(
+  rs: { lastSeenConversationId: string | null; lastSeenSeq: number | null } | null | undefined,
+): string | null {
+  return rs?.lastSeenConversationId && rs.lastSeenSeq != null
+    ? formatMessageId(rs.lastSeenConversationId, rs.lastSeenSeq)
+    : null;
 }

@@ -52,6 +52,16 @@ const CUID_RE = /(?<![a-z0-9])c[a-z0-9]{24}(?![a-z0-9])/g;
 const UUID_RE = /(?<![0-9a-zA-Z])[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(?![0-9a-zA-Z])/g;
 
 /**
+ * The API's message id since work-k5fk.4: `"<conversationId>:<seq>"` (shared
+ * formatMessageId). Matched BEFORE UUID_RE, as one token, so it takes the
+ * message's label (`<message:N>` byte-level, `<message:ada@main#3>` concept)
+ * rather than its conversation's label plus `:N`. A token with no label is left
+ * for UUID_RE, which labels the conversation part — `<conversation:…>:N` never
+ * equals a baseline's `<message:…>`, so an unknown message id still fails the run.
+ */
+const MESSAGE_ID_RE = /(?<![0-9a-zA-Z])[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}:[1-9][0-9]*(?![0-9])/g;
+
+/**
  * The *other* clerkId format, and the second volatile-identifier tripwire.
  *
  * There are two, and the distinction matters because the comment above is about
@@ -292,8 +302,17 @@ export async function buildLabelMap(
  * The byte-level labels over the TARGET tables (TS-9): the same vocabulary as
  * the current-shape rules above, from the rows that carry the same facts, so a
  * byte-level golden recorded on the current shape reads the same labels from a
- * target run. `<message:N>` is the global (time, id) rank, as before — the
- * target writer inserts messages in the old order, so ties break the same way.
+ * target run. `<message:N>` is the global time rank, as before — the target
+ * writer inserts messages in the old order. Since work-k5fk.4 a message is
+ * (conversation_id, seq) and its API id is "<conversation_id>:<seq>", which is
+ * what is labelled. A tie on created_at (one millisecond) broke on the uuidv7
+ * id, i.e. by creation order; with no id, creation order is read from the
+ * row's physical history — the inserting transaction (xmin), then the heap
+ * position (ctid), which within one transaction is insertion order (messages
+ * are append-only: never updated in a run, so neither moves). No key of the
+ * row reproduces it: (conversation_id, seq) and (seq, conversation_id) each
+ * swapped recorded ties (TOMBSTONE_READY's sender copy and delivered copy of
+ * one SHARED_CONTEXT; FEEL_HEARD_B's same-instant pair), measured.
  * Conversations, which have no old row, take their concept labels
  * (`<conversation:ada@main/MAIN>`); a participant has no id of its own since
  * work-k5fk.3 — it is (session_id, user_id), both already labels.
@@ -318,8 +337,10 @@ async function labelTargetRows(target: DbTarget, database: string, labels: Map<s
       // A participant is its user within the session (work-k5fk.3): the user's label is the participant's owner label.
       const who = (userId: string | null): string => bare(userId);
 
-      for (const m of await rows(`SELECT id, row_number() OVER (ORDER BY created_at, id)::text AS rank FROM message`)) {
-        labels.set(String(m.id), `<message:${m.rank}>`);
+      for (const m of await rows(
+        `SELECT conversation_id, seq, row_number() OVER (ORDER BY created_at, xmin::text::bigint, ctid)::text AS rank FROM message`,
+      )) {
+        labels.set(`${m.conversation_id}:${m.seq}`, `<message:${m.rank}>`);
       }
       for (const a of await rows(`SELECT id, author_user_id FROM empathy_attempt ORDER BY id`)) {
         labels.set(String(a.id), `<empathyAttempt:${who(a.author_user_id)}>`);
@@ -543,6 +564,7 @@ export function normalize<T>(value: T, map: LabelMap, window?: FreshWindow): Nor
     // Before the id patterns: a seeded clerkId contains no id, so they never
     // overlap, but running it first keeps the whole token as the unit.
     out = out.replace(SEEDED_CLERKID_RE, resolve);
+    out = out.replace(MESSAGE_ID_RE, m => map.labels.get(m) ?? m);
     out = out.replace(UUID_RE, resolve);
     out = out.replace(CUID_RE, resolve);
     return out;
@@ -742,7 +764,14 @@ export function buildConceptLabelMap(input: ConceptLabelInput): LabelMap {
     return `${convPart(conv)}/${kind}:${from}`;
   };
   for (const [group, msgs] of groupBy(rows('message'), messageGroup)) {
-    sortedBy(msgs, ['created_at']).forEach((m, i) => labels.set(String(m.id), `<message:${group}#${i + 1}>`));
+    sortedBy(msgs, ['created_at']).forEach((m, i) => {
+      const label = `<message:${group}#${i + 1}>`;
+      labels.set(String(m.id), label);
+      // work-k5fk.4: the API's "<conversation_id>:<seq>" for the same line. The target view mints the concept id
+      // with seq in its last 12 hex digits (concept-views/target-shape.sql); on the current shape this key is junk
+      // that no body holds.
+      labels.set(`${String(m.conversation_id)}:${parseInt(String(m.id).slice(-12), 16)}`, label);
+    });
   }
 
   // empathy_attempt: direction and round. Both ends must resolve: an attempt

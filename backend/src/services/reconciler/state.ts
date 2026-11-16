@@ -50,6 +50,7 @@ import {
 } from './analysis';
 import { checkAttempts, hasContextAlreadyBeenShared } from './circuit-breaker';
 import { generateShareSuggestion } from './sharing';
+import { withSerializableRetry } from '../../lib/serializable-retry';
 
 // ============================================================================
 // Helper: resolve the two parties of a direction
@@ -277,54 +278,58 @@ export async function checkAndRevealBothIfReady(sessionId: string): Promise<bool
   if (parties.length !== 2) return false;
   const uids = parties.map(p => p.userId);
 
-  const revealed = await getJobPrisma().$transaction(
-    async tx => {
-      const rounds = await tx.$queryRaw<CurrentRound[]>`SELECT DISTINCT ON (a.author_user_id, a.subject_user_id)
+  // Retried when it loses a Serializable round (step 7 review F2): its delivered copies take each subject
+  // conversation's next seq, so a line committed there after its snapshot makes it fail with 40001.
+  const revealed = await withSerializableRetry(() =>
+    getJobPrisma().$transaction(
+      async tx => {
+        const rounds = await tx.$queryRaw<CurrentRound[]>`SELECT DISTINCT ON (a.author_user_id, a.subject_user_id)
                a.id, a.author_user_id, a.subject_user_id, a.status::text AS status
         FROM empathy_attempt a
         WHERE a.session_id = ${sessionId}::uuid AND a.author_user_id = ANY(${uids}::uuid[])
         ORDER BY a.author_user_id, a.subject_user_id,
                  (a.status NOT IN ('SUPERSEDED', 'VALIDATED')) DESC, a.round DESC`;
-      if (rounds.length !== 2) {
-        logger.debug('Not enough empathy attempts for mutual reveal', { sessionId, count: rounds.length });
-        return null;
-      }
-      const ready = rounds.every(r => r.status === 'READY' || r.status === 'VALIDATED');
-      const toReveal = rounds.filter(r => r.status === 'READY');
-      if (!ready || toReveal.length === 0) return null;
+        if (rounds.length !== 2) {
+          logger.debug('Not enough empathy attempts for mutual reveal', { sessionId, count: rounds.length });
+          return null;
+        }
+        const ready = rounds.every(r => r.status === 'READY' || r.status === 'VALIDATED');
+        const toReveal = rounds.filter(r => r.status === 'READY');
+        if (!ready || toReveal.length === 0) return null;
 
-      const at = new Date();
-      for (const r of toReveal) {
-        transition(r.status, 'MUTUAL_REVEAL');
-        await tx.$queryRaw`SELECT app.empathy_set_status(${r.id}::uuid, 'REVEALED'::empathy_status, NULL::text)`;
-        await markAttemptDelivery(r.id, 'DELIVERED', at, tx);
-      }
-      // Share moment (writer-principal rule; spec §1.2 empathy_attempt: "re-encrypted
-      // under the session key by the reveal job"; ruling R26): the revealed rounds'
-      // content, and the EMPATHY_STATEMENT copies app.empathy_set_status wrote with
-      // that ciphertext verbatim, become the subject's to read. Under the single key
-      // there is nothing to re-encrypt; W13 re-encrypts here, in this job
-      // transaction, with the same plaintext (T-message-immutable exempts mwf_job).
-      await reencryptForSession(
-        {
-          moment: 'empathy-reveal',
-          sessionId,
-          rows: toReveal.flatMap(r => [
-            { table: 'empathy_attempt', id: r.id },
-            // the subject's EMPATHY_STATEMENT copy app.empathy_set_status wrote
-            {
-              table: 'message',
-              id: r.id,
-              by: 'source_attempt_id',
-              scope: "kind = 'EMPATHY_STATEMENT' in the subject's conversation",
-            },
-          ]),
-        },
-        tx,
-      );
-      return toReveal;
-    },
-    { isolationLevel: 'Serializable' },
+        const at = new Date();
+        for (const r of toReveal) {
+          transition(r.status, 'MUTUAL_REVEAL');
+          await tx.$queryRaw`SELECT app.empathy_set_status(${r.id}::uuid, 'REVEALED'::empathy_status, NULL::text)`;
+          await markAttemptDelivery(r.id, 'DELIVERED', at, tx);
+        }
+        // Share moment (writer-principal rule; spec §1.2 empathy_attempt: "re-encrypted
+        // under the session key by the reveal job"; ruling R26): the revealed rounds'
+        // content, and the EMPATHY_STATEMENT copies app.empathy_set_status wrote with
+        // that ciphertext verbatim, become the subject's to read. Under the single key
+        // there is nothing to re-encrypt; W13 re-encrypts here, in this job
+        // transaction, with the same plaintext (T-message-immutable exempts mwf_job).
+        await reencryptForSession(
+          {
+            moment: 'empathy-reveal',
+            sessionId,
+            rows: toReveal.flatMap(r => [
+              { table: 'empathy_attempt', id: r.id },
+              // the subject's EMPATHY_STATEMENT copy app.empathy_set_status wrote
+              {
+                table: 'message',
+                id: r.id,
+                by: 'source_attempt_id',
+                scope: "kind = 'EMPATHY_STATEMENT' in the subject's conversation",
+              },
+            ]),
+          },
+          tx,
+        );
+        return toReveal;
+      },
+      { isolationLevel: 'Serializable' },
+    ),
   );
 
   if (!revealed) return false;

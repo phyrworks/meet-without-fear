@@ -14,7 +14,7 @@
  * foreground with its page visible (hooks/useAppForeground.ts).
  */
 
-import { MessageRole, isUuidV7 } from '@meet-without-fear/shared';
+import { MessageRole, parseMessageId } from '@meet-without-fear/shared';
 
 const RECEIVED_FRAME_ROLES: ReadonlySet<string> = new Set([
   MessageRole.SHARED_CONTEXT,
@@ -42,7 +42,8 @@ export function receivedSharedFrameId(
   if (!RECEIVED_FRAME_ROLES.has(item.role)) return null;
   if (item.sharedContentDirection === 'sent') return null;
   if (!currentUserId || item.senderId === currentUserId) return null;
-  if (!isUuidV7(item.id)) return null;
+  // A server message id is "<conversationId>:<seq>" (work-k5fk.4).
+  if (!parseMessageId(item.id)) return null;
   return item.id;
 }
 

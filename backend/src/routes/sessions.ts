@@ -128,7 +128,7 @@ router.get('/sessions/:id/inner-thoughts', requireAuth, getLinkedInnerThoughts);
 
 /**
  * @route POST /api/v1/sessions/:id/viewed
- * @description Mark session as viewed (updates lastViewedAt and lastSeenChatItemId)
+ * @description Mark session as viewed (body: { lastSeenSeq? }; updates lastViewedAt and the seen message, work-k5fk.4)
  * @access Private - requires authentication and session access
  */
 router.post('/sessions/:id/viewed', requireAuth, requireSessionAccess, asyncHandler(markSessionViewed));

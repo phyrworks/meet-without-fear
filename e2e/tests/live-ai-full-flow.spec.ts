@@ -145,7 +145,13 @@ test.describe('Live AI Full Flow', () => {
 
     // Click feel-heard yes
     const feelHeardYes = page.getByTestId('feel-heard-yes');
+    // work-k5fk.26: wait for the /feel-heard response before typing the next turn (the composer resets as it lands).
+    const feelHeardResponse = page.waitForResponse(
+      (r) => r.url().includes('/feel-heard') && r.request().method() === 'POST',
+      { timeout: 30000 },
+    );
     await feelHeardYes.click();
+    expect((await feelHeardResponse).ok()).toBe(true);
     await expect(feelHeardYes).not.toBeVisible({ timeout: 5000 });
     console.log(`${elapsed()} Feel-heard confirmed, moving to Stage 2`);
 

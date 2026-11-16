@@ -17,6 +17,7 @@
  */
 
 import { RELATIONSHIP_ID_CONCEPT_RULE, relationshipIdDropped } from './relationship-dropped';
+import { messageSeqAdded } from './message-key';
 import type { KnownLeak } from '../privacy';
 import {
   byteLabelShift,
@@ -77,6 +78,7 @@ export const AUTHOR_SEES_STATUS_ONLY_ALLOW: AllowList = {
   scenario: 'author-sees-status-only',
   rules: [
     relationshipIdDropped('author-sees-status-only'),
+    messageSeqAdded('author-sees-status-only'),
     RELATIONSHIP_ID_CONCEPT_RULE,
     ...TARGET_TOPIC_FRAME_RULES,
     ...TARGET_TOPIC_FRAME_INITIAL_RULES,
@@ -92,6 +94,7 @@ export const AUTHOR_SEES_STATUS_ONLY_BYTE_TARGET_ALLOW: AllowList = {
   scenario: 'author-sees-status-only',
   rules: [
     relationshipIdDropped('author-sees-status-only'),
+    messageSeqAdded('author-sees-status-only'),
     ...TARGET_TOPIC_FRAME_RULES,
     ...bodyRules(false),
     byteLabelShift(['steps.16.body.data.records.0.id'], 'consent'),

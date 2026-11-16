@@ -23,9 +23,14 @@ export {
 
 export const getMessagesQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(500).default(25),
-  before: z.string().optional(),
-  after: z.string().optional(),
-  /** Order by timestamp: 'asc' (oldest first) or 'desc' (newest first, for initial load) */
+  /**
+   * Page cursors (work-k5fk.4, step 7 review F3): a message's seq. The page is in
+   * seq order — the conversation's order — so a cursor on the instant could skip
+   * or repeat a line whose created_at disagrees with its seq.
+   */
+  beforeSeq: z.coerce.number().int().min(1).max(2147483647).optional(),
+  afterSeq: z.coerce.number().int().min(1).max(2147483647).optional(),
+  /** Order by seq: 'asc' (oldest first) or 'desc' (newest first, for initial load) */
   order: z.enum(['asc', 'desc']).default('desc'),
 });
 

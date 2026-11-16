@@ -340,6 +340,17 @@ describeTarget('participant composite keys (work-k5fk.3, 6a/6b)', () => {
         `INSERT INTO brain_activity (session_id, participant_user_id, activity_type, model) VALUES ($1, $2, 'LLM_CALL', 'test-model')`,
         seat,
       );
+      // work-k5fk.4: a refinement turn naming a need, and a read state naming the seen message by its key.
+      const [line] = await run.sql<{ conversation_id: string; seq: number }>(
+        `INSERT INTO message (conversation_id, session_id, sender_user_id, role, content, refining_need_id)
+         SELECT c.id, $1::uuid, $2::uuid, 'USER', 'a refinement turn', $3::uuid FROM conversation c
+         WHERE c.session_id = $1::uuid AND c.user_id = $2::uuid AND c.kind = 'MAIN' RETURNING conversation_id, seq`,
+        [...seat, shared],
+      );
+      await run.sql(
+        `UPDATE conversation_read_state SET last_seen_conversation_id = $3, last_seen_seq = $4 WHERE session_id = $1 AND user_id = $2`,
+        [...seat, line.conversation_id, line.seq],
+      );
     });
 
     /** The composite keys that carry session_id, apart from those to session itself and the participant self-reference. */
@@ -613,15 +624,19 @@ describeTarget('participant composite keys (work-k5fk.3, 6a/6b)', () => {
     });
 
     it('deleting an attempt a message cites nulls message.source_attempt_id and keeps the line', async () => {
-      const [m] = await run.sql<{ id: string; source_attempt_id: string }>(
-        `SELECT id, source_attempt_id FROM message WHERE source_attempt_id IS NOT NULL AND session_id = $1 LIMIT 1`,
+      const [m] = await run.sql<{ conversation_id: string; seq: number; source_attempt_id: string }>(
+        `SELECT conversation_id, seq, source_attempt_id FROM message WHERE source_attempt_id IS NOT NULL AND session_id = $1 LIMIT 1`,
         [ids.session],
       );
       await inRolledBackTx(async c => {
         // the attempt's other dependants (agreement-free here) cascade; no trigger stands in the way of the FK actions
         await c.query(`DELETE FROM empathy_attempt WHERE id = $1`, [m.source_attempt_id]);
-        const r = await c.query(`SELECT source_attempt_id FROM message WHERE id = $1`, [m.id]);
-        expect(r.rows).toEqual([{ source_attempt_id: null }]);
+        const r = await c.query(`SELECT source_attempt_id, session_id FROM message WHERE conversation_id = $1 AND seq = $2`, [
+          m.conversation_id,
+          m.seq,
+        ]);
+        // work-k5fk.4 (k5fk.21): one key, SET NULL (source_attempt_id): the session stays.
+        expect(r.rows).toEqual([{ source_attempt_id: null, session_id: ids.session }]);
       });
     });
 
@@ -664,6 +679,46 @@ describeTarget('participant composite keys (work-k5fk.3, 6a/6b)', () => {
         }
         expect(left).toEqual([]);
         expect(tables.rows.length).toBeGreaterThanOrEqual(CHILD_TABLES.length);
+      });
+    });
+  });
+
+  // 6b review F2: ai_memory has two partial unique indexes, one per arm of its nullable session_id. Each is the
+  // only thing refusing its duplicate, so each gets a direct case (dropping either survived the suite before).
+  describe('ai_memory: one document per arm', () => {
+    const insert = (c: Client, session: string | null, kind: string) =>
+      c.query(`INSERT INTO ai_memory (session_id, user_id, kind, doc) VALUES ($1, $2, $3, '{"facts": []}')`, [
+        session,
+        ids.adaUser,
+        kind,
+      ]);
+
+    it('a second GLOBAL_FACTS (session NULL) for a user is refused by sql_ai_memory_one_global', async () => {
+      await inRolledBackTx(async c => {
+        await c.query(`DELETE FROM ai_memory WHERE user_id = $1 AND session_id IS NULL AND kind = 'GLOBAL_FACTS'`, [
+          ids.adaUser,
+        ]);
+        await insert(c, null, 'GLOBAL_FACTS');
+        const f = await failure(insert(c, null, 'GLOBAL_FACTS'));
+        expect({ code: f.code, constraint: f.constraint }).toEqual({
+          code: '23505',
+          constraint: 'sql_ai_memory_one_global',
+        });
+      });
+    });
+
+    it('a second per-participant document of a kind (with a session) is refused by sql_ai_memory_one_per_participant', async () => {
+      await inRolledBackTx(async c => {
+        await c.query(`DELETE FROM ai_memory WHERE user_id = $1 AND session_id = $2 AND kind = 'NOTABLE_FACTS'`, [
+          ids.adaUser,
+          ids.session,
+        ]);
+        await insert(c, ids.session, 'NOTABLE_FACTS');
+        const f = await failure(insert(c, ids.session, 'NOTABLE_FACTS'));
+        expect({ code: f.code, constraint: f.constraint }).toEqual({
+          code: '23505',
+          constraint: 'sql_ai_memory_one_per_participant',
+        });
       });
     });
   });

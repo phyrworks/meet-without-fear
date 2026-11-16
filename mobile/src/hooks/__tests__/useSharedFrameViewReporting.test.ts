@@ -12,7 +12,7 @@ import { useSharedFrameViewReporting } from '../useSharedFrameViewReporting';
 const ME = 'user-me';
 const SESSION = 'session-1';
 const FRAME = {
-  id: '019a5f3e-1c2d-7a00-8b00-000000000001',
+  id: '019a5f3e-1c2d-7a00-8b00-000000000009:1',
   role: MessageRole.SHARED_CONTEXT,
   senderId: 'user-partner',
   sharedContentDirection: 'received',

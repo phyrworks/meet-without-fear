@@ -21,6 +21,7 @@ import type { PrismaClient } from '../generated/prisma/client';
 import {
   createFacilitatorMessage,
   createFacilitatorMessageOnce,
+  createOwnStatementMessage,
   deliverMessage,
   toMessageDTO,
   type StoredMessage,
@@ -71,29 +72,7 @@ export async function ownStatementCopy(opts: {
   content: string;
   attemptId: string;
 }): Promise<StoredMessage> {
-  const row = await prisma.message.create({
-    data: {
-      conversationId: opts.conversationId,
-      sessionId: opts.sessionId,
-      senderUserId: opts.userId,
-      role: 'USER',
-      kind: 'EMPATHY_STATEMENT',
-      content: opts.content,
-      sourceAttemptId: opts.attemptId,
-    },
-    select: { id: true, createdAt: true },
-  });
-  return {
-    id: row.id,
-    conversationId: opts.conversationId,
-    senderUserId: opts.userId,
-    role: 'USER',
-    kind: 'EMPATHY_STATEMENT',
-    content: opts.content,
-    refiningNeedId: null,
-    sourceAttemptId: opts.attemptId,
-    createdAt: row.createdAt,
-  };
+  return createOwnStatementMessage(opts);
 }
 
 /**
@@ -114,7 +93,7 @@ export function validatedWaitNote(
 export async function lastAiNote(conversationId: string, client: PrismaClient = prisma): Promise<string | null> {
   const last = await client.message.findFirst({
     where: { conversationId, role: 'AI' },
-    orderBy: { createdAt: 'desc' },
+    orderBy: { seq: 'desc' },
     select: { content: true },
   });
   return last?.content ?? null;

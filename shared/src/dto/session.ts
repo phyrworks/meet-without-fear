@@ -173,8 +173,12 @@ export interface ResendInvitationResponse {
  * Request to mark a session as viewed (updates lastViewedAt and lastSeenChatItemId)
  */
 export interface MarkSessionViewedRequest {
-  /** Optional: ID of the last chat item visible to user (for "new messages" line) */
-  lastSeenChatItemId?: string;
+  /**
+   * Optional: the seq of the newest message of the caller's conversation visible to
+   * them (for the "new messages" line; work-k5fk.4). The response's
+   * lastSeenChatItemId is that message's id, or null when it is not one.
+   */
+  lastSeenSeq?: number;
 }
 
 /**

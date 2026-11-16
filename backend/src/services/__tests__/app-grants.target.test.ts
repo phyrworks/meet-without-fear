@@ -90,11 +90,11 @@ describeTarget('mwf_app grants (target)', () => {
 
   it('mwf_app cannot UPDATE a message — not even its own — and holds UPDATE on no message column', async () => {
     const [own] = await run.sql<{ id: string }>(
-      `SELECT m.id FROM message m WHERE m.session_id = $1 AND m.sender_user_id = $2 ORDER BY m.created_at LIMIT 1`,
+      `SELECT m.conversation_id || ':' || m.seq AS id FROM message m WHERE m.session_id = $1 AND m.sender_user_id = $2 ORDER BY m.created_at LIMIT 1`,
       [ids.session, ids.adaUser],
     );
     expect(own).toBeDefined();
-    expect(await asApp(`UPDATE message SET content = content WHERE id = $1`, [own.id])).toBe('42501');
+    expect(await asApp(`UPDATE message SET content = content WHERE conversation_id || ':' || seq = $1`, [own.id])).toBe('42501');
     expect(await asApp(`UPDATE message SET created_at = created_at WHERE false`)).toBe('42501');
     const [r] = await run.sql<{ upd: boolean }>(
       `SELECT has_any_column_privilege('mwf_app', 'message', 'UPDATE') AS upd`,
@@ -138,7 +138,7 @@ describeTarget('mwf_app grants (target)', () => {
           'mwf_app',
           user,
           `INSERT INTO message (conversation_id, role, kind, content, sender_user_id, session_id)
-           VALUES ($1::uuid, $3::message_role, $4::message_kind, 'x', $2::uuid, (SELECT x.session_id FROM conversation x WHERE x.id = $1::uuid)) RETURNING id`,
+           VALUES ($1::uuid, $3::message_role, $4::message_kind, 'x', $2::uuid, (SELECT x.session_id FROM conversation x WHERE x.id = $1::uuid)) RETURNING conversation_id || ':' || seq AS id`,
           [conv, sender, role, kind],
         )
         .then(
@@ -146,14 +146,14 @@ describeTarget('mwf_app grants (target)', () => {
           (e: { code?: string }) => e.code ?? String(e),
         );
     const del = (user: string | null, id: string) =>
-      run.as('mwf_app', user, `DELETE FROM message WHERE id = $1`, [id]).then(
+      run.as('mwf_app', user, `DELETE FROM message WHERE conversation_id || ':' || seq = $1`, [id]).then(
         () => 'ok',
         (e: { code?: string }) => e.code ?? String(e),
       );
 
     it('INSERT: own USER CHAT / EMPATHY_STATEMENT only; never an AI/SYSTEM row or a delivered kind', async () => {
-      expect(await insert(ids.adaUser, adaConv, ids.adaUser, 'USER', 'CHAT')).toMatch(/^[0-9a-f-]{36}$/);
-      expect(await insert(ids.adaUser, adaConv, ids.adaUser, 'USER', 'EMPATHY_STATEMENT')).toMatch(/^[0-9a-f-]{36}$/);
+      expect(await insert(ids.adaUser, adaConv, ids.adaUser, 'USER', 'CHAT')).toMatch(/^[0-9a-f-]{36}:[0-9]+$/);
+      expect(await insert(ids.adaUser, adaConv, ids.adaUser, 'USER', 'EMPATHY_STATEMENT')).toMatch(/^[0-9a-f-]{36}:[0-9]+$/);
       expect(await insert(ids.adaUser, adaConv, ids.adaUser, 'AI', 'CHAT')).toBe('42501');
       expect(await insert(ids.adaUser, adaConv, ids.adaUser, 'USER', 'SHARED_CONTEXT')).toBe('42501');
     });
@@ -168,16 +168,16 @@ describeTarget('mwf_app grants (target)', () => {
       const own = await insert(ids.adaUser, adaConv, ids.adaUser, 'USER', 'CHAT');
       expect(await del(ids.adaUser, own)).toBe('ok');
       const [ai] = await run.sql<{ id: string }>(
-        `INSERT INTO message (conversation_id, role, kind, content, session_id) VALUES ($1::uuid, 'AI', 'CHAT', 'x', (SELECT x.session_id FROM conversation x WHERE x.id = $1::uuid)) RETURNING id`,
+        `INSERT INTO message (conversation_id, role, kind, content, session_id) VALUES ($1::uuid, 'AI', 'CHAT', 'x', (SELECT x.session_id FROM conversation x WHERE x.id = $1::uuid)) RETURNING conversation_id || ':' || seq AS id`,
         [adaConv],
       );
       expect(await del(ids.adaUser, ai.id)).toBe('42501');
       const [suggestion] = await run.sql<{ id: string }>(
-        `INSERT INTO message (conversation_id, role, kind, content, session_id) VALUES ($1::uuid, 'AI', 'SHARE_SUGGESTION', 'x', (SELECT x.session_id FROM conversation x WHERE x.id = $1::uuid)) RETURNING id`,
+        `INSERT INTO message (conversation_id, role, kind, content, session_id) VALUES ($1::uuid, 'AI', 'SHARE_SUGGESTION', 'x', (SELECT x.session_id FROM conversation x WHERE x.id = $1::uuid)) RETURNING conversation_id || ':' || seq AS id`,
         [adaConv],
       );
       const [bobsSuggestion] = await run.sql<{ id: string }>(
-        `INSERT INTO message (conversation_id, role, kind, content, session_id) VALUES ($1::uuid, 'AI', 'SHARE_SUGGESTION', 'x', (SELECT x.session_id FROM conversation x WHERE x.id = $1::uuid)) RETURNING id`,
+        `INSERT INTO message (conversation_id, role, kind, content, session_id) VALUES ($1::uuid, 'AI', 'SHARE_SUGGESTION', 'x', (SELECT x.session_id FROM conversation x WHERE x.id = $1::uuid)) RETURNING conversation_id || ':' || seq AS id`,
         [bobConv],
       );
       expect(await del(ids.adaUser, bobsSuggestion.id)).toBe('42501');
@@ -187,7 +187,7 @@ describeTarget('mwf_app grants (target)', () => {
     });
 
     it('FINDING: with no identity bound, whose conversation it is cannot be checked — only the row shape', async () => {
-      expect(await insert(null, bobConv, ids.bobUser, 'USER', 'CHAT')).toMatch(/^[0-9a-f-]{36}$/);
+      expect(await insert(null, bobConv, ids.bobUser, 'USER', 'CHAT')).toMatch(/^[0-9a-f-]{36}:[0-9]+$/);
       expect(await insert(null, bobConv, ids.bobUser, 'AI', 'CHAT')).toBe('42501');
     });
   });

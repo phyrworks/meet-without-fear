@@ -12,7 +12,14 @@ import type { MemorySuggestion } from './memory';
 // ============================================================================
 
 export interface MessageDTO {
+  /** "<conversationId>:<seq>" (work-k5fk.4): an opaque, stable key; formatMessageId / parseMessageId. */
   id: string;
+  /**
+   * The message's place in its conversation (1, 2, 3 …; insertion order). Every
+   * server-sent message carries it; optional only so a client's optimistic,
+   * not-yet-stored message (which has none) is still a MessageDTO.
+   */
+  seq?: number;
   sessionId: string;
   senderId: string | null; // null for AI messages
   role: MessageRole;

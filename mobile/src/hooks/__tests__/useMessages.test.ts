@@ -165,15 +165,15 @@ describe('useMessages', () => {
       mockGet
         .mockResolvedValueOnce({
           messages: [
-            { ...mockMessage, id: 'msg-older-visible', timestamp: '2024-01-01T00:00:00.000Z' },
-            { ...mockAiMessage, id: 'msg-newest-visible', timestamp: '2024-01-01T00:00:01.000Z' },
+            { ...mockMessage, id: 'msg-older-visible', seq: 41, timestamp: '2024-01-01T00:00:00.000Z' },
+            { ...mockAiMessage, id: 'msg-newest-visible', seq: 42, timestamp: '2024-01-01T00:00:01.000Z' },
           ],
           hasMore: true,
         })
         .mockResolvedValueOnce({
           messages: [
-            { ...mockMessage, id: 'msg-older-page', timestamp: '2023-12-31T23:59:58.000Z' },
-            { ...mockAiMessage, id: 'msg-newer-in-older-page', timestamp: '2023-12-31T23:59:59.000Z' },
+            { ...mockMessage, id: 'msg-older-page', seq: 39, timestamp: '2023-12-31T23:59:58.000Z' },
+            { ...mockAiMessage, id: 'msg-newer-in-older-page', seq: 40, timestamp: '2023-12-31T23:59:59.000Z' },
           ],
           hasMore: false,
         });
@@ -201,7 +201,8 @@ describe('useMessages', () => {
       );
       expect(mockGet).toHaveBeenNthCalledWith(
         2,
-        '/sessions/session-123/messages?limit=2&before=2024-01-01T00%3A00%3A00.000Z'
+        // work-k5fk.4 (review F3): the cursor is the oldest visible message's seq, not its instant
+        '/sessions/session-123/messages?limit=2&beforeSeq=41'
       );
     });
   });

@@ -12,6 +12,7 @@ import { Request, Response } from 'express';
 import { Prisma } from '../generated/prisma/client';
 import { logger } from '../lib/logger';
 import { getJobPrisma, prisma } from '../lib/prisma';
+import { withSerializableRetry } from '../lib/serializable-retry';
 import { getSonnetResponse, BrainActivityCallType } from '../lib/bedrock';
 import { buildInitialMessagePrompt, buildStagePromptString } from '../services/stage-prompts';
 import { parseMicroTagResponse } from '../utils/micro-tag-parser';
@@ -42,6 +43,7 @@ import {
   createFacilitatorMessage,
   listConversationMessages,
   MESSAGE_SELECT,
+  withMessageId,
   toMessageDTO,
   type StoredMessage,
 } from '../services/message-store';
@@ -435,7 +437,7 @@ export async function getConversationHistory(req: Request, res: Response): Promi
       return;
     }
 
-    const { limit, before, after, order } = parseResult.data;
+    const { limit, beforeSeq, afterSeq, order } = parseResult.data;
 
     // The caller's participant, resolved once by requireSessionAccess (TS-9).
     // No participant (the invitee fallback) has no conversation to read.
@@ -448,15 +450,15 @@ export async function getConversationHistory(req: Request, res: Response): Promi
     // The caller's MAIN conversation IS the audience: no sender/recipient
     // filter exists any more (target shape: no recipient column).
     logger.info(
-      `[getConversationHistory:${requestId}] Fetching messages with limit=${limit}, before=${before || 'none'}, after=${after || 'none'}, order=${order}`,
+      `[getConversationHistory:${requestId}] Fetching messages with limit=${limit}, beforeSeq=${beforeSeq ?? 'none'}, afterSeq=${afterSeq ?? 'none'}, order=${order}`,
     );
     const [messages, milestones, invitationPending] = await Promise.all([
       listConversationMessages({
         conversationId: participant.mainConversationId,
         limit,
         order,
-        before: before ? new Date(before) : undefined,
-        after: after ? new Date(after) : undefined,
+        beforeSeq,
+        afterSeq,
       }),
       loadMilestones([participant]),
       loadInvitationPending([participant]),
@@ -519,7 +521,7 @@ export async function getInitialMessage(req: Request, res: Response): Promise<vo
     // Already a message in the participant's own conversation?
     const existingMessages = await prisma.message.findFirst({
       where: { conversationId },
-      select: { id: true },
+      select: { seq: true },
     });
 
     if (existingMessages) {
@@ -697,19 +699,24 @@ export async function getInitialMessage(req: Request, res: Response): Promise<vo
     // make the final write idempotent so concurrent calls do not create twins:
     // one Serializable transaction on the JOB connection (the facilitator's
     // rows are the job's) checks the participant's conversation, then writes.
-    let aiMessage: StoredMessage;
-    try {
-      // The probe reads only (id, created_at) — all the job may SELECT from
-      // message (trailer T7) — and an existing message is re-read on the app
-      // connection after the transaction.
-      const written = await getJobPrisma().$transaction(
+    // The probe is "the conversation holds a line" — its first, by seq (work-k5fk.4).
+    // Not "seq 1 exists": a failed first stream turn writes and deletes seq 1, so
+    // an empty conversation can start at 2 (step 7 review F1). It reads only the
+    // key — the job may SELECT (conversation_id, seq, created_at) from message
+    // (tables.sql) — and the line is re-read on the app connection after the
+    // transaction. Two concurrent calls queue on the conversation row
+    // (t_message_seq takes the number under its lock); under Serializable the
+    // later one loses (P2034, or SQLSTATE 40001 through the raw INSERT) and its
+    // retry (withSerializableRetry) finds the line.
+    const written = await withSerializableRetry(() =>
+      getJobPrisma().$transaction(
         async tx => {
           const existing = await tx.message.findFirst({
             where: { conversationId },
-            orderBy: { createdAt: 'asc' },
-            select: { id: true },
+            orderBy: { seq: 'asc' },
+            select: { seq: true },
           });
-          if (existing) return { existingId: existing.id };
+          if (existing) return { existingSeq: existing.seq };
           return {
             created: await createFacilitatorMessage({
               conversationId,
@@ -719,29 +726,16 @@ export async function getInitialMessage(req: Request, res: Response): Promise<vo
           };
         },
         { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
-      );
-      aiMessage =
-        written.created ??
-        ((await prisma.message.findUniqueOrThrow({
-          where: { id: written.existingId! },
+      ),
+    );
+    const aiMessage: StoredMessage =
+      written.created ??
+      (withMessageId(
+        await prisma.message.findUniqueOrThrow({
+          where: { conversationId_seq: { conversationId, seq: written.existingSeq! } },
           select: MESSAGE_SELECT,
-        })) as StoredMessage);
-    } catch (error) {
-      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2034') {
-        const existing = await prisma.message.findFirst({
-          where: { conversationId },
-          orderBy: { createdAt: 'asc' },
-          select: MESSAGE_SELECT,
-        });
-        if (existing) {
-          aiMessage = existing as StoredMessage;
-        } else {
-          throw error;
-        }
-      } else {
-        throw error;
-      }
-    }
+        }),
+      ) as StoredMessage);
 
     // Embed session content for cross-session retrieval (non-blocking)
     // Per fact-ledger architecture, we embed at session level

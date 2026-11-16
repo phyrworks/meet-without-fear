@@ -157,14 +157,15 @@ model Conversation {
   anchorProposalId String?            @map("anchor_proposal_id") @db.Uuid
   status           ConversationStatus @default(ACTIVE)
   resolvedAt       DateTime?          @map("resolved_at") @db.Timestamptz(3)
+  /// work-k5fk.4: the seq the next message takes; written only by app.next_message_seq (t_message_seq).
+  nextSeq          Int                @default(1) @map("next_seq")
   createdAt        DateTime           @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt        DateTime           @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
 
   participant    Participant @relation(fields: [sessionId, userId], references: [sessionId, userId], onDelete: Cascade, onUpdate: NoAction)
   anchorProposal Proposal?   @relation(fields: [anchorProposalId], references: [id], onDelete: SetNull, onUpdate: NoAction)
 
-  messages                Message[]
-  messageConversationPins Message[] @relation("MessageConversationPin")
+  messages Message[]
 
   @@unique([id, sessionId])
   @@index([anchorProposalId])
@@ -173,27 +174,32 @@ model Conversation {
 }
 
 model ConversationReadState {
-  sessionId            String    @map("session_id") @db.Uuid
-  userId               String    @map("user_id") @db.Uuid
-  lastViewedAt         DateTime? @map("last_viewed_at") @db.Timestamptz(3)
-  lastSeenMessageId    String?   @map("last_seen_message_id") @db.Uuid
-  lastViewedShareTabAt DateTime? @map("last_viewed_share_tab_at") @db.Timestamptz(3)
-  lastActiveAt         DateTime? @map("last_active_at") @db.Timestamptz(3)
-  archivedAt           DateTime? @map("archived_at") @db.Timestamptz(3)
-  createdAt            DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt            DateTime  @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+  sessionId              String    @map("session_id") @db.Uuid
+  userId                 String    @map("user_id") @db.Uuid
+  lastViewedAt           DateTime? @map("last_viewed_at") @db.Timestamptz(3)
+  /// work-k5fk.4: the seen message is (lastSeenConversationId, lastSeenSeq), of this read state's session.
+  lastSeenConversationId String?   @map("last_seen_conversation_id") @db.Uuid
+  lastSeenSeq            Int?      @map("last_seen_seq")
+  lastViewedShareTabAt   DateTime? @map("last_viewed_share_tab_at") @db.Timestamptz(3)
+  lastActiveAt           DateTime? @map("last_active_at") @db.Timestamptz(3)
+  archivedAt             DateTime? @map("archived_at") @db.Timestamptz(3)
+  createdAt              DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt              DateTime  @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
 
   participant     Participant @relation(fields: [sessionId, userId], references: [sessionId, userId], onDelete: Cascade, onUpdate: NoAction)
-  lastSeenMessage Message?    @relation(fields: [lastSeenMessageId], references: [id], onDelete: SetNull, onUpdate: NoAction)
+  /// ON DELETE SET NULL (last_seen_conversation_id, last_seen_seq) in the DDL: session_id is never nulled.
+  lastSeenMessage Message?    @relation(fields: [lastSeenConversationId, lastSeenSeq, sessionId], references: [conversationId, seq, sessionId], onDelete: SetNull, onUpdate: NoAction)
 
   @@id([sessionId, userId])
-  @@index([lastSeenMessageId])
+  @@index([lastSeenConversationId, lastSeenSeq, sessionId])
   @@map("conversation_read_state")
 }
 
+/// work-k5fk.4: keyed (conversationId, seq); seq is numbered by the t_message_seq trigger
+/// (trailer.sql) — never sent by a writer (no role may INSERT it).
 model Message {
-  id              String            @id @default(dbgenerated("uuidv7()")) @db.Uuid
   conversationId  String            @map("conversation_id") @db.Uuid
+  seq             Int
   sessionId       String            @map("session_id") @db.Uuid
   senderUserId    String?           @map("sender_user_id") @db.Uuid
   role            MessageRole
@@ -204,16 +210,16 @@ model Message {
   sourceAttemptId String?           @map("source_attempt_id") @db.Uuid
   createdAt       DateTime          @default(now()) @map("created_at") @db.Timestamptz(3)
 
-  conversation      Conversation    @relation(fields: [conversationId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  conversation      Conversation    @relation(fields: [conversationId, sessionId], references: [id, sessionId], onDelete: Cascade, onUpdate: NoAction)
   senderParticipant Participant?    @relation("MessageSender", fields: [sessionId, senderUserId], references: [sessionId, userId], onDelete: Cascade, onUpdate: NoAction)
-  refiningNeed      Need?           @relation(fields: [refiningNeedId], references: [id], onDelete: SetNull, onUpdate: NoAction)
-  sourceAttempt     EmpathyAttempt? @relation(fields: [sourceAttemptId], references: [id], onDelete: SetNull, onUpdate: NoAction)
+  /// ON DELETE SET NULL (refining_need_id) / (source_attempt_id) in the DDL: session_id is never nulled.
+  refiningNeed      Need?           @relation(fields: [refiningNeedId, sessionId], references: [id, sessionId], onDelete: SetNull, onUpdate: NoAction)
+  sourceAttempt     EmpathyAttempt? @relation(fields: [sourceAttemptId, sessionId], references: [id, sessionId], onDelete: SetNull, onUpdate: NoAction)
 
-  readStates       ConversationReadState[]
-  conversationPin  Conversation            @relation("MessageConversationPin", fields: [conversationId, sessionId], references: [id, sessionId], onDelete: Cascade, onUpdate: NoAction)
-  sourceAttemptPin EmpathyAttempt?         @relation("MessageSourceAttemptPin", fields: [sourceAttemptId, sessionId], references: [id, sessionId], onDelete: NoAction, onUpdate: NoAction)
+  readStates ConversationReadState[]
 
-  @@index([conversationId, createdAt])
+  @@id([conversationId, seq])
+  @@unique([conversationId, seq, sessionId])
   @@index([refiningNeedId])
   @@index([sourceAttemptId])
   @@index([sessionId, senderUserId])
@@ -436,8 +442,7 @@ model EmpathyAttempt {
   consentEmpathyAttemptPins    Consent[]           @relation("ConsentEmpathyAttemptPin")
   contextShareOfferAttemptPins ContextShareOffer[] @relation("ContextShareOfferAttemptPin")
   draftAttemptPins             Draft[]             @relation("DraftAttemptPin")
-  empathyReviewAttemptPin     EmpathyReview?     @relation("EmpathyReviewAttemptPin")
-  messageSourceAttemptPins     Message[]           @relation("MessageSourceAttemptPin")
+  empathyReviewAttemptPin      EmpathyReview?      @relation("EmpathyReviewAttemptPin")
   reconcilerResultAttemptPins  ReconcilerResult[]  @relation("ReconcilerResultAttemptPin")
 
   @@unique([id, sessionId])

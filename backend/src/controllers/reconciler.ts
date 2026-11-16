@@ -391,7 +391,7 @@ export async function generateShareDraftHandler(req: Request, res: Response): Pr
     const conversationMessages = me.mainConversationId
       ? await prisma.message.findMany({
           where: { conversationId: me.mainConversationId, kind: 'CHAT' },
-          orderBy: { createdAt: 'asc' },
+          orderBy: { seq: 'asc' },
           take: 30,
           select: { content: true, role: true },
         })

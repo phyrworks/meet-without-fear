@@ -29,6 +29,7 @@
  */
 
 import { RELATIONSHIP_ID_CONCEPT_RULE, relationshipIdDropped } from './relationship-dropped';
+import { messageSeqAdded } from './message-key';
 import { TOMBSTONE_TEXT } from '../../fixture-scenarios/scenarios';
 import { KnownLeak, SESSION_READS, USER_READS } from '../privacy';
 import {
@@ -434,6 +435,7 @@ export const TOMBSTONE_ALLOW: AllowList = {
   scenario: 'tombstone',
   rules: [
     relationshipIdDropped('tombstone'),
+    messageSeqAdded('tombstone'),
     RELATIONSHIP_ID_CONCEPT_RULE,
     ...TARGET_TOPIC_FRAME_RULES,
     ...TARGET_TOPIC_FRAME_INITIAL_RULES,
@@ -504,6 +506,7 @@ export const TOMBSTONE_BYTE_TARGET_ALLOW: AllowList = {
   scenario: 'tombstone',
   rules: [
     relationshipIdDropped('tombstone'),
+    messageSeqAdded('tombstone'),
     ...TARGET_TOPIC_FRAME_RULES,
     ...READ_DTO_RULES.filter(r => r !== DEFAULT_MILESTONE_MASK),
     ...TOMBSTONE_MILESTONE_MASKS,

@@ -21,7 +21,7 @@ import {
   ErrorCode,
   MessageRole,
   Stage,
-  isUuidV7,
+  parseMessageId,
   type MarkSharedContextViewedResponse,
 } from '@meet-without-fear/shared';
 import { markSharedContextViewed } from '../services/shared-context-view';
@@ -44,7 +44,7 @@ import {
 } from '../services/stage-shim';
 import { reachMilestone } from '../services/milestone-writer';
 import { displayStatus, isSessionPaused } from '../services/session-status';
-import { createFacilitatorMessage, listConversationMessages } from '../services/message-store';
+import { createFacilitatorMessage, lastSeenMessageIdOf, listConversationMessages } from '../services/message-store';
 import { getOrchestratedResponse, type FullAIContext } from '../services/ai';
 import { embedSessionContent } from '../services/embedding';
 import { updateSessionSummary, getSessionSummary } from '../services/conversation-summarizer';
@@ -675,6 +675,7 @@ export async function confirmInvitationMessage(req: Request, res: Response): Pro
         // Deliver via Ably so the mobile client picks it up
         await publishMessageAIResponse(sessionId, user.id, {
           id: aiMessage.id,
+          seq: aiMessage.seq,
           sessionId,
           senderId: null,
           role: MessageRole.AI,
@@ -709,7 +710,7 @@ export async function confirmInvitationMessage(req: Request, res: Response): Pro
  * Mark session as viewed
  * POST /sessions/:id/viewed
  *
- * Updates lastViewedAt and optionally lastSeenChatItemId on the participant's
+ * Updates lastViewedAt and optionally the seen message (body lastSeenSeq) on the participant's
  * conversation_read_state (target shape, TS-9). This is called when the user
  * opens/views a session to mark it as "read".
  */
@@ -727,32 +728,32 @@ export async function markSessionViewed(req: Request, res: Response): Promise<vo
       errorResponse(res, ErrorCode.NOT_FOUND, 'Session not found', 404);
       return;
     }
-    const { lastSeenChatItemId } = req.body;
+    const { lastSeenSeq } = (req.body ?? {}) as { lastSeenSeq?: unknown };
 
     const now = new Date();
 
-    // last_seen_message_id is an FK to message: only a message of the
-    // participant's own conversation is kept (a mobile chat-item id that is
-    // not a message — e.g. `context-shared-…` — reads as null, as the target
-    // migration mapped it).
-    const seenMessage =
-      typeof lastSeenChatItemId === 'string' && participant.mainConversationId
-        ? await prisma.message
-            .findFirst({
-              where: { id: lastSeenChatItemId, conversationId: participant.mainConversationId },
-              select: { id: true },
-            })
-            .catch(() => null)
+    // work-k5fk.4: the seen message is (the caller's MAIN conversation, lastSeenSeq),
+    // pinned by conversation_read_state's key to a message of the caller's session.
+    // Only a message that exists there is kept; any other value (absent, not a
+    // positive integer, no such line) reads as null, as a non-message chat-item id did.
+    const conversationId = participant.mainConversationId;
+    const seen =
+      conversationId && Number.isInteger(lastSeenSeq) && (lastSeenSeq as number) >= 1 && (lastSeenSeq as number) <= 2147483647
+        ? await prisma.message.findUnique({
+            where: { conversationId_seq: { conversationId, seq: lastSeenSeq as number } },
+            select: { conversationId: true, seq: true },
+          })
         : null;
+    const seenColumns = { lastSeenConversationId: seen?.conversationId ?? null, lastSeenSeq: seen?.seq ?? null };
 
     const readState = await prisma.conversationReadState.upsert({
       where: { sessionId_userId: seatOf(participant) },
-      update: { lastViewedAt: now, lastActiveAt: now, lastSeenMessageId: seenMessage?.id ?? null },
+      update: { lastViewedAt: now, lastActiveAt: now, ...seenColumns },
       create: {
         ...seatOf(participant),
         lastViewedAt: now,
         lastActiveAt: now,
-        lastSeenMessageId: seenMessage?.id ?? null,
+        ...seenColumns,
       },
     });
 
@@ -784,7 +785,7 @@ export async function markSessionViewed(req: Request, res: Response): Promise<vo
     successResponse(res, {
       success: true,
       lastViewedAt: readState.lastViewedAt?.toISOString() ?? now.toISOString(),
-      lastSeenChatItemId: readState.lastSeenMessageId,
+      lastSeenChatItemId: lastSeenMessageIdOf(readState),
     });
   } catch (error) {
     logger.error('[markSessionViewed] Error:', error);
@@ -832,13 +833,13 @@ export async function markSharedContextViewedHandler(req: Request, res: Response
       return;
     }
     const messageId = (req.body as { messageId?: unknown } | undefined)?.messageId;
-    if (typeof messageId !== 'string' || !isUuidV7(messageId)) {
+    if (!parseMessageId(messageId)) {
       errorResponse(res, ErrorCode.VALIDATION_ERROR, 'messageId must be a message id', 400);
       return;
     }
 
     const now = new Date();
-    const result = await markSharedContextViewed(participant, messageId, now);
+    const result = await markSharedContextViewed(participant, messageId as string, now);
     if (result.status === 'not_found') {
       errorResponse(res, ErrorCode.NOT_FOUND, 'Shared context not found', 404);
       return;

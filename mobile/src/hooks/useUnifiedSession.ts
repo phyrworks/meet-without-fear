@@ -531,10 +531,11 @@ export function useUnifiedSession(
     if (!sessionId || hasMarkedViewed.current || messages.length === 0) return;
     if (session?.status === SessionStatus.CREATED) return;
 
-    // Get the newest message ID (last in the chronologically sorted array)
-    const newestMessageId = messages[messages.length - 1]?.id;
+    // The newest stored message's seq (last in the chronologically sorted array;
+    // an optimistic message has no seq yet). work-k5fk.4.
+    const newestSeq = [...messages].reverse().find((m) => typeof m.seq === 'number')?.seq;
 
-    markViewed({ lastSeenChatItemId: newestMessageId });
+    markViewed({ lastSeenSeq: newestSeq });
     hasMarkedViewed.current = true;
 
     // NOTE: We intentionally do NOT clear lastSeenChatItemIdForSeparator here.

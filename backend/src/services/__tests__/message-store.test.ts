@@ -22,8 +22,9 @@ import {
 } from '../message-store';
 
 const row = (over: Partial<StoredMessage> = {}): StoredMessage => ({
-  id: 'm1',
+  id: 'c-ada:1',
   conversationId: 'c-ada',
+  seq: 1,
   senderUserId: null,
   role: 'AI',
   kind: 'CHAT',
@@ -50,7 +51,8 @@ describe('message DTO mapping', () => {
       ownerInvitationPending: false,
     });
     expect(dto).toEqual({
-      id: 'm1',
+      id: 'c-ada:1',
+      seq: 1,
       sessionId: 's1',
       senderId: 'u-ada',
       role: 'USER',
@@ -86,16 +88,18 @@ describe('createFacilitatorMessageOnce (DB-less)', () => {
 
   it('writes the row and returns it; a conflict is absorbed by ON CONFLICT DO NOTHING, not raised', async () => {
     const at = new Date('2026-11-11T10:00:00.000Z');
-    const { client, calls } = fake(async () => [{ id: 'm-1', created_at: at }]);
+    const { client, calls } = fake(async () => [{ seq: 4, created_at: at }]);
     const row = await createFacilitatorMessageOnce({
       conversationId: 'c-ada',
       dedupeKey: 'STAGE4_HANDOFF_BRIDGE',
       content: 'bridge',
       client,
     });
+    // work-k5fk.4: the key comes back (seq, numbered by t_message_seq); the API id is derived from it.
     expect(row).toEqual({
-      id: 'm-1',
+      id: 'c-ada:4',
       conversationId: 'c-ada',
+      seq: 4,
       senderUserId: null,
       role: 'AI',
       kind: 'CHAT',
@@ -105,7 +109,7 @@ describe('createFacilitatorMessageOnce (DB-less)', () => {
       createdAt: at,
     });
     expect(calls).toHaveLength(1);
-    expect(calls[0].sql.replace(/\s+/g, ' ')).toContain('ON CONFLICT DO NOTHING RETURNING id, created_at');
+    expect(calls[0].sql.replace(/\s+/g, ' ')).toContain('ON CONFLICT DO NOTHING RETURNING seq, created_at');
     // work-k5fk.3 (6a): the conversation id is bound twice (the row, and its session's read)
     expect(calls[0].values).toEqual(['c-ada', 'c-ada', 'bridge', 'STAGE4_HANDOFF_BRIDGE', null]);
   });
@@ -144,7 +148,7 @@ describe('createFacilitatorMessageOnce (DB-less)', () => {
   it('binds the content sealed, as the Prisma extension would (key set)', async () => {
     process.env.FIELD_ENCRYPTION_KEY = crypto.randomBytes(32).toString('base64');
     _resetForTesting();
-    const { client, calls } = fake(async () => [{ id: 'm-2', created_at: new Date() }]);
+    const { client, calls } = fake(async () => [{ seq: 2, created_at: new Date() }]);
     const row = await createFacilitatorMessageOnce({
       conversationId: 'c-ada',
       dedupeKey: 'STAGE2_VALIDATED_WAIT',

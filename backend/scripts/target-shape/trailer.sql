@@ -747,6 +747,27 @@ COMMENT ON FUNCTION app.create_user(public.identity_provider, text, text, text, 
 REVOKE EXECUTE ON FUNCTION app.create_user(public.identity_provider, text, text, text, text) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION app.create_user(public.identity_provider, text, text, text, text) TO mwf_auth;
 
+-- The message counter (work-k5fk.4, design note §5): the next seq of a
+-- conversation, taken under its row's lock by one UPDATE … RETURNING, so two
+-- inserts into one conversation queue and a rolled-back insert returns its
+-- number with the rest of its transaction. Definer, so the counter column is
+-- written by its owner: mwf_app never holds UPDATE (next_seq) nor EXECUTE on
+-- this. The owner is mwf_job, which is also the job's login, so until §7 row
+-- 9a hands the definers to the NOLOGIN mwf_definer the job connection CAN call
+-- this directly and UPDATE next_seq (taking a number with no row — a hole);
+-- no other role can. Its intended caller is t_message_seq (T5), also mwf_job's.
+-- A missing conversation returns NULL; t_message_seq refuses that row.
+CREATE FUNCTION app.next_message_seq(conversation uuid) RETURNS integer
+  LANGUAGE sql SECURITY DEFINER
+  SET search_path = pg_catalog, public, pg_temp
+  AS $$
+    UPDATE public.conversation SET next_seq = next_seq + 1 WHERE id = next_message_seq.conversation
+    RETURNING next_seq - 1
+  $$;
+COMMENT ON FUNCTION app.next_message_seq(uuid) IS 'The next message seq of a conversation (work-k5fk.4): advances conversation.next_seq under the row''s lock and returns the number taken, or NULL for no such conversation. Called by t_message_seq; executable by its owner mwf_job alone (until §7 row 9a moves it to mwf_definer).';
+-- No grant: t_message_seq (owned by mwf_job, as this is) is its caller; mwf_job, as owner, can call it too.
+REVOKE EXECUTE ON FUNCTION app.next_message_seq(uuid) FROM PUBLIC;
+
 -- Hand the definer functions to mwf_job (TS-1 order, measured there with a
 -- non-superuser migrator): CREATE on the schema for the hand-over only. Their
 -- EXECUTE grants were issued above, next to each function, by the migrator as
@@ -767,6 +788,7 @@ ALTER FUNCTION app.anonymize_user_in_session(uuid, uuid) OWNER TO mwf_job;
 ALTER FUNCTION app.anonymize_user_account(uuid) OWNER TO mwf_job;
 ALTER FUNCTION app.resolve_user(public.identity_provider, text) OWNER TO mwf_job;
 ALTER FUNCTION app.create_user(public.identity_provider, text, text, text, text) OWNER TO mwf_job;
+ALTER FUNCTION app.next_message_seq(uuid) OWNER TO mwf_job;
 REVOKE CREATE ON SCHEMA app FROM mwf_job;
 
 -- ---------------------------------------------------------------------------
@@ -818,7 +840,7 @@ CREATE CONSTRAINT TRIGGER t_cardinality_2 AFTER DELETE OR UPDATE OF kind, user_i
   DEFERRABLE INITIALLY DEFERRED
   FOR EACH ROW EXECUTE FUNCTION app.t_participant_cardinality();
 
--- T-message-immutable: routing columns and the once-only dedupe_key (work-fdc1)
+-- T-message-immutable: routing columns (the key (conversation_id, seq) among them, work-k5fk.4) and the once-only dedupe_key (work-fdc1)
 -- never change; content of AI/SYSTEM rows and of every delivered kind never
 -- changes, except by the job (W13 re-encryption).
 CREATE FUNCTION app.t_message_immutable() RETURNS trigger
@@ -827,6 +849,7 @@ CREATE FUNCTION app.t_message_immutable() RETURNS trigger
   AS $$
   BEGIN
     IF NEW.conversation_id IS DISTINCT FROM OLD.conversation_id
+       OR NEW.seq IS DISTINCT FROM OLD.seq
        OR NEW.session_id IS DISTINCT FROM OLD.session_id
        OR NEW.sender_user_id IS DISTINCT FROM OLD.sender_user_id
        OR NEW.role IS DISTINCT FROM OLD.role
@@ -1321,6 +1344,58 @@ ALTER FUNCTION app.t_live_session_pair() OWNER TO mwf_job;
 ALTER FUNCTION app.t_live_session_pair_end() OWNER TO mwf_job;
 REVOKE CREATE ON SCHEMA app FROM mwf_job;
 
+-- ---------------------------------------------------------------------------
+-- work-k5fk.4: a message is (conversation_id, seq). t_message_seq numbers an
+-- INSERT that leaves seq NULL — every runtime writer: no role is granted
+-- INSERT (seq) — from app.next_message_seq. SECURITY DEFINER (owned by mwf_job)
+-- like the k5fk.2 triggers above, the exception to T5's invoker rule: the
+-- helper is executable by its owner alone, so the app cannot take numbers
+-- outside an INSERT (a taken number with no row is a hole). The job login,
+-- being that owner, still can until §7 row 9a (mwf_definer). A conversation
+-- that does not exist (or was deleted while the insert waited) is refused as
+-- foreign_key_violation, with no DETAIL — never the NOT NULL error on seq, whose
+-- DETAIL would print the failing row (house rule; functions-caller-tests 28b).
+-- It runs after t_message_app_insert (name order), which reads
+-- nothing seq-dependent. An ON CONFLICT DO NOTHING insert (createFacilitatorMessageOnce)
+-- takes its number before the conflict is found, so a duplicate once-only
+-- line leaves a hole too: seq orders, it does not count.
+-- ---------------------------------------------------------------------------
+CREATE FUNCTION app.t_message_seq() RETURNS trigger
+  LANGUAGE plpgsql SECURITY DEFINER
+  SET search_path = pg_catalog, public, pg_temp
+  AS $$
+  BEGIN
+    NEW.seq := app.next_message_seq(NEW.conversation_id);
+    IF NEW.seq IS NULL THEN
+      RAISE EXCEPTION 'message refused: no such conversation' USING ERRCODE = 'foreign_key_violation';
+    END IF;
+    RETURN NEW;
+  END
+  $$;
+COMMENT ON FUNCTION app.t_message_seq() IS 'Trigger (work-k5fk.4): a message inserted without seq takes its conversation''s next one (app.next_message_seq).';
+-- No caller needs EXECUTE on a trigger function.
+REVOKE EXECUTE ON FUNCTION app.t_message_seq() FROM PUBLIC;
+CREATE TRIGGER t_message_seq BEFORE INSERT ON public.message
+  FOR EACH ROW WHEN (NEW.seq IS NULL) EXECUTE FUNCTION app.t_message_seq();
+COMMENT ON TRIGGER t_message_seq ON public.message IS 'Numbers the line in its conversation (work-k5fk.4).';
+GRANT CREATE ON SCHEMA app TO mwf_job;
+ALTER FUNCTION app.t_message_seq() OWNER TO mwf_job;
+REVOKE CREATE ON SCHEMA app FROM mwf_job;
+
+-- T-conversation-seq-start: a new conversation's counter starts at 1, whatever
+-- the INSERT sent (a Prisma create sends the column's @default; mwf_app holds
+-- INSERT (next_seq) for that, so the trigger, not the grant, is the rule).
+CREATE FUNCTION app.t_conversation_seq_start() RETURNS trigger
+  LANGUAGE plpgsql
+  SET search_path = pg_catalog, public, pg_temp
+  AS $$ BEGIN NEW.next_seq := 1; RETURN NEW; END $$;
+COMMENT ON FUNCTION app.t_conversation_seq_start() IS 'Trigger (work-k5fk.4): conversation.next_seq is 1 on insert.';
+-- No caller needs EXECUTE on a trigger function.
+REVOKE EXECUTE ON FUNCTION app.t_conversation_seq_start() FROM PUBLIC;
+CREATE TRIGGER t_conversation_seq_start BEFORE INSERT ON public.conversation
+  FOR EACH ROW EXECUTE FUNCTION app.t_conversation_seq_start();
+COMMENT ON TRIGGER t_conversation_seq_start ON public.conversation IS 'A new conversation numbers its messages from 1 (work-k5fk.4).';
+
 -- touch_updated_at on the 34 tables that have updated_at (T8 asserts the set
 -- equals the catalog's). message and takeaway_link have none.
 CREATE TRIGGER touch_updated_at BEFORE UPDATE ON agreement FOR EACH ROW EXECUTE FUNCTION app.touch_updated_at();
@@ -1328,7 +1403,9 @@ CREATE TRIGGER touch_updated_at BEFORE UPDATE ON ai_memory FOR EACH ROW EXECUTE 
 CREATE TRIGGER touch_updated_at BEFORE UPDATE ON brain_activity FOR EACH ROW EXECUTE FUNCTION app.touch_updated_at();
 CREATE TRIGGER touch_updated_at BEFORE UPDATE ON consent FOR EACH ROW EXECUTE FUNCTION app.touch_updated_at();
 CREATE TRIGGER touch_updated_at BEFORE UPDATE ON context_share_offer FOR EACH ROW EXECUTE FUNCTION app.touch_updated_at();
-CREATE TRIGGER touch_updated_at BEFORE UPDATE ON conversation FOR EACH ROW EXECUTE FUNCTION app.touch_updated_at();
+-- conversation: not when the update is the message counter (app.next_message_seq; work-k5fk.4) — a new line is not a change of the thread
+CREATE TRIGGER touch_updated_at BEFORE UPDATE ON conversation
+  FOR EACH ROW WHEN (OLD.next_seq IS NOT DISTINCT FROM NEW.next_seq) EXECUTE FUNCTION app.touch_updated_at();
 CREATE TRIGGER touch_updated_at BEFORE UPDATE ON conversation_read_state FOR EACH ROW EXECUTE FUNCTION app.touch_updated_at();
 CREATE TRIGGER touch_updated_at BEFORE UPDATE ON draft FOR EACH ROW EXECUTE FUNCTION app.touch_updated_at();
 CREATE TRIGGER touch_updated_at BEFORE UPDATE ON empathy_attempt FOR EACH ROW EXECUTE FUNCTION app.touch_updated_at();
@@ -1381,7 +1458,7 @@ SELECT p.session_id, p.user_id, p.kind,
        (u.deleted_at IS NOT NULL) AS is_tombstone,
        p.joined_at, p.left_at,
        c.id AS main_conversation_id,
-       r.last_viewed_at, r.last_seen_message_id, r.last_viewed_share_tab_at, r.archived_at,
+       r.last_viewed_at, r.last_seen_conversation_id, r.last_seen_seq, r.last_viewed_share_tab_at, r.archived_at,
        CASE WHEN p.user_id = app.current_user_id()
               OR coalesce((up.doc -> 'privacy' ->> 'showActivityStatus')::boolean, true)
             THEN r.last_active_at END AS last_active_at,
@@ -1760,6 +1837,23 @@ BEGIN
   FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
   WHERE n.nspname = 'app' AND p.prosecdef AND pg_get_userbyid(p.proowner) <> 'mwf_job';
   IF bad IS NOT NULL THEN RAISE EXCEPTION 'step 20: SECURITY DEFINER function(s) not owned by mwf_job: %', bad; END IF;
+
+  -- work-k5fk.4 (k5fk.21, .23): the column-list SET NULL keys, which Prisma reads as plain SetNull — so the
+  -- drift gate passes a full SET NULL (that would null session_id, NOT NULL) and only this catches it.
+  SELECT string_agg(w.want, '; ') INTO bad
+  FROM (VALUES ('message', 'need', '{refining_need_id}'),
+               ('message', 'empathy_attempt', '{source_attempt_id}'),
+               ('conversation_read_state', 'message', '{last_seen_conversation_id,last_seen_seq}')) x(rel, ref, cols),
+       LATERAL (SELECT x.rel || ' -> ' || x.ref || ' ON DELETE SET NULL ' || x.cols AS want) w
+  WHERE NOT EXISTS (
+    SELECT 1 FROM pg_constraint c
+    WHERE c.contype = 'f' AND c.conrelid = ('public.' || x.rel)::regclass AND c.confrelid = ('public.' || x.ref)::regclass
+      AND c.confdeltype = 'n'
+      AND (SELECT array_agg(a.attname::text ORDER BY a.attname) FROM unnest(c.confdelsetcols) s(attnum)
+             JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = s.attnum)::text = x.cols)
+    OR (SELECT count(*) FROM pg_constraint c
+        WHERE c.contype = 'f' AND c.conrelid = ('public.' || x.rel)::regclass AND c.confrelid = ('public.' || x.ref)::regclass) <> 1;
+  IF bad IS NOT NULL THEN RAISE EXCEPTION 'step 20: expected exactly one key: %', bad; END IF;
 
   -- The milestone seed is in.
   SELECT count(*) INTO n FROM milestone;

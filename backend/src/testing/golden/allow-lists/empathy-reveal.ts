@@ -24,6 +24,7 @@ import {
   TARGET_USER_NAME_RULE,
   TARGET_TOPIC_FRAME_INITIAL_RULES,
 } from './common';
+import { messageSeqAdded } from './message-key';
 import type { AllowList, AllowRule } from './types';
 
 /** Bob's statement in this scenario (the test's BOB_EMPATHY). */
@@ -89,6 +90,8 @@ export const EMPATHY_REVEAL_ALLOW: AllowList = {
 /** TS-10 rules over response bodies — they hold for the byte-level and the concept golden alike. */
 function BODY_TARGET_RULES(): AllowRule[] {
   return [
+    // work-k5fk.4: every MessageDTO carries seq (message-key.ts).
+    messageSeqAdded('empathy-reveal'),
     TARGET_MESSAGE_STAGE_RULE,
     {
       kind: 'mayDiffer',

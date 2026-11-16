@@ -12,6 +12,7 @@
  */
 
 import { RELATIONSHIP_ID_CONCEPT_RULE, relationshipIdDropped } from './relationship-dropped';
+import { messageSeqAdded } from './message-key';
 import {
   MILESTONE_DTO_RULES,
   milestoneMapMask,
@@ -24,6 +25,7 @@ export const SESSION_READ_ALLOW: AllowList = {
   scenario: 'session-read',
   rules: [
     relationshipIdDropped('session-read'),
+    messageSeqAdded('session-read'),
     RELATIONSHIP_ID_CONCEPT_RULE,
     ...TARGET_TOPIC_FRAME_RULES,
     ...TARGET_TOPIC_FRAME_INITIAL_RULES,

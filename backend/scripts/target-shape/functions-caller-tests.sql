@@ -1082,7 +1082,8 @@ DO $$ DECLARE v_msg text; BEGIN
   EXCEPTION WHEN insufficient_privilege THEN RAISE NOTICE 'PASS 27h mwf_job cannot UPDATE ai_memory.kind or doc_schema_version: %', SQLERRM;
   END;
 END $$;
--- 27d. GLOBAL_FACTS through mwf_app (global-memory.ts consolidateGlobalFacts: a Prisma upsert, which sends doc_schema_version)
+-- 27d. GLOBAL_FACTS through mwf_app (global-memory.ts consolidateGlobalFacts writes it with a raw INSERT … ON CONFLICT
+-- (user_id, kind) WHERE session_id IS NULL; this case also names doc_schema_version, which mwf_app may insert)
 \connect - mwf_app
 SELECT 'connected as ' || session_user || ' (current_user ' || current_user || ')';
 SELECT set_config('t.a_user', :'a_user', false) \g /dev/null

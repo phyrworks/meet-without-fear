@@ -30,7 +30,7 @@ import {
   type ShimStageRow,
   type StageOpts,
 } from './stage-shim';
-import { legacyRole, MESSAGE_SELECT, type StoredMessage } from './message-store';
+import { legacyRole, MESSAGE_SELECT, withMessageId, type StoredMessage } from './message-store';
 import type { CategorizedFact as GlobalFact } from './global-memory';
 
 // ============================================================================
@@ -657,11 +657,13 @@ type OwnMessage = StoredMessage;
  * audience, so no other participant's rows can appear here.
  */
 async function loadOwnConversation(conversationId: string): Promise<OwnMessage[]> {
-  return (await prisma.message.findMany({
+  // seq is the chat order (work-k5fk.4).
+  const rows = await prisma.message.findMany({
     where: { conversationId },
-    orderBy: { createdAt: 'asc' },
+    orderBy: { seq: 'asc' },
     select: MESSAGE_SELECT,
-  })) as OwnMessage[];
+  });
+  return rows.map(withMessageId) as OwnMessage[];
 }
 
 /** The last N turns: the participant's own chat and the AI's (not delivered items). */

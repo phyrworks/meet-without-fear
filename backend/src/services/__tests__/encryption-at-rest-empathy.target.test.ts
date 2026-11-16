@@ -61,7 +61,7 @@ describeTarget(
      */
     const expectNoContentDerivedValue = async (id: string, plaintext: string) => {
       const [{ row }] = await run.sql<{ row: Record<string, unknown> }>(
-        `SELECT to_jsonb(m) - 'content' AS row FROM message m WHERE id = $1`,
+        `SELECT to_jsonb(m) - 'content' AS row FROM message m WHERE conversation_id || ':' || seq = $1`,
         [id],
       );
       expect(row).not.toHaveProperty('content_hash');
@@ -120,7 +120,7 @@ describeTarget(
         }),
       );
       const ai = await messages.createFacilitatorMessage({ conversationId: conv.ada, content: 'PROBE_TS13_AI_REPLY' });
-      await expectSealed(run, 'message', 'content', `id = ANY($1::uuid[])`, [[own.id, ai.id]]);
+      await expectSealed(run, 'message', 'content', `conversation_id || ':' || seq = ANY($1::text[])`, [[own.id, ai.id]]);
       await expectNoContentDerivedValue(own.id, 'PROBE_TS13_TURN');
       await expectNoContentDerivedValue(ai.id, 'PROBE_TS13_AI_REPLY');
       const listed = await asUser(ids.adaUser, () =>
@@ -139,7 +139,7 @@ describeTarget(
         kind: 'SHARED_CONTEXT',
         content: typed,
       });
-      const [stored] = (await expectSealed(run, 'message', 'content', `id = $1`, [delivered.id])) as string[];
+      const [stored] = (await expectSealed(run, 'message', 'content', `conversation_id || ':' || seq = $1`, [delivered.id])) as string[];
       expect(stored).not.toBe(typed);
       const bobs = await asUser(ids.bobUser, () =>
         messages.listConversationMessages({ conversationId: conv.bob, limit: 500, order: 'asc' }),

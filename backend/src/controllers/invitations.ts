@@ -14,6 +14,7 @@ import { displayStatus, parseStatusFilter, pausedSessionIds } from '../services/
 import { createInvitationUrl } from '../utils/urls';
 import { reachInvitationSentOnAccept } from '../services/milestone-writer';
 import { lockInvitationForAccept, repointInvitationDrafts } from '../services/empathy-store';
+import { lastSeenMessageIdOf } from '../services/message-store';
 import {
   LIVE_SESSION_EXISTS_MESSAGE,
   findLiveSessionWith,
@@ -104,7 +105,7 @@ export async function listSessions(req: Request, res: Response): Promise<void> {
       },
       include: {
         session: true,
-        readState: { select: { lastViewedAt: true, lastSeenMessageId: true } },
+        readState: { select: { lastViewedAt: true, lastSeenConversationId: true, lastSeenSeq: true } },
       },
       orderBy: { session: { updatedAt: 'desc' } },
       take: takeLimit + 1,
@@ -238,7 +239,7 @@ export async function listSessions(req: Request, res: Response): Promise<void> {
       );
 
       const lastViewedAt = me.readState?.lastViewedAt ?? null;
-      const lastSeenChatItemId = me.readState?.lastSeenMessageId ?? null;
+      const lastSeenChatItemId = lastSeenMessageIdOf(me.readState);
 
       return {
         id: session.id,

@@ -118,7 +118,7 @@ export async function generatePostShareContinuation(
   const recentMessages = subject.mainConversationId
     ? await prisma.message.findMany({
         where: { conversationId: subject.mainConversationId, kind: 'CHAT', role: { in: ['USER', 'AI'] } },
-        orderBy: { createdAt: 'desc' },
+        orderBy: { seq: 'desc' },
         take: 10,
         select: { role: true, content: true },
       })
@@ -935,7 +935,7 @@ export async function getSharedContextForGuesser(
   if (!me?.mainConversationId) return { hasSharedContext: false, content: null, sharedAt: null };
   const contextMessage = await prisma.message.findFirst({
     where: { conversationId: me.mainConversationId, kind: { in: ['SHARED_CONTEXT', 'VALIDATION_FEEDBACK'] } },
-    orderBy: { createdAt: 'desc' },
+    orderBy: { seq: 'desc' },
     select: { content: true, createdAt: true },
   });
   if (!contextMessage) return { hasSharedContext: false, content: null, sharedAt: null };

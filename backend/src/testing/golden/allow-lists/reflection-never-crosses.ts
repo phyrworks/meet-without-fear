@@ -23,6 +23,7 @@
  */
 
 import { RELATIONSHIP_ID_CONCEPT_RULE, relationshipIdDropped } from './relationship-dropped';
+import { messageSeqAdded } from './message-key';
 import type { KnownLeak } from '../privacy';
 import {
   empathySubmittedMilestone,
@@ -72,6 +73,7 @@ export const REFLECTION_NEVER_CROSSES_ALLOW: AllowList = {
   scenario: 'reflection-never-crosses',
   rules: [
     relationshipIdDropped('reflection-never-crosses'),
+    messageSeqAdded('reflection-never-crosses'),
     RELATIONSHIP_ID_CONCEPT_RULE,
     ...TARGET_TOPIC_FRAME_RULES,
     ...TARGET_TOPIC_FRAME_INITIAL_RULES,
@@ -92,6 +94,7 @@ export const REFLECTION_NEVER_CROSSES_BYTE_TARGET_ALLOW: AllowList = {
   scenario: 'reflection-never-crosses',
   rules: [
     relationshipIdDropped('reflection-never-crosses'),
+    messageSeqAdded('reflection-never-crosses'),
     ...TARGET_TOPIC_FRAME_RULES,
     ...bodyRules(false),
     ...targetByteRules({

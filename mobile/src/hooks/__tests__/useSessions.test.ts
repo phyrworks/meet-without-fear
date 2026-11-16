@@ -18,6 +18,7 @@ import {
   useDeclineInvitation,
   useConfirmInvitationMessage,
   useMarkSharedContextViewed,
+  useMarkSessionViewed,
   sessionKeys,
 } from '../useSessions';
 import { SessionStatus, StageStatus } from '@meet-without-fear/shared';
@@ -579,5 +580,34 @@ describe('useMarkSharedContextViewed (work-2doq)', () => {
 
     expect(sharedFrameViewTracker.take(SESSION, [rejected, flaky])).toEqual([]);
     expect(sharedFrameViewTracker.take(SESSION, [rejected, flaky], { retry: true })).toEqual([flaky]);
+  });
+});
+
+describe('useMarkSessionViewed (work-k5fk.4)', () => {
+  const SESSION = 'session-123';
+  const CONV = '019a5f3e-1c2d-7a00-8b00-000000000009';
+
+  it('posts the newest seen message by seq and stores the returned item id', async () => {
+    mockPost.mockResolvedValueOnce({
+      success: true,
+      lastViewedAt: '2026-11-16T10:00:00.000Z',
+      lastSeenChatItemId: `${CONV}:7`,
+    });
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+    queryClient.setQueryData(sessionKeys.state(SESSION), {
+      session: { id: SESSION, lastViewedAt: null, lastSeenChatItemId: null },
+    });
+    const { result } = renderHook(() => useMarkSessionViewed(SESSION), {
+      wrapper: createWrapperWithClient(queryClient),
+    });
+    await act(async () => {
+      result.current.mutate({ lastSeenSeq: 7 });
+    });
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(mockPost).toHaveBeenCalledWith(`/sessions/${SESSION}/viewed`, { lastSeenSeq: 7 });
+    expect(
+      queryClient.getQueryData<{ session: { lastSeenChatItemId: string | null } }>(sessionKeys.state(SESSION))
+        ?.session.lastSeenChatItemId,
+    ).toBe(`${CONV}:7`);
   });
 });
