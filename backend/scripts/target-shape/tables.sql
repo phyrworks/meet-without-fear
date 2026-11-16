@@ -976,6 +976,7 @@ CREATE TABLE conversation (
     anchor_proposal_id uuid7 REFERENCES proposal ON DELETE SET NULL,
     status conversation_status NOT NULL DEFAULT 'ACTIVE',
     resolved_at ts_ms,
+    next_seq integer NOT NULL DEFAULT 1 CHECK (next_seq >= 1),
     created_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
@@ -994,14 +995,21 @@ COMMENT ON COLUMN conversation.session_id IS 'The session of every participant t
 COMMENT ON COLUMN conversation.user_id IS 'A participant of the row''s session, by user (work-k5fk.3): (session_id, user_id) references participant (session_id, user_id).';
 COMMENT ON COLUMN conversation.anchor_kind IS 'SUBCHAT only: what the sub-chat is about.';
 COMMENT ON COLUMN conversation.anchor_proposal_id IS 'SUBCHAT only: the proposal a PROPOSAL_REFINEMENT sub-chat refines.';
+COMMENT ON COLUMN conversation.next_seq IS 'The seq the next message of this conversation takes (work-k5fk.4). Advanced only by app.next_message_seq (through t_message_seq) under this row''s lock; 1 on a new conversation (t_conversation_seq_start).';
 -- mwf_app: the caller's MAIN conversation at createSession / accept / linked process, a Stage 4 sub-chat and its resolution.
 GRANT SELECT ON conversation TO mwf_app;
-GRANT INSERT (session_id, user_id, kind, anchor_kind, anchor_proposal_id, status, created_at, updated_at) ON conversation TO mwf_app;
+-- next_seq: a Prisma create sends its @default(1); t_conversation_seq_start pins it to 1 whatever is sent (work-k5fk.4).
+GRANT INSERT (session_id, user_id, kind, anchor_kind, anchor_proposal_id, status, next_seq, created_at, updated_at)
+  ON conversation TO mwf_app;
 GRANT UPDATE (status, resolved_at, updated_at) ON conversation TO mwf_app;
 -- mwf_job: empathy_set_status: the subject's MAIN conversation; anonymize step 3
 GRANT SELECT (id, session_id, user_id, kind) ON conversation TO mwf_job;
 -- mwf_job: a message writer reads its conversation's session into message.session_id (work-k5fk.3, 6a)
 GRANT SELECT (session_id) ON conversation TO mwf_job;
+-- mwf_job: app.next_message_seq (SECURITY DEFINER, owned by mwf_job; work-k5fk.4) takes the next number. The job
+-- login holds this as the definer's owner until §7 row 9a hands the definers to the NOLOGIN mwf_definer; mwf_app never.
+GRANT SELECT (next_seq) ON conversation TO mwf_job;
+GRANT UPDATE (next_seq) ON conversation TO mwf_job;
 -- mwf_job: anonymize_*: a private-row delete (steps 3–5)
 GRANT DELETE ON conversation TO mwf_job;
 -- mwf_ops: the Neural Monitor dashboard (routes/brain.ts, directly or through the stage shim) reads it.
@@ -1111,48 +1119,52 @@ GRANT SELECT (session_id, user_id) ON need TO mwf_job;
 GRANT DELETE ON need TO mwf_job;
 
 CREATE TABLE message (
-    id uuid7 NOT NULL DEFAULT uuidv7() PRIMARY KEY,
-    conversation_id uuid7 NOT NULL REFERENCES conversation ON DELETE CASCADE,
+    conversation_id uuid7 NOT NULL,
+    seq integer NOT NULL CHECK (seq >= 1),
     session_id uuid7 NOT NULL,
     sender_user_id uuid7,
     role message_role NOT NULL,
     kind message_kind NOT NULL DEFAULT 'CHAT',
     content ciphertext NOT NULL,
     dedupe_key message_dedupe_key,
-    refining_need_id uuid7 REFERENCES need ON DELETE SET NULL,
-    source_attempt_id uuid7 REFERENCES empathy_attempt ON DELETE SET NULL,
+    refining_need_id uuid7,
+    source_attempt_id uuid7,
     created_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
-    -- §1.1 message [P02] — P3 §6, "humans can't author as the facilitator"
-    CHECK (role <> 'USER' OR sender_user_id IS NOT NULL),
-    CHECK (role NOT IN ('AI', 'SYSTEM') OR sender_user_id IS NULL),
+    -- work-k5fk.4: the line is its conversation's seq-th; t_message_seq numbers it (trailer.sql). The key is the chat order.
+    PRIMARY KEY (conversation_id, seq),
+    -- work-k5fk.4: what conversation_read_state's seen-message key pins to (the seen line is of the reader's session)
+    UNIQUE (conversation_id, seq, session_id),
+    -- §1.1 message [P02] — P3 §6, "humans can't author as the facilitator": a participant's line has a sender,
+    -- the facilitator's (AI / SYSTEM) none (the two CHECKs of 6b, folded)
+    CHECK ((role = 'USER') = (sender_user_id IS NOT NULL)),
     -- work-fdc1: a once-only key marks a facilitator line, never a human's
     CHECK (dedupe_key IS NULL OR role IN ('AI', 'SYSTEM')),
-    -- work-k5fk.3: the conversation, the sender and the cited attempt are all of the one session. The attempt pin
-    -- has no action: the single-column FK above nulls source_attempt_id (Prisma cannot write PG15's
-    -- SET NULL (source_attempt_id)), and a NULL source_attempt_id satisfies it (MATCH SIMPLE).
-    -- ORDER-DEPENDENT (6a review F3): a delete of the attempt fires both FKs' RI triggers on empathy_attempt in
-    -- name order, RI_ConstraintTrigger_a_<oid>, so the SET NULL (created first, the lower oid) runs before the
-    -- NO ACTION check, which then finds no referencing row. Created the other way round, the check would fire
-    -- first and refuse the delete. Keep this FK after the single-column one; participant-key.target.test pins
-    -- the outcome (deleting a cited attempt nulls source_attempt_id). work-k5fk.21 revisits it in step 7.
+    -- work-k5fk.3: the conversation, the sender, the refined need and the cited attempt are all of the one session.
+    -- work-k5fk.4 (k5fk.21, k5fk.23): each pin is the only key to its table, and deleting the need / attempt nulls
+    -- the id column alone (PG15 SET NULL (col)), never session_id. Prisma renders that as onDelete: SetNull (it reads
+    -- confdeltype, not confdelsetcols), so the drift gate cannot see the column list: step 20 pins it (trailer.sql).
     FOREIGN KEY (conversation_id, session_id) REFERENCES conversation (id, session_id) ON DELETE CASCADE,
     FOREIGN KEY (session_id, sender_user_id) REFERENCES participant (session_id, user_id) ON DELETE CASCADE,
+    FOREIGN KEY (refining_need_id, session_id) REFERENCES need (id, session_id) ON DELETE SET NULL (refining_need_id),
     FOREIGN KEY (source_attempt_id, session_id) REFERENCES empathy_attempt (id, session_id)
+      ON DELETE SET NULL (source_attempt_id)
 );
-CREATE INDEX ON message (conversation_id, created_at);
 -- + sql_message_once (sql-only.sql)
 CREATE INDEX ON message (session_id, sender_user_id);
 CREATE INDEX ON message (refining_need_id);
 CREATE INDEX ON message (source_attempt_id);
-COMMENT ON TABLE message IS 'One line of a conversation: a human turn, an AI or system line, or an item delivered from the other participant. Append-only.';
+COMMENT ON TABLE message IS 'One line of a conversation: a human turn, an AI or system line, or an item delivered from the other participant. Append-only. Keyed by its conversation and its place in it (work-k5fk.4).';
+COMMENT ON COLUMN message.seq IS 'The line''s place in its conversation, 1, 2, 3 … in insertion order (work-k5fk.4): t_message_seq takes it from conversation.next_seq when an INSERT leaves it NULL, under the conversation row''s lock. A rolled-back insert takes none; a deleted line, or a once-only line that met its duplicate, leaves a hole. The API''s message id is "<conversation_id>:<seq>".';
 COMMENT ON COLUMN message.session_id IS 'The session of every participant the row names (work-k5fk.3): each participant reference and each parent it hangs off is keyed with it, so they are all of this one session.';
-COMMENT ON COLUMN message.sender_user_id IS 'A participant of the row''s session, by user (work-k5fk.3): (session_id, sender_user_id) references participant (session_id, user_id).';
-COMMENT ON COLUMN message.source_attempt_id IS 'Lineage of a delivered item: the empathy attempt it came from.';
+COMMENT ON COLUMN message.sender_user_id IS 'A participant of the row''s session, by user (work-k5fk.3): (session_id, sender_user_id) references participant (session_id, user_id). Set exactly on a participant''s line (role USER); NULL on the facilitator''s.';
+COMMENT ON COLUMN message.refining_need_id IS 'The participant''s need a Stage 3 refinement turn is about: (refining_need_id, session_id) references need (id, session_id).';
+COMMENT ON COLUMN message.source_attempt_id IS 'Lineage of a delivered item: the empathy attempt it came from: (source_attempt_id, session_id) references empathy_attempt (id, session_id).';
 COMMENT ON COLUMN message.dedupe_key IS 'Set only on an app-generated AI or SYSTEM line that is written at most once per conversation; sql_message_once makes a second insert conflict. NULL on every other line. Nothing about the content is stored outside the ciphertext.';
 COMMENT ON COLUMN message.content IS 'encrypted (per-row): the line''s text: the owner''s turn and the AI''s replies under the participant key, every delivered kind under the session key.';
 -- mwf_app: the caller's own turns in their own conversation (message-store createParticipantMessage) and their own copy of
 -- an empathy statement (empathy-messages.ts). Never an UPDATE (t_message_immutable; delivered and AI rows are the job's).
+-- Never seq: t_message_seq numbers every row.
 -- DELETE: a failed stream turn's USER row (stream-turn-persistence.ts) and — FINDING — the job-written SHARE_SUGGESTION
 -- rows of the caller's MAIN conversation when the share offer is declined or accepted (reconciler/sharing.ts).
 GRANT SELECT ON message TO mwf_app;
@@ -1167,9 +1179,9 @@ GRANT INSERT (conversation_id, session_id, sender_user_id, role, kind, content, 
 -- dedupe_key (work-fdc1, sql_message_once), the refining need a facilitator
 -- reply answers, and an explicit instant (fixtures, replays)
 GRANT INSERT (dedupe_key, refining_need_id, created_at) ON message TO mwf_job;
--- mwf_job [TS-9]: message-store insert() returns the written row's id and instant (INSERT … RETURNING id, created_at);
--- getInitialMessage's Serializable idempotency probe reads the first message's id. Never content.
-GRANT SELECT (id, created_at) ON message TO mwf_job;
+-- mwf_job [TS-9]: message-store insert() returns the written row's key and instant (INSERT … RETURNING seq, created_at);
+-- getInitialMessage's Serializable idempotency probe asks whether seq 1 exists (work-k5fk.4). Never content.
+GRANT SELECT (seq, created_at) ON message TO mwf_job;
 -- mwf_job [TS-10 I4]: analysis.ts stagedChat (witnessing content, the subject's recent Stage 2 turns) and
 -- state.ts markEmpathyReady's de-dup guard (lastAiNote): the text and speaker of the
 -- MAIN-conversation CHAT rows of the two parties (conversation_id, kind, created_at granted above).
@@ -1181,7 +1193,8 @@ CREATE TABLE conversation_read_state (
     session_id uuid7 NOT NULL,
     user_id uuid7 NOT NULL,
     last_viewed_at ts_ms,
-    last_seen_message_id uuid7 REFERENCES message ON DELETE SET NULL,
+    last_seen_conversation_id uuid7,
+    last_seen_seq integer,
     last_viewed_share_tab_at ts_ms,
     last_active_at ts_ms,
     archived_at ts_ms,
@@ -1190,22 +1203,29 @@ CREATE TABLE conversation_read_state (
 
     -- work-k5fk.3: one read state per participant, keyed by it
     PRIMARY KEY (session_id, user_id),
-    FOREIGN KEY (session_id, user_id) REFERENCES participant (session_id, user_id) ON DELETE CASCADE
+    FOREIGN KEY (session_id, user_id) REFERENCES participant (session_id, user_id) ON DELETE CASCADE,
+    -- work-k5fk.4 (owner Q6; k5fk.23): the seen message by its key, of the reader's session; both or neither.
+    -- Deleting it nulls the two columns, never session_id (PG15 SET NULL (cols); Prisma reads it as SetNull).
+    CHECK ((last_seen_conversation_id IS NULL) = (last_seen_seq IS NULL)),
+    FOREIGN KEY (last_seen_conversation_id, last_seen_seq, session_id) REFERENCES message (conversation_id, seq, session_id)
+      ON DELETE SET NULL (last_seen_conversation_id, last_seen_seq)
 );
-CREATE INDEX ON conversation_read_state (last_seen_message_id);
+CREATE INDEX ON conversation_read_state (last_seen_conversation_id, last_seen_seq, session_id);
 COMMENT ON TABLE conversation_read_state IS 'Per-participant view state: what was last viewed or seen, presence, and whether the session is archived from their list.';
 COMMENT ON COLUMN conversation_read_state.session_id IS 'The session of every participant the row names (work-k5fk.3): each participant reference and each parent it hangs off is keyed with it, so they are all of this one session.';
 COMMENT ON COLUMN conversation_read_state.user_id IS 'A participant of the row''s session, by user (work-k5fk.3): (session_id, user_id) references participant (session_id, user_id).';
-COMMENT ON COLUMN conversation_read_state.last_seen_message_id IS 'The last message this participant has seen: the "new messages" line.';
+COMMENT ON COLUMN conversation_read_state.last_seen_conversation_id IS 'With last_seen_seq, the last message this participant has seen: the "new messages" line (work-k5fk.4). Both NULL when there is none or it was deleted.';
+COMMENT ON COLUMN conversation_read_state.last_seen_seq IS 'With last_seen_conversation_id, the seen message''s seq: (last_seen_conversation_id, last_seen_seq, session_id) references message (conversation_id, seq, session_id).';
 COMMENT ON COLUMN conversation_read_state.last_viewed_share_tab_at IS 'When the participant last viewed received shared items ("Seen"); the name predates the Share tab''s removal.';
 COMMENT ON COLUMN conversation_read_state.last_active_at IS 'Presence; shown to the co-participant only when their privacy preferences allow (v_participant).';
 COMMENT ON COLUMN conversation_read_state.archived_at IS 'Set when the participant hid the session from their list.';
 -- mwf_app: the caller's read state — created with the participant, then viewed / active / seen / share-tab stamps.
 GRANT SELECT ON conversation_read_state TO mwf_app;
-GRANT INSERT (session_id, user_id, last_viewed_at, last_active_at, last_seen_message_id, last_viewed_share_tab_at,
-              created_at, updated_at)
+GRANT INSERT (session_id, user_id, last_viewed_at, last_active_at, last_seen_conversation_id, last_seen_seq,
+              last_viewed_share_tab_at, created_at, updated_at)
   ON conversation_read_state TO mwf_app;
-GRANT UPDATE (last_viewed_at, last_active_at, last_seen_message_id, last_viewed_share_tab_at, updated_at)
+GRANT UPDATE (last_viewed_at, last_active_at, last_seen_conversation_id, last_seen_seq, last_viewed_share_tab_at,
+              updated_at)
   ON conversation_read_state TO mwf_app;
 -- mwf_job: anonymize_*: a private-row delete (steps 3–5) and the filter columns it reads
 GRANT SELECT (session_id, user_id) ON conversation_read_state TO mwf_job;

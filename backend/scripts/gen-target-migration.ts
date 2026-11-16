@@ -58,8 +58,11 @@ const INCLUDE = '-- @@include sql-only.sql';
  * that 6b drops.
  * 156 since work-k5fk.3 (6b): participant.id and the 33 *_participant_id columns
  * went (-34), ai_memory.session_id came (+1).
+ * 155 since work-k5fk.4: message.id and conversation_read_state.last_seen_message_id
+ * went (-2), conversation_read_state.last_seen_conversation_id came (+1); message's
+ * key is (conversation_id, seq) and seq is an integer.
  */
-export const UUID7_COLUMNS = 156;
+export const UUID7_COLUMNS = 155;
 const UUID7_PLACEHOLDER = '@@UUID7_COLUMNS@@';
 
 /**

@@ -123,7 +123,7 @@ REVOKE EXECUTE ON FUNCTION app.current_user_id() FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION app.current_user_id() TO mwf_app, mwf_job, mwf_ops, mwf_auth;
 
 -- ============================================================================
--- 1. Domains, enums and the 49 target tables (backend/scripts/target-shape/tables.sql; 133 named objects, all lower-case; 156 uuid7 columns)
+-- 1. Domains, enums and the 49 target tables (backend/scripts/target-shape/tables.sql; 133 named objects, all lower-case; 155 uuid7 columns)
 -- ============================================================================
 
 -- ============================================================================
@@ -1104,6 +1104,7 @@ CREATE TABLE conversation (
     anchor_proposal_id uuid7 REFERENCES proposal ON DELETE SET NULL,
     status conversation_status NOT NULL DEFAULT 'ACTIVE',
     resolved_at ts_ms,
+    next_seq integer NOT NULL DEFAULT 1 CHECK (next_seq >= 1),
     created_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
@@ -1122,14 +1123,21 @@ COMMENT ON COLUMN conversation.session_id IS 'The session of every participant t
 COMMENT ON COLUMN conversation.user_id IS 'A participant of the row''s session, by user (work-k5fk.3): (session_id, user_id) references participant (session_id, user_id).';
 COMMENT ON COLUMN conversation.anchor_kind IS 'SUBCHAT only: what the sub-chat is about.';
 COMMENT ON COLUMN conversation.anchor_proposal_id IS 'SUBCHAT only: the proposal a PROPOSAL_REFINEMENT sub-chat refines.';
+COMMENT ON COLUMN conversation.next_seq IS 'The seq the next message of this conversation takes (work-k5fk.4). Advanced only by app.next_message_seq (through t_message_seq) under this row''s lock; 1 on a new conversation (t_conversation_seq_start).';
 -- mwf_app: the caller's MAIN conversation at createSession / accept / linked process, a Stage 4 sub-chat and its resolution.
 GRANT SELECT ON conversation TO mwf_app;
-GRANT INSERT (session_id, user_id, kind, anchor_kind, anchor_proposal_id, status, created_at, updated_at) ON conversation TO mwf_app;
+-- next_seq: a Prisma create sends its @default(1); t_conversation_seq_start pins it to 1 whatever is sent (work-k5fk.4).
+GRANT INSERT (session_id, user_id, kind, anchor_kind, anchor_proposal_id, status, next_seq, created_at, updated_at)
+  ON conversation TO mwf_app;
 GRANT UPDATE (status, resolved_at, updated_at) ON conversation TO mwf_app;
 -- mwf_job: empathy_set_status: the subject's MAIN conversation; anonymize step 3
 GRANT SELECT (id, session_id, user_id, kind) ON conversation TO mwf_job;
 -- mwf_job: a message writer reads its conversation's session into message.session_id (work-k5fk.3, 6a)
 GRANT SELECT (session_id) ON conversation TO mwf_job;
+-- mwf_job: app.next_message_seq (SECURITY DEFINER, owned by mwf_job; work-k5fk.4) takes the next number. The job
+-- login holds this as the definer's owner until §7 row 9a hands the definers to the NOLOGIN mwf_definer; mwf_app never.
+GRANT SELECT (next_seq) ON conversation TO mwf_job;
+GRANT UPDATE (next_seq) ON conversation TO mwf_job;
 -- mwf_job: anonymize_*: a private-row delete (steps 3–5)
 GRANT DELETE ON conversation TO mwf_job;
 -- mwf_ops: the Neural Monitor dashboard (routes/brain.ts, directly or through the stage shim) reads it.
@@ -1239,48 +1247,52 @@ GRANT SELECT (session_id, user_id) ON need TO mwf_job;
 GRANT DELETE ON need TO mwf_job;
 
 CREATE TABLE message (
-    id uuid7 NOT NULL DEFAULT uuidv7() PRIMARY KEY,
-    conversation_id uuid7 NOT NULL REFERENCES conversation ON DELETE CASCADE,
+    conversation_id uuid7 NOT NULL,
+    seq integer NOT NULL CHECK (seq >= 1),
     session_id uuid7 NOT NULL,
     sender_user_id uuid7,
     role message_role NOT NULL,
     kind message_kind NOT NULL DEFAULT 'CHAT',
     content ciphertext NOT NULL,
     dedupe_key message_dedupe_key,
-    refining_need_id uuid7 REFERENCES need ON DELETE SET NULL,
-    source_attempt_id uuid7 REFERENCES empathy_attempt ON DELETE SET NULL,
+    refining_need_id uuid7,
+    source_attempt_id uuid7,
     created_at ts_ms NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
-    -- §1.1 message [P02] — P3 §6, "humans can't author as the facilitator"
-    CHECK (role <> 'USER' OR sender_user_id IS NOT NULL),
-    CHECK (role NOT IN ('AI', 'SYSTEM') OR sender_user_id IS NULL),
+    -- work-k5fk.4: the line is its conversation's seq-th; t_message_seq numbers it (trailer.sql). The key is the chat order.
+    PRIMARY KEY (conversation_id, seq),
+    -- work-k5fk.4: what conversation_read_state's seen-message key pins to (the seen line is of the reader's session)
+    UNIQUE (conversation_id, seq, session_id),
+    -- §1.1 message [P02] — P3 §6, "humans can't author as the facilitator": a participant's line has a sender,
+    -- the facilitator's (AI / SYSTEM) none (the two CHECKs of 6b, folded)
+    CHECK ((role = 'USER') = (sender_user_id IS NOT NULL)),
     -- work-fdc1: a once-only key marks a facilitator line, never a human's
     CHECK (dedupe_key IS NULL OR role IN ('AI', 'SYSTEM')),
-    -- work-k5fk.3: the conversation, the sender and the cited attempt are all of the one session. The attempt pin
-    -- has no action: the single-column FK above nulls source_attempt_id (Prisma cannot write PG15's
-    -- SET NULL (source_attempt_id)), and a NULL source_attempt_id satisfies it (MATCH SIMPLE).
-    -- ORDER-DEPENDENT (6a review F3): a delete of the attempt fires both FKs' RI triggers on empathy_attempt in
-    -- name order, RI_ConstraintTrigger_a_<oid>, so the SET NULL (created first, the lower oid) runs before the
-    -- NO ACTION check, which then finds no referencing row. Created the other way round, the check would fire
-    -- first and refuse the delete. Keep this FK after the single-column one; participant-key.target.test pins
-    -- the outcome (deleting a cited attempt nulls source_attempt_id). work-k5fk.21 revisits it in step 7.
+    -- work-k5fk.3: the conversation, the sender, the refined need and the cited attempt are all of the one session.
+    -- work-k5fk.4 (k5fk.21, k5fk.23): each pin is the only key to its table, and deleting the need / attempt nulls
+    -- the id column alone (PG15 SET NULL (col)), never session_id. Prisma renders that as onDelete: SetNull (it reads
+    -- confdeltype, not confdelsetcols), so the drift gate cannot see the column list: step 20 pins it (trailer.sql).
     FOREIGN KEY (conversation_id, session_id) REFERENCES conversation (id, session_id) ON DELETE CASCADE,
     FOREIGN KEY (session_id, sender_user_id) REFERENCES participant (session_id, user_id) ON DELETE CASCADE,
+    FOREIGN KEY (refining_need_id, session_id) REFERENCES need (id, session_id) ON DELETE SET NULL (refining_need_id),
     FOREIGN KEY (source_attempt_id, session_id) REFERENCES empathy_attempt (id, session_id)
+      ON DELETE SET NULL (source_attempt_id)
 );
-CREATE INDEX ON message (conversation_id, created_at);
 -- + sql_message_once (sql-only.sql)
 CREATE INDEX ON message (session_id, sender_user_id);
 CREATE INDEX ON message (refining_need_id);
 CREATE INDEX ON message (source_attempt_id);
-COMMENT ON TABLE message IS 'One line of a conversation: a human turn, an AI or system line, or an item delivered from the other participant. Append-only.';
+COMMENT ON TABLE message IS 'One line of a conversation: a human turn, an AI or system line, or an item delivered from the other participant. Append-only. Keyed by its conversation and its place in it (work-k5fk.4).';
+COMMENT ON COLUMN message.seq IS 'The line''s place in its conversation, 1, 2, 3 … in insertion order (work-k5fk.4): t_message_seq takes it from conversation.next_seq when an INSERT leaves it NULL, under the conversation row''s lock. A rolled-back insert takes none; a deleted line, or a once-only line that met its duplicate, leaves a hole. The API''s message id is "<conversation_id>:<seq>".';
 COMMENT ON COLUMN message.session_id IS 'The session of every participant the row names (work-k5fk.3): each participant reference and each parent it hangs off is keyed with it, so they are all of this one session.';
-COMMENT ON COLUMN message.sender_user_id IS 'A participant of the row''s session, by user (work-k5fk.3): (session_id, sender_user_id) references participant (session_id, user_id).';
-COMMENT ON COLUMN message.source_attempt_id IS 'Lineage of a delivered item: the empathy attempt it came from.';
+COMMENT ON COLUMN message.sender_user_id IS 'A participant of the row''s session, by user (work-k5fk.3): (session_id, sender_user_id) references participant (session_id, user_id). Set exactly on a participant''s line (role USER); NULL on the facilitator''s.';
+COMMENT ON COLUMN message.refining_need_id IS 'The participant''s need a Stage 3 refinement turn is about: (refining_need_id, session_id) references need (id, session_id).';
+COMMENT ON COLUMN message.source_attempt_id IS 'Lineage of a delivered item: the empathy attempt it came from: (source_attempt_id, session_id) references empathy_attempt (id, session_id).';
 COMMENT ON COLUMN message.dedupe_key IS 'Set only on an app-generated AI or SYSTEM line that is written at most once per conversation; sql_message_once makes a second insert conflict. NULL on every other line. Nothing about the content is stored outside the ciphertext.';
 COMMENT ON COLUMN message.content IS 'encrypted (per-row): the line''s text: the owner''s turn and the AI''s replies under the participant key, every delivered kind under the session key.';
 -- mwf_app: the caller's own turns in their own conversation (message-store createParticipantMessage) and their own copy of
 -- an empathy statement (empathy-messages.ts). Never an UPDATE (t_message_immutable; delivered and AI rows are the job's).
+-- Never seq: t_message_seq numbers every row.
 -- DELETE: a failed stream turn's USER row (stream-turn-persistence.ts) and — FINDING — the job-written SHARE_SUGGESTION
 -- rows of the caller's MAIN conversation when the share offer is declined or accepted (reconciler/sharing.ts).
 GRANT SELECT ON message TO mwf_app;
@@ -1295,9 +1307,9 @@ GRANT INSERT (conversation_id, session_id, sender_user_id, role, kind, content, 
 -- dedupe_key (work-fdc1, sql_message_once), the refining need a facilitator
 -- reply answers, and an explicit instant (fixtures, replays)
 GRANT INSERT (dedupe_key, refining_need_id, created_at) ON message TO mwf_job;
--- mwf_job [TS-9]: message-store insert() returns the written row's id and instant (INSERT … RETURNING id, created_at);
--- getInitialMessage's Serializable idempotency probe reads the first message's id. Never content.
-GRANT SELECT (id, created_at) ON message TO mwf_job;
+-- mwf_job [TS-9]: message-store insert() returns the written row's key and instant (INSERT … RETURNING seq, created_at);
+-- getInitialMessage's Serializable idempotency probe asks whether seq 1 exists (work-k5fk.4). Never content.
+GRANT SELECT (seq, created_at) ON message TO mwf_job;
 -- mwf_job [TS-10 I4]: analysis.ts stagedChat (witnessing content, the subject's recent Stage 2 turns) and
 -- state.ts markEmpathyReady's de-dup guard (lastAiNote): the text and speaker of the
 -- MAIN-conversation CHAT rows of the two parties (conversation_id, kind, created_at granted above).
@@ -1309,7 +1321,8 @@ CREATE TABLE conversation_read_state (
     session_id uuid7 NOT NULL,
     user_id uuid7 NOT NULL,
     last_viewed_at ts_ms,
-    last_seen_message_id uuid7 REFERENCES message ON DELETE SET NULL,
+    last_seen_conversation_id uuid7,
+    last_seen_seq integer,
     last_viewed_share_tab_at ts_ms,
     last_active_at ts_ms,
     archived_at ts_ms,
@@ -1318,22 +1331,29 @@ CREATE TABLE conversation_read_state (
 
     -- work-k5fk.3: one read state per participant, keyed by it
     PRIMARY KEY (session_id, user_id),
-    FOREIGN KEY (session_id, user_id) REFERENCES participant (session_id, user_id) ON DELETE CASCADE
+    FOREIGN KEY (session_id, user_id) REFERENCES participant (session_id, user_id) ON DELETE CASCADE,
+    -- work-k5fk.4 (owner Q6; k5fk.23): the seen message by its key, of the reader's session; both or neither.
+    -- Deleting it nulls the two columns, never session_id (PG15 SET NULL (cols); Prisma reads it as SetNull).
+    CHECK ((last_seen_conversation_id IS NULL) = (last_seen_seq IS NULL)),
+    FOREIGN KEY (last_seen_conversation_id, last_seen_seq, session_id) REFERENCES message (conversation_id, seq, session_id)
+      ON DELETE SET NULL (last_seen_conversation_id, last_seen_seq)
 );
-CREATE INDEX ON conversation_read_state (last_seen_message_id);
+CREATE INDEX ON conversation_read_state (last_seen_conversation_id, last_seen_seq, session_id);
 COMMENT ON TABLE conversation_read_state IS 'Per-participant view state: what was last viewed or seen, presence, and whether the session is archived from their list.';
 COMMENT ON COLUMN conversation_read_state.session_id IS 'The session of every participant the row names (work-k5fk.3): each participant reference and each parent it hangs off is keyed with it, so they are all of this one session.';
 COMMENT ON COLUMN conversation_read_state.user_id IS 'A participant of the row''s session, by user (work-k5fk.3): (session_id, user_id) references participant (session_id, user_id).';
-COMMENT ON COLUMN conversation_read_state.last_seen_message_id IS 'The last message this participant has seen: the "new messages" line.';
+COMMENT ON COLUMN conversation_read_state.last_seen_conversation_id IS 'With last_seen_seq, the last message this participant has seen: the "new messages" line (work-k5fk.4). Both NULL when there is none or it was deleted.';
+COMMENT ON COLUMN conversation_read_state.last_seen_seq IS 'With last_seen_conversation_id, the seen message''s seq: (last_seen_conversation_id, last_seen_seq, session_id) references message (conversation_id, seq, session_id).';
 COMMENT ON COLUMN conversation_read_state.last_viewed_share_tab_at IS 'When the participant last viewed received shared items ("Seen"); the name predates the Share tab''s removal.';
 COMMENT ON COLUMN conversation_read_state.last_active_at IS 'Presence; shown to the co-participant only when their privacy preferences allow (v_participant).';
 COMMENT ON COLUMN conversation_read_state.archived_at IS 'Set when the participant hid the session from their list.';
 -- mwf_app: the caller's read state — created with the participant, then viewed / active / seen / share-tab stamps.
 GRANT SELECT ON conversation_read_state TO mwf_app;
-GRANT INSERT (session_id, user_id, last_viewed_at, last_active_at, last_seen_message_id, last_viewed_share_tab_at,
-              created_at, updated_at)
+GRANT INSERT (session_id, user_id, last_viewed_at, last_active_at, last_seen_conversation_id, last_seen_seq,
+              last_viewed_share_tab_at, created_at, updated_at)
   ON conversation_read_state TO mwf_app;
-GRANT UPDATE (last_viewed_at, last_active_at, last_seen_message_id, last_viewed_share_tab_at, updated_at)
+GRANT UPDATE (last_viewed_at, last_active_at, last_seen_conversation_id, last_seen_seq, last_viewed_share_tab_at,
+              updated_at)
   ON conversation_read_state TO mwf_app;
 -- mwf_job: anonymize_*: a private-row delete (steps 3–5) and the filter columns it reads
 GRANT SELECT (session_id, user_id) ON conversation_read_state TO mwf_job;
@@ -3469,6 +3489,25 @@ COMMENT ON FUNCTION app.create_user(public.identity_provider, text, text, text, 
 REVOKE EXECUTE ON FUNCTION app.create_user(public.identity_provider, text, text, text, text) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION app.create_user(public.identity_provider, text, text, text, text) TO mwf_auth;
 
+-- The message counter (work-k5fk.4, design note §5): the next seq of a
+-- conversation, taken under its row's lock by one UPDATE … RETURNING, so two
+-- inserts into one conversation queue and a rolled-back insert returns its
+-- number with the rest of its transaction. Definer, so the counter column is
+-- written by its owner only: no runtime role holds UPDATE (next_seq) but the
+-- owner, and none is granted EXECUTE — the one caller is t_message_seq (T5),
+-- itself owned by mwf_job. A missing conversation returns NULL, and the NOT
+-- NULL on message.seq refuses the row (the FK would refuse it anyway).
+CREATE FUNCTION app.next_message_seq(conversation uuid) RETURNS integer
+  LANGUAGE sql SECURITY DEFINER
+  SET search_path = pg_catalog, public, pg_temp
+  AS $$
+    UPDATE public.conversation SET next_seq = next_seq + 1 WHERE id = next_message_seq.conversation
+    RETURNING next_seq - 1
+  $$;
+COMMENT ON FUNCTION app.next_message_seq(uuid) IS 'The next message seq of a conversation (work-k5fk.4): advances conversation.next_seq under the row''s lock and returns the number taken. Called only by t_message_seq; no runtime role may EXECUTE it.';
+-- No grant: t_message_seq (owned by mwf_job, as this is) is its only caller.
+REVOKE EXECUTE ON FUNCTION app.next_message_seq(uuid) FROM PUBLIC;
+
 -- Hand the definer functions to mwf_job (TS-1 order, measured there with a
 -- non-superuser migrator): CREATE on the schema for the hand-over only. Their
 -- EXECUTE grants were issued above, next to each function, by the migrator as
@@ -3489,6 +3528,7 @@ ALTER FUNCTION app.anonymize_user_in_session(uuid, uuid) OWNER TO mwf_job;
 ALTER FUNCTION app.anonymize_user_account(uuid) OWNER TO mwf_job;
 ALTER FUNCTION app.resolve_user(public.identity_provider, text) OWNER TO mwf_job;
 ALTER FUNCTION app.create_user(public.identity_provider, text, text, text, text) OWNER TO mwf_job;
+ALTER FUNCTION app.next_message_seq(uuid) OWNER TO mwf_job;
 REVOKE CREATE ON SCHEMA app FROM mwf_job;
 
 -- ---------------------------------------------------------------------------
@@ -3540,7 +3580,7 @@ CREATE CONSTRAINT TRIGGER t_cardinality_2 AFTER DELETE OR UPDATE OF kind, user_i
   DEFERRABLE INITIALLY DEFERRED
   FOR EACH ROW EXECUTE FUNCTION app.t_participant_cardinality();
 
--- T-message-immutable: routing columns and the once-only dedupe_key (work-fdc1)
+-- T-message-immutable: routing columns (the key (conversation_id, seq) among them, work-k5fk.4) and the once-only dedupe_key (work-fdc1)
 -- never change; content of AI/SYSTEM rows and of every delivered kind never
 -- changes, except by the job (W13 re-encryption).
 CREATE FUNCTION app.t_message_immutable() RETURNS trigger
@@ -3549,6 +3589,7 @@ CREATE FUNCTION app.t_message_immutable() RETURNS trigger
   AS $$
   BEGIN
     IF NEW.conversation_id IS DISTINCT FROM OLD.conversation_id
+       OR NEW.seq IS DISTINCT FROM OLD.seq
        OR NEW.session_id IS DISTINCT FROM OLD.session_id
        OR NEW.sender_user_id IS DISTINCT FROM OLD.sender_user_id
        OR NEW.role IS DISTINCT FROM OLD.role
@@ -4043,6 +4084,51 @@ ALTER FUNCTION app.t_live_session_pair() OWNER TO mwf_job;
 ALTER FUNCTION app.t_live_session_pair_end() OWNER TO mwf_job;
 REVOKE CREATE ON SCHEMA app FROM mwf_job;
 
+-- ---------------------------------------------------------------------------
+-- work-k5fk.4: a message is (conversation_id, seq). t_message_seq numbers an
+-- INSERT that leaves seq NULL — every runtime writer: no role is granted
+-- INSERT (seq) — from app.next_message_seq. SECURITY DEFINER (owned by mwf_job)
+-- like the k5fk.2 triggers above, the exception to T5's invoker rule: the
+-- helper is executable by its owner alone, so neither the app nor the job
+-- login can take numbers outside an INSERT (a taken number with no row is a
+-- hole). It runs after t_message_app_insert (name order), which reads
+-- nothing seq-dependent. An ON CONFLICT DO NOTHING insert (createFacilitatorMessageOnce)
+-- takes its number before the conflict is found, so a duplicate once-only
+-- line leaves a hole too: seq orders, it does not count.
+-- ---------------------------------------------------------------------------
+CREATE FUNCTION app.t_message_seq() RETURNS trigger
+  LANGUAGE plpgsql SECURITY DEFINER
+  SET search_path = pg_catalog, public, pg_temp
+  AS $$
+  BEGIN
+    NEW.seq := app.next_message_seq(NEW.conversation_id);
+    RETURN NEW;
+  END
+  $$;
+COMMENT ON FUNCTION app.t_message_seq() IS 'Trigger (work-k5fk.4): a message inserted without seq takes its conversation''s next one (app.next_message_seq).';
+-- No caller needs EXECUTE on a trigger function.
+REVOKE EXECUTE ON FUNCTION app.t_message_seq() FROM PUBLIC;
+CREATE TRIGGER t_message_seq BEFORE INSERT ON public.message
+  FOR EACH ROW WHEN (NEW.seq IS NULL) EXECUTE FUNCTION app.t_message_seq();
+COMMENT ON TRIGGER t_message_seq ON public.message IS 'Numbers the line in its conversation (work-k5fk.4).';
+GRANT CREATE ON SCHEMA app TO mwf_job;
+ALTER FUNCTION app.t_message_seq() OWNER TO mwf_job;
+REVOKE CREATE ON SCHEMA app FROM mwf_job;
+
+-- T-conversation-seq-start: a new conversation's counter starts at 1, whatever
+-- the INSERT sent (a Prisma create sends the column's @default; mwf_app holds
+-- INSERT (next_seq) for that, so the trigger, not the grant, is the rule).
+CREATE FUNCTION app.t_conversation_seq_start() RETURNS trigger
+  LANGUAGE plpgsql
+  SET search_path = pg_catalog, public, pg_temp
+  AS $$ BEGIN NEW.next_seq := 1; RETURN NEW; END $$;
+COMMENT ON FUNCTION app.t_conversation_seq_start() IS 'Trigger (work-k5fk.4): conversation.next_seq is 1 on insert.';
+-- No caller needs EXECUTE on a trigger function.
+REVOKE EXECUTE ON FUNCTION app.t_conversation_seq_start() FROM PUBLIC;
+CREATE TRIGGER t_conversation_seq_start BEFORE INSERT ON public.conversation
+  FOR EACH ROW EXECUTE FUNCTION app.t_conversation_seq_start();
+COMMENT ON TRIGGER t_conversation_seq_start ON public.conversation IS 'A new conversation numbers its messages from 1 (work-k5fk.4).';
+
 -- touch_updated_at on the 34 tables that have updated_at (T8 asserts the set
 -- equals the catalog's). message and takeaway_link have none.
 CREATE TRIGGER touch_updated_at BEFORE UPDATE ON agreement FOR EACH ROW EXECUTE FUNCTION app.touch_updated_at();
@@ -4050,7 +4136,9 @@ CREATE TRIGGER touch_updated_at BEFORE UPDATE ON ai_memory FOR EACH ROW EXECUTE 
 CREATE TRIGGER touch_updated_at BEFORE UPDATE ON brain_activity FOR EACH ROW EXECUTE FUNCTION app.touch_updated_at();
 CREATE TRIGGER touch_updated_at BEFORE UPDATE ON consent FOR EACH ROW EXECUTE FUNCTION app.touch_updated_at();
 CREATE TRIGGER touch_updated_at BEFORE UPDATE ON context_share_offer FOR EACH ROW EXECUTE FUNCTION app.touch_updated_at();
-CREATE TRIGGER touch_updated_at BEFORE UPDATE ON conversation FOR EACH ROW EXECUTE FUNCTION app.touch_updated_at();
+-- conversation: not when the update is the message counter (app.next_message_seq; work-k5fk.4) — a new line is not a change of the thread
+CREATE TRIGGER touch_updated_at BEFORE UPDATE ON conversation
+  FOR EACH ROW WHEN (OLD.next_seq IS NOT DISTINCT FROM NEW.next_seq) EXECUTE FUNCTION app.touch_updated_at();
 CREATE TRIGGER touch_updated_at BEFORE UPDATE ON conversation_read_state FOR EACH ROW EXECUTE FUNCTION app.touch_updated_at();
 CREATE TRIGGER touch_updated_at BEFORE UPDATE ON draft FOR EACH ROW EXECUTE FUNCTION app.touch_updated_at();
 CREATE TRIGGER touch_updated_at BEFORE UPDATE ON empathy_attempt FOR EACH ROW EXECUTE FUNCTION app.touch_updated_at();
@@ -4103,7 +4191,7 @@ SELECT p.session_id, p.user_id, p.kind,
        (u.deleted_at IS NOT NULL) AS is_tombstone,
        p.joined_at, p.left_at,
        c.id AS main_conversation_id,
-       r.last_viewed_at, r.last_seen_message_id, r.last_viewed_share_tab_at, r.archived_at,
+       r.last_viewed_at, r.last_seen_conversation_id, r.last_seen_seq, r.last_viewed_share_tab_at, r.archived_at,
        CASE WHEN p.user_id = app.current_user_id()
               OR coalesce((up.doc -> 'privacy' ->> 'showActivityStatus')::boolean, true)
             THEN r.last_active_at END AS last_active_at,
@@ -4403,7 +4491,7 @@ BEGIN
   FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid JOIN pg_namespace s ON s.oid = c.relnamespace
   WHERE s.nspname = 'public' AND c.relkind = 'r' AND a.attnum > 0 AND NOT a.attisdropped
     AND a.atttypid = 'public.uuid7'::regtype;
-  IF n <> 156 THEN RAISE EXCEPTION 'step 20: % uuid7 columns, expected 156', n; END IF;
+  IF n <> 155 THEN RAISE EXCEPTION 'step 20: % uuid7 columns, expected 155', n; END IF;
 
   -- The encrypted columns (SENSITIVE_FIELD_MAP; tables.sql): 44 text
   -- columns typed ciphertext and 5 text[] columns CHECKed by
@@ -4482,6 +4570,23 @@ BEGIN
   FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
   WHERE n.nspname = 'app' AND p.prosecdef AND pg_get_userbyid(p.proowner) <> 'mwf_job';
   IF bad IS NOT NULL THEN RAISE EXCEPTION 'step 20: SECURITY DEFINER function(s) not owned by mwf_job: %', bad; END IF;
+
+  -- work-k5fk.4 (k5fk.21, .23): the column-list SET NULL keys, which Prisma reads as plain SetNull — so the
+  -- drift gate passes a full SET NULL (that would null session_id, NOT NULL) and only this catches it.
+  SELECT string_agg(w.want, '; ') INTO bad
+  FROM (VALUES ('message', 'need', '{refining_need_id}'),
+               ('message', 'empathy_attempt', '{source_attempt_id}'),
+               ('conversation_read_state', 'message', '{last_seen_conversation_id,last_seen_seq}')) x(rel, ref, cols),
+       LATERAL (SELECT x.rel || ' -> ' || x.ref || ' ON DELETE SET NULL ' || x.cols AS want) w
+  WHERE NOT EXISTS (
+    SELECT 1 FROM pg_constraint c
+    WHERE c.contype = 'f' AND c.conrelid = ('public.' || x.rel)::regclass AND c.confrelid = ('public.' || x.ref)::regclass
+      AND c.confdeltype = 'n'
+      AND (SELECT array_agg(a.attname::text ORDER BY a.attname) FROM unnest(c.confdelsetcols) s(attnum)
+             JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = s.attnum)::text = x.cols)
+    OR (SELECT count(*) FROM pg_constraint c
+        WHERE c.contype = 'f' AND c.conrelid = ('public.' || x.rel)::regclass AND c.confrelid = ('public.' || x.ref)::regclass) <> 1;
+  IF bad IS NOT NULL THEN RAISE EXCEPTION 'step 20: expected exactly one key: %', bad; END IF;
 
   -- The milestone seed is in.
   SELECT count(*) INTO n FROM milestone;
