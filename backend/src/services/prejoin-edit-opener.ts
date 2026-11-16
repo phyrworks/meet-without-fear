@@ -159,7 +159,7 @@ export function deriveAwaitingRevision(facts: {
 export async function findOpenerSince(conversationId: string, reopenedAt: Date): Promise<StoredMessage | null> {
   const row = await prisma.message.findFirst({
     where: { conversationId, role: 'AI', kind: 'CHAT', createdAt: { gte: reopenedAt } },
-    orderBy: [{ createdAt: 'asc' }, { seq: 'asc' }],
+    orderBy: { seq: 'asc' },
     select: MESSAGE_SELECT,
   });
   return row ? (withMessageId(row) as StoredMessage) : null;

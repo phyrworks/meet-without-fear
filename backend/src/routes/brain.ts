@@ -975,7 +975,7 @@ router.get('/activity/:sessionId', async (req, res) => {
     let messages: Array<{ id: string; content: string; timestamp: Date; senderId: string | null }> = (
       await db().message.findMany({
         where: { role: 'USER', kind: 'CHAT', conversation: { kind: 'MAIN', sessionId } },
-        orderBy: { createdAt: 'asc' },
+        orderBy: [{ createdAt: 'asc' }, { conversationId: 'asc' }, { seq: 'asc' }],
         select: { conversationId: true, seq: true, content: true, createdAt: true, senderUserId: true },
       })
     ).map(m => ({

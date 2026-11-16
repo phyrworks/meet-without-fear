@@ -185,7 +185,7 @@ async function stagedChat(
         kind: 'CHAT',
         role: { in: ['USER', 'AI'] },
       },
-      orderBy: { createdAt: 'asc' },
+      orderBy: { seq: 'asc' },
       select: { role: true, content: true, createdAt: true, senderUserId: true },
     }),
     milestonesOf(seat),

@@ -238,16 +238,26 @@ test.describe('Single User Journey', () => {
 
     // Step 12: Click feel-heard-yes button
     console.log(`${elapsed()} Step 12: Clicking feel heard yes...`);
+    // work-k5fk.26: wait for the /feel-heard RESPONSE, not just the button's optimistic disappearance — the
+    // composer is reset while the confirmation lands, and a fill made before that was lost (empty at send).
+    const feelHeardResponse = page.waitForResponse(
+      (r) => r.url().includes('/feel-heard') && r.request().method() === 'POST',
+      { timeout: 15000 },
+    );
     await feelHeardYes.click();
+    expect((await feelHeardResponse).ok()).toBe(true);
 
     // Wait for button to disappear (confirmation processed)
     await expect(feelHeardYes).not.toBeVisible({ timeout: 5000 });
+    // ... and for the transition line it writes, so the chat has settled before typing
+    await expect(page.getByText(/try to imagine what/i)).toBeVisible({ timeout: 15000 });
 
     await page.screenshot({ path: 'test-results/single-user-07-feel-heard-confirmed.png' });
 
     // Step 13: Send fifth message
     console.log(`${elapsed()} Step 13: Sending fifth message...`);
     await chatInput.fill('Yes, I feel heard now');
+    await expect(chatInput).toHaveValue('Yes, I feel heard now');
     await sendButton.click();
 
     // Wait for AI response (post-feel-heard transition) to complete streaming

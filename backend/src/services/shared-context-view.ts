@@ -68,7 +68,7 @@ export async function markSharedContextViewed(
       conversation: { sessionId, userId },
       senderUserId: { not: userId },
     },
-    select: { createdAt: true, conversationId: true },
+    select: { createdAt: true, conversationId: true, seq: true },
   });
   if (!message) return { status: 'not_found' };
 
@@ -85,6 +85,11 @@ export async function markSharedContextViewed(
       conversationId: message.conversationId,
       kind: { in: [...VIEWABLE_SHARED_KINDS] },
       senderUserId: { not: userId },
+      // TIME order on purpose, not seq (step 7 review R2-1): the watermark
+      // last_viewed_share_tab_at is an instant and a frame is unread when its
+      // created_at is after it, so "the next frame" must be the next by
+      // created_at. In seq order a later-numbered but earlier-stamped frame
+      // would move the watermark past an unviewed one.
       createdAt: { gt: message.createdAt },
     },
     orderBy: { createdAt: 'asc' },

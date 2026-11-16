@@ -177,7 +177,7 @@ const SUBCHAT_SELECT = {
   createdAt: true,
   participant: { select: { sessionId: true, userId: true } },
   messages: {
-    orderBy: [{ createdAt: 'asc' }, { seq: 'asc' }],
+    orderBy: { seq: 'asc' },
     select: { conversationId: true, seq: true, role: true, content: true, createdAt: true, refiningNeedId: true },
   },
 } satisfies Prisma.ConversationSelect;
@@ -376,7 +376,7 @@ export async function buildSystemPrompt(input: PromptBuildInput): Promise<BuiltP
         participant.mainConversationId
           ? prisma.message.findMany({
               where: { conversationId: participant.mainConversationId },
-              orderBy: [{ createdAt: 'asc' }, { seq: 'asc' }],
+              orderBy: { seq: 'asc' },
               take: MAIN_CHAT_HISTORY_LIMIT,
               select: { role: true, content: true },
             })

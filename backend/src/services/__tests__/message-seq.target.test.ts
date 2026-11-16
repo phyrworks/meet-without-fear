@@ -40,12 +40,12 @@ import { jobUrlFor } from '../../testing/golden/driver';
 const describeTarget = isTargetShape() ? describe : describe.skip;
 jest.setTimeout(180_000);
 
-async function failure(p: Promise<unknown>): Promise<{ code?: string; message?: string }> {
+async function failure(p: Promise<unknown>): Promise<{ code?: string; message?: string; detail?: string }> {
   try {
     await p;
   } catch (e) {
-    const err = e as { code?: string; message?: string };
-    return { code: err.code, message: err.message };
+    const err = e as { code?: string; message?: string; detail?: string };
+    return { code: err.code, message: err.message, detail: err.detail };
   }
   throw new Error('expected the statement to fail');
 }
@@ -301,6 +301,36 @@ describeTarget('message key (conversation_id, seq) (work-k5fk.4)', () => {
       ).toBe('42501');
     });
 
+    // review F4: t_conversation_seq_start is the rule, not the grant (mwf_app may INSERT next_seq: a Prisma create
+    // sends its @default).
+    it('a new conversation counts from 1 whatever its INSERT sends (t_conversation_seq_start)', async () => {
+      const [c] = await run.as<{ next_seq: number }>(
+        'mwf_app',
+        ids.ada,
+        `INSERT INTO conversation (session_id, user_id, kind, anchor_kind, next_seq) VALUES ($1, $2, 'SUBCHAT', 'NO_OVERLAP', 500)
+         RETURNING next_seq`,
+        [ids.session, ids.ada],
+      );
+      expect(c.next_seq).toBe(1);
+    });
+
+    // review F5: a line naming a conversation that does not exist (or vanished while it waited) is refused as the
+    // foreign key violation it is, with no DETAIL — never a NOT NULL error that prints the failing row (house rule,
+    // functions-caller-tests 28b).
+    it('a line for a missing conversation is refused with foreign_key_violation and no DETAIL', async () => {
+      const missing = '01900000-0000-7000-8000-00000000abcd';
+      const f = await failure(
+        run.as(
+          'mwf_job',
+          null,
+          `INSERT INTO message (conversation_id, session_id, role, kind, content) VALUES ($1, $2, 'AI', 'CHAT', 'PROBE_F5_ROW')`,
+          [missing, ids.session],
+        ),
+      );
+      expect({ code: f.code, detail: f.detail }).toEqual({ code: '23503', detail: undefined });
+      expect(f.message ?? '').not.toContain('PROBE_F5_ROW');
+    });
+
     it("nobody changes a written row's seq (t_message_immutable)", async () => {
       const f = await failure(run.sql(`UPDATE message SET seq = seq + 1000 WHERE conversation_id = $1 AND seq = 1`, [ids.adaConv]));
       expect({ code: f.code, routing: /immutable/.test(f.message ?? '') }).toEqual({ code: '23514', routing: true });
@@ -425,6 +455,29 @@ describeTarget('message key (conversation_id, seq) (work-k5fk.4)', () => {
       const state = await http(ada, 'get', `/sessions/${ids.session}/state`);
       expect(state.status).toBe(200);
       expect(state.body.data.session.lastSeenChatItemId).toBeNull();
+    });
+
+    // review F3: the page order is seq, so the cursor is a seq. A line whose created_at is earlier than lines
+    // numbered before it (clocks of two writers, an explicit instant) must not fall between two pages.
+    it('paging back with beforeSeq visits every line once, even when seq and created_at disagree', async () => {
+      await run.sql(
+        `INSERT INTO message (conversation_id, session_id, role, kind, content, created_at)
+         VALUES ($1::uuid, $2::uuid, 'AI', 'CHAT', 'PROBE_F3_EARLY', (SELECT min(created_at) FROM message WHERE conversation_id = $1::uuid) - interval '1 hour')`,
+        [ids.adaConv, ids.session],
+      );
+      const all = (await seqsOf(ids.adaConv)).reverse();
+      const seen: number[] = [];
+      let cursor: number | undefined;
+      for (let page = 0; page < 100; page++) {
+        const q = `limit=5&order=desc${cursor ? `&beforeSeq=${cursor}` : ''}`;
+        const r = await http(ada, 'get', `/sessions/${ids.session}/messages?${q}`);
+        expect(r.status).toBe(200);
+        const msgs = r.body.data.messages as Array<{ seq: number }>;
+        seen.push(...msgs.map(m => m.seq).reverse());
+        if (!r.body.data.hasMore) break;
+        cursor = msgs[0].seq;
+      }
+      expect(seen).toEqual(all);
     });
   });
 });
