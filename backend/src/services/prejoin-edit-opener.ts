@@ -49,6 +49,7 @@ import { resolvePreJoinReviewForEdit } from './empathy-draft-save';
 import { messageDTO } from './empathy-messages';
 import {
   MESSAGE_SELECT,
+  withMessageId,
   createFacilitatorMessage,
   listConversationMessages,
   countOwnTurns,
@@ -156,11 +157,12 @@ export function deriveAwaitingRevision(facts: {
  * there before it: the review was resolved, the author has not replied yet.)
  */
 export async function findOpenerSince(conversationId: string, reopenedAt: Date): Promise<StoredMessage | null> {
-  return (await prisma.message.findFirst({
+  const row = await prisma.message.findFirst({
     where: { conversationId, role: 'AI', kind: 'CHAT', createdAt: { gte: reopenedAt } },
-    orderBy: { createdAt: 'asc' },
+    orderBy: [{ createdAt: 'asc' }, { seq: 'asc' }],
     select: MESSAGE_SELECT,
-  })) as StoredMessage | null;
+  });
+  return row ? (withMessageId(row) as StoredMessage) : null;
 }
 
 /** How long the opener's model call may take before the template is written instead. */

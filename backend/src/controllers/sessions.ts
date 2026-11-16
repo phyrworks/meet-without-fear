@@ -710,7 +710,7 @@ export async function confirmInvitationMessage(req: Request, res: Response): Pro
  * Mark session as viewed
  * POST /sessions/:id/viewed
  *
- * Updates lastViewedAt and optionally lastSeenChatItemId on the participant's
+ * Updates lastViewedAt and optionally the seen message (body lastSeenSeq) on the participant's
  * conversation_read_state (target shape, TS-9). This is called when the user
  * opens/views a session to mark it as "read".
  */
