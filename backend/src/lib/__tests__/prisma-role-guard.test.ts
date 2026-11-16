@@ -7,6 +7,8 @@ import * as path from 'path';
 import {
   guardAdapterFactory,
   roleGuardViolations,
+  ALLOWED_MEMBERSHIPS,
+  ROLE_GUARD_SQL,
   RuntimeRoleRefusedError,
   exemptProcessFromRoleGuard,
   resetRoleGuardExemptionForTests,
@@ -23,6 +25,8 @@ const clean = (role = 'mwf_app'): RoleFacts => ({
   createdb: false,
   replication: false,
   memberships: [],
+  adminMemberships: [],
+  setRoles: [],
   privilegedRoles: [],
   schemaCreate: [],
   databaseOwner: null,
@@ -60,13 +64,52 @@ describe('roleGuardViolations', () => {
     ]);
   });
 
-  it("refuses any role membership (the allowlist is empty until row 9a), e.g. production's mwf_job TO mwf_app", () => {
-    for (const role of ['app', 'job', 'ops', 'auth'] as const) {
-      expect(roleGuardViolations({ ...clean(), memberships: ['mwf_job'] }, role)).toEqual([
-        'mwf_app is a member of role(s) mwf_job (none is allowed)',
-      ]);
-    }
+  it('accepts each client reaching exactly its one capability role (work-k5fk.10.4)', () => {
+    expect(roleGuardViolations({ ...clean(), memberships: ['app_access'] }, 'app')).toEqual([]);
+    expect(roleGuardViolations({ ...clean('mwf_job'), memberships: ['job_access'] }, 'job')).toEqual([]);
+    expect(roleGuardViolations({ ...clean('mwf_ops'), memberships: ['ops_access'] }, 'ops')).toEqual([]);
+    expect(roleGuardViolations({ ...clean('mwf_auth'), memberships: ['auth_access'] }, 'auth')).toEqual([]);
+    expect(ALLOWED_MEMBERSHIPS).toEqual({
+      app: ['app_access'],
+      job: ['job_access'],
+      ops: ['ops_access'],
+      auth: ['auth_access'],
+    });
+  });
+
+  it("refuses any other role reached, e.g. production's mwf_job TO mwf_app, a second capability, a predefined role", () => {
+    expect(roleGuardViolations({ ...clean(), memberships: ['app_access', 'mwf_job'] }, 'app')).toEqual([
+      'mwf_app reaches role(s) mwf_job (directly or through another role; the app login may reach app_access only)',
+    ]);
+    expect(roleGuardViolations({ ...clean(), memberships: ['app_access', 'job_access'] }, 'app')).toHaveLength(1);
     expect(roleGuardViolations({ ...clean(), memberships: ['pg_write_all_data'] }, 'app')).toHaveLength(1);
+    // Another client's capability is not this client's.
+    expect(roleGuardViolations({ ...clean(), memberships: ['app_access'] }, 'job')).toEqual([
+      'mwf_app reaches role(s) app_access (directly or through another role; the job login may reach job_access only)',
+    ]);
+  });
+
+  it('refuses the capability itself being a member of another role (memberships are transitive)', () => {
+    // ROLE_GUARD_SQL reports every role reached through pg_has_role(…, 'MEMBER'): app_access in mwf_job shows as both.
+    expect(roleGuardViolations({ ...clean(), memberships: ['app_access', 'mwf_job'] }, 'app')[0]).toMatch(
+      /reaches role\(s\) mwf_job/,
+    );
+    expect(ROLE_GUARD_SQL).toMatch(/'memberships', ARRAY\(\s*SELECT r\.rolname::text FROM pg_catalog\.pg_roles r\s*WHERE r\.oid <> me\.oid AND pg_catalog\.pg_has_role\(me\.oid, r\.oid, 'MEMBER'\)/);
+  });
+
+  it('review 9a F1: refuses a login that can SET ROLE to any role (its capability included)', () => {
+    // SET ROLE app_access would make current_user app_access: the triggers keyed on the login (and any
+    // future per-login policy) would no longer see mwf_app.
+    expect(
+      roleGuardViolations({ ...clean(), memberships: ['app_access'], setRoles: ['app_access'] }, 'app'),
+    ).toEqual(['mwf_app can SET ROLE to app_access (a runtime login holds its capability WITH SET FALSE)']);
+    expect(ROLE_GUARD_SQL).toMatch(/'setRoles', ARRAY\(\s*SELECT r\.rolname::text FROM pg_catalog\.pg_roles r\s*WHERE r\.oid <> me\.oid AND pg_catalog\.pg_has_role\(me\.oid, r\.oid, 'SET'\)/);
+  });
+
+  it('refuses a capability held WITH ADMIN OPTION', () => {
+    expect(
+      roleGuardViolations({ ...clean(), memberships: ['app_access'], adminMemberships: ['app_access'] }, 'app'),
+    ).toEqual(['mwf_app holds role(s) app_access WITH ADMIN OPTION']);
   });
 
   it('refuses the database owner, CREATE on the database, and SET on session_replication_role', () => {
@@ -92,8 +135,8 @@ describe('roleGuardViolations', () => {
     const facts: RoleFacts = {
       ...clean(),
       owned: [
-        { object: 'relation public.session', owner: 'mwf_app', definerFunction: false, ownedBySelf: true },
-        { object: 'schema public', owner: 'pg_database_owner', definerFunction: false, ownedBySelf: false },
+        { object: 'relation public.session', owner: 'mwf_app' },
+        { object: 'schema public', owner: 'pg_database_owner' },
       ],
     };
     expect(roleGuardViolations(facts, 'app')).toEqual([
@@ -101,26 +144,19 @@ describe('roleGuardViolations', () => {
     ]);
   });
 
-  it('tolerates the job login owning app SECURITY DEFINER functions — for the job role only (until row 9a)', () => {
-    const definer = { object: 'function app.is_member', owner: 'mwf_job', definerFunction: true, ownedBySelf: true };
-    expect(roleGuardViolations({ ...clean('mwf_job'), owned: [definer] }, 'job')).toEqual([]);
-    expect(roleGuardViolations({ ...clean('mwf_job'), owned: [definer] }, 'app')).toHaveLength(1);
-    // Through membership (not the login itself) is never tolerated.
-    expect(
-      roleGuardViolations({ ...clean('mwf_app'), owned: [{ ...definer, ownedBySelf: false }] }, 'job'),
-    ).toHaveLength(1);
-    // A non-definer object is never tolerated.
-    expect(
-      roleGuardViolations({ ...clean('mwf_job'), owned: [{ ...definer, definerFunction: false }] }, 'job'),
-    ).toHaveLength(1);
+  it('refuses the job login owning a SECURITY DEFINER function: the row 9a allowance is gone (mwf_definer owns them)', () => {
+    const definer = { object: 'function app.is_member', owner: 'mwf_job' };
+    for (const role of ['app', 'job', 'ops', 'auth'] as const) {
+      expect(roleGuardViolations({ ...clean('mwf_job'), owned: [definer] }, role)).toEqual([
+        'mwf_job owns objects in public/app: function app.is_member (owner mwf_job)',
+      ]);
+    }
   });
 
   it('caps the listed objects at five', () => {
     const owned = Array.from({ length: 7 }, (_, i) => ({
       object: `relation public.t${i}`,
       owner: 'x',
-      definerFunction: false,
-      ownedBySelf: true,
     }));
     expect(roleGuardViolations({ ...clean(), owned }, 'app')[0]).toMatch(/ and 2 more$/);
   });

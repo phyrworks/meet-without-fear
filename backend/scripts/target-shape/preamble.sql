@@ -5,13 +5,14 @@
 --
 -- Carries what TS-1's migration 20261019173038_phase3_app_schema_helpers did
 -- before the table DDL existed (that migration is gone with the old history,
--- OD7): the roles assertion, the SET ROLE mwf_job check, schema app and
+-- OD7): the roles assertion, the SET ROLE mwf_definer check, schema app and
 -- app.current_user_id(). The membership helpers app.is_member and
 -- app.partner_user_id are created by the trailer, over participant.
 -- ============================================================================
 
--- Refuse anything but an empty database: the roles the trailer grants to must
--- exist, the migrator must be able to SET ROLE mwf_job, and schema public must
+-- Refuse anything but an empty database: the roles the baseline grants to (the
+-- capability roles and mwf_definer) and the logins step 20 checks must exist, the
+-- migrator must be able to SET ROLE mwf_definer, and schema public must
 -- hold no relation but _prisma_migrations. A database still at the old shape
 -- (table "Session") is refused with the cutover instruction.
 DO $$
@@ -20,15 +21,17 @@ DECLARE
   extra   text;
 BEGIN
   SELECT string_agg(r, ', ' ORDER BY r) INTO missing
-  FROM unnest(ARRAY['mwf_app', 'mwf_job', 'mwf_ops', 'mwf_auth']) AS r
+  FROM unnest(ARRAY['app_access', 'ai_access', 'worker_access', 'ops_access', 'auth_access', 'clinician_access',
+                    'job_access', 'mwf_definer',
+                    'mwf_app', 'mwf_ai', 'mwf_worker', 'mwf_ops', 'mwf_auth', 'mwf_clinician', 'mwf_job']) AS r
   WHERE NOT EXISTS (SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = r);
   IF missing IS NOT NULL THEN
     RAISE EXCEPTION 'target_shape_baseline: database role(s) % do not exist', missing
       USING HINT = 'Roles are cluster-level and created outside Prisma: apply infra/aws/roles.sql '
                    '(docs/development/local-setup.md, "Database roles") and re-run the migration.';
   END IF;
-  IF NOT pg_catalog.pg_has_role(current_user, 'mwf_job', 'SET') THEN
-    RAISE EXCEPTION 'target_shape_baseline: role % cannot SET ROLE mwf_job, which it needs to make mwf_job own the definer helpers', current_user
+  IF NOT pg_catalog.pg_has_role(current_user, 'mwf_definer', 'SET') THEN
+    RAISE EXCEPTION 'target_shape_baseline: role % cannot SET ROLE mwf_definer, which it needs to make mwf_definer own the definer helpers', current_user
       USING HINT = 'infra/aws/roles.sql grants it to the database owner and mwf_migrator: re-apply it.';
   END IF;
   IF pg_catalog.to_regclass('public."Session"') IS NOT NULL THEN
@@ -51,7 +54,9 @@ $$;
 
 CREATE SCHEMA app;
 REVOKE ALL ON SCHEMA app FROM PUBLIC;
-GRANT USAGE ON SCHEMA app TO mwf_app, mwf_job, mwf_ops, mwf_auth;
+-- The capability roles (work-k5fk.10.4) and mwf_definer, whose definer helpers call
+-- app.* functions. ai_access, worker_access and clinician_access: nothing yet.
+GRANT USAGE ON SCHEMA app TO app_access, job_access, ops_access, auth_access, mwf_definer;
 
 -- The caller's identity, from the transaction-local setting the request layer
 -- writes with set_config('app.current_user_id', <id>, true). NULL when unset
@@ -62,4 +67,4 @@ CREATE FUNCTION app.current_user_id() RETURNS uuid
   AS $$ SELECT NULLIF(pg_catalog.current_setting('app.current_user_id', true), '')::uuid $$;
 
 REVOKE EXECUTE ON FUNCTION app.current_user_id() FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION app.current_user_id() TO mwf_app, mwf_job, mwf_ops, mwf_auth;
+GRANT EXECUTE ON FUNCTION app.current_user_id() TO app_access, job_access, ops_access, auth_access, mwf_definer;

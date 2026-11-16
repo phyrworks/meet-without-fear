@@ -146,7 +146,10 @@ fi
 step "4. db (Postgres 18 + pgvector; init-db.sh on a fresh volume)"
 compose up -d db
 wait_healthy db 40 || die "db did not become healthy"
-echo "   db healthy; roles: $(psql_db -Atc "SELECT string_agg(rolname, ',' ORDER BY rolname) FROM pg_roles WHERE rolname LIKE 'mwf\_%' OR rolname = 'slam_bot_readonly'")"
+echo "   db healthy; roles: $(psql_db -Atc "SELECT string_agg(rolname, ',' ORDER BY rolname) FROM pg_roles WHERE rolname LIKE 'mwf\_%' OR rolname LIKE '%\_access' OR rolname = 'slam_bot_readonly'")"
+if [ "$(psql_db -Atc "SELECT count(*) FROM pg_roles WHERE rolname IN ('app_access', 'job_access', 'mwf_definer', 'mwf_ai')")" != 4 ]; then
+  die "the replica's cluster has no capability roles (a volume initialised before work-k5fk.10.4): run infra/local/reset.sh, then up.sh"
+fi
 
 # --- 4b. role-guard preflight, before migrating (work-k5fk.10.3; deploy.sh does the same) ---
 step "4b. role-guard preflight (every runtime role URL; no switch to skip it)"

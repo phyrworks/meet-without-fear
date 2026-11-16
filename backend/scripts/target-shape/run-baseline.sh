@@ -36,7 +36,7 @@
 #   f. steps 3–7 above on the same database;
 #   g. negative: drop-old-objects.sql refuses the database now on the target shape.
 #   With --as-migrator the database is OWNED BY mwf_migrator (non-superuser,
-#   mwf_job WITH INHERIT FALSE, SET TRUE) and a, c, d, e, f, g run as it.
+#   mwf_job and mwf_definer WITH INHERIT FALSE, SET TRUE) and a, c, d, e, f, g run as it.
 #
 # --dev: creates (if missing; OWNED BY mwf_migrator, deployed as it — work-k5fk.10.1) mwf_target_dev, mwf_target_test, mwf_target_e2e and
 #   mwf_target_shadow — the target branch's development databases
@@ -182,7 +182,8 @@ baseline)
 
 cutover)
   # --as-migrator: the whole path runs as the NON-superuser owner mwf_migrator
-  # (it holds mwf_job WITH INHERIT FALSE, SET TRUE, as production's owner does):
+  # (it holds mwf_job — the old history's definer owner — and mwf_definer — the baseline's, work-k5fk.10.4 —
+  # WITH INHERIT FALSE, SET TRUE, as production's owner does):
   # old history deploy, drop-old-objects.sql, baseline deploy. Only the vector
   # extension is pre-created by the superuser (an untrusted extension; in
   # production it already exists), so the old migration's CREATE EXTENSION IF

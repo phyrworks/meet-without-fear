@@ -161,7 +161,7 @@ export interface CoParticipantPresence {
  * context builder, as one statement returning instants only (never content).
  * TS-16 NOTE: under owner-only RLS on conversation_read_state,
  * user_preferences and message this must become a SECURITY DEFINER function
- * (owned by mwf_job, identity-bound), as the v_participant note in the
+ * (owned by mwf_definer, identity-bound), as the v_participant note in the
  * trailer says; its result shape is already that function's.
  */
 export async function getCoParticipantPresence(co: Seat): Promise<CoParticipantPresence> {

@@ -39,7 +39,8 @@ describeTarget('the reconciler reads through the job, not the triggering request
       stage: 'FEEL_HEARD_B',
       runId: `ts10_reader_${process.pid}`,
     });
-    await sql(`REVOKE SELECT ON ai_memory, reconciler_result, reconciler_guidance FROM mwf_app`);
+    // From app_access, the capability that holds mwf_app's grants (work-k5fk.10.4); per database, so this clone only.
+    await sql(`REVOKE SELECT ON ai_memory, reconciler_result, reconciler_guidance FROM app_access`);
   });
   afterAll(async () => {
     if (harness) await harness.teardown();

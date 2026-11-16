@@ -18,9 +18,9 @@
 -- A true rolsuper on any other row means FORCE ROW LEVEL SECURITY does not
 -- bind that role: stop and fix the role before W8. The last query returns
 -- the offending rows only, so an empty result is the pass condition.
-SELECT rolname, rolsuper, rolbypassrls FROM pg_roles WHERE rolname LIKE 'mwf_%' ORDER BY rolname;
+SELECT rolname, rolsuper, rolbypassrls FROM pg_roles WHERE rolname LIKE 'mwf_%' OR rolname LIKE '%\_access' ORDER BY rolname;
 
 SELECT rolname AS d0_violation, rolsuper, rolbypassrls
 FROM pg_roles
-WHERE rolname LIKE 'mwf_%' AND rolname <> 'mwf_user' AND (rolsuper OR rolbypassrls)
+WHERE (rolname LIKE 'mwf_%' OR rolname LIKE '%\_access') AND rolname <> 'mwf_user' AND (rolsuper OR rolbypassrls)
 ORDER BY rolname;

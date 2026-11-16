@@ -128,7 +128,7 @@ describeTarget('session archive on the target, as mwf_app', () => {
     expect(await status(ids.session)).toBe('CREATED');
   });
 
-  it('a job login cannot archive for a user, even a current participant (the owner role is refused)', async () => {
+  it('a job login cannot archive for a user, even a current participant (no EXECUTE since mwf_definer owns it)', async () => {
     let got = 'ok';
     try {
       await run.as('mwf_job', ada.id, `SELECT app.session_archive($1::uuid)`, [ids.session]);
@@ -136,7 +136,9 @@ describeTarget('session archive on the target, as mwf_app', () => {
       const { code, message } = e as { code?: string; message?: string };
       got = `${code} ${message}`;
     }
-    expect(got).toBe('42501 session_archive is identity-bound: a job or migrator login cannot archive for a user');
+    // work-k5fk.10.4: mwf_job no longer owns the function, so it holds no EXECUTE (the function's own
+    // session_user refusal stays as a second wall, for mwf_migrator).
+    expect(got).toBe('42501 permission denied for function session_archive');
     expect(await status(ids.session)).toBe('CREATED');
   });
 

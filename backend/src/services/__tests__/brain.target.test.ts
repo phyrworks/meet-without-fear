@@ -28,7 +28,7 @@ describeTarget('brain_activity (job) and the dashboard (mwf_ops) on the target',
     run = await openTargetRun('INNER_WORK_LINKED_A', `ts12_brain_${process.pid}`);
     ids = await adaAndBob(run);
     // spec §1.8: brain_activity has no mwf_app grant (the run's stand-in grants everything; take it back)
-    await run.sql(`REVOKE ALL ON brain_activity FROM mwf_app`);
+    await run.sql(`REVOKE ALL ON brain_activity FROM app_access`);
     const pw = encodeURIComponent(process.env.GOLDEN_OPS_PASSWORD ?? 'mwf_ops_dev');
     process.env.OPS_DATABASE_URL = `postgresql://mwf_ops:${pw}@${run.fx.target.host}:${run.fx.target.port}/${run.fx.database}`;
     [{ id: reflectionId }] = await run.sql<{ id: string }>(`SELECT id FROM reflection`);

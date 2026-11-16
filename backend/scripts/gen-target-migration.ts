@@ -14,7 +14,7 @@
  *
  * Output, in order (plan §3, baseline build order):
  *   0  scripts/target-shape/preamble.sql — refuse a non-empty database; the
- *      roles assertion and the SET ROLE mwf_job check; schema app;
+ *      roles assertion and the SET ROLE mwf_definer check; schema app;
  *      app.current_user_id();
  *   1  scripts/target-shape/tables.sql — the domains (uuid7, ciphertext, ts_ms, intensity, email,
  *      milestone_key), the

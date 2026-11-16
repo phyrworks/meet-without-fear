@@ -46,11 +46,12 @@ if (require.main === module) {
       if (failures.length === 0) return;
       console.error('ROLE GUARD PREFLIGHT FAILED — not migrating, not starting the API:');
       for (const f of failures) console.error(`  - ${f}`);
-      if (failures.some(f => /owns objects|member of role/.test(f))) {
+      if (failures.some(f => /owns objects|reaches role/.test(f))) {
         console.error(
-          '  A runtime login owns the schema or is a member of another role. This release needs the\n' +
+          '  A runtime login owns the schema or reaches a role other than its capability. This release needs the\n' +
             '  ownership move of design note §7 row 9c (work-k5fk): the database and every object owned by\n' +
-            '  mwf_migrator, no runtime login a member of any role (REVOKE mwf_job FROM mwf_app), and\n' +
+            '  mwf_migrator, each runtime login a member of its one capability role only (REVOKE mwf_job FROM\n' +
+            '  mwf_app; infra/aws/roles.sql), and\n' +
             '  migrations run as mwf_migrator. Do that cutover first; nothing here switches the check off.',
         );
       }

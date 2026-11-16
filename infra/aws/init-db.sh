@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 # Fresh-cluster initialisation (runs once, from docker-entrypoint-initdb.d).
-# For an existing cluster, apply the Phase 3 roles with infra/aws/roles.sql.
-# mwf_migrator, mwf_job, mwf_ops and mwf_auth are the Phase 3 W1 roles; see
-# roles.sql for what each is for. No mwf_* role is SUPERUSER or BYPASSRLS.
+# For an existing cluster, apply the roles with infra/aws/roles.sql, which
+# says what each role is for. No mwf_* or *_access role is SUPERUSER or
+# BYPASSRLS. work-k5fk.10.4 (design note §6): grants target NOLOGIN capability
+# roles; each runtime login is a member of exactly one (INHERIT, no SET/ADMIN);
+# mwf_definer (NOLOGIN) owns the SECURITY DEFINER functions.
 psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" \
   --set=app_password="$APP_DB_PASSWORD" --set=readonly_password="$READONLY_DB_PASSWORD" \
   --set=migrator_password="$MIGRATOR_DB_PASSWORD" --set=job_password="$JOB_DB_PASSWORD" \
@@ -13,6 +15,30 @@ CREATE ROLE mwf_migrator LOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE P
 CREATE ROLE mwf_job LOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE PASSWORD :'job_password';
 CREATE ROLE mwf_ops LOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE PASSWORD :'ops_password';
 CREATE ROLE mwf_auth LOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE PASSWORD :'auth_password';
+-- Reserved logins (roles.sql): NOLOGIN, no password, until design note §7 row 9b (mwf_ai,
+-- mwf_worker) or the clinician portal (Q18, mwf_clinician) uses them.
+CREATE ROLE mwf_ai NOLOGIN;
+CREATE ROLE mwf_worker NOLOGIN;
+CREATE ROLE mwf_clinician NOLOGIN;
+CREATE ROLE app_access NOLOGIN;
+CREATE ROLE ai_access NOLOGIN;
+CREATE ROLE worker_access NOLOGIN;
+CREATE ROLE ops_access NOLOGIN;
+CREATE ROLE auth_access NOLOGIN;
+CREATE ROLE clinician_access NOLOGIN;
+-- INTERIM: mwf_job's grants until design note §7 row 9b retires mwf_job.
+CREATE ROLE job_access NOLOGIN;
+CREATE ROLE mwf_definer NOLOGIN;
+GRANT app_access TO mwf_app WITH INHERIT TRUE, SET FALSE;
+GRANT ai_access TO mwf_ai WITH INHERIT TRUE, SET FALSE;
+GRANT worker_access TO mwf_worker WITH INHERIT TRUE, SET FALSE;
+GRANT ops_access TO mwf_ops WITH INHERIT TRUE, SET FALSE;
+GRANT auth_access TO mwf_auth WITH INHERIT TRUE, SET FALSE;
+GRANT clinician_access TO mwf_clinician WITH INHERIT TRUE, SET FALSE;
+GRANT job_access TO mwf_job WITH INHERIT TRUE, SET FALSE;
+-- The target baseline hands its definer helpers to mwf_definer (ALTER FUNCTION
+-- ... OWNER TO), which needs SET ROLE mwf_definer; no inheritance.
+GRANT mwf_definer TO mwf_migrator WITH INHERIT FALSE, SET TRUE;
 -- Migrations (run as the database owner, mwf_app, until they move to
 -- mwf_migrator) make mwf_job own the SECURITY DEFINER helpers, which needs
 -- SET ROLE mwf_job. No inheritance: mwf_app gains none of mwf_job's grants.

@@ -109,14 +109,18 @@ integer does not convert implicitly to a smallint domain.
 
 `app.json_schema` lives in schema `app`, not `public`: the app never reads it (it validates with
 zod), so it has no Prisma model and is not one of the 49 tables. It is reference data like
-`milestone`: seeded by the baseline, read-only to every runtime role. **SELECT: `mwf_app` and
-`mwf_job`** — the triggers run with the writer's rights (invoker, as every T5 trigger), so the roles
-whose writes fire them read the schemas; a schema restates the published `shared/` contract, so the
-read is harmless. `mwf_ops` and `mwf_auth` get nothing. The validator functions' EXECUTE
-(`app.jsonb_violation`, `app.jsonb_matches`, `app.jsonb_envelope_violation`) goes to the same two
-roles. **A new writer role (the planned `mwf_ai`, `mwf_worker` of design note §6, row 9a) needs
+`milestone`: seeded by the baseline, read-only to every runtime role. **SELECT: `app_access` and
+`job_access`** (the capabilities of `mwf_app` and `mwf_job`, work-k5fk.10.4) — the triggers run with
+the writer's rights (invoker, as every T5 trigger), so the roles whose writes fire them read the
+schemas; a schema restates the published `shared/` contract, so the read is harmless. `ops_access`
+and `auth_access` get nothing. The validator functions' EXECUTE (`app.jsonb_violation`,
+`app.jsonb_matches`, `app.jsonb_envelope_violation`) goes to the same two capabilities. **A new
+writer capability (`ai_access`, `worker_access`, when design note §7 row 9b gives them writes) needs
 SELECT on `app.json_schema` and EXECUTE on `app.jsonb_violation` and `app.jsonb_envelope_violation`**,
-or its first write of a validated column fails with a permission error from inside the trigger.
+or its first write of a validated column fails with a permission error from inside the trigger. The
+baseline's step 20 (trailer.sql T8, work-k5fk.10.4.1) refuses a migration in which any role may fire
+`t_doc_schema` or `t_jsonb_envelope` (INSERT on the table, or UPDATE of a column the trigger names)
+without those grants, so the omission fails at deploy, not at the first write.
 
 ## 5. Changing a shape
 
