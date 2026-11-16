@@ -14,11 +14,15 @@
  *     RLS policy moot), CREATEROLE, CREATEDB or REPLICATION;
  *   - can SET ROLE to a SUPERUSER / BYPASSRLS role (a member of mwf_user is a
  *     superuser one statement away);
- *   - is a member of ANY role (a pg_auth_members row) outside
- *     `ALLOWED_MEMBERSHIPS` — empty today. That refuses the predefined roles
- *     (pg_write_all_data, pg_read_all_data, pg_execute_server_program, …) and
- *     production's interim `GRANT mwf_job TO mwf_app WITH SET` (roles.sql,
- *     init-db.sh before work-k5fk.10.3) without listing them;
+ *   - reaches, directly or through other roles (pg_auth_members, transitively),
+ *     ANY role but its one capability (`ALLOWED_MEMBERSHIPS`, design note §6
+ *     "Roles — one per kind of actor", work-k5fk.10.4): the capability's own
+ *     memberships count, so a capability made a member of mwf_job, of another
+ *     capability or of a predefined role (pg_write_all_data, pg_read_all_data,
+ *     pg_execute_server_program, …) refuses every login in it; production's
+ *     interim `GRANT mwf_job TO mwf_app WITH SET` (roles.sql, init-db.sh) is
+ *     refused the same way;
+ *   - holds its capability WITH ADMIN OPTION (it could grant it onwards);
  *   - holds CREATE on schema `public` or `app`, or CREATE on the database;
  *   - owns, or can SET ROLE to the owner of, the database (pg_database.datdba)
  *     — even once schema `public` is someone else's (init-db-owner.sh, row 9c),
@@ -34,11 +38,9 @@
  * "Can SET ROLE to" is pg_has_role(…, 'MEMBER'): direct or indirect
  * membership, inherited or not — an injected `SET ROLE` needs no inheritance.
  *
- * ONE temporary allowance: the `job` client's login (mwf_job) still OWNS the
- * SECURITY DEFINER functions in schema `app` (trailer T4), so ownership of
- * exactly those, by the login itself, is tolerated for the `job` role only.
- * It goes when the definers move to the NOLOGIN `mwf_definer` (design note §7
- * row 9a, `roles-capabilities`); delete `JOB_OWNS_DEFINERS` then.
+ * No allowance remains for ownership: since work-k5fk.10.4 the NOLOGIN
+ * mwf_definer owns the SECURITY DEFINER functions, and no runtime login can
+ * SET ROLE to it.
  *
  * Exempt, explicitly (nothing else is):
  *   - migrations and the Prisma CLI: they never construct a runtime client
@@ -56,16 +58,18 @@ import { Client } from 'pg';
 import type { DatabaseRole } from './database-urls';
 import { pgSettingsFromUrl, type PgAdapterFactory } from './prisma-pg';
 
-/** Remove with design note §7 row 9a: mwf_job stops owning the definer helpers. */
-const JOB_OWNS_DEFINERS = true;
-
 /**
- * Each login's allowed role memberships. Empty: no runtime login is a member of
- * anything. Design note §7 row 9a adds exactly one capability role per login
- * here (app → app_access, job → worker_access / ai_access, ops → ops_access,
- * auth → auth_access).
+ * Each client's one capability role (infra/aws/roles.sql; trailer.sql step 20
+ * asserts the same map). The login may reach this role and nothing else.
+ * job → job_access is the interim until design note §7 row 9b moves the job's
+ * call sites onto mwf_ai (ai_access) and mwf_worker (worker_access).
  */
-const ALLOWED_MEMBERSHIPS: Record<DatabaseRole, readonly string[]> = { app: [], job: [], ops: [], auth: [] };
+export const ALLOWED_MEMBERSHIPS: Record<DatabaseRole, readonly string[]> = {
+  app: ['app_access'],
+  job: ['job_access'],
+  ops: ['ops_access'],
+  auth: ['auth_access'],
+};
 
 /** What the guard reads about the login (one row, one json column). */
 export interface RoleFacts {
@@ -78,8 +82,10 @@ export interface RoleFacts {
   createrole: boolean;
   createdb: boolean;
   replication: boolean;
-  /** Roles this login is directly a member of (pg_auth_members rows). */
+  /** Every role this login reaches through pg_auth_members, directly or not (itself excluded). */
   memberships: string[];
+  /** Roles this login holds directly WITH ADMIN OPTION. */
+  adminMemberships: string[];
   /** Superuser / BYPASSRLS roles this login can SET ROLE to (itself excluded). */
   privilegedRoles: string[];
   /** Schemas among public / app the login may CREATE in. */
@@ -91,7 +97,7 @@ export interface RoleFacts {
   /** SET on session_replication_role (superuser, or a SET ON PARAMETER grant). */
   setReplicationRole: boolean;
   /** Objects in public/app owned by this login or a role it can SET ROLE to. */
-  owned: Array<{ object: string; owner: string; definerFunction: boolean; ownedBySelf: boolean }>;
+  owned: Array<{ object: string; owner: string }>;
 }
 
 export const ROLE_GUARD_SQL = `
@@ -99,18 +105,18 @@ WITH me AS (
   SELECT oid, rolname, rolsuper, rolbypassrls, rolcreaterole, rolcreatedb, rolreplication
   FROM pg_catalog.pg_roles WHERE rolname = session_user
 ), obj AS (
-  SELECT 'schema ' || n.nspname AS object, n.nspowner AS owner, false AS definer
+  SELECT 'schema ' || n.nspname AS object, n.nspowner AS owner
   FROM pg_catalog.pg_namespace n WHERE n.nspname IN ('public', 'app')
   UNION ALL
-  SELECT 'relation ' || n.nspname || '.' || c.relname, c.relowner, false
+  SELECT 'relation ' || n.nspname || '.' || c.relname, c.relowner
   FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
   WHERE n.nspname IN ('public', 'app')
   UNION ALL
-  SELECT 'function ' || n.nspname || '.' || p.proname, p.proowner, p.prosecdef AND n.nspname = 'app'
+  SELECT 'function ' || n.nspname || '.' || p.proname, p.proowner
   FROM pg_catalog.pg_proc p JOIN pg_catalog.pg_namespace n ON n.oid = p.pronamespace
   WHERE n.nspname IN ('public', 'app')
   UNION ALL
-  SELECT 'type ' || n.nspname || '.' || t.typname, t.typowner, false
+  SELECT 'type ' || n.nspname || '.' || t.typname, t.typowner
   FROM pg_catalog.pg_type t JOIN pg_catalog.pg_namespace n ON n.oid = t.typnamespace
   WHERE n.nspname IN ('public', 'app')
 )
@@ -123,8 +129,12 @@ SELECT json_build_object(
   'createdb', me.rolcreatedb,
   'replication', me.rolreplication,
   'memberships', ARRAY(
+    SELECT r.rolname::text FROM pg_catalog.pg_roles r
+    WHERE r.oid <> me.oid AND pg_catalog.pg_has_role(me.oid, r.oid, 'MEMBER')
+    ORDER BY 1),
+  'adminMemberships', ARRAY(
     SELECT r.rolname::text FROM pg_catalog.pg_auth_members m JOIN pg_catalog.pg_roles r ON r.oid = m.roleid
-    WHERE m.member = me.oid ORDER BY 1),
+    WHERE m.member = me.oid AND m.admin_option ORDER BY 1),
   'privilegedRoles', ARRAY(
     SELECT r.rolname::text FROM pg_catalog.pg_roles r
     WHERE r.oid <> me.oid AND (r.rolsuper OR r.rolbypassrls) AND pg_catalog.pg_has_role(me.oid, r.oid, 'MEMBER')
@@ -139,8 +149,7 @@ SELECT json_build_object(
     WHERE n.nspname IN ('public', 'app') AND pg_catalog.has_schema_privilege(me.oid, n.oid, 'CREATE')
     ORDER BY 1),
   'owned', coalesce((
-    SELECT json_agg(json_build_object('object', o.object, 'owner', pg_catalog.pg_get_userbyid(o.owner),
-                                      'definerFunction', o.definer, 'ownedBySelf', o.owner = me.oid)
+    SELECT json_agg(json_build_object('object', o.object, 'owner', pg_catalog.pg_get_userbyid(o.owner))
                     ORDER BY o.object)
     FROM obj o WHERE pg_catalog.pg_has_role(me.oid, o.owner, 'MEMBER')), '[]'::json)
 )::text AS facts
@@ -163,13 +172,22 @@ export function roleGuardViolations(facts: RoleFacts, role: DatabaseRole): strin
   if (facts.privilegedRoles.length) {
     out.push(`${who} can SET ROLE to superuser/BYPASSRLS role(s): ${facts.privilegedRoles.join(', ')}`);
   }
-  const memberships = facts.memberships.filter(m => !ALLOWED_MEMBERSHIPS[role].includes(m));
-  if (memberships.length) out.push(`${who} is a member of role(s) ${memberships.join(', ')} (none is allowed)`);
+  const allowed = ALLOWED_MEMBERSHIPS[role];
+  const memberships = facts.memberships.filter(m => !allowed.includes(m));
+  if (memberships.length) {
+    out.push(
+      `${who} reaches role(s) ${memberships.join(', ')} (directly or through another role; ` +
+        `the ${role} login may reach ${allowed.join(', ')} only)`,
+    );
+  }
+  if (facts.adminMemberships.length) {
+    out.push(`${who} holds role(s) ${facts.adminMemberships.join(', ')} WITH ADMIN OPTION`);
+  }
   if (facts.schemaCreate.length) out.push(`${who} may CREATE in schema(s) ${facts.schemaCreate.join(', ')}`);
   if (facts.databaseOwner !== null) out.push(`${who} owns the database (owner ${facts.databaseOwner})`);
   if (facts.databaseCreate) out.push(`${who} may CREATE in the database`);
   if (facts.setReplicationRole) out.push(`${who} may SET session_replication_role (turns triggers off)`);
-  const owned = facts.owned.filter(o => !(JOB_OWNS_DEFINERS && role === 'job' && o.definerFunction && o.ownedBySelf));
+  const { owned } = facts;
   if (owned.length) {
     const shown = owned.slice(0, 5).map(o => `${o.object} (owner ${o.owner})`);
     const more = owned.length > shown.length ? ` and ${owned.length - shown.length} more` : '';
@@ -185,7 +203,8 @@ export class RuntimeRoleRefusedError extends Error {
   ) {
     super(
       `Refusing the ${role} database connection (work-k5fk.10.3): ${violations.join('; ')}. ` +
-        'Runtime clients log in as their least-privilege role (mwf_app, mwf_job, mwf_ops, mwf_auth) on a ' +
+        'Runtime clients log in as their least-privilege login (mwf_app, mwf_job, mwf_ops, mwf_auth), each a member of ' +
+        'its one capability role only (infra/aws/roles.sql), on a ' +
         'database whose objects mwf_migrator owns; set APP_/JOB_/OPS_/AUTH_DATABASE_URL accordingly.',
     );
     this.name = 'RuntimeRoleRefusedError';

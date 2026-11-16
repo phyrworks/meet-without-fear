@@ -192,23 +192,27 @@ describeTarget('mwf_app grants (target)', () => {
     });
   });
 
-  // M5: the complete privilege matrix of mwf_app (and PUBLIC, which it inherits): the run
-  // database, schemas public and app, their tables, columns and routines — each privilege with
-  // WITH GRANT OPTION when grantable — and every default ACL (pg_default_acl, any grantee). Any
-  // grant change shows up in the diff of __snapshots__/app-grants.target.test.ts.snap; update it
+  // M5: the complete privilege matrix of mwf_app's capability app_access (and PUBLIC, which every
+  // role inherits): the run database, schemas public and app, their tables, columns and routines —
+  // each privilege with WITH GRANT OPTION when grantable — and every default ACL (pg_default_acl,
+  // any grantee). Since work-k5fk.10.4 mwf_app holds nothing itself (roles-capabilities.target
+  // pins that); recorded under app_access as a pure re-homing of the mwf_app matrix. Any grant
+  // change shows up in the diff of __snapshots__/app-grants.target.test.ts.snap; update it
   // deliberately (jest -u).
-  it('the mwf_app privilege matrix is exactly the recorded one', async () => {
-    const rows = await run.sql<{ line: string }>(PRIVILEGE_MATRIX, [['mwf_app']]);
+  it('the app_access (mwf_app) privilege matrix is exactly the recorded one', async () => {
+    const rows = await run.sql<{ line: string }>(PRIVILEGE_MATRIX, [['app_access']]);
     expect(rows.map(r => r.line).join('\n')).toMatchSnapshot();
   });
 
   // work-k5fk.7: the same matrix for every other role the baseline grants to, plus who owns each
-  // routine (the definer helpers are mwf_job's). Recorded BEFORE the grants of mwf_job, mwf_ops and
-  // mwf_auth moved from trailer.sql T7 into tables.sql next to each table, so the move is proven a
-  // pure move: this snapshot did not change with it.
-  it('the mwf_job / mwf_ops / mwf_auth / mwf_migrator privilege matrix is exactly the recorded one', async () => {
+  // routine. Recorded BEFORE the grants of mwf_job, mwf_ops and mwf_auth moved from trailer.sql T7
+  // into tables.sql next to each table, so the move is proven a pure move: this snapshot did not
+  // change with it. work-k5fk.10.4 re-homed it: mwf_job's grants are job_access's, except those it
+  // held only as the definers' owner, now mwf_definer's (with the routines it owns); mwf_ops' are
+  // ops_access's, mwf_auth's auth_access's.
+  it('the job_access / ops_access / auth_access / mwf_definer / mwf_migrator privilege matrix is exactly the recorded one', async () => {
     const rows = await run.sql<{ line: string }>(PRIVILEGE_MATRIX, [
-      ['mwf_job', 'mwf_ops', 'mwf_auth', 'mwf_migrator'],
+      ['job_access', 'ops_access', 'auth_access', 'mwf_definer', 'mwf_migrator'],
     ]);
     const owners = await run.sql<{ line: string }>(
       `SELECT 'routine owner ' || p.oid::regprocedure::text || ': ' || pg_get_userbyid(p.proowner) AS line

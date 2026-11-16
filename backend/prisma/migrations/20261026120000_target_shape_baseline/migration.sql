@@ -207,9 +207,10 @@ GRANT EXECUTE ON FUNCTION app.current_user_id() TO app_access, job_access, ops_a
 --    any row, its partner's and strangers' alike. That is the expected gap
 --    until RLS (design note §6, rows 9d–9g) narrows it to rows; grants
 --    narrow commands and columns, never rows.
---  * mwf_job's grants: exactly what the definer helpers and writers it owns
---    read and write — mwf_job is also the job's login role, so these are its
---    direct privileges too. Column lists everywhere a column list exists:
+--  * mwf_job's and mwf_definer's grants: exactly what the job's own writers
+--    and the definer helpers (mwf_definer's since work-k5fk.10.4; mwf_job's
+--    before, when its login held their privileges too) read and write.
+--    Column lists everywhere a column list exists:
 --    SELECT only the id / FK / filter columns a function reads (an UPDATE or
 --    DELETE with a WHERE needs SELECT on what it reads), UPDATE only the
 --    columns a function writes — never a routing column

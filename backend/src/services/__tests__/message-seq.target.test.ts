@@ -151,14 +151,14 @@ describeTarget('message key (conversation_id, seq) (work-k5fk.4)', () => {
       ).toBe('23514');
     });
 
-    it('the helper is SECURITY DEFINER, owned by mwf_job, and no runtime role may EXECUTE it', async () => {
+    it('the helper is SECURITY DEFINER, owned by the NOLOGIN mwf_definer, and no runtime role may EXECUTE it', async () => {
       const [f] = await run.sql<{ definer: boolean; owner: string; acl: string | null }>(
         `SELECT p.prosecdef AS definer, p.proowner::regrole::text AS owner, p.proacl::text AS acl
          FROM pg_proc p WHERE p.oid = 'app.next_message_seq(uuid)'::regprocedure`,
       );
       expect(f.definer).toBe(true);
-      expect(f.owner).toBe('mwf_job');
-      for (const role of ['mwf_app', 'mwf_auth', 'mwf_ops']) {
+      expect(f.owner).toBe('mwf_definer');
+      for (const role of ['mwf_app', 'mwf_job', 'mwf_auth', 'mwf_ops', 'mwf_ai', 'mwf_worker', 'mwf_clinician']) {
         const [{ ok }] = await run.sql<{ ok: boolean }>(
           `SELECT has_function_privilege($1, 'app.next_message_seq(uuid)', 'EXECUTE') AS ok`,
           [role],
@@ -183,9 +183,11 @@ describeTarget('message key (conversation_id, seq) (work-k5fk.4)', () => {
         run
           .sql<{ ok: boolean }>(`SELECT has_column_privilege($1, $2, $3, $4) AS ok`, [role, table, col, p])
           .then(r => r[0].ok);
-      for (const role of ['mwf_app', 'mwf_auth', 'mwf_ops']) {
+      // work-k5fk.10.4: mwf_job held UPDATE (next_seq) only as the definers' owner; it moved with them to mwf_definer.
+      for (const role of ['mwf_app', 'mwf_job', 'mwf_auth', 'mwf_ops', 'mwf_ai', 'mwf_worker', 'mwf_clinician']) {
         expect({ role, next_seq: await priv(role, 'conversation', 'next_seq', 'UPDATE') }).toEqual({ role, next_seq: false });
       }
+      expect(await priv('mwf_definer', 'conversation', 'next_seq', 'UPDATE')).toBe(true);
       for (const role of ['mwf_app', 'mwf_job', 'mwf_auth', 'mwf_ops']) {
         expect({ role, ins: await priv(role, 'message', 'seq', 'INSERT'), upd: await priv(role, 'message', 'seq', 'UPDATE') })
           .toEqual({ role, ins: false, upd: false });
@@ -288,12 +290,15 @@ describeTarget('message key (conversation_id, seq) (work-k5fk.4)', () => {
       expect(
         (await failure(run.as('mwf_app', ids.ada, `UPDATE conversation SET next_seq = 1 WHERE id = $1`, [ids.adaConv]))).code,
       ).toBe('42501');
-      // mwf_job does hold UPDATE (next_seq): it owns app.next_message_seq (every SECURITY DEFINER function is
-      // mwf_job's until §7 row 9a moves them to the NOLOGIN mwf_definer), so the job login is the one exception.
+      // work-k5fk.10.4: mwf_job no longer holds UPDATE (next_seq) — the NOLOGIN mwf_definer owns app.next_message_seq
+      // and holds it alone — so no runtime login can move the counter directly.
       const [{ job }] = await run.sql<{ job: boolean }>(
         `SELECT has_column_privilege('mwf_job', 'conversation', 'next_seq', 'UPDATE') AS job`,
       );
-      expect(job).toBe(true);
+      expect(job).toBe(false);
+      expect(
+        (await failure(run.as('mwf_job', null, `UPDATE conversation SET next_seq = 1 WHERE id = $1`, [ids.adaConv]))).code,
+      ).toBe('42501');
     });
 
     it("nobody changes a written row's seq (t_message_immutable)", async () => {
