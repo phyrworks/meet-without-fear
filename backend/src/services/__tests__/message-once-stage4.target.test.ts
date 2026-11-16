@@ -96,7 +96,8 @@ describeTarget('once-only facilitator lines: a closed dedupe key, no content dig
       `SELECT i.indexrelid::regclass::text AS name FROM pg_index i
         WHERE i.indrelid = 'public.message'::regclass AND i.indisunique ORDER BY 1`,
     );
-    expect(uniques.map(u => u.name)).toEqual(['message_pkey', 'sql_message_once']);
+    // work-k5fk.4: the key (conversation_id, seq) and what the read state pins to, (conversation_id, seq, session_id).
+    expect(uniques.map(u => u.name)).toEqual(['message_conversation_id_seq_session_id_key', 'message_pkey', 'sql_message_once']);
     expect(idx.def).toMatch(
       /ON public\.message USING btree \(conversation_id, dedupe_key\) WHERE \(dedupe_key IS NOT NULL\)/,
     );
@@ -116,7 +117,7 @@ describeTarget('once-only facilitator lines: a closed dedupe key, no content dig
     const own = await asUser(ids.adaUser, () =>
       store.createParticipantMessage({ conversationId: conv.ada, seat: ids.ada, content: 'PROBE_FDC1_TURN' }),
     );
-    const [row] = await run.sql<{ dedupe_key: string | null }>(`SELECT dedupe_key FROM message WHERE id = $1`, [
+    const [row] = await run.sql<{ dedupe_key: string | null }>(`SELECT dedupe_key FROM message WHERE conversation_id || ':' || seq = $1`, [
       own.id,
     ]);
     expect(row).toEqual({ dedupe_key: null });
@@ -155,14 +156,14 @@ describeTarget('once-only facilitator lines: a closed dedupe key, no content dig
 
   it('T-message-immutable refuses an UPDATE of dedupe_key (clearing it would allow a second line)', async () => {
     const [{ id }] = await run.sql<{ id: string }>(
-      `SELECT id FROM message WHERE conversation_id = $1 AND dedupe_key = 'STAGE2_VALIDATED_WAIT'`,
+      `SELECT conversation_id || ':' || seq AS id FROM message WHERE conversation_id = $1 AND dedupe_key = 'STAGE2_VALIDATED_WAIT'`,
       [conv.bob],
     );
-    await expect(run.sql(`UPDATE message SET dedupe_key = NULL WHERE id = $1`, [id])).rejects.toThrow(
+    await expect(run.sql(`UPDATE message SET dedupe_key = NULL WHERE conversation_id || ':' || seq = $1`, [id])).rejects.toThrow(
       /message routing is immutable/,
     );
     await expect(
-      run.sql(`UPDATE message SET dedupe_key = 'STAGE4_HANDOFF_BRIDGE' WHERE id = $1`, [id]),
+      run.sql(`UPDATE message SET dedupe_key = 'STAGE4_HANDOFF_BRIDGE' WHERE conversation_id || ':' || seq = $1`, [id]),
     ).rejects.toThrow(/message routing is immutable/);
     expect(await keyed(conv.bob, 'STAGE2_VALIDATED_WAIT')).toBe(1);
   });

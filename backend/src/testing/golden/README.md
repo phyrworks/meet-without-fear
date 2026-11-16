@@ -370,6 +370,21 @@ user column. The harness carries the change without re-recording:
 
 `allow-lists/participant-key.ts` gives the per-baseline reason for both steps.
 
+### work-k5fk.4, step 7: a message is (conversation_id, seq)
+
+`message.id` is gone: a line is keyed by its conversation and `seq`, numbered by `t_message_seq` from
+`conversation.next_seq`. The API keeps `MessageDTO.id` as the derived `"<conversationId>:<seq>"` and adds `seq`.
+No baseline was re-recorded; `allow-lists/message-key.ts` carries the change, one paragraph per baseline:
+
+| Piece | What it does |
+|---|---|
+| `messageSeqAdded(scenario)` (`addedKeys`, `mustMatch`) | Every MessageDTO (`data.messages.*`, `data.messages.messages.*`) gains `seq` — the one added key; message-seq.target.test asserts it is the number in the id. |
+| `MESSAGE_ID_RE` (`normalize.ts`) | The API id is matched as ONE token before the uuid pattern and takes the message's label; an unlabelled one falls through to the uuid pattern, whose `<conversation:…>:N` never equals a baseline label. |
+| Byte-level labels (`labelTargetRows`) | `<message:N>` is the global rank by `(created_at, xmin, ctid)`, keyed by the API id. The uuidv7 id broke a same-millisecond tie by creation order; with no id, creation order is the inserting transaction then the heap position (messages are append-only, so neither moves in a run). No key of the row reproduces it — `(conversation_id, seq)` and `(seq, conversation_id)` each swapped recorded ties (measured on TOMBSTONE_READY and FEEL_HEARD_B). |
+| Concept views (`concept-views/target-shape.sql`) | `old_concept_message.id` is minted from the key: 20 hex digits of `md5('message:' \|\| conversation_id)` then seq as 12 hex digits, so the labeller's id tie-break orders a conversation's lines by seq; the labeller reads seq back from the last 12 digits to label the API id too. `old_concept_conversation_read_state.last_seen_message_id` is minted from the read state's pair the same way. |
+| Snapshots (`snapshot.ts` `UNSNAPSHOTTED_COLUMNS`) | `conversation.next_seq` is never read: it moves on every message insert, and would read as a conversation UPDATE no baseline recorded. `touch_updated_at` skips the counter's UPDATE, and the trace never sees it (it runs inside the trigger). |
+| Fixtures (`fixture-scenarios/target-shape.ts`) | The writer queues every message and inserts them ordered by instant (ties keep the scenario order), so a fixture's seq order is its created_at order, as the app writes it; the scenario model lists messages by participant and phase. |
+
 ### work-keq6: progress is the milestones map
 
 The progress DTOs dropped `gatesSatisfied` and the hand-built `milestones`

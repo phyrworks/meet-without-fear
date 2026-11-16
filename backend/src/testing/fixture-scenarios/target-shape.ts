@@ -371,16 +371,32 @@ export async function writeTargetShape(
 
   readClock('scenario');
 
+  // work-k5fk.4: a message's seq is its place in insertion order (t_message_seq), and the app inserts a
+  // conversation's lines in time order. The scenario lists them by participant and phase, not by time, so the
+  // writer queues every message and inserts them once, ordered by instant (ties keep the scenario's order),
+  // before it returns: the fixture's seq order is its created_at order, a state the app can reach.
+  const pendingMessages: Array<{ at: Date; n: number; params: unknown[] }> = [];
   const writeMessage = async (forKey: ParticipantKey, m: ScenarioMessage, sourceAttemptId: string | null = null) => {
     const from = messageSender(forKey, m);
     const { role, kind } = roleAndKind(m.role, from !== null);
     const conversationId = conversationOf.get(forKey);
     if (!conversationId) throw new Error(`No conversation for participant "${forKey}"`);
-    await db.query(
-      `INSERT INTO message (conversation_id, sender_user_id, role, kind, content, source_attempt_id, created_at, session_id)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-      [conversationId, from === null ? null : pid(from), role, kind, m.content, sourceAttemptId, t(m.at), sessionId],
-    );
+    const at = t(m.at);
+    pendingMessages.push({
+      at,
+      n: pendingMessages.length,
+      params: [conversationId, from === null ? null : pid(from), role, kind, m.content, sourceAttemptId, at, sessionId],
+    });
+  };
+  const flushMessages = async (): Promise<void> => {
+    pendingMessages.sort((a, b) => a.at.getTime() - b.at.getTime() || a.n - b.n);
+    for (const { params } of pendingMessages.splice(0)) {
+      await db.query(
+        `INSERT INTO message (conversation_id, sender_user_id, role, kind, content, source_attempt_id, created_at, session_id)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+        params,
+      );
+    }
   };
 
   const attemptOf = new Map<ParticipantKey, string>();
@@ -804,6 +820,8 @@ export async function writeTargetShape(
       );
     }
   }
+
+  await flushMessages();
 
   return {
     session: { id: sessionId, status: session.rows[0].status },

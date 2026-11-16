@@ -15,6 +15,7 @@
  */
 
 import { RELATIONSHIP_ID_CONCEPT_RULE, relationshipIdDropped } from './relationship-dropped';
+import { messageSeqAdded } from './message-key';
 import type { KnownLeak } from '../privacy';
 import {
   authorAnalysisClosed,
@@ -51,6 +52,7 @@ export const DECLINED_OFFER_NO_TRACE_ALLOW: AllowList = {
   scenario: 'declined-offer-no-trace',
   rules: [
     relationshipIdDropped('declined-offer-no-trace'),
+    messageSeqAdded('declined-offer-no-trace'),
     RELATIONSHIP_ID_CONCEPT_RULE,
     ...TARGET_TOPIC_FRAME_RULES,
     ...TARGET_TOPIC_FRAME_INITIAL_RULES,
@@ -79,6 +81,7 @@ export const DECLINED_OFFER_NO_TRACE_BYTE_TARGET_ALLOW: AllowList = {
   scenario: 'declined-offer-no-trace',
   rules: [
     relationshipIdDropped('declined-offer-no-trace'),
+    messageSeqAdded('declined-offer-no-trace'),
     ...TARGET_TOPIC_FRAME_RULES,
     ...bodyRules(false),
     byteLabelShift(['steps.15.body.data.records.0.id', 'steps.47.body.data.records.0.id'], 'consent'),

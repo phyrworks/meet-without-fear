@@ -246,7 +246,7 @@ describeTarget('Stage 2 realtime payloads (I1): what each participant receives',
     // shared-context-viewed (work-2doq) needs the frame Ada was shown: the
     // SHARED_CONTEXT Bob's accepted offer delivered to her (previous test).
     const sid = harness.sessionId;
-    const [frame] = await rows<{ id: string }>(`SELECT id FROM message WHERE kind = 'SHARED_CONTEXT'`);
+    const [frame] = await rows<{ id: string }>(`SELECT conversation_id || ':' || seq AS id FROM message WHERE kind = 'SHARED_CONTEXT'`);
     expect(frame).toBeDefined();
     for (const [path, event, body] of [
       ['viewed', 'partner.session_viewed', {}],

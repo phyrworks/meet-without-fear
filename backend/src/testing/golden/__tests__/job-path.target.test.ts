@@ -34,7 +34,7 @@ describeTarget('job path on the target, as mwf_job with identity binding on', ()
     withClient(harness.fixture.target, async c => (await c.query<T>(sql, params)).rows, harness.fixture.database);
   const counts = () =>
     rows<{ email: string; n: number }>(
-      `SELECT u.email, count(m.id)::int AS n FROM conversation c
+      `SELECT u.email, count(m.seq)::int AS n FROM conversation c
        JOIN "user" u ON u.id = c.user_id
        LEFT JOIN message m ON m.conversation_id = c.id GROUP BY u.email ORDER BY u.email`,
     );
@@ -61,7 +61,7 @@ describeTarget('job path on the target, as mwf_job with identity binding on', ()
       /permission denied/,
     );
     await expect(getJobPrisma().$queryRaw`SELECT * FROM message LIMIT 1`).rejects.toThrow(/permission denied/);
-    const ok = await getJobPrisma().$queryRaw<Array<{ n: number }>>`SELECT count(id)::int AS n FROM message
+    const ok = await getJobPrisma().$queryRaw<Array<{ n: number }>>`SELECT count(seq)::int AS n FROM message
       WHERE role IS NOT NULL AND content IS NOT NULL AND (sender_user_id IS NULL OR sender_user_id IS NOT NULL)`;
     expect(ok[0].n).toBeGreaterThan(0);
   });
@@ -139,7 +139,7 @@ describeTarget('job path on the target, as mwf_job with identity binding on', ()
     }>(
       `SELECT m.role::text AS role, m.kind::text AS kind, u.email AS sender, m.content, m.dedupe_key::text AS key
        FROM message m LEFT JOIN "user" u ON u.id = m.sender_user_id
-       ORDER BY m.created_at DESC, m.id DESC LIMIT 2`,
+       ORDER BY m.created_at DESC, m.seq DESC LIMIT 2`,
     );
     expect(written.map(w => [w.role, w.kind, w.sender])).toEqual([
       ['AI', 'CHAT', null],

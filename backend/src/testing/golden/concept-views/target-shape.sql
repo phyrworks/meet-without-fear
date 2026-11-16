@@ -21,11 +21,18 @@
 --   * `need.confirmed` is `confirmed_at IS NOT NULL` (the old shape has only
 --     the boolean; current-shape.sql's comment names this projection).
 --
--- One minted id: a participant has no id of its own since work-k5fk.3 (its key
+-- Two minted ids: a participant has no id of its own since work-k5fk.3 (its key
 -- is (session_id, user_id)), so the views derive the concept's participant id
 -- as md5('participant:' || session_id || ':' || user_id)::uuid wherever a row
--- names one — current-shape.sql's own formula for its keyless participant rows. Every other id is the
--- row's own. The normaliser labels them from their natural keys either way.
+-- names one — current-shape.sql's own formula for its keyless participant rows.
+-- A message has none since work-k5fk.4 (its key is (conversation_id, seq)): the
+-- views derive its concept id as the first 20 hex digits of
+-- md5('message:' || conversation_id) followed by seq as 12 hex digits — a uuid
+-- that sorts by seq within a conversation, as the uuidv7 id sorted by creation,
+-- so the normaliser's id tie-break orders a conversation's lines as before; the
+-- normaliser reads seq back from the last 12 digits to label the API's
+-- "<conversation_id>:<seq>" id with the same label. Every other id is the row's
+-- own. The normaliser labels them from their natural keys either way.
 --
 -- `concept_check_*`: the current-shape checks guard states the migration
 -- mapping could not represent. On the target most are enforced by
@@ -116,7 +123,7 @@ FROM participant_milestone pm;
 -- message — spec §1.1 (no updated_at: append-only).
 CREATE VIEW old_concept_message AS
 SELECT
-  m.id,
+  (substr(md5('message:' || m.conversation_id::text), 1, 20) || lpad(to_hex(m.seq), 12, '0'))::uuid AS id,
   m.conversation_id,
   md5('participant:' || m.session_id::text || ':' || m.sender_user_id::text)::uuid AS sender_participant_id,
   m.role::text AS role,
@@ -464,7 +471,8 @@ CREATE VIEW old_concept_conversation_read_state AS
 SELECT
   md5('participant:' || r.session_id::text || ':' || r.user_id::text)::uuid AS participant_id,
   r.last_viewed_at AT TIME ZONE 'UTC' AS last_viewed_at,
-  r.last_seen_message_id,
+  (substr(md5('message:' || r.last_seen_conversation_id::text), 1, 20) || lpad(to_hex(r.last_seen_seq), 12, '0'))::uuid
+    AS last_seen_message_id,
   r.last_viewed_share_tab_at AT TIME ZONE 'UTC' AS last_viewed_share_tab_at,
   r.last_active_at AT TIME ZONE 'UTC' AS last_active_at,
   r.archived_at    AT TIME ZONE 'UTC' AS archived_at,

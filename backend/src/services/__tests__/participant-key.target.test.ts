@@ -340,6 +340,17 @@ describeTarget('participant composite keys (work-k5fk.3, 6a/6b)', () => {
         `INSERT INTO brain_activity (session_id, participant_user_id, activity_type, model) VALUES ($1, $2, 'LLM_CALL', 'test-model')`,
         seat,
       );
+      // work-k5fk.4: a refinement turn naming a need, and a read state naming the seen message by its key.
+      const [line] = await run.sql<{ conversation_id: string; seq: number }>(
+        `INSERT INTO message (conversation_id, session_id, sender_user_id, role, content, refining_need_id)
+         SELECT c.id, $1::uuid, $2::uuid, 'USER', 'a refinement turn', $3::uuid FROM conversation c
+         WHERE c.session_id = $1::uuid AND c.user_id = $2::uuid AND c.kind = 'MAIN' RETURNING conversation_id, seq`,
+        [...seat, shared],
+      );
+      await run.sql(
+        `UPDATE conversation_read_state SET last_seen_conversation_id = $3, last_seen_seq = $4 WHERE session_id = $1 AND user_id = $2`,
+        [...seat, line.conversation_id, line.seq],
+      );
     });
 
     /** The composite keys that carry session_id, apart from those to session itself and the participant self-reference. */
@@ -613,15 +624,19 @@ describeTarget('participant composite keys (work-k5fk.3, 6a/6b)', () => {
     });
 
     it('deleting an attempt a message cites nulls message.source_attempt_id and keeps the line', async () => {
-      const [m] = await run.sql<{ id: string; source_attempt_id: string }>(
-        `SELECT id, source_attempt_id FROM message WHERE source_attempt_id IS NOT NULL AND session_id = $1 LIMIT 1`,
+      const [m] = await run.sql<{ conversation_id: string; seq: number; source_attempt_id: string }>(
+        `SELECT conversation_id, seq, source_attempt_id FROM message WHERE source_attempt_id IS NOT NULL AND session_id = $1 LIMIT 1`,
         [ids.session],
       );
       await inRolledBackTx(async c => {
         // the attempt's other dependants (agreement-free here) cascade; no trigger stands in the way of the FK actions
         await c.query(`DELETE FROM empathy_attempt WHERE id = $1`, [m.source_attempt_id]);
-        const r = await c.query(`SELECT source_attempt_id FROM message WHERE id = $1`, [m.id]);
-        expect(r.rows).toEqual([{ source_attempt_id: null }]);
+        const r = await c.query(`SELECT source_attempt_id, session_id FROM message WHERE conversation_id = $1 AND seq = $2`, [
+          m.conversation_id,
+          m.seq,
+        ]);
+        // work-k5fk.4 (k5fk.21): one key, SET NULL (source_attempt_id): the session stays.
+        expect(r.rows).toEqual([{ source_attempt_id: null, session_id: ids.session }]);
       });
     });
 

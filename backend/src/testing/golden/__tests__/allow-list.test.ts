@@ -103,6 +103,8 @@ describe('compareWithAllowList — empathy-reveal (old ⊆ new, named additions)
     // have, nor its restored session row (work-9klf topic frame); every other
     // rule must match.
     expect(r.unmatchedRules).toEqual([
+      // work-k5fk.4 (message-key.ts): this synthetic baseline reads no conversation, so no MessageDTO gains seq.
+      'addedKeys @ steps.*.body.data.messages.*, steps.*.body.data.messages.messages.*',
       'mayDiffer @ steps.3.body.data.attempt.statusVersion, steps.6.body.data.attempt.statusVersion',
       'replacedEntry @ steps.1.changes',
       'replacedEntry @ steps.1.changes',

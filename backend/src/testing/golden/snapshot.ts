@@ -34,6 +34,16 @@ interface ColumnMeta {
   udtName: string;
 }
 
+/**
+ * Columns no snapshot reads (work-k5fk.4). `conversation.next_seq` is the
+ * message counter: app.next_message_seq advances it inside every message
+ * INSERT, so snapshotting it would turn each written line into a conversation
+ * UPDATE the baselines never recorded. It is a function of the message rows,
+ * which are snapshotted (their seq is the counter's output), and
+ * message-seq.target.test.ts asserts it directly.
+ */
+const UNSNAPSHOTTED_COLUMNS: ReadonlySet<string> = new Set(['conversation.next_seq']);
+
 /** Column metadata for the tables we intend to snapshot. */
 async function columnsFor(target: DbTarget, database: string, tables: string[]): Promise<Map<string, ColumnMeta[]>> {
   return withClient(
@@ -53,6 +63,7 @@ async function columnsFor(target: DbTarget, database: string, tables: string[]):
       );
       const m = new Map<string, ColumnMeta[]>();
       for (const row of r.rows) {
+        if (UNSNAPSHOTTED_COLUMNS.has(`${row.table_name}.${row.column_name}`)) continue;
         const list = m.get(row.table_name) ?? [];
         list.push({ column: row.column_name, dataType: row.data_type, udtName: row.udt_name });
         m.set(row.table_name, list);

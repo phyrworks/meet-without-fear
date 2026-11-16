@@ -6,10 +6,10 @@ column public.ai_memory UPDATE: doc, updated_at (mwf_app)
 column public.consent INSERT: session_id, user_id, requested_by_user_id, need_id, empathy_attempt_id, share_offer_id, review_id, decision, decided_at, created_at, updated_at (mwf_app)
 column public.consent UPDATE: decision, decided_at, revoked_at, updated_at (mwf_app)
 column public.context_share_offer UPDATE: status, suggested_content, shared_content, shared_at, declined_at, offered_at, updated_at (mwf_app)
-column public.conversation INSERT: session_id, user_id, kind, anchor_kind, anchor_proposal_id, status, created_at, updated_at (mwf_app)
+column public.conversation INSERT: session_id, user_id, kind, anchor_kind, anchor_proposal_id, status, next_seq, created_at, updated_at (mwf_app)
 column public.conversation UPDATE: status, resolved_at, updated_at (mwf_app)
-column public.conversation_read_state INSERT: session_id, user_id, last_viewed_at, last_seen_message_id, last_viewed_share_tab_at, last_active_at, created_at, updated_at (mwf_app)
-column public.conversation_read_state UPDATE: last_viewed_at, last_seen_message_id, last_viewed_share_tab_at, last_active_at, updated_at (mwf_app)
+column public.conversation_read_state INSERT: session_id, user_id, last_viewed_at, last_seen_conversation_id, last_seen_seq, last_viewed_share_tab_at, last_active_at, created_at, updated_at (mwf_app)
+column public.conversation_read_state UPDATE: last_viewed_at, last_seen_conversation_id, last_seen_seq, last_viewed_share_tab_at, last_active_at, updated_at (mwf_app)
 column public.draft INSERT: id, session_id, user_id, kind, about_user_id, attempt_id, share_offer_id, invitation_id, content, ready_to_share, version, created_at, updated_at, reopened_at (mwf_app)
 column public.draft UPDATE: content, ready_to_share, version, reopened_at (mwf_app)
 column public.empathy_attempt INSERT: session_id, author_user_id, subject_user_id, round, content, status, status_version, submitted_at, delivery_status, created_at, updated_at (mwf_app)
@@ -151,7 +151,8 @@ column public.consent UPDATE: decision, revoked_at (mwf_job)
 column public.context_share_offer INSERT: attempt_id, result_id, session_id, subject_user_id, iteration, status, offer_message, suggested_content, suggested_reason, offered_at (mwf_job)
 column public.context_share_offer SELECT: id, attempt_id, result_id, session_id, subject_user_id, iteration, status, suggested_content, delivery_status (mwf_job)
 column public.context_share_offer UPDATE: status, delivery_status, delivered_at, delivery_notified_at, seen_notified_at (mwf_job)
-column public.conversation SELECT: id, session_id, user_id, kind (mwf_job)
+column public.conversation SELECT: id, session_id, user_id, kind, next_seq (mwf_job)
+column public.conversation UPDATE: next_seq (mwf_job)
 column public.conversation_read_state SELECT: session_id, user_id (mwf_job)
 column public.draft SELECT: session_id, user_id (mwf_job)
 column public.empathy_attempt INSERT: session_id, author_user_id, subject_user_id, round, supersedes_attempt_id, content, status (mwf_job)
@@ -165,7 +166,7 @@ column public.follow_up_checkin SELECT: follow_up_id, session_id, user_id (mwf_j
 column public.follow_up_note SELECT: session_id, user_id (mwf_job)
 column public.invitation SELECT: session_id, invited_by_user_id (mwf_ops)
 column public.message INSERT: conversation_id, session_id, sender_user_id, role, kind, content, dedupe_key, refining_need_id, source_attempt_id, created_at (mwf_job)
-column public.message SELECT: id, conversation_id, session_id, sender_user_id, role, kind, content, source_attempt_id, created_at (mwf_job)
+column public.message SELECT: conversation_id, seq, session_id, sender_user_id, role, kind, content, source_attempt_id, created_at (mwf_job)
 column public.mood_reading SELECT: session_id, user_id (mwf_job)
 column public.need SELECT: id, session_id, user_id, category, superseded_by_need_id, deleted_at (mwf_job)
 column public.need_disposition SELECT: session_id, user_id (mwf_job)
@@ -238,6 +239,7 @@ routine app.jsonb_violation(jsonb,text,schema_version): EXECUTE (mwf_job)
 routine app.jsonb_violation(jsonb,text,schema_version): EXECUTE (mwf_migrator)
 routine app.need_revoke_share(uuid): EXECUTE (mwf_job)
 routine app.need_share(uuid,text): EXECUTE (mwf_job)
+routine app.next_message_seq(uuid): EXECUTE (mwf_job)
 routine app.partner_user_id(uuid): EXECUTE (mwf_job)
 routine app.resolve_user(identity_provider,text): EXECUTE (mwf_auth)
 routine app.resolve_user(identity_provider,text): EXECUTE (mwf_job)
@@ -246,6 +248,7 @@ routine app.session_set_status(uuid,session_status): EXECUTE (mwf_job)
 routine app.t_agreement_parties(): EXECUTE (mwf_migrator)
 routine app.t_consent_owner(): EXECUTE (mwf_migrator)
 routine app.t_consent_transitions(): EXECUTE (mwf_migrator)
+routine app.t_conversation_seq_start(): EXECUTE (mwf_migrator)
 routine app.t_doc_schema(): EXECUTE (mwf_migrator)
 routine app.t_jsonb_envelope(): EXECUTE (mwf_migrator)
 routine app.t_live_session_pair(): EXECUTE (mwf_job)
@@ -253,6 +256,7 @@ routine app.t_live_session_pair_end(): EXECUTE (mwf_job)
 routine app.t_message_app_delete(): EXECUTE (mwf_migrator)
 routine app.t_message_app_insert(): EXECUTE (mwf_migrator)
 routine app.t_message_immutable(): EXECUTE (mwf_migrator)
+routine app.t_message_seq(): EXECUTE (mwf_job)
 routine app.t_need_share_terminal(): EXECUTE (mwf_migrator)
 routine app.t_participant_added_by(): EXECUTE (mwf_job)
 routine app.t_participant_cardinality(): EXECUTE (mwf_migrator)
@@ -380,6 +384,7 @@ routine owner app.jsonb_schema_violation(jsonb,jsonb,text): mwf_migrator
 routine owner app.jsonb_violation(jsonb,text,schema_version): mwf_migrator
 routine owner app.need_revoke_share(uuid): mwf_job
 routine owner app.need_share(uuid,text): mwf_job
+routine owner app.next_message_seq(uuid): mwf_job
 routine owner app.partner_user_id(uuid): mwf_job
 routine owner app.resolve_user(identity_provider,text): mwf_job
 routine owner app.session_archive(uuid): mwf_job
@@ -387,6 +392,7 @@ routine owner app.session_set_status(uuid,session_status): mwf_job
 routine owner app.t_agreement_parties(): mwf_migrator
 routine owner app.t_consent_owner(): mwf_migrator
 routine owner app.t_consent_transitions(): mwf_migrator
+routine owner app.t_conversation_seq_start(): mwf_migrator
 routine owner app.t_doc_schema(): mwf_migrator
 routine owner app.t_jsonb_envelope(): mwf_migrator
 routine owner app.t_live_session_pair(): mwf_job
@@ -394,6 +400,7 @@ routine owner app.t_live_session_pair_end(): mwf_job
 routine owner app.t_message_app_delete(): mwf_migrator
 routine owner app.t_message_app_insert(): mwf_migrator
 routine owner app.t_message_immutable(): mwf_migrator
+routine owner app.t_message_seq(): mwf_job
 routine owner app.t_need_share_terminal(): mwf_migrator
 routine owner app.t_participant_added_by(): mwf_job
 routine owner app.t_participant_cardinality(): mwf_migrator

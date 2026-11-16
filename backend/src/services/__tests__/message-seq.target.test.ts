@@ -26,7 +26,7 @@
  *     ON DELETE SET NULL of the id column only (work-k5fk.21, .23);
  *   - the API: a MessageDTO's id is "<conversationId>:<seq>" and it carries
  *     seq; POST /viewed takes lastSeenSeq; POST /messages/initial is
- *     idempotent — two concurrent calls on an empty conversation write one
+ *     idempotent (message-seq-initial.target.test.ts) — two concurrent calls on an empty conversation write one
  *     line, seq 1, and both answer it.
  *
  * Requires: npx tsx src/testing/golden/cli.ts build FEEL_HEARD_B (and CREATED)
@@ -288,9 +288,12 @@ describeTarget('message key (conversation_id, seq) (work-k5fk.4)', () => {
       expect(
         (await failure(run.as('mwf_app', ids.ada, `UPDATE conversation SET next_seq = 1 WHERE id = $1`, [ids.adaConv]))).code,
       ).toBe('42501');
-      expect(
-        (await failure(run.as('mwf_job', null, `UPDATE conversation SET next_seq = 1 WHERE id = $1`, [ids.adaConv]))).code,
-      ).toBe('42501');
+      // mwf_job does hold UPDATE (next_seq): it owns app.next_message_seq (every SECURITY DEFINER function is
+      // mwf_job's until §7 row 9a moves them to the NOLOGIN mwf_definer), so the job login is the one exception.
+      const [{ job }] = await run.sql<{ job: boolean }>(
+        `SELECT has_column_privilege('mwf_job', 'conversation', 'next_seq', 'UPDATE') AS job`,
+      );
+      expect(job).toBe(true);
     });
 
     it("nobody changes a written row's seq (t_message_immutable)", async () => {
@@ -414,35 +417,9 @@ describeTarget('message key (conversation_id, seq) (work-k5fk.4)', () => {
       const none = await http(ada, 'post', `/sessions/${ids.session}/viewed`, { lastSeenSeq: seq + 10_000 });
       expect(none.status).toBe(200);
       expect(none.body.data.lastSeenChatItemId).toBeNull();
-      const state = await http(ada, 'get', `/sessions/${ids.session}`);
-      expect(state.body.data.session?.lastSeenChatItemId ?? state.body.data.lastSeenChatItemId).toBeNull();
+      const state = await http(ada, 'get', `/sessions/${ids.session}/state`);
+      expect(state.status).toBe(200);
+      expect(state.body.data.session.lastSeenChatItemId).toBeNull();
     });
-  });
-});
-
-describeTarget('getInitialMessage is idempotent on seq 1 (work-k5fk.4)', () => {
-  let run: TargetRun;
-  afterAll(async () => {
-    if (run) await run.drop();
-  });
-
-  it('two concurrent calls on an empty conversation write one line, seq 1, and both answer it', async () => {
-    run = await openTargetRun('CREATED', `k5fk4_init_${process.pid}`);
-    const [p] = await run.sql<{ session: string; user: string; conv: string; email: string }>(
-      `SELECT c.session_id AS session, c.user_id AS user, c.id AS conv, u.email FROM conversation c JOIN "user" u ON u.id = c.user_id`,
-    );
-    const http = await httpAs();
-    const me = { id: p.user, email: p.email };
-    const [a, b] = await Promise.all([
-      http(me, 'post', `/sessions/${p.session}/messages/initial`),
-      http(me, 'post', `/sessions/${p.session}/messages/initial`),
-    ]);
-    const rows = await run.sql<{ seq: number }>(`SELECT seq FROM message WHERE conversation_id = $1`, [p.conv]);
-    expect(rows).toEqual([{ seq: 1 }]);
-    const answered = [a, b].filter(r => r.status === 200).map(r => r.body.data.message.id);
-    expect(answered.length).toBeGreaterThan(0);
-    for (const id of answered) expect(id).toBe(`${p.conv}:1`);
-    // A later call refuses: the conversation is no longer empty.
-    expect((await http(me, 'post', `/sessions/${p.session}/messages/initial`)).status).toBe(400);
   });
 });
