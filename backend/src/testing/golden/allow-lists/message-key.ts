@@ -45,17 +45,52 @@ export const MESSAGE_DTO_AT = ['steps.*.body.data.messages.*', 'steps.*.body.dat
 
 /** Per baseline: what the key change moves in it, measured on the first target run of this branch. */
 export const MESSAGE_KEY_WHY = {
-  'session-read': '',
-  'empathy-reveal': '',
-  'reflection-never-crosses': '',
-  'unrevealed-attempt-hidden': '',
-  'reveal-all-ready-ada-first': '',
-  'reveal-all-ready-bob-first': '',
-  'needs-hidden-until-shared': '',
-  'choices-hidden-until-shared': '',
-  tombstone: '',
-  'author-sees-status-only': '',
-  'declined-offer-no-trace': '',
+  'session-read':
+    'session-read (FEEL_HEARD_B, reads only): its messages reads (GET /messages for each reader, the page of 5) and ' +
+    'its two session-state reads return 56 MessageDTOs; each gains seq and nothing else — every id keeps its ' +
+    '<message:N> (the same-instant pair of FEEL_HEARD_B ranks in creation order, xmin then ctid), every order and ' +
+    'content is as recorded. The paged message read is still one read of message (traceMapped sameRowsRead).',
+  'empathy-reveal':
+    'empathy-reveal (FEEL_HEARD_B): the two messages reads after the reveal return 27 MessageDTOs, each gaining ' +
+    'seq. The delivered copies keep their pinned entries (deliveredCopyInRead does not name seq); the four messages ' +
+    'Bob writes and the reveal copy are numbered by t_message_seq, which the trace does not see (it runs inside the ' +
+    'INSERT).',
+  'reflection-never-crosses':
+    'reflection-never-crosses (INNER_WORK_LINKED_A): the messages and state reads before and after Ada’s turn ' +
+    'return 44 MessageDTOs, each gaining seq. The probes (no reflection text reaches Bob) are about content and ' +
+    'audience; the conversation is still the audience, by key now.',
+  'unrevealed-attempt-hidden':
+    'unrevealed-attempt-hidden (RECONCILER_SHOWN_B): the messages and state reads at the four phases return 154 ' +
+    'MessageDTOs, each gaining seq; the unread shared-context action (GET /pending-actions) names its message by the ' +
+    'derived id, labelled as before. No attempt, status or reveal value moves.',
+  'reveal-all-ready-ada-first':
+    'reveal-all-ready-ada-first (FEEL_HEARD_B): the messages and state reads after Ada is READY and after the reveal ' +
+    'return 104 MessageDTOs, each gaining seq; the delivered copies are still one per subject conversation ' +
+    '(reveal-checks).',
+  'reveal-all-ready-bob-first':
+    'reveal-all-ready-bob-first (RECONCILER_SHOWN_B): as the Ada-first order, 100 MessageDTOs, each gaining seq; ' +
+    'nothing else moves.',
+  'needs-hidden-until-shared':
+    'needs-hidden-until-shared (NEEDS_CONFIRMED): the messages and state reads once both have shared return 6 ' +
+    'MessageDTOs (the needs_shared lines), each gaining seq. Need labels, evidence and their visibility are unchanged.',
+  'choices-hidden-until-shared':
+    'choices-hidden-until-shared (STAGE4_REDESIGN_PARTNER_INACTIVE): reads no conversation and writes no message ' +
+    'in its recorded steps, so no rule here (a mustMatch rule would have nothing to match); its fixture has no ' +
+    'messages either.',
+  tombstone:
+    'tombstone (TOMBSTONE_READY): the messages and state reads before and after the deletion return 20 MessageDTOs, ' +
+    'each gaining seq; the unread shared-context action names its message by the derived id. Its two same-instant ' +
+    'SHARED_CONTEXT lines (the sender’s copy and the delivered one) keep their creation-order labels (<message:8>, ' +
+    '<message:9>; measured: ordering ties by (conversation_id, seq) swapped them here, by (seq, conversation_id) ' +
+    'FEEL_HEARD_B’s pair). The walk deletes the leaver’s ' +
+    'conversation and its lines by cascade, as before; the template’s labels label the survivors.',
+  'author-sees-status-only':
+    'author-sees-status-only (RECONCILER_SHOWN_B): the author’s messages and state reads return 26 MessageDTOs, ' +
+    'each gaining seq. No status or analysis value moves.',
+  'declined-offer-no-trace':
+    'declined-offer-no-trace (RECONCILER_SHOWN_B): the author’s messages and state reads before and after the ' +
+    'decline return 52 MessageDTOs, each gaining seq on both sides, so "the author’s reads are unchanged by the ' +
+    'decline" still compares the two phases equal.',
 } as const;
 
 export type MessageKeyScenario = keyof typeof MESSAGE_KEY_WHY;
