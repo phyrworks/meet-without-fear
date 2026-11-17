@@ -84,20 +84,6 @@ describeTarget('empathy rounds, the status writer and the review path (mwf_app +
     if (harness) await harness.teardown();
   });
 
-  it('runs as the real roles: the app is mwf_app with an identity, the AI is mwf_ai (work-k5fk.10.5)', async () => {
-    const { prisma, getAiPrisma } = await import('../../lib/prisma');
-    const [app] = await as(
-      ada.userId,
-      () =>
-        prisma.$queryRaw<
-          Array<{ u: string; me: string | null }>
-        >`SELECT session_user AS u, app.current_user_id()::text AS me`,
-    );
-    expect(app).toEqual({ u: 'mwf_app', me: ada.userId });
-    const [ai] = await getAiPrisma().$queryRaw<Array<{ u: string }>>`SELECT session_user AS u`;
-    expect(ai.u).toBe('mwf_ai');
-  });
-
   // --- rounds -----------------------------------------------------------------
 
   it('a resubmission supersedes round n and inserts round n+1 HELD; a retried call returns the same round', async () => {

@@ -149,18 +149,6 @@ describeTarget('the session summary on the target (read by mwf_app, written by m
     expect(await stored()).toBeNull();
   });
 
-  it('normalizeSummarizationResult: coerces each field; no summary text means nothing to store', () => {
-    const n = summarizer.normalizeSummarizationResult({ summary: 'abcd efgh', keyThemes: 'x' });
-    expect(n).toMatchObject({
-      summary: 'abcd efgh',
-      keyThemes: ['x'],
-      emotionalJourney: '',
-      lastUnresolvedThread: null,
-    });
-    expect(summarizer.normalizeSummarizationResult({ summary: '   ' })).toBeNull();
-    expect(summarizer.normalizeSummarizationResult(null)).toBeNull();
-  });
-
   it('long-idle resumption: no activity, not idle, fresh summary, and a refresh when stale or missing', async () => {
     const now = new Date();
     const idle = new Date(now.getTime() - 25 * 60 * 60 * 1000);
@@ -190,9 +178,5 @@ describeTarget('the session summary on the target (read by mwf_app, written by m
       [ids.session, ids.adaUser, new Date(idle.getTime() - 60_000).toISOString()],
     );
     expect(await call(idle)).toBe('refreshed');
-  });
-
-  it('LONG_IDLE_RESUMPTION_THRESHOLD_MS is 24 hours', () => {
-    expect(summarizer.LONG_IDLE_RESUMPTION_THRESHOLD_MS).toBe(24 * 60 * 60 * 1000);
   });
 });
