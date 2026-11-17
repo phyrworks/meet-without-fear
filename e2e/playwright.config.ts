@@ -1,15 +1,17 @@
 import { defineConfig } from '@playwright/test';
 import * as dotenv from 'dotenv';
 import * as path from 'path';
+import { E2E_API_PORT, E2E_WEB_PORT, E2E_API_URL, E2E_API_URL_IP, E2E_WEB_URL, applyE2EPortEnv } from './e2e-ports';
 
 // Load test environment variables
 dotenv.config({ path: path.resolve(__dirname, '.env.test') });
+applyE2EPortEnv();
 
 // Shared web server configurations
 const webServers = (fixtureId: string) => [
   {
     command: 'npm run dev:api',
-    url: 'http://localhost:3000/health',
+    url: `${E2E_API_URL}/health`,
     reuseExistingServer: false,
     cwd: '..',
     timeout: 60000,
@@ -20,6 +22,8 @@ const webServers = (fixtureId: string) => [
       // (backend/src/lib/e2e-bypass.ts) and refuses to start otherwise.
       NODE_ENV: 'development',
       MOCK_LLM: 'true',
+      PORT: String(E2E_API_PORT),
+      E2E_WEB_PORT: String(E2E_WEB_PORT),
       E2E_FIXTURE_ID: fixtureId,
     },
   },
@@ -29,8 +33,8 @@ const webServers = (fixtureId: string) => [
     // on slower hardware (CI, EC2), producing intermittent "blank page"
     // failures even after the dev server reports ready. Production-mode is
     // deterministic — single bundle, single network round-trip, then mounts.
-    command: 'cd ../mobile && EXPO_PUBLIC_E2E_MODE=true EXPO_PUBLIC_API_URL=http://localhost:3000 npx expo start --web --port 8082 --no-dev',
-    url: 'http://localhost:8082',
+    command: `cd ../mobile && EXPO_PUBLIC_E2E_MODE=true EXPO_PUBLIC_API_URL=${E2E_API_URL_IP} npx expo start --web --port ${E2E_WEB_PORT} --no-dev --clear`,
+    url: E2E_WEB_URL,
     reuseExistingServer: false,
     timeout: 300000,
   },
@@ -54,7 +58,7 @@ export default defineConfig({
   workers: 1,
   reporter: [['html', { open: 'never' }], ['list']],
   use: {
-    baseURL: 'http://localhost:8082',
+    baseURL: E2E_WEB_URL,
     screenshot: 'on',
     video: 'on',
     viewport: { width: 375, height: 667 },
@@ -66,28 +70,28 @@ export default defineConfig({
       name: 'user-a-journey',
       testMatch: /single-user-journey\.spec\.ts/,
       use: {
-        baseURL: 'http://localhost:8082',
+        baseURL: E2E_WEB_URL,
       },
     },
     {
       name: 'partner-journey',
       testMatch: /partner-journey\.spec\.ts/,
       use: {
-        baseURL: 'http://localhost:8082',
+        baseURL: E2E_WEB_URL,
       },
     },
     {
       name: 'homepage',
       testMatch: /homepage\.spec\.ts/,
       use: {
-        baseURL: 'http://localhost:8082',
+        baseURL: E2E_WEB_URL,
       },
     },
     {
       name: 'share-tab-rendering',
       testMatch: /share-tab-rendering\.spec\.ts/,
       use: {
-        baseURL: 'http://localhost:8082',
+        baseURL: E2E_WEB_URL,
       },
     },
     // Stage 2 Empathy: Reconciler tests
@@ -95,35 +99,35 @@ export default defineConfig({
       name: 'reconciler-share-accepted',
       testMatch: /stage-2-empathy\/reconciler\/gaps-detected-share-accepted\.spec\.ts/,
       use: {
-        baseURL: 'http://localhost:8082',
+        baseURL: E2E_WEB_URL,
       },
     },
     {
       name: 'reconciler-share-declined',
       testMatch: /stage-2-empathy\/reconciler\/gaps-detected-share-declined\.spec\.ts/,
       use: {
-        baseURL: 'http://localhost:8082',
+        baseURL: E2E_WEB_URL,
       },
     },
     {
       name: 'reconciler-share-refined',
       testMatch: /stage-2-empathy\/reconciler\/gaps-detected-share-refined\.spec\.ts/,
       use: {
-        baseURL: 'http://localhost:8082',
+        baseURL: E2E_WEB_URL,
       },
     },
     {
       name: 'reconciler-no-gaps',
       testMatch: /stage-2-empathy\/reconciler\/no-gaps-proceed-directly\.spec\.ts/,
       use: {
-        baseURL: 'http://localhost:8082',
+        baseURL: E2E_WEB_URL,
       },
     },
     {
       name: 'reconciler-no-gaps-screenshot',
       testMatch: /stage-2-empathy\/reconciler\/no-gaps-screenshot\.spec\.ts/,
       use: {
-        baseURL: 'http://localhost:8082',
+        baseURL: E2E_WEB_URL,
       },
     },
     // Stage 3-4: Complete flow test
@@ -131,7 +135,7 @@ export default defineConfig({
       name: 'stage-3-4-complete',
       testMatch: /stage-3-4-complete\.spec\.ts/,
       use: {
-        baseURL: 'http://localhost:8082',
+        baseURL: E2E_WEB_URL,
       },
     },
     // Circuit breaker: Two-browser test
@@ -139,7 +143,7 @@ export default defineConfig({
       name: 'circuit-breaker',
       testMatch: /two-browser-circuit-breaker\.spec\.ts/,
       use: {
-        baseURL: 'http://localhost:8082',
+        baseURL: E2E_WEB_URL,
       },
     },
     // Stage 3: Two-browser need mapping test
@@ -147,7 +151,7 @@ export default defineConfig({
       name: 'two-browser-stage-3',
       testMatch: /two-browser-stage-3\.spec\.ts/,
       use: {
-        baseURL: 'http://localhost:8082',
+        baseURL: E2E_WEB_URL,
       },
     },
     // Stage 4: Two-browser strategic repair test (redesign flow)
@@ -155,7 +159,7 @@ export default defineConfig({
       name: 'two-browser-stage-4-redesign',
       testMatch: /two-browser-stage-4-redesign\.spec\.ts/,
       use: {
-        baseURL: 'http://localhost:8082',
+        baseURL: E2E_WEB_URL,
       },
     },
   ],
