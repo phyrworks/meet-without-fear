@@ -263,4 +263,48 @@ describeTarget('mwf_job retired: mwf_ai, mwf_worker and the definers (target)', 
     );
     expect(rows).toEqual([]);
   });
+
+  // work-k5fk.10.6 (§7 row 9c): row-level security, ENABLED and FORCED on every table.
+  describe('row-level security (9c)', () => {
+    const OTHER = '01a1e6a2-0000-7000-8000-00000000c9c9';
+
+    it('the worker in the Stage 4 closure reads and changes only its scoped session’s proposals', async () => {
+      const { session } = await adaAndBob(run);
+      const [{ id }] = await run.sql<{ id: string }>(
+        `INSERT INTO proposal (session_id, description) VALUES ($1, 'rls probe') RETURNING id::text`,
+        [session],
+      );
+      const read = `SELECT id::text FROM proposal WHERE id = $1`;
+      expect(await run.as('mwf_worker', null, read, [id], session)).toEqual([{ id }]);
+      expect(await run.as('mwf_worker', null, read, [id], OTHER)).toEqual([]);
+      expect(await run.as('mwf_worker', null, read, [id])).toEqual([]);
+      // Outside its scope the row is not there to update: nothing changes (no error, as for a missing row).
+      const convert = `UPDATE proposal SET status = 'CONVERTED_TO_AGREEMENT' WHERE id = $1 RETURNING id`;
+      expect(await run.as('mwf_worker', null, convert, [id], OTHER)).toEqual([]);
+      expect(await run.sql(`SELECT status::text FROM proposal WHERE id = $1`, [id])).toEqual([{ status: 'ACTIVE' }]);
+      expect(await run.as('mwf_worker', null, convert, [id], session)).toEqual([{ id }]);
+    });
+
+    it('the AI cannot read or lock a session other than its scope', async () => {
+      const { session } = await adaAndBob(run);
+      const read = `SELECT id::text FROM session WHERE id = $1`;
+      expect(await run.as('mwf_ai', null, read, [session], session)).toEqual([{ id: session }]);
+      expect(await run.as('mwf_ai', null, read, [session], OTHER)).toEqual([]);
+      expect(await run.as('mwf_ai', null, `SELECT count(*)::int AS n FROM participant`, [], OTHER)).toEqual([{ n: 0 }]);
+    });
+
+    it('the owner mwf_migrator reads and writes no row (FORCE): it runs DDL only', async () => {
+      const [{ n }] = await run.sql<{ n: number }>(`SELECT count(*)::int AS n FROM message`);
+      expect(n).toBeGreaterThan(0);
+      expect(await run.as('mwf_migrator', null, `SELECT count(*)::int AS n FROM message`)).toEqual([{ n: 0 }]);
+      expect(await run.as('mwf_migrator', null, `SELECT count(*)::int AS n FROM "user"`)).toEqual([{ n: 0 }]);
+      expect(await run.as('mwf_migrator', null, `UPDATE session SET topic_frame = NULL RETURNING id`)).toEqual([]);
+    });
+
+    it('the ops dashboard reads every session (SELECT only)', async () => {
+      const [all] = await run.sql<{ n: number }>(`SELECT count(*)::int AS n FROM session`);
+      expect(await run.as('mwf_ops', null, `SELECT count(*)::int AS n FROM session`)).toEqual([all]);
+      await expect(run.as('mwf_ops', null, `DELETE FROM brain_activity`)).rejects.toMatchObject({ code: '42501' });
+    });
+  });
 });
