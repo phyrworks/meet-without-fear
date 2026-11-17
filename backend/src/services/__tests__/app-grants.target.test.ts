@@ -1,9 +1,11 @@
 /**
  * work-k5fk.10.2, against a real target run database (owned by mwf_migrator):
  * the request role `mwf_app` holds only the grants tables.sql gives it. It
- * cannot touch key material or telemetry, cannot UPDATE a message, owns
- * nothing, and holds no TRUNCATE / REFERENCES / TRIGGER anywhere — refused by
- * the database, logged in as mwf_app.
+ * cannot touch key material or telemetry and cannot UPDATE a message —
+ * refused by the database, logged in as mwf_app. That it owns nothing is
+ * trailer.sql step 20's ("object(s) owned by a runtime login or capability");
+ * every privilege it holds, TRUNCATE / REFERENCES / TRIGGER included, is pinned
+ * by the privilege-matrix snapshot below.
  *
  * Requires the target shape and a built target fixture:
  *   npx tsx src/testing/golden/cli.ts build FEEL_HEARD_B
@@ -38,30 +40,6 @@ describeTarget('mwf_app grants (target)', () => {
       return (e as { code?: string }).code ?? String(e);
     }
   }
-
-  it('the run database and every object in it belong to mwf_migrator; mwf_app owns nothing', async () => {
-    const [r] = await run.sql<{ db_owner: string; owners: string[]; app_owns: string }>(
-      `SELECT pg_get_userbyid(d.datdba) AS db_owner,
-              ARRAY(SELECT DISTINCT pg_get_userbyid(c.relowner)::text FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
-                    WHERE n.nspname IN ('public', 'app')) AS owners,
-              (SELECT count(*) FROM pg_class c WHERE c.relowner = 'mwf_app'::regrole)
-                + (SELECT count(*) FROM pg_proc p WHERE p.proowner = 'mwf_app'::regrole)
-                + (SELECT count(*) FROM pg_type t WHERE t.typowner = 'mwf_app'::regrole) AS app_owns
-       FROM pg_database d WHERE d.datname = current_database()`,
-    );
-    expect(r.db_owner).toBe('mwf_migrator');
-    expect(r.owners).toEqual(['mwf_migrator']);
-    expect(Number(r.app_owns)).toBe(0);
-  });
-
-  it.each(NO_APP_ACCESS)('%s: mwf_app holds no privilege at all, table or column', async table => {
-    const [r] = await run.sql<{ any_table: boolean; any_column: boolean }>(
-      `SELECT has_table_privilege('mwf_app', $1, 'SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER') AS any_table,
-              has_any_column_privilege('mwf_app', $1, 'SELECT, INSERT, UPDATE, REFERENCES') AS any_column`,
-      [table],
-    );
-    expect(r).toEqual({ any_table: false, any_column: false });
-  });
 
   it.each(NO_APP_ACCESS)('%s: SELECT / UPDATE / DELETE as mwf_app are refused (42501)', async table => {
     expect(await asApp(`SELECT 1 FROM ${table} LIMIT 1`)).toBe('42501');
@@ -105,13 +83,18 @@ describeTarget('mwf_app grants (target)', () => {
     expect(r.upd).toBe(false);
   });
 
-  it('mwf_app holds no TRUNCATE, REFERENCES or TRIGGER on any table', async () => {
-    const rows = await run.sql<{ relname: string }>(
-      `SELECT c.relname FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
-       WHERE n.nspname = 'public' AND c.relkind = 'r'
-         AND has_table_privilege('mwf_app', c.oid, 'TRUNCATE, REFERENCES, TRIGGER')`,
+  // Moved from roles-capabilities.target (deleted, test audit 2026-11-17: its catalog checks are step 20's):
+  // the one test there of behaviour, that each login's grants reach it through its capability.
+  it('the logins work through their capability: mwf_app reads milestone, mwf_auth calls resolve_user, mwf_clinician reads nothing', async () => {
+    expect((await run.as('mwf_app', null, `SELECT count(*)::int AS n FROM milestone`))[0]).toEqual({ n: 13 });
+    expect((await run.as('mwf_auth', null, `SELECT app.resolve_user('clerk', 'nobody') AS u`))[0]).toEqual({ u: null });
+    const [r] = await run.sql<{ any: boolean }>(
+      `SELECT bool_or(has_table_privilege('mwf_clinician', c.oid, 'SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER')
+                      OR has_any_column_privilege('mwf_clinician', c.oid, 'SELECT, INSERT, UPDATE, REFERENCES')) AS any
+       FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+       WHERE n.nspname IN ('public', 'app') AND c.relkind IN ('r', 'v', 'm', 'p', 'S')`,
     );
-    expect(rows).toEqual([]);
+    expect(r.any).toBe(false);
   });
 
   it('a column outside the grant is refused: mwf_app cannot write user.deleted_at or participant.left_at', async () => {
@@ -236,8 +219,8 @@ describeTarget('mwf_app grants (target)', () => {
   // M5: the complete privilege matrix of mwf_app's capability app_access (and PUBLIC, which every
   // role inherits): the run database, schemas public and app, their tables, columns and routines —
   // each privilege with WITH GRANT OPTION when grantable — and every default ACL (pg_default_acl,
-  // any grantee). Since work-k5fk.10.4 mwf_app holds nothing itself (roles-capabilities.target
-  // pins that); recorded under app_access as a pure re-homing of the mwf_app matrix. Any grant
+  // any grantee). Since work-k5fk.10.4 mwf_app holds nothing itself (trailer.sql step 20
+  // asserts that); recorded under app_access as a pure re-homing of the mwf_app matrix. Any grant
   // change shows up in the diff of __snapshots__/app-grants.target.test.ts.snap; update it
   // deliberately (jest -u).
   it('the app_access (mwf_app) privilege matrix is exactly the recorded one', async () => {
