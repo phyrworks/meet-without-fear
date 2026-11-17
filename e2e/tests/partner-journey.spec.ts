@@ -199,7 +199,7 @@ test.describe('Partner Journey (Two Browser Contexts)', () => {
     // ==========================================
     // EMPATHY_SHARED_A is seeded post-accept (work-2km7): the invitation is ACCEPTED, the
     // session ACTIVE and User B a participant who has not begun. Accept itself is tested
-    // from INVITATION_READY (backend fixture-scenarios/__tests__/topic-frame.test.ts).
+    // from INVITATION_READY (backend fixture-scenarios/__tests__/topic-frame.target.test.ts).
 
     // ==========================================
     // PHASE 3: User B navigates to session and signs compact
