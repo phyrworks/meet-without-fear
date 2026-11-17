@@ -123,13 +123,6 @@ export default defineConfig({
         baseURL: E2E_WEB_URL,
       },
     },
-    {
-      name: 'reconciler-no-gaps-screenshot',
-      testMatch: /stage-2-empathy\/reconciler\/no-gaps-screenshot\.spec\.ts/,
-      use: {
-        baseURL: E2E_WEB_URL,
-      },
-    },
     // Stage 3-4: Complete flow test
     {
       name: 'stage-3-4-complete',
@@ -137,6 +130,16 @@ export default defineConfig({
       use: {
         baseURL: E2E_WEB_URL,
       },
+    },
+    // Stage 3 needs drawer: A's needs listed, B's unshared needs never shown to A.
+    {
+      name: 'needs-tab-visual',
+      testMatch: /needs-tab-visual\.spec\.ts/,
+    },
+    // Transition messages appear right after feel-heard / invitation confirmation.
+    {
+      name: 'transition-message-display',
+      testMatch: /transition-message-display\.spec\.ts/,
     },
     // two-browser-circuit-breaker, -stage-3 and -stage-4-redesign are not
     // projects here: playwright.two-browser.config.ts matches every
