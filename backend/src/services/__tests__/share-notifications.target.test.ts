@@ -20,7 +20,7 @@ const BASE_URL =
 const describeTarget = isTargetShape() ? describe : describe.skip;
 jest.setTimeout(180_000);
 
-describeTarget('share acceptance and the notification path (mwf_app + mwf_job, identity binding on)', () => {
+describeTarget('share acceptance and the notification path (mwf_app + mwf_ai, identity binding on)', () => {
   let harness: Harness;
   const rows = async <T extends Record<string, unknown>>(sql: string, params: unknown[] = []): Promise<T[]> =>
     withClient(harness.fixture.target, async c => (await c.query<T>(sql, params)).rows, harness.fixture.database);

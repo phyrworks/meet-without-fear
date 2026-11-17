@@ -19,7 +19,7 @@ import { adaAndBob, openTargetRun, type TargetRun } from './target-roles';
 const describeTarget = isTargetShape() ? describe : describe.skip;
 jest.setTimeout(180_000);
 
-describeTarget('the session summary on the target (read by mwf_app, written by mwf_job)', () => {
+describeTarget('the session summary on the target (read by mwf_app, written by mwf_ai)', () => {
   let run: TargetRun;
   let ids: Awaited<ReturnType<typeof adaAndBob>>;
   let ctx: typeof import('../../lib/request-context');

@@ -167,21 +167,22 @@ const HEADER = `-- =============================================================
 --    Nothing here forces a commit (no CONCURRENTLY, no ALTER TYPE … ADD VALUE,
 --    no VACUUM, no COMMIT), so nothing breaks the implicit transaction.
 --  * Run as the database owner (or mwf_migrator) with infra/aws/roles.sql
---    applied; the migrating role must be able to SET ROLE mwf_job (it hands
---    the app.* helpers to mwf_job).
---  * The app.* functions treat a caller as the job only when it logged in as
---    mwf_job or mwf_migrator (session_user); a superuser is not the job.
+--    applied; the migrating role must be able to SET ROLE mwf_definer (it hands
+--    the app.* helpers to mwf_definer).
+--  * The app.* definers decide by capability (session_user's app_access,
+--    ai_access, worker_access; the AI and worker arms only within
+--    app.session_scope) or mwf_migrator; mwf_job is retired (work-k5fk.10.5).
 --  * Does NOT enable RLS or create policies (TS-16).
 --  * TS-16 (v_participant): under owner-only RLS a co-participant reads NULL
 --    last_active_at / last_mood / read state and is_tombstone = false through
 --    this security_invoker view, and coalesce(showActivityStatus, true) would
 --    default to true over a user_preferences row it cannot see. The
 --    partner-facing columns need a SECURITY DEFINER table function (owned by
---    mwf_job, identity-bound) returning participant_id + the masked
+--    mwf_definer, identity-bound) returning participant_id + the masked
 --    last_active_at, with no default-true over an invisible row.
 --
 -- SECTIONS
---   0  preamble: empty-database guard, roles, schema app, app.current_user_id()
+--   0  preamble: empty-database guard, roles, schema app, app.current_user_id(), app.session_scope()
 --      (backend/scripts/target-shape/preamble.sql)
 --   1  domains (uuid7, ciphertext, ts_ms, intensity, email, milestone_key, schema_version),
 --      the jsonb validators' reference table app.json_schema and its seed, enums and the 49

@@ -16,7 +16,7 @@
 
 import { Request, Response } from 'express';
 import { logger } from '../lib/logger';
-import { getJobPrisma, prisma } from '../lib/prisma';
+import { prisma } from '../lib/prisma';
 import { successResponse, errorResponse } from '../utils/response';
 import { isSessionCreator } from '../utils/session';
 
@@ -82,8 +82,8 @@ export async function confirmTopicFrame(req: Request, res: Response): Promise<vo
     // the AI transition message remain gated to confirmInvitationMessage,
     // which the inviter triggers when they close the modal.
     if (updated.status === 'CREATED') {
-      // CREATED → INVITED through the sole status writer (TS-12; spec §4)
-      await getJobPrisma().$executeRaw`SELECT app.session_set_status(${sessionId}::uuid, 'INVITED'::session_status)`;
+      // CREATED → INVITED through the sole status writer (TS-12; spec §4), as the inviter, a current participant
+      await prisma.$executeRaw`SELECT app.session_set_status(${sessionId}::uuid, 'INVITED'::session_status)`;
     }
     await prisma.invitation.updateMany({
       where: { sessionId, messageConfirmedAt: null },

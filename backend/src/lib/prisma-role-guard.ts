@@ -2,7 +2,7 @@
  * Startup guard for runtime database connections (work-k5fk.10.3; design note
  * §6 "Authentication per environment", Q15).
  *
- * Every runtime Prisma client (`createPrismaClient`: app, job, ops, auth)
+ * Every runtime Prisma client (`createPrismaClient`: app, ai, worker, ops, auth)
  * refuses its connection — the first query fails, and `server.ts` exits before
  * it listens — unless the login is a plain least-privilege role. The facts are
  * read for `session_user` (the login), not `current_user`: a login whose
@@ -17,11 +17,11 @@
  *   - reaches, directly or through other roles (pg_auth_members, transitively),
  *     ANY role but its one capability (`ALLOWED_MEMBERSHIPS`, design note §6
  *     "Roles — one per kind of actor", work-k5fk.10.4): the capability's own
- *     memberships count, so a capability made a member of mwf_job, of another
- *     capability or of a predefined role (pg_write_all_data, pg_read_all_data,
- *     pg_execute_server_program, …) refuses every login in it; production's
- *     interim `GRANT mwf_job TO mwf_app WITH SET` (roles.sql, init-db.sh) is
- *     refused the same way;
+ *     memberships count, so a capability made a member of another login, of
+ *     another capability or of a predefined role (pg_write_all_data,
+ *     pg_read_all_data, pg_execute_server_program, …) refuses every login in
+ *     it; production's interim `GRANT mwf_job TO mwf_app WITH SET` (before
+ *     work-k5fk.10.5 retired mwf_job) was refused the same way;
  *   - holds its capability WITH ADMIN OPTION (it could grant it onwards);
  *   - can SET ROLE to any role, its capability included (review 9a F1): after
  *     `SET ROLE app_access` current_user is the capability, not the login, so
@@ -65,12 +65,12 @@ import { pgSettingsFromUrl, type PgAdapterFactory } from './prisma-pg';
 /**
  * Each client's one capability role (infra/aws/roles.sql; trailer.sql step 20
  * asserts the same map). The login may reach this role and nothing else.
- * job → job_access is the interim until design note §7 row 9b moves the job's
- * call sites onto mwf_ai (ai_access) and mwf_worker (worker_access).
+ * (mwf_job → job_access was the interim until work-k5fk.10.5 retired both.)
  */
 export const ALLOWED_MEMBERSHIPS: Record<DatabaseRole, readonly string[]> = {
   app: ['app_access'],
-  job: ['job_access'],
+  ai: ['ai_access'],
+  worker: ['worker_access'],
   ops: ['ops_access'],
   auth: ['auth_access'],
 };
@@ -218,9 +218,9 @@ export class RuntimeRoleRefusedError extends Error {
   ) {
     super(
       `Refusing the ${role} database connection (work-k5fk.10.3): ${violations.join('; ')}. ` +
-        'Runtime clients log in as their least-privilege login (mwf_app, mwf_job, mwf_ops, mwf_auth), each a member of ' +
-        'its one capability role only (infra/aws/roles.sql), on a ' +
-        'database whose objects mwf_migrator owns; set APP_/JOB_/OPS_/AUTH_DATABASE_URL accordingly.',
+        'Runtime clients log in as their least-privilege login (mwf_app, mwf_ai, mwf_worker, mwf_ops, mwf_auth), each a ' +
+        'member of its one capability role only (infra/aws/roles.sql), on a ' +
+        'database whose objects mwf_migrator owns; set APP_/AI_/WORKER_/OPS_/AUTH_DATABASE_URL accordingly.',
     );
     this.name = 'RuntimeRoleRefusedError';
   }

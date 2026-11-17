@@ -5,13 +5,13 @@
  * DEFINER functions belong to the NOLOGIN mwf_definer.
  *
  *   - six capabilities from §6 (app_access, ai_access, worker_access, ops_access, auth_access,
- *     clinician_access) plus job_access, the interim home of mwf_job's grants until §7 row 9b
- *     retires mwf_job: NOLOGIN, no attribute, a member of nothing, owner of nothing;
+ *     clinician_access): NOLOGIN, no attribute, a member of nothing, owner of nothing (mwf_job
+ *     and its interim job_access are retired, work-k5fk.10.5: retire-mwf-job.target.test.ts);
  *   - each runtime login is LOGIN, no attribute, owns nothing, holds no privilege of its own
  *     (every grant is its capability's), and reaches exactly one role — its capability —
  *     through pg_auth_members, transitively;
- *   - mwf_clinician, ai_access and worker_access hold nothing yet (9a creates them; 9b gives
- *     ai/worker their grants with the call sites; clinicians wait on the consent model, Q18);
+ *   - clinician_access holds nothing yet (clinicians wait on the consent model, Q18); ai_access and
+ *     worker_access got their grants with their call sites in §7 row 9b;
  *   - mwf_definer is NOLOGIN, owns every SECURITY DEFINER function in public/app, and no
  *     runtime login can SET ROLE to it.
  *
@@ -24,7 +24,7 @@ import { openTargetRun, type TargetRun } from './target-roles';
 const describeTarget = isTargetShape() ? describe : describe.skip;
 jest.setTimeout(120_000);
 
-/** login → its one capability (design note §6; mwf_job → job_access until §7 row 9b). */
+/** login → its one capability (design note §6). */
 export const LOGIN_CAPABILITY = {
   mwf_app: 'app_access',
   mwf_ai: 'ai_access',
@@ -32,14 +32,13 @@ export const LOGIN_CAPABILITY = {
   mwf_ops: 'ops_access',
   mwf_auth: 'auth_access',
   mwf_clinician: 'clinician_access',
-  mwf_job: 'job_access',
 } as const;
 
 const LOGINS = Object.keys(LOGIN_CAPABILITY);
 /** Logins a client connects as today. */
-const ACTIVE = ['mwf_app', 'mwf_ops', 'mwf_auth', 'mwf_job'];
-/** Reserved logins (review 9a F4): NOLOGIN, no password, until a call site (9b) or the portal (Q18) uses them. */
-const RESERVED = ['mwf_ai', 'mwf_worker', 'mwf_clinician'];
+const ACTIVE = ['mwf_app', 'mwf_ai', 'mwf_worker', 'mwf_ops', 'mwf_auth'];
+/** Reserved login (review 9a F4): NOLOGIN, no password, until the portal (Q18) uses it. */
+const RESERVED = ['mwf_clinician'];
 const CAPABILITIES = Object.values(LOGIN_CAPABILITY) as string[];
 /**
  * What the SECURITY DEFINER functions write (trailer T4/T5 bodies; review 9a F3): the definers' write grants,
@@ -47,19 +46,51 @@ const CAPABILITIES = Object.values(LOGIN_CAPABILITY) as string[];
  * what a definer bug or an injection into one can change.
  */
 const DEFINER_WRITES = [
-  'user:INSERT', 'user:UPDATE', 'user_identity:INSERT', 'user_identity:DELETE', 'user_contact:DELETE',
-  'session:UPDATE', 'participant:UPDATE', 'live_session_pair:INSERT', 'live_session_pair:DELETE',
-  'conversation:UPDATE', 'conversation:DELETE', 'message:INSERT',
-  'empathy_attempt:INSERT', 'empathy_attempt:UPDATE', 'empathy_attempt:DELETE',
-  'need:DELETE', 'need_share:INSERT', 'need_share:UPDATE', 'consent:UPDATE',
-  'participant_key:UPDATE', 'user_key:UPDATE',
-  'conversation_read_state:DELETE', 'draft:DELETE', 'ai_memory:DELETE', 'mood_reading:DELETE',
-  'regulation_event:DELETE', 'need_disposition:DELETE', 'follow_up_note:DELETE', 'proposal_choice:DELETE',
-  'follow_up_checkin:DELETE', 'brain_activity:DELETE', 'reflection:DELETE', 'feature_state:DELETE',
-  'user_memory:DELETE', 'user_device:DELETE', 'user_preferences:DELETE', 'reminder:DELETE',
+  'user:INSERT',
+  'user:UPDATE',
+  'user_identity:INSERT',
+  'user_identity:DELETE',
+  'user_contact:DELETE',
+  'session:UPDATE',
+  'participant:UPDATE',
+  'live_session_pair:INSERT',
+  'live_session_pair:DELETE',
+  'conversation:UPDATE',
+  'conversation:DELETE',
+  'message:INSERT',
+  // work-k5fk.10.5: the request path's two-party writes (reach_milestone, session_resume, choices_unshare,
+  // share_offers_expire, share_offers_mark_notified)
+  'participant_milestone:INSERT',
+  'participant_milestone:DELETE',
+  'context_share_offer:UPDATE',
+  'empathy_attempt:INSERT',
+  'empathy_attempt:UPDATE',
+  'empathy_attempt:DELETE',
+  'need:DELETE',
+  'need_share:INSERT',
+  'need_share:UPDATE',
+  'consent:UPDATE',
+  'participant_key:UPDATE',
+  'user_key:UPDATE',
+  'conversation_read_state:DELETE',
+  'draft:DELETE',
+  'ai_memory:DELETE',
+  'mood_reading:DELETE',
+  'regulation_event:DELETE',
+  'need_disposition:DELETE',
+  'follow_up_note:DELETE',
+  'proposal_choice:DELETE',
+  'follow_up_checkin:DELETE',
+  'brain_activity:DELETE',
+  'reflection:DELETE',
+  'feature_state:DELETE',
+  'user_memory:DELETE',
+  'user_device:DELETE',
+  'user_preferences:DELETE',
+  'reminder:DELETE',
 ];
-/** Capabilities that hold no privilege in 9a. */
-const EMPTY = ['ai_access', 'worker_access', 'clinician_access'];
+/** Capabilities that hold no privilege (Q18). */
+const EMPTY = ['clinician_access'];
 
 describeTarget('capability roles and mwf_definer (target)', () => {
   let run: TargetRun;
@@ -132,7 +163,9 @@ describeTarget('capability roles and mwf_definer (target)', () => {
        FROM pg_roles r WHERE r.rolname = ANY($1::text[]) ORDER BY 1`,
       [LOGINS],
     );
-    expect(rows).toEqual([...LOGINS].sort().map(rolname => ({ rolname, attrs: ACTIVE.includes(rolname) ? 'LOGIN' : '' })));
+    expect(rows).toEqual(
+      [...LOGINS].sort().map(rolname => ({ rolname, attrs: ACTIVE.includes(rolname) ? 'LOGIN' : '' })),
+    );
     const pw = await run.sql<{ rolname: string; has: boolean }>(
       `SELECT rolname::text, rolpassword IS NOT NULL AS has FROM pg_authid WHERE rolname = ANY($1::text[]) ORDER BY 1`,
       [RESERVED],
@@ -261,24 +294,25 @@ describeTarget('capability roles and mwf_definer (target)', () => {
     expect(await run.sql(ACL_OF, [LOGINS])).toEqual([]);
   });
 
-  it('ai_access, worker_access and clinician_access hold nothing yet (9b, Q18)', async () => {
+  it('clinician_access holds nothing yet (Q18)', async () => {
     expect(await run.sql(ACL_OF, [EMPTY])).toEqual([]);
   });
 
-  it('app_access, job_access, ops_access and auth_access hold their logins’ grants', async () => {
-    const rows = await run.sql<{ grantee: string }>(ACL_OF, [['app_access', 'job_access', 'ops_access', 'auth_access']]);
+  it('app_access, ai_access, worker_access, ops_access and auth_access hold their logins’ grants', async () => {
+    const rows = await run.sql<{ grantee: string }>(ACL_OF, [
+      ['app_access', 'ai_access', 'worker_access', 'ops_access', 'auth_access'],
+    ]);
     const by = (g: string) => rows.filter(r => r.grantee === g).length;
     expect(by('app_access')).toBeGreaterThan(0);
-    expect(by('job_access')).toBeGreaterThan(0);
+    expect(by('ai_access')).toBeGreaterThan(0);
+    expect(by('worker_access')).toBeGreaterThan(0);
     expect(by('ops_access')).toBeGreaterThan(0);
     expect(by('auth_access')).toBeGreaterThan(0);
   });
 
   it('the logins work through their capability: mwf_app reads milestone, mwf_auth calls resolve_user, mwf_clinician reads nothing', async () => {
     expect((await run.as('mwf_app', null, `SELECT count(*)::int AS n FROM milestone`))[0]).toEqual({ n: 13 });
-    expect(
-      (await run.as('mwf_auth', null, `SELECT app.resolve_user('clerk', 'nobody') AS u`))[0],
-    ).toEqual({ u: null });
+    expect((await run.as('mwf_auth', null, `SELECT app.resolve_user('clerk', 'nobody') AS u`))[0]).toEqual({ u: null });
     const [r] = await run.sql<{ any: boolean }>(
       `SELECT bool_or(has_table_privilege('mwf_clinician', c.oid, 'SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER')
                       OR has_any_column_privilege('mwf_clinician', c.oid, 'SELECT, INSERT, UPDATE, REFERENCES')) AS any

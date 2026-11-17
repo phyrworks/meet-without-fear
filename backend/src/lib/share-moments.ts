@@ -12,7 +12,7 @@
  * that makes the content visible (passed as `client`), with the rows that become
  * readable by the co-participant. It is the single place W13 changes: decrypt
  * each named column under the owner's participant key and write it back under
- * the session key (same plaintext; `mwf_job` is exempt from the immutability
+ * the session key (same plaintext; W13 names the writer exempt from the immutability
  * triggers for exactly this).
  *
  * | moment                  | caller                                        | rows that become session-readable |

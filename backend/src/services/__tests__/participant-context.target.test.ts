@@ -16,7 +16,7 @@
  */
 
 import { withClient } from '../../testing/golden/db';
-import { appUrlFor, jobUrlFor } from '../../testing/golden/driver';
+import { aiUrlFor, appUrlFor, workerUrlFor } from '../../testing/golden/driver';
 import { restoreFixture, type RestoredFixture } from '../../testing/golden/fixtures';
 import { isTargetShape } from '../../testing/golden/shape';
 
@@ -69,10 +69,11 @@ describeTarget('participant resolution and the single context entry point (targe
   beforeAll(async () => {
     fx = await restoreFixture({ baseUrl: BASE_URL, stage: 'FEEL_HEARD_B', runId: `ctx_${process.pid}` });
     process.env.DATABASE_URL = fx.url;
-    // The app logs in as mwf_app, the job as mwf_job, on this run database
-    // (owned by mwf_migrator, work-k5fk.10.1); identity binding on.
+    // The app logs in as mwf_app, the AI as mwf_ai and the worker as mwf_worker, on this run
+    // database (owned by mwf_migrator, work-k5fk.10.1); identity binding on.
     process.env.APP_DATABASE_URL = appUrlFor(fx.target, fx.database);
-    process.env.JOB_DATABASE_URL = jobUrlFor(fx.target, fx.database);
+    process.env.AI_DATABASE_URL = aiUrlFor(fx.target, fx.database);
+    process.env.WORKER_DATABASE_URL = workerUrlFor(fx.target, fx.database);
     process.env.DB_IDENTITY_BINDING = 'on';
 
     const [p] = await sql<{
@@ -186,9 +187,9 @@ describeTarget('participant resolution and the single context entry point (targe
   });
 
   afterAll(async () => {
-    const { prisma, disconnectJobPrisma } = await import('../../lib/prisma');
+    const { prisma, disconnectRolePrismas } = await import('../../lib/prisma');
     await prisma.$disconnect().catch(() => undefined);
-    await disconnectJobPrisma().catch(() => undefined);
+    await disconnectRolePrismas().catch(() => undefined);
     if (fx) await fx.drop();
   });
 

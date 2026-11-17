@@ -8,6 +8,8 @@ status: proposal
 
 # Phase 3 — Database Object Catalogue
 
+> **2026-11 update (work-k5fk.10.5):** `mwf_job` / `job_access` / `JOB_DATABASE_URL` are retired. Its call sites moved to `mwf_ai` (AI, scoped by `app.session_scope`), `mwf_worker` (scheduled jobs, notification delivery, Stage 4 closure) and request-path SECURITY DEFINER functions called by `mwf_app`. Mentions of the job below are historical.
+
 The inventory companion to [Phase 3 — Database Security Model](./phase3-security-model.md). That
 document carries the argument; this one carries the objects. **Nothing here is applied.**
 

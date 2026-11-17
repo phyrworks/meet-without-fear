@@ -27,7 +27,8 @@
 import { getNicknameForSessionPartner } from '../services/contacts';
 import { Request, Response } from 'express';
 import { logger } from '../lib/logger';
-import { getJobPrisma, prisma } from '../lib/prisma';
+import { getWorkerPrisma, prisma } from '../lib/prisma';
+import { withSessionScope } from '../lib/request-context';
 import { PROPOSAL_REVISION_REASONS } from '../services/proposal-revision-reasons';
 import { decryptRawRows } from '../lib/prisma-encryption-middleware';
 import {
@@ -825,20 +826,29 @@ async function pendingAgreementDTO(
 }
 
 /**
- * The job decides (fix round 1, Important 2): every present human has
- * proposed or confirmed the proposal as an agreement AND is WILLING on it
- * (read on the job connection, which sees every choice) — then the job
- * creates the agreement and its parties (T-agreement-parties re-checks at
- * COMMIT).
+ * The worker decides (fix round 1, Important 2; work-k5fk.10.5: the system's cross-participant decision is
+ * mwf_worker's, scoped to the session): every present human has proposed or confirmed the proposal as an
+ * agreement AND is WILLING on it (read on the worker connection, which sees every choice) — then the worker
+ * creates the agreement and its parties (T-agreement-parties re-checks at COMMIT).
  */
-async function agreeIfEveryoneWilling(args: {
+function agreeIfEveryoneWilling(args: {
   sessionId: string;
   proposalId: string;
   actorUserId: string;
   type: AgreementType;
   followUpAt: Date | null;
 }): Promise<string | null> {
-  const job = getJobPrisma();
+  return withSessionScope(args.sessionId, () => agreeIfEveryoneWillingInScope(args));
+}
+
+async function agreeIfEveryoneWillingInScope(args: {
+  sessionId: string;
+  proposalId: string;
+  actorUserId: string;
+  type: AgreementType;
+  followUpAt: Date | null;
+}): Promise<string | null> {
+  const job = getWorkerPrisma();
   const [[proposal], humans, willing, parties] = await Promise.all([
     job.$queryRaw<
       Array<{

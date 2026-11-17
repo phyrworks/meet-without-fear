@@ -91,21 +91,21 @@ Day-to-day: `podman machine start && podman start mwf-postgres`.
 ### Database roles (required before `prisma migrate`)
 
 The roles are cluster-level, so they are created outside Prisma by `infra/aws/roles.sql`: the
-logins `mwf_migrator`, `mwf_app`, `mwf_job`, `mwf_ops`, `mwf_auth`, `mwf_ai`, `mwf_worker` and
+logins `mwf_migrator`, `mwf_app`, `mwf_ops`, `mwf_auth`, `mwf_ai`, `mwf_worker` and
 `mwf_clinician`, and (work-k5fk.10.4, design note §6) the NOLOGIN capability roles every grant
 targets — `app_access`, `ai_access`, `worker_access`, `ops_access`, `auth_access`,
-`clinician_access`, and `job_access` (mwf_job's, until §7 row 9b) — plus the NOLOGIN `mwf_definer`
+and `clinician_access` (`mwf_job` and its `job_access` are retired, work-k5fk.10.5) — plus the NOLOGIN `mwf_definer`
 that owns the `SECURITY DEFINER` helpers in schema `app`. Each login is a member of exactly one
 capability, WITH INHERIT and without SET or ADMIN (`roles.sql` lists them). The migration `target_shape_baseline` refuses to run without
 them, and its step 20 refuses a cluster where a login reaches any other role. Apply the file once
 per container; it is idempotent (a missing `-v` stops it before any change), and the development
-passwords are these fixed literals. `mwf_ai`, `mwf_worker` and `mwf_clinician` are reserved: NOLOGIN
-and no password until §7 row 9b (or the clinician portal) gives them a caller:
+passwords are these fixed literals. `mwf_ai` and `mwf_worker` are LOGIN (work-k5fk.10.5); `mwf_clinician`
+is reserved: NOLOGIN and no password until the clinician portal gives it a caller:
 
 ```bash
 podman exec -i mwf-postgres psql -U mwf_user -d meet_without_fear \
   -v migrator_password=mwf_migrator_dev -v app_password=mwf_app_dev \
-  -v job_password=mwf_job_dev -v ops_password=mwf_ops_dev -v auth_password=mwf_auth_dev \
+  -v ai_password=mwf_ai_dev -v worker_password=mwf_worker_dev -v ops_password=mwf_ops_dev -v auth_password=mwf_auth_dev \
   < infra/aws/roles.sql
 ```
 
@@ -123,18 +123,21 @@ podman exec -i mwf-postgres psql -U mwf_user -d meet_without_fear < backend/scri
 Fresh production clusters get the roles from `infra/aws/init-db.sh`; existing ones (production)
 are an owner-only operator step with `roles.sql`.
 
-**Connecting as the job or the app.** Once the target shape is in (migration `*_target_shape_baseline`),
-the `app.*` SECURITY DEFINER functions treat a caller as *the job* only when it logged in as
-`mwf_job` or `mwf_migrator` (`session_user`) — the superuser `mwf_user` is **not** the job, so
-code or scripts that need the job arm (reveal, `need_share`, anonymising another user) must
-connect as `mwf_job`; request-path arms connect as `mwf_app` and set
-`app.current_user_id` with `SET LOCAL`/`set_config(…, true)`:
+**Connecting as the AI, the worker or the app.** Once the target shape is in (migration `*_target_shape_baseline`),
+the `app.*` SECURITY DEFINER functions check the login (`session_user`) — the superuser `mwf_user` is
+**not** a runtime caller, so code or scripts that act as the AI (reconciler, facilitator lines, summaries,
+brain telemetry) must connect as `mwf_ai` and set the transaction-local `app.session_scope` (the session it
+acts on; the database refuses an AI write outside it), and scheduled jobs, notification delivery and Stage 4
+closure connect as `mwf_worker`. Request-path arms connect as `mwf_app` and set
+`app.current_user_id` with `SET LOCAL`/`set_config(…, true)`; their cross-partner writes go through
+definer functions (`app.deliver_message`, `app.need_share`, …):
 
 ```bash
-JOB_DATABASE_URL="postgresql://mwf_job:mwf_job_dev@127.0.0.1:5432/meet_without_fear"
+AI_DATABASE_URL="postgresql://mwf_ai:mwf_ai_dev@127.0.0.1:5432/meet_without_fear"
+WORKER_DATABASE_URL="postgresql://mwf_worker:mwf_worker_dev@127.0.0.1:5432/meet_without_fear"
 APP_DATABASE_URL="postgresql://mwf_app:mwf_app_dev@127.0.0.1:5432/meet_without_fear"
 # inside the container the local socket trusts every role:
-podman exec -it mwf-postgres psql -U mwf_job -d meet_without_fear
+podman exec -it mwf-postgres psql -U mwf_ai -d meet_without_fear
 ```
 
 ### The golden harness changes one server-wide setting
@@ -255,7 +258,7 @@ owned by anyone else is reported with a WARNING; drop it and re-run `--dev` to r
 baseline migration is edited in place on this branch, a database deployed before a grant change does
 **not** have it either — rebuild after pulling such a change. The API refuses to start on a connection
 that is a superuser, has BYPASSRLS or owns objects (work-k5fk.10.3), so `APP_DATABASE_URL`,
-`JOB_DATABASE_URL` and (work-k5fk.1: every Clerk-signed request resolves its user on it) `AUTH_DATABASE_URL`
+`AI_DATABASE_URL`, `WORKER_DATABASE_URL` (both required, no fallback) and (work-k5fk.1: every Clerk-signed request resolves its user on it) `AUTH_DATABASE_URL`
 must be set. In the branch's `backend/.env`:
 
 ```bash
@@ -263,18 +266,19 @@ DATABASE_URL=postgresql://mwf_user:mwf_password@127.0.0.1:5432/mwf_target_dev
 DIRECT_URL=postgresql://mwf_user:mwf_password@127.0.0.1:5432/mwf_target_dev
 SHADOW_DATABASE_URL=postgresql://mwf_user:mwf_password@127.0.0.1:5432/mwf_target_shadow
 APP_DATABASE_URL=postgresql://mwf_app:mwf_app_dev@127.0.0.1:5432/mwf_target_dev
-JOB_DATABASE_URL=postgresql://mwf_job:mwf_job_dev@127.0.0.1:5432/mwf_target_dev
+AI_DATABASE_URL=postgresql://mwf_ai:mwf_ai_dev@127.0.0.1:5432/mwf_target_dev
+WORKER_DATABASE_URL=postgresql://mwf_worker:mwf_worker_dev@127.0.0.1:5432/mwf_target_dev
 AUTH_DATABASE_URL=postgresql://mwf_auth:mwf_auth_dev@127.0.0.1:5432/mwf_target_dev
 # the test database (for backend tests only; NOT e2e):
 #   postgresql://mwf_user:mwf_password@127.0.0.1:5432/mwf_target_test
 ```
 
 E2E (`npm run e2e`) reads `e2e/.env.test`, which points every URL at `mwf_target_e2e`: the app
-logs in as `mwf_app` (`APP_DATABASE_URL`), the job as `mwf_job`, `migrate deploy` as `mwf_migrator`
+logs in as `mwf_app` (`APP_DATABASE_URL`), the AI as `mwf_ai` and scheduled jobs as `mwf_worker` (`AI_`/`WORKER_DATABASE_URL`), `migrate deploy` as `mwf_migrator`
 (`MIGRATOR_DATABASE_URL`), and `DATABASE_URL` (the admin) is used only to truncate and by the API's
 E2E tooling connection (`routes/e2e.ts` seeding/cleanup and the auth bypass's user upsert, which
 write what no production request may). Identity binding is on (as the golden driver and the replica
-do, so the job-only definer functions and identity-bound reads behave as in production),
+do, so the definer functions and identity-bound reads behave as in production),
 `AUTH_DATABASE_URL` is `mwf_auth` on `mwf_target_e2e` (the startup check opens it), and
 `OPS_DATABASE_URL` is blank so the dev API cannot pick up the `mwf_target_dev` ops URL
 from `backend/.env`. `e2e/global-setup.ts` truncates every application table and refuses to run
@@ -283,7 +287,7 @@ database. A `DATABASE_URL` exported in your shell overrides `.env.test`; the gua
 
 To prove the baseline itself on a throwaway `ts7_*` database (generator check, deploy, gate, a
 second deploy is a no-op, the target fixture, the view smoke as `mwf_app`, the per-caller tests 1–17 and 19–22
-as `mwf_app` / `mwf_job` / `mwf_auth`):
+as `mwf_app` / `mwf_ai` / `mwf_worker` / `mwf_auth`):
 `backend/scripts/target-shape/run-baseline.sh ts7_<name>` (`--as-migrator` deploys as
 `mwf_migrator` into a database it owns; `--cutover` rehearses the production cutover — old shape
 from the `phoenix/base` history → `drop-old-objects.sql` → baseline). A database created on this

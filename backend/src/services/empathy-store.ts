@@ -14,8 +14,9 @@
  *     enforces the transition table and its actors. The author's and the
  *     subject's own moves run on the APP connection under their identity
  *     (DB_IDENTITY_BINDING binds it to the statement); the reconciler's moves and
- *     the reveal run on the JOB connection (`mwf_job`), which is the only
- *     principal the function lets reveal. The function also owns the reveal
+ *     the reveal run on the AI connection (`mwf_ai`, scoped to the session:
+ *     app.session_scope), which is the only principal the function lets reveal
+ *     (work-k5fk.10.5: was mwf_job). The function also owns the reveal
  *     gate and writes the subject's delivered `EMPATHY_STATEMENT` copy.
  *   - The waiting state ("is my partner's attempt held / ready?") comes from
  *     `v_empathy_direction_status` — content-free, both parties may read it —
@@ -23,12 +24,12 @@
  *   - A participant reads an attempt about them only once `revealed_at` is set
  *     (spec §1.2 RLS, status-independent): `revealedAttemptAbout`.
  *
- * Reads run on the app connection (the request's identity); job writes use
- * exactly the columns tables.sql grants mwf_job.
+ * Reads run on the app connection (the request's identity); the AI's writes use
+ * exactly the columns tables.sql grants mwf_ai.
  */
 
 import type { PrismaClient } from '../generated/prisma/client';
-import { getJobPrisma, prisma, type DbClient } from '../lib/prisma';
+import { getAiPrisma, prisma, type DbClient } from '../lib/prisma';
 import { decryptRawRows, encryptColumnValue } from '../lib/prisma-encryption-middleware';
 import type { Seat } from './participant-resolver';
 
@@ -301,11 +302,11 @@ export async function submitAttempt(opts: {
   }
 }
 
-/** Which connection runs a status move: the caller's own (author/subject) or the job's. */
+/** Which connection runs a status move: the caller's own (author/subject) or the AI's (the reconciler, scoped). */
 export type StatusActor = 'participant' | 'job';
 
 function clientFor(actor: StatusActor): PrismaClient {
-  return actor === 'job' ? getJobPrisma() : prisma;
+  return actor === 'job' ? getAiPrisma() : prisma;
 }
 
 /**
@@ -334,7 +335,7 @@ export function resubmitAttempt(attemptId: string, content: string): Promise<str
 }
 
 /**
- * The reconciler's move (job connection), guarded by `status_version`: the
+ * The reconciler's move (the AI connection, scoped to the session), guarded by `status_version`: the
  * move is made only if the attempt is still at the version the caller's
  * analysis started from, so a late result never overwrites a newer decision
  * (spec §7 service rule). Returns false when the attempt moved on.
@@ -343,10 +344,10 @@ export async function jobMoveIfUnchanged(
   attemptId: string,
   expectedVersion: number,
   status: TargetEmpathyStatus,
-  /** More job writes in the same transaction, run only when the move is made (e.g. its chat note). */
+  /** More AI writes in the same transaction, run only when the move is made (e.g. its chat note). */
   alsoInTransaction?: (tx: DbClient) => Promise<void>,
 ): Promise<boolean> {
-  return getJobPrisma().$transaction(async tx => {
+  return getAiPrisma().$transaction(async tx => {
     // Lock order as in app.empathy_set_status: the session row, then the attempt.
     await tx.$queryRaw`SELECT s.id FROM session s
       WHERE s.id = (SELECT a.session_id FROM empathy_attempt a WHERE a.id = ${attemptId}::uuid)
@@ -365,22 +366,17 @@ export async function jobMoveIfUnchanged(
 }
 
 /**
- * The job's delivery stamp on a revealed/validated attempt (trailer T7:
- * delivery_status, delivered_at, seen_at).
+ * The delivery stamp on a revealed/validated attempt (delivery_status, delivered_at, seen_at), through
+ * app.empathy_mark_delivery (work-k5fk.10.5: was the job's UPDATE): on the caller's own connection the
+ * attempt's SUBJECT (stage2.ts, the review), or inside the reconciler's AI transaction (state.ts).
  */
 export async function markAttemptDelivery(
   attemptId: string,
   delivery: 'DELIVERED' | 'SEEN',
   at: Date = new Date(),
-  client: DbClient = getJobPrisma(),
+  client: DbClient = prisma,
 ): Promise<void> {
-  if (delivery === 'DELIVERED') {
-    await client.$executeRaw`UPDATE empathy_attempt SET delivery_status = 'DELIVERED', delivered_at = coalesce(delivered_at, ${at})
-      WHERE id = ${attemptId}::uuid`;
-  } else {
-    await client.$executeRaw`UPDATE empathy_attempt SET delivery_status = 'SEEN', seen_at = coalesce(seen_at, ${at})
-      WHERE id = ${attemptId}::uuid`;
-  }
+  await client.$executeRaw`SELECT app.empathy_mark_delivery(${attemptId}::uuid, ${delivery}::delivery_status, ${at}::timestamptz)`;
 }
 
 // ----------------------------------------------------------------------------

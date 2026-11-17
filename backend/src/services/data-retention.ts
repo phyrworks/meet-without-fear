@@ -19,7 +19,7 @@
  * is a no-op write.
  */
 
-import { getJobPrisma } from '../lib/prisma';
+import { getWorkerPrisma } from '../lib/prisma';
 import { logger } from '../lib/logger';
 
 export const RETENTION_POLICY = {
@@ -45,7 +45,7 @@ const daysAgo = (now: Date, days: number): Date => new Date(now.getTime() - days
  * Phase 2: Delete records older than deleteDays
  */
 export async function enforceDataRetention(now: Date = new Date()): Promise<RetentionResult> {
-  const job = getJobPrisma();
+  const job = getWorkerPrisma();
   const sessionlessCutoff = daysAgo(now, RETENTION_POLICY.sessionlessBlobPurgeDays);
   const purgeDate = daysAgo(now, RETENTION_POLICY.brainActivityPurgeDays);
   const deleteDate = daysAgo(now, RETENTION_POLICY.brainActivityDeleteDays);

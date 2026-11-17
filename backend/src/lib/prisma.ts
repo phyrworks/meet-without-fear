@@ -3,7 +3,14 @@ import { withEncryption } from './prisma-encryption-middleware';
 import { createPrismaPgAdapter, databaseUrlFromEnv } from './prisma-pg';
 import { guardAdapterFactory, readRoleFactsAt } from './prisma-role-guard';
 import type { DatabaseRole } from './database-urls';
-import { bindIdentity, identityBindingEnabled, keepRequestContextAcrossBatching } from './prisma-identity';
+import {
+  bindTransactionSettings,
+  identityBindingEnabled,
+  assertIdentityBindingOn,
+  keepRequestContextAcrossBatching,
+  type BoundSetting,
+} from './prisma-identity';
+import { getRequestContext, sessionScopeOf } from './request-context';
 import { isE2EBypassEnabled } from './e2e-bypass';
 
 /**
@@ -16,7 +23,7 @@ export type DbClient = PrismaClient | Prisma.TransactionClient;
 export interface PrismaClientOptions {
   /** Connect with this URL instead of the role's environment variable. */
   url?: string;
-  /** Which role's URL to read (APP_/JOB_/OPS_/AUTH_DATABASE_URL, else DATABASE_URL). Default `app`. */
+  /** Which role's URL to read (APP_/AI_/WORKER_/OPS_/AUTH_DATABASE_URL; app and auth fall back to DATABASE_URL). Default `app`. */
   role?: DatabaseRole;
   /**
    * Skip the runtime role guard (prisma-role-guard.ts) for this client, with
@@ -27,14 +34,43 @@ export interface PrismaClientOptions {
 }
 
 /**
+ * The transaction-local settings a role's client binds to every statement and transaction
+ * (prisma-identity.ts; design note §6 "Session variables", work-k5fk.10.5), read from the request
+ * context at the moment Prisma hands the statement over:
+ *   - app.current_user_id, with DB_IDENTITY_BINDING=on (every role; off by default until §7 row 9c);
+ *   - app.session_scope, for the ai and worker roles: the scope (`withSessionScope`, else the session
+ *     a seated request is in). The database requires it — t_session_scope and the definers' AI /
+ *     worker arms refuse a NULL one — so an AI write without one fails there, closed;
+ *   - app.request_id, riding along whenever one of the two is set (audit only; a statement that
+ *     binds nothing else is not wrapped for it).
+ */
+export function boundSettingsFor(
+  role: DatabaseRole,
+  identityBinding: boolean,
+): () => ReadonlyArray<readonly [BoundSetting, string]> {
+  const scoped = role === 'ai' || role === 'worker';
+  return () => {
+    const ctx = getRequestContext();
+    const out: Array<readonly [BoundSetting, string]> = [];
+    if (identityBinding && ctx?.userId) out.push(['app.current_user_id', ctx.userId]);
+    const scope = scoped ? sessionScopeOf(ctx) : undefined;
+    if (scope) out.push(['app.session_scope', scope]);
+    if (out.length && ctx?.requestId) out.push(['app.request_id', ctx.requestId]);
+    return out;
+  };
+}
+
+/**
  * A PrismaClient with the encryption extension, over its own pg.Pool.
- * `prisma` below is the `app` one; job/ops/auth clients for W4a/W10 are built
- * with this factory when their code paths move.
+ * `prisma` below is the `app` one; the ai, worker, ops and auth clients are
+ * built with this factory on first use.
  */
 export function createPrismaClient({ url, role = 'app', roleGuardExemption }: PrismaClientOptions = {}): PrismaClient {
   // DB_IDENTITY_BINDING=on binds the request's user id to every statement
-  // (prisma-identity.ts). Off by default: nothing below is wrapped at all.
-  const bindIdentityToStatements = identityBindingEnabled();
+  // (prisma-identity.ts); the ai and worker clients always bind app.session_scope.
+  // Otherwise (the app, ops and auth clients with binding off) nothing below is wrapped at all.
+  const identityBinding = identityBindingEnabled();
+  const bindIdentityToStatements = identityBinding || role === 'ai' || role === 'worker';
   // work-k5fk.10.3: the first connect refuses a privileged, member or object-owning login. The URL
   // is resolved once (on first connect, as before) so the guard and the pool check the same one.
   let resolved: string | undefined = url;
@@ -46,7 +82,9 @@ export function createPrismaClient({ url, role = 'app', roleGuardExemption }: Pr
   const base = new PrismaClient({
     // Prisma 7: connections come from a pg.Pool; pool size and timeouts are
     // mapped from the URL's connection_limit etc. in prisma-pg.ts.
-    adapter: bindIdentityToStatements ? bindIdentity(pgAdapter) : pgAdapter,
+    adapter: bindIdentityToStatements
+      ? bindTransactionSettings(pgAdapter, boundSettingsFor(role, identityBinding))
+      : pgAdapter,
     log: process.env.NODE_ENV === 'development' ? ['query', 'error', 'warn'] : ['error'],
   });
   if (bindIdentityToStatements) keepRequestContextAcrossBatching(base);
@@ -67,17 +105,32 @@ if (process.env.NODE_ENV !== 'production') {
 }
 
 /**
- * The job connection (`JOB_DATABASE_URL`, `mwf_job`; falls back to
- * DATABASE_URL when unset). Created on first use, never at import: a request
- * path that never writes as the job opens no second pool. AI/SYSTEM messages
- * and every delivered message kind are written through it (spec §1.1 message,
- * "Key per row"; TS-9).
+ * The AI connection (`AI_DATABASE_URL`, `mwf_ai`; REQUIRED — it never falls back to DATABASE_URL;
+ * work-k5fk.10.5, design note §6): the reconciler, the facilitator's AI / SYSTEM lines
+ * (message-store createFacilitatorMessage(Once)), the summarizer and classifier (ai_memory) and the
+ * brain telemetry. One session per transaction: every statement carries app.session_scope (the
+ * request's seated session, or `withSessionScope`), and the database refuses an AI write outside it.
+ * Created on first use.
  */
-const globalForJob = globalThis as unknown as { jobPrisma: PrismaClient | undefined };
+const globalForAi = globalThis as unknown as { aiPrisma: PrismaClient | undefined };
 
-export function getJobPrisma(): PrismaClient {
-  if (!globalForJob.jobPrisma) globalForJob.jobPrisma = createPrismaClient({ role: 'job' });
-  return globalForJob.jobPrisma;
+export function getAiPrisma(): PrismaClient {
+  if (!globalForAi.aiPrisma) globalForAi.aiPrisma = createPrismaClient({ role: 'ai' });
+  return globalForAi.aiPrisma;
+}
+
+/**
+ * The worker connection (`WORKER_DATABASE_URL`, `mwf_worker`; REQUIRED — it never falls back;
+ * work-k5fk.10.5): the scheduled jobs (session and data retention, due follow-ups and reminders),
+ * notification delivery (the recipient's push tokens) and the Stage 4 closure's cross-participant
+ * decision (stage4-closure.ts, stage4-store createAgreementsAsJob / closeSessionAsJob), which runs
+ * scoped to its session (`withSessionScope`). Created on first use.
+ */
+const globalForWorker = globalThis as unknown as { workerPrisma: PrismaClient | undefined };
+
+export function getWorkerPrisma(): PrismaClient {
+  if (!globalForWorker.workerPrisma) globalForWorker.workerPrisma = createPrismaClient({ role: 'worker' });
+  return globalForWorker.workerPrisma;
 }
 
 /**
@@ -122,7 +175,9 @@ const globalForTooling = globalThis as unknown as { e2eToolingPrisma: PrismaClie
 
 export function getE2EToolingPrisma(): PrismaClient {
   if (!isE2EBypassEnabled()) {
-    throw new Error('The E2E tooling connection exists only with E2E_AUTH_BYPASS=true and NODE_ENV test, development or e2e');
+    throw new Error(
+      'The E2E tooling connection exists only with E2E_AUTH_BYPASS=true and NODE_ENV test, development or e2e',
+    );
   }
   if (!globalForTooling.e2eToolingPrisma) {
     const url = process.env.DATABASE_URL;
@@ -135,11 +190,14 @@ export function getE2EToolingPrisma(): PrismaClient {
   return globalForTooling.e2eToolingPrisma;
 }
 
-/** Disconnect the job client if one was opened (tests, shutdown). */
-export async function disconnectJobPrisma(): Promise<void> {
-  const client = globalForJob.jobPrisma;
-  globalForJob.jobPrisma = undefined;
-  await client?.$disconnect();
+/** Disconnect the ai, worker, ops, tooling and auth clients that were opened (tests, shutdown). */
+export async function disconnectRolePrismas(): Promise<void> {
+  const ai = globalForAi.aiPrisma;
+  globalForAi.aiPrisma = undefined;
+  await ai?.$disconnect();
+  const worker = globalForWorker.workerPrisma;
+  globalForWorker.workerPrisma = undefined;
+  await worker?.$disconnect();
   const ops = globalForOps.opsPrisma;
   globalForOps.opsPrisma = undefined;
   await ops?.$disconnect();
@@ -152,15 +210,19 @@ export async function disconnectJobPrisma(): Promise<void> {
 }
 
 /**
- * Startup check (work-k5fk.10.3): open the app, job and auth connections, and
+ * Startup check (work-k5fk.10.3): open the app, ai, worker and auth connections, and
  * the ops connection when it is configured, so the role guard
  * (prisma-role-guard.ts) runs before the server listens. Rejects with
- * RuntimeRoleRefusedError on a superuser, BYPASSRLS or object-owning login.
+ * RuntimeRoleRefusedError on a superuser, BYPASSRLS or object-owning login, and
+ * fails when AI_DATABASE_URL or WORKER_DATABASE_URL is unset (they never fall back).
  */
 export async function verifyRuntimeConnections(env: Record<string, string | undefined> = process.env): Promise<void> {
+  // Review F7: no unbound request path (DB_IDENTITY_BINDING=on is required).
+  assertIdentityBindingOn(env);
   await prisma.$queryRaw`SELECT 1`;
-  // Always: an unset JOB_DATABASE_URL falls back to DATABASE_URL, which must be refused if privileged.
-  await getJobPrisma().$queryRaw`SELECT 1`;
+  // Always: request paths write through both (work-k5fk.10.5); unset, they fail closed here.
+  await getAiPrisma().$queryRaw`SELECT 1`;
+  await getWorkerPrisma().$queryRaw`SELECT 1`;
   // Always, for the same reason: every Clerk-signed request resolves its user on it (work-k5fk.1).
   await getAuthPrisma().$queryRaw`SELECT 1`;
   // ops never falls back (it fails closed when unset), so it is checked only when configured.

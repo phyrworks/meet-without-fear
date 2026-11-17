@@ -28,7 +28,7 @@ import path from 'path';
 import dotenv from 'dotenv';
 import { Pool, type PoolConfig } from 'pg';
 import { PrismaPg } from '@prisma/adapter-pg';
-import { databaseUrlFor, DATABASE_URL_VARS, type DatabaseRole } from './database-urls';
+import { databaseUrlFor, DATABASE_URL_VARS, FAIL_CLOSED, type DatabaseRole } from './database-urls';
 
 /** Query parameters that only Prisma's Rust engine understood. */
 const PRISMA_ONLY_PARAMS = [
@@ -108,8 +108,8 @@ export function databaseUrlFromEnv(role: DatabaseRole = 'app'): string {
   const databaseUrl = databaseUrlFor(role);
   if (!databaseUrl) {
     throw new Error(
-      role === 'ops'
-        ? 'OPS_DATABASE_URL is not set (the read-only dashboard role never falls back to DATABASE_URL)'
+      FAIL_CLOSED.has(role)
+        ? `${DATABASE_URL_VARS[role]} is not set (the ${role} role never falls back to DATABASE_URL)`
         : `Neither ${DATABASE_URL_VARS[role]} nor DATABASE_URL is set`,
     );
   }

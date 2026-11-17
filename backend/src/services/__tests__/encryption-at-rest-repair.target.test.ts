@@ -90,7 +90,7 @@ describeTarget('encryption at rest: needs, repair and follow-up columns (FIELD_E
     proven.add('need.evidence');
   });
 
-  it('need_share.shared_text (shareNeeds → app.need_share as mwf_job): sealed; every raw reader of v_need_shared decrypts; the hook runs', async () => {
+  it('need_share.shared_text (shareNeeds → app.need_share as the owner, mwf_app): sealed; every raw reader of v_need_shared decrypts; the hook runs', async () => {
     const [need] = await run.sql<{ id: string }>(
       `INSERT INTO need (label, category, ai_confidence, confirmed_at, user_id, session_id)
        VALUES ('PROBE_TS13_SHARE_LABEL', 'MEANING', 0.9, now(), $1::uuid, $2::uuid) RETURNING id`,
@@ -288,7 +288,7 @@ describeTarget('encryption at rest: needs, repair and follow-up columns (FIELD_E
     proven.add('proposal_choice.note');
   });
 
-  it('agreement.description, session_closure.summary, follow_up.summary (closeStage4, raw INSERTs as mwf_job): sealed, plaintext on read', async () => {
+  it('agreement.description, session_closure.summary, follow_up.summary (closeStage4, raw INSERTs as mwf_worker): sealed, plaintext on read', async () => {
     await asUser(ids.adaUser, () =>
       store.upsertChoice({ proposalId: proposal.individual, seat: ids.ada, decision: 'WILLING' }),
     );

@@ -2,7 +2,7 @@
  * Open Due Tending Entries
  *
  * CLI entrypoint for scheduled check-ins (TS-11: on `follow_up`). Runs as the
- * JOB: both writers use the job connection (JOB_DATABASE_URL = mwf_job) and
+ * WORKER: both writers use the worker connection (WORKER_DATABASE_URL = mwf_worker; work-k5fk.10.5) and
  * find their work by the partial indexes — sql_follow_up_due (SCHEDULED by
  * scheduled_for) and sql_reminder_due (SCHEDULED reminders by remind_at).
  * Invoke via:

@@ -8,8 +8,8 @@
 #     reaches the API impersonate any user);
 #   - Caddy serves the Expo web export and proxies /api, /health, /realtime on
 #     one origin instead of terminating TLS for api.meetwithoutfear.com;
-#   - init-db-owner.sh runs after init-db.sh: mwf_migrator owns the database and no runtime login
-#     is a member of any role (target-shape ownership; production reaches it at work-k5fk row 9c);
+#   - init-db-owner.sh runs after init-db.sh: mwf_migrator owns the database and each runtime login
+#     is a member of its one capability role only (target-shape ownership; production reaches it at work-k5fk row 9c);
 #   - own compose project (mwf-local), volumes, subnet and ports, so nothing
 #     here can meet the production names or the dev container mwf-postgres.
 name: mwf-local
@@ -23,8 +23,8 @@ services:
     volumes:
       - postgres:/var/lib/postgresql
       - ../aws/init-db.sh:/docker-entrypoint-initdb.d/10-mwf.sh:ro
-      # work-k5fk.10.3: target-shape ownership (mwf_migrator owns everything; no runtime login is a
-      # member of any role); production reaches it at the design note row 9c cutover.
+      # work-k5fk.10.3: target-shape ownership (mwf_migrator owns everything; each runtime login is a
+      # member of its one capability role only, work-k5fk.10.4); production reaches it at the design note row 9c cutover.
       - ./init-db-owner.sh:/docker-entrypoint-initdb.d/20-mwf-owner.sh:ro
     # Loopback only, as in production (there: 127.0.0.1:5432 behind SSH).
     ports: ['127.0.0.1:${MWF_LOCAL_DB_PORT:-15433}:5432']

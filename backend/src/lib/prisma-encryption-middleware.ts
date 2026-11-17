@@ -164,7 +164,7 @@ const textArray = (column: string, key: KeyClass): EncryptedField => ({ column, 
 
 const MESSAGE_KEY_RULE =
   "role = 'USER' AND kind = 'CHAT' (the owner's turn) or role IN ('AI','SYSTEM') replying to the owner → participant; " +
-  'every delivered kind (written by mwf_job) → session';
+  'every delivered kind (written by app.deliver_message) → session';
 const AI_MEMORY_KEY_RULE = 'session_id IS NOT NULL → participant; session_id IS NULL (GLOBAL_FACTS) → user';
 const EMPATHY_ATTEMPT_KEY_RULE =
   "revealed_at IS NULL → participant (author); re-encrypted under session at the reveal (lib/share-moments.ts 'empathy-reveal')";

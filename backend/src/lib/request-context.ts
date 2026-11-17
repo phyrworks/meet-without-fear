@@ -26,6 +26,11 @@ export interface RequestContext {
   startTime: number;
   /** E2E fixture ID for this request (from X-E2E-Fixture-ID header) */
   e2eFixtureId?: string;
+  /**
+   * The one session the AI / worker connection acts on (app.session_scope, work-k5fk.10.5), set by
+   * `withSessionScope`. Absent: a seated request's own session (requireSessionAccess) is the scope.
+   */
+  sessionScope?: string;
 }
 
 const asyncLocalStorage = new AsyncLocalStorage<RequestContext>();
@@ -118,4 +123,38 @@ export function updateContext(updates: Partial<Omit<RequestContext, 'requestId' 
  */
 export function generateRequestId(): string {
   return `req-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+/**
+ * The session an AI / worker statement acts on (app.session_scope; design note §6 Q20, work-k5fk.10.5):
+ * an explicit `withSessionScope`, else the session a seated request is in. undefined: no scope — the
+ * database then refuses every AI write of a session row and every scoped definer arm (fail closed).
+ */
+export function sessionScopeOf(context: RequestContext | undefined): string | undefined {
+  if (!context) return undefined;
+  if (context.sessionScope) return context.sessionScope;
+  return context.seated ? context.sessionId : undefined;
+}
+
+export function getSessionScope(): string | undefined {
+  return sessionScopeOf(getRequestContext());
+}
+
+/**
+ * Run `fn` with `sessionId` as the AI / worker connection's app.session_scope (and inside the
+ * current request context otherwise unchanged: its user, request id and turn stay). For work on a
+ * session the request is not seated in (a new session, a retention sweep, a background task), and
+ * wherever the scope must not depend on the route.
+ */
+export function withSessionScope<T>(sessionId: string, fn: () => T): T {
+  const current = getRequestContext();
+  const context: RequestContext = current
+    ? { ...current, sessionScope: sessionId }
+    : {
+        requestId: generateRequestId(),
+        turnId: `${sessionId}-${Date.now()}`,
+        startTime: Date.now(),
+        sessionScope: sessionId,
+      };
+  return asyncLocalStorage.run(context, fn);
 }

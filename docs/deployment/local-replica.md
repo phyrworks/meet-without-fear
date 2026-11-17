@@ -45,7 +45,7 @@ infra/local/reset.sh --yes # down, drop volume mwf_local_postgres, up (fresh bas
 3. Exports the mobile app for web (`expo export --platform web`) with `EXPO_PUBLIC_E2E_MODE=true`
    and `EXPO_PUBLIC_API_URL=http://127.0.0.1:18180`; skipped when the inputs are unchanged.
 4. Starts `db`; `init-db.sh` creates the roles on a fresh volume, then `infra/local/init-db-owner.sh`
-   hands the database and schema `public` to `mwf_migrator` and revokes `mwf_job` from `mwf_app`
+   hands the database and schema `public` to `mwf_migrator` (a fresh volume never has the retired `mwf_job`; step 4 refuses an older one)
    (work-k5fk.10.3). Then the role-guard preflight (`dist/backend/src/scripts/role-guard-preflight.js`
    in a one-off `api` container) checks every runtime role URL and stops before migrating if one is
    a superuser, BYPASSRLS, a member of any role or owns anything. A volume initialised before
@@ -78,9 +78,9 @@ development container `mwf-postgres` or its databases.
 | `E2E_AUTH_BYPASS` / `MOCK_LLM` | forced `false` in `compose.yaml` | `true` |
 | Caddy | TLS for `api.meetwithoutfear.com` on 80/443, plus loopback `:8080` | loopback `:8080` only, also serving the web export |
 | Image architecture | linux/amd64 (CI) | the Mac's native arm64 |
-| Database URLs | `DATABASE_URL` = `mwf_app` | `DATABASE_URL` = `mwf_migrator` (migrations and the E2E tooling connection only); plus `APP_`/`JOB_`/`OPS_`/`AUTH_DATABASE_URL` for `mwf_app`/`mwf_job`/`mwf_ops`/`mwf_auth` and `DB_IDENTITY_BINDING=on` (the target-shape settings) |
+| Database URLs | `DATABASE_URL` = `mwf_app` | `DATABASE_URL` = `mwf_migrator` (migrations and the E2E tooling connection only); plus `APP_`/`AI_`/`WORKER_`/`OPS_`/`AUTH_DATABASE_URL` for `mwf_app`/`mwf_ai`/`mwf_worker`/`mwf_ops`/`mwf_auth` and `DB_IDENTITY_BINDING=on` (the target-shape settings) |
 | Migrations | `mwf_app` (database owner) via `deploy.sh`, after a backup | `mwf_migrator` (database owner), no backup |
-| Ownership | `mwf_app` owns the database and is a member of `mwf_job` | `mwf_migrator` owns everything, `mwf_definer` (NOLOGIN) the SECURITY DEFINER functions; each runtime login is a member of its one capability role only (work-k5fk.10.4) |
+| Ownership | `mwf_app` owns the database | `mwf_migrator` owns everything, `mwf_definer` (NOLOGIN) the SECURITY DEFINER functions; each runtime login is a member of its one capability role only (work-k5fk.10.4) |
 | Ably | real `ABLY_API_KEY` | none by default: `/api/auth/ably-token` returns a mock token request, so the browser's Ably client never connects and realtime partner updates do not arrive; set `MWF_LOCAL_ABLY_API_KEY` before `up.sh` to use a real key |
 | Field encryption | production key | a random development `FIELD_ENCRYPTION_KEY`, generated once into `infra/local/.local/secrets.env` (see below) |
 | Clerk, Bedrock, Resend, Sentry | configured | not configured; a request with neither bypass headers nor a token fails closed with 500 "Authentication not configured" (production: 401) |

@@ -16,7 +16,8 @@ import { getHaikuJson, BrainActivityCallType } from '../lib/bedrock';
 import { logger } from '../lib/logger';
 import { uuidv7 } from '@meet-without-fear/shared';
 import { withHaikuCircuitBreaker } from '../utils/circuit-breaker';
-import { getJobPrisma } from '../lib/prisma';
+import { getAiPrisma } from '../lib/prisma';
+import { withSessionScope } from '../lib/request-context';
 import { encryptColumnValue } from '../lib/prisma-encryption-middleware';
 import { embedSessionContent } from './embedding';
 
@@ -589,34 +590,36 @@ Output only valid JSON.`;
     }
 
     // Save notable facts as the participant's NOTABLE_FACTS document
-    // (ai_memory; spec §1.1 "in practice written by mwf_job" — the job's
-    // INSERT … ON CONFLICT DO UPDATE, as the SUMMARY writer does; TS-12)
+    // (ai_memory; the AI's INSERT … ON CONFLICT DO UPDATE, as the SUMMARY writer does; TS-12;
+    // work-k5fk.10.5: mwf_ai, scoped to the session)
     if (factsToSave && factsToSave.length > 0) {
       try {
-        const job = getJobPrisma();
-        const [participant] = await job.$queryRaw<Array<{ user_id: string }>>`SELECT user_id FROM participant
+        const job = getAiPrisma();
+        await withSessionScope(input.sessionId, async () => {
+          const [participant] = await job.$queryRaw<Array<{ user_id: string }>>`SELECT user_id FROM participant
           WHERE session_id = ${input.sessionId}::uuid AND user_id = ${input.userId}::uuid`;
-        if (participant) {
-          // ai_memory has no Prisma unique (work-k5fk.3): the conflict target is the partial index
-          // sql_ai_memory_one_per_participant.
-          await job.$executeRaw`INSERT INTO ai_memory (session_id, user_id, kind, doc)
+          if (participant) {
+            // ai_memory has no Prisma unique (work-k5fk.3): the conflict target is the partial index
+            // sql_ai_memory_one_per_participant.
+            await job.$executeRaw`INSERT INTO ai_memory (session_id, user_id, kind, doc)
             VALUES (${input.sessionId}::uuid, ${input.userId}::uuid, 'NOTABLE_FACTS'::ai_memory_kind,
                     ${JSON.stringify(encryptColumnValue('ai_memory', 'doc', { facts: factsToSave }))}::jsonb)
             ON CONFLICT (user_id, session_id, kind) WHERE session_id IS NOT NULL DO UPDATE SET doc = EXCLUDED.doc`;
-          logger.info(
-            `${logPrefix} Saved ${factsToSave.length} notable facts for participant (session=${input.sessionId}, user=${input.userId})`,
-          );
+            logger.info(
+              `${logPrefix} Saved ${factsToSave.length} notable facts for participant (session=${input.sessionId}, user=${input.userId})`,
+            );
 
-          // Trigger session content embedding (fire-and-forget)
-          // Per fact-ledger architecture, we embed at session level after facts update
-          embedSessionContent(input.sessionId, input.userId, input.turnId).catch((err: unknown) =>
-            logger.warn(`${logPrefix} Failed to embed session content:`, err),
-          );
-        } else {
-          logger.warn(
-            `${logPrefix} No participant found for session=${input.sessionId}, user=${input.userId}. Facts not saved.`,
-          );
-        }
+            // Trigger session content embedding (fire-and-forget)
+            // Per fact-ledger architecture, we embed at session level after facts update
+            embedSessionContent(input.sessionId, input.userId, input.turnId).catch((err: unknown) =>
+              logger.warn(`${logPrefix} Failed to embed session content:`, err),
+            );
+          } else {
+            logger.warn(
+              `${logPrefix} No participant found for session=${input.sessionId}, user=${input.userId}. Facts not saved.`,
+            );
+          }
+        });
       } catch (err) {
         logger.error(`${logPrefix} Failed to save notable facts:`, err);
       }

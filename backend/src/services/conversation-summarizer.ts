@@ -12,7 +12,8 @@
  */
 
 import { logger } from '../lib/logger';
-import { getJobPrisma, prisma } from '../lib/prisma';
+import { getAiPrisma, prisma } from '../lib/prisma';
+import { withSessionScope } from '../lib/request-context';
 import { encryptColumnValue } from '../lib/prisma-encryption-middleware';
 import { getPartnerParticipant, resolveParticipant, type Seat } from './participant-resolver';
 import { loadCurrentStages } from './stage-shim';
@@ -385,8 +386,8 @@ export async function updateSessionSummary(
     const lastUnresolvedThread = hints.stageJustAdvanced ? null : (summaryResult.lastUnresolvedThread ?? null);
 
     // Stored as the participant's ai_memory SUMMARY document (spec §1.1:
-    // `text, messageCount, generatedAt` required), written by the job
-    // connection — background classifiers write ai_memory as mwf_job.
+    // `text, messageCount, generatedAt` required), written by the AI
+    // connection, scoped to the participant's session (work-k5fk.10.5).
     // tokenCount is an integer by construction (estimateTokens of a string); a
     // value that is not one is left out rather than written as null.
     const { tokenCount, ...rest } = summary;
@@ -405,14 +406,16 @@ export async function updateSessionSummary(
         lastUnresolvedThread,
       }),
     );
-    // One statement, no RETURNING: the job's grants cover exactly this
-    // (trailer T7, work-k5fk.3: INSERT (session_id, user_id, kind, doc), UPDATE (doc)); the conflict
+    // One statement, no RETURNING: the AI's grants cover exactly this
+    // (tables.sql, work-k5fk.3: INSERT (session_id, user_id, kind, doc), UPDATE (doc)); the conflict
     // target is the partial index sql_ai_memory_one_per_participant (ai_memory has no Prisma unique).
-    await getJobPrisma().$executeRaw`
-      INSERT INTO ai_memory (session_id, user_id, kind, doc)
-      VALUES (${participant.sessionId}::uuid, ${participant.userId}::uuid, 'SUMMARY'::ai_memory_kind,
-              ${JSON.stringify(encryptColumnValue('ai_memory', 'doc', doc))}::jsonb)
-      ON CONFLICT (user_id, session_id, kind) WHERE session_id IS NOT NULL DO UPDATE SET doc = EXCLUDED.doc`;
+    await withSessionScope(participant.sessionId, async () => {
+      await getAiPrisma().$executeRaw`
+        INSERT INTO ai_memory (session_id, user_id, kind, doc)
+        VALUES (${participant.sessionId}::uuid, ${participant.userId}::uuid, 'SUMMARY'::ai_memory_kind,
+                ${JSON.stringify(encryptColumnValue('ai_memory', 'doc', doc))}::jsonb)
+        ON CONFLICT (user_id, session_id, kind) WHERE session_id IS NOT NULL DO UPDATE SET doc = EXCLUDED.doc`;
+    });
 
     logger.info(`[ConversationSummarizer] Summarized ${messagesToSummarize.length} messages for session ${sessionId}`);
 

@@ -9,14 +9,14 @@
  * (subject-only, one current per attempt, `superseded_at` on re-analysis) and
  * `reconciler_guidance` (the abstract hints the author may see). Inputs are
  * read through the JOB connection too (Ruling R35, `reader()` below): the
- * job's "reconciler reader" column grants in trailer T7 (TS-10 block) — the
+ * AI's "reconciler reader" column grants in trailer T7 (TS-10 block) — the
  * parties' MAIN-conversation chat, the subject's NOTABLE_FACTS, the author's
  * attempt, the stored analysis — are all it may read. `runReconciler` returns
  * to its caller only what the caller may see: results where the caller is the
  * subject.
  */
 
-import { getJobPrisma } from '../../lib/prisma';
+import { getAiPrisma } from '../../lib/prisma';
 import { encryptColumnValue } from '../../lib/prisma-encryption-middleware';
 import { logger } from '../../lib/logger';
 import { getSonnetResponse, getHaikuJson, BrainActivityCallType } from '../../lib/bedrock';
@@ -36,16 +36,16 @@ import type { Seat } from '../participant-resolver';
 
 /**
  * Ruling R35: the reconciler runs as the JOB. Every read and write of the
- * analysis path goes through the job connection, whose column grants (tables.sql,
+ * analysis path goes through the AI connection, whose column grants (tables.sql,
  * [TS-10] / [TS-10 I4], "reconciler reader") are the whole of what it may see. The
  * request that triggered an analysis never reads the other participant's rows
  * on its own (app) connection; it gets back only its caller-visible projection
  * (`runReconciler` with `viewerUserId`). The context builder stays the one
  * cross-participant reader on the app connection.
  */
-const reader = () => getJobPrisma();
+const reader = () => getAiPrisma();
 
-/** A participant's milestones (key, reached_at) through the job — the stage shim's input. */
+/** A participant's milestones (key, reached_at) through the AI — the stage shim's input. */
 async function milestonesOf(seat: Seat): Promise<MilestoneReached[]> {
   const rows = await reader().participantMilestone.findMany({
     where: { sessionId: seat.sessionId, userId: seat.userId },
@@ -195,7 +195,7 @@ async function stagedChat(
     content: r.content,
     // Not pending, by construction: the reconciler runs for participants in stage 2+, and the shim holds
     // an inviter with an unsent invitation at stage 0; once invitation_sent exists the later-of rule needs
-    // no option. (Reading it would need a job grant on invitation this reader has no other use for.)
+    // no option. (Reading it would need an AI grant on invitation this reader has no other use for.)
     stage: stageAt(reached, r.createdAt, { invitationPending: false }),
     senderUserId: r.senderUserId,
   }));
@@ -437,7 +437,7 @@ export function dbResultToReconcilerResult(
   };
 }
 
-/** The current result of an attempt (subject-side data: the job, reconciler paths only — R35). */
+/** The current result of an attempt (subject-side data: the AI, reconciler paths only — R35). */
 export async function currentResultFor(attemptId: string): Promise<StoredReconcilerResult | null> {
   return reader().reconcilerResult.findFirst({
     where: { attemptId, supersededAt: null },
@@ -480,14 +480,14 @@ export function getDefaultReconcilerResult(): ReconcilerResult {
 }
 
 // ============================================================================
-// Persisting an analysis (job connection)
+// Persisting an analysis (AI connection)
 // ============================================================================
 
 /**
  * Write one analysis of an attempt: supersede the attempt's current result
  * (re-analysis), insert the new one with the next iteration, and its guidance
  * when there is any. JOB connection, one transaction, exactly the columns
- * tables.sql grants mwf_job ([TS-10]). T-result-live-attempt refuses a result on
+ * tables.sql grants mwf_ai ([TS-10]). T-result-live-attempt refuses a result on
  * a SUPERSEDED round; that refusal is returned as null (a late result for a
  * retired round is dropped, spec §1.2).
  */
@@ -504,7 +504,7 @@ export async function persistAnalysis(opts: {
 }): Promise<string | null> {
   const r = opts.result;
   try {
-    return await getJobPrisma().$transaction(async tx => {
+    return await getAiPrisma().$transaction(async tx => {
       await tx.$executeRaw`UPDATE reconciler_result SET superseded_at = now()
         WHERE attempt_id = ${opts.attemptId}::uuid AND superseded_at IS NULL`;
       const rows = await tx.$queryRaw<
@@ -552,12 +552,12 @@ export async function persistAnalysis(opts: {
 }
 
 /**
- * Retire an attempt's current result (job): a resubmitted round's analysis is
+ * Retire an attempt's current result (AI): a resubmitted round's analysis is
  * no longer current — the new round gets its own. `superseded_at` is the one
  * column a result ever changes (spec §1.2).
  */
 export async function supersedeCurrentResult(attemptId: string): Promise<void> {
-  await getJobPrisma().$executeRaw`UPDATE reconciler_result SET superseded_at = now()
+  await getAiPrisma().$executeRaw`UPDATE reconciler_result SET superseded_at = now()
     WHERE attempt_id = ${attemptId}::uuid AND superseded_at IS NULL`;
 }
 

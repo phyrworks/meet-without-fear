@@ -13,7 +13,7 @@
 
 import { Request, Response } from 'express';
 import { logger } from '../lib/logger';
-import { getJobPrisma, prisma } from '../lib/prisma';
+import { prisma } from '../lib/prisma';
 import { notifyPartner } from '../services/realtime';
 import { ErrorCode, signCompactRequestSchema } from '@meet-without-fear/shared';
 import { successResponse, errorResponse } from '../utils/response';
@@ -88,12 +88,11 @@ export async function signCompact(req: Request, res: Response): Promise<void> {
     const canAdvance = partnerSigned;
 
     // If both have signed, ensure the session is ACTIVE — through
-    // app.session_set_status, the only writer of session.status, as the job.
+    // app.session_set_status, the only writer of session.status, as the signer (a current participant).
     if (partnerSigned) {
       const session = await prisma.session.findUnique({ where: { id: sessionId }, select: { status: true } });
       if (session && session.status !== 'ACTIVE' && session.status !== 'RESOLVED') {
-        await getJobPrisma()
-          .$executeRaw`SELECT app.session_set_status(${sessionId}::uuid, 'ACTIVE'::public.session_status)`
+        await prisma.$executeRaw`SELECT app.session_set_status(${sessionId}::uuid, 'ACTIVE'::public.session_status)`
           .then(() => logger.info(`[signCompact] Updated session ${sessionId} status to ACTIVE (both signed)`))
           .catch((err: unknown) => logger.warn(`[signCompact] Session ${sessionId} not moved to ACTIVE:`, err));
       }
