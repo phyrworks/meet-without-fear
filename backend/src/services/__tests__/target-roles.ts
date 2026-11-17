@@ -9,7 +9,7 @@
 import { Client } from 'pg';
 import { uuidv7 } from '@meet-without-fear/shared';
 import { withClient } from '../../testing/golden/db';
-import { jobUrlFor } from '../../testing/golden/driver';
+import { aiUrlFor, jobUrlFor, workerUrlFor } from '../../testing/golden/driver';
 import { restoreFixture, type RestoredFixture } from '../../testing/golden/fixtures';
 
 export const BASE_URL =
@@ -37,16 +37,23 @@ export function authUrlFor(t: { host: string; port: number }, database: string):
   return `postgresql://mwf_auth:${pw}@${t.host}:${t.port}/${database}`;
 }
 
+/** The logins a target test connects as. */
+export type RunRole = 'mwf_app' | 'mwf_job' | 'mwf_auth' | 'mwf_ai' | 'mwf_worker';
+
 export interface TargetRun {
   fx: RestoredFixture;
   /** Superuser SQL on the run database (setup and assertions only). */
   sql<T extends Record<string, unknown>>(text: string, params?: unknown[]): Promise<T[]>;
-  /** One statement as `role`, with the identity bound the way prisma-identity binds it. */
+  /**
+   * One statement as `role`, with the identity bound the way prisma-identity binds it, and — for
+   * mwf_ai / mwf_worker (work-k5fk.10.5) — `scope` as the transaction's app.session_scope.
+   */
   as<T extends Record<string, unknown>>(
-    role: 'mwf_app' | 'mwf_job' | 'mwf_auth',
+    role: RunRole,
     userId: string | null,
     text: string,
     params?: unknown[],
+    scope?: string | null,
   ): Promise<T[]>;
   drop(): Promise<void>;
 }
@@ -64,22 +71,28 @@ export async function openTargetRun(stage: string, runId: string): Promise<Targe
   // No stand-in grant (work-k5fk.10.1): the run database is mwf_migrator's, so
   // mwf_app and mwf_job hold exactly the baseline's grants.
   const as = async <T extends Record<string, unknown>>(
-    role: 'mwf_app' | 'mwf_job' | 'mwf_auth',
+    role: RunRole,
     userId: string | null,
     text: string,
     params: unknown[] = [],
+    scope: string | null = null,
   ): Promise<T[]> => {
     const url =
       role === 'mwf_app'
         ? appUrlFor(fx.target, fx.database)
         : role === 'mwf_auth'
           ? authUrlFor(fx.target, fx.database)
-          : jobUrlFor(fx.target, fx.database);
+          : role === 'mwf_ai'
+            ? aiUrlFor(fx.target, fx.database)
+            : role === 'mwf_worker'
+              ? workerUrlFor(fx.target, fx.database)
+              : jobUrlFor(fx.target, fx.database);
     const c = new Client({ connectionString: url });
     await c.connect();
     try {
       await c.query('BEGIN');
       if (userId) await c.query("SELECT set_config('app.current_user_id', $1, true)", [userId]);
+      if (scope) await c.query("SELECT set_config('app.session_scope', $1, true)", [scope]);
       const r = await c.query<T>(text, params);
       await c.query('COMMIT');
       return r.rows;

@@ -173,6 +173,22 @@ export function jobUrlFor(t: { host: string; port: number }, database: string): 
   return `postgresql://mwf_job:${pw}@${t.host}:${t.port}/${database}?application_name=${APP_UNDER_TEST}`;
 }
 
+/**
+ * The AI login (`mwf_ai`, work-k5fk.10.5) and the worker login (`mwf_worker`) on a run database.
+ * Their passwords are the dev literals from docs/development/local-setup.md (`GOLDEN_AI_PASSWORD`,
+ * `GOLDEN_WORKER_PASSWORD` override). Tagged with the app-under-test application_name, so their
+ * statements are part of the trace like the app's (mwf_job's were, before 9b retired it).
+ */
+export function aiUrlFor(t: { host: string; port: number }, database: string): string {
+  const pw = encodeURIComponent(process.env.GOLDEN_AI_PASSWORD ?? 'mwf_ai_dev');
+  return `postgresql://mwf_ai:${pw}@${t.host}:${t.port}/${database}?application_name=${APP_UNDER_TEST}`;
+}
+
+export function workerUrlFor(t: { host: string; port: number }, database: string): string {
+  const pw = encodeURIComponent(process.env.GOLDEN_WORKER_PASSWORD ?? 'mwf_worker_dev');
+  return `postgresql://mwf_worker:${pw}@${t.host}:${t.port}/${database}?application_name=${APP_UNDER_TEST}`;
+}
+
 /** TS-10: the request role (`mwf_app`) on a run database (dev password, local-setup.md; GOLDEN_APP_PASSWORD overrides). */
 export function appUrlFor(t: { host: string; port: number }, database: string): string {
   const pw = encodeURIComponent(process.env.GOLDEN_APP_PASSWORD ?? 'mwf_app_dev');
