@@ -39,7 +39,6 @@ const base = {
   },
   setupFilesAfterEnv: ['<rootDir>/src/__tests__/setup.ts'],
   setupFiles: ['<rootDir>/src/__tests__/env.ts'],
-  testTimeout: 15000,
   clearMocks: true,
   restoreMocks: true,
 };
@@ -52,6 +51,8 @@ module.exports = {
   watchman: false,
   // A bare `npx jest` stays serial; the npm scripts pass --maxWorkers per tier.
   maxWorkers: 1,
+  // Global, not per project (jest warns on it inside `projects` and ignores it there).
+  testTimeout: 15000,
   // Silence console output during tests - use --verbose flag to see console output when debugging
   silent: true,
   projects: [
