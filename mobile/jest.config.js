@@ -3,6 +3,11 @@ const path = require('path');
 
 module.exports = {
   preset: 'jest-expo',
+  // Jest crawls with its own node crawler, not watchman. The repo-root .watchmanconfig
+  // ignores .claude/ and .superpowers/ (agent and review worktrees), and watchman resolves a
+  // path to the OUTERMOST directory holding a .watchmanconfig, so jest-via-watchman inside a
+  // worktree would see zero files. See .watchmanconfig.
+  watchman: false,
   transformIgnorePatterns: [
     'node_modules/(?!((jest-)?react-native|@react-native(-community)?)|expo(nent)?|@expo(nent)?/.*|@expo-google-fonts/.*|react-navigation|@react-navigation/.*|@unimodules/.*|unimodules|sentry-expo|native-base|react-native-svg|lucide-react-native|mixpanel-react-native)',
   ],
