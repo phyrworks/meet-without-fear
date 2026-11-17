@@ -1309,84 +1309,170 @@ END $$;
 ROLLBACK;
 
 
--- 30. work-k5fk.10.5: the request path's two-party writes are definers (design note §7 row 9b). On S (…05e6):
---     A (…a1, conversation …08a1) and B (…b1, …08b1); B→A's attempt is att_b. Rolled back.
-\connect - mwf_app
-SELECT 'connected as ' || session_user || ' (current_user ' || current_user || ')';
+-- 30. work-k5fk.10.5: the request path's two-party writes are definers (design note §7 row 9b). On S (…05e6): A (…a1,
+--     conversation …08a1) and B (…b1, …08b1); att_a is A→B (subject B), att_b is B→A (subject A). Rolled back. Each
+--     refusal is pinned by its control: the same call with only the checked fact changed succeeds. The setup is the
+--     superuser's (both rounds REVEALED, an ACTIVE session); every call runs as mwf_app (SET SESSION AUTHORIZATION:
+--     session_user is mwf_app, as the definers' app arm reads it), with the identity bound per call.
+\connect - mwf_user
+SELECT 'connected as ' || session_user || ' (30: setup as the superuser, the calls as mwf_app)';
 SELECT set_config('t.a_user', :'a_user', false), set_config('t.b_user', :'b_user', false), set_config('t.outsider', :'outsider', false), set_config('t.att_a', :'att_a', false), set_config('t.att_b', :'att_b', false), set_config('t.r_session', :'r_session', false) \g /dev/null
 BEGIN;
-DO $$ DECLARE v_seq int; v_sender uuid; BEGIN
-  -- 30a. A delivers an item into B's conversation: role USER, sender A
-  PERFORM set_config('app.current_user_id', current_setting('t.a_user'), true);
-  SELECT d.seq INTO v_seq FROM app.deliver_message('00000000-0000-7e00-8000-0000000008b1', current_setting('t.a_user')::uuid,
-    'SHARED_CONTEXT', 'what A shares', NULL, NULL) d;
-  SELECT m.sender_user_id INTO v_sender FROM message m WHERE m.conversation_id = '00000000-0000-7e00-8000-0000000008b1' AND m.seq = v_seq;
-  IF v_sender IS DISTINCT FROM current_setting('t.a_user')::uuid THEN RAISE EXCEPTION 'TEST FAILED: the delivery is not A''s'; END IF;
-  RAISE NOTICE 'PASS 30a the author delivers into the partner''s conversation (seq %)', v_seq;
-  -- 30b. A cannot deliver as B, nor into their own conversation, nor a CHAT line
+UPDATE session SET status = 'ACTIVE', resolved_at = NULL WHERE id = current_setting('t.r_session')::uuid;
+UPDATE participant SET left_at = NULL WHERE session_id = current_setting('t.r_session')::uuid;
+UPDATE empathy_attempt SET status = 'REVEALED', revealed_at = coalesce(revealed_at, now() - interval '1 hour'),
+       delivery_status = 'PENDING', delivered_at = NULL, seen_at = NULL
+WHERE id IN (current_setting('t.att_a')::uuid, current_setting('t.att_b')::uuid);
+INSERT INTO invitation (id, session_id, invited_by_user_id, status, expires_at)
+VALUES ('00000000-0000-7e00-8000-0000000006f1', current_setting('t.r_session')::uuid, current_setting('t.a_user')::uuid,
+        'DECLINED', now() + interval '1 day');
+SET SESSION AUTHORIZATION mwf_app;
+DO $$ DECLARE v_seq int; v_sender uuid; v_at timestamptz; v_n int;
+  conv_a uuid := '00000000-0000-7e00-8000-0000000008a1'; conv_b uuid := '00000000-0000-7e00-8000-0000000008b1';
+  a uuid := current_setting('t.a_user')::uuid; b uuid := current_setting('t.b_user')::uuid;
+  att_a uuid := current_setting('t.att_a')::uuid; att_b uuid := current_setting('t.att_b')::uuid;
+  s uuid := current_setting('t.r_session')::uuid;
+BEGIN
+  -- 30a. A, the subject of B's revealed round, delivers feedback on it into B's conversation: role USER, sender A
+  PERFORM set_config('app.current_user_id', a::text, true);
+  SELECT d.seq INTO v_seq FROM app.deliver_message(conv_b, a, 'VALIDATION_FEEDBACK', 'feedback from A', att_b, NULL) d;
+  SELECT m.sender_user_id INTO v_sender FROM message m WHERE m.conversation_id = conv_b AND m.seq = v_seq;
+  IF v_sender IS DISTINCT FROM a THEN RAISE EXCEPTION 'TEST FAILED: the delivery is not A''s'; END IF;
+  RAISE NOTICE 'PASS 30a the subject delivers feedback on a revealed round into its author''s conversation (seq %)', v_seq;
+  -- 30b. the identity is the check that refuses: A cannot deliver as B (B present, B's feedback on att_a into A's
+  --      conversation); the same call with B's identity is delivered
   BEGIN
-    PERFORM app.deliver_message('00000000-0000-7e00-8000-0000000008a1', current_setting('t.b_user')::uuid, 'SHARED_CONTEXT', 'x');
+    PERFORM app.deliver_message(conv_a, b, 'VALIDATION_FEEDBACK', 'x', att_a, NULL);
     RAISE EXCEPTION 'TEST FAILED: A delivered as B';
   EXCEPTION WHEN no_data_found THEN RAISE NOTICE 'PASS 30b an item is delivered only as the caller: %', SQLERRM;
   END;
+  PERFORM set_config('app.current_user_id', b::text, true);
+  PERFORM app.deliver_message(conv_a, b, 'VALIDATION_FEEDBACK', 'feedback from B', att_a, NULL);
+  RAISE NOTICE 'PASS 30b control: the same delivery as B, the identity, is written';
+  PERFORM set_config('app.current_user_id', a::text, true);
+  -- 30c. never into one's own conversation; never a kind but VALIDATION_FEEDBACK from the request path (F1)
   BEGIN
-    PERFORM app.deliver_message('00000000-0000-7e00-8000-0000000008a1', current_setting('t.a_user')::uuid, 'SHARED_CONTEXT', 'x');
+    PERFORM app.deliver_message(conv_a, a, 'VALIDATION_FEEDBACK', 'x', att_b, NULL);
     RAISE EXCEPTION 'TEST FAILED: A delivered into their own conversation';
   EXCEPTION WHEN check_violation THEN RAISE NOTICE 'PASS 30c a delivery goes into another participant''s conversation: %', SQLERRM;
   END;
   BEGIN
-    PERFORM app.deliver_message('00000000-0000-7e00-8000-0000000008b1', current_setting('t.a_user')::uuid, 'CHAT', 'x');
-    RAISE EXCEPTION 'TEST FAILED: A delivered a CHAT line';
-  EXCEPTION WHEN check_violation THEN RAISE NOTICE 'PASS 30d a CHAT line is never delivered: %', SQLERRM;
+    PERFORM app.deliver_message(conv_b, a, 'SHARED_CONTEXT', 'x', att_b, NULL);
+    RAISE EXCEPTION 'TEST FAILED: the app delivered SHARED_CONTEXT';
+  EXCEPTION WHEN insufficient_privilege THEN RAISE NOTICE 'PASS 30d the app delivers VALIDATION_FEEDBACK only (SHARED_CONTEXT: %)', SQLERRM;
   END;
-  -- 30e. an outsider delivers into nobody's conversation
+  BEGIN
+    PERFORM app.deliver_message(conv_b, a, 'EMPATHY_STATEMENT', 'x', att_b, NULL);
+    RAISE EXCEPTION 'TEST FAILED: the app delivered an EMPATHY_STATEMENT';
+  EXCEPTION WHEN insufficient_privilege THEN RAISE NOTICE 'PASS 30d the app delivers VALIDATION_FEEDBACK only (EMPATHY_STATEMENT: %)', SQLERRM;
+  END;
+  -- 30e. the source must be a revealed round whose subject is the caller and whose author owns the conversation
+  BEGIN
+    PERFORM app.deliver_message(conv_b, a, 'VALIDATION_FEEDBACK', 'x', NULL, NULL);
+    RAISE EXCEPTION 'TEST FAILED: feedback with no source round';
+  EXCEPTION WHEN insufficient_privilege THEN RAISE NOTICE 'PASS 30e feedback names its round: %', SQLERRM;
+  END;
+  BEGIN
+    PERFORM app.deliver_message(conv_b, a, 'VALIDATION_FEEDBACK', 'x', att_a, NULL);
+    RAISE EXCEPTION 'TEST FAILED: feedback on a round A is not the subject of';
+  EXCEPTION WHEN insufficient_privilege THEN RAISE NOTICE 'PASS 30e feedback only by the round''s subject: %', SQLERRM;
+  END;
+  -- 30f. the instant is bounded: neither backdated nor in the future (F1)
+  BEGIN
+    PERFORM app.deliver_message(conv_b, a, 'VALIDATION_FEEDBACK', 'x', att_b, '2001-01-01');
+    RAISE EXCEPTION 'TEST FAILED: a backdated delivery';
+  EXCEPTION WHEN check_violation THEN RAISE NOTICE 'PASS 30f a backdated instant is refused: %', SQLERRM;
+  END;
+  BEGIN
+    PERFORM app.deliver_message(conv_b, a, 'VALIDATION_FEEDBACK', 'x', att_b, now() + interval '1 hour');
+    RAISE EXCEPTION 'TEST FAILED: a future delivery';
+  EXCEPTION WHEN check_violation THEN RAISE NOTICE 'PASS 30f a future instant is refused: %', SQLERRM;
+  END;
+  -- 30g. an outsider delivers into nobody's conversation
   PERFORM set_config('app.current_user_id', current_setting('t.outsider'), true);
   BEGIN
-    PERFORM app.deliver_message('00000000-0000-7e00-8000-0000000008b1', current_setting('t.outsider')::uuid, 'SHARED_CONTEXT', 'x');
+    PERFORM app.deliver_message(conv_b, current_setting('t.outsider')::uuid, 'VALIDATION_FEEDBACK', 'x', att_b, NULL);
     RAISE EXCEPTION 'TEST FAILED: an outsider delivered';
-  EXCEPTION WHEN no_data_found THEN RAISE NOTICE 'PASS 30e an outsider cannot deliver: %', SQLERRM;
+  EXCEPTION WHEN no_data_found THEN RAISE NOTICE 'PASS 30g an outsider cannot deliver: %', SQLERRM;
   END;
-  -- 30f. A reaches a system milestone for B, once; never a self-assertable one; an outsider reaches none
-  PERFORM set_config('app.current_user_id', current_setting('t.a_user'), true);
-  IF NOT app.reach_milestone(current_setting('t.r_session')::uuid, current_setting('t.b_user')::uuid, 'closed') THEN
-    RAISE EXCEPTION 'TEST FAILED: reach_milestone recorded nothing';
-  END IF;
-  IF app.reach_milestone(current_setting('t.r_session')::uuid, current_setting('t.b_user')::uuid, 'closed') THEN
-    RAISE EXCEPTION 'TEST FAILED: reach_milestone recorded twice';
-  END IF;
-  RAISE NOTICE 'PASS 30f a participant reaches a system milestone for the partner, once';
+  -- 30h. A reaches a system milestone for B, once; never a self-assertable one; an outsider reaches none
+  PERFORM set_config('app.current_user_id', a::text, true);
+  IF NOT app.reach_milestone(s, b, 'closed') THEN RAISE EXCEPTION 'TEST FAILED: reach_milestone recorded nothing'; END IF;
+  IF app.reach_milestone(s, b, 'closed') THEN RAISE EXCEPTION 'TEST FAILED: reach_milestone recorded twice'; END IF;
+  RAISE NOTICE 'PASS 30h a participant reaches a system milestone for the partner, once';
   BEGIN
-    PERFORM app.reach_milestone(current_setting('t.r_session')::uuid, current_setting('t.b_user')::uuid, 'compact_signed');
+    PERFORM app.reach_milestone(s, b, 'compact_signed');
     RAISE EXCEPTION 'TEST FAILED: A asserted B''s self-assertable milestone';
-  EXCEPTION WHEN insufficient_privilege THEN RAISE NOTICE 'PASS 30g a self-assertable milestone is never reached through reach_milestone: %', SQLERRM;
+  EXCEPTION WHEN insufficient_privilege THEN RAISE NOTICE 'PASS 30h a self-assertable milestone is never reached through reach_milestone: %', SQLERRM;
   END;
   PERFORM set_config('app.current_user_id', current_setting('t.outsider'), true);
   BEGIN
-    PERFORM app.reach_milestone(current_setting('t.r_session')::uuid, current_setting('t.b_user')::uuid, 'paused');
+    PERFORM app.reach_milestone(s, b, 'paused');
     RAISE EXCEPTION 'TEST FAILED: an outsider reached a milestone';
   EXCEPTION WHEN no_data_found THEN RAISE NOTICE 'PASS 30h an outsider reaches no milestone: %', SQLERRM;
   END;
   BEGIN
-    PERFORM app.session_resume(current_setting('t.r_session')::uuid);
+    PERFORM app.session_resume(s);
     RAISE EXCEPTION 'TEST FAILED: an outsider resumed a session';
   EXCEPTION WHEN no_data_found THEN RAISE NOTICE 'PASS 30i an outsider cannot resume a session: %', SQLERRM;
   END;
+  BEGIN
+    PERFORM app.share_offers_expire(s, ARRAY[a, b]);
+    RAISE EXCEPTION 'TEST FAILED: an outsider expired the offers';
+  EXCEPTION WHEN no_data_found THEN RAISE NOTICE 'PASS 30i an outsider cannot expire a session''s offers: %', SQLERRM;
+  END;
+  PERFORM set_config('app.current_user_id', a::text, true);
+  PERFORM app.share_offers_expire(s, ARRAY[a, b]);
+  RAISE NOTICE 'PASS 30i control: a participant expires the session''s open offers';
   -- 30j. a caller's own sign-in subject, never another's
   PERFORM set_config('app.current_user_id', '00000000-0000-7e00-8000-0000000000a1', true);
   IF app.identity_subject('clerk') IS DISTINCT FROM 'user_ts7cAda' THEN RAISE EXCEPTION 'TEST FAILED: identity_subject is not Ada''s'; END IF;
   PERFORM set_config('app.current_user_id', '', true);
   IF app.identity_subject('clerk') IS NOT NULL THEN RAISE EXCEPTION 'TEST FAILED: identity_subject with no identity'; END IF;
   RAISE NOTICE 'PASS 30j identity_subject reads the caller''s own subject only';
-  -- 30k. the subject stamps the delivery of the author's attempt; the author cannot
-  PERFORM set_config('app.current_user_id', current_setting('t.b_user'), true);
+  -- 30k. the subject stamps the delivery of the author's revealed round; the author cannot; stamps only move forward
+  --      and their instant is bounded (F10)
+  PERFORM set_config('app.current_user_id', b::text, true);
   BEGIN
-    PERFORM app.empathy_mark_delivery(current_setting('t.att_b')::uuid, 'SEEN');
+    PERFORM app.empathy_mark_delivery(att_b, 'SEEN');
     RAISE EXCEPTION 'TEST FAILED: the author stamped their own attempt';
   EXCEPTION WHEN no_data_found THEN RAISE NOTICE 'PASS 30k only the subject stamps an attempt''s delivery: %', SQLERRM;
   END;
+  PERFORM set_config('app.current_user_id', a::text, true);
+  PERFORM app.empathy_mark_delivery(att_b, 'SEEN', '1999-01-01');
+  PERFORM app.empathy_mark_delivery(att_b, 'DELIVERED');
+  SELECT e.seen_at INTO v_at FROM empathy_attempt e WHERE e.id = att_b;
+  IF (SELECT e.delivery_status::text FROM empathy_attempt e WHERE e.id = att_b) <> 'SEEN' THEN
+    RAISE EXCEPTION 'TEST FAILED: SEEN was downgraded to DELIVERED';
+  END IF;
+  IF v_at < now() - interval '1 minute' THEN RAISE EXCEPTION 'TEST FAILED: the stamp was backdated to %', v_at; END IF;
+  RAISE NOTICE 'PASS 30l the subject stamps SEEN; a later DELIVERED does not downgrade it; the instant is not backdated';
+  -- 30m. the session of a declined invitation ends only while it is CREATED / INVITED: an ACTIVE one is left alone
+  PERFORM set_config('app.current_user_id', current_setting('t.outsider'), true);
+  PERFORM app.session_abandon_declined('00000000-0000-7e00-8000-0000000006f1');
+  IF (SELECT st.status::text FROM session st WHERE st.id = s) <> 'ACTIVE' THEN
+    RAISE EXCEPTION 'TEST FAILED: a declined invitation ended an ACTIVE session';
+  END IF;
+  RAISE NOTICE 'PASS 30m a declined invitation leaves an ACTIVE session alone';
+END $$;
+RESET SESSION AUTHORIZATION;
+-- 30n. stamping a round that was never revealed is refused (F10): B's round back to READY, A tries
+UPDATE empathy_attempt SET status = 'READY', revealed_at = NULL, delivery_status = 'PENDING', seen_at = NULL
+WHERE id = current_setting('t.att_b')::uuid;
+SET SESSION AUTHORIZATION mwf_app;
+DO $$ BEGIN
   PERFORM set_config('app.current_user_id', current_setting('t.a_user'), true);
-  PERFORM app.empathy_mark_delivery(current_setting('t.att_b')::uuid, 'SEEN');
-  RAISE NOTICE 'PASS 30l the subject stamps the author''s attempt SEEN';
+  BEGIN
+    PERFORM app.empathy_mark_delivery(current_setting('t.att_b')::uuid, 'SEEN');
+    RAISE EXCEPTION 'TEST FAILED: an unrevealed round was stamped';
+  EXCEPTION WHEN check_violation THEN RAISE NOTICE 'PASS 30n an unrevealed round is never stamped: %', SQLERRM;
+  END;
+  BEGIN
+    PERFORM app.deliver_message('00000000-0000-7e00-8000-0000000008b1', current_setting('t.a_user')::uuid,
+                                'VALIDATION_FEEDBACK', 'x', current_setting('t.att_b')::uuid, NULL);
+    RAISE EXCEPTION 'TEST FAILED: feedback on an unrevealed round';
+  EXCEPTION WHEN insufficient_privilege THEN RAISE NOTICE 'PASS 30n feedback only on a revealed round: %', SQLERRM;
+  END;
 END $$;
 ROLLBACK;
 
@@ -1409,11 +1495,6 @@ DO $$ BEGIN
     RAISE EXCEPTION 'TEST FAILED: the AI wrote outside its scope';
   EXCEPTION WHEN insufficient_privilege THEN RAISE NOTICE 'PASS 31b another session''s scope, no AI write: %', SQLERRM;
   END;
-  BEGIN
-    PERFORM app.deliver_message('00000000-0000-7e00-8000-0000000008a1', '00000000-0000-7e00-8000-0000000000b1', 'SHARED_CONTEXT', 'x');
-    RAISE EXCEPTION 'TEST FAILED: the AI delivered outside its scope';
-  EXCEPTION WHEN no_data_found THEN RAISE NOTICE 'PASS 31e the AI delivers only within its scope: %', SQLERRM;
-  END;
   PERFORM set_config('app.session_scope', '00000000-0000-7e00-8000-0000000005e6', true);
   INSERT INTO message (conversation_id, session_id, role, kind, content)
   VALUES ('00000000-0000-7e00-8000-0000000008a1', '00000000-0000-7e00-8000-0000000005e6', 'AI', 'CHAT', 'in scope');
@@ -1425,6 +1506,107 @@ DO $$ BEGIN
     RAISE EXCEPTION 'TEST FAILED: the AI wrote a participant''s line';
   EXCEPTION WHEN insufficient_privilege THEN RAISE NOTICE 'PASS 31d the AI never writes a participant''s line: %', SQLERRM;
   END;
+END $$;
+ROLLBACK;
+
+-- 32. the AI's definer arms do only what its call sites do (F2, F3): on S, scoped. Rolled back.
+\connect - mwf_user
+SELECT 'connected as ' || session_user || ' (32: setup as the superuser, the calls as mwf_ai)';
+SELECT set_config('t.a_user', :'a_user', false), set_config('t.b_user', :'b_user', false), set_config('t.att_a', :'att_a', false), set_config('t.att_b', :'att_b', false), set_config('t.r_session', :'r_session', false) \g /dev/null
+BEGIN;
+UPDATE empathy_attempt SET status = 'REVEALED', revealed_at = coalesce(revealed_at, now() - interval '1 hour')
+WHERE id = current_setting('t.att_a')::uuid;
+UPDATE empathy_attempt SET status = 'HELD', revealed_at = NULL WHERE id = current_setting('t.att_b')::uuid;
+SET SESSION AUTHORIZATION mwf_ai;
+DO $$ BEGIN
+  PERFORM set_config('app.session_scope', current_setting('t.r_session'), true);
+  -- 32a. the AI never resubmits a round (SUPERSEDED writes the author's next round) nor reviews a revealed one
+  BEGIN
+    PERFORM app.empathy_set_status(current_setting('t.att_b')::uuid, 'SUPERSEDED', 'AI WROTE THIS');
+    RAISE EXCEPTION 'TEST FAILED: the AI resubmitted a round';
+  EXCEPTION WHEN insufficient_privilege THEN RAISE NOTICE 'PASS 32a the AI cannot supersede a round: %', SQLERRM;
+  END;
+  BEGIN
+    PERFORM app.empathy_set_status(current_setting('t.att_a')::uuid, 'VALIDATED');
+    RAISE EXCEPTION 'TEST FAILED: the AI validated a revealed round';
+  EXCEPTION WHEN insufficient_privilege THEN RAISE NOTICE 'PASS 32a the AI cannot validate a revealed round: %', SQLERRM;
+  END;
+  BEGIN
+    PERFORM app.empathy_set_status(current_setting('t.att_a')::uuid, 'REFINING');
+    RAISE EXCEPTION 'TEST FAILED: the AI sent a revealed round back to refining';
+  EXCEPTION WHEN insufficient_privilege THEN RAISE NOTICE 'PASS 32a the AI cannot move a revealed round to REFINING: %', SQLERRM;
+  END;
+  -- control: the reconciler's own move
+  PERFORM app.empathy_set_status(current_setting('t.att_b')::uuid, 'READY');
+  RAISE NOTICE 'PASS 32a control: the AI moves a HELD round to READY';
+  -- 32b. the AI delivers only SHARED_CONTEXT, and only for an ACCEPTED offer whose subject is the sender (F3)
+  BEGIN
+    PERFORM app.deliver_message('00000000-0000-7e00-8000-0000000008a1', current_setting('t.b_user')::uuid,
+                                'EMPATHY_STATEMENT', 'as B', current_setting('t.att_b')::uuid, NULL);
+    RAISE EXCEPTION 'TEST FAILED: the AI delivered an EMPATHY_STATEMENT';
+  EXCEPTION WHEN insufficient_privilege THEN RAISE NOTICE 'PASS 32b the AI delivers SHARED_CONTEXT only: %', SQLERRM;
+  END;
+  BEGIN
+    PERFORM app.deliver_message('00000000-0000-7e00-8000-0000000008a1', current_setting('t.b_user')::uuid,
+                                'SHARED_CONTEXT', 'as B', NULL, NULL);
+    RAISE EXCEPTION 'TEST FAILED: the AI delivered shared context with no accepted offer';
+  EXCEPTION WHEN insufficient_privilege THEN RAISE NOTICE 'PASS 32b shared context needs the sender''s ACCEPTED offer: %', SQLERRM;
+  END;
+END $$;
+ROLLBACK;
+
+-- 33. the worker (F6): its session_set_status arm only ends sessions; its purge only deletes ARCHIVED sessions; its
+--     follow_up INSERT is scoped. On S. Rolled back.
+\connect - mwf_user
+SELECT 'connected as ' || session_user || ' (33: setup as the superuser, the calls as mwf_worker)';
+SELECT set_config('t.r_session', :'r_session', false) \g /dev/null
+BEGIN;
+UPDATE session SET status = 'INVITED', resolved_at = NULL WHERE id = current_setting('t.r_session')::uuid;
+SET SESSION AUTHORIZATION mwf_worker;
+DO $$ BEGIN
+  PERFORM set_config('app.session_scope', current_setting('t.r_session'), true);
+  BEGIN
+    PERFORM app.session_set_status(current_setting('t.r_session')::uuid, 'ACTIVE');
+    RAISE EXCEPTION 'TEST FAILED: the worker activated a session';
+  EXCEPTION WHEN insufficient_privilege THEN RAISE NOTICE 'PASS 33a the worker cannot move a session to ACTIVE: %', SQLERRM;
+  END;
+  BEGIN
+    DELETE FROM session WHERE id = current_setting('t.r_session')::uuid;
+    RAISE EXCEPTION 'TEST FAILED: the worker deleted a live session';
+  EXCEPTION WHEN insufficient_privilege THEN RAISE NOTICE 'PASS 33b the worker purges only ARCHIVED sessions: %', SQLERRM;
+  END;
+  PERFORM set_config('app.session_scope', '', true);
+  BEGIN
+    INSERT INTO follow_up (session_id, type, scope, status, scheduled_for, summary)
+    VALUES (current_setting('t.r_session')::uuid, 'SCHEDULED_SHARED_AGREEMENT', 'SHARED', 'SCHEDULED', now(), 'unscoped');
+    RAISE EXCEPTION 'TEST FAILED: the worker scheduled a follow-up with no scope';
+  EXCEPTION WHEN insufficient_privilege THEN RAISE NOTICE 'PASS 33c the worker''s follow_up INSERT is scoped: %', SQLERRM;
+  END;
+  -- control: ending the session is the worker's
+  PERFORM set_config('app.session_scope', current_setting('t.r_session'), true);
+  PERFORM app.session_set_status(current_setting('t.r_session')::uuid, 'ABANDONED');
+  RAISE NOTICE 'PASS 33a control: the worker abandons the session in its scope';
+END $$;
+ROLLBACK;
+
+-- 34. account deletion of a participant who already left a live session (F8): the walk ends the session itself. On S:
+--     B left (left_at), S still ACTIVE, B deletes the account as mwf_app. Rolled back.
+\connect - mwf_user
+SELECT 'connected as ' || session_user || ' (34: setup as the superuser, the call as mwf_app)';
+SELECT set_config('t.b_user', :'b_user', false), set_config('t.r_session', :'r_session', false) \g /dev/null
+BEGIN;
+UPDATE session SET status = 'ACTIVE', resolved_at = NULL WHERE id = current_setting('t.r_session')::uuid;
+UPDATE participant SET left_at = now() - interval '1 day'
+WHERE session_id = current_setting('t.r_session')::uuid AND user_id = current_setting('t.b_user')::uuid;
+DO $$ BEGIN
+  EXECUTE 'SET SESSION AUTHORIZATION mwf_app';
+  PERFORM set_config('app.current_user_id', current_setting('t.b_user'), true);
+  PERFORM app.anonymize_user_account(current_setting('t.b_user')::uuid);
+  EXECUTE 'RESET SESSION AUTHORIZATION';
+  IF (SELECT st.status::text FROM session st WHERE st.id = current_setting('t.r_session')::uuid) <> 'ABANDONED' THEN
+    RAISE EXCEPTION 'TEST FAILED: the leaver''s live session was not ended by the walk';
+  END IF;
+  RAISE NOTICE 'PASS 34 a participant who already left a live session deletes the account; the walk ends the session';
 END $$;
 ROLLBACK;
 

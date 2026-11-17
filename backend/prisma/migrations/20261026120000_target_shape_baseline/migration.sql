@@ -5271,6 +5271,42 @@ BEGIN
     RAISE EXCEPTION 'step 20: role(s) that may write a validated column but cannot run its validator: %', bad;
   END IF;
 
+  -- work-k5fk.10.5 review F4: every write the AI or the worker holds is bound to its session by a t_session_scope
+  -- trigger naming that capability, for that event — or is one of the worker's cross-session writes named here
+  -- (retention, due follow-ups and reminders, push-token clean-up, and the purge, which t_session_purge binds to
+  -- ARCHIVED sessions). A grant added without its trigger, or a trigger dropped, refuses the baseline.
+  DECLARE
+    v_scope_exempt CONSTANT text[] := ARRAY[
+      'worker_access:brain_activity:UPDATE', 'worker_access:brain_activity:DELETE',
+      'worker_access:follow_up:UPDATE', 'worker_access:reminder:UPDATE', 'worker_access:user_device:UPDATE',
+      'worker_access:session:DELETE'];
+  BEGIN
+    SELECT string_agg(w.cap || ':' || w.rel || ':' || w.ev, ', ' ORDER BY w.cap, w.rel, w.ev) INTO bad
+    FROM (
+      SELECT DISTINCT r.rolname::text AS cap, c.relname::text AS rel, e.ev, e.bit, c.oid AS reloid
+      FROM pg_roles r
+      CROSS JOIN pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+      CROSS JOIN (VALUES ('INSERT', 4), ('DELETE', 8), ('UPDATE', 16)) e(ev, bit)
+      WHERE r.rolname IN ('ai_access', 'worker_access') AND n.nspname = 'public' AND c.relkind = 'r'
+        AND (EXISTS (SELECT 1 FROM aclexplode(c.relacl) a WHERE a.grantee = r.oid AND a.privilege_type = e.ev)
+             OR EXISTS (SELECT 1 FROM pg_attribute att, aclexplode(att.attacl) a
+                        WHERE att.attrelid = c.oid AND a.grantee = r.oid AND a.privilege_type = e.ev))
+    ) w
+    WHERE NOT (w.cap || ':' || w.rel || ':' || w.ev = ANY (v_scope_exempt))
+      AND NOT EXISTS (
+        SELECT 1 FROM pg_trigger tg
+        WHERE tg.tgrelid = w.reloid AND NOT tg.tgisinternal AND tg.tgfoid = 'app.t_session_scope()'::regprocedure
+          AND (tg.tgtype & w.bit) <> 0
+          AND position(quote_literal(w.cap) IN pg_get_triggerdef(tg.oid)) > 0);
+    IF bad IS NOT NULL THEN
+      RAISE EXCEPTION 'step 20: AI / worker write(s) with no t_session_scope trigger for the event (capability:table:event): %', bad;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_trigger tg WHERE tg.tgrelid = 'public.session'::regclass
+                   AND tg.tgfoid = 'app.t_session_purge()'::regprocedure AND (tg.tgtype & 8) <> 0) THEN
+      RAISE EXCEPTION 'step 20: the worker''s DELETE of session is not bound to ARCHIVED sessions (t_session_purge)';
+    END IF;
+  END;
+
   -- The message counter moves only through app.next_message_seq (work-k5fk.4): no role but its owner mwf_definer
   -- (and the table's owner) may UPDATE conversation.next_seq.
   SELECT string_agg(r.rolname, ', ' ORDER BY r.rolname) INTO bad
