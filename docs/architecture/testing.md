@@ -72,7 +72,7 @@ npm run test -- --coverage --workspace=backend
 The backend jest projects (`backend/jest.config.js`) are chosen by file name:
 
 - `fast`: everything else. No database; a suite here that connects fails.
-- `db`: `*.target.test.ts`, `*.pg.test.ts`, `src/__tests__/db/`. Each suite clones a golden template into its own database, so it runs on 2 workers (`MWF_DB_WORKERS`).
+- `db`: `*.target.test.ts`, `*.pg.test.ts`, `src/__tests__/db/`. Each suite clones a golden template into its own database, so it runs on 2 workers (`MWF_DB_WORKERS`). Exhaustive sweeps that cannot catch an app regression (the email domain's Unicode sweeps) run only under `MWF_TEST_ALL=1`, which `test:all` sets.
 - `golden`: `*.golden.test.ts`, serial (they read the shared container's statement log). `test:golden:premerge` runs the five that hold the read boundary (session-read, empathy-reveal, author-sees-status-only, choices-hidden-until-shared, needs-hidden-until-shared); the other six (the reveal orders, tombstone, declined-offer, unrevealed-attempt, reflection) run only in `test:golden` / `test:all`.
 
 The e2e tiers (`e2e/`):

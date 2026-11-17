@@ -14,6 +14,10 @@ import { isTargetShape } from '../../testing/golden/shape';
 import { openTargetRun, randomUuidV7, type TargetRun } from './target-roles';
 
 const describeTarget = isTargetShape() ? describe : describe.skip;
+// The three exhaustive Unicode sweeps test Postgres's pg_unicode_fast against
+// JavaScript, not anything a change to the app can move: they run in
+// `npm run test:all` (CI, nightly), which sets MWF_TEST_ALL (test audit 2026-11-17).
+const itExhaustive = process.env.MWF_TEST_ALL ? it : it.skip;
 jest.setTimeout(120_000);
 
 /** Independent of tables.sql: the Unicode properties email_no_format and email_no_space_control encode. */
@@ -164,7 +168,7 @@ describeTarget('the email domain (target)', () => {
   // (e.g. U+A7CE, U+16EA0…) lowercase in JS but are unassigned to PG, and email_assigned refuses
   // them — so the address fails closed instead of being stored in two forms. Compared over every
   // code point PostgreSQL considers assigned.
-  it('exhaustive: lower() under pg_unicode_fast and JavaScript toLowerCase agree on every assigned code point', async () => {
+  itExhaustive('exhaustive: lower() under pg_unicode_fast and JavaScript toLowerCase agree on every assigned code point', async () => {
     const rows = await run.sql<{ c: number; l: string }>(
       `SELECT c, lower(chr(c) COLLATE pg_unicode_fast) AS l FROM generate_series(1, 1114111) AS c
        WHERE c NOT BETWEEN 55296 AND 57343 AND unicode_assigned(chr(c))`,
@@ -205,7 +209,7 @@ describeTarget('the email domain (target)', () => {
   // considers assigned (Node 20 knows Unicode 17, PG 18.6 Unicode 16; the others are refused by
   // email_assigned anyway), the format CHECK refuses exactly JavaScript's \p{Cf} ∪
   // \p{Default_Ignorable_Code_Point}, and the space/control CHECK exactly \p{White_Space} ∪ \p{Cc}.
-  it('exhaustive: email_no_format = \\p{Cf} ∪ \\p{Default_Ignorable_Code_Point}, email_no_space_control = \\p{White_Space} ∪ \\p{Cc}', async () => {
+  itExhaustive('exhaustive: email_no_format = \\p{Cf} ∪ \\p{Default_Ignorable_Code_Point}, email_no_space_control = \\p{White_Space} ∪ \\p{Cc}', async () => {
     const [def] = await run.sql<{ def: string }>(
       `SELECT pg_get_constraintdef(oid) AS def FROM pg_constraint WHERE contypid = 'email'::regtype AND conname = 'email_no_format'`,
     );
@@ -233,7 +237,7 @@ describeTarget('the email domain (target)', () => {
   // point of some canonical decomposition are skipped: for them l + m is unchanged by the fold
   // (nothing to lowercase, nothing to compose with) and is a starter followed by one mark, already
   // NFC — so the pair cannot exercise the fold. That leaves every pair that can.
-  it('exhaustive: every letter × every combining mark canonicalizes to a valid, stable value', async () => {
+  itExhaustive('exhaustive: every letter × every combining mark canonicalizes to a valid, stable value', async () => {
     const assigned = (await run.sql<{ c: number }>(
       `SELECT c FROM generate_series(1, 1114111) AS c WHERE c NOT BETWEEN 55296 AND 57343 AND unicode_assigned(chr(c))`,
     )).map(r => r.c);
