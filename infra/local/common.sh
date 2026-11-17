@@ -4,12 +4,28 @@ set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "$HERE/../.." && pwd)"
-LOCAL="$HERE/.local"            # git-ignored: env files, build context, web export
-PROJECT=mwf-local               # compose project; never "mwf" (production)
-MWF_LOCAL_PORT="${MWF_LOCAL_PORT:-18180}"
-MWF_LOCAL_DB_PORT="${MWF_LOCAL_DB_PORT:-15433}"
+# MWF_LOCAL_INSTANCE (work-k5fk.10.6): a second, separately named replica next to the default one —
+# its own compose project, env directory, volumes, subnets and ports — for rehearsing a change
+# without touching the default replica's data. Lowercase letters and digits; unset = the default.
+INSTANCE="${MWF_LOCAL_INSTANCE:-}"
+[[ "$INSTANCE" =~ ^[a-z0-9]*$ ]] || { echo "error: MWF_LOCAL_INSTANCE must be [a-z0-9]*" >&2; exit 1; }
+if [ -z "$INSTANCE" ]; then
+  LOCAL="$HERE/.local"          # git-ignored: env files, build context, web export
+  PROJECT=mwf-local             # compose project; never "mwf" (production)
+  VOLUME_PREFIX=mwf_local
+  NET=172.30                    # subnets $NET.77 (edge), $NET.78 (database), $NET.79 (admin)
+  MWF_LOCAL_PORT="${MWF_LOCAL_PORT:-18180}"
+  MWF_LOCAL_DB_PORT="${MWF_LOCAL_DB_PORT:-15433}"
+else
+  LOCAL="$HERE/.local-$INSTANCE"
+  PROJECT="mwf-local-$INSTANCE"
+  VOLUME_PREFIX="mwf_local_$INSTANCE"
+  NET="${MWF_LOCAL_NET:-172.31}"
+  MWF_LOCAL_PORT="${MWF_LOCAL_PORT:?MWF_LOCAL_INSTANCE needs its own MWF_LOCAL_PORT}"
+  MWF_LOCAL_DB_PORT="${MWF_LOCAL_DB_PORT:?MWF_LOCAL_INSTANCE needs its own MWF_LOCAL_DB_PORT}"
+fi
 ORIGIN="http://127.0.0.1:${MWF_LOCAL_PORT}"
-DB_VOLUME=mwf_local_postgres
+DB_VOLUME="${VOLUME_PREFIX}_postgres"
 
 step() { printf '\n== %s\n' "$*"; }
 die()  { echo "error: $*" >&2; exit 1; }

@@ -32,7 +32,7 @@ services:
     # pgaudit.log = 'all' on for mwf_migrator, the admin and mwf_clinician only (ALTER ROLE … SET).
     # The audit lines go to the container log with the role and application name in the prefix.
     command: [postgres, -c, shared_buffers=128MB, -c, max_connections=35, -c, work_mem=4MB, -c, maintenance_work_mem=64MB,
-              -c, hba_file=/etc/mwf-db/pg_hba.conf, -c, password_encryption=scram-sha-256,
+              -c, hba_file=/var/run/postgresql/tls/pg_hba.conf, -c, password_encryption=scram-sha-256,
               -c, ssl=on, -c, ssl_cert_file=/var/run/postgresql/tls/server.crt,
               -c, ssl_key_file=/var/run/postgresql/tls/server.key, -c, ssl_min_protocol_version=TLSv1.3,
               -c, shared_preload_libraries=pgaudit, -c, pgaudit.log=none, -c, pgaudit.log_catalog=off,

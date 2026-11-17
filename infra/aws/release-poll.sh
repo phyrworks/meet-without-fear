@@ -40,8 +40,8 @@ for file in $expected; do
   mv "/opt/mwf/$file.next" "/opt/mwf/$file"
 done
 chmod 755 /opt/mwf/init-db.sh
-# Read by the database container's postgres user (initdb, hba_file): work-k5fk.10.6.
-chmod 644 /opt/mwf/ownership.sql /opt/mwf/pg_hba.conf
+# Read by the database container's postgres user at initdb (work-k5fk.10.6).
+chmod 644 /opt/mwf/ownership.sql
 /opt/mwf/install-services.sh
 /opt/mwf/deploy.sh "$image" "$work/manifest.json"
 report healthy

@@ -44,15 +44,22 @@ infra/local/reset.sh --yes # down, drop volume mwf_local_postgres, up (fresh bas
    An unchanged tree reuses the image. `MWF_LOCAL_APP_IMAGE=<image>` runs an existing image instead.
 3. Exports the mobile app for web (`expo export --platform web`) with `EXPO_PUBLIC_E2E_MODE=true`
    and `EXPO_PUBLIC_API_URL=http://127.0.0.1:18180`; skipped when the inputs are unchanged.
-4. Starts `db`; `init-db.sh` creates the roles on a fresh volume, then `infra/local/init-db-owner.sh`
-   hands the database and schema `public` to `mwf_migrator` (a fresh volume never has the retired `mwf_job`; step 4 refuses an older one)
-   (work-k5fk.10.3). Then the role-guard preflight (`dist/backend/src/scripts/role-guard-preflight.js`
-   in a one-off `api` container) checks every runtime role URL and stops before migrating if one is
-   a superuser, BYPASSRLS, a member of any role or owns anything. A volume initialised before
-   work-k5fk.10.3 (owned by `mwf_app`) is refused: `infra/local/reset.sh --yes`.
-5. Migrates the way `deploy.sh` does — `stop api`, then a one-off `api` container runs
-   `prisma migrate deploy` — but only when the image changed, the API is not healthy, or a
-   migration is pending. Production has no local backup step.
+4. Builds the database image as production does (`infra/aws/build-db-image.sh` with podman: the
+   pinned base + pgaudit + the TLS entrypoint), makes the TLS pair (`infra/aws/db-tls.sh` into
+   `.local/db-tls`), renders `.local/pg_hba.conf` from `infra/aws/pg_hba.conf` with this instance's
+   subnets (plus one replica-only line, below), and starts `db`. On a fresh volume `init-db.sh`
+   creates the roles, then `infra/aws/ownership.sql` hands the database and schema `public` to
+   `mwf_migrator`, takes CONNECT / TEMPORARY from PUBLIC (the capabilities keep CONNECT) and turns
+   pgaudit on for the migrator, the admin and `mwf_clinician` (work-k5fk.10.6). A volume from
+   before that (no pgaudit, no TLS, or PUBLIC may connect) is refused: `infra/local/reset.sh --yes`.
+   Then the role-guard preflight (`dist/backend/src/scripts/role-guard-preflight.js` in a one-off
+   container on the database network) checks every runtime role URL — over TLS, verifying the
+   server — and stops before migrating if one is a superuser, BYPASSRLS, a member of any role or
+   owns anything.
+5. Migrates the way `deploy.sh` does — `stop api`, then a one-off container of the image at the
+   migration address (`<net>.78.4`, the only source `pg_hba.conf` admits `mwf_migrator` from) runs
+   `prisma migrate deploy` with `.local/migrator.env`'s URL — but only when the image changed, the
+   API is not healthy, or a migration is pending. Production has no local backup step.
 6. Starts `api`, waits for its healthcheck (`infra/aws/healthcheck.cjs`, unchanged), then `caddy`,
    and checks `/health` and `/` through the origin.
 
@@ -64,11 +71,27 @@ infra/local/reset.sh --yes # down, drop volume mwf_local_postgres, up (fresh bas
 | PostgreSQL (admin) | `127.0.0.1:15433` (`MWF_LOCAL_DB_PORT`), database `mwf`, superuser `postgres`; passwords in `infra/local/.local/secrets.env` |
 | Compose project | `mwf-local` (production's is `mwf`) |
 | Volumes | `mwf_local_postgres`, `mwf_local_caddy_data`, `mwf_local_caddy_config` |
-| Networks | `mwf-local_edge` (172.30.77.0/24; production uses 172.29.0.0/24), `mwf-local_database` (internal), `mwf-local_admin` |
+| Networks | `mwf-local_edge` (172.30.77.0/24; production uses 172.29.0.0/24), `mwf-local_database` (internal, 172.30.78.0/24: db .2, api .3, migrations .4), `mwf-local_admin` (172.30.79.0/24) |
 
 Every published port binds `127.0.0.1`. **Keep it that way:** with the auth bypass on, anyone who
 can reach the API can act as any user by sending `x-e2e-user-id`. The replica never touches the
 development container `mwf-postgres` or its databases.
+
+## A second, separately named instance (rehearsals)
+
+`MWF_LOCAL_INSTANCE=<name>` (lowercase letters and digits) runs every script against its own
+replica: compose project `mwf-local-<name>`, env directory `infra/local/.local-<name>/`, volumes
+`mwf_local_<name>_*`, subnets `172.31.77–79.0/24` (`MWF_LOCAL_NET` overrides the `172.31`), and the
+ports you give it (both required):
+
+```bash
+export MWF_LOCAL_INSTANCE=c9 MWF_LOCAL_PORT=18190 MWF_LOCAL_DB_PORT=15443
+infra/local/up.sh && infra/local/up.sh && infra/local/reset.sh --yes && infra/local/smoke.sh
+infra/local/down.sh && podman volume rm mwf_local_c9_postgres mwf_local_c9_caddy_data mwf_local_c9_caddy_config
+rm -rf infra/local/.local-c9
+```
+
+The default replica (`mwf-local`, `mwf_local_*`) is never touched by an instance's scripts.
 
 ## How it differs from production
 
@@ -78,6 +101,7 @@ development container `mwf-postgres` or its databases.
 | `E2E_AUTH_BYPASS` / `MOCK_LLM` | forced `false` in `compose.yaml` | `true` |
 | Caddy | TLS for `api.meetwithoutfear.com` on 80/443, plus loopback `:8080` | loopback `:8080` only, also serving the web export |
 | Image architecture | linux/amd64 (CI) | the Mac's native arm64 |
+| `DATABASE_URL` | `mwf_app` (the app's fallback); migrations from `/etc/mwf/migrator.env` | the superuser, for the E2E tooling connection only (it must see every row; FORCE RLS hides them all from `mwf_migrator`), admitted by one extra `pg_hba.conf` line from the API's address; migrations from `.local/migrator.env` |
 | Database URLs | `DATABASE_URL` = `mwf_app` | `DATABASE_URL` = `mwf_migrator` (migrations and the E2E tooling connection only); plus `APP_`/`AI_`/`WORKER_`/`OPS_`/`AUTH_DATABASE_URL` for `mwf_app`/`mwf_ai`/`mwf_worker`/`mwf_ops`/`mwf_auth` and `DB_IDENTITY_BINDING=on` (the target-shape settings) |
 | Migrations | `mwf_app` (database owner) via `deploy.sh`, after a backup | `mwf_migrator` (database owner), no backup |
 | Ownership | `mwf_app` owns the database | `mwf_migrator` owns everything, `mwf_definer` (NOLOGIN) the SECURITY DEFINER functions; each runtime login is a member of its one capability role only (work-k5fk.10.4) |

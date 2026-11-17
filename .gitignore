@@ -153,6 +153,7 @@ backend/src/testing/golden/.smoke*.ts
 
 # Local production replica: generated env files, build context, web export
 infra/local/.local/
+infra/local/.local-*/
 
 # AWS deployment: secrets, state, plans, backups, and local build contexts
 infra/aws/.local/
