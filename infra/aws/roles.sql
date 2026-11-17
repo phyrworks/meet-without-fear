@@ -169,11 +169,11 @@ GRANT mwf_definer TO mwf_migrator WITH INHERIT FALSE, SET TRUE;
 -- Idempotent: nothing happens once both are gone. A role cannot be dropped while
 -- it owns an object or holds a privilege in ANY database of the cluster, and this
 -- script reaches only the one it runs in, so:
---   1. every membership in either role is revoked (GRANT mwf_job TO mwf_migrator,
+--   1. if either still OWNS an object anywhere (a database at the old shape:
+--      phoenix/base makes mwf_job own its definer helpers), the script stops,
+--      changing nothing — run backend/scripts/target-shape/drop-old-objects.sql there first;
+--   2. every membership in either role is revoked (GRANT mwf_job TO mwf_migrator,
 --      and to a non-superuser database owner, from the pre-9b script);
---   2. if either still OWNS an object anywhere (a database at the old shape:
---      phoenix/base makes mwf_job own its definer helpers), the script stops —
---      run backend/scripts/target-shape/drop-old-objects.sql there first;
 --   3. their privileges in THIS database are dropped (DROP OWNED: they own
 --      nothing, so it only revokes);
 --   4. if another database still grants them something, the script stops and
@@ -182,13 +182,6 @@ GRANT mwf_definer TO mwf_migrator WITH INHERIT FALSE, SET TRUE;
 --   5. both roles are dropped.
 SELECT count(*) > 0 AS legacy_roles FROM pg_catalog.pg_roles WHERE rolname IN ('mwf_job', 'job_access') \gset
 \if :legacy_roles
-SELECT format('REVOKE %I FROM %I', r.rolname, m.rolname)
-FROM pg_catalog.pg_auth_members am
-JOIN pg_catalog.pg_roles r ON r.oid = am.roleid
-JOIN pg_catalog.pg_roles m ON m.oid = am.member
-WHERE r.rolname IN ('mwf_job', 'job_access') AND m.rolname NOT IN ('mwf_job', 'job_access')
-\gexec
-
 SELECT coalesce(string_agg(DISTINCT coalesce(d.datname, '(cluster)'), ', '), '') AS retired_owner_dbs,
        count(*) > 0 AS retired_owns
 FROM pg_catalog.pg_shdepend s LEFT JOIN pg_catalog.pg_database d ON d.oid = s.dbid
@@ -198,6 +191,14 @@ WHERE s.refclassid = 'pg_catalog.pg_authid'::regclass AND s.deptype = 'o'
 \echo 'roles.sql: mwf_job / job_access still OWN objects in: ' :retired_owner_dbs ' — run backend/scripts/target-shape/drop-old-objects.sql there first (work-k5fk.10.5); the roles above were applied, the retirement was not'
 DO $$ BEGIN RAISE EXCEPTION 'roles.sql: a retired role still owns objects (see the line above)'; END $$;
 \endif
+
+-- Ownership checked first (review F9): only now are the memberships revoked, so a run refused there changes nothing.
+SELECT format('REVOKE %I FROM %I', r.rolname, m.rolname)
+FROM pg_catalog.pg_auth_members am
+JOIN pg_catalog.pg_roles r ON r.oid = am.roleid
+JOIN pg_catalog.pg_roles m ON m.oid = am.member
+WHERE r.rolname IN ('mwf_job', 'job_access') AND m.rolname NOT IN ('mwf_job', 'job_access')
+\gexec
 
 SELECT format('DROP OWNED BY %I', rolname) FROM pg_catalog.pg_roles WHERE rolname IN ('mwf_job', 'job_access') ORDER BY rolname
 \gexec

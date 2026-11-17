@@ -28,7 +28,7 @@ const BASE_URL =
 const describeTarget = isTargetShape() ? describe : describe.skip;
 jest.setTimeout(120_000);
 
-describeTarget('job path on the target, as mwf_job with identity binding on', () => {
+describeTarget('job path on the target, as mwf_ai with identity binding on (mwf_job retired, work-k5fk.10.5)', () => {
   let harness: Harness;
   const rows = async <T extends Record<string, unknown>>(sql: string, params: unknown[] = []): Promise<T[]> =>
     withClient(harness.fixture.target, async c => (await c.query<T>(sql, params)).rows, harness.fixture.database);

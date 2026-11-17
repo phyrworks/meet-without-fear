@@ -473,18 +473,21 @@ async function setFollowUpStatusAsJob(
 /** The next round of a follow-up: the current one COMPLETED, a new SCHEDULED row for the same subject. */
 async function scheduleNextRoundAsJob(entry: FollowUpRow, scheduledFor: Date, now: Date): Promise<string> {
   await setFollowUpStatusAsJob(entry.id, 'COMPLETED', { completedAt: now });
-  return insertFollowUpAsJob({
-    sessionId: entry.sessionId,
-    agreementId: entry.agreementId,
-    proposalId: entry.proposalId,
-    type: entry.type,
-    scope: entry.scope,
-    ownerUserId: entry.ownerUserId,
-    optedInShared: entry.optedInShared,
-    status: 'SCHEDULED',
-    scheduledFor,
-    summary: entry.summary,
-  });
+  // The next round is of the entry's session: the worker's follow_up INSERT is scoped (review F6, t_session_scope).
+  return withSessionScope(entry.sessionId, () =>
+    insertFollowUpAsJob({
+      sessionId: entry.sessionId,
+      agreementId: entry.agreementId,
+      proposalId: entry.proposalId,
+      type: entry.type,
+      scope: entry.scope,
+      ownerUserId: entry.ownerUserId,
+      optedInShared: entry.optedInShared,
+      status: 'SCHEDULED',
+      scheduledFor,
+      summary: entry.summary,
+    }),
+  );
 }
 
 type AgreementForScheduling = { id: string; description: string; followUpDate: Date | null };

@@ -22,7 +22,7 @@ type Http = Awaited<ReturnType<typeof httpAs>>;
 const TOKEN_A = 'ExponentPushToken[ts12-ada-phone-aaaaaaaaaaaa]';
 const TOKEN_B = 'ExponentPushToken[ts12-ada-tablet-bbbbbbbbbbb]';
 
-describeTarget('memory and preferences on the target, as mwf_app (and the job as mwf_job)', () => {
+describeTarget('memory and preferences on the target, as mwf_app (and notification delivery as mwf_worker)', () => {
   let run: TargetRun;
   let http: Http;
   let ids: Awaited<ReturnType<typeof adaAndBob>>;
@@ -100,7 +100,7 @@ describeTarget('memory and preferences on the target, as mwf_app (and the job as
     ).toEqual([{ push_token: TOKEN_B }]);
   });
 
-  it("push: the JOB (mwf_job) reads another user's tokens and clears an unregistered one", async () => {
+  it("push: the worker (mwf_worker) reads another user's tokens and clears an unregistered one", async () => {
     const settings = await import('../user-settings');
     expect(await settings.pushTokensAsWorker(ada.id)).toEqual([TOKEN_B]);
     await settings.clearPushTokenAsWorker(ada.id, TOKEN_B);

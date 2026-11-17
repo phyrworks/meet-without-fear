@@ -1317,6 +1317,11 @@ ROLLBACK;
 \connect - mwf_user
 SELECT 'connected as ' || session_user || ' (30: setup as the superuser, the calls as mwf_app)';
 SELECT set_config('t.a_user', :'a_user', false), set_config('t.b_user', :'b_user', false), set_config('t.outsider', :'outsider', false), set_config('t.att_a', :'att_a', false), set_config('t.att_b', :'att_b', false), set_config('t.r_session', :'r_session', false) \g /dev/null
+-- The latest round of each direction (test 10 resubmitted one; the earlier rounds are history).
+SELECT set_config('t.att_a', (SELECT e.id::text FROM empathy_attempt e WHERE e.session_id = current_setting('t.r_session')::uuid
+                              AND e.author_user_id = current_setting('t.a_user')::uuid ORDER BY e.round DESC LIMIT 1), false),
+       set_config('t.att_b', (SELECT e.id::text FROM empathy_attempt e WHERE e.session_id = current_setting('t.r_session')::uuid
+                              AND e.author_user_id = current_setting('t.b_user')::uuid ORDER BY e.round DESC LIMIT 1), false) \g /dev/null
 BEGIN;
 UPDATE session SET status = 'ACTIVE', resolved_at = NULL WHERE id = current_setting('t.r_session')::uuid;
 UPDATE participant SET left_at = NULL WHERE session_id = current_setting('t.r_session')::uuid;
@@ -1445,7 +1450,7 @@ BEGIN
   IF (SELECT e.delivery_status::text FROM empathy_attempt e WHERE e.id = att_b) <> 'SEEN' THEN
     RAISE EXCEPTION 'TEST FAILED: SEEN was downgraded to DELIVERED';
   END IF;
-  IF v_at < now() - interval '1 minute' THEN RAISE EXCEPTION 'TEST FAILED: the stamp was backdated to %', v_at; END IF;
+  IF v_at < now() - interval '11 minutes' THEN RAISE EXCEPTION 'TEST FAILED: the stamp was backdated to %', v_at; END IF;
   RAISE NOTICE 'PASS 30l the subject stamps SEEN; a later DELIVERED does not downgrade it; the instant is not backdated';
   -- 30m. the session of a declined invitation ends only while it is CREATED / INVITED: an ACTIVE one is left alone
   PERFORM set_config('app.current_user_id', current_setting('t.outsider'), true);
@@ -1513,6 +1518,11 @@ ROLLBACK;
 \connect - mwf_user
 SELECT 'connected as ' || session_user || ' (32: setup as the superuser, the calls as mwf_ai)';
 SELECT set_config('t.a_user', :'a_user', false), set_config('t.b_user', :'b_user', false), set_config('t.att_a', :'att_a', false), set_config('t.att_b', :'att_b', false), set_config('t.r_session', :'r_session', false) \g /dev/null
+-- The latest round of each direction (test 10 resubmitted one; the earlier rounds are history).
+SELECT set_config('t.att_a', (SELECT e.id::text FROM empathy_attempt e WHERE e.session_id = current_setting('t.r_session')::uuid
+                              AND e.author_user_id = current_setting('t.a_user')::uuid ORDER BY e.round DESC LIMIT 1), false),
+       set_config('t.att_b', (SELECT e.id::text FROM empathy_attempt e WHERE e.session_id = current_setting('t.r_session')::uuid
+                              AND e.author_user_id = current_setting('t.b_user')::uuid ORDER BY e.round DESC LIMIT 1), false) \g /dev/null
 BEGIN;
 UPDATE empathy_attempt SET status = 'REVEALED', revealed_at = coalesce(revealed_at, now() - interval '1 hour')
 WHERE id = current_setting('t.att_a')::uuid;

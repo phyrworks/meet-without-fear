@@ -33,7 +33,7 @@ jest.setTimeout(180_000);
 
 type Chunk = { type: 'text'; text: string } | { type: 'done' };
 
-describeTarget('the streaming chat turn on the target (mwf_app, the reply by mwf_job)', () => {
+describeTarget('the streaming chat turn on the target (mwf_app, the reply by mwf_ai)', () => {
   let run: TargetRun;
   let ids: Awaited<ReturnType<typeof adaAndBob>>;
   let app: never;

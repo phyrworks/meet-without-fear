@@ -26,7 +26,7 @@ import { adaAndBob, openTargetRun, type TargetRun } from './target-roles';
 const describeTarget = isTargetShape() ? describe : describe.skip;
 jest.setTimeout(180_000);
 
-describeTarget('repair and follow-up on the target, as mwf_app and mwf_job with identity binding on', () => {
+describeTarget('repair and follow-up on the target, as mwf_app and mwf_worker with identity binding on', () => {
   let run: TargetRun;
   let ids: Awaited<ReturnType<typeof adaAndBob>>;
   let store: typeof import('../stage4-store');
@@ -229,7 +229,7 @@ describeTarget('repair and follow-up on the target, as mwf_app and mwf_job with 
     ]);
   });
 
-  it('the open-due job (mwf_job) opens only due SCHEDULED follow-ups', async () => {
+  it('the open-due job (mwf_worker) opens only due SCHEDULED follow-ups', async () => {
     const [{ due_at }] = await run.sql<{ due_at: Date }>(`SELECT max(scheduled_for) AS due_at FROM follow_up`);
     // One not yet due, one due but cancelled.
     await run.sql(

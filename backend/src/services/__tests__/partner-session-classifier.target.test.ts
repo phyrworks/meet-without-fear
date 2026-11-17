@@ -58,7 +58,7 @@ const savedNotableFacts = async (): Promise<CategorizedFactWithId[]> => {
   return row.doc.facts;
 };
 
-describeTarget('partner-session classifier on the target (NOTABLE_FACTS by mwf_job)', () => {
+describeTarget('partner-session classifier on the target (NOTABLE_FACTS by mwf_ai)', () => {
   beforeAll(async () => {
     run = await openTargetRun('INNER_WORK_LINKED_A', `ts12_psc_${process.pid}`);
     const ids = await adaAndBob(run);

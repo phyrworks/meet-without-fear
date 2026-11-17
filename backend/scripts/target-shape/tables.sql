@@ -1406,7 +1406,9 @@ GRANT UPDATE (status, offered_at, suggested_content, declined_at, shared_content
 -- mwf_definer: T-consent-owner (owner of a proposal / share offer / review target), fired by need_revoke_share;
 -- share_offers_expire (stage2.ts triggerStage3Transition: open offers expire when the Stage 2 sharing window closes)
 -- and share_offers_mark_notified (notifications.ts getPendingActionsHandler: the subject's own notification stamps)
-GRANT SELECT (id, session_id, subject_user_id, status) ON context_share_offer TO mwf_definer;
+-- (attempt_id, delivery_status: deliver_message's AI arm ties a SHARED_CONTEXT to the sender's ACCEPTED, undelivered
+-- offer on the recipient's round, review F3)
+GRANT SELECT (id, session_id, subject_user_id, status, attempt_id, delivery_status) ON context_share_offer TO mwf_definer;
 GRANT UPDATE (status, delivery_notified_at, seen_notified_at) ON context_share_offer TO mwf_definer;
 -- mwf_ai: reconciler/sharing.ts insertOffer: the next iteration of an attempt's offers (max(iteration)), RETURNING id;
 -- generateShareSuggestion(ForDirection) / generateShareOffer: does this result already have an (open) offer (with a

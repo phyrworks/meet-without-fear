@@ -50,6 +50,21 @@ export function identityBindingEnabled(env: Record<string, string | undefined> =
   throw new Error(`DB_IDENTITY_BINDING must be "on" or "off", got "${raw}"`);
 }
 
+/**
+ * Startup (work-k5fk.10.5 review F7, decided): the target shape's request path needs the caller's identity in
+ * the database — every request-path definer (app.deliver_message, app.reach_milestone, app.session_set_status …)
+ * decides on app.current_user_id(), and with binding off they would refuse every call. So the API refuses to
+ * start unless DB_IDENTITY_BINDING=on: fail closed, never an app that runs unbound.
+ */
+export function assertIdentityBindingOn(env: Record<string, string | undefined> = process.env): void {
+  if (!identityBindingEnabled(env)) {
+    throw new Error(
+      "DB_IDENTITY_BINDING=on is required: the request path binds the caller's identity to every statement " +
+        '(the definers and identity-bound reads decide on it); refusing to start with it off or unset',
+    );
+  }
+}
+
 export const SET_IDENTITY_SQL = "SELECT set_config('app.current_user_id', $1, true)";
 
 /**

@@ -6,6 +6,7 @@ import type { DatabaseRole } from './database-urls';
 import {
   bindTransactionSettings,
   identityBindingEnabled,
+  assertIdentityBindingOn,
   keepRequestContextAcrossBatching,
   type BoundSetting,
 } from './prisma-identity';
@@ -216,6 +217,8 @@ export async function disconnectRolePrismas(): Promise<void> {
  * fails when AI_DATABASE_URL or WORKER_DATABASE_URL is unset (they never fall back).
  */
 export async function verifyRuntimeConnections(env: Record<string, string | undefined> = process.env): Promise<void> {
+  // Review F7: no unbound request path (DB_IDENTITY_BINDING=on is required).
+  assertIdentityBindingOn(env);
   await prisma.$queryRaw`SELECT 1`;
   // Always: request paths write through both (work-k5fk.10.5); unset, they fail closed here.
   await getAiPrisma().$queryRaw`SELECT 1`;

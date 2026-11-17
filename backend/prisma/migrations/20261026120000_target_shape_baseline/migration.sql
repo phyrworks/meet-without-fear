@@ -1558,7 +1558,9 @@ GRANT UPDATE (status, offered_at, suggested_content, declined_at, shared_content
 -- mwf_definer: T-consent-owner (owner of a proposal / share offer / review target), fired by need_revoke_share;
 -- share_offers_expire (stage2.ts triggerStage3Transition: open offers expire when the Stage 2 sharing window closes)
 -- and share_offers_mark_notified (notifications.ts getPendingActionsHandler: the subject's own notification stamps)
-GRANT SELECT (id, session_id, subject_user_id, status) ON context_share_offer TO mwf_definer;
+-- (attempt_id, delivery_status: deliver_message's AI arm ties a SHARED_CONTEXT to the sender's ACCEPTED, undelivered
+-- offer on the recipient's round, review F3)
+GRANT SELECT (id, session_id, subject_user_id, status, attempt_id, delivery_status) ON context_share_offer TO mwf_definer;
 GRANT UPDATE (status, delivery_notified_at, seen_notified_at) ON context_share_offer TO mwf_definer;
 -- mwf_ai: reconciler/sharing.ts insertOffer: the next iteration of an attempt's offers (max(iteration)), RETURNING id;
 -- generateShareSuggestion(ForDirection) / generateShareOffer: does this result already have an (open) offer (with a
@@ -3117,10 +3119,16 @@ CREATE FUNCTION app.session_set_status(session uuid, status public.session_statu
   AS $$
   DECLARE
     v_from public.session_status;
-    v_job  boolean := session_user = 'mwf_migrator'
-                      OR (pg_catalog.pg_has_role(session_user, 'worker_access', 'USAGE')
-                          AND coalesce(app.session_scope() = session_set_status.session, false));
+    v_worker boolean := pg_catalog.pg_has_role(session_user, 'worker_access', 'USAGE')
+                        AND coalesce(app.session_scope() = session_set_status.session, false);
+    v_job  boolean := session_user = 'mwf_migrator' OR v_worker;
   BEGIN
+    -- review F6: the worker only ends a session (retention, the Stage 4 closure, tending): it never starts one.
+    IF v_worker AND session_user <> 'mwf_migrator'
+       AND session_set_status.status NOT IN ('ABANDONED', 'ARCHIVED', 'RESOLVED') THEN
+      RAISE EXCEPTION 'the worker only ends a session (ABANDONED, ARCHIVED, RESOLVED), not %', session_set_status.status
+        USING ERRCODE = 'insufficient_privilege';
+    END IF;
     SELECT s.status INTO v_from FROM public.session s WHERE s.id = session_set_status.session FOR NO KEY UPDATE;
     IF NOT FOUND OR NOT (v_job OR (pg_catalog.pg_has_role(session_user, 'app_access', 'USAGE') AND EXISTS (
           SELECT 1 FROM public.participant p
@@ -3224,7 +3232,8 @@ GRANT EXECUTE ON FUNCTION app.session_archive(uuid) TO app_access;
 --     AWAITING_SHARING → REFINING | READY, REFINING → READY | AWAITING_SHARING
 --     (the stage2.ts in-request writers), and SUPERSEDED (resubmission);
 --   the AI only: READY → REVEALED, and only when the reveal gate holds;
---   the SUBJECT (identity-bound, app capability) or the AI: REVEALED → VALIDATED | REFINING.
+--   the SUBJECT (identity-bound, app capability) only: REVEALED → VALIDATED | REFINING (review F2: never the AI);
+--   SUPERSEDED (a resubmission) is the author's only, never the AI's.
 -- (mwf_migrator: every arm the AI has, for tooling.)
 -- Anyone else: 'attempt not found'. Locks the session row, then the attempt,
 -- so a concurrent resubmit of the reverse direction cannot slip between the
@@ -3242,6 +3251,7 @@ CREATE FUNCTION app.empathy_set_status(attempt uuid, status public.empathy_statu
     v_me           uuid := app.current_user_id();
     v_app          boolean := pg_catalog.pg_has_role(session_user, 'app_access', 'USAGE');
     v_job          boolean;
+    v_mig          boolean;
     v_session      uuid;
     v_author_user  uuid;
     v_author_left  timestamptz;
@@ -3259,6 +3269,9 @@ CREATE FUNCTION app.empathy_set_status(attempt uuid, status public.empathy_statu
     -- The AI arm (the reconciler's moves and the reveal): only within the attempt's session (app.session_scope).
     v_job := session_user = 'mwf_migrator'
              OR (pg_catalog.pg_has_role(session_user, 'ai_access', 'USAGE') AND coalesce(app.session_scope() = v_session, false));
+    -- review F2: the AI arm makes the reconciler's moves and the reveal only; resubmitting (the author's next round)
+    -- and reviewing a revealed round (the subject's) are never the AI's.
+    v_mig := session_user = 'mwf_migrator';
     PERFORM 1 FROM public.session s WHERE s.id = v_session FOR NO KEY UPDATE;
     SELECT * INTO a FROM public.empathy_attempt e WHERE e.id = empathy_set_status.attempt FOR NO KEY UPDATE;
     SELECT p.user_id, p.left_at INTO v_author_user, v_author_left FROM public.participant p
@@ -3272,7 +3285,7 @@ CREATE FUNCTION app.empathy_set_status(attempt uuid, status public.empathy_statu
     END IF;
 
     IF empathy_set_status.status = 'SUPERSEDED' THEN
-      IF NOT (v_job OR v_is_author) THEN
+      IF NOT (v_mig OR v_is_author) THEN
         RAISE EXCEPTION 'only the author resubmits' USING ERRCODE = 'insufficient_privilege';
       END IF;
       IF a.status = 'SUPERSEDED' THEN
@@ -3310,7 +3323,7 @@ CREATE FUNCTION app.empathy_set_status(attempt uuid, status public.empathy_statu
       END IF;
     ELSIF (a.status, empathy_set_status.status) IN (
          ('REVEALED'::public.empathy_status, 'VALIDATED'::public.empathy_status), ('REVEALED', 'REFINING')) THEN
-      IF NOT (v_job OR v_is_subject) THEN
+      IF NOT (v_mig OR v_is_subject) THEN
         RAISE EXCEPTION 'only the subject reviews a revealed attempt' USING ERRCODE = 'insufficient_privilege';
       END IF;
     ELSE
@@ -3434,9 +3447,11 @@ CREATE FUNCTION app.anonymize_user_in_session(session uuid, "user" uuid) RETURNS
                                    AND coalesce(v_me IS NOT NULL AND uid = v_me, false))) THEN
       RAISE EXCEPTION 'participant not found' USING ERRCODE = 'P0002';
     END IF;
-    -- 1. a live session → ABANDONED (closes the invite-accept path; lets T-cardinality-2 accept the leave)
-    IF (SELECT s.status FROM public.session s WHERE s.id = anonymize_user_in_session.session) IN ('CREATED', 'INVITED', 'ACTIVE') THEN
-      PERFORM app.session_set_status(anonymize_user_in_session.session, 'ABANDONED');
+    -- 1. a live session → ABANDONED (closes the invite-accept path; lets T-cardinality-2 accept the leave). The walk's
+    -- own arm (review F8): not through session_set_status, whose participant arm refuses a user who already left
+    -- (left_at set) — such a user's account deletion must still end the session. Same lock as session_set_status.
+    IF (SELECT s.status FROM public.session s WHERE s.id = sid FOR NO KEY UPDATE) IN ('CREATED', 'INVITED', 'ACTIVE') THEN
+      UPDATE public.session s SET status = 'ABANDONED' WHERE s.id = sid;
     END IF;
     -- 2. the only PII a co-participant sees
     UPDATE public.participant SET display_name = NULL, left_at = coalesce(left_at, now()) WHERE session_id = sid AND user_id = uid;
@@ -3645,15 +3660,18 @@ CREATE FUNCTION app.deliver_message(conversation uuid, from_user uuid, kind publ
   DECLARE
     v_session uuid;
     v_to      uuid;
+    v_mig     boolean := session_user = 'mwf_migrator';
+    v_ai      boolean;
+    v_app     boolean;
+    v_at      timestamptz := coalesce(deliver_message.instant, CURRENT_TIMESTAMP);
   BEGIN
     SELECT c.session_id, c.user_id INTO v_session, v_to FROM public.conversation c WHERE c.id = deliver_message.conversation;
-    IF v_session IS NULL OR NOT (
-         session_user = 'mwf_migrator'
-         OR (pg_catalog.pg_has_role(session_user, 'ai_access', 'USAGE') AND coalesce(app.session_scope() = v_session, false))
-         OR (pg_catalog.pg_has_role(session_user, 'app_access', 'USAGE')
+    v_ai := pg_catalog.pg_has_role(session_user, 'ai_access', 'USAGE') AND coalesce(app.session_scope() = v_session, false);
+    v_app := pg_catalog.pg_has_role(session_user, 'app_access', 'USAGE')
              AND coalesce(app.current_user_id() = deliver_message.from_user, false)
              AND EXISTS (SELECT 1 FROM public.participant p
-                         WHERE p.session_id = v_session AND p.user_id = deliver_message.from_user AND p.left_at IS NULL))) THEN
+                         WHERE p.session_id = v_session AND p.user_id = deliver_message.from_user AND p.left_at IS NULL);
+    IF v_session IS NULL OR NOT (v_mig OR v_ai OR v_app) THEN
       RAISE EXCEPTION 'conversation not found' USING ERRCODE = 'P0002';
     END IF;
     IF deliver_message.kind = 'CHAT' THEN
@@ -3662,14 +3680,40 @@ CREATE FUNCTION app.deliver_message(conversation uuid, from_user uuid, kind publ
     IF v_to = deliver_message.from_user THEN
       RAISE EXCEPTION 'a delivery goes into another participant''s conversation' USING ERRCODE = 'check_violation';
     END IF;
+    -- review F1: the instant orders a delivery after the line it follows; it is never backdated or in the future.
+    IF v_at < CURRENT_TIMESTAMP - interval '10 minutes' OR v_at > CURRENT_TIMESTAMP + interval '5 seconds' THEN
+      RAISE EXCEPTION 'a delivery is stamped now (within ten minutes back, five seconds ahead)' USING ERRCODE = 'check_violation';
+    END IF;
+    IF NOT v_mig AND v_app THEN
+      -- review F1: the request path delivers the subject's feedback on a revealed round into its author's conversation
+      -- (stage2.ts, the review), nothing else.
+      IF deliver_message.kind <> 'VALIDATION_FEEDBACK' OR NOT EXISTS (
+           SELECT 1 FROM public.empathy_attempt e
+           WHERE e.id = deliver_message.source_attempt AND e.session_id = v_session
+             AND e.subject_user_id = deliver_message.from_user AND e.author_user_id = v_to
+             AND e.revealed_at IS NOT NULL AND e.status IN ('REVEALED', 'REFINING')) THEN
+        RAISE EXCEPTION 'the app delivers only the subject''s VALIDATION_FEEDBACK on a revealed round into its author''s conversation'
+          USING ERRCODE = 'insufficient_privilege';
+      END IF;
+    ELSIF NOT v_mig THEN
+      -- review F3: the AI delivers the shared context of an ACCEPTED, undelivered offer whose subject is the sender into
+      -- the conversation of the author of the offer's round (reconciler/sharing.ts deliverAcceptedShare), nothing else.
+      IF deliver_message.kind <> 'SHARED_CONTEXT' OR NOT EXISTS (
+           SELECT 1 FROM public.context_share_offer o JOIN public.empathy_attempt e ON e.id = o.attempt_id
+           WHERE o.session_id = v_session AND o.subject_user_id = deliver_message.from_user
+             AND o.status = 'ACCEPTED' AND o.delivery_status = 'PENDING' AND e.author_user_id = v_to) THEN
+        RAISE EXCEPTION 'the AI delivers only the SHARED_CONTEXT of the sender''s ACCEPTED, undelivered share offer'
+          USING ERRCODE = 'insufficient_privilege';
+      END IF;
+    END IF;
     RETURN QUERY
       INSERT INTO public.message AS m (conversation_id, session_id, sender_user_id, role, kind, content, source_attempt_id, created_at)
       VALUES (deliver_message.conversation, v_session, deliver_message.from_user, 'USER', deliver_message.kind,
-              deliver_message.content, deliver_message.source_attempt, coalesce(deliver_message.instant, CURRENT_TIMESTAMP))
+              deliver_message.content, deliver_message.source_attempt, v_at)
       RETURNING m.seq::integer, m.created_at::timestamptz;
   END
   $$;
-COMMENT ON FUNCTION app.deliver_message(uuid, uuid, public.message_kind, text, uuid, timestamptz) IS 'Deliver a participant''s item (role USER, kind <> CHAT, content sealed by the application) into another participant''s conversation of the same session. The author (identity-bound, app_access) or the AI within app.session_scope. Returns (seq, created_at). work-k5fk.10.5.';
+COMMENT ON FUNCTION app.deliver_message(uuid, uuid, public.message_kind, text, uuid, timestamptz) IS 'Deliver a participant''s item (role USER, content sealed by the application) into another participant''s conversation of the same session, stamped now (bounded): the subject''s VALIDATION_FEEDBACK on a revealed round into its author''s conversation (identity-bound, app_access), or the SHARED_CONTEXT of the sender''s ACCEPTED, undelivered offer (the AI within app.session_scope). Returns (seq, created_at). work-k5fk.10.5.';
 -- mwf_app (app_access): message-store deliverMessage on the request path. mwf_ai (ai_access): sharing.ts deliverAcceptedShare.
 REVOKE EXECUTE ON FUNCTION app.deliver_message(uuid, uuid, public.message_kind, text, uuid, timestamptz) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION app.deliver_message(uuid, uuid, public.message_kind, text, uuid, timestamptz) TO app_access;
@@ -3685,30 +3729,37 @@ CREATE FUNCTION app.empathy_mark_delivery(attempt uuid, delivery public.delivery
   SET search_path = pg_catalog, public, pg_temp
   AS $$
   DECLARE
-    v_session uuid;
-    v_subject uuid;
-    v_at      timestamptz := coalesce(empathy_mark_delivery.instant, CURRENT_TIMESTAMP);
+    v_session  uuid;
+    v_subject  uuid;
+    v_revealed timestamptz;
+    v_at       timestamptz := coalesce(empathy_mark_delivery.instant, CURRENT_TIMESTAMP);
   BEGIN
-    SELECT e.session_id, e.subject_user_id INTO v_session, v_subject
-    FROM public.empathy_attempt e WHERE e.id = empathy_mark_delivery.attempt;
+    SELECT e.session_id, e.subject_user_id, e.revealed_at INTO v_session, v_subject, v_revealed
+    FROM public.empathy_attempt e WHERE e.id = empathy_mark_delivery.attempt FOR NO KEY UPDATE;
     IF v_session IS NULL OR NOT (
          session_user = 'mwf_migrator'
          OR (pg_catalog.pg_has_role(session_user, 'ai_access', 'USAGE') AND coalesce(app.session_scope() = v_session, false))
          OR (pg_catalog.pg_has_role(session_user, 'app_access', 'USAGE') AND coalesce(app.current_user_id() = v_subject, false))) THEN
       RAISE EXCEPTION 'attempt not found' USING ERRCODE = 'P0002';
     END IF;
+    -- review F10: only a revealed round is delivered or seen, and the stamp moves forward only (PENDING → DELIVERED →
+    -- SEEN; a later DELIVERED leaves SEEN), at an instant clamped to the last ten minutes, never before the reveal.
+    IF v_revealed IS NULL THEN
+      RAISE EXCEPTION 'a round that was never revealed is neither delivered nor seen' USING ERRCODE = 'check_violation';
+    END IF;
+    v_at := least(greatest(v_at, v_revealed, CURRENT_TIMESTAMP - interval '10 minutes'), CURRENT_TIMESTAMP);
     IF empathy_mark_delivery.delivery = 'DELIVERED' THEN
       UPDATE public.empathy_attempt SET delivery_status = 'DELIVERED', delivered_at = coalesce(delivered_at, v_at)
-      WHERE id = empathy_mark_delivery.attempt;
+      WHERE id = empathy_mark_delivery.attempt AND delivery_status = 'PENDING';
     ELSIF empathy_mark_delivery.delivery = 'SEEN' THEN
       UPDATE public.empathy_attempt SET delivery_status = 'SEEN', seen_at = coalesce(seen_at, v_at)
-      WHERE id = empathy_mark_delivery.attempt;
+      WHERE id = empathy_mark_delivery.attempt AND delivery_status IN ('PENDING', 'DELIVERED');
     ELSE
       RAISE EXCEPTION 'delivery % is not a stamp', empathy_mark_delivery.delivery USING ERRCODE = 'check_violation';
     END IF;
   END
   $$;
-COMMENT ON FUNCTION app.empathy_mark_delivery(uuid, public.delivery_status, timestamptz) IS 'Stamp an attempt DELIVERED (delivered_at) or SEEN (seen_at), first instant standing. Its subject (identity-bound, app_access) or the AI within app.session_scope. work-k5fk.10.5.';
+COMMENT ON FUNCTION app.empathy_mark_delivery(uuid, public.delivery_status, timestamptz) IS 'Stamp a revealed attempt DELIVERED (delivered_at) or SEEN (seen_at), forward only (SEEN is never downgraded), first instant standing, the instant clamped to the last ten minutes and never before revealed_at. Its subject (identity-bound, app_access) or the AI within app.session_scope. work-k5fk.10.5.';
 -- mwf_app (app_access): stage2.ts, the subject's review. mwf_ai (ai_access): reconciler/state.ts, the reveal's delivery.
 REVOKE EXECUTE ON FUNCTION app.empathy_mark_delivery(uuid, public.delivery_status, timestamptz) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION app.empathy_mark_delivery(uuid, public.delivery_status, timestamptz) TO app_access;
@@ -4210,6 +4261,32 @@ CREATE TRIGGER t_session_scope_worker BEFORE INSERT ON public.proposal_revision
   FOR EACH ROW EXECUTE FUNCTION app.t_session_scope('session_id', 'worker_access');
 CREATE TRIGGER t_session_scope_worker BEFORE UPDATE ON public.proposal
   FOR EACH ROW EXECUTE FUNCTION app.t_session_scope('session_id', 'worker_access');
+-- review F6: a follow-up the worker schedules is of one session (the closure, a check-in's next round, the coordination
+-- cycle's next round); its UPDATEs stay cross-session (open-due, step 20's exemptions).
+CREATE TRIGGER t_session_scope_worker BEFORE INSERT ON public.follow_up
+  FOR EACH ROW EXECUTE FUNCTION app.t_session_scope('session_id', 'worker_access');
+
+-- T-session-purge (review F6): the worker's DELETE of a session (session-retention's purge, a cascade of every
+-- session-scoped row) removes only an ARCHIVED session. Exempt, as t_session_scope: any current_user that is not a
+-- member of worker_access, and the database owner / superusers.
+CREATE FUNCTION app.t_session_purge() RETURNS trigger
+  LANGUAGE plpgsql
+  SET search_path = pg_catalog, public, pg_temp
+  AS $$
+  BEGIN
+    IF pg_catalog.pg_has_role(current_user, 'worker_access', 'USAGE')
+       AND NOT pg_catalog.pg_has_role(current_user, 'pg_database_owner', 'USAGE')
+       AND OLD.status <> 'ARCHIVED' THEN
+      RAISE EXCEPTION 'the worker purges only ARCHIVED sessions, not %', OLD.status USING ERRCODE = 'insufficient_privilege';
+    END IF;
+    RETURN OLD;
+  END
+  $$;
+-- No caller needs EXECUTE on a trigger function.
+REVOKE EXECUTE ON FUNCTION app.t_session_purge() FROM PUBLIC;
+COMMENT ON FUNCTION app.t_session_purge() IS 'The worker deletes only ARCHIVED sessions (session-retention''s purge). work-k5fk.10.5 review F6.';
+CREATE TRIGGER t_session_purge BEFORE DELETE ON public.session
+  FOR EACH ROW EXECUTE FUNCTION app.t_session_purge();
 
 -- T-consent-owner: the decider owns the arc target. Invoker rights, so under
 -- the caller's RLS a partner's row and a missing row look the same; one fixed
