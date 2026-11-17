@@ -20,7 +20,7 @@
 #   5. caller test 18: a second `prisma migrate deploy` is a no-op (no pending
 #      migration, one finished _prisma_migrations row, schema dump unchanged);
 #   6. seed-target-fixture.sql, then smoke-baseline.sql (every view as mwf_app);
-#   7. functions-caller-tests.sql (tests 1–17 and 19–29, as mwf_app / mwf_job / mwf_auth logins) on
+#   7. functions-caller-tests.sql (tests 1–17 and 19–31, as mwf_app / mwf_ai / mwf_worker / mwf_auth logins) on
 #      a throwaway clone <ts7_name>_calls, dropped afterwards.
 #   The scratch database is dropped at the end unless --keep.
 #
@@ -148,7 +148,7 @@ verify_target() {  # $1 = database, $2 = deploy url
   psql_on "$d" -f - <"$HERE/smoke-baseline.sql" >"$OUT/smoke-$d.txt" 2>&1 || { cat "$OUT/smoke-$d.txt"; exit 1; }
   grep -E 'smoke ok|smoke-baseline' "$OUT/smoke-$d.txt" | sed 's/^psql:<stdin>:[0-9]*: //; s/^NOTICE:  //; s/^ *//; s/^/   /'
 
-  step "7. functions-caller-tests.sql — as mwf_app and mwf_job (logins, not the superuser), on a throwaway clone"
+  step "7. functions-caller-tests.sql — as mwf_app, mwf_ai, mwf_worker and mwf_auth (logins, not the superuser), on a throwaway clone"
   local ct="${d:0:56}_calls"
   psql_admin -c "DROP DATABASE IF EXISTS $ct WITH (FORCE)" -c "CREATE DATABASE $ct TEMPLATE $d" >/dev/null
   podman exec -i "$CONTAINER" psql -X -q -v ON_ERROR_STOP=1 -U "$SU" -d "$ct" <"$HERE/functions-caller-tests.sql" >"$OUT/caller-tests-$d.txt" 2>&1 \
@@ -157,8 +157,8 @@ verify_target() {  # $1 = database, $2 = deploy url
   grep -E 'PASS|connected as|ALL PASSED' "$OUT/caller-tests-$d.txt" | sed 's/^NOTICE:  /   /; s/^ /   /'
   local tests
   tests="$( (grep -oE 'PASS [0-9]+' "$OUT/caller-tests-$d.txt"; echo 'PASS 18') | sort -u | wc -l | tr -d ' ')"
-  echo "   caller tests: $tests/29 passed (1–17 and 19–29 SQL, 18 the second deploy)"
-  [ "$tests" = 29 ] || { echo "   expected 29"; exit 1; }
+  echo "   caller tests: $tests/31 passed (1–17 and 19–31 SQL, 18 the second deploy)"
+  [ "$tests" = 31 ] || { echo "   expected 31"; exit 1; }
 }
 
 drop_db() { psql_admin -c "DROP DATABASE IF EXISTS $1 WITH (FORCE)" >/dev/null; echo "   dropped $1"; }
@@ -181,6 +181,16 @@ baseline)
   ;;
 
 cutover)
+  # work-k5fk.10.5 (§7 row 9b) retired mwf_job, which the old history (phoenix/base) makes own its definer helpers
+  # and drop-old-objects.sql drops them as; step 20 of the baseline refuses a cluster where mwf_job still exists.
+  # The rehearsal therefore needs a cluster with mwf_job for a–e and without it for f: the production cutover order
+  # (old shape → drop-old-objects.sql → infra/aws/roles.sql retires mwf_job → baseline) is the open question filed
+  # with 9b. Until it is settled, refuse here rather than fail half-way.
+  if [ "$(psql_admin -Atc "SELECT count(*) FROM pg_roles WHERE rolname = 'mwf_job'")" != 1 ]; then
+    echo "refusing --cutover: the old history needs the retired role mwf_job, which this cluster no longer has (work-k5fk.10.5)" >&2
+    exit 2
+  fi
+  echo "   NOTE: mwf_job exists, so step f's baseline will be refused by step 20 (work-k5fk.10.5: retire it between e and f)"
   # --as-migrator: the whole path runs as the NON-superuser owner mwf_migrator
   # (it holds mwf_job — the old history's definer owner — and mwf_definer — the baseline's, work-k5fk.10.4 —
   # WITH INHERIT FALSE, SET TRUE, as production's owner does):
