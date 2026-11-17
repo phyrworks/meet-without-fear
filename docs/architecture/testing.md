@@ -62,12 +62,12 @@ npm run test -- --coverage --workspace=backend
 
 ## Which tests to run when
 
-| Tier | When | Command | Time |
+| Tier | When | Command | Time (measured 2026-11-17, this Mac) |
 |---|---|---|---|
 | **Inner loop** | every edit | `npm test --workspace=backend -- --findRelatedTests <files>`, plus the one `*.target.test.ts` for the area you touched (`npm run test:db --workspace=backend -- <name>`) | seconds |
 | **Before a commit** | each commit | `npm run test` (backend `fast` + shared + mobile) and `npm run check` | ~6 s + 5 s + 7 s, warm cache |
-| **Pre-merge** | before merging a branch | `npm run test:premerge --workspace=backend` (fast + db + the seven pre-merge goldens); `run-baseline.sh` if `backend/scripts/target-shape` or `prisma/` changed; `npm run test:e2e` if the change reaches the UI | ~4.5 min est. (e2e smoke extra) |
-| **Nightly / CI** | CI, or by hand overnight | `npm run test:all --workspace=backend` (CI runs this); `npm run test:e2e:full`; the live-AI config by hand | ~35 min est. |
+| **Pre-merge** | before merging a branch | `npm run test:premerge --workspace=backend` (fast + db + the seven pre-merge goldens); `run-baseline.sh` if `backend/scripts/target-shape` or `prisma/` changed; `npm run test:e2e` if the change reaches the UI | ~4 min: fast 6 s + db 88 s (2 workers) + seven goldens ~145 s; e2e smoke +1.7 min |
+| **Nightly / CI** | CI, or by hand overnight | `npm run test:all --workspace=backend` (CI runs this); `npm run test:e2e:full`; the live-AI config by hand | backend ~6 min (fast 6 s, db 88 s, goldens 272 s); e2e full 24 min (default config 7.4 min, two-browser 16.8 min) |
 
 The backend jest projects (`backend/jest.config.js`) are chosen by file name:
 
