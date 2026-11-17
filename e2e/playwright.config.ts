@@ -138,30 +138,11 @@ export default defineConfig({
         baseURL: E2E_WEB_URL,
       },
     },
-    // Circuit breaker: Two-browser test
-    {
-      name: 'circuit-breaker',
-      testMatch: /two-browser-circuit-breaker\.spec\.ts/,
-      use: {
-        baseURL: E2E_WEB_URL,
-      },
-    },
-    // Stage 3: Two-browser need mapping test
-    {
-      name: 'two-browser-stage-3',
-      testMatch: /two-browser-stage-3\.spec\.ts/,
-      use: {
-        baseURL: E2E_WEB_URL,
-      },
-    },
-    // Stage 4: Two-browser strategic repair test (redesign flow)
-    {
-      name: 'two-browser-stage-4-redesign',
-      testMatch: /two-browser-stage-4-redesign\.spec\.ts/,
-      use: {
-        baseURL: E2E_WEB_URL,
-      },
-    },
+    // two-browser-circuit-breaker, -stage-3 and -stage-4-redesign are not
+    // projects here: playwright.two-browser.config.ts matches every
+    // two-browser-*.spec.ts, so listing them here ran each one twice in a full
+    // e2e pass (test audit 2026-11-17, ~3 min). The smoke tier
+    // (playwright.smoke.config.ts) runs -stage-4-redesign on this server setup.
   ],
   // Web server configuration
   // Each test specifies its fixture via the X-E2E-Fixture-ID header.

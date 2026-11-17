@@ -45,6 +45,8 @@
     "dev:status": "cd tools/status-dashboard && npm run dev",
     "deploy:status": "cd tools/status-dashboard && vercel --prod",
     "e2e": "npm --workspace e2e run e2e",
+    "test:e2e": "npm --workspace e2e run test:e2e",
+    "test:e2e:full": "npm --workspace e2e run test:e2e:full",
     "e2e:headed": "npm --workspace e2e run e2e:headed",
     "e2e:select": "node e2e/scripts/run-test.mjs",
     "e2e:ui": "npm --workspace e2e run e2e:ui",
